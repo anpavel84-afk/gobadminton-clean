@@ -1,0 +1,47 @@
+{
+  "name": "gobadminton",
+  "private": true,
+  "version": "0.1.0",
+  "description": "GoBadminton monorepo \u2014 F-01 executable foundation",
+  "packageManager": "pnpm@10.18.0",
+  "engines": {
+    "node": "24.21.0",
+    "pnpm": "10.18.0"
+  },
+  "scripts": {
+    "preinstall": "node scripts/check-node.mjs",
+    "check:foundation": "python scripts/check_foundation.py",
+    "foundation:check": "pnpm run check:foundation",
+    "check:contracts": "pnpm --filter @gobadminton/contracts run check",
+    "contracts:check": "pnpm run check:contracts",
+    "typecheck": "pnpm --filter @gobadminton/contracts --filter @gobadminton/api --filter @gobadminton/web --filter @gobadminton/admin run typecheck",
+    "lint": "pnpm --filter @gobadminton/contracts --filter @gobadminton/api --filter @gobadminton/web --filter @gobadminton/admin run lint",
+    "test": "pnpm run test:unit",
+    "test:unit": "pnpm --filter @gobadminton/contracts --filter @gobadminton/api --filter @gobadminton/web --filter @gobadminton/admin run test:unit",
+    "test:integration": "pnpm --filter @gobadminton/api run test:integration",
+    "build": "pnpm run build:api && pnpm run build:web && pnpm run build:admin",
+    "build:api": "pnpm --filter @gobadminton/api run build",
+    "build:worker": "pnpm --filter @gobadminton/worker run build",
+    "build:web": "pnpm --filter @gobadminton/web run build",
+    "start:worker": "pnpm --filter @gobadminton/worker start",
+    "db:migrate": "pnpm --filter @gobadminton/api run db:migrate",
+    "db:smoke": "pnpm --filter @gobadminton/api run db:smoke",
+    "ci": "pnpm run check:foundation && pnpm run check:contracts && pnpm run typecheck && pnpm run lint && pnpm run test:unit && pnpm run build:api && pnpm run build:web",
+    "build:admin": "pnpm --filter @gobadminton/admin run build"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@nestjs/core",
+      "esbuild",
+      "unrs-resolver"
+    ]
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.36.0",
+    "@types/node": "^24.5.2",
+    "eslint": "^9.36.0",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.44.1",
+    "vitest": "^3.2.4"
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "source": "frozen Make v001 (68 files; assignment 0199978e7944c2507f8af475b494154f423d7bd4)",
+  "assets": [
+    {
+      "source": "67df8.svg",
+      "file": "go-badminton.svg",
+      "sha256": "139f0e578d41371c73e36bb844c0956fa86924a33360c15c1c7256def1a8ca71"
+    },
+    {
+      "source": "880cf.svg",
+      "file": "footer-shape.svg",
+      "sha256": "602c4f1cac6960a32c70736d9065de22a382defd2d5f43a3c2fe56b59b6049ad"
+    },
+    {
+      "source": "f8ab5.svg",
+      "file": "games.svg",
+      "sha256": "7d6b85ae3a494e35819ff9a2f93eaa9eb10aadc0492791476ccae4de816ec676"
+    },
+    {
+      "source": "c255f.svg",
+      "file": "players.svg",
+      "sha256": "b1edfd33133e6caa988a0759da4fbf33d4270c9f0860a3ad9e2318da55984ec8"
+    },
+    {
+      "source": "f569e.svg",
+      "file": "my-games.svg",
+      "sha256": "85a47834a58cf27541ffbaa104e0429b8e2e67a08be2bf65c6fef90a67a5ba0f"
+    },
+    {
+      "source": "159f8.svg",
+      "file": "profile.svg",
+      "sha256": "8812d0d90924af5f006a7c7cbd3dfbf11583c044925d4792dbed87a3712535aa"
+    }
+  ]
+}

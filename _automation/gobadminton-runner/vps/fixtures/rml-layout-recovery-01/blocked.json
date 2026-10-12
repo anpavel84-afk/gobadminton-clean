@@ -1,0 +1,14 @@
+{
+  "state": "blocked",
+  "generated_at": "2026-10-07T12:00:00Z",
+  "runner": {"alive":true,"paused":false,"blocked":true,"current":{"id":"fixture-rml-layout-task-2026-01","status":"blocked","attempt":1,"max_attempts":5}},
+  "progress": {"task_id":"fixture-rml-layout-task-2026-01","status":"blocked","current_block":"layout-proof","updated_at":"2026-10-07T12:00:00Z","blocks":[{"id":"layout-proof","title":"Проверка длинного блока очереди на русском языке и доступности статуса","status":"blocked","note":"Блокировка: ожидается локально установленный браузерный компонент фикстуры; требуется сохранить описание, причину и текущий этап целиком."}]},
+  "autopilot": {"alive":false,"status":"blocked"},
+  "writer": {"busy":true},
+  "watchdog": {"health":"healthy"},
+  "queue": {"tasks":[{"id":"fixture-rml-layout-task-2026-01","scope":"Синтетическая задача: проверка полного интерфейса очереди","description_ru":"Синтетическое описание для проверки интерфейса: длинный текст русскоязычной задачи должен целиком читаться в настоящем браузере на телефоне и desktop, переноситься без обрезки и не перекрывать текущий этап, его состояние или причину блокировки. Здесь нет реальных задач, участников или секретов.","order":1,"enabled":true,"executor":"codex","model":"gpt-6-luna","effort":"medium","blocks":[{"id":"layout-proof","title":"Проверка длинного блока очереди на русском языке и доступности статуса","status":"blocked"}]}],"completed":[],"pending":[],"next_gate":{"ready":false,"reason":"Тестовая задача изолирована"}},
+  "recent_activity": [],
+  "git": {"ok":true,"branch":"fixture-only","head":"000000000000","dirty":false,"last_commit":"Synthetic fixture"},
+  "owner_instructions": {"counts":{}},
+  "activity": []
+}

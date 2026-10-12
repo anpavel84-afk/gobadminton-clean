@@ -1,0 +1,85 @@
+.gb-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--gb-space-xs);
+  min-height: 48px;
+  padding: 13px 20px;
+  border-radius: var(--gb-radius-full);
+  border: 1px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  font-weight: 600;
+  font-size: var(--gb-label-size);
+  line-height: var(--gb-label-lh);
+  width: 100%;
+  text-align: center;
+  background: transparent;
+  color: var(--gb-text-primary);
+  appearance: none;
+  text-decoration: none;
+  box-sizing: border-box;
+}
+
+a.gb-btn {
+  cursor: pointer;
+}
+
+.gb-btn--primary {
+  background: var(--gb-bg-brand);
+  color: var(--gb-text-inverse);
+  border-color: transparent;
+}
+
+.gb-btn--secondary {
+  background: var(--gb-bg-surface);
+  color: var(--gb-text-primary);
+  border-color: var(--gb-border-default);
+}
+
+.gb-btn--danger {
+  background: var(--gb-bg-danger);
+  color: var(--gb-text-danger);
+  border-color: var(--gb-border-default);
+}
+
+.gb-btn--auth {
+  min-height: 54px;
+}
+
+.gb-btn--narrow {
+  width: auto;
+  min-width: 106px;
+}
+
+.gb-btn:disabled,
+.gb-btn[aria-disabled="true"] {
+  background: var(--gb-bg-disabled);
+  color: var(--gb-text-secondary);
+  border-color: var(--gb-border-default);
+  cursor: not-allowed;
+}
+
+.gb-btn--block {
+  width: 100%;
+}
+
+.gb-btn--w-270 {
+  width: 100%;
+  max-width: 270px;
+}
+
+.gb-btn--w-320 {
+  width: 100%;
+  max-width: 320px;
+}
+
+.gb-btn--w-354 {
+  width: 100%;
+  max-width: 354px;
+}
+
+.gb-btn--w-552 {
+  width: 100%;
+  max-width: 552px;
+}

@@ -1,0 +1,19 @@
+{
+  "status": "WORKING DRAFT — NOT APPROVED — NOT CANONICAL",
+  "task_id": "fsg-s0-lock-map-repair-02-20261009-v001",
+  "checked_at": "2026-10-09T04:16:08.521961+00:00",
+  "base_sha": "31d09f45776d7b397a1f66c8f4c9131eb3401f04",
+  "fresh_remote_main_sha": "89b0dc040ecf7dac9d70cb5e77ff39e0a7f98941",
+  "planning_source_sha": "7e24b4a40d7594293df3c72d0792f702dbb89be8",
+  "material_source_authority_frozen_drift": [],
+  "active_lock_observation": [
+    {
+      "id": "fsg-s0-lock-map-repair-02-20261009-v001",
+      "locks": [
+        "docs:fsg-s0"
+      ]
+    }
+  ],
+  "new_branch_prepublication": "ABSENT at escalated git ls-remote on 2026-10-09; only refs/heads/main returned",
+  "note": "Network sandbox DNS restriction resolved with authorized Git escalation. Remote final candidate verification after push belongs in mandatory receipt; no self-SHA, PR, deployment or QA acceptance claim."
+}

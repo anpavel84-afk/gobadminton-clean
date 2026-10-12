@@ -1,0 +1,33 @@
+{
+  "name": "@gobadminton/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./openapi.json": "./openapi.json",
+    "./package.json": "./package.json",
+    "./game-types": "./src/game.generated.ts"
+  },
+  "scripts": {
+    "check": "node ./scripts/check-openapi.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint \"src/**/*.ts\"",
+    "test": "node ./scripts/check-openapi.mjs",
+    "test:unit": "node ./scripts/check-openapi.mjs",
+    "build": "node ./scripts/check-openapi.mjs"
+  },
+  "devDependencies": {
+    "@apidevtools/swagger-parser": "^12.1.0",
+    "@types/node": "^24.5.2",
+    "eslint": "^9.36.0",
+    "typescript": "~5.9.3"
+  },
+  "typesVersions": {
+    "*": {
+      "game-types": [
+        "src/game.generated.ts"
+      ]
+    }
+  }
+}

@@ -1,0 +1,27 @@
+.gb-sidebar-title {
+  font-weight: 600;
+  font-size: var(--gb-micro-size);
+  line-height: var(--gb-micro-lh);
+  letter-spacing: var(--gb-micro-tracking);
+  color: var(--gb-text-tertiary);
+  margin: 0 0 var(--gb-space-2xs);
+}
+
+.gb-sidebar-link {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 12px;
+  border-radius: var(--gb-radius-md);
+  font-weight: 600;
+  font-size: var(--gb-label-size);
+  line-height: var(--gb-label-lh);
+  color: var(--gb-text-primary);
+  text-decoration: none;
+  width: 100%;
+}
+
+.gb-sidebar-link--active {
+  background: var(--gb-bg-brand-soft);
+  color: var(--gb-text-brand);
+}

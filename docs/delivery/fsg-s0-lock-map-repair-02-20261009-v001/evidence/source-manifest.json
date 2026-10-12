@@ -1,0 +1,1296 @@
+{
+  "status": "WORKING DRAFT — NOT APPROVED — NOT CANONICAL",
+  "task_id": "fsg-s0-lock-map-repair-02-20261009-v001",
+  "base_sha": "31d09f45776d7b397a1f66c8f4c9131eb3401f04",
+  "assignment_sha": "31d09f45776d7b397a1f66c8f4c9131eb3401f04",
+  "planning_source_sha": "7e24b4a40d7594293df3c72d0792f702dbb89be8",
+  "source_comparison_sha": "65fd416b30238cc9eb7e95555a17bd9cb0beb374",
+  "observed_at": "2026-10-09T04:11:57.115268+00:00",
+  "source_files": [
+    {
+      "path": "AGENTS.md",
+      "sha256": "3b0ee8112b3b83a6532cf4fc677e5fbc9ee2c612acee48ee3ff3d9cfcddd76ee",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/AGENTS.md"
+    },
+    {
+      "path": "CURSOR.md",
+      "sha256": "935788313a94f6bb108fa85cc77411c38cccb4a7ff96e16a98aa8fbf4472be18",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/CURSOR.md"
+    },
+    {
+      "path": "docs/rules/PROJECT_RECORD_POLICY.md",
+      "sha256": "d3c4036bb11bef6b80ec36f8dded1cd1656f7ce5c687016eba7702d9267204ce",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/docs/rules/PROJECT_RECORD_POLICY.md"
+    },
+    {
+      "path": "apps/api/src/common/actor-fence.service.ts",
+      "sha256": "ee383da7f55a632f0cc291831bc0ab60bd2290b54c9579b882067de94c9e4b00",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/src/common/actor-fence.service.ts"
+    },
+    {
+      "path": "apps/api/src/common/mutation-runner.service.ts",
+      "sha256": "f225db2f780b3d8049b72149ce9e9067329e0ea6c8f6d9804b81a6c792de953e",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/src/common/mutation-runner.service.ts"
+    },
+    {
+      "path": "apps/api/src/safety/pair-fence.service.ts",
+      "sha256": "68a8aed290a21e00e17fb6670cf56d9d7f95270c3601fb476c2a0cb0d35de10c",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/src/safety/pair-fence.service.ts"
+    },
+    {
+      "path": "apps/api/src/safety/safety.service.ts",
+      "sha256": "cc1d8f4c17edb8ddc9e9a8d3cdfef78ef40613a5d6626238895d2234e6cad6c7",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/src/safety/safety.service.ts"
+    },
+    {
+      "path": "apps/api/src/profiles/profiles.service.ts",
+      "sha256": "7a88ee1c27867514a722d4870882064a4956488a05a9683cce3b96c1faa1fd89",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/src/profiles/profiles.service.ts"
+    },
+    {
+      "path": "apps/api/src/profiles/game-preferences.service.ts",
+      "sha256": "cd0aa8f64fb7997714c124c754eaaffe7ca7062b320b3908889af15af6ddb07e",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/src/profiles/game-preferences.service.ts"
+    },
+    {
+      "path": "apps/api/src/auth/identity.service.ts",
+      "sha256": "8ee91d9b6450a3fe32ef8218bc54b69466842775cbaa7b35c16a9ed623ae042d",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/src/auth/identity.service.ts"
+    },
+    {
+      "path": "apps/api/src/auth/session.service.ts",
+      "sha256": "3c81073d6a2519d94dffd95014b426e4f7e36129ab833a115cfc945f111ceca4",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/src/auth/session.service.ts"
+    },
+    {
+      "path": "apps/api/src/database/demo-seed-ops.ts",
+      "sha256": "005101b5b9c6491888a973ea33ee9887217dbd01ad83cddf28e8592432bd49aa",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/src/database/demo-seed-ops.ts"
+    },
+    {
+      "path": "apps/api/src/database/schema.ts",
+      "sha256": "0f5694f2df5f33fe74c23b3b3bcc7cec81abb19b3b2f604369080dbc5a13643b",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/src/database/schema.ts"
+    },
+    {
+      "path": "apps/api/src/games/games.service.ts",
+      "sha256": "bfd904d5eb3e14521a3cab1d16287438ec91cc349934d0dd8a3d54b73ce43efc",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/src/games/games.service.ts"
+    },
+    {
+      "path": "apps/api/src/games/game-authority.service.ts",
+      "sha256": "7d005f66b73a08d54c3a56047a2dc14fb86a49695c9f7c8946f4265b521a85f4",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/src/games/game-authority.service.ts"
+    },
+    {
+      "path": "apps/api/src/games/games-discovery.query.ts",
+      "sha256": "ed7e637cf138dd43cf5b85934487f28949e83af87625dcaa3417a6161c41440d",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/src/games/games-discovery.query.ts"
+    },
+    {
+      "path": "apps/api/src/games/games-map.query.ts",
+      "sha256": "fb8c790ff80f2946ba553956fa9501c49dad0e4ff0815d5606af17ec1a397ffc",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/src/games/games-map.query.ts"
+    },
+    {
+      "path": "apps/api/src/invitations/invitations.service.ts",
+      "sha256": "407e9831a51492857227db8eafcfcbe7984b5f09fc01c5b495c90fb90232e26e",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/src/invitations/invitations.service.ts"
+    },
+    {
+      "path": "apps/api/src/invitations/invitations.controller.ts",
+      "sha256": "76743fb6a9b3515c2e762802207eb5b549ea471b709a1d19e7aacc7a8493aa55",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/src/invitations/invitations.controller.ts"
+    },
+    {
+      "path": "apps/api/src/participations/participations.service.ts",
+      "sha256": "c1aa0bf564c30927d7f5e7b300ee953aa7a0929ebb7c2533fef1bd1b7b2656f1",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/src/participations/participations.service.ts"
+    },
+    {
+      "path": "apps/api/src/participations/participations.controller.ts",
+      "sha256": "36ace932362c0fe7f535546f7667d1da8ac5c264ac0192ba57aefb7ee9b4e8dd",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/src/participations/participations.controller.ts"
+    },
+    {
+      "path": "apps/api/src/messaging/messaging.service.ts",
+      "sha256": "46fd8cb6c32a33383c8c0319a9bbfd3248d15153dc3cdaff86adbfa762ad1177",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/src/messaging/messaging.service.ts"
+    },
+    {
+      "path": "apps/api/src/messaging/contact-state.controller.ts",
+      "sha256": "f64252900a152f5bade5e0b42e497cc71eb55563cca35811891132eaba0ac483",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/src/messaging/contact-state.controller.ts"
+    },
+    {
+      "path": "apps/api/src/inbox/inbox-compose-sql.ts",
+      "sha256": "bdfa0bab9c0cd1ccdfe4aa3a96aa0d2f3d6226b54f9efe89049b99dfeed0d12f",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/src/inbox/inbox-compose-sql.ts"
+    },
+    {
+      "path": "apps/api/src/config/env.ts",
+      "sha256": "3eb27827ca3ae8000594de1baf52e4ff3588be01c301a9d395718f801f66cd09",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/src/config/env.ts"
+    },
+    {
+      "path": "apps/api/src/radar/geographic-consent.ts",
+      "sha256": "9022f9a26707a194835e6f254e154c5cf50b2ccb8592034226fe73ceed5f4a00",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/src/radar/geographic-consent.ts"
+    },
+    {
+      "path": "apps/web/src/components/consumer/pages/PlayersDirectoryPage.tsx",
+      "sha256": "ba52ceb0ddf735bd4ea86650f0a65edba441036afa132e2eb92f3ea429c0856c",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/web/src/components/consumer/pages/PlayersDirectoryPage.tsx"
+    },
+    {
+      "path": "apps/web/src/components/consumer/pages/PublicPlayerProfilePage.tsx",
+      "sha256": "47c249d378c05897a8390081c0c0c19d07e718b184b549abca3d2b17421c46ac",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/web/src/components/consumer/pages/PublicPlayerProfilePage.tsx"
+    },
+    {
+      "path": "apps/web/src/components/consumer/pages/MyGamesPage.tsx",
+      "sha256": "03fb7140edcf6c3177a5d6a9cb61dbceeb481c54b6ac3dc975343010a4940188",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/web/src/components/consumer/pages/MyGamesPage.tsx"
+    },
+    {
+      "path": "packages/contracts/openapi.json",
+      "sha256": "828657e83016b17593251c8930b67c29373d92a51855b02474f3169809aef419",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/packages/contracts/openapi.json"
+    },
+    {
+      "path": "apps/api/migrations/0001_enable_postgis.sql",
+      "sha256": "37e078b87653e7ca0a35536ecb46644a97ce86cf75d483b0401174f963eb1767",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/migrations/0001_enable_postgis.sql"
+    },
+    {
+      "path": "apps/api/migrations/0002_identity_session.sql",
+      "sha256": "d67bb0b850bc0a194d849018acb9dd5b3a23bedb198e41b7ea4fdca39c5622e3",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/migrations/0002_identity_session.sql"
+    },
+    {
+      "path": "apps/api/migrations/0003_organizer_venue_game.sql",
+      "sha256": "1df116356bc01f9a6303a43beab0effa2c69eb7ff559e02807732b5be4af1601",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/migrations/0003_organizer_venue_game.sql"
+    },
+    {
+      "path": "apps/api/migrations/0004_participation_loop.sql",
+      "sha256": "69013021205979ffb795282aa0a153bb791fa14cbf60546400af3acefbc578fa",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/migrations/0004_participation_loop.sql"
+    },
+    {
+      "path": "apps/api/migrations/0005_game_scoped_authority.sql",
+      "sha256": "e9226e01246d51f361399fdd9dfd93a73d1c717c2ddfed1d0c5eec0236060dad",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/migrations/0005_game_scoped_authority.sql"
+    },
+    {
+      "path": "apps/api/migrations/0006_regular_vs_trainer_game.sql",
+      "sha256": "ae6df7cc279948214fa407e2fcf8d9f42b202c4390de3843ccdb860919fe8522",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/migrations/0006_regular_vs_trainer_game.sql"
+    },
+    {
+      "path": "apps/api/migrations/0007_idempotency_reservation.sql",
+      "sha256": "6dd69d473d34483f010eb0895098f1a2f60781eb4b772be0e84c032b4cf7b8da",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/migrations/0007_idempotency_reservation.sql"
+    },
+    {
+      "path": "apps/api/migrations/0008_profiles_safety_directory.sql",
+      "sha256": "cc8396f153f525e4cbec64c43aad3ee9c036fe382814db51f0ce0ab6e54a3c3d",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/migrations/0008_profiles_safety_directory.sql"
+    },
+    {
+      "path": "apps/api/migrations/0009_radar_presence_matching.sql",
+      "sha256": "2c405386bf56a5be05a064b2a97c354668f5c48d6c3e5a4cd295aac7fafcee59",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/migrations/0009_radar_presence_matching.sql"
+    },
+    {
+      "path": "apps/api/migrations/0010_durable_jobs_pgboss.sql",
+      "sha256": "9e02d1ec029af166e18b734d3d9ac7b07284bff5616e339e4d22f20614f6aaf7",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/migrations/0010_durable_jobs_pgboss.sql"
+    },
+    {
+      "path": "apps/api/migrations/0011_text_dm.sql",
+      "sha256": "4543cc3f8a03fe6d959eb34b0cedb9b42ad8c1b2c8070064eb27fd5035ed95cb",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/migrations/0011_text_dm.sql"
+    },
+    {
+      "path": "apps/api/migrations/0012_game_invitations.sql",
+      "sha256": "70c1729ef8382321811f02a2155cda90a11ef1a02fe15157a94b6e977a4dcc00",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/migrations/0012_game_invitations.sql"
+    },
+    {
+      "path": "apps/api/migrations/0013_game_chat.sql",
+      "sha256": "7be89cc7468a0650501bfbc0da72ab4239f700cdff0d5672f1a923a8e5c0bbf9",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/migrations/0013_game_chat.sql"
+    },
+    {
+      "path": "apps/api/migrations/0014_composed_inbox.sql",
+      "sha256": "ff6d679d59a483514157b336a807dc16ca324b86da7eede9b138816a40428227",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/migrations/0014_composed_inbox.sql"
+    },
+    {
+      "path": "apps/api/migrations/0015_account_security_controls.sql",
+      "sha256": "06110af7bd6329706442a64d7ae8a6e2cf04b53a8499cf6df07c46a517f9b829",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/migrations/0015_account_security_controls.sql"
+    },
+    {
+      "path": "apps/api/migrations/0016_city_saint_petersburg.sql",
+      "sha256": "e8e7b20fb9dd5db4f8c33c41b114e53fd2f2818c7a901aa657ded8eaeb9d9904",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/migrations/0016_city_saint_petersburg.sql"
+    },
+    {
+      "path": "apps/api/migrations/0017_owned_avatar.sql",
+      "sha256": "3b293d2fe6a752c5201c98dd00da5ba85ee04cb64d337eb6a0792c8217f9595b",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/migrations/0017_owned_avatar.sql"
+    },
+    {
+      "path": "apps/api/migrations/0018_venue_catalog_dedupe.sql",
+      "sha256": "b5d7a401c16a4691c7d86332247125eeec30a27858935edd83aee77fcfe01a27",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/migrations/0018_venue_catalog_dedupe.sql"
+    },
+    {
+      "path": "apps/api/migrations/0019_venue_legacy_identity_extract.sql",
+      "sha256": "5203c3e85fcc009e7d086977c8f944cf73d71d9be9c0567202449ef5245ef4d6",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/migrations/0019_venue_legacy_identity_extract.sql"
+    },
+    {
+      "path": "apps/api/migrations/0020_avatar_moderation.sql",
+      "sha256": "c28ede4a311fa4c20f6d999b434732e1fd0230c73de1f33c6cdb05cf1999d39c",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/migrations/0020_avatar_moderation.sql"
+    },
+    {
+      "path": "apps/api/migrations/0021_radar_geographic_consent.sql",
+      "sha256": "6ebef93f3cbe607dcbd5b1a2c1fea18ccbcf3d831aeb758277d1cb52ddd5911a",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/migrations/0021_radar_geographic_consent.sql"
+    },
+    {
+      "path": "apps/api/migrations/0022_players_unified_radar.sql",
+      "sha256": "6246772ededaa8fe98ef6f9fe6f56818c1b140a5fbd89c6f27c33f6e38386a56",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/migrations/0022_players_unified_radar.sql"
+    },
+    {
+      "path": "apps/api/migrations/0023_user_game_preferences.sql",
+      "sha256": "982964857c1e3c735bfa3e125df24dce0640fecfb1afeea5e8f31d22af02b971",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/migrations/0023_user_game_preferences.sql"
+    },
+    {
+      "path": "apps/api/src/app.module.ts",
+      "sha256": "6e6c3ba3919eabe0a2a3bf95223d78d85f18ad2b1be1efa2178613b770a89bf8",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/src/app.module.ts"
+    },
+    {
+      "path": "apps/api/src/core.module.ts",
+      "sha256": "f6304c3728437f578e2329d387098d523bd98abefffa6d288357b42d417cc1a1",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/src/core.module.ts"
+    },
+    {
+      "path": "apps/api/src/messaging/discovery-proof.hook.ts",
+      "sha256": "47dc7a9afeb10c846d04b361e633835886653cf36beaa56540a935e85787419e",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/src/messaging/discovery-proof.hook.ts"
+    },
+    {
+      "path": "apps/api/test/integration/s00a.transaction-auth.test.ts",
+      "sha256": "126ec1d54e3acbc7a0c2b09063baebf5e40bec1a547c110fe5ba9f8f23ac99a3",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/test/integration/s00a.transaction-auth.test.ts"
+    },
+    {
+      "path": "apps/api/test/integration/ls01.profiles-safety.test.ts",
+      "sha256": "ae69d170942e24717cebd0344dd722b929baaceef0e09b4af5cef17892980e6c",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/test/integration/ls01.profiles-safety.test.ts"
+    },
+    {
+      "path": "apps/api/test/integration/ls03.text-dm.test.ts",
+      "sha256": "1a28eab66c69f0bebfe05745feded2ec091db52874e59491188835f21c524df8",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/test/integration/ls03.text-dm.test.ts"
+    },
+    {
+      "path": "apps/api/test/integration/ls04.game-invitation.test.ts",
+      "sha256": "5dfadd95f4c7b399b6278058691f82b0e152cfdecd1a5f1543eb28caccc79764",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/test/integration/ls04.game-invitation.test.ts"
+    },
+    {
+      "path": "apps/api/test/integration/ls06.composed-inbox.test.ts",
+      "sha256": "f763a83a93d70a910115e7772a7e74dfc79565cb034779332f8bfa023f557391",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/test/integration/ls06.composed-inbox.test.ts"
+    },
+    {
+      "path": "apps/api/test/integration/fb01.game-preferences-seat.test.ts",
+      "sha256": "481df853f59120507ba26899bb448229043730dbf455a92e88b705bedab911f9",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/test/integration/fb01.game-preferences-seat.test.ts"
+    },
+    {
+      "path": "apps/api/src/common/idempotency.service.ts",
+      "sha256": "babfb0adb86d62aabeb21d900b7eb1769c847a607bd0660aef2c336a20882c88",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/src/common/idempotency.service.ts"
+    },
+    {
+      "path": "apps/api/src/auth/consumer-auth.service.ts",
+      "sha256": "d2eb0068a0621fcfe3a2e490430ca8002659c26e04196bacfdcbbd9f29988042",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/src/auth/consumer-auth.service.ts"
+    },
+    {
+      "path": "apps/api/src/radar/radar-proof.service.ts",
+      "sha256": "32bb431fcf39fa9d9854631e430f06014ac7f563d7bdcd7a460a6155df9c84fb",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/src/radar/radar-proof.service.ts"
+    },
+    {
+      "path": "apps/api/src/radar/geographic-proof.ts",
+      "sha256": "474a68a45e13269fc6a58233afb38fba7073f3f93f7a1e524e31b8495f25b7fd",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/src/radar/geographic-proof.ts"
+    },
+    {
+      "path": "apps/api/src/radar/unified-proof.ts",
+      "sha256": "5b86a806172c1bc7926f8a6c63aa815fb7347b163955eccfa99381a981d7f0cf",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/src/radar/unified-proof.ts"
+    },
+    {
+      "path": "apps/api/src/radar/radar.service.ts",
+      "sha256": "30391bd6b1fa640b6cf1ad84e35473668d5aacb91d44b31039fe83d51d2bd82c",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/src/radar/radar.service.ts"
+    },
+    {
+      "path": "apps/api/src/radar/unified-publishing.service.ts",
+      "sha256": "62ec985b22690a357eb1f332d4a5ec2d90a7756acbb450563baa276a126ed1f4",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/src/radar/unified-publishing.service.ts"
+    },
+    {
+      "path": "docs/manifest/PM_ADMISSION_FSG_S0_LOCK_MAP_REPAIR01_20261009_V001.md",
+      "sha256": "3bb92589cfc1324d5eba9d321d42da4828a4a11f60a2ded1357e3e5d500a69dc",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/docs/manifest/PM_ADMISSION_FSG_S0_LOCK_MAP_REPAIR01_20261009_V001.md"
+    },
+    {
+      "path": "docs/prompts/implementation/fsg-s0-lock-map-repair-01-20261009-v001.md",
+      "sha256": "a094ba8d5afca7a9fb1b19350702decb7c6ffe4cf228b45d374f2ba911d28466",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/docs/prompts/implementation/fsg-s0-lock-map-repair-01-20261009-v001.md"
+    },
+    {
+      "path": "apps/api/src/auth/auth.service.ts",
+      "sha256": "96262e76023d1748545410ce0c5dd01588908e3e18c5574fe85ce92e2ccb2de4",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/src/auth/auth.service.ts"
+    },
+    {
+      "path": "apps/api/src/auth/auth-transaction.service.ts",
+      "sha256": "f3b4b5c77b855d2ea7e7cd743b6768c46dbb3357c42479c957477f182a96ea7d",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/src/auth/auth-transaction.service.ts"
+    },
+    {
+      "path": "apps/api/src/auth/me.controller.ts",
+      "sha256": "1b5ca0098d5f814e1de8e6cbeabaa81dd98db11a734ff7bb21c10df6b38ebb61",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/apps/api/src/auth/me.controller.ts"
+    },
+    {
+      "path": "docs/manifest/PM_ADMISSION_FSG_S0_LOCK_MAP_REPAIR02_20261009_V001.md",
+      "sha256": "f36d93401d24607233e7b69d17f81c7b2cb23308e3bd5027f6c642036b99967d",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/docs/manifest/PM_ADMISSION_FSG_S0_LOCK_MAP_REPAIR02_20261009_V001.md"
+    },
+    {
+      "path": "docs/prompts/implementation/fsg-s0-lock-map-repair-02-20261009-v001.md",
+      "sha256": "ac9e6337eedc5abf594e641432d33637e86b60162752ce43e2b4b6142ad2dac1",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/docs/prompts/implementation/fsg-s0-lock-map-repair-02-20261009-v001.md"
+    },
+    {
+      "path": "docs/operations/MODEL_ROUTING_AND_BUDGET_V004.md",
+      "sha256": "36da34bb173c67880d814bb386b8c49bf94f6189e780bc79df9d115111d5ea3f",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/docs/operations/MODEL_ROUTING_AND_BUDGET_V004.md"
+    },
+    {
+      "path": "docs/operations/MODEL_ROUTING_AND_BUDGET_V006.md",
+      "sha256": "7d560eb152285e097e211bf580ccc179aacef44cc066e02574281892506eccc1",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/docs/operations/MODEL_ROUTING_AND_BUDGET_V006.md"
+    },
+    {
+      "path": "docs/operations/QUEUE_AUTOPILOT.md",
+      "sha256": "3cc6d8f6106313befbfa90531ce66dbf902e5c52f813aca84e4353874cca489f",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/31d09f45776d7b397a1f66c8f4c9131eb3401f04/docs/operations/QUEUE_AUTOPILOT.md"
+    }
+  ],
+  "current_main_sha": "89b0dc040ecf7dac9d70cb5e77ff39e0a7f98941",
+  "material_source_drift": [],
+  "original_package_files": [
+    {
+      "path": "docs/workbench/pm/fsg-s0-contract-gate-reconciliation-20261009-v001/EVIDENCE.md",
+      "sha256": "84da8e93b38a124a2ebc025b7c8d42de2ac7ccb8460410408cfbdadd4ae2cd5d",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/2485b75c032a5dfed5e1faff9535619382bea28c/docs/workbench/pm/fsg-s0-contract-gate-reconciliation-20261009-v001/EVIDENCE.md"
+    },
+    {
+      "path": "docs/workbench/pm/fsg-s0-contract-gate-reconciliation-20261009-v001/GATES_AND_NEXT_INTAKE.md",
+      "sha256": "f71a8fb8b73c1253c78415eac5cf45adb71402409e38b166506639b5dfc1928e",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/2485b75c032a5dfed5e1faff9535619382bea28c/docs/workbench/pm/fsg-s0-contract-gate-reconciliation-20261009-v001/GATES_AND_NEXT_INTAKE.md"
+    },
+    {
+      "path": "docs/workbench/pm/fsg-s0-contract-gate-reconciliation-20261009-v001/README.md",
+      "sha256": "953b725bcbe16c4f220748c23cef4fbc27ed6c974531c21b8e8e5f5bf413cf8a",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/2485b75c032a5dfed5e1faff9535619382bea28c/docs/workbench/pm/fsg-s0-contract-gate-reconciliation-20261009-v001/README.md"
+    },
+    {
+      "path": "docs/workbench/pm/fsg-s0-contract-gate-reconciliation-20261009-v001/S1_CONTRACT_AND_CONCURRENCY.md",
+      "sha256": "0228922a3392c18c7a5f57e63aeef39b6779dee69cea7ed1248295ae1736a516",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/2485b75c032a5dfed5e1faff9535619382bea28c/docs/workbench/pm/fsg-s0-contract-gate-reconciliation-20261009-v001/S1_CONTRACT_AND_CONCURRENCY.md"
+    },
+    {
+      "path": "docs/workbench/pm/fsg-s0-contract-gate-reconciliation-20261009-v001/SOURCE_MATRIX.md",
+      "sha256": "6c67455cd8fe14468fb9cb8aff5efcc4d980ff1b351615398ba5fb52ace6a386",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/2485b75c032a5dfed5e1faff9535619382bea28c/docs/workbench/pm/fsg-s0-contract-gate-reconciliation-20261009-v001/SOURCE_MATRIX.md"
+    },
+    {
+      "path": "docs/workbench/pm/fsg-s0-contract-gate-reconciliation-20261009-v001/evidence/docs-verification.json",
+      "sha256": "59b40de41b0655b3b7529324faac56d1c505627170b08494a1b155cf3bd39579",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/2485b75c032a5dfed5e1faff9535619382bea28c/docs/workbench/pm/fsg-s0-contract-gate-reconciliation-20261009-v001/evidence/docs-verification.json"
+    },
+    {
+      "path": "docs/workbench/pm/fsg-s0-contract-gate-reconciliation-20261009-v001/evidence/publication-freshness.json",
+      "sha256": "a25add0054c5caa6d400a48fe37465562b8bd73fd8b4cd3b9ccfc4c128c04d70",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/2485b75c032a5dfed5e1faff9535619382bea28c/docs/workbench/pm/fsg-s0-contract-gate-reconciliation-20261009-v001/evidence/publication-freshness.json"
+    },
+    {
+      "path": "docs/workbench/pm/fsg-s0-contract-gate-reconciliation-20261009-v001/evidence/serialized-model-rerun.json",
+      "sha256": "517fc73bca2e296aa83a8366a267a26fb65a34ba56b0d25e747374f040658718",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/2485b75c032a5dfed5e1faff9535619382bea28c/docs/workbench/pm/fsg-s0-contract-gate-reconciliation-20261009-v001/evidence/serialized-model-rerun.json"
+    },
+    {
+      "path": "docs/workbench/pm/fsg-s0-contract-gate-reconciliation-20261009-v001/evidence/source-manifest.json",
+      "sha256": "623dec3373cb3dfc6ba166ada3c3cabb92ba10397b9a2d8a35f4a15b2cb90e63",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/2485b75c032a5dfed5e1faff9535619382bea28c/docs/workbench/pm/fsg-s0-contract-gate-reconciliation-20261009-v001/evidence/source-manifest.json"
+    },
+    {
+      "path": "docs/workbench/pm/fsg-s0-contract-gate-reconciliation-20261009-v001/evidence/verify_docs.py",
+      "sha256": "ff0b08115eba622e8d4288593656ca1c97d9dd15a00f50372e945498da5d3264",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/2485b75c032a5dfed5e1faff9535619382bea28c/docs/workbench/pm/fsg-s0-contract-gate-reconciliation-20261009-v001/evidence/verify_docs.py"
+    }
+  ],
+  "repair01_package_files": [
+    {
+      "path": "docs/delivery/fsg-s0-lock-map-repair-01-20261009-v001/CHANGE_LEDGER.md",
+      "sha256": "3369be83adce97ed99aaacdd9f0c87845d77b8dfe07ed1cb2e017c68e2a8cd7d",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/55ef0136facdf2996378e29aa56eaf962a69f1e9/docs/delivery/fsg-s0-lock-map-repair-01-20261009-v001/CHANGE_LEDGER.md"
+    },
+    {
+      "path": "docs/delivery/fsg-s0-lock-map-repair-01-20261009-v001/EVIDENCE.md",
+      "sha256": "82399ee18ed089d9ab72afbc79d2dbb5b6ab7f62af5b08410ec68fbc911b3e45",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/55ef0136facdf2996378e29aa56eaf962a69f1e9/docs/delivery/fsg-s0-lock-map-repair-01-20261009-v001/EVIDENCE.md"
+    },
+    {
+      "path": "docs/delivery/fsg-s0-lock-map-repair-01-20261009-v001/FUTURE_JOINT_SQL_CRITERIA.md",
+      "sha256": "32e10b94b09f1db6317334fd4faa9c38a7f7301093b9c9c203e52e20cf0c9214",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/55ef0136facdf2996378e29aa56eaf962a69f1e9/docs/delivery/fsg-s0-lock-map-repair-01-20261009-v001/FUTURE_JOINT_SQL_CRITERIA.md"
+    },
+    {
+      "path": "docs/delivery/fsg-s0-lock-map-repair-01-20261009-v001/GATES_AND_NEXT_INTAKE.md",
+      "sha256": "68821735f934de290991d21b2c51193084760c8400305678ff436212c43b90df",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/55ef0136facdf2996378e29aa56eaf962a69f1e9/docs/delivery/fsg-s0-lock-map-repair-01-20261009-v001/GATES_AND_NEXT_INTAKE.md"
+    },
+    {
+      "path": "docs/delivery/fsg-s0-lock-map-repair-01-20261009-v001/LEGACY_LOCK_MAP.md",
+      "sha256": "06b54b8ae89b4de7f110c4aff74f8f945f85e1f73b27d26ac5635f7444d12cdd",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/55ef0136facdf2996378e29aa56eaf962a69f1e9/docs/delivery/fsg-s0-lock-map-repair-01-20261009-v001/LEGACY_LOCK_MAP.md"
+    },
+    {
+      "path": "docs/delivery/fsg-s0-lock-map-repair-01-20261009-v001/README.md",
+      "sha256": "e1f2a9c3442f54d48e599f66a044e2322141e6bd54113feefa573fb9d0ee72ae",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/55ef0136facdf2996378e29aa56eaf962a69f1e9/docs/delivery/fsg-s0-lock-map-repair-01-20261009-v001/README.md"
+    },
+    {
+      "path": "docs/delivery/fsg-s0-lock-map-repair-01-20261009-v001/S1_CONTRACT_AND_CONCURRENCY.md",
+      "sha256": "048d64d11752f8925e78e6b92332150aa939d31a4ba5e070f293b9944cc23801",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/55ef0136facdf2996378e29aa56eaf962a69f1e9/docs/delivery/fsg-s0-lock-map-repair-01-20261009-v001/S1_CONTRACT_AND_CONCURRENCY.md"
+    },
+    {
+      "path": "docs/delivery/fsg-s0-lock-map-repair-01-20261009-v001/SOURCE_MATRIX.md",
+      "sha256": "5c87a8b4d41b1e616140dcb3007c65eb354532dfcaa6b9fbe7185cfedac83363",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/55ef0136facdf2996378e29aa56eaf962a69f1e9/docs/delivery/fsg-s0-lock-map-repair-01-20261009-v001/SOURCE_MATRIX.md"
+    },
+    {
+      "path": "docs/delivery/fsg-s0-lock-map-repair-01-20261009-v001/evidence/docs-verification.json",
+      "sha256": "5fa0d5088bb9a924d427b22407574f79fcc04a1256b4b78eb3f7493e48d17694",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/55ef0136facdf2996378e29aa56eaf962a69f1e9/docs/delivery/fsg-s0-lock-map-repair-01-20261009-v001/evidence/docs-verification.json"
+    },
+    {
+      "path": "docs/delivery/fsg-s0-lock-map-repair-01-20261009-v001/evidence/publication-freshness.json",
+      "sha256": "d41fe76c83a75e5afd2722731e37eb4ebc0bc2bc28e0325e8472a71f171ff0e8",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/55ef0136facdf2996378e29aa56eaf962a69f1e9/docs/delivery/fsg-s0-lock-map-repair-01-20261009-v001/evidence/publication-freshness.json"
+    },
+    {
+      "path": "docs/delivery/fsg-s0-lock-map-repair-01-20261009-v001/evidence/serialized-model-rerun.json",
+      "sha256": "577c569fe00f9886918c40bc2ff476f833310bafb474705db84ec18e181faec2",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/55ef0136facdf2996378e29aa56eaf962a69f1e9/docs/delivery/fsg-s0-lock-map-repair-01-20261009-v001/evidence/serialized-model-rerun.json"
+    },
+    {
+      "path": "docs/delivery/fsg-s0-lock-map-repair-01-20261009-v001/evidence/source-manifest.json",
+      "sha256": "40181a23bcdd4e64b03b3c913a0f552c9392e972b0f4781a346f3bceacac87ff",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/55ef0136facdf2996378e29aa56eaf962a69f1e9/docs/delivery/fsg-s0-lock-map-repair-01-20261009-v001/evidence/source-manifest.json"
+    },
+    {
+      "path": "docs/delivery/fsg-s0-lock-map-repair-01-20261009-v001/evidence/verify_docs.py",
+      "sha256": "82359873337b448e98badc71c4f989f0d5553101d6823c0cf976af1be6acb9f5",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/55ef0136facdf2996378e29aa56eaf962a69f1e9/docs/delivery/fsg-s0-lock-map-repair-01-20261009-v001/evidence/verify_docs.py"
+    }
+  ],
+  "lineage": [
+    {
+      "candidate_sha": "2485b75c032a5dfed5e1faff9535619382bea28c",
+      "candidate_tree": "0e80a58f0f486d27ed6192e0936d81d740ab7965",
+      "qa_sha": "cd9d3f3ef61893692bd394f98d98a8ad64322030",
+      "verdict": "FAIL",
+      "finding": "B01",
+      "merge": "MERGE_NOT_RECOMMENDED"
+    },
+    {
+      "candidate_sha": "55ef0136facdf2996378e29aa56eaf962a69f1e9",
+      "candidate_tree": "154a497c95a1b2120c75e6808b50a4a1d3708abf",
+      "qa_sha": "26d5233723b430a6dc9e42a70d2760391157f83a",
+      "verdict": "FAIL",
+      "finding": "B02",
+      "B01": "CORRECTED_IN_NEW_CANDIDATE",
+      "merge": "MERGE_NOT_RECOMMENDED"
+    }
+  ],
+  "repair_attempt": 2,
+  "max_repairs": 5,
+  "repair02_ledger": "../CHANGE_LEDGER.md",
+  "original_admission_sha": "d5dc97b89e725eddf17c87b65390ccdbdbd3a7c1",
+  "historical_observations": {
+    "original": {
+      "status": "WORKING DRAFT — NOT APPROVED — NOT CANONICAL",
+      "base_sha": "65fd416b30238cc9eb7e95555a17bd9cb0beb374",
+      "assignment_sha": "d5dc97b89e725eddf17c87b65390ccdbdbd3a7c1",
+      "observed_at": "2026-10-09T03:09:44.625381+00:00",
+      "source_files": [
+        {
+          "path": "AGENTS.md",
+          "sha256": "3b0ee8112b3b83a6532cf4fc677e5fbc9ee2c612acee48ee3ff3d9cfcddd76ee",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/AGENTS.md"
+        },
+        {
+          "path": "CURSOR.md",
+          "sha256": "935788313a94f6bb108fa85cc77411c38cccb4a7ff96e16a98aa8fbf4472be18",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/CURSOR.md"
+        },
+        {
+          "path": "docs/rules/PROJECT_RECORD_POLICY.md",
+          "sha256": "d3c4036bb11bef6b80ec36f8dded1cd1656f7ce5c687016eba7702d9267204ce",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/docs/rules/PROJECT_RECORD_POLICY.md"
+        },
+        {
+          "path": "apps/api/src/common/actor-fence.service.ts",
+          "sha256": "ee383da7f55a632f0cc291831bc0ab60bd2290b54c9579b882067de94c9e4b00",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/src/common/actor-fence.service.ts"
+        },
+        {
+          "path": "apps/api/src/common/mutation-runner.service.ts",
+          "sha256": "f225db2f780b3d8049b72149ce9e9067329e0ea6c8f6d9804b81a6c792de953e",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/src/common/mutation-runner.service.ts"
+        },
+        {
+          "path": "apps/api/src/safety/pair-fence.service.ts",
+          "sha256": "68a8aed290a21e00e17fb6670cf56d9d7f95270c3601fb476c2a0cb0d35de10c",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/src/safety/pair-fence.service.ts"
+        },
+        {
+          "path": "apps/api/src/safety/safety.service.ts",
+          "sha256": "cc1d8f4c17edb8ddc9e9a8d3cdfef78ef40613a5d6626238895d2234e6cad6c7",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/src/safety/safety.service.ts"
+        },
+        {
+          "path": "apps/api/src/profiles/profiles.service.ts",
+          "sha256": "7a88ee1c27867514a722d4870882064a4956488a05a9683cce3b96c1faa1fd89",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/src/profiles/profiles.service.ts"
+        },
+        {
+          "path": "apps/api/src/profiles/game-preferences.service.ts",
+          "sha256": "cd0aa8f64fb7997714c124c754eaaffe7ca7062b320b3908889af15af6ddb07e",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/src/profiles/game-preferences.service.ts"
+        },
+        {
+          "path": "apps/api/src/auth/identity.service.ts",
+          "sha256": "8ee91d9b6450a3fe32ef8218bc54b69466842775cbaa7b35c16a9ed623ae042d",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/src/auth/identity.service.ts"
+        },
+        {
+          "path": "apps/api/src/auth/session.service.ts",
+          "sha256": "3c81073d6a2519d94dffd95014b426e4f7e36129ab833a115cfc945f111ceca4",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/src/auth/session.service.ts"
+        },
+        {
+          "path": "apps/api/src/database/demo-seed-ops.ts",
+          "sha256": "005101b5b9c6491888a973ea33ee9887217dbd01ad83cddf28e8592432bd49aa",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/src/database/demo-seed-ops.ts"
+        },
+        {
+          "path": "apps/api/src/database/schema.ts",
+          "sha256": "0f5694f2df5f33fe74c23b3b3bcc7cec81abb19b3b2f604369080dbc5a13643b",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/src/database/schema.ts"
+        },
+        {
+          "path": "apps/api/src/games/games.service.ts",
+          "sha256": "bfd904d5eb3e14521a3cab1d16287438ec91cc349934d0dd8a3d54b73ce43efc",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/src/games/games.service.ts"
+        },
+        {
+          "path": "apps/api/src/games/game-authority.service.ts",
+          "sha256": "7d005f66b73a08d54c3a56047a2dc14fb86a49695c9f7c8946f4265b521a85f4",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/src/games/game-authority.service.ts"
+        },
+        {
+          "path": "apps/api/src/games/games-discovery.query.ts",
+          "sha256": "ed7e637cf138dd43cf5b85934487f28949e83af87625dcaa3417a6161c41440d",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/src/games/games-discovery.query.ts"
+        },
+        {
+          "path": "apps/api/src/games/games-map.query.ts",
+          "sha256": "fb8c790ff80f2946ba553956fa9501c49dad0e4ff0815d5606af17ec1a397ffc",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/src/games/games-map.query.ts"
+        },
+        {
+          "path": "apps/api/src/invitations/invitations.service.ts",
+          "sha256": "407e9831a51492857227db8eafcfcbe7984b5f09fc01c5b495c90fb90232e26e",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/src/invitations/invitations.service.ts"
+        },
+        {
+          "path": "apps/api/src/invitations/invitations.controller.ts",
+          "sha256": "76743fb6a9b3515c2e762802207eb5b549ea471b709a1d19e7aacc7a8493aa55",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/src/invitations/invitations.controller.ts"
+        },
+        {
+          "path": "apps/api/src/participations/participations.service.ts",
+          "sha256": "c1aa0bf564c30927d7f5e7b300ee953aa7a0929ebb7c2533fef1bd1b7b2656f1",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/src/participations/participations.service.ts"
+        },
+        {
+          "path": "apps/api/src/participations/participations.controller.ts",
+          "sha256": "36ace932362c0fe7f535546f7667d1da8ac5c264ac0192ba57aefb7ee9b4e8dd",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/src/participations/participations.controller.ts"
+        },
+        {
+          "path": "apps/api/src/messaging/messaging.service.ts",
+          "sha256": "46fd8cb6c32a33383c8c0319a9bbfd3248d15153dc3cdaff86adbfa762ad1177",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/src/messaging/messaging.service.ts"
+        },
+        {
+          "path": "apps/api/src/messaging/contact-state.controller.ts",
+          "sha256": "f64252900a152f5bade5e0b42e497cc71eb55563cca35811891132eaba0ac483",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/src/messaging/contact-state.controller.ts"
+        },
+        {
+          "path": "apps/api/src/inbox/inbox-compose-sql.ts",
+          "sha256": "bdfa0bab9c0cd1ccdfe4aa3a96aa0d2f3d6226b54f9efe89049b99dfeed0d12f",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/src/inbox/inbox-compose-sql.ts"
+        },
+        {
+          "path": "apps/api/src/config/env.ts",
+          "sha256": "3eb27827ca3ae8000594de1baf52e4ff3588be01c301a9d395718f801f66cd09",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/src/config/env.ts"
+        },
+        {
+          "path": "apps/api/src/radar/geographic-consent.ts",
+          "sha256": "9022f9a26707a194835e6f254e154c5cf50b2ccb8592034226fe73ceed5f4a00",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/src/radar/geographic-consent.ts"
+        },
+        {
+          "path": "apps/web/src/components/consumer/pages/PlayersDirectoryPage.tsx",
+          "sha256": "ba52ceb0ddf735bd4ea86650f0a65edba441036afa132e2eb92f3ea429c0856c",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/web/src/components/consumer/pages/PlayersDirectoryPage.tsx"
+        },
+        {
+          "path": "apps/web/src/components/consumer/pages/PublicPlayerProfilePage.tsx",
+          "sha256": "47c249d378c05897a8390081c0c0c19d07e718b184b549abca3d2b17421c46ac",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/web/src/components/consumer/pages/PublicPlayerProfilePage.tsx"
+        },
+        {
+          "path": "apps/web/src/components/consumer/pages/MyGamesPage.tsx",
+          "sha256": "03fb7140edcf6c3177a5d6a9cb61dbceeb481c54b6ac3dc975343010a4940188",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/web/src/components/consumer/pages/MyGamesPage.tsx"
+        },
+        {
+          "path": "packages/contracts/openapi.json",
+          "sha256": "828657e83016b17593251c8930b67c29373d92a51855b02474f3169809aef419",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/packages/contracts/openapi.json"
+        },
+        {
+          "path": "apps/api/migrations/0001_enable_postgis.sql",
+          "sha256": "37e078b87653e7ca0a35536ecb46644a97ce86cf75d483b0401174f963eb1767",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/migrations/0001_enable_postgis.sql"
+        },
+        {
+          "path": "apps/api/migrations/0002_identity_session.sql",
+          "sha256": "d67bb0b850bc0a194d849018acb9dd5b3a23bedb198e41b7ea4fdca39c5622e3",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/migrations/0002_identity_session.sql"
+        },
+        {
+          "path": "apps/api/migrations/0003_organizer_venue_game.sql",
+          "sha256": "1df116356bc01f9a6303a43beab0effa2c69eb7ff559e02807732b5be4af1601",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/migrations/0003_organizer_venue_game.sql"
+        },
+        {
+          "path": "apps/api/migrations/0004_participation_loop.sql",
+          "sha256": "69013021205979ffb795282aa0a153bb791fa14cbf60546400af3acefbc578fa",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/migrations/0004_participation_loop.sql"
+        },
+        {
+          "path": "apps/api/migrations/0005_game_scoped_authority.sql",
+          "sha256": "e9226e01246d51f361399fdd9dfd93a73d1c717c2ddfed1d0c5eec0236060dad",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/migrations/0005_game_scoped_authority.sql"
+        },
+        {
+          "path": "apps/api/migrations/0006_regular_vs_trainer_game.sql",
+          "sha256": "ae6df7cc279948214fa407e2fcf8d9f42b202c4390de3843ccdb860919fe8522",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/migrations/0006_regular_vs_trainer_game.sql"
+        },
+        {
+          "path": "apps/api/migrations/0007_idempotency_reservation.sql",
+          "sha256": "6dd69d473d34483f010eb0895098f1a2f60781eb4b772be0e84c032b4cf7b8da",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/migrations/0007_idempotency_reservation.sql"
+        },
+        {
+          "path": "apps/api/migrations/0008_profiles_safety_directory.sql",
+          "sha256": "cc8396f153f525e4cbec64c43aad3ee9c036fe382814db51f0ce0ab6e54a3c3d",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/migrations/0008_profiles_safety_directory.sql"
+        },
+        {
+          "path": "apps/api/migrations/0009_radar_presence_matching.sql",
+          "sha256": "2c405386bf56a5be05a064b2a97c354668f5c48d6c3e5a4cd295aac7fafcee59",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/migrations/0009_radar_presence_matching.sql"
+        },
+        {
+          "path": "apps/api/migrations/0010_durable_jobs_pgboss.sql",
+          "sha256": "9e02d1ec029af166e18b734d3d9ac7b07284bff5616e339e4d22f20614f6aaf7",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/migrations/0010_durable_jobs_pgboss.sql"
+        },
+        {
+          "path": "apps/api/migrations/0011_text_dm.sql",
+          "sha256": "4543cc3f8a03fe6d959eb34b0cedb9b42ad8c1b2c8070064eb27fd5035ed95cb",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/migrations/0011_text_dm.sql"
+        },
+        {
+          "path": "apps/api/migrations/0012_game_invitations.sql",
+          "sha256": "70c1729ef8382321811f02a2155cda90a11ef1a02fe15157a94b6e977a4dcc00",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/migrations/0012_game_invitations.sql"
+        },
+        {
+          "path": "apps/api/migrations/0013_game_chat.sql",
+          "sha256": "7be89cc7468a0650501bfbc0da72ab4239f700cdff0d5672f1a923a8e5c0bbf9",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/migrations/0013_game_chat.sql"
+        },
+        {
+          "path": "apps/api/migrations/0014_composed_inbox.sql",
+          "sha256": "ff6d679d59a483514157b336a807dc16ca324b86da7eede9b138816a40428227",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/migrations/0014_composed_inbox.sql"
+        },
+        {
+          "path": "apps/api/migrations/0015_account_security_controls.sql",
+          "sha256": "06110af7bd6329706442a64d7ae8a6e2cf04b53a8499cf6df07c46a517f9b829",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/migrations/0015_account_security_controls.sql"
+        },
+        {
+          "path": "apps/api/migrations/0016_city_saint_petersburg.sql",
+          "sha256": "e8e7b20fb9dd5db4f8c33c41b114e53fd2f2818c7a901aa657ded8eaeb9d9904",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/migrations/0016_city_saint_petersburg.sql"
+        },
+        {
+          "path": "apps/api/migrations/0017_owned_avatar.sql",
+          "sha256": "3b293d2fe6a752c5201c98dd00da5ba85ee04cb64d337eb6a0792c8217f9595b",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/migrations/0017_owned_avatar.sql"
+        },
+        {
+          "path": "apps/api/migrations/0018_venue_catalog_dedupe.sql",
+          "sha256": "b5d7a401c16a4691c7d86332247125eeec30a27858935edd83aee77fcfe01a27",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/migrations/0018_venue_catalog_dedupe.sql"
+        },
+        {
+          "path": "apps/api/migrations/0019_venue_legacy_identity_extract.sql",
+          "sha256": "5203c3e85fcc009e7d086977c8f944cf73d71d9be9c0567202449ef5245ef4d6",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/migrations/0019_venue_legacy_identity_extract.sql"
+        },
+        {
+          "path": "apps/api/migrations/0020_avatar_moderation.sql",
+          "sha256": "c28ede4a311fa4c20f6d999b434732e1fd0230c73de1f33c6cdb05cf1999d39c",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/migrations/0020_avatar_moderation.sql"
+        },
+        {
+          "path": "apps/api/migrations/0021_radar_geographic_consent.sql",
+          "sha256": "6ebef93f3cbe607dcbd5b1a2c1fea18ccbcf3d831aeb758277d1cb52ddd5911a",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/migrations/0021_radar_geographic_consent.sql"
+        },
+        {
+          "path": "apps/api/migrations/0022_players_unified_radar.sql",
+          "sha256": "6246772ededaa8fe98ef6f9fe6f56818c1b140a5fbd89c6f27c33f6e38386a56",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/migrations/0022_players_unified_radar.sql"
+        },
+        {
+          "path": "apps/api/migrations/0023_user_game_preferences.sql",
+          "sha256": "982964857c1e3c735bfa3e125df24dce0640fecfb1afeea5e8f31d22af02b971",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/migrations/0023_user_game_preferences.sql"
+        },
+        {
+          "path": "apps/api/src/app.module.ts",
+          "sha256": "6e6c3ba3919eabe0a2a3bf95223d78d85f18ad2b1be1efa2178613b770a89bf8",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/src/app.module.ts"
+        },
+        {
+          "path": "apps/api/src/core.module.ts",
+          "sha256": "f6304c3728437f578e2329d387098d523bd98abefffa6d288357b42d417cc1a1",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/src/core.module.ts"
+        },
+        {
+          "path": "apps/api/src/messaging/discovery-proof.hook.ts",
+          "sha256": "47dc7a9afeb10c846d04b361e633835886653cf36beaa56540a935e85787419e",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/src/messaging/discovery-proof.hook.ts"
+        },
+        {
+          "path": "apps/api/test/integration/s00a.transaction-auth.test.ts",
+          "sha256": "126ec1d54e3acbc7a0c2b09063baebf5e40bec1a547c110fe5ba9f8f23ac99a3",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/test/integration/s00a.transaction-auth.test.ts"
+        },
+        {
+          "path": "apps/api/test/integration/ls01.profiles-safety.test.ts",
+          "sha256": "ae69d170942e24717cebd0344dd722b929baaceef0e09b4af5cef17892980e6c",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/test/integration/ls01.profiles-safety.test.ts"
+        },
+        {
+          "path": "apps/api/test/integration/ls03.text-dm.test.ts",
+          "sha256": "1a28eab66c69f0bebfe05745feded2ec091db52874e59491188835f21c524df8",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/test/integration/ls03.text-dm.test.ts"
+        },
+        {
+          "path": "apps/api/test/integration/ls04.game-invitation.test.ts",
+          "sha256": "5dfadd95f4c7b399b6278058691f82b0e152cfdecd1a5f1543eb28caccc79764",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/test/integration/ls04.game-invitation.test.ts"
+        },
+        {
+          "path": "apps/api/test/integration/ls06.composed-inbox.test.ts",
+          "sha256": "f763a83a93d70a910115e7772a7e74dfc79565cb034779332f8bfa023f557391",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/test/integration/ls06.composed-inbox.test.ts"
+        },
+        {
+          "path": "apps/api/test/integration/fb01.game-preferences-seat.test.ts",
+          "sha256": "481df853f59120507ba26899bb448229043730dbf455a92e88b705bedab911f9",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/65fd416b30238cc9eb7e95555a17bd9cb0beb374/apps/api/test/integration/fb01.game-preferences-seat.test.ts"
+        }
+      ],
+      "migration_max": "0023_user_game_preferences.sql",
+      "new_fsg_openapi_paths": [],
+      "openapi_path_count": 78,
+      "draft_heads": {
+        "132": {
+          "head_sha": "4388a5a8c28963143cd39d1eb1778b9f2974d5c1",
+          "head_is_main_ancestor": false
+        },
+        "135": {
+          "head_sha": "f4f59813c33512897e03b93ac09bd106989c832e",
+          "head_is_main_ancestor": false
+        },
+        "142": {
+          "head_sha": "d75d4a3c2a30407286b245aacb6ab2779ee63de9",
+          "head_is_main_ancestor": true
+        },
+        "146": {
+          "head_sha": "05c507bb288b5eced9872fb2f7aa448f733ddcc3",
+          "head_is_main_ancestor": true
+        }
+      },
+      "fresh_pr_state": "UNVERIFIED: gh absent; unauthenticated GitHub API returned 404 for PR132/135/142/146; use PM exact status snapshot + Git ancestry, not a claimed fresh OPEN status",
+      "runtime": "NOT_PROBED; main/source merge is not deployment",
+      "runner_observation": {
+        "observed_at": "2026-10-09T03:09:44.807026+00:00",
+        "read_only": true,
+        "active": [
+          {
+            "id": "p0-admission-drift-phantom-repair-01-20261009-v001",
+            "locks": [
+              "runner-control"
+            ]
+          },
+          {
+            "id": "fsg-s0-contract-gate-reconciliation-20261009-v001",
+            "locks": [
+              "docs:fsg-s0"
+            ]
+          },
+          {
+            "id": "fb01-header006-provenance-bind-20261009-v001",
+            "locks": [
+              "docs:header006-proof"
+            ]
+          }
+        ],
+        "note": "point-in-time observation only; no other worktree inspected; S1 must recheck at admission"
+      },
+      "source_drift_from_architect_base": [
+        "apps/api/migrations/0023_user_game_preferences.sql",
+        "apps/api/package.json",
+        "apps/api/src/database/schema.ts",
+        "apps/api/src/games/GAMES_MAP.md",
+        "apps/api/src/games/games-discovery.query.ts",
+        "apps/api/src/games/games-map.query.ts",
+        "apps/api/src/games/games-map.read.ts",
+        "apps/api/src/games/games.controller.ts",
+        "apps/api/src/games/games.module.ts",
+        "apps/api/src/games/games.service.ts",
+        "apps/api/src/messaging/contact-state.controller.ts",
+        "apps/api/src/messaging/messaging.module.ts",
+        "apps/api/src/messaging/messaging.service.ts",
+        "apps/api/src/participations/participations.service.ts",
+        "apps/api/src/profiles/game-preferences.service.ts",
+        "apps/api/src/profiles/me-game-preferences.controller.ts",
+        "apps/api/src/profiles/profiles.module.ts",
+        "apps/api/src/venues/effective-venue.query.ts",
+        "apps/api/test/integration/fb01.game-preferences-seat.test.ts",
+        "apps/api/test/integration/game.discovery.test.ts",
+        "apps/api/test/integration/games.map.test.ts",
+        "apps/api/test/integration/gmap1.fb01-preservation.test.ts",
+        "apps/api/test/integration/ls03.text-dm.test.ts",
+        "apps/api/test/integration/ls04.game-invitation.test.ts",
+        "apps/api/test/integration/ls05.game-chat.test.ts",
+        "apps/api/test/integration/migration.smoke.test.ts",
+        "apps/api/test/integration/participation.loop.test.ts",
+        "apps/api/test/integration/radar.geographic.test.ts",
+        "apps/api/test/unit/games-map-boundaries.test.ts",
+        "apps/web/AGENTS.md",
+        "apps/web/CLAUDE.md",
+        "apps/web/package.json",
+        "apps/web/src/components/consumer/RootNav.tsx",
+        "apps/web/src/components/consumer/messages/DirectConversation.tsx",
+        "apps/web/src/components/consumer/messages/GameConversation.tsx",
+        "apps/web/src/components/consumer/messages/MessagesPage.tsx",
+        "apps/web/src/components/consumer/messages/NewContact.tsx",
+        "apps/web/src/components/consumer/pages/PlayersDirectoryPage.tsx",
+        "apps/web/src/components/consumer/pages/PublicPlayerProfilePage.tsx",
+        "apps/web/src/components/consumer/players/ContactAction.tsx",
+        "apps/web/src/components/consumer/players/ProfileComposition.tsx",
+        "apps/web/src/components/consumer/radar/GeographicRadarMap.tsx",
+        "apps/web/src/components/consumer/radar/RadarContact.tsx",
+        "apps/web/src/components/consumer/radar/RadarControls.tsx",
+        "apps/web/src/components/consumer/radar/RadarPage.tsx",
+        "apps/web/src/components/consumer/radar/RadarSessionProvider.tsx",
+        "apps/web/src/components/consumer/radar/UnifiedPlayerCard.tsx",
+        "apps/web/src/components/consumer/radar/UnifiedPlayerPreview.tsx",
+        "apps/web/src/lib/api-client.ts",
+        "apps/web/src/lib/direct-history.ts",
+        "apps/web/src/lib/foreground-updates.ts",
+        "apps/web/src/lib/messaging-api.ts",
+        "apps/web/src/lib/messaging-types.ts",
+        "apps/web/src/lib/radar-controller.ts",
+        "apps/web/src/lib/radar-map-assets.ts",
+        "apps/web/src/lib/radar-types.ts",
+        "apps/web/src/lib/unified-directory.ts",
+        "apps/web/src/styles/discovery.css",
+        "apps/web/src/styles/games.css",
+        "apps/web/src/styles/players.css",
+        "apps/web/src/styles/radar-geographic.css",
+        "apps/web/test/contact-action.test.tsx",
+        "apps/web/test/direct-history.test.ts",
+        "apps/web/test/fb01-cards-modal.test.ts",
+        "apps/web/test/foreground-updates.test.ts",
+        "apps/web/test/radar-unified-activation.test.ts",
+        "apps/web/test/unified-directory.test.ts",
+        "apps/web/test/web02-players-profile.test.ts",
+        "packages/contracts/openapi.json",
+        "packages/contracts/package.json",
+        "packages/contracts/scripts/check-openapi.mjs",
+        "packages/contracts/scripts/generate-game-types.mjs",
+        "packages/contracts/src/game.generated.ts",
+        "packages/contracts/src/index.ts"
+      ]
+    },
+    "repair01": {
+      "status": "WORKING DRAFT — NOT APPROVED — NOT CANONICAL",
+      "base_sha": "8d7b4088072657e77c2c3827ecf84872b607ad9d",
+      "assignment_sha": "8d7b4088072657e77c2c3827ecf84872b607ad9d",
+      "observed_at": "2026-10-09T03:41:49.082795+00:00",
+      "migration_max": "0023_user_game_preferences.sql",
+      "new_fsg_openapi_paths": [],
+      "openapi_path_count": 78,
+      "runtime": "NOT_PROBED; main/source merge is not deployment",
+      "source_drift_from_architect_base": [
+        "apps/api/migrations/0023_user_game_preferences.sql",
+        "apps/api/package.json",
+        "apps/api/src/database/schema.ts",
+        "apps/api/src/games/GAMES_MAP.md",
+        "apps/api/src/games/games-discovery.query.ts",
+        "apps/api/src/games/games-map.query.ts",
+        "apps/api/src/games/games-map.read.ts",
+        "apps/api/src/games/games.controller.ts",
+        "apps/api/src/games/games.module.ts",
+        "apps/api/src/games/games.service.ts",
+        "apps/api/src/messaging/contact-state.controller.ts",
+        "apps/api/src/messaging/messaging.module.ts",
+        "apps/api/src/messaging/messaging.service.ts",
+        "apps/api/src/participations/participations.service.ts",
+        "apps/api/src/profiles/game-preferences.service.ts",
+        "apps/api/src/profiles/me-game-preferences.controller.ts",
+        "apps/api/src/profiles/profiles.module.ts",
+        "apps/api/src/venues/effective-venue.query.ts",
+        "apps/api/test/integration/fb01.game-preferences-seat.test.ts",
+        "apps/api/test/integration/game.discovery.test.ts",
+        "apps/api/test/integration/games.map.test.ts",
+        "apps/api/test/integration/gmap1.fb01-preservation.test.ts",
+        "apps/api/test/integration/ls03.text-dm.test.ts",
+        "apps/api/test/integration/ls04.game-invitation.test.ts",
+        "apps/api/test/integration/ls05.game-chat.test.ts",
+        "apps/api/test/integration/migration.smoke.test.ts",
+        "apps/api/test/integration/participation.loop.test.ts",
+        "apps/api/test/integration/radar.geographic.test.ts",
+        "apps/api/test/unit/games-map-boundaries.test.ts",
+        "apps/web/AGENTS.md",
+        "apps/web/CLAUDE.md",
+        "apps/web/package.json",
+        "apps/web/src/components/consumer/RootNav.tsx",
+        "apps/web/src/components/consumer/messages/DirectConversation.tsx",
+        "apps/web/src/components/consumer/messages/GameConversation.tsx",
+        "apps/web/src/components/consumer/messages/MessagesPage.tsx",
+        "apps/web/src/components/consumer/messages/NewContact.tsx",
+        "apps/web/src/components/consumer/pages/PlayersDirectoryPage.tsx",
+        "apps/web/src/components/consumer/pages/PublicPlayerProfilePage.tsx",
+        "apps/web/src/components/consumer/players/ContactAction.tsx",
+        "apps/web/src/components/consumer/players/ProfileComposition.tsx",
+        "apps/web/src/components/consumer/radar/GeographicRadarMap.tsx",
+        "apps/web/src/components/consumer/radar/RadarContact.tsx",
+        "apps/web/src/components/consumer/radar/RadarControls.tsx",
+        "apps/web/src/components/consumer/radar/RadarPage.tsx",
+        "apps/web/src/components/consumer/radar/RadarSessionProvider.tsx",
+        "apps/web/src/components/consumer/radar/UnifiedPlayerCard.tsx",
+        "apps/web/src/components/consumer/radar/UnifiedPlayerPreview.tsx",
+        "apps/web/src/lib/api-client.ts",
+        "apps/web/src/lib/direct-history.ts",
+        "apps/web/src/lib/foreground-updates.ts",
+        "apps/web/src/lib/messaging-api.ts",
+        "apps/web/src/lib/messaging-types.ts",
+        "apps/web/src/lib/radar-controller.ts",
+        "apps/web/src/lib/radar-map-assets.ts",
+        "apps/web/src/lib/radar-types.ts",
+        "apps/web/src/lib/unified-directory.ts",
+        "apps/web/src/styles/discovery.css",
+        "apps/web/src/styles/games.css",
+        "apps/web/src/styles/players.css",
+        "apps/web/src/styles/radar-geographic.css",
+        "apps/web/test/contact-action.test.tsx",
+        "apps/web/test/direct-history.test.ts",
+        "apps/web/test/fb01-cards-modal.test.ts",
+        "apps/web/test/foreground-updates.test.ts",
+        "apps/web/test/radar-unified-activation.test.ts",
+        "apps/web/test/unified-directory.test.ts",
+        "apps/web/test/web02-players-profile.test.ts",
+        "packages/contracts/openapi.json",
+        "packages/contracts/package.json",
+        "packages/contracts/scripts/check-openapi.mjs",
+        "packages/contracts/scripts/generate-game-types.mjs",
+        "packages/contracts/src/game.generated.ts",
+        "packages/contracts/src/index.ts"
+      ],
+      "source_comparison_sha": "65fd416b30238cc9eb7e95555a17bd9cb0beb374",
+      "prior_candidate_sha": "2485b75c032a5dfed5e1faff9535619382bea28c",
+      "prior_candidate_tree": "0e80a58f0f486d27ed6192e0936d81d740ab7965",
+      "terminal_qa_sha": "cd9d3f3ef61893692bd394f98d98a8ad64322030",
+      "original_admission_sha": "d5dc97b89e725eddf17c87b65390ccdbdbd3a7c1",
+      "prior_observation": {
+        "runner_observation": {
+          "observed_at": "2026-10-09T03:09:44.807026+00:00",
+          "read_only": true,
+          "active": [
+            {
+              "id": "p0-admission-drift-phantom-repair-01-20261009-v001",
+              "locks": [
+                "runner-control"
+              ]
+            },
+            {
+              "id": "fsg-s0-contract-gate-reconciliation-20261009-v001",
+              "locks": [
+                "docs:fsg-s0"
+              ]
+            },
+            {
+              "id": "fb01-header006-provenance-bind-20261009-v001",
+              "locks": [
+                "docs:header006-proof"
+              ]
+            }
+          ],
+          "note": "point-in-time observation only; no other worktree inspected; S1 must recheck at admission"
+        },
+        "draft_heads": {
+          "132": {
+            "head_sha": "4388a5a8c28963143cd39d1eb1778b9f2974d5c1",
+            "head_is_main_ancestor": false
+          },
+          "135": {
+            "head_sha": "f4f59813c33512897e03b93ac09bd106989c832e",
+            "head_is_main_ancestor": false
+          },
+          "142": {
+            "head_sha": "d75d4a3c2a30407286b245aacb6ab2779ee63de9",
+            "head_is_main_ancestor": true
+          },
+          "146": {
+            "head_sha": "05c507bb288b5eced9872fb2f7aa448f733ddcc3",
+            "head_is_main_ancestor": true
+          }
+        },
+        "fresh_pr_state": "UNVERIFIED: gh absent; unauthenticated GitHub API returned 404 for PR132/135/142/146; use PM exact status snapshot + Git ancestry, not a claimed fresh OPEN status"
+      },
+      "runner_observation": {
+        "observed_at": "2026-10-09T03:41:49.082795+00:00",
+        "read_only": true,
+        "active": [
+          {
+            "id": "fsg-s0-lock-map-repair-01-20261009-v001",
+            "locks": [
+              "docs:fsg-s0"
+            ]
+          }
+        ],
+        "note": "Own task only; no overlapping writer observed; not a future S1 reservation"
+      },
+      "fresh_pr_state": "NOT_RECHECKED: prior PM/QA exact bindings retained as historical evidence; no new PR UI status claimed",
+      "current_main_sha": "7e24b4a40d7594293df3c72d0792f702dbb89be8",
+      "material_source_drift": []
+    }
+  },
+  "runner_observation": {
+    "read_only": true,
+    "active": [
+      {
+        "id": "fsg-s0-lock-map-repair-02-20261009-v001",
+        "locks": [
+          "docs:fsg-s0"
+        ]
+      }
+    ],
+    "note": "Own task only; point-in-time, no future reservation"
+  },
+  "source_drift_from_architect_base": [
+    "apps/api/migrations/0023_user_game_preferences.sql",
+    "apps/api/package.json",
+    "apps/api/src/database/schema.ts",
+    "apps/api/src/games/GAMES_MAP.md",
+    "apps/api/src/games/games-discovery.query.ts",
+    "apps/api/src/games/games-map.query.ts",
+    "apps/api/src/games/games-map.read.ts",
+    "apps/api/src/games/games.controller.ts",
+    "apps/api/src/games/games.module.ts",
+    "apps/api/src/games/games.service.ts",
+    "apps/api/src/messaging/contact-state.controller.ts",
+    "apps/api/src/messaging/messaging.module.ts",
+    "apps/api/src/messaging/messaging.service.ts",
+    "apps/api/src/participations/participations.service.ts",
+    "apps/api/src/profiles/game-preferences.service.ts",
+    "apps/api/src/profiles/me-game-preferences.controller.ts",
+    "apps/api/src/profiles/profiles.module.ts",
+    "apps/api/src/venues/effective-venue.query.ts",
+    "apps/api/test/integration/fb01.game-preferences-seat.test.ts",
+    "apps/api/test/integration/game.discovery.test.ts",
+    "apps/api/test/integration/games.map.test.ts",
+    "apps/api/test/integration/gmap1.fb01-preservation.test.ts",
+    "apps/api/test/integration/ls03.text-dm.test.ts",
+    "apps/api/test/integration/ls04.game-invitation.test.ts",
+    "apps/api/test/integration/ls05.game-chat.test.ts",
+    "apps/api/test/integration/migration.smoke.test.ts",
+    "apps/api/test/integration/participation.loop.test.ts",
+    "apps/api/test/integration/radar.geographic.test.ts",
+    "apps/api/test/unit/games-map-boundaries.test.ts",
+    "apps/web/AGENTS.md",
+    "apps/web/CLAUDE.md",
+    "apps/web/package.json",
+    "apps/web/src/components/consumer/RootNav.tsx",
+    "apps/web/src/components/consumer/messages/DirectConversation.tsx",
+    "apps/web/src/components/consumer/messages/GameConversation.tsx",
+    "apps/web/src/components/consumer/messages/MessagesPage.tsx",
+    "apps/web/src/components/consumer/messages/NewContact.tsx",
+    "apps/web/src/components/consumer/pages/PlayersDirectoryPage.tsx",
+    "apps/web/src/components/consumer/pages/PublicPlayerProfilePage.tsx",
+    "apps/web/src/components/consumer/players/ContactAction.tsx",
+    "apps/web/src/components/consumer/players/ProfileComposition.tsx",
+    "apps/web/src/components/consumer/radar/GeographicRadarMap.tsx",
+    "apps/web/src/components/consumer/radar/RadarContact.tsx",
+    "apps/web/src/components/consumer/radar/RadarControls.tsx",
+    "apps/web/src/components/consumer/radar/RadarPage.tsx",
+    "apps/web/src/components/consumer/radar/RadarSessionProvider.tsx",
+    "apps/web/src/components/consumer/radar/UnifiedPlayerCard.tsx",
+    "apps/web/src/components/consumer/radar/UnifiedPlayerPreview.tsx",
+    "apps/web/src/lib/api-client.ts",
+    "apps/web/src/lib/direct-history.ts",
+    "apps/web/src/lib/foreground-updates.ts",
+    "apps/web/src/lib/messaging-api.ts",
+    "apps/web/src/lib/messaging-types.ts",
+    "apps/web/src/lib/radar-controller.ts",
+    "apps/web/src/lib/radar-map-assets.ts",
+    "apps/web/src/lib/radar-types.ts",
+    "apps/web/src/lib/unified-directory.ts",
+    "apps/web/src/styles/discovery.css",
+    "apps/web/src/styles/games.css",
+    "apps/web/src/styles/players.css",
+    "apps/web/src/styles/radar-geographic.css",
+    "apps/web/test/contact-action.test.tsx",
+    "apps/web/test/direct-history.test.ts",
+    "apps/web/test/fb01-cards-modal.test.ts",
+    "apps/web/test/foreground-updates.test.ts",
+    "apps/web/test/radar-unified-activation.test.ts",
+    "apps/web/test/unified-directory.test.ts",
+    "apps/web/test/web02-players-profile.test.ts",
+    "packages/contracts/openapi.json",
+    "packages/contracts/package.json",
+    "packages/contracts/scripts/check-openapi.mjs",
+    "packages/contracts/scripts/generate-game-types.mjs",
+    "packages/contracts/src/game.generated.ts",
+    "packages/contracts/src/index.ts"
+  ],
+  "fresh_pr_state": "NOT_RECHECKED; historical exact bindings only",
+  "runtime": "NOT_PROBED; source != deployment",
+  "migration_max": "0023_user_game_preferences.sql",
+  "openapi_path_count": 78,
+  "new_fsg_openapi_paths": [],
+  "historical_record_files": [
+    {
+      "path": "docs/handoffs/2026-10-09_pm_fsg-s0-contract-gate-reconciliation-v001.md",
+      "sha256": "2968fdee9b0b025c81e434f00f9483b00f8363d48479433bce1a81ab07124e4b",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/2485b75c032a5dfed5e1faff9535619382bea28c/docs/handoffs/2026-10-09_pm_fsg-s0-contract-gate-reconciliation-v001.md",
+      "sha": "2485b75c032a5dfed5e1faff9535619382bea28c"
+    },
+    {
+      "path": "docs/handoffs/2026-10-09_fsg-s0-lock-map-repair-01-v001.md",
+      "sha256": "112095585f99b43fd1c78bbea5a5f69d8cd54d77e6594fc574d7cf1e0d2299af",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/55ef0136facdf2996378e29aa56eaf962a69f1e9/docs/handoffs/2026-10-09_fsg-s0-lock-map-repair-01-v001.md",
+      "sha": "55ef0136facdf2996378e29aa56eaf962a69f1e9"
+    },
+    {
+      "path": "docs/handoffs/2026-10-09_qa_to_pm_fsg-s0-contract-gate-reconciliation-v001.md",
+      "sha256": "ada4f81b73fccefe8e400542fc3e8136bca4f90471465f668476dc168f59bb15",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/cd9d3f3ef61893692bd394f98d98a8ad64322030/docs/handoffs/2026-10-09_qa_to_pm_fsg-s0-contract-gate-reconciliation-v001.md",
+      "sha": "cd9d3f3ef61893692bd394f98d98a8ad64322030"
+    },
+    {
+      "path": "docs/handoffs/2026-10-09_qa_fsg-s0-lock-map-reverify-01-v001.md",
+      "sha256": "f038482eeecab717d10c2f6cf42d11b33ca40b2a326827e37e5e1b926ed0be05",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/26d5233723b430a6dc9e42a70d2760391157f83a/docs/handoffs/2026-10-09_qa_fsg-s0-lock-map-reverify-01-v001.md",
+      "sha": "26d5233723b430a6dc9e42a70d2760391157f83a"
+    },
+    {
+      "path": "docs/workbench/qa/qa-fsg-s0-contract-gate-reconciliation-20261009-v001/checks.json",
+      "sha256": "705b309c703ed0bf8557446bd6c106b7ac12e33b7c145f8e8b333d1c0d9703f4",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/cd9d3f3ef61893692bd394f98d98a8ad64322030/docs/workbench/qa/qa-fsg-s0-contract-gate-reconciliation-20261009-v001/checks.json",
+      "sha": "cd9d3f3ef61893692bd394f98d98a8ad64322030"
+    },
+    {
+      "path": "docs/workbench/qa/qa-fsg-s0-contract-gate-reconciliation-20261009-v001/verdict.json",
+      "sha256": "c7cd04b2ccd1d691c2045a24d5e3262e53becba8a5c4c68c3af20b23fdf95dd8",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/cd9d3f3ef61893692bd394f98d98a8ad64322030/docs/workbench/qa/qa-fsg-s0-contract-gate-reconciliation-20261009-v001/verdict.json",
+      "sha": "cd9d3f3ef61893692bd394f98d98a8ad64322030"
+    },
+    {
+      "path": "docs/handoffs/evidence/qa-fsg-s0-lock-map-reverify-01-20261009-v001/checks.json",
+      "sha256": "d311338da9c43406a9ec7fb9694d75b1dbd347e0b38f3f0bc8e7cbbd5f22538e",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/26d5233723b430a6dc9e42a70d2760391157f83a/docs/handoffs/evidence/qa-fsg-s0-lock-map-reverify-01-20261009-v001/checks.json",
+      "sha": "26d5233723b430a6dc9e42a70d2760391157f83a"
+    },
+    {
+      "path": "docs/handoffs/evidence/qa-fsg-s0-lock-map-reverify-01-20261009-v001/verdict.json",
+      "sha256": "d707141eeefb3e02f95ee539f84f1aa974f1e3c129d8dc66383bce17c0654654",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/26d5233723b430a6dc9e42a70d2760391157f83a/docs/handoffs/evidence/qa-fsg-s0-lock-map-reverify-01-20261009-v001/verdict.json",
+      "sha": "26d5233723b430a6dc9e42a70d2760391157f83a"
+    },
+    {
+      "path": "docs/handoffs/evidence/qa-fsg-s0-lock-map-reverify-01-20261009-v001/identity-lock-order-finding.json",
+      "sha256": "699595b3d50deed56629589e9b63c8b81ff428b42caf82ea71ad85ace226b2c5",
+      "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/26d5233723b430a6dc9e42a70d2760391157f83a/docs/handoffs/evidence/qa-fsg-s0-lock-map-reverify-01-20261009-v001/identity-lock-order-finding.json",
+      "sha": "26d5233723b430a6dc9e42a70d2760391157f83a"
+    }
+  ]
+}

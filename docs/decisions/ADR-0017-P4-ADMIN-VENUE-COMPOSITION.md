@@ -1,0 +1,19 @@
+# ADR-0017 — Internal Admin and Venue composition after P3
+
+Status: PROPOSED, SOURCE_ONLY; implementation candidate requires independent QA. 2026-10-10.
+
+Execution base `1dc29f68bc6f1c3cf2132c96713507c5a0927d4a`, source base `84d0c666d38bf68153366a24a9cd40c31a8d6952`; exact admission `fa726ceb8329e06ae593ca39ea7323c0751aa85a`.
+
+Compose the accepted repaired Admin identity, A0b shell, A2a moderation, A2b restrictions and A3 cases as bounded additions to current P1/P2/P3. Consumer authentication, new unified discovery and Email remain authoritative. No historical whole-tree replacement or acceptance of failed A0a/A1b. The separate Admin application calls the existing modular API; no second database or direct browser database access.
+
+Admin remains disabled by default. Enabling requires explicitly synthetic local/test configuration, loopback API/database, separate localhost origin and pepper. Every privileged call rechecks database principal, session, credential, fixed role and exact Origin; mutations additionally verify CSRF, idempotency and versions, with signed WebAuthn step-up. Superadmin keeps all 19 explicit permissions; no permission editor or real staff grant is introduced. Audit commits with commands; privileged reads fail closed when audit cannot commit.
+
+Venue-owned lifecycle commands run within the Admin transaction. A common catalog advisory fence serializes proposals, legacy identity promotion, Admin editing/merging and new Game venue selection; merge locks Venue UUIDs and Games deterministically. Explicit merge requires fresh step-up and both versions, same city, final-target resolution and no self/cycle or distinct hall/unit conflation. Live Games, identity reservations and aliases move atomically. Historical duplicate, merge and audit/action records retain original IDs; their FKs are history, not live ownership. Existing Game version increments on relocation. Existing keys are retained as aliases; the old one-key-per-venue index becomes nonunique. Editing into another identity creates audited duplicate review without changing Venue fields. No bulk delete or booking.
+
+Migration0027 is repaired Admin identity,0028 new Venue lifecycle,0029 game moderation,0030 user restrictions,0031 scoped cases. Main0001–0026 bytes are preserved. These imported Admin migrations were not applied to current main; only their new publication filenames change. Deployment/upgrade from a separately installed historical Admin composite is not admitted here.
+
+Moderation calls the Sessions-owned cancel transaction, retaining capacity, participants, invitations and chat cascades. Hide/takedown/restore use an orthogonal projection shared by public list/map. Restrictions are expiring capability ledgers and separate explicit consumer-session revocation. Current P3 actor NO KEY UPDATE fences remain; unified Radar mutations, selection and proof redemption enforce relevant capabilities. Restriction commands update the target user timestamp to invalidate stale repeatable-read snapshots and existing P1 query revisions; query deadlines account for restriction expiry. Historical allowed reads and privacy-off actions remain available.
+
+Cases retain assigned-role scope and minimal synthetic evidence. O-ADM-04/05 are unresolved: default capture/read disabled, explicit synthetic TTL only, no legal retention period, live hold or purge authorization. Existing reports remain compatible.
+
+Consequences: catalog writes serialize conservatively; Admin authority serialization is inherited. Live deployment needs its own image/config/migration/rollback and Owner gates. Source rollback is revert of this candidate; an eventual applied schema rollback must retain append-only history and disable gates, never rewrite applied migrations. Author checks are not independent acceptance.

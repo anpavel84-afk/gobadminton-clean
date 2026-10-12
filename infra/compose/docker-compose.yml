@@ -1,0 +1,175 @@
+name: gobadminton_mvp
+
+# Split MVP topology (ADR-0010):
+#   Germany backend:  docker compose --profile backend up -d
+#   Moscow web:       docker compose --profile web up -d
+# Full local stack:   docker compose --profile backend --profile web up -d
+
+services:
+  db:
+    profiles: ["backend"]
+    # Digest verified by docker pull on vmi3510488 during F-01.
+    image: postgis/postgis:18-3.6@sha256:60f6ad1d21ea86a67d47780b9a0d1e1d200500f62b19293fa834d0dea80b8677
+    container_name: gobadminton-mvp-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: gobadminton
+      POSTGRES_USER: gobadminton
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    volumes:
+      # PostgreSQL 18+ images expect the mount at /var/lib/postgresql (not .../data).
+      - gobadminton_mvp_pgdata:/var/lib/postgresql
+    networks:
+      - gobadminton_mvp_internal
+    # Postgres is not published on the host; access only via compose network / one-off migrate.
+    # Require a real SQL round-trip so PostGIS image initdb temporary server is not treated as ready.
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U gobadminton -d gobadminton && psql -U gobadminton -d gobadminton -v ON_ERROR_STOP=1 -c \"SELECT PostGIS_Version();\" >/dev/null",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 40s
+    mem_limit: 1024m
+    cpus: "1.0"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  migrate:
+    profiles: ["backend"]
+    image: gobadminton-mvp-api:${IMAGE_TAG:?set IMAGE_TAG}
+    container_name: gobadminton-mvp-migrate
+    restart: "no"
+    environment:
+      NODE_ENV: production
+      APP_ENV: mvp
+      DATABASE_URL: postgres://gobadminton:${POSTGRES_PASSWORD}@db:5432/gobadminton
+      PUBLIC_API_ORIGIN: ${PUBLIC_API_ORIGIN:-https://dev-api.gobadminton.ru}
+      PUBLIC_WEB_ORIGIN: ${PUBLIC_WEB_ORIGIN:-https://gobadminton.ru}
+      AUTH_PEPPER: ${AUTH_PEPPER:?set AUTH_PEPPER}
+      GIT_SHA: ${GIT_SHA:?set GIT_SHA}
+      HOST: 127.0.0.1
+      PORT: 3000
+    command: ["node", "dist/database/migrate.js"]
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - gobadminton_mvp_internal
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  api:
+    profiles: ["backend"]
+    image: gobadminton-mvp-api:${IMAGE_TAG}
+    container_name: gobadminton-mvp-api
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      APP_ENV: mvp
+      HOST: 0.0.0.0
+      PORT: 3000
+      DATABASE_URL: postgres://gobadminton:${POSTGRES_PASSWORD}@db:5432/gobadminton
+      PUBLIC_API_ORIGIN: ${PUBLIC_API_ORIGIN:-https://dev-api.gobadminton.ru}
+      PUBLIC_WEB_ORIGIN: ${PUBLIC_WEB_ORIGIN:-https://gobadminton.ru}
+      ALLOWED_WEB_ORIGINS: ${ALLOWED_WEB_ORIGINS:-https://gobadminton.ru,https://www.gobadminton.ru}
+      AUTH_PEPPER: ${AUTH_PEPPER:?set AUTH_PEPPER}
+      VK_CLIENT_ID: ${VK_CLIENT_ID:-}
+      VK_CLIENT_SECRET: ${VK_CLIENT_SECRET:-}
+      VK_REDIRECT_URI: ${VK_REDIRECT_URI:-}
+      YANDEX_CLIENT_ID: ${YANDEX_CLIENT_ID:-}
+      YANDEX_CLIENT_SECRET: ${YANDEX_CLIENT_SECRET:-}
+      YANDEX_REDIRECT_URI: ${YANDEX_REDIRECT_URI:-}
+      # DEMO_PUBLIC social surfaces (fail-closed app process defaults remain off unless compose sets these).
+      # SOCIAL_RADAR_ENABLED durable source default is on (Owner GitHub #65). Rollback: set 0 in a separately admitted runtime.
+      # This file does not mutate a running DEMO_PUBLIC; live apply waits for an admitted deploy.
+      # SOCIAL_RADAR_DEMO_ENABLED enables synthetic/internal city-scoped Radar for demo identities only.
+      SOCIAL_DIRECTORY_ENABLED: ${SOCIAL_DIRECTORY_ENABLED:-1}
+      SOCIAL_DM_ENABLED: ${SOCIAL_DM_ENABLED:-1}
+      SOCIAL_INVITATIONS_ENABLED: ${SOCIAL_INVITATIONS_ENABLED:-1}
+      SOCIAL_GAME_CHAT_ENABLED: ${SOCIAL_GAME_CHAT_ENABLED:-1}
+      SOCIAL_INBOX_ENABLED: ${SOCIAL_INBOX_ENABLED:-1}
+      SOCIAL_RADAR_ENABLED: ${SOCIAL_RADAR_ENABLED:-1}
+      SOCIAL_RADAR_GLOBAL_DEBUG_USER_IDS: ${SOCIAL_RADAR_GLOBAL_DEBUG_USER_IDS:-}
+      SOCIAL_RADAR_DEMO_ENABLED: ${SOCIAL_RADAR_DEMO_ENABLED:-1}
+      GIT_SHA: ${GIT_SHA}
+      AVATAR_MEDIA_ROOT: /var/lib/gobadminton/avatars
+      SERVICE_NAME: gobadminton-api
+      RUN_MIGRATIONS_ON_START: "0"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - gobadminton_mvp_avatars:/var/lib/gobadminton/avatars
+    ports:
+      - "127.0.0.1:${API_HOST_PORT:-18080}:3000"
+    networks:
+      - gobadminton_mvp_internal
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"fetch('http://127.0.0.1:3000/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\"",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    mem_limit: 768m
+    cpus: "1.0"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  web:
+    profiles: ["web"]
+    image: gobadminton-mvp-web:${IMAGE_TAG}
+    container_name: gobadminton-mvp-web
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      HOSTNAME: 0.0.0.0
+      # Server-side SSR health fetch. Prefer hostname, never raw VPS IP.
+      API_BASE_URL: ${API_BASE_URL:-https://dev-api.gobadminton.ru}
+    ports:
+      - "127.0.0.1:${WEB_HOST_PORT:-18082}:3001"
+    networks:
+      - gobadminton_mvp_internal
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"fetch('http://127.0.0.1:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\"",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    mem_limit: 512m
+    cpus: "0.5"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  gobadminton_mvp_internal:
+    name: gobadminton_mvp_internal
+    driver: bridge
+
+volumes:
+  gobadminton_mvp_pgdata:
+    name: gobadminton_mvp_pgdata
+  gobadminton_mvp_avatars:
+    name: gobadminton_mvp_avatars

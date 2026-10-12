@@ -1,0 +1,376 @@
+@import "./tokens.css";
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+.gb-account-body {
+  color-scheme: dark;
+  margin: 0;
+  min-height: 100dvh;
+  background: var(--gb-bg-canvas);
+  color: var(--gb-text-primary);
+  font-family: var(--gb-font);
+  font-size: var(--gb-body-size);
+  line-height: var(--gb-body-lh);
+  font-weight: 400;
+  -webkit-font-smoothing: antialiased;
+}
+
+.gb-account-body a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.gb-account-body button,
+.gb-account-body input,
+.gb-account-body select,
+.gb-account-body textarea {
+  font: inherit;
+}
+
+/* D-04: 2px external #F4F7EF focus-visible ring, no gap */
+.gb-account-body :focus {
+  outline: none;
+}
+
+.gb-account-body :focus-visible {
+  outline: 2px solid var(--gb-focus-ring);
+  outline-offset: 0;
+}
+
+.gb-type-display {
+  font-weight: 800;
+  font-size: var(--gb-display-size);
+  line-height: var(--gb-display-lh);
+  letter-spacing: var(--gb-display-tracking);
+  margin: 0;
+}
+
+.gb-type-h1 {
+  font-weight: 800;
+  font-size: var(--gb-h1-size);
+  line-height: var(--gb-h1-lh);
+  letter-spacing: var(--gb-h1-tracking);
+  margin: 0;
+}
+
+.gb-type-h2 {
+  font-weight: 700;
+  font-size: var(--gb-h2-size);
+  line-height: var(--gb-h2-lh);
+  letter-spacing: var(--gb-h2-tracking);
+  margin: 0;
+}
+
+.gb-type-h3 {
+  font-weight: 700;
+  font-size: var(--gb-h3-size);
+  line-height: var(--gb-h3-lh);
+  letter-spacing: var(--gb-h3-tracking);
+  margin: 0;
+}
+
+.gb-type-body {
+  font-weight: 400;
+  font-size: var(--gb-body-size);
+  line-height: var(--gb-body-lh);
+  margin: 0;
+}
+
+.gb-type-body-strong {
+  font-weight: 600;
+  font-size: var(--gb-body-size);
+  line-height: var(--gb-body-lh);
+  margin: 0;
+}
+
+.gb-type-label {
+  font-weight: 600;
+  font-size: var(--gb-label-size);
+  line-height: var(--gb-label-lh);
+  margin: 0;
+}
+
+.gb-type-meta {
+  font-weight: 400;
+  font-size: var(--gb-meta-size);
+  line-height: var(--gb-meta-lh);
+  margin: 0;
+}
+
+.gb-type-micro {
+  font-weight: 600;
+  font-size: var(--gb-micro-size);
+  line-height: var(--gb-micro-lh);
+  letter-spacing: var(--gb-micro-tracking);
+  margin: 0;
+}
+
+/* Shell — fit-based (D-02), not viewport breakpoints */
+.gb-shell {
+  width: 100%;
+  max-width: var(--gb-content-max);
+  margin: 0 auto;
+  padding:
+    max(var(--gb-gutter-mobile), env(safe-area-inset-top, 0px))
+    max(var(--gb-gutter-mobile), env(safe-area-inset-right, 0px))
+    max(var(--gb-gutter-mobile), env(safe-area-inset-bottom, 0px))
+    max(var(--gb-gutter-mobile), env(safe-area-inset-left, 0px));
+  display: flex;
+  flex-direction: column;
+  gap: var(--gb-space-md);
+  container-type: inline-size;
+  container-name: account-shell;
+}
+
+@container account-shell (min-width: 1180px) {
+  .gb-shell-inner-pad {
+    /* reference desktop top rhythm */
+  }
+}
+
+.gb-shell--desktop-pad {
+  padding-top: 28px;
+  gap: var(--gb-space-2xl);
+}
+
+.gb-account-layout {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gb-space-md);
+  container-type: inline-size;
+  container-name: account-layout;
+  width: 100%;
+}
+
+.gb-account-sidebar {
+  display: none;
+  width: var(--gb-sidebar-width);
+  flex-shrink: 0;
+  flex-direction: column;
+  gap: var(--gb-space-xs);
+}
+
+.gb-account-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--gb-space-md);
+  container-type: inline-size;
+  container-name: account-main;
+}
+
+/* Sidebar + 36 gap while main can be ≥600 → need layout ≥ 240+36+600 = 876 */
+@container account-layout (min-width: 876px) {
+  .gb-account-layout {
+    flex-direction: row;
+    align-items: flex-start;
+    gap: var(--gb-sidebar-gap);
+  }
+
+  .gb-account-sidebar {
+    display: flex;
+  }
+
+  .gb-account-main {
+    gap: var(--gb-space-lg);
+  }
+}
+
+/* Shell-level mobile/desktop chrome (elements live outside account-layout) */
+@container account-shell (min-width: 876px) {
+  .gb-mobile-only {
+    display: none !important;
+  }
+}
+
+@container account-shell (max-width: 875px) {
+  .gb-desktop-only {
+    display: none !important;
+  }
+}
+
+.gb-pair {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gb-space-xl);
+  width: 100%;
+}
+
+@container account-main (min-width: 904px) {
+  .gb-pair--profile {
+    flex-direction: row;
+  }
+
+  .gb-pair--profile > * {
+    flex: 1 1 440px;
+    max-width: 440px;
+  }
+}
+
+@container account-main (min-width: 732px) {
+  .gb-pair--cards {
+    flex-direction: row;
+  }
+
+  .gb-pair--cards > * {
+    flex: 0 0 354px;
+    width: 354px;
+    max-width: 354px;
+  }
+}
+
+.gb-panel {
+  background: var(--gb-bg-surface);
+  border: 1px solid var(--gb-border-default);
+  border-radius: var(--gb-radius-xl);
+  padding: var(--gb-space-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--gb-space-xs);
+  width: 100%;
+}
+
+.gb-panel--soft {
+  border: none;
+}
+
+.gb-panel--desktop {
+  padding: var(--gb-space-xl);
+  gap: var(--gb-space-md);
+}
+
+.gb-form {
+  width: 100%;
+  max-width: var(--gb-form-max);
+  display: flex;
+  flex-direction: column;
+  gap: var(--gb-space-md);
+}
+
+.gb-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gb-space-xs);
+  width: 100%;
+}
+
+.gb-stack--md {
+  gap: var(--gb-space-md);
+}
+
+.gb-stack--lg {
+  gap: var(--gb-space-lg);
+}
+
+.gb-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gb-space-lg);
+  align-items: center;
+}
+
+.gb-row--actions {
+  gap: var(--gb-space-lg);
+}
+
+.gb-row--separate {
+  margin-top: var(--gb-space-xs);
+}
+
+.gb-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.gb-gated-note {
+  color: var(--gb-text-tertiary);
+  font-size: var(--gb-meta-size);
+  line-height: var(--gb-meta-lh);
+}
+
+.gb-page-header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gb-space-md);
+}
+
+.gb-mobile-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 46px;
+  width: 100%;
+}
+
+.gb-mobile-header__context {
+  color: var(--gb-text-secondary);
+}
+
+.gb-desktop-heading {
+  display: none;
+}
+
+@container account-shell (min-width: 876px) {
+  .gb-mobile-header {
+    display: none;
+  }
+
+  .gb-type-h1.gb-page-title-mobile {
+    display: none;
+  }
+
+  .gb-desktop-heading {
+    display: block;
+  }
+}
+
+/* Profile: mobile menu vs desktop everyday/security pair */
+.gb-profile-desktop-panels {
+  display: none;
+}
+
+.gb-profile-edit {
+  max-width: 270px;
+}
+
+.gb-btn-w270 {
+  max-width: 270px;
+}
+
+.gb-profile-destructive {
+  flex-wrap: wrap;
+}
+
+@container account-main (min-width: 904px) {
+  .gb-profile-mobile-menu {
+    display: none;
+  }
+
+  .gb-profile-desktop-panels {
+    display: flex;
+  }
+}
+
+@container account-main (max-width: 903px) {
+  .gb-profile-desktop-panels {
+    display: none;
+  }
+}
+
+/* D-01: focused field + helper/error remain scrollable into view */
+.gb-account-body :focus-visible,
+.gb-field__control:focus {
+  scroll-margin-block: 24px;
+}

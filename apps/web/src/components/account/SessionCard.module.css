@@ -1,0 +1,27 @@
+.gb-session {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gb-space-xs);
+  width: 100%;
+  max-width: 354px;
+  padding: var(--gb-space-md);
+  border-radius: var(--gb-radius-xl);
+  border: 1px solid var(--gb-border-default);
+  background: var(--gb-bg-surface);
+}
+
+.gb-session__device {
+  font-weight: 600;
+  font-size: var(--gb-body-size);
+  line-height: var(--gb-body-lh);
+  margin: 0;
+  color: var(--gb-text-primary);
+}
+
+.gb-session__activity {
+  font-weight: 400;
+  font-size: var(--gb-meta-size);
+  line-height: var(--gb-meta-lh);
+  margin: 0;
+  color: var(--gb-text-secondary);
+}

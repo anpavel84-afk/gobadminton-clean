@@ -1,0 +1,20 @@
+{
+  "source": "../go-badminton.svg",
+  "sourceSha256": "139f0e578d41371c73e36bb844c0956fa86924a33360c15c1c7256def1a8ca71",
+  "recipe": "Complete unchanged 144:39.6 wordmark centered at 80% canvas width on canonical #a7f447; opaque RGB PNG; no corner mask baked in.",
+  "generator": "apps/web/scripts/generate-pwa-icons.mjs",
+  "assets": [
+    {
+      "file": "apple-touch-icon.png",
+      "sha256": "bd6cbdd4ea4da14b87ba7777af2274749d64a2842b49df0528565cf9e5595a09"
+    },
+    {
+      "file": "icon-192.png",
+      "sha256": "a2fc15eba2e0ef17a504e502a720919db90da997989caa021cdade1c0950b719"
+    },
+    {
+      "file": "icon-512.png",
+      "sha256": "76469bebd216158794f6c39643b143ba4f6d16886cd326297146bb5d46d835cd"
+    }
+  ]
+}

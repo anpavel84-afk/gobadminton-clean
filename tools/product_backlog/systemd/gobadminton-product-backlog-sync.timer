@@ -1,0 +1,9 @@
+[Unit]
+Description=Keep GoBadminton product backlog fresh without Codex
+[Timer]
+OnBootSec=30
+OnUnitInactiveSec=60
+AccuracySec=5
+Persistent=yes
+[Install]
+WantedBy=timers.target

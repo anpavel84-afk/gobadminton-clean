@@ -1,0 +1,126 @@
+/**
+ * FR-00 canonical tokens — verified frozen Make palette + Final Consumer Design Spec
+ * Frozen Design Spec merge: 487a8379ff31c88a95d0f0f130dad7c78f7af6f2
+ * Historical `--c23-*` kept as compatibility aliases for existing pages.
+ * Scoped under .gb-consumer so Player Cabinet dark tokens remain intact.
+ */
+
+.gb-consumer {
+  /* Frozen brand palette */
+  --gb-ink: #13221a;
+  --gb-ink-soft: #536159;
+  --gb-paper: #f5f6f2;
+  --gb-white: #ffffff;
+  --gb-line: #dfe4dc;
+  --gb-line-dark: #cbd3ca;
+  --gb-lime: #a7f447;
+  --gb-lime-deep: #74ce14;
+  --gb-lime-soft: #eaffcd;
+  --gb-purple: #7945de;
+  --gb-purple-soft: #eee6ff;
+  --gb-yellow: #ffe640;
+  --gb-danger: #ed5c4d;
+
+  /* Semantic aliases (do not bind domain status to raw color alone) */
+  --gb-text-primary: var(--gb-ink);
+  --gb-text-secondary: var(--gb-ink-soft);
+  --gb-surface-page: var(--gb-paper);
+  --gb-surface-card: var(--gb-white);
+  --gb-border-default: var(--gb-line);
+  --gb-action-primary: var(--gb-lime);
+  --gb-state-danger: var(--gb-danger);
+  --gb-state-attention: var(--gb-yellow);
+  --gb-state-trainer: var(--gb-purple);
+
+  --gb-radius-sm: 12px;
+  --gb-radius-md: 18px;
+  --gb-radius-lg: 28px;
+  --gb-radius-pill: 999px;
+  --gb-shadow-elevated: 0 18px 50px rgba(19, 34, 26, 0.09);
+
+  --gb-header-height-desktop: 84px;
+  --gb-header-height-mobile: 72px;
+  --gb-bottom-nav-height: 76px;
+  --gb-content-max: min(1380px, calc(100% - 64px));
+  --gb-gutter-mobile: 16px;
+  --gb-safe-bottom: env(safe-area-inset-bottom, 0px);
+  --gb-nav-reserve: calc(var(--gb-bottom-nav-height) + var(--gb-safe-bottom));
+  --gb-sticky-cta-height: 88px;
+  --gb-sticky-cta-reserve: calc(var(--gb-sticky-cta-height) + 12px);
+
+  --gb-space-1: 4px;
+  --gb-space-2: 8px;
+  --gb-space-3: 12px;
+  --gb-space-4: 16px;
+  --gb-space-6: 24px;
+  --gb-space-8: 32px;
+  --gb-space-12: 48px;
+  --gb-motion-fast: 160ms;
+  --gb-motion-standard: 200ms;
+  --gb-motion-overlay: 240ms;
+
+  --gb-font: var(--font-onest), "Onest", system-ui, sans-serif;
+  --gb-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --gb-focus-ring: #7945de59;
+
+  /* Compatibility aliases for existing Consumer pages */
+  --c23-canvas: var(--gb-paper);
+  --c23-surface: var(--gb-white);
+  --c23-surface-soft: #f8f9f6;
+  --c23-ink: var(--gb-ink);
+  --c23-secondary: var(--gb-ink-soft);
+  --c23-muted: #6b766f;
+  --c23-border: var(--gb-line);
+  --c23-border-strong: var(--gb-line-dark);
+  --c23-lime: var(--gb-lime);
+  --c23-lime-deep: var(--gb-lime-deep);
+  --c23-lime-soft: var(--gb-lime-soft);
+  --c23-lime-ink: var(--gb-ink);
+  --c23-purple: var(--gb-purple);
+  --c23-purple-soft: var(--gb-purple-soft);
+  --c23-purple-ring: var(--gb-focus-ring);
+  --c23-yellow: var(--gb-yellow);
+  --c23-pending-bg: #fff7d6;
+  --c23-pending-ink: #72590a;
+  --c23-confirmed-bg: #e1f5dd;
+  --c23-confirmed-ink: #245d21;
+  --c23-danger-bg: #fff0ed;
+  --c23-danger-ink: #a13c32;
+  --c23-danger: var(--gb-danger);
+  --c23-subtle-bg: #edf1e9;
+  --c23-subtle-ink: var(--gb-ink-soft);
+  --c23-focus: var(--gb-purple);
+  --c23-disabled-bg: #edf0e8;
+  --c23-disabled-ink: #6b766f;
+
+  --c23-radius-control: var(--gb-radius-sm);
+  --c23-radius-card: var(--gb-radius-md);
+  --c23-radius-sheet: var(--gb-radius-lg);
+  --c23-shadow: var(--gb-shadow-elevated);
+  --c23-shadow-soft: 0 3px 10px rgba(19, 34, 26, 0.08);
+  --c23-shadow-lift: 0 8px 18px rgba(19, 34, 26, 0.12);
+  --c23-ease: var(--gb-ease);
+  --c23-btn-height: 48px;
+  --c23-nav-target-w: 72px;
+  --c23-nav-target-h: 52px;
+  --c23-icon: 24px;
+  --c23-gutter: var(--gb-gutter-mobile);
+  --c23-content-max: 1380px;
+  --c23-mobile-ref: 390px;
+  --c23-desktop-ref: 1440px;
+  --c23-target-min: 44px;
+  --c23-nav-reserve: var(--gb-bottom-nav-height);
+  --c23-safe-bottom: var(--gb-safe-bottom);
+
+  --c23-font: var(--gb-font);
+  --c23-display: 38px;
+  --c23-display-lh: 44px;
+  --c23-h1: 30px;
+  --c23-h1-lh: 36px;
+  --c23-title: 20px;
+  --c23-title-lh: 25px;
+  --c23-body: 16px;
+  --c23-body-lh: 22px;
+  --c23-meta: 14px;
+  --c23-meta-lh: 20px;
+}

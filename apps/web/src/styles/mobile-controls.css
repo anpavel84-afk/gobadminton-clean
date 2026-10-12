@@ -1,0 +1,19 @@
+/* Owner GitHub #65: mobile/PWA 1:1 viewport. Pinch, double-tap, and manual zoom off.
+ * Keep computed control type ≥16px so iOS cannot reintroduce focus-zoom.
+ * Desktop type stays on the shared Style Guide tokens except this mobile/PWA floor.
+ */
+@media (max-width: 720px), (hover: none) and (pointer: coarse) {
+  html,
+  body.gb-consumer-body {
+    touch-action: pan-x pan-y;
+    overscroll-behavior-x: none;
+  }
+
+  .gb-consumer-body :is(input, select, textarea, button, .gb-c23-btn) {
+    font-size: 16px !important;
+  }
+
+  .gb-consumer-body :is(input, select, textarea, button, .gb-c23-btn, a.gb-c23-btn) {
+    min-height: 44px !important;
+  }
+}

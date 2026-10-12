@@ -1,0 +1,13 @@
+{
+  "name": "@gobadminton/worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Worker process of the same GoBadminton backend release (pg-boss).",
+  "scripts": {
+    "build": "pnpm --filter @gobadminton/api run build",
+    "start": "node ../api/dist/worker-main.js",
+    "start:dev": "pnpm --filter @gobadminton/api exec tsx src/worker-main.ts",
+    "typecheck": "pnpm --filter @gobadminton/api run typecheck",
+    "lint": "pnpm --filter @gobadminton/api exec eslint \"src/jobs/**/*.ts\" \"src/worker-main.ts\""
+  }
+}

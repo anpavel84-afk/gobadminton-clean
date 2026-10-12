@@ -1,0 +1,14 @@
+{
+  "state": "idle",
+  "generated_at": "2026-10-07T12:00:00Z",
+  "runner": {"alive":true,"paused":false,"blocked":false,"current":null},
+  "progress": {"task_id":"fixture-old-completed-task","status":"done","current_block":"old-done","blocks":[{"id":"old-done","title":"Old stale completed block","status":"done"}]},
+  "autopilot": {"alive":false,"status":"idle"},
+  "writer": {"busy":false},
+  "watchdog": {"health":"healthy"},
+  "queue": {"tasks":[{"id":"fixture-old-completed-task","scope":"Старая вымышленная задача, завершённая в прошлом; она показывается только как историческая запись.","description_ru":"История очереди остаётся доступной, но не выдаётся за активную работу.","order":1,"status":"completed","enabled":false,"executor":"codex","model":"gpt-6-luna","effort":"medium","blocks":[]}],"completed":["fixture-old-completed-task"],"pending":[],"next_gate":{"ready":false,"reason":"Нет активной задачи"}},
+  "recent_activity": [{"at":"2026-10-07T11:00:00Z","id":"fixture-old-completed-task","status":"completed"}],
+  "git": {"ok":true,"branch":"fixture-only","head":"000000000000","dirty":false,"last_commit":"Synthetic fixture"},
+  "owner_instructions": {"counts":{}},
+  "activity": []
+}

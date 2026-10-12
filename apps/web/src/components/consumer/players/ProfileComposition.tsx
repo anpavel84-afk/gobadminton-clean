@@ -1,0 +1,114 @@
+"use client";
+
+import Link from "next/link";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { startAuth } from "../../../lib/api-client";
+import type { PublicPlayer, PlayerAvatar } from "../../../lib/consumer-types";
+import { writeAuthIntent, type AuthIntent } from "../../../lib/location-context";
+import { formatSocialLevel, initialsFromName } from "../../../lib/player-presentation";
+import { profileSetupPath, safeAuthReturnPath } from "../../../lib/auth-return";
+import { Button } from "../Button";
+import { listAuthMethods } from "../../../lib/email-auth";
+import { EmailCodeForm } from "./EmailCodeForm";
+
+export function Avatar({ name, tone = "lime", avatar }: { name: string; tone?: "lime" | "purple" | "yellow"; avatar?: PlayerAvatar }) {
+  const [failed, setFailed] = useState<string[]>([]);
+  const candidates = [avatar?.uploadedUrl, avatar?.providerUrl].filter((url): url is string => Boolean(url));
+  const src = candidates.find(url => !failed.includes(url));
+  return <span className={`avatar avatar--${tone}`} aria-hidden="true">{src ? <img key={src} src={src} alt="" referrerPolicy="no-referrer" onError={() => setFailed(previous => [...previous, src])} /> : initialsFromName(name)}</span>;
+}
+export function Badge({ children, trainer = false }: { children: ReactNode; trainer?: boolean }) {
+  return <span className={`status-badge status-badge--${trainer ? "attention" : "available"}`}>{children}</span>;
+}
+export function PlayerCard({ player, city, metadata }: { player: PublicPlayer; city?: string; metadata?: ReactNode }) {
+  return <Link className="player-card" href={`/players/${player.publicPlayerId}`}>
+    <Avatar avatar={player.avatar} name={player.displayName} tone={player.trainer ? "purple" : "yellow"} />
+    <div className="player-card__main">
+      <div className="player-card__title"><h3>{player.displayName}</h3>{player.lookingForGame && <Badge>Ищу игру</Badge>}</div>
+      <strong>{formatSocialLevel(player.level)}</strong>
+      {(city || player.areaKey) && <span><img className="profile-icon" src="/discovery/pin.svg" alt="" />{[city, player.areaKey].filter(Boolean).join(" · ")}</span>}
+      {metadata}
+      {player.bio && <p>{player.bio}</p>}
+      {player.trainer && <em>Тренер</em>}
+      {player.canRequestContact === true && <small>Принимает запросы на общение</small>}
+    </div><span className="player-card__arrow" aria-hidden="true"><img className="profile-icon" src="/discovery/arrow.svg" alt="" /></span>
+  </Link>;
+}
+export function SectionHeader({ title, eyebrow, action }: { title: string; eyebrow?: string; action?: ReactNode }) {
+  return <header className="editable-section-header"><span>{eyebrow && <small>{eyebrow}</small>}<h2>{title}</h2></span>{action}</header>;
+}
+export function ProfileState({ title, children, state = "unavailable", retry }: { title: string; children?: ReactNode; state?: string; retry?: () => void }) {
+  return <section className="profile-section profile-state" data-state={state} role={state === "error" ? "alert" : "status"}><h2>{title}</h2>{children && <p>{children}</p>}{retry && <Button variant="outline" onClick={retry}>Повторить</Button>}</section>;
+}
+export function VisibilityRow({ label, value, shown }: { label: string; value: string; shown: boolean }) {
+  return <div><span className={`visibility-mark ${shown ? "" : "is-off"}`}>{shown ? "✓" : "—"}</span><span><small>{label}</small><strong>{value}</strong></span><em>{shown ? "Показывается" : "Скрыто"}</em></div>;
+}
+export function Toggle({ label, helper, on, disabled, onClick, describedBy, id }: { label: string; helper?: string; on: boolean; disabled?: boolean; onClick?: () => void; describedBy?: string; id?: string }) {
+  return <button type="button" id={id} className={`toggle-row ${on ? "is-on" : ""}`} aria-label={label} aria-describedby={describedBy} role="switch" aria-checked={on} disabled={disabled} onClick={onClick}><span><strong>{label}</strong>{helper && <small>{helper}</small>}</span><i aria-hidden="true"><b /></i></button>;
+}
+/** Native modal provides focus containment, Escape and focus restoration. */
+export function ProfileDialog({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  const ref = useRef<HTMLDialogElement>(null);
+  useEffect(() => { const dialog = ref.current; const trigger = document.activeElement as HTMLElement | null; dialog?.showModal(); return () => { dialog?.close(); if (trigger?.isConnected) trigger.focus(); }; }, []);
+  return <dialog ref={ref} className="profile-dialog" aria-label={title} onCancel={e => { e.preventDefault(); onClose(); }} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}><header><h2>{title}</h2><button type="button" aria-label="Закрыть" onClick={onClose}>×</button></header>{children}</dialog>;
+}
+/** Shared chooser: provider starts only after an explicit selection, even for one provider. */
+export function AuthChooser({ returnPath, intent, onClose }: { returnPath: string; intent?: AuthIntent; onClose: () => void }) {
+  const [providers, setProviders] = useState<Array<"vk" | "yandex">>([]);
+  const [emailAvailable, setEmailAvailable] = useState(false);
+  const [emailBusy, setEmailBusy] = useState(false);
+  const [emailSuccess, setEmailSuccess] = useState<string | null>(null);
+  const [state, setState] = useState<"loading" | "ready" | "error">("loading");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const alive = useRef(false);
+  const starting = useRef(false);
+  async function load() {
+    setState("loading"); setError("");
+    const result = await listAuthMethods();
+    if (!alive.current) return;
+    if (!result.ok) { setState("error"); return; }
+    setProviders(result.data.items.filter(item => item.available && item.method !== "email").map(item => item.method as "vk" | "yandex"));
+    setEmailAvailable(result.data.items.some(item => item.method === "email" && item.available)); setState("ready");
+  }
+  useEffect(() => {
+    alive.current = true;
+    void load();
+    return () => { alive.current = false; };
+  }, []);
+  async function begin(provider: "vk" | "yandex") {
+    if (starting.current || emailBusy) return;
+    starting.current = true;
+    setBusy(true); setError("");
+    const safeReturn = safeAuthReturnPath(returnPath);
+    writeAuthIntent(intent ?? { kind: "return", path: safeReturn });
+    const result = await startAuth(provider, profileSetupPath(safeReturn));
+    if (!alive.current) return;
+    if (!result.ok) { starting.current = false; setBusy(false); setError("Не удалось начать вход. Попробуйте ещё раз."); return; }
+    window.location.href = result.data.authorizationUrl;
+  }
+  function continueEmail() {
+    window.dispatchEvent(new Event("gb-session-changed"));
+    const safeReturn = safeAuthReturnPath(emailSuccess ?? returnPath);
+    writeAuthIntent(intent ?? {kind: "return", path: safeReturn});
+    window.location.assign(profileSetupPath(safeReturn));
+  }
+  return <div className="fr3"><ProfileDialog title="Войти в GoBadminton" onClose={onClose}>
+    {emailSuccess ? <><p role="status">Вы вошли в GoBadminton. Продолжите, чтобы вернуться к выбранному действию.</p><Button onClick={continueEmail}>Продолжить</Button></> : <>
+      <p>Выберите способ входа. После входа вы вернётесь на эту страницу.</p>
+      {state === "loading" && <p role="status">Загружаем способы входа…</p>}
+      {state === "error" && <ProfileState title="Вход сейчас недоступен" state="error" retry={() => void load()}>Попробуйте немного позже.</ProfileState>}
+      {state === "ready" && <><div className="profile-form-actions">{providers.map(p => <Button key={p} variant="outline" disabled={busy || emailBusy} onClick={() => void begin(p)}>{p === "vk" ? "ВКонтакте" : "Яндекс"}</Button>)}</div>
+        <div className="email-auth-divider"><span>или</span></div>
+        {emailAvailable && !busy ? <><p>Войти или зарегистрироваться по email</p><p className="account-security-hint">Если вы уже входили через VK или Яндекс, войдите этим способом и добавьте email в «Способы входа». Совпадение адресов не объединяет профили.</p>
+          <EmailCodeForm purpose="login_signup" returnPath={safeAuthReturnPath(returnPath)} onBusyChange={setEmailBusy} onSuccess={result => setEmailSuccess(safeAuthReturnPath(result.returnPath, safeAuthReturnPath(returnPath)))} /></>
+          : <p role="status">Вход по email сейчас недоступен.</p>}
+      </>}
+      {error && <p role="alert">{error}</p>}
+    </>}
+  </ProfileDialog></div>;
+}
+export function AuthEntry({ returnPath, intent, children = "Войти" }: { returnPath: string; intent?: AuthIntent; children?: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return <><Button onClick={() => setOpen(true)}>{children}</Button>{open && <AuthChooser returnPath={returnPath} intent={intent} onClose={() => setOpen(false)} />}</>;
+}

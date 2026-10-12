@@ -1,0 +1,33 @@
+name: Product backlog integrity
+on:
+  pull_request:
+    paths:
+      - 'docs/product/backlog/**'
+      - 'tools/product_backlog/**'
+  push:
+    branches: [main]
+    paths:
+      - 'docs/product/backlog/**'
+      - 'tools/product_backlog/**'
+permissions:
+  contents: read
+jobs:
+  integrity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Validate registry and append-only history
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          python3 -B -m unittest discover -s tools/product_backlog -p 'test_*.py'
+          python3 -B tools/product_backlog/manage.py --check
+          if [ -n "$BASE_SHA" ] && [ "$BASE_SHA" != "0000000000000000000000000000000000000000" ]; then
+            git fetch --no-tags --depth=1 origin "$BASE_SHA"
+            if git cat-file -e "$BASE_SHA:docs/product/backlog/registry.json" 2>/dev/null; then
+              git show "$BASE_SHA:docs/product/backlog/registry.json" > /tmp/product-backlog-before.json
+              python3 -B tools/product_backlog/manage.py --check --base-registry /tmp/product-backlog-before.json
+            fi
+          fi

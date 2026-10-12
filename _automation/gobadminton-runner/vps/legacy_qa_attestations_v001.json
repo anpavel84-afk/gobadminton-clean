@@ -1,0 +1,685 @@
+{
+  "main_snapshot_sha": "f82b910b7f30fa6bf4ffac5622cd8de87164f36d",
+  "prod_authorized": false,
+  "project": "GoBadminton",
+  "records": {
+    "qa-fb01-city-visual-v001": {
+      "acceptance_scope": "source_only; existing exact dependency edges only; no release or merge authority",
+      "accepted_main_sha": "5e2db6d40bb9e193b763cd45c7c4cc1798f88bd3",
+      "candidate_sha": "9178210ebf5b15a691b69cbb082d89b7b4003560",
+      "candidate_tree": "a06a913dd9ffc78a9b78583ca1502e762a12e0f3",
+      "consumers": {
+        "merge-fb01-city-visual-v001": "265b43bbf7f005dfe00ac754437ac62c4c2797d048fa899c1aaf652ab67e0c32"
+      },
+      "decision": "ATTESTED_DEPENDENCY_ONLY",
+      "original_blocking_findings": [],
+      "producer_branch": "impl/fb01-city-visual-v001",
+      "producer_definition_sha256": "8e752f5c2da679ea3cda64740b628dbf4f6a72a757e1036a90d8d6cd8b1a6afc",
+      "producer_publication_observation": "9178210ebf5b15a691b69cbb082d89b7b4003560\trefs/heads/impl/fb01-city-visual-v001",
+      "producer_publication_sha": "9178210ebf5b15a691b69cbb082d89b7b4003560",
+      "producer_receipt_sha256": "4c0898edeaf71642ff586de5e9adb67e60a67324b636ab70fdfed5186e60c5a7",
+      "producer_task_id": "fb01-city-visual-v001",
+      "proofs": [
+        {
+          "blob": "59a7d58b7d6345e664938d5510164cb02afec2cf",
+          "commit": "25ddab8fb786e60e05e25d4297ba1983121164d5",
+          "path": "docs/workbench/qa/qa-fb01-city-visual-v001/README.md"
+        },
+        {
+          "blob": "0e94fc2bb465150afe4ad46df0be6f9a8d8377c5",
+          "commit": "9178210ebf5b15a691b69cbb082d89b7b4003560",
+          "path": "docs/handoffs/2026-10-08_implementation_to_qa_fb01-city-visual-v001.md"
+        }
+      ],
+      "qa_definition_sha256": "d931553d24def2e471c33bb2f1ba32d5baff9bb8d1ed4b2d8b275098d91b377c",
+      "qa_receipt_sha256": "c1d973de59a7078d2732c62aaec1bf27dcdc2363ec693728a03fc7b9754b961b",
+      "verdict": "PASS_WITH_NONBLOCKING_GAPS"
+    },
+    "qa-fb01-game-api-backend-20261008-v001": {
+      "acceptance_scope": "source_only; existing exact dependency edges only; no release or merge authority",
+      "accepted_main_sha": "b5c71ff03e2e864e6c03797c72f04126a98385cc",
+      "candidate_sha": "b5c71ff03e2e864e6c03797c72f04126a98385cc",
+      "candidate_tree": "d8457f2f75bdc188d15ca0b8db96473d6853c5c7",
+      "consumers": {
+        "fb01-feature-game-v001": "38a0e6cc8ab4dd3fe30034b4d6155111af80f54b71a7fcc48abf4a78f9ddbfdf",
+        "merge-fb01-game-api-backend-20261008-v001": "bce0cd2781934babbd2e1b1121989bbfce385d07f422fec5d4b652e963c254b4"
+      },
+      "decision": "ATTESTED_DEPENDENCY_ONLY",
+      "original_blocking_findings": [],
+      "producer_branch": "runner/fb01-game-api-backend-20261008-v001",
+      "producer_definition_sha256": "f317095e5e414c60b769fcf983f47a20631e3de435a31ddd5eb7b7394be82391",
+      "producer_publication_observation": "ea445f374c718ccbce9d0cff08bbceb6ae6b0361\trefs/heads/runner/fb01-game-api-backend-20261008-v001",
+      "producer_publication_sha": "ea445f374c718ccbce9d0cff08bbceb6ae6b0361",
+      "producer_receipt_sha256": "cecf7c107189e49eaa397825d943526a588c3cd390d6cd5a727b8cac5edc7ee6",
+      "producer_task_id": "fb01-game-api-backend-20261008-v001",
+      "proofs": [
+        {
+          "blob": "d1bd296dd189b251ce9e0c96a722a2118c22ff0d",
+          "commit": "3c389f8a3b83370edb69556421bc8f3aab37d8e6",
+          "path": "docs/handoffs/2026-10-08_qa_to_pm_fb01-game-api-backend-v001.md"
+        },
+        {
+          "blob": "65a0b909af709e7dfb75af03f2347e86ef2f9946",
+          "commit": "ea445f374c718ccbce9d0cff08bbceb6ae6b0361",
+          "path": "docs/handoffs/2026-10-08_implementation_to_qa_fb01-game-api-backend-v001.md"
+        }
+      ],
+      "qa_definition_sha256": "41fd1acc7b362817af99eced605cb874fa5a37757428de0275865366300406db",
+      "qa_receipt_sha256": "c9e8daeff17e79dd8c9d9793ebafc7a0ba57e12ad54515ef5e575b97f1bc0cd7",
+      "verdict": "PASS_WITH_NONBLOCKING_GAPS"
+    },
+    "qa-fb01-logo-edge-v001": {
+      "acceptance_scope": "source_only; existing exact dependency edges only; no release or merge authority",
+      "accepted_main_sha": "59642e31f9aec5bdab1275cd0b3c8c8cc6ebb941",
+      "candidate_sha": "59642e31f9aec5bdab1275cd0b3c8c8cc6ebb941",
+      "candidate_tree": "fb4a3a495436b39b08c1dd4677f7593e9f5f17c6",
+      "consumers": {
+        "merge-fb01-logo-edge-v001": "ead4d07286dea162d99d333722983f113d017c22bbbc57460ede422b4521bf8a"
+      },
+      "decision": "ATTESTED_DEPENDENCY_ONLY",
+      "original_blocking_findings": [],
+      "producer_branch": "impl/fb01-logo-edge-v001",
+      "producer_definition_sha256": "411491d7b2bd793780fe353eb2258bde4ff670713ecc3a06b7f018ca7f033016",
+      "producer_publication_observation": "59642e31f9aec5bdab1275cd0b3c8c8cc6ebb941\trefs/heads/impl/fb01-logo-edge-v001",
+      "producer_publication_sha": "59642e31f9aec5bdab1275cd0b3c8c8cc6ebb941",
+      "producer_receipt_sha256": "1729e2adc656eddc1b0d9ec76717732540b003cb01f1eb226b83d972375493bf",
+      "producer_task_id": "fb01-logo-edge-v001",
+      "proofs": [
+        {
+          "blob": "44c5f0fad5f4efeb0a0957a2c402514f1ac2adf0",
+          "commit": "58857991beeb9f74db32db5ceec61e937bc2caf2",
+          "path": "docs/handoffs/2026-10-08_qa_to_pm_fb01-logo-edge-v001.md"
+        },
+        {
+          "blob": "c03e7b2ca006b458ea6825a1034c98f2d8946d18",
+          "commit": "59642e31f9aec5bdab1275cd0b3c8c8cc6ebb941",
+          "path": "docs/handoffs/2026-10-08_implementation_to_qa_fb01-logo-edge-v001.md"
+        }
+      ],
+      "qa_definition_sha256": "bebe22251ed17244d2b523caf5b3120b3960656c3a9a794fbefd0ccff2c73bb6",
+      "qa_receipt_sha256": "4f20b02f9df0e4aa28b7d1162d0faf071c7736ec94041e1b40b7c138a3ebc311",
+      "verdict": "PASS_WITH_NONBLOCKING_GAPS"
+    },
+    "qa-fb01-review-city-v001": {
+      "candidate_sha": "4e7cfad2c6054e9a3c9480d2348763cb1cc9bdcd",
+      "candidate_tree": "16622bd0a2d3f3160e9ef4db5efb5e9d2b45d60e",
+      "consumers": {
+        "fb01-feature-city-v001": "0275daa0a2d506fb8e56258ef495b63688efac6aa0d8c10443482cb500096851"
+      },
+      "decision": "WAITING_REVIEW",
+      "original_blocking_findings": [],
+      "producer_branch": "review/fb01-city-v001",
+      "producer_definition_sha256": "977a7b62b38d2c7115de5c3d425344d3de1f5e98dece775ab88ec1c2040e748c",
+      "producer_publication_sha": "a55d3008dd9b2352d51177d62d71a2d809882889",
+      "producer_receipt_sha256": "bef142f569bf945505838d83ce502afc3b38e15d91ed008c52c53fa29f5a0020",
+      "producer_task_id": "fb01-review-city-v001",
+      "proofs": [
+        {
+          "blob": "5762eb7ea9396be009cb0ad1f0e90194a5f9ce6c",
+          "commit": "300a4982d7295363c9bf24b00cf7f92c1e0f6705",
+          "path": "docs/workbench/qa/qa-fb01-review-city-v001/README.md"
+        }
+      ],
+      "qa_definition_sha256": "8410875c68d39e33261ba6c395cfd473b7f213d962ddf0f1a84630002c6a0f82",
+      "qa_receipt_sha256": "b9ab327c8f41d0f4552d9b5a7a456402774d518e6634679320a7a7d8315801df",
+      "reason": "Reviewed exact candidate is not in pinned current main ancestry. No assumed acceptance from branch existence.",
+      "verdict": "PASS_WITH_NONBLOCKING_GAPS"
+    },
+    "qa-fb01-review-design-v001": {
+      "candidate_sha": "45d53a03e760dfb778b31dc0a3f493d7e36212fc",
+      "candidate_tree": "5cc462aebc7447b3b1ba738516e208c495e17de4",
+      "consumers": {
+        "fb01-feature-design-v001": "28343792a002ba6b6a361be581a2036acb2a5bc33e822a493160dc46f73f50b4"
+      },
+      "decision": "WAITING_REVIEW",
+      "original_blocking_findings": [],
+      "producer_branch": "runner/fb01-review-design-v001",
+      "producer_definition_sha256": "b3ebf4a37b6c460bc8b852b18e97b8ac96ff08f630ad1b7a068da843ce2dc516",
+      "producer_publication_sha": "45d53a03e760dfb778b31dc0a3f493d7e36212fc",
+      "producer_receipt_sha256": "37619d2a6fcc8edc38431319b8fcd905db0589fb691226b5f801ffb523f4cace",
+      "producer_task_id": "fb01-review-design-v001",
+      "proofs": [
+        {
+          "blob": "031df1d9f5e124dc27827684376e943f166a7fdd",
+          "commit": "206a177b759443c58660d37356e7c76efb171878",
+          "path": "docs/handoffs/2026-10-08_qa_to_pm_fb01-review-design-v001.md"
+        }
+      ],
+      "qa_definition_sha256": "e149d1ac6bea8cdce418c6b906d3a2668aa07b6041b36a368493cb4770444237",
+      "qa_receipt_sha256": "e2cb3768c6e56cfcfd32dea6149035d8c7dba0a1b75f4770c23080543ca0e3a7",
+      "reason": "Reviewed exact candidate is not in pinned current main ancestry. No assumed acceptance from branch existence.",
+      "verdict": "PASS_WITH_NONBLOCKING_GAPS"
+    },
+    "qa-fb01-review-game-v001": {
+      "candidate_sha": "e8183e0af6dccd6a1441d578112676ce1bacde86",
+      "candidate_tree": "7596b37b4acd75dd540543f42c42aa6a954ba320",
+      "consumers": {
+        "fb01-feature-game-v001": "38a0e6cc8ab4dd3fe30034b4d6155111af80f54b71a7fcc48abf4a78f9ddbfdf",
+        "fb01-game-api-backend-20261008-v001": "f317095e5e414c60b769fcf983f47a20631e3de435a31ddd5eb7b7394be82391"
+      },
+      "decision": "WAITING_REVIEW",
+      "original_blocking_findings": [],
+      "producer_branch": "runner/fb01-review-game-v001",
+      "producer_definition_sha256": "252b3231fd02764f60390a3ad5b8d8d9e7c3a1d891ddc254a7187126f8dc13a4",
+      "producer_publication_sha": "e8183e0af6dccd6a1441d578112676ce1bacde86",
+      "producer_receipt_sha256": "03601852e6c57769789597ff9388cf2d70cf64a88f46cd64b3536ea2410d123c",
+      "producer_task_id": "fb01-review-game-v001",
+      "proofs": [
+        {
+          "blob": "e964ce07fa3807fc104ec290c66a7c7f430ccc04",
+          "commit": "a618171206542aad02402375cc7cfe8addcc7649",
+          "path": "docs/handoffs/2026-10-08_qa_to_pm_fb01-review-game-v001.md"
+        }
+      ],
+      "qa_definition_sha256": "1d1b5f3f727d97dc532054eee48eb52ceac716d1bee1cc301080546dbbb88dba",
+      "qa_receipt_sha256": "d7ccedcc7183a6a6da806a2e09d8d8f9a5c110e685e13c64ec02953f1a59680a",
+      "reason": "Reviewed exact candidate is not in pinned current main ancestry. No assumed acceptance from branch existence.",
+      "verdict": "PASS_WITH_NONBLOCKING_GAPS"
+    },
+    "qa-fb01-review-media-v001": {
+      "candidate_sha": "6552732635efdfd2a81c134d74b6c5ce0991562b",
+      "candidate_tree": "73fce9463f50fdc1e636510468b2538e53f804de",
+      "consumers": {
+        "fb01-feature-media-v001": "131a2e0288118582086c08ff58d346afbc997df33f8db80627dc61e0fc7f07ae"
+      },
+      "decision": "WAITING_REVIEW",
+      "original_blocking_findings": [],
+      "producer_branch": "review/fb01-review-media-v001",
+      "producer_definition_sha256": "16c6fb07018f87b05f72a6fe377cfae3e7dc6c357201dbf254e837e90d153798",
+      "producer_publication_sha": "423931d995450df0e6696fee1f2ef1e2936f3e7e",
+      "producer_receipt_sha256": "cf566233ac4dc980bdfd33ddd8833d50a17496974a9b3446da659c40f31f70ed",
+      "producer_task_id": "fb01-review-media-v001",
+      "proofs": [
+        {
+          "blob": "d67f69ef4b34eda52afe27b37af1ed452e76d8e1",
+          "commit": "a8948ca6ecac532db1d50647b60dbb1767cdce24",
+          "path": "docs/handoffs/2026-10-08_qa_fb01-review-media-v001.md"
+        }
+      ],
+      "qa_definition_sha256": "04947a8b1ddc85e1532a74de327d18a2ad01724b596286f8abc78737c7b6edb3",
+      "qa_receipt_sha256": "4f7befdba26bb6228c03a39c0787490a5d4051b07bb18878158990a4b3f73090",
+      "reason": "Reviewed exact candidate is not in pinned current main ancestry. No assumed acceptance from branch existence.",
+      "verdict": "PASS_WITH_NONBLOCKING_GAPS"
+    },
+    "qa-fb01-review-messaging-v001": {
+      "candidate_sha": "b6f47c038d74ee005f1f577ee0af3b4f64d68c70",
+      "candidate_tree": "f5ffc4aa0149f7d542177c2e883f4a8d38dcdc54",
+      "consumers": {
+        "fb01-feature-messaging-v001": "1afedbd7e0e2045aa340eefc52381c6a6c08f51403fb271a991347a53df1839e"
+      },
+      "decision": "WAITING_REVIEW",
+      "original_blocking_findings": [],
+      "producer_branch": "review/fb01-review-messaging-v001",
+      "producer_definition_sha256": "d1f8039c13db8bacb8e45beb8f2ef07a824366e842af1c957748373f39e7ab01",
+      "producer_publication_sha": "b6f47c038d74ee005f1f577ee0af3b4f64d68c70",
+      "producer_receipt_sha256": "7e384686c07d08b6743c38bf5fb0afe26db22df82622794cfd641d487310429d",
+      "producer_task_id": "fb01-review-messaging-v001",
+      "proofs": [
+        {
+          "blob": "200ae1f9416ee88e1572681a15a4e059a97a6bdf",
+          "commit": "727fb2d6eea0a78fe32a21d2d4648e0db22bf7c7",
+          "path": "docs/handoffs/2026-10-08_qa_to_pm_fb01-review-messaging-v001.md"
+        }
+      ],
+      "qa_definition_sha256": "24358dc9594eea9a51c67ba41276ce194ce1c46d56579e085793392822049673",
+      "qa_receipt_sha256": "295ec455dfae063e0297574d995b10b6d462a96dc09c453bd9534dfd4a15bb9d",
+      "reason": "Reviewed exact candidate is not in pinned current main ancestry. No assumed acceptance from branch existence.",
+      "verdict": "PASS"
+    },
+    "qa-fb01-thread-return-v001": {
+      "acceptance_scope": "source_only; existing exact dependency edges only; no release or merge authority",
+      "accepted_main_sha": "dd1b38addce103547a6d98f02b5bb1d3173908cf",
+      "candidate_sha": "dd1b38addce103547a6d98f02b5bb1d3173908cf",
+      "candidate_tree": "df0793c8c64b258bd6fd5154a0f7e3b4ff2a2878",
+      "consumers": {
+        "merge-fb01-thread-return-v001": "63e3a52d9c0197af9ebacf45a3758463161a1aff3bb71639b0362df3010c9eed"
+      },
+      "decision": "ATTESTED_DEPENDENCY_ONLY",
+      "original_blocking_findings": [],
+      "producer_branch": "impl/fb01-thread-return-v001",
+      "producer_definition_sha256": "5b87a38d2f4bf1ed2aee349c045c334ad2a31ce82a7a3f644d1cbdbf34ea8c2e",
+      "producer_publication_observation": "ac58ec5a380c385572bab48255d11f2c191acab7\trefs/heads/impl/fb01-thread-return-v001",
+      "producer_publication_sha": "ac58ec5a380c385572bab48255d11f2c191acab7",
+      "producer_receipt_sha256": "51f4f246209fdc9f9c51609388a8469092c59f4bf90957192ca6aa4a808f2e71",
+      "producer_task_id": "fb01-thread-return-v001",
+      "proofs": [
+        {
+          "blob": "a77d3f22f0a41e92af5b8835b2abda1fea127416",
+          "commit": "875c605868d31d42c5e22768acb496a204402362",
+          "path": "docs/handoffs/2026-10-08_qa_fb01-thread-return-v001.md"
+        },
+        {
+          "blob": "4ae5110db2f53c22741ff229ac5ff5f0f2b5d046",
+          "commit": "ac58ec5a380c385572bab48255d11f2c191acab7",
+          "path": "docs/handoffs/2026-10-08_implementation_to_qa_fb01-thread-return-v001.md"
+        }
+      ],
+      "qa_definition_sha256": "8725eaac79ab0e19e20541367d6049f512b6c8d3c8c1f7262f7286d68e6f8df8",
+      "qa_receipt_sha256": "9def25eb2a7b4f077cadb342be56258b4dc18235663d30e3dec5d3c3aa2b48bd",
+      "verdict": "PASS_WITH_NONBLOCKING_GAPS"
+    },
+    "qa-owner-messaging-registration-default-v001": {
+      "candidate_sha": "ea73cdf46f383fc1ba0a3b7221982e540f6b99ba",
+      "candidate_tree": "4767b200c45f8f6328f56ac4a5c7601cd6042004",
+      "consumers": {
+        "preview-owner-messaging-registration-default-v001": "daf0cf39b5a96f7da30973d87f1bac9baf8e4c158e6295b14f4ddd9738af93a7"
+      },
+      "decision": "WAITING_REVIEW",
+      "original_blocking_findings": [],
+      "producer_branch": "impl/owner-messaging-registration-default-v001",
+      "producer_definition_sha256": "f8cd5e63aa96fa51df38a8cf0b65c33c4a7474466573d44c9d5b6e624b9980e8",
+      "producer_publication_sha": "9c423c89a02957b74e920012b3a3b48976e0e289",
+      "producer_receipt_sha256": "e4fcae094337a7156e74591a105adf28104cc68a95155444a2e9a4db3bcd3b4e",
+      "producer_task_id": "owner-messaging-registration-default-v001",
+      "proofs": [
+        {
+          "blob": "912cc8111108d94a6f5a294060e5ec8447fe4eaa",
+          "commit": "274d555c830d7093db12abc9e6361809a31931ac",
+          "path": "docs/handoffs/2026-10-08_qa-owner-messaging-registration-default-v001.md"
+        }
+      ],
+      "qa_definition_sha256": "80ae09d61b9638461f440daf6c63c0f4afb982b4f5a8f7701f2f8903e8dc9ad8",
+      "qa_receipt_sha256": "dfc70b06f327c7ba27f8badc147538e7e3f02bd991e650b313d3c4efa73b5db7",
+      "reason": "Reviewed exact candidate is not in pinned current main ancestry. No assumed acceptance from branch existence.",
+      "verdict": "PASS_WITH_NONBLOCKING_GAPS"
+    },
+    "qa-radar-distance-unified-directory-contract-20261008-v001": {
+      "candidate_sha": "6134a80a6a636d02c1bdb47b75e7c5a24b034ad0",
+      "candidate_tree": "526078a431d2889d2b59cbe6d723d8381286057e",
+      "consumers": {
+        "radar-unified-distance-api-20261008-v001": "2e50ddd1a48379a19db454cfbf162393233f5887cde2f2f4f8ef37a1f55c23cc",
+        "rv3-players-map-frontend-v001": "77df8df098907f47a025de2ff20d3c4a9fd175d3d420a8f2fa8eba3211d6ad9e"
+      },
+      "decision": "WAITING_REVIEW",
+      "original_blocking_findings": [],
+      "producer_branch": "docs/radar-distance-unified-directory-contract-20261008-v001",
+      "producer_definition_sha256": "d288ff16d1daf5745582556acd40574d1cc02ba38eb598e9924e3398013dc0ce",
+      "producer_publication_sha": "f142da0af175a193ad2eae84b92e18799aa03a6a",
+      "producer_receipt_sha256": "39fb9b206ca2f23c077898ca499f783705c3b5116ebeaa4905100416d23354ff",
+      "producer_task_id": "radar-distance-unified-directory-contract-20261008-v001",
+      "proofs": [
+        {
+          "blob": "7ab199d33b5f4f60f54b06351a9f6048a0cb90ed",
+          "commit": "430bfe0b3b223234a112b5c4d6e47492a6aad644",
+          "path": "docs/handoffs/2026-10-08_qa_to_pm_radar-distance-unified-directory-contract-v001.md"
+        }
+      ],
+      "qa_definition_sha256": "e92762884440fc87491de2a452255283269f792aa30765e0116de948fdc5ce08",
+      "qa_receipt_sha256": "e347a416d89828a4509e18cead933d079e730aade05dadc1d10ad4e2ddcea5c6",
+      "reason": "Reviewed exact candidate is not in pinned current main ancestry. No assumed acceptance from branch existence.",
+      "verdict": "PASS"
+    },
+    "qa-radar-g1-current-main-integration-20261008-v001": {
+      "acceptance_scope": "source_only; existing exact dependency edges only; no release or merge authority",
+      "accepted_main_sha": "6cb80cf3f4f07aa88039b8cc19e52464cd558ea1",
+      "candidate_sha": "6cb80cf3f4f07aa88039b8cc19e52464cd558ea1",
+      "candidate_tree": "2e3e7f2f049d57882a67c09f808f6a87fdf34fae",
+      "consumers": {
+        "radar-g1-reviewed-main-merge-20261008-v001": "cc5aaffd790bacf3dab918c6988342dab1a447cf1fc64a4c68fa286e22c779c7",
+        "rv3-players-map-frontend-v001": "77df8df098907f47a025de2ff20d3c4a9fd175d3d420a8f2fa8eba3211d6ad9e"
+      },
+      "decision": "ATTESTED_DEPENDENCY_ONLY",
+      "original_blocking_findings": [],
+      "producer_branch": "implementation/radar-g1-current-main-integration-20261008-v001",
+      "producer_definition_sha256": "f9f0e08494645fe90caeb8d62a5b04b41c776819a2db7d3f788111aeed09729c",
+      "producer_publication_observation": "a877fc654ed8f3db92dc273086ee2e5390ecd537\trefs/heads/implementation/radar-g1-current-main-integration-20261008-v001",
+      "producer_publication_sha": "a877fc654ed8f3db92dc273086ee2e5390ecd537",
+      "producer_receipt_sha256": "73214e621256879c067d19a4de54f280655f971b05e087807cdb74bbf7dffc8d",
+      "producer_task_id": "radar-g1-current-main-integration-20261008-v001",
+      "proofs": [
+        {
+          "blob": "48c6633f87834e1ebf1140fbc6e4b7a40c87143a",
+          "commit": "6d87ee731863adcab1965d0a17c465c9a179706d",
+          "path": "docs/handoffs/2026-10-08_qa_to_pm_radar-g1-current-main-integration-v001.md"
+        },
+        {
+          "blob": "7aa55392baf8ff0a0e39d7ee77a81302c2a2c6bb",
+          "commit": "a877fc654ed8f3db92dc273086ee2e5390ecd537",
+          "path": "docs/handoffs/2026-10-08_implementation_to_qa_radar-g1-current-main-integration-v001.md"
+        }
+      ],
+      "qa_definition_sha256": "c743780d8694caad2d017e88c6fcb66121193927f87b1905a92c6733f255b6d8",
+      "qa_receipt_sha256": "91b99ead08ca0edffdeb96662749f5f3d6231791df143503ff67659d98eae55b",
+      "verdict": "PASS_WITH_NONBLOCKING_GAPS"
+    },
+    "qa-radar-map-asset-readiness-20261008-v001": {
+      "candidate_sha": "7e2f1f83337d8b6b8acca1f564e8ff8b320a4c36",
+      "candidate_tree": "f5997aaa440ef7fca4af419222cb0e1fe8d69fb9",
+      "consumers": {
+        "rv3-players-map-frontend-v001": "77df8df098907f47a025de2ff20d3c4a9fd175d3d420a8f2fa8eba3211d6ad9e"
+      },
+      "decision": "WAITING_REVIEW",
+      "original_blocking_findings": [],
+      "producer_branch": "",
+      "producer_definition_sha256": "3ed38726dd04c003c21c057ea10c17ac52e8ef3e81cc04ae45c8678530be4ffd",
+      "producer_publication_sha": "2d7dd6033b9a84329e9af369c814011eeed321c8",
+      "producer_receipt_sha256": "a59c6d69f6e085abf5fb8bda859f7b098c33e03a9d11e1c614c6e969e26aca5f",
+      "producer_task_id": "radar-map-asset-readiness-20261008-v001",
+      "proofs": [
+        {
+          "blob": "33392aefaa190dfed889bbcaa59c56665754bac4",
+          "commit": "4987780aadd87c8f42c46ee3db64ccb5534548e0",
+          "path": "docs/handoffs/2026-10-08_qa_radar-map-asset-readiness-20261008-v001.md"
+        }
+      ],
+      "qa_definition_sha256": "4acfa86cad1a2ddb96628e4d27c50b8a312a50256c569300e02362d209014434",
+      "qa_receipt_sha256": "843003059092cce1a09cfbedd7f2d614fc92bd657fb1cfeeb2f55508b4efb1a3",
+      "reason": "Incomplete original candidate/branch/publication evidence; PM binding required.",
+      "verdict": "PASS_WITH_NONBLOCKING_GAPS"
+    },
+    "qa-radar-unified-distance-api-20261008-v001": {
+      "acceptance_scope": "source_only; existing exact dependency edges only; no release or merge authority",
+      "accepted_main_sha": "c3043b7d6f36a777609ebdc79bdf6f36bb0363c8",
+      "candidate_sha": "ea60f6f4bfb0abe690f22a4ca3738e3ef2362511",
+      "candidate_tree": "9b42172e8946fda93525ee57a06d9d562eb37422",
+      "consumers": {
+        "radar-unified-api-reviewed-merge-20261008-v001": "c939aede5c15acf371d0f6c46f0ab2de8e29b35636e21e1cdeeb92b77e9b083f",
+        "rv3-players-map-frontend-v001": "77df8df098907f47a025de2ff20d3c4a9fd175d3d420a8f2fa8eba3211d6ad9e"
+      },
+      "decision": "ATTESTED_DEPENDENCY_ONLY",
+      "original_blocking_findings": [],
+      "producer_branch": "impl/radar-unified-distance-api-20261008-v001",
+      "producer_definition_sha256": "2e50ddd1a48379a19db454cfbf162393233f5887cde2f2f4f8ef37a1f55c23cc",
+      "producer_publication_observation": "98547f7e2723f08c775b0a452fd8a35a52ebd1d3\trefs/heads/impl/radar-unified-distance-api-20261008-v001",
+      "producer_publication_sha": "98547f7e2723f08c775b0a452fd8a35a52ebd1d3",
+      "producer_receipt_sha256": "8ebb2ee9e7b200c3305cbf762b651b2048736fce4a5fd7db3d98893965692226",
+      "producer_task_id": "radar-unified-distance-api-20261008-v001",
+      "proofs": [
+        {
+          "blob": "db84a62c95edb5872bd8fc3798fc0c165e4c4ad1",
+          "commit": "8f055a7d178e4d016f014f32d67b85b2eaff7a5e",
+          "path": "docs/workbench/qa/qa-radar-unified-distance-api-20261008-v001/REPORT.md"
+        },
+        {
+          "blob": "90971801a623482acd6662e303e10f4a09e1db49",
+          "commit": "98547f7e2723f08c775b0a452fd8a35a52ebd1d3",
+          "path": "docs/handoffs/2026-10-08_codex_to_pm_radar-unified-distance-api-v001.md"
+        }
+      ],
+      "qa_definition_sha256": "4cc63068c3541638a223f5c77c04f6d8f357c61c8c9ec4c58a735d74abe25ecd",
+      "qa_receipt_sha256": "42d04a5b31a3ad1c21bc3e7c1c4ea78dd5cb5486c34eded35412157dd9174b7f",
+      "verdict": "PASS_WITH_NONBLOCKING_GAPS"
+    },
+    "qa-runner-scoped-locks-20261008-v001": {
+      "candidate_sha": "45c32c9b1af7095615ef2f519fcb192356a08067",
+      "consumers": {
+        "runner-scoped-locks-release-review-20261008-v001": "e66fb4587ad591c3d8df2e48aba77fd661669481b4ba0e2757378e0b4588ee35"
+      },
+      "decision": "WAITING_REVIEW",
+      "original_blocking_findings": [],
+      "proofs": [
+        {
+          "blob": "9a0747e151d7d5d7af129e07f1a2944a79c7cc25",
+          "commit": "c82b4e1de0b6ac2fad513eeb8ff715e17f89e62a",
+          "path": "docs/handoffs/2026-10-08_qa_runner-scoped-locks-v001.md"
+        }
+      ],
+      "qa_definition_sha256": "d4cf86d44cfb0ea3b03c83931fea9497b8b7638d852c996e4a64de22bbfb72ec",
+      "qa_receipt_sha256": "514faaf9002f416d68e14f67505416d6afc6c44fe4a00d47fa88ece34d706091",
+      "reason": "No exact own producer dependency/receipt; asset evidence or PM source QA needs explicit reviewed binding.",
+      "verdict": "PASS_WITH_NONBLOCKING_GAPS"
+    },
+    "qa-rv3-moscow-map-assets-v001": {
+      "candidate_sha": null,
+      "consumers": {
+        "rv3-players-map-frontend-v001": "77df8df098907f47a025de2ff20d3c4a9fd175d3d420a8f2fa8eba3211d6ad9e"
+      },
+      "decision": "WAITING_REVIEW",
+      "original_blocking_findings": [],
+      "proofs": [
+        {
+          "blob": "7cb84bccd35bcb68e955ff562f720b2e0116c95b",
+          "commit": "14400c4757721bb2a310519593d0aad5cc97e634",
+          "path": "docs/handoffs/2026-10-08_qa_moscow-static-map-infra-v001.md"
+        }
+      ],
+      "qa_definition_sha256": "bb4e1af0d01a94ef6ce2a68ddf35ba1272a882f9a7b68732cf195445cb92e52f",
+      "qa_receipt_sha256": "9102664eb05dedd69e6bb42a8791a93ab6ad092c8d21f4e678b5f27664992e1f",
+      "reason": "No exact own producer dependency/receipt; asset evidence or PM source QA needs explicit reviewed binding.",
+      "verdict": "PASS_WITH_NONBLOCKING_GAPS"
+    },
+    "qa-rv3-players-map-frontend-v001": {
+      "acceptance_scope": "source_only; existing exact dependency edges only; no release or merge authority",
+      "accepted_main_sha": "bec2c515d4e27112c3885c580f8eab6c8e7759e2",
+      "candidate_sha": "bec2c515d4e27112c3885c580f8eab6c8e7759e2",
+      "candidate_tree": "c1177ec5f562573fc60c2d39552cc665ef570f71",
+      "consumers": {
+        "preview-rv3-players-map-v001": "04d97d766a8b02725e68a86e44aaf04a9bb1fd97f3223e9ee7f31160f57d316d",
+        "radar-g2-reviewed-main-merge-20261008-v001": "b8da06f2ba7249586233f8fe8ecbe6d38ba94f70211d08e8374bcbfddcc237c4"
+      },
+      "decision": "ATTESTED_DEPENDENCY_ONLY",
+      "original_blocking_findings": [],
+      "producer_branch": "implementation/rv3-players-map-frontend-v001",
+      "producer_definition_sha256": "77df8df098907f47a025de2ff20d3c4a9fd175d3d420a8f2fa8eba3211d6ad9e",
+      "producer_publication_observation": "e4a0f8f882d655534ee3670fdffb56d20e2097c7\trefs/heads/implementation/rv3-players-map-frontend-v001",
+      "producer_publication_sha": "e4a0f8f882d655534ee3670fdffb56d20e2097c7",
+      "producer_receipt_sha256": "674c0a448c6f80d2445be85346c0bd0163a67a9eae76797ab1fa4a5e6dafd06c",
+      "producer_task_id": "rv3-players-map-frontend-v001",
+      "proofs": [
+        {
+          "blob": "51c8124fcd1de6c6adaadbdf82188425d7925c9a",
+          "commit": "9f76b41c12bd08ae2a4de297a2765fbbafe44dcc",
+          "path": "docs/handoffs/2026-10-09_qa_to_pm_radar-g2-unified-map-ui-v001.md"
+        }
+      ],
+      "qa_definition_sha256": "e7b7a780627775c6da6067430fccfef6fb715d0f2ac2838ba4cd4de06d26d379",
+      "qa_receipt_sha256": "ade60eecc73f04362e3d25ab293e71850f531cb4612d513b8c88ad4345cfd1a0",
+      "verdict": "PASS_WITH_NONBLOCKING_GAPS"
+    },
+    "qa-venue-a1a-consumer-search-select-v001": {
+      "candidate_sha": "eed41b8d227fc9a35cc27c131702890fe8f21442",
+      "candidate_tree": "3c077dc8438ecfdbb5e41375a5461301d3f434ef",
+      "consumers": {
+        "game-venue-cover-inheritance-frontend-v001": "20a4fe928f2e31619900844d140a263bb452afaac53ce191e2c48a371cb10e84",
+        "preview-venue-a1a-consumer-search-select-v001": "6aee1975a76a86a1731b28a8d66017c54757c6aa68985ff594a885e10a328534",
+        "venue-a1b-admin-review-merge-v001": "28c86a0815c19f768bcb93c4b34116430fa815f8c9633465f17c38b7bf1cc77e"
+      },
+      "decision": "WAITING_REVIEW",
+      "original_blocking_findings": [],
+      "producer_branch": "impl/venue-a1a-consumer-search-select-v001",
+      "producer_definition_sha256": "7bcf49b3c2807dfcb82428e251883a7fbc16348736a40f8973ab8db55e59ffaf",
+      "producer_publication_sha": "f581361c0b0d631f7cf7f57d5610d2b088ca7ef1",
+      "producer_receipt_sha256": "621f2c212eac338134b4ac5632729fdf8dce795e7e6f6d44492e678504870c39",
+      "producer_task_id": "venue-a1a-consumer-search-select-v001",
+      "proofs": [
+        {
+          "blob": "08f678fcce869972b96889894c497c7b0067aa25",
+          "commit": "2487e429081818be45d14b9d569869c6efd1094d",
+          "path": "docs/handoffs/QA_VENUE_A1A_CONSUMER_SEARCH_SELECT_V001.md"
+        }
+      ],
+      "qa_definition_sha256": "35a8d4d68185432ee773681c5a9f1f5e5ad62fd2f0dcf0aacced3722997cb3d3",
+      "qa_receipt_sha256": "ee2fb82911d5b676457d3d4f02220dbdc2cba30e2674b32f9073f31a20e050d8",
+      "reason": "Reviewed exact candidate is not in pinned current main ancestry. No assumed acceptance from branch existence.",
+      "verdict": "PASS_WITH_NONBLOCKING_GAPS"
+    }
+  },
+  "status": "PROPOSED_AUTHOR_ATTESTATIONS_REQUIRES_INDEPENDENT_QA_AND_BOOTSTRAP",
+  "terminal_receipts": {
+    "qa-admin-a0a-identity-rbac-audit-v001": {
+      "sha256": "b8b30b7ff7ed3b07a9455e5a0d48caf34cb64bb47eab11e9733bbbe1989a083e",
+      "status": "qa_failed"
+    },
+    "qa-autopilot-nonrunnable-queue-recovery-v001": {
+      "sha256": "a8f5540c6ae52f7746f9b9886bd0aae39bf9784aed9668ec48b4a84e0d993ddd",
+      "status": "qa_failed"
+    },
+    "qa-canonical-mvp-release-deploy-v001": {
+      "sha256": "998139191d546e0c8746ddc3cba9d673e7c7466158737a9761656fb6212a13a0",
+      "status": "qa_failed"
+    },
+    "qa-canonical-mvp-web-public-assets-reverify-01-v001": {
+      "sha256": "1663dd46fc2258589134be02273ab25806b5c7028cd85141522118dcd5aba8c4",
+      "status": "qa_blocked"
+    },
+    "qa-demo-foundation-seed-reverify-after-repair-01-v001": {
+      "sha256": "c4be0157334208b1e2e7b26bb0476723829665766a03e6712fdaff10cdd073d8",
+      "status": "qa_blocked"
+    },
+    "qa-demo-foundation-seed-reverify-after-repair-02-v001": {
+      "sha256": "48b4475afb530a791b276ccf45ef462b5078642bd7e285b5885be85523a829ad",
+      "status": "qa_failed"
+    },
+    "qa-demo-foundation-seed-v001": {
+      "sha256": "d564fa72998c691232b322646502d11625061fc20a2122bfb4a8034603380d68",
+      "status": "completed"
+    },
+    "qa-demo-preview-deploy-v001": {
+      "sha256": "44225c79187592be524df54eb7a6a8537cf3c88d5411f29701a4ffa27e815ff9",
+      "status": "qa_blocked"
+    },
+    "qa-demo-social-backfill-reverify-after-swc-republish-01-v001": {
+      "sha256": "0221d22822527172d584a5bf81d1d23654a5bc139ced6ea2c3ce8746a0db360b",
+      "status": "qa_blocked"
+    },
+    "qa-demo-social-backfill-v001": {
+      "sha256": "06c0d1319ef69b47267ef97047e26ee9c12352421306b5f1534a146aaa2fe3b2",
+      "status": "qa_blocked"
+    },
+    "qa-demo-two-cities-20-games-v001": {
+      "sha256": "bb2220a369631146a5e783360a10abf6ad5fde0ff56fb30d9cf5bb248eed095c",
+      "status": "qa_blocked"
+    },
+    "qa-f02-identity-min-account-acceptance-v001": {
+      "sha256": "9ff96f32df971c182743b8d82adf4019debc32e174bd5564633ec51bcbc8ba91",
+      "status": "completed"
+    },
+    "qa-fb01-accepted-web-batch-20261008-v001": {
+      "sha256": "1f350f819246a77ce366af2a3a749998f9a535ba185ad25757d0084d2d2ee8df",
+      "status": "qa_blocked"
+    },
+    "qa-fb01-cards-modal-v001": {
+      "sha256": "b3d47e0e8ca2cf35c67c155d4f1cdf73e1c0999db466ed24e16ce80937f90708",
+      "status": "qa_blocked"
+    },
+    "qa-fb01-feature-messaging-v001": {
+      "sha256": "c3702307593a1f63cf3388eb7855589769afa4f741778ac19de29162dd910632",
+      "status": "qa_failed"
+    },
+    "qa-fr01-canonical-games-discovery-v001": {
+      "sha256": "77d33a211197865ed2669b9aeebcf705aaef82b8fa09ae7dde5c12fa73066bdf",
+      "status": "qa_failed"
+    },
+    "qa-fr04-canonical-messages-invitations-v001": {
+      "sha256": "9408990b4abf2ed5bc00f497a11fa406ae66b83a82bdf2e382eb210d44a5902a",
+      "status": "qa_failed"
+    },
+    "qa-fr07-integrated-canonical-frontend-v001": {
+      "sha256": "601c9ec248db464dd1eacb7a42871ee76ff85ddd665f42430ff24d66451c3c1b",
+      "status": "qa_failed"
+    },
+    "qa-game-profile-controls-v001": {
+      "sha256": "ac1439280a9570520c7185d8fe06f011051115da9905ba10e7897397a6a1b087",
+      "status": "qa_failed"
+    },
+    "qa-game-venue-cover-inheritance-frontend-v001": {
+      "sha256": "15999b536628efe9a6b018991fc4aa17f6ea862805e5cc15261e9efcb6b114d7",
+      "status": "qa_blocked"
+    },
+    "qa-ls03-text-dm-v001": {
+      "sha256": "b7cee0c999609bf8d7e2105fd84ed47e6e0475302a5415427eb461e846ec283b",
+      "status": "qa_failed"
+    },
+    "qa-ls04-game-invitation-v001": {
+      "sha256": "810808b60fd4e250529d92fbecf17c8bb4e4b14de2a23ba2b4927e0c817ae7cd",
+      "status": "qa_failed"
+    },
+    "qa-ls05-game-chat-v001": {
+      "sha256": "dbf85f334305c14d7174d65baa9343a80ca813429888065f7016da38300e745b",
+      "status": "qa_failed"
+    },
+    "qa-ls06-composed-inbox-v001": {
+      "sha256": "bb12160f09676d326fe9be7d0451fbdcee99c67aaeda8495ae09ac5f70c6879d",
+      "status": "qa_failed"
+    },
+    "qa-ls07-social-readiness-v001": {
+      "sha256": "b9b0869efcb1ec13e606ed662eb1b79d9f2357b9f4fa9508d4b1b93638d9e3b0",
+      "status": "qa_failed"
+    },
+    "qa-lsr2-radar-contact-recovery-v001": {
+      "sha256": "385352cbec8cb14effc4e32a1a283b58b540144d82755b7795405740ee7ff510",
+      "status": "qa_failed"
+    },
+    "qa-mobile-no-zoom-radar-global-remaining-gates-reverify-01-v001": {
+      "sha256": "64a74b221ab58bcf05e6acac1cca8273d54b03d2594ac9af2c1b8fb5665b76f8",
+      "status": "qa_blocked"
+    },
+    "qa-mobile-no-zoom-radar-global-v001": {
+      "sha256": "4f2198e965bce833f4eb157a86023e866bb502b199e5f6a29a60bc367a52c317",
+      "status": "qa_blocked"
+    },
+    "qa-monitor-autopilot-continuity-repair-v001": {
+      "sha256": "9324682b8175d135b30853bc128ca099849f36c30651246d6c9fdd2cf3882656",
+      "status": "qa_failed"
+    },
+    "qa-owner-a-create-discovery-onboarding-repair-v001": {
+      "sha256": "ed34d7479dc8b9aa5f1e16df81329aa2e37929a7a01a9e2ce9c280ca67780121",
+      "status": "qa_failed"
+    },
+    "qa-polish-deploy-internal-mvp-browser-reverify-01-v001": {
+      "sha256": "b2a275ef25f925f93c8f0a665225ebfcfcee702dbe3835a868b7b2ae5f37745d",
+      "status": "qa_blocked"
+    },
+    "qa-polish-deploy-internal-mvp-v001": {
+      "sha256": "673105e63fbbb9c873838b84cdde0ea325f85a197f189e408651075aef91c5b4",
+      "status": "qa_blocked"
+    },
+    "qa-preview-mobile-no-zoom-radar-global-v001": {
+      "sha256": "718e96bd976966c4aaa302b9fca2177a0c445c14a0129b98cba35888ad49d82e",
+      "status": "qa_blocked"
+    },
+    "qa-preview-owner-b-messaging-canonical-route-reverify-v001": {
+      "sha256": "48fc278190ce156070e7a01cf7647855445255823537259028c3f3d3942c91f9",
+      "status": "qa_blocked"
+    },
+    "qa-preview-owner-feedback-games-defaults-v001": {
+      "sha256": "453d3f8d4841a36edde5826d43577e8d2ab36b8c08530ed9454eb3b9f85f3081",
+      "status": "qa_blocked"
+    },
+    "qa-preview-radar-live-user-activation-flag-reverify-01-v001": {
+      "sha256": "615766b6bee369bcc526ac1b367df9754b096ebd0c046fa58354a33c50a13337",
+      "status": "qa_blocked"
+    },
+    "qa-preview-radar-live-user-activation-v001": {
+      "sha256": "b1ad1ce01cde3bc629ca94c11fa97de4692fba5b93047f6793800a8c8936ee99",
+      "status": "qa_blocked"
+    },
+    "qa-radar-demo-activation-v001": {
+      "sha256": "9b6d25f63bd9d2f59302fba9b501d2d1d8e3a223d316298cf0aebcf55b24db0e",
+      "status": "qa_failed"
+    },
+    "qa-radar-toggle-directory-map-rework-v001": {
+      "sha256": "a89ef25eecbd7d53c42bc671ee1fe2fc5bc2df48c9042c3de2b1616645454177",
+      "status": "qa_failed"
+    },
+    "qa-runner-backlog-sync-autoadmission-repair-01-v001": {
+      "sha256": "39ec1ca079ad7e308f5aa06486c67840e8cb71ec55251b4d9dd55fd1d37ad47e",
+      "status": "qa_failed"
+    },
+    "qa-runner-backlog-sync-autoadmission-repair-02-v001": {
+      "sha256": "8ca524583946cb7e6b264fc2806e58678626a1d913cecd47025b19b6d37ec30e",
+      "status": "qa_failed"
+    },
+    "qa-runner-monitor-russian-copy-v001": {
+      "sha256": "936f61dc59c7da5654fccd1fa86ad7dbd4d1801b5ec7bef7dc549e66850b44ab",
+      "status": "qa_failed"
+    },
+    "qa-runner88-safe-lane-idle-scheduler-repair-v001": {
+      "sha256": "caa3eddf7bc52e92a2a8b68891a3f073c8cc6845f4e57cadbf545044be554014",
+      "status": "qa_failed"
+    },
+    "qa-rv3-contract-lifecycle-control-reverify-01-v001": {
+      "sha256": "1bb15c25dcf34d46e6b89a7dcf1375e3e5bb2a974bd1796732ad74af35cc44f4",
+      "status": "qa_failed"
+    },
+    "qa-rv3-contract-v001": {
+      "sha256": "e75e6f13a1c6c823c3a39beb94ec4957024b0e588d7758807dbe9c8eb1e9271f",
+      "status": "qa_failed"
+    },
+    "qa-venue-a1a-catalog-dedupe-backend-v001": {
+      "sha256": "7c7780927cefc184d4c24aa67cc47835269974b89558549aacc584473f365b77",
+      "status": "qa_failed"
+    }
+  },
+  "version": 1
+}

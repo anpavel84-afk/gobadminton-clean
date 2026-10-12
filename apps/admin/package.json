@@ -1,0 +1,28 @@
+{
+  "name": "@gobadminton/admin",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --hostname localhost --port 3010",
+    "build": "next build",
+    "start": "next start --hostname localhost --port 3010",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:unit": "vitest run"
+  },
+  "dependencies": {
+    "next": "16.3.8",
+    "react": "19.1.1",
+    "react-dom": "19.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.5.2",
+    "@types/react": "^19.1.13",
+    "@types/react-dom": "^19.1.9",
+    "eslint": "^9.36.0",
+    "eslint-config-next": "16.3.8",
+    "typescript": "~5.9.3",
+    "vitest": "^3.2.4"
+  }
+}

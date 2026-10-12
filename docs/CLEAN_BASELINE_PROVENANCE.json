@@ -1,0 +1,10 @@
+{
+  "legacy_repo": "https://github.com/anpavel84-afk/gobadminton",
+  "legacy_main_sha": "8c5aaee07c9f0f5ce3bce8532fe501854a3d2a00",
+  "source_tree_commit": "d1cb97cdc9b6d9072361ba5de8856fba1785ddbe",
+  "history": "fresh root; no old PR/QA cryptographic authority migrates",
+  "old_qa_archive": "https://files.anpavel.ru/projects/gobadminton/qa-evidence-archive-20261012/",
+  "production_unmodified": true,
+  "operator_paused": true,
+  "source_files_copied": 803
+}

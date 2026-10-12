@@ -1,0 +1,19 @@
+[Unit]
+Description=GoBadminton product requirements GitHub read-only mirror (no models)
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+User=agentagency-dev
+Group=agentagency-dev
+Environment=HOME=/home/agentagency-dev
+Environment=GIT_TERMINAL_PROMPT=0
+Environment="GIT_SSH_COMMAND=ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=yes"
+ExecStart=/usr/bin/python3 -B /srv/gobadminton-product-backlog/app/sync.py --repo /srv/gobadminton-product-backlog/source.git --state /srv/gobadminton-product-backlog/state
+TimeoutStartSec=70
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/srv/gobadminton-product-backlog
+UMask=0022

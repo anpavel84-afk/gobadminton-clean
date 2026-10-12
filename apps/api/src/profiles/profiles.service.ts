@@ -1,0 +1,1329 @@
+import { withdrawGeographicConsent } from "../radar/geographic-consent";
+import { unrestrictedSql } from "../restrictions/policy";
+import { avatarForUser, avatarForPlayer, type PlayerAvatar } from "./avatar-presentation";
+import { Inject, Injectable } from "@nestjs/common";
+import type { Pool, PoolClient } from "pg";
+import {
+  conflict,
+  notFound,
+  unprocessable,
+} from "../auth/problem";
+import { IdempotencyService } from "../common/idempotency.service";
+import { MutationRunner } from "../common/mutation-runner.service";
+import { JobEnqueueService } from "../jobs/job-enqueue.service";
+import { DATABASE_POOL } from "../tokens";
+import {
+  DIRECTORY_CONSENT_POLICY_VERSION,
+  DIRECTORY_DEFAULT_LIMIT,
+  DIRECTORY_MAX_LIMIT,
+  LOOKING_TTL_DEFAULT_MINUTES,
+  LOOKING_TTL_MAX_MINUTES,
+  LOOKING_TTL_MIN_MINUTES,
+  RADAR_CONSENT_POLICY_VERSION,
+} from "./constants";
+import type { AppEnv } from "../config/env";
+import { APP_ENV } from "../tokens";
+import { SocialFeatureService } from "./social-feature";
+
+export type LevelDto = {
+  scaleId: string;
+  scaleVersion: number;
+  levelId: string;
+  provenance: "self_declared";
+};
+
+export type LookingIntentDto = {
+  version: number;
+  state: "active" | "inactive";
+  cityId: string | null;
+  areaKey: string | null;
+  startsAt: string | null;
+  endsAt: string | null;
+  expiresAt: string | null;
+  formatKeys: string[];
+};
+
+export type OwnSocialProfileDto = {
+  avatar?: PlayerAvatar;
+  publicPlayerId: string | null;
+  version: number;
+  displayName: string;
+  cityId: string | null;
+  areaKey: string | null;
+  level: LevelDto | null;
+  bio: string | null;
+  directoryVisible: boolean;
+  contactPolicy: "requests" | "closed";
+  consentPolicyVersion: string | null;
+  optedInAt: string | null;
+  radarConsented: boolean;
+  radarConsentPolicyVersion: string | null;
+  radarConsentedAt: string | null;
+  socialEligible: boolean;
+  trainer: boolean;
+  lookingForGame: LookingIntentDto | null;
+};
+
+export type PublicPlayerDto = {
+  canRequestContact: boolean;
+  avatar?: PlayerAvatar;
+  publicPlayerId: string;
+  displayName: string;
+  cityId: string | null;
+  areaKey: string | null;
+  level: LevelDto | null;
+  bio: string | null;
+  trainer: boolean;
+  lookingForGame: boolean;
+};
+
+export type PatchSocialProfileInput = {
+  expectedVersion?: number;
+  displayName?: string;
+  cityId?: string | null;
+  areaKey?: string | null;
+  level?: LevelDto | null;
+  bio?: string | null;
+  contactPolicy?: "requests" | "closed";
+  radarConsented?: boolean;
+  radarConsentPolicyVersion?: string;
+  socialEligible?: boolean;
+};
+
+export type VisibilityInput = {
+  directoryVisible: boolean;
+  consentPolicyVersion?: string;
+  expectedVersion: number;
+};
+
+export type LookingPutInput = {
+  cityId: string;
+  areaKey?: string | null;
+  ttlMinutes?: number;
+  formatKeys?: string[];
+  expectedVersion?: number;
+};
+
+type ProfileRow = {
+  user_id: string;
+  public_player_id: string;
+  display_name: string;
+  city_id: string | null;
+  area_key: string | null;
+  level_scale_id: string | null;
+  level_scale_version: number | null;
+  level_id: string | null;
+  bio: string | null;
+  directory_visible: boolean;
+  contact_policy: "requests" | "closed";
+  consent_policy_version: string | null;
+  opted_in_at: Date | null;
+  radar_consented: boolean;
+  radar_consent_policy_version: string | null;
+  radar_consented_at: Date | null;
+  social_eligible: boolean;
+  version: number;
+};
+
+type LookingRow = {
+  user_id: string;
+  active: boolean;
+  city_id: string | null;
+  area_key: string | null;
+  starts_at: Date | null;
+  ends_at: Date | null;
+  expires_at: Date | null;
+  format_keys: unknown;
+  version: number;
+};
+
+const PROFILE_SELECT = `user_id, public_player_id, display_name, city_id, area_key,
+  level_scale_id, level_scale_version, level_id, bio, directory_visible,
+  contact_policy, consent_policy_version, opted_in_at, radar_consented,
+  radar_consent_policy_version, radar_consented_at, social_eligible, version`;
+
+@Injectable()
+export class ProfilesService {
+  constructor(
+    @Inject(DATABASE_POOL) private readonly pool: Pool,
+    private readonly idempotency: IdempotencyService,
+    private readonly mutations: MutationRunner,
+    private readonly feature: SocialFeatureService,
+    private readonly jobs: JobEnqueueService,
+    @Inject(APP_ENV) private readonly env: AppEnv,
+  ) {}
+
+  async getOwn(userId: string): Promise<OwnSocialProfileDto> {
+    this.feature.assertEnabled();
+    const profile = await this.loadProfile(this.pool, userId);
+    const looking = await this.loadLookingEffective(this.pool, userId);
+    const trainer = await this.hasActiveTrainer(this.pool, userId);
+    if (!profile) {
+      return { ...emptyOwnProfile(trainer), avatar: await avatarForUser(this.pool, userId) };
+    }
+    return { ...mapOwn(profile, looking, trainer), avatar: await avatarForUser(this.pool, userId) };
+  }
+
+  async patchOwn(
+    userId: string,
+    sessionId: string,
+    idempotencyKey: string,
+    input: PatchSocialProfileInput,
+  ): Promise<{ statusCode: number; body: OwnSocialProfileDto }> {
+    this.feature.assertEnabled();
+    if (this.env.SOCIAL_RADAR_GEOGRAPHIC_ENABLED && input.radarConsented===true) {
+      throw unprocessable("RADAR_DISCLOSURE_REQUIRED","Согласие на географический Radar принимается при явном включении");
+    }
+    const normalized = normalizePatch(input);
+    const operation = "social_profile.patch";
+    const requestHash = this.idempotency.requestHash(normalized);
+    return this.mutations.runIdempotent<OwnSocialProfileDto>({
+      actorId: userId,
+      sessionId,
+      operation,
+      key: idempotencyKey,
+      requestHash,
+      authorizeReplay: async (client) => {
+        await client.query(
+          `SELECT user_id FROM player_social_profiles WHERE user_id = $1 FOR UPDATE`,
+          [userId],
+        );
+      },
+      execute: async (client) => {
+        const locked = await client.query<ProfileRow>(
+          `SELECT ${PROFILE_SELECT}
+           FROM player_social_profiles
+           WHERE user_id = $1
+           FOR UPDATE`,
+          [userId],
+        );
+        const existing = locked.rows[0];
+        let statusCode = 200;
+        let row: ProfileRow;
+
+        if (!existing) {
+          if (
+            normalized.expectedVersion !== undefined &&
+            normalized.expectedVersion !== 0
+          ) {
+            throw conflict("VERSION_CONFLICT", "Социальный профиль ещё не создан");
+          }
+          if (normalized.cityId) await assertCity(client, normalized.cityId);
+          const level = normalized.level;
+          const seededName =
+            (normalized.displayName ?? "").trim() ||
+            (await accountDisplayName(client, userId));
+          const inserted = await client.query<ProfileRow>(
+            `INSERT INTO player_social_profiles (
+               user_id, display_name, city_id, area_key,
+               level_scale_id, level_scale_version, level_id, bio,
+               contact_policy, radar_consented, radar_consent_policy_version,
+               radar_consented_at, social_eligible, version
+             ) VALUES (
+               $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 1
+             )
+             RETURNING ${PROFILE_SELECT}`,
+            [
+              userId,
+              seededName,
+              normalized.cityId ?? null,
+              normalized.areaKey ?? null,
+              level?.scaleId ?? null,
+              level?.scaleVersion ?? null,
+              level?.levelId ?? null,
+              normalized.bio ?? null,
+              normalized.contactPolicy ?? "closed",
+              normalized.radarConsented ?? false,
+              normalized.radarConsented
+                ? (normalized.radarConsentPolicyVersion ??
+                  RADAR_CONSENT_POLICY_VERSION)
+                : null,
+              normalized.radarConsented ? new Date() : null,
+              normalized.socialEligible ?? true,
+            ],
+          );
+          row = inserted.rows[0]!;
+          statusCode = 201;
+        } else {
+          if (
+            normalized.expectedVersion === undefined ||
+            existing.version !== normalized.expectedVersion
+          ) {
+            throw conflict("VERSION_CONFLICT", "Версия социального профиля устарела");
+          }
+          const nextDisplay =
+            normalized.displayName !== undefined
+              ? normalized.displayName
+              : existing.display_name;
+          const nextCity =
+            normalized.cityId !== undefined
+              ? normalized.cityId
+              : existing.city_id;
+          const nextArea =
+            normalized.areaKey !== undefined
+              ? normalized.areaKey
+              : existing.area_key;
+          const nextLevel =
+            normalized.level !== undefined
+              ? normalized.level
+              : mapLevel(existing);
+          const nextBio =
+            normalized.bio !== undefined ? normalized.bio : existing.bio;
+          const nextContact =
+            normalized.contactPolicy !== undefined
+              ? normalized.contactPolicy
+              : existing.contact_policy;
+          let nextRadar = existing.radar_consented;
+          let nextRadarPolicy = existing.radar_consent_policy_version;
+          let nextRadarAt = existing.radar_consented_at;
+          if (normalized.radarConsented !== undefined) {
+            nextRadar = normalized.radarConsented;
+            if (nextRadar) {
+              nextRadarPolicy =
+                normalized.radarConsentPolicyVersion ??
+                RADAR_CONSENT_POLICY_VERSION;
+              nextRadarAt = existing.radar_consented
+                ? existing.radar_consented_at
+                : new Date();
+            } else {
+              nextRadarPolicy = null;
+              nextRadarAt = null;
+            }
+          }
+          const nextEligible =
+            normalized.socialEligible !== undefined
+              ? normalized.socialEligible
+              : existing.social_eligible;
+          // Full social eligibility revoke clears Radar consent.
+          if (nextEligible === false) {
+            nextRadar = false;
+            nextRadarPolicy = null;
+            nextRadarAt = null;
+          }
+          // Directory visibility stays as stored; patch does not toggle it.
+          // If fields required for opt-in are removed while visible, reject.
+          if (
+            existing.directory_visible &&
+            (nextDisplay.trim().length < 1 || nextCity === null)
+          ) {
+            throw unprocessable(
+              "DIRECTORY_FIELDS_REQUIRED",
+              "Для видимого профиля нужны displayName и cityId",
+            );
+          }
+          if (nextCity) await assertCity(client, nextCity);
+
+          const updated = await client.query<ProfileRow>(
+            `UPDATE player_social_profiles
+             SET display_name = $2,
+                 city_id = $3,
+                 area_key = $4,
+                 level_scale_id = $5,
+                 level_scale_version = $6,
+                 level_id = $7,
+                 bio = $8,
+                 contact_policy = $9,
+                 radar_consented = $10,
+                 radar_consent_policy_version = $11,
+                 radar_consented_at = $12,
+                 social_eligible = $13,
+                 directory_visible = CASE
+                   WHEN $13 = false THEN false
+                   ELSE directory_visible
+                 END,
+                 version = version + 1,
+                 updated_at = now()
+             WHERE user_id = $1
+             RETURNING ${PROFILE_SELECT}`,
+            [
+              userId,
+              nextDisplay,
+              nextCity,
+              nextArea,
+              nextLevel?.scaleId ?? null,
+              nextLevel?.scaleVersion ?? null,
+              nextLevel?.levelId ?? null,
+              nextBio,
+              nextContact,
+              nextRadar,
+              nextRadarPolicy,
+              nextRadarAt,
+              nextEligible,
+            ],
+          );
+          row = updated.rows[0]!;
+          if (!row.radar_consented || !row.social_eligible) {
+            await withdrawGeographicConsent(client,userId);
+            await client.query(`DELETE FROM radar_presences WHERE user_id = $1`, [
+              userId,
+            ]);
+          }
+        }
+        const looking = await this.loadLookingEffective(client, userId);
+        const trainer = await this.hasActiveTrainer(client, userId);
+        return { statusCode, body: { ...mapOwn(row, looking, trainer), avatar: await avatarForUser(client, userId) } };
+      },
+    });
+  }
+
+  async setVisibility(
+    userId: string,
+    sessionId: string,
+    idempotencyKey: string,
+    input: VisibilityInput,
+  ): Promise<{ statusCode: number; body: OwnSocialProfileDto }> {
+    this.feature.assertEnabled();
+    const normalized = normalizeVisibility(input);
+    const operation = "social_profile.visibility";
+    const requestHash = this.idempotency.requestHash(normalized);
+    return this.mutations.runIdempotent<OwnSocialProfileDto>({
+      actorId: userId,
+      sessionId,
+      operation,
+      requiredCapabilities: normalized.directoryVisible ? ["profile.public", "social.directory"] : [],
+      key: idempotencyKey,
+      requestHash,
+      authorizeReplay: async (client) => {
+        await client.query(
+          `SELECT user_id FROM player_social_profiles WHERE user_id = $1 FOR UPDATE`,
+          [userId],
+        );
+      },
+      execute: async (client) => {
+        const locked = await client.query<ProfileRow>(
+          `SELECT ${PROFILE_SELECT}
+           FROM player_social_profiles
+           WHERE user_id = $1
+           FOR UPDATE`,
+          [userId],
+        );
+        const existing = locked.rows[0];
+        if (!existing) {
+          throw unprocessable(
+            "SOCIAL_PROFILE_REQUIRED",
+            "Сначала заполните социальный профиль",
+          );
+        }
+        if (existing.version !== normalized.expectedVersion) {
+          throw conflict("VERSION_CONFLICT", "Версия социального профиля устарела");
+        }
+        if (!existing.social_eligible && normalized.directoryVisible) {
+          throw unprocessable(
+            "SOCIAL_INELIGIBLE",
+            "Социальный профиль недоступен для публикации",
+          );
+        }
+        let consent = existing.consent_policy_version;
+        let optedInAt = existing.opted_in_at;
+        if (normalized.directoryVisible) {
+          if (
+            existing.display_name.trim().length < 1 ||
+            !existing.city_id
+          ) {
+            throw unprocessable(
+              "DIRECTORY_FIELDS_REQUIRED",
+              "Для opt-in нужны displayName и cityId",
+            );
+          }
+          const policy =
+            normalized.consentPolicyVersion ?? DIRECTORY_CONSENT_POLICY_VERSION;
+          if (policy !== DIRECTORY_CONSENT_POLICY_VERSION) {
+            throw unprocessable(
+              "CONSENT_POLICY_VERSION_INVALID",
+              "Некорректная версия согласия каталога",
+            );
+          }
+          consent = policy;
+          optedInAt = existing.opted_in_at ?? new Date();
+        }
+        // Opt-out must NOT clear radar consent (ADR-004 / assignment).
+        const updated = await client.query<ProfileRow>(
+          `UPDATE player_social_profiles
+           SET directory_visible = $2,
+               consent_policy_version = $3,
+               opted_in_at = $4,
+               version = version + 1,
+               updated_at = now()
+           WHERE user_id = $1
+           RETURNING ${PROFILE_SELECT}`,
+          [userId, normalized.directoryVisible, consent, optedInAt],
+        );
+        const looking = await this.loadLookingEffective(client, userId);
+        const trainer = await this.hasActiveTrainer(client, userId);
+        return { statusCode: 200, body: { ...mapOwn(updated.rows[0]!, looking, trainer), avatar: await avatarForUser(client, userId) } };
+      },
+    });
+  }
+
+  async putLooking(
+    userId: string,
+    sessionId: string,
+    idempotencyKey: string,
+    input: LookingPutInput,
+  ): Promise<{ statusCode: number; body: LookingIntentDto }> {
+    this.feature.assertEnabled();
+    const normalized = normalizeLookingPut(input);
+    const operation = "looking_for_game.put";
+    const requestHash = this.idempotency.requestHash(normalized);
+    return this.mutations.runIdempotent<LookingIntentDto>({
+      actorId: userId,
+      sessionId,
+      operation,
+      key: idempotencyKey,
+      requestHash,
+      authorizeReplay: async (client) => {
+        await client.query(
+          `SELECT user_id FROM player_looking_intents WHERE user_id = $1 FOR UPDATE`,
+          [userId],
+        );
+      },
+      execute: async (client) => {
+        await assertCity(client, normalized.cityId);
+        const profile = await client.query<{ social_eligible: boolean }>(
+          `SELECT social_eligible FROM player_social_profiles
+           WHERE user_id = $1 FOR UPDATE`,
+          [userId],
+        );
+        if (!profile.rows[0]?.social_eligible) {
+          // Allow looking only when profile exists and eligible; create-soft fail.
+          if (!profile.rows[0]) {
+            throw unprocessable(
+              "SOCIAL_PROFILE_REQUIRED",
+              "Сначала заполните социальный профиль",
+            );
+          }
+          throw unprocessable(
+            "SOCIAL_INELIGIBLE",
+            "Социальный профиль недоступен",
+          );
+        }
+        const locked = await client.query<LookingRow>(
+          `SELECT user_id, active, city_id, area_key, starts_at, ends_at,
+                  expires_at, format_keys, version
+           FROM player_looking_intents
+           WHERE user_id = $1
+           FOR UPDATE`,
+          [userId],
+        );
+        const existing = locked.rows[0];
+        if (
+          existing &&
+          normalized.expectedVersion !== undefined &&
+          existing.version !== normalized.expectedVersion
+        ) {
+          throw conflict("VERSION_CONFLICT", "Версия looking-intent устарела");
+        }
+        if (
+          !existing &&
+          normalized.expectedVersion !== undefined &&
+          normalized.expectedVersion !== 0
+        ) {
+          throw conflict("VERSION_CONFLICT", "Looking-intent ещё не создан");
+        }
+        const now = new Date();
+        const expiresAt = new Date(
+          now.getTime() + normalized.ttlMinutes * 60_000,
+        );
+        const formatJson = JSON.stringify(normalized.formatKeys);
+        if (!existing) {
+          const inserted = await client.query<LookingRow>(
+            `INSERT INTO player_looking_intents (
+               user_id, active, city_id, area_key, starts_at, ends_at,
+               expires_at, format_keys, version
+             ) VALUES ($1, true, $2, $3, $4, $5, $5, $6::jsonb, 1)
+             RETURNING user_id, active, city_id, area_key, starts_at, ends_at,
+                       expires_at, format_keys, version`,
+            [
+              userId,
+              normalized.cityId,
+              normalized.areaKey,
+              now,
+              expiresAt,
+              formatJson,
+            ],
+          );
+          const body = mapLooking(inserted.rows[0]!);
+          await this.jobs.enqueueLookingIntentExpiry(client, {
+            userId,
+            version: body.version,
+            expiresAt,
+          });
+          return { statusCode: 201, body };
+        }
+        const updated = await client.query<LookingRow>(
+          `UPDATE player_looking_intents
+           SET active = true,
+               city_id = $2,
+               area_key = $3,
+               starts_at = $4,
+               ends_at = $5,
+               expires_at = $5,
+               format_keys = $6::jsonb,
+               version = version + 1,
+               updated_at = now()
+           WHERE user_id = $1
+           RETURNING user_id, active, city_id, area_key, starts_at, ends_at,
+                     expires_at, format_keys, version`,
+          [
+            userId,
+            normalized.cityId,
+            normalized.areaKey,
+            now,
+            expiresAt,
+            formatJson,
+          ],
+        );
+        const body = mapLooking(updated.rows[0]!);
+        await this.jobs.enqueueLookingIntentExpiry(client, {
+          userId,
+          version: body.version,
+          expiresAt,
+        });
+        return { statusCode: 200, body };
+      },
+    });
+  }
+
+  async deleteLooking(
+    userId: string,
+    sessionId: string,
+    idempotencyKey: string,
+  ): Promise<{ statusCode: number; body: LookingIntentDto }> {
+    this.feature.assertEnabled();
+    const operation = "looking_for_game.delete";
+    const requestHash = this.idempotency.requestHash({ stop: true });
+    return this.mutations.runIdempotent<LookingIntentDto>({
+      actorId: userId,
+      sessionId,
+      operation,
+      key: idempotencyKey,
+      requestHash,
+      authorizeReplay: async (client) => {
+        await client.query(
+          `SELECT user_id FROM player_looking_intents WHERE user_id = $1 FOR UPDATE`,
+          [userId],
+        );
+      },
+      execute: async (client) => {
+        const locked = await client.query<LookingRow>(
+          `SELECT user_id, active, city_id, area_key, starts_at, ends_at,
+                  expires_at, format_keys, version
+           FROM player_looking_intents
+           WHERE user_id = $1
+           FOR UPDATE`,
+          [userId],
+        );
+        const existing = locked.rows[0];
+        if (!existing) {
+          return {
+            statusCode: 200,
+            body: {
+              version: 0,
+              state: "inactive",
+              cityId: null,
+              areaKey: null,
+              startsAt: null,
+              endsAt: null,
+              expiresAt: null,
+              formatKeys: [],
+            },
+          };
+        }
+        // Expire-on-command: mark inactive regardless of prior expiry.
+        const updated = await client.query<LookingRow>(
+          `UPDATE player_looking_intents
+           SET active = false,
+               version = version + 1,
+               updated_at = now()
+           WHERE user_id = $1
+           RETURNING user_id, active, city_id, area_key, starts_at, ends_at,
+                     expires_at, format_keys, version`,
+          [userId],
+        );
+        return { statusCode: 200, body: mapLooking(updated.rows[0]!) };
+      },
+    });
+  }
+
+  async listDirectory(
+    viewerId: string | null,
+    query: {
+      cursor?: string;
+      limit?: number;
+      cityId?: string;
+      areaKey?: string;
+      name?: string;
+      looking?: boolean;
+      trainer?: boolean;
+    },
+  ): Promise<{ items: PublicPlayerDto[]; nextCursor: string | null }> {
+    this.feature.assertEnabled();
+    const limit = clampLimit(query.limit);
+    const params: unknown[] = [];
+    const where: string[] = [
+      `p.directory_visible = true`,
+      `p.social_eligible = true`,
+      `u.status = 'active'`,
+      unrestrictedSql(this.env.USER_RESTRICTIONS_INTERNAL_ENABLED, "p.user_id", ["account.access", "profile.public", "social.directory"]),
+    ];
+    if (viewerId) {
+      params.push(viewerId);
+      const viewerParam = `$${params.length}`;
+      where.push(`NOT EXISTS (
+         SELECT 1 FROM user_blocks b
+         WHERE (b.blocker_user_id = ${viewerParam} AND b.blocked_user_id = p.user_id)
+            OR (b.blocker_user_id = p.user_id AND b.blocked_user_id = ${viewerParam})
+       )`);
+      where.push(`p.user_id <> ${viewerParam}`);
+    }
+    if (query.cityId) {
+      params.push(query.cityId);
+      where.push(`p.city_id = $${params.length}`);
+    }
+    if (query.areaKey) {
+      params.push(query.areaKey);
+      where.push(`p.area_key = $${params.length}`);
+    }
+    if (query.name && query.name.trim().length >= 2) {
+      params.push(`${query.name.trim().toLowerCase()}%`);
+      where.push(`lower(p.display_name) LIKE $${params.length}`);
+    }
+    if (query.looking === true) {
+      where.push(`EXISTS (
+        SELECT 1 FROM player_looking_intents li
+        WHERE li.user_id = p.user_id
+          AND li.active = true
+          AND li.expires_at > now()
+      )`);
+    }
+    if (query.trainer === true) {
+      where.push(`EXISTS (
+        SELECT 1 FROM trainer_profiles tp
+        WHERE tp.user_id = p.user_id AND tp.status = 'active'
+      )`);
+    }
+    let cursorName: string | null = null;
+    let cursorId: string | null = null;
+    if (query.cursor) {
+      const decoded = decodeCursor(query.cursor);
+      cursorName = decoded.name;
+      cursorId = decoded.id;
+      params.push(cursorName, cursorId);
+      where.push(
+        `(lower(p.display_name), p.public_player_id) > ($${params.length - 1}, $${params.length})`,
+      );
+    }
+    params.push(limit + 1);
+    const result = await this.pool.query<{
+      user_id: string;
+      public_player_id: string;
+      display_name: string;
+      city_id: string | null;
+      area_key: string | null;
+      level_scale_id: string | null;
+      level_scale_version: number | null;
+      level_id: string | null;
+      bio: string | null;
+      trainer: boolean;
+      looking: boolean;
+    }>(
+      `SELECT p.user_id, p.public_player_id, p.display_name, p.city_id, p.area_key,
+              p.level_scale_id, p.level_scale_version, p.level_id, p.bio,
+              EXISTS (
+                SELECT 1 FROM trainer_profiles tp
+                WHERE tp.user_id = p.user_id AND tp.status = 'active'
+              ) AS trainer,
+              EXISTS (
+                SELECT 1 FROM player_looking_intents li
+                WHERE li.user_id = p.user_id
+                  AND li.active = true
+                  AND li.expires_at > now()
+              ) AS looking
+       FROM player_social_profiles p
+       INNER JOIN users u ON u.id = p.user_id
+       WHERE ${where.join(" AND ")}
+       ORDER BY lower(p.display_name) ASC, p.public_player_id ASC
+       LIMIT $${params.length}`,
+      params,
+    );
+    const hasMore = result.rows.length > limit;
+    const page = hasMore ? result.rows.slice(0, limit) : result.rows;
+    const contactable = await this.contactableTargets(this.pool, viewerId, page.map(row => row.user_id));
+    const items = await Promise.all(page.map(async (row) => ({ ...mapPublic(row), canRequestContact: contactable.has(row.user_id), avatar: await avatarForPlayer(this.pool, row.public_player_id) })));
+    const last = page[page.length - 1];
+    return {
+      items,
+      nextCursor:
+        hasMore && last
+          ? encodeCursor(last.display_name.toLowerCase(), last.public_player_id)
+          : null,
+    };
+  }
+
+  async getDirectoryPlayer(
+    viewerId: string | null,
+    publicPlayerId: string,
+  ): Promise<PublicPlayerDto> {
+    this.feature.assertEnabled();
+    if (!isUuid(publicPlayerId)) {
+      throw notFound("RESOURCE_UNAVAILABLE", "Ресурс недоступен");
+    }
+    const result = await this.pool.query<{
+      public_player_id: string;
+      display_name: string;
+      city_id: string | null;
+      area_key: string | null;
+      level_scale_id: string | null;
+      level_scale_version: number | null;
+      level_id: string | null;
+      bio: string | null;
+      trainer: boolean;
+      looking: boolean;
+      user_id: string;
+    }>(
+      `SELECT p.public_player_id, p.display_name, p.city_id, p.area_key,
+              p.level_scale_id, p.level_scale_version, p.level_id, p.bio,
+              p.user_id,
+              EXISTS (
+                SELECT 1 FROM trainer_profiles tp
+                WHERE tp.user_id = p.user_id AND tp.status = 'active'
+              ) AS trainer,
+              EXISTS (
+                SELECT 1 FROM player_looking_intents li
+                WHERE li.user_id = p.user_id
+                  AND li.active = true
+                  AND li.expires_at > now()
+              ) AS looking
+       FROM player_social_profiles p
+       INNER JOIN users u ON u.id = p.user_id
+       WHERE p.public_player_id = $1
+         AND p.directory_visible = true
+         AND p.social_eligible = true
+         AND u.status = 'active'
+         AND ${unrestrictedSql(this.env.USER_RESTRICTIONS_INTERNAL_ENABLED, "p.user_id", ["account.access", "profile.public", "social.directory"])}`,
+      [publicPlayerId],
+    );
+    const row = result.rows[0];
+    if (!row) {
+      throw notFound("RESOURCE_UNAVAILABLE", "Ресурс недоступен");
+    }
+    if (viewerId && row.user_id !== viewerId) {
+      const blocked = await this.pool.query(
+        `SELECT 1 FROM user_blocks
+         WHERE (blocker_user_id = $1 AND blocked_user_id = $2)
+            OR (blocker_user_id = $2 AND blocked_user_id = $1)
+         LIMIT 1`,
+        [viewerId, row.user_id],
+      );
+      if ((blocked.rowCount ?? 0) > 0) {
+        throw notFound("RESOURCE_UNAVAILABLE", "Ресурс недоступен");
+      }
+    }
+    const contactable = await this.contactableTargets(this.pool, viewerId, [row.user_id]);
+    return { ...mapPublic(row), canRequestContact: contactable.has(row.user_id), avatar: await avatarForUser(this.pool, row.user_id) };
+  }
+
+  /** Read projection only. Commands still lock/revalidate all current fences. */
+  async contactableTargets(
+    client: Pool | PoolClient,
+    viewerId: string | null,
+    targetIds: string[],
+  ): Promise<Set<string>> {
+    if (!viewerId || !this.feature.enabled || !this.env.SOCIAL_DM_ENABLED || !targetIds.length) {
+      return new Set();
+    }
+    const result = await client.query<{ user_id: string }>(
+      `SELECT p.user_id FROM player_social_profiles p
+       JOIN users target ON target.id = p.user_id AND target.status = 'active'
+       WHERE p.user_id = ANY($2::uuid[]) AND p.user_id <> $1
+         AND p.directory_visible AND p.social_eligible AND p.contact_policy = 'requests'
+         AND ${unrestrictedSql(this.env.USER_RESTRICTIONS_INTERNAL_ENABLED, "p.user_id", ["account.access", "profile.public", "social.directory"])}
+         AND ${unrestrictedSql(this.env.USER_RESTRICTIONS_INTERNAL_ENABLED, "$1", ["account.access", "social.dm_send"])}
+         AND EXISTS (SELECT 1 FROM player_social_profiles actor
+           JOIN users u ON u.id = actor.user_id AND u.status = 'active'
+           WHERE actor.user_id = $1 AND actor.social_eligible)
+         AND NOT EXISTS (SELECT 1 FROM user_blocks b
+           WHERE (b.blocker_user_id = $1 AND b.blocked_user_id = p.user_id)
+              OR (b.blocker_user_id = p.user_id AND b.blocked_user_id = $1))
+         AND NOT EXISTS (SELECT 1 FROM conversations c
+           WHERE c.kind = 'direct' AND
+             ((c.initiator_user_id = $1 AND c.recipient_user_id = p.user_id)
+              OR (c.initiator_user_id = p.user_id AND c.recipient_user_id = $1)))`,
+      [viewerId, targetIds],
+    );
+    return new Set(result.rows.map(row => row.user_id));
+  }
+
+  async resolveUserIdByPublicPlayerId(
+    client: Pool | PoolClient,
+    publicPlayerId: string,
+  ): Promise<string | null> {
+    const result = await client.query<{ user_id: string }>(
+      `SELECT user_id FROM player_social_profiles WHERE public_player_id = $1`,
+      [publicPlayerId],
+    );
+    return result.rows[0]?.user_id ?? null;
+  }
+
+  private async loadProfile(
+    client: Pool | PoolClient,
+    userId: string,
+  ): Promise<ProfileRow | null> {
+    const result = await client.query<ProfileRow>(
+      `SELECT ${PROFILE_SELECT} FROM player_social_profiles WHERE user_id = $1`,
+      [userId],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  private async loadLookingEffective(
+    client: Pool | PoolClient,
+    userId: string,
+  ): Promise<LookingIntentDto | null> {
+    const result = await client.query<LookingRow>(
+      `SELECT user_id, active, city_id, area_key, starts_at, ends_at,
+              expires_at, format_keys, version
+       FROM player_looking_intents
+       WHERE user_id = $1`,
+      [userId],
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+    // Expiry on read: logically inactive when past expires_at.
+    if (row.active && row.expires_at && row.expires_at.getTime() <= Date.now()) {
+      await client.query(
+        `UPDATE player_looking_intents
+         SET active = false, updated_at = now()
+         WHERE user_id = $1 AND active = true AND expires_at <= now()`,
+        [userId],
+      );
+      return mapLooking({ ...row, active: false });
+    }
+    return mapLooking(row);
+  }
+
+  private async hasActiveTrainer(
+    client: Pool | PoolClient,
+    userId: string,
+  ): Promise<boolean> {
+    const result = await client.query(
+      `SELECT 1 FROM trainer_profiles
+       WHERE user_id = $1 AND status = 'active' LIMIT 1`,
+      [userId],
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
+}
+
+function emptyOwnProfile(trainer: boolean): OwnSocialProfileDto {
+  return {
+    publicPlayerId: null,
+    version: 0,
+    displayName: "",
+    cityId: null,
+    areaKey: null,
+    level: null,
+    bio: null,
+    directoryVisible: false,
+    contactPolicy: "closed",
+    consentPolicyVersion: null,
+    optedInAt: null,
+    radarConsented: false,
+    radarConsentPolicyVersion: null,
+    radarConsentedAt: null,
+    socialEligible: true,
+    trainer,
+    lookingForGame: null,
+  };
+}
+
+function mapOwn(
+  row: ProfileRow,
+  looking: LookingIntentDto | null,
+  trainer: boolean,
+): OwnSocialProfileDto {
+  return {
+    publicPlayerId: row.public_player_id,
+    version: row.version,
+    displayName: row.display_name,
+    cityId: row.city_id,
+    areaKey: row.area_key,
+    level: mapLevel(row),
+    bio: row.bio,
+    directoryVisible: row.directory_visible,
+    contactPolicy: row.contact_policy,
+    consentPolicyVersion: row.consent_policy_version,
+    optedInAt: row.opted_in_at?.toISOString() ?? null,
+    radarConsented: row.radar_consented,
+    radarConsentPolicyVersion: row.radar_consent_policy_version,
+    radarConsentedAt: row.radar_consented_at?.toISOString() ?? null,
+    socialEligible: row.social_eligible,
+    trainer,
+    lookingForGame: looking,
+  };
+}
+
+function mapLevel(row: {
+  level_scale_id: string | null;
+  level_scale_version: number | null;
+  level_id: string | null;
+}): LevelDto | null {
+  if (!row.level_scale_id || !row.level_scale_version || !row.level_id) {
+    return null;
+  }
+  return {
+    scaleId: row.level_scale_id,
+    scaleVersion: row.level_scale_version,
+    levelId: row.level_id,
+    provenance: "self_declared",
+  };
+}
+
+function mapLooking(row: LookingRow): LookingIntentDto {
+  const expired =
+    row.expires_at !== null && row.expires_at.getTime() <= Date.now();
+  const active = row.active && !expired;
+  return {
+    version: row.version,
+    state: active ? "active" : "inactive",
+    cityId: row.city_id,
+    areaKey: row.area_key,
+    startsAt: row.starts_at?.toISOString() ?? null,
+    endsAt: row.ends_at?.toISOString() ?? null,
+    expiresAt: row.expires_at?.toISOString() ?? null,
+    formatKeys: Array.isArray(row.format_keys)
+      ? (row.format_keys as string[])
+      : [],
+  };
+}
+
+function mapPublic(row: {
+  public_player_id: string;
+  display_name: string;
+  city_id: string | null;
+  area_key: string | null;
+  level_scale_id: string | null;
+  level_scale_version: number | null;
+  level_id: string | null;
+  bio: string | null;
+  trainer: boolean;
+  looking: boolean;
+}): Omit<PublicPlayerDto, "canRequestContact"> {
+  return {
+    publicPlayerId: row.public_player_id,
+    displayName: row.display_name,
+    cityId: row.city_id,
+    areaKey: row.area_key,
+    level: mapLevel(row),
+    bio: row.bio,
+    trainer: row.trainer,
+    lookingForGame: row.looking,
+  };
+}
+
+function normalizePatch(input: PatchSocialProfileInput): {
+  expectedVersion?: number;
+  displayName?: string;
+  cityId?: string | null;
+  areaKey?: string | null;
+  level?: LevelDto | null;
+  bio?: string | null;
+  contactPolicy?: "requests" | "closed";
+  radarConsented?: boolean;
+  radarConsentPolicyVersion?: string;
+  socialEligible?: boolean;
+} {
+  const raw = input as PatchSocialProfileInput & {
+    userId?: unknown;
+    publicPlayerId?: unknown;
+    email?: unknown;
+    phone?: unknown;
+    providerId?: unknown;
+    latitude?: unknown;
+    longitude?: unknown;
+  };
+  if (
+    raw.userId !== undefined ||
+    raw.publicPlayerId !== undefined ||
+    raw.email !== undefined ||
+    raw.phone !== undefined ||
+    raw.providerId !== undefined
+  ) {
+    throw unprocessable(
+      "PRIVATE_IDENTITY_NOT_ACCEPTED",
+      "Приватные идентификаторы не принимаются",
+    );
+  }
+  if (raw.latitude !== undefined || raw.longitude !== undefined) {
+    throw unprocessable(
+      "RAW_LOCATION_NOT_ACCEPTED",
+      "Сырые координаты не принимаются",
+    );
+  }
+  const out: ReturnType<typeof normalizePatch> = {};
+  if (input.expectedVersion !== undefined) {
+    if (
+      !Number.isInteger(input.expectedVersion) ||
+      input.expectedVersion < 0
+    ) {
+      throw unprocessable(
+        "EXPECTED_VERSION_INVALID",
+        "Некорректный expectedVersion",
+      );
+    }
+    out.expectedVersion = input.expectedVersion;
+  }
+  if (input.displayName !== undefined) {
+    const displayName = input.displayName.trim();
+    if (displayName.length > 80) {
+      throw unprocessable("DISPLAY_NAME_INVALID", "Некорректный displayName");
+    }
+    out.displayName = displayName;
+  }
+  if (input.cityId !== undefined) {
+    if (input.cityId !== null && !isUuid(input.cityId)) {
+      throw unprocessable("CITY_ID_INVALID", "Некорректный cityId");
+    }
+    out.cityId = input.cityId;
+  }
+  if (input.areaKey !== undefined) {
+    if (input.areaKey !== null) {
+      const area = input.areaKey.trim();
+      if (area.length < 1 || area.length > 64) {
+        throw unprocessable("AREA_KEY_INVALID", "Некорректный areaKey");
+      }
+      out.areaKey = area;
+    } else {
+      out.areaKey = null;
+    }
+  }
+  if (input.level !== undefined) {
+    if (input.level === null) {
+      out.level = null;
+    } else {
+      if (
+        typeof input.level.scaleId !== "string" ||
+        input.level.scaleId.length < 1 ||
+        input.level.scaleId.length > 64 ||
+        !Number.isInteger(input.level.scaleVersion) ||
+        input.level.scaleVersion < 1 ||
+        typeof input.level.levelId !== "string" ||
+        input.level.levelId.length < 1 ||
+        input.level.levelId.length > 64 ||
+        input.level.provenance !== "self_declared"
+      ) {
+        throw unprocessable("LEVEL_INVALID", "Некорректный level");
+      }
+      out.level = {
+        scaleId: input.level.scaleId,
+        scaleVersion: input.level.scaleVersion,
+        levelId: input.level.levelId,
+        provenance: "self_declared",
+      };
+    }
+  }
+  if (input.bio !== undefined) {
+    if (input.bio === null) {
+      out.bio = null;
+    } else {
+      const bio = String(input.bio).trim();
+      if (bio.length < 1 || bio.length > 500) {
+        throw unprocessable("BIO_INVALID", "Некорректный bio");
+      }
+      out.bio = bio;
+    }
+  }
+  if (input.contactPolicy !== undefined) {
+    if (
+      input.contactPolicy !== "requests" &&
+      input.contactPolicy !== "closed"
+    ) {
+      throw unprocessable("CONTACT_POLICY_INVALID", "Некорректный contactPolicy");
+    }
+    out.contactPolicy = input.contactPolicy;
+  }
+  if (input.radarConsented !== undefined) {
+    if (typeof input.radarConsented !== "boolean") {
+      throw unprocessable("RADAR_CONSENT_INVALID", "Некорректный radarConsented");
+    }
+    out.radarConsented = input.radarConsented;
+    if (input.radarConsented) {
+      const policy =
+        input.radarConsentPolicyVersion ?? RADAR_CONSENT_POLICY_VERSION;
+      if (policy !== RADAR_CONSENT_POLICY_VERSION) {
+        throw unprocessable(
+          "RADAR_CONSENT_POLICY_VERSION_INVALID",
+          "Некорректная версия Radar consent",
+        );
+      }
+      out.radarConsentPolicyVersion = policy;
+    }
+  }
+  if (input.socialEligible !== undefined) {
+    if (typeof input.socialEligible !== "boolean") {
+      throw unprocessable(
+        "SOCIAL_ELIGIBLE_INVALID",
+        "Некорректный socialEligible",
+      );
+    }
+    out.socialEligible = input.socialEligible;
+  }
+  return out;
+}
+
+function normalizeVisibility(input: VisibilityInput): {
+  directoryVisible: boolean;
+  consentPolicyVersion?: string;
+  expectedVersion: number;
+} {
+  if (typeof input.directoryVisible !== "boolean") {
+    throw unprocessable(
+      "DIRECTORY_VISIBLE_INVALID",
+      "Некорректный directoryVisible",
+    );
+  }
+  if (!Number.isInteger(input.expectedVersion) || input.expectedVersion < 1) {
+    throw unprocessable(
+      "EXPECTED_VERSION_INVALID",
+      "Некорректный expectedVersion",
+    );
+  }
+  return {
+    directoryVisible: input.directoryVisible,
+    consentPolicyVersion: input.consentPolicyVersion,
+    expectedVersion: input.expectedVersion,
+  };
+}
+
+function normalizeLookingPut(input: LookingPutInput): {
+  cityId: string;
+  areaKey: string | null;
+  ttlMinutes: number;
+  formatKeys: string[];
+  expectedVersion?: number;
+} {
+  const raw = input as LookingPutInput & {
+    latitude?: unknown;
+    longitude?: unknown;
+    gps?: unknown;
+  };
+  if (
+    raw.latitude !== undefined ||
+    raw.longitude !== undefined ||
+    raw.gps !== undefined
+  ) {
+    throw unprocessable(
+      "RAW_LOCATION_NOT_ACCEPTED",
+      "Сырые координаты не принимаются",
+    );
+  }
+  if (!input.cityId || !isUuid(input.cityId)) {
+    throw unprocessable("CITY_ID_INVALID", "Некорректный cityId");
+  }
+  let areaKey: string | null = null;
+  if (input.areaKey !== undefined && input.areaKey !== null) {
+    const area = String(input.areaKey).trim();
+    if (area.length < 1 || area.length > 64) {
+      throw unprocessable("AREA_KEY_INVALID", "Некорректный areaKey");
+    }
+    areaKey = area;
+  }
+  const ttlMinutes =
+    input.ttlMinutes === undefined
+      ? LOOKING_TTL_DEFAULT_MINUTES
+      : input.ttlMinutes;
+  if (
+    !Number.isInteger(ttlMinutes) ||
+    ttlMinutes < LOOKING_TTL_MIN_MINUTES ||
+    ttlMinutes > LOOKING_TTL_MAX_MINUTES
+  ) {
+    throw unprocessable("TTL_MINUTES_INVALID", "Некорректный ttlMinutes");
+  }
+  let formatKeys: string[] = [];
+  if (input.formatKeys !== undefined) {
+    if (!Array.isArray(input.formatKeys) || input.formatKeys.length > 5) {
+      throw unprocessable("FORMAT_KEYS_INVALID", "Некорректные formatKeys");
+    }
+    formatKeys = input.formatKeys.map((key) => {
+      const value = String(key).trim();
+      if (value.length < 1 || value.length > 64) {
+        throw unprocessable("FORMAT_KEYS_INVALID", "Некорректные formatKeys");
+      }
+      return value;
+    });
+  }
+  if (
+    input.expectedVersion !== undefined &&
+    (!Number.isInteger(input.expectedVersion) || input.expectedVersion < 0)
+  ) {
+    throw unprocessable(
+      "EXPECTED_VERSION_INVALID",
+      "Некорректный expectedVersion",
+    );
+  }
+  return {
+    cityId: input.cityId,
+    areaKey,
+    ttlMinutes,
+    formatKeys,
+    expectedVersion: input.expectedVersion,
+  };
+}
+
+async function assertCity(client: PoolClient, cityId: string): Promise<void> {
+  const result = await client.query(`SELECT id FROM cities WHERE id = $1`, [
+    cityId,
+  ]);
+  if (!result.rows[0]) {
+    throw unprocessable("CITY_ID_INVALID", "Город не найден");
+  }
+}
+
+function clampLimit(limit?: number): number {
+  if (limit === undefined || Number.isNaN(limit)) return DIRECTORY_DEFAULT_LIMIT;
+  if (!Number.isInteger(limit) || limit < 1) {
+    throw unprocessable("LIMIT_INVALID", "Некорректный limit");
+  }
+  return Math.min(limit, DIRECTORY_MAX_LIMIT);
+}
+
+function encodeCursor(name: string, id: string): string {
+  return Buffer.from(JSON.stringify({ name, id }), "utf8").toString(
+    "base64url",
+  );
+}
+
+function decodeCursor(cursor: string): { name: string; id: string } {
+  try {
+    const parsed = JSON.parse(
+      Buffer.from(cursor, "base64url").toString("utf8"),
+    ) as { name?: unknown; id?: unknown };
+    if (
+      typeof parsed.name !== "string" ||
+      typeof parsed.id !== "string" ||
+      !isUuid(parsed.id)
+    ) {
+      throw new Error("bad cursor");
+    }
+    return { name: parsed.name, id: parsed.id };
+  } catch {
+    throw unprocessable("CURSOR_INVALID", "Некорректный cursor");
+  }
+}
+
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    value,
+  );
+}
+
+async function accountDisplayName(
+  client: PoolClient,
+  userId: string,
+): Promise<string> {
+  const result = await client.query<{ display_name: string }>(
+    `SELECT display_name FROM users WHERE id = $1`,
+    [userId],
+  );
+  return result.rows[0]?.display_name?.trim() ?? "";
+}

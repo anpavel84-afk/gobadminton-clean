@@ -1,0 +1,298 @@
+{
+  "status": "WORKING DRAFT — NOT APPROVED — NOT CANONICAL",
+  "task_id": "fsg-s0-lock-map-repair-02-20261009-v001",
+  "base_sha": "31d09f45776d7b397a1f66c8f4c9131eb3401f04",
+  "checked_at": "2026-10-09T04:17:16.000486+00:00",
+  "author_docs_verification": "checks_completed",
+  "checks": [
+    {
+      "check": "queued_base_not_failed_candidate",
+      "result": "PASS",
+      "base_sha": "31d09f45776d7b397a1f66c8f4c9131eb3401f04",
+      "comparison_sha": "65fd416b30238cc9eb7e95555a17bd9cb0beb374",
+      "prior_candidate_sha": "2485b75c032a5dfed5e1faff9535619382bea28c",
+      "prior_candidate_tree": "0e80a58f0f486d27ed6192e0936d81d740ab7965"
+    },
+    {
+      "check": "all_current_source_hashes_match_pinned_git_and_workspace",
+      "result": "PASS",
+      "files": 79
+    },
+    {
+      "check": "complete_original_package_hash_custody",
+      "result": "PASS",
+      "files": 10
+    },
+    {
+      "check": "original_terminal_FAIL_retained",
+      "result": "PASS",
+      "prior_qa_sha": "cd9d3f3ef61893692bd394f98d98a8ad64322030",
+      "blocking_gap_count": 1
+    },
+    {
+      "check": "repair01_complete_package_and_terminal_FAIL_B02_retained",
+      "result": "PASS",
+      "candidate_sha": "55ef0136facdf2996378e29aa56eaf962a69f1e9",
+      "candidate_tree": "154a497c95a1b2120c75e6808b50a4a1d3708abf",
+      "qa_sha": "26d5233723b430a6dc9e42a70d2760391157f83a",
+      "package_files": 13,
+      "historical_records": 9
+    },
+    {
+      "check": "repair02_count_and_queued_base_not_failed_ancestry",
+      "result": "PASS",
+      "repair_attempt": 2,
+      "max_repairs": 5,
+      "planning_source_sha": "7e24b4a40d7594293df3c72d0792f702dbb89be8"
+    },
+    {
+      "check": "B02_direct_link_unlink_external_identity_locks_not_user_first",
+      "result": "PASS",
+      "link_explicit": "own BEGIN → external issuer/subject FOR UPDATE → conditional user/provider external FOR UPDATE → INSERT",
+      "unlink_explicit": "own BEGIN → existing external identities FOR UPDATE → provider checks → DELETE",
+      "user_ActorFence": "no prior explicit users row lock or ActorFence in direct methods",
+      "SQL_runtime": "NOT_RUN"
+    },
+    {
+      "check": "B02_link_early_returns_and_rollback_pool_lookup_reachable",
+      "result": "PASS",
+      "missing_rows": "no nonexistent tuple lock inferred",
+      "implicit_insert": "only reached on new-link path",
+      "fallback": "plain pool SELECT after ROLLBACK"
+    },
+    {
+      "check": "B02_resolve_distinct_join_and_insert_branches",
+      "result": "PASS",
+      "join": "one explicit matched identity/user locking statement; no OF-list physical row-order proof",
+      "lookup": "separate plain fallback"
+    },
+    {
+      "check": "B02_implicit_FK_unique_write_effects_separate_from_explicit_lock_order",
+      "result": "PASS",
+      "limitation": "schema/source distinction only; no observed DB lock graph or provider uniqueness guarantee"
+    },
+    {
+      "check": "B02_caller_boundaries_do_not_inherit_users_first_transaction",
+      "result": "PASS",
+      "consume": "own committed/released auth_transactions lock before Identity call",
+      "auth": "plain lookups/checks and IDs passed, no shared PoolClient; no MutationRunner retry claimed"
+    },
+    {
+      "check": "B02_all_summaries_match_method_specific_source",
+      "result": "PASS",
+      "disposition": "CORRECTED_IN_NEW_CANDIDATE_PENDING_INDEPENDENT_QA",
+      "runtime_defect": "NOT_ASSERTED"
+    },
+    {
+      "check": "B01_create_profile_before_Pair_and_Accept_Pair_before_profile",
+      "result": "PASS",
+      "existing_create": "actor/session → idempotency → Game/manager → accounts SHARE → profiles SHARE → Pair → Participation → pending invitation",
+      "existing_accept": "actor/session → idempotency → Game → invitation → accounts SHARE → Pair → profiles SHARE → Participation confirmation",
+      "limitation": "Static call/SQL order only; no runtime deadlock or deadlock-freedom claim"
+    },
+    {
+      "check": "invitation_account_profile_and_Pair_helper_SQL",
+      "result": "PASS",
+      "profile_row_acquisition_order": "NOT_PROVEN: one unordered IN query",
+      "pair_identity": "sorted endpoints of one pair"
+    },
+    {
+      "check": "actual_actor_session_idempotency_prelude_and_replay",
+      "result": "PASS",
+      "session_lock": "no session row-lock in ActorFence SQL",
+      "replay": "separate callback, not execute order"
+    },
+    {
+      "check": "conditional_invitation_geographic_unified_fence_and_late_presence_SQL",
+      "result": "PASS",
+      "skipped": "accounts SHARE only, not actor or create profiles",
+      "SQL": "Pair reentry → presence SHARE; final held recheck"
+    },
+    {
+      "check": "DM_create_decisions_send_are_distinct_existing_orders",
+      "result": "PASS",
+      "decisions": "conversation → accounts → Pair, no profile-SHARE helper",
+      "accepted_send": "profiles SHARE after Pair"
+    },
+    {
+      "check": "block_profile_session_Radar_graph_peer_helpers",
+      "result": "PASS",
+      "limitation": "mapped existing path variants; not a universal Radar lock order"
+    },
+    {
+      "check": "all_S1_schema_wire_lifecycle_and_proposed_lock_sections_unchanged",
+      "result": "PASS"
+    },
+    {
+      "check": "retained_serialized_semantics_and_all_other_future_cases_unchanged",
+      "result": "PASS"
+    },
+    {
+      "check": "entire_non_B01_S2_S3_gates_DD_intake_unchanged_except_base_and_QA_recipient",
+      "result": "PASS",
+      "preserved": [
+        "OQ-01 YES CLOSED",
+        "G-05",
+        "G-06",
+        "G-08",
+        "G-03",
+        "G-07",
+        "S2 one recipient/nonseat",
+        "S3 distinct actionable Game/formal precedence/game:null/UNKNOWN",
+        "DD-FR-01..03/Style Guide"
+      ]
+    },
+    {
+      "check": "immutable_authority_matrix_unchanged",
+      "result": "PASS"
+    },
+    {
+      "check": "corrected_summaries_explicitly_separate_existing_create_Accept_from_proposals",
+      "result": "PASS"
+    },
+    {
+      "check": "future_joint_criteria_complete_and_NOT_RUN",
+      "result": "PASS",
+      "executed_SQL": "NOT_RUN",
+      "implementation": "NOT_ADMITTED"
+    },
+    {
+      "check": "repair01_B01_legacy_paragraphs_retained_except_B02_addition",
+      "result": "PASS",
+      "retained": "source create profile-before-Pair; Accept inverse; separate DM decisions/send and liveness caveat"
+    },
+    {
+      "check": "repair01_S1_and_gates_unchanged_except_B02_legacy_and_joint_row_metadata",
+      "result": "PASS"
+    },
+    {
+      "check": "entire_repair01_non_Identity_legacy_map_retained",
+      "result": "PASS"
+    },
+    {
+      "check": "all_non_Identity_source_matrix_propositions_retained",
+      "result": "PASS"
+    },
+    {
+      "check": "repair01_J01_J10_preserved_except_B02_writer_fence_qualifier",
+      "result": "PASS"
+    },
+    {
+      "check": "future_Identity_J11_is_NOT_RUN_reachable_method_boundaries_and_implicit_waits",
+      "result": "PASS",
+      "SQL": "NOT_RUN",
+      "new_locking_prescription": "NONE"
+    },
+    {
+      "check": "Owner_Architect_Product_PM_exact_authority_hashes",
+      "result": "PASS",
+      "sources": [
+        {
+          "sha": "23653a38f35f46bb85eca2be4b36c6f933cf0a2d",
+          "path": "docs/workbench/architecture/friends-social-games-v001/OWNER_ADMIT_PRODUCT_RETURN_V001.md",
+          "sha256": "65b490327e2d87009f8cb84d9e50aee22b62508010ae11537321dc96cf7a32ed",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/23653a38f35f46bb85eca2be4b36c6f933cf0a2d/docs/workbench/architecture/friends-social-games-v001/OWNER_ADMIT_PRODUCT_RETURN_V001.md"
+        },
+        {
+          "sha": "4388a5a8c28963143cd39d1eb1778b9f2974d5c1",
+          "path": "docs/workbench/architecture/friends-social-games-v001/README.md",
+          "sha256": "91154f395c6ec8e21400dfbfbb323e8cfae3ce7890d2bb119bf8907beadc9185",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/4388a5a8c28963143cd39d1eb1778b9f2974d5c1/docs/workbench/architecture/friends-social-games-v001/README.md"
+        },
+        {
+          "sha": "4388a5a8c28963143cd39d1eb1778b9f2974d5c1",
+          "path": "docs/workbench/architecture/friends-social-games-v001/SECURITY_CONCURRENCY.md",
+          "sha256": "e4f99dd74456f9560e2bdc5772935576e299371ac9078bf38f1239b2f26ba418",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/4388a5a8c28963143cd39d1eb1778b9f2974d5c1/docs/workbench/architecture/friends-social-games-v001/SECURITY_CONCURRENCY.md"
+        },
+        {
+          "sha": "f4f59813c33512897e03b93ac09bd106989c832e",
+          "path": "docs/workbench/product-ux/friends-social-game-invitations-my-games-product-spec-v002.md",
+          "sha256": "f5802d4549ac66eb2a7ff84ed487cb700cd0fc650b64dbbc4c9a726da937a29a",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/f4f59813c33512897e03b93ac09bd106989c832e/docs/workbench/product-ux/friends-social-game-invitations-my-games-product-spec-v002.md"
+        },
+        {
+          "sha": "f4f59813c33512897e03b93ac09bd106989c832e",
+          "path": "docs/workbench/product-ux/friends-social-games-decisions-gates-v002.md",
+          "sha256": "0be8d09411b7f19c0565d8d1b3df9bd03809eda4c99f282bd85f054d94ec176b",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/f4f59813c33512897e03b93ac09bd106989c832e/docs/workbench/product-ux/friends-social-games-decisions-gates-v002.md"
+        },
+        {
+          "sha": "05c507bb288b5eced9872fb2f7aa448f733ddcc3",
+          "path": "docs/handoffs/2026-10-08_pm_friends-social-games-frozen-design-and-s1-s4-conditional-admissions-v001.md",
+          "sha256": "a0cd705769ed549335f28bc20dd16b3360e8f403427c4e9ba484b86dbd91b242",
+          "permalink": "https://github.com/anpavel84-afk/gobadminton/blob/05c507bb288b5eced9872fb2f7aa448f733ddcc3/docs/handoffs/2026-10-08_pm_friends-social-games-frozen-design-and-s1-s4-conditional-admissions-v001.md"
+        }
+      ]
+    },
+    {
+      "check": "seven_frozen_DD_files_byte_identical",
+      "result": "PASS",
+      "files": [
+        "docs/workbench/design/friends-social-games-integration-design-spec-v001/DESIGN_DIRECTOR_FREEZE.md",
+        "docs/workbench/design/friends-social-games-integration-design-spec-v001/INPUT_REQUIRED.md",
+        "docs/workbench/design/friends-social-games-integration-design-spec-v001/INSERTION_MATRIX.md",
+        "docs/workbench/design/friends-social-games-integration-design-spec-v001/QA_DELTA_CRITERIA.md",
+        "docs/workbench/design/friends-social-games-integration-design-spec-v001/README.md",
+        "docs/workbench/design/friends-social-games-integration-design-spec-v001/STATE_CTA_AND_RESPONSIVE.md",
+        "docs/workbench/design/friends-social-games-integration-design-spec-v001/STYLE_GUIDE_PARITY.md"
+      ],
+      "freeze_sha": "f48187ddafbb2e769acd38f94b708ecb7b375d9a"
+    },
+    {
+      "check": "pinned_planning_and_fresh_main_material_sources_unchanged_no_overlapping_writer",
+      "result": "PASS",
+      "fresh_main_sha": "89b0dc040ecf7dac9d70cb5e77ff39e0a7f98941",
+      "observed_at": "2026-10-09T04:16:08.521961+00:00",
+      "limitation": "point-in-time source observation; no S1 lock reservation or runtime proof"
+    },
+    {
+      "check": "all_Markdown_draft_status_local_links_immutable_targets_and_line_bounds",
+      "result": "PASS",
+      "immutable_links": 85,
+      "local_links": 36
+    },
+    {
+      "check": "unchanged_contract_migration_inventory",
+      "result": "PASS",
+      "OpenAPI_paths": 78
+    },
+    {
+      "check": "pinned_serialized_model_rerun_reproducible_only_65_proposal_assertions",
+      "result": "PASS",
+      "source_sha256": "8904ce38380132f755fe9bb2c39568d29923b9e455dfee76cef2b3253be1b0f8",
+      "limitation": "finite serialized proposal model ONLY; not production source, SQL locks, API, browser, queue or independent QA"
+    },
+    {
+      "check": "exact_task_Git_write_allowlist",
+      "result": "PASS",
+      "changed_files": [
+        "docs/delivery/fsg-s0-lock-map-repair-02-20261009-v001/CHANGE_LEDGER.md",
+        "docs/delivery/fsg-s0-lock-map-repair-02-20261009-v001/EVIDENCE.md",
+        "docs/delivery/fsg-s0-lock-map-repair-02-20261009-v001/FUTURE_JOINT_SQL_CRITERIA.md",
+        "docs/delivery/fsg-s0-lock-map-repair-02-20261009-v001/GATES_AND_NEXT_INTAKE.md",
+        "docs/delivery/fsg-s0-lock-map-repair-02-20261009-v001/LEGACY_LOCK_MAP.md",
+        "docs/delivery/fsg-s0-lock-map-repair-02-20261009-v001/README.md",
+        "docs/delivery/fsg-s0-lock-map-repair-02-20261009-v001/S1_CONTRACT_AND_CONCURRENCY.md",
+        "docs/delivery/fsg-s0-lock-map-repair-02-20261009-v001/SOURCE_MATRIX.md",
+        "docs/delivery/fsg-s0-lock-map-repair-02-20261009-v001/evidence/docs-verification.json",
+        "docs/delivery/fsg-s0-lock-map-repair-02-20261009-v001/evidence/publication-freshness.json",
+        "docs/delivery/fsg-s0-lock-map-repair-02-20261009-v001/evidence/serialized-model-rerun.json",
+        "docs/delivery/fsg-s0-lock-map-repair-02-20261009-v001/evidence/source-manifest.json",
+        "docs/delivery/fsg-s0-lock-map-repair-02-20261009-v001/evidence/verify_docs.py",
+        "docs/handoffs/2026-10-09_fsg-s0-lock-map-repair-02-v001.md"
+      ]
+    },
+    {
+      "check": "git_diff_check",
+      "result": "PASS",
+      "output": ""
+    },
+    {
+      "check": "untracked_or_staged_docs_trailing_whitespace",
+      "result": "PASS"
+    }
+  ],
+  "independent_qa": "NOT_RUN",
+  "application_SQL_browser_CI_runtime": "NOT_RUN"
+}

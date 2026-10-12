@@ -1,0 +1,94 @@
+/**
+ * Player Cabinet frozen design tokens — measured from Design Spec
+ * commit 9b447c1d5327a451227715f1529b943a15fb5299 / freeze review-freeze-v001.
+ * Concrete fallbacks match COMPONENTS_AND_TOKENS.md §5–7.
+ */
+
+:root {
+  /* Semantic colors */
+  --gb-bg-canvas: #071012;
+  --gb-bg-surface: #141e22;
+  --gb-bg-subtle: #202a2d;
+  --gb-bg-brand: #ddfe43;
+  --gb-bg-brand-soft: #28340b;
+  --gb-bg-accent: #58c9f4;
+  --gb-bg-accent-soft: #0e2b36;
+  --gb-bg-pending: #332712;
+  --gb-bg-confirmed: #143428;
+  --gb-bg-danger: #351a1a;
+  --gb-bg-info: #102c38;
+  --gb-bg-disabled: #202a2d;
+  --gb-bg-conflict: #392812;
+
+  --gb-text-primary: #f4f7ef;
+  --gb-text-secondary: #bcc6c1;
+  --gb-text-tertiary: #8d9a94;
+  --gb-text-inverse: #071012;
+  --gb-text-brand: #cdeb31;
+  --gb-text-pending: #ffd36f;
+  --gb-text-confirmed: #6fe0a7;
+  --gb-text-danger: #ff9b92;
+  --gb-text-info: #75d6ff;
+  --gb-text-conflict: #ffb05f;
+
+  --gb-border-default: #273438;
+  --gb-border-strong: #3a484d;
+  --gb-border-brand: #ddfe43;
+
+  --gb-focus-ring: #f4f7ef;
+
+  /* Spacing */
+  --gb-space-2xs: 4px;
+  --gb-space-xs: 8px;
+  --gb-space-sm: 12px;
+  --gb-space-md: 16px;
+  --gb-space-lg: 20px;
+  --gb-space-xl: 24px;
+  --gb-space-2xl: 32px;
+  --gb-space-3xl: 40px;
+  --gb-space-4xl: 48px;
+  --gb-space-5xl: 64px;
+
+  /* Composition (not spacing-token aliases) */
+  --gb-gutter-mobile: 18px;
+  --gb-sidebar-gap: 36px;
+  --gb-content-max: 1180px;
+  --gb-sidebar-width: 240px;
+  --gb-main-min-with-sidebar: 600px;
+  --gb-profile-pair-min: 904px;
+  --gb-provider-pair-min: 732px;
+  --gb-form-max: 600px;
+  --gb-mobile-content: 354px;
+  --gb-target-min: 44px;
+
+  /* Radius */
+  --gb-radius-sm: 10px;
+  --gb-radius-md: 14px;
+  --gb-radius-lg: 18px;
+  --gb-radius-xl: 24px;
+  --gb-radius-full: 999px;
+
+  /* Typography — Onest */
+  --gb-font: "Onest", system-ui, sans-serif;
+  --gb-display-size: 56px;
+  --gb-display-lh: 58px;
+  --gb-display-tracking: -1.4px;
+  --gb-h1-size: 38px;
+  --gb-h1-lh: 42px;
+  --gb-h1-tracking: -0.8px;
+  --gb-h2-size: 28px;
+  --gb-h2-lh: 32px;
+  --gb-h2-tracking: -0.4px;
+  --gb-h3-size: 22px;
+  --gb-h3-lh: 26px;
+  --gb-h3-tracking: -0.2px;
+  --gb-body-size: 16px;
+  --gb-body-lh: 24px;
+  --gb-label-size: 14px;
+  --gb-label-lh: 20px;
+  --gb-meta-size: 14px;
+  --gb-meta-lh: 20px;
+  --gb-micro-size: 12px;
+  --gb-micro-lh: 16px;
+  --gb-micro-tracking: 0.2px;
+}

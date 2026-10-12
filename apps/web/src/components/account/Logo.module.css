@@ -1,0 +1,18 @@
+.gb-logo {
+  display: block;
+  flex-shrink: 0;
+}
+
+.gb-logo img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.gb-logo--sm {
+  width: 112px;
+}
+
+.gb-logo--md {
+  width: 144px;
+}

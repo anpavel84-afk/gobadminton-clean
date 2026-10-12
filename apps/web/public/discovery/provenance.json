@@ -1,0 +1,50 @@
+{
+  "source": "frozen figma-make-frozen-v001/public/assets",
+  "assets": [
+    {
+      "file": "badminton-gear.jpg",
+      "source": "badminton-gear.jpg",
+      "sha256": "7cd727ef4dae0ec861e95636d01f9e099aec8246534335c29963c18b3d338230"
+    },
+    {
+      "file": "badminton-courts.jpg",
+      "source": "badminton-courts.jpg",
+      "sha256": "1acea73ecbe6c322bede0c066f533422e17e90635463cafedfc8a630dd7771cd"
+    },
+    {
+      "file": "hero-lime.svg",
+      "source": "bb5a8.svg",
+      "sha256": "5bb84ed9fd61228d7607b686f709dc87fe37f919423d22d149394c3042a0f202"
+    },
+    {
+      "file": "purple-shape.svg",
+      "source": "c6893.svg",
+      "sha256": "a63d5f310156d4a16b301fb89e5f32d8c1c1ef51d7a37e2c286ac1875aa5aa07"
+    },
+    {
+      "file": "create-shape.svg",
+      "source": "7411c.svg",
+      "sha256": "2282505fa7f7f6d449a7d84e5086eca816a8dbf55d49c9d65b94f920a106f962"
+    },
+    {
+      "file": "pin.svg",
+      "source": "360c7.svg",
+      "sha256": "acd75d09824b2f23c6615c036636d50cf765cb29715f6732eb15bd2fb3d00f38"
+    },
+    {
+      "file": "calendar.svg",
+      "source": "7e770.svg",
+      "sha256": "efc55816861206f615d3f7489fdf0e1e181672de1c2b1176a75b4a6810354f18"
+    },
+    {
+      "file": "filter.svg",
+      "source": "6f386.svg",
+      "sha256": "8faa8449810a1985551e895e81bfcfd3159aad7d9c0324ec3648bfa986c88b51"
+    },
+    {
+      "file": "arrow.svg",
+      "source": "e70cd.svg",
+      "sha256": "ba82fb83f61f33ad46846fdf074acbe1853ecaff19fcffbdf7edb240654c55ad"
+    }
+  ]
+}

@@ -1,0 +1,171 @@
+# API policy v1
+
+Статус: **TECH_SELECTED**; [OpenAPI 0.1.0](../../packages/contracts/openapi.json) — **DESIGN_DRAFT**, не опубликованный работающий API. Стандарт OpenAPI 3.1.1 выбран для совместимости tooling [S14](../reference/SOURCES.md).
+
+## Transport и контракты
+
+HTTPS, REST/JSON, `/v1`. UTF-8, ISO8601 instants, UUID resource IDs, explicit IANA timezone, точные денежные строки. Request schemas запрещают неизвестные поля; response clients терпимы к совместимым добавлениям. DTO — разрешённая projection, не сериализация ORM entity. Public Game DTO не содержит applicant roster, identities или private contacts.
+
+`packages/contracts/openapi.json` — первичный wire-contract. SDK генерируется; ручные типы/Swagger-декораторы не должны стать вторым несовпадающим источником. Перед реализацией endpoint: schema validation, примеры success/error, security, pagination, idempotency и contract tests. Ajv/генератор и их exact versions проверяются в F-01; текущий stdlib check не заменяет полноценный OpenAPI validator.
+
+## Authentication
+
+Consumer cookie `__Host-gb_session` либо bearer application token; при одновременном противоречивом credential наборе запрос отвергается, не выбирается наиболее привилегированный. Cookie mutations требуют `X-CSRF-Token` и проверенного Origin; OpenAPI отмечает этот header optional только потому, что bearer mobile не использует CSRF cookie flow. Нельзя трактовать optional header как отключение CSRF для web.
+
+Public paths имеют `security: []`. Получение Game допускает optional authentication, но доступ к draft/unlisted определяется сервером: anonymous unlisted требует действующего `X-Game-Share-Token`, draft — manager. Такой header не даёт доступ к applicants. Для unlisted/private requests — no-store и редактирование журналов, token не в analytics.
+
+Провайдеры в `/auth/providers` — capability allowlist, сейчас только VK/Яндекс. Полный auth start/callback/native exchange/link/refresh/deletion wire-contract доводится в F-02; его security semantics уже описаны в [AUTH](../integrations/AUTH.md). OpenAPI не выдаёт incomplete OAuth draft за реализованный вход.
+
+## Команды, повтор и конкуренция
+
+Все бизнес-mutations требуют `Idempotency-Key` 16–128 символов. Scope записи — actor + operation + key; hash normalized payload (включая target resource identity) исключает reuse с другим содержимым. TTL default 24 часа.
+
+Протокол идемпотентности (S-00A / ADR-SOCIAL-003): в одной бизнес-транзакции сначала insert-first UNIQUE reservation (`reservation_state=processing`), затем авторизация и команда, затем `completed` receipt перед COMMIT. ROLLBACK снимает reservation вместе с эффектами. Параллельный waiter блокируется на UNIQUE; после commit победителя читает completed receipt. Timeout ожидания → `409 COMMAND_IN_PROGRESS` с `Retry-After` (не raw unique-violation 500). Same key / другое тело → `409 IDEMPOTENCY_KEY_REUSED`. Same key / то же тело → сохранённый status/body только после **текущей** actor/resource authorization. Отозванный менеджер/неактивный аккаунт не получает cached private success. TTL cleanup удаляет только expired `completed`, не active `processing`. До 3 технических DB-retry (deadlock/transient) с тем же ключом; business conflicts (capacity/version/authz) не ретраятся.
+
+`expectedVersion` относится к изменяемому ресурсу. Game version увеличивается при изменениях агрегата, включая изменение занятых мест (`pending→confirmed`, `confirmed→withdrawn/removed`, publish/cancel и прочие state/terms changes); pending-only request/reapply/reject/expire **не** увеличивают Game.version. Participation имеет отдельную version. Для новой заявки `expectedGameVersion` привязывает согласие к прочитанному Game snapshot. При stale version — `409 VERSION_CONFLICT`, получить свежие данные и явно повторить, не молча согласиться с новыми условиями. Confirm проверяет Participation version и текущую Game capacity в одной транзакции; required `expectedGameVersion` в confirm body **не** добавляется. Семантический diff условий может позднее получить отдельную revision через ADR.
+
+Authenticated mutations дополнительно держат in-transaction fence: `User.status=active` + действующая consumer session до COMMIT. Edge `/me` и cookie session lookup отвергают inactive/disabled/`deletion_pending`.
+
+`POST /games/{gameId}/participations` возвращает 201 при новой attempt и 200 для уже активной заявки; одинаковый idempotency key воспроизводит первоначальный status/body. Повтор после withdrawn допускает новую attempt. Для terminal rejected/removed/expired нужна отдельная product policy, не скрытый reset.
+
+## Пагинация, ошибки и кеш
+
+Lists: cursor pagination, limit 1–100, default20; stable ordering `(startsAt,id)` для games и `(requestedAt,id)` для personal requests. Cursor непрозрачен клиенту, сервер валидирует его размер/формат/filters. Discovery показывает текущую, не snapshot-consistent выдачу: при изменениях между страницами client dedupe по id. Датный диапазон ограничен server policy; нет неограниченных export queries.
+
+Ошибки — `application/problem+json` по RFC9457 [S15](../reference/SOURCES.md), с `type,title,status,code,requestId`, безопасным detail без stack/SQL/provider tokens. HTTP: 400 malformed, 401 no valid session, 403 known resource forbidden/CSRF, 404 not visible/not found, 409 conflict/full/closed, 422 invalid semantic input, 429 limit, 503 temporary dependency. Retry-After при временном throttling. Коды не отображаются игроку без локализованного текста.
+
+Private endpoints no-store. Public list/card short cache допустим без индивидуальных токенов; command всегда перечитывает primary. Нет cached success для mutation. ETag/read caching не заменяет expectedVersion и authorization.
+
+## Coverage v0.1
+
+В контракте: provider list, self summary, Game create/list/detail/publish/cancel, request/list, own requests и confirm/reject/withdraw. Следующие bounded дополнения: organizer/venue management, profile/identity lifecycle, share lifecycle, attendance/outcomes, moderation/admin, notification preferences и capacity edits. Их отсутствие в draft **не разрешает пропустить их перед live pilot**; F-02/F-03/F-05 включают contract completion и QA.
+
+## LS-01 Profiles / Safety / Directory (v0.8.0)
+
+Admitted consumer routes (feature flag `SOCIAL_DIRECTORY_ENABLED`, default **off** → `404 SOCIAL_DIRECTORY_DISABLED`):
+
+- `GET/PATCH /me/social-profile`, `PUT /me/social-profile/visibility`
+- `PUT/DELETE /me/looking-for-game`
+- `GET /players`, `GET /players/{publicPlayerId}`
+- `PUT/DELETE /me/blocks/{publicPlayerId}`
+- `POST /reports`
+
+Rules:
+
+- Mutations reuse S-00A session fence + insert-first idempotency; PairFence before block/report rows; never Game locks on these paths.
+- Social-profile bootstrap validates a supplied non-null city against the catalog before INSERT; updates validate before UPDATE. Unknown or malformed city → safe `422 CITY_ID_INVALID`. A failed write rolls back profile/consent/version and idempotency reservation. Omitted/null city remains supported by this API; mandatory city is the web setup prerequisite. Version conflicts and currently authorized successful replay retain their existing precedence.
+- Directory projections omit phone/email/provider IDs and internal user UUIDs; use opaque `publicPlayerId`.
+- Directory hide does not clear stored Radar consent; social eligibility revoke clears Radar consent. No `/me/radar/**` in this slice.
+- Looking intent stores city/area TTL only (no GPS). Expiry enforced on read/commands.
+- Block is bilateral for directory visibility and does not cancel Game/Participation.
+- Abuse reports are create-only for consumers; no cross-user private browse.
+- Lists: default limit 20, max 50, opaque cursor, **no totals**.
+
+PROPOSED product defaults used for fail-closed implementation are labeled in
+`docs/workbench/implementation/ls01-profiles-safety-directory-v001/DISPOSITION_REGISTER.md`
+and do not close Owner/Legal gates.
+
+
+## LS-R1 Radar (additive)
+
+OpenAPI `0.9.0` admits ephemeral `/me/radar/**` and `/radar/results/preview` behind `SOCIAL_RADAR_ENABLED` (default off). Nearby rejects arbitrary center/radius filters. Preview is revalidated against current presence and does not create DM/invite contact. PROPOSED synthetic TTL/radius/sparse parameters are fixture defaults, not live policy closure.
+
+## LS-04 GameInvitation (v0.11.0)
+
+Admitted consumer routes (feature flag `SOCIAL_INVITATIONS_ENABLED`, default **off** → `404 SOCIAL_INVITATIONS_DISABLED`):
+
+- `POST/GET /games/{gameId}/invitations`
+- `GET /me/invitations`
+- `GET /invitations/{invitationId}`
+- `POST /invitations/{invitationId}/accept|decline|revoke`
+
+Rules:
+
+- GameInvitation is a Sessions resource: not Participation and not a DM/message side effect.
+- Only a current authorized GameManager may create or revoke.
+- Pending invitations reserve **zero** seats. Accept re-locks Game, re-checks published/deadline/start/capacity, then confirms Participation with existing capacity protocol.
+- `409 GAME_FULL` leaves the invitation pending. `409 GAME_VERSION_CHANGED` when `expectedGameVersion` is stale.
+- PairFence + bilateral block fail closed (`404 RESOURCE_UNAVAILABLE`). Block does not cancel already confirmed seats.
+- Mutations reuse S-00A insert-first idempotency. Same key / same body replays only after current actor authorization.
+- Optional `discoveryProof` on create uses the LS-R2 Radar current-state hook; it is not a bearer grant. Ordinary manager invite does not require Radar.
+
+## LS-05 Game Chat (additive, v0.13.0)
+
+Text-only Game Chat under `/games/{gameId}/chat` (+ messages/read/members). Access derives from current active GameManager or confirmed Participation while the Game is `published` and `now < endsAt`. Cancel/completed/ended deny all consumer chat reads and sends immediately (no retained read-only cohort). Membership rows never authorize alone. Social block does not fence Game Chat; pending applicants are not members and may use ordinary DM with optional `gameContextId` without gaining room access. Feature flag `SOCIAL_GAME_CHAT_ENABLED` default off. Message retention fixture `SOCIAL_GAME_CHAT_MESSAGE_RETENTION_SECONDS` (default 90d) is engineering-only, not Legal final.
+
+## LS-06 Composed Inbox (additive, v0.14.1)
+
+Read-time composition under `GET /me/inbox`, `GET /me/inbox/counts`, and `POST /me/inbox/items/{kind}/{id}/read`. Sources remain LS-03 DM, LS-04 GameInvitation and LS-05 Game Chat; Inbox never becomes a second mutable write model. Ordering is `lastActivityAt DESC, kind DESC, id DESC` with opaque cursor. Opaque cursor `at` must be an ISO-8601 timestamptz; malformed cursor or non-strict `limit` (trailing junk / non-integer) → `400` (`CURSOR_INVALID` / `LIMIT_INVALID`), never `500`. Effective overdue DM request / invitation expiry is projected in the compose SQL without Inbox-owned `UPDATE`s; durable expiry remains Messaging, Invitation and cleanup jobs. Unread counts incoming messages after the reader marker and exclude own sends/hidden rows; pending DM requests and pending invitations are separate named attention counts and are not folded into `dmUnread`/`gameChatUnread`. Muted threads suppress badge counts only. Mark-read for `dm`/`dm_request`/`game_chat` delegates to the owning source services. Feature flag `SOCIAL_INBOX_ENABLED` default off. Polling-first; no Elasticsearch/Redis/Kafka/SSE requirement.
+
+## LS-R2 Radar contact/recovery (additive, v0.12.0)
+
+`resultRef` / optional `discoveryProof` is viewer + owner session + activation/version bound. Preview and first-contact redemption revalidate both current Radar activations, expiry, foreground/location validity, radius/cohort membership, bilateral block and social/Radar eligibility. Stop, logout, revoke, expiry and takeover invalidate future proof use. Already created conversations/invitations follow their own policy and are not deleted by later Radar stop. Feature flag `SOCIAL_RADAR_ENABLED` remains default off (live real-user Radar). Optional `SOCIAL_RADAR_DEMO_ENABLED` (default off) admits synthetic/internal city-scoped Radar for deterministic demo identities in Moscow / Санкт-Петербург only; responses include `exposureMode` (`live` | `synthetic_demo`). Logical dumps must `--exclude-table-data=radar_presences`; restore/failover truncates presence before traffic. No raw coordinates, bearing, meters, background GPS or movement history.
+- Expiry is scheduled on pg-boss `social.expiry.cleanup` (`kind=invitation`) and remains correct on-read if the worker is down.
+- Fixture TTL: `SOCIAL_INVITATION_TTL_SECONDS` (default 7d), capped by `applicationDeadlineAt`. Not a Legal/Owner policy closure.
+
+## Owner A temporal execution compatibility
+
+New `POST /games` draft creation and `POST /games/{gameId}/publish` execution
+require `startsAt > server now`; elapsed starts return `422 GAME_START_NOT_FUTURE`.
+The check is inside execution, so an authorized completed idempotency receipt
+can still replay after the start. Existing history reads and stored games are
+unchanged. All web/mobile/API callers retain existing input shapes and deadline
+invariant `applicationDeadlineAt <= startsAt`; equality closes requests at start.
+Web Create uses equality and elapsed duration in whole minutes (UI bound 1–1440,
+an implementation choice, not an Owner policy or new backend duration bound).
+No schema migration or privacy default change.
+
+## Owner B contactability (compatible additive projection)
+
+`PublicPlayer` and `RadarPlayerProjection` add `canRequestContact`. The server
+always emits a boolean in an already permitted projection; clients treat a
+missing field from a previous server as false. Guests/self, disabled DM or
+social directory, inactive/ineligible actors/targets, bilateral blocks and any
+existing direct conversation produce false. Hidden/ineligible public targets
+remain unavailable; Radar's existing permitted preview may carry false without
+exposing directory consent or private policy. No new identity/location fields.
+Authenticated guests must sign in and reread; the boolean is not a command grant.
+First-contact POST continues to revalidate current target consent, account,
+session, block and optional Radar discoveryProof. Accepted conversations remain
+available through Messages independently of the first-contact setting.
+
+Own `PATCH /me/social-profile` retains `contactPolicy: requests|closed`, closed
+by default, expectedVersion, CSRF and idempotency. Only explicit own action changes
+this preference; no migration/backfill. Version conflicts require a reread.
+GameChat send retains required bounded `clientMessageId` and Idempotency-Key;
+unknown-result retries preserve both for the same logical message.
+
+### Radar toggle/list reconciliation (2026-10-07)
+
+Owner decision `OWNER_DECISION_RADAR_TOGGLE_DIRECTORY_MAP_V001` supersedes the
+consumer sparse K=3/random-first behavior: K=1; normative array order is
+(band ordinal, floor(coarse-center distance / 1000), viewer/15-minute-epoch
+keyed rank, internal ID). Ties never use exact distance. SQL selects the global
+first 20 coarse keys WITH TIES before keyed ranking/cap, shared by nearby/proof.
+All eligibility, partition, consent, session, freshness and block predicates
+precede ranking. No public DTO fields or policy version change; numeric distance,
+bucket, rank, coordinates, bearing and last-seen remain private.
+
+## FB01 game backend source candidate (013/014)
+
+`GET /v1/me/game-preferences` читает только собственный приватный шаблон: `{defaultPublicGameContact:null,version:0}` без строки. `PATCH` требует активную cookie session, Origin/CSRF, Idempotency-Key и `{expectedVersion,defaultPublicGameContact}`; null очищает, строка trim 1–320, unknown/omitted fields дают 422, stale version — 409 VERSION_CONFLICT. Все ответы no-store. API не копирует provider/social contacts.
+
+`POST /v1/games` принимает additive optional `savePublicContactDefault:{expectedVersion}`. Сохраняет explicit public game contact snapshot и default атомарно; stale default откатывает Game/manager/seat/audit/outbox/receipt. Omitted extension не меняет default. Replay возвращает исходный snapshot после current actor/session/management checks и не перезаписывает более новый default. Preference edit/clear не меняет существующие games. Deletion_pending очищает preference под existing Identity fence; продуктовый endpoint удаления не включается.
+
+Новая regular draft имеет confirmedCount=1 и availablePlaces=capacity−external−1 из реальной Participation. Trainer-led остаётся без auto-seat. Participation DTO получает server-derived `isCreatorOrganizer`, допустимый на authorized own/roster/command projections (optional для старых invitation receipts); public Game не раскрывает roster. Draft initial event `participation.confirmed` имеет optional origin `creator_initial_seat`, без контактов, requested event, room membership или notification job. Legacy outbox классифицирован KEEP_AS_EVIDENCE; будущий consumer должен подавлять self/draft delivery и проверять актуальный lifecycle.
+
+Реализация — source-only candidate pending independent QA; не runtime release. OpenAPI и generated game DTO являются wire truth; см. [ADR-0012](../decisions/ADR-0012-GAME-CONTACT-CREATOR-SEAT.md).
+
+## Email E1 internal foundation (v0.18.0)
+
+[Email E1 addendum](EMAIL_AUTH_E1_ADDENDUM_V001.md) adds consumer email-code discovery,
+challenge/login and explicit linking, preserving OAuth compatibility. Default disabled;
+only strict loopback local test fake transport is available. Challenge commands use
+single-use/generation and shared issuance budgets rather than a reusable success receipt:
+consumed verification cannot replay a session token. No public fake mailbox or live SMTP.
+
+Email proof commands are a narrow exception to business-command Idempotency-Key:
+`x-auth-challenge-protocol=bound-single-use-v1` marks only the enumerated login/link/change request/resend/verify/status
+routes. Exact Origin/flow/binding and atomic generation/consume prevent duplicate authority;
+an already consumed verify returns an error, never a cached session credential.
+The foundation checker recognizes only these exact routes with required binding headers.
