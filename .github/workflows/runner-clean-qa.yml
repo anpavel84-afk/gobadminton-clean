@@ -67,9 +67,9 @@ jobs:
       matrix:
         include:
           - candidate: radar-map-pr19
-            commit: f3b08bedfd68b4782a231a6f16410d74810bb994
+            commit: 6aae8460b5cf132fbc0344c7cb914f130ceb9d57
             package: web
-            focused_test: src/lib/radar-map-assets.test.ts
+            focused_test: test/radar-map-assets.test.ts
           - candidate: friends-api-pr20
             commit: 08a68a2b5ae861f22e7d440a01e32d14496a68fe
             package: api
