@@ -44,7 +44,7 @@ Role owners are responsibilities, not invented GitHub assignees or claims of ind
 - Foundation failed with missing documents referenced by AGENTS/docs and OpenAPI idempotency/body findings on linked providers, sessions, avatars and admin auth routes. These sources were not changed by initial package import.
 - Actual product checks are split into independent required jobs so foundation failure does not conceal later failures. Deployment still invokes blocking foundation and full checks.
 - New repository write key fingerprint SHA256:McJ0ggrpDOAZLNcIdpFsAN0qYCZZ8/2wqOB9JcB+3IM. Push succeeded for 6b31e14fb467c7581f8206e22a5178a70b372ff5.
-- gh 2.45.0 installed from Ubuntu repositories. No authenticated host for root or agentagency-dev at audit. Environments/Secrets/Projects cannot be commissioned with an SSH Git key.
+- gh 2.45.0 installed from Ubuntu repositories. Owner completed device authentication for bootstrap. OAuth is stored root-only on Germany and is NOT available to agentagency-dev. A separate least-privilege PM identity is still required for unattended work.
 - CHATOPS_DEV_COMMISSIONED and CHATOPS_PROD_COMMISSIONED are required opt-in variables; do not set them until their gates above are verified. A skipped deployment is not a delivery receipt.
 - PROD RELEASE_ACTOR comparison alone does not prove human GO. Environment/tag/workflow protections and separate release credentials must be configured and audited before enabling PROD. Do not publish a production release in this task.
 
@@ -56,10 +56,25 @@ DEV retains previous actual image IDs and private per-release state. Failed appl
 
 ## Rollback of this implementation
 
-PR is draft; main untouched. Source rollback is reverting PR commits. No installed receiver or deploy keys for environments exist from this work. Remove/disable only newly commissioned DEV entry points if commissioning later fails, retaining receipts and previous images. Do not delete worktrees, checkpoints, old automation or database volumes. Do not restart old automation indiscriminately: restore only the units explicitly recorded as active before cutover, after checking competing writers.
+PR is draft; main untouched. Source rollback is reverting PR commits. DEV receiver and its distinct SSH key are installed; PROD receiver/profile/key/approval are absent. To roll back bootstrap, disable gb-deploy-watchdog@dev.timer, remove only the new DEV authorized-key/sudoers/sshd drop-in after sshd -t, revoke the DEV environment secret and leave the account disabled. Retain root-owned helper/profile, evidence and previous images until review. This does not restart or remove application containers. Do not delete worktrees, checkpoints, old automation or database volumes. Do not restart old automation indiscriminately: restore only the units explicitly recorded as active before cutover, after checking competing writers.
 
 ## Operating rules
 
 Owner chats provide product direction and explicit PROD GO. PM drives Issues/Projects and launches one CLI task on Germany. GitHub-hosted runners own installation, builds, tests, browser execution. A gh watcher does not provide closed-chat autonomous repair. Cloud tests are independently executed infrastructure; independent reviewer judgment remains a separate recorded fact.
 
 Continue from PR22 and the server worktree. PLAN is only the source of the Owner-provided archive; no development or builds there.
+
+## Verified bootstrap update
+
+- GitHub Projects board created and linked: https://github.com/users/anpavel84-afk/projects/1. Actual field IDs discovered; Stage/Role/spec/evidence fields created; Issues #4, #13, #14, #23 registered. #23 is the explicit foundation-remediation dependency, not a skipped gate.
+- DEV environment created with encrypted SSH key, host and host-key pin. After successful probe, temporary commissioning branch access was removed. Branch allowlist now contains only dev.
+- CHATOPS_DEV_COMMISSIONED=false. PROD remains absent/unconfigured. No image was deployed, no release receipt created.
+- Receiver account gb-deploy-dev uid983 has only its own group. Root-owned forced command and exact sudo rule are installed. Effective sshd config denies passwords, PTY, user RC/environment and forwarding. The stock imported PermitUserEnvironment Match directive was rejected by sshd -t, removed before reload; global effective value is no.
+- Real cloud SSH probe passed: https://github.com/anpavel84-afk/gobadminton-clean/actions/runs/38483975082. It checks pinned connection, status, ignoring arbitrary SSH commands, rejection of extra environment fields/unsupported actions and forwarding. No deploy or rollback mutation was tested.
+- Cloud helper regression grew from 15 to 19 tests, all passed on 48c9b465d9ee852bec68b0eb0767d062cd9bdd41: https://github.com/anpavel84-afk/gobadminton-clean/actions/runs/38484196418/job/115593924497. Extra tests enforce exact root-owned Owner GO, expiry and digest matching. This is not a live PROD acceptance.
+- Effective DEV profile has no host Docker socket, privileged mode, host PID or bind mounts; API owns only its existing avatar volume, and Web none. Images currently run as gobadminton. No app service restarted.
+- Observed DEV screenshot and FAIL receipt: https://github.com/anpavel84-afk/gobadminton-clean/actions/runs/38483974956/artifacts/11858238682. Human visual inspection confirms Players list and login-for-Radar button but no map entry. Private player consent QA remains NOT_TESTED.
+- Product CI reports API/Web/Admin/contracts type/lint/unit success. Foundation remains blocked by existing references and API contracts in #23. Disposable DB suite debugging fixed PostGIS temporary-server readiness, a too-short synthetic secret and explicit formal_invite_* database requirement. Existing avatar migration fixture force-disconnect caused an unhandled pg error; replaced FORCE with normal drop. Full 46-suite execution then produced 347 passed, 44 failed and 18 pending assertions. Failures identified additional harness contracts: PostgreSQL dump tool path, pre-migrated schema for two historical Radar suites and GMAP1_DISPOSABLE_DB. These are now configured explicitly; fresh cloud validation is required.
+- Before deployment still required: foundation remediation; complete DB PASS; PR19 exact integrated cloud QA; cloud image builds and GHCR pull visibility/read identity; audited identical migration manifest for first MIGRATE=0 release; actual map smoke and rollback rehearsal. Do not enable DEV while any gate fails.
+- Existing gobadminton-clean-publisher.timer and gobadminton-clean-dev-release.timer remain active/enabled by design. Their retirement is dependent on verified replacement. Runner/Autopilot/QA remain disabled. No history or claims changed.
+- PROD helper source now additionally requires root-owned prod-owner-go.json on both actual hosts. No record is generated before explicit Owner GO. The GitHub actor comparison alone is insufficient.

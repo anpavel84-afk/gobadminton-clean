@@ -24,6 +24,17 @@ export NODE_ENV=test APP_ENV=local RUN_DB_INTEGRATION=1
 export CONTENT_MODERATION_PROVIDER=fake CONTENT_MODERATION_FINGERPRINT_SECRET=ci-synthetic-only-fingerprint-000000000000
 export PUBLIC_API_ORIGIN=http://127.0.0.1:3000 PUBLIC_WEB_ORIGIN=http://127.0.0.1:3001
 export AUTH_PEPPER=ci-synthetic-only-pepper-not-a-live-secret
+# Use PostgreSQL 18 tools from the SAME pinned image, not a workstation-specific binary.
+export CI_POSTGIS_IMAGE="$IMAGE"
+export PG_DUMP_PATH="${RUNNER_TEMP:?}/gb-ci-pg-dump"
+cat >"$PG_DUMP_PATH" <<'PG_DUMP_WRAPPER'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+[[ ${GITHUB_ACTIONS:-} == true ]] || exit 77
+exec docker run --rm --network host --entrypoint pg_dump "${CI_POSTGIS_IMAGE:?}" "$@"
+PG_DUMP_WRAPPER
+chmod 700 "$PG_DUMP_PATH"
+export GMAP1_DISPOSABLE_DB=1
 export PG_CONTAINER="$NAME" CI_DB_PORT="$PORT" CI_DB_PASSWORD="$PASSWORD"
 # Fresh install + N-1 -> N upgrade + immutable previously applied SQL.
 python3 scripts/chatops/migration-ci.py
@@ -42,6 +53,11 @@ for file in "${files[@]}"; do
   docker exec "$NAME" dropdb -U gobadminton --if-exists --force "$db"
   docker exec "$NAME" createdb -U gobadminton "$db"
   export DATABASE_URL="postgres://gobadminton:$PASSWORD@127.0.0.1:$PORT/$db"
+  # These two historical suites expect an already migrated disposable schema.
+  case $(basename "$file") in
+    radar.geographic.test.ts|qa.g1-independent.test.ts)
+      pnpm --filter @gobadminton/api exec tsx src/database/migrate.ts ;;
+  esac
   report="$ROOT/_out/test-results/$(basename "$file").json"
   if ! pnpm --filter @gobadminton/api exec vitest run --project integration "test/integration/$(basename "$file")" \
     --reporter=default --reporter=json --outputFile="$report"; then
