@@ -1,0 +1,57 @@
+{
+  "project": "GoBadminton",
+  "status": "PROPOSED_SOURCE_ONLY_ADMISSION",
+  "baseline_main": "c9916e1cc2e8e6828438fbd38d1b12f351c84e72",
+  "autonomous_status": "COMMISSIONING_NOT_AUTONOMOUS",
+  "instructions": [
+    {
+      "id": "github-issue4-comment-6148670164",
+      "origin": "VERIFIED_GITHUB_OWNER_ISSUE",
+      "text": "## OWNER REQUEST · ONE-TIME AUTO-RUNNER COMMISSIONING · 2026-10-13\n\n**Single accountable delivery issue: #4.** Owner wants **ONE front-facing GoBadminton PM chat + existing Germany Runner Monitor**, NOT three operator chats or manual Codex commands. This is an existing-system integration/commissioning task, NOT a new Runner architecture, V4, new dashboard, or another paperwork/GO cycle.\n\n**Verified new fact:** clean repo is now **PUBLIC**. Public branch rulesets API returned `[]` (none configured). GitHub Pro upgrade is no longer a prerequisite. Reuse existing reader key and separately provisioned Publisher identity where correctly authorized; do not request two extra GitHub Apps until an actual capability gap is demonstrated.\n\n**Original Germany snapshot (2026-10-13 ~14:50Z):** `vmi3510488`; clean Runner systemd active/enabled, PID 1734551, installed `runner.py` blob `1a5aa2a4a519d4372fed60fe52a5abf164f92faa`, Git clean main `c9916e1cc2e8e6828438fbd38d1b12f351c84e72`; paused=false, 2 slots, 6 queued records all disabled, active=0, history=0, gate NO_ELIGIBLE_WORK. Codex 0.160.1 login verified; `codex_cli` path repaired. German DEV Web/API/PostGIS healthy and monitor HTTP200. Clean independent QA evidence root and clean control-plane root **ABSENT**, old Autopilot `masked`, no canonical PM intake service, no clean Publisher, one GitHub workflow only `runner-clean-qa.yml` (Runner Python tests). systemd PATH gives Node20, while supported Node24/pnpm10 exist in service account home. Old Autopilot defaults to Cursor, references missing legacy docs and Codex planner source currently selects bypass-approvals-and-sandbox. **Do not simply unmask/restart it.**\n\n### Integrated engineering work; run without asking Owner for routine DEV micro-GOs\n\n1. **Runner/PM intake:** Make a trusted, idempotent GitHub Issue-based task intake or existing Owner Inbox bridge for clean repo; input from this PM chat is a durable, authenticated GitHub event, verified against authorized identity, scope and exact event ID; NO passive assumption a comment magically starts a process. Extend the *existing* Runner/Autopilot code with minimal scoped fixes: Codex planner selection, avoid full sandbox bypass, replace missing legacy PM instruction references, correct Node24/pnpm PATH, protect control-state and sibling worktrees from implementation agents, single-writer queue admission via existing publication_guard and exact Owner-binding source; correct active task/job monitoring. No legacy 551-task import, no PLAN agents.\n2. **QA:** Commission real independent source-review/test runner and protected clean-root QA evidence for exact producer, reviewer, branch, SHA, tree, suite and authorization; preserve R1 FAIL and prevent trusted_job replay. An author test receipt is not independent PASS. Run tests in isolated/disposable environments; no live Germany DEV database mutation without permitted DEV release, no PROD DB use.\n3. **Publisher/CI/Release Ops:** Commission ONE authenticated main writer and guarded clean-repo publisher; prove exact-SHA/lease/rollback before main writes. Build Web/API and launch PostGIS integration/browser smoke in a sanctioned service environment. Deploy successful QA-accepted changes automatically to Germany DEV `dev.gobadminton.ru` with image digests, health checks and rollback. PROD remains separate Owner acceptance, never auto-promote. Use public-repo branch protection after REAL checks exist; do not preconfigure required nonexistent checks. Do not start historical Publisher.\n4. **First actual work (no duplicate authoring):** Incorporate previously drafted PR #19 Radar, PR #20 Friends and their German worktree diffs/handoffs; authorized Writer publishes exact candidate SHAs. Admit in canonical queue via guarded mechanism `friends-dev-s1-api-20261013-v001` + its independent QA and `radar-dev-map-ui-20261013-v001` + own independent QA. Two parallel producer slots subject to locks; avatar #15 later. Fresh tests/smoke; do not relabel manual work as Runner execution.\n5. **Monitor truth:** Existing `https://dev.gobadminton.ru/runner-monitor/` displays each task ID/title, source link, model, state (`ADMITTED/QUEUED/CLAIMED/RUNNING/TESTING/QA/INTEGRATING/DEPLOYING/SMOKE/DONE/BLOCKED`), actual start/progress, logs/evidence links and blockers; never fake active tasks. Preserve history across reboot and Desktop Commander outages.\n\n**Definition of Done:** A new genuinely authenticated Owner/PM-approved clean GitHub task is picked up automatically on original Germany with no manual SSH or running Codex from PLAN, gets a scoped execution and exact published commit, nonauthor QA PASS, automated real Germany DEV deployment/smoke, shows truthful progress, and next task auto-starts. Test failure/rollback and one resumed/crashed job; verify no PROD touched. Until then state `COMMISSIONING_NOT_AUTONOMOUS`.\n\n**Scope of Owner attention:** only ONE-TIME genuine external blockers (e.g. GitHub setting requiring account admin/permission, missing formal install rights or billing decision). For each return exact UI action, link and proof; do NOT delegate routine CLI launches to Owner, ask for repetitive GO, or publish more prep-only manifests.\n\n**Current dispatch status:** This issue comment is a single integrated implementation assignment and durable coordination record. It is NOT an auto-dispatched Runner claim, root QA certificate, or DEV deployment. One integration owner coordinates internal QA/Ops; Owner communicates only with PM and existing monitor.",
+      "text_sha256": "2d3cf0e888a45546512164372818d19355d1eff519b34648b35e7221d1626751",
+      "source_url": "https://github.com/anpavel84-afk/gobadminton-clean/issues/4#issuecomment-6148670164",
+      "action": "enqueued",
+      "task_ids": [
+        "friends-dev-s1-api-20261013-v001",
+        "qa-friends-dev-s1-api-20261013-v001",
+        "radar-dev-map-ui-20261013-v001",
+        "qa-radar-dev-map-ui-20261013-v001"
+      ]
+    }
+  ],
+  "admission_pairs": [
+    {
+      "producer_task_id": "friends-dev-s1-api-20261013-v001",
+      "qa_task_id": "qa-friends-dev-s1-api-20261013-v001",
+      "write_paths": [
+        "apps/api",
+        "db",
+        "packages/contracts",
+        "docs/handoffs/20261013/clean-canary-friends-dev-s1-api-20261013-v001.md"
+      ]
+    },
+    {
+      "producer_task_id": "radar-dev-map-ui-20261013-v001",
+      "qa_task_id": "qa-radar-dev-map-ui-20261013-v001",
+      "write_paths": [
+        "apps/web",
+        "docs/handoffs/20261013/clean-canary-radar-dev-map-ui-20261013-v001.md"
+      ]
+    }
+  ],
+  "prepared_candidates": {
+    "friends-dev-s1-api-20261013-v001": {
+      "sha": "f98b1ed42e3f3847ac305e487cf3a706d6a458f2",
+      "tree": "8e28c766e2b6f657869ba497a5adf352d9d0ee17",
+      "branch": "feature/friends-s1-clean-source-20261013",
+      "pr": 20
+    },
+    "radar-dev-map-ui-20261013-v001": {
+      "sha": "ed1ad372751b25f1d4bddae1f13e1b3876ef5bec",
+      "tree": "7f4a9949a96d676925b740f425f99cad32889a8c",
+      "branch": "feature/radar-dev-real-map-20261013",
+      "pr": 19
+    }
+  },
+  "remaining_scope": "Integrated commissioning, actual protected QA, guarded integration, DEV deployment/smoke, crash/resume and rollback remain unproven. Avatar pair remains disabled. F2/F3 are not added; any future shared locks must serialize."
+}

@@ -15,10 +15,10 @@
       "id": "friends-dev-s1-api-20261013-v001",
       "order": 10,
       "status": "queued",
-      "enabled": false,
+      "enabled": true,
       "source": "https://github.com/anpavel84-afk/gobadminton-clean/blob/09408233f0720576af8d68a0fad3e65c84f30916/docs/assignments/20261013/friends-s1-api.md",
       "admission": "https://github.com/anpavel84-afk/gobadminton-clean/blob/09408233f0720576af8d68a0fad3e65c84f30916/docs/assignments/20261013/owner-clean-dev-batch.md",
-      "scope": "Friends API schema, privacy, lifecycle, contracts, unit/integration tests",
+      "scope": "Verify and reuse the existing prepared clean PR #20 candidate f98b1ed42e3f3847ac305e487cf3a706d6a458f2. No duplicate implementation, no feature enablement, no application edits for this first verification run. Inspect exact SHA/tree/branch, compatibility, privacy and existing tests in an isolated disposable environment; never run SQL against live DEV/PROD. Return source-only completion proposal; host records actual executor PID/exit and publishes the new execution handoff via separate Clean Publisher. Independent own protected QA must execute freshly after publication; manual QA is historical only. Retain the existing test/local-only Friends gate.",
       "title_ru": "Друзья: серверная часть и запросы",
       "summary_ru": "Разработка только в исходниках clean Git; независимая QA перед DEV.",
       "lane": "implementation",
@@ -29,30 +29,23 @@
       "effect_ceiling": "source_only",
       "locks": [
         "api",
-        "db"
+        "db",
+        "contracts"
       ],
-      "base_sha": "16ab3e2a9740377dca32908d3f210f23a54d2261",
-      "notes": "Owner Issue #12; DEV-only; no PROD or old Runner; exact Git Writer publication and independent QA required",
+      "base_sha": "f98b1ed42e3f3847ac305e487cf3a706d6a458f2",
+      "notes": "Exact Owner event github-issue4-comment-6148670164; SHA256 2d3cf0e888a45546512164372818d19355d1eff519b34648b35e7221d1626751; prepared-source verification only, separate Publisher and new protected own QA, DEV SOURCE_ONLY, no deployment.",
       "blocks": [
         {
-          "id": "b1",
-          "title": "Exact clean main + accepted legacy code review"
+          "id": "pin",
+          "title": "Verify prepared clean candidate SHA/tree/branch without duplicate authoring"
         },
         {
-          "id": "b2",
-          "title": "Additive migration and friendship data contracts"
+          "id": "verify",
+          "title": "Inspect compatibility/privacy and actual isolated tests; preserve failures"
         },
         {
-          "id": "b3",
-          "title": "Request/accept/decline/cancel/unfriend service"
-        },
-        {
-          "id": "b4",
-          "title": "Privacy, idempotency, concurrency tests"
-        },
-        {
-          "id": "b5",
-          "title": "Publish immutable source candidate and receipt"
+          "id": "handoff",
+          "title": "Return completion proposal for real host execution handoff and separate Publisher"
         }
       ]
     },
@@ -60,10 +53,10 @@
       "id": "qa-friends-dev-s1-api-20261013-v001",
       "order": 20,
       "status": "queued",
-      "enabled": false,
+      "enabled": true,
       "source": "https://github.com/anpavel84-afk/gobadminton-clean/blob/09408233f0720576af8d68a0fad3e65c84f30916/docs/assignments/20261013/qa-friends-s1-api.md",
       "admission": "https://github.com/anpavel84-afk/gobadminton-clean/blob/09408233f0720576af8d68a0fad3e65c84f30916/docs/assignments/20261013/owner-clean-dev-batch.md",
-      "scope": "QA: безопасность API друзей",
+      "scope": "Fresh independent protected QA for own exact published producer SHA/tree/branch and suite friends-s1-germany-dev-privacy-v001. Service-owned tests plus distinct nonauthor reviewer; no manual PASS reuse or trusted_job replay. Follow immutable assignment privacy/functional checks, record FAIL/BLOCKED honestly. No live database mutation or DEV/PROD release.",
       "title_ru": "QA: безопасность API друзей",
       "summary_ru": "Независимая проверка exact SHA; только read-only, без выдачи собственной root QA подписи.",
       "lane": "qa",
@@ -74,7 +67,8 @@
       "effect_ceiling": "source_only",
       "locks": [
         "api",
-        "db"
+        "db",
+        "contracts"
       ],
       "depends_on_completed": [
         "friends-dev-s1-api-20261013-v001"
@@ -83,7 +77,7 @@
         "producer_task_id": "friends-dev-s1-api-20261013-v001",
         "suite_id": "friends-s1-germany-dev-privacy-v001"
       },
-      "notes": "Owner Issue #12; exact producer SHA and trusted root policy; FAIL closed if missing",
+      "notes": "Exact Owner event github-issue4-comment-6148670164; separate root-owned QA service and dedicated reviewer. Fresh exact producer-bound evidence only.",
       "blocks": [
         {
           "id": "pin",
@@ -103,10 +97,10 @@
       "id": "radar-dev-map-ui-20261013-v001",
       "order": 30,
       "status": "queued",
-      "enabled": false,
+      "enabled": true,
       "source": "https://github.com/anpavel84-afk/gobadminton-clean/blob/09408233f0720576af8d68a0fad3e65c84f30916/docs/assignments/20261013/radar-map-ui.md",
       "admission": "https://github.com/anpavel84-afk/gobadminton-clean/blob/09408233f0720576af8d68a0fad3e65c84f30916/docs/assignments/20261013/owner-clean-dev-batch.md",
-      "scope": "Radar DEV map button, local PMTiles/MapLibre rendering, venues and consent-gated people",
+      "scope": "Verify and reuse the existing prepared clean PR #19 candidate ed1ad372751b25f1d4bddae1f13e1b3876ef5bec. No duplicate implementation, no feature enablement, no application edits for this first verification run. Inspect exact SHA/tree/branch, compatibility, privacy and existing tests in an isolated disposable environment; never run SQL against live DEV/PROD. Return source-only completion proposal; host records actual executor PID/exit and publishes the new execution handoff via separate Clean Publisher. Independent own protected QA must execute freshly after publication; manual QA is historical only. For Radar also verify Style Guide/Construction Kit parity and report any missing parity evidence; preserve CANDIDATE_NOT_REGISTERED and the unresolved cross-network large glyph/metro smoke requirement.",
       "title_ru": "Radar: настоящая карта, площадки и участники",
       "summary_ru": "Разработка только в исходниках clean Git; независимая QA перед DEV.",
       "lane": "implementation",
@@ -119,28 +113,20 @@
         "web",
         "map"
       ],
-      "base_sha": "16ab3e2a9740377dca32908d3f210f23a54d2261",
-      "notes": "Owner Issue #13; DEV-only; no PROD or old Runner; exact Git Writer publication and independent QA required",
+      "base_sha": "ed1ad372751b25f1d4bddae1f13e1b3876ef5bec",
+      "notes": "Exact Owner event github-issue4-comment-6148670164; SHA256 2d3cf0e888a45546512164372818d19355d1eff519b34648b35e7221d1626751; prepared-source verification only, separate Publisher and new protected own QA, DEV SOURCE_ONLY, no deployment.",
       "blocks": [
         {
-          "id": "b1",
-          "title": "Visible accessible map/list control"
+          "id": "pin",
+          "title": "Verify prepared clean candidate SHA/tree/branch without duplicate authoring"
         },
         {
-          "id": "b2",
-          "title": "Bind Germany DEV approved local style/assets"
+          "id": "verify",
+          "title": "Inspect compatibility/privacy and actual isolated tests; preserve failures"
         },
         {
-          "id": "b3",
-          "title": "Render venues from DEV PostGIS public location"
-        },
-        {
-          "id": "b4",
-          "title": "Render opted-in, valid Radar people only"
-        },
-        {
-          "id": "b5",
-          "title": "Responsive tests and candidate receipt"
+          "id": "handoff",
+          "title": "Return completion proposal for real host execution handoff and separate Publisher"
         }
       ]
     },
@@ -148,15 +134,15 @@
       "id": "qa-radar-dev-map-ui-20261013-v001",
       "order": 40,
       "status": "queued",
-      "enabled": false,
+      "enabled": true,
       "source": "https://github.com/anpavel84-afk/gobadminton-clean/blob/09408233f0720576af8d68a0fad3e65c84f30916/docs/assignments/20261013/qa-radar-map-ui.md",
       "admission": "https://github.com/anpavel84-afk/gobadminton-clean/blob/09408233f0720576af8d68a0fad3e65c84f30916/docs/assignments/20261013/owner-clean-dev-batch.md",
-      "scope": "QA: карта и приватность Radar",
+      "scope": "Fresh independent protected QA for own exact published producer SHA/tree/branch and suite radar-map-germany-dev-privacy-v001. Service-owned tests plus distinct nonauthor reviewer; no manual PASS reuse or trusted_job replay. Follow immutable assignment privacy/functional checks, record FAIL/BLOCKED honestly. No live database mutation or DEV/PROD release.",
       "title_ru": "QA: карта и приватность Radar",
       "summary_ru": "Независимая проверка exact SHA; только read-only, без выдачи собственной root QA подписи.",
       "lane": "qa",
       "executor": "codex",
-      "model": "gpt-6.1-sol",
+      "model": "gpt-6-astra",
       "effort": "high",
       "sandbox": "read-only",
       "effect_ceiling": "source_only",
@@ -171,7 +157,7 @@
         "producer_task_id": "radar-dev-map-ui-20261013-v001",
         "suite_id": "radar-map-germany-dev-privacy-v001"
       },
-      "notes": "Owner Issue #13; exact producer SHA and trusted root policy; FAIL closed if missing",
+      "notes": "Exact Owner event github-issue4-comment-6148670164; separate root-owned QA service and dedicated reviewer. Fresh exact producer-bound evidence only.",
       "blocks": [
         {
           "id": "pin",
