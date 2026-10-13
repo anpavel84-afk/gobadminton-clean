@@ -8,6 +8,7 @@ A mismatched, unsafe or ambiguous source fails closed with exact evidence.
 from __future__ import annotations
 
 import argparse
+import writer_bridge
 import fcntl
 import hashlib
 import json
@@ -24,8 +25,9 @@ from datetime import datetime, timezone
 from typing import Any
 
 CANONICAL_PATH = "_automation/gobadminton-runner/backlog.json"
+_GITHUB_SAFE_SEGMENT = r"(?!\.{1,2}(?:/|$))[A-Za-z0-9_.-]+"
 FULL_GITHUB_SOURCE = re.compile(
-    r"^https://github\.com/anpavel84-afk/gobadminton/blob/([0-9a-f]{40})/([A-Za-z0-9_./-]+)$"
+    rf"^https://github\.com/anpavel84-afk/gobadminton-clean/blob/([0-9a-f]{{40}})/({_GITHUB_SAFE_SEGMENT}(?:/{_GITHUB_SAFE_SEGMENT})*)$"
 )
 TERMINAL_STATUSES = frozenset(
     {"completed", "blocked", "qa_failed", "qa_blocked", "owner_skipped", "superseded_before_launch", "deferred"}
@@ -92,15 +94,16 @@ def claim_sync_section(root: Path):
     threads. No network operation or executor runs while this lock is held.
     Contention skips this claim/sync tick; it never waits on a task lifetime.
     """
-    with (Path(root) / "backlog-claim.lock").open("a+") as fp:
-        try:
-            fcntl.flock(fp.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
-            raise SyncBlocked("claim/backlog replacement critical section busy; retry next tick") from exc
-        try:
-            yield
-        finally:
-            fcntl.flock(fp.fileno(), fcntl.LOCK_UN)
+    with writer_bridge.bridge_section():
+        with (Path(root) / "backlog-claim.lock").open("a+") as fp:
+            try:
+                fcntl.flock(fp.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise SyncBlocked("claim/backlog replacement critical section busy; retry next tick") from exc
+            try:
+                yield
+            finally:
+                fcntl.flock(fp.fileno(), fcntl.LOCK_UN)
 
 
 def now_iso() -> str:
@@ -131,6 +134,30 @@ def parse_backlog(raw: bytes, label: str) -> tuple[dict[str, Any], dict[str, dic
     return data, tasks
 
 
+def verify_source_review_immutability(
+    old: dict[str, dict[str, Any]], new: dict[str, dict[str, Any]]
+) -> None:
+    """An admitted task ID can never change its independently reviewed object.
+
+    Insertion, deletion and changes to any source_review pin require a NEW task
+    identity and the existing Owner-bound canonical admission. An already
+    admitted ID cannot be rebound even if source/admission URLs stay unchanged.
+    """
+    for tid, before in old.items():
+        after = new.get(tid)
+        if after is None:
+            continue
+        # QA-229-01 remains unchanged in effect: existing task identities cannot
+        # rebound their reviewed object. The same rule protects the NEW internal
+        # QA suite authority and source-only CI handoff intent.
+        for field in ("source_review", "source_qa", "release_handoff"):
+            if (field in before) != (field in after) or before.get(field) != after.get(field):
+                raise SyncBlocked(
+                    f"{tid}: immutable {field} binding changed; "
+                    "new task ID and Owner-bound admission required"
+                )
+
+
 def verify_candidate(
     canonical_raw: bytes,
     runtime_raw: bytes,
@@ -145,6 +172,8 @@ def verify_candidate(
         raise SyncBlocked(f"canonical missing {len(missing)} runtime task IDs: {', '.join(sorted(missing)[:5])}")
     if len(new) < len(old):
         raise SyncBlocked("canonical task count decreased")
+
+    verify_source_review_immutability(old, new)
 
     if not isinstance(active_claims, dict):
         raise SyncBlocked("active claims unavailable")
@@ -592,13 +621,16 @@ def atomic_write(path: Path, content: bytes, mode: int = 0o600) -> None:
 
 
 def save_status(root: Path, info: dict[str, Any]) -> None:
-    payload = dict(info)
-    payload["checked_at"] = now_iso()
-    atomic_write(
-        root / "backlog-sync-state.json",
-        (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8"),
-        mode=0o644,
-    )
+    # Every write to the shared authoritative sync state owns the bridge lease,
+    # even when called outside sync_once (error/recovery/direct CLI paths).
+    with writer_bridge.bridge_section():
+        payload = dict(info)
+        payload["checked_at"] = now_iso()
+        atomic_write(
+            root / "backlog-sync-state.json",
+            (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8"),
+            mode=0o644,
+        )
 
 
 def notice_delivered(root: Path, token: str) -> bool:
@@ -786,42 +818,43 @@ def sync_once(
             "task_count": len(parse_backlog(payload, "canonical")[1]),
             "changed": old_blob != blob,
         }
-        if old_blob != blob and not dry_run:
-            with claim_sync_section(root):
-                if runtime_path.read_bytes() != runtime_raw:
-                    raise SyncBlocked("runtime backlog changed concurrently; retry")
-                verify_candidate(payload, runtime_raw, read_active(state_path))
-                backup_dir = root / "backlog-backups"
-                backup_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-                backup = backup_dir / f"before-main-{head[:12]}-{old_blob}.json"
-                if not backup.exists():
-                    atomic_write(backup, runtime_raw)
-                # Detect an old/noncooperating writer too. Cooperating claims
-                # cannot arrive here until replacement releases the shared lock.
-                verify_candidate(payload, runtime_raw, read_active(state_path))
-                latest_state = read_runner_state(state_path)
-                if latest_state['history'] != runner_state['history']:
-                    raise SyncBlocked('terminal/accepted dependency history changed during sync')
-                validate_recovery_transition(root, parse_backlog(runtime_raw, 'runtime')[0],
-                    parse_backlog(payload, 'canonical')[0], latest_state)
-                for proof_path, proof_raw, proof_id in rebind_proofs:
-                    if (proof_path.read_bytes() != proof_raw or
-                            runner._v2_history_status(latest_state, proof_id) != runner._v2_history_status(runner_state, proof_id)):
-                        raise SyncBlocked("accepted-source rebind evidence changed during sync")
-                mode = stat.S_IMODE(runtime_path.stat().st_mode)
-                atomic_write(runtime_path, payload, mode=mode)
-                if git_blob_sha(runtime_path.read_bytes()) != blob:
-                    raise SyncBlocked("post-sync runtime checksum mismatch")
-                status["backup"] = backup.name
-        if not dry_run:
-            # Trust and transient status are separate. If interrupted between
-            # these writes, mismatch blocks recovery rather than weakening ancestry.
-            atomic_write(trust_path, (json.dumps({
-                "canonical_commit": head, "canonical_blob": blob,
-            }) + "\n").encode())
-            save_status(root, status)
-        return status
-    except (SyncBlocked, OSError, subprocess.TimeoutExpired) as exc:
+        with writer_bridge.bridge_section():
+            if old_blob != blob and not dry_run:
+                with claim_sync_section(root):
+                    if runtime_path.read_bytes() != runtime_raw:
+                        raise SyncBlocked("runtime backlog changed concurrently; retry")
+                    verify_candidate(payload, runtime_raw, read_active(state_path))
+                    backup_dir = root / "backlog-backups"
+                    backup_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+                    backup = backup_dir / f"before-main-{head[:12]}-{old_blob}.json"
+                    if not backup.exists():
+                        atomic_write(backup, runtime_raw)
+                    # Detect an old/noncooperating writer too. Cooperating claims
+                    # cannot arrive here until replacement releases the shared lock.
+                    verify_candidate(payload, runtime_raw, read_active(state_path))
+                    latest_state = read_runner_state(state_path)
+                    if latest_state['history'] != runner_state['history']:
+                        raise SyncBlocked('terminal/accepted dependency history changed during sync')
+                    validate_recovery_transition(root, parse_backlog(runtime_raw, 'runtime')[0],
+                        parse_backlog(payload, 'canonical')[0], latest_state)
+                    for proof_path, proof_raw, proof_id in rebind_proofs:
+                        if (proof_path.read_bytes() != proof_raw or
+                                runner._v2_history_status(latest_state, proof_id) != runner._v2_history_status(runner_state, proof_id)):
+                            raise SyncBlocked("accepted-source rebind evidence changed during sync")
+                    mode = stat.S_IMODE(runtime_path.stat().st_mode)
+                    atomic_write(runtime_path, payload, mode=mode)
+                    if git_blob_sha(runtime_path.read_bytes()) != blob:
+                        raise SyncBlocked("post-sync runtime checksum mismatch")
+                    status["backup"] = backup.name
+            if not dry_run:
+                # Trust and transient status are separate. If interrupted between
+                # these writes, mismatch blocks recovery rather than weakening ancestry.
+                atomic_write(trust_path, (json.dumps({
+                    "canonical_commit": head, "canonical_blob": blob,
+                }) + "\n").encode())
+                save_status(root, status)
+            return status
+    except (SyncBlocked, writer_bridge.BridgeHold, OSError, subprocess.TimeoutExpired) as exc:
         # Retain last known good canonical head even after a failed fetch,
         # unsafe candidate or temporary repo outage. A later non-fast-forward
         # source cannot bypass ancestry checks just by causing one error tick.
@@ -840,12 +873,15 @@ def sync_once(
             # A loser NEVER writes shared metadata. Corrupt evidence is retained
             # byte-for-byte; errors go to a separate concrete diagnostic record.
             try:
-                atomic_write(root / "backlog-sync-diagnostic.json",
-                             (json.dumps({**info, "checked_at": now_iso()}) + "\n").encode())
-                if (not isinstance(exc, InvalidRunnerState) and metadata_valid and trusted
-                        and failed_runtime_blob and (root / "backlog-sync-state.json").exists()):
-                    save_status(root, info)
-            except OSError as diagnostic_error:
+                # A losing process must not write even the diagnostic/status
+                # while the v3 Publisher or a Runner claim holds this inode.
+                with writer_bridge.bridge_section():
+                    atomic_write(root / "backlog-sync-diagnostic.json",
+                                 (json.dumps({**info, "checked_at": now_iso()}) + "\n").encode())
+                    if (not isinstance(exc, InvalidRunnerState) and metadata_valid and trusted
+                            and failed_runtime_blob and (root / "backlog-sync-state.json").exists()):
+                        save_status(root, info)
+            except (OSError, writer_bridge.BridgeHold) as diagnostic_error:
                 info["diagnostic_write_error"] = str(diagnostic_error)[:180]
         return info
     finally:
@@ -854,8 +890,8 @@ def sync_once(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--repo", type=Path, default=Path("/srv/gobadminton-dev/repo"))
-    parser.add_argument("--runtime-root", type=Path, default=Path("/srv/gobadminton-dev/runner"))
+    parser.add_argument("--repo", type=Path, default=Path("/srv/gobadminton-clean/repo"))
+    parser.add_argument("--runtime-root", type=Path, default=Path("/srv/gobadminton-clean/runner"))
     parser.add_argument("--no-fetch", action="store_true", help="synthetic/offline testing only")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)

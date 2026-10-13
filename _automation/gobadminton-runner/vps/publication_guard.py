@@ -14,6 +14,7 @@ from pathlib import Path
 
 import backlog_sync
 import runner
+import writer_bridge
 
 
 MAX_ADMISSION_PAIRS = 4
@@ -21,8 +22,10 @@ MAX_ADMISSION_PAIRS = 4
 
 def admission_delta(before, after):
     old = {t['id']: t for t in before['tasks']}
-    fields = ('source', 'admission', 'depends_on_completed', 'depends_on_accepted',
-              'locks', 'order', 'effect_ceiling', 'notes')
+    new = {t['id']: t for t in after['tasks']}
+    backlog_sync.verify_source_review_immutability(old, new)
+    fields = ('source', 'admission', 'source_review', 'depends_on_completed',
+              'depends_on_accepted', 'locks', 'order', 'effect_ceiling', 'notes')
     return {t['id'] for t in after['tasks'] if t.get('enabled') is True
             and t.get('status', 'queued') == 'queued'
             and (t['id'] not in old or old[t['id']].get('enabled') is not True
@@ -90,6 +93,58 @@ def validate_admission_batch(before, after, state, receipt, binding):
         scopes[item['producer_task_id']] = (item['qa_task_id'], normalized_paths(item['write_paths']))
     pairs = []
     covered = set()
+    # Source-only release handoffs are bounded source tasks, not deploy jobs.
+    handoffs = [tid for tid in ids if "release_handoff" in tasks[tid]]
+    if (len(handoffs) > 1
+            or receipt.get("release_handoff_task_ids", []) != handoffs
+            or binding.get("release_handoff_task_ids", []) != handoffs):
+        raise backlog_sync.SyncBlocked("bounded handoff IDs must match Owner binding")
+    for tid in handoffs:
+        task = tasks[tid]
+        deps = runner._v2_dependencies(task, "depends_on_accepted")
+        if (task.get("effect_ceiling") != "source_only"
+                or task.get("release_handoff") !=
+                    {"kind": "ci_candidate", "target": "authorized_release_job"}
+                or task.get("sandbox") != "read-only"
+                or "global" not in runner.task_locks(task)
+                or runner._v2_dependencies(task, "depends_on_completed")
+                or len(deps) != 1 or deps[0] not in tasks
+                or "source_qa" not in tasks[deps[0]]
+                or runner._v2_history_status(state, tid) in backlog_sync.TERMINAL_STATUSES
+                or any(k in task for k in ("write_paths", "file_scope", "allowed_paths"))):
+            raise backlog_sync.SyncBlocked("handoff must wait for approved source QA")
+        for key in ("source", "admission"):
+            if not backlog_sync.FULL_GITHUB_SOURCE.fullmatch(str(task.get(key) or "")):
+                raise backlog_sync.SyncBlocked("handoff requires immutable Owner source")
+        for claim in runner.active_claims(state):
+            if claim["id"] != tid:
+                raise backlog_sync.SyncBlocked("handoff overlaps active claim")
+        covered.add(tid)
+    # Direct independent source-review tasks have no synthetic producer.
+    # They are exact Owner-bound, immutable and SOURCE_ONLY, never merger authority.
+    reviews=[tid for tid in ids if "source_review" in tasks[tid]]
+    if (len(reviews) > 1
+            or receipt.get("source_review_task_ids",[]) != reviews
+            or binding.get("source_review_task_ids",[]) != reviews):
+        raise backlog_sync.SyncBlocked('source review IDs need exact durable Owner binding')
+    for tid in reviews:
+        task=tasks[tid]
+        if (task.get("effect_ceiling")!="source_only"
+                or task.get("sandbox")!="read-only"
+                or runner._v2_history_status(state,tid) in backlog_sync.TERMINAL_STATUSES
+                or any(k in task for k in ("write_paths","file_scope","allowed_paths"))
+                or runner._v2_dependencies(task,"depends_on_completed")
+                or runner._v2_dependencies(task,"depends_on_accepted")):
+            raise backlog_sync.SyncBlocked('source review must be new read-only bounded task')
+        for key in ("source","admission"):
+            if not backlog_sync.FULL_GITHUB_SOURCE.fullmatch(str(task.get(key) or "")):
+                raise backlog_sync.SyncBlocked('source review lacks immutable admission')
+        for claim in runner.active_claims(state):
+            if claim["id"]!=tid and (
+                    claim["id"] not in tasks or runner.locks_conflict(
+                        runner.task_locks(task),runner.task_locks(tasks[claim["id"]]))):
+                raise backlog_sync.SyncBlocked('source review overlaps active claim')
+        covered.add(tid)
     for qa_id in ids:
         if not qa_id.startswith('qa-'):
             continue
@@ -121,13 +176,16 @@ def validate_admission_batch(before, after, state, receipt, binding):
         scope = scopes.get(pid)
         if scope and scope[0] != qa_id:
             raise backlog_sync.SyncBlocked('scope QA identity mismatch')
+        if "source_qa" in qa and qa["source_qa"].get("producer_task_id") != pid:
+            raise backlog_sync.SyncBlocked("source QA does not bind its own producer")
         locks = tuple(set(runner.task_locks(producer)) | set(runner.task_locks(qa)))
         paths = scope[1] if scope else []
         for other_pid, other_qa, other_locks, other_paths in pairs:
-            if (runner.locks_conflict(locks, other_locks) or paths_overlap(paths, other_paths)
-                    or other_pid in backlog_sync.dependency_closure(producer, tasks)
-                    or pid in backlog_sync.dependency_closure(tasks[other_pid], tasks)):
-                raise backlog_sync.SyncBlocked('batch pairs overlap or depend on each other')
+            # Pre-admission is not simultaneous execution. The existing
+            # scheduler AND claim lock serialize conflicting resource locks.
+            # Overlapping write paths without a shared lock remain forbidden.
+            if paths_overlap(paths, other_paths) and not runner.locks_conflict(locks, other_locks):
+                raise backlog_sync.SyncBlocked("overlapping write paths lack serialization lock")
         for claim in runner.active_claims(state):
             if claim['id'] in delta:
                 continue  # post-sync Runner may already have claimed this exact publication
@@ -140,10 +198,17 @@ def validate_admission_batch(before, after, state, receipt, binding):
         covered.add(qa_id)
         if pid in delta:
             covered.add(pid)
-    if not 1 <= len(pairs) <= MAX_ADMISSION_PAIRS or covered != delta:
-        raise backlog_sync.SyncBlocked('admit up to four complete producer/separate QA pairs; no orphan producer')
+    units = len(pairs) + len(reviews) + len(handoffs)
+    # Ordinary <=4-pair intake unchanged; one Owner-bound source review and
+    # one final nondeploying handoff extend the total to at most five units.
+    if (len(pairs) > MAX_ADMISSION_PAIRS or units < 1
+            or units > MAX_ADMISSION_PAIRS + 1 or covered != delta):
+        raise backlog_sync.SyncBlocked("bounded producer/QA/review/handoff batch exceeded")
     if set(scopes) - {p[0] for p in pairs}:
         raise backlog_sync.SyncBlocked('scope metadata references unreported pair')
+    for tid in delta:
+        if tid in backlog_sync.dependency_closure(tasks[tid], tasks):
+            raise backlog_sync.SyncBlocked("cyclic Owner-bound DAG admission")
     return pairs
 
 
@@ -235,10 +300,12 @@ def accepted_merge_proof(repo, root, before, state, receipt, baseline, target):
 
 
 def quarantine(root, target, reason):
-    backlog_sync.atomic_write(Path(root) / 'source-publication-quarantine.json',
-        (json.dumps({'status': 'QUARANTINED', 'result_commit': target,
-                     'reason': reason, 'manual_remediation_required': True,
-                     'updated_at': backlog_sync.now_iso()}) + '\n').encode())
+    # Quarantine is shared publication metadata, not a lock-free diagnostic.
+    with writer_bridge.bridge_section():
+        backlog_sync.atomic_write(Path(root) / 'source-publication-quarantine.json',
+            (json.dumps({'status': 'QUARANTINED', 'result_commit': target,
+                         'reason': reason, 'manual_remediation_required': True,
+                         'updated_at': backlog_sync.now_iso()}) + '\n').encode())
 
 
 def pre_push(repo, root, context, receipt, baseline, target):
@@ -251,10 +318,23 @@ def pre_push(repo, root, context, receipt, baseline, target):
     git = lambda *args: backlog_sync.run_git(Path(repo), list(args))
     before = json.loads(git('show', baseline + ':' + backlog_sync.CANONICAL_PATH))
     after = json.loads(git('show', target + ':' + backlog_sync.CANONICAL_PATH))
+    # All publication actions, including quarantined, share this immutable
+    # review-pin boundary before any writer, merge or CAS side effect.
+    backlog_sync.verify_source_review_immutability(
+        {t['id']: t for t in before['tasks']},
+        {t['id']: t for t in after['tasks']},
+    )
     git('merge-base', '--is-ancestor', baseline, target)
     runner.validate_backlog(after)
     backlog_sync.verify_candidate(json.dumps(after).encode(), json.dumps(before).encode(), state['active'])
-    backlog_sync.validate_recovery_transition(root, before, after, state, Path(repo), baseline, target, receipt)
+    validated_recovery = backlog_sync.validate_recovery_transition(root, before, after, state, Path(repo), baseline, target, receipt)
+    delta = admission_delta(before, after)
+    # Recovery transition above verified immutable ledger/pair proof. Merely
+    # labelling a normal pair 'repair' in a receipt is not an exemption.
+    old_ids = {t['id'] for t in before['tasks']}
+    repair = validated_recovery and bool(delta) and not (delta & old_ids) and all(
+        t.get('recovery_from') for t in after['tasks'] if t['id'] in delta)
+    writer_bridge.deny_admit_pair(has_admission=bool(delta), verified_repair=repair)
     proofs = backlog_sync.verify_dependency_rebindings(Path(repo), root,
         {t['id']: t for t in before['tasks']}, {t['id']: t for t in after['tasks']}, state, target)
     action = receipt.get('action')
@@ -262,6 +342,8 @@ def pre_push(repo, root, context, receipt, baseline, target):
             or receipt.get('result_commit') != target
             or action not in {'enqueued', 'quarantined', 'merged', 'merged_and_enqueued'}):
         raise backlog_sync.SyncBlocked('write exact publication receipt before pushing main')
+    if delta and action not in {'enqueued', 'merged_and_enqueued'}:
+        raise backlog_sync.SyncBlocked('new task admission requires Owner-bound enqueued publication')
     if action in {'enqueued', 'merged_and_enqueued'}:
         binding_path = receipt.get('owner_binding_path')
         if (not isinstance(binding_path, str) or not re.fullmatch(r'docs/manifest/[A-Za-z0-9_./-]+\.json', binding_path)
@@ -288,6 +370,7 @@ def pre_push(repo, root, context, receipt, baseline, target):
     # Network proof is outside the short lock. Claims and competing hook
     # processes cannot pass the final byte/history check and merge reservation.
     with backlog_sync.claim_sync_section(root):
+        writer_bridge.deny_admit_pair(has_admission=bool(delta), verified_repair=repair)
         latest = backlog_sync.read_runner_state(root / 'state.json')
         stable = latest == state if merging else all(latest.get(k) == state.get(k) for k in
             ('history', 'paused', 'blocked', 'global_gates', 'project_global_blocker'))

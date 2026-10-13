@@ -1,0 +1,57 @@
+name: Runner clean-root QA
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "_automation/gobadminton-runner/**"
+      - ".github/workflows/runner-clean-qa.yml"
+  push:
+    branches: [main]
+    paths:
+      - "_automation/gobadminton-runner/**"
+      - ".github/workflows/runner-clean-qa.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runner-clean-qa-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  runner-source-tests:
+    name: Python + protected root QA regression
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    defaults:
+      run:
+        working-directory: _automation/gobadminton-runner/vps
+    steps:
+      - name: Checkout the exact candidate commit
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check canonical Runner queue schema and no PROD authorization
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import json
+          queue = json.loads(Path("../backlog.json").read_text())
+          assert queue["project"] == "GoBadminton"
+          assert queue["prod_authorized"] is False
+          assert isinstance(queue["tasks"], list)
+          assert all(isinstance(task, dict) for task in queue["tasks"])
+          print("CLEAN_QUEUE_ISOLATED_AND_EMPTY")
+          PY
+      - name: Compile changed Runner modules
+        run: |
+          python -m py_compile runner.py autopilot.py backlog_sync.py publication_guard.py control_agent.py writer_bridge.py queue_recovery.py test_job_contract.py compact_pm_brief.py compact_task_capsule.py
+      - name: Clean-root binding, DAG and protected QA tests
+        run: |
+          python -m unittest -v             test_clean_git_binding_20261013             test_friends_dag_auto_advance_v001             test_qa23001_protected_job_identity_v001 test_qa_pr11_git_alias_v001 test_qa_pr11_compact_capsule_v001 test_qa_pr11_sandbox_control_r3_v001

@@ -24,6 +24,7 @@ import runner
 import backlog_sync
 import queue_recovery
 import publication_guard
+import writer_bridge
 import shlex
 
 try:
@@ -48,7 +49,7 @@ NO_ACTION_REPLAN_SECONDS = 300
 PLANNER_TIMEOUT_SECONDS = 1800
 BACKLOG_SYNC_INTERVAL_SECONDS = 60
 OWNER_NO_ACTION_REPLAN_SECONDS = 300
-WORKTREE = Path("/srv/gobadminton-dev/worktrees/pm-autopilot")
+WORKTREE = Path("/srv/gobadminton-clean/worktrees/pm-autopilot")
 BRANCH = "pm/autopilot-local"
 
 
@@ -66,29 +67,34 @@ def load_json(path: Path, default: Any = None) -> Any:
 
 
 def write_json(path: Path, data: Any) -> None:
-    backlog_sync.atomic_write(path, (json.dumps(data, ensure_ascii=False, indent=2) + "\n").encode())
+    # The Autopilot status and Owner metadata are also shared Publisher evidence.
+    # A lease loser must not overwrite them; a nested planner launch borrows
+    # the same validated thread-local lease.
+    with writer_bridge.bridge_section():
+        backlog_sync.atomic_write(path, (json.dumps(data, ensure_ascii=False, indent=2) + "\n").encode())
 
 
 def durable_create_notice(path: Path, payload: dict[str, Any]) -> None:
     """Publish a complete fsynced notice with create-once semantics."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temp = tempfile.mkstemp(prefix=".notice-", dir=path.parent)
-    try:
-        with os.fdopen(fd, "wb") as fp:
-            fp.write((json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode())
-            fp.flush()
-            os.fsync(fp.fileno())
+    with writer_bridge.bridge_section():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, temp = tempfile.mkstemp(prefix=".notice-", dir=path.parent)
         try:
-            os.link(temp, path)
-        except FileExistsError:
-            pass
-        parent = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(parent)
+            with os.fdopen(fd, "wb") as fp:
+                fp.write((json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode())
+                fp.flush()
+                os.fsync(fp.fileno())
+            try:
+                os.link(temp, path)
+            except FileExistsError:
+                pass
+            parent = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(parent)
+            finally:
+                os.close(parent)
         finally:
-            os.close(parent)
-    finally:
-        os.unlink(temp)
+            os.unlink(temp)
 
 
 # Delivery/ack is not completion. Keep NEW + ACKNOWLEDGED actionable for the planner
@@ -258,30 +264,12 @@ class SingleInstanceLock:
 
 
 def completed_ids(state: dict[str, Any]) -> set[str]:
-    terminal_statuses = {"completed", "qa_failed", "qa_blocked", "blocked"}
-    return {
-        str(item.get("id"))
-        for item in state.get("history") or []
-        if isinstance(item, dict)
-        and item.get("status") in terminal_statuses
-        and item.get("id")
-    }
+    return runner.completed_ids(state)
 
 
 def pending_tasks(backlog: dict[str, Any], state: dict[str, Any]) -> list[dict[str, Any]]:
-    done = completed_ids(state)
-    tasks = []
-    for task in backlog.get("tasks") or []:
-        if not isinstance(task, dict):
-            continue
-        if task.get("status", "queued") != "queued":
-            continue
-        if task.get("enabled") is False:
-            continue
-        if str(task.get("id")) in done:
-            continue
-        tasks.append(task)
-    return sorted(tasks, key=lambda item: float(item.get("order", 10**9)))
+    return runner.pending_tasks(backlog, state)
+
 
 
 def planning_input_key(backlog, state, sync_result, owner_items=()):
@@ -293,11 +281,69 @@ def planning_input_key(backlog, state, sync_result, owner_items=()):
             receipts[task['id']] = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
     inputs = {'backlog': backlog, 'canonical_commit': sync_result.get('canonical_commit'),
               'history': [(h.get('id'), h.get('status'), h.get('verdict')) for h in state.get('history', [])],
-              'active': sorted((c['id'], tuple(c.get('locks') or ['global'])) for c in runner.active_claims(state)),
+              # Task claims are handled by Runner; no expensive PM replan on active-slot churn.
+              'active': [],
               'gates': [state.get(k) for k in ('paused', 'blocked', 'global_gates', 'project_global_blocker')],
               'receipts': receipts,
               'owner': [{k: item.get(k) for k in ('id', 'origin', 'text', 'payload')} for item in owner_items]}
     return hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
+
+
+def budget_owner_waiting_qa(owner_items, backlog, state):
+    """No LLM while the prior exact Owner-admitted producer awaits its own QA.
+
+    This is a read-only budget wait hint, NEVER a positive permission or QA verdict.
+    New independent Owner instructions are not swallowed by an older wait.
+    """
+    if not owner_items or not all(isinstance(item.get("budget_wait_for_qa"), list)
+                                  for item in owner_items):
+        return []
+    sync = load_json(ROOT / "backlog-sync-state.json", {}) or {}
+    if sync.get("status") != "IN_SYNC":
+        return []
+    tasks = runner._v2_task_map(backlog)
+    wait = []
+    for item in owner_items:
+        if sync.get("canonical_commit") != item.get("budget_bound_main"):
+            return []
+        ids = item.get("budget_wait_for_qa") or []
+        if not ids:
+            return []
+        for qid in ids:
+            task = tasks.get(qid) if isinstance(qid, str) else None
+            if not isinstance(task, dict) or not qid.startswith("qa-") or task.get("enabled") is not True:
+                return []
+            terminal = runner._v2_history_status(state, qid)
+            if terminal in {"completed", "qa_failed", "qa_blocked", "blocked", "deferred"}:
+                return []
+            wait.append(qid)
+    return sorted(set(wait))
+
+
+def budget_record_new_qa_wait(owner_items, receipt):
+    """Record a proposed QA wait, usable only after exact canonical sync proof."""
+    if not isinstance(receipt, dict) or receipt.get("action") not in {
+            "enqueued", "merged_and_enqueued"}:
+        return
+    sha = str(receipt.get("result_commit") or "")
+    ids = receipt.get("task_ids") or []
+    if len(sha) != 40 or not isinstance(ids, list) or not ids:
+        return
+    qa = [name for name in ids if isinstance(name, str) and name.startswith("qa-")]
+    if not qa:
+        return
+    for item in owner_items:
+        path_text = item.get("_path") if isinstance(item, dict) else None
+        if not path_text:
+            continue
+        path = Path(str(path_text))
+        current = load_json(path, {}) or {}
+        if not isinstance(current, dict) or current.get("id") != item.get("id"):
+            continue
+        current["budget_wait_for_qa"] = qa
+        current["budget_bound_main"] = sha
+        current["budget_pending_reason"] = "Wait for exact new independent QA terminal evidence; no PM Codex polling"
+        write_json(path, current)
 
 
 def approved_source_opportunity(backlog, state, cfg):
@@ -424,7 +470,7 @@ def run(cmd: list[str], cwd: Path | None = None, timeout: int = 120) -> subproce
 def ensure_worktree(cfg: dict[str, Any]) -> tuple[bool, str]:
     primary = Path(str(cfg["workspace"]))
     remote = run(["git", "remote", "get-url", "origin"], cwd=primary, timeout=15)
-    if remote.returncode or remote.stdout.strip() != "git@github-gobadminton:anpavel84-afk/gobadminton.git":
+    if remote.returncode or remote.stdout.strip() != "git@github-gobadminton-clean:anpavel84-afk/gobadminton-clean.git":
         return False, "planner remote is not verified GoBadminton repository-specific SSH identity"
     author = run(["git", "var", "GIT_AUTHOR_IDENT"], cwd=primary, timeout=15)
     if author.returncode or not author.stdout.strip():
@@ -461,6 +507,9 @@ def build_prompt(
     *,
     active_admission_only: bool = False,
 ) -> str:
+    if cfg.get('autopilot_budget_mode') == 'compact':
+        from compact_pm_brief import render
+        return render(owner_items, active_admission_only)
     runtime = str(ROOT)
     if owner_items is None:
         owner_items = pending_owner_instructions()
@@ -664,6 +713,11 @@ def launch_planner(
     *,
     active_admission_only: bool = False,
 ) -> tuple[bool, str, dict[str, Any] | None]:
+    try:
+        with writer_bridge.bridge_section():
+            pass  # Validate epoch before setup; native pre-push revalidates delta.
+    except writer_bridge.BridgeHold as exc:
+        return False, str(exc), None
     prior = load_json(AUTOPILOT_STATE_PATH, {}) or {}
     if pid_alive(prior.get("planner_pid")):
         return False, "existing planner PID still alive; publication reconciliation required", None
@@ -671,12 +725,8 @@ def launch_planner(
     if not ok:
         return False, reason, None
 
-    try:
-        if AUTOPILOT_RECEIPT_PATH.exists():
-            AUTOPILOT_RECEIPT_PATH.unlink()
-    except OSError:
-        pass
-
+    # A failed later lease revalidation must preserve an existing receipt.
+    # Remove the prior receipt only inside the actual authoritative spawn lease.
     try:
         publication_env = planner_publication_environment(active_admission_only)
     except (OSError, ValueError, RuntimeError) as exc:
@@ -726,35 +776,60 @@ def launch_planner(
 
     stdout = (ROOT / "autopilot-agent.stdout.log").open("a", encoding="utf-8")
     stderr = (ROOT / "autopilot-agent.stderr.log").open("a", encoding="utf-8")
-    proc = subprocess.Popen(
-        cmd,
-        cwd=str(WORKTREE),
-        stdin=subprocess.DEVNULL,
-        stdout=stdout,
-        stderr=stderr,
-        creationflags=creationflags,
-        start_new_session=True,
-        env={
-            **publication_env,
-            "PATH": ":".join([
-                str(cfg.get("node_bin") or ""),
-                str(cfg.get("local_bin") or ""),
-                os.environ.get("PATH", ""),
-            ]),
-        },
-    )
+    try:
+        # Recheck the exact pinned epoch at the actual planner spawn boundary.
+        # No model run, job claim or network operation occurs under this lease.
+        with writer_bridge.bridge_section():
+            try:
+                if AUTOPILOT_RECEIPT_PATH.exists():
+                    AUTOPILOT_RECEIPT_PATH.unlink()
+            except OSError:
+                pass
+            proc = subprocess.Popen(
+                cmd,
+                cwd=str(WORKTREE),
+                stdin=subprocess.DEVNULL,
+                stdout=stdout,
+                stderr=stderr,
+                creationflags=creationflags,
+                start_new_session=True,
+                env={
+                    **publication_env,
+                    "PATH": ":".join([
+                        str(cfg.get("node_bin") or ""),
+                        str(cfg.get("local_bin") or ""),
+                        os.environ.get("PATH", ""),
+                    ]),
+                },
+            )
 
-    ap_state = load_json(AUTOPILOT_STATE_PATH, {}) or {}
-    ap_state.update({
-        "planner_pid": proc.pid,
-        "planner_started_at": utc_now(),
-        "status": "planning",
-    })
-    write_json(AUTOPILOT_STATE_PATH, ap_state)
+            ap_state = load_json(AUTOPILOT_STATE_PATH, {}) or {}
+            ap_state.update({
+                "planner_pid": proc.pid,
+                "planner_started_at": utc_now(),
+                "status": "planning",
+            })
+            write_json(AUTOPILOT_STATE_PATH, ap_state)
+    except writer_bridge.BridgeHold as exc:
+        # If the epoch was revoked during spawn, do not leave a detached PM
+        # planner running or report planning after a denied authority.
+        if 'proc' in locals():
+            try:
+                proc.terminate()
+            except (OSError, AttributeError):
+                pass
+            # Also terminate any detached descendants from this *newly* denied
+            # planner group; never affect already-running Runner workers.
+            cleanup_planner_process_group(getattr(proc, "pid", None))
+        stdout.close()
+        stderr.close()
+        return False, str(exc), None
     log(f"planner started pid={proc.pid} executor={planner_executor}")
 
     try:
-        rc = proc.wait(timeout=PLANNER_TIMEOUT_SECONDS)
+        # Cost brake: one bounded compact cycle, not a 30-minute PM loop.
+        limit = min(PLANNER_TIMEOUT_SECONDS, 600) if cfg.get('autopilot_budget_mode') == 'compact' else PLANNER_TIMEOUT_SECONDS
+        rc = proc.wait(timeout=limit)
     except subprocess.TimeoutExpired:
         proc.terminate()
         try:
@@ -824,7 +899,7 @@ def _verify_planner_publication(
         return False, "reported result_commit is not an ancestor of canonical main"
     baseline = str(backlog_before.get("_canonical_commit") or "")
     if (not backlog_sync.FULL_GITHUB_SOURCE.fullmatch(
-            f"https://github.com/anpavel84-afk/gobadminton/blob/{baseline}/baseline")
+            f"https://github.com/anpavel84-afk/gobadminton-clean/blob/{baseline}/baseline")
             or baseline == code
             or run(["git", "merge-base", "--is-ancestor", baseline, code],
                    cwd=repo, timeout=20).returncode != 0):
@@ -948,95 +1023,52 @@ def verify_planner_publication(cfg, receipt, sync_result, backlog_before, backlo
 
 
 def recovery_tick(cfg, backlog, state, ap_state):
-    """One bounded intake cycle; return True when it owns this tick's hold."""
+    """Observe existing recovery; retry verification, never dispatch/publication."""
     try:
-        rows = queue_recovery.classify(backlog, state, cfg)
-        ap_state["queue_classification"] = rows
+        # Corrupt shared state is a project-wide writer-integrity boundary,
+        # not a lane-local QA failure. Do not resume Owner processing before
+        # validating the same strict terminal history accepted by Runner.
+        backlog_sync.validate_history(state.get("history"))
         ledger = queue_recovery.observe(ROOT, backlog, state, pid_alive)
         ap_state["qa_recovery_actions"] = {key: {k: entry.get(k) for k in
-            ("status", "attempt", "reason", "task_ids", "claim_pid")} for key, entry in ledger["actions"].items()}
-        failures = sorted({dep for row in rows if row["status"] == "TERMINAL_QA_DEPENDENCY"
-                           for dep in row["failed_qa_ids"]} | {
-                           entry["terminal_qa"] for entry in ledger["actions"].values()
-                           if entry.get("terminal_qa") and runner._v2_history_status(state, entry["terminal_qa"]) in {"qa_failed", "qa_blocked"}})
+            ("status", "attempt", "reason", "task_ids", "claim_pid")}
+            for key, entry in ledger["actions"].items()}
+        selected, waits = runner.select_runnable_tasks(backlog, state, cfg)
+        ap_state["queue_classification"] = runner.queue_eligibility(backlog, state, cfg)
         if state.get("global_gates") or state.get("project_global_blocker"):
-            ap_state.update(status="STOPPED_SAFE", hold_reason="WAITING_OWNER_RELEASE: true project global safety gate", owner_item="Owner gate disposition")
+            ap_state.update(status="STOPPED_SAFE", hold_reason="WAITING_OWNER_RELEASE: true project global safety gate")
             return True
-        # An admitted safe task always goes to the existing Runner; PM does not
-        # acquire its domain lock or launch another executor.
-        if any(row["status"] == "READY" for row in rows):
-            if failures:
-                ap_state.update(status="runner_ready", hold_reason="existing Runner has independently runnable work")
-                return True
-            return False
-        if not failures:
-            return False
-        entries = []
-        for qa_id in failures:
-            qa_task = runner._v2_task_map(backlog)[qa_id]
-            # Fresh producer publication observation, never cached remote alone.
-            runner.refresh_qa_candidate_refs(backlog, state, cfg, qa_tasks=[qa_task])
-            evidence = queue_recovery.failure_evidence(qa_id, backlog, state)
-            entry, notice = queue_recovery.prepare(ROOT, evidence, durable_create_notice)
-            entries.append((entry, notice))
-        for entry, notice in entries:
-            if entry["status"] in {"ADMITTED", "RUNNING", "CLOSED"}:
+        for entry in ledger["actions"].values():
+            if entry.get("status") not in {"DISPATCH_RESERVED", "HOLD"}:
                 continue
-            if entry["status"] in {"DISPATCH_RESERVED", "HOLD"}:
-                previous = load_json(AUTOPILOT_RECEIPT_PATH, {}) or {}
-                if entry.get("baseline") and previous.get("recovery_key") == entry["key"]:
-                    result = backlog_sync.sync_once(Path(str(cfg["workspace"])), ROOT)
-                    after = load_json(BACKLOG_PATH, {}) or {}
-                    verified, reason = verify_planner_publication(cfg, previous, result,
-                        entry["baseline"], after, [notice], active_admission_only=True)
-                    if verified:
-                        ids = queue_recovery.validate_pair(entry, entry["baseline"], after, previous, state)
-                        queue_recovery.finish(ROOT, entry["key"], "ADMITTED", task_ids=ids,
-                            publication_commit=previous["result_commit"], reason="restart publication reconciled; awaiting claim PID")
-                        ap_state.update(status="qa_recovery_admitted", backlog_sync=result)
-                        return True
-                ap_state.update(status="STOPPED_SAFE", hold_reason=entry.get("reason"), owner_item=notice["id"])
-                continue  # never replay an interrupted expensive dispatch
-            busy, reason = any_gobadminton_cursor_active()
-            if busy:
-                ap_state.update(status="recovery_waiting_writer", hold_reason=reason)
-                continue
-            before = json.loads(json.dumps(backlog))
-            before["_canonical_commit"] = (ap_state.get("backlog_sync") or {}).get("canonical_commit", "")
-            reserved = queue_recovery.reserve(ROOT, entry["key"], baseline=before)
-            if reserved is None:
-                continue
-            ap_state.update(status="qa_recovery_planning", last_plan_at=utc_now(), recovery_key=entry["key"])
-            write_json(AUTOPILOT_STATE_PATH, ap_state)
-            log(f"QA recovery dispatch key={entry['key']} attempt={reserved['attempt']}")
-            try:
-                ok, summary, receipt = launch_planner(cfg, owner_items=[notice], active_admission_only=True)
-                if (not ok or not isinstance(receipt, dict) or receipt.get("action") != "enqueued"
-                        or receipt.get("recovery_key") != entry["key"]):
-                    raise queue_recovery.RecoveryHold(summary or "source repair not published")
+            previous = load_json(AUTOPILOT_RECEIPT_PATH, {}) or {}
+            if entry.get("baseline") and previous.get("recovery_key") == entry["key"]:
+                notice = load_json(ROOT / "owner-inbox" / (entry["notice_id"] + ".json"), {}) or {}
+                if notice.get("id") != entry["notice_id"]:
+                    raise queue_recovery.RecoveryHold("existing recovery notice unavailable")
                 result = backlog_sync.sync_once(Path(str(cfg["workspace"])), ROOT)
                 after = load_json(BACKLOG_PATH, {}) or {}
-                verified, reason = verify_planner_publication(
-                    cfg, receipt, result, before, after, [notice], active_admission_only=True)
-                if not verified:
-                    raise queue_recovery.RecoveryHold(reason)
-                ids = queue_recovery.validate_pair(reserved, backlog, after, receipt,
-                                                   load_json(RUNNER_STATE_PATH, {}) or {})
-                queue_recovery.finish(ROOT, entry["key"], "ADMITTED", task_ids=ids,
-                    publication_commit=receipt["result_commit"], reason="main/parity/new pair verified; awaiting real claim PID")
-                ap_state.update(status="qa_recovery_admitted", last_result=summary, backlog_sync=result)
-            except Exception as exc:
-                reason = f"publication unverified: {type(exc).__name__}: {exc}"
-                queue_recovery.finish(ROOT, entry["key"], "HOLD", reason=reason)
-                ap_state.update(status="STOPPED_SAFE", hold_reason=reason, owner_item=notice["id"])
-            ap_state.update(last_plan_finished_at=utc_now(), planner_pid=None)
-            return True  # at most one immediate pair per cycle
-        if ap_state.get("status") not in {"STOPPED_SAFE", "recovery_waiting_writer"}:
-            ap_state.update(status="qa_recovery_waiting", hold_reason="recovery pair pending; downstream stays gated")
-        return True
+                verified, reason = verify_planner_publication(cfg, previous, result,
+                    entry["baseline"], after, [notice], active_admission_only=True)
+                if verified:
+                    ids = queue_recovery.validate_pair(entry, entry["baseline"], after, previous, state)
+                    queue_recovery.finish(ROOT, entry["key"], "ADMITTED", task_ids=ids,
+                        publication_commit=previous["result_commit"], reason="restart publication reconciled; awaiting claim PID")
+                    ap_state.update(status="qa_recovery_admitted", backlog_sync=result)
+                    return False
+                ap_state.update(status="STOPPED_SAFE", hold_reason=reason)
+            else:
+                ap_state.update(status="STOPPED_SAFE", hold_reason=entry.get("reason") or "existing recovery publication unverified")
+            if selected:
+                ap_state.update(status="runner_ready", local_holds=waits[:10])
+                return False
+            return True
+        ap_state.update(status="runner_ready" if selected else "NO_ELIGIBLE_WORK",
+                        hold_reason="existing admitted work" if selected else "no eligible current task",
+                        local_holds=waits[:10])
+        return False
     except Exception as exc:
-        ap_state.update(status="STOPPED_SAFE", hold_reason=f"recovery evidence unavailable: {type(exc).__name__}: {exc}",
-                        owner_item="PM verify immutable QA/source/trust evidence")
+        ap_state.update(status="STOPPED_SAFE", hold_reason=f"recovery evidence unavailable: {type(exc).__name__}: {exc}")
         return True
 
 
@@ -1099,6 +1131,28 @@ def main() -> int:
                     if notices:
                         ap_state["admission_reconcile_notices"] = notices
 
+            # Shared timer owns a separate verified backlog sync. An ordinary
+            # advisory lock collision must not deadlock PM while the timer has
+            # already published a RECENT identical GitHub/runtime checksum.
+            if cfg.get("autopilot_budget_mode") == "compact":
+                current = ap_state.get("backlog_sync") or {}
+                if (current.get("status") == "BLOCKED"
+                        and current.get("reason") == "another backlog reconciler owns the lock"):
+                    peer = load_json(ROOT / "backlog-sync-state.json", {}) or {}
+                    try:
+                        checked = datetime.fromisoformat(str(peer.get("checked_at"))).timestamp()
+                        age = now - checked
+                    except (TypeError, ValueError, OverflowError):
+                        age = float("inf")
+                    if (peer.get("status") == "IN_SYNC"
+                            and 0 <= age <= 180
+                            and peer.get("canonical_blob")
+                            and peer.get("canonical_blob") == peer.get("runtime_blob")
+                            and peer.get("admission_drift") == []
+                            and len(str(peer.get("canonical_commit") or "")) == 40):
+                        ap_state["backlog_sync"] = peer
+                        ap_state["last_backlog_sync_epoch"] = now
+                        log("budget mode: reused fresh independently verified canonical backlog sync")
             if (ap_state.get("backlog_sync") or {}).get("status") == "BLOCKED":
                 ap_state["status"] = "canonical_backlog_blocked"
                 write_json(AUTOPILOT_STATE_PATH, ap_state)
@@ -1128,6 +1182,14 @@ def main() -> int:
             active = runner.active_claims(runner._v2_migrate_state(runner_state))
             current = runner_state.get("current") or (active[0] if active else {})
             if owner_items:
+                if cfg.get("autopilot_budget_mode") == "compact":
+                    waiting_qa = budget_owner_waiting_qa(owner_items, backlog, runner_state)
+                    if waiting_qa:
+                        ap_state["status"] = "budget_wait_for_exact_qa_no_llm"
+                        ap_state["budget_pending_qa"] = waiting_qa
+                        write_json(AUTOPILOT_STATE_PATH, ap_state)
+                        wait_for_wake(ACTIVE_POLL_SECONDS)
+                        continue
                 before_owner_backlog = json.loads(json.dumps(backlog))
                 before_owner_backlog["_canonical_commit"] = str(
                     (ap_state.get("backlog_sync") or {}).get("canonical_commit") or ""
@@ -1173,6 +1235,8 @@ def main() -> int:
                     "last_owner_input_key": owner_key,
                 })
                 action = receipt.get("action") if isinstance(receipt, dict) else None
+                if cfg.get("autopilot_budget_mode") == "compact" and ok:
+                    budget_record_new_qa_wait(owner_items, receipt)
                 publication_ok = False
                 if ok and action != "no_safe_action":
                     result = backlog_sync.sync_once(Path(str(cfg["workspace"])), ROOT)
