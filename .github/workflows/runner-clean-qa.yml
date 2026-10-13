@@ -57,3 +57,49 @@ jobs:
           python -m unittest -v             test_clean_git_binding_20261013             test_friends_dag_auto_advance_v001             test_qa23001_protected_job_identity_v001 test_qa_pr11_git_alias_v001 test_qa_pr11_compact_capsule_v001 test_qa_pr11_sandbox_control_r3_v001
       - name: Clean Owner Issue intake and Codex confinement
         run: python -m unittest -v test_clean_issue_commissioning_v001
+
+  candidate-dev-source-checks:
+    name: Exact clean candidate ${{ matrix.candidate }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - candidate: radar-map-pr19
+            commit: f3b08bedfd68b4782a231a6f16410d74810bb994
+            package: web
+            focused_test: src/lib/radar-map-assets.test.ts
+          - candidate: friends-api-pr20
+            commit: 08a68a2b5ae861f22e7d440a01e32d14496a68fe
+            package: api
+            focused_test: test/unit/friendships.test.ts
+    steps:
+      - name: Checkout exact immutable candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.commit }}
+          persist-credentials: false
+      - name: Verify candidate pin
+        run: test "$(git rev-parse HEAD)" = "${{ matrix.commit }}"
+      - name: Node 24.21.0
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.21.0
+      - name: pnpm 10.18.0
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.18.0 --activate
+          node --version
+          pnpm --version
+      - name: Install pinned clean dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Check contracts, types and focused tests
+        run: |
+          pnpm --filter @gobadminton/contracts run check
+          pnpm --filter "@gobadminton/${{ matrix.package }}" run typecheck
+          pnpm --filter "@gobadminton/${{ matrix.package }}" exec vitest run "${{ matrix.focused_test }}"
+      - name: Source-only marker
+        run: |
+          echo "SOURCE_TESTED_ONLY=${{ matrix.commit }}"
+          echo "INDEPENDENT_QA=NOT_RUN DEV_DEPLOY=NOT_RUN PROD_DEPLOY=NOT_RUN"
