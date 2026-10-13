@@ -97,6 +97,11 @@ export const envSchema = z
     YANDEX_CLIENT_ID: z.string().optional(),
     YANDEX_CLIENT_SECRET: z.string().optional(),
     YANDEX_REDIRECT_URI: z.string().url().optional().or(z.literal("")),
+    FRIENDS_INTERNAL_ENABLED: z.enum(["0", "1"]).default("0"),
+    FRIENDS_REQUEST_TTL_SECONDS: z.coerce.number().int().positive().safe().optional(),
+    FRIENDS_RATE_WINDOW_SECONDS: z.coerce.number().int().positive().safe().optional(),
+    FRIENDS_SEND_LIMIT: z.coerce.number().int().positive().max(2147483647).optional(),
+    FRIENDS_RECEIVE_LIMIT: z.coerce.number().int().positive().max(2147483647).optional(),
     SOCIAL_DIRECTORY_ENABLED: z
       .enum(["0", "1", "true", "false"])
       .optional()
@@ -273,6 +278,11 @@ export const envSchema = z
       YANDEX_CLIENT_ID: optionalNonEmpty(raw.YANDEX_CLIENT_ID),
       YANDEX_CLIENT_SECRET: optionalNonEmpty(raw.YANDEX_CLIENT_SECRET),
       YANDEX_REDIRECT_URI: optionalNonEmpty(raw.YANDEX_REDIRECT_URI),
+      FRIENDS_INTERNAL_ENABLED: raw.FRIENDS_INTERNAL_ENABLED === "1",
+      FRIENDS_REQUEST_TTL_SECONDS: raw.FRIENDS_REQUEST_TTL_SECONDS,
+      FRIENDS_RATE_WINDOW_SECONDS: raw.FRIENDS_RATE_WINDOW_SECONDS,
+      FRIENDS_SEND_LIMIT: raw.FRIENDS_SEND_LIMIT,
+      FRIENDS_RECEIVE_LIMIT: raw.FRIENDS_RECEIVE_LIMIT,
       SOCIAL_DIRECTORY_ENABLED: raw.SOCIAL_DIRECTORY_ENABLED ?? false,
       RADAR_DEV_MAP_PREVIEW_ENABLED: raw.RADAR_DEV_MAP_PREVIEW_ENABLED === "1",
       RADAR_DEV_MAP_PREVIEW_VERSION: raw.RADAR_DEV_MAP_PREVIEW_VERSION,

@@ -1,3 +1,4 @@
+import "./generate-friendship-types.mjs";
 import "./check-admin-protocol.mjs";
 import "./generate-game-types.mjs";
 import "./generate-unified-types.mjs";

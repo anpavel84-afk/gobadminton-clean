@@ -21,3 +21,6 @@ export const foundationPaths = ["/health", "/ready", "/meta"] as const;
 export type * from "./unified.generated.js";
 
 export type * from "./game.generated.js";
+
+export type { FriendshipView, FriendshipReceipt, FriendshipCreateRequest, FriendshipDecisionRequest,
+  FriendshipList, FriendshipStates, SocialCapabilities } from "./friendship.generated.js";
