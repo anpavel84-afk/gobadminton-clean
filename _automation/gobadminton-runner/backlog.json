@@ -10,5 +10,270 @@
     "stop_on_blocked": true,
     "max_repair_attempts": 3
   },
-  "tasks": []
+  "tasks": [
+    {
+      "id": "friends-dev-s1-api-20261013-v001",
+      "order": 10,
+      "status": "queued",
+      "enabled": false,
+      "source": "https://github.com/anpavel84-afk/gobadminton-clean/blob/09408233f0720576af8d68a0fad3e65c84f30916/docs/assignments/20261013/friends-s1-api.md",
+      "admission": "https://github.com/anpavel84-afk/gobadminton-clean/blob/09408233f0720576af8d68a0fad3e65c84f30916/docs/assignments/20261013/owner-clean-dev-batch.md",
+      "scope": "Friends API schema, privacy, lifecycle, contracts, unit/integration tests",
+      "title_ru": "Друзья: серверная часть и запросы",
+      "summary_ru": "Разработка только в исходниках clean Git; независимая QA перед DEV.",
+      "lane": "implementation",
+      "executor": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "medium",
+      "sandbox": "workspace",
+      "effect_ceiling": "source_only",
+      "locks": [
+        "api",
+        "db"
+      ],
+      "base_sha": "16ab3e2a9740377dca32908d3f210f23a54d2261",
+      "notes": "Owner Issue #12; DEV-only; no PROD or old Runner; exact Git Writer publication and independent QA required",
+      "blocks": [
+        {
+          "id": "b1",
+          "title": "Exact clean main + accepted legacy code review"
+        },
+        {
+          "id": "b2",
+          "title": "Additive migration and friendship data contracts"
+        },
+        {
+          "id": "b3",
+          "title": "Request/accept/decline/cancel/unfriend service"
+        },
+        {
+          "id": "b4",
+          "title": "Privacy, idempotency, concurrency tests"
+        },
+        {
+          "id": "b5",
+          "title": "Publish immutable source candidate and receipt"
+        }
+      ]
+    },
+    {
+      "id": "qa-friends-dev-s1-api-20261013-v001",
+      "order": 20,
+      "status": "queued",
+      "enabled": false,
+      "source": "https://github.com/anpavel84-afk/gobadminton-clean/blob/09408233f0720576af8d68a0fad3e65c84f30916/docs/assignments/20261013/qa-friends-s1-api.md",
+      "admission": "https://github.com/anpavel84-afk/gobadminton-clean/blob/09408233f0720576af8d68a0fad3e65c84f30916/docs/assignments/20261013/owner-clean-dev-batch.md",
+      "scope": "QA: безопасность API друзей",
+      "title_ru": "QA: безопасность API друзей",
+      "summary_ru": "Независимая проверка exact SHA; только read-only, без выдачи собственной root QA подписи.",
+      "lane": "qa",
+      "executor": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "high",
+      "sandbox": "read-only",
+      "effect_ceiling": "source_only",
+      "locks": [
+        "api",
+        "db"
+      ],
+      "depends_on_completed": [
+        "friends-dev-s1-api-20261013-v001"
+      ],
+      "source_qa": {
+        "producer_task_id": "friends-dev-s1-api-20261013-v001",
+        "suite_id": "friends-s1-germany-dev-privacy-v001"
+      },
+      "notes": "Owner Issue #12; exact producer SHA and trusted root policy; FAIL closed if missing",
+      "blocks": [
+        {
+          "id": "pin",
+          "title": "Verify candidate and independent identity"
+        },
+        {
+          "id": "tests",
+          "title": "Run scoped security and product tests"
+        },
+        {
+          "id": "verdict",
+          "title": "Write immutable QA verdict and guarded handoff"
+        }
+      ]
+    },
+    {
+      "id": "radar-dev-map-ui-20261013-v001",
+      "order": 30,
+      "status": "queued",
+      "enabled": false,
+      "source": "https://github.com/anpavel84-afk/gobadminton-clean/blob/09408233f0720576af8d68a0fad3e65c84f30916/docs/assignments/20261013/radar-map-ui.md",
+      "admission": "https://github.com/anpavel84-afk/gobadminton-clean/blob/09408233f0720576af8d68a0fad3e65c84f30916/docs/assignments/20261013/owner-clean-dev-batch.md",
+      "scope": "Radar DEV map button, local PMTiles/MapLibre rendering, venues and consent-gated people",
+      "title_ru": "Radar: настоящая карта, площадки и участники",
+      "summary_ru": "Разработка только в исходниках clean Git; независимая QA перед DEV.",
+      "lane": "implementation",
+      "executor": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "medium",
+      "sandbox": "workspace",
+      "effect_ceiling": "source_only",
+      "locks": [
+        "web",
+        "map"
+      ],
+      "base_sha": "16ab3e2a9740377dca32908d3f210f23a54d2261",
+      "notes": "Owner Issue #13; DEV-only; no PROD or old Runner; exact Git Writer publication and independent QA required",
+      "blocks": [
+        {
+          "id": "b1",
+          "title": "Visible accessible map/list control"
+        },
+        {
+          "id": "b2",
+          "title": "Bind Germany DEV approved local style/assets"
+        },
+        {
+          "id": "b3",
+          "title": "Render venues from DEV PostGIS public location"
+        },
+        {
+          "id": "b4",
+          "title": "Render opted-in, valid Radar people only"
+        },
+        {
+          "id": "b5",
+          "title": "Responsive tests and candidate receipt"
+        }
+      ]
+    },
+    {
+      "id": "qa-radar-dev-map-ui-20261013-v001",
+      "order": 40,
+      "status": "queued",
+      "enabled": false,
+      "source": "https://github.com/anpavel84-afk/gobadminton-clean/blob/09408233f0720576af8d68a0fad3e65c84f30916/docs/assignments/20261013/qa-radar-map-ui.md",
+      "admission": "https://github.com/anpavel84-afk/gobadminton-clean/blob/09408233f0720576af8d68a0fad3e65c84f30916/docs/assignments/20261013/owner-clean-dev-batch.md",
+      "scope": "QA: карта и приватность Radar",
+      "title_ru": "QA: карта и приватность Radar",
+      "summary_ru": "Независимая проверка exact SHA; только read-only, без выдачи собственной root QA подписи.",
+      "lane": "qa",
+      "executor": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "high",
+      "sandbox": "read-only",
+      "effect_ceiling": "source_only",
+      "locks": [
+        "web",
+        "map"
+      ],
+      "depends_on_completed": [
+        "radar-dev-map-ui-20261013-v001"
+      ],
+      "source_qa": {
+        "producer_task_id": "radar-dev-map-ui-20261013-v001",
+        "suite_id": "radar-map-germany-dev-privacy-v001"
+      },
+      "notes": "Owner Issue #13; exact producer SHA and trusted root policy; FAIL closed if missing",
+      "blocks": [
+        {
+          "id": "pin",
+          "title": "Verify candidate and independent identity"
+        },
+        {
+          "id": "tests",
+          "title": "Run scoped security and product tests"
+        },
+        {
+          "id": "verdict",
+          "title": "Write immutable QA verdict and guarded handoff"
+        }
+      ]
+    },
+    {
+      "id": "avatar-created-games-ui-20261013-v001",
+      "order": 50,
+      "status": "queued",
+      "enabled": false,
+      "source": "https://github.com/anpavel84-afk/gobadminton-clean/blob/09408233f0720576af8d68a0fad3e65c84f30916/docs/assignments/20261013/avatar-created-games.md",
+      "admission": "https://github.com/anpavel84-afk/gobadminton-clean/blob/09408233f0720576af8d68a0fad3e65c84f30916/docs/assignments/20261013/owner-clean-dev-batch.md",
+      "scope": "Resolve safe organizer avatars for Created/My Games, tests and cache invalidation",
+      "title_ru": "Фото создателя в карточках игр",
+      "summary_ru": "Разработка только в исходниках clean Git; независимая QA перед DEV.",
+      "lane": "implementation",
+      "executor": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "medium",
+      "sandbox": "workspace",
+      "effect_ceiling": "source_only",
+      "locks": [
+        "web",
+        "api"
+      ],
+      "base_sha": "16ab3e2a9740377dca32908d3f210f23a54d2261",
+      "notes": "Owner Issue #15; DEV-only; no PROD or old Runner; exact Git Writer publication and independent QA required",
+      "blocks": [
+        {
+          "id": "b1",
+          "title": "Inspect creator-vs-manager authorization"
+        },
+        {
+          "id": "b2",
+          "title": "Expose public-safe organizer avatar projection"
+        },
+        {
+          "id": "b3",
+          "title": "Render image with fallback initials in games"
+        },
+        {
+          "id": "b4",
+          "title": "Update/removal/cache and privacy tests"
+        },
+        {
+          "id": "b5",
+          "title": "Publish exact source candidate and receipt"
+        }
+      ]
+    },
+    {
+      "id": "qa-avatar-created-games-ui-20261013-v001",
+      "order": 60,
+      "status": "queued",
+      "enabled": false,
+      "source": "https://github.com/anpavel84-afk/gobadminton-clean/blob/09408233f0720576af8d68a0fad3e65c84f30916/docs/assignments/20261013/qa-avatar-created-games.md",
+      "admission": "https://github.com/anpavel84-afk/gobadminton-clean/blob/09408233f0720576af8d68a0fad3e65c84f30916/docs/assignments/20261013/owner-clean-dev-batch.md",
+      "scope": "QA: аватар создателя игры",
+      "title_ru": "QA: аватар создателя игры",
+      "summary_ru": "Независимая проверка exact SHA; только read-only, без выдачи собственной root QA подписи.",
+      "lane": "qa",
+      "executor": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "high",
+      "sandbox": "read-only",
+      "effect_ceiling": "source_only",
+      "locks": [
+        "web",
+        "api"
+      ],
+      "depends_on_completed": [
+        "avatar-created-games-ui-20261013-v001"
+      ],
+      "source_qa": {
+        "producer_task_id": "avatar-created-games-ui-20261013-v001",
+        "suite_id": "created-games-avatar-privacy-v001"
+      },
+      "notes": "Owner Issue #15; exact producer SHA and trusted root policy; FAIL closed if missing",
+      "blocks": [
+        {
+          "id": "pin",
+          "title": "Verify candidate and independent identity"
+        },
+        {
+          "id": "tests",
+          "title": "Run scoped security and product tests"
+        },
+        {
+          "id": "verdict",
+          "title": "Write immutable QA verdict and guarded handoff"
+        }
+      ]
+    }
+  ]
 }
