@@ -158,8 +158,23 @@ def fetch_public_comment_pages(opener=urllib.request.urlopen):
 
 def write_unique(inbox: Path, record: dict) -> bool:
     """Never rewrite/overwrite an existing source event or planner disposition."""
+    if not inbox.exists():
+        if inbox.is_symlink():
+            raise IntakeHold("Owner inbox is an unexpected symlink")
+        parent = inbox.parent
+        try:
+            proof = parent.lstat()
+        except OSError as exc:
+            raise IntakeHold("Runner control directory absent") from exc
+        if (not stat.S_ISDIR(proof.st_mode) or proof.st_uid != os.getuid()
+                or stat.S_IMODE(proof.st_mode) & 0o077):
+            raise IntakeHold("Runner control directory not private/service-owned")
+        try:
+            inbox.mkdir(mode=0o700)
+        except FileExistsError:
+            pass
     if inbox.is_symlink() or not inbox.is_dir():
-        raise IntakeHold("Owner inbox directory absent, symlinked or invalid")
+        raise IntakeHold("Owner inbox directory symlinked or invalid")
     info = inbox.stat()
     if (info.st_uid != os.getuid()
             or stat.S_IMODE(info.st_mode) & 0o077):
@@ -204,8 +219,13 @@ def poll_once(root: Path, canonical: dict, *, opener=urllib.request.urlopen,
     inbox = Path(root) / "owner-inbox"
     marker = Path(root) / "github-issue-intake-last-poll"
     when = time.time() if now is None else now
-    if marker.exists() and when - marker.stat().st_mtime < INTERVAL_SECONDS:
-        return []
+    if marker.exists() or marker.is_symlink():
+        proof = marker.lstat()
+        if (not stat.S_ISREG(proof.st_mode) or proof.st_uid != os.getuid()
+                or stat.S_IMODE(proof.st_mode) & 0o077):
+            raise IntakeHold("issue intake poll marker is not service-private")
+        if when - proof.st_mtime < INTERVAL_SECONDS:
+            return []
     verified = [v for comment in fetch_public_comment_pages(opener)
                 if (v := checked_comment(comment, canonical)) is not None]
     created = []
