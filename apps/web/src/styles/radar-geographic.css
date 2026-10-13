@@ -35,6 +35,13 @@
 .g2-map-fallback { margin:160px auto 0; padding:24px; max-width:500px; }.g2-map-fallback h1 { font-size:24px; }.g2-map-fallback p { line-height:1.6; }
 .g2-map-marker { width:48px; height:48px; border:3px solid var(--gb-white); border-radius:50%; background:var(--gb-lime); color:var(--gb-ink); font-weight:700; box-shadow:0 3px 12px rgba(19,34,26,.22); cursor:pointer; }
 .g2-map-marker[aria-pressed="true"] { background:var(--gb-purple); color:var(--gb-white); border-color:var(--gb-lime); }
+/* Public venues and consented Radar players use deliberately distinct pins. */
+.g2-map-venue-marker { width:34px; height:34px; border:2px solid var(--gb-white); border-radius:50%; background:var(--gb-purple); color:var(--gb-white); font-size:25px; line-height:28px; text-align:center; box-shadow:0 3px 11px rgba(19,34,26,.23); cursor:pointer; }
+.g2-map-venue-notice { position:absolute; left:16px; bottom:60px; z-index:2; max-width:350px; padding:10px 14px; border:1px solid var(--gb-line); border-radius:12px; background:var(--gb-white); font-size:13px; }
+.g2-map-summary > button:disabled { cursor:default; opacity:1; }
+.g2-radar-map .maplibregl-popup-content { font-family:var(--font-onest),sans-serif; color:var(--gb-ink); }
+.g2-radar-map .maplibregl-popup-content p { margin:6px 0 0; }
+
 .g2-radar-map button:focus-visible,.g2-radar-map a:focus-visible { outline:3px solid var(--gb-purple); outline-offset:3px; }
 .g2-map-panel { position:absolute; right:80px; top:110px; bottom:48px; width:360px; max-width:calc(100% - 32px); padding:16px 20px; z-index:4; border:1px solid var(--gb-line); border-radius:18px; background:var(--gb-white); overflow:auto; }
 .g2-map-panel > header { display:flex; justify-content:flex-end; gap:12px; }.g2-map-panel > header button { min-width:44px; min-height:44px; background:transparent; color:var(--gb-ink); border:0; font-size:24px; cursor:pointer; }.g2-sheet-handle { display:none; }
