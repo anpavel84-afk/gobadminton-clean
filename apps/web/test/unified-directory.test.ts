@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { UnifiedSnapshot, UnifiedRow, UnifiedDistance } from "@gobadminton/contracts";
+import type { UnifiedMapSnapshot, UnifiedSnapshot, UnifiedRow, UnifiedDistance } from "@gobadminton/contracts";
 import { UnifiedDirectoryController, distanceText } from "../src/lib/unified-directory";
 import { candidateMapAllowed, MOSCOW_BUNDLE, allowedMapResource } from "../src/lib/radar-map-assets";
 import type { Me } from "../src/lib/consumer-types";
@@ -8,7 +8,7 @@ const now = Date.parse("2030-01-01T00:00:00Z");
 const ok = (data: unknown) => ({ ok: true as const, status: 200, data });
 const row = (id: string) => ({ publicPlayerId: id, projection: "directory", player: { publicPlayerId: id, displayName: id }, radar: null }) as UnifiedRow;
 function snapshot(items: UnifiedRow[] = [row("first")]): UnifiedSnapshot {
-  return { contractVersion: "players-unified-radar-v1", cityId: MOSCOW_BUNDLE.cityId, exposureMode: "synthetic_demo", generatedAt: new Date(now).toISOString(), validUntil: new Date(now + 45000).toISOString(), query: { queryRef: "context", originState: "none", originRef: null, ordering: "radar_city_then_directory", asOf: new Date(now).toISOString() }, items, map: { availability: "missing", mapId: null, version: null }, page: { returnedCount: items.length, rankStart: 1, rankEnd: items.length, hasMore: true, nextCursor: "page2" } } as UnifiedSnapshot;
+  return { policyVersion: "radar-geographic-sharing-v2", contractVersion: "players-unified-radar-v1", cityId: MOSCOW_BUNDLE.cityId, exposureMode: "synthetic_demo", generatedAt: new Date(now).toISOString(), validUntil: new Date(now + 45000).toISOString(), query: { queryRef: "context", originState: "none", originRef: null, ordering: "radar_city_then_directory", asOf: new Date(now).toISOString() }, items, map: { availability: "missing", mapId: null, version: null }, page: { returnedCount: items.length, rankStart: 1, rankEnd: items.length, hasMore: true, nextCursor: "page2" } } as UnifiedSnapshot;
 }
 const me = { id: "viewer", csrfToken: "csrf" } as Me;
 const filters = { cityId: MOSCOW_BUNDLE.cityId };
@@ -69,5 +69,27 @@ describe("distance and map authority", () => {
     expect(candidateMapAllowed(snapshot(), "localhost", undefined)).toBe(false);
     expect(candidateMapAllowed(snapshot(), "localhost", MOSCOW_BUNDLE.version)).toBe(true);
     expect(allowedMapResource(MOSCOW_BUNDLE.prefix + "style.json")).toBe(true); expect(allowedMapResource("https://evil.example/tiles")).toBe(false); expect(allowedMapResource(MOSCOW_BUNDLE.prefix + "../other/style.json")).toBe(false);
+  });
+});
+
+const radarRow = (validUntil: number): UnifiedRow => ({ ...row("consented"), radar: { consentPolicyVersion: "radar-geographic-sharing-v2", resultRef: "server-proof", validUntil: new Date(validUntil).toISOString(), geo: { latitude: 55.75, longitude: 37.61, crs: "EPSG:4326" } } } as UnifiedRow);
+describe("map snapshot privacy deadlines", () => {
+  it("purges geometry when the map expires before the list", async () => {
+    let time = now;
+    const point = radarRow(now + 40000);
+    const request = vi.fn(async (path: string) => ok(path.endsWith("/map") ? { ...snapshot([point]), validUntil: new Date(now + 10000).toISOString(), mapPage: { returnedCount: 1, rankStart: 1, rankEnd: 1, hasMore: false, nextMapCursor: null } } : snapshot())) as typeof apiFetch;
+    const c = new UnifiedDirectoryController(request, () => time); c.bind(me); await c.query(filters); await c.map();
+    expect(c.view.pins).toEqual([point]); time += 10000; c.tick();
+    expect(c.view.pins).toEqual([]); expect(c.view.snapshot).toBeNull();
+  });
+  it("rejects ordinary, expired and wrong-policy map rows, without profile inference", async () => {
+    const expired = radarRow(now);
+    const wrongPolicy = { ...radarRow(now + 40000), radar: { ...radarRow(now + 40000).radar!, consentPolicyVersion: "old" } } as unknown as UnifiedRow;
+    const point = radarRow(now + 10000);
+    let time = now;
+    const data = { ...snapshot([row("ordinary"), expired, wrongPolicy, point]), mapPage: { returnedCount: 1, rankStart: 1, rankEnd: 1, hasMore: false, nextMapCursor: null } } as UnifiedMapSnapshot;
+    const request = vi.fn(async (path: string) => ok(path.endsWith("/map") ? data : snapshot())) as typeof apiFetch;
+    const c = new UnifiedDirectoryController(request, () => time); c.bind(me); await c.query(filters); await c.map();
+    expect(c.view.pins).toEqual([point]); time += 10000; c.tick(); expect(c.view.pins).toEqual([]);
   });
 });
