@@ -2317,6 +2317,11 @@ def block_prompt(task: dict[str, Any]) -> str:
     rows = "\n".join(
         f"- {i+1}/{len(blocks)} {b['id']} · {b['title']}" for i, b in enumerate(blocks)
     )
+    if task.get("_workspace") and str(task.get("executor") or "").lower() == "codex":
+        return ("PM block plan (execute in order):\\n" + rows +
+                "\\nRunner owns progress/control-state and host-captured receipt. "
+                "Do not edit Runner files; include truthful block outcomes "
+                "in final JSON.\\n")
     return f"""
 PM block plan (execute in this order):
 {rows}
@@ -2409,7 +2414,11 @@ Owner/safety hard blocker:
 A task/lane-local terminal blocker must use owner_blocker=false and blocker_scope="lane_local".
 For independent QA include verdict PASS|PASS_WITH_NONBLOCKING_GAPS|FAIL|BLOCKED.
 QA FAIL/BLOCKED is terminal for that immutable candidate and must not be retried.
-Exit only after the receipt file exists.
+When using scoped Codex, return ONE valid JSON object as the FINAL
+response. The Codex host CLI writes --output-last-message to the fixed Runner
+receipt path after execution. Do not write control-state, receipts, progress,
+Owner inbox, system configuration, or sibling worktrees directly.
+The Runner validates host-written JSON before recording completion.
 """
 
 
