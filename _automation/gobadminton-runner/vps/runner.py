@@ -25,6 +25,7 @@ from typing import Any
 
 import psutil
 import backlog_sync
+import writer_bridge
 
 try:
     import msvcrt
@@ -281,9 +282,9 @@ def _workspace_args(cmdline: list[str]) -> list[str]:
     for i, raw in enumerate(cmdline):
         arg = str(raw)
         low = arg.lower()
-        if low == "--workspace" and i + 1 < len(cmdline):
+        if low in {"--workspace", "--cd", "-c"} and i + 1 < len(cmdline):
             out.append(str(cmdline[i + 1]))
-        elif low.startswith("--workspace="):
+        elif low.startswith(("--workspace=", "--cd=")):
             out.append(arg.split("=", 1)[1])
 
         # Wrapper shells can carry the whole cursor command as one string.
@@ -369,6 +370,8 @@ def external_cursor_agent_busy(cfg: dict[str, Any], state_agent_pid: int | None)
                     if resolved == dev_root or dev_root in resolved.parents:
                         scoped = True
                         break
+            if isolated_readonly_qa(proc, cfg):
+                continue
             if scoped and managed_pm_planner(proc, cfg):
                 continue
             if scoped:
@@ -1511,22 +1514,24 @@ def load_state() -> dict[str, Any]:
 
 
 def save_state(st: dict[str, Any]) -> None:
-    with _V2_STATE_LOCK:
-        data = _v2_migrate_state(_copy.deepcopy(st))
-        data["updated_at"] = utc_now()
-        atomic_write_json(STATE_PATH, data)
+    with writer_bridge.bridge_section():
+        with _V2_STATE_LOCK:
+            data = _v2_migrate_state(_copy.deepcopy(st))
+            data["updated_at"] = utc_now()
+            atomic_write_json(STATE_PATH, data)
 
 
 def _v2_mutate_state(fn) -> dict[str, Any]:
-    with _V2_STATE_LOCK:
-        raw = load_json(STATE_PATH, {}) or {}
-        st = _v2_migrate_state(raw if isinstance(raw, dict) else {})
-        fn(st)
-        _v2_sync_current_alias(st)
-        st["version"] = RUNNER_V2_STATE_VERSION
-        st["updated_at"] = utc_now()
-        atomic_write_json(STATE_PATH, st)
-        return _copy.deepcopy(st)
+    with writer_bridge.bridge_section():
+        with _V2_STATE_LOCK:
+            raw = load_json(STATE_PATH, {}) or {}
+            st = _v2_migrate_state(raw if isinstance(raw, dict) else {})
+            fn(st)
+            _v2_sync_current_alias(st)
+            st["version"] = RUNNER_V2_STATE_VERSION
+            st["updated_at"] = utc_now()
+            atomic_write_json(STATE_PATH, st)
+            return _copy.deepcopy(st)
 
 
 def active_claims(st: dict[str, Any] | None = None) -> list[dict[str, Any]]:
@@ -1549,7 +1554,7 @@ def validate_backlog(q: Any) -> dict[str, Any]:
     if q.get("prod_authorized") is not False:
         raise RuntimeError("backlog must keep prod_authorized=false")
     allowed = set(ALLOWED_TASK_KEYS) | {
-        "locks", "depends_on_completed", "depends_on_accepted", "base_sha", "candidate_sha", "effect_ceiling", "recovery_from", "recovery_policy"
+        "locks", "depends_on_completed", "depends_on_accepted", "base_sha", "candidate_sha", "effect_ceiling", "recovery_from", "recovery_policy", "source_review", "source_qa", "release_handoff"
     }
     for t in q["tasks"]:
         if not isinstance(t, dict):
@@ -1594,6 +1599,46 @@ def validate_backlog(q: Any) -> dict[str, Any]:
                 or not all(isinstance(x, str) and x.strip() for x in value)
             ):
                 raise RuntimeError(f"task {t.get('id')} {key} must be string[]")
+        if "source_qa" in t:
+            source_qa = t["source_qa"]
+            deps = t.get("depends_on_completed")
+            if (not isinstance(source_qa, dict)
+                    or set(source_qa) != {"producer_task_id", "suite_id"}
+                    or not str(t.get("id") or "").startswith("qa-")
+                    or not isinstance(source_qa.get("producer_task_id"), str)
+                    or not source_qa["producer_task_id"]
+                    or deps != [source_qa["producer_task_id"]]
+                    or t.get("depends_on_accepted") not in (None, [])
+                    or not isinstance(source_qa.get("suite_id"), str)
+                    or not re.fullmatch(r"[A-Za-z0-9_.:-]+", source_qa["suite_id"])
+                    or t.get("effect_ceiling") != "source_only"
+                    or t.get("sandbox") != "read-only"):
+                raise RuntimeError(f"task {t.get('id')} invalid immutable own-source QA")
+        if "release_handoff" in t:
+            deps = t.get("depends_on_accepted")
+            if (t.get("release_handoff") !=
+                    {"kind": "ci_candidate", "target": "authorized_release_job"}
+                    or t.get("effect_ceiling") != "source_only"
+                    or t.get("sandbox") != "read-only"
+                    or t.get("depends_on_completed") not in (None, [])
+                    or not isinstance(deps, list) or len(deps) != 1
+                    or not isinstance(deps[0], str) or not deps[0].startswith("qa-")
+                    or "global" not in task_locks(t)
+                    or "source_review" in t or "source_qa" in t):
+                raise RuntimeError(f"task {t.get('id')} invalid source-only CI handoff")
+        if "source_review" in t:
+            review=t["source_review"]
+            if (not isinstance(review,dict)
+                    or set(review)!={"candidate_sha","candidate_tree","branch","suite_id"}
+                    or not all(isinstance(review.get(k),str) and review[k] for k in review)
+                    or not all(re.fullmatch(r"[0-9a-f]{40}",review[k])
+                               for k in ("candidate_sha","candidate_tree"))
+                    or not re.fullmatch(r"[A-Za-z0-9_./-]+",review["branch"])
+                    or review["branch"].startswith((".","/"))
+                    or not re.fullmatch(r"[A-Za-z0-9_.:-]+",review["suite_id"])
+                    or t.get("effect_ceiling")!="source_only"
+                    or t.get("depends_on_completed") or t.get("depends_on_accepted")):
+                raise RuntimeError(f"task {t.get('id')} invalid independent source review binding")
         base = t.get("base_sha")
         if base is not None and not re.fullmatch(r"[0-9a-f]{40}", str(base)):
             raise RuntimeError(f"task {t.get('id')} base_sha must be 40-char sha")
@@ -1829,7 +1874,165 @@ def _v2_dependency_accepted(q: dict[str, Any], st: dict[str, Any], dep_id: str,
         # A rewritten historic receipt cannot escape its byte-bound ledger by
         # adding the new-format fields. Repairs require a new task ID and SHA.
         return legacy_qa.accepted(sys.modules[__name__], q, st, dep_id, consumer)
+    task = _v2_task_map(q).get(dep_id, {})
+    if "source_review" in task:
+        return _v2_source_review_accepted(q, st, dep_id, consumer=consumer)
+    if "source_qa" in task:
+        return _v2_source_qa_accepted(q, st, dep_id, consumer=consumer)
     return _v2_strict_dependency_accepted(q, st, dep_id)
+
+
+SOURCE_REVIEW_QA_ROOT=Path("/var/lib/gobadminton-v3-trusted-qa-evidence")
+
+
+def _v2_source_review_accepted(q: dict[str, Any], st: dict[str, Any], dep_id: str,
+                               *, consumer: dict[str, Any] | None = None) -> bool:
+    """Independently attested SOURCE_ACCEPTED, never a merge/release right."""
+    dep=_v2_task_map(q).get(dep_id)
+    if (not isinstance(dep,dict) or "source_review" not in dep
+            or (consumer is not None and consumer.get("effect_ceiling")!="source_only")
+            or _v2_history_status(st,dep_id)!="completed"
+            or dep.get("status") in {"qa_failed","qa_blocked","blocked"}):
+        return False
+    pin=dep["source_review"]
+    if (not isinstance(pin,dict) or set(pin)!={"candidate_sha","candidate_tree","branch","suite_id"}):
+        return False
+    proof=read_receipt(receipt_path_for(dep))
+    if (not isinstance(proof,dict) or proof.get("project")!="GoBadminton"
+            or proof.get("task_id")!=dep_id or proof.get("ok") is not True
+            or proof.get("acceptance_state")!="SOURCE_ACCEPTED"
+            or proof.get("verdict")!="PASS" or proof.get("blocking_findings")!=[]
+            or proof.get("candidate_sha")!=pin["candidate_sha"]
+            or proof.get("candidate_tree")!=pin["candidate_tree"]
+            or proof.get("blocking_gap_count") not in (None,0)
+            or not isinstance(proof.get("trusted_job"),str)):
+        return False
+    try:
+        import test_job_contract
+        test_job_contract.verify_runner_receipt(proof,SOURCE_REVIEW_QA_ROOT)
+        record=test_job_contract.protected_json(
+            SOURCE_REVIEW_QA_ROOT/(proof["trusted_job"]+".json"))
+        if (record["job"]["source_tree"]!=pin["candidate_tree"]
+                or record["job"]["suite_id"]!=pin["suite_id"]):
+            return False
+        repo=_v2_evidence_repo()
+        if repo is None:
+            return False
+        backlog_sync.validate_immutable_sources(repo,[dep])
+        sha=pin["candidate_sha"]
+        if (_v2_git_evidence(["rev-parse",sha+"^{tree}"])!=pin["candidate_tree"]
+                or _v2_git_evidence(["merge-base","--is-ancestor",sha,
+                                     "refs/remotes/origin/"+pin["branch"]]) is None):
+            return False
+    except (OSError,ValueError,TypeError,KeyError,AttributeError,
+            backlog_sync.SyncBlocked,subprocess.TimeoutExpired):
+        return False
+    return True
+
+
+def _v2_source_qa_accepted(q: dict[str, Any], st: dict[str, Any], dep_id: str,
+                            *, consumer: dict[str, Any] | None = None) -> bool:
+    """Root-protected independent SOURCE_ACCEPTED for a generated unmerged PR.
+
+    Source producer 'completed' alone cannot authorize downstream tasks.
+    No source merge or production release is implied by this predicate.
+    """
+    lookup = _v2_task_map(q)
+    qa = lookup.get(dep_id)
+    if (not isinstance(qa, dict) or not dep_id.startswith("qa-")
+            or (consumer is not None and consumer.get("effect_ceiling") != "source_only")
+            or _v2_history_status(st, dep_id) != "completed"
+            or qa.get("status") in {"qa_failed", "qa_blocked", "blocked"}):
+        return False
+    pin = qa.get("source_qa")
+    if (not isinstance(pin, dict) or set(pin) != {"producer_task_id", "suite_id"}
+            or _v2_dependencies(qa, "depends_on_completed") != [pin["producer_task_id"]]
+            or _v2_dependencies(qa, "depends_on_accepted")):
+        return False
+    producer = lookup.get(pin["producer_task_id"])
+    if (not producer or _v2_history_status(st, producer["id"]) != "completed"
+            or producer.get("status") in {"qa_failed", "qa_blocked", "blocked"}):
+        return False
+    own = read_receipt(receipt_path_for(producer))
+    proof = read_receipt(receipt_path_for(qa))
+    if (not isinstance(own, dict) or not isinstance(proof, dict)
+            or proof.get("project") != "GoBadminton"
+            or proof.get("task_id") != dep_id or proof.get("ok") is not True
+            or proof.get("acceptance_state") != "SOURCE_ACCEPTED"
+            or proof.get("verdict") != "PASS"
+            or proof.get("blocking_findings") != []
+            or proof.get("blocking_gap_count") not in (None, 0)
+            or proof.get("producer_task_id") != producer["id"]
+            or proof.get("candidate_sha") != own.get("candidate_sha")
+            or proof.get("candidate_tree") != own.get("candidate_tree")
+            or proof.get("branch") != own.get("branch")
+            or not isinstance(proof.get("trusted_job"), str)):
+        return False
+    try:
+        import test_job_contract
+        test_job_contract.verify_runner_receipt(proof, SOURCE_REVIEW_QA_ROOT)
+        record = test_job_contract.protected_json(
+            SOURCE_REVIEW_QA_ROOT / (proof["trusted_job"] + ".json"))
+        if (record["job"]["source_tree"] != proof["candidate_tree"]
+                or record["job"]["suite_id"] != pin["suite_id"]):
+            return False
+        # QA-230-01: the original protected job authenticates source/tree/suite,
+        # but is NOT reusable authority for another QA, producer or branch.
+        # Bind that already-verified cryptographic job digest to an EXACT identity
+        # digest in the existing root-owned protected policy. This changes no
+        # test_job_contract schema, reviewer approval mechanism or F1 path.
+        identity = {
+            "schema_version": 1,
+            "qa_task_id": dep_id,
+            "producer_task_id": producer["id"],
+            "candidate_sha": proof["candidate_sha"],
+            "candidate_tree": proof["candidate_tree"],
+            "branch": proof["branch"],
+            "suite_id": pin["suite_id"],
+        }
+        protected_policy = test_job_contract.protected_json(
+            SOURCE_REVIEW_QA_ROOT / "policy.json")
+        source_qa_authorizations = protected_policy.get(
+            "source_qa_authorizations")
+        if (type(source_qa_authorizations) is not dict
+                or source_qa_authorizations.get(proof["trusted_job"])
+                    != test_job_contract.digest(identity)):
+            return False
+        repo = _v2_evidence_repo()
+        if repo is None:
+            return False
+        backlog_sync.validate_immutable_sources(repo, [producer, qa])
+        candidate = _v2_verified_producer_candidate(qa, producer)
+        if candidate != proof["candidate_sha"]:
+            return False
+    except (OSError, ValueError, TypeError, KeyError, AttributeError,
+            backlog_sync.SyncBlocked, subprocess.TimeoutExpired):
+        return False
+    return True
+
+
+def _v2_release_handoff_valid(q: dict[str, Any], st: dict[str, Any],
+                              task: dict[str, Any], data: dict[str, Any]) -> bool:
+    """Verify an exact nonpublic candidate receipt; never invoke a deployer."""
+    if task.get("release_handoff") != {"kind": "ci_candidate",
+                                       "target": "authorized_release_job"}:
+        return False
+    qa_ids = _v2_dependencies(task, "depends_on_accepted")
+    if len(qa_ids) != 1 or not _v2_source_qa_accepted(q, st, qa_ids[0], consumer=task):
+        return False
+    qa_proof = read_receipt(receipt_path_for(_v2_task_map(q)[qa_ids[0]]))
+    handoff = data.get("handoff")
+    if (not isinstance(handoff, dict)
+            or set(handoff) != {"state", "accepted_qa_task_id", "candidate_sha",
+                               "candidate_tree"}
+            or handoff.get("state") != "SOURCE_ONLY_CI_HANDOFF_READY"
+            or handoff.get("accepted_qa_task_id") != qa_ids[0]
+            or handoff.get("candidate_sha") != qa_proof.get("candidate_sha")
+            or handoff.get("candidate_tree") != qa_proof.get("candidate_tree")
+            or any(field in data for field in
+                   ("deployed", "deployment_status", "release_job_id", "released"))):
+        return False
+    return True
 
 
 def _v2_strict_dependency_accepted(q: dict[str, Any], st: dict[str, Any], dep_id: str) -> bool:
@@ -1942,6 +2145,7 @@ def pending_tasks(q: dict[str, Any], st: dict[str, Any]) -> list[dict[str, Any]]
         and t.get("enabled") is True
         and str(t["id"]) not in done
         and str(t["id"]) not in active
+        and str(t["id"]) != str((st.get("blocked") or {}).get("id") or "")
     ]
     return sorted(tasks, key=lambda x: float(x.get("order", 10**9)))
 
@@ -1950,7 +2154,7 @@ def select_runnable_tasks(
     q: dict[str, Any], st: dict[str, Any], cfg: dict[str, Any],
     *, external_writer_busy: bool = False,
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
-    if (external_writer_busy or st.get("paused") or st.get("blocked")
+    if (external_writer_busy or st.get("paused") or (st.get("blocked") and not lane_local_block(st))
             or st.get("global_gates") or st.get("project_global_blocker")):
         return [], []
     active = active_claims(st)
@@ -1997,7 +2201,7 @@ def queue_eligibility(q: dict[str, Any], st: dict[str, Any], cfg: dict[str, Any]
             label = "TERMINAL"
         elif task.get("enabled") is not True:
             label, reason = "WAITING_OWNER_RELEASE", "task disabled; exact source/release admission required"
-        elif st.get("paused") or st.get("blocked"):
+        elif st.get("paused") or (st.get("blocked") and not lane_local_block(st)) or st.get("global_gates") or st.get("project_global_blocker"):
             label, reason = "WAITING_OWNER_RELEASE", "Runner paused or globally blocked"
         else:
             ready, reason = dependencies_ready(task, q, st)
@@ -2328,6 +2532,129 @@ def _v2_runner_owned_process(proc: Any, active_pids: set[int]) -> bool:
         return False
 
 
+def isolated_readonly_qa(proc: Any, cfg: dict[str, Any]) -> bool:
+    """Only operator-proven isolated QA identities escape the writer hold."""
+    try:
+        cwd = Path(proc.cwd()).resolve()
+        uid = proc.uids().real
+        args = [str(x) for x in proc.cmdline()]
+        targets = _workspace_args(args)
+        readonly = any(args[i:i+2] == ["--sandbox", "read-only"] for i in range(len(args)-1)) or "--sandbox=read-only" in args
+        if not readonly or not targets or any(Path(x).resolve() != cwd for x in targets):
+            return False
+        workspace = Path(str(cfg["workspace"])).resolve()
+        for entry in cfg.get("isolated_readonly_qa", []):
+            if (entry.get("uid") == uid and Path(entry["workspace"]).resolve() == cwd
+                    and entry.get("separate_git") is True and entry.get("db_access") is False
+                    and cwd != workspace and cwd not in workspace.parents and workspace not in cwd.parents):
+                return True
+    except (psutil.Error, OSError, ValueError, KeyError, TypeError, AttributeError):
+        pass
+    return False
+
+
+def verified_disjoint_codex(proc: Any, cfg: dict[str, Any]) -> bool:
+    """Exclude only an introspectable Codex CLI in a distinct real Git domain."""
+    try:
+        args = [str(x) for x in proc.cmdline()]
+        if args != [str(x) for x in (proc.info.get("cmdline") or [])]:
+            return False
+        if not args or Path(args[0]).name != "codex" or "exec" not in args:
+            return False
+        if type(proc.uids().real) is not int or proc.uids().real < 0:
+            return False
+        cwd = Path(proc.cwd()).resolve(strict=True)
+        workspace = Path(str(cfg["workspace"])).resolve(strict=True)
+        dev = Path(str(cfg.get("dev_root") or workspace.parent)).resolve(strict=True)
+        targets = _workspace_args(args)
+        if not targets or any(Path(x).resolve(strict=True) != cwd for x in targets):
+            return False
+        if any(cwd == root or cwd in root.parents or root in cwd.parents
+               for root in (workspace, dev)):
+            return False
+        # Other CLI paths/DB targets cannot establish an unrelated domain.
+        if any(str(root) in arg for root in (workspace, dev) for arg in args):
+            return False
+        if any(token in " ".join(args).lower() for token in
+               ("postgres", "database", "db_access", "database_url", "--add-dir", "--dangerously", "--yolo")):
+            return False
+        def git_domain(path):
+            result = subprocess.run(["git", "-C", str(path), "rev-parse", "--git-common-dir"],
+                                    capture_output=True, text=True, timeout=5,
+                                    env={k: v for k, v in os.environ.items() if not k.startswith("GIT_")})
+            if result.returncode or not result.stdout.strip():
+                raise ValueError("unverified Git domain")
+            return (path / result.stdout.strip()).resolve(strict=True)
+        # Git checkout directories can differ while their *write target*
+        # is the same remote. Both fetch and push identities count: treating
+        # same origin as unrelated would enable competing remote writers.
+        def git_remotes(path):
+            """Enumerate EVERY configured fetch/push remote URL, not just origin.
+
+            Git supports several push URLs on a single remote. Ignoring the
+            second one would classify two independently initialized local
+            repositories as disjoint even while publishing to the same branch.
+            No network access or secret logging occurs.
+            """
+            env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+            listed = subprocess.run(
+                ["git", "-C", str(path), "remote"], capture_output=True,
+                text=True, timeout=5, env=env)
+            if listed.returncode:
+                raise ValueError("unverifiable configured Git remotes")
+            identities = set()
+            from urllib.parse import urlsplit
+            for remote in listed.stdout.splitlines():
+                if not remote or any(x.isspace() for x in remote):
+                    raise ValueError("ambiguous remote name")
+                for options in (["remote", "get-url", "--all", remote],
+                                ["remote", "get-url", "--push", "--all", remote]):
+                    result = subprocess.run(
+                        ["git", "-C", str(path), *options],
+                        capture_output=True, text=True, timeout=5, env=env)
+                    if result.returncode or not result.stdout.strip():
+                        raise ValueError("unverifiable configured remote URLs")
+                    for value in result.stdout.splitlines():
+                        value = value.strip()
+                        if not value:
+                            raise ValueError("empty configured remote URL")
+                        if "://" in value:
+                            parsed = urlsplit(value)
+                            # A valid hostname is not evidence that a transport
+                            # is understood. Unknown helper/protocol is an
+                            # opaque potential writer and must remain HOLD.
+                            if parsed.scheme.lower() not in {"https", "ssh", "file"}:
+                                raise ValueError("unapproved Git remote scheme")
+                            if parsed.password or parsed.query or parsed.fragment:
+                                raise ValueError("opaque remote URL credential/query")
+                            if parsed.scheme == "file":
+                                if not parsed.path:
+                                    raise ValueError("empty local Git remote path")
+                                identity = "file/" + str(Path(parsed.path).resolve())
+                            else:
+                                if not parsed.hostname or not parsed.path:
+                                    raise ValueError("ambiguous Git remote URL")
+                                identity = parsed.hostname.lower() + "/" + parsed.path.lstrip("/")
+                        elif "@" in value and ":" in value.split("@", 1)[-1]:
+                            host_path = value.split("@", 1)[-1]
+                            host, remote_path = host_path.split(":", 1)
+                            identity = host.lower() + "/" + remote_path.lstrip("/")
+                        elif value.startswith(("/", "./", "../")):
+                            identity = "file/" + str((path / value).resolve())
+                        else:
+                            raise ValueError("unclassified Git remote URL")
+                        identities.add(identity.rstrip("/").removesuffix(".git").lower())
+            return identities
+        if git_domain(cwd) == git_domain(workspace):
+            return False
+        if git_remotes(cwd) & git_remotes(workspace):
+            return False
+        return True
+    except (psutil.Error, OSError, ValueError, KeyError, TypeError, AttributeError,
+            subprocess.SubprocessError):
+        return False
+
+
 def external_cursor_agent_busy(
     cfg: dict[str, Any],
     state_agent_pid: int | None = None,
@@ -2381,6 +2708,10 @@ def external_cursor_agent_busy(
                         scoped = True
                         break
                     scoped_elsewhere = True
+            if isolated_readonly_qa(proc, cfg):
+                continue
+            if is_codex and verified_disjoint_codex(proc, cfg):
+                continue
             if scoped and managed_pm_planner(proc, cfg):
                 continue
             if not scoped and not scoped_elsewhere:
@@ -2388,10 +2719,12 @@ def external_cursor_agent_busy(
                     f"ambiguous external {'Cursor' if is_cursor else 'Codex'} "
                     f"pid {pid}: agent process cannot be scoped; fail closed"
                 )
-            if scoped:
-                return True, f"external {'Cursor' if is_cursor else 'Codex'} pid {pid} scoped to {dev_root}"
-        except (psutil.NoSuchProcess, psutil.AccessDenied, ValueError):
+            if scoped or scoped_elsewhere:
+                return True, f"unproven external {'Cursor' if is_cursor else 'Codex'} pid {pid} scoped to {dev_root}"
+        except psutil.NoSuchProcess:
             continue
+        except (psutil.AccessDenied, ValueError):
+            return True, "external agent inventory identity unavailable; HOLD"
     return False, "no external GoBadminton Cursor/Codex writer"
 
 
@@ -2434,9 +2767,16 @@ def claim_task(task: dict[str, Any]) -> dict[str, Any]:
     try:
         preflight_state = backlog_sync.read_runner_state(STATE_PATH)
     except backlog_sync.InvalidRunnerState as exc:
-        backlog_sync.atomic_write(BACKLOG_PATH.parent / "backlog-sync-diagnostic.json",
-            (json.dumps({"status": "BLOCKED", "reason": str(exc), "changed": False,
-                         "checked_at": utc_now()}) + "\n").encode())
+        # Invalid state is a hard HOLD regardless of diagnostics. A losing
+        # claimant must not overwrite the shared sync diagnostic while the
+        # Publisher or another claimant owns the authoritative writer lease.
+        try:
+            with writer_bridge.bridge_section():
+                backlog_sync.atomic_write(BACKLOG_PATH.parent / "backlog-sync-diagnostic.json",
+                    (json.dumps({"status": "BLOCKED", "reason": str(exc), "changed": False,
+                                 "checked_at": utc_now()}) + "\n").encode())
+        except writer_bridge.BridgeHold:
+            pass  # Preserve old evidence and re-raise the invalid-state HOLD.
         raise
     cfg = load_json(BACKLOG_PATH.parent / "config.json", {}) or {}
     gate_ok, gate_reason = task_gate(task, cfg)
@@ -2452,10 +2792,13 @@ def claim_task(task: dict[str, Any]) -> dict[str, Any]:
         nonlocal result
         if st.get("paused"):
             raise RuntimeError("paused")
-        if st.get("blocked") or st.get("global_gates") or st.get("project_global_blocker"):
+        if (st.get("blocked") and not lane_local_block(st)) or st.get("global_gates") or st.get("project_global_blocker"):
             raise RuntimeError("project-global blocked")
         if tid in completed_ids(st):
-            raise RuntimeError("already completed")
+            raise RuntimeError("already terminal")
+        busy, reason = writer_busy(cfg, st, include_owned_active=False)
+        if busy:
+            raise RuntimeError(reason)
         active = _v2_active(st)
         if tid in active:
             raise RuntimeError(f"already active {tid}")
@@ -2813,7 +3156,7 @@ def run_claimed(cfg: dict[str, Any], task: dict[str, Any], claim: dict[str, Any]
                 ok, reason = validate_receipt(rpath, tid)
                 data = read_receipt(rpath) or {}
 
-        if tid.startswith("qa-"):
+        if tid.startswith("qa-") or "source_review" in task:
             verdict = str(data.get("verdict") or "").upper()
             lower_reason = reason.lower()
             missing_candidate = any(
@@ -2825,6 +3168,25 @@ def run_claimed(cfg: dict[str, Any], task: dict[str, Any], claim: dict[str, Any]
                 mark_qa_terminal(tid, verdict or "BLOCKED", reason)
                 return
         if ok:
+            if any(key in task for key in ("source_review", "source_qa", "release_handoff")):
+                # Executor-produced receipts are untrusted until a distinct
+                # root-authorized independent QA job proves the exact result.
+                trial = dict(load_state())
+                trial["history"] = [*(trial.get("history") or []),
+                                    {"id": tid, "status": "completed"}]
+                queue = load_backlog()
+                approved = (_v2_source_review_accepted(queue, trial, tid)
+                            if "source_review" in task else
+                            _v2_source_qa_accepted(queue, trial, tid)
+                            if "source_qa" in task else
+                            _v2_release_handoff_valid(queue, trial, task, data))
+                if not approved:
+                    mark_blocked(tid, "missing trusted source QA or exact CI handoff",
+                                 blocker_scope="lane_local")
+                    return
+                if "release_handoff" in task:
+                    mark_completed(tid, "source-only CI handoff prepared; no release-job executed")
+                    return
             mark_completed(tid, reason)
             return
         if data.get("owner_blocker") is True:
@@ -2883,7 +3245,25 @@ def _v2_finalize_or_requeue_recovered(cfg: dict[str, Any], claim: dict[str, Any]
         mark_qa_terminal(tid, str(data.get("verdict") or "BLOCKED"), reason)
         return
     if ok:
-        mark_completed(tid, reason)
+        task = _v2_task_map(load_backlog()).get(tid)
+        if task is None:
+            mark_blocked(tid, "recovered task is absent from canonical backlog")
+            return
+        if any(key in task for key in ("source_review", "source_qa", "release_handoff")):
+            trial = dict(load_state())
+            trial["history"] = [*(trial.get("history") or []),
+                                {"id": tid, "status": "completed"}]
+            queue = load_backlog()
+            approved = (_v2_source_review_accepted(queue, trial, tid)
+                        if "source_review" in task else
+                        _v2_source_qa_accepted(queue, trial, tid)
+                        if "source_qa" in task else
+                        _v2_release_handoff_valid(queue, trial, task, data))
+            if not approved:
+                mark_blocked(tid, "recovered claim lacks protected QA/CI handoff evidence")
+                return
+        mark_completed(tid, reason if "release_handoff" not in task
+                       else "source-only CI handoff prepared; not deployed")
         return
     if data.get("owner_blocker") is True or data.get("blocker_scope") == "project_global":
         mark_blocked(tid, reason, blocker_scope="project_global", owner_blocker=bool(data.get("owner_blocker")))
@@ -2958,7 +3338,7 @@ def daemon_loop() -> int:
                 continue
             if st.get("blocked") and release_lane_block(cfg, st):
                 continue
-            if st.get("blocked"):
+            if st.get("blocked") and not lane_local_block(st):
                 time.sleep(poll)
                 continue
 
@@ -2986,10 +3366,10 @@ def daemon_loop() -> int:
                     log(f"claimed {task['id']} locks={','.join(task_locks(task))}")
                     _v2_start_worker(cfg, task, claim)
             else:
-                summary = None
+                summary = {"type": "NO_ELIGIBLE_WORK", "reason": "no dependency/gate/lock READY task", "at": utc_now()}
                 if waits:
                     summary = {
-                        "type": "task_locks_or_dependencies",
+                        "type": "NO_ELIGIBLE_WORK",
                         "reason": "; ".join(f"{x['id']}: {x['reason']}" for x in waits[:5]),
                         "at": utc_now(),
                     }

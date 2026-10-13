@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 import backlog_sync
 import runner
+import writer_bridge
 
 
 class RecoveryHold(RuntimeError):
@@ -126,30 +127,33 @@ def failure_evidence(qa_id, q, st):
 
 @contextmanager
 def transaction(root):
-    root.mkdir(parents=True, exist_ok=True)
-    with (root / 'qa-recovery.lock').open('a') as fp:
-        fcntl.flock(fp, fcntl.LOCK_EX)
-        path = root / 'qa-recovery-ledger.json'
-        if path.exists():
-            try:
-                ledger = json.loads(path.read_text())
-            except (OSError, ValueError) as exc:
-                raise RecoveryHold('corrupt recovery ledger; preserve bytes') from exc
-            if (not isinstance(ledger, dict) or ledger.get('version') != 1
-                    or not isinstance(ledger.get('actions'), dict) or not isinstance(ledger.get('slices'), dict)):
-                raise RecoveryHold('corrupt recovery ledger schema; preserve bytes')
-            for key, action in ledger['actions'].items():
-                if (not isinstance(action, dict) or action.get('key') != key
-                        or action.get('status') not in {'NOTICE', 'DISPATCH_RESERVED', 'HOLD', 'ADMITTED', 'RUNNING', 'CLOSED'}
-                        or not isinstance(action.get('evidence'), dict)):
-                    raise RecoveryHold('corrupt recovery action; preserve bytes')
-            for count in ledger['slices'].values():
-                if type(count) is not int or not 0 <= count <= 5:
-                    raise RecoveryHold('corrupt recovery attempt counter; preserve bytes')
-        else:
-            ledger = dict(version=1, actions={}, slices={})
-        yield ledger
-        backlog_sync.atomic_write(path, (json.dumps(ledger, indent=2, ensure_ascii=False)+'\n').encode())
+    # The ledger read/modify/write and its local recovery lock must be
+    # serialized against the exact v3 Publisher lease as one transaction.
+    with writer_bridge.bridge_section():
+        root.mkdir(parents=True, exist_ok=True)
+        with (root / 'qa-recovery.lock').open('a') as fp:
+            fcntl.flock(fp, fcntl.LOCK_EX)
+            path = root / 'qa-recovery-ledger.json'
+            if path.exists():
+                try:
+                    ledger = json.loads(path.read_text())
+                except (OSError, ValueError) as exc:
+                    raise RecoveryHold('corrupt recovery ledger; preserve bytes') from exc
+                if (not isinstance(ledger, dict) or ledger.get('version') != 1
+                        or not isinstance(ledger.get('actions'), dict) or not isinstance(ledger.get('slices'), dict)):
+                    raise RecoveryHold('corrupt recovery ledger schema; preserve bytes')
+                for key, action in ledger['actions'].items():
+                    if (not isinstance(action, dict) or action.get('key') != key
+                            or action.get('status') not in {'NOTICE', 'DISPATCH_RESERVED', 'HOLD', 'ADMITTED', 'RUNNING', 'CLOSED'}
+                            or not isinstance(action.get('evidence'), dict)):
+                        raise RecoveryHold('corrupt recovery action; preserve bytes')
+                for count in ledger['slices'].values():
+                    if type(count) is not int or not 0 <= count <= 5:
+                        raise RecoveryHold('corrupt recovery attempt counter; preserve bytes')
+            else:
+                ledger = dict(version=1, actions={}, slices={})
+            yield ledger
+            backlog_sync.atomic_write(path, (json.dumps(ledger, indent=2, ensure_ascii=False)+'\n').encode())
 
 
 def prepare(root, evidence, create_notice):

@@ -1,0 +1,321 @@
+{
+  "schema": "gobadminton.friends.dag.source-only.v1",
+  "status": "PREPARED_NOT_CANONICAL_NOT_AUTHORIZED",
+  "accepted_runner_sha": "56c910846549acfc96e3f33eac261d1465efb110",
+  "owner_scope_reference": "https://github.com/anpavel84-afk/gobadminton/pull/198#issuecomment-6111763919",
+  "source_candidate": {
+    "sha": "0562bf1d2dc9ed5fc17f044cacfcf2cb061da17d",
+    "tree": "d7cd49b19fcb480503eaa07c34d463c3a25fee10"
+  },
+  "task_order": [
+    "friends-dogfood-s1-privacy-qa-v001",
+    "friends-dogfood-s2-public-game-recommendations-v001",
+    "qa-friends-dogfood-s2-public-game-recommendations-v001",
+    "friends-dogfood-s3-my-games-attention-v001",
+    "qa-friends-dogfood-s3-my-games-attention-v001",
+    "friends-dogfood-s4-web-integration-v001",
+    "qa-friends-dogfood-s4-web-integration-v001",
+    "friends-dogfood-release-v001"
+  ],
+  "tasks": [
+    {
+      "id": "friends-dogfood-s1-privacy-qa-v001",
+      "order": -1000,
+      "status": "queued",
+      "enabled": true,
+      "source": "https://github.com/anpavel84-afk/gobadminton/blob/9bffa8adfd02e0de3c631e14df6ef11c30da35dd/docs/workbench/operations/runner-229-install-prep/f1-privacy-source-qa.md",
+      "admission": "https://github.com/anpavel84-afk/gobadminton/blob/9bffa8adfd02e0de3c631e14df6ef11c30da35dd/docs/workbench/operations/runner-229-install-prep/owner-scope-reference.md",
+      "executor": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "medium",
+      "sandbox": "read-only",
+      "locks": [
+        "review:friends-s1"
+      ],
+      "blocks": [
+        {
+          "id": "task",
+          "title": "Owner-scoped source/QA task"
+        }
+      ],
+      "effect_ceiling": "source_only",
+      "base_sha": "8c5aaee07c9f0f5ce3bce8532fe501854a3d2a00",
+      "depends_on_completed": [],
+      "depends_on_accepted": [],
+      "source_review": {
+        "candidate_sha": "0562bf1d2dc9ed5fc17f044cacfcf2cb061da17d",
+        "candidate_tree": "d7cd49b19fcb480503eaa07c34d463c3a25fee10",
+        "branch": "owner/friends-p0-delivery-20261010-v001",
+        "suite_id": "friends-s1-privacy-cursor"
+      }
+    },
+    {
+      "id": "friends-dogfood-s2-public-game-recommendations-v001",
+      "order": -900,
+      "status": "queued",
+      "enabled": true,
+      "source": "https://github.com/anpavel84-afk/gobadminton/blob/9bffa8adfd02e0de3c631e14df6ef11c30da35dd/docs/workbench/operations/runner-229-install-prep/f2-public-games.md",
+      "admission": "https://github.com/anpavel84-afk/gobadminton/blob/9bffa8adfd02e0de3c631e14df6ef11c30da35dd/docs/workbench/operations/runner-229-install-prep/owner-scope-reference.md",
+      "executor": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "medium",
+      "sandbox": "workspace-write",
+      "locks": [
+        "api",
+        "schema-contracts"
+      ],
+      "blocks": [
+        {
+          "id": "task",
+          "title": "Owner-scoped source/QA task"
+        }
+      ],
+      "effect_ceiling": "source_only",
+      "base_sha": "8c5aaee07c9f0f5ce3bce8532fe501854a3d2a00",
+      "depends_on_completed": [],
+      "depends_on_accepted": [
+        "friends-dogfood-s1-privacy-qa-v001"
+      ]
+    },
+    {
+      "id": "qa-friends-dogfood-s2-public-game-recommendations-v001",
+      "order": -899,
+      "status": "queued",
+      "enabled": true,
+      "source": "https://github.com/anpavel84-afk/gobadminton/blob/ad683dd7b87744804ba401dd0a9412a791fca189/docs/workbench/operations/runner-229-install-prep/qa-f2-independent-public-games.md",
+      "admission": "https://github.com/anpavel84-afk/gobadminton/blob/9bffa8adfd02e0de3c631e14df6ef11c30da35dd/docs/workbench/operations/runner-229-install-prep/owner-scope-reference.md",
+      "executor": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "medium",
+      "sandbox": "read-only",
+      "locks": [
+        "api",
+        "schema-contracts"
+      ],
+      "blocks": [
+        {
+          "id": "task",
+          "title": "Owner-scoped source/QA task"
+        }
+      ],
+      "effect_ceiling": "source_only",
+      "base_sha": "8c5aaee07c9f0f5ce3bce8532fe501854a3d2a00",
+      "depends_on_completed": [
+        "friends-dogfood-s2-public-game-recommendations-v001"
+      ],
+      "depends_on_accepted": [],
+      "source_qa": {
+        "producer_task_id": "friends-dogfood-s2-public-game-recommendations-v001",
+        "suite_id": "friends-s2-public-games-privacy"
+      }
+    },
+    {
+      "id": "friends-dogfood-s3-my-games-attention-v001",
+      "order": -800,
+      "status": "queued",
+      "enabled": true,
+      "source": "https://github.com/anpavel84-afk/gobadminton/blob/9bffa8adfd02e0de3c631e14df6ef11c30da35dd/docs/workbench/operations/runner-229-install-prep/f3-my-games-attention.md",
+      "admission": "https://github.com/anpavel84-afk/gobadminton/blob/9bffa8adfd02e0de3c631e14df6ef11c30da35dd/docs/workbench/operations/runner-229-install-prep/owner-scope-reference.md",
+      "executor": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "medium",
+      "sandbox": "workspace-write",
+      "locks": [
+        "api",
+        "web"
+      ],
+      "blocks": [
+        {
+          "id": "task",
+          "title": "Owner-scoped source/QA task"
+        }
+      ],
+      "effect_ceiling": "source_only",
+      "base_sha": "8c5aaee07c9f0f5ce3bce8532fe501854a3d2a00",
+      "depends_on_completed": [],
+      "depends_on_accepted": [
+        "friends-dogfood-s1-privacy-qa-v001"
+      ]
+    },
+    {
+      "id": "qa-friends-dogfood-s3-my-games-attention-v001",
+      "order": -799,
+      "status": "queued",
+      "enabled": true,
+      "source": "https://github.com/anpavel84-afk/gobadminton/blob/ad683dd7b87744804ba401dd0a9412a791fca189/docs/workbench/operations/runner-229-install-prep/qa-f3-independent-my-games.md",
+      "admission": "https://github.com/anpavel84-afk/gobadminton/blob/9bffa8adfd02e0de3c631e14df6ef11c30da35dd/docs/workbench/operations/runner-229-install-prep/owner-scope-reference.md",
+      "executor": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "medium",
+      "sandbox": "read-only",
+      "locks": [
+        "api",
+        "web"
+      ],
+      "blocks": [
+        {
+          "id": "task",
+          "title": "Owner-scoped source/QA task"
+        }
+      ],
+      "effect_ceiling": "source_only",
+      "base_sha": "8c5aaee07c9f0f5ce3bce8532fe501854a3d2a00",
+      "depends_on_completed": [
+        "friends-dogfood-s3-my-games-attention-v001"
+      ],
+      "depends_on_accepted": [],
+      "source_qa": {
+        "producer_task_id": "friends-dogfood-s3-my-games-attention-v001",
+        "suite_id": "friends-s3-my-games-privacy"
+      }
+    },
+    {
+      "id": "friends-dogfood-s4-web-integration-v001",
+      "order": -700,
+      "status": "queued",
+      "enabled": true,
+      "source": "https://github.com/anpavel84-afk/gobadminton/blob/9bffa8adfd02e0de3c631e14df6ef11c30da35dd/docs/workbench/operations/runner-229-install-prep/f4-web-integration.md",
+      "admission": "https://github.com/anpavel84-afk/gobadminton/blob/9bffa8adfd02e0de3c631e14df6ef11c30da35dd/docs/workbench/operations/runner-229-install-prep/owner-scope-reference.md",
+      "executor": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "medium",
+      "sandbox": "workspace-write",
+      "locks": [
+        "web",
+        "schema-contracts"
+      ],
+      "blocks": [
+        {
+          "id": "task",
+          "title": "Owner-scoped source/QA task"
+        }
+      ],
+      "effect_ceiling": "source_only",
+      "base_sha": "8c5aaee07c9f0f5ce3bce8532fe501854a3d2a00",
+      "depends_on_completed": [],
+      "depends_on_accepted": [
+        "qa-friends-dogfood-s2-public-game-recommendations-v001",
+        "qa-friends-dogfood-s3-my-games-attention-v001"
+      ]
+    },
+    {
+      "id": "qa-friends-dogfood-s4-web-integration-v001",
+      "order": -699,
+      "status": "queued",
+      "enabled": true,
+      "source": "https://github.com/anpavel84-afk/gobadminton/blob/ad683dd7b87744804ba401dd0a9412a791fca189/docs/workbench/operations/runner-229-install-prep/qa-f4-independent-web.md",
+      "admission": "https://github.com/anpavel84-afk/gobadminton/blob/9bffa8adfd02e0de3c631e14df6ef11c30da35dd/docs/workbench/operations/runner-229-install-prep/owner-scope-reference.md",
+      "executor": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "medium",
+      "sandbox": "read-only",
+      "locks": [
+        "web",
+        "schema-contracts"
+      ],
+      "blocks": [
+        {
+          "id": "task",
+          "title": "Owner-scoped source/QA task"
+        }
+      ],
+      "effect_ceiling": "source_only",
+      "base_sha": "8c5aaee07c9f0f5ce3bce8532fe501854a3d2a00",
+      "depends_on_completed": [
+        "friends-dogfood-s4-web-integration-v001"
+      ],
+      "depends_on_accepted": [],
+      "source_qa": {
+        "producer_task_id": "friends-dogfood-s4-web-integration-v001",
+        "suite_id": "friends-s4-web-privacy"
+      }
+    },
+    {
+      "id": "friends-dogfood-release-v001",
+      "order": -600,
+      "status": "queued",
+      "enabled": true,
+      "source": "https://github.com/anpavel84-afk/gobadminton/blob/ad683dd7b87744804ba401dd0a9412a791fca189/docs/workbench/operations/runner-229-install-prep/f5-machine-handoff-contract.md",
+      "admission": "https://github.com/anpavel84-afk/gobadminton/blob/9bffa8adfd02e0de3c631e14df6ef11c30da35dd/docs/workbench/operations/runner-229-install-prep/owner-scope-reference.md",
+      "executor": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "medium",
+      "sandbox": "read-only",
+      "locks": [
+        "global"
+      ],
+      "blocks": [
+        {
+          "id": "task",
+          "title": "Owner-scoped source/QA task"
+        }
+      ],
+      "effect_ceiling": "source_only",
+      "base_sha": "8c5aaee07c9f0f5ce3bce8532fe501854a3d2a00",
+      "depends_on_completed": [],
+      "depends_on_accepted": [
+        "qa-friends-dogfood-s4-web-integration-v001"
+      ],
+      "release_handoff": {
+        "kind": "ci_candidate",
+        "target": "authorized_release_job"
+      }
+    }
+  ],
+  "synthetic_admission_for_dry_run": {
+    "action": "enqueued",
+    "task_ids": [
+      "friends-dogfood-s1-privacy-qa-v001",
+      "friends-dogfood-s2-public-game-recommendations-v001",
+      "qa-friends-dogfood-s2-public-game-recommendations-v001",
+      "friends-dogfood-s3-my-games-attention-v001",
+      "qa-friends-dogfood-s3-my-games-attention-v001",
+      "friends-dogfood-s4-web-integration-v001",
+      "qa-friends-dogfood-s4-web-integration-v001",
+      "friends-dogfood-release-v001"
+    ],
+    "source_review_task_ids": [
+      "friends-dogfood-s1-privacy-qa-v001"
+    ],
+    "release_handoff_task_ids": [
+      "friends-dogfood-release-v001"
+    ],
+    "admission_pairs": [],
+    "warning": "Syntactic mock receipt only. No authentic Owner issuer, protected grant, canonical Git writer or runtime admission is created."
+  },
+  "synthetic_owner_binding_for_dry_run": {
+    "project": "GoBadminton",
+    "instructions": [
+      {
+        "id": "owner-friends-f1f5-single-scope-v001",
+        "action": "enqueued",
+        "task_ids": [
+          "friends-dogfood-s1-privacy-qa-v001",
+          "friends-dogfood-s2-public-game-recommendations-v001",
+          "qa-friends-dogfood-s2-public-game-recommendations-v001",
+          "friends-dogfood-s3-my-games-attention-v001",
+          "qa-friends-dogfood-s3-my-games-attention-v001",
+          "friends-dogfood-s4-web-integration-v001",
+          "qa-friends-dogfood-s4-web-integration-v001",
+          "friends-dogfood-release-v001"
+        ]
+      }
+    ],
+    "source_review_task_ids": [
+      "friends-dogfood-s1-privacy-qa-v001"
+    ],
+    "release_handoff_task_ids": [
+      "friends-dogfood-release-v001"
+    ],
+    "admission_pairs": [],
+    "warning": "Not cryptographically authenticated; authorized original Owner-bound publication required."
+  },
+  "release_handoff_contract": "F5 receipt carries exact QA-F4 candidate/tree and SOURCE_ONLY_CI_HANDOFF_READY. No production action, release-job ID, CLI deployment or migration.",
+  "parallelism_policy": "F2 and F3 overlap api lock; scheduler and atomic claim MUST serialize; disjoint independently proven locks may run up to configured max_parallel.",
+  "effect_ceiling": "source_only",
+  "QA_companions": [
+    "qa-friends-dogfood-s2-public-game-recommendations-v001",
+    "qa-friends-dogfood-s3-my-games-attention-v001",
+    "qa-friends-dogfood-s4-web-integration-v001"
+  ]
+}
