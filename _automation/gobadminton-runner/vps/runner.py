@@ -2448,9 +2448,9 @@ def _seed_clean_dependencies(cfg: dict[str, Any], task: dict[str, Any], worktree
     resolved = worktree.resolve(strict=True)
     if worktree.is_symlink() or resolved != _v2_task_worktree(cfg, task).resolve(strict=True):
         raise RuntimeError("dependency destination is not the exact task worktree")
-    clean = subprocess.run(["git", "-C", str(worktree), "status", "--porcelain", "--untracked-files=all"],
-                           capture_output=True, text=True, timeout=30)
-    if clean.returncode != 0 or clean.stdout.strip():
+    import clean_publish_submit
+    clean_publish_submit.workspace(str(task["id"]), worktree)
+    if clean_publish_submit.git(worktree, "status", "--porcelain", "--untracked-files=all"):
         raise RuntimeError("dependency seeding requires clean Git source")
     for directory in (cache, *cache.parents):
         _root_protected_dependency_path(directory)
