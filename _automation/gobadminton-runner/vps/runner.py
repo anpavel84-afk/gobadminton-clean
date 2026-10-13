@@ -649,15 +649,30 @@ def launch_agent(cfg: dict[str, Any], task: dict[str, Any], prompt: str) -> subp
     if executor == "codex" and not model:
         model = str(cfg.get("codex_default_model") or "gpt-6-sol").strip()
     sandbox = str(task.get("sandbox") or "workspace").strip().lower()
-    workspace = str(cfg["workspace"])
-    worktrees = str(cfg.get("worktrees_root") or (Path(workspace).parent / "worktrees"))
+    clean = cfg.get("project_repo") == "anpavel84-afk/gobadminton-clean"
+    workspace = str(task.get("_workspace") or cfg["workspace"])
+    worktrees = str(cfg.get("worktrees_root") or
+                    (Path(str(cfg["workspace"])).parent / "worktrees"))
+    if clean and task.get("_workspace"):
+        # Real V2 task worktree, never shared Git checkout/control root.
+        work = Path(workspace).resolve()
+        root = Path(worktrees).resolve()
+        if work.parent != root or work == root or Path(workspace).is_symlink():
+            raise RuntimeError("clean task worktree escapes dedicated task root")
 
     env = dict(os.environ)
-    node_bin = str(cfg.get("node_bin") or "").strip()
-    local_bin = str(cfg.get("local_bin") or "").strip()
+    node_bin = str(cfg.get("node_bin") or
+                   ("/home/agentagency-dev/.local/node-v24.21.0/bin" if clean else "")).strip()
+    local_bin = str(cfg.get("local_bin") or
+                    ("/home/agentagency-dev/.local/bin" if clean else "")).strip()
     prefixes = [x for x in [node_bin, local_bin] if x]
     if prefixes:
         env["PATH"] = os.pathsep.join(prefixes + [env.get("PATH", "")])
+
+    if clean and sandbox == "full":
+        raise RuntimeError("clean executor full sandbox bypass is not authorized")
+    if clean and executor != "codex":
+        raise RuntimeError("clean DEV executor requires scoped Codex, not Cursor")
 
     if executor == "cursor":
         cli = str(cfg.get("cursor_agent") or "") or (shutil.which("agent") or shutil.which("cursor-agent") or "")
@@ -702,8 +717,14 @@ def launch_agent(cfg: dict[str, Any], task: dict[str, Any], prompt: str) -> subp
                        "pinned Runner receipt path. Never claim root independent QA "
                        "PASS without an authentic separately authorized test job.")
         else:
-            # Codex 0.155+ --approve-for-me selects workspace-write.
-            cmd += ["--approve-for-me", "--add-dir", str(ROOT), "--add-dir", worktrees]
+            # CLI owns the final receipt; model cannot edit Runner control state
+            # or sibling worktrees through --add-dir.
+            if clean:
+                cmd += ["--approve-for-me", "--output-last-message",
+                        str(readonly_receipt_path(task))]
+            else:
+                cmd += ["--approve-for-me", "--add-dir", str(ROOT),
+                        "--add-dir", worktrees]
         if model:
             cmd += ["--model", model]
         if effort in {"low", "medium", "high", "xhigh", "extra_high"}:
