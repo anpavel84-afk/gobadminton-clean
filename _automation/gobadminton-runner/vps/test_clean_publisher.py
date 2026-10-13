@@ -121,6 +121,29 @@ class PublisherSafety(unittest.TestCase):
         self.assertEqual(values['core.hooksPath'], '/dev/null')
         self.assertIn('IdentitiesOnly=yes', values['core.sshCommand'])
 
+    def test_only_fixed_clean_credential_paths_are_read_and_used(self):
+        account = types.SimpleNamespace(getpwnam=lambda _: types.SimpleNamespace(pw_uid=988))
+        with patch.dict(sys.modules, {'pwd': account}), patch.object(p.os, 'geteuid', return_value=988, create=True), \
+                patch.object(p, 'secure_read', return_value=b'fixture') as reads:
+            env = p.git_environment({'publisher_uid': 988})
+        expected = Path('/etc/gobadminton-clean-control-plane/credentials')
+        self.assertEqual([call.args[0] for call in reads.call_args_list],
+                         [expected / 'github-publisher-identity', expected / 'github-known-hosts'])
+        self.assertTrue(all(call.args[1] == 0 for call in reads.call_args_list))
+        values = {env['GIT_CONFIG_KEY_' + str(i)]: env['GIT_CONFIG_VALUE_' + str(i)]
+                  for i in range(int(env['GIT_CONFIG_COUNT']))}
+        self.assertIn(str(expected / 'github-publisher-identity'), values['core.sshCommand'])
+        self.assertIn(str(expected / 'github-known-hosts'), values['core.sshCommand'])
+        self.assertNotIn('gobadminton-control-plane-v3-publisher', values['core.sshCommand'])
+        self.assertNotIn('id_ed25519', values['core.sshCommand'])
+
+    def test_historical_or_task_selected_credential_path_is_refused(self):
+        with patch.object(p, 'secure_read') as read:
+            for field in ('ssh_identity', 'ssh_known_hosts', 'credential_path', 'ssh_command'):
+                with self.subTest(field=field), self.assertRaises(p.Hold):
+                    p.git_environment({'publisher_uid': 988, field: '/etc/gobadminton-control-plane-v3-publisher/credentials/github-publisher-identity'})
+            read.assert_not_called()
+
     def test_git_never_uses_request_repository_or_shell(self):
         with self.assertRaises(p.Hold):
             p.run_git(Path('/tmp/executor'), ['status'])

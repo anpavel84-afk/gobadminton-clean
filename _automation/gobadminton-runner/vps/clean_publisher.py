@@ -181,12 +181,14 @@ def trusted_modules(config: dict):
 
 
 def git_environment(config: dict) -> dict[str, str]:
+    if any(key in config for key in ('ssh_identity', 'ssh_known_hosts', 'credential_path', 'ssh_command')):
+        raise Hold('credential path/command overrides refused; fixed Clean credentials required')
     if type(config.get('publisher_uid')) is not int or os.geteuid() != config['publisher_uid'] or os.geteuid() == 0:
         raise Hold('exclusive nonroot publisher identity required')
     import pwd
     if os.geteuid() != pwd.getpwnam('gobadminton-v3-publisher').pw_uid:
         raise Hold('existing exclusive writer principal required')
-    keys = Path('/etc/gobadminton-control-plane-v3-publisher/credentials')
+    keys = Path('/etc/gobadminton-clean-control-plane/credentials')
     identity, hosts = keys / 'github-publisher-identity', keys / 'github-known-hosts'
     secure_read(identity, 0, 16384)
     secure_read(hosts, 0, 65536)

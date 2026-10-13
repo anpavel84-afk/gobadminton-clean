@@ -107,7 +107,10 @@ class CleanQAJobSafety(unittest.TestCase):
         with patch.dict(sys.modules, {'pwd': fake_pwd}):
             command = qa.sandbox(Path('/snapshot'), 'api', 'qa', 999)
             self.assertEqual(command[:5], ['/usr/bin/nsenter', '--target', '999', '--net', '--'])
-            self.assertIn('--clear-groups', command); self.assertIn('--unshare-all', command)
+            self.assertNotIn('/usr/bin/setpriv', command); self.assertIn('--unshare-all', command)
+            self.assertEqual(command[command.index('--uid') + 1], '1234')
+            self.assertEqual(command[command.index('--gid') + 1], '1234')
+            self.assertEqual(command[command.index('--cap-drop') + 1], 'ALL')
             self.assertIn('--share-net', command)
             self.assertIn('postgresql://qa:disposable-only@127.0.0.1:5432/gobadminton_friends_s1_disposable', command)
             self.assertIn('RUN_DB_INTEGRATION', command)
@@ -120,6 +123,20 @@ class CleanQAJobSafety(unittest.TestCase):
         fake_pwd = types.SimpleNamespace(getpwnam=lambda _: types.SimpleNamespace(pw_uid=0, pw_gid=0))
         with patch.dict(sys.modules, {'pwd': fake_pwd}), self.assertRaises(ValueError):
             qa.sandbox(Path('/snapshot'), 'web', 'root')
+
+    def test_reviewer_root_namespace_creator_drops_nonroot_identity_and_all_caps(self):
+        user = types.SimpleNamespace(pw_uid=985, pw_gid=977)
+        command = qa.review_sandbox(Path('/snapshot'), Path('/job'), Path('/job/output'), user)
+        self.assertEqual(command[0], '/usr/bin/bwrap')
+        self.assertNotIn('/usr/bin/setpriv', command)
+        self.assertEqual(command[command.index('--uid') + 1], '985')
+        self.assertEqual(command[command.index('--gid') + 1], '977')
+        self.assertEqual(command[command.index('--cap-drop') + 1], 'ALL')
+        self.assertIn('--unshare-all', command); self.assertIn('--share-net', command)
+        self.assertNotIn('/var/run/docker.sock', command)
+        self.assertNotIn('/home/agentagency-dev', command)
+        with self.assertRaises(ValueError):
+            qa.review_sandbox(Path('/snapshot'), Path('/job'), Path('/job/output'), types.SimpleNamespace(pw_uid=0, pw_gid=0))
 
     def test_disposable_database_cleanup_on_suite_exception(self):
         commands = []

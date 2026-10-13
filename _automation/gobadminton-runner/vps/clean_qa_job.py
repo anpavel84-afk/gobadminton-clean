@@ -60,7 +60,7 @@ EVIDENCE = Path('/var/lib/gobadminton-clean-trusted-qa-evidence')
 INSTALL = Path('/opt/gobadminton-clean-qa')
 DEPENDENCIES = INSTALL / 'dependencies'
 NODE = INSTALL / 'node/bin/node'
-PNPM = INSTALL / 'pnpm/pnpm.cjs'
+PNPM = INSTALL / 'pnpm/bin/pnpm.cjs'
 CODEX = INSTALL / 'bin/codex'
 AUTH = Path('/var/lib/gobadminton-clean-qa-reviewer')
 IMAGE = 'postgis/postgis:18-3.6'
@@ -270,8 +270,10 @@ def sandbox(source, app, account, db_pid=None):
     user = pwd.getpwnam(account)
     if user.pw_uid == 0:
         raise ValueError('QA account must not be root')
-    args = ['/usr/bin/setpriv', '--reuid=' + str(user.pw_uid), '--regid=' + str(user.pw_gid), '--clear-groups',
-            '/usr/bin/bwrap', '--die-with-parent', '--new-session', '--unshare-all']
+    # Approved root job creates namespaces; bwrap drops payload identity/caps.
+    # Do not weaken host user-namespace restrictions to run the payload.
+    args = ['/usr/bin/bwrap', '--die-with-parent', '--new-session', '--unshare-all',
+            '--uid', str(user.pw_uid), '--gid', str(user.pw_gid), '--cap-drop', 'ALL']
     if db_pid is not None:
         if not isinstance(db_pid, int) or db_pid <= 1:
             raise ValueError('invalid disposable DB namespace')
@@ -397,8 +399,10 @@ def failure(job, log, outcome, exit_code):
 def review_sandbox(source, root, output_dir, user):
     # Read-only Codex itself is additionally OS-isolated: no writer homes/SSH,
     # root policy, live project DB credentials, Docker socket or source writes.
-    args = ['/usr/bin/setpriv', '--reuid=' + str(user.pw_uid), '--regid=' + str(user.pw_gid), '--clear-groups',
-            '/usr/bin/bwrap', '--die-with-parent', '--new-session', '--unshare-all', '--share-net']
+    if user.pw_uid == 0:
+        raise ValueError('reviewer payload must not be root')
+    args = ['/usr/bin/bwrap', '--die-with-parent', '--new-session', '--unshare-all', '--share-net',
+            '--uid', str(user.pw_uid), '--gid', str(user.pw_gid), '--cap-drop', 'ALL']
     for path in ('/usr', '/bin', '/lib', '/lib64'):
         if Path(path).exists():
             args += ['--ro-bind', path, path]
