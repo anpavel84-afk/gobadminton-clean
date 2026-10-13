@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AppEnv } from "../../src/config/env";
 import { loadEnv } from "../../src/config/env";
-import { assertDecision, createRequest, decideRequest, effectivePending, eligible, emptyView, friendsEnabled,
+import { assertDecision, canRequestAgain, createRequest, decideRequest, effectivePending, eligible, emptyView, friendsEnabled,
   listQuery, parse, type Availability, type FriendshipRow } from "../../src/friendships/friendships.policy";
 import { FriendshipsController } from "../../src/friendships/friendships.controller";
 import { FriendshipsService } from "../../src/friendships/friendships.service";
@@ -64,6 +64,20 @@ describe("Friends S1 policy and HTTP authentication", () => {
   it("expiry equality denies with no worker", () => {
     expect(effectivePending(row,profiles,false,now)).toBe(true);
     expect(effectivePending(row,profiles,false,row.expires_at!)).toBe(false);
+  });
+  it("allows a fresh request after terminal states or expiry without restoring old rights", () => {
+    for (const state of ["declined", "cancelled", "removed", "blocked", "expired"]) {
+      expect(canRequestAgain({...row,state},profiles,false,now,true)).toBe(true);
+    }
+    expect(canRequestAgain(row,profiles,false,row.expires_at!,true)).toBe(true);
+    expect(canRequestAgain(row,[profiles[0]!,{...profiles[1]!,social_action_epoch:"4"}],false,now,true)).toBe(true);
+    expect(canRequestAgain(row,profiles,false,now,true)).toBe(false);
+    const retired = {...row,state:"removed"};
+    expect(canRequestAgain({...row,state:"accepted"},profiles,false,now,true)).toBe(false);
+    expect(canRequestAgain(retired,profiles,true,now,true)).toBe(false);
+    expect(canRequestAgain(retired,profiles,false,now,false)).toBe(false);
+    expect(canRequestAgain(retired,[profiles[0]!],false,now,true)).toBe(false);
+    expect(canRequestAgain(retired,[profiles[0]!,{...profiles[1]!,directory_visible:false}],false,now,true)).toBe(false);
   });
   it("block and changed epochs never resurrect pending after reenable", () => {
     expect(effectivePending(row,profiles,true,now)).toBe(false);

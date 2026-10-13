@@ -11,7 +11,7 @@ import { MutationRunner } from "../common/mutation-runner.service";
 import { PairFenceService } from "../safety/pair-fence.service";
 import { avatarForUser } from "../profiles/avatar-presentation";
 import { unrestrictedSql } from "../restrictions/policy";
-import { assertDecision, createRequest, decideRequest, effectivePending, eligible, emptyView,
+import { assertDecision, canRequestAgain, createRequest, decideRequest, effectivePending, eligible, emptyView,
   friendsEnabled, listQuery, parse, unavailable, uuid, type Availability, type FriendshipRow } from "./friendships.policy";
 
 type Action = "accept" | "decline" | "cancel" | "remove";
@@ -211,7 +211,7 @@ export class FriendshipsService {
       request: pending ? { id: row.request_id, expiresAt: row.expires_at!.toISOString() } : null,
       peer: visible && (accepted || pending) ? { publicPlayerId: peer.public_player_id, displayName: peer.display_name,
         avatar: await avatarForUser(client, peerId) } : null,
-      capabilities: { canRequest: false, canAccept: pending && row.recipient_user_id === actor,
+      capabilities: { canRequest: canRequestAgain(row, ctx.profiles, ctx.blocked, ctx.now, friendsEnabled(this.env)), canAccept: pending && row.recipient_user_id === actor,
         canDecline: row.state === "pending" && row.recipient_user_id === actor,
         canCancel: row.state === "pending" && row.requester_user_id === actor,
         canRemove: row.state === "accepted" } };
