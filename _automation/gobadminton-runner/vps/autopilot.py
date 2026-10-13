@@ -49,7 +49,7 @@ NO_ACTION_REPLAN_SECONDS = 300
 PLANNER_TIMEOUT_SECONDS = 1800
 BACKLOG_SYNC_INTERVAL_SECONDS = 60
 OWNER_NO_ACTION_REPLAN_SECONDS = 300
-WORKTREE = Path("/srv/gobadminton-dev/worktrees/pm-autopilot")
+WORKTREE = Path("/srv/gobadminton-clean/worktrees/pm-autopilot")
 BRANCH = "pm/autopilot-local"
 
 
@@ -470,7 +470,7 @@ def run(cmd: list[str], cwd: Path | None = None, timeout: int = 120) -> subproce
 def ensure_worktree(cfg: dict[str, Any]) -> tuple[bool, str]:
     primary = Path(str(cfg["workspace"]))
     remote = run(["git", "remote", "get-url", "origin"], cwd=primary, timeout=15)
-    if remote.returncode or remote.stdout.strip() != "git@github-gobadminton:anpavel84-afk/gobadminton.git":
+    if remote.returncode or remote.stdout.strip() != "git@github-gobadminton-clean:anpavel84-afk/gobadminton-clean.git":
         return False, "planner remote is not verified GoBadminton repository-specific SSH identity"
     author = run(["git", "var", "GIT_AUTHOR_IDENT"], cwd=primary, timeout=15)
     if author.returncode or not author.stdout.strip():
@@ -899,7 +899,7 @@ def _verify_planner_publication(
         return False, "reported result_commit is not an ancestor of canonical main"
     baseline = str(backlog_before.get("_canonical_commit") or "")
     if (not backlog_sync.FULL_GITHUB_SOURCE.fullmatch(
-            f"https://github.com/anpavel84-afk/gobadminton/blob/{baseline}/baseline")
+            f"https://github.com/anpavel84-afk/gobadminton-clean/blob/{baseline}/baseline")
             or baseline == code
             or run(["git", "merge-base", "--is-ancestor", baseline, code],
                    cwd=repo, timeout=20).returncode != 0):

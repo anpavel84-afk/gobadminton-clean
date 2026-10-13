@@ -599,7 +599,7 @@ Mandatory project context:
 - Read AGENTS.md and CURSOR.md.
 - Load applicable .cursor/rules and repository governance.
 - GitHub/Git history is durable project truth.
-- Work only inside /srv/gobadminton-dev/repo, /srv/gobadminton-dev/worktrees and the runner receipt/progress paths.
+- Work only inside /srv/gobadminton-clean/repo, /srv/gobadminton-clean/worktrees and the runner receipt/progress paths.
 - /srv/gobadminton is LIVE RUNTIME MATERIAL and is strictly read-only/out of scope.
 - /srv/agent-agency is another project and is strictly out of scope.
 - Do not infer authority beyond the exact assignment.
@@ -1882,7 +1882,7 @@ def _v2_dependency_accepted(q: dict[str, Any], st: dict[str, Any], dep_id: str,
     return _v2_strict_dependency_accepted(q, st, dep_id)
 
 
-SOURCE_REVIEW_QA_ROOT=Path("/var/lib/gobadminton-v3-trusted-qa-evidence")
+SOURCE_REVIEW_QA_ROOT=Path("/var/lib/gobadminton-clean-trusted-qa-evidence")
 
 
 def _v2_source_review_accepted(q: dict[str, Any], st: dict[str, Any], dep_id: str,

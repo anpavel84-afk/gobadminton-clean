@@ -4,7 +4,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 import base64, json, os, signal, subprocess, time, urllib.request, urllib.error
 
-ROOT=Path("/srv/gobadminton-dev/runner")
+ROOT=Path("/srv/gobadminton-clean/runner")
 STATE=ROOT/"state.json"
 PROGRESS=ROOT/"progress.json"
 BACKLOG=ROOT/"backlog.json"

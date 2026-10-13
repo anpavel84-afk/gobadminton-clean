@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "project": "GoBadminton",
+  "workspace": "/srv/gobadminton-clean/repo",
+  "prod_authorized": false,
+  "policy": {
+    "execution": "conflict_domain_parallel",
+    "single_writer": true,
+    "completion_requires_receipt": true,
+    "stop_on_blocked": true,
+    "max_repair_attempts": 3
+  },
+  "tasks": []
+}

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from compact_task_capsule import capsule
 
-ROOT = Path("/srv/gobadminton-dev/runner")
+ROOT = Path("/srv/gobadminton-clean/runner")
 CRITICAL_QA_PREFIXES = (
     "qa-product-web-p4-predeploy-tooling-",
     "qa-product-p5-friends-offline-tooling-",
@@ -92,7 +92,7 @@ def render(owner_items, active_admission_only: bool) -> str:
           "Use affordable model routing: Luna low/medium routine, Sol medium technical, "
           "Astra high ONLY novel sensitive security, not routine P6 packaging QA. "
           "Never create duplicate work or proof-of-proof planning tasks.\n"
-        + "Write exact planner receipt in /srv/gobadminton-dev/runner/autopilot-receipt.json. "
+        + "Write exact planner receipt in /srv/gobadminton-clean/runner/autopilot-receipt.json. "
           "For Owner instruction, canonical result binding includes matching id, SHA of "
           "instruction text and exact task IDs. Guarded atomic single-writer Git push; "
           "backlog_sync parity after. If no safe action, leave main untouched, "

@@ -25,8 +25,9 @@ from datetime import datetime, timezone
 from typing import Any
 
 CANONICAL_PATH = "_automation/gobadminton-runner/backlog.json"
+_GITHUB_SAFE_SEGMENT = r"(?!\.{1,2}(?:/|$))[A-Za-z0-9_.-]+"
 FULL_GITHUB_SOURCE = re.compile(
-    r"^https://github\.com/anpavel84-afk/gobadminton/blob/([0-9a-f]{40})/([A-Za-z0-9_./-]+)$"
+    rf"^https://github\.com/anpavel84-afk/gobadminton-clean/blob/([0-9a-f]{{40}})/({_GITHUB_SAFE_SEGMENT}(?:/{_GITHUB_SAFE_SEGMENT})*)$"
 )
 TERMINAL_STATUSES = frozenset(
     {"completed", "blocked", "qa_failed", "qa_blocked", "owner_skipped", "superseded_before_launch", "deferred"}
@@ -889,8 +890,8 @@ def sync_once(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--repo", type=Path, default=Path("/srv/gobadminton-dev/repo"))
-    parser.add_argument("--runtime-root", type=Path, default=Path("/srv/gobadminton-dev/runner"))
+    parser.add_argument("--repo", type=Path, default=Path("/srv/gobadminton-clean/repo"))
+    parser.add_argument("--runtime-root", type=Path, default=Path("/srv/gobadminton-clean/runner"))
     parser.add_argument("--no-fetch", action="store_true", help="synthetic/offline testing only")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)

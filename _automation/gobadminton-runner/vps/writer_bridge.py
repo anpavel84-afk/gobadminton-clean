@@ -111,7 +111,7 @@ _LOCAL = threading.local()
 
 # Root owns this file, not the Runner v2 agent. Absent file means OFF.
 # This explicit path is a source contract; Stage B2 does not install it.
-ROOT_POLICY_PATH = Path("/etc/gobadminton-control-plane-v3/v2-writer-bridge-policy.json")
+ROOT_POLICY_PATH = Path("/etc/gobadminton-clean-control-plane/v2-writer-bridge-policy.json")
 _POLICY_MAX_BYTES = 32_768
 
 
