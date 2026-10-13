@@ -189,7 +189,7 @@ class CleanCodexWorktree(unittest.TestCase):
         self.cli.write_text("dummy CLI, never executed\n")
         self.worktrees = self.root / "worktrees"
         self.worktrees.mkdir()
-        self.workspace = self.worktrees / "runner-friends-api"
+        self.workspace = self.worktrees / "runner-friends-dev-s1-api-20261013-v001"
         self.workspace.mkdir()
         self.control = self.root / "runner"
         self.control.mkdir()
@@ -232,7 +232,8 @@ class CleanCodexWorktree(unittest.TestCase):
               "sandbox":"workspace","_workspace":str(self.workspace)}
         for task in ({**good,"sandbox":"full"},
                      {**good,"executor":"cursor"},
-                     {**good,"_workspace":str(self.root / "shared_repo")}):
+                     {**good,"_workspace":str(self.root / "shared_repo")},
+                     {**good,"_workspace":str(self.worktrees / "runner-other-task")}):
             with self.subTest(task=task),self.assertRaises(RuntimeError),patch.object(
                 runner.subprocess,"Popen") as process:
                 self.capture_without_spawn(task,process)
