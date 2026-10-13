@@ -373,9 +373,10 @@ def disposable_database():
 
 def reviewer_result(raw, receipt, job_id):
     value = json.loads(raw)
-    if (set(value) != {'job_id', 'receipt_sha', 'verdict', 'blocking_findings'}
+    if (set(value) != {'job_id', 'receipt_sha', 'verdict', 'blocking_findings', 'merge_recommendation'}
             or value['job_id'] != job_id or value['receipt_sha'] != contract.digest(receipt)
-            or value['verdict'] != 'PASS' or value['blocking_findings'] != []):
+            or value['verdict'] != 'PASS' or value['blocking_findings'] != []
+            or value['merge_recommendation'] != 'MERGE_RECOMMENDED'):
         raise ValueError('actual independent reviewer did not approve exact receipt')
     return value
 
@@ -510,6 +511,8 @@ def wait_for_job(qa_id, timeout=7200):
         path = EVIDENCE / (qa_id + '.result.json')
         if path.exists():
             proof = contract.protected_json(path)
+            if proof.get('merge_recommendation') != 'MERGE_RECOMMENDED':
+                raise ValueError('protected result lacks actual independent merge recommendation')
             contract.verify_runner_receipt(proof, EVIDENCE)
             if any(proof.get(k) != identity[k] for k in ('candidate_sha', 'candidate_tree', 'branch', 'producer_task_id')):
                 raise ValueError('root QA result belongs to another candidate/task')
@@ -563,6 +566,8 @@ def execute(qa_id):
         raise ValueError('canonical producer not completed')
     if (EVIDENCE / (qa_id + '.result.json')).exists():
         proof = contract.protected_json(EVIDENCE / (qa_id + '.result.json'))
+        if proof.get('merge_recommendation') != 'MERGE_RECOMMENDED':
+            raise ValueError('old protected result cannot infer a merge recommendation')
         contract.verify_runner_receipt(proof, EVIDENCE)
         if (proof.get('task_id') != qa_id or any(proof.get(k) != identity[k] for k in
                 ('candidate_sha', 'candidate_tree', 'branch', 'producer_task_id'))):
@@ -643,8 +648,10 @@ def execute(qa_id):
         prompt = ('Independently review GoBadminton exact immutable candidate, tests and privacy boundaries. '
                   'Read /evidence/review-input.json and /evidence/tests.log; inspect /source. '
                   'No writes, credentials, publish, DB or service operations. Source QA only, never claim DEV browser smoke. '
-                  'Return only JSON with job_id, receipt_sha, verdict PASS/FAIL/BLOCKED, blocking_findings. '
+                  'Return only JSON with job_id, receipt_sha, verdict PASS/FAIL/BLOCKED, blocking_findings, merge_recommendation. '
                   'Use the exact provided job_id and receipt digest. PASS only if independent review finds no source blockers. '
+                  'Explicitly return merge_recommendation=MERGE_RECOMMENDED only when you independently recommend '
+                  'merging this exact reviewed source candidate; otherwise use MERGE_NOT_RECOMMENDED and FAIL/BLOCKED. '
                   'Receipt digest=' + contract.digest(receipt))
         review_cmd = review_sandbox(source, root, output_dir, user) + reviewer_command(app, prompt)
         code, review_log = run(review_cmd, timeout=1800, on_start=lambda pid: reviewer_started(
@@ -653,7 +660,7 @@ def execute(qa_id):
             failure(job, bytes(logs) + b'\nREVIEW\n' + review_log, 'ENV_BLOCKED', code or 1)
             raise ValueError('independent reviewer process failed')
         try:
-            reviewer_result(output_path.read_bytes(), receipt, job_id)
+            actual_review = reviewer_result(output_path.read_bytes(), receipt, job_id)
         except ValueError:
             try:
                 actual = json.loads(output_path.read_bytes())
@@ -696,6 +703,7 @@ def execute(qa_id):
                 contract.immutable_write(path, payload)
         atomic_policy(policy)
         proof = {'project': 'GoBadminton', 'task_id': qa_id, 'ok': True, 'verdict': 'PASS',
+                 'merge_recommendation': actual_review['merge_recommendation'],
                  'acceptance_state': 'SOURCE_ACCEPTED', 'blocking_findings': [], 'blocking_gap_count': 0,
                  'producer_task_id': producer_id, 'candidate_sha': identity['candidate_sha'],
                  'candidate_tree': identity['candidate_tree'], 'branch': identity['branch'], 'trusted_job': ref}

@@ -80,6 +80,7 @@ def clean_claim(claim):
       "id":tid,
       "status":limited(claim.get("status"),30) or "running",
       "attempt":int(claim.get("attempt") or 1) if str(claim.get("attempt") or "1").isdigit() else 1,
+      "pid":verified_pid(claim.get("agent_pid"),"exec"),
       "max_attempts":5,
       "locks":[limited(x,40) for x in locks[:8] if isinstance(x,str)] if isinstance(locks,list) else [],
     }
@@ -111,7 +112,7 @@ def main():
     assert backlog.get("project")=="GoBadminton" and backlog.get("prod_authorized") is False
     assert cfg.get("project_repo")=="anpavel84-afk/gobadminton-clean" and cfg.get("prod_authorized") is False
     assert cfg.get("workspace")==str(REPO)
-    status=json.loads(command(PYTHON,str(RUNNER/"runner.py"),"status",timeout=10))
+    status=json.loads(command("/usr/bin/python3","-E","-s","-B",str(Path(__file__).resolve().parent/"runner.py"),"status",timeout=10))
     service_active=command("systemctl","is-active","gobadminton-clean-runner.service",timeout=5)=="active"
     alive=status.get("runner_alive") is True and service_active
     if status.get("paused") not in (True,False):

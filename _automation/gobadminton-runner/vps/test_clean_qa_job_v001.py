@@ -86,7 +86,8 @@ class CleanQAJobSafety(unittest.TestCase):
 
     def test_reviewer_wrong_receipt_job_or_blocker_cannot_authorize(self):
         receipt = {'actual': 'receipt'}
-        valid = {'job_id': 'job', 'receipt_sha': contract.digest(receipt), 'verdict': 'PASS', 'blocking_findings': []}
+        valid = {'job_id': 'job', 'receipt_sha': contract.digest(receipt), 'verdict': 'PASS', 'blocking_findings': [],
+                 'merge_recommendation': 'MERGE_RECOMMENDED'}
         self.assertEqual(qa.reviewer_result(json.dumps(valid), receipt, 'job'), valid)
         for field, value in [('receipt_sha', '0' * 64), ('job_id', 'other'), ('verdict', 'BLOCKED'),
                              ('blocking_findings', ['privacy defect'])]:
@@ -94,6 +95,18 @@ class CleanQAJobSafety(unittest.TestCase):
                 qa.reviewer_result(json.dumps({**valid, field: value}), receipt, 'job')
         with self.assertRaises(ValueError):
             qa.reviewer_result(json.dumps({**valid, 'reviewer_id': 'self-authorized'}), receipt, 'job')
+
+    def test_merge_recommendation_must_be_explicit_actual_bound_reviewer_output(self):
+        receipt = {'actual': 'successful tests do not authorize merging'}
+        reviewed = {'job_id': 'real-nonce', 'receipt_sha': contract.digest(receipt), 'verdict': 'PASS',
+                    'blocking_findings': [], 'merge_recommendation': 'MERGE_RECOMMENDED'}
+        self.assertEqual(qa.reviewer_result(json.dumps(reviewed), receipt, 'real-nonce')['merge_recommendation'], 'MERGE_RECOMMENDED')
+        absent = {key: value for key, value in reviewed.items() if key != 'merge_recommendation'}
+        for invalid in [absent, {**reviewed, 'merge_recommendation': 'MERGE_NOT_RECOMMENDED'},
+                        {**reviewed, 'merge_recommendation': True}, {**reviewed, 'job_id': 'another-nonce'},
+                        {**reviewed, 'blocking_findings': ['privacy defect']}]:
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                qa.reviewer_result(json.dumps(invalid), receipt, 'real-nonce')
 
     def test_dependency_fingerprint_changes_on_actual_byte_mutation(self):
         with tempfile.TemporaryDirectory() as temporary:
