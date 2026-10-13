@@ -3,7 +3,7 @@ import type { UnifiedSnapshot } from "@gobadminton/contracts";
 import {
   MOSCOW_BUNDLE, MOSCOW_DEV_BUNDLE, allowedMapResource,
   candidateMapAllowed, mapBundleForHost, publicDevMapAllowed,
-} from "./radar-map-assets";
+} from "../src/lib/radar-map-assets";
 
 const snapshot = (cityId: string, exposureMode: "live" | "synthetic_demo") =>
   ({ cityId, exposureMode }) as unknown as UnifiedSnapshot;
