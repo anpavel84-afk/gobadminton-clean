@@ -130,6 +130,7 @@ def validate_admission_batch(before, after, state, receipt, binding):
     for tid in reviews:
         task=tasks[tid]
         if (task.get("effect_ceiling")!="source_only"
+                or task.get("sandbox")!="read-only"
                 or runner._v2_history_status(state,tid) in backlog_sync.TERMINAL_STATUSES
                 or any(k in task for k in ("write_paths","file_scope","allowed_paths"))
                 or runner._v2_dependencies(task,"depends_on_completed")

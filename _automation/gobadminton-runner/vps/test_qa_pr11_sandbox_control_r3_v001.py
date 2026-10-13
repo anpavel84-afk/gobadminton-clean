@@ -95,6 +95,29 @@ class QASandboxAndControlR3(unittest.TestCase):
         with patch.object(control_agent,"bounded_restart",return_value=True) as restart:
             self.assertEqual(control_agent.execute({"type":"RESTART_RUNNER"}),"runner restarted")
             restart.assert_called_once_with("gobadminton-clean-runner.service")
+    def test_source_review_rejects_writable_sandbox_at_schema_and_preadmission(self):
+        import copy
+        import json
+        import publication_guard
+        f=json.loads((Path(__file__).with_name("friends_f1f5_dag_fixture_v001.json")).read_text())
+        source_review=next(task for task in f["tasks"] if "source_review" in task)
+        self.assertEqual(source_review["sandbox"],"read-only")
+        for mode in ("workspace","full"):
+            task=copy.deepcopy(source_review)
+            task["sandbox"]=mode
+            queue={"project":"GoBadminton","prod_authorized":False,"tasks":[task]}
+            with self.subTest(mode=mode):
+                with self.assertRaisesRegex(RuntimeError,"invalid independent source review"):
+                    runner.validate_backlog(queue)
+                receipt={"task_ids":[task["id"]],"action":"enqueued","admission_pairs":[],
+                         "source_review_task_ids":[task["id"]],"release_handoff_task_ids":[]}
+                binding={"project":"GoBadminton","instructions":[{"action":"enqueued",
+                         "task_ids":[task["id"]]}],"admission_pairs":[],
+                         "source_review_task_ids":[task["id"]],"release_handoff_task_ids":[]}
+                with self.assertRaisesRegex(Exception,"source review must be new read-only"):
+                    publication_guard.validate_admission_batch({"tasks":[]},queue,
+                              {"history":[],"active":{}},receipt,binding)
+
     def test_old_owner_command_endpoint_absent_and_blocked(self):
         self.assertEqual(control_agent.REMOTE,"")
         with self.assertRaisesRegex(RuntimeError,"No clean-root authenticated Owner"):

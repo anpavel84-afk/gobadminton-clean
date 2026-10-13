@@ -1664,6 +1664,7 @@ def validate_backlog(q: Any) -> dict[str, Any]:
                     or review["branch"].startswith((".","/"))
                     or not re.fullmatch(r"[A-Za-z0-9_.:-]+",review["suite_id"])
                     or t.get("effect_ceiling")!="source_only"
+                    or t.get("sandbox")!="read-only"
                     or t.get("depends_on_completed") or t.get("depends_on_accepted")):
                 raise RuntimeError(f"task {t.get('id')} invalid independent source review binding")
         base = t.get("base_sha")
