@@ -28,6 +28,26 @@ class PublisherSafety(unittest.TestCase):
         p.validate_request(value['task_id'], value)
         self.assertEqual(p.SLOTS['radar-dev-map-ui-20261013-v001'], 'feature/radar-dev-real-map-20261013')
 
+    def test_only_exact_second_attempts_alias_owner_bootstrap(self):
+        for family in ('friends-dev-s1-api-20261013', 'radar-dev-map-ui-20261013'):
+            original, successor = family + '-v001', family + '-v002'
+            self.assertEqual(p.owner_producer(successor), original)
+            self.assertEqual(p.SLOTS[successor], p.SLOTS[original])
+            self.assertEqual(p.WORKTREES[successor].name, 'runner-' + successor)
+            with self.assertRaises(p.Hold): p.owner_producer(family + '-v003')
+
+    def test_policy_requires_exact_five_slots_and_unchanged_prepared_scope(self):
+        config = {'task_baseline': {slot:(p.PREPARED_BASES[p.OWNER_PRODUCERS[slot]] if slot != 'main-pm' else 'a'*40) for slot in p.SLOTS},
+                  'task_scopes': {slot:['docs'] for slot in p.SLOTS}}
+        p.validate_slots(config)
+        for mutate in ('scope', 'base', 'extra', 'missing'):
+            changed = __import__('copy').deepcopy(config)
+            if mutate == 'scope': changed['task_scopes']['friends-dev-s1-api-20261013-v002'] = ['apps']
+            if mutate == 'base': changed['task_baseline']['friends-dev-s1-api-20261013-v002'] = 'b'*40
+            if mutate == 'extra': changed['task_baseline']['friends-dev-s1-api-20261013-v003'] = 'b'*40
+            if mutate == 'missing': changed['task_scopes'].pop('radar-dev-map-ui-20261013-v002')
+            with self.subTest(mutate=mutate), self.assertRaises(p.Hold): p.validate_slots(changed)
+
     def test_receipt_cannot_supply_shell_paths_credentials_or_other_refs(self):
         for field in ('command', 'shell', 'worktree', 'branch', 'ssh_identity', 'remote', 'owner_ref'):
             value = self.request()

@@ -60,6 +60,14 @@ class DevRelease(unittest.TestCase):
         with self.assertRaises(r.Blocked):
             r.bind(publication, planner, qa, producer, {}, contract)
 
+    def test_only_second_attempt_own_qa_can_release(self):
+        self.assertEqual(set(r.SUITES), {'qa-friends-dev-s1-api-20261013-v002','qa-radar-dev-map-ui-20261013-v002'})
+        for unsupported in ('qa-friends-dev-s1-api-20261013-v001','qa-friends-dev-s1-api-20261013-v003'):
+            publication, planner, qa, producer, contract = self.proof()
+            planner['accepted_qa_task_id'] = unsupported
+            with self.subTest(unsupported=unsupported), self.assertRaises(r.Blocked):
+                r.bind(publication, planner, qa, producer, {}, contract)
+
     def test_source_pass_without_independent_merge_recommendation_is_denied(self):
         publication, planner, qa, producer, contract = self.proof()
         qa.pop('merge_recommendation')
@@ -241,7 +249,7 @@ class DevRelease(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, patch.object(r, 'STORE', Path(directory)), \
                 patch.object(r, 'protected', side_effect=protected), patch.object(r, 'git', side_effect=git), \
                 patch.object(r, 'command', side_effect=command), patch.object(r, 'inspect_container', side_effect=inspect), \
-                patch.object(r, 'extract'), patch.object(r, 'migrations', return_value=[]), patch.object(r, 'record', side_effect=record), \
+                patch.object(r, 'extract'), patch.object(r, 'check_database_binding'), patch.object(r, 'migrations', return_value=[]), patch.object(r, 'record', side_effect=record), \
                 patch.object(r, 'smoke') as health, patch.object(r, 'browser', side_effect=r.Blocked('browser unavailable')), \
                 patch.object(r, 'bind', return_value=identity), patch.object(r, '_POLICY_BYTES', content), \
                 patch.object(r.importlib, 'import_module', return_value=contract), patch.object(r.os, 'fchmod', create=True):
@@ -260,6 +268,22 @@ class DevRelease(unittest.TestCase):
         self.assertFalse(running['new'])
         self.assertFalse(any('down' in args or 'restore' in args or '--volumes' in args for args in calls))
         self.assertTrue(all('/srv/gobadminton/' not in ' '.join(args) for args in calls))
+
+    def test_migration_database_and_network_cannot_redirect_to_host_or_shared_db(self):
+        database = {'Config': {'Env': ['POSTGRES_DB=gobadminton','POSTGRES_USER=gobadminton']},
+                    'NetworkSettings': {'Networks': {'gobadminton_dev_preview_internal': {}}}}
+        config = {'networks': {'isolated_dev_backend': {'name':'gobadminton_dev_preview_internal'}},
+                  'services': {'api': {'environment':{'DATABASE_URL':'postgres://gobadminton:private@db:5432/gobadminton'}},
+                               'migrate': {'networks': {'isolated_dev_backend': {}},
+                                           'environment':{'DATABASE_URL':'postgres://gobadminton:private@db:5432/gobadminton'}}}}
+        r.check_database_binding(config,database)
+        for url in ('postgres://gobadminton:private@localhost:5432/gobadminton',
+                    'postgres://gobadminton:private@db:5432/other',
+                    'postgres://other:private@db:5432/gobadminton',
+                    'postgres://gobadminton:private@db:5432/gobadminton?host=external'):
+            config['services']['migrate']['environment']['DATABASE_URL'] = url
+            with self.subTest(url=url), self.assertRaises(r.Blocked):
+                r.check_database_binding(config,database)
 
 
 if __name__ == '__main__':

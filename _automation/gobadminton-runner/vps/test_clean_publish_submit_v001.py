@@ -62,6 +62,30 @@ class HostSourcePublication(unittest.TestCase):
                     submit.workspace(slot, source)
             git.assert_not_called()
 
+    def test_second_attempts_use_only_same_fixed_branches_and_own_worktrees(self):
+        self.assertEqual(set(submit.BRANCHES), {'main-pm',
+            'friends-dev-s1-api-20261013-v001','radar-dev-map-ui-20261013-v001',
+            'friends-dev-s1-api-20261013-v002','radar-dev-map-ui-20261013-v002'})
+        for family in ('friends-dev-s1-api-20261013','radar-dev-map-ui-20261013'):
+            original, successor = family + '-v001', family + '-v002'
+            self.assertEqual(submit.BRANCHES[successor], submit.BRANCHES[original])
+            self.assertEqual(submit.WORKTREES[successor].name, 'runner-' + successor)
+            with patch.object(submit, 'git') as git:
+                with self.assertRaises(RuntimeError):
+                    submit.workspace(successor, submit.WORKTREES[original])
+                with self.assertRaises(RuntimeError):
+                    submit.workspace(family + '-v003', '/untrusted')
+                git.assert_not_called()
+
+    def test_second_attempt_nonzero_exit_retains_same_no_publication_boundary(self):
+        task = {'id':'friends-dev-s1-api-20261013-v002'}
+        receipt = {'ok':True,'project':'GoBadminton','task_id':task['id']}
+        with patch.object(submit, 'workspace') as workspace, patch.object(submit, 'submit') as writer:
+            with self.assertRaises(RuntimeError):
+                submit.finish_producer(task, submit.WORKTREES[task['id']], receipt,
+                                       executor_pid=1234, executor_exit_code=1)
+            workspace.assert_not_called(); writer.assert_not_called()
+
     def test_actual_active_v2_denies_nonzero_before_completed_gate(self):
         source = Path(runner.__file__).read_text()
         tree = ast.parse(source)

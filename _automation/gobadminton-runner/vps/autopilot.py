@@ -622,6 +622,20 @@ def build_prompt(
             "their automatically claimed producers verify these sources rather "
             "than redevelop them. Each producer still needs its own newly executed "
             "protected QA job. Do not copy manual QA PASS into runtime.\\n"
+            "If an original v001 producer became terminal BLOCKED solely because "
+            "dependencies were unavailable, preserve that failure and quarantine "
+            "its original pair. Once the root Publisher policy registers them, "
+            "use only friends-dev-s1-api-20261013-v002 and "
+            "radar-dev-map-ui-20261013-v002 with their exact qa- counterparts "
+            "as new ordinary source-only verification pairs, the same prepared "
+            "base SHAs and existing Owner instruction binding. Never rearm a "
+            "terminal ID or invent a new Owner comment/authority. The host seeds "
+            "private dependencies from the matching protected offline cache before "
+            "launch; the producer must not install dependencies. These are ENV "
+            "continuations of the same approved products, not a QA defect repair; "
+            "do not add recovery_from or relax any independent QA gate. Preserve "
+            "the original receipt/history evidence in an immutable PM report. "
+            "Leave Avatar disabled.\\n"
             "Clean Publisher authority is the root-owned exact Owner-bound "
             "/etc/gobadminton-clean-control-plane/clean-publisher-policy.json, "
             "its immutable installed module pins and separate service/credential. "
@@ -1313,7 +1327,18 @@ def main() -> int:
                 continue
 
             lane_recovery = runner.lane_local_block(runner_state)
-            owner_items = pending_owner_instructions()
+            try:
+                owner_items = pending_owner_instructions()
+            except RuntimeError as error:
+                from github_owner_issue_intake import IntakeHold
+                if not isinstance(error.__cause__, IntakeHold):
+                    raise
+                # Transport denial holds new planning without a restart storm.
+                ap_state.update(status="owner_intake_transport_held",
+                                hold_reason=str(error)[:250])
+                write_json(AUTOPILOT_STATE_PATH, ap_state)
+                wait_for_wake(ACTIVE_POLL_SECONDS)
+                continue
             if runner_state.get("blocked") and not lane_recovery:
                 ap_state["status"] = "runner_blocked"
                 ap_state["last_result"] = runner_state.get("blocked")

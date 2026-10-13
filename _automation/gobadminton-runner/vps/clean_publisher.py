@@ -31,7 +31,19 @@ REMOTE = 'git@github.com:anpavel84-afk/gobadminton-clean.git'
 SLOTS = {
     'friends-dev-s1-api-20261013-v001': 'feature/friends-s1-clean-source-20261013',
     'radar-dev-map-ui-20261013-v001': 'feature/radar-dev-real-map-20261013',
+    'friends-dev-s1-api-20261013-v002': 'feature/friends-s1-clean-source-20261013',
+    'radar-dev-map-ui-20261013-v002': 'feature/radar-dev-real-map-20261013',
     'main-pm': 'main',
+}
+OWNER_PRODUCERS = {
+    'friends-dev-s1-api-20261013-v001': 'friends-dev-s1-api-20261013-v001',
+    'radar-dev-map-ui-20261013-v001': 'radar-dev-map-ui-20261013-v001',
+    'friends-dev-s1-api-20261013-v002': 'friends-dev-s1-api-20261013-v001',
+    'radar-dev-map-ui-20261013-v002': 'radar-dev-map-ui-20261013-v001',
+}
+PREPARED_BASES = {
+    'friends-dev-s1-api-20261013-v001': 'f98b1ed42e3f3847ac305e487cf3a706d6a458f2',
+    'radar-dev-map-ui-20261013-v001': 'ed1ad372751b25f1d4bddae1f13e1b3876ef5bec',
 }
 WORKTREES = {slot: Path('/srv/gobadminton-clean/worktrees') /
              ('pm-autopilot' if slot == 'main-pm' else 'runner-' + slot) for slot in SLOTS}
@@ -46,6 +58,26 @@ _RUNTIME_GID = None
 
 class Hold(RuntimeError):
     pass
+
+
+def owner_producer(slot):
+    if slot not in OWNER_PRODUCERS:
+        raise Hold('unknown bounded Owner producer identity')
+    return OWNER_PRODUCERS[slot]
+
+
+def validate_slots(config):
+    if set(config['task_baseline']) != set(SLOTS) or set(config['task_scopes']) != set(SLOTS):
+        raise Hold('all five fixed task bindings required')
+    for slot, original in OWNER_PRODUCERS.items():
+        if config['task_baseline'][slot] != PREPARED_BASES[original]:
+            raise Hold('prepared Friends/Radar source base changed')
+    for successor in ('friends-dev-s1-api-20261013-v002', 'radar-dev-map-ui-20261013-v002'):
+        original = owner_producer(successor)
+        if (config['task_baseline'][successor] != config['task_baseline'][original]
+                or config['task_scopes'][successor] != config['task_scopes'][original]
+                or SLOTS[successor] != SLOTS[original]):
+            raise Hold('second attempt changed original bounded branch/base/scope')
 
 
 def digest(raw: bytes) -> str:
@@ -421,7 +453,7 @@ def publish_slot(slot: str, config: dict, intake, guard):
     owner = intake.checked_comment(event, canonical, require_queued=False)
     if owner is None or owner['github_comment_id'] != 6148670164:
         raise Hold('exact Owner event absent')
-    if slot != 'main-pm' and slot not in owner['task_ids']:
+    if slot != 'main-pm' and owner_producer(slot) not in owner['task_ids']:
         raise Hold('task outside exact Owner event')
     receipt = context = None
     if slot == 'main-pm':
@@ -522,8 +554,7 @@ def main():
         raise Hold('exact root service policy required')
     if type(config['submitter_uid']) is not int or config['submitter_uid'] in {0, config['publisher_uid']}:
         raise Hold('submitter/publisher separation required')
-    if set(config['task_baseline']) != set(SLOTS) or set(config['task_scopes']) != set(SLOTS):
-        raise Hold('all three fixed task bindings required')
+    validate_slots(config)
     if type(config.get('runtime_gid')) is not int or config['runtime_gid'] <= 0:
         raise Hold('positive typed runtime group required')
     _RUNTIME_GID = config['runtime_gid']

@@ -2419,10 +2419,108 @@ def _v2_task_worktree(cfg: dict[str, Any], task: dict[str, Any]) -> Path:
     return root / f"runner-{_v2_slug(str(task['id']))}"
 
 
+def _clean_dependency_cache(task_id: str) -> tuple[Path, str] | None:
+    app = {"friends-dev-s1-api-20261013-v001": "api",
+           "radar-dev-map-ui-20261013-v001": "web",
+           "friends-dev-s1-api-20261013-v002": "api",
+           "radar-dev-map-ui-20261013-v002": "web"}.get(task_id)
+    return (Path("/opt/gobadminton-clean-qa/dependencies") / app, app) if app else None
+
+
+def _root_protected_dependency_path(path: Path) -> None:
+    import stat
+    info = path.lstat()
+    if info.st_uid != 0 or (not stat.S_ISLNK(info.st_mode) and info.st_mode & 0o022):
+        raise RuntimeError("dependency cache is not root-owned/read-only")
+    if not (stat.S_ISLNK(info.st_mode) or stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
+        raise RuntimeError("dependency cache contains unsupported file type")
+
+
+def _seed_clean_dependencies(cfg: dict[str, Any], task: dict[str, Any], worktree: Path) -> None:
+    """Snapshot fixed preinstalled dependencies; never install packages/network."""
+    import hashlib
+    import stat
+    import tempfile
+    binding = _clean_dependency_cache(str(task.get("id") or ""))
+    if cfg.get("project_repo") != "anpavel84-afk/gobadminton-clean" or binding is None:
+        return
+    cache, app = binding
+    resolved = worktree.resolve(strict=True)
+    if worktree.is_symlink() or resolved != _v2_task_worktree(cfg, task).resolve(strict=True):
+        raise RuntimeError("dependency destination is not the exact task worktree")
+    clean = subprocess.run(["git", "-C", str(worktree), "status", "--porcelain", "--untracked-files=all"],
+                           capture_output=True, text=True, timeout=30)
+    if clean.returncode != 0 or clean.stdout.strip():
+        raise RuntimeError("dependency seeding requires clean Git source")
+    for directory in (cache, *cache.parents):
+        _root_protected_dependency_path(directory)
+        if directory.is_symlink():
+            raise RuntimeError("dependency cache root ancestry is symlinked")
+    lock = cache / "pnpm-lock.yaml"
+    _root_protected_dependency_path(lock)
+    candidate_lock = worktree / "pnpm-lock.yaml"
+    if (lock.is_symlink() or not candidate_lock.is_file() or candidate_lock.is_symlink()
+            or hashlib.sha256(lock.read_bytes()).digest() != hashlib.sha256(
+                candidate_lock.read_bytes()).digest()):
+        raise RuntimeError("dependency cache lock differs from candidate lock")
+    relatives = (Path("node_modules"), Path("apps") / app / "node_modules",
+                 Path("packages/contracts/node_modules"))
+    for relative in relatives:
+        destination = worktree / relative
+        if not destination.parent.resolve().is_relative_to(resolved) or destination.is_symlink():
+            raise RuntimeError("dependency destination ancestry escapes worktree")
+    for relative in relatives:
+        root = cache / relative
+        if not root.is_dir() or root.is_symlink():
+            raise RuntimeError("required dependency cache directory missing/symlinked")
+        for directory in (root, *root.parents):
+            if not directory.is_relative_to(cache):
+                break
+            _root_protected_dependency_path(directory)
+            if directory.is_symlink():
+                raise RuntimeError("dependency directory ancestry is symlinked")
+        for directory, dirs, files in os.walk(root, followlinks=False):
+            for entry in [Path(directory), *(Path(directory) / name for name in dirs + files)]:
+                _root_protected_dependency_path(entry)
+                if entry.is_symlink():
+                    target = os.readlink(entry)
+                    destination = worktree / entry.relative_to(cache)
+                    if (Path(target).is_absolute() or not entry.resolve().is_relative_to(cache)
+                            or not (destination.parent / target).resolve().is_relative_to(resolved)):
+                        raise RuntimeError("dependency symlink escapes snapshot/worktree")
+    # All validation precedes mutation. Each producer receives its own copied
+    # files, not links to the reviewer/cache store or another producer.
+    with tempfile.TemporaryDirectory(prefix=".runner-dependencies-", dir=worktree) as stage:
+        staging = Path(stage)
+        for relative in relatives:
+            shutil.copytree(cache / relative, staging / relative, symlinks=True)
+        for directory, dirs, files in os.walk(staging, followlinks=False):
+            os.chmod(directory, 0o700)
+            for name in files:
+                item = Path(directory) / name
+                if not item.is_symlink():
+                    os.chmod(item, 0o700 if item.stat().st_mode & 0o111 else 0o600)
+        for relative in relatives:
+            destination = worktree / relative
+            if not destination.parent.resolve().is_relative_to(resolved) or destination.is_symlink():
+                raise RuntimeError("dependency destination ancestry escapes worktree")
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if destination.exists():
+                shutil.rmtree(destination)
+            os.replace(staging / relative, destination)
+        for relative in relatives:
+            for directory, dirs, files in os.walk(worktree / relative, followlinks=False):
+                for name in dirs + files:
+                    item = Path(directory) / name
+                    if item.is_symlink() and not item.resolve().is_relative_to(resolved):
+                        raise RuntimeError("installed dependency symlink escapes worktree")
+
+
 def prepare_task_worktree(cfg: dict[str, Any], task: dict[str, Any]) -> Path:
     primary = Path(str(cfg["workspace"]))
     path = _v2_task_worktree(cfg, task)
     if (path / ".git").exists() or (path / ".git").is_file():
+        _seed_clean_dependencies(cfg, task, path)
         return path
     if path.exists() and any(path.iterdir()):
         raise RuntimeError(f"task worktree path exists but is not a git worktree: {path}")
@@ -2446,6 +2544,7 @@ def prepare_task_worktree(cfg: dict[str, Any], task: dict[str, Any]) -> Path:
     )
     if add.returncode != 0:
         raise RuntimeError(f"cannot create task worktree {path}: {add.stderr.strip()[:500]}")
+    _seed_clean_dependencies(cfg, task, path)
     return path
 
 
@@ -2590,8 +2689,136 @@ def launch_agent(cfg: dict[str, Any], task: dict[str, Any], prompt: str) -> subp
     )
 
 
+def _clean_pm_source() -> Path:
+    """The installed root-owned release is the only Clean planner ancestor."""
+    import stat
+    current = Path("/opt/gobadminton-clean/runner-code/current")
+    if current.lstat().st_uid != 0:
+        raise ValueError("untrusted Clean release pointer")
+    source = (current / "autopilot.py").resolve(strict=True)
+    base = Path("/opt/gobadminton-clean/runner-code")
+    if not source.is_relative_to(base) or source.name != "autopilot.py":
+        raise ValueError("Clean planner release escaped fixed source root")
+    for item in (source, *source.parents):
+        info = item.stat()
+        if info.st_uid != 0 or info.st_mode & 0o022:
+            raise ValueError("Clean release ancestry is not root protected")
+        if item == source and not stat.S_ISREG(info.st_mode):
+            raise ValueError("Clean planner source is not a regular file")
+    return source
+
+
+def _clean_pm_state() -> dict[str, Any]:
+    import stat
+    runtime = Path("/srv/gobadminton-clean/runner")
+    authority = clean_runtime_access.policy()
+    if (authority.get("submitter_uid") != 1002 or authority.get("runtime_gid") != 978
+            or not clean_runtime_access.directory_allowed(runtime, 1002)):
+        raise ValueError("Clean state runtime lacks exact root-pinned service/group authority")
+    directory = runtime.lstat()
+    if directory.st_gid != 978 or stat.S_IMODE(directory.st_mode) != 0o2770:
+        raise ValueError("Clean state runtime is not the dedicated shared directory")
+    path = "/srv/gobadminton-clean/runner/autopilot-state.json"
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != 1002 or info.st_gid != 978
+                or info.st_nlink != 1 or info.st_mode & 0o022 or not 0 < info.st_size <= 65536):
+            raise ValueError("Clean Autopilot state is not protected")
+        data = stream.read(65537)
+        after = os.fstat(stream.fileno())
+        final = Path(path).lstat()
+        identity = lambda s: (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+        if (identity(info) != identity(after) or identity(info) != identity(final)
+                or len(data) != info.st_size):
+            raise ValueError("Clean Autopilot state changed during read")
+    def unique(items):
+        value = {}
+        for key, item in items:
+            if key in value:
+                raise ValueError("duplicate Clean Autopilot state field")
+            value[key] = item
+        return value
+    result = json.loads(data, object_pairs_hook=unique)
+    if not isinstance(result, dict):
+        raise ValueError("invalid Clean Autopilot state")
+    return result
+
+
+def _clean_pm_cgroup(proc: Any) -> bool:
+    return any(line.split(":", 2)[-1].rstrip("/") ==
+               "/system.slice/gobadminton-clean-autopilot.service"
+               for line in Path(f"/proc/{proc.pid}/cgroup").read_text().splitlines())
+
+
+def _clean_pm_args(args: list[str]) -> bool:
+    planning = "/srv/gobadminton-clean/worktrees/pm-autopilot"
+    if not any(Path(args[j]).name == "codex" and args[j + 1] == "exec"
+               for j in range(min(2, len(args) - 1))):
+        return False
+    if (args.count("-C") != 1 or args[args.index("-C") + 1] != planning
+            or "--ignore-user-config" not in args or "--approve-for-me" not in args):
+        return False
+    forbidden = ("--add-dir", "--cd", "--workspace", "--sandbox", "-s",
+                 "--profile", "-p", "--enable", "--dangerously-bypass-approvals-and-sandbox",
+                 "--dangerously-bypass-hook-trust")
+    if any(arg == item or arg.startswith(item + "=") for arg in args for item in forbidden):
+        return False
+    disabled = [args[j + 1] for j, arg in enumerate(args[:-1]) if arg == "--disable"]
+    if sorted(disabled) != ["apps", "hooks", "remote_plugin"]:
+        return False
+    config = [args[j + 1] for j, arg in enumerate(args[:-1]) if arg in {"-c", "--config"}]
+    if ("apps._default.enabled=false" not in config
+            or any(x != "apps._default.enabled=false" and
+                   not re.fullmatch(r'model_reasoning_effort="?(low|medium|high|xhigh)"?', x)
+                   for x in config)
+            or any(arg.startswith("--config=") or (arg.startswith("-c") and arg != "-c")
+                   or (arg.startswith("-p") and arg != "-p") for arg in args)):
+        return False
+    return (args.count("--output-last-message") == 1
+            and args[args.index("--output-last-message") + 1] ==
+            "/srv/gobadminton-clean/runner/autopilot-receipt.json")
+
+
+def _clean_managed_pm_planner(proc: Any, cfg: dict[str, Any]) -> bool:
+    import pwd
+    source = _clean_pm_source()
+    uid = pwd.getpwnam("agentagency-dev").pw_uid
+    if uid != 1002 or cfg.get("workspace") != "/srv/gobadminton-clean/repo":
+        return False
+    if Path(proc.cwd()).resolve() != Path("/srv/gobadminton-clean/worktrees/pm-autopilot"):
+        return False
+    state = _clean_pm_state()
+    ap_pid, planner_pid = state.get("pid"), state.get("planner_pid")
+    if (type(ap_pid) is not int or type(planner_pid) is not int
+            or min(ap_pid, planner_pid) <= 0 or ap_pid == planner_pid
+            or state.get("status") != "planning"):
+        return False
+    lineage = [proc, *proc.parents()]
+    planner = next((p for p in lineage if p.pid == planner_pid), None)
+    ancestor = next((p for p in lineage if p.pid == ap_pid), None)
+    if (planner is None or ancestor is None or
+            not any(p.pid == ap_pid for p in planner.parents())):
+        return False
+    if any(p.uids().real != uid or not _clean_pm_cgroup(p)
+           for p in (proc, planner, ancestor)):
+        return False
+    ap_args = ancestor.cmdline()
+    if (len(ap_args) != 5 or ap_args[:4] != ["/usr/bin/python3", "-E", "-s", "-B"]
+            or ap_args[4] != "/opt/gobadminton-clean/runner-code/current/autopilot.py"
+            or Path(ap_args[4]).resolve(strict=True) != source):
+        return False
+    return _clean_pm_args([str(x) for x in planner.cmdline()])
+
+
 def managed_pm_planner(proc: Any, cfg: dict[str, Any]) -> bool:
     """Recognize only managed PM planner processes and their helper descendants."""
+    if cfg.get("project_repo") == "anpavel84-afk/gobadminton-clean":
+        try:
+            return _clean_managed_pm_planner(proc, cfg)
+        except (psutil.Error, OSError, ValueError, KeyError, IndexError, AttributeError,
+                clean_runtime_access.AccessHold):
+            return False
     dev = Path(str(cfg.get("dev_root") or Path(str(cfg["workspace"])).parent)).resolve()
     planning = dev / "worktrees/pm-autopilot"
     try:

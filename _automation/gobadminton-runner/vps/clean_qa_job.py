@@ -67,6 +67,8 @@ IMAGE = 'postgis/postgis:18-3.6'
 SUITES = {
     'qa-friends-dev-s1-api-20261013-v001': ('friends-dev-s1-api-20261013-v001', 'friends-s1-germany-dev-privacy-v001', 'api'),
     'qa-radar-dev-map-ui-20261013-v001': ('radar-dev-map-ui-20261013-v001', 'radar-map-germany-dev-privacy-v001', 'web'),
+    'qa-friends-dev-s1-api-20261013-v002': ('friends-dev-s1-api-20261013-v002', 'friends-s1-germany-dev-privacy-v001', 'api'),
+    'qa-radar-dev-map-ui-20261013-v002': ('radar-dev-map-ui-20261013-v002', 'radar-map-germany-dev-privacy-v001', 'web'),
 }
 BRANCHES = {'api': 'feature/friends-s1-clean-source-20261013', 'web': 'feature/radar-dev-real-map-20261013'}
 MODELS = {'api': 'gpt-6.1-sol', 'web': 'gpt-6-astra'}

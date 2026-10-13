@@ -81,6 +81,7 @@ def clean_claim(claim):
       "status":limited(claim.get("status"),30) or "running",
       "attempt":int(claim.get("attempt") or 1) if str(claim.get("attempt") or "1").isdigit() else 1,
       "pid":verified_pid(claim.get("agent_pid"),"exec"),
+      "agent_pid":verified_pid(claim.get("agent_pid"),"exec"),
       "max_attempts":5,
       "locks":[limited(x,40) for x in locks[:8] if isinstance(x,str)] if isinstance(locks,list) else [],
     }
@@ -90,7 +91,14 @@ def verified_pid(value, expected):
     try:
         args=Path(f"/proc/{value}/cmdline").read_bytes().split(b"\x00")
         if expected == "exec":
-            executable=Path(f"/proc/{value}/exe").resolve().name
+            launcher=(len(args)>1 and args[1]==b"/home/agentagency-dev/.local/bin/codex"
+                      and Path(args[0].decode(errors="replace")).name=="node")
+            try:
+                executable=Path(f"/proc/{value}/exe").resolve().name
+            except PermissionError:
+                # Different primary groups prevent ptrace; the canonical host
+                # claim and exact readable launcher argv still prove liveness.
+                executable="node" if launcher else ""
             return value if b"exec" in args and executable in {"codex","node"} else None
         name=Path(expected).name
         matched=expected.encode() in args or any(
@@ -117,12 +125,18 @@ def main():
     alive=status.get("runner_alive") is True and service_active
     if status.get("paused") not in (True,False):
         raise RuntimeError("unknown pause state")
-    head=command("git","-C",str(REPO),"rev-parse","refs/heads/main",timeout=6)
+    head=command("git","-C",str(REPO),"rev-parse","refs/remotes/origin/main",timeout=6)
     if not re.fullmatch("[0-9a-f]{40}",head):raise RuntimeError("bad clean source HEAD")
     tasks=[v for v in (clean_task(t) for t in backlog.get("tasks",[])[:125]) if v]
     ids={x["id"] for x in tasks}
     acts=[v for v in (clean_claim(c) for c in status.get("active",[])[:4]) if v and v["id"] in ids]
-    completed=[task_id(t) for t in status.get("completed",[])[:200] if task_id(t)]
+    actual_state=get_json(RUNNER/"state.json")
+    terminal={task_id(row.get("id")):row.get("status") for row in actual_state.get("history",[])
+              if isinstance(row,dict) and task_id(row.get("id"))}
+    completed=[tid for tid,outcome in terminal.items() if outcome=="completed"]
+    for task in tasks:
+        if terminal.get(task["id"]) in ALLOWED_STATUS:
+            task["status"]=terminal[task["id"]]
     pending=[task_id(t) for t in status.get("pending",[])[:125] if task_id(t)]
     runnable=[task_id(t) for t in status.get("runnable_now",[])[:10] if task_id(t)]
     now=datetime.now(timezone.utc).replace(microsecond=0).isoformat()

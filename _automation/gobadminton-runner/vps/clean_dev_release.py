@@ -20,8 +20,10 @@ import tempfile
 import time
 import urllib.request
 import urllib.error
+import urllib.parse
 
 ROOT = Path('/srv/gobadminton-clean/runner')
+CODE_LINK = Path('/opt/gobadminton-clean/runner-code/current')
 POLICY = Path('/etc/gobadminton-clean-control-plane/clean-dev-release-policy.json')
 STORE = Path('/var/lib/gobadminton-clean-dev-release')
 GIT = STORE / 'source.git'
@@ -39,10 +41,10 @@ CHROME = BROWSER / 'chromium/chrome'
 PUBLIC = 'https://dev.gobadminton.ru'
 REMOTE = 'https://github.com/anpavel84-afk/gobadminton-clean.git'
 SHA = re.compile('[0-9a-f]{40}')
-SUITES = {'qa-friends-dev-s1-api-20261013-v001': 'friends-s1-germany-dev-privacy-v001',
-          'qa-radar-dev-map-ui-20261013-v001': 'radar-map-germany-dev-privacy-v001'}
-BRANCHES = {'qa-friends-dev-s1-api-20261013-v001': 'feature/friends-s1-clean-source-20261013',
-            'qa-radar-dev-map-ui-20261013-v001': 'feature/radar-dev-real-map-20261013'}
+SUITES = {'qa-friends-dev-s1-api-20261013-v002': 'friends-s1-germany-dev-privacy-v001',
+          'qa-radar-dev-map-ui-20261013-v002': 'radar-map-germany-dev-privacy-v001'}
+BRANCHES = {'qa-friends-dev-s1-api-20261013-v002': 'feature/friends-s1-clean-source-20261013',
+            'qa-radar-dev-map-ui-20261013-v002': 'feature/radar-dev-real-map-20261013'}
 EVENTS = []
 _POLICY_BYTES = None
 
@@ -102,7 +104,8 @@ def command(args, *, data=None, timeout=1800):
     result = subprocess.run(args, input=data, capture_output=True, timeout=timeout,
                             env={'PATH': '/usr/bin:/bin', 'HOME': '/nonexistent', 'LANG': 'C.UTF-8',
                                  'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null',
-                                 'GIT_CONFIG_SYSTEM': '/dev/null', 'GIT_TERMINAL_PROMPT': '0'})
+                                 'GIT_CONFIG_SYSTEM': '/dev/null', 'GIT_TERMINAL_PROMPT': '0',
+                                 'GIT_NO_REPLACE_OBJECTS': '1'})
     EVENTS.append({'operation': Path(args[0]).name, 'exit_code': result.returncode,
                    'output_sha256': sha(result.stdout + result.stderr),
                    'seconds': round(time.monotonic() - started, 3)})
@@ -252,6 +255,24 @@ def check_container(info, name, port):
         raise Blocked('DEV port isolation changed')
 
 
+def check_database_binding(config, database):
+    environment = dict(item.split('=', 1) for item in database['Config']['Env'])
+    if environment.get('POSTGRES_DB') != 'gobadminton' or environment.get('POSTGRES_USER') != 'gobadminton':
+        raise Blocked('DEV database/user identity differs')
+    network = config['networks']['isolated_dev_backend']['name']
+    if network != 'gobadminton_dev_preview_internal' or network not in database['NetworkSettings']['Networks']:
+        raise Blocked('DEV isolated database network differs')
+    migrate_networks = config['services']['migrate']['networks']
+    if set(migrate_networks) != {'isolated_dev_backend'}:
+        raise Blocked('migration is not restricted to existing isolated DEV network')
+    for service in ('api', 'migrate'):
+        url = urllib.parse.urlsplit(config['services'][service]['environment']['DATABASE_URL'])
+        if (url.scheme not in {'postgres', 'postgresql'} or url.hostname != 'db'
+                or url.port != 5432 or url.username != 'gobadminton' or url.path != '/gobadminton'
+                or url.query or url.fragment):
+            raise Blocked('DEV migration/API database binding outside fixed DB alias')
+
+
 def smoke(expected_sha, *, privacy=True):
     for attempt in range(30):
         try:
@@ -384,6 +405,7 @@ def release(policy, publication, planner, identity):
     if old_env['api'].get('NODE_ENV') != 'production' or old_env['web'].get('NODE_ENV') != 'production':
         raise Blocked('DEV existing environment unexpected')
     before_cfg = json.loads(command(compose_args(current if current.exists() else None) + ['config', '--format', 'json']))
+    check_database_binding(before_cfg, db_old)
     for name in ('api', 'web'):
         if any(str(v) != old_env[name].get(k) for k, v in before_cfg['services'][name]['environment'].items()):
             raise Blocked('DEV effective Compose does not match running environment')
@@ -482,6 +504,9 @@ def main():
     _POLICY_BYTES = protected(POLICY)
     policy = parse(_POLICY_BYTES)
     code = Path(__file__).resolve().parent
+    if (CODE_LINK.lstat().st_uid != 0 or not CODE_LINK.is_symlink()
+            or CODE_LINK.resolve(strict=True) != code or not code.is_relative_to(CODE_LINK.parent)):
+        raise Blocked('fixed root-installed immutable DEV executable required')
     if set(policy['module_sha256']) != {'clean_dev_release.py', 'clean_runtime_access.py', 'test_job_contract.py'}:
         raise Blocked('installed release/authority/QA source pins required')
     for name, pin in policy['module_sha256'].items():

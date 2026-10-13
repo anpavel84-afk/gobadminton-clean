@@ -24,6 +24,8 @@ REMOTE = 'https://github.com/anpavel84-afk/gobadminton-clean.git'
 BRANCHES = {
     'friends-dev-s1-api-20261013-v001': 'feature/friends-s1-clean-source-20261013',
     'radar-dev-map-ui-20261013-v001': 'feature/radar-dev-real-map-20261013',
+    'friends-dev-s1-api-20261013-v002': 'feature/friends-s1-clean-source-20261013',
+    'radar-dev-map-ui-20261013-v002': 'feature/radar-dev-real-map-20261013',
     'main-pm': 'main',
 }
 WORKTREES = {slot: Path('/srv/gobadminton-clean/worktrees') /

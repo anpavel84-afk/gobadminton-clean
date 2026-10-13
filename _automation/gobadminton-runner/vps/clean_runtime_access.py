@@ -22,7 +22,8 @@ READ_FILES = {'backlog.json', 'state.json', 'config.json', 'progress.json',
               'source-publication-quarantine.json', 'planner-publication-hooks/context.json'}
 WRITE_FILES = {'source-merge-reservation.json', 'planner-publication.lock',
                'backlog-claim.lock', 'backlog-sync.lock'}
-PRODUCERS = {'friends-dev-s1-api-20261013-v001', 'radar-dev-map-ui-20261013-v001'}
+PRODUCERS = {'friends-dev-s1-api-20261013-v001', 'radar-dev-map-ui-20261013-v001',
+             'friends-dev-s1-api-20261013-v002', 'radar-dev-map-ui-20261013-v002'}
 RECEIPTS = PRODUCERS | {'qa-' + task for task in PRODUCERS}
 
 

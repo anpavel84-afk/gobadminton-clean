@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
 import stat
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -31,6 +33,9 @@ OWNER_BOOTSTRAP_CREATED = "2026-10-13T15:08:14Z"
 # SHA256 of the original GitHub API body UTF-8 bytes, without normalization.
 OWNER_BOOTSTRAP_BODY_SHA256 = "2d3cf0e888a45546512164372818d19355d1eff519b34648b35e7221d1626751"
 INTERVAL_SECONDS = 300
+MAX_BACKOFF_SECONDS = 3600
+DEFAULT_OPENER = urllib.request.urlopen
+BUDGET_FILE = 'github-issue-intake-poll-budget.json'
 MAX_COMMENT_BYTES = 16_384
 MAX_PAGES = 3
 MARKER = "GOBADMINTON_PM_TASK_V1"
@@ -45,6 +50,105 @@ BOOTSTRAP_IDS = (
 
 class IntakeHold(RuntimeError):
     """Source/Owner identity or runtime state cannot be trusted."""
+
+
+class IntakeHTTPHold(IntakeHold):
+    def __init__(self, status, reset):
+        super().__init__('GitHub public API HTTP ' + str(status))
+        self.http_status = status
+        self.rate_limit_reset = reset
+
+
+class PollResult(list):
+    """Transport telemetry only. Does not authenticate an Owner or grant work."""
+    def __init__(self, values=(), *, poll_status='polled', next_poll_epoch=None):
+        super().__init__(values)
+        self.poll_status = poll_status
+        self.next_poll_epoch = next_poll_epoch
+
+
+def checked_time(value):
+    if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
+        raise IntakeHold('invalid polling clock/budget timestamp')
+    return value
+
+
+def retry_hold(reason, next_poll):
+    error = IntakeHold(reason + ' OWNER_INTAKE_RETRY_UNTIL=' + str(math.ceil(next_poll)))
+    error.retry_after_epoch = math.ceil(next_poll)
+    error.poll_status = 'held'
+    return error
+
+
+def read_budget(root, when):
+    path = root / BUDGET_FILE
+    if not clean_runtime_access.directory_allowed(root, os.getuid()):
+        raise IntakeHold('poll budget control root is not service-private')
+    if not path.exists() and not path.is_symlink():
+        return None
+    fd = -1
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+        before = os.fstat(fd)
+        if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_uid != os.getuid()
+                or stat.S_IMODE(before.st_mode) != 0o600 or not 0 < before.st_size <= 16384):
+            raise IntakeHold('poll budget is not a bounded service-private regular file')
+        raw = os.read(fd, 16385)
+        after = os.fstat(fd)
+        current = path.lstat()
+        identity = lambda info: (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+        if identity(before) != identity(after) or identity(before) != identity(current) or len(raw) != before.st_size:
+            raise IntakeHold('poll budget changed during read')
+        value = strict_json(raw.decode('utf-8'))
+        fields = {'schema', 'last_poll_epoch', 'next_poll_epoch', 'last_status', 'last_error', 'http_status'}
+        if (not isinstance(value, dict) or set(value) != fields or value.get('schema') != 'GBCLEAN_OWNER_POLL_BUDGET_V1'
+                or value.get('last_status') not in {'POLLING', 'OK', 'HELD'}
+                or not isinstance(value.get('last_error'), str) or len(value['last_error']) > 160
+                or value.get('http_status') is not None and (type(value['http_status']) is not int or not 100 <= value['http_status'] <= 599)):
+            raise IntakeHold('poll budget schema/telemetry refused')
+        last = checked_time(value['last_poll_epoch'])
+        upcoming = checked_time(value['next_poll_epoch'])
+        if not last + INTERVAL_SECONDS <= upcoming <= last + MAX_BACKOFF_SECONDS or last > when:
+            raise IntakeHold('poll budget timestamp range/clock reversal refused')
+        return value
+    except (OSError, ValueError, UnicodeError) as exc:
+        raise IntakeHold('poll budget unreadable/malformed') from exc
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
+def write_budget(root, value):
+    # Separate private state, not an Owner inbox event or approval certificate.
+    if not clean_runtime_access.directory_allowed(root, os.getuid()):
+        raise IntakeHold('poll budget control root is not service-private')
+    path = root / BUDGET_FILE
+    if path.is_symlink():
+        raise IntakeHold('poll budget symlink refused')
+    fd, temporary = tempfile.mkstemp(prefix='.owner-poll-budget-', dir=root)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, 'wb') as stream:
+            stream.write((json.dumps(value, sort_keys=True, allow_nan=False) + '\n').encode())
+            stream.flush(); os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        parent = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(parent)
+        finally:
+            os.close(parent)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def next_retry(when, error):
+    target = when + INTERVAL_SECONDS
+    if getattr(error, 'http_status', None) == 403:
+        reset = getattr(error, 'rate_limit_reset', None)
+        if isinstance(reset, str) and re.fullmatch('[0-9]{1,16}', reset):
+            target = max(target, min(int(reset) + 1, when + MAX_BACKOFF_SECONDS))
+    return target
 
 
 def strict_json(source: str):
@@ -128,7 +232,7 @@ def checked_comment(comment: dict, canonical: dict, *, require_queued: bool = Tr
     }
 
 
-def fetch_public_comment_pages(opener=urllib.request.urlopen):
+def fetch_public_comment_pages(opener=DEFAULT_OPENER):
     """Only the fixed GitHub API endpoint. Never follow untrusted URLs."""
     all_comments = []
     for page in range(1, MAX_PAGES + 1):
@@ -143,6 +247,8 @@ def fetch_public_comment_pages(opener=urllib.request.urlopen):
                 if stream.geturl() != url:
                     raise IntakeHold("GitHub API redirected unexpectedly")
                 payload = stream.read(512 * 1024 + 1)
+        except urllib.error.HTTPError as exc:
+            raise IntakeHTTPHold(exc.code, exc.headers.get('X-RateLimit-Reset') if exc.headers is not None else None) from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             raise IntakeHold("GitHub public API unavailable") from exc
         if len(payload) > 512 * 1024:
@@ -215,7 +321,7 @@ def write_unique(inbox: Path, record: dict) -> bool:
     return True
 
 
-def poll_once(root: Path, canonical: dict, *, opener=urllib.request.urlopen,
+def poll_once(root: Path, canonical: dict, *, opener=DEFAULT_OPENER,
               now: float | None = None) -> list[str]:
     """Read and journal Owner proof only. No claim, model, Git write or deploy."""
     if (not isinstance(canonical, dict)
@@ -224,31 +330,62 @@ def poll_once(root: Path, canonical: dict, *, opener=urllib.request.urlopen,
         raise IntakeHold("canonical clean queue not trustworthy")
     inbox = Path(root) / "owner-inbox"
     marker = Path(root) / "github-issue-intake-last-poll"
-    when = time.time() if now is None else now
+    when = checked_time(time.time() if now is None else now)
+    live_budget = opener is DEFAULT_OPENER
+    budget = read_budget(Path(root), when) if live_budget else None
     if marker.exists() or marker.is_symlink():
         proof = marker.lstat()
         if (not stat.S_ISREG(proof.st_mode) or proof.st_uid != os.getuid()
+                or proof.st_nlink != 1 or proof.st_size != 0
                 or stat.S_IMODE(proof.st_mode) & 0o077):
             raise IntakeHold("issue intake poll marker is not service-private")
+        if proof.st_mtime > when:
+            raise IntakeHold('issue intake poll marker clock reversal/future timestamp')
+    if budget is not None and when < budget['next_poll_epoch']:
+        if budget['last_status'] == 'OK':
+            return PollResult(poll_status='no_new_poll', next_poll_epoch=budget['next_poll_epoch'])
+        raise retry_hold('Owner intake HELD; fresh GitHub poll deferred', budget['next_poll_epoch'])
+    if marker.exists():
         if when - proof.st_mtime < INTERVAL_SECONDS:
-            return []
+            if live_budget and budget is None:
+                # Old success marker has no authenticated durable budget/status.
+                # Do not treat its mtime as cached Owner verification.
+                raise retry_hold('Owner intake legacy marker awaiting fresh poll', proof.st_mtime + INTERVAL_SECONDS)
+            return PollResult(poll_status='no_new_poll', next_poll_epoch=proof.st_mtime + INTERVAL_SECONDS)
+    if live_budget:
+        budget = {'schema': 'GBCLEAN_OWNER_POLL_BUDGET_V1', 'last_poll_epoch': when,
+                  'next_poll_epoch': when + INTERVAL_SECONDS, 'last_status': 'POLLING',
+                  'last_error': '', 'http_status': None}
+        write_budget(Path(root), budget)  # Reserve before network; crash/restart cannot flood.
     # Historical events retain identity/body/scope verification after tasks
     # advance. An existing receipt must still pass write_unique replay checks;
     # only a NEW event requires every task to remain queued.
-    verified = []
-    for comment in fetch_public_comment_pages(opener):
-        cid = comment.get("id") if isinstance(comment, dict) else None
-        existing = (inbox / f"github-issue{ISSUE}-comment-{cid}.json"
-                    if type(cid) is int and cid > 0 else None)
-        record = checked_comment(comment, canonical, require_queued=not (
-            existing is not None and (existing.exists() or existing.is_symlink())))
-        if record is not None:
-            verified.append(record)
-    created = []
-    for item in verified:
-        if write_unique(inbox, item):
-            created.append(item["id"])
+    try:
+        verified = []
+        for comment in fetch_public_comment_pages(opener):
+            cid = comment.get("id") if isinstance(comment, dict) else None
+            existing = (inbox / f"github-issue{ISSUE}-comment-{cid}.json"
+                        if type(cid) is int and cid > 0 else None)
+            record = checked_comment(comment, canonical, require_queued=not (
+                existing is not None and (existing.exists() or existing.is_symlink())))
+            if record is not None:
+                verified.append(record)
+        created = []
+        for item in verified:
+            if write_unique(inbox, item):
+                created.append(item["id"])
+    except IntakeHold as error:
+        if not live_budget:
+            raise
+        budget.update(last_status='HELD', next_poll_epoch=next_retry(when, error),
+                      last_error='HTTP_FAILURE' if isinstance(error, IntakeHTTPHold) else 'SOURCE_VERIFICATION_HELD',
+                      http_status=getattr(error, 'http_status', None))
+        write_budget(Path(root), budget)
+        raise retry_hold(str(error), budget['next_poll_epoch']) from error
     # Throttle only after every comment has passed verification and journaling.
     marker.touch(mode=0o600, exist_ok=True)
     os.utime(marker, (when, when))
-    return created
+    if live_budget:
+        budget.update(last_status='OK', last_error='', http_status=None)
+        write_budget(Path(root), budget)
+    return PollResult(created, next_poll_epoch=when + INTERVAL_SECONDS)

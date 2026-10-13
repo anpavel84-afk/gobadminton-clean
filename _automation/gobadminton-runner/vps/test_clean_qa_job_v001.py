@@ -38,6 +38,28 @@ class CleanQAJobSafety(unittest.TestCase):
         receipt['task_id'] = qa.SUITES['qa-friends-dev-s1-api-20261013-v001'][0]
         with self.assertRaises(ValueError): qa.bind(task, queue, receipt)
 
+    def test_exact_successor_pair_uses_own_producer_and_not_original_proof(self):
+        for app, component in [('api', 'friends-dev-s1-api'), ('web', 'radar-dev-map-ui')]:
+            producer = component + '-20261013-v002'; task = 'qa-' + producer
+            registered_producer, suite, registered_app = qa.SUITES[task]
+            self.assertEqual((registered_producer, registered_app), (producer, app))
+            queue = {'tasks': [{'id': task, 'enabled': True, 'effect_ceiling': 'source_only',
+                               'source_qa': {'producer_task_id': producer, 'suite_id': suite},
+                               'depends_on_completed': [producer]}, {'id': producer, 'enabled': True}]}
+            receipt = {'project': 'GoBadminton', 'task_id': producer, 'ok': True,
+                       'candidate_sha': 'c' * 40, 'candidate_tree': 'd' * 40, 'branch': qa.BRANCHES[app]}
+            identity, _ = qa.bind(task, queue, receipt)
+            self.assertEqual(identity['producer_task_id'], producer)
+            with self.assertRaises(ValueError):
+                qa.bind(task, queue, {**receipt, 'task_id': component + '-20261013-v001'})
+            with self.assertRaises(ValueError):
+                qa.bind(task.replace('v002', 'v003'), queue, receipt)
+
+    def test_successor_registry_does_not_accept_arbitrary_aliases(self):
+        self.assertEqual(set(qa.SUITES), {
+            'qa-friends-dev-s1-api-20261013-v001', 'qa-radar-dev-map-ui-20261013-v001',
+            'qa-friends-dev-s1-api-20261013-v002', 'qa-radar-dev-map-ui-20261013-v002'})
+
     def test_unregistered_job_rejected(self):
         _, queue, receipt = self.inputs()
         with self.assertRaises(ValueError): qa.bind('qa-arbitrary', queue, receipt)

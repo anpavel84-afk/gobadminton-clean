@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import urllib.error
 import unittest
 from unittest.mock import patch, Mock
 import sys
@@ -200,6 +201,94 @@ class CleanOwnerIssueIntake(unittest.TestCase):
         self.assertEqual(c, [])
         self.assertEqual(len(calls), 2)
         self.assertEqual(len(list((self.root / "owner-inbox").glob("*.json"))), 1)
+
+    def test_real_default_budget_is_durable_across_five_second_polls(self):
+        calls = []
+        def opener(request, timeout=12):
+            calls.append(request.full_url)
+            return FakeResponse(request.full_url, [owner_comment()])
+        with patch.object(intake, 'DEFAULT_OPENER', opener):
+            first = intake.poll_once(self.root, self.input, opener=opener, now=1000000000)
+            self.assertEqual(first, ['github-issue4-comment-6148670164'])
+            for seconds in range(5, 300, 5):
+                skipped = intake.poll_once(self.root, self.input, opener=opener, now=1000000000 + seconds)
+                self.assertEqual(skipped, [])
+                self.assertEqual(skipped.poll_status, 'no_new_poll')
+            self.assertEqual(len(calls), 1)
+            intake.poll_once(self.root, self.input, opener=opener, now=1000000300)
+            self.assertEqual(len(calls), 2)
+        state = json.loads((self.root / intake.BUDGET_FILE).read_text())
+        self.assertEqual(state['last_status'], 'OK')
+        self.assertEqual(state['next_poll_epoch'], 1000000600)
+        self.assertEqual((self.root / intake.BUDGET_FILE).stat().st_mode & 0o777, 0o600)
+        self.assertNotIn('authority', state)
+        self.assertNotIn('accepted', state)
+
+    def test_http403_backoff_survives_restart_and_honors_reset_with_one_hour_cap(self):
+        calls = []
+        def limited(request, timeout=12):
+            calls.append(request.full_url)
+            raise urllib.error.HTTPError(request.full_url, 403, 'rate limited',
+                                         {'X-RateLimit-Reset': '1000001800'}, None)
+        with patch.object(intake, 'DEFAULT_OPENER', limited):
+            with self.assertRaises(intake.IntakeHold) as original:
+                intake.poll_once(self.root, self.input, opener=limited, now=1000000000)
+            self.assertEqual(original.exception.retry_after_epoch, 1000001801)
+            for seconds in (5, 15, 300, 1799):
+                with self.assertRaisesRegex(intake.IntakeHold, 'OWNER_INTAKE_RETRY_UNTIL=1000001801'):
+                    intake.poll_once(self.root, self.input, opener=limited, now=1000000000 + seconds)
+            self.assertEqual(len(calls), 1)
+        state = json.loads((self.root / intake.BUDGET_FILE).read_text())
+        self.assertEqual(state['last_status'], 'HELD')
+        self.assertEqual(state['http_status'], 403)
+        self.assertEqual(len(list((self.root / 'owner-inbox').glob('*.json'))), 0)
+        self.assertEqual(intake.next_retry(1000000000, intake.IntakeHTTPHold(403, '9999999999999999')), 1000003600)
+        self.assertEqual(intake.next_retry(1000000000, intake.IntakeHTTPHold(403, 'invalid')), 1000000300)
+
+    def test_failed_default_verification_cannot_be_relabelled_by_budget_skip(self):
+        def tampered(request, timeout=12):
+            return FakeResponse(request.full_url, [owner_comment(OWNER_EVENT['body'] + '\n')])
+        with patch.object(intake, 'DEFAULT_OPENER', tampered):
+            with self.assertRaisesRegex(intake.IntakeHold, 'modified'):
+                intake.poll_once(self.root, self.input, opener=tampered, now=1000000000)
+            with self.assertRaisesRegex(intake.IntakeHold, 'HELD'):
+                intake.poll_once(self.root, self.input, opener=tampered, now=1000000005)
+        self.assertFalse((self.root / 'github-issue-intake-last-poll').exists())
+        # Custom fixture opener bypasses only the LIVE budget, so existing
+        # negative source/body tests continue to actually verify their input.
+        with self.assertRaisesRegex(intake.IntakeHold, 'modified'):
+            intake.poll_once(self.root, self.input, opener=tampered, now=1000000005)
+
+    def test_budget_bad_clock_timestamps_and_schema_fail_closed_before_network(self):
+        state = {'schema': 'GBCLEAN_OWNER_POLL_BUDGET_V1', 'last_poll_epoch': 1000000000,
+                 'next_poll_epoch': 1000000300, 'last_status': 'OK', 'last_error': '', 'http_status': None}
+        opener = Mock()
+        for field, bad in [('next_poll_epoch', True), ('next_poll_epoch', float('nan')),
+                           ('next_poll_epoch', 1000003601), ('last_poll_epoch', 1000000001),
+                           ('last_status', 'PASS'), ('http_status', True)]:
+            mutated = {**state, field: bad}
+            path = self.root / intake.BUDGET_FILE
+            path.write_text(json.dumps(mutated)); path.chmod(0o600)
+            with patch.object(intake, 'DEFAULT_OPENER', opener), self.subTest(field=field), self.assertRaises(intake.IntakeHold):
+                intake.poll_once(self.root, self.input, opener=opener, now=1000000000)
+        for bad_now in (True, -1, float('nan'), float('inf'), '1000000000'):
+            with self.subTest(now=bad_now), self.assertRaises(intake.IntakeHold):
+                intake.poll_once(self.root, self.input, opener=opener, now=bad_now)
+        opener.assert_not_called()
+
+    def test_budget_symlink_or_nonprivate_mode_cannot_avoid_fetch_or_modify_target(self):
+        outside = self.root / 'unrelated-budget-target'
+        outside.write_text('UNCHANGED')
+        path = self.root / intake.BUDGET_FILE
+        path.symlink_to(outside)
+        opener = Mock()
+        with patch.object(intake, 'DEFAULT_OPENER', opener), self.assertRaises(intake.IntakeHold):
+            intake.poll_once(self.root, self.input, opener=opener, now=1000000000)
+        self.assertEqual(outside.read_text(), 'UNCHANGED')
+        path.unlink(); path.write_text('{}'); path.chmod(0o644)
+        with patch.object(intake, 'DEFAULT_OPENER', opener), self.assertRaises(intake.IntakeHold):
+            intake.poll_once(self.root, self.input, opener=opener, now=1000000000)
+        opener.assert_not_called()
 
     def test_received_bootstrap_does_not_block_next_task_after_completion(self):
         def opener(request, timeout=12):
