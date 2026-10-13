@@ -8,10 +8,9 @@ from compact_task_capsule import capsule
 
 ROOT = Path("/srv/gobadminton-clean/runner")
 CRITICAL_QA_PREFIXES = (
-    "qa-product-web-p4-predeploy-tooling-",
-    "qa-product-p5-friends-offline-tooling-",
-    "qa-product-p6-composed-release-tooling-",
-    "qa-product-runner-monitor-provenance-",
+    "qa-friends-dev-s1-api-",
+    "qa-friends-dev-s2-web-",
+    "qa-friends-dev-s3-integration-",
 )
 
 
@@ -68,29 +67,29 @@ def render(owner_items, active_admission_only: bool) -> str:
         + "Small machine evidence, NOT permission: " +
         json.dumps(evidence, ensure_ascii=False, separators=(",", ":")) + "\n"
         + "Boundary: " + scope + "\n"
-        + "Read AGENTS.md, CURSOR.md, docs/rules/PROJECT_RECORD_POLICY.md, "
-          "docs/operations/QUEUE_AUTOPILOT.md, "
-          "docs/operations/MODEL_ROUTING_AND_BUDGET_V006.md, "
-          "and exact current relevant QA/producer handoffs only. Fetch fresh GitHub main. "
-          "Do not read all 547 tasks or entire history for unchanged context.\n"
-        + "Priority: (1) safe source-only repair of failed P6QA-001 and Monitor QMS-002 "
-          "on NEW task IDs with conceptual max5 and NEW independent QA; "
-          "(2) guarded exact accepted-source merges of Web/P5 PASS_WITH_NONBLOCKING_GAPS "
-          "with blocking_findings=[] and MERGE_RECOMMENDED; "
-          "(3) other already Owner-approved independent tasks; else no_safe_action. "
-          "Never retry terminal task or exact failed candidate.\n"
-        + "Absolute gates: final TRAIN-QA-008 FAIL repair5/5 continuous controller "
-          "NO INSTALL/NO MERGE/NO REPAIR6; P5 Friends OFF (G02/G03/G05/G06/G08 D02/D06); "
-          "P6 real release HOLD; legal/privacy/data region/SMTP/OAuth/GPS/other-project VPN "
-          "and all production effects excluded. No falsified QA evidence. "
-          "Only PM documentation, exact prompts/bindings and canonical backlog allowed; "
-          "no application code, runtime edits or deleting receipts.\n"
+        + "Read the canonical clean-root AGENTS.md and exact relevant product "
+          "issues only. Repository is anpavel84-afk/gobadminton-clean. "
+          "No import or replay of 551 historical Runner tasks or signed receipts. "
+          "Do not assume historical source QA proves new clean-root evidence.\n"
+        + "Priority: existing Owner-approved Friends DEV Issue #12, starting "
+          "with one bounded S1 foundation producer + its OWN independent QA. "
+          "S2 UI follows only after S1 privacy acceptance. "
+          "Only separately Owner-bound durable admission can enable new work; "
+          "otherwise report no_safe_action and leave canonical main unchanged. "
+          "Never retry terminal task IDs or an exact QA-failed candidate.\n"
+        + "Absolute gates: Friends real-user enablement OFF pending distinct "
+          "consent/privacy and deployment approval. Preserve player location "
+          "privacy, contact eligibility, game capacity and all account fences. "
+          "No production deployment/DB mutations, SMTP/OAuth/other-project VPN "
+          "or self-certified QA. Only PM documentation, exact immutable inputs "
+          "and guarded canonical backlog publication. No application code or "
+          "runtime edits from the PM planner.\n"
         + "Any source merge requires exact QA candidate SHA/tree/branch, no blocking "
           "findings, no writer conflict, existing publication_guard and immutable "
           "main ancestry. STOP on guard refusal. Preserve old attempt ledgers. "
-          "A new repair must be scoped only to precise QA finding with one independent QA. "
-          "Use affordable model routing: Luna low/medium routine, Sol medium technical, "
-          "Astra high ONLY novel sensitive security, not routine P6 packaging QA. "
+          "A new repair must be scoped only to the precise QA finding with a "
+          "new bounded attempt and its own independent QA. Use an available "
+          "cost-appropriate model; do not assert authorization by model choice. "
           "Never create duplicate work or proof-of-proof planning tasks.\n"
         + "Write exact planner receipt in /srv/gobadminton-clean/runner/autopilot-receipt.json. "
           "For Owner instruction, canonical result binding includes matching id, SHA of "

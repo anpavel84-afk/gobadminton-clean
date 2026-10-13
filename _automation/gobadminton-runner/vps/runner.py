@@ -2553,6 +2553,24 @@ def isolated_readonly_qa(proc: Any, cfg: dict[str, Any]) -> bool:
     return False
 
 
+def _trusted_git_remote_hostname(host: str) -> str:
+    """Resolve only explicitly provisioned Git SSH aliases, else HOLD.
+
+    An arbitrary SSH Host alias can point at the same GitHub repository as
+    an HTTPS remote. Never call an unknown alias an independent writer.
+    This is a limited host normalization for conflict detection, not Git auth.
+    """
+    normalized = str(host).lower().strip()
+    if normalized in {
+        "github.com", "github-gobadminton-clean",
+        "github-gobadminton", "github-gobadminton-readonly",
+    }:
+        return "github.com"
+    if normalized in {"gitlab.com", "bitbucket.org"}:
+        return normalized
+    raise ValueError("unverified Git remote host or SSH alias")
+
+
 def verified_disjoint_codex(proc: Any, cfg: dict[str, Any]) -> bool:
     """Exclude only an introspectable Codex CLI in a distinct real Git domain."""
     try:
@@ -2634,11 +2652,11 @@ def verified_disjoint_codex(proc: Any, cfg: dict[str, Any]) -> bool:
                             else:
                                 if not parsed.hostname or not parsed.path:
                                     raise ValueError("ambiguous Git remote URL")
-                                identity = parsed.hostname.lower() + "/" + parsed.path.lstrip("/")
+                                identity = _trusted_git_remote_hostname(parsed.hostname) + "/" + parsed.path.lstrip("/")
                         elif "@" in value and ":" in value.split("@", 1)[-1]:
                             host_path = value.split("@", 1)[-1]
                             host, remote_path = host_path.split(":", 1)
-                            identity = host.lower() + "/" + remote_path.lstrip("/")
+                            identity = _trusted_git_remote_hostname(host) + "/" + remote_path.lstrip("/")
                         elif value.startswith(("/", "./", "../")):
                             identity = "file/" + str((path / value).resolve())
                         else:

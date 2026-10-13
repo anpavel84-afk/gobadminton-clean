@@ -51,7 +51,7 @@ jobs:
           PY
       - name: Compile changed Runner modules
         run: |
-          python -m py_compile runner.py autopilot.py backlog_sync.py publication_guard.py control_agent.py writer_bridge.py queue_recovery.py test_job_contract.py compact_pm_brief.py
+          python -m py_compile runner.py autopilot.py backlog_sync.py publication_guard.py control_agent.py writer_bridge.py queue_recovery.py test_job_contract.py compact_pm_brief.py compact_task_capsule.py
       - name: Clean-root binding, DAG and protected QA tests
         run: |
-          python -m unittest -v             test_clean_git_binding_20261013             test_friends_dag_auto_advance_v001             test_qa23001_protected_job_identity_v001
+          python -m unittest -v             test_clean_git_binding_20261013             test_friends_dag_auto_advance_v001             test_qa23001_protected_job_identity_v001 test_qa_pr11_git_alias_v001 test_qa_pr11_compact_capsule_v001
