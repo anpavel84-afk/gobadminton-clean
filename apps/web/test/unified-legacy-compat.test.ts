@@ -9,8 +9,8 @@ const now = Date.parse("2030-01-01T00:00:00Z");
 const me = { id: "actor-a", csrfToken: "csrf-a" } as Me;
 const filters = { cityId: "city-a" };
 const config = { exposureMode: "live", unifiedDirectory: { enabled: true, contractVersion: UNIFIED_WIRE, disclosure: { text: "Согласие" } }, publishingV2: { enabled: true }, cities: [{ cityId: "city-a", regionId: "region-a", map: { availability: "missing" } }] };
-const row = { publicPlayerId: "peer", projection: "radar", player: { publicPlayerId: "peer" }, radar: { resultRef: "private-proof", geo: { latitude: 1, longitude: 2 } } } as unknown as UnifiedRow;
-const snapshot = { contractVersion: UNIFIED_WIRE, cityId: "city-a", validUntil: new Date(now + 45000).toISOString(), query: { queryRef: "private-query", originRef: "private-origin", originState: "authorized" }, items: [row], page: { nextCursor: "private-cursor" } } as unknown as UnifiedSnapshot;
+const row = { publicPlayerId: "peer", projection: "radar", player: { publicPlayerId: "peer" }, radar: { consentPolicyVersion: "radar-geographic-sharing-v2", validUntil: new Date(now + 45000).toISOString(), resultRef: "private-proof", geo: { latitude: 1, longitude: 2, crs: "EPSG:4326" } } } as unknown as UnifiedRow;
+const snapshot = { policyVersion: "radar-geographic-sharing-v2", exposureMode: "authenticated_live", contractVersion: UNIFIED_WIRE, cityId: "city-a", validUntil: new Date(now + 45000).toISOString(), query: { queryRef: "private-query", originRef: "private-origin", originState: "authorized" }, items: [row], page: { nextCursor: "private-cursor" } } as unknown as UnifiedSnapshot;
 const ok = (data: unknown) => ({ ok: true as const, status: 200, data });
 const error = (status: number) => ({ ok: false as const, status, error: `HTTP ${status}`, retryAfterSeconds: status === 429 ? 90 : undefined });
 
