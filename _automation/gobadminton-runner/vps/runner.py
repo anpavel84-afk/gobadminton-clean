@@ -2498,9 +2498,10 @@ def launch_agent(cfg: dict[str, Any], task: dict[str, Any], prompt: str) -> subp
     if clean and task.get("_workspace"):
         task_path = Path(workspace).resolve()
         base = Path(worktrees).resolve()
-        if (task_path.parent != base or task_path == base
-                or Path(workspace).is_symlink()):
-            raise RuntimeError("clean task worktree escapes dedicated task root")
+        expected = _v2_task_worktree(cfg, task).resolve()
+        if (task_path != expected or task_path.parent != base
+                or task_path == base or Path(workspace).is_symlink()):
+            raise RuntimeError("clean task worktree must match its exact task identity")
     env = dict(os.environ)
     prefixes = [
         str(cfg.get("node_bin") or
