@@ -62,7 +62,10 @@ DEPENDENCIES = INSTALL / 'dependencies'
 NODE = INSTALL / 'node/bin/node'
 PNPM = INSTALL / 'pnpm/bin/pnpm.cjs'
 CODEX = INSTALL / 'bin/codex'
+NATIVE_BWRAP = INSTALL / 'native-helper/bin/bwrap'
+NATIVE_PROFILE = Path('/etc/apparmor.d/gobadminton-clean-qa-bwrap')
 AUTH = Path('/var/lib/gobadminton-clean-qa-reviewer')
+STYLE_GUIDE = INSTALL / 'style-guide'
 IMAGE = 'postgis/postgis:18-3.6'
 SUITES = {
     'qa-friends-dev-s1-api-20261013-v001': ('friends-dev-s1-api-20261013-v001', 'friends-s1-germany-dev-privacy-v001', 'api'),
@@ -543,7 +546,7 @@ def reviewer_credentials(user, policy):
         raise ValueError('reviewer authenticated account differs from administrator binding')
 
 
-def review_sandbox(source, root, output_dir, user):
+def review_sandbox(source, root, output_dir, user, *, app=None):
     # Read-only Codex itself is additionally OS-isolated: no writer homes/SSH,
     # root policy, live project DB credentials, Docker socket or source writes.
     if user.pw_uid == 0:
@@ -553,9 +556,16 @@ def review_sandbox(source, root, output_dir, user):
     for path in ('/usr', '/bin', '/lib', '/lib64'):
         if Path(path).exists():
             args += ['--ro-bind', path, path]
-    for path in ('/etc/resolv.conf', '/etc/hosts', '/etc/ssl/certs'):
+    # Explicit traversal permissions on namespace-only parents. Otherwise bwrap
+    # implicitly creates private root directories and native config reads EACCES.
+    for parent in ('/etc', '/etc/ssl', '/etc/codex'):
+        args += ['--dir', parent, '--chmod', '0755', parent]
+    for path in ('/etc/resolv.conf', '/etc/hosts', '/etc/ssl/certs',
+                 '/etc/codex/managed_config.toml', '/etc/codex/requirements.toml'):
         if Path(path).exists():
             args += ['--ro-bind', path, path]
+    if app == 'web':
+        args += ['--ro-bind', str(STYLE_GUIDE), '/style-guide']
     args += ['--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp', '--chmod', '1777', '/tmp',
              '--tmpfs', '/home', '--dir', '/home/qa',
              '--ro-bind', str(INSTALL), '/qa-tools', '--ro-bind', str(source), '/source',
@@ -563,7 +573,7 @@ def review_sandbox(source, root, output_dir, user):
              '--ro-bind', str(root / 'tests.log'), '/evidence/tests.log',
              '--bind', str(AUTH), '/home/qa',
              '--bind', str(output_dir), '/output', '--clearenv', '--setenv', 'HOME', '/home/qa',
-             '--setenv', 'CODEX_HOME', '/home/qa', '--setenv', 'PATH', '/qa-tools/node/bin:/usr/bin:/bin',
+             '--setenv', 'CODEX_HOME', '/home/qa', '--setenv', 'PATH', '/qa-tools/native-helper/bin:/qa-tools/node/bin:/usr/bin:/bin',
              '--setenv', 'LANG', 'C.UTF-8', '--chdir', '/source', '--']
     return args + payload_drop(user)
 
@@ -738,11 +748,16 @@ def execute(qa_id):
         raise ValueError('actual Git source tree mismatch')
     # Publisher's protected PUBLISHED record is the exact remote observation.
     # A bounded local bundle import need not create refs/remotes/origin/*.
-    for item in [NODE, PNPM, CODEX, *DEPENDENCIES.rglob('*')]:
+    for item in [NODE, PNPM, CODEX, NATIVE_BWRAP, NATIVE_PROFILE, *DEPENDENCIES.rglob('*')]:
         if not item.is_symlink():
             protected(item)
     dependencies = tree_sha(DEPENDENCIES / app)
     lock_digest = file_sha(DEPENDENCIES / app / 'pnpm-lock.yaml')
+    guide_digest = None
+    if app == 'web':
+        for item in [STYLE_GUIDE, *STYLE_GUIDE.rglob('*')]:
+            protected(item)
+        guide_digest = tree_sha(STYLE_GUIDE)
     with tempfile.TemporaryDirectory(prefix='job-', dir=EVIDENCE) as temporary:
         root = Path(temporary); root.chmod(0o755)
         source = root / 'source'; source.mkdir(mode=0o755)
@@ -760,6 +775,8 @@ def execute(qa_id):
                            'sandbox': 'bwrap-fixed-host-identity-map', 'source_only': True,
                            'codex_sha': file_sha(CODEX), 'bwrap_sha': file_sha(Path('/usr/bin/bwrap')),
                            'payload_drop_sha': file_sha(Path('/usr/bin/setpriv')),
+                           'native_bwrap_sha': file_sha(NATIVE_BWRAP), 'native_profile_sha': file_sha(NATIVE_PROFILE),
+                           'style_guide_sha': guide_digest,
                            'verifier_sha': file_sha(Path(contract.__file__))}
             job = {'source_sha': identity['candidate_sha'], 'source_tree': identity['candidate_tree'],
                    'tests_sha': tests_digest, 'dependencies_sha': dependencies, 'node_sha': file_sha(NODE),
@@ -805,7 +822,11 @@ def execute(qa_id):
                   'Explicitly return merge_recommendation=MERGE_RECOMMENDED only when you independently recommend '
                   'merging this exact reviewed source candidate; otherwise use MERGE_NOT_RECOMMENDED and FAIL/BLOCKED. '
                   'Receipt digest=' + contract.digest(receipt))
-        review_cmd = review_sandbox(source, root, output_dir, user) + reviewer_command(app, prompt)
+        if app == 'web':
+            prompt += (' Read the actual canonical frozen Owner style guide in /style-guide and compare source '
+                       'composition/tokens/navigation against it; record concrete parity findings. '
+                       'Never claim rendered visual/browser PASS from source comparison or reference file existence.')
+        review_cmd = review_sandbox(source, root, output_dir, user, app=app) + reviewer_command(app, prompt)
         code, review_log = run(review_cmd, timeout=1800, on_start=lambda pid: reviewer_started(
             qa_id, pid, attempt=attempt, identity=identity, model=MODELS[app]))
         reviewer_credentials(user, policy)  # Refresh may change tokens, never account/permissions.

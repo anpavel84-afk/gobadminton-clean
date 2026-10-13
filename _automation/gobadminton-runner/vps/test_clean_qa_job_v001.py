@@ -287,6 +287,35 @@ class CleanQAJobSafety(unittest.TestCase):
                                  ['0777', '/source/apps/web/node_modules/.vite'], ['0777', '/source/apps/web/node_modules/.vite-temp']])
         self.assertTrue(all(path in {'/tmp', '/work'} or path.endswith(('/.vite', '/.vite-temp')) for _, path in chmods))
 
+    def test_native_config_parent_traversal_is_namespace_only_and_managed_constraints_preserved(self):
+        with patch.object(qa.Path, 'exists', return_value=True):
+            command = qa.review_sandbox(Path('/snapshot'), Path('/job'), Path('/output'), types.SimpleNamespace(pw_uid=985, pw_gid=976))
+        windows = [command[i:i + 5] for i in range(len(command) - 4)]
+        for parent in ('/etc', '/etc/ssl', '/etc/codex'):
+            self.assertIn(['--dir', parent, '--chmod', '0755', parent], windows)
+        triples = [command[i:i + 3] for i in range(len(command) - 2)]
+        for path in ('/etc/codex/managed_config.toml', '/etc/codex/requirements.toml'):
+            self.assertIn(['--ro-bind', path, path], triples)
+        self.assertNotIn(['--bind', '/etc', '/etc'], triples)
+
+    def test_radar_canonical_style_guide_mount_is_fixed_readonly_and_not_visual_pass(self):
+        user = types.SimpleNamespace(pw_uid=985, pw_gid=976)
+        web = qa.review_sandbox(Path('/snapshot'), Path('/job'), Path('/output'), user, app='web')
+        friends = qa.review_sandbox(Path('/snapshot'), Path('/job'), Path('/output'), user, app='api')
+        self.assertIn(['--ro-bind', str(qa.STYLE_GUIDE), '/style-guide'], [web[i:i + 3] for i in range(len(web) - 2)])
+        self.assertNotIn('/style-guide', friends)
+        self.assertNotIn(['--bind', str(qa.STYLE_GUIDE), '/style-guide'], [web[i:i + 3] for i in range(len(web) - 2)])
+
+    def test_native_helper_selector_is_fixed_protected_path_without_policy_or_capability_bypass(self):
+        command = qa.review_sandbox(Path('/snapshot'), Path('/job'), Path('/output'), types.SimpleNamespace(pw_uid=985, pw_gid=976))
+        self.assertIn(['--setenv', 'PATH', '/qa-tools/native-helper/bin:/qa-tools/node/bin:/usr/bin:/bin'],
+                      [command[i:i + 3] for i in range(len(command) - 2)])
+        self.assertEqual(qa.NATIVE_BWRAP, qa.INSTALL / 'native-helper/bin/bwrap')
+        self.assertNotIn('--cap-add', command)
+        reviewer = qa.reviewer_command('web', 'review')
+        self.assertEqual(reviewer[reviewer.index('--sandbox') + 1], 'read-only')
+        self.assertNotIn('--dangerously-bypass-approvals-and-sandbox', reviewer)
+
     def test_disposable_database_cleanup_on_suite_exception(self):
         commands = []
         def checked(command, **kwargs):
