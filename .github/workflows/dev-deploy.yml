@@ -1,0 +1,74 @@
+name: DEV deploy
+on:
+  push:
+    branches: [dev]
+permissions:
+  contents: read
+# Keep an active deployment intact; superseded pending DEV pushes may coalesce.
+concurrency:
+  group: gobadminton-dev
+  cancel-in-progress: false
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: {fetch-depth: 0, persist-credentials: false}
+      - uses: ./.github/actions/ci-setup
+      - run: bash scripts/chatops/ci.sh fast
+        env:
+          BASE_SHA: ${{ github.event.before }}
+  images:
+    needs: checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions: {contents: read, packages: write}
+    outputs:
+      api: ${{ steps.build.outputs.api }}
+      web: ${{ steps.build.outputs.web }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with: {persist-credentials: false}
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - id: build
+        run: |
+          bash scripts/chatops/build-pair.sh
+          echo "api=$(jq -r .api_digest _out/release.json)" >> "$GITHUB_OUTPUT"
+          echo "web=$(jq -r .web_digest _out/release.json)" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
+  deploy:
+    if: vars.CHATOPS_DEV_COMMISSIONED == 'true'
+    needs: images
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    environment:
+      name: dev
+      url: https://dev.gobadminton.ru
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with: {persist-credentials: false}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with: {node-version: '24.21.0'}
+      - name: Apply, browser-smoke, accept; rollback on failure
+        run: |
+          mkdir -p _out
+          jq -n --arg s "$GITHUB_SHA" --arg a "$API" --arg w "$WEB" --argjson r "$GITHUB_RUN_ID" \
+            '{schema:1,source_sha:$s,api_digest:$a,web_digest:$w,dev_run_id:$r}' > _out/release.json
+          bash scripts/chatops/deploy.sh dev _out/release.json
+        env:
+          API: ${{ needs.images.outputs.api }}
+          WEB: ${{ needs.images.outputs.web }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ vars.DEPLOY_PORT }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          PUBLIC_URL: https://dev.gobadminton.ru
+          REQUIRE_RADAR: '1'
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dev-release
+          path: _out/release.json
+          if-no-files-found: error
+          retention-days: 90

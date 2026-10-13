@@ -1,0 +1,8 @@
+[Unit]
+Description=Recover unacknowledged GoBadminton %i releases
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/gb-deploy-helper.sh --watchdog %i
+User=root
+UMask=0077
+TimeoutStartSec=240

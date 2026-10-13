@@ -1,0 +1,8 @@
+[Unit]
+Description=Check pending GoBadminton %i release expiry
+[Timer]
+OnBootSec=60
+OnUnitActiveSec=60
+Persistent=true
+[Install]
+WantedBy=timers.target

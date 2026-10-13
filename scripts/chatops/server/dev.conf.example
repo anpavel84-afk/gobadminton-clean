@@ -1,0 +1,15 @@
+# Install /etc/gobadminton/deploy/dev.conf root:root 0600.
+# BIND THESE TO THE EXISTING DEV PROJECT. Do not recreate the DB/volumes.
+PROJECT=gobadminton_dev_preview
+COMPOSE_FILES=(/srv/gobadminton-dev-preview/docker-compose.yml /srv/gobadminton-dev-preview/compose.full-germany-oauth-avatar-v003.yml)
+ENV_FILE=/srv/gobadminton-dev-preview/.env
+SERVICES=(api web)
+DB_USER=gobadminton
+DB_NAME=gobadminton
+REGISTRY_PREFIX=ghcr.io/anpavel84-afk/gobadminton-clean
+MIGRATE=0
+# First Radar slice: no schema changes. Require unchanged migration manifest before admission.
+API_META_URL=http://127.0.0.1:18084/v1/meta
+READINESS_SECONDS=120
+ACCEPT_SECONDS=300
+OPERATION_SECONDS=900

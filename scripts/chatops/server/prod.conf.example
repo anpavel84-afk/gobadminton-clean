@@ -1,0 +1,17 @@
+# Install /etc/gobadminton/deploy/prod.conf root:root 0600.
+# EXAMPLE ONLY: verify current project name/paths/ports before binding.
+PROJECT=gobadminton_mvp
+COMPOSE_FILES=(/etc/gobadminton/deploy/docker-compose.prod.yml)
+ENV_FILE=/etc/gobadminton/deploy/prod.env
+# Current split production: Germany SERVICES=(api), Moscow SERVICES=(web).
+# If an actually approved single-host PROD exists: SERVICES=(api web).
+SERVICES=(api)
+DB_USER=gobadminton
+DB_NAME=gobadminton
+REGISTRY_PREFIX=ghcr.io/anpavel84-afk/gobadminton-clean
+MIGRATE=1
+# On the Moscow Web host: MIGRATE=0 and API_META_URL=''.
+API_META_URL=http://127.0.0.1:18080/v1/meta
+READINESS_SECONDS=180
+ACCEPT_SECONDS=420
+OPERATION_SECONDS=1200
