@@ -11,6 +11,15 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch, Mock
+import sys
+from types import SimpleNamespace
+
+try:
+    import psutil
+except ModuleNotFoundError:
+    sys.modules["psutil"] = SimpleNamespace(
+        Error=OSError, AccessDenied=OSError, NoSuchProcess=OSError,
+        process_iter=lambda *args, **kwargs: ())
 
 import github_owner_issue_intake as intake
 import runner
