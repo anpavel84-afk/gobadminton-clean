@@ -32,6 +32,8 @@ export function PlayersDirectoryPage() {
   const directory = useUnifiedDirectory();
   const config = useRadarConfig();
   const unifiedMode = directory.view.mode === "unified";
+  const [devMapAvailable, setDevMapAvailable] = useState(false);
+  useEffect(() => { setDevMapAvailable(window.location.hostname === "dev.gobadminton.ru"); }, []);
   // Ordinary profiles remain usable while the private Radar context loads/expires.
   const directoryVisible = !unifiedMode || !directory.view.snapshot;
   const queryFilters: UnifiedFilters = { cityId, ...(areaKey.trim() ? { areaKey: areaKey.trim() } : {}), ...(name.trim().length >= 2 ? { name: name.trim() } : {}), ...(lookingOnly ? { looking: true } : {}), ...(trainerOnly ? { trainer: true } : {}) };
@@ -102,8 +104,9 @@ export function PlayersDirectoryPage() {
     <section className="players-hero"><div><span className="eyebrow">Игровое сообщество</span><h1>Игроки</h1><p>Находите партнёров по уровню, району и игровому настрою.</p></div><RadarSwitchControl /></section>
     <RadarStatusControls />
     <div className="unified-actions">
+      {devMapAvailable && <Button href="/players/radar" variant="dark">Карта</Button>}
       {unifiedAvailable && !directory.view.authenticationRequired && view.me && <><Button variant="outline" disabled={!eligibleCity || directory.view.busy} onClick={() => void directory.controller?.query(queryFilters)}>Смотреть участников Radar</Button><Button variant="outline" disabled={!eligibleCity || originBusy || directory.view.busy} onClick={() => void nearby()}>{originBusy ? "Определяем местоположение…" : "Сортировать по близости"}</Button></>}
-      {unifiedMode && <><Button variant="ghost" onClick={() => directory.controller?.ordinary()}>Обычный каталог</Button><Button variant="outline" disabled={directory.view.busy} onClick={() => void directory.controller?.refresh()}>Обновить участников Radar</Button><Button href="/players/radar" variant="dark">Показать на карте</Button></>}
+      {unifiedMode && <><Button variant="ghost" onClick={() => directory.controller?.ordinary()}>Обычный каталог</Button><Button variant="outline" disabled={directory.view.busy} onClick={() => void directory.controller?.refresh()}>Обновить участников Radar</Button>{!devMapAvailable && <Button href="/players/radar" variant="dark">Показать на карте</Button>}</>}
       {unifiedAvailable && !eligibleCity && <p>Выберите доступный город, чтобы смотреть участников Radar. Обычный каталог доступен.</p>}
     </div>
     {directory.view.authenticationRequired && <AuthEntry returnPath="/players">Войти для участников Radar</AuthEntry>}
