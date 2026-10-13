@@ -8,5 +8,4 @@ Match User gb-deploy-dev,gb-deploy-prod
     PermitTTY no
     DisableForwarding yes
     PermitUserRC no
-    PermitUserEnvironment no
 Match all

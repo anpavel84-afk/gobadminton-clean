@@ -33,7 +33,10 @@ files=(apps/api/test/integration/*.test.ts)
 for file in "${files[@]}"; do
   # Existing Friends suite explicitly requires this name and an empty app DB.
   db=gobadminton
-  [[ $(basename "$file") != friends-s1.disposable.test.ts ]] || db=gobadminton_friends_s1_disposable
+  case $(basename "$file") in
+    friends-s1.disposable.test.ts) db=gobadminton_friends_s1_disposable ;;
+    formal-invitation-privacy-authority-boundary.test.ts) db=formal_invite_ci ;;
+  esac
   docker exec "$NAME" dropdb -U gobadminton --if-exists --force "$db"
   docker exec "$NAME" createdb -U gobadminton "$db"
   export DATABASE_URL="postgres://gobadminton:$PASSWORD@127.0.0.1:$PORT/$db"
