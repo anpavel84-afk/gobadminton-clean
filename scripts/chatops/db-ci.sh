@@ -20,7 +20,7 @@ done
 PORT=$(docker port "$NAME" 5432/tcp | awk -F: '{print $NF}')
 [[ $PORT =~ ^[0-9]+$ ]]
 export NODE_ENV=test APP_ENV=local RUN_DB_INTEGRATION=1
-export CONTENT_MODERATION_PROVIDER=fake CONTENT_MODERATION_FINGERPRINT_SECRET=ci-synthetic-only-fingerprint
+export CONTENT_MODERATION_PROVIDER=fake CONTENT_MODERATION_FINGERPRINT_SECRET=ci-synthetic-only-fingerprint-000000000000
 export PUBLIC_API_ORIGIN=http://127.0.0.1:3000 PUBLIC_WEB_ORIGIN=http://127.0.0.1:3001
 export AUTH_PEPPER=ci-synthetic-only-pepper-not-a-live-secret
 export PG_CONTAINER="$NAME" CI_DB_PORT="$PORT" CI_DB_PASSWORD="$PASSWORD"
