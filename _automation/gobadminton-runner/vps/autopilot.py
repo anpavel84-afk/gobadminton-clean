@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import json
 import hashlib
+import math
 import os
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -55,6 +57,28 @@ BRANCH = "pm/autopilot-local"
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def owner_input_backoff(state: dict[str, Any], owner_key: str, *, now: float) -> bool:
+    """Retry failed transport/planner attempts; unchanged successful decisions wait."""
+    if state.get("last_owner_input_key") != owner_key:
+        return False
+    outcome = state.get("last_owner_attempt_outcome")
+    if outcome is None:
+        # Recover the deployed pre-fix failure without treating an arbitrary
+        # no_safe_action summary as an execution error. Persist classification
+        # before status changes to backoff so it survives subsequent restarts.
+        if (state.get("status") == "owner_instruction_planner_error_retriable"
+                or (state.get("status") == "owner_instruction_backoff"
+                    and state.get("last_result") == "planner author identity unavailable")):
+            outcome = state["last_owner_attempt_outcome"] = "planner_error"
+    if outcome != "planner_error":
+        return True
+    attempted = state.get("last_owner_no_action_epoch")
+    if (type(attempted) not in (int, float) or not math.isfinite(attempted)
+            or attempted <= 0 or not math.isfinite(now)):
+        return True
+    return now - attempted < OWNER_NO_ACTION_REPLAN_SECONDS
 
 
 def load_json(path: Path, default: Any = None) -> Any:
@@ -282,7 +306,37 @@ def pending_tasks(backlog: dict[str, Any], state: dict[str, Any]) -> list[dict[s
 
 
 
-def planning_input_key(backlog, state, sync_result, owner_items=()):
+def runtime_readiness_key(cfg: dict[str, Any]) -> str:
+    """Bounded readiness change hint; never a policy authorization or secret."""
+    policies = []
+    for path in (
+        "/etc/gobadminton-clean-control-plane/clean-publisher-policy.json",
+        "/var/lib/gobadminton-clean-trusted-qa-evidence/policy.json",
+    ):
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+            with os.fdopen(fd, "rb") as stream:
+                info = os.fstat(stream.fileno())
+                if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0
+                        or info.st_mode & 0o022 or info.st_size > 65536):
+                    policies.append("invalid")
+                    continue
+                data = stream.read(65537)
+                policies.append(hashlib.sha256(data).hexdigest()
+                                if len(data) <= 65536 else "invalid")
+        except FileNotFoundError:
+            policies.append("absent")
+        except OSError:
+            policies.append("unreadable")
+    projection = {
+        "owner_issue_intake_enabled": cfg.get("owner_issue_intake_enabled") is True,
+        "github_repo_write_authorized": cfg.get("github_repo_write_authorized") is True,
+        "fixed_policy_digests": policies,
+    }
+    return hashlib.sha256(json.dumps(projection, sort_keys=True).encode()).hexdigest()
+
+
+def planning_input_key(backlog, state, sync_result, owner_items=(), *, runtime_readiness=None):
     """Semantic source/evidence fingerprint, independent of monitor timestamps."""
     receipts = {}
     for task in backlog.get('tasks', []):
@@ -296,6 +350,8 @@ def planning_input_key(backlog, state, sync_result, owner_items=()):
               'gates': [state.get(k) for k in ('paused', 'blocked', 'global_gates', 'project_global_blocker')],
               'receipts': receipts,
               'owner': [{k: item.get(k) for k in ('id', 'origin', 'text', 'payload')} for item in owner_items]}
+    if runtime_readiness is not None:
+        inputs['runtime_readiness'] = runtime_readiness
     return hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
 
 
@@ -1252,8 +1308,11 @@ def main() -> int:
                 before_owner_backlog["_canonical_commit"] = str(
                     (ap_state.get("backlog_sync") or {}).get("canonical_commit") or ""
                 )
-                owner_key = planning_input_key(backlog, runner_state, ap_state.get('backlog_sync') or {}, owner_items)
-                if ap_state.get('last_owner_input_key') == owner_key:
+                owner_key = planning_input_key(
+                    backlog, runner_state, ap_state.get('backlog_sync') or {}, owner_items,
+                    runtime_readiness=runtime_readiness_key(cfg),
+                )
+                if owner_input_backoff(ap_state, owner_key, now=time.time()):
                     ap_state["status"] = "owner_instruction_backoff"
                     write_json(AUTOPILOT_STATE_PATH, ap_state)
                     wait_for_wake(ACTIVE_POLL_SECONDS)
@@ -1311,10 +1370,14 @@ def main() -> int:
                     # a persuasive Codex completion message or a PR alone.
                     update_owner_instruction_status(owner_items, "PLANNED", summary)
                     ap_state["last_owner_no_action_epoch"] = 0
+                    ap_state["last_owner_attempt_outcome"] = "published"
                     ap_state["status"] = f"owner_instruction_{action or 'planned'}"
                 elif ok:
                     update_owner_instruction_status(owner_items, "ACKNOWLEDGED", summary)
                     ap_state["last_owner_no_action_epoch"] = time.time()
+                    ap_state["last_owner_attempt_outcome"] = (
+                        "no_safe_action" if action == "no_safe_action" else "publication_unverified"
+                    )
                     ap_state["status"] = (
                         "owner_instruction_acknowledged_no_safe_action" if action == "no_safe_action"
                         else "owner_instruction_publication_unverified"
@@ -1322,6 +1385,7 @@ def main() -> int:
                 else:
                     update_owner_instruction_status(owner_items, "ACKNOWLEDGED", summary)
                     ap_state["last_owner_no_action_epoch"] = time.time()
+                    ap_state["last_owner_attempt_outcome"] = "planner_error"
                     ap_state["status"] = "owner_instruction_planner_error_retriable"
                 write_json(AUTOPILOT_STATE_PATH, ap_state)
                 log(f"owner instruction planning result ok={ok} action={action!r}: {summary}")

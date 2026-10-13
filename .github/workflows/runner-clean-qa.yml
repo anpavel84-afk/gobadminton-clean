@@ -56,7 +56,7 @@ jobs:
         run: |
           python -m unittest -v             test_clean_git_binding_20261013             test_friends_dag_auto_advance_v001             test_qa23001_protected_job_identity_v001 test_qa_pr11_git_alias_v001 test_qa_pr11_compact_capsule_v001 test_qa_pr11_sandbox_control_r3_v001
       - name: Clean Owner Issue intake and Codex confinement
-        run: python -m unittest -v test_clean_issue_commissioning_v001
+        run: python -m unittest -v test_clean_issue_commissioning_v001 test_owner_planner_retry_v001
 
   candidate-dev-source-checks:
     name: Exact clean candidate ${{ matrix.candidate }}
@@ -67,11 +67,11 @@ jobs:
       matrix:
         include:
           - candidate: radar-map-pr19
-            commit: 6aae8460b5cf132fbc0344c7cb914f130ceb9d57
+            commit: ed1ad372751b25f1d4bddae1f13e1b3876ef5bec
             package: web
-            focused_test: test/radar-map-assets.test.ts
+            focused_test: test
           - candidate: friends-api-pr20
-            commit: 08a68a2b5ae861f22e7d440a01e32d14496a68fe
+            commit: f98b1ed42e3f3847ac305e487cf3a706d6a458f2
             package: api
             focused_test: test/unit/friendships.test.ts
     steps:
