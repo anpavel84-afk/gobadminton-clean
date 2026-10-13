@@ -107,6 +107,16 @@ def pending_owner_instructions(
 ) -> list[dict[str, Any]]:
     allowed = {str(x) for x in statuses}
     items: list[dict[str, Any]] = []
+    cfg = load_json(CONFIG_PATH, {}) or {}
+    if (cfg.get("project_repo") == "anpavel84-afk/gobadminton-clean"
+            and cfg.get("owner_issue_intake_enabled") is True):
+        # Exact GitHub Owner ID+Issue comment evidence, not a claimed
+        # authorization from an arbitrary public issue/comment.
+        from github_owner_issue_intake import poll_once, IntakeHold
+        try:
+            poll_once(ROOT, load_json(BACKLOG_PATH, {}) or {})
+        except IntakeHold as exc:
+            raise RuntimeError("authenticated Owner Issue intake held: " + str(exc)) from exc
     if not OWNER_INBOX_DIR.is_dir():
         return items
     for path in sorted(OWNER_INBOX_DIR.glob("*.json")):
@@ -510,6 +520,46 @@ def build_prompt(
     if cfg.get('autopilot_budget_mode') == 'compact':
         from compact_pm_brief import render
         return render(owner_items, active_admission_only)
+    if cfg.get("project_repo") == "anpavel84-afk/gobadminton-clean":
+        if owner_items is None:
+            owner_items = pending_owner_instructions()
+        requests = [{
+            "id": v.get("id"), "origin": v.get("origin"),
+            "text_sha256": v.get("text_sha256"),
+            "task_ids": v.get("task_ids"),
+            "text": str(v.get("text") or "")[:7000],
+        } for v in owner_items if isinstance(v, dict)]
+        return (
+            "GoBadminton CLEAN PM. ONE already-authorized DEV source-only "
+            "planning/publication action, not an implementation executor.\\n"
+            "Read AGENTS.md, docs/assignments/20261013/, the exact current "
+            "GitHub Issues #4/#12/#13/#14/#15, the real six-task canonical "
+            "queue, immutable history and current main OID.\\n"
+            "Authenticated Owner Inbox inputs (still subject to exact "
+            "publication_guard, CAS and protected QA): "
+            + json.dumps(requests, ensure_ascii=False, sort_keys=True) + "\\n"
+            "Source-only DEV work, never PROD. Prefer existing prepared "
+            "Friends S1 producer+own QA and Radar Map producer+own QA; "
+            "do not duplicate draft PR19/PR20 code or import legacy 551 tasks. "
+            "F2/F3 shared locks must serialize. Do not activate Avatar until "
+            "its recorded predecessor and real write-path safety permit.\\n"
+            "Select Codex model/effort by scoped task risk, no Cursor fallback, "
+            "no sandbox bypass, no writes outside the PM worktree. Never edit "
+            "Runner state, Owner Inbox, trust or application source.\\n"
+            "For any source/QA admission: genuine Owner instruction ID and "
+            "SHA256(trimmed UTF-8 instruction text), exact immutable Git source, "
+            "the matching separate QA pair, unique task IDs, non-conflicting "
+            "real file/lock scopes, the sole existing publication_guard "
+            "pre-push and remote main compare-and-swap. No raw main push. "
+            "No self-signed PASS or untrusted legacy evidence.\\n"
+            "If canonical single-writer credentials/policy, distinct nonauthor "
+            "root QA, or protected Owner binding are absent, write "
+            "no_safe_action with exact blocker and STOP. Do not claim a Git "
+            "comment started a Runner task, nor claim DEV deployed.\\n"
+            "Return exactly one JSON receipt. Host Codex --output-last-message "
+            "writes /srv/gobadminton-clean/runner/autopilot-receipt.json; "
+            "do not edit control-state directly. No secret output."
+        )
     runtime = str(ROOT)
     if owner_items is None:
         owner_items = pending_owner_instructions()
@@ -732,7 +782,11 @@ def launch_planner(
     except (OSError, ValueError, RuntimeError) as exc:
         return False, 'publication safety setup failed: ' + str(exc), None
     prompt = build_prompt(cfg, owner_items=owner_items, active_admission_only=active_admission_only)
-    planner_executor = str(cfg.get("autopilot_planner_executor") or "cursor").strip().lower()
+    clean = cfg.get("project_repo") == "anpavel84-afk/gobadminton-clean"
+    planner_executor = str(cfg.get("autopilot_planner_executor")
+                           or ("codex" if clean else "cursor")).strip().lower()
+    if clean and planner_executor != "codex":
+        return False, "clean-root planner must use Codex workspace sandbox", None
     worktrees_root = str(Path(str(cfg["workspace"])).parent / "worktrees")
     if planner_executor == "codex":
         cli = str(cfg.get("codex_cli") or "")
@@ -747,7 +801,8 @@ def launch_planner(
         cmd = [
             cli, "exec", "--color", "never",
             "-C", str(WORKTREE),
-            "--dangerously-bypass-approvals-and-sandbox",
+            "--approve-for-me",
+            "--output-last-message", str(AUTOPILOT_RECEIPT_PATH),
             "--model", model,
         ]
         if effort in {"low", "medium", "high", "xhigh", "extra_high"}:
@@ -796,8 +851,11 @@ def launch_planner(
                 env={
                     **publication_env,
                     "PATH": ":".join([
-                        str(cfg.get("node_bin") or ""),
-                        str(cfg.get("local_bin") or ""),
+                        str(cfg.get("node_bin") or
+                            ("/home/agentagency-dev/.local/node-v24.21.0/bin"
+                             if clean else "")),
+                        str(cfg.get("local_bin") or
+                            ("/home/agentagency-dev/.local/bin" if clean else "")),
                         os.environ.get("PATH", ""),
                     ]),
                 },
