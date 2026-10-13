@@ -6,6 +6,7 @@ ROOT=$(git rev-parse --show-toplevel)
 NAME="gb-ci-${GITHUB_RUN_ID:?}-${GITHUB_RUN_ATTEMPT:?}-${RANDOM}"
 IMAGE='postgis/postgis:18-3.6@sha256:60f6ad1d21ea86a67d47780b9a0d1e1d200500f62b19293fa834d0dea80b8677'
 PASSWORD=$(openssl rand -hex 18)
+printf '::add-mask::%s\n' "$PASSWORD"
 cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 # Ephemeral port; credentials are synthetic and confined to this job's container.
@@ -30,6 +31,7 @@ mkdir -p _out/test-results
 shopt -s nullglob
 files=(apps/api/test/integration/*.test.ts)
 (( ${#files[@]} > 0 )) || { echo 'No integration suites'; exit 1; }
+result=0
 for file in "${files[@]}"; do
   # Existing Friends suite explicitly requires this name and an empty app DB.
   db=gobadminton
@@ -41,8 +43,13 @@ for file in "${files[@]}"; do
   docker exec "$NAME" createdb -U gobadminton "$db"
   export DATABASE_URL="postgres://gobadminton:$PASSWORD@127.0.0.1:$PORT/$db"
   report="$ROOT/_out/test-results/$(basename "$file").json"
-  pnpm --filter @gobadminton/api exec vitest run --project integration "test/integration/$(basename "$file")" \
-    --reporter=default --reporter=json --outputFile="$report"
+  if ! pnpm --filter @gobadminton/api exec vitest run --project integration "test/integration/$(basename "$file")" \
+    --reporter=default --reporter=json --outputFile="$report"; then
+    result=1
+  fi
   # Fail on silently skipped mandatory tests; fix the explicit suite contract, not this exit code.
-  jq -e '.success == true and .numPassedTests > 0 and .numFailedTests == 0 and .numPendingTests == 0' "$report" >/dev/null
+  if ! jq -e '.success == true and .numPassedTests > 0 and .numFailedTests == 0 and .numPendingTests == 0' "$report" >/dev/null; then
+    result=1
+  fi
  done
+exit "$result"

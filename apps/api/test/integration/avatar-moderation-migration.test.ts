@@ -24,6 +24,6 @@ run("M1 upgrade from applied 0019",()=>{
       await pool.query("UPDATE users SET status='deletion_pending' WHERE id=$1",[user]);
       expect((await pool.query("SELECT avatar_key,avatar_moderation_approval_id,version FROM player_social_profiles WHERE user_id=$1",[user])).rows[0]).toEqual({avatar_key:null,avatar_moderation_approval_id:null,version:9});
       expect((await pool.query("SELECT storage_key FROM avatar_media_gc")).rows).toEqual([{storage_key:key}]);
-    }finally{await pool.end();await admin.query(`DROP DATABASE "${name}" WITH (FORCE)`);await admin.end();}
+    }finally{await pool.end();await admin.query(`DROP DATABASE "${name}"`);await admin.end();}
   });
 });
