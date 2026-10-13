@@ -14,8 +14,8 @@
     {
       "id": "friends-dev-s1-api-20261013-v001",
       "order": 10,
-      "status": "queued",
-      "enabled": true,
+      "status": "blocked",
+      "enabled": false,
       "source": "https://github.com/anpavel84-afk/gobadminton-clean/blob/09408233f0720576af8d68a0fad3e65c84f30916/docs/assignments/20261013/friends-s1-api.md",
       "admission": "https://github.com/anpavel84-afk/gobadminton-clean/blob/09408233f0720576af8d68a0fad3e65c84f30916/docs/assignments/20261013/owner-clean-dev-batch.md",
       "scope": "Verify and reuse the existing prepared clean PR #20 candidate f98b1ed42e3f3847ac305e487cf3a706d6a458f2. No duplicate implementation, no feature enablement, no application edits for this first verification run. Inspect exact SHA/tree/branch, compatibility, privacy and existing tests in an isolated disposable environment; never run SQL against live DEV/PROD. Return source-only completion proposal; host records actual executor PID/exit and publishes the new execution handoff via separate Clean Publisher. Independent own protected QA must execute freshly after publication; manual QA is historical only. Retain the existing test/local-only Friends gate.",
@@ -52,8 +52,8 @@
     {
       "id": "qa-friends-dev-s1-api-20261013-v001",
       "order": 20,
-      "status": "queued",
-      "enabled": true,
+      "status": "superseded_before_launch",
+      "enabled": false,
       "source": "https://github.com/anpavel84-afk/gobadminton-clean/blob/09408233f0720576af8d68a0fad3e65c84f30916/docs/assignments/20261013/qa-friends-s1-api.md",
       "admission": "https://github.com/anpavel84-afk/gobadminton-clean/blob/09408233f0720576af8d68a0fad3e65c84f30916/docs/assignments/20261013/owner-clean-dev-batch.md",
       "scope": "Fresh independent protected QA for own exact published producer SHA/tree/branch and suite friends-s1-germany-dev-privacy-v001. Service-owned tests plus distinct nonauthor reviewer; no manual PASS reuse or trusted_job replay. Follow immutable assignment privacy/functional checks, record FAIL/BLOCKED honestly. No live database mutation or DEV/PROD release.",
@@ -96,8 +96,8 @@
     {
       "id": "radar-dev-map-ui-20261013-v001",
       "order": 30,
-      "status": "queued",
-      "enabled": true,
+      "status": "blocked",
+      "enabled": false,
       "source": "https://github.com/anpavel84-afk/gobadminton-clean/blob/09408233f0720576af8d68a0fad3e65c84f30916/docs/assignments/20261013/radar-map-ui.md",
       "admission": "https://github.com/anpavel84-afk/gobadminton-clean/blob/09408233f0720576af8d68a0fad3e65c84f30916/docs/assignments/20261013/owner-clean-dev-batch.md",
       "scope": "Verify and reuse the existing prepared clean PR #19 candidate ed1ad372751b25f1d4bddae1f13e1b3876ef5bec. No duplicate implementation, no feature enablement, no application edits for this first verification run. Inspect exact SHA/tree/branch, compatibility, privacy and existing tests in an isolated disposable environment; never run SQL against live DEV/PROD. Return source-only completion proposal; host records actual executor PID/exit and publishes the new execution handoff via separate Clean Publisher. Independent own protected QA must execute freshly after publication; manual QA is historical only. For Radar also verify Style Guide/Construction Kit parity and report any missing parity evidence; preserve CANDIDATE_NOT_REGISTERED and the unresolved cross-network large glyph/metro smoke requirement.",
@@ -133,8 +133,8 @@
     {
       "id": "qa-radar-dev-map-ui-20261013-v001",
       "order": 40,
-      "status": "queued",
-      "enabled": true,
+      "status": "superseded_before_launch",
+      "enabled": false,
       "source": "https://github.com/anpavel84-afk/gobadminton-clean/blob/09408233f0720576af8d68a0fad3e65c84f30916/docs/assignments/20261013/qa-radar-map-ui.md",
       "admission": "https://github.com/anpavel84-afk/gobadminton-clean/blob/09408233f0720576af8d68a0fad3e65c84f30916/docs/assignments/20261013/owner-clean-dev-batch.md",
       "scope": "Fresh independent protected QA for own exact published producer SHA/tree/branch and suite radar-map-germany-dev-privacy-v001. Service-owned tests plus distinct nonauthor reviewer; no manual PASS reuse or trusted_job replay. Follow immutable assignment privacy/functional checks, record FAIL/BLOCKED honestly. No live database mutation or DEV/PROD release.",
@@ -258,6 +258,168 @@
         {
           "id": "verdict",
           "title": "Write immutable QA verdict and guarded handoff"
+        }
+      ]
+    },
+    {
+      "id": "friends-dev-s1-api-20261013-v002",
+      "order": 11,
+      "status": "queued",
+      "enabled": true,
+      "source": "https://github.com/anpavel84-afk/gobadminton-clean/blob/09408233f0720576af8d68a0fad3e65c84f30916/docs/assignments/20261013/friends-s1-api.md",
+      "admission": "https://github.com/anpavel84-afk/gobadminton-clean/blob/09408233f0720576af8d68a0fad3e65c84f30916/docs/assignments/20261013/owner-clean-dev-batch.md",
+      "scope": "ENV continuation of the same authenticated Owner instruction, ordinary new source-only verification pair, not recovery. Verify prepared immutable candidate SHA/tree/branch; do not redevelop PR19/PR20, edit application source, enable features, install dependencies or release. Host seeds private dependencies from the matching root-protected offline cache before launch; verify available toolchain and lockfile match, otherwise BLOCKED. Preserve and individually recheck every prior finding from docs/handoffs/20261013/CLEAN_PM_V001_BLOCKED_EVIDENCE_20261013_V001.json (SHA256 2300bca7818c4922de303372f3b8e5b61d60369a1c50ff6832c3208167f5ab7b); original receipt bytes/history and exact Foundation FAIL output are archived there. Execute python3 scripts/check_foundation.py in the disposable exact-source environment; report every missing governance/documentation path and Idempotency-Key/command-body finding with exact new evidence, without repairing outside scope. Unresolved findings remain FAIL/BLOCKED; ENV readiness/admission does not accept a candidate. Tests only in isolated/disposable environments, never live DEV/PROD SQL. No control-state, Owner Inbox, trust, sibling worktree or runtime writes; no sandbox bypass/Cursor fallback. Return targeted evidence and a task-specific handoff proposal for host execution capture and separate Clean Publisher; only its own freshly executed protected nonauthor QA may accept exact published SHA/tree/branch/suite, no manual PASS/trusted_job replay. Targeted checks: API typecheck, OpenAPI contract validation, friendships unit/privacy tests, disposable PostGIS friends-s1.disposable.test.ts and 0032 forward/rollback. Check session actor, hidden/blocked/anonymous peers, consent/deletion epochs, incoming/outgoing lifecycle, duplicate/replay, expiry, cancel/accept races, no contact or precise coordinate leaks. Preserve default OFF/test-local Friends gate and historical failures. Allowed publication path only docs/handoffs/20261013/clean-canary-friends-dev-s1-api-20261013-v002.md; application scope remains verification-only.",
+      "title_ru": "Друзья: серверная часть и запросы · проверка v002",
+      "summary_ru": "ENV continuation: проверка готового кандидата; прежние FAIL/BLOCKED сохранены.",
+      "lane": "implementation",
+      "executor": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "high",
+      "sandbox": "workspace",
+      "effect_ceiling": "source_only",
+      "locks": [
+        "api",
+        "db",
+        "contracts"
+      ],
+      "base_sha": "f98b1ed42e3f3847ac305e487cf3a706d6a458f2",
+      "notes": "Exact existing Owner event github-issue4-comment-6148670164; SHA256 2d3cf0e888a45546512164372818d19355d1eff519b34648b35e7221d1626751; fixed authorized ENV continuation v002, same prepared base SHA; no recovery_from; preserve archived v001 failures; fresh own protected QA; DEV SOURCE_ONLY; no release.",
+      "blocks": [
+        {
+          "id": "pin",
+          "title": "Verify immutable prepared SHA/tree/branch and host-seeded protected dependencies"
+        },
+        {
+          "id": "verify",
+          "title": "Execute targeted checks; individually report archived Foundation failures and required parity"
+        },
+        {
+          "id": "handoff",
+          "title": "Return factual source-only handoff; unresolved findings FAIL/BLOCKED"
+        }
+      ]
+    },
+    {
+      "id": "qa-friends-dev-s1-api-20261013-v002",
+      "order": 21,
+      "status": "queued",
+      "enabled": true,
+      "source": "https://github.com/anpavel84-afk/gobadminton-clean/blob/09408233f0720576af8d68a0fad3e65c84f30916/docs/assignments/20261013/qa-friends-s1-api.md",
+      "admission": "https://github.com/anpavel84-afk/gobadminton-clean/blob/09408233f0720576af8d68a0fad3e65c84f30916/docs/assignments/20261013/owner-clean-dev-batch.md",
+      "scope": "Fresh independent root-protected nonauthor QA for own producer friends-dev-s1-api-20261013-v002. ENV continuation of the same authenticated Owner instruction, ordinary new source-only verification pair, not recovery. Verify prepared immutable candidate SHA/tree/branch; do not redevelop PR19/PR20, edit application source, enable features, install dependencies or release. Host seeds private dependencies from the matching root-protected offline cache before launch; verify available toolchain and lockfile match, otherwise BLOCKED. Preserve and individually recheck every prior finding from docs/handoffs/20261013/CLEAN_PM_V001_BLOCKED_EVIDENCE_20261013_V001.json (SHA256 2300bca7818c4922de303372f3b8e5b61d60369a1c50ff6832c3208167f5ab7b); original receipt bytes/history and exact Foundation FAIL output are archived there. Execute python3 scripts/check_foundation.py in the disposable exact-source environment; report every missing governance/documentation path and Idempotency-Key/command-body finding with exact new evidence, without repairing outside scope. Unresolved findings remain FAIL/BLOCKED; ENV readiness/admission does not accept a candidate. Tests only in isolated/disposable environments, never live DEV/PROD SQL. No control-state, Owner Inbox, trust, sibling worktree or runtime writes; no sandbox bypass/Cursor fallback. Return targeted evidence and a task-specific handoff proposal for host execution capture and separate Clean Publisher; only its own freshly executed protected nonauthor QA may accept exact published SHA/tree/branch/suite, no manual PASS/trusted_job replay. Targeted checks: API typecheck, OpenAPI contract validation, friendships unit/privacy tests, disposable PostGIS friends-s1.disposable.test.ts and 0032 forward/rollback. Check session actor, hidden/blocked/anonymous peers, consent/deletion epochs, incoming/outgoing lifecycle, duplicate/replay, expiry, cancel/accept races, no contact or precise coordinate leaks. Preserve default OFF/test-local Friends gate and historical failures. Verify protected identity, exact new producer receipt/Publisher observation, branch/SHA/tree/suite and unique authorization. QA is read-only; do not accept unresolved findings.",
+      "title_ru": "QA: безопасность API друзей · v002",
+      "summary_ru": "Независимая проверка exact SHA; только read-only, без выдачи собственной root QA подписи.",
+      "lane": "qa",
+      "executor": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "high",
+      "sandbox": "read-only",
+      "effect_ceiling": "source_only",
+      "locks": [
+        "api",
+        "db",
+        "contracts"
+      ],
+      "depends_on_completed": [
+        "friends-dev-s1-api-20261013-v002"
+      ],
+      "source_qa": {
+        "producer_task_id": "friends-dev-s1-api-20261013-v002",
+        "suite_id": "friends-s1-germany-dev-privacy-v001"
+      },
+      "notes": "Exact existing Owner event github-issue4-comment-6148670164; SHA256 2d3cf0e888a45546512164372818d19355d1eff519b34648b35e7221d1626751; fixed authorized ENV continuation v002, same prepared base SHA; no recovery_from; preserve archived v001 failures; fresh own protected QA; DEV SOURCE_ONLY; no release.",
+      "blocks": [
+        {
+          "id": "pin",
+          "title": "Verify own producer and distinct protected reviewer/job binding"
+        },
+        {
+          "id": "tests",
+          "title": "Fresh isolated targeted tests; report every archived finding and Radar parity where applicable"
+        },
+        {
+          "id": "verdict",
+          "title": "Protected exact-source verdict; unresolved FAIL/BLOCKED; no trusted_job replay"
+        }
+      ]
+    },
+    {
+      "id": "radar-dev-map-ui-20261013-v002",
+      "order": 31,
+      "status": "queued",
+      "enabled": true,
+      "source": "https://github.com/anpavel84-afk/gobadminton-clean/blob/09408233f0720576af8d68a0fad3e65c84f30916/docs/assignments/20261013/radar-map-ui.md",
+      "admission": "https://github.com/anpavel84-afk/gobadminton-clean/blob/09408233f0720576af8d68a0fad3e65c84f30916/docs/assignments/20261013/owner-clean-dev-batch.md",
+      "scope": "ENV continuation of the same authenticated Owner instruction, ordinary new source-only verification pair, not recovery. Verify prepared immutable candidate SHA/tree/branch; do not redevelop PR19/PR20, edit application source, enable features, install dependencies or release. Host seeds private dependencies from the matching root-protected offline cache before launch; verify available toolchain and lockfile match, otherwise BLOCKED. Preserve and individually recheck every prior finding from docs/handoffs/20261013/CLEAN_PM_V001_BLOCKED_EVIDENCE_20261013_V001.json (SHA256 2300bca7818c4922de303372f3b8e5b61d60369a1c50ff6832c3208167f5ab7b); original receipt bytes/history and exact Foundation FAIL output are archived there. Execute python3 scripts/check_foundation.py in the disposable exact-source environment; report every missing governance/documentation path and Idempotency-Key/command-body finding with exact new evidence, without repairing outside scope. Unresolved findings remain FAIL/BLOCKED; ENV readiness/admission does not accept a candidate. Tests only in isolated/disposable environments, never live DEV/PROD SQL. No control-state, Owner Inbox, trust, sibling worktree or runtime writes; no sandbox bypass/Cursor fallback. Return targeted evidence and a task-specific handoff proposal for host execution capture and separate Clean Publisher; only its own freshly executed protected nonauthor QA may accept exact published SHA/tree/branch/suite, no manual PASS/trusted_job replay. Targeted checks: existing web unit/privacy regressions, typecheck, lint, generated unified contract types; consent/session stop/expiry, hidden/blocked/suspended/no-consent/wrong-city negatives, city-filtered venue API markers, accessible map/list/loading/offline fallback. Producer AND own protected QA acceptance require actual Radar STYLE_GUIDE_PARITY evidence against root-read-only /opt/gobadminton-clean-qa/style-guide. Verify manifest.json SHA256 f55a1fd104cd394359dfac194b95a6f5409b23f58a597e5b83c39e78e5cde595 and every listed file hash/mode; verify Owner-pinned src/App.tsx SHA256 04187d4d7d70c8c61e9ca2f08b6b6325a98539a3ec90c711c48ab771f675b61c and src/index.css SHA256 f660e31973a6142784308f22728c751d7bb7432fb2ac0136bac032dbc6b1db2a. Compare screen-specific RadarMapPage, MapPlayerMarker, RadarPlayerPreview, navigation/buttons/tokens and responsive composition; record patterns and screen composition reused, every STYLE_GUIDE_GAP and any genuine OWNER_VISUAL_OVERRIDE (none supplied). Provide candidate-specific source comparisons and actual browser desktop/mobile visual parity evidence where sanctioned disposable tooling permits; reference hashes alone are not rendered parity. Missing/uncited canonical parity remains FAIL/BLOCKED; do not invent override or redesign. Preserve CANDIDATE_NOT_REGISTERED, attribution, Germany style/glyph/sprite GET200 and PMTiles206 checks and unresolved cross-network large glyph/metro/browser smoke; missing executable/browser evidence must be reported. No old Moscow host calls or PROD changes. Allowed publication path only docs/handoffs/20261013/clean-canary-radar-dev-map-ui-20261013-v002.md; application scope remains verification-only.",
+      "title_ru": "Radar: настоящая карта, площадки и участники · проверка v002",
+      "summary_ru": "ENV continuation: проверка готового кандидата; прежние FAIL/BLOCKED сохранены.",
+      "lane": "implementation",
+      "executor": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "high",
+      "sandbox": "workspace",
+      "effect_ceiling": "source_only",
+      "locks": [
+        "web",
+        "map"
+      ],
+      "base_sha": "ed1ad372751b25f1d4bddae1f13e1b3876ef5bec",
+      "notes": "Exact existing Owner event github-issue4-comment-6148670164; SHA256 2d3cf0e888a45546512164372818d19355d1eff519b34648b35e7221d1626751; fixed authorized ENV continuation v002, same prepared base SHA; no recovery_from; preserve archived v001 failures; fresh own protected QA; DEV SOURCE_ONLY; no release.",
+      "blocks": [
+        {
+          "id": "pin",
+          "title": "Verify immutable prepared SHA/tree/branch and host-seeded protected dependencies"
+        },
+        {
+          "id": "verify",
+          "title": "Execute targeted checks; individually report archived Foundation failures and required parity"
+        },
+        {
+          "id": "handoff",
+          "title": "Return factual source-only handoff; unresolved findings FAIL/BLOCKED"
+        }
+      ]
+    },
+    {
+      "id": "qa-radar-dev-map-ui-20261013-v002",
+      "order": 41,
+      "status": "queued",
+      "enabled": true,
+      "source": "https://github.com/anpavel84-afk/gobadminton-clean/blob/09408233f0720576af8d68a0fad3e65c84f30916/docs/assignments/20261013/qa-radar-map-ui.md",
+      "admission": "https://github.com/anpavel84-afk/gobadminton-clean/blob/09408233f0720576af8d68a0fad3e65c84f30916/docs/assignments/20261013/owner-clean-dev-batch.md",
+      "scope": "Fresh independent root-protected nonauthor QA for own producer radar-dev-map-ui-20261013-v002. ENV continuation of the same authenticated Owner instruction, ordinary new source-only verification pair, not recovery. Verify prepared immutable candidate SHA/tree/branch; do not redevelop PR19/PR20, edit application source, enable features, install dependencies or release. Host seeds private dependencies from the matching root-protected offline cache before launch; verify available toolchain and lockfile match, otherwise BLOCKED. Preserve and individually recheck every prior finding from docs/handoffs/20261013/CLEAN_PM_V001_BLOCKED_EVIDENCE_20261013_V001.json (SHA256 2300bca7818c4922de303372f3b8e5b61d60369a1c50ff6832c3208167f5ab7b); original receipt bytes/history and exact Foundation FAIL output are archived there. Execute python3 scripts/check_foundation.py in the disposable exact-source environment; report every missing governance/documentation path and Idempotency-Key/command-body finding with exact new evidence, without repairing outside scope. Unresolved findings remain FAIL/BLOCKED; ENV readiness/admission does not accept a candidate. Tests only in isolated/disposable environments, never live DEV/PROD SQL. No control-state, Owner Inbox, trust, sibling worktree or runtime writes; no sandbox bypass/Cursor fallback. Return targeted evidence and a task-specific handoff proposal for host execution capture and separate Clean Publisher; only its own freshly executed protected nonauthor QA may accept exact published SHA/tree/branch/suite, no manual PASS/trusted_job replay. Targeted checks: existing web unit/privacy regressions, typecheck, lint, generated unified contract types; consent/session stop/expiry, hidden/blocked/suspended/no-consent/wrong-city negatives, city-filtered venue API markers, accessible map/list/loading/offline fallback. Producer AND own protected QA acceptance require actual Radar STYLE_GUIDE_PARITY evidence against root-read-only /opt/gobadminton-clean-qa/style-guide. Verify manifest.json SHA256 f55a1fd104cd394359dfac194b95a6f5409b23f58a597e5b83c39e78e5cde595 and every listed file hash/mode; verify Owner-pinned src/App.tsx SHA256 04187d4d7d70c8c61e9ca2f08b6b6325a98539a3ec90c711c48ab771f675b61c and src/index.css SHA256 f660e31973a6142784308f22728c751d7bb7432fb2ac0136bac032dbc6b1db2a. Compare screen-specific RadarMapPage, MapPlayerMarker, RadarPlayerPreview, navigation/buttons/tokens and responsive composition; record patterns and screen composition reused, every STYLE_GUIDE_GAP and any genuine OWNER_VISUAL_OVERRIDE (none supplied). Provide candidate-specific source comparisons and actual browser desktop/mobile visual parity evidence where sanctioned disposable tooling permits; reference hashes alone are not rendered parity. Missing/uncited canonical parity remains FAIL/BLOCKED; do not invent override or redesign. Preserve CANDIDATE_NOT_REGISTERED, attribution, Germany style/glyph/sprite GET200 and PMTiles206 checks and unresolved cross-network large glyph/metro/browser smoke; missing executable/browser evidence must be reported. No old Moscow host calls or PROD changes. Verify protected identity, exact new producer receipt/Publisher observation, branch/SHA/tree/suite and unique authorization. QA is read-only; do not accept unresolved findings.",
+      "title_ru": "QA: карта и приватность Radar · v002",
+      "summary_ru": "Независимая проверка exact SHA; только read-only, без выдачи собственной root QA подписи.",
+      "lane": "qa",
+      "executor": "codex",
+      "model": "gpt-6-astra",
+      "effort": "high",
+      "sandbox": "read-only",
+      "effect_ceiling": "source_only",
+      "locks": [
+        "web",
+        "map"
+      ],
+      "depends_on_completed": [
+        "radar-dev-map-ui-20261013-v002"
+      ],
+      "source_qa": {
+        "producer_task_id": "radar-dev-map-ui-20261013-v002",
+        "suite_id": "radar-map-germany-dev-privacy-v001"
+      },
+      "notes": "Exact existing Owner event github-issue4-comment-6148670164; SHA256 2d3cf0e888a45546512164372818d19355d1eff519b34648b35e7221d1626751; fixed authorized ENV continuation v002, same prepared base SHA; no recovery_from; preserve archived v001 failures; fresh own protected QA; DEV SOURCE_ONLY; no release.",
+      "blocks": [
+        {
+          "id": "pin",
+          "title": "Verify own producer and distinct protected reviewer/job binding"
+        },
+        {
+          "id": "tests",
+          "title": "Fresh isolated targeted tests; report every archived finding and Radar parity where applicable"
+        },
+        {
+          "id": "verdict",
+          "title": "Protected exact-source verdict; unresolved FAIL/BLOCKED; no trusted_job replay"
         }
       ]
     }

@@ -1,0 +1,316 @@
+{
+  "project": "GoBadminton",
+  "status": "FACTUAL_PM_ARCHIVE_NOT_QA_ACCEPTANCE",
+  "baseline_main": "60787ca428ad86909b9e72917b9f09e5c4b22472",
+  "observed_at_utc": "2026-10-13T20:51:00.793689+00:00",
+  "owner_instruction_id": "github-issue4-comment-6148670164",
+  "owner_instruction_sha256": "2d3cf0e888a45546512164372818d19355d1eff519b34648b35e7221d1626751",
+  "runtime_history": [
+    {
+      "id": "friends-dev-s1-api-20261013-v001",
+      "status": "blocked",
+      "reason": "The isolated worktree has no node_modules: tsc, vitest and @apidevtools/swagger-parser are unavailable. Installation is explicitly prohibited. Mandatory executable checks could not complete.",
+      "blocker_scope": "lane_local",
+      "owner_blocker": false,
+      "at": "2026-10-13T19:19:54+00:00"
+    },
+    {
+      "id": "radar-dev-map-ui-20261013-v001",
+      "status": "blocked",
+      "reason": "Isolated verification blocked: existing web tests and typecheck cannot execute without dependencies; installation is prohibited. Foundation check reports FAIL. Required Style Guide parity evidence is missing.",
+      "blocker_scope": "lane_local",
+      "owner_blocker": false,
+      "at": "2026-10-13T19:20:27+00:00"
+    }
+  ],
+  "runtime_blocked_tasks": {
+    "friends-dev-s1-api-20261013-v001": {
+      "id": "friends-dev-s1-api-20261013-v001",
+      "status": "blocked",
+      "reason": "The isolated worktree has no node_modules: tsc, vitest and @apidevtools/swagger-parser are unavailable. Installation is explicitly prohibited. Mandatory executable checks could not complete.",
+      "blocker_scope": "lane_local",
+      "owner_blocker": false,
+      "at": "2026-10-13T19:19:54+00:00"
+    },
+    "radar-dev-map-ui-20261013-v001": {
+      "id": "radar-dev-map-ui-20261013-v001",
+      "status": "blocked",
+      "reason": "Isolated verification blocked: existing web tests and typecheck cannot execute without dependencies; installation is prohibited. Foundation check reports FAIL. Required Style Guide parity evidence is missing.",
+      "blocker_scope": "lane_local",
+      "owner_blocker": false,
+      "at": "2026-10-13T19:20:27+00:00"
+    }
+  },
+  "runtime_attempts": {
+    "friends-dev-s1-api-20261013-v001": 1,
+    "radar-dev-map-ui-20261013-v001": 1
+  },
+  "original_receipts": {
+    "friends-dev-s1-api-20261013-v001": {
+      "original_path": "/srv/gobadminton-clean/runner/receipts/friends-dev-s1-api-20261013-v001.json",
+      "raw_utf8": "{\n  \"ok\": false,\n  \"task_id\": \"friends-dev-s1-api-20261013-v001\",\n  \"project\": \"GoBadminton\",\n  \"summary\": \"Prepared PR #20 candidate pinned and inspected without edits; executable verification blocked by missing dependencies.\",\n  \"reason\": \"The isolated worktree has no node_modules: tsc, vitest and @apidevtools/swagger-parser are unavailable. Installation is explicitly prohibited. Mandatory executable checks could not complete.\",\n  \"owner_blocker\": false,\n  \"blocker_scope\": \"lane_local\",\n  \"status\": \"HOLD\",\n  \"effect\": \"SOURCE_ONLY\",\n  \"result_ref\": \"https://github.com/anpavel84-afk/gobadminton-clean/commit/f98b1ed42e3f3847ac305e487cf3a706d6a458f2\",\n  \"candidate\": {\n    \"sha\": \"f98b1ed42e3f3847ac305e487cf3a706d6a458f2\",\n    \"tree\": \"8e28c766e2b6f657869ba497a5adf352d9d0ee17\",\n    \"base\": \"c9916e1cc2e8e6828438fbd38d1b12f351c84e72\",\n    \"checkout\": \"detached HEAD\",\n    \"remote_branch\": \"feature/friends-s1-clean-source-20261013\",\n    \"remote_branch_and_pr20_head_match\": true,\n    \"pr\": \"https://github.com/anpavel84-afk/gobadminton-clean/pull/20\",\n    \"worktree_clean\": true\n  },\n  \"blocks\": [\n    {\n      \"block\": \"1/3 pin\",\n      \"outcome\": \"COMPLETE\",\n      \"evidence\": \"Local HEAD/tree verified; git ls-remote confirmed branch and refs/pull/20/head match exact candidate.\"\n    },\n    {\n      \"block\": \"2/3 verify\",\n      \"outcome\": \"BLOCKED\",\n      \"evidence\": \"Static inspection completed. Typecheck, contract check, unit and integration attempts stopped at missing dependencies. No SQL executed.\"\n    },\n    {\n      \"block\": \"3/3 handoff\",\n      \"outcome\": \"PROPOSAL_RETURNED\",\n      \"evidence\": \"This JSON is the completion proposal for host capture and separate Clean Publisher publication; publication is not claimed.\"\n    }\n  ],\n  \"checks\": [\n    {\n      \"command\": \"git diff --check c9916e1 HEAD\",\n      \"exit_code\": 0\n    },\n    {\n      \"command\": \"Dependency-free JSON.parse of packages/contracts/openapi.json\",\n      \"exit_code\": 0,\n      \"result\": \"OpenAPI 3.1.1 parses; nine Friends/capabilities paths present. This is not contract validation.\"\n    },\n    {\n      \"command\": \"pnpm --filter @gobadminton/api run typecheck\",\n      \"exit_code\": 1,\n      \"result\": \"tsc not found\"\n    },\n    {\n      \"command\": \"pnpm --filter @gobadminton/contracts run check\",\n      \"exit_code\": 1,\n      \"result\": \"@apidevtools/swagger-parser missing\"\n    },\n    {\n      \"command\": \"env -u DATABASE_URL -u RUN_DB_INTEGRATION NODE_ENV=test pnpm --filter @gobadminton/api exec vitest run --config vitest.typescript.config.ts test/unit/friendships.test.ts\",\n      \"exit_code\": 254,\n      \"result\": \"vitest not found; no tests executed\"\n    },\n    {\n      \"command\": \"env -u DATABASE_URL NODE_ENV=test RUN_DB_INTEGRATION=1 pnpm --filter @gobadminton/api exec vitest run --config vitest.typescript.config.ts test/integration/friends-s1.disposable.test.ts\",\n      \"exit_code\": 254,\n      \"result\": \"vitest not found; no tests or SQL executed\"\n    }\n  ],\n  \"static_findings\": [\n    \"Migrations 0001–0031 unchanged from base; locally recorded origin/main has no API/contracts changes relative to base.\",\n    \"Friends defaults OFF and enabling requires NODE_ENV=test, APP_ENV=local, social directory and all numerical policy inputs.\",\n    \"Controllers derive actor from session; strict request schemas reject actor impersonation fields.\",\n    \"Service inspects membership, blocks, profile eligibility, epochs, request expiry, versions and idempotency replay under transaction fences.\",\n    \"Peer projections contain public identity, display name and avatar; cursor actor binding uses a keyed digest.\",\n    \"Existing isolated suite covers schema0031 compatibility, migration recovery, privacy, replay and races; coverage was inspected, not executed.\",\n    \"Live DEV state and its synthetic accounts were not inspected.\"\n  ],\n  \"candidate_modified_paths\": [\n    \"apps/api/migrations/0032_friendship_core.sql\",\n    \"apps/api/migrations/rollback/0032_friendship_core.sql\",\n    \"apps/api/src/app.module.ts\",\n    \"apps/api/src/config/env.ts\",\n    \"apps/api/src/friendships/friendships.controller.ts\",\n    \"apps/api/src/friendships/friendships.module.ts\",\n    \"apps/api/src/friendships/friendships.policy.ts\",\n    \"apps/api/src/friendships/friendships.service.ts\",\n    \"apps/api/src/safety/safety.service.ts\",\n    \"apps/api/test/integration/friends-s1.disposable.test.ts\",\n    \"apps/api/test/sql/0032_friendship_core.smoke.sql\",\n    \"apps/api/test/sql/0032_friendship_ledger_guard.focused.sql\",\n    \"apps/api/test/unit/friendships.test.ts\",\n    \"apps/api/vitest.typescript.config.ts\",\n    \"packages/contracts/openapi.json\",\n    \"packages/contracts/package.json\",\n    \"packages/contracts/scripts/check-openapi.mjs\",\n    \"packages/contracts/scripts/generate-friendship-types.mjs\",\n    \"packages/contracts/src/friendship.generated.ts\",\n    \"packages/contracts/src/index.ts\"\n  ],\n  \"executor_modified_paths\": [],\n  \"governance_gaps\": [\n    \"CURSOR.md and .cursor/rules/README.md are absent from candidate; available governance documents were read.\"\n  ],\n  \"rollback\": {\n    \"executed\": false,\n    \"source\": \"apps/api/migrations/rollback/0032_friendship_core.sql\",\n    \"conditions\": \"Caller-owned transaction, stopped Friends writers and empty Friends tables. Populated ledgers must be preserved; roll application code back with feature OFF instead.\"\n  },\n  \"synthetic_examples\": {\n    \"created\": false,\n    \"source\": \"apps/api/test/integration/friends-s1.disposable.test.ts\",\n    \"accounts\": [\n      \"Synthetic A\",\n      \"Synthetic B\"\n    ],\n    \"note\": \"Existing fixture creates fresh UUID identities and test sessions; no accounts or tokens were created in this run.\"\n  },\n  \"independent_qa\": {\n    \"executed\": false,\n    \"status\": \"PENDING_AFTER_PUBLICATION\",\n    \"note\": \"No independent QA verdict issued. Historical manual QA is not reused. Required verification remains blocked.\"\n  },\n  \"publication\": {\n    \"new_handoff_published\": false,\n    \"recipient\": \"Host and separate Clean Publisher\",\n    \"next_action\": \"Capture and publish this blocked execution evidence against the unchanged candidate. Provision prerequisites through an authorized lane before further execution; independent protected QA must run freshly after publication.\"\n  },\n  \"safety\": {\n    \"application_edits\": false,\n    \"install\": false,\n    \"feature_enablement\": false,\n    \"live_database_access\": false,\n    \"deployment\": false,\n    \"merge\": false,\n    \"runner_files_written\": false,\n    \"next_task_started\": false\n  }\n}",
+      "sha256": "1d708944392a3fbe2ff94e5e2eb87e224d9ab73bf836452ea4ba5109355f02d7",
+      "parsed_receipt": {
+        "ok": false,
+        "task_id": "friends-dev-s1-api-20261013-v001",
+        "project": "GoBadminton",
+        "summary": "Prepared PR #20 candidate pinned and inspected without edits; executable verification blocked by missing dependencies.",
+        "reason": "The isolated worktree has no node_modules: tsc, vitest and @apidevtools/swagger-parser are unavailable. Installation is explicitly prohibited. Mandatory executable checks could not complete.",
+        "owner_blocker": false,
+        "blocker_scope": "lane_local",
+        "status": "HOLD",
+        "effect": "SOURCE_ONLY",
+        "result_ref": "https://github.com/anpavel84-afk/gobadminton-clean/commit/f98b1ed42e3f3847ac305e487cf3a706d6a458f2",
+        "candidate": {
+          "sha": "f98b1ed42e3f3847ac305e487cf3a706d6a458f2",
+          "tree": "8e28c766e2b6f657869ba497a5adf352d9d0ee17",
+          "base": "c9916e1cc2e8e6828438fbd38d1b12f351c84e72",
+          "checkout": "detached HEAD",
+          "remote_branch": "feature/friends-s1-clean-source-20261013",
+          "remote_branch_and_pr20_head_match": true,
+          "pr": "https://github.com/anpavel84-afk/gobadminton-clean/pull/20",
+          "worktree_clean": true
+        },
+        "blocks": [
+          {
+            "block": "1/3 pin",
+            "outcome": "COMPLETE",
+            "evidence": "Local HEAD/tree verified; git ls-remote confirmed branch and refs/pull/20/head match exact candidate."
+          },
+          {
+            "block": "2/3 verify",
+            "outcome": "BLOCKED",
+            "evidence": "Static inspection completed. Typecheck, contract check, unit and integration attempts stopped at missing dependencies. No SQL executed."
+          },
+          {
+            "block": "3/3 handoff",
+            "outcome": "PROPOSAL_RETURNED",
+            "evidence": "This JSON is the completion proposal for host capture and separate Clean Publisher publication; publication is not claimed."
+          }
+        ],
+        "checks": [
+          {
+            "command": "git diff --check c9916e1 HEAD",
+            "exit_code": 0
+          },
+          {
+            "command": "Dependency-free JSON.parse of packages/contracts/openapi.json",
+            "exit_code": 0,
+            "result": "OpenAPI 3.1.1 parses; nine Friends/capabilities paths present. This is not contract validation."
+          },
+          {
+            "command": "pnpm --filter @gobadminton/api run typecheck",
+            "exit_code": 1,
+            "result": "tsc not found"
+          },
+          {
+            "command": "pnpm --filter @gobadminton/contracts run check",
+            "exit_code": 1,
+            "result": "@apidevtools/swagger-parser missing"
+          },
+          {
+            "command": "env -u DATABASE_URL -u RUN_DB_INTEGRATION NODE_ENV=test pnpm --filter @gobadminton/api exec vitest run --config vitest.typescript.config.ts test/unit/friendships.test.ts",
+            "exit_code": 254,
+            "result": "vitest not found; no tests executed"
+          },
+          {
+            "command": "env -u DATABASE_URL NODE_ENV=test RUN_DB_INTEGRATION=1 pnpm --filter @gobadminton/api exec vitest run --config vitest.typescript.config.ts test/integration/friends-s1.disposable.test.ts",
+            "exit_code": 254,
+            "result": "vitest not found; no tests or SQL executed"
+          }
+        ],
+        "static_findings": [
+          "Migrations 0001–0031 unchanged from base; locally recorded origin/main has no API/contracts changes relative to base.",
+          "Friends defaults OFF and enabling requires NODE_ENV=test, APP_ENV=local, social directory and all numerical policy inputs.",
+          "Controllers derive actor from session; strict request schemas reject actor impersonation fields.",
+          "Service inspects membership, blocks, profile eligibility, epochs, request expiry, versions and idempotency replay under transaction fences.",
+          "Peer projections contain public identity, display name and avatar; cursor actor binding uses a keyed digest.",
+          "Existing isolated suite covers schema0031 compatibility, migration recovery, privacy, replay and races; coverage was inspected, not executed.",
+          "Live DEV state and its synthetic accounts were not inspected."
+        ],
+        "candidate_modified_paths": [
+          "apps/api/migrations/0032_friendship_core.sql",
+          "apps/api/migrations/rollback/0032_friendship_core.sql",
+          "apps/api/src/app.module.ts",
+          "apps/api/src/config/env.ts",
+          "apps/api/src/friendships/friendships.controller.ts",
+          "apps/api/src/friendships/friendships.module.ts",
+          "apps/api/src/friendships/friendships.policy.ts",
+          "apps/api/src/friendships/friendships.service.ts",
+          "apps/api/src/safety/safety.service.ts",
+          "apps/api/test/integration/friends-s1.disposable.test.ts",
+          "apps/api/test/sql/0032_friendship_core.smoke.sql",
+          "apps/api/test/sql/0032_friendship_ledger_guard.focused.sql",
+          "apps/api/test/unit/friendships.test.ts",
+          "apps/api/vitest.typescript.config.ts",
+          "packages/contracts/openapi.json",
+          "packages/contracts/package.json",
+          "packages/contracts/scripts/check-openapi.mjs",
+          "packages/contracts/scripts/generate-friendship-types.mjs",
+          "packages/contracts/src/friendship.generated.ts",
+          "packages/contracts/src/index.ts"
+        ],
+        "executor_modified_paths": [],
+        "governance_gaps": [
+          "CURSOR.md and .cursor/rules/README.md are absent from candidate; available governance documents were read."
+        ],
+        "rollback": {
+          "executed": false,
+          "source": "apps/api/migrations/rollback/0032_friendship_core.sql",
+          "conditions": "Caller-owned transaction, stopped Friends writers and empty Friends tables. Populated ledgers must be preserved; roll application code back with feature OFF instead."
+        },
+        "synthetic_examples": {
+          "created": false,
+          "source": "apps/api/test/integration/friends-s1.disposable.test.ts",
+          "accounts": [
+            "Synthetic A",
+            "Synthetic B"
+          ],
+          "note": "Existing fixture creates fresh UUID identities and test sessions; no accounts or tokens were created in this run."
+        },
+        "independent_qa": {
+          "executed": false,
+          "status": "PENDING_AFTER_PUBLICATION",
+          "note": "No independent QA verdict issued. Historical manual QA is not reused. Required verification remains blocked."
+        },
+        "publication": {
+          "new_handoff_published": false,
+          "recipient": "Host and separate Clean Publisher",
+          "next_action": "Capture and publish this blocked execution evidence against the unchanged candidate. Provision prerequisites through an authorized lane before further execution; independent protected QA must run freshly after publication."
+        },
+        "safety": {
+          "application_edits": false,
+          "install": false,
+          "feature_enablement": false,
+          "live_database_access": false,
+          "deployment": false,
+          "merge": false,
+          "runner_files_written": false,
+          "next_task_started": false
+        }
+      }
+    },
+    "radar-dev-map-ui-20261013-v001": {
+      "original_path": "/srv/gobadminton-clean/runner/receipts/radar-dev-map-ui-20261013-v001.json",
+      "raw_utf8": "{\n  \"ok\": false,\n  \"task_id\": \"radar-dev-map-ui-20261013-v001\",\n  \"project\": \"GoBadminton\",\n  \"reason\": \"Isolated verification blocked: existing web tests and typecheck cannot execute without dependencies; installation is prohibited. Foundation check reports FAIL. Required Style Guide parity evidence is missing.\",\n  \"owner_blocker\": false,\n  \"blocker_scope\": \"lane_local\",\n  \"verdict\": \"BLOCKED\",\n  \"result_ref\": \"https://github.com/anpavel84-afk/gobadminton-clean/commit/ed1ad372751b25f1d4bddae1f13e1b3876ef5bec\",\n  \"candidate\": {\n    \"sha\": \"ed1ad372751b25f1d4bddae1f13e1b3876ef5bec\",\n    \"tree\": \"7f4a9949a96d676925b740f425f99cad32889a8c\",\n    \"remote_branch\": \"feature/radar-dev-real-map-20261013\",\n    \"branch_and_pr19_head_verified\": true,\n    \"checkout\": \"detached HEAD, clean\",\n    \"comparison_base\": \"c9916e1cc2e8e6828438fbd38d1b12f351c84e72\"\n  },\n  \"block_outcomes\": [\n    {\n      \"block\": \"1/3 pin\",\n      \"outcome\": \"PASS\",\n      \"evidence\": \"Local HEAD and remote branch plus refs/pull/19/head match the exact prepared candidate. No duplicate implementation.\"\n    },\n    {\n      \"block\": \"2/3 verify\",\n      \"outcome\": \"BLOCKED\",\n      \"evidence\": \"Source compatibility/privacy inspection completed; executable web verification unavailable. Foundation failure preserved.\"\n    },\n    {\n      \"block\": \"3/3 handoff\",\n      \"outcome\": \"PROPOSED\",\n      \"evidence\": \"This JSON supplies the host completion proposal. Host execution receipt and separate Clean Publisher handoff remain pending.\"\n    }\n  ],\n  \"checks\": [\n    {\n      \"check\": \"Existing web unit suite in disposable exact-SHA source export\",\n      \"outcome\": \"BLOCKED\",\n      \"exit_code\": 1,\n      \"evidence\": \"vitest: not found; node_modules missing; no tests executed\"\n    },\n    {\n      \"check\": \"Web typecheck in disposable source export\",\n      \"outcome\": \"BLOCKED\",\n      \"exit_code\": 1,\n      \"evidence\": \"tsc: not found\"\n    },\n    {\n      \"check\": \"Generated unified contract types\",\n      \"outcome\": \"PASS\"\n    },\n    {\n      \"check\": \"git diff --check\",\n      \"outcome\": \"PASS\"\n    },\n    {\n      \"check\": \"Foundation static check\",\n      \"outcome\": \"FAIL\",\n      \"evidence\": \"Missing governance/documentation targets and contract Idempotency-Key/command-body findings. No repairs authorized in this verification-only run.\"\n    }\n  ],\n  \"source_findings\": [\n    \"Candidate changes no API, contract, migration or runtime configuration files relative to comparison base.\",\n    \"Public venues use paginated city-filtered API data and Moscow coordinate bounds.\",\n    \"Player pins use server snapshots with policy, proof, row expiry, map expiry and exposure-binding guards; lifecycle clearing runs every second and on hidden/session changes.\",\n    \"DEV map resources use the pinned Germany style checksum and resource allowlist; PROD admission remains closed.\",\n    \"These findings are source inspection, not executed privacy or browser QA.\"\n  ],\n  \"style_guide_parity\": {\n    \"outcome\": \"UNVERIFIED\",\n    \"evidence\": \"No candidate-specific STYLE_GUIDE_PARITY record found. Frozen Construction Kit source was unavailable; published guide and construction-kit could not be accessed through the browsing tool.\",\n    \"missing_context\": [\n      \"CURSOR.md\",\n      \".cursor/rules/README.md\",\n      \"docs/operations/FRONTEND_STYLE_GUIDE_FIRST_V001.md\"\n    ]\n  },\n  \"preserved_gates\": [\n    \"CANDIDATE_NOT_REGISTERED; no map registration or provider acceptance claimed\",\n    \"Cross-network large glyph/metro smoke remains unresolved\",\n    \"Fresh independent protected QA must execute after publication; historical manual QA supplies no current verdict\",\n    \"No merge, install, feature enablement, deployment, live SQL, runtime mutation or Owner/release-gate change\"\n  ],\n  \"publication\": {\n    \"new_publication_performed\": false,\n    \"next_recipient\": \"Host and separate Clean Publisher\",\n    \"proposal\": \"Publish the factual blocked execution handoff with this immutable candidate reference; do not promote the candidate as verified or release-ready.\"\n  },\n  \"application_edits\": false,\n  \"runner_files_written\": false\n}",
+      "sha256": "854adfeecfb2a4a5febd19c02b2ae5e0643c3a2e53f5aea2a12753b2d3facf05",
+      "parsed_receipt": {
+        "ok": false,
+        "task_id": "radar-dev-map-ui-20261013-v001",
+        "project": "GoBadminton",
+        "reason": "Isolated verification blocked: existing web tests and typecheck cannot execute without dependencies; installation is prohibited. Foundation check reports FAIL. Required Style Guide parity evidence is missing.",
+        "owner_blocker": false,
+        "blocker_scope": "lane_local",
+        "verdict": "BLOCKED",
+        "result_ref": "https://github.com/anpavel84-afk/gobadminton-clean/commit/ed1ad372751b25f1d4bddae1f13e1b3876ef5bec",
+        "candidate": {
+          "sha": "ed1ad372751b25f1d4bddae1f13e1b3876ef5bec",
+          "tree": "7f4a9949a96d676925b740f425f99cad32889a8c",
+          "remote_branch": "feature/radar-dev-real-map-20261013",
+          "branch_and_pr19_head_verified": true,
+          "checkout": "detached HEAD, clean",
+          "comparison_base": "c9916e1cc2e8e6828438fbd38d1b12f351c84e72"
+        },
+        "block_outcomes": [
+          {
+            "block": "1/3 pin",
+            "outcome": "PASS",
+            "evidence": "Local HEAD and remote branch plus refs/pull/19/head match the exact prepared candidate. No duplicate implementation."
+          },
+          {
+            "block": "2/3 verify",
+            "outcome": "BLOCKED",
+            "evidence": "Source compatibility/privacy inspection completed; executable web verification unavailable. Foundation failure preserved."
+          },
+          {
+            "block": "3/3 handoff",
+            "outcome": "PROPOSED",
+            "evidence": "This JSON supplies the host completion proposal. Host execution receipt and separate Clean Publisher handoff remain pending."
+          }
+        ],
+        "checks": [
+          {
+            "check": "Existing web unit suite in disposable exact-SHA source export",
+            "outcome": "BLOCKED",
+            "exit_code": 1,
+            "evidence": "vitest: not found; node_modules missing; no tests executed"
+          },
+          {
+            "check": "Web typecheck in disposable source export",
+            "outcome": "BLOCKED",
+            "exit_code": 1,
+            "evidence": "tsc: not found"
+          },
+          {
+            "check": "Generated unified contract types",
+            "outcome": "PASS"
+          },
+          {
+            "check": "git diff --check",
+            "outcome": "PASS"
+          },
+          {
+            "check": "Foundation static check",
+            "outcome": "FAIL",
+            "evidence": "Missing governance/documentation targets and contract Idempotency-Key/command-body findings. No repairs authorized in this verification-only run."
+          }
+        ],
+        "source_findings": [
+          "Candidate changes no API, contract, migration or runtime configuration files relative to comparison base.",
+          "Public venues use paginated city-filtered API data and Moscow coordinate bounds.",
+          "Player pins use server snapshots with policy, proof, row expiry, map expiry and exposure-binding guards; lifecycle clearing runs every second and on hidden/session changes.",
+          "DEV map resources use the pinned Germany style checksum and resource allowlist; PROD admission remains closed.",
+          "These findings are source inspection, not executed privacy or browser QA."
+        ],
+        "style_guide_parity": {
+          "outcome": "UNVERIFIED",
+          "evidence": "No candidate-specific STYLE_GUIDE_PARITY record found. Frozen Construction Kit source was unavailable; published guide and construction-kit could not be accessed through the browsing tool.",
+          "missing_context": [
+            "CURSOR.md",
+            ".cursor/rules/README.md",
+            "docs/operations/FRONTEND_STYLE_GUIDE_FIRST_V001.md"
+          ]
+        },
+        "preserved_gates": [
+          "CANDIDATE_NOT_REGISTERED; no map registration or provider acceptance claimed",
+          "Cross-network large glyph/metro smoke remains unresolved",
+          "Fresh independent protected QA must execute after publication; historical manual QA supplies no current verdict",
+          "No merge, install, feature enablement, deployment, live SQL, runtime mutation or Owner/release-gate change"
+        ],
+        "publication": {
+          "new_publication_performed": false,
+          "next_recipient": "Host and separate Clean Publisher",
+          "proposal": "Publish the factual blocked execution handoff with this immutable candidate reference; do not promote the candidate as verified or release-ready."
+        },
+        "application_edits": false,
+        "runner_files_written": false
+      }
+    }
+  },
+  "radar_foundation_original_output": {
+    "original_log_path": "/srv/gobadminton-clean/runner/task-logs/radar-dev-map-ui-20261013-v001/codex.stderr.log",
+    "first_line": 2109,
+    "raw_utf8": "FOUNDATION STATIC CHECK: FAIL\n- AGENTS.md: missing/out-of-repo local path CURSOR.md\n- AGENTS.md: missing/out-of-repo local path .cursor/rules/README.md\n- AGENTS.md: missing/out-of-repo local path docs/product/backlog/README.md\n- AGENTS.md: missing/out-of-repo local path docs/product/backlog/REGULATION.md\n- AGENTS.md: missing/out-of-repo local path docs/product/backlog/ROLES.md\n- docs/README.md: missing/out-of-repo local path ../CURSOR.md\n- docs/README.md: missing/out-of-repo local path operations/CURSOR_QUEUE.md\n- docs/README.md: missing/out-of-repo local path operations/MVP_VPS_RUNTIME.md\n- docs/README.md: missing/out-of-repo local path prompts/implementation/f01-split-runtime-continuation-v004.md\n- docs/README.md: missing/out-of-repo local path workbench/README.md\n- docs/README.md: missing/out-of-repo local path prompts/README.md\n- docs/README.md: missing/out-of-repo local path handoffs/README.md\n- docs/architecture/OVERVIEW.md: missing/out-of-repo local path ../operations/MVP_VPS_RUNTIME.md\n- docs/architecture/SCALING.md: missing/out-of-repo local path ../operations/OBSERVABILITY_AND_SLO.md\n- docs/delivery/fsg-s0-lock-map-repair-02-20261009-v001/README.md: missing/out-of-repo local path ../../handoffs/2026-10-09_fsg-s0-lock-map-repair-02-v001.md\n- docs/governance/BOOTSTRAP.md: missing/out-of-repo local path ../../CURSOR.md\n- docs/governance/BOOTSTRAP.md: missing/out-of-repo local path ../handoffs/HANDOFF_TEMPLATE.md\n- docs/governance/BOOTSTRAP.md: missing/out-of-repo local path ../prompts/PROMPT_TEMPLATE.md\n- docs/governance/CURSOR_ONBOARDING.md: missing/out-of-repo local path ../operations/MVP_VPS_RUNTIME.md\n- docs/quality/TEST_STRATEGY.md: missing/out-of-repo local path ../operations/OBSERVABILITY_AND_SLO.md\n- docs/rules/PROJECT_RECORD_POLICY.md: missing/out-of-repo local path ../handoffs/HANDOFF_TEMPLATE.md\n- docs/rules/PROJECT_RECORD_POLICY.md: missing/out-of-repo local path ../product/backlog/REGULATION.md\n- docs/rules/README.md: missing/out-of-repo local path ../workbench/README.md\n- docs/rules/README.md: missing/out-of-repo local path ../prompts/README.md\n- docs/rules/README.md: missing/out-of-repo local path ../handoffs/README.md\n- POST /me/linked-providers/{provider}/link: business mutation needs required Idempotency-Key\n- DELETE /me/linked-providers/{provider}: business mutation needs required Idempotency-Key\n- DELETE /me/linked-providers/{provider}: expected explicit required command body\n- DELETE /me/sessions/{sessionId}: business mutation needs required Idempotency-Key\n- DELETE /me/sessions/{sessionId}: expected explicit required command body\n- PUT /me/avatar: business mutation needs required Idempotency-Key\n- DELETE /me/avatar: business mutation needs required Idempotency-Key\n- DELETE /me/avatar: expected explicit required command body\n- POST /admin/auth/{provider}/start: business mutation needs required Idempotency-Key\n- POST /admin/auth/webauthn/options: business mutation needs required Idempotency-Key\n- POST /admin/auth/webauthn/verify: business mutation needs required Idempotency-Key\n",
+    "sha256": "6f0d8cb45c437c483fa419374ee7312bb8065341b26b646761069f48eb9767df"
+  },
+  "historical_independent_reports": {
+    "Friends": "https://github.com/anpavel84-afk/gobadminton-clean/blob/66ed93ec98a8125e7025fa1075bf09b8d41496ee/docs/handoffs/2026-10-13_FRIENDS_INDEPENDENT_QA_R2.md",
+    "Radar": "https://github.com/anpavel84-afk/gobadminton-clean/blob/66ed93ec98a8125e7025fa1075bf09b8d41496ee/docs/handoffs/2026-10-13_RADAR_INDEPENDENT_QA_R2.md",
+    "Runner": "https://github.com/anpavel84-afk/gobadminton-clean/blob/66ed93ec98a8125e7025fa1075bf09b8d41496ee/docs/handoffs/2026-10-13_PR21_INDEPENDENT_QA_R2.md"
+  },
+  "preserved_findings": [
+    "Friends missing tsc/vitest/swagger-parser: mandatory executable checks not completed.",
+    "Radar missing tsc/vitest: mandatory executable checks not completed.",
+    "Radar Foundation FAIL: every missing governance/documentation link and Idempotency-Key/required command-body finding in the exact archived output must be checked and reported by both new producers and their own protected QA.",
+    "Radar Style Guide parity UNVERIFIED; frozen source was unavailable in v001. Newly present reference is a prerequisite for checking parity, not proof of candidate parity.",
+    "CANDIDATE_NOT_REGISTERED and cross-network large glyph/metro smoke remain unresolved.",
+    "Historical R1/R2 failures and manual source review are retained, not root-protected runtime acceptance."
+  ],
+  "prohibitions": [
+    "No rearming v001 terminal IDs.",
+    "No original receipt/history changes.",
+    "No manual PASS copied into runtime.",
+    "No recovery_from or relaxed QA/release gates.",
+    "No product redevelopment, feature enablement, live DEV/PROD DB writes or release."
+  ]
+}
