@@ -1,6 +1,7 @@
 """Runner PR11 R3: require real Codex read-only mode and isolated clean service names."""
 from __future__ import annotations
 import sys
+import tempfile
 from types import SimpleNamespace
 from unittest.mock import patch
 import unittest
@@ -16,12 +17,22 @@ import runner
 import control_agent
 
 class QASandboxAndControlR3(unittest.TestCase):
+    def setUp(self):
+        # Both binaries are only path-preflight stubs. subprocess.Popen is
+        # separately mocked; no Codex/Cursor execution or credentials required.
+        holder = tempfile.TemporaryDirectory(prefix="gb-runner-ci-cli-")
+        self.addCleanup(holder.cleanup)
+        self.fake_codex = Path(holder.name) / "codex"
+        self.fake_agent = Path(holder.name) / "agent"
+        self.fake_codex.write_text("not executable, mock only\n")
+        self.fake_agent.write_text("not executable, mock only\n")
+
     def cfg(self):
         return {"project":"GoBadminton",
                 "workspace":"/srv/gobadminton-clean/repo",
                 "worktrees_root":"/srv/gobadminton-clean/worktrees",
-                "codex_cli":"/home/agentagency-dev/.local/bin/codex",
-                "cursor_agent":"/home/agentagency-dev/.local/bin/agent",
+                "codex_cli":str(self.fake_codex),
+                "cursor_agent":str(self.fake_agent),
                 "prod_authorized":False,
                 "max_parallel":2}
     def command(self, task):
