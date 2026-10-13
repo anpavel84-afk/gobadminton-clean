@@ -201,6 +201,29 @@ class CleanOwnerIssueIntake(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         self.assertEqual(len(list((self.root / "owner-inbox").glob("*.json"))), 1)
 
+    def test_received_bootstrap_does_not_block_next_task_after_completion(self):
+        def opener(request, timeout=12):
+            return FakeResponse(request.full_url, [owner_comment()])
+        intake.poll_once(self.root, self.input, opener=opener, now=1000000000)
+        for task in self.input["tasks"]:
+            if task["id"] == intake.BOOTSTRAP_IDS[0]:
+                task["status"] = "completed"
+        self.assertEqual(intake.poll_once(self.root, self.input, opener=opener,
+                                         now=1000000600), [])
+        path = self.root / "owner-inbox" / "github-issue4-comment-6148670164.json"
+        received = json.loads(path.read_text())
+        received["status"] = "PLANNED"
+        path.write_text(json.dumps(received))
+        self.assertEqual(intake.poll_once(self.root, self.input, opener=opener,
+                                         now=1000001200), [])
+        self.assertEqual(json.loads(path.read_text())["status"], "PLANNED")
+        with self.assertRaises(intake.IntakeHold):
+            intake.checked_comment(owner_comment(), self.input)
+        received["text_sha256"] = "0" * 64
+        path.write_text(json.dumps(received))
+        with self.assertRaisesRegex(intake.IntakeHold, "edited/replayed"):
+            intake.poll_once(self.root, self.input, opener=opener, now=1000001800)
+
     def test_http_redirect_and_missing_private_inbox_fail_closed(self):
         def redirected(request, timeout=12):
             return FakeResponse("https://evil.example/not-github", [owner_comment()])

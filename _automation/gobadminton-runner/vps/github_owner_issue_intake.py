@@ -57,7 +57,7 @@ def strict_json(source: str):
     return json.loads(source, object_pairs_hook=unique)
 
 
-def checked_comment(comment: dict, canonical: dict) -> dict | None:
+def checked_comment(comment: dict, canonical: dict, *, require_queued: bool = True) -> dict | None:
     """Return a bounded inbox instruction, or None for non-dispatch comments."""
     if not isinstance(comment, dict):
         raise IntakeHold("untrusted GitHub comment type")
@@ -107,7 +107,7 @@ def checked_comment(comment: dict, canonical: dict) -> dict | None:
     for task_id in task_ids:
         task = tasks.get(task_id)
         if (not task or task.get("effect_ceiling") != "source_only"
-                or task.get("status", "queued") != "queued"
+                or require_queued and task.get("status", "queued") != "queued"
                 or any(not backlog_sync.FULL_GITHUB_SOURCE.fullmatch(
                     str(task.get(key) or "")) for key in ("source", "admission"))):
             raise IntakeHold("task not prepared as exact immutable DEV source")
@@ -228,8 +228,18 @@ def poll_once(root: Path, canonical: dict, *, opener=urllib.request.urlopen,
             raise IntakeHold("issue intake poll marker is not service-private")
         if when - proof.st_mtime < INTERVAL_SECONDS:
             return []
-    verified = [v for comment in fetch_public_comment_pages(opener)
-                if (v := checked_comment(comment, canonical)) is not None]
+    # Historical events retain identity/body/scope verification after tasks
+    # advance. An existing receipt must still pass write_unique replay checks;
+    # only a NEW event requires every task to remain queued.
+    verified = []
+    for comment in fetch_public_comment_pages(opener):
+        cid = comment.get("id") if isinstance(comment, dict) else None
+        existing = (inbox / f"github-issue{ISSUE}-comment-{cid}.json"
+                    if type(cid) is int and cid > 0 else None)
+        record = checked_comment(comment, canonical, require_queued=not (
+            existing is not None and (existing.exists() or existing.is_symlink())))
+        if record is not None:
+            verified.append(record)
     created = []
     for item in verified:
         if write_unique(inbox, item):
