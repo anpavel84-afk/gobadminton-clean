@@ -5,6 +5,7 @@ Publisher activation or database. All externally sourced comments are fixtures.
 """
 from __future__ import annotations
 import copy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -27,21 +28,17 @@ import runner
 
 ROOT = Path(__file__).resolve().parent
 QUEUE = json.loads((ROOT.parent / "backlog.json").read_text())
+OWNER_EVENT = json.loads((ROOT / "fixtures" / "owner-comment-6148670164.json").read_text(encoding="utf-8"))
 
 
 def owner_comment(body=None, *, owner_id=intake.OWNER_ID,
                   cid=intake.OWNER_BOOTSTRAP_COMMENT):
-    return {
-        "id": cid, "issue_url": intake.ISSUE_URL,
-        "url": intake.COMMENT_URL + str(cid),
-        "created_at": intake.OWNER_BOOTSTRAP_CREATED,
-        "user": {"login": intake.OWNER_LOGIN, "id": owner_id, "type": "User"},
-        "body": body or (
-            "## OWNER REQUEST · ONE-TIME AUTO-RUNNER COMMISSIONING · 2026-10-13\n"
-            "OPERATOR_PAUSED retained until protected QA and Publisher.\n"
-            "DEV only. PROD not allowed.\n"
-        ),
-    }
+    event = copy.deepcopy(OWNER_EVENT)
+    event.update(id=cid, url=intake.COMMENT_URL + str(cid))
+    event["user"]["id"] = owner_id
+    if body is not None:
+        event["body"] = body
+    return event
 
 
 class FakeResponse:
@@ -71,13 +68,42 @@ class CleanOwnerIssueIntake(unittest.TestCase):
         self.input = copy.deepcopy(QUEUE)
 
     def test_exact_owner_bootstrap_admits_prepared_tasks_not_live_claim(self):
+        self.assertNotIn("OPERATOR_PAUSED", OWNER_EVENT["body"])
+        self.assertEqual(hashlib.sha256(OWNER_EVENT["body"].encode("utf-8")).hexdigest(),
+                         intake.OWNER_BOOTSTRAP_BODY_SHA256)
         x = intake.checked_comment(owner_comment(), self.input)
+        self.assertEqual(x["text"], OWNER_EVENT["body"])
+        self.assertEqual(x["text_sha256"], intake.OWNER_BOOTSTRAP_BODY_SHA256)
         self.assertEqual(x["task_ids"], list(intake.BOOTSTRAP_IDS))
         self.assertEqual(x["origin"], "VERIFIED_GITHUB_OWNER_ISSUE")
         self.assertEqual(x["status"], "NEW")
         self.assertEqual(x["scope"], "SOURCE_ONLY_DEV_NO_PROD")
         self.assertEqual(len(x["text_sha256"]), 64)
         self.assertFalse(any(x.get(z) for z in ("accepted", "deployed", "claimed")))
+
+    def test_original_event_body_bytes_and_edit_timestamp_cannot_be_substituted(self):
+        original = OWNER_EVENT["body"]
+        for body in (original + "\n", " " + original,
+                     original.replace("PROD", "DEV"),
+                     original.replace("Friends", "Enemy"),
+                     original.replace("\n", "\r\n"),
+                     "## OWNER REQUEST · ONE-TIME AUTO-RUNNER COMMISSIONING\nOPERATOR_PAUSED PROD"):
+            with self.subTest(body=body[:70]), self.assertRaises(intake.IntakeHold):
+                intake.checked_comment(owner_comment(body), self.input)
+        edited = owner_comment()
+        edited["updated_at"] = "2026-10-13T16:00:00Z"
+        with self.assertRaises(intake.IntakeHold):
+            intake.checked_comment(edited, self.input)
+
+    def test_original_body_with_other_event_or_account_is_not_bootstrap(self):
+        self.assertIsNone(intake.checked_comment(owner_comment(cid=6148670165), self.input))
+        for user in ({"id": intake.OWNER_ID, "login": "impostor", "type": "User"},
+                     {"id": intake.OWNER_ID, "login": intake.OWNER_LOGIN, "type": "Bot"},
+                     {"id": 1234, "login": intake.OWNER_LOGIN, "type": "User"}):
+            event = owner_comment()
+            event["user"] = user
+            with self.subTest(user=user):
+                self.assertIsNone(intake.checked_comment(event, self.input))
 
     def test_public_spoof_wrong_owner_issue_or_comment_identity_refused(self):
         self.assertIsNone(intake.checked_comment(

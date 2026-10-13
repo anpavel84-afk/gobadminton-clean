@@ -27,6 +27,8 @@ COMMENTS_URL = ISSUE_URL + "/comments?per_page=100&page="
 COMMENT_URL = f"https://api.github.com/repos/{REPOSITORY}/issues/comments/"
 OWNER_BOOTSTRAP_COMMENT = 6148670164
 OWNER_BOOTSTRAP_CREATED = "2026-10-13T15:08:14Z"
+# SHA256 of the original GitHub API body UTF-8 bytes, without normalization.
+OWNER_BOOTSTRAP_BODY_SHA256 = "2d3cf0e888a45546512164372818d19355d1eff519b34648b35e7221d1626751"
 INTERVAL_SECONDS = 300
 MAX_COMMENT_BYTES = 16_384
 MAX_PAGES = 3
@@ -71,11 +73,11 @@ def checked_comment(comment: dict, canonical: dict) -> dict | None:
     body = comment.get("body")
     if not isinstance(body, str) or len(body.encode("utf-8")) > MAX_COMMENT_BYTES:
         raise IntakeHold("Owner comment body invalid or too large")
-    body = body.strip()
+    body_sha256 = hashlib.sha256(body.encode("utf-8")).hexdigest()
     if cid == OWNER_BOOTSTRAP_COMMENT:
         if (comment.get("created_at") != OWNER_BOOTSTRAP_CREATED
-                or not body.startswith("## OWNER REQUEST · ONE-TIME AUTO-RUNNER COMMISSIONING")
-                or "OPERATOR_PAUSED" not in body or "PROD" not in body):
+                or comment.get("updated_at") != OWNER_BOOTSTRAP_CREATED
+                or body_sha256 != OWNER_BOOTSTRAP_BODY_SHA256):
             raise IntakeHold("historical exact Owner commissioning intent modified")
         task_ids = list(BOOTSTRAP_IDS)
     elif body.startswith(MARKER + "\n"):
@@ -115,7 +117,7 @@ def checked_comment(comment: dict, canonical: dict) -> dict | None:
         "status": "NEW",
         "project": "GoBadminton",
         "text": body,
-        "text_sha256": hashlib.sha256(body.encode("utf-8")).hexdigest(),
+        "text_sha256": body_sha256,
         "task_ids": task_ids,
         "source_url": f"https://github.com/{REPOSITORY}/issues/{ISSUE}#issuecomment-{cid}",
         "github_comment_id": cid,
