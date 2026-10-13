@@ -2,7 +2,7 @@
 """Local integration tests with FAKE Docker/curl. Never connects to any VPS.
 Requires Linux, root (for permission assertions), bash, jq, flock, timeout.
 """
-import json, os, shutil, subprocess, tempfile, unittest
+import json, os, shutil, subprocess, tempfile, time, unittest
 from pathlib import Path
 SOURCE=Path(__file__).resolve().parents[1]/'server/gb-deploy-helper.sh'
 SHA='a'*40
@@ -84,6 +84,32 @@ API_META_URL=http://127.0.0.1/meta
  def test_injected_id(self):self.assertNotEqual(self.invoke(self.req()|{'release_id':'r1-a1;id'}).returncode,0)
  def test_wrong_digest(self):self.assertNotEqual(self.invoke(self.req()|{'api_digest':'latest'}).returncode,0)
  def test_prod_without_baseline(self):self.assertNotEqual(self.invoke(self.req()|{'expected_previous_sha':'e'*40},'prod').returncode,0)
+ def prod_baseline(self):
+  state=self.root/'state/prod';state.mkdir(mode=0o700)
+  (state/'accepted.json').write_text(json.dumps({'release_id':'r1-a1','source_sha':'e'*40}))
+ def prod_approval(self,**overrides):
+  request=self.req()|{'expected_previous_sha':'e'*40}
+  approval={k:request[k] for k in ['release_id','source_sha','api_digest','web_digest','expected_previous_sha']}
+  approval.update(owner_go_id='owner-go-test',expires_at=int(time.time())+600)
+  approval.update(overrides)
+  (self.root/'config/prod-owner-go.json').write_text(json.dumps(approval))
+  return request
+ def test_prod_requires_owner_go(self):
+  self.prod_baseline()
+  self.assertNotEqual(self.invoke(self.req()|{'expected_previous_sha':'e'*40},'prod').returncode,0)
+  self.assertFalse((self.root/'state/prod/r123-a1').exists())
+ def test_prod_rejects_wrong_digest_owner_go(self):
+  self.prod_baseline();request=self.prod_approval(web_digest='sha256:'+'f'*64)
+  self.assertNotEqual(self.invoke(request,'prod').returncode,0)
+  self.assertFalse((self.root/'state/prod/r123-a1').exists())
+ def test_prod_rejects_expired_owner_go(self):
+  self.prod_baseline();request=self.prod_approval(expires_at=1)
+  self.assertNotEqual(self.invoke(request,'prod').returncode,0)
+  self.assertFalse((self.root/'state/prod/r123-a1').exists())
+ def test_prod_exact_owner_go(self):
+  self.prod_baseline();request=self.prod_approval()
+  r=self.invoke(request,'prod');self.assertEqual(r.returncode,0,r.stderr)
+  self.assertEqual(json.loads(r.stdout)['pending']['status'],'PENDING_SMOKE')
  def test_group_write_config(self):
   (self.root/'config/dev.conf').chmod(0o664);self.assertNotEqual(self.invoke({'action':'status'}).returncode,0)
  def test_symlink_config(self):

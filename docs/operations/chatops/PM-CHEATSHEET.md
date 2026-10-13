@@ -162,3 +162,28 @@ gh release create "$TAG" --repo "$REPO" --verify-tag --notes-file /tmp/release-n
 Если fast-forward невозможен, ПМ интегрирует конфликт на отдельной ветке,
 проводит этот интеграционный commit через DEV и использует его SHA. Нельзя
 squash-merge в новый непроверенный SHA и притворяться, что это тот же DEV.
+
+## Фактическая доска и bootstrap (2026-10-13)
+
+Доска создана: https://github.com/users/anpavel84-afk/projects/1,
+`PROJECT_NUMBER=1`. Primary platform Issue #4, Radar Issue #13.
+Поля Stage и Role созданы. Значения показываются через `board` в чате.
+Owner OAuth для первоначальной настройки хранится только в root-only каталоге
+Германии; его нельзя копировать в окружение Codex/Cursor или использовать как
+постоянную идентичность разработчика. SSH deploy key не заменяет API-токен.
+Для постоянного непривилегированного PM/worker нужен отдельный ограниченный
+GitHub App/токен: Issues/Projects write, Actions read и необходимый Contents write,
+без управления PROD environment/secrets/approval.
+
+## Дополнительный серверный барьер PROD
+
+Перед каждым PROD выпуском оператор после явного Owner GO сохраняет на обоих
+проверенных хостах `/etc/gobadminton/deploy/prod-owner-go.json` (root:root 0600).
+Запись содержит ровно: `owner_go_id` (owner-go-...), `release_id` (rRUN-aATTEMPT),
+`source_sha`, `api_digest`, `web_digest`, `expected_previous_sha`,
+`expires_at` (Unix seconds, не более 24 часов). Значения берутся из проверенного
+candidate, а не из latest. Approval для другого digest, прошлого SHA или другого
+run attempt отвергается до первого pull. Запись фиксирует реальный Owner GO и
+не создаётся автоматически из Issue, CI PASS, actor login или публикации release.
+Root bootstrap credentials никогда не передаются execution agent.
+Никакая такая запись сейчас не создана; PROD не подключён.

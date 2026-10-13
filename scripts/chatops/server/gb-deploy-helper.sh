@@ -161,6 +161,18 @@ if [[ $ENVIRONMENT == prod ]]; then
   [[ $EXPECTED =~ ^[0-9a-f]{40}$ ]] || fail 'PROD requires exact previous release SHA'
   [[ -f $STATE/accepted.json ]] || fail 'PROD baseline not enrolled; one-time bootstrap needed'
   [[ $(jq -r .source_sha "$STATE/accepted.json") == "$EXPECTED" ]] || fail 'PROD changed since QA baseline'
+  # Separate, root-owned approval exists only after an explicit Owner GO in chat.
+  # Neither repository writes nor the restricted SSH key can create this record.
+  APPROVAL="$CONFIG_ROOT/prod-owner-go.json"
+  trusted "$APPROVAL"
+  jq -e --argjson req "$REQUEST" --argjson now "$(date +%s)" '
+    keys==["api_digest","expected_previous_sha","expires_at","owner_go_id","release_id","source_sha","web_digest"] and
+    (.owner_go_id|type=="string" and test("^owner-go-[a-zA-Z0-9_-]{1,100}$")) and
+    (.expires_at|type=="number" and floor==. and .>$now and .<=($now+86400)) and
+    .release_id==$req.release_id and .source_sha==$req.source_sha and
+    .api_digest==$req.api_digest and .web_digest==$req.web_digest and
+    .expected_previous_sha==$req.expected_previous_sha
+  ' "$APPROVAL" >/dev/null || fail 'missing, expired or mismatched Owner release GO'
 fi
 mkdir -m 700 "$STATE/$ID"
 DIR="$STATE/$ID"
