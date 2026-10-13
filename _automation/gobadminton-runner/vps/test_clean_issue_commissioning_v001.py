@@ -138,6 +138,27 @@ class CleanOwnerIssueIntake(unittest.TestCase):
             intake.write_unique(self.root / "owner-inbox", altered)
         self.assertEqual(len(list((self.root / "owner-inbox").glob("*.json"))), 1)
 
+    def test_missing_inbox_bootstraps_only_under_private_control_root(self):
+        (self.root / "owner-inbox").rmdir()
+        record = intake.checked_comment(owner_comment(), self.input)
+        self.assertTrue(intake.write_unique(self.root / "owner-inbox", record))
+        self.assertEqual((self.root / "owner-inbox").stat().st_mode & 0o777, 0o700)
+        (self.root / "owner-inbox" / (record["id"] + ".json")).unlink()
+        (self.root / "owner-inbox").rmdir()
+        self.root.chmod(0o777)
+        with self.assertRaisesRegex(intake.IntakeHold, "not private"):
+            intake.write_unique(self.root / "owner-inbox", record)
+
+    def test_symlink_marker_must_not_throttle_or_overwrite_other_file(self):
+        outside = self.root / "unrelated-config.txt"
+        outside.write_text("DO NOT MODIFY")
+        (self.root / "github-issue-intake-last-poll").symlink_to(outside)
+        def opener(request, timeout=12):
+            return FakeResponse(request.full_url, [owner_comment()])
+        with self.assertRaisesRegex(intake.IntakeHold, "not service-private"):
+            intake.poll_once(self.root, self.input, opener=opener, now=1000000000)
+        self.assertEqual(outside.read_text(), "DO NOT MODIFY")
+
     def test_polling_authenticated_issue_read_only_and_throttled(self):
         calls = []
         def opener(request, timeout=12):
