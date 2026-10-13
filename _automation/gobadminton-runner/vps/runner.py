@@ -282,7 +282,9 @@ def _workspace_args(cmdline: list[str]) -> list[str]:
     for i, raw in enumerate(cmdline):
         arg = str(raw)
         low = arg.lower()
-        if low in {"--workspace", "--cd", "-c"} and i + 1 < len(cmdline):
+        # The Codex -C (capital) is a working-directory flag; -c (lowercase)
+        # passes config such as model_reasoning_effort, NOT a directory.
+        if (arg == "-C" or low in {"--workspace", "--cd"}) and i + 1 < len(cmdline):
             out.append(str(cmdline[i + 1]))
         elif low.startswith(("--workspace=", "--cd=")):
             out.append(arg.split("=", 1)[1])
@@ -552,6 +554,19 @@ def receipt_path_for(task: dict[str, Any]) -> Path:
     return RECEIPTS_DIR / f"{task['id']}.json"
 
 
+def readonly_receipt_path(task: dict[str, Any]) -> Path:
+    """Host-side Codex output path fixed under Runner; never task-provided."""
+    task_id = task.get("id")
+    if not isinstance(task_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,99}", task_id):
+        raise RuntimeError("invalid read-only task ID for final JSON output")
+    fixed = RECEIPTS_DIR / f"{task_id}.json"
+    if task.get("receipt") is not None and receipt_path_for(task) != fixed:
+        raise RuntimeError("read-only task cannot redirect receipt output")
+    if RECEIPTS_DIR.is_symlink() or fixed.is_symlink():
+        raise RuntimeError("read-only task receipt path must not be symlink")
+    return fixed
+
+
 def read_receipt(path: Path) -> dict[str, Any] | None:
     if not path.is_file():
         return None
@@ -673,9 +688,21 @@ def launch_agent(cfg: dict[str, Any], task: dict[str, Any], prompt: str) -> subp
         cmd = [cli, "exec", "--color", "never", "-C", workspace]
         if sandbox == "full":
             cmd += ["--dangerously-bypass-approvals-and-sandbox"]
+        elif sandbox == "read-only":
+            # Real Codex enforcement, not a label in the Runner task record.
+            # Codex CLI itself writes the final JSON outside its sandbox through
+            # --output-last-message; the agent has NO filesystem write rights.
+            cmd += ["--sandbox", "read-only"]
+            target = readonly_receipt_path(task)
+            cmd += ["--output-last-message", str(target)]
+            prompt += ("\nREAD-ONLY QA: do not write files or attempt workspace mutations. "
+                       "Return a single valid JSON object as your FINAL answer, with "
+                       "project='GoBadminton', task_id, ok, verdict and actual evidence. "
+                       "The Codex host CLI (not model shell) stores final JSON at the "
+                       "pinned Runner receipt path. Never claim root independent QA "
+                       "PASS without an authentic separately authorized test job.")
         else:
-            # Codex 0.155+ --approve-for-me already selects the workspace-write sandbox.
-            # Passing both --sandbox and --approve-for-me is rejected by the CLI.
+            # Codex 0.155+ --approve-for-me selects workspace-write.
             cmd += ["--approve-for-me", "--add-dir", str(ROOT), "--add-dir", worktrees]
         if model:
             cmd += ["--model", model]
@@ -2446,6 +2473,10 @@ def launch_agent(cfg: dict[str, Any], task: dict[str, Any], prompt: str) -> subp
         cmd = [cli, "--print", "--output-format", "json", "--model", model or "auto"]
         if sandbox == "full":
             cmd += ["--force", "--trust", "--sandbox", "disabled"]
+        elif sandbox == "read-only":
+            # Cursor's interactive sandbox does not have a proven write-denial
+            # contract equivalent to Codex --sandbox read-only.
+            raise RuntimeError("Cursor read-only QA requires a separately verified executor")
         else:
             mode = str(cfg.get("cursor_workspace_mode") or "auto_review_no_native_sandbox")
             cmd += ["--force", "--trust", "--sandbox", "enabled" if mode == "native_sandbox" else "disabled"]
@@ -2457,6 +2488,18 @@ def launch_agent(cfg: dict[str, Any], task: dict[str, Any], prompt: str) -> subp
         cmd = [cli, "exec", "--color", "never", "-C", workspace]
         if sandbox == "full":
             cmd += ["--dangerously-bypass-approvals-and-sandbox"]
+        elif sandbox == "read-only":
+            # No writable dirs or auto-approval. The Codex host writes the last
+            # completion message (JSON receipt) via this explicit CLI output.
+            # This does not grant the model permission to write any files.
+            target = readonly_receipt_path(task)
+            cmd += ["--sandbox", "read-only",
+                    "--output-last-message", str(target)]
+            prompt += ("\nREAD-ONLY QA: do not write any files. Return only a "
+                       "JSON receipt as your FINAL answer, including project, task_id, "
+                       "ok, verdict, and factual evidence. Codex host CLI captures "
+                       "that message; it is not an independently authorized root QA "
+                       "receipt. Failure to prove a reviewer/job means BLOCKED.")
         else:
             cmd += ["--approve-for-me", "--add-dir", str(ROOT), "--add-dir", worktrees]
         if model:

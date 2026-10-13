@@ -15,9 +15,9 @@ LOG=ROOT/"control-agent.log"
 CRED=ROOT/"monitor-push-credentials.txt"
 OWNER_INBOX=ROOT/"owner-inbox"
 WAKE=ROOT/"autopilot-wake.json"
-REMOTE="https://gobadminton.ru/runner-control-agent"
+REMOTE=""  # No clean-root owner command service is commissioned. Fail closed.
 RUNNER_PY=ROOT/"runner.py"
-PYTHON=ROOT/".venv/bin/python"
+PYTHON=Path("/srv/gobadminton-dev/runner/.venv/bin/python")
 POLL_SECONDS=5
 STALE_PROGRESS_SECONDS=30*60
 DEAD_EXECUTOR_GRACE_SECONDS=60
@@ -61,11 +61,15 @@ def auth_header():
     return "Basic "+base64.b64encode(raw).decode()
 
 def request(path,method="GET",data=None,timeout=12):
+    if not REMOTE:
+        raise RuntimeError("No clean-root authenticated Owner command endpoint commissioned")
     body=None
     headers={"Authorization":auth_header(),"User-Agent":"GoBadmintonControlAgent/1.0"}
     if data is not None:
         body=json.dumps(data,ensure_ascii=False).encode()
         headers["Content-Type"]="application/json"
+    if not REMOTE:
+        raise RuntimeError("No clean-root authenticated Owner command endpoint commissioned")
     req=urllib.request.Request(REMOTE+path,data=body,method=method,headers=headers)
     with urllib.request.urlopen(req,timeout=timeout) as r:
         raw=r.read()
@@ -165,11 +169,11 @@ def execute(command):
     if kind=="WAKE_AUTOPILOT":return wake_autopilot("manual_wake")
     if kind=="RETRY_BLOCKED":return run_runner("retry-blocked")
     if kind=="RESTART_RUNNER":
-        if not bounded_restart("gobadminton-runner.service"):
+        if not bounded_restart("gobadminton-clean-runner.service"):
             raise RuntimeError("runner restart refused by Owner-OFF or bounded policy")
         return "runner restarted"
     if kind=="RESTART_AUTOPILOT":
-        if not bounded_restart("gobadminton-autopilot.service"):
+        if not bounded_restart("gobadminton-clean-autopilot.service"):
             raise RuntimeError("autopilot restart refused by Owner-OFF or bounded policy")
         return "autopilot restarted"
     if kind=="PAUSE_QUEUE":return run_runner("pause")
@@ -226,6 +230,8 @@ def enabled_pending_count(backlog,state):
 
 
 def service_restart_allowed(name):
+    if name != "gobadminton-clean-runner.service":
+        return False, "uncommissioned or legacy service restart forbidden"
     cp = sh(["systemctl", "show", name, "--property=UnitFileState,RefuseManualStart,DropInPaths"])
     if cp.returncode: return False, "service policy unavailable; HOLD"
     props = dict(line.split("=", 1) for line in cp.stdout.splitlines() if "=" in line)
@@ -296,8 +302,10 @@ def watchdog():
     prior=load(WATCHDOG,{}) or {}
     initial_state=load(STATE,{}) or {}
     initial_ready=enabled_pending_count(load(BACKLOG,{}) or {},initial_state)
-    for service in ("gobadminton-runner.service","gobadminton-autopilot.service","gobadminton-dashboard.service","gobadminton-monitor-push.service"):
-        if service=="gobadminton-runner.service" and not initial_ready and not initial_state.get("active") and (initial_state.get("current") or {}).get("status")!="running":
+    # Only the clean Runner service exists and is authorized for recovery.
+    # Never attempt a legacy unit or invent an Autopilot/Publisher commission.
+    for service in ("gobadminton-clean-runner.service",):
+        if service=="gobadminton-clean-runner.service" and not initial_ready and not initial_state.get("active") and (initial_state.get("current") or {}).get("status")!="running":
             continue
         if not service_active(service):
             try:
@@ -333,7 +341,7 @@ def watchdog():
             health="ATTENTION";reason=f"Current executor PID {pid} is dead for {int(age)}s."
             if age>=DEAD_EXECUTOR_GRACE_SECONDS:
                 try:
-                    if bounded_restart("gobadminton-runner.service"): recovered.append("runner restarted after dead executor state")
+                    if bounded_restart("gobadminton-clean-runner.service"): recovered.append("runner restarted after dead executor state")
                     dead_executor_seen_at=None
                 except Exception as e:
                     incidents.append("dead executor recovery failed: "+str(e))
@@ -353,7 +361,7 @@ def watchdog():
             if age>=IDLE_QUEUE_GRACE_SECONDS:
                 health="ATTENTION";reason=f"{pending} admitted task(s) pending but no current task for {int(age)}s."
                 try:
-                    if bounded_restart("gobadminton-runner.service"): recovered.append("runner restarted after idle admitted queue")
+                    if bounded_restart("gobadminton-clean-runner.service"): recovered.append("runner restarted after idle admitted queue")
                     idle_queue_seen_at=None
                 except Exception as e:
                     incidents.append("idle queue recovery failed: "+str(e))
