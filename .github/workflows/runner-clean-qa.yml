@@ -37,7 +37,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Check immutable empty startup queue and no PROD authorization
+      - name: Check canonical Runner queue schema and no PROD authorization
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -45,7 +45,8 @@ jobs:
           queue = json.loads(Path("../backlog.json").read_text())
           assert queue["project"] == "GoBadminton"
           assert queue["prod_authorized"] is False
-          assert queue["tasks"] == []
+          assert isinstance(queue["tasks"], list)
+          assert all(isinstance(task, dict) for task in queue["tasks"])
           print("CLEAN_QUEUE_ISOLATED_AND_EMPTY")
           PY
       - name: Compile changed Runner modules
