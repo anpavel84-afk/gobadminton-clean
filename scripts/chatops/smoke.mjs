@@ -10,7 +10,7 @@ const response = await fetch(new URL('/v1/meta', url), {signal: AbortSignal.time
 assert(response.ok, `meta HTTP ${response.status}`);
 assert.equal((await response.json()).gitSha, process.env.EXPECTED_SHA);
 await mkdir('_out/radar', {recursive:true});
-let page, passed=false;
+let page, passed=false, failure=null;
 const errors=[], resources=[];
 const browser = await chromium.launch({headless:true});
 try {
@@ -21,6 +21,7 @@ try {
   if (process.env.REQUIRE_RADAR !== '0') {
     const city = page.getByRole('combobox',{name:'Город',exact:true});
     if (await city.count()) {
+      await city.locator('option').filter({hasText:/Москв/}).first().waitFor({state:'attached',timeout:30000});
       const opts = await city.locator('option').evaluateAll(nodes => nodes.map(n => ({value:n.value,text:n.textContent})));
       const moscow = opts.find(o => /Москв/.test(o.text));
       assert(moscow, 'Moscow option missing');
@@ -43,9 +44,9 @@ try {
   passed=true;
   console.log(JSON.stringify({smoke:'PASS',source_sha:process.env.EXPECTED_SHA,
     radar:process.env.REQUIRE_RADAR==='0'?'NOT_REQUESTED':'VISIBLE',url:url.origin}));
- } finally {
+ } catch(error) { failure=error.message; throw error; } finally {
   if(page) await page.screenshot({path:'_out/radar/screenshot.png',fullPage:true});
   await writeFile('_out/radar/receipt.json',JSON.stringify({status:passed?'ANONYMOUS_MAP_PASS':'FAIL',
-    observedApiSha:process.env.EXPECTED_SHA,privatePlayerAcceptance:'NOT_TESTED',resources,errors},null,2));
+    observedApiSha:process.env.EXPECTED_SHA,privatePlayerAcceptance:'NOT_TESTED',failure,resources,errors},null,2));
   await browser.close();
 }

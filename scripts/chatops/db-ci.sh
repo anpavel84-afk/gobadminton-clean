@@ -13,7 +13,7 @@ docker run -d --name "$NAME" -e POSTGRES_PASSWORD="$PASSWORD" -e POSTGRES_USER=g
   -e POSTGRES_DB=gobadminton -p 127.0.0.1::5432 "$IMAGE" >/dev/null
 ready=0
 for _ in {1..60}; do
-  if docker exec "$NAME" psql -U gobadminton -d gobadminton -Atc 'select PostGIS_Version()' >/dev/null 2>&1; then ready=1; break; fi
+  if docker exec "$NAME" psql -h 127.0.0.1 -U gobadminton -d gobadminton -Atc 'select PostGIS_Version()' >/dev/null 2>&1; then ready=1; break; fi
   sleep 2
 done
 [[ $ready == 1 ]] || { echo 'PostGIS not ready'; exit 1; }
