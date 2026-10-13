@@ -48,6 +48,11 @@ export function effectivePending(row: FriendshipRow, profiles: Availability[], b
     && profiles.find(p => p.user_id === row.requester_user_id)?.social_action_epoch === row.requester_epoch
     && profiles.find(p => p.user_id === row.recipient_user_id)?.social_action_epoch === row.recipient_epoch;
 }
+/** A retired or expired attempt must not permanently disable requesting again. */
+export function canRequestAgain(row: FriendshipRow, profiles: Availability[], blocked: boolean, now: Date, enabled: boolean): boolean {
+  return enabled && !blocked && profiles.length === 2 && profiles.every(eligible)
+    && row.state !== "accepted" && !effectivePending(row, profiles, blocked, now);
+}
 export function assertDecision(row: FriendshipRow, actor: string, action: string, id: string, version: string): void {
   if (row.requester_user_id !== actor && row.recipient_user_id !== actor) unavailable();
   if (action !== "remove" && row.request_id !== id) throw conflict("FRIENDSHIP_STALE", "Состояние изменилось");

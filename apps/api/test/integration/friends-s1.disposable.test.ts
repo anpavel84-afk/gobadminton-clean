@@ -131,6 +131,19 @@ run("Friends S1 API — isolated synthetic PostGIS only", () => {
     finally { upgrade.release(); }
     expect((await pool.query("SELECT count(*)::int AS n FROM friendships")).rows[0].n).toBe(0);
     expect((await pool.query("SELECT social_action_epoch FROM player_social_profiles WHERE user_id=$1",[oldActor.userId])).rows[0].social_action_epoch).toBe("1");
+    // Exercise the actual recovery SQL only in this validated disposable DB.
+    // Roll the recovery transaction back so the remaining API cases use 0032.
+    const recovery = await pool.connect();
+    try {
+      await recovery.query("BEGIN");
+      await recovery.query(await readFile(path.join(migrations,"rollback/0032_friendship_core.sql"),"utf8"));
+      expect((await recovery.query("SELECT to_regclass('friendships') AS name")).rows[0].name).toBeNull();
+      expect((await recovery.query("SELECT count(*)::int AS n FROM schema_migrations")).rows[0].n).toBe(31);
+      expect((await recovery.query(`SELECT count(*)::int AS n FROM information_schema.columns
+        WHERE table_schema='public' AND table_name='player_social_profiles' AND column_name='social_action_epoch'`)).rows[0].n).toBe(0);
+      expect((await recovery.query("SELECT count(*)::int AS n FROM users WHERE id=ANY($1::uuid[])",[[oldActor.userId,oldPeer.userId]])).rows[0].n).toBe(2);
+    } finally { await recovery.query("ROLLBACK"); recovery.release(); }
+    expect((await pool.query("SELECT count(*)::int AS n FROM schema_migrations")).rows[0].n).toBe(32);
     console.info("S1 disposable migrations applied through unchanged0032; no inferred relations");
   });
   afterAll(async () => {
@@ -234,6 +247,7 @@ run("Friends S1 API — isolated synthetic PostGIS only", () => {
     const wire=JSON.stringify(view);for (const secret of [a.userId,b.userId,(await stored(r)).pair_id,"social_action_epoch","latitude","longitude","contactPolicy","generation"]) expect(wire).not.toContain(secret);
     expect((await get(outsider,`/v1/friendships/${r.friendshipId}`)).statusCode).toBe(404);
     expect((await decide(a,receipt,"remove")).statusCode).toBe(200);expect((await stored(r)).state).toBe("removed");
+    expect((await get(a,`/v1/me/friendship-states?publicPlayerId=${b.publicPlayerId}`)).json().items[0].capabilities.canRequest).toBe(true);
     const fresh=await request();const acceptAgain=(await decide(b,fresh,"accept")).json<FriendshipReceipt>();
     expect((await decide(b,acceptAgain,"remove")).statusCode).toBe(200);
   });
@@ -241,6 +255,7 @@ run("Friends S1 API — isolated synthetic PostGIS only", () => {
     const old=await request();const rightful=action==="decline"?b:a;const wrong=action==="decline"?a:b;
     expect((await decide(wrong,old,action)).statusCode).toBe(404);
     expect((await decide(rightful,old,action)).statusCode).toBe(200);
+    expect((await get(a,`/v1/me/friendship-states?publicPlayerId=${b.publicPlayerId}`)).json().items[0].capabilities.canRequest).toBe(true);
     const fresh=await request();expect(fresh.requestId).not.toBe(old.requestId);expect(fresh.friendshipId).toBe(old.friendshipId);
     expect((await stored(fresh)).generation).toBe("2");expect(await ledgerCount(fresh)).toBe(2);
     expect((await decide(b,old,"accept")).json().code).toBe("FRIENDSHIP_STALE");
@@ -305,9 +320,27 @@ run("Friends S1 API — isolated synthetic PostGIS only", () => {
     expect((await decide(b,r,"accept")).statusCode).toBe(404);
     expect((await post(a,"/v1/friend-requests",{targetPublicPlayerId:b.publicPlayerId},idem)).statusCode).toBe(404);
     expect((await get(a,"/v1/me/friendships?view=outgoing")).json().items).toEqual([]);
+    expect((await get(a,`/v1/me/friendship-states?publicPlayerId=${b.publicPlayerId}`)).json().items[0].capabilities.canRequest).toBe(true);
     env.FRIENDS_REQUEST_TTL_SECONDS=120;
     const fresh=await request();expect(fresh.requestId).not.toBe(r.requestId);
     expect((await decide(b,r,"accept")).statusCode).toBe(409);expect(await ledgerCount(fresh)).toBe(2);
+  });
+  it("migration recovery refuses to erase a populated immutable attempt ledger",async()=>{
+    const r=await request();const client=await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await expect(client.query(await readFile(path.resolve(__dirname,"../../migrations/rollback/0032_friendship_core.sql"),"utf8")))
+        .rejects.toMatchObject({code:"23514"});
+    } finally {await client.query("ROLLBACK");client.release();}
+    expect(await ledgerCount(r)).toBe(1);expect((await stored(r)).state).toBe("pending");
+  });
+  it("concurrent accepts commit once and reject the stale second version",async()=>{
+    const r=await request();
+    const responses=await overlap(()=>decide(b,r,"accept"),()=>decide(b,r,"accept"));
+    expect(responses.map(response=>response.statusCode)).toEqual([200,409]);
+    expect(responses[1]!.json().code).toBe("FRIENDSHIP_STALE");
+    expect(await stored(r)).toMatchObject({state:"accepted",version:"2"});
+    expect(await ledgerCount(r)).toBe(1);
   });
   it("accepted dormant friends redact peer and name search; restoring visibility does not restore removed relation",async()=>{
     const r=await request();const accepted=(await decide(b,r,"accept")).json<FriendshipReceipt>();
