@@ -34,7 +34,10 @@ try:
 except ImportError:
     msvcrt = None  # type: ignore
 
-ROOT = Path(__file__).resolve().parent
+_CODE_ROOT = Path(__file__).resolve().parent
+ROOT = (Path("/srv/gobadminton-clean/runner")
+        if _CODE_ROOT.is_relative_to(Path("/opt/gobadminton-clean/runner-code"))
+        else _CODE_ROOT)
 CONFIG_PATH = ROOT / "config.json"
 RUNNER_STATE_PATH = ROOT / "state.json"
 BACKLOG_PATH = ROOT / "backlog.json"
@@ -608,6 +611,26 @@ def build_prompt(
             "real file/lock scopes, the sole existing publication_guard "
             "pre-push and remote main compare-and-swap. No raw main push. "
             "No self-signed PASS or untrusted legacy evidence.\\n"
+            "The planner prepares permitted PM documents in its worktree and "
+            "returns its exact action/task_ids/owner_binding_path JSON proposal. "
+            "Do NOT push Git or invoke publication_guard --publish yourself. "
+            "The host commits the bounded PM diff and submits it to the separately "
+            "credentialed Clean Publisher, which retains publication_guard/CAS. "
+            "For already prepared first tasks, reuse Friends candidate "
+            "f98b1ed42e3f3847ac305e487cf3a706d6a458f2 and Radar candidate "
+            "ed1ad372751b25f1d4bddae1f13e1b3876ef5bec as task base_sha; "
+            "their automatically claimed producers verify these sources rather "
+            "than redevelop them. Each producer still needs its own newly executed "
+            "protected QA job. Do not copy manual QA PASS into runtime.\\n"
+            "Clean Publisher authority is the root-owned exact Owner-bound "
+            "/etc/gobadminton-clean-control-plane/clean-publisher-policy.json, "
+            "its immutable installed module pins and separate service/credential. "
+            "You are deliberately NOT given its credential. Do not call that "
+            "absence a blocker when the protected service is configured. Its "
+            "exclusive publication lock and remote main SHA CAS fence transport. "
+            "Do not manufacture historical V3/G1-G6 proofs or require activating "
+            "the old Publisher. Optional writer_bridge policy, if present, must "
+            "still validate; the adapter never weakens its checks.\\n"
             "If canonical single-writer credentials/policy, distinct nonauthor "
             "root QA, or protected Owner binding are absent, write "
             "no_safe_action with exact blocker and STOP. Do not claim a Git "
@@ -861,6 +884,9 @@ def launch_planner(
             "--output-last-message", str(AUTOPILOT_RECEIPT_PATH),
             "--model", model,
         ]
+        if clean:
+            cmd += ["--disable", "apps", "--disable", "remote_plugin", "--disable", "hooks",
+                    "--ignore-user-config", "-c", "apps._default.enabled=false"]
         if effort in {"low", "medium", "high", "xhigh", "extra_high"}:
             normalized = "xhigh" if effort == "extra_high" else effort
             cmd += ["-c", f'model_reasoning_effort="{normalized}"']
@@ -965,6 +991,13 @@ def launch_planner(
         return False, str(receipt.get("summary") or "planner reported error"), receipt
     if rc != 0:
         return False, f"planner exit {rc} despite receipt", receipt
+    if (clean and cfg.get("github_repo_write_authorized") is True
+            and receipt.get("action") in {"enqueued", "merged", "merged_and_enqueued"}):
+        try:
+            from clean_publish_submit import prepare_pm_proposal
+            receipt = prepare_pm_proposal(WORKTREE, receipt)
+        except Exception as exc:
+            return False, "separated PM Publisher rejected proposal: " + str(exc), receipt
     state = load_json(RUNNER_STATE_PATH, {}) or {}
     if runner.lane_local_block(state) and receipt.get("action") in {
         "enqueued", "merged_and_enqueued", "merged", "quarantined"}:

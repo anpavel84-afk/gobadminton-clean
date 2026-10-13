@@ -17,6 +17,7 @@ import stat
 import time
 import urllib.error
 import urllib.request
+import clean_runtime_access
 
 OWNER_ID = 318610566
 OWNER_LOGIN = "anpavel84-afk"
@@ -168,8 +169,11 @@ def write_unique(inbox: Path, record: dict) -> bool:
             proof = parent.lstat()
         except OSError as exc:
             raise IntakeHold("Runner control directory absent") from exc
-        if (not stat.S_ISDIR(proof.st_mode) or proof.st_uid != os.getuid()
-                or stat.S_IMODE(proof.st_mode) & 0o077):
+        try:
+            allowed = clean_runtime_access.directory_allowed(parent, os.getuid())
+        except (clean_runtime_access.AccessHold, OSError):
+            allowed = False
+        if not allowed:
             raise IntakeHold("Runner control directory not private/service-owned")
         try:
             inbox.mkdir(mode=0o700)

@@ -26,13 +26,17 @@ from typing import Any
 import psutil
 import backlog_sync
 import writer_bridge
+import clean_runtime_access
 
 try:
     import msvcrt
 except ImportError:
     msvcrt = None  # type: ignore
 
-ROOT = Path(__file__).resolve().parent
+_CODE_ROOT = Path(__file__).resolve().parent
+ROOT = (Path("/srv/gobadminton-clean/runner")
+        if _CODE_ROOT.is_relative_to(Path("/opt/gobadminton-clean/runner-code"))
+        else _CODE_ROOT)
 BACKLOG_PATH = ROOT / "backlog.json"
 STATE_PATH = ROOT / "state.json"
 CONFIG_PATH = ROOT / "config.json"
@@ -86,6 +90,10 @@ def atomic_write_json(path: Path, data: Any) -> None:
     )
     payload = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
     tmp.write_text(payload, encoding="utf-8")
+    mode, gid = clean_runtime_access.file_access(path)
+    if gid is not None:
+        os.chown(tmp, -1, gid)
+    os.chmod(tmp, mode)
     try:
         os.replace(tmp, path)
     except PermissionError:
@@ -585,6 +593,11 @@ def validate_receipt(path: Path, task_id: str) -> tuple[bool, str]:
         return False, f"receipt task_id mismatch: {data.get('task_id')!r}"
     if data.get("project") != "GoBadminton":
         return False, "receipt project must be GoBadminton"
+    if (data.get("ok") is True and task_id in {
+            "friends-dev-s1-api-20261013-v001", "radar-dev-map-ui-20261013-v001"}):
+        from clean_publish_submit import producer_is_published
+        if not producer_is_published(task_id, data):
+            return False, "producer completion requires actual separated Publisher observation"
     if data.get("ok") is True:
         return True, str(data.get("summary") or "ok")
     return False, str(data.get("reason") or data.get("summary") or "receipt ok!=true")
@@ -2497,6 +2510,22 @@ def launch_agent(cfg: dict[str, Any], task: dict[str, Any], prompt: str) -> subp
     if clean and executor != "codex":
         raise RuntimeError("clean DEV executor requires scoped Codex, not Cursor")
 
+    if clean and "source_qa" in task and cfg.get("trusted_qa_job_enabled") is True:
+        if sandbox != "read-only":
+            raise RuntimeError("protected Clean QA requires read-only task")
+        from clean_qa_job import SUITES
+        if task.get("id") not in SUITES:
+            raise RuntimeError("unregistered protected Clean QA suite")
+        job = Path("/opt/gobadminton-clean/runner-code/current/clean_qa_job.py")
+        import clean_qa_job
+        clean_qa_job.protected(job.resolve())
+        # The actual root-owned QA service independently observes the admitted
+        # active claim. This unprivileged child only waits for verified evidence.
+        return subprocess.Popen(["/usr/bin/python3", "-I", str(job), "--wait", task["id"]],
+                                cwd=workspace, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                start_new_session=True, env=env)
+
     if executor == "cursor":
         cli = str(cfg.get("cursor_agent") or "") or (shutil.which("agent") or shutil.which("cursor-agent") or "")
         if not cli or not Path(cli).is_file():
@@ -2517,6 +2546,9 @@ def launch_agent(cfg: dict[str, Any], task: dict[str, Any], prompt: str) -> subp
         if not cli or not Path(cli).is_file():
             raise RuntimeError("Codex CLI not found")
         cmd = [cli, "exec", "--color", "never", "-C", workspace]
+        if clean:
+            cmd += ["--disable", "apps", "--disable", "remote_plugin", "--disable", "hooks",
+                    "--ignore-user-config", "-c", "apps._default.enabled=false"]
         if sandbox == "full":
             cmd += ["--dangerously-bypass-approvals-and-sandbox"]
         elif sandbox == "read-only":
@@ -3223,6 +3255,24 @@ def run_claimed(cfg: dict[str, Any], task: dict[str, Any], claim: dict[str, Any]
         proc.wait()
         cleanup_executor_process_group(proc.pid)
         log(f"agent exited code={proc.returncode} task={tid} executor={active_executor}")
+        if (cfg.get("project_repo") == "anpavel84-afk/gobadminton-clean"
+                and cfg.get("github_repo_write_authorized") is True
+                and tid in {"friends-dev-s1-api-20261013-v001", "radar-dev-map-ui-20261013-v001"}
+                and proc.returncode == 0):
+            proposal = read_receipt(rpath) or {}
+            if (proposal.get("ok") is True and proposal.get("project") == "GoBadminton"
+                    and proposal.get("task_id") == tid):
+                try:
+                    from clean_publish_submit import finish_producer
+                    _v2_update_active(tid, {"phase": "INTEGRATING", "agent_pid": None})
+                    finish_producer(task, worktree, proposal, executor_pid=proc.pid,
+                                    executor_exit_code=proc.returncode)
+                except Exception as exc:
+                    # Keep the real process/publication history; do not convert
+                    # an unconfirmed source proposal into completed work.
+                    mark_blocked(tid, "separated Publisher observation failed: " + str(exc),
+                                 blocker_scope="lane_local")
+                    return
         ok, reason = validate_receipt(rpath, tid)
         data = read_receipt(rpath) or {}
 
@@ -3254,6 +3304,9 @@ def run_claimed(cfg: dict[str, Any], task: dict[str, Any], claim: dict[str, Any]
                     continue
                 ok, reason = validate_receipt(rpath, tid)
                 data = read_receipt(rpath) or {}
+
+        if proc.returncode != 0:
+            ok, reason = False, f"executor exited nonzero ({proc.returncode}); receipt is not completion"
 
         if tid.startswith("qa-") or "source_review" in task:
             verdict = str(data.get("verdict") or "").upper()
