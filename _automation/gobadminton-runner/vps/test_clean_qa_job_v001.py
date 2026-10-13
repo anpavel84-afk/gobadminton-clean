@@ -2,6 +2,7 @@
 import io
 import json
 import os
+import stat
 from pathlib import Path
 import sys
 import tarfile
@@ -142,17 +143,19 @@ class CleanQAJobSafety(unittest.TestCase):
         with patch.dict(sys.modules, {'pwd': fake_pwd}):
             command = qa.sandbox(Path('/snapshot'), 'api', 'qa', 999)
             self.assertEqual(command[:5], ['/usr/bin/nsenter', '--target', '999', '--net', '--'])
-            self.assertNotIn('/usr/bin/setpriv', command); self.assertIn('--unshare-all', command)
-            self.assertEqual(command[command.index('--uid') + 1], '1234')
-            self.assertEqual(command[command.index('--gid') + 1], '1234')
-            self.assertEqual(command[command.index('--cap-drop') + 1], 'ALL')
-            self.assertIn('--share-net', command)
+            self.assertIn('/usr/bin/setpriv', command); self.assertNotIn('--unshare-all', command)
+            self.assertIn('--unshare-pid', command); self.assertIn('--unshare-ipc', command)
+            self.assertEqual(command[command.index('--uid') + 1], '0')
+            self.assertEqual(command[command.index('--gid') + 1], '0')
+            self.assertIn('--reuid=1234', command); self.assertIn('--regid=1234', command)
+            self.assertIn('--bounding-set=-all', command); self.assertIn('--no-new-privs', command)
+            self.assertNotIn('--unshare-net', command)
             self.assertIn('postgresql://qa:disposable-only@127.0.0.1:5432/gobadminton_friends_s1_disposable', command)
             self.assertIn('RUN_DB_INTEGRATION', command)
             self.assertNotIn('/var/run/docker.sock', command)
             self.assertNotIn('/home/agentagency-dev', command)
             radar = qa.sandbox(Path('/snapshot'), 'web', 'qa')
-            self.assertNotIn('--share-net', radar)
+            self.assertIn('--unshare-net', radar)
 
     def test_sandbox_root_account_refused(self):
         fake_pwd = types.SimpleNamespace(getpwnam=lambda _: types.SimpleNamespace(pw_uid=0, pw_gid=0))
@@ -160,18 +163,129 @@ class CleanQAJobSafety(unittest.TestCase):
             qa.sandbox(Path('/snapshot'), 'web', 'root')
 
     def test_reviewer_root_namespace_creator_drops_nonroot_identity_and_all_caps(self):
-        user = types.SimpleNamespace(pw_uid=985, pw_gid=977)
+        user = types.SimpleNamespace(pw_uid=985, pw_gid=976)
         command = qa.review_sandbox(Path('/snapshot'), Path('/job'), Path('/job/output'), user)
         self.assertEqual(command[0], '/usr/bin/bwrap')
-        self.assertNotIn('/usr/bin/setpriv', command)
-        self.assertEqual(command[command.index('--uid') + 1], '985')
-        self.assertEqual(command[command.index('--gid') + 1], '977')
-        self.assertEqual(command[command.index('--cap-drop') + 1], 'ALL')
-        self.assertIn('--unshare-all', command); self.assertIn('--share-net', command)
+        self.assertIn('/usr/bin/setpriv', command)
+        self.assertEqual(command[command.index('--uid') + 1], '0')
+        self.assertEqual(command[command.index('--gid') + 1], '0')
+        self.assertIn('--reuid=985', command); self.assertIn('--regid=976', command)
+        self.assertIn('--clear-groups', command); self.assertIn('--no-new-privs', command)
+        self.assertIn('--bounding-set=-all', command); self.assertIn('--inh-caps=-all', command); self.assertIn('--ambient-caps=-all', command)
+        self.assertNotIn('--unshare-all', command); self.assertNotIn('--unshare-net', command)
+        self.assertIn('--unshare-pid', command); self.assertIn('--unshare-ipc', command)
         self.assertNotIn('/var/run/docker.sock', command)
         self.assertNotIn('/home/agentagency-dev', command)
+        self.assertIn(['--bind', str(qa.AUTH), '/home/qa'], [command[i:i + 3] for i in range(len(command) - 2)])
+        self.assertNotIn('--add-dir', qa.reviewer_command('web', 'review'))
         with self.assertRaises(ValueError):
             qa.review_sandbox(Path('/snapshot'), Path('/job'), Path('/job/output'), types.SimpleNamespace(pw_uid=0, pw_gid=0))
+
+    def test_private_native_reviewer_credentials_have_exact_principal_and_modes(self):
+        for directory, kind, mode in [(True, stat.S_IFDIR, 0o700), (False, stat.S_IFREG, 0o600)]:
+            info = types.SimpleNamespace(st_uid=985, st_gid=976, st_mode=kind | mode, st_nlink=1)
+            qa.credential_metadata(info, uid=985, gid=976, directory=directory)
+            for change in [{'st_uid': 0}, {'st_gid': 977}, {'st_mode': kind | 0o644}]:
+                changed = types.SimpleNamespace(**{**vars(info), **change})
+                with self.subTest(change=change), self.assertRaises(ValueError):
+                    qa.credential_metadata(changed, uid=985, gid=976, directory=directory)
+            with self.assertRaises(ValueError):
+                qa.credential_metadata(info, uid=985, gid=976, directory=directory, symlink=True)
+        linked = types.SimpleNamespace(st_uid=985, st_gid=976, st_mode=stat.S_IFREG | 0o600, st_nlink=2)
+        with self.assertRaises(ValueError): qa.credential_metadata(linked, uid=985, gid=976)
+
+    def test_native_refresh_account_binding_does_not_depend_on_or_export_tokens(self):
+        credential = {'auth_mode': 'chatgpt', 'tokens': {'account_id': 'synthetic-account-only', 'refresh_token': 'fake-before'}}
+        before = qa.credential_account(credential)
+        after = qa.credential_account({**credential, 'tokens': {**credential['tokens'], 'refresh_token': 'fake-after'}})
+        self.assertEqual(before, after)
+        self.assertNotEqual(before, qa.credential_account({**credential, 'tokens': {**credential['tokens'], 'account_id': 'different-account'}}))
+        with self.assertRaises(ValueError): qa.credential_account({'auth_mode': 'apikey'})
+
+    def test_exact_two_line_maps_preserve_actual_host_role_ids(self):
+        self.assertEqual(qa.identity_maps(985, 976), ('0 0 1\n985 985 1\n', '0 0 1\n976 976 1\n'))
+        self.assertEqual(qa.identity_maps(986, 977), ('0 0 1\n986 986 1\n', '0 0 1\n977 977 1\n'))
+        for uid, gid in [(0, 0), (985, 977), (1234, 1234)]:
+            with self.assertRaises(ValueError): qa.identity_maps(uid, gid)
+
+    def test_fixed_namespace_bootstrap_no_automatic_uidmap_or_namespace_fallback(self):
+        user = types.SimpleNamespace(pw_uid=985, pw_gid=976)
+        review = qa.review_sandbox(Path('/source'), Path('/job'), Path('/output'), user)
+        wrapped, role = qa.mapped_command(review + qa.reviewer_command('web', 'review'))
+        self.assertEqual(role, (985, 976))
+        self.assertEqual(wrapped[0], '/usr/bin/bwrap')
+        self.assertNotIn('--unshare-all', wrapped); self.assertNotIn('--map-root-user', wrapped)
+        self.assertNotIn('--unshare-user-try', wrapped); self.assertNotIn('--share-net', wrapped)
+        self.assertIn('GBCLEAN_QA_USERNS_READY', qa.USERNS_BOOTSTRAP)
+        self.assertIn('sys.stdin.buffer.read()', qa.USERNS_BOOTSTRAP)
+        self.assertNotIn('execv', qa.USERNS_BOOTSTRAP)
+        compile(qa.USERNS_BOOTSTRAP, '<fixed-bootstrap>', 'exec')
+        bad = list(review); bad[bad.index('--reuid=985')] = '--reuid=0'
+        with self.assertRaises(ValueError): qa.mapped_command(bad)
+        with self.assertRaises(ValueError): qa.mapped_command(review + ['--unshare-all'])
+
+    def test_friends_mapping_keeps_only_exact_disposable_network_prefix(self):
+        fake_pwd = types.SimpleNamespace(getpwnam=lambda _: types.SimpleNamespace(pw_uid=986, pw_gid=977))
+        with patch.dict(sys.modules, {'pwd': fake_pwd}):
+            command = qa.sandbox(Path('/source'), 'api', 'qa', 999)
+            wrapped, role = qa.mapped_command(command + ['/usr/bin/id'])
+            self.assertEqual(role, (986, 977))
+            self.assertEqual(wrapped[:6], ['/usr/bin/nsenter', '--target', '999', '--net', '--', '/usr/bin/bwrap'])
+            self.assertNotIn('--unshare-net', wrapped)
+            bad = list(command); bad[3] = '--mount'
+            with self.assertRaises(ValueError): qa.mapped_command(bad)
+
+    def test_initial_namespace_parent_passes_descendant_namespace_fd_to_actual_bwrap(self):
+        command = qa.review_sandbox(Path('/source'), Path('/job'), Path('/output'), types.SimpleNamespace(pw_uid=985, pw_gid=976))
+        holder = unittest.mock.MagicMock()
+        holder.__enter__.return_value = 17
+        with patch.object(qa, 'namespace_holder', return_value=holder) as creator, \
+                patch.object(qa, 'run_process', return_value=(0, b'actual process output')) as actual:
+            self.assertEqual(qa.run(command), (0, b'actual process output'))
+            creator.assert_called_once_with((985, 976), 1800)
+            called = actual.call_args.args[0]
+            self.assertEqual(called[:3], ['/usr/bin/bwrap', '--userns', '17'])
+            self.assertEqual(actual.call_args.kwargs['pass_fds'], (17,))
+        holder.__exit__.assert_called_once()
+
+    def test_namespace_holder_is_kept_alive_and_cleaned_on_payload_failure(self):
+        holder = unittest.mock.MagicMock(pid=12345, stdin=io.BytesIO(), stdout=io.BytesIO())
+        with patch.object(qa.subprocess, 'Popen', return_value=holder) as spawn, \
+                patch.object(qa, 'map_namespace') as mapping, \
+                patch.object(qa.os, 'open', return_value=17), patch.object(qa.os, 'close') as close:
+            with self.assertRaisesRegex(RuntimeError, 'payload fail'):
+                with qa.namespace_holder((985, 976), 30) as descriptor:
+                    self.assertEqual(descriptor, 17)
+                    self.assertFalse(holder.stdin.closed)
+                    raise RuntimeError('payload fail')
+            self.assertEqual(spawn.call_args.args[0][:5], ['/usr/bin/unshare', '--user', '/usr/bin/python3', '-I', '-c'])
+            mapping.assert_called_once_with(holder, (985, 976), 30)
+            close.assert_called_once_with(17)
+            self.assertTrue(holder.stdin.closed)
+            holder.wait.assert_called_once_with(timeout=5)
+
+    def test_mapped_namespace_rejects_missing_privilege_drop_or_retained_caps(self):
+        command = qa.review_sandbox(Path('/source'), Path('/job'), Path('/output'), types.SimpleNamespace(pw_uid=985, pw_gid=976))
+        boundary = command.index('--')
+        with self.assertRaises(ValueError): qa.mapped_command(command[:boundary + 1] + ['/qa-tools/bin/codex'])
+        bad = list(command); bad[bad.index('--bounding-set=-all')] = '--bounding-set=+all'
+        with self.assertRaises(ValueError): qa.mapped_command(bad)
+        bad = list(command); bad[bad.index('--clear-groups')] = '--keep-groups'
+        with self.assertRaises(ValueError): qa.mapped_command(bad)
+
+    def test_only_private_namespace_scratch_and_cache_mounts_get_write_permissions(self):
+        fake_pwd = types.SimpleNamespace(getpwnam=lambda _: types.SimpleNamespace(pw_uid=986, pw_gid=977))
+        with patch.dict(sys.modules, {'pwd': fake_pwd}):
+            tests = qa.sandbox(Path('/snapshot'), 'web', 'qa')
+        review = qa.review_sandbox(Path('/snapshot'), Path('/job'), Path('/job/output'), types.SimpleNamespace(pw_uid=985, pw_gid=976))
+        for command in [tests, review]:
+            self.assertIn(['--tmpfs', '/tmp', '--chmod', '1777', '/tmp'], [command[i:i + 5] for i in range(len(command) - 4)])
+            self.assertIn(['--ro-bind', str(Path('/snapshot')), '/source'], [command[i:i + 3] for i in range(len(command) - 2)])
+        chmods = [tests[i + 1:i + 3] for i, word in enumerate(tests) if word == '--chmod']
+        self.assertEqual(chmods, [['1777', '/tmp'], ['0777', '/work'],
+                                 ['0777', '/source/node_modules/.vite'], ['0777', '/source/node_modules/.vite-temp'],
+                                 ['0777', '/source/apps/web/node_modules/.vite'], ['0777', '/source/apps/web/node_modules/.vite-temp']])
+        self.assertTrue(all(path in {'/tmp', '/work'} or path.endswith(('/.vite', '/.vite-temp')) for _, path in chmods))
 
     def test_disposable_database_cleanup_on_suite_exception(self):
         commands = []

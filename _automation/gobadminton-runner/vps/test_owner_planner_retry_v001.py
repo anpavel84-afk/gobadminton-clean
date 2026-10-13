@@ -9,6 +9,22 @@ import autopilot
 
 
 class OwnerPlannerRetry(unittest.TestCase):
+    def test_clean_prompt_allows_registered_verification_with_prior_findings_preserved(self):
+        prompt = autopilot.build_prompt(
+            {"project_repo": "anpavel84-afk/gobadminton-clean"}, owner_items=[])
+        self.assertIn("friends-dev-s1-api-20261013-v002", prompt)
+        self.assertIn("radar-dev-map-ui-20261013-v002", prompt)
+        self.assertNotIn("terminal BLOCKED solely because", prompt)
+        self.assertIn("dependency-only failure is not a prerequisite", prompt)
+        self.assertIn("Carry every prior Foundation FAIL", prompt)
+        self.assertIn("new task acceptance criteria", prompt)
+        self.assertIn("actual Radar Style Guide parity evidence", prompt)
+        self.assertIn("Unresolved findings remain FAIL/BLOCKED", prompt)
+        self.assertIn("its own protected QA", prompt)
+        self.assertIn("producer must not install dependencies", prompt)
+        self.assertIn("Never rearm a terminal ID", prompt)
+        self.assertIn("authorize product redevelopment", prompt)
+
     def state(self, outcome="planner_error"):
         return {"last_owner_input_key": "same", "last_owner_attempt_outcome": outcome,
                 "last_owner_no_action_epoch": 1000, "status": "owner_instruction_backoff"}

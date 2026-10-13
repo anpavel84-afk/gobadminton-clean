@@ -75,6 +75,99 @@ MODELS = {'api': 'gpt-6.1-sol', 'web': 'gpt-6-astra'}
 TRUSTED_ENV = {'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8',
                'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null',
                'GIT_CONFIG_SYSTEM': '/dev/null', 'GIT_NO_REPLACE_OBJECTS': '1'}
+ROLE_MAPS = {(985, 976), (986, 977)}
+NAMESPACE_READY = b'GBCLEAN_QA_USERNS_READY\n'
+USERNS_BOOTSTRAP = (
+    "import os,sys; "
+    "sys.stdout.buffer.write(b'GBCLEAN_QA_USERNS_READY\\n');sys.stdout.buffer.flush(); "
+    "sys.stdin.buffer.read()"
+)
+
+
+def mapped_command(command):
+    """Only the two fixed QA payload identities can receive host-preserving maps."""
+    prefix = []
+    parts = list(command)
+    if parts and parts[0] == '/usr/bin/nsenter':
+        if (len(parts) < 6 or parts[1] != '--target' or not parts[2].isdigit()
+                or int(parts[2]) <= 1 or parts[3:5] != ['--net', '--']):
+            raise ValueError('only disposable DB network namespace prefix allowed')
+        prefix, parts = parts[:5], parts[5:]
+    if not parts or parts[0] != '/usr/bin/bwrap':
+        return command, None
+    boundary = parts.index('--')
+    drop = parts[boundary + 1:boundary + 9]
+    if (len(drop) != 8 or drop[0] != '/usr/bin/setpriv' or not drop[1].startswith('--reuid=')
+            or not drop[2].startswith('--regid=')
+            or drop[3:] != ['--clear-groups', '--no-new-privs', '--bounding-set=-all', '--inh-caps=-all', '--ambient-caps=-all']
+            or len(parts) <= boundary + 9 or parts[boundary + 9] != '--'):
+        raise ValueError('fixed privilege drop required before every QA payload')
+    uid, gid = int(drop[1].split('=', 1)[1]), int(drop[2].split('=', 1)[1])
+    if ((uid, gid) not in ROLE_MAPS or '--unshare-all' in parts or '--unshare-user' in parts
+            or '--share-net' in parts or '--userns' in parts or '--userns2' in parts
+            or parts[parts.index('--uid') + 1] != '0' or parts[parts.index('--gid') + 1] != '0'):
+        raise ValueError('fixed mapped nonroot QA namespace required; no fallback')
+    return prefix + parts, (uid, gid)
+
+
+def identity_maps(uid, gid):
+    if (uid, gid) not in ROLE_MAPS:
+        raise ValueError('unregistered host credential/test identity')
+    return ('0 0 1\n%d %d 1\n' % (uid, uid), '0 0 1\n%d %d 1\n' % (gid, gid))
+
+
+def payload_drop(user):
+    if user.pw_uid == 0:
+        raise ValueError('QA payload must never run as root')
+    return ['/usr/bin/setpriv', '--reuid=' + str(user.pw_uid), '--regid=' + str(user.pw_gid),
+            '--clear-groups', '--no-new-privs', '--bounding-set=-all', '--inh-caps=-all', '--ambient-caps=-all', '--']
+
+
+def map_namespace(process, role, timeout):
+    import select
+    if os.geteuid() != 0:
+        raise ValueError('root administrator namespace creator required')
+    readable, _, _ = select.select([process.stdout], [], [], min(10, timeout))
+    if not readable:
+        raise TimeoutError('fixed user namespace readiness timeout')
+    if process.stdout.readline() != NAMESPACE_READY:
+        raise ValueError('fixed user namespace bootstrap failed before handshake')
+    proc = Path('/proc') / str(process.pid)
+    if ((proc / 'ns/user').stat().st_ino == Path('/proc/self/ns/user').stat().st_ino
+            or (proc / 'uid_map').read_text().strip() or (proc / 'gid_map').read_text().strip()
+            or (proc / 'setgroups').read_text().strip() != 'allow'):
+        raise ValueError('fresh unmapped namespace/setgroups allowance required')
+    uid_map, gid_map = identity_maps(*role)
+    (proc / 'uid_map').write_text(uid_map)
+    (proc / 'gid_map').write_text(gid_map)
+    # No deny-setgroups, newuidmap, global kernel setting or fallback namespace.
+    # Holder stays blocked until parent closes stdin after actual bwrap finishes.
+
+
+@contextlib.contextmanager
+def namespace_holder(role, timeout):
+    """Parent joins a mapped descendant namespace, never its own current one."""
+    holder = subprocess.Popen(['/usr/bin/unshare', '--user', '/usr/bin/python3', '-I', '-c', USERNS_BOOTSTRAP],
+                              env=TRUSTED_ENV, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT, start_new_session=True)
+    descriptor = None
+    try:
+        map_namespace(holder, role, timeout)
+        descriptor = os.open('/proc/' + str(holder.pid) + '/ns/user', os.O_RDONLY)
+        yield descriptor
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if holder.stdin:
+            holder.stdin.close()
+        try:
+            holder.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(holder.pid, signal.SIGKILL)
+            holder.wait()
+        if holder.stdout:
+            holder.stdout.close()
 
 
 def git_command(repo):
@@ -199,7 +292,18 @@ def verify_waiter(qa_id, claim):
 
 def run(command, *, env=None, timeout=1800, cwd=None, on_start=None):
     """Bounded process group: timed-out descendants cannot escape cleanup."""
+    command, role = mapped_command(command)
+    with namespace_holder(role, timeout) if role else contextlib.nullcontext(None) as descriptor:
+        if descriptor is not None:
+            index = command.index('/usr/bin/bwrap') + 1
+            command = command[:index] + ['--userns', str(descriptor)] + command[index:]
+        return run_process(command, env=env, timeout=timeout, cwd=cwd, on_start=on_start,
+                           pass_fds=() if descriptor is None else (descriptor,))
+
+
+def run_process(command, *, env=None, timeout=1800, cwd=None, on_start=None, pass_fds=()):
     p = subprocess.Popen(command, cwd=cwd, env={**(env or TRUSTED_ENV), **{k: v for k, v in TRUSTED_ENV.items() if k.startswith('GIT_')}},
+                         stdin=subprocess.DEVNULL, pass_fds=pass_fds,
                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
     try:
         if on_start:
@@ -272,18 +376,22 @@ def sandbox(source, app, account, db_pid=None):
     user = pwd.getpwnam(account)
     if user.pw_uid == 0:
         raise ValueError('QA account must not be root')
-    # Approved root job creates namespaces; bwrap drops payload identity/caps.
+    # Approved root job creates namespaces. Fixed trusted setpriv drops payload
+    # host identity, groups and all capabilities before any Node/Codex execution.
     # Do not weaken host user-namespace restrictions to run the payload.
-    args = ['/usr/bin/bwrap', '--die-with-parent', '--new-session', '--unshare-all',
-            '--uid', str(user.pw_uid), '--gid', str(user.pw_gid), '--cap-drop', 'ALL']
+    args = ['/usr/bin/bwrap', '--die-with-parent', '--new-session', '--unshare-ipc', '--unshare-pid', '--unshare-uts',
+            '--uid', '0', '--gid', '0']
     if db_pid is not None:
         if not isinstance(db_pid, int) or db_pid <= 1:
             raise ValueError('invalid disposable DB namespace')
-        args = ['/usr/bin/nsenter', '--target', str(db_pid), '--net', '--'] + args + ['--share-net']
+        args = ['/usr/bin/nsenter', '--target', str(db_pid), '--net', '--'] + args
+    else:
+        args += ['--unshare-net']
     for path in ('/usr', '/bin', '/lib', '/lib64'):
         if Path(path).exists():
             args += ['--ro-bind', path, path]
-    args += ['--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp', '--tmpfs', '/home',
+    args += ['--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp', '--chmod', '1777', '/tmp',
+             '--tmpfs', '/work', '--chmod', '0777', '/work', '--tmpfs', '/home',
              '--dir', '/home/qa', '--ro-bind', str(INSTALL), '/qa-tools',
              '--ro-bind', str(source), '/source', '--ro-bind', str(DEPENDENCIES / app / 'node_modules'), '/source/node_modules']
     for part in ('apps/' + app, 'packages/contracts'):
@@ -292,14 +400,14 @@ def sandbox(source, app, account, db_pid=None):
     # Administrator creates these empty mountpoints in the dependency snapshot.
     for prefix in ('/source/node_modules', '/source/apps/' + app + '/node_modules'):
         for cache in ('.vite', '.vite-temp'):
-            args += ['--tmpfs', prefix + '/' + cache]
+            args += ['--tmpfs', prefix + '/' + cache, '--chmod', '0777', prefix + '/' + cache]
     args += ['--chdir', '/source/apps/' + app, '--clearenv',
              '--setenv', 'PATH', '/qa-tools/node/bin:/usr/bin:/bin', '--setenv', 'HOME', '/home/qa',
              '--setenv', 'NODE_ENV', 'test', '--setenv', 'LANG', 'C.UTF-8', '--setenv', 'CI', '1']
     if db_pid is not None:
         args += ['--setenv', 'DATABASE_URL', 'postgresql://qa:disposable-only@127.0.0.1:5432/gobadminton_friends_s1_disposable',
                  '--setenv', 'RUN_DB_INTEGRATION', '1']
-    return args + ['--']
+    return args + ['--'] + payload_drop(user)
 
 
 def suite_commands(app):
@@ -399,28 +507,65 @@ def failure(job, log, outcome, exit_code):
         contract.immutable_write(path, contract.canonical(payload))
 
 
+def credential_metadata(info, *, uid, gid, directory=False, symlink=False):
+    expected = 0o700 if directory else 0o600
+    kind = stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode)
+    if (symlink or not kind or info.st_uid != uid or info.st_gid != gid
+            or stat.S_IMODE(info.st_mode) != expected or not directory and info.st_nlink != 1):
+        raise ValueError('dedicated reviewer private credential ownership/type/mode refused')
+
+
+def credential_account(value):
+    # Hash non-secret account identity only. Never return/export token bytes.
+    if (not isinstance(value, dict) or value.get('auth_mode') != 'chatgpt'
+            or not isinstance(value.get('tokens'), dict)
+            or not isinstance(value['tokens'].get('account_id'), str)
+            or not value['tokens']['account_id']
+            or not isinstance(value['tokens'].get('refresh_token'), str)
+            or not value['tokens']['refresh_token']):
+        raise ValueError('authorized native ChatGPT reviewer credential shape required')
+    return contract.digest({'auth_mode': 'chatgpt', 'account_id': value['tokens']['account_id']})
+
+
+def reviewer_credentials(user, policy):
+    # Native CLI persists refresh in its own private home. Ancestors remain root
+    # controlled; neither source nor model gets a writable filesystem-policy root.
+    for parent in AUTH.parents:
+        protected(parent, True)
+    credential_metadata(AUTH.lstat(), uid=user.pw_uid, gid=user.pw_gid, directory=True, symlink=AUTH.is_symlink())
+    path = AUTH / 'auth.json'
+    credential_metadata(path.lstat(), uid=user.pw_uid, gid=user.pw_gid, symlink=path.is_symlink())
+    if path.stat().st_size > 65536:
+        raise ValueError('reviewer credential size refused')
+    expected = policy.get('reviewer_account_sha256')
+    contract.sha(expected)
+    if credential_account(json.loads(path.read_bytes())) != expected:
+        raise ValueError('reviewer authenticated account differs from administrator binding')
+
+
 def review_sandbox(source, root, output_dir, user):
     # Read-only Codex itself is additionally OS-isolated: no writer homes/SSH,
     # root policy, live project DB credentials, Docker socket or source writes.
     if user.pw_uid == 0:
         raise ValueError('reviewer payload must not be root')
-    args = ['/usr/bin/bwrap', '--die-with-parent', '--new-session', '--unshare-all', '--share-net',
-            '--uid', str(user.pw_uid), '--gid', str(user.pw_gid), '--cap-drop', 'ALL']
+    args = ['/usr/bin/bwrap', '--die-with-parent', '--new-session', '--unshare-ipc', '--unshare-pid', '--unshare-uts',
+            '--uid', '0', '--gid', '0']
     for path in ('/usr', '/bin', '/lib', '/lib64'):
         if Path(path).exists():
             args += ['--ro-bind', path, path]
     for path in ('/etc/resolv.conf', '/etc/hosts', '/etc/ssl/certs'):
         if Path(path).exists():
             args += ['--ro-bind', path, path]
-    args += ['--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp', '--tmpfs', '/home', '--dir', '/home/qa',
+    args += ['--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp', '--chmod', '1777', '/tmp',
+             '--tmpfs', '/home', '--dir', '/home/qa',
              '--ro-bind', str(INSTALL), '/qa-tools', '--ro-bind', str(source), '/source',
              '--dir', '/evidence', '--ro-bind', str(root / 'review-input.json'), '/evidence/review-input.json',
              '--ro-bind', str(root / 'tests.log'), '/evidence/tests.log',
-             '--ro-bind', str(AUTH / 'auth.json'), '/home/qa/auth.json',
+             '--bind', str(AUTH), '/home/qa',
              '--bind', str(output_dir), '/output', '--clearenv', '--setenv', 'HOME', '/home/qa',
              '--setenv', 'CODEX_HOME', '/home/qa', '--setenv', 'PATH', '/qa-tools/node/bin:/usr/bin:/bin',
              '--setenv', 'LANG', 'C.UTF-8', '--chdir', '/source', '--']
-    return args
+    return args + payload_drop(user)
 
 
 def atomic_policy(policy):
@@ -548,13 +693,17 @@ def execute(qa_id):
         raise ValueError('dedicated administrator-owned QA job required')
     protected(Path(__file__).resolve()); protected(Path(contract.__file__).resolve())
     protected(INSTALL, True); protected(EVIDENCE, True)
-    protected(AUTH, True); protected(DEPENDENCIES, True)
+    protected(DEPENDENCIES, True)
     policy = contract.protected_json(EVIDENCE / 'policy.json')
     if policy.get('owner_event') != access.OWNER_EVENT:
         raise ValueError('administrator Owner-bound reviewer policy missing')
     reviewer = policy.get('clean_reviewer_id')
     if reviewer != 'clean-qa-reviewer-v001' or reviewer not in policy['reviewers']:
         raise ValueError('dedicated reviewer authorization missing')
+    reviewer_user = pwd.getpwnam('gobadminton-clean-qa-reviewer')
+    if reviewer_user.pw_uid == 0:
+        raise ValueError('reviewer native credential principal must not be root')
+    reviewer_credentials(reviewer_user, policy)
     queue = regular_json(RUNNER / 'backlog.json')
     producer_id = SUITES[qa_id][0] if qa_id in SUITES else ''
     own = regular_json(RUNNER / 'receipts' / (producer_id + '.json'))
@@ -589,7 +738,7 @@ def execute(qa_id):
         raise ValueError('actual Git source tree mismatch')
     # Publisher's protected PUBLISHED record is the exact remote observation.
     # A bounded local bundle import need not create refs/remotes/origin/*.
-    for item in [NODE, PNPM, CODEX, AUTH / 'auth.json', *DEPENDENCIES.rglob('*')]:
+    for item in [NODE, PNPM, CODEX, *DEPENDENCIES.rglob('*')]:
         if not item.is_symlink():
             protected(item)
     dependencies = tree_sha(DEPENDENCIES / app)
@@ -608,8 +757,9 @@ def execute(qa_id):
         count = 0
         with disposable_database() if app == 'api' else contextlib.nullcontext((None, 'none')) as (db_pid, image):
             environment = {'adapter_sha': file_sha(Path(__file__)), 'app': app, 'image': image,
-                           'sandbox': 'bwrap-unshare-all', 'source_only': True,
+                           'sandbox': 'bwrap-fixed-host-identity-map', 'source_only': True,
                            'codex_sha': file_sha(CODEX), 'bwrap_sha': file_sha(Path('/usr/bin/bwrap')),
+                           'payload_drop_sha': file_sha(Path('/usr/bin/setpriv')),
                            'verifier_sha': file_sha(Path(contract.__file__))}
             job = {'source_sha': identity['candidate_sha'], 'source_tree': identity['candidate_tree'],
                    'tests_sha': tests_digest, 'dependencies_sha': dependencies, 'node_sha': file_sha(NODE),
@@ -642,7 +792,7 @@ def execute(qa_id):
         (root / 'tests.log').write_bytes(logs); (root / 'tests.log').chmod(0o444)
         output_path = root / 'reviewer-output.json'
         # Dedicated reviewer auth only. CLI host writes its final output; model sandbox is read-only.
-        user = pwd.getpwnam('gobadminton-clean-qa-reviewer')
+        user = reviewer_user
         if user.pw_uid == 0 or user.pw_uid == pwd.getpwnam('gobadminton-clean-qa-test').pw_uid:
             raise ValueError('reviewer/test identities not independent')
         output_dir = root / 'review-output'; output_dir.mkdir(); os.chown(output_dir, user.pw_uid, user.pw_gid)
@@ -658,6 +808,7 @@ def execute(qa_id):
         review_cmd = review_sandbox(source, root, output_dir, user) + reviewer_command(app, prompt)
         code, review_log = run(review_cmd, timeout=1800, on_start=lambda pid: reviewer_started(
             qa_id, pid, attempt=attempt, identity=identity, model=MODELS[app]))
+        reviewer_credentials(user, policy)  # Refresh may change tokens, never account/permissions.
         if code or output_path.is_symlink() or not output_path.is_file() or output_path.stat().st_size > 65536:
             failure(job, bytes(logs) + b'\nREVIEW\n' + review_log, 'ENV_BLOCKED', code or 1)
             raise ValueError('independent reviewer process failed')
