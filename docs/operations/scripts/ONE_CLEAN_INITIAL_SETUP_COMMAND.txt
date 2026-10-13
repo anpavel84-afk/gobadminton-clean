@@ -1,0 +1,4 @@
+Run once as root on original Germany vmi3510488, using the Owner's administrative console.
+This installs verified source with preimage checks, backup and rollback. It does not launch Codex manually or fabricate commissioning completion.
+
+f=$(mktemp /tmp/gobadminton-initial-XXXXXX.py) && curl -fsSL 'https://raw.githubusercontent.com/anpavel84-afk/gobadminton-clean/23ef14ad46562869906c8ecbf4dc63a9e2d640f1/docs/operations/scripts/owner-clean-initial-setup-20261013.py' -o "$f" && printf '%s  %s\n' 'ce7f66bbe6235e891fa24e962d6fc89cafc30af9d427a9a5e5d011301720d7e6' "$f" | sha256sum -c - && python3 "$f"
