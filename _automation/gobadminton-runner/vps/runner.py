@@ -2489,13 +2489,33 @@ def launch_agent(cfg: dict[str, Any], task: dict[str, Any], prompt: str) -> subp
     if executor == "codex" and not model:
         model = str(cfg.get("codex_default_model") or "gpt-6-sol").strip()
     sandbox = str(task.get("sandbox") or "workspace").strip().lower()
+    clean = cfg.get("project_repo") == "anpavel84-afk/gobadminton-clean"
     workspace = str(task.get("_workspace") or cfg["workspace"])
-    worktrees = str(cfg.get("worktrees_root") or (Path(str(cfg["workspace"])).parent / "worktrees"))
+    worktrees = str(cfg.get("worktrees_root") or
+                    (Path(str(cfg["workspace"])).parent / "worktrees"))
+    if clean and sandbox != "read-only" and not task.get("_workspace"):
+        raise RuntimeError("clean source producer must have an isolated worktree")
+    if clean and task.get("_workspace"):
+        task_path = Path(workspace).resolve()
+        base = Path(worktrees).resolve()
+        if (task_path.parent != base or task_path == base
+                or Path(workspace).is_symlink()):
+            raise RuntimeError("clean task worktree escapes dedicated task root")
     env = dict(os.environ)
-    prefixes = [str(cfg.get("node_bin") or "").strip(), str(cfg.get("local_bin") or "").strip()]
+    prefixes = [
+        str(cfg.get("node_bin") or
+            ("/home/agentagency-dev/.local/node-v24.21.0/bin" if clean else "")).strip(),
+        str(cfg.get("local_bin") or
+            ("/home/agentagency-dev/.local/bin" if clean else "")).strip(),
+    ]
     prefixes = [x for x in prefixes if x]
     if prefixes:
         env["PATH"] = os.pathsep.join(prefixes + [env.get("PATH", "")])
+
+    if clean and sandbox == "full":
+        raise RuntimeError("clean executor full sandbox bypass is not authorized")
+    if clean and executor != "codex":
+        raise RuntimeError("clean DEV executor requires scoped Codex, not Cursor")
 
     if executor == "cursor":
         cli = str(cfg.get("cursor_agent") or "") or (shutil.which("agent") or shutil.which("cursor-agent") or "")
@@ -2532,7 +2552,14 @@ def launch_agent(cfg: dict[str, Any], task: dict[str, Any], prompt: str) -> subp
                        "that message; it is not an independently authorized root QA "
                        "receipt. Failure to prove a reviewer/job means BLOCKED.")
         else:
-            cmd += ["--approve-for-me", "--add-dir", str(ROOT), "--add-dir", worktrees]
+            if clean:
+                # Host CLI captures final JSON. Model cannot write Runner state
+                # or sibling worktrees via --add-dir.
+                cmd += ["--approve-for-me", "--output-last-message",
+                        str(readonly_receipt_path(task))]
+            else:
+                cmd += ["--approve-for-me", "--add-dir", str(ROOT),
+                        "--add-dir", worktrees]
         if model:
             cmd += ["--model", model]
         if effort in {"low", "medium", "high", "xhigh", "extra_high"}:
