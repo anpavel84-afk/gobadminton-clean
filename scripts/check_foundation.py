@@ -93,6 +93,48 @@ def dereference(document: dict, node: dict) -> dict:
     return node
 
 
+# Owner direct, Clean issue #23: exact existing proof/bodyless operations only.
+ADMIN_PROOF_ROUTES = {
+    "/admin/auth/{provider}/start",
+    "/admin/auth/webauthn/options",
+    "/admin/auth/webauthn/verify",
+}
+BODYLESS_DELETES = {
+    "/me/linked-providers/{provider}", "/me/sessions/{sessionId}", "/me/avatar",
+}
+
+
+def admin_proof_exemption(document: dict, route: str, method: str,
+                          operation: dict, headers: dict) -> bool:
+    if (method != "post" or route not in ADMIN_PROOF_ROUTES
+            or operation.get("x-auth-challenge-protocol") != "admin-bound-single-use-v1"):
+        return False
+    origin = headers.get("origin", {})
+    if (origin.get("required") is not True
+            or origin.get("schema", {}).get("type") != "string"
+            or origin.get("description") != "Exact isolated ADMIN_ORIGIN; consumer origins rejected."):
+        return False
+    if route == "/admin/auth/{provider}/start":
+        return operation.get("security") == []
+    # Explicit OR alternatives, never inherited consumer credentials or anonymous access.
+    security = operation.get("security")
+    if (not isinstance(security, list) or len(security) != 2
+            or {"AdminSessionCookie": []} not in security
+            or {"AdminMfaTicket": []} not in security
+            or headers.get("x-csrf-token", {}).get("required") is not True):
+        return False
+    schemes = document.get("components", {}).get("securitySchemes", {})
+    return all(
+        all(schemes.get(name, {}).get(key) == value for key, value in {
+            "type": "apiKey", "in": "cookie", "name": cookie,
+        }.items())
+        for name, cookie in (
+            ("AdminSessionCookie", "__Host-gb_admin_session"),
+            ("AdminMfaTicket", "__Host-gb_admin_mfa"),
+        )
+    )
+
+
 def markdown_errors(path: Path) -> list[str]:
     errors: list[str] = []
     text = path.read_text(encoding="utf-8")
@@ -196,12 +238,15 @@ def contract_errors(document: dict) -> tuple[list[str], int]:
                     read_post = method == "post" and route in {"/players/query", "/players/query/map"} and operation.get("x-operation-kind") == "authenticated-read"
                     if read_post and "idempotency-key" in headers:
                         errors.append(f"{label}: private read must not require a durable command receipt")
-                    if not read_post and not email_proof and not headers.get("idempotency-key", {}).get("required"):
+                    if (not read_post and not email_proof
+                            and not admin_proof_exemption(document, route, method, operation, headers)
+                            and not headers.get("idempotency-key", {}).get("required")):
                         errors.append(f"{label}: business mutation needs required Idempotency-Key")
                     if "x-csrf-token" not in headers:
                         errors.append(f"{label}: cookie mutation needs declared CSRF behavior")
                     body = operation.get("requestBody", {})
-                    if not body.get("required"):
+                    bodyless_delete = method == "delete" and route in BODYLESS_DELETES and "requestBody" not in operation
+                    if not bodyless_delete and not body.get("required"):
                         errors.append(f"{label}: expected explicit required command body")
                 for choice in operation.get("security", document.get("security", [])):
                     for scheme in choice:

@@ -20,6 +20,39 @@ Public paths имеют `security: []`. Получение Game допускае
 
 Все бизнес-mutations требуют `Idempotency-Key` 16–128 символов. Scope записи — actor + operation + key; hash normalized payload (включая target resource identity) исключает reuse с другим содержимым. TTL default 24 часа.
 
+### Bounded Foundation scanner exceptions — Clean issue #23 (2026-10-14)
+
+Provenance: Owner direct source-only assignment for
+[Clean issue #23](https://github.com/anpavel84-afk/gobadminton-clean/issues/23),
+base `f0b085c9c0608c29bc5c0410fe5908576ab629df`; the declarations already exist
+in `packages/contracts/openapi.json` at that revision. This records scanner scope,
+not a new implementation, independent QA, release approval or PROD authorization.
+
+Only `POST /admin/auth/{provider}/start`, `POST /admin/auth/webauthn/options`
+and `POST /admin/auth/webauthn/verify` may omit Idempotency-Key in this check:
+they use the existing `x-auth-challenge-protocol: admin-bound-single-use-v1`
+proof ceremony rather than a replayable business-command receipt. The exemption
+requires the exact route and marker plus required string `Origin` with the existing
+`Exact isolated ADMIN_ORIGIN; consumer origins rejected.` declaration. OpenAPI
+has no literal Origin value here; actual Origin validation remains a runtime duty.
+Start requires explicit `security: []` and retains declared CSRF behavior.
+Options/verify require explicit OR alternatives `AdminSessionCookie: []` and
+`AdminMfaTicket: []`, bound respectively to apiKey cookies
+`__Host-gb_admin_session` and `__Host-gb_admin_mfa`, and required `X-CSRF-Token`.
+Wrong/missing declarations invalidate the exemption; the marker alone grants none.
+Required command-body and existing security checks remain in force.
+
+Only bodyless `DELETE /me/linked-providers/{provider}`,
+`DELETE /me/sessions/{sessionId}` and `DELETE /me/avatar` may omit requestBody:
+the target is identified by the route/current actor (avatar also declares the
+profile-version header), so an artificial command body is unnecessary. Their
+Idempotency-Key and declared CSRF checks remain blocking. A supplied requestBody
+must still be required; other POST/PUT/PATCH/DELETE body rules remain unchanged.
+The five existing Idempotency-Key findings remain unresolved by this assignment.
+Verification: dependency-free `python3 scripts/test_check_foundation.py` and
+`python3 scripts/check_foundation.py`; the latter is expected to exit 1 with exactly
+five Idempotency-Key findings, zero body findings and zero broken-doc findings.
+
 Протокол идемпотентности (S-00A / ADR-SOCIAL-003): в одной бизнес-транзакции сначала insert-first UNIQUE reservation (`reservation_state=processing`), затем авторизация и команда, затем `completed` receipt перед COMMIT. ROLLBACK снимает reservation вместе с эффектами. Параллельный waiter блокируется на UNIQUE; после commit победителя читает completed receipt. Timeout ожидания → `409 COMMAND_IN_PROGRESS` с `Retry-After` (не raw unique-violation 500). Same key / другое тело → `409 IDEMPOTENCY_KEY_REUSED`. Same key / то же тело → сохранённый status/body только после **текущей** actor/resource authorization. Отозванный менеджер/неактивный аккаунт не получает cached private success. TTL cleanup удаляет только expired `completed`, не active `processing`. До 3 технических DB-retry (deadlock/transient) с тем же ключом; business conflicts (capacity/version/authz) не ретраятся.
 
 `expectedVersion` относится к изменяемому ресурсу. Game version увеличивается при изменениях агрегата, включая изменение занятых мест (`pending→confirmed`, `confirmed→withdrawn/removed`, publish/cancel и прочие state/terms changes); pending-only request/reapply/reject/expire **не** увеличивают Game.version. Participation имеет отдельную version. Для новой заявки `expectedGameVersion` привязывает согласие к прочитанному Game snapshot. При stale version — `409 VERSION_CONFLICT`, получить свежие данные и явно повторить, не молча согласиться с новыми условиями. Confirm проверяет Participation version и текущую Game capacity в одной транзакции; required `expectedGameVersion` в confirm body **не** добавляется. Семантический diff условий может позднее получить отдельную revision через ADR.
