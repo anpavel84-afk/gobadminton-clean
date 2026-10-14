@@ -89,7 +89,8 @@ export class UnifiedPlayersService {
     }
     const input = parsed.data;
     const devTestAllowed = devMoscowFixturesEnabled(this.env);
-    if (initial && "filters" in input && input.filters.cityId === MOSCOW_CITY_ID && mode === "live" && devTestAllowed) {
+    const devInitial = initial && "filters" in input && input.filters.cityId === MOSCOW_CITY_ID && mode === "live" && devTestAllowed;
+    if (devInitial) {
       const client = await this.pool.connect();
       try {
         await client.query("BEGIN");
@@ -98,6 +99,9 @@ export class UnifiedPlayersService {
         await this.fence.assertActiveConsumerInTransaction(client, { actorId: viewerId, sessionId });
         const eligible = await client.query("SELECT 1 FROM player_social_profiles WHERE user_id=$1 AND NOT social_eligible", [viewerId]);
         if (eligible.rowCount) throw forbidden("VIEWER_RESTRICTED", "Социальный профиль недоступен");
+        // Reserve the existing initial-query budget BEFORE the shared fixture
+        // advisory lock. A 429 must never mutate or refresh shared test peers.
+        await this.budgets.consumeUnified(client, viewerId, true, new Date());
         await refreshDevMoscowPeers(client, this.env, this.fence, { actorId: viewerId, sessionId });
         await this.fence.assertActiveConsumerInTransaction(client, { actorId: viewerId, sessionId });
         // Deferred epoch bump commits BEFORE the RR snapshot, never after its final fence.
@@ -110,7 +114,9 @@ export class UnifiedPlayersService {
       } finally { client.release(); }
     }
     return this.read(viewerId, sessionId, async (client, sessionExpires) => {
-      await this.budgets.consumeUnified(client, viewerId, initial, new Date());
+      // The DEV initial request already consumed its budget in the short,
+      // fenced fixture transaction; never double-charge in the RR read.
+      if (!devInitial) await this.budgets.consumeUnified(client, viewerId, initial, new Date());
       let context: UnifiedContext;
       let cursor: UnifiedCursor | null = null;
       const revision = (

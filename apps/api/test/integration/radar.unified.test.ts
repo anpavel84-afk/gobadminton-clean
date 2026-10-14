@@ -1343,6 +1343,14 @@ dbDescribe("Unified Players / isolated synthetic PostGIS and HTTP", () => {
       const expiredClient = await pool.connect();
       try { await expect(redeemUnifiedProof(expiredClient,proof,false,false,env)).rejects.toThrow(); }
       finally { expiredClient.release(); }
+      // Adversarial over-budget request must fail before obtaining the shared
+      // fixture lock: even expired peers may not be refreshed by a 429.
+      await pool.query("UPDATE radar_presences SET foreground_until=clock_timestamp()-interval '1 second' WHERE user_id=ANY($1::uuid[])", [DEV_MOSCOW_PEER_IDS]);
+      const before429 = (await pool.query("SELECT user_id,activation_id,foreground_until FROM radar_presences WHERE user_id=ANY($1::uuid[]) ORDER BY user_id", [DEV_MOSCOW_PEER_IDS])).rows;
+      const revision429 = (await pool.query("SELECT revision::text AS revision FROM players_query_revision WHERE singleton")).rows[0].revision;
+      await expect(service.query(viewer.id,viewer.issued.session.id,initial())).rejects.toMatchObject({status:429});
+      expect((await pool.query("SELECT user_id,activation_id,foreground_until FROM radar_presences WHERE user_id=ANY($1::uuid[]) ORDER BY user_id", [DEV_MOSCOW_PEER_IDS])).rows).toEqual(before429);
+      expect((await pool.query("SELECT revision::text AS revision FROM players_query_revision WHERE singleton")).rows[0].revision).toBe(revision429);
       env.APP_ENV = "prod";
       await clearBudget(viewer);
       expect((await service.query(viewer.id,viewer.issued.session.id,initial())).items.some(r=>r.player.displayName.startsWith("TEST"))).toBe(false);
