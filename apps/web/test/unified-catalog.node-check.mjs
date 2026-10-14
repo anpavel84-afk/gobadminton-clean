@@ -80,6 +80,22 @@ test('target private lease expiry clears selected preview and map pins before qu
   assert.deepEqual(c.view.rows, []);
   assert.equal(c.view.stale, true);
 });
+test('late map API response is rejected if a target proof expires before response arrives', async () => {
+  let time = now, calls = 0;
+  const late = { ...radarRow('late'), radar: { validUntil: new Date(now + 10500).toISOString() } };
+  const c = new UnifiedDirectoryController(async () => ({
+    ok: true, data: ++calls === 1 ? snapshot([], 0) : { ...snapshot([late], 1), mapPage: { hasMore: false, nextMapCursor: null } }
+  }), () => time);
+  c.bind({ id:'viewer', csrfToken:'csrf' });
+  await c.query({ cityId:'moscow' });
+  time += 10600;
+  await c.map();
+  assert.equal(c.view.snapshot, null);
+  assert.deepEqual(c.view.pins, []);
+  assert.equal(c.view.selected, null);
+  assert.equal(c.view.preview, null);
+  assert.equal(c.view.stale, true);
+});
 test('private A-B-A and OFF/ON fence late responses and keep 30s budget', async () => {
   let time = now, calls = 0, resolve;
   const controller = new UnifiedDirectoryController(async () => {

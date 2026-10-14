@@ -173,7 +173,14 @@ export class UnifiedDirectoryController {
     this.set({ snapshot: result.data, rows: result.data.items, notice: result.data.query.originState === "none" ? "Участники Radar по городу. Расстояние неизвестно." : "Расстояние приблизительное, по опубликованным геопозициям." });
   }
   private acceptable(data: UnifiedSnapshot | UnifiedMapSnapshot) {
-    return data.contractVersion === UNIFIED_WIRE && data.cityId === this.filters?.cityId && Date.parse(data.validUntil) > this.clock();
+    const now = this.clock();
+    // A queryRef can outlive an individual participant's Radar lease. Refuse
+    // entire late response before admitting even one expired private marker.
+    return data.contractVersion === UNIFIED_WIRE &&
+      data.cityId === this.filters?.cityId &&
+      Number.isFinite(Date.parse(data.validUntil)) && Date.parse(data.validUntil) > now &&
+      data.items.every(row => !row.radar ||
+        (Number.isFinite(Date.parse(row.radar.validUntil)) && Date.parse(row.radar.validUntil) > now));
   }
   async refresh() { if (this.filters && !this.pending) await this.query(this.filters, this.origin, this.activationOriginKey); }
   async more() {
