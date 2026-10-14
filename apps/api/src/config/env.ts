@@ -172,6 +172,19 @@ export const envSchema = z
       .transform((value) => value === "1" || value === "true"),
   })
   .superRefine((raw, ctx) => {
+    if (raw.FRIENDS_INTERNAL_ENABLED === "1" && (raw.NODE_ENV === "production" || raw.APP_ENV === "prod")) {
+      const dev = ["mvp", "stage"].includes(raw.APP_ENV)
+        && raw.PUBLIC_WEB_ORIGIN === "https://dev.gobadminton.ru"
+        && raw.PUBLIC_API_ORIGIN === "https://dev.gobadminton.ru";
+      const bounded = raw.FRIENDS_REQUEST_TTL_SECONDS !== undefined && raw.FRIENDS_REQUEST_TTL_SECONDS <= 30 * 86400
+        && raw.FRIENDS_RATE_WINDOW_SECONDS !== undefined && raw.FRIENDS_RATE_WINDOW_SECONDS <= 86400
+        && raw.FRIENDS_SEND_LIMIT !== undefined && raw.FRIENDS_SEND_LIMIT <= 100
+        && raw.FRIENDS_RECEIVE_LIMIT !== undefined && raw.FRIENDS_RECEIVE_LIMIT <= 100;
+      if (!dev || !raw.SOCIAL_DIRECTORY_ENABLED || !bounded) {
+        ctx.addIssue({code:"custom", path:["FRIENDS_INTERNAL_ENABLED"],
+          message:"Friends production runtime requires exact DEV origins, mvp/stage, directory and bounded explicit TTL/rate limits; PROD forbidden"});
+      }
+    }
     if (raw.RADAR_DEV_TEST_OWNER_USER_ID && (!["mvp", "stage"].includes(raw.APP_ENV) || raw.PUBLIC_WEB_ORIGIN !== "https://dev.gobadminton.ru" || raw.PUBLIC_API_ORIGIN !== "https://dev.gobadminton.ru")) {
       ctx.addIssue({code:"custom",path:["RADAR_DEV_TEST_OWNER_USER_ID"],message:"Moscow test capability requires exact DEV API/web origins and mvp/stage; forbidden in PROD"});
     }

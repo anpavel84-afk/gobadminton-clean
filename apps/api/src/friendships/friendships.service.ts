@@ -41,7 +41,7 @@ export class FriendshipsService {
       await client.query("SELECT user_id FROM player_social_profiles WHERE user_id=$1 FOR SHARE", [id]);
     }
     const r = await client.query<Availability>(`SELECT p.*, u.status,
-      ${unrestrictedSql(this.env.USER_RESTRICTIONS_INTERNAL_ENABLED, "p.user_id", ["account.access", "profile.public", "social.directory"])} AS unrestricted
+      ${unrestrictedSql(this.env.USER_RESTRICTIONS_INTERNAL_ENABLED || (this.env.NODE_ENV === "production" && friendsEnabled(this.env)), "p.user_id", ["account.access", "profile.public", "social.directory"])} AS unrestricted
       FROM player_social_profiles p JOIN users u ON u.id=p.user_id WHERE p.user_id=ANY($1::uuid[])`, [ids]);
     return r.rows;
   }
@@ -291,7 +291,7 @@ export class FriendshipsService {
         WHERE ${query.view === "accepted" ? "(f.requester_user_id=$1 OR f.recipient_user_id=$1) AND f.state='accepted'" : `f.${field}=$1 AND f.state='pending'`}
         AND ($2::uuid IS NULL OR f.id>$2) AND f.requested_at<=$3
         AND ($4::text IS NULL OR (p.directory_visible AND p.social_eligible AND p.contact_policy='requests'
-          AND u.status='active' AND ${unrestrictedSql(this.env.USER_RESTRICTIONS_INTERNAL_ENABLED, "p.user_id", ["account.access", "profile.public", "social.directory"])}
+          AND u.status='active' AND ${unrestrictedSql(this.env.USER_RESTRICTIONS_INTERNAL_ENABLED || (this.env.NODE_ENV === "production" && friendsEnabled(this.env)), "p.user_id", ["account.access", "profile.public", "social.directory"])}
           AND NOT EXISTS(SELECT 1 FROM user_blocks b WHERE b.pair_id=f.pair_id)
           AND strpos(lower(p.display_name),lower($4))>0)) ORDER BY f.id LIMIT $5`,
         [actor,after,asOf,query.q || null,query.limit+1]);
