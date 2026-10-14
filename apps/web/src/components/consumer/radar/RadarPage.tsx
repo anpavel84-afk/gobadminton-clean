@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import dynamic from "next/dynamic";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { MOSCOW_BUNDLE, candidateMapConfigAllowed } from "../../../lib/radar-map-assets";
 import { distanceText } from "../../../lib/unified-directory";
 import { Button } from "../Button";
@@ -15,6 +15,17 @@ export function RadarPage() {
   const [failed, setFailed] = useState(false); const [listOpen, setListOpen] = useState(false); const [expanded, setExpanded] = useState(false);
   const [candidate, setCandidate] = useState(false); const sheet = useRef<HTMLElement>(null); const touchY = useRef<number | null>(null); const trigger = useRef<HTMLElement | null>(null);
   const snapshot = view.snapshot;
+  // Keep the map marker identity stable between one-second header ticks;
+  // the exact-deadline timer below invalidates this array when a lease expires.
+  const safeMapPins = useMemo(() => view.pins.filter(row => row.radar &&
+    Date.parse(row.radar.validUntil) > Date.now()), [view.pins]);
+  const privateMapDeadline = Math.min(...view.pins.filter(row => row.radar)
+    .map(row => Date.parse(row.radar!.validUntil)), Infinity);
+  useEffect(() => {
+    if (!controller || !Number.isFinite(privateMapDeadline)) return;
+    const timer = window.setTimeout(() => controller.tick(), Math.max(0, privateMapDeadline - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [controller, privateMapDeadline]);
   const config = useRadarConfig(); const { filters } = useDirectoryFilters();
   const cityId = filters.cityId || config?.cities.find(c => c.cityId === MOSCOW_BUNDLE.cityId)?.cityId;
   const activationId = session.status?.state === "active" && session.status.contractVersion === "players-unified-radar-v1" && !session.pendingStop ? session.status.activationId : null;
@@ -47,7 +58,7 @@ export function RadarPage() {
   function close() { controller?.close(); setListOpen(false); setExpanded(false); }
   return <main id="gb-main" className="gb-consumer g2-radar-map fr3" aria-label="Карта участников Radar">
     <header className="g2-map-header"><Link className="g2-map-back" href="/players">← К списку</Link><span><strong>Участники Radar</strong></span><RadarStatusAffordance /></header>
-    {mapped ? <GeographicRadarMap controller={controller} rows={view.pins} selected={view.selected} onSelect={row => { trigger.current = document.activeElement as HTMLElement; setListOpen(false); void controller.select(row); }} onUnavailable={() => setFailed(true)} /> : <section className="g2-map-fallback"><h1>{failed ? "Не удалось загрузить карту" : !config ? "Проверяем доступность карты…" : "Карта пока недоступна"}</h1><p>{failed ? "Проверьте подключение к картографическим ресурсам." : "Карта доступна для Москвы только на DEV после входа."}</p><Button href="/players">К списку игроков</Button></section>}
+    {mapped ? <GeographicRadarMap controller={controller} rows={safeMapPins} selected={view.selected} onSelect={row => { trigger.current = document.activeElement as HTMLElement; setListOpen(false); void controller.select(row); }} onUnavailable={() => setFailed(true)} /> : <section className="g2-map-fallback"><h1>{failed ? "Не удалось загрузить карту" : !config ? "Проверяем доступность карты…" : "Карта пока недоступна"}</h1><p>{failed ? "Проверьте подключение к картографическим ресурсам." : "Карта доступна для Москвы только на DEV после входа."}</p><Button href="/players">К списку игроков</Button></section>}
     {mapped && <><div className="g2-map-summary"><button aria-expanded={listOpen} aria-controls="g2-map-panel" onClick={() => { trigger.current = document.activeElement as HTMLElement; if (!listOpen) controller.close(); setListOpen(!listOpen); }}>{view.busy ? "Загружаем игроков…" : `На карте: ${view.pins.length} из ${snapshot?.totals.radarTotal ?? 0}`}</button><small>Приблизительные геопозиции. {view.mapPage?.hasMore ? "Показана часть участников." : ""}</small>{view.mapPage?.nextMapCursor && <Button variant="outline" disabled={view.busy} onClick={() => void controller.map(true)}>Следующие точки</Button>}{view.notice && <small role="status">{view.notice}</small>}</div>
       {!view.busy && !view.pins.length && <p className="g2-map-empty" role="status">{view.stale || !snapshot ? "Обновляем участников Radar. Карта города доступна." : "Нет участников с геопозицией. Обычные профили доступны в списке."}</p>}
       {(listOpen || view.selected) && <aside id="g2-map-panel" ref={sheet} tabIndex={-1} aria-label="Игроки на карте" className={`g2-map-panel ${expanded || listOpen ? "is-expanded" : ""}`} onKeyDown={e => { if (e.key === "Escape") close(); }}>
