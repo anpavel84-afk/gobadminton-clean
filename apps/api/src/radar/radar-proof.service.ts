@@ -156,7 +156,7 @@ export class RadarProofService {
         p.targetId !== input.targetUserId
       )
         unavailable();
-      await redeemUnifiedProof(client, p, true, this.env.USER_RESTRICTIONS_INTERNAL_ENABLED);
+      await redeemUnifiedProof(client, p, true, this.env.USER_RESTRICTIONS_INTERNAL_ENABLED, this.env);
       return;
     }
     const payload = parseGeographicToken(
@@ -211,7 +211,7 @@ export class RadarProofService {
       );
       if (!target.rows[0]) unavailable();
       await this.pairs.lockOrCreate(client, p.context.viewerId, p.targetId);
-      return redeemUnifiedProof(client, p, false, this.env.USER_RESTRICTIONS_INTERNAL_ENABLED);
+      return redeemUnifiedProof(client, p, false, this.env.USER_RESTRICTIONS_INTERNAL_ENABLED, this.env);
     }
     if (this.env.SOCIAL_RADAR_GEOGRAPHIC_ENABLED) {
       const geo = parseGeographicToken(

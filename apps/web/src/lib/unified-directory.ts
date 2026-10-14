@@ -4,6 +4,7 @@ import type { Me } from "./consumer-types";
 
 export const UNIFIED_WIRE = "players-unified-radar-v1" as const;
 export type RadarConfig = {
+  devMoscowTest?: { latitude: number; longitude: number; accuracyMeters: number };
   exposureMode: "live" | "synthetic_demo";
   unifiedDirectory: UnifiedCapability;
   publishingV2: { enabled: boolean };

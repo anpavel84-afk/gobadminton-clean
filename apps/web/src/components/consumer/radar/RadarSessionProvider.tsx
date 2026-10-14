@@ -6,6 +6,7 @@ import { radarHeaderStatus } from "../../../lib/radar-header";
 import { RadarController, type RadarView } from "../../../lib/radar-controller";
 import { syntheticDemoFix } from "../../../lib/radar-demo-fix";
 import { apiFetch } from "../../../lib/api-client";
+import { devMoscowFix, usesDevMoscowLocation } from "../../../lib/radar-dev-moscow";
 import { UnifiedDirectoryController, compatibleRadarConfig, type RadarConfig } from "../../../lib/unified-directory";
 import type { OwnSocialProfile } from "../../../lib/consumer-types";
 import { isAdmittedDemoCity } from "../../../lib/radar-demo-fix";
@@ -106,13 +107,14 @@ export function RadarSessionProvider({ children }: { children: ReactNode }) {
 }
 function RadarPermissionObserver() {
   const { controller, view } = useRadarSession();
+  const config = useRadarConfig();
   useEffect(() => {
-    if (!controller || view.exposureMode !== "live" || !navigator.permissions) return;
+    if (!controller || usesDevMoscowLocation(config, window.location.origin) || view.exposureMode !== "live" || !navigator.permissions) return;
     let cancelled = false; let permission: PermissionStatus | undefined;
     const changed = () => { if (permission?.state === "denied") void controller.permissionDenied(); };
     void navigator.permissions.query({ name: "geolocation" }).then(p => { if (cancelled) return; permission = p; p.addEventListener("change", changed); changed(); }).catch(() => {});
     return () => { cancelled = true; permission?.removeEventListener("change", changed); };
-  }, [controller, view.exposureMode, view.confirmedOn]);
+  }, [controller, config, view.exposureMode, view.confirmedOn]);
   return null;
 }
 export function RadarStatusAffordance() {
@@ -133,6 +135,8 @@ export function acquireRadarLocation(controller: RadarController): Promise<Radar
   const view = controller.snapshot();
   if (document.hidden || compatibleRadarConfig(controller.config)?.publishingV2.enabled !== true) return Promise.reject({ code: 2 });
   if (view.exposureMode === "synthetic_demo") return controller.usesSyntheticLocation() && view.demoCityId ? Promise.resolve(syntheticDemoFix(view.demoCityId)) : Promise.reject({ code: 2 });
+  const testFix = view.me ? devMoscowFix(compatibleRadarConfig(controller.config), window.location.origin) : null;
+  if (view.exposureMode === "live" && testFix) return Promise.resolve(testFix);
   if (view.exposureMode !== "live" || !window.isSecureContext || !navigator.geolocation) return Promise.reject({ code: 2 });
   return new Promise((resolve, reject) => navigator.geolocation.getCurrentPosition(p => resolve({ latitude: p.coords.latitude, longitude: p.coords.longitude, accuracyMeters: p.coords.accuracy, capturedAt: new Date(p.timestamp).toISOString() }), reject, { maximumAge: 0, timeout: 15000, enableHighAccuracy: false }));
 }

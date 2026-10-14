@@ -1,3 +1,4 @@
+import { devMoscowTestAllowed, devMoscowTestLocation } from "./dev-moscow-test";
 import { UNIFIED_WIRE,UNIFIED_POLICY,UNIFIED_DISCLOSURE_ID,UNIFIED_DISCLOSURE_HASH,UNIFIED_DISCLOSURE_TEXT } from "./unified-contract";
 import { Inject, Injectable } from "@nestjs/common";
 import { createHmac, randomUUID } from "node:crypto";
@@ -64,6 +65,7 @@ export class GeographicRadarService {
       const cityIds =
         mode === "live" ? [MOSCOW_CITY_ID] : [MOSCOW_CITY_ID, DEMO_SPB_CITY_ID];
       return {
+        ...(devMoscowTestAllowed(this.env, userId) && mode === "live" ? { devMoscowTest: devMoscowTestLocation } : {}),
         contractVersion: GEO_CONTRACT,
         policyVersion: GEO_POLICY,
         enabled: this.env.SOCIAL_RADAR_GEOGRAPHIC_ENABLED,

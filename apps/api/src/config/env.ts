@@ -101,6 +101,8 @@ export const envSchema = z
       .enum(["0", "1", "true", "false"])
       .optional()
       .transform((value) => value === "1" || value === "true"),
+    /** Root-only DEV opt-in; owner receives simulated GPS, authenticated viewers see TEST peers. */
+    RADAR_DEV_TEST_OWNER_USER_ID: z.uuid().optional(),
     /** Source-staged geographic cutover; default off, separate from legacy mode flags. */
     RADAR_GEOGRAPHIC_TOKEN_EPOCH: z.string().min(1).max(128).default("source-stage-v1"),
     SOCIAL_RADAR_UNIFIED_ENABLED: z.enum(["0", "1", "true", "false"]).optional().transform(value => value === "1" || value === "true"),
@@ -162,6 +164,9 @@ export const envSchema = z
       .transform((value) => value === "1" || value === "true"),
   })
   .superRefine((raw, ctx) => {
+    if (raw.RADAR_DEV_TEST_OWNER_USER_ID && (!["mvp", "stage"].includes(raw.APP_ENV) || raw.PUBLIC_WEB_ORIGIN !== "https://dev.gobadminton.ru" || raw.PUBLIC_API_ORIGIN !== "https://dev.gobadminton.ru")) {
+      ctx.addIssue({code:"custom",path:["RADAR_DEV_TEST_OWNER_USER_ID"],message:"Moscow test capability requires exact DEV API/web origins and mvp/stage; forbidden in PROD"});
+    }
     if (raw.CASES_INTERNAL_ENABLED === "1" && raw.ADMIN_INTERNAL_ENABLED !== "1") {
       ctx.addIssue({code:"custom",path:["CASES_INTERNAL_ENABLED"],message:"Cases require local internal Admin"});
     }
@@ -266,6 +271,7 @@ export const envSchema = z
       YANDEX_CLIENT_SECRET: optionalNonEmpty(raw.YANDEX_CLIENT_SECRET),
       YANDEX_REDIRECT_URI: optionalNonEmpty(raw.YANDEX_REDIRECT_URI),
       SOCIAL_DIRECTORY_ENABLED: raw.SOCIAL_DIRECTORY_ENABLED ?? false,
+      RADAR_DEV_TEST_OWNER_USER_ID: raw.RADAR_DEV_TEST_OWNER_USER_ID,
       RADAR_GEOGRAPHIC_TOKEN_EPOCH: raw.RADAR_GEOGRAPHIC_TOKEN_EPOCH,
       SOCIAL_RADAR_UNIFIED_ENABLED: raw.SOCIAL_RADAR_UNIFIED_ENABLED ?? false,
       SOCIAL_RADAR_PUBLISHING_V2_ENABLED: raw.SOCIAL_RADAR_PUBLISHING_V2_ENABLED ?? false,
