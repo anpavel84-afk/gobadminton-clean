@@ -129,8 +129,18 @@ export class UnifiedDirectoryController {
     if (result.status === 401) this.set({ mode: "ordinary", authenticationRequired: true });
   }
   tick() {
-    if (this.view.snapshot && this.clock() >= Date.parse(this.view.snapshot.validUntil)) {
-      this.origin = { kind: "none" }; this.invalidate("Список устарел. Обновите участников Radar.", true);
+    const now = this.clock();
+    const snapshotExpired = this.view.snapshot && now >= Date.parse(this.view.snapshot.validUntil);
+    // Target proof/lease may expire sooner than the enclosing 45-second
+    // private query. Never retain its selection, preview or map pins after TTL.
+    const rowExpired = [...this.view.rows, ...this.view.pins].some(row =>
+      row.radar && (!Number.isFinite(Date.parse(row.radar.validUntil)) || Date.parse(row.radar.validUntil) <= now));
+    const previewExpired = this.view.preview && (!Number.isFinite(Date.parse(this.view.preview.radar.validUntil))
+      || Date.parse(this.view.preview.radar.validUntil) <= now);
+    if (snapshotExpired || rowExpired || previewExpired) {
+      this.origin = { kind: "none" };
+      this.invalidate("Список участников Radar устарел. Обновляем данные.", true);
+      this.set({ mode: "ordinary" });
     }
   }
   async query(filters: UnifiedFilters, origin: UnifiedOriginInput = { kind: "none" }, activationKey: string | null = origin.kind === "current_activation" ? origin.activationId : null) {

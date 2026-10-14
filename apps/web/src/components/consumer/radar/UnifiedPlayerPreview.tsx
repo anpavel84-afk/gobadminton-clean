@@ -11,7 +11,12 @@ export function UnifiedPlayerPreview({ dialog = false, onClose }: { dialog?: boo
   const row = [...directory.view.pins, ...directory.view.rows].find(row => row.publicPlayerId === directory.view.selected);
   const preview = directory.view.preview;
   useEffect(() => { if (!dialog) focus.current?.focus(); }, [directory.view.selected, dialog]);
-  if (!row?.radar) return null;
+  // Rendering is also fenced, so even a delayed root ticker cannot expose a
+  // private player preview beyond the proof/consent lifetime.
+  if (!row?.radar || !directory.view.snapshot || directory.view.stale ||
+      Date.parse(directory.view.snapshot.validUntil) <= view.now ||
+      Date.parse(row.radar.validUntil) <= view.now ||
+      (preview && Date.parse(preview.radar.validUntil) <= view.now)) return null;
   const content = <div ref={focus} tabIndex={-1} className="unified-preview" onKeyDown={e => { if (e.key === "Escape") onClose(); }}>
     {directory.view.previewBusy && <p role="status">Проверяем доступность игрока…</p>}
     {preview && <><Avatar name={preview.player.displayName} avatar={preview.player.avatar} /><h2>{preview.player.displayName}</h2>{preview.player.level && <p>{formatSocialLevel(preview.player.level)}</p>}<p>{distanceText(preview.radar.distance) ?? "Расстояние неизвестно"}</p><p>Приблизительное положение · погрешность {preview.radar.geo.uncertaintyMeters} м · возраст геопозиции до {preview.radar.geo.sourceAgeSeconds} с.</p>{preview.radar.geo.quality === "degraded" && <p>Местоположение определяется неточно.</p>}{row.projection === "directory" && <Button variant="outline" href={`/players/${row.publicPlayerId}`}>Открыть профиль</Button>}{view.me && <RadarContact key={row.radar.resultRef} me={view.me} item={{ resultId: row.radar.resultId, resultRef: row.radar.resultRef, player: preview.player }} />}</>}

@@ -61,6 +61,25 @@ test('More loads unseen Radar before ordinary remainder and dedupes across Radar
   assert.equal(full.moreRadar, false); assert.equal(full.radar.length, 56);
   assert.deepEqual(ids(full.ordinary), ['normal-moscow', 'normal-kazan', 'normal-spb']);
 });
+test('target private lease expiry clears selected preview and map pins before query expiry', async () => {
+  let time = now;
+  const short = { ...radarRow('short-lived'), radar: { validUntil: new Date(now + 10000).toISOString() } };
+  const c = new UnifiedDirectoryController(async () => ({ ok: true, data: snapshot([short], 1) }), () => time);
+  c.bind({ id: 'viewer', csrfToken: 'csrf' });
+  await c.query({ cityId: 'moscow' });
+  c.view.selected = short.publicPlayerId;
+  c.view.preview = { radar: { validUntil: new Date(now + 10000).toISOString() }, player: { publicPlayerId: short.publicPlayerId } };
+  c.view.pins = [short];
+  assert(c.view.snapshot && new Date(c.view.snapshot.validUntil).getTime() > now + 10000);
+  time += 11000;
+  c.tick();
+  assert.equal(c.view.snapshot, null);
+  assert.equal(c.view.selected, null);
+  assert.equal(c.view.preview, null);
+  assert.deepEqual(c.view.pins, []);
+  assert.deepEqual(c.view.rows, []);
+  assert.equal(c.view.stale, true);
+});
 test('private A-B-A and OFF/ON fence late responses and keep 30s budget', async () => {
   let time = now, calls = 0, resolve;
   const controller = new UnifiedDirectoryController(async () => {
@@ -86,4 +105,6 @@ test('page wires preserve ordinary All cities and independent Radar geography', 
   assert.match(page, /listPlayers\(\{ cityId: cityId \|\| undefined/);
   assert.match(page, /cityId: queryCity/); assert.doesNotMatch(page, /directoryVisible|effectiveCityId|radarOn:/);
   assert.match(page, /return \(\) => \{ live = false; clearTimeout\(timer\); \}/);
+  assert.match(page, /\{availableNextCursor && <Button/);
+  assert.match(page, /Ещё участники Radar/);
 });
