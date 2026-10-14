@@ -80,7 +80,24 @@ export class AvatarService implements OnModuleInit, OnModuleDestroy {
           const journal = await client.query("SELECT 1 FROM avatar_media_gc WHERE storage_key=$1 FOR UPDATE", [key]);
           if (!journal.rowCount) throw serviceUnavailable("AVATAR_STORAGE_UNAVAILABLE", "Загрузка фото пока недоступна");
         }
-        const approvalId = key && approval && stagedBytes ? await this.moderation.bindImage(client, approval, stagedBytes) : null;
+        // The journal row lock prevents our collector from deleting this file.
+        // Read the ACTUAL staged bytes immediately before publishing, rather
+        // than trusting a buffer captured earlier. The bounded local read is
+        // necessary inside the transaction to bind disk bytes to the receipt.
+        // Missing or substituted bytes must not become a committed avatar.
+        let verifiedBytes: Buffer | undefined;
+        if (key) {
+          try {
+            verifiedBytes = await readFile(this.filename(key));
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+            throw serviceUnavailable("AVATAR_STORAGE_UNAVAILABLE", "Загрузка фото пока недоступна");
+          }
+          if (!stagedBytes || !verifiedBytes.equals(stagedBytes)) {
+            throw serviceUnavailable("AVATAR_STORAGE_UNAVAILABLE", "Загрузка фото пока недоступна");
+          }
+        }
+        const approvalId = key && approval && verifiedBytes ? await this.moderation.bindImage(client, approval, verifiedBytes) : null;
         const updated = current.rows[0]
           ? await client.query<{version: number}>("UPDATE player_social_profiles SET avatar_key = $2, avatar_moderation_approval_id = $3, version = version + 1, updated_at = now() WHERE user_id = $1 RETURNING version", [actor.userId, key ?? null, approvalId])
           : await client.query<{version: number}>("INSERT INTO player_social_profiles(user_id, avatar_key, avatar_moderation_approval_id, display_name) SELECT id, $2, $3, display_name FROM users WHERE id = $1 RETURNING version", [actor.userId, key ?? null, approvalId]);

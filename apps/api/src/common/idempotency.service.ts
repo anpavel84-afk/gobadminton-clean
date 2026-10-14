@@ -79,6 +79,19 @@ export class IdempotencyService {
     const keyHash = this.keyHash(input.key);
     const expiresAt = new Date(Date.now() + IDEMPOTENCY_TTL_MS);
 
+    // Reuse after TTL is a new command. Remove only this actor/operation/key's
+    // expired COMPLETED receipt before insert-first reservation. The deletion
+    // and new reservation run in the same transaction under MutationRunner's
+    // current actor/session fence; failed execution rolls both back, and each
+    // subsequent attempt can try again instead of looping on COMMAND_IN_PROGRESS.
+    // Processing reservations cannot be removed or bypassed.
+    await client.query(
+      `DELETE FROM idempotency_records
+       WHERE actor_id = $1 AND operation = $2 AND key_hash = $3
+         AND reservation_state = 'completed' AND expires_at <= now()`,
+      [input.actorId, input.operation, keyHash],
+    );
+
     const inserted = await client.query<{ id: string }>(
       `INSERT INTO idempotency_records
          (actor_id, operation, key_hash, request_hash, reservation_state,
@@ -195,16 +208,10 @@ export class IdempotencyService {
       throw commandInProgress();
     }
     if (row.expires_at.getTime() <= Date.now()) {
-      await client.query(
-        `DELETE FROM idempotency_records
-         WHERE actor_id = $1 AND operation = $2 AND key_hash = $3
-           AND reservation_state = 'completed'
-           AND expires_at <= now()`,
-        [input.actorId, input.operation, keyHash],
-      );
-      throw commandInProgress(
-        "Резерв идемпотентности истёк; повторите запрос с тем же ключом",
-      );
+      // Preflight never performs cleanup or throws an undoing error for TTL
+      // expiry. The next runIdempotent performs conditional deletion and
+      // insert-first reservation as one fenced transaction.
+      return undefined;
     }
     if (row.request_hash !== input.requestHash) {
       throw conflict(

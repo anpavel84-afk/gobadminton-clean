@@ -3,7 +3,7 @@ import { FastifyAdapter, type NestFastifyApplication } from "@nestjs/platform-fa
 import { Test } from "@nestjs/testing";
 import { execFileSync } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { Pool } from "pg";
 import sharp from "sharp";
@@ -260,6 +260,114 @@ run("M1 direct avatar prepublication",()=>{
     // Rollback released the reservation; a retry with the same command can commit.
     expect((await upload(source,version,headers,key)).statusCode).toBe(200);expect(await receipts(key)).toHaveLength(1);
   });
+  for (const condition of ["modified", "deleted"] as const) {
+    it(`refuses to publish a ${condition} staged avatar after moderation and before DB commit`,async()=>{
+      const before=await row();const oldFiles=new Set(await readdir(media));const key=randomUUID();
+      const runner=app.get(MutationRunner);const original=runner.runIdempotent.bind(runner);
+      const spy=vi.spyOn(runner,"runIdempotent").mockImplementationOnce(async input=>{
+        // Actual production stage() has already completed at this boundary.
+        const stages=(await pool.query<{storage_key:string}>("SELECT storage_key FROM avatar_media_gc")).rows
+          .filter(x=>!oldFiles.has(x.storage_key));
+        expect(stages).toHaveLength(1);
+        const file=path.join(media,stages[0]!.storage_key);
+        if(condition==="modified") await writeFile(file,Buffer.from("tampered-stage-on-disk"));
+        else await unlink(file);
+        return original(input);
+      });
+      try{
+        const response=await upload(source,version,headers,key);
+        expect(response.statusCode,response.body).toBe(503);
+        expect(response.json().code).toBe("AVATAR_STORAGE_UNAVAILABLE");
+        expect(await row()).toEqual(before);
+        expect(await receipts(key)).toEqual([]);
+      }finally{spy.mockRestore();}
+      // A rejected candidate must not leave an approved private avatar.
+      expect((await app.inject({method:"GET",url:oldUrl})).statusCode).toBe(200);
+      const retry=await upload(source,version,headers,key);
+      expect(retry.statusCode,retry.body).toBe(200);
+      expect(await receipts(key)).toHaveLength(1);
+    });
+  }
+  it("reuses an expired completed key as a fresh fenced transaction instead of looping",async()=>{
+    const key=randomUUID();const initial=await upload(source,version,headers,key);
+    expect(initial.statusCode,initial.body).toBe(200);
+    const oldVersion=initial.json().version as number;
+    const current=await row();
+    // Synthetic TTL expiration on the disposable test DB only.
+    const expired=await pool.query(
+      "UPDATE idempotency_records SET expires_at=now()-interval '1 second' WHERE actor_id=$1 AND operation='profiles.avatar.mutate' AND key_hash=$2",
+      [userId,app.get(IdempotencyService).keyHash(key)],
+    );
+    expect(expired.rowCount).toBe(1);
+    const freshBytes=await fresh();
+    const second=await upload(freshBytes,oldVersion,headers,key);
+    expect(second.statusCode,second.body).toBe(200);
+    expect(second.json().version).toBe(oldVersion+1);
+    expect((await row()).avatar_key).not.toEqual(current.avatar_key);
+    expect(await receipts(key)).toEqual([{
+      reservation_state:"completed",status_code:200,response_body:second.json(),
+    }]);
+    const replay=await upload(freshBytes,oldVersion,headers,key);
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json()).toEqual(second.json());
+    expect((await row()).version).toBe(oldVersion+1);
+  });
+
+  it("an expired receipt cannot bypass current authentication, but an active session can reuse the key",async()=>{
+    const key=randomUUID();const expected=version;
+    const initial=await remove(expected,key);expect(initial.statusCode,initial.body).toBe(200);
+    const oldReceipt=await receipts(key);expect(oldReceipt).toHaveLength(1);
+    const expired=await pool.query(
+      "UPDATE idempotency_records SET expires_at=now()-interval '1 second' WHERE actor_id=$1 AND operation='profiles.avatar.mutate' AND key_hash=$2",
+      [userId,app.get(IdempotencyService).keyHash(key)],
+    );expect(expired.rowCount).toBe(1);
+    // A revoked session must not even clear a receipt; authorization precedes
+    // expiry cleanup, not just stored-response replay.
+    await pool.query("UPDATE app_sessions SET revoked_at=now() WHERE user_id=$1",[userId]);
+    const denied=await remove(initial.json().version,key,headers);
+    expect(denied.statusCode,denied.body).toBe(401);
+    expect(await receipts(key)).toEqual(oldReceipt);
+    await pool.query("UPDATE app_sessions SET revoked_at=NULL WHERE user_id=$1",[userId]);
+    // The authorized second session may start a NEW command after the TTL.
+    const valid=await remove(initial.json().version,key,second);
+    expect(valid.statusCode,valid.body).toBe(200);
+    expect(valid.json().version).toBe(initial.json().version+1);
+    expect(await receipts(key)).toEqual([{reservation_state:"completed",status_code:200,response_body:valid.json()}]);
+  });
+  it("two current sessions reuse the same expired key concurrently, but execute exactly once",async()=>{
+    const key=randomUUID();
+    const initial=await remove(version,key);expect(initial.statusCode,initial.body).toBe(200);
+    const expected=initial.json().version as number;
+    const expired=await pool.query(
+      "UPDATE idempotency_records SET expires_at=now()-interval '1 second' WHERE actor_id=$1 AND operation='profiles.avatar.mutate' AND key_hash=$2",
+      [userId,app.get(IdempotencyService).keyHash(key)],
+    );expect(expired.rowCount).toBe(1);
+    const replies=await Promise.all([remove(expected,key,headers),remove(expected,key,second)]);
+    expect(replies.map(r=>r.statusCode),replies.map(r=>r.body)).toEqual([200,200]);
+    expect(replies[0]!.json()).toEqual(replies[1]!.json());
+    expect((await row()).version).toBe(expected+1);
+    expect(await receipts(key)).toEqual([{reservation_state:"completed",status_code:200,response_body:replies[0]!.json()}]);
+    expect((await remove(expected,key,second)).json()).toEqual(replies[0]!.json());
+  });
+  it("an expired processing reservation is never deleted or replaced",async()=>{
+    const key=randomUUID();const expected=version;
+    const initial=await remove(expected,key);expect(initial.statusCode,initial.body).toBe(200);
+    await pool.query(
+      "UPDATE idempotency_records SET reservation_state='processing',status_code=NULL,response_body=NULL,expires_at=now()-interval '1 second' WHERE actor_id=$1 AND operation='profiles.avatar.mutate' AND key_hash=$2",
+      [userId,app.get(IdempotencyService).keyHash(key)],
+    );
+    const blocked=await remove(initial.json().version,key,second);
+    expect(blocked.statusCode,blocked.body).toBe(409);
+    expect(blocked.json().code).toBe("COMMAND_IN_PROGRESS");
+    expect((await row()).version).toBe(initial.json().version);
+    const protectedRow=await pool.query(
+      "SELECT reservation_state,expires_at FROM idempotency_records WHERE actor_id=$1 AND operation='profiles.avatar.mutate' AND key_hash=$2",
+      [userId,app.get(IdempotencyService).keyHash(key)],
+    );
+    expect(protectedRow.rowCount).toBe(1);
+    expect(protectedRow.rows[0].reservation_state).toBe("processing");
+  });
+
   it("failure after writing the completed receipt rolls back metadata, approval and receipt",async()=>{
     const key=randomUUID();const before=await row();const files=await readdir(media);
     const idempotency=app.get(IdempotencyService);const complete=idempotency.complete.bind(idempotency);
