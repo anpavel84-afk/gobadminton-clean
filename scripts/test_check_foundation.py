@@ -23,9 +23,6 @@ class FoundationExceptionsTest(unittest.TestCase):
 
     def test_exact_residual_findings_and_docs(self):
         expected = {
-            'POST /me/linked-providers/{provider}/link',
-            'DELETE /me/linked-providers/{provider}',
-            'DELETE /me/sessions/{sessionId}',
             'PUT /me/avatar', 'DELETE /me/avatar',
         }
         self.assertEqual(set(self.findings()), {
@@ -81,12 +78,74 @@ class FoundationExceptionsTest(unittest.TestCase):
                     elif change == 'missing scheme': schemes.pop('AdminMfaTicket')
                     self.assert_idempotency(route)
 
+    def test_oauth_link_exemption_fail_closed(self):
+        route = '/me/linked-providers/{provider}/link'
+        for change in ['marker missing', 'marker wrong', 'origin missing', 'origin optional',
+                       'origin wrong type', 'origin wrong declaration', 'origin wrong name', 'csrf missing',
+                       'csrf optional', 'csrf wrong name', 'csrf wrong type', 'security inherited',
+                       'bearer', 'anonymous', 'and security', 'wrong scope', 'cookie missing',
+                       'cookie wrong type', 'cookie wrong location', 'cookie wrong name', 'route moved',
+                       'method changed']:
+            with self.subTest(change=change):
+                self.document = copy.deepcopy(self.contract)
+                op = self.document['paths'][route]['post']
+                origin = next(p for p in op['parameters'] if p['name'] == 'Origin')
+                csrf = next(p for p in op['parameters'] if p['name'] == 'X-CSRF-Token')
+                scheme = self.document['components']['securitySchemes']['cookieSession']
+                target, method = route, 'POST'
+                if change == 'marker missing': op.pop('x-auth-challenge-protocol')
+                elif change == 'marker wrong': op['x-auth-challenge-protocol'] = 'bound-single-use-v1'
+                elif change == 'origin missing': op['parameters'].remove(origin)
+                elif change == 'origin optional': origin['required'] = False
+                elif change == 'origin wrong type': origin['schema']['type'] = 'integer'
+                elif change == 'origin wrong declaration': origin['description'] = 'Any Origin'
+                elif change == 'origin wrong name': origin['name'] = 'X-Other-Origin'
+                elif change == 'csrf missing': op['parameters'].remove(csrf)
+                elif change == 'csrf optional': csrf['required'] = False
+                elif change == 'csrf wrong name': csrf['name'] = 'X-Other-CSRF'
+                elif change == 'csrf wrong type': csrf['schema']['type'] = 'integer'
+                elif change == 'security inherited': op.pop('security')
+                elif change == 'bearer': op['security'] = [{'bearerSession': []}]
+                elif change == 'anonymous': op['security'].append({})
+                elif change == 'and security': op['security'] = [{'cookieSession': [], 'bearerSession': []}]
+                elif change == 'wrong scope': op['security'][0]['cookieSession'] = ['unexpected']
+                elif change == 'cookie missing': self.document['components']['securitySchemes'].pop('cookieSession')
+                elif change == 'cookie wrong type': scheme['type'] = 'http'
+                elif change == 'cookie wrong location': scheme['in'] = 'header'
+                elif change == 'cookie wrong name': scheme['name'] = '__Host-other-session'
+                elif change == 'route moved':
+                    target = route + '/other'
+                    self.document['paths'][target] = self.document['paths'].pop(route)
+                elif change == 'method changed':
+                    method = 'PUT'
+                    self.document['paths'][route] = {'put': op}
+                self.assert_idempotency(target, method)
+
+    def test_delete_keys_are_required_and_bodyless(self):
+        for route in ['/me/linked-providers/{provider}', '/me/sessions/{sessionId}']:
+            with self.subTest(route=route):
+                self.document = copy.deepcopy(self.contract)
+                op = self.document['paths'][route]['delete']
+                self.assertNotIn('requestBody', op)
+                self.assertEqual(op['security'], [{'cookieSession': []}])
+                for name in ['Origin', 'X-CSRF-Token']:
+                    self.assertTrue(next(p for p in op['parameters'] if p.get('name') == name)['required'])
+                for change in ['missing', 'optional']:
+                    with self.subTest(key=change):
+                        self.document = copy.deepcopy(self.contract)
+                        op = self.document['paths'][route]['delete']
+                        if change == 'missing':
+                            op['parameters'] = [p for p in op['parameters'] if p.get('$ref') != '#/components/parameters/IdempotencyKey']
+                        else:
+                            self.document['components']['parameters']['IdempotencyKey']['required'] = False
+                        self.assert_idempotency(route, 'DELETE')
+
     def test_bodyless_deletes_keep_idempotency_and_csrf(self):
         for route in ['/me/linked-providers/{provider}', '/me/sessions/{sessionId}', '/me/avatar']:
             with self.subTest(route=route):
                 self.document = copy.deepcopy(self.contract)
                 op = self.document['paths'][route]['delete']
-                op['parameters'] = [p for p in op['parameters'] if p.get('name') != 'X-CSRF-Token' and p.get('$ref') != '#/components/parameters/CsrfToken']
+                op['parameters'] = [p for p in op['parameters'] if p.get('name') not in {'X-CSRF-Token', 'Idempotency-Key'} and p.get('$ref') not in {'#/components/parameters/CsrfToken', '#/components/parameters/IdempotencyKey'}]
                 self.assert_idempotency(route, 'DELETE')
                 self.assertIn(f'DELETE {route}: cookie mutation needs declared CSRF behavior', self.findings())
                 op['requestBody'] = {'required': False}

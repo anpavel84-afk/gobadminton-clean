@@ -157,7 +157,7 @@ export class SessionService {
     });
   }
 
-  async listActiveSessionsForUser(userId: string): Promise<
+  async listActiveSessionsForUser(userId: string, client?: PoolClient): Promise<
     Array<{
       id: string;
       createdAt: Date;
@@ -165,7 +165,7 @@ export class SessionService {
       expiresAt: Date;
     }>
   > {
-    const result = await this.pool.query<{
+    const result = await (client ?? this.pool).query<{
       id: string;
       created_at: Date;
       last_seen_at: Date;
@@ -194,51 +194,46 @@ export class SessionService {
     sessionId: string;
     currentSessionId: string;
   }): Promise<"revoked" | "already_revoked"> {
+    return this.withRevocationTransaction((client) =>
+      this.revokeOwnedSessionInTransaction(client, input),
+    );
+  }
+
+  /** Ownership is rechecked on replay even though the target may already be revoked. */
+  async lockOwnedSessionInTransaction(client: PoolClient, input: {
+    userId: string;
+    sessionId: string;
+    currentSessionId: string;
+  }): Promise<{ id: string; revoked_at: Date | null }> {
     if (input.sessionId === input.currentSessionId) {
       throw conflict("CURRENT_SESSION", "Текущую сессию завершите через выход");
     }
-    const client = await this.pool.connect();
-    try {
-      await client.query("BEGIN");
-      await client.query("SELECT id FROM users WHERE id=$1 FOR NO KEY UPDATE", [
-        input.userId,
-      ]);
-      const result = await client.query<{
-        id: string;
-        revoked_at: Date | null;
-      }>(
-        `SELECT id, revoked_at FROM app_sessions
-         WHERE id = $1 AND user_id = $2 AND audience = $3
-         FOR UPDATE`,
-        [input.sessionId, input.userId, CONSUMER_AUDIENCE],
-      );
-      const row = result.rows[0];
-      if (!row) {
-        await client.query("ROLLBACK");
-        throw notFound("SESSION_NOT_FOUND", "Сессия не найдена");
-      }
-      if (row.revoked_at) {
-        await client.query("COMMIT");
-        return "already_revoked";
-      }
-      await client.query(
-        `UPDATE app_sessions
-         SET revoked_at = COALESCE(revoked_at, now())
-         WHERE id = $1`,
-        [row.id],
-      );
-      await client.query(
-        `DELETE FROM radar_presences WHERE owner_session_id = $1`,
-        [row.id],
-      );
-      await client.query("COMMIT");
-      return "revoked";
-    } catch (error) {
-      await client.query("ROLLBACK").catch(() => undefined);
-      throw error;
-    } finally {
-      client.release();
-    }
+    await client.query("SELECT id FROM users WHERE id=$1 FOR NO KEY UPDATE", [input.userId]);
+    const result = await client.query<{ id: string; revoked_at: Date | null }>(
+      `SELECT id, revoked_at FROM app_sessions
+       WHERE id = $1 AND user_id = $2 AND audience = $3
+       FOR UPDATE`,
+      [input.sessionId, input.userId, CONSUMER_AUDIENCE],
+    );
+    const row = result.rows[0];
+    if (!row) throw notFound("SESSION_NOT_FOUND", "Сессия не найдена");
+    return row;
+  }
+
+  /** Revoke and remove presence on the caller's transaction, without a nested BEGIN/COMMIT. */
+  async revokeOwnedSessionInTransaction(client: PoolClient, input: {
+    userId: string;
+    sessionId: string;
+    currentSessionId: string;
+  }): Promise<"revoked" | "already_revoked"> {
+    const row = await this.lockOwnedSessionInTransaction(client, input);
+    if (row.revoked_at) return "already_revoked";
+    await client.query(
+      `UPDATE app_sessions SET revoked_at = COALESCE(revoked_at, now()) WHERE id = $1`,
+      [row.id],
+    );
+    await client.query("DELETE FROM radar_presences WHERE owner_session_id = $1", [row.id]);
+    return "revoked";
   }
 
   async revokeOtherSessions(input: {

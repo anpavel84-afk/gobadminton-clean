@@ -181,8 +181,9 @@ export class IdentityService {
 
   async listLinkedProviderDetails(
     userId: string,
+    client?: PoolClient,
   ): Promise<Array<{ providerKey: string; linkedAt: Date }>> {
-    const result = await this.pool.query<{
+    const result = await (client ?? this.pool).query<{
       provider_key: string;
       linked_at: Date;
     }>(
@@ -311,34 +312,7 @@ export class IdentityService {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
-      await lockAuthActor(client, userId, sessionId, true);
-      const locked = await client.query<{ id: string; provider_key: string }>(
-        `SELECT id, provider_key
-         FROM external_identities
-         WHERE user_id = $1
-         FOR UPDATE`,
-        [userId],
-      );
-      const providers = new Set(locked.rows.map((row) => row.provider_key));
-      if (!providers.has(providerKey)) {
-        await client.query("ROLLBACK");
-        throw conflict(
-          "PROVIDER_NOT_LINKED",
-          "Этот способ входа не подключён",
-        );
-      }
-      if (await usableAuthMethodCount(client, userId) <= 1) {
-        await client.query("ROLLBACK");
-        throw conflict(
-          "LAST_AUTH_METHOD",
-          "Нельзя отключить последний способ входа",
-        );
-      }
-      await client.query(
-        `DELETE FROM external_identities
-         WHERE user_id = $1 AND provider_key = $2`,
-        [userId, providerKey],
-      );
+      await this.unlinkProviderInTransaction(client, userId, providerKey, sessionId);
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK").catch(() => undefined);
@@ -346,6 +320,31 @@ export class IdentityService {
     } finally {
       client.release();
     }
+  }
+
+  /** Caller owns the transaction; retains the existing actor/recent-auth and method locks. */
+  async unlinkProviderInTransaction(
+    client: PoolClient, userId: string, providerKey: string, sessionId?: string,
+  ): Promise<void> {
+    await lockAuthActor(client, userId, sessionId, true);
+    const locked = await client.query<{ id: string; provider_key: string }>(
+      `SELECT id, provider_key
+       FROM external_identities
+       WHERE user_id = $1
+       FOR UPDATE`,
+      [userId],
+    );
+    const providers = new Set(locked.rows.map((row) => row.provider_key));
+    if (!providers.has(providerKey)) {
+      throw conflict("PROVIDER_NOT_LINKED", "Этот способ входа не подключён");
+    }
+    if (await usableAuthMethodCount(client, userId) <= 1) {
+      throw conflict("LAST_AUTH_METHOD", "Нельзя отключить последний способ входа");
+    }
+    await client.query(
+      `DELETE FROM external_identities WHERE user_id = $1 AND provider_key = $2`,
+      [userId, providerKey],
+    );
   }
 
   /** Test helper: attempt to attach an identity that already belongs to another user. */

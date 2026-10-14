@@ -135,6 +135,27 @@ def admin_proof_exemption(document: dict, route: str, method: str,
     )
 
 
+def consumer_oauth_link_exemption(document: dict, route: str, method: str,
+                                  operation: dict, headers: dict) -> bool:
+    """Only the actual cookie/session-bound OAuth initiation, never a business receipt."""
+    if (method != "post" or route != "/me/linked-providers/{provider}/link"
+            or operation.get("x-auth-challenge-protocol") != "consumer-oauth-link-bound-single-use-v1"
+            or operation.get("security") != [{"cookieSession": []}]):
+        return False
+    origin = headers.get("origin", {})
+    csrf = headers.get("x-csrf-token", {})
+    if (origin.get("required") is not True
+            or origin.get("schema", {}).get("type") != "string"
+            or origin.get("description") != "Exact allowed consumer web Origin; validated by requireCookieMutation."
+            or csrf.get("required") is not True
+            or csrf.get("schema", {}).get("type") != "string"):
+        return False
+    scheme = document.get("components", {}).get("securitySchemes", {}).get("cookieSession", {})
+    return all(scheme.get(key) == value for key, value in {
+        "type": "apiKey", "in": "cookie", "name": "__Host-gb_session",
+    }.items())
+
+
 def markdown_errors(path: Path) -> list[str]:
     errors: list[str] = []
     text = path.read_text(encoding="utf-8")
@@ -240,6 +261,7 @@ def contract_errors(document: dict) -> tuple[list[str], int]:
                         errors.append(f"{label}: private read must not require a durable command receipt")
                     if (not read_post and not email_proof
                             and not admin_proof_exemption(document, route, method, operation, headers)
+                            and not consumer_oauth_link_exemption(document, route, method, operation, headers)
                             and not headers.get("idempotency-key", {}).get("required")):
                         errors.append(f"{label}: business mutation needs required Idempotency-Key")
                     if "x-csrf-token" not in headers:
