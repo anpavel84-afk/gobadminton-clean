@@ -1,0 +1,64 @@
+name: Product CI
+on:
+  pull_request:
+    branches: [main, dev]
+  push:
+    branches: ["chatops/**"]
+permissions:
+  contents: read
+concurrency:
+  group: product-ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  foundation:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: {persist-credentials: false}
+      - run: python3 scripts/check_foundation.py
+      - name: Check bounded contract exemptions even on foundation failure
+        if: always()
+        run: |
+          python3 -B scripts/test_email_contract_policy.py
+          python3 -B scripts/test_check_foundation.py
+  source:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [api, web, admin, contracts]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: {persist-credentials: false}
+      - uses: ./.github/actions/ci-setup
+      - run: pnpm --filter @gobadminton/${{ matrix.package }} run typecheck
+      - run: pnpm --filter @gobadminton/${{ matrix.package }} run lint
+        if: success() || failure()
+      - run: pnpm --filter @gobadminton/${{ matrix.package }} run test:unit
+        if: success() || failure()
+  database:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: {fetch-depth: 0, persist-credentials: false}
+      - uses: ./.github/actions/ci-setup
+      - run: bash scripts/chatops/db-ci.sh
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || '30f24bae57123c3fdb53ceef94ec6bae71e4fcd0' }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: product-test-results
+          path: _out/test-results/
+  receiver:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: {persist-credentials: false}
+      - run: |
+          find scripts/chatops -name '*.sh' -exec bash -n {} +
+          node --check scripts/chatops/smoke.mjs
+          sudo python3 scripts/chatops/tests/test_helper.py

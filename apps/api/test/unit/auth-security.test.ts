@@ -62,6 +62,8 @@ describe("auth security gates", () => {
       {} as never,
       {} as never,
       {} as never,
+      {} as never,
+      {} as never,
     );
 
     await expect(
@@ -99,6 +101,8 @@ describe("auth security gates", () => {
       {} as never,
       {} as never,
       {} as never,
+      {} as never,
+      {} as never,
     );
 
     await expect(
@@ -124,6 +128,8 @@ describe("auth security gates", () => {
       {} as never,
       {} as never,
       sessions as never,
+      {} as never,
+      {} as never,
       {} as never,
     );
 
@@ -155,6 +161,8 @@ describe("auth security gates", () => {
     const auth = new AuthService(
       makeEnv(),
       { listKeys: () => ["vk", "yandex"] } as never,
+      {} as never,
+      {} as never,
       {} as never,
       {} as never,
       {} as never,
@@ -209,6 +217,8 @@ describe("auth security gates", () => {
       transactions as never,
       identities as never,
       sessions as never,
+      {} as never,
+      {} as never,
       {} as never,
     );
     const reply = { setCookie: vi.fn(), clearCookie: vi.fn() };
@@ -286,6 +296,8 @@ describe("auth security gates", () => {
       {
         createConsumerSession: async () => ({ sessionToken: "ya-session" }),
       } as never,
+      {} as never,
+      {} as never,
       {} as never,
     );
 

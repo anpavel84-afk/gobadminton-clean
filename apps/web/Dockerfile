@@ -13,6 +13,7 @@ COPY packages/contracts/package.json packages/contracts/package.json
 COPY packages/tooling/package.json packages/tooling/package.json
 RUN pnpm install --frozen-lockfile --filter @gobadminton/web...
 COPY apps/web apps/web
+COPY packages/contracts packages/contracts
 COPY packages/tooling packages/tooling
 ENV API_BASE_URL=http://127.0.0.1:3000
 RUN pnpm --filter @gobadminton/web run build

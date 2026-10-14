@@ -1,0 +1,19 @@
+# Germany API profile: audit snapshot only, NOT installed or commissioned.
+# Root operator must revalidate all paths/services against current containers after Owner GO.
+PROJECT=gobadminton_mvp
+COMPOSE_FILES=(/srv/gobadminton/compose/docker-compose.yml /srv/gobadminton/compose/docker-compose.p1p4-release-20261010.yml /srv/gobadminton-dev/worktrees/radar-main-owner-candidate-20261011/compose.main-radar-override.EXACT_SHA_RELEASE_STAGED_NOT_ACTIVE.yml)
+ENV_FILE=/srv/gobadminton/compose/.env
+# Additional current env files must be captured into a root-owned release profile
+# after audit; this incomplete example MUST NOT be installed as production configuration.
+SERVICES=(api)
+DB_USER=gobadminton
+DB_NAME=gobadminton
+REGISTRY_PREFIX=ghcr.io/anpavel84-afk/gobadminton-clean
+MIGRATE=0
+API_META_URL=http://127.0.0.1:18080/v1/meta
+READINESS_SECONDS=180
+ACCEPT_SECONDS=420
+OPERATION_SECONDS=1200
+# Moscow is a separate Web-only receiver, SERVICES=(web); host 194.87.214.217.
+# Its Compose paths are UNVERIFIED. No fabricated path or alternate host is allowed.
+# Both hosts require root-owned prod-owner-go.json bound to the same release and digests.

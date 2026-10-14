@@ -145,11 +145,11 @@ run("E1 verified email auth, actual PostgreSQL and API",()=>{
     const pending=linkVerify(b,d);await new Promise(resolve=>setTimeout(resolve,100));await client.query("COMMIT");client.release();expect((await pending).statusCode).toBe(401);
   });
   it("last OAuth unlink counts email, and removal races preserve one method",async()=>{
-    const a=await actor();expect((await app.inject({method:"DELETE",url:"/v1/me/linked-providers/vk",headers:a.headers,cookies:a.cookies})).statusCode).toBe(409);
+    const a=await actor();expect((await app.inject({method:"DELETE",url:"/v1/me/linked-providers/vk",headers:{...a.headers,"idempotency-key":randomUUID()},cookies:a.cookies})).statusCode).toBe(409);
     const c=await link(a,`${randomUUID()}@example.test`);await linkVerify(a,c);
-    expect((await app.inject({method:"DELETE",url:"/v1/me/linked-providers/vk",headers:a.headers,cookies:a.cookies})).statusCode).toBe(200);
+    expect((await app.inject({method:"DELETE",url:"/v1/me/linked-providers/vk",headers:{...a.headers,"idempotency-key":randomUUID()},cookies:a.cookies})).statusCode).toBe(200);
     const b=await actor();await pool.query("INSERT INTO external_identities(user_id,provider_key,issuer_namespace,subject) VALUES($1,'yandex','e1-test',$2)",[b.userId,randomUUID()]);
-    const results=await Promise.all(['vk','yandex'].map(provider=>app.inject({method:"DELETE",url:`/v1/me/linked-providers/${provider}`,headers:b.headers,cookies:b.cookies})));expect(results.map(r=>r.statusCode).sort()).toEqual([200,409]);
+    const results=await Promise.all(['vk','yandex'].map(provider=>app.inject({method:"DELETE",url:`/v1/me/linked-providers/${provider}`,headers:{...b.headers,"idempotency-key":randomUUID()},cookies:b.cookies})));expect(results.map(r=>r.statusCode).sort()).toEqual([200,409]);
   });
   it("OAuth metadata email never auto-links and explicit OAuth can link to an email User",async()=>{
     const metadataOwner=await actor();const metadataEmail=`${randomUUID()}@example.test`;

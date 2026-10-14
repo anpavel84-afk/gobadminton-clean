@@ -1,22 +1,25 @@
 import { Controller, Delete, Get, Header, Param, Put, Req, Res } from "@nestjs/common";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { ConsumerAuthService } from "../auth/consumer-auth.service";
+import { IdempotencyService } from "../common/idempotency.service";
 import { AvatarService } from "./avatar.service";
 
 @Controller()
 export class AvatarController {
-  constructor(private readonly auth: ConsumerAuthService, private readonly avatars: AvatarService) {}
+  constructor(private readonly auth: ConsumerAuthService, private readonly avatars: AvatarService, private readonly idempotency: IdempotencyService) {}
   @Put("me/avatar")
   @Header("Cache-Control", "no-store")
   async replace(@Req() request: FastifyRequest) {
     const actor = await this.auth.requireCookieMutation(request);
-    return this.avatars.mutate(actor, request.headers["x-profile-version"], { body: request.body, mime: request.headers["content-type"] ?? "" });
+    const key = this.idempotency.requireKey(request.headers["idempotency-key"]);
+    return this.avatars.mutate(actor, key, request.headers["x-profile-version"], { body: request.body, mime: request.headers["content-type"] ?? "" });
   }
   @Delete("me/avatar")
   @Header("Cache-Control", "no-store")
   async remove(@Req() request: FastifyRequest) {
     const actor = await this.auth.requireCookieMutation(request);
-    return this.avatars.mutate(actor, request.headers["x-profile-version"]);
+    const key = this.idempotency.requireKey(request.headers["idempotency-key"]);
+    return this.avatars.mutate(actor, key, request.headers["x-profile-version"]);
   }
   @Get("media/avatars/:key")
   async read(@Param("key") key: string, @Res() reply: FastifyReply) {

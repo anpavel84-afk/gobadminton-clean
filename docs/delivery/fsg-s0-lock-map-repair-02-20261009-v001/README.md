@@ -16,6 +16,6 @@ Read in order:
 2. [Existing SQL map](LEGACY_LOCK_MAP.md), [retained S1 contract proposals](S1_CONTRACT_AND_CONCURRENCY.md).
 3. [Future joint SQL criteria J01–J11 — NOT_RUN](FUTURE_JOINT_SQL_CRITERIA.md).
 4. [Preserved S2/S3/gates/DD and future intake](GATES_AND_NEXT_INTAKE.md).
-5. [Repair02 change ledger](CHANGE_LEDGER.md), [fresh author evidence/limits](EVIDENCE.md), [handoff](../../handoffs/2026-10-09_fsg-s0-lock-map-repair-02-v001.md).
+5. [Repair02 change ledger](CHANGE_LEDGER.md), [fresh author evidence/limits](EVIDENCE.md), historical handoff `2026-10-09_fsg-s0-lock-map-repair-02-v001.md` (not included in Clean extraction).
 
 OQ-01 YES stays CLOSED; G-05/G-06/G-08/G-03/G-07, S2 one-recipient/nonseat, S3 distinct actionable Game/formal precedence/private `game:null`/UNKNOWN, DD-FR-01..03 and frozen Style Guide custody remain. All S0 schemas/routes/locking selections remain proposals. S1–S4/app/API/migration/flags/release effects are unadmitted. One next recipient: independent `qa-fsg-s0-lock-map-reverify-02-20261009-v001` reviewing NEW immutable candidate/tree. Publication and author self-check do not constitute independent QA. Rollback discards/reverts own docs only; no runtime resources changed.

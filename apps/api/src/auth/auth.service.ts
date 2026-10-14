@@ -1,3 +1,7 @@
+import type { PoolClient } from "pg";
+import { IdempotencyService } from "../common/idempotency.service";
+import { MutationRunner } from "../common/mutation-runner.service";
+import { lockAuthActor } from "./auth-method.service";
 import { Inject, Injectable } from "@nestjs/common";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { AppEnv } from "../config/env";
@@ -70,6 +74,8 @@ export class AuthService {
     private readonly identities: IdentityService,
     private readonly sessions: SessionService,
     private readonly consumerAuth: ConsumerAuthService,
+    private readonly idempotency: IdempotencyService,
+    private readonly mutations: MutationRunner,
   ) {}
 
   listProviders(): { providers: Array<"vk" | "yandex"> } {
@@ -339,7 +345,11 @@ export class AuthService {
 
   async listLinkedProviders(request: FastifyRequest) {
     const consumer = await this.consumerAuth.requireSession(request);
-    const linked = await this.identities.listLinkedProviderDetails(consumer.userId);
+    return this.linkedProvidersSnapshot(consumer.userId);
+  }
+
+  private async linkedProvidersSnapshot(userId: string, client?: PoolClient) {
+    const linked = await this.identities.listLinkedProviderDetails(userId, client);
     const linkedMap = new Map(
       linked.map((row) => [row.providerKey, row.linkedAt] as const),
     );
@@ -431,19 +441,40 @@ export class AuthService {
       throw badRequest("UNKNOWN_PROVIDER", "Неизвестный провайдер входа");
     }
     const consumer = await this.consumerAuth.requireCookieMutation(request);
-    await this.identities.unlinkProvider(consumer.userId, providerKey, consumer.sessionId);
-    return this.listLinkedProviders(request);
+    const key = this.idempotency.requireKey(request.headers["idempotency-key"]);
+    const result = await this.mutations.runIdempotent({
+      actorId: consumer.userId,
+      sessionId: consumer.sessionId,
+      operation: "identity.provider.unlink",
+      key,
+      requestHash: this.idempotency.requestHash({ provider: providerKey }),
+      authorizeReplay: async (client) => {
+        // Own-provider authority = current actor/recent-auth + actor-scoped receipt
+        // + exact provider hash. Do not require the identity deleted by this receipt
+        // to still exist, and do not delete an identity linked again since then.
+        await lockAuthActor(client, consumer.userId, consumer.sessionId, true);
+      },
+      execute: async (client) => {
+        await this.identities.unlinkProviderInTransaction(
+          client, consumer.userId, providerKey, consumer.sessionId,
+        );
+        return { statusCode: 200, body: await this.linkedProvidersSnapshot(consumer.userId, client) };
+      },
+    });
+    return result.body;
   }
 
   async listSessions(request: FastifyRequest) {
     const consumer = await this.consumerAuth.requireSession(request);
-    const sessions = await this.sessions.listActiveSessionsForUser(
-      consumer.userId,
-    );
+    return this.sessionsSnapshot(consumer.userId, consumer.sessionId);
+  }
+
+  private async sessionsSnapshot(userId: string, currentSessionId: string, client?: PoolClient) {
+    const sessions = await this.sessions.listActiveSessionsForUser(userId, client);
     return {
       items: sessions.map((session) => ({
         id: session.id,
-        current: session.id === consumer.sessionId,
+        current: session.id === currentSessionId,
         createdAt: session.createdAt.toISOString(),
         lastSeenAt: session.lastSeenAt.toISOString(),
         expiresAt: session.expiresAt.toISOString(),
@@ -453,12 +484,24 @@ export class AuthService {
 
   async revokeSession(request: FastifyRequest, sessionId: string) {
     const consumer = await this.consumerAuth.requireCookieMutation(request);
-    await this.sessions.revokeOwnedSession({
-      userId: consumer.userId,
-      sessionId,
-      currentSessionId: consumer.sessionId,
+    const key = this.idempotency.requireKey(request.headers["idempotency-key"]);
+    const target = { userId: consumer.userId, sessionId, currentSessionId: consumer.sessionId };
+    const result = await this.mutations.runIdempotent({
+      actorId: consumer.userId,
+      sessionId: consumer.sessionId,
+      operation: "identity.session.revoke",
+      key,
+      // current flags in the response belong to this exact invoking session.
+      requestHash: this.idempotency.requestHash({ sessionId, currentSessionId: consumer.sessionId }),
+      authorizeReplay: async (client) => {
+        await this.sessions.lockOwnedSessionInTransaction(client, target);
+      },
+      execute: async (client) => {
+        await this.sessions.revokeOwnedSessionInTransaction(client, target);
+        return { statusCode: 200, body: await this.sessionsSnapshot(consumer.userId, consumer.sessionId, client) };
+      },
     });
-    return this.listSessions(request);
+    return result.body;
   }
 
   async revokeOtherSessions(request: FastifyRequest) {

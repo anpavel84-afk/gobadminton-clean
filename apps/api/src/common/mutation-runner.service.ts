@@ -19,6 +19,17 @@ export type MutationResult<T> = {
   body: T;
 };
 
+type MutationInput<T> = {
+  actorId: string;
+  sessionId: string;
+  operation: string;
+  key: string;
+  requestHash: string;
+  requiredCapabilities?: readonly UserCapability[];
+  authorizeReplay: (client: PoolClient, body: T) => Promise<void>;
+  execute: (client: PoolClient) => Promise<MutationResult<T>>;
+};
+
 /**
  * Shared mutation transaction protocol:
  * BEGIN → timeouts → actor/session fence → insert-first idempotency
@@ -34,16 +45,19 @@ export class MutationRunner {
     @Inject(APP_ENV) private readonly env: AppEnv,
   ) {}
 
-  async runIdempotent<T>(input: {
-    actorId: string;
-    sessionId: string;
-    operation: string;
-    key: string;
-    requestHash: string;
-    requiredCapabilities?: readonly UserCapability[];
-    authorizeReplay: (client: PoolClient, body: T) => Promise<void>;
-    execute: (client: PoolClient) => Promise<MutationResult<T>>;
-  }): Promise<MutationResult<T>> {
+  /**
+   * Short authorized preflight before external preparation. A miss finishes
+   * without reserving anything; final execution must still use runIdempotent.
+   */
+  async findReplay<T>(input: Omit<MutationInput<T>, "execute">): Promise<MutationResult<T> | undefined> {
+    return this.withRetries(() => this.runOnce(input, true));
+  }
+
+  async runIdempotent<T>(input: MutationInput<T>): Promise<MutationResult<T>> {
+    return this.withRetries(() => this.runOnce(input, false));
+  }
+
+  private async withRetries<T>(run: () => Promise<T>): Promise<T> {
     let lastError: unknown;
     for (
       let attempt = 1;
@@ -51,7 +65,7 @@ export class MutationRunner {
       attempt += 1
     ) {
       try {
-        return await this.runOnce(input);
+        return await run();
       } catch (error) {
         lastError = error;
         if (error instanceof HttpException) {
@@ -87,16 +101,9 @@ export class MutationRunner {
       : new Error("mutation retries exhausted");
   }
 
-  private async runOnce<T>(input: {
-    actorId: string;
-    sessionId: string;
-    operation: string;
-    key: string;
-    requestHash: string;
-    requiredCapabilities?: readonly UserCapability[];
-    authorizeReplay: (client: PoolClient, body: T) => Promise<void>;
-    execute: (client: PoolClient) => Promise<MutationResult<T>>;
-  }): Promise<MutationResult<T>> {
+  private async runOnce<T>(input: Omit<MutationInput<T>, "execute">, preflight: true): Promise<MutationResult<T> | undefined>;
+  private async runOnce<T>(input: MutationInput<T>, preflight: false): Promise<MutationResult<T>>;
+  private async runOnce<T>(input: Omit<MutationInput<T>, "execute"> & Partial<Pick<MutationInput<T>, "execute">>, preflight: boolean): Promise<MutationResult<T> | undefined> {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
@@ -110,20 +117,27 @@ export class MutationRunner {
       });
       await assertCapabilities(client, this.env.USER_RESTRICTIONS_INTERNAL_ENABLED, input.actorId,
         [...operationCapabilities(input.operation), ...(input.requiredCapabilities ?? [])]);
-      const gate = await this.idempotency.reserveOrReplay<T>(client, {
+      const receiptInput = {
         actorId: input.actorId,
         operation: input.operation,
         key: input.key,
         requestHash: input.requestHash,
-      });
-      if (gate.kind === "replay") {
+      };
+      const gate = preflight
+        ? await this.idempotency.findCompletedReceipt<T>(client, receiptInput)
+        : await this.idempotency.reserveOrReplay<T>(client, receiptInput);
+      if (gate?.kind === "replay") {
         // Pass server-stored body so create-style commands can reauthorize
         // against the exact resource without trusting client input.
         await input.authorizeReplay(client, gate.body);
         await client.query("COMMIT");
         return { statusCode: gate.statusCode, body: gate.body };
       }
-      const result = await input.execute(client);
+      if (preflight) {
+        await client.query("COMMIT");
+        return undefined;
+      }
+      const result = await input.execute!(client);
       await this.idempotency.complete(client, {
         actorId: input.actorId,
         operation: input.operation,

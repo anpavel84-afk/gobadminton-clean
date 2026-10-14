@@ -565,7 +565,23 @@
             }
           },
           {
-            "$ref": "#/components/parameters/CsrfToken"
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "description": "Required session-bound CSRF token; bearer credentials rejected."
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Exact allowed consumer web Origin; validated by requireCookieMutation."
           }
         ],
         "requestBody": {
@@ -617,7 +633,14 @@
           "default": {
             "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "x-auth-challenge-protocol": "consumer-oauth-link-bound-single-use-v1",
+        "description": "Each initiation creates fresh one-time OAuth state/PKCE bound to the exact user, session and auth-binding cookie. No business receipt or credential replay; Idempotency-Key, if supplied, is ignored. Callback consumes state once before provider exchange; failures after consumption require a new initiation."
       }
     },
     "/me/linked-providers/{provider}": {
@@ -641,12 +664,31 @@
             }
           },
           {
-            "$ref": "#/components/parameters/CsrfToken"
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "description": "Required session-bound CSRF token; bearer credentials rejected."
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Exact allowed consumer web Origin; validated by requireCookieMutation."
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "responses": {
           "200": {
-            "description": "Updated provider status list",
+            "description": "Transactional response snapshot; authorized same-key replay returns the original snapshot.",
             "content": {
               "application/json": {
                 "schema": {
@@ -670,7 +712,12 @@
           "default": {
             "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ]
       }
     },
     "/me/sessions": {
@@ -725,12 +772,31 @@
             }
           },
           {
-            "$ref": "#/components/parameters/CsrfToken"
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "description": "Required session-bound CSRF token; bearer credentials rejected."
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Exact allowed consumer web Origin; validated by requireCookieMutation."
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "responses": {
           "200": {
-            "description": "Updated session list",
+            "description": "Transactional response snapshot; authorized same-key replay returns the original snapshot.",
             "content": {
               "application/json": {
                 "schema": {
@@ -753,8 +819,16 @@
           },
           "default": {
             "$ref": "#/components/responses/Problem"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ]
       }
     },
     "/me/sessions/revoke-others": {
@@ -4891,6 +4965,18 @@
               "type": "integer",
               "minimum": 0
             }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Exact allowed consumer web Origin; validated by requireCookieMutation."
           }
         ],
         "responses": {
@@ -4956,7 +5042,12 @@
             }
           }
         },
-        "description": "Direct owned uploads require approval for the exact sanitized 512x512 PNG (maximum 2 MiB derivative) before file staging/publication. Provider preflight is outside the publication transaction; profile version and derivative fingerprint are rechecked at commit. Failure preserves the previous avatar. Existing avatars remain legacy/unreviewed. Trusted VK/Yandex provider fallback is not re-moderated."
+        "description": "Direct owned uploads require approval for the exact sanitized 512x512 PNG (maximum 2 MiB derivative) before file staging/publication. Provider preflight is outside the publication transaction; profile version and derivative fingerprint are rechecked at commit. Failure preserves the previous avatar. Existing avatars remain legacy/unreviewed. Trusted VK/Yandex provider fallback is not re-moderated.",
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ]
       },
       "delete": {
         "operationId": "removeMyAvatar",
@@ -4981,6 +5072,18 @@
               "type": "integer",
               "minimum": 0
             }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Exact allowed consumer web Origin; validated by requireCookieMutation."
           }
         ],
         "responses": {
@@ -5019,7 +5122,12 @@
             "$ref": "#/components/responses/AvatarProblem"
           }
         },
-        "description": "Provider-independent removal clears both owned media and its internal approval binding, preserving trusted provider fallback. Works during moderation outage and upload saturation."
+        "description": "Provider-independent removal clears both owned media and its internal approval binding, preserving trusted provider fallback. Works during moderation outage and upload saturation.",
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ]
       }
     },
     "/media/avatars/{key}": {
