@@ -47,7 +47,7 @@ describe("Friends reuse of social mutation retry boundary", () => {
     expect(apiFetch).toHaveBeenCalledTimes(1);
     pending.retry(); await settle();
     expect(vi.mocked(apiFetch).mock.calls[1]).toEqual(vi.mocked(apiFetch).mock.calls[0]);
-    expect(vi.mocked(apiFetch).mock.calls[0][1]).toMatchObject({ csrfToken: "csrf", headers: { "Idempotency-Key": "same-attempt-key" } });
+    expect(vi.mocked(apiFetch).mock.calls[0]![1]).toMatchObject({ csrfToken: "csrf", headers: { "Idempotency-Key": "same-attempt-key" } });
     expect(success).toHaveBeenCalledOnce(); expect(render().pending).toBe(false);
   });
   it.each([401, 409, 403, 404])("known failure %i refreshes authorization/state without replay or success", async status => {

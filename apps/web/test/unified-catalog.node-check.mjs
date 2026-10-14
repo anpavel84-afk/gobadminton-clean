@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { URL } from 'node:url';
+import { Buffer } from 'node:buffer';
 import { stripTypeScriptTypes } from 'node:module';
 import { test } from 'node:test';
 
