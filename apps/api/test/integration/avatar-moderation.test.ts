@@ -343,7 +343,7 @@ run("M1 direct avatar prepublication",()=>{
       [userId,app.get(IdempotencyService).keyHash(key)],
     );expect(expired.rowCount).toBe(1);
     const replies=await Promise.all([remove(expected,key,headers),remove(expected,key,second)]);
-    expect(replies.map(r=>r.statusCode),replies.map(r=>r.body)).toEqual([200,200]);
+    expect(replies.map(r=>r.statusCode)).toEqual([200,200]);
     expect(replies[0]!.json()).toEqual(replies[1]!.json());
     expect((await row()).version).toBe(expected+1);
     expect(await receipts(key)).toEqual([{reservation_state:"completed",status_code:200,response_body:replies[0]!.json()}]);
