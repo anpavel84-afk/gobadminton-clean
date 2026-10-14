@@ -437,6 +437,10 @@ dbDescribe("Unified Players / isolated synthetic PostGIS and HTTP", () => {
       viewer,
       true,
     );
+    // A continuation MUST preserve the exact encrypted query reference:
+    // sealUnified uses randomized AES-GCM and its raw tokens cannot otherwise
+    // be compared by the Web client even for the same valid signed context.
+    expect(m.query.queryRef).toBe(s.query.queryRef);
     expect(m.items).toHaveLength(7);
     expect(m.totals).toEqual(s.totals);
     expect(m.items.every((i) => i.radar !== null)).toBe(true);
@@ -450,6 +454,7 @@ dbDescribe("Unified Players / isolated synthetic PostGIS and HTTP", () => {
       viewer,
       true,
     );
+    expect(n.query.queryRef).toBe(s.query.queryRef);
     expect(n.mapPage!.rankStart).toBe(8);
     expect(
       (
@@ -468,6 +473,8 @@ dbDescribe("Unified Players / isolated synthetic PostGIS and HTTP", () => {
     const n = await next(s, 11),
       r = await next(s, 11);
     expect(n.items).toEqual(r.items);
+    expect(n.query.queryRef).toBe(s.query.queryRef);
+    expect(r.query.queryRef).toBe(s.query.queryRef);
     expect(n.page).toMatchObject({
       rankStart: 51,
       rankEnd: 61,

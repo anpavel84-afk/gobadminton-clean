@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { UnifiedSnapshot, UnifiedRow, UnifiedDistance } from "@gobadminton/contracts";
 import { UnifiedDirectoryController, distanceText, scopedCatalogCursor } from "../src/lib/unified-directory";
-import { candidateMapAllowed, MOSCOW_BUNDLE, allowedMapResource } from "../src/lib/radar-map-assets";
+import { candidateMapAllowed, candidateMapConfigAllowed, MOSCOW_BUNDLE, allowedMapResource } from "../src/lib/radar-map-assets";
+import type { RadarConfig } from "../src/lib/unified-directory";
 import type { Me } from "../src/lib/consumer-types";
 import type { apiFetch } from "../src/lib/api-client";
 const now = Date.parse("2030-01-01T00:00:00Z");
@@ -123,6 +124,12 @@ describe("distance and map authority", () => {
     expect(candidateMapAllowed({ ...preview, exposureMode: "authenticated_live" }, "https://dev.gobadminton.ru")).toBe(true);
     expect(candidateMapAllowed({ ...preview, cityId: "other" }, "https://dev.gobadminton.ru")).toBe(false);
     expect(candidateMapAllowed({ ...preview, map: { ...preview.map, version: "wrong" } } as unknown as UnifiedSnapshot, "https://dev.gobadminton.ru")).toBe(false);
+    const config = { exposureMode:"live", unifiedDirectory:{ enabled:true }, cities:[{ cityId:MOSCOW_BUNDLE.cityId,regionId:"moscow",map:{availability:"dev_preview",mapId:"moscow",version:MOSCOW_BUNDLE.version} }] } as RadarConfig;
+    expect(candidateMapConfigAllowed(config,MOSCOW_BUNDLE.cityId,"https://dev.gobadminton.ru")).toBe(true);
+    expect(candidateMapConfigAllowed(config,MOSCOW_BUNDLE.cityId,"https://gobadminton.ru")).toBe(false);
+    expect(candidateMapConfigAllowed(config,"another-city","https://dev.gobadminton.ru")).toBe(false);
+    expect(candidateMapConfigAllowed({ ...config, cities:[{ ...config.cities[0]!, map:{ availability:"missing" } }] },MOSCOW_BUNDLE.cityId,"https://dev.gobadminton.ru")).toBe(false);
+    expect(candidateMapConfigAllowed(null,MOSCOW_BUNDLE.cityId,"https://dev.gobadminton.ru")).toBe(false);
     expect(allowedMapResource(MOSCOW_BUNDLE.prefix + "style.json")).toBe(true); expect(allowedMapResource("https://evil.example/tiles")).toBe(false); expect(allowedMapResource(MOSCOW_BUNDLE.prefix + "../other/style.json")).toBe(false);
   });
 });

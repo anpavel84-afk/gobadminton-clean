@@ -25,7 +25,7 @@ export function PlayerCard({ player, city, metadata, onSelect }: { player: Publi
     <Avatar avatar={player.avatar} name={player.displayName} tone={player.trainer ? "purple" : "yellow"} />
     <div className="player-card__main">
       <div className="player-card__title"><h3>{player.displayName}</h3>{player.lookingForGame && <Badge>Ищу игру</Badge>}</div>
-      <strong>{formatSocialLevel(player.level)}</strong>
+      {player.level && <strong>{formatSocialLevel(player.level)}</strong>}
       {(city || player.areaKey) && <span><img className="profile-icon" src="/discovery/pin.svg" alt="" />{[city, player.areaKey].filter(Boolean).join(" · ")}</span>}
       {metadata}
       {player.bio && <p>{player.bio}</p>}

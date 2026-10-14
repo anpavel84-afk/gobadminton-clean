@@ -1,4 +1,5 @@
 import type { UnifiedSnapshot } from "@gobadminton/contracts";
+import type { RadarConfig } from "./unified-directory";
 export const MOSCOW_BUNDLE = {
   version: "moscow-20261007-p4-098a869f-v001",
   cityId: "a0000000-0000-4000-8000-000000000001",
@@ -12,6 +13,15 @@ export function candidateMapAllowed(snapshot: UnifiedSnapshot, origin: string): 
   return origin === "https://dev.gobadminton.ru" && snapshot.map.availability === "dev_preview" &&
     snapshot.map.mapId === "moscow" && snapshot.map.version === MOSCOW_BUNDLE.version &&
     ["authenticated_live", "synthetic_demo"].includes(snapshot.exposureMode) && snapshot.cityId === MOSCOW_BUNDLE.cityId;
+}
+/** Public basemap may remain visible while a short-lived signed people query
+ * expires. No participant/pin is allowed without that separate live query. */
+export function candidateMapConfigAllowed(config: RadarConfig | null, cityId: string | undefined, origin: string): boolean {
+  if (origin !== "https://dev.gobadminton.ru" || cityId !== MOSCOW_BUNDLE.cityId ||
+      config?.unifiedDirectory.enabled !== true ||
+      !["live", "synthetic_demo"].includes(config.exposureMode)) return false;
+  const map = config.cities.find(c => c.cityId === cityId)?.map;
+  return map?.availability === "dev_preview" && map.mapId === "moscow" && map.version === MOSCOW_BUNDLE.version;
 }
 export function allowedMapResource(url: string): boolean {
   const resource = url.replace(/^pmtiles:\/\//, "");

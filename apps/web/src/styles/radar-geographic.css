@@ -17,7 +17,7 @@
 .g2-map-header { position:absolute; z-index:3; top:env(safe-area-inset-top,0px); left:16px; right:16px; display:flex; align-items:center; gap:16px; padding:12px 16px; border:1px solid var(--gb-line); border-radius:18px; background:var(--gb-white); box-shadow:0 4px 16px rgba(19,34,26,.08); }
 .g2-radar-map .g2-map-header .radar-entry { width:auto; flex:none; }
 .g2-radar-map .g2-map-header .radar-entry .toggle-row { width:auto; min-height:44px; }
-.g2-map-header > span { flex:1; }.g2-map-header strong,.g2-map-header small { display:block; }.g2-map-header small { color:var(--gb-ink-soft); font-size:12px; }
+.g2-map-header > span:not(.gb-radar-indicator) { flex:1; }.g2-map-header > span:not(.gb-radar-indicator) strong { display:block; }
 .g2-map-header .radar-entry > .gb-c23-btn,.g2-map-header .radar-entry > small { display:none; }
 .g2-map-header .toggle-row { min-height:44px; padding:8px; }.g2-map-back { min-height:44px; display:flex; align-items:center; font-weight:600; }
 .g2-map-session { position:absolute; z-index:5; top:88px; left:16px; right:80px; max-width:480px; }

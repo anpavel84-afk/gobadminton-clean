@@ -13,7 +13,7 @@ export type RadarConfig = {
   exposureMode: "live" | "synthetic_demo";
   unifiedDirectory: UnifiedCapability;
   publishingV2: { enabled: boolean };
-  cities: Array<{ cityId: string; regionId: string; map: { availability: string } }>;
+  cities: Array<{ cityId: string; regionId: string; map: { availability: string; mapId?: string | null; version?: string | null } }>;
 };
 /** A successful HTTP response alone does not advertise a usable private capability. */
 export function compatibleRadarConfig(value: unknown): RadarConfig | null {

@@ -8,7 +8,6 @@ import { readSelectedLocation } from "../../../lib/location-context";
 import { isSocialDirectoryDisabled } from "../../../lib/player-presentation";
 import { Button } from "../Button";
 import { ConsumerShell } from "../ConsumerShell";
-import { RadarSwitchControl, RadarStatusControls } from "../radar/RadarControls";
 import { UnifiedPlayerCard } from "../radar/UnifiedPlayerCard";
 import { UnifiedPlayerPreview } from "../radar/UnifiedPlayerPreview";
 import { useUnifiedDirectory, useRadarConfig } from "../radar/RadarSessionProvider";
@@ -104,8 +103,7 @@ export function PlayersDirectoryPage() {
   function reset() { setName(""); setAreaKey(""); setCityId(""); setLookingOnly(false); setTrainerOnly(false); setCursor(null); }
   const cityName = cities.find(c => c.id === (activationId ? effectiveCityId : cityId))?.nameRu;
   return <ConsumerShell active="players" title="Игроки" hideHeading><div className="fr3 players-page" data-surface="players-directory" data-state={state}>
-    <section className="players-hero"><div><span className="eyebrow">Игровое сообщество</span><h1>Игроки</h1><p>Находите партнёров по уровню, району и игровому настрою.</p></div><RadarSwitchControl /></section>
-    <RadarStatusControls />
+    <section className="players-hero"><div><span className="eyebrow">Игровое сообщество</span><h1>Игроки</h1><p>Находите партнёров по уровню и игровому настрою.</p></div></section>
     {activationId && <div className="unified-actions"><Button href="/players/radar" variant="dark">Показать на карте</Button></div>}
     {directory.view.authenticationRequired && <AuthEntry returnPath="/players">Войти для участников Radar</AuthEntry>}
     {!unifiedMode && directory.view.notice && <section className="radar-notice"><span role="status"><strong>{directory.view.notice}</strong></span></section>}

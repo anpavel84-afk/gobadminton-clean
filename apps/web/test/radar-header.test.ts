@@ -1,12 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { radarHeaderStatus } from "../src/lib/radar-header";
+import { radarHeaderStatus, radarRingFraction } from "../src/lib/radar-header";
 import type { RadarView } from "../src/lib/radar-controller";
 const now = Date.parse("2026-10-09T12:00:00Z");
 const stamp = (n: number) => new Date(now + n * 1000).toISOString();
-const active = { phase: "active", me: { id:"A" }, status: { state:"active", expiresAt:stamp(300),hardExpiresAt:stamp(400),foregroundUntil:stamp(100),locationValidUntil:stamp(120),nextLocationUpdateAt:stamp(60) }, now, confirmedOn:true, pendingStop:false, exposureMode:"live" } as RadarView;
+const active = { phase: "active", me: { id:"A" }, status: { state:"active", startedAt:stamp(0), expiresAt:stamp(300),hardExpiresAt:stamp(400),foregroundUntil:stamp(100),locationValidUntil:stamp(120),nextLocationUpdateAt:stamp(60) }, now, confirmedOn:true, pendingStop:false, exposureMode:"live" } as RadarView;
 describe("compact Radar is a pure honest projection", () => {
   it.each(["checking","guest","off","permission","locating","activating","disabled"])("%s without server confirmation stays hidden", phase => {
     expect(radarHeaderStatus({...active, phase, confirmedOn:false} as RadarView)).toBeNull();
+  });
+  it("renders an authoritative decreasing session ring with no clock beyond expiry", () => {
+    expect(radarRingFraction(active)).toBeGreaterThan(0);
+    expect(radarRingFraction({...active,now:now+150000})).toBeLessThan(radarRingFraction(active));
+    expect(radarRingFraction({...active,now:now+300000})).toBe(0);
+    expect(radarRingFraction({...active,confirmedOn:false})).toBe(0);
+    expect(radarRingFraction({...active,status:{...active.status!,startedAt:"bad"} as RadarView["status"]})).toBe(0);
   });
   it("uses the effective deadline, not just expiresAt", () => {
     expect(radarHeaderStatus(active)).toEqual({tone:"active",text:"Радар включён",until:now+100000});

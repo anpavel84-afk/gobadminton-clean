@@ -2,10 +2,10 @@
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useEffect, useRef, useState } from "react";
-import { MOSCOW_BUNDLE, candidateMapAllowed } from "../../../lib/radar-map-assets";
+import { MOSCOW_BUNDLE, candidateMapConfigAllowed } from "../../../lib/radar-map-assets";
 import { distanceText } from "../../../lib/unified-directory";
 import { Button } from "../Button";
-import { RadarSwitchControl, RadarStatusControls } from "./RadarControls";
+import { RadarStatusAffordance } from "./RadarSessionProvider";
 import { UnifiedPlayerPreview } from "./UnifiedPlayerPreview";
 import { useRadarSession, useUnifiedDirectory, useRadarConfig, useDirectoryFilters } from "./RadarSessionProvider";
 import "../../../styles/radar-geographic.css";
@@ -32,18 +32,24 @@ export function RadarPage() {
     document.body.style.overflow = "hidden";
     return () => { document.body.style.overflow = overflow; };
   }, []);
-  useEffect(() => { setCandidate(snapshot ? candidateMapAllowed(snapshot, window.location.origin) : false); setFailed(false); }, [snapshot?.query.queryRef]);
-  useEffect(() => { if (candidate && controller && !view.mapPage && !view.busy) void controller.map(); }, [candidate, controller, view.mapPage, view.busy]);
+  // Public DEV basemap registration is independent of expiring private
+  // query tokens. Never use stale queries to authorize Radar pins.
+  useEffect(() => {
+    setCandidate(candidateMapConfigAllowed(config, cityId, window.location.origin) && Boolean(session.me));
+    setFailed(false);
+  }, [config, cityId, session.me?.id]);
+  useEffect(() => {
+    if (candidate && controller && snapshot && !view.mapPage && !view.busy) void controller.map();
+  }, [candidate, controller, snapshot?.query.queryRef, view.mapPage, view.busy]);
   useEffect(() => { if (view.selected) { setExpanded(false); } else { if (trigger.current?.isConnected) trigger.current.focus(); } }, [view.selected]);
   useEffect(() => { if (listOpen) sheet.current?.focus(); }, [listOpen]);
-  const mapped = candidate && !failed && snapshot && controller;
+  const mapped = candidate && !failed && controller && session.me;
   function close() { controller?.close(); setListOpen(false); setExpanded(false); }
   return <main id="gb-main" className="gb-consumer g2-radar-map fr3" aria-label="Карта участников Radar">
-    <header className="g2-map-header"><Link className="g2-map-back" href="/players">← К списку</Link><span><strong>Участники Radar</strong><small>{session.confirmedOn ? "Вы делитесь геопозицией" : "Вы смотрите, не делясь геопозицией"}</small></span><RadarSwitchControl map /></header>
-    <div className="g2-map-session"><RadarStatusControls map /></div>
-    {mapped ? <GeographicRadarMap controller={controller} rows={view.pins} selected={view.selected} onSelect={row => { trigger.current = document.activeElement as HTMLElement; setListOpen(false); void controller.select(row); }} onUnavailable={() => setFailed(true)} /> : <section className="g2-map-fallback"><h1>{failed ? "Не удалось загрузить карту" : view.busy ? "Загружаем участников Radar…" : "Карта пока недоступна"}</h1><p>{view.notice || (!snapshot ? "Для загрузки участников требуется активный Radar и доступный город." : "Для этого города можно посмотреть участников Radar в списке.")}</p><Button href="/players">К списку игроков</Button></section>}
-    {mapped && <><div className="g2-map-summary"><button aria-expanded={listOpen} aria-controls="g2-map-panel" onClick={() => { trigger.current = document.activeElement as HTMLElement; if (!listOpen) controller.close(); setListOpen(!listOpen); }}>{view.busy ? "Загружаем игроков…" : `На карте: ${view.pins.length} из ${snapshot.totals.radarTotal}`}</button><small>Приблизительные геопозиции. {view.mapPage?.hasMore ? "Показана часть участников." : ""}</small>{view.mapPage?.nextMapCursor && <Button variant="outline" disabled={view.busy} onClick={() => void controller.map(true)}>Следующие точки</Button>}{view.notice && <small role="status">{view.notice}</small>}</div>
-      {!view.busy && !view.pins.length && <p className="g2-map-empty" role="status">Нет участников с геопозицией. Обычные профили доступны в списке.</p>}
+    <header className="g2-map-header"><Link className="g2-map-back" href="/players">← К списку</Link><span><strong>Участники Radar</strong></span><RadarStatusAffordance /></header>
+    {mapped ? <GeographicRadarMap controller={controller} rows={view.pins} selected={view.selected} onSelect={row => { trigger.current = document.activeElement as HTMLElement; setListOpen(false); void controller.select(row); }} onUnavailable={() => setFailed(true)} /> : <section className="g2-map-fallback"><h1>{failed ? "Не удалось загрузить карту" : !config ? "Проверяем доступность карты…" : "Карта пока недоступна"}</h1><p>{failed ? "Проверьте подключение к картографическим ресурсам." : "Карта доступна для Москвы только на DEV после входа."}</p><Button href="/players">К списку игроков</Button></section>}
+    {mapped && <><div className="g2-map-summary"><button aria-expanded={listOpen} aria-controls="g2-map-panel" onClick={() => { trigger.current = document.activeElement as HTMLElement; if (!listOpen) controller.close(); setListOpen(!listOpen); }}>{view.busy ? "Загружаем игроков…" : `На карте: ${view.pins.length} из ${snapshot?.totals.radarTotal ?? 0}`}</button><small>Приблизительные геопозиции. {view.mapPage?.hasMore ? "Показана часть участников." : ""}</small>{view.mapPage?.nextMapCursor && <Button variant="outline" disabled={view.busy} onClick={() => void controller.map(true)}>Следующие точки</Button>}{view.notice && <small role="status">{view.notice}</small>}</div>
+      {!view.busy && !view.pins.length && <p className="g2-map-empty" role="status">{view.stale || !snapshot ? "Обновляем участников Radar. Карта города доступна." : "Нет участников с геопозицией. Обычные профили доступны в списке."}</p>}
       {(listOpen || view.selected) && <aside id="g2-map-panel" ref={sheet} tabIndex={-1} aria-label="Игроки на карте" className={`g2-map-panel ${expanded || listOpen ? "is-expanded" : ""}`} onKeyDown={e => { if (e.key === "Escape") close(); }}>
         <header onTouchStart={e => { touchY.current = e.touches[0]?.clientY ?? null; }} onTouchEnd={e => { const y = e.changedTouches[0]?.clientY; if (touchY.current !== null && y !== undefined) { if (y - touchY.current > 70) setExpanded(false); if (touchY.current - y > 70) setExpanded(true); } touchY.current = null; }}><button aria-label={expanded ? "Свернуть карточку" : "Развернуть карточку"} aria-expanded={expanded} className="g2-sheet-handle" onClick={() => setExpanded(!expanded)}>—</button><button aria-label="Закрыть карточку игрока" onClick={close}>×</button></header>
         {view.selected ? <UnifiedPlayerPreview onClose={close} /> : <><h2>Игроки на карте</h2>{view.pins.map(row => <button className="g2-map-list-row" key={row.publicPlayerId} onClick={() => { trigger.current = document.activeElement as HTMLElement; setListOpen(false); void controller.select(row); }}><strong>{row.player.displayName}</strong><small>{distanceText(row.radar?.distance ?? null) ?? "Расстояние неизвестно"}</small></button>)}</>}

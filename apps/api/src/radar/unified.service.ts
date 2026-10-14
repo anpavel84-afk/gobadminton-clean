@@ -426,7 +426,11 @@ export class UnifiedPlayersService {
         validUntil: new Date(context.expiresAt).toISOString(),
         refreshAfterSeconds: 30,
         query: {
-          queryRef: sealUnified(this.env, "query", context),
+          // AES-GCM uses a fresh random IV. Re-encrypting the SAME context gives
+          // different opaque bytes, so a client cannot compare returned refs.
+          // Continuations (including the map window) echo the authenticated
+          // incoming reference without relaxing actor/session/revision fences.
+          queryRef: "queryRef" in input ? input.queryRef : sealUnified(this.env, "query", context),
           asOf: new Date(context.asOf).toISOString(),
           ordering: context.origin
             ? "radar_distance_then_directory"

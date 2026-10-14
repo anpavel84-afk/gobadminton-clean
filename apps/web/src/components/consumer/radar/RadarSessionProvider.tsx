@@ -1,9 +1,11 @@
 "use client";
-import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { createContext, useContext, useEffect, useId, useState, useSyncExternalStore, type ReactNode } from "react";
-import { radarHeaderStatus } from "../../../lib/radar-header";
+import { createContext, useContext, useEffect, useId, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { radarHeaderStatus, radarRingFraction } from "../../../lib/radar-header";
 import { RadarController, type RadarView } from "../../../lib/radar-controller";
+import { remainingTime } from "../../../lib/radar-presentation";
+import { Button } from "../Button";
+import { AuthEntry, ProfileDialog } from "../players/ProfileComposition";
 import { syntheticDemoFix } from "../../../lib/radar-demo-fix";
 import { apiFetch } from "../../../lib/api-client";
 import { devMoscowFix, usesDevMoscowLocation } from "../../../lib/radar-dev-moscow";
@@ -117,17 +119,99 @@ function RadarPermissionObserver() {
   }, [controller, config, view.exposureMode, view.confirmedOn]);
   return null;
 }
+/** Single owner-approved Radar control for desktop, mobile and map header.
+ * Public circular countdown is strictly projected from authoritative status;
+ * the popover owns explicit start/renew/stop actions, never automatic GPS. */
 export function RadarStatusAffordance() {
-  const { view } = useRadarSession();
-  const status = radarHeaderStatus(view); const id = useId();
+  const { controller, view } = useRadarSession();
+  const config = useRadarConfig();
+  const status = radarHeaderStatus(view);
+  const popupId = useId();
   const [open, setOpen] = useState(false);
-  if (!status) return null;
-  return <span className="gb-radar-indicator" data-tone={status.tone} onPointerEnter={() => setOpen(true)} onPointerLeave={() => setOpen(false)}>
-    <Link className="gb-radar-indicator__link" href="/players" aria-label={`${status.text}. Перейти к управлению радаром`} aria-describedby={open ? id : undefined}
-      onFocus={() => setOpen(true)} onBlur={() => setOpen(false)} onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); setOpen(false); } }}>
-      <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="4" /><path d="M12 12 19 5" /><circle cx="12" cy="12" r="1" /></svg>
-    </Link>
-    {open && <span id={id} role="tooltip" className="gb-radar-tooltip">{status.text}{status.until && <small>До {new Date(status.until).toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit" })}</small>}</span>}
+  const host = useRef<HTMLSpanElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const outside = (event: PointerEvent) => {
+      if (!host.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setOpen(false);
+        trigger.current?.focus();
+      }
+    };
+    document.addEventListener("pointerdown", outside);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("pointerdown", outside);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [open]);
+  const activation = view.status?.state === "active" ? view.status : null;
+  const running = view.phase === "active" && Boolean(activation) && view.confirmedOn;
+  const progress = radarRingFraction(view);
+  const circumference = 2 * Math.PI * 21;
+  const busy = ["checking", "permission", "locating", "activating", "stopping", "background"].includes(view.phase);
+  const canStart = Boolean(controller && config?.publishingV2.enabled && !busy && view.phase !== "disabled");
+  const canRenew = Boolean(running && activation && Date.parse(activation.hardExpiresAt) > Date.parse(activation.expiresAt));
+  const needsLocation = Boolean(running && activation && view.now >= Date.parse(activation.nextLocationUpdateAt));
+  const canStop = Boolean(controller && view.me && view.status && "activationId" in view.status && !busy);
+  const remaining = running && activation ? remainingTime(activation.expiresAt, view.now) : null;
+  const caption = status?.text ?? (view.phase === "guest" ? "Войдите для Radar" : "Radar выключен");
+  const close = () => { setOpen(false); trigger.current?.focus(); };
+  return <span ref={host} className="gb-radar-indicator" data-tone={status?.tone ?? "off"}>
+    <button ref={trigger} type="button" className="gb-radar-indicator__link"
+      aria-label={caption + ". Открыть управление Radar"} aria-haspopup="dialog"
+      aria-expanded={open} aria-controls={open ? popupId : undefined}
+      onClick={() => setOpen(value => !value)}>
+      <svg aria-hidden="true" viewBox="0 0 48 48" className="gb-radar-symbol">
+        <circle cx="24" cy="24" r="21" fill="none" stroke="currentColor" strokeWidth="3.5" opacity=".13"/>
+        {running && <circle className="gb-radar-progress" cx="24" cy="24" r="21" fill="none"
+          stroke="#8DE126" strokeWidth="3.5" strokeLinecap="round"
+          strokeDasharray={circumference} strokeDashoffset={circumference * (1 - progress)}
+          transform="rotate(-90 24 24)"/>}
+        <circle className="gb-radar-symbol__disc" cx="24" cy="24" r="16" />
+        <g className="gb-radar-symbol__glyph" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+          <circle cx="24" cy="24" r="11"/><circle cx="24" cy="24" r="6"/>
+          <path d="M24 24L31 17"/><circle cx="24" cy="24" r="1.3" fill="currentColor"/>
+        </g>
+      </svg>
+    </button>
+    {open && <section id={popupId} className="gb-radar-popover" role="dialog" aria-label="Управление Radar">
+      <strong>{caption}</strong>
+      {running && <><div className="gb-radar-popover__time" aria-live="off">
+        <b>{remaining}</b><small>до окончания сессии</small>
+      </div><div className="gb-radar-popover__track" aria-hidden="true"><span style={{ width: String(Math.round(progress * 100)) + "%" }}/></div></>}
+      {needsLocation && <p role="status">Обновите геопозицию, чтобы Radar продолжал показывать участников.</p>}
+      {view.phase === "owned_elsewhere" && <p>Radar работает на другом устройстве. Можно перенести его сюда.</p>}
+      <div className="gb-radar-popover__actions">
+        {view.phase === "guest" ? <AuthEntry returnPath="/players">Войти для Radar</AuthEntry> :
+          running ? <>
+            {canRenew && <Button disabled={!controller || busy} onClick={() => { close(); if (controller) void controller.activate(() => acquireRadarLocation(controller), "renew"); }}>Продлить</Button>}
+            {needsLocation && <Button variant="outline" disabled={!controller || busy} onClick={() => { close(); if (controller) void controller.activate(() => acquireRadarLocation(controller), "location"); }}>Обновить позицию</Button>}
+            <Button variant="outline" disabled={!canStop} onClick={() => { close(); if (controller) void controller.stop(); }}>Выключить</Button>
+          </> : <>
+            {view.confirmedOn && canStop && <Button variant="outline" onClick={() => { close(); if (controller) void controller.stop(); }}>Выключить</Button>}
+            {!view.confirmedOn && <Button disabled={!canStart} onClick={() => { close(); controller?.permission(); }}>Включить Radar</Button>}
+            {view.phase === "error" && <Button variant="outline" onClick={() => { close(); if (controller) void controller.reconcile(); }}>Проверить статус</Button>}
+            {view.phase === "owned_elsewhere" && <Button disabled={!canStart} onClick={() => { close(); controller?.permission(); }}>Перенести сюда</Button>}
+          </>}
+      </div>
+    </section>}
+    {view.phase === "permission" && controller && <div className="fr3"><ProfileDialog title="Включить Radar и поделиться геопозицией?"
+      onClose={() => controller.cancel()}>
+      <p>{config?.unifiedDirectory.disclosure.text ?? "Radar сейчас недоступен. Можно пользоваться обычным каталогом."}</p>
+      {view.status?.state === "owned_elsewhere" && <p>В другой сессии Radar выключится.</p>}
+      <div className="profile-form-actions">
+        <Button disabled={!config?.publishingV2.enabled}
+          onClick={() => void controller.activate(() => acquireRadarLocation(controller))}>
+          {view.status?.state === "owned_elsewhere" ? "Перенести и включить" : "Согласен, включить Radar"}
+        </Button>
+        <Button variant="ghost" onClick={() => controller.cancel()}>Отмена</Button>
+      </div>
+    </ProfileDialog></div>}
   </span>;
 }
 /** Called only by an explicit foreground intent. Synthetic never falls through to GPS. */

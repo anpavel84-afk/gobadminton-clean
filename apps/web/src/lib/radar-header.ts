@@ -14,3 +14,14 @@ export function radarHeaderStatus(view: RadarView): { tone: "active" | "attentio
   }
   return { tone: "checking", text: "Проверить статус радара" + demo };
 }
+
+/** The outer lime arc shrinks continuously over the CONFIRMED session window.
+ * No local animation timer is required: the existing RadarSessionProvider
+ * publishes the authoritative second-by-second view.now. */
+export function radarRingFraction(view: RadarView): number {
+  const a = view.status;
+  if (!view.confirmedOn || view.phase !== "active" || a?.state !== "active") return 0;
+  const start = Date.parse(a.startedAt), expires = Date.parse(a.expiresAt);
+  if (![start, expires, view.now].every(Number.isFinite) || expires <= start) return 0;
+  return Math.max(0, Math.min(1, (expires - view.now) / (expires - start)));
+}
