@@ -13,23 +13,19 @@ function snapshot(items: UnifiedRow[] = [row("first")]): UnifiedSnapshot {
 }
 const me = { id: "viewer", csrfToken: "csrf" } as Me;
 const filters = { cityId: MOSCOW_BUNDLE.cityId };
-describe("ordinary pagination follows the exact visible city and Radar state", () => {
-  const allCities = JSON.stringify({ city: "", areaKey: "", name: "", lookingOnly: false, trainerOnly: false, radarOn: false });
-  const moscowRadar = JSON.stringify({ city: MOSCOW_BUNDLE.cityId, areaKey: "", name: "", lookingOnly: false, trainerOnly: false, radarOn: true });
+describe("ordinary pagination follows only the ordinary filters", () => {
+  const allCities = JSON.stringify({ city: "", areaKey: "", name: "", lookingOnly: false, trainerOnly: false });
+  const moscow = JSON.stringify({ city: MOSCOW_BUNDLE.cityId, areaKey: "", name: "", lookingOnly: false, trainerOnly: false });
   const oldPage = { scope: allCities, value: "all-cities-page-2" };
-  const moscowPage = { scope: moscowRadar, value: "moscow-page-2" };
-  it("does not resurrect page2 on All cities -> Moscow Radar -> All cities", () => {
-    let stored: { scope: string; value: string } | null = oldPage;
-    expect(scopedCatalogCursor(stored, allCities)).toBe("all-cities-page-2");
-    expect(scopedCatalogCursor(stored, moscowRadar)).toBeNull();
-    // The component's ordinaryScope effect clears both saved tokens.
-    stored = null;
-    expect(scopedCatalogCursor(stored, allCities)).toBeNull();
-    stored = moscowPage;
-    expect(scopedCatalogCursor(stored, allCities)).toBeNull();
+  it("preserves All cities page2 across Radar OFF/ON, but not a city change", () => {
+    expect(scopedCatalogCursor(oldPage, allCities)).toBe("all-cities-page-2");
+    expect(scopedCatalogCursor(oldPage, moscow)).toBeNull();
+    // A city/filter transition clears saved tokens; returning to A starts fresh.
+    const cleared = null;
+    expect(scopedCatalogCursor(cleared, allCities)).toBeNull();
   });
-  it("also invalidates pagination on ordinary filter changes without a Radar toggle", () => {
-    const nameChanged = JSON.stringify({ city: "", areaKey: "", name: "Anna", lookingOnly: false, trainerOnly: false, radarOn: false });
+  it("invalidates pagination on name filters", () => {
+    const nameChanged = JSON.stringify({ city: "", areaKey: "", name: "Anna", lookingOnly: false, trainerOnly: false });
     expect(scopedCatalogCursor(oldPage, nameChanged)).toBeNull();
   });
 });
