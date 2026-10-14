@@ -4,6 +4,7 @@ import * as maplibregl from "maplibre-gl";
 import type { Map as LibreMap, StyleSpecification } from "maplibre-gl";
 import { Protocol } from "pmtiles";
 import "maplibre-gl/dist/maplibre-gl.css";
+import { listAllCityVenues } from "../../../lib/api-client";
 import type { UnifiedRow } from "@gobadminton/contracts";
 import { MOSCOW_BUNDLE, allowedMapResource } from "../../../lib/radar-map-assets";
 import { initialsFromName } from "../../../lib/player-presentation";
@@ -20,18 +21,23 @@ export function GeographicRadarMap({ controller, rows, selected, onSelect, onUna
   const container = useRef<HTMLDivElement>(null); const map = useRef<LibreMap | null>(null);
   const markers = useRef<Array<{ marker: maplibregl.Marker; button: HTMLButtonElement; id: string }>>([]);
   const callbacks = useRef({ onSelect, onUnavailable }); callbacks.current = { onSelect, onUnavailable };
+  const [venueCount, setVenueCount] = useState<number | null>(null);
+  const [venuesFailed, setVenuesFailed] = useState(false);
   const [ready, setReady] = useState(false); const [status, setStatus] = useState("Загружаем карту города…");
   useEffect(() => {
     let alive = true; const abort = new AbortController(); let instance: LibreMap | undefined;
     const timeout = setTimeout(() => { if (alive && !instance?.loaded()) callbacks.current.onUnavailable(); }, 20000);
     async function start() {
       try {
-        const response = await fetch(MOSCOW_BUNDLE.prefix + "style.json", { credentials: "omit", signal: abort.signal });
+        const response = await fetch(MOSCOW_BUNDLE.prefix + "style-dev.json", { credentials: "omit", signal: abort.signal });
         if (!response.ok) throw new Error("style");
         const bytes = await response.arrayBuffer();
         const hash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map(b => b.toString(16).padStart(2, "0")).join("");
         if (hash !== MOSCOW_BUNDLE.styleHash) throw new Error("style identity");
         const style = JSON.parse(new TextDecoder().decode(bytes)) as StyleSpecification;
+        // PMTiles fetches its archive internally: validate style URLs before installing it.
+        const resources = [style.glyphs, ...(typeof style.sprite === "string" ? [style.sprite] : (style.sprite ?? []).map(sprite => sprite.url)), ...Object.values(style.sources).flatMap(source => ["url" in source ? source.url : undefined, ...("tiles" in source ? source.tiles ?? [] : [])])];
+        if (resources.some(url => typeof url === "string" && !allowedMapResource(url))) throw new Error("Unapproved style resource");
         if (!alive || !container.current) return;
         installProtocol();
         instance = new maplibregl.Map({ container: container.current, style, center: controller.camera?.center ?? MOSCOW_BUNDLE.center, zoom: controller.camera?.zoom ?? 10.5, maxBounds: MOSCOW_BUNDLE.bounds, maxZoom: 16, attributionControl: { compact: false }, dragRotate: false, pitchWithRotate: false,
@@ -62,6 +68,24 @@ export function GeographicRadarMap({ controller, rows, selected, onSelect, onUna
     }
     // Selection focus survives subsequent tick renders; source rows change only on a new window.
   }, [rows, ready]);
+  useEffect(() => {
+    if (!ready || !map.current) return;
+    let alive = true; const venueMarkers: maplibregl.Marker[] = [];
+    void listAllCityVenues(MOSCOW_BUNDLE.cityId).then(result => {
+      if (!alive || !map.current) return;
+      if (!result.ok) { setVenuesFailed(true); return; }
+      for (const venue of result.data) {
+        const { latitude: lat, longitude: lon } = venue;
+        if (venue.cityId !== MOSCOW_BUNDLE.cityId || typeof lat !== "number" || typeof lon !== "number" || !Number.isFinite(lat) || !Number.isFinite(lon) || lon < 36 || lon > 39.5 || lat < 54.5 || lat > 56.5) continue;
+        const button = document.createElement("button"); button.type = "button"; button.className = "g2-map-venue-marker"; button.textContent = "⌂"; button.setAttribute("aria-label", `Площадка: ${venue.name}`);
+        const content = document.createElement("div"); const title = document.createElement("strong"); title.textContent = venue.name; const address = document.createElement("p"); address.textContent = venue.address; content.append(title, address);
+        const marker = new maplibregl.Marker({ element: button }).setLngLat([lon, lat]).setPopup(new maplibregl.Popup().setDOMContent(content)).addTo(map.current);
+        venueMarkers.push(marker);
+      }
+      setVenueCount(venueMarkers.length);
+    }).catch(() => { if (alive) setVenuesFailed(true); });
+    return () => { alive = false; venueMarkers.forEach(marker => marker.remove()); };
+  }, [ready]);
   useEffect(() => { for (const marker of markers.current) marker.button.setAttribute("aria-pressed", String(marker.id === selected)); }, [selected]);
   function fit() {
     if (!map.current) return;
@@ -70,5 +94,5 @@ export function GeographicRadarMap({ controller, rows, selected, onSelect, onUna
     const bounds = new maplibregl.LngLatBounds(); points.forEach(p => bounds.extend(p));
     map.current.fitBounds(bounds, { padding: { top: 100, bottom: 180, left: 60, right: 60 }, maxZoom: 13, duration: 0 });
   }
-  return <><div ref={container} className="g2-map-canvas" data-map-ready={ready} />{status && <p className="g2-map-loading" role="status">{status}</p>}<div className="g2-map-camera" aria-label="Управление картой"><button aria-label="Увеличить карту" onClick={() => map.current?.zoomIn()}>+</button><button aria-label="Уменьшить карту" onClick={() => map.current?.zoomOut()}>−</button><button aria-label="Показать всех полученных игроков" onClick={fit}><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="7" /><circle cx="12" cy="12" r="2" /><path d="M12 2v3m0 14v3M2 12h3m14 0h3" /></svg></button></div></>;
+  return <><div ref={container} className="g2-map-canvas" data-map-ready={ready} />{status && <p className="g2-map-loading" role="status">{status}</p>}<p className="g2-map-venues" role="status">{venuesFailed ? "Площадки не удалось загрузить" : venueCount === null ? "Загружаем площадки…" : `Площадки на карте: ${venueCount}`}</p><div className="g2-map-camera" aria-label="Управление картой"><button aria-label="Увеличить карту" onClick={() => map.current?.zoomIn()}>+</button><button aria-label="Уменьшить карту" onClick={() => map.current?.zoomOut()}>−</button><button aria-label="Показать всех полученных игроков" onClick={fit}><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="7" /><circle cx="12" cy="12" r="2" /><path d="M12 2v3m0 14v3M2 12h3m14 0h3" /></svg></button></div></>;
 }

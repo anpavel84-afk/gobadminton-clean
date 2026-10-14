@@ -1,3 +1,4 @@
+import { devMapPreview } from "./dev-map-preview";
 import { devMoscowTestAllowed, devMoscowTestLocation } from "./dev-moscow-test";
 import { UNIFIED_WIRE,UNIFIED_POLICY,UNIFIED_DISCLOSURE_ID,UNIFIED_DISCLOSURE_HASH,UNIFIED_DISCLOSURE_TEXT } from "./unified-contract";
 import { Inject, Injectable } from "@nestjs/common";
@@ -93,7 +94,7 @@ export class GeographicRadarService {
         cities: cityIds.map((cityId) => ({
           cityId,
           regionId: geographicCity(cityId, mode).regionId,
-          map: { availability: "missing" },
+          map: devMapPreview(this.env, cityId),
         })),
       };
     });

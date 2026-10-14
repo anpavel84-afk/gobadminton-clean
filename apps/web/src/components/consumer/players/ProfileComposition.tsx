@@ -20,8 +20,8 @@ export function Avatar({ name, tone = "lime", avatar }: { name: string; tone?: "
 export function Badge({ children, trainer = false }: { children: ReactNode; trainer?: boolean }) {
   return <span className={`status-badge status-badge--${trainer ? "attention" : "available"}`}>{children}</span>;
 }
-export function PlayerCard({ player, city, metadata }: { player: PublicPlayer; city?: string; metadata?: ReactNode }) {
-  return <Link className="player-card" href={`/players/${player.publicPlayerId}`}>
+export function PlayerCard({ player, city, metadata, onSelect }: { player: PublicPlayer; city?: string; metadata?: ReactNode; onSelect?: () => void }) {
+  const content = <>
     <Avatar avatar={player.avatar} name={player.displayName} tone={player.trainer ? "purple" : "yellow"} />
     <div className="player-card__main">
       <div className="player-card__title"><h3>{player.displayName}</h3>{player.lookingForGame && <Badge>Ищу игру</Badge>}</div>
@@ -32,7 +32,8 @@ export function PlayerCard({ player, city, metadata }: { player: PublicPlayer; c
       {player.trainer && <em>Тренер</em>}
       {player.canRequestContact === true && <small>Принимает запросы на общение</small>}
     </div><span className="player-card__arrow" aria-hidden="true"><img className="profile-icon" src="/discovery/arrow.svg" alt="" /></span>
-  </Link>;
+  </>;
+  return onSelect ? <button type="button" className="player-card" onClick={onSelect}>{content}</button> : <Link className="player-card" href={`/players/${player.publicPlayerId}`}>{content}</Link>;
 }
 export function SectionHeader({ title, eyebrow, action }: { title: string; eyebrow?: string; action?: ReactNode }) {
   return <header className="editable-section-header"><span>{eyebrow && <small>{eyebrow}</small>}<h2>{title}</h2></span>{action}</header>;

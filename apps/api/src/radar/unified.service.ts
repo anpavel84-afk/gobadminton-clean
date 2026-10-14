@@ -1,3 +1,4 @@
+import { devMapPreview } from "./dev-map-preview";
 import { devMoscowFixturesEnabled, refreshDevMoscowPeers } from "./dev-moscow-test";
 import { MOSCOW_CITY_ID } from "../venues/venues.service";
 import { Inject, Injectable } from "@nestjs/common";
@@ -441,7 +442,7 @@ export class UnifiedPlayersService {
           ordinaryOnlyTotal: Number(stats.ordinary_total),
           completeness: "exact_at_asOf",
         },
-        map: { availability: "missing", mapId: null, version: null },
+        map: devMapPreview(this.env, context.filters.cityId),
         ...(map
           ? { mapPage: { ...pagination, nextMapCursor: next } }
           : { page: { ...pagination, nextCursor: next } }),

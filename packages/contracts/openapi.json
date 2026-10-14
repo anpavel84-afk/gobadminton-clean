@@ -16619,17 +16619,24 @@
         }
       },
       "RadarGeographicMap": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "availability"
-        ],
-        "properties": {
-          "availability": {
-            "type": "string",
-            "const": "missing"
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "availability"
+            ],
+            "properties": {
+              "availability": {
+                "type": "string",
+                "const": "missing"
+              }
+            }
+          },
+          {
+            "$ref": "#/components/schemas/UnifiedMap"
           }
-        }
+        ]
       },
       "RadarGeographicSnapshot": {
         "type": "object",
@@ -17663,24 +17670,48 @@
         }
       },
       "UnifiedMap": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "availability",
-          "mapId",
-          "version"
-        ],
-        "properties": {
-          "availability": {
-            "const": "missing"
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "availability",
+              "mapId",
+              "version"
+            ],
+            "properties": {
+              "availability": {
+                "const": "missing"
+              },
+              "mapId": {
+                "type": "null"
+              },
+              "version": {
+                "type": "null"
+              }
+            }
           },
-          "mapId": {
-            "type": "null"
-          },
-          "version": {
-            "type": "null"
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "availability",
+              "mapId",
+              "version"
+            ],
+            "properties": {
+              "availability": {
+                "const": "dev_preview"
+              },
+              "mapId": {
+                "const": "moscow"
+              },
+              "version": {
+                "const": "moscow-20261007-p4-098a869f-v001"
+              }
+            }
           }
-        }
+        ]
       },
       "UnifiedQueryInfo": {
         "type": "object",

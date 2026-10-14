@@ -1,4 +1,5 @@
 /* global process, sessionStorage, window, navigator, document, Event, innerWidth, console, URL */
+// Requires restored legacy fixture; currently NOT_TESTED.
 // Author regression against the built React provider, synthetic loopback only.
 // Run from repository root after starting Next on 127.0.0.1:18982.
 import assert from 'node:assert/strict';
@@ -7,6 +8,7 @@ import { pathToFileURL } from 'node:url';
 const { chromium } = await import(pathToFileURL(process.cwd() + '/.tools/node_modules/playwright/index.mjs'));
 const evidence = process.cwd() + '/docs/workbench/product-rebaseline/p1-repair01/';
 const { state, response, city } = await import(pathToFileURL(evidence + 'legacy-fixture.mjs'));
+const activeUnified = () => ({ state: 'active', contractVersion: 'players-unified-radar-v1', activationId: 'fixture-activation', version: 1, ownerHere: true, policyVersion: 'radar-geographic-sharing-v2', exposureMode: 'live', expiresAt: new Date(Date.now()+300000).toISOString(), hardExpiresAt: new Date(Date.now()+600000).toISOString(), foregroundUntil: new Date(Date.now()+90000).toISOString(), locationValidUntil: new Date(Date.now()+360000).toISOString(), nextLocationUpdateAt: new Date(Date.now()+300000).toISOString() });
 const origin = process.env.P1_ORIGIN || 'http://127.0.0.1:18984';
 const report = { kind: 'author checks, not independent QA', checks: [], failures: [], requests: [], pageErrors: [] };
 await mkdir(evidence + 'session-race', { recursive: true });
@@ -32,6 +34,7 @@ try {
         const call = { name, actor: s.actor, path: url.pathname, method: req.method(), csrf: req.headers()['x-csrf-token'] ?? null };
         calls.push(call); report.requests.push(call);
         const r = response(s, url.pathname, req.method(), body);
+        if (url.pathname === "/v1/me/radar/activations/current" && !s.guest) r.data = activeUnified();
         // Capture A now, then deliberately deliver its successful identity last.
         if (holdA && url.pathname === '/v1/me') await new Promise(resolve => held.push(resolve));
         await route.fulfill({ status: r.status, json: r.data }).catch(() => {});
@@ -58,7 +61,7 @@ try {
           assert.equal(calls.filter(c => c.method !== 'GET').length, 0);
         } else {
           await page.getByRole('combobox', { name: 'Город', exact: true }).selectOption(city);
-          await page.getByRole('button', { name: 'Смотреть участников Radar', exact: true }).click();
+          // The mocked server confirms an active unified session; query is automatic.
           for (let i = 0; i < 100 && !calls.some(c => c.path === '/v1/players/query'); i++) await page.waitForTimeout(25);
           const queries = calls.filter(c => c.path === '/v1/players/query');
           assert.ok(queries.length > 0, 'B query must execute');
@@ -88,6 +91,7 @@ try {
     const body = req.postData() ? req.postDataJSON() : null;
     if (url.pathname === '/v1/players/query') { rotated = true; queryCalls++; }
     const r = response(s, url.pathname, req.method(), body);
+        if (url.pathname === "/v1/me/radar/activations/current" && !s.guest) r.data = activeUnified();
     if (url.pathname === '/v1/me' && rotated) { r.data.csrfToken = 'csrf-A-rotated'; identityAfter401++; }
     report.requests.push({ name: 'query401-same-account-rotation', path: url.pathname, status: r.status });
     await route.fulfill({ status: r.status, json: r.data }).catch(() => {});
@@ -97,7 +101,7 @@ try {
   try {
     await page.goto(origin + '/players');
     await page.getByRole('combobox', { name: 'Город', exact: true }).selectOption(city);
-    await page.getByRole('button', { name: 'Смотреть участников Radar', exact: true }).click();
+    // The mocked server confirms an active unified session; query is automatic.
     await page.waitForTimeout(800);
     assert.ok(identityAfter401 > 0, 'independent /me200 with rotated token occurred');
     await page.getByText('Войдите снова, чтобы смотреть участников Radar.', { exact: true }).waitFor();

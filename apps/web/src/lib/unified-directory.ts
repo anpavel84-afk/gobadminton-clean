@@ -108,13 +108,15 @@ export class UnifiedDirectoryController {
   }
   async query(filters: UnifiedFilters, origin: UnifiedOriginInput = { kind: "none" }, activationKey: string | null = origin.kind === "current_activation" ? origin.activationId : null) {
     if (!this.me || !this.visible || this.view.capabilityUnavailable || this.view.authenticationRequired) return;
-    this.filters = filters; this.origin = origin; this.activationOriginKey = activationKey;
-    this.invalidate(); this.set({ mode: "unified" });
+    if (this.pending) return;
     if (this.clock() < Math.max(this.nextInitial, this.retryAt)) {
+      if (JSON.stringify(this.filters) !== JSON.stringify(filters) || this.activationOriginKey !== activationKey) this.invalidate();
       // A declined query must not leave a raw foreground fix in controller memory.
       this.origin = { kind: "none" };
       this.set({ stale: true, notice: "Обновить участников Radar можно через несколько секунд. Пока доступен обычный каталог." }); return;
     }
+    this.filters = filters; this.origin = origin; this.activationOriginKey = activationKey;
+    this.invalidate(); this.set({ mode: "unified" });
     this.nextInitial = this.clock() + 30000;
     const epoch = this.epoch; this.pending = true; this.set({ busy: true });
     const result = await this.request<UnifiedSnapshot>("/v1/players/query", { method: "POST", csrfToken: this.me.csrfToken, signal: this.abort.signal, body: JSON.stringify({ contractVersion: UNIFIED_WIRE, filters, origin, limit: 50 }) });

@@ -102,6 +102,9 @@ export const envSchema = z
       .optional()
       .transform((value) => value === "1" || value === "true"),
     /** Root-only DEV opt-in; owner receives simulated GPS, authenticated viewers see TEST peers. */
+    RADAR_DEV_MAP_PREVIEW_ENABLED: z.enum(["0", "1"]).default("0"),
+    RADAR_DEV_MAP_PREVIEW_VERSION: z.string().optional(),
+    RADAR_DEV_MAP_PREVIEW_STYLE_SHA256: z.string().optional(),
     RADAR_DEV_TEST_OWNER_USER_ID: z.uuid().optional(),
     /** Source-staged geographic cutover; default off, separate from legacy mode flags. */
     RADAR_GEOGRAPHIC_TOKEN_EPOCH: z.string().min(1).max(128).default("source-stage-v1"),
@@ -271,6 +274,9 @@ export const envSchema = z
       YANDEX_CLIENT_SECRET: optionalNonEmpty(raw.YANDEX_CLIENT_SECRET),
       YANDEX_REDIRECT_URI: optionalNonEmpty(raw.YANDEX_REDIRECT_URI),
       SOCIAL_DIRECTORY_ENABLED: raw.SOCIAL_DIRECTORY_ENABLED ?? false,
+      RADAR_DEV_MAP_PREVIEW_ENABLED: raw.RADAR_DEV_MAP_PREVIEW_ENABLED === "1",
+      RADAR_DEV_MAP_PREVIEW_VERSION: raw.RADAR_DEV_MAP_PREVIEW_VERSION,
+      RADAR_DEV_MAP_PREVIEW_STYLE_SHA256: raw.RADAR_DEV_MAP_PREVIEW_STYLE_SHA256,
       RADAR_DEV_TEST_OWNER_USER_ID: raw.RADAR_DEV_TEST_OWNER_USER_ID,
       RADAR_GEOGRAPHIC_TOKEN_EPOCH: raw.RADAR_GEOGRAPHIC_TOKEN_EPOCH,
       SOCIAL_RADAR_UNIFIED_ENABLED: raw.SOCIAL_RADAR_UNIFIED_ENABLED ?? false,

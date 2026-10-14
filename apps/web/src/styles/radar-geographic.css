@@ -1,10 +1,6 @@
 /* G2 uses canonical map controls, PlayerCard metadata and Drawer/BottomSheet tokens. */
 .unified-actions { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin:12px 0 20px; }
 .unified-actions p { width:100%; color:var(--gb-ink-soft); font-size:14px; }
-.unified-row { position:relative; }
-.unified-row .player-card { padding-right:112px; }
-.unified-detail { position:absolute; right:20px; bottom:20px; border:1px solid var(--gb-line); border-radius:12px; padding:10px; background:var(--gb-white); cursor:pointer; }
-.unified-public { width:100%; text-align:left; color:var(--gb-ink); cursor:pointer; }
 .unified-distance { color:var(--gb-ink); font-weight:600; }
 .unified-distance small { display:block; color:var(--gb-ink-soft); font-weight:400; }
 .unified-preview { outline:none; }
@@ -42,10 +38,12 @@
 .g2-radar-map .maplibregl-ctrl-attrib { font-family:inherit; max-width:100%; font-size:12px; background:var(--gb-white); }.g2-radar-map .maplibregl-ctrl-bottom-right { right:8px; bottom:calc(8px + env(safe-area-inset-bottom,0px)); }
 @media(max-width:900px) { .g2-map-panel { right:16px; width:340px; } }
 @media(max-width:720px) {
-  .unified-row .player-card { padding-right:20px; padding-bottom:62px; }.unified-detail { right:16px; bottom:12px; }
   .g2-map-header { left:8px; right:8px; padding:8px; gap:8px; }.g2-map-header > span strong { font-size:14px; }.g2-map-header > span small { font-size:10px; }.g2-map-header .radar-entry .toggle-row > span { display:none; }.g2-map-back { font-size:13px; }
   .g2-map-camera,.g2-map-summary { top:88px; }.g2-map-summary { left:8px; padding:8px; }.g2-map-summary small { max-width:220px; }
   .g2-map-panel { top:auto; bottom:calc(36px + env(safe-area-inset-bottom,0px)); left:0; right:0; width:100%; max-width:100%; max-height:30dvh; border-radius:28px 28px 0 0; padding:8px 16px 16px; transition:max-height 220ms var(--gb-ease); }
   .g2-map-panel.is-expanded { max-height:68dvh; }.g2-map-panel > header { touch-action:none; justify-content:space-between; }.g2-sheet-handle { display:block; flex:1; }.g2-map-panel .unified-preview > .avatar { display:none; }.g2-map-panel h2 { margin:0 0 8px; }
 }
 @media(prefers-reduced-motion:reduce) { .g2-radar-map * { transition:none !important; } }
+
+.g2-map-venue-marker { width: 32px; height: 32px; border: 2px solid var(--gb-purple); border-radius: 8px; background: var(--gb-surface); color: var(--gb-purple); cursor: pointer; font-size: 20px; }
+.g2-map-venues { position: absolute; left: 16px; bottom: 100px; padding: 8px; background: var(--gb-surface); border-radius: 8px; font-size: 12px; }

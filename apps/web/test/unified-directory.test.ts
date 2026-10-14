@@ -51,6 +51,18 @@ describe("unified directory privacy and global pagination", () => {
     expect(c.matches(filters, "activation:1")).toBe(true);
     expect(JSON.parse(vi.mocked(request).mock.calls[1]![1]!.body as string).origin).toEqual({ kind: "reference", originRef: "private-reference" });
   });
+  it("recovers an expired private route context with the live activation and rate limit", async () => {
+    let time = now; const request = vi.fn(async () => ok({ ...snapshot(), validUntil: new Date(time + 45000).toISOString() })) as typeof apiFetch;
+    const c = new UnifiedDirectoryController(request, () => time); c.bind(me);
+    await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    expect(request).toHaveBeenCalledTimes(1); expect(c.view.snapshot).not.toBeNull();
+    time += 45000; c.tick(); expect(c.matches(filters, "activation:1")).toBe(false);
+    await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(vi.mocked(request).mock.calls[1]![1]!.body as string).origin).toEqual({ kind: "current_activation", activationId: "activation" });
+    expect(c.matches(filters, "activation:1")).toBe(true);
+  });
   it("respects initial-query cooldown on filter changes and carries no old cursor", async () => {
     const request = vi.fn(async () => ok(snapshot())) as typeof apiFetch;
     const c = new UnifiedDirectoryController(request, () => now); c.bind(me); await c.query(filters); await c.query({ ...filters, trainer: true });
@@ -64,10 +76,14 @@ describe("distance and map authority", () => {
     expect(distanceText({ kind: "range", upperMeters: 4000, roundingStepMeters: 1000 } as UnifiedDistance)).toBe("Рядом · до 4 км (примерно)"); expect(distanceText(null)).toBeNull();
   });
   it("never interprets missing registration as public map approval", () => {
-    expect(candidateMapAllowed(snapshot(), "gobadminton.ru", MOSCOW_BUNDLE.version)).toBe(false);
-    expect(candidateMapAllowed({ ...snapshot(), exposureMode: "authenticated_live" }, "localhost", MOSCOW_BUNDLE.version)).toBe(false);
-    expect(candidateMapAllowed(snapshot(), "localhost", undefined)).toBe(false);
-    expect(candidateMapAllowed(snapshot(), "localhost", MOSCOW_BUNDLE.version)).toBe(true);
+    const preview = { ...snapshot(), map: { availability: "dev_preview", mapId: "moscow", version: MOSCOW_BUNDLE.version } } as UnifiedSnapshot;
+    expect(candidateMapAllowed(preview, "https://gobadminton.ru")).toBe(false);
+    expect(candidateMapAllowed(preview, "http://localhost:3001")).toBe(false);
+    expect(candidateMapAllowed(snapshot(), "https://dev.gobadminton.ru")).toBe(false);
+    expect(candidateMapAllowed(preview, "https://dev.gobadminton.ru")).toBe(true);
+    expect(candidateMapAllowed({ ...preview, exposureMode: "authenticated_live" }, "https://dev.gobadminton.ru")).toBe(true);
+    expect(candidateMapAllowed({ ...preview, cityId: "other" }, "https://dev.gobadminton.ru")).toBe(false);
+    expect(candidateMapAllowed({ ...preview, map: { ...preview.map, version: "wrong" } } as unknown as UnifiedSnapshot, "https://dev.gobadminton.ru")).toBe(false);
     expect(allowedMapResource(MOSCOW_BUNDLE.prefix + "style.json")).toBe(true); expect(allowedMapResource("https://evil.example/tiles")).toBe(false); expect(allowedMapResource(MOSCOW_BUNDLE.prefix + "../other/style.json")).toBe(false);
   });
 });
