@@ -1,9 +1,9 @@
 import type { UnifiedCapability, UnifiedFilters, UnifiedMapSnapshot, UnifiedOriginInput, UnifiedPreview, UnifiedRow, UnifiedSnapshot, UnifiedDistance } from "@gobadminton/contracts";
 import { apiFetch, type ApiResult } from "./api-client";
-import type { Me } from "./consumer-types";
+import type { Me, PublicPlayer } from "./consumer-types";
 
 export type ScopedCatalogCursor = { scope: string; value: string };
-/** Pagination tokens belong to one exact filter + Radar-mode scope. */
+/** Pagination tokens belong to one exact ordinary filter scope. */
 export function scopedCatalogCursor(cursor: ScopedCatalogCursor | null, scope: string): string | null {
   return cursor?.scope === scope ? cursor.value : null;
 }
@@ -55,6 +55,28 @@ export type DirectoryView = {
   capabilityUnavailable: boolean;
   authenticationRequired: boolean;
 };
+/** Overlay only live private Radar rows; the public API remains catalog authority.
+ * The existing More boundary precedes the remainder until all Radar ranks load.
+ */
+export function mergeRadarCatalog(players: PublicPlayer[], view: DirectoryView, authorized: boolean, now = Date.now()) {
+  const live = authorized && view.mode === "unified" && !view.stale && !view.authenticationRequired && !view.capabilityUnavailable &&
+    view.snapshot !== null && Date.parse(view.snapshot.validUntil) > now;
+  const seen = new Set<string>();
+  const radar = live ? view.rows.filter(row => {
+    if (!row.radar || Date.parse(row.radar.validUntil) <= now || seen.has(row.publicPlayerId)) return false;
+    seen.add(row.publicPlayerId); return true;
+  }) : [];
+  const loadedRadar = live ? new Set(view.rows.filter(row => row.radar !== null).map(row => row.publicPlayerId)).size : 0;
+  const moreRadar = Boolean(live && view.snapshot?.page.nextCursor && loadedRadar < view.snapshot.totals.radarTotal);
+  const ordinary = players.filter(player => {
+    if (seen.has(player.publicPlayerId)) return false;
+    seen.add(player.publicPlayerId); return true;
+  });
+  // The owner requires the ordinary catalog to stay present even when Radar
+  // has another page. Show its existing rows after the bounded Radar window,
+  // with an explicit More boundary before them; never hide other cities.
+  return { radar, ordinary, moreRadar };
+}
 const initial = (): DirectoryView => ({ mode: "ordinary", snapshot: null, rows: [], pins: [], mapPage: null, selected: null, preview: null, busy: false, previewBusy: false, notice: "", stale: false, capabilityUnavailable: false, authenticationRequired: false });
 /** Private contexts/proofs/origins live only in this root-client session, never URLs/storage. */
 export class UnifiedDirectoryController {
