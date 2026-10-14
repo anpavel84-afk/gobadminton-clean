@@ -2,6 +2,11 @@ import type { UnifiedCapability, UnifiedFilters, UnifiedMapSnapshot, UnifiedOrig
 import { apiFetch, type ApiResult } from "./api-client";
 import type { Me } from "./consumer-types";
 
+export type ScopedCatalogCursor = { scope: string; value: string };
+/** Pagination tokens belong to one exact filter + Radar-mode scope. */
+export function scopedCatalogCursor(cursor: ScopedCatalogCursor | null, scope: string): string | null {
+  return cursor?.scope === scope ? cursor.value : null;
+}
 export const UNIFIED_WIRE = "players-unified-radar-v1" as const;
 export type RadarConfig = {
   devMoscowTest?: { latitude: number; longitude: number; accuracyMeters: number };

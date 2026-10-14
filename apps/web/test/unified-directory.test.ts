@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { UnifiedSnapshot, UnifiedRow, UnifiedDistance } from "@gobadminton/contracts";
-import { UnifiedDirectoryController, distanceText } from "../src/lib/unified-directory";
+import { UnifiedDirectoryController, distanceText, scopedCatalogCursor } from "../src/lib/unified-directory";
 import { candidateMapAllowed, MOSCOW_BUNDLE, allowedMapResource } from "../src/lib/radar-map-assets";
 import type { Me } from "../src/lib/consumer-types";
 import type { apiFetch } from "../src/lib/api-client";
@@ -12,6 +12,22 @@ function snapshot(items: UnifiedRow[] = [row("first")]): UnifiedSnapshot {
 }
 const me = { id: "viewer", csrfToken: "csrf" } as Me;
 const filters = { cityId: MOSCOW_BUNDLE.cityId };
+describe("ordinary pagination follows the exact visible city and Radar state", () => {
+  const allCities = JSON.stringify({ city: "", areaKey: "", name: "", lookingOnly: false, trainerOnly: false, radarOn: false });
+  const moscowRadar = JSON.stringify({ city: MOSCOW_BUNDLE.cityId, areaKey: "", name: "", lookingOnly: false, trainerOnly: false, radarOn: true });
+  const oldPage = { scope: allCities, value: "all-cities-page-2" };
+  const moscowPage = { scope: moscowRadar, value: "moscow-page-2" };
+  it("drops both previous page and next-cursor when Radar changes scope", () => {
+    expect(scopedCatalogCursor(oldPage, allCities)).toBe("all-cities-page-2");
+    expect(scopedCatalogCursor(oldPage, moscowRadar)).toBeNull();
+    expect(scopedCatalogCursor(moscowPage, allCities)).toBeNull();
+    expect(scopedCatalogCursor(null, moscowRadar)).toBeNull();
+  });
+  it("also invalidates pagination on ordinary filter changes without a Radar toggle", () => {
+    const nameChanged = JSON.stringify({ city: "", areaKey: "", name: "Anna", lookingOnly: false, trainerOnly: false, radarOn: false });
+    expect(scopedCatalogCursor(oldPage, nameChanged)).toBeNull();
+  });
+});
 describe("unified directory privacy and global pagination", () => {
   it("keeps page order from the full-set server context, with no cap20 concatenation", async () => {
     const request = vi.fn(async (_path, init) => ok(JSON.parse(init.body).cursor ? { ...snapshot([row("server-rank51"), row("tail")]), page: { nextCursor: null } } : snapshot(Array.from({ length: 50 }, (_, i) => row(`rank${i + 1}`))))) as typeof apiFetch;

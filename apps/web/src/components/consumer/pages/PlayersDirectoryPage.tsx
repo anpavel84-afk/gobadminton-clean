@@ -14,7 +14,7 @@ import { UnifiedPlayerPreview } from "../radar/UnifiedPlayerPreview";
 import { useUnifiedDirectory, useRadarConfig } from "../radar/RadarSessionProvider";
 import type { UnifiedFilters } from "@gobadminton/contracts";
 import { MOSCOW_BUNDLE } from "../../../lib/radar-map-assets";
-import { unifiedDirectoryAvailable } from "../../../lib/unified-directory";
+import { scopedCatalogCursor, unifiedDirectoryAvailable, type ScopedCatalogCursor } from "../../../lib/unified-directory";
 import { useRadarSession, useDirectoryFilters } from "../radar/RadarSessionProvider";
 import { AuthEntry, PlayerCard, ProfileState } from "../players/ProfileComposition";
 
@@ -59,8 +59,13 @@ export function PlayersDirectoryPage() {
     return () => clearInterval(timer);
   }, [directory.controller, activationKey, view.pendingStop, eligibleCity, unifiedAvailable, filterKey]);
   const [reload, setReload] = useState(0);
-  const [cursor, setCursor] = useState<string | null>(null);
-  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  // Pagination belongs to the exact ordinary query, including Radar ON/OFF.
+  // Never replay an All-cities cursor against a Moscow-only fallback.
+  const ordinaryScope = JSON.stringify({ city: activationId ? effectiveCityId : cityId, areaKey, name, lookingOnly, trainerOnly, radarOn: Boolean(activationId) });
+  const [cursor, setCursor] = useState<ScopedCatalogCursor | null>(null);
+  const [nextCursor, setNextCursor] = useState<ScopedCatalogCursor | null>(null);
+  const pageCursor = scopedCatalogCursor(cursor, ordinaryScope);
+  const availableNextCursor = scopedCatalogCursor(nextCursor, ordinaryScope);
   const [moreBusy, setMoreBusy] = useState(false);
   useEffect(() => {
     if (!controller) return;
@@ -78,16 +83,16 @@ export function PlayersDirectoryPage() {
   useEffect(() => {
     if (!directoryVisible) { setCursor(null); return; }
     let live = true;
-    if (!cursor) { setPlayers([]); setState("loading"); } else setMoreBusy(true);
-    const timer = setTimeout(() => { void listPlayers({ cityId: (activationId ? effectiveCityId : cityId) || undefined, areaKey: areaKey.trim() || undefined, name: name.trim().length >= 2 ? name.trim() : undefined, looking: lookingOnly || undefined, trainer: trainerOnly || undefined, cursor: cursor ?? undefined, limit: 50 }).then(result => {
+    if (!pageCursor) { setPlayers([]); setNextCursor(null); setMoreBusy(false); setState("loading"); } else setMoreBusy(true);
+    const timer = setTimeout(() => { void listPlayers({ cityId: (activationId ? effectiveCityId : cityId) || undefined, areaKey: areaKey.trim() || undefined, name: name.trim().length >= 2 ? name.trim() : undefined, looking: lookingOnly || undefined, trainer: trainerOnly || undefined, cursor: pageCursor ?? undefined, limit: 50 }).then(result => {
       if (!live) return;
       setMoreBusy(false);
       if (!result.ok) { setState(isSocialDirectoryDisabled(result) ? "unavailable" : "error"); return; }
-      setPlayers(previous => cursor ? [...previous, ...result.data.items.filter(p => !previous.some(old => old.publicPlayerId === p.publicPlayerId))] : result.data.items);
-      setNextCursor(result.data.nextCursor); setState(result.data.items.length || cursor ? "ready" : "empty");
+      setPlayers(previous => pageCursor ? [...previous, ...result.data.items.filter(p => !previous.some(old => old.publicPlayerId === p.publicPlayerId))] : result.data.items);
+      setNextCursor(result.data.nextCursor ? { scope: ordinaryScope, value: result.data.nextCursor } : null); setState(result.data.items.length || pageCursor ? "ready" : "empty");
     }); }, 200);
     return () => { live = false; clearTimeout(timer); };
-  }, [cityId, effectiveCityId, activationId, areaKey, name, lookingOnly, trainerOnly, reload, cursor, directoryVisible]);
+  }, [ordinaryScope, pageCursor, reload, directoryVisible]);
   function reset() { setName(""); setAreaKey(""); setCityId(""); setLookingOnly(false); setTrainerOnly(false); setCursor(null); }
   const cityName = cities.find(c => c.id === (activationId ? effectiveCityId : cityId))?.nameRu;
   return <ConsumerShell active="players" title="Игроки" hideHeading><div className="fr3 players-page" data-surface="players-directory" data-state={state}>
@@ -109,7 +114,7 @@ export function PlayersDirectoryPage() {
       {directoryVisible && state === "unavailable" && <ProfileState title="Каталог игроков сейчас недоступен" state="unavailable">Попробуйте вернуться позже.</ProfileState>}
       {directoryVisible && state === "error" && <ProfileState title="Не удалось загрузить каталог" state="error" retry={() => setReload(n => n + 1)}>Проверьте соединение и попробуйте снова.</ProfileState>}
       {directoryVisible && state === "empty" && <ProfileState title={filtered ? "Никого не нашли" : "Игроков пока нет"} state="empty">{filtered ? "Попробуйте изменить или сбросить фильтры." : "Вернитесь немного позже."}</ProfileState>}
-      {directoryVisible && state === "ready" && <><div aria-label="Каталог игроков">{players.map(player => <PlayerCard key={player.publicPlayerId} player={player} city={cities.find(c => c.id === player.cityId)?.nameRu} />)}</div>{nextCursor && <Button variant="outline" disabled={moreBusy} onClick={() => setCursor(nextCursor)}>{moreBusy ? "Загрузка…" : "Показать ещё"}</Button>}</>}
+      {directoryVisible && state === "ready" && <><div aria-label="Каталог игроков">{players.map(player => <PlayerCard key={player.publicPlayerId} player={player} city={cities.find(c => c.id === player.cityId)?.nameRu} />)}</div>{availableNextCursor && <Button variant="outline" disabled={moreBusy} onClick={() => setCursor({ scope: ordinaryScope, value: availableNextCursor })}>{moreBusy ? "Загрузка…" : "Показать ещё"}</Button>}</>}
     </section>
     {directory.view.selected && <UnifiedPlayerPreview dialog onClose={() => directory.controller?.close()} />}
   </div></ConsumerShell>;
