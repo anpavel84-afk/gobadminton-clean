@@ -137,7 +137,7 @@ Hub outage или невозможность проверить binding не д�
 9. Что нельзя потерять или переинтерпретировать.
 10. Один следующий bounded action и ожидаемый recipient.
 
-Использовать [HANDOFF_TEMPLATE.md](../handoffs/HANDOFF_TEMPLATE.md).
+Legacy `HANDOFF_TEMPLATE.md` отсутствует в Clean extraction; использовать обязательные поля выше.
 
 ## 7. Permalink rule
 
@@ -215,4 +215,4 @@ Hub outage или невозможность проверить binding не д�
 
 ## Owner-authorized product obligations register (2026-10-10)
 
-The explicit Owner assignment authorizes `docs/product/backlog/registry.json` as the durable source of truth for **product requirements and Owner acceptance**, with append-only history and stable GB IDs. This is a narrow distinction from operational Hub/Runner task execution state, not a replacement of those systems. Read [the backlog regulation](../product/backlog/REGULATION.md). No existing QA/security/privacy/release gate or execution authority is waived.
+The historical 2026-10-10 Owner assignment authorized `docs/product/backlog/registry.json` as the durable source of truth for **product requirements and Owner acceptance**, with append-only history and stable GB IDs. This is a narrow distinction from operational Hub/Runner task execution state, not a replacement of those systems. Historical `docs/product/backlog/REGULATION.md` and the registry are not included in Clean extraction. For current task navigation use the Owner-approved [ChatOps / GitHub Projects and Issues route](../operations/chatops/PM-CHEATSHEET.md); preserve historical GB IDs as references, without importing the legacy registry. No existing QA/security/privacy/release gate or execution authority is waived.

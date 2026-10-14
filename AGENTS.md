@@ -18,15 +18,15 @@ Cursor является частью GoBadminton delivery system.
 
 **Current primary execution host:** Germany VPS `vmi3510488`.
 
-- primary development checkout: `/srv/gobadminton-dev/repo`;
-- task worktrees: `/srv/gobadminton-dev/worktrees`;
-- queue/runtime state: `/srv/gobadminton-dev/runner`;
-- normal executors: Cursor or Codex selected by the admitted queue task;
-- GitHub write transport: repository-specific SSH identity through host alias `github-gobadminton`;
-- PLAN runner must remain paused/recovery-only and must not be a concurrent writer;
+- canonical source: `anpavel84-afk/gobadminton-clean`; task worktrees: `/srv/gobadminton-clean/worktrees`;
+- current PM task board: GitHub Projects/Issues; checks and release: GitHub Actions;
+- implementation: task-scoped Cursor or Codex CLI on Germany, invoked under authorized PM assignment;
+- GitHub source write transport: repository-specific SSH identity via `github-gobadminton-clean`;
+- legacy Clean Runner/Autopilot are retired from active task execution; never start a second writer;
+- PLAN is a control/viewing workstation, not a model executor;
 - `/srv/gobadminton` is live backend/deployment material, not the development checkout.
 
-Repository access does not grant product/runtime authority. Exact Assignment + queue admission still control allowed writes and effects.
+Repository access does not grant product/runtime authority. The authorized GitHub Issue/assignment limits code changes, GitHub Actions gates DEV release, and PROD remains subject to separate Owner GO.
 
 ## Frontend visual authority
 
@@ -38,11 +38,11 @@ Repository access does not grant product/runtime authority. Exact Assignment + q
 Сначала проверить существующий canonical pattern; новый визуальный паттерн допустим только как документированный `STYLE_GUIDE_GAP` или после явного `OWNER_VISUAL_OVERRIDE`. Старый frontend-код не является presentation authority.
 
 При работе через Cursor обязательно:
-1. прочитать [CURSOR.md](CURSOR.md);
-2. загрузить project-local [`.cursor/rules/`](.cursor/rules/README.md);
+1. прочитать [ChatOps route](docs/operations/chatops/README.md); legacy `CURSOR.md` отсутствует в Clean extraction;
+2. прочитать [PM / GitHub Projects и Issues](docs/operations/chatops/PM-CHEATSHEET.md); legacy `.cursor/rules/` отсутствует в Clean extraction;
 3. пройти [Cursor onboarding](docs/governance/CURSOR_ONBOARDING.md);
 4. открыть **exact active assignment**, а не выбирать задачу по памяти/дате;
-5. работать из primary GoBadminton checkout на Germany VPS `/srv/gobadminton-dev/repo` или из task-scoped worktree under `/srv/gobadminton-dev/worktrees`; PLAN используется только как paused recovery/reference host;
+5. работать только в выделенном GoBadminton Clean worktree на Germany VPS под `/srv/gobadminton-clean/worktrees`; PLAN не исполняет модельные задачи;
 6. публиковать результат через GitHub branch/PR + durable handoff.
 
 Cursor/CLI/model не дают authority сами по себе. Scope и effects задаются Owner/PM assignment и canonical project rules.
@@ -74,4 +74,4 @@ Cursor/CLI/model не дают authority сами по себе. Scope и effect
 
 ## Постоянный продуктовый бэклог · Owner 2026-10-10
 
-Перед передачей любого продуктового замечания в работу PM регистрирует или находит его постоянный `GB-###` в [едином реестре](docs/product/backlog/README.md). Обязательны [регламент](docs/product/backlog/REGULATION.md) и [роли](docs/product/backlog/ROLES.md). Код, независимый QA, публикация и приёмка Owner — отдельные факты. Задачи и старые номера не удаляются. Технические Runner/V3 ID связываются с GB-номером и не заменяют его. Реестр не даёт новых прав на выполнение, деплой или снятие защитных ограничений.
+Перед передачей любого продуктового замечания в работу PM регистрирует или находит его постоянный `GB-###` в GitHub Issue по [ChatOps / Projects route](docs/operations/chatops/PM-CHEATSHEET.md). Legacy `docs/product/backlog/README.md`, `REGULATION.md` и `ROLES.md` не включены в Clean extraction; исторические GB-номера сохраняются как references в Issue, без импорта старого реестра. Код, независимый QA, публикация и приёмка Owner — отдельные факты. Задачи и старые номера не удаляются. Технические Runner/V3 ID связываются с GB-номером и не заменяют его. Реестр не даёт новых прав на выполнение, деплой или снятие защитных ограничений.

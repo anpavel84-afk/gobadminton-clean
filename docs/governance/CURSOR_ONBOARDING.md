@@ -7,8 +7,8 @@ Cursor must be able to recover project context without chat memory.
 ## Startup
 
 1. Read `AGENTS.md`.
-2. Read `CURSOR.md`.
-3. Load `.cursor/rules/`.
+2. Read [ChatOps route](../operations/chatops/README.md); legacy `CURSOR.md` is not included in Clean extraction.
+3. Read [PM / GitHub Projects and Issues](../operations/chatops/PM-CHEATSHEET.md); legacy `.cursor/rules/` is not included in Clean extraction.
 4. Read exact active prompt/assignment.
 5. Verify exact base/branch/dirty state/writer collision.
 6. Load bounded canonical docs.
@@ -63,7 +63,7 @@ DNS:
 - `dev-api.gobadminton.ru` → Germany;
 - `api.gobadminton.ru` reserved/unassigned at latest verification.
 
-Read [MVP runtime](../operations/MVP_VPS_RUNTIME.md).
+For historical topology, read [Environments](../operations/ENVIRONMENTS.md); `MVP_VPS_RUNTIME.md` is not included in Clean extraction. For the ChatOps route, read [ChatOps](../operations/chatops/README.md).
 
 ## Completion
 

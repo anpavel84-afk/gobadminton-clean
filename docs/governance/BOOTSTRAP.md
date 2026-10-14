@@ -1,14 +1,14 @@
 # Project bootstrap — GoBadminton v1
 
-Canonical repository: `anpavel84-afk/gobadminton`.
+Canonical repository: `anpavel84-afk/gobadminton-clean`. The old `anpavel84-afk/gobadminton` remains a historical archive, not an implementation or release target.
 
 Загрузить точный commit этой инструкции вместе с [Project rules](../rules/README.md), [Project Record & Handoff Policy](../rules/PROJECT_RECORD_POLICY.md), [Owner decisions](../manifest/OWNER_DECISIONS.md), [манифестом](../manifest/PROJECT_MANIFEST.md), [scope](../product/SCOPE.md), [архитектурой](../architecture/OVERVIEW.md) и документами своего bounded slice.
 
 ## Cursor startup
 
 Если работа выполняется через Cursor:
-- root [CURSOR.md](../../CURSOR.md) обязателен;
-- project-local `.cursor/rules/` обязателен;
+- прочитать [ChatOps route](../operations/chatops/README.md); legacy root `CURSOR.md` отсутствует в Clean extraction;
+- найти exact assigned GitHub Issue через [PM / Projects route](../operations/chatops/PM-CHEATSHEET.md); legacy `.cursor/rules/` отсутствует в Clean extraction;
 - прочитать [CURSOR_ONBOARDING](CURSOR_ONBOARDING.md);
 - точный assignment имеет приоритет над общим IDE context;
 - Cursor не выбирает следующий task самостоятельно.
@@ -38,4 +38,4 @@ QA: exact candidate/environment/criteria and independent producer.
 
 В конце bounded работы вернуть short status, exact artifact permalink/commit, выполненные проверки, gaps и следующий разрешённый шаг.
 
-Для handoff использовать [handoff template](../handoffs/HANDOFF_TEMPLATE.md), для project prompt — [prompt template](../prompts/PROMPT_TEMPLATE.md) или эквивалент.
+Для handoff и project prompt использовать обязательные поля из [Project Record & Handoff Policy](../rules/PROJECT_RECORD_POLICY.md), разделы 5–6. Legacy `HANDOFF_TEMPLATE.md` и `PROMPT_TEMPLATE.md` отсутствуют в Clean extraction.

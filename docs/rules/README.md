@@ -5,9 +5,9 @@
 ## Обязательные правила
 
 1. [Project Record & Handoff Policy](PROJECT_RECORD_POLICY.md) — GitHub как долговременная память проекта; правила для prompts, drafts, handoffs, reviews и canonical artifacts.
-2. [Workbench](../workbench/README.md) — промежуточные и ещё не согласованные рабочие материалы.
-3. [Prompts](../prompts/README.md) — проектные задания и launcher/assignment records.
-4. [Handoffs](../handoffs/README.md) — передача результата следующей роли/команде.
+2. `docs/workbench/` (legacy README отсутствует в Clean extraction) — промежуточные и ещё не согласованные рабочие материалы.
+3. Project prompts в [ChatOps Issues](../operations/chatops/PM-CHEATSHEET.md) (legacy `docs/prompts/README.md` отсутствует в Clean extraction) — проектные задания и launcher/assignment records.
+4. Handoffs по [Project Record & Handoff Policy](PROJECT_RECORD_POLICY.md) (legacy `docs/handoffs/README.md` отсутствует в Clean extraction) — передача результата следующей роли/команде.
 
 ## Универсальный launcher для всех ролей
 

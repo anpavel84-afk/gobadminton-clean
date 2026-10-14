@@ -32,4 +32,4 @@ Mobile обновляется не одновременно с backend. В API v
 
 ## Нагрузочный baseline
 
-Предложенный acceptance profile первого load test: 10 000 публичных будущих игр в нескольких городах, 100 параллельных browsing clients и отдельный burst конкурирующих подтверждений последнего места. Не обещаем поддержку этого объёма без измерения. p95/p99, lock contention, DB connections, error rate и outbox lag сохраняются как evidence. Требования времени ответа: [SLO](../operations/OBSERVABILITY_AND_SLO.md).
+Предложенный acceptance profile первого load test: 10 000 публичных будущих игр в нескольких городах, 100 параллельных browsing clients и отдельный burst конкурирующих подтверждений последнего места. Не обещаем поддержку этого объёма без измерения. p95/p99, lock contention, DB connections, error rate и outbox lag сохраняются как evidence. Требования времени ответа: исторический `OBSERVABILITY_AND_SLO.md` (отсутствует в Clean extraction; конкретные SLO здесь не восстановлены).
