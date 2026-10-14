@@ -65,7 +65,9 @@ jobs:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
           PUBLIC_URL: https://dev.gobadminton.ru
-          REQUIRE_RADAR: '1'
+          # Owner-authorized infrastructure bootstrap: default remains full Radar.
+          # The temporary repo variable is explicitly a PLATFORM CANARY, not map QA.
+          REQUIRE_RADAR: ${{ vars.CHATOPS_DEV_PLATFORM_CANARY == 'true' && '0' || '1' }}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: dev-release

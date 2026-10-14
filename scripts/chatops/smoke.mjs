@@ -17,7 +17,8 @@ try {
   page = await browser.newPage({viewport:{width:390,height:844}}); // no geolocation permission; public map must work abroad
   page.on('response',r=>{if(r.url().includes('/map-assets/')) resources.push({url:r.url(),status:r.status()});});
   page.on('pageerror', e => errors.push(e.message));
-  await page.goto(new URL('/players',url).href,{waitUntil:'domcontentloaded',timeout:45000});
+  const players = await page.goto(new URL('/players',url).href,{waitUntil:'domcontentloaded',timeout:45000});
+  assert(players && players.ok(), 'players HTTP '+(players ? players.status() : 'NO_RESPONSE'));
   if (process.env.REQUIRE_RADAR !== '0') {
     const city = page.getByRole('combobox',{name:'Город',exact:true});
     if (await city.count()) {
@@ -46,7 +47,7 @@ try {
     radar:process.env.REQUIRE_RADAR==='0'?'NOT_REQUESTED':'VISIBLE',url:url.origin}));
  } catch(error) { failure=error.message; throw error; } finally {
   if(page) await page.screenshot({path:'_out/radar/screenshot.png',fullPage:true});
-  await writeFile('_out/radar/receipt.json',JSON.stringify({status:passed?'ANONYMOUS_MAP_PASS':'FAIL',
-    observedApiSha:process.env.EXPECTED_SHA,privatePlayerAcceptance:'NOT_TESTED',failure,resources,errors},null,2));
+  await writeFile('_out/radar/receipt.json',JSON.stringify({status:passed?(process.env.REQUIRE_RADAR==='0'?'PLATFORM_CANARY_PASS':'ANONYMOUS_MAP_PASS'):'FAIL',
+    observedApiSha:process.env.EXPECTED_SHA,radarAcceptance:process.env.REQUIRE_RADAR==='0'?'NOT_TESTED':(passed?'PASS':'FAIL'),privatePlayerAcceptance:'NOT_TESTED',failure,resources,errors},null,2));
   await browser.close();
 }
