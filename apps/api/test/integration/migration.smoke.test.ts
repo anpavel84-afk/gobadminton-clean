@@ -154,8 +154,22 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
         "0029_game_moderation",
         "0030_user_capability_restrictions",
         "0031_support_cases",
-
+        "0032_friendship_core",
       ]);
+      // Additive Friends S1 upgrade must be physically present in the
+      // migration smoke; merely recording the filename is insufficient.
+      const friendships = await pool.query<{ name: string | null }>(
+        "SELECT to_regclass('public.friendships')::text AS name",
+      );
+      expect(friendships.rows[0]?.name).toBe("friendships");
+      const attempts = await pool.query<{ name: string | null }>(
+        "SELECT to_regclass('public.friendship_request_attempts')::text AS name",
+      );
+      expect(attempts.rows[0]?.name).toBe("friendship_request_attempts");
+      const epoch = await pool.query<{column_name: string}>(
+        "SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='player_social_profiles' AND column_name='social_action_epoch'",
+      );
+      expect(epoch.rows).toHaveLength(1);
 
       const ls02Indexes = await pool.query<{ indexname: string }>(
         `SELECT indexname
