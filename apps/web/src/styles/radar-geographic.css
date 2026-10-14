@@ -47,3 +47,9 @@
 
 .g2-map-venue-marker { width: 32px; height: 32px; border: 2px solid var(--gb-purple); border-radius: 8px; background: var(--gb-surface); color: var(--gb-purple); cursor: pointer; font-size: 20px; }
 .g2-map-venues { position: absolute; left: 16px; bottom: 100px; padding: 8px; background: var(--gb-surface); border-radius: 8px; font-size: 12px; }
+
+/* The fullscreen map header is already flush right: never use the topbar's
+ * mobile avatar offset or the action sheet protrudes past the viewport. */
+@media (max-width:720px) {
+  .g2-radar-map .gb-radar-popover { right:0; }
+}

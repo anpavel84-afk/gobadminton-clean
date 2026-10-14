@@ -128,7 +128,7 @@ export function RadarStatusAffordance() {
   const status = radarHeaderStatus(view);
   const popupId = useId();
   const [open, setOpen] = useState(false);
-  const host = useRef<HTMLSpanElement>(null);
+  const host = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     if (!open) return;
@@ -154,14 +154,23 @@ export function RadarStatusAffordance() {
   const progress = radarRingFraction(view);
   const circumference = 2 * Math.PI * 21;
   const busy = ["checking", "permission", "locating", "activating", "stopping", "background"].includes(view.phase);
-  const canStart = Boolean(controller && config?.publishingV2.enabled && !busy && view.phase !== "disabled");
+  const canStart = Boolean(controller && config?.publishingV2.enabled && !busy &&
+    ["off", "stopped", "expired", "denied", "location_error", "owned_elsewhere"].includes(view.phase));
   const canRenew = Boolean(running && activation && Date.parse(activation.hardExpiresAt) > Date.parse(activation.expiresAt));
   const needsLocation = Boolean(running && activation && view.now >= Date.parse(activation.nextLocationUpdateAt));
   const canStop = Boolean(controller && view.me && view.status && "activationId" in view.status && !busy);
   const remaining = running && activation ? remainingTime(activation.expiresAt, view.now) : null;
   const caption = status?.text ?? (view.phase === "guest" ? "Войдите для Radar" : "Radar выключен");
+  const diagnostic =
+    view.phase === "denied" ? "Доступ к геолокации запрещён. Разрешите его в настройках браузера." :
+    view.phase === "location_error" ? "Не удалось определить геопозицию. Проверьте разрешения и попробуйте снова." :
+    view.phase === "disabled" ? "Radar сейчас недоступен. Обычный каталог работает." :
+    view.phase === "error" ? (view.notice || "Не удалось проверить Radar. Повторите проверку статуса.") :
+    view.pendingStop || view.phase === "stopping" ? "Ожидаем подтверждения выключения Radar." :
+    view.phase === "background" ? "Radar приостановлен, пока приложение неактивно." :
+    view.phase === "expired" ? "Сессия завершена. Включите Radar снова." : "";
   const close = () => { setOpen(false); trigger.current?.focus(); };
-  return <span ref={host} className="gb-radar-indicator" data-tone={status?.tone ?? "off"}>
+  return <div ref={host} className="gb-radar-indicator" data-tone={status?.tone ?? "off"}>
     <button ref={trigger} type="button" className="gb-radar-indicator__link"
       aria-label={caption + ". Открыть управление Radar"} aria-haspopup="dialog"
       aria-expanded={open} aria-controls={open ? popupId : undefined}
@@ -184,6 +193,7 @@ export function RadarStatusAffordance() {
       {running && <><div className="gb-radar-popover__time" aria-live="off">
         <b>{remaining}</b><small>до окончания сессии</small>
       </div><div className="gb-radar-popover__track" aria-hidden="true"><span style={{ width: String(Math.round(progress * 100)) + "%" }}/></div></>}
+      {diagnostic && <p role="status">{diagnostic}</p>}
       {needsLocation && <p role="status">Обновите геопозицию, чтобы Radar продолжал показывать участников.</p>}
       {view.phase === "owned_elsewhere" && <p>Radar работает на другом устройстве. Можно перенести его сюда.</p>}
       <div className="gb-radar-popover__actions">
@@ -212,7 +222,7 @@ export function RadarStatusAffordance() {
         <Button variant="ghost" onClick={() => controller.cancel()}>Отмена</Button>
       </div>
     </ProfileDialog></div>}
-  </span>;
+  </div>;
 }
 /** Called only by an explicit foreground intent. Synthetic never falls through to GPS. */
 export function acquireRadarLocation(controller: RadarController): Promise<RadarFix> {
