@@ -39,8 +39,8 @@ run("M1 direct avatar prepublication",()=>{
     registerAvatarHttp(app.getHttpAdapter().getInstance());await app.register(cookie);app.setGlobalPrefix("v1");
     app.useGlobalFilters(new ProblemExceptionFilter());await app.init();await app.getHttpAdapter().getInstance().ready();
   }
-  const upload=(bytes=source,v=version,h=headers,key=randomUUID())=>app.inject({method:"PUT",url:"/v1/me/avatar",headers:{...h,"idempotency-key":key,"x-profile-version":String(v)},payload:bytes});
-  const remove=(v=version,key=randomUUID(),h=headers)=>app.inject({method:"DELETE",url:"/v1/me/avatar",headers:{...h,"idempotency-key":key,"x-profile-version":String(v)}});
+  const upload=(bytes:Buffer=source,v:number=version,h:Record<string,string>=headers,key:string=randomUUID())=>app.inject({method:"PUT",url:"/v1/me/avatar",headers:{...h,"idempotency-key":key,"x-profile-version":String(v)},payload:bytes});
+  const remove=(v:number=version,key:string=randomUUID(),h:Record<string,string>=headers)=>app.inject({method:"DELETE",url:"/v1/me/avatar",headers:{...h,"idempotency-key":key,"x-profile-version":String(v)}});
   const row=async()=>(await pool.query("SELECT avatar_key,avatar_moderation_approval_id,version FROM player_social_profiles WHERE user_id=$1",[userId])).rows[0];
   const receipts=async(key:string)=>(await pool.query("SELECT reservation_state,status_code,response_body FROM idempotency_records WHERE actor_id=$1 AND operation='profiles.avatar.mutate' AND key_hash=$2",[userId,app.get(IdempotencyService).keyHash(key)])).rows;
   async function fresh(){return sharp(randomBytes(32*32*3),{raw:{width:32,height:32,channels:3}}).png().toBuffer();}

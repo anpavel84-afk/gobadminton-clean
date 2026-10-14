@@ -52,7 +52,7 @@ describe("avatar command boundary", () => {
       const auth = { requireCookieMutation: vi.fn().mockResolvedValue(actor) };
       const avatars = { mutate: vi.fn() };
       const controller = new AvatarController(auth as unknown as ConsumerAuthService, avatars as unknown as AvatarService, new IdempotencyService({} as Pool, env));
-      const request = { headers: { "idempotency-key": key, "x-profile-version": "7" } } as FastifyRequest;
+      const request = { headers: { "idempotency-key": key, "x-profile-version": "7" } } as unknown as FastifyRequest;
       await expect(controller[method](request)).rejects.toMatchObject({ status: 400 });
       expect(avatars.mutate).not.toHaveBeenCalled();
     });
@@ -62,7 +62,7 @@ describe("avatar command boundary", () => {
       const avatars = { mutate: vi.fn().mockResolvedValue(result) };
       const controller = new AvatarController(auth as unknown as ConsumerAuthService, avatars as unknown as AvatarService, new IdempotencyService({} as Pool, env));
       const body = Buffer.from([0, 255, 128, 1]);
-      const request = { body, headers: { "idempotency-key": "x".repeat(length), "x-profile-version": "7", "content-type": "image/png" } } as FastifyRequest;
+      const request = { body, headers: { "idempotency-key": "x".repeat(length), "x-profile-version": "7", "content-type": "image/png" } } as unknown as FastifyRequest;
       expect(await controller[method](request)).toBe(result);
       expect(avatars.mutate).toHaveBeenCalledWith(actor, "x".repeat(length), "7", ...(method === "replace" ? [{ body, mime: "image/png" }] : []));
     });
