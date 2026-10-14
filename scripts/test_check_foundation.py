@@ -22,12 +22,9 @@ class FoundationExceptionsTest(unittest.TestCase):
         self.assertIn(f'{method} {route}: business mutation needs required Idempotency-Key', self.findings())
 
     def test_exact_residual_findings_and_docs(self):
-        expected = {
-            'PUT /me/avatar', 'DELETE /me/avatar',
-        }
-        self.assertEqual(set(self.findings()), {
-            f'{label}: business mutation needs required Idempotency-Key' for label in expected
-        })
+        # Both avatar commands now bind the same required key contract to real
+        # MutationRunner receipts. Any regression must produce a fresh finding.
+        self.assertEqual(self.findings(), [])
         self.assertEqual(sum(len(markdown_errors(p)) for p in repository_files() if p.suffix == '.md'), 0)
 
     def test_admin_exemption_fail_closed(self):
@@ -122,7 +119,7 @@ class FoundationExceptionsTest(unittest.TestCase):
                 self.assert_idempotency(target, method)
 
     def test_delete_keys_are_required_and_bodyless(self):
-        for route in ['/me/linked-providers/{provider}', '/me/sessions/{sessionId}']:
+        for route in ['/me/linked-providers/{provider}', '/me/sessions/{sessionId}', '/me/avatar']:
             with self.subTest(route=route):
                 self.document = copy.deepcopy(self.contract)
                 op = self.document['paths'][route]['delete']
@@ -140,6 +137,23 @@ class FoundationExceptionsTest(unittest.TestCase):
                             self.document['components']['parameters']['IdempotencyKey']['required'] = False
                         self.assert_idempotency(route, 'DELETE')
 
+
+    def test_avatar_required_key_does_not_displace_version_or_binary_upload(self):
+        for method in ('put', 'delete'):
+            with self.subTest(method=method):
+                self.document = copy.deepcopy(self.contract)
+                op = self.document['paths']['/me/avatar'][method]
+                self.assertIn({'$ref': '#/components/parameters/IdempotencyKey'}, op['parameters'])
+                self.assertTrue(next(p for p in op['parameters'] if p.get('name') == 'X-Profile-Version')['required'])
+                self.assertTrue(next(p for p in op['parameters'] if p.get('name') == 'X-CSRF-Token')['required'])
+                if method == 'put':
+                    self.assertTrue(op['requestBody']['required'])
+                    self.assertIn('image/png', op['requestBody']['content'])
+                else:
+                    self.assertNotIn('requestBody', op)
+                op['parameters'] = [p for p in op['parameters'] if p.get('$ref') != '#/components/parameters/IdempotencyKey']
+                self.assert_idempotency('/me/avatar', method.upper())
+
     def test_bodyless_deletes_keep_idempotency_and_csrf(self):
         for route in ['/me/linked-providers/{provider}', '/me/sessions/{sessionId}', '/me/avatar']:
             with self.subTest(route=route):
@@ -156,6 +170,7 @@ class FoundationExceptionsTest(unittest.TestCase):
             with self.subTest(method=method):
                 self.document = copy.deepcopy(self.contract)
                 op = copy.deepcopy(self.document['paths']['/me/avatar']['delete'])
+                op['parameters'] = [p for p in op['parameters'] if p.get('$ref') != '#/components/parameters/IdempotencyKey']
                 self.document['paths']['/unknown-delete'] = {method: op}
                 self.assertIn(f'{method.upper()} /unknown-delete: expected explicit required command body', self.findings())
                 self.assert_idempotency('/unknown-delete', method.upper())

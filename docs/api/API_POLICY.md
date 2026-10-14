@@ -52,7 +52,7 @@ must still be required; other POST/PUT/PATCH/DELETE body rules remain unchanged.
 
 Owner direct source-only assignment, exact base
 `55e3775cc284e4266f1537052e9a3260a73b79ef`. The frozen admin exceptions above
-are unchanged. Avatar handlers and their two key findings remain blocking.
+were unchanged by this first slice. Avatar still had two blocking key findings at that stage; the subsequent isolated avatar source candidate is described below.
 
 `POST /me/linked-providers/{provider}/link` is OAuth initiation, not a replayable
 business command. Its sole scanner exemption requires this exact POST route,
@@ -118,10 +118,30 @@ The web apiFetch already supplies a fresh key per non-GET call and preserves an
 explicit key; separate calls are separate commands unless the caller retains it.
 
 Verification: dependency-free `python3 -B scripts/test_check_foundation.py` and
-`python3 -B scripts/check_foundation.py`; the latter must exit 1 with exactly the
-two avatar Idempotency-Key findings, zero body findings and zero broken-doc findings.
+`python3 -B scripts/check_foundation.py`; the latter showed exactly two avatar key findings at the first-slice commit.
+The follow-up avatar source candidate must instead achieve full Foundation PASS.
 Integration/security tests use only the existing disposable PostGIS harness.
 Source-only results do not establish independent QA, deployment or Owner acceptance.
+
+### Avatar PUT/DELETE source follow-up — issue #23 (awaiting independent QA)
+
+The proposed source-only avatar implementation in
+[the exact handoff](../handoffs/ISSUE23_AVATAR_IDEMPOTENCY_SOURCE_20261014.md)
+requires the existing 16–128-character Idempotency-Key on both PUT and DELETE,
+alongside the explicitly required cookie session, Origin, CSRF and the
+X-Profile-Version optimistic concurrency guard. Both
+OpenAPI mutations reference the same required key definition. DELETE keeps
+its valid bodyless wire format; PUT keeps its original binary image body.
+A single receipt operation binds action, user, expected profile version, MIME
+and original-upload SHA256, preventing the same key from silently changing
+the command. Actor/session authorization precedes all cached replays.
+
+Existing moderation and disk staging remain outside the actor-locked write
+transaction; the authoritative profile/version mutation and completed receipt
+commit in one DB transaction. Losing staging artifacts are held in the existing
+media GC journal and never deleted if they remain referenced. This is a
+candidate implementation pending hosted integration and independent QA;
+it does not authorize DEV or PROD release or attest to runtime behavior.
 
 Протокол идемпотентности (S-00A / ADR-SOCIAL-003): в одной бизнес-транзакции сначала insert-first UNIQUE reservation (`reservation_state=processing`), затем авторизация и команда, затем `completed` receipt перед COMMIT. ROLLBACK снимает reservation вместе с эффектами. Параллельный waiter блокируется на UNIQUE; после commit победителя читает completed receipt. Timeout ожидания → `409 COMMAND_IN_PROGRESS` с `Retry-After` (не raw unique-violation 500). Same key / другое тело → `409 IDEMPOTENCY_KEY_REUSED`. Same key / то же тело → сохранённый status/body только после **текущей** actor/resource authorization. Отозванный менеджер/неактивный аккаунт не получает cached private success. TTL cleanup удаляет только expired `completed`, не active `processing`. До 3 технических DB-retry (deadlock/transient) с тем же ключом; business conflicts (capacity/version/authz) не ретраятся.
 

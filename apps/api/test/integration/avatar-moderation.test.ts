@@ -12,6 +12,8 @@ import { AuthModule } from "../../src/auth/auth.module";
 import { SESSION_COOKIE } from "../../src/auth/constants";
 import { SessionService } from "../../src/auth/session.service";
 import { ActorFenceService } from "../../src/common/actor-fence.service";
+import { IdempotencyService } from "../../src/common/idempotency.service";
+import { MutationRunner } from "../../src/common/mutation-runner.service";
 import { ProblemExceptionFilter } from "../../src/common/problem.filter";
 import { loadEnv } from "../../src/config/env";
 import { FakeModerationProvider } from "../../src/moderation/fake-provider";
@@ -37,9 +39,10 @@ run("M1 direct avatar prepublication",()=>{
     registerAvatarHttp(app.getHttpAdapter().getInstance());await app.register(cookie);app.setGlobalPrefix("v1");
     app.useGlobalFilters(new ProblemExceptionFilter());await app.init();await app.getHttpAdapter().getInstance().ready();
   }
-  const upload=(bytes=source,v=version,h=headers)=>app.inject({method:"PUT",url:"/v1/me/avatar",headers:{...h,"x-profile-version":String(v)},payload:bytes});
-  const remove=()=>app.inject({method:"DELETE",url:"/v1/me/avatar",headers:{...headers,"x-profile-version":String(version)}});
+  const upload=(bytes=source,v=version,h=headers,key=randomUUID())=>app.inject({method:"PUT",url:"/v1/me/avatar",headers:{...h,"idempotency-key":key,"x-profile-version":String(v)},payload:bytes});
+  const remove=(v=version,key=randomUUID(),h=headers)=>app.inject({method:"DELETE",url:"/v1/me/avatar",headers:{...h,"idempotency-key":key,"x-profile-version":String(v)}});
   const row=async()=>(await pool.query("SELECT avatar_key,avatar_moderation_approval_id,version FROM player_social_profiles WHERE user_id=$1",[userId])).rows[0];
+  const receipts=async(key:string)=>(await pool.query("SELECT reservation_state,status_code,response_body FROM idempotency_records WHERE actor_id=$1 AND operation='profiles.avatar.mutate' AND key_hash=$2",[userId,app.get(IdempotencyService).keyHash(key)])).rows;
   async function fresh(){return sharp(randomBytes(32*32*3),{raw:{width:32,height:32,channels:3}}).png().toBuffer();}
   beforeAll(async()=>{
     execFileSync("pnpm",["exec","tsx","src/database/migrate.ts"],{cwd:path.resolve(__dirname,"../.."),env:{...process.env,NODE_ENV:"test",PUBLIC_API_ORIGIN:env.PUBLIC_API_ORIGIN},stdio:"inherit"});
@@ -54,7 +57,93 @@ run("M1 direct avatar prepublication",()=>{
     const initial=await upload();expect(initial.statusCode,initial.body).toBe(200);oldUrl=initial.json().avatar.uploadedUrl;version=initial.json().version;source=await fresh();fake.calls=0;
   });
   afterAll(async()=>{
-    vi.restoreAllMocks();await app?.close();if(pool){await pool.query("DELETE FROM external_identities WHERE user_id=ANY($1::uuid[])",[users]);await pool.query("DELETE FROM app_sessions WHERE user_id=ANY($1::uuid[])",[users]);await pool.query("DELETE FROM player_social_profiles WHERE user_id=ANY($1::uuid[])",[users]);await pool.query("DELETE FROM users WHERE id=ANY($1::uuid[])",[users]);await pool.end();}if(media)await rm(media,{recursive:true,force:true});
+    vi.restoreAllMocks();await app?.close();if(pool){await pool.query("DELETE FROM idempotency_records WHERE actor_id=ANY($1::uuid[])",[users]);await pool.query("DELETE FROM external_identities WHERE user_id=ANY($1::uuid[])",[users]);await pool.query("DELETE FROM app_sessions WHERE user_id=ANY($1::uuid[])",[users]);await pool.query("DELETE FROM player_social_profiles WHERE user_id=ANY($1::uuid[])",[users]);await pool.query("DELETE FROM users WHERE id=ANY($1::uuid[])",[users]);await pool.end();}if(media)await rm(media,{recursive:true,force:true});
+  });
+  it("replays the original upload before moderation/CAS, even after replacement and restart",async()=>{
+    const key="u".repeat(16);const expected=version;const original=Buffer.from(source);
+    const first=await upload(original,expected,headers,key);expect(first.statusCode,first.body).toBe(200);
+    const calls=fake.calls;const firstFiles=await readdir(media);
+    const repeated=await upload(original,expected,headers,key);expect(repeated.statusCode).toBe(200);expect(repeated.json()).toEqual(first.json());
+    expect((await row()).version).toBe(first.json().version);expect(fake.calls).toBe(calls);expect(await readdir(media)).toEqual(firstFiles);
+    version=first.json().version;
+    const newer=await upload(await fresh());expect(newer.statusCode,newer.body).toBe(200);
+    const current=await row();const files=await readdir(media);const count=fake.calls;
+    await app.close();await start();
+    fake.fixture=async()=>{throw new ModerationProviderError("unavailable");};
+    const replay=await upload(original,expected,second,key);
+    expect(replay.statusCode).toBe(first.statusCode);expect(replay.json()).toEqual(first.json());
+    expect(fake.calls).toBe(count);expect(await row()).toEqual(current);expect(await readdir(media)).toEqual(files);
+    expect((await app.inject({method:"GET",url:newer.json().avatar.uploadedUrl})).statusCode).toBe(200);
+    expect(await receipts(key)).toEqual([{reservation_state:"completed",status_code:200,response_body:first.json()}]);
+    // Authorization still precedes a saved private response.
+    for(const csrf of ["","wrong"]){
+      expect((await upload(original,expected,{...headers,"x-csrf-token":csrf},key)).statusCode).toBe(403);
+    }
+    expect((await upload(original,expected,{...headers,origin:"https://evil.invalid"},key)).statusCode).toBe(403);
+  });
+  it("binds original binary bytes, version, MIME and action to the shared key",async()=>{
+    const key=randomUUID();const expected=version;
+    const first=await upload(source,expected,headers,key);expect(first.statusCode,first.body).toBe(200);
+    const current=await row();const count=fake.calls;
+    // Metadata changes the original bytes, while producing the same sanitized image.
+    const metadata=await sharp(source).withMetadata({orientation:1}).png().toBuffer();
+    expect(metadata.equals(source)).toBe(false);
+    for(const response of [await upload(metadata,expected,headers,key),await upload(source,first.json().version,headers,key),
+      await upload(source,expected,{...headers,"content-type":"image/jpeg"},key),await remove(expected,key)]){
+      expect(response.statusCode,response.body).toBe(409);expect(response.json().code).toBe("IDEMPOTENCY_KEY_REUSED");
+    }
+    expect(fake.calls).toBe(count);expect(await row()).toEqual(current);expect(await receipts(key)).toHaveLength(1);
+  });
+  it("replays DELETE exactly without clearing a subsequent upload",async()=>{
+    const key="d".repeat(128);const expected=version;
+    const first=await remove(expected,key);expect(first.statusCode,first.body).toBe(200);version=first.json().version;
+    expect((await remove(expected,key)).json()).toEqual(first.json());expect((await row()).version).toBe(version);
+    const newer=await upload();expect(newer.statusCode,newer.body).toBe(200);const current=await row();
+    const replay=await remove(expected,key,second);expect(replay.statusCode).toBe(200);expect(replay.json()).toEqual(first.json());
+    expect(await row()).toEqual(current);expect((await app.inject({method:"GET",url:newer.json().avatar.uploadedUrl})).statusCode).toBe(200);
+    for(const response of [await remove(current.version,key),await upload(source,expected,headers,key)]){
+      expect(response.statusCode).toBe(409);expect(response.json().code).toBe("IDEMPOTENCY_KEY_REUSED");
+    }
+    for(const csrf of ["","wrong"])expect((await remove(expected,key,{...headers,"x-csrf-token":csrf})).statusCode).toBe(403);
+  });
+  it("concurrent same-key uploads stage twice but commit once and collect the losing stage",async()=>{
+    const key=randomUUID();const expected=version;const files=new Set(await readdir(media));
+    const runner=app.get(MutationRunner);const run=runner.runIdempotent.bind(runner);
+    const staged=new Set<string>();let arrived=0;let release!:()=>void;
+    const both=new Promise<void>(resolve=>{release=resolve;});
+    const spy=vi.spyOn(runner,"runIdempotent").mockImplementation(async input=>{
+      const candidates=(await pool.query<{storage_key:string}>("SELECT storage_key FROM avatar_media_gc")).rows;
+      for(const candidate of candidates)if(!files.has(candidate.storage_key))staged.add(candidate.storage_key);
+      if(++arrived===2)release();await both;return run(input);
+    });
+    let responses:Awaited<ReturnType<typeof upload>>[];
+    try{responses=await Promise.all([upload(source,expected,headers,key),upload(source,expected,second,key)]);}finally{spy.mockRestore();}
+    expect(responses.map(r=>r.statusCode)).toEqual([200,200]);expect(responses[0]!.json()).toEqual(responses[1]!.json());
+    expect((await row()).version).toBe(expected+1);expect(staged.size).toBe(2);
+    const winner=(await row()).avatar_key;expect(staged.has(winner)).toBe(true);
+    await app.get(AvatarService).cleanup();
+    for(const candidate of staged){expect((await readdir(media)).includes(candidate)).toBe(candidate===winner);}
+    expect((await pool.query("SELECT 1 FROM avatar_media_gc WHERE storage_key=ANY($1::text[])",[[...staged]])).rowCount).toBe(0);
+    expect(await receipts(key)).toEqual([{reservation_state:"completed",status_code:200,response_body:responses[0]!.json()}]);
+  });
+  it("concurrent same-key DELETE commits once and returns the same receipt",async()=>{
+    const key=randomUUID();const expected=version;
+    const responses=await Promise.all([remove(expected,key),remove(expected,key,second)]);
+    expect(responses.map(r=>r.statusCode)).toEqual([200,200]);expect(responses[0]!.json()).toEqual(responses[1]!.json());
+    expect((await row()).version).toBe(expected+1);expect(await receipts(key)).toHaveLength(1);
+  });
+  it("revoked session/account cannot replay a committed private result at either boundary",async()=>{
+    const key=randomUUID();const expected=version;const original=Buffer.from(source);
+    const first=await upload(original,expected,headers,key);expect(first.statusCode,first.body).toBe(200);
+    const sessionId=(await pool.query("SELECT id FROM app_sessions WHERE user_id=$1 LIMIT 1",[userId])).rows[0].id;
+    await pool.query("UPDATE app_sessions SET revoked_at=now() WHERE user_id=$1",[userId]);
+    expect((await upload(original,expected,headers,key)).statusCode).toBe(401);
+    // Bypass edge auth to prove the saved result is guarded by the DB fence too.
+    await expect(app.get(AvatarService).mutate({userId,sessionId},key,String(expected),{body:original,mime:"image/png"})).rejects.toMatchObject({status:401});
+    await pool.query("UPDATE app_sessions SET revoked_at=NULL WHERE user_id=$1",[userId]);
+    await pool.query("UPDATE users SET status='deletion_pending' WHERE id=$1",[userId]);
+    await expect(app.get(AvatarService).mutate({userId,sessionId},key,String(expected),{body:original,mime:"image/png"})).rejects.toMatchObject({status:401});
+    expect(await receipts(key)).toHaveLength(1);
   });
   it("only sends sanitized 512 PNG outside all actor/profile transactions and binds exact bytes",async()=>{
     source=await sharp(randomBytes(800*600*3),{raw:{width:800,height:600,channels:3}}).withMetadata().png().toBuffer();
@@ -84,7 +173,8 @@ run("M1 direct avatar prepublication",()=>{
   for(const category of ["sexual","violence/graphic"] as const)it(`${category} synthetic rejection preserves old public file and GC`,async()=>{
     fake.fixture=async()=>{const d=safeImageDecision();d.categories[category]=true;d.flagged=true;return d;};
     const before=await row();const files=await readdir(media);const gc=(await pool.query("SELECT * FROM avatar_media_gc ORDER BY storage_key")).rows;
-    const response=await upload();expect(response.statusCode).toBe(422);expect(response.json().code).toBe("PUBLIC_IMAGE_CONTENT_REJECTED");
+    const key=randomUUID();const response=await upload(source,version,headers,key);expect(response.statusCode).toBe(422);expect(response.json().code).toBe("PUBLIC_IMAGE_CONTENT_REJECTED");
+    expect(await receipts(key)).toEqual([]);
     expect(await row()).toEqual(before);expect(await readdir(media)).toEqual(files);expect((await pool.query("SELECT * FROM avatar_media_gc ORDER BY storage_key")).rows).toEqual(gc);
     expect((await app.inject({method:"GET",url:oldUrl})).statusCode).toBe(200);expect(response.body).not.toContain(category);
   });
@@ -96,9 +186,10 @@ run("M1 direct avatar prepublication",()=>{
       if(kind==="exception")throw new Error("PRIVATE_IMAGE BASE64 synthetic-api-key");
       throw new ModerationProviderError(kind==="schema"?"schema":"unavailable",kind==="429"?12:undefined);
     };
-    const before=await row();const files=await readdir(media);const response=await upload();
+    const key=randomUUID();const before=await row();const files=await readdir(media);const response=await upload(source,version,headers,key);
     expect(response.statusCode).toBe(503);expect(response.json().code).toBe(["schema","model","unknown-flag"].includes(kind)?"MODERATION_POLICY_MISMATCH":"MODERATION_TEMPORARILY_UNAVAILABLE");
     expect(response.body).not.toMatch(/PRIVATE_IMAGE|BASE64|synthetic-api-key|categories|scores/);expect(await row()).toEqual(before);expect(await readdir(media)).toEqual(files);
+    expect(await receipts(key)).toEqual([]);
   });
   it("exact cache survives restart, skips budget/provider but keeps version CAS",async()=>{
     source=await fresh();const approved=await upload();expect(approved.statusCode).toBe(200);version=approved.json().version;const count=fake.calls;
@@ -132,9 +223,12 @@ run("M1 direct avatar prepublication",()=>{
     let enter!:()=>void;const entered=new Promise<void>(resolve=>{enter=resolve;});let finish!:(v:ImageDecision)=>void;
     fake.fixture=async()=>{enter();return new Promise(resolve=>{finish=resolve;});};
     const stale=upload().then(r=>r);await entered;fake.fixture=async()=>safeImageDecision();
-    const winner=await upload(await fresh(),version,second);expect(winner.statusCode,winner.body).toBe(200);finish(safeImageDecision());
-    expect((await stale).statusCode).toBe(409);expect((await avatarForUser(pool,userId)).uploadedUrl).toBe(winner.json().avatar.uploadedUrl);
-    const orphans=(await pool.query("SELECT storage_key FROM avatar_media_gc WHERE not_before>now() AND storage_key NOT IN (SELECT avatar_key FROM player_social_profiles WHERE avatar_key IS NOT NULL)")).rows;
+    const winner=await upload(await fresh(),version,second);expect(winner.statusCode,winner.body).toBe(200);
+    const cleanup=vi.spyOn(app.get(AvatarService),"cleanup").mockRejectedValueOnce(new Error("Synthetic GC outage"));
+    finish(safeImageDecision());
+    try{expect((await stale).statusCode).toBe(409);}finally{cleanup.mockRestore();}
+    expect((await avatarForUser(pool,userId)).uploadedUrl).toBe(winner.json().avatar.uploadedUrl);
+    const orphans=(await pool.query("SELECT storage_key FROM avatar_media_gc WHERE not_before<=now() AND storage_key NOT IN (SELECT avatar_key FROM player_social_profiles WHERE avatar_key IS NOT NULL)")).rows;
     expect(orphans.length).toBeGreaterThan(0);for(const orphan of orphans){expect((await app.inject({method:"GET",url:`/v1/media/avatars/${orphan.storage_key}`})).statusCode).toBe(404);}
     await pool.query("UPDATE avatar_media_gc SET not_before=now()-interval '1 second'");await app.get(AvatarService).cleanup();
     for(const orphan of orphans)expect(await readdir(media)).not.toContain(orphan.storage_key);
@@ -161,24 +255,62 @@ run("M1 direct avatar prepublication",()=>{
   it("fingerprint recheck rejects altered staged bytes and rolls approval/publication back",async()=>{
     const service=app.get(ContentModerationService);const original=service.bindImage.bind(service);const before=await row();
     const spy=vi.spyOn(service,"bindImage").mockImplementation((client,approval,bytes)=>original(client,approval,Buffer.concat([bytes,Buffer.from("tamper")])));
-    try{const response=await upload();expect(response.statusCode).toBe(503);expect(response.json().code).toBe("MODERATION_POLICY_MISMATCH");expect(await row()).toEqual(before);}finally{spy.mockRestore();}
+    const key=randomUUID();
+    try{const response=await upload(source,version,headers,key);expect(response.statusCode).toBe(503);expect(response.json().code).toBe("MODERATION_POLICY_MISMATCH");expect(await row()).toEqual(before);expect(await receipts(key)).toEqual([]);}finally{spy.mockRestore();}
+    // Rollback released the reservation; a retry with the same command can commit.
+    expect((await upload(source,version,headers,key)).statusCode).toBe(200);expect(await receipts(key)).toHaveLength(1);
+  });
+  it("failure after writing the completed receipt rolls back metadata, approval and receipt",async()=>{
+    const key=randomUUID();const before=await row();const files=await readdir(media);
+    const idempotency=app.get(IdempotencyService);const complete=idempotency.complete.bind(idempotency);
+    const spy=vi.spyOn(idempotency,"complete").mockImplementationOnce(async(client,input)=>{
+      await complete(client,input);throw new Error("Synthetic failure before COMMIT");
+    });
+    try{
+      expect((await upload(source,version,headers,key)).statusCode).toBe(500);
+      expect(await row()).toEqual(before);expect(await receipts(key)).toEqual([]);expect(await readdir(media)).toEqual(files);
+      const sanitized=await sharp(source).resize(512,512,{fit:"cover"}).png().toBuffer();
+      expect((await pool.query("SELECT 1 FROM content_moderation_approvals WHERE content_fingerprint=$1",[app.get(ContentModerationService).fingerprint(sanitized)])).rowCount).toBe(0);
+    }finally{spy.mockRestore();}
+    expect((await upload(source,version,headers,key)).statusCode).toBe(200);expect(await receipts(key)).toHaveLength(1);
+  });
+  it("a collected stage cannot publish missing bytes or leave a completed receipt",async()=>{
+    const key=randomUUID();const before=await row();const files=new Set(await readdir(media));
+    const runner=app.get(MutationRunner);const run=runner.runIdempotent.bind(runner);
+    const spy=vi.spyOn(runner,"runIdempotent").mockImplementationOnce(async input=>{
+      const stages=(await pool.query<{storage_key:string}>("SELECT storage_key FROM avatar_media_gc")).rows.filter(r=>!files.has(r.storage_key));
+      expect(stages).toHaveLength(1);
+      await pool.query("UPDATE avatar_media_gc SET not_before=now()-interval '1 second' WHERE storage_key=$1",[stages[0]!.storage_key]);
+      await app.get(AvatarService).cleanup();
+      expect(await readdir(media)).not.toContain(stages[0]!.storage_key);
+      return run(input);
+    });
+    try{
+      const response=await upload(source,version,headers,key);expect(response.statusCode,response.body).toBe(503);
+      expect(await row()).toEqual(before);expect(await receipts(key)).toEqual([]);
+    }finally{spy.mockRestore();}
+    expect((await upload(source,version,headers,key)).statusCode).toBe(200);
   });
   it("ambiguous successful COMMIT never deletes a possibly published candidate",async()=>{
     const fence=app.get(ActorFenceService);const assert=fence.assertActiveConsumerInTransaction.bind(fence);
     const spy=vi.spyOn(fence,"assertActiveConsumerInTransaction").mockImplementation(async(client,input)=>{
-      await assert(client,input);const query=client.query.bind(client);
+      await assert(client,input);const query=client.query.bind(client);let published=false;
       // Shim only the fenced publication client, preserving driver overloads.
       client.query=(async(text:string,values?:unknown[])=>{
         const result=await query(text,values);
-        if(text==="COMMIT"){client.query=query;throw new Error("Synthetic lost commit acknowledgement");}
+        if(text.startsWith("UPDATE player_social_profiles SET avatar_key"))published=true;
+        if(text==="COMMIT"){client.query=query;if(published)throw new Error("Synthetic lost commit acknowledgement");}
         return result;
       }) as typeof client.query;
     });
+    const key=randomUUID();const expected=version;
     try{
-      const response=await upload();expect(response.statusCode).toBe(500);
+      const response=await upload(source,expected,headers,key);expect(response.statusCode).toBe(500);
       const current=await row();expect(current.version).toBe(version+1);expect(current.avatar_moderation_approval_id).not.toBeNull();
       expect((await app.inject({method:"GET",url:`/v1/media/avatars/${current.avatar_key}`})).statusCode).toBe(200);
       await app.get(AvatarService).cleanup();expect(await readdir(media)).toContain(current.avatar_key);
+      const replay=await upload(source,expected,headers,key);expect(replay.statusCode,replay.body).toBe(200);
+      expect(replay.json()).toEqual((await receipts(key))[0]!.response_body);expect(await row()).toEqual(current);
     }finally{spy.mockRestore();}
   });
   it("restart cleans crash journals; referenced possibly committed file remains readable",async()=>{

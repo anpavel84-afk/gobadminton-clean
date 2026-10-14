@@ -98,12 +98,15 @@ export class IdempotencyService {
       return { kind: "execute" };
     }
 
-    return this.readCompletedReceipt<T>(client, {
+    const receipt = await this.findCompletedReceipt<T>(client, {
       actorId: input.actorId,
       operation: input.operation,
-      keyHash,
+      key: input.key,
       requestHash: input.requestHash,
     });
+    // Never execute without a new reservation if cleanup removed the winner.
+    if (!receipt) throw commandInProgress();
+    return receipt;
   }
 
   async complete<T>(
@@ -160,15 +163,17 @@ export class IdempotencyService {
     return result.rowCount ?? 0;
   }
 
-  private async readCompletedReceipt<T>(
+  /** Non-reserving preflight; a miss grants no permission to execute. */
+  async findCompletedReceipt<T>(
     client: PoolClient,
     input: {
       actorId: string;
       operation: string;
-      keyHash: string;
+      key: string;
       requestHash: string;
     },
-  ): Promise<ReserveGate<T>> {
+  ): Promise<Extract<ReserveGate<T>, { kind: "replay" }> | undefined> {
+    const keyHash = this.keyHash(input.key);
     const existing = await client.query<{
       request_hash: string;
       status_code: number | null;
@@ -179,15 +184,11 @@ export class IdempotencyService {
       `SELECT request_hash, status_code, response_body, expires_at, reservation_state
        FROM idempotency_records
        WHERE actor_id = $1 AND operation = $2 AND key_hash = $3`,
-      [input.actorId, input.operation, input.keyHash],
+      [input.actorId, input.operation, keyHash],
     );
     const row = existing.rows[0];
     if (!row) {
-      // Winner rolled back or coordinated cleanup removed row — never execute
-      // without a new reservation; surface as retryable in-progress.
-      throw commandInProgress(
-        "Резерв идемпотентности исчез; повторите запрос с тем же ключом",
-      );
+      return undefined;
     }
     if (row.reservation_state !== "completed") {
       // Should not be visible after INSERT wait under READ COMMITTED.
@@ -199,7 +200,7 @@ export class IdempotencyService {
          WHERE actor_id = $1 AND operation = $2 AND key_hash = $3
            AND reservation_state = 'completed'
            AND expires_at <= now()`,
-        [input.actorId, input.operation, input.keyHash],
+        [input.actorId, input.operation, keyHash],
       );
       throw commandInProgress(
         "Резерв идемпотентности истёк; повторите запрос с тем же ключом",
