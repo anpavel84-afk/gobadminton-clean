@@ -1,8 +1,9 @@
 import type { AppEnv } from "../config/env";
-import type { UnifiedMap } from "@gobadminton/contracts";
 import { MOSCOW_CITY_ID } from "../venues/venues.service";
-export const DEV_MAP_VERSION = "moscow-20261007-p4-098a869f-v001";
-export function devMapPreview(env: AppEnv, cityId: string): UnifiedMap {
+export const DEV_MAP_VERSION = "moscow-20261007-p4-098a869f-v001" as const;
+type DevMapPreview = { availability: "missing"; mapId: null; version: null } |
+  { availability: "dev_preview"; mapId: "moscow"; version: typeof DEV_MAP_VERSION };
+export function devMapPreview(env: AppEnv, cityId: string): DevMapPreview {
   const enabled = cityId === MOSCOW_CITY_ID && ["mvp", "stage"].includes(env.APP_ENV) &&
     env.PUBLIC_WEB_ORIGIN === "https://dev.gobadminton.ru" && env.PUBLIC_API_ORIGIN === "https://dev.gobadminton.ru" &&
     env.RADAR_DEV_MAP_PREVIEW_ENABLED === true && env.RADAR_DEV_MAP_PREVIEW_VERSION === DEV_MAP_VERSION &&

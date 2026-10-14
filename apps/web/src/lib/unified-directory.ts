@@ -108,10 +108,17 @@ export class UnifiedDirectoryController {
   }
   async query(filters: UnifiedFilters, origin: UnifiedOriginInput = { kind: "none" }, activationKey: string | null = origin.kind === "current_activation" ? origin.activationId : null) {
     if (!this.me || !this.visible || this.view.capabilityUnavailable || this.view.authenticationRequired) return;
-    if (this.pending) return;
+    const changed = JSON.stringify(this.filters) !== JSON.stringify(filters) ||
+      this.activationOriginKey !== activationKey;
+    // A filter/activation change aborts and fences the old in-flight response.
+    if (this.pending) {
+      if (!changed) return;
+      this.invalidate();
+      this.set({ mode: "ordinary" });
+    }
     if (this.clock() < Math.max(this.nextInitial, this.retryAt)) {
-      if (JSON.stringify(this.filters) !== JSON.stringify(filters) || this.activationOriginKey !== activationKey) this.invalidate();
-      // A declined query must not leave a raw foreground fix in controller memory.
+      if (changed) { this.invalidate(); this.set({ mode: "ordinary" }); }
+      // Never retain a raw foreground fix while waiting for the cooldown.
       this.origin = { kind: "none" };
       this.set({ stale: true, notice: "Обновить участников Radar можно через несколько секунд. Пока доступен обычный каталог." }); return;
     }

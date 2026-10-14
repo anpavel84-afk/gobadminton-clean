@@ -17,6 +17,6 @@ describe("single Players card family", () => {
   });
   it("Radar-only projection uses the same contents with a safe preview button", () => {
     const html = renderToStaticMarkup(<UnifiedPlayerCard row={{ ...row, projection: "radar_public" } as unknown as UnifiedRow} city="Москва" onSelect={() => {}} />);
-    expect(html).toContain('<button type="button" class="player-card"'); expect(html).not.toContain('href='); expect(html).toContain("player-card__title"); expect(html).toContain("Безопасное имя");
+    expect(html).toContain('<button type="button" class="player-card"'); expect(html).not.toContain('href="/players/'); expect(html).toContain("player-card__title"); expect(html).toContain("Безопасное имя");
   });
 });

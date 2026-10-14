@@ -29,6 +29,25 @@ describe("unified directory privacy and global pagination", () => {
       resolve(ok(snapshot())); await read; expect(c.view.rows).toEqual([]); expect(c.view.snapshot).toBeNull();
     }
   });
+  it("drops the old pending response on a changed filter and rereads latest after cooldown", async () => {
+    let time = now;
+    let resolveFirst!: (v: ReturnType<typeof ok>) => void;
+    const first = new Promise<ReturnType<typeof ok>>(resolve => { resolveFirst = resolve; });
+    const request = vi.fn()
+      .mockImplementationOnce(async () => first)
+      .mockImplementationOnce(async () => ok({ ...snapshot([row("new-filter-only")]), validUntil: new Date(time + 45000).toISOString() })) as typeof apiFetch;
+    const c = new UnifiedDirectoryController(request, () => time); c.bind(me);
+    const oldRead = c.query(filters, { kind: "current_activation", activationId: "active" }, "active:1");
+    const newest = { ...filters, trainer: true };
+    await c.query(newest, { kind: "current_activation", activationId: "active" }, "active:1");
+    resolveFirst(ok(snapshot([row("old-filter")]))); await oldRead;
+    expect(c.view.rows).toEqual([]); expect(c.view.snapshot).toBeNull();
+    expect(c.view.mode).toBe("ordinary"); expect(request).toHaveBeenCalledTimes(1);
+    time += 30000;
+    await c.query(newest, { kind: "current_activation", activationId: "active" }, "active:1");
+    expect(c.view.rows.map(r => r.publicPlayerId)).toEqual(["new-filter-only"]);
+    expect(JSON.parse(vi.mocked(request).mock.calls[1]![1]!.body as string).filters).toMatchObject({ trainer: true });
+  });
   it("clears the complete context on stale page2 and never appends a new epoch", async () => {
     let calls = 0;
     const request = vi.fn(async () => ++calls === 1 ? ok(snapshot()) : ({ ok: false, status: 409, error: "stale" })) as typeof apiFetch;
