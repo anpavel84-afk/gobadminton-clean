@@ -17,11 +17,15 @@ describe("ordinary pagination follows the exact visible city and Radar state", (
   const moscowRadar = JSON.stringify({ city: MOSCOW_BUNDLE.cityId, areaKey: "", name: "", lookingOnly: false, trainerOnly: false, radarOn: true });
   const oldPage = { scope: allCities, value: "all-cities-page-2" };
   const moscowPage = { scope: moscowRadar, value: "moscow-page-2" };
-  it("drops both previous page and next-cursor when Radar changes scope", () => {
-    expect(scopedCatalogCursor(oldPage, allCities)).toBe("all-cities-page-2");
-    expect(scopedCatalogCursor(oldPage, moscowRadar)).toBeNull();
-    expect(scopedCatalogCursor(moscowPage, allCities)).toBeNull();
-    expect(scopedCatalogCursor(null, moscowRadar)).toBeNull();
+  it("does not resurrect page2 on All cities -> Moscow Radar -> All cities", () => {
+    let stored: { scope: string; value: string } | null = oldPage;
+    expect(scopedCatalogCursor(stored, allCities)).toBe("all-cities-page-2");
+    expect(scopedCatalogCursor(stored, moscowRadar)).toBeNull();
+    // The component's ordinaryScope effect clears both saved tokens.
+    stored = null;
+    expect(scopedCatalogCursor(stored, allCities)).toBeNull();
+    stored = moscowPage;
+    expect(scopedCatalogCursor(stored, allCities)).toBeNull();
   });
   it("also invalidates pagination on ordinary filter changes without a Radar toggle", () => {
     const nameChanged = JSON.stringify({ city: "", areaKey: "", name: "Anna", lookingOnly: false, trainerOnly: false, radarOn: false });

@@ -67,6 +67,14 @@ export function PlayersDirectoryPage() {
   const pageCursor = scopedCatalogCursor(cursor, ordinaryScope);
   const availableNextCursor = scopedCatalogCursor(nextCursor, ordinaryScope);
   const [moreBusy, setMoreBusy] = useState(false);
+  // Scope A -> B -> A must NEVER resurrect A's old page-2 token. Clear saved
+  // pagination in addition to checking the current token's scope.
+  useEffect(() => {
+    setCursor(null);
+    setNextCursor(null);
+    setPlayers([]);
+    setMoreBusy(false);
+  }, [ordinaryScope]);
   useEffect(() => {
     if (!controller) return;
     if (controller.listScrollY) requestAnimationFrame(() => window.scrollTo(0, controller.listScrollY));
