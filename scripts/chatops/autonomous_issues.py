@@ -230,6 +230,10 @@ class Store:
             try:
                 if issue['number'] in self.data['done']:
                     continue
+                try:
+                    body_task = validate_issue(issue, since)
+                except (Hold, ValueError, KeyError, TypeError):
+                    body_task = None
                 authorizations = []
                 for comment in by_parent.get(
                         f'https://api.github.com/repos/{REPO}/issues/{issue["number"]}', []):
@@ -238,13 +242,15 @@ class Store:
                         authorizations.append((comment, task))
                     except (Hold, ValueError, KeyError, TypeError):
                         continue
-                require(len(authorizations) <= 1, 'ambiguous authorization comments')
+                require(len(authorizations) + (body_task is not None) <= 1,
+                        'ambiguous body/comment authorizations')
                 if authorizations:
                     comment, task = authorizations[0]
                     stamp = comment['created_at']
                     admission = dict(id=comment['id'], fingerprint=comment_fingerprint(comment))
                 else:
-                    task = validate_issue(issue, since)
+                    require(body_task is not None, 'no authorization')
+                    task = body_task
                     stamp, admission = issue['created_at'], None
                 created = dt.datetime.fromisoformat(stamp.replace('Z', '+00:00'))
                 choices.append((created, issue['number'], issue, task, admission))
@@ -254,6 +260,7 @@ class Store:
             return None
         _, number, issue, task, admission = min(choices, key=lambda x: x[:2])
         self.data['active'] = dict(issue=number, task=task, fingerprint=fingerprint(issue),
+                                   approved_since=since.isoformat(),
                                    phase='claimed', base=None, head=None, pr=None, ci=None,
                                    run=None, attempt=0)
         if admission is not None:
@@ -556,6 +563,21 @@ class Bridge:
             require(validate_comment(issue, comment, created, created) == active['task']
                     and comment_fingerprint(comment) == admission['fingerprint'],
                     'authorization comment changed after claim')
+        # Re-read through the same bounded, spaced API at every gate, including restart.
+        # Enrollment is durable; an existing claim or competing authorization may age.
+        since = dt.datetime.fromisoformat(active.get('approved_since', issue['created_at'])
+                                         .replace('Z', '+00:00'))
+        now = dt.datetime.now(dt.timezone.utc)
+        for comment in pages(f'issues/{active["issue"]}/comments'):
+            try:
+                created = dt.datetime.fromisoformat(comment['created_at'].replace('Z', '+00:00'))
+                require(created <= now, 'future authorization')
+                validate_comment(issue, comment, since, created)
+            except (Hold, ValueError, KeyError, TypeError):
+                continue
+            require('comment' in active and comment['id'] == active['comment']['id']
+                    and comment_fingerprint(comment) == active['comment']['fingerprint'],
+                    'competing authorization after claim')
 
 
     def clean(self, sha):

@@ -49,6 +49,82 @@ def existing(number=13):
 
 
 class CommentAdmission(unittest.TestCase):
+    def test_body_and_comment_authorizations_are_ambiguous(self):
+        parent = issue()
+        _, comment = existing(30)
+        for body in (parent['body'], parent['body'].replace('Write canary', 'Other task')):
+            with self.subTest(body=body), tempfile.TemporaryDirectory() as tmp:
+                store = a.Store(Path(tmp)/'state')
+                try:
+                    self.assertIsNone(store.claim([parent], SINCE, [comment | {'body': body}]))
+                    self.assertIsNone(store.data['active'])
+                finally:
+                    os.close(store.lock)
+
+    def test_competing_comment_blocks_both_modes_and_restart_before_effects(self):
+        for comment_mode in (False, True):
+            for restart in (False, True):
+                with self.subTest(comment_mode=comment_mode, restart=restart), \
+                        tempfile.TemporaryDirectory() as tmp:
+                    parent, bound = existing() if comment_mode else (issue(), None)
+                    _, competing = existing(parent['number'])
+                    competing.update(id=124, body=bound['body'] if bound else parent['body'])
+                    competing['body'] = competing['body'].replace('Write canary', 'New instruction')
+                    store = a.Store(Path(tmp)/'state')
+                    try:
+                        active = store.claim([parent], SINCE, [bound] if bound else [])
+                        store.phase('candidate', head=HEAD, base=BASE)
+                        if restart:
+                            os.close(store.lock)
+                            store = a.Store(Path(tmp)/'state')
+                            active = store.data['active']
+                        bridge = a.Bridge(types.SimpleNamespace(worktrees_root=Path(tmp)), store)
+                        bridge.git = unittest.mock.Mock()
+                        bridge.model = unittest.mock.Mock()
+                        with patch.object(a, 'api', side_effect=[parent, bound] if bound else [parent]), \
+                                patch.object(a, 'pages', return_value=([bound] if bound else [])+[competing]), \
+                                self.assertRaisesRegex(a.Hold, 'competing authorization'):
+                            bridge.execute(active, recovery=restart)
+                        bridge.git.assert_not_called()
+                        bridge.model.assert_not_called()
+                    finally:
+                        os.close(store.lock)
+
+    def test_runtime_ignores_non_authorizing_comments_in_both_modes(self):
+        for comment_mode in (False, True):
+            parent, bound = existing() if comment_mode else (issue(), None)
+            _, candidate = existing(parent['number'])
+            candidate.update(id=124, body=bound['body'] if bound else parent['body'])
+            ignored = [candidate | {'user': {'id': 1}}, candidate | {'body': 'Owner prose'},
+                       candidate | {'body': a.MARKER+'\n{invalid}'},
+                       candidate | {'created_at': (SINCE-dt.timedelta(seconds=1)).isoformat(),
+                                    'updated_at': (SINCE-dt.timedelta(seconds=1)).isoformat()}]
+            with tempfile.TemporaryDirectory() as tmp:
+                store = a.Store(Path(tmp)/'state')
+                try:
+                    active = store.claim([parent], SINCE, [bound] if bound else [])
+                    bridge = a.Bridge(types.SimpleNamespace(), store)
+                    with patch.object(a, 'api', side_effect=[parent, bound] if bound else [parent]), \
+                            patch.object(a, 'pages', return_value=ignored+([bound] if bound else [])):
+                        bridge.unchanged_issue(active)
+                finally:
+                    os.close(store.lock)
+
+    def test_runtime_quota_preserves_claim(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = a.Store(Path(tmp)/'state')
+            try:
+                parent = issue()
+                active = store.claim([parent], SINCE)
+                before = store.path.read_bytes()
+                bridge = a.Bridge(types.SimpleNamespace(), store)
+                with patch.object(a, 'api', return_value=parent), \
+                        patch.object(a, 'pages', side_effect=a.QuotaWait()), self.assertRaises(a.QuotaWait):
+                    bridge.unchanged_issue(active)
+                self.assertEqual(store.path.read_bytes(), before)
+            finally:
+                os.close(store.lock)
+
     def test_old_parent_restart_done_and_no_body_rewrite(self):
         parent, comment = existing()
         original = copy.deepcopy(parent)
@@ -138,7 +214,8 @@ class CommentAdmission(unittest.TestCase):
             try:
                 active = store.claim([parent], SINCE, [comment])
                 bridge = a.Bridge(types.SimpleNamespace(), store)
-                with patch.object(a, 'api', side_effect=[parent, comment]) as read:
+                with patch.object(a, 'api', side_effect=[parent, comment]) as read, \
+                        patch.object(a, 'pages', return_value=[comment]):
                     bridge.unchanged_issue(active)
                     self.assertEqual(read.call_args.args[0], 'issues/comments/123')
                 for changes in ({'id': 124}, {'id': True}, {'body': issue()['body']},
