@@ -82,10 +82,10 @@ describe("WEB-02 Players / Profile", () => {
     expect(page).toContain("trainer");
     expect(page).toContain("areaKey");
     expect(page).toContain("cityId");
-    // Owner-approved single header control, not a second page switch.
+    // Wave A requires visible Players enable/recovery controls; the header owns consent.
     const provider = await readSource("../src/components/consumer/radar/RadarSessionProvider.tsx");
-    expect(page).not.toContain("RadarSwitchControl");
-    expect(page).not.toContain("RadarStatusControls");
+    expect(page).toContain("<RadarSwitchControl />");
+    expect(page).toContain("<RadarStatusControls />");
     expect(provider).toContain("export function RadarStatusAffordance()");
     expect(provider).toContain("gb-radar-progress");
     expect(provider).toContain("Управление Radar");
