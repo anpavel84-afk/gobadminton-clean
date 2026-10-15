@@ -87,7 +87,17 @@ def loads(raw):
 
 def safe_path(value):
     require(isinstance(value, str) and len(value) <= 240, 'invalid path')
-    require(re.fullmatch(r'[A-Za-z0-9_/-]+(?:\.[A-Za-z0-9_-]+)*', value)
+    # Validate route brackets separately; keep the original literal path for git argv.
+    checked_parts = []
+    for part in value.split('/'):
+        if '[' in part or ']' in part:
+            require(value.startswith('apps/web/src/app/')
+                    and re.fullmatch(r'\[[A-Za-z][A-Za-z0-9_]*\]', part),
+                    'unsafe route segment')
+            checked_parts.append(part[1:-1])
+        else:
+            checked_parts.append(part)
+    require(re.fullmatch(r'[A-Za-z0-9_/-]+(?:\.[A-Za-z0-9_-]+)*', '/'.join(checked_parts))
             and all(p not in ('', '.', '..') and not p.startswith('.')
                     for p in value.split('/')), 'unsafe path')
     require(value.split('/')[0] in {'apps', 'packages', 'docs'}, 'restricted path')
