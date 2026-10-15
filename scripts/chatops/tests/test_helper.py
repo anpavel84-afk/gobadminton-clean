@@ -66,7 +66,7 @@ API_META_URL=http://127.0.0.1/meta
   for e in ['dev','prod']:(self.root/f'config/{e}.conf').write_text(cfg)
   for name,text in [('docker',MOCK),('curl',CURL)]:
    p=self.root/name;p.write_text(text);p.chmod(0o755)
-  source=SOURCE.read_text().replace('CONFIG_ROOT=/etc/gobadminton/deploy',f'CONFIG_ROOT={self.root}/config').replace('STATE_ROOT=/var/lib/gobadminton-deploy',f'STATE_ROOT={self.root}/state').replace('DOCKER=/usr/bin/docker',f'DOCKER={self.root}/docker').replace('CURL=/usr/bin/curl',f'CURL={self.root}/curl')
+  source=SOURCE.read_text().replace('CONFIG_ROOT=/etc/gobadminton/deploy',f'CONFIG_ROOT={self.root}/config').replace('STATE_ROOT=/var/lib/gobadminton-deploy',f'STATE_ROOT={self.root}/state').replace('EVIDENCE_ROOT=/var/lib/gobadminton-deploy-evidence',f'EVIDENCE_ROOT={self.root}/evidence').replace('DOCKER=/usr/bin/docker',f'DOCKER={self.root}/docker').replace('CURL=/usr/bin/curl',f'CURL={self.root}/curl')
   self.helper=self.root/'helper.sh';self.helper.write_text(source);self.helper.chmod(0o755)
   data={f'testdev-{s}':{'project':'testdev','service':s,'image':'sha256:'+'d'*64,'sha':'e'*40} for s in ['api','web','db']}
   (self.root/'docker.json').write_text(json.dumps(data))
@@ -79,6 +79,26 @@ API_META_URL=http://127.0.0.1/meta
  def req(self):return {'action':'deploy','release_id':'r123-a1','sequence':1001,'source_sha':SHA,'api_digest':API,'web_digest':WEB,'expected_previous_sha':''}
  def test_status(self):
   r=self.invoke({'action':'status'});self.assertEqual(r.returncode,0,r.stderr);self.assertIsNone(json.loads(r.stdout)['pending'])
+ def test_filtered_projection_accept_and_rollback(self):
+  r=self.invoke(self.req());self.assertEqual(r.returncode,0,r.stderr)
+  path=self.root/'evidence/dev.json'
+  value=json.loads(path.read_text());self.assertTrue(value['pending'])
+  r=self.invoke({'action':'accept','release_id':'r123-a1'});self.assertEqual(r.returncode,0,r.stderr)
+  value=json.loads(path.read_text());self.assertFalse(value['pending'])
+  self.assertEqual(value['accepted']['source_sha'],SHA)
+  self.assertEqual(value['accepted']['api_digest'],API)
+  self.assertEqual(value['accepted']['web_digest'],WEB)
+  self.assertEqual(set(value['accepted']),{'release_id','source_sha','api_digest','web_digest','status','finished_at'})
+  self.assertEqual(path.stat().st_mode & 0o777,0o644)
+  self.assertEqual(path.stat().st_uid,0)
+  self.assertEqual(path.parent.stat().st_mode & 0o777,0o755)
+  self.assertEqual((self.root/'state/dev').stat().st_mode & 0o777,0o700)
+  r=self.invoke({'action':'rollback','release_id':'r123-a1'});self.assertEqual(r.returncode,0,r.stderr)
+  value=json.loads(path.read_text());self.assertFalse(value['pending']);self.assertIsNone(value['accepted'])
+ def test_failed_deploy_exit_projects_rollback(self):
+  r=self.invoke(self.req(),extra={'FAIL_UP':'1'});self.assertNotEqual(r.returncode,0)
+  value=json.loads((self.root/'evidence/dev.json').read_text())
+  self.assertFalse(value['pending']);self.assertIsNone(value['accepted'])
  def test_wrong_credential(self):self.assertNotEqual(self.invoke({'action':'status'},'prod',{'SUDO_USER':'gb-deploy-dev'}).returncode,0)
  def test_unknown_field(self):self.assertNotEqual(self.invoke(self.req()|{'command':'id'}).returncode,0)
  def test_injected_id(self):self.assertNotEqual(self.invoke(self.req()|{'release_id':'r1-a1;id'}).returncode,0)

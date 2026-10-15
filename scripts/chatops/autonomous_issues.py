@@ -11,6 +11,7 @@ from pathlib import Path
 import pwd
 import re
 import signal
+import socket
 import stat
 import subprocess
 import tempfile
@@ -34,10 +35,31 @@ DEPLOY_STEP = 'Apply, browser-smoke, accept; rollback on failure'
 MAX_JSON = 2 * 1024 * 1024
 CANARIES = {30: 'docs/operations/chatops/AUTONOMY_CANARY_A.md',
             31: 'docs/operations/chatops/AUTONOMY_CANARY_B.md'}
+RUNTIME_READS = [Path(p) for p in (
+    '/home/agentagency-dev/.local/bin',
+    '/home/agentagency-dev/.local/lib/node_modules/@openai',
+    '/home/agentagency-dev/.local/node-v24.21.0') if Path(p).exists()]
+EVIDENCE = Path('/var/lib/gobadminton-deploy-evidence/dev.json')
+REQUIRED_STEPS = {
+    'foundation': {'Run python3 scripts/check_foundation.py', 'Check bounded contract exemptions even on foundation failure'},
+    'database': {'Run bash scripts/chatops/db-ci.sh'},
+    'receiver': {"Run find scripts/chatops -name '*.sh' -exec bash -n {} +"},
+    'checks': {'Run bash scripts/chatops/ci.sh fast'},
+    'images': {'Run bash scripts/chatops/build-pair.sh'},
+    'deploy': {DEPLOY_STEP},
+}
+for package in ('api', 'web', 'admin', 'contracts'):
+    REQUIRED_STEPS[f'source ({package})'] = {
+        f'Run pnpm --filter @gobadminton/{package} run {command}'
+        for command in ('typecheck', 'lint', 'test:unit')}
 _API_NEXT = 0.0
 
 
 class QuotaWait(Exception):
+    pass
+
+
+class ReadWait(Exception):
     pass
 
 
@@ -203,7 +225,7 @@ class Store:
                           'sha': self.data['active'].get('head')}), flush=True)
 
 
-def api(path):
+def _api_once(path):
     url = path if path.startswith('https://dev.gobadminton.ru/') else (
         f'https://api.github.com/repos/{REPO}/{path}')
     request = urllib.request.Request(url, headers={
@@ -219,6 +241,10 @@ def api(path):
         with urllib.request.urlopen(request, timeout=30) as response:
             raw = response.read(MAX_JSON + 1)
     except urllib.error.HTTPError as error:
+        if error.code == 401:
+            raise Hold("API authentication rejected (401)") from None
+        if 500 <= error.code <= 599:
+            raise ReadWait("transient HTTP failure") from None
         if github and error.code in (403, 429):
             try:
                 reset = float(error.headers.get('X-RateLimit-Reset', 0)) - time.time()
@@ -228,9 +254,26 @@ def api(path):
             _API_NEXT = time.monotonic() + max(3600, reset, retry)
             raise QuotaWait() from None
         raise
+    except (urllib.error.URLError, TimeoutError, ConnectionError, socket.timeout):
+        raise ReadWait("transient read failure") from None
 
     require(len(raw) <= MAX_JSON, 'API response too large')
     return loads(raw)
+
+
+def api(path):
+    # Retry only this idempotent read, never its caller/model/git side effects.
+    attempt = 0
+    while True:
+        try:
+            return _api_once(path)
+        except QuotaWait:
+            continue  # _API_NEXT enforces the quota delay inside this same read.
+        except ReadWait:
+            if attempt == 4:
+                raise Hold('read retries exhausted; durable phase retained for reconciliation') from None
+            time.sleep(min(60, 2 ** (attempt + 1)))
+            attempt += 1
 
 
 def pages(path, key=None):
@@ -256,9 +299,17 @@ def run(argv, cwd, env, timeout=120, input=None, guard=None):
     try:
         stdout, stderr = process.communicate(input.encode() if input is not None else None, timeout=timeout)
     except BaseException:
-        os.killpg(process.pid, signal.SIGKILL)
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
         process.wait()
         raise
+    # A successful parent must not leave background writers behind either.
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
     require(not re.search(rb'(?i)\b401\b|unauthorized|token.{0,30}revoked', stderr),
             'BLOCKED: model authentication rejected (401/unauthorized)')
     require(process.returncode == 0, f'command failed: {Path(argv[0]).name} (output withheld)')
@@ -328,11 +379,55 @@ def successful(run_info, jobs, sha, required, deploy=False):
         steps = job.get('steps', [])
         require(steps and all(s['status'] == 'completed' and s['conclusion'] in ('success', 'skipped')
                               for s in steps), 'failed/missing steps')
+        for step in steps:
+            if step['conclusion'] == 'skipped':
+                require(step['name'].startswith(('Post ', 'Run actions/upload-artifact@')),
+                        'unexpected skipped step')
+        for name in REQUIRED_STEPS[job['name']]:
+            matches = [s for s in steps if s['name'] == name]
+            require(len(matches) == 1 and matches[0]['conclusion'] == 'success',
+                    'required check missing/skipped/duplicate: ' + name)
         if deploy and job['name'] == 'deploy':
             matches = [s for s in steps if s['name'] == DEPLOY_STEP]
             require(len(matches) == 1 and matches[0]['conclusion'] == 'success',
                     'DEV ACCEPTED step not successful')
     return True
+
+
+def server_evidence(release_id, sha):
+    # Open every component without following symlinks. No user-selected source.
+    fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for part in EVIDENCE.parts[1:]:
+            info = os.fstat(fd)
+            require(info.st_uid == 0 and info.st_mode & 0o022 == 0, 'untrusted evidence ancestor')
+            child = os.open(part, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+            os.close(fd)
+            fd = child
+        info = os.fstat(fd)
+        require(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and info.st_gid == 0
+                and stat.S_IMODE(info.st_mode) == 0o644, 'untrusted evidence file')
+        raw = os.read(fd, 8193)
+        require(len(raw) <= 8192, 'oversize evidence')
+    finally:
+        os.close(fd)
+    return validate_server_evidence(loads(raw), release_id, sha)
+
+
+def validate_server_evidence(value, release_id, sha):
+    require(isinstance(value, dict), 'invalid server projection')
+    require(value.get('environment') == 'dev' and value.get('schema') == 1
+            and value.get('pending') is False, 'pending/invalid server evidence')
+    receipt = value.get('accepted') or {}
+    require(isinstance(receipt, dict), 'invalid receipt')
+    require(receipt.get('status') == 'ACCEPTED' and receipt.get('release_id') == release_id
+            and receipt.get('source_sha') == sha, 'server acceptance mismatch')
+    for name in ('api_digest', 'web_digest'):
+        require(isinstance(receipt.get(name), str)
+                and re.fullmatch(r'sha256:[0-9a-f]{64}', receipt[name]), 'invalid accepted digest')
+    require(type(value.get('observed_at')) is int
+            and 0 <= time.time() - value['observed_at'] <= 300, 'stale server status')
+    return value
 
 
 class Bridge:
@@ -377,7 +472,7 @@ class Bridge:
         # Do not grant a readable ancestor of the SSH key or checkpoint directory.
         readable = [Path(x) for x in ('/usr', '/bin', '/lib', '/lib64', '/etc', '/dev')
                     if Path(x).exists()]
-        readable += [Path('/proc/self'), Path('/home/agentagency-dev/.local'), common, self.work, job, auth]
+        readable += [Path('/proc/self'), *RUNTIME_READS, common, self.work, job, auth]
         for path in readable:
             resolved = path.resolve()
             require(not KEY.is_relative_to(resolved)
@@ -573,10 +668,14 @@ class Bridge:
                 require(active.get('ci', {}).get('sha') == active['head']
                         and qa_result(active['qa'], active['head']), 'missing candidate gates')
                 deployed = self.wait_run(active, dev=True)
+                release_id = f'r{deployed["id"]}-a{deployed["attempt"]}'
+                receipt = server_evidence(release_id, active['head'])
                 meta = api('https://dev.gobadminton.ru/v1/meta')
                 require(meta.get('gitSha') == active['head'], 'live DEV SHA mismatch')
+                require(server_evidence(release_id, active['head'])['accepted'] == receipt['accepted'],
+                        'server status changed during live meta read')
                 self.store.phase('done', run=deployed, live=meta,
-                                 release_id=f'r{deployed["id"]}-a{deployed["attempt"]}')
+                                 release_id=release_id, server=receipt)
             return
 
 
@@ -592,6 +691,18 @@ def main():
     parser.add_argument('--wait-timeout', type=int, default=7200)
     parser.add_argument('--model-timeout', type=int, default=1800)
     config = parser.parse_args()
+    def terminate(signum, frame):
+        raise SystemExit(128 + signum)
+    signal.signal(signal.SIGTERM, terminate)
+    service = run(['systemctl', '--user', 'show', 'gobadminton-autonomy.service',
+                   '--property=KillMode,MainPID,ActiveState'], '/', clean_env() | {
+                       'XDG_RUNTIME_DIR': f'/run/user/{os.getuid()}',
+                       'DBUS_SESSION_BUS_ADDRESS': f'unix:path=/run/user/{os.getuid()}/bus'})
+    properties = dict(line.split('=', 1) for line in service.splitlines())
+    require(properties.get('KillMode') == 'control-group'
+            and properties.get('MainPID') == str(os.getpid())
+            and properties.get('ActiveState') in ('active', 'activating'),
+            'must run as the single gobadminton-autonomy user service with KillMode=control-group')
     require(os.getuid() != 0 and pwd.getpwuid(os.getuid()).pw_name == 'agentagency-dev', 'wrong runtime user')
     require(120 <= config.poll <= 300 and 30 <= config.wait_timeout <= 14400
             and 30 <= config.model_timeout <= 3600, 'invalid time bounds')
@@ -626,7 +737,8 @@ def main():
         except Exception as error:
             if store.data['active'] and store.data['active']['phase'] != 'done':
                 # No subprocess/API output or credentials in diagnostics/checkpoints.
-                store.phase('blocked', reason=str(error) if isinstance(error, Hold) else type(error).__name__)
+                store.phase('blocked', resume_phase=store.data['active']['phase'],
+                            reason=str(error) if isinstance(error, Hold) else type(error).__name__)
             else:
                 print('Poll unavailable; retrying without claim', flush=True)
         time.sleep(config.poll)

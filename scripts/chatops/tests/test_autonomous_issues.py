@@ -31,7 +31,7 @@ def issue(number=30):
 def gates(required, deploy=False):
     run = dict(head_sha=HEAD, event='push', status='completed', conclusion='success')
     jobs = [dict(name=n, status='completed', conclusion='success', steps=[
-        dict(name=a.DEPLOY_STEP if n == 'deploy' else 'test', status='completed', conclusion='success')])
+        dict(name=step, status='completed', conclusion='success') for step in a.REQUIRED_STEPS[n]])
         for n in required]
     return run, jobs
 
@@ -113,9 +113,9 @@ class Contracts(unittest.TestCase):
 
     def test_quota_retains_backoff_without_tokens(self):
         error = a.urllib.error.HTTPError('url', 403, 'quota', {}, None)
-        with patch.object(a.urllib.request, 'urlopen', side_effect=error):
+        with patch.object(a, '_API_NEXT', 0), patch.object(a.urllib.request, 'urlopen', side_effect=error):
             with self.assertRaises(a.QuotaWait):
-                a.api('issues?state=open')
+                a._api_once('issues?state=open')
             self.assertGreater(a._API_NEXT, a.time.monotonic() + 3500)
         a._API_NEXT = 0
 
@@ -139,6 +139,103 @@ class Contracts(unittest.TestCase):
             else:
                 self.assertEqual(result, 'DENIED')
                 self.assertEqual((allowed / 'proof').read_text(), 'ok')
+
+
+class Adversarial(unittest.TestCase):
+    def test_each_required_step_cannot_be_skipped_missing_or_duplicated(self):
+        for required in (a.CI_JOBS, a.DEV_JOBS):
+            run, jobs = gates(required)
+            for index, job in enumerate(jobs):
+                for step in range(len(job['steps'])):
+                    for mode in ('skip', 'missing', 'duplicate'):
+                        bad = copy.deepcopy(jobs)
+                        steps = bad[index]['steps']
+                        if mode == 'skip':
+                            steps[step]['conclusion'] = 'skipped'
+                        elif mode == 'missing':
+                            steps.pop(step)
+                        else:
+                            steps.append(steps[step].copy())
+                        with self.subTest(job=job['name'], mode=mode), self.assertRaises(a.Hold):
+                            a.successful(run, bad, HEAD, required, required == a.DEV_JOBS)
+
+    def test_server_receipt_exact_identity_digests_pending_and_freshness(self):
+        good = dict(schema=1, environment='dev', pending=False, observed_at=int(a.time.time()),
+                    accepted=dict(status='ACCEPTED', release_id='r1-a1', source_sha=HEAD,
+                                  api_digest='sha256:'+'b'*64, web_digest='sha256:'+'c'*64))
+        self.assertEqual(a.validate_server_evidence(good, 'r1-a1', HEAD), good)
+        for changes in ({'pending': True}, {'pending': None}, {'observed_at': 0},
+                        {'environment': 'prod'}, {'observed_at': int(a.time.time())+60}):
+            with self.assertRaises(a.Hold):
+                a.validate_server_evidence(good | changes, 'r1-a1', HEAD)
+        for changes in ({'release_id': 'r2-a1'}, {'source_sha': BASE}, {'status': 'PENDING_SMOKE'},
+                        {'api_digest': 'sha256:bad'}, {'web_digest': None}):
+            with self.assertRaises(a.Hold):
+                a.validate_server_evidence(good | {'accepted': good['accepted'] | changes}, 'r1-a1', HEAD)
+
+    def test_forged_evidence_and_symlink_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / 'dev.json'
+            p.write_text(json.dumps(dict(schema=1, environment='dev', pending=False,
+                observed_at=int(a.time.time()), accepted=dict(status='ACCEPTED',
+                source_sha=HEAD, release_id='r1-a1', api_digest='sha256:'+'b'*64,
+                web_digest='sha256:'+'c'*64))))
+            p.chmod(0o644)
+            with patch.object(a, 'EVIDENCE', p), self.assertRaises(a.Hold):
+                a.server_evidence('r1-a1', HEAD)
+            link = Path(tmp) / 'link'; link.symlink_to(p)
+            with patch.object(a, 'EVIDENCE', link), self.assertRaises((a.Hold, OSError)):
+                a.server_evidence('r1-a1', HEAD)
+
+    def test_transient_reads_and_401_classification_without_sleep(self):
+        for error in (a.urllib.error.URLError('offline'), TimeoutError(),
+                      a.urllib.error.HTTPError('url', 503, 'unavailable', {}, None)):
+            with patch.object(a, '_API_NEXT', 0), patch.object(a.urllib.request, 'urlopen', side_effect=error):
+                with self.assertRaises(a.ReadWait):
+                    a._api_once('issues')
+        with patch.object(a, '_API_NEXT', 0), patch.object(a.urllib.request, 'urlopen',
+                side_effect=a.urllib.error.HTTPError('url', 401, 'denied', {}, None)):
+            with self.assertRaises(a.Hold):
+                a.api('issues')
+
+    def test_read_retries_are_bounded_and_never_repeat_caller(self):
+        with patch.object(a, '_api_once', side_effect=[a.ReadWait(), {'ok': True}]) as read, patch.object(a.time, 'sleep') as sleep:
+            self.assertEqual(a.api('issues'), {'ok': True})
+            self.assertEqual(read.call_count, 2)
+            sleep.assert_called_once_with(2)
+        with patch.object(a, '_api_once', side_effect=a.ReadWait()) as read, patch.object(a.time, 'sleep') as sleep:
+            with self.assertRaises(a.Hold):
+                a.api('issues')
+            self.assertEqual(read.call_count, 5)
+            self.assertEqual([x.args[0] for x in sleep.call_args_list], [2, 4, 8, 16])
+
+    def test_term_kills_real_child_and_grandchild_before_lock_release(self):
+        import time
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            # Worker owns flock; descendants attempt delayed proof writes.
+            script = root / 'worker.py'
+            script.write_text("import importlib.util,signal,sys\n"
+                "spec=importlib.util.spec_from_file_location('a',sys.argv[1]);a=importlib.util.module_from_spec(spec);spec.loader.exec_module(a)\n"
+                "signal.signal(signal.SIGTERM,lambda *_:sys.exit(143))\n"
+                "store=a.Store(a.Path(sys.argv[2])/'state')\n"
+                "a.run(['/bin/sh','-c',sys.argv[3]],sys.argv[2],a.clean_env())\n")
+            command = '(sleep 1; touch "' + str(root / 'survivor') + '") & echo ready > "' + str(root / 'ready') + '"; wait'
+            worker = subprocess.Popen(['/usr/bin/python3', '-B', str(script), str(SPEC.origin), tmp, command])
+            try:
+                deadline = time.monotonic() + 5
+                while not (root / 'ready').exists() and time.monotonic() < deadline:
+                    time.sleep(.01)
+                self.assertTrue((root / 'ready').exists())
+                with self.assertRaises(a.Hold):
+                    a.Store(root / 'state')
+                worker.terminate(); worker.wait(timeout=5)
+                store = a.Store(root / 'state'); os.close(store.lock)
+                time.sleep(1.1)
+                self.assertFalse((root / 'survivor').exists())
+            finally:
+                if worker.poll() is None:
+                    worker.kill(); worker.wait()
 
 
 class Recovery(unittest.TestCase):
@@ -168,7 +265,7 @@ class Recovery(unittest.TestCase):
                         remote_state[0] = HEAD
                     return BASE
                 bridge.git = git
-                with patch.object(a, 'api', return_value={'gitSha': HEAD}):
+                with patch.object(a, 'server_evidence', return_value={'accepted': {'synthetic': True}}), patch.object(a, 'api', return_value={'gitSha': HEAD}):
                     bridge.execute(active, recovery=True)
                 return calls, copy.deepcopy(active)
             finally:

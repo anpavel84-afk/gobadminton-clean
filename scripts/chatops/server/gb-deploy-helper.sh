@@ -8,6 +8,7 @@ export PATH=/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8 LC_ALL=C.UTF-8
 unset BASH_ENV ENV CDPATH DOCKER_HOST DOCKER_CONTEXT DOCKER_CONFIG COMPOSE_FILE COMPOSE_PROJECT_NAME
 CONFIG_ROOT=/etc/gobadminton/deploy
 STATE_ROOT=/var/lib/gobadminton-deploy
+EVIDENCE_ROOT=/var/lib/gobadminton-deploy-evidence
 DOCKER=/usr/bin/docker
 # Every Docker invocation has a hard deadline so watchdog can acquire the lock.
 docker_bounded() { /usr/bin/timeout --kill-after=15s 300 "$DOCKER" "$@"; }
@@ -57,8 +58,38 @@ export HOME=/root DOCKER_CONFIG="$CONFIG_ROOT/registry-$ENVIRONMENT"
 BASE=(docker_bounded compose --project-name "$PROJECT" --env-file "$ENV_FILE")
 for p in "${COMPOSE_FILES[@]}"; do BASE+=(-f "$p"); done
 compose() { local o=$1; shift; "${BASE[@]}" -f "$o" "$@"; }
-write_json() { local dst=$1 tmp; tmp=$(mktemp "$STATE/.json.XXXXXX"); cat >"$tmp"; jq -e . "$tmp" >/dev/null; chmod 600 "$tmp"; mv -f -- "$tmp" "$dst"; }
+# DEV-only filtered public projection. Private state permissions remain unchanged.
+publish_evidence() {
+  [[ $ENVIRONMENT == dev ]] || return 0
+  local tmp
+  trusted "$(dirname -- "$EVIDENCE_ROOT")"
+  if [[ ! -e $EVIDENCE_ROOT && ! -L $EVIDENCE_ROOT ]]; then
+    mkdir -m 755 -- "$EVIDENCE_ROOT"
+  fi
+  trusted "$EVIDENCE_ROOT"
+  [[ -d $EVIDENCE_ROOT ]] || fail 'evidence directory required'
+  chmod 755 "$EVIDENCE_ROOT"
+  tmp=$(mktemp "$EVIDENCE_ROOT/.dev.XXXXXX")
+  jq -n --slurpfile good <(cat "$STATE/accepted.json" 2>/dev/null || printf 'null') \
+    --argjson pending "$(if [[ -e $STATE/pending.json ]]; then printf true; else printf false; fi)" \
+    '{schema:1,environment:"dev",observed_at:(now|floor),pending:$pending,
+      accepted:($good[0] | if . == null then null else
+        {release_id,source_sha,api_digest,web_digest,status,finished_at} end)}' >"$tmp"
+  chown root:root "$tmp"; chmod 644 "$tmp"
+  mv -fT -- "$tmp" "$EVIDENCE_ROOT/dev.json"
+}
+MUTATING=0
+finish() {
+  local rc=$?
+  trap - EXIT HUP INT TERM
+  if (( MUTATING )); then rollback || { echo GB_ROLLBACK_FAILED >&2; rc=1; }; fi
+  publish_evidence || rc=1
+  exit "$rc"
+}
+trap finish EXIT
+write_json() { local dst=$1 tmp; tmp=$(mktemp "$STATE/.json.XXXXXX"); cat >"$tmp"; jq -e . "$tmp" >/dev/null; chmod 600 "$tmp"; mv -f -- "$tmp" "$dst"; publish_evidence; }
 status() {
+  publish_evidence
   jq -n --slurpfile good <(cat "$STATE/accepted.json" 2>/dev/null || printf 'null') \
     --slurpfile pending <(cat "$STATE/pending.json" 2>/dev/null || printf 'null') \
     --slurpfile last <(cat "$STATE/last-result.json" 2>/dev/null || printf 'null') \
@@ -206,7 +237,7 @@ done
 PENDING=$(jq --argjson deadline "$(( $(date +%s) + OPERATION_SECONDS ))" '. + {status:"DEPLOYING",deadline:$deadline}' <<<"$REQUEST")
 printf '%s\n' "$PENDING" | write_json "$STATE/pending.json"
 MUTATING=1
-trap 'rc=$?; if (( MUTATING )); then trap - EXIT HUP INT TERM; rollback || echo GB_ROLLBACK_FAILED >&2; fi; exit "$rc"' EXIT
+trap finish EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
@@ -224,5 +255,5 @@ healthy "$DIR/candidate.json"
 verify_version "$SHA"
 jq --argjson d "$(( $(date +%s) + ACCEPT_SECONDS ))" '. + {status:"PENDING_SMOKE",deadline:$d}' "$STATE/pending.json" | write_json "$STATE/pending.json"
 MUTATING=0
-trap - EXIT ERR HUP INT TERM
+trap - ERR HUP INT TERM
 status

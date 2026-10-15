@@ -1,0 +1,14 @@
+# User unit only; substitute approved paths/enrollment before installation.
+[Unit]
+Description=GoBadminton single-claim Issue adapter
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -B /APPROVED/scripts/chatops/autonomous_issues.py --repo /APPROVED --state-dir /PRIVATE_STATE --worktrees-root /ASSIGNED_WORKTREES --known-hosts /VERIFIED_HOSTS --approved-since ENROLLMENT_UTC
+KillMode=control-group
+TimeoutStopSec=20
+SendSIGKILL=yes
+Restart=on-failure
+RestartSec=30
+UMask=0077
+[Install]
+WantedBy=default.target

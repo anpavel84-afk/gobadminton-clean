@@ -90,3 +90,63 @@ test_autonomous_issues.py`, `python3 -B scripts/check_foundation.py`,
 `git diff --check`. These are author checks, not independent QA or commissioning.
 Next bounded action: independent review of this package, then authorized publication
 and controlled A–E commissioning with exact GitHub evidence.
+
+## Issue #29 R1 repair · 2026-10-15 · READY FOR REVIEW, commissioning BLOCKED
+
+Owner bounded assignment: repair candidate `01b32f714e948c6e70fea3391359fce05f41e6ce`
+on `ops/p0-chatops-autonomy-20261015`, single writer. Scope: existing bridge/helper,
+offline adversarial tests, explicit model probe and user-unit template. No push,
+host installation, DEV/PROD action, permissions/workflow changes or canary consumption.
+The earlier paragraph saying no commit describes the original candidate only;
+this repair was authorized for local commit, but commit is BLOCKED by sandbox:
+Git cannot create `/srv/gobadminton-clean/repo/.git/worktrees/p0-chatops-autonomy-20261015/index.lock`
+(Read-only file system). Changes remain uncommitted in the assigned worktree.
+
+DONE now requires fixed `/var/lib/gobadminton-deploy-evidence/dev.json`, opened
+component-by-component without symlinks, root-owned non-writable ancestors and
+root:root 0644 regular file. Receipt must be ACCEPTED for exact run/attempt release
+ID and candidate SHA, both complete sha256 digests, pending=false, schema/environment
+and observed_at within 300 seconds. It is checked around live meta SHA validation.
+Root helper atomically publishes only the filtered DEV receipt plus pending bool
+and observation timestamp, on state writes, status and EXIT while holding its lock;
+rollback failure retains pending=true. Private state remains 0700. No PROD projection.
+A delayed/restarted adapter needs a fresh status projection via the existing
+root helper status route; absence/staleness blocks, never falls back to user evidence.
+No periodic publisher or new privileged service is introduced.
+
+Required check names follow ci.yml (including each source matrix package).
+Missing, duplicate or skipped checks fail; only normal post/artifact steps may skip.
+Read-only HTTP calls retry locally up to five attempts with 2/4/8/16-second backoff
+and existing public quota spacing; no caller/model/write replay. Exhaustion/401
+blocks and retains resume_phase. Quota waits stay inside the same read.
+
+The fixed user service name is `gobadminton-autonomy.service`; runtime verifies
+its MainPID and KillMode=control-group before enrollment. Template is under
+`scripts/chatops/user/`. SIGTERM unwinds child execution and kills its process
+group before flock release; cgroup cleanup additionally covers escaped groups
+and uncatchable parent death. Uncertain writer/reviewer recovery stays BLOCKED.
+Never run another instance with a different state directory to escape a claim.
+
+Author validation: 16 offline bridge tests pass, including forged evidence,
+receipt mutations, required-step skip/removal/duplication, bounded retries and
+real child/grandchild SIGTERM with lock reacquisition and delayed survivor proof.
+Foundation and whitespace/shell syntax checks pass. Root helper integration tests
+are present but skipped under uid 1002; run them in the authorized disposable root
+test environment before acceptance (not against installed host state).
+
+Actual CLI 0.160.1 was invoked under Landlock with workspace-write sandbox,
+requesting shell `true` and denial of a synthetic key outside allowed roots.
+It failed closed with Permission denied before the requested proof. No real SSH
+key/token was read by this probe; output was withheld except fixed diagnostic
+signatures. Reproducible explicit probe: `python3 -B
+scripts/chatops/tests/probe_model_guard.py`. Composition remains BLOCKED; no
+sandbox bypass or scope widening was attempted. This is not model/shell success.
+
+Next bounded recipient/action: independent R2 review of the exact repair commit;
+then resolve guard composition and execute disposable root helper tests before
+any authorized commissioning. Preserve all claims/QA on stop. Rollback source
+with a normal revert of the repair commit, no automatic host rollback. Publication
+is pending because Owner explicitly forbids push in this assignment; the uncommitted worktree
+is the handoff candidate, not a claim of durable GitHub publication.
+HEAD remains `01b32f714e948c6e70fea3391359fce05f41e6ce`; an authorized environment
+with writable task Git metadata must commit these changes before R2 review.
