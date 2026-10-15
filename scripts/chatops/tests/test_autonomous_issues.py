@@ -103,6 +103,21 @@ class Contracts(unittest.TestCase):
         with self.assertRaisesRegex(a.Hold, 'BLOCKED'):
             a.run(['/bin/sh', '-c', 'echo Unauthorized 401 >&2; exit 1'], '/tmp', a.clean_env())
 
+    def test_successful_stderr_auth_words_are_not_rejection(self):
+        self.assertEqual(a.run(
+            ['/bin/sh', '-c', 'echo /tmp/unauthorized/path Unauthorized401 >&2; printf ok'],
+            '/tmp', a.clean_env()), 'ok')
+
+    def test_nonzero_unauthorized_path_is_generic_failure(self):
+        with self.assertRaisesRegex(a.Hold, '^command failed:'):
+            a.run(['/bin/sh', '-c', 'echo /tmp/unauthorized/path >&2; exit 1'],
+                  '/tmp', a.clean_env())
+
+    def test_actual_unauthorized401_blocks(self):
+        with self.assertRaisesRegex(a.Hold, 'BLOCKED: model authentication rejected'):
+            a.run(['/bin/sh', '-c', 'echo Unauthorized401 >&2; exit 1'],
+                  '/tmp', a.clean_env())
+
     def test_guard_setup_failure_never_executes_child(self):
         with tempfile.TemporaryDirectory() as tmp:
             proof = Path(tmp) / 'executed'
@@ -123,21 +138,23 @@ class Contracts(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); allowed = root / 'allowed'; allowed.mkdir()
             secret = root / 'secret'; secret.write_text('test secret')
+            (allowed/'link').symlink_to(secret)
             reads = [Path(p) for p in ('/usr', '/bin', '/lib', '/lib64') if Path(p).exists()]
             code = ('from pathlib import Path; import sys\n'
                     'Path(sys.argv[1]).write_text("ok")\n'
-                    'try:\n Path(sys.argv[2]).read_text()\n'
-                    'except PermissionError:\n print("DENIED")\n'
-                    'else:\n raise RuntimeError("secret readable")\n')
-            command = ['/bin/sh', '-c', 'exec /usr/bin/python3 -B -c "$1" "$2" "$3"', 'guard-test', code,
-                       str(allowed / 'proof'), str(secret)]
+                    'for name in sys.argv[2:]:\n'
+                    ' try:\n  Path(name).read_text()\n'
+                    ' except PermissionError:\n  print("DENIED")\n'
+                    ' else:\n  raise RuntimeError("secret readable")\n')
+            command = ['/bin/sh', '-c', 'exec /usr/bin/python3 -B -c "$1" "$2" "$3" "$4" "$5"', 'guard-test', code,
+                       str(allowed / 'proof'), str(secret), str(allowed/'link'), '/proc/self/root'+str(secret)]
             try:
                 result = a.run(command, root, a.clean_env(), guard=(reads, [allowed]))
             except subprocess.SubprocessError:
                 self.assertFalse((allowed / 'proof').exists(), 'guard failed after child executed')
                 print('Landlock unavailable: child execution blocked; commissioning BLOCKED')
             else:
-                self.assertEqual(result, 'DENIED')
+                self.assertEqual(result, 'DENIED\nDENIED\nDENIED')
                 self.assertEqual((allowed / 'proof').read_text(), 'ok')
 
 
@@ -161,7 +178,7 @@ class Adversarial(unittest.TestCase):
 
     def test_server_receipt_exact_identity_digests_pending_and_freshness(self):
         good = dict(schema=1, environment='dev', pending=False, observed_at=int(a.time.time()),
-                    accepted=dict(status='ACCEPTED', release_id='r1-a1', source_sha=HEAD,
+                    accepted=dict(status='ACCEPTED', finished_at=int(a.time.time()), release_id='r1-a1', source_sha=HEAD,
                                   api_digest='sha256:'+'b'*64, web_digest='sha256:'+'c'*64))
         self.assertEqual(a.validate_server_evidence(good, 'r1-a1', HEAD), good)
         for changes in ({'pending': True}, {'pending': None}, {'observed_at': 0},
@@ -169,9 +186,40 @@ class Adversarial(unittest.TestCase):
             with self.assertRaises(a.Hold):
                 a.validate_server_evidence(good | changes, 'r1-a1', HEAD)
         for changes in ({'release_id': 'r2-a1'}, {'source_sha': BASE}, {'status': 'PENDING_SMOKE'},
-                        {'api_digest': 'sha256:bad'}, {'web_digest': None}):
+                        {'api_digest': 'sha256:bad'}, {'web_digest': None}, {'finished_at': 0}, {'finished_at': True}, {'finished_at': int(a.time.time())+1}):
             with self.assertRaises(a.Hold):
                 a.validate_server_evidence(good | {'accepted': good['accepted'] | changes}, 'r1-a1', HEAD)
+
+    def test_receipt_survives_api_spacing_but_expires_from_acceptance(self):
+        now = 100000
+        good = dict(schema=1, environment='dev', pending=False, observed_at=now-900,
+                    accepted=dict(status='ACCEPTED', finished_at=now-901, release_id='r1-a1',
+                                  source_sha=HEAD, api_digest='sha256:'+'b'*64, web_digest='sha256:'+'c'*64))
+        with patch.object(a.time, 'time', return_value=now):
+            a.validate_server_evidence(good, 'r1-a1', HEAD)
+            good['accepted']['finished_at'] = now-a.EVIDENCE_MAX_AGE-1
+            with self.assertRaises(a.Hold):
+                a.validate_server_evidence(good, 'r1-a1', HEAD)
+
+    def test_managed_profile_and_config_preflight(self):
+        import tomllib
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); work = root/'work'; work.mkdir()
+            args = a.model_command(a.NATIVE_CODEX, work, root/'job', root/'git', root/'state')
+            self.assertNotIn('--sandbox', args)
+            self.assertIn('--no-daemon', args)
+            profile = tomllib.loads(next(x for x in args if x.startswith('permissions.')))['permissions']['gb-task']
+            self.assertFalse(profile['network']['enabled'])
+            self.assertEqual(profile['filesystem'][str(a.KEY.parent)], 'deny')
+            self.assertEqual(profile['filesystem'][str(work/'.git')], 'read')
+            self.assertEqual(profile['filesystem'][':root'], 'deny')
+            self.assertEqual(profile['filesystem'][':slash_tmp'], 'deny')
+            self.assertEqual(profile['filesystem'][':tmpdir'], 'write')
+            self.assertEqual(profile['filesystem'][str(root/'job')], 'write')
+            self.assertEqual(profile['filesystem'][str(root/'state')], 'deny')
+            (work/'.codex').mkdir(); (work/'.codex/config.toml').write_text('')
+            with self.assertRaises(a.Hold):
+                a.model_command(a.NATIVE_CODEX, work, root/'job', root/'git', root/'state')
 
     def test_forged_evidence_and_symlink_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:

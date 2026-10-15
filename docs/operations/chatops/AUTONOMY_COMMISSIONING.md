@@ -29,10 +29,9 @@ even when inherited CODEX_HOME points there. Model 401/Unauthorized blocks the
 claim; do not print tokens or raw model output. Validate current CLI compatibility
 and OAuth separately before enrollment; no model was launched here.
 
-Landlock ABI >=3 must enforce restrictions in child commands; failed guard setup
+For non-model foundation validation, Landlock ABI >=3 must enforce restrictions in child commands; failed guard setup
 must prevent execution. Run the included child/grandchild tests under the actual
-runtime user. Ubuntu bwrap preflight is reported available by Owner; full nested
-CLI + Landlock + bwrap remains unverified here. If it fails, commissioning is
+runtime user. Codex tools use the managed profile described below, without an outer Landlock wrapper. If it fails, commissioning is
 BLOCKED: retain sandbox, state and SSH isolation; never disable protections.
 
 GitHub-hosted Autonomy PR uses only GITHUB_TOKEN, pull-requests:write, strict
@@ -106,7 +105,7 @@ DONE now requires fixed `/var/lib/gobadminton-deploy-evidence/dev.json`, opened
 component-by-component without symlinks, root-owned non-writable ancestors and
 root:root 0644 regular file. Receipt must be ACCEPTED for exact run/attempt release
 ID and candidate SHA, both complete sha256 digests, pending=false, schema/environment
-and observed_at within 300 seconds. It is checked around live meta SHA validation.
+and acceptance age within the bounded four-hour window described below. It is checked around live meta SHA validation.
 Root helper atomically publishes only the filtered DEV receipt plus pending bool
 and observation timestamp, on state writes, status and EXIT while holding its lock;
 rollback failure retains pending=true. Private state remains 0700. No PROD projection.
@@ -150,3 +149,114 @@ is pending because Owner explicitly forbids push in this assignment; the uncommi
 is the handoff candidate, not a claim of durable GitHub publication.
 HEAD remains `01b32f714e948c6e70fea3391359fce05f41e6ce`; an authorized environment
 with writable task Git metadata must commit these changes before R2 review.
+
+
+## Issue #29 supported-profile continuation · 2026-10-15 · BLOCKED runtime proof
+
+This section supersedes earlier sandbox/freshness/HEAD claims. Exact base is
+`5067e4615ce3f6c796a8d466ac52eedf292b46a3`; same worktree, sole writer.
+Owner scope: model boundary repair, acceptance freshness, hosted unit coverage,
+synthetic proof and documentation. No commit (PM commits), install, push, canary,
+deployment or repository permission changes. Current changes are an unpublished
+handoff candidate; PM must publish them before durable independent review.
+
+Codex uses native installed CLI, `--no-daemon`, ignored user config/rules,
+approval never, disabled web search/hooks/apps/MCP, and one CLI inline TOML table
+selecting `default_permissions="gb-task"`. Project config is rejected before
+launch rather than merged. No legacy `--sandbox` override. See
+[official managed permissions](https://learn.chatgpt.com/docs/permissions).
+Profile extends `:workspace` for author, `:read-only` for QA: root denied,
+minimal runtime read, task worktree write/read respectively, .git/common-dir read,
+exact SSH directory and private worker state denied. Shared /tmp denied; only job
+TMPDIR writes allowed. Runtime roots are existing OpenAI CLI and standalone Node;
+PATH starts with `/home/agentagency-dev/.local/node-v24.21.0/bin`. No neighboring
+project runtime is resolved or reused. Foundation retains Landlock without OAuth
+home access. CLI OAuth transport is trusted; model tools have network disabled.
+
+Acceptance requires exact release ID, SHA, digests and pending=false, with integer
+`finished_at <= observed_at <= now` and acceptance age <=14400 seconds (maximum
+bounded wait/recovery window). This tolerates 65-second API spacing and polling;
+observation updates cannot renew an old acceptance. Evidence remains checked on
+both sides of live meta validation; stale acceptance requires reconciliation.
+
+Autonomy unit tests run in the existing receiver step, preserving its first-line
+GitHub-generated name and REQUIRED_STEPS. No named step or gate was removed.
+
+Validation: final 18 offline tests passed, including synthetic symlink/proc denial.
+Foundation, one email policy test, eight foundation policy tests and whitespace/
+shell checks passed. All 21 root helper tests were skipped under uid1002; no root
+helper PASS is claimed. Synthetic probe
+runs native sandbox author/QA checks (direct, symlink and /proc/self/root denial,
+git read-only and allowed writes), then real `codex exec` and independently checks
+its proof. Under this session's enclosing filesystem restrictions, native sandbox
+failed before shell with `app-server socket directory must be a user-owned
+directory with mode 0700`; real `codex exec --no-daemon` failed before model startup
+with `failed to initialize in-process app-server client: Read-only file system
+(os error 30)`. No model PASS or allowed proof exists. No real SSH key was read or
+printed. No permission widening or sandbox bypass attempted. These are runtime
+blockers, not evidence that managed profiles passed in this session.
+
+Next bounded action: PM publishes source/tests and reruns
+`python3 -B scripts/chatops/tests/probe_model_guard.py` under the authorized runtime
+with its normal writable CLI state, keeping the same managed restrictions. Require
+both model result and independent proof checks before commissioning. Root helper
+integration still needs the disposable root CI environment; local uid1002 cannot
+substitute for it. Rollback: restore changed source files to the exact base; no
+host effects need rollback. Preserve all prior R1 recovery and release gates.
+
+
+### Issue #29 bounded correction · 2026-10-15
+
+Same base and unpublished handoff status as above; preserve existing diff. The
+dedicated job TMPDIR now has `:tmpdir=write` as well as its resolved job path
+write grant: a deny on the same resolved path wins over write. `:slash_tmp=deny`,
+root deny, SSH directory deny and private state deny remain unchanged.
+The synthetic probe fixture now creates its private temporary root beneath
+`/srv/gobadminton-clean/worktrees/.autonomy-probes`, with parent, root and child
+directories mode 0700. Sibling state under masked /tmp prevented bwrap from
+scaffolding mounts. Direct/symlink/proc key denial and git read-only checks remain.
+
+Supervisor reports direct DC native sandbox EXIT0 with the real /srv worktree,
+job TMPDIR and corrected profile; this is supplied evidence, not a local run.
+Do not run nested Codex in this enclosing sandbox: auth HOME cannot be written
+and its read-only failure is not evidence about the corrected direct runtime.
+PM must run the exact probe directly in DC after handoff. No new model/runtime
+PASS is claimed here. No commit, push, install, deployment or canary consumption.
+Rollback only this continuation's edits; do not restore whole files over the
+pre-existing diff.
+
+Author checks after this bounded correction: 18 offline autonomy tests PASS;
+foundation static check PASS; one email policy and eight foundation policy tests
+PASS; `git diff --check` PASS. Exact native/model probe intentionally not run
+inside the enclosing sandbox; direct DC execution remains PM's next action.
+
+
+### Issue #29 final bounded source fixes · 2026-10-15
+
+Same exact base `5067e4615ce3f6c796a8d466ac52eedf292b46a3`, sole writer,
+preserving the entire pre-existing diff. This latest evidence supersedes earlier
+claims that no direct model PASS exists. Supervisor reports direct host positive
+model probe PASS in session `01a13d7f-63a9-7cd1-86b2-a5411a50e3d9`: native
+`model_command` with current managed profile, shell `true` plus allowed workspace
+`printf`, independently verified proof `allowed`, exit 0. Separate direct native
+author/QA probes also PASS: direct/symlink/proc secret denial, common/.git read-only,
+and QA source read-only. These are supplied Supervisor evidence, not local runs
+or a claim that this final source revision has been probed. The combined negative
+model prompt returned PROBE_FAIL because it asked for forbidden operations; model
+willingness to attempt them is not a permission-negative acceptance criterion.
+
+The model prompt now requests only `true` and the allowed proof write. All native
+negative checks and independent unchanged .git/common checks remain. Fixture name
+is `forbidden-write`. `run()` classifies authentication rejection only on nonzero
+exit with an authentication error signature, avoiding successful stderr transcript
+paths/prompts containing `unauthorized`. Regression coverage includes successful
+stderr with an unauthorized path/auth text, generic nonzero path failure, and
+actual `Unauthorized401` exit 1 blocking. No sandbox/policy permissions changed.
+
+Author validation: 21 offline autonomy tests PASS; foundation static check PASS;
+one email policy test and eight foundation policy tests PASS; `git diff --check`
+PASS. No nested Codex launch, commit, push, install or deployment. Candidate remains
+unpublished at Owner request. Next bounded action: PM runs the updated exact probe
+directly on the authorized host and publishes source/evidence for independent
+review. Existing CI/root-helper/release gates remain. Rollback only these bounded
+edits, preserving all earlier changes.

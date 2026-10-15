@@ -60,5 +60,6 @@ jobs:
         with: {persist-credentials: false}
       - run: |
           find scripts/chatops -name '*.sh' -exec bash -n {} +
+          python3 -B scripts/chatops/tests/test_autonomous_issues.py
           node --check scripts/chatops/smoke.mjs
           sudo python3 scripts/chatops/tests/test_helper.py

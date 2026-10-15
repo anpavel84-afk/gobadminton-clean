@@ -36,9 +36,10 @@ MAX_JSON = 2 * 1024 * 1024
 CANARIES = {30: 'docs/operations/chatops/AUTONOMY_CANARY_A.md',
             31: 'docs/operations/chatops/AUTONOMY_CANARY_B.md'}
 RUNTIME_READS = [Path(p) for p in (
-    '/home/agentagency-dev/.local/bin',
     '/home/agentagency-dev/.local/lib/node_modules/@openai',
     '/home/agentagency-dev/.local/node-v24.21.0') if Path(p).exists()]
+NATIVE_CODEX = '/home/agentagency-dev/.local/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex'
+EVIDENCE_MAX_AGE = 14400  # one bounded wait/recovery window from acceptance
 EVIDENCE = Path('/var/lib/gobadminton-deploy-evidence/dev.json')
 REQUIRED_STEPS = {
     'foundation': {'Run python3 scripts/check_foundation.py', 'Check bounded contract exemptions even on foundation failure'},
@@ -310,7 +311,13 @@ def run(argv, cwd, env, timeout=120, input=None, guard=None):
         os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
         pass
-    require(not re.search(rb'(?i)\b401\b|unauthorized|token.{0,30}revoked', stderr),
+    # CLI transcripts can echo paths/prompts containing auth words on successful runs.
+    auth_error = re.search(
+        rb'(?i)\bunauthorized[ :_-]*401\b|\b401[ :_-]+unauthorized\b|'
+        rb'\b(?:HTTP(?:/\d(?:\.\d)?)?\s+|status(?:\s+code)?[ :=]+)401\b|'
+        rb'\b(?:error|authentication failed)[ :]+unauthorized\b|\btoken.{0,30}revoked\b',
+        stderr)
+    require(not (process.returncode != 0 and auth_error),
             'BLOCKED: model authentication rejected (401/unauthorized)')
     require(process.returncode == 0, f'command failed: {Path(argv[0]).name} (output withheld)')
     require(len(stdout) <= MAX_JSON, 'command output bound exceeded')
@@ -321,7 +328,7 @@ def landlock(readable, writable):
     """Linux ABI >=3; fail closed. Unlike env scrubbing, this denies SSH-key reads.
 
     Applied only to child processes, including foundation. No privilege or service change.
-    Codex's own sandbox further restricts tools; git common-dir is readable, never writable.
+    Used for non-model validation only; Codex tools use managed permissions.
     """
     libc = ctypes.CDLL(None, use_errno=True)
     require(libc.syscall(444, 0, 0, 1) >= 3, 'Landlock ABI >=3 required')
@@ -349,11 +356,42 @@ def landlock(readable, writable):
 
 
 def clean_env():
-    return {'PATH': '/home/agentagency-dev/.local/bin:/usr/local/bin:/usr/bin:/bin',
+    return {'PATH': '/home/agentagency-dev/.local/node-v24.21.0/bin:/usr/bin:/bin',
             'HOME': '/home/agentagency-dev', 'USER': 'agentagency-dev', 'LANG': 'C.UTF-8',
             'CODEX_HOME': '/home/agentagency-dev/.codex',
             'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null',
             'GIT_TERMINAL_PROMPT': '0'}
+
+
+def permission_config(work, job, common, state, qa=False, denied=()):
+    """Whole inline TOML table: quoted path keys must not go through dotted -c parsing."""
+    work, job, common, state = [Path(p).resolve() for p in (work, job, common, state)]
+    require(not state.is_relative_to(work) and not job.is_relative_to(state), 'unsafe private state scope')
+    filesystem = {':root': 'deny', ':minimal': 'read', ':slash_tmp': 'deny',
+                  ':tmpdir': 'write', str(work): 'read' if qa else 'write',
+                  str(job): 'write', str(common): 'read', str(work / '.git'): 'read'}
+    for path in RUNTIME_READS:
+        filesystem[str(path.resolve())] = 'read'
+    for path in (KEY.parent, state, *denied):
+        filesystem[str(Path(path).resolve())] = 'deny'
+    def table(mapping):
+        return '{' + ','.join(json.dumps(k) + '=' + (table(v) if isinstance(v, dict)
+                          else str(v).lower() if isinstance(v, bool) else json.dumps(v))
+                          for k, v in mapping.items()) + '}'
+    return 'permissions.gb-task=' + table({'extends': ':read-only' if qa else ':workspace',
+                                          'network': {'enabled': False}, 'filesystem': filesystem})
+
+
+def model_command(codex, work, job, common, state, qa=False, denied=()):
+    # User config is ignored; reject project config rather than merge unknown hooks/MCP/policy.
+    for directory in (Path(work), *Path(work).parents):
+        require(not (directory / '.codex/config.toml').exists(), 'project Codex config prohibited')
+    return [str(codex), '--no-daemon', 'exec', '--ignore-user-config', '--ignore-rules',
+            '--ephemeral', '--skip-git-repo-check', '-C', str(work),
+            '-c', 'approval_policy="never"', '-c', 'default_permissions="gb-task"',
+            '-c', permission_config(work, job, common, state, qa, denied),
+            '-c', 'mcp_servers={}', '-c', 'features.hooks=false',
+            '-c', 'features.apps=false', '-c', 'web_search="disabled"']
 
 
 def qa_result(value, sha):
@@ -425,8 +463,10 @@ def validate_server_evidence(value, release_id, sha):
     for name in ('api_digest', 'web_digest'):
         require(isinstance(receipt.get(name), str)
                 and re.fullmatch(r'sha256:[0-9a-f]{64}', receipt[name]), 'invalid accepted digest')
-    require(type(value.get('observed_at')) is int
-            and 0 <= time.time() - value['observed_at'] <= 300, 'stale server status')
+    observed, finished = value.get('observed_at'), receipt.get('finished_at')
+    require(type(observed) is int and type(finished) is int
+            and 0 <= time.time() - finished <= EVIDENCE_MAX_AGE
+            and finished <= observed <= time.time(), 'stale server status')
     return value
 
 
@@ -468,27 +508,25 @@ class Bridge:
 
     def guard(self, job, qa=False):
         common = Path(self.git('rev-parse', '--path-format=absolute', '--git-common-dir'))
-        auth = Path(self.env['CODEX_HOME']).resolve(strict=True)
         # Do not grant a readable ancestor of the SSH key or checkpoint directory.
         readable = [Path(x) for x in ('/usr', '/bin', '/lib', '/lib64', '/etc', '/dev')
                     if Path(x).exists()]
-        readable += [Path('/proc/self'), *RUNTIME_READS, common, self.work, job, auth]
+        readable += [*RUNTIME_READS, common, self.work, job]
         for path in readable:
             resolved = path.resolve()
             require(not KEY.is_relative_to(resolved)
                     and not self.c.state_dir.is_relative_to(resolved), 'unsafe sandbox read root')
-        return readable, [job, auth] + ([] if qa else [self.work])
+        return readable, [job] + ([] if qa else [self.work])
 
     def model(self, prompt, qa=False):
         with tempfile.TemporaryDirectory(prefix='gb-model-') as temp:
             job = Path(temp)
             result = job / 'result.json'
             env = self.env | {'TMPDIR': temp}
-            argv = [self.c.codex, 'exec', '--ignore-user-config', '--ephemeral',
-                    '-c', 'approval_policy="never"', '-C', str(self.work), '--sandbox',
-                    'read-only' if qa else 'workspace-write', '-o', str(result), '-']
-            run(argv, self.work, env, timeout=self.c.model_timeout, input=prompt,
-                guard=self.guard(job, qa))
+            common = Path(self.git('rev-parse', '--path-format=absolute', '--git-common-dir'))
+            argv = model_command(self.c.codex, self.work, job, common, self.c.state_dir, qa)
+            argv += ['-o', str(result), '-']
+            run(argv, self.work, env, timeout=self.c.model_timeout, input=prompt)
             if qa:
                 require(result.stat().st_size <= 65536, 'QA result too large')
                 return loads(result.read_text())
@@ -686,7 +724,7 @@ def main():
     parser.add_argument('--worktrees-root', type=Path, required=True)
     parser.add_argument('--known-hosts', type=Path, required=True)
     parser.add_argument('--approved-since', required=True, help='UTC enrollment instant, e.g. 2026-10-15T12:00:00Z')
-    parser.add_argument('--codex', default='/home/agentagency-dev/.local/bin/codex')
+    parser.add_argument('--codex', default=NATIVE_CODEX)
     parser.add_argument('--poll', type=int, default=240)
     parser.add_argument('--wait-timeout', type=int, default=7200)
     parser.add_argument('--model-timeout', type=int, default=1800)
