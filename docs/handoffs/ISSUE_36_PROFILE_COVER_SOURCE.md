@@ -1,5 +1,25 @@
 # Issue #36 — Wave B2 owned profile cover
 
+## Attempt 3 continuation before first QA3 — complete CI facts, 2026-10-15
+
+From: source author. To: trusted parent publisher → NEW independent read-only QA3.
+Status: READY_FOR_REVIEW / UNVERIFIED, same attempt 3; no independent QA3 started or acceptance claimed.
+Exact entry/base: `7c8f8b202c41f3976d463d191efdff2a2db9b4f3`, `automation/issue-36`, clean worktree. Parent explicitly authorized only this bounded continuation; no second writer was launched. Immutable task goal/allowed paths and Owner reference #5#issuecomment-6182091853 remain unchanged. Live DEV base was not accessed.
+
+FACT supplied by PM and `.tools/style-reference/ACTUAL_CI_SOURCE_ERRORS.md`: complete hosted Product CI `38731326473`, database job `116409562093`, source `7e4c18a7ff08a8ac3d3b344ec5f0876ab1f392eb`, also failed cover block setup (missing mandatory pair_id) and LS01 exact public projection (detail now includes cover). Earlier inline type/header/migration-list fixes are already in entry HEAD and were not repeated. Original independent QA2 remains FAIL; this late CI output does not rewrite that verdict or constitute QA3.
+
+Changes in this continuation:
+
+- `apps/api/test/integration/cover-upload.test.ts`: import SafetyModule into the existing TestApp with its already isolated `loadEnv({...process.env, SOCIAL_DIRECTORY_ENABLED:"1"})`. Replace raw block INSERT/DELETE with normal authenticated Safety PUT/DELETE and fresh idempotency keys, following `me.managed-games.test.ts`. Exercise viewer→owner AND owner→viewer; each denies viewer media, retains owner access, unblocks in finally, validates exact receipts and proves viewer access returns. Synthetic viewer profile enables reverse targeting. Its later own-cover DELETE obtains the current version via authenticated GET, preserving successful own mutation and the assertion that owner's media remains untouched. Teardown removes the now-created synthetic pair after API unblock and before deleting users; no ledger rows are fabricated/rewritten, no constraints/triggers are relaxed.
+- `apps/api/test/integration/ls01.profiles-safety.test.ts`: distinguish strict directory and detail key sets in the existing projection helper. Directory retains its exact previous whitelist; detail adds only `cover`, explicitly present in OpenAPI PublicPlayer and ProfilesService.getDirectoryPlayer. The no-upload fixture must return exactly `{uploadedUrl:null}` (no private metadata, keys, original URL or extra fields). All forbidden-substring and visibility/block negatives remain. ProfilesService.listDirectory does not add cover, and no production projection/contract change was necessary. Uploaded derivative authorization remains covered by the cover integration suite.
+- This chronology addition only. No Web visuals, production source behavior, migration SQL, checksums, flags or architecture changed.
+
+Actual author verification (not QA): `git diff --check` exit 0. `COREPACK_ENABLE_NETWORK=0 pnpm --filter @gobadminton/api run typecheck` could not start: pinned pnpm 10.18.0 unavailable, network disabled. `node packages/contracts/scripts/check-openapi.mjs` could not validate: missing `@apidevtools/swagger-parser`. Direct `node --check` on the two TypeScript files rejects existing inline type imports and cannot serve as a TS syntax check; no TS syntax/type PASS is claimed. Dependencies were not installed. Typecheck/lint/unit/disposable PostGIS/browser/build are NOT_TESTED here. Parent retains Foundation execution; its prior PASS is not a new result for this diff.
+
+Rollback: inverse only this continuation's two integration-test diffs and chronology addition; retain all existing source/history and earlier attempt-3 fixes. No commit/push/reset/rebootstrap, service/root/credentials/live DB/PROD access or deployment performed. Publication is intentionally pending trusted parent; no new exact SHA/permalink exists yet. Current changes must be included in a normal append commit and FF push by parent for durable GitHub representation.
+
+Next bounded action: parent runs Foundation, publishes normally, records exact final SHA/permalinks, then starts FIRST new independent QA3 and full hosted Product CI on that SHA. Authorized DEV backup/paired digests/smoke/receiver root-owned ACCEPTED pending=false and real authenticated synthetic mobile/desktop upload/replace/delete/forbidden actions remain NOT_TESTED; source review is not product acceptance. Preserve `.tools/style-reference` canonical data for review and all prior STYLE_GUIDE_GAP/parity caveats below. No PROD.
+
 ## Bounded continuation on reviewed candidate — 2026-10-15
 
 Status: READY_FOR_REVIEW / UNVERIFIED. Recipient: trusted parent publisher, then NEW independent exact-SHA SOURCE QA. Current local base is `7e4c18a7ff08a8ac3d3b344ec5f0876ab1f392eb`, branch `automation/issue-36`; checkout was clean at this continuation's entry despite the supplied dirty-worktree description. Complete existing cover implementation was preserved. No reset, commit, push or git metadata mutation was performed. Live DEV base was not accessed or claimed.

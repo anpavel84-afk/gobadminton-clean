@@ -15,6 +15,7 @@ import { ProblemExceptionFilter } from "../../src/common/problem.filter";
 import { loadEnv } from "../../src/config/env";
 import { FakeModerationProvider } from "../../src/moderation/fake-provider";
 import { MODERATION_PROVIDER, safeImageDecision } from "../../src/moderation/provider";
+import { SafetyModule } from "../../src/safety/safety.module";
 import { ProfilesModule } from "../../src/profiles/profiles.module";
 import { registerAvatarHttp } from "../../src/profiles/avatar-http";
 import { buildTestCoreModule } from "./test-core.module";
@@ -35,14 +36,14 @@ run("owned cover: disposable PostGIS API", () => {
     pool = new Pool({connectionString:env.DATABASE_URL});
     await pool.query("INSERT INTO users(id,display_name) VALUES ($1,'Synthetic cover owner'),($2,'Synthetic cover viewer')",[user,viewer]);
     const root=path.resolve(__dirname,"../../.qa-runtime");await mkdir(root,{recursive:true});media=await mkdtemp(path.join(root,"cover-"));env.AVATAR_MEDIA_ROOT=media;
-    const module=await Test.createTestingModule({imports:[buildTestCoreModule(env,pool),AuthModule,ProfilesModule]}).overrideProvider(MODERATION_PROVIDER).useValue(fake).compile();
+    const module=await Test.createTestingModule({imports:[buildTestCoreModule(env,pool),AuthModule,ProfilesModule,SafetyModule]}).overrideProvider(MODERATION_PROVIDER).useValue(fake).compile();
     app=module.createNestApplication<NestFastifyApplication>(new FastifyAdapter({logger:false}));registerAvatarHttp(app.getHttpAdapter().getInstance());await app.register(cookie);app.setGlobalPrefix("v1");app.useGlobalFilters(new ProblemExceptionFilter());await app.init();await app.getHttpAdapter().getInstance().ready();
     const a=await app.get(SessionService).createConsumerSession(user), b=await app.get(SessionService).createConsumerSession(viewer);
     own={cookie:`${SESSION_COOKIE}=${a.sessionToken}`,origin:env.PUBLIC_WEB_ORIGIN,"x-csrf-token":a.csrfToken,"content-type":"image/png"};other={...own,cookie:`${SESSION_COOKIE}=${b.sessionToken}`,"x-csrf-token":b.csrfToken};
     png=await sharp({create:{width:600,height:400,channels:3,background:"green"}}).withMetadata().png().toBuffer();
   });
   afterAll(async()=>{
-    await app?.close();if(pool){await pool.query("DELETE FROM user_blocks WHERE blocker_user_id=ANY($1::uuid[]) OR blocked_user_id=ANY($1::uuid[])",[[user,viewer]]);await pool.query("DELETE FROM idempotency_records WHERE actor_id=ANY($1::uuid[])",[[user,viewer]]);await pool.query("DELETE FROM app_sessions WHERE user_id=ANY($1::uuid[])",[[user,viewer]]);await pool.query("DELETE FROM player_social_profiles WHERE user_id=ANY($1::uuid[])",[[user,viewer]]);await pool.query("DELETE FROM users WHERE id=ANY($1::uuid[])",[[user,viewer]]);await pool.end();}if(media)await rm(media,{recursive:true,force:true});
+    await app?.close();if(pool){await pool.query("DELETE FROM social_pairs WHERE user_low=ANY($1::uuid[]) OR user_high=ANY($1::uuid[])",[[user,viewer]]);await pool.query("DELETE FROM idempotency_records WHERE actor_id=ANY($1::uuid[])",[[user,viewer]]);await pool.query("DELETE FROM app_sessions WHERE user_id=ANY($1::uuid[])",[[user,viewer]]);await pool.query("DELETE FROM player_social_profiles WHERE user_id=ANY($1::uuid[])",[[user,viewer]]);await pool.query("DELETE FROM users WHERE id=ANY($1::uuid[])",[[user,viewer]]);await pool.end();}if(media)await rm(media,{recursive:true,force:true});
   });
   it("requires authentication, CSRF and origin before decoding",async()=>{
     const deniedHeaders: Array<{ patch: Record<string, string>; status: number }> = [
@@ -75,15 +76,42 @@ run("owned cover: disposable PostGIS API", () => {
   it("public visibility and bilateral block are checked for each media read",async()=>{
     await pool.query("UPDATE player_social_profiles SET directory_visible=true,city_id=(SELECT id FROM cities LIMIT 1),consent_policy_version='directory-mvp-v1',opted_in_at=now() WHERE user_id=$1",[user]);
     expect((await read()).statusCode).toBe(200);expect((await read(other)).statusCode).toBe(200);
-    await pool.query("INSERT INTO user_blocks(blocker_user_id,blocked_user_id) VALUES ($1,$2)",[viewer,user]);expect((await read(other)).statusCode).toBe(404);expect((await read(own)).statusCode).toBe(200);
-    await pool.query("DELETE FROM user_blocks WHERE blocker_user_id=$1",[viewer]);
+    // Use the normal Safety API with this TestApp's isolated directory flag.
+    // Both directions must fence media; unblock through the same pair transaction.
+    await pool.query("INSERT INTO player_social_profiles(user_id,display_name) VALUES ($1,'Synthetic cover viewer')", [viewer]);
+    const profiles = await pool.query<{ user_id: string; public_player_id: string }>(
+      "SELECT user_id,public_player_id FROM player_social_profiles WHERE user_id=ANY($1::uuid[])", [[user,viewer]],
+    );
+    for (const [actorHeaders, target] of [[other, user], [own, viewer]] as const) {
+      const publicPlayerId = profiles.rows.find(row => row.user_id === target)!.public_player_id;
+      const blockUrl = `/v1/me/blocks/${publicPlayerId}`;
+      const mutateBlock = (method: "PUT" | "DELETE") => app.inject({
+        method, url: blockUrl,
+        headers: { ...actorHeaders, "content-type": "application/json", "idempotency-key": randomUUID() },
+        payload: {},
+      });
+      try {
+        const block = await mutateBlock("PUT");
+        expect(block.statusCode, block.body).toBe(200);
+        expect(block.json()).toEqual({ publicPlayerId, blocked: true });
+        expect((await read(other)).statusCode).toBe(404);
+        expect((await read(own)).statusCode).toBe(200);
+      } finally {
+        const unblock = await mutateBlock("DELETE");
+        expect(unblock.statusCode, unblock.body).toBe(200);
+        expect(unblock.json()).toEqual({ publicPlayerId, blocked: false });
+      }
+      expect((await read(other)).statusCode).toBe(200);
+    }
     await pool.query("UPDATE player_social_profiles SET directory_visible=false WHERE user_id=$1",[user]);expect((await read()).statusCode).toBe(404);
   });
   it("rejected moderation preserves current bytes, CAS fences races and other users",async()=>{
     fake.fixture=async()=>({...safeImageDecision(),flagged:true,categories:{...safeImageDecision().categories,violence:true}});
     const changed=await sharp(png).negate().png().toBuffer();expect((await upload(version,randomUUID(),changed)).statusCode).toBe(422);expect((await read(own)).statusCode).toBe(200);fake.fixture=async()=>safeImageDecision();
     const race=await Promise.all([upload(),upload()]);expect(race.map(r=>r.statusCode).sort()).toEqual([200,409]);const winner=race.find(r=>r.statusCode===200)!.json();version=winner.version;url=winner.cover.uploadedUrl;
-    const чужой=await app.inject({method:"DELETE",url:"/v1/me/cover",headers:{...other,"content-type":"application/json","idempotency-key":randomUUID(),"x-profile-version":"0"},payload:{expectedVersion:0}});expect(чужой.statusCode).toBe(200);expect((await read(own)).statusCode).toBe(200);
+    const otherCover=await app.inject({method:"GET",url:"/v1/me/cover",headers:other});expect(otherCover.statusCode).toBe(200);
+    const otherVersion=otherCover.json().version;
+    const чужой=await app.inject({method:"DELETE",url:"/v1/me/cover",headers:{...other,"content-type":"application/json","idempotency-key":randomUUID(),"x-profile-version":String(otherVersion)},payload:{expectedVersion:otherVersion}});expect(чужой.statusCode).toBe(200);expect((await read(own)).statusCode).toBe(200);
     expect((await app.inject({method:"PUT",url:`/v1/players/${user}/cover`,headers:other,payload:png})).statusCode).toBe(404);
   });
   it("shared moderation budget rejects new bytes without changing the current cover",async()=>{

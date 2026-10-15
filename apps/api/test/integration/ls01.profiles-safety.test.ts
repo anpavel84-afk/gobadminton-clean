@@ -736,6 +736,7 @@ describeIntegration("LS-01 profiles/safety/directory", () => {
   function assertPublicProjection(
     body: Record<string, unknown>,
     forbiddenSubstrings: string[],
+    surface: "directory" | "detail" = "directory",
   ) {
     expect(Object.keys(body).sort()).toEqual(
       [
@@ -749,8 +750,13 @@ describeIntegration("LS-01 profiles/safety/directory", () => {
         "lookingForGame",
         "publicPlayerId",
         "trainer",
+        ...(surface === "detail" ? ["cover"] : []),
       ].sort(),
     );
+    if (surface === "detail") {
+      // PublicPlayer contracts only a safe derivative reference, never storage/original metadata.
+      expect(body.cover).toEqual({ uploadedUrl: null });
+    }
     const serialized = JSON.stringify(body);
     for (const fragment of forbiddenSubstrings) {
       expect(serialized).not.toContain(fragment);
@@ -824,7 +830,7 @@ describeIntegration("LS-01 profiles/safety/directory", () => {
     assertPublicProjection(detail.json() as Record<string, unknown>, [
       a.userId,
       "ls01-a@example.com",
-    ]);
+    ], "detail");
   });
 
   it("anonymous reads hide hidden, ineligible, disabled, and missing profiles uniformly", async () => {
