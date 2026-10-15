@@ -190,6 +190,8 @@ if [[ $ACTION == accept || $ACTION == rollback ]]; then
   (( $(date +%s) < $(jq -r .deadline "$STATE/pending.json") )) || { rollback; fail 'acceptance expired'; }
   healthy "$STATE/$ID/candidate.json" || fail 'unhealthy candidate'
   verify_version "$(jq -r .source_sha "$STATE/pending.json")" || fail 'wrong application version'
+  # Verification can consume the remaining deadline while the watchdog waits on our lock.
+  (( $(date +%s) < $(jq -r .deadline "$STATE/pending.json") )) || { rollback; fail 'acceptance expired'; }
   jq '. + {status:"ACCEPTED",finished_at:(now|floor)}' "$STATE/pending.json" | write_json "$STATE/accepted.json"
   cp -- "$STATE/accepted.json" "$STATE/last-result.json"; rm -- "$STATE/pending.json"
   status; exit 0

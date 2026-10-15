@@ -27,7 +27,8 @@ image without pushing; receiver job runs new offline tests plus existing root te
 Admin, with exact repo, refs/heads/dev and dev environment checks in build/client.
 Missing/invalid Admin digest or mismatched client source SHA fails before SSH.
 OFF builds API/Web only and omits admin_digest entirely, including SSH requests;
-old installed two-image helper remains compatible. Supplying Admin to PROD fails.
+old installed two-image helper remains compatible. PROD opt-in remains forbidden;
+valid downloaded DEV Admin metadata is validated then dropped from PROD requests.
 Enabled release is API/Web/Admin from the same source SHA, linux/amd64, with revision
 and canonical source labels checked for all three by the receiver. Registry prefix
 and image names stay fixed. Existing image cache/package permissions are reused.
@@ -161,3 +162,71 @@ Original author base6ab2812 is historical. PM fast-forwarded this unpublished Op
 Parent validation before QA initially FAILED under a read-only source Landlock guard because three new disposable fixture paths forced temporary directories into Path.cwd(). They now honor tempfile.gettempdir()/TMPDIR, so only the designated private temporary directory is writable; real receiver ownership checks are unchanged. The original failure log is preserved. New parent test results and independent exact-SHA QA remain separate gates.
 
 The additional validation-only filesystem guard also blocked normal shell fixture /dev/null writes and existing adversarial evidence tests opening parent directories. Full offline tests therefore run with the usual clean environment/private TMPDIR as nonroot UID1002, not with that extra test wrapper. Codex itself remains sandboxed/read-only for QA, and no OS/sandbox/Root/SSH permissions were changed. Foundation retains the extra guard. Guard-induced failures are preserved and are not represented as product defects or PASS.
+
+
+## Bounded correction after independent QAa1 FAIL (2026-10-15)
+
+From: native bounded source-fix author. To: NEW independent source QA / PM.
+Status: READY_FOR_REVIEW, unpublished working diff; NOT APPROVED / NOT INSTALLED.
+Exact correction base and historical QAa1 FAIL candidate:
+[`8281215643a484fe80b95c1bd33b446386bbaaf6`](https://github.com/anpavel84-afk/gobadminton-clean/tree/8281215643a484fe80b95c1bd33b446386bbaaf6).
+This does not supersede that FAIL. Prior product QA3/Foundation and parent offline
+70 tests (49 PASS / 21 root-dependent SKIP) remain historical evidence only.
+Owner's current bounded assignment: fix only the two supplied QAa1 source defects,
+add isolated regressions, preserve TMPDIR behavior/history, update this handoff,
+and stop without commit/push/network/root/runtime effects for NEW independent QA.
+
+QAa1 findings retained: (1) default-OFF client rejected the commissioned DEV
+manifest preserved by prepare-prod.sh, blocking existing API/Web promotion;
+(2) acceptance could cross its durable pending deadline during verification under
+the watchdog lock and still write ACCEPTED. Read-only QA found no real helper
+ownership bypass, but did not run tests/runtime/hosted root CI or live security.
+DNS/TLS/provider callbacks/real passkey proof remain unresolved or unproven.
+
+Correction mechanics:
+- prepare-prod.sh is read only and unchanged: its downloaded manifest preserves
+  extra admin_digest and adds expected_previous_sha. Shared deploy.sh permits a
+  strictly valid optional digest for PROD OFF, but builds the SSH payload using
+  the commissioned flag, so PROD always receives only API/Web. DEV OFF still
+  rejects Admin metadata; DEV ON retains exact flag/ref/repo/env/SHA/digest gates;
+  PROD ON still fails before credentials/commands. Unknown/partial image fields
+  remain rejected. No promotion architecture or actual PROD config changed.
+- Helper rechecks durable pending.deadline after healthy/verify_version immediately
+  before accepted mutation. Expiry uses existing rollback and fails without a new
+  accepted receipt. Root/trusted checks, locking, compensation and watchdog are
+  unchanged for both image modes.
+- New disposable client fixture uses fake SSH/npm/Playwright/node and FAKE
+  credentials, captures both split-target payloads, checks exact API/Web/baseline
+  fields and no Admin, and rejects malformed/partial manifests before SSH.
+  New receiver fixture advances fake time from 99 to deadline 100 inside fake
+  HTTP verification for both two/three-image modes; asserts image restoration,
+  no pending, ROLLED_BACK and no accepted state/public receipt. No timing sleeps.
+  All test artifacts honor private TMPDIR, with stubs only in disposable copies.
+
+Validation and limitations are recorded below after the completed local run.
+Source rollback: reverse only this correction diff against exact8281215; no live
+rollback performed. Only deploy.sh, gb-deploy-helper.sh, test_admin_deploy.py and
+this handoff changed; test_helper.py ownership tests remain unchanged for hosted CI.
+Next bounded action: independent QA reviews the new diff/candidate; PM separately
+publishes an exact candidate permalink and runs hosted root receiver CI. No
+self-approval, deployment, live/DNS/TLS/provider/passkey or PROD approval claim.
+
+Actual author validation on this correction (unprivileged, offline):
+- `TMPDIR=/tmp/gb-model-wib4jp0w python3 -B -m unittest discover -s scripts/chatops/tests -p 'test_*.py'`:
+  72 tests, 51 PASS / 21 root-dependent SKIP, 23.377s. Includes both new regressions.
+- `bash -n scripts/chatops/deploy.sh scripts/chatops/server/gb-deploy-helper.sh`,
+  `node --check scripts/chatops/smoke.mjs`, `git diff --check`: passed.
+- `python3 -B scripts/check_foundation.py`: static PASS (169 Markdown files,
+  164 draft API operations); no runtime/independent QA implication.
+- Initial author fixture runs FAILED (generated fake SSH newline escaping, then
+  fake npm --prefix argument index). Both corrected only in disposable fixture
+  generation before the successful full rerun; these failures are not concealed
+  or represented as product regressions.
+
+NOT_TESTED: real Docker/build/runtime, hosted root ownership/receiver CI, sudo/SSH,
+actual backup/rollback/watchdog execution, Actions, DNS/TLS, provider registrations
+and callbacks, passkeys, live security, DB/UAT. Root-dependent SKIP is not PASS.
+No downloads, network, real credentials, live/config/service/DB/PROD changes,
+commit or push. Publication remains explicitly prohibited in this bounded turn;
+there is no new candidate SHA/permalink yet. Historical QAa1 FAIL remains in force
+until NEW independent exact-candidate QA; author tests do not self-approve it.

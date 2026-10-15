@@ -105,7 +105,76 @@ ADMIN_META_URL=https://dev-admin.gobadminton.ru/v1/meta
   self.assertNotEqual(self.call({'action':'accept','release_id':'r123-a1'}).returncode,0)
   self.assertEqual(self.data(),before)
 
+ def test_deadline_crossed_during_verification(self):
+  # Real helper logic, fake clock and curl only in this disposable fixture copy.
+  for admin in [False, True]:
+   with self.subTest(admin=admin):
+    if admin:self.enable(existing=True)
+    before=self.data()
+    request=(self.request() if admin else self.fixture.req())|{'release_id':f'r{200+int(admin)}-a1','sequence':2000+int(admin)}
+    self.ok(self.call(request))
+    pending=self.root/'state/dev/pending.json'
+    d=json.loads(pending.read_text());d['deadline']=100;pending.write_text(json.dumps(d))
+    clock=self.root/'clock';clock.write_text('99')
+    helper=self.fixture.helper.read_text().replace('$(date +%s)', f'$(cat "{clock}")')
+    self.fixture.helper.write_text(helper)
+    curl=self.root/'curl'
+    curl.write_text(curl.read_text().replace("d=json.loads", "(Path(os.environ['MOCK_ROOT'])/'clock').write_text('100')\nd=json.loads"))
+    r=self.call({'action':'accept','release_id':request['release_id']})
+    self.assertNotEqual(r.returncode,0,r.stderr)
+    self.assertIn('acceptance expired',r.stderr)
+    self.assertEqual(clock.read_text(),'100')
+    self.assertEqual(self.data(),before)
+    self.assertFalse(pending.exists())
+    self.assertFalse((self.root/'state/dev/accepted.json').exists())
+    status=self.ok(self.call({'action':'status'}))
+    self.assertEqual(status['last_result']['status'],'ROLLED_BACK')
+    self.assertIsNone(status['accepted'])
+    self.assertIsNone(json.loads((self.root/'evidence/dev.json').read_text())['accepted'])
+
 class ClientGates(unittest.TestCase):
+ def test_prod_promotion_filters_admin_metadata(self):
+  # Exercise the shared client end-to-end with fake SSH/npm/node and credentials.
+  script=Path('scripts/chatops/deploy.sh').resolve()
+  with tempfile.TemporaryDirectory(dir=tempfile.gettempdir()) as td:
+   root=Path(td)
+   manifest={'schema':1,'source_sha':legacy.SHA,'api_digest':legacy.API,'web_digest':legacy.WEB,
+             'dev_run_id':123,'expected_previous_sha':'e'*40,'admin_digest':ADMIN}
+   release=root/'release.json';release.write_text(json.dumps(manifest))
+   ssh=root/'ssh';ssh.write_text("""#!/usr/bin/env python3
+import json,os,sys
+from pathlib import Path
+p=json.load(sys.stdin)
+with (Path(os.environ['FIXTURE_ROOT'])/'requests.jsonl').open('a') as f:f.write(json.dumps(p)+'\\n')
+key='pending' if p['action']=='deploy' else 'accepted'
+print(json.dumps({key:{'release_id':p['release_id'],'status':'PENDING_SMOKE' if key=='pending' else 'ACCEPTED'}}))
+""")
+   npm=root/'npm';npm.write_text("""#!/bin/bash
+set -eu
+mkdir -p "$3/node_modules/.bin"
+printf '#!/bin/bash\nexit 0\n' > "$3/node_modules/.bin/playwright"
+chmod +x "$3/node_modules/.bin/playwright"
+""")
+   node=root/'node';node.write_text('#!/bin/bash\nexit 0\n')
+   for command in [ssh,npm,node]:command.chmod(0o755)
+   env={'PATH':str(root)+':/usr/bin:/bin','RUNNER_TEMP':td,'FIXTURE_ROOT':td,
+        'DEPLOY_HOST':'fake.invalid','DEPLOY_WEB_HOST':'web.fake.invalid','DEPLOY_SSH_KEY':'FAKE',
+        'DEPLOY_KNOWN_HOSTS':'FAKE','PUBLIC_URL':'https://fake.invalid','GITHUB_RUN_ID':'123',
+        'GITHUB_RUN_ATTEMPT':'1','GITHUB_RUN_NUMBER':'1'}
+   r=subprocess.run(['bash',str(script),'prod',str(release)],cwd=root,env=env,text=True,capture_output=True)
+   self.assertEqual(r.returncode,0,r.stderr)
+   requests=[json.loads(line) for line in (root/'requests.jsonl').read_text().splitlines()]
+   deploys=[p for p in requests if p['action']=='deploy']
+   expected={k:manifest[k] for k in ['source_sha','api_digest','web_digest','expected_previous_sha']}
+   self.assertEqual(deploys,[expected|{'action':'deploy','release_id':'r123-a1','sequence':1001}]*2)
+   self.assertTrue(all('admin_digest' not in p for p in requests))
+   self.assertEqual(json.loads(release.read_text()),manifest)
+   for field,value in [('admin_digest',None),('api_digest','latest'),('web_digest',None),('extra',1)]:
+    release.write_text(json.dumps(manifest|{field:value}))
+    bad=subprocess.run(['bash',str(script),'prod',str(release)],cwd=root,env=env,text=True,capture_output=True)
+    self.assertNotEqual(bad.returncode,0)
+   self.assertEqual(len((root/'requests.jsonl').read_text().splitlines()),4)
+
  def test_reject_before_external_commands(self):
   # No credentials, no docker/ssh/npm is supplied or run: invalid input must exit first.
   with tempfile.TemporaryDirectory(dir=tempfile.gettempdir()) as td:

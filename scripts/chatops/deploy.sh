@@ -9,10 +9,11 @@ if [[ $ADMIN == true ]]; then
   [[ $ENVIRONMENT == dev && ${GITHUB_ENVIRONMENT:-} == dev && ${GITHUB_REF:-} == refs/heads/dev &&
      ${GITHUB_REPOSITORY:-} == anpavel84-afk/gobadminton-clean && -z ${DEPLOY_WEB_HOST:-} ]] || exit 64
   jq -e --arg sha "${GITHUB_SHA:-}" '.source_sha==$sha and (.admin_digest | type=="string" and test("^sha256:[0-9a-f]{64}$"))' "$FILE" >/dev/null
-else
+elif [[ $ENVIRONMENT == dev ]]; then
   jq -e 'has("admin_digest") | not' "$FILE" >/dev/null
 fi
 jq -e 'type=="object" and ((keys - ["schema","source_sha","api_digest","web_digest","admin_digest","dev_run_id","expected_previous_sha"])|length==0) and
+  (if has("admin_digest") then (.admin_digest|type=="string" and test("^sha256:[0-9a-f]{64}$")) else true end) and
   .schema==1 and (.source_sha|type=="string" and test("^[0-9a-f]{40}$")) and
   (.api_digest|type=="string" and test("^sha256:[0-9a-f]{64}$")) and
   (.web_digest|type=="string" and test("^sha256:[0-9a-f]{64}$"))' "$FILE" >/dev/null
@@ -52,10 +53,10 @@ cleanup() {
   exit "$rc"
 }
 trap cleanup EXIT
-jq --arg id "$ID" --argjson seq "$SEQUENCE" \
+jq --arg id "$ID" --argjson seq "$SEQUENCE" --argjson admin "$ADMIN" \
   '. as $manifest | {action:"deploy",release_id:$id,sequence:$seq,source_sha,api_digest,web_digest,
     expected_previous_sha:(.expected_previous_sha // "")} +
-    (if $manifest|has("admin_digest") then {admin_digest:$manifest.admin_digest} else {} end)' "$FILE" >"$DIR/request.json"
+    (if $admin then {admin_digest:$manifest.admin_digest} else {} end)' "$FILE" >"$DIR/request.json"
 # In split production this is API first, then Web. Not a distributed atomic transaction.
 for host in "${HOSTS[@]}"; do
   TOUCHED+=("$host")
