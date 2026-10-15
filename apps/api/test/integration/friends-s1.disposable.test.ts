@@ -13,6 +13,10 @@ import { ProblemExceptionFilter } from "../../src/common/problem.filter";
 import { loadEnv, type AppEnv } from "../../src/config/env";
 import { FriendshipsService } from "../../src/friendships/friendships.service";
 import { FriendshipsModule } from "../../src/friendships/friendships.module";
+import { GamesModule } from "../../src/games/games.module";
+import { InvitationsModule } from "../../src/invitations/invitations.module";
+import { InboxModule } from "../../src/inbox/inbox.module";
+import { VenuesModule } from "../../src/venues/venues.module";
 import { PairFenceService } from "../../src/safety/pair-fence.service";
 import { MOSCOW_CITY_ID } from "../../src/venues/venues.service";
 import { buildTestCoreModule } from "./test-core.module";
@@ -101,9 +105,11 @@ run("Friends S1 API — isolated synthetic PostGIS only", () => {
       PUBLIC_API_ORIGIN:"http://127.0.0.1:3000",PUBLIC_WEB_ORIGIN:origin,COOKIE_SECURE:"false",
       AUTH_PEPPER:"friends-s1-synthetic-fixture-pepper-only",CONTENT_MODERATION_PROVIDER:"fake",
       CONTENT_MODERATION_FINGERPRINT_SECRET:"friends-s1-synthetic-fingerprint-only",SOCIAL_DIRECTORY_ENABLED:"1",
+      SOCIAL_INVITATIONS_ENABLED:"1",SOCIAL_INBOX_ENABLED:"1",
       ...fixturePolicy});
     // Actual registered FriendsModule/Auth/Profiles/Safety and shared test core.
-    const ref = await Test.createTestingModule({imports:[buildTestCoreModule(env,pool),FriendshipsModule]})
+    const ref = await Test.createTestingModule({imports:[buildTestCoreModule(env,pool),FriendshipsModule,
+      GamesModule,InvitationsModule,InboxModule,VenuesModule]})
       .overrideProvider(PairFenceService).useValue(pairs).compile();
     app = ref.createNestApplication<NestFastifyApplication>(new FastifyAdapter({logger:false}));
     await app.register(cookie);
@@ -145,6 +151,19 @@ run("Friends S1 API — isolated synthetic PostGIS only", () => {
     } finally { await recovery.query("ROLLBACK"); recovery.release(); }
     expect((await pool.query("SELECT count(*)::int AS n FROM schema_migrations")).rows[0].n).toBe(32);
     console.info("S1 disposable migrations applied through unchanged0032; no inferred relations");
+    // Preserve the 0031/0032 recovery evidence above, then use the current schema
+    // for the integrated game projections (including the cover-wave columns).
+    const current = await pool.connect();
+    try {
+      for (const file of files.filter(f => f > "0032_friendship_core.sql")) {
+        await current.query("BEGIN");
+        try {
+          await current.query(await readFile(path.join(migrations,file),"utf8"));
+          await current.query("INSERT INTO schema_migrations(id) VALUES($1)",[file.replace(/\.sql$/,"")]);
+          await current.query("COMMIT");
+        } catch (error) { await current.query("ROLLBACK"); throw error; }
+      }
+    } finally { current.release(); }
   });
   afterAll(async () => {
     pairs.clear();
@@ -189,6 +208,121 @@ run("Friends S1 API — isolated synthetic PostGIS only", () => {
   async function ledgerCount(r:FriendshipReceipt) {
     return (await pool.query("SELECT count(*)::int AS n FROM friendship_request_attempts WHERE friendship_id=$1",[r.friendshipId])).rows[0].n;
   }
+  // Existing HTTP game flow; creator retains the real initial seat. Capacity 2
+  // therefore leaves exactly one place for invitation/ordinary participation.
+  async function friendGame() {
+    const venue = await post(a,"/v1/venues",{cityId:MOSCOW_CITY_ID,name:"Wave C synthetic court",
+      address:"Moscow",timezone:"Europe/Moscow",latitude:55.75,longitude:37.62});
+    expect([200,201]).toContain(venue.statusCode);
+    const starts = Date.now()+7*86400000;
+    const draft = await post(a,"/v1/games",{hostDisplayName:"Synthetic host",hostPublicContact:"telegram:@synthetic",
+      venueId:venue.json().id,title:"Wave C disposable game",startsAt:new Date(starts).toISOString(),
+      endsAt:new Date(starts+7200000).toISOString(),timezone:"Europe/Moscow",
+      applicationDeadlineAt:new Date(starts-86400000).toISOString(),capacity:2,externalReservedCount:0,
+      visibility:"public",formatKey:"doubles",activityKind:"regular",
+      levelRule:{scaleId:"ntrp",scaleVersion:1,allowedLevelIds:["3.0","3.5"]},
+      settlement:{mode:"external",purpose:"no_trainer_fee",priceMinor:null,currency:null,
+        terms:"Synthetic external court terms"}});
+    expect(draft.statusCode).toBe(201);
+    const published = await post(a,`/v1/games/${draft.json().id}/publish`,{expectedVersion:draft.json().version});
+    expect(published.statusCode).toBe(200);
+    return published.json() as {id:string;version:number};
+  }
+  async function inviteFriend(game:{id:string;version:number},peer:Actor) {
+    const friendship = await request(a,peer);
+    expect((await decide(peer,friendship,"accept")).statusCode).toBe(200);
+    const response = await post(a,`/v1/games/${game.id}/invitations`,{
+      inviteePublicPlayerId:peer.publicPlayerId,expectedGameVersion:game.version});
+    expect(response.statusCode).toBe(201);
+    return response.json() as {id:string;version:number};
+  }
+  async function mine(who:Actor,gameId:string) {
+    const response = await get(who,"/v1/me/participations?limit=50");
+    expect(response.statusCode).toBe(200);
+    return response.json().items.filter((p:{gameId:string})=>p.gameId===gameId) as Array<{id:string;status:string}>;
+  }
+  async function inboxInvitation(who:Actor,id:string) {
+    const response = await get(who,"/v1/me/inbox?limit=50");
+    expect(response.statusCode).toBe(200);
+    return response.json().items.find((item:{invitationId:string|null})=>item.invitationId===id);
+  }
+  it("Wave C: friends do not grant invitation ownership or reserve seats; accept projects to My Games/Messages",async()=>{
+    const game=await friendGame(),invitation=await inviteFriend(game,b);
+    expect(await mine(b,game.id)).toEqual([]);
+    expect(await inboxInvitation(b,invitation.id)).toMatchObject({kind:"game_invitation",invitationStatus:"pending"});
+    expect(await inboxInvitation(outsider,invitation.id)).toBeUndefined();
+    expect((await get(outsider,`/v1/invitations/${invitation.id}`)).statusCode).toBe(404);
+    const denied=await post(outsider,`/v1/invitations/${invitation.id}/accept`,{
+      expectedVersion:invitation.version,expectedGameVersion:game.version});
+    expect(denied.statusCode).toBe(404);
+    expect((await get(b,`/v1/games/${game.id}`)).json()).toMatchObject({confirmedCount:1,availablePlaces:1});
+    const idem=key(),payload={expectedVersion:invitation.version,expectedGameVersion:game.version};
+    const accepted=await post(b,`/v1/invitations/${invitation.id}/accept`,payload,idem);
+    expect(accepted.statusCode).toBe(200);
+    expect(accepted.json().participation.status).toBe("confirmed");
+    expect(await mine(b,game.id)).toEqual([expect.objectContaining({id:accepted.json().participation.id,status:"confirmed"})]);
+    expect(await inboxInvitation(b,invitation.id)).toMatchObject({invitationStatus:"accepted"});
+    const replay=await post(b,`/v1/invitations/${invitation.id}/accept`,payload,idem);
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json()).toEqual(accepted.json());
+    expect((await get(b,`/v1/games/${game.id}`)).json()).toMatchObject({confirmedCount:2,availablePlaces:0});
+    const row=(await pool.query("SELECT count(*)::int AS n FROM participations WHERE game_id=$1 AND user_id=$2 AND status='confirmed'",[game.id,b.userId])).rows[0];
+    expect(row.n).toBe(1);
+  });
+  it.each(["decline","revoke"] as const)("Wave C: friend invitation %s gives no My Games seat and stale accept cannot revive it",async action=>{
+    const game=await friendGame(),invitation=await inviteFriend(game,b);
+    const terminal=await post(action==="decline"?b:a,`/v1/invitations/${invitation.id}/${action}`,{expectedVersion:invitation.version});
+    expect(terminal.statusCode).toBe(200);
+    const status=action==="decline"?"declined":"revoked";
+    expect((await get(b,`/v1/invitations/${invitation.id}`)).json().status).toBe(status);
+    expect(await inboxInvitation(b,invitation.id)).toMatchObject({invitationStatus:status});
+    expect((await post(b,`/v1/invitations/${invitation.id}/accept`,{
+      expectedVersion:invitation.version,expectedGameVersion:game.version})).statusCode).toBe(409);
+    expect(await mine(b,game.id)).toEqual([]);
+    expect((await get(b,`/v1/games/${game.id}`)).json()).toMatchObject({confirmedCount:1,availablePlaces:1});
+  });
+  it("Wave C: two accepted friends compete for one real seat, not two invitation reservations",async()=>{
+    const game=await friendGame(),first=await inviteFriend(game,b),second=await inviteFriend(game,outsider);
+    const results=await Promise.all(([[b,first],[outsider,second]] as const).map(([who,invitation])=>{
+      return post(who,`/v1/invitations/${invitation.id}/accept`,{
+        expectedVersion:invitation.version,expectedGameVersion:game.version});
+    }));
+    expect(results.map(r=>r.statusCode).sort()).toEqual([200,409]);
+    expect(results.find(r=>r.statusCode===409)!.json().code).toBe("GAME_FULL");
+    const loser=results[0]!.statusCode===409?b:outsider,inv=loser===b?first:second;
+    expect(await mine(loser,game.id)).toEqual([]);
+    expect((await get(loser,`/v1/invitations/${inv.id}`)).json().status).toBe("pending");
+    expect((await get(b,`/v1/games/${game.id}`)).json()).toMatchObject({confirmedCount:2,availablePlaces:0});
+  });
+  it("Wave C: ordinary confirmation consumes the same capacity as a friend's pending invitation",async()=>{
+    const game=await friendGame(),invitation=await inviteFriend(game,b);
+    const requested=await post(outsider,`/v1/games/${game.id}/participations`,{expectedGameVersion:game.version});
+    expect(requested.statusCode).toBe(201);
+    expect(requested.json().status).toBe("pending");
+    expect((await get(b,`/v1/games/${game.id}`)).json().availablePlaces).toBe(1);
+    const confirmed=await post(a,`/v1/participations/${requested.json().id}/confirm`,{expectedVersion:requested.json().version});
+    expect(confirmed.statusCode).toBe(200);
+    const fresh=await get(b,`/v1/games/${game.id}`);
+    expect(fresh.json()).toMatchObject({confirmedCount:2,availablePlaces:0});
+    const accept=await post(b,`/v1/invitations/${invitation.id}/accept`,{
+      expectedVersion:invitation.version,expectedGameVersion:fresh.json().version});
+    expect(accept.statusCode).toBe(409);expect(accept.json().code).toBe("GAME_FULL");
+    expect(await mine(b,game.id)).toEqual([]);
+    expect(await mine(outsider,game.id)).toEqual([expect.objectContaining({status:"confirmed"})]);
+  });
+  it("Wave C: friendship does not revive an expired invitation, even without the expiry worker",async()=>{
+    const game=await friendGame(),invitation=await inviteFriend(game,b);
+    await pool.query("UPDATE game_invitations SET expires_at=clock_timestamp()-interval '1 second' WHERE id=$1",[invitation.id]);
+    const expired=await get(b,`/v1/invitations/${invitation.id}`);
+    expect(expired.statusCode).toBe(200);expect(expired.json().status).toBe("expired");
+    expect((await post(b,`/v1/invitations/${invitation.id}/accept`,{
+      expectedVersion:invitation.version,expectedGameVersion:game.version})).statusCode).toBe(409);
+    expect(await mine(b,game.id)).toEqual([]);
+    const friends=await get(b,"/v1/me/friendships?view=accepted");
+    expect(friends.statusCode).toBe(200);
+    expect(friends.json().items).toEqual([expect.objectContaining({relationship:"friends"})]);
+    expect((await get(b,`/v1/games/${game.id}`)).json().availablePlaces).toBe(1);
+  });
   async function putBlock(who:Actor,target:Actor,remove=false):Promise<Response> {
     return app.inject({method:remove ? "DELETE" : "PUT",url:`/v1/me/blocks/${target.publicPlayerId}`,
       headers:{cookie:who.cookie,origin,"x-csrf-token":who.csrfToken,"idempotency-key":key()}}) as Promise<Response>;
