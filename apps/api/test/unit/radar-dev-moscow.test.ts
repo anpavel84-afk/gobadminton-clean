@@ -17,6 +17,10 @@ describe("DEV Moscow owner boundary", () => {
   it("refuses startup when explicitly configured in PROD or outside exact DEV", () => {
     const raw = { NODE_ENV:"test", APP_ENV:"stage", DATABASE_URL:"postgres://test:test@localhost/test", PUBLIC_API_ORIGIN:"https://dev.gobadminton.ru", PUBLIC_WEB_ORIGIN:"https://dev.gobadminton.ru", RADAR_DEV_TEST_OWNER_USER_ID:owner };
     expect(loadEnv(raw).RADAR_DEV_TEST_OWNER_USER_ID).toBe(owner);
+    const second = randomUUID();
+    expect(loadEnv({ ...raw, RADAR_DEV_TEST_SECOND_USER_ID: second }).RADAR_DEV_TEST_SECOND_USER_ID).toBe(second);
+    for (const patch of [{ APP_ENV: "prod" }, { PUBLIC_API_ORIGIN: "https://gobadminton.ru" }, { PUBLIC_WEB_ORIGIN: "https://dev.gobadminton.ru/" }, { RADAR_DEV_TEST_SECOND_USER_ID: "invalid" }, { RADAR_DEV_TEST_OWNER_USER_ID: undefined }])
+      expect(() => loadEnv({ ...raw, RADAR_DEV_TEST_SECOND_USER_ID: second, ...patch })).toThrow(/Invalid API configuration/);
     for (const patch of [{ APP_ENV:"prod" }, { PUBLIC_WEB_ORIGIN:"https://gobadminton.ru" }, { PUBLIC_API_ORIGIN:"https://gobadminton.ru" }, { RADAR_DEV_TEST_OWNER_USER_ID:"invalid" }])
       expect(() => loadEnv({ ...raw, ...patch })).toThrow(/Invalid API configuration/);
   });
@@ -26,6 +30,16 @@ describe("DEV Moscow owner boundary", () => {
     for (const patch of [{ RADAR_DEV_TEST_OWNER_USER_ID: undefined }, { APP_ENV: "prod" }, { APP_ENV: "local" }, { PUBLIC_API_ORIGIN: "https://gobadminton.ru" }, { PUBLIC_WEB_ORIGIN: "https://gobadminton.ru" }])
       expect(devMoscowFixturesEnabled({ ...env, ...patch } as AppEnv)).toBe(false);
     expect(devMoscowFixturesEnabled(undefined)).toBe(false);
+  });
+  it("admits precisely owner and second UUID, with no wildcard or malformed config", () => {
+    const second = randomUUID();
+    const configured = { ...env, RADAR_DEV_TEST_SECOND_USER_ID: second };
+    expect(devMoscowTestAllowed(configured, owner)).toBe(true);
+    expect(devMoscowTestAllowed(configured, second)).toBe(true);
+    expect(devMoscowTestAllowed(configured, randomUUID())).toBe(false);
+    for (const patch of [{ APP_ENV: "prod" }, { PUBLIC_WEB_ORIGIN: "https://dev.gobadminton.ru/" }, { PUBLIC_API_ORIGIN: "https://gobadminton.ru" }, { RADAR_DEV_TEST_SECOND_USER_ID: "invalid" }, { RADAR_DEV_TEST_OWNER_USER_ID: undefined }]) {
+      expect(devMoscowTestAllowed({ ...configured, ...patch } as AppEnv, second)).toBe(false);
+    }
   });
   it("reserves exactly six deterministic identities outside demo namespace", () => {
     expect(new Set(DEV_MOSCOW_PEER_IDS).size).toBe(6);

@@ -11,11 +11,16 @@ export type RadarView = {
   phase: Phase; me: Me | null; status: RadarStatus | null; items: RadarItem[]; loading: boolean; selected: string | null; preview: RadarPreview | null; previewLoading: boolean; notice: string; now: number;
   exposureMode: RadarExposureMode | null; demoCityId: string | null; confirmedOn: boolean; pendingStop: boolean;
 };
+export type RadarDuration = "15m" | "1h" | "until_off";
 type Fetcher = typeof apiFetch;
 const CURRENT = "/v1/me/radar/activations/current";
 /** Only memory owns fixes/proofs. Every async read is fenced by epoch and selection. */
 export class RadarController {
   view: RadarView = { phase: "checking", me: null, status: null, items: [], loading: false, selected: null, preview: null, previewLoading: false, notice: "", now: Date.now(), exposureMode: null, demoCityId: null, confirmedOn: false, pendingStop: false };
+  duration: RadarDuration = "15m";
+  private intentUntil = Infinity;
+  private continuationConsented = false;
+  chooseDuration(duration: RadarDuration) { if (this.view.phase === "permission") { this.duration = duration; this.set({}); } }
   private listeners = new Set<() => void>();
   private epoch = 0;
   private visible = true;
@@ -41,6 +46,7 @@ export class RadarController {
   private valid(epoch: number) { return !this.disposed && this.visible && epoch === this.epoch; }
   private fail(result: Exclude<ApiResult<unknown>, { ok: true }>) {
     this.clear();
+    this.intentUntil = Infinity; this.continuationConsented = false;
     if (result.status === 401) { this.stopIntent = null; this.set({ phase: "guest", me: null, status: null, confirmedOn: false, pendingStop: false }); return; }
     if (result.status === 429) this.retryAt = this.clock() + (result.retryAfterSeconds ?? 60) * 1000;
     this.set({ phase: result.problem?.code === "SOCIAL_RADAR_DISABLED" && !this.view.confirmedOn ? "disabled" : "error", notice: result.problem?.code === "RADAR_REGION_UNSUPPORTED" ? "Radar пока недоступен в этом регионе. Откройте обычный список игроков." : result.status === 429 ? "Radar обновляется слишком часто. Попробуйте позже." : "Не удалось проверить Radar. Проверьте статус перед следующим действием." });
@@ -103,8 +109,8 @@ export class RadarController {
     status = { ...status, exposureMode: status.exposureMode ?? this.config?.exposureMode };
     const honesty = radarHonestyNotice(status.exposureMode);
     this.set({ status, phase: status.state, confirmedOn: status.state === "active" || status.state === "owned_elsewhere", notice: honesty, exposureMode: status.exposureMode, demoCityId });
-    if (status.state !== "active") { this.clear(); return; }
-    if (!(effectiveDeadline(status) > this.clock())) { this.clear(); this.set({ phase: "expired", confirmedOn: false }); return; }
+    if (status.state !== "active") { this.continuationConsented = false; this.clear(); return; }
+    if (!(effectiveDeadline(status) > this.clock())) { this.continuationConsented = false; this.clear(); this.set({ phase: "expired", confirmedOn: false }); return; }
     this.nextHeartbeat = this.clock() + Math.max(1000, (Date.parse(status.foregroundUntil) - this.clock()) / 2);
   }
   /** Demo mode skips browser geolocation; live mode still requires an explicit permission step. */
@@ -144,7 +150,7 @@ export class RadarController {
     const me = await this.request<Me>("/v1/me");
     if (!this.valid(epoch)) return;
     if (!me.ok || !previous || me.data.id !== previous.id || me.data.csrfToken !== previous.csrfToken) {
-      ++this.epoch; this.busy = false; this.clear(); this.stopIntent = null;
+      ++this.epoch; this.busy = false; this.clear(); this.stopIntent = null; this.continuationConsented = false;
       this.set({ me: null, status: null, confirmedOn: false, pendingStop: false });
       await this.reconcile();
     }
@@ -153,7 +159,7 @@ export class RadarController {
     const current = await this.request<Me>("/v1/me");
     if (!this.valid(epoch)) return false;
     if (!current.ok || current.data.id !== me.id || current.data.csrfToken !== me.csrfToken) {
-      this.busy = false; ++this.epoch; this.clear(); this.stopIntent = null;
+      this.busy = false; ++this.epoch; this.clear(); this.stopIntent = null; this.continuationConsented = false;
       this.set({ me: null, status: null, confirmedOn: false, pendingStop: false });
       await this.reconcile(); return false;
     }
@@ -249,6 +255,7 @@ export class RadarController {
       this.fail(result); return;
     }
     if (!await this.identityCurrent(epoch, me)) return;
+    if (mode === "start") { this.continuationConsented = true; this.intentUntil = this.duration === "until_off" ? Infinity : this.clock() + (this.duration === "1h" ? 60 : 15) * 60000; }
     this.accept(result.data);
     if (this.view.phase === "active" && this.resultView !== "none") {
       if (this.clock() >= this.nextRead && this.clock() >= this.retryAt) await this.nearby(epoch);
@@ -276,7 +283,7 @@ export class RadarController {
     if (!this.valid(epoch)) return;
     this.busy = false;
     if (!r.ok) { this.fail(r); this.set({ notice: "Не удалось подтвердить выключение. Проверьте статус." }); return; }
-    this.stopIntent = null;
+    this.stopIntent = null; this.intentUntil = Infinity; this.continuationConsented = false;
     this.set({
       phase: "stopped", confirmedOn: false, pendingStop: false, notice: "Radar выключен",
       status: {
@@ -321,11 +328,20 @@ export class RadarController {
   tick() {
     if (!this.visible || this.disposed) return;
     this.set({});
+    if (this.view.phase === "active" && this.clock() >= this.intentUntil) { void this.stop(); return; }
     if (this.view.status?.state === "active" && !this.view.pendingStop && !["permission", "stopping", "background", "checking"].includes(this.view.phase) && effectiveDeadline(this.view.status) <= this.clock()) {
-      ++this.epoch; this.busy = false; this.clear(); this.set({ phase: "checking", notice: "Radar завершён. Проверяем статус…" }); void this.reconcile(); return;
+      ++this.epoch; this.busy = false; this.continuationConsented = false; this.clear(); this.set({ phase: "checking", notice: "Radar завершён. Проверяем статус…" }); void this.reconcile(); return;
     }
     if (this.freshUntil && this.freshUntil <= this.clock()) this.clear();
     if (this.view.phase !== "active" || this.busy || this.clock() < this.retryAt) return;
+    const active = this.view.status;
+    // Continue only an explicit in-memory long-duration intent, in foreground,
+    // while every lease is still valid. Never acquire GPS automatically.
+    if (this.continuationConsented && this.intentUntil > this.clock()) {
+      if (active?.state === "active" && this.duration !== "15m" && Date.parse(active.expiresAt) - this.clock() <= 60000 && Date.parse(active.hardExpiresAt) > Date.parse(active.expiresAt) && this.clock() < Date.parse(active.nextLocationUpdateAt)) {
+        void this.activate(() => Promise.reject({ code: 2 }), "renew"); return;
+      }
+    }
     if (this.clock() >= this.nextHeartbeat) { void this.pulse(); return; }
     if (this.resultView !== "none" && this.clock() >= this.nextRead) void this.nearby(this.epoch);
   }
@@ -336,7 +352,7 @@ export class RadarController {
     // Identity is checked before each foreground pulse; account changes never inherit Radar.
     const identity = await this.request<Me>("/v1/me");
     if (!this.valid(epoch)) return;
-    if (!identity.ok || identity.data.id !== me.id || identity.data.csrfToken !== me.csrfToken) { this.busy = false; ++this.epoch; this.clear(); this.set({ me: null, status: null }); await this.reconcile(); return; }
+    if (!identity.ok || identity.data.id !== me.id || identity.data.csrfToken !== me.csrfToken) { this.busy = false; ++this.epoch; this.continuationConsented = false; this.clear(); this.set({ me: null, status: null, confirmedOn: false, pendingStop: false }); await this.reconcile(); return; }
     const r = await this.request<RadarActivation>(CURRENT + "/heartbeat", { method: "POST", body: JSON.stringify({ activationId: status.activationId, ...(status.contractVersion === UNIFIED_WIRE ? { contractVersion: UNIFIED_WIRE, consentPolicyVersion: status.policyVersion } : {}) }), csrfToken: me.csrfToken });
     if (!this.valid(epoch)) return;
     this.busy = false;

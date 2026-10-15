@@ -1,0 +1,30 @@
+# Issue #13 — Wave A source handoff
+
+From: source author. To: PM / independent SOURCE QA. Date: 2026-10-15.
+Status: WORKING_DRAFT, UNCOMMITTED, NOT ACCEPTED. Base: `ebdbe7089503b1500cefd9aa64f407b553006ce0` on `automation/issue-13`.
+
+Assignment: immutable GOBADMINTON_AUTONOMY_V1 source_only task for existing #13, DEV only, max_attempts=3. Owner standing assignment: https://github.com/anpavel84-afk/gobadminton-clean/issues/5#issuecomment-6182091853 ; previous exact assignment: https://github.com/anpavel84-afk/gobadminton-clean/issues/13#issuecomment-6182724011 . No new Radar, no map redesign. Only the task's allowed web/API radar/config/test/contracts/handoff paths may change. Direct instruction prohibits commit/push, git metadata, automation, secrets, services, deployment and author self-QA. GitHub publication therefore remains PM's action; no candidate SHA or result permalink is fabricated.
+
+## Source changes (not runtime facts)
+
+Existing persistent root Radar provider retained. Explicit consent dialog uses the existing Button with full-width stacked actions and native labelled duration selector. Existing Players enable action, status/recovery notices and shared header affordance retained; header unknown/unavailable copy made explicit. Confirmed status adds coarse-location help. Active timer uses the minimum of server lease, hard expiry, location freshness and foreground lease, with green status treatment; it can move after an acknowledged heartbeat and does not promise uninterrupted operation.
+
+Duration choices 15 minutes / 1 hour / until off are memory-only user intent, never new wire lease authority. Long intent permits foreground renewal only before expiry, below hard expiry and before location-update due; automatic GPS acquisition is forbidden. A new fix remains an explicit action. Local finite intent requests stop at its deadline. Reload reads server status and does not reconstruct continuation consent. Errors, non-active status and identity replacement retire continuation; expired sessions need consent again. Navigation retains the same controller; map requests/pins require active confirmed session and error/elsewhere transitions clear directory context.
+
+Unified status and mutation transport now optionally project `coarseCenter` from the stored published PostGIS center, only for the owner session. No raw browser fix is returned or stored client-side. Map recenter uses that center with roughly 10 km radius, bounded to supported Moscow area, with city fallback when absent; participant extent no longer controls recenter. Pinned MapLibre/PMTiles resources and public venue loading are retained. OpenAPI and generated UnifiedActivation type include the optional projection.
+
+Server-only `RADAR_DEV_TEST_SECOND_USER_ID` complements the existing owner UUID. Both configured origins must exactly equal `https://dev.gobadminton.ru`, environment mvp/stage, with owner present; malformed identifiers fail closed. No email/provider subject/real UUID added to client. PM provisions the verified second account's UUID separately. Capability only changes location/config eligibility, not consent, privacy, identity fence, heartbeat or expiry. Existing fixture-viewing policy is preserved; this is not an expansion of synthetic location capability to all viewers.
+
+## STYLE_GUIDE_PARITY
+
+Authority: `docs/decisions/OWNER_DECISION_FRONTEND_STYLE_GUIDE_FIRST_V001.md`; frozen references https://nougat-wise-76949869.figma.site/#guide and #construction-kit . Reused canonical families: existing Button primary/outline/ghost/block, ProfileDialog, FormGroup selector/help composition, status/notice and existing map camera control. Existing screen composition retained. STYLE_GUIDE_GAP: referenced `docs/operations/FRONTEND_STYLE_GUIDE_FIRST_V001.md` and frozen Make source are absent in this checkout; exact screen-specific parity cannot be established from source here. Native duration selector is a bounded composition in the existing form token system. No OWNER_VISUAL_OVERRIDE claimed. Independent visual review against frozen guide remains required.
+
+## Checks and evidence
+
+Executed: read-only source/context discovery and source editing only. No self-QA was run, per direct instruction. Typecheck, lint, unit, integration, generated-contract parity, browser/mobile/desktop accessibility, real private pins, authenticated navigation and runtime allowlist: **NOT_TESTED**. No PASS claim. Added regressions cover duration wire isolation/consent, SPA controller continuity, reload expiry, account replacement/elsewhere, ten-km bounds, coarse center owner-only projection, second-actor exact-origin configuration matrix and integration no-consent denial. Existing tests were retained. Integration tests require the existing disposable database harness, never a live DB.
+
+No independent SOURCE QA, Product CI, DEV backup/smoke/release, root-owned ACCEPTED (same SHA/digests, pending=false), product UAT or PROD action occurred. Existing contract generator parity and all affected tests must be evaluated independently; no local source artifact proves release.
+
+## Continuity / next bounded action
+
+PM captures this diff in a candidate commit and publishes this handoff with its exact permalink; independent read-only SOURCE QA examines that exact SHA before CI. QA should examine UI consent from Players/header, foreground renewal and identity/expiry/error races, owner-only coarse projection, second capability and no-consent/third-account/PROD/origin denials. Then PM owns full Product CI and authorized DEV delivery gates, runtime second UUID provisioning, authenticated synthetic smoke and mobile/desktop UAT. Do not infer product acceptance from source QA or CI. Do not alter gates or PROD. Rollback is removal/reversion of this candidate source diff only; there are no runtime effects to undo.

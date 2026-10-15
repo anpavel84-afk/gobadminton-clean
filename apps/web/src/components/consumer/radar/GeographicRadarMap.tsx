@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import * as maplibregl from "maplibre-gl";
 import type { Map as LibreMap, StyleSpecification } from "maplibre-gl";
 import { Protocol } from "pmtiles";
@@ -7,6 +7,8 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { listAllCityVenues } from "../../../lib/api-client";
 import type { UnifiedRow } from "@gobadminton/contracts";
 import { MOSCOW_BUNDLE, allowedMapResource } from "../../../lib/radar-map-assets";
+import { radarNeighborhood } from "../../../lib/radar-camera";
+import { useRadarSession } from "./RadarSessionProvider";
 import { initialsFromName } from "../../../lib/player-presentation";
 import type { UnifiedDirectoryController } from "../../../lib/unified-directory";
 let protocol: Protocol | undefined;
@@ -18,6 +20,9 @@ function installProtocol() {
   }
 }
 export function GeographicRadarMap({ controller, rows, selected, onSelect, onUnavailable }: { controller: UnifiedDirectoryController; rows: UnifiedRow[]; selected: string | null; onSelect: (row: UnifiedRow) => void; onUnavailable: () => void }) {
+  const { view: session } = useRadarSession();
+  const center = session.phase === "active" && session.confirmedOn && session.status?.state === "active" ? session.status.coarseCenter : undefined;
+  const centerLatitude = center?.latitude, centerLongitude = center?.longitude;
   const container = useRef<HTMLDivElement>(null); const map = useRef<LibreMap | null>(null);
   const markers = useRef<Array<{ marker: maplibregl.Marker; button: HTMLButtonElement; id: string }>>([]);
   const callbacks = useRef({ onSelect, onUnavailable }); callbacks.current = { onSelect, onUnavailable };
@@ -87,12 +92,15 @@ export function GeographicRadarMap({ controller, rows, selected, onSelect, onUna
     return () => { alive = false; venueMarkers.forEach(marker => marker.remove()); };
   }, [ready]);
   useEffect(() => { for (const marker of markers.current) marker.button.setAttribute("aria-pressed", String(marker.id === selected)); }, [selected]);
-  function fit() {
+  const fit = useCallback(() => {
     if (!map.current) return;
-    const points = rows.flatMap(row => row.radar ? [[row.radar.geo.longitude, row.radar.geo.latitude] as [number, number]] : []);
-    if (!points.length) { map.current.easeTo({ center: MOSCOW_BUNDLE.center, zoom: 10.5, duration: 0 }); return; }
-    const bounds = new maplibregl.LngLatBounds(); points.forEach(p => bounds.extend(p));
-    map.current.fitBounds(bounds, { padding: { top: 100, bottom: 180, left: 60, right: 60 }, maxZoom: 13, duration: 0 });
-  }
-  return <><div ref={container} className="g2-map-canvas" data-map-ready={ready} />{status && <p className="g2-map-loading" role="status">{status}</p>}<p className="g2-map-venues" role="status">{venuesFailed ? "Площадки не удалось загрузить" : venueCount === null ? "Загружаем площадки…" : `Площадки на карте: ${venueCount}`}</p><div className="g2-map-camera" aria-label="Управление картой"><button aria-label="Увеличить карту" onClick={() => map.current?.zoomIn()}>+</button><button aria-label="Уменьшить карту" onClick={() => map.current?.zoomOut()}>−</button><button aria-label="Показать всех полученных игроков" onClick={fit}><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="7" /><circle cx="12" cy="12" r="2" /><path d="M12 2v3m0 14v3M2 12h3m14 0h3" /></svg></button></div></>;
+    const bounds = radarNeighborhood(centerLatitude === undefined || centerLongitude === undefined ? undefined : { latitude: centerLatitude, longitude: centerLongitude });
+    if (!bounds) {
+      map.current.easeTo({ center: MOSCOW_BUNDLE.center, zoom: 10.5, duration: 0 }); return;
+    }
+    // Only the server-published coarse center; never the acquired browser fix.
+    map.current.fitBounds(bounds, { padding: 48, duration: 0 });
+  }, [centerLatitude, centerLongitude]);
+  useEffect(() => { if (ready && centerLatitude !== undefined && centerLongitude !== undefined) fit(); }, [ready, fit, centerLatitude, centerLongitude]);
+  return <><div ref={container} className="g2-map-canvas" data-map-ready={ready} />{status && <p className="g2-map-loading" role="status">{status}</p>}<p className="g2-map-venues" role="status">{venuesFailed ? "Площадки не удалось загрузить" : venueCount === null ? "Загружаем площадки…" : `Площадки на карте: ${venueCount}`}</p><div className="g2-map-camera" aria-label="Управление картой"><button aria-label="Увеличить карту" onClick={() => map.current?.zoomIn()}>+</button><button aria-label="Уменьшить карту" onClick={() => map.current?.zoomOut()}>−</button><button aria-label="Показать район Radar около 10 км" onClick={fit}><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="7" /><circle cx="12" cy="12" r="2" /><path d="M12 2v3m0 14v3M2 12h3m14 0h3" /></svg></button></div></>;
 }

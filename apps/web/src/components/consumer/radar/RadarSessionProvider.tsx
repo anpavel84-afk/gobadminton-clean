@@ -3,7 +3,7 @@ import { usePathname } from "next/navigation";
 import { createContext, useContext, useEffect, useId, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { radarHeaderStatus, radarRingFraction } from "../../../lib/radar-header";
 import { RadarController, type RadarView } from "../../../lib/radar-controller";
-import { remainingTime } from "../../../lib/radar-presentation";
+import { effectiveDeadline, remainingTime } from "../../../lib/radar-presentation";
 import { Button } from "../Button";
 import { AuthEntry, ProfileDialog } from "../players/ProfileComposition";
 import { syntheticDemoFix } from "../../../lib/radar-demo-fix";
@@ -57,7 +57,7 @@ export function RadarSessionProvider({ children }: { children: ReactNode }) {
       // that recovery through the transient null, including CSRF rotation.
       // Guest or a different confirmed actor still resets the binding.
       if (view.me || !directory.view.authenticationRequired || view.phase === "guest") directory.bind(view.me);
-      if (view.pendingStop || (wasOn && !view.confirmedOn)) directory.ordinary();
+      if (view.pendingStop || (wasOn && (!view.confirmedOn || ["error", "owned_elsewhere", "expired", "guest"].includes(view.phase)))) directory.ordinary();
       wasOn = view.confirmedOn;
       const key = view.me ? `${view.me.id}:${view.me.csrfToken}` : "";
       if (key === identityKey) return;
@@ -159,8 +159,8 @@ export function RadarStatusAffordance() {
   const canRenew = Boolean(running && activation && Date.parse(activation.hardExpiresAt) > Date.parse(activation.expiresAt));
   const needsLocation = Boolean(running && activation && view.now >= Date.parse(activation.nextLocationUpdateAt));
   const canStop = Boolean(controller && view.me && view.status && "activationId" in view.status && !busy);
-  const remaining = running && activation ? remainingTime(activation.expiresAt, view.now) : null;
-  const caption = status?.text ?? (view.phase === "guest" ? "Войдите для Radar" : "Radar выключен");
+  const remaining = running && activation ? remainingTime(new Date(effectiveDeadline(activation)).toISOString(), view.now) : null;
+  const caption = status?.text ?? (view.phase === "guest" ? "Войдите для Radar" : view.phase === "disabled" ? "Radar недоступен" : view.phase === "error" ? "Статус Radar неизвестен" : ["checking", "locating", "activating", "stopping"].includes(view.phase) ? "Проверяем Radar…" : "Radar выключен");
   const diagnostic =
     view.phase === "denied" ? "Доступ к геолокации запрещён. Разрешите его в настройках браузера." :
     view.phase === "location_error" ? "Не удалось определить геопозицию. Проверьте разрешения и попробуйте снова." :
@@ -190,8 +190,8 @@ export function RadarStatusAffordance() {
     </button>
     {open && <section id={popupId} className="gb-radar-popover" role="dialog" aria-label="Управление Radar">
       <strong>{caption}</strong>
-      {running && <><div className="gb-radar-popover__time" aria-live="off">
-        <b>{remaining}</b><small>до окончания сессии</small>
+      {running && <><p role="status">Radar включён. Участники видят только приблизительное положение. Обновляйте геопозицию и продлевайте сессию на этом экране.</p><div className="gb-radar-popover__time" aria-live="off">
+        <b>{remaining}</b><small>до ближайшей проверки / окончания lease</small>
       </div><div className="gb-radar-popover__track" aria-hidden="true"><span style={{ width: String(Math.round(progress * 100)) + "%" }}/></div></>}
       {diagnostic && <p role="status">{diagnostic}</p>}
       {needsLocation && <p role="status">Обновите геопозицию, чтобы Radar продолжал показывать участников.</p>}
@@ -214,8 +214,9 @@ export function RadarStatusAffordance() {
       onClose={() => controller.cancel()}>
       <p>{config?.unifiedDirectory.disclosure.text ?? "Radar сейчас недоступен. Можно пользоваться обычным каталогом."}</p>
       {view.status?.state === "owned_elsewhere" && <p>В другой сессии Radar выключится.</p>}
-      <div className="profile-form-actions">
-        <Button disabled={!config?.publishingV2.enabled}
+      <RadarDurationChoice />
+      <div className="profile-form-actions radar-consent-actions">
+        <Button block disabled={!config?.publishingV2.enabled}
           onClick={() => void controller.activate(() => acquireRadarLocation(controller))}>
           {view.status?.state === "owned_elsewhere" ? "Перенести и включить" : "Согласен, включить Radar"}
         </Button>
@@ -233,4 +234,15 @@ export function acquireRadarLocation(controller: RadarController): Promise<Radar
   if (view.exposureMode === "live" && testFix) return Promise.resolve(testFix);
   if (view.exposureMode !== "live" || !window.isSecureContext || !navigator.geolocation) return Promise.reject({ code: 2 });
   return new Promise((resolve, reject) => navigator.geolocation.getCurrentPosition(p => resolve({ latitude: p.coords.latitude, longitude: p.coords.longitude, accuracyMeters: p.coords.accuracy, capturedAt: new Date(p.timestamp).toISOString() }), reject, { maximumAge: 0, timeout: 15000, enableHighAccuracy: false }));
+}
+
+/** Local intent only: no duration field is sent to the lease API. */
+export function RadarDurationChoice() {
+  const { controller } = useRadarSession();
+  return <div className="radar-duration"><label>Желаемое время Radar
+    <select value={controller?.duration ?? "15m"} onChange={event => {
+      const value = event.target.value;
+      if (value === "15m" || value === "1h" || value === "until_off") controller?.chooseDuration(value);
+    }}><option value="15m">15 минут</option><option value="1h">1 час</option><option value="until_off">До выключения</option></select>
+  </label><p>Это намерение, а не бессрочная сессия. Сервер ограничивает срок и свежесть геопозиции. Допустимое продление выполняется только на переднем плане со свежей геопозицией; после истечения потребуется снова включить Radar с согласием. При перезагрузке проверим серверный срок.</p></div>;
 }

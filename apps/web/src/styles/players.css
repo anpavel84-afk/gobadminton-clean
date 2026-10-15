@@ -386,3 +386,11 @@
   .fr3 .email-auth-form .profile-form-actions { flex-direction:column; align-items:stretch; }
   .fr3 .email-auth-form .profile-form-actions .gb-c23-btn { width:100%; word-break:normal; }
 }
+
+/* Canonical Button + FormGroup composition for Radar consent. */
+.fr3 .radar-consent-actions { flex-direction:column; align-items:stretch; }
+.fr3 .radar-consent-actions > .gb-c23-btn { width:100%; flex:none; white-space:normal; min-height:48px; }
+.radar-duration label { display:flex; flex-direction:column; gap:8px; }
+.radar-duration select { width:100%; min-height:44px; padding:10px; color:var(--gb-ink); background:var(--gb-white); border:1px solid var(--gb-line); border-radius:var(--gb-radius-sm); font:inherit; }
+.radar-duration p { color:var(--gb-ink-soft); font-size:13px; line-height:1.5; }
+.fr3 .radar-on--compact .radar-countdown { color:var(--gb-ink); background:var(--gb-lime-soft); border-radius:var(--gb-radius-sm); padding:8px; }

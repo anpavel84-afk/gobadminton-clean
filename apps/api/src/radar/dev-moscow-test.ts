@@ -6,6 +6,8 @@ import { MOSCOW_CITY_ID } from "../venues/venues.service";
 import { quantizeUnified } from "./unified-location";
 import { UNIFIED_POLICY, UNIFIED_DISCLOSURE_ID, UNIFIED_DISCLOSURE_HASH } from "./unified-contract";
 
+const validActorId = (value: string | undefined) => typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value) && !DEV_MOSCOW_PEER_IDS.includes(value);
+
 // Reserved non-demo fixture identities. Never linked to any provider/login.
 export const DEV_MOSCOW_PEER_IDS = Array.from({ length: 6 }, (_, i) =>
   `a17e2026-1014-4000-8000-${String(i + 1).padStart(12, "0")}`);
@@ -13,10 +15,11 @@ export function devMoscowFixturesEnabled(env: AppEnv | undefined): boolean {
   return !!env && ["mvp", "stage"].includes(env.APP_ENV) &&
     env.PUBLIC_WEB_ORIGIN === "https://dev.gobadminton.ru" &&
     env.PUBLIC_API_ORIGIN === "https://dev.gobadminton.ru" &&
-    !!env.RADAR_DEV_TEST_OWNER_USER_ID;
+    validActorId(env.RADAR_DEV_TEST_OWNER_USER_ID) &&
+    (env.RADAR_DEV_TEST_SECOND_USER_ID === undefined || validActorId(env.RADAR_DEV_TEST_SECOND_USER_ID));
 }
 export function devMoscowTestAllowed(env: AppEnv | undefined, actorId: string): boolean {
-  return devMoscowFixturesEnabled(env) && actorId === env!.RADAR_DEV_TEST_OWNER_USER_ID;
+  return devMoscowFixturesEnabled(env) && (actorId === env!.RADAR_DEV_TEST_OWNER_USER_ID || actorId === env!.RADAR_DEV_TEST_SECOND_USER_ID);
 }
 export const devMoscowTestLocation = { latitude: 55.7558, longitude: 37.6173, accuracyMeters: 25 };
 

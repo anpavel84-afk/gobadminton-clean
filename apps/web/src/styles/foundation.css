@@ -144,8 +144,8 @@
 .gb-radar-indicator .gb-radar-symbol__disc { fill:var(--gb-surface); }
 .gb-radar-indicator[data-tone="active"] .gb-radar-symbol__disc { fill:var(--gb-lime-soft); }
 .gb-radar-indicator[data-tone="active"] .gb-radar-symbol__glyph { color:var(--gb-ink); }
-.gb-radar-indicator[data-tone="attention"] .gb-radar-symbol__disc { fill:var(--gb-purple-soft); }
-.gb-radar-indicator[data-tone="attention"] .gb-radar-symbol__glyph { color:var(--gb-purple); }
+.gb-radar-indicator[data-tone="attention"] .gb-radar-symbol__disc { fill:var(--gb-surface); }
+.gb-radar-indicator[data-tone="attention"] .gb-radar-symbol__glyph { color:var(--gb-ink-soft); }
 .gb-radar-indicator__link:focus-visible { outline:2px solid var(--gb-purple); outline-offset:2px; }
 .gb-radar-progress { transition:stroke-dashoffset 700ms linear; }
 .gb-radar-popover { position:absolute; z-index:110; right:0; top:calc(100% + 10px); box-sizing:border-box; display:grid; gap:14px; width:280px; max-width:calc(100vw - 32px); padding:18px; border:1px solid var(--gb-line); border-radius:18px; background:var(--gb-white); color:var(--gb-ink); box-shadow:var(--gb-shadow-elevated); text-align:left; }

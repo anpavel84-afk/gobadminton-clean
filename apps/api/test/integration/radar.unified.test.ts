@@ -1289,7 +1289,7 @@ dbDescribe("Unified Players / isolated synthetic PostGIS and HTTP", () => {
     );
   });
   it("all authenticated DEV viewers see fixtures, refresh before RR and retain proof isolation", async () => {
-    const saved = { APP_ENV: env.APP_ENV, PUBLIC_WEB_ORIGIN: env.PUBLIC_WEB_ORIGIN, PUBLIC_API_ORIGIN: env.PUBLIC_API_ORIGIN, RADAR_DEV_TEST_OWNER_USER_ID: env.RADAR_DEV_TEST_OWNER_USER_ID };
+    const saved = { APP_ENV: env.APP_ENV, PUBLIC_WEB_ORIGIN: env.PUBLIC_WEB_ORIGIN, PUBLIC_API_ORIGIN: env.PUBLIC_API_ORIGIN, RADAR_DEV_TEST_OWNER_USER_ID: env.RADAR_DEV_TEST_OWNER_USER_ID, RADAR_DEV_TEST_SECOND_USER_ID: env.RADAR_DEV_TEST_SECOND_USER_ID };
     const owner = await person("Synthetic owner", false, MOSCOW_CITY_ID);
     const service = app.get(UnifiedPlayersService);
     const before = (await pool.query("SELECT * FROM player_social_profiles WHERE user_id=$1", [owner.id])).rows[0];
@@ -1299,6 +1299,17 @@ dbDescribe("Unified Players / isolated synthetic PostGIS and HTTP", () => {
       env.RADAR_DEV_TEST_OWNER_USER_ID = owner.id;
       expect((await app.get(GeographicRadarService).config(owner.id, owner.issued.session.id))).toHaveProperty("devMoscowTest", { latitude:55.7558, longitude:37.6173, accuracyMeters:25 });
       expect((await app.get(GeographicRadarService).config(viewer.id, viewer.issued.session.id))).not.toHaveProperty("devMoscowTest");
+      const second = await person("Second test actor", false, MOSCOW_CITY_ID);
+      env.RADAR_DEV_TEST_SECOND_USER_ID = second.id;
+      const secondConfig = await app.get(GeographicRadarService).config(second.id, second.issued.session.id);
+      expect(secondConfig).toHaveProperty("devMoscowTest");
+      expect(JSON.stringify(secondConfig)).not.toContain(second.id);
+      expect(JSON.stringify(secondConfig)).not.toContain(owner.id);
+      expect((await app.get(GeographicRadarService).config(viewer.id, viewer.issued.session.id))).not.toHaveProperty("devMoscowTest");
+      // Capability does not bypass an explicit disclosure receipt.
+      const noConsent = await app.inject({ method: "POST", url: "/v1/me/radar/activations", headers: headers(second), payload: { contractVersion: UNIFIED_WIRE, consentPolicyVersion: UNIFIED_POLICY, location: fix() } });
+      expect(noConsent.statusCode).toBeGreaterThanOrEqual(400);
+      expect((await pool.query("SELECT 1 FROM radar_presences WHERE user_id=$1", [second.id])).rowCount).toBe(0);
       const configWithoutOrigin = await app.inject({ method: "GET", url: "/v1/radar/config", headers: { cookie: `${SESSION_COOKIE}=${owner.issued.sessionToken}` } });
       expect(configWithoutOrigin.statusCode).toBe(200);
       expect(configWithoutOrigin.json()).toHaveProperty("devMoscowTest");
