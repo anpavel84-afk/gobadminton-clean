@@ -3,7 +3,7 @@ import dynamic from "next/dynamic";
 import { useEffect, useMemo, useState } from "react";
 import { listAllCityVenues, listAllUpcomingCityGames } from "../../../lib/api-client";
 import type { Game, VenueSummary } from "../../../lib/consumer-types";
-import { venueSchedules } from "../../../lib/games-venue-map";
+import { venueSchedules, startVenueMapRefresh } from "../../../lib/games-venue-map";
 import { MOSCOW_BUNDLE } from "../../../lib/radar-map-assets";
 import { VenueScheduleCard } from "./VenueScheduleCard";
 import { Button } from "../Button";
@@ -19,29 +19,36 @@ export function GamesMapView({ cityId, day }: { cityId: string; day: string }) {
   const [selected, setSelected] = useState<string | null>(null);
   useEffect(() => {
     const clock = setInterval(() => setNow(Date.now()), 1000);
-    const timer = setInterval(() => { setNow(Date.now()); setRefresh(n => n + 1); }, 30000);
-    const reload = () => { setNow(Date.now()); setRefresh(n => n + 1); };
-    window.addEventListener("focus", reload); window.addEventListener("online", reload);
-    window.addEventListener("gb-session-changed", reload);
-    return () => { clearInterval(clock); clearInterval(timer); window.removeEventListener("focus", reload); window.removeEventListener("online", reload); window.removeEventListener("gb-session-changed", reload); };
+    return () => clearInterval(clock);
   }, []);
   useEffect(() => {
-    let active = true; setLoading(true); setError(false);
-    // Keep public geography mounted; never display old schedule hints during revalidation.
-    setSnapshot(previous => previous?.cityId === cityId ? { ...previous, games: [], gamesReady: false } : null);
-    void Promise.all([listAllCityVenues(cityId), listAllUpcomingCityGames(cityId)]).then(([venues, games]) => {
-      if (!active) return;
-      setError(!venues.ok || !games.ok);
-      setSnapshot(previous => {
-        const retained = previous?.cityId === cityId ? previous : null;
-        if (!venues.ok && !retained) return null;
-        return { cityId, venues: venues.ok ? venues.data : retained!.venues,
-          games: games.ok ? games.data : [], gamesReady: games.ok };
-      });
-      setNow(Date.now()); setLoading(false);
-    }).catch(() => { if (active) { setError(true); setLoading(false); } });
-    return () => { active = false; };
-  }, [cityId, refresh]);
+    const polling = startVenueMapRefresh(async signal => {
+      setLoading(true); setError(false);
+      // Keep public geography mounted; never display old schedule hints during revalidation.
+      setSnapshot(previous => previous?.cityId === cityId ? { ...previous, games: [], gamesReady: false } : null);
+      await Promise.all([listAllCityVenues(cityId, signal), listAllUpcomingCityGames(cityId, signal)]).then(([venues, games]) => {
+        if (signal.aborted) return;
+        setError(!venues.ok || !games.ok);
+        setSnapshot(previous => {
+          const retained = previous?.cityId === cityId ? previous : null;
+          if (!venues.ok && !retained) return null;
+          return { cityId, venues: venues.ok ? venues.data : retained!.venues,
+            games: games.ok ? games.data : [], gamesReady: games.ok };
+        });
+        setNow(Date.now()); setLoading(false);
+      }).catch(() => { if (!signal.aborted) { setError(true); setLoading(false); } });
+    });
+    const reload = () => polling.refresh();
+    // A session change invalidates permissions immediately, even during a load.
+    const sessionChanged = () => setRefresh(n => n + 1);
+    window.addEventListener("focus", reload); window.addEventListener("online", reload);
+    window.addEventListener("gb-session-changed", sessionChanged);
+    return () => {
+      polling.stop();
+      window.removeEventListener("focus", reload); window.removeEventListener("online", reload);
+      window.removeEventListener("gb-session-changed", sessionChanged);
+    };
+  }, [cityId, day, refresh]);
   const venues = snapshot?.cityId === cityId ? snapshot.venues : [];
   const games = snapshot?.cityId === cityId ? snapshot.games : [];
   const all = useMemo(() => venueSchedules(venues, games, "", now), [venues, games, now]);

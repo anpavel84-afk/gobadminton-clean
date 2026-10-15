@@ -50,3 +50,25 @@ export function reconcileVenueMarkers<Entry>(entries: Map<string, Entry>, venues
     if (!visible.has(id)) { adapter.remove(entry); entries.delete(id); }
   }
 }
+
+/** One complete load at a time; the quiet polling interval starts after settlement. */
+export function startVenueMapRefresh(load: (signal: AbortSignal) => Promise<void>) {
+  const controller = new AbortController();
+  let pending = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const refresh = async () => {
+    if (controller.signal.aborted || pending) return;
+    clearTimeout(timer);
+    pending = true;
+    try { await load(controller.signal); }
+    finally {
+      pending = false;
+      if (!controller.signal.aborted) timer = setTimeout(() => { void refresh(); }, 30000);
+    }
+  };
+  void refresh();
+  return {
+    refresh: () => { void refresh(); },
+    stop: () => { controller.abort(); clearTimeout(timer); },
+  };
+}
