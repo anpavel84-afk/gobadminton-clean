@@ -75,7 +75,7 @@ export function VenueCoverEditor({venueId,onChange}:{venueId:string;onChange:(re
     <p role="status">{busy?"Проверяем и сохраняем…":preparing?"Подготавливаем фото…":message}</p>
     <div className="gb-venue-editor__actions">
       <Button disabled={busy||preparing||uncertain||!draft} onClick={()=>void run("save")}>Подтвердить обложку</Button>
-      <Button variant="outline" disabled={busy||preparing||uncertain||!access.cover.uploadedUrl} onClick={()=>void run("delete")}>Удалить обложку</Button>
+      <Button variant="outline" disabled={busy||preparing||uncertain||!access.hasCover} onClick={()=>void run("delete")}>Удалить обложку</Button>
       <Button variant="ghost" disabled={busy||preparing} onClick={()=>void run("refresh")}>Обновить данные</Button>
     </div>
   </section>;

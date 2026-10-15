@@ -3,6 +3,7 @@
  * No consumer role, venueId or UI flag is an authorization grant.
  */
 export type VenueCover = { uploadedUrl: string | null };
-export type VenueCoverReceipt = { version: number; cover: VenueCover };
+/** Authorized retained-cover presence, independent of public moderation visibility. */
+export type VenueCoverReceipt = { version: number; hasCover: boolean; cover: VenueCover };
 export type VenueCoverAccess = VenueCoverReceipt & { csrfToken: string };
 export type DeleteVenueCoverCommand = { expectedVersion: number };

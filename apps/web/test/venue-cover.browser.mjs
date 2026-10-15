@@ -10,7 +10,7 @@ const id='00000037-1111-4111-8111-111111111111';
 try {
   for(const width of [320,360,390,1440]){
     const context=await browser.newContext({viewport:{width,height:900}});
-    let version=1,uploadedUrl=null,bytes=null,writes=0,failNext=false,broken=false,authorized=true;
+    let version=1,hasCover=false,uploadedUrl=null,bytes=null,writes=0,failNext=false,broken=false,authorized=true;
     await context.route('**/*',async route=>{
       const req=route.request(),url=new URL(req.url()),p=url.pathname;
       if(url.origin!==origin)return route.abort();
@@ -19,17 +19,17 @@ try {
       if(p===`/v1/venues/${id}`)return reply({id,cityId:'a0000000-0000-4000-8000-000000000001',name:'Synthetic venue',address:'Synthetic address',timezone:'Europe/Moscow',latitude:55.7,longitude:37.6,dataStatus:'verified',provenance:'admin_created',cover:{uploadedUrl}});
       if(p===`/v1/admin/venues/${id}/cover/access`){
         assert.equal(req.method(),'GET');
-        return authorized?reply({version,cover:{uploadedUrl},csrfToken:'synthetic-csrf'},200):reply({title:'Forbidden'},403);
+        return authorized?reply({version,hasCover,cover:{uploadedUrl},csrfToken:'synthetic-csrf'},200):reply({title:'Forbidden'},403);
       }
       if(p===`/v1/admin/venues/${id}/cover`){
         assert.equal(req.headers()['x-csrf-token'],'synthetic-csrf');assert.ok(req.headers()['idempotency-key']);
         if(req.method()==='PUT'){
           assert.equal(req.headers()['x-venue-version'],String(version));assert.equal(req.headers()['content-type'],'image/webp');
-          bytes=req.postDataBuffer();assert.ok(bytes.length<=512*1024);uploadedUrl='/v1/media/venue-covers/'+String(version).repeat(64)+'.png';
-        } else {assert.equal(req.method(),'DELETE');assert.deepEqual(req.postDataJSON(),{expectedVersion:version});uploadedUrl=null;}
+          hasCover=true;bytes=req.postDataBuffer();assert.ok(bytes.length<=512*1024);uploadedUrl='/v1/media/venue-covers/'+String(version).repeat(64)+'.png';
+        } else {assert.equal(req.method(),'DELETE');assert.deepEqual(req.postDataJSON(),{expectedVersion:version});uploadedUrl=null;hasCover=false;}
         writes++;version++;
         if(failNext){failNext=false;return route.abort();}
-        return reply({version,cover:{uploadedUrl}});
+        return reply({version,hasCover,cover:{uploadedUrl}});
       }
       if(p.startsWith('/v1/media/venue-covers/'))return broken?route.abort():route.fulfill({contentType:'image/webp',body:bytes});
       if(p==='/v1/me')return reply({title:'Synthetic anonymous consumer'},401);
@@ -57,8 +57,18 @@ try {
     assert.equal(await page.getByAltText('Предпросмотр обложки').getAttribute('src'),draft,'reconciliation preserves local crop');
     await page.getByRole('button',{name:'Подтвердить обложку',exact:true}).click();
     await page.getByRole('status').filter({hasText:'Обложка сохранена.'}).waitFor();
+    // Moderation hides the public derivative but retains the owner's removable cover.
+    uploadedUrl=null;
+    await page.reload();
+    await page.getByRole('heading',{name:'Обложка площадки',exact:true}).waitFor();
+    await page.locator('[data-cover="default"]').waitFor();
+    assert.equal(hasCover,true);
+    assert.equal(await page.getByRole('button',{name:'Удалить обложку',exact:true}).isEnabled(),true);
     await page.getByRole('button',{name:'Удалить обложку',exact:true}).click();
     await page.locator('[data-cover="default"]').waitFor();assert.equal(uploadedUrl,null);
+    await page.getByRole('status').filter({hasText:'Обложка сохранена.'}).waitFor();
+    assert.equal(hasCover,false);
+    assert.equal(await page.getByRole('button',{name:'Удалить обложку',exact:true}).isDisabled(),true);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
     // Broken current media uses the neutral shell; revoked access never mounts controls.
     uploadedUrl='/v1/media/venue-covers/'+'a'.repeat(64)+'.png';broken=true;authorized=false;

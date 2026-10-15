@@ -30,7 +30,7 @@ describe("venue cover presentation / mutation wire protocol",()=>{
   });
   it("sends bounded derivative confirmation with cookie/CSRF/CAS/replay; DELETE has exact JSON command",async()=>{
     const fetch=vi.fn().mockResolvedValue(new Response(JSON.stringify({version:2,cover:{uploadedUrl:url}}),{status:200}));vi.stubGlobal("fetch",fetch);
-    const id="00000037-1111-4111-8111-111111111111",access={version:1,csrfToken:"synthetic-csrf",cover:{uploadedUrl:null}},controller=new AbortController(),blob=new Blob(["synthetic"],{type:"image/png"});
+    const id="00000037-1111-4111-8111-111111111111",access={version:1,hasCover:false,csrfToken:"synthetic-csrf",cover:{uploadedUrl:null}},controller=new AbortController(),blob=new Blob(["synthetic"],{type:"image/png"});
     await venueCoverRequest(id,"PUT",controller.signal,access,blob);
     expect(fetch.mock.calls[0][0]).toBe(`/v1/admin/venues/${id}/cover`);
     const init=fetch.mock.calls[0][1];expect(init.credentials).toBe("include");expect(init.cache).toBe("no-store");expect(init.headers.get("X-Venue-Version")).toBe("1");expect(init.headers.get("X-CSRF-Token")).toBe(access.csrfToken);expect(init.headers.get("Idempotency-Key")).toBeTruthy();expect(init.body).toBe(blob);

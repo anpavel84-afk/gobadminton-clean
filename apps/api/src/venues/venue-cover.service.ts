@@ -18,7 +18,7 @@ export class VenueCoverService {
   private async scope(c: PoolClient, actor: AdminActor, id: string) {
     const user = await c.query("SELECT id FROM users WHERE id=$1 AND status='active' FOR UPDATE",[actor.principal.user_id]);
     if (!user.rowCount) throw notFound("VENUE_NOT_FOUND", "Площадка недоступна для редактирования");
-    const row = (await c.query<{version:number}>(`SELECT version FROM venues
+    const row = (await c.query<{version:number;has_cover:boolean}>(`SELECT version, cover_key IS NOT NULL AS has_cover FROM venues
       WHERE id=$1 AND created_by_user_id=$2 AND lifecycle_state IN ('unverified','verified') FOR UPDATE`,
       [id, actor.principal.user_id])).rows[0];
     if (!row) throw notFound("VENUE_NOT_FOUND", "Площадка недоступна для редактирования");
@@ -29,7 +29,7 @@ export class VenueCoverService {
       const row = await this.scope(c,a,id);
       const cover = (await c.query<{uploaded_url:string|null}>("SELECT venue_cover_url($1) AS uploaded_url", [id])).rows[0]!;
       await appendAudit(c,{actor:a,action:"venue.cover_read",targetType:"venue",targetId:id,permission:"venue.manage",reason:"operations_read"});
-      return {version:row.version,cover:{uploadedUrl:cover.uploaded_url}};
+      return {version:row.version,hasCover:row.has_cover,cover:{uploadedUrl:cover.uploaded_url}};
     });
   }
   async mutate(request: FastifyRequest, replayKey: string | undefined, id: string, expectedVersion: number,
@@ -40,7 +40,7 @@ export class VenueCoverService {
     const original = upload && Buffer.isBuffer(upload.body) ? Buffer.from(upload.body) : null;
     const input = {id,expectedVersion,action:upload?"replace":"remove",mime:upload?.mime??null,
       sha256:original?createHash("sha256").update(original).digest("hex"):null};
-    const replay = await this.admin.privilegedReplay<{version:number;cover:{uploadedUrl:string|null}}>(request,replayKey,"venue.manage","venue.cover",input,
+    const replay = await this.admin.privilegedReplay<{version:number;hasCover:boolean;cover:{uploadedUrl:string|null}}>(request,replayKey,"venue.manage","venue.cover",input,
       async(c,a) => { await this.scope(c,a,id); });
     if (replay) return replay;
     if (authority.venueVersion !== expectedVersion) throw conflict("VENUE_VERSION_CONFLICT", "Площадка изменилась. Обновите данные.");
@@ -67,7 +67,7 @@ export class VenueCoverService {
           permission:"venue.manage",reason:"venue_cover",keyHash,before:{version:row.version},after:{version:updated.version}});
         await c.query("INSERT INTO venue_admin_actions(venue_id,venue_version,action,actor_id,audit_id) VALUES($1,$2,'cover',$3,$4)",[id,updated.version,a.principalId,auditId]);
         const cover = (await c.query<{url:string|null}>("SELECT venue_cover_url($1) AS url",[id])).rows[0]!;
-        return {version:updated.version,cover:{uploadedUrl:cover.url}};
+        return {version:updated.version,hasCover:key !== undefined,cover:{uploadedUrl:cover.url}};
       },async(c,a) => { await this.scope(c,a,id); });
     } finally {
       if (key) await this.media.releaseStage(key);

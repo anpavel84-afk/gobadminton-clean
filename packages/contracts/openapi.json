@@ -24515,12 +24515,17 @@
         "additionalProperties": false,
         "required": [
           "version",
+          "hasCover",
           "cover"
         ],
         "properties": {
           "version": {
             "type": "integer",
             "minimum": 1
+          },
+          "hasCover": {
+            "type": "boolean",
+            "description": "Retained cover exists, including when moderation hides its public URL. Only returned after venue-management authorization; mutations always reauthorize."
           },
           "cover": {
             "$ref": "#/components/schemas/VenueCover"
@@ -24532,6 +24537,7 @@
         "additionalProperties": false,
         "required": [
           "version",
+          "hasCover",
           "cover",
           "csrfToken"
         ],
@@ -24539,6 +24545,10 @@
           "version": {
             "type": "integer",
             "minimum": 1
+          },
+          "hasCover": {
+            "type": "boolean",
+            "description": "Retained cover exists, including when moderation hides its public URL. Only returned after venue-management authorization; mutations always reauthorize."
           },
           "cover": {
             "$ref": "#/components/schemas/VenueCover"

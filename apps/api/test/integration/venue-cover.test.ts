@@ -92,7 +92,7 @@ run("venue cover: isolated disposable PostGIS / actual API / games projections",
       const denied=await app.inject({method:"GET",url:`/v1/admin/venues/${v.id}/cover/access`,headers:{cookie:headers().cookie,"sec-fetch-site":"same-origin",referer:origin+`/venues/${v.id}`,...patch}});
       expect(denied.statusCode).toBe(403);
     }
-    expect(access.statusCode,access.body).toBe(200);expect(access.json()).toMatchObject({version:1,csrfToken:owner.csrf,cover:{uploadedUrl:null}});
+    expect(access.statusCode,access.body).toBe(200);expect(access.json()).toMatchObject({version:1,hasCover:false,csrfToken:owner.csrf,cover:{uploadedUrl:null}});
   });
   it("projects current derivative/default in actual games list/detail, replace/delete/hide and public media; preserves private profile covers",async()=>{
     const v=await venue(),service=app.get(GamesService),session=await app.get(SessionService).createConsumerSession(owner.userId);
@@ -125,6 +125,30 @@ run("venue cover: isolated disposable PostGIS / actual API / games projections",
     expect(removed.statusCode,removed.body).toBe(200);expect((await read(next)).statusCode).toBe(404);await projections(null);
     await app.get(AvatarService).cleanup();
     expect((await pool.query("SELECT count(*)::int AS n FROM venue_admin_actions WHERE venue_id=$1 AND action='cover'",[v.id])).rows[0].n).toBe(3);
+  });
+  it.each(["reject", "review"])("lets only the authorized owner delete a retained cover hidden by %s",async decision=>{
+    const v=await venue(),saved=await upload(v.id);
+    expect(saved.statusCode,saved.body).toBe(200);
+    expect(saved.json().hasCover).toBe(true);
+    const url=saved.json().cover.uploadedUrl;
+    await pool.query("UPDATE content_moderation_approvals SET decision=$2 WHERE id=(SELECT cover_moderation_approval_id FROM venues WHERE id=$1)",[v.id,decision]);
+    expect((await read(url)).statusCode).toBe(404);
+    const access=await app.inject({method:"GET",url:`/v1/admin/venues/${v.id}/cover/access`,headers:headers()});
+    expect(access.statusCode,access.body).toBe(200);
+    expect(access.json()).toMatchObject({version:2,hasCover:true,cover:{uploadedUrl:null}});
+    // Public DTOs still contain only the approved URL, never retained-cover metadata.
+    expect((await read(`/v1/venues/${v.id}`)).json()).not.toHaveProperty("hasCover");
+    for(const a of [other,support]){
+      const denied=await app.inject({method:"DELETE",url:`/v1/admin/venues/${v.id}/cover`,headers:headers(a),payload:{expectedVersion:2}});
+      expect(denied.statusCode).toBe(a===other?404:403);
+    }
+    const removed=await app.inject({method:"DELETE",url:`/v1/admin/venues/${v.id}/cover`,headers:headers(),payload:{expectedVersion:access.json().version}});
+    expect(removed.statusCode,removed.body).toBe(200);
+    expect(removed.json()).toMatchObject({version:3,hasCover:false,cover:{uploadedUrl:null}});
+    expect((await pool.query("SELECT cover_key,cover_moderation_approval_id,cover_actor_id FROM venues WHERE id=$1",[v.id])).rows[0]).toEqual({cover_key:null,cover_moderation_approval_id:null,cover_actor_id:null});
+    const fresh=await app.inject({method:"GET",url:`/v1/admin/venues/${v.id}/cover/access`,headers:headers()});
+    expect(fresh.json()).toMatchObject({version:3,hasCover:false,cover:{uploadedUrl:null}});
+    expect((await read(url)).statusCode).toBe(404);
   });
   it("keeps CAS and moderation rejection atomic; retirement hides public bytes",async()=>{
     const v=await venue();
