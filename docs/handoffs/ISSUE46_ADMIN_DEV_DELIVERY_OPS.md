@@ -722,3 +722,70 @@ emitted font URLs/bytes and verify Onest loads before claiming the fix. An inlin
 No Next config, CI or security guards changed. Only this handoff remains changed;
 source rollback is removal of this section. Parent publication, independent review
 and fresh full hosted CI remain separate gates; no approval/runtime claim.
+
+## Authorized asset-scope correction after docs-only a221 (2026-10-16)
+
+From: bounded source author. To: Supervisor / independent reviewer.
+Status: SOURCE_READY — WORKING DRAFT — NOT APPROVED — NOT CANONICAL.
+Exact base: `a221f76665c045b73acc9269a9248fcb5aaa8800`, initially clean
+`automation/admin-dev-delivery-20261015` worktree. No commit/push performed.
+
+Historical correction: a221 changed **only this handoff**, despite its font-fix
+commit title. It contains no font/source fix. Supervisor reports Product CI
+38822111047, Admin job 116720892791 failed with the same
+`get_font_fallbacks` unexpected-data-version failure:
+https://github.com/anpavel84-afk/gobadminton-clean/actions/runs/38822111047/job/116720892791
+This evidence is supplied by Supervisor, not independently queried here. Previous
+failures and the asset-scope block above remain historical facts.
+
+Supervisor explicitly authorized this narrowly necessary asset correction within
+existing Issue #46: add exact gzip-decoded original Onest.ttf; delete malformed
+Onest.woff2 only after verifying no active reference; Admin layout/CSS/tests;
+expand only the existing source(admin) CI build step to root and path builds;
+update this handoff. No network/download/dependency/version changes, other
+worktrees, root, services/live configuration, DB/grants, commit/push, PROD/PLAN/VPN
+or additional agents were used. This authorization resolves the previous asset
+scope block. Its suggested removal of next/font was a proposal, superseded here
+by preserving the existing local-font pipeline.
+
+Actual changed source:
+- `apps/admin/public/fonts/Onest.ttf`: 124376 exact decompressed original bytes;
+  SHA256 `3faa4b905661849b2332e394b42f91b5bf5575e553c516caa81811e868a4d589`.
+  No font redesign or replacement/download. Existing provenance/attribution file
+  is unchanged; its SHA256 continues to identify the original gzip source bytes.
+- `apps/admin/src/app/layout.tsx`: next/font/local now points to .ttf and declares
+  its actual variable weight range 100–900. Next retains generated/hashed asset
+  handling for default root and optional /admin; no consumer root font URL.
+- Removed old malformed .woff2 after repository reference search and inspection
+  found no remaining active consumer. Historical handoff references remain.
+- `apps/admin/test/font_asset_test.py`: dependency-free exact historical gzip
+  byte comparison, TrueType table bounds/signature/fvar checks, local layout
+  reference/weight checks, and absence of the malformed source reference.
+- `.github/workflows/ci.yml`: same existing source(admin) build step now executes
+  two real sequential Docker builds: default root (`admin-ci-root`) and
+  ADMIN_DEV_PATH_BUILD=1 (`admin-ci-path`), no push. No other jobs/steps, guards,
+  Next configuration, Admin security flags or DEV contract changed.
+
+Executed local author checks (PASS):
+- `python3 -B apps/admin/test/font_asset_test.py` (2 tests; compares against exact
+  a221 asset in Git, original SHA256 c2475a4e…44275).
+- `python3 -B scripts/check_foundation.py` (170 Markdown files, 164 draft ops).
+- `python3 -B scripts/test_email_contract_policy.py` (1 test).
+- `python3 -B scripts/test_check_foundation.py` (8 tests).
+- `git diff --check`.
+
+NOT_TESTED: actual Next/Turbopack builds, both Docker builds, package typecheck,
+lint/Vitest, emitted font URLs/bytes, browser font loading at root and /admin,
+security/path runtime regression, hosted CI, deployment and independent QA.
+No dependency installation or Corepack attempt was made. Static checks do not
+prove build/runtime success; this is source-ready, not self-approved or deployed.
+
+Rollback: restore only the listed changed files to exact base a221 (including
+restoring old .woff2), remove the new .ttf and new font test; no runtime rollback
+is involved. Do not present restored malformed bytes as a valid solution.
+Next bounded action: Supervisor reviews/publishes the actual source diff, obtains
+fresh exact-SHA hosted CI for both builds and independent verification of emitted
+font bytes/URLs and browser loading in both modes. Publication is pending under
+this assignment's explicit no-commit/no-push restriction; no new candidate
+permalink exists yet. This handoff plus exact base and diff permit continuation
+without old chat; no approval or release authority is implied.
