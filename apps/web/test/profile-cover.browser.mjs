@@ -1,4 +1,4 @@
-/* global process, Buffer, URL, console, document, innerWidth */
+/* global process, Buffer, URL, console, document, innerWidth, getComputedStyle */
 // Synthetic UI regression only. Independent QA supplies an already-built loopback
 // Web server and Playwright; this script never starts services or authenticates live users.
 import assert from 'node:assert/strict';
