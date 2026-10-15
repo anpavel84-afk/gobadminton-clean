@@ -40,7 +40,11 @@ run("venue cover: isolated disposable PostGIS / actual API / games projections",
     await pool.query("CREATE TABLE schema_migrations(id text PRIMARY KEY,applied_at timestamptz NOT NULL DEFAULT now())");
     for(const file of (await readdir(dir)).filter(f=>f.endsWith(".sql")).sort())await pool.query(await readFile(path.join(dir,file),"utf8"));
     const root=path.resolve(__dirname,"../../.qa-runtime");await mkdir(root,{recursive:true});media=await mkdtemp(path.join(root,"venue-cover-"));
-    const env=loadEnv({...process.env,DATABASE_URL:url.href,NODE_ENV:"test",APP_ENV:"local",PUBLIC_API_ORIGIN:"http://127.0.0.1:19441",PUBLIC_WEB_ORIGIN:origin,ALLOWED_WEB_ORIGINS:origin,ADMIN_INTERNAL_ENABLED:"1",ADMIN_ORIGIN:origin,ADMIN_AUTH_PEPPER:pepper,AVATAR_MEDIA_ROOT:media,CONTENT_MODERATION_PROVIDER:"fake",CONTENT_MODERATION_FINGERPRINT_SECRET:"venue-cover-synthetic-fingerprint-secret"});
+    // Keep the synthetic consumer and admin surfaces isolated regardless of CI inheritance.
+    const env=loadEnv({...process.env,DATABASE_URL:url.href,NODE_ENV:"test",APP_ENV:"local",PUBLIC_API_ORIGIN:"http://127.0.0.1:19441",
+      HOST:"127.0.0.1",PUBLIC_WEB_ORIGIN:"http://127.0.0.1:19442",ALLOWED_WEB_ORIGINS:"http://127.0.0.1:19442",
+      AUTH_PEPPER:"venue-cover-synthetic-consumer-pepper-32chars",ADMIN_INTERNAL_ENABLED:"1",ADMIN_ORIGIN:origin,ADMIN_AUTH_PEPPER:pepper,
+      ADMIN_VK_REDIRECT_URI:origin+"/v1/admin/auth/vk/callback",ADMIN_YANDEX_REDIRECT_URI:origin+"/v1/admin/auth/yandex/callback",AVATAR_MEDIA_ROOT:media,CONTENT_MODERATION_PROVIDER:"fake",CONTENT_MODERATION_FINGERPRINT_SECRET:"venue-cover-synthetic-fingerprint-secret"});
     fake=new FakeModerationProvider(env);
     const mod=await Test.createTestingModule({imports:[buildTestCoreModule(env,pool),AdminModule,GamesModule,VenuesModule,ProfilesModule]})
       .overrideProvider(MODERATION_PROVIDER).useValue(fake).compile();

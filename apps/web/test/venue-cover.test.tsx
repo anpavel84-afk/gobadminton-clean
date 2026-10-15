@@ -29,12 +29,22 @@ describe("venue cover presentation / mutation wire protocol",()=>{
     }
   });
   it("sends bounded derivative confirmation with cookie/CSRF/CAS/replay; DELETE has exact JSON command",async()=>{
-    const fetch=vi.fn().mockResolvedValue(new Response(JSON.stringify({version:2,cover:{uploadedUrl:url}}),{status:200}));vi.stubGlobal("fetch",fetch);
+    const fetch=vi.fn<(input: string, init: RequestInit & {headers: Headers}) => Promise<Response>>()
+      .mockImplementation(async()=>new Response(JSON.stringify({version:2,cover:{uploadedUrl:url}}),{status:200}));
+    vi.stubGlobal("fetch",fetch);
+    function callAt(index:number){
+      const call=fetch.mock.calls[index];
+      if(!call)throw new Error(`Missing fetch call ${index}`);
+      return call;
+    }
     const id="00000037-1111-4111-8111-111111111111",access={version:1,hasCover:false,csrfToken:"synthetic-csrf",cover:{uploadedUrl:null}},controller=new AbortController(),blob=new Blob(["synthetic"],{type:"image/png"});
     await venueCoverRequest(id,"PUT",controller.signal,access,blob);
-    expect(fetch.mock.calls[0][0]).toBe(`/v1/admin/venues/${id}/cover`);
-    const init=fetch.mock.calls[0][1];expect(init.credentials).toBe("include");expect(init.cache).toBe("no-store");expect(init.headers.get("X-Venue-Version")).toBe("1");expect(init.headers.get("X-CSRF-Token")).toBe(access.csrfToken);expect(init.headers.get("Idempotency-Key")).toBeTruthy();expect(init.body).toBe(blob);
-    await venueCoverRequest(id,"DELETE",controller.signal,access);expect(JSON.parse(fetch.mock.calls[1][1].body)).toEqual({expectedVersion:1});
-    await venueCoverRequest(id,"GET",controller.signal);expect(fetch.mock.calls[2][0]).toBe(`/v1/admin/venues/${id}/cover/access`);expect(fetch.mock.calls[2][1].body).toBeUndefined();
+    expect(callAt(0)[0]).toBe(`/v1/admin/venues/${id}/cover`);
+    const init=callAt(0)[1];expect(init.credentials).toBe("include");expect(init.cache).toBe("no-store");expect(init.headers.get("X-Venue-Version")).toBe("1");expect(init.headers.get("X-CSRF-Token")).toBe(access.csrfToken);expect(init.headers.get("Idempotency-Key")).toBeTruthy();expect(init.body).toBe(blob);
+    await venueCoverRequest(id,"DELETE",controller.signal,access);
+    const deleteBody=callAt(1)[1].body;
+    if(typeof deleteBody!=="string")throw new Error("DELETE body must be JSON text");
+    expect(JSON.parse(deleteBody)).toEqual({expectedVersion:1});
+    await venueCoverRequest(id,"GET",controller.signal);expect(callAt(2)[0]).toBe(`/v1/admin/venues/${id}/cover/access`);expect(callAt(2)[1].body).toBeUndefined();
   });
 });
