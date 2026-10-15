@@ -1,4 +1,4 @@
-/* global process, Buffer, URL, console */
+/* global process, Buffer, URL, console, document, innerWidth */
 // Independent QA may run against a prebuilt local Web server; never starts/deploys services.
 import assert from 'node:assert/strict';
 import { pathToFileURL } from 'node:url';

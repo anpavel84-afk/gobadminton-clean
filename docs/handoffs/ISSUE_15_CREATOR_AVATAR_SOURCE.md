@@ -127,3 +127,7 @@ Important review points: directory-hidden/social-ineligible creators intentional
 User explicitly prohibits commit/push: changes are uncommitted, no new source SHA or published artifact permalink exists. Do not cite base as new implementation evidence. Authorized publisher must record exact new SHA and artifact permalink after independent review, preserving this NOT_TESTED status until evidence exists.
 Rollback: authorized integrator discards/reverts only this slice's files; no schema migration or runtime rollback is required by these source edits. Never discard unrelated work.
 Next bounded action: independent SOURCE QA on the publisher's exact new SHA, including tests and privacy/URL/broken-image checks. Repair within #15 if findings occur; separate hosted CI and authorized DEV acceptance gates remain mandatory. This source handoff does not authorize executing those runtime effects.
+
+## Attempt 4 — canonical input recovery / source supersession (2026-10-15)
+
+Base remains `98753ee2e4fd9e71dde58a41bb47307702c221af`. Prior FAIL/BLOCKED and NOT_TESTED records are preserved. The earlier no-gap statement is superseded by the inspected published reference and bounded gaps documented in [ISSUE_15_CANONICAL_REFERENCE.md](ISSUE_15_CANONICAL_REFERENCE.md). Source composition was actually repaired, not merely relabeled. Separate trainer identity and valid synthetic opt-in fixture restored; browser globals declared. No tests/self-QA or publication executed; independent QA4 and all CI/DEV/UAT acceptance remain pending. No new candidate SHA is claimed.

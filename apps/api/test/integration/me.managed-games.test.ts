@@ -281,9 +281,10 @@ describeIntegration("GET /v1/me/games managed games read contract", () => {
 
     // Synthetic DB fixture only: exercise real game HTTP boundaries with current creator media.
     const avatarKey = "a".repeat(64) + ".png";
-    await pool.query(`INSERT INTO player_social_profiles(user_id, display_name, directory_visible, social_eligible, avatar_key)
-      VALUES ($1, 'Avatar Creator', true, true, $2)
-      ON CONFLICT(user_id) DO UPDATE SET directory_visible=true, social_eligible=true, avatar_key=$2`, [owner.userId, avatarKey]);
+    await pool.query(`INSERT INTO player_social_profiles(user_id, display_name, directory_visible, social_eligible, avatar_key, city_id, consent_policy_version, opted_in_at)
+      VALUES ($1, 'Avatar Creator', true, true, $2, $3, 'synthetic-issue15-v1', now())
+      ON CONFLICT(user_id) DO UPDATE SET display_name='Avatar Creator', directory_visible=true, social_eligible=true, avatar_key=$2,
+        city_id=$3, consent_policy_version='synthetic-issue15-v1', opted_in_at=now()`, [owner.userId, avatarKey, MOSCOW_CITY_ID]);
     const readAvatar = async (url: string, cookie = owner.cookie) => {
       const res = await app.inject({ method: "GET", url, headers: { cookie } });
       expect(res.statusCode).toBe(200);

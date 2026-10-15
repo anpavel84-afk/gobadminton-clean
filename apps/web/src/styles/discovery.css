@@ -153,3 +153,13 @@
 /* Existing GameCard avatar slot, shared with the canonical Avatar fallback. */
 .gb-discovery-avatar { overflow: hidden; }
 .gb-discovery-avatar > img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+/* Published kit §08 Avatar/IdentityRow; bounded #15 composition, see source manifest. */
+.gb-game-identity { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.gb-game-identity > span:last-child { min-width: 0; overflow-wrap: anywhere; }
+.gb-game-identity small, .gb-game-identity strong { display: block; }
+.gb-game-identity small { color: var(--gb-ink-soft); font-size: 10px; }
+.gb-game-identity strong { font-size: 13px; font-weight: 600; }
+.gb-personal-card__organizer { margin-top: 8px; }
+.gb-game-facts .gb-game-identity .gb-discovery-avatar { width: 24px; height: 24px; font-size: 10px; }
+.gb-discovery-trainer { margin-bottom: 12px; }

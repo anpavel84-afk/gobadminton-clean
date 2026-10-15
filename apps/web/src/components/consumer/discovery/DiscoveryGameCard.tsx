@@ -25,6 +25,10 @@ export function DiscoveryGameCard({ game }: { game: Game }) {
       <p className="gb-discovery-address"><DiscoveryIcon name="pin" />{game.venue.address}</p>
       <div className="gb-discovery-meta"><span>Уровень: {game.levelRule.allowedLevelIds.join(", ")}</span>{format && <span>{format}</span>}</div>
       <p className="gb-discovery-terms">{settlementTerms(game.settlement)}</p>
+      {trainer && game.trainer && <div className="gb-game-identity gb-discovery-trainer">
+        <Avatar className="gb-discovery-avatar" name={game.trainer.displayName} />
+        <span><small>Тренер · самостоятельно указано</small><strong>{game.trainer.displayName}</strong></span>
+      </div>}
       <div className="gb-discovery-host">
         <Avatar className="gb-discovery-avatar" name={host} avatar={game.organizer.avatar} />
         <span><small>Организатор</small><strong>{host}</strong></span>

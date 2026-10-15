@@ -44,7 +44,7 @@ export function GameTerms({ game, showCapacity = true }: { game: Game; showCapac
       <span className="gb-game-kicker">Встречаемся на корте</span><h2>Место и организатор</h2>
       <dl className="gb-game-facts">
         <div><dt>Площадка</dt><dd>{game.venue.name}<small>{game.venue.address}</small></dd></div>
-        <div><dt>Организует</dt><dd><Avatar className="gb-discovery-avatar" name={game.organizer.displayName} avatar={game.organizer.avatar} />{game.organizer.displayName}<small>{game.organizer.publicContact}</small></dd></div>
+        <div><dt>Организует</dt><dd><span className="gb-game-identity"><Avatar className="gb-discovery-avatar" name={game.organizer.displayName} avatar={game.organizer.avatar} /><span>{game.organizer.displayName}</span></span><small>{game.organizer.publicContact}</small></dd></div>
         {showCapacity && <div><dt>Состав</dt><dd>До {game.capacity} игроков<small>Подтверждено: {game.confirmedCount} · Занято вне сервиса: {game.externalReservedCount}</small></dd></div>}
       </dl>
     </section>
@@ -83,7 +83,10 @@ export function PersonalGameCard({
     <div className="gb-personal-card__body">
       <span className="gb-game-type" data-trainer={game.activityKind === "trainer_led"}>{game.activityKind === "trainer_led" ? "С тренером" : "Обычная игра"}</span>
       <h3>{game.title}</h3><strong>{when.day} · {when.time}</strong>
-      <p>{game.venue.name}</p><div className="gb-discovery-host"><Avatar className="gb-discovery-avatar" name={game.organizer.displayName} avatar={game.organizer.avatar} /><span><small>Организатор</small><strong>{game.organizer.displayName}</strong></span></div><small>{game.levelRule.allowedLevelIds.join(", ")} · {capacityStatusLabel(game)}</small>
+      <p>{game.venue.name}</p>
+      <small>{game.levelRule.allowedLevelIds.join(", ")} · {capacityStatusLabel(game)}</small>
+      {/* STYLE_GUIDE_GAP #15: kit IdentityRow inside the canonical card body; no footer/divider. */}
+      <div className="gb-game-identity gb-personal-card__organizer"><Avatar className="gb-discovery-avatar" name={game.organizer.displayName} avatar={game.organizer.avatar} /><span><small>Организатор</small><strong>{game.organizer.displayName}</strong></span></div>
     </div>
     <div className="gb-personal-card__action"><Button variant={tone === "draft" ? "dark" : "outline"} href={owned ? `/my-games/${game.id}` : `/games/${game.id}`}>{owned ? (game.status === "draft" ? "Продолжить" : "Управление") : "Открыть игру"} →</Button></div>
   </article>;

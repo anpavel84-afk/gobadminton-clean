@@ -105,3 +105,21 @@ describe("creator avatar across game surfaces", () => {
     }
   });
 });
+
+// #15 bounded kit extension preserves the published personal-card hierarchy.
+describe("personal creator identity composition", () => {
+  it("keeps identity after body metadata and before the trailing action", () => {
+    const html = renderToStaticMarkup(<PersonalGameCard game={game} owned />);
+    const body = html.indexOf('class="gb-personal-card__body"');
+    const venue = html.indexOf(game.venue.name, body);
+    const metadata = html.indexOf(game.levelRule.allowedLevelIds.join(", "), venue);
+    const identity = html.indexOf('class="gb-game-identity gb-personal-card__organizer"');
+    const action = html.indexOf('class="gb-personal-card__action"');
+    expect(body).toBeGreaterThan(-1);
+    expect(venue).toBeGreaterThan(body);
+    expect(metadata).toBeGreaterThan(venue);
+    expect(identity).toBeGreaterThan(metadata);
+    expect(action).toBeGreaterThan(identity);
+    expect(html).not.toContain('class="gb-discovery-host"');
+  });
+});
