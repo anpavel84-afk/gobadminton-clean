@@ -206,10 +206,10 @@ try {
    await page.getByRole('button',{name:'Изменить профиль',exact:true}).click();
    const form=page.getByRole('dialog',{name:'Игровой профиль',exact:true});
    assert.equal(await form.getByLabel('Имя',{exact:true}).inputValue(),fields.displayName);
-   assert.equal(await form.getByLabel('О себе',{exact:true}).inputValue(),fields.bio);
+   assert.equal(await form.getByRole('textbox',{name:'О себе',exact:true}).inputValue(),fields.bio);
    assert.equal(await form.getByLabel('Город',{exact:true}).inputValue(),fields.cityId);
    assert.equal(await form.getByLabel('Район / метро',{exact:true}).inputValue(),fields.areaKey);
-   await form.getByLabel('О себе',{exact:true}).fill(fields.bio+' + local');
+   await form.getByRole('textbox',{name:'О себе',exact:true}).fill(fields.bio+' + local');
    const profileWritesBefore=profileWrites;
    await form.getByRole('button',{name:'Сохранить',exact:true}).click();
    await page.getByText('Профиль сохранён.',{exact:true}).waitFor();
