@@ -81,3 +81,14 @@ describe("navigation and passkey transport", () => {
     expect(Array.from(new Uint8Array(request.allowCredentials![0]!.id as ArrayBuffer))).toEqual([4, 5, 6]); expect(request.userVerification).toBe("required");
   });
 });
+
+describe("Germany DEV app fence", () => {
+  const dev = {ADMIN_INTERNAL_APP_ENABLED:"1",ADMIN_DEV_ENABLED:"1",NODE_ENV:"production",APP_ENV:"stage",
+    PUBLIC_WEB_ORIGIN:"https://dev.gobadminton.ru",ADMIN_ORIGIN:"https://dev-admin.gobadminton.ru",ADMIN_API_URL:"https://dev.gobadminton.ru"};
+  it("requires exact explicit separate HTTPS origins and denies PROD and mixed test config", () => {
+    expect(internalConfig(dev)).toEqual({origin:dev.ADMIN_ORIGIN,api:dev.ADMIN_API_URL});
+    for (const bad of [{APP_ENV:"prod"},{NODE_ENV:"test"},{ADMIN_DEV_ENABLED:"0"},
+      {ADMIN_ORIGIN:dev.PUBLIC_WEB_ORIGIN},{ADMIN_API_URL:"https://token@dev.gobadminton.ru"},
+      {ADMIN_TEST_ORIGIN:origin},{ADMIN_ORIGIN:"https://arbitrary.test"}]) expect(internalConfig({...dev,...bad})).toBeNull();
+  });
+});
