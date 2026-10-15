@@ -6,6 +6,8 @@ import { listCities, listPlayers } from "../../../lib/api-client";
 import type { City, PublicPlayer } from "../../../lib/consumer-types";
 import { readSelectedLocation } from "../../../lib/location-context";
 import { isSocialDirectoryDisabled } from "../../../lib/player-presentation";
+import { confirmedDirectoryActivation } from "../../../lib/radar-controller";
+import { RadarSwitchControl, RadarStatusControls } from "../radar/RadarControls";
 import { Button } from "../Button";
 import { ConsumerShell } from "../ConsumerShell";
 import { UnifiedPlayerCard } from "../radar/UnifiedPlayerCard";
@@ -31,7 +33,7 @@ export function PlayersDirectoryPage() {
   const setTrainerOnly = (value: boolean) => update({ trainerOnly: value });
   const directory = useUnifiedDirectory();
   const config = useRadarConfig();
-  const activationId = view.status?.state === "active" && view.status.contractVersion === "players-unified-radar-v1" && !view.pendingStop ? view.status.activationId : null;
+  const activationId = confirmedDirectoryActivation(view);
   // Radar query geography must never change the ordinary catalog selection.
   const queryCity = cityId || config?.cities.find(c => c.cityId === MOSCOW_BUNDLE.cityId)?.cityId || "";
   const queryFilters: UnifiedFilters = { cityId: queryCity, ...(areaKey.trim() ? { areaKey: areaKey.trim() } : {}), ...(name.trim().length >= 2 ? { name: name.trim() } : {}), ...(lookingOnly ? { looking: true } : {}), ...(trainerOnly ? { trainer: true } : {}) };
@@ -45,12 +47,13 @@ export function PlayersDirectoryPage() {
     if (!unified) return;
     if (!activationId || view.pendingStop || !eligibleCity || !unifiedAvailable) { unified.ordinary(); return; }
     const query = () => {
+      if (!controller || confirmedDirectoryActivation(controller.snapshot()) !== activationId) { unified.ordinary(); return; }
       if (!unified.matches(queryFilters, activationKey)) void unified.query(queryFilters, { kind: "current_activation", activationId }, activationKey);
     };
     query();
     const timer = setInterval(query, 30000);
     return () => clearInterval(timer);
-  }, [directory.controller, activationKey, view.pendingStop, eligibleCity, unifiedAvailable, filterKey]);
+  }, [controller, directory.controller, activationId, activationKey, view.pendingStop, eligibleCity, unifiedAvailable, filterKey]);
   const [reload, setReload] = useState(0);
   // Radar toggles do not change the ordinary query or its pagination.
   const ordinaryScope = JSON.stringify({ city: cityId, areaKey, name, lookingOnly, trainerOnly });
@@ -98,6 +101,8 @@ export function PlayersDirectoryPage() {
   const cityName = cities.find(c => c.id === cityId)?.nameRu;
   return <ConsumerShell active="players" title="Игроки" hideHeading><div className="fr3 players-page" data-surface="players-directory" data-state={state}>
     <section className="players-hero"><div><span className="eyebrow">Игровое сообщество</span><h1>Игроки</h1><p>Находите партнёров по уровню и игровому настрою.</p></div></section>
+    <RadarSwitchControl />
+    <RadarStatusControls />
     {activationId && <div className="unified-actions"><Button href="/players/radar" variant="dark">Показать на карте</Button></div>}
     {directory.view.authenticationRequired && <AuthEntry returnPath="/players">Войти для участников Radar</AuthEntry>}
     {directory.view.notice && <section className="radar-notice"><span role="status"><strong>{directory.view.notice}</strong></span></section>}

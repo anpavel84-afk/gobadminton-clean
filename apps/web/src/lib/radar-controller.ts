@@ -11,6 +11,11 @@ export type RadarView = {
   phase: Phase; me: Me | null; status: RadarStatus | null; items: RadarItem[]; loading: boolean; selected: string | null; preview: RadarPreview | null; previewLoading: boolean; notice: string; now: number;
   exposureMode: RadarExposureMode | null; demoCityId: string | null; confirmedOn: boolean; pendingStop: boolean;
 };
+/** Private directory access requires current confirmation, never retained status alone. */
+export function confirmedDirectoryActivation(view: RadarView) {
+  return view.phase === "active" && view.confirmedOn && !view.pendingStop && view.status?.state === "active" && view.status.contractVersion === "players-unified-radar-v1"
+    ? view.status.activationId : null;
+}
 export type RadarDuration = "15m" | "1h" | "until_off";
 type Fetcher = typeof apiFetch;
 const CURRENT = "/v1/me/radar/activations/current";
@@ -21,6 +26,7 @@ export class RadarController {
   private intentUntil = Infinity;
   private continuationConsented = false;
   chooseDuration(duration: RadarDuration) { if (this.view.phase === "permission") { this.duration = duration; this.set({}); } }
+  private resetDurationIntent() { this.duration = "15m"; this.intentUntil = Infinity; this.continuationConsented = false; }
   private listeners = new Set<() => void>();
   private epoch = 0;
   private visible = true;
@@ -60,7 +66,7 @@ export class RadarController {
     if (!this.valid(epoch)) return;
     if (!me.ok) { this.busy = false; this.fail(me); return; }
     if (this.view.me && (this.view.me.id !== me.data.id || this.view.me.csrfToken !== me.data.csrfToken)) {
-      this.stopIntent = null; this.set({ status: null, confirmedOn: false, pendingStop: false });
+      this.resetDurationIntent(); this.stopIntent = null; this.set({ status: null, confirmedOn: false, pendingStop: false });
     }
     this.set({ me: me.data });
     const status = await this.request<RadarStatus>(CURRENT);
@@ -150,7 +156,7 @@ export class RadarController {
     const me = await this.request<Me>("/v1/me");
     if (!this.valid(epoch)) return;
     if (!me.ok || !previous || me.data.id !== previous.id || me.data.csrfToken !== previous.csrfToken) {
-      ++this.epoch; this.busy = false; this.clear(); this.stopIntent = null; this.continuationConsented = false;
+      ++this.epoch; this.busy = false; this.clear(); this.stopIntent = null; this.resetDurationIntent();
       this.set({ me: null, status: null, confirmedOn: false, pendingStop: false });
       await this.reconcile();
     }
@@ -159,7 +165,7 @@ export class RadarController {
     const current = await this.request<Me>("/v1/me");
     if (!this.valid(epoch)) return false;
     if (!current.ok || current.data.id !== me.id || current.data.csrfToken !== me.csrfToken) {
-      this.busy = false; ++this.epoch; this.clear(); this.stopIntent = null; this.continuationConsented = false;
+      this.busy = false; ++this.epoch; this.clear(); this.stopIntent = null; this.resetDurationIntent();
       this.set({ me: null, status: null, confirmedOn: false, pendingStop: false });
       await this.reconcile(); return false;
     }
@@ -352,7 +358,7 @@ export class RadarController {
     // Identity is checked before each foreground pulse; account changes never inherit Radar.
     const identity = await this.request<Me>("/v1/me");
     if (!this.valid(epoch)) return;
-    if (!identity.ok || identity.data.id !== me.id || identity.data.csrfToken !== me.csrfToken) { this.busy = false; ++this.epoch; this.continuationConsented = false; this.clear(); this.set({ me: null, status: null, confirmedOn: false, pendingStop: false }); await this.reconcile(); return; }
+    if (!identity.ok || identity.data.id !== me.id || identity.data.csrfToken !== me.csrfToken) { this.busy = false; ++this.epoch; this.resetDurationIntent(); this.clear(); this.set({ me: null, status: null, confirmedOn: false, pendingStop: false }); await this.reconcile(); return; }
     const r = await this.request<RadarActivation>(CURRENT + "/heartbeat", { method: "POST", body: JSON.stringify({ activationId: status.activationId, ...(status.contractVersion === UNIFIED_WIRE ? { contractVersion: UNIFIED_WIRE, consentPolicyVersion: status.policyVersion } : {}) }), csrfToken: me.csrfToken });
     if (!this.valid(epoch)) return;
     this.busy = false;

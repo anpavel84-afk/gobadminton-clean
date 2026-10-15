@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { RadarController } from "../src/lib/radar-controller";
+import { confirmedDirectoryActivation, RadarController } from "../src/lib/radar-controller";
 import { radarNeighborhood } from "../src/lib/radar-camera";
 import { effectiveDeadline } from "../src/lib/radar-presentation";
 import type { apiFetch } from "../src/lib/api-client";
@@ -55,6 +55,35 @@ describe("Wave A existing Radar lifecycle", () => {
     time(900); c.tick();
     await vi.waitFor(() => expect(request.mock.calls.some(([, init]) => init?.method === "DELETE")).toBe(true));
     expect(request.mock.calls.some(([path]) => path.endsWith("/renew"))).toBe(false);
+  });
+  it.each(["navigation", "reconcile", "mutation", "heartbeat"])("retires the old account duration deadline on %s identity replacement", async route => {
+    const { c, request, actor, state, time } = harness();
+    await c.reconcile(); c.permission(); c.chooseDuration("1h"); await c.activate(fix);
+    actor("replacement"); state("active");
+    if (route === "navigation") await c.checkIdentity();
+    else if (route === "reconcile") await c.reconcile();
+    else if (route === "mutation") await c.activate(fix, "location");
+    else { time(45); c.tick(); await vi.waitFor(() => expect(c.view.me?.id).toBe("replacement")); }
+    expect(c.duration).toBe("15m");
+    // B has its own longer, valid lease; A's one-hour deadline must not stop B.
+    c.view = { ...c.view, status: { ...active, expiresAt: stamp(7200), hardExpiresAt: stamp(8000), foregroundUntil: stamp(4000), locationValidUntil: stamp(5000), nextLocationUpdateAt: stamp(4500) } };
+    time(3600); c.tick();
+    await c.checkIdentity();
+    expect(request.mock.calls.some(([, init]) => init?.method === "DELETE")).toBe(false);
+    expect(request.mock.calls.some(([path]) => path.endsWith("/renew"))).toBe(false);
+  });
+  it("blocks private directory access after heartbeat error even when directory refreshes", async () => {
+    const { c, request, state, time } = harness(); state("active"); await c.reconcile();
+    c.view = { ...c.view, status: { ...active, contractVersion: "players-unified-radar-v1" } };
+    expect(confirmedDirectoryActivation(c.view)).toBe("activation");
+    request.mockImplementationOnce(async () => ({ ok: true, status: 200, data: { id: "owner", csrfToken: "owner" } }))
+      .mockImplementationOnce(async () => ({ ok: false, status: 503, data: undefined } as never));
+    time(45); c.tick(); await vi.waitFor(() => expect(c.view.phase).toBe("error"));
+    expect(c.view.status?.state).toBe("active");
+    // A stale 30-second callback and a fresh directory response cannot reopen access.
+    time(75);
+    expect(confirmedDirectoryActivation(c.snapshot())).toBeNull();
+    expect(confirmedDirectoryActivation({ ...c.view, confirmedOn: false, phase: "active" })).toBeNull();
   });
   it("recenter fits about ten km around coarse center, independent of participant pins", () => {
     const bounds = radarNeighborhood({ latitude: 55.75, longitude: 37.61 })!;
