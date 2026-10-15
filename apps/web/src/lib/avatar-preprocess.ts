@@ -142,7 +142,7 @@ export function stripAvatarMetadata(bytes: ArrayBuffer, mime: string, orientatio
   return new Blob(parts, { type: mime });
 }
 
-export async function preprocessAvatar(source: File, parentSignal?: AbortSignal): Promise<Blob> {
+export async function preprocessAvatar(source: File, parentSignal?: AbortSignal, cover?: { x: number; y: number }): Promise<Blob> {
   if (!source.size || source.size > AVATAR_SOURCE_MAX_BYTES) throw new AvatarSourceError('Фото должно быть не больше 10 МБ. Выберите фото меньшего размера.');
   const controller = new AbortController();
   const abort = () => controller.abort(parentSignal?.reason);
@@ -173,9 +173,33 @@ export async function preprocessAvatar(source: File, parentSignal?: AbortSignal)
       drawable = image; width = image.naturalWidth; height = image.naturalHeight;
     }
     if (!width || !height) throw new AvatarSourceError('Не удалось прочитать фото. Выберите другое фото.');
-    canvas = document.createElement('canvas'); canvas.width = SIZE; canvas.height = SIZE;
+    const outputWidth = cover ? 1200 : SIZE, outputHeight = cover ? 400 : SIZE;
+    canvas = document.createElement('canvas'); canvas.width = outputWidth; canvas.height = outputHeight;
     const context = canvas.getContext('2d');
     if (!context) throw new AvatarSourceError('Не удалось подготовить фото на этом устройстве.');
+    if (cover) {
+      // Orient once, then crop in visible coordinates. The intermediate stays <=2048px.
+      const scale = Math.min(1, 2048 / Math.max(width, height));
+      const w = Math.max(1, Math.round(width * scale)), h = Math.max(1, Math.round(height * scale));
+      const oriented = document.createElement('canvas');
+      const swapped = meta.orientation >= 5;
+      oriented.width = swapped ? h : w; oriented.height = swapped ? w : h;
+      try {
+        const ctx = oriented.getContext('2d');
+        if (!ctx) throw new AvatarSourceError('Не удалось подготовить обложку.');
+        const transforms: [number, number, number, number, number, number][] = [
+          [1,0,0,1,0,0], [-1,0,0,1,w,0], [-1,0,0,-1,w,h], [1,0,0,-1,0,h],
+          [0,1,1,0,0,0], [0,1,-1,0,h,0], [0,-1,-1,0,h,w], [0,-1,1,0,0,w],
+        ];
+        ctx.setTransform(...transforms[meta.orientation - 1]!);
+        ctx.drawImage(drawable, 0, 0, w, h);
+        const cropW = Math.min(oriented.width, oriented.height * 3), cropH = cropW / 3;
+        const x = Math.min(1, Math.max(0, cover.x)), y = Math.min(1, Math.max(0, cover.y));
+        context.fillStyle = '#ffffff'; context.fillRect(0, 0, outputWidth, outputHeight);
+        context.drawImage(oriented, (oriented.width - cropW) * x, (oriented.height - cropH) * y,
+          cropW, cropH, 0, 0, outputWidth, outputHeight);
+      } finally { oriented.width = 0; oriented.height = 0; }
+    } else {
     // A centered square commutes with rotation/mirroring. Map that square into
     // the oriented output coordinates rather than trusting decoder EXIF behavior.
     const side = Math.min(width, height);
@@ -186,6 +210,7 @@ export async function preprocessAvatar(source: File, parentSignal?: AbortSignal)
     ];
     if (meta.orientation !== 1) context.setTransform(...orientationTransforms[meta.orientation - 2]!);
     context.drawImage(drawable, (width - side) / 2, (height - side) / 2, side, side, 0, 0, SIZE, SIZE);
+    }
     for (const mime of ['image/webp', 'image/jpeg']) {
       for (const quality of [0.9, 0.8, 0.65, 0.5, 0.35]) {
         const result = await avatarAbortable(new Promise<Blob | null>(resolve => canvas!.toBlob(resolve, mime, quality)), signal);
@@ -194,7 +219,7 @@ export async function preprocessAvatar(source: File, parentSignal?: AbortSignal)
           const bytes = await avatarAbortable(result.arrayBuffer(), signal);
           const encoded = inspectAvatarSource(bytes, result.type);
           const stripped = stripAvatarMetadata(bytes, result.type);
-          if (encoded.width === SIZE && encoded.height === SIZE && encoded.orientation === 1 && stripped.size <= AVATAR_DERIVATIVE_MAX_BYTES) return stripped;
+          if (encoded.width === outputWidth && encoded.height === outputHeight && encoded.orientation === 1 && stripped.size <= AVATAR_DERIVATIVE_MAX_BYTES) return stripped;
           if (stripped.size > AVATAR_DERIVATIVE_MAX_BYTES) continue;
           break;
         }

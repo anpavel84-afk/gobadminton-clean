@@ -662,3 +662,16 @@ export function getGamePreferences() {
 export function patchGamePreferences(input: PatchGamePreferences, csrfToken: string) {
   return apiFetch<GamePreferences>("/v1/me/game-preferences", { method: "PATCH", body: JSON.stringify(input), csrfToken, idempotent: true });
 }
+
+export type { CoverReceipt } from "@gobadminton/contracts";
+import type { CoverReceipt } from "@gobadminton/contracts";
+export function getMyCover(signal?: AbortSignal) {
+  return avatarRequest<CoverReceipt>("/v1/me/cover", {}, AVATAR_RECONCILE_MS, signal);
+}
+export function changeMyCover(file: Blob | null, expectedVersion: number, csrfToken: string, signal?: AbortSignal) {
+  return avatarRequest<CoverReceipt>("/v1/me/cover", {
+    method: file ? "PUT" : "DELETE", csrfToken,
+    headers: { "X-Profile-Version": String(expectedVersion), "Content-Type": file ? file.type : "application/json" },
+    body: file ?? JSON.stringify({ expectedVersion } satisfies import("@gobadminton/contracts").DeleteCoverCommand),
+  }, AVATAR_NETWORK_MS, signal);
+}

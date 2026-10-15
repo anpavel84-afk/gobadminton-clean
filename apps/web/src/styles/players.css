@@ -394,3 +394,21 @@
 .radar-duration select { width:100%; min-height:44px; padding:10px; color:var(--gb-ink); background:var(--gb-white); border:1px solid var(--gb-line); border-radius:var(--gb-radius-sm); font:inherit; }
 .radar-duration p { color:var(--gb-ink-soft); font-size:13px; line-height:1.5; }
 .fr3 .radar-on--compact .radar-countdown { color:var(--gb-ink); background:var(--gb-lime-soft); border-radius:var(--gb-radius-sm); padding:8px; }
+
+/* #36 bounded media/header extension; canonical tokens, modal and form primitives. */
+.fr3 .profile-cover { aspect-ratio: 3 / 1; width: 100%; overflow: hidden; background: var(--gb-lime-soft); border-radius: var(--gb-radius-md); }
+.fr3 .profile-cover > img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.fr3 .profile-cover > .profile-cover__fallback { object-fit: contain; padding: 24px; box-sizing: border-box; }
+.fr3 .profile-cover-controls { padding: 12px 0; }
+.fr3 .profile-cover--mobile { aspect-ratio: 2 / 1; max-width: 360px; }
+@media (max-width: 680px) { .fr3 .profile-cover { aspect-ratio: 2 / 1; } }
+
+.fr3 .profile-cover--desktop { aspect-ratio: 3 / 1; }
+
+/* Header media stays inside the canonical identity panel, never a new banner. */
+.fr3 .own-profile-avatar > .profile-cover,
+.fr3 .player-profile-visual > .profile-cover { position: absolute; inset: 0; height: 100%; aspect-ratio: auto; border-radius: 0; background: var(--gb-lime); }
+.fr3 .own-profile-avatar > .profile-cover > .profile-cover__fallback { position: absolute; left: -35px; bottom: -55px; width: auto; height: auto; padding: 0; opacity: .2; }
+.fr3 .player-profile-visual > .profile-cover ~ .avatar { position: relative; z-index: 2; }
+.fr3 .player-profile-visual:has(> .profile-cover[data-cover="uploaded"]) > img { display: none; }
+.fr3 .profile-cover--desktop { aspect-ratio: 380 / 460; max-width: 380px; }

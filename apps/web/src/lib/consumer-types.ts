@@ -245,6 +245,7 @@ export type LookingIntent = {
 };
 
 export type OwnSocialProfile = {
+  cover?: { uploadedUrl: string | null };
   avatar?: PlayerAvatar;
   publicPlayerId: string | null;
   version: number;
@@ -266,6 +267,7 @@ export type OwnSocialProfile = {
 };
 
 export type PublicPlayer = {
+  cover?: { uploadedUrl: string | null };
   /** Missing on older servers means unavailable. Commands revalidate. */
   canRequestContact?: boolean;
   avatar?: PlayerAvatar;

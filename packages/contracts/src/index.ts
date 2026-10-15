@@ -24,3 +24,5 @@ export type * from "./game.generated.js";
 
 export type { FriendshipView, FriendshipReceipt, FriendshipCreateRequest, FriendshipDecisionRequest,
   FriendshipList, FriendshipStates, SocialCapabilities } from "./friendship.generated.js";
+
+export type { PlayerCover, CoverReceipt, DeleteCoverCommand } from "./profile-cover.js";

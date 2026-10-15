@@ -13960,6 +13960,263 @@
           }
         }
       }
+    },
+    "/me/cover": {
+      "put": {
+        "operationId": "replaceMyCover",
+        "tags": [
+          "Profiles"
+        ],
+        "summary": "Own cover mutation: cookie + Origin + CSRF + idempotency; shared profile version. Removal restores default header.",
+        "parameters": [
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Profile-Version",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Exact allowed consumer web Origin; validated by requireCookieMutation."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Committed cover receipt; no-store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoverReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "401": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "403": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "409": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "413": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "415": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "422": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "503": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "429": {
+            "$ref": "#/components/responses/AvatarProblem"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "description": "Raw JPEG/PNG/WebP derivative only. Browser source stays local (existing maximum 10 MiB/50 MP); user confirms 1200x400 crop, mobile preview uses centered 2:1 framing. Browser derivative maximum 524288 bytes. Server maximum 5 MiB, 16 MP, 8192px per side, single frame, actual MIME/signature and safe decode; re-encode to 1200x400 PNG without metadata (maximum 2 MiB). No URLs, paths, SVG or HTML.",
+          "content": {
+            "image/jpeg": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "image/png": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "image/webp": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
+        "description": "Existing owned-media store, session epoch/actor fence, CAS, durable replay and GC. Exact sanitized 1200x400 PNG must receive cover_image moderation approval before publication; same image moderation policy and budgets as avatar. Replacement/deletion invalidate the prior URL immediately. Hidden profiles are owner-only; other viewers require directory visibility, eligibility, active status, no restrictions and no bilateral block.",
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ]
+      },
+      "delete": {
+        "operationId": "removeMyCover",
+        "tags": [
+          "Profiles"
+        ],
+        "summary": "Own cover mutation: cookie + Origin + CSRF + idempotency; shared profile version. Removal restores default header.",
+        "parameters": [
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Profile-Version",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2147483647
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Exact allowed consumer web Origin; validated by requireCookieMutation."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Committed cover receipt; no-store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoverReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "401": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "403": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "409": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "413": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "415": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "422": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "503": {
+            "$ref": "#/components/responses/AvatarProblem"
+          }
+        },
+        "description": "Existing owned-media store, session epoch/actor fence, CAS, durable replay and GC. Exact sanitized 1200x400 PNG must receive cover_image moderation approval before publication; same image moderation policy and budgets as avatar. Replacement/deletion invalidate the prior URL immediately. Hidden profiles are owner-only; other viewers require directory visibility, eligibility, active status, no restrictions and no bilateral block. Required JSON command expectedVersion must equal X-Profile-Version; missing, extra, malformed or disagreeing fields return 400 before mutation.",
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteCoverCommand"
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "Read own cover and current shared profile version",
+        "responses": {
+          "200": {
+            "description": "Authenticated own cover, no-store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoverReceipt"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Session required"
+          }
+        },
+        "operationId": "getMyCover",
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ]
+      }
+    },
+    "/media/covers/{key}": {
+      "get": {
+        "summary": "Read current authorized cover derivative; no-store, Vary Cookie. Hidden profiles are owner-only; blocked viewers receive 404.",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}\\.png$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Re-encoded 1200x400 PNG without metadata",
+            "content": {
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unavailable or unauthorized"
+          }
+        },
+        "operationId": "getProfileCoverMedia"
+      }
     }
   },
   "components": {
@@ -15494,6 +15751,9 @@
           },
           "avatar": {
             "$ref": "#/components/schemas/PlayerAvatar"
+          },
+          "cover": {
+            "$ref": "#/components/schemas/PlayerCover"
           }
         }
       },
@@ -15562,6 +15822,9 @@
           "canRequestContact": {
             "type": "boolean",
             "description": "Current server-owned first-contact eligibility for this authenticated viewer. False for guests/self, feature-off, ineligible actors/targets, blocks or an existing direct conversation. Missing on an older server must be treated as unavailable. Read only; POST revalidates current state. No private policy or location fields are exposed."
+          },
+          "cover": {
+            "$ref": "#/components/schemas/PlayerCover"
           }
         }
       },
@@ -23611,6 +23874,53 @@
             "type": "boolean"
           }
         }
+      },
+      "PlayerCover": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "uploadedUrl"
+        ],
+        "properties": {
+          "uploadedUrl": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^/v1/media/covers/[a-f0-9]{64}\\.png$"
+          }
+        }
+      },
+      "CoverReceipt": {
+        "type": "object",
+        "required": [
+          "version",
+          "cover"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "cover": {
+            "$ref": "#/components/schemas/PlayerCover"
+          }
+        }
+      },
+      "DeleteCoverCommand": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "expectedVersion"
+        ],
+        "properties": {
+          "expectedVersion": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647
+          }
+        },
+        "description": "Required shared profile CAS version; must equal X-Profile-Version."
       }
     }
   }
