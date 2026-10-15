@@ -12,7 +12,13 @@ it("merges all pages by immutable ID with one stable upcoming lower bound", asyn
   }));
   const result = await listAllUpcomingCityGames("city");
   expect(result.ok && result.data.map(g => g.id)).toEqual(["a", "b"]);
-  expect(requests[0].searchParams.get("startsFrom")).toBe(requests[1].searchParams.get("startsFrom"));
+  expect(requests).toHaveLength(2);
+  const [first, second] = requests;
+  if (!first || !second) throw new Error("Expected both pagination requests");
+  const startsFrom = first.searchParams.get("startsFrom");
+  expect(startsFrom).not.toBeNull();
+  expect(startsFrom).not.toBe("");
+  expect(second.searchParams.get("startsFrom")).toBe(startsFrom);
 });
 it("rejects repeated cursor instead of presenting a partial count", async () => {
   vi.stubGlobal("fetch", vi.fn(async () => response({ items: [game("a")], nextCursor: "repeat" })));

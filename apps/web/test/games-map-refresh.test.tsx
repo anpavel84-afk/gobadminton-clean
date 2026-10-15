@@ -1,3 +1,5 @@
+import { Children, isValidElement } from "react";
+import type * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Game, VenueSummary } from "../src/lib/consumer-types";
@@ -7,7 +9,7 @@ import type { Game, VenueSummary } from "../src/lib/consumer-types";
 const hooks = vi.hoisted(() => ({ slots: [] as unknown[], cursor: 0,
   effects: [] as (() => void)[], cleanups: [] as (() => void)[] }));
 vi.mock("react", async importOriginal => ({
-  ...await importOriginal<typeof import("react")>(),
+  ...await importOriginal<typeof React>(),
   useState<T>(initial: T) {
     const index = hooks.cursor++;
     if (!(index in hooks.slots)) hooks.slots[index] = initial;
@@ -25,7 +27,7 @@ vi.mock("react", async importOriginal => ({
     }
   },
 }));
-vi.mock("next/link", () => ({ default: ({ href, children }: { href: string; children: import("react").ReactNode }) => <a href={href}>{children}</a> }));
+vi.mock("next/link", () => ({ default: ({ href, children }: { href: string; children: React.ReactNode }) => <a href={href}>{children}</a> }));
 vi.mock("next/dynamic", () => ({ default: () => () => <div>Map</div> }));
 vi.mock("../src/components/consumer/discovery/DiscoveryGameCard", () => ({
   DiscoveryGameCard: ({ game }: { game: Game }) => <a href={`/games/${game.id}`}>{game.title}</a>,
@@ -120,7 +122,22 @@ it.each(["city", "date", "session", "unmount"])("cancels pending pages on %s and
   expect(inFlight).toBe(change === "unmount" ? 0 : 2);
   await vi.advanceTimersByTimeAsync(40000);
   if (change === "city") expect(html("other")).not.toContain("Delayed game");
-  if (change === "date") expect(html("city", "2026-10-19")).toContain("Нет игр в выбранную дату");
+  if (change === "date") {
+    // Open the retained venue through its real list interaction before checking its schedule.
+    let selected = false;
+    const clickVenue = (node: React.ReactNode): void => {
+      if (!isValidElement<{ children?: React.ReactNode; onClick?: () => void; "aria-pressed"?: boolean }>(node)) return;
+      if (node.type === "button" && node.props["aria-pressed"] !== undefined && Children.toArray(node.props.children).join("") === "Venue · 0") {
+        node.props.onClick?.(); selected = true;
+      }
+      Children.forEach(node.props.children, clickVenue);
+    };
+    clickVenue(render("city", "2026-10-19"));
+    expect(selected).toBe(true);
+    const dated = html("city", "2026-10-19");
+    expect(dated).toContain("Нет игр в выбранную дату");
+    expect(dated).not.toContain("Delayed game");
+  }
   unmount();
   const count = requests.length;
   await vi.advanceTimersByTimeAsync(90000);
