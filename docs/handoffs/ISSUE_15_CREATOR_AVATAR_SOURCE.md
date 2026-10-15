@@ -3,6 +3,51 @@
 From: source author. To: independent SOURCE QA / authorized PM. Date: 2026-10-15.
 Status: WORKING_DRAFT / UNVERIFIED; source only, no acceptance or deployment claim.
 
+## Bounded repair after independent QA — 2026-10-15
+
+Status: BLOCKED on canonical visual source; prior independent SOURCE QA FAIL remains open.
+Repair base: `dc78aae34cd0aceb7459aff993dbf5ec7d375c74`, branch `automation/issue-15`, clean at entry.
+Exact reviewed source: https://github.com/anpavel84-afk/gobadminton-clean/tree/dc78aae34cd0aceb7459aff993dbf5ec7d375c74
+
+The supplied independent QA finding rejects the added organizer row in
+`apps/web/src/components/consumer/games/GameDetailComposition.tsx` and changed detail
+composition because neither is mapped to the corresponding frozen Make screen.
+The older STYLE_GUIDE_PARITY paragraph below is an implementation description only;
+its claim of reused personal-card/detail compositions is not canonical evidence.
+It does not resolve this finding. No parity PASS, applicable STYLE_GUIDE_GAP, or
+OWNER_VISUAL_OVERRIDE is established.
+
+Canonical-source recovery attempted in this repair: repository file discovery and
+reading the binding Owner decision and
+`docs/handoffs/CLEAN_PM_V002_VERIFICATION_ADMISSION_20261013_V001.md`.
+The latter names `/opt/gobadminton-clean-qa/style-guide/manifest.json`; reading that
+exact path and listing its parent both returned `No such file or directory`.
+The referenced `docs/operations/FRONTEND_STYLE_GUIDE_FIRST_V001.md` is also absent.
+No corresponding frozen Make screen source was found in the checkout. The published
+Figma page was not inspected; no callable browser is available in this source session.
+Source unavailability does not establish that the Style Guide lacks a pattern and
+therefore is not a STYLE_GUIDE_GAP. Local frontend code is not presentation authority.
+
+Only this handoff is changed in the repair. Application code and existing tests are
+retained pending canonical mapping; inventing a replacement layout or removing the
+required creator photo from Created/My Games would not resolve the assignment.
+Actually executed: read-only repository state, rules, architecture, source and source-location
+inspection; this documentation edit. No tests, builds, browser runs or self-QA executed.
+No commit, push, git metadata, network deployment, service or runtime changes made.
+Current remote DEV revision and train ordering remain unobserved.
+
+Next bounded action for authorized PM/source author: supply a readable frozen Make
+snapshot matching the Owner-pinned source identities (or an explicit applicable Owner
+visual override), inspect the exact My Games/Created/detail/manager compositions and
+GameCard/Avatar kit specimens, then record file/line mapping and any genuine bounded
+gap before changing the layout. Independent QA must subsequently evaluate the exact
+new published SHA, followed by the separate CI/DEV/product acceptance gates.
+Rollback of this repair is limited to reverting this handoff edit; no runtime rollback
+is needed. Publication remains with the authorized publisher; no new SHA/permalink
+exists because this assignment forbids commit/push.
+
+The following sections record the earlier implementation, not acceptance of this repair.
+
 Exact base: `ca6eca0bdb5f70a9b1f61106fe0f6708db1a295d`, branch `automation/issue-15`, initially clean worktree.
 Base: https://github.com/anpavel84-afk/gobadminton-clean/tree/ca6eca0bdb5f70a9b1f61106fe0f6708db1a295d
 Assignment: https://github.com/anpavel84-afk/gobadminton-clean/issues/15#issuecomment-6144204953
