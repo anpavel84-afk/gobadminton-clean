@@ -400,10 +400,8 @@
 .fr3 .profile-cover > img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .fr3 .profile-cover > .profile-cover__fallback { object-fit: contain; padding: 24px; box-sizing: border-box; }
 .fr3 .profile-cover-controls { padding: 12px 0; }
-.fr3 .profile-cover--mobile { aspect-ratio: 2 / 1; max-width: 360px; }
 @media (max-width: 680px) { .fr3 .profile-cover { aspect-ratio: 2 / 1; } }
 
-.fr3 .profile-cover--desktop { aspect-ratio: 3 / 1; }
 
 /* Header media stays inside the canonical identity panel, never a new banner. */
 .fr3 .own-profile-avatar > .profile-cover,
@@ -411,4 +409,6 @@
 .fr3 .own-profile-avatar > .profile-cover > .profile-cover__fallback { position: absolute; left: -35px; bottom: -55px; width: auto; height: auto; padding: 0; opacity: .2; }
 .fr3 .player-profile-visual > .profile-cover ~ .avatar { position: relative; z-index: 2; }
 .fr3 .player-profile-visual:has(> .profile-cover[data-cover="uploaded"]) > img { display: none; }
-.fr3 .profile-cover--desktop { aspect-ratio: 380 / 460; max-width: 380px; }
+
+/* Ratio comes from the real responsive header, not a separate preview recipe. */
+.fr3 .profile-cover--preview { max-width: 100%; }

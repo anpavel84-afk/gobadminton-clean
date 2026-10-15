@@ -8,15 +8,15 @@ const origin=process.env.P1_ORIGIN || 'http://127.0.0.1:18984';
 assert.equal(new URL(origin).hostname,'127.0.0.1','Synthetic loopback only');
 const browser=await chromium.launch({headless:true,args:['--no-sandbox']});
 try {
- for(const width of [390,1440]) {
+ for(const width of [320,360,390,1440]) {
   const context=await browser.newContext({viewport:{width,height:900}});
-  let version=1, uploadedUrl=null, writes=0, failNext=false, broken=false;
+  let version=1, uploadedUrl=null, writes=0, failNext=false, broken=false, savedBytes=null;
   const cover=()=>({uploadedUrl});
   const profile=()=>({publicPlayerId:'00000036-1111-4111-8111-111111111111',version,displayName:'Synthetic cover owner',cityId:null,areaKey:null,level:null,bio:null,directoryVisible:false,contactPolicy:'closed',consentPolicyVersion:null,optedInAt:null,radarConsented:false,radarConsentPolicyVersion:null,radarConsentedAt:null,socialEligible:true,trainer:false,lookingForGame:null,cover:cover()});
   await context.route('**/*',async route=>{
    const request=route.request(),url=new URL(request.url()),p=url.pathname;
    if(url.origin!==origin)return route.abort();
-   if(p.startsWith('/v1/media/covers/'))return broken?route.abort():route.fulfill({contentType:'image/png',body:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j5S8AAAAASUVORK5CYII=','base64')});
+   if(p.startsWith('/v1/media/covers/'))return broken?route.abort():route.fulfill({contentType:'image/png',body:savedBytes ?? Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j5S8AAAAASUVORK5CYII=','base64')});
    if(!p.startsWith('/v1/'))return route.continue();
    const reply=(json,status=200)=>route.fulfill({json,status});
    if(p==='/v1/me')return reply({id:'synthetic-owner',displayName:'Synthetic cover owner',csrfToken:'fixture',locale:'ru',linkedProviders:[]});
@@ -28,6 +28,7 @@ try {
     if(request.method()==='PUT') {
      const body=request.postDataBuffer();assert.ok(body?.length && body.length<=524288);
      assert.match(request.headers()['content-type'],/^image\/(jpeg|webp)$/);
+     savedBytes=body;
      uploadedUrl='/v1/media/covers/'+(writes%2?'a':'b').repeat(64)+'.png';
     } else {assert.equal(request.method(),'DELETE');assert.match(request.headers()['content-type'],/^application\/json/);assert.deepEqual(request.postDataJSON(),{expectedVersion:version});uploadedUrl=null;}
     version++;return reply({version,cover:cover()});
@@ -41,16 +42,56 @@ try {
   const page=await context.newPage();
   await page.goto(origin+'/profile');await page.getByRole('button',{name:'Изменить обложку',exact:true}).waitFor();
   // Build a real local source with a different size from the transmitted derivative.
-  const data=await page.evaluate(()=>{const canvas=document.createElement('canvas');canvas.width=900;canvas.height=600;const ctx=canvas.getContext('2d');ctx.fillStyle='green';ctx.fillRect(0,0,900,600);return canvas.toDataURL('image/png').split(',')[1];});
+  const data=await page.evaluate(()=>{const canvas=document.createElement('canvas');canvas.width=900;canvas.height=600;const ctx=canvas.getContext('2d');for(let y=0;y<600;y+=20)for(let x=0;x<900;x+=20){ctx.fillStyle=`rgb(${x%255},${y%255},${(x+y)%255})`;ctx.fillRect(x,y,20,20);}return canvas.toDataURL('image/png').split(',')[1];});
   const choose=async()=>{
    await page.getByRole('button',{name:'Изменить обложку',exact:true}).click();
    await page.getByLabel('Выбрать изображение обложки',{exact:true}).setInputFiles({name:'synthetic.png',mimeType:'image/png',buffer:Buffer.from(data,'base64')});
-   await page.getByAltText('Выбранный фрагмент на компьютере').waitFor();
+   await page.getByAltText('Выбранный фрагмент в шапке профиля').waitFor();
   };
   await choose();assert.equal(writes,0,'selection and preview do not upload');
+  // Compare actual object-fit source rectangles and rasterized visible pixels,
+  // not CSS declarations. Save/reload must show the same asymmetric landmarks.
+  const cropPixels=async selector=>page.locator(selector).evaluate(async element=>{
+   const img=element.querySelector('img');await img.decode();
+   const {width:w,height:h}=element.getBoundingClientRect();
+   const css=getComputedStyle(img);
+   if(css.objectFit!=='cover'||css.objectPosition!=='50% 50%')throw new Error('Unexpected cover fit');
+   const scale=Math.max(w/img.naturalWidth,h/img.naturalHeight);
+   const sw=w/scale,sh=h/scale,sx=(img.naturalWidth-sw)/2,sy=(img.naturalHeight-sh)/2;
+   const canvas=document.createElement('canvas');canvas.width=96;canvas.height=96;
+   const ctx=canvas.getContext('2d');ctx.drawImage(img,sx,sy,sw,sh,0,0,96,96);
+   return {ratio:w/h,rect:[sx,sy,sw,sh],pixels:Array.from(ctx.getImageData(0,0,96,96).data)};
+  });
+  // Resize while the confirmation dialog stays open: observer must follow layout.
+  await page.setViewportSize({width:width===1440?1000:width+20,height:900});
+  await page.waitForFunction(()=>{
+   const a=document.querySelector('.own-profile-avatar').getBoundingClientRect();
+   const b=document.querySelector('.profile-cover--preview').getBoundingClientRect();
+   return Math.abs(a.width/a.height-b.width/b.height)<0.002;
+  });
+  await page.setViewportSize({width,height:900});
+  await page.waitForFunction(()=>{
+   const a=document.querySelector('.own-profile-avatar').getBoundingClientRect();
+   const b=document.querySelector('.profile-cover--preview').getBoundingClientRect();
+   return Math.abs(a.width/a.height-b.width/b.height)<0.002;
+  });
+  const previewCrop=await cropPixels('.profile-cover--preview');
+  const headerBox=await page.locator('.own-profile-avatar').boundingBox();
+  assert.ok(Math.abs(previewCrop.ratio-headerBox.width/headerBox.height)<0.002,`${width}: preview follows real panel`);
+
   await page.getByLabel('По вертикали',{exact:true}).focus();await page.keyboard.press('ArrowRight');
-  await page.getByAltText('Выбранный фрагмент на компьютере').waitFor();
+  await page.getByAltText('Выбранный фрагмент в шапке профиля').waitFor();
+  await page.getByRole('button',{name:'Сохранить фрагмент',exact:true}).waitFor({state:'visible'});
+  await page.waitForFunction(()=>!document.querySelector('.profile-cover-controls').getAttribute('aria-busy') || document.querySelector('.profile-cover-controls').getAttribute('aria-busy')==='false');
+  const finalPreview=await cropPixels('.profile-cover--preview');
   await page.getByRole('button',{name:'Сохранить фрагмент',exact:true}).click();await page.getByText('Обложка сохранена.',{exact:true}).waitFor();
+  const confirmedCrop=await cropPixels('.own-profile-avatar > .profile-cover');
+  // The keyboard move above changes preprocessing: capture the final preview before save below.
+  assert.ok(Math.abs(confirmedCrop.ratio-previewCrop.ratio)<0.002);
+  assert.deepEqual(confirmedCrop.rect.map(Math.round),finalPreview.rect.map(Math.round),`${width}: identical visible source bounds`);
+  assert.equal(confirmedCrop.pixels.length,finalPreview.pixels.length);
+  const meanError=confirmedCrop.pixels.reduce((sum,value,i)=>sum+Math.abs(value-finalPreview.pixels[i]),0)/confirmedCrop.pixels.length;
+  assert.ok(meanError<1,`${width}: visible landmark pixels differ by ${meanError}`);
   assert.equal(writes,1);const first=uploadedUrl;
   await choose();await page.getByRole('button',{name:'Сохранить фрагмент',exact:true}).click();await page.getByText('Обложка сохранена.',{exact:true}).waitFor();assert.notEqual(uploadedUrl,first);
   broken=true;await page.reload();await page.locator('.own-profile-avatar > .profile-cover[data-cover="default"]').waitFor();broken=false;

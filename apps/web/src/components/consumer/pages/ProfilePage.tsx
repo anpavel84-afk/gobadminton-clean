@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { deactivateTrainerProfile, deleteMyLookingForGame, getMe, getMySocialProfile, getTrainerProfile, listCities, logout, patchMySocialProfile, putMyLookingForGame, putMySocialProfileVisibility } from "../../../lib/api-client";
 import type { ApiResult } from "../../../lib/api-client";
@@ -18,6 +18,7 @@ import { OwnUpcomingGames } from "../players/OwnUpcomingGames";
 
 export function ProfilePage() {
   const router = useRouter();
+  const coverFrame = useRef<HTMLDivElement>(null);
   const [me, setMe] = useState<Me | null>(null);
   const [social, setSocial] = useState<OwnSocialProfile | null>(null);
   const [trainer, setTrainer] = useState<TrainerProfile | null>(null);
@@ -160,8 +161,8 @@ export function ProfilePage() {
     {state === "error" && <ProfileState title="Не удалось загрузить профиль" state="error" retry={() => setReload(n => n + 1)}>Попробуйте снова.</ProfileState>}
     {state === "auth" && <section className="own-profile-hero"><div className="own-profile-avatar"><Avatar name="?" /><img src="/canonical/ce252.svg" alt="" /></div><div className="own-profile-intro"><span className="eyebrow">Личный профиль</span><h1>Ваша игра начинается здесь</h1><p>Войдите, чтобы заполнить профиль и находить партнёров для игры.</p><AuthEntry returnPath="/profile" /></div></section>}
     {state === "ready" && me && <>
-      <section className="own-profile-hero" data-surface="op-01"><div className="own-profile-avatar"><ProfileCover url={social?.cover?.uploadedUrl} /><Avatar avatar={social?.avatar} name={social?.displayName || me.displayName} /></div><div className="own-profile-intro"><span className="eyebrow">Личный профиль</span><h1>{social?.displayName || me.displayName}</h1><strong>{[formatSocialLevel(social?.level), city, social?.areaKey].filter(Boolean).join(" · ")}</strong>{social?.bio && <p>{social.bio}</p>}<Button variant="outline" disabled={!social || socialUnavailable || locked} onClick={edit}>Изменить профиль</Button></div></section>
-      {social && !socialUnavailable && <CoverEditor onRefresh={() => setReload(n => n + 1)} cover={social.cover} version={social.version} csrfToken={me.csrfToken} disabled={locked} onBusy={setBusy} onChange={value => setSocial(current => current ? { ...current, ...value } : current)} />}
+      <section className="own-profile-hero" data-surface="op-01"><div ref={coverFrame} className="own-profile-avatar"><ProfileCover url={social?.cover?.uploadedUrl} /><Avatar avatar={social?.avatar} name={social?.displayName || me.displayName} /></div><div className="own-profile-intro"><span className="eyebrow">Личный профиль</span><h1>{social?.displayName || me.displayName}</h1><strong>{[formatSocialLevel(social?.level), city, social?.areaKey].filter(Boolean).join(" · ")}</strong>{social?.bio && <p>{social.bio}</p>}<Button variant="outline" disabled={!social || socialUnavailable || locked} onClick={edit}>Изменить профиль</Button></div></section>
+      {social && !socialUnavailable && <CoverEditor frameRef={coverFrame} onRefresh={() => setReload(n => n + 1)} cover={social.cover} version={social.version} csrfToken={me.csrfToken} disabled={locked} onBusy={setBusy} onChange={value => setSocial(current => current ? { ...current, ...value } : current)} />}
       <div className="own-profile-layout"><div className="own-profile-main">
         {socialUnavailable ? <ProfileState title="Игровой профиль сейчас недоступен">Попробуйте вернуться позже. Настройки аккаунта доступны ниже.</ProfileState> : social && <>
           <section className="profile-section" data-surface="op-02"><SectionHeader title="Игровой профиль" eyebrow="Публичные данные" action={<button disabled={locked} onClick={edit}>Изменить</button>} /><div className="profile-info-list"><div><span>Уровень</span><strong>{formatSocialLevel(social.level)}</strong></div><div><span>Город</span><strong>{city || "Не указан"}</strong></div><div><span>Район / метро</span><strong>{social.areaKey || "Не указан"}</strong></div><div className="profile-info-row--wide"><span>Короткое описание</span><strong>{social.bio || "Не заполнено"}</strong></div></div></section>

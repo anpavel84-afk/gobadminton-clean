@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import { changeMyCover, getMyCover, type CoverReceipt } from "../../../lib/api-client";
 import { AvatarSourceError, preprocessAvatar } from "../../../lib/avatar-preprocess";
 import { Button } from "../Button";
@@ -13,10 +13,26 @@ export function ProfileCover({ url }: { url?: string | null }) {
   </div>;
 }
 
-export function CoverEditor({ cover, version, csrfToken, disabled, onBusy, onChange, onRefresh }: {
+export function CoverEditor({ frameRef, cover, version, csrfToken, disabled, onBusy, onChange, onRefresh }: {
+  frameRef?: RefObject<HTMLDivElement | null>;
   cover?: CoverReceipt["cover"]; version: number; csrfToken: string; disabled: boolean;
   onBusy: (value: boolean) => void; onChange: (value: CoverReceipt) => void; onRefresh: () => void;
 }) {
+  const [frameRatio, setFrameRatio] = useState<number | null>(null);
+  useEffect(() => {
+    const frame = frameRef?.current;
+    if (!frame) return;
+    // Observe the actual canonical panel, including content-driven desktop height.
+    // The dialog can scale it down, but must preserve its object-fit crop.
+    const measure = () => {
+      const { width, height } = frame.getBoundingClientRect();
+      if (width > 0 && height > 0) setFrameRatio(width / height);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(frame);
+    return () => observer.disconnect();
+  }, [frameRef]);
   const input = useRef<HTMLInputElement>(null);
   const [open, setOpen] = useState(false);
   const [file, setFile] = useState<File | null>(null);
@@ -94,13 +110,13 @@ export function CoverEditor({ cover, version, csrfToken, disabled, onBusy, onCha
         <label className="profile-field">По вертикали<input type="range" min="0" max="1" step="0.01" value={crop.y} disabled={saving} onChange={e => setCrop({ ...crop, y: Number(e.target.value) })} /></label>
       </>}
       {preparing && <p role="status">Готовим фрагмент…</p>}
-      {preview && <div aria-label="Предпросмотр обложки"><p>Компьютер: фрагмент в панели профиля, края обрезаются</p><div className="profile-cover profile-cover--desktop"><img src={preview.url} alt="Выбранный фрагмент на компьютере" /></div><p>Телефон: края обрезаются</p><div className="profile-cover profile-cover--mobile"><img src={preview.url} alt="Выбранный фрагмент на телефоне" /></div></div>}
+      {preview && frameRatio && <div aria-label="Предпросмотр обложки"><p>Фрагмент в шапке профиля при текущем размере экрана</p><div className="profile-cover profile-cover--preview" style={{ aspectRatio: frameRatio }}><img src={preview.url} alt="Выбранный фрагмент в шапке профиля" /></div></div>}
       {!file && <ProfileCover url={cover?.uploadedUrl} />}
       {saving && <p role="status">Сохраняем обложку…</p>}
       {error && <p role="alert">{error}</p>}
       <div className="profile-form-actions">
         {uncertain ? <Button disabled={saving} onClick={() => void reconcile()}>Обновить данные</Button> : <>
-          <Button disabled={disabled || saving || preparing || !preview} onClick={() => void save(preview!.blob)}>Сохранить фрагмент</Button>
+          <Button disabled={disabled || saving || preparing || !preview || !frameRatio} onClick={() => void save(preview!.blob)}>Сохранить фрагмент</Button>
           {cover?.uploadedUrl && <Button variant="ghost" disabled={disabled || saving} onClick={() => void save(null)}>Удалить обложку</Button>}
         </>}
         <Button variant="outline" disabled={saving} onClick={() => { setOpen(false); setFile(null); setPreview(null); }}>Отмена</Button>
