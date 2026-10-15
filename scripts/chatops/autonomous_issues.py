@@ -594,7 +594,17 @@ class Bridge:
         try:
             result = self.model('Independent QA in a NEW session; never implement fixes. Review EXACT '
                                 + active['head'] + ' against base ' + active['base']
-                                + '. Inspect diff, acceptance, allowed paths and project rules. '
+                                + '. This is SOURCE QA before CI and DEV. Inspect the diff against '
+                                'the immutable task goal, allowed paths, project rules and source-level '
+                                'acceptance; run feasible source tests. Acceptance may also contain '
+                                'future lifecycle clauses: defer those to their later gates. '
+                                'Source QA must not require GitHub authentication, a CI run, release '
+                                'evidence, deployed acceptance, or any later-stage action. Missing '
+                                'later-stage evidence is not a source defect. Report real source '
+                                'defects, scope/rule violations and failing feasible source tests as '
+                                'FAIL; do not waive source requirements because acceptance mixes stages. '
+                                'PASS is a source-only verdict, never lifecycle acceptance. Later CI '
+                                'and server ACCEPTED gates remain mandatory and unchanged. '
                                 'Return ONLY JSON with exact keys verdict (PASS or FAIL), findings '
                                 '(array of strings; empty for PASS), reviewed_sha (exact SHA). TASK: '
                                 + json.dumps(active['task'], ensure_ascii=False), qa=True)

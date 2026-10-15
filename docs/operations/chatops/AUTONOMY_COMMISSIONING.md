@@ -260,3 +260,33 @@ unpublished at Owner request. Next bounded action: PM runs the updated exact pro
 directly on the authorized host and publishes source/evidence for independent
 review. Existing CI/root-helper/release gates remain. Rollback only these bounded
 edits, preserving all earlier changes.
+# Issue #29 source QA stage boundary · 2026-10-15
+
+WORKING DRAFT — NOT APPROVED — NOT CANONICAL
+
+From: source author. To: PM / independent reviewer. Exact base:
+`302177aaa9a508a705520fe7bc52b890fb061d64`. Bounded Owner assignment:
+review prompt construction, focused offline tests and this note only.
+
+PM-supplied runtime facts: actual CanaryA exact-file QA of `c497148` returned
+FAIL solely because acceptance also required later CI/DEV. Author attempt 2
+produced zero diff and correctly BLOCKED. Worker is stopped and claim preserved.
+This source correction does not overturn that FAIL or claim a successful rerun.
+Canary files, live state, claims and QA evidence are untouched.
+
+Review now explicitly runs SOURCE QA before CI/DEV: immutable goal, source-level
+acceptance, allowed paths, project rules and feasible source tests. Mixed future
+lifecycle clauses cannot require GitHub authentication, CI/release/deployment
+evidence or later actions at this stage. Real source defects still fail; exact
+`reviewed_sha` JSON validation is unchanged. PASS means source-only verdict.
+Later CI and server ACCEPTED gates are unchanged and remain required.
+
+Author validation: 23 offline autonomy tests, Foundation static check and eight
+Foundation policy tests passed. Regression tests capture the actual constructed
+prompt with mixed acceptance, preserve source FAIL findings and reject a wrong
+reviewed SHA; mocked results do not prove actual reviewer behavior. No nested
+models, commit, push, install or deploy. Unpublished candidate per Owner scope;
+PM must publish the durable revision, run independent exactSHA review and actual
+reviewer regression outside this sandbox. No lifecycle acceptance is claimed.
+Rollback: revert only this bounded three-file diff to the exact base; no runtime
+effects to roll back. Historical commissioning entries below remain historical.
