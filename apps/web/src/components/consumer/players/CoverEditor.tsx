@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef, useState, type RefObject } from "react";
-import { changeMyCover, getMyCover, type CoverReceipt } from "../../../lib/api-client";
+import { changeMyCover, reconcileMyCover, type CoverReceipt } from "../../../lib/api-client";
+import type { OwnSocialProfile } from "../../../lib/consumer-types";
 import { AvatarSourceError, preprocessAvatar } from "../../../lib/avatar-preprocess";
 import { Button } from "../Button";
 import { ProfileDialog } from "./ProfileComposition";
@@ -13,10 +14,11 @@ export function ProfileCover({ url }: { url?: string | null }) {
   </div>;
 }
 
-export function CoverEditor({ frameRef, cover, version, csrfToken, disabled, onBusy, onChange, onUnauthorized }: {
+export function CoverEditor({ frameRef, cover, version, csrfToken, disabled, onBusy, onChange, onReconcile, onUnauthorized }: {
   frameRef?: RefObject<HTMLDivElement | null>;
   cover?: CoverReceipt["cover"]; version: number; csrfToken: string; disabled: boolean;
   onBusy: (value: boolean) => void; onChange: (value: CoverReceipt) => void; onUnauthorized: () => void;
+  onReconcile: (value: OwnSocialProfile) => void;
 }) {
   const [frameRatio, setFrameRatio] = useState<number | null>(null);
   useEffect(() => {
@@ -46,8 +48,8 @@ export function CoverEditor({ frameRef, cover, version, csrfToken, disabled, onB
   const [uncertain, setUncertain] = useState(false);
   const operation = useRef<AbortController | null>(null);
   const mounted = useRef(false);
-  const callbacks = useRef({ onBusy, onChange, onUnauthorized });
-  useEffect(() => { callbacks.current = { onBusy, onChange, onUnauthorized }; }, [onBusy, onChange, onUnauthorized]);
+  const callbacks = useRef({ onBusy, onChange, onReconcile, onUnauthorized });
+  useEffect(() => { callbacks.current = { onBusy, onChange, onReconcile, onUnauthorized }; }, [onBusy, onChange, onReconcile, onUnauthorized]);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; operation.current?.abort(); callbacks.current.onBusy(false); }; }, []);
   useEffect(() => { operation.current?.abort(); }, [version, csrfToken]);
   useEffect(() => {
@@ -72,13 +74,13 @@ export function CoverEditor({ frameRef, cover, version, csrfToken, disabled, onB
     const controller = new AbortController(); operation.current = controller;
     setSaving(true); setReconciling(true); setError(""); callbacks.current.onBusy(true);
     try {
-      const result = await getMyCover(controller.signal);
+      const result = await reconcileMyCover(controller.signal);
       if (!mounted.current || controller.signal.aborted) return;
       if (result.ok && result.data.version >= version) {
-        // The ambiguous write may have committed. Adopt its authoritative CAS
-        // version without remounting the editor or discarding the local crop.
+        // Another tab may have changed unrelated fields. Adopt the complete
+        // snapshot and form values with its CAS version, retaining this crop.
         operation.current = null;
-        callbacks.current.onChange(result.data);
+        callbacks.current.onReconcile(result.data);
         setUncertain(false);
       } else if (!result.ok && result.status === 401) callbacks.current.onUnauthorized();
       else setError("Не удалось проверить результат. Повторите обновление данных.");

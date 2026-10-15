@@ -11,9 +11,11 @@ try {
  for(const width of [320,360,390,1440]) {
   const context=await browser.newContext({viewport:{width,height:900}});
   let version=1, uploadedUrl=null, writes=0, failNext=null, broken=false, savedBytes=null;
-  let coverReads=0, profileReads=0, readFailure=0, readGate=null, readVersion=null;
+  let coverReads=0, profileReads=0, profileWrites=0, readFailure=0, readGate=null, readVersion=null;
+  const cityA='00000036-2222-4222-8222-111111111111', cityB='00000036-2222-4222-8222-222222222222';
+  let fields={displayName:'Synthetic owner',bio:'Initial bio',cityId:cityA,areaKey:'Old area',directoryVisible:false,contactPolicy:'closed'};
   const cover=()=>({uploadedUrl});
-  const profile=()=>({publicPlayerId:'00000036-1111-4111-8111-111111111111',version,displayName:'Synthetic cover owner',cityId:null,areaKey:null,level:null,bio:null,directoryVisible:false,contactPolicy:'closed',consentPolicyVersion:null,optedInAt:null,radarConsented:false,radarConsentPolicyVersion:null,radarConsentedAt:null,socialEligible:true,trainer:false,lookingForGame:null,cover:cover()});
+  const profile=()=>({publicPlayerId:'00000036-1111-4111-8111-111111111111',version,...fields,level:null,consentPolicyVersion:null,optedInAt:null,radarConsented:false,radarConsentPolicyVersion:null,radarConsentedAt:null,socialEligible:true,trainer:false,lookingForGame:null,cover:cover()});
   await context.route('**/*',async route=>{
    const request=route.request(),url=new URL(request.url()),p=url.pathname;
    if(url.origin!==origin)return route.abort();
@@ -21,17 +23,35 @@ try {
    if(!p.startsWith('/v1/'))return route.continue();
    const reply=(json,status=200)=>route.fulfill({json,status});
    if(p==='/v1/me')return reply({id:'synthetic-owner',displayName:'Synthetic cover owner',csrfToken:'fixture',locale:'ru',linkedProviders:[]});
-   if(p==='/v1/me/social-profile'){profileReads++;return reply(profile());}
+   if(p==='/v1/me/social-profile'){
+    if(request.method()==='PATCH'){
+     const input=request.postDataJSON();
+     assert.equal(request.headers()['x-csrf-token'],'fixture');assert.ok(request.headers()['idempotency-key']);
+     assert.equal(input.expectedVersion,version,'subsequent profile save uses coherent CAS');
+     assert.equal(input.displayName,fields.displayName,'must preserve the other tab name');
+     assert.equal(input.cityId,fields.cityId);assert.equal(input.areaKey,fields.areaKey);
+     assert.equal(input.bio,fields.bio+' + local','local bio edit starts from the authoritative bio');
+     fields={...fields,bio:input.bio};version++;profileWrites++;
+     return reply(profile());
+    }
+    assert.equal(request.method(),'GET');profileReads++;
+    if(readGate)await readGate;
+    if(readFailure){const status=readFailure;readFailure=0;return reply({title:'Synthetic read failure'},status);}
+    const snapshot=profile();snapshot.version=readVersion ?? version;readVersion=null;
+    return reply(snapshot);
+   }
    if(p==='/v1/me/cover') {
     if(request.method()==='GET'){
      coverReads++;
-     if(readGate)await readGate;
-     if(readFailure){const status=readFailure;readFailure=0;return reply({title:'Synthetic read failure'},status);}
-     const receiptVersion=readVersion ?? version;readVersion=null;
-     return reply({version:receiptVersion,cover:cover()});
+     return reply({version,cover:cover()});
     }
-    writes++;assert.equal(request.headers()['x-csrf-token'],'fixture');assert.equal(Number(request.headers()['x-profile-version']),version);assert.ok(request.headers()['idempotency-key']);
+    writes++;assert.equal(request.headers()['x-csrf-token'],'fixture');assert.ok(request.headers()['idempotency-key']);
     const failure=failNext;failNext=null;
+    if(failure?.startsWith('conflict')){
+     assert.equal(Number(request.headers()['x-profile-version']),version-1,'tab A still has the pre-tab-B version');
+     return reply({title:'Synthetic concurrent non-cover update'},409);
+    }
+    assert.equal(Number(request.headers()['x-profile-version']),version);
     if(failure==='offline')return route.abort('internetdisconnected');
     if(request.method()==='PUT') {
      const body=request.postDataBuffer();assert.ok(body?.length && body.length<=524288);
@@ -43,7 +63,7 @@ try {
     if(failure==='committed')return route.abort('connectionreset');
     return reply({version,cover:cover()});
    }
-   if(p==='/v1/cities')return reply({items:[]});
+   if(p==='/v1/cities')return reply({items:[{id:cityA,nameRu:'Москва'},{id:cityB,nameRu:'Казань'}]});
    if(p==='/v1/me/trainer-profile')return reply({},404);
    if(p==='/v1/me/participations'||p==='/v1/me/games')return reply({items:[],nextCursor:null});
    if(p==='/v1/me/inbox/counts')return reply({pendingRequestCount:0,pendingInvitationCount:0,dmUnread:0,gameChatUnread:0});
@@ -71,6 +91,11 @@ try {
    const canvas=document.createElement('canvas');canvas.width=96;canvas.height=96;
    const ctx=canvas.getContext('2d');ctx.drawImage(img,sx,sy,sw,sh,0,0,96,96);
    return {ratio:w/h,rect:[sx,sy,sw,sh],pixels:Array.from(ctx.getImageData(0,0,96,96).data)};
+  });
+  const draftPixels=async()=>page.getByAltText('Выбранный фрагмент в шапке профиля').evaluate(async img=>{
+   await img.decode();const canvas=document.createElement('canvas');canvas.width=96;canvas.height=32;
+   const ctx=canvas.getContext('2d');ctx.drawImage(img,0,0,96,32);
+   return Array.from(ctx.getImageData(0,0,96,32).data);
   });
   // Resize while the confirmation dialog stays open: observer must follow layout.
   await page.setViewportSize({width:width===1440?1000:width+20,height:900});
@@ -106,9 +131,9 @@ try {
   await choose();await page.getByRole('button',{name:'Сохранить фрагмент',exact:true}).click();await page.getByText('Обложка сохранена.',{exact:true}).waitFor();assert.notEqual(uploadedUrl,first);
   broken=true;await page.reload();await page.locator('.own-profile-avatar > .profile-cover[data-cover="default"]').waitFor();broken=false;
   await page.getByRole('button',{name:'Изменить обложку',exact:true}).click();await page.getByRole('button',{name:'Удалить обложку',exact:true}).click();await page.getByText('Обложка удалена. Используется стандартное оформление.',{exact:true}).waitFor();assert.equal(uploadedUrl,null);
-  // Exercise the actual client GET and mounted ProfilePage, including an
-  // ambiguous request that DID commit. Never infer failure from a lost reply.
-  for(const failure of ['offline','committed']){
+  // Tab B changes NON-cover fields while tab A retains its crop and old snapshot.
+  // Cover-only receipts cannot authorize a later profile edit with stale fields.
+  for(const failure of ['offline','committed','conflict-retry','conflict-cancel']){
    await choose();
    await page.getByLabel('По горизонтали',{exact:true}).press('Home');
    await page.getByLabel('По горизонтали',{exact:true}).press('ArrowRight');
@@ -117,23 +142,33 @@ try {
    const save=page.getByRole('button',{name:'Сохранить фрагмент',exact:true});
    await page.waitForFunction(()=>document.querySelector('.profile-cover-controls').getAttribute('aria-busy')==='false');
    const draft=await page.getByAltText('Выбранный фрагмент в шапке профиля').getAttribute('src');
+   const draftBitmap=await draftPixels();
    const pixels=await cropPixels('.profile-cover--preview');
    const readsBefore=profileReads, coverReadsBefore=coverReads, versionBefore=version;
+   const otherTabEdit=()=>{
+    fields={displayName:'Owner '+failure,bio:'Bio '+failure,cityId:fields.cityId===cityA?cityB:cityA,areaKey:'Area '+failure,directoryVisible:!fields.directoryVisible,contactPolicy:fields.contactPolicy==='closed'?'requests':'closed'};
+    version++;
+   };
+   if(failure.startsWith('conflict'))otherTabEdit();
    failNext=failure;await save.click();
    const refresh=page.getByRole('button',{name:'Обновить данные',exact:true});
    await refresh.waitFor();
-   assert.equal(version,versionBefore+(failure==='committed'?1:0));
+   assert.equal(version,versionBefore+(failure==='committed'||failure.startsWith('conflict')?1:0));
+   if(!failure.startsWith('conflict'))otherTabEdit();
    if(failure==='offline'){
     readFailure=503;await refresh.click();
+    await page.waitForFunction(()=>document.querySelector('.profile-cover-controls').getAttribute('aria-busy')==='false');
     await page.getByText('Не удалось проверить результат. Повторите обновление данных.',{exact:true}).waitFor();
     assert.equal(await save.count(),0,'failed reconciliation cannot unlock mutation');
-    readVersion=version-1;await refresh.click();
+    readVersion=versionBefore-1;await refresh.click();
+    await page.waitForFunction(()=>document.querySelector('.profile-cover-controls').getAttribute('aria-busy')==='false');
     await page.getByText('Не удалось проверить результат. Повторите обновление данных.',{exact:true}).waitFor();
-    assert.equal(await save.count(),0,'older cover receipts cannot unlock mutation');
+    assert.equal(await save.count(),0,'older profile snapshots cannot unlock mutation');
+    assert.notEqual(await page.locator('.own-profile-intro h1').textContent(),fields.displayName,'stale read cannot hydrate newer fields or clear uncertainty');
    }
    let releaseRead;
    readGate=new Promise(resolve=>{releaseRead=resolve;});
-   const readStarted=page.waitForRequest(request=>new URL(request.url()).pathname==='/v1/me/cover'&&request.method()==='GET');
+   const readStarted=page.waitForRequest(request=>new URL(request.url()).pathname==='/v1/me/social-profile'&&request.method()==='GET');
    await refresh.click();await readStarted;
    assert.equal(await refresh.isDisabled(),true,'reconciliation locks repeated reads');
    assert.equal(await page.getByLabel('По горизонтали',{exact:true}).isDisabled(),true);
@@ -142,15 +177,43 @@ try {
    releaseRead();readGate=null;
    await save.waitFor();
    assert.equal(await save.isEnabled(),true);
-   assert.equal(profileReads,readsBefore,'cover reconciliation must not reload the profile');
-   assert.equal(coverReads,coverReadsBefore+(failure==='offline'?3:1),'authoritative cover GET was performed');
+   assert.equal(profileReads,readsBefore+(failure==='offline'?3:1),'complete authoritative profile GET was performed');
+   assert.equal(coverReads,coverReadsBefore,'cover-only reads cannot reconcile the shared profile');
    assert.equal(await page.getByAltText('Выбранный фрагмент в шапке профиля').getAttribute('src'),draft);
    assert.equal(await page.getByLabel('По горизонтали',{exact:true}).inputValue(),'0.01');
    assert.equal(await page.getByLabel('По вертикали',{exact:true}).inputValue(),'0.99');
-   assert.deepEqual(await cropPixels('.profile-cover--preview'),pixels,'draft pixels survive reconciliation');
+   assert.deepEqual(await draftPixels(),draftBitmap,'all draft image pixels survive reconciliation');
+   const refreshedPixels=await cropPixels('.profile-cover--preview');
+   // A complete profile refresh may change the content-driven panel height;
+   // the retained image must follow that framing, without regenerating the blob.
+   if(Math.abs(refreshedPixels.ratio-pixels.ratio)<0.002)assert.deepEqual(refreshedPixels,pixels,'draft pixels survive reconciliation');
+   await page.waitForFunction(()=>{
+    const a=document.querySelector('.own-profile-avatar').getBoundingClientRect();
+    const b=document.querySelector('.profile-cover--preview').getBoundingClientRect();
+    return Math.abs(a.width/a.height-b.width/b.height)<0.002;
+   });
+   await page.waitForFunction(name=>document.querySelector('.own-profile-intro h1')?.textContent===name,fields.displayName);
+   assert.equal(await page.getByRole('switch',{name:'Показывать профиль в каталоге',exact:true}).getAttribute('aria-checked'),String(fields.directoryVisible));
+   assert.equal(await page.getByRole('switch',{name:'Принимать запросы на общение',exact:true}).getAttribute('aria-checked'),String(fields.contactPolicy==='requests'));
    const reconciledVersion=version;
-   await save.click();await page.getByText('Обложка сохранена.',{exact:true}).waitFor();
-   assert.equal(version,reconciledVersion+1,'retry uses fresh CAS version (asserted by the route)');
+   if(failure==='conflict-cancel'){
+    await page.getByRole('button',{name:'Отмена',exact:true}).click();
+    assert.equal(version,reconciledVersion,'cancel leaves the server unchanged');
+   } else {
+    await save.click();await page.getByText('Обложка сохранена.',{exact:true}).waitFor();
+    assert.equal(version,reconciledVersion+1,'retry uses fresh CAS version (asserted by the route)');
+   }
+   await page.getByRole('button',{name:'Изменить профиль',exact:true}).click();
+   const form=page.getByRole('dialog',{name:'Игровой профиль',exact:true});
+   assert.equal(await form.getByLabel('Имя',{exact:true}).inputValue(),fields.displayName);
+   assert.equal(await form.getByLabel('О себе',{exact:true}).inputValue(),fields.bio);
+   assert.equal(await form.getByLabel('Город',{exact:true}).inputValue(),fields.cityId);
+   assert.equal(await form.getByLabel('Район / метро',{exact:true}).inputValue(),fields.areaKey);
+   await form.getByLabel('О себе',{exact:true}).fill(fields.bio+' + local');
+   const profileWritesBefore=profileWrites;
+   await form.getByRole('button',{name:'Сохранить',exact:true}).click();
+   await page.getByText('Профиль сохранён.',{exact:true}).waitFor();
+   assert.equal(profileWrites,profileWritesBefore+1,'subsequent edit preserves non-cover fields (asserted by route)');
   }
   await page.getByRole('button',{name:'Изменить обложку',exact:true}).click();await page.keyboard.press('Escape');assert.equal(await page.getByRole('dialog',{name:'Обложка профиля'}).count(),0);
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`${width}: no overflow`);

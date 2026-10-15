@@ -669,6 +669,10 @@ import type { CoverReceipt } from "@gobadminton/contracts";
 export function getMyCover(signal?: AbortSignal) {
   return avatarRequest<CoverReceipt>("/v1/me/cover", {}, AVATAR_RECONCILE_MS, signal);
 }
+/** Shared CAS recovery must refresh every profile field along with its version. */
+export function reconcileMyCover(signal?: AbortSignal) {
+  return avatarRequest<OwnSocialProfile>("/v1/me/social-profile", {}, AVATAR_RECONCILE_MS, signal);
+}
 export function changeMyCover(file: Blob | null, expectedVersion: number, csrfToken: string, signal?: AbortSignal) {
   return avatarRequest<CoverReceipt>("/v1/me/cover", {
     method: file ? "PUT" : "DELETE", csrfToken,
