@@ -23,7 +23,9 @@ export class GamesController {
   ) {}
 
   @Get()
+  @Header("Cache-Control", "no-store")
   async listGames(
+    @Req() request: FastifyRequest,
     @Query("cursor") cursor?: string,
     @Query("limit") limitRaw?: string,
     @Query("cityId") cityId?: string,
@@ -39,6 +41,7 @@ export class GamesController {
       limitRaw === undefined || limitRaw === ""
         ? undefined
         : Number.parseInt(limitRaw, 10);
+    const consumer = await this.auth.optionalSession(request);
     return this.games.listPublished({
       cursor,
       limit,
@@ -50,7 +53,7 @@ export class GamesController {
       activityKind,
       temporalScope,
       venueId,
-    });
+    }, consumer?.userId ?? null);
   }
 
   @Get("map")
@@ -93,6 +96,7 @@ export class GamesController {
   }
 
   @Get(":gameId")
+  @Header("Cache-Control", "no-store")
   async getGame(
     @Param("gameId") gameId: string,
     @Req() request: FastifyRequest,

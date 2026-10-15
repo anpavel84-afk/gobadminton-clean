@@ -75,6 +75,7 @@ export type VenueSummary = {
 };
 
 export type OrganizerSummary = {
+  avatar?: PlayerAvatar;
   id: string | null;
   displayName: string;
   publicContact: string;

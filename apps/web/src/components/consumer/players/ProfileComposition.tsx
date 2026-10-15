@@ -11,11 +11,16 @@ import { Button } from "../Button";
 import { listAuthMethods } from "../../../lib/email-auth";
 import { EmailCodeForm } from "./EmailCodeForm";
 
-export function Avatar({ name, tone = "lime", avatar }: { name: string; tone?: "lime" | "purple" | "yellow"; avatar?: PlayerAvatar }) {
+export function safeAvatarUrl(raw: string): boolean {
+  if (/^\/v1\/media\/avatars\/[a-f0-9]{64}\.png$/.test(raw)) return true;
+  if (raw.length > 2048) return false;
+  try { const url = new URL(raw); return url.protocol === "https:" && !url.username && !url.password && !url.port && (url.hostname === "avatars.yandex.net" || url.hostname.endsWith(".userapi.com")); } catch { return false; }
+}
+export function Avatar({ name, tone = "lime", avatar, className }: { name: string; tone?: "lime" | "purple" | "yellow"; avatar?: PlayerAvatar; className?: string }) {
   const [failed, setFailed] = useState<string[]>([]);
-  const candidates = [avatar?.uploadedUrl, avatar?.providerUrl].filter((url): url is string => Boolean(url));
+  const candidates = [avatar?.uploadedUrl, avatar?.providerUrl].filter((url): url is string => Boolean(url) && safeAvatarUrl(url!));
   const src = candidates.find(url => !failed.includes(url));
-  return <span className={`avatar avatar--${tone}`} aria-hidden="true">{src ? <img key={src} src={src} alt="" referrerPolicy="no-referrer" onError={() => setFailed(previous => [...previous, src])} /> : initialsFromName(name)}</span>;
+  return <span className={className ?? `avatar avatar--${tone}`} aria-hidden="true">{src ? <img key={src} src={src} alt="" referrerPolicy="no-referrer" onError={() => setFailed(previous => [...previous, src])} /> : initialsFromName(name)}</span>;
 }
 export function Badge({ children, trainer = false }: { children: ReactNode; trainer?: boolean }) {
   return <span className={`status-badge status-badge--${trainer ? "attention" : "available"}`}>{children}</span>;

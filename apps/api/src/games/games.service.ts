@@ -1,3 +1,4 @@
+import { avatarForGameCreator, type PlayerAvatar } from "../profiles/avatar-presentation";
 import { GamePreferencesService, normalizePublicGameContact, validatePreferenceVersion } from "../profiles/game-preferences.service";
 import type { AppEnv } from "../config/env";
 import { readModeration } from "../game-moderation/projection";
@@ -73,6 +74,7 @@ export type GameDto = {
     id: string | null;
     displayName: string;
     publicContact: string;
+    avatar?: PlayerAvatar;
   };
   venue: {
     id: string;
@@ -500,7 +502,7 @@ export class GamesService {
     try {
       let dto: GameDto;
       try {
-        dto = await this.loadGameDto(client, gameId);
+        dto = await this.loadGameDto(client, gameId, viewerUserId);
       } catch {
         throw notFound("GAME_NOT_FOUND", "Игра не найдена");
       }
@@ -540,7 +542,7 @@ export class GamesService {
   async listPublished(query: DiscoveryInput & {
     cursor?: string;
     limit?: number;
-  }): Promise<{ items: GameDto[]; nextCursor: string | null }> {
+  }, viewerId: string | null = null): Promise<{ items: GameDto[]; nextCursor: string | null }> {
     const limit = clampLimit(query.limit);
     const filter = normalizeDiscovery(query);
     let cursorStartsAt: Date | null = null;
@@ -575,7 +577,7 @@ export class GamesService {
     const rows = result.rows;
     const hasMore = rows.length > limit;
     const page = hasMore ? rows.slice(0, limit) : rows;
-    const items = page.map(mapGameRow);
+    const items = await Promise.all(page.map(async row => this.withCreatorAvatar(this.pool, mapGameRow(row), viewerId)));
     const last = page[page.length - 1];
     return {
       items,
@@ -640,8 +642,8 @@ export class GamesService {
     const rows = result.rows;
     const hasMore = rows.length > limit;
     const page = hasMore ? rows.slice(0, limit) : rows;
-    const items = page.map((row) => {
-      const game = mapGameRow(row);
+    const items = await Promise.all(page.map(async (row) => {
+      const game = await this.withCreatorAvatar(this.pool, mapGameRow(row), userId);
       return {
         ...game,
         management: {
@@ -649,7 +651,7 @@ export class GamesService {
           createdByMe: row.created_by_user_id === userId,
         },
       };
-    });
+    }));
     const last = page[page.length - 1];
     return {
       items,
@@ -726,6 +728,7 @@ export class GamesService {
   private async loadGameDto(
     client: PoolClient,
     gameId: string,
+    viewerId: string | null = null,
   ): Promise<GameDto> {
     const result = await client.query<GameRow>(
       ` ${effectiveVenueCtes("SELECT venue_id AS id FROM games WHERE id = $1")}
@@ -737,7 +740,11 @@ export class GamesService {
     );
     const row = result.rows[0];
     if (!row) throw notFound("GAME_NOT_FOUND", "Игра не найдена");
-    return mapGameRow(row);
+    return this.withCreatorAvatar(client, mapGameRow(row), viewerId);
+  }
+
+  private async withCreatorAvatar(db: Pool | PoolClient, game: GameDto, viewerId: string | null = null): Promise<GameDto> {
+    return { ...game, organizer: { ...game.organizer, avatar: await avatarForGameCreator(db, game.id, this.env.USER_RESTRICTIONS_INTERNAL_ENABLED, viewerId) } };
   }
 }
 

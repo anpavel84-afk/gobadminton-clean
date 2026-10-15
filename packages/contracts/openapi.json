@@ -14368,6 +14368,28 @@
           "publicContact": {
             "type": "string",
             "description": "Explicit per-game host contact snapshot, not a player's private contact"
+          },
+          "avatar": {
+            "type": "object",
+            "description": "Current permitted avatar of games.created_by_user_id only. Trainer and legacy organizer identities are never used.",
+            "required": [
+              "uploadedUrl",
+              "providerUrl"
+            ],
+            "properties": {
+              "uploadedUrl": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "providerUrl": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
           }
         }
       },

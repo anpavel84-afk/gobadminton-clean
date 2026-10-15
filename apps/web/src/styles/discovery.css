@@ -149,3 +149,7 @@
   .gb-discovery *, .gb-discovery *::before, .gb-discovery *::after { animation: none !important; transition: none !important; }
   .gb-discovery-card:hover, .gb-discovery-card:hover .gb-discovery-card__image > img { transform: none; }
 }
+
+/* Existing GameCard avatar slot, shared with the canonical Avatar fallback. */
+.gb-discovery-avatar { overflow: hidden; }
+.gb-discovery-avatar > img { width: 100%; height: 100%; object-fit: cover; display: block; }

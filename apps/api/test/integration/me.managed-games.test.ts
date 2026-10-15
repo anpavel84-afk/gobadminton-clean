@@ -279,6 +279,37 @@ describeIntegration("GET /v1/me/games managed games read contract", () => {
     });
     expect(publishedRes.statusCode).toBe(200);
 
+    // Synthetic DB fixture only: exercise real game HTTP boundaries with current creator media.
+    const avatarKey = "a".repeat(64) + ".png";
+    await pool.query(`INSERT INTO player_social_profiles(user_id, display_name, directory_visible, social_eligible, avatar_key)
+      VALUES ($1, 'Avatar Creator', true, true, $2)
+      ON CONFLICT(user_id) DO UPDATE SET directory_visible=true, social_eligible=true, avatar_key=$2`, [owner.userId, avatarKey]);
+    const readAvatar = async (url: string, cookie = owner.cookie) => {
+      const res = await app.inject({ method: "GET", url, headers: { cookie } });
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      const item = body.items ? body.items.find((g: { id: string }) => g.id === publishedDraft.id) : body;
+      expect(item).toBeTruthy();
+      return item.organizer.avatar;
+    };
+    const boundaries = [`/v1/games/${publishedDraft.id}`, `/v1/games?venueId=${venueId}`, "/v1/me/games?limit=100"];
+    try {
+      for (const url of boundaries) expect((await readAvatar(url)).uploadedUrl).toBe(`/v1/media/avatars/${avatarKey}`);
+      const replacement = "b".repeat(64) + ".png";
+      await pool.query("UPDATE player_social_profiles SET avatar_key=$2 WHERE user_id=$1", [owner.userId, replacement]);
+      for (const url of boundaries) expect((await readAvatar(url)).uploadedUrl).toBe(`/v1/media/avatars/${replacement}`);
+      await pool.query("UPDATE player_social_profiles SET directory_visible=false WHERE user_id=$1", [owner.userId]);
+      for (const url of boundaries) expect(await readAvatar(url)).toEqual({ uploadedUrl: null, providerUrl: null });
+      await pool.query("UPDATE player_social_profiles SET directory_visible=true, avatar_key=NULL WHERE user_id=$1", [owner.userId]);
+      for (const url of boundaries) expect((await readAvatar(url)).uploadedUrl).toBeNull();
+      await pool.query("UPDATE player_social_profiles SET avatar_key=$2 WHERE user_id=$1", [owner.userId, replacement]);
+      await pool.query("INSERT INTO user_blocks(blocker_user_id, blocked_user_id) VALUES ($1,$2) ON CONFLICT DO NOTHING", [other.userId, owner.userId]);
+      for (const url of boundaries.slice(0, 2)) expect(await readAvatar(url, other.cookie)).toEqual({ uploadedUrl: null, providerUrl: null });
+    } finally {
+      await pool.query("DELETE FROM user_blocks WHERE blocker_user_id=$1 AND blocked_user_id=$2", [other.userId, owner.userId]);
+      await pool.query("UPDATE player_social_profiles SET avatar_key=NULL WHERE user_id=$1", [owner.userId]);
+    }
+
     const foreignDraft = await createDraft(other, venueId, {
       title: `MGAPI foreign ${suffix}`,
       suffix: `${suffix}-f`,
@@ -354,6 +385,14 @@ describeIntegration("GET /v1/me/games managed games read contract", () => {
       otherAsManager.json() as { items: ManagedGameItem[] }
     ).items.find((item) => item.id === draft.id);
     expect(managerItem).toBeTruthy();
+    // A manager's own photo must never replace the creator's current avatar.
+    await pool.query(`INSERT INTO player_social_profiles(user_id, display_name, avatar_key)
+      VALUES ($1, 'Different Manager', $2) ON CONFLICT(user_id) DO UPDATE SET avatar_key=$2`, [other.userId, "c".repeat(64) + ".png"]);
+    const managerRead = await app.inject({ method: "GET", url: "/v1/me/games", headers: { cookie: other.cookie } });
+    const managedAvatar = managerRead.json().items.find((item: { id: string }) => item.id === draft.id).organizer.avatar;
+    expect(managedAvatar.uploadedUrl).toBeNull();
+    expect(JSON.stringify(managedAvatar)).not.toContain("c".repeat(64));
+    await pool.query("UPDATE player_social_profiles SET avatar_key=NULL WHERE user_id=$1", [other.userId]);
     expect(managerItem!.management).toEqual({
       role: "manager",
       createdByMe: false,
