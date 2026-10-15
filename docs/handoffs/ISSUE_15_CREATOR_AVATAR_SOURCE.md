@@ -3,6 +3,51 @@
 From: source author. To: independent SOURCE QA / authorized PM. Date: 2026-10-15.
 Status: WORKING_DRAFT / UNVERIFIED; source only, no acceptance or deployment claim.
 
+## Current bounded repair — base f4774a6 — 2026-10-15
+
+From: source author. To: authorized PM / canonical reference provider, then independent SOURCE QA.
+Status: BLOCKED; supplied independent SOURCE QA FAIL on
+`f4774a6097a81be0dd72cce6140391fbc7e41b6d` remains unresolved.
+Exact entry base: https://github.com/anpavel84-afk/gobadminton-clean/tree/f4774a6097a81be0dd72cce6140391fbc7e41b6d
+Branch: `automation/issue-15`; entry worktree clean. This section supersedes earlier
+repair status for the current attempt, without replacing its historical evidence.
+
+Scope: only the supplied immutable #15 source-only assignment and its reported
+Style Guide first defect. Expected/actual edit: this handoff only. No new slice,
+application changes, test deletion, commit, push or git metadata writes authorized.
+Rollback: remove only this section; no runtime rollback needed.
+
+Canonical recovery actually executed: read AGENTS.md, canonical rules/decisions,
+project context and existing handoff; inspect GameDetailComposition source and
+repository reference locations. Reading the documented exact
+`/opt/gobadminton-clean-qa/style-guide/manifest.json` returned `No such file or directory`.
+The linked frontend operations guide is absent as well. Read-only HTTP HEAD to
+`https://nougat-wise-76949869.figma.site/` failed with curl exit 6,
+`Could not resolve host`; no published content was obtained. No PLAN, unrelated
+project, private credential or protected automation-state access attempted.
+
+STYLE_GUIDE_PARITY: UNRESOLVED for the existing organizer insertion in GameTerms
+(detail/manager) and added host row in PersonalGameCard (Created/My Games).
+No corresponding frozen screen or kit specimen was available to inspect and map.
+Neither a genuine STYLE_GUIDE_GAP nor OWNER_VISUAL_OVERRIDE is established.
+Missing access is not evidence of a missing canonical pattern. The binding rule
+requires inspecting the relevant canonical family before introducing composition;
+local CSS/component reuse cannot resolve that requirement. Application code is
+retained pending the missing authority, rather than claiming this documentation
+edit repairs the QA defect.
+
+NOT_TESTED in this attempt: all tests, builds, lint, contract generation/verification,
+browser, self-QA, independent QA, hosted CI and DEV/product acceptance. No prior
+test result is adopted as current PASS. Current DEV SHA and train ordering were
+not observed; no DEV/UAT claim is made.
+
+Next single bounded action: authorized PM/reference provider makes the Owner-pinned
+frozen Make source readable for the exact Created/My Games/detail/manager screens
+and Avatar/GameCard specimens, or supplies an applicable explicit Owner visual
+override. Source author can then map and repair only #15; independent QA must
+review the publisher's exact new SHA. Publication is not performed here because
+commit/push are expressly forbidden; this uncommitted handoff has no new permalink.
+
 ## Bounded repair after independent QA — 2026-10-15
 
 Status: BLOCKED on canonical visual source; prior independent SOURCE QA FAIL remains open.
