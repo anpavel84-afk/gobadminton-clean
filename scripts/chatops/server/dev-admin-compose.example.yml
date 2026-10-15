@@ -1,0 +1,24 @@
+# Root-owned addition to the EXISTING DEV project; no DB/network/volume replacement.
+# PM must verify unused host port 18088 before installation.
+services:
+  admin:
+    # Replaced by the receiver's digest-pinned candidate/previous overlay.
+    image: ghcr.io/anpavel84-afk/gobadminton-clean-admin:uncommissioned
+    env_file: /etc/gobadminton/deploy/admin-dev.env
+    environment:
+      HOSTNAME: 0.0.0.0
+      PORT: '3010'
+    ports:
+      - '127.0.0.1:18088:3010'
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3010/').then(async r=>{const b=await r.text();process.exit(r.ok&&b.includes('Вход для команды')&&!b.includes('Администрирование недоступно')?0:1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12

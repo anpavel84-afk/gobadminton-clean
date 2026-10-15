@@ -16,7 +16,7 @@ FROM node:24.21.0-bookworm-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3010
-ENV HOSTNAME=127.0.0.1
+ENV HOSTNAME=0.0.0.0
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV ADMIN_INTERNAL_APP_ENABLED=0
 RUN useradd --system --uid 10001 --create-home gobadminton

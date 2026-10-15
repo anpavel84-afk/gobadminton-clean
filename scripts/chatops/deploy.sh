@@ -3,6 +3,20 @@
 set -Eeuo pipefail
 ENVIRONMENT=${1:?dev or prod}; FILE=${2:?release.json}
 [[ $ENVIRONMENT == dev || $ENVIRONMENT == prod ]] || exit 64
+ADMIN=${CHATOPS_DEV_ADMIN_COMMISSIONED:-false}
+[[ $ADMIN == true || $ADMIN == false ]] || exit 64
+if [[ $ADMIN == true ]]; then
+  [[ $ENVIRONMENT == dev && ${GITHUB_ENVIRONMENT:-} == dev && ${GITHUB_REF:-} == refs/heads/dev &&
+     ${GITHUB_REPOSITORY:-} == anpavel84-afk/gobadminton-clean && -z ${DEPLOY_WEB_HOST:-} ]] || exit 64
+  jq -e --arg sha "${GITHUB_SHA:-}" '.source_sha==$sha and (.admin_digest | type=="string" and test("^sha256:[0-9a-f]{64}$"))' "$FILE" >/dev/null
+else
+  jq -e 'has("admin_digest") | not' "$FILE" >/dev/null
+fi
+jq -e 'type=="object" and ((keys - ["schema","source_sha","api_digest","web_digest","admin_digest","dev_run_id","expected_previous_sha"])|length==0) and
+  .schema==1 and (.source_sha|type=="string" and test("^[0-9a-f]{40}$")) and
+  (.api_digest|type=="string" and test("^sha256:[0-9a-f]{64}$")) and
+  (.web_digest|type=="string" and test("^sha256:[0-9a-f]{64}$"))' "$FILE" >/dev/null
+export CHATOPS_DEV_ADMIN_COMMISSIONED="$ADMIN"
 : "${DEPLOY_HOST:?}" "${DEPLOY_SSH_KEY:?}" "${DEPLOY_KNOWN_HOSTS:?}" "${PUBLIC_URL:?}"
 PORT=${DEPLOY_PORT:-22}; [[ $PORT =~ ^[0-9]{1,5}$ ]] && ((10#$PORT>0 && 10#$PORT<65536))
 HOSTS=("$DEPLOY_HOST")
@@ -39,25 +53,33 @@ cleanup() {
 }
 trap cleanup EXIT
 jq --arg id "$ID" --argjson seq "$SEQUENCE" \
-  '{action:"deploy",release_id:$id,sequence:$seq,source_sha,api_digest,web_digest,
-    expected_previous_sha:(.expected_previous_sha // "")}' "$FILE" >"$DIR/request.json"
+  '. as $manifest | {action:"deploy",release_id:$id,sequence:$seq,source_sha,api_digest,web_digest,
+    expected_previous_sha:(.expected_previous_sha // "")} +
+    (if $manifest|has("admin_digest") then {admin_digest:$manifest.admin_digest} else {} end)' "$FILE" >"$DIR/request.json"
 # In split production this is API first, then Web. Not a distributed atomic transaction.
 for host in "${HOSTS[@]}"; do
   TOUCHED+=("$host")
   ssh_request "$host" "$DIR/request.json" >"$DIR/result.json"
   jq -e --arg id "$ID" '(.pending.release_id==$id and .pending.status=="PENDING_SMOKE") or
     (.accepted.release_id==$id and .accepted.status=="ACCEPTED")' "$DIR/result.json" >/dev/null
+  if [[ $ADMIN == true ]]; then
+    jq -e --arg sha "$SHA" --arg digest "$(jq -r .admin_digest "$FILE")"       '(.pending // .accepted) | .source_sha==$sha and .admin_digest==$digest' "$DIR/result.json" >/dev/null
+  fi
  done
 # All browser execution is on the ephemeral GitHub runner, not on the VPS.
 PLAY="$DIR/playwright"
 npm install --prefix "$PLAY" --ignore-scripts --no-audit --no-fund playwright@1.56.1 >&2
 "$PLAY/node_modules/.bin/playwright" install --with-deps chromium >&2
+if [[ $ADMIN == true ]]; then export EXPECTED_ADMIN_DIGEST="$(jq -r .admin_digest "$FILE")"; fi
 export PLAYWRIGHT_MODULE="$PLAY/node_modules/playwright" EXPECTED_SHA="$SHA"
 node scripts/chatops/smoke.mjs
 jq -n --arg id "$ID" '{action:"accept",release_id:$id}' >"$DIR/accept.json"
 for host in "${HOSTS[@]}"; do
   ssh_request "$host" "$DIR/accept.json" >"$DIR/result.json"
   jq -e --arg id "$ID" '.accepted.release_id==$id and .accepted.status=="ACCEPTED"' "$DIR/result.json" >/dev/null
+  if [[ $ADMIN == true ]]; then
+    jq -e --arg sha "$SHA" --arg digest "$(jq -r .admin_digest "$FILE")"       '.accepted.source_sha==$sha and .accepted.admin_digest==$digest' "$DIR/result.json" >/dev/null
+  fi
  done
 ACCEPTED=1
 printf 'ACCEPTED %s %s %s\n' "$ENVIRONMENT" "$ID" "$SHA"

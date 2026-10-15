@@ -37,6 +37,9 @@ jobs:
         if: success() || failure()
       - run: pnpm --filter @gobadminton/${{ matrix.package }} run test:unit
         if: success() || failure()
+      - name: Build Admin standalone image (no push)
+        if: matrix.package == 'admin'
+        run: docker build --network=default -f apps/admin/Dockerfile -t admin-ci .
   database:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -62,4 +65,5 @@ jobs:
           find scripts/chatops -name '*.sh' -exec bash -n {} +
           python3 -B scripts/chatops/tests/test_autonomous_issues.py
           node --check scripts/chatops/smoke.mjs
+          python3 -B scripts/chatops/tests/test_admin_deploy.py
           sudo python3 scripts/chatops/tests/test_helper.py
