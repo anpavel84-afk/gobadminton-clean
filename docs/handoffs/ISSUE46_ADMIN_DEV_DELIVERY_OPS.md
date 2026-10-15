@@ -675,3 +675,50 @@ required for the new candidate. No real build/runtime/nginx/SSH/provider/passkey
 DB/UAT, livefiles or services tested/changed. The supplied hosted receiver PASS
 belongs only to old exact9290; it is not a new-source/full-CI PASS. All historical
 FAIL including ReviewerMissingEvidenceFAIL9290 remain preserved.
+
+## Bounded Admin font investigation on exact2b5b (2026-10-16)
+
+From: bounded source author. To: parent Supervisor / source reviewer.
+Status: WORKING_DRAFT — NOT APPROVED — NOT CANONICAL; BLOCKED on asset scope,
+not source-ready. Base: `2b5b1c09dbe0f7acfa273cb3cb5b9b4ee888e564`;
+initial worktree clean. Assignment permits only Admin layout/CSS, narrowly necessary
+Admin tests and this handoff; prohibits network, models, root, live config, secrets,
+services, DB, grants, commit/push, PROD/PLAN/VPN and other worktrees.
+
+Supervisor-supplied hosted evidence (not queried by this author): actual Product CI
+**38821535095 FAIL**, Admin job **116719002692**, Docker build with compiled
+`/admin` path fails in Turbopack `next/font/local/target.css`, unexpected data
+version / `get_font_fallbacks`, reached from layout.tsx. Admin unit tests now PASS;
+source(api), web, contracts, foundation and receiver passed on that hosted source.
+These are distinct facts, not a full-CI PASS:
+https://github.com/anpavel84-afk/gobadminton-clean/actions/runs/38821535095/job/116719002692
+Historical **38820541328 FAIL** / exact9290 and all prior FAIL above remain intact.
+
+Local offline finding: `apps/admin/public/fonts/Onest.woff2` is **not WOFF2**.
+Its 71,117 bytes start with gzip magic `1f 8b`; Python standard-library
+`gzip.decompress` yields 124,376 bytes starting with TrueType `00 01 00 00`.
+The decoded `fvar` table confirms variable `wght` min/default/max 100/400/900.
+Original asset SHA256:
+`c2475a4eb6479e2d5f5a0c1929ed29839ac9e61169e5aa5660299b8b77144275`.
+This malformed input is consistent with the font-parser failure; actual compiler
+confirmation of the cause remains outstanding. A plain relative CSS URL to the
+existing gzip-wrapped file does not repair the browser font bytes. The initial
+offline WOFF2 signature assertion FAILED; gzip/TrueType/fvar inspection then PASS.
+
+A candidate removal of next/font plus relative CSS @font-face was evaluated and
+withdrawn after the byte validation failed; layout and CSS are unchanged against
+exact2b5b. No broken-font fallback is presented as preserving canonical Onest.
+No dependencies are installed locally; actual Next/Turbopack builds, Docker builds,
+Vitest and browser checks were NOT_RUN. No static test claiming basePath output was
+added: it would not exercise the missing compiler or verify emitted font bytes.
+
+Next bounded action: Supervisor must authorize the additional bundled-font asset
+write needed to replace the gzip wrapper with its existing decoded font (prefer a
+correctly named .ttf and CSS format("truetype"), without download/dependencies),
+then remove next/font/local and reference that bundled asset relatively in CSS.
+Require real builds for both default root and ADMIN_DEV_PATH_BUILD=1, inspect
+emitted font URLs/bytes and verify Onest loads before claiming the fix. An inline
+166KB base64 font in CSS was not introduced as a workaround for the asset scope.
+No Next config, CI or security guards changed. Only this handoff remains changed;
+source rollback is removal of this section. Parent publication, independent review
+and fresh full hosted CI remain separate gates; no approval/runtime claim.
