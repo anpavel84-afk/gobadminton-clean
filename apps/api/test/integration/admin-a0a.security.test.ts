@@ -973,8 +973,13 @@ run("Admin A0a isolated identity / WebAuthn / DB authority", () => {
       expect((await isolated.query("SELECT * FROM admin_webauthn_credentials")).rowCount).toBe(0);
       await isolated.query("UPDATE admin_principals SET status='revoked' WHERE id=$1",[provisioned.principalId]);
       await expect(provisionAdmin(isolated,pepper,provision)).rejects.toThrow();
-      await isolated.query("UPDATE users SET status='deleted' WHERE id=$1",[secondUser]);
-      await expect(provisionAdmin(isolated,pepper,provision)).rejects.toThrow();
+      // Exercise the inactive-user fence independently of the revoked-principal fence above.
+      const inactiveUser = (await isolated.query<{id:string}>("INSERT INTO users DEFAULT VALUES RETURNING id")).rows[0]!.id;
+      const inactiveInput = {...provision,userId:inactiveUser,operationId:randomUUID(),activationToken:randomUUID()+randomUUID()};
+      const inactivePrincipal = await provisionAdmin(isolated,pepper,inactiveInput);
+      expect((await isolated.query("SELECT status FROM admin_principals WHERE id=$1",[inactivePrincipal.principalId])).rows[0]!.status).toBe("pending_mfa");
+      await isolated.query("UPDATE users SET status='deletion_pending' WHERE id=$1",[inactiveUser]);
+      await expect(provisionAdmin(isolated,pepper,inactiveInput)).rejects.toThrow();
       await expect(
         adminTransaction(isolated, async (c) => {
           await c.query("UPDATE admin_principals SET status='active'");
@@ -982,7 +987,7 @@ run("Admin A0a isolated identity / WebAuthn / DB authority", () => {
         }),
       ).rejects.toThrow();
       expect(
-        (await isolated.query("SELECT status FROM admin_principals")).rows[0]!
+        (await isolated.query("SELECT status FROM admin_principals WHERE id=$1",[both[0]!.principalId])).rows[0]!
           .status,
       ).toBe("pending_mfa");
     } finally {
