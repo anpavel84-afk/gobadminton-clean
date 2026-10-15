@@ -789,3 +789,76 @@ font bytes/URLs and browser loading in both modes. Publication is pending under
 this assignment's explicit no-commit/no-push restriction; no new candidate
 permalink exists yet. This handoff plus exact base and diff permit continuation
 without old chat; no approval or release authority is implied.
+
+## Bounded Product CI / installed strict-step compatibility — 2026-10-16
+
+From: bounded serial source author. To: Supervisor / NEW independent source QA.
+Status: SOURCE_READY — WORKING DRAFT — NOT APPROVED — NOT CANONICAL.
+Exact base: `a59eb7b2da48e571ba9b11f3aecce921de57d914`, initially clean branch
+`automation/admin-dev-delivery-20261015`, same separate Ops worktree. No other
+writer per assignment. Base reference:
+https://github.com/anpavel84-afk/gobadminton-clean/tree/a59eb7b2da48e571ba9b11f3aecce921de57d914
+
+Supervisor assignment/finding: installed successful() requires exactly seven
+Product CI jobs and rejects skipped steps except Post/upload-artifact names.
+The previous matrix.package == 'admin' YAML conditions skipped both Admin extras
+in API/Web/contracts jobs, so otherwise green CI could not satisfy that gate.
+Fix workflow only; preserve strict executor and all normal package checks, Admin
+path regression and both actual Docker build modes. Scope is ci.yml, relevant
+ChatOps regression tests and this handoff only; no runtime/autonomy source change,
+root/models/network/live config/DB/keys/services/grants, commit/push, PROD/PLAN/VPN
+or other worktrees. This paragraph preserves the bounded prompt for continuity.
+
+Changes:
+- ci.yml replaces two YAML-conditional Admin extras with one unconditional,
+  explicitly named Admin-only extra step. Its shell uses set -euo pipefail and
+  a package comparison. API/Web/contracts finish this extra step successfully
+  without running Admin commands; their genuine typecheck/lint/test:unit commands
+  still execute unchanged. Admin runs the actual dependency-free path regression,
+  then actual default-root and ADMIN_DEV_PATH_BUILD=1 Docker builds sequentially.
+  Failure propagates; no continue-on-error or security gate relaxation.
+- Receiver runs new test_ci_workflow.py unconditionally. This stdlib test parses
+  the controlled workflow source-step format, fails on unknown syntax, expands
+  every matrix package's actual step display names, and calls the unmodified
+  repository successful() function. Other three jobs are explicitly synthetic
+  existing-style required-step fixtures, not actual Actions evidence. Required
+  package commands/conditions are asserted exactly. Negative fixtures reproduce
+  both former YAML-skipped extras for each non-Admin package and must be rejected;
+  skipping each required package step must also be rejected.
+- A separate shell test executes the actual addon body with local command-function
+  stubs. It checks zero Admin invocations for each other package, exact path/root/
+  path-build order for Admin, and failure/short-circuit at each command. It does
+  not execute Docker or claim compiler/build success.
+
+Exact seven Product CI names remain foundation, source (api), source (web),
+source (admin), source (contracts), database, receiver. Trigger/ref/permissions/
+cancellation policy and existing DEV checks/images/deploy contract are unchanged.
+Font source/history and every preceding QA/CI FAIL remain intact. No installed
+executor source was modified or gate relaxed; only its pure repository function
+is imported for offline tests. No actual installed process is invoked.
+
+Rollback: reverse only this three-file diff against exact a59eb7b; no runtime
+rollback or broad reset. Publication is prohibited here, so no new candidate SHA
+or published result permalink exists. Next bounded action: Supervisor publishes
+this source candidate with exact permalinks, requests NEW independent QA and
+fresh hosted full CI, including both actual Admin builds. This is not self-approval,
+DEV commissioning, deployment or resolution of historical failed gates.
+
+Actual offline author validation (unprivileged):
+- `TMPDIR=/tmp/gb-model-zbp3ytto python3 -B -m unittest discover -s scripts/chatops/tests -p 'test_*.py'`:
+  80 tests in 30.099s, 59 PASS / 21 root-dependent SKIP (not PASS).
+  After tightening exact package-command assertions, focused test_ci_workflow.py
+  rerun: 2 PASS, including all four package expansions and shell failure cases.
+- `python3 -B scripts/check_foundation.py`: static PASS, 170 Markdown files,
+  164 draft API operations. Email contract policy: 1 PASS; foundation policy:
+  8 PASS. Final handoff-only documentation update also rechecked below.
+- All ChatOps shell files bash -n and smoke.mjs node --check: PASS. Available
+  local PyYAML parsed Product CI and DEV workflows; no dependency downloaded.
+- `git diff --check`: PASS.
+
+NOT_TESTED: actual Actions, installed runtime execution, package typecheck/lint/
+Vitest, actual Docker/Next root/path builds, emitted font URLs/bytes or browser
+loading, root ownership fixtures, live ingress/security/provider/passkey/DB/UAT.
+Historical font correction remains source evidence only until actual hosted
+build/runtime validation. No fabricated actual Actions PASS; independent review
+and fresh full CI remain required. No commit/push/network or activation performed.

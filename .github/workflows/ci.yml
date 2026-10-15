@@ -37,14 +37,14 @@ jobs:
         if: success() || failure()
       - run: pnpm --filter @gobadminton/${{ matrix.package }} run test:unit
         if: success() || failure()
-      - name: Execute dependency-free Admin path regression on pinned Node
-        if: matrix.package == 'admin'
-        run: python3 -B scripts/chatops/tests/test_admin_path.py
-      - name: Build Admin standalone images at root and /admin (no push)
-        if: matrix.package == 'admin'
+      - name: Admin-only extra path regression and standalone root/path builds
         run: |
-          docker build --network=default -f apps/admin/Dockerfile -t admin-ci-root .
-          docker build --network=default --build-arg ADMIN_DEV_PATH_BUILD=1 -f apps/admin/Dockerfile -t admin-ci-path .
+          set -euo pipefail
+          if [ "${{ matrix.package }}" = admin ]; then
+            python3 -B scripts/chatops/tests/test_admin_path.py
+            docker build --network=default -f apps/admin/Dockerfile -t admin-ci-root .
+            docker build --network=default --build-arg ADMIN_DEV_PATH_BUILD=1 -f apps/admin/Dockerfile -t admin-ci-path .
+          fi
   database:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -68,6 +68,7 @@ jobs:
         with: {persist-credentials: false}
       - run: |
           find scripts/chatops -name '*.sh' -exec bash -n {} +
+          python3 -B scripts/chatops/tests/test_ci_workflow.py
           python3 -B scripts/chatops/tests/test_autonomous_issues.py
           node --check scripts/chatops/smoke.mjs
           python3 -B scripts/chatops/tests/test_admin_deploy.py
