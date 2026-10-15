@@ -1,4 +1,5 @@
 import type { GamePreferences, PatchGamePreferences } from "@gobadminton/contracts/game-types";
+import type { DeleteCoverCommand } from "@gobadminton/contracts";
 import { foregroundUpdates } from "./foreground-updates";
 import { privateViews } from "./private-view";
 import type {
@@ -672,6 +673,6 @@ export function changeMyCover(file: Blob | null, expectedVersion: number, csrfTo
   return avatarRequest<CoverReceipt>("/v1/me/cover", {
     method: file ? "PUT" : "DELETE", csrfToken,
     headers: { "X-Profile-Version": String(expectedVersion), "Content-Type": file ? file.type : "application/json" },
-    body: file ?? JSON.stringify({ expectedVersion } satisfies import("@gobadminton/contracts").DeleteCoverCommand),
+    body: file ?? JSON.stringify({ expectedVersion } satisfies DeleteCoverCommand),
   }, AVATAR_NETWORK_MS, signal);
 }

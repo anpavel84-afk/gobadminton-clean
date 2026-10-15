@@ -1,5 +1,24 @@
 # Issue #36 — Wave B2 owned profile cover
 
+## Bounded continuation on reviewed candidate — 2026-10-15
+
+Status: READY_FOR_REVIEW / UNVERIFIED. Recipient: trusted parent publisher, then NEW independent exact-SHA SOURCE QA. Current local base is `7e4c18a7ff08a8ac3d3b344ec5f0876ab1f392eb`, branch `automation/issue-36`; checkout was clean at this continuation's entry despite the supplied dirty-worktree description. Complete existing cover implementation was preserved. No reset, commit, push or git metadata mutation was performed. Live DEV base was not accessed or claimed.
+
+Prior independent QA supplied by PM: **FAIL** on that exact base: Web inline `import()` type violates `@typescript-eslint/consistent-type-imports`; negative-auth header union in API integration test fails TS2345. Supplied local `.tools/style-reference/ACTUAL_CI_SOURCE_ERRORS.md` additionally records hosted Product CI run `38731326473`, database job `116409562093`: exact migration smoke list omitted the existing additive `0033_owned_cover`. This is supplied evidence, not a newly fetched CI result. The earlier pre-candidate Foundation FAIL chronology below remains intact.
+
+Changes limited to the API client's explicit `import type { DeleteCoverCommand }`, explicitly typed negative-auth header cases preserving all three assertions, and appending `0033_owned_cover` to the exact ordered migration expectation. No assertion, old SQL, checksum, avatar DELETE behavior, operationId, required cover command validation, UI composition, automation or live flag was weakened or changed. Existing contract/controller/disposable-DB/Web tests for required JSON body, valid expectedVersion, CAS/replay and defaults remain in place.
+
+Author verification only, not independent QA or acceptance:
+
+- `python3 scripts/check_foundation.py`: exit 0, static PASS (157 Markdown files, 159 draft API operations).
+- `git diff --check` and `node --check apps/web/test/profile-cover.browser.mjs`: exit 0.
+- `node packages/contracts/scripts/check-openapi.mjs`: could not run validation; `ERR_MODULE_NOT_FOUND` for `@apidevtools/swagger-parser`.
+- `COREPACK_ENABLE_NETWORK=0 pnpm --filter @gobadminton/api run typecheck`: could not start; pinned pnpm 10.18.0 unavailable locally and Corepack network disabled. No install or network fetch performed. API/Web typecheck, lint, unit, disposable PostGIS and browser runtime suites remain NOT_TESTED in this continuation. No services or database were accessed.
+
+Independently viewed actual `.tools/style-reference/profile-desktop.png`, `profile-mobile.png` and `guide.png`, and read supplied provenance README/manifest. Canonical desktop media LEFT / identity RIGHT and mobile media ABOVE identity are preserved. No new visual edit was made. Local canonical continuity path remains **`.tools/style-reference`**; crop surface and rendered application parity remain UNVERIFIED under `STYLE_GUIDE_GAP #36-cover-crop-preview` below. No PLAN access or frozen hash claim.
+
+Rollback of this continuation is a reviewable inverse of these three source/test edits and this handoff addition; retain the full prior cover implementation. Parent must publish normally and record a new exact SHA/permalink, obtain NEW independent QA, then full hosted CI before any separately authorized DEV process. No new candidate SHA or GitHub publication is claimed by this author. DEV release/receiver/UAT and PROD remain outside this continuation and NOT_TESTED.
+
 From: source author. To: PM publisher → independent SOURCE QA → authorized DEV release operator.
 Date: 2026-10-15. Status: READY_FOR_REVIEW / UNVERIFIED. No SOURCE PASS, visual approval, CI PASS or product acceptance is asserted.
 

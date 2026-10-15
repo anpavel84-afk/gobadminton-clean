@@ -155,6 +155,7 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
         "0030_user_capability_restrictions",
         "0031_support_cases",
         "0032_friendship_core",
+        "0033_owned_cover",
       ]);
       // Additive Friends S1 upgrade must be physically present in the
       // migration smoke; merely recording the filename is insufficient.

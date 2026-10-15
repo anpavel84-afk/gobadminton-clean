@@ -45,7 +45,14 @@ run("owned cover: disposable PostGIS API", () => {
     await app?.close();if(pool){await pool.query("DELETE FROM user_blocks WHERE blocker_user_id=ANY($1::uuid[]) OR blocked_user_id=ANY($1::uuid[])",[[user,viewer]]);await pool.query("DELETE FROM idempotency_records WHERE actor_id=ANY($1::uuid[])",[[user,viewer]]);await pool.query("DELETE FROM app_sessions WHERE user_id=ANY($1::uuid[])",[[user,viewer]]);await pool.query("DELETE FROM player_social_profiles WHERE user_id=ANY($1::uuid[])",[[user,viewer]]);await pool.query("DELETE FROM users WHERE id=ANY($1::uuid[])",[[user,viewer]]);await pool.end();}if(media)await rm(media,{recursive:true,force:true});
   });
   it("requires authentication, CSRF and origin before decoding",async()=>{
-    for(const patch of [{cookie:""},{"x-csrf-token":""},{origin:"https://evil.invalid"}])expect((await upload(0,randomUUID(),png,{...own,...patch})).statusCode).toBe(patch.cookie===""?401:403);
+    const deniedHeaders: Array<{ patch: Record<string, string>; status: number }> = [
+      { patch: { cookie: "" }, status: 401 },
+      { patch: { "x-csrf-token": "" }, status: 403 },
+      { patch: { origin: "https://evil.invalid" }, status: 403 },
+    ];
+    for (const { patch, status } of deniedHeaders) {
+      expect((await upload(0, randomUUID(), png, { ...own, ...patch })).statusCode).toBe(status);
+    }
     expect((await app.inject({method:"GET",url:"/v1/me/cover"})).statusCode).toBe(401);
   });
   it("publishes only a moderated derivative; hidden cover is owner-only",async()=>{
