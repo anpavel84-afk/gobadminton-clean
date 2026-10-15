@@ -9,6 +9,41 @@ No commit/push authorized; supervisor must publish these source artifacts and at
 candidate SHA/permalinks to Issue 46 before independent QA. Historical FAIL and attempt
 caps remain intact. Prior QA input was `{}`; no previous verdict is superseded here.
 
+## Source revision following independent FAIL (2026-10-15)
+
+Revision base: `d496f526e0e7937b774aef89e33655144e78fc08`, branch
+`automation/issue-46`, initially clean worktree. The earlier paragraph describes
+the initial submission; subsequent independent QA returned **FAIL** for this exact
+base because executable bootstrap CLI unit regressions were absent. Preserve that
+FAIL and the existing attempt count; this revision does not supersede the verdict.
+QA also reported unavailable pnpm/dependencies and registry DNS failure, which was
+an infrastructure limitation rather than a source defect.
+
+Added `apps/api/test/unit/admin-bootstrap-cli.test.ts`. Tests dynamically import the
+actual CLI entry point with real environment parsing and provisioning input schema;
+only Pool/persistence primitives and console output are mocked. Synthetic fixtures
+cover exact DEV operator opt-in, mvp/stage first-mode dispatch/default role,
+explicit enroll role and replay receipt, invalid modes/roles, missing/invalid
+reason/operation/user/token, disabled configuration and PROD denial, isolated local
+gate/default compatibility, success output limited to receipt, and generic errors
+even when a persistence exception contains activation token/pepper. Failure before
+validation must not open a Pool; persistence success/error must close it. DB
+idempotence remains covered by the existing disposable integration tests rather
+than being claimed from mocked CLI dispatch.
+
+Author execution: **NOT_TESTED**; no self-QA, dependency installation, test/build,
+DB or network action performed. Independent QA should execute, from `apps/api`,
+`pnpm exec vitest run --project unit test/unit/admin-bootstrap-cli.test.ts`, plus
+the previously required API/AdminApp suites and disposable DB regressions. Full
+hosted Product CI and NEW independent source QA must use the supervisor-published
+exact candidate SHA. No live activation, provisioning or Owner role grant occurred.
+
+Only this handoff and the new unit file are changed by this revision. Rollback is
+removal of the new test file and this revision section; runtime code/config are
+unchanged. Supervisor must publish the candidate and exact artifact permalinks
+under Issue 46; author has no commit/push authorization. The existing bounded Ops,
+configuration/enrollment, rollback and live acceptance prerequisites below remain.
+
 ## Bounded source result
 
 Existing AdminService, provider subjects, separate cookies/audience, WebAuthn UV/RP,
