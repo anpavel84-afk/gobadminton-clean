@@ -271,12 +271,13 @@ run available offline tests/Foundation. No self-approval or live acceptance clai
 ### Current source behavior (supersedes dedicated-host prerequisites above)
 
 The previous dedicated-host nginx template and DNS prerequisite are historical.
-This candidate supplies exactly two INSERTABLE locations for the existing main DEV
+The initial path candidate supplied two INSERTABLE locations for the existing main DEV
 HTTPS vhost: `= /admin` returns 303 to `/admin/` without any incoming query, and
 `^~ /admin/` forwards the original URI to loopback18088. No server/certificate,
 wildcard, existing location, unrelated dev-api upstream or live file is changed.
-Access logging is off in both locations; operator must also review inherited error /
-debug logging before real provider use. Provider authorization codes necessarily
+Access logging was off in both locations; inherited error/debug logging and the
+second public /v1 callback hop remained uncovered. The serial completion below
+supersedes that incomplete logging boundary. Provider authorization codes necessarily
 arrive at the registered callback URL, then are removed from navigation by AdminApp.
 Activation remains password-input React memory / POST body, never a navigation URL.
 
@@ -412,5 +413,161 @@ installed profile; finish pending release recovery before changing config.
 Next bounded action: Supervisor publishes/integrates this source safely without
 self-merging/rebasing here, records exact candidate permalinks, and requests NEW
 independent read-only QA. No commit/push or new candidate permalink exists from this
-turn because Owner expressly prohibited publication. The prior QA FAIL is preserved,
+turn because the source-author role was prohibited from publication; Supervisor retains Owner delivery authority. The prior QA FAIL is preserved,
 not converted to approval by these author checks. No PROD authorization is implied.
+
+
+## Bounded source correction after independent QAa1 FAIL of exact c902 (2026-10-16)
+
+WORKING DRAFT — NOT APPROVED — NOT CANONICAL. From source author to Supervisor
+and NEW independent QA. Exact base/unchanged HEAD:
+`c902850d822d0e33825d4d9b0bd4e750db0a934f` ([historical candidate](https://github.com/anpavel84-afk/gobadminton-clean/commit/c902850d822d0e33825d4d9b0bd4e750db0a934f)).
+This is the same separate Ops worktree, branch `automation/admin-dev-delivery-20261015`.
+Owner assignment is bounded to request logging, mandatory DEV receiver gate and
+this handoff. No root, network, other models, commit/push, live runtime/config,
+DB/secrets/grants/flags, PROD/PLAN/VPN or other worktrees are authorized here.
+Supervisor has Owner delivery authority; the publication restriction applies to
+this source-author role only. A new SHA/permalink must be recorded by Supervisor
+before NEW independent QA; this uncommitted diff is not an exact-new-SHA candidate.
+
+Historical independent QA data (preserved verbatim; prior FAIL/results above remain):
+
+```json
+{"verdict": "FAIL", "findings": ["apps/admin/src/app/v1/admin/[...path]/route.ts:32-47 forwards callback code/state in the upstream GET URL, while apps/api/src/main.ts:17 enables Fastify's default request logger without URL redaction. Admin OAuth authorization codes and state therefore enter API request logs; disabling nginx logging only for /admin does not protect this upstream request.", ".github/workflows/dev-deploy.yml:19,23,47 allows deployment after ci.sh fast and image building without requiring the root receiver tests in Product CI. scripts/chatops/ci.sh never runs test_helper.py or the Ops regression suites, and Product CI does not run on dev pushes. The mandatory actual root-helper CI gate can therefore be bypassed before deployment."], "reviewed_sha": "c902850d822d0e33825d4d9b0bd4e750db0a934f"}
+```
+
+Changes (author implementation, not acceptance):
+- `apps/api/src/main.ts` uses `common/api-logger.ts`: existing Fastify/Pino logger,
+  allowlisted request method/path without query, response status and opaque error
+  type; fixed log message prevents raw URL/not-found/provider error interpolation.
+  Request IDs and completion timing remain. Headers, cookies, bodies, arbitrary
+  log fields and error message/stack are omitted. Nest exception logging and
+  bootstrap failure also suppress potentially credential-bearing errors.
+- Admin/consumer callbacks still receive untouched query inputs. Existing Admin
+  gate/proxy/receiver/three-image protocol is unchanged. Reviewed callback/provider
+  failures use bounded problem messages; unhandled failures reach the safe logger.
+- `apps/api/test/unit/api-logger.test.ts` executes actual Fastify inject/logger/sink
+  with synthetic callback queries, header/body credentials, not-found and thrown
+  errors. It checks raw logs and successful code/state delivery, plus Nest error
+  sink suppression. No live OAuth/credentials. Product CI API unit suite includes
+  it; DEV checks explicitly run it before images as well.
+- DEV workflow adds mandatory pinned-Node receiver job at exact `GITHUB_SHA`,
+  including actual root `test_helper.py` disposable fake-Docker/curl fixtures and
+  current Ops/autonomy/client/path regressions. Images need both checks and receiver;
+  deploy needs images. No continue-on-error or status shortcut. Root fixtures run
+  only on hosted CI, never against the installed deployment helper. Existing DEV
+  environment/ref/flags/image SHA gates, backups and rollback remain unchanged.
+
+### SAFE COMMISSIONING prerequisite (operator/Supervisor, not executed)
+
+1. Before changing API environment for same-origin Admin, deploy the new API
+   path-support source with Admin flags OFF through the existing two-image DEV
+   protocol and obtain server **ACCEPTED**. The old `4c` API rejects main-origin
+   Admin. Retain exact accepted API/Web baseline and receiver receipt.
+2. Only after this acceptance, back up ingress, root profile and private env
+   explicitly using the authorized operator procedure. Commission three images
+   against that API-compatible baseline; previous API image must be able to start
+   under the installed fixed environment for first-enable image rollback.
+3. Image-only rollback does NOT restore changed configuration. On failed
+   commissioning the operator must explicitly restore backed-up ingress/root
+   profile/private env as required, in coordination with pending release recovery.
+   Do not add automatic secret/env restoration or caller-controlled receiver fields.
+
+Real provider and passkey/UV remain **NOT_TESTED**. No deployment or self-approval.
+
+### Validation of this correction
+
+- Node is `v24.21.0`. No node_modules; pinned pnpm is absent from Corepack cache.
+  `COREPACK_ENABLE_NETWORK=0 pnpm --filter @gobadminton/api exec vitest run
+  --project unit test/unit/api-logger.test.ts` exited 1: network disabled/cache miss.
+  No download occurred. Fastify test, typecheck/lint/build are NOT_RUN locally;
+  hosted CI execution is required before acceptance.
+- Foundation static PASS (170 Markdown files, 164 draft API operations); email
+  policy 1 test PASS; foundation policy 8 tests PASS. These are author checks only.
+- Bash syntax for all ChatOps shell files, Node smoke syntax, YAML parse and DEV
+  images->checks/receiver->deploy dependency assertions passed.
+
+Source rollback: reverse only this bounded diff against exact c902 above; do not
+reset other work or change runtime. Next single bounded action: Supervisor records
+new source SHA/permalinks through authorized publication and requests NEW independent
+QA at that exact SHA. Historical QAa1 FAIL remains until independent review; hosted
+CI and subsequent authorized commissioning are separate facts.
+
+Final offline regression receipt for this correction:
+`TMPDIR=/tmp/gb-model-mhoa45j7 python3 -B -m unittest discover -s scripts/chatops/tests -p 'test_*.py'`:
+75 tests in 38.474s, 54 passed / 21 root-dependent skipped. Actual native
+Node Admin config/proxy/path regression ran successfully within this suite.
+Root ownership/permission fixtures were skipped locally, and are mandatory in DEV
+hosted receiver gate. No root elevation or installed helper invocation occurred.
+Final `git diff --check` passed. Changed files are limited to:
+`.github/workflows/dev-deploy.yml`, `apps/api/src/main.ts`, new
+`apps/api/src/common/api-logger.ts`, new `apps/api/test/unit/api-logger.test.ts`,
+and this handoff. No lockfile or dependency changes.
+
+
+## SERIAL source-only ingress logging completion — 2026-10-16
+
+WORKING DRAFT — NOT APPROVED — NOT CANONICAL. From: bounded serial source author.
+To: Supervisor / NEW independent exact-candidate QA. Base HEAD remains
+`c902850d822d0e33825d4d9b0bd4e750db0a934f`, branch
+`automation/admin-dev-delivery-20261015`. Initial logging/CI author exited; no
+concurrent writer per assignment. Existing API logger, API regression and DEV CI
+correction sources were inspected and preserved unmodified. All historical QA FAIL
+receipts above remain in force; this is no self-approval or Issue46 acceptance.
+
+Owner-authorized Supervisor assignment: complete only main DEV ingress source,
+relevant executable regressions and this handoff. No root/network/other models,
+live config/services/grants, commit/push, PROD/PLAN/VPN. This paragraph records the
+bounded prompt so continuation does not require chat history.
+
+Supervisor read-only audit fact (provided, not independently re-audited here): main
+DEV nginx `/v1/` proxies API18084 and inherits global access logging. AdminApp sends
+callbacks to PUBLIC main DEV `/v1/admin/auth/{vk,yandex}/callback?code=...&state=...`.
+Fastify logger redaction alone therefore leaves a second nginx query leak.
+
+Current source boundary in `scripts/chatops/server/dev-admin-nginx.example.conf`:
+- Four INSERTABLE locations in the EXISTING main DEV HTTPS vhost: existing `= /admin`
+  and `^~ /admin/` to AdminApp18088, plus exact `= /v1/admin/auth/vk/callback` and
+  `= /v1/admin/auth/yandex/callback` to existing API18084.
+- Every one explicitly sets `access_log off` and `error_log /dev/null crit`.
+  A location-local error sink replaces inherited error/debug sinks, including
+  upstream-failure diagnostics that can interpolate request URI/query. Both the
+  browser -> AdminApp and AdminApp -> public main DEV -> API callback hops are
+  covered at location logging time. General consumer `/v1`, legacy dev-api and
+  PROD logging/routing are unchanged. `/admin/` already had scoped access suppression;
+  its scoped error sink also covers provider callback failures at that first hop.
+- Exact API matches retain original URI/query (proxy_pass has no URI suffix),
+  Host/forwarded HTTPS/host/Origin headers and normal request headers/body forwarding.
+  No new redirect, rewrite, host/certificate/auth stack/network, or caller-controlled
+  bypass header. Existing `/admin` canonical redirect remains unchanged.
+
+Regression source: `scripts/chatops/tests/test_admin_path.py` now checks the four
+fixed locations, both per-location log overrides, exact ports, untouched callback
+URI/query forwarding contract and preserved proxy headers. Only fixed Admin
+callback exceptions are allowed; no broad `/v1` replacement. Existing actual Node
+Admin config/proxy regression still verifies successful code/state forwarding.
+No executable test in the starting tree asserted exactly two nginx locations;
+the historical handoff's two-location assumption is explicitly superseded above.
+These are source-contract checks, not an nginx runtime/error-injection test.
+
+nginx executable is unavailable locally. NOT_TESTED: real nginx syntax/effective
+config and upstream-error log capture, live ingress, provider/passkey flows,
+deployment or historical log remediation. Location overrides do not prove safety
+of any separately configured pre-location/global debug capture or external logging
+system; authorized commissioning must verify effective config and absence of such
+capture before real callbacks. No deployed nginx/log scrubbing claim is made.
+
+Source rollback: reverse only the serial completion edits to this snippet,
+`test_admin_path.py` and this handoff; preserve the previous author's API/CI diff.
+Next bounded action: Supervisor publishes source under its authority, records exact
+new SHA/permalinks, then requests NEW independent QA and required hosted CI.
+Publication is prohibited here, so no new durable GitHub permalink is claimed.
+
+Serial completion author validation (offline, unprivileged):
+- `TMPDIR=/tmp/gb-model-4v20zxm7 python3 -B -m unittest discover -s scripts/chatops/tests -p 'test_*.py'`:
+  77 tests in 25.458s; 56 passed, 21 root-dependent skipped (not PASS).
+- `python3 -B scripts/check_foundation.py`: static PASS, 170 Markdown files,
+  164 draft API operations. Email policy: 1 passed; foundation policy: 8 passed.
+- Focused `test_admin_path.py`: 3 passed, including actual native Node proxy/config
+  regression and two new nginx source-contract regressions.
+- Final `git diff --check`: passed. No dependency install or network attempt.

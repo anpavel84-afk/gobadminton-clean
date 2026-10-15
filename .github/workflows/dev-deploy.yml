@@ -14,13 +14,32 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with: {fetch-depth: 0, persist-credentials: false}
+        with: {ref: "${{ github.sha }}", fetch-depth: 0, persist-credentials: false}
       - uses: ./.github/actions/ci-setup
+      - name: Real API logging regression
+        run: pnpm --filter @gobadminton/api exec vitest run --project unit test/unit/api-logger.test.ts
       - run: bash scripts/chatops/ci.sh fast
         env:
           BASE_SHA: ${{ github.event.before }}
+  receiver:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with: {ref: "${{ github.sha }}", persist-credentials: false}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with: {node-version: '24.21.0'}
+      - name: Isolated receiver, Ops, autonomy, client and path regressions
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          find scripts/chatops -name '*.sh' -exec bash -n {} +
+          node --check scripts/chatops/smoke.mjs
+          python3 -B scripts/chatops/tests/test_autonomous_issues.py
+          python3 -B scripts/chatops/tests/test_admin_deploy.py
+          python3 -B scripts/chatops/tests/test_admin_path.py
+          sudo python3 -B scripts/chatops/tests/test_helper.py
   images:
-    needs: checks
+    needs: [checks, receiver]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions: {contents: read, packages: write}
