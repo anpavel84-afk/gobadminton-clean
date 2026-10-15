@@ -167,6 +167,12 @@ export function CreateGamePage() {
       if (cancelled) return;
       if (result.ok) {
         setKnownVenues(result.data);
+        const requested = new URLSearchParams(window.location.search).get("venueId");
+        const preselected = result.data.find(venue => venue.id === requested && venue.cityId === location.cityId);
+        if (preselected) {
+          setSelectedVenueCache(preselected);
+          setDraft(d => ({ ...d, venueId: d.venueId || preselected.id, createNewVenue: false }));
+        }
         setVenueStatus("ready");
       } else {
         setKnownVenues([]);
@@ -375,7 +381,7 @@ export function CreateGamePage() {
       {step === "loading" && <div className="gb-game-feedback" role="status"><h1>Готовим создание игры</h1></div>}
       {step === "setup" && <div className="gb-game-feedback" data-state="setup"><h1>Укажите город, чтобы создать игру</h1><p>Сначала сохраните город в игровом профиле. Затем вы вернётесь к созданию игры и сможете проверить её перед публикацией.</p><Button href="/profile/setup?returnTo=%2Fgames%2Fcreate">Указать город</Button></div>}
       {step === "load-error" && <div className="gb-game-feedback" data-state="error" role="alert"><h1>Не удалось проверить профиль</h1><p>Проверьте соединение и попробуйте снова. Создание игры продолжится после проверки входа и города.</p><Button onClick={() => setReload(n => n + 1)}>Повторить проверку</Button></div>}
-      {step === "auth" && <div className="gb-game-feedback" data-state="auth"><h1>Войдите, чтобы создать игру</h1><p>После входа вы сможете заполнить игру и проверить её перед публикацией.</p><AuthEntry returnPath="/games/create" intent={{ kind: "create", activityKind }} />{error && <p role="alert">{error}</p>}</div>}
+      {step === "auth" && <div className="gb-game-feedback" data-state="auth"><h1>Войдите, чтобы создать игру</h1><p>После входа вы сможете заполнить игру и проверить её перед публикацией.</p><AuthEntry returnPath={typeof window === "undefined" ? "/games/create" : `/games/create${window.location.search}`} intent={{ kind: "create", activityKind }} />{error && <p role="alert">{error}</p>}</div>}
       {step === "form" && <>
         <header className="gb-create-header"><span className="gb-game-kicker">Соберите свою игру</span><h1>Создать игру</h1><p>Выберите место, время и условия. Перед публикацией вы сможете всё проверить.</p></header>
         <form className="gb-game-form" data-surface="create-form" onSubmit={event => { event.preventDefault(); void onCheck(); }}>

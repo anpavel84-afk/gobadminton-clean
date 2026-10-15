@@ -12,11 +12,14 @@ import { ConsumerShell } from "../ConsumerShell";
 import { CreateBanner, DiscoveryHero, DiscoveryIcon, DiscoverySidebar, DiscoverySkeleton } from "../discovery/DiscoveryComposition";
 import { DiscoveryGameCard } from "../discovery/DiscoveryGameCard";
 
+import { GamesMapView } from "../games/GamesMapView";
+
 type LoadState = "loading" | "ready" | "filtered" | "empty" | "error" | "stale";
 type Feed = GamePage & { key: string; state: LoadState };
 
 export function GamesDiscoveryPage() {
   const router = useRouter();
+  const [view, setView] = useState<"list" | "map">("list");
   const [authOpen, setAuthOpen] = useState(false);
   const { location } = useDiscoveryCity();
   const [selectedDay, setSelectedDay] = useState("");
@@ -125,7 +128,11 @@ export function GamesDiscoveryPage() {
         <CreateBanner busy={creating} onClick={() => void goCreate()} />
       </section>
       {createError && <div className="gb-discovery-notice" role="alert">Не удалось проверить вход. Попробуйте создать игру ещё раз.</div>}
-      <section className="gb-discovery-layout">
+      <div className="gb-discovery-chips" role="group" aria-label="Вид игр">
+        <button type="button" className="gb-discovery-chip" aria-pressed={view === "list"} onClick={() => setView("list")}>Списком</button>
+        <button type="button" className="gb-discovery-chip" aria-pressed={view === "map"} onClick={() => setView("map")}>На карте</button>
+      </div>
+      {view === "map" ? <GamesMapView cityId={location.cityId} day={selectedDay} /> : <section className="gb-discovery-layout">
         <div className="gb-discovery-feed">
           <div className="gb-discovery-filters">
             <div className="gb-discovery-chips" role="group" aria-label="Фильтр активности">
@@ -147,7 +154,7 @@ export function GamesDiscoveryPage() {
           {(showCards || state === "empty") && feed.nextCursor && state !== "stale" && <Button className="gb-discovery-more" variant="outline" loading={paging} onClick={() => void loadMore()}>{paging ? "Загружаем…" : "Показать ещё"}</Button>}
         </div>
         <DiscoverySidebar city={location.nameRu} />
-      </section>
+      </section>}
     </div>
     {authOpen && <AuthChooser returnPath="/games/create" intent={{ kind: "create" }} onClose={() => setAuthOpen(false)} />}
   </ConsumerShell>;

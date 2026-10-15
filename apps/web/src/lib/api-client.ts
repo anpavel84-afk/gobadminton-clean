@@ -179,6 +179,24 @@ export async function listAllCityVenues(cityId: string): Promise<ApiResult<Venue
   return { ok: false, status: 0, error: "Не удалось загрузить полный каталог площадок." };
 }
 
+/** Bounded complete snapshot; never present partial pagination as an exact count. */
+export async function listAllUpcomingCityGames(cityId: string): Promise<ApiResult<Game[]>> {
+  const games = new Map<string, Game>();
+  const cursors = new Set<string>();
+  const startsFrom = new Date().toISOString();
+  let cursor: string | undefined;
+  for (let page = 0; page < 100; page++) {
+    const result = await listGames({ cityId, startsFrom, cursor, limit: 50 });
+    if (!result.ok) return result;
+    for (const game of result.data.items) if (game.venue.cityId === cityId) games.set(game.id, game);
+    const next = result.data.nextCursor;
+    if (!next) return { ok: true, status: 200, data: [...games.values()] };
+    if (cursors.has(next)) return { ok: false, status: 0, error: "Повтор страницы расписания." };
+    cursors.add(next); cursor = next;
+  }
+  return { ok: false, status: 0, error: "Полное расписание недоступно. Уточните город." };
+}
+
 export function getGame(gameId: string) {
   return apiFetch<Game>(`/v1/games/${gameId}`);
 }
