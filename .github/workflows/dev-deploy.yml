@@ -14,11 +14,23 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with: {fetch-depth: 0, persist-credentials: false}
+        with: {ref: "${{ github.sha }}", fetch-depth: 0, persist-credentials: false}
       - uses: ./.github/actions/ci-setup
+      - name: Real API logging regression
+        run: pnpm --filter @gobadminton/api exec vitest run --project unit test/unit/api-logger.test.ts
       - run: bash scripts/chatops/ci.sh fast
         env:
           BASE_SHA: ${{ github.event.before }}
+      - name: Isolated receiver, Ops, autonomy, client and path regressions
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          find scripts/chatops -name '*.sh' -exec bash -n {} +
+          node --check scripts/chatops/smoke.mjs
+          python3 -B scripts/chatops/tests/test_dev_workflow.py
+          python3 -B scripts/chatops/tests/test_autonomous_issues.py
+          python3 -B scripts/chatops/tests/test_admin_deploy.py
+          python3 -B scripts/chatops/tests/test_admin_path.py
+          sudo python3 -B scripts/chatops/tests/test_helper.py
   images:
     needs: checks
     runs-on: ubuntu-24.04
@@ -27,6 +39,7 @@ jobs:
     outputs:
       api: ${{ steps.build.outputs.api }}
       web: ${{ steps.build.outputs.web }}
+      admin: ${{ steps.build.outputs.admin }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with: {persist-credentials: false}
@@ -35,8 +48,11 @@ jobs:
         run: |
           bash scripts/chatops/build-pair.sh
           echo "api=$(jq -r .api_digest _out/release.json)" >> "$GITHUB_OUTPUT"
+          echo "admin=$(jq -r '.admin_digest // ""' _out/release.json)" >> "$GITHUB_OUTPUT"
           echo "web=$(jq -r .web_digest _out/release.json)" >> "$GITHUB_OUTPUT"
         env:
+          CHATOPS_DEV_ADMIN_COMMISSIONED: ${{ vars.CHATOPS_DEV_ADMIN_COMMISSIONED || 'false' }}
+          GITHUB_ENVIRONMENT: dev
           GH_TOKEN: ${{ github.token }}
   deploy:
     if: vars.CHATOPS_DEV_COMMISSIONED == 'true'
@@ -56,8 +72,15 @@ jobs:
           mkdir -p _out
           jq -n --arg s "$GITHUB_SHA" --arg a "$API" --arg w "$WEB" --argjson r "$GITHUB_RUN_ID" \
             '{schema:1,source_sha:$s,api_digest:$a,web_digest:$w,dev_run_id:$r}' > _out/release.json
+          if [[ -n $ADMIN ]]; then
+            jq --arg a "$ADMIN" '. + {admin_digest:$a}' _out/release.json > _out/release.next.json
+            mv _out/release.next.json _out/release.json
+          fi
           bash scripts/chatops/deploy.sh dev _out/release.json
         env:
+          CHATOPS_DEV_ADMIN_COMMISSIONED: ${{ vars.CHATOPS_DEV_ADMIN_COMMISSIONED || 'false' }}
+          GITHUB_ENVIRONMENT: dev
+          ADMIN: ${{ needs.images.outputs.admin }}
           API: ${{ needs.images.outputs.api }}
           WEB: ${{ needs.images.outputs.web }}
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}

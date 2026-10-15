@@ -1,4 +1,5 @@
 "use client";
+import { adminPath } from "../lib/admin-path";
 import { Venues } from "./Venues";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AdminError, adminRequest, errorMessage, freshStepUp, visibleNavigation, type Session, type Ticket } from "../lib/admin-client";
@@ -55,10 +56,10 @@ export function AdminApp() {
     mounted.current = true;
     async function init() {
       const status = new URLSearchParams(location.search).get("auth");
-      history.replaceState(null, "", "/");
+      history.replaceState(null, "", adminPath("/"));
       try {
         if (status === "complete") {
-          const response = await fetch("/internal/auth-ticket", { cache: "no-store", credentials: "same-origin" });
+          const response = await fetch(adminPath("/internal/auth-ticket"), { cache: "no-store", credentials: "same-origin" });
           if (!response.ok) throw new AdminError("ADMIN_MFA_REQUIRED", 401);
           const pending = await response.json() as Ticket;
           if (mounted.current) setTicket(pending);
@@ -160,7 +161,7 @@ export function AdminApp() {
   const nav = visibleNavigation(session?.roles ?? []);
   const fresh = session && freshStepUp(session, now);
   return <>
-    <header className="topbar"><div className="topbar-inner"><img src="/brand/go-badminton.svg" width="144" height="40" alt="GoBadminton" /><span className="badge">Администрирование</span>{session && <button className="button outline" disabled={busy} onClick={() => void logout()}>Выйти</button>}</div></header>
+    <header className="topbar"><div className="topbar-inner"><img src={adminPath("/brand/go-badminton.svg")} width="144" height="40" alt="GoBadminton" /><span className="badge">Администрирование</span>{session && <button className="button outline" disabled={busy} onClick={() => void logout()}>Выйти</button>}</div></header>
     <main className={`container ${session ? "" : "narrow"}`}>
       <div className="section-header"><span className="eyebrow">Команда GoBadminton</span><h1>{session ? "Рабочий кабинет" : ticket ? "Подтверждение входа" : "Вход для команды"}</h1><p>{session ? "Доступные разделы зависят от ваших текущих ролей." : "Вход доступен только сотрудникам с предоставленным доступом."}</p></div>
       {error && <div className="notice danger" role="alert">{error}</div>}

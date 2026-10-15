@@ -36,3 +36,24 @@ Frozen Guide and Construction Kit App.tsx/index.css verified against canonical h
 Reproduce actual signed browser tests with own task harness in docs/workbench/implementation/admin-a0b-internal-shell-v001. A fresh task-owned PostgreSQL/PostGIS is mandatory; never set DATABASE_URL to a live DB. Harness only uses fake provider identities and Chromium CDP virtual authenticator; real staff/physical passkey enrollment NOT_TESTED.
 
 Rollout is preparation only. Before any real rollout, separate PM/Owner admission must name exact independently reviewed source/image, secure Admin origin/redirect/RP configuration, staff/MFA/recovery/legal gates, backend/runtime enablement, bounded ingress/TLS and cookie checks, deployment smoke and independent rollback images. Current internal-only API/app cannot be made publicly usable by flipping these test flags. Consumer and Admin images/processes roll back independently; additive A0a schema remains. No proxy/nginx/DNS/cert changes or deployments accompany this source candidate.
+
+## Optional DEV path entry (source only)
+
+The optional commissioned DEV image is built with `ADMIN_DEV_PATH_BUILD=1`.
+Default builds retain root paths. Runtime additionally requires
+`ADMIN_DEV_PATH_ENABLED=1`, existing Admin/DEV flags, production Node and mvp/stage,
+exact web/Admin/API origin `https://dev.gobadminton.ru` and no local test config.
+Every other combination stays unavailable. Dedicated-origin mode still requires
+its original distinct origin and a root build. PROD remains forbidden.
+API configuration uses the same explicit path flag and both exact provider callback
+URIs `https://dev.gobadminton.ru/admin/v1/admin/auth/{vk|yandex}/callback`.
+Browser requests use `/admin/v1/admin`; AdminApp forwards only allowlisted routes
+to unprefixed `/v1/admin` on main DEV. Existing main `/v1` must stay on API upstream.
+Never use dev-api as upstream. Next assets, font, logo and auth-ticket URLs include
+the compiled basePath; full reloads stay under `/admin/`.
+
+This mode shares the consumer origin: consumer XSS can make same-origin Admin
+requests/read responses with browser cookies. HttpOnly, audience separation, CSRF,
+UV and step-up do not provide independent-origin isolation. Existing Admin host
+cookies retain Secure/HttpOnly/Path=/; never narrow __Host cookie paths to /admin.
+No activation/CSRF/session secrets are added to URLs or browser persistence.

@@ -11,12 +11,14 @@ COPY apps/admin/package.json apps/admin/package.json
 RUN pnpm install --frozen-lockfile --filter @gobadminton/admin...
 COPY apps/admin apps/admin
 COPY packages/tooling packages/tooling
+ARG ADMIN_DEV_PATH_BUILD=0
+ENV ADMIN_DEV_PATH_BUILD=$ADMIN_DEV_PATH_BUILD
 RUN pnpm --filter @gobadminton/admin build
 FROM node:24.21.0-bookworm-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3010
-ENV HOSTNAME=127.0.0.1
+ENV HOSTNAME=0.0.0.0
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV ADMIN_INTERNAL_APP_ENABLED=0
 RUN useradd --system --uid 10001 --create-home gobadminton

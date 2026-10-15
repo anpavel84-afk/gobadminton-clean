@@ -16,36 +16,42 @@ a=sys.argv[1:]; d=json.loads(p.read_text())
 def save():p.write_text(json.dumps(d))
 if a[0]=='pull':print(a[1]);sys.exit(0)
 if a[:2]==['image','inspect']:
- print(json.dumps([{'Config':{'Labels':{'org.opencontainers.image.revision':os.environ['TEST_SHA']}}}]));sys.exit(0)
+ print(json.dumps([{'Architecture':os.environ.get('IMAGE_ARCH','amd64'),'Os':'linux','Config':{'Labels':{'org.opencontainers.image.revision':('0'*40 if '-admin@' in a[-1] and os.environ.get('BAD_ADMIN_REVISION') else os.environ.get('IMAGE_SHA',os.environ['TEST_SHA'])),'org.opencontainers.image.source':os.environ.get('IMAGE_SOURCE','https://github.com/anpavel84-afk/gobadminton-clean')}}}]));sys.exit(0)
 if a[0]=='inspect':
  item=d[a[1]]
  print(json.dumps([{'Image':item['image'],'State':{'Running':True,'Health':{'Status':'healthy'}},
- 'Config':{'Labels':{'com.docker.compose.project':item['project'],'com.docker.compose.service':item['service']},
+ 'Config':{'Image':item.get('reference',item['image']),'Labels':{'com.docker.compose.project':item['project'],'com.docker.compose.service':item['service']},
  'Env':['GIT_SHA='+item['sha']]}}]));sys.exit(0)
 if a[0]=='exec':
  if 'pg_dump' in a:sys.stdout.write('PGDMPdummy');sys.exit(0)
  raise SystemExit(2)
 if a[0]=='compose':
  project=a[a.index('--project-name')+1]
- action=next(x for x in a if x in ['ps','up','run'])
- if action=='ps':print(project+'-'+a[-1]);sys.exit(0)
+ action=next(x for x in a if x in ['ps','up','run','rm'])
+ if action=='ps':
+  cid=project+'-'+a[-1];print(cid if cid in d else '');sys.exit(0)
+ if action=='rm':d.pop(project+'-admin',None);save();sys.exit(0)
  if action=='run':sys.exit(int(os.environ.get('FAIL_MIGRATION','0')))
  files=[a[i+1] for i,x in enumerate(a) if x=='-f'];overlay=json.loads(Path(files[-1]).read_text())
- names=[x for x in a[a.index('up')+1:] if x in ['api','web']]
+ names=[x for x in a[a.index('up')+1:] if x in ['api','web','admin']]
  candidate=False
  for s in names:
   o=overlay['services'][s]; image=o['image']; candidate|=image.startswith('ghcr.io')
-  d[project+'-'+s].update(image=image.split('@')[-1],sha=o.get('environment',{}).get('GIT_SHA',d[project+'-'+s]['sha']))
+  d.setdefault(project+'-'+s,{'project':project,'service':s,'sha':''})
+  d[project+'-'+s].update(image=image.split('@')[-1],**({'reference':image} if image.startswith('ghcr.io') else {}),sha=o.get('environment',{}).get('GIT_SHA',d[project+'-'+s]['sha']))
+  if not image.startswith('ghcr.io'):d[project+'-'+s].pop('reference',None)
  save()
- if candidate and os.environ.get('FAIL_UP')=='1':raise SystemExit(5)
+ if candidate and (os.environ.get('FAIL_UP')=='1' or ('admin' in names and os.environ.get('FAIL_ADMIN')=='1')):raise SystemExit(5)
  sys.exit(0)
 raise SystemExit('unsupported fake docker: '+repr(a))
 '''
 CURL=r'''#!/usr/bin/env python3
-import os,json
+import os,json,sys
 from pathlib import Path
 d=json.loads((Path(os.environ['MOCK_ROOT'])/'docker.json').read_text())
-print(json.dumps({'gitSha':d['testdev-api']['sha']}))
+if sys.argv[-1] == 'https://dev.gobadminton.ru/admin/':
+ print('Администрирование недоступно' if os.environ.get('BAD_ADMIN') else 'GoBadminton · Администрирование Вход для команды /admin/_next/app.js')
+else:print(json.dumps({'gitSha':d['testdev-api']['sha']}))
 '''
 @unittest.skipUnless(os.geteuid()==0,'Root needed for local root-ownership assertions')
 class TestHelper(unittest.TestCase):

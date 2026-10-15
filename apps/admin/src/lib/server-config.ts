@@ -1,13 +1,18 @@
 export function internalConfig(env: Record<string, string | undefined> = process.env) {
   if (env.ADMIN_INTERNAL_APP_ENABLED !== "1") return null;
   if (env.APP_ENV === "prod") return null;
+  const path = env.ADMIN_DEV_PATH_ENABLED ?? "0";
+  if (!["0", "1"].includes(path)) return null;
+  const basePath = path === "1" ? "/admin" : "";
+  if ((process.env.NEXT_PUBLIC_ADMIN_BASE_PATH ?? "") !== basePath) return null;
+  if (path === "1" && env.ADMIN_DEV_ENABLED !== "1") return null;
   if (env.ADMIN_DEV_ENABLED === "1") {
     if (env.NODE_ENV !== "production" || !["mvp", "stage"].includes(env.APP_ENV ?? "") ||
         env.PUBLIC_WEB_ORIGIN !== "https://dev.gobadminton.ru" ||
-        env.ADMIN_ORIGIN !== "https://dev-admin.gobadminton.ru" ||
+        env.ADMIN_ORIGIN !== (path === "1" ? "https://dev.gobadminton.ru" : "https://dev-admin.gobadminton.ru") ||
         env.ADMIN_API_URL !== "https://dev.gobadminton.ru" ||
         env.ADMIN_TEST_ORIGIN || env.ADMIN_TEST_API_URL) return null;
-    return { origin: env.ADMIN_ORIGIN, api: env.ADMIN_API_URL };
+    return { origin: env.ADMIN_ORIGIN, api: env.ADMIN_API_URL, ...(basePath ? { basePath } : {}) };
   }
   if (env.ADMIN_DEV_ENABLED && env.ADMIN_DEV_ENABLED !== "0") return null;
   if (env.NODE_ENV === "production" || (env.APP_ENV && env.APP_ENV !== "local")) return null;

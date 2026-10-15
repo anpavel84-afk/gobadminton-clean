@@ -39,14 +39,27 @@ trusted() {
 trusted "$CONFIG_ROOT/$ENVIRONMENT.conf"
 # This is root-provisioned code, never downloaded from a job or supplied over SSH.
 # shellcheck disable=SC1090
+unset DEV_ADMIN_COMMISSIONED ADMIN_ENV_FILE ADMIN_RESPONSE_URL ADMIN_META_URL
 source "$CONFIG_ROOT/$ENVIRONMENT.conf"
 : "${PROJECT:?}" "${ENV_FILE:?}" "${DB_USER:?}" "${DB_NAME:?}" "${REGISTRY_PREFIX:?}"
 : "${READINESS_SECONDS:=120}" "${ACCEPT_SECONDS:=300}" "${OPERATION_SECONDS:=900}"
 declare -p COMPOSE_FILES SERVICES >/dev/null 2>&1 || fail 'missing fixed arrays'
 [[ $PROJECT =~ ^[a-z][a-z0-9_-]+$ && $DB_USER =~ ^[a-zA-Z0-9_]+$ && $DB_NAME =~ ^[a-zA-Z0-9_]+$ ]] || fail 'invalid profile'
 [[ $REGISTRY_PREFIX == ghcr.io/anpavel84-afk/gobadminton-clean ]] || fail 'unexpected registry'
-[[ ${#SERVICES[@]} -ge 1 && ${#SERVICES[@]} -le 2 ]] || fail 'invalid service scope'
-for s in "${SERVICES[@]}"; do [[ $s == api || $s == web ]] || fail 'service outside api/web'; done
+ADMIN_ENABLED=${DEV_ADMIN_COMMISSIONED:-false}
+[[ $ADMIN_ENABLED == true || $ADMIN_ENABLED == false ]] || fail 'invalid Admin opt-in'
+if [[ $ADMIN_ENABLED == true ]]; then
+  [[ $ENVIRONMENT == dev && ${SERVICES[*]} == 'api web admin' &&
+     ${ADMIN_RESPONSE_URL:-} == https://dev.gobadminton.ru/admin/ &&
+     ${ADMIN_META_URL:-} == https://dev.gobadminton.ru/v1/meta ]] || fail 'invalid DEV Admin profile'
+  : "${ADMIN_ENV_FILE:?}"
+  trusted "$ADMIN_ENV_FILE"; (( (8#$(stat -c %a -- "$ADMIN_ENV_FILE") & 0077) == 0 )) || fail 'Admin env must be private'
+  [[ -f $ADMIN_ENV_FILE ]] || fail 'missing private Admin env'
+else
+  [[ -z ${ADMIN_ENV_FILE:-} && -z ${ADMIN_RESPONSE_URL:-} && -z ${ADMIN_META_URL:-} ]] || fail 'partial Admin profile'
+fi
+[[ ${#SERVICES[@]} -ge 1 && (${#SERVICES[@]} -le 2 || $ADMIN_ENABLED == true) ]] || fail 'invalid service scope'
+for s in "${SERVICES[@]}"; do [[ $s == api || $s == web || ($s == admin && $ADMIN_ENABLED == true) ]] || fail 'service outside api/web'; done
 for p in "${COMPOSE_FILES[@]}" "$ENV_FILE"; do trusted "$p"; [[ -f $p ]] || fail 'not a file'; done
 trusted "$STATE_ROOT"
 STATE="$STATE_ROOT/$ENVIRONMENT"
@@ -74,7 +87,8 @@ publish_evidence() {
     --argjson pending "$(if [[ -e $STATE/pending.json ]]; then printf true; else printf false; fi)" \
     '{schema:1,environment:"dev",observed_at:(now|floor),pending:$pending,
       accepted:($good[0] | if . == null then null else
-        {release_id,source_sha,api_digest,web_digest,status,finished_at} end)}' >"$tmp"
+        {release_id,source_sha,api_digest,web_digest,status,finished_at} +
+        (if has("admin_digest") then {admin_digest} else {} end) end)}' >"$tmp"
   chown root:root "$tmp"; chmod 644 "$tmp"
   mv -fT -- "$tmp" "$EVIDENCE_ROOT/dev.json"
 }
@@ -97,17 +111,28 @@ status() {
 }
 healthy() {
   local o=$1 s cid item
-  for s in "${SERVICES[@]}"; do
+  local -a checks=("${SERVICES[@]}")
+  if [[ -f ${o%/*}/admin-absent && $o == */previous.json ]]; then checks=(api web); fi
+  for s in "${checks[@]}"; do
     cid=$(compose "$o" ps -q "$s")
     [[ -n $cid && $cid != *$'\n'* ]] || return 1
     item=$(docker_bounded inspect "$cid")
+    if [[ $ADMIN_ENABLED == true && $o == */candidate.json ]]; then
+      jq -e --arg image "$(jq -r --arg s "$s" '.services[$s].image' "$o")"         '.[0].Config.Image == $image' <<<"$item" >/dev/null || return 1
+    fi
     jq -e '.[0].State.Running == true and .[0].State.Health.Status == "healthy"' <<<"$item" >/dev/null || return 1
   done
 }
 verify_version() {
   local sha=$1
   if [[ -n ${API_META_URL-} ]]; then
-    "$CURL" --fail --silent --show-error --max-time 10 "$API_META_URL" | jq -e --arg s "$sha" '.gitSha == $s' >/dev/null
+    "$CURL" --fail --silent --show-error --max-time 10 "$API_META_URL" | jq -e --arg s "$sha" '.gitSha == $s' >/dev/null || return 1
+  fi
+  if [[ $ADMIN_ENABLED == true ]]; then
+    "$CURL" --fail --silent --show-error --max-time 10 "$ADMIN_META_URL" | jq -e --arg s "$sha" '.gitSha == $s' >/dev/null || return 1
+    local body
+    body=$("$CURL" --fail --silent --show-error --max-time 10 --max-filesize 1048576 "$ADMIN_RESPONSE_URL") || return 1
+    [[ $body == *'Вход для команды'* && $body == *'GoBadminton · Администрирование'* && $body == *'/admin/_next/'* && $body != *'Администрирование недоступно'* ]] || return 1
   fi
 }
 # Only image rollback. Never restore a historical DB dump or reverse schema automatically.
@@ -115,8 +140,13 @@ rollback() {
   local pending id
   [[ -f $STATE/pending.json ]] || return 0
   pending=$(cat "$STATE/pending.json"); id=$(jq -r .release_id <<<"$pending")
+  local -a restore=("${SERVICES[@]}")
+  if [[ -f $STATE/$id/admin-absent ]]; then
+    compose "$STATE/$id/candidate.json" rm -s -f admin >&2 || return 1
+    restore=(api web)
+  fi
   compose "$STATE/$id/previous.json" up -d --no-deps --no-build --pull never \
-    --wait --wait-timeout "$READINESS_SECONDS" "${SERVICES[@]}" >&2 || return 1
+    --wait --wait-timeout "$READINESS_SECONDS" "${restore[@]}" >&2 || return 1
   healthy "$STATE/$id/previous.json" || return 1
   jq '. + {status:"ROLLED_BACK",finished_at:(now|floor)}' <<<"$pending" | write_json "$STATE/last-result.json"
   if [[ -f $STATE/$id/previous-accepted.json ]]; then
@@ -160,12 +190,15 @@ if [[ $ACTION == accept || $ACTION == rollback ]]; then
   (( $(date +%s) < $(jq -r .deadline "$STATE/pending.json") )) || { rollback; fail 'acceptance expired'; }
   healthy "$STATE/$ID/candidate.json" || fail 'unhealthy candidate'
   verify_version "$(jq -r .source_sha "$STATE/pending.json")" || fail 'wrong application version'
+  # Verification can consume the remaining deadline while the watchdog waits on our lock.
+  (( $(date +%s) < $(jq -r .deadline "$STATE/pending.json") )) || { rollback; fail 'acceptance expired'; }
   jq '. + {status:"ACCEPTED",finished_at:(now|floor)}' "$STATE/pending.json" | write_json "$STATE/accepted.json"
   cp -- "$STATE/accepted.json" "$STATE/last-result.json"; rm -- "$STATE/pending.json"
   status; exit 0
 fi
 [[ $ACTION == deploy ]] || fail 'unsupported action'
-jq -e 'keys==["action","api_digest","expected_previous_sha","release_id","sequence","source_sha","web_digest"] and
+jq -e --argjson admin "$ADMIN_ENABLED" '(if $admin then has("admin_digest") and (.admin_digest|type=="string" and test("^sha256:[0-9a-f]{64}$")) else (has("admin_digest")|not) end) and
+  (del(.admin_digest)|keys)==["action","api_digest","expected_previous_sha","release_id","sequence","source_sha","web_digest"] and
   (.sequence|type=="number" and floor==. and .>0 and .<1000000000000) and
   (.source_sha|test("^[0-9a-f]{40}$")) and
   (.expected_previous_sha|test("^$|^[0-9a-f]{40}$")) and
@@ -174,13 +207,14 @@ jq -e 'keys==["action","api_digest","expected_previous_sha","release_id","sequen
 SHA=$(jq -r .source_sha <<<"$REQUEST"); SEQUENCE=$(jq -r .sequence <<<"$REQUEST")
 API_IMAGE="$REGISTRY_PREFIX-api@$(jq -r .api_digest <<<"$REQUEST")"
 WEB_IMAGE="$REGISTRY_PREFIX-web@$(jq -r .web_digest <<<"$REQUEST")"
+ADMIN_IMAGE="$REGISTRY_PREFIX-admin@$(jq -r '.admin_digest // ""' <<<"$REQUEST")"
 if [[ -f $STATE/accepted.json ]] && [[ $(jq -r .release_id "$STATE/accepted.json") == "$ID" ]]; then
-  [[ $(jq -cS '{release_id,source_sha,api_digest,web_digest,sequence}' "$STATE/accepted.json") == $(jq -cS '{release_id,source_sha,api_digest,web_digest,sequence}' <<<"$REQUEST") ]] || fail 'reused release ID'
+  [[ $(jq -cS '{release_id,source_sha,api_digest,web_digest,sequence} + (if has("admin_digest") then {admin_digest} else {} end)' "$STATE/accepted.json") == $(jq -cS '{release_id,source_sha,api_digest,web_digest,sequence} + (if has("admin_digest") then {admin_digest} else {} end)' <<<"$REQUEST") ]] || fail 'reused release ID'
   status; exit 0
 fi
 if [[ -f $STATE/pending.json ]]; then
   if [[ $(jq -r .release_id "$STATE/pending.json") == "$ID" ]]; then
-    [[ $(jq -cS '{release_id,source_sha,api_digest,web_digest,sequence}' "$STATE/pending.json") == $(jq -cS '{release_id,source_sha,api_digest,web_digest,sequence}' <<<"$REQUEST") ]] || fail 'pending release ID rebound'
+    [[ $(jq -cS '{release_id,source_sha,api_digest,web_digest,sequence} + (if has("admin_digest") then {admin_digest} else {} end)' "$STATE/pending.json") == $(jq -cS '{release_id,source_sha,api_digest,web_digest,sequence} + (if has("admin_digest") then {admin_digest} else {} end)' <<<"$REQUEST") ]] || fail 'pending release ID rebound'
     status; exit 0
   fi
   fail 'another release awaits acceptance/recovery'
@@ -212,10 +246,15 @@ printf '%s\n' "$SEQUENCE" >"$STATE/max-sequence"
 # Build a fixed overlay. Caller cannot change networks, mounts, commands or env other than GIT_SHA.
 jq -n --arg a "$API_IMAGE" --arg w "$WEB_IMAGE" --arg sha "$SHA" \
   '{services:{api:{image:$a,environment:{GIT_SHA:$sha}},web:{image:$w,environment:{GIT_SHA:$sha}},migrate:{image:$a,environment:{GIT_SHA:$sha}}}}' >"$DIR/candidate.json"
+if [[ $ADMIN_ENABLED == true ]]; then
+  jq --arg a "$ADMIN_IMAGE" --arg sha "$SHA" '.services.admin={image:$a,environment:{GIT_SHA:$sha}}' "$DIR/candidate.json" > "$DIR/candidate.next.json"
+  mv "$DIR/candidate.next.json" "$DIR/candidate.json"
+fi
 printf '{"services":{}}\n' >"$DIR/previous.json"
 # Snapshot actual container image IDs (not mutable tags) and version env.
 for s in "${SERVICES[@]}"; do
   CID=$("${BASE[@]}" ps -q "$s")
+  if [[ -z $CID && $s == admin ]]; then touch "$DIR/admin-absent"; continue; fi
   [[ -n $CID && $CID != *$'\n'* ]] || fail "bootstrap requires one existing $s container"
   INFO=$(docker_bounded inspect "$CID")
   jq -e --arg p "$PROJECT" --arg s "$s" '.[0].Config.Labels["com.docker.compose.project"]==$p and .[0].Config.Labels["com.docker.compose.service"]==$s' <<<"$INFO" >/dev/null || fail 'wrong container identity'
@@ -230,10 +269,11 @@ for s in "${SERVICES[@]}"; do
 done
 # Pull can fail safely before any running service has been changed.
 for s in "${SERVICES[@]}"; do
-  if [[ $s == api ]]; then image=$API_IMAGE; else image=$WEB_IMAGE; fi
+  case $s in api) image=$API_IMAGE;; web) image=$WEB_IMAGE;; admin) image=$ADMIN_IMAGE;; esac
   timeout --kill-after=15s 300 "$DOCKER" pull "$image" >&2
-  docker_bounded image inspect "$image" | jq -e --arg sha "$SHA" '.[0].Config.Labels["org.opencontainers.image.revision"]==$sha' >/dev/null || fail 'image/source label mismatch'
+  docker_bounded image inspect "$image" | jq -e --arg sha "$SHA" --argjson admin "$ADMIN_ENABLED" '.[0] | .Config.Labels["org.opencontainers.image.revision"]==$sha and (if $admin then .Config.Labels["org.opencontainers.image.source"]=="https://github.com/anpavel84-afk/gobadminton-clean" and .Architecture=="amd64" and .Os=="linux" else true end)' >/dev/null || fail 'image/source label mismatch'
 done
+if [[ $ADMIN_ENABLED == true ]]; then printf '%s\n' "$REQUEST" > "$DIR/release.json"; fi
 PENDING=$(jq --argjson deadline "$(( $(date +%s) + OPERATION_SECONDS ))" '. + {status:"DEPLOYING",deadline:$deadline}' <<<"$REQUEST")
 printf '%s\n' "$PENDING" | write_json "$STATE/pending.json"
 MUTATING=1

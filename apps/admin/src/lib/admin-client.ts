@@ -1,3 +1,4 @@
+import { adminPath } from "./admin-path";
 export type Ticket = { principalId: string; status: "active" | "pending_mfa"; csrfToken: string };
 export type Session = { principalId: string; userId: string; status: string; version: number; roles: string[]; sessionId: string; expiresAt: string; stepUpAt: string; csrfToken: string };
 export class AdminError extends Error {
@@ -8,7 +9,7 @@ export async function adminRequest<T>(path: string, body?: unknown, csrf?: strin
   if (body !== undefined) headers["Content-Type"] = "application/json";
   if (csrf) headers["X-CSRF-Token"] = csrf;
   if (key) headers["Idempotency-Key"] = key;
-  const response = await fetch("/v1/admin/" + path, {
+  const response = await fetch(adminPath("/v1/admin/" + path), {
     method: body === undefined ? "GET" : "POST", headers,
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     credentials: "same-origin", cache: "no-store", signal: AbortSignal.timeout(20000),

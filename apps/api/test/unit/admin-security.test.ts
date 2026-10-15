@@ -91,3 +91,24 @@ describe("deliberate Germany DEV Admin configuration", () => {
       expect(() => loadEnv({...dev,...bad})).toThrow();
   });
 });
+
+describe("DEV path config retains pure Origin and explicit callbacks", () => {
+  const main = "https://dev.gobadminton.ru";
+  const dev = { ...base, NODE_ENV:"production", APP_ENV:"stage", ADMIN_INTERNAL_ENABLED:"1", ADMIN_DEV_ENABLED:"1", ADMIN_DEV_PATH_ENABLED:"1",
+    PUBLIC_WEB_ORIGIN:main, PUBLIC_API_ORIGIN:main, ADMIN_ORIGIN:main,
+    ADMIN_AUTH_PEPPER:"dedicated-admin-secret-longer-than-32-chars",
+    ADMIN_VK_REDIRECT_URI:main+"/admin/v1/admin/auth/vk/callback",
+    ADMIN_YANDEX_REDIRECT_URI:main+"/admin/v1/admin/auth/yandex/callback",
+    VK_CLIENT_ID:"synthetic", VK_CLIENT_SECRET:"synthetic-provider-secret",
+    CONTENT_MODERATION_PROVIDER:"openai", CONTENT_MODERATION_FINGERPRINT_SECRET:"dedicated-moderation-secret-longer-than-32", OPENAI_MODERATION_API_KEY:"synthetic" };
+  it("admits only exact DEV path configuration and rejects partial or lookalike activation", () => {
+    expect(loadEnv(dev).ADMIN_ORIGIN).toBe(main);
+    for (const bad of [{ADMIN_DEV_PATH_ENABLED:"0"},{ADMIN_DEV_PATH_ENABLED:"true"},{ADMIN_DEV_ENABLED:"0"},
+      {ADMIN_INTERNAL_ENABLED:"0"},{APP_ENV:"prod"},{APP_ENV:"local"},{COOKIE_SECURE:"0"},
+      {ADMIN_ORIGIN:main+"/admin"},{ADMIN_ORIGIN:main+"?x"},{ADMIN_ORIGIN:main+"#x"},
+      {ADMIN_ORIGIN:"https://user@dev.gobadminton.ru"},{ADMIN_ORIGIN:main+".evil.test"},
+      {ADMIN_VK_REDIRECT_URI:main+"/v1/admin/auth/vk/callback"},
+      {ADMIN_YANDEX_REDIRECT_URI:main+"/admin/v1/admin/auth/yandex/callback?code=x"}])
+      expect(() => loadEnv({...dev,...bad})).toThrow();
+  });
+});
