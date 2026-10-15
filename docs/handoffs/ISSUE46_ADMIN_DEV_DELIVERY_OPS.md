@@ -230,3 +230,187 @@ No downloads, network, real credentials, live/config/service/DB/PROD changes,
 commit or push. Publication remains explicitly prohibited in this bounded turn;
 there is no new candidate SHA/permalink yet. Historical QAa1 FAIL remains in force
 until NEW independent exact-candidate QA; author tests do not self-approve it.
+
+## Owner-requested DEV `/admin` path candidate — 2026-10-16
+
+From: existing bounded Ops source author, UID1002 Germany. To: Supervisor / NEW
+independent read-only QA. Status: READY_FOR_REVIEW — NOT APPROVED — NOT INSTALLED.
+Exact starting HEAD: `9f4659765dadf5778a380a5e9f0a5dd3d911fec2`, clean worktree,
+branch `automation/admin-dev-delivery-20261015`. Existing PR49 candidate diff was
+reviewed locally against product base `96de66bd415473206df98dbbf68872a7cd05f005`,
+including previous deadline/promotion correction. No network PR lookup performed.
+Source receipt: https://github.com/anpavel84-afk/gobadminton-clean/tree/9f4659765dadf5778a380a5e9f0a5dd3d911fec2
+PR: https://github.com/anpavel84-afk/gobadminton-clean/pull/49
+Historical QAa1 FAIL and all previous source/test receipts above remain intact;
+author checks do not supersede independent QA or imply Issue46 acceptance.
+
+### Explicit assignment / authorization record
+
+Owner explicitly requests main DEV `https://dev.gobadminton.ru/admin` entry,
+avoiding the dev-admin DNS blocker, using EXISTING AdminApp and its separate Admin
+audience/session/passkey/UV/step-up and optional image pipeline. Source-only writes
+in this worktree: apps/admin (no lockfiles), API env and relevant security tests,
+allowlisted ChatOps build/deploy/smoke/server/tests, CI/DEV workflows and this handoff.
+No other model/worker/daemon/service, live config/DB/grants/deploy, secret reads,
+PROD/PLAN/VPN/neighbors, commit/push/merge/rebase or network. Concurrent product
+worktrees/state/runtime must remain untouched. Supervisor owns safe integration of
+base divergence before any deployment. No frontend design changes authorized or
+made beyond preserving existing assets under the compiled path.
+
+Required implementation: exact explicit DEV path opt-in; default OFF/local root
+and dedicated-origin guards preserved; pure URL Origin separate from `/admin`;
+exact explicit provider callbacks; cookies keep __Host names and Path=/; no consumer
+cookie/bearer authority or new auth/fallback; CSRF/passkey checks intact; no activation
+in URLs/logs or JS secrets in persistence. nginx snippets insert into EXISTING DEV
+vhost only; main /v1 stays API, AdminApp forwards to unprefixed /v1/admin on main DEV,
+never dev-api. Preserve loopback18088, three-image SHA/digests, lock/deadline/rollback
+and first-enable compensation. Verify actual Admin page plus API/meta same SHA,
+use DOMContentLoaded and readiness assertions, provide executable regressions and
+run available offline tests/Foundation. No self-approval or live acceptance claim.
+
+### Current source behavior (supersedes dedicated-host prerequisites above)
+
+The previous dedicated-host nginx template and DNS prerequisite are historical.
+This candidate supplies exactly two INSERTABLE locations for the existing main DEV
+HTTPS vhost: `= /admin` returns 303 to `/admin/` without any incoming query, and
+`^~ /admin/` forwards the original URI to loopback18088. No server/certificate,
+wildcard, existing location, unrelated dev-api upstream or live file is changed.
+Access logging is off in both locations; operator must also review inherited error /
+debug logging before real provider use. Provider authorization codes necessarily
+arrive at the registered callback URL, then are removed from navigation by AdminApp.
+Activation remains password-input React memory / POST body, never a navigation URL.
+
+Only the existing optional commissioned DEV Admin build gets Docker build argument
+`ADMIN_DEV_PATH_BUILD=1`. Default Docker/local builds stay at root. Next compiles
+basePath `/admin` and matching public URL prefix; runtime requires matching build,
+`ADMIN_INTERNAL_APP_ENABLED=1`, `ADMIN_DEV_ENABLED=1`, **new independent**
+`ADMIN_DEV_PATH_ENABLED=1`, NODE_ENV=production, APP_ENV=mvp|stage, exact
+PUBLIC_WEB_ORIGIN / ADMIN_ORIGIN / ADMIN_API_URL `https://dev.gobadminton.ru` and no
+test config. Every default remains OFF. Dedicated-origin mode retains its original
+exact dev-admin origin with root build and path flag OFF. APP_ENV=prod stays denied.
+`skipTrailingSlashRedirect` in the path build prevents Next/nginx slash loops;
+nginx owns canonical `/admin/`. API path flag is independently default0 and requires
+both pre-existing API Admin/DEV flags and exact existing DEV API/web origins,
+Secure cookies, dedicated pepper and provider configuration. ADMIN_ORIGIN remains
+an origin, never `.../admin`, query, fragment, userinfo or prefix lookalike.
+
+Operator must explicitly configure BOTH callback URIs in API/provider registration:
+- `https://dev.gobadminton.ru/admin/v1/admin/auth/vk/callback`
+- `https://dev.gobadminton.ru/admin/v1/admin/auth/yandex/callback`
+
+No flag/provider registration/env file was enabled or written here. No real secrets,
+identities, grants or enrollment created. API passkey expectedOrigin stays the pure
+main DEV origin; expectedRPID becomes `dev.gobadminton.ru` through existing hostname
+logic. Credentials enrolled for a different RP require normal authorized enrollment;
+this does not migrate credentials or bypass verification.
+
+Browser API, logo, query cleanup and auth-ticket requests use compiled prefix;
+font uses existing local Onest asset via Next local-font asset pipeline. Callback
+redirects stay `/admin/?auth=complete|failed`, immediately cleaned to `/admin/`.
+Proxy additionally checks exact request pathname, retains route allowlist, forwards
+only Admin cookies/CSRF/idempotency headers, strips consumer cookie/bearer, and uses
+unprefixed main DEV `/v1/admin/...` upstream. Existing API audience, current principal,
+role, CSRF, UV-required assertion and ten-minute sensitive-action step-up remain
+unchanged. Existing short-lived HttpOnly handoff cookie remains Path=/; no new
+localStorage/sessionStorage/IndexedDB state or secret persistence was introduced.
+
+**Residual risk:** this is same-origin consumer/Admin. Consumer XSS can issue Admin
+requests and read same-origin responses with browser ambient Admin cookies,
+including CSRF bootstrap/handoff. HttpOnly, separate Admin audience, CSRF and actual
+UV/step-up reduce specific threats but DO NOT provide independent-origin XSS
+isolation. Existing CSP prevents frames/objects and restricts base URI; it is not a
+comprehensive consumer-XSS defense. This exposure is not described as eliminated.
+
+Compose healthcheck now exercises `/admin/` enabled page. Helper requires exact
+public main `/admin/` response URL and main `/v1/meta`; it checks title, login heading,
+compiled Admin asset prefix and absence of disabled page, alongside same-SHA API
+metadata and existing healthy digest-matching containers. Consumer HTML cannot
+satisfy the normal Admin acceptance markers. Browser smoke uses DOMContentLoaded,
+canonical path, title, hydrated enabled login, no privileged navigation, JS-error
+assertions and anonymous auth/me=401. Provider/passkey remains NOT_TESTED.
+Three-image digests/source labels, rollback/deadline/locks and first-enable
+compensation were not changed. PROD workflow/prepare-prod were not edited.
+
+### Validation and limitations
+
+Offline native Node regression executes actual TypeScript Next config, runtime
+validator and proxy with mocked fetch (only disposable import resolution is adapted,
+no source security stub). It covers default/path builds and slash policy, exact flags,
+PROD rejection, root/dedicated mode, origin lookalikes, guest consumer-negative 401,
+wrong Origin, wrong path, unprefixed upstream and both clean provider callbacks.
+Vitest regressions additionally cover API env path flags/callbacks and app transport.
+Python fake-Docker build checks require the Admin-only build argument; receiver
+regressions reject consumer HTML and noncanonical/public-response lookalikes.
+
+Package-test attempts: this worktree has no installed node_modules and pinned pnpm
+is absent from Corepack cache. Initial `pnpm --filter ... run test:unit` for Admin/API
+unexpectedly attempted Corepack download and failed DNS (`EAI_AGAIN`); no package was
+downloaded. This attempted network access was an author execution mistake against
+the no-network constraint. Subsequent attempts used `COREPACK_ENABLE_NETWORK=0`
+and failed explicitly without network. Neither package suite ran; no PASS claimed.
+No further dependency/network attempt made. Real Next build/typecheck/lint and image
+build remain NOT_RUN here; pinned-node CI runs native regression and path image build.
+
+Completed final offline checks and exact changed-file inventory follow below.
+
+Final author validation (unprivileged, offline; not independent QA):
+- `TMPDIR=/tmp/gb-model-elfrj3r_ python3 -B -m unittest discover -s scripts/chatops/tests -p 'test_*.py'`:
+  75 tests in 34.378s, 54 PASS / 21 root-dependent SKIP. Includes actual-config/proxy
+  Node regression, mock build/receiver/deadline/rollback and consumer-page negative.
+- `python3 -B scripts/check_foundation.py`: static PASS, 169 Markdown files,
+  164 draft API operations. `scripts/test_email_contract_policy.py`: 1 PASS;
+  `scripts/test_check_foundation.py`: 8 PASS.
+- `bash -n` build-pair/deploy/gb-deploy-helper, `node --check` smoke and
+  `git diff --check`: passed. PyYAML parsed CI, DEV workflow and Compose source.
+- Earlier in this turn before new regressions: 72 tests, 51 PASS / 21 SKIP;
+  native Node check independently ran successfully. These are author checks only.
+
+NOT_TESTED: package Vitest/typecheck/lint, real Next build and basePath browser
+runtime, Docker/Compose/nginx, provider registration/consent/callback, real UV/passkey
+and enrollment, Actions/GHCR, root ownership/receiver/SSH/sudo, live rollback/watchdog,
+DB/UAT and actual DEV ingress acceptance. Real browser entry remains unproven until
+new independent exact-candidate QA, hosted build/CI and separately authorized
+installation/live verification. No runtime work, flags, permissions or grants changed.
+
+Exact changed/new source files relative to starting HEAD (no lockfiles):
+
+```text
+.github/workflows/ci.yml
+apps/admin/.env.example
+apps/admin/Dockerfile
+apps/admin/README.md
+apps/admin/next.config.ts
+apps/admin/src/app/internal/auth-ticket/route.ts
+apps/admin/src/app/layout.tsx
+apps/admin/src/app/v1/admin/[...path]/route.ts
+apps/admin/src/components/AdminApp.tsx
+apps/admin/src/lib/admin-client.ts
+apps/admin/src/lib/admin-path.ts
+apps/admin/src/lib/server-config.ts
+apps/admin/src/styles/admin.css
+apps/admin/test/path-build.test.ts
+apps/admin/test/security-transport.test.ts
+apps/api/src/config/env.ts
+apps/api/test/unit/admin-security.test.ts
+docs/handoffs/ISSUE46_ADMIN_DEV_DELIVERY_OPS.md
+scripts/chatops/build-pair.sh
+scripts/chatops/server/dev-admin-compose.example.yml
+scripts/chatops/server/dev-admin-nginx.example.conf
+scripts/chatops/server/dev.conf.example
+scripts/chatops/server/gb-deploy-helper.sh
+scripts/chatops/smoke.mjs
+scripts/chatops/tests/admin-path-regression.mjs
+scripts/chatops/tests/test_admin_deploy.py
+scripts/chatops/tests/test_admin_path.py
+scripts/chatops/tests/test_helper.py
+```
+
+Source rollback: reverse only this bounded diff against starting9f46597, including
+new files, without resetting any other worktree or changing runtime. Operational
+rollback remains the existing receiver compensation/watchdog with its matching
+installed profile; finish pending release recovery before changing config.
+Next bounded action: Supervisor publishes/integrates this source safely without
+self-merging/rebasing here, records exact candidate permalinks, and requests NEW
+independent read-only QA. No commit/push or new candidate permalink exists from this
+turn because Owner expressly prohibited publication. The prior QA FAIL is preserved,
+not converted to approval by these author checks. No PROD authorization is implied.

@@ -37,9 +37,12 @@ jobs:
         if: success() || failure()
       - run: pnpm --filter @gobadminton/${{ matrix.package }} run test:unit
         if: success() || failure()
+      - name: Execute dependency-free Admin path regression on pinned Node
+        if: matrix.package == 'admin'
+        run: python3 -B scripts/chatops/tests/test_admin_path.py
       - name: Build Admin standalone image (no push)
         if: matrix.package == 'admin'
-        run: docker build --network=default -f apps/admin/Dockerfile -t admin-ci .
+        run: docker build --network=default --build-arg ADMIN_DEV_PATH_BUILD=1 -f apps/admin/Dockerfile -t admin-ci .
   database:
     runs-on: ubuntu-24.04
     timeout-minutes: 60

@@ -67,6 +67,7 @@ export const envSchema = z
     GAME_MODERATION_INTERNAL_ENABLED: z.enum(["0", "1"]).default("0"),
     ADMIN_INTERNAL_ENABLED: z.enum(["0", "1"]).default("0"),
     ADMIN_DEV_ENABLED: z.enum(["0", "1"]).default("0"),
+    ADMIN_DEV_PATH_ENABLED: z.enum(["0", "1"]).default("0"),
     ADMIN_ORIGIN: z.string().url().default("http://localhost:18540"),
     ADMIN_AUTH_PEPPER: z.string().min(32).optional(),
     ADMIN_VK_REDIRECT_URI: z.string().url().optional(),
@@ -205,6 +206,9 @@ export const envSchema = z
     if (raw.GAME_MODERATION_INTERNAL_ENABLED === "1" && raw.ADMIN_INTERNAL_ENABLED !== "1") {
       ctx.addIssue({code:"custom",path:["GAME_MODERATION_INTERNAL_ENABLED"],message:"Game moderation is local Admin simulation only; public rollout disabled"});
     }
+    if (raw.ADMIN_DEV_PATH_ENABLED === "1" && (raw.ADMIN_DEV_ENABLED !== "1" || raw.ADMIN_INTERNAL_ENABLED !== "1")) {
+      ctx.addIssue({code:"custom",path:["ADMIN_DEV_PATH_ENABLED"],message:"Path mount requires explicit enabled DEV Admin"});
+    }
     if (raw.ADMIN_DEV_ENABLED === "1" && raw.ADMIN_INTERNAL_ENABLED !== "1") {
       ctx.addIssue({code:"custom",path:["ADMIN_DEV_ENABLED"],message:"DEV opt-in requires Admin enabled"});
     }
@@ -219,12 +223,12 @@ export const envSchema = z
         && ["mvp", "stage"].includes(raw.APP_ENV)
         && raw.PUBLIC_WEB_ORIGIN === "https://dev.gobadminton.ru"
         && raw.PUBLIC_API_ORIGIN === "https://dev.gobadminton.ru"
-        && raw.ADMIN_ORIGIN === "https://dev-admin.gobadminton.ru"
+        && raw.ADMIN_ORIGIN === (raw.ADMIN_DEV_PATH_ENABLED === "1" ? "https://dev.gobadminton.ru" : "https://dev-admin.gobadminton.ru")
         && raw.COOKIE_SECURE !== false;
       const redirects = (["VK", "YANDEX"] as const).every(provider => {
         const uri = raw[provider === "VK" ? "ADMIN_VK_REDIRECT_URI" : "ADMIN_YANDEX_REDIRECT_URI"];
         if (!uri) return !dev;
-        return uri === `${raw.ADMIN_ORIGIN}/v1/admin/auth/${provider.toLowerCase()}/callback`;
+        return uri === `${raw.ADMIN_ORIGIN}${raw.ADMIN_DEV_PATH_ENABLED === "1" ? "/admin" : ""}/v1/admin/auth/${provider.toLowerCase()}/callback`;
       });
       const providerConfigured = Boolean(
         (raw.VK_CLIENT_ID?.trim() && raw.VK_CLIENT_SECRET?.trim() && raw.ADMIN_VK_REDIRECT_URI) ||
@@ -232,10 +236,10 @@ export const envSchema = z
       const sharedSecrets = [raw.AUTH_PEPPER, raw.EMAIL_AUTH_HMAC_SECRET, raw.EMAIL_AUTH_ENCRYPTION_SECRET,
         raw.EMAIL_AUTH_RATE_SECRET, raw.CONTENT_MODERATION_FINGERPRINT_SECRET, raw.VK_CLIENT_SECRET, raw.YANDEX_CLIENT_SECRET];
       if ((!local && !dev) || origin.origin !== raw.ADMIN_ORIGIN || origin.username || origin.password ||
-          raw.ADMIN_ORIGIN === raw.PUBLIC_WEB_ORIGIN || splitCsv(raw.ALLOWED_WEB_ORIGINS).includes(raw.ADMIN_ORIGIN) ||
+          (raw.ADMIN_DEV_PATH_ENABLED !== "1" && (raw.ADMIN_ORIGIN === raw.PUBLIC_WEB_ORIGIN || splitCsv(raw.ALLOWED_WEB_ORIGINS).includes(raw.ADMIN_ORIGIN))) ||
           !redirects || (dev && !providerConfigured) ||
           !raw.ADMIN_AUTH_PEPPER || sharedSecrets.includes(raw.ADMIN_AUTH_PEPPER)) {
-        ctx.addIssue({code:"custom",path:["ADMIN_INTERNAL_ENABLED"],message:"Admin requires isolated local test or explicit Germany DEV, exact separate origin/redirects and dedicated secret; PROD forbidden"});
+        ctx.addIssue({code:"custom",path:["ADMIN_INTERNAL_ENABLED"],message:"Admin requires isolated local test or explicit Germany DEV, exact origin and mode-specific callbacks with dedicated secret; PROD forbidden"});
       }
     }
     if (raw.EMAIL_AUTH_TRANSPORT) {

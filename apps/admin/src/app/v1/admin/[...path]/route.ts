@@ -8,6 +8,8 @@ async function proxy(request: Request, context: { params: Promise<{ path: string
   const config = internalConfig();
   if (!config) return new Response(null, { status: 404, headers: { "Cache-Control": "no-store" } });
   const path = (await context.params).path.join("/");
+  if (new URL(request.url).pathname !== (config.basePath ?? "") + "/v1/admin/" + path)
+    return new Response(null, { status: 404, headers: { "Cache-Control": "no-store" } });
   const callback = request.method === "GET" && /^auth\/(vk|yandex)\/callback$/.test(path);
   const caseDetail = /^cases\/[0-9a-f-]{36}$/.test(path);
   const caseEvidence = /^cases\/[0-9a-f-]{36}\/evidence(?:\/[0-9a-f-]{36})?$/.test(path);
@@ -55,7 +57,7 @@ async function proxy(request: Request, context: { params: Promise<{ path: string
         if (typeof data.csrfToken === "string" && typeof data.principalId === "string" && ["active", "pending_mfa"].includes(data.status))
           ticket = { csrfToken: data.csrfToken, principalId: data.principalId, status: data.status };
       }
-      responseHeaders.set("Location", config.origin + (ticket ? "/?auth=complete" : "/?auth=failed"));
+      responseHeaders.set("Location", config.origin + (config.basePath ?? "") + (ticket ? "/?auth=complete" : "/?auth=failed"));
       responseHeaders.append("Set-Cookie", `${HANDOFF_COOKIE}=${ticket ? encodeURIComponent(JSON.stringify(ticket)) : ""}; Path=/; Max-Age=${ticket ? 600 : 0}; Secure; HttpOnly; SameSite=Strict`);
       return new Response(null, { status: 303, headers: responseHeaders });
     }

@@ -49,8 +49,8 @@ CURL=r'''#!/usr/bin/env python3
 import os,json,sys
 from pathlib import Path
 d=json.loads((Path(os.environ['MOCK_ROOT'])/'docker.json').read_text())
-if '18088' in sys.argv[-1]:
- print('Администрирование недоступно' if os.environ.get('BAD_ADMIN') else 'Администрирование Вход для команды')
+if sys.argv[-1] == 'https://dev.gobadminton.ru/admin/':
+ print('Администрирование недоступно' if os.environ.get('BAD_ADMIN') else 'GoBadminton · Администрирование Вход для команды /admin/_next/app.js')
 else:print(json.dumps({'gitSha':d['testdev-api']['sha']}))
 '''
 @unittest.skipUnless(os.geteuid()==0,'Root needed for local root-ownership assertions')

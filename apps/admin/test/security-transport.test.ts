@@ -92,3 +92,54 @@ describe("Germany DEV app fence", () => {
       {ADMIN_TEST_ORIGIN:origin},{ADMIN_ORIGIN:"https://arbitrary.test"}]) expect(internalConfig({...dev,...bad})).toBeNull();
   });
 });
+
+describe("explicit DEV path mount", () => {
+  const main = "https://dev.gobadminton.ru";
+  const dev = { ADMIN_INTERNAL_APP_ENABLED: "1", ADMIN_DEV_ENABLED: "1", ADMIN_DEV_PATH_ENABLED: "1",
+    NODE_ENV: "production", APP_ENV: "stage", PUBLIC_WEB_ORIGIN: main, ADMIN_ORIGIN: main, ADMIN_API_URL: main };
+  function pathEnabled() {
+    for (const [key, value] of Object.entries(dev)) vi.stubEnv(key, value);
+    vi.stubEnv("NEXT_PUBLIC_ADMIN_BASE_PATH", "/admin");
+  }
+  it("requires matching build and every exact runtime flag/origin", () => {
+    expect(internalConfig(dev)).toBeNull();
+    pathEnabled();
+    expect(internalConfig(dev)).toEqual({origin:main,api:main,basePath:"/admin"});
+    for (const bad of [{APP_ENV:"prod"},{APP_ENV:"local"},{NODE_ENV:"test"}, {ADMIN_DEV_ENABLED:"0"},
+      {ADMIN_INTERNAL_APP_ENABLED:"0"},{ADMIN_DEV_PATH_ENABLED:"0"},{ADMIN_DEV_PATH_ENABLED:"true"},
+      {ADMIN_ORIGIN:main+"/admin"},{ADMIN_ORIGIN:main+"?x"},{ADMIN_ORIGIN:main+"#x"},
+      {ADMIN_ORIGIN:"https://user@dev.gobadminton.ru"},{ADMIN_ORIGIN:main+".evil.test"},
+      {ADMIN_API_URL:"https://dev-api.gobadminton.ru"},{ADMIN_TEST_API_URL:"http://localhost"}])
+      expect(internalConfig({...dev,...bad})).toBeNull();
+  });
+  it("proxies prefixed requests to unprefixed API, never forwards consumer authority", async () => {
+    pathEnabled();
+    const fetch = vi.fn().mockResolvedValue(Response.json({code:"ADMIN_SESSION_REQUIRED"},{status:401}));
+    vi.stubGlobal("fetch",fetch);
+    const headers = {origin:main,cookie:"__Host-gb_session=consumer",authorization:"Bearer consumer"};
+    const response = await GET(new Request(main+"/admin/v1/admin/auth/me",{headers}),ctx("auth/me"));
+    expect(response.status).toBe(401);
+    const [url, options] = fetch.mock.calls[0]!;
+    expect(url.href).toBe(main+"/v1/admin/auth/me");
+    expect(options.headers.get("cookie")).toBe("");
+    expect(options.headers.has("authorization")).toBe(false);
+    expect((await GET(new Request(main+"/v1/admin/auth/me",{headers}),ctx("auth/me"))).status).toBe(404);
+    expect((await POST(new Request(main+"/admin/v1/admin/auth/logout",{method:"POST",headers:{origin:"https://evil.test"}}),ctx("auth/logout"))).status).toBe(403);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+  it("keeps callback handoff at canonical basePath and removes provider query", async () => {
+    pathEnabled(); const fetch = vi.fn().mockResolvedValue(Response.json({csrfToken:"csrf-secret",principalId:"fixture",status:"pending_mfa"}));
+    vi.stubGlobal("fetch",fetch);
+    for (const provider of ["vk","yandex"]) {
+      const response = await GET(new Request(main+`/admin/v1/admin/auth/${provider}/callback?code=private&state=bound&activation=never`,{headers:{cookie:"__Host-gb_admin_binding=binding; __Host-gb_session=consumer"}}),ctx(`auth/${provider}/callback`));
+      expect(response.status).toBe(303);
+      expect(response.headers.get("location")).toBe(main+"/admin/?auth=complete");
+      expect(response.headers.getSetCookie().join(";")).toContain("Path=/;");
+      expect(response.headers.getSetCookie().join(";")).toContain("HttpOnly");
+      const [url, options] = fetch.mock.calls.at(-1)!;
+      expect(url.pathname).toBe(`/v1/admin/auth/${provider}/callback`);
+      expect(url.searchParams.has("activation")).toBe(false);
+      expect(options.headers.get("cookie")).toBe("__Host-gb_admin_binding=binding");
+    }
+  });
+});

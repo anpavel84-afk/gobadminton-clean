@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import "../styles/admin.css";
+import localFont from "next/font/local";
+const onest = localFont({ src: "../../public/fonts/Onest.woff2", display: "swap", variable: "--font-onest" });
 export const metadata: Metadata = { title: "GoBadminton · Администрирование", robots: { index: false, follow: false } };
 export default function RootLayout({ children }: { children: React.ReactNode }) {
-  return <html lang="ru"><body>{children}</body></html>;
+  return <html lang="ru"><body className={onest.className}>{children}</body></html>;
 }

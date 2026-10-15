@@ -45,18 +45,26 @@ try {
   if (process.env.CHATOPS_DEV_ADMIN_COMMISSIONED === 'true') {
     assert.equal(url.origin, 'https://dev.gobadminton.ru');
     assert.match(process.env.EXPECTED_ADMIN_DIGEST || '', /^sha256:[0-9a-f]{64}$/);
-    const admin = 'https://dev-admin.gobadminton.ru';
+    const admin = 'https://dev.gobadminton.ru';
     const meta = await fetch(admin+'/v1/meta', {redirect:'error',signal:AbortSignal.timeout(15000)});
     assert(meta.ok, `Admin meta HTTP ${meta.status}`);
     assert.equal((await meta.json()).gitSha, process.env.EXPECTED_SHA);
     // Fresh unauthenticated context; never enroll a credential or start provider login.
     const adminPage = await browser.newPage();
+    const adminErrors = [];
+    adminPage.on("pageerror", error => adminErrors.push(error.message));
     try {
-      const response = await adminPage.goto(admin, {waitUntil:'networkidle',timeout:45000});
+      const response = await adminPage.goto(admin+'/admin/', {waitUntil:'domcontentloaded',timeout:45000});
       assert(response?.ok(), 'Admin HTTP response failed');
+      assert.equal(new URL(adminPage.url()).pathname, '/admin/');
       await adminPage.getByRole('heading',{name:'Вход для команды',exact:true}).waitFor({timeout:15000});
-      await adminPage.getByRole('button',{name:'Войти через Яндекс',exact:true}).waitFor();
-      const me = await adminPage.request.get(admin+'/v1/admin/auth/me', {headers:{Origin:admin}});
+      const login = adminPage.getByRole('button',{name:'Войти через Яндекс',exact:true});
+      await login.waitFor();
+      assert(await login.isEnabled(), 'Admin login is not ready');
+      assert.equal(await adminPage.title(), 'GoBadminton · Администрирование');
+      assert.equal(await adminPage.getByRole('navigation',{name:'Разделы администрирования'}).count(), 0);
+      assert.equal(adminErrors.length, 0, adminErrors.join('\n'));
+      const me = await adminPage.request.get(admin+'/admin/v1/admin/auth/me', {headers:{Origin:admin}});
       assert.equal(me.status(),401,'Anonymous Admin must require authentication');
       await adminPage.screenshot({path:'_out/radar/admin.png'});
     } finally { await adminPage.close(); }

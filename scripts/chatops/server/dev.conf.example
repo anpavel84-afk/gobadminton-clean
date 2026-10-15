@@ -14,11 +14,11 @@ READINESS_SECONDS=120
 ACCEPT_SECONDS=300
 OPERATION_SECONDS=900
 
-# OFF until matching reviewed receiver, ingress, private config and DNS/TLS/provider readiness.
+# OFF until matching reviewed receiver, ingress, private config and main DEV TLS/provider readiness.
 DEV_ADMIN_COMMISSIONED=false
 # Enable together only after review; existing COMPOSE_FILES retains API/Web/DB bindings:
 # COMPOSE_FILES+=(/etc/gobadminton/deploy/dev-admin-compose.yml)
 # SERVICES=(api web admin)
 # ADMIN_ENV_FILE=/etc/gobadminton/deploy/admin-dev.env
-# ADMIN_RESPONSE_URL=http://127.0.0.1:18088/
-# ADMIN_META_URL=https://dev-admin.gobadminton.ru/v1/meta
+# ADMIN_RESPONSE_URL=https://dev.gobadminton.ru/admin/
+# ADMIN_META_URL=https://dev.gobadminton.ru/v1/meta

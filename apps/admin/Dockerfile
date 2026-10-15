@@ -11,6 +11,8 @@ COPY apps/admin/package.json apps/admin/package.json
 RUN pnpm install --frozen-lockfile --filter @gobadminton/admin...
 COPY apps/admin apps/admin
 COPY packages/tooling packages/tooling
+ARG ADMIN_DEV_PATH_BUILD=0
+ENV ADMIN_DEV_PATH_BUILD=$ADMIN_DEV_PATH_BUILD
 RUN pnpm --filter @gobadminton/admin build
 FROM node:24.21.0-bookworm-slim AS runtime
 WORKDIR /app

@@ -50,8 +50,8 @@ ADMIN_ENABLED=${DEV_ADMIN_COMMISSIONED:-false}
 [[ $ADMIN_ENABLED == true || $ADMIN_ENABLED == false ]] || fail 'invalid Admin opt-in'
 if [[ $ADMIN_ENABLED == true ]]; then
   [[ $ENVIRONMENT == dev && ${SERVICES[*]} == 'api web admin' &&
-     ${ADMIN_RESPONSE_URL:-} == http://127.0.0.1:18088/ &&
-     ${ADMIN_META_URL:-} == https://dev-admin.gobadminton.ru/v1/meta ]] || fail 'invalid DEV Admin profile'
+     ${ADMIN_RESPONSE_URL:-} == https://dev.gobadminton.ru/admin/ &&
+     ${ADMIN_META_URL:-} == https://dev.gobadminton.ru/v1/meta ]] || fail 'invalid DEV Admin profile'
   : "${ADMIN_ENV_FILE:?}"
   trusted "$ADMIN_ENV_FILE"; (( (8#$(stat -c %a -- "$ADMIN_ENV_FILE") & 0077) == 0 )) || fail 'Admin env must be private'
   [[ -f $ADMIN_ENV_FILE ]] || fail 'missing private Admin env'
@@ -132,7 +132,7 @@ verify_version() {
     "$CURL" --fail --silent --show-error --max-time 10 "$ADMIN_META_URL" | jq -e --arg s "$sha" '.gitSha == $s' >/dev/null || return 1
     local body
     body=$("$CURL" --fail --silent --show-error --max-time 10 --max-filesize 1048576 "$ADMIN_RESPONSE_URL") || return 1
-    [[ $body == *'Администрирование'* && $body != *'Администрирование недоступно'* ]] || return 1
+    [[ $body == *'Вход для команды'* && $body == *'GoBadminton · Администрирование'* && $body == *'/admin/_next/'* && $body != *'Администрирование недоступно'* ]] || return 1
   fi
 }
 # Only image rollback. Never restore a historical DB dump or reverse schema automatically.

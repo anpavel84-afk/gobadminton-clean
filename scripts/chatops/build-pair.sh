@@ -14,7 +14,9 @@ printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-std
 trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
 build() {
   local app=$1
-  docker buildx build --platform linux/amd64 --push --provenance=mode=min \
+  local -a admin_args=()
+  if [[ $app == admin && $ADMIN == true ]]; then admin_args=(--build-arg ADMIN_DEV_PATH_BUILD=1); fi
+  docker buildx build "${admin_args[@]}" --platform linux/amd64 --push --provenance=mode=min \
     --label "org.opencontainers.image.revision=$GITHUB_SHA" \
     --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
     --cache-from "type=registry,ref=$PREFIX-$app:buildcache-dev" \

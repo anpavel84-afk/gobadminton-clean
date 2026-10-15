@@ -28,8 +28,8 @@ class AdminProtocol(unittest.TestCase):
   p.write_text(p.read_text().replace('SERVICES=(api web)', 'SERVICES=(api web admin)')+f'''
 DEV_ADMIN_COMMISSIONED=true
 ADMIN_ENV_FILE={self.root}/config/admin.env
-ADMIN_RESPONSE_URL=http://127.0.0.1:18088/
-ADMIN_META_URL=https://dev-admin.gobadminton.ru/v1/meta
+ADMIN_RESPONSE_URL=https://dev.gobadminton.ru/admin/
+ADMIN_META_URL=https://dev.gobadminton.ru/v1/meta
 ''')
   (self.root/'config/admin.env').write_text('DUMMY=1\n')
   (self.root/'config/admin.env').chmod(0o600)
@@ -82,6 +82,21 @@ ADMIN_META_URL=https://dev-admin.gobadminton.ru/v1/meta
   self.enable();before=self.data()
   self.assertNotEqual(self.call(self.request(),extra={'BAD_ADMIN':'1'}).returncode,0)
   self.assertEqual(self.data(),before)
+ def test_consumer_page_cannot_accept(self):
+  self.enable();self.ok(self.call(self.request()))
+  curl=self.root/'curl'
+  curl.write_text(curl.read_text().replace('GoBadminton · Администрирование Вход для команды /admin/_next/app.js','GoBadminton consumer page'))
+  self.assertNotEqual(self.call({'action':'accept','release_id':'r123-a1'}).returncode,0)
+  self.assertFalse((self.root/'state/dev/accepted.json').exists())
+ def test_profile_requires_exact_main_path(self):
+  self.enable()
+  config=self.root/'config/dev.conf';original=config.read_text()
+  for bad in ['https://dev.gobadminton.ru/admin', 'https://dev.gobadminton.ru/admin/?code=x',
+              'https://dev.gobadminton.ru/admin/evil', 'https://dev-admin.gobadminton.ru/',
+              'https://user@dev.gobadminton.ru/admin/']:
+   config.write_text(original.replace('https://dev.gobadminton.ru/admin/',bad))
+   self.assertNotEqual(self.call(self.request()).returncode,0)
+  config.write_text(original)
  def test_missing_admin_cannot_accept(self):
   self.enable();self.ok(self.call(self.request()));d=self.data();d.pop('testdev-admin');self.save(d)
   self.assertNotEqual(self.call({'action':'accept','release_id':'r123-a1'}).returncode,0)
@@ -199,6 +214,8 @@ a=sys.argv[1:]
 if a[:2]==['buildx','build']:
  app=a[a.index('-f')+1].split('/')[1]
  assert a[a.index('--platform')+1]=='linux/amd64'
+ if app=='admin':assert a[a.index('--build-arg')+1]=='ADMIN_DEV_PATH_BUILD=1'
+ else:assert '--build-arg' not in a
  assert 'org.opencontainers.image.revision='+'a'*40 in a
  assert 'org.opencontainers.image.source=https://github.com/anpavel84-afk/gobadminton-clean' in a
  Path(a[a.index('--metadata-file')+1]).write_text(json.dumps({'containerimage.digest':'sha256:'+{'api':'b','web':'c','admin':'f'}[app]*64}))
