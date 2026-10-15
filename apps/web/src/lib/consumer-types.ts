@@ -65,6 +65,7 @@ export type City = {
 };
 
 export type VenueSummary = {
+  cover?: { uploadedUrl: string | null };
   id: string;
   name: string;
   cityId: string;
@@ -220,6 +221,7 @@ export type CreateVenueInput = {
 };
 
 export type Venue = CreateVenueInput & {
+  cover?: { uploadedUrl: string | null };
   id: string;
   dataStatus: string;
   provenance: string;

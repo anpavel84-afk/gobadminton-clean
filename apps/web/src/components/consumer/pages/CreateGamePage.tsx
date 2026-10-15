@@ -1,5 +1,6 @@
 "use client";
 
+import { VenueCover } from "../venues/VenueCover";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   createGame,
@@ -395,12 +396,14 @@ export function CreateGamePage() {
                 aria-expanded={venuePickerOpen}
                 onClick={() => setVenuePickerOpen(true)}
               >
+                {selectedVenue && <VenueCover className="gb-venue-cover--thumb" cover={selectedVenue.cover} name={selectedVenue.name} />}
                 <span className="gb-venue-picker-trigger-copy">
                   <span className="gb-venue-picker-trigger-title">{selectedVenue?.name ?? "Выберите площадку"}</span>
                   {selectedVenue && <span className="gb-venue-picker-trigger-address">{selectedVenue.address}</span>}
                 </span>
                 <span aria-hidden="true">⌄</span>
               </button>
+              {selectedVenue && <Button variant="ghost" href={`/venues/${selectedVenue.id}`}>Открыть площадку</Button>}
               <small>{venueStatus === "loading" ? "Загружаем все площадки…" :
                 venueStatus === "error" ? "Каталог временно недоступен. Откройте список, чтобы повторить загрузку." :
                 knownVenues.length ? `В каталоге ${knownVenues.length} площадок. Поиск по названию и адресу.` :

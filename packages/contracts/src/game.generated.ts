@@ -2,7 +2,7 @@
 export type Id = string;
 export type LevelRule = { "scaleId": string; "scaleVersion": number; "allowedLevelIds": Array<string> };
 export type Settlement = SettlementNoTrainerFee | SettlementTrainerFeeFixed | SettlementTrainerFeeByAgreement;
-export type VenueSummary = { "id": Id; "name": string; "cityId": Id; "address": string; "timezone": string; "latitude"?: number; "longitude"?: number };
+export type VenueSummary = { "id": Id; "name": string; "cityId": Id; "address": string; "timezone": string; "latitude"?: number; "longitude"?: number; "cover"?: VenueCover };
 export type OrganizerSummary = { "id": Id | null; "displayName": string; "publicContact": string; "avatar"?: { "uploadedUrl": string | null; "providerUrl": string | null } };
 export type Game = { "id": Id; "version": number; "title": string; "status": "draft" | "published" | "cancelled" | "completed"; "visibility": "public" | "unlisted"; "organizer": OrganizerSummary; "venue": VenueSummary; "startsAt": string; "endsAt": string; "timezone": string; "applicationDeadlineAt": string; "capacity": number; "externalReservedCount": number; "confirmedCount": number; "availablePlaces": number; "formatKey": string; "levelRule": LevelRule; "settlement": Settlement; "activityKind": "regular" | "trainer_led"; "trainer": GameTrainerSummary | null; "trainingDescription": string | null };
 export type CreateGame = { "hostDisplayName": string; "hostPublicContact": string; "venueId": Id; "title"?: string; "startsAt": string; "endsAt": string; "timezone": string; "applicationDeadlineAt": string; "capacity": number; "externalReservedCount": number; "visibility": "public" | "unlisted"; "formatKey": string; "levelRule": LevelRule; "settlement": Settlement; "activityKind": "regular" | "trainer_led"; "trainingDescription"?: string | null; "savePublicContactDefault"?: SavePublicContactDefault };
@@ -19,3 +19,4 @@ export type DiscoveryCityId = "a0000000-0000-4000-8000-000000000001" | "a0000000
 export type DiscoveryCityHint = { "cityId": DiscoveryCityId; "source": "ip" | "default" };
 export type DiscoveryPreference = { "cityId": DiscoveryCityId | null; "version": number };
 export type PutDiscoveryPreference = { "cityId": DiscoveryCityId; "expectedVersion": number };
+export type VenueCover = { "uploadedUrl": string | null };

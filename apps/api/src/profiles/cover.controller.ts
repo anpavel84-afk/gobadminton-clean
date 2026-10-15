@@ -33,6 +33,12 @@ export class CoverController {
     const actor = await this.auth.requireCookieMutation(request);
     return this.media.mutate(actor, this.idempotency.requireKey(request.headers["idempotency-key"]), coverDeleteVersion(request.body, request.headers["x-profile-version"]), undefined, "cover");
   }
+  @Get("media/venue-covers/:key")
+  async readVenue(@Param("key") key: string, @Res() reply: FastifyReply) {
+    reply.header("Cache-Control", "no-store").header("X-Content-Type-Options", "nosniff")
+      .header("Content-Security-Policy", "default-src 'none'; sandbox");
+    return reply.type("image/png").send(await this.media.readVenueCover(key));
+  }
   @Get("media/covers/:key")
   async read(@Req() request: FastifyRequest, @Param("key") key: string, @Res() reply: FastifyReply) {
     reply.header("Cache-Control", "no-store").header("Vary", "Cookie").header("X-Content-Type-Options", "nosniff")

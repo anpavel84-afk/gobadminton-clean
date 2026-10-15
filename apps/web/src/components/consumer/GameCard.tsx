@@ -1,3 +1,4 @@
+import { VenueCover } from "./venues/VenueCover";
 import { Avatar } from "./players/ProfileComposition";
 import Link from "next/link";
 import type { Game, ParticipationStatus } from "../../lib/consumer-types";
@@ -34,7 +35,7 @@ export function GameCard({
       className={`gb-c23-card${trainer ? " gb-c23-card--trainer" : ""}`}
       data-activity={game.activityKind}
     >
-      <div className="gb-c23-card__media" aria-hidden="true" />
+      <VenueCover className="gb-c23-card__media" cover={game.venue.cover} name={game.venue.name} />
       <div className="gb-c23-card__body">
         <p className="gb-c23-card__when">{formatGameWhen(game)}</p>
         <p className="gb-c23-card__seats" data-tone={seatsTone}>

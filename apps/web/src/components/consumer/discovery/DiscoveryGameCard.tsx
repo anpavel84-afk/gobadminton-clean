@@ -1,5 +1,6 @@
+import { VenueCover } from "../venues/VenueCover";
 import { Avatar } from "../players/ProfileComposition";
-/* canonical local editorial imagery, not a photo of this venue. */
+/* Current venue-approved derivative in the canonical media slot. */
 import { GameShare } from "../games/GameShare";
 import Link from "next/link";
 import type { Game } from "../../../lib/consumer-types";
@@ -14,7 +15,7 @@ export function DiscoveryGameCard({ game }: { game: Game }) {
   const format = discoveryFormat(game.formatKey);
   return <article className={`gb-discovery-card${trainer ? " gb-discovery-card--trainer" : ""}`} data-activity={game.activityKind}>
     <div className="gb-discovery-card__image">
-      <img src={`/discovery/${trainer ? "badminton-courts" : "badminton-gear"}.jpg`} alt="" loading="lazy" />
+      <VenueCover cover={game.venue.cover} name={game.venue.name} />
       <span className="gb-discovery-type">{trainer ? "С тренером" : "Обычная игра"}</span>
     </div>
     <div className="gb-discovery-card__content">

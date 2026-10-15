@@ -26,6 +26,6 @@ import { SocialFeatureService } from "./social-feature";
     PlayersController,
   ],
   providers: [DiscoveryPreferencesService, GamePreferencesService, AvatarService, ProfilesService, SocialFeatureService],
-  exports: [GamePreferencesService, ProfilesService, SocialFeatureService],
+  exports: [AvatarService, GamePreferencesService, ProfilesService, SocialFeatureService],
 })
 export class ProfilesModule {}

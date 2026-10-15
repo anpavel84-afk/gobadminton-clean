@@ -1,3 +1,5 @@
+import Link from "next/link";
+import { VenueCover } from "../venues/VenueCover";
 import { Avatar } from "../players/ProfileComposition";
 import type { ReactNode } from "react";
 import type { Game, ParticipationStatus } from "../../../lib/consumer-types";
@@ -9,13 +11,13 @@ export function GameStatusBadge({ tone, children }: { tone: string; children: Re
   return <span className="gb-game-status" data-tone={tone}>{children}</span>;
 }
 
-/** Frozen TrainerDetail / MediaBlock. The supplied photograph is editorial, not a venue photo. */
+/** Existing TrainerDetail / MediaBlock composition with the current venue cover/default. */
 export function GameHero({ game, preview = false }: { game: Game; preview?: boolean }) {
   const when = discoveryGameWhen(game);
   const trainer = game.activityKind === "trainer_led";
   return <section className="gb-game-hero" data-activity={game.activityKind}>
     <div className="gb-game-hero__image">
-      <img src="/discovery/badminton-courts.jpg" alt="" />
+      <VenueCover cover={game.venue.cover} name={game.venue.name} />
       <span className="gb-game-ribbon" data-trainer={trainer}>{trainer ? "Тренировка с тренером" : "Обычная игра"}</span>
     </div>
     <div className="gb-game-hero__copy">
@@ -43,7 +45,7 @@ export function GameTerms({ game, showCapacity = true }: { game: Game; showCapac
     <section className="gb-game-section">
       <span className="gb-game-kicker">Встречаемся на корте</span><h2>Место и организатор</h2>
       <dl className="gb-game-facts">
-        <div><dt>Площадка</dt><dd>{game.venue.name}<small>{game.venue.address}</small></dd></div>
+        <div><dt>Площадка</dt><dd><Link href={`/venues/${game.venue.id}`}>{game.venue.name}</Link><small>{game.venue.address}</small></dd></div>
         <div><dt>Организует</dt><dd><span className="gb-game-identity"><Avatar className="gb-discovery-avatar" name={game.organizer.displayName} avatar={game.organizer.avatar} /><span>{game.organizer.displayName}</span></span><small>{game.organizer.publicContact}</small></dd></div>
         {showCapacity && <div><dt>Состав</dt><dd>До {game.capacity} игроков<small>Подтверждено: {game.confirmedCount} · Занято вне сервиса: {game.externalReservedCount}</small></dd></div>}
       </dl>

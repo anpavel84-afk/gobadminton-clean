@@ -120,7 +120,7 @@ export class AvatarService implements OnModuleInit, OnModuleDestroy {
       if (upload) this.processing--;
     }
   }
-  private async stage(key: string, sanitized: Buffer): Promise<Buffer> {
+  async stage(key: string, sanitized: Buffer): Promise<Buffer> {
     const file = this.filename(key);
     // Durable journal BEFORE disk write. Only this journal row is locked during
     // filesystem work, so even an expired/crashed stage cannot race the collector.
@@ -170,6 +170,27 @@ export class AvatarService implements OnModuleInit, OnModuleDestroy {
       throw error;
     }
   }
+  /** Venue derivatives are public only while the current owning row and approval allow them. */
+  async readVenueCover(key: string): Promise<Buffer> {
+    const file = this.filename(key);
+    const current = await this.pool.query("SELECT 1 FROM venues WHERE cover_key=$1 AND venue_cover_url(id) IS NOT NULL", [key]);
+    if (!current.rowCount) throw notFound("COVER_UNAVAILABLE", "Обложка недоступна");
+    try { return await readFile(file); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") throw notFound("COVER_UNAVAILABLE", "Обложка недоступна");
+      throw error;
+    }
+  }
+  async releaseStage(key: string): Promise<void> {
+    await this.pool.query("UPDATE avatar_media_gc SET not_before=now() WHERE storage_key=$1", [key])
+      .catch(() => this.logger.warn("Venue cover cleanup deferred"));
+  }
+  async verifyStage(client: import("pg").PoolClient, key: string, expected: Buffer): Promise<Buffer> {
+    const journal = await client.query("SELECT 1 FROM avatar_media_gc WHERE storage_key=$1 FOR UPDATE", [key]);
+    if (!journal.rowCount) throw serviceUnavailable("AVATAR_STORAGE_UNAVAILABLE", "Фото недоступно");
+    const bytes = await readFile(this.filename(key));
+    if (!bytes.equals(expected)) throw serviceUnavailable("AVATAR_STORAGE_UNAVAILABLE", "Фото недоступно");
+    return bytes;
+  }
   /** Retryable journal includes the account-deletion status transition and explicit profile deletion; never removes a referenced key. */
   async cleanup(): Promise<void> {
     if (this.sweeping || !this.env.AVATAR_MEDIA_ROOT) return;
@@ -183,7 +204,7 @@ export class AvatarService implements OnModuleInit, OnModuleDestroy {
           // Serialize collectors and publication/staging on the journal only.
           const journal = await client.query("SELECT 1 FROM avatar_media_gc WHERE storage_key=$1 AND not_before<=now() FOR UPDATE SKIP LOCKED", [row.storage_key]);
           if (journal.rowCount) {
-            const ref = await client.query("SELECT 1 FROM player_social_profiles WHERE avatar_key = $1 OR cover_key = $1", [row.storage_key]);
+            const ref = await client.query("SELECT 1 FROM player_social_profiles WHERE avatar_key = $1 OR cover_key = $1 UNION ALL SELECT 1 FROM venues WHERE cover_key=$1", [row.storage_key]);
             if (!ref.rowCount) {
               try { await unlink(this.filename(row.storage_key)); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
               await client.query("DELETE FROM avatar_media_gc WHERE storage_key = $1", [row.storage_key]);

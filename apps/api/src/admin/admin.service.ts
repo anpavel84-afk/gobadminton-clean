@@ -108,8 +108,16 @@ export class AdminService {
   }
   private origin(request: FastifyRequest) {
     this.enabled();
-    if (request.headers.origin !== this.env.ADMIN_ORIGIN)
-      throw forbidden("ADMIN_ORIGIN_REJECTED", "Admin origin required");
+    if (request.headers.origin === this.env.ADMIN_ORIGIN) return;
+    // Same-origin browser GETs omit Origin. This one read-only access bootstrap
+    // accepts browser-controlled Fetch Metadata plus exact Referer origin;
+    // mutations and every other admin route retain the strict Origin requirement.
+    if (request.headers.origin === undefined && request.method === "GET"
+      && /^\/v1\/admin\/venues\/[0-9a-f-]{36}\/cover\/access$/.test(request.url)
+      && request.headers["sec-fetch-site"] === "same-origin") {
+      try { if (new URL(String(request.headers.referer ?? "")).origin === this.env.ADMIN_ORIGIN) return; } catch { /* fail closed */ }
+    }
+    throw forbidden("ADMIN_ORIGIN_REJECTED", "Admin origin required");
   }
   private cookie(
     reply: FastifyReply,
@@ -244,6 +252,29 @@ export class AdminService {
     return adminTransaction(this.pool, async client => {
       const actor = await this.actor(client, request, false, permission, stepup);
       return read(client, actor);
+    });
+  }
+  /** Validate cookie mutation authority before bounded external media preflight. */
+  async privilegedMutationPreflight<T>(request: FastifyRequest, permission: AdminPermission,
+    read: (client: PoolClient, actor: AdminActor) => Promise<T>): Promise<T> {
+    await this.limited(request);
+    return adminTransaction(this.pool, async client => {
+      const actor = await this.actor(client, request, true, permission, true);
+      return read(client, actor);
+    });
+  }
+  async privilegedReplay<T>(request: FastifyRequest, key: string | undefined, permission: AdminPermission,
+    operation: string, input: object, scope: (client: PoolClient, actor: AdminActor) => Promise<void>): Promise<T | null> {
+    await this.limited(request);
+    if (!key || key.length < 16 || key.length > 128) throw badRequest("IDEMPOTENCY_KEY_REQUIRED", "Idempotency-Key required");
+    return adminTransaction(this.pool, async client => {
+      const actor = await this.actor(client,request,true,permission,true);
+      await scope(client,actor);
+      const row = (await client.query<{fingerprint:string;response_ciphertext:string}>(
+        "SELECT * FROM admin_command_receipts WHERE actor_id=$1 AND key_hash=$2",[actor.principalId,this.hash(key)])).rows[0];
+      if (!row) return null;
+      if (row.fingerprint !== this.hash(JSON.stringify({operation,input}))) throw conflict("IDEMPOTENCY_KEY_REUSED", "Idempotency key changed");
+      return JSON.parse(openSecret(this.pepper,row.response_ciphertext)) as T;
     });
   }
   async privilegedCommand<T>(request: FastifyRequest, key: string | undefined,

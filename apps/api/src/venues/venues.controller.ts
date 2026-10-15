@@ -27,6 +27,7 @@ export class VenuesController {
   }
 
   @Get("venues")
+  @Header("Cache-Control", "no-store")
   async searchVenues(
     @Query("cityId") cityId?: string,
     @Query("q") q?: string,
@@ -105,6 +106,7 @@ export class VenuesController {
   }
 
   @Get("venues/:venueId")
+  @Header("Cache-Control", "no-store")
   async getVenue(@Param("venueId") venueId: string) {
     return this.venues.getById(venueId);
   }

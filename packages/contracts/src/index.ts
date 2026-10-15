@@ -26,3 +26,4 @@ export type { FriendshipView, FriendshipReceipt, FriendshipCreateRequest, Friend
   FriendshipList, FriendshipStates, SocialCapabilities } from "./friendship.generated.js";
 
 export type { PlayerCover, CoverReceipt, DeleteCoverCommand } from "./profile-cover.js";
+export type { VenueCover, VenueCoverReceipt, VenueCoverAccess, DeleteVenueCoverCommand } from "./venue-cover.js";

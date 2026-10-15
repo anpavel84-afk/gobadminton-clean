@@ -283,3 +283,20 @@
   .gb-owned-summary .gb-applicants__row { grid-template-columns: minmax(0,1fr); }
   .gb-owned-summary .gb-applicants__actions { grid-column: auto; }
 }
+
+/* STYLE_GUIDE_GAP #37: MediaBlock shell reused in venue list/detail/editor. */
+.gb-venue-cover { display:block; position:relative; overflow:hidden; width:100%; height:100%; min-height:1px; background:var(--c23-surface); }
+.gb-venue-cover > img { display:block; width:100%; height:100%; object-fit:cover; }
+.gb-venue-cover__default { display:grid; width:100%; height:100%; place-items:center; color:var(--c23-muted); background:var(--c23-surface); }
+.gb-venue-cover__default > span { font-size:3rem; }
+.gb-venue-cover--thumb { width:80px; height:45px; flex:0 0 80px; border-radius:8px; }
+.gb-venue-media { aspect-ratio:16/9; width:100%; overflow:hidden; border-radius:16px; }
+.gb-venue-page { max-width:960px; margin:0 auto; padding:24px; }
+.gb-venue-editor { display:grid; gap:16px; margin-top:24px; }
+.gb-venue-editor input { max-width:100%; }
+.gb-venue-editor__actions { display:flex; flex-wrap:wrap; gap:12px; }
+@media (max-width:600px) { .gb-venue-page { padding:16px; } }
+.gb-discovery-card__image > .gb-venue-cover, .gb-game-hero__image > .gb-venue-cover { position:absolute; inset:0; }
+.gb-c23-card__media[data-cover="uploaded"]::after { display:none; }
+.gb-venue-picker-option-copy, .gb-venue-picker-trigger-copy { min-width:0; }
+.gb-venue-picker-option-name, .gb-venue-picker-option-address { overflow-wrap:anywhere; }

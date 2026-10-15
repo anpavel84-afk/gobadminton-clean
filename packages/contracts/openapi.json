@@ -14217,6 +14217,571 @@
         },
         "operationId": "getProfileCoverMedia"
       }
+    },
+    "/admin/venues/{id}/cover": {
+      "get": {
+        "operationId": "getManagedVenueCover",
+        "tags": [
+          "Admin"
+        ],
+        "summary": "getManagedVenueCover",
+        "security": [
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "x-client-surface": "admin-only",
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Audited result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VenueCoverReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Admin session required",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission, Origin, CSRF or step-up rejected",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Version, identity or merge conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "description": "Existing internal admin gate remains unchanged. Current active user must have venue.manage AND own created_by_user_id. No grant by venueId. No-store; public current derivative reads also require current venue lifecycle and cover_image allow approval. Games resolve current cover by immutable venueId; no game snapshot cache."
+      },
+      "put": {
+        "operationId": "replaceManagedVenueCover",
+        "tags": [
+          "Admin"
+        ],
+        "summary": "replaceManagedVenueCover",
+        "security": [
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "x-client-surface": "admin-only",
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "name": "X-Venue-Version",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483647
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Audited result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VenueCoverReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Admin session required",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission, Origin, CSRF or step-up rejected",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Version, identity or merge conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "415": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "422": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "503": {
+            "$ref": "#/components/responses/AvatarProblem"
+          }
+        },
+        "description": "Existing internal admin gate remains unchanged. Current active user must have venue.manage AND own created_by_user_id. No grant by venueId. No-store; public current derivative reads also require current venue lifecycle and cover_image allow approval. Games resolve current cover by immutable venueId; no game snapshot cache. Fresh existing admin step-up and principal generation/session fence, origin, CSRF, rate budget, durable replay, row lock and shared venue version required at every mutation. Replays reauthorize current ownership/role/session before returning the original receipt. Replacement/removal/hide invalidate prior URL on new reads; journal GC retains all current references.",
+        "requestBody": {
+          "required": true,
+          "description": "Raw JPEG/PNG/WebP only, no URLs, SVG, HTML or paths. Existing cover sanitizer: max 5 MiB input, 16 MP, 8192px/side, single frame, MIME/signature decode, strict container validation, stripped metadata, 1200x400 PNG max 2 MiB. Browser bounded preprocessing max 10 MiB/50 MP, 512 KiB derivative; explicit confirmation with centered 16:9 preview.",
+          "content": {
+            "image/jpeg": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "image/png": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "image/webp": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "removeManagedVenueCover",
+        "tags": [
+          "Admin"
+        ],
+        "summary": "removeManagedVenueCover",
+        "security": [
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "x-client-surface": "admin-only",
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Audited result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VenueCoverReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Admin session required",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission, Origin, CSRF or step-up rejected",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Version, identity or merge conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "415": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "422": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "503": {
+            "$ref": "#/components/responses/AvatarProblem"
+          }
+        },
+        "description": "Existing internal admin gate remains unchanged. Current active user must have venue.manage AND own created_by_user_id. No grant by venueId. No-store; public current derivative reads also require current venue lifecycle and cover_image allow approval. Games resolve current cover by immutable venueId; no game snapshot cache. Fresh existing admin step-up and principal generation/session fence, origin, CSRF, rate budget, durable replay, row lock and shared venue version required at every mutation. Replays reauthorize current ownership/role/session before returning the original receipt. Replacement/removal/hide invalidate prior URL on new reads; journal GC retains all current references.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteVenueCoverCommand"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/venues/{id}/cover/access": {
+      "get": {
+        "operationId": "getManagedVenueCoverAccess",
+        "tags": [
+          "Admin"
+        ],
+        "summary": "getManagedVenueCoverAccess",
+        "security": [
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "x-client-surface": "admin-only",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Exact ADMIN_ORIGIN when supplied. Browser GET fallback is restricted to same-origin Fetch Metadata + exact Referer."
+          },
+          {
+            "name": "Sec-Fetch-Site",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Referer",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Admin session required",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission, Origin, CSRF or step-up rejected",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Version, identity or merge conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Audited result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VenueCoverAccess"
+                }
+              }
+            }
+          }
+        },
+        "description": "Read-only scoped access bootstrap. Existing internal admin gate, active AdminSessionCookie, venue.manage AND created_by_user_id required. No-store. Exact ADMIN_ORIGIN header, or ONLY for this GET: absent Origin, Sec-Fetch-Site same-origin and exact Referer origin. Cross-site, wrong Origin/Referer, consumer/foreign/revoked actor denied. Returns current receipt and existing admin CSRF token; does not mint a session or grant authority. All writes retain strict Origin plus CSRF, replay, CAS and fresh step-up."
+      }
+    },
+    "/media/venue-covers/{key}": {
+      "get": {
+        "summary": "Read only the current approved public venue PNG",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}\\.png$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Re-encoded 1200x400 PNG without metadata",
+            "content": {
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unavailable or unauthorized"
+          }
+        },
+        "operationId": "getPublicVenueCoverMedia",
+        "description": "No-store and nosniff; current venue lifecycle, active uploader and cover_image allow decision checked at each read. Replacement, deletion, retirement and moderation deny revoke old URLs. No private profile-media lookup, arbitrary path or external URL."
+      }
     }
   },
   "components": {
@@ -14596,6 +15161,9 @@
             "type": "number",
             "minimum": -180,
             "maximum": 180
+          },
+          "cover": {
+            "$ref": "#/components/schemas/VenueCover"
           }
         }
       },
@@ -15304,6 +15872,9 @@
           },
           "resolvedFromVenueId": {
             "$ref": "#/components/schemas/Id"
+          },
+          "cover": {
+            "$ref": "#/components/schemas/VenueCover"
           }
         }
       },
@@ -23921,6 +24492,75 @@
           }
         },
         "description": "Required shared profile CAS version; must equal X-Profile-Version."
+      },
+      "VenueCover": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "uploadedUrl"
+        ],
+        "properties": {
+          "uploadedUrl": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^/v1/media/venue-covers/[a-f0-9]{64}\\.png$",
+            "description": "Current approved venue derivative or null for canonical default. Never an external URL or storage path."
+          }
+        }
+      },
+      "VenueCoverReceipt": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "version",
+          "cover"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "cover": {
+            "$ref": "#/components/schemas/VenueCover"
+          }
+        }
+      },
+      "VenueCoverAccess": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "version",
+          "cover",
+          "csrfToken"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "cover": {
+            "$ref": "#/components/schemas/VenueCover"
+          },
+          "csrfToken": {
+            "type": "string"
+          }
+        }
+      },
+      "DeleteVenueCoverCommand": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "expectedVersion"
+        ],
+        "properties": {
+          "expectedVersion": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          }
+        }
       }
     }
   }

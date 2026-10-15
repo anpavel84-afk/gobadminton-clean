@@ -1,5 +1,6 @@
 "use client";
 
+import { VenueCover } from "../venues/VenueCover";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { KeyboardEvent } from "react";
@@ -104,6 +105,7 @@ export function VenuePickerDialog({ venues, selectedId, status, onSelect, onClos
               aria-pressed={selectedId === venue.id}
               onClick={() => onSelect(venue)}
             >
+              <VenueCover className="gb-venue-cover--thumb" cover={venue.cover} name={venue.name} />
               <span className="gb-venue-picker-option-copy">
                 <span className="gb-venue-picker-option-name">{venue.name}</span>
                 <span className="gb-venue-picker-option-address">{venue.address}</span>

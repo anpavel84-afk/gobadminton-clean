@@ -77,6 +77,7 @@ export type GameDto = {
     avatar?: PlayerAvatar;
   };
   venue: {
+    cover?: { uploadedUrl: string | null };
     id: string;
     name: string;
     cityId: string;
@@ -172,6 +173,7 @@ type GameRow = {
   venue_id: string;
   venue_name: string;
   venue_city_id: string;
+  venue_cover_url: string | null;
   venue_address: string;
   venue_timezone: string;
   venue_latitude: number;
@@ -761,7 +763,7 @@ function gameSelectColumns(): string {
     g.organizer_id AS organizer_id,
     g.host_display_name AS organizer_display_name,
     g.host_public_contact AS organizer_public_contact,
-    v.id AS venue_id, v.name AS venue_name, v.city_id AS venue_city_id, v.address AS venue_address,
+    venue_cover_url(v.id) AS venue_cover_url, v.id AS venue_id, v.name AS venue_name, v.city_id AS venue_city_id, v.address AS venue_address,
     v.timezone AS venue_timezone,
     ST_Y(v.location::geometry) AS venue_latitude,
     ST_X(v.location::geometry) AS venue_longitude,
@@ -808,6 +810,7 @@ function mapGameRow(row: GameRow): GameDto {
       publicContact: row.organizer_public_contact,
     },
     venue: {
+      cover: { uploadedUrl: row.venue_cover_url ?? null },
       id: row.venue_id,
       name: row.venue_name,
       cityId: row.venue_city_id,
