@@ -12,7 +12,7 @@ describe("profile cover",()=>{
     }
   });
   it("exposes keyboard button with locked state and no automatic upload",()=>{
-    const change=vi.fn();const html=renderToStaticMarkup(<CoverEditor version={1} csrfToken="synthetic" disabled onBusy={vi.fn()} onChange={change} onRefresh={vi.fn()}/>);
+    const change=vi.fn();const html=renderToStaticMarkup(<CoverEditor version={1} csrfToken="synthetic" disabled onBusy={vi.fn()} onChange={change} onUnauthorized={vi.fn()}/>);
     expect(html).toContain("Изменить обложку");expect(html).toContain("disabled");expect(change).not.toHaveBeenCalled();
   });
   it("sends only the confirmed derivative with CSRF, shared version and a replay key; delete sends an explicit CAS command",async()=>{

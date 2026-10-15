@@ -6,11 +6,12 @@ import { pathToFileURL } from 'node:url';
 const { chromium } = await import(pathToFileURL(process.cwd()+'/.tools/node_modules/playwright/index.mjs'));
 const origin=process.env.P1_ORIGIN || 'http://127.0.0.1:18984';
 assert.equal(new URL(origin).hostname,'127.0.0.1','Synthetic loopback only');
-const browser=await chromium.launch({headless:true,args:['--no-sandbox']});
+const browser=await chromium.launch({headless:true,chromiumSandbox:true});
 try {
  for(const width of [320,360,390,1440]) {
   const context=await browser.newContext({viewport:{width,height:900}});
-  let version=1, uploadedUrl=null, writes=0, failNext=false, broken=false, savedBytes=null;
+  let version=1, uploadedUrl=null, writes=0, failNext=null, broken=false, savedBytes=null;
+  let coverReads=0, profileReads=0, readFailure=0, readGate=null, readVersion=null;
   const cover=()=>({uploadedUrl});
   const profile=()=>({publicPlayerId:'00000036-1111-4111-8111-111111111111',version,displayName:'Synthetic cover owner',cityId:null,areaKey:null,level:null,bio:null,directoryVisible:false,contactPolicy:'closed',consentPolicyVersion:null,optedInAt:null,radarConsented:false,radarConsentPolicyVersion:null,radarConsentedAt:null,socialEligible:true,trainer:false,lookingForGame:null,cover:cover()});
   await context.route('**/*',async route=>{
@@ -20,18 +21,27 @@ try {
    if(!p.startsWith('/v1/'))return route.continue();
    const reply=(json,status=200)=>route.fulfill({json,status});
    if(p==='/v1/me')return reply({id:'synthetic-owner',displayName:'Synthetic cover owner',csrfToken:'fixture',locale:'ru',linkedProviders:[]});
-   if(p==='/v1/me/social-profile')return reply(profile());
+   if(p==='/v1/me/social-profile'){profileReads++;return reply(profile());}
    if(p==='/v1/me/cover') {
-    if(request.method()==='GET')return reply({version,cover:cover()});
+    if(request.method()==='GET'){
+     coverReads++;
+     if(readGate)await readGate;
+     if(readFailure){const status=readFailure;readFailure=0;return reply({title:'Synthetic read failure'},status);}
+     const receiptVersion=readVersion ?? version;readVersion=null;
+     return reply({version:receiptVersion,cover:cover()});
+    }
     writes++;assert.equal(request.headers()['x-csrf-token'],'fixture');assert.equal(Number(request.headers()['x-profile-version']),version);assert.ok(request.headers()['idempotency-key']);
-    if(failNext){failNext=false;return reply({code:'MODERATION_TEMPORARILY_UNAVAILABLE',title:'Synthetic retry'},503);}
+    const failure=failNext;failNext=null;
+    if(failure==='offline')return route.abort('internetdisconnected');
     if(request.method()==='PUT') {
      const body=request.postDataBuffer();assert.ok(body?.length && body.length<=524288);
      assert.match(request.headers()['content-type'],/^image\/(jpeg|webp)$/);
      savedBytes=body;
      uploadedUrl='/v1/media/covers/'+(writes%2?'a':'b').repeat(64)+'.png';
     } else {assert.equal(request.method(),'DELETE');assert.match(request.headers()['content-type'],/^application\/json/);assert.deepEqual(request.postDataJSON(),{expectedVersion:version});uploadedUrl=null;}
-    version++;return reply({version,cover:cover()});
+    version++;
+    if(failure==='committed')return route.abort('connectionreset');
+    return reply({version,cover:cover()});
    }
    if(p==='/v1/cities')return reply({items:[]});
    if(p==='/v1/me/trainer-profile')return reply({},404);
@@ -96,10 +106,58 @@ try {
   await choose();await page.getByRole('button',{name:'Сохранить фрагмент',exact:true}).click();await page.getByText('Обложка сохранена.',{exact:true}).waitFor();assert.notEqual(uploadedUrl,first);
   broken=true;await page.reload();await page.locator('.own-profile-avatar > .profile-cover[data-cover="default"]').waitFor();broken=false;
   await page.getByRole('button',{name:'Изменить обложку',exact:true}).click();await page.getByRole('button',{name:'Удалить обложку',exact:true}).click();await page.getByText('Обложка удалена. Используется стандартное оформление.',{exact:true}).waitFor();assert.equal(uploadedUrl,null);
-  await choose();failNext=true;await page.getByRole('button',{name:'Сохранить фрагмент',exact:true}).click();await page.getByRole('button',{name:'Обновить данные',exact:true}).click();
-  await page.getByRole('button',{name:'Изменить обложку',exact:true}).waitFor();assert.equal(uploadedUrl,null);
+  // Exercise the actual client GET and mounted ProfilePage, including an
+  // ambiguous request that DID commit. Never infer failure from a lost reply.
+  for(const failure of ['offline','committed']){
+   await choose();
+   await page.getByLabel('По горизонтали',{exact:true}).press('Home');
+   await page.getByLabel('По горизонтали',{exact:true}).press('ArrowRight');
+   await page.getByLabel('По вертикали',{exact:true}).press('End');
+   await page.getByLabel('По вертикали',{exact:true}).press('ArrowLeft');
+   const save=page.getByRole('button',{name:'Сохранить фрагмент',exact:true});
+   await page.waitForFunction(()=>document.querySelector('.profile-cover-controls').getAttribute('aria-busy')==='false');
+   const draft=await page.getByAltText('Выбранный фрагмент в шапке профиля').getAttribute('src');
+   const pixels=await cropPixels('.profile-cover--preview');
+   const readsBefore=profileReads, coverReadsBefore=coverReads, versionBefore=version;
+   failNext=failure;await save.click();
+   const refresh=page.getByRole('button',{name:'Обновить данные',exact:true});
+   await refresh.waitFor();
+   assert.equal(version,versionBefore+(failure==='committed'?1:0));
+   if(failure==='offline'){
+    readFailure=503;await refresh.click();
+    await page.getByText('Не удалось проверить результат. Повторите обновление данных.',{exact:true}).waitFor();
+    assert.equal(await save.count(),0,'failed reconciliation cannot unlock mutation');
+    readVersion=version-1;await refresh.click();
+    await page.getByText('Не удалось проверить результат. Повторите обновление данных.',{exact:true}).waitFor();
+    assert.equal(await save.count(),0,'older cover receipts cannot unlock mutation');
+   }
+   let releaseRead;
+   readGate=new Promise(resolve=>{releaseRead=resolve;});
+   const readStarted=page.waitForRequest(request=>new URL(request.url()).pathname==='/v1/me/cover'&&request.method()==='GET');
+   await refresh.click();await readStarted;
+   assert.equal(await refresh.isDisabled(),true,'reconciliation locks repeated reads');
+   assert.equal(await page.getByLabel('По горизонтали',{exact:true}).isDisabled(),true);
+   assert.equal(await page.getByRole('button',{name:'Изменить профиль',exact:true}).isDisabled(),true);
+   assert.equal(await page.getByRole('button',{name:'Отмена',exact:true}).isDisabled(),true);
+   releaseRead();readGate=null;
+   await save.waitFor();
+   assert.equal(await save.isEnabled(),true);
+   assert.equal(profileReads,readsBefore,'cover reconciliation must not reload the profile');
+   assert.equal(coverReads,coverReadsBefore+(failure==='offline'?3:1),'authoritative cover GET was performed');
+   assert.equal(await page.getByAltText('Выбранный фрагмент в шапке профиля').getAttribute('src'),draft);
+   assert.equal(await page.getByLabel('По горизонтали',{exact:true}).inputValue(),'0.01');
+   assert.equal(await page.getByLabel('По вертикали',{exact:true}).inputValue(),'0.99');
+   assert.deepEqual(await cropPixels('.profile-cover--preview'),pixels,'draft pixels survive reconciliation');
+   const reconciledVersion=version;
+   await save.click();await page.getByText('Обложка сохранена.',{exact:true}).waitFor();
+   assert.equal(version,reconciledVersion+1,'retry uses fresh CAS version (asserted by the route)');
+  }
   await page.getByRole('button',{name:'Изменить обложку',exact:true}).click();await page.keyboard.press('Escape');assert.equal(await page.getByRole('dialog',{name:'Обложка профиля'}).count(),0);
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`${width}: no overflow`);
+  await choose();failNext='offline';await page.getByRole('button',{name:'Сохранить фрагмент',exact:true}).click();
+  readFailure=401;await page.getByRole('button',{name:'Обновить данные',exact:true}).click();
+  await page.getByRole('heading',{name:'Ваша игра начинается здесь',exact:true}).waitFor();
+  assert.equal(await page.getByRole('dialog',{name:'Обложка профиля'}).count(),0,'unauthorized read returns to auth and discards private draft');
   await context.close();
  }
  console.log('Synthetic cover UI regression completed (mock API; not live authenticated acceptance)');

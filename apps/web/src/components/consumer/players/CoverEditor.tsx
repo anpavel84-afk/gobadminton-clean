@@ -13,10 +13,10 @@ export function ProfileCover({ url }: { url?: string | null }) {
   </div>;
 }
 
-export function CoverEditor({ frameRef, cover, version, csrfToken, disabled, onBusy, onChange, onRefresh }: {
+export function CoverEditor({ frameRef, cover, version, csrfToken, disabled, onBusy, onChange, onUnauthorized }: {
   frameRef?: RefObject<HTMLDivElement | null>;
   cover?: CoverReceipt["cover"]; version: number; csrfToken: string; disabled: boolean;
-  onBusy: (value: boolean) => void; onChange: (value: CoverReceipt) => void; onRefresh: () => void;
+  onBusy: (value: boolean) => void; onChange: (value: CoverReceipt) => void; onUnauthorized: () => void;
 }) {
   const [frameRatio, setFrameRatio] = useState<number | null>(null);
   useEffect(() => {
@@ -40,15 +40,16 @@ export function CoverEditor({ frameRef, cover, version, csrfToken, disabled, onB
   const [preview, setPreview] = useState<{ blob: Blob; url: string } | null>(null);
   const [preparing, setPreparing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [reconciling, setReconciling] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [uncertain, setUncertain] = useState(false);
   const operation = useRef<AbortController | null>(null);
   const mounted = useRef(false);
-  const callbacks = useRef({ onBusy, onChange, onRefresh });
-  useEffect(() => { callbacks.current = { onBusy, onChange, onRefresh }; }, [onBusy, onChange, onRefresh]);
+  const callbacks = useRef({ onBusy, onChange, onUnauthorized });
+  useEffect(() => { callbacks.current = { onBusy, onChange, onUnauthorized }; }, [onBusy, onChange, onUnauthorized]);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; operation.current?.abort(); callbacks.current.onBusy(false); }; }, []);
-  useEffect(() => { operation.current?.abort(); }, [version]);
+  useEffect(() => { operation.current?.abort(); }, [version, csrfToken]);
   useEffect(() => {
     if (!file || !open) return;
     const controller = new AbortController();
@@ -67,14 +68,24 @@ export function CoverEditor({ frameRef, cover, version, csrfToken, disabled, onB
   }, [file, crop, open]);
 
   async function reconcile() {
-    if (operation.current) return;
-    const controller = new AbortController(); operation.current = controller; setSaving(true);
+    if (operation.current || disabled) return;
+    const controller = new AbortController(); operation.current = controller;
+    setSaving(true); setReconciling(true); setError(""); callbacks.current.onBusy(true);
     try {
       const result = await getMyCover(controller.signal);
       if (!mounted.current || controller.signal.aborted) return;
-      if (result.ok) { operation.current = null; setUncertain(false); callbacks.current.onRefresh(); }
+      if (result.ok && result.data.version >= version) {
+        // The ambiguous write may have committed. Adopt its authoritative CAS
+        // version without remounting the editor or discarding the local crop.
+        operation.current = null;
+        callbacks.current.onChange(result.data);
+        setUncertain(false);
+      } else if (!result.ok && result.status === 401) callbacks.current.onUnauthorized();
       else setError("Не удалось проверить результат. Повторите обновление данных.");
-    } finally { if (operation.current === controller) operation.current = null; if (mounted.current) setSaving(false); }
+    } finally {
+      if (operation.current === controller) operation.current = null;
+      if (mounted.current) { setSaving(false); setReconciling(false); callbacks.current.onBusy(false); }
+    }
   }
   async function save(blob: Blob | null) {
     if (operation.current || disabled || uncertain) return;
@@ -85,7 +96,7 @@ export function CoverEditor({ frameRef, cover, version, csrfToken, disabled, onB
       if (!mounted.current) return;
       if (controller.signal.aborted) { setUncertain(true); return; }
       if (!result.ok) {
-        if (result.status === 401) { callbacks.current.onRefresh(); return; }
+        if (result.status === 401) { callbacks.current.onUnauthorized(); return; }
         if (result.status === 0 || result.status >= 500 || result.status === 409) setUncertain(true);
         setError(result.status === 429 ? "Слишком много попыток. Попробуйте позже." : result.status === 422 ? "Обложка не прошла проверку. Выберите другое фото." : "Сохранение не подтверждено. Обновите данные перед повтором.");
         return;
@@ -112,10 +123,10 @@ export function CoverEditor({ frameRef, cover, version, csrfToken, disabled, onB
       {preparing && <p role="status">Готовим фрагмент…</p>}
       {preview && frameRatio && <div aria-label="Предпросмотр обложки"><p>Фрагмент в шапке профиля при текущем размере экрана</p><div className="profile-cover profile-cover--preview" style={{ aspectRatio: frameRatio }}><img src={preview.url} alt="Выбранный фрагмент в шапке профиля" /></div></div>}
       {!file && <ProfileCover url={cover?.uploadedUrl} />}
-      {saving && <p role="status">Сохраняем обложку…</p>}
+      {saving && <p role="status">{reconciling ? "Проверяем обложку…" : "Сохраняем обложку…"}</p>}
       {error && <p role="alert">{error}</p>}
       <div className="profile-form-actions">
-        {uncertain ? <Button disabled={saving} onClick={() => void reconcile()}>Обновить данные</Button> : <>
+        {uncertain ? <Button disabled={disabled || saving} onClick={() => void reconcile()}>Обновить данные</Button> : <>
           <Button disabled={disabled || saving || preparing || !preview || !frameRatio} onClick={() => void save(preview!.blob)}>Сохранить фрагмент</Button>
           {cover?.uploadedUrl && <Button variant="ghost" disabled={disabled || saving} onClick={() => void save(null)}>Удалить обложку</Button>}
         </>}

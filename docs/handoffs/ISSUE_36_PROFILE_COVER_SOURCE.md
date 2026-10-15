@@ -1,5 +1,32 @@
 # Issue #36 — Wave B2 owned profile cover
 
+## Attempt 6 — bounded live-UX recovery correction, 2026-10-15
+
+From: source author. To: parent publisher → NEW independent read-only SOURCE QA6.
+Status: READY_FOR_REVIEW / UNVERIFIED; uncommitted source, no new QA verdict or live success.
+Exact base: [`03c6abb1157276d58432728c9ebae528c446243d`](https://github.com/anpavel84-afk/gobadminton-clean/tree/03c6abb1157276d58432728c9ebae528c446243d), branch `automation/issue-36`, initially clean. Authorization supplied by parent: standing Owner CONTINUE and [PR #41 comment 6193993393](https://github.com/anpavel84-afk/gobadminton-clean/pull/41#issuecomment-6193993393). Only this attempt 6 is authorized; no automatic attempt 7.
+
+Prior facts **supplied by parent, not reverified by source author**: QA5 SOURCE PASS with no findings at exact base; full push/PR CI PASS; actual DEV `r38742345608-a2` root ACCEPTED, migration `0033` applied with pre-migration backup. Initial DEV deployment missed the migration; Ops corrected DEV configuration without API/SQL changes. Independent authenticated browser UAT passed its first five checks (keyboard focus, oversized local rejection, successful upload/public PNG, mobile390 crop pixel error 0 and previews at 320/360/390/1440), then **FAIL**: offline save → uncertain → restored network → «Обновить данные» reloads ProfilePage, unmounting CoverEditor and losing the draft/preview. These facts do not erase the earlier Foundation/QA2/CI FAIL chronology below. Historical `.tools/style-reference/ACTUAL_CI_SOURCE_ERRORS.md` concerns earlier rejected SHAs, not new errors on this base.
+
+Source correction:
+
+- Successful existing authenticated `GET /v1/me/cover` now applies authoritative cover/version through `onChange`, without profile reload, editor remount or draft/crop/blob URL reset. A lost write response may mean the original write committed: the retry uses the returned shared CAS version, never the pre-error version. The existing explicit confirmation, mutation API and idempotency/session/CSRF safeguards remain.
+- Read failure or an older receipt retains uncertainty and blocks save/delete; read 401 switches directly to the existing auth view and discards the private editor. Reconciliation reports «Проверяем обложку…», locks profile mutations/crop/close and repeated requests through existing busy controls, then releases busy in finally. Version/CSRF changes abort pending operations; aborted/unmounted reads are ignored. Parent functional updates reject receipts older than current state.
+- Browser regression now exercises real client reconciliation against synthetic loopback routes at all four widths: offline failure, failed/stale reads, retained draft URL/crop/pixels, held-read busy controls, successful retry, committed-but-lost response with advanced version, no profile refetch and unauthorized read. Route assertions enforce fresh expectedVersion, CSRF and replay key on retry. Chromium sandbox is explicitly enabled; no sandbox bypass is used. This remains mocked API coverage, not live authentication/security evidence.
+
+STYLE_GUIDE_PARITY: reviewed binding Style Guide decision and supplied primary `.tools/style-reference` provenance/mobile rendering. This correction retains canonical header placement/geometry, crop math, responsive preview, Button/ProfileDialog/form/notice primitives and existing `STYLE_GUIDE_GAP #36-cover-crop-preview`. No new visual pattern or OWNER_VISUAL_OVERRIDE. The linked operations style-guide document and installed Next docs are absent locally; no PLAN/frozen-tree or new rendered parity claim.
+
+Author verification only (not independent QA):
+
+- `node --check apps/web/test/profile-cover.browser.mjs`: exit 0, syntax only.
+- `git diff --check`: exit 0.
+- Web typecheck, lint and targeted cover unit/preprocess tests were each attempted with `COREPACK_ENABLE_NETWORK=0 pnpm --filter @gobadminton/web run …`; all stopped before execution because pinned pnpm 10.18.0 is unavailable locally and network is disabled. No dependency install/fetch.
+- `node apps/web/test/profile-cover.browser.mjs`: stopped before browser/server access with `ERR_MODULE_NOT_FOUND` for `.tools/node_modules/playwright/index.mjs`. Browser regression, typecheck, lint, unit execution, build and fresh hosted/live/UAT checks are **NOT_TESTED** for this diff. No service started or browser sandbox bypass attempted.
+
+Only changed Web source/tests and this handoff. No API/SQL/contracts, automation, Git metadata, secrets, services, real accounts, live environments or PROD changes; no commit/push/self-QA. Rollback: inverse of this attempt's five-file diff on the exact base, retaining all earlier cover implementation and historical evidence; no database operation.
+
+Next bounded action: parent normal commit/publication with NEW exact SHA/permalinks → NEW independent QA6 → fresh full hosted Product CI at that SHA → separately authorized actual DEV/root ACCEPTED and authenticated synthetic live UAT of recovery/retry. New candidate SHA/publication pending parent; prior SHA's SOURCE/CI/DEV facts cannot accept this diff. Source review is not product acceptance. No additional correction attempt is authorized here.
+
 ## Attempt 3 continuation before first QA3 — complete CI facts, 2026-10-15
 
 From: source author. To: trusted parent publisher → NEW independent read-only QA3.
