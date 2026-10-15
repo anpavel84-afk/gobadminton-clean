@@ -3,6 +3,62 @@
 From: source author. To: independent SOURCE QA / authorized PM. Date: 2026-10-15.
 Status: WORKING_DRAFT / UNVERIFIED; source only, no acceptance or deployment claim.
 
+## Attempt 5 — bounded CI block-fixture repair (2026-10-15)
+
+From: source author. To: authorized Bridge publisher / independent QA5.
+Status: READY_FOR_REVIEW source delta; execution UNVERIFIED. This section supersedes
+earlier current-status paragraphs while preserving their historical evidence.
+Exact base: `4b9f46f1d923da772bf12719e7e4e368e13dc296`, branch
+`automation/issue-15`, clean at entry:
+https://github.com/anpavel84-afk/gobadminton-clean/tree/4b9f46f1d923da772bf12719e7e4e368e13dc296
+Authorization: supplied immutable #15 source assignment plus bounded attempt 5:
+https://github.com/anpavel84-afk/gobadminton-clean/pull/40#issuecomment-6190153107
+
+Preserved supplied evidence (not newly verified): independent QA4 PASS, no findings,
+on that exact base. PM reports Product CI run 38720970649: 6/7 jobs passed;
+database job 116375138357 failed at managed-games fixture inserting a block without
+required `pair_id`. This diagnostic is not a replacement QA verdict or UAT.
+
+Only `apps/api/test/integration/me.managed-games.test.ts` and this handoff change.
+Read current migrations (0008 pair/block constraints, 0022 deferred revision trigger,
+0032 friendship generation and immutable attempt guards), production PairFenceService,
+SafetyService/controllers and existing LS01 HTTP block/unblock examples.
+The fixture now imports SafetyModule and uses authenticated, CSRF/idempotency-protected
+PUT and DELETE `/v1/me/blocks/:publicPlayerId`, with JSON bodies and distinct keys.
+Social directory is enabled only in the constructed synthetic application's env object;
+no process-wide or runtime privacy flag changes. Production pair creation/locking,
+block FK identity, friendship terminal-state/version handling and commit-time revision
+triggers are reused. This fixture creates no friendship generation/attempt and never
+deletes or rewrites the append-only ledger or pair row. Unblock runs in a nested
+`finally`; outer cleanup still clears the synthetic avatar even if unblock fails.
+Receipt/status assertions guard setup and cleanup; an added HTTP read checks the
+replacement avatar returns after unblock. All previous creator/manager, block, hide,
+replacement/removal and discovery assertions remain.
+
+STYLE_GUIDE_PARITY: accepted visual source and canonical mapping in
+[ISSUE_15_CANONICAL_REFERENCE.md](ISSUE_15_CANONICAL_REFERENCE.md) are untouched;
+no frontend or composition changes in this repair.
+
+Actually attempted: `pnpm --filter @gobadminton/api exec vitest run --project integration
+test/integration/me.managed-games.test.ts`. It failed before Vitest startup:
+Corepack could not download pnpm 10.18.0, DNS `EAI_AGAIN registry.npmjs.org`.
+No dependencies were installed; no DB was contacted or test executed. The attempted
+command did not set RUN_DB_INTEGRATION; the independent disposable-DB run must set
+`RUN_DB_INTEGRATION=1` and use its authorized disposable DATABASE_URL.
+`git diff --check` completed with exit 0 before this documentation addition.
+NOT_TESTED: compilation, lint, integration execution, independent QA5, new hosted CI,
+browser/UAT, actual DEV SHA/paired digests/backup/root-owned acceptance. No self-QA
+verdict, current test PASS, deployment or acceptance claimed.
+
+Next single bounded action: Bridge reviews and publishes these two files as a new
+candidate SHA, then routes independent read-only QA5 on that exact SHA. Full hosted
+Product CI and authorized DEV paired images/backup/browser/root-owned ACCEPTED receipt
+(exact SHA/digests, pending=false), plus synthetic mobile/desktop product browser smoke,
+remain separate mandatory gates. Any failure requires bounded repair or BLOCKED/rollback.
+No commit/push, git metadata writes, GitHub writes, service/root/PROD effects performed.
+No new SHA/permalink exists in this author session. Rollback: discard/revert only this
+two-file delta; no migration or runtime rollback is introduced.
+
 ## Current bounded repair — base f4774a6 — 2026-10-15
 
 From: source author. To: authorized PM / canonical reference provider, then independent SOURCE QA.

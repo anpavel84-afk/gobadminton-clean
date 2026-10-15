@@ -22,6 +22,7 @@ import { GameAuthorityService } from "../../src/games/game-authority.service";
 import { GamesModule } from "../../src/games/games.module";
 import { OrganizersModule } from "../../src/organizers/organizers.module";
 import { ParticipationsModule } from "../../src/participations/participations.module";
+import { SafetyModule } from "../../src/safety/safety.module";
 import { MOSCOW_CITY_ID } from "../../src/venues/venues.service";
 import { VenuesModule } from "../../src/venues/venues.module";
 
@@ -129,7 +130,8 @@ describeIntegration("GET /v1/me/games managed games read contract", () => {
       shell: process.platform === "win32",
     });
 
-    const env = loadEnv(process.env);
+    // Enable only this synthetic application's block API, never runtime/global flags.
+    const env = loadEnv({ ...process.env, SOCIAL_DIRECTORY_ENABLED: "1" });
     const database = createDatabase(env.DATABASE_URL);
     pool = database.pool;
 
@@ -143,6 +145,7 @@ describeIntegration("GET /v1/me/games managed games read contract", () => {
         VenuesModule,
         GamesModule,
         ParticipationsModule,
+        SafetyModule,
       ],
     })
       .overrideProvider(AUTH_PROVIDER_OVERRIDES)
@@ -285,6 +288,10 @@ describeIntegration("GET /v1/me/games managed games read contract", () => {
       VALUES ($1, 'Avatar Creator', true, true, $2, $3, 'synthetic-issue15-v1', now())
       ON CONFLICT(user_id) DO UPDATE SET display_name='Avatar Creator', directory_visible=true, social_eligible=true, avatar_key=$2,
         city_id=$3, consent_policy_version='synthetic-issue15-v1', opted_in_at=now()`, [owner.userId, avatarKey, MOSCOW_CITY_ID]);
+    const creatorProfile = await pool.query<{ public_player_id: string }>(
+      "SELECT public_player_id FROM player_social_profiles WHERE user_id=$1", [owner.userId],
+    );
+    const blockUrl = `/v1/me/blocks/${creatorProfile.rows[0]!.public_player_id}`;
     const readAvatar = async (url: string, cookie = owner.cookie) => {
       const res = await app.inject({ method: "GET", url, headers: { cookie } });
       expect(res.statusCode).toBe(200);
@@ -304,10 +311,28 @@ describeIntegration("GET /v1/me/games managed games read contract", () => {
       await pool.query("UPDATE player_social_profiles SET directory_visible=true, avatar_key=NULL WHERE user_id=$1", [owner.userId]);
       for (const url of boundaries) expect((await readAvatar(url)).uploadedUrl).toBeNull();
       await pool.query("UPDATE player_social_profiles SET avatar_key=$2 WHERE user_id=$1", [owner.userId, replacement]);
-      await pool.query("INSERT INTO user_blocks(blocker_user_id, blocked_user_id) VALUES ($1,$2) ON CONFLICT DO NOTHING", [other.userId, owner.userId]);
-      for (const url of boundaries.slice(0, 2)) expect(await readAvatar(url, other.cookie)).toEqual({ uploadedUrl: null, providerUrl: null });
+      // Use the production pair fence and mutation transaction for both directions.
+      // Do not fabricate friendship generations or rewrite the append-only ledger.
+      try {
+        const block = await app.inject({
+          method: "PUT", url: blockUrl,
+          headers: mutationHeaders(other, `idem-block-${suffix}-abcdefgh`),
+          payload: {},
+        });
+        expect(block.statusCode).toBe(200);
+        expect(block.json()).toEqual({ publicPlayerId: creatorProfile.rows[0]!.public_player_id, blocked: true });
+        for (const url of boundaries.slice(0, 2)) expect(await readAvatar(url, other.cookie)).toEqual({ uploadedUrl: null, providerUrl: null });
+      } finally {
+        const unblock = await app.inject({
+          method: "DELETE", url: blockUrl,
+          headers: mutationHeaders(other, `idem-unblock-${suffix}-abcdefgh`),
+          payload: {},
+        });
+        expect(unblock.statusCode).toBe(200);
+        expect(unblock.json()).toEqual({ publicPlayerId: creatorProfile.rows[0]!.public_player_id, blocked: false });
+      }
+      for (const url of boundaries.slice(0, 2)) expect((await readAvatar(url, other.cookie)).uploadedUrl).toBe(`/v1/media/avatars/${replacement}`);
     } finally {
-      await pool.query("DELETE FROM user_blocks WHERE blocker_user_id=$1 AND blocked_user_id=$2", [other.userId, owner.userId]);
       await pool.query("UPDATE player_social_profiles SET avatar_key=NULL WHERE user_id=$1", [owner.userId]);
     }
 
