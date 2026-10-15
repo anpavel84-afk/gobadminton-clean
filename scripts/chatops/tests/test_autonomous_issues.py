@@ -36,6 +36,146 @@ def gates(required, deploy=False):
     return run, jobs
 
 
+def existing(number=13):
+    parent = issue() | dict(number=number, body='Original product prose',
+                           created_at=(NOW-dt.timedelta(days=90)).isoformat(),
+                           updated_at=(NOW-dt.timedelta(days=2)).isoformat())
+    task = json.loads(issue()['body'].split('\n', 1)[1])
+    task['allowed_paths'] = ['apps/web/src/example.ts']
+    comment = dict(id=123, issue_url=f'https://api.github.com/repos/{a.REPO}/issues/{number}',
+                   user={'id': 318610566}, created_at=NOW.isoformat(), updated_at=NOW.isoformat(),
+                   body=a.MARKER+'\n'+json.dumps(task))
+    return parent, comment
+
+
+class CommentAdmission(unittest.TestCase):
+    def test_old_parent_restart_done_and_no_body_rewrite(self):
+        parent, comment = existing()
+        original = copy.deepcopy(parent)
+        with tempfile.TemporaryDirectory() as tmp:
+            store = a.Store(Path(tmp)/'state')
+            active = store.claim([parent], SINCE, [comment])
+            self.assertEqual(active['issue'], 13)
+            self.assertEqual(active['comment']['id'], 123)
+            os.close(store.lock)
+            store = a.Store(Path(tmp)/'state')
+            try:
+                self.assertEqual(store.claim([], SINCE), active)
+                store.phase('done')
+                self.assertIsNone(store.claim([parent], SINCE, [comment | {'id': 124}]))
+                self.assertEqual(parent, original)
+            finally:
+                os.close(store.lock)
+
+    def test_invalid_comments_and_parents(self):
+        parent, comment = existing()
+        old = (NOW-dt.timedelta(days=8)).isoformat()
+        future = (NOW+dt.timedelta(days=1)).isoformat()
+        cases = [(parent | change, comment) for change in
+                 ({'user': {'id': 1}}, {'user': {'id': str(318610566)}},
+                  {'state': 'closed'}, {'pull_request': {}})]
+        cases += [(parent, comment | change) for change in
+                  ({'user': {'id': 1}}, {'user': {'id': str(318610566)}},
+                   {'id': True}, {'id': 0}, {'id': '123'},
+                   {'issue_url': 'https://api.github.com/repos/other/repo/issues/13'},
+                   {'issue_url': comment['issue_url']+'0'},
+                   {'updated_at': old}, {'created_at': old, 'updated_at': old},
+                   {'created_at': future, 'updated_at': future},
+                   {'body': a.MARKER+'\n{invalid}'}, {'body': 'prose'},
+                   {'body': ' '+comment['body']})]
+        for par, com in cases:
+            with self.subTest(parent=par, comment=com), tempfile.TemporaryDirectory() as tmp:
+                store = a.Store(Path(tmp)/'state')
+                try:
+                    self.assertIsNone(store.claim([par], SINCE, [com]))
+                finally:
+                    os.close(store.lock)
+
+    def test_comment_exact_task_contract_and_cutoff(self):
+        parent, comment = existing()
+        task = json.loads(comment['body'].split('\n', 1)[1])
+        for changes in ({'target': 'prod'}, {'kind': 'deploy'}, {'schema': 1},
+                        {'max_attempts': True}, {'max_attempts': 4},
+                        {'allowed_paths': ['scripts/chatops/autonomous_issues.py']},
+                        {'allowed_paths': ['apps/../secret']},
+                        {'allowed_paths': ['apps/web/$(touch proof)']},
+                        {'allowed_paths': [a.CANARIES[30]]}, {'extra': 'field'}):
+            with self.subTest(changes=changes), self.assertRaises(a.Hold):
+                a.validate_comment(parent, comment | {
+                    'body': a.MARKER+'\n'+json.dumps(task | changes)}, SINCE, NOW)
+        with self.assertRaises(a.Hold):
+            a.validate_comment(parent, comment | {
+                'body': a.MARKER+'\n'+comment['body'].split('\n', 1)[1][:-1]+',"target":"dev"}'}, SINCE, NOW)
+        with self.assertRaises(a.Hold):
+            a.validate_comment(parent, comment, NOW+dt.timedelta(seconds=1), NOW)
+        # Equal instants with different UTC offsets must tie-break by Issue number.
+        other, second = existing(12)
+        second['created_at'] = second['updated_at'] = NOW.astimezone(
+            dt.timezone(dt.timedelta(hours=2))).isoformat()
+        with tempfile.TemporaryDirectory() as tmp:
+            store = a.Store(Path(tmp)/'state')
+            try:
+                self.assertEqual(store.claim([parent, other], SINCE, [comment, second])['issue'], 12)
+            finally:
+                os.close(store.lock)
+
+    def test_ambiguity_and_authorization_instant_order(self):
+        parent, comment = existing()
+        other, second = existing(15)
+        second['created_at'] = second['updated_at'] = (NOW-dt.timedelta(minutes=1)).isoformat()
+        with tempfile.TemporaryDirectory() as tmp:
+            store = a.Store(Path(tmp)/'state')
+            try:
+                self.assertIsNone(store.claim([parent], SINCE, [comment, comment | {'id': 124}]))
+                self.assertEqual(store.claim([parent, other], SINCE, [comment, second])['issue'], 15)
+            finally:
+                os.close(store.lock)
+
+    def test_runtime_exact_comment_and_parent_fail_closed(self):
+        parent, comment = existing()
+        with tempfile.TemporaryDirectory() as tmp:
+            store = a.Store(Path(tmp)/'state')
+            try:
+                active = store.claim([parent], SINCE, [comment])
+                bridge = a.Bridge(types.SimpleNamespace(), store)
+                with patch.object(a, 'api', side_effect=[parent, comment]) as read:
+                    bridge.unchanged_issue(active)
+                    self.assertEqual(read.call_args.args[0], 'issues/comments/123')
+                for changes in ({'id': 124}, {'id': True}, {'body': issue()['body']},
+                                {'user': {'id': 1}}, {'updated_at': 'edited'},
+                                {'issue_url': comment['issue_url']+'0'},
+                                {'created_at': (NOW-dt.timedelta(seconds=1)).isoformat()}):
+                    with patch.object(a, 'api', side_effect=[parent, comment | changes]):
+                        with self.assertRaises((a.Hold, ValueError)):
+                            bridge.unchanged_issue(active)
+                with patch.object(a, 'api', side_effect=[parent, a.Hold('deleted')]):
+                    with self.assertRaises(a.Hold):
+                        bridge.unchanged_issue(active)
+                with patch.object(a, 'api', return_value=parent | {'body': 'changed'}):
+                    with self.assertRaises(a.Hold):
+                        bridge.unchanged_issue(active)
+            finally:
+                os.close(store.lock)
+
+    def test_discovery_quota_preserves_checkpoint_and_fetches_once(self):
+        parent, comment = existing()
+        with tempfile.TemporaryDirectory() as tmp:
+            store = a.Store(Path(tmp)/'state')
+            try:
+                active = store.claim([parent], SINCE, [comment])
+                before = store.path.read_bytes()
+                with patch.object(a, 'pages', side_effect=[[parent], a.QuotaWait()]):
+                    with self.assertRaises(a.QuotaWait):
+                        a.discover(store, SINCE)
+                self.assertEqual(store.path.read_bytes(), before)
+                with patch.object(a, 'pages', side_effect=[[parent], [comment]]) as read:
+                    self.assertEqual(a.discover(store, SINCE), active)
+                    self.assertEqual(read.call_count, 2)
+                    self.assertTrue(read.call_args.args[0].startswith('issues/comments?since='))
+            finally:
+                os.close(store.lock)
+
+
 class Contracts(unittest.TestCase):
     def test_two_canaries_and_strict_schema(self):
         for n in (30, 31):

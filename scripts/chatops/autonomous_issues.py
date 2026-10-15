@@ -145,6 +145,31 @@ def validate_issue(issue, since, now=None):
     return task
 
 
+def validate_comment(issue, comment, since, now=None):
+    require(type(comment.get('id')) is int and comment['id'] > 0, 'invalid comment id')
+    require(comment.get('issue_url') ==
+            f'https://api.github.com/repos/{REPO}/issues/{issue["number"]}',
+            'wrong comment parent')
+    require(type(comment.get('user', {}).get('id')) is int
+            and comment['user']['id'] == 318610566, 'not Owner comment')
+    # Reuse the exact body contract, including parent identity and canary restrictions.
+    return validate_issue(issue | {k: comment[k] for k in
+                          ('body', 'created_at', 'updated_at')}, since, now)
+
+
+def comment_fingerprint(comment):
+    immutable = {k: comment[k] for k in
+                 ('id', 'issue_url', 'body', 'user', 'created_at', 'updated_at')}
+    return hashlib.sha256(json.dumps(immutable, sort_keys=True).encode()).hexdigest()
+
+
+def discover(store, since):
+    issues = pages('issues?state=open')
+    cutoff = urllib.parse.quote(since.isoformat(), safe='')
+    comments = pages(f'issues/comments?since={cutoff}')
+    return store.claim(issues, since, comments)
+
+
 def fingerprint(issue):
     # updated_at changes from comments/PR references are allowed after claim; body/author are not.
     immutable = {k: issue[k] for k in ('number', 'body', 'user', 'created_at')}
@@ -194,23 +219,45 @@ class Store:
     def save(self):
         atomic(self.path, self.data)
 
-    def claim(self, issues, since):
+    def claim(self, issues, since, comments=None):
         if self.data['active'] and self.data['active']['phase'] != 'done':
             return self.data['active']
+        by_parent = {}
+        for comment in comments or []:
+            by_parent.setdefault(comment.get('issue_url'), []).append(comment)
         choices = []
         for issue in issues:
             try:
-                task = validate_issue(issue, since)
-                if issue['number'] not in self.data['done']:
-                    choices.append((issue['created_at'], issue['number'], issue, task))
+                if issue['number'] in self.data['done']:
+                    continue
+                authorizations = []
+                for comment in by_parent.get(
+                        f'https://api.github.com/repos/{REPO}/issues/{issue["number"]}', []):
+                    try:
+                        task = validate_comment(issue, comment, since)
+                        authorizations.append((comment, task))
+                    except (Hold, ValueError, KeyError, TypeError):
+                        continue
+                require(len(authorizations) <= 1, 'ambiguous authorization comments')
+                if authorizations:
+                    comment, task = authorizations[0]
+                    stamp = comment['created_at']
+                    admission = dict(id=comment['id'], fingerprint=comment_fingerprint(comment))
+                else:
+                    task = validate_issue(issue, since)
+                    stamp, admission = issue['created_at'], None
+                created = dt.datetime.fromisoformat(stamp.replace('Z', '+00:00'))
+                choices.append((created, issue['number'], issue, task, admission))
             except (Hold, ValueError, KeyError, TypeError):
                 continue
         if not choices:
             return None
-        _, number, issue, task = min(choices)
+        _, number, issue, task, admission = min(choices, key=lambda x: x[:2])
         self.data['active'] = dict(issue=number, task=task, fingerprint=fingerprint(issue),
                                    phase='claimed', base=None, head=None, pr=None, ci=None,
                                    run=None, attempt=0)
+        if admission is not None:
+            self.data['active']['comment'] = admission
         self.save()
         return self.data['active']
 
@@ -498,6 +545,18 @@ class Bridge:
         issue = api(f'issues/{active["issue"]}')
         require(issue.get('state') == 'open' and 'pull_request' not in issue
                 and fingerprint(issue) == active['fingerprint'], 'Issue changed/closed after claim')
+        if 'comment' in active:
+            admission = active['comment']
+            require(type(admission['id']) is int and admission['id'] > 0, 'invalid claimed comment')
+            comment = api(f'issues/comments/{admission["id"]}')
+            require(comment.get('id') == admission['id'] and type(comment.get('id')) is int,
+                    'comment identity changed')
+            # Freshness is an admission-only rule; immutable claims survive restarts/age.
+            created = dt.datetime.fromisoformat(comment['created_at'].replace('Z', '+00:00'))
+            require(validate_comment(issue, comment, created, created) == active['task']
+                    and comment_fingerprint(comment) == admission['fingerprint'],
+                    'authorization comment changed after claim')
+
 
     def clean(self, sha):
         require(self.git('rev-parse', 'HEAD', cwd=self.work) == sha
@@ -774,7 +833,7 @@ def main():
                 time.sleep(config.poll)
                 continue
             if not active or active['phase'] == 'done':
-                active = store.claim(pages('issues?state=open'), since)
+                active = discover(store, since)
                 recovery = False
             if active and active['phase'] != 'done':
                 bridge.execute(active, recovery=recovery)
