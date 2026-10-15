@@ -14,3 +14,19 @@ export function venueSchedules(venues: VenueSummary[], games: Game[], day: strin
   for (const games of schedules.values()) games.sort((a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt) || a.id.localeCompare(b.id));
   return schedules;
 }
+
+/** null means unavailable, never a verified zero. Also used for accessible marker text. */
+export function venueMarkerPresentation(venue: Pick<VenueSummary, "id" | "name">, counts: ReadonlyMap<string, number> | null) {
+  const count = counts?.get(venue.id);
+  return {
+    className: count ? "g2-map-marker" : "g2-map-venue-marker",
+    text: count ? String(count) : "⌂",
+    label: count === undefined ? `${venue.name}: расписание недоступно` : `${venue.name}: ${count} доступных игр`,
+  };
+}
+
+/** Only the immutable venue ID is carried through authentication/profile setup. */
+export function venueCreatePath(search: string) {
+  const venueId = new URLSearchParams(search).get("venueId");
+  return venueId ? `/games/create?${new URLSearchParams({ venueId })}` : "/games/create";
+}

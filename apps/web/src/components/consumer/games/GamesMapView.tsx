@@ -5,8 +5,7 @@ import { listAllCityVenues, listAllUpcomingCityGames } from "../../../lib/api-cl
 import type { Game, VenueSummary } from "../../../lib/consumer-types";
 import { venueSchedules } from "../../../lib/games-venue-map";
 import { MOSCOW_BUNDLE } from "../../../lib/radar-map-assets";
-import { VenueCover } from "../venues/VenueCover";
-import { DiscoveryGameCard } from "../discovery/DiscoveryGameCard";
+import { VenueScheduleCard } from "./VenueScheduleCard";
 import { Button } from "../Button";
 const MapView = dynamic(() => import("./GamesVenueMap").then(module => module.GamesVenueMap), { ssr: false });
 
@@ -48,19 +47,12 @@ export function GamesMapView({ cityId, day }: { cityId: string; day: string }) {
     {loading && <p role="status">Загружаем все площадки и расписание…</p>}
     {error && <p role="alert">Не удалось загрузить полный каталог или расписание. Проверьте соединение и повторите. Непроверенные количества не показываем.</p>}
     {snapshot?.cityId === cityId && <>
-      {cityId === MOSCOW_BUNDLE.cityId ? <MapView venues={venues} counts={counts} onSelect={venue => setSelected(venue.id)} /> : <p role="status">Карта выбранного города пока недоступна. Все площадки доступны списком.</p>}
+      {cityId === MOSCOW_BUNDLE.cityId ? <MapView venues={venues} counts={snapshot.gamesReady ? counts : null} onSelect={venue => setSelected(venue.id)} /> : <p role="status">Карта выбранного города пока недоступна. Все площадки доступны списком.</p>}
       {venues.some(venue => typeof venue.latitude !== "number" || typeof venue.longitude !== "number") && <p role="status">Для части площадок нет координат: они доступны в списке ниже.</p>}
       {!venues.length && <p role="status">В каталоге города пока нет площадок.</p>}
       <div className="gb-discovery-chips" role="group" aria-label="Все площадки города">{venues.map(venue => <button className="gb-discovery-chip" type="button" key={venue.id} aria-pressed={selected === venue.id} onClick={() => setSelected(venue.id)}>{venue.name} · {snapshot.gamesReady ? counts.get(venue.id) ?? 0 : "?"}</button>)}</div>
-      {venue && <article className="gb-discovery-state" aria-label={`Площадка: ${venue.name}`}>
-        <VenueCover name={venue.name} cover={venue.cover} /><h2>{venue.name}</h2><p>{venue.address}</p>
-        <Button variant="outline" href={`/venues/${encodeURIComponent(venue.id)}`}>О площадке</Button>
-        <Button href={`/games/create?venueId=${encodeURIComponent(venue.id)}`}>Создать игру на этой площадке</Button>
-        <h3>Расписание · {venue.timezone}</h3>
-        {!snapshot.gamesReady && <p role="status">Расписание временно недоступно.</p>}
-        {snapshot.gamesReady && !schedules.get(venue.id)?.length && <p>{day && all.get(venue.id)?.length ? "Нет игр в выбранную дату" : "Нет предстоящих доступных игр"}</p>}
-        <div className="gb-discovery-cards">{schedules.get(venue.id)?.map(game => <DiscoveryGameCard key={game.id} game={game} />)}</div>
-      </article>}
+      {venue && <VenueScheduleCard venue={venue} games={schedules.get(venue.id) ?? []}
+        gamesReady={snapshot.gamesReady} day={day} hasUpcoming={!!all.get(venue.id)?.length} />}
     </>}
   </section>;
 }

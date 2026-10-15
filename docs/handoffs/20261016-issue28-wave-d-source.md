@@ -56,13 +56,26 @@ Empty/Error, responsive recipes. Reuses DiscoveryHero/CreateBanner, existing cit
 selectors, chip/button tokens, DiscoveryGameCard and safe VenueCover. Shell and four
 mobile bottom tabs unchanged. Games screen-specific existing hero/sidebar/list
 composition remains for list mode.
-STYLE_GUIDE_GAP: frozen Make screen source is not available in this clean checkout;
-docs/operations/FRONTEND_STYLE_GUIDE_FIRST_V001.md is absent. Exact Games map / VenueCard
-screen composition could not be inspected. The map with accessible venue selectors
-and inline schedule card is a bounded provisional composition of existing families.
-No claim of exact frozen-screen parity; independent visual review is blocking before
-acceptance. OWNER_VISUAL_OVERRIDE: none. No clustering was introduced; markers use
-count vs neutral house, with equivalent accessible venue selectors below.
+Correction after independent FAIL on `14bb364e19b2e22842f95e1f8173917f1e971c8d`:
+the earlier assertion that reference material was unavailable was incorrect.
+Author inspected supplied `.tools/style-reference/README.md`, `guide.txt`
+(including Map primitives and Construction Kit sections 00–02), actual
+`guide-desktop.png`, `games-map-action.txt` and its manifest. These are primary
+public rendered observations captured 2026-10-15, admitted by Owner:
+https://github.com/anpavel84-afk/gobadminton-clean/issues/28#issuecomment-6198534662 .
+The guide explicitly provides ContentCard image-top, SurfacePanel, SectionHeader,
+responsive mobile stacking, GameCard and map selected preview / mobile bottom sheet.
+The Games map action was OBSERVED_NOOP, not an inspectable dedicated map screen.
+No standalone VenueCard specimen was verified in these supplied observations.
+
+STYLE_GUIDE_GAP #28-venue-schedule: bounded composition of the inspected ContentCard
+image-top + SurfacePanel + SectionHeader + existing GameCards, safe VenueCover and
+Button actions, now isolated in `VenueScheduleCard.tsx` with scoped responsive CSS.
+This is a proposed venue-specific composition, not a claim that a standalone frozen
+VenueCard was found or that all external reference states lack one. No invented
+screen-specific parity or frozen PLAN tree/hash verification. OWNER_VISUAL_OVERRIDE:
+none. Independent visual review remains required for canonical VenueCard acceptance.
+Marker styling is imported directly by GamesVenueMap, independent of visiting Radar.
 
 ## Checks / UAT — all NOT_TESTED
 

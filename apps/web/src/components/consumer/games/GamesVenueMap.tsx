@@ -4,6 +4,8 @@ import * as maplibregl from "maplibre-gl";
 import type { Map as LibreMap, StyleSpecification } from "maplibre-gl";
 import { Protocol } from "pmtiles";
 import "maplibre-gl/dist/maplibre-gl.css";
+import "../../../styles/radar-geographic.css";
+import { venueMarkerPresentation } from "../../../lib/games-venue-map";
 import { MOSCOW_BUNDLE, allowedMapResource } from "../../../lib/radar-map-assets";
 import type { VenueSummary } from "../../../lib/consumer-types";
 let protocol: Protocol | undefined;
@@ -14,7 +16,7 @@ function installProtocol() {
     protocol = new Protocol(); maplibregl.addProtocol("pmtiles", protocol.tile);
   }
 }
-export function GamesVenueMap({ venues, counts, onSelect }: { venues: VenueSummary[]; counts: Map<string, number>; onSelect: (venue: VenueSummary) => void }) {
+export function GamesVenueMap({ venues, counts, onSelect }: { venues: VenueSummary[]; counts: Map<string, number> | null; onSelect: (venue: VenueSummary) => void }) {
   const container = useRef<HTMLDivElement>(null); const map = useRef<LibreMap | null>(null);
   const callbacks = useRef({ onSelect }); callbacks.current = { onSelect };
   const [ready, setReady] = useState(false);
@@ -56,11 +58,11 @@ export function GamesVenueMap({ venues, counts, onSelect }: { venues: VenueSumma
     for (const venue of venues) {
       const { latitude: lat, longitude: lon } = venue;
       if (typeof lat !== "number" || typeof lon !== "number" || !Number.isFinite(lat) || !Number.isFinite(lon) || lon < 36 || lon > 39.5 || lat < 54.5 || lat > 56.5) continue;
-      const count = counts.get(venue.id) ?? 0;
+      const marker = venueMarkerPresentation(venue, counts);
       const button = document.createElement("button"); button.type = "button";
-      button.className = count ? "g2-map-marker" : "g2-map-venue-marker";
-      button.textContent = count ? String(count) : "⌂";
-      button.setAttribute("aria-label", `${venue.name}: ${count} доступных игр`);
+      button.className = marker.className;
+      button.textContent = marker.text;
+      button.setAttribute("aria-label", marker.label);
       button.onclick = () => callbacks.current.onSelect(venue);
       markers.push(new maplibregl.Marker({ element: button }).setLngLat([lon, lat]).addTo(map.current));
     }
