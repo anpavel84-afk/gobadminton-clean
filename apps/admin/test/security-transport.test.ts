@@ -128,7 +128,7 @@ describe("explicit DEV path mount", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
   });
   it("keeps callback handoff at canonical basePath and removes provider query", async () => {
-    pathEnabled(); const fetch = vi.fn().mockResolvedValue(Response.json({csrfToken:"csrf-secret",principalId:"fixture",status:"pending_mfa"}));
+    pathEnabled(); const fetch = vi.fn().mockImplementation(async () => Response.json({csrfToken:"csrf-secret",principalId:"fixture",status:"pending_mfa"}));
     vi.stubGlobal("fetch",fetch);
     for (const provider of ["vk","yandex"]) {
       const response = await GET(new Request(main+`/admin/v1/admin/auth/${provider}/callback?code=private&state=bound&activation=never`,{headers:{cookie:"__Host-gb_admin_binding=binding; __Host-gb_session=consumer"}}),ctx(`auth/${provider}/callback`));

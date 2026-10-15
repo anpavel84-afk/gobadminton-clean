@@ -7,7 +7,7 @@ export const apiLogger: FastifyServerOptions["logger"] = {
   serializers: {
     req: (req) => ({ method: req.method, path: String(req.url ?? "").split(/[?#]/, 1)[0] }),
     res: (res) => ({ statusCode: res.statusCode }),
-    err: () => ({ type: "RequestError" }),
+    err: () => ({ type: "RequestError", message: "Request failed", stack: "Error details suppressed" }),
   },
   hooks: {
     // Fastify error/not-found messages may interpolate raw URLs or error.message.

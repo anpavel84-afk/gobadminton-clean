@@ -41,6 +41,8 @@ describe("production API logger pipeline", () => {
     const records = output.trim().split("\n").map((line) => JSON.parse(line));
     expect(records.some((r) => r.req?.method === "GET" && r.req.path === "/v1/admin/auth/yandex/callback" && r.reqId)).toBe(true);
     expect(records.some((r) => r.res?.statusCode === 500)).toBe(true);
+    expect(records.some((r) => r.err?.type === "RequestError" &&
+      r.err.message === "Request failed" && r.err.stack === "Error details suppressed")).toBe(true);
   });
 
   it("suppresses Nest exception details before the console sink", () => {

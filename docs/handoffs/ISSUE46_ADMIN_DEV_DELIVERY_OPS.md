@@ -571,3 +571,107 @@ Serial completion author validation (offline, unprivileged):
 - Focused `test_admin_path.py`: 3 passed, including actual native Node proxy/config
   regression and two new nginx source-contract regressions.
 - Final `git diff --check`: passed. No dependency install or network attempt.
+
+## Bounded hosted-CI / installed DEV protocol correction — 2026-10-16
+
+WORKING DRAFT — NOT APPROVED — NOT CANONICAL. DRAFT CI candidate only;
+source-ready does not mean DEV approval. From: bounded source author. To:
+Supervisor / NEW independent exact-SHA reviewer. Same Ops worktree and branch,
+initially clean; exact base `9290a5df5fb869abe8c3060817ff2cb283e254c5`:
+https://github.com/anpavel84-afk/gobadminton-clean/tree/9290a5df5fb869abe8c3060817ff2cb283e254c5
+
+Assignment: correct only the supplied API serializer type failure, consumed Admin
+callback fixture, and DEV graph compatibility; add workflow regression and preserve
+all historical independent QA FAIL / hosted CI FAIL evidence. No other writer per
+Supervisor assignment. No runtime executor or installed bridge inspection/change,
+root/network/models/livefiles/secrets/DB/services/flags/grants, commit/push,
+PROD/PLAN/VPN/neighbors. No publication performed; Supervisor must publish as DRAFT
+CI candidate and record exact new SHA/permalinks. This file is the source handoff
+for that future durable publication, not a claim of a published new revision.
+
+### Actual hosted evidence supplied by Supervisor (not queried locally)
+
+Product CI push run **38820541328**, exact9290, full CI **FAIL**:
+https://github.com/anpavel84-afk/gobadminton-clean/actions/runs/38820541328
+- source(api) job **116715779419**: TS2322 at api-logger.ts:10; error serializer
+  returned type only, missing required string message and stack.
+  https://github.com/anpavel84-afk/gobadminton-clean/actions/runs/38820541328/job/116715779419
+- source(admin) job **116715779059**: security-transport.test.ts:135, second
+  provider callback expected303 / actual503.
+  https://github.com/anpavel84-afk/gobadminton-clean/actions/runs/38820541328/job/116715779059
+- Root-owned hosted receiver job **116715779087 PASS** is a separate fact. It
+  does not change full CI FAIL or prove live receiver/commissioning acceptance.
+  https://github.com/anpavel84-afk/gobadminton-clean/actions/runs/38820541328/job/116715779087
+- **ReviewerMissingEvidenceFAIL9290** remains preserved and unresolved. All earlier
+  independent QA FAIL and hosted CI FAIL receipts remain historical facts; no
+  author check below supersedes them or constitutes independent review.
+
+### Source changes / compatibility
+
+API error serializer now returns constant type/message/stack strings, satisfying
+required return fields without inspecting real error details, assertions/casts,
+or typecheck suppression. Actual Fastify hooks/request correlation and security
+canary regression remain; regression additionally requires the safe error record.
+No real message or stack is forwarded. Package typecheck is still required hosted.
+
+Admin fixture defect is confirmed by source inspection: mockResolvedValue reused
+one Response for two providers; proxy calls upstream.json(), consuming its body.
+Second json() throws into the existing safe503 handler. mockImplementation now
+creates a fresh upstream Response per invocation. Both provider303, canonical
+/admin/?auth=complete, query filtering, binding-only cookie and handoff assertions
+are unchanged. No Admin product source changed. Existing offline native regression
+executes actual proxy code with fresh responses for both providers.
+
+Supervisor's new installed compatibility finding: autonomous_issues.py requires
+EXACT DEV_JOBS={'checks','images','deploy'} and the checks step display name
+'Run bash scripts/chatops/ci.sh fast'. A fourth receiver job blocks successful
+future autonomous dev_wait. Installed/runtime bridge and its gates are untouched.
+The former DEV receiver block is now unconditional inside existing checks, after
+pinned ci-setup and logging/fast checks. It verifies exact checkout SHA, shell/Node
+syntax, workflow/autonomy/Ops/client/path regressions and actual isolated root
+receiver fixtures via hosted sudo. Images needs checks; deploy needs images.
+No continue-on-error, conditional bypass or always() shortcut added. Product CI
+workflow and its seven expanded jobs are unchanged. This supersedes only the
+historical four-job DEV design description above, not its historical evidence.
+
+New dependency-free test_dev_workflow.py enforces exactly three jobs, unnamed fast
+step (required default display name), pinned-SHA checkout, setup/logging/fast/receiver
+ordering, exact mandatory commands including sudo root fixtures, no checks
+conditions/error tolerance, and both needs edges before build/deploy. It runs
+unconditionally in DEV checks and under local offline unittest discovery.
+
+Changed files only:
+- apps/api/src/common/api-logger.ts
+- apps/api/test/unit/api-logger.test.ts
+- apps/admin/test/security-transport.test.ts (fixture only)
+- .github/workflows/dev-deploy.yml
+- scripts/chatops/tests/test_dev_workflow.py
+- docs/handoffs/ISSUE46_ADMIN_DEV_DELIVERY_OPS.md
+
+Source rollback: reverse only this six-file correction against exact9290, without
+resetting other work or invoking any runtime rollback. Next bounded action:
+Supervisor publishes DRAFT CI candidate with exact SHA, obtains NEW independent
+review including missing evidence and fresh hosted full CI. No DEV approval,
+commissioning or self-approval is granted by this source result.
+
+### Actual offline author validation of exact9290 correction
+
+- `TMPDIR=/tmp/gb-model-fub4h9w_ python3 -B -m unittest discover -s scripts/chatops/tests -p 'test_*.py'`:
+  78 tests in 27.330s, **57 PASS / 21 root-dependent SKIP**. Includes new DEV graph
+  contract and actual native Node Admin proxy/config regression for both callbacks.
+  Root-dependent SKIP is not PASS; no local sudo/root invocation performed.
+- `python3 -B scripts/check_foundation.py`: static PASS (170 Markdown files,
+  164 draft API operations). Email policy: 1 PASS; foundation policy: 8 PASS.
+- All ChatOps shell files `bash -n`, `node --check scripts/chatops/smoke.mjs`:
+  PASS, Node v24.21.0. PyYAML parses both workflows; DEV exact three jobs and
+  checks->images->deploy edges asserted. Product CI source was not modified.
+- `git diff --check`: PASS. After tightening the new image-job conditional
+  assertion to multiline, focused workflow regression re-run PASS.
+
+Package Vitest/API typecheck/Admin typecheck/lint/build NOT_RUN: native package
+dependencies absent. No pnpm/Corepack invocation, download or network attempted.
+Fresh hosted typecheck, both real Vitest suites, root checks and full CI remain
+required for the new candidate. No real build/runtime/nginx/SSH/provider/passkey,
+DB/UAT, livefiles or services tested/changed. The supplied hosted receiver PASS
+belongs only to old exact9290; it is not a new-source/full-CI PASS. All historical
+FAIL including ReviewerMissingEvidenceFAIL9290 remain preserved.
