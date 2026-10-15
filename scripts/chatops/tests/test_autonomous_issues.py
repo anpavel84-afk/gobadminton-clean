@@ -286,6 +286,57 @@ class Adversarial(unittest.TestCase):
                     worker.kill(); worker.wait()
 
 
+class SourceReview(unittest.TestCase):
+    def review(self, result):
+        task = json.loads(issue()['body'].split('\n', 1)[1])
+        task['acceptance'] = ('File contains the approved canary; GitHub CI succeeds, '
+                              'DEV is deployed and server ACCEPTED release evidence is recorded.')
+        active = dict(issue=30, attempt=1, head=HEAD, base=BASE, task=task)
+        with tempfile.TemporaryDirectory() as tmp:
+            store = unittest.mock.Mock()
+            bridge = a.Bridge(types.SimpleNamespace(worktrees_root=Path(tmp),
+                                                    state_dir=Path(tmp)), store)
+            author_work = Path(tmp) / 'author'
+            bridge.work = author_work
+            bridge.clean = unittest.mock.Mock()
+            bridge.git = unittest.mock.Mock(side_effect=['', HEAD, ''])
+            bridge.model = unittest.mock.Mock(return_value=result)
+            with patch.object(a, 'atomic') as save:
+                passed = bridge.review(active)
+            prompt = bridge.model.call_args.args[0]
+            self.assertEqual(bridge.model.call_args.kwargs, {'qa': True})
+            self.assertEqual(json.loads(prompt.split('TASK: ', 1)[1]), task)
+            self.assertIn(HEAD + ' against base ' + BASE, prompt)
+            self.assertIn('reviewed_sha (exact SHA)', prompt)
+            self.assertEqual(bridge.work, author_work)
+            return passed, prompt, store, save
+
+    def test_mixed_acceptance_stays_source_only(self):
+        result = dict(verdict='PASS', findings=[], reviewed_sha=HEAD)
+        passed, prompt, store, save = self.review(result)
+        self.assertTrue(passed)
+        for instruction in ('SOURCE QA before CI and DEV', 'immutable task goal, allowed paths',
+                            'project rules and source-level acceptance', 'run feasible source tests',
+                            'future lifecycle clauses', 'must not require GitHub authentication',
+                            'a CI run, release evidence, deployed acceptance, or any later-stage action',
+                            'PASS is a source-only verdict, never lifecycle acceptance',
+                            'Later CI and server ACCEPTED gates remain mandatory and unchanged'):
+            self.assertIn(instruction, prompt)
+        store.phase.assert_called_once_with('qa', qa=result)
+        self.assertEqual(save.call_args.args[1], result)
+
+    def test_mixed_acceptance_preserves_real_defect_and_exact_sha(self):
+        result = dict(verdict='FAIL', findings=['Approved canary content is missing'], reviewed_sha=HEAD)
+        passed, prompt, store, save = self.review(result)
+        self.assertFalse(passed)
+        self.assertIn('Report real source defects, scope/rule violations', prompt)
+        self.assertIn('do not waive source requirements because acceptance mixes stages', prompt)
+        store.phase.assert_called_once_with('qa', qa=result)
+        self.assertEqual(save.call_args.args[1], result)
+        with self.assertRaisesRegex(a.Hold, 'QA SHA mismatch'):
+            self.review(result | {'reviewed_sha': BASE})
+
+
 class Recovery(unittest.TestCase):
     def exercise(self, phase, remote=HEAD, dirty=False, qa='PASS', ci_fail=False, tamper=False):
         with tempfile.TemporaryDirectory() as tmp:
