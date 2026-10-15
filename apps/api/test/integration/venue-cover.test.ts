@@ -156,8 +156,10 @@ run("venue cover: isolated disposable PostGIS / actual API / games projections",
   });
   it("keeps CAS and moderation rejection atomic; retirement hides public bytes",async()=>{
     const v=await venue();
-    fake.fixture=async()=>({...safeImageDecision(),flagged:true});
+    fake.fixture=async()=>{const d=safeImageDecision();return {...d,flagged:true,categories:{...d.categories,violence:true}};};
+    const callsBefore=fake.calls;
     expect((await upload(v.id)).statusCode).toBe(422);
+    expect(fake.calls).toBe(callsBefore+1); // provider was really consulted
     expect((await pool.query("SELECT cover_key,version FROM venues WHERE id=$1",[v.id])).rows[0]).toEqual({cover_key:null,version:1});
     fake.fixture=async()=>safeImageDecision();await pool.query("DELETE FROM content_moderation_rate_budgets");
     const saved=await upload(v.id);expect(saved.statusCode,saved.body).toBe(200);
@@ -176,8 +178,13 @@ run("venue cover: isolated disposable PostGIS / actual API / games projections",
     await pool.query("UPDATE admin_role_grants SET active=false WHERE principal_id=$1",[a.id]);expect((await upload(v.id,1,a,key)).statusCode).toBe(403);
     await pool.query("UPDATE admin_role_grants SET active=true WHERE principal_id=$1",[a.id]);
     await pool.query("DELETE FROM content_moderation_rate_budgets");
+    const fresh=await sharp({create:{width:900,height:600,channels:3,background:"blue"}}).withMetadata().png().toBuffer();
     fake.fixture=async()=>{await pool.query("UPDATE admin_principals SET version=version+1 WHERE id=$1",[a.id]);return safeImageDecision();};
-    expect((await upload(v.id,2,a)).statusCode).toBe(409);expect((await read(saved.json().cover.uploadedUrl)).statusCode).toBe(200);
+    const fenceCalls=fake.calls;
+    expect((await upload(v.id,2,a,randomUUID(),fresh)).statusCode).toBe(409);
+    expect(fake.calls).toBe(fenceCalls+1); // fence was exercised mid-moderation
+    fake.fixture=async()=>safeImageDecision();
+    expect((await read(saved.json().cover.uploadedUrl)).statusCode).toBe(200);
     await pool.query("UPDATE admin_sessions SET revoked_at=now() WHERE principal_id=$1",[a.id]);expect((await upload(v.id,1,a,key)).statusCode).toBe(401);
     await pool.query("UPDATE users SET status='deletion_pending' WHERE id=$1",[a.userId]);expect((await read(saved.json().cover.uploadedUrl)).statusCode).toBe(404);
     expect((await pool.query("SELECT cover_key FROM venues WHERE id=$1",[v.id])).rows[0].cover_key).toBeNull();
