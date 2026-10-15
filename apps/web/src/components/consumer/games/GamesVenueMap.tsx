@@ -5,7 +5,7 @@ import type { Map as LibreMap, StyleSpecification } from "maplibre-gl";
 import { Protocol } from "pmtiles";
 import "maplibre-gl/dist/maplibre-gl.css";
 import "../../../styles/radar-geographic.css";
-import { venueMarkerPresentation } from "../../../lib/games-venue-map";
+import { venueMarkerPresentation, reconcileVenueMarkers } from "../../../lib/games-venue-map";
 import { MOSCOW_BUNDLE, allowedMapResource } from "../../../lib/radar-map-assets";
 import type { VenueSummary } from "../../../lib/consumer-types";
 let protocol: Protocol | undefined;
@@ -19,6 +19,7 @@ function installProtocol() {
 export function GamesVenueMap({ venues, counts, onSelect }: { venues: VenueSummary[]; counts: Map<string, number> | null; onSelect: (venue: VenueSummary) => void }) {
   const container = useRef<HTMLDivElement>(null); const map = useRef<LibreMap | null>(null);
   const callbacks = useRef({ onSelect }); callbacks.current = { onSelect };
+  const markers = useRef(new Map<string, { marker: maplibregl.Marker; button: HTMLButtonElement }>());
   const [ready, setReady] = useState(false);
   const [status, setStatus] = useState("Загружаем карту города…");
   const unavailable = () => setStatus("Карта недоступна: ресурсы, Range, CSP или соединение. Площадки доступны списком ниже.");
@@ -50,23 +51,26 @@ export function GamesVenueMap({ venues, counts, onSelect }: { venues: VenueSumma
     }
     void start();
     const resize = new ResizeObserver(() => instance?.resize()); if (container.current) resize.observe(container.current);
-    return () => { alive = false; abort.abort(); clearTimeout(timeout); resize.disconnect(); instance?.remove(); map.current = null; };
+    return () => { alive = false; abort.abort(); clearTimeout(timeout); resize.disconnect(); markers.current.forEach(entry => entry.marker.remove()); markers.current.clear(); instance?.remove(); map.current = null; };
   }, []);
   useEffect(() => {
     if (!ready || !map.current) return;
-    const markers: maplibregl.Marker[] = [];
-    for (const venue of venues) {
-      const { latitude: lat, longitude: lon } = venue;
-      if (typeof lat !== "number" || typeof lon !== "number" || !Number.isFinite(lat) || !Number.isFinite(lon) || lon < 36 || lon > 39.5 || lat < 54.5 || lat > 56.5) continue;
-      const marker = venueMarkerPresentation(venue, counts);
-      const button = document.createElement("button"); button.type = "button";
-      button.className = marker.className;
-      button.textContent = marker.text;
-      button.setAttribute("aria-label", marker.label);
-      button.onclick = () => callbacks.current.onSelect(venue);
-      markers.push(new maplibregl.Marker({ element: button }).setLngLat([lon, lat]).addTo(map.current));
-    }
-    return () => { markers.forEach(marker => marker.remove()); };
+    reconcileVenueMarkers(markers.current, venues, {
+      create: venue => {
+        const button = document.createElement("button"); button.type = "button";
+        const marker = new maplibregl.Marker({ element: button }).setLngLat([venue.longitude!, venue.latitude!]).addTo(map.current!);
+        return { marker, button };
+      },
+      update: (entry, venue) => {
+        const presentation = venueMarkerPresentation(venue, counts);
+        entry.button.className = presentation.className;
+        entry.button.textContent = presentation.text;
+        entry.button.setAttribute("aria-label", presentation.label);
+        entry.button.onclick = () => callbacks.current.onSelect(venue);
+        entry.marker.setLngLat([venue.longitude!, venue.latitude!]);
+      },
+      remove: entry => entry.marker.remove(),
+    });
   }, [ready, venues, counts]);
   return <><div ref={container} style={{ height: "min(60vh, 540px)", minHeight: 300, position: "relative" }} />{status && <p role="status">{status}</p>}</>;
 }

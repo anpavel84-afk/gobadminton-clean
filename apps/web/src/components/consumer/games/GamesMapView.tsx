@@ -26,12 +26,19 @@ export function GamesMapView({ cityId, day }: { cityId: string; day: string }) {
     return () => { clearInterval(clock); clearInterval(timer); window.removeEventListener("focus", reload); window.removeEventListener("online", reload); window.removeEventListener("gb-session-changed", reload); };
   }, []);
   useEffect(() => {
-    let active = true; setLoading(true); setError(false); setSnapshot(null);
+    let active = true; setLoading(true); setError(false);
+    // Keep public geography mounted; never display old schedule hints during revalidation.
+    setSnapshot(previous => previous?.cityId === cityId ? { ...previous, games: [], gamesReady: false } : null);
     void Promise.all([listAllCityVenues(cityId), listAllUpcomingCityGames(cityId)]).then(([venues, games]) => {
       if (!active) return;
-      if (!venues.ok) { setError(true); setLoading(false); return; }
-      setError(!games.ok);
-      setSnapshot({ cityId, venues: venues.data, games: games.ok ? games.data : [], gamesReady: games.ok }); setNow(Date.now()); setLoading(false);
+      setError(!venues.ok || !games.ok);
+      setSnapshot(previous => {
+        const retained = previous?.cityId === cityId ? previous : null;
+        if (!venues.ok && !retained) return null;
+        return { cityId, venues: venues.ok ? venues.data : retained!.venues,
+          games: games.ok ? games.data : [], gamesReady: games.ok };
+      });
+      setNow(Date.now()); setLoading(false);
     }).catch(() => { if (active) { setError(true); setLoading(false); } });
     return () => { active = false; };
   }, [cityId, refresh]);

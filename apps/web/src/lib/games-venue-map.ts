@@ -30,3 +30,23 @@ export function venueCreatePath(search: string) {
   const venueId = new URLSearchParams(search).get("venueId");
   return venueId ? `/games/create?${new URLSearchParams({ venueId })}` : "/games/create";
 }
+
+/** Reconcile by immutable ID: presentation refreshes must preserve focused controls. */
+export function reconcileVenueMarkers<Entry>(entries: Map<string, Entry>, venues: VenueSummary[], adapter: {
+  create: (venue: VenueSummary) => Entry;
+  update: (entry: Entry, venue: VenueSummary) => void;
+  remove: (entry: Entry) => void;
+}) {
+  const visible = new Set<string>();
+  for (const venue of venues) {
+    const { latitude: lat, longitude: lon } = venue;
+    if (typeof lat !== "number" || typeof lon !== "number" || !Number.isFinite(lat) || !Number.isFinite(lon) || lon < 36 || lon > 39.5 || lat < 54.5 || lat > 56.5) continue;
+    visible.add(venue.id);
+    let entry = entries.get(venue.id);
+    if (!entry) { entry = adapter.create(venue); entries.set(venue.id, entry); }
+    adapter.update(entry, venue);
+  }
+  for (const [id, entry] of entries) {
+    if (!visible.has(id)) { adapter.remove(entry); entries.delete(id); }
+  }
+}
