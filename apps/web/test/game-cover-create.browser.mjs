@@ -78,13 +78,16 @@ try {
   await page.locator('#venueId').filter({hasText:'Synthetic venue'}).waitFor();
   await page.getByRole('button',{name:'Завтра',exact:true}).click();
   await page.locator('#startTime').fill('18:00');
+  const selection=page.getByRole('region',{name:'Фото этой игры',exact:true});
+  const editorImage=selection.getByRole('img',{name:'Предпросмотр фото игры',exact:true});
+  const previewImage=page.getByRole('img',{name:'Предпросмотр фото игры',exact:true});
+  let retainedEditorUrl=null;
   const source=await page.evaluate(()=>{const c=document.createElement('canvas');c.width=1200;c.height=600;const x=c.getContext('2d');x.fillStyle='green';x.fillRect(0,0,1200,600);return c.toDataURL('image/png').split(',')[1];});
   if(scenario!=='none'){
    if(scenario==='cancel')await page.evaluate(()=>{window.__photoGate=true;});
    await page.locator('input[type=file]').setInputFiles({name:'synthetic.png',mimeType:'image/png',buffer:Buffer.from(source,'base64')});
    if(scenario==='cancel'){
     await page.waitForFunction(()=>window.__photoDecodePending===true);
-    const selection=page.getByRole('region',{name:'Фото этой игры',exact:true});
     assert.equal(await selection.getAttribute('aria-busy'),'true');
     assert.equal(await page.getByRole('button',{name:'Проверить игру',exact:true}).isDisabled(),true);
     await page.getByRole('button',{name:'Без своего фото',exact:true}).click();
@@ -96,24 +99,37 @@ try {
     assert.equal(await selection.getAttribute('aria-busy'),'false');
     assert.equal(await page.getByAltText('Предпросмотр фото игры').count(),0);
    }else{
-    await page.getByAltText('Предпросмотр фото игры').waitFor();
+    await editorImage.waitFor();
+    assert.equal(await editorImage.count(),1,'one accessible editor image');
+    assert.equal(await page.getByRole('button',{name:'Проверить игру',exact:true}).isDisabled(),true,'selection requires explicit confirmation');
     if(scenario.startsWith('roundtrip')){
      await page.getByRole('slider',{name:'По горизонтали',exact:true}).fill('0.27');
      await page.getByRole('slider',{name:'По вертикали',exact:true}).fill('0.73');
     }
     await page.getByRole('button',{name:'Подтвердить выбор фото',exact:true}).click();
+    assert.match(await selection.getByRole('status').textContent(),/Фото выбрано/);
+    retainedEditorUrl=await editorImage.getAttribute('src');
+    assert.match(retainedEditorUrl,/^blob:/,'capture confirmed editor URL before leaving editing');
    }
   }
   assert.deepEqual(events,[],'selection must remain local');
   await page.getByRole('button',{name:'Проверить игру',exact:true}).click();
   await page.getByRole('heading',{name:'Проверка перед публикацией',exact:true}).waitFor();
+  // Role locators exclude the intentionally retained hidden editor. The
+  // publication preview owns a separate legitimate object URL for the photo.
+  const expectsPhoto=!['none','cancel'].includes(scenario);
+  assert.equal(await previewImage.count(),expectsPhoto?1:0,'unique accessible publication photo only when selected');
+  if(expectsPhoto){
+   assert.equal(await previewImage.isVisible(),true);
+   assert.match(await previewImage.getAttribute('src'),/^blob:/);
+  }
   if(scenario.startsWith('roundtrip')){
-   const selection=page.getByRole('region',{name:'Фото этой игры',exact:true});
    assert.equal(await selection.count(),0,'hidden form must leave the accessibility tree during preview');
-   const originalPreview=await page.getByAltText('Предпросмотр фото игры').getAttribute('src');
    await page.getByRole('button',{name:'Назад к редактированию',exact:true}).click();
    await selection.waitFor();
-   assert.equal(await page.getByAltText('Предпросмотр фото игры').getAttribute('src'),originalPreview,'same selection survives preview navigation');
+   assert.equal(await editorImage.count(),1,'one restored accessible editor image');
+   assert.equal(await editorImage.isVisible(),true);
+   assert.equal(await editorImage.getAttribute('src'),retainedEditorUrl,'same editor selection survives preview navigation');
    assert.equal(await page.getByRole('slider',{name:'По горизонтали',exact:true}).inputValue(),'0.27');
    assert.equal(await page.getByRole('slider',{name:'По вертикали',exact:true}).inputValue(),'0.73');
    assert.match(await selection.getByRole('status').textContent(),/Фото выбрано/);
@@ -125,10 +141,17 @@ try {
     await page.getByRole('slider',{name:'По горизонтали',exact:true}).fill('0.61');
     assert.equal(await page.getByRole('button',{name:'Проверить игру',exact:true}).isDisabled(),true,'editing restored crop requires confirmation');
     await page.getByRole('button',{name:'Подтвердить выбор фото',exact:true}).click();
+    assert.equal(await page.getByRole('slider',{name:'По горизонтали',exact:true}).inputValue(),'0.61');
+    assert.equal(await page.getByRole('slider',{name:'По вертикали',exact:true}).inputValue(),'0.73');
+    assert.match(await selection.getByRole('status').textContent(),/Фото выбрано/);
+    assert.equal(await page.getByRole('button',{name:'Проверить игру',exact:true}).isEnabled(),true,'reconfirmation restores preview access');
    }
    assert.deepEqual(events,[],'round trip and crop/removal remain local');
    await page.getByRole('button',{name:'Проверить игру',exact:true}).click();
    await page.getByRole('heading',{name:'Проверка перед публикацией',exact:true}).waitFor();
+   assert.equal(await selection.count(),0,'editor leaves accessibility tree again');
+   assert.equal(await previewImage.count(),scenario==='roundtrip-remove'?0:1,'removal or reconfirmed photo survives second preview');
+   if(scenario==='roundtrip')assert.equal(await previewImage.isVisible(),true);
   }
   if(scenario==='double-publish'){
    // Two clicks in one JS task bypass React's next-render disabled state.
