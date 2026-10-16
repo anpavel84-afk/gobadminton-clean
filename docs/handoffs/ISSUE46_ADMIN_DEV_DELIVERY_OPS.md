@@ -949,3 +949,61 @@ source adjustment:3 and2 PASS; foundation static and diff whitespace rechecked.
 HTTP missing/forged proxy-header assertions permit403 or404 because Next may
 change its internal URL scheme before path validation; wrong browser Origin and
 POST Origin still require403 exactly. Neither rejection may reach the stub401.
+
+## Exact8c bounded HTTP expectation correction — 2026-10-16
+
+From: bounded test author. To: parent Supervisor / fresh independent QA.
+Status: WORKING_DRAFT — NOT APPROVED — NOT CANONICAL.
+Exact base: `8c7cfed0ead9763ae5270e34e232aa900c45287e`, initially clean branch
+`automation/admin-dev-delivery-20261015`. Assignment permits only
+`scripts/chatops/tests/admin-standalone-http.py` and this handoff; offline static
+checks only, no dependency install, network, commit/push or runtime effects.
+
+Supervisor-supplied evidence, not independently queried here: sourceQAa4 PASS
+on exact8c; actual Product CI **38828056403 Admin addon FAILED**, line99, expected
+403/404 but received401 for one missing/forged-header case. Other CI still pending
+at assignment time. Run: https://github.com/anpavel84-afk/gobadminton-clean/actions/runs/38828056403
+Neither the source QA nor this correction supersedes that failure or establishes
+full-CI success. All preceding failure history remains preserved.
+
+Supervisor verified actual framework source in immutable failed image f312,
+`next/dist/server/base-server.js`:
+
+```js
+req.headers['x-forwarded-host'] ??= req.headers['host'] ?? this.hostname;
+req.headers['x-forwarded-port'] ??= this.port ? this.port.toString() : isHttps ? '443' : '80';
+req.headers['x-forwarded-proto'] ??= isHttps ? 'https' : 'http';
+```
+
+Only missing raw X-Forwarded-Host with exact public Host is removed from the deny
+matrix. An explicit actual Docker HTTP case requires401 and the outbound fixture's
+ADMIN_SESSION_REQUIRED body: Next synthesizes the same validated Host before
+AppRoute, so the handler cannot detect raw XFHost absence after normalization.
+A new wrong Host plus missing XFHost case still requires403/404. Every other deny
+expectation is retained, including missing Host (http.client autofills loopback),
+forged/comma hosts and missing/bad/comma proto, Origin/FetchSite, POST Origin,
+malformed/unprefixed routes. Consumer filtering, CSRF forwarding and callback
+assertions remain intact. No forged-header expectation accepts401. Request status
+assertions now include case label, method, path and header changes; all values are
+synthetic fixtures, never real credentials.
+
+This corrects the earlier blanket claim that every missing proxy header must be
+rejected: raw XFHost absence in this one normalized case is not observable. It
+accepts no arbitrary origin. Fixed public nginx pins Host/X-Forwarded-Host/proto,
+Admin port is loopback, and the unchanged source guard still requires exact
+normalized authority. These topology/source facts are supplied assignment context,
+not newly executed runtime verification. No sourceguard/auth/config/CI/executor/
+service/DB/grant changes; actual built Docker HTTP and existing outbound-only
+transport replacement remain unchanged.
+
+Rollback: reverse only this two-file diff against exact8c. Parent alone publishes
+the test and handoff; no new SHA/permalink exists from this no-commit author.
+Next bounded action: parent publishes, obtains NEW exact-SHA independent QA and
+full hosted CI including actual built HTTP. Any other unjustified HTTP failure
+must remain FAIL; no local static result proves the hosted gate or release.
+
+Executed offline author validation: Python stdlib AST parse PASS;
+`python3 -B scripts/check_foundation.py` PASS (170 Markdown files, 164 draft API
+operations); `git diff --check` PASS. Final diff reviewed for the exact two-file
+scope and unchanged strict expectations. NOT_RUN: Docker/built HTTP, hosted CI,
+package tests/builds and independent QA. No dependencies installed.

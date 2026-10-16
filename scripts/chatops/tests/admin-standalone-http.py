@@ -60,7 +60,7 @@ def main():
                      'Cookie':'__Host-gb_session=consumer; __Host-gb_admin_session=fixture',
                      'Authorization':'Bearer consumer'}
 
-            def request(route, status, method='GET', changes=None):
+            def request(route, status, method='GET', changes=None, label='HTTP boundary'):
                 headers = fixed | (changes or {})
                 headers = {key:value for key,value in headers.items() if value is not None}
                 conn = http.client.HTTPConnection('127.0.0.1', port, timeout=5)
@@ -68,7 +68,7 @@ def main():
                     conn.request(method, route, body='{}' if method == 'POST' else None, headers=headers)
                     response = conn.getresponse()
                     body = response.read()
-                    assert response.status in (status if isinstance(status, tuple) else (status,)), (route, response.status, status, body)
+                    assert response.status in (status if isinstance(status, tuple) else (status,)), (label, method, route, changes or {}, response.status, status, body)
                     return response, body
                 finally:
                     conn.close()
@@ -88,15 +88,26 @@ def main():
             route = '/admin/v1/admin/auth/me'
             response, body = request(route, 401)
             assert json.loads(body)['code'] == 'ADMIN_SESSION_REQUIRED'
+            # Supervisor verified next/dist/server/base-server.js in failed image f312:
+            # req.headers['x-forwarded-host'] ??= req.headers['host'] ?? this.hostname;
+            # Next synthesizes the exact validated Host before AppRoute; raw absence
+            # cannot be distinguished by the handler after this normalization.
+            response, body = request(route, 401, changes={'X-Forwarded-Host':None},
+                                     label='missing raw XFHost synthesized from validated Host')
+            assert json.loads(body)['code'] == 'ADMIN_SESSION_REQUIRED'
+            request(route, (403, 404),
+                    changes={'Host':'evil.test', 'X-Forwarded-Host':None},
+                    label='wrong Host with missing XFHost remains denied')
             # Missing/forged proto may alter Next's internal URL and fail path
             # validation first (404); it must never reach outbound transport.
             for key, values in {'Host':[None,'evil.test','dev.gobadminton.ru:3010'],
-                                'X-Forwarded-Host':[None,'evil.test','dev.gobadminton.ru, evil.test'],
+                                'X-Forwarded-Host':['evil.test','dev.gobadminton.ru, evil.test'],
                                 'X-Forwarded-Proto':[None,'http','https,http'],
                                 'Origin':['https://evil.test','null'],
                                 'Sec-Fetch-Site':['cross-site']}.items():
                 for value in values:
-                    request(route, 403 if key in ('Origin', 'Sec-Fetch-Site') else (403, 404), changes={key:value})
+                    request(route, 403 if key in ('Origin', 'Sec-Fetch-Site') else (403, 404), changes={key:value},
+                            label='missing/forged header denied')
             for origin in (None, 'https://evil.test'):
                 request('/admin/v1/admin/auth/logout', 403, 'POST', {'Origin':origin})
             request('/admin/v1/admin/auth/logout', 401, 'POST',
