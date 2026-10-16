@@ -145,7 +145,7 @@ it("ignores late responses from an aborted transport without continuing its pagi
 });
 
 it("navigates catalog selection to the full venue route and renders only that venue schedule there", async () => {
-  const assign = vi.fn();
+  const assign = vi.fn<(url: string) => void>();
   Object.assign(window, { location: { pathname: "/games", search: "?view=map&day=2026-10-18", assign } });
   render(); await vi.advanceTimersByTimeAsync(40000);
   const tree = render();
@@ -156,7 +156,9 @@ it("navigates catalog selection to the full venue route and renders only that ve
   };
   clickVenue(tree);
   expect(assign).toHaveBeenCalledTimes(1);
-  const destination = new URL(assign.mock.calls[0][0], "https://example.test");
+  const navigation = assign.mock.calls[0];
+  if (!navigation) throw new Error("Expected one venue navigation");
+  const destination = new URL(navigation[0], "https://example.test");
   expect(destination.pathname).toBe("/venues/venue-id");
   expect(destination.searchParams.get("returnTo")).toBe("/games?view=map&day=2026-10-18");
   const full = renderToStaticMarkup(render("city", "", venue.id));

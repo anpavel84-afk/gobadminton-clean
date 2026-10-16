@@ -31,13 +31,21 @@ describe("Games map identity, dates and privacy hints", () => {
 });
 
 it("counts 5/4/6 distinct games, never seats or participants", () => {
-  const catalog = ["five", "four", "six"].map(id => ({ ...venues[0], id }));
-  const rows = catalog.flatMap((venue, i) => Array.from({ length: [5, 4, 6][i] }, (_, n) =>
-    game(`${venue.id}-${n}`, venue, { availablePlaces: 20 + n, startsAt: `2026-10-16T${String(10 + n).padStart(2, "0")}:00:00Z` })));
-  const grouped = venueSchedules(catalog, [...rows].reverse().concat(rows[0]), "", now);
+  const counts = [5, 4, 6];
+  const catalog: VenueSummary[] = counts.map(count => ({ id: `venue-${count}`, name: "Одинаковое имя", cityId: "city", address: `address-${count}`, timezone: "Europe/Moscow" }));
+  const rows = counts.flatMap((count, i) => {
+    const venue = catalog[i];
+    if (!venue) throw new Error(`Missing venue for ${count} games`);
+    return Array.from({ length: count }, (_, n) =>
+      game(`${venue.id}-${n}`, venue, { availablePlaces: 20 + n, startsAt: `2026-10-16T${String(10 + n).padStart(2, "0")}:00:00Z` }));
+  });
+  const duplicate = rows[0];
+  if (!duplicate) throw new Error("Expected a game to exercise duplicate elimination");
+  const grouped = venueSchedules(catalog, [...rows].reverse().concat(duplicate), "", now);
   expect([...grouped.values()].map(games => games.length)).toEqual([5, 4, 6]);
   for (const venue of catalog) {
-    const schedule = grouped.get(venue.id)!;
+    const schedule = grouped.get(venue.id);
+    if (!schedule) throw new Error(`Missing schedule for ${venue.id}`);
     expect(schedule.every(row => row.venue.id === venue.id)).toBe(true);
     expect(schedule.map(row => row.startsAt)).toEqual(schedule.map(row => row.startsAt).sort());
   }

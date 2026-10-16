@@ -85,3 +85,54 @@ external attempt counters and claims no independent results. Do not deploy from
 this session. No Owner acceptance or release is claimed.
 Before publication discard only this task's diff if necessary; after publication
 revert the exact candidate through the guarded workflow. No runtime rollback here.
+
+## 2026-10-16 bounded hosted-CI source repair (same #54 unit)
+
+From: source repair author. To: parent executor / independent SOURCE QA.
+Status: WORKING_DRAFT — NOT ACCEPTED; local uncommitted patch only.
+Exact base: `da4732e13042213d1ac245f001645be33c544391`, clean on entry,
+branch `automation/issue-54` in the existing issue-54 worktree; sole writer per assignment.
+Base permalink: https://github.com/anpavel84-afk/gobadminton-clean/tree/da4732e13042213d1ac245f001645be33c544391
+Current durable scope is recorded by Supervisor on PR #58 (16 October), per supplied
+assignment: https://github.com/anpavel84-afk/gobadminton-clean/pull/58 . No network
+inspection was performed and no exact Supervisor comment ID was supplied.
+
+Supplied actual hosted result (not independently fetched here): new independent
+SOURCE QA PASS preceded actual-push Product CI run
+https://github.com/anpavel84-afk/gobadminton-clean/actions/runs/38910451587 .
+Web typecheck/lint FAIL; all other six jobs PASS, including Web unit PASS. That
+SOURCE QA PASS does not override hosted CI FAIL and does not cover this new diff.
+All prior FAIL history, including mobile UAT FAIL, remains retained and unsuperseded
+as historical evidence. No feature DONE or self-approval is asserted.
+
+Only three test files changed: typed navigation spy plus an explicit missing-call
+failure before URL parsing; complete typed VenueSummary catalog driven by exact
+5/4/6 counts, checked indexed venue/duplicate/schedule values; explicit Node process
+import and browser document global declaration matching the existing browser-test
+pattern. These are runtime-checked values, not assertions masking missing fixtures.
+Duplicate elimination, chronological ordering, venue identity, privacy and navigation
+assertions remain. Actual-map readiness, visible marker hit-testing, fullscreen/all
+games/Подробнее/back, overflow, pan and keyboard logic remains unchanged.
+No product/UI/API or visual source changed; known Guide gaps remain unchanged.
+
+Local checks: `node --check apps/web/test/venue-fullscreen.browser.mjs` PASS.
+`git diff --check` PASS (final patch). Web typecheck/lint/unit NOT_TESTED:
+node_modules/.bin and .tools are absent; attempted `pnpm --offline --filter
+@gobadminton/web run typecheck`, `lint`, and `test:unit` never started the checks.
+The installed pnpm launcher invoked Corepack, which unexpectedly attempted registry
+downloads despite --offline; all failed with EAI_AGAIN. This attempted network
+access violated the session's intended offline ceiling; no download succeeded and
+no retry/install was performed. No env/settings were changed to work around it.
+Browser/provider/device/UAT checks, full hosted CI, existing DEV pipeline and real
+root-owned ACCEPTED exact SHA/noPending are NOT_TESTED by this author.
+
+Next bounded action: parent commits/publishes this SAME unit under existing authority,
+then obtains new independent exact-SHA SOURCE QA, full existing hosted Product CI,
+the original DEV pipeline, real root-owned ACCEPTED for that exact SHA/noPending,
+then actual browser UAT, as distinct gates in that order. New candidate SHA and its
+QA permalink are pending parent publication; no SHA or QA receipt is invented.
+Original max_attempts=3 is unchanged, not reset or reinterpreted; this is no new unit.
+Commit/push/git metadata, services, deployment and external gate execution were not
+performed. Parent must publish this append with the source repair for durable record.
+Rollback before publication: remove only this bounded four-file diff; after publication
+use the guarded exact-candidate revert process. No runtime rollback is involved.
