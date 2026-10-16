@@ -176,13 +176,14 @@
 
 /* Owner mobile Venue catalog picker: full-height search sheet, compact alphabetic entries. */
 .gb-venue-picker-trigger {
- display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;
+ display:grid;grid-template-columns:minmax(0,1fr) 20px;align-items:center;gap:12px;width:100%;
  min-height:52px;padding:11px 14px;border:1px solid var(--gb-line);border-radius:12px;
  background:var(--gb-paper);color:var(--gb-ink);font:inherit;text-align:left;cursor:pointer;
 }
+.gb-venue-picker-trigger:has(> .gb-venue-cover--thumb){grid-template-columns:80px minmax(0,1fr) 20px}
 .gb-venue-picker-trigger-copy{display:grid;min-width:0;gap:3px}
 .gb-venue-picker-trigger-title{font-size:14px;font-weight:600;overflow-wrap:anywhere}
-.gb-venue-picker-trigger-address{color:var(--gb-ink-soft);font-size:12px;font-weight:400;line-height:1.3}
+.gb-venue-picker-trigger-address{color:var(--gb-ink-soft);font-size:12px;font-weight:400;line-height:1.3;overflow-wrap:anywhere}
 .gb-venue-picker-backdrop{
  position:fixed;inset:0;z-index:5000;display:grid;place-items:center;
  padding:20px;background:rgba(16,29,22,.55);
@@ -214,7 +215,7 @@
 }
 .gb-venue-picker-scroll{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain}
 .gb-venue-picker-option{
- display:flex;align-items:center;justify-content:space-between;gap:12px;
+ display:grid;grid-template-columns:80px minmax(0,1fr) 20px;align-items:center;gap:12px;
  width:100%;min-height:58px;padding:9px 22px;border:0;border-bottom:1px solid var(--gb-line);
  border-radius:0;background:white;color:var(--gb-ink);text-align:left;cursor:pointer;
 }
