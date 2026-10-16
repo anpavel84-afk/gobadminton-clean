@@ -29,3 +29,16 @@ describe("Games map identity, dates and privacy hints", () => {
     expect(Date.parse(bounds.startsBefore) - Date.parse(bounds.startsFrom)).toBe(25 * 3600000);
   });
 });
+
+it("counts 5/4/6 distinct games, never seats or participants", () => {
+  const catalog = ["five", "four", "six"].map(id => ({ ...venues[0], id }));
+  const rows = catalog.flatMap((venue, i) => Array.from({ length: [5, 4, 6][i] }, (_, n) =>
+    game(`${venue.id}-${n}`, venue, { availablePlaces: 20 + n, startsAt: `2026-10-16T${String(10 + n).padStart(2, "0")}:00:00Z` })));
+  const grouped = venueSchedules(catalog, [...rows].reverse().concat(rows[0]), "", now);
+  expect([...grouped.values()].map(games => games.length)).toEqual([5, 4, 6]);
+  for (const venue of catalog) {
+    const schedule = grouped.get(venue.id)!;
+    expect(schedule.every(row => row.venue.id === venue.id)).toBe(true);
+    expect(schedule.map(row => row.startsAt)).toEqual(schedule.map(row => row.startsAt).sort());
+  }
+});

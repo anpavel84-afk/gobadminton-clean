@@ -5,7 +5,7 @@ import type { Map as LibreMap, StyleSpecification } from "maplibre-gl";
 import { Protocol } from "pmtiles";
 import "maplibre-gl/dist/maplibre-gl.css";
 import "../../../styles/radar-geographic.css";
-import { venueMarkerPresentation, reconcileVenueMarkers } from "../../../lib/games-venue-map";
+import { venueMarkerPresentation, reconcileVenueMarkers, markerActivation } from "../../../lib/games-venue-map";
 import { MOSCOW_BUNDLE, allowedMapResource } from "../../../lib/radar-map-assets";
 import type { VenueSummary } from "../../../lib/consumer-types";
 let protocol: Protocol | undefined;
@@ -18,6 +18,7 @@ function installProtocol() {
 }
 export function GamesVenueMap({ venues, counts, onSelect }: { venues: VenueSummary[]; counts: Map<string, number> | null; onSelect: (venue: VenueSummary) => void }) {
   const container = useRef<HTMLDivElement>(null); const map = useRef<LibreMap | null>(null);
+  const venuesRef = useRef(venues); venuesRef.current = venues;
   const callbacks = useRef({ onSelect }); callbacks.current = { onSelect };
   const markers = useRef(new Map<string, { marker: maplibregl.Marker; button: HTMLButtonElement }>());
   const [ready, setReady] = useState(false);
@@ -44,6 +45,15 @@ export function GamesVenueMap({ venues, counts, onSelect }: { venues: VenueSumma
           transformRequest: url => { if (!allowedMapResource(url)) throw new Error("Unapproved map resource"); return { url, credentials: "same-origin" }; },
         });
         instance.touchZoomRotate.disableRotation(); map.current = instance;
+        try {
+          const camera = JSON.parse(sessionStorage.getItem("gb-games-map-camera") ?? "null");
+          if (camera && [camera.lng, camera.lat, camera.zoom].every(Number.isFinite) && camera.lng >= 36 && camera.lng <= 39.5 && camera.lat >= 54.5 && camera.lat <= 56.5)
+            instance.jumpTo({ center: [camera.lng, camera.lat], zoom: Math.min(16, Math.max(0, camera.zoom)) });
+        } catch { /* Storage is optional. */ }
+        instance.on("moveend", () => {
+          const center = instance!.getCenter();
+          try { sessionStorage.setItem("gb-games-map-camera", JSON.stringify({ lng: center.lng, lat: center.lat, zoom: instance!.getZoom() })); } catch { /* Storage is optional. */ }
+        });
         instance.on("load", () => { if (alive) { setReady(true); setStatus(""); clearTimeout(timeout); } });
         instance.on("error", () => { if (alive) unavailable(); });
         instance.getCanvas().setAttribute("aria-label", "Карта Москвы: стрелки перемещают карту, плюс и минус меняют масштаб");
@@ -58,19 +68,27 @@ export function GamesVenueMap({ venues, counts, onSelect }: { venues: VenueSumma
     reconcileVenueMarkers(markers.current, venues, {
       create: venue => {
         const button = document.createElement("button"); button.type = "button";
+        const activation = markerActivation();
+        button.addEventListener("pointerdown", event => activation.start(event.clientX, event.clientY));
+        button.addEventListener("pointermove", event => activation.move(event.clientX, event.clientY));
+        button.addEventListener("pointercancel", () => activation.cancel());
+        button.addEventListener("click", event => {
+          if (!activation.allow(event.detail) || map.current?.isMoving()) return;
+          const current = callbacks.current;
+          current.onSelect(venuesRef.current.find(item => item.id === venue.id) ?? venue);
+        });
         const marker = new maplibregl.Marker({ element: button }).setLngLat([venue.longitude!, venue.latitude!]).addTo(map.current!);
         return { marker, button };
       },
       update: (entry, venue) => {
         const presentation = venueMarkerPresentation(venue, counts);
-        entry.button.className = presentation.className;
+        entry.button.className = `maplibregl-marker ${presentation.className}`;
         entry.button.textContent = presentation.text;
         entry.button.setAttribute("aria-label", presentation.label);
-        entry.button.onclick = () => callbacks.current.onSelect(venue);
         entry.marker.setLngLat([venue.longitude!, venue.latitude!]);
       },
       remove: entry => entry.marker.remove(),
     });
   }, [ready, venues, counts]);
-  return <><div ref={container} style={{ height: "min(60vh, 540px)", minHeight: 300, position: "relative" }} />{status && <p role="status">{status}</p>}</>;
+  return <><div ref={container} data-map-ready={ready} style={{ height: "min(60vh, 540px)", minHeight: 300, position: "relative" }} />{status && <p role="status">{status}</p>}</>;
 }

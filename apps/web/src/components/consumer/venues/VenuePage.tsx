@@ -4,8 +4,12 @@ import type { Venue } from "../../../lib/consumer-types";
 import { ConsumerShell } from "../ConsumerShell";
 import { Button } from "../Button";
 import { VenueCover } from "./VenueCover";
+import { GamesMapView } from "../games/GamesMapView";
+import { gamesMapReturnPath } from "../../../lib/games-venue-map";
 import { VenueCoverEditor } from "./VenueCoverEditor";
 export function VenuePage({venueId}:{venueId:string}) {
+  const [context,setContext]=useState({day:"",returnTo:"/games?view=map"});
+  useEffect(()=>{ const query=new URLSearchParams(window.location.search); setContext({day:query.get("day") ?? "",returnTo:gamesMapReturnPath(query.get("returnTo"))}); },[]);
   const [venue,setVenue]=useState<Venue|null>(null);
   const [error,setError]=useState(false);
   const [reload,setReload]=useState(0);
@@ -19,8 +23,8 @@ export function VenuePage({venueId}:{venueId:string}) {
     return ()=>{active=false;controller.abort();clearTimeout(timer);};
   },[venueId,reload]);
   return <ConsumerShell active="games" title="Площадка" mode="page" hideHeading><div className="gb-venue-page">
-    <Button variant="ghost" href="/games">К играм</Button>
-    {venue?<><h1>{venue.name}</h1><p>{venue.address}</p><div className="gb-venue-media"><VenueCover name={venue.name} cover={venue.cover}/></div>
+    <Button variant="ghost" href={context.returnTo}>Назад к карте</Button>
+    {venue?<><h1>{venue.name}</h1><p>{venue.address}</p><div className="gb-venue-media"><VenueCover name={venue.name} cover={venue.cover}/></div><GamesMapView cityId={venue.cityId} day={context.day} venueId={venue.id}/>
       <VenueCoverEditor key={venue.id} venueId={venue.id} onChange={receipt=>setVenue(v=>v?{...v,cover:receipt.cover}:v)}/>
     </>:error?<div role="alert"><p>Площадка недоступна.</p><Button onClick={()=>setReload(v=>v+1)}>Повторить</Button></div>:<p role="status">Загружаем площадку…</p>}
   </div></ConsumerShell>;

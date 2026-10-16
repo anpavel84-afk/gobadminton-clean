@@ -24,6 +24,25 @@ export function GamesDiscoveryPage() {
   const { location } = useDiscoveryCity();
   const [selectedDay, setSelectedDay] = useState("");
   const [activityFilter, setActivityFilter] = useState<"all" | ActivityKind>("all");
+  const [contextReady, setContextReady] = useState(false);
+  useEffect(() => {
+    const query = new URLSearchParams(window.location.search);
+    if (query.get("view") === "map") setView("map");
+    const day = query.get("day");
+    if (day && /^\d{4}-\d{2}-\d{2}$/.test(day)) setSelectedDay(day);
+    const activity = query.get("activity");
+    if (activity === "regular" || activity === "trainer_led") setActivityFilter(activity);
+    setContextReady(true);
+  }, []);
+  useEffect(() => {
+    if (!contextReady) return;
+    const url = new URL(window.location.href);
+    url.searchParams.set("view", view);
+    url.searchParams.set("day", selectedDay);
+    url.searchParams.set("activity", activityFilter);
+    window.history.replaceState(window.history.state, "", url);
+  }, [view, selectedDay, activityFilter, contextReady]);
+
   const [now, setNow] = useState(() => Date.now());
   const [refresh, setRefresh] = useState(0);
   const [feed, setFeed] = useState<Feed>({ key: "", state: "loading", items: [], nextCursor: null });
@@ -45,7 +64,11 @@ export function GamesDiscoveryPage() {
   const dates = useMemo(() => today ? Array.from({ length: 7 }, (_, i) => nextCalendarDay(today, i)) : [], [today]);
   const filterActive = activityFilter !== "all";
 
-  useEffect(() => { setSelectedDay(""); }, [location?.cityId]);
+  const previousCity = useRef(location?.cityId);
+  useEffect(() => {
+    if (previousCity.current && previousCity.current !== location?.cityId) setSelectedDay("");
+    previousCity.current = location?.cityId;
+  }, [location?.cityId]);
 
   useEffect(() => {
     const tick = () => setNow(Date.now());
