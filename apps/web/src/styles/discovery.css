@@ -37,7 +37,7 @@
 .gb-discovery-layout { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 28px; align-items: start; padding-bottom: 0; }
 .gb-discovery-feed { min-width: 0; }
 .gb-discovery-filters { display: flex; justify-content: space-between; gap: 14px; margin-bottom: 32px; }
-.gb-discovery-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.gb-discovery-chips { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; max-width: 100%; }
 .gb-consumer .gb-discovery-chip { min-height: 44px; padding: 0 15px; border: 1px solid var(--gb-line); border-radius: 999px; background: var(--gb-white); color: var(--gb-ink-soft); font-size: 13px; font-weight: 500; cursor: pointer; }
 .gb-discovery-chip[aria-pressed="true"] { border-color: var(--gb-ink); color: var(--gb-white); background: var(--gb-ink); }
 .gb-discovery-chip:disabled { cursor: not-allowed; color: var(--gb-ink-soft); background: var(--gb-paper); border-style: dashed; }
@@ -132,7 +132,8 @@
   .gb-discovery-create { min-height: 82px; }
   .gb-discovery-create__plus { width: 52px; height: 52px; }
   .gb-discovery-filters { margin: 2px 0 28px; padding: 3px; overflow-x: auto; overscroll-behavior-inline: contain; scrollbar-width: none; }
-  .gb-discovery-chips { flex-wrap: nowrap; }
+  .gb-discovery-chips { flex-wrap: nowrap; overflow-x: auto; overscroll-behavior-inline: contain; }
+  .gb-discovery-chips > * { flex-shrink: 0; }
   .gb-discovery-chip { white-space: nowrap; }
   .gb-discovery-sort { display: none; }
   .gb-discovery-feed-heading h2 { font-size: 30px; }

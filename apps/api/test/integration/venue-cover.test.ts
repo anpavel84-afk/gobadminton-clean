@@ -189,4 +189,116 @@ run("venue cover: isolated disposable PostGIS / actual API / games projections",
     await pool.query("UPDATE users SET status='deletion_pending' WHERE id=$1",[a.userId]);expect((await read(saved.json().cover.uploadedUrl)).statusCode).toBe(404);
     expect((await pool.query("SELECT cover_key FROM venues WHERE id=$1",[v.id])).rows[0].cover_key).toBeNull();
   });
+  async function consumer(){
+    const userId=await user(),session=await app.get(SessionService).createConsumerSession(userId);
+    return {userId,session,headers:{cookie:`${SESSION_COOKIE}=${session.sessionToken}`,origin:"http://127.0.0.1:19442","x-csrf-token":session.csrfToken}};
+  }
+  async function gameFor(v:string,a:Awaited<ReturnType<typeof consumer>>,visibility:"public"|"unlisted"="public"){
+    const starts=new Date(Date.now()+2*86400000);
+    const response=await app.inject({method:"POST",url:"/v1/games",headers:{...a.headers,"idempotency-key":randomUUID()},payload:{hostDisplayName:"Synthetic game host",hostPublicContact:"Synthetic contact",venueId:v,startsAt:starts.toISOString(),endsAt:new Date(+starts+3600000).toISOString(),timezone:"Europe/Moscow",applicationDeadlineAt:starts.toISOString(),capacity:4,externalReservedCount:0,visibility,formatKey:"doubles",activityKind:"regular",levelRule:{scaleId:"test",scaleVersion:1,allowedLevelIds:["test"]},settlement:{mode:"external",purpose:"no_trainer_fee",priceMinor:null,currency:null,terms:"Synthetic"}}});
+    expect(response.statusCode,response.body).toBe(201);return response.json() as {id:string;version:number};
+  }
+  function gameUpload(id:string,version:number,a:Awaited<ReturnType<typeof consumer>>,key=randomUUID(),body=png){
+    return app.inject({method:"PUT",url:`/v1/games/${id}/cover`,headers:{...a.headers,"idempotency-key":key,"x-game-version":String(version),"content-type":"image/png"},payload:body});
+  }
+  it("Issue47 ordinary organizers: own > current exact venue > default, independent games, removal, public projections",async()=>{
+    const a=await consumer(),v=await venue(),g=await gameFor(v.id,a),inheritor=await gameFor(v.id,a);
+    const first=await upload(v.id);expect(first.statusCode,first.body).toBe(200);const venueUrl=first.json().cover.uploadedUrl;
+    expect((await app.get(GamesService).getGame(g.id,a.userId)).cover).toEqual({uploadedUrl:venueUrl});
+    const key=randomUUID(),saved=await gameUpload(g.id,g.version,a,key);expect(saved.statusCode,saved.body).toBe(200);
+    const ownUrl=saved.json().cover.uploadedUrl;expect(ownUrl).toMatch(/^\/v1\/media\/game-covers\/[a-f0-9]{64}\.png$/);
+    // Draft confidentiality and no cross-surface key promotion.
+    expect((await read(ownUrl)).statusCode).toBe(404);
+    expect((await app.inject({method:"GET",url:ownUrl,headers:a.headers})).statusCode).toBe(200);
+    const suffix=ownUrl.split("/").at(-1);
+    for(const route of ["venue-covers","covers"])expect((await read(`/v1/media/${route}/${suffix}`)).statusCode).toBe(404);
+    const calls=fake.calls;expect((await gameUpload(g.id,g.version,a,key)).statusCode).toBe(200);expect(fake.calls).toBe(calls);
+    const service=app.get(GamesService);
+    await service.publish(a.userId,a.session.session.id,g.id,randomUUID(),saved.json().version);
+    await service.publish(a.userId,a.session.session.id,inheritor.id,randomUUID(),inheritor.version);
+    const image=await read(ownUrl);expect(image.statusCode,image.body).toBe(200);expect(image.headers["cache-control"]).toBe("no-store");expect(image.headers.vary).toBe("Cookie");
+    const meta=await sharp(image.rawPayload).metadata();expect(meta).toMatchObject({format:"png",width:1200,height:400});expect(meta.exif).toBeUndefined();expect(meta.icc).toBeUndefined();
+    const changed=await upload(v.id,2);expect(changed.statusCode,changed.body).toBe(200);const current=changed.json().cover.uploadedUrl;
+    async function projections(id:string,expected:string|null){
+      expect((await read(`/v1/games/${id}`)).json().cover).toEqual({uploadedUrl:expected});
+      const list=(await read(`/v1/games?venueId=${v.id}`)).json().items;expect(list.find((x:{id:string})=>x.id===id).cover).toEqual({uploadedUrl:expected});
+      const mine=(await app.inject({method:"GET",url:"/v1/me/games",headers:a.headers})).json().items;expect(mine.find((x:{id:string})=>x.id===id).cover).toEqual({uploadedUrl:expected});
+      const map=(await read(`/v1/games/map?cityId=${cityId}&temporalScope=upcoming&venueId=${v.id}`)).json();
+      expect(map.items.flatMap((x:{games:unknown[]})=>x.games).find((x:{id:string})=>x.id===id).cover).toEqual({uploadedUrl:expected});
+    }
+    await projections(g.id,ownUrl);await projections(inheritor.id,current);
+    const currentGame=await service.getGame(g.id,a.userId);
+    const removed=await app.inject({method:"DELETE",url:`/v1/games/${g.id}/cover`,headers:{...a.headers,"idempotency-key":randomUUID(),"x-game-version":String(currentGame.version)},payload:{expectedVersion:currentGame.version}});
+    expect(removed.statusCode,removed.body).toBe(200);await projections(g.id,current);expect((await read(ownUrl)).statusCode).toBe(404);
+    await pool.query("UPDATE content_moderation_approvals SET decision='review' WHERE id=(SELECT cover_moderation_approval_id FROM venues WHERE id=$1)",[v.id]);
+    await projections(g.id,null);await projections(inheritor.id,null);expect((await read(current)).statusCode).toBe(404);
+  });
+  it("Issue47 auth/CSRF/foreign/private/moderation/CAS/replay/actor fences and concurrent replacement",async()=>{
+    const a=await consumer(),foreign=await consumer(),v=await venue(),g=await gameFor(v.id,a,"unlisted");
+    const initialCalls=fake.calls;
+    expect((await gameUpload(g.id,1,foreign)).statusCode).toBe(404);
+    for(const patch of [{cookie:""},{"x-csrf-token":""},{origin:"https://evil.invalid"}])expect((await app.inject({method:"PUT",url:`/v1/games/${g.id}/cover`,headers:{...a.headers,...patch,"content-type":"image/png","idempotency-key":randomUUID(),"x-game-version":"1"},payload:png})).statusCode).toBeGreaterThanOrEqual(400);
+    expect(fake.calls).toBe(initialCalls);
+    for(const bytes of [Buffer.from("<svg/>"),Buffer.concat([png,Buffer.from("trailing")])])expect((await gameUpload(g.id,1,a,randomUUID(),bytes)).statusCode).toBeGreaterThanOrEqual(400);
+    const fresh=await sharp({create:{width:900,height:600,channels:3,background:"orange"}}).png().toBuffer();
+    fake.fixture=async()=>{const d=safeImageDecision();return {...d,flagged:true,categories:{...d.categories,violence:true}};};
+    expect((await gameUpload(g.id,1,a,randomUUID(),fresh)).statusCode).toBe(422);
+    expect((await pool.query("SELECT cover_key,version FROM games WHERE id=$1",[g.id])).rows[0]).toEqual({cover_key:null,version:1});
+    fake.fixture=async()=>safeImageDecision();
+    const key=randomUUID(),saved=await gameUpload(g.id,1,a,key);expect(saved.statusCode,saved.body).toBe(200);const url=saved.json().cover.uploadedUrl;
+    await app.get(GamesService).publish(a.userId,a.session.session.id,g.id,randomUUID(),2);
+    expect((await read(url)).statusCode).toBe(404);expect((await app.inject({method:"GET",url,headers:foreign.headers})).statusCode).toBe(404);
+    const racers=await Promise.all([gameUpload(g.id,3,a),gameUpload(g.id,3,a)]);expect(racers.map(x=>x.statusCode).sort()).toEqual([200,409]);
+    expect((await app.inject({method:"GET",url,headers:a.headers})).statusCode).toBe(404);
+    await pool.query("UPDATE game_managers SET status='revoked' WHERE game_id=$1 AND user_id=$2",[g.id,a.userId]);
+    expect((await gameUpload(g.id,1,a,key)).statusCode).toBe(403);
+    await pool.query("UPDATE game_managers SET status='active' WHERE game_id=$1 AND user_id=$2",[g.id,a.userId]);
+    fake.fixture=async()=>{await pool.query("UPDATE app_sessions SET revoked_at=now() WHERE id=$1",[a.session.session.id]);return safeImageDecision();};
+    const unique=await sharp({create:{width:900,height:600,channels:3,background:"purple"}}).png().toBuffer();
+    expect((await gameUpload(g.id,4,a,randomUUID(),unique)).statusCode).toBe(401);
+    expect((await pool.query("SELECT version FROM games WHERE id=$1",[g.id])).rows[0].version).toBe(4);
+  });
+
+  it("Issue47 retains hidden own slots for removal, shares moderation budgets, retires account media and rejects malformed delete",async()=>{
+    const a=await consumer(),v=await venue(),g=await gameFor(v.id,a);
+    const venueImage=await upload(v.id);expect(venueImage.statusCode).toBe(200);
+    const photo=await sharp({create:{width:900,height:600,channels:3,background:"yellow"}}).withMetadata().png().toBuffer();
+    const saved=await gameUpload(g.id,1,a,randomUUID(),photo);expect(saved.statusCode,saved.body).toBe(200);const ownUrl=saved.json().cover.uploadedUrl;
+    await pool.query("UPDATE content_moderation_approvals SET decision='review' WHERE id=(SELECT cover_moderation_approval_id FROM games WHERE id=$1)",[g.id]);
+    expect((await app.inject({method:"GET",url:ownUrl,headers:a.headers})).statusCode).toBe(404);
+    const access=await app.inject({method:"GET",url:`/v1/games/${g.id}/cover`,headers:a.headers});expect(access.json()).toMatchObject({hasCover:true,cover:venueImage.json().cover});
+    for(const payload of [{},{expectedVersion:1.5},{expectedVersion:2,arbitraryUrl:"https://evil.invalid"},{expectedVersion:3}]){
+      const r=await app.inject({method:"DELETE",url:`/v1/games/${g.id}/cover`,headers:{...a.headers,"idempotency-key":randomUUID(),"x-game-version":"2"},payload});expect(r.statusCode).toBe(400);
+    }
+    const removed=await app.inject({method:"DELETE",url:`/v1/games/${g.id}/cover`,headers:{...a.headers,"idempotency-key":randomUUID(),"x-game-version":"2"},payload:{expectedVersion:2}});expect(removed.statusCode,removed.body).toBe(200);expect(removed.json()).toMatchObject({hasCover:false,cover:venueImage.json().cover});
+    await pool.query("INSERT INTO content_moderation_rate_budgets(user_id,bucket,window_started_at,count,day_started_at,day_count) VALUES($1,'image',now(),10,now(),50) ON CONFLICT(user_id,bucket) DO UPDATE SET count=10,day_count=50",[a.userId]);
+    const fresh=await sharp({create:{width:900,height:600,channels:3,background:"pink"}}).png().toBuffer();
+    expect((await gameUpload(g.id,3,a,randomUUID(),fresh)).statusCode).toBe(429);
+    await pool.query("DELETE FROM content_moderation_rate_budgets WHERE user_id=$1",[a.userId]);
+    const next=await gameUpload(g.id,3,a,randomUUID(),fresh);expect(next.statusCode,next.body).toBe(200);
+    const storageKey=next.json().cover.uploadedUrl.split("/").at(-1);
+    await pool.query("UPDATE users SET status='deletion_pending' WHERE id=$1",[a.userId]);
+    expect((await read(next.json().cover.uploadedUrl)).statusCode).toBe(404);
+    expect((await pool.query("SELECT cover_key FROM games WHERE id=$1",[g.id])).rows[0].cover_key).toBeNull();
+    expect((await pool.query("SELECT 1 FROM avatar_media_gc WHERE storage_key=$1",[storageKey])).rowCount).toBe(1);
+  });
+
+  it("Issue47 additive 0035 upgrade preserves games; unused rollback refuses populated slots",async()=>{
+    const a=await consumer(),v=await venue(),g=await gameFor(v.id,a);
+    const saved=await gameUpload(g.id,1,a);expect(saved.statusCode,saved.body).toBe(200);
+    const migration=await readFile(path.resolve(__dirname,"../../migrations/0035_game_cover.sql"),"utf8");
+    const rollback=await readFile(path.resolve(__dirname,"../../migrations/rollback/0035_game_cover.sql"),"utf8");
+    const c=await pool.connect();
+    try {
+      await c.query("BEGIN");await expect(c.query(rollback)).rejects.toThrow("refuses populated");await c.query("ROLLBACK");
+      await c.query("BEGIN");
+      const before=(await c.query("SELECT id,version,status,venue_id,created_by_user_id FROM games ORDER BY id")).rows;
+      await c.query("UPDATE games SET cover_key=NULL,cover_moderation_approval_id=NULL,cover_actor_id=NULL");
+      await c.query(rollback);await c.query(migration);
+      expect((await c.query("SELECT id,version,status,venue_id,created_by_user_id FROM games ORDER BY id")).rows).toEqual(before);
+      expect((await c.query("SELECT game_effective_cover_url($1) AS url",[g.id])).rows[0].url).toBeNull();
+      await c.query("ROLLBACK");
+    } finally {await c.query("ROLLBACK");c.release();}
+  });
+
 });

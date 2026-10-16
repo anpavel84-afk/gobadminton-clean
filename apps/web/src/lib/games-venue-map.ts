@@ -72,3 +72,24 @@ export function startVenueMapRefresh(load: (signal: AbortSignal) => Promise<void
     stop: () => { controller.abort(); clearTimeout(timer); },
   };
 }
+
+/** Route only to an existing venue screen; return destinations stay inside Games. */
+export function gamesMapReturnPath(value: string | null) {
+  if (!value || !/^\/games(?:\?|$)/.test(value)) return "/games?view=map";
+  return value;
+}
+export function venueMapPath(venueId: string, day: string, returnTo: string) {
+  return `/venues/${encodeURIComponent(venueId)}?${new URLSearchParams({ day, returnTo: gamesMapReturnPath(returnTo) })}`;
+}
+
+/** A browser-synthesized click after a drag must not select a venue. detail=0 is keyboard. */
+export function markerActivation() {
+  let origin: [number, number] | null = null;
+  let dragged = false;
+  return {
+    start(x: number, y: number) { origin = [x, y]; dragged = false; },
+    move(x: number, y: number) { if (origin && Math.hypot(x - origin[0], y - origin[1]) > 5) dragged = true; },
+    cancel() { dragged = true; },
+    allow(detail: number) { return detail === 0 || !dragged; },
+  };
+}

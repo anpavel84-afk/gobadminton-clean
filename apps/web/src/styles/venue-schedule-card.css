@@ -9,3 +9,10 @@
 section[aria-label="Игры на карте"] .g2-map-marker:focus-visible,
 section[aria-label="Игры на карте"] .g2-map-venue-marker:focus-visible { outline:3px solid var(--gb-purple); outline-offset:3px; }
 @media(max-width:720px) { .gb-venue-schedule__body { padding:16px; } }
+
+/* Bound intrinsic width at the source; retain map gestures and every catalog chip. */
+section[aria-label="Игры на карте"], section[aria-label="Расписание площадки"],
+.gb-venue-page, .gb-venue-schedule { min-width:0; max-width:100%; }
+.gb-venue-page h1 { overflow-wrap:anywhere; }
+section[aria-label="Игры на карте"] .maplibregl-marker { pointer-events:auto; }
+section[aria-label="Игры на карте"] .g2-map-venue-marker { width:44px; height:44px; }

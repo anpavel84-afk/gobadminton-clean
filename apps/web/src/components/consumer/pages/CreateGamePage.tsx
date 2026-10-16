@@ -1,6 +1,8 @@
 "use client";
 import { venueCreatePath } from "../../../lib/games-venue-map";
 
+import { GamePhotoSelection } from "../games/GamePhotoSelection";
+import { gameCoverRequest } from "../../../lib/game-cover-api";
 import { VenueCover } from "../venues/VenueCover";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -114,6 +116,14 @@ export function CreateGamePage() {
   const [created, setCreated] = useState<Game | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [photo,setPhoto] = useState<Blob|null>(null);
+  const [photoReady,setPhotoReady] = useState(true);
+  const [photoUrl,setPhotoUrl] = useState<string|undefined>();
+  useEffect(()=>{
+    if(!photo){setPhotoUrl(undefined);return;}
+    const url=URL.createObjectURL(photo);setPhotoUrl(url);
+    return ()=>URL.revokeObjectURL(url);
+  },[photo]);
   const mutation = useRef(false);
   const [recoveryChecked, setRecoveryChecked] = useState(false);
 
@@ -148,7 +158,7 @@ export function CreateGamePage() {
   }, [reload, location]);
 
   useEffect(() => {
-    const changed = () => { ++sessionEpoch.current; contactEdited.current = false; setMe(null); setTrainer(null); setPreferences(null); setSaveContact(false); setDraft(emptyDraft()); setCreated(null); setCreatorSeat(null); setStep("loading"); setReload(n => n + 1); };
+    const changed = () => { ++sessionEpoch.current; contactEdited.current = false; setMe(null); setTrainer(null); setPreferences(null); setSaveContact(false); setDraft(emptyDraft()); setCreated(null); setPhoto(null); setPhotoReady(true); setCreatorSeat(null); setStep("loading"); setReload(n => n + 1); };
     window.addEventListener("gb-session-changed", changed);
     return () => { ++sessionEpoch.current; window.removeEventListener("gb-session-changed", changed); };
   }, []);
@@ -298,6 +308,7 @@ export function CreateGamePage() {
   async function onPublish() {
     if (!previewPayload || !me || !location) return;
     if (busy) return;
+    if (!photoReady || step !== "preview") return;
     if (!gameStartIsFuture(previewPayload.startsAt)) {
       setError("Начало уже прошло, пока вы проверяли игру. Выберите другое время."); setStep("form"); return;
     }
@@ -341,7 +352,20 @@ export function CreateGamePage() {
       if (!gameStartIsFuture(createResult.data.startsAt)) {
         setError("Начало уже прошло. Черновик сохранён, игра не опубликована."); setStep("conflict"); await rereadResult(createResult.data); return;
       }
-      const published = await publishGame(createResult.data.id, createResult.data.version, me.csrfToken);
+      let publishVersion=createResult.data.version;
+      if(photo){
+        const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),20000);
+        try {
+          const receipt=await gameCoverRequest(createResult.data.id,"PUT",controller.signal,{version:publishVersion,csrfToken:me.csrfToken},photo);
+          if(epoch!==sessionEpoch.current)return;
+          publishVersion=receipt.version;
+        } catch {
+          if(epoch!==sessionEpoch.current)return;
+          setError("Фото не сохранено или проверка не пройдена. Черновик сохранён, игра не опубликована. Повторите загрузку или удалите своё фото в сводке, затем опубликуйте черновик.");
+          setStep("conflict");await rereadResult(createResult.data);return;
+        } finally {clearTimeout(timer);}
+      }
+      const published = await publishGame(createResult.data.id, publishVersion, me.csrfToken);
       if (epoch !== sessionEpoch.current) return;
       if (!published.ok) {
         setError(published.status === 422 ? "Публикация отклонена. Проверьте время начала и доступность профиля тренера в сохранённом черновике." : "Не удалось подтвердить публикацию. Проверяем сохранённую игру.");
@@ -383,9 +407,10 @@ export function CreateGamePage() {
       {step === "setup" && <div className="gb-game-feedback" data-state="setup"><h1>Укажите город, чтобы создать игру</h1><p>Сначала сохраните город в игровом профиле. Затем вы вернётесь к созданию игры и сможете проверить её перед публикацией.</p><Button href={`/profile/setup?returnTo=${encodeURIComponent(venueCreatePath(typeof window === "undefined" ? "" : window.location.search))}`}>Указать город</Button></div>}
       {step === "load-error" && <div className="gb-game-feedback" data-state="error" role="alert"><h1>Не удалось проверить профиль</h1><p>Проверьте соединение и попробуйте снова. Создание игры продолжится после проверки входа и города.</p><Button onClick={() => setReload(n => n + 1)}>Повторить проверку</Button></div>}
       {step === "auth" && <div className="gb-game-feedback" data-state="auth"><h1>Войдите, чтобы создать игру</h1><p>После входа вы сможете заполнить игру и проверить её перед публикацией.</p><AuthEntry returnPath={venueCreatePath(typeof window === "undefined" ? "" : window.location.search)} intent={{ kind: "create", activityKind }} />{error && <p role="alert">{error}</p>}</div>}
-      {step === "form" && <>
-        <header className="gb-create-header"><span className="gb-game-kicker">Соберите свою игру</span><h1>Создать игру</h1><p>Выберите место, время и условия. Перед публикацией вы сможете всё проверить.</p></header>
-        <form className="gb-game-form" data-surface="create-form" onSubmit={event => { event.preventDefault(); void onCheck(); }}>
+      {/* Keep local photo/crop state alive for the preview → edit round trip. */}
+      {(step === "form" || step === "preview") && <>
+        <header className="gb-create-header" hidden={step !== "form"} style={step !== "form" ? { display: "none" } : undefined}><span className="gb-game-kicker">Соберите свою игру</span><h1>Создать игру</h1><p>Выберите место, время и условия. Перед публикацией вы сможете всё проверить.</p></header>
+        <form className="gb-game-form" data-surface="create-form" hidden={step !== "form"} style={step !== "form" ? { display: "none" } : undefined} onSubmit={event => { event.preventDefault(); void onCheck(); }}>
           <section className="gb-game-form-group" aria-labelledby="gb-create-game-section-1"><h2 id="gb-create-game-section-1" className="gb-game-form-group-title">Основное</h2><div className="gb-game-fields">
             {trainer && <div className="gb-game-field gb-game-field--wide"><span>Тип игры</span><div className="gb-game-segmented" role="group" aria-label="Тип игры"><button type="button" aria-pressed={activityKind === "regular"} onClick={() => setActivityKind("regular")}>Обычная игра</button><button type="button" aria-pressed={activityKind === "trainer_led"} onClick={() => setActivityKind("trainer_led")}>С тренером</button></div></div>}
             <label className="gb-game-field gb-game-field--wide">Название (необязательно)<input id="title" maxLength={160} value={draft.title} onChange={e => setDraft({ ...draft, title: e.target.value })} placeholder="Например, парная игра в субботу" /></label>
@@ -460,13 +485,15 @@ export function CreateGamePage() {
               <label className="gb-game-field gb-game-field--wide">Оплата тренеру (по договорённости)<textarea id="feeTerms" required value={draft.trainerFeeTerms} onChange={e => setDraft({ ...draft, trainerFeeTerms: e.target.value })} /><small>Расчёт напрямую с тренером.</small></label>
             </>}
           </div></section>
+          <GamePhotoSelection onChange={setPhoto} onReady={setPhotoReady} disabled={busy}/>
           {error && <div className="gb-game-notice" role="alert"><p>{error}</p><Button variant="outline" type="button" onClick={() => setReload(n => n + 1)}>Обновить проверку входа</Button></div>}
-          <div className="gb-game-form-actions"><Button variant="outline" href="/games">Отмена</Button><Button type="submit">Проверить игру</Button></div>
+          <div className="gb-game-form-actions"><Button variant="outline" href="/games">Отмена</Button><Button type="submit" disabled={!photoReady}>Проверить игру</Button></div>
         </form>
       </>}
       {step === "preview" && previewGame && <div className="gb-game-preview" data-surface="create-preview">
         <header className="gb-game-preview-heading"><h2>Проверка перед публикацией</h2><p>Проверьте данные. Игра появится после нажатия «Опубликовать игру».</p></header>
-        <GameHero game={previewGame} preview />
+        <GameHero game={previewGame} preview localPreview={photoUrl} />
+        <p>{photo ? "Выбрано своё фото этой игры. Перед публикацией сервер проверит изображение." : "Будет использована текущая одобренная обложка площадки или стандартная."}</p>
         <div className="gb-game-detail-grid"><div><GameTerms game={previewGame} /><section className="gb-game-section"><h2>Кто увидит игру</h2><p>{draft.visibility === "public" ? "Игра появится в поиске" : "Только те, у кого есть ссылка"}</p></section></div>
           <aside className="gb-game-booking"><div className="gb-game-booking__terms"><strong>Готово к публикации</strong><p>{activityKind === "regular" ? "При создании обычной игры ваше участие подтверждает сервер." : "Тренер не занимает место игрока."}</p></div><GameActionBar><Button disabled={busy} loading={busy} onClick={() => void onPublish()}>{busy ? "Публикуем…" : "Опубликовать игру"}</Button><Button variant="outline" disabled={busy} onClick={() => setStep("form")}>Назад к редактированию</Button></GameActionBar></aside>
         </div>

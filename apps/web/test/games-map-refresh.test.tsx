@@ -41,18 +41,14 @@ let inFlight: number;
 let maxInFlight: number;
 let fail: boolean;
 let ignoreAbort: boolean;
-function render(cityId = "city", day = "") {
+function render(cityId = "city", day = "", venueId?: string) {
   hooks.cursor = 0;
-  const tree = GamesMapView({ cityId, day });
+  const tree = GamesMapView({ cityId, day, venueId });
   for (const effect of hooks.effects.splice(0)) effect();
   return tree;
 }
 function html(cityId = "city", day = "") { return renderToStaticMarkup(render(cityId, day)); }
 function unmount() { for (const cleanup of hooks.cleanups) cleanup?.(); }
-function selectVenue() {
-  // The selected immutable venue ID is the sixth state slot, after snapshot/error/loading/refresh/now.
-  hooks.slots[5] = venue.id;
-}
 beforeEach(() => {
   vi.useFakeTimers(); vi.setSystemTime(new Date("2026-10-16T12:00:00Z"));
   hooks.slots = []; hooks.cleanups = []; hooks.effects = []; hooks.cursor = 0;
@@ -83,11 +79,9 @@ it("finishes >30s sequential pagination, renders venues/schedules, and polls onl
   expect(requests).toHaveLength(4); // two resources, each on its second sequential page
   expect(html()).toContain("Загружаем");
   await vi.advanceTimersByTimeAsync(9000);
-  selectVenue();
   const completed = html();
   expect(completed).toContain("Venue · 1");
-  expect(completed).toContain('href="/games/game-id"');
-  expect(completed).toContain("Delayed game");
+  expect(completed).not.toContain("Delayed game"); // schedules live on the venue route
   expect(completed).not.toContain("Загружаем");
   await vi.advanceTimersByTimeAsync(29999);
   expect(requests).toHaveLength(4);
@@ -96,17 +90,17 @@ it("finishes >30s sequential pagination, renders venues/schedules, and polls onl
   expect(html()).toContain("Venue · ?");
   expect(html()).not.toContain("Delayed game");
   await vi.advanceTimersByTimeAsync(40000);
-  expect(html()).toContain("Delayed game");
+  expect(html()).toContain("Venue · 1");
   expect(maxInFlight).toBe(2); // at most one request per resource, never two snapshots
 });
 it("retains public venues with unknown counts and truthful failure state", async () => {
-  render(); await vi.advanceTimersByTimeAsync(40000); selectVenue();
+  render(); await vi.advanceTimersByTimeAsync(40000);
   fail = true;
   await vi.advanceTimersByTimeAsync(50000);
   const failed = html();
   expect(failed).toContain("Venue · ?");
   expect(failed).toContain('role="alert"');
-  expect(failed).toContain("Расписание временно недоступно");
+  expect(failed).toContain("Непроверенные количества не показываем");
   expect(failed).not.toContain("Delayed game");
   expect(failed).not.toContain("Загружаем");
 });
@@ -123,19 +117,8 @@ it.each(["city", "date", "session", "unmount"])("cancels pending pages on %s and
   await vi.advanceTimersByTimeAsync(40000);
   if (change === "city") expect(html("other")).not.toContain("Delayed game");
   if (change === "date") {
-    // Open the retained venue through its real list interaction before checking its schedule.
-    let selected = false;
-    const clickVenue = (node: React.ReactNode): void => {
-      if (!isValidElement<{ children?: React.ReactNode; onClick?: () => void; "aria-pressed"?: boolean }>(node)) return;
-      if (node.type === "button" && node.props["aria-pressed"] !== undefined && Children.toArray(node.props.children).join("") === "Venue · 0") {
-        node.props.onClick?.(); selected = true;
-      }
-      Children.forEach(node.props.children, clickVenue);
-    };
-    clickVenue(render("city", "2026-10-19"));
-    expect(selected).toBe(true);
     const dated = html("city", "2026-10-19");
-    expect(dated).toContain("Нет игр в выбранную дату");
+    expect(dated).toContain("Venue · 0");
     expect(dated).not.toContain("Delayed game");
   }
   unmount();
@@ -159,4 +142,29 @@ it("ignores late responses from an aborted transport without continuing its pagi
   const count = requests.length;
   await vi.advanceTimersByTimeAsync(90000);
   expect(requests).toHaveLength(count);
+});
+
+it("navigates catalog selection to the full venue route and renders only that venue schedule there", async () => {
+  const assign = vi.fn<(url: string) => void>();
+  Object.assign(window, { location: { pathname: "/games", search: "?view=map&day=2026-10-18", assign } });
+  render(); await vi.advanceTimersByTimeAsync(40000);
+  const tree = render();
+  const clickVenue = (node: React.ReactNode): void => {
+    if (!isValidElement<{ children?: React.ReactNode; onClick?: () => void }>(node)) return;
+    if (node.type === "button" && Children.toArray(node.props.children).join("") === "Venue · 1") node.props.onClick?.();
+    Children.forEach(node.props.children, clickVenue);
+  };
+  clickVenue(tree);
+  expect(assign).toHaveBeenCalledTimes(1);
+  const navigation = assign.mock.calls[0];
+  if (!navigation) throw new Error("Expected one venue navigation");
+  const destination = new URL(navigation[0], "https://example.test");
+  expect(destination.pathname).toBe("/venues/venue-id");
+  expect(destination.searchParams.get("returnTo")).toBe("/games?view=map&day=2026-10-18");
+  const full = renderToStaticMarkup(render("city", "", venue.id));
+  expect(full).toContain('aria-label="Расписание площадки"');
+  expect(full).toContain('href="/games/game-id"');
+  expect(full).toContain("Delayed game");
+  expect(full).not.toContain('aria-label="Все площадки города"');
+  expect(renderToStaticMarkup(render("city", "", "other-venue"))).not.toContain("Delayed game");
 });

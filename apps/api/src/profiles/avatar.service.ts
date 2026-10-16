@@ -180,6 +180,19 @@ export class AvatarService implements OnModuleInit, OnModuleDestroy {
       throw error;
     }
   }
+  async assertGameCoverCurrent(key: string): Promise<void> {
+    const current = await this.pool.query("SELECT 1 FROM games WHERE cover_key=$1 AND game_own_cover_url(id) IS NOT NULL", [key]);
+    if (!current.rowCount) throw notFound("COVER_UNAVAILABLE", "Обложка недоступна");
+  }
+  /** Caller must separately authorize the Game for this viewer. No generic media route uses this. */
+  async readGameCover(key: string): Promise<Buffer> {
+    const file = this.filename(key);
+    await this.assertGameCoverCurrent(key);
+    try { return await readFile(file); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") throw notFound("COVER_UNAVAILABLE", "Обложка недоступна");
+      throw error;
+    }
+  }
   async releaseStage(key: string): Promise<void> {
     await this.pool.query("UPDATE avatar_media_gc SET not_before=now() WHERE storage_key=$1", [key])
       .catch(() => this.logger.warn("Venue cover cleanup deferred"));
@@ -204,7 +217,7 @@ export class AvatarService implements OnModuleInit, OnModuleDestroy {
           // Serialize collectors and publication/staging on the journal only.
           const journal = await client.query("SELECT 1 FROM avatar_media_gc WHERE storage_key=$1 AND not_before<=now() FOR UPDATE SKIP LOCKED", [row.storage_key]);
           if (journal.rowCount) {
-            const ref = await client.query("SELECT 1 FROM player_social_profiles WHERE avatar_key = $1 OR cover_key = $1 UNION ALL SELECT 1 FROM venues WHERE cover_key=$1", [row.storage_key]);
+            const ref = await client.query("SELECT 1 FROM player_social_profiles WHERE avatar_key = $1 OR cover_key = $1 UNION ALL SELECT 1 FROM venues WHERE cover_key=$1 UNION ALL SELECT 1 FROM games WHERE cover_key=$1", [row.storage_key]);
             if (!ref.rowCount) {
               try { await unlink(this.filename(row.storage_key)); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
               await client.query("DELETE FROM avatar_media_gc WHERE storage_key = $1", [row.storage_key]);
