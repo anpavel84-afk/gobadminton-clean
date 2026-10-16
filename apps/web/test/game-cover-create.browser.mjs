@@ -12,7 +12,7 @@ const venue={id:venueId,cityId:city,name:'Synthetic venue',address:'Fixture',tim
 const own='/v1/media/game-covers/'+'b'.repeat(64)+'.webp';
 const browser=await chromium.launch({headless:true,chromiumSandbox:true});
 try {
- for(const width of [360,1440]) for(const scenario of ['approved','rejected','uncertain','none','cancel']) {
+ for(const width of [360,1440]) for(const scenario of ['approved','rejected','uncertain','none','cancel','roundtrip','roundtrip-remove']) {
   const context=await browser.newContext({viewport:{width,height:1000}});
   const events=[];let saved=null,uploaded=null,readbacks=0;
   // Hold the real decoder deterministically. Cancellation must clear busy state
@@ -62,7 +62,7 @@ try {
    }
    if(p===`/v1/games/${id}/publish`){
     events.push('publish');assert.equal(req.method(),'POST');
-    assert.equal(req.postDataJSON().expectedVersion,scenario==='approved'?11:7,'publish uses upload receipt version, or original version without an image');
+    assert.equal(req.postDataJSON().expectedVersion,['approved','roundtrip'].includes(scenario)?11:7,'publish uses upload receipt version, or original version without an image');
     assert.equal(req.headers()['x-csrf-token'],'fixture');
     saved={...saved,status:'published',version:saved.version+1};return reply(saved);
    }
@@ -94,12 +94,39 @@ try {
     assert.equal(await page.getByAltText('Предпросмотр фото игры').count(),0);
    }else{
     await page.getByAltText('Предпросмотр фото игры').waitFor();
+    if(scenario.startsWith('roundtrip')){
+     await page.getByRole('slider',{name:'По горизонтали',exact:true}).fill('0.27');
+     await page.getByRole('slider',{name:'По вертикали',exact:true}).fill('0.73');
+    }
     await page.getByRole('button',{name:'Подтвердить выбор фото',exact:true}).click();
    }
   }
   assert.deepEqual(events,[],'selection must remain local');
   await page.getByRole('button',{name:'Проверить игру',exact:true}).click();
   await page.getByRole('heading',{name:'Проверка перед публикацией',exact:true}).waitFor();
+  if(scenario.startsWith('roundtrip')){
+   const selection=page.getByRole('region',{name:'Фото этой игры',exact:true});
+   assert.equal(await selection.count(),0,'hidden form must leave the accessibility tree during preview');
+   const originalPreview=await page.getByAltText('Предпросмотр фото игры').getAttribute('src');
+   await page.getByRole('button',{name:'Назад к редактированию',exact:true}).click();
+   await selection.waitFor();
+   assert.equal(await page.getByAltText('Предпросмотр фото игры').getAttribute('src'),originalPreview,'same selection survives preview navigation');
+   assert.equal(await page.getByRole('slider',{name:'По горизонтали',exact:true}).inputValue(),'0.27');
+   assert.equal(await page.getByRole('slider',{name:'По вертикали',exact:true}).inputValue(),'0.73');
+   assert.match(await selection.getByRole('status').textContent(),/Фото выбрано/);
+   assert.equal(await page.getByRole('button',{name:'Проверить игру',exact:true}).isEnabled(),true);
+   if(scenario==='roundtrip-remove'){
+    await page.getByRole('button',{name:'Без своего фото',exact:true}).click();
+    assert.equal(await page.getByAltText('Предпросмотр фото игры').count(),0);
+   }else{
+    await page.getByRole('slider',{name:'По горизонтали',exact:true}).fill('0.61');
+    assert.equal(await page.getByRole('button',{name:'Проверить игру',exact:true}).isDisabled(),true,'editing restored crop requires confirmation');
+    await page.getByRole('button',{name:'Подтвердить выбор фото',exact:true}).click();
+   }
+   assert.deepEqual(events,[],'round trip and crop/removal remain local');
+   await page.getByRole('button',{name:'Проверить игру',exact:true}).click();
+   await page.getByRole('heading',{name:'Проверка перед публикацией',exact:true}).waitFor();
+  }
   await page.getByRole('button',{name:'Опубликовать игру',exact:true}).click();
   if(['rejected','uncertain'].includes(scenario)){
    await page.getByRole('status').filter({hasText:'Игра сохранена как черновик'}).waitFor();
@@ -108,9 +135,9 @@ try {
    assert.equal(await page.getByRole('button',{name:'Опубликовать игру',exact:true}).count(),0);
   }else{
    await page.getByRole('heading',{name:'Игра опубликована',exact:true}).waitFor();
-   assert.deepEqual(events,scenario==='approved'?['draft','cover','publish']:['draft','publish']);
+   assert.deepEqual(events,['approved','roundtrip'].includes(scenario)?['draft','cover','publish']:['draft','publish']);
    assert.equal(saved.status,'published');
-   assert.equal(saved.cover.uploadedUrl,scenario==='approved'?own:null);
+   assert.equal(saved.cover.uploadedUrl,['approved','roundtrip'].includes(scenario)?own:null);
   }
   await context.close();
  }

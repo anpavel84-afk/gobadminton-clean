@@ -64,3 +64,24 @@ Actual results: author read source/rules and wrote the above files. **NOT_TESTED
 Independent execution entry point, from repository root with the existing Playwright tool installation and an independently prepared local Web build/server: `P1_ORIGIN=http://127.0.0.1:18984 node apps/web/test/game-cover-create.browser.mjs`. Runner refuses a non-loopback hostname, starts no server and contacts no live account. Continue running existing management runner and required same-SHA source/CI/product gates; mocked browser tests are not authenticated hosted UAT.
 
 Rollback: remove only the repair changes in the selector, new browser runner and this handoff addition before publication. No schema/API/runtime changes in this repair. Next bounded recipient/action remains trusted publisher → independent exact-SHA SOURCE QA; publishing is prohibited to this author, so this local artifact has no new commit permalink yet. No product acceptance or accepted DEV provenance is claimed.
+
+## Bounded preview round-trip repair after independent SOURCE QA FAIL
+
+From: source author. To: trusted publisher → independent exact-SHA SOURCE QA.
+Date: 2026-10-16. Status: UNVERIFIED / NOT_TESTED.
+Base/reviewed SHA: `f89c69ba2075644bf0521388d8955fd89749cea2`; branch `automation/issue-47`, clean at entry.
+Exact source: https://github.com/anpavel84-afk/gobadminton-clean/tree/f89c69ba2075644bf0521388d8955fd89749cea2
+
+Caller supplied independent FAIL: confirmed selection disappeared from the editor after publication-preview → «Назад к редактированию», while the parent retained an uploadable photo. The selector's file, crop and derivative were unmounted independently of the parent's confirmed Blob.
+
+Source repair: `apps/web/src/components/consumer/pages/CreateGamePage.tsx` retains the existing form and selector instance across form/preview navigation. Header/form are hidden during preview, with explicit display suppression so existing layout CSS cannot override the hidden state. Their controls leave the accessibility tree and keyboard navigation. Other steps still unmount the form, including session reset/loading. No extra picker, URL persistence, API/schema or upload-policy changes.
+
+Executable regression: `apps/web/test/game-cover-create.browser.mjs` adds `roundtrip` and `roundtrip-remove` at 360/1440 widths. Select and confirm a noncentral crop, enter preview, return to editing, assert the same preview URL, both crop values, confirmation status and enabled form. Assert preview hides editor controls. Change the restored crop and require reconfirmation before normal upload/publication; separately remove the restored selection and publish without a cover write. All selection/navigation operations remain local. Existing cancellation, no-photo, moderation rejection and uncertain-receipt scenarios remain.
+
+STYLE_GUIDE_PARITY: no new visual component, composition, copy, CSS class, token or screen navigation. Existing Forms/FormGroup, media/image and Button families remain; only their lifetime/visibility changes across existing steps. Canonical authority remains the Owner decision and guide/kit URLs cited above. Previously recorded missing operations document/frozen-source gap remains UNVERIFIED; no new reference or OWNER_VISUAL_OVERRIDE is invented.
+
+Actual results: canonical rule/source inspection and edits only. Regression execution, typecheck, lint, build, all other tests, disposable DB, hosted CI, authenticated UAT and visual parity: **NOT_TESTED**, as the caller explicitly forbids self-QA. Previous independent FAIL remains historical evidence; this repair does not clear it. No commit, push, Git metadata changes, automation, secrets, live account/DB/service or deployment actions. No product DONE/ACCEPTED/PROD claim.
+
+Independent regression entry point remains `P1_ORIGIN=http://127.0.0.1:18984 node apps/web/test/game-cover-create.browser.mjs`, using an independently prepared loopback server/build and existing Playwright installation. The author did not run it or start services. Hosted authenticated UAT and all same-SHA gates remain separate requirements.
+
+Rollback: undo only this repair's form-lifetime changes, browser scenario additions and this handoff section. No schema/runtime rollback needed for this bounded repair. Next bounded action: trusted publisher records the new exact candidate SHA and GitHub permalinks, then independent QA executes the regression and required source checks against that SHA. Publication is prohibited to this author; this addition is local pending authorized publication, with no invented candidate permalink or accepted-base provenance.
