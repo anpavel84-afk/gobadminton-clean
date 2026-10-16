@@ -46,3 +46,21 @@ Before publication, discard only this author's task edits; no Git changes are pe
 Publication, accepted-base provenance, new exact-SHA independent SOURCE QA, full same-SHA hosted Product CI with disposable PostGIS, normal DEV backup/images/smoke/receiver/ACCEPTED records and real authenticated synthetic mobile/desktop UAT remain separate gates. Do not infer product DONE, accepted DEV, pending=false or PROD from this source handoff. Preserve NOT_TESTED/history. Product UAT must show independent venue/game sources, inheritance-only propagation, own priority/deletion, foreign/private/unmoderated negatives and actual guide parity.
 
 One next bounded action: trusted publisher records the exact candidate SHA and commit permalinks for this handoff/source, then hands that SHA to independent SOURCE QA. This author is forbidden to commit/push; no candidate permalink or durable GitHub publication is claimed here.
+
+## Bounded repair after independent SOURCE QA FAIL (2026-10-16)
+
+Repair base/reviewed SHA: `8de7ae100b7764139b8c9e7ece2f0112b2772424`, clean `automation/issue-47` at entry.
+Exact reference: https://github.com/anpavel84-afk/gobadminton-clean/tree/8de7ae100b7764139b8c9e7ece2f0112b2772424
+The caller supplied independent QA **FAIL** on that SHA: (1) cancelling preprocessing left preparation busy forever; (2) executable create-flow coverage was missing. This supersedes the initial “Prior independent QA supplied: {}” only for this repair; earlier source history is retained.
+
+Source changes in this repair:
+- `apps/web/src/components/consumer/games/GamePhotoSelection.tsx`: clearing selection resets preparation immediately and the no-file effect also clears it. Aborted work remains fenced from updating the current selection; its cleanup still releases preview resources.
+- `apps/web/test/game-cover-create.browser.mjs`: executable real-page synthetic browser scenarios at 360/1440 widths. Holds actual image decoding pending, cancels selection, asserts busy/progress reset, enabled form, no late preview, and successful no-photo creation. Separately drives confirmed custom selection → draft version 7 → upload receipt version 11 → publish with version 11; moderation 422 and committed-but-lost upload response both stop publication and reconcile the retained draft. Explicit no-image case publishes with original draft version and never calls cover upload. Requests are intercepted, same-origin only, with synthetic session/venue/game data. Checks local selection causes no writes and game mutations retain CSRF/CAS. Existing management/browser/projection tests remain in place.
+
+STYLE_GUIDE_PARITY for repair: no visual composition, CSS, tokens, copy or navigation changes. Only existing preparation-state behavior and executable coverage change. Original guide references, missing operations document/frozen-source gap and UNVERIFIED visual parity remain unchanged; no new visual pattern or override is claimed.
+
+Actual results: author read source/rules and wrote the above files. **NOT_TESTED**: new browser regression, all existing tests, typecheck/lint/build, disposable DB, CI and hosted UAT. No self-QA was run, no PASS asserted, no services started, no Git metadata/commit/push or deployment performed. Independent QA must execute against the new published exact SHA; the previous FAIL is not cleared by this source repair.
+
+Independent execution entry point, from repository root with the existing Playwright tool installation and an independently prepared local Web build/server: `P1_ORIGIN=http://127.0.0.1:18984 node apps/web/test/game-cover-create.browser.mjs`. Runner refuses a non-loopback hostname, starts no server and contacts no live account. Continue running existing management runner and required same-SHA source/CI/product gates; mocked browser tests are not authenticated hosted UAT.
+
+Rollback: remove only the repair changes in the selector, new browser runner and this handoff addition before publication. No schema/API/runtime changes in this repair. Next bounded recipient/action remains trusted publisher → independent exact-SHA SOURCE QA; publishing is prohibited to this author, so this local artifact has no new commit permalink yet. No product acceptance or accepted DEV provenance is claimed.

@@ -10,7 +10,7 @@ export function GamePhotoSelection({onChange,onReady,disabled=false}:{onChange:(
   const [preparing,setPreparing]=useState(false);
   const [message,setMessage]=useState("");
   useEffect(()=>{
-    if(!file){setDraft(null);return;}
+    if(!file){setDraft(null);setPreparing(false);return;}
     const controller=new AbortController();let url:string|undefined;
     setPreparing(true);setDraft(null);
     void preprocessAvatar(file,controller.signal,crop).then(blob=>{
@@ -31,7 +31,7 @@ export function GamePhotoSelection({onChange,onReady,disabled=false}:{onChange:(
       <p>В карточках будет показан широкий центральный фрагмент. Перед сохранением фото проверяется сервером.</p>
       <Button type="button" disabled={disabled||preparing||!draft} onClick={()=>{if(draft){onChange(draft.blob);onReady(true);setMessage("Фото выбрано. Оно будет проверено при сохранении игры.");}}}>Подтвердить выбор фото</Button>
     </>}
-    <Button type="button" variant="outline" disabled={disabled} onClick={()=>{setFile(null);setDraft(null);onChange(null);onReady(true);setMessage("Используется текущая обложка площадки или стандартная.");}}>Без своего фото</Button>
+    <Button type="button" variant="outline" disabled={disabled} onClick={()=>{setFile(null);setDraft(null);setPreparing(false);onChange(null);onReady(true);setMessage("Используется текущая обложка площадки или стандартная.");}}>Без своего фото</Button>
     <p role="status">{preparing?"Подготавливаем фото…":message}</p>
   </section>;
 }
