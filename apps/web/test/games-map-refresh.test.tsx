@@ -32,8 +32,9 @@ vi.mock("next/dynamic", () => ({ default: () => () => <div>Map</div> }));
 vi.mock("../src/components/consumer/discovery/DiscoveryGameCard", () => ({
   DiscoveryGameCard: ({ game }: { game: Game }) => <a href={`/games/${game.id}`}>{game.title}</a>,
 }));
+import { MOSCOW_BUNDLE } from "../src/lib/radar-map-assets";
 import { GamesMapView } from "../src/components/consumer/games/GamesMapView";
-const venue = { id: "venue-id", cityId: "city", name: "Venue", address: "Address", timezone: "Europe/Moscow" } as VenueSummary;
+const venue = { id: "venue-id", cityId: "city", name: "Venue", latitude: 55.75, longitude: 37.62, address: "Address", timezone: "Europe/Moscow" } as VenueSummary;
 const game = { id: "game-id", title: "Delayed game", venue, status: "published", visibility: "public", availablePlaces: 2,
   startsAt: "2026-10-18T12:00:00Z", applicationDeadlineAt: "2026-10-18T11:00:00Z" } as Game;
 let requests: { url: URL; signal: AbortSignal }[];
@@ -167,4 +168,22 @@ it("navigates catalog selection to the full venue route and renders only that ve
   expect(full).toContain("Delayed game");
   expect(full).not.toContain('aria-label="Все площадки города"');
   expect(renderToStaticMarkup(render("city", "", "other-venue"))).not.toContain("Delayed game");
+});
+
+
+it("does not mount redundant venue controls on the normal map; exposes a closed fallback only on failure", async () => {
+  render(MOSCOW_BUNDLE.cityId); await vi.advanceTimersByTimeAsync(40000);
+  const normal = renderToStaticMarkup(render(MOSCOW_BUNDLE.cityId));
+  expect(normal).not.toContain('aria-label="Все площадки города"');
+  expect(normal).not.toContain("Venue · 1");
+  const failMap = (node: React.ReactNode): void => {
+    if (!isValidElement<{ children?: React.ReactNode; onAvailability?: (available: boolean) => void }>(node)) return;
+    node.props.onAvailability?.(false);
+    Children.forEach(node.props.children, failMap);
+  };
+  failMap(render(MOSCOW_BUNDLE.cityId));
+  const fallback = renderToStaticMarkup(render(MOSCOW_BUNDLE.cityId));
+  expect(fallback).toContain('class="gb-games-map-fallback"');
+  expect(fallback).toContain("Venue · 1");
+  expect(fallback).not.toContain("<details open");
 });

@@ -16,14 +16,14 @@ function installProtocol() {
     protocol = new Protocol(); maplibregl.addProtocol("pmtiles", protocol.tile);
   }
 }
-export function GamesVenueMap({ venues, counts, onSelect }: { venues: VenueSummary[]; counts: Map<string, number> | null; onSelect: (venue: VenueSummary) => void }) {
+export function GamesVenueMap({ venues, counts, onSelect, onAvailability }: { venues: VenueSummary[]; counts: Map<string, number> | null; onSelect: (venue: VenueSummary) => void; onAvailability?: (available: boolean) => void }) {
   const container = useRef<HTMLDivElement>(null); const map = useRef<LibreMap | null>(null);
   const venuesRef = useRef(venues); venuesRef.current = venues;
-  const callbacks = useRef({ onSelect }); callbacks.current = { onSelect };
+  const callbacks = useRef({ onSelect, onAvailability }); callbacks.current = { onSelect, onAvailability };
   const markers = useRef(new Map<string, { marker: maplibregl.Marker; button: HTMLButtonElement }>());
   const [ready, setReady] = useState(false);
   const [status, setStatus] = useState("Загружаем карту города…");
-  const unavailable = () => setStatus("Карта недоступна: ресурсы, Range, CSP или соединение. Площадки доступны списком ниже.");
+  const unavailable = () => { callbacks.current.onAvailability?.(false); setStatus("Карта недоступна: ресурсы, Range, CSP или соединение. Площадки доступны в раскрываемом списке."); };
   useEffect(() => {
     let alive = true; const abort = new AbortController(); let instance: LibreMap | undefined;
     const timeout = setTimeout(() => { if (alive && !instance?.loaded()) unavailable(); }, 20000);
@@ -44,17 +44,20 @@ export function GamesVenueMap({ venues, counts, onSelect }: { venues: VenueSumma
         instance = new maplibregl.Map({ container: container.current, style, center: MOSCOW_BUNDLE.center, zoom: 10.5, maxBounds: MOSCOW_BUNDLE.bounds, maxZoom: 16, attributionControl: { compact: false }, dragRotate: false, pitchWithRotate: false,
           transformRequest: url => { if (!allowedMapResource(url)) throw new Error("Unapproved map resource"); return { url, credentials: "same-origin" }; },
         });
+        instance.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
         instance.touchZoomRotate.disableRotation(); map.current = instance;
         try {
           const camera = JSON.parse(sessionStorage.getItem("gb-games-map-camera") ?? "null");
           if (camera && [camera.lng, camera.lat, camera.zoom].every(Number.isFinite) && camera.lng >= 36 && camera.lng <= 39.5 && camera.lat >= 54.5 && camera.lat <= 56.5)
             instance.jumpTo({ center: [camera.lng, camera.lat], zoom: Math.min(16, Math.max(0, camera.zoom)) });
         } catch { /* Storage is optional. */ }
+        instance.on("movestart", () => { container.current?.setAttribute("data-map-settled", "false"); });
+        instance.on("idle", () => { container.current?.setAttribute("data-map-settled", "true"); });
         instance.on("moveend", () => {
           const center = instance!.getCenter();
           try { sessionStorage.setItem("gb-games-map-camera", JSON.stringify({ lng: center.lng, lat: center.lat, zoom: instance!.getZoom() })); } catch { /* Storage is optional. */ }
         });
-        instance.on("load", () => { if (alive) { setReady(true); setStatus(""); clearTimeout(timeout); } });
+        instance.on("load", () => { if (alive) { setReady(true); callbacks.current.onAvailability?.(true); setStatus(""); clearTimeout(timeout); } });
         instance.on("error", () => { if (alive) unavailable(); });
         instance.getCanvas().setAttribute("aria-label", "Карта Москвы: стрелки перемещают карту, плюс и минус меняют масштаб");
       } catch { if (alive) unavailable(); }
@@ -90,5 +93,5 @@ export function GamesVenueMap({ venues, counts, onSelect }: { venues: VenueSumma
       remove: entry => entry.marker.remove(),
     });
   }, [ready, venues, counts]);
-  return <><div ref={container} data-map-ready={ready} style={{ height: "min(60vh, 540px)", minHeight: 300, position: "relative" }} />{status && <p role="status">{status}</p>}</>;
+  return <><div ref={container} data-map-ready={ready} data-map-settled={ready} className="gb-games-map-canvas" />{status && <p role="status">{status}</p>}</>;
 }

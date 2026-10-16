@@ -164,3 +164,23 @@
 .gb-personal-card__organizer { margin-top: 8px; }
 .gb-game-facts .gb-game-identity .gb-discovery-avatar { width: 24px; height: 24px; font-size: 10px; }
 .gb-discovery-trainer { margin-bottom: 12px; }
+
+/* #61 Owner: map follows compact canonical selectors/tabs, list keeps its banners. */
+.gb-app-shell:has(.gb-discovery[data-view="map"]) .gb-site-footer { display: none; }
+.gb-shell-content:has(.gb-discovery[data-view="map"]) { padding-bottom: 0; }
+.gb-discovery[data-view="map"] .gb-discovery-search { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 8px; margin-bottom: 8px; box-shadow: none; }
+.gb-discovery[data-view="map"] .gb-discovery-selector { min-height: 44px; padding: 4px 8px; gap: 8px; }
+.gb-discovery[data-view="map"] .gb-discovery-selector__icon { width: 28px; height: 28px; }
+.gb-discovery[data-view="map"] .gb-discovery-selector small { display: none; }
+.gb-discovery[data-view="map"] > .gb-discovery-chips { margin-bottom: 8px; }
+.gb-games-map-viewport { height: 100dvh; min-height: 0; }
+ .gb-games-map { height: 100%; min-height: 0; display: flex; flex-direction: column; gap: 4px; }
+.gb-games-map-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; }
+.gb-games-map-help { flex: 1 1 auto; font-size: 12px; min-width: 0; }
+.gb-games-map-help summary, .gb-games-map-fallback summary { cursor: pointer; }
+.gb-games-map-toolbar > button { min-height: 32px; padding-block: 4px; font-size: 12px; }
+.gb-games-map > p { margin: 0; font-size: 12px; }
+.gb-games-map-canvas { flex: 1 1 0; min-width: 0; min-height: 0; position: relative; }
+.gb-games-map-fallback { flex: none; max-height: 40%; overflow: auto; font-size: 13px; }
+.gb-games-map-fallback [role="group"] { display: grid; gap: 8px; padding: 8px 0; }
+.gb-games-map-fallback button { overflow-wrap: anywhere; }

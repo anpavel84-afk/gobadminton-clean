@@ -12,6 +12,7 @@ import { ConsumerShell } from "../ConsumerShell";
 import { CreateBanner, DiscoveryHero, DiscoveryIcon, DiscoverySidebar, DiscoverySkeleton } from "../discovery/DiscoveryComposition";
 import { DiscoveryGameCard } from "../discovery/DiscoveryGameCard";
 
+import { GamesMapViewport } from "../games/GamesMapViewport";
 import { GamesMapView } from "../games/GamesMapView";
 
 type LoadState = "loading" | "ready" | "filtered" | "empty" | "error" | "stale";
@@ -137,8 +138,8 @@ export function GamesDiscoveryPage() {
 
   const showCards = state === "ready" || state === "filtered" || state === "stale";
   return <ConsumerShell active="games" title="Игры" hideHeading>
-    <div className="gb-discovery" data-surface="games-discovery">
-      <DiscoveryHero city={location.nameRu} /><DiscoveryCityNotice />
+    <div className="gb-discovery" data-surface="games-discovery" data-view={view}>
+      {view === "list" && <DiscoveryHero city={location.nameRu} />}<DiscoveryCityNotice />
       <section className="gb-discovery-search" aria-label="Поиск игр">
         <button type="button" className="gb-discovery-selector" onClick={() => router.push("/location")} aria-label={`Где играем: ${location.nameRu}. Сменить город`}>
           <span className="gb-discovery-selector__icon"><DiscoveryIcon name="pin" /></span>
@@ -148,14 +149,14 @@ export function GamesDiscoveryPage() {
           <span className="gb-discovery-selector__icon"><DiscoveryIcon name="calendar" /></span>
           <span className="gb-discovery-date"><small>Когда</small><select aria-label="Когда играем" value={selectedDay} onChange={event => setSelectedDay(event.target.value)}><option value="">Все ближайшие</option>{dates.map(day => <option key={day} value={day}>{discoveryDateLabel(day)}</option>)}</select></span>
         </label>
-        <CreateBanner busy={creating} onClick={() => void goCreate()} />
+        {view === "list" && <CreateBanner busy={creating} onClick={() => void goCreate()} />}
       </section>
       {createError && <div className="gb-discovery-notice" role="alert">Не удалось проверить вход. Попробуйте создать игру ещё раз.</div>}
       <div className="gb-discovery-chips" role="group" aria-label="Вид игр">
         <button type="button" className="gb-discovery-chip" aria-pressed={view === "list"} onClick={() => setView("list")}>Списком</button>
         <button type="button" className="gb-discovery-chip" aria-pressed={view === "map"} onClick={() => setView("map")}>На карте</button>
       </div>
-      {view === "map" ? <GamesMapView cityId={location.cityId} day={selectedDay} /> : <section className="gb-discovery-layout">
+      {view === "map" ? <GamesMapViewport><GamesMapView cityId={location.cityId} day={selectedDay} /></GamesMapViewport> : <section className="gb-discovery-layout">
         <div className="gb-discovery-feed">
           <div className="gb-discovery-filters">
             <div className="gb-discovery-chips" role="group" aria-label="Фильтр активности">

@@ -18,11 +18,28 @@ try {
     await page.goto(process.env.GB_MAP_ORIGIN + '/games?view=map');
     await bounded();
     await page.locator('[data-map-ready="true"]').waitFor({timeout:30000});
+    const settled = () => page.locator('[data-map-ready="true"][data-map-settled="true"]').waitFor({timeout:30000});
+    await settled();
+    const framePin = async pin => {
+      // At most three real zoom-out actions; an off-canvas target is a framing failure.
+      for (let attempt=0; attempt<=3; attempt++) {
+        await settled();
+        const visible = await pin.evaluate(node => {
+          const r=node.getBoundingClientRect(), c=node.closest('.maplibregl-map').getBoundingClientRect();
+          const x=r.x+r.width/2,y=r.y+r.height/2;
+          return x>=c.left && x<=c.right && y>=c.top && y<=c.bottom && node.contains(document.elementFromPoint(x,y));
+        });
+        if(visible) return;
+        assert.ok(attempt<3,'marker not framed/hit-testable after three zoom-out actions');
+        await page.locator('.maplibregl-ctrl-zoom-out').click();
+      }
+    };
     const marker = page.locator('.maplibregl-marker.g2-map-marker');
     assert.ok(await marker.count() >= 3, 'NOT_TESTED: actual map markers required');
     await bounded();
     for (const venue of venues) {
       const pin = page.getByRole('button',{name:`${venue.name}: ${venue.gameIds.length} доступных игр`,exact:true});
+      await framePin(pin);
       const box = await pin.boundingBox();
       assert.ok(box, 'NOT_TESTED: visible marker required');
       assert.equal(await pin.textContent(), String(venue.gameIds.length));
@@ -53,7 +70,9 @@ try {
     await page.mouse.move(box.x+box.width/2,box.y+box.height/2);
     await page.mouse.down(); await page.mouse.move(box.x+box.width/2+70,box.y+box.height/2+30,{steps:10}); await page.mouse.up();
     assert.equal(page.url(),before,'pan must not select venue'); await bounded();
+    await settled();
     const pin=page.locator('.maplibregl-marker.g2-map-marker').first();
+    await framePin(pin);
     await pin.focus(); await page.keyboard.press('Enter');
     await page.waitForURL(url=>url.pathname.startsWith('/venues/'));
     await bounded();
