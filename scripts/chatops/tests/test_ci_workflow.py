@@ -103,19 +103,20 @@ class ProductWorkflow(unittest.TestCase):
             'python3 -B scripts/chatops/tests/test_admin_path.py',
             'docker build --network=default -f apps/admin/Dockerfile -t admin-ci-root .',
             'docker build --network=default --build-arg ADMIN_DEV_PATH_BUILD=1 -f apps/admin/Dockerfile -t admin-ci-path .',
+            'python3 -B scripts/chatops/tests/admin-standalone-http.py',
         ]
         # Functions replace only external commands in this disposable shell;
         # execute the actual workflow block, including its fail-fast semantics.
         stubs = '''
-python3() { echo "python3 $*"; [ "$FAIL_AT" != path ]; }
+python3() { echo "python3 $*"; case "$*" in *admin-standalone-http.py*) [ "$FAIL_AT" != http ];; *) [ "$FAIL_AT" != path ];; esac; }
 docker() { echo "docker $*"; case "$*" in *admin-ci-root*) [ "$FAIL_AT" != root ];; *admin-ci-path*) [ "$FAIL_AT" != pathbuild ];; *) return 99;; esac; }
 '''
         for package in self.packages:
-            for fail in ('none', 'path', 'root', 'pathbuild'):
+            for fail in ('none', 'path', 'root', 'pathbuild', 'http'):
                 script = stubs + self.addon['run'].replace('${{ matrix.package }}', package)
                 result = subprocess.run(['bash', '--noprofile', '--norc', '-c', script],
                                         env=dict(os.environ, FAIL_AT=fail), text=True, capture_output=True)
-                count = {'none': 3, 'path': 1, 'root': 2, 'pathbuild': 3}[fail] if package == 'admin' else 0
+                count = {'none': 4, 'path': 1, 'root': 2, 'pathbuild': 3, 'http': 4}[fail] if package == 'admin' else 0
                 with self.subTest(package=package, fail=fail):
                     self.assertEqual(result.stdout.splitlines(), expected[:count])
                     self.assertEqual(result.returncode == 0, package != 'admin' or fail == 'none', result.stderr)

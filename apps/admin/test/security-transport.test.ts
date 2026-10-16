@@ -116,7 +116,7 @@ describe("explicit DEV path mount", () => {
     pathEnabled();
     const fetch = vi.fn().mockResolvedValue(Response.json({code:"ADMIN_SESSION_REQUIRED"},{status:401}));
     vi.stubGlobal("fetch",fetch);
-    const headers = {origin:main,cookie:"__Host-gb_session=consumer",authorization:"Bearer consumer"};
+    const headers = {host:"dev.gobadminton.ru","x-forwarded-host":"dev.gobadminton.ru","x-forwarded-proto":"https",origin:main,cookie:"__Host-gb_session=consumer",authorization:"Bearer consumer"};
     const response = await GET(new Request(main+"/admin/v1/admin/auth/me",{headers}),ctx("auth/me"));
     expect(response.status).toBe(401);
     const [url, options] = fetch.mock.calls[0]!;
@@ -124,14 +124,14 @@ describe("explicit DEV path mount", () => {
     expect(options.headers.get("cookie")).toBe("");
     expect(options.headers.has("authorization")).toBe(false);
     expect((await GET(new Request(main+"/v1/admin/auth/me",{headers}),ctx("auth/me"))).status).toBe(404);
-    expect((await POST(new Request(main+"/admin/v1/admin/auth/logout",{method:"POST",headers:{origin:"https://evil.test"}}),ctx("auth/logout"))).status).toBe(403);
+    expect((await POST(new Request(main+"/admin/v1/admin/auth/logout",{method:"POST",headers:{host:"dev.gobadminton.ru","x-forwarded-host":"dev.gobadminton.ru","x-forwarded-proto":"https",origin:"https://evil.test"}}),ctx("auth/logout"))).status).toBe(403);
     expect(fetch).toHaveBeenCalledTimes(1);
   });
   it("keeps callback handoff at canonical basePath and removes provider query", async () => {
     pathEnabled(); const fetch = vi.fn().mockImplementation(async () => Response.json({csrfToken:"csrf-secret",principalId:"fixture",status:"pending_mfa"}));
     vi.stubGlobal("fetch",fetch);
     for (const provider of ["vk","yandex"]) {
-      const response = await GET(new Request(main+`/admin/v1/admin/auth/${provider}/callback?code=private&state=bound&activation=never`,{headers:{cookie:"__Host-gb_admin_binding=binding; __Host-gb_session=consumer"}}),ctx(`auth/${provider}/callback`));
+      const response = await GET(new Request(main+`/admin/v1/admin/auth/${provider}/callback?code=private&state=bound&activation=never`,{headers:{host:"dev.gobadminton.ru","x-forwarded-host":"dev.gobadminton.ru","x-forwarded-proto":"https",cookie:"__Host-gb_admin_binding=binding; __Host-gb_session=consumer"}}),ctx(`auth/${provider}/callback`));
       expect(response.status).toBe(303);
       expect(response.headers.get("location")).toBe(main+"/admin/?auth=complete");
       expect(response.headers.getSetCookie().join(";")).toContain("Path=/;");

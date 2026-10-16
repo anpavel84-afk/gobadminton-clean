@@ -1,4 +1,4 @@
-import { ADMIN_COOKIES, HANDOFF_COOKIE, adminCookies, internalConfig, sameOriginRequest } from "../../../../lib/server-config";
+import { ADMIN_COOKIES, HANDOFF_COOKIE, adminCookies, internalConfig, adminRequestOrigin, adminRequestPath } from "../../../../lib/server-config";
 
 export const dynamic = "force-dynamic";
 const allowedGet = new Set(["auth/me", "audit/security", "games", "reports", "cases"]);
@@ -8,7 +8,7 @@ async function proxy(request: Request, context: { params: Promise<{ path: string
   const config = internalConfig();
   if (!config) return new Response(null, { status: 404, headers: { "Cache-Control": "no-store" } });
   const path = (await context.params).path.join("/");
-  if (new URL(request.url).pathname !== (config.basePath ?? "") + "/v1/admin/" + path)
+  if (!adminRequestPath(request, config, "/v1/admin/" + path))
     return new Response(null, { status: 404, headers: { "Cache-Control": "no-store" } });
   const callback = request.method === "GET" && /^auth\/(vk|yandex)\/callback$/.test(path);
   const caseDetail = /^cases\/[0-9a-f-]{36}$/.test(path);
@@ -21,7 +21,7 @@ async function proxy(request: Request, context: { params: Promise<{ path: string
   const venueRoute = request.method === "GET" ? /^venues(?:\/(?:duplicates|[0-9a-f-]{36}(?:\/games)?))?$/.test(path) : /^venues(?:\/(?:[0-9a-f-]{36}\/commands|duplicates\/[0-9a-f-]{36}\/dismiss))?$/.test(path);
   if (!(venueRoute || callback || (request.method === "GET" ? allowedGet.has(path) || gameDetail || userDetail || caseDetail || caseEvidence : allowedPost.has(path) || gameCommand || userCommand || caseCommand)))
     return new Response(null, { status: 404, headers: { "Cache-Control": "no-store" } });
-  if (!sameOriginRequest(request, config.origin, callback))
+  if (!adminRequestOrigin(request, config, callback))
     return Response.json({ code: "ADMIN_ORIGIN_REJECTED" }, { status: 403, headers: { "Cache-Control": "no-store" } });
   const headers = new Headers({ Origin: config.origin, Cookie: adminCookies(request.headers.get("cookie") ?? "") });
   for (const name of ["content-type", "x-csrf-token", "idempotency-key"])

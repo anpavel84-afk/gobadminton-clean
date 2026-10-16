@@ -862,3 +862,90 @@ loading, root ownership fixtures, live ingress/security/provider/passkey/DB/UAT.
 Historical font correction remains source evidence only until actual hosted
 build/runtime validation. No fabricated actual Actions PASS; independent review
 and fresh full CI remain required. No commit/push/network or activation performed.
+
+## Exact86 standalone request correction — 2026-10-16
+
+From: bounded source author. To: parent Supervisor / fresh read-only QA.
+Status: WORKING_DRAFT / SOURCE_FIX, NOT APPROVED, NOT feature DONE.
+Base: `86db9232651d9053f9c472695f95eab5478aed2d`, clean initial branch
+`automation/admin-dev-delivery-20261015`; one assigned writer in this Ops worktree.
+https://github.com/anpavel84-afk/gobadminton-clean/tree/86db9232651d9053f9c472695f95eab5478aed2d
+
+Assignment/evidence supplied by parent: exact86 ProductCI green and SOURCEQAa3PASS
+masked a real HTTP defect. Pipeline38824147395 attempt1 realRootACCEPTED paired
+API/Web with Admin OFF. Attempt2 built all three images and rendered Admin login,
+but /admin/v1/admin/auth/me returned404 instead401. Receiver ROLLED_BACK attempt2,
+kept attempt1; operator restored config/nginx/repo Admin flag OFF. No roles granted.
+The isolated diagnostic of the exact failed image observed handler Request URL
+`https://0.0.0.0:3010/v1/admin/auth/me`: Next strips /admin and constructs an internal
+bind authority even with correct fixed proxy headers. Upstream API returned401;
+external unprefixed route returned Next404. Diagnostic container was removed.
+These are parent-supplied historical facts, not new author-run runtime evidence.
+All historical failures and outstanding release/QA requirements remain valid.
+
+Allowed effects: source only under apps/admin/src, apps/admin/test,
+scripts/chatops/tests, ci.yml and this handoff. No commit/push/auth changes,
+root/bypass, executor changes, live config/services/DB/principals/secrets,
+PROD/VPN/PLAN/other projects/worktrees. Native managed sandbox retained.
+
+Implementation:
+- Shared path/origin validation recognizes only exact DEV /admin config and the
+  observed HTTPS 0.0.0.0:3010 authority with stripped pathname. Public authority
+  remains exactly https://dev.gobadminton.ru. Host and X-Forwarded-Host must each
+  equal dev.gobadminton.ru and X-Forwarded-Proto must equal https; lists, ports,
+  missing/forged values fail. Header values never construct URLs or redirects.
+- Both API proxy and internal auth-ticket use the shared validators. Public-URL
+  fixture compatibility retains exact prefixed pathname; real normalized URL must
+  have the exact unprefixed handler pathname. Encoded/slash variants still fail
+  equality against decoded allowlisted route params. External unprefixed ingress
+  remains Next's responsibility and is covered by the real HTTP regression.
+- Existing local/dedicated origin logic is unchanged. DEV path noncallback reads
+  and mutations also reject supplied Sec-Fetch-Site other than same-origin;
+  POST still requires exact Origin and forwards the existing CSRF token. Callback
+  navigation retains its cross-site GET exception and rejects wrong Origin.
+  No changes to flags/PROD OFF, allowlist, passkeys/stepup, cookies or callback logs.
+- New scripts/chatops/tests/admin-standalone-http.py runs the actual built
+  admin-ci-path image with production/stage exact opt-ins, image nonroot user,
+  ephemeral loopback published port and bounded HTTP/startup/subprocess operations.
+  Finally removes its container, then its temporary read-only preload mount.
+  Only outbound fetch is replaced: fixed API URL/method/Origin/cookie/no-bearer
+  assertions return fresh401 or a fresh callback Response. Config/Next/routes/auth
+  are not stubbed. No real credentials or public API are needed.
+- HTTP assertions cover401, wrong Origin403, missing/forged Host/forwarded host/
+  proto rejection, POST Origin plus CSRF forwarding, consumer cookie stripping,
+  external unprefixed404, encoded/trailing slash404, both callback clean303 and
+  filtered Set-Cookie, and auth-ticket401 without a ticket. Callback query fields
+  are checked outbound without printing their values. Fixed401 body assertion
+  distinguishes the transport stub from an unrelated401.
+- Existing unconditional CI addon now runs HTTP regression after both genuine
+  root/path Docker builds. Seven job names/required steps, other package addon
+  completion and DEV three-job workflow unchanged. Offline structural test retains
+  dispatch checks and now asserts HTTP invocation/failure propagation too.
+
+Actual author checks so far: test_admin_path.py 3 PASS (actual TS imported on
+Node24, handcrafted Request fixtures); test_ci_workflow.py 2 PASS (shell/gate
+fixtures); foundation static PASS (170 Markdown,164 operations), email contract
+policy 1 PASS, foundation policy 8 PASS; new Python AST parse and diff whitespace
+check successful. Full ChatOps suite result recorded below once complete.
+
+NOT RUN: built standalone HTTP regression, Docker builds, package typecheck/lint/
+Vitest, hosted CI, root mandatory fixtures, independent QA or actual DEV. No node
+modules are installed in this worktree; no dependencies downloaded. The HTTP
+regression is wired for hosted Docker CI, not claimed PASS locally. A baseline86
+built-image negative run was not performed; its first expected401 assertion would
+exercise the exact historically observed404. The separate normalized Request
+fixture was added as supplementary coverage, not a substitute for real HTTP.
+
+Rollback: reverse only this bounded source/test/workflow/handoff diff against86;
+no runtime rollback actions. Publication is reserved to parent (normal commit,
+branch push, DRAFT only); no candidate commit/permalink exists from this author.
+Next bounded action: parent reviews scope/diff and publishes candidate for fresh
+hosted full CI including real standalone HTTP, then fresh independent read-only QA;
+real DEV remains a separate required action. This handoff is not self-approval.
+
+Completed full offline ChatOps discovery: 80 tests in30.411s, 59 PASS and21
+root-dependent SKIP (not PASS). Focused path/CI tests were rerun after the final
+source adjustment:3 and2 PASS; foundation static and diff whitespace rechecked.
+HTTP missing/forged proxy-header assertions permit403 or404 because Next may
+change its internal URL scheme before path validation; wrong browser Origin and
+POST Origin still require403 exactly. Neither rejection may reach the stub401.

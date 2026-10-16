@@ -38,11 +38,25 @@ globalThis.fetch=async (url,options)=>{
   assert.equal(options.headers.has('authorization'),false);
   return Response.json({code:'ADMIN_SESSION_REQUIRED'},{status:401});
 };
-const headers={origin:main,cookie:'__Host-gb_session=consumer',authorization:'Bearer consumer'};
+const headers={host:"dev.gobadminton.ru","x-forwarded-host":"dev.gobadminton.ru","x-forwarded-proto":"https",origin:main,cookie:'__Host-gb_session=consumer',authorization:'Bearer consumer'};
 assert.equal((await GET(new Request(main+'/admin/v1/admin/auth/me',{headers}),ctx('auth/me'))).status,401);
 assert.equal((await GET(new Request(main+'/v1/admin/auth/me',{headers}),ctx('auth/me'))).status,404);
-assert.equal((await POST(new Request(main+'/admin/v1/admin/auth/logout',{method:'POST',headers:{origin:'https://evil.test'}}),ctx('auth/logout'))).status,403);
+assert.equal((await POST(new Request(main+'/admin/v1/admin/auth/logout',{method:'POST',headers:{host:"dev.gobadminton.ru","x-forwarded-host":"dev.gobadminton.ru","x-forwarded-proto":"https",origin:'https://evil.test'}}),ctx('auth/logout'))).status,403);
 assert.equal(calls,1);
+// Actual observed standalone URL: stripped basePath, fixed HTTPS bind authority.
+const internal='https://0.0.0.0:3010/v1/admin/auth/me';
+assert.equal((await GET(new Request(internal,{headers}),ctx('auth/me'))).status,401);
+for(const [key,value] of [['host','evil.test'],['x-forwarded-host','evil.test'],['x-forwarded-proto','http']]) {
+ const forged={...headers,[key]:value};
+ assert.equal((await GET(new Request(internal,{headers:forged}),ctx('auth/me'))).status,403);
+ delete forged[key];
+ assert.equal((await GET(new Request(internal,{headers:forged}),ctx('auth/me'))).status,403);
+}
+for(const url of ['https://0.0.0.0:3011/v1/admin/auth/me','http://0.0.0.0:3010/v1/admin/auth/me',
+ 'https://127.0.0.1:3010/v1/admin/auth/me'])
+ assert.equal((await GET(new Request(url,{headers}),ctx('auth/me'))).status,404);
+assert.equal(calls,2);
+
 for(const provider of ['vk','yandex']) {
  globalThis.fetch=async (url,options)=>{
   assert.equal(url.pathname,`/v1/admin/auth/${provider}/callback`);
@@ -51,7 +65,7 @@ for(const provider of ['vk','yandex']) {
   assert.equal(options.headers.get('cookie'),'__Host-gb_admin_binding=bound');
   return Response.json({csrfToken:'secret',principalId:'fixture',status:'pending_mfa'});
  };
- const response=await GET(new Request(main+`/admin/v1/admin/auth/${provider}/callback?state=s&code=private&activation=never`,{headers:{cookie:'__Host-gb_admin_binding=bound; __Host-gb_session=consumer'}}),ctx(`auth/${provider}/callback`));
+ const response=await GET(new Request(main+`/admin/v1/admin/auth/${provider}/callback?state=s&code=private&activation=never`,{headers:{host:"dev.gobadminton.ru","x-forwarded-host":"dev.gobadminton.ru","x-forwarded-proto":"https",cookie:'__Host-gb_admin_binding=bound; __Host-gb_session=consumer'}}),ctx(`auth/${provider}/callback`));
  assert.equal(response.status,303);
  assert.equal(response.headers.get('location'),main+'/admin/?auth=complete');
  assert.match(response.headers.getSetCookie().join(';'),/Path=\/;.*Secure; HttpOnly; SameSite=Strict/);

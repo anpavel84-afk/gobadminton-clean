@@ -44,6 +44,7 @@ jobs:
             python3 -B scripts/chatops/tests/test_admin_path.py
             docker build --network=default -f apps/admin/Dockerfile -t admin-ci-root .
             docker build --network=default --build-arg ADMIN_DEV_PATH_BUILD=1 -f apps/admin/Dockerfile -t admin-ci-path .
+            python3 -B scripts/chatops/tests/admin-standalone-http.py
           fi
   database:
     runs-on: ubuntu-24.04

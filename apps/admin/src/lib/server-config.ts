@@ -29,8 +29,34 @@ export function internalConfig(env: Record<string, string | undefined> = process
   } catch { return null; }
 }
 
+// Next standalone removes basePath from handler URLs and uses its fixed bind
+// authority. This exception is reachable only through the exact DEV path config.
+export function adminRequestPath(request: Request, config: { origin: string; basePath?: string }, path: string) {
+  const url = new URL(request.url);
+  const normalized = config.basePath === "/admin" && config.origin === "https://dev.gobadminton.ru" &&
+    url.origin === "https://0.0.0.0:3010";
+  return url.pathname === (normalized ? "" : config.basePath ?? "") + path;
+}
+
+export function adminRequestOrigin(request: Request, config: { origin: string; basePath?: string }, callback = false) {
+  if (config.basePath !== "/admin") return sameOriginRequest(request, config.origin, callback);
+  const url = new URL(request.url);
+  if (config.origin !== "https://dev.gobadminton.ru" ||
+      ![config.origin, "https://0.0.0.0:3010"].includes(url.origin) ||
+      request.headers.get("host") !== "dev.gobadminton.ru" ||
+      request.headers.get("x-forwarded-host") !== "dev.gobadminton.ru" ||
+      request.headers.get("x-forwarded-proto") !== "https") return false;
+  const site = request.headers.get("sec-fetch-site");
+  if (!callback && site && site !== "same-origin") return false;
+  return browserOriginRequest(request, config.origin, callback);
+}
+
 export function sameOriginRequest(request: Request, origin: string, callback = false) {
   if (new URL(request.url).origin !== origin) return false;
+  return browserOriginRequest(request, origin, callback);
+}
+
+function browserOriginRequest(request: Request, origin: string, callback: boolean) {
   const supplied = request.headers.get("origin");
   if (supplied && supplied !== origin) return false;
   if (callback && request.method === "GET") return true;
