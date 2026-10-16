@@ -3,7 +3,7 @@
 // Run from repo root: node apps/web/test/venue-picker-geometry.browser.mjs
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { pathToFileURL } from 'node:url';
+import { URL, pathToFileURL } from 'node:url';
 const { chromium } = await import(pathToFileURL(process.cwd() + '/.tools/node_modules/playwright/index.mjs'));
 const css = await readFile(new URL('../src/styles/games.css', import.meta.url), 'utf8');
 const browser = await chromium.launch({ headless: true, chromiumSandbox: true });
