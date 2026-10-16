@@ -17,18 +17,32 @@ import { FakeModerationProvider } from "../../src/moderation/fake-provider";
 import { MODERATION_PROVIDER, safeImageDecision } from "../../src/moderation/provider";
 import { SafetyModule } from "../../src/safety/safety.module";
 import { ProfilesModule } from "../../src/profiles/profiles.module";
+import { AvatarService } from "../../src/profiles/avatar.service";
+import { ConsumerAuthService } from "../../src/auth/consumer-auth.service";
 import { registerAvatarHttp } from "../../src/profiles/avatar-http";
 import { buildTestCoreModule } from "./test-core.module";
 
 const run = process.env.RUN_DB_INTEGRATION === "1" ? describe : describe.skip;
-run("owned cover: disposable PostGIS API", () => {
+run("legacy profile cover storage/privacy: internal fixture, public write surface retired", () => {
   let app: NestFastifyApplication, pool: Pool, media: string, png: Buffer;
   let own: Record<string,string>, other: Record<string,string>;
   const user = randomUUID(), viewer = randomUUID();
   let version = 0, url = "";
   const env = loadEnv({ ...process.env, NODE_ENV:"test", APP_ENV:"local", PUBLIC_API_ORIGIN:"http://127.0.0.1:3000", PUBLIC_WEB_ORIGIN:"http://127.0.0.1:3001", SOCIAL_DIRECTORY_ENABLED:"1", CONTENT_MODERATION_PROVIDER:"fake", CONTENT_MODERATION_FINGERPRINT_SECRET:"synthetic-cover-test-fingerprint-secret" });
   const fake = new FakeModerationProvider(env);
-  const upload = (v=version, key=randomUUID(), bytes=png, headers=own) => app.inject({method:"PUT",url:"/v1/me/cover",headers:{...headers,"idempotency-key":key,"x-profile-version":String(v)},payload:bytes});
+  // Legacy storage regression uses the internal service only. There is no profile-cover write route.
+  async function command(v:number,key:string,headers:Record<string,string>,bytes?:Buffer) {
+    try {
+      const token=headers.cookie.split("=")[1];
+      const actor=await app.get(ConsumerAuthService).requireCookieMutation({headers,cookies:{[SESSION_COOKIE]:token}} as never);
+      const body=await app.get(AvatarService).mutate(actor,key,String(v),bytes?{body:bytes,mime:"image/png"}:undefined,"cover");
+      return {statusCode:200,body:JSON.stringify(body),json:()=>body as {version:number;cover:{uploadedUrl:string}}};
+    } catch(error) {
+      const e=error as {getStatus:()=>number;getResponse:()=>unknown};
+      return {statusCode:e.getStatus(),body:JSON.stringify(e.getResponse()),json:()=>e.getResponse() as never};
+    }
+  }
+  const upload = (v=version,key=randomUUID(),bytes=png,headers=own)=>command(v,key,headers,bytes);
   const read = (headers:Record<string,string>={}) => app.inject({method:"GET",url,headers});
   beforeAll(async () => {
     if (!["127.0.0.1","localhost","[::1]"].includes(new URL(env.DATABASE_URL).hostname)) throw new Error("Disposable loopback PostGIS required");
@@ -71,7 +85,7 @@ run("owned cover: disposable PostGIS API", () => {
     expect((await app.inject({method:"GET",url:old,headers:own})).statusCode).toBe(404);
     const calls=fake.calls;expect((await upload(expected,key)).json()).toEqual(r.json());expect(fake.calls).toBe(calls);
     expect((await upload(version,key)).statusCode).toBe(409);
-    const del=await app.inject({method:"DELETE",url:"/v1/me/cover",headers:{...own,"content-type":"application/json","idempotency-key":key,"x-profile-version":String(expected)},payload:{expectedVersion:expected}});expect(del.statusCode).toBe(409);
+    const del=await command(expected,key,own);expect(del.statusCode).toBe(409);
   });
   it("public visibility and bilateral block are checked for each media read",async()=>{
     await pool.query("UPDATE player_social_profiles SET directory_visible=true,city_id=(SELECT id FROM cities LIMIT 1),consent_policy_version='directory-mvp-v1',opted_in_at=now() WHERE user_id=$1",[user]);
@@ -111,7 +125,7 @@ run("owned cover: disposable PostGIS API", () => {
     const race=await Promise.all([upload(),upload()]);expect(race.map(r=>r.statusCode).sort()).toEqual([200,409]);const winner=race.find(r=>r.statusCode===200)!.json();version=winner.version;url=winner.cover.uploadedUrl;
     const otherCover=await app.inject({method:"GET",url:"/v1/me/cover",headers:other});expect(otherCover.statusCode).toBe(200);
     const otherVersion=otherCover.json().version;
-    const чужой=await app.inject({method:"DELETE",url:"/v1/me/cover",headers:{...other,"content-type":"application/json","idempotency-key":randomUUID(),"x-profile-version":String(otherVersion)},payload:{expectedVersion:otherVersion}});expect(чужой.statusCode).toBe(200);expect((await read(own)).statusCode).toBe(200);
+    const чужой=await command(otherVersion,randomUUID(),other);expect(чужой.statusCode).toBe(200);expect((await read(own)).statusCode).toBe(200);
     expect((await app.inject({method:"PUT",url:`/v1/players/${user}/cover`,headers:other,payload:png})).statusCode).toBe(404);
   });
   it("shared moderation budget rejects new bytes without changing the current cover",async()=>{
@@ -130,18 +144,19 @@ run("owned cover: disposable PostGIS API", () => {
     expect((await upload(version,key,fresh,isolated)).statusCode).toBe(401);
     expect((await read(own)).statusCode).toBe(200);fake.fixture=async()=>safeImageDecision();
   });
-  it("rejects absent, malformed and disagreeing DELETE commands without changing DB or media",async()=>{
+  it("rejects all retired profile-cover HTTP writes without changing legacy DB or media",async()=>{
     const before=await pool.query("SELECT version,cover_key FROM player_social_profiles WHERE user_id=$1",[user]);
     for(const payload of [undefined,{}, {expectedVersion:-1},{expectedVersion:1.5},{expectedVersion:"0"},{expectedVersion:2147483648},{expectedVersion:version+1},{expectedVersion:version,extra:true}]){
       const response=await app.inject({method:"DELETE",url:"/v1/me/cover",headers:{...own,"content-type":"application/json","idempotency-key":randomUUID(),"x-profile-version":String(version)},...(payload===undefined?{}:{payload})});
-      expect(response.statusCode,response.body).toBe(400);
+      expect(response.statusCode,response.body).toBe(404);
     }
+    expect((await app.inject({method:"PUT",url:"/v1/me/cover",headers:{...own,"x-profile-version":String(version),"idempotency-key":randomUUID()},payload:png})).statusCode).toBe(404);
     expect((await pool.query("SELECT version,cover_key FROM player_social_profiles WHERE user_id=$1",[user])).rows).toEqual(before.rows);
     expect((await read(own)).statusCode).toBe(200);
   });
   it("deletes to default, rejects stale URL, and account retirement revokes the current URL",async()=>{
     const expected=version,key=randomUUID();
-    const remove=(v:number,replayKey=key)=>app.inject({method:"DELETE",url:"/v1/me/cover",headers:{...own,"content-type":"application/json","idempotency-key":replayKey,"x-profile-version":String(v)},payload:{expectedVersion:v}});
+    const remove=(v:number,replayKey=key)=>command(v,replayKey,own);
     const r=await remove(expected);expect(r.statusCode,r.body).toBe(200);version=r.json().version;expect(r.json().cover.uploadedUrl).toBeNull();expect((await read(own)).statusCode).toBe(404);
     expect((await remove(expected)).json()).toEqual(r.json());
     expect((await remove(version)).statusCode).toBe(409);

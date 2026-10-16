@@ -49,7 +49,7 @@ export function gamesMapQuery(filter: DiscoveryFilter, moderationEnabled = false
   return { params: eligible.params, sql: `
     ${effectiveVenueCtes()},
     eligible AS MATERIALIZED (
-      SELECT g.id, g.version, g.title, g.starts_at, g.ends_at, g.timezone,
+      SELECT game_effective_cover_url(g.id) AS cover_url, g.id, g.version, g.title, g.starts_at, g.ends_at, g.timezone,
              g.activity_kind, g.capacity, g.external_reserved_count,
              v.id AS venue_id, v.name, v.city_id, v.address, v.timezone AS venue_timezone,
              v.lifecycle_state, v.canonical_resolved,
@@ -84,7 +84,7 @@ export function gamesMapQuery(filter: DiscoveryFilter, moderationEnabled = false
       SELECT g.*, COALESCE(o.confirmed_count, 0) AS confirmed_count,
         jsonb_build_object('id', g.id, 'version', g.version, 'title', g.title,
           'startsAt', g.starts_at, 'endsAt', g.ends_at, 'timezone', g.timezone,
-          'activityKind', g.activity_kind,
+          'activityKind', g.activity_kind, 'cover', jsonb_build_object('uploadedUrl',g.cover_url),
           'capacity', g.capacity, 'externalReservedCount', g.external_reserved_count,
           'confirmedCount', COALESCE(o.confirmed_count, 0)) AS game
       FROM previews g LEFT JOIN occupancy o ON o.game_id = g.id

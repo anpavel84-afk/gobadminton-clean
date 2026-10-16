@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { VenueCover } from "../venues/VenueCover";
+import { GameCover } from "./GameCover";
 import { Avatar } from "../players/ProfileComposition";
 import type { ReactNode } from "react";
 import type { Game, ParticipationStatus } from "../../../lib/consumer-types";
@@ -12,12 +12,12 @@ export function GameStatusBadge({ tone, children }: { tone: string; children: Re
 }
 
 /** Existing TrainerDetail / MediaBlock composition with the current venue cover/default. */
-export function GameHero({ game, preview = false }: { game: Game; preview?: boolean }) {
+export function GameHero({ game, preview = false, localPreview }: { game: Game; preview?: boolean; localPreview?: string }) {
   const when = discoveryGameWhen(game);
   const trainer = game.activityKind === "trainer_led";
   return <section className="gb-game-hero" data-activity={game.activityKind}>
     <div className="gb-game-hero__image">
-      <VenueCover cover={game.venue.cover} name={game.venue.name} />
+      {preview && localPreview?.startsWith("blob:") ? <span className="gb-venue-cover"><img src={localPreview} alt="Предпросмотр фото игры" /></span> : <GameCover game={game} />}
       <span className="gb-game-ribbon" data-trainer={trainer}>{trainer ? "Тренировка с тренером" : "Обычная игра"}</span>
     </div>
     <div className="gb-game-hero__copy">
@@ -84,7 +84,7 @@ export function PersonalGameCard({
     </div>
     <div className="gb-personal-card__body">
       <span className="gb-game-type" data-trainer={game.activityKind === "trainer_led"}>{game.activityKind === "trainer_led" ? "С тренером" : "Обычная игра"}</span>
-      <h3>{game.title}</h3><strong>{when.day} · {when.time}</strong>
+      <GameCover game={game} /><h3>{game.title}</h3><strong>{when.day} · {when.time}</strong>
       <p>{game.venue.name}</p>
       <small>{game.levelRule.allowedLevelIds.join(", ")} · {capacityStatusLabel(game)}</small>
       {/* STYLE_GUIDE_GAP #15: kit IdentityRow inside the canonical card body; no footer/divider. */}

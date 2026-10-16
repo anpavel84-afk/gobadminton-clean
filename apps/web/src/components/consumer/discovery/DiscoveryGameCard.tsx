@@ -1,4 +1,4 @@
-import { VenueCover } from "../venues/VenueCover";
+import { GameCover } from "../games/GameCover";
 import { Avatar } from "../players/ProfileComposition";
 /* Current venue-approved derivative in the canonical media slot. */
 import { GameShare } from "../games/GameShare";
@@ -15,7 +15,7 @@ export function DiscoveryGameCard({ game }: { game: Game }) {
   const format = discoveryFormat(game.formatKey);
   return <article className={`gb-discovery-card${trainer ? " gb-discovery-card--trainer" : ""}`} data-activity={game.activityKind}>
     <div className="gb-discovery-card__image">
-      <VenueCover cover={game.venue.cover} name={game.venue.name} />
+      <GameCover game={game} />
       <span className="gb-discovery-type">{trainer ? "С тренером" : "Обычная игра"}</span>
     </div>
     <div className="gb-discovery-card__content">

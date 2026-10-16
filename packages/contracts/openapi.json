@@ -13962,204 +13962,6 @@
       }
     },
     "/me/cover": {
-      "put": {
-        "operationId": "replaceMyCover",
-        "tags": [
-          "Profiles"
-        ],
-        "summary": "Own cover mutation: cookie + Origin + CSRF + idempotency; shared profile version. Removal restores default header.",
-        "parameters": [
-          {
-            "name": "X-CSRF-Token",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "X-Profile-Version",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "minimum": 0
-            }
-          },
-          {
-            "$ref": "#/components/parameters/IdempotencyKey"
-          },
-          {
-            "name": "Origin",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "Exact allowed consumer web Origin; validated by requireCookieMutation."
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Committed cover receipt; no-store",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CoverReceipt"
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/AvatarProblem"
-          },
-          "401": {
-            "$ref": "#/components/responses/AvatarProblem"
-          },
-          "403": {
-            "$ref": "#/components/responses/AvatarProblem"
-          },
-          "409": {
-            "$ref": "#/components/responses/AvatarProblem"
-          },
-          "413": {
-            "$ref": "#/components/responses/AvatarProblem"
-          },
-          "415": {
-            "$ref": "#/components/responses/AvatarProblem"
-          },
-          "422": {
-            "$ref": "#/components/responses/AvatarProblem"
-          },
-          "503": {
-            "$ref": "#/components/responses/AvatarProblem"
-          },
-          "429": {
-            "$ref": "#/components/responses/AvatarProblem"
-          }
-        },
-        "requestBody": {
-          "required": true,
-          "description": "Raw JPEG/PNG/WebP derivative only. Browser source stays local (existing maximum 10 MiB/50 MP); user confirms 1200x400 crop, mobile preview uses centered 2:1 framing. Browser derivative maximum 524288 bytes. Server maximum 5 MiB, 16 MP, 8192px per side, single frame, actual MIME/signature and safe decode; re-encode to 1200x400 PNG without metadata (maximum 2 MiB). No URLs, paths, SVG or HTML.",
-          "content": {
-            "image/jpeg": {
-              "schema": {
-                "type": "string",
-                "format": "binary"
-              }
-            },
-            "image/png": {
-              "schema": {
-                "type": "string",
-                "format": "binary"
-              }
-            },
-            "image/webp": {
-              "schema": {
-                "type": "string",
-                "format": "binary"
-              }
-            }
-          }
-        },
-        "description": "Existing owned-media store, session epoch/actor fence, CAS, durable replay and GC. Exact sanitized 1200x400 PNG must receive cover_image moderation approval before publication; same image moderation policy and budgets as avatar. Replacement/deletion invalidate the prior URL immediately. Hidden profiles are owner-only; other viewers require directory visibility, eligibility, active status, no restrictions and no bilateral block.",
-        "security": [
-          {
-            "cookieSession": []
-          }
-        ]
-      },
-      "delete": {
-        "operationId": "removeMyCover",
-        "tags": [
-          "Profiles"
-        ],
-        "summary": "Own cover mutation: cookie + Origin + CSRF + idempotency; shared profile version. Removal restores default header.",
-        "parameters": [
-          {
-            "name": "X-CSRF-Token",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "X-Profile-Version",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 2147483647
-            }
-          },
-          {
-            "$ref": "#/components/parameters/IdempotencyKey"
-          },
-          {
-            "name": "Origin",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "Exact allowed consumer web Origin; validated by requireCookieMutation."
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Committed cover receipt; no-store",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CoverReceipt"
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/AvatarProblem"
-          },
-          "401": {
-            "$ref": "#/components/responses/AvatarProblem"
-          },
-          "403": {
-            "$ref": "#/components/responses/AvatarProblem"
-          },
-          "409": {
-            "$ref": "#/components/responses/AvatarProblem"
-          },
-          "413": {
-            "$ref": "#/components/responses/AvatarProblem"
-          },
-          "415": {
-            "$ref": "#/components/responses/AvatarProblem"
-          },
-          "422": {
-            "$ref": "#/components/responses/AvatarProblem"
-          },
-          "503": {
-            "$ref": "#/components/responses/AvatarProblem"
-          }
-        },
-        "description": "Existing owned-media store, session epoch/actor fence, CAS, durable replay and GC. Exact sanitized 1200x400 PNG must receive cover_image moderation approval before publication; same image moderation policy and budgets as avatar. Replacement/deletion invalidate the prior URL immediately. Hidden profiles are owner-only; other viewers require directory visibility, eligibility, active status, no restrictions and no bilateral block. Required JSON command expectedVersion must equal X-Profile-Version; missing, extra, malformed or disagreeing fields return 400 before mutation.",
-        "security": [
-          {
-            "cookieSession": []
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/DeleteCoverCommand"
-              }
-            }
-          }
-        }
-      },
       "get": {
         "summary": "Read own cover and current shared profile version",
         "responses": {
@@ -14782,6 +14584,308 @@
         "operationId": "getPublicVenueCoverMedia",
         "description": "No-store and nosniff; current venue lifecycle, active uploader and cover_image allow decision checked at each read. Replacement, deletion, retirement and moderation deny revoke old URLs. No private profile-media lookup, arbitrary path or external URL."
       }
+    },
+    "/games/{gameId}/cover": {
+      "get": {
+        "operationId": "getManagedGameCover",
+        "summary": "Game managers only; current own → exact venue → default cover. No admin role required.",
+        "parameters": [
+          {
+            "name": "gameId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current authorized cover",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GameCoverReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid command"
+          },
+          "401": {
+            "description": "Session required"
+          },
+          "403": {
+            "description": "CSRF or session rejected"
+          },
+          "404": {
+            "description": "Game unavailable"
+          },
+          "409": {
+            "description": "CAS or replay conflict"
+          },
+          "413": {
+            "description": "Byte limit"
+          },
+          "415": {
+            "description": "Unsupported content"
+          },
+          "422": {
+            "description": "Image or moderation rejected"
+          },
+          "429": {
+            "description": "Rate budget"
+          },
+          "503": {
+            "description": "Provider or storage unavailable"
+          }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ]
+      },
+      "put": {
+        "operationId": "replaceManagedGameCover",
+        "summary": "Game managers only; current own → exact venue → default cover. No admin role required.",
+        "parameters": [
+          {
+            "name": "gameId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Game-Version",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current authorized cover",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GameCoverReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid command"
+          },
+          "401": {
+            "description": "Session required"
+          },
+          "403": {
+            "description": "CSRF or session rejected"
+          },
+          "404": {
+            "description": "Game unavailable"
+          },
+          "409": {
+            "description": "CAS or replay conflict"
+          },
+          "413": {
+            "description": "Byte limit"
+          },
+          "415": {
+            "description": "Unsupported content"
+          },
+          "422": {
+            "description": "Image or moderation rejected"
+          },
+          "429": {
+            "description": "Rate budget"
+          },
+          "503": {
+            "description": "Provider or storage unavailable"
+          }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "image/jpeg": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "image/png": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "image/webp": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "removeManagedGameCover",
+        "summary": "Game managers only; current own → exact venue → default cover. No admin role required.",
+        "parameters": [
+          {
+            "name": "gameId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Game-Version",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current authorized cover",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GameCoverReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid command"
+          },
+          "401": {
+            "description": "Session required"
+          },
+          "403": {
+            "description": "CSRF or session rejected"
+          },
+          "404": {
+            "description": "Game unavailable"
+          },
+          "409": {
+            "description": "CAS or replay conflict"
+          },
+          "413": {
+            "description": "Byte limit"
+          },
+          "415": {
+            "description": "Unsupported content"
+          },
+          "422": {
+            "description": "Image or moderation rejected"
+          },
+          "429": {
+            "description": "Rate budget"
+          },
+          "503": {
+            "description": "Provider or storage unavailable"
+          }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteGameCoverCommand"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/media/game-covers/{key}": {
+      "get": {
+        "operationId": "getGameCoverMedia",
+        "summary": "Reauthorizes the owning game and current approved key on every read; no-store, Vary Cookie. Private/draft/unlisted games require active game management, matching current detail rights.",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}\\.png$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sanitized approved PNG",
+            "content": {
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unavailable or unauthorized"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -15340,6 +15444,9 @@
               "null"
             ],
             "maxLength": 2000
+          },
+          "cover": {
+            "$ref": "#/components/schemas/GameCover"
           }
         }
       },
@@ -20897,6 +21004,9 @@
           "availablePlaces": {
             "type": "integer",
             "minimum": 0
+          },
+          "cover": {
+            "$ref": "#/components/schemas/GameCover"
           }
         }
       },
@@ -24559,6 +24669,57 @@
         }
       },
       "DeleteVenueCoverCommand": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "expectedVersion"
+        ],
+        "properties": {
+          "expectedVersion": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          }
+        }
+      },
+      "GameCover": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "uploadedUrl"
+        ],
+        "properties": {
+          "uploadedUrl": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^/v1/media/(game|venue)-covers/[a-f0-9]{64}\\.png$"
+          }
+        }
+      },
+      "GameCoverReceipt": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "version",
+          "hasCover",
+          "cover"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "hasCover": {
+            "type": "boolean"
+          },
+          "cover": {
+            "$ref": "#/components/schemas/GameCover"
+          }
+        }
+      },
+      "DeleteGameCoverCommand": {
         "type": "object",
         "additionalProperties": false,
         "required": [

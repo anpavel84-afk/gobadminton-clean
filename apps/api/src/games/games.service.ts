@@ -61,6 +61,7 @@ export type GameTrainerSummary = {
 };
 
 export type GameDto = {
+  cover?: { uploadedUrl: string | null };
   id: string;
   version: number;
   title: string;
@@ -174,6 +175,7 @@ type GameRow = {
   venue_name: string;
   venue_city_id: string;
   venue_cover_url: string | null;
+  game_cover_url: string | null;
   venue_address: string;
   venue_timezone: string;
   venue_latitude: number;
@@ -763,7 +765,7 @@ function gameSelectColumns(): string {
     g.organizer_id AS organizer_id,
     g.host_display_name AS organizer_display_name,
     g.host_public_contact AS organizer_public_contact,
-    venue_cover_url(v.id) AS venue_cover_url, v.id AS venue_id, v.name AS venue_name, v.city_id AS venue_city_id, v.address AS venue_address,
+    game_effective_cover_url(g.id) AS game_cover_url, venue_cover_url(g.venue_id) AS venue_cover_url, v.id AS venue_id, v.name AS venue_name, v.city_id AS venue_city_id, v.address AS venue_address,
     v.timezone AS venue_timezone,
     ST_Y(v.location::geometry) AS venue_latitude,
     ST_X(v.location::geometry) AS venue_longitude,
@@ -804,6 +806,7 @@ function mapGameRow(row: GameRow): GameDto {
           }
         : null,
     trainingDescription: row.training_description,
+    cover: { uploadedUrl: row.game_cover_url ?? null },
     organizer: {
       id: row.organizer_id,
       displayName: row.organizer_display_name,

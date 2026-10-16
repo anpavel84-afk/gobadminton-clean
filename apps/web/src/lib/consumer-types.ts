@@ -121,6 +121,7 @@ export type GameTrainerSummary = {
 };
 
 export type Game = {
+  cover?: { uploadedUrl: string | null };
   id: string;
   version: number;
   title: string;

@@ -1,0 +1,48 @@
+# Issue 47 — independent game photo and live venue inheritance
+
+From: source author. To: trusted publisher → independent exact-SHA SOURCE QA.
+Date: 2026-10-16. Status: UNVERIFIED / NOT_TESTED. Prior independent QA supplied: `{}`.
+
+Base: `bc6d98230a890998bff846956bf6fdd4a35dbde7`, initially clean branch `automation/issue-47`.
+Exact base reference: https://github.com/anpavel84-afk/gobadminton-clean/tree/bc6d98230a890998bff846956bf6fdd4a35dbde7
+This is the supplied claim checkout. Accepted DEV provenance cannot be established from this checkout alone; do not relabel it ACCEPTED. It includes migration 0034 and venue-cover source. No live release record, account, database, environment, service or deployment was accessed.
+
+## Authorized bounded assignment
+
+Caller supplied immutable `GOBADMINTON_AUTONOMY_V1`, `target=dev`, `kind=source_only`, `max_attempts=3`, Issue 47. Only paths under `apps/api/**`, `apps/web/src/**`, `apps/web/test/**`, `apps/web/public/**`, `packages/contracts/**`, `docs/handoffs/**` may change. No commit, push, Git metadata modification, automation, secrets, services, PROD or self-QA. No new task, media/RBAC/moderation stack, queues, design system or second writer. Existing assignments remain untouched.
+
+Owner behavior: two upload/edit targets only: authorized venue management and optional image for one game during existing creation, with replacement/removal under current game-management rights. Ordinary organizers require no global admin role. Effective priority is approved own-game image → current approved cover of the immutable stored game venue → standard default. Venue media is never copied into a game. All public media must use decoded/sanitized/moderation-approved derivatives and current resource authorization. Preserve game confidentiality, replay/session/actor/CAS/rate rules and organizer avatars. Same effective image in Discovery, cards, detail, My Games and map schedules. Existing venue management remains separately authorized.
+
+## Source implementation facts (not executed behavior)
+
+- Additive `apps/api/migrations/0035_game_cover.sql`: nullable game-owned key/approval/actor binding, current approved own/effective URL functions, existing GC trigger, account-retirement cleanup. Exact fallback uses `g.venue_id`, including when venue display data resolves a merge chain. No copied venue key and no input URL.
+- `GameCoverService` and controller provide GET/PUT/DELETE `/games/{gameId}/cover` through consumer session auth, Origin/CSRF, shared Game version CAS, actor/session-fenced MutationRunner, current Game owner/manager authorization and reauthorization on replay. Preflight scopes the game before decoding/provider work. Provider remains synchronous and uses existing image policy/rate budgets; bounded image processing and existing stage verification bind exact approved sanitized bytes. Only draft/published games can change media.
+- GET `/media/game-covers/{key}` checks current approved own slot, existing Game detail viewer rights, reads storage, then rechecks access/current key. `no-store`, `Vary: Cookie`, nosniff and sandbox CSP. Game keys are never resolved by venue/profile/global image routes. Draft/unlisted media is manager-only, matching current Game detail rights; no new invitation/share-token entitlement is invented.
+- Existing avatar store collector also recognizes game references. Replaced/deleted files are journaled; inactive uploader slots are retired. Public own images hidden by moderation are withheld, retaining a removable owner slot and safe venue/default fallback.
+- Common Game projection and map preview SQL expose additive `cover`. Venue cover projection now also uses immutable `g.venue_id`. API contracts/generated types updated. Clients use `GameCover` for discovery, GameCard, detail, personal cards and own upcoming games. Map venue schedules already reuse DiscoveryGameCard. Venue photograph and organizer avatar remain separate.
+- Create form uses optional local selection/crop/preview/confirmation, then existing create-draft → approved cover upload → publish with the updated Game version. No selected photo uses the original create/publish path. Failed or uncertain image upload leaves a draft and stops publishing. The management screen can retry/replace/remove and publish the retained draft through the existing publication API. No second cover picker or navigation replacement.
+- Existing profile-cover editor is removed from ProfilePage, and profile cover HTTP writes are retired to enforce two edit targets. Existing legacy profile media/read privacy and internal storage code remain. This is an intentional compatibility consequence of the explicit two-location rule; older clients attempting `/me/cover` PUT/DELETE receive 404. Legacy storage/privacy regression tests now seed via the internal service rather than exposing a third public write route. Account retirement still cleans legacy images.
+
+## STYLE_GUIDE_PARITY
+
+Authority read: `docs/decisions/OWNER_DECISION_FRONTEND_STYLE_GUIDE_FIRST_V001.md`; canonical published references https://nougat-wise-76949869.figma.site/#guide and https://nougat-wise-76949869.figma.site/#construction-kit . Frozen source identity recorded by that decision: `5a04ac69a259245c72da3ed5618326e8398396b4dd2c861b6eef4aecd726b1d6`.
+
+Patterns named by authority and retained: Forms/FormGroup/validation, Buttons/input/range controls, media/image blocks, GameCard, existing detail media and personal cards, status/error notices. Existing screen navigation and composition remain. The game editor composes these families without new CSS/tokens or layout systems. It reuses existing bounded media preprocessing and crop behavior.
+
+`STYLE_GUIDE_GAP`: `docs/operations/FRONTEND_STYLE_GUIDE_FIRST_V001.md` is absent in this checkout. Frozen Make source is not present locally; PLAN is excluded from this assignment and no external reference was fetched. Exact screen-specific Make parity and the canonical standard image appearance are UNVERIFIED. No frozen reference is invented and existing frontend is not claimed as visual authority. The bounded extension is optional game-photo selection inside the current form and management flow using the families listed in the Owner decision. No `OWNER_VISUAL_OVERRIDE` was supplied. Independent visual QA must compare actual guide/kit and screen-specific source before acceptance. Existing venue/default media component is reused, not presented as newly verified canonical design.
+
+## Evidence and actual results
+
+- Source author read canonical rules and inspected source. Initial worktree was clean; exact base is above.
+- Contract Game types were regenerated with the existing generator (`--write`), not validated.
+- Tests, typecheck, lint, build, disposable PostGIS, hosted CI, browser execution, authenticated UAT and runtime checks: **NOT_TESTED**, per explicit no-self-QA instruction. There is no author PASS or independent QA result.
+- Added API executable cases in `apps/api/test/integration/venue-cover.test.ts`: ordinary consumer game creation, own/venue/default priority, two games, current venue replacement, removal/hide, draft/unlisted confidentiality and cross-route negatives, real sanitized image dimensions/metadata, provider rejection, CSRF/foreign/session/replay/CAS/concurrent replacement, budgets, retirement and additive upgrade/rollback. Runs only under the existing disposable DB integration gate. Unit contract tests cover Game CAS and retired third write target.
+- `apps/web/test/game-cover.test.tsx`: rendering/projections, safe URL filtering, optional local selector and upload/delete wire protocol. `apps/web/test/game-cover.browser.mjs`: executable loopback mobile/desktop management selection/crop/confirmation, uncertain save reconciliation/retry, replacement, own priority after venue change, deletion to current venue/default and denied controls. Browser script requires an independently prepared local web server and the existing Playwright tool installation; it does not start services or use live accounts. Mocked browser evidence cannot substitute for authenticated hosted UAT.
+
+## Rollback and review limits
+
+Before publication, discard only this author's task edits; no Git changes are performed by the author. After release, use the normal previous immutable images/source rollback procedure under authorized release control. Keep additive schema 0035 and a cover-aware collector: the pre-47 collector does not know game references and must not sweep retained game media. Do not run schema rollback on populated slots. `migrations/rollback/0035_game_cover.sql` is for unused installations only, refuses populated slots under a table lock and must run transactionally with writers stopped by the authorized operator. No rollback has been executed.
+
+Publication, accepted-base provenance, new exact-SHA independent SOURCE QA, full same-SHA hosted Product CI with disposable PostGIS, normal DEV backup/images/smoke/receiver/ACCEPTED records and real authenticated synthetic mobile/desktop UAT remain separate gates. Do not infer product DONE, accepted DEV, pending=false or PROD from this source handoff. Preserve NOT_TESTED/history. Product UAT must show independent venue/game sources, inheritance-only propagation, own priority/deletion, foreign/private/unmoderated negatives and actual guide parity.
+
+One next bounded action: trusted publisher records the exact candidate SHA and commit permalinks for this handoff/source, then hands that SHA to independent SOURCE QA. This author is forbidden to commit/push; no candidate permalink or durable GitHub publication is claimed here.
