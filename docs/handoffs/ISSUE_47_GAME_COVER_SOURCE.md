@@ -85,3 +85,38 @@ Actual results: canonical rule/source inspection and edits only. Regression exec
 Independent regression entry point remains `P1_ORIGIN=http://127.0.0.1:18984 node apps/web/test/game-cover-create.browser.mjs`, using an independently prepared loopback server/build and existing Playwright installation. The author did not run it or start services. Hosted authenticated UAT and all same-SHA gates remain separate requirements.
 
 Rollback: undo only this repair's form-lifetime changes, browser scenario additions and this handoff section. No schema/runtime rollback needed for this bounded repair. Next bounded action: trusted publisher records the new exact candidate SHA and GitHub permalinks, then independent QA executes the regression and required source checks against that SHA. Publication is prohibited to this author; this addition is local pending authorized publication, with no invented candidate permalink or accepted-base provenance.
+
+## Bounded native correction after auto3 and hosted CI defects
+
+From: source author. To: parent publisher → NEW independent exact-SHA SOURCE QA / full hosted Product CI → normal existing DEV unit.
+Date: 2026-10-16. Status: UNVERIFIED; source correction only, no product acceptance.
+Correction base: `6c82c2700250ccc0c20ff7b0cc9de2eb3da863f1`, clean existing `automation/issue-47` worktree at entry.
+Exact base: https://github.com/anpavel84-afk/gobadminton-clean/tree/6c82c2700250ccc0c20ff7b0cc9de2eb3da863f1
+
+**Actual PM scope correction**, supplied by caller, durable reference:
+https://github.com/anpavel84-afk/gobadminton-clean/issues/47#issuecomment-6205963893
+The two photo upload/edit locations concern GAME images (own-game image versus venue fallback). They do not retire previously Owner-approved/ACCEPTED personal profile header #36. Earlier statements in this handoff about “two targets only” and “retired third write target” are superseded in that scope; retained as history, not current implementation authority. This is an actual scope fix, not a new Owner assumption. No privacy default or real account changed.
+
+Restored from `bc6d98230a890998bff846956bf6fdd4a35dbde7`:
+- Entire profile `cover.controller.ts`, `ProfilePage.tsx` and `integration/cover-upload.test.ts` match baseline byte-for-byte. Real PUT/DELETE HTTP tests replace the invented internal service/fake response helper. Existing DELETE body validation remains 400 for malformed commands; no server/404 workaround. Cookie/CSRF/session/CAS/replay/rate/moderation/read privacy and consumer selection/crop/delete remain the baseline implementation.
+- `/me/cover` OpenAPI path and existing profile cover schemas match baseline. Original profile contract/CAS/controller unit suite is retained in full, with additive game contract/controller tests alongside it. Game/venue write endpoints, game authorization distinctions, private media, projection and fallback code are retained.
+- Removed TS18048 source by restoring original real HTTP tests, rather than widening types or asserting away an undefined cookie.
+
+Other actual defects corrected:
+- `game-cover.test.tsx` tests effective cover in GameHero/Discovery/My Games. Organizer identity/avatar assertions run in real Discovery, detail GameTerms and personal-card identity slots, with a separate approved avatar URL and explicit rejection of game/venue cover URLs in those slots. No new identity UI was added to Hero.
+- Create publication keeps the legitimate `if (busy) return` guard, photo readiness and synchronous mutation-ref concurrency fence; adds a preview-step fence. No replay or retry is introduced. Existing WEB-01 guard assertion stays intact.
+- Real-page synthetic browser runner retains cancel-during-decode, selection→preview→back crop/confirmation, roundtrip removal, upload rejection, no-image and lost upload receipt cases. Adds two publication clicks in the same JavaScript task, lost create receipt and committed-but-lost publish receipt. Assertions require exactly one create/upload/publish sequence, read-only recovery and no creation replay or unsafe retry. These are executable scenarios, not browser execution evidence.
+
+STYLE_GUIDE_PARITY: restores accepted #36 UI exactly; no new presentation, CSS, tokens, identity UI or second game picker. Canonical Owner decision read; local `.tools/style-reference/README.md`, manifest and guide text inspected as rendered reference inputs only. The operational guide file named by AGENTS is absent. Frozen PLAN parity remains UNVERIFIED and original bounded game-photo STYLE_GUIDE_GAP remains; no network/PLAN access or invented visual override.
+
+Actual offline results:
+- Baseline byte comparison of the three restored files, profile OpenAPI path/schemas and retained original unit suite: passed. Game/venue/media paths retained. The first structural script used `{venueId}` instead of the actual existing `{id}` venue parameter and failed that assertion; corrected script passed without changing the contract.
+- `node --check apps/web/test/game-cover-create.browser.mjs`: passed (syntax only).
+- Existing contract scripts `generate-game-types.mjs`, `generate-unified-types.mjs`, `generate-friendship-types.mjs`: verified without writes. `check-admin-protocol.mjs`: passed.
+- `git diff --check`: passed.
+- Full `check-openapi.mjs`: could not execute, `ERR_MODULE_NOT_FOUND` for `@apidevtools/swagger-parser`. No node_modules/Vitest/TypeScript/Playwright installation is available in this worktree; no dependencies downloaded or Corepack network used.
+- Vitest, API/Web typecheck/lint/build, browser execution, disposable PostGIS, full hosted CI, independent SOURCE QA, authenticated mobile/desktop UAT and DEV acceptance: **NOT_TESTED** here. No author check is independent QA. Caller reports hosted ProductCI 38834328919/38834332419 failure on `f89c69ba2075644bf0521388d8955fd89749cea2`; that history is not cleared by this correction.
+
+All edits remain in the original allowed paths. No second writer, commit/push/Git metadata write, assignment/controlfile/CI change, secrets/liveDB/env/accounts/services/network/downloads/root/PROD/PLAN/VPN action. No new unit or attempt counter reset. Rollback before publication: reverse only this correction's diff against the exact correction base, retaining prior history and game-cover implementation. No runtime/schema rollback executed.
+
+One next bounded action: parent commits on the normal branch, records candidate exact SHA/permalinks, resumes the SAME existing unit for NEW independent exact-SHA SOURCE QA and full hosted Product CI including disposable PostGIS; then normal authorized DEV backup/immutable images/smoke/receiver/root-owned ACCEPTED same SHA/digests/pending=false and real authenticated synthetic UAT. This local correction is not DONE/ACCEPTED/PROD and has no new GitHub permalink until parent publication.

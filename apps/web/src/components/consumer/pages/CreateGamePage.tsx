@@ -307,7 +307,8 @@ export function CreateGamePage() {
 
   async function onPublish() {
     if (!previewPayload || !me || !location) return;
-    if (busy || !photoReady) return;
+    if (busy) return;
+    if (!photoReady || step !== "preview") return;
     if (!gameStartIsFuture(previewPayload.startsAt)) {
       setError("Начало уже прошло, пока вы проверяли игру. Выберите другое время."); setStep("form"); return;
     }

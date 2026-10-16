@@ -12,7 +12,7 @@ const venue={id:venueId,cityId:city,name:'Synthetic venue',address:'Fixture',tim
 const own='/v1/media/game-covers/'+'b'.repeat(64)+'.webp';
 const browser=await chromium.launch({headless:true,chromiumSandbox:true});
 try {
- for(const width of [360,1440]) for(const scenario of ['approved','rejected','uncertain','none','cancel','roundtrip','roundtrip-remove']) {
+ for(const width of [360,1440]) for(const scenario of ['approved','rejected','uncertain','none','cancel','roundtrip','roundtrip-remove','double-publish','publish-uncertain','create-uncertain']) {
   const context=await browser.newContext({viewport:{width,height:1000}});
   const events=[];let saved=null,uploaded=null,readbacks=0;
   // Hold the real decoder deterministically. Cancellation must clear busy state
@@ -49,6 +49,7 @@ try {
     const input=req.postDataJSON();assert.equal(input.venueId,venueId);
     assert.equal('cover' in input,false,'venue/own media is not copied into creation payload');
     saved={...input,id,version:7,title:'Synthetic game',status:'draft',venue,cover:{uploadedUrl:null},organizer:{id:null,displayName:'Synthetic organizer',publicContact:'Synthetic contact'},trainer:null,confirmedCount:1,availablePlaces:3};
+    if(scenario==='create-uncertain')return route.abort(); // draft committed, receipt lost
     return reply(saved,201);
    }
    if(p===`/v1/games/${id}/cover`&&req.method()==='PUT'){
@@ -62,9 +63,11 @@ try {
    }
    if(p===`/v1/games/${id}/publish`){
     events.push('publish');assert.equal(req.method(),'POST');
-    assert.equal(req.postDataJSON().expectedVersion,['approved','roundtrip'].includes(scenario)?11:7,'publish uses upload receipt version, or original version without an image');
+    assert.equal(req.postDataJSON().expectedVersion,['approved','roundtrip','double-publish','publish-uncertain'].includes(scenario)?11:7,'publish uses upload receipt version, or original version without an image');
     assert.equal(req.headers()['x-csrf-token'],'fixture');
-    saved={...saved,status:'published',version:saved.version+1};return reply(saved);
+    saved={...saved,status:'published',version:saved.version+1};
+    if(scenario==='publish-uncertain')return route.abort(); // published, receipt lost
+    return reply(saved);
    }
    if(p.startsWith('/v1/media/'))return uploaded?route.fulfill({body:uploaded,contentType:'image/webp'}):route.abort();
    return reply({items:[],nextCursor:null});
@@ -127,7 +130,21 @@ try {
    await page.getByRole('button',{name:'Проверить игру',exact:true}).click();
    await page.getByRole('heading',{name:'Проверка перед публикацией',exact:true}).waitFor();
   }
-  await page.getByRole('button',{name:'Опубликовать игру',exact:true}).click();
+  if(scenario==='double-publish'){
+   // Two clicks in one JS task bypass React's next-render disabled state.
+   // The synchronous mutation ref must stop the second invocation.
+   await page.getByRole('button',{name:'Опубликовать игру',exact:true}).evaluate(button=>{button.click();button.click();});
+  }else await page.getByRole('button',{name:'Опубликовать игру',exact:true}).click();
+  if(scenario==='create-uncertain'){
+   await page.getByRole('heading',{name:'Результат публикации неизвестен',exact:true}).waitFor();
+   assert.deepEqual(events,['draft']);assert.equal(saved.status,'draft');
+   assert.equal(await page.getByRole('button',{name:'Опубликовать игру',exact:true}).count(),0);
+   await page.getByRole('button',{name:'Проверить состояние',exact:true}).click();
+   await page.getByRole('status').filter({hasText:'Список обновлён'}).waitFor();
+   assert.deepEqual(events,['draft'],'recovery must read without replaying creation');
+   await context.close();continue;
+  }
+
   if(['rejected','uncertain'].includes(scenario)){
    await page.getByRole('status').filter({hasText:'Игра сохранена как черновик'}).waitFor();
    assert.deepEqual(events,['draft','cover'],'failed/uncertain image must stop publication');
@@ -135,9 +152,10 @@ try {
    assert.equal(await page.getByRole('button',{name:'Опубликовать игру',exact:true}).count(),0);
   }else{
    await page.getByRole('heading',{name:'Игра опубликована',exact:true}).waitFor();
-   assert.deepEqual(events,['approved','roundtrip'].includes(scenario)?['draft','cover','publish']:['draft','publish']);
+   assert.deepEqual(events,['approved','roundtrip','double-publish','publish-uncertain'].includes(scenario)?['draft','cover','publish']:['draft','publish']);
    assert.equal(saved.status,'published');
-   assert.equal(saved.cover.uploadedUrl,['approved','roundtrip'].includes(scenario)?own:null);
+   if(scenario==='publish-uncertain')assert.ok(readbacks>0,'lost publish receipt must reconcile without replay');
+   assert.equal(saved.cover.uploadedUrl,['approved','roundtrip','double-publish','publish-uncertain'].includes(scenario)?own:null);
   }
   await context.close();
  }

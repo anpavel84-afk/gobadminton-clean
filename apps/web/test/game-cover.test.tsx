@@ -4,7 +4,7 @@ import { GameCover, gameCoverUrl } from "../src/components/consumer/games/GameCo
 import { GamePhotoSelection } from "../src/components/consumer/games/GamePhotoSelection";
 import { gameCoverRequest } from "../src/lib/game-cover-api";
 import { DiscoveryGameCard } from "../src/components/consumer/discovery/DiscoveryGameCard";
-import { GameHero, PersonalGameCard } from "../src/components/consumer/games/GameDetailComposition";
+import { GameHero, GameTerms, PersonalGameCard } from "../src/components/consumer/games/GameDetailComposition";
 import type { Game } from "../src/lib/consumer-types";
 const venueUrl="/v1/media/venue-covers/"+"a".repeat(64)+".png",ownUrl="/v1/media/game-covers/"+"b".repeat(64)+".png";
 afterEach(()=>vi.unstubAllGlobals());
@@ -19,9 +19,18 @@ describe("Issue47 effective game cover",()=>{
   it("renders the effective image in discovery, detail and My Games without changing avatars",()=>{
     const game={id:"synthetic",version:1,title:"Synthetic game",status:"published",visibility:"public",activityKind:"regular",trainer:null,trainingDescription:null,
       cover:{uploadedUrl:ownUrl},venue:{id:"venue",name:"Synthetic",address:"Synthetic",cityId:"city",timezone:"Europe/Moscow",cover:{uploadedUrl:venueUrl}},
-      organizer:{id:null,displayName:"Organizer",publicContact:"Synthetic"},startsAt:"2029-01-01T12:00:00Z",endsAt:"2029-01-01T13:00:00Z",timezone:"Europe/Moscow",applicationDeadlineAt:"2029-01-01T12:00:00Z",capacity:4,externalReservedCount:0,confirmedCount:1,availablePlaces:3,formatKey:"doubles",levelRule:{scaleId:"test",scaleVersion:1,allowedLevelIds:["test"]},settlement:{mode:"external",purpose:"no_trainer_fee",terms:"Synthetic",priceMinor:null,currency:null}} as Game;
+      organizer:{id:null,displayName:"Organizer",publicContact:"Synthetic",avatar:{uploadedUrl:"/v1/media/avatars/"+"d".repeat(64)+".png",providerUrl:null}},startsAt:"2029-01-01T12:00:00Z",endsAt:"2029-01-01T13:00:00Z",timezone:"Europe/Moscow",applicationDeadlineAt:"2029-01-01T12:00:00Z",capacity:4,externalReservedCount:0,confirmedCount:1,availablePlaces:3,formatKey:"doubles",levelRule:{scaleId:"test",scaleVersion:1,allowedLevelIds:["test"]},settlement:{mode:"external",purpose:"no_trainer_fee",terms:"Synthetic",priceMinor:null,currency:null}} as Game;
     for(const element of [<DiscoveryGameCard key="discovery" game={game}/>,<GameHero key="detail" game={game}/>,<PersonalGameCard key="mine" game={game} ownStatus="confirmed"/>]){
-      const html=renderToStaticMarkup(element);expect(html).toContain(ownUrl);expect(html).toContain("Organizer");
+      const html=renderToStaticMarkup(element);expect(html).toContain(ownUrl);
+    }
+    for(const element of [<DiscoveryGameCard key="identity-discovery" game={game}/>,<GameTerms key="identity-detail" game={game}/>,<PersonalGameCard key="identity-mine" game={game} ownStatus="confirmed"/>]){
+      const html=renderToStaticMarkup(element);
+      expect(html).toContain("Organizer");
+      expect(html).toContain(game.organizer.avatar!.uploadedUrl!);
+      const identity=html.match(/<span class="gb-discovery-avatar"[^>]*>(.*?)<\/span>/)?.[1];
+      expect(identity).toContain(game.organizer.avatar!.uploadedUrl!);
+      expect(identity).not.toContain(ownUrl);
+      expect(identity).not.toContain(venueUrl);
     }
     const inherited={...game,cover:{uploadedUrl:venueUrl}};
     expect(renderToStaticMarkup(<DiscoveryGameCard game={inherited}/>)).toContain(venueUrl);
