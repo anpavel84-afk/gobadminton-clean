@@ -92,3 +92,67 @@ acceptance. No release gate is satisfied by this source handoff. Preserve #36/#4
 #57 delivered semantics and current Admin/CI. No active immutable assignment was edited.
 Before publication discard only this task's patch; afterward revert exact candidate via
 existing guarded process. No runtime rollback attempted or authorized in this session.
+
+
+## 2026-10-17 — bounded native CI repair
+
+From: native source repair author. To: parent publisher / independent QA.
+Status: WORKING_DRAFT — uncommitted, NOT ACCEPTED; no independent QA or product DONE.
+Exact base: `b20757cd1170206a3764e7836654bfe235e1f2a9`, initially clean,
+branch `automation/issue-61`, sole writer in the assigned worktree.
+Base: https://github.com/anpavel84-afk/gobadminton-clean/tree/b20757cd1170206a3764e7836654bfe235e1f2a9
+Failing Product CI: https://github.com/anpavel84-afk/gobadminton-clean/actions/runs/38959446897
+Assignment-supplied evidence: Web lint and one of 522 Web tests failed; Web
+typecheck and the other six jobs passed. Not fetched or independently verified
+here: network is outside scope. This historical FAIL and all prior FAILs remain.
+
+Authorized scope: ONE bounded repair, only the two specified test files and this
+append. No product, dependencies, network, environment, services, runtime/control
+files, permissions, secrets, live DB, other worktrees or git metadata changed.
+No commit/push; parent handles publication. No #62/#64 work or delegation.
+Original maximum three attempts remains unchanged; no counter read or reset.
+
+Diagnosis and narrowed fix:
+
+- Removed only the unused getComputedStyle global declaration from
+  games-map-layout.browser.mjs; browser regression logic is unchanged.
+- The fetch harness returns venues with the requested cityId, but its original
+  game's nested venue uses cityId "city". The new normal-map case requested
+  MOSCOW_BUNDLE.cityId. Real listAllUpcomingCityGames filters out mismatching
+  game.venue.cityId, so the actual fallback count was correctly zero.
+- Introduced a per-test responseGame reset to the original game in beforeEach.
+  Only the new normal-map case explicitly sets its nested venue to the selected
+  Moscow city. Existing city/date/stale-response regressions retain their fixtures.
+  Explicit day 2026-10-18 is used consistently across this case's renders. With
+  the existing 2026-10-16 fake clock, the published/public game starts on that
+  Moscow date, has two available places and a future application deadline.
+- The existing real component/API pagination/eligibility flow remains: initial
+  render runs effects, 40 seconds resolves both sequential pages, later renders
+  read the snapshot; after onAvailability(false), another render reads fallback
+  state. Real pagination deduplicates the repeated game ID to exactly one game.
+  Exact Venue · 1, normal-map no-catalog/no-chip and closed-fallback assertions
+  remain. Existing date/city zero-game assertions remain; no expected count was
+  weakened, no test skipped and no additional fake hook or map mock introduced.
+
+Checks actually executed:
+
+- node --check apps/web/test/games-map-layout.browser.mjs: exit 0.
+- git diff --check: exit 0, including final append.
+- Focused Vitest, ESLint, typecheck and full suite: NOT_TESTED. Root and web
+  node_modules/.bin are absent; vitest/eslint are absent from PATH. No install
+  or download attempted. Node syntax checking does not establish lint/test success.
+- Actual public map/browser, DEV and legitimate authenticated mobile/desktop
+  product UAT: NOT_TESTED. This existing mocked-transport/dynamic-map harness
+  cannot establish actual map behavior or authenticated UAT.
+
+Next bounded action: parent reviews/publishes the exact patch and handoff and
+records the resulting candidate SHA/permalink. NEW independent exact-SHA read-only
+QA and full hosted Product CI are still required. Then use only the original
+existing DEV pipeline with root backup/rollback and all current three-image Admin
+opt-ins preserved; establish exact root ACCEPTED/live SHA/noPending separately
+from actual mobile/desktop product UAT. Root ACCEPTED is not product acceptance.
+All original acceptance criteria, historical #54/CI FAILs and the original max-3
+bound remain binding. No release or acceptance is claimed. Before publication,
+rollback is removal of only this repair diff in the three allowed files; afterward
+parent uses the existing guarded exact-candidate revert process. No commit or
+candidate permalink was created because publication is reserved to the parent.

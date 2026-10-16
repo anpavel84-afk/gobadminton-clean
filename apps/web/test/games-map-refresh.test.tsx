@@ -42,6 +42,7 @@ let inFlight: number;
 let maxInFlight: number;
 let fail: boolean;
 let ignoreAbort: boolean;
+let responseGame: Game;
 function render(cityId = "city", day = "", venueId?: string) {
   hooks.cursor = 0;
   const tree = GamesMapView({ cityId, day, venueId });
@@ -54,6 +55,7 @@ beforeEach(() => {
   vi.useFakeTimers(); vi.setSystemTime(new Date("2026-10-16T12:00:00Z"));
   hooks.slots = []; hooks.cleanups = []; hooks.effects = []; hooks.cursor = 0;
   requests = []; inFlight = 0; maxInFlight = 0; fail = false; ignoreAbort = false;
+  responseGame = game;
   vi.stubGlobal("window", new EventTarget());
   vi.stubGlobal("fetch", vi.fn((url: string, init: RequestInit) => new Promise<Response>((resolve, reject) => {
     const parsed = new URL(url, "https://example.test");
@@ -65,7 +67,7 @@ beforeEach(() => {
       finish();
       const isVenue = parsed.pathname === "/v1/venues";
       resolve(new Response(JSON.stringify(fail ? { title: "Offline" } : {
-        items: [isVenue ? { ...venue, cityId: parsed.searchParams.get("cityId") } : game],
+        items: [isVenue ? { ...venue, cityId: parsed.searchParams.get("cityId") } : responseGame],
         nextCursor: parsed.searchParams.has("cursor") ? null : "page-2",
       }), { status: fail ? 503 : 200 }));
     }, 20000);
@@ -172,8 +174,12 @@ it("navigates catalog selection to the full venue route and renders only that ve
 
 
 it("does not mount redundant venue controls on the normal map; exposes a closed fallback only on failure", async () => {
-  render(MOSCOW_BUNDLE.cityId); await vi.advanceTimersByTimeAsync(40000);
-  const normal = renderToStaticMarkup(render(MOSCOW_BUNDLE.cityId));
+  const cityId = MOSCOW_BUNDLE.cityId;
+  const day = "2026-10-18";
+  // The real API client rejects games whose venue belongs to another city.
+  responseGame = { ...game, venue: { ...venue, cityId } };
+  render(cityId, day); await vi.advanceTimersByTimeAsync(40000);
+  const normal = renderToStaticMarkup(render(cityId, day));
   expect(normal).not.toContain('aria-label="Все площадки города"');
   expect(normal).not.toContain("Venue · 1");
   const failMap = (node: React.ReactNode): void => {
@@ -181,8 +187,8 @@ it("does not mount redundant venue controls on the normal map; exposes a closed 
     node.props.onAvailability?.(false);
     Children.forEach(node.props.children, failMap);
   };
-  failMap(render(MOSCOW_BUNDLE.cityId));
-  const fallback = renderToStaticMarkup(render(MOSCOW_BUNDLE.cityId));
+  failMap(render(cityId, day));
+  const fallback = renderToStaticMarkup(render(cityId, day));
   expect(fallback).toContain('class="gb-games-map-fallback"');
   expect(fallback).toContain("Venue · 1");
   expect(fallback).not.toContain("<details open");
