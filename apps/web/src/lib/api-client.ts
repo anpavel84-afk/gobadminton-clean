@@ -135,7 +135,7 @@ export function listGames(query: {
   activityKind?: "regular" | "trainer_led";
   cursor?: string;
   limit?: number;
-}) {
+}, signal?: AbortSignal) {
   const params = new URLSearchParams();
   if (query.cityId) params.set("cityId", query.cityId);
   if (query.startsFrom) params.set("startsFrom", query.startsFrom);
@@ -144,7 +144,7 @@ export function listGames(query: {
   if (query.cursor) params.set("cursor", query.cursor);
   if (query.limit) params.set("limit", String(query.limit));
   const qs = params.toString();
-  return apiFetch<GamePage>(`/v1/games${qs ? `?${qs}` : ""}`);
+  return apiFetch<GamePage>(`/v1/games${qs ? `?${qs}` : ""}`, { signal });
 }
 
 export type VenueCatalogPage = {
@@ -153,19 +153,20 @@ export type VenueCatalogPage = {
 };
 
 /** Read catalog entries, not just venues referenced by currently active games. */
-export function listVenueCatalogPage(cityId: string, cursor?: string) {
+export function listVenueCatalogPage(cityId: string, cursor?: string, signal?: AbortSignal) {
   const params = new URLSearchParams({ cityId, limit: "50" });
   if (cursor) params.set("cursor", cursor);
-  return apiFetch<VenueCatalogPage>(`/v1/venues?${params.toString()}`);
+  return apiFetch<VenueCatalogPage>(`/v1/venues?${params.toString()}`, { signal });
 }
 
 /** Fetch every city page; never silently return a partially loaded catalog. */
-export async function listAllCityVenues(cityId: string): Promise<ApiResult<VenueSummary[]>> {
+export async function listAllCityVenues(cityId: string, signal?: AbortSignal): Promise<ApiResult<VenueSummary[]>> {
   const items = new Map<string, VenueSummary>();
   const cursors = new Set<string>();
   let cursor: string | undefined;
   for (let page = 0; page < 20; page += 1) {
-    const result = await listVenueCatalogPage(cityId, cursor);
+    const result = await listVenueCatalogPage(cityId, cursor, signal);
+    if (signal?.aborted) return { ok: false, status: 0, error: "Загрузка отменена." };
     if (!result.ok) return result;
     for (const venue of result.data.items) {
       if (venue.cityId === cityId) items.set(venue.id, venue);
@@ -177,6 +178,25 @@ export async function listAllCityVenues(cityId: string): Promise<ApiResult<Venue
     cursor = next;
   }
   return { ok: false, status: 0, error: "Не удалось загрузить полный каталог площадок." };
+}
+
+/** Bounded complete snapshot; never present partial pagination as an exact count. */
+export async function listAllUpcomingCityGames(cityId: string, signal?: AbortSignal): Promise<ApiResult<Game[]>> {
+  const games = new Map<string, Game>();
+  const cursors = new Set<string>();
+  const startsFrom = new Date().toISOString();
+  let cursor: string | undefined;
+  for (let page = 0; page < 100; page++) {
+    const result = await listGames({ cityId, startsFrom, cursor, limit: 50 }, signal);
+    if (signal?.aborted) return { ok: false, status: 0, error: "Загрузка отменена." };
+    if (!result.ok) return result;
+    for (const game of result.data.items) if (game.venue.cityId === cityId) games.set(game.id, game);
+    const next = result.data.nextCursor;
+    if (!next) return { ok: true, status: 200, data: [...games.values()] };
+    if (cursors.has(next)) return { ok: false, status: 0, error: "Повтор страницы расписания." };
+    cursors.add(next); cursor = next;
+  }
+  return { ok: false, status: 0, error: "Полное расписание недоступно. Уточните город." };
 }
 
 export function getGame(gameId: string) {
