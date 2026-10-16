@@ -157,6 +157,55 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
         "0032_friendship_core",
         "0033_owned_cover",
         "0034_venue_cover",
+        "0035_game_cover",
+      ]);
+      // Verify the additive game slot exists, beyond its migration record.
+      const gameCoverColumns = await pool.query<{
+        column_name: string; data_type: string; is_nullable: string;
+      }>(
+        `SELECT column_name, data_type, is_nullable
+         FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = 'games'
+           AND column_name IN ('cover_key', 'cover_moderation_approval_id', 'cover_actor_id')
+         ORDER BY column_name`,
+      );
+      expect(gameCoverColumns.rows).toEqual([
+        { column_name: "cover_actor_id", data_type: "uuid", is_nullable: "YES" },
+        { column_name: "cover_key", data_type: "text", is_nullable: "YES" },
+        { column_name: "cover_moderation_approval_id", data_type: "uuid", is_nullable: "YES" },
+      ]);
+      const gameCoverConstraints = await pool.query<{ conname: string; contype: string }>(
+        `SELECT conname, contype::text
+         FROM pg_constraint
+         WHERE conrelid = 'public.games'::regclass
+           AND conname IN ('game_cover_binding', 'games_cover_key_check',
+             'games_cover_key_key', 'games_cover_actor_id_fkey',
+             'games_cover_moderation_approval_id_fkey')
+         ORDER BY conname`,
+      );
+      expect(gameCoverConstraints.rows).toEqual([
+        { conname: "game_cover_binding", contype: "c" },
+        { conname: "games_cover_actor_id_fkey", contype: "f" },
+        { conname: "games_cover_key_check", contype: "c" },
+        { conname: "games_cover_key_key", contype: "u" },
+        { conname: "games_cover_moderation_approval_id_fkey", contype: "f" },
+      ]);
+      const gameCoverFunctions = await pool.query<{ own: boolean; effective: boolean; retire: boolean }>(
+        `SELECT to_regprocedure('public.game_own_cover_url(uuid)') IS NOT NULL AS own,
+           to_regprocedure('public.game_effective_cover_url(uuid)') IS NOT NULL AS effective,
+           to_regprocedure('public.retire_inactive_game_cover()') IS NOT NULL AS retire`,
+      );
+      expect(gameCoverFunctions.rows).toEqual([{ own: true, effective: true, retire: true }]);
+      const gameCoverTriggers = await pool.query<{ tgname: string }>(
+        `SELECT tgname FROM pg_trigger
+         WHERE NOT tgisinternal AND tgenabled = 'O'
+           AND ((tgrelid = 'public.games'::regclass AND tgname = 'game_cover_cleanup')
+             OR (tgrelid = 'public.users'::regclass AND tgname = 'inactive_game_cover'))
+         ORDER BY tgname`,
+      );
+      expect(gameCoverTriggers.rows).toEqual([
+        { tgname: "game_cover_cleanup" },
+        { tgname: "inactive_game_cover" },
       ]);
       // Additive Friends S1 upgrade must be physically present in the
       // migration smoke; merely recording the filename is insufficient.
