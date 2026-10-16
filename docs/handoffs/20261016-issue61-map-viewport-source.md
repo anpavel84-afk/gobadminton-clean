@@ -156,3 +156,59 @@ bound remain binding. No release or acceptance is claimed. Before publication,
 rollback is removal of only this repair diff in the three allowed files; afterward
 parent uses the existing guarded exact-candidate revert process. No commit or
 candidate permalink was created because publication is reserved to the parent.
+
+## 2026-10-17 — correction of supplied independent QA FAIL
+
+From: source author. To: same authorized publisher / independent read-only QA.
+Status: WORKING_DRAFT — NOT ACCEPTED; source only, uncommitted.
+Exact clean base: `df84f60e1bf809d764f33ae990b74ffbd4147c93`.
+Base permalink: https://github.com/anpavel84-afk/gobadminton-clean/tree/df84f60e1bf809d764f33ae990b74ffbd4147c93
+The supplied review of that SHA is FAIL: (1) load incorrectly advertised genuine
+settlement before idle, (2) executable regression coverage omitted zero-game venues,
+long names, loading/error/fallback usability and camera/filter return assertions.
+Reviewer reported syntax/whitespace checks passed but Vitest could not run because
+dependencies were absent and Corepack download failed with EAI_AGAIN. These are
+supplied historical results, not checks performed by this author.
+
+Changes limited to GamesVenueMap, focused browser regressions and this handoff:
+
+- Independent settlement state starts false; only MapLibre idle sets it true.
+  movestart clears it. React renders can no longer overwrite idle/movestart with
+  load readiness. Availability/load readiness remain separate from settlement.
+- Layout browser entry/return and resize geometry waits now require idle settlement.
+- Actual public-map venue harness retains 5/4/6 exact schedule, time/free-place,
+  tap/click/keyboard and mouse-pan assertions. Return asserts exact query context,
+  saved camera and actual projected marker position, after idle. Starts with
+  activity=regular; optional GB_MAP_DAY supplies a controlled fixture date.
+  Also requires GB_MAP_EMPTY_VENUE JSON {id,name}: real zero-count marker activation,
+  exact empty venue schedule with no game links, existing preselected create path,
+  and return. Missing fixtures fail rather than skip.
+- New games-map-fallback.browser.mjs is explicitly LOCAL MOCKED-API coverage,
+  restricted to loopback GB_MAP_LOCAL_ORIGIN (default http://localhost:3000).
+  Uses actual browser layout, real application components and keyboard navigation;
+  intentionally unavailable approved map on local origin, never a mock presented as
+  an actual map. At all five widths it gates loading, checks disabled refresh,
+  closed disclosure visibility, keyboard expansion/zero-game activation, long-name
+  document geometry, exact empty schedule/create link, preserved activity, error
+  with retained unknown counts, enabled retry and recovery to verified zero.
+  Routes only public test API responses and guest 401; no fake authenticated UAT.
+
+STYLE_GUIDE_PARITY: existing canonical controls/status/disclosure/shell only;
+no presentation change or new pattern. Binding Owner decision read; operational
+Style Guide file remains absent as already recorded. #61 override and prior bounded
+gap record unchanged. #62 remains proposal-only.
+
+Execution status: NO tests, syntax checks, lint, build, browser or self-QA performed,
+per explicit source-author instruction. No PASS claimed. No dependency installation,
+network/deployment, services, automation, secrets, git metadata, commit or push.
+All prior FAILs, the original max-three-attempt bound, #54 framing/pan failures,
+three-image Admin opt-ins and #36/#47/#52/#54/#57 requirements remain unchanged.
+No attempt counter read/reset; no independent writer/delegation started.
+
+Next bounded action: publisher records exact candidate SHA and publishes this artifact;
+new exact-SHA independent read-only QA and full hosted Product CI, then only original
+existing DEV pipeline with root backup/rollback. Exact root ACCEPTED/liveSHA/noPending
+is separate from actual mobile/desktop public-map and legitimate authenticated UAT
+and Owner acceptance. No candidate permalink exists before authorized publication.
+Rollback before publication: remove only this correction patch; after publication use
+existing guarded exact-candidate revert. No release/runtime action authorized here.

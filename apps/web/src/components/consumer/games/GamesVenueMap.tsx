@@ -22,6 +22,7 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability }: { ve
   const callbacks = useRef({ onSelect, onAvailability }); callbacks.current = { onSelect, onAvailability };
   const markers = useRef(new Map<string, { marker: maplibregl.Marker; button: HTMLButtonElement }>());
   const [ready, setReady] = useState(false);
+  const [settled, setSettled] = useState(false);
   const [status, setStatus] = useState("Загружаем карту города…");
   const unavailable = () => { callbacks.current.onAvailability?.(false); setStatus("Карта недоступна: ресурсы, Range, CSP или соединение. Площадки доступны в раскрываемом списке."); };
   useEffect(() => {
@@ -51,8 +52,8 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability }: { ve
           if (camera && [camera.lng, camera.lat, camera.zoom].every(Number.isFinite) && camera.lng >= 36 && camera.lng <= 39.5 && camera.lat >= 54.5 && camera.lat <= 56.5)
             instance.jumpTo({ center: [camera.lng, camera.lat], zoom: Math.min(16, Math.max(0, camera.zoom)) });
         } catch { /* Storage is optional. */ }
-        instance.on("movestart", () => { container.current?.setAttribute("data-map-settled", "false"); });
-        instance.on("idle", () => { container.current?.setAttribute("data-map-settled", "true"); });
+        instance.on("movestart", () => { if (alive) setSettled(false); });
+        instance.on("idle", () => { if (alive) setSettled(true); });
         instance.on("moveend", () => {
           const center = instance!.getCenter();
           try { sessionStorage.setItem("gb-games-map-camera", JSON.stringify({ lng: center.lng, lat: center.lat, zoom: instance!.getZoom() })); } catch { /* Storage is optional. */ }
@@ -93,5 +94,5 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability }: { ve
       remove: entry => entry.marker.remove(),
     });
   }, [ready, venues, counts]);
-  return <><div ref={container} data-map-ready={ready} data-map-settled={ready} className="gb-games-map-canvas" />{status && <p role="status">{status}</p>}</>;
+  return <><div ref={container} data-map-ready={ready} data-map-settled={settled} className="gb-games-map-canvas" />{status && <p role="status">{status}</p>}</>;
 }
