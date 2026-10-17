@@ -60,7 +60,7 @@ function browserOriginRequest(request: Request, origin: string, callback: boolea
   const supplied = request.headers.get("origin");
   if (supplied && supplied !== origin) return false;
   if (callback && request.method === "GET") return true;
-  if (request.method === "POST") return supplied === origin;
+  if (["POST", "PUT", "DELETE"].includes(request.method)) return supplied === origin;
   return supplied === origin || request.headers.get("sec-fetch-site") === "same-origin";
 }
 

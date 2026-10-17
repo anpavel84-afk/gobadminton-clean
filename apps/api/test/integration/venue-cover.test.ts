@@ -17,7 +17,7 @@ import { loadEnv } from "../../src/config/env";
 import { GamesModule } from "../../src/games/games.module";
 import { GamesService } from "../../src/games/games.service";
 import { FakeModerationProvider } from "../../src/moderation/fake-provider";
-import { MODERATION_PROVIDER, safeImageDecision } from "../../src/moderation/provider";
+import { MODERATION_PROVIDER, ModerationProviderError, safeImageDecision } from "../../src/moderation/provider";
 import { ProfilesModule } from "../../src/profiles/profiles.module";
 import { AvatarService } from "../../src/profiles/avatar.service";
 import { registerAvatarHttp } from "../../src/profiles/avatar-http";
@@ -74,6 +74,32 @@ run("venue cover: isolated disposable PostGIS / actual API / games projections",
     return app.inject({method:"PUT",url:`/v1/admin/venues/${id}/cover`,headers:{...headers(a),"content-type":"image/png","x-venue-version":String(version),"idempotency-key":key,...patch},payload:body});
   }
   const read=(url:string)=>app.inject({method:"GET",url});
+  it("superadmin manages imported and nonowned eligible catalog covers without changing creator ownership",async()=>{
+    const admin=await actor("superadmin");
+    for(const imported of [false,true]) {
+      const v=await venue();
+      if(imported)await pool.query("UPDATE venues SET created_by_user_id=NULL WHERE id=$1",[v.id]);
+      const access=await app.inject({method:"GET",url:`/v1/admin/venues/${v.id}/cover/access`,headers:headers(admin)});
+      expect(access.statusCode,access.body).toBe(200);
+      expect((await upload(v.id,1,other)).statusCode).toBe(404);
+      const saved=await upload(v.id,1,admin);expect(saved.statusCode,saved.body).toBe(200);
+      const row=(await pool.query("SELECT created_by_user_id FROM venues WHERE id=$1",[v.id])).rows[0];
+      expect(row.created_by_user_id).toBe(imported?null:owner.userId);
+      const removed=await app.inject({method:"DELETE",url:`/v1/admin/venues/${v.id}/cover`,headers:headers(admin),payload:{expectedVersion:saved.json().version}});
+      expect(removed.statusCode,removed.body).toBe(200);
+      await pool.query("UPDATE venues SET lifecycle_state='retired' WHERE id=$1",[v.id]);
+      expect((await upload(v.id,removed.json().version,admin)).statusCode).toBe(404);
+    }
+  });
+  it("two-venue selection isolation and reload persist exact selected cover",async()=>{
+    const a=await venue(),b=await venue(),admin=await actor("superadmin");
+    const saved=await upload(a.id,1,admin);expect(saved.statusCode,saved.body).toBe(200);
+    const cover=async(id:string)=>app.inject({method:"GET",url:`/v1/admin/venues/${id}/cover`,headers:headers(admin)});
+    const first=await cover(a.id),second=await cover(b.id);
+    expect(first.json().hasCover).toBe(true);expect(second.json()).toMatchObject({version:1,hasCover:false});
+    expect((await cover(a.id)).json()).toEqual(first.json());
+    expect((await pool.query("SELECT version,cover_key FROM venues WHERE id=$1",[b.id])).rows[0]).toMatchObject({version:1,cover_key:null});
+  });
   it("rejects anonymous/player/foreign manager/support, CSRF, origin, stale step-up and invalid binary before publication",async()=>{
     const v=await venue(),calls=fake.calls;
     for(const [patch,status] of [[{cookie:""},401],[{cookie:playerCookie},401],[{"x-csrf-token":""},403],[{origin:"https://evil.invalid"},403]] as Array<[Record<string,string>,number]>)expect((await upload(v.id,1,owner,randomUUID(),png,patch)).statusCode).toBe(status);
@@ -153,6 +179,33 @@ run("venue cover: isolated disposable PostGIS / actual API / games projections",
     const fresh=await app.inject({method:"GET",url:`/v1/admin/venues/${v.id}/cover/access`,headers:headers()});
     expect(fresh.json()).toMatchObject({version:3,hasCover:false,cover:{uploadedUrl:null}});
     expect((await read(url)).statusCode).toBe(404);
+  });
+  it("moderation unavailable during replacement preserves the published cover, version and public projection",async()=>{
+    const v=await venue(),saved=await upload(v.id);
+    expect(saved.statusCode,saved.body).toBe(200);
+    const previous=saved.json(),url=previous.cover.uploadedUrl;
+    expect(url).toEqual(expect.any(String));
+    const before=(await pool.query("SELECT version,cover_key,cover_moderation_approval_id,cover_actor_id FROM venues WHERE id=$1",[v.id])).rows[0];
+    const publicBefore=(await read(`/v1/venues/${v.id}`)).json();
+    expect(publicBefore.cover).toEqual({uploadedUrl:url});
+    const bytesBefore=await read(url);expect(bytesBefore.statusCode).toBe(200);
+    // Distinct sanitized bytes must reach moderation rather than reuse an approval.
+    const replacement=await sharp({create:{width:900,height:600,channels:3,background:"red"}}).png().toBuffer();
+    const calls=fake.calls;
+    fake.fixture=async()=>{throw new ModerationProviderError("unavailable");};
+    try{
+      const failed=await upload(v.id,previous.version,owner,randomUUID(),replacement);
+      expect(failed.statusCode,failed.body).toBe(503);
+      expect(failed.json().code).toBe("MODERATION_TEMPORARILY_UNAVAILABLE");
+      expect(fake.calls).toBeGreaterThan(calls);
+      expect((await pool.query("SELECT version,cover_key,cover_moderation_approval_id,cover_actor_id FROM venues WHERE id=$1",[v.id])).rows[0]).toEqual(before);
+      const access=await app.inject({method:"GET",url:`/v1/admin/venues/${v.id}/cover`,headers:headers()});
+      expect(access.statusCode,access.body).toBe(200);expect(access.json()).toEqual(previous);
+      const publicAfter=await read(`/v1/venues/${v.id}`);
+      expect(publicAfter.statusCode).toBe(200);expect(publicAfter.json()).toEqual(publicBefore);
+      const retained=await read(url);expect(retained.statusCode).toBe(200);expect(retained.rawPayload).toEqual(bytesBefore.rawPayload);
+      expect((await pool.query("SELECT count(*)::int AS n FROM venue_admin_actions WHERE venue_id=$1 AND action='cover'",[v.id])).rows[0].n).toBe(1);
+    }finally{fake.fixture=async()=>safeImageDecision();}
   });
   it("keeps CAS and moderation rejection atomic; retirement hides public bytes",async()=>{
     const v=await venue();
