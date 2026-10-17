@@ -26,6 +26,7 @@ function harness(method: string, outcome: string) {
   const fetch = async (_url: string, request: typeof requests[number]) => {
     requests.push(request);
     const key = request.headers["Idempotency-Key"];
+    assert.ok(key, "actual save must supply an idempotency key");
     if (outcome === "stepup" && receipts.has(key) && state.stepups === 0) return new Response(JSON.stringify({code: "ADMIN_STEP_UP_REQUIRED"}), {status: 403});
     if (!receipts.has(key)) {
       assert.equal(Number(request.headers["X-Venue-Version"]), 7);
@@ -68,10 +69,12 @@ for (const method of ["PUT", "DELETE"]) {
       await h.invoke();
       assert.equal(h.commits(), 1);
       assert.equal(h.requests.length, 2);
-      assert.equal(h.requests[1].method, original.method);
-      assert.equal(h.requests[1].body, original.body);
-      assert.equal(h.requests[1].headers["Idempotency-Key"], original.key);
-      assert.equal(h.requests[1].headers["X-Venue-Version"], String(original.version));
+      const replay = h.requests[1];
+      assert.ok(replay, "explicit retry must issue a second request");
+      assert.equal(replay.method, original.method);
+      assert.equal(replay.body, original.body);
+      assert.equal(replay.headers["Idempotency-Key"], original.key);
+      assert.equal(replay.headers["X-Venue-Version"], String(original.version));
       assert.equal(h.state.pending, null);
       assert.equal(h.state.receipt.version, 8);
       assert.equal(h.state.changed, 1);

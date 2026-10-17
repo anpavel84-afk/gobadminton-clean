@@ -25,7 +25,6 @@ export function VenuePhoto({id,session,changed,authorityLoss,stepup,onBusy}:{id:
   }).catch(e=>{if(active)fail(e);}).finally(()=>{clearTimeout(timeout);if(active)setReading(false);});
   return()=>{active=false;clearTimeout(timeout);controller.abort();};
  // The component is keyed by venue and version by its parent.
- // eslint-disable-next-line react-hooks/exhaustive-deps
  },[id,readAttempt]);
  async function confirmAccess(){
   if(busy||reading)return;

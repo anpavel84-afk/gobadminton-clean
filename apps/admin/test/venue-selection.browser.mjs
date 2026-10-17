@@ -1,3 +1,4 @@
+/* global document, innerWidth, structuredClone */
 /**
  * Synthetic browser regression; NEVER authenticated DEV UAT.
  * Independent QA provisions Playwright + Chromium outside the repository and
@@ -10,7 +11,9 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { pathToFileURL } from 'node:url';
+import { URL, URLSearchParams, pathToFileURL } from 'node:url';
+import process from 'node:process';
+import { Buffer } from 'node:buffer';
 
 const url = new URL(process.env.ADMIN_BROWSER_URL ?? 'http://localhost:3010');
 if (!['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)) {

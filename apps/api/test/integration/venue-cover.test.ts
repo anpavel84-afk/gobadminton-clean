@@ -78,13 +78,15 @@ run("venue cover: isolated disposable PostGIS / actual API / games projections",
     const admin=await actor("superadmin");
     for(const imported of [false,true]) {
       const v=await venue();
-      if(imported)await pool.query("UPDATE venues SET created_by_user_id=NULL WHERE id=$1",[v.id]);
+      // Imported catalog rows still have mandatory creator provenance in the actual schema.
+      const creator=imported?await user():owner.userId;
+      if(imported)await pool.query("UPDATE venues SET created_by_user_id=$2 WHERE id=$1",[v.id,creator]);
       const access=await app.inject({method:"GET",url:`/v1/admin/venues/${v.id}/cover/access`,headers:headers(admin)});
       expect(access.statusCode,access.body).toBe(200);
       expect((await upload(v.id,1,other)).statusCode).toBe(404);
       const saved=await upload(v.id,1,admin);expect(saved.statusCode,saved.body).toBe(200);
       const row=(await pool.query("SELECT created_by_user_id FROM venues WHERE id=$1",[v.id])).rows[0];
-      expect(row.created_by_user_id).toBe(imported?null:owner.userId);
+      expect(row.created_by_user_id).toBe(creator);
       const removed=await app.inject({method:"DELETE",url:`/v1/admin/venues/${v.id}/cover`,headers:headers(admin),payload:{expectedVersion:saved.json().version}});
       expect(removed.statusCode,removed.body).toBe(200);
       await pool.query("UPDATE venues SET lifecycle_state='retired' WHERE id=$1",[v.id]);
@@ -210,8 +212,10 @@ run("venue cover: isolated disposable PostGIS / actual API / games projections",
   it("keeps CAS and moderation rejection atomic; retirement hides public bytes",async()=>{
     const v=await venue();
     fake.fixture=async()=>{const d=safeImageDecision();return {...d,flagged:true,categories:{...d.categories,violence:true}};};
+    // Distinct bytes must miss any prior legitimate allow-approval cache.
+    const rejected=await sharp({create:{width:900,height:600,channels:3,background:"#123abc"}}).png().toBuffer();
     const callsBefore=fake.calls;
-    expect((await upload(v.id)).statusCode).toBe(422);
+    expect((await upload(v.id,1,owner,randomUUID(),rejected)).statusCode).toBe(422);
     expect(fake.calls).toBe(callsBefore+1); // provider was really consulted
     expect((await pool.query("SELECT cover_key,version FROM venues WHERE id=$1",[v.id])).rows[0]).toEqual({cover_key:null,version:1});
     fake.fixture=async()=>safeImageDecision();await pool.query("DELETE FROM content_moderation_rate_budgets");
