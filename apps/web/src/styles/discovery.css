@@ -190,7 +190,8 @@
 .gb-games-map-context { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
 .gb-games-view-action { display: none; }
 @media (max-width: 720px) {
-  .gb-games-list-return { display: none; }
+  /* Mobile already has the above-nav List action; outrank foundation Button. */
+  .gb-consumer .gb-games-map-context > .gb-games-list-return { display: none; }
   .gb-games-view-action { position: fixed; z-index: 20; left: 0; right: 0; height: 60px; display: flex; align-items: center; justify-content: center; pointer-events: none; background: var(--gb-white); }
   .gb-games-view-action > button { pointer-events: auto; min-height: 44px; gap: 8px; }
   .gb-discovery[data-view="list"] { padding-bottom: 60px; }

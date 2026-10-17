@@ -13,6 +13,7 @@ try {
     await page.locator('[data-map-ready="true"][data-map-settled="true"]').waitFor({ timeout: 30000 });
     for (const size of [{width,height:600}, {width,height:1000}, {width:900,height:width}]) {
       await page.setViewportSize(size);
+      const mobile = size.width <= 720;
       const measure = () => page.evaluate(() => {
         const rect = node => { const r=node.getBoundingClientRect(); return {top:r.top,bottom:r.bottom,height:r.height,width:r.width,left:r.left,right:r.right}; };
         const box = selector => { const node=document.querySelector(selector); if (!node) throw new Error(selector); return rect(node); };
@@ -49,6 +50,8 @@ try {
         });
         geometry = await measure();
         console.log(JSON.stringify({size,phase:'settled',geometry}));
+        assert.equal(await page.locator('.gb-games-list-return').isVisible(), !mobile, 'inline return is desktop-only; mobile uses the above-nav List action');
+        assert.equal(await page.getByRole('button',{name:'Список',exact:true}).isVisible(), mobile, 'mobile List action remains available');
         assert.ok(geometry.settled, 'genuine map idle required');
         assert.ok(Math.abs(geometry.frame.bottom-geometry.bottom) <= 2, 'frame reaches measured action/nav/viewport');
         assert.ok(Math.abs(geometry.map.top-geometry.expectedTop) <= 2, 'only visible required controls above canvas');
@@ -80,7 +83,6 @@ try {
         assert.equal(await page.getByRole('group',{name:'Все площадки города',exact:true}).count(),0,'closed fallback has no accessible catalog focus stops');
       } else assert.equal(await page.getByRole('group',{name:'Все площадки города',exact:true}).count(),0,'normal map has no catalog cloud');
       assert.equal(await page.getByRole('group',{name:'Вид игр',exact:true}).count(),0,'no duplicate view pills');
-      const mobile = size.width <= 720;
       await page.getByRole('button',{name:mobile ? 'Список' : '← К списку игр',exact:true}).click();
       await page.locator('.gb-discovery-hero').waitFor();
       assert.equal(await page.locator('.gb-discovery-create').count(),1,'original create banner');
