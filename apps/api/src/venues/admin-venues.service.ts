@@ -8,9 +8,9 @@ import type { VenueFields, VenueCommand } from "../admin/venues.dto";
 import { extractIdentityDiscriminator, normalizeVenueText, venueDedupeKey } from "./venue-normalize";
 import { effectiveVenueCtes } from "./effective-venue.query";
 
-type Row = {id:string;city_id:string;name:string;address:string;timezone:string;latitude:number;longitude:number;lifecycle_state:string;canonical_venue_id:string|null;identity_discriminator:string;version:number};
-const select = "SELECT v.*, ST_Y(location::geometry) AS latitude, ST_X(location::geometry) AS longitude FROM venues v";
-const dto = (r:Row) => ({id:r.id,cityId:r.city_id,name:r.name,address:r.address,timezone:r.timezone,latitude:Number(r.latitude),longitude:Number(r.longitude),lifecycleState:r.lifecycle_state,canonicalVenueId:r.canonical_venue_id,identityDiscriminator:r.identity_discriminator,version:r.version});
+type Row = {id:string;city_id:string;city_name?:string;name:string;address:string;timezone:string;latitude:number;longitude:number;lifecycle_state:string;canonical_venue_id:string|null;identity_discriminator:string;version:number};
+const select = "SELECT v.*, (SELECT name_ru FROM cities WHERE id=v.city_id) AS city_name, ST_Y(location::geometry) AS latitude, ST_X(location::geometry) AS longitude FROM venues v";
+const dto = (r:Row) => ({id:r.id,cityId:r.city_id,cityName:r.city_name,name:r.name,address:r.address,timezone:r.timezone,latitude:Number(r.latitude),longitude:Number(r.longitude),lifecycleState:r.lifecycle_state,canonicalVenueId:r.canonical_venue_id,identityDiscriminator:r.identity_discriminator,version:r.version});
 /** Venue-owned writes. Admin supplies current authorization and one transaction. */
 @Injectable()
 export class AdminVenuesService {

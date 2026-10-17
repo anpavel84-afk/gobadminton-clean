@@ -74,6 +74,32 @@ run("venue cover: isolated disposable PostGIS / actual API / games projections",
     return app.inject({method:"PUT",url:`/v1/admin/venues/${id}/cover`,headers:{...headers(a),"content-type":"image/png","x-venue-version":String(version),"idempotency-key":key,...patch},payload:body});
   }
   const read=(url:string)=>app.inject({method:"GET",url});
+  it("superadmin manages imported and nonowned eligible catalog covers without changing creator ownership",async()=>{
+    const admin=await actor("superadmin");
+    for(const imported of [false,true]) {
+      const v=await venue();
+      if(imported)await pool.query("UPDATE venues SET created_by_user_id=NULL WHERE id=$1",[v.id]);
+      const access=await app.inject({method:"GET",url:`/v1/admin/venues/${v.id}/cover/access`,headers:headers(admin)});
+      expect(access.statusCode,access.body).toBe(200);
+      expect((await upload(v.id,1,other)).statusCode).toBe(404);
+      const saved=await upload(v.id,1,admin);expect(saved.statusCode,saved.body).toBe(200);
+      const row=(await pool.query("SELECT created_by_user_id FROM venues WHERE id=$1",[v.id])).rows[0];
+      expect(row.created_by_user_id).toBe(imported?null:owner.userId);
+      const removed=await app.inject({method:"DELETE",url:`/v1/admin/venues/${v.id}/cover`,headers:headers(admin),payload:{expectedVersion:saved.json().version}});
+      expect(removed.statusCode,removed.body).toBe(200);
+      await pool.query("UPDATE venues SET lifecycle_state='retired' WHERE id=$1",[v.id]);
+      expect((await upload(v.id,removed.json().version,admin)).statusCode).toBe(404);
+    }
+  });
+  it("two-venue selection isolation and reload persist exact selected cover",async()=>{
+    const a=await venue(),b=await venue(),admin=await actor("superadmin");
+    const saved=await upload(a.id,1,admin);expect(saved.statusCode,saved.body).toBe(200);
+    const cover=async(id:string)=>app.inject({method:"GET",url:`/v1/admin/venues/${id}/cover`,headers:headers(admin)});
+    const first=await cover(a.id),second=await cover(b.id);
+    expect(first.json().hasCover).toBe(true);expect(second.json()).toMatchObject({version:1,hasCover:false});
+    expect((await cover(a.id)).json()).toEqual(first.json());
+    expect((await pool.query("SELECT version,cover_key FROM venues WHERE id=$1",[b.id])).rows[0]).toMatchObject({version:1,cover_key:null});
+  });
   it("rejects anonymous/player/foreign manager/support, CSRF, origin, stale step-up and invalid binary before publication",async()=>{
     const v=await venue(),calls=fake.calls;
     for(const [patch,status] of [[{cookie:""},401],[{cookie:playerCookie},401],[{"x-csrf-token":""},403],[{origin:"https://evil.invalid"},403]] as Array<[Record<string,string>,number]>)expect((await upload(v.id,1,owner,randomUUID(),png,patch)).statusCode).toBe(status);

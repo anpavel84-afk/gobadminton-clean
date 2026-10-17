@@ -9,7 +9,7 @@ import { AvatarService } from "../profiles/avatar.service";
 import { sanitizeAvatar } from "../profiles/avatar-image";
 import { ContentModerationService } from "../moderation/moderation.service";
 
-/** No consumer role or supplied UI flag can grant venue.manage. Ownership further narrows it. */
+/** No consumer role or supplied UI flag can grant venue.manage. Only superadmin may manage eligible catalog venues without creator ownership. */
 @Injectable()
 export class VenueCoverService {
   private processing = 0;
@@ -19,8 +19,8 @@ export class VenueCoverService {
     const user = await c.query("SELECT id FROM users WHERE id=$1 AND status='active' FOR UPDATE",[actor.principal.user_id]);
     if (!user.rowCount) throw notFound("VENUE_NOT_FOUND", "Площадка недоступна для редактирования");
     const row = (await c.query<{version:number;has_cover:boolean}>(`SELECT version, cover_key IS NOT NULL AS has_cover FROM venues
-      WHERE id=$1 AND created_by_user_id=$2 AND lifecycle_state IN ('unverified','verified') FOR UPDATE`,
-      [id, actor.principal.user_id])).rows[0];
+      WHERE id=$1 AND (created_by_user_id=$2 OR $3::boolean) AND lifecycle_state IN ('unverified','verified') FOR UPDATE`,
+      [id, actor.principal.user_id, actor.roles.includes("superadmin")])).rows[0];
     if (!row) throw notFound("VENUE_NOT_FOUND", "Площадка недоступна для редактирования");
     return row;
   }
