@@ -42,7 +42,11 @@ export function VenuePhoto({id,session,changed,authorityLoss,stepup,onBusy}:{id:
    const response=await fetch(adminPath(`/v1/admin/venues/${id}/cover`),{method:operation.method,credentials:"same-origin",cache:"no-store",signal:AbortSignal.timeout(20000),headers:{"Content-Type":operation.body instanceof Blob?operation.body.type:"application/json","X-CSRF-Token":session.csrfToken,"Idempotency-Key":operation.key,"X-Venue-Version":String(operation.version)},body:operation.body});
    if(!response.ok){const p=await response.json().catch(()=>({}));throw new AdminError(p.code??"ADMIN_REQUEST_FAILED",response.status);}
    setReceipt(await response.json());setBlob(null);setConfirm(false);setPending(null);setNotice("Фото сохранено.");await changed();
-  }catch(e){if(e instanceof AdminError)setPending(null);fail(e);}finally{setBusy(false);}
+  }catch(e){
+   // A proxy/server timeout can follow a committed write. Replay the original operation.
+   if(e instanceof AdminError&&e.status<500&&e.status!==408&&e.code!=="ADMIN_UPSTREAM_UNAVAILABLE")setPending(null);
+   fail(e);
+  }finally{setBusy(false);}
  }
  return <div className="panel"><h3>Фото этой площадки</h3>{error&&<div className="notice danger" role="alert">{error}<p>При ошибке проверки изображения прежнее фото сохраняется. Можно повторить попытку.</p><button className="button outline" disabled={busy||reading||!!pending} onClick={()=>void confirmAccess()}>Подтвердить вход</button></div>}{notice&&<p role="status">{notice}</p>}
  {!receipt&&!reading&&<button className="button outline" disabled={busy||!!pending} onClick={()=>setReadAttempt(attempt=>attempt+1)}>Повторить загрузку фото</button>}
