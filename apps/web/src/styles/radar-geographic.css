@@ -53,3 +53,10 @@
 @media (max-width:720px) {
   .g2-radar-map .gb-radar-popover { right:0; }
 }
+
+/* #62: canonical court asset, purple on white; compact art with a 44px target. */
+.gb-games-map .g2-map-venue-marker { width: 44px; height: 44px; padding: 6px; border: 0; border-radius: 50%; background: transparent; display: grid; place-items: center; }
+.gb-venue-court-glyph { display: block; width: 32px; height: 32px; border-radius: 50%; background: var(--gb-white); box-shadow: 0 2px 8px rgba(19,34,26,.22); position: relative; }
+.gb-venue-court-glyph::after { content: ""; position: absolute; inset: 6px; background: var(--gb-purple); mask: url('/brand/games.svg') center / contain no-repeat; }
+.gb-games-map button.maplibregl-marker:focus-visible { outline: 3px solid var(--gb-purple); outline-offset: 3px; z-index: 2; }
+.gb-games-map button.maplibregl-marker[aria-pressed="true"] { outline: 3px solid var(--gb-purple); outline-offset: 2px; z-index: 1; }

@@ -14,7 +14,8 @@ export function GamesMapViewport({ children }: { children: ReactNode }) {
     const measure = () => {
       const bottom = (viewport?.offsetTop ?? 0) + (viewport?.height ?? window.innerHeight);
       const navBox = nav?.getBoundingClientRect();
-      const usableBottom = navBox && navBox.height > 0 ? Math.min(bottom, navBox.top) : bottom;
+      const navBottom = navBox && navBox.height > 0 ? Math.min(bottom, navBox.top) : bottom;
+      const usableBottom = navBottom - (window.matchMedia("(max-width: 720px)").matches ? 60 : 0);
       const height = Math.max(0, usableBottom - element.getBoundingClientRect().top);
       element.style.height = `${height}px`;
     };

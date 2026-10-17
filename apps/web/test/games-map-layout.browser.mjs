@@ -18,7 +18,8 @@ try {
         if (!map) return false;
         const box = map.getBoundingClientRect();
         const nav = document.querySelector('.gb-bottom-nav')?.getBoundingClientRect();
-        const bottom = Math.min(window.innerHeight, nav?.height ? nav.top : window.innerHeight);
+        const action = document.querySelector(".gb-games-view-action")?.getBoundingClientRect();
+        const bottom = Math.min(window.innerHeight, nav?.height ? nav.top : window.innerHeight, action?.height ? action.top : window.innerHeight);
         return box.height > 0 && Math.abs(box.bottom - bottom) <= 2;
       });
       const geometry = await page.evaluate(() => {
@@ -35,10 +36,12 @@ try {
       assert.ok(geometry.map.height >= (geometry.height - geometry.header.height) * .4, 'map must occupy remaining space even on short screens');
       assert.ok(geometry.documentHeight <= geometry.height + 2, 'footer/blank scroll gap');
       assert.equal(await page.getByRole('group',{name:'Все площадки города',exact:true}).count(),0,'normal map must not mount catalog focus stops');
-      await page.getByRole('button',{name:'Списком',exact:true}).click();
+      assert.equal(await page.getByRole('group',{name:'Вид игр',exact:true}).count(),0,'no duplicate view pills');
+      const mobile = size.width <= 720;
+      await page.getByRole('button',{name:mobile ? 'Список' : '← К списку игр',exact:true}).click();
       await page.locator('.gb-discovery-hero').waitFor();
       assert.equal(await page.locator('.gb-discovery-create').count(),1,'original create banner');
-      await page.getByRole('button',{name:'На карте',exact:true}).click();
+      await page.getByRole('button',{name:mobile ? 'Карта' : 'Все игры на карте',exact:true}).click();
       await page.locator('[data-map-ready="true"][data-map-settled="true"]').waitFor({timeout:30000});
     }
     await page.close();

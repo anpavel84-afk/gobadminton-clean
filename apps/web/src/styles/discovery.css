@@ -184,3 +184,15 @@
 .gb-games-map-fallback { flex: none; max-height: 40%; overflow: auto; font-size: 13px; }
 .gb-games-map-fallback [role="group"] { display: grid; gap: 8px; padding: 8px 0; }
 .gb-games-map-fallback button { overflow-wrap: anywhere; }
+
+/* #62 bounded view actions; activity chips remain filters only. */
+.gb-discovery-layout[hidden] { display: none; }
+.gb-games-map-context { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.gb-games-view-action { display: none; }
+@media (max-width: 720px) {
+  .gb-games-list-return { display: none; }
+  .gb-games-view-action { position: fixed; z-index: 20; left: 0; right: 0; height: 60px; display: flex; align-items: center; justify-content: center; pointer-events: none; background: var(--gb-white); }
+  .gb-games-view-action > button { pointer-events: auto; min-height: 44px; gap: 8px; }
+  .gb-discovery[data-view="list"] { padding-bottom: 60px; }
+  .gb-app-shell:has(.gb-games-view-action) .gb-site-footer { padding-bottom: 60px; }
+}

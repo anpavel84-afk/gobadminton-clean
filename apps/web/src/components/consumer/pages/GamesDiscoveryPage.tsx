@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { supportedLocation } from "../../../lib/discovery-city";
 import { getMe, listGames } from "../../../lib/api-client";
 import type { ActivityKind, GamePage } from "../../../lib/consumer-types";
 import { useDiscoveryCity, DiscoveryCityNotice } from "../discovery/DiscoveryCityProvider";
@@ -12,6 +13,7 @@ import { ConsumerShell } from "../ConsumerShell";
 import { CreateBanner, DiscoveryHero, DiscoveryIcon, DiscoverySidebar, DiscoverySkeleton } from "../discovery/DiscoveryComposition";
 import { DiscoveryGameCard } from "../discovery/DiscoveryGameCard";
 
+import { GamesViewAction } from "../games/GamesViewAction";
 import { GamesMapViewport } from "../games/GamesMapViewport";
 import { GamesMapView } from "../games/GamesMapView";
 
@@ -22,18 +24,28 @@ export function GamesDiscoveryPage() {
   const router = useRouter();
   const [view, setView] = useState<"list" | "map">("list");
   const [authOpen, setAuthOpen] = useState(false);
-  const { location } = useDiscoveryCity();
+  const { location: resolvedLocation } = useDiscoveryCity();
+  const [urlCity, setUrlCity] = useState<string | null>(null);
+  const location = useMemo(() => supportedLocation(urlCity) ?? resolvedLocation, [urlCity, resolvedLocation]);
   const [selectedDay, setSelectedDay] = useState("");
   const [activityFilter, setActivityFilter] = useState<"all" | ActivityKind>("all");
   const [contextReady, setContextReady] = useState(false);
+  const listScroll = useRef(0);
+  const restoreListScroll = useRef(true);
   useEffect(() => {
+    const readContext = () => {
     const query = new URLSearchParams(window.location.search);
-    if (query.get("view") === "map") setView("map");
+    setView(query.get("view") === "map" ? "map" : "list");
+    setUrlCity(query.get("cityId"));
     const day = query.get("day");
-    if (day && /^\d{4}-\d{2}-\d{2}$/.test(day)) setSelectedDay(day);
+    setSelectedDay(day && /^\d{4}-\d{2}-\d{2}$/.test(day) ? day : "");
     const activity = query.get("activity");
-    if (activity === "regular" || activity === "trainer_led") setActivityFilter(activity);
+    setActivityFilter(activity === "regular" || activity === "trainer_led" ? activity : "all");
     setContextReady(true);
+    };
+    readContext();
+    window.addEventListener("popstate", readContext);
+    return () => window.removeEventListener("popstate", readContext);
   }, []);
   useEffect(() => {
     if (!contextReady) return;
@@ -41,8 +53,21 @@ export function GamesDiscoveryPage() {
     url.searchParams.set("view", view);
     url.searchParams.set("day", selectedDay);
     url.searchParams.set("activity", activityFilter);
+    if (location) url.searchParams.set("cityId", location.cityId);
     window.history.replaceState(window.history.state, "", url);
-  }, [view, selectedDay, activityFilter, contextReady]);
+  }, [view, selectedDay, activityFilter, contextReady, location]);
+
+  function changeView(next: "list" | "map") {
+    if (next === "map") {
+      listScroll.current = window.scrollY;
+      try { sessionStorage.setItem(`gb-games-list-scroll:${key}`, String(window.scrollY)); } catch { /* Optional storage. */ }
+    }
+    const url = new URL(window.location.href);
+    url.searchParams.set("view", next);
+    window.history.pushState(window.history.state, "", url);
+    setView(next);
+  }
+
 
   const [now, setNow] = useState(() => Date.now());
   const [refresh, setRefresh] = useState(0);
@@ -56,6 +81,18 @@ export function GamesDiscoveryPage() {
   const [paging, setPaging] = useState(false);
   const [pageError, setPageError] = useState(false);
   const key = JSON.stringify([location?.cityId, location?.timezone, selectedDay, activityFilter]);
+  useEffect(() => {
+    if (view === "map") { restoreListScroll.current = true; return; }
+    if (contextReady && restoreListScroll.current && feed.key === key && feed.state !== "loading") {
+      let saved = listScroll.current;
+      try { saved = Number(sessionStorage.getItem(`gb-games-list-scroll:${key}`) ?? saved); } catch { /* Optional storage. */ }
+      const frame = requestAnimationFrame(() => {
+        window.scrollTo(0, Number.isFinite(saved) ? saved : 0);
+        restoreListScroll.current = false;
+      });
+      return () => cancelAnimationFrame(frame);
+    }
+  }, [view, contextReady, key, feed.key, feed.state]);
   const activeKey = useRef(key);
   activeKey.current = key;
   const items = feed.key === key ? futureDiscoveryItems(feed.items, Math.max(now, Date.now())) : [];
@@ -67,9 +104,9 @@ export function GamesDiscoveryPage() {
 
   const previousCity = useRef(location?.cityId);
   useEffect(() => {
-    if (previousCity.current && previousCity.current !== location?.cityId) setSelectedDay("");
+    if (!urlCity && previousCity.current && previousCity.current !== location?.cityId) setSelectedDay("");
     previousCity.current = location?.cityId;
-  }, [location?.cityId]);
+  }, [location?.cityId, urlCity]);
 
   useEffect(() => {
     const tick = () => setNow(Date.now());
@@ -152,11 +189,14 @@ export function GamesDiscoveryPage() {
         {view === "list" && <CreateBanner busy={creating} onClick={() => void goCreate()} />}
       </section>
       {createError && <div className="gb-discovery-notice" role="alert">Не удалось проверить вход. Попробуйте создать игру ещё раз.</div>}
-      <div className="gb-discovery-chips" role="group" aria-label="Вид игр">
-        <button type="button" className="gb-discovery-chip" aria-pressed={view === "list"} onClick={() => setView("list")}>Списком</button>
-        <button type="button" className="gb-discovery-chip" aria-pressed={view === "map"} onClick={() => setView("map")}>На карте</button>
-      </div>
-      {view === "map" ? <GamesMapViewport><GamesMapView cityId={location.cityId} day={selectedDay} /></GamesMapViewport> : <section className="gb-discovery-layout">
+      {view === "map" && <div className="gb-games-map-context">
+        <Button className="gb-games-list-return" variant="outline" onClick={() => changeView("list")}>← К списку игр</Button>
+        <div className="gb-discovery-chips" role="group" aria-label="Фильтр активности">
+          {([["all", "Все"], ["regular", "Обычные"], ["trainer_led", "С тренером"]] as const).map(([value, label]) => <button key={value} type="button" className="gb-discovery-chip" aria-pressed={activityFilter === value} onClick={() => setActivityFilter(value)}>{label}</button>)}
+        </div>
+      </div>}
+      {view === "map" ? <GamesMapViewport><GamesMapView cityId={location.cityId} day={selectedDay} activity={activityFilter} /></GamesMapViewport> : null}
+      <section className="gb-discovery-layout" hidden={view !== "list"}>
         <div className="gb-discovery-feed">
           <div className="gb-discovery-filters">
             <div className="gb-discovery-chips" role="group" aria-label="Фильтр активности">
@@ -177,8 +217,9 @@ export function GamesDiscoveryPage() {
           {pageError && <p role="alert" className="gb-discovery-notice">Не удалось загрузить остальные игры. Попробуйте ещё раз.</p>}
           {(showCards || state === "empty") && feed.nextCursor && state !== "stale" && <Button className="gb-discovery-more" variant="outline" loading={paging} onClick={() => void loadMore()}>{paging ? "Загружаем…" : "Показать ещё"}</Button>}
         </div>
-        <DiscoverySidebar city={location.nameRu} />
-      </section>}
+        <DiscoverySidebar city={location.nameRu} onMap={() => changeView("map")} />
+      </section>
+      <GamesViewAction view={view} onClick={() => changeView(view === "list" ? "map" : "list")} />
     </div>
     {authOpen && <AuthChooser returnPath="/games/create" intent={{ kind: "create" }} onClose={() => setAuthOpen(false)} />}
   </ConsumerShell>;

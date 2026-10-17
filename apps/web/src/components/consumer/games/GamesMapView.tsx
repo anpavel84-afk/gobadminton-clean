@@ -2,7 +2,7 @@
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useState } from "react";
 import { listAllCityVenues, listAllUpcomingCityGames } from "../../../lib/api-client";
-import type { Game, VenueSummary } from "../../../lib/consumer-types";
+import type { ActivityKind, Game, VenueSummary } from "../../../lib/consumer-types";
 import { venueSchedules, startVenueMapRefresh } from "../../../lib/games-venue-map";
 import { MOSCOW_BUNDLE } from "../../../lib/radar-map-assets";
 import { VenueScheduleCard } from "./VenueScheduleCard";
@@ -13,7 +13,7 @@ import { Button } from "../Button";
 const MapView = dynamic(() => import("./GamesVenueMap").then(module => module.GamesVenueMap), { ssr: false });
 
 /** Public venues never depend on Radar consent, a location fix or a people query. */
-export function GamesMapView({ cityId, day, venueId }: { cityId: string; day: string; venueId?: string }) {
+export function GamesMapView({ cityId, day, venueId, activity = "all" }: { cityId: string; day: string; venueId?: string; activity?: "all" | ActivityKind }) {
   const [snapshot, setSnapshot] = useState<{ cityId: string; venues: VenueSummary[]; games: Game[]; gamesReady: boolean } | null>(null);
   const [mapAvailable, setMapAvailable] = useState(true);
   const [error, setError] = useState(false);
@@ -53,7 +53,7 @@ export function GamesMapView({ cityId, day, venueId }: { cityId: string; day: st
     };
   }, [cityId, day, refresh]);
   const venues = snapshot?.cityId === cityId ? snapshot.venues : [];
-  const games = snapshot?.cityId === cityId ? snapshot.games : [];
+  const games = useMemo(() => (snapshot?.cityId === cityId ? snapshot.games : []).filter(game => activity === "all" || game.activityKind === activity), [snapshot, cityId, activity]);
   const all = useMemo(() => venueSchedules(venues, games, "", now), [venues, games, now]);
   const schedules = useMemo(() => venueSchedules(venues, games, day, now), [venues, games, day, now]);
   const counts = useMemo(() => new Map([...schedules].map(([id, games]) => [id, games.length])), [schedules]);

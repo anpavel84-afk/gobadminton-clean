@@ -31,9 +31,9 @@ it("does not expose stale games or a false empty state while schedules are unava
   expect(html).not.toContain("Stale game");
 });
 it("keeps unavailable marker counts distinct from verified zero and positive counts", () => {
-  expect(venueMarkerPresentation(venue, null)).toMatchObject({ text: "⌂", label: "Зал без игр: расписание недоступно" });
+  expect(venueMarkerPresentation(venue, null)).toMatchObject({ text: "", label: "Зал без игр: расписание недоступно" });
   expect(venueMarkerPresentation(venue, new Map())).toMatchObject({ label: "Зал без игр: расписание недоступно" });
-  expect(venueMarkerPresentation(venue, new Map([[venue.id, 0]]))).toMatchObject({ text: "⌂", label: "Зал без игр: 0 доступных игр" });
+  expect(venueMarkerPresentation(venue, new Map([[venue.id, 0]]))).toMatchObject({ text: "", label: "Зал без игр: 0 доступных игр" });
   expect(venueMarkerPresentation(venue, new Map([[venue.id, 2]]))).toMatchObject({ text: "2", className: "g2-map-marker" });
 });
 it("preserves venue identity through the encoded profile setup return path", () => {

@@ -8,6 +8,9 @@ import "../../../styles/radar-geographic.css";
 import { venueMarkerPresentation, reconcileVenueMarkers, markerActivation } from "../../../lib/games-venue-map";
 import { MOSCOW_BUNDLE, allowedMapResource } from "../../../lib/radar-map-assets";
 import type { VenueSummary } from "../../../lib/consumer-types";
+function sessionStorageVenue() {
+  try { return sessionStorage.getItem("gb-games-map-selected"); } catch { return null; }
+}
 let protocol: Protocol | undefined;
 function installProtocol() {
   if (!protocol) {
@@ -79,6 +82,7 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability }: { ve
         button.addEventListener("click", event => {
           if (!activation.allow(event.detail) || map.current?.isMoving()) return;
           const current = callbacks.current;
+          try { sessionStorage.setItem("gb-games-map-selected", venue.id); } catch { /* Optional storage. */ }
           current.onSelect(venuesRef.current.find(item => item.id === venue.id) ?? venue);
         });
         const marker = new maplibregl.Marker({ element: button }).setLngLat([venue.longitude!, venue.latitude!]).addTo(map.current!);
@@ -87,7 +91,15 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability }: { ve
       update: (entry, venue) => {
         const presentation = venueMarkerPresentation(venue, counts);
         entry.button.className = `maplibregl-marker ${presentation.className}`;
-        entry.button.textContent = presentation.text;
+        entry.button.replaceChildren();
+        if (presentation.text) entry.button.textContent = presentation.text;
+        else {
+          const glyph = document.createElement("span");
+          glyph.className = "gb-venue-court-glyph";
+          glyph.setAttribute("aria-hidden", "true");
+          entry.button.append(glyph);
+        }
+        entry.button.setAttribute("aria-pressed", String(sessionStorageVenue() === venue.id));
         entry.button.setAttribute("aria-label", presentation.label);
         entry.marker.setLngLat([venue.longitude!, venue.latitude!]);
       },

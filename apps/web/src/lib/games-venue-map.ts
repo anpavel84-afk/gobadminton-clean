@@ -20,7 +20,7 @@ export function venueMarkerPresentation(venue: Pick<VenueSummary, "id" | "name">
   const count = counts?.get(venue.id);
   return {
     className: count ? "g2-map-marker" : "g2-map-venue-marker",
-    text: count ? String(count) : "⌂",
+    text: count ? String(count) : "",
     label: count === undefined ? `${venue.name}: расписание недоступно` : `${venue.name}: ${count} доступных игр`,
   };
 }
