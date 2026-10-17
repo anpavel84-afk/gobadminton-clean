@@ -91,6 +91,10 @@ def safe_path(value):
     checked_parts = []
     for part in value.split('/'):
         if '[' in part or ']' in part:
+            # Existing Admin BFF is the sole approved catch-all route.
+            if value == 'apps/admin/src/app/v1/admin/[...path]/route.ts' and part == '[...path]':
+                checked_parts.append('path')
+                continue
             require(value.startswith('apps/web/src/app/')
                     and re.fullmatch(r'\[[A-Za-z][A-Za-z0-9_]*\]', part),
                     'unsafe route segment')

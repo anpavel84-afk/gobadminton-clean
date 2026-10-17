@@ -49,6 +49,24 @@ def existing(number=13):
 
 
 class RoutePaths(unittest.TestCase):
+    def test_exact_existing_admin_bff_route_only(self):
+        path = 'apps/admin/src/app/v1/admin/[...path]/route.ts'
+        self.assertEqual(a.safe_path(path), path)
+        self.assertTrue(a.permitted(path, ['apps/admin/src/**']))
+        self.assertFalse(a.permitted(path, ['apps/web/src/**']))
+        for unsafe in (
+            'apps/admin/src/app/v1/admin/[...path]/page.tsx',
+            'apps/admin/src/app/v1/admin/[[...path]]/route.ts',
+            'apps/admin/src/app/v1/admin/[...other]/route.ts',
+            'apps/admin/src/app/v1/admin/[...path]/../route.ts',
+            'apps/admin/src/app/v1/admin/[...path]/nested/route.ts',
+            'apps/admin/src/app/v1/admin/%5B...path%5D/route.ts',
+            'apps/admin/src/app/v1/other/[...path]/route.ts',
+            'apps/web/src/app/v1/admin/[...path]/route.ts',
+        ):
+            with self.subTest(path=unsafe), self.assertRaises(a.Hold):
+                a.safe_path(unsafe)
+
     def test_literal_dynamic_routes_and_allowed_path_admission(self):
         for path in ('apps/web/src/app/venues/[venueId]/page.tsx',
                      'apps/web/src/app/games/[gameId]/page.tsx',
