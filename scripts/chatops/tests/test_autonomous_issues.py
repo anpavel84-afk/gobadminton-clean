@@ -48,6 +48,52 @@ def existing(number=13):
     return parent, comment
 
 
+class RoutePaths(unittest.TestCase):
+    def test_literal_dynamic_routes_and_allowed_path_admission(self):
+        for path in ('apps/web/src/app/venues/[venueId]/page.tsx',
+                     'apps/web/src/app/games/[gameId]/page.tsx',
+                     'apps/web/src/app/players/[publicPlayerId]/page.tsx',
+                     'apps/web/src/app/[A0_b]/[Child2]/page.tsx'):
+            with self.subTest(path=path):
+                self.assertIs(a.safe_path(path), path)
+                self.assertEqual(a.patterns([path]), [path])
+                self.assertTrue(a.permitted(path, [path]))
+                self.assertTrue(a.permitted(path, ['apps/web/src/app/**']))
+                self.assertFalse(a.permitted(path, ['apps/web/src/other/**']))
+                parent, comment = existing(37)
+                task = json.loads(comment['body'].split('\n', 1)[1])
+                task['allowed_paths'] = [path]
+                a.validate_comment(parent, comment | {
+                    'body': a.MARKER+'\n'+json.dumps(task)}, SINCE, NOW)
+
+    def test_unsafe_routes_remain_rejected(self):
+        root = 'apps/web/src/app/'
+        paths = [root+segment+'/page.tsx' for segment in (
+            '[...slug]', '[[...slug]]', '[[id]]', '[]', '[0id]', '[_id]',
+            '[éId]', '[id-name]', '[id.name]', '[id', 'id]', 'pre[id]',
+            '[id]post', '[id][other]', '[id;echo]', '[id$]', '[id\n]',
+            '%5Bid%5D', '%255Bid%255D', '[id]/../secrets', '[id]/./child',
+            '[id]//child', '[id]/.hidden', '[id]/%2e%2e', '[id]\\child',
+            '[id]/$(touch proof)', '[id]/`id`', '[id]/a;b', '[id]/a|b',
+            '[id]/a&b', '[id]/a b', '[id]/a\x00b', '[id]/a\rb',
+            '[id]/secrets', '[id]/credentials', '[id]/node_modules',
+            '[id]/AGENTS.md', '[id]/private.pem', '[id]/private.KEY')]
+        paths += [prefix+'[id]/page.tsx' for prefix in (
+            'apps/web/src/', 'apps/web/src/application/', 'apps/web/src/app2/',
+            'apps/web/src/App/', 'apps/api/src/app/', 'packages/', 'docs/',
+            'docs/operations/', 'apps/[web]/src/app/')]
+        paths += ['', '/'+root+'[id]/page.tsx', root+'[id]/'+'a'*240,
+                  '../apps/web/src/app/[id]/page.tsx',
+                  'docs/rules/policy.md', 'docs/governance/policy.md',
+                  '/home/agentagency-dev/.gb-autonomy-state/checkpoint.json',
+                  '/home/agentagency-dev/.ssh/gobadminton-clean-chatops-ed25519',
+                  '.git/config', 'scripts/chatops/autonomous_issues.py',
+                  '/tmp/sandbox/[id]/page.tsx', None, 37]
+        for path in paths:
+            with self.subTest(path=path), self.assertRaises(a.Hold):
+                a.safe_path(path)
+
+
 class CommentAdmission(unittest.TestCase):
     def test_body_and_comment_authorizations_are_ambiguous(self):
         parent = issue()
