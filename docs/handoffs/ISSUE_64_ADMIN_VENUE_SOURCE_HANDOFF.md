@@ -44,3 +44,29 @@ Read Owner Style Guide first decision. Reused existing canonical Admin tokens (O
 No commit or candidate permalink exists from this source-only author. Publication is pending, not represented as durable GitHub completion. Do not confuse source implementation, independent QA, CI, deployment, live UAT or Owner acceptance. No PROD action. Rollback before publication: revert this task's source diff only; after publication PM uses the exact reviewed candidate's normal rollback process. Do not discard unrelated edits.
 
 Next bounded action: independent read-only QA of the exact published source SHA against immutable task acceptance, followed by PM's existing CI/release route if authorized. Preserve historical FAIL and max-three-attempt limit; no second writer or automatic next assignment. Remaining visual, browser, authenticated-UAT and release evidence must be recorded with exact permalinks by their authorized producer.
+
+
+## Independent QA FAIL repair — 2026-10-17
+
+From: source author. To: commissioned independent read-only QA / PM.
+Status: WORKING_DRAFT / UNVERIFIED; source repair only.
+Exact repair base / reviewed SHA: `34458f6d6a0edd4461fcde6822f1a18bae274a47`.
+Base permalink: https://github.com/anpavel84-afk/gobadminton-clean/tree/34458f6d6a0edd4461fcde6822f1a18bae274a47
+Branch: `automation/issue-64`; initial working tree clean. Immutable assignment and effect ceiling above remain in force. This repair addresses only the two supplied independent QA findings, not another assignment. Max-three-attempt limit remains; no new writer started.
+
+Historical independent verdict: **FAIL**, reviewed SHA above. Findings preserved:
+1. Initial cover GET failure leaves receipt null and photo controls disabled, with no read retry. Confirmation only performs step-up; reopening unchanged venue does not remount the same key. Transient failure therefore blocks management until venue switch or reload.
+2. Missing executable moderation-service failure test during replacement of an already published cover. Initial rejection and hiding an approval do not establish preservation during failed replacement.
+
+Source edits (not verified by execution):
+- `apps/admin/src/components/VenuePhoto.tsx`: one GET per mount or explicit retry, bounded by a 20-second timeout and aborted on unmount. Failed initial reads expose “Повторить загрузку фото” without requiring venue switch/reload. Read loading ends on failure and shows a distinct failed state. Confirmation awaits the existing step-up workflow and schedules a fresh bounded GET; server authorization remains authoritative, including if confirmation is cancelled or fails. No mutation auto-retry. Read/preparation/confirmation disables conflicting controls; unresolved mutation receipts continue to fence new work and keep their original replay key/body/version.
+- `apps/admin/src/lib/admin-client.ts`: actual `MODERATION_TEMPORARILY_UNAVAILABLE` code maps to the existing honest retryable previous-photo-preserved notice.
+- `apps/api/test/integration/venue-cover.test.ts`: authored disposable test publishes a real sanitized synthetic cover, submits distinct replacement bytes with unavailable moderation, asserts provider consultation and 503 code, unchanged version/cover key/approval/actor, unchanged Admin receipt and public venue projection, identical publicly served old bytes, and no extra cover audit action. Provider fixture restored in finally. Existing initial rejection, ownership negatives, CAS and game fallback tests retained.
+
+STYLE_GUIDE_PARITY: added retry action and loading/error text use the canonical Button and Error/Notices families documented in the Owner Style Guide first decision; existing panel/form/image composition retained. No new visual family, STYLE_GUIDE_GAP or OWNER_VISUAL_OVERRIDE. Referenced operations guide remains absent; external frozen Make parity remains UNVERIFIED.
+
+No tests, lint, build, browser, screenshots, DB execution, self-QA, CI, deployment, service, secret or git metadata mutation performed. Authored assertions are not results. Historical FAIL remains unresolved pending NEW independent exact-candidate-SHA read-only QA. No candidate SHA/permalink exists from this uncommitted source author. Publication is pending with the authorized executor; do not represent this local handoff as published GitHub evidence.
+
+Readiness remains separate: full hosted seven-job ProductCI including Admin build/standalone HTTP and receiver; same commissioned three-image DEV pipeline with backup/rollback, fresh root ACCEPTED/liveSHA/noPending/exact digests; before/after browser evidence at 390/430/768/1024/1440; and real authenticated DEV UAT are not established here. No legitimate test Admin session is available to this author; Owner's session is neither assumed nor accessed. Synthetic disposable tests cannot establish real DEV UAT PASS.
+
+Rollback: remove only this repair's edits in the four files named above, preserving earlier implementation and unrelated work. No runtime rollback is needed because no runtime effect was performed. Next bounded action: authorized executor publishes exact candidate, then independent read-only QA evaluates both historical findings and the immutable acceptance before any authorized existing CI/release route. Preserve historical FAIL and the max-three-attempt ceiling.

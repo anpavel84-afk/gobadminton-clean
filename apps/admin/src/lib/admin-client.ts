@@ -24,7 +24,7 @@ export async function adminRequest<T>(path: string, body?: unknown, csrf?: strin
 export function errorMessage(error: unknown) {
   if (error instanceof AdminError) {
     if (error.code === "VENUE_VERSION_CONFLICT") return "Площадка изменилась. Откройте её заново, проверьте данные и подтвердите действие.";
-    if (["CONTENT_MODERATION_UNAVAILABLE", "MODERATION_UNAVAILABLE", "AVATAR_BUSY"].includes(error.code)) return "Проверка фото временно недоступна. Прежнее фото сохранено. Повторите попытку позже.";
+    if (["CONTENT_MODERATION_UNAVAILABLE", "MODERATION_UNAVAILABLE", "MODERATION_TEMPORARILY_UNAVAILABLE", "AVATAR_BUSY"].includes(error.code)) return "Проверка фото временно недоступна. Прежнее фото сохранено. Повторите попытку позже.";
     if (error.status === 401) return "Вход истёк или доступ отозван. Войдите заново.";
     if (error.code === "ADMIN_STEP_UP_REQUIRED") return "Подтвердите вход ключом доступа ещё раз.";
     if (error.code === "ADMIN_ACTIVATION_REQUIRED") return "Код активации недействителен или истёк.";
