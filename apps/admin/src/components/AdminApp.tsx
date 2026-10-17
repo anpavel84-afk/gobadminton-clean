@@ -175,7 +175,7 @@ export function AdminApp() {
           : section === "users" ? <UserRestrictions key={session.principalId} session={session} busy={busy} fresh={Boolean(fresh)} run={run} stepup={() => prove("step_up")} />
           : section === "games" ? <GameModeration key={session.principalId} session={session} busy={busy} fresh={Boolean(fresh)} run={run} stepup={() => prove("step_up")} />
           : section === "security" ? <><h2>Журнал безопасности</h2><p>Последние события доступа и изменения учётных записей.</p>{audit ? audit.items.length ? <ul className="events">{audit.items.map(item => <li key={item.id}><strong>{item.action_key}</strong><small>{new Date(item.created_at).toLocaleString("ru-RU")}</small></li>)}</ul> : <div className="notice">Событий пока нет.</div> : <p role="status">Загружаем журнал…</p>}</>
-          : section === "venues" ? <Venues session={session} stepup={() => prove("step_up")} onAuthorityLoss={() => { clear(); }} />
+          : section === "venues" ? <Venues session={session} stepup={() => prove("step_up")} onAuthorityLoss={clear} />
           : <><h2>{nav.find(item => item.id === section)?.label}</h2><div className="notice"><strong>Раздел готовится</strong><p>Работа с этими данными пока недоступна.</p></div></>}
         </section>
       </div> : ticket ? <section className="panel">

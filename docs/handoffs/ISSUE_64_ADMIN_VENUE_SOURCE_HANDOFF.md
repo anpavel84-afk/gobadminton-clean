@@ -70,3 +70,68 @@ No tests, lint, build, browser, screenshots, DB execution, self-QA, CI, deployme
 Readiness remains separate: full hosted seven-job ProductCI including Admin build/standalone HTTP and receiver; same commissioned three-image DEV pipeline with backup/rollback, fresh root ACCEPTED/liveSHA/noPending/exact digests; before/after browser evidence at 390/430/768/1024/1440; and real authenticated DEV UAT are not established here. No legitimate test Admin session is available to this author; Owner's session is neither assumed nor accessed. Synthetic disposable tests cannot establish real DEV UAT PASS.
 
 Rollback: remove only this repair's edits in the four files named above, preserving earlier implementation and unrelated work. No runtime rollback is needed because no runtime effect was performed. Next bounded action: authorized executor publishes exact candidate, then independent read-only QA evaluates both historical findings and the immutable acceptance before any authorized existing CI/release route. Preserve historical FAIL and the max-three-attempt ceiling.
+
+## Independent QA FAIL repair, final bounded source attempt — 2026-10-17
+
+From: source author. To: commissioned independent exact-SHA read-only QA / PM.
+Status: WORKING_DRAFT / UNVERIFIED. Base/reviewed SHA:
+`632befd79846a588fd5fa9e219f5015330541fce`, branch `automation/issue-64`, initially clean.
+Exact base: https://github.com/anpavel84-afk/gobadminton-clean/tree/632befd79846a588fd5fa9e219f5015330541fce
+Same immutable source-only assignment; no new assignment or writer. Preserve max_attempts=3;
+this is the third source iteration represented in this handoff, not permission for another iteration.
+
+Historical independent verdict **FAIL** at that SHA remains recorded:
+1. AdminApp inline onAuthorityLoss changes fail/effect identity on parent renders; the
+   15-second refresh reloads page one and clears the paginated cursor.
+2. Named API two-venue GET/upload test is not executable browser selection, metadata/photo
+   action isolation or browser reload persistence coverage.
+
+Source changes authored:
+- `apps/admin/src/components/AdminApp.tsx` passes existing useCallback-stable `clear`
+  directly to Venues. Authority clearing behavior is identical; normal parent session
+  refresh no longer changes Venues.fail and retriggers its initial list effect. The
+  existing status-dependent load continues to reset pagination on deliberate filter changes.
+- `apps/admin/test/venue-selection.browser.mjs` is an executable Node test using
+  QA-provisioned Playwright/Chromium against an independently started disposable loopback
+  Admin server. It exercises the actual AdminApp browser UI and real client image
+  preprocessing, with synthetic API interception strictly inside its browser context.
+  Separate fixtures per 390/430/768/1024/1440 viewport cover opening two venues from a
+  paginated list, edit validation/cancel/save, actual 15-second parent refresh preserving
+  page and selected detail, photo selection/preview/upload on the other venue, switching
+  back, browser reload and reopening persisted synthetic metadata/photo, removal/fallback,
+  exact mutation target assertions and document overflow assertions. Optional before/after
+  screenshots are emitted only when QA provides ADMIN_BROWSER_EVIDENCE_DIR.
+  The intercepted in-memory store outlives browser reload; it does not establish backend
+  persistence. Disposable DB/API tests remain separate evidence. No fake session is sent
+  to any real backend; a synthetic auth/me response exists only within this test context.
+
+Independent invocation (NOT RUN by author): provision Playwright and Chromium outside
+repository dependencies; build/start existing Admin separately on loopback, then
+`node --test apps/admin/test/venue-selection.browser.mjs`.
+Optional ADMIN_BROWSER_URL selects that loopback server (default localhost:3010).
+PLAYWRIGHT_MODULE may specify the absolute module entry of the QA-provisioned Playwright;
+no package manifest, lockfile, CI automation or dependency was changed. This standalone
+browser suite is intentionally separate from Node-environment Vitest discovery and must
+be explicitly run by independent QA. Missing browser tooling is an execution prerequisite,
+not a passing result. Tests and screenshots have NOT been executed/generated here.
+
+No self-QA, tests, lint, build, browser launch, servers, network, DB, deployment, git
+metadata changes, commits or pushes performed. The initial edit command used unavailable
+`python`; the source edit was subsequently applied using `python3`. No test result inferred.
+No new candidate SHA/permalink exists until the authorized executor publishes these edits.
+Publication remains pending under the user's explicit no-commit/no-push ceiling.
+
+STYLE_GUIDE_PARITY: no visual/composition change, new family, gap or override in this
+repair. Existing canonical Admin panel/form/button/notice/image patterns remain.
+
+Readiness remains UNVERIFIED: NEW independent exact-SHA QA, hosted seven-job ProductCI
+including Admin build/standalone HTTP and receiver, commissioned three-image DEV pipeline
+with backup/rollback and fresh root ACCEPTED/liveSHA/noPending/exact digests, actual
+before/after viewport evidence and authenticated DEV UAT remain pending. No legitimate
+test Admin session was supplied; Owner login/session is not accessible or assumed.
+Synthetic browser/API evidence cannot become real authenticated DEV UAT PASS.
+
+Rollback: remove only this repair's callback replacement, new browser test and this
+handoff section. No runtime effect needs rollback. Next bounded action: authorized
+executor publishes candidate; commissioned independent read-only QA runs the browser
+suite and full required checks against the exact candidate, preserving all historical FAILs.
