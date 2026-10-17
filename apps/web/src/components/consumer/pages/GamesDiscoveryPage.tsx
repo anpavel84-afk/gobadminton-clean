@@ -73,6 +73,7 @@ export function GamesDiscoveryPage() {
   const [refresh, setRefresh] = useState(0);
   const [feed, setFeed] = useState<Feed>({ key: "", state: "loading", items: [], nextCursor: null });
   const cache = useRef(new Map<string, GamePage>());
+  const loadedPages = useRef(new Map<string, number>());
   const generation = useRef(0);
   const createLock = useRef(false);
   const pagingLock = useRef(false);
@@ -100,7 +101,7 @@ export function GamesDiscoveryPage() {
   }, [contextReady, view, key]);
   useEffect(() => {
     if (view === "map") { restoreListScroll.current = true; return; }
-    if (contextReady && restoreListScroll.current && feed.key === key && feed.state !== "loading") {
+    if (contextReady && restoreListScroll.current && feed.key === key && (feed.state === "ready" || feed.state === "filtered" || feed.state === "empty" || feed.state === "stale")) {
       let saved = listScroll.current;
       try { saved = Number(sessionStorage.getItem(`gb-games-list-scroll:${key}`) ?? saved); } catch { /* Optional storage. */ }
       const frame = requestAnimationFrame(() => {
@@ -139,7 +140,7 @@ export function GamesDiscoveryPage() {
   }, [today, selectedDay]);
 
   useEffect(() => {
-    if (!location) return;
+    if (!contextReady || !location) return;
     const request = ++generation.current;
     let cancelled = false;
     pagingLock.current = false;
@@ -147,19 +148,35 @@ export function GamesDiscoveryPage() {
     setPageError(false);
     setFeed({ key, state: "loading", items: [], nextCursor: null });
     void (async () => {
-      const result = await listGames({ cityId: location.cityId, ...futureDiscoveryBounds(selectedDay, location.timezone), activityKind: activityFilter === "all" ? undefined : activityFilter, limit: 50 });
-      if (cancelled || request !== generation.current) return;
-      if (!result.ok) {
-        const saved = cache.current.get(key);
-        setFeed(saved ? { ...saved, items: futureDiscoveryItems(saved.items), key, state: "stale" } : { key, state: "error", items: [], nextCursor: null });
-        return;
-      }
-      const page = { ...result.data, items: futureDiscoveryItems(result.data.items) };
+      // Persist only pagination depth, never game data or cursors. A full venue
+      // navigation destroys React memory; replay fresh public pages before
+      // restoring scroll so it cannot clamp against just the first page.
+      let depth = loadedPages.current.get(key) ?? 1;
+      try {
+        const stored = Number(sessionStorage.getItem(`gb-games-list-pages:${key}`));
+        if (Number.isSafeInteger(stored) && stored > 0) depth = stored;
+      } catch { /* Optional storage; in-document navigation retains the ref. */ }
+      const bounds = futureDiscoveryBounds(selectedDay, location.timezone);
+      let page: GamePage = { items: [], nextCursor: null };
+      let fetched = 0;
+      do {
+        const result = await listGames({ cityId: location.cityId, ...bounds, activityKind: activityFilter === "all" ? undefined : activityFilter, cursor: page.nextCursor ?? undefined, limit: 50 });
+        if (cancelled || request !== generation.current) return;
+        if (!result.ok) {
+          const saved = cache.current.get(key);
+          setFeed(saved ? { ...saved, items: futureDiscoveryItems(saved.items), key, state: "stale" } : { key, state: "error", items: [], nextCursor: null });
+          return;
+        }
+        page = { items: futureDiscoveryItems([...new Map([...page.items, ...result.data.items].map(game => [game.id, game])).values()]), nextCursor: result.data.nextCursor };
+        fetched += 1;
+      } while (fetched < depth && page.nextCursor);
+      loadedPages.current.set(key, fetched);
+      try { sessionStorage.setItem(`gb-games-list-pages:${key}`, String(fetched)); } catch { /* Optional storage. */ }
       cache.current.set(key, page);
       setFeed({ ...page, key, state: page.items.length ? (activityFilter === "all" ? "ready" : "filtered") : "empty" });
     })();
     return () => { cancelled = true; };
-  }, [location, selectedDay, activityFilter, key, refresh]);
+  }, [contextReady, location, selectedDay, activityFilter, key, refresh]);
 
   async function loadMore() {
     if (!location || !feed.nextCursor || pagingLock.current || state === "stale") return;
@@ -173,6 +190,9 @@ export function GamesDiscoveryPage() {
     if (!result.ok) { setPageError(true); return; }
     const items = futureDiscoveryItems([...new Map([...feed.items, ...result.data.items].map(game => [game.id, game])).values()]);
     const page = { items, nextCursor: result.data.nextCursor };
+    const depth = (loadedPages.current.get(key) ?? 1) + 1;
+    loadedPages.current.set(key, depth);
+    try { sessionStorage.setItem(`gb-games-list-pages:${key}`, String(depth)); } catch { /* Optional storage. */ }
     cache.current.set(key, page);
     setFeed({ ...page, key, state: items.length ? (filterActive ? "filtered" : "ready") : "empty" });
   }
