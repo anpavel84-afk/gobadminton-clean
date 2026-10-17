@@ -28,9 +28,9 @@ export function VenuePhoto({id,session,changed,authorityLoss,stepup,onBusy}:{id:
  // eslint-disable-next-line react-hooks/exhaustive-deps
  },[id,readAttempt]);
  async function confirmAccess(){
-  if(busy||reading||pending)return;
+  if(busy||reading)return;
   setBusy(true);setError("");
-  try{await stepup();setReadAttempt(attempt=>attempt+1);}catch(e){fail(e);}finally{setBusy(false);}
+  try{await stepup();if(!pending)setReadAttempt(attempt=>attempt+1);}catch(e){fail(e);}finally{setBusy(false);}
  }
  async function select(file:File){setBusy(true);setError("");setBlob(null);try{const controller=new AbortController();preparation.current=controller;setBlob(await preprocessAvatar(file,controller.signal,{x:.5,y:.5}));}catch(e){setError(e instanceof Error?e.message:errorMessage(e));}finally{setBusy(false);}}
  async function save(method:"PUT"|"DELETE"){
@@ -44,11 +44,11 @@ export function VenuePhoto({id,session,changed,authorityLoss,stepup,onBusy}:{id:
    setReceipt(await response.json());setBlob(null);setConfirm(false);setPending(null);setNotice("Фото сохранено.");await changed();
   }catch(e){
    // A proxy/server timeout can follow a committed write. Replay the original operation.
-   if(e instanceof AdminError&&e.status<500&&e.status!==408&&e.code!=="ADMIN_UPSTREAM_UNAVAILABLE")setPending(null);
+   if(e instanceof AdminError&&e.status<500&&e.status!==408&&e.code!=="ADMIN_UPSTREAM_UNAVAILABLE"&&e.code!=="ADMIN_STEP_UP_REQUIRED")setPending(null);
    fail(e);
   }finally{setBusy(false);}
  }
- return <div className="panel"><h3>Фото этой площадки</h3>{error&&<div className="notice danger" role="alert">{error}<p>При ошибке проверки изображения прежнее фото сохраняется. Можно повторить попытку.</p><button className="button outline" disabled={busy||reading||!!pending} onClick={()=>void confirmAccess()}>Подтвердить вход</button></div>}{notice&&<p role="status">{notice}</p>}
+ return <div className="panel"><h3>Фото этой площадки</h3>{error&&<div className="notice danger" role="alert">{error}<p>При ошибке проверки изображения прежнее фото сохраняется. Можно повторить попытку.</p><button className="button outline" disabled={busy||reading} onClick={()=>void confirmAccess()}>Подтвердить вход</button></div>}{notice&&<p role="status">{notice}</p>}
  {!receipt&&!reading&&<button className="button outline" disabled={busy||!!pending} onClick={()=>setReadAttempt(attempt=>attempt+1)}>Повторить загрузку фото</button>}
  {receipt?.cover.uploadedUrl?<img className="venue-cover" src={receipt.cover.uploadedUrl} alt="Текущее фото площадки"/>:<div className="notice">{receipt?"Нет опубликованного фото — используется стандартная обложка.":reading?"Загрузка текущего фото…":"Текущее фото не загружено. Повторите загрузку."}</div>}
  <label className="form-field"><span>Выбрать JPEG, PNG или WebP (до 10 МБ)</span><input type="file" accept="image/jpeg,image/png,image/webp" disabled={busy||reading||!!pending||!receipt} onChange={e=>{const file=e.target.files?.[0];e.target.value="";if(file)void select(file);}}/></label>
