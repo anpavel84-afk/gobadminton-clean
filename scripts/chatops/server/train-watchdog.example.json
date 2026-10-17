@@ -1,0 +1,10 @@
+{
+  "enabled": false,
+  "host": "SMTP_HOST",
+  "port": 587,
+  "tls": "starttls",
+  "username": "SMTP_USERNAME",
+  "password": "SMTP_PASSWORD",
+  "from": "VERIFIED_SENDER@example.invalid",
+  "to": "OWNER_ADDRESS@example.invalid"
+}

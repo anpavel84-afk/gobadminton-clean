@@ -1,0 +1,11 @@
+[Unit]
+Description=Check GoBadminton train independently every two minutes
+
+[Timer]
+OnBootSec=90
+OnUnitActiveSec=120
+AccuracySec=10
+Unit=gobadminton-train-watchdog.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,11 @@
+[Unit]
+Description=GoBadminton train read-only SMTP watchdog (no AI)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -B /home/agentagency-dev/.local/libexec/gobadminton-train-watchdog.py
+TimeoutStartSec=75
+UMask=0077
+NoNewPrivileges=true
+MemoryMax=96M
+CPUQuota=20%
