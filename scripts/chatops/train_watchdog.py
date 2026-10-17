@@ -103,7 +103,7 @@ def collect():
 
 def classify(snapshot, service, holder, helper, age):
     if helper:
-        return None  # Deliberately stopped unit while exclusive finite repair owns lock.
+        return {"kind": "maintenance"}  # Suppress, but do not reset an existing incident.
     a = snapshot.get("active") or {}
     issue = a.get("issue")
     phase = a.get("phase")
@@ -132,6 +132,8 @@ def classify(snapshot, service, holder, helper, age):
 
 
 def reconcile(ledger, incident, now, sender):
+    if incident is not None and incident.get("kind") == "maintenance":
+        return "maintenance"
     if incident is None:
         ledger.clear()
         ledger.update(version=1, status="healthy")

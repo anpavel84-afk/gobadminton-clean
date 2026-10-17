@@ -29,7 +29,13 @@ class WatchdogTests(unittest.TestCase):
         self.assertEqual(self.classify(active="inactive", holder=0)["kind"], "worker_stopped")
 
     def test_finite_operator_owns_lock_is_maintenance(self):
-        self.assertIsNone(self.classify("blocked", active="inactive", holder=234, helper=True))
+        self.assertEqual(self.classify("blocked", active="inactive", holder=234, helper=True), {"kind": "maintenance"})
+
+    def test_maintenance_does_not_rearm_existing_alert(self):
+        ledger = {"version": 1, "status": "sent", "fingerprint": "existing"}
+        before = dict(ledger)
+        self.assertEqual(w.reconcile(ledger, {"kind": "maintenance"}, 400, lambda *_: "id"), "maintenance")
+        self.assertEqual(ledger, before)
 
     def test_unknown_holder_is_alarm(self):
         self.assertEqual(self.classify(holder=234)["kind"], "worker_lock_missing")
