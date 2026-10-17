@@ -68,8 +68,8 @@ export function GamesMapView({ cityId, day, venueId, activity = "all" }: { cityI
     {!loading && !error && !venue && <p role="status">Площадка отсутствует в каталоге города.</p>}
   </section>;
   return <section className="gb-games-map" aria-label="Игры на карте">
-    <div className="gb-games-map-toolbar"><details className="gb-games-map-help"><summary>О карте и количествах</summary><p className="gb-discovery-helper">Все площадки города. Число на маркере — доступные публичные игры{day ? " в выбранную дату" : ""}. Места и права проверяются при открытии игры.</p></details>
-    <Button variant="outline" onClick={() => setRefresh(n => n + 1)} disabled={loading}>Обновить карту и расписание</Button></div>
+    <div className="gb-games-map-toolbar"><details className="gb-games-map-help"><summary aria-label="О карте и количествах">О карте</summary><p className="gb-discovery-helper">Все площадки города. Число на маркере — доступные публичные игры{day ? " в выбранную дату" : ""}. Места и права проверяются при открытии игры.</p></details>
+    <Button variant="outline" onClick={() => setRefresh(n => n + 1)} disabled={loading} aria-label="Обновить карту и расписание">Обновить</Button></div>
     {loading && <p role="status">Загружаем все площадки и расписание…</p>}
     {error && <p role="alert">Не удалось загрузить полный каталог или расписание. Проверьте соединение и повторите. Непроверенные количества не показываем.</p>}
     {snapshot?.cityId === cityId && <>

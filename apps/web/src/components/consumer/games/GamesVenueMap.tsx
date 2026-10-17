@@ -67,7 +67,9 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability }: { ve
       } catch { if (alive) unavailable(); }
     }
     void start();
-    const resize = new ResizeObserver(() => instance?.resize()); if (container.current) resize.observe(container.current);
+    const resize = new ResizeObserver(() => {
+      if (instance && alive) { setSettled(false); instance.resize(); }
+    }); if (container.current) resize.observe(container.current);
     return () => { alive = false; abort.abort(); clearTimeout(timeout); resize.disconnect(); markers.current.forEach(entry => entry.marker.remove()); markers.current.clear(); instance?.remove(); map.current = null; };
   }, []);
   useEffect(() => {

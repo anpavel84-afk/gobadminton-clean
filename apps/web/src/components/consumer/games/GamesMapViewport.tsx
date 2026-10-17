@@ -10,12 +10,14 @@ export function GamesMapViewport({ children }: { children: ReactNode }) {
     const viewport = window.visualViewport;
     const shell = element.closest(".gb-app-shell");
     const nav = shell?.querySelector(".gb-bottom-nav");
+    const action = shell?.querySelector(".gb-games-view-action");
     let request = 0;
     const measure = () => {
       const bottom = (viewport?.offsetTop ?? 0) + (viewport?.height ?? window.innerHeight);
       const navBox = nav?.getBoundingClientRect();
       const navBottom = navBox && navBox.height > 0 ? Math.min(bottom, navBox.top) : bottom;
-      const usableBottom = navBottom - (window.matchMedia("(max-width: 720px)").matches ? 60 : 0);
+      const actionBox = action?.getBoundingClientRect();
+      const usableBottom = actionBox && actionBox.height > 0 ? Math.min(navBottom, actionBox.top) : navBottom;
       const height = Math.max(0, usableBottom - element.getBoundingClientRect().top);
       element.style.height = `${height}px`;
     };
@@ -26,14 +28,17 @@ export function GamesMapViewport({ children }: { children: ReactNode }) {
     const header = shell?.querySelector(".gb-topbar");
     if (header) observer.observe(header);
     if (nav) observer.observe(nav);
+    if (action) observer.observe(action);
     window.scrollTo(0, 0);
     measure();
     window.addEventListener("resize", schedule);
+    window.addEventListener("gb-games-action-layout", schedule);
     viewport?.addEventListener("resize", schedule);
     viewport?.addEventListener("scroll", schedule);
     return () => {
       cancelAnimationFrame(request); observer.disconnect();
       window.removeEventListener("resize", schedule);
+      window.removeEventListener("gb-games-action-layout", schedule);
       viewport?.removeEventListener("resize", schedule);
       viewport?.removeEventListener("scroll", schedule);
     };

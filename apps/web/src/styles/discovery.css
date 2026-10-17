@@ -196,3 +196,23 @@
   .gb-discovery[data-view="list"] { padding-bottom: 60px; }
   .gb-app-shell:has(.gb-games-view-action) .gb-site-footer { padding-bottom: 60px; }
 }
+
+/* #66: compact existing selector/chip/disclosure families; no overlay on the map.
+   Explicit specificity keeps canonical generic button dimensions from winning. */
+.gb-discovery[data-view="map"] .gb-discovery-search { padding: var(--gb-space-1); gap: var(--gb-space-1); margin-bottom: var(--gb-space-1); }
+.gb-discovery[data-view="map"] .gb-discovery-selector { gap: var(--gb-space-1); }
+.gb-games-map-context { gap: var(--gb-space-1); margin-bottom: var(--gb-space-1); }
+.gb-games-map-context > .gb-discovery-chips { min-width: 0; gap: var(--gb-space-1); }
+.gb-consumer .gb-games-map-context .gb-discovery-chip { padding-inline: var(--gb-space-3); }
+.gb-consumer .gb-games-map-context > .gb-games-list-return { min-height: 44px; padding-inline: var(--gb-space-2); }
+.gb-games-map-toolbar { flex: none; flex-wrap: nowrap; }
+.gb-games-map-help { flex: 1; }
+.gb-games-map-help summary { min-height: 44px; display: list-item; align-content: center; }
+.gb-games-map-help[open] { max-height: 30dvh; overflow: auto; }
+.gb-consumer .gb-games-map-toolbar > button { flex: none; min-height: 44px; padding: var(--gb-space-1) var(--gb-space-2); font-size: 12px; }
+.gb-games-map > p { flex: none; max-height: 25%; overflow: auto; }
+.gb-games-map-fallback { max-height: 30%; }
+@media (max-width: 720px) {
+  .gb-games-view-action { height: auto; padding-block: var(--gb-space-1); }
+  .gb-consumer .gb-games-view-action > button { min-height: 44px; }
+}
