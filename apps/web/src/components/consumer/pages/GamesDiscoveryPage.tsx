@@ -82,6 +82,23 @@ export function GamesDiscoveryPage() {
   const [pageError, setPageError] = useState(false);
   const key = JSON.stringify([location?.cityId, location?.timezone, selectedDay, activityFilter]);
   useEffect(() => {
+    if (!contextReady || view !== "list") return;
+    const saveListScroll = () => {
+      // Do not replace the saved position while the returning list is settling.
+      if (restoreListScroll.current) return;
+      listScroll.current = window.scrollY;
+      try { sessionStorage.setItem(`gb-games-list-scroll:${key}`, String(window.scrollY)); } catch { /* Optional storage. */ }
+    };
+    // Keep the outgoing list position even when Forward opens the map without
+    // going through changeView. popstate runs before React hides the list.
+    window.addEventListener("scroll", saveListScroll, { passive: true });
+    window.addEventListener("popstate", saveListScroll);
+    return () => {
+      window.removeEventListener("scroll", saveListScroll);
+      window.removeEventListener("popstate", saveListScroll);
+    };
+  }, [contextReady, view, key]);
+  useEffect(() => {
     if (view === "map") { restoreListScroll.current = true; return; }
     if (contextReady && restoreListScroll.current && feed.key === key && feed.state !== "loading") {
       let saved = listScroll.current;
