@@ -1,9 +1,9 @@
-/* global document */
+/* global document, sessionStorage */
 // Independent QA entrypoint; requires an existing authorized DEV and controlled public games.
 // No service startup, deployment, login or mutation. Missing map/fixtures is never PASS.
 import assert from 'node:assert/strict';
 import process from 'node:process';
-import { pathToFileURL } from 'node:url';
+import { URL, pathToFileURL } from 'node:url';
 const { chromium, webkit } = await import(pathToFileURL(process.cwd() + '/.tools/node_modules/playwright/index.mjs'));
 assert.ok(process.env.GB_MAP_ORIGIN, 'NOT_TESTED: provide authorized DEV origin');
 assert.ok(process.env.GB_MAP_VENUES, 'NOT_TESTED: provide JSON [{id,name,gameIds}] with 5/4/6 eligible games');

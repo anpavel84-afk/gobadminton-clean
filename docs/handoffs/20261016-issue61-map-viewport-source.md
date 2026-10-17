@@ -212,3 +212,8 @@ is separate from actual mobile/desktop public-map and legitimate authenticated U
 and Owner acceptance. No candidate permalink exists before authorized publication.
 Rollback before publication: remove only this correction patch; after publication use
 existing guarded exact-candidate revert. No release/runtime action authorized here.
+
+
+## Finite Supervisor operator lint correction, 17 Oct 2026 UTC
+
+Exact input f6c9ac7b4371d58e43e0ce27cfd6b65b73db8bf5 passed independent SOURCE QA; hosted Product CI38978989090 passed six jobs, Web typecheck and all 522 Web tests. Web lint failed solely for undeclared URL (six uses) and browser sessionStorage (two uses) in the new regression scripts. This deterministic operator correction imports Node URL from existing node:url in both scripts and declares the actual browser sessionStorage global in the fullscreen script. No assertion, runtime/product behavior, test selection or lint rule changed. Original native author counter3 and max3 remain unchanged; no fourth native source-author call or automatic retry loop. Prior exact-SHA QA/CI and FAIL records preserved. New independent native read-only QA and complete hosted CI are required for the resulting exact SHA; normal three-image DEV release and actual product UAT remain separate mandatory gates.

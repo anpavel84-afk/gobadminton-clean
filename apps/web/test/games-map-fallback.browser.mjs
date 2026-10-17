@@ -3,7 +3,7 @@
 // Run against an already running local web app; never intercept a hosted DEV session.
 import assert from 'node:assert/strict';
 import process from 'node:process';
-import { pathToFileURL } from 'node:url';
+import { URL, pathToFileURL } from 'node:url';
 const { chromium } = await import(pathToFileURL(process.cwd() + '/.tools/node_modules/playwright/index.mjs'));
 const origin = new URL(process.env.GB_MAP_LOCAL_ORIGIN || 'http://localhost:3000');
 assert.ok(['localhost', '127.0.0.1'].includes(origin.hostname), 'local mocked-API tests require loopback');
