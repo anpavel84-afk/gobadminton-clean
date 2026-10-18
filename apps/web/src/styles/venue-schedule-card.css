@@ -16,3 +16,6 @@ section[aria-label="Игры на карте"], section[aria-label="Распис
 .gb-venue-page h1 { overflow-wrap:anywhere; }
 section[aria-label="Игры на карте"] .maplibregl-marker { pointer-events:auto; }
 section[aria-label="Игры на карте"] .g2-map-venue-marker { width:44px; height:44px; }
+
+section[aria-label="Игры на карте"] .g2-map-marker:not(.g2-person-marker) { width:48px; height:48px; border:3px solid var(--gb-white); background:var(--gb-lime); color:var(--gb-ink); border-radius:50%; box-shadow:var(--c23-shadow-lift); }
+section[aria-label="Игры на карте"] button.maplibregl-marker[aria-pressed="true"] { box-shadow:0 0 0 3px var(--gb-lime),0 0 0 6px var(--gb-purple); z-index:10; }

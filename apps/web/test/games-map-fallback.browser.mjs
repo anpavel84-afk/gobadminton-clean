@@ -1,4 +1,4 @@
-/* global document */
+/* global document, window */
 // Local mocked-API browser regressions ONLY. No actual map or authenticated UAT claim.
 // Run against an already running local web app; never intercept a hosted DEV session.
 import assert from 'node:assert/strict';
@@ -35,13 +35,14 @@ try {
     // Local origin deliberately cannot load the approved hosted map bundle. No fake map.
     await page.goto(origin + 'games?view=map&activity=regular');
     const loading = page.getByRole('status').filter({hasText:'Загружаем все площадки и расписание'});
-    await loading.waitFor();
-    const refresh = page.getByRole('button',{name:'Обновить карту и расписание',exact:true});
-    assert.equal(await refresh.isDisabled(),true,'loading prevents duplicate refresh');
+    await loading.waitFor({state:'attached'});
+    assert.equal(await page.getByRole('button',{name:'Обновить карту и расписание',exact:true}).count(),0);
     release();
     const disclosure = page.locator('.gb-games-map-fallback > summary');
     await disclosure.waitFor();
-    await page.getByRole('status').filter({hasText:'Карта недоступна:'}).waitFor();
+    await page.getByRole('heading',{name:'Карта не загрузилась'}).waitFor();
+    assert.equal(await page.locator('.gb-games-map-back').count(),0,'M0 card owns the only return control');
+    assert.equal(await page.getByRole('button',{name:'Повторить',exact:true}).count(),1);
     const pinAlternative = page.getByRole('button',{name:name+' · 0',exact:true});
     assert.equal(await pinAlternative.isVisible(),false,'closed fallback hides focus targets');
     await disclosure.focus(); await page.keyboard.press('Enter');
@@ -61,13 +62,12 @@ try {
     await disclosure.waitFor();
     assert.equal(new URL(page.url()).searchParams.get('activity'),'regular');
     fail = true;
-    await refresh.click();
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
     await page.getByRole('alert').filter({hasText:'Не удалось загрузить полный каталог'}).waitFor();
-    assert.equal(await refresh.isEnabled(),true,'failed load retains usable retry');
     await disclosure.click();
     await page.getByRole('button',{name:name+' · ?',exact:true}).waitFor();
     fail = false;
-    await refresh.click();
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
     await pinAlternative.waitFor();
     assert.equal(await page.getByRole('alert').filter({hasText:'Не удалось загрузить полный каталог'}).count(),0,'retry clears error');
     await context.close();

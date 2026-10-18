@@ -66,7 +66,7 @@ export function GamesDiscoveryPage() {
     });
     previousView.current = view;
     if (view !== "map") return;
-    const focusFrame = requestAnimationFrame(() => document.querySelector<HTMLButtonElement>(".gb-games-view-action.is-map button")?.focus({ preventScroll: true }));
+    const focusFrame = requestAnimationFrame(() => document.querySelector<HTMLButtonElement>(".gb-games-map-back")?.focus({ preventScroll: true }));
     const escape = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented || document.querySelector("dialog[open], [role=dialog]")) return;
       changeView("list");
@@ -232,8 +232,8 @@ export function GamesDiscoveryPage() {
   const showCards = state === "ready" || state === "filtered" || state === "stale";
   return <ConsumerShell active="games" title="Игры" hideHeading fullscreenMap={view === "map"}>
     <div className="gb-discovery" data-surface="games-discovery" data-view={view}>
-      {view === "list" && <DiscoveryHero city={location.nameRu} />}<DiscoveryCityNotice />
-      <section className="gb-discovery-search" aria-label="Поиск игр">
+      {view === "list" && <DiscoveryHero city={location.nameRu} />}{view === "list" && <DiscoveryCityNotice />}
+      {view === "list" && <section className="gb-discovery-search" aria-label="Поиск игр">
         <button type="button" className="gb-discovery-selector" onClick={() => router.push("/location")} aria-label={`Где играем: ${location.nameRu}. Сменить город`}>
           <span className="gb-discovery-selector__icon"><DiscoveryIcon name="pin" /></span>
           <span><small>Где играем</small><strong>{location.nameRu}</strong></span><span className="gb-discovery-selector__chevron" aria-hidden="true">⌄</span>
@@ -243,14 +243,8 @@ export function GamesDiscoveryPage() {
           <span className="gb-discovery-date"><small>Когда</small><select aria-label="Когда играем" value={selectedDay} onChange={event => setSelectedDay(event.target.value)}><option value="">Все ближайшие</option>{dates.map(day => <option key={day} value={day}>{discoveryDateLabel(day)}</option>)}</select></span>
         </label>
         {view === "list" && <CreateBanner busy={creating} onClick={() => void goCreate()} />}
-      </section>
+      </section>}
       {createError && <div className="gb-discovery-notice" role="alert">Не удалось проверить вход. Попробуйте создать игру ещё раз.</div>}
-      {view === "map" && <div className="gb-games-map-context">
-        <Button className="gb-games-list-return" variant="outline" onClick={() => changeView("list")}>← К списку игр</Button>
-        <div className="gb-discovery-chips" role="group" aria-label="Фильтр активности">
-          {([["all", "Все"], ["regular", "Обычные"], ["trainer_led", "С тренером"]] as const).map(([value, label]) => <button key={value} type="button" className="gb-discovery-chip" aria-pressed={activityFilter === value} onClick={() => setActivityFilter(value)}>{label}</button>)}
-        </div>
-      </div>}
       {view === "map" ? <GamesMapViewport fullscreen><GamesMapView cityId={location.cityId} day={selectedDay} activity={activityFilter} onReturnToList={() => changeView("list")} /></GamesMapViewport> : null}
       <section className="gb-discovery-layout" hidden={view !== "list"}>
         <div className="gb-discovery-feed">

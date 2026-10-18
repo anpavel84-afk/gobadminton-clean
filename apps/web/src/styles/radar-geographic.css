@@ -105,3 +105,14 @@ svg.gb-venue-court-glyph { width:28px; height:28px; border-radius:0; box-shadow:
 .gb-map-position-unavailable { position:absolute; z-index:3; top:calc(72px + env(safe-area-inset-top,0px)); left:16px; right:16px; max-width:480px; padding:12px; border-radius:var(--gb-radius-sm); background:var(--gb-white); pointer-events:auto; }
 .gb-fullscreen-map-viewport .maplibregl-ctrl-attrib { font-size:12px; }
 .gb-games-map .g2-map-marker:not(.g2-person-marker)[aria-pressed="true"] { background:var(--gb-lime); color:var(--gb-ink); border-color:var(--gb-white); }
+
+/* M1 V001: selected venues retain their count/zero presentation. */
+.gb-games-map button.maplibregl-marker:not(.g2-person-marker)[aria-pressed="true"] {
+  outline:none; box-shadow:0 0 0 3px var(--gb-lime), 0 0 0 6px var(--gb-purple); z-index:10;
+}
+.gb-games-map-back { min-width:44px; min-height:44px; max-width:calc(100% - 112px); cursor:pointer; font:inherit; }
+.gb-games-map-back:focus-visible { outline:3px solid var(--gb-purple); outline-offset:3px; }
+.gb-fullscreen-map-viewport { overflow:hidden; max-width:100vw; }
+.gb-fullscreen-map-viewport .gb-games-map-area { position:absolute; inset:0; }
+.gb-fullscreen-map-viewport .gb-games-map > .gb-map-sr-only,
+.gb-map-sr-only { position:absolute; width:1px; height:1px; margin:-1px; padding:0; border:0; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
