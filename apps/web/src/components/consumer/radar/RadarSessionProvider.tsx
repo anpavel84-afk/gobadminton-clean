@@ -136,7 +136,7 @@ export function RadarStatusAffordance() {
       if (!host.current?.contains(event.target as Node)) setOpen(false);
     };
     const escape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
+      if (event.key === "Escape" && !document.querySelector("dialog[open]") && !(event.target instanceof Element && event.target.closest("[role=dialog]") && !host.current?.contains(event.target))) {
         event.preventDefault();
         setOpen(false);
         trigger.current?.focus();

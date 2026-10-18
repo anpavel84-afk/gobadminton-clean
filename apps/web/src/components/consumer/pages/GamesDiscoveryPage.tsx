@@ -13,6 +13,7 @@ import { ConsumerShell } from "../ConsumerShell";
 import { CreateBanner, DiscoveryHero, DiscoveryIcon, DiscoverySidebar, DiscoverySkeleton } from "../discovery/DiscoveryComposition";
 import { DiscoveryGameCard } from "../discovery/DiscoveryGameCard";
 
+import { RadarStatusAffordance } from "../radar/RadarSessionProvider";
 import { GamesViewAction } from "../games/GamesViewAction";
 import { GamesMapViewport } from "../games/GamesMapViewport";
 import { GamesMapView } from "../games/GamesMapView";
@@ -57,11 +58,29 @@ export function GamesDiscoveryPage() {
     window.history.replaceState(window.history.state, "", url);
   }, [view, selectedDay, activityFilter, contextReady, location]);
 
+  const previousView = useRef(view);
+  useEffect(() => {
+    if (previousView.current === "map" && view === "list") requestAnimationFrame(() => {
+      const buttons = document.querySelectorAll<HTMLButtonElement>(".gb-games-view-action button, .gb-discovery-sidebar button");
+      [...buttons].find(button => button.getClientRects().length > 0)?.focus({ preventScroll: true });
+    });
+    previousView.current = view;
+    if (view !== "map") return;
+    const focusFrame = requestAnimationFrame(() => document.querySelector<HTMLButtonElement>(".gb-games-view-action.is-map button")?.focus({ preventScroll: true }));
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented || document.querySelector("dialog[open], [role=dialog]")) return;
+      changeView("list");
+    };
+    window.addEventListener("keydown", escape);
+    return () => { cancelAnimationFrame(focusFrame); window.removeEventListener("keydown", escape); };
+  }, [view]);
+
   function changeView(next: "list" | "map") {
     if (next === "map") {
       listScroll.current = window.scrollY;
       try { sessionStorage.setItem(`gb-games-list-scroll:${key}`, String(window.scrollY)); } catch { /* Optional storage. */ }
     }
+    if (next === "list") window.dispatchEvent(new Event("gb-map-return"));
     const url = new URL(window.location.href);
     url.searchParams.set("view", next);
     window.history.pushState(window.history.state, "", url);
@@ -211,7 +230,7 @@ export function GamesDiscoveryPage() {
   if (!location) return <ConsumerShell active="games" title="Игры"><div className="gb-discovery-state" role="status"><h2>Загружаем игры</h2><p>Готовим список ближайших игр…</p></div></ConsumerShell>;
 
   const showCards = state === "ready" || state === "filtered" || state === "stale";
-  return <ConsumerShell active="games" title="Игры" hideHeading>
+  return <ConsumerShell active="games" title="Игры" hideHeading fullscreenMap={view === "map"}>
     <div className="gb-discovery" data-surface="games-discovery" data-view={view}>
       {view === "list" && <DiscoveryHero city={location.nameRu} />}<DiscoveryCityNotice />
       <section className="gb-discovery-search" aria-label="Поиск игр">
@@ -232,7 +251,7 @@ export function GamesDiscoveryPage() {
           {([["all", "Все"], ["regular", "Обычные"], ["trainer_led", "С тренером"]] as const).map(([value, label]) => <button key={value} type="button" className="gb-discovery-chip" aria-pressed={activityFilter === value} onClick={() => setActivityFilter(value)}>{label}</button>)}
         </div>
       </div>}
-      {view === "map" ? <GamesMapViewport><GamesMapView cityId={location.cityId} day={selectedDay} activity={activityFilter} /></GamesMapViewport> : null}
+      {view === "map" ? <GamesMapViewport fullscreen><GamesMapView cityId={location.cityId} day={selectedDay} activity={activityFilter} /></GamesMapViewport> : null}
       <section className="gb-discovery-layout" hidden={view !== "list"}>
         <div className="gb-discovery-feed">
           <div className="gb-discovery-filters">
@@ -256,6 +275,7 @@ export function GamesDiscoveryPage() {
         </div>
         <DiscoverySidebar city={location.nameRu} onMap={() => changeView("map")} />
       </section>
+      {view === "map" && <div className="gb-map-radar"><RadarStatusAffordance /></div>}
       <GamesViewAction view={view} onClick={() => changeView(view === "list" ? "map" : "list")} />
     </div>
     {authOpen && <AuthChooser returnPath="/games/create" intent={{ kind: "create" }} onClose={() => setAuthOpen(false)} />}
