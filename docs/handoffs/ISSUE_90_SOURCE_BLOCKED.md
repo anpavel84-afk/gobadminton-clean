@@ -9,13 +9,14 @@ Bounded source-only successor to Issue 88 / PR 89: restore the single map return
 
 Worktree: `/srv/gobadminton-clean/worktrees/issue-90`.
 Branch: `automation/issue-90`.
-Exact base / HEAD: `1d24f50dc8cb16c3f05f9611b840d5a9790c3bcf`.
+Exact base / HEAD for this successor attempt: `05c59bb0104d8a450c6672af5c8eb158597729fd`.
+Original development base: `1d24f50dc8cb16c3f05f9611b840d5a9790c3bcf`.
 Required reapplication source: `0ce158e062d4509e8528abbbf33b520a21210ecf`.
 Source permalink: https://github.com/anpavel84-afk/gobadminton-clean/commit/0ce158e062d4509e8528abbbf33b520a21210ecf
 
 ## Blocking prerequisite
 
-The assignment requires fetching origin automation/issue-88 and verifying its current tip before reapplication, stopping otherwise. The enclosing instruction prohibits changing git metadata. Fetch would change git metadata; it was not run. Repository-specific SSH identity files are also outside permitted reads.
+The assignment requires fetching origin automation/issue-88 and verifying its current tip before reapplication, stopping otherwise. The enclosing instruction prohibits changing git metadata. Fetch would change git metadata; it was not run. Repository-specific SSH identity files are also outside permitted reads. This attempt additionally tried a read-only HTTPS remote-tip lookup with credential helpers disabled; it failed because github.com could not be resolved. Therefore the prerequisite remains unsatisfied, rather than assuming that the local candidate is the current remote tip.
 
 Read-only evidence:
 
@@ -25,23 +26,24 @@ $ git status --short
 $ git branch --show-current
 automation/issue-90
 $ git rev-parse HEAD
-1d24f50dc8cb16c3f05f9611b840d5a9790c3bcf
+05c59bb0104d8a450c6672af5c8eb158597729fd
 $ git rev-parse refs/remotes/origin/automation/issue-88
 fatal: ambiguous argument 'refs/remotes/origin/automation/issue-88': unknown revision or path not in the working tree.
 $ git cat-file -t 0ce158e062d4509e8528abbbf33b520a21210ecf
 commit
-$ git show-ref --heads --tags
-[relevant entry]
-0ce158e062d4509e8528abbbf33b520a21210ecf refs/heads/automation/issue-88
+$ git -c credential.helper= ls-remote https://github.com/anpavel84-afk/gobadminton-clean.git refs/heads/automation/issue-88
+fatal: unable to access 'https://github.com/anpavel84-afk/gobadminton-clean.git/': Could not resolve host: github.com
 ```
 
 The local branch and object exist, but neither establishes the current origin tip. No mismatch is asserted; remote tip is UNVERIFIED. No source was re-applied from the candidate. No fix was implemented and no coverage is claimed.
 
 ## Scope, checks and rollback
 
-Only this allowed `docs/handoffs/**` file was added. No application files, git metadata, automation, dependencies, secrets, services or deployment were changed. Rollback is removal of this handoff file by the receiving workflow.
+Only this allowed `docs/handoffs/**` file was updated. No application files, git metadata, automation, dependencies, secrets, services or deployment were changed. Rollback is restoration of this file from the exact base above by the receiving workflow.
 
-Web unit tests, lint, typecheck, build, all three browser scripts and physical iOS: NOT_TESTED. Work stopped at STEP 1; no self-QA was performed. Read-only inspection commands additionally included `pwd`, `git remote -v`, rule/context document reads and `rg --files docs/handoffs`. No commit or push was performed; this artifact needs publication by the authorized workflow before it has a durable GitHub permalink.
+Web unit tests, lint, typecheck, build, all three browser scripts and physical iOS: NOT_TESTED. Work stopped at STEP 1; no self-QA was performed, as explicitly prohibited by the enclosing source-author instruction. STEP 2 in the task data conflicts with that prohibition. No assertion failures or PASS are claimed. Read-only inspection commands in this attempt included `pwd`, `git status --short`, `git branch --show-current`, the revision/object queries and HTTPS lookup quoted above, and rule/context document reads. No commit or push was performed; this artifact needs publication by the authorized workflow before it has a durable GitHub permalink.
+
+Prior independent QA on this exact base was FAIL: C1–C4 implementation and C6/C7 evidence are absent. This attempt does not resolve those findings. C5 behavior has not been verified. Source was NOT re-applied from the candidate; marker separation, selected ring and marker CSS (M1d) remain excluded, along with all other source edits while the prerequisite is unresolved.
 
 ## STYLE_GUIDE_PARITY
 
