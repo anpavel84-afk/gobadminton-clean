@@ -29,3 +29,7 @@ Offline допускает чтение ограниченного кеша с �
 ## Продуктовые развилки
 
 Точная шкала уровня, допустимые форматы, минимальный профиль и канал срочных уведомлений уточняются с пилотными организаторами, не выводятся из старого сайта. [Open decisions](../manifest/OPEN_DECISIONS.md).
+
+## Утверждённое продолжение после встречи
+
+Мои игры → Управляю → игра → Участники / Итоги: до игры заявки, во время быстрый present, после — held/not_held/later и необязательное уточнение unknown. Игрок в собственной истории видит assertion/автора, может agree/disagree, оставить private contextual feedback или report даже без доступа к чату. Менеджер не цензурирует отзыв отметкой absent. Личная заметка явно «Видно только вам». Один reply, optional explicit next-game invitation. [Полный сценарий/права](../architecture/POST_GAME_V001.md), [Owner approval](../decisions/OWNER_DECISION_POST_GAME_MODEL_V001.md); UI implementation pending.

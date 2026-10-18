@@ -24,3 +24,7 @@
 Admin — отдельный audience/session boundary, короткие privileged sessions и MFA/step-up перед публичным пилотом. Настоящие platform admin права не зависят только от успеха consumer social login. Recovery-процедура до PROD проверяется отдельно.
 
 Основание для проверки object-level authorization: [S13](../reference/SOURCES.md). Тестовая матрица: [ACCEPTANCE_MATRIX](../quality/ACCEPTANCE_MATRIX.md).
+
+## Post-game permissions (implementation pending)
+
+Нормативная [матрица ACL](../architecture/POST_GAME_V001.md#6-права-и-видимость) дополняет общую таблицу: current GameManager меняет attendance/outcome, сам участник видит/оспаривает свою отметку независимо от чата, notes author-only, reviews author+recipient, staff строго case-scoped. Ответственный адресат organization review фиксируется, не все будущие managers получают историю. Report receipt/status только reporter; target не получает дело автоматически. Ни manager role, ни platform role не дают общего чтения личных заметок. Права проверяются также на idempotent replay и deep links.

@@ -31,3 +31,7 @@ Current continuation:
 Moscow is resource-constrained; heavy build work should happen on PLAN/CI or stronger build host rather than during live runtime.
 
 No automatic F-02/F-03 execution until F-01 is accepted.
+
+## Post-game successor scope (2026-10-18)
+
+Для утверждённого [завершения игры](../architecture/POST_GAME_V001.md) использовать [PG-0…PG-5 и PM prompt](POST_GAME_DELIVERY_V001.md), не исторические F-01 инструкции выше. Current source gobadminton-clean/dev, GitHub Issues/Projects и действующий ChatOps; никакого нового PLAN/legacy runner execution. Это decomposition, не запущенные tasks. Absent+notice+recourse единый release unit; весь feedback/report scope сохраняется.

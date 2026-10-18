@@ -24,3 +24,6 @@ Technical decisions are made in the delegated OD-006 area and do not imply produ
 
 Template: Context → Options → Decision → Consequences → Verification → Supersession.
 - [ADR-0016 — bounded email method replacement proof](ADR-0016-EMAIL-METHOD-CHANGE-PROOF.md) — internally admitted E2/E3 source candidate, no release.
+
+- [Owner post-game model v001](OWNER_DECISION_POST_GAME_MODEL_V001.md) — OWNER_CONFIRMED, не runtime acceptance.
+- [ADR-0018 — post-game outcomes, attendance and feedback](ADR-0018-POST-GAME-OUTCOMES-FEEDBACK.md) — TECH_SELECTED, implementation pending; [единый пакет](../architecture/POST_GAME_V001.md).

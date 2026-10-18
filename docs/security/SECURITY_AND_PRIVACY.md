@@ -38,3 +38,7 @@ Public organizer contact — осознанно указанный контак�
 ## Security release gate
 
 Проверить threat tests, секреты/dependency advisories, runtime roles, backup restore, admin step-up, deletion, incident contacts, privacy documents и legal data-flow sign-off. Нерешённая утечка или обход прав блокируют release. Статическая проверка текущих документов не считается прохождением gate. Основания security patterns: [S12–S13](../reference/SOURCES.md).
+
+## Post-game safeguards
+
+[ADR-0018](../decisions/ADR-0018-POST-GAME-OUTCOMES-FEEDBACK.md): notice+recourse обязательны до absent enablement; block/chat closure не лишают correction/report. No public reliability/skill mutation/auto-sanctions. Notes author-only, feedback author+recipient, case access ограничен и audited. Проверять retaliation через roster/attendance changes, IDOR, block-as-censorship, review spam, case self-conflict, privacy в push/cache/logs и deletion/rollback. Existing synthetic-only Support не подтверждает real-person case readiness; [PG-Q acceptance](../delivery/POST_GAME_DELIVERY_V001.md).

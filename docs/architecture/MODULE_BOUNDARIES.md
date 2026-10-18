@@ -30,3 +30,7 @@
 Worker lease имеет expiry; после crash запись можно обработать снова. Consumer хранит dedupe key. Уведомления переоценивают актуальность состояния перед отправкой: запоздавшее confirmed-сообщение не должно скрывать уже отменённую игру. Event payload не содержит access tokens, телефонов или всей копии User.
 
 Event log не является event sourcing: текущая реляционная модель — source of truth; audit/outbox служат другим задачам. Миграции событий и consumers поддерживают текущий и предыдущий format на период rollout.
+
+## Post-game ownership (ADR-0018; implementation pending)
+
+[Полная модель](POST_GAME_V001.md) уточняет Sessions: historical participant context, outcome, attendance revisions/acknowledgements/disputes. Небольшой Feedback submodule владеет author-only notes, contextual reviews и singleton reply. Safety/Trust расширяет existing abuse_reports/support_cases типизированными связями; не создаёт второй сервис жалоб и не пишет Sessions напрямую. Communications сохраняет durable own notice атомарно с assertion; внешняя доставка после commit. Current game_managers, не generic OrganizerMembership, проверяются для всех post-game manager commands. Новые события не несут тексты отзывов/споров.

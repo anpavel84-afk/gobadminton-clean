@@ -45,3 +45,7 @@ GeoJSON/SQL point: longitude, latitude; API объекты явно называ
 API money: строка целого количества minor units + ISO currency, чтобы не терять точность JS. В БД bigint; для будущих расчётов допустим exact numeric по ADR. Никогда float для денежных сумм. RUB — единственная стартовая валюта UI, не единственный код в storage model.
 
 Источники: [S04–S07](../reference/SOURCES.md). Проектная схема не утверждает поддержку миграций, пока не выполнен F-01/F-03.
+
+## Post-game schema extension (design, not applied)
+
+[ADR-0018 model](../architecture/POST_GAME_V001.md#3-владение-и-минимальная-модель) уточняет прежнюю строку game_outcomes/attendance: historical contexts, versioned assertions/revisions/disputes, author-private notes, typed reviews/one reply, existing Safety contexts. Это additive migrations будущего slice; старые файлы SQL immutable. No automatic backfill from confirmed/time. Actual readiness определяется текущими migrations/source, не исторической фразой «БД ещё не создана» в foundation heading.
