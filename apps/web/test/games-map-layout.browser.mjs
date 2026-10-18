@@ -30,11 +30,11 @@ try {
     assert.equal(await page.locator('.gb-map-radar').count(),1);
     await back.click();
     await page.locator('.gb-discovery-search').waitFor();
-    assert.equal(new URL(page.url()).searchParams.get('view'),'list');
+    assert.equal(new globalThis.URL(page.url()).searchParams.get('view'),'list');
     await page.getByRole('button',{name:'На карте',exact:true}).waitFor();
     await page.goBack();
     await back.waitFor();
-    assert.equal(new URL(page.url()).searchParams.get('view'),'map');
+    assert.equal(new globalThis.URL(page.url()).searchParams.get('view'),'map');
     await page.close();
   }
 } finally { await browser.close(); }

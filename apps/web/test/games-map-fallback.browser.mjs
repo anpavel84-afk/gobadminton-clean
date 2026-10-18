@@ -62,12 +62,12 @@ try {
     await disclosure.waitFor();
     assert.equal(new URL(page.url()).searchParams.get('activity'),'regular');
     fail = true;
-    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await page.evaluate(() => window.dispatchEvent(new globalThis.Event('online')));
     await page.getByRole('alert').filter({hasText:'Не удалось загрузить полный каталог'}).waitFor();
     await disclosure.click();
     await page.getByRole('button',{name:name+' · ?',exact:true}).waitFor();
     fail = false;
-    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await page.evaluate(() => window.dispatchEvent(new globalThis.Event('online')));
     await pinAlternative.waitFor();
     assert.equal(await page.getByRole('alert').filter({hasText:'Не удалось загрузить полный каталог'}).count(),0,'retry clears error');
     await context.close();
