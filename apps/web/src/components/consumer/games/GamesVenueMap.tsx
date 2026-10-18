@@ -165,15 +165,15 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability, onRetu
       for (const offset of separateMarkerPoints(points)) {
         const entry = markers.current.get(offset.id)!;
         const point = instance.project(entry.marker.getLngLat());
-        const dx = ownPoint ? point.x - ownPoint.x : 0;
-        const dy = ownPoint ? point.y - ownPoint.y : 0;
+        const dx = ownPoint ? point.x + offset.x - ownPoint.x : 0;
+        const dy = ownPoint ? point.y + offset.y - ownPoint.y : 0;
         const distance = Math.hypot(dx, dy);
-        // Preserve own-marker avoidance direction, bounded to the venue's tap target.
+        // Bound venue-to-venue offsets first, then preserve the existing 64px
+        // own-marker clearance, including when that offset moves a venue inward.
         const ownOffset = ownPoint && distance < 64 ? 64 - distance : 0;
         const x = offset.x + ownOffset * (distance ? dx / distance : 1);
         const y = offset.y + ownOffset * (distance ? dy / distance : 0);
-        const scale = Math.min(1, 22 / (Math.hypot(x, y) || 1));
-        entry.marker.setOffset([x * scale, y * scale]);
+        entry.marker.setOffset([x, y]);
       }
     };
     separate(); instance.on("moveend", separate); instance.on("zoomend", separate); window.addEventListener("gb-map-own-marker", separate);
