@@ -86,7 +86,7 @@ describe("WEB-02 Players / Profile", () => {
     const provider = await readSource("../src/components/consumer/radar/RadarSessionProvider.tsx");
     expect(page).toContain("<RadarSwitchControl />");
     expect(page).toContain("<RadarStatusControls />");
-    expect(provider).toContain("export function RadarStatusAffordance()");
+    expect(provider).toContain("export function RadarStatusAffordance(");
     expect(provider).toContain("gb-radar-progress");
     expect(provider).toContain("Управление Radar");
     expect(page).not.toMatch(/fixture players|fake player|mockPlayers/i);

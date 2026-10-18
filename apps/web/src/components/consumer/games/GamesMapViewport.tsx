@@ -2,7 +2,7 @@
 import { useLayoutEffect, useRef, type ReactNode } from "react";
 
 /** Measure chrome rather than assuming header/nav heights; visualViewport follows browser bars. */
-export function GamesMapViewport({ children }: { children: ReactNode }) {
+export function GamesMapViewport({ children, fullscreen = false }: { children: ReactNode; fullscreen?: boolean }) {
   const frame = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const element = frame.current;
@@ -13,6 +13,13 @@ export function GamesMapViewport({ children }: { children: ReactNode }) {
     const action = shell?.querySelector(".gb-games-view-action");
     let request = 0;
     const measure = () => {
+      if (fullscreen) {
+        element.style.height = `${viewport?.height ?? window.innerHeight}px`;
+        element.style.top = `${viewport?.offsetTop ?? 0}px`;
+        element.style.left = `${viewport?.offsetLeft ?? 0}px`;
+        element.style.width = `${viewport?.width ?? window.innerWidth}px`;
+        return;
+      }
       const bottom = (viewport?.offsetTop ?? 0) + (viewport?.height ?? window.innerHeight);
       const navBox = nav?.getBoundingClientRect();
       const navBottom = navBox && navBox.height > 0 ? Math.min(bottom, navBox.top) : bottom;
@@ -42,6 +49,6 @@ export function GamesMapViewport({ children }: { children: ReactNode }) {
       viewport?.removeEventListener("resize", schedule);
       viewport?.removeEventListener("scroll", schedule);
     };
-  }, []);
-  return <div ref={frame} className="gb-games-map-viewport">{children}</div>;
+  }, [fullscreen]);
+  return <div ref={frame} className={`gb-games-map-viewport${fullscreen ? " gb-fullscreen-map-viewport" : ""}`}>{children}</div>;
 }
