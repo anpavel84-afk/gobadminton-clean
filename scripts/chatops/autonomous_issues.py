@@ -311,7 +311,6 @@ class Store:
         require(set(parked) == {'parked'} and isinstance(parked['parked'], list), 'invalid parked state')
         for entry in parked['parked']:
             require(isinstance(entry, dict) and type(entry.get('issue')) is int
-                    and isinstance(entry.get('authorized_at'), str)
                     and isinstance(entry.get('allow_successors'), list)
                     and type(entry.get('park_comment')) is int, 'invalid parked entry')
         self.parked = parked['parked']
@@ -358,10 +357,6 @@ class Store:
                     task = body_task
                     stamp, admission = issue['created_at'], None
                 created = dt.datetime.fromisoformat(stamp.replace('Z', '+00:00'))
-                # Order barrier: nothing authorized at/after a parked task runs unless listed.
-                require(not any(created >= dt.datetime.fromisoformat(e['authorized_at'].replace('Z', '+00:00'))
-                                and issue['number'] not in e['allow_successors']
-                                for e in self.parked), 'dependent waits for parked predecessor')
                 choices.append((created, issue['number'], issue, task, admission))
             except (Hold, ValueError, KeyError, TypeError):
                 continue
@@ -919,10 +914,23 @@ class Bridge:
         """Blocked task that cannot be resumed -> parked.json, slot freed, NOT done. True once parked."""
         if not (active and active.get('phase') == 'blocked') or resume_eligible(active):
             return False
+        pending = [e for e in self.store.parked if e['issue'] == active['issue']]
+        if pending:
+            # Crash after the parked.json write: finish from durable evidence only. The Owner comment is
+            # NOT re-read, so a later edit/deletion of it cannot strand the slot or change the outcome.
+            entry = pending[0]
+            backup = self.c.state_dir / f'before-park-{active["issue"]}-a{active["attempt"]}.json'
+            require(len(pending) == 1 and entry['head'] == active['head']
+                    and entry['attempt'] == active['attempt']
+                    and entry['snapshot'] == json.loads(json.dumps(active))
+                    and backup.exists() and not backup.is_symlink()
+                    and loads(backup.read_bytes()) == self.store.data,
+                    'parked entry/backup differ from checkpoint; reconcile')
+            self.store.park(entry)
+            return True
         since = dt.datetime.fromisoformat(active['approved_since'].replace('Z', '+00:00'))
         cutoff = urllib.parse.quote(since.isoformat(), safe='')
-        # An entry for THIS issue means a crash after the parked.json write: reuse it idempotently.
-        used = {e['park_comment'] for e in self.store.parked if e['issue'] != active['issue']}
+        used = {e['park_comment'] for e in self.store.parked}
         valid = []
         for comment in pages(f'issues/{active["issue"]}/comments?since={cutoff}'):
             try:
@@ -934,10 +942,6 @@ class Bridge:
         require(len(valid) == 1, 'ambiguous park comments')
         comment, value = valid[0]
         self.unchanged_issue(active)
-        issue = api(f'issues/{active["issue"]}')
-        authorized_at = issue['created_at']
-        if 'comment' in active:
-            authorized_at = api(f'issues/comments/{active["comment"]["id"]}')['created_at']
         backup = self.c.state_dir / f'before-park-{active["issue"]}-a{active["attempt"]}.json'
         require(not backup.is_symlink(), 'park backup is a symlink')
         if backup.exists():  # retry after a transient pre-checkpoint failure; never overwrite
@@ -947,7 +951,7 @@ class Bridge:
         snapshot = json.loads(json.dumps(active))
         entry = dict(issue=active['issue'], head=active['head'], attempt=active['attempt'],
                      park_comment=comment['id'], allow_successors=value['allow_successors'],
-                     reason=value['reason'], authorized_at=authorized_at, snapshot=snapshot)
+                     reason=value['reason'], snapshot=snapshot)
         self.store.park(entry)
         return True
 
@@ -1099,7 +1103,7 @@ def main():
                         parked = False
                     if not parked:
                         time.sleep(config.poll)
-                    continue  # parked: slot is free, next pass claims under the order barrier
+                    continue  # parked: slot is free, next pass may claim any other admitted Issue
                 recovery = False
             if not active or active['phase'] == 'done':
                 active = discover(store, since)

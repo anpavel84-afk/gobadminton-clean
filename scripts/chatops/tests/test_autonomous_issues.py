@@ -1099,40 +1099,37 @@ class Park(unittest.TestCase):
             finally:
                 os.close(store.lock)
 
-    def test_parked_issue_is_never_reclaimed_and_dependents_wait(self):
+    def test_parked_issue_never_reclaimed_but_later_and_unrelated_issues_are_claimable(self):
         with tempfile.TemporaryDirectory() as tmp:
             store, active = self.setup_store(tmp)
             try:
-                bridge = self.bridge(tmp, store, [park_comment(active)])
+                bridge = self.bridge(tmp, store, [park_comment(active, body=dict(allow_successors=[]))])
                 parent, comment = existing(30)
                 self.assertTrue(self.do_park(bridge, active))
-                entry = store.parked[0]
                 # Old admission comment of the parked Issue must not re-claim it.
                 self.assertIsNone(store.claim([parent], SINCE, [comment]))
                 self.assertIsNone(store.claim([issue(30)], SINCE))
-                # Later Issues (dependents) wait unless listed in allow_successors.
-                entry['authorized_at'] = (NOW - dt.timedelta(minutes=30)).isoformat()
+                # A FRESH admission comment on the parked Issue also never re-claims it (no unpark in V1).
+                fresh = comment | dict(id=999, created_at=NOW.isoformat(), updated_at=NOW.isoformat())
+                self.assertIsNone(store.claim([parent], SINCE, [comment, fresh]))
+                self.assertEqual(store.data['active'], None)
+                # Issues authorized AFTER the park are NOT blocked, listed or not.
                 later = issue(31)
-                later['created_at'] = later['updated_at'] = NOW.isoformat()
-                later['body'] = a.MARKER + '\n' + json.dumps(dict(json.loads(later['body'].split('\n', 1)[1])))
-                entry['allow_successors'] = []
-                self.assertIsNone(store.claim([later], SINCE))
-                entry['allow_successors'] = [31]
-                claimed = store.claim([later], SINCE)
+                claimed = store.claim([parent, later], SINCE, [comment])
                 self.assertEqual(claimed['issue'], 31)
                 self.assertEqual(claimed['phase'], 'claimed')
                 self.assertNotIn(30, store.data['done'])
+                self.assertEqual([e['issue'] for e in store.parked], [30])
             finally:
                 os.close(store.lock)
 
-    def test_issue_authorized_before_parked_task_is_not_blocked_by_barrier(self):
+    def test_successor_with_admission_comment_after_park_is_claimable(self):
         with tempfile.TemporaryDirectory() as tmp:
             store, active = self.setup_store(tmp)
             try:
                 self.assertTrue(self.do_park(self.bridge(tmp, store, [park_comment(active)]), active))
-                store.parked[0]['authorized_at'] = (NOW + dt.timedelta(hours=1)).isoformat()
-                store.parked[0]['allow_successors'] = []
-                self.assertEqual(store.claim([issue(31)], SINCE)['issue'], 31)
+                parent, comment = existing(13)
+                self.assertEqual(store.claim([parent], SINCE, [comment])['issue'], 13)
             finally:
                 os.close(store.lock)
 
@@ -1155,13 +1152,44 @@ class Park(unittest.TestCase):
                 store.save = original
                 store.data['active'] = json.loads(store.path.read_text())['active']
                 active = store.data['active']
-                bridge = self.bridge(tmp, store, [park_comment(active)])
-                self.assertTrue(self.do_park(bridge, active))
+                # Owner comment deleted/edited meanwhile: recovery uses durable evidence, no GitHub read.
+                bridge = self.bridge(tmp, store, [])
+                with patch.object(a, 'pages', side_effect=AssertionError('no request expected')), \
+                        patch.object(a, 'api', side_effect=AssertionError('no request expected')):
+                    self.assertTrue(bridge.park(active))
                 self.assertEqual(len(store.parked), 1)
                 self.assertIsNone(json.loads(store.path.read_text())['active'])
+                self.assertNotIn(30, store.data['done'])
                 self.assertEqual(len(json.loads(store.parked_path.read_text())['parked']), 1)
             finally:
                 os.close(store.lock)
+
+    def test_recovery_refuses_when_evidence_differs_from_checkpoint(self):
+        for tamper in ('snapshot', 'backup', 'nobackup'):
+            with self.subTest(tamper=tamper), tempfile.TemporaryDirectory() as tmp:
+                store, active = self.setup_store(tmp)
+                try:
+                    bridge = self.bridge(tmp, store, [park_comment(active)])
+                    store.save = lambda: (_ for _ in ()).throw(OSError('crash'))
+                    with self.assertRaises(OSError):
+                        self.do_park(bridge, active)
+                    del store.save
+                    store.data['active'] = json.loads(store.path.read_text())['active']
+                    active = store.data['active']
+                    backup = store.directory / 'before-park-30-a3.json'
+                    if tamper == 'snapshot':
+                        store.parked[0]['snapshot']['attempt'] = 1
+                    elif tamper == 'backup':
+                        backup.write_text('{"active": null, "done": [1]}')
+                    else:
+                        backup.unlink()
+                    bridge = self.bridge(tmp, store, [])
+                    with patch.object(a, 'pages', side_effect=AssertionError('no request expected')), \
+                            self.assertRaises(a.Hold):
+                        bridge.park(active)
+                    self.assertEqual(json.loads(store.path.read_text())['active']['phase'], 'blocked')
+                finally:
+                    os.close(store.lock)
 
     def test_invalid_parked_file_fails_closed(self):
         with tempfile.TemporaryDirectory() as tmp:
