@@ -921,5 +921,290 @@ def loads_state(store):
     return json.loads(store.path.read_text())
 
 
+
+def park_comment(active, **over):
+    body = dict(schema=a.PARK_MARKER, issue=active['issue'], head=active['head'],
+                attempt=active['attempt'], reason='QA FAIL x3; Owner chose successor',
+                allow_successors=[31])
+    body.update(over.pop('body', {}))
+    stamp = NOW.isoformat()
+    comment = dict(id=888, issue_url=f'https://api.github.com/repos/{a.REPO}/issues/{active["issue"]}',
+                   user={'id': 318610566}, created_at=stamp, updated_at=stamp,
+                   body=a.PARK_MARKER + '\n' + json.dumps(body))
+    return comment | over
+
+
+class Park(unittest.TestCase):
+    """PARK_V1: Owner-authorised parking of a truly blocked task; parked != done."""
+
+    def setup_store(self, tmp, attempt=3, **blocked):
+        store = a.Store(Path(tmp) / 'state')
+        active = store.claim([issue()], SINCE)
+        active['task']['max_attempts'] = 3
+        qa = dict(verdict='FAIL', findings=['x'], reviewed_sha=HEAD)
+        store.phase('blocked', head=HEAD, base=BASE, pr=74, attempt=attempt, qa=qa, ci=None,
+                    history=[dict(attempt=1, head=DRIFT)], resumes=[5],
+                    resume_phase=blocked.get('resume_phase', 'qa'),
+                    reason=blocked.get('reason', 'QA FAIL; attempts exhausted'))
+        a.atomic(store.directory / f'qa-30-a{attempt}.json', qa)
+        return store, active
+
+    def bridge(self, tmp, store, comments):
+        bridge = a.Bridge(types.SimpleNamespace(
+            worktrees_root=Path(tmp), state_dir=store.directory), store)
+        bridge.unchanged_issue = lambda x: None
+        self.comments = comments
+        return bridge
+
+    def do_park(self, bridge, active):
+        stamp = (NOW - dt.timedelta(days=1)).isoformat()
+
+        def fake_api(path):
+            return dict(created_at=stamp)
+        with patch.object(a, 'pages', side_effect=lambda path, key=None: self.comments), \
+                patch.object(a, 'api', side_effect=fake_api):
+            return bridge.park(active)
+
+    def test_validate_park_exact_owner_marker_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store, active = self.setup_store(tmp)
+            try:
+                good = park_comment(active)
+                self.assertEqual(a.validate_park(active, good, SINCE)['allow_successors'], [31])
+                old = (SINCE - dt.timedelta(hours=1)).isoformat()
+                bad = [
+                    park_comment(active, user={'id': 1}),
+                    park_comment(active, updated_at=(NOW + dt.timedelta(seconds=1)).isoformat()),
+                    park_comment(active, issue_url=f'https://api.github.com/repos/{a.REPO}/issues/31'),
+                    park_comment(active, body=dict(head=DRIFT)),
+                    park_comment(active, body=dict(attempt=2)),
+                    park_comment(active, body=dict(attempt=True)),
+                    park_comment(active, body=dict(issue=31)),
+                    park_comment(active, body=dict(schema='X')),
+                    park_comment(active, body=dict(reason='')),
+                    park_comment(active, body=dict(reason='x' * 501)),
+                    park_comment(active, body=dict(allow_successors=[1, 2, 3, 4])),
+                    park_comment(active, body=dict(allow_successors=[31, 31])),
+                    park_comment(active, body=dict(allow_successors=[30])),
+                    park_comment(active, body=dict(allow_successors=[True])),
+                    park_comment(active, body=dict(allow_successors='31')),
+                    park_comment(active, body=dict(extra=1)),
+                    park_comment(active, created_at=old, updated_at=old),
+                    park_comment(active, id=0),
+                    park_comment(active) | {'body': 'x' + park_comment(active)['body']},
+                    park_comment(active) | {'body': a.MARKER + '\n' + json.dumps(active['task'])},
+                    park_comment(active) | {'body': park_comment(active)['body'].replace(a.PARK_MARKER, a.RESUME_MARKER, 1)},
+                ]
+                for comment in bad:
+                    with self.subTest(comment=comment['body'][:90]), self.assertRaises(a.Hold):
+                        a.validate_park(active, comment, SINCE)
+                with self.assertRaises(a.Hold):
+                    a.validate_park(active, good, SINCE, used={888})
+                for change in (dict(phase='ci'), dict(phase='developing'), dict(head=None)):
+                    with self.subTest(change=change), self.assertRaises(a.Hold):
+                        a.validate_park(copy.deepcopy(active) | change, good, SINCE)
+                resumable = copy.deepcopy(active) | dict(attempt=2, resume_phase='ci', reason='Actions failed')
+                with self.assertRaises(a.Hold):
+                    a.validate_park(resumable, park_comment(resumable), SINCE)
+            finally:
+                os.close(store.lock)
+
+    def test_park_preserves_everything_and_is_not_done(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store, active = self.setup_store(tmp)
+            try:
+                bridge = self.bridge(tmp, store, [park_comment(active)])
+                before = copy.deepcopy(store.data)
+                qa_file = store.directory / 'qa-30-a3.json'
+                qa_bytes = qa_file.read_bytes()
+                self.assertTrue(self.do_park(bridge, active))
+                state = json.loads(store.path.read_text())
+                self.assertEqual(set(state), {'active', 'done'})
+                self.assertIsNone(state['active'])
+                self.assertEqual(state['done'], before['done'])
+                self.assertNotIn(30, state['done'])
+                parked = json.loads(store.parked_path.read_text())
+                self.assertEqual(set(parked), {'parked'})
+                entry, = parked['parked']
+                self.assertEqual(entry['snapshot'], before['active'])
+                self.assertEqual((entry['issue'], entry['attempt'], entry['head']), (30, 3, HEAD))
+                self.assertEqual(entry['snapshot']['history'], [dict(attempt=1, head=DRIFT)])
+                self.assertEqual(entry['snapshot']['qa']['verdict'], 'FAIL')
+                self.assertEqual(entry['allow_successors'], [31])
+                self.assertEqual(entry['park_comment'], 888)
+                self.assertEqual(json.loads((store.directory / 'before-park-30-a3.json').read_text()), before)
+                self.assertEqual(qa_file.read_bytes(), qa_bytes)
+                self.assertEqual(stat_mode(store.parked_path), 0o600)
+                # Restart sees the same parked set; replay of the comment is ignored.
+                os.close(store.lock)
+                again = a.Store(Path(tmp) / 'state')
+                try:
+                    self.assertEqual(again.parked, [entry])
+                    with self.assertRaises(a.Hold):
+                        a.validate_park(entry['snapshot'], park_comment(entry['snapshot']), SINCE,
+                                        used={e['park_comment'] for e in again.parked})
+                finally:
+                    os.close(again.lock)
+                    store.lock = os.open(Path(tmp) / 'state' / 'worker.lock', os.O_RDWR)
+            finally:
+                os.close(store.lock)
+
+    def test_negative_cases_change_nothing(self):
+        cases = {'wrong author': park_comment, 'edited': park_comment, 'wrong head': park_comment,
+                 'wrong attempt': park_comment, 'two comments': park_comment}
+        overrides = {'wrong author': dict(user={'id': 2}),
+                     'edited': dict(updated_at=(NOW + dt.timedelta(minutes=1)).isoformat()),
+                     'wrong head': dict(body=dict(head=DRIFT)),
+                     'wrong attempt': dict(body=dict(attempt=2))}
+        for name in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                store, active = self.setup_store(tmp)
+                try:
+                    comments = [park_comment(active, **copy.deepcopy(overrides.get(name, {})))]
+                    if name == 'two comments':
+                        comments.append(park_comment(active, id=889))
+                    bridge = self.bridge(tmp, store, comments)
+                    before = copy.deepcopy(store.data)
+                    try:
+                        self.assertFalse(self.do_park(bridge, active))
+                    except a.Hold:
+                        self.assertEqual(name, 'two comments')
+                    self.assertEqual(store.data, before)
+                    self.assertFalse(store.parked_path.exists())
+                    self.assertFalse((store.directory / 'before-park-30-a3.json').exists())
+                finally:
+                    os.close(store.lock)
+
+    def test_not_blocked_resumable_or_no_comment_do_not_park(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store, active = self.setup_store(tmp, attempt=2, resume_phase='ci', reason='Actions failed')
+            try:
+                bridge = self.bridge(tmp, store, [park_comment(active)])
+                with patch.object(a, 'pages', side_effect=AssertionError('no request expected')):
+                    self.assertFalse(bridge.park(active))  # resumable: RESUME only
+                self.assertEqual(store.data['active']['phase'], 'blocked')
+            finally:
+                os.close(store.lock)
+        with tempfile.TemporaryDirectory() as tmp:
+            store, active = self.setup_store(tmp)
+            try:
+                active['phase'] = 'ci'
+                bridge = self.bridge(tmp, store, [])
+                with patch.object(a, 'pages', side_effect=AssertionError('no request expected')):
+                    self.assertFalse(bridge.park(active))
+                active['phase'] = 'blocked'
+                self.assertFalse(self.do_park(bridge, active))  # blocked without marker only waits
+                self.assertEqual(store.data['active']['phase'], 'blocked')
+                self.assertFalse(store.parked_path.exists())
+            finally:
+                os.close(store.lock)
+
+    def test_parked_issue_never_reclaimed_but_later_and_unrelated_issues_are_claimable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store, active = self.setup_store(tmp)
+            try:
+                bridge = self.bridge(tmp, store, [park_comment(active, body=dict(allow_successors=[]))])
+                parent, comment = existing(30)
+                self.assertTrue(self.do_park(bridge, active))
+                # Old admission comment of the parked Issue must not re-claim it.
+                self.assertIsNone(store.claim([parent], SINCE, [comment]))
+                self.assertIsNone(store.claim([issue(30)], SINCE))
+                # A FRESH admission comment on the parked Issue also never re-claims it (no unpark in V1).
+                fresh = comment | dict(id=999, created_at=NOW.isoformat(), updated_at=NOW.isoformat())
+                self.assertIsNone(store.claim([parent], SINCE, [comment, fresh]))
+                self.assertEqual(store.data['active'], None)
+                # Issues authorized AFTER the park are NOT blocked, listed or not.
+                later = issue(31)
+                claimed = store.claim([parent, later], SINCE, [comment])
+                self.assertEqual(claimed['issue'], 31)
+                self.assertEqual(claimed['phase'], 'claimed')
+                self.assertNotIn(30, store.data['done'])
+                self.assertEqual([e['issue'] for e in store.parked], [30])
+            finally:
+                os.close(store.lock)
+
+    def test_successor_with_admission_comment_after_park_is_claimable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store, active = self.setup_store(tmp)
+            try:
+                self.assertTrue(self.do_park(self.bridge(tmp, store, [park_comment(active)]), active))
+                parent, comment = existing(13)
+                self.assertEqual(store.claim([parent], SINCE, [comment])['issue'], 13)
+            finally:
+                os.close(store.lock)
+
+    def test_crash_between_parked_file_and_state_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store, active = self.setup_store(tmp)
+            try:
+                bridge = self.bridge(tmp, store, [park_comment(active)])
+                original = store.save
+                calls = []
+
+                def crash():
+                    calls.append(1)
+                    raise OSError('simulated crash before state save')
+                store.save = crash
+                with self.assertRaises(OSError):
+                    self.do_park(bridge, active)
+                self.assertEqual(len(store.parked), 1)
+                self.assertEqual(json.loads(store.path.read_text())['active']['phase'], 'blocked')
+                store.save = original
+                store.data['active'] = json.loads(store.path.read_text())['active']
+                active = store.data['active']
+                # Owner comment deleted/edited meanwhile: recovery uses durable evidence, no GitHub read.
+                bridge = self.bridge(tmp, store, [])
+                with patch.object(a, 'pages', side_effect=AssertionError('no request expected')), \
+                        patch.object(a, 'api', side_effect=AssertionError('no request expected')):
+                    self.assertTrue(bridge.park(active))
+                self.assertEqual(len(store.parked), 1)
+                self.assertIsNone(json.loads(store.path.read_text())['active'])
+                self.assertNotIn(30, store.data['done'])
+                self.assertEqual(len(json.loads(store.parked_path.read_text())['parked']), 1)
+            finally:
+                os.close(store.lock)
+
+    def test_recovery_refuses_when_evidence_differs_from_checkpoint(self):
+        for tamper in ('snapshot', 'backup', 'nobackup'):
+            with self.subTest(tamper=tamper), tempfile.TemporaryDirectory() as tmp:
+                store, active = self.setup_store(tmp)
+                try:
+                    bridge = self.bridge(tmp, store, [park_comment(active)])
+                    store.save = lambda: (_ for _ in ()).throw(OSError('crash'))
+                    with self.assertRaises(OSError):
+                        self.do_park(bridge, active)
+                    del store.save
+                    store.data['active'] = json.loads(store.path.read_text())['active']
+                    active = store.data['active']
+                    backup = store.directory / 'before-park-30-a3.json'
+                    if tamper == 'snapshot':
+                        store.parked[0]['snapshot']['attempt'] = 1
+                    elif tamper == 'backup':
+                        backup.write_text('{"active": null, "done": [1]}')
+                    else:
+                        backup.unlink()
+                    bridge = self.bridge(tmp, store, [])
+                    with patch.object(a, 'pages', side_effect=AssertionError('no request expected')), \
+                            self.assertRaises(a.Hold):
+                        bridge.park(active)
+                    self.assertEqual(json.loads(store.path.read_text())['active']['phase'], 'blocked')
+                finally:
+                    os.close(store.lock)
+
+    def test_invalid_parked_file_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp) / 'state'
+            store = a.Store(directory)
+            os.close(store.lock)
+            for raw in ('{"parked": 1}', '{"parked": [], "x": 1}', '{"parked": [{"issue": "1"}]}'):
+                (directory / 'parked.json').write_text(raw)
+                with self.subTest(raw=raw), self.assertRaises(a.Hold):
+                    a.Store(directory)
+
+
+def stat_mode(path):
+    return os.stat(path).st_mode & 0o777
+
+
 if __name__ == '__main__':
     unittest.main()

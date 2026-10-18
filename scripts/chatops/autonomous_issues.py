@@ -26,6 +26,7 @@ WRITE_REMOTE = f'git@github.com:{REPO}.git'
 KEY = Path('/home/agentagency-dev/.ssh/gobadminton-clean-chatops-ed25519')
 MARKER = 'GOBADMINTON_AUTONOMY_V1'
 RESUME_MARKER = 'GOBADMINTON_RESUME_V1'
+PARK_MARKER = 'GOBADMINTON_PARK_V1'
 OWNER_ID = 318610566
 SHA = re.compile(r'[0-9a-f]{40}')
 PHASES = {'claimed', 'developing', 'candidate', 'pr_wait', 'qa', 'ci',
@@ -218,6 +219,43 @@ def validate_resume(active, comment, since, now=None):
     return value
 
 
+def validate_park(active, comment, since, used=(), now=None):
+    """One-shot Owner marker that parks a genuinely blocked task; bound to issue/head/attempt."""
+    require(active and active.get('phase') == 'blocked' and SHA.fullmatch(active.get('head') or '')
+            and type(active.get('attempt')) is int, 'task not parkable')
+    require(not resume_eligible(active), 'resumable task must use RESUME')
+    require(type(comment.get('id')) is int and comment['id'] > 0, 'invalid comment id')
+    require(comment['id'] not in used and comment['id'] not in active.get('parks', []),
+            'park comment already used')
+    require(comment.get('issue_url') ==
+            f'https://api.github.com/repos/{REPO}/issues/{active["issue"]}', 'wrong comment parent')
+    require(type(comment.get('user', {}).get('id')) is int
+            and comment['user']['id'] == OWNER_ID, 'not Owner comment')
+    body = comment.get('body')
+    require(isinstance(body, str) and len(body.encode()) <= 8192, 'invalid body size')
+    marker, separator, raw = body.partition('\n')
+    require(marker == PARK_MARKER and separator, 'no exact park marker')
+    require(comment.get('updated_at') == comment.get('created_at'), 'edited park comment')
+    created = dt.datetime.fromisoformat(comment['created_at'].replace('Z', '+00:00'))
+    now = now or dt.datetime.now(dt.timezone.utc)
+    require(since <= created <= now, 'park outside enrollment window')
+    value = loads(raw)
+    require(isinstance(value, dict) and set(value) == {
+        'schema', 'issue', 'head', 'attempt', 'reason', 'allow_successors'}, 'unexpected park fields')
+    require(value['schema'] == PARK_MARKER, 'park scope')
+    require(type(value['issue']) is int and value['issue'] == active['issue'], 'park issue mismatch')
+    require(isinstance(value['head'], str) and value['head'] == active['head'], 'park head mismatch')
+    require(type(value['attempt']) is int and value['attempt'] == active['attempt'],
+            'park attempt mismatch')
+    require(isinstance(value['reason'], str) and 1 <= len(value['reason']) <= 500, 'park reason size')
+    successors = value['allow_successors']
+    require(isinstance(successors, list) and len(successors) <= 3
+            and len(set(successors)) == len(successors)
+            and all(type(n) is int and n > 0 and n != active['issue'] for n in successors),
+            'invalid allow_successors')
+    return value
+
+
 def discover(store, since):
     issues = pages('issues?state=open')
     cutoff = urllib.parse.quote(since.isoformat(), safe='')
@@ -266,6 +304,16 @@ class Store:
         self.path = directory / 'state.json'
         require(not self.path.is_symlink(), 'symlink state')
         self.data = loads(self.path.read_bytes()) if self.path.exists() else {'active': None, 'done': []}
+        # Parked tasks live in a SEPARATE file; state.json keeps its exact {active, done} schema.
+        self.parked_path = directory / 'parked.json'
+        require(not self.parked_path.is_symlink(), 'symlink parked state')
+        parked = loads(self.parked_path.read_bytes()) if self.parked_path.exists() else {'parked': []}
+        require(set(parked) == {'parked'} and isinstance(parked['parked'], list), 'invalid parked state')
+        for entry in parked['parked']:
+            require(isinstance(entry, dict) and type(entry.get('issue')) is int
+                    and isinstance(entry.get('allow_successors'), list)
+                    and type(entry.get('park_comment')) is int, 'invalid parked entry')
+        self.parked = parked['parked']
         require(set(self.data) == {'active', 'done'} and isinstance(self.data['done'], list),
                 'invalid checkpoint')
         if self.data['active']:
@@ -283,8 +331,9 @@ class Store:
         choices = []
         for issue in issues:
             try:
-                if issue['number'] in self.data['done']:
-                    continue
+                if issue['number'] in self.data['done'] or any(
+                        e['issue'] == issue['number'] for e in self.parked):
+                    continue  # parked != done, but a parked task is never re-claimed
                 try:
                     body_task = validate_issue(issue, since)
                 except (Hold, ValueError, KeyError, TypeError):
@@ -322,6 +371,21 @@ class Store:
             self.data['active']['comment'] = admission
         self.save()
         return self.data['active']
+
+    def park(self, entry):
+        """Checkpoint order: parked.json first, then state. Idempotent after a crash in between."""
+        active = self.data['active']
+        require(active and active['phase'] == 'blocked' and active['issue'] == entry['issue'],
+                'nothing to park')
+        same = [e for e in self.parked if e['issue'] == entry['issue']]
+        if same:
+            require(same == [entry], 'different parked entry exists; reconcile')
+        else:
+            atomic(self.parked_path, {'parked': self.parked + [entry]})
+            self.parked = self.parked + [entry]
+        self.data['active'] = None  # never appended to done
+        self.save()
+        print(json.dumps({'phase': 'parked', 'issue': entry['issue'], 'sha': entry['head']}), flush=True)
 
     def phase(self, phase, **fields):
         require(phase in PHASES, 'unknown phase')
@@ -846,6 +910,51 @@ class Bridge:
                     resumes=resumes, ci_failure=failure, reason=None, resume_phase=None)
         return True
 
+    def park(self, active):
+        """Blocked task that cannot be resumed -> parked.json, slot freed, NOT done. True once parked."""
+        if not (active and active.get('phase') == 'blocked') or resume_eligible(active):
+            return False
+        pending = [e for e in self.store.parked if e['issue'] == active['issue']]
+        if pending:
+            # Crash after the parked.json write: finish from durable evidence only. The Owner comment is
+            # NOT re-read, so a later edit/deletion of it cannot strand the slot or change the outcome.
+            entry = pending[0]
+            backup = self.c.state_dir / f'before-park-{active["issue"]}-a{active["attempt"]}.json'
+            require(len(pending) == 1 and entry['head'] == active['head']
+                    and entry['attempt'] == active['attempt']
+                    and entry['snapshot'] == json.loads(json.dumps(active))
+                    and backup.exists() and not backup.is_symlink()
+                    and loads(backup.read_bytes()) == self.store.data,
+                    'parked entry/backup differ from checkpoint; reconcile')
+            self.store.park(entry)
+            return True
+        since = dt.datetime.fromisoformat(active['approved_since'].replace('Z', '+00:00'))
+        cutoff = urllib.parse.quote(since.isoformat(), safe='')
+        used = {e['park_comment'] for e in self.store.parked}
+        valid = []
+        for comment in pages(f'issues/{active["issue"]}/comments?since={cutoff}'):
+            try:
+                valid.append((comment, validate_park(active, comment, since, used)))
+            except (Hold, ValueError, KeyError, TypeError):
+                continue
+        if not valid:
+            return False
+        require(len(valid) == 1, 'ambiguous park comments')
+        comment, value = valid[0]
+        self.unchanged_issue(active)
+        backup = self.c.state_dir / f'before-park-{active["issue"]}-a{active["attempt"]}.json'
+        require(not backup.is_symlink(), 'park backup is a symlink')
+        if backup.exists():  # retry after a transient pre-checkpoint failure; never overwrite
+            require(loads(backup.read_bytes()) == self.store.data, 'park backup differs; reconcile')
+        else:
+            atomic(backup, self.store.data)
+        snapshot = json.loads(json.dumps(active))
+        entry = dict(issue=active['issue'], head=active['head'], attempt=active['attempt'],
+                     park_comment=comment['id'], allow_successors=value['allow_successors'],
+                     reason=value['reason'], snapshot=snapshot)
+        self.store.park(entry)
+        return True
+
     def execute(self, active, recovery=False):
         self.work = self.c.worktrees_root / f'issue-{active["issue"]}'
         self.unchanged_issue(active)
@@ -983,8 +1092,18 @@ def main():
                                                  else type(error).__name__), flush=True)
                     resumed = False
                 if not resumed:
-                    time.sleep(config.poll)
-                    continue
+                    try:
+                        parked = bridge.park(active)
+                    except Exception as error:
+                        current = store.data['active']
+                        if current is None or current['phase'] != 'blocked':
+                            raise
+                        print('Park declined: ' + (str(error) if isinstance(error, Hold)
+                                                   else type(error).__name__), flush=True)
+                        parked = False
+                    if not parked:
+                        time.sleep(config.poll)
+                    continue  # parked: slot is free, next pass may claim any other admitted Issue
                 recovery = False
             if not active or active['phase'] == 'done':
                 active = discover(store, since)
