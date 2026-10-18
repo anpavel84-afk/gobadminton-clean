@@ -79,15 +79,18 @@ export function RadarPage({ sharedMap, resumeCamera = false }: { sharedMap?: Lib
     // Keep the existing bounded page-window API. Panning or PageDown exposes
     // the next window without adding a permanent map control or accumulating pins.
     const next = () => { const current = controller.snapshot(); if (!current.busy && current.mapPage?.nextMapCursor) void controller.map(true); };
+    // The existing status popover and canvas shortcut open the same sheet.
+    const openList = () => { trigger.current = document.activeElement as HTMLElement; controller.close(); setListOpen(true); };
     const key = (event: KeyboardEvent) => {
       if (document.querySelector("dialog[open], [role=dialog]")) return;
       if (event.key === "PageDown") { event.preventDefault(); next(); }
-      if (event.key.toLowerCase() === "l") { trigger.current = document.activeElement as HTMLElement; controller.close(); setListOpen(true); }
+      if (event.key.toLowerCase() === "l") openList();
     };
     const canvas = sharedMap.getCanvas();
     canvas.setAttribute("aria-description", "Стрелки перемещают карту. PageDown — следующие участники Radar. L — список участников на карте.");
     canvas.addEventListener("keydown", key); sharedMap.on("dragend", next);
-    return () => { canvas.removeEventListener("keydown", key); sharedMap.off("dragend", next); canvas.removeAttribute("aria-description"); };
+    window.addEventListener("gb-radar-map-list", openList);
+    return () => { window.removeEventListener("gb-radar-map-list", openList); canvas.removeEventListener("keydown", key); sharedMap.off("dragend", next); canvas.removeAttribute("aria-description"); };
   }, [sharedMap, controller, activationId]);
   const mapped = candidate && !failed && controller && session.me;
   function close() { if (window.history.state?.gbRadarPreview) window.history.back(); controller?.close(); setListOpen(false); setExpanded(false); requestAnimationFrame(() => { if (trigger.current?.isConnected) trigger.current.focus({ preventScroll: true }); }); }

@@ -198,6 +198,7 @@ export function RadarStatusAffordance({ mapControls = false }: { mapControls?: b
       {needsLocation && <p role="status">Обновите геопозицию, чтобы Radar продолжал показывать участников.</p>}
       {view.phase === "owned_elsewhere" && <p>Radar работает на другом устройстве. Можно перенести его сюда.</p>}
       <div className="gb-radar-popover__actions">
+        {mapControls && running && !view.pendingStop && <Button variant="outline" disabled={!directory.controller || !directory.view.snapshot} aria-controls="g2-map-panel" onClick={() => { close(); window.dispatchEvent(new Event("gb-radar-map-list")); }}>Список участников</Button>}
         {mapControls && running && !view.pendingStop && directory.view.mapPage?.nextMapCursor && <Button variant="outline" disabled={directory.view.busy || !directory.controller} onClick={() => { if (directory.controller) void directory.controller.map(true); }}>Следующие точки</Button>}
         {view.phase === "guest" ? <AuthEntry returnPath="/players">Войти для Radar</AuthEntry> :
           running ? <>
