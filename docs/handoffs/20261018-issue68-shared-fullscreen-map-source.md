@@ -84,3 +84,40 @@ exact-SHA source QA, then existing authorized CI/release gates only. No next sli
 admitted. Before publication undo only this handoff and the #68 source edits;
 after publication use a reviewed exact-candidate revert through the existing
 pipeline. No runtime rollback performed or authorized by this handoff.
+
+## Independent QA repair — 2026-10-18
+
+From: source author. To: admitted executor / independent exact-SHA QA.
+Status: WORKING_DRAFT, UNVERIFIED. Repair base:
+`e1074226b43e3b8ef01c3f3ca2b0d162101e5293` (clean working tree).
+Prior independent verdict: FAIL, two findings supplied in immutable assignment:
+session-wide camera prevented fresh Radar-ON centering; map pagination unreachable.
+
+Camera restoration now belongs to the map's browser history entry, matched to its
+exact path/search. Opening a new Games map entry clears inherited camera state.
+A venue selection saves a return camera; the explicit venue-to-map action arms a
+one-shot restoration consumed on map creation. A saved browsing camera alone no
+longer suppresses initial own-position centering. Centering also waits for an
+eligible, consenting own profile, remains once-only, and respects manual movement.
+Browser history restoration and the explicit venue return preserve camera.
+
+Restored the existing nextMapCursor action via controller.map(true), only while
+Radar is permitted. It replaces the bounded private map window (no automatic
+city-wide accumulation), disables during requests and disappears with Radar OFF.
+This necessary participant-page action is map content, positioned above legal
+attribution with safe insets; it adds no header, filter, legend or map toolbar.
+STYLE_GUIDE_PARITY: existing frozen outline Button, white surface, spacing,
+shadow and focus tokens reused; original Option3 Owner override retained.
+No new visual pattern or API/privacy semantics introduced.
+
+Changed source: GamesVenueMap, SharedRadarLayer, GamesDiscoveryPage, VenuePage,
+fullscreen-map.css and this handoff. Rollback: revert only this repair diff against
+the repair base; no git operation performed by source author.
+No tests, self-QA, browser sessions, CI, deployment, commits or pushes performed,
+as explicitly required by the source-only instruction. All acceptance criteria
+remain UNVERIFIED for this candidate, including authenticated Radar and physical
+iOS/WebKit. Historical limitations/failures above remain in force.
+Next bounded action: executor publishes the candidate and obtains new independent
+exact-SHA source QA; CI/release remain separate authorized executor stages.
+No immutable assignment or attempt counter changed. GitHub publication is pending
+executor transport; this local source handoff is not a published durable record.

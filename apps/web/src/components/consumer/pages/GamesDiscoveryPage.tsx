@@ -64,7 +64,9 @@ export function GamesDiscoveryPage() {
     }
     const url = new URL(window.location.href);
     url.searchParams.set("view", next);
-    window.history.pushState(window.history.state, "", url);
+    const nextState = { ...window.history.state };
+    delete nextState.gbFullscreenMapCamera;
+    window.history.pushState(nextState, "", url);
     setView(next);
   }
 

@@ -23,3 +23,7 @@
 }
 .gb-fullscreen-map .gb-games-map .g2-map-venue-marker { width:44px; height:44px; padding:6px; display:grid; place-items:center; border:0; border-radius:50%; background:transparent; }
 .gb-fullscreen-map .gb-person-marker[aria-pressed="true"] { outline:3px solid var(--gb-purple); outline-offset:2px; }
+
+/* Bounded participant window navigation; never accumulate private city pins. */
+.gb-map-people-page { position:absolute; z-index:3; left:calc(env(safe-area-inset-left,0px) + var(--gb-space-3)); bottom:calc(env(safe-area-inset-bottom,0px) + 48px); max-width:calc(100% - env(safe-area-inset-left,0px) - env(safe-area-inset-right,0px) - 24px); }
+.gb-map-people-page .gb-c23-btn { min-height:44px; background:var(--gb-white); box-shadow:var(--c23-shadow-soft); white-space:normal; }

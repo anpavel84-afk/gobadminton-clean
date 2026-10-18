@@ -26,6 +26,7 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability, cityId
   const venuesRef = useRef(venues); venuesRef.current = venues;
   const callbacks = useRef({ onSelect, onAvailability }); callbacks.current = { onSelect, onAvailability };
   const markers = useRef(new Map<string, { marker: maplibregl.Marker; button: HTMLButtonElement }>());
+  const restoredCamera = useRef(false);
   const [ready, setReady] = useState(false);
   const [settled, setSettled] = useState(false);
   const [status, setStatus] = useState("Загружаем карту города…");
@@ -52,15 +53,21 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability, cityId
         });
         instance.touchZoomRotate.disableRotation(); map.current = instance;
         try {
-          const camera = JSON.parse(sessionStorage.getItem("gb-games-map-camera") ?? "null");
+          const returning = JSON.parse(sessionStorage.getItem("gb-map-explicit-return") ?? "null");
+          sessionStorage.removeItem("gb-map-explicit-return");
+          const saved = window.history.state?.gbFullscreenMapCamera ?? returning;
+          const camera = saved?.path === window.location.pathname + window.location.search ? saved : null;
           if (camera && [camera.lng, camera.lat, camera.zoom].every(Number.isFinite) && camera.lng >= 36 && camera.lng <= 39.5 && camera.lat >= 54.5 && camera.lat <= 56.5)
+            {
             instance.jumpTo({ center: [camera.lng, camera.lat], zoom: Math.min(16, Math.max(0, camera.zoom)) });
+            restoredCamera.current = true;
+          }
         } catch { /* Storage is optional. */ }
         instance.on("movestart", () => { if (alive) setSettled(false); });
         instance.on("idle", () => { if (alive) setSettled(true); });
         instance.on("moveend", () => {
           const center = instance!.getCenter();
-          try { sessionStorage.setItem("gb-games-map-camera", JSON.stringify({ lng: center.lng, lat: center.lat, zoom: instance!.getZoom() })); } catch { /* Storage is optional. */ }
+          try { window.history.replaceState({ ...window.history.state, gbFullscreenMapCamera: { path: window.location.pathname + window.location.search, lng: center.lng, lat: center.lat, zoom: instance!.getZoom() } }, ""); } catch { /* Storage is optional. */ }
         });
         instance.on("load", () => { if (alive) { setReady(true); callbacks.current.onAvailability?.(true); setStatus(""); clearTimeout(timeout); } });
         instance.on("error", () => { if (alive) unavailable(); });
@@ -85,7 +92,9 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability, cityId
         button.addEventListener("click", event => {
           if (!activation.allow(event.detail) || map.current?.isMoving()) return;
           const current = callbacks.current;
-          try { sessionStorage.setItem("gb-games-map-selected", venue.id); } catch { /* Optional storage. */ }
+          try { sessionStorage.setItem("gb-games-map-selected", venue.id);
+            const center = map.current!.getCenter();
+            sessionStorage.setItem("gb-map-venue-camera", JSON.stringify({ path: window.location.pathname + window.location.search, lng: center.lng, lat: center.lat, zoom: map.current!.getZoom() })); } catch { /* Optional storage. */ }
           current.onSelect(venuesRef.current.find(item => item.id === venue.id) ?? venue);
         });
         const marker = new maplibregl.Marker({ element: button }).setLngLat([venue.longitude!, venue.latitude!]).addTo(map.current!);
@@ -107,5 +116,5 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability, cityId
       remove: entry => entry.marker.remove(),
     });
   }, [ready, venues, counts]);
-  return <><div ref={container} data-map-ready={ready} data-map-settled={settled} className="gb-games-map-canvas" />{status && <p role="status">{status}</p>}{ready && map.current && <SharedRadarLayer map={map.current} cityId={cityId} />}</>;
+  return <><div ref={container} data-map-ready={ready} data-map-settled={settled} className="gb-games-map-canvas" />{status && <p role="status">{status}</p>}{ready && map.current && <SharedRadarLayer map={map.current} cityId={cityId} restoredCamera={restoredCamera.current} />}</>;
 }

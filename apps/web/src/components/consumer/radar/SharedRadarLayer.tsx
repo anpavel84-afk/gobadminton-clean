@@ -5,12 +5,13 @@ import { Marker, type Map as LibreMap } from "maplibre-gl";
 import { getMySocialProfile } from "../../../lib/api-client";
 import type { OwnSocialProfile } from "../../../lib/consumer-types";
 import { candidateMapConfigAllowed } from "../../../lib/radar-map-assets";
+import { Button } from "../Button";
 import { Avatar } from "../players/ProfileComposition";
 import { UnifiedPlayerPreview } from "./UnifiedPlayerPreview";
 import { useDirectoryFilters, useRadarConfig, useRadarSession, useUnifiedDirectory } from "./RadarSessionProvider";
 
 /** People are a private, independently revocable layer on the public venue map. */
-export function SharedRadarLayer({ map, cityId }: { map: LibreMap; cityId: string }) {
+export function SharedRadarLayer({ map, cityId, restoredCamera }: { map: LibreMap; cityId: string; restoredCamera: boolean }) {
   const { view: session } = useRadarSession();
   const { controller, view } = useUnifiedDirectory();
   const { filters } = useDirectoryFilters(); const config = useRadarConfig();
@@ -44,11 +45,11 @@ export function SharedRadarLayer({ map, cityId }: { map: LibreMap; cityId: strin
   const center = permitted && session.status?.state === "active" ? session.status.coarseCenter : undefined;
   const validCenter = center && Number.isFinite(center.latitude) && Number.isFinite(center.longitude) && center.longitude >= 36 && center.longitude <= 39.5 && center.latitude >= 54.5 && center.latitude <= 56.5 ? center : undefined;
   useEffect(() => {
-    if (!validCenter || centered.current || interacted.current) return;
+    if (!validCenter || !own?.socialEligible || !own.radarConsented || centered.current || interacted.current) return;
     centered.current = true;
     // Preserve the saved map when returning from a venue/game or browser history.
-    if (!sessionStorageCamera()) map.jumpTo({ center: [validCenter.longitude, validCenter.latitude] });
-  }, [map, validCenter?.latitude, validCenter?.longitude]);
+    if (!restoredCamera) map.jumpTo({ center: [validCenter.longitude, validCenter.latitude] });
+  }, [map, validCenter?.latitude, validCenter?.longitude, own, restoredCamera]);
   useEffect(() => {
     const markers: Marker[] = []; const content: typeof portals = [];
     if (permitted && own?.socialEligible && own.radarConsented) {
@@ -86,8 +87,8 @@ export function SharedRadarLayer({ map, cityId }: { map: LibreMap; cityId: strin
     if (view.selected) panel.current?.focus(); else if (trigger.current?.isConnected) trigger.current.focus();
   }, [view.selected]);
   return <>{portals.map(item => createPortal(<Avatar name={item.name} avatar={item.avatar} />, item.element))}
+    {permitted && view.mapPage?.nextMapCursor && <div className="gb-map-people-page"><Button variant="outline" disabled={view.busy} onClick={() => void controller?.map(true)}>Следующие участники на карте</Button></div>}
     {permitted && own && !validCenter && <p className="gb-map-exception" role="status">Ваша опубликованная геопозиция недоступна.</p>}
     {permitted && view.selected && <aside ref={panel} tabIndex={-1} className="g2-map-panel" aria-label="Игрок на карте" onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); controller?.close(); } }}><UnifiedPlayerPreview onClose={() => controller?.close()} /></aside>}
   </>;
 }
-function sessionStorageCamera() { try { return sessionStorage.getItem("gb-games-map-camera"); } catch { return null; } }
