@@ -61,7 +61,7 @@ run("T0a-1: контакты площадки и приватность",()=>{
     await db.query("INSERT INTO schema_migrations(id) VALUES($1)",[file.replace(/\.sql$/,"")]);
    }
    const uid=(await db.query("INSERT INTO users(display_name) VALUES('Синтетический пользователь') RETURNING id")).rows[0].id;
-   const id=(await db.query("INSERT INTO venues(city_id,name,address,timezone,location,created_by_user_id) VALUES($1,'Синтетический зал','Синтетический адрес','Europe/Moscow',ST_SetSRID(ST_MakePoint(37.62,55.75),4326)::geography,$2) RETURNING id",[cityId,uid])).rows[0].id;
+   const id=(await db.query("INSERT INTO venues(city_id,name,address,timezone,location,created_by_user_id,lifecycle_state,normalized_name,normalized_address) VALUES($1,'Синтетический зал','Синтетический адрес','Europe/Moscow',ST_SetSRID(ST_MakePoint(37.62,55.75),4326)::geography,$2,'unverified',venue_normalize_v1('Синтетический зал'),venue_normalize_v1('Синтетический адрес')) RETURNING id",[cityId,uid])).rows[0].id;
    const sql=await readFile(path.join(dir,"0036_venue_contacts.sql"),"utf8");
    await db.query(sql);await db.query("INSERT INTO schema_migrations(id) VALUES('0036_venue_contacts')");
    // migrate.ts пропускает применённый файл по ledger; сырой ALTER повторно не исполняется.
