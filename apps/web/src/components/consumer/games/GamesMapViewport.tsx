@@ -1,5 +1,6 @@
 "use client";
 import { useLayoutEffect, useRef, type ReactNode } from "react";
+import { RadarStatusAffordance } from "../radar/RadarSessionProvider";
 import "../../../styles/fullscreen-map.css";
 
 /** Shared map surface owns the viewport; list chrome is unmounted, never covered. */
@@ -21,7 +22,11 @@ export function FullscreenMap({ children, onBack }: { children: ReactNode; onBac
     viewport?.addEventListener("resize", measure); viewport?.addEventListener("scroll", measure);
     return () => { window.removeEventListener("resize", measure); viewport?.removeEventListener("resize", measure); viewport?.removeEventListener("scroll", measure); };
   }, []);
-  return <main ref={frame} id="gb-main" className="gb-consumer gb-fullscreen-map" aria-label="Игры и площадки на карте" onKeyDown={event => { if (event.key === "Escape" && !event.defaultPrevented) onBack(); }}>
+  return <main ref={frame} id="gb-main" className="gb-consumer gb-fullscreen-map" aria-label="Игры и площадки на карте" onKeyDown={event => {
+    // The existing Radar popover owns Escape before the map return action.
+    if (event.key === "Escape" && !event.defaultPrevented && !frame.current?.querySelector('.gb-radar-indicator [aria-expanded="true"], .gb-radar-indicator [role="dialog"]')) onBack();
+  }}>
     {children}<button ref={back} type="button" className="gb-map-back" onClick={onBack}><span aria-hidden="true">←</span>К списку</button>
+    <div className="gb-map-radar-control"><RadarStatusAffordance /></div>
   </main>;
 }

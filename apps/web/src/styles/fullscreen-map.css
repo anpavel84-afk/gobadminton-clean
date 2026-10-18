@@ -4,6 +4,9 @@
 .gb-fullscreen-map .gb-games-map-canvas { position:absolute; inset:0; width:100%; height:100%; }
 .gb-map-back { position:absolute; z-index:5; top:calc(env(safe-area-inset-top,0px) + var(--gb-space-3)); left:calc(env(safe-area-inset-left,0px) + var(--gb-space-3)); display:flex; align-items:center; gap:var(--gb-space-2); min-height:44px; padding:6px 16px 6px 6px; border:1px solid var(--gb-line); border-radius:var(--gb-radius-pill); background:var(--gb-white); color:var(--gb-ink); font:600 14px var(--gb-font); box-shadow:var(--c23-shadow-soft); cursor:pointer; }
 .gb-map-back > span { display:grid; place-items:center; width:30px; height:30px; border-radius:50%; background:var(--gb-purple); color:var(--gb-white); font-size:22px; }
+.gb-map-radar-control { position:absolute; z-index:6; top:calc(env(safe-area-inset-top,0px) + var(--gb-space-3)); right:calc(env(safe-area-inset-right,0px) + var(--gb-space-3)); }
+.gb-map-radar-control .gb-radar-indicator__link { background:var(--gb-white); box-shadow:var(--c23-shadow-soft); }
+.gb-fullscreen-map .gb-radar-popover { right:0; max-width:calc(100vw - env(safe-area-inset-left,0px) - env(safe-area-inset-right,0px) - 24px); max-height:calc(100dvh - env(safe-area-inset-top,0px) - env(safe-area-inset-bottom,0px) - 84px); overflow:auto; }
 .gb-fullscreen-map :is(button,a):focus-visible { outline:3px solid var(--gb-purple); outline-offset:3px; }
 .gb-fullscreen-map .maplibregl-ctrl-bottom-right { right:env(safe-area-inset-right,0px); bottom:env(safe-area-inset-bottom,0px); max-width:100%; }
 .gb-fullscreen-map .maplibregl-ctrl-attrib { background:var(--gb-white); font-size:11px; line-height:16px; max-width:100%; white-space:normal; }

@@ -121,3 +121,50 @@ Next bounded action: executor publishes the candidate and obtains new independen
 exact-SHA source QA; CI/release remain separate authorized executor stages.
 No immutable assignment or attempt counter changed. GitHub publication is pending
 executor transport; this local source handoff is not a published durable record.
+
+## Independent QA repair — Radar control and marker identity
+
+From: source author. To: same admitted executor / independent QA.
+Date: 2026-10-18. Status: WORKING_DRAFT — UNVERIFIED, NOT ACCEPTED.
+Exact repair base: `6c14575e1da83e518b34e87b58e8311837bcafc5`, clean
+`automation/issue-68` worktree. Base source:
+https://github.com/anpavel84-afk/gobadminton-clean/tree/6c14575e1da83e518b34e87b58e8311837bcafc5
+The supplied independent source QA verdict for this base is FAIL: the fullscreen
+map lacked Radar management, and selection used nonunique display names.
+
+The shared FullscreenMap now mounts the existing RadarStatusAffordance for both
+GamesDiscoveryPage and RadarPage. The established explicit consent/start/stop,
+status and privacy flow is reused; no alternate toggle or permission path added.
+Its compact existing circular control floats at the safe upper-right edge, with
+no header or toolbar. The popover is bounded and scrollable for short viewports;
+Escape is left to the Radar popover/dialog while present before map exit.
+Session updates flow into the existing people layer without keying/remounting the
+map component. Venue and camera ownership are unchanged.
+
+SharedRadarLayer stores publicPlayerId on each portal record and compares selected
+identity directly. Equal display names no longer identify selection. Own avatar
+records remain distinct and do not receive neighbour aria-pressed state.
+
+STYLE_GUIDE_PARITY: reused existing owner-approved RadarStatusAffordance,
+Radar glyph/countdown, popover, consent dialog and Button families, plus frozen
+white/spacing/shadow tokens. Clarification A and supplied independent QA require
+in-map Radar management alongside the Option3 return control. No new visual
+family; original documented Option3 override and shuttlecock gap remain.
+The referenced operations Style Guide document remains absent; frozen external
+source was not fetched. No visual parity acceptance is claimed.
+
+Changed files: GamesMapViewport.tsx, SharedRadarLayer.tsx, fullscreen-map.css and
+this handoff, all within allowed_paths. No tests, typecheck, lint, build, browser,
+screenshots, live API, self-QA or independent QA executed by this source author.
+Authenticated Radar, physical iOS/WebKit and every release acceptance criterion
+remain NOT_TESTED / UNVERIFIED for this repair. No commit, push, git metadata,
+automation, counters, services, secrets or deployments changed. Prior historical
+FAIL / PASS_LIMITED qualifications above remain unchanged.
+
+Next bounded action: admitted executor publishes the candidate and this handoff,
+then requests NEW independent exact-SHA source QA including duplicate-name
+selection and Radar ON/OFF from both entrypoints with camera/filter/venue/focus
+preservation, Escape and short-viewport popover access. Existing hosted CI and
+release gates remain separate. Publication and exact candidate permalink are
+pending executor transport, not claimed complete here. Rollback is only this
+four-file repair diff against the exact base above; no rollback performed.

@@ -16,7 +16,7 @@ export function SharedRadarLayer({ map, cityId, restoredCamera }: { map: LibreMa
   const { controller, view } = useUnifiedDirectory();
   const { filters } = useDirectoryFilters(); const config = useRadarConfig();
   const [own, setOwn] = useState<OwnSocialProfile | null>(null);
-  const [portals, setPortals] = useState<Array<{ element: HTMLButtonElement; name: string; avatar?: OwnSocialProfile["avatar"] }>>([]);
+  const [portals, setPortals] = useState<Array<{ element: HTMLButtonElement; publicPlayerId: string; name: string; avatar?: OwnSocialProfile["avatar"]; own?: boolean }>>([]);
   const centered = useRef(false); const interacted = useRef(false);
   const trigger = useRef<HTMLElement | null>(null); const panel = useRef<HTMLElement>(null);
   const active = session.phase === "active" && session.confirmedOn && !session.pendingStop && session.status?.state === "active" && session.status.contractVersion === "players-unified-radar-v1";
@@ -61,14 +61,14 @@ export function SharedRadarLayer({ map, cityId, restoredCamera }: { map: LibreMa
         element.setAttribute("aria-label", `Показать игрока: ${row.player.displayName}`); element.setAttribute("aria-pressed", String(view.selected === row.publicPlayerId));
         element.onclick = () => { if (map.isMoving()) return; trigger.current = element; void controller?.select(row); };
         markers.push(new Marker({ element }).setLngLat([geo.longitude, geo.latitude]).addTo(map));
-        content.push({ element, name: row.player.displayName, avatar: row.player.avatar });
+        content.push({ element, publicPlayerId: row.publicPlayerId, name: row.player.displayName, avatar: row.player.avatar });
       }
       if (validCenter) {
         const element = document.createElement("button"); element.type = "button"; element.className = "g2-map-marker gb-person-marker gb-person-marker--own";
         element.setAttribute("aria-label", `Вы: ${own.displayName}`);
         element.onclick = () => { window.location.assign("/profile"); };
         markers.push(new Marker({ element }).setLngLat([validCenter.longitude, validCenter.latitude]).addTo(map));
-        content.push({ element, name: own.displayName, avatar: own.avatar });
+        content.push({ element, publicPlayerId: own.publicPlayerId, name: own.displayName, avatar: own.avatar, own: true });
       }
     }
     setPortals(content);
@@ -76,10 +76,9 @@ export function SharedRadarLayer({ map, cityId, restoredCamera }: { map: LibreMa
   }, [map, permitted, own, view.pins, validCenter?.latitude, validCenter?.longitude, controller]);
   useEffect(() => {
     for (const item of portals) {
-      const row = view.pins.find(row => `Показать игрока: ${row.player.displayName}` === item.element.getAttribute("aria-label"));
-      if (row) item.element.setAttribute("aria-pressed", String(view.selected === row.publicPlayerId));
+      if (!item.own) item.element.setAttribute("aria-pressed", String(view.selected === item.publicPlayerId));
     }
-  }, [view.selected, portals, view.pins]);
+  }, [view.selected, portals]);
   useEffect(() => {
     if (!permitted) controller?.close();
   }, [permitted, controller]);
