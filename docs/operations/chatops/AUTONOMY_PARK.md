@@ -31,7 +31,7 @@ Known limits: parking requires the Issue to be open and unchanged (`unchanged_is
 
 ## PARK_V1.1: headless `zero diff` task
 A blocked task with no candidate head can be parked ONLY in this exact shape (strict equality, nothing else):
-`phase == blocked`, `resume_phase == developing`, `reason == "zero diff"`, `head is null`, `pr is null`, valid `base` SHA.
+`phase == blocked`, `resume_phase == developing`, `reason == "zero diff"`, `head is null`, `pr is null`, valid `base` SHA, and `attempt` is an integer (a bool or a string is rejected); the comment `attempt` must be an integer equal to it.
 Such a task is never resumable (RESUME_V1 needs a head and a CI failure) and is unchanged by this release.
 The Owner comment keeps the same marker `GOBADMINTON_PARK_V1` and all PARK_V1 checks (Owner id, not edited, parent Issue,
 after enrollment, one-time comment id, exactly one valid comment) but carries exactly 7 JSON keys:
