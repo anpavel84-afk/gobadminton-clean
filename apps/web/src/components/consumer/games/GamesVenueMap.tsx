@@ -2,6 +2,8 @@
 import { useEffect, useRef, useState } from "react";
 import * as maplibregl from "maplibre-gl";
 import type { Map as LibreMap, StyleSpecification } from "maplibre-gl";
+import { SharedRadarLayer } from "../radar/SharedRadarLayer";
+import { shuttlecockGlyph } from "../../../lib/map-glyphs";
 import { Protocol } from "pmtiles";
 import "maplibre-gl/dist/maplibre-gl.css";
 import "../../../styles/radar-geographic.css";
@@ -19,7 +21,7 @@ function installProtocol() {
     protocol = new Protocol(); maplibregl.addProtocol("pmtiles", protocol.tile);
   }
 }
-export function GamesVenueMap({ venues, counts, onSelect, onAvailability }: { venues: VenueSummary[]; counts: Map<string, number> | null; onSelect: (venue: VenueSummary) => void; onAvailability?: (available: boolean) => void }) {
+export function GamesVenueMap({ venues, counts, onSelect, onAvailability, cityId }: { cityId: string; venues: VenueSummary[]; counts: Map<string, number> | null; onSelect: (venue: VenueSummary) => void; onAvailability?: (available: boolean) => void }) {
   const container = useRef<HTMLDivElement>(null); const map = useRef<LibreMap | null>(null);
   const venuesRef = useRef(venues); venuesRef.current = venues;
   const callbacks = useRef({ onSelect, onAvailability }); callbacks.current = { onSelect, onAvailability };
@@ -48,7 +50,6 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability }: { ve
         instance = new maplibregl.Map({ container: container.current, style, center: MOSCOW_BUNDLE.center, zoom: 10.5, maxBounds: MOSCOW_BUNDLE.bounds, maxZoom: 16, attributionControl: { compact: false }, dragRotate: false, pitchWithRotate: false,
           transformRequest: url => { if (!allowedMapResource(url)) throw new Error("Unapproved map resource"); return { url, credentials: "same-origin" }; },
         });
-        instance.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
         instance.touchZoomRotate.disableRotation(); map.current = instance;
         try {
           const camera = JSON.parse(sessionStorage.getItem("gb-games-map-camera") ?? "null");
@@ -96,9 +97,7 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability }: { ve
         entry.button.replaceChildren();
         if (presentation.text) entry.button.textContent = presentation.text;
         else {
-          const glyph = document.createElement("span");
-          glyph.className = "gb-venue-court-glyph";
-          glyph.setAttribute("aria-hidden", "true");
+          const glyph = shuttlecockGlyph();
           entry.button.append(glyph);
         }
         entry.button.setAttribute("aria-pressed", String(sessionStorageVenue() === venue.id));
@@ -108,5 +107,5 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability }: { ve
       remove: entry => entry.marker.remove(),
     });
   }, [ready, venues, counts]);
-  return <><div ref={container} data-map-ready={ready} data-map-settled={settled} className="gb-games-map-canvas" />{status && <p role="status">{status}</p>}</>;
+  return <><div ref={container} data-map-ready={ready} data-map-settled={settled} className="gb-games-map-canvas" />{status && <p role="status">{status}</p>}{ready && map.current && <SharedRadarLayer map={map.current} cityId={cityId} />}</>;
 }

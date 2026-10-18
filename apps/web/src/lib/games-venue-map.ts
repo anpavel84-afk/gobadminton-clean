@@ -75,7 +75,7 @@ export function startVenueMapRefresh(load: (signal: AbortSignal) => Promise<void
 
 /** Route only to an existing venue screen; return destinations stay inside Games. */
 export function gamesMapReturnPath(value: string | null) {
-  if (!value || !/^\/games(?:\?|$)/.test(value)) return "/games?view=map";
+  if (!value || !/^\/(?:games|players\/map)(?:\?|$)/.test(value)) return "/games?view=map";
   return value;
 }
 export function venueMapPath(venueId: string, day: string, returnTo: string) {

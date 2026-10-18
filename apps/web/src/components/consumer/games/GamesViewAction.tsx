@@ -1,8 +1,8 @@
 "use client";
 import { useLayoutEffect, useRef } from "react";
 import { Button } from "../Button";
-import { DiscoveryIcon } from "../discovery/DiscoveryComposition";
-import { NavIcon } from "../NavIcon";
+import { MapEntryIcon } from "./MapEntryIcon";
+
 
 /** A bounded action above the existing navigation, outside the map's gesture surface. */
 export function GamesViewAction({ view, onClick }: { view: "list" | "map"; onClick: () => void }) {
@@ -22,7 +22,7 @@ export function GamesViewAction({ view, onClick }: { view: "list" | "map"; onCli
     viewport?.addEventListener("resize", measure); viewport?.addEventListener("scroll", measure);
     return () => { observer.disconnect(); window.removeEventListener("resize", measure); viewport?.removeEventListener("resize", measure); viewport?.removeEventListener("scroll", measure); };
   }, []);
-  return <div ref={ref} className="gb-games-view-action"><Button variant="dark" onClick={onClick}>
-    {view === "list" ? <DiscoveryIcon name="pin" /> : <NavIcon name="games" />}{view === "list" ? "Карта" : "Список"}
+  return <div ref={ref} className="gb-games-view-action"><Button variant="outline" className="gb-map-entry" onClick={onClick}>
+    <MapEntryIcon />{view === "list" ? "На карте" : "К списку"}
   </Button></div>;
 }

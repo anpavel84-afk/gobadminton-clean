@@ -1,3 +1,4 @@
+import { MapEntryIcon } from "../games/MapEntryIcon";
 /* frozen local branded assets; decorative imagery, not venue photography. */
 import { Button } from "../Button";
 import { discoveryCityHeading } from "../../../lib/discovery-presentation";
@@ -43,7 +44,7 @@ export function DiscoverySidebar({ city, onMap }: { city: string; onMap: () => v
         <span className="gb-discovery-map__label">{city}</span>
       </div>
       <p className="gb-discovery-map-caption">Площадки {city}: доступные публичные игры и расписание.</p>
-      <Button variant="dark" onClick={onMap}><DiscoveryIcon name="pin" />Все игры на карте</Button>
+      <Button variant="outline" className="gb-map-entry" onClick={onMap}><MapEntryIcon />Все игры на карте</Button>
     </section>
     <section className="gb-discovery-community">
       <small>Game first</small>

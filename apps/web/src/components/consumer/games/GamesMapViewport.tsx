@@ -1,47 +1,27 @@
 "use client";
 import { useLayoutEffect, useRef, type ReactNode } from "react";
+import "../../../styles/fullscreen-map.css";
 
-/** Measure chrome rather than assuming header/nav heights; visualViewport follows browser bars. */
-export function GamesMapViewport({ children }: { children: ReactNode }) {
-  const frame = useRef<HTMLDivElement>(null);
+/** Shared map surface owns the viewport; list chrome is unmounted, never covered. */
+export function FullscreenMap({ children, onBack }: { children: ReactNode; onBack: () => void }) {
+  const frame = useRef<HTMLElement>(null);
+  const back = useRef<HTMLButtonElement>(null);
   useLayoutEffect(() => {
     const element = frame.current;
     if (!element) return;
     const viewport = window.visualViewport;
-    const shell = element.closest(".gb-app-shell");
-    const nav = shell?.querySelector(".gb-bottom-nav");
-    const action = shell?.querySelector(".gb-games-view-action");
-    let request = 0;
     const measure = () => {
-      const bottom = (viewport?.offsetTop ?? 0) + (viewport?.height ?? window.innerHeight);
-      const navBox = nav?.getBoundingClientRect();
-      const navBottom = navBox && navBox.height > 0 ? Math.min(bottom, navBox.top) : bottom;
-      const actionBox = action?.getBoundingClientRect();
-      const usableBottom = actionBox && actionBox.height > 0 ? Math.min(navBottom, actionBox.top) : navBottom;
-      const height = Math.max(0, usableBottom - element.getBoundingClientRect().top);
-      element.style.height = `${height}px`;
+      element.style.height = `${viewport?.height ?? window.innerHeight}px`;
+      element.style.width = `${viewport?.width ?? window.innerWidth}px`;
+      element.style.top = `${viewport?.offsetTop ?? 0}px`;
+      element.style.left = `${viewport?.offsetLeft ?? 0}px`;
     };
-    const schedule = () => { cancelAnimationFrame(request); request = requestAnimationFrame(measure); };
-    const observer = new ResizeObserver(schedule);
-    // Observe controls/header/nav, not the frame whose height we write.
-    if (element.parentElement) for (const sibling of element.parentElement.children) if (sibling !== element) observer.observe(sibling);
-    const header = shell?.querySelector(".gb-topbar");
-    if (header) observer.observe(header);
-    if (nav) observer.observe(nav);
-    if (action) observer.observe(action);
-    window.scrollTo(0, 0);
-    measure();
-    window.addEventListener("resize", schedule);
-    window.addEventListener("gb-games-action-layout", schedule);
-    viewport?.addEventListener("resize", schedule);
-    viewport?.addEventListener("scroll", schedule);
-    return () => {
-      cancelAnimationFrame(request); observer.disconnect();
-      window.removeEventListener("resize", schedule);
-      window.removeEventListener("gb-games-action-layout", schedule);
-      viewport?.removeEventListener("resize", schedule);
-      viewport?.removeEventListener("scroll", schedule);
-    };
+    measure(); back.current?.focus({ preventScroll: true });
+    window.addEventListener("resize", measure);
+    viewport?.addEventListener("resize", measure); viewport?.addEventListener("scroll", measure);
+    return () => { window.removeEventListener("resize", measure); viewport?.removeEventListener("resize", measure); viewport?.removeEventListener("scroll", measure); };
   }, []);
-  return <div ref={frame} className="gb-games-map-viewport">{children}</div>;
+  return <main ref={frame} id="gb-main" className="gb-consumer gb-fullscreen-map" aria-label="Игры и площадки на карте" onKeyDown={event => { if (event.key === "Escape" && !event.defaultPrevented) onBack(); }}>
+    {children}<button ref={back} type="button" className="gb-map-back" onClick={onBack}><span aria-hidden="true">←</span>К списку</button>
+  </main>;
 }

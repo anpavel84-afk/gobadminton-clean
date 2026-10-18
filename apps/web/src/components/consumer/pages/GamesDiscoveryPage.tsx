@@ -14,7 +14,7 @@ import { CreateBanner, DiscoveryHero, DiscoveryIcon, DiscoverySidebar, Discovery
 import { DiscoveryGameCard } from "../discovery/DiscoveryGameCard";
 
 import { GamesViewAction } from "../games/GamesViewAction";
-import { GamesMapViewport } from "../games/GamesMapViewport";
+import { FullscreenMap } from "../games/GamesMapViewport";
 import { GamesMapView } from "../games/GamesMapView";
 
 type LoadState = "loading" | "ready" | "filtered" | "empty" | "error" | "stale";
@@ -107,6 +107,7 @@ export function GamesDiscoveryPage() {
       const frame = requestAnimationFrame(() => {
         window.scrollTo(0, Number.isFinite(saved) ? saved : 0);
         restoreListScroll.current = false;
+        document.querySelector<HTMLButtonElement>(".gb-games-view-action button, .gb-discovery-sidebar .gb-map-entry")?.focus({ preventScroll: true });
       });
       return () => cancelAnimationFrame(frame);
     }
@@ -211,6 +212,7 @@ export function GamesDiscoveryPage() {
   if (!location) return <ConsumerShell active="games" title="Игры"><div className="gb-discovery-state" role="status"><h2>Загружаем игры</h2><p>Готовим список ближайших игр…</p></div></ConsumerShell>;
 
   const showCards = state === "ready" || state === "filtered" || state === "stale";
+  if (view === "map") return <FullscreenMap onBack={() => changeView("list")}><GamesMapView cityId={location.cityId} day={selectedDay} activity={activityFilter} /></FullscreenMap>;
   return <ConsumerShell active="games" title="Игры" hideHeading>
     <div className="gb-discovery" data-surface="games-discovery" data-view={view}>
       {view === "list" && <DiscoveryHero city={location.nameRu} />}<DiscoveryCityNotice />
@@ -226,13 +228,6 @@ export function GamesDiscoveryPage() {
         {view === "list" && <CreateBanner busy={creating} onClick={() => void goCreate()} />}
       </section>
       {createError && <div className="gb-discovery-notice" role="alert">Не удалось проверить вход. Попробуйте создать игру ещё раз.</div>}
-      {view === "map" && <div className="gb-games-map-context">
-        <Button className="gb-games-list-return" variant="outline" onClick={() => changeView("list")}>← К списку игр</Button>
-        <div className="gb-discovery-chips" role="group" aria-label="Фильтр активности">
-          {([["all", "Все"], ["regular", "Обычные"], ["trainer_led", "С тренером"]] as const).map(([value, label]) => <button key={value} type="button" className="gb-discovery-chip" aria-pressed={activityFilter === value} onClick={() => setActivityFilter(value)}>{label}</button>)}
-        </div>
-      </div>}
-      {view === "map" ? <GamesMapViewport><GamesMapView cityId={location.cityId} day={selectedDay} activity={activityFilter} /></GamesMapViewport> : null}
       <section className="gb-discovery-layout" hidden={view !== "list"}>
         <div className="gb-discovery-feed">
           <div className="gb-discovery-filters">
