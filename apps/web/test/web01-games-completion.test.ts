@@ -129,7 +129,7 @@ describe("WEB-01 Games completion", () => {
     expect(page).toContain("isActiveCreatedGame");
   });
 
-  it("preserves Players gate and admitted Messages header and no Radar UI in Games lane", async () => {
+  it("preserves Players gate and admitted Messages header; Games allows Radar status without player slot fields", async () => {
     const nav = await readSource("../src/components/consumer/RootNav.tsx");
     const players = await readSource(
       "../src/components/consumer/pages/PlayersGatedPage.tsx",
@@ -142,7 +142,7 @@ describe("WEB-01 Games completion", () => {
     );
     expect(nav).toContain('href="/messages"');
     expect(players).toContain('data-gated="players"');
-    expect(discovery).not.toMatch(/Radar|displaySlot|proximityBand/);
+    expect(discovery).not.toMatch(/displaySlot|proximityBand/);
     expect(detail).not.toMatch(/Radar|Inbox|Написать сообщение/);
   });
 });

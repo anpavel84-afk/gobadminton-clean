@@ -60,3 +60,48 @@
 .gb-venue-court-glyph::after { content: ""; position: absolute; inset: 6px; background: var(--gb-purple); mask: url('/brand/games.svg') center / contain no-repeat; }
 .gb-games-map button.maplibregl-marker:focus-visible { outline: 3px solid var(--gb-purple); outline-offset: 3px; z-index: 2; }
 .gb-games-map button.maplibregl-marker[aria-pressed="true"] { outline: 3px solid var(--gb-purple); outline-offset: 2px; z-index: 1; }
+
+/* Issue 76: Owner Option3, shared map frame and token-based capsule primitives. */
+.gb-fullscreen-map-viewport { position:fixed; inset:0; z-index:100; width:100%; height:100dvh; background:var(--gb-paper); }
+.gb-fullscreen-map-viewport .gb-games-map { position:relative; width:100%; height:100%; }
+.gb-fullscreen-map-viewport .gb-games-map-canvas { position:absolute; inset:0; width:100%; height:100%; }
+.gb-fullscreen-map-viewport .gb-games-map-toolbar { position:absolute; z-index:2; top:calc(72px + env(safe-area-inset-top,0px)); left:16px; right:16px; background:var(--gb-white); }
+.gb-fullscreen-map-viewport .gb-games-map:has([data-map-ready="true"]):not(:has([role="alert"])) .gb-games-map-toolbar { display:none; }
+.gb-fullscreen-map-viewport .gb-games-map > p { position:absolute; z-index:2; top:calc(128px + env(safe-area-inset-top,0px)); left:16px; right:16px; padding:12px; max-width:480px; border-radius:var(--gb-radius-sm); background:var(--gb-white); }
+.gb-fullscreen-map-viewport .gb-games-map:has([data-map-ready="true"]) > p[role="status"] { position:absolute; width:1px; height:1px; padding:0; clip-path:inset(50%); }
+.gb-fullscreen-map-viewport .gb-games-map-fallback { position:absolute; z-index:2; bottom:calc(40px + env(safe-area-inset-bottom,0px)); left:16px; right:16px; padding:12px; background:var(--gb-white); border-radius:var(--gb-radius-sm); }
+.gb-fullscreen-map-viewport .maplibregl-ctrl-bottom-right { bottom:env(safe-area-inset-bottom,0px); right:0; max-width:100%; }
+.gb-fullscreen-map-viewport .maplibregl-ctrl-attrib { font-size:11px; background:var(--gb-white); color:var(--gb-ink); }
+.gb-app-shell:has(.gb-discovery[data-view="map"]) .gb-topbar,
+.gb-app-shell:has(.gb-discovery[data-view="map"]) .gb-bottom-nav,
+.gb-app-shell:has(.gb-discovery[data-view="map"]) .gb-site-footer,
+.gb-discovery[data-view="map"] > .gb-discovery-search,
+.gb-discovery[data-view="map"] > .gb-games-map-context,
+.gb-discovery[data-view="map"] > .gb-discovery-notice { display:none; }
+.gb-map-return,.gb-consumer .gb-games-view-action.is-map > button { min-height:44px; padding:6px 14px 6px 6px; display:flex; align-items:center; gap:8px; border:1px solid var(--gb-line); border-radius:var(--gb-radius-pill); color:var(--gb-ink); background:var(--gb-white); box-shadow:var(--c23-shadow-lift); font-weight:600; text-decoration:none; }
+.gb-map-return { position:fixed; z-index:102; top:calc(12px + env(safe-area-inset-top,0px)); left:16px; }
+.gb-map-return > span,.gb-map-return-accent { width:30px; height:30px; display:grid; place-items:center; border-radius:50%; background:var(--gb-purple); color:var(--gb-white); }
+.gb-consumer .gb-games-view-action { height:auto; padding:12px 0; background:transparent; }
+.gb-consumer .gb-games-view-action > button,.gb-consumer .gb-map-desktop-entry { min-height:48px; min-width:190px; gap:10px; padding:6px 16px 6px 6px; color:var(--gb-ink); background:var(--gb-white); border:1px solid var(--gb-line); border-radius:var(--gb-radius-pill); box-shadow:var(--c23-shadow-lift); font-weight:600; }
+.gb-map-entry-tile { display:grid; place-items:center; width:36px; height:36px; flex:none; border-radius:10px; background:var(--gb-lime); color:var(--gb-purple); }
+.gb-map-entry-tile svg { width:24px; height:24px; }
+.gb-consumer .gb-games-view-action.is-map { display:flex; position:fixed; z-index:102; top:calc(12px + env(safe-area-inset-top,0px)); left:16px; right:auto; bottom:auto !important; padding:0; }
+.gb-consumer .gb-games-view-action.is-map > button { min-width:0; }
+.gb-map-radar { position:fixed; z-index:102; right:16px; top:calc(12px + env(safe-area-inset-top,0px)); }
+.gb-map-radar .gb-radar-popover { right:0; max-width:calc(100vw - 32px); }
+.gb-radar-layer { position:absolute; inset:0; pointer-events:none; }
+.gb-radar-layer .g2-map-panel,.gb-radar-layer dialog,.gb-radar-layer .gb-map-layer-summary { pointer-events:auto; }
+.gb-map-layer-summary:not(:focus-within) { width:1px; height:1px; padding:0; clip-path:inset(50%); }
+.gb-map-layer-summary:focus-within { top:calc(72px + env(safe-area-inset-top,0px)); }
+.gb-games-map .g2-map-venue-marker { width:44px; height:44px; padding:7px; border:1px solid var(--gb-line); border-radius:50%; background:var(--gb-white); color:var(--gb-purple); box-shadow:var(--c23-shadow-lift); }
+svg.gb-venue-court-glyph { width:28px; height:28px; border-radius:0; box-shadow:none; background:transparent; }
+.g2-person-marker { width:48px; height:48px; padding:0; background:var(--gb-white); border:3px solid var(--gb-white); }
+.g2-person-marker .avatar { width:100%; height:100%; min-width:0; border-radius:50%; display:grid; place-items:center; font-size:14px; background:var(--gb-purple-soft); color:var(--gb-purple); }
+.g2-person-marker img { width:100%; height:100%; object-fit:cover; border-radius:50%; }
+.g2-own-marker { width:60px; height:60px; border-color:var(--gb-purple); box-shadow:0 0 0 3px var(--gb-white),var(--c23-shadow-lift); }
+.gb-games-map .g2-map-venue-marker,.gb-games-map .g2-map-marker:not(.g2-person-marker) { z-index:2; }
+.g2-person-marker:focus-visible { outline:3px solid var(--gb-purple); outline-offset:3px; }
+.gb-map-layer-summary[hidden] { display:none; }
+.gb-map-position-unavailable { position:absolute; z-index:3; top:calc(72px + env(safe-area-inset-top,0px)); left:16px; right:16px; max-width:480px; padding:12px; border-radius:var(--gb-radius-sm); background:var(--gb-white); pointer-events:auto; }
+.gb-fullscreen-map-viewport .maplibregl-ctrl-attrib { font-size:12px; }
+.gb-games-map .g2-map-marker:not(.g2-person-marker)[aria-pressed="true"] { background:var(--gb-lime); color:var(--gb-ink); border-color:var(--gb-white); }

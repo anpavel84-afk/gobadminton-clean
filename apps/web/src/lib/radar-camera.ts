@@ -4,3 +4,17 @@ export function radarNeighborhood(center: { latitude: number; longitude: number 
   const dy = 10 / 111.32, dx = dy / Math.cos(center.latitude * Math.PI / 180);
   return [[center.longitude - dx, center.latitude - dy], [center.longitude + dx, center.latitude + dy]];
 }
+
+/** One entry owns one initial framing intent. A saved camera is deliberately
+ * not an input: only an explicit return from a venue resumes the previous view. */
+export function createRadarEntryCamera(resumingVenue = false) {
+  let consumed = resumingVenue;
+  return {
+    claim(center: { latitude: number; longitude: number } | undefined) {
+      if (consumed) return null;
+      const bounds = radarNeighborhood(center);
+      if (bounds) consumed = true;
+      return bounds;
+    },
+  };
+}

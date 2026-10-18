@@ -1,8 +1,8 @@
 "use client";
 import { useLayoutEffect, useRef } from "react";
 import { Button } from "../Button";
-import { DiscoveryIcon } from "../discovery/DiscoveryComposition";
-import { NavIcon } from "../NavIcon";
+import { FoldedMapGlyph } from "../NavIcon";
+import "../../../styles/radar-geographic.css";
 
 /** A bounded action above the existing navigation, outside the map's gesture surface. */
 export function GamesViewAction({ view, onClick }: { view: "list" | "map"; onClick: () => void }) {
@@ -21,8 +21,8 @@ export function GamesViewAction({ view, onClick }: { view: "list" | "map"; onCli
     measure(); window.addEventListener("resize", measure);
     viewport?.addEventListener("resize", measure); viewport?.addEventListener("scroll", measure);
     return () => { observer.disconnect(); window.removeEventListener("resize", measure); viewport?.removeEventListener("resize", measure); viewport?.removeEventListener("scroll", measure); };
-  }, []);
-  return <div ref={ref} className="gb-games-view-action"><Button variant="dark" onClick={onClick}>
-    {view === "list" ? <DiscoveryIcon name="pin" /> : <NavIcon name="games" />}{view === "list" ? "Карта" : "Список"}
+  }, [view]);
+  return <div ref={ref} className={`gb-games-view-action${view === "map" ? " is-map" : ""}`}><Button variant="dark" onClick={onClick}>
+    {view === "list" ? <span className="gb-map-entry-tile"><FoldedMapGlyph /></span> : <span className="gb-map-return-accent" aria-hidden="true">←</span>}{view === "list" ? "На карте" : "К списку"}
   </Button></div>;
 }

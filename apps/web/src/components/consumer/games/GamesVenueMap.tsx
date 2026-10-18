@@ -1,4 +1,6 @@
 "use client";
+import { RadarPage } from "../radar/RadarPage";
+import { shuttlecockElement } from "../NavIcon";
 import { useEffect, useRef, useState } from "react";
 import * as maplibregl from "maplibre-gl";
 import type { Map as LibreMap, StyleSpecification } from "maplibre-gl";
@@ -24,12 +26,20 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability }: { ve
   const venuesRef = useRef(venues); venuesRef.current = venues;
   const callbacks = useRef({ onSelect, onAvailability }); callbacks.current = { onSelect, onAvailability };
   const markers = useRef(new Map<string, { marker: maplibregl.Marker; button: HTMLButtonElement }>());
+  const [resumeCamera, setResumeCamera] = useState(false);
+  const [sharedMap, setSharedMap] = useState<LibreMap>();
   const [ready, setReady] = useState(false);
   const [settled, setSettled] = useState(false);
   const [status, setStatus] = useState("Загружаем карту города…");
   const unavailable = () => { callbacks.current.onAvailability?.(false); setStatus("Карта недоступна: ресурсы, Range, CSP или соединение. Площадки доступны в раскрываемом списке."); };
   useEffect(() => {
     let alive = true; const abort = new AbortController(); let instance: LibreMap | undefined;
+    const saveCamera = () => {
+      if (!instance) return;
+      const center = instance.getCenter();
+      try { sessionStorage.setItem("gb-games-map-camera", JSON.stringify({ lng: center.lng, lat: center.lat, zoom: instance.getZoom() })); } catch { /* Optional storage. */ }
+    };
+    window.addEventListener("gb-map-return", saveCamera); window.addEventListener("pagehide", saveCamera);
     const timeout = setTimeout(() => { if (alive && !instance?.loaded()) unavailable(); }, 20000);
     async function start() {
       try {
@@ -48,20 +58,18 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability }: { ve
         instance = new maplibregl.Map({ container: container.current, style, center: MOSCOW_BUNDLE.center, zoom: 10.5, maxBounds: MOSCOW_BUNDLE.bounds, maxZoom: 16, attributionControl: { compact: false }, dragRotate: false, pitchWithRotate: false,
           transformRequest: url => { if (!allowedMapResource(url)) throw new Error("Unapproved map resource"); return { url, credentials: "same-origin" }; },
         });
-        instance.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
+        // Pan, pinch and keyboard remain native; fullscreen has no zoom overlay.
         instance.touchZoomRotate.disableRotation(); map.current = instance;
         try {
+          setResumeCamera(sessionStorage.getItem("gb-games-map-returning") === "venue");
+          sessionStorage.removeItem("gb-games-map-returning");
           const camera = JSON.parse(sessionStorage.getItem("gb-games-map-camera") ?? "null");
           if (camera && [camera.lng, camera.lat, camera.zoom].every(Number.isFinite) && camera.lng >= 36 && camera.lng <= 39.5 && camera.lat >= 54.5 && camera.lat <= 56.5)
             instance.jumpTo({ center: [camera.lng, camera.lat], zoom: Math.min(16, Math.max(0, camera.zoom)) });
         } catch { /* Storage is optional. */ }
         instance.on("movestart", () => { if (alive) setSettled(false); });
         instance.on("idle", () => { if (alive) setSettled(true); });
-        instance.on("moveend", () => {
-          const center = instance!.getCenter();
-          try { sessionStorage.setItem("gb-games-map-camera", JSON.stringify({ lng: center.lng, lat: center.lat, zoom: instance!.getZoom() })); } catch { /* Storage is optional. */ }
-        });
-        instance.on("load", () => { if (alive) { setReady(true); callbacks.current.onAvailability?.(true); setStatus(""); clearTimeout(timeout); } });
+        instance.on("load", () => { if (alive) { setReady(true); setSharedMap(instance); callbacks.current.onAvailability?.(true); setStatus(""); clearTimeout(timeout); } });
         instance.on("error", () => { if (alive) unavailable(); });
         instance.getCanvas().setAttribute("aria-label", "Карта Москвы: стрелки перемещают карту, плюс и минус меняют масштаб");
       } catch { if (alive) unavailable(); }
@@ -70,7 +78,9 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability }: { ve
     const resize = new ResizeObserver(() => {
       if (instance && alive) { setSettled(false); instance.resize(); }
     }); if (container.current) resize.observe(container.current);
-    return () => { alive = false; abort.abort(); clearTimeout(timeout); resize.disconnect(); markers.current.forEach(entry => entry.marker.remove()); markers.current.clear(); instance?.remove(); map.current = null; };
+    return () => { alive = false; abort.abort(); clearTimeout(timeout); resize.disconnect(); window.removeEventListener("gb-map-return", saveCamera); window.removeEventListener("pagehide", saveCamera);
+      if (instance) { const center = instance.getCenter(); try { sessionStorage.setItem("gb-games-map-camera", JSON.stringify({ lng: center.lng, lat: center.lat, zoom: instance.getZoom() })); } catch { /* Optional storage. */ } }
+      markers.current.forEach(entry => entry.marker.remove()); markers.current.clear(); instance?.remove(); map.current = null; };
   }, []);
   useEffect(() => {
     if (!ready || !map.current) return;
@@ -84,7 +94,8 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability }: { ve
         button.addEventListener("click", event => {
           if (!activation.allow(event.detail) || map.current?.isMoving()) return;
           const current = callbacks.current;
-          try { sessionStorage.setItem("gb-games-map-selected", venue.id); } catch { /* Optional storage. */ }
+          window.dispatchEvent(new Event("gb-map-return"));
+          try { sessionStorage.setItem("gb-games-map-returning", "venue"); sessionStorage.setItem("gb-games-map-selected", venue.id); } catch { /* Optional storage. */ }
           current.onSelect(venuesRef.current.find(item => item.id === venue.id) ?? venue);
         });
         const marker = new maplibregl.Marker({ element: button }).setLngLat([venue.longitude!, venue.latitude!]).addTo(map.current!);
@@ -96,8 +107,8 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability }: { ve
         entry.button.replaceChildren();
         if (presentation.text) entry.button.textContent = presentation.text;
         else {
-          const glyph = document.createElement("span");
-          glyph.className = "gb-venue-court-glyph";
+          const glyph = shuttlecockElement();
+          glyph.setAttribute("class", "gb-venue-court-glyph");
           glyph.setAttribute("aria-hidden", "true");
           entry.button.append(glyph);
         }
@@ -108,5 +119,24 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability }: { ve
       remove: entry => entry.marker.remove(),
     });
   }, [ready, venues, counts]);
-  return <><div ref={container} data-map-ready={ready} data-map-settled={settled} className="gb-games-map-canvas" />{status && <p role="status">{status}</p>}</>;
+  useEffect(() => {
+    if (!ready || !map.current) return;
+    const instance = map.current;
+    const separate = () => {
+      const own = instance.getContainer().querySelector<HTMLElement>(".g2-own-marker");
+      const ownPoint = own ? instance.project([Number(own.dataset.longitude), Number(own.dataset.latitude)]) : null;
+      for (const entry of markers.current.values()) {
+        const point = instance.project(entry.marker.getLngLat());
+        const dx = ownPoint ? point.x - ownPoint.x : 0;
+        const dy = ownPoint ? point.y - ownPoint.y : 0;
+        const distance = Math.hypot(dx, dy);
+        // Presentation offset only: published coordinates remain unchanged.
+        const offset = ownPoint && distance < 64 ? 64 - distance : 0;
+        entry.marker.setOffset([offset * (distance ? dx / distance : 1), offset * (distance ? dy / distance : 0)]);
+      }
+    };
+    separate(); instance.on("moveend", separate); window.addEventListener("gb-map-own-marker", separate);
+    return () => { instance.off("moveend", separate); window.removeEventListener("gb-map-own-marker", separate); };
+  }, [ready, venues, counts]);
+  return <><div ref={container} data-map-ready={ready} data-map-settled={settled} className="gb-games-map-canvas" />{status && <p role="status">{status}</p>}{sharedMap && <RadarPage resumeCamera={resumeCamera} sharedMap={sharedMap} />}</>;
 }
