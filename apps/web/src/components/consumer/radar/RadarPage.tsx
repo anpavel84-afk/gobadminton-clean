@@ -47,6 +47,15 @@ export function RadarPage({ sharedMap, resumeCamera = false }: { sharedMap?: Lib
     document.body.style.overflow = "hidden";
     return () => { document.body.style.overflow = overflow; };
   }, [sharedMap]);
+  useEffect(() => {
+    if (sharedMap) return;
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented || document.querySelector("dialog[open], [role=dialog]")) return;
+      document.querySelector<HTMLAnchorElement>(".gb-shared-fullscreen .gb-map-return")?.click();
+    };
+    window.addEventListener("keydown", escape);
+    return () => window.removeEventListener("keydown", escape);
+  }, [sharedMap]);
   // Public DEV basemap registration is independent of expiring private
   // query tokens. Never use stale queries to authorize Radar pins.
   useEffect(() => {
@@ -83,7 +92,7 @@ export function RadarPage({ sharedMap, resumeCamera = false }: { sharedMap?: Lib
   const mapped = candidate && !failed && controller && session.me;
   function close() { if (window.history.state?.gbRadarPreview) window.history.back(); controller?.close(); setListOpen(false); setExpanded(false); requestAnimationFrame(() => { if (trigger.current?.isConnected) trigger.current.focus({ preventScroll: true }); }); }
   const mapLayer = mapped && sharedMap ? <GeographicRadarMap resumeCamera={resumeCamera} sharedMap={sharedMap} controller={controller} rows={session.phase === "active" && session.confirmedOn && !session.pendingStop ? safeMapPins : []} selected={view.selected} onSelect={row => { trigger.current = document.activeElement as HTMLElement; setListOpen(false); void controller.select(row); }} onUnavailable={() => setFailed(true)} /> : null;
-  if (!sharedMap) return <main id="gb-main" className="gb-consumer g2-radar-map gb-shared-fullscreen" aria-label="Карта игр, площадок и Radar"><GamesMapViewport fullscreen><GamesMapView cityId={cityId ?? MOSCOW_BUNDLE.cityId} day="" /></GamesMapViewport><Link className="gb-map-return" href="/players" onClick={() => window.dispatchEvent(new Event("gb-map-return"))}><span aria-hidden="true">←</span>К списку</Link><div className="gb-map-radar"><RadarStatusAffordance /></div></main>;
+  if (!sharedMap) return <main id="gb-main" className="gb-consumer g2-radar-map gb-shared-fullscreen" aria-label="Карта игр, площадок и Radar"><GamesMapViewport fullscreen><GamesMapView cityId={cityId ?? MOSCOW_BUNDLE.cityId} day="" /></GamesMapViewport><Link className="gb-map-return" href="/players" onClick={() => window.dispatchEvent(new Event("gb-map-return"))}><span aria-hidden="true">←</span>К списку</Link><div className="gb-map-radar"><RadarStatusAffordance mapControls /></div></main>;
   return <div className="gb-consumer gb-radar-layer fr3" aria-label="Карта участников Radar">
     {mapLayer}
     {failed && <p role="alert" className="gb-map-position-unavailable">Не удалось загрузить участников Radar. Площадки и игры остаются на карте.</p>}

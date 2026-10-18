@@ -275,7 +275,7 @@ export function GamesDiscoveryPage() {
         </div>
         <DiscoverySidebar city={location.nameRu} onMap={() => changeView("map")} />
       </section>
-      {view === "map" && <div className="gb-map-radar"><RadarStatusAffordance /></div>}
+      {view === "map" && <div className="gb-map-radar"><RadarStatusAffordance mapControls /></div>}
       <GamesViewAction view={view} onClick={() => changeView(view === "list" ? "map" : "list")} />
     </div>
     {authOpen && <AuthChooser returnPath="/games/create" intent={{ kind: "create" }} onClose={() => setAuthOpen(false)} />}

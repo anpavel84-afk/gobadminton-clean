@@ -108,7 +108,7 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability }: { ve
         if (presentation.text) entry.button.textContent = presentation.text;
         else {
           const glyph = shuttlecockElement();
-          glyph.className = "gb-venue-court-glyph";
+          glyph.setAttribute("class", "gb-venue-court-glyph");
           glyph.setAttribute("aria-hidden", "true");
           entry.button.append(glyph);
         }

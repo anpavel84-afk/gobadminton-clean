@@ -122,8 +122,9 @@ function RadarPermissionObserver() {
 /** Single owner-approved Radar control for desktop, mobile and map header.
  * Public circular countdown is strictly projected from authoritative status;
  * the popover owns explicit start/renew/stop actions, never automatic GPS. */
-export function RadarStatusAffordance() {
+export function RadarStatusAffordance({ mapControls = false }: { mapControls?: boolean } = {}) {
   const { controller, view } = useRadarSession();
+  const directory = useUnifiedDirectory();
   const config = useRadarConfig();
   const status = radarHeaderStatus(view);
   const popupId = useId();
@@ -197,6 +198,7 @@ export function RadarStatusAffordance() {
       {needsLocation && <p role="status">Обновите геопозицию, чтобы Radar продолжал показывать участников.</p>}
       {view.phase === "owned_elsewhere" && <p>Radar работает на другом устройстве. Можно перенести его сюда.</p>}
       <div className="gb-radar-popover__actions">
+        {mapControls && running && !view.pendingStop && directory.view.mapPage?.nextMapCursor && <Button variant="outline" disabled={directory.view.busy || !directory.controller} onClick={() => { if (directory.controller) void directory.controller.map(true); }}>Следующие точки</Button>}
         {view.phase === "guest" ? <AuthEntry returnPath="/players">Войти для Radar</AuthEntry> :
           running ? <>
             {canRenew && <Button disabled={!controller || busy} onClick={() => { close(); if (controller) void controller.activate(() => acquireRadarLocation(controller), "renew"); }}>Продлить</Button>}

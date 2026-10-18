@@ -62,3 +62,39 @@ No author self-QA is authorized. The following are coverage definitions, not PAS
 Next bounded action: authorized dispatcher publishes this candidate and handoff, then assigns independent exact-SHA source QA and the existing hosted gates. Browser/authenticated assertions above remain open until actual evidence exists. Do not mark this source accepted or deploy from chat.
 
 Additional authored coverage (NOT_RUN): `shared-map-controller.test.ts` exercises the actual unchanged UnifiedDirectoryController wire request for R2 (`map(true)`, exact cursor, limit 100, bounded window, no extra request at end), and R4 same-name distinct-ID preview/resultRef selection plus OFF privacy clearing. DOM focus/pressed state and authenticated UAT assertions remain open.
+
+## Independent QA remediation — 2026-10-18
+
+From: source author. To: independent exact-SHA QA / dispatcher.
+Status: WORKING_DRAFT / UNVERIFIED, source only.
+Exact remediation base: `c8d607a449c425877c7a1e41fbef583bad292a78`, branch `automation/issue-76`, initially clean. The earlier base above describes the original implementation, not this remediation. Active authority is the immutable Issue 76 JSON supplied with this source-only assignment. No second writer or delegation used.
+
+Before editing, the behaviour inventory above was read against the existing implementation. For this bounded remediation specifically preserve: venue reconciliation/counts/selection/drag activation; Radar activation/city/filter query recovery, deadline invalidation, first map fetch, next-page cursor window, PageDown and dragend; sheet list/selection/history/focus/close/expand/touch; status affordance countdown/start/renew/location/stop/native consent/outside-click/Escape; both shared-map entry compositions and return navigation. GeographicRadarMap, RadarControls, UnifiedPlayerPreview, GamesMapViewport, radar-controller and radar-camera receive no changes in this remediation.
+
+Expected/edited source files: `GamesVenueMap.tsx`, `RadarPage.tsx`, `RadarSessionProvider.tsx`, `GamesDiscoveryPage.tsx` under consumer components, and this handoff. Rollback: authorized integrator reverts only this remediation's source diff against the exact base; no runtime rollback is needed for uncommitted source.
+
+Changes addressing the prior independent FAIL:
+
+1. Zero-game venue SVG uses `setAttribute("class", ...)`, preserving its class without assigning the read-only SVGAnimatedString property.
+2. Existing RadarStatusAffordance accepts optional map-controls context. Both fullscreen entry points opt in. Its existing popover exposes the native Button “Следующие точки” when Radar is running, stop is not pending and a nextMapCursor exists; the button calls the existing directory controller `map(true)` and is disabled while busy. It remains within the sole existing Radar control, with no additional permanent overlay. PageDown/dragend and the original summary code remain. The earlier statement that shortcuts alone preserve accessible pagination is superseded by this explicit touch/keyboard action.
+3. Standalone RadarPage adds a window Escape handler that activates the existing Next Link “К списку”, including its camera-save event. It ignores prevented events and any open native dialog or role=dialog; the shared child does not install this handler. Existing preview/popover handling therefore retains priority. GamesDiscoveryPage's existing Escape handler remains.
+
+STYLE_GUIDE_PARITY: reuse existing Button outline variant and existing Radar popover/actions family, existing return capsule and SVG icon class. No new visual pattern, tokens, glyph or layout introduced. The operations guide remains absent as recorded above; no external Make parity verification claimed.
+
+### R1–R7 remediation coverage for independent QA
+
+All assertions below are authored instructions, NOT executed evidence; earlier test files remain authored/unexecuted in this session.
+
+- R1: unchanged entry-camera tests and legitimate-session browser assertion in the table above; verify fresh saved-camera override once and no reframe after pan/zoom.
+- R2: retain existing controller test; at BOTH fullscreen entries with a legitimate multi-page response, open existing Radar control, tap “Следующие точки” without moving camera, assert request uses current nextMapCursor and limit 100, later-page marker appears, and camera/venues stay fixed. Repeat with Tab/Enter; while loading assert disabled and no duplicate request. At last page assert action absent, no hidden focus stop. Retest PageDown and dragend. This covers the accessible equivalent missing in prior QA.
+- R3: existing both-entry ON/OFF browser assertion above; opening pagination must not change filters, venue IDs or camera; OFF removes person targets and next-page action.
+- R4: unchanged same-name/distinct-publicPlayerId controller test and marker pressed-state browser assertion above.
+- R5: on `/players/radar` and Games map, open native consent and press Escape: consent cancels, URL remains map, camera unchanged. Repeat external role dialog and existing Radar popover; dismissing either must not activate map return. Then Escape on unobstructed Radar canvas must navigate to `/players`, dispatch camera save, and remove fullscreen map. Games Escape must still restore list/focus. Check browser Back separately. This covers the previously absent Radar entry handler.
+- R6: unchanged visible mobile/desktop return-focus assertions in the table and public browser script above; verify hidden twin never focused.
+- R7: unchanged preview dialog close/button/Escape/browser Back/focus assertions above, including selected marker identity and no unintended map exit.
+
+Additional blocking regression assertion: actual zero-game venue renders a native violet SVG with `class="gb-venue-court-glyph"`, no read-only-property exception, and subsequent venues still reconcile; activate it and verify exact venue → chronological schedule/empty state → return. Independent typecheck must confirm SVG assignment error is removed.
+
+Verification: NOT_RUN author tests/typecheck/lint/build/self-QA by explicit assignment. NOT_TESTED public MapLibre/tiles/API/browser geometry/screenshots, authenticated Radar UAT and physical iOS/WebKit. No PASS, acceptance, hosted CI, Admin CI, DEV deployment, three-image backup/rollback or root/live META evidence claimed. Prior FAIL remains the latest independent verdict until a new exact-SHA review. Historical #66 geometry FAIL, #54 FAIL, blocked #68 and PR #74 records remain; `3c1f7c84` UAT is not evidence for this candidate.
+
+No commit/push/git metadata/automation/secrets/services/PROD/network deployment changes. No result SHA/permalink exists until the authorized dispatcher publishes. Exact remediation base: https://github.com/anpavel84-afk/gobadminton-clean/tree/c8d607a449c425877c7a1e41fbef583bad292a78 . Next bounded action: dispatcher publishes this source and handoff, then requests NEW independent exact-SHA source QA and required existing hosted/browser/release gates.
