@@ -1,6 +1,7 @@
 /* global document, window */
 // Read-only actual DEV map geometry. No mocks, login, forced clicks or service startup.
 import assert from 'node:assert/strict';
+import console from 'node:console';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 const { chromium } = await import(pathToFileURL(process.cwd() + '/.tools/node_modules/playwright/index.mjs'));
