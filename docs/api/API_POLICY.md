@@ -292,3 +292,24 @@ Email proof commands are a narrow exception to business-command Idempotency-Key:
 routes. Exact Origin/flow/binding and atomic generation/consume prevent duplicate authority;
 an already consumed verify returns an error, never a cached session credential.
 The foundation checker recognizes only these exact routes with required binding headers.
+
+
+## Контакты площадки: T0a-1
+
+`GET /games/{gameId}` добавляет в `venue` необязательные `contactPhone`,
+`contactWebsite`, `bookingNote` только для текущего активного управляющего игры
+(`game_managers`: `owner` или `manager`, `status=active`) либо участника этой игры
+с `participations.status=confirmed`. Значения могут быть `null`.
+Для остальных, включая анонимных, pending/rejected/withdrawn/removed,
+`cancelled_by_game`, expired, посторонних и заблокированных без указанных прав,
+все три ключа отсутствуют. Сам факт блокировки не предоставляет прав.
+Списки игр (включая управляемые), карта, discovery и каталог/деталь `/venues`
+не раскрывают эти поля. Ответ детали игры остаётся `Cache-Control: no-store`.
+
+Существующая admin-команда `edit` принимает три необязательных строковых поля:
+`contactPhone` (до 40), `contactWebsite` (до 300, префикс `http://` или `https://`),
+`bookingNote` (до 500). Пробелы по краям удаляются, пустая строка записывает SQL
+`NULL`, пропуск сохраняет значение. `contact_updated_at` меняется только при
+изменении хотя бы одного значения. Контакты не добавлены в admin create или
+новые endpoint/UI; audit, step-up, expectedVersion и idempotency сохраняются.
+Ошибки валидации используют существующий problem-формат.

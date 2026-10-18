@@ -6,10 +6,17 @@ export const venueFields = z.object({
   latitude: z.number().min(-90).max(90), longitude: z.number().min(-180).max(180),
   identityDiscriminator: z.string().trim().max(80).optional(),
 }).strict();
+const venueCreateFields = venueFields;
+const contactFields = {
+  contactPhone: z.string().trim().max(40).optional(),
+  contactWebsite: z.string().trim().max(300).refine(v => v === "" || /^https?:\/\//.test(v), "Нужен адрес http:// или https://").optional(),
+  bookingNote: z.string().trim().max(500).optional(),
+};
+const venueEditFields = venueFields.extend(contactFields).strict();
 const base = {expectedVersion:z.number().int().positive(),reasonCode:reason};
-export const venueCreate = venueFields.extend({reasonCode:reason}).strict();
+export const venueCreate = venueCreateFields.extend({reasonCode:reason}).strict();
 export const venueCommand = z.discriminatedUnion("action", [
-  z.object({...base,action:z.literal("edit"),fields:venueFields}).strict(),
+  z.object({...base,action:z.literal("edit"),fields:venueEditFields}).strict(),
   z.object({...base,action:z.enum(["verify","retire","restore"])}).strict(),
   z.object({...base,action:z.literal("merge"),targetId:uuid,expectedTargetVersion:z.number().int().positive()}).strict(),
 ]);

@@ -15466,6 +15466,30 @@
           },
           "cover": {
             "$ref": "#/components/schemas/VenueCover"
+          },
+          "contactPhone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 40,
+            "description": "Только в GET /games/{gameId} для активного управляющего или подтверждённого участника; иначе ключ отсутствует."
+          },
+          "contactWebsite": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 300,
+            "description": "Только в GET /games/{gameId} для активного управляющего или подтверждённого участника; иначе ключ отсутствует."
+          },
+          "bookingNote": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 500,
+            "description": "Только в GET /games/{gameId} для активного управляющего или подтверждённого участника; иначе ключ отсутствует."
           }
         }
       },
@@ -24087,6 +24111,22 @@
                   "identityDiscriminator": {
                     "type": "string",
                     "maxLength": 80
+                  },
+                  "contactPhone": {
+                    "type": "string",
+                    "maxLength": 40,
+                    "description": "Пробелы по краям удаляются; пустая строка очищает значение. Пропуск сохраняет значение."
+                  },
+                  "contactWebsite": {
+                    "type": "string",
+                    "maxLength": 300,
+                    "description": "Пробелы по краям удаляются; пустая строка очищает значение. Пропуск сохраняет значение.",
+                    "pattern": "^(https?://|$)"
+                  },
+                  "bookingNote": {
+                    "type": "string",
+                    "maxLength": 500,
+                    "description": "Пробелы по краям удаляются; пустая строка очищает значение. Пропуск сохраняет значение."
                   }
                 },
                 "required": [
@@ -24210,6 +24250,22 @@
           "identityDiscriminator": {
             "type": "string",
             "maxLength": 80
+          },
+          "contactPhone": {
+            "type": "string",
+            "maxLength": 40,
+            "description": "Пробелы по краям удаляются; пустая строка очищает значение. Пропуск сохраняет значение."
+          },
+          "contactWebsite": {
+            "type": "string",
+            "maxLength": 300,
+            "description": "Пробелы по краям удаляются; пустая строка очищает значение. Пропуск сохраняет значение.",
+            "pattern": "^(https?://|$)"
+          },
+          "bookingNote": {
+            "type": "string",
+            "maxLength": 500,
+            "description": "Пробелы по краям удаляются; пустая строка очищает значение. Пропуск сохраняет значение."
           }
         },
         "required": [

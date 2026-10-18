@@ -8,7 +8,7 @@ import type { VenueFields, VenueCommand } from "../admin/venues.dto";
 import { extractIdentityDiscriminator, normalizeVenueText, venueDedupeKey } from "./venue-normalize";
 import { effectiveVenueCtes } from "./effective-venue.query";
 
-type Row = {id:string;city_id:string;city_name?:string;name:string;address:string;timezone:string;latitude:number;longitude:number;lifecycle_state:string;canonical_venue_id:string|null;identity_discriminator:string;version:number};
+type Row = {contact_phone:string|null;contact_website:string|null;booking_note:string|null;id:string;city_id:string;city_name?:string;name:string;address:string;timezone:string;latitude:number;longitude:number;lifecycle_state:string;canonical_venue_id:string|null;identity_discriminator:string;version:number};
 const select = "SELECT v.*, (SELECT name_ru FROM cities WHERE id=v.city_id) AS city_name, ST_Y(location::geometry) AS latitude, ST_X(location::geometry) AS longitude FROM venues v";
 const dto = (r:Row) => ({id:r.id,cityId:r.city_id,cityName:r.city_name,name:r.name,address:r.address,timezone:r.timezone,latitude:Number(r.latitude),longitude:Number(r.longitude),lifecycleState:r.lifecycle_state,canonicalVenueId:r.canonical_venue_id,identityDiscriminator:r.identity_discriminator,version:r.version});
 /** Venue-owned writes. Admin supplies current authorization and one transaction. */
@@ -113,9 +113,12 @@ export class AdminVenuesService {
           await appendAudit(c,{actor:a,action:"venue.edit_collision_review",targetType:"venue",targetId:id,permission:"venue.manage",reason:input.reasonCode,keyHash});
           return {...dto(before),reviewRequired:true};
         }
+        const phone = f.contactPhone === undefined ? before.contact_phone : f.contactPhone || null;
+        const website = f.contactWebsite === undefined ? before.contact_website : f.contactWebsite || null;
+        const note = f.bookingNote === undefined ? before.booking_note : f.bookingNote || null;
         // Retain historical reservations so proposals using old keys resolve canonically.
         await c.query("INSERT INTO venue_identity_keys(dedupe_key,venue_id,normalization_version) VALUES($1,$2,1) ON CONFLICT(dedupe_key) DO NOTHING",[n.key,id]);
-        await c.query("UPDATE venues SET name=$2,address=$3,timezone=$4,location=ST_SetSRID(ST_MakePoint($5,$6),4326)::geography,normalized_name=$7,normalized_address=$8,identity_discriminator=$9,provenance='admin_corrected',version=version+1,updated_at=now() WHERE id=$1",[id,f.name,f.address,f.timezone,f.longitude,f.latitude,n.normalizedName,n.normalizedAddress,n.identityDiscriminator]);
+        await c.query("UPDATE venues SET name=$2,address=$3,timezone=$4,location=ST_SetSRID(ST_MakePoint($5,$6),4326)::geography,normalized_name=$7,normalized_address=$8,identity_discriminator=$9,contact_updated_at=CASE WHEN contact_phone IS DISTINCT FROM $10::text OR contact_website IS DISTINCT FROM $11::text OR booking_note IS DISTINCT FROM $12::text THEN now() ELSE contact_updated_at END,contact_phone=$10,contact_website=$11,booking_note=$12,provenance='admin_corrected',version=version+1,updated_at=now() WHERE id=$1",[id,f.name,f.address,f.timezone,f.longitude,f.latitude,n.normalizedName,n.normalizedAddress,n.identityDiscriminator,phone,website,note]);
       } else {
         const next=input.action==="retire"?"retired":input.action==="verify"?"verified":"unverified";
         if(input.action==="restore" ? before.lifecycle_state!=="retired" : !["unverified","verified"].includes(before.lifecycle_state))throw conflict("VENUE_STATE_CONFLICT","Действие недоступно в текущем состоянии");

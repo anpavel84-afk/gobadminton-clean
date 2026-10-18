@@ -104,6 +104,10 @@ export const cities = pgTable("cities", {
 });
 
 export const venues = pgTable("venues", {
+  contactPhone: text("contact_phone"),
+  contactWebsite: text("contact_website"),
+  bookingNote: text("booking_note"),
+  contactUpdatedAt: timestamp("contact_updated_at", { withTimezone: true }),
   version: integer("version").notNull().default(1),
   id: uuid("id").defaultRandom().primaryKey(),
   cityId: uuid("city_id").notNull(),

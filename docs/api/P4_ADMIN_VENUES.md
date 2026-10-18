@@ -11,3 +11,24 @@ Current Game list/map use the same moderation projection. Game force-cancel invo
 Cases and minimal evidence preserve current assignment/role checks on reads and idempotent replay. Policy is disabled unless explicitly synthetic; purge always denied. No global chat browse/export, raw code/token/contact/GPS evidence, real staff privileges, real SMTP or production effects.
 
 The private dependency supplement is cache evidence only. No executor dependency install or future frozen-install claim. Full author checks and independent QA disposition belong to the exact candidate handoff.
+
+
+## Контакты площадки: T0a-1
+
+`GET /games/{gameId}` добавляет в `venue` необязательные `contactPhone`,
+`contactWebsite`, `bookingNote` только для текущего активного управляющего игры
+(`game_managers`: `owner` или `manager`, `status=active`) либо участника этой игры
+с `participations.status=confirmed`. Значения могут быть `null`.
+Для остальных, включая анонимных, pending/rejected/withdrawn/removed,
+`cancelled_by_game`, expired, посторонних и заблокированных без указанных прав,
+все три ключа отсутствуют. Сам факт блокировки не предоставляет прав.
+Списки игр (включая управляемые), карта, discovery и каталог/деталь `/venues`
+не раскрывают эти поля. Ответ детали игры остаётся `Cache-Control: no-store`.
+
+Существующая admin-команда `edit` принимает три необязательных строковых поля:
+`contactPhone` (до 40), `contactWebsite` (до 300, префикс `http://` или `https://`),
+`bookingNote` (до 500). Пробелы по краям удаляются, пустая строка записывает SQL
+`NULL`, пропуск сохраняет значение. `contact_updated_at` меняется только при
+изменении хотя бы одного значения. Контакты не добавлены в admin create или
+новые endpoint/UI; audit, step-up, expectedVersion и idempotency сохраняются.
+Ошибки валидации используют существующий problem-формат.
