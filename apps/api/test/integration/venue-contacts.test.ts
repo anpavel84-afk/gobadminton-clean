@@ -17,7 +17,6 @@ import { loadEnv } from "../../src/config/env";
 import { GamesModule } from "../../src/games/games.module";
 import { GamesService } from "../../src/games/games.service";
 import { VenuesModule } from "../../src/venues/venues.module";
-import { VenuesService } from "../../src/venues/venues.service";
 import { buildTestCoreModule } from "./test-core.module";
 const run=process.env.RUN_DB_INTEGRATION==="1"?describe:describe.skip;
 const origin="http://localhost:19440",pepper="p4-private-synthetic-admin-pepper-32chars";
@@ -25,7 +24,7 @@ type Actor={id:string;token:string;csrf:string};
 run("T0a-1: контакты площадки и приватность",()=>{
  const databaseName="venue_contacts_"+randomUUID().replaceAll("-", "");
  let adminPool:Pool;
- let app:NestFastifyApplication,pool:Pool,content:Actor,other:Actor,support:Actor,games:GamesService,sessions:SessionService,venues:VenuesService;
+ let app:NestFastifyApplication,pool:Pool,content:Actor,games:GamesService,sessions:SessionService;
  const cityId="a0000000-0000-4000-8000-000000000001";
  beforeAll(async()=>{
   process.env.NODE_ENV="test";process.env.APP_ENV="local";process.env.PUBLIC_API_ORIGIN="http://127.0.0.1:19441";process.env.PUBLIC_WEB_ORIGIN="http://127.0.0.1:19442";process.env.ALLOWED_WEB_ORIGINS=process.env.PUBLIC_WEB_ORIGIN;
@@ -38,7 +37,7 @@ run("T0a-1: контакты площадки и приватность",()=>{
   for(const file of (await readdir(dir)).filter(f=>f.endsWith(".sql")).sort())await pool.query(await readFile(path.join(dir,file),"utf8"));
   const mod=await Test.createTestingModule({imports:[buildTestCoreModule(env,pool),AdminModule,GamesModule,VenuesModule,AuthModule]}).compile();
   app=mod.createNestApplication<NestFastifyApplication>(new FastifyAdapter({logger:false}));await app.register(cookie);app.setGlobalPrefix("v1");app.useGlobalFilters(new ProblemExceptionFilter());await app.init();await app.getHttpAdapter().getInstance().ready();
-  content=await actor("content_manager");other=await actor("superadmin");support=await actor("support");games=mod.get(GamesService);sessions=mod.get(SessionService);venues=mod.get(VenuesService);
+  content=await actor("content_manager");games=mod.get(GamesService);sessions=mod.get(SessionService);
  },120000);
  beforeEach(async()=>{await pool.query("DELETE FROM admin_rate_windows");});
  afterAll(async()=>{await app?.close();await pool?.end();if(adminPool){await adminPool.query(`DROP DATABASE IF EXISTS "${databaseName}"`);await adminPool.end();}});
@@ -46,8 +45,6 @@ run("T0a-1: контакты площадки и приватность",()=>{
  async function actor(role:AdminRole):Promise<Actor>{const uid=await user(),id=(await pool.query<{id:string}>("INSERT INTO admin_principals(user_id,status) VALUES($1,'active') RETURNING id",[uid])).rows[0]!.id;await pool.query("INSERT INTO admin_role_grants(principal_id,role,reason_code) VALUES($1,$2,'synthetic_fixture')",[id,role]);const credential=randomUUID(),token=randomUUID()+randomUUID(),csrf=randomUUID();await pool.query("INSERT INTO admin_webauthn_credentials(credential_id,principal_id,public_key) VALUES($1,$2,$3)",[credential,id,Buffer.from('synthetic-command-fixture')]);await pool.query("INSERT INTO admin_sessions(principal_id,credential_id,token_hash,csrf_ciphertext) VALUES($1,$2,$3,$4)",[id,credential,hashSecret(pepper,token),sealSecret(pepper,csrf)]);return {id,token,csrf};}
  function fields(extra:object={}){return {cityId,name:"Synthetic "+randomUUID(),address:"Synthetic address "+randomUUID(),timezone:"Europe/Moscow",latitude:55.75,longitude:37.62,...extra};}
  function post(url:string,payload:object,a=content,key=randomUUID()){return app.inject({method:"POST",url:"/v1/admin/venues"+url,headers:{origin,"x-csrf-token":a.csrf,"idempotency-key":key},cookies:{[ADMIN_COOKIE]:a.token},payload});}
- function get(url:string,a=content){return app.inject({method:"GET",url:"/v1/admin/venues"+url,headers:{origin},cookies:{[ADMIN_COOKIE]:a.token}});}
- async function create(extra:object={}){const r=await post("",{...fields(extra),reasonCode:"synthetic_review"});expect(r.statusCode,r.body).toBe(201);return r.json() as {id:string;version:number};}
  function command(id:string,action:string,extra:object={},a=content,key=randomUUID()){return post('/'+id+'/commands',{action,expectedVersion:1,reasonCode:'synthetic_review',...extra},a,key);}
 
  it("миграция: N-1, nullable, CHECK, повтор по ledger и безопасный rollback",async()=>{
