@@ -34,3 +34,7 @@
 Не поддерживаем два источника одного правила. При конфликте обновлять зависимые документы вместе.
 
 Для долговременной памяти действует [Project Record & Handoff Policy](rules/PROJECT_RECORD_POLICY.md).
+
+## Итоги игры — утверждённая модель (2026-10-18 UTC)
+
+[Единый вход для агентов](architecture/POST_GAME_V001.md): посещаемость, итог, исправления, приватные отзывы/заметки, ответ и контекстные жалобы. [Owner approval](decisions/OWNER_DECISION_POST_GAME_MODEL_V001.md), [ADR-0018](decisions/ADR-0018-POST-GAME-OUTCOMES-FEEDBACK.md), [API design](api/POST_GAME_CONTRACT_V001.md), [PM/Implementation/QA pack](delivery/POST_GAME_DELIVERY_V001.md). Модель утверждена; наличие документов не означает реализацию, admission или deployment.

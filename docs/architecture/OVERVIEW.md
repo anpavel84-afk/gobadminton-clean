@@ -45,3 +45,7 @@ No microservices/Kubernetes/Kafka/GraphQL/event sourcing/CMS dependency for tran
 The technical topology does not itself establish legal compliance for public personal-data processing. With primary DB in Germany, public real-data launch still requires O-02 review.
 
 Details: [STACK](STACK.md), [MODULE_BOUNDARIES](MODULE_BOUNDARIES.md), [ENVIRONMENTS](../operations/ENVIRONMENTS.md), [ADR](../decisions/README.md). Historical `MVP_VPS_RUNTIME.md` is not included in Clean extraction.
+
+## Post-game extension · ADR-0018
+
+[Завершение игры](POST_GAME_V001.md) расширяет текущий модульный монолит: Sessions владеет outcome/attendance/correction, Feedback — заметками/отзывами/ответом, Safety/Trust — существующими обращениями, Communications — durable уведомлением. Новых сервисов/очередей/чатов не создаём. Product OWNER_CONFIRMED, техническая модель TECH_SELECTED, implementation pending. Данное дополнение не меняет topology/transport/runtime.

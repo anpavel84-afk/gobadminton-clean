@@ -37,3 +37,7 @@
 ## Definition of usable pilot
 
 Есть реальные разрешённые организаторы и карточки, реальные VK/Яндекс end-to-end, понятные правила участия, учёт заявок/исходов, privacy/terms, поддержка, восстановление после сбоя и пройденный независимый QA critical flows. Ни skeleton UI, ни build PASS, ни заполненные документы отдельно этого не доказывают.
+
+## OWNER_CONFIRMED extension: завершение игры
+
+[Owner decision v001](../decisions/OWNER_DECISION_POST_GAME_MODEL_V001.md) утверждает связанную первую версию: outcome, attendance, прозрачное исправление, private notes, peer/organization feedback, один reply и contextual report в существующих экранах. Этот scope уже не PROPOSED_PRODUCT; [delivery slices](../delivery/POST_GAME_DELIVERY_V001.md) не означают admission. No-show нельзя выпускать отдельно от notice+recourse. Public ratings/penalties/GPS/новая лента/media не входят. [Архитектура](../architecture/POST_GAME_V001.md).

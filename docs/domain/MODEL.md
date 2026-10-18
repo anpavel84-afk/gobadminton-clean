@@ -43,3 +43,7 @@ Game хранит `settlementMode=external`, `priceMinor` nullable, `currency` �
 ## Visibility
 
 `public` — находится в discovery; `unlisted` — доступен по share link, не попадает в индекс. Unlisted **не private**: адрес и детали доступны получившему ссылку. По-настоящему закрытые группы потребуют отдельной ACL-модели. В обоих режимах private applicant data никогда не включаются в публичную карточку.
+
+## Уточнение Attendance / GameOutcome и Feedback
+
+См. [утверждённый post-game пакет](../architecture/POST_GAME_V001.md), sections 3–6. ParticipantContext сохраняет минимальную историческую связь; Attendance unknown/present/absent независима от Participation. GameOutcome unknown/held/not_held не вычисляется по времени. Revisions и Dispute сохраняют авторство и право исправить ошибку. PersonalGameNote, GameReview(peer/organization/training) и ReviewReply — разные типизированные записи с разными ACL; AbuseReport остаётся отдельным процессом. Creator seat не означает present; manager role не даёт self/peer rating без собственного опыта. Таблицы и API этого расширения ещё не реализованы этой документацией.

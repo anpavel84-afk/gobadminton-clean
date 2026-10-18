@@ -80,3 +80,17 @@ Capacity нельзя уменьшить ниже занятого количе�
 Новая regular draft получает ровно одну реальную confirmed Participation создателя. Publish/replay не создают и не восстанавливают место. Trainer-led и исторические игры не получают backfill. External count относится к другим людям, `1 + externalReservedCount <= capacity` проверяется при regular create. Withdraw/remove/cancel меняют реальную строку; management authority остаётся отдельной. Active participation возвращается request до проверки GAME_FULL, после текущих version/lifecycle/time gates.
 
 Приватный contact default принадлежит Profiles: explicit save-on-create выполняется после Game/manager/Participation в той же транзакции. Preference-only PATCH не блокирует Game. Deletion_pending очищает default и увеличивает version под account fence. Новый API не активирует удаление аккаунта как продуктовую функцию. См. [ADR-0012](../decisions/ADR-0012-GAME-CONTACT-CREATOR-SEAT.md), source candidate pending independent QA.
+
+## Post-game invariants · ADR-0018
+
+[Подробные переходы и locks](../architecture/POST_GAME_V001.md).
+- PG-INV-01: отсутствие attendance/outcome = unknown; никакого inferred held/no-show.
+- PG-INV-02: outcome/attendance не меняют seats/Participation; cancelled не reopening через outcome.
+- PG-INV-03: absent только expected-at-start после endsAt, не canceled/not_held; подтверждение места не доказательство прихода.
+- PG-INV-04: mutation + revision + durable own notice атомарны; same-key replay не повторяет эффект.
+- PG-INV-05: silence/timeout/correction автором не закрывают open dispute автоматически; acknowledgement привязан к версии.
+- PG-INV-06: собственная история/оспаривание не зависит от chat/block/current confirmed status.
+- PG-INV-07: manager не может лишить подачи feedback посредством absent; provenance contested, не verified.
+- PG-INV-08: один review на author/subject/game/kind, один reply; no self-review, no auto skill/reputation effects.
+- PG-INV-09: пакет present содержит exact подтверждённые IDs+versions и применяется целиком.
+Post-game authority — действующий GameManager; старые generic OrganizerMembership формулировки не использовать для этого сценария. Численные окна 30m/72h/7d не стали утверждёнными cutoff.

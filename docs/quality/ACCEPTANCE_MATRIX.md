@@ -28,3 +28,7 @@
 | Q-22 | Измерение пилота | Click/request/confirm/attend различаются; retries дедуплицируются; unknown и new-client evidence не скрыты |
 
 QA выбирает exact строки для bounded slice и добавляет regression зависимости. Полная матрица не означает требование запускать stores/платежи при каждом PR. Независимый QA foundation: пока **не выполнен**.
+
+## Post-game extension
+
+[PG-Q01…PG-Q18](../delivery/POST_GAME_DELIVERY_V001.md#independent-acceptance-matrix) — обязательная расширенная матрица для [ADR-0018](../decisions/ADR-0018-POST-GAME-OUTCOMES-FEEDBACK.md): time/unknown, canceled arrival, bulk/version races, notices/disputes, anti-censorship, audience isolation, typed reports, migration/rollback и mobile flow. Статус NOT RUN; требуется independent QA exact implementation SHA. Q-05…Q-10/Q-13/Q-16/Q-17/Q-20/Q-21 остаются regression dependencies.

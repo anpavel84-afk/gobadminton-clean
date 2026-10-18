@@ -292,3 +292,7 @@ Email proof commands are a narrow exception to business-command Idempotency-Key:
 routes. Exact Origin/flow/binding and atomic generation/consume prevent duplicate authority;
 an already consumed verify returns an error, never a cached session credential.
 The foundation checker recognizes only these exact routes with required binding headers.
+
+## Post-game contract design (2026-10-18)
+
+[POST_GAME_CONTRACT_V001](POST_GAME_CONTRACT_V001.md) описывает целевое additive API по [ADR-0018](../decisions/ADR-0018-POST-GAME-OUTCOMES-FEEDBACK.md). Это design, не выпущенные endpoints и не замена packages/contracts/openapi.json. Admitted implementation обязан синхронно изменить OpenAPI/generated DTO/tests. Current consumer auth, CSRF, actor-scoped idempotency, no-store, scoped projection и version-conflict semantics сохраняются; новый сценарий не получает исключений.

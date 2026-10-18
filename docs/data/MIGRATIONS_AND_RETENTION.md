@@ -30,3 +30,7 @@ Reauthentication → deletion request → немедленная блокиро�
 После восстановления backup повторно применять deletion journal до открытия доступа; иначе удалённые люди появляются снова. Журнал не должен содержать лишние восстановимые PII. Срок исчезновения из rolling backups объясняется пользователю. Provider unlink и полное удаление User — разные операции.
 
 Публичный web deletion route и in-app initiation проектируются заранее для mobile stores; [S16–S17](../reference/SOURCES.md). Не размещать реальные заявления/контакты и дампы в Git.
+
+## Post-game records
+
+[ADR-0018 retention/rollout](../architecture/POST_GAME_V001.md#10-миграции--rollback--измерение): notes/reviews/disputes/notices/case evidence имеют разные purpose и retention; численные сроки ещё не утверждены. Open-case evidence не стирать обычным hide/delete, но audit не оправдывает вечное хранение текста. Existing 0031 support evidence synthetic-only: real-data policy требует отдельного разрешённого расширения, не обхода immutable triggers. Upgrade не выдумывает историческое посещение. Rollback сохраняет историю и доступ к исправлению, не destructive down-migration.
