@@ -74,3 +74,18 @@ NOT_TESTED: all component/browser tests, lint, typecheck, build and runtime chec
 Scope review: working-tree changed-path listing only, against exact initial base; no test execution. Allowed application files are the M1 paths listed in the assignment; tests and this handoff remain under allowed directories. Rollback: authorized integrator discards only this source diff against the initial base; no data/runtime rollback. Preserve other writers' changes if any arise after handoff.
 
 Next single bounded action: authorized publisher records the source candidate in GitHub, then independent QA runs B1–B5 and A1–A6, demonstrates D1 regression on the predecessor, executes web tests/lint/typecheck/build and records exact evidence. This source handoff does not authorize release or Owner acceptance.
+
+## Correction after independent B3 QA FAIL — 2026-10-19
+
+From: source author. To: independent QA / authorized integrator.
+Status: WORKING_DRAFT — UNVERIFIED, source-only.
+Exact correction base: `5e68b03cafe8314ba8429f4cb28169c98e150a92`, clean `automation/issue-88`.
+Reviewed candidate: https://github.com/anpavel84-afk/gobadminton-clean/commit/5e68b03cafe8314ba8429f4cb28169c98e150a92
+
+Supplied independent QA: FAIL on B3. The geometry script treated a fixed return capsule as a flow child and searched for the nested canvas among direct frame children, subtracting a spurious height/gap. It also required zoom controls that GamesVenueMap intentionally does not install.
+
+Correction: measure the fullscreen map against frame top and measured viewport/blocker bottom directly. Require its absolute area to fill the frame vertically; require map/frame and actual canvas widths to agree. Flow-control bounds still apply to normal-flow children, excluding both absolute and fixed overlays. Keep all viewport sizes, rotations, height/overflow/scroll/gap checks, return-button checks, list navigation and fallback checks. Retain attribution bounds and extend them to both axes; remove the inapplicable zoom-overlay requirement because pan, pinch and keyboard zoom are native. This supersedes the earlier handoff's attribution/zoom coverage wording. D1/D2 application code and authored regression coverage remain unchanged. No new visual pattern; Style Guide authority and inherited external-parity limitation remain unchanged.
+
+NOT_TESTED: browser/component tests, lint, typecheck, build, runtime and physical iOS. No self-QA performed under the explicit source-only instruction; no PASS claim. No fetch/checkout, Git metadata mutation, commit, push, automation, secrets, service or deployment changes. Original exact-source reapplication record above remains applicable; no repeat reapplication was needed on this successor candidate.
+
+Next bounded action: independent QA verifies corrected B3 on the published candidate and runs required B1–B5/A1–A6 checks. Authorized publishing process must attach the resulting commit permalink; these edits are uncommitted. Rollback: discard only the geometry-script and handoff correction relative to the exact correction base, preserving prior M1/D1–D3 work.

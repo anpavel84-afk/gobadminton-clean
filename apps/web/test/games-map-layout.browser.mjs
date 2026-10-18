@@ -20,20 +20,23 @@ try {
         const frame = document.querySelector('.gb-games-map');
         const map = document.querySelector('.gb-games-map-canvas');
         if (!frame || !map) throw new Error('map frame absent');
-        const children = [...frame.children].filter(node => node.getBoundingClientRect().height > 0 && window.getComputedStyle(node).position !== "absolute");
-        const index = children.indexOf(map);
-        const gap = parseFloat(window.getComputedStyle(frame).rowGap) || 0;
-        const before = children.slice(0,index).map(rect);
-        const after = children.slice(index+1).map(rect);
+        // The canvas is nested in an absolute area; the fixed return capsule
+        // overlays it. Neither participates in the frame's normal flow.
+        const area = frame.querySelector('.gb-games-map-area');
+        if (!area || !area.contains(map)) throw new Error('map area absent');
+        const flowControls = [...frame.children].filter(node => {
+          const position = window.getComputedStyle(node).position;
+          return node.getBoundingClientRect().height > 0 && position !== 'absolute' && position !== 'fixed';
+        }).map(rect);
         const viewport = window.visualViewport;
         const viewportBottom = (viewport?.offsetTop ?? 0) + (viewport?.height ?? window.innerHeight);
         const blockers = [...frame.querySelectorAll('.gb-bottom-nav,.gb-games-view-action')].map(rect).filter(r => r.height > 0);
         const bottom = Math.min(viewportBottom, ...blockers.map(r => r.top));
-        return {map:rect(map), canvas:box('.gb-games-map-canvas canvas'), frame:rect(frame),
+        return {map:rect(map), area:rect(area), canvas:box('.gb-games-map-canvas canvas'), frame:rect(frame),
           header:box('.gb-topbar'), back:box('.gb-games-map-back'),
-          before, after, gap, bottom, blockers,
-          expectedTop: rect(frame).top + before.reduce((sum,r) => sum+r.height+gap,0),
-          expectedBottom: bottom - after.reduce((sum,r) => sum+r.height+gap,0),
+          flowControls, bottom, blockers,
+          expectedTop: rect(frame).top,
+          expectedBottom: bottom,
           settled:map.dataset.mapReady === 'true' && map.dataset.mapSettled === 'true',
           scroll:window.scrollY, width:document.documentElement.clientWidth, scrollWidth:document.documentElement.scrollWidth,
           height:window.innerHeight, documentHeight:document.documentElement.scrollHeight};
@@ -57,17 +60,20 @@ try {
         assert.ok(geometry.back.top >= geometry.frame.top && geometry.back.bottom <= geometry.frame.bottom,'return stays in viewport');
         assert.ok(geometry.settled, 'genuine map idle required');
         assert.ok(Math.abs(geometry.frame.bottom-geometry.bottom) <= 2, 'frame reaches measured action/nav/viewport');
-        assert.ok(Math.abs(geometry.map.top-geometry.expectedTop) <= 2, 'only visible required controls above canvas');
-        assert.ok(Math.abs(geometry.map.bottom-geometry.expectedBottom) <= 2, 'only visible required fallback/status below canvas');
+        assert.ok(Math.abs(geometry.map.top-geometry.expectedTop) <= 2, 'fullscreen map reaches frame top');
+        assert.ok(Math.abs(geometry.map.bottom-geometry.expectedBottom) <= 2, 'fullscreen map reaches viewport bottom');
         assert.ok(Math.abs(geometry.canvas.height-geometry.map.height) <= 2, 'MapLibre resized its actual canvas');
         assert.ok(Math.abs(geometry.canvas.bottom-geometry.map.bottom) <= 2, 'actual canvas fills map container');
-        for (const control of [...geometry.before,...geometry.after]) {
+        assert.ok(Math.abs(geometry.area.top-geometry.frame.top) <= 2 && Math.abs(geometry.area.bottom-geometry.bottom) <= 2, 'absolute map area fills frame vertically');
+        assert.ok(Math.abs(geometry.map.left-geometry.frame.left) <= 2 && Math.abs(geometry.map.right-geometry.frame.right) <= 2, 'map fills frame width');
+        assert.ok(Math.abs(geometry.canvas.width-geometry.map.width) <= 2, 'MapLibre resized actual canvas width');
+        for (const control of geometry.flowControls) {
           assert.ok(control.top >= geometry.frame.top-1 && control.bottom <= geometry.bottom+1, 'required controls remain visible above action/nav');
           assert.ok(control.width <= geometry.frame.width+1, 'required controls fit frame');
         }
-        for (const selector of ['.maplibregl-ctrl-attrib','.maplibregl-ctrl-zoom-in','.maplibregl-ctrl-zoom-out']) {
+        for (const selector of ['.maplibregl-ctrl-attrib']) {
           const control=await page.locator(selector).boundingBox();
-          assert.ok(control && control.y >= geometry.canvas.top-1 && control.y+control.height <= geometry.canvas.bottom+1, 'attribution/zoom inside canvas');
+          assert.ok(control && control.y >= geometry.canvas.top-1 && control.y+control.height <= geometry.canvas.bottom+1 && control.x >= geometry.canvas.left-1 && control.x+control.width <= geometry.canvas.right+1, 'attribution inside canvas');
         }
       } finally {
         console.log(JSON.stringify({size,phase:'diagnostic',geometry:await measure()}));
