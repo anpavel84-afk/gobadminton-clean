@@ -13,7 +13,7 @@ import { Button } from "../Button";
 const MapView = dynamic(() => import("./GamesVenueMap").then(module => module.GamesVenueMap), { ssr: false });
 
 /** Public venues never depend on Radar consent, a location fix or a people query. */
-export function GamesMapView({ cityId, day, venueId, activity = "all" }: { cityId: string; day: string; venueId?: string; activity?: "all" | ActivityKind }) {
+export function GamesMapView({ cityId, day, venueId, activity = "all", onReturnToList }: { cityId: string; day: string; venueId?: string; activity?: "all" | ActivityKind; onReturnToList?: () => void }) {
   const [snapshot, setSnapshot] = useState<{ cityId: string; venues: VenueSummary[]; games: Game[]; gamesReady: boolean } | null>(null);
   const [mapAvailable, setMapAvailable] = useState(true);
   const [error, setError] = useState(false);
@@ -73,7 +73,7 @@ export function GamesMapView({ cityId, day, venueId, activity = "all" }: { cityI
     {loading && <p role="status">Загружаем все площадки и расписание…</p>}
     {error && <p role="alert">Не удалось загрузить полный каталог или расписание. Проверьте соединение и повторите. Непроверенные количества не показываем.</p>}
     {snapshot?.cityId === cityId && <>
-      {cityId === MOSCOW_BUNDLE.cityId ? <MapView venues={venues} counts={snapshot.gamesReady ? counts : null} onSelect={openVenue} onAvailability={setMapAvailable} /> : <p role="status">Карта выбранного города пока недоступна. Все площадки доступны списком.</p>}
+      {cityId === MOSCOW_BUNDLE.cityId ? <MapView venues={venues} counts={snapshot.gamesReady ? counts : null} onSelect={openVenue} onAvailability={setMapAvailable} onReturnToList={onReturnToList} /> : <p role="status">Карта выбранного города пока недоступна. Все площадки доступны списком.</p>}
       {!venues.length && <p role="status">В каталоге города пока нет площадок.</p>}
       {(!mapAvailable || cityId !== MOSCOW_BUNDLE.cityId || venues.some(venue => typeof venue.latitude !== "number" || typeof venue.longitude !== "number" || !Number.isFinite(venue.latitude) || !Number.isFinite(venue.longitude) || venue.longitude < 36 || venue.longitude > 39.5 || venue.latitude < 54.5 || venue.latitude > 56.5)) && <details className="gb-games-map-fallback">
         <summary>Площадки списком — карта или координаты недоступны</summary>

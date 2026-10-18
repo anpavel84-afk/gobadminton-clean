@@ -217,3 +217,9 @@
   .gb-games-view-action { height: auto; padding-block: var(--gb-space-1); }
   .gb-consumer .gb-games-view-action > button { min-height: 44px; }
 }
+
+/* M0: bounded Error + SurfacePanel + Button composition; attribution stays exposed. */
+.gb-games-map-area { flex: 1 1 0; min-height: 0; position: relative; display: flex; }
+.gb-games-map-error { position: absolute; z-index: 5; top: 16px; left: 16px; right: 16px; margin: auto; max-width: 420px; background: var(--gb-white); }
+.gb-games-map-error h2 { margin-top: 0; }
+.gb-games-map-error > div { display: flex; flex-wrap: wrap; gap: 8px; }

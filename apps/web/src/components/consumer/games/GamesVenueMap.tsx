@@ -1,4 +1,7 @@
 "use client";
+import { Button } from "../Button";
+import { SurfacePanel } from "../Surfaces";
+import { classifyMapError, mapErrorReason, type MapDiagnostic } from "../../../lib/games-map-diagnostics";
 import { RadarPage } from "../radar/RadarPage";
 import { shuttlecockElement } from "../NavIcon";
 import { useEffect, useRef, useState } from "react";
@@ -21,7 +24,7 @@ function installProtocol() {
     protocol = new Protocol(); maplibregl.addProtocol("pmtiles", protocol.tile);
   }
 }
-export function GamesVenueMap({ venues, counts, onSelect, onAvailability }: { venues: VenueSummary[]; counts: Map<string, number> | null; onSelect: (venue: VenueSummary) => void; onAvailability?: (available: boolean) => void }) {
+export function GamesVenueMap({ venues, counts, onSelect, onAvailability, onReturnToList }: { venues: VenueSummary[]; counts: Map<string, number> | null; onSelect: (venue: VenueSummary) => void; onAvailability?: (available: boolean) => void; onReturnToList?: () => void }) {
   const container = useRef<HTMLDivElement>(null); const map = useRef<LibreMap | null>(null);
   const venuesRef = useRef(venues); venuesRef.current = venues;
   const callbacks = useRef({ onSelect, onAvailability }); callbacks.current = { onSelect, onAvailability };
@@ -31,7 +34,10 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability }: { ve
   const [ready, setReady] = useState(false);
   const [settled, setSettled] = useState(false);
   const [status, setStatus] = useState("Загружаем карту города…");
-  const unavailable = () => { callbacks.current.onAvailability?.(false); setStatus("Карта недоступна: ресурсы, Range, CSP или соединение. Площадки доступны в раскрываемом списке."); };
+  const [attempt, setAttempt] = useState(0);
+  const [failure, setFailure] = useState<MapDiagnostic>();
+  const [lastError, setLastError] = useState<string>();
+  const [warnings, setWarnings] = useState(0);
   useEffect(() => {
     let alive = true; const abort = new AbortController(); let instance: LibreMap | undefined;
     const saveCamera = () => {
@@ -40,12 +46,24 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability }: { ve
       try { sessionStorage.setItem("gb-games-map-camera", JSON.stringify({ lng: center.lng, lat: center.lat, zoom: instance.getZoom() })); } catch { /* Optional storage. */ }
     };
     window.addEventListener("gb-map-return", saveCamera); window.addEventListener("pagehide", saveCamera);
-    const timeout = setTimeout(() => { if (alive && !instance?.loaded()) unavailable(); }, 20000);
+    let loadedAt: number | undefined; let loadedTiles = 0; let firstRender = false;
+    let phase: "style" | "init" = "style";
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let tileTimeout: ReturnType<typeof setTimeout> | undefined;
+    let fatal = false; let started = false;
+    const report = (event: unknown) => {
+      if (!alive) return;
+      const diagnostic = classifyMapError(event, { loadedTiles, firstRender, sinceLoadMs: loadedAt === undefined ? undefined : Date.now() - loadedAt });
+      console.warn("[games-map]", diagnostic.kind, diagnostic.url, diagnostic.status);
+      setLastError(diagnostic.kind); setWarnings(n => n + 1);
+      if (diagnostic.fatal) { fatal = true; setFailure(diagnostic); setStatus(""); callbacks.current.onAvailability?.(false); }
+    };
     async function start() {
+      timeout = setTimeout(() => report({ kind: "timeout" }), 20000);
       try {
         if (window.location.origin !== new URL(MOSCOW_BUNDLE.prefix).origin) throw new Error("Map origin unsupported");
         const response = await fetch(MOSCOW_BUNDLE.prefix + "style-dev.json", { credentials: "omit", signal: abort.signal });
-        if (!response.ok) throw new Error("style");
+        if (!response.ok) throw { kind: "style", url: response.url, status: response.status };
         const bytes = await response.arrayBuffer();
         const hash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map(b => b.toString(16).padStart(2, "0")).join("");
         if (hash !== MOSCOW_BUNDLE.styleHash) throw new Error("style identity");
@@ -54,9 +72,10 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability }: { ve
         const resources = [style.glyphs, ...(typeof style.sprite === "string" ? [style.sprite] : (style.sprite ?? []).map(sprite => sprite.url)), ...Object.values(style.sources).flatMap(source => ["url" in source ? source.url : undefined, ...("tiles" in source ? source.tiles ?? [] : [])])];
         if (resources.some(url => typeof url === "string" && !allowedMapResource(url))) throw new Error("Unapproved style resource");
         if (!alive || !container.current) return;
+        phase = "init";
         installProtocol();
         instance = new maplibregl.Map({ container: container.current, style, center: MOSCOW_BUNDLE.center, zoom: 10.5, maxBounds: MOSCOW_BUNDLE.bounds, maxZoom: 16, attributionControl: { compact: false }, dragRotate: false, pitchWithRotate: false,
-          transformRequest: url => { if (!allowedMapResource(url)) throw new Error("Unapproved map resource"); return { url, credentials: "same-origin" }; },
+          transformRequest: url => { if (!allowedMapResource(url)) throw Object.assign(new Error("Unapproved map resource"), { url }); return { url, credentials: "same-origin" }; },
         });
         // Pan, pinch and keyboard remain native; fullscreen has no zoom overlay.
         instance.touchZoomRotate.disableRotation(); map.current = instance;
@@ -68,20 +87,37 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability }: { ve
             instance.jumpTo({ center: [camera.lng, camera.lat], zoom: Math.min(16, Math.max(0, camera.zoom)) });
         } catch { /* Storage is optional. */ }
         instance.on("movestart", () => { if (alive) setSettled(false); });
-        instance.on("idle", () => { if (alive) setSettled(true); });
-        instance.on("load", () => { if (alive) { setReady(true); setSharedMap(instance); callbacks.current.onAvailability?.(true); setStatus(""); clearTimeout(timeout); } });
-        instance.on("error", () => { if (alive) unavailable(); });
+        let firstIdle = true;
+        instance.on("idle", () => { if (alive) { if (firstIdle) { firstIdle = false; instance?.resize(); } setSettled(true); } });
+        instance.on("render", () => { firstRender = true; });
+        instance.on("sourcedata", event => {
+          if (event.sourceId === "protomaps" && event.tile && event.tile.state === "loaded") loadedTiles++;
+        });
+        instance.on("load", () => { if (alive) {
+          instance?.resize(); loadedAt = Date.now(); setReady(true); setSharedMap(instance);
+          if (!fatal) { callbacks.current.onAvailability?.(true); setStatus(""); }
+          clearTimeout(timeout);
+          tileTimeout = setTimeout(() => { if (!loadedTiles) report({ kind: "tiles", sourceId: "protomaps" }); }, 8000);
+        } });
+        instance.on("error", report);
+        instance.on("webglcontextlost", () => report({ kind: "webgl" }));
         instance.getCanvas().setAttribute("aria-label", "Карта Москвы: стрелки перемещают карту, плюс и минус меняют масштаб");
-      } catch { if (alive) unavailable(); }
+      } catch (error) { if (alive) report({ error, kind: classifyMapError(error, { phase, loadedTiles }).kind }); }
     }
-    void start();
-    const resize = new ResizeObserver(() => {
-      if (instance && alive) { setSettled(false); instance.resize(); }
-    }); if (container.current) resize.observe(container.current);
-    return () => { alive = false; abort.abort(); clearTimeout(timeout); resize.disconnect(); window.removeEventListener("gb-map-return", saveCamera); window.removeEventListener("pagehide", saveCamera);
+    const layout = () => {
+      if (!alive || !container.current) return;
+      const { width, height } = container.current.getBoundingClientRect();
+      if (width <= 0 || height <= 0) return;
+      if (!started) { started = true; void start(); }
+      else if (instance) { setSettled(false); instance.resize(); }
+    };
+    const resize = new ResizeObserver(layout);
+    if (container.current) resize.observe(container.current);
+    layout();
+    return () => { alive = false; abort.abort(); clearTimeout(timeout); clearTimeout(tileTimeout); resize.disconnect(); window.removeEventListener("gb-map-return", saveCamera); window.removeEventListener("pagehide", saveCamera);
       if (instance) { const center = instance.getCenter(); try { sessionStorage.setItem("gb-games-map-camera", JSON.stringify({ lng: center.lng, lat: center.lat, zoom: instance.getZoom() })); } catch { /* Optional storage. */ } }
       markers.current.forEach(entry => entry.marker.remove()); markers.current.clear(); instance?.remove(); map.current = null; };
-  }, []);
+  }, [attempt]);
   useEffect(() => {
     if (!ready || !map.current) return;
     reconcileVenueMarkers(markers.current, venues, {
@@ -138,5 +174,13 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability }: { ve
     separate(); instance.on("moveend", separate); window.addEventListener("gb-map-own-marker", separate);
     return () => { instance.off("moveend", separate); window.removeEventListener("gb-map-own-marker", separate); };
   }, [ready, venues, counts]);
-  return <><div ref={container} data-map-ready={ready} data-map-settled={settled} className="gb-games-map-canvas" />{status && <p role="status">{status}</p>}{sharedMap && <RadarPage resumeCamera={resumeCamera} sharedMap={sharedMap} />}</>;
+  const retry = () => {
+    setReady(false); setSettled(false); setSharedMap(undefined); setFailure(undefined);
+    setLastError(undefined); setWarnings(0); setStatus("Загружаем карту города…");
+    callbacks.current.onAvailability?.(true); setAttempt(n => n + 1);
+  };
+  return <><div className="gb-games-map-area"><div ref={container} data-map-error={lastError} data-map-warnings={warnings} data-map-ready={ready} data-map-settled={settled} className="gb-games-map-canvas" />{failure && <SurfacePanel className="gb-games-map-error" role="alert">
+    <h2>Карта не загрузилась</h2><p>{mapErrorReason[failure.kind]}</p>
+    <div><Button onClick={retry}>Повторить</Button><Button variant="outline" onClick={() => { if (onReturnToList) onReturnToList(); else window.location.assign("/games"); }}>← К списку</Button></div>
+  </SurfacePanel>}</div>{status && <p role="status">{status}</p>}{sharedMap && <RadarPage resumeCamera={resumeCamera} sharedMap={sharedMap} />}</>;
 }
