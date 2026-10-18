@@ -10,7 +10,7 @@ import type { Map as LibreMap, StyleSpecification } from "maplibre-gl";
 import { Protocol } from "pmtiles";
 import "maplibre-gl/dist/maplibre-gl.css";
 import "../../../styles/radar-geographic.css";
-import { venueMarkerPresentation, reconcileVenueMarkers, markerActivation } from "../../../lib/games-venue-map";
+import { venueMarkerPresentation, reconcileVenueMarkers, markerActivation, separateMarkerPoints } from "../../../lib/games-venue-map";
 import { MOSCOW_BUNDLE, allowedMapResource } from "../../../lib/radar-map-assets";
 import type { VenueSummary } from "../../../lib/consumer-types";
 function sessionStorageVenue() {
@@ -24,7 +24,7 @@ function installProtocol() {
     protocol = new Protocol(); maplibregl.addProtocol("pmtiles", protocol.tile);
   }
 }
-export function GamesVenueMap({ venues, counts, onSelect, onAvailability, onReturnToList }: { venues: VenueSummary[]; counts: Map<string, number> | null; onSelect: (venue: VenueSummary) => void; onAvailability?: (available: boolean) => void; onReturnToList?: () => void }) {
+export function GamesVenueMap({ venues, counts, onSelect, onAvailability, onReturnToList, selectedVenueId }: { selectedVenueId?: string; venues: VenueSummary[]; counts: Map<string, number> | null; onSelect: (venue: VenueSummary) => void; onAvailability?: (available: boolean) => void; onReturnToList?: () => void }) {
   const container = useRef<HTMLDivElement>(null); const map = useRef<LibreMap | null>(null);
   const venuesRef = useRef(venues); venuesRef.current = venues;
   const callbacks = useRef({ onSelect, onAvailability }); callbacks.current = { onSelect, onAvailability };
@@ -148,31 +148,36 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability, onRetu
           glyph.setAttribute("aria-hidden", "true");
           entry.button.append(glyph);
         }
-        entry.button.setAttribute("aria-pressed", String(sessionStorageVenue() === venue.id));
+        entry.button.setAttribute("aria-pressed", String((selectedVenueId ?? sessionStorageVenue()) === venue.id));
         entry.button.setAttribute("aria-label", presentation.label);
         entry.marker.setLngLat([venue.longitude!, venue.latitude!]);
       },
       remove: entry => entry.marker.remove(),
     });
-  }, [ready, venues, counts]);
+  }, [ready, venues, counts, selectedVenueId]);
   useEffect(() => {
     if (!ready || !map.current) return;
     const instance = map.current;
     const separate = () => {
       const own = instance.getContainer().querySelector<HTMLElement>(".g2-own-marker");
       const ownPoint = own ? instance.project([Number(own.dataset.longitude), Number(own.dataset.latitude)]) : null;
-      for (const entry of markers.current.values()) {
+      const points = [...markers.current].map(([id, entry]) => ({ id, ...instance.project(entry.marker.getLngLat()) }));
+      for (const offset of separateMarkerPoints(points)) {
+        const entry = markers.current.get(offset.id)!;
         const point = instance.project(entry.marker.getLngLat());
-        const dx = ownPoint ? point.x - ownPoint.x : 0;
-        const dy = ownPoint ? point.y - ownPoint.y : 0;
+        const dx = ownPoint ? point.x + offset.x - ownPoint.x : 0;
+        const dy = ownPoint ? point.y + offset.y - ownPoint.y : 0;
         const distance = Math.hypot(dx, dy);
-        // Presentation offset only: published coordinates remain unchanged.
-        const offset = ownPoint && distance < 64 ? 64 - distance : 0;
-        entry.marker.setOffset([offset * (distance ? dx / distance : 1), offset * (distance ? dy / distance : 0)]);
+        // Bound venue-to-venue offsets first, then preserve the existing 64px
+        // own-marker clearance, including when that offset moves a venue inward.
+        const ownOffset = ownPoint && distance < 64 ? 64 - distance : 0;
+        const x = offset.x + ownOffset * (distance ? dx / distance : 1);
+        const y = offset.y + ownOffset * (distance ? dy / distance : 0);
+        entry.marker.setOffset([x, y]);
       }
     };
-    separate(); instance.on("moveend", separate); window.addEventListener("gb-map-own-marker", separate);
-    return () => { instance.off("moveend", separate); window.removeEventListener("gb-map-own-marker", separate); };
+    separate(); instance.on("moveend", separate); instance.on("zoomend", separate); window.addEventListener("gb-map-own-marker", separate);
+    return () => { instance.off("moveend", separate); instance.off("zoomend", separate); window.removeEventListener("gb-map-own-marker", separate); };
   }, [ready, venues, counts]);
   const retry = () => {
     setReady(false); setSettled(false); setSharedMap(undefined); setFailure(undefined);
@@ -182,5 +187,5 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability, onRetu
   return <><div className="gb-games-map-area"><div ref={container} data-map-error={lastError} data-map-warnings={warnings} data-map-ready={ready} data-map-settled={settled} className="gb-games-map-canvas" />{failure && <SurfacePanel className="gb-games-map-error" role="alert">
     <h2>Карта не загрузилась</h2><p>{mapErrorReason[failure.kind]}</p>
     <div><Button onClick={retry}>Повторить</Button><Button variant="outline" onClick={() => { if (onReturnToList) onReturnToList(); else window.location.assign("/games"); }}>← К списку</Button></div>
-  </SurfacePanel>}</div>{status && <p role="status">{status}</p>}{sharedMap && <RadarPage resumeCamera={resumeCamera} sharedMap={sharedMap} />}</>;
+  </SurfacePanel>}</div>{status && <p className="gb-map-sr-only" role="status">{status}</p>}{sharedMap && <RadarPage resumeCamera={resumeCamera} sharedMap={sharedMap} />}</>;
 }

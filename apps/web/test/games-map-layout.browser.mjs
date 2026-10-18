@@ -14,24 +14,23 @@ try {
     await page.locator('[data-map-ready="true"][data-map-settled="true"]').waitFor({ timeout: 30000 });
     for (const size of [{width,height:600}, {width,height:1000}, {width:900,height:width}]) {
       await page.setViewportSize(size);
-      const mobile = size.width <= 720;
       const measure = () => page.evaluate(() => {
         const rect = node => { const r=node.getBoundingClientRect(); return {top:r.top,bottom:r.bottom,height:r.height,width:r.width,left:r.left,right:r.right}; };
         const box = selector => { const node=document.querySelector(selector); if (!node) throw new Error(selector); return rect(node); };
         const frame = document.querySelector('.gb-games-map');
         const map = document.querySelector('.gb-games-map-canvas');
         if (!frame || !map) throw new Error('map frame absent');
-        const children = [...frame.children].filter(node => node.getBoundingClientRect().height > 0);
+        const children = [...frame.children].filter(node => node.getBoundingClientRect().height > 0 && window.getComputedStyle(node).position !== "absolute");
         const index = children.indexOf(map);
         const gap = parseFloat(window.getComputedStyle(frame).rowGap) || 0;
         const before = children.slice(0,index).map(rect);
         const after = children.slice(index+1).map(rect);
         const viewport = window.visualViewport;
         const viewportBottom = (viewport?.offsetTop ?? 0) + (viewport?.height ?? window.innerHeight);
-        const blockers = ['.gb-bottom-nav','.gb-games-view-action'].map(selector => document.querySelector(selector)).filter(Boolean).map(rect).filter(r => r.height > 0);
+        const blockers = [...frame.querySelectorAll('.gb-bottom-nav,.gb-games-view-action')].map(rect).filter(r => r.height > 0);
         const bottom = Math.min(viewportBottom, ...blockers.map(r => r.top));
         return {map:rect(map), canvas:box('.gb-games-map-canvas canvas'), frame:rect(frame),
-          header:box('.gb-topbar'), controls:box('.gb-discovery-search'), context:box('.gb-games-map-context'),
+          header:box('.gb-topbar'), back:box('.gb-games-map-back'),
           before, after, gap, bottom, blockers,
           expectedTop: rect(frame).top + before.reduce((sum,r) => sum+r.height+gap,0),
           expectedBottom: bottom - after.reduce((sum,r) => sum+r.height+gap,0),
@@ -51,8 +50,11 @@ try {
         });
         geometry = await measure();
         console.log(JSON.stringify({size,phase:'settled',geometry}));
-        assert.equal(await page.locator('.gb-games-list-return').isVisible(), !mobile, 'inline return is desktop-only; mobile uses the above-nav List action');
-        assert.equal(await page.getByRole('button',{name:'Список',exact:true}).isVisible(), mobile, 'mobile List action remains available');
+        assert.equal(await page.getByRole('button',{name:'К списку игр',exact:true}).count(),1,'one return control at every size');
+        assert.equal(await page.locator('.gb-games-view-action,.gb-games-map-context,.gb-discovery-search,.gb-games-map-toolbar').count(),0,'fullscreen composition has no old controls');
+        assert.ok(geometry.back.width >= 44 && geometry.back.height >= 44,'accessible return target');
+        assert.ok(geometry.back.left >= geometry.frame.left && geometry.back.right <= geometry.frame.right,'return fits frame');
+        assert.ok(geometry.back.top >= geometry.frame.top && geometry.back.bottom <= geometry.frame.bottom,'return stays in viewport');
         assert.ok(geometry.settled, 'genuine map idle required');
         assert.ok(Math.abs(geometry.frame.bottom-geometry.bottom) <= 2, 'frame reaches measured action/nav/viewport');
         assert.ok(Math.abs(geometry.map.top-geometry.expectedTop) <= 2, 'only visible required controls above canvas');
@@ -73,9 +75,10 @@ try {
       }
       assert.equal(geometry.scroll, 0, 'entry/rotation must not need hero scrolling');
       assert.ok(geometry.scrollWidth <= geometry.width + 1, 'horizontal document overflow');
-      assert.ok(geometry.controls.top >= geometry.header.bottom - 1, 'controls covered by header');
-      assert.ok(geometry.controls.top - geometry.header.bottom <= 24, 'hero-sized gap');
-      assert.ok(geometry.map.top >= geometry.controls.bottom, 'controls overlap map');
+      // Fullscreen overlays the page header; equivalent chrome/gap checks use the frame edge.
+      assert.ok(Math.abs(geometry.frame.top) <= 2,'fullscreen starts above the underlying header');
+      assert.ok(Math.abs(geometry.map.top - geometry.frame.top) <= 2,'no hero/header gap above map');
+      assert.ok(geometry.back.top - geometry.frame.top <= 44,'return remains at the top of the map');
       assert.ok(geometry.map.height >= (geometry.height - geometry.header.height) * .4, 'map must occupy remaining space even on short screens');
       assert.ok(geometry.documentHeight <= geometry.height + 2, 'footer/blank scroll gap');
       const fallback=page.locator('.gb-games-map-fallback');
@@ -84,10 +87,10 @@ try {
         assert.equal(await page.getByRole('group',{name:'Все площадки города',exact:true}).count(),0,'closed fallback has no accessible catalog focus stops');
       } else assert.equal(await page.getByRole('group',{name:'Все площадки города',exact:true}).count(),0,'normal map has no catalog cloud');
       assert.equal(await page.getByRole('group',{name:'Вид игр',exact:true}).count(),0,'no duplicate view pills');
-      await page.getByRole('button',{name:mobile ? 'Список' : '← К списку игр',exact:true}).click();
+      await page.getByRole('button',{name:'К списку игр',exact:true}).click();
       await page.locator('.gb-discovery-hero').waitFor();
       assert.equal(await page.locator('.gb-discovery-create').count(),1,'original create banner');
-      await page.getByRole('button',{name:mobile ? 'Карта' : 'Все игры на карте',exact:true}).click();
+      await page.getByRole('button',{name:'На карте',exact:true}).click();
       await page.locator('[data-map-ready="true"][data-map-settled="true"]').waitFor({timeout:30000});
     }
     await page.close();

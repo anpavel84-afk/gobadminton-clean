@@ -93,3 +93,26 @@ export function markerActivation() {
     allow(detail: number) { return detail === 0 || !dragged; },
   };
 }
+
+/** Screen presentation only, stable by immutable ID; never mutate geographic coordinates.
+ * Cap at 22px so even the 44px target still contains its true point.
+ */
+export function separateMarkerPoints(points: readonly { id: string; x: number; y: number }[], minDistance = 40) {
+  const ordered = [...points].sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+  return ordered.map((point, index) => {
+    let x = 0; let y = 0; let close = false;
+    for (const [otherIndex, other] of ordered.entries()) {
+      if (index === otherIndex) continue;
+      const dx = point.x - other.x; const dy = point.y - other.y;
+      const distance = Math.hypot(dx, dy);
+      if (distance >= minDistance) continue;
+      close = true;
+      const angle = (index < otherIndex ? 0 : Math.PI) + (index + otherIndex) * 2.399963229728653;
+      x += distance ? dx / distance * (minDistance - distance) / 2 : Math.cos(angle) * minDistance / 2;
+      y += distance ? dy / distance * (minDistance - distance) / 2 : Math.sin(angle) * minDistance / 2;
+    }
+    if (close && Math.hypot(x, y) < 0.001) { x = Math.cos(index * 2.399963229728653); y = Math.sin(index * 2.399963229728653); }
+    const scale = Math.min(1, 22 / (Math.hypot(x, y) || 1));
+    return { id: point.id, x: x * scale, y: y * scale };
+  });
+}
