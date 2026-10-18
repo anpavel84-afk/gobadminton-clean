@@ -24,7 +24,7 @@ function installProtocol() {
     protocol = new Protocol(); maplibregl.addProtocol("pmtiles", protocol.tile);
   }
 }
-export function GamesVenueMap({ venues, counts, onSelect, onAvailability, onReturnToList, selectedVenueId }: { selectedVenueId?: string; venues: VenueSummary[]; counts: Map<string, number> | null; onSelect: (venue: VenueSummary) => void; onAvailability?: (available: boolean) => void; onReturnToList?: () => void }) {
+export function GamesVenueMap({ venues, counts, onSelect, onAvailability, onErrorCardChange, onReturnToList, selectedVenueId }: { selectedVenueId?: string; venues: VenueSummary[]; counts: Map<string, number> | null; onSelect: (venue: VenueSummary) => void; onAvailability?: (available: boolean) => void; onErrorCardChange?: (shown: boolean) => void; onReturnToList?: () => void }) {
   const container = useRef<HTMLDivElement>(null); const map = useRef<LibreMap | null>(null);
   const venuesRef = useRef(venues); venuesRef.current = venues;
   const callbacks = useRef({ onSelect, onAvailability }); callbacks.current = { onSelect, onAvailability };
@@ -36,6 +36,11 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability, onRetu
   const [status, setStatus] = useState("Загружаем карту города…");
   const [attempt, setAttempt] = useState(0);
   const [failure, setFailure] = useState<MapDiagnostic>();
+  // Return-control visibility follows the M0 card, independently of map load.
+  useEffect(() => {
+    onErrorCardChange?.(!!failure);
+    return () => onErrorCardChange?.(false);
+  }, [failure, onErrorCardChange]);
   const [lastError, setLastError] = useState<string>();
   const [warnings, setWarnings] = useState(0);
   useEffect(() => {

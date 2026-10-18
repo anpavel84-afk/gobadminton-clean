@@ -42,10 +42,11 @@ class FakeMap {
   getContainer() { return { querySelector: () => null }; } project() { return { x: 0, y: 0 }; } jumpTo() {}
 }
 const venue = { id: "v", name: "Зал", latitude: 55.7, longitude: 37.6 } as VenueSummary;
+const errorCard = vi.fn();
 const availability = vi.fn(); const back = vi.fn();
 function render() {
   h.cursor = 0;
-  const tree = GamesVenueMap({ venues: [venue], counts: new Map([["v", 1]]), onSelect: vi.fn(), onAvailability: availability, onReturnToList: back });
+  const tree = GamesVenueMap({ venues: [venue], counts: new Map([["v", 1]]), onSelect: vi.fn(), onAvailability: availability, onErrorCardChange: errorCard, onReturnToList: back });
   const attach = (node: React.ReactNode): void => {
     if (!isValidElement<{ ref?: { current: unknown }; children?: React.ReactNode }>(node)) return;
     if (node.props.ref) node.props.ref.current = { getBoundingClientRect: () => ({ width: h.width, height: 400 }) };
@@ -61,7 +62,7 @@ function click(tree: React.ReactNode, label: string): void {
 async function start() { render(); await vi.waitFor(() => expect(h.maps).toHaveLength(1)); h.maps[0]!.emit("load"); return h.maps[0]!; }
 beforeEach(() => {
   vi.useFakeTimers(); h.slots = []; h.cursor = 0; h.effects = []; h.cleanups = []; h.maps = []; h.width = 400;
-  availability.mockClear(); back.mockClear(); h.markerCreates = 0; h.markerRemove.mockClear();
+  errorCard.mockClear(); availability.mockClear(); back.mockClear(); h.markerCreates = 0; h.markerRemove.mockClear();
   vi.stubGlobal("window", Object.assign(new EventTarget(), { location: { origin: "https://dev.gobadminton.ru" } }));
   vi.stubGlobal("sessionStorage", { getItem: () => null, setItem() {}, removeItem() {} });
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
@@ -73,6 +74,7 @@ beforeEach(() => {
 afterEach(() => { h.cleanups.forEach(fn => fn?.()); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 it("keeps markers and map for warnings; fatal failure offers retry and list; rebuilds once", async () => {
   const map = await start(); render();
+  expect(errorCard).toHaveBeenLastCalledWith(false);
   map.emit("sourcedata", { sourceId: "protomaps", tile: { state: "loaded" } });
   map.emit("error", { error: { message: "glyph failed" } });
   expect(renderToStaticMarkup(render())).not.toContain("Карта не загрузилась");
@@ -81,8 +83,10 @@ it("keeps markers and map for warnings; fatal failure offers retry and list; reb
   map.emit("error", { error: { message: "WebGL context lost" } });
   const failed = render(); const html = renderToStaticMarkup(failed);
   expect(html).toContain("Карта не загрузилась"); expect(html).toContain("Повторить"); expect(html).toContain("← К списку");
+  expect(errorCard).toHaveBeenLastCalledWith(true);
   click(failed, "← К списку"); expect(back).toHaveBeenCalledOnce();
   click(failed, "Повторить"); expect(renderToStaticMarkup(render())).not.toContain("Карта не загрузилась");
+  expect(errorCard).toHaveBeenLastCalledWith(false);
   await vi.waitFor(() => expect(h.maps).toHaveLength(2)); expect(map.remove).toHaveBeenCalledOnce();
 });
 it("reports zero vector tiles eight seconds after load", async () => {

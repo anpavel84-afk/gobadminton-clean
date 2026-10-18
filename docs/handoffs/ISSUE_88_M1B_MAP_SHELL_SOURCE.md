@@ -89,3 +89,22 @@ Correction: measure the fullscreen map against frame top and measured viewport/b
 NOT_TESTED: browser/component tests, lint, typecheck, build, runtime and physical iOS. No self-QA performed under the explicit source-only instruction; no PASS claim. No fetch/checkout, Git metadata mutation, commit, push, automation, secrets, service or deployment changes. Original exact-source reapplication record above remains applicable; no repeat reapplication was needed on this successor candidate.
 
 Next bounded action: independent QA verifies corrected B3 on the published candidate and runs required B1–B5/A1–A6 checks. Authorized publishing process must attach the resulting commit permalink; these edits are uncommitted. Rollback: discard only the geometry-script and handoff correction relative to the exact correction base, preserving prior M1/D1–D3 work.
+
+## Correction after independent D2/B2 QA FAIL — 2026-10-19
+
+From: source author. To: independent QA / authorized integrator.
+Status: WORKING_DRAFT — UNVERIFIED source-only.
+Exact clean correction base: `04e2b7c73be7c796dc9556425663ab581142e0ad`, branch `automation/issue-88`.
+Reviewed source: https://github.com/anpavel84-afk/gobadminton-clean/commit/04e2b7c73be7c796dc9556425663ab581142e0ad
+
+Supplied independent QA: FAIL, D2/B2 return visibility during retry and Moscow reinitialization. Reported dependency/Corepack EAI_AGAIN limitations are environment limitations, not source failures. Prior exact M1 reapplication from `135bc87310e4184e09779f8ecda0fa42a1d39e48` is retained above; no repeat import or Git metadata mutation.
+
+Correction: GamesVenueMap explicitly reports whether its `failure` state renders the M0 error card, clearing that signal on retry and unmount. GamesMapView uses this signal for capsule visibility and clears it on city changes; map availability remains dedicated to the coordinates fallback. Thus retry can have unavailable geography with a visible return capsule. Existing retry/load availability reporting, D1 focus, D3 geometry and other M1 behavior are preserved.
+
+Authored coverage: games-map-refresh.test.tsx exercises pending snapshot, fatal card, retry with availability still false, unsupported city and Moscow reinitialization, counting exactly one or zero return capsules. games-venue-map-lifecycle.test.tsx verifies the actual card signal before failure, during failure and immediately after retry before map load. These assertions have not been executed and are not PASS evidence.
+
+STYLE_GUIDE_PARITY: lifecycle/visibility correction only; existing M1 return capsule and M0 Error/SurfacePanel/Button patterns retained. No new visual pattern. Canonical Owner rule read; operational guide/frozen source remain unavailable in this checkout, external visual parity UNVERIFIED.
+
+NOT_TESTED: tests, lint, typecheck, build, browser/runtime checks and physical iOS. No self-QA per explicit user instruction. No commit, push, Git metadata changes, automation, secrets, services or deployment. Authorized publisher must provide the eventual candidate permalink; none exists for this uncommitted correction.
+
+Rollback: discard only this correction's changes in GamesMapView.tsx, GamesVenueMap.tsx, the two named test files and this handoff relative to the exact correction base, preserving all previous M1/D1–D3 work. Next bounded action: authorized publication followed by independent B2 retry/city-transition QA and the assigned acceptance checks. No release or acceptance implied.
