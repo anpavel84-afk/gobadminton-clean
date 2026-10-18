@@ -48,6 +48,70 @@ def existing(number=13):
     return parent, comment
 
 
+class RoutePaths(unittest.TestCase):
+    def test_exact_existing_admin_bff_route_only(self):
+        path = 'apps/admin/src/app/v1/admin/[...path]/route.ts'
+        self.assertEqual(a.safe_path(path), path)
+        self.assertTrue(a.permitted(path, ['apps/admin/src/**']))
+        self.assertFalse(a.permitted(path, ['apps/web/src/**']))
+        for unsafe in (
+            'apps/admin/src/app/v1/admin/[...path]/page.tsx',
+            'apps/admin/src/app/v1/admin/[[...path]]/route.ts',
+            'apps/admin/src/app/v1/admin/[...other]/route.ts',
+            'apps/admin/src/app/v1/admin/[...path]/../route.ts',
+            'apps/admin/src/app/v1/admin/[...path]/nested/route.ts',
+            'apps/admin/src/app/v1/admin/%5B...path%5D/route.ts',
+            'apps/admin/src/app/v1/other/[...path]/route.ts',
+            'apps/web/src/app/v1/admin/[...path]/route.ts',
+        ):
+            with self.subTest(path=unsafe), self.assertRaises(a.Hold):
+                a.safe_path(unsafe)
+
+    def test_literal_dynamic_routes_and_allowed_path_admission(self):
+        for path in ('apps/web/src/app/venues/[venueId]/page.tsx',
+                     'apps/web/src/app/games/[gameId]/page.tsx',
+                     'apps/web/src/app/players/[publicPlayerId]/page.tsx',
+                     'apps/web/src/app/[A0_b]/[Child2]/page.tsx'):
+            with self.subTest(path=path):
+                self.assertIs(a.safe_path(path), path)
+                self.assertEqual(a.patterns([path]), [path])
+                self.assertTrue(a.permitted(path, [path]))
+                self.assertTrue(a.permitted(path, ['apps/web/src/app/**']))
+                self.assertFalse(a.permitted(path, ['apps/web/src/other/**']))
+                parent, comment = existing(37)
+                task = json.loads(comment['body'].split('\n', 1)[1])
+                task['allowed_paths'] = [path]
+                a.validate_comment(parent, comment | {
+                    'body': a.MARKER+'\n'+json.dumps(task)}, SINCE, NOW)
+
+    def test_unsafe_routes_remain_rejected(self):
+        root = 'apps/web/src/app/'
+        paths = [root+segment+'/page.tsx' for segment in (
+            '[...slug]', '[[...slug]]', '[[id]]', '[]', '[0id]', '[_id]',
+            '[éId]', '[id-name]', '[id.name]', '[id', 'id]', 'pre[id]',
+            '[id]post', '[id][other]', '[id;echo]', '[id$]', '[id\n]',
+            '%5Bid%5D', '%255Bid%255D', '[id]/../secrets', '[id]/./child',
+            '[id]//child', '[id]/.hidden', '[id]/%2e%2e', '[id]\\child',
+            '[id]/$(touch proof)', '[id]/`id`', '[id]/a;b', '[id]/a|b',
+            '[id]/a&b', '[id]/a b', '[id]/a\x00b', '[id]/a\rb',
+            '[id]/secrets', '[id]/credentials', '[id]/node_modules',
+            '[id]/AGENTS.md', '[id]/private.pem', '[id]/private.KEY')]
+        paths += [prefix+'[id]/page.tsx' for prefix in (
+            'apps/web/src/', 'apps/web/src/application/', 'apps/web/src/app2/',
+            'apps/web/src/App/', 'apps/api/src/app/', 'packages/', 'docs/',
+            'docs/operations/', 'apps/[web]/src/app/')]
+        paths += ['', '/'+root+'[id]/page.tsx', root+'[id]/'+'a'*240,
+                  '../apps/web/src/app/[id]/page.tsx',
+                  'docs/rules/policy.md', 'docs/governance/policy.md',
+                  '/home/agentagency-dev/.gb-autonomy-state/checkpoint.json',
+                  '/home/agentagency-dev/.ssh/gobadminton-clean-chatops-ed25519',
+                  '.git/config', 'scripts/chatops/autonomous_issues.py',
+                  '/tmp/sandbox/[id]/page.tsx', None, 37]
+        for path in paths:
+            with self.subTest(path=path), self.assertRaises(a.Hold):
+                a.safe_path(path)
+
+
 class CommentAdmission(unittest.TestCase):
     def test_body_and_comment_authorizations_are_ambiguous(self):
         parent = issue()
@@ -605,6 +669,256 @@ class Recovery(unittest.TestCase):
                                ('promoting', {'tamper': True}), ('dev_wait', {'tamper': True})]:
             with self.subTest(phase=phase, options=options), self.assertRaises(a.Hold):
                 self.exercise(phase, **options)
+
+NEW = 'd' * 40
+
+
+def resume_comment(active, **over):
+    body = dict(schema=a.RESUME_MARKER, issue=active['issue'], head=active['head'],
+                attempt=active['attempt'], mode='ci_fix', note='lint: console is not defined')
+    body.update(over.pop('body', {}))
+    stamp = NOW.isoformat()
+    comment = dict(id=777, issue_url=f'https://api.github.com/repos/{a.REPO}/issues/{active["issue"]}',
+                   user={'id': 318610566}, created_at=stamp, updated_at=stamp,
+                   body=a.RESUME_MARKER + '\n' + json.dumps(body))
+    return comment | over
+
+
+class Resume(unittest.TestCase):
+    """RESUME_V1: blocked(CI FAIL) -> one more author attempt; never resets counters/history."""
+
+    def setup_store(self, tmp, attempt=2, max_attempts=3, **blocked):
+        store = a.Store(Path(tmp) / 'state')
+        active = store.claim([issue()], SINCE)
+        active['task']['max_attempts'] = max_attempts
+        active['task']['allowed_paths'] = ['apps/web/test/**']
+        qa = dict(verdict='PASS', findings=[], reviewed_sha=HEAD)
+        store.phase('blocked', head=HEAD, base=BASE, pr=70, attempt=attempt, qa=qa, ci={'sha': None},
+                    resume_phase=blocked.get('resume_phase', 'ci'),
+                    reason=blocked.get('reason', 'Actions failed'))
+        a.atomic(store.directory / f'qa-30-a{attempt}.json', qa)
+        return store, active
+
+    def bridge(self, tmp, store, remote=BASE, comments=(), failure=None, git_log=None):
+        bridge = a.Bridge(types.SimpleNamespace(
+            worktrees_root=Path(tmp), state_dir=store.directory, known_hosts=Path('/x')), store)
+        bridge.unchanged_issue = lambda x: None
+        bridge.clean = lambda sha: None
+        bridge.remote_dev = lambda: remote
+        bridge.failed_ci = lambda x: failure or dict(run=5, run_attempt=1, failed=[
+            dict(job='source (web)', steps=['Run pnpm --filter @gobadminton/web run lint'])])
+        head = [HEAD]
+        log = git_log if git_log is not None else []
+
+        def git(*args, **kw):
+            log.append(args)
+            if args[0] == 'ls-remote':
+                return f'{HEAD}\trefs/heads/automation/issue-30'
+            if args[0] == 'rev-parse':
+                return head[0]
+            if args[0] == 'diff':
+                return 'apps/web/test/x.mjs\0' if args[1] == '--name-only' else ''
+            if args[0] == 'ls-files':
+                return ''
+            if 'commit' in args and args[0] == '-c':
+                head[0] = NEW
+            return ''
+        bridge.git = git
+        bridge.prompts = []
+        bridge.model = lambda prompt, qa=False: bridge.prompts.append(prompt)
+        self.comments = list(comments)
+        return bridge
+
+    def run_resume(self, tmp, store, active, bridge):
+        with patch.object(a, 'pages', side_effect=lambda path, key=None: self.comments), \
+                patch.object(a, 'run', return_value=''):
+            return bridge.resume(active)
+
+    def test_validate_resume_accepts_exact_owner_marker_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store, active = self.setup_store(tmp)
+            try:
+                good = resume_comment(active)
+                self.assertEqual(a.validate_resume(active, good, SINCE)['mode'], 'ci_fix')
+                bad = [
+                    resume_comment(active, user={'id': 1}),
+                    resume_comment(active, updated_at=(NOW + dt.timedelta(seconds=1)).isoformat()),
+                    resume_comment(active, issue_url=f'https://api.github.com/repos/{a.REPO}/issues/31'),
+                    resume_comment(active, body=dict(head=DRIFT)),
+                    resume_comment(active, body=dict(attempt=1)),
+                    resume_comment(active, body=dict(attempt=True)),
+                    resume_comment(active, body=dict(issue=31)),
+                    resume_comment(active, body=dict(mode='any')),
+                    resume_comment(active, body=dict(note='x' * 2001)),
+                    resume_comment(active, body=dict(extra=1)),
+                    resume_comment(active, created_at=(SINCE - dt.timedelta(hours=1)).isoformat(),
+                                   updated_at=(SINCE - dt.timedelta(hours=1)).isoformat()),
+                    resume_comment(active, body=dict(), id=0),
+                    resume_comment(active) | {'body': 'x' + resume_comment(active)['body']},
+                    resume_comment(active) | {'body': resume_comment(active)['body'].replace('V1\n', 'V1 \n', 1)},
+                    resume_comment(active) | {'body': a.MARKER + '\n' + json.dumps(active['task'])},
+                ]
+                for comment in bad:
+                    with self.subTest(comment=comment['body'][:80]), self.assertRaises(a.Hold):
+                        a.validate_resume(active, comment, SINCE)
+                active['resumes'] = [777]
+                with self.assertRaises(a.Hold):
+                    a.validate_resume(active, good, SINCE)
+            finally:
+                os.close(store.lock)
+
+    def test_only_ci_failed_blocks_with_unspent_attempt_are_eligible(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store, active = self.setup_store(tmp)
+            try:
+                self.assertTrue(a.resume_eligible(active))
+                for change in (dict(attempt=3), dict(reason='QA FAIL; attempts exhausted'),
+                               dict(resume_phase='qa'), dict(phase='ci'), dict(head=None)):
+                    with self.subTest(change=change):
+                        self.assertFalse(a.resume_eligible(copy.deepcopy(active) | change))
+                self.assertFalse(a.resume_eligible(None))
+            finally:
+                os.close(store.lock)
+
+    def test_resume_spends_exactly_one_attempt_and_keeps_history(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store, active = self.setup_store(tmp)
+            try:
+                log = []
+                bridge = self.bridge(tmp, store, comments=[], git_log=log)
+                self.comments = [resume_comment(active)]
+                done_before = list(store.data['done'])
+                qa_file = store.directory / 'qa-30-a2.json'
+                qa_bytes = qa_file.read_bytes()
+                before = copy.deepcopy(store.data)
+                self.assertTrue(self.run_resume(tmp, store, active, bridge))
+                data = loads_state(store)
+                live = data['active']
+                self.assertEqual(set(data), {'active', 'done'})
+                self.assertEqual(data['done'], done_before)
+                self.assertEqual((live['phase'], live['attempt'], live['head']), ('candidate', 3, NEW))
+                self.assertEqual(live['base'], BASE)
+                self.assertEqual(live['pr'], 70)
+                self.assertEqual(live['resumes'], [777])
+                self.assertEqual(live['history'][0]['attempt'], 2)
+                self.assertEqual(live['history'][0]['head'], HEAD)
+                self.assertEqual(live['history'][0]['qa']['verdict'], 'PASS')
+                self.assertEqual(live['history'][0]['reason'], 'Actions failed')
+                self.assertEqual(live['ci_failure']['failed'][0]['job'], 'source (web)')
+                self.assertFalse(a.resume_eligible(live))
+                self.assertEqual(qa_file.read_bytes(), qa_bytes)
+                backup = json.loads((store.directory / 'before-resume-30-a2.json').read_text())
+                self.assertEqual(backup, before)
+                self.assertIn('lint: console is not defined', bridge.prompts[0])
+                self.assertIn('do not weaken', bridge.prompts[0])
+                self.assertFalse([c for c in log if c[0] == 'push'])  # push belongs to execute()
+                self.assertFalse([c for c in log if '--force' in c or 'rebase' in c or 'merge' in c])
+                # Same comment can never be used twice, and attempt binding changed anyway.
+                with self.assertRaises(a.Hold):
+                    a.validate_resume(live | {'phase': 'blocked', 'resume_phase': 'ci',
+                                             'reason': 'Actions failed'}, self.comments[0], SINCE)
+            finally:
+                os.close(store.lock)
+
+    def test_exhausted_attempts_wrong_state_or_no_comment_change_nothing(self):
+        cases = [dict(attempt=3), dict(reason='Actions failed ')]
+        for options in cases:
+            with tempfile.TemporaryDirectory() as tmp:
+                store, active = self.setup_store(tmp, **{k: v for k, v in options.items() if k != 'attempt'},
+                                                 **({'attempt': options['attempt']} if 'attempt' in options else {}))
+                try:
+                    bridge = self.bridge(tmp, store)
+                    self.comments = [resume_comment(active)]
+                    before = copy.deepcopy(store.data)
+                    with patch.object(a, 'pages', side_effect=AssertionError('no request expected')):
+                        self.assertFalse(bridge.resume(active))
+                    self.assertEqual(store.data, before)
+                finally:
+                    os.close(store.lock)
+        with tempfile.TemporaryDirectory() as tmp:
+            store, active = self.setup_store(tmp)
+            try:
+                bridge = self.bridge(tmp, store)
+                before = copy.deepcopy(store.data)
+                self.assertFalse(self.run_resume(tmp, store, active, bridge))
+                self.assertEqual(store.data, before)
+                self.assertFalse((store.directory / 'before-resume-30-a2.json').exists())
+            finally:
+                os.close(store.lock)
+
+    def test_ambiguity_drift_and_non_failure_refuse_without_state_change(self):
+        for mode in ('ambiguous', 'drift', 'ci'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
+                store, active = self.setup_store(tmp)
+                try:
+                    bridge = self.bridge(tmp, store, remote=DRIFT if mode == 'drift' else BASE)
+                    self.comments = [resume_comment(active)]
+                    if mode == 'ambiguous':
+                        self.comments.append(resume_comment(active, id=778))
+                    if mode == 'ci':
+                        bridge.failed_ci = lambda x: a.require(False, 'exact-head Actions run is not a completed failure')
+                    before = copy.deepcopy(store.data)
+                    with self.assertRaises(a.Hold):
+                        self.run_resume(tmp, store, active, bridge)
+                    self.assertEqual(store.data, before)
+                    self.assertEqual(active['phase'], 'blocked')
+                    self.assertEqual(active['attempt'], 2)
+                finally:
+                    os.close(store.lock)
+
+    def test_failed_ci_reads_only_exact_head_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store, active = self.setup_store(tmp)
+            try:
+                bridge = a.Bridge(types.SimpleNamespace(worktrees_root=Path(tmp), state_dir=store.directory), store)
+                run = dict(id=9, run_attempt=2, name='Product CI', head_sha=HEAD, head_branch='automation/issue-30',
+                           event='push', status='completed', conclusion='failure')
+                jobs = [dict(name='source (web)', conclusion='failure', steps=[
+                    dict(name='lint', conclusion='failure'), dict(name='ok', conclusion='success')]),
+                    dict(name='foundation', conclusion='success', steps=[])]
+
+                def fake(runs):
+                    return lambda path, key=None: runs if key == 'workflow_runs' else jobs
+                with patch.object(a, 'pages', side_effect=fake([run])):
+                    result = bridge.failed_ci(active)
+                self.assertEqual(result, dict(run=9, run_attempt=2, failed=[dict(job='source (web)', steps=['lint'])]))
+                for runs in ([], [run | {'head_sha': DRIFT}], [run | {'conclusion': 'success'}],
+                             [run | {'status': 'in_progress', 'conclusion': None}],
+                             [run | {'conclusion': 'cancelled'}], [run | {'head_branch': 'dev'}]):
+                    with self.subTest(runs=runs), patch.object(a, 'pages', side_effect=fake(runs)), \
+                            self.assertRaises(a.Hold):
+                        bridge.failed_ci(active)
+            finally:
+                os.close(store.lock)
+
+    def test_resume_comment_is_not_a_competing_authorization(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store, active = self.setup_store(tmp)
+            try:
+                bridge = a.Bridge(types.SimpleNamespace(worktrees_root=Path(tmp), state_dir=store.directory), store)
+                parent = issue()
+                active['fingerprint'] = a.fingerprint(parent)
+                comments = [resume_comment(active)]
+
+                def fake_api(path):
+                    return parent
+                with patch.object(a, 'api', side_effect=fake_api), patch.object(a, 'pages', return_value=comments):
+                    bridge.unchanged_issue(active)
+            finally:
+                os.close(store.lock)
+
+    def test_blocked_without_marker_never_claims_other_work(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store, active = self.setup_store(tmp)
+            try:
+                self.assertEqual(store.claim([issue(31)], SINCE)['issue'], 30)
+                self.assertEqual(store.data['active']['phase'], 'blocked')
+            finally:
+                os.close(store.lock)
+
+
+def loads_state(store):
+    return json.loads(store.path.read_text())
 
 
 if __name__ == '__main__':
