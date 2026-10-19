@@ -14,6 +14,12 @@ import "../../../styles/radar-geographic.css";
 import { venueMarkerPresentation, reconcileVenueMarkers, markerActivation } from "../../../lib/games-venue-map";
 import { MOSCOW_BUNDLE, allowedMapResource } from "../../../lib/radar-map-assets";
 import type { VenueSummary } from "../../../lib/consumer-types";
+type VenueMarkerEntry = {
+  marker: maplibregl.Marker;
+  button: HTMLButtonElement;
+  presentation?: string;
+  position?: string;
+};
 function sessionStorageVenue() {
   try { return sessionStorage.getItem("gb-games-map-selected"); } catch { return null; }
 }
@@ -30,7 +36,7 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability, onErro
   const container = useRef<HTMLDivElement>(null); const map = useRef<LibreMap | null>(null);
   const venuesRef = useRef(venues); venuesRef.current = venues;
   const callbacks = useRef({ onSelect, onAvailability }); callbacks.current = { onSelect, onAvailability };
-  const markers = useRef(new Map<string, { marker: maplibregl.Marker; button: HTMLButtonElement; presentation?: string; position?: string }>());
+  const markers = useRef(new Map<string, VenueMarkerEntry>());
   const [resumeCamera, setResumeCamera] = useState(false);
   const [sharedMap, setSharedMap] = useState<LibreMap>();
   const [ready, setReady] = useState(false);
@@ -143,7 +149,7 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability, onErro
   }, [attempt]);
   useEffect(() => {
     if (!ready || !map.current) return;
-    reconcileVenueMarkers(markers.current, venues, {
+    reconcileVenueMarkers<VenueMarkerEntry>(markers.current, venues, {
       create: venue => {
         const button = document.createElement("button"); button.type = "button";
         const activation = markerActivation();
