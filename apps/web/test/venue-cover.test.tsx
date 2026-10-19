@@ -15,6 +15,28 @@ describe("venue cover presentation / mutation wire protocol",()=>{
       expect(venueCoverUrl(value)).toBeNull();expect(renderToStaticMarkup(<VenueCover cover={{uploadedUrl:value}}/>)).toContain('data-cover="default"');
     }
   });
+  it("uses court and trainer photos for default venue and discovery covers",()=>{
+    const game: Game={id:"synthetic",version:1,title:"Synthetic game",status:"published",visibility:"public",activityKind:"regular",trainer:null,trainingDescription:null,
+      venue:{id:"00000037-1111-4111-8111-111111111111",name:"Synthetic venue",address:"Synthetic address",timezone:"Europe/Moscow",cityId:"synthetic",cover:{uploadedUrl:null}},
+      organizer:{id:null,displayName:"Synthetic host",publicContact:"Synthetic"},startsAt:"2027-01-01T15:00:00Z",endsAt:"2027-01-01T16:00:00Z",timezone:"Europe/Moscow",capacity:4,externalReservedCount:0,confirmedCount:0,availablePlaces:4,formatKey:"doubles",applicationDeadlineAt:"2027-01-01T15:00:00Z",
+      levelRule:{scaleId:"test",scaleVersion:1,allowedLevelIds:["test"]},settlement:{mode:"external",purpose:"no_trainer_fee",priceMinor:null,currency:null,terms:"Synthetic"}};
+    const cases = [
+      { element: <VenueCover />, fallback: "court", image: "badminton-courts.jpg", alt: "Бадминтонный корт" },
+      { element: <VenueCover cover={{uploadedUrl:"https://evil.invalid/photo.png"}} fallback="trainer" />, fallback: "trainer", image: "badminton-gear.jpg", alt: "Ракетка и воланы на корте" },
+      { element: <DiscoveryGameCard game={{...game,activityKind:"regular"}} />, fallback: "court", image: "badminton-courts.jpg", alt: "Бадминтонный корт" },
+      { element: <DiscoveryGameCard game={{...game,activityKind:"trainer_led"}} />, fallback: "trainer", image: "badminton-gear.jpg", alt: "Ракетка и воланы на корте" },
+    ];
+    for (const {element,fallback,image,alt} of cases) {
+      const markup = renderToStaticMarkup(element);
+      expect(markup).toContain(`src="/discovery/${image}"`);
+      expect(markup).toContain('data-cover="default"');
+      expect(markup).toContain(`data-fallback="${fallback}"`);
+      expect(markup).toContain(`alt="${alt}"`);
+      expect(markup).toContain('loading="lazy"');
+      expect(markup).toContain('decoding="async"');
+      expect(markup).not.toContain("▱");
+    }
+  });
   it("does not grant an editor by venueId; no controls until scoped server access",()=>{
     expect(renderToStaticMarkup(<VenueCoverEditor venueId="00000037-1111-4111-8111-111111111111" onChange={vi.fn()}/>)).toBe("");
   });
