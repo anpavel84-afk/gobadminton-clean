@@ -1,6 +1,6 @@
 # GoBadminton · LIVE STATE (живое состояние для резервного PM)
 
-**Обновлено:** 19.10.2026 17:34 (Сан-Паулу, UTC-3), генератор `ops/grok-toolkit/sync_state.py`
+**Обновлено:** 19.10.2026 18:07 (Сан-Паулу, UTC-3), генератор `ops/grok-toolkit/sync_state.py`
 **Активный оператор:** Grok (Go Bad) с 2026-10-17
 
 > Генерируется автоматически. Руками правится только строка «Активный оператор» (протокол передачи: `docs/workbench/OPS_BACKUP_PM_TAKEOVER_DRILL_V001.md` §9). Секретов здесь нет. UNKNOWN ≠ 0.
@@ -36,7 +36,7 @@
 
 **PR:**
 - #102 `ops/takeover-runbook-v1` → `dev` @ `эта ветка`: Docs: OPS takeover runbook V001 (docs-only, DO NOT MERGE yet)
-- #100 `ops/parallel-slots-v1` → `dev` @ `750afb7c`: OPS: PARALLEL_SLOTS_V1 executor slots, lock registry, merge queue, budgets (NOT INSTALLED)
+- #100 `ops/parallel-slots-v1` → `dev` @ `3e5f5b89`: OPS: PARALLEL_SLOTS_V1 executor slots, lock registry, merge queue, budgets (NOT INSTALLED)
 - #97 `automation/issue-96` → `dev` @ `765aebc2`: Refs #96: autonomous source candidate
 - #95 `automation/issue-94` → `dev` @ `5cb76118`: Refs #94: autonomous source candidate
 - #81 `ops/executor-park-v1-1` → `dev` @ `970e5a47`: OPS: executor PARK_V1.1 (park headless 'zero diff' task)
