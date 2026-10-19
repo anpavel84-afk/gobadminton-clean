@@ -11,8 +11,9 @@ const layerBlock = /(?:^|[{}])\s*\.gb-consumer\.gb-radar-layer\s*\{([^{}]*)\}/g;
 function transparentLayer(css: string): boolean {
   const uncommented = css.replace(/\/\*[\s\S]*?\*\//g, "");
   return [...uncommented.matchAll(layerBlock)].some((match) => {
-    const declarations = new Map(match[1].split(";").map((declaration) => {
-      const [property, ...value] = declaration.split(":");
+    const body = match[1] ?? "";
+    const declarations = new Map(body.split(";").map((declaration) => {
+      const [property = "", ...value] = declaration.split(":");
       return [property.trim(), value.join(":").trim()];
     }));
     return declarations.get("background") === "transparent" && declarations.get("min-height") === "0";
