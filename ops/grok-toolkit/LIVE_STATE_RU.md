@@ -1,6 +1,6 @@
 # GoBadminton · LIVE STATE (живое состояние для резервного PM)
 
-**Обновлено:** 19.10.2026 10:20 (Сан-Паулу, UTC-3), генератор `ops/grok-toolkit/sync_state.py`
+**Обновлено:** 19.10.2026 10:41 (Сан-Паулу, UTC-3), генератор `ops/grok-toolkit/sync_state.py`
 **Активный оператор:** Grok (Go Bad) с 2026-10-17
 
 > Генерируется автоматически. Руками правится только строка «Активный оператор» (протокол передачи: `docs/workbench/OPS_BACKUP_PM_TAKEOVER_DRILL_V001.md` §9). Секретов здесь нет. UNKNOWN ≠ 0.
@@ -9,10 +9,10 @@
 
 - Исполнитель: `active/running`, MainPID 1456 (время проверки — в строке «Обновлено»).
 - Выполнено задач (`done_count`): **22**.
-- Активная задача: **#101** M0e: убрать непрозрачный слой над подложкой карты — фаза `developing`, попытка 2, head `609d4c7d`, PR #103, QA PASS на `609d4c7d`.
-- Последняя выкатка DEV: `r39248271537-a1`, ACCEPTED, pending=False, source `47fa3fde`, завершена 19.10.2026 09:00 (Сан-Паулу).
-- DEV `/v1/meta`: gitSha `47fa3fde`, apiVersion `0.19.0`.
-- GitHub `dev` HEAD: `47fa3fde`.
+- Активная задача: **#101** M0e: убрать непрозрачный слой над подложкой карты — фаза `dev_wait`, попытка 2, head `58d71ae3`, PR #103, QA PASS на `58d71ae3`.
+- Последняя выкатка DEV: `r39261662533-a1`, ACCEPTED, pending=False, source `58d71ae3`, завершена 19.10.2026 10:40 (Сан-Паулу).
+- DEV `/v1/meta`: gitSha `58d71ae3`, apiVersion `0.19.0`.
+- GitHub `dev` HEAD: `58d71ae3`.
 - Сверка dev HEAD = DEV gitSha = квитанция: **совпадает**.
 
 ## 2. Следующие задачи и бэклог (топ-10, `backlog_ru.json`)
@@ -35,7 +35,6 @@
 ## 3. Открытые PR и Issue (GitHub)
 
 **PR:**
-- #103 `automation/issue-101` → `dev` @ `609d4c7d`: Refs #101: autonomous source candidate
 - #102 `ops/takeover-runbook-v1` → `dev` @ `эта ветка`: Docs: OPS takeover runbook V001 (docs-only, DO NOT MERGE yet)
 - #100 `ops/parallel-slots-v1` → `dev` @ `750afb7c`: OPS: PARALLEL_SLOTS_V1 executor slots, lock registry, merge queue, budgets (NOT INSTALLED)
 - #97 `automation/issue-96` → `dev` @ `765aebc2`: Refs #96: autonomous source candidate
@@ -73,7 +72,7 @@
 
 | Поток | Состояние | Пути | Дальше |
 |---|---|---|---|
-| #101 M0e: убрать непрозрачный слой над подложкой карты | blocked после попытки 1: CI source (web) упал на 609d4c7d (QA PASS), resume_phase=ci | `ops/grok-toolkit/map_split/bodies/published_101_M0e.body.txt`; `box: /workspace/outputs/map_split/` | разобрать ошибку source (web), подготовить GOBADMINTON_RESUME_V1 (попытки остались); после DEV ACCEPTED — браузерная проверка карты |
+| #101 M0e: убрать непрозрачный слой над подложкой карты | выпущен в DEV: попытка 2 (58d71ae3) QA PASS, CI зелёный, PR #103 влит в dev; DEV ACCEPTED r39261662533-a1, live gitSha 58d71ae3 | `ops/grok-toolkit/map_split/bodies/published_101_M0e.body.txt`; `box: /workspace/outputs/map_split/` | браузерная проверка карты на dev.gobadminton.ru против макета; вердикт Павлу |
 | PR #100 параллельные слоты (ops/parallel-slots-v1) | доделывается: QA, CI, установщик под одну root-команду | `ops/grok-toolkit/parallel_v2/`; `box: /workspace/outputs/parallel_slots_pr/` | установка только в окно idle и после «да» Павла; перед этим влить #81 |
 | Аудит контактов и описаний площадок | идёт сбор (только чтение, вне очереди) | `box: /workspace/outputs/venue_audit/ (SUMMARY_RU.md, venues_audit.csv, venues_audit.json)` | таблица Павлу на проверку, затем задача в конвейер на добавление данных |
 | PR #102 runbook передачи + grok-toolkit + drill | на ветке ops/takeover-runbook-v1, НЕ вливать (merge = DEV-деплой) | `docs/workbench/OPS_TAKEOVER_RUNBOOK_V001.md`; `docs/workbench/OPS_BACKUP_PM_TAKEOVER_DRILL_V001.md`; `ops/grok-toolkit/` | пробный подхват резервным PM без публикации |
