@@ -156,8 +156,8 @@ def render(vps, ghs, meta, backlog, streams, titles, operator_line):
     if vps.get('error') and not st:
         L += ['- Статус с VPS: **UNKNOWN** (%s).' % vps['error']]
     else:
-        L += ['- Исполнитель: `%s/%s`, MainPID %s, проверено %s.' % (worker.get('state', '?'), worker.get('substate', '?'),
-                                                                   worker.get('main_pid', '?'), fmt_ts(st.get('checked_utc'))),
+        L += ['- Исполнитель: `%s/%s`, MainPID %s (время проверки — в строке «Обновлено»).' % (
+                  worker.get('state', '?'), worker.get('substate', '?'), worker.get('main_pid', '?')),
               '- Выполнено задач (`done_count`): **%s**.' % claim.get('done_count', 'UNKNOWN')]
         if claim.get('issue'):
             qa = claim.get('qa') or {}
@@ -191,7 +191,9 @@ def render(vps, ghs, meta, backlog, streams, titles, operator_line):
     if ghs.get('ok'):
         L += ['**PR:**']
         for p in ghs['prs']:
-            L.append('- #%s `%s` → `%s` @ `%s`: %s' % (p['number'], p['head']['ref'], p['base']['ref'], p['head']['sha'][:8], md_escape(p['title'])))
+            # своя ветка: head SHA меняется от каждого sync — не печатаем, иначе файл меняется бесконечно
+            sha = 'эта ветка' if p['head']['ref'] == BRANCH else p['head']['sha'][:8]
+            L.append('- #%s `%s` → `%s` @ `%s`: %s' % (p['number'], p['head']['ref'], p['base']['ref'], sha, md_escape(p['title'])))
         L += ['', '**Issue (открытые, номера ≥ 60):**']
         for i in ghs['issues']:
             if i['number'] >= 60:
