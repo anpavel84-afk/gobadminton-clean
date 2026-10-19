@@ -33,6 +33,7 @@ vi.mock("../src/components/consumer/discovery/DiscoveryGameCard", () => ({
   DiscoveryGameCard: ({ game }: { game: Game }) => <a href={`/games/${game.id}`}>{game.title}</a>,
 }));
 import { MOSCOW_BUNDLE } from "../src/lib/radar-map-assets";
+import { GamesMapBackButton } from "../src/components/consumer/games/GamesMapBackButton";
 import { GamesMapView } from "../src/components/consumer/games/GamesMapView";
 const venue = { id: "venue-id", cityId: "city", name: "Venue", latitude: 55.75, longitude: 37.62, address: "Address", timezone: "Europe/Moscow" } as VenueSummary;
 const game = { id: "game-id", title: "Delayed game", venue, status: "published", visibility: "public", availablePlaces: 2,
@@ -43,9 +44,9 @@ let maxInFlight: number;
 let fail: boolean;
 let ignoreAbort: boolean;
 let responseGame: Game;
-function render(cityId = "city", day = "", venueId?: string) {
+function render(cityId = "city", day = "", venueId?: string, withReturn = false) {
   hooks.cursor = 0;
-  const tree = GamesMapView({ cityId, day, venueId });
+  const tree = GamesMapView({ cityId, day, venueId, onReturnToList: withReturn ? () => {} : undefined });
   for (const effect of hooks.effects.splice(0)) effect();
   return tree;
 }
@@ -192,4 +193,33 @@ it("does not mount redundant venue controls on the normal map; exposes a closed 
   expect(fallback).toContain('class="gb-games-map-fallback"');
   expect(fallback).toContain("Venue · 1");
   expect(fallback).not.toContain("<details open");
+});
+
+it("ties the single return capsule to the M0 card, including retry and city reinitialization", async () => {
+  const city = MOSCOW_BUNDLE.cityId;
+  const mapView = (cityId: string) => render(cityId, "", undefined, true);
+  const returns = (tree: React.ReactNode): number => {
+    if (!isValidElement<{ children?: React.ReactNode }>(tree)) return 0;
+    return Number(tree.type === GamesMapBackButton) + Children.toArray(tree.props.children).reduce<number>((sum, child) => sum + returns(child), 0);
+  };
+  const report = (tree: React.ReactNode, available: boolean, shown: boolean): void => {
+    if (!isValidElement<{ children?: React.ReactNode; onAvailability?: (value: boolean) => void; onErrorCardChange?: (value: boolean) => void }>(tree)) return;
+    tree.props.onAvailability?.(available);
+    tree.props.onErrorCardChange?.(shown);
+    Children.forEach(tree.props.children, child => report(child, available, shown));
+  };
+  expect(returns(mapView(city))).toBe(1); // snapshot pending
+  await vi.advanceTimersByTimeAsync(40000);
+  expect(returns(mapView(city))).toBe(1); // working map
+  report(mapView(city), false, true);
+  expect(returns(mapView(city))).toBe(0); // fatal M0 card
+  report(mapView(city), false, false);
+  expect(returns(mapView(city))).toBe(1); // retry loading, still unavailable
+  report(mapView(city), false, true);
+  expect(returns(mapView("other-city"))).toBe(1);
+  await vi.advanceTimersByTimeAsync(40000);
+  expect(returns(mapView("other-city"))).toBe(1);
+  expect(returns(mapView(city))).toBe(1);
+  await vi.advanceTimersByTimeAsync(40000);
+  expect(returns(mapView(city))).toBe(1); // Moscow reinitializes with stale availability=false
 });

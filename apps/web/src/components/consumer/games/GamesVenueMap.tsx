@@ -24,7 +24,7 @@ function installProtocol() {
     protocol = new Protocol(); maplibregl.addProtocol("pmtiles", protocol.tile);
   }
 }
-export function GamesVenueMap({ venues, counts, onSelect, onAvailability, onReturnToList }: { venues: VenueSummary[]; counts: Map<string, number> | null; onSelect: (venue: VenueSummary) => void; onAvailability?: (available: boolean) => void; onReturnToList?: () => void }) {
+export function GamesVenueMap({ venues, counts, onSelect, onAvailability, onErrorCardChange, onReturnToList }: { venues: VenueSummary[]; counts: Map<string, number> | null; onSelect: (venue: VenueSummary) => void; onAvailability?: (available: boolean) => void; onErrorCardChange?: (shown: boolean) => void; onReturnToList?: () => void }) {
   const container = useRef<HTMLDivElement>(null); const map = useRef<LibreMap | null>(null);
   const venuesRef = useRef(venues); venuesRef.current = venues;
   const callbacks = useRef({ onSelect, onAvailability }); callbacks.current = { onSelect, onAvailability };
@@ -36,6 +36,10 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability, onRetu
   const [status, setStatus] = useState("Загружаем карту города…");
   const [attempt, setAttempt] = useState(0);
   const [failure, setFailure] = useState<MapDiagnostic>();
+  useEffect(() => {
+    onErrorCardChange?.(!!failure);
+    return () => onErrorCardChange?.(false);
+  }, [failure, onErrorCardChange]);
   const [lastError, setLastError] = useState<string>();
   const [warnings, setWarnings] = useState(0);
   useEffect(() => {
@@ -182,5 +186,5 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability, onRetu
   return <><div className="gb-games-map-area"><div ref={container} data-map-error={lastError} data-map-warnings={warnings} data-map-ready={ready} data-map-settled={settled} className="gb-games-map-canvas" />{failure && <SurfacePanel className="gb-games-map-error" role="alert">
     <h2>Карта не загрузилась</h2><p>{mapErrorReason[failure.kind]}</p>
     <div><Button onClick={retry}>Повторить</Button><Button variant="outline" onClick={() => { if (onReturnToList) onReturnToList(); else window.location.assign("/games"); }}>← К списку</Button></div>
-  </SurfacePanel>}</div>{status && <p role="status">{status}</p>}{sharedMap && <RadarPage resumeCamera={resumeCamera} sharedMap={sharedMap} />}</>;
+  </SurfacePanel>}</div>{status && <p className="gb-map-sr-only" role="status">{status}</p>}{sharedMap && <RadarPage resumeCamera={resumeCamera} sharedMap={sharedMap} />}</>;
 }
