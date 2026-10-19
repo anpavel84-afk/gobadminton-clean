@@ -7,7 +7,6 @@ import { VenueCoverCredit } from "./VenueCoverCredit";
 import { VenueCover } from "./VenueCover";
 import { GamesMapView } from "../games/GamesMapView";
 import { gamesMapReturnPath } from "../../../lib/games-venue-map";
-import { VenueCoverEditor } from "./VenueCoverEditor";
 export function VenuePage({venueId}:{venueId:string}) {
   const [context,setContext]=useState({day:"",returnTo:"/games?view=map"});
   useEffect(()=>{ const query=new URLSearchParams(window.location.search); setContext({day:query.get("day") ?? "",returnTo:gamesMapReturnPath(query.get("returnTo"))}); },[]);
@@ -28,7 +27,6 @@ export function VenuePage({venueId}:{venueId:string}) {
   return <ConsumerShell active="games" title="Площадка" mode="page" hideHeading><div className="gb-venue-page">
     <Button variant="ghost" href={context.returnTo}>Назад к карте</Button>
     {venue?<><h1>{venue.name}</h1><p>{venue.address}</p><div className="gb-venue-media"><VenueCover name={venue.name} cover={venue.cover}/></div><VenueCoverCredit credit={venue.cover?.credit}/><GamesMapView cityId={venue.cityId} day={context.day} venueId={venue.id} activity={activity}/>
-      <VenueCoverEditor key={venue.id} venueId={venue.id} onChange={receipt=>setVenue(v=>v?{...v,cover:{...receipt.cover,credit:receipt.cover.uploadedUrl===v.cover?.uploadedUrl?v.cover?.credit??null:null}}:v)}/>
     </>:error?<div role="alert"><p>Площадка недоступна.</p><Button onClick={()=>setReload(v=>v+1)}>Повторить</Button></div>:<p role="status">Загружаем площадку…</p>}
   </div></ConsumerShell>;
 }

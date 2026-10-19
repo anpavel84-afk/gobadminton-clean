@@ -4,7 +4,7 @@ import { VenueCover, venueCoverUrl } from "../src/components/consumer/venues/Ven
 import { VenueCoverEditor } from "../src/components/consumer/venues/VenueCoverEditor";
 import { DiscoveryGameCard } from "../src/components/consumer/discovery/DiscoveryGameCard";
 import { GameHero } from "../src/components/consumer/games/GameDetailComposition";
-import { venueCoverRequest } from "../src/lib/venue-cover-api";
+import { VenueCoverError, venueCoverRequest } from "../src/lib/venue-cover-api";
 import type { Game } from "../src/lib/consumer-types";
 afterEach(()=>vi.unstubAllGlobals());
 const url="/v1/media/venue-covers/"+"a".repeat(64)+".png";
@@ -64,9 +64,26 @@ describe("venue cover presentation / mutation wire protocol",()=>{
     expect(callAt(0)[0]).toBe(`/v1/admin/venues/${id}/cover`);
     const init=callAt(0)[1];expect(init.credentials).toBe("include");expect(init.cache).toBe("no-store");expect(init.headers.get("X-Venue-Version")).toBe("1");expect(init.headers.get("X-CSRF-Token")).toBe(access.csrfToken);expect(init.headers.get("Idempotency-Key")).toBeTruthy();expect(init.body).toBe(blob);
     await venueCoverRequest(id,"DELETE",controller.signal,access);
-    const deleteBody=callAt(1)[1].body;
+    const deleteInit=callAt(1)[1];
+    expect(deleteInit.credentials).toBe("include");expect(deleteInit.headers.get("X-CSRF-Token")).toBe(access.csrfToken);expect(deleteInit.headers.get("Idempotency-Key")).toBeTruthy();
+    const deleteBody=deleteInit.body;
     if(typeof deleteBody!=="string")throw new Error("DELETE body must be JSON text");
     expect(JSON.parse(deleteBody)).toEqual({expectedVersion:1});
-    await venueCoverRequest(id,"GET",controller.signal);expect(callAt(2)[0]).toBe(`/v1/admin/venues/${id}/cover/access`);expect(callAt(2)[1].body).toBeUndefined();
+    await venueCoverRequest(id,"GET",controller.signal);expect(callAt(2)[0]).toBe(`/v1/admin/venues/${id}/cover/access`);expect(callAt(2)[1].body).toBeUndefined();expect(callAt(2)[1].credentials).toBe("include");expect(callAt(2)[1].headers.has("X-CSRF-Token")).toBe(false);
   });
 });
+
+for (const method of ["GET", "PUT", "DELETE"] as const) {
+  for (const status of [401, 403]) {
+    it(`${method} rejects original ${status} without false success`, async () => {
+      const localFetch = vi.fn(async () => new Response("{}", { status }));
+      vi.stubGlobal("fetch", localFetch);
+      const access = { version: 7, hasCover: true, csrfToken: "test-csrf", cover: { uploadedUrl: url } };
+      const request = venueCoverRequest("00000037-1111-4111-8111-111111111111", method,
+        new AbortController().signal, access, method === "PUT" ? new Blob(["image"], { type: "image/png" }) : undefined);
+      await expect(request).rejects.toBeInstanceOf(VenueCoverError);
+      await expect(request).rejects.toMatchObject({ status });
+      expect(localFetch).toHaveBeenCalledTimes(1);
+    });
+  }
+}
