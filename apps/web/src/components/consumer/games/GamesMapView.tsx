@@ -8,7 +8,7 @@ import { MOSCOW_BUNDLE } from "../../../lib/radar-map-assets";
 import { VenueScheduleCard } from "./VenueScheduleCard";
 import "../../../styles/venue-schedule-card.css";
 import "../../../styles/discovery.css";
-import { venueMapPath } from "../../../lib/games-venue-map";
+import { VenueSheet } from "./VenueSheet";
 import { GamesMapBackButton } from "./GamesMapBackButton";
 import { VenuePreviewCard } from "./VenuePreviewCard";
 import { Button } from "../Button";
@@ -67,28 +67,25 @@ export function GamesMapView({ cityId, day, venueId, activity = "all", onReturnT
     return previousCounts.current = stableVenueCounts(previousCounts.current, next);
   }, [schedules, snapshot, cityId]);
   const [selectedVenueId, setSelectedVenueId] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
+  const selectVenue = (venue: VenueSummary) => { setExpanded(false); setSelectedVenueId(venue.id); };
   const selectedVenue = venues.find(item => item.id === selectedVenueId);
   const escapeSelection = useRef<VenueSummary | undefined>(undefined);
   useEffect(() => { escapeSelection.current = selectedVenue; }, [selectedVenue]);
-  useEffect(() => { setSelectedVenueId(null); }, [cityId]);
+  useEffect(() => { setSelectedVenueId(null); setExpanded(false); }, [cityId]);
   useEffect(() => {
-    if (selectedVenueId !== null && !selectedVenue) setSelectedVenueId(null);
+    if (selectedVenueId !== null && !selectedVenue) { setSelectedVenueId(null); setExpanded(false); }
   }, [selectedVenueId, selectedVenue]);
   useEffect(() => {
     const escape = (event: KeyboardEvent) => {
-      if (!escapeSelection.current || event.key !== "Escape" || event.defaultPrevented || document.querySelector("dialog[open], [role=dialog]")) return;
+      if (!escapeSelection.current || expanded || event.key !== "Escape" || event.defaultPrevented || document.querySelector("dialog[open], [role=dialog]")) return;
       escapeSelection.current = undefined;
-      event.preventDefault(); setSelectedVenueId(null);
+      event.preventDefault(); event.stopImmediatePropagation(); setSelectedVenueId(null);
     };
     window.addEventListener("keydown", escape, true);
     return () => window.removeEventListener("keydown", escape, true);
-  }, []);
+  }, [expanded]);
   const venue = venues.find(venue => venue.id === venueId);
-  const openVenue = (venue: VenueSummary) => {
-    window.dispatchEvent(new Event("gb-map-return"));
-    try { sessionStorage.setItem("gb-games-map-returning", "venue"); sessionStorage.setItem("gb-games-map-selected", venue.id); } catch { /* Optional storage. */ }
-    window.location.assign(venueMapPath(venue.id, day, window.location.pathname + window.location.search));
-  };
   if (venueId) return <section aria-label="Расписание площадки">
     {loading && <p className="gb-map-sr-only" role="status">Загружаем расписание…</p>}
     {error && <p role="alert">Не удалось загрузить расписание. Проверьте соединение.</p>}
@@ -102,13 +99,16 @@ export function GamesMapView({ cityId, day, venueId, activity = "all", onReturnT
     {loading && <p className="gb-map-sr-only" role="status">Загружаем все площадки и расписание…</p>}
     {error && <p role="alert">Не удалось загрузить полный каталог или расписание. Проверьте соединение и повторите. Непроверенные количества не показываем.</p>}
     {<>
-      {cityId === MOSCOW_BUNDLE.cityId ? <MapView venues={venues} counts={counts} selectedVenueId={selectedVenueId} onSelect={venue => setSelectedVenueId(venue.id)} onDeselect={() => setSelectedVenueId(null)} onAvailability={setMapAvailable} onErrorCardChange={setMapErrorCardShown} onReturnToList={onReturnToList} /> : <p role="alert">Карта выбранного города пока недоступна. Все площадки доступны списком.</p>}
+      {cityId === MOSCOW_BUNDLE.cityId ? <MapView venues={venues} counts={counts} selectedVenueId={selectedVenueId} onSelect={selectVenue} onDeselect={() => setSelectedVenueId(null)} onAvailability={setMapAvailable} onErrorCardChange={setMapErrorCardShown} onReturnToList={onReturnToList} /> : <p role="alert">Карта выбранного города пока недоступна. Все площадки доступны списком.</p>}
       {selectedVenue && <VenuePreviewCard venue={selectedVenue} games={all.get(selectedVenue.id) ?? []}
-        gamesReady={snapshot?.cityId === cityId && snapshot.gamesReady} now={now} onOpen={() => openVenue(selectedVenue)} />}
+        gamesReady={snapshot?.cityId === cityId && snapshot.gamesReady} now={now} onOpen={() => setExpanded(true)} />}
+      {selectedVenue && expanded && <VenueSheet key={selectedVenue.id} venue={selectedVenue} games={all.get(selectedVenue.id) ?? []}
+        gamesReady={snapshot?.cityId === cityId && snapshot.gamesReady} now={now}
+        onCollapse={() => setExpanded(false)} onDismiss={() => { setExpanded(false); setSelectedVenueId(null); }} />}
       {!venues.length && <p className="gb-map-sr-only" role="status">В каталоге города пока нет площадок.</p>}
       {(!mapAvailable || cityId !== MOSCOW_BUNDLE.cityId) && <details className="gb-games-map-fallback">
         <summary>Площадки списком — карта или координаты недоступны</summary>
-        <div role="group" aria-label="Все площадки города">{venues.map(venue => <button className="gb-discovery-chip" type="button" key={venue.id} onClick={() => openVenue(venue)}>{venue.name} · {counts ? counts.get(venue.id) ?? 0 : "?"}</button>)}</div>
+        <div role="group" aria-label="Все площадки города">{venues.map(venue => <button className="gb-discovery-chip" type="button" key={venue.id} onClick={() => selectVenue(venue)}>{venue.name} · {counts ? counts.get(venue.id) ?? 0 : "?"}</button>)}</div>
       </details>}
     </>}
   </section>;

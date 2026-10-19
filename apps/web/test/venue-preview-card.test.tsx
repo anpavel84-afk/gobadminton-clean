@@ -1,5 +1,5 @@
 import { Children, isValidElement } from "react";
-import type { ReactNode } from "react";
+import type { ReactNode, PointerEvent } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, it, vi } from "vitest";
 import type { Game, VenueSummary } from "../src/lib/consumer-types";
@@ -21,6 +21,7 @@ it("renders the real cover and region with exactly one named keyboard button; op
   expect(html).toContain('role="region" aria-label="Выбранная площадка"');
   expect(html.match(/<button /g)).toHaveLength(1);
   expect(html).toContain('aria-label="Открыть площадку Зал А"');
+  expect(html).toContain("↑"); expect(html).not.toContain("→"); expect(html).toContain("Ручка площадки");
   expect(html).toContain("Улица 1"); expect(html).toContain('data-cover="default"');
   function activate(node: ReactNode): void {
     if (!isValidElement<{ children?: ReactNode; onClick?: () => void }>(node)) return;
@@ -52,4 +53,29 @@ it.each([
   ["2026-10-24T22:30:00Z", "2026-10-25T23:00:00Z", "2026-10-26T00:00:00Z", "00:00 – 01:00 · Завтра"],
 ])("handles DST calendar tomorrow at %s", (now, start, end, label) => {
   expect(nearestGameLabel([game(start, end)], "Europe/Berlin", Date.parse(now))).toBe(label);
+});
+
+it.each([[1, "игра"], [2, "игры"], [5, "игр"]])("reserves the same two status lines for %s games", (count, word) => {
+  const games = Array.from({ length: Number(count) }, (_, index) => ({ ...game("2026-11-04T10:00:00Z", "2026-11-04T11:00:00Z"), id: String(index) }));
+  const html = renderToStaticMarkup(<VenuePreviewCard venue={venue} games={games} gamesReady now={0} onOpen={() => {}} />);
+  expect(html).toContain(`На этой площадке ${count} ${word}`);
+  expect(html).toContain("gb-venue-preview-count");
+  const empty = renderToStaticMarkup(<VenuePreviewCard venue={venue} games={[]} gamesReady now={0} onOpen={() => {}} />);
+  expect(empty).toContain("gb-venue-preview-count"); expect(empty).toContain("Пока нет игр");
+});
+it("expands the actual preview through its handle only after an upward 81px swipe", () => {
+  const open = vi.fn();
+  const tree = VenuePreviewCard({ venue, games: [], gamesReady: true, now: 0, onOpen: open });
+  type HandleProps = { children?: ReactNode; className?: string; onPointerDown?: (event: PointerEvent<HTMLElement>) => void; onPointerUp?: (event: PointerEvent<HTMLElement>) => void };
+  function find(node: ReactNode): HandleProps | undefined {
+    if (!isValidElement<HandleProps>(node)) return undefined;
+    if (node.props.className === "gb-venue-handle") return node.props;
+    return Children.toArray(node.props.children).map(find).find(value => value !== undefined);
+  }
+  const handle = find(tree);
+  expect(handle).toBeDefined();
+  const event = (y: number) => ({ button: 0, pointerId: 1, clientX: 0, clientY: y,
+    target: { closest: () => null }, currentTarget: { setPointerCapture() {} }, preventDefault() {} }) as unknown as PointerEvent<HTMLElement>;
+  handle?.onPointerDown?.(event(100)); handle?.onPointerUp?.(event(20)); expect(open).not.toHaveBeenCalled();
+  handle?.onPointerDown?.(event(100)); handle?.onPointerUp?.(event(19)); expect(open).toHaveBeenCalledOnce();
 });
