@@ -108,3 +108,52 @@ remain outstanding. Rollback this follow-up by removing this appended section
 only, preserving the prior handoff and other work. Publication remains the
 responsibility of the authorized delivery actor because commit/push are forbidden;
 there is no new result permalink.
+
+## Source-author follow-up against d91d79b (2026-10-19)
+
+From: source author. To: PM / assignment owner. Status: BLOCKED / UNVERIFIED.
+Exact starting HEAD: `d91d79bd06fc8d745fa2edc855864b1ab2f00231`, branch
+`automation/issue-94`; `git status --short` initially returned no entries.
+Base permalink: https://github.com/anpavel84-afk/gobadminton-clean/tree/d91d79bd06fc8d745fa2edc855864b1ab2f00231
+
+The supplied independent QA FAIL against this HEAD is acknowledged. D1–D6 remain
+outstanding; this record does not resolve the missing implementation or checks.
+The immutable assignment still requires starting after M1c acceptance on DEV and
+explicitly stopping if M1c is not merged into dev. No revised prerequisite or
+durable acceptance evidence was supplied with the QA findings.
+
+Current read-only command output:
+
+```text
+git rev-parse origin/dev
+ce399529b0c7d137a917f45cd4e999234d5a2908
+
+git merge-base --is-ancestor dc1d1b9fe9460ed6fd734c95ac3e2a9a19220c90 origin/dev
+exit 1 (no stdout)
+
+git rev-parse automation/issue-88
+0ce158e062d4509e8528abbbf33b520a21210ecf
+```
+
+FACT: the locally available dev history still lacks the specified M1c candidate.
+Current remote state and DEV acceptance are UNVERIFIED; no fetch or Git metadata
+change was performed. `ISSUE_92_M1E.md` still describes the successor as
+READY_FOR_REVIEW, with no acceptance or deployment claimed. The local reuse tip
+matches the required SHA. Nothing was reused or merged by hand because the
+prerequisite stop applies before implementation.
+
+Only this allowed handoff is edited. Application code, marker tests, return
+capsule, focus behavior, layout scripts, dependencies and all other files remain
+unchanged. NOT_TESTED in this follow-up: unit tests, lint, typecheck, build,
+browser/computed styles, 390/430 widths, zoom/selection lifecycle and physical
+iOS. No author PASS, independent QA, deployment or acceptance is claimed.
+
+STYLE_GUIDE_PARITY: binding Owner decision read; referenced operations guide is
+absent. No visual changes, reused patterns, new gap or override, or fresh Make
+inspection claimed.
+
+Next bounded action: PM supplies the accepted M1c/successor dev base and durable
+merge/DEV acceptance evidence, or explicitly revises the prerequisite, before
+reassigning this same marker slice. Rollback: remove only this appended section.
+Commit/push remain prohibited; publication and a result permalink must be supplied
+by the authorized delivery actor, not fabricated by the source author.
