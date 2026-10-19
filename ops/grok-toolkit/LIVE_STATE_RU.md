@@ -1,6 +1,6 @@
 # GoBadminton · LIVE STATE (живое состояние для резервного PM)
 
-**Обновлено:** 19.10.2026 12:22 (Сан-Паулу, UTC-3), генератор `ops/grok-toolkit/sync_state.py`
+**Обновлено:** 19.10.2026 13:01 (Сан-Паулу, UTC-3), генератор `ops/grok-toolkit/sync_state.py`
 **Активный оператор:** Grok (Go Bad) с 2026-10-17
 
 > Генерируется автоматически. Руками правится только строка «Активный оператор» (протокол передачи: `docs/workbench/OPS_BACKUP_PM_TAKEOVER_DRILL_V001.md` §9). Секретов здесь нет. UNKNOWN ≠ 0.
@@ -9,7 +9,7 @@
 
 - Исполнитель: `active/running`, MainPID 1456 (время проверки — в строке «Обновлено»).
 - Выполнено задач (`done_count`): **24**.
-- Активная задача: **#106** M6: подпись источника обложки площадки (Фото / Логотип / Иллюстрация) — фаза `blocked`, попытка 1, head `675fe3d0`, PR #107, QA PASS на `675fe3d0`, причина: Actions failed, resume_phase: ci.
+- Активная задача: **#106** M6: подпись источника обложки площадки (Фото / Логотип / Иллюстрация) — фаза `ci`, попытка 2, head `6dd3972d`, PR #107, QA PASS на `6dd3972d`.
 - Последняя выкатка DEV: `r39267138620-a1`, ACCEPTED, pending=False, source `1b4c97be`, завершена 19.10.2026 11:18 (Сан-Паулу).
 - DEV `/v1/meta`: gitSha `1b4c97be`, apiVersion `0.19.0`.
 - GitHub `dev` HEAD: `1b4c97be`.
@@ -35,7 +35,7 @@
 ## 3. Открытые PR и Issue (GitHub)
 
 **PR:**
-- #107 `automation/issue-106` → `dev` @ `675fe3d0`: Refs #106: autonomous source candidate
+- #107 `automation/issue-106` → `dev` @ `6dd3972d`: Refs #106: autonomous source candidate
 - #102 `ops/takeover-runbook-v1` → `dev` @ `эта ветка`: Docs: OPS takeover runbook V001 (docs-only, DO NOT MERGE yet)
 - #100 `ops/parallel-slots-v1` → `dev` @ `750afb7c`: OPS: PARALLEL_SLOTS_V1 executor slots, lock registry, merge queue, budgets (NOT INSTALLED)
 - #97 `automation/issue-96` → `dev` @ `765aebc2`: Refs #96: autonomous source candidate
@@ -76,7 +76,7 @@
 | Поток | Состояние | Пути | Дальше |
 |---|---|---|---|
 | #104 заглушка обложки по типу игры (корт / корт с ракеткой) | done на DEV: 1b4c97be ACCEPTED r39267138620-a1; done_count 24; ждёт браузерной проверки оператором | `apps/web/src/components/consumer/venues/VenueCover.tsx`; `apps/web/src/components/consumer/games/GameCover.tsx`; `apps/web/test/venue-cover.test.tsx` | браузерная проверка на dev.gobadminton.ru (список игр, деталь, площадки): обычная/площадка=корт, trainer=ракетка, нет ▱; вердикт Павлу |
-| #106 M6: подпись источника обложки площадки (Фото / Логотип / Иллюстрация) | blocked: PR #107 head 675fe3d0, attempt 1/3, QA PASS; CI database упал (venue-cover-credit.test.ts: 4 теста, 'inconsistent types deduced for parameter $1' в fixture стр.76); resume_phase=ci | `box: /workspace/outputs/venue_images/m6/`; `apps/api/migrations/0037_venue_cover_credit.sql`; `apps/web/src/components/consumer/venues/VenueCoverCredit.tsx` | RESUME CI-фикса (attempt 2/3); после DEV-приёмки — I1 фото площадок |
+| #106 M6: подпись источника обложки площадки (Фото / Логотип / Иллюстрация) | в работе: PR #107 head 6dd3972d, attempt 2/3, phase=ci, QA PASS; CI ещё идёт (после RESUME фикстуры database) | `box: /workspace/outputs/venue_images/m6/`; `apps/api/migrations/0037_venue_cover_credit.sql`; `apps/web/src/components/consumer/venues/VenueCoverCredit.tsx` | дождаться зелёного CI и merge на DEV; затем I1 фото площадок |
 | #101 M0e: убрать непрозрачный слой над подложкой карты | done на DEV: 58d71ae3 (теперь под 1b4c97be); done_count 24; браузерная проверка карты могла ещё не закрыта | `ops/grok-toolkit/map_split/bodies/published_101_M0e.body.txt`; `box: /workspace/outputs/map_split/` | если вердикт по карте ещё не дан: сравнение с MOCKUP_V001_owner.png; иначе закрыть поток |
 | PR #100 параллельные слоты (ops/parallel-slots-v1) | доделывается: QA, CI, установщик под одну root-команду | `ops/grok-toolkit/parallel_v2/`; `box: /workspace/outputs/parallel_slots_pr/` | установка только в окно idle и после «да» Павла; перед этим влить #81 |
 | Аудит контактов и описаний площадок | идёт сбор (только чтение, вне очереди) | `box: /workspace/outputs/venue_audit/ (SUMMARY_RU.md, venues_audit.csv, venues_audit.json)` | таблица Павлу на проверку, затем задача в конвейер на добавление данных |
