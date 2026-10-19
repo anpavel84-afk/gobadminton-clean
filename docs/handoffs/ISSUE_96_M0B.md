@@ -27,9 +27,35 @@ therefore candidate permalink awaits authorized publication by the delivery syst
   Debug tests cover shape, limit, opt-in persistence, disabled output, sensitive detail
   rejection and panel visibility. No data is transmitted.
 
-Coverage limits: no claim that all A2 transitions are independently exercised by a
-single combined mounted Map/View harness; device visibility and clipboard behavior
-also require browser QA. These are source tests, not executed evidence.
+## A2 revision after independent QA FAIL
+
+Revision source/base: `224ebbe3540bfd6c914e4638b543dafcb393d2ab` (clean worktree).
+Exact reviewed source: https://github.com/anpavel84-afk/gobadminton-clean/commit/224ebbe3540bfd6c914e4638b543dafcb393d2ab
+Prior independent QA reported incomplete A2 source coverage: the refresh suite's
+static dynamic placeholder never constructed MapLibre. That FAIL is not superseded
+by author assertions; independent QA must review and execute this revision.
+
+Added `apps/web/test/games-map-refresh-lifecycle.test.tsx`: real GamesMapView and
+GamesVenueMap, separate persistent mocked-hook stores, an explicitly reconciled
+next/dynamic boundary, real polling helper, controlled API promises and mocked
+MapLibre/pmtiles. Missing dynamic children dispose the child store, so a transient
+unmount cannot silently pass. This supplements the existing focused suites.
+
+The two parameterized cases cover automatic background refresh, window focus,
+online, failed poll after success, same-Moscow rerender and day change, asserting
+one Map construction and no remove() after each transition. Counts are confirmed
+before refresh, retained while pending, null after failure (gamesReady=false), and
+updated to zero after a successful different-day reload. Terminal cases assert
+removal exactly once on unmount, or removal/reconstruction on explicit retry and
+subsequent cleanup of the replacement. Fatal display itself must keep the Map.
+
+Only this new test and this handoff change in the revision. Existing implementation
+remains in the reviewed base; the revision does not repeat source changes merely
+to produce a new source diff. Rollback for this revision: remove the added test and
+restore this handoff's revision text through the authorized delivery process.
+
+Coverage limits: device visibility and clipboard behavior require browser QA.
+These are authored source tests, not executed evidence.
 
 ## Presentation authority
 
