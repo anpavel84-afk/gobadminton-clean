@@ -52,3 +52,59 @@ PM must establish the exact latest dev base containing accepted M1c (or its expl
 Rollback: remove only this newly added handoff if needed, preserving later edits. No application rollback required.
 
 This source-only handoff is unpublished because commit/push are prohibited. PM must publish it through the authorized record route; no result commit permalink exists yet.
+
+## Source-author follow-up after independent QA FAIL (2026-10-19)
+
+From: source author. To: PM / assignment owner. Status: BLOCKED, implementation absent.
+Follow-up exact base: `d5789f2b53eb6a7e598e879b65792706b025bbb9`;
+branch `automation/issue-94`, initially clean worktree.
+Base: https://github.com/anpavel84-afk/gobadminton-clean/tree/d5789f2b53eb6a7e598e879b65792706b025bbb9
+
+The supplied independent QA verdict is FAIL against this base: D1–D3 implementation
+and tests are absent; D5 checks remain unverified. Those findings are acknowledged,
+not resolved by this documentation update. No READY_FOR_REVIEW or PASS is claimed.
+
+Repeated read-only commands and results:
+
+```text
+git rev-parse origin/dev
+ce399529b0c7d137a917f45cd4e999234d5a2908
+
+git merge-base --is-ancestor dc1d1b9fe9460ed6fd734c95ac3e2a9a19220c90 origin/dev
+exit 1 (no stdout)
+
+git rev-parse automation/issue-88
+0ce158e062d4509e8528abbbf33b520a21210ecf
+```
+
+The local source branch tip matches the required reuse SHA. Read-only `git show`
+and `git diff` inspected its marker helper, component, CSS and tests; nothing was
+copied or merged. Its helper also moves nearby distinct points and uses a distance
+argument rather than the task's zoom argument, so it would require adaptation,
+not unconditional reuse. No checkout/index mutation was performed.
+
+The immutable task explicitly says: “if M1c is not merged into dev, stop and say
+so in the handoff.” Available local dev history still lacks M1c; current remote
+merge and DEV acceptance remain UNVERIFIED. Issue 92's existing handoff records
+its successor as READY_FOR_REVIEW with no acceptance/deployment claim. Prior QA
+criticism does not supply merge evidence or repeal that explicit stop condition.
+No fetch/network action, source edits, commit, push, services or self-QA performed.
+Only this allowed handoff changed. All protected source, layout and test files
+remain unchanged.
+
+NOT_TESTED in this follow-up: web unit tests, lint, typecheck, build, lifecycle,
+computed styles, browser widths 390/430 and physical iOS. No command output for
+unexecuted checks is asserted. The direct source-author instruction prohibits
+self-QA; the prerequisite also stops implementation before checks.
+
+STYLE_GUIDE_PARITY: binding Owner decision read; operations guide absent. No
+visual change, new pattern, gap or override introduced. No new frozen Make
+inspection claimed.
+
+Next bounded action: PM supplies a base containing merged M1c (or explicitly
+accepted successor), with durable DEV acceptance evidence, or explicitly revises
+the prerequisite. Then assign the same marker-only implementation slice; D1–D6
+remain outstanding. Rollback this follow-up by removing this appended section
+only, preserving the prior handoff and other work. Publication remains the
+responsibility of the authorized delivery actor because commit/push are forbidden;
+there is no new result permalink.
