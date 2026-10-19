@@ -1,13 +1,13 @@
 # GoBadminton · LIVE STATE (живое состояние для резервного PM)
 
-**Обновлено:** 19.10.2026 10:10 (Сан-Паулу, UTC-3), генератор `ops/grok-toolkit/sync_state.py`
+**Обновлено:** 19.10.2026 10:19 (Сан-Паулу, UTC-3), генератор `ops/grok-toolkit/sync_state.py`
 **Активный оператор:** Grok (Go Bad) с 2026-10-17
 
 > Генерируется автоматически. Руками правится только строка «Активный оператор» (протокол передачи: `docs/workbench/OPS_BACKUP_PM_TAKEOVER_DRILL_V001.md` §9). Секретов здесь нет. UNKNOWN ≠ 0.
 
 ## 1. Конвейер (исполнитель)
 
-- Исполнитель: `active/running`, MainPID 1456, проверено 19.10.2026 10:10 (Сан-Паулу).
+- Исполнитель: `active/running`, MainPID 1456, проверено 19.10.2026 10:19 (Сан-Паулу).
 - Выполнено задач (`done_count`): **22**.
 - Активная задача: **#101** M0e: убрать непрозрачный слой над подложкой карты — фаза `blocked`, попытка 1, head `609d4c7d`, PR #103, QA PASS на `609d4c7d`, причина: Actions failed, resume_phase: ci.
 - Последняя выкатка DEV: `r39248271537-a1`, ACCEPTED, pending=False, source `47fa3fde`, завершена 19.10.2026 09:00 (Сан-Паулу).
@@ -36,7 +36,7 @@
 
 **PR:**
 - #103 `automation/issue-101` → `dev` @ `609d4c7d`: Refs #101: autonomous source candidate
-- #102 `ops/takeover-runbook-v1` → `dev` @ `a5ee64fb`: Docs: OPS takeover runbook V001 (docs-only, DO NOT MERGE yet)
+- #102 `ops/takeover-runbook-v1` → `dev` @ `56851612`: Docs: OPS takeover runbook V001 (docs-only, DO NOT MERGE yet)
 - #100 `ops/parallel-slots-v1` → `dev` @ `750afb7c`: OPS: PARALLEL_SLOTS_V1 executor slots, lock registry, merge queue, budgets (NOT INSTALLED)
 - #97 `automation/issue-96` → `dev` @ `765aebc2`: Refs #96: autonomous source candidate
 - #95 `automation/issue-94` → `dev` @ `5cb76118`: Refs #94: autonomous source candidate
