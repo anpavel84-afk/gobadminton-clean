@@ -74,8 +74,8 @@ run("0037 venue cover credit: disposable PostGIS and public API", () => {
   async function fixture(withCover = true): Promise<string> {
     const id = randomUUID();
     await pool.query(
-      "INSERT INTO venues(id,city_id,name,address,timezone,location,created_by_user_id,lifecycle_state,normalized_name,normalized_address,cover_key,cover_moderation_approval_id,cover_actor_id) VALUES($1,$2,'Synthetic credit','Synthetic address','Europe/Moscow',ST_SetSRID(ST_MakePoint(37.62,55.75),4326)::geography,$3,'unverified',$1::text,$1::text,$4,$5,$6)",
-      [id, cityId, actorId, withCover ? randomUUID().replaceAll("-", "").repeat(2) + ".png" : null, withCover ? approvalId : null, withCover ? actorId : null],
+      "INSERT INTO venues(id,city_id,name,address,timezone,location,created_by_user_id,lifecycle_state,normalized_name,normalized_address,cover_key,cover_moderation_approval_id,cover_actor_id) VALUES($1,$2,'Synthetic credit','Synthetic address','Europe/Moscow',ST_SetSRID(ST_MakePoint(37.62,55.75),4326)::geography,$3,'unverified',$7,$7,$4,$5,$6)",
+      [id, cityId, actorId, withCover ? randomUUID().replaceAll("-", "").repeat(2) + ".png" : null, withCover ? approvalId : null, withCover ? actorId : null, id],
     );
     return id;
   }
