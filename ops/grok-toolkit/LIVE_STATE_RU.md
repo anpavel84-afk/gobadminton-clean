@@ -1,6 +1,6 @@
 # GoBadminton · LIVE STATE (живое состояние для резервного PM)
 
-**Обновлено:** 19.10.2026 14:07 (Сан-Паулу, UTC-3), генератор `ops/grok-toolkit/sync_state.py`
+**Обновлено:** 19.10.2026 14:32 (Сан-Паулу, UTC-3), генератор `ops/grok-toolkit/sync_state.py`
 **Активный оператор:** Grok (Go Bad) с 2026-10-17
 
 > Генерируется автоматически. Руками правится только строка «Активный оператор» (протокол передачи: `docs/workbench/OPS_BACKUP_PM_TAKEOVER_DRILL_V001.md` §9). Секретов здесь нет. UNKNOWN ≠ 0.
@@ -8,11 +8,11 @@
 ## 1. Конвейер (исполнитель)
 
 - Исполнитель: `active/running`, MainPID 1456 (время проверки — в строке «Обновлено»).
-- Выполнено задач (`done_count`): **25**.
-- Активная задача: **#108** NAV1: новые иконки нижнего меню (вариант B) — фаза `pr_wait`, попытка 1, head `687fa922`, PR —, QA None на `—`.
-- Последняя выкатка DEV: `r39285408995-a1`, ACCEPTED, pending=False, source `6dd3972d`, завершена 19.10.2026 13:42 (Сан-Паулу).
-- DEV `/v1/meta`: gitSha `6dd3972d`, apiVersion `0.19.0`.
-- GitHub `dev` HEAD: `6dd3972d`.
+- Выполнено задач (`done_count`): **26**.
+- Активная задача: **#108** NAV1: новые иконки нижнего меню (вариант B) — фаза `done`, попытка 1, head `687fa922`, PR #110, QA PASS на `687fa922`.
+- Последняя выкатка DEV: `r39293031333-a1`, ACCEPTED, pending=False, source `687fa922`, завершена 19.10.2026 14:23 (Сан-Паулу).
+- DEV `/v1/meta`: gitSha `687fa922`, apiVersion `0.19.0`.
+- GitHub `dev` HEAD: `687fa922`.
 - Сверка dev HEAD = DEV gitSha = квитанция: **совпадает**.
 
 ## 2. Следующие задачи и бэклог (топ-10, `backlog_ru.json`)
@@ -35,7 +35,6 @@
 ## 3. Открытые PR и Issue (GitHub)
 
 **PR:**
-- #110 `automation/issue-108` → `dev` @ `687fa922`: Refs #108: autonomous source candidate
 - #102 `ops/takeover-runbook-v1` → `dev` @ `эта ветка`: Docs: OPS takeover runbook V001 (docs-only, DO NOT MERGE yet)
 - #100 `ops/parallel-slots-v1` → `dev` @ `750afb7c`: OPS: PARALLEL_SLOTS_V1 executor slots, lock registry, merge queue, budgets (NOT INSTALLED)
 - #97 `automation/issue-96` → `dev` @ `765aebc2`: Refs #96: autonomous source candidate
@@ -79,7 +78,7 @@
 |---|---|---|---|
 | #104 заглушка обложки по типу игры (корт / корт с ракеткой) | done на DEV: 1b4c97be (теперь под 6dd3972d); проверено, Павлу дан вердикт «готово» | `apps/web/src/components/consumer/venues/VenueCover.tsx`; `apps/web/src/components/consumer/games/GameCover.tsx`; `apps/web/test/venue-cover.test.tsx` | закрыть поток |
 | #106 M6: подпись источника обложки площадки (Фото / Логотип / Иллюстрация) | done на DEV: 6dd3972d ACCEPTED r39285408995-a1; done_count 25; ждёт браузерной проверки оператором | `box: /workspace/outputs/venue_images/m6/`; `apps/api/migrations/0037_venue_cover_credit.sql`; `apps/web/src/components/consumer/venues/VenueCoverCredit.tsx` | браузерная проверка подписи источника на карточках площадок; вердикт Павлу; затем I1 фото площадок (пересобрать на 6dd3972d) |
-| #108 NAV1: новые иконки нижнего меню (вариант B, лаймовый круг у активного) | взята в работу 19.10 ~13:30; attempt 1/3, фаза pr_wait (автор сделал, ждём PR), база 6dd3972d | `box: /workspace/outputs/navicons/NAV1.final.body.txt`; `apps/web/src/components/consumer/NavIcon.tsx`; `apps/web/src/components/consumer/nav-icon-paths.tsx`; `apps/web/src/styles/foundation.css` | QA, CI, DEV-выкатка; затем браузерная проверка нижнего меню на мобильном экране и вердикт Павлу |
+| #108 NAV1: новые иконки нижнего меню (вариант B, лаймовый круг у активного) | done на DEV: 687fa922 ACCEPTED r39293031333-a1; done_count 26; ждёт браузерной проверки оператором | `box: /workspace/outputs/navicons/NAV1.final.body.txt`; `apps/web/src/components/consumer/NavIcon.tsx`; `apps/web/src/components/consumer/nav-icon-paths.tsx`; `apps/web/src/styles/foundation.css` | браузерная проверка нижнего меню на мобильном экране; вердикт Павлу; затем M2 по плану (после MAP-PERF1) |
 | #101 M0e: убрать непрозрачный слой над подложкой карты | done на DEV: 58d71ae3 (теперь под 1b4c97be); done_count 24; браузерная проверка карты могла ещё не закрыта | `ops/grok-toolkit/map_split/bodies/published_101_M0e.body.txt`; `box: /workspace/outputs/map_split/` | если вердикт по карте ещё не дан: сравнение с MOCKUP_V001_owner.png; иначе закрыть поток |
 | PR #100 параллельные слоты (ops/parallel-slots-v1) | доделывается: QA, CI, установщик под одну root-команду | `ops/grok-toolkit/parallel_v2/`; `box: /workspace/outputs/parallel_slots_pr/` | установка только в окно idle и после «да» Павла; перед этим влить #81 |
 | Аудит контактов и описаний площадок | идёт сбор (только чтение, вне очереди) | `box: /workspace/outputs/venue_audit/ (SUMMARY_RU.md, venues_audit.csv, venues_audit.json)` | таблица Павлу на проверку, затем задача в конвейер на добавление данных |
