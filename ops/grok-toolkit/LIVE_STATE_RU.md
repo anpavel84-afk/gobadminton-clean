@@ -7,9 +7,9 @@
 
 ## 1. Конвейер (исполнитель)
 
-- Исполнитель: `active/running`, MainPID 1456, проверено 19.10.2026 10:20 (Сан-Паулу).
+- Исполнитель: `active/running`, MainPID 1456 (время проверки — в строке «Обновлено»).
 - Выполнено задач (`done_count`): **22**.
-- Активная задача: **#101** M0e: убрать непрозрачный слой над подложкой карты — фаза `blocked`, попытка 1, head `609d4c7d`, PR #103, QA PASS на `609d4c7d`, причина: Actions failed, resume_phase: ci.
+- Активная задача: **#101** M0e: убрать непрозрачный слой над подложкой карты — фаза `developing`, попытка 2, head `609d4c7d`, PR #103, QA PASS на `609d4c7d`.
 - Последняя выкатка DEV: `r39248271537-a1`, ACCEPTED, pending=False, source `47fa3fde`, завершена 19.10.2026 09:00 (Сан-Паулу).
 - DEV `/v1/meta`: gitSha `47fa3fde`, apiVersion `0.19.0`.
 - GitHub `dev` HEAD: `47fa3fde`.
@@ -36,7 +36,7 @@
 
 **PR:**
 - #103 `automation/issue-101` → `dev` @ `609d4c7d`: Refs #101: autonomous source candidate
-- #102 `ops/takeover-runbook-v1` → `dev` @ `81c2c8ae`: Docs: OPS takeover runbook V001 (docs-only, DO NOT MERGE yet)
+- #102 `ops/takeover-runbook-v1` → `dev` @ `эта ветка`: Docs: OPS takeover runbook V001 (docs-only, DO NOT MERGE yet)
 - #100 `ops/parallel-slots-v1` → `dev` @ `750afb7c`: OPS: PARALLEL_SLOTS_V1 executor slots, lock registry, merge queue, budgets (NOT INSTALLED)
 - #97 `automation/issue-96` → `dev` @ `765aebc2`: Refs #96: autonomous source candidate
 - #95 `automation/issue-94` → `dev` @ `5cb76118`: Refs #94: autonomous source candidate
