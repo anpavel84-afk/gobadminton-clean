@@ -24871,6 +24871,44 @@
             ],
             "pattern": "^/v1/media/venue-covers/[a-f0-9]{64}\\.png$",
             "description": "Current approved venue derivative or null for canonical default. Never an external URL or storage path."
+          },
+          "credit": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "kind",
+                  "text",
+                  "url"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "photo",
+                      "logo",
+                      "illustration"
+                    ]
+                  },
+                  "text": {
+                    "type": "string",
+                    "maxLength": 120
+                  },
+                  "url": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "pattern": "^https://",
+                    "maxLength": 300
+                  }
+                }
+              }
+            ]
           }
         }
       },

@@ -222,7 +222,7 @@ export type CreateVenueInput = {
 };
 
 export type Venue = CreateVenueInput & {
-  cover?: { uploadedUrl: string | null };
+  cover?: { uploadedUrl: string | null; credit?: { kind: "photo" | "logo" | "illustration"; text: string; url: string | null } | null };
   id: string;
   dataStatus: string;
   provenance: string;

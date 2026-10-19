@@ -19,5 +19,5 @@ export type DiscoveryCityId = "a0000000-0000-4000-8000-000000000001" | "a0000000
 export type DiscoveryCityHint = { "cityId": DiscoveryCityId; "source": "ip" | "default" };
 export type DiscoveryPreference = { "cityId": DiscoveryCityId | null; "version": number };
 export type PutDiscoveryPreference = { "cityId": DiscoveryCityId; "expectedVersion": number };
-export type VenueCover = { "uploadedUrl": string | null };
+export type VenueCover = { "uploadedUrl": string | null; "credit"?: null | { "kind": "photo" | "logo" | "illustration"; "text": string; "url": string | null } };
 export type GameCover = { "uploadedUrl": string | null };

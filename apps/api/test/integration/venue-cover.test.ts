@@ -134,8 +134,8 @@ run("venue cover: isolated disposable PostGIS / actual API / games projections",
     async function projections(expected:string|null){
       const detail=await read(`/v1/games/${game.body.id}`);expect(detail.statusCode,detail.body).toBe(200);expect(detail.json().venue).toMatchObject({id:v.id,cover:{uploadedUrl:expected}});
       const list=await read(`/v1/games?venueId=${v.id}`);expect(list.statusCode,list.body).toBe(200);expect(list.json().items.find((g:{id:string})=>g.id===game.body.id)?.venue).toMatchObject({id:v.id,cover:{uploadedUrl:expected}});
-      expect((await read(`/v1/venues/${v.id}`)).json().cover).toEqual({uploadedUrl:expected});
-      const catalog=await read(`/v1/venues?cityId=${cityId}`);expect(catalog.json().items.find((r:{id:string})=>r.id===v.id)?.cover).toEqual({uploadedUrl:expected});
+      expect((await read(`/v1/venues/${v.id}`)).json().cover).toEqual({uploadedUrl:expected,credit:null});
+      const catalog=await read(`/v1/venues?cityId=${cityId}`);expect(catalog.json().items.find((r:{id:string})=>r.id===v.id)?.cover).toEqual({uploadedUrl:expected,credit:null});
     }
     await projections(null);
     const key=randomUUID(),saved=await upload(v.id,1,owner,key);expect(saved.statusCode,saved.body).toBe(200);const url=saved.json().cover.uploadedUrl;
@@ -189,7 +189,7 @@ run("venue cover: isolated disposable PostGIS / actual API / games projections",
     expect(url).toEqual(expect.any(String));
     const before=(await pool.query("SELECT version,cover_key,cover_moderation_approval_id,cover_actor_id FROM venues WHERE id=$1",[v.id])).rows[0];
     const publicBefore=(await read(`/v1/venues/${v.id}`)).json();
-    expect(publicBefore.cover).toEqual({uploadedUrl:url});
+    expect(publicBefore.cover).toEqual({uploadedUrl:url,credit:null});
     const bytesBefore=await read(url);expect(bytesBefore.statusCode).toBe(200);
     // Distinct sanitized bytes must reach moderation rather than reuse an approval.
     const replacement=await sharp({create:{width:900,height:600,channels:3,background:"red"}}).png().toBuffer();
@@ -226,7 +226,7 @@ run("venue cover: isolated disposable PostGIS / actual API / games projections",
     const retired=await app.inject({method:"POST",url:`/v1/admin/venues/${v.id}/commands`,headers:headers(),payload:{action:"retire",expectedVersion:2,reasonCode:"synthetic_fixture"}});
     expect(retired.statusCode,retired.body).toBe(201);
     expect((await read(saved.json().cover.uploadedUrl)).statusCode).toBe(404);
-    expect((await read(`/v1/venues/${v.id}`)).json().cover).toEqual({uploadedUrl:null});
+    expect((await read(`/v1/venues/${v.id}`)).json().cover).toEqual({uploadedUrl:null,credit:null});
     expect((await upload(v.id,3)).statusCode).toBe(404);
   });
   it("reauthorizes replay, fences principal generation during moderation and account retirement",async()=>{

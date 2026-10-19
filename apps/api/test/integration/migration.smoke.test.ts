@@ -159,6 +159,7 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
         "0034_venue_cover",
         "0035_game_cover",
         "0036_venue_contacts",
+        "0037_venue_cover_credit",
       ]);
       // Verify the additive game slot exists, beyond its migration record.
       const gameCoverColumns = await pool.query<{
