@@ -1,5 +1,43 @@
 # M2 — Venue preview over Games map
 
+## CI repair — 2026-10-19
+
+From: source author (Codex). To: integrator / independent QA.
+Status: READY_FOR_REVIEW; execution checks NOT_TESTED.
+Repair base: `0b8369f6deebe91888c505ae2489688ae8912082`.
+Exact base: https://github.com/anpavel84-afk/gobadminton-clean/tree/0b8369f6deebe91888c505ae2489688ae8912082
+
+FACT: bounded repair for CI run `39303585450`, job `118234800021`, failing
+second Escape assertion in `games-map-selection.test.tsx:116`. Only
+`GamesMapView.tsx` and this handoff are changed relative to the repair base.
+The capture listener reads current selection from a ref updated by the selection
+effect, and clears that ref synchronously when consuming Escape. Thus a subsequent
+Escape is not consumed, including before React commits the state update. The listener
+is registered once with cleanup; dialog/defaultPrevented guards remain before mutation.
+All existing candidate code and tests are otherwise preserved; no visual changes.
+STYLE_GUIDE_PARITY remains UNVERIFIED, with the original STYLE_GUIDE_GAP M2 below.
+
+Requested repair checks, each attempted separately with `COREPACK_ENABLE_NETWORK=0`:
+
+- `pnpm --filter @gobadminton/web run typecheck`
+- `pnpm --filter @gobadminton/web run lint`
+- `pnpm --filter @gobadminton/web exec vitest run test/games-map-selection.test.tsx`
+- `pnpm --filter @gobadminton/web run test:unit`
+
+Each exited **1** before execution: Corepack required
+`https://registry.npmjs.org/pnpm/-/pnpm-10.18.0.tgz` and reported
+`Network access disabled by the environment; can't reach` that URL.
+All four checks are **NOT_TESTED**, not PASS. No install or network access enabled.
+`git diff --check`: exit **0**, no whitespace diagnostics.
+No independent self-QA, commit, push, deployment or Git metadata changes performed.
+
+PROPOSED next bounded action: integrator runs these four checks with provisioned
+tooling and obtains independent review of this repair before integration. Existing
+prior QA PASS applies only to the base SHA, not this uncommitted repair.
+Rollback: remove only this repair's GamesMapView and handoff diff against the repair
+base, preserving all original candidate changes. Publication and a resulting exact
+commit permalink remain the integrator's responsibility.
+
 From: source author (Codex)
 To: GoBadminton integrator / independent QA
 Date: 2026-10-19

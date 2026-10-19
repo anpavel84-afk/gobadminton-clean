@@ -68,19 +68,21 @@ export function GamesMapView({ cityId, day, venueId, activity = "all", onReturnT
   }, [schedules, snapshot, cityId]);
   const [selectedVenueId, setSelectedVenueId] = useState<string | null>(null);
   const selectedVenue = venues.find(item => item.id === selectedVenueId);
+  const escapeSelection = useRef<VenueSummary | undefined>(undefined);
+  useEffect(() => { escapeSelection.current = selectedVenue; }, [selectedVenue]);
   useEffect(() => { setSelectedVenueId(null); }, [cityId]);
   useEffect(() => {
     if (selectedVenueId !== null && !selectedVenue) setSelectedVenueId(null);
   }, [selectedVenueId, selectedVenue]);
   useEffect(() => {
-    if (!selectedVenue) return;
     const escape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || event.defaultPrevented || document.querySelector("dialog[open], [role=dialog]")) return;
+      if (!escapeSelection.current || event.key !== "Escape" || event.defaultPrevented || document.querySelector("dialog[open], [role=dialog]")) return;
+      escapeSelection.current = undefined;
       event.preventDefault(); setSelectedVenueId(null);
     };
     window.addEventListener("keydown", escape, true);
     return () => window.removeEventListener("keydown", escape, true);
-  }, [selectedVenue]);
+  }, []);
   const venue = venues.find(venue => venue.id === venueId);
   const openVenue = (venue: VenueSummary) => {
     window.dispatchEvent(new Event("gb-map-return"));
