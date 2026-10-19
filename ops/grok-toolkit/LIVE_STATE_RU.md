@@ -1,6 +1,6 @@
 # GoBadminton · LIVE STATE (живое состояние для резервного PM)
 
-**Обновлено:** 19.10.2026 15:33 (Сан-Паулу, UTC-3), генератор `ops/grok-toolkit/sync_state.py`
+**Обновлено:** 19.10.2026 16:08 (Сан-Паулу, UTC-3), генератор `ops/grok-toolkit/sync_state.py`
 **Активный оператор:** Grok (Go Bad) с 2026-10-17
 
 > Генерируется автоматически. Руками правится только строка «Активный оператор» (протокол передачи: `docs/workbench/OPS_BACKUP_PM_TAKEOVER_DRILL_V001.md` §9). Секретов здесь нет. UNKNOWN ≠ 0.
@@ -9,11 +9,10 @@
 
 - Исполнитель: `active/running`, MainPID 1456 (время проверки — в строке «Обновлено»).
 - Выполнено задач (`done_count`): **27**.
-- Активная задача: **#112** M2: тап по маркеру — карточка поверх карты, без перехода — фаза `candidate`, попытка 1, head `0b8369f6`, PR —, QA None на `—`.
+- Активная задача: **#112**  — фаза `blocked`, попытка 1, head `0b8369f6`, PR #113, QA PASS на `0b8369f6`, причина: Actions failed, resume_phase: ci.
 - Последняя выкатка DEV: `r39299797649-a1`, ACCEPTED, pending=False, source `f0168eac`, завершена 19.10.2026 15:16 (Сан-Паулу).
 - DEV `/v1/meta`: gitSha `f0168eac`, apiVersion `0.19.0`.
-- GitHub `dev` HEAD: `f0168eac`.
-- Сверка dev HEAD = DEV gitSha = квитанция: **совпадает**.
+- GitHub `dev` HEAD: `UNKNOWN`.
 
 ## 2. Следующие задачи и бэклог (топ-10, `backlog_ru.json`)
 
@@ -34,44 +33,7 @@
 
 ## 3. Открытые PR и Issue (GitHub)
 
-**PR:**
-- #102 `ops/takeover-runbook-v1` → `dev` @ `эта ветка`: Docs: OPS takeover runbook V001 (docs-only, DO NOT MERGE yet)
-- #100 `ops/parallel-slots-v1` → `dev` @ `750afb7c`: OPS: PARALLEL_SLOTS_V1 executor slots, lock registry, merge queue, budgets (NOT INSTALLED)
-- #97 `automation/issue-96` → `dev` @ `765aebc2`: Refs #96: autonomous source candidate
-- #95 `automation/issue-94` → `dev` @ `5cb76118`: Refs #94: autonomous source candidate
-- #81 `ops/executor-park-v1-1` → `dev` @ `970e5a47`: OPS: executor PARK_V1.1 (park headless 'zero diff' task)
-- #73 `docs/post-game-architecture-v001` → `dev` @ `193276ee`: Docs: утверждённые итоги игры, посещаемость, отзывы и исправления
-- #44 `automation/next-route-validation-20261015` → `dev` @ `d0dd6097`: Refs #29 #37: narrowly support Next.js dynamic route paths
-- #22 `chatops/github-actions-20261013` → `main` @ `c00a1e95`: ChatOps: hosted product CI and restricted DEV/PROD deployment foundation
-- #21 `fix/clean-runner-issue-intake-20261013` → `main` @ `ca433bd3`: Clean Runner: authenticated Owner issue intake + task-scoped Codex execution
-- #20 `feature/friends-s1-clean-source-20261013` → `main` @ `f98b1ed4`: Friends S1 #12: rebase historical API, additive schema and tests onto clean Git
-- #19 `feature/radar-dev-real-map-20261013` → `main` @ `ed1ad372`: Radar #13: start real Germany DEV map with public venues and opt-in player pins
-- #16 `owner/dev-tasks-friends-radar-avatars-20261013` → `main` @ `5ce49154`: Owner DEV task batch: Friends + local map + Radar + organizer avatars
-- #10 `policy/owner-dev-first-prod-promotion-20261013` → `main` @ `bfeb3600`: Owner policy: immediate real DEV previews, selective proven PROD releases
-- #9 `deploy/germany-full-dev-20261013` → `main` @ `67bed8d0`: Germany DEV Web+API+PostGIS live; PROD API alias with isolation and rollback
-- #8 `governance/owner-standing-execution` → `main` @ `7de2c5db`: Policy: one Owner instruction = end-to-end execution; one-time server commissioning
-- #7 `fix/p0-reverse-xhttp-lanes` → `main` @ `79e6291e`: P0 transport: isolated reverse-XHTTP lanes + mTLS keepalive (source candidate)
-
-**Issue (открытые, номера ≥ 60):**
-- #112: M2: тап по маркеру — карточка поверх карты, без перехода
-- #109: I1: импорт 20 фото площадок (DEV)
-- #108: NAV1: новые иконки нижнего меню (вариант B)
-- #106: M6: подпись источника обложки площадки (Фото / Логотип / Иллюстрация)
-- #104: P1: заглушка обложки по типу игры вместо серого значка (корт / корт с ракеткой)
-- #101: M0e: убрать непрозрачный слой над подложкой карты
-- #98: M0c: ядро стабильности карты на iPhone (WebGL grace, маркеры, resize, сбои данных)
-- #96: M0b: карта не должна пропадать на iPhone (жизненный цикл, лог, mapdebug)
-- #94: M1d: состояния маркеров и разведение пересекающихся точек
-- #92: M1e: преемник M1c — кнопка К списку и раскладка (реальный код, без fetch)
-- #84: M0: восстановить подложку карты и честная ошибка
-- #82: T0a-1: venue contact data + privacy-gated game read (API + contracts)
-- #78: Narrow successor of #76: web lint fix and A1 test updates on top of the #76 candidate (Radar on the shared map)
-- #69: Owner · VPS watchdog трейна без GPT и уведомления через SMTP
-- #66: UAT · карта сжимается до 101px на коротком мобильном экране
-- #64: Admin · полноценное редактирование площадок и управление обложками каталога
-- #62: Owner UX · выделить вход «Все игры на карте» и предложить мобильное переключение
-- #61: Owner UX · убрать россыпь площадок с числом игр под картой
-- Старые открытые (< 60, нужен разбор Owner): #57, #54, #53, #52, #47, #46, #37, #36, #31, #30, #29, #28, #23, #15, #14, #13, #12, #6, #5, #4, #3, #2, #1
+- GitHub: **UNKNOWN** (TimeoutError).
 
 ## 4. Рабочие потоки Grok (что в работе и где лежит)
 
@@ -86,7 +48,7 @@
 | Аудит контактов и описаний площадок | идёт сбор (только чтение, вне очереди) | `box: /workspace/outputs/venue_audit/ (SUMMARY_RU.md, venues_audit.csv, venues_audit.json)` | таблица Павлу на проверку, затем задача в конвейер на добавление данных |
 | PR #102 runbook передачи + grok-toolkit + drill | на ветке ops/takeover-runbook-v1, НЕ вливать (merge = DEV-деплой) | `docs/workbench/OPS_TAKEOVER_RUNBOOK_V001.md`; `docs/workbench/OPS_BACKUP_PM_TAKEOVER_DRILL_V001.md`; `ops/grok-toolkit/` | пробный подхват резервным PM без публикации |
 | OPS-монитор v4 с «Бэклогом» | установлен и работает | `ops/grok-toolkit/ops_monitor/`; `сервер: /var/lib/gb-ops-titles/backlog_ru.json` | обновлять backlog_ru.json при каждой публикации или закрытии задачи |
-| #112 M2: тап по маркеру — карточка площадки поверх карты, без перехода | взята в работу: попытка 1/3, base f0168eac, head 0b8369f6, фаза candidate, PR ещё нет | `apps/web/src/components/consumer/games/GamesMapView.tsx`; `apps/web/src/components/consumer/games/VenuePreviewCard.tsx`; `apps/web/src/styles/venue-popup.css` | дождаться PR/QA/DEV; затем браузерная проверка против макета; далее M3 |
+| #112 M2: тап по маркеру — карточка площадки поверх карты, без перехода | blocked (CI): попытка 1/3, PR #113 head 0b8369f6, QA PASS; упал web unit-тест games-map-selection (Escape); resume_phase=ci | `apps/web/src/components/consumer/games/GamesMapView.tsx`; `apps/web/src/components/consumer/games/VenuePreviewCard.tsx`; `apps/web/src/styles/venue-popup.css` | RESUME после CI-фейла (оператор), затем выпуск на DEV и браузерная проверка попапа |
 
 Пути с префиксом `box:` лежат на рабочем компьютере Grok, а не в репозитории. Резервному PM они недоступны: опирайтесь на копии в `ops/grok-toolkit/`.
 
