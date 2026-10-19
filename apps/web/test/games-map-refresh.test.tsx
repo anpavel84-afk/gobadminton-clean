@@ -17,6 +17,7 @@ vi.mock("react", async importOriginal => ({
       hooks.slots[index] = typeof next === "function" ? (next as (old: T) => T)(hooks.slots[index] as T) : next;
     }];
   },
+  useRef(initial: unknown) { const index = hooks.cursor++; return hooks.slots[index] ??= { current: initial }; },
   useMemo: (fn: () => unknown) => fn(),
   useEffect(effect: () => void | (() => void), deps: unknown[]) {
     const index = hooks.cursor++;
@@ -27,6 +28,7 @@ vi.mock("react", async importOriginal => ({
     }
   },
 }));
+vi.mock("../src/components/consumer/games/GamesMapDebugPanel", () => ({ GamesMapDebugPanel: () => null }));
 vi.mock("next/link", () => ({ default: ({ href, children }: { href: string; children: React.ReactNode }) => <a href={href}>{children}</a> }));
 vi.mock("next/dynamic", () => ({ default: () => () => <div>Map</div> }));
 vi.mock("../src/components/consumer/discovery/DiscoveryGameCard", () => ({
@@ -91,7 +93,7 @@ it("finishes >30s sequential pagination, renders venues/schedules, and polls onl
   expect(requests).toHaveLength(4);
   await vi.advanceTimersByTimeAsync(1);
   expect(requests).toHaveLength(6);
-  expect(html()).toContain("Venue · ?");
+  expect(html()).toContain("Venue · 1");
   expect(html()).not.toContain("Delayed game");
   await vi.advanceTimersByTimeAsync(40000);
   expect(html()).toContain("Venue · 1");
@@ -222,4 +224,33 @@ it("ties the single return capsule to the M0 card, including retry and city rein
   expect(returns(mapView(city))).toBe(1);
   await vi.advanceTimersByTimeAsync(40000);
   expect(returns(mapView(city))).toBe(1); // Moscow reinitializes with stale availability=false
+});
+
+function mapProps(tree: React.ReactNode): { venues: VenueSummary[]; counts: Map<string, number> | null } | undefined {
+  if (!isValidElement<{ children?: React.ReactNode; venues?: VenueSummary[]; counts?: Map<string, number> | null }>(tree)) return;
+  if (tree.props.venues) return tree.props as { venues: VenueSummary[]; counts: Map<string, number> | null };
+  for (const child of Children.toArray(tree.props.children)) { const found = mapProps(child); if (found) return found; }
+}
+it("renders the map with empty venues and an honest alert after first failure", async () => {
+  fail = true; render(MOSCOW_BUNDLE.cityId); await vi.advanceTimersByTimeAsync(20000);
+  const tree = render(MOSCOW_BUNDLE.cityId);
+  expect(mapProps(tree)?.venues).toEqual([]); expect(mapProps(tree)?.counts).toBeNull();
+  expect(renderToStaticMarkup(tree)).toContain('role="alert"');
+});
+it("preserves counts identity across a minute and focus revalidation, invalidates failed reload", async () => {
+  const city = MOSCOW_BUNDLE.cityId; responseGame = { ...game, venue: { ...venue, cityId: city } };
+  render(city); await vi.advanceTimersByTimeAsync(40000);
+  const original = mapProps(render(city))!.counts;
+  window.dispatchEvent(new Event("focus"));
+  expect(mapProps(render(city))!.counts).toBe(original);
+  let changes = 0; let previous = original;
+  for (let i = 0; i < 6; i++) {
+    await vi.advanceTimersByTimeAsync(10000);
+    const counts = mapProps(render(city))!.counts;
+    if (counts !== previous) changes++;
+    previous = counts;
+  }
+  expect(changes).toBeLessThanOrEqual(1);
+  fail = true; window.dispatchEvent(new Event("focus")); await vi.advanceTimersByTimeAsync(50000);
+  expect(mapProps(render(city))!.counts).toBeNull();
 });

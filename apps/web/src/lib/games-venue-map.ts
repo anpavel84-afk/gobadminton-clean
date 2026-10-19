@@ -93,3 +93,8 @@ export function markerActivation() {
     allow(detail: number) { return detail === 0 || !dragged; },
   };
 }
+
+/** Preserve identity when the count values are unchanged, including zero entries. */
+export function stableVenueCounts(previous: Map<string, number> | null, next: Map<string, number>) {
+  return previous && previous.size === next.size && [...next].every(([id, count]) => previous.has(id) && previous.get(id) === count) ? previous : next;
+}
