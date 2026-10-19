@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { venueSchedules } from "../src/lib/games-venue-map";
+import { sameVenueCounts, stableVenueCounts, venueSchedules } from "../src/lib/games-venue-map";
 import { discoveryDayBounds } from "../src/lib/discovery-presentation";
 import type { Game, VenueSummary } from "../src/lib/consumer-types";
 const venues = ["a", "b", "empty"].map(id => ({ id, name: "Одинаковое имя", cityId: "city", address: id, timezone: "Europe/Moscow" })) as VenueSummary[];
@@ -49,4 +49,17 @@ it("counts 5/4/6 distinct games, never seats or participants", () => {
     expect(schedule.every(row => row.venue.id === venue.id)).toBe(true);
     expect(schedule.map(row => row.startsAt)).toEqual(schedule.map(row => row.startsAt).sort());
   }
+});
+
+it("stabilizes counts by content without equating unknown and empty", () => {
+  const previous = new Map([["a", 1], ["b", 2]]);
+  const reordered = new Map([["b", 2], ["a", 1]]);
+  expect(sameVenueCounts(previous, reordered)).toBe(true);
+  expect(stableVenueCounts(previous, reordered)).toBe(previous);
+  for (const next of [new Map([["a", 2], ["b", 2]]), new Map([["c", 1], ["b", 2]])]) {
+    expect(stableVenueCounts(previous, next)).toBe(next);
+  }
+  expect(sameVenueCounts(null, null)).toBe(true);
+  expect(sameVenueCounts(null, new Map())).toBe(false);
+  expect(sameVenueCounts(new Map(), null)).toBe(false);
 });

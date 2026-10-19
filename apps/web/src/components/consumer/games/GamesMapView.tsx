@@ -1,9 +1,9 @@
 "use client";
 import dynamic from "next/dynamic";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { listAllCityVenues, listAllUpcomingCityGames } from "../../../lib/api-client";
 import type { ActivityKind, Game, VenueSummary } from "../../../lib/consumer-types";
-import { venueSchedules, startVenueMapRefresh } from "../../../lib/games-venue-map";
+import { venueSchedules, startVenueMapRefresh, stableVenueCounts } from "../../../lib/games-venue-map";
 import { MOSCOW_BUNDLE } from "../../../lib/radar-map-assets";
 import { VenueScheduleCard } from "./VenueScheduleCard";
 import "../../../styles/venue-schedule-card.css";
@@ -24,29 +24,30 @@ export function GamesMapView({ cityId, day, venueId, activity = "all", onReturnT
   const [refresh, setRefresh] = useState(0);
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
-    const clock = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(clock);
+    const clock = setInterval(() => setNow(previous => Math.floor(previous / 60000) === Math.floor(Date.now() / 60000) ? previous : Date.now()), 30000);
+    const visible = () => { if (document.visibilityState === "visible") setNow(Date.now()); };
+    document.addEventListener("visibilitychange", visible);
+    return () => { clearInterval(clock); document.removeEventListener("visibilitychange", visible); };
   }, []);
   useEffect(() => {
     const polling = startVenueMapRefresh(async signal => {
       setLoading(true); setError(false);
-      // Keep public geography mounted; never display old schedule hints during revalidation.
-      setSnapshot(previous => previous?.cityId === cityId ? { ...previous, games: [], gamesReady: false } : null);
+      // Same-city refresh keeps the verified snapshot until a current response settles.
+      setSnapshot(previous => previous?.cityId === cityId ? previous : null);
       await Promise.all([listAllCityVenues(cityId, signal), listAllUpcomingCityGames(cityId, signal)]).then(([venues, games]) => {
         if (signal.aborted) return;
         setError(!venues.ok || !games.ok);
         setSnapshot(previous => {
           const retained = previous?.cityId === cityId ? previous : null;
-          if (!venues.ok && !retained) return null;
-          return { cityId, venues: venues.ok ? venues.data : retained!.venues,
-            games: games.ok ? games.data : [], gamesReady: games.ok };
+          return { cityId, venues: venues.ok ? venues.data : retained?.venues ?? [],
+            games: games.ok ? games.data : [], gamesReady: games.ok && venues.ok };
         });
         setNow(Date.now()); setLoading(false);
-      }).catch(() => { if (!signal.aborted) { setError(true); setLoading(false); } });
+      }).catch(() => { if (!signal.aborted) { setError(true); setSnapshot(previous => previous?.cityId === cityId ? { ...previous, gamesReady: false } : null); setLoading(false); } });
     });
     const reload = () => polling.refresh();
     // A session change invalidates permissions immediately, even during a load.
-    const sessionChanged = () => setRefresh(n => n + 1);
+    const sessionChanged = () => { polling.stop(); setSnapshot(previous => previous ? { ...previous, gamesReady: false } : null); setRefresh(n => n + 1); };
     window.addEventListener("focus", reload); window.addEventListener("online", reload);
     window.addEventListener("gb-session-changed", sessionChanged);
     return () => {
@@ -59,7 +60,11 @@ export function GamesMapView({ cityId, day, venueId, activity = "all", onReturnT
   const games = useMemo(() => (snapshot?.cityId === cityId ? snapshot.games : []).filter(game => activity === "all" || game.activityKind === activity), [snapshot, cityId, activity]);
   const all = useMemo(() => venueSchedules(venues, games, "", now), [venues, games, now]);
   const schedules = useMemo(() => venueSchedules(venues, games, day, now), [venues, games, day, now]);
-  const counts = useMemo(() => new Map([...schedules].map(([id, games]) => [id, games.length])), [schedules]);
+  const previousCounts = useRef<Map<string, number> | null>(null);
+  const counts = useMemo(() => {
+    const next = snapshot?.cityId === cityId && snapshot.gamesReady ? new Map([...schedules].map(([id, games]) => [id, games.length])) : null;
+    return previousCounts.current = stableVenueCounts(previousCounts.current, next);
+  }, [schedules, snapshot, cityId]);
   const venue = venues.find(venue => venue.id === venueId);
   const openVenue = (venue: VenueSummary) => window.location.assign(venueMapPath(venue.id, day, window.location.pathname + window.location.search));
   if (venueId) return <section aria-label="Расписание площадки">
@@ -71,15 +76,15 @@ export function GamesMapView({ cityId, day, venueId, activity = "all", onReturnT
     {!loading && !error && !venue && <p className="gb-map-sr-only" role="status">Площадка отсутствует в каталоге города.</p>}
   </section>;
   return <section className="gb-games-map" aria-label="Игры на карте">
-    {(!mapErrorCardShown || cityId !== MOSCOW_BUNDLE.cityId || snapshot?.cityId !== cityId) && onReturnToList && <GamesMapBackButton onClick={onReturnToList} />}
+    {(!mapErrorCardShown || cityId !== MOSCOW_BUNDLE.cityId) && onReturnToList && <GamesMapBackButton onClick={onReturnToList} />}
     {loading && <p className="gb-map-sr-only" role="status">Загружаем все площадки и расписание…</p>}
     {error && <p role="alert">Не удалось загрузить полный каталог или расписание. Проверьте соединение и повторите. Непроверенные количества не показываем.</p>}
-    {snapshot?.cityId === cityId && <>
-      {cityId === MOSCOW_BUNDLE.cityId ? <MapView venues={venues} counts={snapshot.gamesReady ? counts : null} onSelect={openVenue} onAvailability={setMapAvailable} onErrorCardChange={setMapErrorCardShown} onReturnToList={onReturnToList} /> : <p role="alert">Карта выбранного города пока недоступна. Все площадки доступны списком.</p>}
+    {<>
+      {cityId === MOSCOW_BUNDLE.cityId ? <MapView venues={venues} counts={counts} onSelect={openVenue} onAvailability={setMapAvailable} onErrorCardChange={setMapErrorCardShown} onReturnToList={onReturnToList} /> : <p role="alert">Карта выбранного города пока недоступна. Все площадки доступны списком.</p>}
       {!venues.length && <p className="gb-map-sr-only" role="status">В каталоге города пока нет площадок.</p>}
       {(!mapAvailable || cityId !== MOSCOW_BUNDLE.cityId) && <details className="gb-games-map-fallback">
         <summary>Площадки списком — карта или координаты недоступны</summary>
-        <div role="group" aria-label="Все площадки города">{venues.map(venue => <button className="gb-discovery-chip" type="button" key={venue.id} onClick={() => openVenue(venue)}>{venue.name} · {snapshot.gamesReady ? counts.get(venue.id) ?? 0 : "?"}</button>)}</div>
+        <div role="group" aria-label="Все площадки города">{venues.map(venue => <button className="gb-discovery-chip" type="button" key={venue.id} onClick={() => openVenue(venue)}>{venue.name} · {counts ? counts.get(venue.id) ?? 0 : "?"}</button>)}</div>
       </details>}
     </>}
   </section>;

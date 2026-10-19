@@ -93,3 +93,14 @@ export function markerActivation() {
     allow(detail: number) { return detail === 0 || !dragged; },
   };
 }
+
+/** Compare verified hints by content, preserving unknown versus verified empty. */
+export function sameVenueCounts(previous: Map<string, number> | null, next: Map<string, number> | null): boolean {
+  if (previous === next) return true;
+  if (previous === null || next === null || previous.size !== next.size) return false;
+  for (const [key, value] of previous) if (!next.has(key) || next.get(key) !== value) return false;
+  return true;
+}
+export function stableVenueCounts(previous: Map<string, number> | null, next: Map<string, number> | null): Map<string, number> | null {
+  return sameVenueCounts(previous, next) ? previous : next;
+}

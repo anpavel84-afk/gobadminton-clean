@@ -17,7 +17,12 @@ vi.mock("react", async importOriginal => ({
       hooks.slots[index] = typeof next === "function" ? (next as (old: T) => T)(hooks.slots[index] as T) : next;
     }];
   },
-  useMemo: (fn: () => unknown) => fn(),
+  useRef(initial: unknown) { const i = hooks.cursor++; return hooks.slots[i] ??= { current: initial }; },
+  useMemo(fn: () => unknown, deps: unknown[]) {
+    const i = hooks.cursor++; const prev = hooks.slots[i] as { deps: unknown[]; value: unknown } | undefined;
+    if (!prev || deps.some((v, n) => v !== prev.deps[n])) hooks.slots[i] = { deps, value: fn() };
+    return (hooks.slots[i] as { value: unknown }).value;
+  },
   useEffect(effect: () => void | (() => void), deps: unknown[]) {
     const index = hooks.cursor++;
     const previous = hooks.slots[index] as unknown[] | undefined;
@@ -42,6 +47,7 @@ let requests: { url: URL; signal: AbortSignal }[];
 let inFlight: number;
 let maxInFlight: number;
 let fail: boolean;
+let failResource: "games" | "venues" | "reject" | undefined;
 let ignoreAbort: boolean;
 let responseGame: Game;
 function render(cityId = "city", day = "", venueId?: string, withReturn = false) {
@@ -55,9 +61,11 @@ function unmount() { for (const cleanup of hooks.cleanups) cleanup?.(); }
 beforeEach(() => {
   vi.useFakeTimers(); vi.setSystemTime(new Date("2026-10-16T12:00:00Z"));
   hooks.slots = []; hooks.cleanups = []; hooks.effects = []; hooks.cursor = 0;
+  failResource = undefined;
   requests = []; inFlight = 0; maxInFlight = 0; fail = false; ignoreAbort = false;
   responseGame = game;
   vi.stubGlobal("window", new EventTarget());
+  vi.stubGlobal("document", Object.assign(new EventTarget(), { visibilityState: "visible" }));
   vi.stubGlobal("fetch", vi.fn((url: string, init: RequestInit) => new Promise<Response>((resolve, reject) => {
     const parsed = new URL(url, "https://example.test");
     const signal = init.signal as AbortSignal;
@@ -67,10 +75,12 @@ beforeEach(() => {
     const timer = setTimeout(() => {
       finish();
       const isVenue = parsed.pathname === "/v1/venues";
-      resolve(new Response(JSON.stringify(fail ? { title: "Offline" } : {
+      if (failResource === "reject") { reject(new Error("offline")); return; }
+      const resourceFailed = fail || (isVenue ? failResource === "venues" : failResource === "games");
+      resolve(new Response(JSON.stringify(resourceFailed ? { title: "Offline" } : {
         items: [isVenue ? { ...venue, cityId: parsed.searchParams.get("cityId") } : responseGame],
         nextCursor: parsed.searchParams.has("cursor") ? null : "page-2",
-      }), { status: fail ? 503 : 200 }));
+      }), { status: resourceFailed ? 503 : 200 }));
     }, 20000);
     signal.addEventListener("abort", abort, { once: true });
   })));
@@ -91,7 +101,7 @@ it("finishes >30s sequential pagination, renders venues/schedules, and polls onl
   expect(requests).toHaveLength(4);
   await vi.advanceTimersByTimeAsync(1);
   expect(requests).toHaveLength(6);
-  expect(html()).toContain("Venue · ?");
+  expect(html()).toContain("Venue · 1");
   expect(html()).not.toContain("Delayed game");
   await vi.advanceTimersByTimeAsync(40000);
   expect(html()).toContain("Venue · 1");
@@ -222,4 +232,38 @@ it("ties the single return capsule to the M0 card, including retry and city rein
   expect(returns(mapView(city))).toBe(1);
   await vi.advanceTimersByTimeAsync(40000);
   expect(returns(mapView(city))).toBe(1); // Moscow reinitializes with stale availability=false
+});
+
+it.each(["games", "venues", "reject"] as const)("invalidates counts after %s failure and preserves geography while pending", async resource => {
+  render(); await vi.advanceTimersByTimeAsync(40000); expect(html()).toContain("Venue · 1");
+  failResource = resource; window.dispatchEvent(new Event("focus"));
+  expect(html()).toContain("Venue · 1");
+  await vi.advanceTimersByTimeAsync(40000);
+  expect(html()).toContain("Venue · ?"); expect(html()).toContain('role="alert"');
+});
+it("invalidates session counts before a replacement request resolves", async () => {
+  render(); await vi.advanceTimersByTimeAsync(40000); expect(html()).toContain("Venue · 1");
+  window.dispatchEvent(new Event("gb-session-changed"));
+  expect(html()).toContain("Venue · ?");
+});
+
+it.each(["visible", "minute"])("expires eligibility on %s independently of the pending transport", async trigger => {
+  const city = MOSCOW_BUNDLE.cityId;
+  responseGame = { ...game, venue: { ...venue, cityId: city }, applicationDeadlineAt: "2026-10-16T12:00:45Z" };
+  const mapCounts = (): Map<string, number> | null | undefined => {
+    let counts: Map<string, number> | null | undefined;
+    const visit = (node: React.ReactNode): void => {
+      if (!isValidElement<{ counts?: Map<string, number> | null; children?: React.ReactNode }>(node)) return;
+      if ("counts" in node.props) counts = node.props.counts;
+      Children.forEach(node.props.children, visit);
+    };
+    visit(render(city)); return counts;
+  };
+  render(city); await vi.advanceTimersByTimeAsync(40000);
+  const verified = mapCounts(); expect(verified?.get(venue.id)).toBe(1);
+  await vi.advanceTimersByTimeAsync(10000);
+  expect(mapCounts()).toBe(verified); // still the same minute, no visible event
+  if (trigger === "visible") document.dispatchEvent(new Event("visibilitychange"));
+  else await vi.advanceTimersByTimeAsync(10000);
+  expect(mapCounts()?.get(venue.id)).toBe(0);
 });

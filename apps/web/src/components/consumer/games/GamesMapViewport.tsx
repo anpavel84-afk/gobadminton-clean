@@ -12,12 +12,16 @@ export function GamesMapViewport({ children, fullscreen = false }: { children: R
     const nav = shell?.querySelector(".gb-bottom-nav");
     const action = shell?.querySelector(".gb-games-view-action");
     let request = 0;
+    const write = (key: "height" | "top" | "left" | "width", value: string) => {
+      if (element.style[key] !== value) element.style[key] = value;
+    };
     const measure = () => {
+      request = 0;
       if (fullscreen) {
-        element.style.height = `${viewport?.height ?? window.innerHeight}px`;
-        element.style.top = `${viewport?.offsetTop ?? 0}px`;
-        element.style.left = `${viewport?.offsetLeft ?? 0}px`;
-        element.style.width = `${viewport?.width ?? window.innerWidth}px`;
+        write("height", `${viewport?.height ?? window.innerHeight}px`);
+        write("top", `${viewport?.offsetTop ?? 0}px`);
+        write("left", `${viewport?.offsetLeft ?? 0}px`);
+        write("width", `${viewport?.width ?? window.innerWidth}px`);
         return;
       }
       const bottom = (viewport?.offsetTop ?? 0) + (viewport?.height ?? window.innerHeight);
@@ -26,9 +30,9 @@ export function GamesMapViewport({ children, fullscreen = false }: { children: R
       const actionBox = action?.getBoundingClientRect();
       const usableBottom = actionBox && actionBox.height > 0 ? Math.min(navBottom, actionBox.top) : navBottom;
       const height = Math.max(0, usableBottom - element.getBoundingClientRect().top);
-      element.style.height = `${height}px`;
+      write("height", `${height}px`);
     };
-    const schedule = () => { cancelAnimationFrame(request); request = requestAnimationFrame(measure); };
+    const schedule = () => { if (!request) request = requestAnimationFrame(measure); };
     const observer = new ResizeObserver(schedule);
     // Observe controls/header/nav, not the frame whose height we write.
     if (element.parentElement) for (const sibling of element.parentElement.children) if (sibling !== element) observer.observe(sibling);

@@ -16,6 +16,12 @@ import type { VenueSummary } from "../../../lib/consumer-types";
 function sessionStorageVenue() {
   try { return sessionStorage.getItem("gb-games-map-selected"); } catch { return null; }
 }
+interface VenueMarkerEntry {
+  marker: maplibregl.Marker;
+  button: HTMLButtonElement;
+  presentation?: string;
+  position?: string;
+}
 let protocol: Protocol | undefined;
 function installProtocol() {
   if (!protocol) {
@@ -28,7 +34,7 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability, onErro
   const container = useRef<HTMLDivElement>(null); const map = useRef<LibreMap | null>(null);
   const venuesRef = useRef(venues); venuesRef.current = venues;
   const callbacks = useRef({ onSelect, onAvailability }); callbacks.current = { onSelect, onAvailability };
-  const markers = useRef(new Map<string, { marker: maplibregl.Marker; button: HTMLButtonElement }>());
+  const markers = useRef(new Map<string, VenueMarkerEntry>());
   const [resumeCamera, setResumeCamera] = useState(false);
   const [sharedMap, setSharedMap] = useState<LibreMap>();
   const [ready, setReady] = useState(false);
@@ -55,12 +61,30 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability, onErro
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let tileTimeout: ReturnType<typeof setTimeout> | undefined;
     let fatal = false; let started = false;
+    let grace: ReturnType<typeof setTimeout> | undefined;
+    let deadline: number | undefined;
+    const fail = (diagnostic: MapDiagnostic) => {
+      if (!alive || fatal) return;
+      fatal = true; setFailure(diagnostic); setStatus(""); callbacks.current.onAvailability?.(false);
+    };
+    const restore = () => {
+      if (!alive || fatal || deadline === undefined || Date.now() >= deadline) return;
+      clearTimeout(grace); grace = undefined; deadline = undefined; instance?.triggerRepaint();
+    };
+    const visible = () => { if (alive && document.visibilityState === "visible") instance?.triggerRepaint(); };
+    document.addEventListener("visibilitychange", visible);
+    const lost = (event: Event) => { event.preventDefault(); report({ kind: "webgl" }); };
     const report = (event: unknown) => {
       if (!alive) return;
       const diagnostic = classifyMapError(event, { loadedTiles, firstRender, sinceLoadMs: loadedAt === undefined ? undefined : Date.now() - loadedAt });
       console.warn("[games-map]", diagnostic.kind, diagnostic.url, diagnostic.status);
       setLastError(diagnostic.kind); setWarnings(n => n + 1);
-      if (diagnostic.fatal) { fatal = true; setFailure(diagnostic); setStatus(""); callbacks.current.onAvailability?.(false); }
+      if (diagnostic.kind === "webgl") {
+        if (!fatal && deadline === undefined) {
+          deadline = Date.now() + 4000;
+          grace = setTimeout(() => fail(diagnostic), 4000);
+        }
+      } else if (diagnostic.fatal) fail(diagnostic);
     };
     async function start() {
       timeout = setTimeout(() => report({ kind: "timeout" }), 20000);
@@ -104,27 +128,38 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability, onErro
           tileTimeout = setTimeout(() => { if (!loadedTiles) report({ kind: "tiles", sourceId: "protomaps" }); }, 8000);
         } });
         instance.on("error", report);
-        instance.on("webglcontextlost", () => report({ kind: "webgl" }));
+        instance.getCanvas().addEventListener("webglcontextlost", lost);
+        instance.getCanvas().addEventListener("webglcontextrestored", restore);
         instance.getCanvas().setAttribute("aria-label", "Карта Москвы: стрелки перемещают карту, плюс и минус меняют масштаб");
       } catch (error) { if (alive) report({ error, kind: classifyMapError(error, { phase, loadedTiles }).kind }); }
     }
+    let frame = 0;
+    let size = "";
+    let observedZero = false;
     const layout = () => {
+      frame = 0;
       if (!alive || !container.current) return;
       const { width, height } = container.current.getBoundingClientRect();
-      if (width <= 0 || height <= 0) return;
+      if (width <= 0 || height <= 0) { observedZero = true; return; }
+      const nextSize = `${width}:${height}`;
+      const changed = observedZero || size !== nextSize;
+      size = nextSize; observedZero = false;
       if (!started) { started = true; void start(); }
-      else if (instance) { setSettled(false); instance.resize(); }
+      else if (instance && changed) { setSettled(false); instance.resize(); }
     };
-    const resize = new ResizeObserver(layout);
+    const resize = new ResizeObserver(() => { if (!frame) frame = requestAnimationFrame(layout); });
     if (container.current) resize.observe(container.current);
     layout();
-    return () => { alive = false; abort.abort(); clearTimeout(timeout); clearTimeout(tileTimeout); resize.disconnect(); window.removeEventListener("gb-map-return", saveCamera); window.removeEventListener("pagehide", saveCamera);
+    return () => { alive = false; abort.abort(); clearTimeout(grace); cancelAnimationFrame(frame);
+      document.removeEventListener("visibilitychange", visible);
+      instance?.getCanvas().removeEventListener("webglcontextlost", lost);
+      instance?.getCanvas().removeEventListener("webglcontextrestored", restore); clearTimeout(timeout); clearTimeout(tileTimeout); resize.disconnect(); window.removeEventListener("gb-map-return", saveCamera); window.removeEventListener("pagehide", saveCamera);
       if (instance) { const center = instance.getCenter(); try { sessionStorage.setItem("gb-games-map-camera", JSON.stringify({ lng: center.lng, lat: center.lat, zoom: instance.getZoom() })); } catch { /* Optional storage. */ } }
       markers.current.forEach(entry => entry.marker.remove()); markers.current.clear(); instance?.remove(); map.current = null; };
   }, [attempt]);
   useEffect(() => {
     if (!ready || !map.current) return;
-    reconcileVenueMarkers(markers.current, venues, {
+    reconcileVenueMarkers<VenueMarkerEntry>(markers.current, venues, {
       create: venue => {
         const button = document.createElement("button"); button.type = "button";
         const activation = markerActivation();
@@ -139,22 +174,29 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability, onErro
           current.onSelect(venuesRef.current.find(item => item.id === venue.id) ?? venue);
         });
         const marker = new maplibregl.Marker({ element: button }).setLngLat([venue.longitude!, venue.latitude!]).addTo(map.current!);
-        return { marker, button };
+        return { marker, button, position: `${venue.longitude}:${venue.latitude}` };
       },
       update: (entry, venue) => {
         const presentation = venueMarkerPresentation(venue, counts);
-        entry.button.className = `maplibregl-marker ${presentation.className}`;
-        entry.button.replaceChildren();
-        if (presentation.text) entry.button.textContent = presentation.text;
-        else {
-          const glyph = shuttlecockElement();
-          glyph.setAttribute("class", "gb-venue-court-glyph");
-          glyph.setAttribute("aria-hidden", "true");
-          entry.button.append(glyph);
+        const pressed = String(sessionStorageVenue() === venue.id);
+        const previous = entry.presentation ? JSON.parse(entry.presentation) as string[] : [];
+        if (previous[0] !== presentation.className) entry.button.className = `maplibregl-marker ${presentation.className}`;
+        if (previous[1] !== presentation.text) {
+          entry.button.replaceChildren();
+          if (presentation.text) entry.button.textContent = presentation.text;
+          else {
+            const glyph = shuttlecockElement();
+            glyph.setAttribute("class", "gb-venue-court-glyph"); glyph.setAttribute("aria-hidden", "true");
+            entry.button.append(glyph);
+          }
         }
-        entry.button.setAttribute("aria-pressed", String(sessionStorageVenue() === venue.id));
-        entry.button.setAttribute("aria-label", presentation.label);
-        entry.marker.setLngLat([venue.longitude!, venue.latitude!]);
+        if (previous[2] !== pressed) entry.button.setAttribute("aria-pressed", pressed);
+        if (previous[3] !== presentation.label) entry.button.setAttribute("aria-label", presentation.label);
+        entry.presentation = JSON.stringify([presentation.className, presentation.text, pressed, presentation.label]);
+        const position = `${venue.longitude}:${venue.latitude}`;
+        if (entry.position !== position) {
+          entry.marker.setLngLat([venue.longitude!, venue.latitude!]); entry.position = position;
+        }
       },
       remove: entry => entry.marker.remove(),
     });
@@ -177,7 +219,7 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability, onErro
     };
     separate(); instance.on("moveend", separate); window.addEventListener("gb-map-own-marker", separate);
     return () => { instance.off("moveend", separate); window.removeEventListener("gb-map-own-marker", separate); };
-  }, [ready, venues, counts]);
+  }, [ready, venues]);
   const retry = () => {
     setReady(false); setSettled(false); setSharedMap(undefined); setFailure(undefined);
     setLastError(undefined); setWarnings(0); setStatus("Загружаем карту города…");
