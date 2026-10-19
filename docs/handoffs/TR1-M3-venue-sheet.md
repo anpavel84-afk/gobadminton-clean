@@ -4,6 +4,42 @@ From: Codex, source author. To: integrator, then independent QA.
 Date: 2026-10-20. Status: PROPOSED / SOURCE_ONLY / NOT_TESTED runtime.
 Target: DEV source candidate; no release or visual acceptance.
 
+## D5 cover correction after independent QA (2026-10-20)
+
+From: Codex source author. To: integrator / independent QA. Status: PROPOSED,
+SOURCE_ONLY; no independent QA or visual acceptance performed by this author.
+Observed HEAD: `346f04f5253ab793900b8cdecc86e1ad9fe35c96`, branch
+`automation/issue-117`; initial tracked diff empty. Requested task base remains
+`faade9a313e92b77b1b89d6ea7b77991a8350cda`. No Git metadata was changed.
+Reviewed source: https://github.com/anpavel84-afk/gobadminton-clean/tree/346f04f5253ab793900b8cdecc86e1ad9fe35c96
+
+Prior independent QA supplied with this assignment reported D5 FAIL: the shared
+`.gb-venue-cover` gives both width and height 100%, preventing aspect-ratio from
+reserving the intended photo height. The scoped `.gb-venue-sheet-cover` now sets
+`width:auto; height:auto`. Its absolute left/right 16px offsets determine available
+width, and `aspect-ratio:16/9` determines height. Existing image/fallback rendering
+and reserved header photo area are preserved. Only venue-popup.css and this
+handoff are changed in this revision; rollback is their reverse diff.
+
+D1–D4: inherited implementation and five substantive test files remain in HEAD;
+no new runtime evidence or acceptance claim. D5: source correction above; actual
+390/430px geometry and native focus remain NOT_TESTED. D6 commands executed
+separately from the repository root for this revision:
+
+- `COREPACK_ENABLE_NETWORK=0 pnpm --filter @gobadminton/web exec tsc -p tsconfig.json --noEmit --incremental false` — exit 1 before compiler execution.
+- `COREPACK_ENABLE_NETWORK=0 pnpm --filter @gobadminton/web exec vitest run --no-cache test/venue-preview-card.test.tsx test/games-map-selection.test.tsx test/games-map-refresh.test.tsx test/venue-sheet.test.tsx test/venue-sheet-integration.test.tsx` — exit 1 before test execution.
+- Both: pnpm 10.18.0 unavailable locally; Corepack reports `Network access disabled by the environment; can't reach https://registry.npmjs.org/pnpm/-/pnpm-10.18.0.tgz`. TypeScript/Vitest NOT_TESTED; no install or network workaround attempted.
+- `git diff --check` — exit 0 for this revision, including this handoff.
+
+STYLE_GUIDE_PARITY: the documented BottomSheet, media/image blocks, ListRow and
+chips families remain a PROPOSED composition under the two Owner decisions linked
+below. Frozen Make #guide/#construction-kit and the external mockup remain
+UNVERIFIED; no STYLE_GUIDE_GAP, OWNER_VISUAL_OVERRIDE or visual parity is asserted.
+The referenced operations Style Guide document is absent in this checkout.
+Publication, exact new candidate permalink, independent QA and reconciliation
+with newer dev belong to the integrator. No commit, push, deployment, service or
+dependency changes were performed. Historical source handoffs follow.
+
 ## Source revision after independent QA (2026-10-20)
 
 From: Codex source author. To: integrator / independent QA. Status: PROPOSED;
