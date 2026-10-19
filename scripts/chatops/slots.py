@@ -1,0 +1,815 @@
+#!/usr/bin/env python3
+"""PARALLEL_SLOTS_V1: isolated executor slots, lock registry, PM scheduler, budgets, model adapters
+and the single integration mutex (serialized merge queue). Fail-closed; no GitHub writes.
+
+Two uses:
+  * imported by autonomous_issues.py ONLY with ``--slot slotN``; the default slot never imports it;
+  * the supervisor CLI: ``python3 slots.py supervise|status|plan|adapters|migrate``.
+Nothing here is installed by this module; see docs/operations/chatops/AUTONOMY_SLOTS.md.
+"""
+import argparse
+import datetime as dt
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import pwd
+import re
+import stat
+import sys
+import tempfile
+import time
+
+SLOT_RE = re.compile(r'slot[1-8]')
+STATE_ROOT = Path('/var/lib/gobadminton-autonomy')     # slots/<slot> (0700), outbox/<slot>, assign/, locks/
+SLOT_ROOT = Path('/srv/gb-slots')                      # <slot>/{repo,worktrees,home}
+CONFIG_ROOT = Path('/etc/gobadminton-slots')           # budgets.json, supervisor.json (root-owned)
+RUNTIME_ROOT = Path('/opt/gb-slots/runtime')           # node + codex for non-legacy slot users
+LEGACY_USER = 'agentagency-dev'
+LEGACY_HOME = Path('/home/agentagency-dev')
+LEGACY_STATE = LEGACY_HOME / '.gb-autonomy-state'
+KEY_NAME = 'gobadminton-clean-chatops-ed25519'
+SUPERVISOR_USER = 'gb-supervisor'
+# slot1 keeps the existing executor account (its own SSH key and Codex login, nothing copied).
+SLOT_USERS = {'slot1': LEGACY_USER}
+SOLO_LOCKS = {'global', 'migrations', 'contracts', 'workflows', 'chatops'}
+UNKNOWN = None          # quota unknown != 0: never "free", never "empty"; it blocks scheduling
+ROLES = ('author', 'qa', 'review')
+ASSIGN_SCHEMA = 'GB_SLOT_ASSIGN_V1'
+STATUS_SCHEMA = 'GB_SLOT_STATUS_V1'
+RETIRED = 'RETIRED_TO_SLOT.json'
+MAX_FILE = 65536
+
+
+class Hold(Exception):
+    """Fail closed; the executor converts it into its own Hold."""
+
+
+class AdapterDisabled(Hold):
+    pass
+
+
+def require(condition, reason):
+    if not condition:
+        raise Hold(reason)
+
+
+def _unique(pairs):
+    result = {}
+    for key, value in pairs:
+        require(key not in result, 'duplicate JSON key')
+        result[key] = value
+    return result
+
+
+def loads(raw):
+    return json.loads(raw, object_pairs_hook=_unique)
+
+
+def read_json(path, trusted_uids=None, limit=MAX_FILE):
+    """No symlinks, regular file, bounded, optional owner allowlist, never group/world writable."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        info = os.fstat(fd)
+        require(stat.S_ISREG(info.st_mode) and info.st_mode & 0o022 == 0, f'untrusted file {Path(path).name}')
+        if trusted_uids is not None:
+            require(info.st_uid in trusted_uids, f'untrusted owner of {Path(path).name}')
+        raw = os.read(fd, limit + 1)
+    finally:
+        os.close(fd)
+    require(len(raw) <= limit, 'file too large')
+    return loads(raw)
+
+
+def atomic(path, value, mode=0o600):
+    path = Path(path)
+    data = json.dumps(value, ensure_ascii=False, sort_keys=True).encode()
+    fd, tmp = tempfile.mkstemp(prefix='.slot-', dir=path.parent)
+    try:
+        with os.fdopen(fd, 'wb') as stream:
+            os.fchmod(stream.fileno(), mode)
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def uid_of(user):
+    try:
+        return pwd.getpwnam(user).pw_uid
+    except KeyError:
+        return None
+
+
+def slot_user(slot):
+    require(SLOT_RE.fullmatch(slot or ''), 'invalid slot name')
+    return SLOT_USERS.get(slot, f'gb-{slot}')
+
+
+# ---------------------------------------------------------------- layout
+class Layout:
+    """Every per-slot path. Invariant: no path of slot A is inside a path of slot B."""
+
+    def __init__(self, slot, state_root=STATE_ROOT, slot_root=SLOT_ROOT):
+        require(isinstance(slot, str) and SLOT_RE.fullmatch(slot), 'invalid slot name')
+        self.slot, self.state_root, self.slot_root = slot, Path(state_root), Path(slot_root)
+        self.state_dir = self.state_root / 'slots' / slot
+        self.outbox = self.state_root / 'outbox' / slot
+        self.assignment = self.state_root / 'assign' / f'{slot}.json'
+        self.locks = self.state_root / 'locks'
+        self.integration = self.locks / 'integration.lock'
+        self.registry = self.locks / 'registry.lock'
+        self.api_clock = self.locks / 'api.clock'
+        self.root = self.slot_root / slot
+        self.repo = self.root / 'repo'
+        self.worktrees = self.root / 'worktrees'
+        self.home = self.root / 'home'
+
+    def own(self):
+        return [self.state_dir, self.outbox, self.root]
+
+    def others(self):
+        return [p for n in range(1, 9) if f'slot{n}' != self.slot
+                for p in (self.state_root / 'slots' / f'slot{n}', self.slot_root / f'slot{n}')]
+
+
+def disjoint(paths_a, paths_b):
+    for a in paths_a:
+        for b in paths_b:
+            a, b = Path(a), Path(b)
+            if a == b or a.is_relative_to(b) or b.is_relative_to(a):
+                return False
+    return True
+
+
+# ---------------------------------------------------------------- locks
+def task_record(issue, task):
+    locks = task.get('locks') or ['global']    # undeclared = solo
+    return dict(issue=issue, locks=list(locks), allowed_paths=list(task['allowed_paths']),
+                depends_on=list(task.get('depends_on', [])))
+
+
+def lock_conflict(a, b):
+    if a.split(':')[0] in SOLO_LOCKS or b.split(':')[0] in SOLO_LOCKS:
+        return True
+    pa, pb = a.split(':'), b.split(':')
+    n = min(len(pa), len(pb))
+    return pa[:n] == pb[:n]       # equal, parent/child
+
+
+def path_overlap(p, q):
+    def norm(x):
+        return (x[:-2], True) if x.endswith('/**') else (x, False)
+    (pp, pdir), (qq, qdir) = norm(p), norm(q)
+    if pdir and (qq.startswith(pp) or (qdir and pp.startswith(qq))):
+        return True
+    if qdir and pp.startswith(qq):
+        return True
+    return pp == qq
+
+
+def conflicts(r1, r2):
+    """Conservative: any lock conflict OR any allowed_paths overlap serializes the pair."""
+    if r1['issue'] == r2['issue']:
+        return True
+    return (any(lock_conflict(a, b) for a in r1['locks'] for b in r2['locks'])
+            or any(path_overlap(p, q) for p in r1['allowed_paths'] for q in r2['allowed_paths']))
+
+
+class _Flock:
+    def __init__(self, path, write=False):
+        self.path, self.write, self.fd = Path(path), write, None
+
+    def __enter__(self):
+        flags = (os.O_RDWR | os.O_CREAT) if self.write else os.O_RDONLY
+        self.fd = os.open(self.path, flags | os.O_NOFOLLOW, 0o660)
+        fcntl.flock(self.fd, fcntl.LOCK_EX)
+        return self.fd
+
+    def __exit__(self, *exc):
+        os.close(self.fd)
+        self.fd = None
+
+
+class LockRegistry:
+    """Leases ``<slot>.lease`` in one sticky directory. A lease is LIVE only while its slot process
+    holds an exclusive flock on it (the kernel drops it when the process dies). Stale leases are
+    ignored, never deleted by another slot (sticky dir: only the owner may unlink)."""
+
+    def __init__(self, directory, registry_lock):
+        self.directory, self.registry_lock = Path(directory), Path(registry_lock)
+        self.fd, self.slot, self.record = None, None, None
+
+    def _live(self):
+        out = {}
+        for entry in sorted(os.listdir(self.directory)):
+            name = entry[:-6] if entry.endswith('.lease') else None
+            if not name or not SLOT_RE.fullmatch(name):
+                continue
+            try:
+                fd = os.open(self.directory / entry, os.O_RDONLY | os.O_NOFOLLOW)
+            except FileNotFoundError:
+                continue
+            try:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    raw = os.read(fd, MAX_FILE + 1)
+                    require(len(raw) <= MAX_FILE, 'lease too large')
+                    out[name] = loads(raw) if raw else dict(issue=0, locks=['global'], allowed_paths=[])
+                else:
+                    fcntl.flock(fd, fcntl.LOCK_UN)     # nobody holds it: stale, not live
+            finally:
+                os.close(fd)
+        return out
+
+    def holders(self):
+        with _Flock(self.registry_lock):
+            return self._live()
+
+    def acquire(self, slot, record):
+        """Atomic check-and-take under the registry mutex. Returns False on conflict."""
+        require(SLOT_RE.fullmatch(slot), 'invalid slot name')
+        if self.fd is not None:
+            require(self.slot == slot and self.record == record, 'slot already holds a different lease')
+            return True
+        with _Flock(self.registry_lock):
+            for other, held in self._live().items():
+                if other != slot and conflicts(record, held):
+                    return False
+            fd = os.open(self.directory / f'{slot}.lease', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o644)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                os.close(fd)
+                raise Hold('another process holds this slot lease') from None
+            os.ftruncate(fd, 0)
+            os.write(fd, json.dumps(record, sort_keys=True).encode())
+            os.fsync(fd)
+            self.fd, self.slot, self.record = fd, slot, record
+            return True
+
+    def release(self):
+        if self.fd is None:
+            return
+        try:
+            os.ftruncate(self.fd, 0)
+            os.unlink(self.directory / f'{self.slot}.lease')
+        except FileNotFoundError:
+            pass
+        os.close(self.fd)
+        self.fd, self.slot, self.record = None, None, None
+
+
+class IntegrationMutex:
+    """Exactly one integrator for dev: merge-onto-dev -> full QA -> full CI -> ff -> deploy -> accept.
+    flock = crash-safe (released when the holder dies). Re-entrant within one process."""
+
+    def __init__(self, path):
+        self.path, self.fd = Path(path), None
+
+    @property
+    def held(self):
+        return self.fd is not None
+
+    def try_acquire(self):
+        if self.fd is not None:
+            return True
+        fd = os.open(self.path, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            os.close(fd)
+            return False
+        self.fd = fd
+        return True
+
+    def release(self):
+        if self.fd is not None:
+            os.close(self.fd)
+            self.fd = None
+
+
+class ApiClock:
+    """One unauthenticated GitHub quota (60/h) is shared by every process on the host. All slots and
+    the supervisor space their reads through this file so the HOST stays below it, not each process."""
+
+    def __init__(self, path, spacing=65):
+        self.path, self.spacing = Path(path), spacing
+
+    def wait(self, sleep=time.sleep, now=time.time):
+        with _Flock(self.path, write=True) as fd:
+            raw = os.pread(fd, 64, 0)
+            last = float(raw) if raw.strip() else 0.0
+            delay = last + self.spacing - now()
+            if delay > 0:
+                sleep(min(delay, 4 * 3600))
+            stamp = repr(now()).encode()
+            os.ftruncate(fd, 0)
+            os.pwrite(fd, stamp, 0)
+
+    def backoff(self, seconds, now=time.time):
+        with _Flock(self.path, write=True) as fd:
+            os.ftruncate(fd, 0)
+            os.pwrite(fd, repr(now() + seconds - self.spacing).encode(), 0)
+
+
+# ---------------------------------------------------------------- adapters
+class Adapter:
+    def __init__(self, name, provider, roles, installed, in_catalog, authenticated, inference_proven,
+                 owner_approved, executable, reason=''):
+        self.name, self.provider, self.roles = name, provider, tuple(roles)
+        self.installed, self.in_catalog, self.authenticated = installed, in_catalog, authenticated
+        self.inference_proven, self.owner_approved, self.executable = inference_proven, owner_approved, executable
+        self.reason = reason
+
+
+# Closed registry. Flipping a flag is a reviewed code change, never runtime input.
+ADAPTERS = {
+    'codex': Adapter('codex', 'codex', ('author', 'qa', 'review'), True, True, True, True, True, True),
+    'cursor': Adapter('cursor', 'cursor', ('author',), True, True, True, False, False, False,
+                      'no tokens until the billing period renews; then Auto mode, provider test on 3 tasks, Owner yes'),
+    'agy': Adapter('agy', 'agy', ('review',), True, True, True, False, False, False,
+                   '#29: 7 known defects open; never a QA gate'),
+}
+FORBIDDEN = {'agy': {'qa', 'author'}}    # hard rule, independent of flags
+MODEL_ADAPTER = {'gpt-6.1-sol': 'codex'}  # task "model" -> adapter; absent model -> codex default
+QA_ADAPTER = 'codex'
+
+
+def adapter_for(task):
+    model = task.get('model')
+    if model is None:
+        return 'codex'
+    require(model in MODEL_ADAPTER, 'model not in registry')
+    return MODEL_ADAPTER[model]
+
+
+def adapter_status(name, role, budget=None, slot=None, adapters=None):
+    """(enabled, reason). Every state must be true AND the quota known and > 0."""
+    ad = (adapters or ADAPTERS).get(name)
+    if ad is None:
+        return False, 'unknown adapter'
+    if role in FORBIDDEN.get(name, ()):
+        return False, f'{name} may never act as {role}'
+    if role not in ad.roles:
+        return False, f'role {role} not supported'
+    for flag in ('installed', 'in_catalog', 'authenticated', 'inference_proven', 'owner_approved', 'executable'):
+        if not getattr(ad, flag):
+            return False, f'{flag}=false' + (f' ({ad.reason})' if ad.reason else '')
+    if budget is not None:
+        left = budget.remaining(ad.provider, role, slot)
+        if left is UNKNOWN:
+            return False, 'quota UNKNOWN (not 0, not free): set a limit or measure first'
+        if left <= 0:
+            return False, 'daily budget exhausted'
+    return True, 'enabled'
+
+
+# ---------------------------------------------------------------- budgets
+class Budget:
+    """Daily call budgets per provider/role (host total) AND per slot. Missing limit = UNKNOWN.
+    Each slot writes only its own ledger (outbox/<slot>/ledger.json); totals sum every ledger."""
+
+    def __init__(self, limits_path, outbox_root, registry_lock, today=None):
+        self.limits_path, self.outbox_root = Path(limits_path), Path(outbox_root)
+        self.registry_lock = Path(registry_lock)
+        self.today = today or (lambda: dt.datetime.now(dt.timezone.utc).date().isoformat())
+
+    def limits(self):
+        try:
+            value = read_json(self.limits_path, trusted_uids=None)
+        except FileNotFoundError:
+            return {}
+        require(isinstance(value, dict) and set(value) <= {'schema', 'providers', 'slots'}, 'invalid budgets')
+        for section in ('providers', 'slots'):
+            require(isinstance(value.get(section, {}), dict), 'invalid budgets')
+        return value
+
+    @staticmethod
+    def _limit(table, provider, role):
+        value = (table or {}).get(provider, {}).get(role, UNKNOWN)
+        if value is UNKNOWN:
+            return UNKNOWN
+        require(type(value) is int and 0 <= value <= 10000, 'invalid budget value')
+        return value
+
+    def used(self, provider, role, slot=None):
+        total, day = 0, self.today()
+        if not self.outbox_root.exists():
+            return 0
+        for name in sorted(os.listdir(self.outbox_root)):
+            if not SLOT_RE.fullmatch(name) or (slot and name != slot):
+                continue
+            path = self.outbox_root / name / 'ledger.json'
+            if not path.exists():
+                continue
+            ledger = read_json(path)
+            count = ledger.get(day, {}).get(provider, {}).get(role, 0)
+            require(type(count) is int and count >= 0, 'invalid ledger')
+            total += count
+        return total
+
+    def remaining(self, provider, role, slot=None):
+        limits = self.limits()
+        host = self._limit(limits.get('providers'), provider, role)
+        if host is UNKNOWN:
+            return UNKNOWN
+        left = host - self.used(provider, role)
+        if slot is not None:
+            own = self._limit(limits.get('slots', {}).get(slot), provider, role)
+            if own is UNKNOWN:
+                return UNKNOWN
+            left = min(left, own - self.used(provider, role, slot))
+        return left
+
+    def charge(self, slot, provider, role):
+        with _Flock(self.registry_lock):
+            left = self.remaining(provider, role, slot)
+            require(left is not UNKNOWN, f'{provider} {role} quota UNKNOWN; refusing model call')
+            require(left > 0, f'{provider} {role} daily budget exhausted')
+            path = self.outbox_root / slot / 'ledger.json'
+            ledger = read_json(path) if path.exists() else {}
+            day = self.today()
+            ledger = {k: v for k, v in ledger.items() if k >= (dt.date.fromisoformat(day)
+                                                                 - dt.timedelta(days=7)).isoformat()}
+            cell = ledger.setdefault(day, {}).setdefault(provider, {})
+            cell[role] = cell.get(role, 0) + 1
+            atomic(path, ledger, 0o644)
+            return left - 1
+
+
+# ---------------------------------------------------------------- runtime (executor side)
+class Runtime:
+    """Everything a slot executor needs; built only for --slot slotN."""
+
+    def __init__(self, slot, state_root=STATE_ROOT, slot_root=SLOT_ROOT, config_root=CONFIG_ROOT,
+                 runtime_root=RUNTIME_ROOT, trusted_assigners=None, legacy_reads=()):
+        self.slot = slot
+        self.layout = Layout(slot, state_root, slot_root)
+        self.user = slot_user(slot)
+        self.unit = f'gobadminton-slot@{slot}.service'
+        self.legacy = self.user == LEGACY_USER
+        self.home = LEGACY_HOME if self.legacy else self.layout.home
+        self.key = self.home / '.ssh' / KEY_NAME
+        self.codex_home = self.home / '.codex'
+        if self.legacy:
+            self.path = '/home/agentagency-dev/.local/node-v24.21.0/bin:/usr/bin:/bin'
+            self.runtime_reads = list(legacy_reads)
+        else:
+            self.path = f'{runtime_root}/node/bin:/usr/bin:/bin'
+            self.runtime_reads = [Path(runtime_root)] if Path(runtime_root).exists() else []
+        self.registry = LockRegistry(self.layout.locks, self.layout.registry)
+        self.mutex = IntegrationMutex(self.layout.integration)
+        self.budget = Budget(Path(config_root) / 'budgets.json', self.layout.state_root / 'outbox',
+                             self.layout.registry)
+        self.clock = ApiClock(self.layout.api_clock)
+        if trusted_assigners is None:
+            trusted_assigners = {0} | ({uid_of(SUPERVISOR_USER)} - {None})
+        self.trusted_assigners = set(trusted_assigners)
+
+    def env(self):
+        return {'PATH': self.path, 'HOME': str(self.home), 'USER': self.user, 'LANG': 'C.UTF-8',
+                'CODEX_HOME': str(self.codex_home), 'GIT_CONFIG_NOSYSTEM': '1',
+                'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_TERMINAL_PROMPT': '0'}
+
+    def denied(self):
+        """Model sandbox deny-list: every other slot, the legacy state, other homes."""
+        out = [p for p in self.layout.others() if p.exists()]
+        if not self.legacy:
+            out += [p for p in (LEGACY_HOME,) if p.exists()]
+        if LEGACY_STATE.exists() and LEGACY_STATE != self.layout.state_dir:
+            out.append(LEGACY_STATE)
+        return out
+
+    def check_paths(self, repo, state_dir, worktrees_root):
+        require(Path(repo) == self.layout.repo and Path(state_dir) == self.layout.state_dir
+                and Path(worktrees_root) == self.layout.worktrees, 'slot paths must be the fixed slot layout')
+        require(disjoint(self.layout.own(), self.layout.others()), 'slot paths overlap another slot')
+        require(disjoint([self.layout.state_dir], [LEGACY_STATE]), 'slot state overlaps legacy state')
+
+    def assignment(self):
+        """The issue the supervisor assigned to this slot, or None. Untrusted owner -> Hold."""
+        try:
+            value = read_json(self.layout.assignment, self.trusted_assigners, 4096)
+        except FileNotFoundError:
+            return None
+        require(isinstance(value, dict)
+                and set(value) == {'schema', 'slot', 'issue', 'assigned_at', 'locks', 'allowed_paths'}
+                and value['schema'] == ASSIGN_SCHEMA and value['slot'] == self.slot
+                and type(value['issue']) is int and value['issue'] > 0, 'invalid assignment')
+        return value['issue']
+
+    def lease(self, active):
+        record = task_record(active['issue'], active['task'])
+        require(self.registry.acquire(self.slot, record), 'lock conflict with another live slot')
+
+    def release_lease(self):
+        self.registry.release()
+
+    def charge(self, task, role):
+        adapter = QA_ADAPTER if role == 'qa' else adapter_for(task)
+        ok, reason = adapter_status(adapter, role)
+        if not ok:
+            raise AdapterDisabled(f'{adapter}:{role}: {reason}')
+        return self.budget.charge(self.slot, ADAPTERS[adapter].provider, role)
+
+    def publish(self, data, parked):
+        active = data.get('active')
+        summary = None
+        if active:
+            summary = dict(issue=active['issue'], phase=active['phase'], attempt=active.get('attempt'),
+                           head=active.get('head'), base=active.get('base'),
+                           integration=active.get('integration', 0),
+                           **{k: v for k, v in task_record(active['issue'], active['task']).items() if k != 'issue'})
+        atomic(self.layout.outbox / 'status.json',
+               dict(schema=STATUS_SCHEMA, slot=self.slot, active=summary, done=list(data.get('done', [])),
+                    parked=[e['issue'] for e in parked], at=int(time.time()),
+                    integrating=self.mutex.held), 0o644)
+
+
+# ---------------------------------------------------------------- scheduler (supervisor side)
+def read_statuses(state_root, slots, owners=None):
+    out = {}
+    for slot in slots:
+        path = Path(state_root) / 'outbox' / slot / 'status.json'
+        try:
+            value = read_json(path, None if owners is None else {owners[slot]})
+        except FileNotFoundError:
+            continue
+        require(value.get('schema') == STATUS_SCHEMA and value.get('slot') == slot, 'invalid slot status')
+        out[slot] = value
+    return out
+
+
+def plan(candidates, statuses, assignments, slots, max_parallel, budget=None, adapters=None):
+    """Pure PM step. candidates: [(issue, task)] in claim order. Returns ({slot: issue}, reasons).
+
+    * ready  = every depends_on is done; a parked dependency waits for its successor;
+    * serial = locks/paths conflict with any busy or newly planned task (conservative);
+    * at most max_parallel slots busy; author adapter and codex QA must be enabled with known quota."""
+    done = set().union(*[set(s.get('done', [])) for s in statuses.values()]) if statuses else set()
+    parked = set().union(*[set(s.get('parked', [])) for s in statuses.values()]) if statuses else set()
+    busy = {}
+    for slot in slots:
+        active = (statuses.get(slot) or {}).get('active')
+        if active and active['phase'] != 'done':
+            busy[slot] = dict(issue=active['issue'], locks=active['locks'], allowed_paths=active['allowed_paths'])
+        elif slot in assignments and assignments[slot]['issue'] not in done | parked:
+            busy[slot] = assignments[slot]['record']
+    taken = {r['issue'] for r in busy.values()}
+    free = [s for s in slots if s not in busy and s in statuses]
+    capacity = max(0, max_parallel - len(busy))
+    result, reasons = {}, {}
+    for issue, task in candidates:
+        if capacity <= 0 or not free:
+            break
+        if issue in done or issue in parked or issue in taken:
+            continue
+        deps = task.get('depends_on', [])
+        if any(d in parked for d in deps):
+            reasons[issue] = 'dependency parked: waiting for successor'
+            continue
+        if not all(d in done for d in deps):
+            reasons[issue] = 'waiting for dependencies'
+            continue
+        try:
+            author = adapter_for(task)
+        except Hold as error:
+            reasons[issue] = str(error)
+            continue
+        record = task_record(issue, task)
+        if any(conflicts(record, r) for r in busy.values()):
+            reasons[issue] = 'lock/path conflict: serialized'
+            continue
+        slot = None
+        for candidate in free:
+            ok_a, why_a = adapter_status(author, 'author', budget, candidate, adapters)
+            ok_q, why_q = adapter_status(QA_ADAPTER, 'qa', budget, candidate, adapters)
+            if ok_a and ok_q:
+                slot = candidate
+                break
+            reasons[issue] = f'author {author}: {why_a}; qa: {why_q}'
+        if slot is None:
+            continue
+        reasons.pop(issue, None)
+        result[slot] = issue
+        busy[slot] = record
+        taken.add(issue)
+        free.remove(slot)
+        capacity -= 1
+    return result, reasons
+
+
+def admitted(a, issues, comments, since):
+    """Same admission contract as Store.claim (body XOR exactly one Owner comment), claim order."""
+    by_parent = {}
+    for comment in comments:
+        by_parent.setdefault(comment.get('issue_url'), []).append(comment)
+    out = []
+    for issue in issues:
+        try:
+            try:
+                body = a.validate_issue(issue, since)
+            except (a.Hold, ValueError, KeyError, TypeError):
+                body = None
+            auth = []
+            for comment in by_parent.get(f'https://api.github.com/repos/{a.REPO}/issues/{issue["number"]}', []):
+                try:
+                    auth.append((comment, a.validate_comment(issue, comment, since)))
+                except (a.Hold, ValueError, KeyError, TypeError):
+                    continue
+            if len(auth) + (body is not None) != 1:
+                continue
+            stamp, task = (auth[0][0]['created_at'], auth[0][1]) if auth else (issue['created_at'], body)
+            created = dt.datetime.fromisoformat(stamp.replace('Z', '+00:00'))
+            out.append((created, issue['number'], task))
+        except (a.Hold, Hold, ValueError, KeyError, TypeError):
+            continue
+    return [(n, t) for _, n, t in sorted(out, key=lambda x: x[:2])]
+
+
+# ---------------------------------------------------------------- state migration (code only)
+STATE_FILES = re.compile(r'(state|parked)\.json|(qa|before-resume|before-park)-[0-9]+-a[0-9]+(-i[0-9]+)?\.json')
+
+
+def _sha(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def migrate_state(src, dst, slot='slot1', dry_run=True):
+    """Copy the legacy executor state into a slot, byte-identical (no counter/history reset).
+
+    Refuses unless: the legacy worker lock is free (no executor running), the state is idle
+    (active is None or done), dst is absent/empty. Every copied file is sha256-verified; a manifest
+    is written into dst and a tombstone into src so the legacy executor can never run on it again."""
+    src, dst = Path(src), Path(dst)
+    require(src.is_dir() and not src.is_symlink(), 'legacy state dir missing')
+    require(not (src / RETIRED).exists(), 'legacy state already retired')
+    require(not dst.is_symlink() and (not dst.exists() or not any(dst.iterdir())), 'slot state not empty')
+    lock = os.open(src / 'worker.lock', os.O_RDWR | os.O_NOFOLLOW)
+    try:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise Hold('legacy executor is running (worker.lock held)') from None
+        state = loads((src / 'state.json').read_bytes())
+        require(set(state) == {'active', 'done'} and isinstance(state['done'], list), 'invalid legacy state')
+        require(state['active'] is None or state['active'].get('phase') == 'done', 'legacy executor not idle')
+        names = sorted(n for n in os.listdir(src) if STATE_FILES.fullmatch(n))
+        require('state.json' in names, 'state.json missing')
+        files = {}
+        for name in names:
+            info = os.lstat(src / name)
+            require(stat.S_ISREG(info.st_mode), f'non-regular state file {name}')
+            files[name] = _sha(src / name)
+        manifest = dict(schema='GB_SLOT_MIGRATION_V1', slot=slot, src=str(src), dst=str(dst), files=files,
+                        done=len(state['done']), at=dt.datetime.now(dt.timezone.utc).isoformat())
+        if dry_run:
+            return manifest
+        dst.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.chmod(dst, 0o700)
+        for name, digest in files.items():
+            data = (src / name).read_bytes()
+            fd = os.open(dst / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(fd, 'wb') as out:
+                out.write(data)
+                out.flush()
+                os.fsync(out.fileno())
+            require(_sha(dst / name) == digest == _sha(src / name), f'sha256 mismatch for {name}')
+        require(loads((dst / 'state.json').read_bytes()) == state, 'state differs after copy')
+        atomic(dst / 'MIGRATION.json', manifest)
+        atomic(src / RETIRED, dict(slot=slot, dst=str(dst), manifest_sha=_sha(dst / 'MIGRATION.json')))
+        return manifest
+    finally:
+        os.close(lock)
+
+
+# ---------------------------------------------------------------- supervisor CLI
+def load_supervisor_config(path):
+    value = read_json(path, {0})
+    require(set(value) == {'schema', 'slots', 'max_parallel', 'approved_since', 'poll'}
+            and value['schema'] == 'GB_SLOT_SUPERVISOR_V1', 'invalid supervisor config')
+    require(isinstance(value['slots'], list) and 1 <= len(value['slots']) <= 8
+            and all(isinstance(s, str) and SLOT_RE.fullmatch(s) for s in value['slots'])
+            and len(set(value['slots'])) == len(value['slots']), 'invalid slots')
+    require(type(value['max_parallel']) is int and 1 <= value['max_parallel'] <= len(value['slots']),
+            'invalid max_parallel')
+    require(type(value['poll']) is int and 120 <= value['poll'] <= 600, 'invalid poll')
+    return value
+
+
+def _executor():
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import autonomous_issues
+    return autonomous_issues
+
+
+def read_assignments(state_root, slots):
+    out = {}
+    for slot in slots:
+        path = Path(state_root) / 'assign' / f'{slot}.json'
+        try:
+            value = read_json(path, None, 4096)
+        except FileNotFoundError:
+            continue
+        require(isinstance(value, dict) and value.get('schema') == ASSIGN_SCHEMA and value.get('slot') == slot
+                and type(value.get('issue')) is int and isinstance(value.get('locks'), list)
+                and isinstance(value.get('allowed_paths'), list), 'invalid assignment')
+        out[slot] = dict(issue=value['issue'], record=dict(issue=value['issue'], locks=value['locks'],
+                                                             allowed_paths=value['allowed_paths']))
+    return out
+
+
+def tick(cfg, state_root=STATE_ROOT, config_root=CONFIG_ROOT, fetch=None, owners=None, a=None):
+    """One supervisor pass: read slot statuses, retire finished assignments, assign ready tasks."""
+    a = a or _executor()
+    slots = cfg['slots']
+    since = dt.datetime.fromisoformat(cfg['approved_since'].replace('Z', '+00:00'))
+    statuses = read_statuses(state_root, slots, owners)
+    assignments = read_assignments(state_root, slots)
+    finished = set().union(*[set(s['done']) | set(s['parked']) for s in statuses.values()]) if statuses else set()
+    for slot, asg in list(assignments.items()):
+        active = (statuses.get(slot) or {}).get('active')
+        if asg['issue'] in finished and not (active and active['issue'] == asg['issue'] and active['phase'] != 'done'):
+            os.unlink(Path(state_root) / 'assign' / f'{slot}.json')
+            del assignments[slot]
+    budget = Budget(Path(config_root) / 'budgets.json', Path(state_root) / 'outbox', Path(state_root) / 'locks' / 'registry.lock')
+    free = [s for s in slots if s not in assignments and s in statuses
+            and not ((statuses[s].get('active') or {}).get('phase') not in (None, 'done'))]
+    if not free:
+        return {}, {}
+    if fetch is None:
+        issues = a.pages('issues?state=open')
+        cutoff = a.urllib.parse.quote(since.isoformat(), safe='')
+        comments = a.pages(f'issues/comments?since={cutoff}')
+    else:
+        issues, comments = fetch()
+    planned, reasons = plan(admitted(a, issues, comments, since), statuses, assignments, slots,
+                            cfg['max_parallel'], budget)
+    for slot, issue in planned.items():
+        task = dict(admitted(a, [i for i in issues if i['number'] == issue], comments, since))[issue]
+        record = task_record(issue, task)
+        atomic(Path(state_root) / 'assign' / f'{slot}.json',
+               dict(schema=ASSIGN_SCHEMA, slot=slot, issue=issue, assigned_at=int(time.time()),
+                    locks=record['locks'], allowed_paths=record['allowed_paths']), 0o644)
+    return planned, reasons
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    sub = parser.add_subparsers(dest='cmd', required=True)
+    sup = sub.add_parser('supervise')
+    sup.add_argument('--config', type=Path, default=CONFIG_ROOT / 'supervisor.json')
+    sub.add_parser('adapters')
+    st = sub.add_parser('status')
+    st.add_argument('--config', type=Path, default=CONFIG_ROOT / 'supervisor.json')
+    pl = sub.add_parser('plan', help='dry-run the scheduler on a JSON list of {issue, task}')
+    pl.add_argument('--tasks', type=Path, required=True)
+    pl.add_argument('--max-parallel', type=int, default=2)
+    mg = sub.add_parser('migrate')
+    mg.add_argument('--src', type=Path, default=LEGACY_STATE)
+    mg.add_argument('--dst', type=Path, default=STATE_ROOT / 'slots' / 'slot1')
+    mg.add_argument('--apply', action='store_true', help='without it: dry-run only')
+    args = parser.parse_args(argv)
+    if args.cmd == 'adapters':
+        for name in ADAPTERS:
+            print(json.dumps({'adapter': name, **{r: adapter_status(name, r)[1] for r in ROLES}}))
+        return 0
+    if args.cmd == 'plan':
+        items = loads(args.tasks.read_bytes())
+        slots = [f'slot{i + 1}' for i in range(args.max_parallel)]
+        statuses = {s: dict(active=None, done=[], parked=[]) for s in slots}
+        always = Adapter('codex', 'codex', ('author', 'qa', 'review'), *([True] * 6))
+        result, reasons = plan([(x['issue'], x['task']) for x in items], statuses, {}, slots,
+                               args.max_parallel, None, dict(ADAPTERS, codex=always))
+        print(json.dumps({'parallel': result, 'deferred': reasons}, sort_keys=True))
+        return 0
+    if args.cmd == 'migrate':
+        print(json.dumps(migrate_state(args.src, args.dst, dry_run=not args.apply), sort_keys=True))
+        return 0
+    cfg = load_supervisor_config(args.config)
+    if args.cmd == 'status':
+        print(json.dumps({'statuses': read_statuses(STATE_ROOT, cfg['slots']),
+                          'assignments': read_assignments(STATE_ROOT, cfg['slots'])}, sort_keys=True))
+        return 0
+    require(os.getuid() != 0 and pwd.getpwuid(os.getuid()).pw_name == SUPERVISOR_USER, 'wrong supervisor user')
+    a = _executor()
+    a._API_CLOCK = ApiClock(STATE_ROOT / 'locks' / 'api.clock')
+    owners = {s: uid_of(slot_user(s)) for s in cfg['slots']}
+    while True:
+        try:
+            planned, reasons = tick(cfg, owners=owners, a=a)
+            print(json.dumps({'assigned': planned, 'deferred': {str(k): v for k, v in reasons.items()}}), flush=True)
+        except Exception as error:   # never crash-loop on a transient read; report without details
+            print('Supervisor pass failed: ' + (str(error) if isinstance(error, (Hold, a.Hold))
+                                                 else type(error).__name__), flush=True)
+        time.sleep(cfg['poll'])
+
+
+if __name__ == '__main__':
+    sys.exit(main())

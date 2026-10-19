@@ -14,6 +14,7 @@ import signal
 import socket
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.error
@@ -57,6 +58,16 @@ for package in ('api', 'web', 'admin', 'contracts'):
         f'Run pnpm --filter @gobadminton/{package} run {command}'
         for command in ('typecheck', 'lint', 'test:unit')}
 _API_NEXT = 0.0
+TASK_FIELDS = {'schema', 'target', 'kind', 'goal', 'acceptance', 'allowed_paths', 'max_attempts'}
+# PM V1: optional, validated links. The executor records them; only --slot mode acts on them.
+OPTIONAL_FIELDS = {'depends_on', 'locks', 'model', 'effort'}
+LOCK_RE = re.compile(r'[a-z0-9][a-z0-9-]{0,23}(:[a-z0-9][a-z0-9-]{0,23}){0,2}')
+MODELS = {'gpt-6.1-sol': {'high', 'medium'}}  # closed registry approved by the Owner
+# PARALLEL_SLOTS_V1. 'default' keeps every path, unit, env, file name and API spacing exactly as before;
+# slots.py is imported only for --slot slotN.
+SLOT = 'default'
+_SLOTS = None
+_API_CLOCK = None
 
 
 class QuotaWait(Exception):
@@ -131,6 +142,27 @@ def permitted(path, allowed):
     return any(path.startswith(p[:-2]) if p.endswith('/**') else path == p for p in allowed)
 
 
+def check_links(task, issue_number):
+    """Validate the OPTIONAL PM V1 fields; raises Hold on any problem."""
+    if 'depends_on' in task:
+        d = task['depends_on']
+        require(isinstance(d, list) and len(d) <= 8 and len(set(d)) == len(d)
+                and all(type(x) is int and x > 0 and x != issue_number for x in d),
+                'invalid depends_on')
+    if 'locks' in task:
+        locks = task['locks']
+        require(isinstance(locks, list) and 1 <= len(locks) <= 8
+                and len(set(locks)) == len(locks)
+                and all(isinstance(x, str) and (x == 'global' or LOCK_RE.fullmatch(x))
+                        for x in locks), 'invalid locks')
+        require('global' not in locks or locks == ['global'], 'global lock must be alone')
+    require(('model' in task) == ('effort' in task), 'model and effort go together')
+    if 'model' in task:
+        require(isinstance(task['model'], str) and task['model'] in MODELS
+                and isinstance(task['effort'], str) and task['effort'] in MODELS[task['model']],
+                'model/effort not in registry')
+
+
 def validate_issue(issue, since, now=None):
     require('pull_request' not in issue and issue.get('state') == 'open', 'not an open Issue')
     require(type(issue.get('user', {}).get('id')) is int
@@ -146,9 +178,8 @@ def validate_issue(issue, since, now=None):
     now = now or dt.datetime.now(dt.timezone.utc)
     require(since <= created <= now and now - created <= dt.timedelta(days=7), 'stale Issue')
     task = loads(raw)
-    require(isinstance(task, dict) and set(task) == {
-        'schema', 'target', 'kind', 'goal', 'acceptance', 'allowed_paths', 'max_attempts'},
-        'unexpected task fields')
+    require(isinstance(task, dict) and TASK_FIELDS <= set(task) <= TASK_FIELDS | OPTIONAL_FIELDS,
+            'unexpected task fields')
     require(type(task['schema']) is str and task['schema'] == MARKER
             and task['target'] == 'dev' and task['kind'] == 'source_only', 'task scope')
     require(type(task['max_attempts']) is int and 1 <= task['max_attempts'] <= 3, 'attempt bound')
@@ -156,6 +187,7 @@ def validate_issue(issue, since, now=None):
     require(isinstance(task['acceptance'], str) and 1 <= len(task['acceptance']) <= 6000,
             'invalid acceptance')
     patterns(task['allowed_paths'])
+    check_links(task, issue['number'])
     canary_paths = set(task['allowed_paths']) & set(CANARIES.values())
     if canary_paths or issue['number'] in CANARIES:
         require(task['allowed_paths'] == [CANARIES.get(issue['number'])], 'canary scope')
@@ -271,10 +303,53 @@ def validate_park(active, comment, since, used=(), now=None):
 
 
 def discover(store, since):
+    if _SLOTS is not None:
+        return slot_discover(store, since)
     issues = pages('issues?state=open')
     cutoff = urllib.parse.quote(since.isoformat(), safe='')
     comments = pages(f'issues/comments?since={cutoff}')
     return store.claim(issues, since, comments)
+
+
+def slot(call, *args):
+    """Run a slots.py call; its fail-closed Hold becomes this module's Hold."""
+    try:
+        return call(*args)
+    except _SLOTS_HOLD as error:
+        raise Hold(str(error)) from None
+
+
+_SLOTS_HOLD = ()
+
+
+def activate_slot(name, **roots):
+    """--slot slotN: own OS user, state, checkpoint, worktrees, lease, budget and API clock."""
+    global SLOT, _SLOTS, _API_CLOCK, _SLOTS_HOLD, KEY, RUNTIME_READS
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import slots as module
+    _SLOTS_HOLD = module.Hold
+    runtime = slot(lambda: module.Runtime(name, **({'legacy_reads': RUNTIME_READS} | roots)))
+    SLOT, _SLOTS, _API_CLOCK = name, runtime, runtime.clock
+    KEY = runtime.key
+    if not runtime.legacy:
+        RUNTIME_READS = runtime.runtime_reads
+    return runtime
+
+
+def slot_discover(store, since):
+    """Slot mode: claim ONLY the issue the supervisor assigned to this slot (no free-for-all)."""
+    if not (store.data['active'] and store.data['active']['phase'] != 'done'):
+        _SLOTS.release_lease()
+    assigned = slot(_SLOTS.assignment)
+    if assigned is None or assigned in store.data['done'] or any(e['issue'] == assigned for e in store.parked):
+        return store.claim([], since)
+    issue = api(f'issues/{assigned}')
+    cutoff = urllib.parse.quote(since.isoformat(), safe='')
+    comments = pages(f'issues/{assigned}/comments?since={cutoff}')
+    active = store.claim([issue], since, comments)
+    if active and active['phase'] != 'done':
+        slot(_SLOTS.lease, active)  # conflict with a live slot -> Hold -> blocked, nothing pushed yet
+    return active
 
 
 def fingerprint(issue):
@@ -335,6 +410,8 @@ class Store:
 
     def save(self):
         atomic(self.path, self.data)
+        if _SLOTS is not None:
+            slot(_SLOTS.publish, self.data, self.parked)
 
     def claim(self, issues, since, comments=None):
         if self.data['active'] and self.data['active']['phase'] != 'done':
@@ -425,6 +502,8 @@ def _api_once(path):
         while time.monotonic() < _API_NEXT:
             time.sleep(min(60, _API_NEXT - time.monotonic()))
         _API_NEXT = time.monotonic() + 65
+        if _API_CLOCK is not None:
+            _API_CLOCK.wait()  # slot mode: one host-wide spacing for the shared public quota
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
             raw = response.read(MAX_JSON + 1)
@@ -440,6 +519,8 @@ def _api_once(path):
             except (TypeError, ValueError):
                 reset = retry = 3600
             _API_NEXT = time.monotonic() + max(3600, reset, retry)
+            if _API_CLOCK is not None:
+                _API_CLOCK.backoff(max(3600, reset, retry))
             raise QuotaWait() from None
         raise
     except (urllib.error.URLError, TimeoutError, ConnectionError, socket.timeout):
@@ -543,6 +624,8 @@ def landlock(readable, writable):
 
 
 def clean_env():
+    if _SLOTS is not None:
+        return _SLOTS.env()
     return {'PATH': '/home/agentagency-dev/.local/node-v24.21.0/bin:/usr/bin:/bin',
             'HOME': '/home/agentagency-dev', 'USER': 'agentagency-dev', 'LANG': 'C.UTF-8',
             'CODEX_HOME': '/home/agentagency-dev/.codex',
@@ -590,6 +673,12 @@ def qa_result(value, sha):
             and all(isinstance(x, str) and len(x) <= 4000 for x in value['findings']), 'invalid QA')
     require(value['verdict'] != 'PASS' or not value['findings'], 'QA PASS has findings')
     return value['verdict'] == 'PASS'
+
+
+def integ(active):
+    """'' unless slot-mode integration produced a new candidate SHA (then -i<k>)."""
+    k = active.get('integration', 0)
+    return f'-i{k}' if k else ''
 
 
 def successful(run_info, jobs, sha, required, deploy=False):
@@ -738,7 +827,13 @@ class Bridge:
             result = job / 'result.json'
             env = self.env | {'TMPDIR': temp}
             common = Path(self.git('rev-parse', '--path-format=absolute', '--git-common-dir'))
-            argv = model_command(self.c.codex, self.work, job, common, self.c.state_dir, qa)
+            if _SLOTS is None:
+                argv = model_command(self.c.codex, self.work, job, common, self.c.state_dir, qa)
+            else:
+                # Budget is charged BEFORE the call; UNKNOWN or exhausted quota refuses (fail closed).
+                slot(_SLOTS.charge, self.store.data['active']['task'], 'qa' if qa else 'author')
+                argv = model_command(self.c.codex, self.work, job, common, self.c.state_dir, qa,
+                                     denied=_SLOTS.denied())
             argv += ['-o', str(result), '-']
             run(argv, self.work, env, timeout=self.c.model_timeout, input=prompt)
             if qa:
@@ -746,6 +841,8 @@ class Bridge:
                 return loads(result.read_text())
 
     def author(self, active, fix=None, **checkpoint):
+        if _SLOTS is not None:
+            _SLOTS.mutex.release()  # never hold the merge queue while authoring
         self.unchanged_issue(active)
         self.clean(active['head'] or active['base'])
         self.store.phase('developing', attempt=active['attempt'] + 1, **checkpoint)
@@ -807,7 +904,7 @@ class Bridge:
 
     def review(self, active):
         self.clean(active['head'])
-        qa_work = self.c.worktrees_root / f'qa-issue-{active["issue"]}-a{active["attempt"]}'
+        qa_work = self.c.worktrees_root / f'qa-issue-{active["issue"]}-a{active["attempt"]}{integ(active)}'
         require(not qa_work.exists(), 'QA worktree already exists; reconcile')
         self.git('worktree', 'add', '--detach', str(qa_work), active['head'])
         author_work = self.work
@@ -829,7 +926,7 @@ class Bridge:
                                 'Return ONLY JSON with exact keys verdict (PASS or FAIL), findings '
                                 '(array of strings; empty for PASS), reviewed_sha (exact SHA). TASK: '
                                 + json.dumps(active['task'], ensure_ascii=False), qa=True)
-            atomic(self.c.state_dir / f'qa-{active["issue"]}-a{active["attempt"]}.json', result)
+            atomic(self.c.state_dir / f'qa-{active["issue"]}-a{active["attempt"]}{integ(active)}.json', result)
             require(self.git('rev-parse', 'HEAD', cwd=qa_work) == active['head']
                     and not self.git('status', '--porcelain', '--untracked-files=all', cwd=qa_work),
                     'QA modified candidate')
@@ -859,7 +956,7 @@ class Bridge:
         raise Hold(f'{name} timeout/absent')
 
     def saved_qa(self, active):
-        path = self.c.state_dir / f'qa-{active["issue"]}-a{active["attempt"]}.json'
+        path = self.c.state_dir / f'qa-{active["issue"]}-a{active["attempt"]}{integ(active)}.json'
         require(not path.is_symlink() and path.stat().st_size <= 65536, 'invalid saved QA')
         result = loads(path.read_bytes())
         require(result == active['qa'] and qa_result(result, active['head']),
@@ -969,7 +1066,67 @@ class Bridge:
         self.store.park(entry)
         return True
 
+    def integration_lock(self, active):
+        """Serialized merge queue: one integrator holds the host-wide mutex from the dev check
+        through ff push, deploy and ACCEPTED. Waiting changes no checkpoint."""
+        announced = False
+        while not slot(_SLOTS.mutex.try_acquire):
+            if not announced:
+                print(json.dumps({'phase': 'merge_wait', 'issue': active['issue'], 'sha': active.get('head')}),
+                      flush=True)
+                announced = True
+            time.sleep(self.c.poll)
+
+    def integrate(self, active, dev):
+        """dev moved since claim (another slot merged). Bring the candidate onto the NEW dev with a
+        merge commit (no history rewrite, no force push) and require fresh full QA and full CI on the
+        new SHA. Conflicts, rewritten dev history or out-of-scope paths fail closed."""
+        require(SHA.fullmatch(dev or ''), 'invalid dev SHA')
+        self.clean(active['head'])
+        try:
+            self.git('merge-base', '--is-ancestor', active['base'], dev, cwd=self.work)
+        except Hold:
+            raise Hold('dev history does not contain the claimed base; integration refused') from None
+        try:
+            self.git('-c', 'user.name=GoBadminton Issue Bridge', '-c', 'user.email=autonomy@gobadminton.invalid',
+                     '-c', 'commit.gpgsign=false', 'merge', '--no-ff', '--no-edit', '-m',
+                     f'Refs #{active["issue"]}: integrate candidate onto dev {dev[:12]}', dev, cwd=self.work)
+        except Hold:
+            try:
+                self.git('merge', '--abort', cwd=self.work)
+            except Hold:
+                pass
+            raise Hold('integration conflict with new dev') from None
+        head = self.git('rev-parse', 'HEAD', cwd=self.work)
+        require(SHA.fullmatch(head) and head != active['head'], 'invalid integration candidate')
+        changed = set(self.git('diff', '--name-only', '-z', dev, head, cwd=self.work).split('\0'))
+        changed.discard('')
+        require(changed, 'zero diff')
+        for name in changed:
+            require(permitted(name, active['task']['allowed_paths']), 'untrusted modified path')
+        self.git('diff', '--check', dev, head, cwd=self.work)
+        history = list(active.get('history', [])) + [dict(
+            attempt=active['attempt'], head=active['head'], base=active['base'], qa=active.get('qa'),
+            ci=active.get('ci'), integrated_onto=dev)]
+        self.store.phase('candidate', base=dev, head=head, qa=None, ci=None,
+                         integration=active.get('integration', 0) + 1, history=history)
+
     def execute(self, active, recovery=False):
+        if _SLOTS is None:
+            return self._execute(active, recovery)
+        try:
+            if recovery and active['phase'] in ('promoting', 'dev_wait'):
+                self.integration_lock(active)
+            result = self._execute(active, recovery)
+        except QuotaWait:
+            raise  # API backoff only: keep our place in the merge queue, the same pass resumes
+        except BaseException:
+            _SLOTS.mutex.release()
+            raise
+        _SLOTS.mutex.release()
+        return result
+
+    def _execute(self, active, recovery=False):
         self.work = self.c.worktrees_root / f'issue-{active["issue"]}'
         self.unchanged_issue(active)
         if recovery:
@@ -1013,6 +1170,12 @@ class Bridge:
                 self.store.phase('ci', ci=ci)
                 self.clean(active['head'])
                 self.unchanged_issue(active)
+                if _SLOTS is not None:
+                    self.integration_lock(active)
+                    dev = self.remote_dev()
+                    if dev != active['base']:
+                        self.integrate(active, dev)
+                        continue
                 require(self.remote_dev() == active['base'], 'dev baseline drift')
                 require(self.git('merge-base', active['base'], active['head']) == active['base'],
                         'candidate is not a fast-forward')
@@ -1063,26 +1226,39 @@ def main():
     parser.add_argument('--poll', type=int, default=240)
     parser.add_argument('--wait-timeout', type=int, default=7200)
     parser.add_argument('--model-timeout', type=int, default=1800)
+    parser.add_argument('--slot', default='default', help="'default' = the legacy single executor, unchanged")
     config = parser.parse_args()
     def terminate(signum, frame):
         raise SystemExit(128 + signum)
     signal.signal(signal.SIGTERM, terminate)
-    service = run(['systemctl', '--user', 'show', 'gobadminton-autonomy.service',
-                   '--property=KillMode,MainPID,ActiveState'], '/', clean_env() | {
-                       'XDG_RUNTIME_DIR': f'/run/user/{os.getuid()}',
-                       'DBUS_SESSION_BUS_ADDRESS': f'unix:path=/run/user/{os.getuid()}/bus'})
+    if config.slot != 'default':
+        activate_slot(config.slot)
+    if _SLOTS is None:
+        service = run(['systemctl', '--user', 'show', 'gobadminton-autonomy.service',
+                       '--property=KillMode,MainPID,ActiveState'], '/', clean_env() | {
+                           'XDG_RUNTIME_DIR': f'/run/user/{os.getuid()}',
+                           'DBUS_SESSION_BUS_ADDRESS': f'unix:path=/run/user/{os.getuid()}/bus'})
+    else:
+        service = run(['systemctl', 'show', _SLOTS.unit, '--property=KillMode,MainPID,ActiveState'],
+                      '/', clean_env())
     properties = dict(line.split('=', 1) for line in service.splitlines())
     require(properties.get('KillMode') == 'control-group'
             and properties.get('MainPID') == str(os.getpid())
             and properties.get('ActiveState') in ('active', 'activating'),
-            'must run as the single gobadminton-autonomy user service with KillMode=control-group')
-    require(os.getuid() != 0 and pwd.getpwuid(os.getuid()).pw_name == 'agentagency-dev', 'wrong runtime user')
+            'must run as the single gobadminton-autonomy user service with KillMode=control-group'
+            if _SLOTS is None else f'must run as {_SLOTS.unit} with KillMode=control-group')
+    user = 'agentagency-dev' if _SLOTS is None else _SLOTS.user
+    require(os.getuid() != 0 and pwd.getpwuid(os.getuid()).pw_name == user, 'wrong runtime user')
     require(120 <= config.poll <= 300 and 30 <= config.wait_timeout <= 14400
             and 30 <= config.model_timeout <= 3600, 'invalid time bounds')
     for name in ('repo', 'state_dir', 'worktrees_root', 'known_hosts'):
         path = getattr(config, name)
         require(path.is_absolute() and path == path.resolve(), 'absolute non-symlink config paths required')
     require(re.fullmatch(r'/[A-Za-z0-9_./-]+', str(config.known_hosts)), 'unsafe known_hosts path')
+    if _SLOTS is not None:
+        slot(_SLOTS.check_paths, config.repo, config.state_dir, config.worktrees_root)
+    # A state dir migrated into a slot is retired: the legacy executor must never run on it again.
+    require(not (config.state_dir / 'RETIRED_TO_SLOT.json').exists(), 'state retired to a slot; refusing')
     for path in (KEY, config.known_hosts):
         require(path.is_file() and not path.is_symlink(), 'missing enrolled SSH material')
     require(KEY.stat().st_uid == os.getuid() and KEY.stat().st_mode & 0o077 == 0, 'private key permissions')
@@ -1090,6 +1266,10 @@ def main():
     require(since.tzinfo is not None, 'enrollment must be timezone aware')
     os.umask(0o077)
     store = Store(config.state_dir)
+    if _SLOTS is not None:
+        if store.data['active'] and store.data['active']['phase'] != 'done':
+            slot(_SLOTS.lease, store.data['active'])  # restart: re-take own lease before any effect
+        slot(_SLOTS.publish, store.data, store.parked)
     bridge = Bridge(config, store)
     recovery = bool(store.data['active'])
     while True:
@@ -1125,6 +1305,8 @@ def main():
             if active and active['phase'] != 'done':
                 bridge.execute(active, recovery=recovery)
             recovery = False
+            if _SLOTS is not None and not (store.data['active'] and store.data['active']['phase'] != 'done'):
+                _SLOTS.release_lease()  # done or parked: free the locks for the next task
         except QuotaWait:
             # Preserve the claim and phase; API backoff is enforced before the next request.
             recovery = True
