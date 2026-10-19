@@ -61,6 +61,7 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability, onErro
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let tileTimeout: ReturnType<typeof setTimeout> | undefined;
     let fatal = false; let started = false;
+    const removeMapListeners: (() => void)[] = [];
     let grace: ReturnType<typeof setTimeout> | undefined;
     let deadline: number | undefined;
     const fail = (diagnostic: MapDiagnostic) => {
@@ -114,20 +115,31 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability, onErro
           if (camera && [camera.lng, camera.lat, camera.zoom].every(Number.isFinite) && camera.lng >= 36 && camera.lng <= 39.5 && camera.lat >= 54.5 && camera.lat <= 56.5)
             instance.jumpTo({ center: [camera.lng, camera.lat], zoom: Math.min(16, Math.max(0, camera.zoom)) });
         } catch { /* Storage is optional. */ }
-        instance.on("movestart", () => { if (alive) setSettled(false); });
+        const moving = () => { if (alive) setSettled(false); };
+        instance.on("movestart", moving);
+        removeMapListeners.push(() => instance?.off("movestart", moving));
         let firstIdle = true;
-        instance.on("idle", () => { if (alive) { if (firstIdle) { firstIdle = false; instance?.resize(); } setSettled(true); } });
-        instance.on("render", () => { firstRender = true; });
-        instance.on("sourcedata", event => {
+        const idle = () => { if (alive) { if (firstIdle) { firstIdle = false; instance?.resize(); } setSettled(true); } };
+        instance.on("idle", idle);
+        removeMapListeners.push(() => instance?.off("idle", idle));
+        const rendered = () => { firstRender = true; };
+        instance.on("render", rendered);
+        removeMapListeners.push(() => instance?.off("render", rendered));
+        const sourcedata = (event: maplibregl.MapSourceDataEvent) => {
           if (event.sourceId === "protomaps" && event.tile && event.tile.state === "loaded") loadedTiles++;
-        });
-        instance.on("load", () => { if (alive) {
+        };
+        instance.on("sourcedata", sourcedata);
+        removeMapListeners.push(() => instance?.off("sourcedata", sourcedata));
+        const loaded = () => { if (alive) {
           instance?.resize(); loadedAt = Date.now(); setReady(true); setSharedMap(instance);
           if (!fatal) { callbacks.current.onAvailability?.(true); setStatus(""); }
           clearTimeout(timeout);
           tileTimeout = setTimeout(() => { if (!loadedTiles) report({ kind: "tiles", sourceId: "protomaps" }); }, 8000);
-        } });
+        } };
+        instance.on("load", loaded);
+        removeMapListeners.push(() => instance?.off("load", loaded));
         instance.on("error", report);
+        removeMapListeners.push(() => instance?.off("error", report));
         instance.getCanvas().addEventListener("webglcontextlost", lost);
         instance.getCanvas().addEventListener("webglcontextrestored", restore);
         instance.getCanvas().setAttribute("aria-label", "Карта Москвы: стрелки перемещают карту, плюс и минус меняют масштаб");
@@ -151,6 +163,7 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability, onErro
     if (container.current) resize.observe(container.current);
     layout();
     return () => { alive = false; abort.abort(); clearTimeout(grace); cancelAnimationFrame(frame);
+      removeMapListeners.forEach(remove => remove());
       document.removeEventListener("visibilitychange", visible);
       instance?.getCanvas().removeEventListener("webglcontextlost", lost);
       instance?.getCanvas().removeEventListener("webglcontextrestored", restore); clearTimeout(timeout); clearTimeout(tileTimeout); resize.disconnect(); window.removeEventListener("gb-map-return", saveCamera); window.removeEventListener("pagehide", saveCamera);

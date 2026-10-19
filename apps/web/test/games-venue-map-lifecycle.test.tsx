@@ -2,7 +2,7 @@ import { Children, isValidElement } from "react";
 import type * as React from "react";
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-const h = vi.hoisted(() => ({ slots: [] as unknown[], cursor: 0, effects: [] as (() => void)[], cleanups: [] as (() => void)[], maps: [] as FakeMap[], width: 400, markerCreates: 0, markerRemove: vi.fn(), resizeCallback: () => {}, lngLat: vi.fn(), replace: vi.fn() }));
+const h = vi.hoisted(() => ({ slots: [] as unknown[], cursor: 0, effects: [] as (() => void)[], cleanups: [] as (() => void)[], maps: [] as FakeMap[], width: 400, buttons: [] as HTMLButtonElement[], selected: null as string | null, markerCreates: 0, markerRemove: vi.fn(), resizeCallback: () => {}, lngLat: vi.fn(), replace: vi.fn() }));
 vi.mock("react", async original => ({
   ...await original<typeof React>(),
   useRef(initial: unknown) { const i = h.cursor++; return h.slots[i] ??= { current: initial }; },
@@ -29,12 +29,12 @@ vi.mock("maplibre-gl", () => ({
   handlers = new Map<string, ((event: unknown) => void)[]>();
   touchZoomRotate = { disableRotation: vi.fn() }; resize = vi.fn(); remove = vi.fn();
   on(name: string, fn: (event: unknown) => void) { this.handlers.set(name, [...this.handlers.get(name) ?? [], fn]); }
-  off() {} emit(name: string, event = {}) { this.handlers.get(name)?.forEach(fn => fn(event)); }
+  off(name: string, fn: (event: unknown) => void) { this.handlers.set(name, (this.handlers.get(name) ?? []).filter(listener => listener !== fn)); } emit(name: string, event = {}) { this.handlers.get(name)?.forEach(fn => fn(event)); }
   canvas = Object.assign(new EventTarget(), { setAttribute() {} }); triggerRepaint = vi.fn();
   getCanvas() { return this.canvas; } getCenter() { return { lng: 37.6, lat: 55.7 }; } getZoom() { return 10.5; }
   getContainer() { return { querySelector: () => null }; } project() { return { x: 0, y: 0 }; } jumpTo() {}
 },
-  Marker: class { constructor() { h.markerCreates++; } setLngLat() { h.lngLat(); return this; } addTo() { return this; } remove = h.markerRemove; setOffset() {} getLngLat() { return [37.6, 55.7]; } },
+  Marker: class { constructor() { h.markerCreates++; } setLngLat(position: number[]) { h.lngLat(position); return this; } addTo() { return this; } remove = h.markerRemove; setOffset() {} getLngLat() { return [37.6, 55.7]; } },
 }));
 import { GamesMapViewport } from "../src/components/consumer/games/GamesMapViewport";
 import { GamesVenueMap } from "../src/components/consumer/games/GamesVenueMap";
@@ -44,7 +44,7 @@ class FakeMap {
   handlers = new Map<string, ((event: unknown) => void)[]>();
   touchZoomRotate = { disableRotation: vi.fn() }; resize = vi.fn(); remove = vi.fn();
   on(name: string, fn: (event: unknown) => void) { this.handlers.set(name, [...this.handlers.get(name) ?? [], fn]); }
-  off() {} emit(name: string, event = {}) { this.handlers.get(name)?.forEach(fn => fn(event)); }
+  off(name: string, fn: (event: unknown) => void) { this.handlers.set(name, (this.handlers.get(name) ?? []).filter(listener => listener !== fn)); } emit(name: string, event = {}) { this.handlers.get(name)?.forEach(fn => fn(event)); }
   canvas = Object.assign(new EventTarget(), { setAttribute() {} }); triggerRepaint = vi.fn();
   getCanvas() { return this.canvas; } getCenter() { return { lng: 37.6, lat: 55.7 }; } getZoom() { return 10.5; }
   getContainer() { return { querySelector: () => null }; } project() { return { x: 0, y: 0 }; } jumpTo() {}
@@ -52,9 +52,9 @@ class FakeMap {
 const venue = { id: "v", name: "Зал", latitude: 55.7, longitude: 37.6 } as VenueSummary;
 const errorCard = vi.fn();
 const availability = vi.fn(); const back = vi.fn();
-function render() {
+function render(overrides: Partial<React.ComponentProps<typeof GamesVenueMap>> = {}) {
   h.cursor = 0;
-  const tree = GamesVenueMap({ venues: [venue], counts: new Map([["v", 1]]), onSelect: vi.fn(), onAvailability: availability, onErrorCardChange: errorCard, onReturnToList: back });
+  const tree = GamesVenueMap({ venues: [venue], counts: new Map([["v", 1]]), onSelect: vi.fn(), onAvailability: availability, onErrorCardChange: errorCard, onReturnToList: back, ...overrides });
   const attach = (node: React.ReactNode): void => {
     if (!isValidElement<{ ref?: { current: unknown }; children?: React.ReactNode }>(node)) return;
     if (node.props.ref) node.props.ref.current = { getBoundingClientRect: () => ({ width: h.width, height: 400 }) };
@@ -70,13 +70,17 @@ function click(tree: React.ReactNode, label: string): void {
 async function start() { render(); await vi.waitFor(() => expect(h.maps).toHaveLength(1)); h.maps[0]!.emit("load"); return h.maps[0]!; }
 beforeEach(() => {
   vi.useFakeTimers(); h.slots = []; h.cursor = 0; h.effects = []; h.cleanups = []; h.maps = []; h.width = 400;
-  errorCard.mockClear(); availability.mockClear(); back.mockClear(); h.markerCreates = 0; h.markerRemove.mockClear();
+  errorCard.mockClear(); availability.mockClear(); back.mockClear(); h.markerCreates = 0; h.markerRemove.mockClear(); h.buttons = []; h.selected = null;
   vi.stubGlobal("window", Object.assign(new EventTarget(), { location: { origin: "https://dev.gobadminton.ru" } }));
-  vi.stubGlobal("sessionStorage", { getItem: () => null, setItem() {}, removeItem() {} });
+  vi.stubGlobal("sessionStorage", { getItem: (key: string) => key === "gb-games-map-selected" ? h.selected : null, setItem() {}, removeItem() {} });
   vi.stubGlobal("requestAnimationFrame", (fn: FrameRequestCallback) => setTimeout(() => fn(0), 16));
   vi.stubGlobal("cancelAnimationFrame", clearTimeout);
   vi.stubGlobal("ResizeObserver", class { constructor(fn: () => void) { h.resizeCallback = fn; } observe() {} disconnect() {} });
-  vi.stubGlobal("document", Object.assign(new EventTarget(), { visibilityState: "visible", createElement: () => ({ addEventListener() {}, setAttribute() {}, replaceChildren: h.replace, append() {} }) }));
+  vi.stubGlobal("document", Object.assign(new EventTarget(), { visibilityState: "visible", activeElement: null, createElement: () => {
+    const attributes = new Map<string, string>();
+    const button = { className: "", textContent: "", addEventListener() {}, setAttribute: vi.fn((key: string, value: string) => attributes.set(key, value)), getAttribute: (key: string) => attributes.get(key), replaceChildren: h.replace, append() {}, focus() { Object.assign(document, { activeElement: button }); } } as unknown as HTMLButtonElement;
+    h.buttons.push(button); return button;
+  } }));
   vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, arrayBuffer: async () => new TextEncoder().encode('{"version":8,"sources":{},"layers":[]}') })));
   vi.stubGlobal("crypto", { subtle: { digest: async () => new Uint8Array(MOSCOW_BUNDLE.styleHash.match(/../g)!.map(hex => parseInt(hex, 16))).buffer } });
   vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -99,6 +103,9 @@ it("keeps markers and map for warnings; fatal failure offers retry and list; reb
   click(failed, "Повторить"); expect(renderToStaticMarkup(render())).not.toContain("Карта не загрузилась");
   expect(errorCard).toHaveBeenLastCalledWith(false);
   await vi.waitFor(() => expect(h.maps).toHaveLength(2)); expect(map.remove).toHaveBeenCalledOnce();
+  expect([...map.handlers.values()].flat()).toHaveLength(0);
+  const warnings = availability.mock.calls.length; map.emit("load"); map.emit("error", { kind: "style" });
+  expect(availability).toHaveBeenCalledTimes(warnings);
 });
 it("reports zero vector tiles eight seconds after load", async () => {
   await start(); await vi.advanceTimersByTimeAsync(8000);
@@ -191,4 +198,31 @@ it("does not defer a style fatal behind WebGL grace", async () => {
   map.emit("error", { kind: "style" });
   expect(renderToStaticMarkup(render())).toContain("Не удалось загрузить оформление");
   expect(availability).toHaveBeenCalledWith(false);
+});
+
+
+it("updates changed marker fields in place while count-only updates preserve separation listeners and focus", async () => {
+  const map = await start(); const venues = [venue];
+  render({ venues });
+  const button = h.buttons[0]!; button.focus();
+  const moveend = map.handlers.get("moveend")?.[0];
+  const add = vi.spyOn(window, "addEventListener");
+  const remove = vi.spyOn(window, "removeEventListener");
+  h.replace.mockClear(); h.lngLat.mockClear();
+  render({ venues, counts: new Map([["v", 2]]) });
+  expect(button.textContent).toBe("2");
+  expect(map.handlers.get("moveend")).toEqual([moveend]);
+  expect(add.mock.calls.filter(([name]) => name === "gb-map-own-marker")).toHaveLength(0);
+  expect(remove.mock.calls.filter(([name]) => name === "gb-map-own-marker")).toHaveLength(0);
+  expect(h.lngLat).not.toHaveBeenCalled();
+  h.selected = "v";
+  render({ venues: [{ ...venue, name: "Новый зал", longitude: 37.8, latitude: 55.8 }], counts: new Map([["v", 0]]) });
+  expect(button.getAttribute("aria-label")).toContain("Новый зал");
+  expect(button.getAttribute("aria-pressed")).toBe("true");
+  expect(button.className).toBe("maplibregl-marker g2-map-venue-marker");
+  expect(h.lngLat).toHaveBeenCalledExactlyOnceWith([37.8, 55.8]);
+  expect(h.buttons).toEqual([button]); expect(document.activeElement).toBe(button);
+  h.lngLat.mockClear(); h.replace.mockClear();
+  render({ venues: [{ ...venue, name: "Новый зал", longitude: 37.8, latitude: 55.8 }], counts: new Map([["v", 0]]) });
+  expect(h.lngLat).not.toHaveBeenCalled(); expect(h.replace).not.toHaveBeenCalled();
 });

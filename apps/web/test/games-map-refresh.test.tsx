@@ -267,3 +267,19 @@ it.each(["visible", "minute"])("expires eligibility on %s independently of the p
   else await vi.advanceTimersByTimeAsync(10000);
   expect(mapCounts()?.get(venue.id)).toBe(0);
 });
+
+
+it("recalculates eligibility immediately on a successful response inside the same minute", async () => {
+  responseGame = { ...game, applicationDeadlineAt: "2026-10-16T12:00:45Z" };
+  render(); await vi.advanceTimersByTimeAsync(40000);
+  expect(html()).toContain("Venue · 1");
+  // A single-page refresh completes at :46, before the minute clock changes.
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => new Response(JSON.stringify({
+    items: [new URL(url, "https://example.test").pathname === "/v1/venues" ? venue : responseGame], nextCursor: null,
+  }))));
+  await vi.advanceTimersByTimeAsync(6000);
+  window.dispatchEvent(new Event("focus"));
+  expect(html()).toContain("Venue · 1");
+  await vi.advanceTimersByTimeAsync(0);
+  expect(html()).toContain("Venue · 0");
+});

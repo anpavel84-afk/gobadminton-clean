@@ -63,3 +63,12 @@ it("stabilizes counts by content without equating unknown and empty", () => {
   expect(sameVenueCounts(null, new Map())).toBe(false);
   expect(sameVenueCounts(new Map(), null)).toBe(false);
 });
+
+
+it("preserves verified empty identity but invalidates it when verification is lost", () => {
+  const empty = new Map<string, number>();
+  expect(stableVenueCounts(empty, new Map())).toBe(empty);
+  expect(stableVenueCounts(empty, null)).toBeNull();
+  expect(stableVenueCounts(null, empty)).toBe(empty);
+  expect(stableVenueCounts(null, null)).toBeNull();
+});

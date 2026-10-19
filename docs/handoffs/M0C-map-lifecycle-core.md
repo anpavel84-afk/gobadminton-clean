@@ -7,7 +7,7 @@ Status: WORKING_DRAFT — source and tests provided; checks NOT_TESTED
 
 ## Assignment and authority
 
-Immutable GOBADMINTON_AUTONOMY_V1 source_only assignment, target dev, M0c bounded Games map lifecycle slice. Base is [0c61960868b85cf40b761d953c7ea1b7565ecda9](https://github.com/anpavel84-afk/gobadminton-clean/tree/0c61960868b85cf40b761d953c7ea1b7565ecda9), matching supplied checkout HEAD (automation/issue-98). Initial tracked diff was empty. Only the four assigned source paths, four assigned test paths and this newly created handoff were edited. No commit, git metadata writes, publication, dependency installation, network deployment, services or PROD effects were authorized or performed. Candidate permalink: publisher to populate after publication; none invented here.
+Immutable GOBADMINTON_AUTONOMY_V1 source_only assignment, target dev, M0c bounded Games map lifecycle slice. Base is [0c61960868b85cf40b761d953c7ea1b7565ecda9](https://github.com/anpavel84-afk/gobadminton-clean/tree/0c61960868b85cf40b761d953c7ea1b7565ecda9), the original task base. Revision checkout HEAD is `0c371fe092b1db16e06cd4017acbe66fdeb8d086` (automation/issue-98), already containing the initial implementation. Integrator resolves the base discrepancy manually. Initial tracked diff was empty. Only the four assigned source paths, four assigned test paths and this newly created handoff were edited. No commit, git metadata writes, publication, dependency installation, network deployment, services or PROD effects were authorized or performed. Candidate permalink: publisher to populate after publication; none invented here.
 
 ## FACT versus hypothesis/history
 
@@ -15,7 +15,7 @@ FACT from local base: immediate fatal WebGL handling; marker updates rewrote DOM
 
 Reported history: M0b #96 failed independent QA after three attempts; CI attempt 2 reportedly had TS2339 for marker presentation/position. CI history was not independently accessed or confirmed. The marker entry now explicitly declares those optional fields, and reconciliation uses its explicit generic type, without any/ts-ignore.
 
-Hypothesis: reducing avoidable lifecycle/DOM churn may improve the reported iPhone behavior. No Safari/device diagnosis or PASS is claimed. Prior independent QA supplied with this assignment was `{}`.
+Hypothesis: reducing avoidable lifecycle/DOM churn may improve the reported iPhone behavior. No Safari/device diagnosis or PASS is claimed. Prior independent QA at `0c371fe092b1db16e06cd4017acbe66fdeb8d086` was FAIL: incomplete A2 marker/count identity coverage and A3/A5 automatic poll, initial alert, separate resource failures and listener removal coverage. Checks remained NOT_TESTED. This revision addresses those source-test findings; no independent verdict is claimed.
 
 ## Changes → regression coverage
 
@@ -51,3 +51,12 @@ Compilation, lint and unit behavior are NOT_TESTED because the required package 
 Rollback: integrator removes only this M0c diff; no runtime migration or metadata rollback is needed. Base discrepancies belong to the integrator for manual merge; do not fetch/reset or replace unrelated work.
 
 Next bounded action: independent QA obtains the publisher's exact candidate, runs A7 with provisioned offline tools, reviews A1–A6 against the source/tests and records evidence against that candidate. A later iPhone scenario is `/games?view=map`, observe 30s, pan/zoom, background 10s and return. It is future QA, not this source diff's gate and not Safari PASS.
+
+
+## Revision after independent QA FAIL — 2026-10-19
+
+Source change: GamesVenueMap explicitly unregisters its six MapLibre lifecycle callbacks during cleanup/retry, in addition to canvas/window/document callbacks and the separate marker effect cleanup. MapLibre test mocks now implement `off` by removing the exact callback. Retry regression asserts the old handler registry is empty and late old-map events cannot change availability.
+
+New source-test coverage: changed count/text, name/label, pressed state, class and coordinates retain the same focused button; count-only updates preserve moveend/own-marker registrations. The real parent/child continuity test is parameterized for games-only, venues-only and rejected refreshes, asserts the initial failure alert, performs automatic successful polls across 60 seconds, and asserts counts identity, button/focus identity and no repeated DOM replacement/coordinate writes. Helper coverage includes verified empty-to-unknown transitions. Refresh coverage adds successful-response eligibility expiry inside the same minute.
+
+Required commands were attempted again in order (typecheck, lint, test:unit), each with `COREPACK_ENABLE_NETWORK=0`; all exited 1 with the same pnpm 10.18.0 Corepack bootstrap error quoted above. All remain NOT_TESTED; no self-QA or device PASS. The publisher must supply the new candidate permalink. Only source, tests and this handoff are changed; no publication or metadata writes.
