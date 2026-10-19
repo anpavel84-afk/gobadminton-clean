@@ -129,3 +129,41 @@ independent QA runs strict typecheck, lint, build and only these new test files 
 provisioned tooling and a disposable DB, including review of the documented staging
 order. No permission for another implementation slice or DEV population follows
 from this handoff. PROD remains outside scope.
+
+## Revision after independent QA FAIL (source attempt 2)
+
+Source base / reviewed revision: `ec76598b6439cdefd5845cde88654e2a681eb272`.
+Reference: https://github.com/anpavel84-afk/gobadminton-clean/commit/ec76598b6439cdefd5845cde88654e2a681eb272
+This revision changes only the integration test and this handoff. The earlier
+supplied-HEAD note above describes attempt 1, not this revision's base.
+
+Addressed findings in source:
+- Venue fixture INSERT now uses separate `$4`/`$5` text parameters for
+  normalized_name/normalized_address; `$1` is used only for the UUID ID.
+- Actor rejection tests call CLI `main` with parsed arguments and `--apply`, a
+  regular empty manifest, the disposable database URL and DEV guard-compatible
+  environment. Missing active superadmin grant, suspended principal and inactive
+  user must each reject with IMPORT_ACTOR_REFUSED. Snapshots assert unchanged
+  venue/action/audit rows, stage/approval counts and media directory entries.
+  The CLI uses its real OpenAI adapter with a synthetic unused key; an empty
+  batch and actor rejection require no provider request. The core integration
+  cases retain local test fake-provider rules. No CLI fake bypass was added.
+
+C6 commands were reattempted with COREPACK_ENABLE_NETWORK=0 in this revision:
+
+| Command (prefix COREPACK_ENABLE_NETWORK=0) | Exit | Result |
+| --- | --- | --- |
+| pnpm --filter @gobadminton/api run typecheck | 1 | NOT_TESTED: unavailable pnpm |
+| pnpm --filter @gobadminton/api run lint | 1 | NOT_TESTED: unavailable pnpm |
+| pnpm --filter @gobadminton/api run build | 1 | NOT_TESTED: unavailable pnpm |
+| pnpm --filter @gobadminton/api run test:unit -- test/unit/venue-cover-import.test.ts | 1 | NOT_TESTED: unavailable pnpm |
+| pnpm --filter @gobadminton/api run test:integration -- test/integration/venue-cover-import.test.ts | 1 | NOT_TESTED: unavailable pnpm |
+
+Every command stopped before its package script with the exact reason:
+`Network access disabled by the environment; can't reach https://registry.npmjs.org/pnpm/-/pnpm-10.18.0.tgz`.
+No download, DB execution, live provider, real storage or DEV data verification
+occurred. These remain NOT_TESTED. No independent self-QA was performed.
+Rollback of this revision: discard only this revision's two-file diff through the
+authorized delivery process. No commit/push/publication or Git metadata mutation
+was performed. Next recipient: independent QA via authorized external delivery;
+re-run C6 with provisioned offline tooling and disposable PostGIS before acceptance.

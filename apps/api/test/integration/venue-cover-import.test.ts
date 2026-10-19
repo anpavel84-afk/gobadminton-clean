@@ -1,12 +1,12 @@
 import { randomUUID, createHash } from "node:crypto";
-import { readdir, readFile, mkdtemp, rm } from "node:fs/promises";
+import { readdir, readFile, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Pool } from "pg";
 import sharp from "sharp";
 import { afterAll,beforeAll,describe,expect,it } from "vitest";
 import { loadEnv } from "../../src/config/env";
-import { importVenueCovers, requireImportActor } from "../../src/database/import-venue-covers";
+import { importVenueCovers, main } from "../../src/database/import-venue-covers";
 import { validateManifest } from "../../src/venues/venue-cover-import";
 import { AvatarService } from "../../src/profiles/avatar.service";
 import { ContentModerationService } from "../../src/moderation/moderation.service";
@@ -23,6 +23,7 @@ run("venue cover import: disposable PostGIS",()=>{
   let admin:Pool|undefined, pool:Pool|undefined, root:string|undefined;
   let media:AvatarService,moderation:ContentModerationService,fake:FakeModerationProvider;
   let actor:string,userId:string;
+  let cliEnv:NodeJS.ProcessEnv;
   let venues:VenuesService;
   const city="a0000000-0000-4000-8000-000000000001";
   function db(){if(!pool)throw new Error("Missing disposable DB");return pool;}
@@ -43,6 +44,12 @@ run("venue cover import: disposable PostGIS",()=>{
       PUBLIC_API_ORIGIN:"http://127.0.0.1:19441",PUBLIC_WEB_ORIGIN:"http://127.0.0.1:19442",ALLOWED_WEB_ORIGINS:"http://127.0.0.1:19442",
       AUTH_PEPPER:"synthetic-cover-import-pepper-32chars",AVATAR_MEDIA_ROOT:root,CONTENT_MODERATION_PROVIDER:"fake",
       CONTENT_MODERATION_FINGERPRINT_SECRET:"synthetic-cover-import-fingerprint-32chars"});
+    cliEnv={NODE_ENV:"test",APP_ENV:"stage",DATABASE_URL:url.href,
+      PUBLIC_API_ORIGIN:"https://dev.gobadminton.ru",PUBLIC_WEB_ORIGIN:"https://dev.gobadminton.ru",
+      ALLOWED_WEB_ORIGINS:"https://dev.gobadminton.ru",AVATAR_MEDIA_ROOT:root,
+      AUTH_PEPPER:"synthetic-cover-import-pepper-32chars",CONTENT_MODERATION_PROVIDER:"openai",
+      OPENAI_MODERATION_API_KEY:"synthetic-unused-key",
+      CONTENT_MODERATION_FINGERPRINT_SECRET:"synthetic-cover-import-fingerprint-32chars"};
     fake=new FakeModerationProvider(env);moderation=new ContentModerationService(db(),env,fake);
     const idempotency=new IdempotencyService(db(),env);
     const mutations=new MutationRunner(db(),idempotency,new ActorFenceService(env),env);
@@ -66,7 +73,7 @@ run("venue cover import: disposable PostGIS",()=>{
     for(const kind of kinds){
       const id=randomUUID();
       await db().query(`INSERT INTO venues(id,city_id,name,address,timezone,location,created_by_user_id,lifecycle_state,normalized_name,normalized_address)
-        VALUES($1,$2,'Synthetic venue','Synthetic address','Europe/Moscow',ST_SetSRID(ST_MakePoint(37.62,55.75),4326)::geography,$3,'unverified',$1,$1)`,[id,city,userId]);
+        VALUES($1,$2,'Synthetic venue','Synthetic address','Europe/Moscow',ST_SetSRID(ST_MakePoint(37.62,55.75),4326)::geography,$3,'unverified',$4,$5)`,[id,city,userId,id,id]);
       images.set(id,bytes);items.push({venueId:id,file:id+".jpg",sha256:createHash("sha256").update(bytes).digest("hex"),kind,
         credit_text:kind==="photo"?"Фото: Клуб":kind==="logo"?"Логотип: Клуб":"Иллюстрация",source_page_url:kind==="illustration"?null:"https://example.com",basis_note:"PRIVATE BASIS"});
     }
@@ -120,16 +127,35 @@ run("venue cover import: disposable PostGIS",()=>{
       expect(lines).toContainEqual(expect.objectContaining({venueId:retired.venueId,action:"SKIPPED"}));
     }finally{fake.fixture=async()=>safeImageDecision();}
   });
-  it("rejects inactive principals, inactive users and missing superadmin grants",async()=>{
-    for(const [disable,enable] of [
-      ["UPDATE admin_role_grants SET active=false WHERE principal_id=$1","UPDATE admin_role_grants SET active=true WHERE principal_id=$1"],
-      ["UPDATE admin_principals SET status='suspended' WHERE id=$1","UPDATE admin_principals SET status='active' WHERE id=$1"],
-    ]){
-      if(!disable||!enable)throw new Error("fixture");
-      await db().query(disable,[actor]);try{await expect(requireImportActor(db(),actor)).rejects.toThrow("IMPORT_ACTOR_REFUSED");}finally{await db().query(enable,[actor]);}
-    }
-    await db().query("UPDATE users SET status='deletion_pending' WHERE id=$1",[userId]);
-    try{await expect(requireImportActor(db(),actor)).rejects.toThrow("IMPORT_ACTOR_REFUSED");}
-    finally{await db().query("UPDATE users SET status='active' WHERE id=$1",[userId]);}
+  it("CLI apply rejects inactive principals, inactive users and missing superadmin grants before writes",async()=>{
+    const dir=await mkdtemp(path.join(tmpdir(),"venue-import-cli-"));
+    try {
+      // Empty validated batch makes the entry authority guard observable even with no rows to import.
+      await writeFile(path.join(dir,"batch.json"),JSON.stringify({schema:"VENUE_COVER_BATCH_V1",batch:"actor-guards",count:0,items:[]}));
+      const args=["--dir",dir,"--manifest","batch.json","--actor-principal-id",actor,"--apply"];
+      const snapshot=async()=> (await db().query(`SELECT
+        (SELECT jsonb_agg(to_jsonb(v) ORDER BY id) FROM venues v) venues,
+        (SELECT jsonb_agg(to_jsonb(a) ORDER BY id) FROM venue_admin_actions a) actions,
+        (SELECT jsonb_agg(to_jsonb(a) ORDER BY id) FROM privileged_audit_events a) audits,
+        (SELECT count(*) FROM avatar_media_gc) stages,
+        (SELECT count(*) FROM content_moderation_approvals) approvals`)).rows;
+      const refused=async()=>{
+        const before=await snapshot();
+        const files=await readdir(root??"");
+        await expect(main(args,cliEnv)).rejects.toThrow("IMPORT_ACTOR_REFUSED");
+        expect(await snapshot()).toEqual(before);
+        expect(await readdir(root??"")).toEqual(files);
+      };
+      for(const [disable,enable] of [
+        ["UPDATE admin_role_grants SET active=false WHERE principal_id=$1","UPDATE admin_role_grants SET active=true WHERE principal_id=$1"],
+        ["UPDATE admin_principals SET status='suspended' WHERE id=$1","UPDATE admin_principals SET status='active' WHERE id=$1"],
+      ]){
+        if(!disable||!enable)throw new Error("fixture");
+        await db().query(disable,[actor]);try{await refused();}finally{await db().query(enable,[actor]);}
+      }
+      await db().query("UPDATE users SET status='deletion_pending' WHERE id=$1",[userId]);
+      try{await refused();}
+      finally{await db().query("UPDATE users SET status='active' WHERE id=$1",[userId]);}
+    } finally {await rm(dir,{recursive:true,force:true});}
   });
 });
