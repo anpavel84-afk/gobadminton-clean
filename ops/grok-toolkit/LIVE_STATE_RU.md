@@ -1,6 +1,6 @@
 # GoBadminton · LIVE STATE (живое состояние для резервного PM)
 
-**Обновлено:** 19.10.2026 11:07 (Сан-Паулу, UTC-3), генератор `ops/grok-toolkit/sync_state.py`
+**Обновлено:** 19.10.2026 11:35 (Сан-Паулу, UTC-3), генератор `ops/grok-toolkit/sync_state.py`
 **Активный оператор:** Grok (Go Bad) с 2026-10-17
 
 > Генерируется автоматически. Руками правится только строка «Активный оператор» (протокол передачи: `docs/workbench/OPS_BACKUP_PM_TAKEOVER_DRILL_V001.md` §9). Секретов здесь нет. UNKNOWN ≠ 0.
@@ -8,11 +8,11 @@
 ## 1. Конвейер (исполнитель)
 
 - Исполнитель: `active/running`, MainPID 1456 (время проверки — в строке «Обновлено»).
-- Выполнено задач (`done_count`): **23**.
-- Активная задача: **#104** P1: заглушка обложки по типу игры вместо серого значка (корт / корт с ракеткой) — фаза `ci`, попытка 1, head `1b4c97be`, PR #105, QA PASS на `1b4c97be`.
-- Последняя выкатка DEV: `r39261662533-a1`, ACCEPTED, pending=False, source `58d71ae3`, завершена 19.10.2026 10:40 (Сан-Паулу).
-- DEV `/v1/meta`: gitSha `58d71ae3`, apiVersion `0.19.0`.
-- GitHub `dev` HEAD: `58d71ae3`.
+- Выполнено задач (`done_count`): **24**.
+- Активная задача: **#106** M6: подпись источника обложки площадки (Фото / Логотип / Иллюстрация) — фаза `claimed`, попытка 0, head `—`, PR —, QA None на `—`.
+- Последняя выкатка DEV: `r39267138620-a1`, ACCEPTED, pending=False, source `1b4c97be`, завершена 19.10.2026 11:18 (Сан-Паулу).
+- DEV `/v1/meta`: gitSha `1b4c97be`, apiVersion `0.19.0`.
+- GitHub `dev` HEAD: `1b4c97be`.
 - Сверка dev HEAD = DEV gitSha = квитанция: **совпадает**.
 
 ## 2. Следующие задачи и бэклог (топ-10, `backlog_ru.json`)
@@ -35,7 +35,6 @@
 ## 3. Открытые PR и Issue (GitHub)
 
 **PR:**
-- #105 `automation/issue-104` → `dev` @ `1b4c97be`: Refs #104: autonomous source candidate
 - #102 `ops/takeover-runbook-v1` → `dev` @ `эта ветка`: Docs: OPS takeover runbook V001 (docs-only, DO NOT MERGE yet)
 - #100 `ops/parallel-slots-v1` → `dev` @ `750afb7c`: OPS: PARALLEL_SLOTS_V1 executor slots, lock registry, merge queue, budgets (NOT INSTALLED)
 - #97 `automation/issue-96` → `dev` @ `765aebc2`: Refs #96: autonomous source candidate
@@ -54,6 +53,7 @@
 - #7 `fix/p0-reverse-xhttp-lanes` → `main` @ `79e6291e`: P0 transport: isolated reverse-XHTTP lanes + mTLS keepalive (source candidate)
 
 **Issue (открытые, номера ≥ 60):**
+- #106: M6: подпись источника обложки площадки (Фото / Логотип / Иллюстрация)
 - #104: P1: заглушка обложки по типу игры вместо серого значка (корт / корт с ракеткой)
 - #101: M0e: убрать непрозрачный слой над подложкой карты
 - #98: M0c: ядро стабильности карты на iPhone (WebGL grace, маркеры, resize, сбои данных)
@@ -74,8 +74,9 @@
 
 | Поток | Состояние | Пути | Дальше |
 |---|---|---|---|
-| #104 заглушка обложки по типу игры (корт / корт с ракеткой) | в работе: попытка 1, PR #105 head 1b4c97be, QA PASS, CI 8/8 green, phase=ci | `apps/web/src/components/consumer/venues/VenueCover.tsx`; `apps/web/src/components/consumer/games/GameCover.tsx`; `apps/web/test/venue-cover.test.tsx` | ожидать merge/DEV после CI; после ACCEPTED — браузерная проверка карточек игр/площадок |
-| #101 M0e: убрать непрозрачный слой над подложкой карты | done на DEV: 58d71ae3 ACCEPTED r39261662533-a1; done_count 23; ждёт браузерной проверки оператором | `ops/grok-toolkit/map_split/bodies/published_101_M0e.body.txt`; `box: /workspace/outputs/map_split/` | если ещё не проверено: карта на dev.gobadminton.ru против макета; вердикт Павлу |
+| #104 заглушка обложки по типу игры (корт / корт с ракеткой) | done на DEV: 1b4c97be ACCEPTED r39267138620-a1; done_count 24; ждёт браузерной проверки оператором | `apps/web/src/components/consumer/venues/VenueCover.tsx`; `apps/web/src/components/consumer/games/GameCover.tsx`; `apps/web/test/venue-cover.test.tsx` | браузерная проверка на dev.gobadminton.ru (список игр, деталь, площадки): обычная/площадка=корт, trainer=ракетка, нет ▱; вердикт Павлу |
+| #106 M6: подпись источника обложки площадки (Фото / Логотип / Иллюстрация) | только что взята: phase=claimed, attempt 0/3, PR ещё нет; base 1b4c97be | `box: /workspace/outputs/venue_images/m6/`; `apps/api/migrations/0037_venue_cover_credit.sql`; `apps/web/src/components/consumer/venues/VenueCoverCredit.tsx` | ждать PR/CI/QA; после #106 — I1 фото площадок |
+| #101 M0e: убрать непрозрачный слой над подложкой карты | done на DEV: 58d71ae3 (теперь под 1b4c97be); done_count 24; браузерная проверка карты могла ещё не закрыта | `ops/grok-toolkit/map_split/bodies/published_101_M0e.body.txt`; `box: /workspace/outputs/map_split/` | если вердикт по карте ещё не дан: сравнение с MOCKUP_V001_owner.png; иначе закрыть поток |
 | PR #100 параллельные слоты (ops/parallel-slots-v1) | доделывается: QA, CI, установщик под одну root-команду | `ops/grok-toolkit/parallel_v2/`; `box: /workspace/outputs/parallel_slots_pr/` | установка только в окно idle и после «да» Павла; перед этим влить #81 |
 | Аудит контактов и описаний площадок | идёт сбор (только чтение, вне очереди) | `box: /workspace/outputs/venue_audit/ (SUMMARY_RU.md, venues_audit.csv, venues_audit.json)` | таблица Павлу на проверку, затем задача в конвейер на добавление данных |
 | PR #102 runbook передачи + grok-toolkit + drill | на ветке ops/takeover-runbook-v1, НЕ вливать (merge = DEV-деплой) | `docs/workbench/OPS_TAKEOVER_RUNBOOK_V001.md`; `docs/workbench/OPS_BACKUP_PM_TAKEOVER_DRILL_V001.md`; `ops/grok-toolkit/` | пробный подхват резервным PM без публикации |
