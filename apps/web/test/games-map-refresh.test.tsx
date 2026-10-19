@@ -41,8 +41,12 @@ import { MOSCOW_BUNDLE } from "../src/lib/radar-map-assets";
 import { GamesMapBackButton } from "../src/components/consumer/games/GamesMapBackButton";
 import { GamesMapView } from "../src/components/consumer/games/GamesMapView";
 const venue = { id: "venue-id", cityId: "city", name: "Venue", latitude: 55.75, longitude: 37.62, address: "Address", timezone: "Europe/Moscow" } as VenueSummary;
-const game = { id: "game-id", title: "Delayed game", venue, status: "published", visibility: "public", availablePlaces: 2,
-  startsAt: "2026-10-18T12:00:00Z", applicationDeadlineAt: "2026-10-18T11:00:00Z" } as Game;
+const game: Game = { id: "game-id", version: 1, title: "Delayed game", venue, status: "published", visibility: "public", availablePlaces: 2,
+  startsAt: "2026-10-18T12:00:00Z", endsAt: "2026-10-18T13:00:00Z", applicationDeadlineAt: "2026-10-18T11:00:00Z",
+  timezone: venue.timezone, activityKind: "regular", trainer: null, trainingDescription: null,
+  organizer: { id: null, displayName: "Организатор", publicContact: "" }, capacity: 4, externalReservedCount: 0, confirmedCount: 2,
+  formatKey: "doubles", levelRule: { scaleId: "t", scaleVersion: 1, allowedLevelIds: [] },
+  settlement: { mode: "external", purpose: "no_trainer_fee", priceMinor: null, currency: null, terms: "" } };
 let requests: { url: URL; signal: AbortSignal }[];
 let inFlight: number;
 let maxInFlight: number;
@@ -95,7 +99,7 @@ it("finishes >30s sequential pagination, renders venues/schedules, and polls onl
   await vi.advanceTimersByTimeAsync(9000);
   const completed = html();
   expect(completed).toContain("Venue · 1");
-  expect(completed).not.toContain("Delayed game"); // schedules live on the venue route
+  expect(completed).not.toContain("Delayed game"); // no venue is selected yet
   expect(completed).not.toContain("Загружаем");
   await vi.advanceTimersByTimeAsync(29999);
   expect(requests).toHaveLength(4);
@@ -282,4 +286,20 @@ it("recalculates eligibility immediately on a successful response inside the sam
   expect(html()).toContain("Venue · 1");
   await vi.advanceTimersByTimeAsync(0);
   expect(html()).toContain("Venue · 0");
+});
+
+it("fallback selection and expansion do not restart paginated transport", async () => {
+  render(); await vi.advanceTimersByTimeAsync(40000);
+  const visit = (node: React.ReactNode, action: (props: Record<string, unknown>) => void): void => {
+    if (!isValidElement<Record<string, unknown>>(node)) return;
+    action(node.props);
+    Children.forEach(node.props.children as React.ReactNode, child => visit(child, action));
+  };
+  visit(render(), props => { if (props.className === "gb-discovery-chip") (props.onClick as () => void)(); });
+  const count = requests.length;
+  visit(render(), props => { if (typeof props.onOpen === "function") props.onOpen(); });
+  const tree = render();
+  let expanded = false;
+  visit(tree, props => { if (typeof props.onCollapse === "function") { expanded = true; expect(props.gamesReady).toBe(true); } });
+  expect(expanded).toBe(true); expect(requests).toHaveLength(count);
 });
