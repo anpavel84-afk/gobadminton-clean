@@ -180,6 +180,29 @@ class Locks(unittest.TestCase):
         p.stdout.close()
         return p
 
+    def test_lease_and_shared_lock_modes_survive_umask_0077(self):
+        # QA100: the executor runs with umask 0077; leases must stay readable (not writable) by
+        # other slots, shared flock files group-usable, and an unreadable lease fails closed.
+        old = os.umask(0o077)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                locks = Path(tmp)
+                reg = s.LockRegistry(locks, locks / 'registry.lock')
+                with s._Flock(locks / 'registry.lock', write=True):
+                    pass
+                self.assertEqual((locks / 'registry.lock').stat().st_mode & 0o777, 0o660)
+                self.assertTrue(reg.acquire('slot1', self.rec(1, ['web:a'], ['apps/web/a.ts'])))
+                self.assertEqual((locks / 'slot1.lease').stat().st_mode & 0o777, 0o644)
+                reg.release()
+                bad = locks / 'slot8.lease'
+                bad.write_text('{}')
+                os.chmod(bad, 0)
+                if os.getuid() != 0:                   # root bypasses modes; covered on the server by check 6
+                    self.assertEqual(s.LockRegistry(locks, locks / 'registry.lock').holders(),
+                                     {'slot8': dict(issue=0, locks=['global'], allowed_paths=[])})
+        finally:
+            os.umask(old)
+
     def test_lease_is_live_only_while_its_process_lives(self):
         with tempfile.TemporaryDirectory() as tmp:
             locks = Path(tmp)

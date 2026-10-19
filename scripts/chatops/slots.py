@@ -187,6 +187,8 @@ class _Flock:
     def __enter__(self):
         flags = (os.O_RDWR | os.O_CREAT) if self.write else os.O_RDONLY
         self.fd = os.open(self.path, flags | os.O_NOFOLLOW, 0o660)
+        if self.write and os.fstat(self.fd).st_uid == os.getuid():
+            os.fchmod(self.fd, 0o660)                  # shared lock file: umask 0077 must not hide it
         fcntl.flock(self.fd, fcntl.LOCK_EX)
         return self.fd
 
@@ -213,6 +215,9 @@ class LockRegistry:
             try:
                 fd = os.open(self.directory / entry, os.O_RDONLY | os.O_NOFOLLOW)
             except FileNotFoundError:
+                continue
+            except PermissionError:                    # unreadable lease: fail closed, treat as global
+                out[name] = dict(issue=0, locks=['global'], allowed_paths=[])
                 continue
             try:
                 try:
@@ -247,6 +252,7 @@ class LockRegistry:
             except BlockingIOError:
                 os.close(fd)
                 raise Hold('another process holds this slot lease') from None
+            os.fchmod(fd, 0o644)                       # readable by other slots despite umask 0077
             os.ftruncate(fd, 0)
             os.write(fd, json.dumps(record, sort_keys=True).encode())
             os.fsync(fd)

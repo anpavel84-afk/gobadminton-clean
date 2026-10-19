@@ -6,6 +6,9 @@
 ## Коротко
 - `--slot default` (по умолчанию) — **ровно прежний исполнитель**: те же пути, user-unit `gobadminton-autonomy.service`,
   пользователь `agentagency-dev`, env, имена файлов QA, интервал API. `slots.py` в этом режиме даже не импортируется.
+  Два осознанных отличия и в default: (1) PM V1 — необязательные поля задания `depends_on/locks/model/effort`
+  валидируются (`check_links`), неверные значения → Issue отклоняется; (2) state с `RETIRED_TO_SLOT.json`
+  (после миграции в slot1) → отказ старта. Всё остальное новое поведение — только под `_SLOTS`.
 - `--slot slotN` (`slot1`..`slot8`) — изолированный слот: свой пользователь ОС, свой state/checkpoint, свои worktree,
   своя аренда блокировок, свой бюджет; system-unit `gobadminton-slot@slotN.service`.
 - Supervisor (`slots.py supervise`, пользователь `gb-supervisor`) читает статусы слотов, строит план по `depends_on`
