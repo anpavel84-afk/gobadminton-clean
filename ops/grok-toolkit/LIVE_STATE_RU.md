@@ -1,6 +1,6 @@
 # GoBadminton · LIVE STATE (живое состояние для резервного PM)
 
-**Обновлено:** 19.10.2026 14:32 (Сан-Паулу, UTC-3), генератор `ops/grok-toolkit/sync_state.py`
+**Обновлено:** 19.10.2026 15:08 (Сан-Паулу, UTC-3), генератор `ops/grok-toolkit/sync_state.py`
 **Активный оператор:** Grok (Go Bad) с 2026-10-17
 
 > Генерируется автоматически. Руками правится только строка «Активный оператор» (протокол передачи: `docs/workbench/OPS_BACKUP_PM_TAKEOVER_DRILL_V001.md` §9). Секретов здесь нет. UNKNOWN ≠ 0.
@@ -9,11 +9,11 @@
 
 - Исполнитель: `active/running`, MainPID 1456 (время проверки — в строке «Обновлено»).
 - Выполнено задач (`done_count`): **26**.
-- Активная задача: **#108** NAV1: новые иконки нижнего меню (вариант B) — фаза `done`, попытка 1, head `687fa922`, PR #110, QA PASS на `687fa922`.
+- Активная задача: **#109** I1: импорт 20 фото площадок (DEV) — фаза `dev_wait`, попытка 2, head `f0168eac`, PR #111, QA PASS на `f0168eac`.
 - Последняя выкатка DEV: `r39293031333-a1`, ACCEPTED, pending=False, source `687fa922`, завершена 19.10.2026 14:23 (Сан-Паулу).
 - DEV `/v1/meta`: gitSha `687fa922`, apiVersion `0.19.0`.
-- GitHub `dev` HEAD: `687fa922`.
-- Сверка dev HEAD = DEV gitSha = квитанция: **совпадает**.
+- GitHub `dev` HEAD: `f0168eac`.
+- Сверка dev HEAD = DEV gitSha = квитанция: **НЕ совпадает, разобрать**.
 
 ## 2. Следующие задачи и бэклог (топ-10, `backlog_ru.json`)
 
@@ -76,6 +76,7 @@
 
 | Поток | Состояние | Пути | Дальше |
 |---|---|---|---|
+| #109 I1: импорт 20 фото площадок (DEV, CLI оператора) | попытка 2/3, PR #111, head f0168eac, QA PASS, фаза dev_wait (ждёт DEV-выкатки) | `box: /workspace/outputs/venue_images/batch1/`; `apps/api/src/venues/venue-cover-import.ts`; `apps/api/src/database/import-venue-covers.ts` | после DEV ACCEPTED: дать Павлу root-команду импорта (batch1/ROOT_COMMAND.txt), затем проверка обложек площадок в браузере |
 | #104 заглушка обложки по типу игры (корт / корт с ракеткой) | done на DEV: 1b4c97be (теперь под 6dd3972d); проверено, Павлу дан вердикт «готово» | `apps/web/src/components/consumer/venues/VenueCover.tsx`; `apps/web/src/components/consumer/games/GameCover.tsx`; `apps/web/test/venue-cover.test.tsx` | закрыть поток |
 | #106 M6: подпись источника обложки площадки (Фото / Логотип / Иллюстрация) | done на DEV: 6dd3972d ACCEPTED r39285408995-a1; done_count 25; ждёт браузерной проверки оператором | `box: /workspace/outputs/venue_images/m6/`; `apps/api/migrations/0037_venue_cover_credit.sql`; `apps/web/src/components/consumer/venues/VenueCoverCredit.tsx` | браузерная проверка подписи источника на карточках площадок; вердикт Павлу; затем I1 фото площадок (пересобрать на 6dd3972d) |
 | #108 NAV1: новые иконки нижнего меню (вариант B, лаймовый круг у активного) | done на DEV: 687fa922 ACCEPTED r39293031333-a1; done_count 26; ждёт браузерной проверки оператором | `box: /workspace/outputs/navicons/NAV1.final.body.txt`; `apps/web/src/components/consumer/NavIcon.tsx`; `apps/web/src/components/consumer/nav-icon-paths.tsx`; `apps/web/src/styles/foundation.css` | браузерная проверка нижнего меню на мобильном экране; вердикт Павлу; затем M2 по плану (после MAP-PERF1) |
