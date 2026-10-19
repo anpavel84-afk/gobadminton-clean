@@ -39,9 +39,18 @@ DEPLOY_STEP = 'Apply, browser-smoke, accept; rollback on failure'
 MAX_JSON = 2 * 1024 * 1024
 CANARIES = {30: 'docs/operations/chatops/AUTONOMY_CANARY_A.md',
             31: 'docs/operations/chatops/AUTONOMY_CANARY_B.md'}
+def readable_present(path):
+    """Read-allowlist probe: an unstat-able path (EACCES, e.g. an unprivileged slot user or ProtectHome)
+    is absent, never granted and never an import-time crash (Path.exists raises EACCES on Python 3.12)."""
+    try:
+        return Path(path).exists()
+    except OSError:
+        return False
+
+
 RUNTIME_READS = [Path(p) for p in (
     '/home/agentagency-dev/.local/lib/node_modules/@openai',
-    '/home/agentagency-dev/.local/node-v24.21.0') if Path(p).exists()]
+    '/home/agentagency-dev/.local/node-v24.21.0') if readable_present(p)]
 NATIVE_CODEX = '/home/agentagency-dev/.local/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex'
 EVIDENCE_MAX_AGE = 14400  # one bounded wait/recovery window from acceptance
 EVIDENCE = Path('/var/lib/gobadminton-deploy-evidence/dev.json')
@@ -813,7 +822,7 @@ class Bridge:
         common = Path(self.git('rev-parse', '--path-format=absolute', '--git-common-dir'))
         # Do not grant a readable ancestor of the SSH key or checkpoint directory.
         readable = [Path(x) for x in ('/usr', '/bin', '/lib', '/lib64', '/etc', '/dev')
-                    if Path(x).exists()]
+                    if readable_present(x)]
         readable += [*RUNTIME_READS, common, self.work, job]
         for path in readable:
             resolved = path.resolve()

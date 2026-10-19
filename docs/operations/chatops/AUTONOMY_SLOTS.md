@@ -80,6 +80,14 @@ Auto, provider-тест на 3 задачах, «да» Owner). `agy` — тол
 Копирует байт-в-байт `state.json`, `parked.json`, `qa-*`, `before-*` с проверкой sha256, без сброса счётчиков и истории,
 пишет `MIGRATION.json` и в legacy-каталог `RETIRED_TO_SLOT.json`: default-исполнитель на таком state дальше не стартует.
 
+## Недоступные пути (EACCES)
+Слот под отдельным пользователем или с `ProtectHome=yes` не может сделать stat внутри `/home/agentagency-dev`, а на Python 3.12
+`Path.exists()` в этом случае бросает `PermissionError`. Поэтому проверки разделены. В read-allowlist (`readable_present`)
+недоступный путь считается отсутствующим и не выдаётся. В deny-list (`deny_present`) он считается существующим и
+остаётся запрещённым, то есть fail-closed. Импорт исполнителя под непривилегированным пользователем больше не падает.
+Для slot2 до включения нужен собственный путь `--codex` и runtime вне `/home` (default `NATIVE_CODEX` лежит в legacy home).
+Это отдельный шаг вместе с разрешением на второй слот.
+
 ## Тесты
 `python3 -B scripts/chatops/tests/test_autonomous_issues.py` (прежние 57, без изменений) и
 `python3 -B scripts/chatops/tests/test_slots.py` (новые). CI: job `receiver`.

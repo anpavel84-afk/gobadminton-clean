@@ -256,6 +256,35 @@ class Locks(unittest.TestCase):
             self.assertEqual(slept[-1], 3600.0)
 
 
+class UnreadableHome(unittest.TestCase):
+    """Server finding (Python 3.12): Path.exists raises EACCES for an unprivileged slot user / ProtectHome."""
+
+    def test_probes_on_permission_error(self):
+        with patch.object(Path, 'stat', side_effect=PermissionError(13, 'Permission denied')):
+            self.assertFalse(a.readable_present('/home/agentagency-dev/.local/node-v24.21.0'))
+            self.assertFalse(s.readable_present('/home/agentagency-dev/.local'))
+            self.assertTrue(s.deny_present('/home/agentagency-dev/.gb-autonomy-state'))
+
+    def test_import_survives_unreadable_home(self):
+        spec = importlib.util.spec_from_file_location('autonomy_eacces_test', HERE / 'autonomous_issues.py')
+        mod = importlib.util.module_from_spec(spec)
+        with patch.object(Path, 'stat', side_effect=PermissionError(13, 'Permission denied')):
+            spec.loader.exec_module(mod)
+        self.assertEqual(mod.RUNTIME_READS, [])
+
+    def test_denied_keeps_unstatable_paths(self):
+        with tempfile.TemporaryDirectory() as d, patch.object(s, 'LEGACY_HOME', Path(d) / 'home'), \
+                patch.object(s, 'LEGACY_STATE', Path(d) / 'home' / '.gb-autonomy-state'):
+            rt = s.Runtime.__new__(s.Runtime)
+            rt.legacy = False
+            rt.layout = types.SimpleNamespace(others=lambda: [Path(d) / 'other'], state_dir=Path(d) / 'mine')
+            with patch.object(Path, 'stat', side_effect=PermissionError(13, 'Permission denied')):
+                out = rt.denied()
+            self.assertIn(Path(d) / 'other', out)
+            self.assertIn(Path(d) / 'home', out)
+            self.assertIn(Path(d) / 'home' / '.gb-autonomy-state', out)
+
+
 class Budgets(unittest.TestCase):
     def budget(self, tmp, limits):
         h = host(tmp, limits)

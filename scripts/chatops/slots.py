@@ -137,6 +137,22 @@ class Layout:
                 for p in (self.state_root / 'slots' / f'slot{n}', self.slot_root / f'slot{n}')]
 
 
+def readable_present(path):
+    """Read-allowlist probe: an unstat-able path is absent (never granted, never a crash)."""
+    try:
+        return Path(path).exists()
+    except OSError:
+        return False
+
+
+def deny_present(path):
+    """Deny-list probe, fail-closed: a path we cannot stat (EACCES) may exist, so it stays denied."""
+    try:
+        return Path(path).exists()
+    except OSError:
+        return True
+
+
 def disjoint(paths_a, paths_b):
     for a in paths_a:
         for b in paths_b:
@@ -468,7 +484,7 @@ class Runtime:
             self.runtime_reads = list(legacy_reads)
         else:
             self.path = f'{runtime_root}/node/bin:/usr/bin:/bin'
-            self.runtime_reads = [Path(runtime_root)] if Path(runtime_root).exists() else []
+            self.runtime_reads = [Path(runtime_root)] if readable_present(runtime_root) else []
         self.registry = LockRegistry(self.layout.locks, self.layout.registry)
         self.mutex = IntegrationMutex(self.layout.integration)
         self.budget = Budget(Path(config_root) / 'budgets.json', self.layout.state_root / 'outbox',
@@ -485,10 +501,10 @@ class Runtime:
 
     def denied(self):
         """Model sandbox deny-list: every other slot, the legacy state, other homes."""
-        out = [p for p in self.layout.others() if p.exists()]
+        out = [p for p in self.layout.others() if deny_present(p)]
         if not self.legacy:
-            out += [p for p in (LEGACY_HOME,) if p.exists()]
-        if LEGACY_STATE.exists() and LEGACY_STATE != self.layout.state_dir:
+            out += [p for p in (LEGACY_HOME,) if deny_present(p)]
+        if deny_present(LEGACY_STATE) and LEGACY_STATE != self.layout.state_dir:
             out.append(LEGACY_STATE)
         return out
 
