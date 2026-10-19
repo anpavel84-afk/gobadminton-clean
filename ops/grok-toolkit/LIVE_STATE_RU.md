@@ -1,6 +1,6 @@
 # GoBadminton · LIVE STATE (живое состояние для резервного PM)
 
-**Обновлено:** 19.10.2026 16:36 (Сан-Паулу, UTC-3), генератор `ops/grok-toolkit/sync_state.py`
+**Обновлено:** 19.10.2026 17:02 (Сан-Паулу, UTC-3), генератор `ops/grok-toolkit/sync_state.py`
 **Активный оператор:** Grok (Go Bad) с 2026-10-17
 
 > Генерируется автоматически. Руками правится только строка «Активный оператор» (протокол передачи: `docs/workbench/OPS_BACKUP_PM_TAKEOVER_DRILL_V001.md` §9). Секретов здесь нет. UNKNOWN ≠ 0.
@@ -8,12 +8,12 @@
 ## 1. Конвейер (исполнитель)
 
 - Исполнитель: `active/running`, MainPID 1456 (время проверки — в строке «Обновлено»).
-- Выполнено задач (`done_count`): **27**.
-- Активная задача: **#112** M2: тап по маркеру — карточка поверх карты, без перехода — фаза `dev_wait`, попытка 2, head `b85f3280`, PR #113, QA PASS на `b85f3280`.
-- Последняя выкатка DEV: `r39299797649-a1`, ACCEPTED, pending=False, source `f0168eac`, завершена 19.10.2026 15:16 (Сан-Паулу).
-- DEV `/v1/meta`: gitSha `f0168eac`, apiVersion `0.19.0`.
+- Выполнено задач (`done_count`): **28**.
+- Активная задача: **#112** M2: тап по маркеру — карточка поверх карты, без перехода — фаза `done`, попытка 2, head `b85f3280`, PR #113, QA PASS на `b85f3280`.
+- Последняя выкатка DEV: `r39312413798-a1`, ACCEPTED, pending=False, source `b85f3280`, завершена 19.10.2026 16:40 (Сан-Паулу).
+- DEV `/v1/meta`: gitSha `b85f3280`, apiVersion `0.19.0`.
 - GitHub `dev` HEAD: `b85f3280`.
-- Сверка dev HEAD = DEV gitSha = квитанция: **НЕ совпадает, разобрать**.
+- Сверка dev HEAD = DEV gitSha = квитанция: **совпадает**.
 
 ## 2. Следующие задачи и бэклог (топ-10, `backlog_ru.json`)
 
@@ -86,7 +86,7 @@
 | Аудит контактов и описаний площадок | идёт сбор (только чтение, вне очереди) | `box: /workspace/outputs/venue_audit/ (SUMMARY_RU.md, venues_audit.csv, venues_audit.json)` | таблица Павлу на проверку, затем задача в конвейер на добавление данных |
 | PR #102 runbook передачи + grok-toolkit + drill | на ветке ops/takeover-runbook-v1, НЕ вливать (merge = DEV-деплой) | `docs/workbench/OPS_TAKEOVER_RUNBOOK_V001.md`; `docs/workbench/OPS_BACKUP_PM_TAKEOVER_DRILL_V001.md`; `ops/grok-toolkit/` | пробный подхват резервным PM без публикации |
 | OPS-монитор v4 с «Бэклогом» | установлен и работает | `ops/grok-toolkit/ops_monitor/`; `сервер: /var/lib/gb-ops-titles/backlog_ru.json` | обновлять backlog_ru.json при каждой публикации или закрытии задачи |
-| #112 M2: тап по маркеру — карточка площадки поверх карты, без перехода | attempt 2/3 после RESUME: PR #113 head b85f3280, CI 7/7 PASS, QA PASS, phase=promoting; DEV ещё f0168eac | `apps/web/src/components/consumer/games/GamesMapView.tsx`; `apps/web/src/components/consumer/games/VenuePreviewCard.tsx`; `apps/web/src/styles/venue-popup.css` | дождаться релиза на DEV, затем браузерная проверка попапа площадки над картой и вердикт Павлу |
+| #112 M2: тап по маркеру — карточка площадки поверх карты, без перехода | done на DEV: b85f3280 ACCEPTED r39312413798-a1; done_count 28; ждёт браузерной проверки оператором | `apps/web/src/components/consumer/games/GamesMapView.tsx`; `apps/web/src/components/consumer/games/VenuePreviewCard.tsx`; `apps/web/src/styles/venue-popup.css` | браузерная проверка карточки площадки поверх карты (сравнить с макетом); вердикт Павлу; затем M3 единая шторка |
 
 Пути с префиксом `box:` лежат на рабочем компьютере Grok, а не в репозитории. Резервному PM они недоступны: опирайтесь на копии в `ops/grok-toolkit/`.
 
