@@ -90,6 +90,7 @@
 .gb-map-radar { position:fixed; z-index:102; right:16px; top:calc(12px + env(safe-area-inset-top,0px)); }
 .gb-map-radar .gb-radar-popover { right:0; max-width:calc(100vw - 32px); }
 .gb-radar-layer { position:absolute; inset:0; pointer-events:none; }
+.gb-consumer.gb-radar-layer { background: transparent; min-height: 0; }
 .gb-radar-layer .g2-map-panel,.gb-radar-layer dialog,.gb-radar-layer .gb-map-layer-summary { pointer-events:auto; }
 .gb-map-layer-summary:not(:focus-within) { width:1px; height:1px; padding:0; clip-path:inset(50%); }
 .gb-map-layer-summary:focus-within { top:calc(72px + env(safe-area-inset-top,0px)); }
