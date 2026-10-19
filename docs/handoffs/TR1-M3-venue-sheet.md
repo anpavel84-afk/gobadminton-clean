@@ -4,6 +4,40 @@ From: Codex, source author. To: integrator, then independent QA.
 Date: 2026-10-20. Status: PROPOSED / SOURCE_ONLY / NOT_TESTED runtime.
 Target: DEV source candidate; no release or visual acceptance.
 
+## Source revision after independent QA (2026-10-20)
+
+From: Codex source author. To: integrator / independent QA. Status: PROPOSED;
+TypeScript and Vitest NOT_TESTED, no source PASS or visual acceptance claim.
+This revision starts at observed HEAD `113525c27e4b7d0728d5297492762c1a6f5a02b4`
+(prior source attempt), with empty initial tracked diff. Requested task base remains
+`faade9a313e92b77b1b89d6ea7b77991a8350cda`; no checkout or Git metadata writes
+were performed. The implementation and five test files below are inherited from
+the reviewed HEAD, not newly authored by this revision.
+
+Prior independent QA reported FAIL: missing preview clearance for both lower
+MapLibre control corners, and unavailable D6 tools. This bounded correction changes
+only venue-popup.css and this handoff. It restores both data-venue-preview control
+selectors inside .gb-consumer. Explicit title/address line heights make the preview
+150px tall: handle 44 + copy 90 (22/20/18/18 and three 4px gaps) + padding 16.
+Control bottom is 174px + safe-bottom: card height + its 12px bottom offset + a
+12px clearance. This protects attribution and other lower controls in both corners,
+with and without games. No map state, camera, requests or component logic changes.
+
+D1–D4: inherited implementation/coverage, no new execution evidence. D5: scoped
+clearance correction above; browser geometry at 390/430px remains NOT_TESTED.
+D6 repeated from repository root for this revision:
+
+- `COREPACK_ENABLE_NETWORK=0 pnpm --filter @gobadminton/web exec tsc -p tsconfig.json --noEmit --incremental false` — exit 1 before compiler startup.
+- `COREPACK_ENABLE_NETWORK=0 pnpm --filter @gobadminton/web exec vitest run --no-cache test/venue-preview-card.test.tsx test/games-map-selection.test.tsx test/games-map-refresh.test.tsx test/venue-sheet.test.tsx test/venue-sheet-integration.test.tsx` — exit 1 before test startup.
+- Both report missing pnpm 10.18.0: Corepack attempts its registry download, then reports `Network access disabled by the environment; can't reach https://registry.npmjs.org/pnpm/-/pnpm-10.18.0.tgz`. Result: NOT_TESTED; no installation/network workaround attempted.
+- `git diff --check` — exit 0 after this correction.
+
+STYLE_GUIDE_PARITY below still applies: documented families are a PROPOSED
+composition, external Make/mockup parity UNVERIFIED. No new visual pattern,
+STYLE_GUIDE_GAP or OWNER_VISUAL_OVERRIDE is asserted. Rollback for this revision:
+reverse its two-file diff only. Integrator owns independent QA, publication and
+the exact candidate permalink. Historical first-attempt notes follow.
+
 ## Assignment and base
 
 Bounded assignment: TR1-M3, issue-117 worktree, immutable GOBADMINTON_AUTONOMY_V1 source_only task supplied by Owner. Implement marker/fallback selection → preview → information → schedule → game detail in one sheet above the existing map. No new requests, participation actions, page navigation, history mutation, API/DB/contracts/dependencies/workflows/control-document changes.
