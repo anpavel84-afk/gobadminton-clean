@@ -1,18 +1,18 @@
 # GoBadminton · LIVE STATE (живое состояние для резервного PM)
 
-**Обновлено:** 19.10.2026 18:34 (Сан-Паулу, UTC-3), генератор `ops/grok-toolkit/sync_state.py`
+**Обновлено:** 19.10.2026 19:50 (Сан-Паулу, UTC-3), генератор `ops/grok-toolkit/sync_state.py`
 **Активный оператор:** Grok (Go Bad) с 2026-10-17
 
 > Генерируется автоматически. Руками правится только строка «Активный оператор» (протокол передачи: `docs/workbench/OPS_BACKUP_PM_TAKEOVER_DRILL_V001.md` §9). Секретов здесь нет. UNKNOWN ≠ 0.
 
 ## 1. Конвейер (исполнитель)
 
-- Исполнитель: `active/running`, MainPID 3715121 (время проверки — в строке «Обновлено»).
+- Исполнитель: `active/running`, MainPID 224489 (время проверки — в строке «Обновлено»).
 - Выполнено задач (`done_count`): **28**.
-- Активная задача: **#112** M2: тап по маркеру — карточка поверх карты, без перехода — фаза `done`, попытка 2, head `b85f3280`, PR #113, QA PASS на `b85f3280`.
-- Последняя выкатка DEV: `r39312413798-a1`, ACCEPTED, pending=False, source `b85f3280`, завершена 19.10.2026 16:40 (Сан-Паулу).
-- DEV `/v1/meta`: gitSha `b85f3280`, apiVersion `0.19.0`.
-- GitHub `dev` HEAD: `b85f3280`.
+- Активная задача: **#114** V0: без вызова админки для гостей (убрать 401) на карте, в попапе и на странице площадки — фаза `claimed`, попытка 0, head `—`, PR —, QA None на `—`.
+- Последняя выкатка DEV: `r39336714367-a1`, ACCEPTED, pending=False, source `faade9a3`, завершена 19.10.2026 19:45 (Сан-Паулу).
+- DEV `/v1/meta`: gitSha `faade9a3`, apiVersion `0.19.0`.
+- GitHub `dev` HEAD: `faade9a3`.
 - Сверка dev HEAD = DEV gitSha = квитанция: **совпадает**.
 
 ## 2. Следующие задачи и бэклог (топ-10, `backlog_ru.json`)
@@ -53,6 +53,7 @@
 - #7 `fix/p0-reverse-xhttp-lanes` → `main` @ `79e6291e`: P0 transport: isolated reverse-XHTTP lanes + mTLS keepalive (source candidate)
 
 **Issue (открытые, номера ≥ 60):**
+- #114: V0: без вызова админки для гостей (убрать 401) на карте, в попапе и на странице площадки
 - #112: M2: тап по маркеру — карточка поверх карты, без перехода
 - #109: I1: импорт 20 фото площадок (DEV)
 - #108: NAV1: новые иконки нижнего меню (вариант B)
@@ -87,6 +88,7 @@
 | PR #102 runbook передачи + grok-toolkit + drill | на ветке ops/takeover-runbook-v1, НЕ вливать (merge = DEV-деплой) | `docs/workbench/OPS_TAKEOVER_RUNBOOK_V001.md`; `docs/workbench/OPS_BACKUP_PM_TAKEOVER_DRILL_V001.md`; `ops/grok-toolkit/` | пробный подхват резервным PM без публикации |
 | OPS-монитор v4 с «Бэклогом» | установлен и работает | `ops/grok-toolkit/ops_monitor/`; `сервер: /var/lib/gb-ops-titles/backlog_ru.json` | обновлять backlog_ru.json при каждой публикации или закрытии задачи |
 | #112 M2: тап по маркеру — карточка площадки поверх карты, без перехода | done на DEV: b85f3280 ACCEPTED r39312413798-a1; done_count 28; ждёт браузерной проверки оператором | `apps/web/src/components/consumer/games/GamesMapView.tsx`; `apps/web/src/components/consumer/games/VenuePreviewCard.tsx`; `apps/web/src/styles/venue-popup.css` | браузерная проверка карточки площадки поверх карты (сравнить с макетом); вердикт Павлу; затем M3 единая шторка |
+| #114 V0: без вызова админки для гостей (убрать 401) на карте, в попапе и на странице площадки | взята исполнителем: attempt 0/3, base faade9a3, phase=claimed | `apps/web/src/components/consumer/venues/VenuePage.tsx`; `apps/web/test/venue-public-access.test.tsx`; `apps/web/test/venue-public-boundary.test.ts` | дождаться PR, CI и QA; после выкладки на DEV проверить, что гость не получает 401 на площадке |
 
 Пути с префиксом `box:` лежат на рабочем компьютере Grok, а не в репозитории. Резервному PM они недоступны: опирайтесь на копии в `ops/grok-toolkit/`.
 
