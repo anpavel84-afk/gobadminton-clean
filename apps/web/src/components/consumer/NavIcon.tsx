@@ -1,10 +1,9 @@
 import type { RootNavItem } from "./nav-items";
-
-const assets = { games: "games", players: "players", mine: "my-games", profile: "profile", messages: "messages" };
+import { NAV_ICON_PATHS } from "./nav-icon-paths";
 
 export function NavIcon({ name }: { name: RootNavItem["icon"] }) {
-  if (name === "messages") return <MessageGlyph />;
-  return <img className="gb-nav-icon" src={`/brand/${assets[name]}.svg`} alt="" aria-hidden="true" />;
+  if (name === "profile") return <img className="gb-nav-icon" src="/brand/profile.svg" alt="" aria-hidden="true" />;
+  return <svg className="gb-nav-icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" focusable="false" aria-hidden="true">{NAV_ICON_PATHS[name]}</svg>;
 }
 
 export function MessageGlyph() {

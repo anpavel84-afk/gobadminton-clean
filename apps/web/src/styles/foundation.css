@@ -128,6 +128,7 @@
   .gb-bottom-nav .gb-message-count { top: 5px; right: calc(50% - 25px); }
   .gb-bottom-nav a[aria-current="page"] { color: var(--gb-ink); }
   .gb-bottom-nav a[aria-current="page"]::after { content: ""; position: absolute; bottom: -3px; width: 30px; height: 3px; border-radius: 3px; background: var(--gb-lime-deep); }
+  .gb-bottom-nav a[aria-current="page"] .gb-nav-icon { border-radius: 50%; background-color: var(--gb-lime-soft); box-shadow: 0 0 0 4px var(--gb-lime-soft); }
   .gb-shell-content--focused { padding: 0; }
   .gb-shell-content--document :is(h2,h3) { scroll-margin-top: 16px; }
 }
