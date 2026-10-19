@@ -1,4 +1,5 @@
 "use client";
+import { logMapEvent } from "../../../lib/games-map-debug";
 import { Button } from "../Button";
 import { SurfacePanel } from "../Surfaces";
 import { classifyMapError, mapErrorReason, type MapDiagnostic } from "../../../lib/games-map-diagnostics";
@@ -13,6 +14,12 @@ import "../../../styles/radar-geographic.css";
 import { venueMarkerPresentation, reconcileVenueMarkers, markerActivation } from "../../../lib/games-venue-map";
 import { MOSCOW_BUNDLE, allowedMapResource } from "../../../lib/radar-map-assets";
 import type { VenueSummary } from "../../../lib/consumer-types";
+type VenueMarkerEntry = {
+  marker: maplibregl.Marker;
+  button: HTMLButtonElement;
+  presentation?: string;
+  position?: string;
+};
 function sessionStorageVenue() {
   try { return sessionStorage.getItem("gb-games-map-selected"); } catch { return null; }
 }
@@ -25,10 +32,11 @@ function installProtocol() {
   }
 }
 export function GamesVenueMap({ venues, counts, onSelect, onAvailability, onErrorCardChange, onReturnToList }: { venues: VenueSummary[]; counts: Map<string, number> | null; onSelect: (venue: VenueSummary) => void; onAvailability?: (available: boolean) => void; onErrorCardChange?: (shown: boolean) => void; onReturnToList?: () => void }) {
+  useEffect(() => { logMapEvent("venue-map-mount"); return () => logMapEvent("venue-map-unmount"); }, []);
   const container = useRef<HTMLDivElement>(null); const map = useRef<LibreMap | null>(null);
   const venuesRef = useRef(venues); venuesRef.current = venues;
   const callbacks = useRef({ onSelect, onAvailability }); callbacks.current = { onSelect, onAvailability };
-  const markers = useRef(new Map<string, { marker: maplibregl.Marker; button: HTMLButtonElement }>());
+  const markers = useRef(new Map<string, VenueMarkerEntry>());
   const [resumeCamera, setResumeCamera] = useState(false);
   const [sharedMap, setSharedMap] = useState<LibreMap>();
   const [ready, setReady] = useState(false);
@@ -50,6 +58,7 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability, onErro
       try { sessionStorage.setItem("gb-games-map-camera", JSON.stringify({ lng: center.lng, lat: center.lat, zoom: instance.getZoom() })); } catch { /* Optional storage. */ }
     };
     window.addEventListener("gb-map-return", saveCamera); window.addEventListener("pagehide", saveCamera);
+    let webglTimer: ReturnType<typeof setTimeout> | undefined; let tileErrors = 0;
     let loadedAt: number | undefined; let loadedTiles = 0; let firstRender = false;
     let phase: "style" | "init" = "style";
     let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -58,9 +67,11 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability, onErro
     const report = (event: unknown) => {
       if (!alive) return;
       const diagnostic = classifyMapError(event, { loadedTiles, firstRender, sinceLoadMs: loadedAt === undefined ? undefined : Date.now() - loadedAt });
+      tileErrors++; logMapEvent("tile-error", `${diagnostic.kind},${diagnostic.status ?? "unknown"},${diagnostic.url ?? "unknown"}`);
+      logMapEvent("tiles", `${loadedTiles},${tileErrors}`);
       console.warn("[games-map]", diagnostic.kind, diagnostic.url, diagnostic.status);
       setLastError(diagnostic.kind); setWarnings(n => n + 1);
-      if (diagnostic.fatal) { fatal = true; setFailure(diagnostic); setStatus(""); callbacks.current.onAvailability?.(false); }
+      if (diagnostic.fatal) { logMapEvent("fatal", diagnostic.kind); logMapEvent("fallback-shown", diagnostic.kind); fatal = true; setFailure(diagnostic); setStatus(""); callbacks.current.onAvailability?.(false); }
     };
     async function start() {
       timeout = setTimeout(() => report({ kind: "timeout" }), 20000);
@@ -78,6 +89,8 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability, onErro
         if (!alive || !container.current) return;
         phase = "init";
         installProtocol();
+        const box = container.current.getBoundingClientRect();
+        logMapEvent("map-construct", `${box.width} x ${box.height}, dpr ${window.devicePixelRatio ?? 1}`);
         instance = new maplibregl.Map({ container: container.current, style, center: MOSCOW_BUNDLE.center, zoom: 10.5, maxBounds: MOSCOW_BUNDLE.bounds, maxZoom: 16, attributionControl: { compact: false }, dragRotate: false, pitchWithRotate: false,
           transformRequest: url => { if (!allowedMapResource(url)) throw Object.assign(new Error("Unapproved map resource"), { url }); return { url, credentials: "same-origin" }; },
         });
@@ -91,40 +104,52 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability, onErro
             instance.jumpTo({ center: [camera.lng, camera.lat], zoom: Math.min(16, Math.max(0, camera.zoom)) });
         } catch { /* Storage is optional. */ }
         instance.on("movestart", () => { if (alive) setSettled(false); });
-        let firstIdle = true;
-        instance.on("idle", () => { if (alive) { if (firstIdle) { firstIdle = false; instance?.resize(); } setSettled(true); } });
-        instance.on("render", () => { firstRender = true; });
+        instance.on("style.load", () => logMapEvent("style-load"));
+        instance.on("idle", () => { if (alive) { logMapEvent("idle"); setSettled(true); } });
+        instance.on("render", () => { if (!firstRender) logMapEvent("first-render"); firstRender = true; });
         instance.on("sourcedata", event => {
-          if (event.sourceId === "protomaps" && event.tile && event.tile.state === "loaded") loadedTiles++;
+          if (event.sourceId === "protomaps" && event.tile && event.tile.state === "loaded") { if (!loadedTiles) logMapEvent("first-tile"); loadedTiles++; logMapEvent("tiles", `${loadedTiles},${tileErrors}`); }
         });
         instance.on("load", () => { if (alive) {
-          instance?.resize(); loadedAt = Date.now(); setReady(true); setSharedMap(instance);
+          logMapEvent("load"); loadedAt = Date.now(); setReady(true); setSharedMap(instance);
           if (!fatal) { callbacks.current.onAvailability?.(true); setStatus(""); }
           clearTimeout(timeout);
           tileTimeout = setTimeout(() => { if (!loadedTiles) report({ kind: "tiles", sourceId: "protomaps" }); }, 8000);
         } });
         instance.on("error", report);
-        instance.on("webglcontextlost", () => report({ kind: "webgl" }));
+        instance.on("webglcontextlost", () => {
+          logMapEvent("webgl-lost");
+          if (!webglTimer) webglTimer = setTimeout(() => { webglTimer = undefined; report({ kind: "webgl" }); }, 4000);
+        });
+        instance.on("webglcontextrestored", () => { logMapEvent("webgl-restored"); clearTimeout(webglTimer); webglTimer = undefined; instance?.triggerRepaint(); });
+        const canvas = instance.getCanvas();
+        logMapEvent("canvas", `${canvas.clientWidth} x ${canvas.clientHeight} vs ${canvas.width} x ${canvas.height}`);
         instance.getCanvas().setAttribute("aria-label", "Карта Москвы: стрелки перемещают карту, плюс и минус меняют масштаб");
       } catch (error) { if (alive) report({ error, kind: classifyMapError(error, { phase, loadedTiles }).kind }); }
     }
+    const visibility = () => { logMapEvent("visibility", document.visibilityState); if (document.visibilityState === "visible") instance?.triggerRepaint(); };
+    const pagehide = () => logMapEvent("pagehide");
+    document.addEventListener("visibilitychange", visibility); window.addEventListener("pagehide", pagehide);
+    let lastWidth = -1; let lastHeight = -1; let frame = 0;
     const layout = () => {
       if (!alive || !container.current) return;
       const { width, height } = container.current.getBoundingClientRect();
-      if (width <= 0 || height <= 0) return;
+      if (width <= 0 || height <= 0) { lastWidth = width; lastHeight = height; logMapEvent("zero-size-skip"); return; }
+      if (width === lastWidth && height === lastHeight) return;
+      lastWidth = width; lastHeight = height; logMapEvent("resize", `${width} x ${height}`);
       if (!started) { started = true; void start(); }
       else if (instance) { setSettled(false); instance.resize(); }
     };
-    const resize = new ResizeObserver(layout);
+    const resize = new ResizeObserver(() => { if (!frame) frame = requestAnimationFrame(() => { frame = 0; layout(); }); });
     if (container.current) resize.observe(container.current);
     layout();
-    return () => { alive = false; abort.abort(); clearTimeout(timeout); clearTimeout(tileTimeout); resize.disconnect(); window.removeEventListener("gb-map-return", saveCamera); window.removeEventListener("pagehide", saveCamera);
+    return () => { alive = false; cancelAnimationFrame(frame); clearTimeout(webglTimer); document.removeEventListener("visibilitychange", visibility); window.removeEventListener("pagehide", pagehide); abort.abort(); clearTimeout(timeout); clearTimeout(tileTimeout); resize.disconnect(); window.removeEventListener("gb-map-return", saveCamera); window.removeEventListener("pagehide", saveCamera);
       if (instance) { const center = instance.getCenter(); try { sessionStorage.setItem("gb-games-map-camera", JSON.stringify({ lng: center.lng, lat: center.lat, zoom: instance.getZoom() })); } catch { /* Optional storage. */ } }
       markers.current.forEach(entry => entry.marker.remove()); markers.current.clear(); instance?.remove(); map.current = null; };
   }, [attempt]);
   useEffect(() => {
     if (!ready || !map.current) return;
-    reconcileVenueMarkers(markers.current, venues, {
+    reconcileVenueMarkers<VenueMarkerEntry>(markers.current, venues, {
       create: venue => {
         const button = document.createElement("button"); button.type = "button";
         const activation = markerActivation();
@@ -143,6 +168,10 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability, onErro
       },
       update: (entry, venue) => {
         const presentation = venueMarkerPresentation(venue, counts);
+        const pressed = String(sessionStorageVenue() === venue.id);
+        const signature = JSON.stringify([presentation.text, presentation.label, presentation.className, pressed]);
+        if (entry.presentation !== signature) {
+        entry.presentation = signature;
         entry.button.className = `maplibregl-marker ${presentation.className}`;
         entry.button.replaceChildren();
         if (presentation.text) entry.button.textContent = presentation.text;
@@ -152,9 +181,11 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability, onErro
           glyph.setAttribute("aria-hidden", "true");
           entry.button.append(glyph);
         }
-        entry.button.setAttribute("aria-pressed", String(sessionStorageVenue() === venue.id));
+        entry.button.setAttribute("aria-pressed", pressed);
         entry.button.setAttribute("aria-label", presentation.label);
-        entry.marker.setLngLat([venue.longitude!, venue.latitude!]);
+        }
+        const position = `${venue.longitude},${venue.latitude}`;
+        if (entry.position !== position) { entry.position = position; entry.marker.setLngLat([venue.longitude!, venue.latitude!]); }
       },
       remove: entry => entry.marker.remove(),
     });
@@ -177,7 +208,7 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability, onErro
     };
     separate(); instance.on("moveend", separate); window.addEventListener("gb-map-own-marker", separate);
     return () => { instance.off("moveend", separate); window.removeEventListener("gb-map-own-marker", separate); };
-  }, [ready, venues, counts]);
+  }, [ready, venues]);
   const retry = () => {
     setReady(false); setSettled(false); setSharedMap(undefined); setFailure(undefined);
     setLastError(undefined); setWarnings(0); setStatus("Загружаем карту города…");

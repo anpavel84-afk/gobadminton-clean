@@ -1,9 +1,9 @@
 "use client";
 import dynamic from "next/dynamic";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { listAllCityVenues, listAllUpcomingCityGames } from "../../../lib/api-client";
 import type { ActivityKind, Game, VenueSummary } from "../../../lib/consumer-types";
-import { venueSchedules, startVenueMapRefresh } from "../../../lib/games-venue-map";
+import { venueSchedules, startVenueMapRefresh, stableVenueCounts } from "../../../lib/games-venue-map";
 import { MOSCOW_BUNDLE } from "../../../lib/radar-map-assets";
 import { VenueScheduleCard } from "./VenueScheduleCard";
 import "../../../styles/venue-schedule-card.css";
@@ -11,10 +11,14 @@ import "../../../styles/discovery.css";
 import { venueMapPath } from "../../../lib/games-venue-map";
 import { GamesMapBackButton } from "./GamesMapBackButton";
 import { Button } from "../Button";
+import { logMapEvent } from "../../../lib/games-map-debug";
+import { GamesMapDebugPanel } from "./GamesMapDebugPanel";
 const MapView = dynamic(() => import("./GamesVenueMap").then(module => module.GamesVenueMap), { ssr: false });
 
 /** Public venues never depend on Radar consent, a location fix or a people query. */
 export function GamesMapView({ cityId, day, venueId, activity = "all", onReturnToList }: { cityId: string; day: string; venueId?: string; activity?: "all" | ActivityKind; onReturnToList?: () => void }) {
+  useEffect(() => { logMapEvent("map-view-mount"); return () => logMapEvent("map-view-unmount"); }, []);
+  const countsRef = useRef<Map<string, number> | null>(null);
   const [snapshot, setSnapshot] = useState<{ cityId: string; venues: VenueSummary[]; games: Game[]; gamesReady: boolean } | null>(null);
   const [mapAvailable, setMapAvailable] = useState(true);
   const [mapErrorCardShown, setMapErrorCardShown] = useState(false);
@@ -24,25 +28,27 @@ export function GamesMapView({ cityId, day, venueId, activity = "all", onReturnT
   const [refresh, setRefresh] = useState(0);
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
-    const clock = setInterval(() => setNow(Date.now()), 1000);
+    const clock = setInterval(() => setNow(previous => Math.floor(previous / 60000) === Math.floor(Date.now() / 60000) ? previous : Date.now()), 30000);
     return () => clearInterval(clock);
   }, []);
   useEffect(() => {
     const polling = startVenueMapRefresh(async signal => {
+      logMapEvent("poll", "start");
       setLoading(true); setError(false);
-      // Keep public geography mounted; never display old schedule hints during revalidation.
-      setSnapshot(previous => previous?.cityId === cityId ? { ...previous, games: [], gamesReady: false } : null);
+      // Retain confirmed same-city data during background revalidation; failures invalidate counts.
+      setSnapshot(previous => { if (previous?.cityId === cityId) return previous; logMapEvent("snapshot-reset", "city-change-or-first-load"); return { cityId, venues: [], games: [], gamesReady: false }; });
       await Promise.all([listAllCityVenues(cityId, signal), listAllUpcomingCityGames(cityId, signal)]).then(([venues, games]) => {
         if (signal.aborted) return;
+        logMapEvent("poll", venues.ok && games.ok ? "ok" : "fail");
         setError(!venues.ok || !games.ok);
         setSnapshot(previous => {
           const retained = previous?.cityId === cityId ? previous : null;
-          if (!venues.ok && !retained) return null;
-          return { cityId, venues: venues.ok ? venues.data : retained!.venues,
-            games: games.ok ? games.data : [], gamesReady: games.ok };
+
+          return { cityId, venues: venues.ok ? venues.data : retained?.venues ?? [],
+            games: games.ok ? games.data : [], gamesReady: venues.ok && games.ok };
         });
         setNow(Date.now()); setLoading(false);
-      }).catch(() => { if (!signal.aborted) { setError(true); setLoading(false); } });
+      }).catch(() => { if (!signal.aborted) { logMapEvent("poll", "fail"); setError(true); setSnapshot(previous => previous?.cityId === cityId ? { ...previous, games: [], gamesReady: false } : { cityId, venues: [], games: [], gamesReady: false }); setLoading(false); } });
     });
     const reload = () => polling.refresh();
     // A session change invalidates permissions immediately, even during a load.
@@ -59,7 +65,8 @@ export function GamesMapView({ cityId, day, venueId, activity = "all", onReturnT
   const games = useMemo(() => (snapshot?.cityId === cityId ? snapshot.games : []).filter(game => activity === "all" || game.activityKind === activity), [snapshot, cityId, activity]);
   const all = useMemo(() => venueSchedules(venues, games, "", now), [venues, games, now]);
   const schedules = useMemo(() => venueSchedules(venues, games, day, now), [venues, games, day, now]);
-  const counts = useMemo(() => new Map([...schedules].map(([id, games]) => [id, games.length])), [schedules]);
+  const counts = stableVenueCounts(countsRef.current, new Map([...schedules].map(([id, games]) => [id, games.length])));
+  useEffect(() => { if (countsRef.current !== counts) logMapEvent("counts-identity-change"); countsRef.current = counts; }, [counts]);
   const venue = venues.find(venue => venue.id === venueId);
   const openVenue = (venue: VenueSummary) => window.location.assign(venueMapPath(venue.id, day, window.location.pathname + window.location.search));
   if (venueId) return <section aria-label="Расписание площадки">
@@ -71,6 +78,7 @@ export function GamesMapView({ cityId, day, venueId, activity = "all", onReturnT
     {!loading && !error && !venue && <p className="gb-map-sr-only" role="status">Площадка отсутствует в каталоге города.</p>}
   </section>;
   return <section className="gb-games-map" aria-label="Игры на карте">
+    <GamesMapDebugPanel />
     {(!mapErrorCardShown || cityId !== MOSCOW_BUNDLE.cityId || snapshot?.cityId !== cityId) && onReturnToList && <GamesMapBackButton onClick={onReturnToList} />}
     {loading && <p className="gb-map-sr-only" role="status">Загружаем все площадки и расписание…</p>}
     {error && <p role="alert">Не удалось загрузить полный каталог или расписание. Проверьте соединение и повторите. Непроверенные количества не показываем.</p>}

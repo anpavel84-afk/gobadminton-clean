@@ -27,7 +27,10 @@ export function GamesDiscoveryPage() {
   const [authOpen, setAuthOpen] = useState(false);
   const { location: resolvedLocation } = useDiscoveryCity();
   const [urlCity, setUrlCity] = useState<string | null>(null);
-  const location = useMemo(() => supportedLocation(urlCity) ?? resolvedLocation, [urlCity, resolvedLocation]);
+  const currentLocation = useMemo(() => supportedLocation(urlCity) ?? resolvedLocation, [urlCity, resolvedLocation]);
+  const lastLocation = useRef(currentLocation);
+  useEffect(() => { if (currentLocation) lastLocation.current = currentLocation; }, [currentLocation]);
+  const location = currentLocation ?? lastLocation.current;
   const [selectedDay, setSelectedDay] = useState("");
   const [activityFilter, setActivityFilter] = useState<"all" | ActivityKind>("all");
   const [contextReady, setContextReady] = useState(false);
