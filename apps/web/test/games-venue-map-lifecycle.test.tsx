@@ -166,7 +166,7 @@ it("does not rewrite unchanged markers and cleanup cancels grace and resize", as
 it.each([false, true])("writes only changed viewport geometry (fullscreen=%s)", fullscreen => {
   const writes = vi.fn();
   const style = new Proxy({ height: "", top: "", left: "", width: "" }, {
-    set(target, key: keyof typeof target, value: string) { writes(key, value); target[key] = value; return true; },
+    set(target, key, value: unknown) { writes(key, value); return Reflect.set(target, key, value); },
   });
   const viewport = Object.assign(new EventTarget(), { height: 700, width: 400, offsetTop: 10, offsetLeft: 0 });
   Object.assign(window, { visualViewport: viewport, scrollTo() {} });
