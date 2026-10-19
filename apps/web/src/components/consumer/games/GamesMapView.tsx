@@ -10,6 +10,7 @@ import "../../../styles/venue-schedule-card.css";
 import "../../../styles/discovery.css";
 import { venueMapPath } from "../../../lib/games-venue-map";
 import { GamesMapBackButton } from "./GamesMapBackButton";
+import { VenuePreviewCard } from "./VenuePreviewCard";
 import { Button } from "../Button";
 const MapView = dynamic(() => import("./GamesVenueMap").then(module => module.GamesVenueMap), { ssr: false });
 
@@ -65,8 +66,27 @@ export function GamesMapView({ cityId, day, venueId, activity = "all", onReturnT
     const next = snapshot?.cityId === cityId && snapshot.gamesReady ? new Map([...schedules].map(([id, games]) => [id, games.length])) : null;
     return previousCounts.current = stableVenueCounts(previousCounts.current, next);
   }, [schedules, snapshot, cityId]);
+  const [selectedVenueId, setSelectedVenueId] = useState<string | null>(null);
+  const selectedVenue = venues.find(item => item.id === selectedVenueId);
+  useEffect(() => { setSelectedVenueId(null); }, [cityId]);
+  useEffect(() => {
+    if (selectedVenueId !== null && !selectedVenue) setSelectedVenueId(null);
+  }, [selectedVenueId, selectedVenue]);
+  useEffect(() => {
+    if (!selectedVenue) return;
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented || document.querySelector("dialog[open], [role=dialog]")) return;
+      event.preventDefault(); setSelectedVenueId(null);
+    };
+    window.addEventListener("keydown", escape, true);
+    return () => window.removeEventListener("keydown", escape, true);
+  }, [selectedVenue]);
   const venue = venues.find(venue => venue.id === venueId);
-  const openVenue = (venue: VenueSummary) => window.location.assign(venueMapPath(venue.id, day, window.location.pathname + window.location.search));
+  const openVenue = (venue: VenueSummary) => {
+    window.dispatchEvent(new Event("gb-map-return"));
+    try { sessionStorage.setItem("gb-games-map-returning", "venue"); sessionStorage.setItem("gb-games-map-selected", venue.id); } catch { /* Optional storage. */ }
+    window.location.assign(venueMapPath(venue.id, day, window.location.pathname + window.location.search));
+  };
   if (venueId) return <section aria-label="Расписание площадки">
     {loading && <p className="gb-map-sr-only" role="status">Загружаем расписание…</p>}
     {error && <p role="alert">Не удалось загрузить расписание. Проверьте соединение.</p>}
@@ -75,12 +95,14 @@ export function GamesMapView({ cityId, day, venueId, activity = "all", onReturnT
       gamesReady={!!snapshot?.gamesReady} day={day} hasUpcoming={!!all.get(venue.id)?.length} />}
     {!loading && !error && !venue && <p className="gb-map-sr-only" role="status">Площадка отсутствует в каталоге города.</p>}
   </section>;
-  return <section className="gb-games-map" aria-label="Игры на карте">
+  return <section className="gb-games-map" data-venue-preview={!!selectedVenue} aria-label="Игры на карте">
     {(!mapErrorCardShown || cityId !== MOSCOW_BUNDLE.cityId) && onReturnToList && <GamesMapBackButton onClick={onReturnToList} />}
     {loading && <p className="gb-map-sr-only" role="status">Загружаем все площадки и расписание…</p>}
     {error && <p role="alert">Не удалось загрузить полный каталог или расписание. Проверьте соединение и повторите. Непроверенные количества не показываем.</p>}
     {<>
-      {cityId === MOSCOW_BUNDLE.cityId ? <MapView venues={venues} counts={counts} onSelect={openVenue} onAvailability={setMapAvailable} onErrorCardChange={setMapErrorCardShown} onReturnToList={onReturnToList} /> : <p role="alert">Карта выбранного города пока недоступна. Все площадки доступны списком.</p>}
+      {cityId === MOSCOW_BUNDLE.cityId ? <MapView venues={venues} counts={counts} selectedVenueId={selectedVenueId} onSelect={venue => setSelectedVenueId(venue.id)} onDeselect={() => setSelectedVenueId(null)} onAvailability={setMapAvailable} onErrorCardChange={setMapErrorCardShown} onReturnToList={onReturnToList} /> : <p role="alert">Карта выбранного города пока недоступна. Все площадки доступны списком.</p>}
+      {selectedVenue && <VenuePreviewCard venue={selectedVenue} games={all.get(selectedVenue.id) ?? []}
+        gamesReady={snapshot?.cityId === cityId && snapshot.gamesReady} now={now} onOpen={() => openVenue(selectedVenue)} />}
       {!venues.length && <p className="gb-map-sr-only" role="status">В каталоге города пока нет площадок.</p>}
       {(!mapAvailable || cityId !== MOSCOW_BUNDLE.cityId) && <details className="gb-games-map-fallback">
         <summary>Площадки списком — карта или координаты недоступны</summary>

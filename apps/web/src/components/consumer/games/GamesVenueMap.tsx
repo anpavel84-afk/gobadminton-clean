@@ -30,7 +30,7 @@ function installProtocol() {
     protocol = new Protocol(); maplibregl.addProtocol("pmtiles", protocol.tile);
   }
 }
-export function GamesVenueMap({ venues, counts, onSelect, onAvailability, onErrorCardChange, onReturnToList }: { venues: VenueSummary[]; counts: Map<string, number> | null; onSelect: (venue: VenueSummary) => void; onAvailability?: (available: boolean) => void; onErrorCardChange?: (shown: boolean) => void; onReturnToList?: () => void }) {
+export function GamesVenueMap({ venues, counts, selectedVenueId, onDeselect, onSelect, onAvailability, onErrorCardChange, onReturnToList }: { venues: VenueSummary[]; counts: Map<string, number> | null; selectedVenueId?: string | null; onDeselect?: () => void; onSelect: (venue: VenueSummary) => void; onAvailability?: (available: boolean) => void; onErrorCardChange?: (shown: boolean) => void; onReturnToList?: () => void }) {
   const container = useRef<HTMLDivElement>(null); const map = useRef<LibreMap | null>(null);
   const venuesRef = useRef(venues); venuesRef.current = venues;
   const callbacks = useRef({ onSelect, onAvailability }); callbacks.current = { onSelect, onAvailability };
@@ -182,8 +182,6 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability, onErro
         button.addEventListener("click", event => {
           if (!activation.allow(event.detail) || map.current?.isMoving()) return;
           const current = callbacks.current;
-          window.dispatchEvent(new Event("gb-map-return"));
-          try { sessionStorage.setItem("gb-games-map-returning", "venue"); sessionStorage.setItem("gb-games-map-selected", venue.id); } catch { /* Optional storage. */ }
           current.onSelect(venuesRef.current.find(item => item.id === venue.id) ?? venue);
         });
         const marker = new maplibregl.Marker({ element: button }).setLngLat([venue.longitude!, venue.latitude!]).addTo(map.current!);
@@ -191,7 +189,7 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability, onErro
       },
       update: (entry, venue) => {
         const presentation = venueMarkerPresentation(venue, counts);
-        const pressed = String(sessionStorageVenue() === venue.id);
+        const pressed = String((selectedVenueId === undefined ? sessionStorageVenue() : selectedVenueId) === venue.id);
         const previous = entry.presentation ? JSON.parse(entry.presentation) as string[] : [];
         if (previous[0] !== presentation.className) entry.button.className = `maplibregl-marker ${presentation.className}`;
         if (previous[1] !== presentation.text) {
@@ -213,7 +211,14 @@ export function GamesVenueMap({ venues, counts, onSelect, onAvailability, onErro
       },
       remove: entry => entry.marker.remove(),
     });
-  }, [ready, venues, counts]);
+  }, [ready, venues, counts, selectedVenueId]);
+  useEffect(() => {
+    if (!ready || !map.current) return;
+    const canvas = map.current.getCanvas();
+    const deselect = () => onDeselect?.();
+    canvas.addEventListener("click", deselect);
+    return () => canvas.removeEventListener("click", deselect);
+  }, [ready, onDeselect]);
   useEffect(() => {
     if (!ready || !map.current) return;
     const instance = map.current;
