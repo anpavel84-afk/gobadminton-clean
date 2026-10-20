@@ -313,3 +313,22 @@ The foundation checker recognizes only these exact routes with required binding 
 изменении хотя бы одного значения. Контакты не добавлены в admin create или
 новые endpoint/UI; audit, step-up, expectedVersion и idempotency сохраняются.
 Ошибки валидации используют существующий problem-формат.
+
+## Публичные контакты организации (M3)
+
+Venue catalog/detail, fuzzy candidates, propose responses and AdminVenue add optional
+`publicContacts`: null or `{phone, website, messengers}` with all three keys required.
+Only admin edit fields accept writes: omission preserves, null clears, object replaces.
+Create/propose do not accept or write these contacts. Phone is trimmed, <=40 characters,
+7–15 ASCII digits, optional leading +, spaces/parentheses/hyphens only. Website is an
+absolute HTTP(S) URL <=300 characters. Up to three messengers have unique kind
+telegram/whatsapp/vk, HTTPS URLs <=300, exact hosts t.me/wa.me/vk.com and a nonempty
+pathname other than /. URLs reject credentials, nondefault ports, backslashes and
+controls before trim. Writes reject unknown keys. Reads project only safe fields,
+null invalid phone/website and filter invalid/duplicate messengers.
+Merged venue detail uses the final target's contacts. No private column or player
+contact is copied or backfilled. The existing private contact matrix and all admin
+step-up, authorization, CSRF, Origin, replay/version and audit protections above
+remain unchanged. Public-only edit preserves private values and contact_updated_at;
+audit/outbox do not contain contact values. Application rollback retains nullable
+public_contacts and stored data; old clients tolerate the additive response field.
