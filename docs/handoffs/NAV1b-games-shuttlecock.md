@@ -110,6 +110,36 @@ binding decision прочитан. iPhone **NOT_TESTED**, не source gate.
 
 ## Ограничения / rollback / next action
 
+### Повтор по reviewed SHA 06d201b (2026-10-20)
+
+From: source author (Codex). To: интегратор → независимый QA. Status: PROPOSED.
+Фактический HEAD этой попытки: `06d201b909be004825d6bca2593a1d902b241467`;
+исходный рабочий diff пуст. Immutable base остаётся
+`0e75b57fac4ea1ffc995393395147d499e4ff366`; checkout не переключался.
+Prior independent QA: FAIL, A6 unmet — pnpm 10.18.0 отсутствует offline,
+TypeScript/Vitest NOT_TESTED, не доказанная ошибка исходника.
+
+Обе точные команды A6 из таблицы выше повторно выполнены отдельно из корня.
+Каждая завершилась exit 1 до исполнения TypeScript/Vitest; точный вывод:
+
+```text
+! Corepack is about to download https://registry.npmjs.org/pnpm/-/pnpm-10.18.0.tgz
+Network access disabled by the environment; can't reach https://registry.npmjs.org/pnpm/-/pnpm-10.18.0.tgz
+```
+
+`git diff --check` и
+`git diff 0e75b57fac4ea1ffc995393395147d499e4ff366 --check`:
+exit 0, без вывода. A6 остаётся NOT_TESTED; PASS и снятие prior QA FAIL
+не заявляются. Это исполнение обязательных команд автором, не независимый QA.
+Совокупный candidate от immutable base содержит реальный games source,
+тесты и handoff — ровно три разрешённых файла. Source/tests сохранены;
+переписывать их без code finding ради нового рабочего diff оснований нет.
+В этой попытке изменён только этот handoff. Зависимости, установка, сеть,
+git metadata и публикация не затрагивались.
+Следующий bounded шаг — независимый QA в заранее подготовленном offline
+окружении с pnpm 10.18.0 и зависимостями. Подготовка окружения не входит
+в source-only scope. Exact result permalinks добавляет интегратор.
+
 ### Повтор по reviewed SHA 273c743
 
 2026-10-20: фактический HEAD при получении текущего assignment —
