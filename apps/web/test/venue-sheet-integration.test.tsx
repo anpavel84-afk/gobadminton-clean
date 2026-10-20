@@ -49,6 +49,7 @@ vi.mock("../src/lib/api-client", () => ({
 }));
 const transport = vi.hoisted(() => ({ venues: vi.fn(), games: vi.fn() }));
 import { GamesMapView } from "../src/components/consumer/games/GamesMapView";
+import { VenuePopup } from "../src/components/consumer/games/VenuePopup";
 import { VenueSheet } from "../src/components/consumer/games/VenueSheet";
 import { VenuePreviewCard } from "../src/components/consumer/games/VenuePreviewCard";
 import { GamesVenueMap } from "../src/components/consumer/games/GamesVenueMap";
@@ -101,12 +102,23 @@ afterEach(() => { h.cleanups.forEach(fn => fn?.()); vi.useRealTimers(); vi.unstu
 
 function elements(node: React.ReactNode): React.ReactElement<Record<string, unknown>>[] {
   if (!isValidElement<Record<string, unknown>>(node)) return [];
+  if (node.type === VenuePopup) return [node, ...elements((node.props.expanded ? node.props.children : node.props.preview) as React.ReactNode)];
   return [node, ...Children.toArray(node.props.children as React.ReactNode).flatMap(elements)];
 }
 // Separate hook storage for parent and child models React component identity.
 it.each(["games", "venues", "reject"] as const)("keeps the real Moscow map through initial failure, automatic polling and %s refresh failure", async resource => {
   const child = { slots: [] as unknown[], cleanups: [] as (() => void)[] };
   let childMounted = false;
+  const popupState = { slots: [] as unknown[], cleanups: [] as (() => void)[] };
+  let popupTree: React.ReactNode = null;
+  let popupRendered = false;
+  const captures = new Set<number>();
+  const handleTarget = { setPointerCapture: (id: number) => captures.add(id), hasPointerCapture: (id: number) => captures.has(id), releasePointerCapture: (id: number) => captures.delete(id) };
+  const pointer = (handler: string, y: number, time: number) => {
+    const handle = elements(popupTree).find(node => node.props.className === "gb-venue-handle");
+    if (!handle) throw new Error("No handle");
+    (handle.props[handler] as (event: unknown) => void)({ clientX: 0, clientY: y, timeStamp: time, pointerId: 1, isPrimary: true, button: 0, currentTarget: handleTarget, preventDefault() {} });
+  };
   const sheet = { slots: [] as unknown[], cleanups: [] as (() => void)[] };
   let sheetTree: React.ReactNode = null;
   let sheetMounted = false;
@@ -136,6 +148,17 @@ it.each(["games", "venues", "reject"] as const)("keeps the real Moscow map throu
         attach(mapTree); h.effects.splice(0).forEach(fn => fn());
         child.slots = h.slots; child.cleanups = h.cleanups;
         h.slots = parent.slots; h.cleanups = parent.cleanups;
+      } else if (node.type === VenuePopup) {
+        h.slots = popupState.slots; h.cleanups = popupState.cleanups; h.cursor = 0;
+        popupTree = VenuePopup(node.props as unknown as React.ComponentProps<typeof VenuePopup>);
+        popupRendered = true;
+        for (const item of elements(popupTree)) {
+          const ref = item.props.ref as { current: unknown } | undefined;
+          if (ref) ref.current = { getBoundingClientRect: () => ({ height: item.props.className === "gb-venue-popup-full-measure" ? 772 : 172 }) };
+        }
+        h.effects.splice(0).forEach(fn => fn()); popupState.slots = h.slots; popupState.cleanups = h.cleanups;
+        h.slots = parent.slots; h.cleanups = parent.cleanups;
+        Children.forEach(popupTree, visit);
       } else if (node.type === VenueSheet) {
         h.slots = sheet.slots; h.cleanups = sheet.cleanups; h.cursor = 0;
         sawSheet = true; sheetMounted = true;
@@ -168,8 +191,15 @@ it.each(["games", "venues", "reject"] as const)("keeps the real Moscow map throu
   (mapNode.props.onSelect as (value: VenueSummary) => void)(venue);
   const selected = cycle(); const preview = elements(selected).find(node => node.type === VenuePreviewCard);
   if (!preview) throw new Error("No preview");
-  (preview.props.onOpen as () => void)();
-  const expanded = cycle(); const popup = elements(expanded).find(node => node.type === VenueSheet);
+  expect(popupRendered).toBe(true);
+  pointer("onPointerDown", 700, 0); pointer("onPointerMove", 600, 1000); cycle();
+  const firstPosition = elements(popupTree).find(node => node.props.className === "gb-venue-popup")?.props.style;
+  pointer("onPointerMove", 200, 2000); cycle();
+  expect(elements(popupTree).find(node => node.props.className === "gb-venue-popup")?.props.style).not.toEqual(firstPosition);
+  expect(renderToStaticMarkup(sheetTree)).toContain("Показать игры на этой площадке");
+  expect(transport.games).toHaveBeenCalledTimes(callsBefore); expect(transport.venues).toHaveBeenCalledTimes(venueCallsBefore);
+  pointer("onPointerUp", 200, 2200); const expanded = cycle();
+  await vi.advanceTimersByTimeAsync(220); cycle(); const popup = elements(expanded).find(node => node.type === VenueSheet);
   if (!popup) throw new Error("No sheet");
   expect(h.maps).toHaveLength(1); expect(map.remove).not.toHaveBeenCalled();
   sheetClick("Показать игры"); cycle();
@@ -179,20 +209,14 @@ it.each(["games", "venues", "reject"] as const)("keeps the real Moscow map throu
   sheetClick("К расписанию"); cycle();
   expect(renderToStaticMarkup(sheetTree)).toContain("Игры на этой площадке");
   expect(h.maps).toHaveLength(1); expect(map.remove).not.toHaveBeenCalled();
-  // A real swipe collapses/unmounts the sheet; only the surviving parent sees the click.
-  class Handle { closest() { return true; } } vi.stubGlobal("Element", Handle);
-  const dialog = elements(sheetTree).find(node => node.props.role === "dialog");
-  if (!dialog) throw new Error("No dialog");
-  // Attach the scroll ref before driving the real handler.
-  const ref = dialog.props.ref as { current: unknown }; ref.current = { scrollTop: 0 };
-  const pointer = { target: new Handle(), clientX: 0, clientY: 0, pointerId: 1, currentTarget: { setPointerCapture() {} } };
-  (dialog.props.onPointerDown as (event: unknown) => void)(pointer);
-  (dialog.props.onPointerUp as (event: unknown) => void)({ ...pointer, clientY: 81 });
+  // Collapse the same surface; its click guard survives the content unmount.
+  pointer("onPointerDown", 100, 3000); pointer("onPointerMove", 650, 4000); cycle();
+  pointer("onPointerUp", 650, 4200); cycle(); await vi.advanceTimersByTimeAsync(220);
   const collapsed = cycle(); expect(sheetTree).toBeNull();
-  const section = elements(collapsed).find(node => node.props.className === "gb-games-map");
-  if (!section) throw new Error("No persistent section");
-  const click = { preventDefault: vi.fn(), stopPropagation: vi.fn() };
-  (section.props.onClickCapture as (event: unknown) => void)(click);
+  const shell = elements(popupTree).find(node => node.props.className === "gb-venue-popup");
+  if (!shell) throw new Error("No persistent popup");
+  const click = { detail: 1, preventDefault: vi.fn(), stopPropagation: vi.fn() };
+  (shell.props.onClickCapture as (event: unknown) => void)(click);
   expect(click.preventDefault).toHaveBeenCalledOnce();
   expect(transport.games).toHaveBeenCalledTimes(callsBefore);
   expect(transport.venues).toHaveBeenCalledTimes(venueCallsBefore); expect(h.jump).toHaveBeenCalledTimes(cameraCalls);
@@ -228,6 +252,6 @@ it.each(["games", "venues", "reject"] as const)("keeps the real Moscow map throu
   expect(navigation.setItem).not.toHaveBeenCalled(); expect(navigation.returnFlag).not.toHaveBeenCalled();
   expect(hasAlert(cycle("2026-10-20"))).toBe(true);
   expect(countsSeen.at(-1)).toBeNull(); expect(h.maps).toHaveLength(1); expect(map.remove).not.toHaveBeenCalled();
-  sheet.cleanups.forEach(fn => fn?.()); h.cleanups.forEach(fn => fn?.());
+  popupState.cleanups.forEach(fn => fn?.()); sheet.cleanups.forEach(fn => fn?.()); h.cleanups.forEach(fn => fn?.());
   child.cleanups.forEach(fn => fn?.()); expect(map.remove).toHaveBeenCalledOnce();
 });

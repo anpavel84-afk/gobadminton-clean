@@ -10,6 +10,7 @@ import "../../../styles/venue-schedule-card.css";
 import "../../../styles/discovery.css";
 import { GamesMapBackButton } from "./GamesMapBackButton";
 import { VenuePreviewCard } from "./VenuePreviewCard";
+import { VenuePopup } from "./VenuePopup";
 import { VenueSheet } from "./VenueSheet";
 import { Button } from "../Button";
 const MapView = dynamic(() => import("./GamesVenueMap").then(module => module.GamesVenueMap), { ssr: false });
@@ -68,9 +69,6 @@ export function GamesMapView({ cityId, day, venueId, activity = "all", onReturnT
   }, [schedules, snapshot, cityId]);
   const [selectedVenueId, setSelectedVenueId] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
-  // This owner survives preview/sheet replacement, including the synthesized click.
-  const swipeClickUntil = useRef(0);
-  const suppressSwipeClick = () => { swipeClickUntil.current = Date.now() + 500; };
   const selectVenue = (venue: VenueSummary) => { setExpanded(false); setSelectedVenueId(venue.id); };
   const selectedVenue = venues.find(item => item.id === selectedVenueId);
   const escapeSelection = useRef<VenueSummary | undefined>(undefined);
@@ -97,18 +95,19 @@ export function GamesMapView({ cityId, day, venueId, activity = "all", onReturnT
       gamesReady={!!snapshot?.gamesReady} day={day} hasUpcoming={!!all.get(venue.id)?.length} />}
     {!loading && !error && !venue && <p className="gb-map-sr-only" role="status">Площадка отсутствует в каталоге города.</p>}
   </section>;
-  return <section onClickCapture={event => {
-    if (swipeClickUntil.current > Date.now()) { event.preventDefault(); event.stopPropagation(); }
-    swipeClickUntil.current = 0;
-  }} className="gb-games-map" data-venue-preview={!!selectedVenue} aria-label="Игры на карте">
+  return <section className="gb-games-map" data-venue-preview={!!selectedVenue} aria-label="Игры на карте">
     {(!mapErrorCardShown || cityId !== MOSCOW_BUNDLE.cityId) && onReturnToList && <GamesMapBackButton onClick={onReturnToList} />}
     {loading && <p className="gb-map-sr-only" role="status">Загружаем все площадки и расписание…</p>}
     {error && <p role="alert">Не удалось загрузить полный каталог или расписание. Проверьте соединение и повторите. Непроверенные количества не показываем.</p>}
     {<>
       {cityId === MOSCOW_BUNDLE.cityId ? <MapView venues={venues} counts={counts} selectedVenueId={selectedVenueId} onSelect={selectVenue} onDeselect={() => setSelectedVenueId(null)} onAvailability={setMapAvailable} onErrorCardChange={setMapErrorCardShown} onReturnToList={onReturnToList} /> : <p role="alert">Карта выбранного города пока недоступна. Все площадки доступны списком.</p>}
-      {selectedVenue && !expanded && <VenuePreviewCard venue={selectedVenue} games={all.get(selectedVenue.id) ?? []}
-        gamesReady={snapshot?.cityId === cityId && snapshot.gamesReady} now={now} onSwipe={suppressSwipeClick} onOpen={() => setExpanded(true)} />}
-      {selectedVenue && expanded && <VenueSheet key={selectedVenue.id} venue={selectedVenue} games={all.get(selectedVenue.id) ?? []} gamesReady={snapshot?.cityId === cityId && snapshot.gamesReady === true} now={now} onSwipe={suppressSwipeClick} onCollapse={() => setExpanded(false)} onDeselect={() => setSelectedVenueId(null)} />}
+      {selectedVenue && <VenuePopup key={selectedVenue.id} expanded={expanded} onExpandedChange={setExpanded} onDeselect={() => setSelectedVenueId(null)}
+        preview={<VenuePreviewCard embedded venue={selectedVenue} games={all.get(selectedVenue.id) ?? []}
+          gamesReady={snapshot?.cityId === cityId && snapshot.gamesReady} now={now} onOpen={() => setExpanded(true)} />}>
+        <VenueSheet embedded active={expanded} venue={selectedVenue} games={all.get(selectedVenue.id) ?? []}
+          gamesReady={snapshot?.cityId === cityId && snapshot.gamesReady === true} now={now}
+          onCollapse={() => setExpanded(false)} onDeselect={() => setSelectedVenueId(null)} />
+      </VenuePopup>}
       {!venues.length && <p className="gb-map-sr-only" role="status">В каталоге города пока нет площадок.</p>}
       {(!mapAvailable || cityId !== MOSCOW_BUNDLE.cityId) && <details className="gb-games-map-fallback">
         <summary>Площадки списком — карта или координаты недоступны</summary>

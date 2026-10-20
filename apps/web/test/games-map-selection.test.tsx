@@ -11,10 +11,10 @@ const hooks = vi.hoisted(() => ({ slots: [] as unknown[], cursor: 0,
 vi.mock("react", async importOriginal => ({
   ...await importOriginal<typeof React>(),
   useState<T>(initial: T) {
-    const index = hooks.cursor++;
-    if (!(index in hooks.slots)) hooks.slots[index] = initial;
-    return [hooks.slots[index], (next: T | ((old: T) => T)) => {
-      hooks.slots[index] = typeof next === "function" ? (next as (old: T) => T)(hooks.slots[index] as T) : next;
+    const index = hooks.cursor++; const slots = hooks.slots;
+    if (!(index in slots)) slots[index] = initial;
+    return [slots[index], (next: T | ((old: T) => T)) => {
+      slots[index] = typeof next === "function" ? (next as (old: T) => T)(slots[index] as T) : next;
     }];
   },
   useRef(initial: unknown) { const i = hooks.cursor++; return hooks.slots[i] ??= { current: initial }; },
@@ -36,6 +36,7 @@ vi.mock("next/dynamic", () => ({ default: () => function CapturedMap() { return 
 import { GamesMapView } from "../src/components/consumer/games/GamesMapView";
 import { VenuePreviewCard } from "../src/components/consumer/games/VenuePreviewCard";
 import { MOSCOW_BUNDLE } from "../src/lib/radar-map-assets";
+import { VenuePopup } from "../src/components/consumer/games/VenuePopup";
 import { VenueSheet } from "../src/components/consumer/games/VenueSheet";
 const a: VenueSummary = { id: "a", cityId: MOSCOW_BUNDLE.cityId, name: "Зал А", address: "Улица А", timezone: "Europe/Moscow", latitude: 55.7, longitude: 37.6 };
 const b: VenueSummary = { ...a, id: "b", name: "Зал Б", address: "Улица Б" };
@@ -53,7 +54,8 @@ function render(overrides: Partial<React.ComponentProps<typeof GamesMapView>> = 
 }
 function elements(node: React.ReactNode): React.ReactElement<Record<string, unknown>>[] {
   if (!isValidElement<Record<string, unknown>>(node)) return [];
-  return [node, ...Children.toArray(node.props.children as React.ReactNode).flatMap(elements)];
+  if (node.type === VenuePopup) return [node, ...elements((node.props.expanded ? node.props.children : node.props.preview) as React.ReactNode)];
+    return [node, ...Children.toArray(node.props.children as React.ReactNode).flatMap(elements)];
 }
 function mapProps(tree: React.ReactNode) {
   const map = elements(tree).find(node => typeof node.props.onSelect === "function");
@@ -129,19 +131,13 @@ it("clears selection on city change and venue removal; unavailable snapshot is n
   expect(elements(tree).some(node => node.type === VenuePreviewCard)).toBe(false);
 });
 
-it("expires swipe suppression on the persistent map owner", async () => {
-  const tree = await load(); mapProps(tree).onSelect(a);
-  const card = preview(render()); card.props.onSwipe?.(); card.props.onOpen();
-  let section = elements(render()).find(node => node.props.className === "gb-games-map");
-  if (!section) throw new Error("No map section");
-  const click = { preventDefault: vi.fn(), stopPropagation: vi.fn() };
-  (section.props.onClickCapture as (event: unknown) => void)(click);
-  expect(click.preventDefault).toHaveBeenCalledOnce();
-  (section.props.onClickCapture as (event: unknown) => void)(click);
-  expect(click.preventDefault).toHaveBeenCalledOnce();
-  card.props.onSwipe?.(); await vi.advanceTimersByTimeAsync(501);
-  section = elements(render()).find(node => node.props.className === "gb-games-map");
-  if (!section) throw new Error("No map section");
-  (section.props.onClickCapture as (event: unknown) => void)(click);
-  expect(click.preventDefault).toHaveBeenCalledOnce();
+it("keeps the popup identity and selected venue when presentation changes", async () => {
+  let tree = await load(); mapProps(tree).onSelect(a); tree = render();
+  const compact = elements(tree).find(node => node.type === VenuePopup);
+  preview(tree).props.onOpen(); tree = render();
+  const expanded = elements(tree).find(node => node.type === VenuePopup);
+  expect(expanded?.key).toBe(compact?.key);
+  expect(expanded?.props.expanded).toBe(true);
+  expect(mapProps(tree).selectedVenueId).toBe(a.id);
+  expect(assign).not.toHaveBeenCalled(); expect(writes).not.toHaveBeenCalled(); expect(returned).not.toHaveBeenCalled();
 });

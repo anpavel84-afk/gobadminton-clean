@@ -41,6 +41,7 @@ import { MOSCOW_BUNDLE } from "../src/lib/radar-map-assets";
 import { GamesMapBackButton } from "../src/components/consumer/games/GamesMapBackButton";
 import { GamesMapView } from "../src/components/consumer/games/GamesMapView";
 import { VenuePreviewCard } from "../src/components/consumer/games/VenuePreviewCard";
+import { VenuePopup } from "../src/components/consumer/games/VenuePopup";
 import { VenueSheet } from "../src/components/consumer/games/VenueSheet";
 const venue = { id: "venue-id", cityId: "city", name: "Venue", latitude: 55.75, longitude: 37.62, address: "Address", timezone: "Europe/Moscow" } as VenueSummary;
 const game = { id: "game-id", title: "Delayed game", venue, status: "published", visibility: "public", availablePlaces: 2,
@@ -94,6 +95,7 @@ it("finishes >30s sequential pagination, renders venues/schedules, and polls onl
   window.dispatchEvent(new Event("focus")); window.dispatchEvent(new Event("online"));
   expect(requests).toHaveLength(4); // two resources, each on its second sequential page
   expect(html()).toContain("Загружаем");
+  expect(html()).not.toContain("Создать игру на этой площадке");
   await vi.advanceTimersByTimeAsync(9000);
   const completed = html();
   expect(completed).toContain("Venue · 1");
@@ -175,6 +177,7 @@ it("selects a venue preview then opens its sheet without navigation and preserve
   // Inspect real component nodes without rendering child hooks into the parent's slots.
   const elements = (node: React.ReactNode): React.ReactElement<Record<string, unknown>>[] => {
     if (!isValidElement<Record<string, unknown>>(node)) return [];
+    if (node.type === VenuePopup) return [node, ...elements((node.props.expanded ? node.props.children : node.props.preview) as React.ReactNode)];
     return [node, ...Children.toArray(node.props.children as React.ReactNode).flatMap(elements)];
   };
   const selected = render();

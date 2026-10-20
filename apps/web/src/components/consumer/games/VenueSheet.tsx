@@ -1,4 +1,6 @@
 "use client";
+import Link from "next/link";
+import { venueCreatePath } from "../../../lib/games-venue-map";
 import { useEffect, useId, useRef, useState } from "react";
 import type { Game, VenueSummary } from "../../../lib/consumer-types";
 import { venueDays, venueDayLabel } from "../../../lib/venue-popup";
@@ -8,9 +10,9 @@ import { Avatar } from "../players/ProfileComposition";
 import { GameHero, GameTerms } from "./GameDetailComposition";
 import "../../../styles/venue-popup.css";
 
-export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDeselect, onSwipe }: {
+export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDeselect, embedded = false, active = true }: {
   venue: VenueSummary; games: readonly Game[]; gamesReady: boolean; now: number;
-  onCollapse: () => void; onDeselect: () => void; onSwipe?: () => void;
+  onCollapse: () => void; onDeselect: () => void; embedded?: boolean; active?: boolean;
 }) {
   const [view, setView] = useState<"info" | "schedule" | "game">("info");
   const [selectedDate, setSelectedDate] = useState("");
@@ -30,6 +32,7 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
   const close = useRef<HTMLButtonElement>(null);
   const collapse = useRef(onCollapse); collapse.current = onCollapse;
   useEffect(() => {
+    if (!active) return;
     const initiator = document.activeElement;
     const overflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -46,29 +49,15 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
     window.addEventListener("keydown", keydown, options);
     return () => {
       window.removeEventListener("keydown", keydown, options); document.body.style.overflow = overflow;
-      if (initiator instanceof HTMLElement && initiator.isConnected) initiator.focus();
-      else document.querySelector<HTMLButtonElement>('.gb-venue-preview-button')?.focus();
+      if (initiator instanceof HTMLElement && initiator.isConnected && !initiator.closest?.("[hidden]")) initiator.focus();
+      else (document.querySelector<HTMLButtonElement>('.gb-venue-popup .gb-venue-handle') ?? document.querySelector<HTMLButtonElement>('.gb-venue-preview-button'))?.focus();
     };
-  }, []);
-  const gesture = useRef<{ x: number; y: number; id: number } | null>(null);
+  }, [active]);
   const time = (value: string) => new Intl.DateTimeFormat("ru-RU", { timeZone: venue.timezone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(value));
   return <>
-    <div className="gb-venue-sheet-backdrop" onClick={onDeselect} />
-    <div ref={panel} className="gb-venue-sheet" role="dialog" aria-modal="true" aria-labelledby={label}
-      onPointerDown={event => {
-        gesture.current = null;
-        if (event.target instanceof Element && event.target.closest(".gb-venue-handle") && panel.current?.scrollTop === 0) {
-          gesture.current = { x: event.clientX, y: event.clientY, id: event.pointerId }; event.currentTarget.setPointerCapture(event.pointerId);
-        }
-      }}
-      onPointerCancel={() => { gesture.current = null; }}
-      onPointerUp={event => {
-        const origin = gesture.current; gesture.current = null;
-        if (origin && origin.id === event.pointerId && event.clientY - origin.y > 80 && Math.abs(event.clientY - origin.y) > Math.abs(event.clientX - origin.x) && panel.current?.scrollTop === 0) {
-          onSwipe?.(); onCollapse();
-        }
-      }}>
-      <div className="gb-venue-handle" data-venue-handle="true"><span /></div>
+    {!embedded && <div className="gb-venue-sheet-backdrop" onClick={onDeselect} />}
+    <div ref={panel} className="gb-venue-sheet" role={active ? "dialog" : undefined} aria-modal={active ? "true" : undefined} aria-labelledby={label}>
+      {!embedded && <button type="button" className="gb-venue-handle" aria-label="Свернуть площадку" onClick={onCollapse}><span /></button>}
       <header className="gb-venue-sheet-header">
         {currentView !== "info" && <button type="button" aria-label={currentView === "game" ? "К расписанию" : "К информации о площадке"} onClick={() => setView(currentView === "game" ? "schedule" : "info")}>←</button>}
         <h2 id={label}>{venue.name}</h2>
@@ -78,6 +67,7 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
         <VenueCover cover={venue.cover} name={venue.name} className="gb-venue-sheet-cover" />
         <h3>{venue.name}</h3><p>{venue.address}</p>
         {!gamesReady && <p role="status">Расписание временно недоступно</p>}
+        {gamesReady && games.length === 0 && <Link className="gb-venue-sheet-primary" href={venueCreatePath(new URLSearchParams({ venueId: venue.id }).toString())}>Создать игру на этой площадке</Link>}
         {gamesReady && days.length > 0 && <button type="button" className="gb-venue-sheet-primary" onClick={() => setView("schedule")}>Показать игры на этой площадке</button>}
       </div> : currentView === "game" && game ? <div className="gb-venue-sheet-detail"><GameHero game={game} /><GameTerms game={game} onVenueClick={() => setView("info")} /></div>
         : <div><h3>Игры на этой площадке</h3>
