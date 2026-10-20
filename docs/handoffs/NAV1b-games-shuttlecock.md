@@ -110,6 +110,31 @@ binding decision прочитан. iPhone **NOT_TESTED**, не source gate.
 
 ## Ограничения / rollback / next action
 
+### Повтор по reviewed SHA 23b74f8 (2026-10-20)
+
+From: source author (Codex). To: интегратор → независимый QA. Status: PROPOSED.
+Фактический HEAD: `23b74f8bbeac94e66a4f0ef243e136c38c64f5a2`,
+branch `automation/issue-136`; исходный tracked diff пуст. Immutable base
+`0e75b57fac4ea1ffc995393395147d499e4ff366` не переключалась.
+Prior independent QA для этого HEAD: **FAIL**, единственное finding —
+невыполненный A6 из-за отсутствующего offline pnpm 10.18.0.
+
+Обе точные команды A6 из таблицы выше повторно выполнены отдельно из корня.
+Каждая вернула exit 1 до исполнения tsc/Vitest с тем же точным выводом
+Corepack, приведённым выше. Typecheck и тесты **NOT_TESTED**; A6 не пройден,
+prior QA FAIL не снят. `git diff --check` и
+`git diff 0e75b57fac4ea1ffc995393395147d499e4ff366 --check` вернули exit 0
+без вывода. Это обязательные source-команды автора, не независимый QA.
+
+Совокупный diff от immutable base содержит games source, тесты и этот
+handoff, ровно три разрешённых файла. Source/tests сохранены без изменений:
+code finding в переданном QA отсутствует. Текущий рабочий diff дополняет
+только этот handoff; сам по себе он не является новым implementation result.
+Устранение отсутствующего pnpm требует подготовки окружения вне allowed_paths;
+install/network/dependencies/git metadata не менялись. Следующий bounded шаг —
+независимый QA в заранее подготовленном offline окружении с pnpm 10.18.0
+и зависимостями. Result permalinks и публикацию добавляет интегратор.
+
 ### Повтор по reviewed SHA 06d201b (2026-10-20)
 
 From: source author (Codex). To: интегратор → независимый QA. Status: PROPOSED.
