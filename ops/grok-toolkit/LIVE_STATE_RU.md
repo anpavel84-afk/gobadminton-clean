@@ -1,6 +1,6 @@
 # GoBadminton · LIVE STATE (живое состояние для резервного PM)
 
-**Обновлено:** 19.10.2026 22:15 (Сан-Паулу, UTC-3), генератор `ops/grok-toolkit/sync_state.py`
+**Обновлено:** 19.10.2026 22:54 (Сан-Паулу, UTC-3), генератор `ops/grok-toolkit/sync_state.py`
 **Активный оператор:** Grok (Go Bad) с 2026-10-17
 
 > Генерируется автоматически. Руками правится только строка «Активный оператор» (протокол передачи: `docs/workbench/OPS_BACKUP_PM_TAKEOVER_DRILL_V001.md` §9). Секретов здесь нет. UNKNOWN ≠ 0.
@@ -9,10 +9,10 @@
 
 - Исполнитель: `active/running`, MainPID 224489 (время проверки — в строке «Обновлено»).
 - Выполнено задач (`done_count`): **29**.
-- Активная задача: **#127** M3 v8: развёрнутый попап площадки поверх карты (преемник #117) — фаза `claimed`, попытка 0, head `—`, PR —, QA None на `—`.
-- Последняя выкатка DEV: `r39349599843-a1`, ACCEPTED, pending=False, source `b2cd0f03`, завершена 19.10.2026 21:49 (Сан-Паулу).
-- DEV `/v1/meta`: gitSha `b2cd0f03`, apiVersion `0.19.0`.
-- GitHub `dev` HEAD: `b2cd0f03`.
+- Активная задача: **#127** M3 v8: развёрнутый попап площадки поверх карты (преемник #117) — фаза `blocked`, попытка 2, head `ae4df3f6`, PR #128, QA PASS на `ae4df3f6`, причина: Actions failed, resume_phase: ci.
+- Последняя выкатка DEV: `r39354396521-a1`, ACCEPTED, pending=False, source `42e87d30`, завершена 19.10.2026 22:40 (Сан-Паулу).
+- DEV `/v1/meta`: gitSha `42e87d30`, apiVersion `0.19.0`.
+- GitHub `dev` HEAD: `42e87d30`.
 - Сверка dev HEAD = DEV gitSha = квитанция: **совпадает**.
 
 ## 2. Следующие задачи и бэклог (топ-10, `backlog_ru.json`)
@@ -35,6 +35,7 @@
 ## 3. Открытые PR и Issue (GitHub)
 
 **PR:**
+- #128 `automation/issue-127` → `dev` @ `ae4df3f6`: Refs #127: autonomous source candidate
 - #120 `automation/issue-117` → `dev` @ `5c38adec`: Refs #117: autonomous source candidate
 - #102 `ops/takeover-runbook-v1` → `dev` @ `эта ветка`: Docs: OPS takeover runbook V001 (docs-only, DO NOT MERGE yet)
 - #100 `ops/parallel-slots-v1` → `dev` @ `3e5f5b89`: OPS: PARALLEL_SLOTS_V1 executor slots, lock registry, merge queue, budgets (NOT INSTALLED)
@@ -92,7 +93,7 @@
 | OPS-монитор v4 с «Бэклогом» | установлен и работает | `ops/grok-toolkit/ops_monitor/`; `сервер: /var/lib/gb-ops-titles/backlog_ru.json` | обновлять backlog_ru.json при каждой публикации или закрытии задачи |
 | #112 M2: тап по маркеру — карточка площадки поверх карты, без перехода | done на DEV: b85f3280 ACCEPTED r39312413798-a1; done_count 28; ждёт браузерной проверки оператором | `apps/web/src/components/consumer/games/GamesMapView.tsx`; `apps/web/src/components/consumer/games/VenuePreviewCard.tsx`; `apps/web/src/styles/venue-popup.css` | браузерная проверка карточки площадки поверх карты (сравнить с макетом); вердикт Павлу; затем M3 единая шторка |
 | #114 V0: без вызова админки для гостей (убрать 401) на карте, в попапе и на странице площадки | влита в dev (50014405, attempt 1), выложена на DEV под b2cd0f03 r39349599843-a1 ACCEPTED; done_count 29 | `apps/web/src/components/consumer/venues/VenuePage.tsx`; `apps/web/test/venue-public-access.test.tsx`; `apps/web/test/venue-public-boundary.test.ts` | проверить в браузере как гость: карта, попап и страница площадки без 401; дать Павлу вердикт |
-| #127 M3 v8: развёрнутый попап площадки поверх карты (преемник #117) | claimed: #127 взята в работу (attempt 0/3, свежие попытки); #117/PR #120 заменены преемником | `box: /workspace/outputs/map_split/popup/`; `apps/web/src/components/consumer/games/VenueSheet.tsx` | ждать автора и QA по #127; после DEV — браузерная проверка шторки площадки против M3_venue_mockup.png |
+| #127 M3 v8: развёрнутый попап площадки поверх карты (преемник #117) | blocked после CI: PR #128, head ae4df3f6, attempt 2/3, QA PASS, CI source (web) упал (3 vitest-теста: старый тест навигации на страницу площадки и 2 теста фокус-ловушки Tab). RESUME ci_fix опубликован 01:40Z | `box: /workspace/outputs/map_split/popup/`; `apps/web/src/components/consumer/games/VenueSheet.tsx` | ждать, что исполнитель подхватит RESUME; если снова провал или нет прогресса >40 мин — Codex переписывает тело, PARK + преемник с max_attempts 6 |
 
 Пути с префиксом `box:` лежат на рабочем компьютере Grok, а не в репозитории. Резервному PM они недоступны: опирайтесь на копии в `ops/grok-toolkit/`.
 
