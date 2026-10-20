@@ -230,3 +230,35 @@ it("does not lock the body or mount expanded controls in settled compact mode", 
   (h.find("gb-venue-handle").props.onKeyDown as (event: unknown) => void)(arrowKey);
   expect(arrowKey.preventDefault).toHaveBeenCalledOnce(); expect(h.change).toHaveBeenLastCalledWith(true); h.dispose();
 });
+
+// Exercise the complete release/click sequence, including interrupted settlement.
+it.each([false, true])("horizontal release preserves settled state during settlement=%s", interrupted => {
+  vi.useFakeTimers(); const h = popupHarness(false);
+  if (interrupted) {
+    h.pointer("onPointerDown", 700, 0); h.pointer("onPointerMove", 200, 1000);
+    h.pointer("onPointerUp", 200, 1200);
+  }
+  const before = h.change.mock.calls.length;
+  h.pointer("onPointerDown", 500, 1300);
+  h.pointer("onPointerMove", 490, 1400, { clientX: 100 });
+  h.pointer("onPointerUp", 490, 1500, { clientX: 100 });
+  const click = h.click(1);
+  if (!click.preventDefault.mock.calls.length) (h.find("gb-venue-handle").props.onClick as () => void)();
+  expect(click.preventDefault).toHaveBeenCalledOnce();
+  expect(h.change).toHaveBeenCalledTimes(before);
+  vi.advanceTimersByTime(220);
+  expect(h.height()).toBe(interrupted ? "88dvh" : "172px");
+  expect(h.click(1).preventDefault).not.toHaveBeenCalled();
+  (h.find("gb-venue-handle").props.onClick as () => void)();
+  expect(h.change).toHaveBeenLastCalledWith(!interrupted); h.dispose();
+});
+it.each(["onPointerCancel", "onLostPointerCapture"])("%s does not swallow the next tap", handler => {
+  const h = popupHarness(false, true);
+  h.pointer("onPointerDown", 700, 0); h.pointer("onPointerMove", 400, 1000);
+  h.pointer(handler, 400, 1100);
+  expect(h.click(1).preventDefault).not.toHaveBeenCalled();
+  h.pointer("onPointerDown", 700, 1200); h.pointer("onPointerUp", 700, 1300);
+  expect(h.click(1).preventDefault).not.toHaveBeenCalled();
+  (h.find("gb-venue-handle").props.onClick as () => void)();
+  expect(h.change).toHaveBeenLastCalledWith(true); h.dispose();
+});

@@ -58,3 +58,48 @@ Integrator manually combines this base-specific diff with newer dev, publishes s
 Rollback: integrator removes/reverse-applies only this delivered diff in the allowed source/styles/six tests and this handoff, preserving unrelated work.
 
 Slice 2/2: add `publicContacts` to the info content before the primary CTA. Keep the common popup gesture/capture/settlement and modal lifecycle intact. Contacts must remain independent of Radar/filters; do not replace this container or introduce another gesture implementation. No publicContacts/API change is part of this slice.
+
+
+## Source revision after independent QA FAIL (2026-10-20)
+
+Actual starting HEAD for this correction: `92fbb830ca066f0b01a2e4099078300877cbbc20`
+(`automation/issue-133`), initial diff empty. The original base above describes
+attempt 1; this correction is an incremental diff over that attempt, not a fresh
+checkout of `62c789975daa7e9a7effebb642c346f87891c476`. The existing continuous
+popup, CTA and six test files remain part of the candidate history. Integrator
+must include that history when assembling the full D1–D5 candidate.
+
+Prior independent QA: FAIL at the actual starting HEAD. Four findings addressed:
+
+- Embedded dialog semantics now belong to the persistent popup surface, which
+  includes the shared handle. VenueSheet's existing modal lifecycle uses that
+  surface for Tab containment; standalone sheet semantics remain unchanged.
+- pointercancel/lostpointercapture clear the one-click suppression guard, since
+  cancellation does not synthesize a click.
+- Horizontal rejection resets interrupted settlement to the settled endpoint,
+  avoiding a frozen intermediate height. Pending pointerup also resets temporary
+  state after interrupting settlement.
+- Horizontal rejection consumes its synthesized click once; a new primary
+  pointerdown clears an old guard so the next ordinary tap remains usable.
+
+Regression sources in both component suites exercise horizontal release plus
+click, interruption during settlement, next tap after cancellation and lost
+capture. The sheet suite adds embedded Tab boundaries through the shared handle,
+modal ownership and keyboard activation. Existing #131 assertions are retained.
+Only VenuePopup, VenueSheet, these two suites and this handoff changed in this
+correction. No independent QA or browser/product acceptance is claimed.
+
+Required commands were attempted again separately from root:
+
+- Exact D6 typecheck command above: exit 1, NOT_TESTED.
+- Exact D6 six-file Vitest command above: exit 1, NOT_TESTED.
+- Both fail before compiler/test startup with the same Corepack pnpm-10.18.0
+  download/network-disabled output recorded above. No dependency installation or
+  network fallback was attempted. Final source changes remain unexecuted.
+- `git diff --check`: exit 0, no output; whitespace only.
+
+STYLE_GUIDE_PARITY remains UNVERIFIED, visual/browser NOT_TESTED. The corrections
+use the existing BottomSheet/accessibility/motion patterns, without a new visual
+pattern, gap or override. Publication and exact result permalink remain the
+integrator's responsibility. Rollback only this incremental diff; the 2/2
+publicContacts-before-CTA contract and gesture/lifecycle preservation still apply.

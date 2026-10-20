@@ -40,10 +40,11 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
     const keydown = (event: KeyboardEvent) => {
       if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); collapse.current(); }
       if (event.key !== "Tab") return;
-      const targets = [...panel.current?.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], [tabindex="0"]') ?? []];
+      const boundary = embedded ? panel.current?.closest?.<HTMLElement>(".gb-venue-popup") ?? panel.current : panel.current;
+      const targets = [...boundary?.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], [tabindex="0"]') ?? []];
       const first = targets[0]; const last = targets.at(-1);
-      if (event.shiftKey && (document.activeElement === first || !panel.current?.contains(document.activeElement))) { event.preventDefault(); last?.focus(); }
-      else if (!event.shiftKey && (document.activeElement === last || !panel.current?.contains(document.activeElement))) { event.preventDefault(); first?.focus(); }
+      if (event.shiftKey && (document.activeElement === first || !boundary?.contains(document.activeElement))) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && (document.activeElement === last || !boundary?.contains(document.activeElement))) { event.preventDefault(); first?.focus(); }
     };
     const options = { capture: true };
     window.addEventListener("keydown", keydown, options);
@@ -52,11 +53,11 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
       if (initiator instanceof HTMLElement && initiator.isConnected && !initiator.closest?.("[hidden]")) initiator.focus();
       else (document.querySelector<HTMLButtonElement>('.gb-venue-popup .gb-venue-handle') ?? document.querySelector<HTMLButtonElement>('.gb-venue-preview-button'))?.focus();
     };
-  }, [active]);
+  }, [active, embedded]);
   const time = (value: string) => new Intl.DateTimeFormat("ru-RU", { timeZone: venue.timezone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(value));
   return <>
     {!embedded && <div className="gb-venue-sheet-backdrop" onClick={onDeselect} />}
-    <div ref={panel} className="gb-venue-sheet" role={active ? "dialog" : undefined} aria-modal={active ? "true" : undefined} aria-labelledby={label}>
+    <div ref={panel} className="gb-venue-sheet" role={active && !embedded ? "dialog" : undefined} aria-modal={active && !embedded ? "true" : undefined} aria-labelledby={label}>
       {!embedded && <button type="button" className="gb-venue-handle" aria-label="Свернуть площадку" onClick={onCollapse}><span /></button>}
       <header className="gb-venue-sheet-header">
         {currentView !== "info" && <button type="button" aria-label={currentView === "game" ? "К расписанию" : "К информации о площадке"} onClick={() => setView(currentView === "game" ? "schedule" : "info")}>←</button>}

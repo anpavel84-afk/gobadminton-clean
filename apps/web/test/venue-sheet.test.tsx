@@ -63,11 +63,13 @@ function render() {
   hooks.cursor = 0; const tree = VenueSheet(props);
   for (const node of elements(tree)) {
     const ref = node.props.ref as { current: unknown } | undefined;
-    if (ref) ref.current = node.props.role === "dialog" ? panel : first;
+    if (ref) ref.current = node.props.className === "gb-venue-sheet" ? panel : first;
   }
   hooks.effects.splice(0).forEach(effect => effect()); return tree;
 }
-const panel = { scrollTop: 0, contains: (target: unknown) => target === first || target === last, querySelectorAll: () => [first, last] };
+const handle = new FocusTarget();
+const popupBoundary = { contains: (target: unknown) => target === handle || target === first || target === last, querySelectorAll: () => [handle, first, last] };
+const panel = { closest: () => popupBoundary, scrollTop: 0, contains: (target: unknown) => target === first || target === last, querySelectorAll: () => [first, last] };
 function click(tree: React.ReactNode, text: string) {
   const button = elements(tree).find(node => node.type === "button" && (node.props["aria-label"] === text || renderToStaticMarkup(node).includes(text)));
   if (!button) throw new Error(`Missing ${text}`);
@@ -333,4 +335,55 @@ it("active=false restores modal effects before the closing surface unmounts", ()
   expect(document.body.style.overflow).toBe("auto"); expect(document.activeElement).toBe(initiator);
   const event = Object.assign(new Event("keydown", { cancelable: true }), { key: "Escape" }); window.dispatchEvent(event);
   expect(event.defaultPrevented).toBe(false); expect(collapse).not.toHaveBeenCalled();
+});
+
+// Exercise the complete release/click sequence, including interrupted settlement.
+it.each([false, true])("horizontal release preserves settled state during settlement=%s", interrupted => {
+  vi.useFakeTimers(); const h = popupHarness(false);
+  if (interrupted) {
+    h.pointer("onPointerDown", 700, 0); h.pointer("onPointerMove", 200, 1000);
+    h.pointer("onPointerUp", 200, 1200);
+  }
+  const before = h.change.mock.calls.length;
+  h.pointer("onPointerDown", 500, 1300);
+  h.pointer("onPointerMove", 490, 1400, { clientX: 100 });
+  h.pointer("onPointerUp", 490, 1500, { clientX: 100 });
+  const click = h.click(1);
+  if (!click.preventDefault.mock.calls.length) (h.find("gb-venue-handle").props.onClick as () => void)();
+  expect(click.preventDefault).toHaveBeenCalledOnce();
+  expect(h.change).toHaveBeenCalledTimes(before);
+  vi.advanceTimersByTime(220);
+  expect(h.height()).toBe(interrupted ? "88dvh" : "172px");
+  expect(h.click(1).preventDefault).not.toHaveBeenCalled();
+  (h.find("gb-venue-handle").props.onClick as () => void)();
+  expect(h.change).toHaveBeenLastCalledWith(!interrupted); h.dispose();
+});
+it.each(["onPointerCancel", "onLostPointerCapture"])("%s does not swallow the next tap", handler => {
+  const h = popupHarness(false, true);
+  h.pointer("onPointerDown", 700, 0); h.pointer("onPointerMove", 400, 1000);
+  h.pointer(handler, 400, 1100);
+  expect(h.click(1).preventDefault).not.toHaveBeenCalled();
+  h.pointer("onPointerDown", 700, 1200); h.pointer("onPointerUp", 700, 1300);
+  expect(h.click(1).preventDefault).not.toHaveBeenCalled();
+  (h.find("gb-venue-handle").props.onClick as () => void)();
+  expect(h.change).toHaveBeenLastCalledWith(true); h.dispose();
+});
+
+it("embedded modal Tab includes the shared handle in both directions", () => {
+  props = { ...props, embedded: true }; const sheet = render();
+  expect(renderToStaticMarkup(sheet)).not.toContain('role="dialog"');
+  const popup = popupHarness(true, true);
+  expect(popup.find("gb-venue-popup").props).toMatchObject({ role: "dialog", "aria-modal": "true" });
+  Object.assign(document, { activeElement: first });
+  const backwards = Object.assign(new Event("keydown", { cancelable: true }), { key: "Tab", shiftKey: true });
+  window.dispatchEvent(backwards);
+  expect(backwards.defaultPrevented).toBe(false); // Native previous target is the handle.
+  Object.assign(document, { activeElement: last });
+  const forwards = Object.assign(new Event("keydown", { cancelable: true }), { key: "Tab", shiftKey: false });
+  window.dispatchEvent(forwards); expect(forwards.defaultPrevented).toBe(true); expect(document.activeElement).toBe(handle);
+  const wrap = Object.assign(new Event("keydown", { cancelable: true }), { key: "Tab", shiftKey: true });
+  window.dispatchEvent(wrap); expect(wrap.defaultPrevented).toBe(true); expect(document.activeElement).toBe(last);
+  expect(popup.click(0).preventDefault).not.toHaveBeenCalled();
+  (popup.find("gb-venue-handle").props.onClick as () => void)();
+  expect(popup.change).toHaveBeenLastCalledWith(false); popup.dispose();
 });
