@@ -40,6 +40,8 @@ vi.mock("../src/components/consumer/discovery/DiscoveryGameCard", () => ({
 import { MOSCOW_BUNDLE } from "../src/lib/radar-map-assets";
 import { GamesMapBackButton } from "../src/components/consumer/games/GamesMapBackButton";
 import { GamesMapView } from "../src/components/consumer/games/GamesMapView";
+import { VenuePreviewCard } from "../src/components/consumer/games/VenuePreviewCard";
+import { VenueSheet } from "../src/components/consumer/games/VenueSheet";
 const venue = { id: "venue-id", cityId: "city", name: "Venue", latitude: 55.75, longitude: 37.62, address: "Address", timezone: "Europe/Moscow" } as VenueSummary;
 const game = { id: "game-id", title: "Delayed game", venue, status: "published", visibility: "public", availablePlaces: 2,
   startsAt: "2026-10-18T12:00:00Z", applicationDeadlineAt: "2026-10-18T11:00:00Z" } as Game;
@@ -95,7 +97,7 @@ it("finishes >30s sequential pagination, renders venues/schedules, and polls onl
   await vi.advanceTimersByTimeAsync(9000);
   const completed = html();
   expect(completed).toContain("Venue · 1");
-  expect(completed).not.toContain("Delayed game"); // schedules live on the venue route
+  expect(completed).not.toContain("Delayed game"); // schedules are hidden until a venue is selected
   expect(completed).not.toContain("Загружаем");
   await vi.advanceTimersByTimeAsync(29999);
   expect(requests).toHaveLength(4);
@@ -158,7 +160,7 @@ it("ignores late responses from an aborted transport without continuing its pagi
   expect(requests).toHaveLength(count);
 });
 
-it("navigates catalog selection to the full venue route and renders only that venue schedule there", async () => {
+it("selects a venue preview then opens its sheet without navigation and preserves the venueId schedule branch", async () => {
   const assign = vi.fn<(url: string) => void>();
   Object.assign(window, { location: { pathname: "/games", search: "?view=map&day=2026-10-18", assign } });
   render(); await vi.advanceTimersByTimeAsync(40000);
@@ -168,13 +170,37 @@ it("navigates catalog selection to the full venue route and renders only that ve
     if (node.type === "button" && Children.toArray(node.props.children).join("") === "Venue · 1") node.props.onClick?.();
     Children.forEach(node.props.children, clickVenue);
   };
+  const requestCount = requests.length;
   clickVenue(tree);
-  expect(assign).toHaveBeenCalledTimes(1);
-  const navigation = assign.mock.calls[0];
-  if (!navigation) throw new Error("Expected one venue navigation");
-  const destination = new URL(navigation[0], "https://example.test");
-  expect(destination.pathname).toBe("/venues/venue-id");
-  expect(destination.searchParams.get("returnTo")).toBe("/games?view=map&day=2026-10-18");
+  // Inspect real component nodes without rendering child hooks into the parent's slots.
+  const elements = (node: React.ReactNode): React.ReactElement<Record<string, unknown>>[] => {
+    if (!isValidElement<Record<string, unknown>>(node)) return [];
+    return [node, ...Children.toArray(node.props.children as React.ReactNode).flatMap(elements)];
+  };
+  const selected = render();
+  const preview = elements(selected).find(node => node.type === VenuePreviewCard) as React.ReactElement<React.ComponentProps<typeof VenuePreviewCard>> | undefined;
+  if (!preview) throw new Error("Expected the selected venue preview");
+  expect(preview.props.venue.id).toBe(venue.id);
+  expect(preview.props.games.map(item => item.id)).toEqual([game.id]);
+  expect(preview.props.games.every(item => item.venue.id === venue.id)).toBe(true);
+  expect(elements(selected).some(node => node.type === VenueSheet)).toBe(false);
+  expect(assign).not.toHaveBeenCalled();
+  expect(window.location.pathname).toBe("/games");
+  expect(window.location.search).toBe("?view=map&day=2026-10-18");
+  expect(requests).toHaveLength(requestCount);
+  preview.props.onOpen();
+  const expanded = render();
+  const sheet = elements(expanded).find(node => node.type === VenueSheet) as React.ReactElement<React.ComponentProps<typeof VenueSheet>> | undefined;
+  if (!sheet) throw new Error("Expected the expanded venue sheet");
+  expect(sheet.props.venue.id).toBe(venue.id);
+  expect(sheet.props.games.map(item => item.id)).toEqual([game.id]);
+  expect(sheet.props.games.every(item => item.venue.id === venue.id)).toBe(true);
+  expect(sheet.props.gamesReady).toBe(true);
+  expect(elements(expanded).some(node => node.type === VenuePreviewCard)).toBe(false);
+  expect(assign).not.toHaveBeenCalled();
+  expect(window.location.pathname).toBe("/games");
+  expect(window.location.search).toBe("?view=map&day=2026-10-18");
+  expect(requests).toHaveLength(requestCount);
   const full = renderToStaticMarkup(render("city", "", venue.id));
   expect(full).toContain('aria-label="Расписание площадки"');
   expect(full).toContain('href="/games/game-id"');

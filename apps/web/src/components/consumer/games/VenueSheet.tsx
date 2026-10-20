@@ -42,9 +42,10 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
       if (event.shiftKey && (document.activeElement === first || !panel.current?.contains(document.activeElement))) { event.preventDefault(); last?.focus(); }
       else if (!event.shiftKey && (document.activeElement === last || !panel.current?.contains(document.activeElement))) { event.preventDefault(); first?.focus(); }
     };
-    window.addEventListener("keydown", keydown, true);
+    const options = { capture: true };
+    window.addEventListener("keydown", keydown, options);
     return () => {
-      window.removeEventListener("keydown", keydown, true); document.body.style.overflow = overflow;
+      window.removeEventListener("keydown", keydown, options); document.body.style.overflow = overflow;
       if (initiator instanceof HTMLElement && initiator.isConnected) initiator.focus();
       else document.querySelector<HTMLButtonElement>('.gb-venue-preview-button')?.focus();
     };

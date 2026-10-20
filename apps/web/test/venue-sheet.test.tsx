@@ -128,6 +128,30 @@ it.each([false, true])("traps actual Tab boundary with shift=%s and allows inter
   const after = Object.assign(new Event("keydown", { cancelable: true }), { key: "Tab", shiftKey });
   window.dispatchEvent(after); expect(after.defaultPrevented).toBe(false);
 });
+it("removes Escape and Tab listeners after cleanup and a fresh reopening", () => {
+  const escape = () => {
+    const event = Object.assign(new Event("keydown", { cancelable: true }), { key: "Escape" });
+    window.dispatchEvent(event);
+    return event;
+  };
+  for (let opening = 0; opening < 2; opening++) {
+    // A remount has fresh hook slots but retains the same real window EventTarget.
+    hooks.slots = []; hooks.effects = []; hooks.cleanups = []; hooks.cursor = 0;
+    render();
+    expect(document.body.style.overflow).toBe("hidden");
+    expect(escape().defaultPrevented).toBe(true);
+    expect(collapse).toHaveBeenCalledTimes(opening + 1);
+    hooks.cleanups.splice(0).forEach(fn => fn?.());
+    expect(document.activeElement).toBe(initiator);
+    expect(document.body.style.overflow).toBe("auto");
+    expect(escape().defaultPrevented).toBe(false);
+    expect(collapse).toHaveBeenCalledTimes(opening + 1);
+    const tab = Object.assign(new Event("keydown", { cancelable: true }), { key: "Tab", shiftKey: false });
+    window.dispatchEvent(tab);
+    expect(tab.defaultPrevented).toBe(false);
+    expect(document.activeElement).toBe(initiator);
+  }
+});
 it("restores preview focus when the initiating element was removed", () => {
   render(); initiator.isConnected = false;
   hooks.cleanups.forEach(fn => fn?.()); expect(document.activeElement).toBe(first);
