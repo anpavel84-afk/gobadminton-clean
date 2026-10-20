@@ -160,7 +160,14 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
         "0035_game_cover",
         "0036_venue_contacts",
         "0037_venue_cover_credit",
+        "0038_public_venue_contacts",
       ]);
+      const publicContactsColumn = await pool.query<{data_type:string;is_nullable:string;column_default:string|null}>(
+        "SELECT data_type,is_nullable,column_default FROM information_schema.columns WHERE table_name='venues' AND column_name='public_contacts'",
+      );
+      expect(publicContactsColumn.rows).toEqual([{data_type:"jsonb",is_nullable:"YES",column_default:null}]);
+      const publicCheck = await pool.query("SELECT conname FROM pg_constraint WHERE conrelid='venues'::regclass AND conname='venues_public_contacts_check'");
+      expect(publicCheck.rows).toHaveLength(1);
       // Verify the additive game slot exists, beyond its migration record.
       const gameCoverColumns = await pool.query<{
         column_name: string; data_type: string; is_nullable: string;

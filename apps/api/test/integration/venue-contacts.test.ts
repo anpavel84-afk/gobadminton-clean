@@ -78,6 +78,69 @@ run("T0a-1: контакты площадки и приватность",()=>{
    expect((await db.query("SELECT contact_phone FROM venues WHERE id=$1",[id])).rows[0].contact_phone).toBe("Синтетический контакт");
   } finally {await db.end();await adminPool.query(`DROP DATABASE IF EXISTS "${migrationDatabase}"`);}
  });
+ it("0037→0038 upgrade, SQL storage boundaries and ledger rerun",async()=>{
+  const name=databaseName+"_public_upgrade";await adminPool.query(`CREATE DATABASE "${name}"`);
+  const url=new URL(process.env.DATABASE_URL!);url.pathname="/"+name;const db=new Pool({connectionString:url.href});
+  try {
+   const dir=path.resolve(__dirname,"../../migrations"),files=(await readdir(dir)).filter(f=>f.endsWith('.sql')).sort();
+   await db.query("CREATE TABLE schema_migrations(id text PRIMARY KEY)");
+   for(const file of files.filter(f=>f<'0038')){await db.query(await readFile(path.join(dir,file),'utf8'));await db.query("INSERT INTO schema_migrations VALUES($1)",[file.replace(/\.sql$/,'')]);}
+   const uid=(await db.query<{id:string}>("INSERT INTO users(display_name) VALUES('public synthetic') RETURNING id")).rows[0]!.id;
+   const id=(await db.query<{id:string}>("INSERT INTO venues(city_id,name,address,timezone,location,created_by_user_id,contact_phone,contact_website,booking_note) VALUES($1,'Public synthetic','Address','Europe/Moscow',ST_SetSRID(ST_MakePoint(37,55),4326)::geography,$2,'private','https://private.invalid','private note') RETURNING id",[cityId,uid])).rows[0]!.id;
+   let alters=0;
+   for(let pass=0;pass<2;pass++)for(const file of files){const mid=file.replace(/\.sql$/,'');if(!(await db.query('SELECT 1 FROM schema_migrations WHERE id=$1',[mid])).rowCount){await db.query(await readFile(path.join(dir,file),'utf8'));await db.query('INSERT INTO schema_migrations VALUES($1)',[mid]);if(mid==='0038_public_venue_contacts')alters++;}}
+   expect(alters).toBe(1);
+   expect((await db.query('SELECT public_contacts,contact_phone,contact_website,booking_note FROM venues WHERE id=$1',[id])).rows[0]).toEqual({public_contacts:null,contact_phone:'private',contact_website:'https://private.invalid',booking_note:'private note'});
+   const canonical=publicVenueContactsSchema.parse({phone:'+1234567',website:'https://пример.рф/contact',messengers:[{kind:'telegram',url:'https://t.me/club'}]});
+   await db.query('UPDATE venues SET public_contacts=$2::jsonb WHERE id=$1',[id,JSON.stringify(canonical)]);
+   for(const bad of [null,{},[],{...canonical,phone:1},{...canonical,private:'secret'},{...canonical,phone:'123456'},{...canonical,website:'https://пример.рф/contact'},{...canonical,website:'https://foo／bar.example/path'},{...canonical,website:'https://a@b/'},{...canonical,website:'https://example.com:443/'},{...canonical,website:'https://example.com/a/../b'},{...canonical,messengers:[{kind:'telegram',url:'https://t.me/'}]},{...canonical,messengers:Array(4).fill({kind:'vk',url:'https://vk.com/club'})}])await expect(db.query('UPDATE venues SET public_contacts=$2::jsonb WHERE id=$1',[id,JSON.stringify(bad)])).rejects.toMatchObject({code:'23514'});
+   await db.query('UPDATE venues SET public_contacts=$2 WHERE id=$1',[id,null]);expect((await db.query('SELECT public_contacts IS NULL AS cleared FROM venues WHERE id=$1',[id])).rows[0]?.cleared).toBe(true);
+  }finally{await db.end();await adminPool.query(`DROP DATABASE IF EXISTS "${name}"`);}
+ });
+ it("public IDN edit, omission, replacement and SQL NULL leave private timestamp and audit safe",async()=>{
+  const x=await fixture();
+  const before=(await pool.query('SELECT contact_phone,contact_website,booking_note,contact_updated_at FROM venues WHERE id=$1',[x.v.id])).rows[0];
+  const publicContacts={phone:'+1234567',website:'https://пример.рф/contact',messengers:[{kind:'vk',url:'https://vk.com/club'}]};
+  const normalized=publicVenueContactsSchema.parse(publicContacts);
+  const key=randomUUID(),payload={expectedVersion:2,fields:{...x.f,publicContacts}};
+  const edited=await command(x.v.id,'edit',payload,content,key);expect(edited.statusCode,edited.body).toBe(201);expect(edited.json()).toHaveProperty('publicContacts',normalized);
+  expect((await command(x.v.id,'edit',payload,content,key)).body).toBe(edited.body);
+  expect((await command(x.v.id,'edit',payload)).statusCode).toBe(409);
+  for(const url of ['/v1/venues/'+x.v.id,'/v1/venues?cityId='+cityId,'/v1/admin/venues/'+x.v.id]){
+   const r=await app.inject({method:'GET',url,headers:url.includes('/admin/')?{origin,cookie:`${ADMIN_COOKIE}=${content.token}`}:{}});expect(r.statusCode,r.body).toBe(200);const body=r.json();expect(url.includes('?')?body.items.find((v:{id:string})=>v.id===x.v.id):body).toHaveProperty('publicContacts',normalized);
+  }
+  expect((await command(x.v.id,'edit',{expectedVersion:3,fields:x.f})).statusCode).toBe(201);
+  expect((await pool.query('SELECT public_contacts FROM venues WHERE id=$1',[x.v.id])).rows[0]?.public_contacts).toEqual(normalized);
+  const replacement={phone:null,website:'http://example.com/',messengers:[]};
+  expect((await command(x.v.id,'edit',{expectedVersion:4,fields:{...x.f,publicContacts:replacement}})).statusCode).toBe(201);
+  expect((await pool.query('SELECT public_contacts FROM venues WHERE id=$1',[x.v.id])).rows[0]?.public_contacts).toEqual(replacement);
+  expect((await command(x.v.id,'edit',{expectedVersion:5,fields:{...x.f,publicContacts:null}})).statusCode).toBe(201);
+  expect((await pool.query('SELECT public_contacts IS NULL AS cleared FROM venues WHERE id=$1',[x.v.id])).rows[0]?.cleared).toBe(true);
+  expect((await pool.query('SELECT contact_phone,contact_website,booking_note,contact_updated_at FROM venues WHERE id=$1',[x.v.id])).rows[0]).toEqual(before);
+  const audit=await pool.query("SELECT before_diff,after_diff FROM privileged_audit_events WHERE target_id=$1",[x.v.id]);expect(JSON.stringify(audit.rows)).not.toMatch(/1234567|xn--|publicContacts/);
+  expect((await post('',{...fields(),publicContacts,reasonCode:'synthetic_review'})).statusCode).toBe(400);
+  const csrf=await app.inject({method:'POST',url:'/v1/admin/venues/'+x.v.id+'/commands',headers:{origin,'idempotency-key':randomUUID()},cookies:{[ADMIN_COOKIE]:content.token},payload:{action:'edit',expectedVersion:6,reasonCode:'synthetic_review',fields:{...x.f,publicContacts}}});expect(csrf.statusCode).toBeGreaterThanOrEqual(400);
+ });
+
+ it("public contact edits retain auth/Origin/step-up fences and collision does not publish",async()=>{
+  const x=await fixture(),publicContacts={phone:'+1234567',website:null,messengers:[]};
+  const payload={action:'edit',expectedVersion:2,reasonCode:'synthetic_review',fields:{...x.f,publicContacts}};
+  const endpoint='/v1/admin/venues/'+x.v.id+'/commands';
+  const guest=await app.inject({method:'POST',url:endpoint,headers:{origin,'idempotency-key':randomUUID(),'x-csrf-token':content.csrf},payload});expect(guest.statusCode).toBeGreaterThanOrEqual(400);
+  const wrongOrigin=await app.inject({method:'POST',url:endpoint,headers:{origin:'https://untrusted.invalid','idempotency-key':randomUUID(),'x-csrf-token':content.csrf},cookies:{[ADMIN_COOKIE]:content.token},payload});expect(wrongOrigin.statusCode).toBeGreaterThanOrEqual(400);
+  await pool.query("UPDATE admin_sessions SET step_up_at=now()-interval '1 day' WHERE principal_id=$1",[content.id]);
+  try {expect((await command(x.v.id,'edit',{expectedVersion:2,fields:{...x.f,publicContacts}})).statusCode).toBeGreaterThanOrEqual(400);}
+  finally {await pool.query('UPDATE admin_sessions SET step_up_at=now() WHERE principal_id=$1',[content.id]);}
+  const f=fields(),created=await post('',{...f,reasonCode:'synthetic_review'});expect(created.statusCode,created.body).toBe(201);
+  const second=created.json() as {id:string};
+  const collision=await command(second.id,'edit',{fields:{...x.f,publicContacts}});expect(collision.statusCode,collision.body).toBe(201);expect(collision.json()).toHaveProperty('reviewRequired',true);
+  expect((await pool.query('SELECT public_contacts FROM venues WHERE id=$1',[second.id])).rows[0]?.public_contacts).toBeNull();
+  const input={...fields(),publicContacts};
+  const proposed=await app.get(VenuesService).propose(x.uid,x.s.session,randomUUID(),input);
+  if('id' in proposed.body){expect((await pool.query('SELECT public_contacts FROM venues WHERE id=$1',[proposed.body.id])).rows[0]?.public_contacts).toBeNull();}
+  else {expect(proposed.statusCode).toBe(409);expect(proposed.body.candidates.length).toBeGreaterThan(0);}
+ });
+
  const keys=["contactPhone","contactWebsite","bookingNote"];
  const contacts={contactPhone:"+0 000 000-00-00",contactWebsite:"https://venue.example.invalid",bookingNote:"Синтетическая инструкция"};
  function absent(value:unknown):void {
@@ -152,5 +215,111 @@ run("T0a-1: контакты площадки и приватность",()=>{
   }
   const r=await command(x.v.id,"edit",{expectedVersion:2,fields:{...x.f,contactPhone:"  "+contacts.contactPhone+" ",contactWebsite:" http://venue.example.invalid ",bookingNote:"  Инструкция  "}});expect(r.statusCode,r.body).toBe(201);
   expect((await detail(x.gameId,x.s.cookie)).venue).toMatchObject({contactPhone:contacts.contactPhone,contactWebsite:"http://venue.example.invalid",bookingNote:"Инструкция"});
+ });
+});
+
+// Pure source-author checks run even when PostGIS integration is disabled.
+import { publicContactUrl, publicContactPhone, publicVenueContactsSchema, readPublicVenueContacts } from "../../src/venues/public-venue-contacts";
+import { venueCommand, venueCreate } from "../../src/admin/venues.dto";
+describe("public venue contacts: offline policy",()=>{
+ const valid={phone:"+7 (999) 123-45-67",website:"https://пример.рф/contact",messengers:[{kind:"telegram",url:"https://t.me/club"}]};
+ const f={cityId:"a0000000-0000-4000-8000-000000000001",name:"Зал",address:"Адрес",timezone:"Europe/Moscow",latitude:55,longitude:37};
+ it("strict edit normalizes IDN; create rejects; omission/null remain distinct",()=>{
+  const normalized=publicVenueContactsSchema.parse(valid);
+  expect(normalized?.website).toBe("https://xn--e1afmkfd.xn--p1ai/contact");
+  for(const publicContacts of [valid,null,undefined])expect(venueCommand.safeParse({action:"edit",expectedVersion:1,reasonCode:"synthetic_review",fields:{...f,publicContacts}}).success).toBe(true);
+  expect(venueCreate.safeParse({...f,reasonCode:"synthetic_review",publicContacts:valid}).success).toBe(false);
+  for(const bad of [{...valid,private:"secret"},{...valid,phone:undefined},{...valid,messengers:[...valid.messengers,...valid.messengers]}])expect(publicVenueContactsSchema.safeParse(bad).success).toBe(false);
+ });
+ it("WHATWG boundaries and normalized rather than raw length",()=>{
+  for(const [raw,url] of [["HTTP://Example.COM:80/a/../b","http://example.com/b"],["https://127.0.0.1:443/","https://127.0.0.1/"],["https://[::1]/","https://[::1]/"],[" ".repeat(310)+"https://example.com/ ","https://example.com/"]])expect(publicContactUrl(raw)).toBe(url);
+  for(const raw of ["https://foo／bar.example/path","https://a@b/","https://b:444/","https://b/\n","https://b/\\x","javascript:alert(1)"])expect(publicContactUrl(raw)).toBeNull();
+  const expanded="https://example.com/"+"я".repeat(100);expect(expanded.length).toBeLessThan(300);expect(publicContactUrl(expanded)).toBeNull();
+  expect(publicContactUrl("https://example.com/"+"a".repeat(280))).not.toBeNull();
+  expect(publicContactUrl("https://example.com/"+"a".repeat(281))).toBeNull();
+  expect(publicContactUrl("https://t.me/a/..","telegram")).toBeNull();
+  expect(publicContactUrl("http://t.me/club","telegram")).toBeNull();
+ });
+ it("phone bounds and tolerant reads retain safe neighbors",()=>{
+  for(const phone of ["123456","1".repeat(16),"12+345678","\n1234567","1234567\u0085"])expect(publicContactPhone(phone)).toBeNull();
+  expect(publicContactPhone("  +1234567  ")).toBe("+1234567");
+  for(const raw of [null,undefined,[],42,"x"])expect(readPublicVenueContacts(raw)).toBeNull();
+  expect(readPublicVenueContacts({...valid,phone:"unsafe",website:"javascript:x",messengers:[{kind:"telegram",url:"https://t.me/"},...valid.messengers,...valid.messengers,{kind:"vk",url:"https://vk.com/club"}],contact_phone:"private"})).toEqual({phone:null,website:null,messengers:[{kind:"telegram",url:"https://t.me/club"},{kind:"vk",url:"https://vk.com/club"}]});
+ });
+});
+
+import type { PoolClient, QueryResult, QueryResultRow } from "pg";
+import type { FastifyRequest } from "fastify";
+import { AdminService, type AdminActor } from "../../src/admin/admin.service";
+import { AdminVenuesService } from "../../src/venues/admin-venues.service";
+import { VenuesService } from "../../src/venues/venues.service";
+import { IdempotencyService } from "../../src/common/idempotency.service";
+import { MutationRunner } from "../../src/common/mutation-runner.service";
+function queryResult<R extends QueryResultRow>(rows:R[]):QueryResult<R>{return {rows,rowCount:rows.length,command:"SELECT",oid:0,fields:[]};}
+describe("public contacts service projections and SQL binds without DB",()=>{
+ const id="a0000000-0000-4000-8000-000000000003",cityId="a0000000-0000-4000-8000-000000000001";
+ const contacts={phone:"+1234567",website:"https://example.com/",messengers:[]};
+ const base={id,city_id:cityId,name:"Зал",address:"Адрес",timezone:"Europe/Moscow",latitude:55,longitude:37,lifecycle_state:"verified",canonical_venue_id:null,identity_discriminator:"",version:1,normalized_name:"зал",normalized_address:"адрес",data_status:"verified",provenance:"admin_created",public_contacts:contacts as unknown,contact_phone:"private",contact_website:"https://private.invalid",booking_note:"private",cover_credit_kind:null,cover_credit_text:null,cover_credit_url:null};
+ it("catalog and alias detail sanitize unknown contacts and omit private fields",async()=>{
+  const statements:string[]=[];
+  let alias=false;
+  const fake:Pick<Pool,"query">={query:(async(sql:string)=>{
+   statements.push(sql);
+   if(alias && statements.length===1)return queryResult([{...base,lifecycle_state:"merged",canonical_venue_id:"a0000000-0000-4000-8000-000000000004"}]);
+   return queryResult([{...base,id:alias?"a0000000-0000-4000-8000-000000000004":id,public_contacts:{...contacts,phone:"unsafe"}}]);
+  }) as Pool['query']};
+  const service=new VenuesService(fake as Pool,{} as IdempotencyService,{} as MutationRunner);
+  const page=await service.searchCatalog({cityId});expect(page.items[0]?.publicContacts).toEqual({...contacts,phone:null});expect(JSON.stringify(page)).not.toContain('private');expect(statements[0]).toContain('public_contacts');
+  statements.length=0;alias=true;
+  const detail=await service.getById(id);expect(detail.publicContacts).toEqual({...contacts,phone:null});expect(detail.resolvedFromVenueId).toBe(id);expect(statements).toHaveLength(2);
+ });
+ it("fuzzy candidates and proposal RETURNING expose safe contacts without contact writes",async()=>{
+  for(const fuzzy of [true,false]){
+   const calls:string[]=[];
+   const client:Pick<PoolClient,'query'>={query:(async(sql:string)=>{
+    calls.push(sql);
+    if(sql.startsWith('SELECT id FROM cities'))return queryResult([{id:cityId}]);
+    if(sql.includes('AS distance_m'))return queryResult(fuzzy?[{...base,distance_m:0}]:[]);
+    if(sql.includes('INSERT INTO venues ('))return queryResult([{...base,public_contacts:null}]);
+    if(sql.includes('INSERT INTO venue_identity_keys'))return queryResult([{venue_id:id}]);
+    return queryResult([]);
+   }) as PoolClient['query']};
+   const mutations:Pick<MutationRunner,'runIdempotent'>={runIdempotent:async input=>input.execute(client as PoolClient)};
+   const hash:Pick<IdempotencyService,'requestHash'>={requestHash:()=>"synthetic"};
+   const service=new VenuesService({} as Pool,hash as IdempotencyService,mutations as MutationRunner);
+   const result=await service.propose(id,id,'synthetic-key',{cityId,name:base.name,address:base.address,timezone:base.timezone,latitude:55,longitude:37});
+   expect(result.statusCode).toBe(fuzzy?409:201);
+   if('candidates' in result.body)expect(result.body.candidates[0]?.publicContacts).toEqual(contacts);
+   else expect(result.body.publicContacts).toBeNull();
+   expect(JSON.stringify(result.body)).not.toContain('private');
+   expect(calls.some(sql=>sql.includes('public_contacts')&&sql.includes(fuzzy?'AS distance_m':'RETURNING'))).toBe(true);
+   for(const sql of calls.filter(sql=>sql.includes('INSERT INTO venues (')))expect(sql.split('RETURNING')[0]).not.toContain('public_contacts');
+  }
+ });
+ it("admin edit binds omission, SQL NULL and serialized canonical replacement; audit/outbox omit contacts",async()=>{
+  for(const publicContacts of [undefined,null,{...contacts,website:"https://пример.рф/contact"}]){
+   let row={...base};const calls:{sql:string;values:unknown[]}[]=[];
+   const client:Pick<PoolClient,'query'>={query:(async(sql:string,values:unknown[]=[])=>{
+    calls.push({sql,values});
+    if(sql.startsWith('SELECT v.*'))return queryResult([row]);
+    if(sql.startsWith('UPDATE venues SET name=')){if(values[12])row={...row,public_contacts:values[13]===null?null:JSON.parse(String(values[13]))};row.version++;}
+    if(sql.includes('privileged_audit_events'))return queryResult([{id:'audit'}]);
+    return queryResult([]);
+   }) as PoolClient['query']};
+   const actor={principalId:'actor',roles:[],sessionId:'session'} as AdminActor;
+   const fake:Pick<AdminService,'privilegedCommand'|'privilegedRead'>={
+    privilegedCommand:async(_r,_k,_p,_s,_o,_i,execute)=>execute(client as PoolClient,actor,'hash'),
+    privilegedRead:async(_r,_p,read)=>read(client as PoolClient,actor),
+   };
+   const service=new AdminVenuesService(fake as AdminService);
+   const input=venueCommand.parse({action:'edit',expectedVersion:1,reasonCode:'synthetic_review',fields:{cityId,name:base.name,address:base.address,timezone:base.timezone,latitude:55,longitude:37,publicContacts}});
+   const result=await service.command({} as FastifyRequest,'synthetic-key',id,input);
+   const update=calls.find(c=>c.sql.startsWith('UPDATE venues SET name='));expect(update?.sql).toContain('CASE WHEN $13::boolean THEN $14::jsonb ELSE public_contacts END');
+   expect(update?.values[12]).toBe(publicContacts!==undefined);
+   expect(update?.values[13]).toBe(publicContacts==null?null:JSON.stringify({...contacts,website:'https://xn--e1afmkfd.xn--p1ai/contact'}));
+   expect(result).toHaveProperty('publicContacts',publicContacts===undefined?contacts:publicContacts===null?null:{...contacts,website:'https://xn--e1afmkfd.xn--p1ai/contact'});
+   for(const call of calls.filter(c=>/INSERT INTO (privileged_audit_events|outbox_events)/.test(c.sql)))expect(JSON.stringify(call.values)).not.toMatch(/1234567|example.com|xn--|private/);
+   expect(await service.detail({} as FastifyRequest,id)).toHaveProperty('publicContacts');
+  }
  });
 });

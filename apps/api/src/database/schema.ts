@@ -104,6 +104,7 @@ export const cities = pgTable("cities", {
 });
 
 export const venues = pgTable("venues", {
+  publicContacts: jsonb("public_contacts"),
   contactPhone: text("contact_phone"),
   contactWebsite: text("contact_website"),
   bookingNote: text("booking_note"),

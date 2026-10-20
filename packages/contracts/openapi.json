@@ -16204,6 +16204,9 @@
           },
           "cover": {
             "$ref": "#/components/schemas/VenueCover"
+          },
+          "publicContacts": {
+            "$ref": "#/components/schemas/PublicVenueContacts"
           }
         }
       },
@@ -24127,6 +24130,9 @@
                     "type": "string",
                     "maxLength": 500,
                     "description": "Пробелы по краям удаляются; пустая строка очищает значение. Пропуск сохраняет значение."
+                  },
+                  "publicContacts": {
+                    "$ref": "#/components/schemas/PublicVenueContacts"
                   }
                 },
                 "required": [
@@ -24375,6 +24381,9 @@
               "integer",
               "null"
             ]
+          },
+          "publicContacts": {
+            "$ref": "#/components/schemas/PublicVenueContacts"
           }
         },
         "required": [
@@ -25022,6 +25031,63 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 2147483647
+          }
+        }
+      },
+      "PublicVenueContacts": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "additionalProperties": false,
+        "required": [
+          "phone",
+          "website",
+          "messengers"
+        ],
+        "description": "Public organization contacts only. Strict edit input: trim phone, forbid controls; WHATWG HTTP(S) URL normalization accepts IDN, stores/outputs ASCII punycode href, removes default ports; 300 characters after serialization. No credentials, backslash or nondefault ports. Omission preserves; null clears SQL value.",
+        "properties": {
+          "phone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 40,
+            "description": "7–15 ASCII digits; optional leading +; ASCII spaces, parentheses and hyphens only; controls forbidden before trim."
+          },
+          "website": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "HTTP(S) URL, max 300 after WHATWG serialization; IDN input allowed; ASCII output."
+          },
+          "messengers": {
+            "type": "array",
+            "maxItems": 3,
+            "description": "Unique kind; HTTPS t.me/wa.me/vk.com respectively, non-root normalized pathname.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "url"
+              ],
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "telegram",
+                    "whatsapp",
+                    "vk"
+                  ]
+                },
+                "url": {
+                  "type": "string",
+                  "description": "Canonical HTTPS href; max 300 after serialization."
+                }
+              }
+            }
           }
         }
       }

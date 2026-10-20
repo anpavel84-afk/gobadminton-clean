@@ -10,6 +10,46 @@ import { Avatar } from "../players/ProfileComposition";
 import { GameHero, GameTerms } from "./GameDetailComposition";
 import "../../../styles/venue-popup.css";
 
+// Validate untrusted/older API data independently of server normalization.
+function contactUrl(value: unknown, kind?: string): string | null {
+  if (typeof value !== "string" || /[\u0000-\u001f\u007f-\u009f\\]/.test(value)) return null;
+  const raw = value.trim();
+  if (!/^https?:\/\//i.test(raw) || raw.split(/[/?#]/)[2]?.includes("@")) return null;
+  try {
+    const url = new URL(raw);
+    if (!url.hostname.startsWith("[") && (url.hostname.length > 253 || !url.hostname.split(".").every(label => /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(label)))) return null;
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.port || url.href.length > 300) return null;
+    const host = kind === "telegram" ? "t.me" : kind === "whatsapp" ? "wa.me" : kind === "vk" ? "vk.com" : null;
+    if (kind && (!host || url.protocol !== "https:" || url.hostname !== host || url.pathname === "/")) return null;
+    return url.href;
+  } catch { return null; }
+}
+function VenuePublicContacts({ value }: { value: unknown }) {
+  const row = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const rawPhone = row.phone;
+  const trimmed = typeof rawPhone === "string" ? rawPhone.trim() : "";
+  const digits = trimmed.replace(/[^0-9]/g, "");
+  const phone = typeof rawPhone === "string" && !/[\u0000-\u001f\u007f-\u009f\\]/.test(rawPhone) && trimmed.length <= 40 && /^\+?[0-9 ()-]+$/.test(trimmed) && digits.length >= 7 && digits.length <= 15 ? trimmed : null;
+  const website = contactUrl(row.website);
+  const links: { kind: string; url: string; label: string }[] = [];
+  for (const [kind, label] of [["telegram", "Telegram"], ["whatsapp", "WhatsApp"], ["vk", "ВКонтакте"]] as const) {
+    if (!Array.isArray(row.messengers)) continue;
+    for (const item of row.messengers as unknown[]) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+      const messenger = item as Record<string, unknown>;
+      if (messenger.kind !== kind) continue;
+      const url = contactUrl(messenger.url, kind);
+      if (url) { links.push({kind,url,label}); break; }
+    }
+  }
+  return <section aria-label="Контакты площадки"><h3>Контакты площадки</h3><p>Публичные контакты организации</p>
+    {phone && <p><a href={`tel:${trimmed.startsWith("+") ? "+" : ""}${digits}`}>{phone}</a></p>}
+    {website && <p><a href={website} target="_blank" rel="noopener noreferrer">Сайт площадки</a></p>}
+    {links.map(link => <p key={link.kind}><a href={link.url} target="_blank" rel="noopener noreferrer">{link.label}</a></p>)}
+    {!phone && !website && !links.length && <p>Публичные контакты не указаны</p>}
+  </section>;
+}
+
 export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDeselect, embedded = false, active = true }: {
   venue: VenueSummary; games: readonly Game[]; gamesReady: boolean; now: number;
   onCollapse: () => void; onDeselect: () => void; embedded?: boolean; active?: boolean;
@@ -67,6 +107,7 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
       {currentView === "info" ? <div className="gb-venue-sheet-info">
         <VenueCover cover={venue.cover} name={venue.name} className="gb-venue-sheet-cover" />
         <h3>{venue.name}</h3><p>{venue.address}</p>
+        <VenuePublicContacts value={venue.publicContacts} />
         {!gamesReady && <p role="status">Расписание временно недоступно</p>}
         {gamesReady && games.length === 0 && <Link className="gb-venue-sheet-primary" href={venueCreatePath(new URLSearchParams({ venueId: venue.id }).toString())}>Создать игру на этой площадке</Link>}
         {gamesReady && days.length > 0 && <button type="button" className="gb-venue-sheet-primary" onClick={() => setView("schedule")}>Показать игры на этой площадке</button>}

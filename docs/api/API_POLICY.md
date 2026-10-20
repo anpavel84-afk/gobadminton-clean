@@ -313,3 +313,27 @@ The foundation checker recognizes only these exact routes with required binding 
 изменении хотя бы одного значения. Контакты не добавлены в admin create или
 новые endpoint/UI; audit, step-up, expectedVersion и idempotency сохраняются.
 Ошибки валидации используют существующий problem-формат.
+
+### Public venue organization contacts (M3-CONTACTS-R2)
+
+Venue and AdminVenue may contain nullable `publicContacts` (PublicVenueContacts):
+required `phone`, `website`, `messengers`; each messenger has required `kind` and
+`url`. Only admin edit accepts this field. Omission preserves, null clears to SQL
+NULL, object replaces the entire value. Create/propose do not accept/write it.
+Unknown/private keys are rejected on write. Reads retain safe neighbors while
+nulling invalid phone/website and filtering/deduplicating messengers.
+
+Phone forbids controls before trim, has at most 40 characters after trim and
+7–15 ASCII digits, with optional initial + and ASCII spaces/parentheses/hyphens.
+URLs forbid controls and backslash before trim, require explicit HTTP(S):// and
+an authority without @, credentials or nondefault ports. Standard WHATWG URL
+serialization supplies stored/output href: IDN input becomes ASCII punycode,
+default ports disappear, dot segments normalize; the 300 character limit applies
+AFTER serialization (padding does not count). Messenger kinds are unique, at
+most three; HTTPS host is t.me / wa.me / vk.com and normalized path is non-root.
+SQL checks canonical ASCII storage rather than implementing WHATWG parsing.
+
+These are public organization contacts, distinct from private `contact_phone`,
+`contact_website`, `booking_note`. Private game-detail fields remain available
+only to an active owner/manager or a confirmed participant of that game. Game
+contracts and authorization are unchanged. Audit/outbox omit contact values.
