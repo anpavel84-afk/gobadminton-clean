@@ -172,7 +172,7 @@ export class VenuesService {
     let pointSql = "";
     let sql = `
       SELECT
-        public_contacts, venue_cover_url(id) AS cover_url, cover_credit_kind, cover_credit_text, cover_credit_url, id, name, city_id, address, timezone, data_status, provenance,
+        to_jsonb(venues)->'public_contacts' AS public_contacts, venue_cover_url(id) AS cover_url, cover_credit_kind, cover_credit_text, cover_credit_url, id, name, city_id, address, timezone, data_status, provenance,
         lifecycle_state, identity_discriminator,
         normalized_name, normalized_address, canonical_venue_id,
         ST_Y(location::geometry) AS latitude,
@@ -466,7 +466,7 @@ export class VenuesService {
          'unverified',$9,$10,$11,$12
        )
        RETURNING
-         public_contacts, venue_cover_url(id) AS cover_url, cover_credit_kind, cover_credit_text, cover_credit_url, id, name, city_id, address, timezone, data_status, provenance,
+         to_jsonb(venues)->'public_contacts' AS public_contacts, venue_cover_url(id) AS cover_url, cover_credit_kind, cover_credit_text, cover_credit_url, id, name, city_id, address, timezone, data_status, provenance,
          lifecycle_state, identity_discriminator,
          normalized_name, normalized_address, canonical_venue_id,
          ST_Y(location::geometry) AS latitude,
@@ -612,7 +612,7 @@ export class VenuesService {
   ): Promise<VenueRow[]> {
     const result = await client.query<VenueRow>(
       `SELECT
-         public_contacts, venue_cover_url(id) AS cover_url, cover_credit_kind, cover_credit_text, cover_credit_url, id, name, city_id, address, timezone, data_status, provenance,
+         to_jsonb(venues)->'public_contacts' AS public_contacts, venue_cover_url(id) AS cover_url, cover_credit_kind, cover_credit_text, cover_credit_url, id, name, city_id, address, timezone, data_status, provenance,
          lifecycle_state, identity_discriminator,
          normalized_name, normalized_address, canonical_venue_id,
          ST_Y(location::geometry) AS latitude,
@@ -751,10 +751,13 @@ function buildIdentity(parsed: ParsedVenueInput): BuiltIdentity {
   };
 }
 
+// Extract only the public key from the row so reads also work on schema 0037.
+// PostgreSQL returns SQL NULL for an absent JSON key; private keys never leave SQL.
+// Catalog, fuzzy and INSERT RETURNING use the same projection.
 function venueSelectSql(where: string): string {
   return `
     SELECT
-      v.public_contacts, venue_cover_url(v.id) AS cover_url, v.cover_credit_kind, v.cover_credit_text, v.cover_credit_url, v.id, v.name, v.city_id, v.address, v.timezone, v.data_status, v.provenance,
+      to_jsonb(v)->'public_contacts' AS public_contacts, venue_cover_url(v.id) AS cover_url, v.cover_credit_kind, v.cover_credit_text, v.cover_credit_url, v.id, v.name, v.city_id, v.address, v.timezone, v.data_status, v.provenance,
       v.lifecycle_state, v.identity_discriminator,
       v.normalized_name, v.normalized_address, v.canonical_venue_id,
       ST_Y(v.location::geometry) AS latitude,

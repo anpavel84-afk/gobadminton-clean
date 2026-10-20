@@ -86,7 +86,7 @@ run("T0a-1: контакты площадки и приватность",()=>{
    await db.query("CREATE TABLE schema_migrations(id text PRIMARY KEY)");
    for(const file of files.filter(f=>f<'0038')){await db.query(await readFile(path.join(dir,file),'utf8'));await db.query("INSERT INTO schema_migrations VALUES($1)",[file.replace(/\.sql$/,'')]);}
    const uid=(await db.query<{id:string}>("INSERT INTO users(display_name) VALUES('public synthetic') RETURNING id")).rows[0]!.id;
-   const id=(await db.query<{id:string}>("INSERT INTO venues(city_id,name,address,timezone,location,created_by_user_id,contact_phone,contact_website,booking_note) VALUES($1,'Public synthetic','Address','Europe/Moscow',ST_SetSRID(ST_MakePoint(37,55),4326)::geography,$2,'private','https://private.invalid','private note') RETURNING id",[cityId,uid])).rows[0]!.id;
+   const id=(await db.query<{id:string}>("INSERT INTO venues(city_id,name,address,timezone,location,created_by_user_id,lifecycle_state,contact_phone,contact_website,booking_note) VALUES($1,'Public synthetic','Address','Europe/Moscow',ST_SetSRID(ST_MakePoint(37,55),4326)::geography,$2,'unverified','private','https://private.invalid','private note') RETURNING id",[cityId,uid])).rows[0]!.id;
    let alters=0;
    for(let pass=0;pass<2;pass++)for(const file of files){const mid=file.replace(/\.sql$/,'');if(!(await db.query('SELECT 1 FROM schema_migrations WHERE id=$1',[mid])).rowCount){await db.query(await readFile(path.join(dir,file),'utf8'));await db.query('INSERT INTO schema_migrations VALUES($1)',[mid]);if(mid==='0038_public_venue_contacts')alters++;}}
    expect(alters).toBe(1);
@@ -306,7 +306,17 @@ describe("public contacts service projections and SQL binds without DB",()=>{
     if(sql.includes('privileged_audit_events'))return queryResult([{id:'audit'}]);
     return queryResult([]);
    }) as PoolClient['query']};
-   const actor={principalId:'actor',roles:[],sessionId:'session'} as AdminActor;
+   const timestamp = new Date("2026-10-21T00:00:00Z");
+   const actor: AdminActor = {
+    principalId: 'actor', roles: ['content_manager'], sessionId: 'session',
+    principal: { id: 'actor', user_id: id, status: 'active', version: 1 },
+    session: {
+     id: 'session', principal_id: 'actor', credential_id: 'credential',
+     audience: 'gobadminton-admin', csrf_ciphertext: 'synthetic-csrf',
+     expires_at: new Date("2026-10-22T00:00:00Z"), last_seen_at: timestamp,
+     step_up_at: timestamp, revoked_at: null,
+    },
+   };
    const fake:Pick<AdminService,'privilegedCommand'|'privilegedRead'>={
     privilegedCommand:async(_r,_k,_p,_s,_o,_i,execute)=>execute(client as PoolClient,actor,'hash'),
     privilegedRead:async(_r,_p,read)=>read(client as PoolClient,actor),

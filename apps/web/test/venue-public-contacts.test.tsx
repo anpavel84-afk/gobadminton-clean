@@ -18,9 +18,10 @@ function render(value:unknown,gamesReady=true){
  const tree=VenueSheet({venue:v,games:[],gamesReady,now:0,onCollapse:()=>{},onDeselect:()=>{}});
  return {nodes:walk(tree),html:renderToStaticMarkup(tree)};
 }
-afterEach(()=>vi.unstubAllGlobals());
+afterEach(()=>{vi.unstubAllGlobals();vi.unstubAllEnvs();});
 describe("VenueSheet public organization contacts",()=>{
  it("keeps the entire API object and renders labels/order/link props",async()=>{
+  vi.stubEnv("API_BASE_URL", "http://localhost:19441");
   const publicContacts={phone:" +7 (999) 123-45-67 ",website:"https://пример.рф/contact",messengers:[{kind:"vk",url:"https://vk.com/club"},{kind:"telegram",url:"https://t.me/club"},{kind:"whatsapp",url:"https://wa.me/79991234567"}]};
   vi.stubGlobal("fetch",vi.fn().mockResolvedValue(new Response(JSON.stringify({items:[{...venue,publicContacts}],nextCursor:null}),{status:200})));
   const result=await listAllCityVenues("city");expect(result.ok).toBe(true);if(!result.ok)throw new Error(result.error);
@@ -28,7 +29,9 @@ describe("VenueSheet public organization contacts",()=>{
   const {nodes,html}=render(result.data[0]?.publicContacts);
   const anchors=nodes.filter(n=>n.type==='a' && !String(n.props.href).startsWith('/'));
   expect(anchors.map(n=>n.props.href)).toEqual(["tel:+79991234567","https://xn--e1afmkfd.xn--p1ai/contact","https://t.me/club","https://wa.me/79991234567","https://vk.com/club"]);
+  expect(anchors.map(n=>n.props.children)).toEqual(["+7 (999) 123-45-67","Сайт площадки","Telegram","WhatsApp","ВКонтакте"]);
   expect(anchors[0]?.props.target).toBeUndefined();
+  expect(anchors[0]?.props.rel).toBeUndefined();
   for(const a of anchors.slice(1)){expect(a.props.target).toBe('_blank');expect(a.props.rel).toBe('noopener noreferrer');}
   expect(html).toContain("Публичные контакты организации");
   const labels=["Сайт площадки","Telegram","WhatsApp","ВКонтакте"];expect(labels.map(l=>html.indexOf(l))).toEqual(labels.map(l=>html.indexOf(l)).sort((a,b)=>a-b));

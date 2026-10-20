@@ -11,8 +11,14 @@ import { GameHero, GameTerms } from "./GameDetailComposition";
 import "../../../styles/venue-popup.css";
 
 // Validate untrusted/older API data independently of server normalization.
+function hasForbiddenContactCharacters(value: string): boolean {
+  return Array.from(value).some(character => {
+    const code = character.charCodeAt(0);
+    return code <= 0x1f || (code >= 0x7f && code <= 0x9f) || character === "\\";
+  });
+}
 function contactUrl(value: unknown, kind?: string): string | null {
-  if (typeof value !== "string" || /[\u0000-\u001f\u007f-\u009f\\]/.test(value)) return null;
+  if (typeof value !== "string" || hasForbiddenContactCharacters(value)) return null;
   const raw = value.trim();
   if (!/^https?:\/\//i.test(raw) || raw.split(/[/?#]/)[2]?.includes("@")) return null;
   try {
@@ -29,7 +35,7 @@ function VenuePublicContacts({ value }: { value: unknown }) {
   const rawPhone = row.phone;
   const trimmed = typeof rawPhone === "string" ? rawPhone.trim() : "";
   const digits = trimmed.replace(/[^0-9]/g, "");
-  const phone = typeof rawPhone === "string" && !/[\u0000-\u001f\u007f-\u009f\\]/.test(rawPhone) && trimmed.length <= 40 && /^\+?[0-9 ()-]+$/.test(trimmed) && digits.length >= 7 && digits.length <= 15 ? trimmed : null;
+  const phone = typeof rawPhone === "string" && !hasForbiddenContactCharacters(rawPhone) && trimmed.length <= 40 && /^\+?[0-9 ()-]+$/.test(trimmed) && digits.length >= 7 && digits.length <= 15 ? trimmed : null;
   const website = contactUrl(row.website);
   const links: { kind: string; url: string; label: string }[] = [];
   for (const [kind, label] of [["telegram", "Telegram"], ["whatsapp", "WhatsApp"], ["vk", "ВКонтакте"]] as const) {

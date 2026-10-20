@@ -5,10 +5,15 @@ export type PublicVenueContacts = {
   website: string | null;
   messengers: { kind: "telegram" | "whatsapp" | "vk"; url: string }[];
 };
-const forbidden = /[\u0000-\u001f\u007f-\u009f\\]/;
+function hasForbiddenContactCharacters(value: string): boolean {
+  return Array.from(value).some(character => {
+    const code = character.charCodeAt(0);
+    return code <= 0x1f || (code >= 0x7f && code <= 0x9f) || character === "\\";
+  });
+}
 const hosts = { telegram: "t.me", whatsapp: "wa.me", vk: "vk.com" } as const;
 export function publicContactUrl(value: unknown, kind?: keyof typeof hosts): string | null {
-  if (typeof value !== "string" || forbidden.test(value)) return null;
+  if (typeof value !== "string" || hasForbiddenContactCharacters(value)) return null;
   const raw = value.trim();
   if (!/^https?:\/\//i.test(raw) || raw.split(/[/?#]/)[2]?.includes("@")) return null;
   try {
@@ -20,7 +25,7 @@ export function publicContactUrl(value: unknown, kind?: keyof typeof hosts): str
   } catch { return null; }
 }
 export function publicContactPhone(value: unknown): string | null {
-  if (typeof value !== "string" || forbidden.test(value)) return null;
+  if (typeof value !== "string" || hasForbiddenContactCharacters(value)) return null;
   const phone = value.trim();
   const digits = phone.replace(/[^0-9]/g, "").length;
   return phone.length <= 40 && /^\+?[0-9 ()-]+$/.test(phone) && digits >= 7 && digits <= 15 ? phone : null;
