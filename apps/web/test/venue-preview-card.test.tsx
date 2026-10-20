@@ -1,7 +1,7 @@
 import { Children, isValidElement } from "react";
 import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { Game, VenueSummary } from "../src/lib/consumer-types";
 import { VenuePreviewCard } from "../src/components/consumer/games/VenuePreviewCard";
 import { nearestGameLabel } from "../src/lib/venue-popup";
@@ -14,12 +14,12 @@ function game(startsAt: string, endsAt: string): Game {
     levelRule: { scaleId: "test", scaleVersion: 1, allowedLevelIds: [] },
     settlement: { mode: "external", purpose: "no_trainer_fee", priceMinor: null, currency: null, terms: "" } };
 }
-it("renders the real cover and region with exactly one named keyboard button; opens once", () => {
+it("renders the real cover and region with named keyboard buttons; opens once", () => {
   const onOpen = vi.fn();
   const tree = VenuePreviewCard({ venue, games: [], gamesReady: true, now: 0, onOpen });
   const html = renderToStaticMarkup(tree);
   expect(html).toContain('role="region" aria-label="Выбранная площадка"');
-  expect(html.match(/<button /g)).toHaveLength(1);
+  expect(html.match(/<button /g)).toHaveLength(2);
   expect(html).toContain('aria-label="Открыть площадку Зал А"');
   expect(html).toContain("Улица 1"); expect(html).toContain('data-cover="default"');
   function activate(node: ReactNode): void {
@@ -27,7 +27,7 @@ it("renders the real cover and region with exactly one named keyboard button; op
     if (node.type === "button") node.props.onClick?.();
     Children.forEach(node.props.children, activate);
   }
-  activate(tree); expect(onOpen).toHaveBeenCalledOnce();
+  activate(tree); expect(onOpen).toHaveBeenCalledTimes(2);
   const uploadedUrl = `/v1/media/venue-covers/${"a".repeat(64)}.png`;
   expect(renderToStaticMarkup(<VenuePreviewCard venue={{ ...venue, cover: { uploadedUrl } }} games={[]} gamesReady now={0} onOpen={onOpen} />)).toContain('data-cover="uploaded"');
 });
@@ -52,4 +52,29 @@ it.each([
   ["2026-10-24T22:30:00Z", "2026-10-25T23:00:00Z", "2026-10-26T00:00:00Z", "00:00 – 01:00 · Завтра"],
 ])("handles DST calendar tomorrow at %s", (now, start, end, label) => {
   expect(nearestGameLabel([game(start, end)], "Europe/Berlin", Date.parse(now))).toBe(label);
+});
+
+it.each([[1, "1 игра"], [2, "2 игры"], [5, "5 игр"]] as const)("counts %s games", (count, label) => {
+  const games = Array.from({ length: count }, () => game("2026-11-04T10:00:00Z", "2026-11-04T11:00:00Z"));
+  const html = renderToStaticMarkup(<VenuePreviewCard venue={venue} games={games} gamesReady now={0} onOpen={() => {}} />);
+  expect(html).toContain(`На этой площадке ${label}`); expect(html).toContain("↑"); expect(html).toContain("gb-venue-handle");
+});
+
+afterEach(() => vi.unstubAllGlobals());
+it.each(["80", "81", "horizontal", "cancel", "control"])("preview gesture %s", reason => {
+  class Target { closest() { return reason !== "control"; } }
+  vi.stubGlobal("Element", Target);
+  const onOpen = vi.fn(); const onSwipe = vi.fn();
+  const tree = VenuePreviewCard({ venue, games: [], gamesReady: true, now: 0, onOpen, onSwipe });
+  const event = { target: new Target(), clientX: 0, clientY: 100, pointerId: 1, currentTarget: { setPointerCapture() {} } };
+  tree.props.onPointerDown(event);
+  if (reason === "cancel") tree.props.onPointerCancel();
+  tree.props.onPointerUp({ ...event, clientX: reason === "horizontal" ? 100 : 0, clientY: reason === "80" ? 20 : 19 });
+  expect(onOpen).toHaveBeenCalledTimes(reason === "81" ? 1 : 0);
+  expect(onSwipe).toHaveBeenCalledTimes(reason === "81" ? 1 : 0);
+  const click = { preventDefault: vi.fn(), stopPropagation: vi.fn() };
+  tree.props.onClickCapture(click);
+  expect(click.preventDefault).toHaveBeenCalledTimes(reason === "81" ? 1 : 0);
+  tree.props.onClickCapture(click);
+  expect(click.preventDefault).toHaveBeenCalledTimes(reason === "81" ? 1 : 0);
 });

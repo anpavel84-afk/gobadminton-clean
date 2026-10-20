@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Game, VenueSummary } from "../src/lib/consumer-types";
 
-// Explicit effect/state harness: real component, transport, pagination, timers and cards.
+// TR1-M3 preserves transport refresh semantics. Explicit effect/state harness: real component, transport, pagination, timers and cards.
 // No browser dependency is installed in this source checkout.
 const hooks = vi.hoisted(() => ({ slots: [] as unknown[], cursor: 0,
   effects: [] as (() => void)[], cleanups: [] as (() => void)[] }));
@@ -245,6 +245,7 @@ it("invalidates session counts before a replacement request resolves", async () 
   render(); await vi.advanceTimersByTimeAsync(40000); expect(html()).toContain("Venue · 1");
   window.dispatchEvent(new Event("gb-session-changed"));
   expect(html()).toContain("Venue · ?");
+  expect(html()).not.toContain("Venue · 0"); // invalidation must not fabricate a checked empty schedule
 });
 
 it.each(["visible", "minute"])("expires eligibility on %s independently of the pending transport", async trigger => {
