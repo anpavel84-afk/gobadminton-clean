@@ -1,5 +1,46 @@
 # M3 UAT 2/2 — public organization contacts source handoff
 
+## Repair after independent QA FAIL — 2026-10-20
+
+From: Codex source author. To: dev integrator, then independent QA.
+Status: READY_FOR_REVIEW; compiler/tests/DB NOT_TESTED; no QA/UAT or release claim.
+Actual repair base/initial HEAD: `f6fefaa07fae8deb55447477481fcdba5c47c846`;
+initial diff empty. Original assignment base remains
+`f50eb6f0f1703efabe86ef1de5b8f42948fc4497`; no checkout or git metadata changed.
+Repair base: https://github.com/anpavel84-afk/gobadminton-clean/commit/f6fefaa07fae8deb55447477481fcdba5c47c846
+
+Supplied independent QA verdict: FAIL at the repair base. Finding: admin edit
+serialized explicit publicContacts:null as JSONB null, rejected by 0038's object
+CHECK. The binding now sends SQL NULL for null/undefined, retaining the separate
+omission boolean: omission preserves, explicit null clears, object replaces.
+The existing D3 DB test now checks clear response status 201 and stored
+`public_contacts IS NULL`, distinguishing SQL NULL from JSONB null. This test
+source was not executed. No CHECK relaxation, backfill or private-contact change.
+
+Only admin-venues.service.ts, venue-contacts.test.ts and this handoff changed in
+this repair. Existing D1–D5 implementation, frontend composition, handlers and both
+venue-sheet suites remain unchanged. Historical statements below describe the
+original implementation; the prior QA `{}` statement is superseded here.
+
+D6 author commands were attempted again separately from repository root after
+the repair, exactly as listed in the D6 section below. Both typechecks and both
+Vitest commands exited 1 before starting their tools, with the same Corepack
+pnpm-10.18.0/network-disabled output recorded below. API invocation explicitly used
+RUN_DB_INTEGRATION=0. OpenAPI command exited 1 before validation with the same
+missing @apidevtools/swagger-parser import. All are NOT_TESTED. DB remains
+NOT_TESTED by the source-only prohibition; no SQL/migrations/services executed.
+`git diff --check`: exit 0, no output (whitespace only).
+
+STYLE_GUIDE_PARITY remains UNVERIFIED. Local manifest/App.tsx/index.css reads again
+returned No such file or directory; no frontend changes or STYLE_GUIDE_GAP.
+D5 history remains PM_REPORTED / UNVERIFIED_BY_THIS_REVIEW.
+Rollback reverses only this incremental source/test repair; retain 0038 column,
+constraints, ledger and data. Integrator manually reconciles with newer dev,
+publishes the candidate and adds exact result permalinks, then sends it to
+independent QA with installed tooling. No commit/push/publication by this author.
+
+## Original implementation record
+
 - From: Codex, source author. To: GoBadminton dev integrator, then independent QA.
 - Date: 2026-10-20. Status: READY_FOR_REVIEW / runtime NOT_TESTED.
 - Exact base: `f50eb6f0f1703efabe86ef1de5b8f42948fc4497`, initial HEAD on

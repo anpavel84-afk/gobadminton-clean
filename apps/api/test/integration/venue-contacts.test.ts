@@ -182,7 +182,11 @@ run("T0a-1: контакты площадки и приватность",()=>{
   expect((await command(x.v.id,"edit",{expectedVersion:3,fields:x.f})).json()).toMatchObject({publicContacts,version:4});
   const replacement={phone:null,website:null,messengers:[]};
   expect((await command(x.v.id,"edit",{expectedVersion:4,fields:{...x.f,publicContacts:replacement}})).json()).toMatchObject({publicContacts:replacement,version:5});
-  expect((await command(x.v.id,"edit",{expectedVersion:5,fields:{...x.f,publicContacts:null}})).json()).toMatchObject({publicContacts:null,version:6});
+  const cleared=await command(x.v.id,"edit",{expectedVersion:5,fields:{...x.f,publicContacts:null}});
+  expect(cleared.statusCode,cleared.body).toBe(201);
+  expect(cleared.json()).toMatchObject({publicContacts:null,version:6});
+  // Distinguish SQL NULL from JSONB null: only SQL NULL is a valid clear.
+  expect((await pool.query("SELECT public_contacts IS NULL AS cleared FROM venues WHERE id=$1",[x.v.id])).rows[0]).toEqual({cleared:true});
   expect((await pool.query("SELECT contact_phone,contact_website,booking_note,contact_updated_at FROM venues WHERE id=$1",[x.v.id])).rows[0]).toEqual(privateBefore);
   const audits=await pool.query("SELECT e.before_diff,e.after_diff FROM privileged_audit_events e JOIN venue_admin_actions a ON a.audit_id=e.id WHERE a.venue_id=$1",[x.v.id]);
   expect(JSON.stringify(audits.rows)).not.toContain(publicContacts.phone);expect(JSON.stringify(audits.rows)).not.toContain(publicContacts.website);
