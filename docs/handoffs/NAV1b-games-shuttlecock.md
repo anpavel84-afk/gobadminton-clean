@@ -4,15 +4,19 @@ From: source author (Codex)
 To: PM / integrator / independent source QA
 Date: 2026-10-20
 Status: PROPOSED — source only, not accepted
-Base: `0e75b57fac4ea1ffc995393395147d499e4ff366` (HEAD at entry)
+Task base: `0e75b57fac4ea1ffc995393395147d499e4ff366`.
+Revision entry HEAD: `f2ef77624536be2b4ab5c2d4b0926be8505bc7ba`
+on `automation/issue-138`; initial working diff empty.
 Assignment: immutable NAV1b source task, successor of #136, current worktree issue-138.
 
 ## Scope and successor
 
-Only `games` in `apps/web/src/components/consumer/nav-icon-paths.tsx`,
-`apps/web/test/nav-icons-variant-b.test.tsx`, and this new handoff are changed.
-Initial tracked diff was empty. This is the first source attempt in this successor session;
-NAV1b has its own limit of 3. No predecessor history or attempt counter is changed.
+The NAV1b implementation relative to the task base changes only `games` in
+`apps/web/src/components/consumer/nav-icon-paths.tsx`,
+`apps/web/test/nav-icons-variant-b.test.tsx`, and this handoff.
+This revision changes only the test and this handoff; the glyph is already present
+at entry HEAD. NAV1b has its own limit of 3. No predecessor history or attempt
+counter is changed.
 No commits, Git metadata writes, network operations, dependency installation, automation,
 services, API/DB changes, deployment or PROD actions are authorized or performed.
 Newer dev must be reconciled manually by the integrator. Rollback: reverse this diff.
@@ -62,6 +66,7 @@ A1–A5 test assertions have NOT run in this environment; no source PASS is clai
 
 ## A6 — executed author commands
 
+The commands and results below were repeated for this A3 revision on 2026-10-20.
 All commands below were invoked from repository root, with no installation or
 network enabling. Each pnpm command exited 1 before the requested tool ran:
 
@@ -82,6 +87,21 @@ Typecheck: NOT_TESTED. Lint: NOT_TESTED. Vitest: NOT_TESTED.
 Reason: pnpm 10.18.0 unavailable locally and Corepack networking disabled.
 `git diff --check`: exit 0, no output (PASS for whitespace only).
 No independent QA or rendered comparison was performed.
+
+## Prior independent QA finding and bounded source revision
+
+Incoming independent QA: FAIL, reviewed_sha
+`f2ef77624536be2b4ab5c2d4b0926be8505bc7ba`. A3 finding: arc flags were parsed
+as general numbers, accepting `0.0`, `1e0`, and signed `-0 +1`.
+This is separate from the PM_REPORTED #136 history below.
+
+The parser now reads the original numeric token and accepts a flag only when its
+spelling is exactly `0` or `1`, before numeric conversion. Regression assertions
+cover decimals, exponents, signs, leading zeroes, out-of-range and nonfinite tokens
+in both positions, the reported signed pair, and all four valid flag combinations.
+Production geometry, expectedTabs, thresholds, SSR and prior unit assertions remain
+unchanged in this revision. A1–A5/A7 remain implementation notes requiring new
+independent source QA; this document does not issue a QA verdict.
 
 ## Incoming history — PM_REPORTED / UNVERIFIED_BY_THIS_REVIEW
 

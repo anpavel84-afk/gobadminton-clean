@@ -157,10 +157,17 @@ function flatten(d: string): Point[] {
     offset += match[0].length;
     return required(match[1]);
   };
+  const numericToken = () => token(/^\s*([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)/);
   const number = () => {
-    const value = Number(token(/^\s*([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)/));
+    const value = Number(numericToken());
     if (!Number.isFinite(value)) throw new Error("Nonfinite coordinate");
     return value;
+  };
+  const flag = () => {
+    // Validate spelling before conversion: SVG flags are literal 0 or 1.
+    const value = numericToken();
+    if (value !== "0" && value !== "1") throw new Error("Invalid arc flag");
+    return Number(value);
   };
   const point = (): Point => [number(), number()];
   if (token(/^\s*([MLCAZ])/) !== "M") throw new Error("Expected M");
@@ -189,7 +196,7 @@ function flatten(d: string): Point[] {
     if (command === "C") { const b = point(), c = point(), end = point(); cubic(current, b, c, end); }
     if (command === "A") {
       let rx = number(), ry = number();
-      const phi = number() * Math.PI / 180, large = number(), sweep = number(), end = point();
+      const phi = number() * Math.PI / 180, large = flag(), sweep = flag(), end = point();
       if (rx < 0 || ry < 0 || ![0, 1].includes(large) || ![0, 1].includes(sweep)) throw new Error("Invalid arc");
       if (distance(current, end) === 0) continue;
       if (rx === 0 || ry === 0) { line(end); continue; }
@@ -290,6 +297,18 @@ describe("NAV1b geometry", () => {
 
   it("rejects incomplete paths, implicit commands, garbage, flags and nonfinite numbers", () => {
     for (const d of ["", "M0 0 Z", "M0 0 L1 Z", "M0 0 L1 1 2 2 Z", "M0 0 L1 1 Z junk", "M0 0 M1 1 Z", "M0 0 Q1 1 2 2 Z", "M0 0 LNaN 1 Z", "M0 0 LInfinity 1 Z", "M0 0 L1e999 1 Z", "M0 0 A1 1 0 2 0 2 2 Z", "M0 0 A1 1 0 0 .5 2 2 Z", "M0 0 A1 1 0 0 1 2 Z", "M0 0 L1 1"]) expect(() => flatten(d)).toThrow();
+  });
+  it("requires literal arc flags in both flag positions", () => {
+    for (const invalid of ["0.0", "1.0", ".0", "0.", "1e0", "0E0", "-0", "+1", "-1", "+0", "00", "01", "2", "NaN", "Infinity"]) {
+      expect(() => flatten(`M0 0 A1 1 0 ${invalid} 1 2 2 Z`)).toThrow();
+      expect(() => flatten(`M0 0 A1 1 0 0 ${invalid} 2 2 Z`)).toThrow();
+    }
+    expect(() => flatten("M0 0 A1 1 0 -0 +1 2 2 Z")).toThrow();
+    for (const large of ["0", "1"]) {
+      for (const sweep of ["0", "1"]) {
+        expect(() => flatten(`M0 0 A2 2 0 ${large} ${sweep} 2 2 Z`)).not.toThrow();
+      }
+    }
   });
   it("flattens L/Z exactly and handles degenerate arcs", () => {
     const line = flatten("M0 0 L1 0 Z");
