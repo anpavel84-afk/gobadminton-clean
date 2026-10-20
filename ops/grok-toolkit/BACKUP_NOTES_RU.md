@@ -74,3 +74,12 @@
 - Технический PM запущен штатным codex-write с брифом M3-UAT.v1.brief.md на точной базе 62c78997; requested gpt-6.1-sol/xhigh существующей обёртки. Он должен подготовить bounded task(и), включая безопасный API для контактов, затем независимый review/линтер/публикация.
 - Монитор обновлён штатным job monitor-m3uat-meta: M3 привязана к #133, статус «в планах / постановка», новая карточка описывает три требования; это ещё не implementation claim.
 - Источник UI: существующий внешний M3_venue_mockup.png из решения Owner. Бинарные скриншоты в GitHub не загружались.
+
+
+### 20.10.2026 10:10 (Сан-Паулу) — bounded UAT задачи подготовлены
+- Штатный technical PM run M3-UAT.v1.brief-62c78997-20261020T130643Z-2426715 завершился rc0 за 704s, BODY_OK. Source output SHA256 41038533cf425a729fee4b1527e9e4557280946fcb600de36f16a6e6a40fc70c.
+- Разделение обосновано 22 позициями объединённого allowlist при лимите14: 1/2 continuous drag+empty-create CTA (#133); 2/2 отдельный явный publicContacts API/admin edit и блок в попапе (#134), сразу следующий приоритет.
+- #134 создана как человеческая продуктовая запись; draft2 сохранён в https://github.com/anpavel84-afk/gobadminton-clean/issues/134#issuecomment-6291609477 . Это НЕ admission; body начинается человеческим префиксом. Ни один новый source task пока не допущен.
+- Финальные черновики после механической коррекции двух false-positive формулировок линтера: /var/lib/gb-ops-stage/files/M3-UAT.1.v2.body.txt SHA256 dae6d906644b65b920b1136bcb56e0f6c1435c3088146da0a83bfab9d0fd5a76 (10981 bytes); M3-UAT.2.v2.body.txt SHA256 4da075cc49b819cdc0a3570c9d644b768e00884a87a5cc8060f28ce56f3ccae7 (10930 bytes). Линтер с isolated копией установленного validate_issue:0FAIL, offline warnings; поля/лимиты принимаются.
+- Независимое codex-review первого v1 идёт PID2507813, старт13:07UTC. v2 отличается текстом запрета остановки; ПОСЛЕ результата v1 надо учесть findings и независимо проверить окончательные байты v2 (старый PASS не переносить). Stage first v1 hash4e8d4c...; новая v2 не имеет review пока.
+- После first final review+lint публиковать одно machine Owner comment в #133; #134 держать неавторизованной до review и сверки с first candidate/base. Для контактов источник публичных данных надо отдельно подтвердить/заполнить существующим разрешённым admin маршрутом после реализации; private legacy не backfill. Пустой UI не равен завершённому продукту.
