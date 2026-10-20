@@ -1,5 +1,48 @@
 # M3 UAT 2/2 — public organization contacts source handoff
 
+## Internationalized website persistence repair — 2026-10-20
+
+From: Codex source author. To: dev integrator, then independent QA.
+Status: READY_FOR_REVIEW / NOT_TESTED; no QA, live UAT or release claim.
+Actual starting HEAD: `dcb6ee0702fb8f5b3cd6851582eeee5ae195b4de`, initial diff empty.
+Base: https://github.com/anpavel84-afk/gobadminton-clean/commit/dcb6ee0702fb8f5b3cd6851582eeee5ae195b4de
+Original assignment base remains `f50eb6f0f1703efabe86ef1de5b8f42948fc4497`.
+
+Supplied independent QA: FAIL at actual starting HEAD. SQL's ASCII-only host
+label regex rejected `https://пример.рф/contact`, although safePublicUrl accepted
+and preserved it. The migration host-label expression now includes Unicode code
+points through U+10FFFF, retaining the existing ASCII labels, IPv4/IPv6 checks,
+control/backslash rejection, credentials/default-port restrictions and exact
+messenger hosts. No URL rewriting or private-contact fallback is introduced.
+This is a bounded correction to the IDN rejection, not a claim that the SQL
+validator implements every WHATWG/IDNA normalization rule.
+
+Changed paths: 0038_public_venue_contacts.sql, venue-contacts.test.ts and this
+handoff only. Regression sources cover original Cyrillic, Japanese, accented and
+supplementary-plane host spelling in parser/write/read, admin command validation,
+fresh schema persistence and 0037→0038 persistence. The existing authenticated
+edit/guest catalog/detail test now uses the reported Cyrillic URL and asserts
+stored JSON equality; its version, replay, private-preservation and audit checks
+remain. Messenger hosts remain restricted. Existing D1–D5 sources, frontend,
+handlers and both venue-sheet test files are preserved.
+
+For this correction all six D6 commands listed below are NOT_TESTED / NOT_RUN,
+with no exit code or output: the current source-author instruction explicitly
+prohibits self-QA. No compiler, Vitest, OpenAPI checker or diff whitespace check
+was run. DB/SQL/migrations are additionally prohibited by source-only scope;
+DB tests remain source only and RUN_DB_INTEGRATION must remain 0. Earlier command
+outputs below are historical evidence from prior attempts, not this correction.
+D1–D4 regression behavior is unexecuted. D5 history remains
+PM_REPORTED / UNVERIFIED_BY_THIS_REVIEW; STYLE_GUIDE_PARITY remains UNVERIFIED.
+
+No commit/push/git metadata, automation, secrets, services, deployment or network
+actions. Integrator manually reconciles newer dev and publishes exact candidate
+permalinks, then requests independent QA. Rollback this incremental application
+source repair as appropriate while retaining the public_contacts column, data,
+CHECK/functions and migration ledger; do not DROP or backfill. The migration
+source change targets fresh/0037 upgrades; an environment that already recorded
+0038 will not rerun it and requires a separately authorized forward migration.
+
 ## Repair after independent QA FAIL — 2026-10-20
 
 From: Codex source author. To: dev integrator, then independent QA.

@@ -22,7 +22,10 @@ BEGIN
   -- Only default ports are accepted, matching WHATWG URL.port normalization.
   host := regexp_replace(authority, CASE WHEN scheme = 'https' THEN ':0*443$' ELSE ':0*80$' END, '');
   IF host !~ '^\[[0-9a-fA-F:]+\]$' AND host ~ ':' THEN RETURN false; END IF;
-  IF host !~ '^([a-zA-Z0-9_-]+\.)*[a-zA-Z0-9_-]+\.?$' AND host !~ '^\[[0-9a-fA-F:]+\]$' THEN RETURN false; END IF;
+  -- WHATWG URL accepts internationalized hosts and the application preserves
+  -- their original spelling. Do not restrict persisted website labels to ASCII.
+  -- Controls, authority separators, credentials and ports remain checked above.
+  IF host !~ U&'^([a-zA-Z0-9_\0080-\+10FFFF-]+[.])*[a-zA-Z0-9_\0080-\+10FFFF-]+[.]?$' AND host !~ '^\[[0-9a-fA-F:]+\]$' THEN RETURN false; END IF;
   IF host ~ '^\[' THEN
     BEGIN PERFORM substring(host from 2 for char_length(host)-2)::inet;
     EXCEPTION WHEN invalid_text_representation THEN RETURN false; END;

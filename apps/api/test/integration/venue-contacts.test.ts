@@ -164,11 +164,12 @@ run("T0a-1: контакты площадки и приватность",()=>{
  });
  it("public edit: guest projection, replacement/null/omission, private preservation, audit and replay", async()=>{
   const x=await fixture();
-  const publicContacts={phone:"+7 (999) 123-45-67",website:"https://public.example.invalid",messengers:[{kind:"telegram",url:"https://t.me/synthetic_venue"}]};
+  const publicContacts={phone:"+7 (999) 123-45-67",website:"https://пример.рф/contact",messengers:[{kind:"telegram",url:"https://t.me/synthetic_venue"}]};
   const privateBefore=(await pool.query("SELECT contact_phone,contact_website,booking_note,contact_updated_at FROM venues WHERE id=$1",[x.v.id])).rows[0];
   const key=randomUUID(), payload={expectedVersion:2,fields:{...x.f,publicContacts}};
   const edited=await command(x.v.id,"edit",payload,content,key);expect(edited.statusCode,edited.body).toBe(201);
   expect(edited.json()).toMatchObject({publicContacts,version:3});
+  expect((await pool.query("SELECT public_contacts FROM venues WHERE id=$1",[x.v.id])).rows[0]).toEqual({public_contacts:publicContacts});
   expect((await command(x.v.id,"edit",payload,content,key)).body).toBe(edited.body);
   expect((await command(x.v.id,"edit",payload)).statusCode).toBe(409);
   await pool.query("UPDATE admin_sessions SET revoked_at=now() WHERE principal_id=$1",[content.id]);
@@ -196,6 +197,11 @@ run("T0a-1: контакты площадки и приватность",()=>{
  it("fresh 0038 schema, CHECK and create/propose do not publish private inputs",async()=>{
   const x=await fixture();
   expect((await pool.query("SELECT public_contacts FROM venues WHERE id=$1",[x.v.id])).rows[0]).toEqual({public_contacts:null});
+  for(const website of internationalPublicWebsites){
+   const publicContacts={...emptyPublicContacts,website};
+   await pool.query("UPDATE venues SET public_contacts=$2::jsonb WHERE id=$1",[x.v.id,JSON.stringify(publicContacts)]);
+   expect((await pool.query("SELECT public_contacts FROM venues WHERE id=$1",[x.v.id])).rows[0]).toEqual({public_contacts:publicContacts});
+  }
   for(const value of invalidPublicContacts)await expect(pool.query("UPDATE venues SET public_contacts=$2::jsonb WHERE id=$1",[x.v.id,JSON.stringify(value)])).rejects.toMatchObject({code:"23514"});
   expect((await post("",{...fields(),publicContacts:validPublicContacts,reasonCode:"synthetic_review"})).statusCode).toBe(400);
   const input={...fields(),publicContacts:validPublicContacts,contactPhone:"synthetic private"};
@@ -239,6 +245,11 @@ run("T0a-1: контакты площадки и приватность",()=>{
    expect((await db.query("SELECT public_contacts,contact_phone,contact_website,booking_note,contact_updated_at FROM venues WHERE id=$1",[id])).rows[0]).toEqual({public_contacts:null,contact_phone:"synthetic private",contact_website:"https://private.example.invalid",booking_note:"synthetic booking",contact_updated_at:new Date("2026-01-01T00:00:00Z")});
    expect((await db.query("SELECT column_default,is_nullable,data_type FROM information_schema.columns WHERE table_name='venues' AND column_name='public_contacts'")).rows).toEqual([{column_default:null,is_nullable:"YES",data_type:"jsonb"}]);
    for(const value of invalidPublicContacts){await expect(db.query("UPDATE venues SET public_contacts=$2::jsonb WHERE id=$1",[id,JSON.stringify(value)])).rejects.toMatchObject({code:"23514"});}
+   for(const website of internationalPublicWebsites){
+    const publicContacts={...emptyPublicContacts,website};
+    await db.query("UPDATE venues SET public_contacts=$2::jsonb WHERE id=$1",[id,JSON.stringify(publicContacts)]);
+    expect((await db.query("SELECT public_contacts FROM venues WHERE id=$1",[id])).rows[0]).toEqual({public_contacts:publicContacts});
+   }
    await db.query("UPDATE venues SET public_contacts=$2::jsonb WHERE id=$1",[id,JSON.stringify(validPublicContacts)]);
    // Application rollback: old-column projection/update leaves the new data intact.
    await db.query("UPDATE venues SET name='Synthetic old application' WHERE id=$1",[id]);
@@ -250,6 +261,10 @@ run("T0a-1: контакты площадки и приватность",()=>{
 
 const validPublicContacts = {phone:"+7 (999) 123-45-67",website:"http://venue.example.invalid",messengers:[{kind:"telegram",url:"https://t.me/synthetic"},{kind:"whatsapp",url:"https://wa.me/79991234567"},{kind:"vk",url:"https://vk.com/synthetic"}]};
 const emptyPublicContacts = {phone:null,website:null,messengers:[]};
+const internationalPublicWebsites = [
+ "https://пример.рф/contact", "http://例え.テスト/contact", "https://bücher.example:443/contact",
+ "https://🏸.example/contact",
+];
 const invalidPublicContacts: unknown[] = [
  null, [], "private", {}, {...emptyPublicContacts,private:"secret"}, {...emptyPublicContacts,contactPhone:"secret"},
  {website:null,messengers:[]}, {...emptyPublicContacts,phone:1}, {...emptyPublicContacts,phone:"123456"},
@@ -274,6 +289,17 @@ describe("public organization contacts: no DB",()=>{
   for(const key of ["phone","website","messengers"]){const value:Record<string,unknown>={...emptyPublicContacts};delete value[key];expect(publicVenueContactsSchema.safeParse(value).success).toBe(false);}
   for(const publicContacts of [undefined,null,validPublicContacts])expect(venueCommand.safeParse({action:"edit",expectedVersion:1,reasonCode:"synthetic_review",fields:{...fields,publicContacts}}).success).toBe(true);
   expect(venueCreate.safeParse({...fields,reasonCode:"synthetic_review",publicContacts:validPublicContacts}).success).toBe(false);
+ });
+ it("internationalized website hosts preserve their original URL in writes and reads",()=>{
+  for(const website of internationalPublicWebsites){
+   const publicContacts={...emptyPublicContacts,website};
+   expect(safePublicUrl(website)).toBe(website);
+   expect(publicVenueContactsSchema.parse(publicContacts)).toEqual(publicContacts);
+   expect(readPublicVenueContacts(publicContacts)).toEqual(publicContacts);
+   expect(venueCommand.safeParse({action:"edit",expectedVersion:1,reasonCode:"synthetic_review",fields:{...fields,publicContacts}}).success).toBe(true);
+   // IDN support for websites must not widen the exact messenger host allowlist.
+   expect(safePublicUrl(website,"telegram")).toBeNull();
+  }
  });
  it("phone/URL boundaries and trimming precede safe projection",()=>{
   expect(safePublicPhone("  +1 (234) 567-8901  ")).toBe("+1 (234) 567-8901");
