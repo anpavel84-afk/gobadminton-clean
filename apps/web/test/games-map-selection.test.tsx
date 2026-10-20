@@ -36,7 +36,7 @@ vi.mock("next/dynamic", () => ({ default: () => function CapturedMap() { return 
 import { GamesMapView } from "../src/components/consumer/games/GamesMapView";
 import { VenuePreviewCard } from "../src/components/consumer/games/VenuePreviewCard";
 import { MOSCOW_BUNDLE } from "../src/lib/radar-map-assets";
-import { venueMapPath } from "../src/lib/games-venue-map";
+import { VenueSheet } from "../src/components/consumer/games/VenueSheet";
 const a: VenueSummary = { id: "a", cityId: MOSCOW_BUNDLE.cityId, name: "Зал А", address: "Улица А", timezone: "Europe/Moscow", latitude: 55.7, longitude: 37.6 };
 const b: VenueSummary = { ...a, id: "b", name: "Зал Б", address: "Улица Б" };
 const game: Game = { id: "game", version: 1, title: "Игра", venue: a, startsAt: "2026-11-04T10:00:00Z", endsAt: "2026-11-04T11:00:00Z", timezone: a.timezone,
@@ -85,7 +85,7 @@ beforeEach(() => {
   }));
 });
 afterEach(() => { hooks.cleanups.forEach(cleanup => cleanup?.()); vi.useRealTimers(); vi.unstubAllGlobals(); });
-it("selects A/B above the map without navigation, flags or requests; card opens the preserved URL once", async () => {
+it("selects A/B above the map without navigation, flags or requests; card expands without navigation", async () => {
   let tree = await load(); const requests = vi.mocked(fetch).mock.calls.length;
   expect(mapProps(tree).selectedVenueId).toBeNull();
   mapProps(tree).onSelect(a); tree = render();
@@ -96,14 +96,15 @@ it("selects A/B above the map without navigation, flags or requests; card opens 
   expect(assign).not.toHaveBeenCalled(); expect(writes).not.toHaveBeenCalled(); expect(returned).not.toHaveBeenCalled();
   expect(window.location.search).toBe("?view=map&day=2026-11-10"); expect(fetch).toHaveBeenCalledTimes(requests);
   preview(tree).props.onOpen();
-  expect(assign).toHaveBeenCalledExactlyOnceWith(venueMapPath("b", "2026-11-10", "/games?view=map&day=2026-11-10"));
-  expect(returned).toHaveBeenCalledOnce(); expect(writes).toHaveBeenCalledWith("gb-games-map-selected", "b");
+  tree = render();
+  expect(elements(tree).some(node => node.type === VenueSheet)).toBe(true);
+  expect(assign).not.toHaveBeenCalled(); expect(returned).not.toHaveBeenCalled(); expect(writes).not.toHaveBeenCalled();
 });
-it("keeps fallback navigation and activity while day does not restrict the preview", async () => {
+it("keeps fallback selection and activity while day does not restrict the preview", async () => {
   let tree = await load(); mapProps(tree).onAvailability(false); tree = render();
   const fallback = elements(tree).find(node => node.type === "button" && node.props.className === "gb-discovery-chip");
   if (!fallback) throw new Error("Fallback missing");
-  (fallback.props.onClick as () => void)(); expect(assign).toHaveBeenCalledWith(venueMapPath("a", "2026-11-10", "/games?view=map&day=2026-11-10"));
+  (fallback.props.onClick as () => void)(); expect(preview(render()).props.venue.id).toBe("a"); expect(assign).not.toHaveBeenCalled();
   mapProps(tree).onSelect(a); tree = render({ activity: "regular" });
   expect(renderToStaticMarkup(preview(tree))).toContain("Пока нет игр");
 });

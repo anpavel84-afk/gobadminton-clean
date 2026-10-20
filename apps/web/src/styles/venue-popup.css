@@ -1,13 +1,37 @@
-.gb-venue-preview { position:absolute; z-index:3; left:12px; right:12px; bottom:calc(12px + var(--gb-safe-bottom)); box-sizing:border-box; min-width:0; }
-.gb-venue-preview-button { display:grid; grid-template-columns:96px minmax(0,1fr) 44px; align-items:center; gap:12px; width:100%; min-width:0; box-sizing:border-box; border:0; padding:12px; text-align:left; font:inherit; cursor:pointer; background:var(--gb-white); border-radius:var(--gb-radius-md); box-shadow:var(--gb-shadow-elevated); color:var(--gb-ink); }
-.gb-venue-preview-cover { display:block; width:96px; height:72px; border-radius:var(--gb-radius-sm); overflow:hidden; }
-.gb-venue-preview-cover img { display:block; width:100%; height:100%; object-fit:cover; }
-.gb-venue-preview-copy { display:grid; min-width:0; gap:4px; }
-.gb-venue-preview-copy > * { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
-.gb-venue-preview-copy strong { font-size:17px; font-weight:700; color:var(--gb-ink); }
-.gb-venue-preview-address { font-size:14px; color:var(--gb-ink-soft); }
-.gb-venue-preview-time { font-size:13px; color:var(--gb-ink-soft); }
-.gb-venue-preview-arrow { display:grid; place-items:center; width:44px; height:44px; border-radius:var(--gb-radius-pill); background:var(--gb-lime); color:var(--gb-ink); }
-.gb-venue-preview-button:focus-visible { outline:3px solid var(--gb-purple); outline-offset:2px; }
-.gb-games-map[data-venue-preview="true"] .maplibregl-ctrl-bottom-right,
-.gb-games-map[data-venue-preview="true"] .maplibregl-ctrl-bottom-left { bottom:calc(120px + var(--gb-safe-bottom)); }
+.gb-consumer .gb-venue-preview { position:absolute; z-index:3; left:12px; right:12px; bottom:calc(12px + var(--gb-safe-bottom)); height:172px; box-sizing:border-box; min-width:0; background:var(--gb-white); border-radius:var(--gb-radius-lg); box-shadow:var(--gb-shadow-elevated); }
+.gb-consumer .gb-venue-handle { display:flex; align-items:center; justify-content:center; width:100%; height:44px; min-height:44px; padding:0; border:0; background:transparent; touch-action:none; }
+.gb-consumer .gb-venue-handle > span { display:block; width:40px; height:4px; border-radius:var(--gb-radius-pill); background:var(--gb-line-dark); }
+.gb-consumer .gb-venue-preview-button { display:grid; grid-template-columns:64px minmax(0,1fr) 44px; align-items:center; gap:12px; width:100%; min-width:0; height:128px; box-sizing:border-box; border:0; padding:0 16px 16px; text-align:left; font:inherit; cursor:pointer; background:transparent; color:var(--gb-ink); }
+.gb-consumer .gb-venue-preview-cover { display:block; width:64px; height:64px; border-radius:var(--gb-radius-sm); overflow:hidden; }
+.gb-consumer .gb-venue-preview-cover img { display:block; width:100%; height:100%; object-fit:cover; }
+.gb-consumer .gb-venue-preview-copy { display:grid; min-width:0; gap:4px; }
+.gb-consumer .gb-venue-preview-copy > * { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+.gb-consumer .gb-venue-preview-copy strong { font-size:17px; font-weight:700; }
+.gb-consumer .gb-venue-preview-address { font-size:14px; color:var(--gb-ink-soft); }
+.gb-consumer .gb-venue-preview-time, .gb-consumer .gb-venue-preview-count { font-size:13px; line-height:18px; min-height:18px; color:var(--gb-ink-soft); }
+.gb-consumer .gb-venue-preview-count { color:var(--gb-lime-deep); }
+.gb-consumer .gb-venue-preview-arrow { display:grid; place-items:center; width:44px; height:44px; border-radius:var(--gb-radius-pill); background:var(--gb-lime); color:var(--gb-ink); }
+.gb-consumer .gb-games-map[data-venue-preview="true"] .maplibregl-ctrl-bottom-right,
+.gb-consumer .gb-games-map[data-venue-preview="true"] .maplibregl-ctrl-bottom-left { bottom:calc(172px + 24px + var(--gb-safe-bottom)); }
+.gb-consumer .gb-venue-sheet-backdrop { position:fixed; inset:0; background:color-mix(in srgb, var(--gb-ink) 32%, transparent); z-index:103; }
+.gb-consumer .gb-venue-sheet { position:fixed; bottom:0; right:0; width:100%; max-height:88dvh; overflow:auto; z-index:104; background:var(--gb-white); color:var(--gb-ink); border-radius:var(--gb-radius-lg) var(--gb-radius-lg) 0 0; padding:0 16px calc(16px + var(--gb-safe-bottom)); box-sizing:border-box; min-width:0; overflow-wrap:anywhere; }
+.gb-consumer .gb-venue-sheet * { box-sizing:border-box; min-width:0; }
+.gb-consumer .gb-venue-sheet button { min-height:44px; min-width:44px; font:inherit; color:var(--gb-ink); cursor:pointer; }
+.gb-consumer .gb-venue-sheet-header { display:flex; align-items:center; gap:8px; }
+.gb-consumer .gb-venue-sheet-header h2 { flex:1; font-size:18px; }
+.gb-consumer .gb-venue-sheet-close { position:sticky; top:0; z-index:1; border:1px solid var(--gb-line); border-radius:var(--gb-radius-pill); background:var(--gb-white); }
+.gb-consumer .gb-venue-sheet:has(.gb-venue-sheet-info) .gb-venue-sheet-header { height:0; position:relative; z-index:1; }
+.gb-consumer .gb-venue-sheet:has(.gb-venue-sheet-info) .gb-venue-sheet-header h2 { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
+.gb-consumer .gb-venue-sheet:has(.gb-venue-sheet-info) .gb-venue-sheet-close { position:absolute; right:8px; top:8px; }
+.gb-consumer .gb-venue-sheet-cover, .gb-consumer .gb-venue-sheet-cover img { display:block; width:100%; height:auto; aspect-ratio:16/9; object-fit:cover; border-radius:var(--gb-radius-md); overflow:hidden; }
+.gb-consumer .gb-venue-sheet-info h3 { font-size:24px; font-weight:800; }
+.gb-consumer .gb-venue-sheet-info p { font-size:15px; }
+.gb-consumer .gb-venue-sheet-primary { width:100%; border:0; border-radius:var(--gb-radius-pill); padding:12px 16px; background:var(--gb-lime); }
+.gb-consumer .gb-venue-sheet-dates { display:flex; gap:8px; overflow-x:auto; padding:4px 0; }
+.gb-consumer .gb-venue-sheet-dates button { flex-shrink:0; display:grid; gap:4px; border:1px solid var(--gb-line); border-radius:var(--gb-radius-sm); padding:8px 12px; background:var(--gb-white); color:var(--gb-ink-soft); }
+.gb-consumer .gb-venue-sheet-dates button[aria-pressed="true"] { background:var(--gb-ink); color:var(--gb-white); }
+.gb-consumer .gb-venue-sheet-game { width:100%; display:grid; grid-template-columns:auto minmax(0,1fr); gap:12px; margin-top:12px; padding:16px; border:1px solid var(--gb-line); border-radius:var(--gb-radius-md); background:var(--gb-white); text-align:left; }
+.gb-consumer .gb-venue-sheet-game > span:last-child { display:grid; gap:8px; }
+.gb-consumer .gb-venue-sheet-count { color:var(--gb-lime-deep); }
+.gb-consumer .gb-venue-sheet-detail .gb-game-hero, .gb-consumer .gb-venue-sheet-detail .gb-game-content, .gb-consumer .gb-venue-sheet-detail .gb-game-schedule, .gb-consumer .gb-venue-sheet-detail .gb-game-facts { display:grid; grid-template-columns:minmax(0,1fr); }
+@media (min-width:768px) { .gb-consumer .gb-venue-sheet { right:16px; width:420px; max-width:calc(100% - 32px); } }

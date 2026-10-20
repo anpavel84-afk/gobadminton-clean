@@ -35,7 +35,7 @@ export function GameHero({ game, preview = false, localPreview }: { game: Game; 
   </section>;
 }
 
-export function GameTerms({ game, showCapacity = true }: { game: Game; showCapacity?: boolean }) {
+export function GameTerms({ game, showCapacity = true, onVenueClick }: { game: Game; showCapacity?: boolean; onVenueClick?: () => void }) {
   const trainer = game.activityKind === "trainer_led";
   return <div className="gb-game-content">
     {trainer && game.trainer && <section className="gb-game-coach" aria-label="Тренер">
@@ -45,7 +45,7 @@ export function GameTerms({ game, showCapacity = true }: { game: Game; showCapac
     <section className="gb-game-section">
       <span className="gb-game-kicker">Встречаемся на корте</span><h2>Место и организатор</h2>
       <dl className="gb-game-facts">
-        <div><dt>Площадка</dt><dd><Link href={`/venues/${game.venue.id}`}>{game.venue.name}</Link><small>{game.venue.address}</small></dd></div>
+        <div><dt>Площадка</dt><dd>{onVenueClick ? <button type="button" onClick={onVenueClick}>{game.venue.name}</button> : <Link href={`/venues/${game.venue.id}`}>{game.venue.name}</Link>}<small>{game.venue.address}</small></dd></div>
         <div><dt>Организует</dt><dd><span className="gb-game-identity"><Avatar className="gb-discovery-avatar" name={game.organizer.displayName} avatar={game.organizer.avatar} /><span>{game.organizer.displayName}</span></span><small>{game.organizer.publicContact}</small></dd></div>
         {showCapacity && <div><dt>Состав</dt><dd>До {game.capacity} игроков<small>Подтверждено: {game.confirmedCount} · Занято вне сервиса: {game.externalReservedCount}</small></dd></div>}
       </dl>
