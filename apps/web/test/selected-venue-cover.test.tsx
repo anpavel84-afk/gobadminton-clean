@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 const h = vi.hoisted(() => ({ memo: undefined as { deps: unknown[]; value: unknown } | undefined }));
-vi.mock("react", async original => ({ ...await original<typeof React>(), useMemo(fn: () => unknown, deps: unknown[]) {
+vi.mock("react", async original => ({ ...await original<typeof React>(), useEffect(fn: () => void) { fn(); }, useMemo(fn: () => unknown, deps: unknown[]) {
   if (!h.memo || deps.some((v, i) => v !== h.memo?.deps[i])) h.memo = { deps, value: fn() };
   return h.memo.value;
 } }));
@@ -28,8 +28,8 @@ class Slot {
 }
 const nodes: ImageNode[] = [];
 function span(slot: Slot) { return slot as unknown as HTMLSpanElement; }
-function resource(id = "a", uploadedUrl: string | null = url, cityId = "city") {
-  return useSelectedVenueCover(cityId, { id, name: "Зал", cover: { uploadedUrl } } as VenueSummary);
+function resource(id = "a", uploadedUrl: string | null = url, cityId = "city", name = "Зал") {
+  return useSelectedVenueCover(cityId, { id, name, cover: { uploadedUrl } } as VenueSummary);
 }
 function image(slot: Slot) { if (!slot.child) throw new Error("Missing image"); return slot.child; }
 beforeEach(() => { h.memo = undefined; nodes.length = 0; vi.stubGlobal("document", { createElement: vi.fn((tag: string) => { expect(tag).toBe("img"); const node = new ImageNode(); nodes.push(node); return node; }) }); });
@@ -54,6 +54,18 @@ it("moves one loaded node through stable commit refs without assigning src again
   }
   expect(nodes).toHaveLength(1); expect(node.writes).toEqual([url]); r.compact(null);
   expect(node.value).toBeNull(); expect([...node.listeners.values()].flatMap(set => [...set])).toEqual([]);
+});
+it("refreshes the name without replacing the resource, refs, image or source", () => {
+  const r = resource(); const compact = new Slot(); const full = new Slot();
+  r.compact(span(compact)); const node = image(compact); node.saved("load")();
+  const refreshed = resource("a", url, "city", "Новое название");
+  expect(refreshed).toBe(r);
+  expect(refreshed.compact).toBe(r.compact); expect(refreshed.info).toBe(r.info);
+  expect(node.alt).toBe("Обложка: Новое название");
+  refreshed.info(span(full)); expect(image(full)).toBe(node);
+  refreshed.info(null); expect(image(compact)).toBe(node);
+  expect(nodes).toHaveLength(1); expect(node.writes).toEqual([url]);
+  refreshed.compact(null);
 });
 it.each(["same-url", "different-url", "same-venue", "city"])("invalidates %s and ignores saved callbacks after change/cleanup", change => {
   const old = resource(); const slot = new Slot(); old.compact(span(slot)); const node = image(slot);

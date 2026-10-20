@@ -1,5 +1,5 @@
 "use client";
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import type { VenueSummary } from "../../../lib/consumer-types";
 import { venueCoverUrl } from "./VenueCover";
 
@@ -7,7 +7,8 @@ const court = "/discovery/badminton-courts.jpg";
 type Mode = "compact" | "info";
 
 /** Pure resource construction. DOM work belongs exclusively to commit refs. */
-function createResource(url: string | null, name: string) {
+function createResource(url: string | null) {
+  let name = "площадки";
   const slots: Record<Mode, HTMLSpanElement | null> = { compact: null, info: null };
   let image: HTMLImageElement | null = null;
   let stop: (() => void) | null = null;
@@ -62,6 +63,10 @@ function createResource(url: string | null, name: string) {
     if (image.parentNode !== target) target.appendChild(image);
   };
   return {
+    setName(value: string) {
+      name = value;
+      if (image && uploaded) image.alt = `Обложка: ${name}`;
+    },
     compact: (slot: HTMLSpanElement | null) => register("compact", slot),
     info: (slot: HTMLSpanElement | null) => register("info", slot),
   };
@@ -74,7 +79,9 @@ export function useSelectedVenueCover(cityId: string, venue: VenueSummary | unde
   const url = venueCoverUrl(venue?.cover?.uploadedUrl);
   const name = venue?.name ?? "площадки";
   // Identity follows the selection and normalized source, never presentation state.
-  return useMemo(() => createResource(url, name), [cityId, id, url, name]);
+  const resource = useMemo(() => createResource(url), [cityId, id, url]);
+  useEffect(() => { resource.setName(name); }, [resource, name]);
+  return resource;
 }
 
 export function SelectedVenueCover({ resource, mode, className }: {

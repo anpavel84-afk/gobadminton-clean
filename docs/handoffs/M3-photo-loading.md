@@ -1,15 +1,19 @@
 # M3-PHOTO #141 — source handoff
 
-From: Codex, source author  
-To: GoBadminton integrator → independent QA  
-Date: 2026-10-20  
+From: Codex, source author
+To: GoBadminton integrator → independent QA
+Date: 2026-10-20
 Status: READY_FOR_REVIEW; execution checks NOT_TESTED (offline toolchain unavailable)
 
 ## Assignment and base
 
 Exact assignment: supplied immutable GOBADMINTON_AUTONOMY_V1 task, source_only,
-DEV, M3-PHOTO #141. Base/checkout:
+DEV, M3-PHOTO #141. Original task base:
 `f50eb6f0f1703efabe86ef1de5b8f42948fc4497`, branch `automation/issue-141`.
+Revision checkout: `e99a2f0aaae6497529c84b7631813a087f6d6ac7` (prior QA FAIL).
+This revision removes name from resource identity and updates uploaded alt in a
+commit effect. Unit and real-UI lifecycle regression cases cover name refresh
+without another image or src assignment. Handoff trailing whitespace is removed.
 Initial tracked diff was empty. Base reference:
 https://github.com/anpavel84-afk/gobadminton-clean/tree/f50eb6f0f1703efabe86ef1de5b8f42948fc4497
 Task reference: https://github.com/anpavel84-afk/gobadminton-clean/issues/141
@@ -75,9 +79,14 @@ in the working diff. Tests use explicit checked indexing, no any, TS suppression
 non-null index assertions or skipped cases; project strict/noUncheckedIndexedAccess
 configuration is unchanged. Their compilation and execution remain unverified.
 
-3. `git diff --check` — exit 0, no output (tracked diff whitespace check).
-   New files remain untracked under the source-only constraint; this command does
-   not inspect them. No staging was performed.
+3. Revision checks: `git diff --check` and
+   `git diff --check f50eb6f0f1703efabe86ef1de5b8f42948fc4497`
+   — each exit 0, no output. The latter includes the original implementation
+   and handoff, addressing the prior QA whitespace finding. Files already exist
+   in revision checkout; no staging was performed.
+
+The two execution commands above were attempted again for this revision with
+the same exit 1 and exact Corepack output. No independent self-QA was performed.
 
 ## STYLE_GUIDE_PARITY
 
@@ -118,3 +127,8 @@ Rollback only this diff: reverse the changes in the three named existing
 components and remove the new SelectedVenueCover, the two new tests and this
 handoff if still exclusive to #141. Preserve unrelated integrator changes;
 no reset/force-push or service rollback is authorized by this handoff.
+
+Revision rollback: reverse only the uncommitted changes to SelectedVenueCover,
+the two new-task test files and this handoff relative to
+`e99a2f0aaae6497529c84b7631813a087f6d6ac7`; retain the original #141 implementation.
+The full-slice rollback above is for the integrator only.

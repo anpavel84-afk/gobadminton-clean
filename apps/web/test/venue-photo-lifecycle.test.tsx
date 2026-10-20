@@ -105,6 +105,19 @@ it.each([false, true])("retains one selected node through real popup/sheet UI (l
   expect(vi.mocked(document.createElement).mock.calls.filter(([tag]) => tag === "img")).toHaveLength(1);
   click("Закрыть"); mapProps?.onDeselect?.(); render(); expect(image.value).toBeNull(); expect(image.parentNode).toBeNull();
 });
+it("keeps the loaded selected image when a refreshed venue name changes", async () => {
+  await load(); select(venue); const image = photo(); image.dispatchEvent(new Event("load"));
+  const refreshed = { ...venue, name: "Обновлённый зал" };
+  vi.mocked(fetch).mockImplementation(async (input: string | URL | Request) => {
+    const path = String(input);
+    return new Response(JSON.stringify({ items: path.startsWith("/v1/venues") ? [refreshed, other] : [{ ...game, venue: refreshed }], nextCursor: null }));
+  });
+  window.dispatchEvent(new Event("focus")); await vi.advanceTimersByTimeAsync(1); render(); render();
+  click("Открыть площадку Обновлённый зал"); inSlot("sheet");
+  expect(text).toContain("Обновлённый зал"); expect(image.alt).toBe("Обложка: Обновлённый зал");
+  click("Закрыть"); inSlot("preview");
+  expect(photo()).toBe(image); expect(images).toHaveLength(1); expect(image.writes).toEqual([url]);
+});
 it("moves the same node during moving/settling and cleans up on city switch", async () => {
   await load(); select(venue); const image = photo();
   const handle = host(n => n.props["aria-label"] === "Развернуть площадку");
