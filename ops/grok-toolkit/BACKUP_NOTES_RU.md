@@ -48,3 +48,13 @@
 - M3-FIX опубликована как Issue #131, краткое русское резюме в теле; точное независимо проверенное машинное тело в Owner-комментарии https://github.com/anpavel84-afk/gobadminton-clean/issues/131#issuecomment-6290000263 . Readback подтвердил Owner id, неизменённый комментарий и точное совпадение байтов тела.
 - Линтер с фактическим candidate validator: 0 FAIL, WARN на offline refs / обычный max_attempts 3 / формулировку NOT_TESTED. В предоставленном Owner-брифе park-drift отдельно зафиксирован новый предел 6 для новых задач; checkpoints не менялись. Файлы проверены независимым body review на точной базе.
 - После исправления/независимого OPS-review r6: штатная reconciliation/install без --force, затем PARK #127 с allow_successors=[131] и наблюдение за #131.
+
+### 20.10.2026 08:47 (Сан-Паулу) — park-drift установлен без ручных действий Owner
+- r6: installer SHA256 ff8f325e3c20a7a42f8fdcfd2ff4ee7c229584f631bf85a71b327db08df4138a; независимое review-park-drift-20261020T114238Z-1970717 = PASS, четыре прежних trusted exceptions, новых исключений/прав нет.
+- Read-only проверка helper на живом VPS в контексте runtime user успешно прочитала metadata после исправления; исходный ACL не менялся.
+- Активный PM самостоятельно вызвал существующий gb-run installer mode: dry rc=0, --remove rc=0 (11:46:44 UTC), install rc=0 (11:47:08 UTC). --force не применялся. Старый незавершённый backup reconciled штатным --remove.
+- Установленный executor SHA256 788c5f75a16bb5b48a0788dd9903110317c9471fe6e4190ade0e27ccf798921c; владелец/группа/mode сохранены. Installer проверил активность user unit.
+- Перед публикацией PARK подтверждена неизменная привязка #127 / ae4df3f609056b185533e34cb1949328d99fe718 / attempt2 / blocked.
+- Штатный PARK опубликован как Owner: https://github.com/anpavel84-afk/gobadminton-clean/issues/127#issuecomment-6290141256 , allow_successors=[131]. История/счётчики/state не редактировались PM.
+- M3-FIX #131 с точным проверенным заданием уже опубликована. Применение PARK и подхват #131 ещё требуют подтверждения живым checkpoint; публикация комментария не равна исполнению.
+- Рутинные операции выполнены без новой root-команды Павлу. Следующий шаг — проверить переход worker на #131, затем QA/CI/DEV и браузерная проверка по обычному конвейеру.
