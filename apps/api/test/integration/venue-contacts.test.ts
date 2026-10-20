@@ -86,7 +86,7 @@ run("T0a-1: контакты площадки и приватность",()=>{
    await db.query("CREATE TABLE schema_migrations(id text PRIMARY KEY)");
    for(const file of files.filter(f=>f<'0038')){await db.query(await readFile(path.join(dir,file),'utf8'));await db.query("INSERT INTO schema_migrations VALUES($1)",[file.replace(/\.sql$/,'')]);}
    const uid=(await db.query<{id:string}>("INSERT INTO users(display_name) VALUES('public synthetic') RETURNING id")).rows[0]!.id;
-   const id=(await db.query<{id:string}>("INSERT INTO venues(city_id,name,address,timezone,location,created_by_user_id,lifecycle_state,contact_phone,contact_website,booking_note) VALUES($1,'Public synthetic','Address','Europe/Moscow',ST_SetSRID(ST_MakePoint(37,55),4326)::geography,$2,'unverified','private','https://private.invalid','private note') RETURNING id",[cityId,uid])).rows[0]!.id;
+   const id=(await db.query<{id:string}>("INSERT INTO venues(city_id,name,address,timezone,location,created_by_user_id,lifecycle_state,normalized_name,normalized_address,contact_phone,contact_website,booking_note) VALUES($1,'Public synthetic','Address','Europe/Moscow',ST_SetSRID(ST_MakePoint(37,55),4326)::geography,$2,'unverified',venue_normalize_v1('Public synthetic'),venue_normalize_v1('Address'),'private','https://private.invalid','private note') RETURNING id",[cityId,uid])).rows[0]!.id;
    let alters=0;
    for(let pass=0;pass<2;pass++)for(const file of files){const mid=file.replace(/\.sql$/,'');if(!(await db.query('SELECT 1 FROM schema_migrations WHERE id=$1',[mid])).rowCount){await db.query(await readFile(path.join(dir,file),'utf8'));await db.query('INSERT INTO schema_migrations VALUES($1)',[mid]);if(mid==='0038_public_venue_contacts')alters++;}}
    expect(alters).toBe(1);
