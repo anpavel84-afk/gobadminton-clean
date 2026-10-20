@@ -1,19 +1,19 @@
 # GoBadminton · LIVE STATE (живое состояние для резервного PM)
 
-**Обновлено:** 19.10.2026 22:54 (Сан-Паулу, UTC-3), генератор `ops/grok-toolkit/sync_state.py`
+**Обновлено:** 20.10.2026 07:50 (Сан-Паулу, UTC-3), генератор `ops/grok-toolkit/sync_state.py`
 **Активный оператор:** Grok (Go Bad) с 2026-10-17
 
 > Генерируется автоматически. Руками правится только строка «Активный оператор» (протокол передачи: `docs/workbench/OPS_BACKUP_PM_TAKEOVER_DRILL_V001.md` §9). Секретов здесь нет. UNKNOWN ≠ 0.
 
 ## 1. Конвейер (исполнитель)
 
-- Исполнитель: `active/running`, MainPID 224489 (время проверки — в строке «Обновлено»).
+- Исполнитель: `active/running`, MainPID 1438948 (время проверки — в строке «Обновлено»).
 - Выполнено задач (`done_count`): **29**.
 - Активная задача: **#127** M3 v8: развёрнутый попап площадки поверх карты (преемник #117) — фаза `blocked`, попытка 2, head `ae4df3f6`, PR #128, QA PASS на `ae4df3f6`, причина: Actions failed, resume_phase: ci.
 - Последняя выкатка DEV: `r39354396521-a1`, ACCEPTED, pending=False, source `42e87d30`, завершена 19.10.2026 22:40 (Сан-Паулу).
 - DEV `/v1/meta`: gitSha `42e87d30`, apiVersion `0.19.0`.
-- GitHub `dev` HEAD: `42e87d30`.
-- Сверка dev HEAD = DEV gitSha = квитанция: **совпадает**.
+- GitHub `dev` HEAD: `bce61bcc`.
+- Сверка dev HEAD = DEV gitSha = квитанция: **НЕ совпадает, разобрать**.
 
 ## 2. Следующие задачи и бэклог (топ-10, `backlog_ru.json`)
 
@@ -35,7 +35,6 @@
 ## 3. Открытые PR и Issue (GitHub)
 
 **PR:**
-- #128 `automation/issue-127` → `dev` @ `ae4df3f6`: Refs #127: autonomous source candidate
 - #120 `automation/issue-117` → `dev` @ `5c38adec`: Refs #117: autonomous source candidate
 - #102 `ops/takeover-runbook-v1` → `dev` @ `эта ветка`: Docs: OPS takeover runbook V001 (docs-only, DO NOT MERGE yet)
 - #100 `ops/parallel-slots-v1` → `dev` @ `3e5f5b89`: OPS: PARALLEL_SLOTS_V1 executor slots, lock registry, merge queue, budgets (NOT INSTALLED)
