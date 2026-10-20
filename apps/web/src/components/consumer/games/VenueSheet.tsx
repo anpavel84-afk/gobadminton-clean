@@ -8,9 +8,9 @@ import { Avatar } from "../players/ProfileComposition";
 import { GameHero, GameTerms } from "./GameDetailComposition";
 import "../../../styles/venue-popup.css";
 
-export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDeselect }: {
+export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDeselect, onSwipe }: {
   venue: VenueSummary; games: readonly Game[]; gamesReady: boolean; now: number;
-  onCollapse: () => void; onDeselect: () => void;
+  onCollapse: () => void; onDeselect: () => void; onSwipe?: () => void;
 }) {
   const [view, setView] = useState<"info" | "schedule" | "game">("info");
   const [selectedDate, setSelectedDate] = useState("");
@@ -50,12 +50,10 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
     };
   }, []);
   const gesture = useRef<{ x: number; y: number; id: number } | null>(null);
-  const suppressClick = useRef(false);
   const time = (value: string) => new Intl.DateTimeFormat("ru-RU", { timeZone: venue.timezone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(value));
   return <>
     <div className="gb-venue-sheet-backdrop" onClick={onDeselect} />
     <div ref={panel} className="gb-venue-sheet" role="dialog" aria-modal="true" aria-labelledby={label}
-      onClickCapture={event => { if (suppressClick.current) { suppressClick.current = false; event.preventDefault(); event.stopPropagation(); } }}
       onPointerDown={event => {
         gesture.current = null;
         if (event.target instanceof Element && event.target.closest(".gb-venue-handle") && panel.current?.scrollTop === 0) {
@@ -66,7 +64,7 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
       onPointerUp={event => {
         const origin = gesture.current; gesture.current = null;
         if (origin && origin.id === event.pointerId && event.clientY - origin.y > 80 && Math.abs(event.clientY - origin.y) > Math.abs(event.clientX - origin.x) && panel.current?.scrollTop === 0) {
-          suppressClick.current = true; onCollapse();
+          onSwipe?.(); onCollapse();
         }
       }}>
       <div className="gb-venue-handle" data-venue-handle="true"><span /></div>

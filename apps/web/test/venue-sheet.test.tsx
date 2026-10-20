@@ -36,6 +36,7 @@ vi.mock("react", async importOriginal => ({
 
 import { VenueSheet } from "../src/components/consumer/games/VenueSheet";
 import { GameTerms } from "../src/components/consumer/games/GameDetailComposition";
+import { formatSeats } from "../src/lib/game-presentation";
 import { venueDays, venueDayLabel } from "../src/lib/venue-popup";
 vi.mock("next/link", () => ({ default: ({ href, children }: { href: string; children: React.ReactNode }) => <a href={href}>{children}</a> }));
 const venue: VenueSummary = { id: "a", cityId: "city", name: "Зал", address: "Адрес", timezone: "Europe/Berlin" };
@@ -51,28 +52,33 @@ function elements(node: React.ReactNode): React.ReactElement<Record<string, unkn
   if (!isValidElement<Record<string, unknown>>(node)) return [];
   return [node, ...Children.toArray(node.props.children as React.ReactNode).flatMap(elements)];
 }
-const collapse = vi.fn(); const deselect = vi.fn(); const focus = vi.fn();
+class FocusTarget {
+  isConnected = true;
+  focus = vi.fn(() => { Object.assign(document, { activeElement: this }); });
+}
+const first = new FocusTarget(); const last = new FocusTarget(); const initiator = new FocusTarget();
+const collapse = vi.fn(); const deselect = vi.fn(); const focus = first.focus;
 let props: React.ComponentProps<typeof VenueSheet>;
 function render() {
   hooks.cursor = 0; const tree = VenueSheet(props);
   for (const node of elements(tree)) {
     const ref = node.props.ref as { current: unknown } | undefined;
-    if (ref) ref.current = node.props.role === "dialog" ? panel : { focus };
+    if (ref) ref.current = node.props.role === "dialog" ? panel : first;
   }
   hooks.effects.splice(0).forEach(effect => effect()); return tree;
 }
-const panel = { scrollTop: 0, contains: () => false, querySelectorAll: () => [{ focus }, { focus }] };
+const panel = { scrollTop: 0, contains: (target: unknown) => target === first || target === last, querySelectorAll: () => [first, last] };
 function click(tree: React.ReactNode, text: string) {
   const button = elements(tree).find(node => node.type === "button" && (node.props["aria-label"] === text || renderToStaticMarkup(node).includes(text)));
   if (!button) throw new Error(`Missing ${text}`);
   (button.props.onClick as () => void)();
 }
 beforeEach(() => {
-  hooks.slots = []; hooks.effects = []; hooks.cleanups = []; hooks.cursor = 0; collapse.mockClear(); deselect.mockClear(); focus.mockClear(); panel.scrollTop = 0;
+  hooks.slots = []; hooks.effects = []; hooks.cleanups = []; hooks.cursor = 0; collapse.mockClear(); deselect.mockClear(); focus.mockClear(); panel.scrollTop = 0; last.focus.mockClear(); initiator.focus.mockClear();
   props = { venue, games: [fixture("b"), fixture("a"), fixture("c", "2026-10-26T12:00:00Z")], gamesReady: true, now: Date.parse("2026-10-24T22:30:00Z"), onCollapse: collapse, onDeselect: deselect };
   vi.stubGlobal("window", new EventTarget());
-  vi.stubGlobal("document", { activeElement: null, body: { style: { overflow: "auto" } }, querySelector: () => ({ focus }) });
-  vi.stubGlobal("HTMLElement", class {});
+  vi.stubGlobal("document", { activeElement: initiator, body: { style: { overflow: "auto" } }, querySelector: () => ({ focus }) });
+  vi.stubGlobal("HTMLElement", FocusTarget);
 });
 afterEach(() => { hooks.cleanups.forEach(fn => fn?.()); vi.unstubAllGlobals(); });
 it("renders cover, single modal, focuses close and restores overflow on cleanup", () => {
@@ -111,12 +117,24 @@ it("keeps old GameTerms Link unless callback is supplied", () => {
   const html = renderToStaticMarkup(<GameTerms game={game} onVenueClick={() => {}} />);
   expect(html).not.toContain('href="/venues/a"'); expect(html).toContain("<button");
 });
-it.each([false, true])("traps Tab with shift=%s", shiftKey => {
-  render(); const event = Object.assign(new Event("keydown", { cancelable: true }), { key: "Tab", shiftKey });
-  window.dispatchEvent(event); expect(event.defaultPrevented).toBe(true); expect(focus).toHaveBeenCalled();
+it.each([false, true])("traps actual Tab boundary with shift=%s and allows interior Tab", shiftKey => {
+  render(); Object.assign(document, { activeElement: shiftKey ? first : last });
+  const event = Object.assign(new Event("keydown", { cancelable: true }), { key: "Tab", shiftKey });
+  window.dispatchEvent(event); expect(event.defaultPrevented).toBe(true);
+  expect(document.activeElement).toBe(shiftKey ? last : first);
+  const interior = Object.assign(new Event("keydown", { cancelable: true }), { key: "Tab", shiftKey });
+  window.dispatchEvent(interior); expect(interior.defaultPrevented).toBe(false);
+  hooks.cleanups.forEach(fn => fn?.()); expect(document.activeElement).toBe(initiator);
+  const after = Object.assign(new Event("keydown", { cancelable: true }), { key: "Tab", shiftKey });
+  window.dispatchEvent(after); expect(after.defaultPrevented).toBe(false);
+});
+it("restores preview focus when the initiating element was removed", () => {
+  render(); initiator.isConnected = false;
+  hooks.cleanups.forEach(fn => fn?.()); expect(document.activeElement).toBe(first);
+  initiator.isConnected = true;
 });
 it("background deselects, close collapses, inner clicks do neither", () => {
-  const tree = render(); click(tree, "Закрыть"); expect(collapse).toHaveBeenCalledOnce();
+  const tree = render(); expect(collapse).not.toHaveBeenCalled(); expect(deselect).not.toHaveBeenCalled(); click(tree, "Закрыть"); expect(collapse).toHaveBeenCalledOnce();
   const backdrop = elements(tree).find(node => node.props.className === "gb-venue-sheet-backdrop");
   if (!backdrop) throw new Error("No backdrop"); (backdrop.props.onClick as () => void)(); expect(deselect).toHaveBeenCalledOnce();
 });
@@ -138,13 +156,29 @@ it.each(["horizontal", "cancel", "scroll", "control"])("ignores %s gesture", rea
   (dialog.props.onPointerUp as (value: unknown) => void)({ ...event, clientX: reason === "horizontal" ? 100 : 0, clientY: 81 });
   expect(collapse).not.toHaveBeenCalled();
 });
-it("suppresses the click following a swipe", () => {
+it("notifies the persistent owner before collapsing and removing the sheet", () => {
   class Target { closest() { return true; } } vi.stubGlobal("Element", Target);
+  const order: string[] = [];
+  props = { ...props, onSwipe: () => order.push("suppress"), onCollapse: () => { order.push("collapse"); hooks.cleanups.forEach(fn => fn?.()); } };
   const dialog = elements(render()).find(node => node.props.role === "dialog"); if (!dialog) throw new Error("No dialog");
   const event = { target: new Target(), clientX: 0, clientY: 0, pointerId: 1, currentTarget: { setPointerCapture() {} } };
   (dialog.props.onPointerDown as (value: unknown) => void)(event);
   (dialog.props.onPointerUp as (value: unknown) => void)({ ...event, clientY: 81 });
-  const clickEvent = { preventDefault: vi.fn(), stopPropagation: vi.fn() };
-  (dialog.props.onClickCapture as (value: unknown) => void)(clickEvent);
-  expect(clickEvent.preventDefault).toHaveBeenCalledOnce();
+  expect(order).toEqual(["suppress", "collapse"]);
+  expect(document.body.style.overflow).toBe("auto");
+});
+
+it("preserves the selected date through detail and chooses the first remaining date on removal", () => {
+  click(render(), "Показать игры"); click(render(), "26 окт.");
+  let tree = render(); expect(renderToStaticMarkup(tree)).toContain("Игра c");
+  expect(renderToStaticMarkup(tree)).toContain(formatSeats(fixture("c")));
+  expect(renderToStaticMarkup(tree)).toContain("B");
+  expect(renderToStaticMarkup(tree)).not.toContain("Любой уровень");
+  click(tree, "Игра c"); click(render(), "К расписанию");
+  tree = render(); expect(renderToStaticMarkup(tree)).not.toContain("Игра a");
+  props = { ...props, games: [fixture("a")] };
+  tree = render(); expect(renderToStaticMarkup(tree)).toContain("Игра a");
+  expect(renderToStaticMarkup(tree)).not.toContain("Игра c");
+  props = { ...props, games: [] };
+  expect(renderToStaticMarkup(render())).not.toContain("Игры на этой площадке");
 });

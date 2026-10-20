@@ -128,3 +128,20 @@ it("clears selection on city change and venue removal; unavailable snapshot is n
   mapProps(tree).onSelect(b); render(); tree = render({ cityId: "other" });
   expect(elements(tree).some(node => node.type === VenuePreviewCard)).toBe(false);
 });
+
+it("expires swipe suppression on the persistent map owner", async () => {
+  const tree = await load(); mapProps(tree).onSelect(a);
+  const card = preview(render()); card.props.onSwipe?.(); card.props.onOpen();
+  let section = elements(render()).find(node => node.props.className === "gb-games-map");
+  if (!section) throw new Error("No map section");
+  const click = { preventDefault: vi.fn(), stopPropagation: vi.fn() };
+  (section.props.onClickCapture as (event: unknown) => void)(click);
+  expect(click.preventDefault).toHaveBeenCalledOnce();
+  (section.props.onClickCapture as (event: unknown) => void)(click);
+  expect(click.preventDefault).toHaveBeenCalledOnce();
+  card.props.onSwipe?.(); await vi.advanceTimersByTimeAsync(501);
+  section = elements(render()).find(node => node.props.className === "gb-games-map");
+  if (!section) throw new Error("No map section");
+  (section.props.onClickCapture as (event: unknown) => void)(click);
+  expect(click.preventDefault).toHaveBeenCalledOnce();
+});

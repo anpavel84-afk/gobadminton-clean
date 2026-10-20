@@ -1,7 +1,7 @@
 import { Children, isValidElement } from "react";
 import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { Game, VenueSummary } from "../src/lib/consumer-types";
 import { VenuePreviewCard } from "../src/components/consumer/games/VenuePreviewCard";
 import { nearestGameLabel } from "../src/lib/venue-popup";
@@ -58,4 +58,23 @@ it.each([[1, "1 игра"], [2, "2 игры"], [5, "5 игр"]] as const)("count
   const games = Array.from({ length: count }, () => game("2026-11-04T10:00:00Z", "2026-11-04T11:00:00Z"));
   const html = renderToStaticMarkup(<VenuePreviewCard venue={venue} games={games} gamesReady now={0} onOpen={() => {}} />);
   expect(html).toContain(`На этой площадке ${label}`); expect(html).toContain("↑"); expect(html).toContain("gb-venue-handle");
+});
+
+afterEach(() => vi.unstubAllGlobals());
+it.each(["80", "81", "horizontal", "cancel", "control"])("preview gesture %s", reason => {
+  class Target { closest() { return reason !== "control"; } }
+  vi.stubGlobal("Element", Target);
+  const onOpen = vi.fn(); const onSwipe = vi.fn();
+  const tree = VenuePreviewCard({ venue, games: [], gamesReady: true, now: 0, onOpen, onSwipe });
+  const event = { target: new Target(), clientX: 0, clientY: 100, pointerId: 1, currentTarget: { setPointerCapture() {} } };
+  tree.props.onPointerDown(event);
+  if (reason === "cancel") tree.props.onPointerCancel();
+  tree.props.onPointerUp({ ...event, clientX: reason === "horizontal" ? 100 : 0, clientY: reason === "80" ? 20 : 19 });
+  expect(onOpen).toHaveBeenCalledTimes(reason === "81" ? 1 : 0);
+  expect(onSwipe).toHaveBeenCalledTimes(reason === "81" ? 1 : 0);
+  const click = { preventDefault: vi.fn(), stopPropagation: vi.fn() };
+  tree.props.onClickCapture(click);
+  expect(click.preventDefault).toHaveBeenCalledTimes(reason === "81" ? 1 : 0);
+  tree.props.onClickCapture(click);
+  expect(click.preventDefault).toHaveBeenCalledTimes(reason === "81" ? 1 : 0);
 });

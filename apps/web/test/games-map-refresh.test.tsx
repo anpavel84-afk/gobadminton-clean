@@ -245,6 +245,7 @@ it("invalidates session counts before a replacement request resolves", async () 
   render(); await vi.advanceTimersByTimeAsync(40000); expect(html()).toContain("Venue · 1");
   window.dispatchEvent(new Event("gb-session-changed"));
   expect(html()).toContain("Venue · ?");
+  expect(html()).not.toContain("Venue · 0"); // invalidation must not fabricate a checked empty schedule
 });
 
 it.each(["visible", "minute"])("expires eligibility on %s independently of the pending transport", async trigger => {

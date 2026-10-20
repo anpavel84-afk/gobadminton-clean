@@ -5,6 +5,54 @@ Date: 2026-10-20. Status: WORKING_DRAFT / NOT_TESTED; no acceptance or release c
 Base: `b2cd0f03bf420cdd1bb3c62d54c75b2f14337edf` (initial HEAD, branch automation/issue-127).
 Base permalink: https://github.com/anpavel84-afk/gobadminton-clean/tree/b2cd0f03bf420cdd1bb3c62d54c75b2f14337edf
 
+## Repair after independent QA FAIL — 2026-10-20
+
+Actual repair base: `1b705883be12e3f271e71a533993de99dc60dde9`, clean tracked diff at entry.
+https://github.com/anpavel84-afk/gobadminton-clean/commit/1b705883be12e3f271e71a533993de99dc60dde9
+The JSON's original dev base remains b2cd0f03bf420cdd1bb3c62d54c75b2f14337edf;
+no checkout or metadata was changed to reconcile that difference.
+
+Independent QA supplied by the assignment: FAIL on the actual repair base.
+Findings D3 (suppression lost on unmount), D2–D3 (missing gesture/focus cases),
+D4 (empty schedules and discarded sheet output). This repair is source-author
+work, not independent QA or acceptance.
+
+D1/D3: the persistent GamesMapView section now owns a bounded 500ms post-swipe
+click guard. Both swipe directions notify it before replacing the child. Thus
+collapse/unmount cannot remove the interceptor. Guard consumes one click and
+expires without a timer/listener. Existing sheet effects still restore overflow,
+focus and keyboard listeners on unmount.
+D2/D3: preview tests drive 80/81px, horizontal/control/cancel and click handlers;
+sheet tests use distinct focus targets, actual first/last boundaries, interior Tab,
+connected initiator restoration and disconnected preview fallback.
+D4: integration retains rendered sheet output, supplies a complete future Game,
+drives schedule/detail/back and a downward swipe, actually removes the sheet and
+passes the subsequent click to the surviving parent. Session invalidation and
+three transport failures are checked while expanded, with no stale game or CTA.
+Map construction/removal, stable camera calls, transport counts and navigation /
+history / return-storage spies cover the transitions. All five required test files
+have repair changes. Existing tests for legacy venueId, pagination and polling remain.
+D5: no CSS or visual composition change in this repair. Original parity limitations
+below remain. D6: commands attempted below; no runtime PASS claimed.
+
+Validation (repository root, no installation or network enabled):
+
+- `COREPACK_ENABLE_NETWORK=0 pnpm --filter @gobadminton/web exec tsc -p tsconfig.json --noEmit --incremental false`: exit 1, NOT_TESTED.
+- `COREPACK_ENABLE_NETWORK=0 pnpm --filter @gobadminton/web exec vitest run --no-cache test/venue-preview-card.test.tsx test/games-map-selection.test.tsx test/games-map-refresh.test.tsx test/venue-sheet.test.tsx test/venue-sheet-integration.test.tsx`: exit 1, NOT_TESTED.
+- Both failed before tool execution with identical Corepack output:
+  `Network access disabled by the environment; can't reach https://registry.npmjs.org/pnpm/-/pnpm-10.18.0.tgz`.
+  These are environment bootstrap failures, not observed TypeScript/Vitest errors.
+- `git diff --check`: exit 0, no output (whitespace only).
+
+No self-QA verdict, commit, push, deployment, publication or candidate permalink.
+Integrator must publish the final source/handoff with an exact commit permalink,
+obtain GitHub Actions tsc/vitest PASS on that exact commit before integration or DEV
+release; CI FAIL prohibits both. Then independent QA reviews D1–D6. Browser
+390/430px and native focus remain NOT_TESTED. Rollback: reverse this repair diff.
+
+The original implementation handoff below is historical; its statements about
+no prior QA and unattempted checks are superseded by this repair record.
+
 ## Assignment and effects
 
 Only TR1-M3 source changes in the supplied allowed_paths. Offline, no install,
