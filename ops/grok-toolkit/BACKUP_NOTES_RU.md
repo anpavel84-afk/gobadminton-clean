@@ -246,3 +246,14 @@
 - Monitor штатно обновлён monitor-contacts142-ready rc0, log20261021-000631-monitor-contacts142-ready-1697065.log; strict49PASS, IDs сохранены. M3→142 опубликована, M3-PHOTO→144 ожидает постановки. Исторические134/141 сохранены.
 - VPS anonymous GitHub reader65s между запросами,403/429 вводят минимум3600s backoff; это факт кода, текущий sleep не доказывает конкретную причину. Read-only rate_limit в22:03UTC core remaining26/60. Никаких обходов rate limit, credential copy, рестартов ради сброса _API_NEXT или прав здесь нет. Установщик executor-ghread.sh существует, не исследован/не запущен в этой работе.
 - Следующее: реальный claim142→author/QA/CI/DEV; забрать codex-write1682114 и независимо проверить final body144 на свежей базе. DEV пока f50; новых UI-релизов не объявлять.
+
+
+## Продолжение 20.10.2026, 22:20 UTC — контакты забраны, фото допущено
+- #141 штатно припаркована на attempt=3/head=fb8b4655e361da3f0d0da9c910a0b14757109bba; PARK comment 6302824786 обработан. История и счётчики сохранены.
+- #142 фактически CLAIMED: active.issue=142, phase=claimed, attempt=0, head=null. Единственный admission: https://github.com/anpavel84-afk/gobadminton-clean/issues/142#issuecomment-6302661724 . Это захват задания, не завершение author/QA.
+- #144 codex-write завершён; окончательное тело /var/lib/gb-ops-stage/files/M3-PHOTO-R2.v1.body.txt, SHA256 87784a76b1e53c9316e3c31f6faa676f2d7628546bed6ada173b6e408e43294e, 10845 bytes/7 paths/max_attempts=3.
+- Независимое ревью финальных байтов: MOZHNO, все12ДА; /var/lib/gb-ops-stage/reviews/M3-PHOTO-R2.v1.body-f50eb6f0-20261020T221824Z.txt, report SHA256 dab609707a821a3c04731e5c922ddcdf0f2b20ee50d2e65784b3868d3d3c7ecf. Requested gpt-6.1-sol/high; actual UNVERIFIED. Исходное тело принято, REVISED_BODY не использовано.
+- Перед публикацией dev=f50eb6f0f1703efabe86ef1de5b8f42948fc4497; существующих admission144=0. Проверен настоящий installed validate_issue: PASS. Русское резюме: https://github.com/anpavel84-afk/gobadminton-clean/issues/144#issuecomment-6303065407 . Единственный машинный admission: https://github.com/anpavel84-afk/gobadminton-clean/issues/144#issuecomment-6303065689 . Readback: exact body, Owner318610566, unedited.
+- #144 ожидает после #142; не публиковать admission повторно. У photo predecessor отменённый CI и зависание теста, не случайный сбой: unchanged CI не перезапускать. Новый тест имеет bounded harness и внешний60s deadline.
+- Монитор: штатный gb-run monitor-photo144-admitted rc0, strict loader BACKLOG_VALID_49; обе записи M3/M3-PHOTO сохранены, photo issue144/status опубликована. Log /var/log/gb-ops/runs/20261021-002042-monitor-photo144-admitted-1789425.log.
+- Последняя проверка: active142/claimed/attempt0; done32; DEV остаётся f50, новые контакты/фото ещё не выкачены. Дальше наблюдать142→author→независимая QA exact SHA→CI→DEV→браузер; затем144 в том же штатном конвейере. PROD и PR102 не трогать.
