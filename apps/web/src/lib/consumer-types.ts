@@ -1,3 +1,4 @@
+export type PublicVenueContacts = { phone: string | null; website: string | null; messengers: { kind: "telegram" | "whatsapp" | "vk"; url: string }[] };
 export type ActivityKind = "regular" | "trainer_led";
 export type GameStatus = "draft" | "published" | "cancelled" | "completed";
 export type GameVisibility = "public" | "unlisted";
@@ -65,6 +66,7 @@ export type City = {
 };
 
 export type VenueSummary = {
+  publicContacts?: PublicVenueContacts | null;
   cover?: { uploadedUrl: string | null };
   id: string;
   name: string;
@@ -222,6 +224,7 @@ export type CreateVenueInput = {
 };
 
 export type Venue = CreateVenueInput & {
+  publicContacts?: PublicVenueContacts | null;
   cover?: { uploadedUrl: string | null; credit?: { kind: "photo" | "logo" | "illustration"; text: string; url: string | null } | null };
   id: string;
   dataStatus: string;

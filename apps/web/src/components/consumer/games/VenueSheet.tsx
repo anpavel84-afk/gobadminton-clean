@@ -2,13 +2,49 @@
 import Link from "next/link";
 import { venueCreatePath } from "../../../lib/games-venue-map";
 import { useEffect, useId, useRef, useState } from "react";
-import type { Game, VenueSummary } from "../../../lib/consumer-types";
+import type { Game, VenueSummary, PublicVenueContacts } from "../../../lib/consumer-types";
 import { venueDays, venueDayLabel } from "../../../lib/venue-popup";
 import { formatSeats } from "../../../lib/game-presentation";
 import { VenueCover } from "../venues/VenueCover";
 import { Avatar } from "../players/ProfileComposition";
 import { GameHero, GameTerms } from "./GameDetailComposition";
 import "../../../styles/venue-popup.css";
+
+const controls = /[\x00-\x1f\x7f-\x9f]/;
+const hosts = { telegram: "t.me", whatsapp: "wa.me", vk: "vk.com" } as const;
+function record(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+export function safePublicPhone(value: unknown): string | null {
+  if (typeof value !== "string" || controls.test(value)) return null;
+  const phone = value.trim();
+  const digits = phone.replace(/[^0-9]/g, "");
+  return phone.length <= 40 && /^\+?[0-9 ()-]+$/.test(phone) && digits.length >= 7 && digits.length <= 15 ? phone : null;
+}
+export function safePublicUrl(value: unknown, kind?: keyof typeof hosts): string | null {
+  if (typeof value !== "string" || controls.test(value) || value.includes("\\")) return null;
+  const text = value.trim();
+  if (text.length > 300 || text.split(/[/?#]/)[2]?.includes("@") || !/^https?:\/\//i.test(text)) return null;
+  try {
+    const url = new URL(text);
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.port) return null;
+    if (kind && (url.protocol !== "https:" || url.hostname !== hosts[kind] || url.pathname === "/" || !url.pathname)) return null;
+    return text;
+  } catch { return null; }
+}
+export function readPublicVenueContacts(value: unknown): PublicVenueContacts | null {
+  if (!record(value)) return null;
+  const messengers: PublicVenueContacts["messengers"] = [];
+  const seen = new Set<string>();
+  if (Array.isArray(value.messengers)) for (const item of value.messengers) {
+    if (!record(item) || (item.kind !== "telegram" && item.kind !== "whatsapp" && item.kind !== "vk") || seen.has(item.kind)) continue;
+    const url = safePublicUrl(item.url, item.kind);
+    if (!url) continue;
+    seen.add(item.kind); messengers.push({ kind: item.kind, url });
+    if (messengers.length === 3) break;
+  }
+  return { phone: safePublicPhone(value.phone), website: safePublicUrl(value.website), messengers };
+}
 
 export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDeselect, embedded = false, active = true }: {
   venue: VenueSummary; games: readonly Game[]; gamesReady: boolean; now: number;
@@ -54,6 +90,8 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
       else (document.querySelector<HTMLButtonElement>('.gb-venue-popup .gb-venue-handle') ?? document.querySelector<HTMLButtonElement>('.gb-venue-preview-button'))?.focus();
     };
   }, [active, embedded]);
+  const contacts = readPublicVenueContacts(venue.publicContacts);
+  const hasContacts = contacts && (contacts.phone || contacts.website || contacts.messengers.length > 0);
   const time = (value: string) => new Intl.DateTimeFormat("ru-RU", { timeZone: venue.timezone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(value));
   return <>
     {!embedded && <div className="gb-venue-sheet-backdrop" onClick={onDeselect} />}
@@ -67,6 +105,15 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
       {currentView === "info" ? <div className="gb-venue-sheet-info">
         <VenueCover cover={venue.cover} name={venue.name} className="gb-venue-sheet-cover" />
         <h3>{venue.name}</h3><p>{venue.address}</p>
+        <section aria-label="Контакты площадки">
+          <h3>Контакты площадки</h3>
+          <p>Публичные контакты организации</p>
+          {contacts && hasContacts ? <>
+            {contacts.phone && <p><a href={`tel:${contacts.phone.replace(/[^0-9+]/g, "")}`}>{contacts.phone}</a></p>}
+            {contacts.website && <p><a href={contacts.website} target="_blank" rel="noopener noreferrer">Сайт площадки</a></p>}
+            {contacts.messengers.map(item => <p key={item.kind}><a href={item.url} target="_blank" rel="noopener noreferrer">{{ telegram: "Telegram", whatsapp: "WhatsApp", vk: "ВКонтакте" }[item.kind]}</a></p>)}
+          </> : <p>Публичные контакты не указаны</p>}
+        </section>
         {!gamesReady && <p role="status">Расписание временно недоступно</p>}
         {gamesReady && games.length === 0 && <Link className="gb-venue-sheet-primary" href={venueCreatePath(new URLSearchParams({ venueId: venue.id }).toString())}>Создать игру на этой площадке</Link>}
         {gamesReady && days.length > 0 && <button type="button" className="gb-venue-sheet-primary" onClick={() => setView("schedule")}>Показать игры на этой площадке</button>}
