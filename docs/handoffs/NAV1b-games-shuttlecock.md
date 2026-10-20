@@ -110,6 +110,33 @@ binding decision прочитан. iPhone **NOT_TESTED**, не source gate.
 
 ## Ограничения / rollback / next action
 
+### Повтор по reviewed SHA 1f6ee9b (2026-10-20)
+
+From: source author (Codex). To: интегратор → независимый QA.
+Status: PROPOSED; prior independent QA FAIL не снят.
+Фактический HEAD при старте: `1f6ee9b865e78f79bd49642a62f7c68d4d38e371`,
+branch `automation/issue-136`; рабочий diff пуст. Immutable base
+`0e75b57fac4ea1ffc995393395147d499e4ff366` не переключалась.
+Совокупный base-to-candidate diff уже содержит games source, тесты и этот
+handoff: три разрешённых файла. Source/tests сохранены; текущая попытка
+обновляет только evidence и не является новой реализацией.
+
+Обе точные pnpm-команды A6 из таблицы выше выполнены отдельно из корня:
+каждая exit 1 до исполнения проверок, с точным выводом Corepack из таблицы.
+TypeScript и Vitest остаются **NOT_TESTED**: локальный pnpm 10.18.0 недоступен,
+Corepack не может загрузить его offline. `git diff --check` и
+`git diff 0e75b57fac4ea1ffc995393395147d499e4ff366 --check` выполнены:
+exit 0, без вывода. A1–A5 остаются assertions без подтверждённого исполнения;
+A6 не пройден. Это обязательные команды автора, не независимый QA.
+
+Устранить единственное переданное finding в разрешённых source-файлах нельзя:
+нужна подготовка окружения, а install/network/dependencies запрещены.
+Код не переписывался ради формального diff. Следующий bounded шаг —
+независимый QA в заранее подготовленном offline окружении с pnpm 10.18.0
+и зависимостями. Публикацию и exact result permalinks добавляет интегратор.
+Откат — обратный diff интегратором. Rendered parity UNVERIFIED,
+iPhone NOT_TESTED; Owner acceptance и OWNER_VISUAL_OVERRIDE не заявлены.
+
 ### Повтор по reviewed SHA 23b74f8 (2026-10-20)
 
 From: source author (Codex). To: интегратор → независимый QA. Status: PROPOSED.
