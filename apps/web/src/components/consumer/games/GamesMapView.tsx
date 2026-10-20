@@ -11,6 +11,7 @@ import "../../../styles/discovery.css";
 import { GamesMapBackButton } from "./GamesMapBackButton";
 import { VenuePreviewCard } from "./VenuePreviewCard";
 import { VenuePopup } from "./VenuePopup";
+import { SelectedVenueCover, useSelectedVenueCover } from "../venues/SelectedVenueCover";
 import { VenueSheet } from "./VenueSheet";
 import { Button } from "../Button";
 const MapView = dynamic(() => import("./GamesVenueMap").then(module => module.GamesVenueMap), { ssr: false });
@@ -71,6 +72,7 @@ export function GamesMapView({ cityId, day, venueId, activity = "all", onReturnT
   const [expanded, setExpanded] = useState(false);
   const selectVenue = (venue: VenueSummary) => { setExpanded(false); setSelectedVenueId(venue.id); };
   const selectedVenue = venues.find(item => item.id === selectedVenueId);
+  const coverResource = useSelectedVenueCover(cityId, selectedVenue);
   const escapeSelection = useRef<VenueSummary | undefined>(undefined);
   useEffect(() => { escapeSelection.current = selectedVenue; }, [selectedVenue]);
   useEffect(() => { setSelectedVenueId(null); setExpanded(false); }, [cityId]);
@@ -102,9 +104,9 @@ export function GamesMapView({ cityId, day, venueId, activity = "all", onReturnT
     {<>
       {cityId === MOSCOW_BUNDLE.cityId ? <MapView venues={venues} counts={counts} selectedVenueId={selectedVenueId} onSelect={selectVenue} onDeselect={() => setSelectedVenueId(null)} onAvailability={setMapAvailable} onErrorCardChange={setMapErrorCardShown} onReturnToList={onReturnToList} /> : <p role="alert">Карта выбранного города пока недоступна. Все площадки доступны списком.</p>}
       {selectedVenue && <VenuePopup key={selectedVenue.id} expanded={expanded} onExpandedChange={setExpanded} onDeselect={() => setSelectedVenueId(null)}
-        preview={<VenuePreviewCard embedded venue={selectedVenue} games={all.get(selectedVenue.id) ?? []}
+        preview={<VenuePreviewCard coverSlot={<SelectedVenueCover resource={coverResource} mode="compact" className="gb-venue-preview-cover" />} embedded venue={selectedVenue} games={all.get(selectedVenue.id) ?? []}
           gamesReady={snapshot?.cityId === cityId && snapshot.gamesReady} now={now} onOpen={() => setExpanded(true)} />}>
-        <VenueSheet embedded active={expanded} venue={selectedVenue} games={all.get(selectedVenue.id) ?? []}
+        <VenueSheet coverSlot={<SelectedVenueCover resource={coverResource} mode="info" className="gb-venue-sheet-cover" />} embedded active={expanded} venue={selectedVenue} games={all.get(selectedVenue.id) ?? []}
           gamesReady={snapshot?.cityId === cityId && snapshot.gamesReady === true} now={now}
           onCollapse={() => setExpanded(false)} onDeselect={() => setSelectedVenueId(null)} />
       </VenuePopup>}

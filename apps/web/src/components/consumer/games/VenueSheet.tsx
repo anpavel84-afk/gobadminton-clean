@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { venueCreatePath } from "../../../lib/games-venue-map";
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import type { Game, VenueSummary } from "../../../lib/consumer-types";
 import { venueDays, venueDayLabel } from "../../../lib/venue-popup";
 import { formatSeats } from "../../../lib/game-presentation";
@@ -10,9 +10,9 @@ import { Avatar } from "../players/ProfileComposition";
 import { GameHero, GameTerms } from "./GameDetailComposition";
 import "../../../styles/venue-popup.css";
 
-export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDeselect, embedded = false, active = true }: {
+export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDeselect, embedded = false, active = true, coverSlot }: {
   venue: VenueSummary; games: readonly Game[]; gamesReady: boolean; now: number;
-  onCollapse: () => void; onDeselect: () => void; embedded?: boolean; active?: boolean;
+  onCollapse: () => void; onDeselect: () => void; embedded?: boolean; active?: boolean; coverSlot?: ReactNode;
 }) {
   const [view, setView] = useState<"info" | "schedule" | "game">("info");
   const [selectedDate, setSelectedDate] = useState("");
@@ -65,7 +65,7 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
         <button ref={close} className="gb-venue-sheet-close" type="button" aria-label="Закрыть" onClick={onCollapse}>×</button>
       </header>
       {currentView === "info" ? <div className="gb-venue-sheet-info">
-        <VenueCover cover={venue.cover} name={venue.name} className="gb-venue-sheet-cover" />
+        {coverSlot ?? <VenueCover cover={venue.cover} name={venue.name} className="gb-venue-sheet-cover" />}
         <h3>{venue.name}</h3><p>{venue.address}</p>
         {!gamesReady && <p role="status">Расписание временно недоступно</p>}
         {gamesReady && games.length === 0 && <Link className="gb-venue-sheet-primary" href={venueCreatePath(new URLSearchParams({ venueId: venue.id }).toString())}>Создать игру на этой площадке</Link>}
