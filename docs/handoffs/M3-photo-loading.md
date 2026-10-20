@@ -132,3 +132,45 @@ Revision rollback: reverse only the uncommitted changes to SelectedVenueCover,
 the two new-task test files and this handoff relative to
 `e99a2f0aaae6497529c84b7631813a087f6d6ac7`; retain the original #141 implementation.
 The full-slice rollback above is for the integrator only.
+
+## CI repair — 2026-10-20
+
+From: Codex, source author. To: integrator → independent QA.
+Status: READY_FOR_REVIEW; typecheck and test execution NOT_TESTED.
+Exact repair base/HEAD: `a1cd85eb8dad0edf4557fac726d630425f1ed68c`.
+Initial tracked diff was empty. This addendum preserves the preceding attempt
+history; no attempt counters are reset. Prior independent QA reported PASS on
+that SHA, but the supplied CI report subsequently identified two test-harness
+failures in source (web), run 39492337637 attempt 1 (Owner also referenced
+run 39492347839 / job 118868513914).
+
+Only `apps/web/test/venue-photo-lifecycle.test.tsx` and this handoff change:
+
+- The async next/dynamic mock imports the real GamesVenueMap before returning
+  it, avoiding access to the test module's uninitialized static import while
+  GamesMapView initializes. The harness still executes the real map component.
+- Tree traversal recognizes DOM hosts using `typeof value.type === "string"`;
+  fragments still traverse their children without creating a host. This removes
+  the invalid string/Fragment comparison without any or TS suppressions.
+
+All assertions and implementation remain intact, including resource identity
+by city/venue/URL without name and alt updates without another image. No visual
+composition changes; STYLE_GUIDE_PARITY remains UNVERIFIED as recorded above.
+
+Required local commands attempted separately from repository root:
+
+1. `COREPACK_ENABLE_NETWORK=0 pnpm --filter @gobadminton/web exec tsc -p tsconfig.json --noEmit --incremental false`
+2. `COREPACK_ENABLE_NETWORK=0 pnpm --filter @gobadminton/web exec vitest run --no-cache test/selected-venue-cover.test.tsx test/venue-photo-lifecycle.test.tsx`
+
+Each exited 1 before TypeScript/Vitest execution, with the exact Corepack
+download/network-disabled output recorded in the earlier Commands section.
+Both are NOT_TESTED. No dependency installation or network workaround, remote
+CI, independent self-QA, Git write, service operation or deployment was performed.
+`git diff --check` exited 0 with no output for the repair diff.
+Browser/iPhone/flicker remain NOT_TESTED.
+
+Next bounded action: integrator publishes a new exact candidate SHA, obtains
+new independent QA and full mandatory Product CI on that SHA. Earlier QA PASS
+does not cover this repair. Rollback only these two files' repair changes
+relative to `a1cd85eb8dad0edf4557fac726d630425f1ed68c`, preserving the candidate
+and all prior fixes. Publication/permalinks remain the integrator's responsibility.

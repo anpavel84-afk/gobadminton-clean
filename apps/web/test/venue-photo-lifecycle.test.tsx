@@ -1,4 +1,4 @@
-import { Children, isValidElement, Fragment } from "react";
+import { Children, isValidElement } from "react";
 import type * as React from "react";
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
 const h = vi.hoisted(() => ({ current: "", cursor: 0, slots: new Map<string, unknown[]>(), effects: [] as (() => void)[], cleanups: new Map<string, () => void>() }));
@@ -11,7 +11,10 @@ vi.mock("react", async original => ({
   useMemo(fn: () => unknown, deps: unknown[]) { const s = slots(); const i = h.cursor++; const old = s[i] as { deps: unknown[]; value: unknown } | undefined; if (!old || deps.some((v, n) => v !== old.deps[n])) s[i] = { deps, value: fn() }; return (s[i] as { value: unknown }).value; },
   useEffect(fn: () => void | (() => void), deps: unknown[]) { const s = slots(); const i = h.cursor++; const key = `${h.current}:${i}`; const old = s[i] as unknown[] | undefined; if (!old || deps.some((v, n) => v !== old[n])) { s[i] = deps; h.effects.push(() => { h.cleanups.get(key)?.(); h.cleanups.set(key, fn() || (() => {})); }); } },
 }));
-vi.mock("next/dynamic", () => ({ default: () => GamesVenueMap }));
+vi.mock("next/dynamic", async () => {
+  const { GamesVenueMap } = await import("../src/components/consumer/games/GamesVenueMap");
+  return { default: () => GamesVenueMap };
+});
 vi.mock("next/link", () => ({ default: (props: Record<string, unknown>) => <a {...props} /> }));
 vi.mock("pmtiles", () => ({ Protocol: class {} }));
 vi.mock("maplibre-gl", () => ({ Map: class {}, Marker: class {} }));
@@ -60,7 +63,7 @@ function render() {
       const result = (value.type as (props: Record<string, unknown>) => React.ReactNode)(value.props);
       walk(result, `${key}/out`); return;
     }
-    if (value.type !== Fragment) {
+    if (typeof value.type === "string") {
       const ref = value.props.ref as Ref; const old = mounted.get(key);
       const node = old?.node ?? new Host(String(value.type)); node.props = value.props; node.className = String(value.props.className ?? "");
       next.set(key, { node, ref });
