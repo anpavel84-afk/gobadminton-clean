@@ -65,3 +65,12 @@
 - Затем живой checkpoint подтвердил #131 phase=claimed, attempt=0, head=None. Это взятие задания, не завершённый авторский запуск/QA/DEV.
 - Через штатный gb-run job monitor-m3fix-meta обновлены только описательные titles/backlog: #131 и связь M3 с #131. JSON backup сохранён в стейдже, ownership/mode сохранены; runtime checkpoint не изменялся.
 - Монитор обновляется отдельно, поэтому снимок может отставать от checkpoint на один цикл.
+
+### 20.10.2026 09:51 (Сан-Паулу) — новый UAT попапа
+- #131 завершена в 1 попытку: candidate/dev 62c789975daa7e9a7effebb642c346f87891c476, PR #132, DEV ACCEPTED r39422029385-a1. История source QA/CI отдельна от нового продуктового замечания.
+- Owner показал текущую компактную/раскрытую карточку и целевой макет: требуется непрерывное следование шторки за пальцем при вытягивании ручки; информация/публичные контакты площадки; CTA «Создать игру на этой площадке» при проверенном пустом расписании.
+- Создана постоянная Issue #133; полный технический PM brief сохранён в https://github.com/anpavel84-afk/gobadminton-clean/issues/133#issuecomment-6291351097 . Маркера допуска в ней пока нет.
+- Аудит: preview/sheet сейчас только pointerup threshold без pointermove; VenueSheet не рендерит контакты/empty-create CTA; публичный VenueDto/consumer VenueSummary не возвращает contacts; legacy contact_phone/contact_website/booking_note принадлежат отдельной ролевой проекции. Не публиковать их автоматически как всеобщие contacts.
+- Технический PM запущен штатным codex-write с брифом M3-UAT.v1.brief.md на точной базе 62c78997; requested gpt-6.1-sol/xhigh существующей обёртки. Он должен подготовить bounded task(и), включая безопасный API для контактов, затем независимый review/линтер/публикация.
+- Монитор обновлён штатным job monitor-m3uat-meta: M3 привязана к #133, статус «в планах / постановка», новая карточка описывает три требования; это ещё не implementation claim.
+- Источник UI: существующий внешний M3_venue_mockup.png из решения Owner. Бинарные скриншоты в GitHub не загружались.
