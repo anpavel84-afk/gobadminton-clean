@@ -223,3 +223,20 @@
 .gb-games-map-error { position: absolute; z-index: 5; top: 16px; left: 16px; right: 16px; margin: auto; max-width: 420px; background: var(--gb-white); }
 .gb-games-map-error h2 { margin-top: 0; }
 .gb-games-map-error > div { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* MAP-PERF1: temporary module states share the existing map area's flex space. */
+.gb-games-map-module-loading, .gb-games-map-module-error-area { display: flex; min-height: 0; min-width: 0; align-items: center; justify-content: center; padding: 16px; color: var(--gb-ink); background: var(--gb-paper); }
+.gb-games-map-module-loading { flex-direction: column; gap: 12px; }
+.gb-games-map-module-loading__text { margin: 0; text-align: center; }
+.gb-games-map-module-loading__progress { flex: none; width: 160px; max-width: 100%; height: 6px; border-radius: 6px; overflow: hidden; background: var(--gb-line); }
+.gb-games-map-module-loading__progress > span { display: block; width: 40%; height: 100%; border-radius: inherit; background: var(--gb-lime-deep); animation: gb-games-map-module-progress 1.2s ease infinite; }
+@keyframes gb-games-map-module-progress {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(250%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .gb-games-map-module-loading__progress > span { animation: none; }
+}
+.gb-games-map-module-error-area { overflow: auto; }
+.gb-games-map-module-error { min-width: 0; width: 100%; max-width: 420px; }
+.gb-games-map-module-error h2 { margin-top: 0; }

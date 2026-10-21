@@ -1,6 +1,7 @@
 "use client";
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { ComponentProps } from "react";
 import { listAllCityVenues, listAllUpcomingCityGames } from "../../../lib/api-client";
 import type { ActivityKind, Game, VenueSummary } from "../../../lib/consumer-types";
 import { venueSchedules, startVenueMapRefresh, stableVenueCounts } from "../../../lib/games-venue-map";
@@ -14,7 +15,26 @@ import { VenuePopup } from "./VenuePopup";
 import { SelectedVenueCover, useSelectedVenueCover } from "../venues/SelectedVenueCover";
 import { VenueSheet } from "./VenueSheet";
 import { Button } from "../Button";
-const MapView = dynamic(() => import("./GamesVenueMap").then(module => module.GamesVenueMap), { ssr: false });
+import { SurfacePanel } from "../Surfaces";
+import { GamesMapModuleLoading } from "./GamesMapModuleLoading";
+import type { GamesVenueMap } from "./GamesVenueMap";
+
+/** A failed chunk stays unavailable; recovery uses the existing venue list. */
+function GamesMapModuleError({ onAvailability, onReturnToList }: ComponentProps<typeof GamesVenueMap>) {
+  useEffect(() => { onAvailability?.(false); }, [onAvailability]);
+  return <div className="gb-games-map-area gb-games-map-module-error-area">
+    <SurfacePanel className="gb-games-map-module-error" role="alert">
+      <h2>Карта не загрузилась</h2>
+      <p>Не удалось загрузить модуль карты. Площадки доступны списком.</p>
+      {onReturnToList ? <Button variant="outline" onClick={onReturnToList}>← К списку</Button> : <Button variant="outline" href="/games">← К списку</Button>}
+    </SurfacePanel>
+  </div>;
+}
+
+const MapView = dynamic(() => import("./GamesVenueMap").then(module => module.GamesVenueMap).catch(() => GamesMapModuleError), {
+  ssr: false,
+  loading: GamesMapModuleLoading,
+});
 
 /** Public venues never depend on Radar consent, a location fix or a people query. */
 export function GamesMapView({ cityId, day, venueId, activity = "all", onReturnToList }: { cityId: string; day: string; venueId?: string; activity?: "all" | ActivityKind; onReturnToList?: () => void }) {
