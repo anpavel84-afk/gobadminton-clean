@@ -10,9 +10,16 @@ import { distanceText } from "../../../lib/unified-directory";
 import { Button } from "../Button";
 import { RadarStatusAffordance } from "./RadarSessionProvider";
 import { UnifiedPlayerPreview } from "./UnifiedPlayerPreview";
+import { RadarMapModuleLoading } from "./RadarMapModuleLoading";
 import { useRadarSession, useUnifiedDirectory, useRadarConfig, useDirectoryFilters } from "./RadarSessionProvider";
 import "../../../styles/radar-geographic.css";
-const GeographicRadarMap = dynamic(() => import("./GeographicRadarMap").then(m => m.GeographicRadarMap), { ssr: false });
+function RadarMapModuleError({ onUnavailable }: { onUnavailable: () => void }) {
+  useEffect(() => { onUnavailable(); }, [onUnavailable]);
+  return <p role="alert" className="gb-map-position-unavailable">Не удалось загрузить участников Radar. Площадки и игры остаются на карте.</p>;
+}
+const GeographicRadarMap = dynamic(() => import("./GeographicRadarMap")
+  .then(m => m.GeographicRadarMap)
+  .catch(() => RadarMapModuleError), { ssr: false, loading: RadarMapModuleLoading });
 export function RadarPage({ sharedMap, resumeCamera = false }: { sharedMap?: LibreMap; resumeCamera?: boolean } = {}) {
   const { view: session } = useRadarSession(); const { controller, view } = useUnifiedDirectory();
   const [failed, setFailed] = useState(false); const [listOpen, setListOpen] = useState(false); const [expanded, setExpanded] = useState(false);
