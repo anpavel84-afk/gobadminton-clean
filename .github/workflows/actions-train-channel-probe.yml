@@ -1,0 +1,54 @@
+name: Actions train channel probe
+on:
+  push:
+    branches: [chatops/actions-train-channel-probe-20261021]
+    paths: ['.github/workflows/actions-train-channel-probe.yml']
+permissions:
+  contents: read
+  issues: read
+  actions: read
+concurrency:
+  group: actions-train-channel-probe
+  cancel-in-progress: false
+  queue: max
+jobs:
+  readonly-channel:
+    if: github.repository == 'anpavel84-afk/gobadminton-clean'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: dev
+    steps:
+      - name: Verify authenticated repository reads and existing restricted DEV status
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          KNOWN: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          PORT: ${{ vars.DEPLOY_PORT || '22' }}
+        run: |
+          set -Eeuo pipefail
+          test "$GITHUB_REPOSITORY" = anpavel84-afk/gobadminton-clean
+          test -n "$KEY" && test -n "$HOST" && test -n "$KNOWN"
+          [[ "$HOST" =~ ^[A-Za-z0-9.-]+$ ]] && [[ "$PORT" =~ ^[0-9]{1,5}$ ]]
+          mkdir -p evidence
+          gh api "repos/$GITHUB_REPOSITORY/issues/156" --jq '{number,state,comments}' > evidence/issue-access.json
+          gh api "repos/$GITHUB_REPOSITORY/pulls/153" --jq '{number,state,head:.head.sha}' > evidence/pr-access.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs?per_page=1" --jq '{total_count,latest:(.workflow_runs[0]|{id,status,conclusion})}' > evidence/actions-access.json
+          d=$(mktemp -d)
+          trap 'rm -rf -- "$d"' EXIT
+          chmod 700 "$d"
+          printf '%s\n' "$KEY" > "$d/key"
+          printf '%s\n' "$KNOWN" > "$d/known"
+          chmod 600 "$d/key" "$d/known"
+          unset KEY KNOWN GH_TOKEN
+          printf '{"action":"status"}\n' | timeout 50 ssh -F /dev/null -T -p "$PORT" -i "$d/key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$d/known" -o ConnectTimeout=15 "gb-deploy-dev@$HOST" > evidence/receiver-status.json
+          jq -e 'has("accepted") and has("pending")' evidence/receiver-status.json >/dev/null
+          jq '{accepted:(.accepted|if .==null then null else {source_sha,status,release_id} end),pending:(.pending!=null)}' evidence/receiver-status.json > evidence/summary.json
+          printf 'PASS: hosted authenticated Issues/PR/Actions reads and pinned restricted DEV SSH status; no mutation\n' | tee evidence/result.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: actions-train-channel-probe
+          path: evidence/
+          retention-days: 14
