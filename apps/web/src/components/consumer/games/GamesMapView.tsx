@@ -21,6 +21,7 @@ import type { GamesVenueMap } from "./GamesVenueMap";
 
 /** A failed chunk stays unavailable; recovery uses the existing venue list. */
 function GamesMapModuleError({ onAvailability, onReturnToList }: ComponentProps<typeof GamesVenueMap>) {
+  // Reveal the existing list without hiding the parent's return button.
   useEffect(() => { onAvailability?.(false); }, [onAvailability]);
   return <div className="gb-games-map-area gb-games-map-module-error-area">
     <SurfacePanel className="gb-games-map-module-error" role="alert">

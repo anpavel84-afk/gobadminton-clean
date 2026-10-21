@@ -62,6 +62,8 @@ it("renders one polite atomic module status and a decorative progress bar inside
   expect(html).toContain('role="status" aria-live="polite" aria-atomic="true"');
   expect(html).toContain(">Загружаем карту…</p>");
   expect(html).toContain('<div class="gb-games-map-module-loading__progress" aria-hidden="true"><span></span></div>');
+  expect(html).not.toContain("gb-map-sr-only");
+  expect(html).not.toContain("aria-valuenow");
 });
 
 it("registers the real loading component with ssr:false and resolves to the exact map export", async () => {
@@ -103,12 +105,13 @@ it("resolves a rejected import to a stable alert and keeps the existing return a
   expect(alert).toContain("Не удалось загрузить модуль карты. Площадки доступны списком.");
   expect(alert).not.toContain("Загружаем карту…");
   expect(alert).toContain("К списку");
+  expect(alert).not.toContain("Повторить");
 
   const html = renderToStaticMarkup(<GamesMapView cityId={MOSCOW_BUNDLE.cityId} day="" onReturnToList={onReturnToList} />);
   expect(html).toContain('role="alert"');
   expect(html).toContain("Карта не загрузилась");
   expect(html).toContain("Не удалось загрузить модуль карты. Площадки доступны списком.");
-  expect(html).toContain('aria-label="К списку игр"');
+  expect(html.match(/aria-label="К списку игр"/g)).toHaveLength(1);
   expect(html).toContain("Загружаем все площадки и расписание…");
   expect(html).not.toContain("Загружаем карту…");
   expect(mapExport).not.toHaveBeenCalled();

@@ -4,33 +4,30 @@
 - To: PM, for independent QA and publication outside the author sandbox.
 - Date: 2026-10-21.
 - Status: WORKING_DRAFT / SOURCE_ONLY; implementation and tests authored, execution checks unavailable. NOT independently QA verified, NOT accepted, NOT deployed.
-- Assignment: immutable `GOBADMINTON_AUTONOMY_V1`, `source_only`, target `dev`, MAP-PERF1, lock `web:games-map-loader`, no prior independent QA supplied (`{}`). No historical PASS claimed.
+- Assignment: immutable `GOBADMINTON_AUTONOMY_V1`, `source_only`, target `dev`, MAP-PERF1, lock `web:games-map-loader`. Prior independent QA: **FAIL**, reviewed SHA `fb849d364c96c8a386606ffab518832c13b4a53a`; the supplied findings establish verification limitations, not a source defect. No historical PASS claimed.
 - Exact assigned base: `9d3e092cc30796ffc0096c50584a771e60c18ef3` (`dev` per assignment). [Base reference](https://github.com/anpavel84-afk/gobadminton-clean/tree/9d3e092cc30796ffc0096c50584a771e60c18ef3).
 
 ## Scope and source facts
 
-Only these five task paths were edited/created:
+The complete task consists of these five source artifacts, already present when this continuation began:
 
 1. `apps/web/src/components/consumer/games/GamesMapView.tsx`
 2. `apps/web/src/styles/discovery.css`
-3. `apps/web/src/components/consumer/games/GamesMapModuleLoading.tsx` (new)
-4. `apps/web/test/games-map-module-loading.test.tsx` (new)
-5. `docs/handoffs/slots-loader-games.md` (new)
+3. `apps/web/src/components/consumer/games/GamesMapModuleLoading.tsx` (created by the prior attempt)
+4. `apps/web/test/games-map-module-loading.test.tsx` (created by the prior attempt)
+5. `docs/handoffs/slots-loader-games.md` (created by the prior attempt)
 
-Repository rules and the exact supplied assignment were read. The assignment's offline/source-only limits override general publication instructions: no commit, push, Git metadata edits, dependency installation, service changes, deployment or network publication was performed. This handoff and the two other new files are uncommitted worktree artifacts; PM must include them when collecting the task. There is no result commit or published artifact permalink yet.
+Repository rules and the exact supplied assignment were read. The assignment's offline/source-only limits override general publication instructions: no commit, push, Git metadata edits, dependency installation, service changes, deployment or network publication was performed in this continuation. No other writer or executor was started. This continuation adds an explanatory comment to `GamesMapView`, strengthens the substantive SSR test (no hidden module status, no percentage value, no retry action, exactly one parent return capsule), and updates this handoff. The loading component and CSS from the prior attempt are retained. No runtime defect was established by the supplied QA; no unrelated implementation was added to work around its environmental findings.
 
-The worktree `.git` points to `/srv/gb-slots/slot1/repo/.git/worktrees/issue-151`. Its HEAD file names `refs/heads/automation/issue-151`; that loose ref contains the assigned base SHA above. However, `git show -s --format='%H %D' HEAD` failed with exit 128 (`fatal: bad object HEAD`), because Git cannot normalize the alternate object path `/srv/gb-slots/base.git/objects`. Object-level base verification and a reliable initial Git dirty/staged-state assessment were unavailable. Initial `git diff --name-only` / `git diff --cached --name-only` emitted object-store errors; their path output is not evidence of unrelated edits. Git metadata was left untouched. No additional writer or executor was started.
+The worktree `.git` points to `/srv/gb-slots/slot1/repo/.git/worktrees/issue-151`. Its HEAD file names `refs/heads/automation/issue-151`; the loose ref currently contains `fb849d364c96c8a386606ffab518832c13b4a53a`, matching the supplied prior QA reviewed SHA, rather than the assignment's stated base. Reading this metadata does not verify its commit object. `git show --no-patch --format='%H %D' HEAD` and `git cat-file -t 9d3e092cc30796ffc0096c50584a771e60c18ef3` both failed (exit 128): Git cannot normalize the alternate object path `/srv/gb-slots/base.git/objects` or read the assigned base. Exact-base diff also failed (exit 128, `fatal: bad object 9d3e092cc30796ffc0096c50584a771e60c18ef3`). An index-relative diff for the current comment/test changes is readable with the alternate-store diagnostic. The full base-to-candidate diff, exact five-file scope and preservation of original code cannot be certified here. Git metadata was left untouched.
 
-Before edits, the loading component, new test and this handoff were absent. Initial SHA-256 of the two existing allowed files:
-
-- `GamesMapView.tsx`: `f18fe80c238d1913988f68fdd360354dc36a0a3c66f7581f80fd7c106d763cfd`
-- `discovery.css`: `1c6ba4202aae4f68a92dc4dbd035ca799b7d08f8a046c34f81c5a1f062c5dee4`
+PM must collect the prior implementation plus this continuation against the exact assigned base, rather than treating the small continuation diff as the complete five-file task. There is no newly authored result commit or published artifact permalink; publication belongs to PM outside this sandbox.
 
 ## Implementation / D1–D5
 
 These are authored source/test descriptions, not executed acceptance results.
 
-- **D1:** the exact five-file scope above includes the implementation and a substantive new SSR/Vitest test. No existing tests or configuration were edited.
+- **D1:** the five task artifacts above contain implementation and a substantive new SSR/Vitest test. No pre-existing tests outside this task or configuration were edited. Exact-base five-file diff verification remains unavailable; the continuation alone is not the complete task diff.
 - **D2:** `GamesMapModuleLoading` is a pure component with its own temporary `gb-games-map-area` shell. It renders `Загружаем карту…`, one `role="status"` with `aria-live="polite"` / `aria-atomic="true"`, and an `aria-hidden="true"` progress track. New local CSS centers the content in the existing flex area, with `min-height: 0`, `min-width: 0`, 16px padding, ink/paper tokens, a track up to 160px and available width, 6px height/radius, line token, 40% lime-deep segment, 1.2s ease infinite motion, and reduced-motion disabling animation. Existing map rules and dimensions were preserved. The new test uses real `renderToStaticMarkup` to assert the standalone shell, text and accessibility markup.
 - **D3:** `MapView` remains a module-level `next/dynamic` declaration with `ssr: false`. Its loading option references the real component. Its loader returns the original `GamesVenueMap` export on success and catches import rejection into the stable module-level `GamesMapModuleError`. It adds no preload, retry or cached-rejection replay. The typed dynamic mock captures the real loader/options. Isolated success/rejection import mocks exercise that loader, exact successful export identity, stable error identity, standalone SSR and subsequent modeled dynamic rendering. The mock models pending/resolved rendering only; it does not verify actual Next, browser or chunk timing.
 - **D4:** the real `GamesMapView` is SSR rendered under that mock for Moscow, another city and `venueId`. Error coverage checks both exact error texts, `role="alert"`, retained `GamesMapBackButton` when `onReturnToList` is supplied, and `/games` list navigation without a callback. The ordinary error-component `useEffect` calls `onAvailability?.(false)`. It does not call `onErrorCardChange(true)`; the existing `mapAvailable`-dependent details and parent return-button condition remain unchanged. SSR does not execute effects or demonstrate a populated venue list.
@@ -50,16 +47,15 @@ Network access disabled by the environment; can't reach https://registry.npmjs.o
 | `COREPACK_ENABLE_NETWORK=0 pnpm --filter @gobadminton/web exec tsc -p tsconfig.json --noEmit --incremental false` | 1 | NOT_TESTED: required pnpm 10.18.0 unavailable locally; Corepack refused download. |
 | `COREPACK_ENABLE_NETWORK=0 pnpm --filter @gobadminton/web run lint` | 1 | NOT_TESTED: same Corepack failure, eslint did not start. |
 | `COREPACK_ENABLE_NETWORK=0 pnpm --filter @gobadminton/web exec vitest run --no-cache test/games-map-module-loading.test.tsx` | 1 | NOT_TESTED: same Corepack failure, Vitest did not start. |
-| `git diff --check` | 128 | NOT_TESTED: unavailable alternate object store; Git could not inspect the diff. |
+| `git diff --check` | 0 | Completed for the available index-relative diff with an alternate-store diagnostic; no whitespace findings. This does not verify the inaccessible exact-base diff or its five-file scope. |
 
 Git's substantive output was:
 
 ```text
 error: unable to normalize alternate object path: /srv/gb-slots/base.git/objects
-fatal: unable to read a120726b0e8b583379afb9c7369c0ca0e4b318b5
 ```
 
-The `node_modules` directories at the root and `apps/web` were also absent. No dependencies were installed and no settings were changed. The required installed-Next guide under `apps/web/node_modules/next/dist/docs/` could not be read. There were no executed compiler, lint or test-suite results to classify as source PASS or source FAIL. Code and tests remain for external execution. These author command attempts are not independent QA, CI evidence or Owner acceptance.
+The installed-Next documentation paths at the root and `apps/web/node_modules/next/dist/docs/` were absent. No dependencies were installed and no settings were changed. There were no executed compiler, lint or test-suite results to classify as source PASS or source FAIL. Code and tests remain for external execution. These required author command attempts are not an independent QA run, CI evidence or Owner acceptance; no additional self-QA was performed.
 
 ## STYLE_GUIDE_PARITY
 
@@ -74,6 +70,6 @@ The `node_modules` directories at the root and `apps/web` were also absent. No d
 
 Browser/iPhone rendering, real React effects, populated-list disclosure after failure, actual Next transitions/chunk behavior, module timing, tile loading and visual comparison are **NOT_TESTED**. Test execution, TypeScript and lint remain **NOT_TESTED** for the exact environment reasons above. Independent QA/CI/acceptance are pending.
 
-Rollback is for the integrator: remove only this task's additions to `GamesMapView.tsx` and appended local rules in `discovery.css`, and remove the three new task files if they contain no later work. Do not reset the worktree or replace unrelated changes. A newer `dev` must be reconciled manually by the integrator as assigned.
+Rollback is for the integrator after restoring exact-base access: remove only this task's diff in the five allowed paths, including the prior attempt's implementation. Remove the three task-created files only if they contain no later work. Do not reset the worktree or replace unrelated changes. A newer `dev` must be reconciled manually by the integrator as assigned.
 
 Next bounded action: PM collects these exact five source artifacts, restores access to the assigned Git objects/dependencies and frozen reference outside this sandbox, and sends the candidate for independent QA covering D1–D6 and actual UI/effect behavior. PM owns publication and durable result permalinks. This author handoff does not authorize another slice, release or PROD effects.
