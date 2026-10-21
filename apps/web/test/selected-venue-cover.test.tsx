@@ -4,7 +4,7 @@ import type * as React from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 type StateSlot = { value: unknown; setter: (next: unknown) => void };
-type EffectSlot = { deps: readonly unknown[] | undefined; cleanup?: () => void };
+type EffectSlot = { setup?: () => void | (() => void); deps: readonly unknown[] | undefined; cleanup?: () => void };
 type Store = { slots: unknown[]; cursor: number; alive: boolean };
 const runtime = vi.hoisted(() => ({ current: null as Store | null, dirty: false, queue: [] as (() => void)[] }));
 function active() { if (!runtime.current) throw new Error("Hook outside component"); return runtime.current; }
@@ -17,7 +17,7 @@ vi.mock("react", async original => {
     const store = active(); const index = store.cursor++;
     const previous = store.slots[index] as EffectSlot | undefined;
     if (previous && equalDeps(previous.deps, deps)) return;
-    const slot: EffectSlot = { deps }; store.slots[index] = slot;
+    const slot: EffectSlot = { deps, setup: callback }; store.slots[index] = slot;
     runtime.queue.push(() => {
       previous?.cleanup?.(); if (previous) previous.cleanup = undefined;
       if (store.alive) { const cleanup = callback(); if (cleanup) slot.cleanup = cleanup; }
@@ -169,6 +169,21 @@ class Renderer {
       runtime.queue.splice(0).forEach(effect => effect());
     } while (runtime.dirty);
   }
+  replayRefs() {
+    for (const host of this.hosts.values()) {
+      assignRef(host.ref, null);
+      assignRef(host.ref, host.node);
+    }
+  }
+  replayEffects() {
+    for (const store of this.stores.values()) for (const value of store.slots) {
+      const slot = value as EffectSlot | undefined;
+      if (!slot?.setup) continue;
+      slot.cleanup?.(); slot.cleanup = undefined;
+      const cleanup = slot.setup();
+      if (cleanup) slot.cleanup = cleanup;
+    }
+  }
   unmount() { this.root = () => null; this.render(); }
   nodes() { return [...this.hosts.values()].map(host => host.node); }
   find(label: string) {
@@ -183,7 +198,7 @@ beforeEach(() => {
   runtime.current = null; runtime.dirty = false; runtime.queue = []; created.length = 0; body.rendered = []; body.style = {}; dom.activeElement = null;
   vi.stubGlobal("document", dom); vi.stubGlobal("HTMLElement", Node);
 });
-afterEach(() => { renderers.splice(0).forEach(renderer => renderer.unmount()); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(async () => { renderers.splice(0).forEach(renderer => renderer.unmount()); await Promise.resolve(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 import { SelectedVenueCover, useSelectedVenueCover } from "../src/components/consumer/venues/SelectedVenueCover";
 import { useEffect, useMemo, useState } from "react";
@@ -216,7 +231,7 @@ it.each([null, "invalid", "https://external.invalid/photo.png"])("uses court for
   expect(image.parentNode?.dataset).toEqual({ cover: "default", fallback: "court" });
   image.dispatchEvent(new Event("error")); expect(image.srcWrites).toEqual([court]);
 });
-it.each([false, true])("falls back once in info=%s, rejects stale fallback and cleanup callbacks", expanded => {
+it.each([false, true])("falls back once in info=%s, rejects stale fallback and cleanup callbacks", async expanded => {
   info = expanded;
   const add = vi.spyOn(Node.prototype, "addEventListener"); const remove = vi.spyOn(Node.prototype, "removeEventListener");
   const renderer = mount(() => <Selected />); const image = imageAt();
@@ -224,11 +239,11 @@ it.each([false, true])("falls back once in info=%s, rejects stale fallback and c
   const fireStale = () => { if (typeof stale === "function") stale.call(image, new Event("error")); };
   image.dispatchEvent(new Event("error")); fireStale(); image.dispatchEvent(new Event("error"));
   expect(image.srcWrites).toEqual([uploaded, court]); expect(image.parentNode?.dataset.fallback).toBe("court");
-  renderer.unmount(); fireStale(); image.dispatchEvent(new Event("load")); image.dispatchEvent(new Event("error"));
+  renderer.unmount(); await Promise.resolve(); fireStale(); image.dispatchEvent(new Event("load")); image.dispatchEvent(new Event("error"));
   expect(image.src).toBe(""); expect(image.parentNode).toBeNull(); expect(image.srcWrites).toEqual([uploaded, court]);
   expect(remove.mock.calls.filter(([type]) => type === "error")).toHaveLength(2);
 });
-it.each(["city", "venue", "url"])("invalidates %s identity, including identical URLs", identity => {
+it.each(["city", "venue", "url"])("invalidates %s identity, including identical URLs", async identity => {
   const add = vi.spyOn(Node.prototype, "addEventListener");
   const renderer = mount(() => <Selected />); const old = imageAt();
   const stale = add.mock.calls.find(([type]) => type === "error")?.[1];
@@ -236,17 +251,20 @@ it.each(["city", "venue", "url"])("invalidates %s identity, including identical 
   if (identity === "venue") venue = { ...venue, id: "other" };
   if (identity === "url") venue = { ...venue, cover: { uploadedUrl: uploaded.replace("a".repeat(64), "b".repeat(64)) } };
   renderer.render();
+  expect(old.parentNode).toBeNull();
+  if (typeof stale === "function") stale.call(old, new Event("error"));
+  await Promise.resolve();
   expect(old.parentNode).toBeNull(); expect(old.src).toBe("");
   if (typeof stale === "function") stale.call(old, new Event("error"));
   old.dispatchEvent(new Event("load")); old.dispatchEvent(new Event("error"));
   expect(imageAt(1).srcWrites).toEqual([venue.cover.uploadedUrl]);
   expect(imageAt(1).parentNode?.dataset.cover).toBe("uploaded");
 });
-it("repeated refs are safe, info detaches to compact, final null removes src and listeners", () => {
+it("repeated refs are safe, info detaches to compact, final null removes src and listeners", async () => {
   const renderer = mount(() => <Selected />); const image = imageAt(); const compact = image.parentNode;
   resource.compact(compact as unknown as HTMLSpanElement); resource.info(null); resource.info(null);
   expect(image.srcWrites).toEqual([uploaded]); expect(image.parentNode).toBe(compact);
-  resource.compact(null); resource.compact(null); expect(image.parentNode).toBeNull(); expect(image.src).toBe(""); renderer.unmount();
+  resource.compact(null); resource.compact(null); await Promise.resolve(); expect(image.parentNode).toBeNull(); expect(image.src).toBe(""); renderer.unmount();
 });
 it("harness isolates stores, initializes once, stabilizes setters, applies functional updates and dependency length", () => {
   const init = vi.fn(() => 1); const cleanup = vi.fn(); const effects = vi.fn();
@@ -274,4 +292,25 @@ it("keeps render free of DOM operations until refs commit", () => {
   expect(create).not.toHaveBeenCalled();
   // This uncommitted render has no resource or listeners to release.
   runtime.queue = []; store.alive = false; renderer.unmount();
+});
+
+it("preserves one image/source across StrictMode ref and passive-effect replay", async () => {
+  const renderer = mount(() => <Selected />);
+  const image = imageAt();
+  renderer.replayRefs();
+  renderer.replayEffects();
+  await Promise.resolve();
+  expect(created.filter(node => node.tag === "img")).toEqual([image]);
+  expect(image.srcWrites).toEqual([uploaded]);
+  expect(image.src).toBe(uploaded);
+  expect(image.parentNode?.className).toContain("gb-venue-preview-cover");
+  image.dispatchEvent(new Event("error"));
+  expect(image.srcWrites).toEqual([uploaded, court]);
+  info = true; renderer.render(); renderer.replayRefs(); renderer.replayEffects();
+  await Promise.resolve();
+  expect(image.parentNode?.className).toContain("gb-venue-sheet-cover");
+  expect(image.srcWrites).toEqual([uploaded, court]);
+  renderer.unmount();
+  await Promise.resolve();
+  expect(image.parentNode).toBeNull(); expect(image.src).toBe("");
 });

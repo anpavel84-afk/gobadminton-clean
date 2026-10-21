@@ -169,6 +169,12 @@ class Renderer {
       runtime.queue.splice(0).forEach(effect => effect());
     } while (runtime.dirty);
   }
+  replayRefs() {
+    for (const host of this.hosts.values()) {
+      assignRef(host.ref, null);
+      assignRef(host.ref, host.node);
+    }
+  }
   unmount() { this.root = () => null; this.render(); }
   nodes() { return [...this.hosts.values()].map(host => host.node); }
   find(label: string) {
@@ -186,7 +192,7 @@ beforeEach(() => {
   runtime.current = null; runtime.dirty = false; runtime.queue = []; created.length = 0; body.rendered = []; body.style = {}; dom.activeElement = null;
   vi.stubGlobal("document", dom); vi.stubGlobal("HTMLElement", Node);
 });
-afterEach(() => { renderers.splice(0).forEach(renderer => renderer.unmount()); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(async () => { renderers.splice(0).forEach(renderer => renderer.unmount()); await Promise.resolve(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 import type * as ApiClient from "../src/lib/api-client";
 import type { Game, VenueSummary } from "../src/lib/consumer-types";
@@ -245,7 +251,7 @@ const game: Game = { id: "game", version: 1, title: "Вечерняя игра",
 let currentCity = MOSCOW_BUNDLE.cityId;
 const returnToList = vi.fn();
 beforeEach(() => {
-  vi.useFakeTimers(); maps.length = 0; markerButtons.length = 0; currentCity = MOSCOW_BUNDLE.cityId; navigation.mockClear(); returnToList.mockClear();
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date", "performance"] }); maps.length = 0; markerButtons.length = 0; currentCity = MOSCOW_BUNDLE.cityId; navigation.mockClear(); returnToList.mockClear();
   transport.venues.mockReset().mockResolvedValue({ ok: true, data: [venue, { ...venue, id: "unselected", name: "Другой зал" }] });
   transport.games.mockReset().mockResolvedValue({ ok: true, data: [game] }); transport.apiFetch.mockReset();
   vi.stubGlobal("window", Object.assign(new EventTarget(), { location: { origin: new URL(MOSCOW_BUNDLE.prefix).origin, assign: navigation }, matchMedia: () => ({ matches: false }), innerHeight: 800 }));
@@ -277,7 +283,9 @@ function gesture(renderer: Renderer, name: string, x: number, y: number, time = 
 }
 function output(renderer: Renderer) { return renderer.tree.map(text).join(""); }
 it.each([false, true])("keeps selected photo before/after load=%s through moving, settling, schedule, collapse and refresh", async loaded => {
-  const { renderer } = await start(); const image = photo(); if (loaded) image.dispatchEvent(new Event("load"));
+  const { renderer } = await start(); const image = photo(); renderer.replayRefs(); await Promise.resolve();
+  expect(created.filter(node => node.tag === "img")).toEqual([image]); expect(image.srcWrites).toEqual([cover]);
+  if (loaded) image.dispatchEvent(new Event("load"));
   const requests = transport.venues.mock.calls.length; const mapFetches = vi.mocked(fetch).mock.calls.length;
   gesture(renderer, "onPointerDown", 0, 600); gesture(renderer, "onPointerMove", 0, 200, 100);
   expect(surface(renderer).props["data-moving"]).toBe(true); expect(image.parentNode?.className).toContain("gb-venue-sheet-cover");
@@ -299,12 +307,12 @@ it.each(["city", "deselect"])("cleans photo on %s", async mode => {
   const { renderer, map } = await start(); const image = photo();
   click(renderer, "Развернуть площадку");
   if (mode === "city") currentCity = "other"; else map.canvas.dispatchEvent(new Event("click"));
-  renderer.render(); expect(image.parentNode).toBeNull(); expect(image.src).toBe("");
+  renderer.render(); expect(image.parentNode).toBeNull(); await Promise.resolve(); expect(image.src).toBe("");
   image.dispatchEvent(new Event("error")); image.dispatchEvent(new Event("load")); expect(image.srcWrites).toEqual([cover]);
 });
 it("fatal map failure exposes a real fallback button and opens the same photo resource", async () => {
   const { renderer, map } = await start(); const image = photo();
-  map.canvas.dispatchEvent(new Event("click")); renderer.render(); expect(image.src).toBe("");
+  map.canvas.dispatchEvent(new Event("click")); renderer.render(); await Promise.resolve(); expect(image.src).toBe("");
   map.emit("error", { kind: "style" }); await settle(renderer);
   expect(output(renderer)).toContain("Карта не загрузилась");
   const fallback = renderer.nodes().find(node => node.tag === "button" && node.className === "gb-discovery-chip" && text(node).startsWith("Зал"));

@@ -7,9 +7,9 @@ Status: WORKING_DRAFT — NOT_TESTED — NOT APPROVED
 
 ## Assignment and authority
 
-Base: `13d0f76c5db4f841b8f3e04b4645808c8df71fb6` (checkout HEAD confirmed).
+Task base: `13d0f76c5db4f841b8f3e04b4645808c8df71fb6`. Actual revision checkout / correction base: `af45f6e937c8fedfee2dea0db23ae82f6a03a932` (HEAD observed with `git log -1`; initial working diff empty). This correction preserves the existing implementation and edits only the resource, two allowed tests and this handoff; the three integration components already exist in the correction base.
 Canonical repository: `anpavel84-afk/gobadminton-clean`; worktree: `/srv/gobadminton-clean/worktrees/issue-147`.
-Exact assignment: supplied immutable `GOBADMINTON_AUTONOMY_V1`, source_only, DEV, M3-PHOTO-R3 #147, successor to #144/#141. Historical candidate SHAs and their reported PASS results were not implementation inputs or current evidence. Prior independent QA supplied with assignment: `{}`.
+Exact assignment: supplied immutable `GOBADMINTON_AUTONOMY_V1`, source_only, DEV, M3-PHOTO-R3 #147, successor to #144/#141. Historical PASS reports are not current evidence; the supplied prior QA finding defines this correction. Prior independent QA on `af45f6e937c8fedfee2dea0db23ae82f6a03a932`: FAIL. Last-ref disposal recreated img/src during React 19 StrictMode callback-ref replay; passive-effect cleanup also disposed the resource during replay. Previous harnesses omitted these lifecycle replays. This correction is not independently reviewed.
 
 Scope: preserve the selected venue image across compact/info presentations without repeated image creation/source assignment during a transfer. Contacts from #142, popup gestures, focus, schedule, map lifecycle and all other cover consumers retain their existing behavior. Cold network loading is not promised to be instantaneous.
 
@@ -31,6 +31,15 @@ Created:
 - This handoff.
 
 `VenuePopup.tsx`, existing tests/handoffs, CSS, APIs, DB, contracts, dependencies, workflows and control documentation were not edited. Other `VenueCover` consumers remain lazy/async.
+
+
+## StrictMode correction
+
+The resource now separates listener setup from source assignment. Last-ref detach immediately removes the image from its parent, removes listeners and invalidates captured callbacks. Final `removeAttribute('src')` and image release occur in a queued microtask. A synchronous ref reattachment cancels that final release, restores listeners with a new generation and reuses the existing img/src. Passive-effect cleanup uses the same conditional release, and effect setup retains the resource. No timer, image cache or extra request is introduced. Identity changes remove the old visible image during commit; old-source release completes at the microtask checkpoint.
+
+This microtask boundary reconciles final cleanup with React 19's synchronous node → null → node replay: clearing src synchronously at the intermediate null would require assigning src again on replay. Final-ref cleanup assertions now await that checkpoint; they still assert immediate removal from the parent on identity change.
+
+D2–D3 additions: resource harness explicitly replays callback refs and passive-effect cleanup/setup, then asserts one image/source, working fallback, preserved info priority and final disposal. D4 addition: the real component integration tree replays committed refs before the existing moving/settling/schedule/refresh scenario and asserts one image/source. Its already mounted map effects are not artificially replayed. These authored tests are NOT_TESTED, not independent QA evidence.
 
 ## Authored coverage / D2–D5
 
@@ -63,7 +72,7 @@ Network access disabled by the environment; can't reach https://registry.npmjs.o
 
 Result: typecheck **NOT_TESTED**, lint **NOT_TESTED**, new tests **NOT_TESTED**. Collection did not begin; no test PASS is claimed. The timeout was not increased and did not expire (not exit 124). No installation or network workaround was attempted. Strict/noUncheckedIndexedAccess compilation remains required in the dependency-equipped integration environment; the base tsconfig enables both.
 
-`git diff --check`: exit 0, no output. New files also received `git diff --no-index --check /dev/null <file>`: each returned exit 1 (new-file differences), with empty output and no whitespace diagnostics. This is whitespace validation only, not typecheck or QA.
+`git diff --check`: exit 0, no output. This correction uses tracked files from its actual HEAD; no Git write or metadata operation was performed. This is whitespace validation only, not typecheck or QA.
 
 ## STYLE_GUIDE_PARITY
 
