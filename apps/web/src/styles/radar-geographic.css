@@ -90,6 +90,17 @@
 .gb-map-radar { position:fixed; z-index:102; right:16px; top:calc(12px + env(safe-area-inset-top,0px)); }
 .gb-map-radar .gb-radar-popover { right:0; max-width:calc(100vw - 32px); }
 .gb-radar-layer { position:absolute; inset:0; pointer-events:none; }
+.gb-radar-layer .gb-radar-map-module-loading {
+  position:absolute; z-index:3; margin:0;
+  top:calc(72px + env(safe-area-inset-top,0px)); left:16px;
+  width:max-content; max-width:calc(100% - 32px); box-sizing:border-box;
+  padding:12px; display:flex; align-items:center; gap:10px;
+  border-radius:var(--gb-radius-sm); background:var(--gb-ink); color:var(--gb-white);
+  font-size:14px; white-space:normal; overflow-wrap:anywhere; pointer-events:none;
+}
+.gb-radar-layer .gb-radar-map-module-loading > [aria-hidden="true"] {
+  width:9px; height:9px; flex:none; border-radius:50%; background:var(--gb-lime);
+}
 .gb-consumer.gb-radar-layer { background: transparent; min-height: 0; }
 .gb-radar-layer .g2-map-panel,.gb-radar-layer dialog,.gb-radar-layer .gb-map-layer-summary { pointer-events:auto; }
 .gb-map-layer-summary:not(:focus-within) { width:1px; height:1px; padding:0; clip-path:inset(50%); }
