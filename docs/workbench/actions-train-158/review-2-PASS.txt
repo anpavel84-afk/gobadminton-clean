@@ -1,0 +1,11 @@
+VERDICT: PASS — focused supplied-snapshot review.
+
+- Candidate: `8b7a0958ab124b6e8745d77921e49d8d79eacf47`
+- Manifest SHA-256: `a623fca645448f08615a9f31bb830fa92accaba69db370621dc184ea2af13b61`
+- Bridge SHA-256: `247663a96109083ab6b722d843efce01040a1a8de74883ca72d62a1d3cd52fff`
+
+No concrete remaining blockers found. Eight focused checks passed, covering clean deferral, archive/history/budget preservation, root reservation release, unknown guards, and bridge filtering. No arbitrary execution/effect bypass found.
+
+Prior report, old candidate, Git metadata, and root proof were unavailable in this mount; their provenance and reported permissions were not independently reverified. No live acceptance declared.
+
+[Review and reproduction details](/var/lib/gb-actions-review/job2/review.txt)
