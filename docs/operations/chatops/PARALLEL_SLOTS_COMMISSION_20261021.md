@@ -84,3 +84,22 @@ Exact reviewed `--preflight-slot2` returned ready=true with failures=[], activat
 ## Backlog display correction during commissioning
 
 An OPS metadata update used unsupported status “в работе”; the existing strict backlog validator rejects the whole data file if any item has an unknown status. This was an operator data error, not loss of backlog records. Restored supported “ожидает” while retaining the note that both slots are installed/active and await actual task commissioning. Both temporary and final files passed the actual load_backlog_strict validator before republishing. Published snapshot available=true with42 visible items and all49 source records retained (2026-10-21T16:18:27Z). Further metadata writes must pass the actual validator before replacement.
+
+
+## Product execution and backlog reconciliation (follow-up)
+
+Both exact reviewed task bodies were published as #151 Games and #152 Radar and separately assigned to slot1/slot2. Actual own-UID author execution produced PR153 and PR154; slot1 has progressed to attempt2, slot2 to independent QA. This proves real execution in both slots, but does not yet assert accepted DEV for either task. Requested model remains distinct from observed model identity.
+
+The live backlog was consolidated from49 source entries to32; strict loader and dependency DAG checks passed before atomic replacement, and the subsequent live snapshot has available=true with24 visible pending entries. Full before/after, mapping for all49 original entries and consolidated briefs are in backlog-audit-20261021/. V0 was linked to completed issue114, stale147 CI note corrected, OPS commissioning moved out of the pending product queue. No active admission body or execution history was changed. Existing completed ledger entries remain in the source only as dependency anchors and are hidden by the monitor. Operator photo import and Friends activation/UAT remain explicitly unproven rather than declared complete from source-only delivery.
+
+
+## Own-repository object repair
+
+Slot1 independent QA attempt1 explicitly failed to inspect immutable base because the alternate object store was outside its sandbox. Both own repositories borrowed /srv/gb-slots/base.git/objects. Materialized reachable objects using git repack -a as each owning UID (without deleting existing packs), then renamed only its own objects/info/alternates to alternates.commission-backup. git fsck --connectivity-only --no-dangling passed independently for both repositories. No sandbox read root, credentials, executor binary, candidate commit, or QA verdict was changed. The original alternate paths are retained for recovery. This fixes base-object availability without granting either model access to a shared ancestor. Existing source-only pnpm/style-reference limitations still must be reported honestly by QA; GitHub CI remains mandatory.
+
+
+## Live telemetry installed (17:09 UTC)
+
+Exact installer SHA256 7d3b5c5eea2eca61d124a6e0ca658c0b82e7f08e856cbcf8f7afc9946880040c passed independent review7, no waivers: /var/lib/gb-ops-stage/ops-patches/review-slot-live-telemetry-20261021T170524Z-363189/notes.txt. gb-run DRY and apply both rc0, logs slot-live-telemetry-dry7.log and slot-live-telemetry-install7.log. Both own-UID timers active, first telemetry17:09:54Z reports process active/running PIDs79318/79319 and exact checkpoint facts. Snapshot projects both slots FRESH with real commits/PRs and slot2 QA PASS bound to4977074e. App now uses the existing seven-stage progress bar for each slot. Missing future QA/CI is explicitly not-yet-received, requested model is labelled requested; observation age and checkpoint age are separate.
+
+Public HTTPS healthz and app.js returned200 no-store; served app SHA256 9e9980c6c0580e54b01e42eda52bff573b45af9cd43b2f060cf70fea4f6ea379 equals installed bytes. Authenticated snapshot access still requires the existing PIN session; cloud browser was at the sign-in screen, so no logged-in browser visual verification is claimed. Offline DOM tests cover stage bars and actual installed UI semantics. No PIN/authentication flow changed.
