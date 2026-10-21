@@ -166,6 +166,25 @@ class Routing(unittest.TestCase):
         self.assertEqual(core.route(S,TASK,'qa','codex',self.Budget(),'slot1')['provider'],'codex')
         with self.assertRaises(core.Refused):core.route(S,TASK|{'model':'unknown'},'author','auto',self.Budget(),'slot1')
 
+class OpaqueGitHubCredentials(unittest.TestCase):
+    def test_classic_and_2026_installation_jwt_are_opaque(self):
+        for token in ('ghs_'+'A'*36, 'ghs_12345_'+('Ab-c_D'*30)+'.'+('ef-G_h'*30)+'.'+('ij-K_l'*25)):
+            value=req();value['gh_token']=token
+            self.assertEqual(core.request(value)['gh_token'],token)
+            self.assertEqual(core.API(token)._token,token)
+            self.assertNotIn('gh_token',core.binding(value))
+    def test_transport_controls_whitespace_unicode_and_unbounded_values_rejected(self):
+        for token in ('A'*9,'A'*4097,'A'*12+'\rX','A'*12+'\nX','A'*12+'\tX','A'*12+' X','A'*12+'\x00X','A'*12+'я',None):
+            value=req();value['gh_token']=token
+            with self.assertRaises(core.Refused):core.request(value)
+            with self.assertRaises(core.Refused):core.API(token)
+    def test_bad_credential_diagnostic_never_contains_credential(self):
+        token='sensitive-value\nsecond-line';value=req();value['gh_token']=token
+        with self.assertRaises(core.Refused) as error:core.request(value)
+        self.assertEqual(str(error.exception),'invalid API credential')
+        self.assertNotIn('sensitive',str(error.exception))
+
+
 class APIReads(unittest.TestCase):
     def test_repository_identity_uses_canonical_root_without_trailing_slash(self):
         seen=[]

@@ -62,10 +62,17 @@ def live():
          == PINS['check_foundation.py'], 'foundation drift')
     return modules[1], modules[0]
 
+def safe_credential(value):
+    # Transport/header safety only. GitHub authenticates the opaque token; clients
+    # must not interpret JWT contents or assume a fixed token alphabet/length.
+    return (isinstance(value, str) and 10 <= len(value) <= 4096 and value.isascii()
+            and all(33 <= ord(char) <= 126 for char in value))
+
+
 class API:
     """Token kept only in trusted process memory. Never included in exceptions/URLs/env/models."""
     def __init__(self, token, opener=urllib.request.urlopen):
-        need(isinstance(token, str) and 10 <= len(token) <= 4096 and '\n' not in token, 'invalid API credential')
+        need(safe_credential(token), 'invalid API credential')
         self._token, self.opener = token, opener
 
     def __call__(self, path, data=None, method=None):
@@ -136,8 +143,7 @@ def request(value):
                              'integrating', 'promoting', 'dev_wait', 'done', 'blocked'), 'invalid phase')
     need(value['head'] is None or isinstance(value['head'], str) and SHA.fullmatch(value['head']), 'invalid head')
     need(value['profile'] in PROFILES, 'unknown profile')
-    need(isinstance(value['gh_token'], str) and re.fullmatch('[A-Za-z0-9_]+', value['gh_token'])
-         and 10 <= len(value['gh_token']) <= 4096, 'invalid API credential')
+    need(safe_credential(value['gh_token']), 'invalid API credential')
     return value
 
 def binding(req):
