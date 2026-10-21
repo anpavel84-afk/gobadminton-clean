@@ -18,3 +18,9 @@ Reference operational guide restored verbatim from archive commit50f5a4473f8ed4c
 Concrete review risks already found before author completion: bootstrap origin is /srv/gb-slots/base.git in BOTH own repos; new origin checks must accept this exact trusted local source. Preserve public-status V1 schema or update monitor in same reviewed package. New integration phase needs compatible telemetry. Rollback cannot restore a runtime unable to parse deferred-policy records. Keep supervisor public API calls bounded while all slots busy. Author and QA need the existing public frozen reference in their read-only sandbox.
 
 Next action: finish source review/fix these findings, run meaningful regression tests, independent installer review, DRY and apply with rollback, then verify actual #151 progress and admit reviewed #156/#157. Preparation is not installation.
+
+## 19:55Z checkpoint
+
+V1 CLI author completed: 138 core tests + 2 installer tests PASS; this is author self-check only, NOT INSTALLED. Source candidate committed for continuity. Known commissioning defects are enumerated in docs/prompts/slots-continuity-v2.md; second CLI author PID1427819 is correcting them in isolated source. Do not install V1.
+
+#156 prompt v5 exact SHA256 21b0bbc2ecdf9a695e076118378523d9e0114f987b1c0bf18543c56576c2713e received independent MOZHNO on DEV4977074e; report SHA256 4e1fcf5d19cb03566503bae910db747c77cdc1e49fa9634301a0f35730fce922. This is task definition review, not code/installation/admission. Admission waits for runtime compatibility fix. #157 prompt v3 independent review PID1444011.

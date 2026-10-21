@@ -40,6 +40,43 @@ ASSIGN_SCHEMA = 'GB_SLOT_ASSIGN_V1'
 STATUS_SCHEMA = 'GB_SLOT_STATUS_V1'
 RETIRED = 'RETIRED_TO_SLOT.json'
 MAX_FILE = 65536
+CONTINUITY_SCHEMA = 'GB_SLOT_CONTINUITY_V1'
+
+
+def continuity_policy(path):
+    """Reviewed root policy only; absence disables continuity, malformed/untrusted files fail closed."""
+    path = Path(path)
+    require(path.is_absolute(), 'absolute continuity policy required')
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return None
+    # An existing policy may only be reached through trusted real parents.
+    for parent in reversed(path.parents):
+        info = parent.lstat()
+        require(stat.S_ISDIR(info.st_mode) and info.st_uid == 0 and not info.st_mode & 0o022,
+                'untrusted continuity directory')
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return None
+    try:
+        info = os.fstat(fd)
+        require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_uid == 0
+                and not info.st_mode & 0o022, 'untrusted continuity policy')
+        raw = os.read(fd, 4097)
+    finally:
+        os.close(fd)
+    require(len(raw) <= 4096, 'continuity policy too large')
+    value = loads(raw)
+    require(isinstance(value, dict) and set(value) == {
+        'schema', 'enabled', 'max_attempts', 'max_integrations', 'read_backoff_seconds'}
+        and value['schema'] == CONTINUITY_SCHEMA and type(value['enabled']) is bool,
+        'invalid continuity policy')
+    for key, low, high in (('max_attempts', 1, 3), ('max_integrations', 1, 3),
+                           ('read_backoff_seconds', 120, 3600)):
+        require(type(value[key]) is int and low <= value[key] <= high, 'invalid continuity bound')
+    return (value | {'sha256': hashlib.sha256(raw).hexdigest()}) if value['enabled'] else None
 
 
 class Hold(Exception):
@@ -515,6 +552,7 @@ class Runtime:
         self.budget = Budget(Path(config_root) / 'budgets.json', self.layout.state_root / 'outbox',
                              self.layout.registry)
         self.clock = ApiClock(self.layout.api_clock)
+        self.continuity_path = Path(config_root) / 'continuity.json'
         if trusted_assigners is None:
             trusted_assigners = {0} | ({uid_of(SUPERVISOR_USER)} - {None})
         self.trusted_assigners = set(trusted_assigners)
@@ -523,6 +561,9 @@ class Runtime:
         return {'PATH': self.path, 'HOME': str(self.home), 'USER': self.user, 'LANG': 'C.UTF-8',
                 'CODEX_HOME': str(self.codex_home), 'GIT_CONFIG_NOSYSTEM': '1',
                 'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_TERMINAL_PROMPT': '0'}
+
+    def continuity(self):
+        return continuity_policy(self.continuity_path)
 
     def denied(self):
         """Model sandbox deny-list: every other slot, the legacy state, other homes."""
@@ -572,10 +613,15 @@ class Runtime:
             summary = dict(issue=active['issue'], phase=active['phase'], attempt=active.get('attempt'),
                            head=active.get('head'), base=active.get('base'),
                            integration=active.get('integration', 0),
+                           reason=active.get('reason'), resume_phase=active.get('resume_phase'),
+                           wait=active.get('wait'),
                            **{k: v for k, v in task_record(active['issue'], active['task']).items() if k != 'issue'})
         atomic(self.layout.outbox / 'status.json',
                dict(schema=STATUS_SCHEMA, slot=self.slot, active=summary, done=list(data.get('done', [])),
                     parked=[e['issue'] for e in parked], at=int(time.time()),
+                    deferred=[dict(issue=e['issue'], reason=e.get('reason'),
+                                   kind='policy' if e.get('kind') == 'policy' else 'owner',
+                                   head=e.get('head'), attempt=e.get('attempt')) for e in parked],
                     integrating=self.mutex.held), 0o644)
 
 
@@ -596,7 +642,7 @@ def read_statuses(state_root, slots, owners=None):
 def plan(candidates, statuses, assignments, slots, max_parallel, budget=None, adapters=None):
     """Pure PM step. candidates: [(issue, task)] in claim order. Returns ({slot: issue}, reasons).
 
-    * ready  = every depends_on is done; a parked dependency waits for its successor;
+    * ready  = every depends_on is done; an unresolved parked dependency stays unsatisfied;
     * serial = locks/paths conflict with any busy or newly planned task (conservative);
     * at most max_parallel slots busy; author adapter and codex QA must be enabled with known quota."""
     done = set().union(*[set(s.get('done', [])) for s in statuses.values()]) if statuses else set()
@@ -613,13 +659,12 @@ def plan(candidates, statuses, assignments, slots, max_parallel, budget=None, ad
     capacity = max(0, max_parallel - len(busy))
     result, reasons = {}, {}
     for issue, task in candidates:
-        if capacity <= 0 or not free:
-            break
         if issue in done or issue in parked or issue in taken:
+            reasons[issue] = 'done' if issue in done else ('unresolved parked task' if issue in parked else 'busy')
             continue
         deps = task.get('depends_on', [])
         if any(d in parked for d in deps):
-            reasons[issue] = 'dependency parked: waiting for successor'
+            reasons[issue] = 'dependency parked: unresolved (successor does not satisfy depends_on)'
             continue
         if not all(d in done for d in deps):
             reasons[issue] = 'waiting for dependencies'
@@ -632,6 +677,9 @@ def plan(candidates, statuses, assignments, slots, max_parallel, budget=None, ad
         record = task_record(issue, task)
         if any(conflicts(record, r) for r in busy.values()):
             reasons[issue] = 'lock/path conflict: serialized'
+            continue
+        if capacity <= 0 or not free:
+            reasons[issue] = 'busy: no free slot/capacity'
             continue
         slot = None
         for candidate in free:
@@ -885,18 +933,17 @@ def tick(cfg, state_root=STATE_ROOT, config_root=CONFIG_ROOT, fetch=None, owners
             os.unlink(Path(state_root) / 'assign' / f'{slot}.json')
             del assignments[slot]
     budget = Budget(Path(config_root) / 'budgets.json', Path(state_root) / 'outbox', Path(state_root) / 'locks' / 'registry.lock')
-    free = [s for s in slots if s not in assignments and s in statuses
-            and not ((statuses[s].get('active') or {}).get('phase') not in (None, 'done'))]
-    if not free:
-        return {}, {}
     if fetch is None:
         issues = a.pages('issues?state=open')
         cutoff = a.urllib.parse.quote(since.isoformat(), safe='')
         comments = a.pages(f'issues/comments?since={cutoff}')
     else:
         issues, comments = fetch()
-    planned, reasons = plan(admitted(a, issues, comments, since), statuses, assignments, slots,
+    candidates = admitted(a, issues, comments, since)
+    planned, reasons = plan(candidates, statuses, assignments, slots,
                             cfg['max_parallel'], budget)
+    if not candidates:
+        reasons['queue'] = 'no admitted tasks'
     for slot, issue in planned.items():
         task = dict(admitted(a, [i for i in issues if i['number'] == issue], comments, since))[issue]
         record = task_record(issue, task)
