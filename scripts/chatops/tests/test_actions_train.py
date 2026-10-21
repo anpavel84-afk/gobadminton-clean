@@ -167,6 +167,21 @@ class Routing(unittest.TestCase):
         with self.assertRaises(core.Refused):core.route(S,TASK|{'model':'unknown'},'author','auto',self.Budget(),'slot1')
 
 class APIReads(unittest.TestCase):
+    def test_repository_identity_uses_canonical_root_without_trailing_slash(self):
+        seen=[]
+        def opener(req, **_):
+            seen.append(req)
+            return io.BytesIO(json.dumps(dict(id=core.REPO_ID, full_name=core.REPO, default_branch='main')).encode())
+        api=core.API('fake_test_credential', opener=opener)
+        api.identity()
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(seen[0].full_url, 'https://api.github.com/repos/' + core.REPO)
+        self.assertEqual(seen[0].get_header('Authorization'), 'Bearer fake_test_credential')
+    def test_repository_identity_still_rejects_wrong_repository(self):
+        def opener(req, **_):
+            return io.BytesIO(json.dumps(dict(id=1, full_name=core.REPO, default_branch='main')).encode())
+        with self.assertRaises(core.Refused):
+            core.API('fake_test_credential', opener=opener).identity()
     def test_auth_only_to_github(self):
         seen=[]
         def opener(req,**_): seen.append(req);return io.BytesIO(b'{"gitSha":"a"}')

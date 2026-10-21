@@ -71,7 +71,7 @@ class API:
     def __call__(self, path, data=None, method=None):
         public = path == 'https://dev.gobadminton.ru/v1/meta'
         need(public or (not path.startswith('/') and '://' not in path and '..' not in path), 'API path refused')
-        url = path if public else f'https://api.github.com/repos/{REPO}/{path}'
+        url = path if public else f'https://api.github.com/repos/{REPO}' + ('/' + path if path else '')
         headers = {'Accept': 'application/vnd.github+json', 'User-Agent': 'gb-actions-train',
                    'X-GitHub-Api-Version': '2022-11-28'}
         if not public:
