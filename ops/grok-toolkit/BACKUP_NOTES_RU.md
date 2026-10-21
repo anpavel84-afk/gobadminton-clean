@@ -281,3 +281,10 @@
 - #147 https://github.com/anpavel84-afk/gobadminton-clean/issues/147 — humanWORKING_DRAFT, admissionЕЩЁНЕТ. PMbrief /var/lib/gb-ops-stage/files/M3-PHOTO-R3.brief.md SHA2560cf568dd9cbec99a38424fdb53421987459e6cef0b16cb3976ba664d0414e013; полное durableсодержимое comment6313866704. Codex-write PID2292596 вработе наbase13d0f76c. Точныйфикс: stable setter percomponent/hookslot, currentstate/functionalupdates/Object.is/lazyinitonce, depslength, обычныйimporttype. Сохранены прежние141/144/UIfindings,7paths/max3/sourceonly; новыйhandoff M3-photo-loading-r3.md.
 - #144 разбор6313860588 и единственный подписанный PARK6313860845 allow_successors[147], headb9a0/attempt3. ReadbackOwner318610566/unedited/exact. Последний pollещёactive144, PARKpending; не дублировать, не обнулятьstate.
 - Монитор: gb-run monitor-photo147-preparing rc0/strict49PASS; stableID M3-PHOTO→issue147/ожидает. log /var/log/gb-ops/runs/20261021-123440-monitor-photo147-preparing-2296087.log. Следующее: дождатьсяwrite2292596→проверитьfinalbody→independentcodex-review→livevalidator/currentdev→singleadmission147→actualclaim. PR102неmerge, никакихPROD/PLAN/VPN/permissionschanges.
+
+
+### #147 постановка готова; независимое ревью в работе
+- PARK1446313860845 обработан: activeосвободился; parked144/headb9a0/attempt3. Не дублироватьPARK.
+- codex-write2292596 BODY_OK613s: /var/lib/gb-ops-stage/writes/M3-PHOTO-R3.brief-13d0f76c-20261021T104416Z-2292607.txt SHA256aa051ee521fa963bc1af858094eb0f6524eeb1d5d3dcf3498352a196068d1605; OPEN_QUESTIONSнет.
+- Финальное тело /var/lib/gb-ops-stage/files/M3-PHOTO-R3.v1.body.txt SHA256b83564662f00a8d42b7cf4d24db4f4896a73aae84646a00dae40bf5edf6f4c8a,10859bytes/goal4367/acceptance3494/7paths/max3. MinifiedJSON сохраняет смыслчерновика, точныебайтыreview.
+- codex-review PID2361515 сейчасвработе на13d0f76c5db4f841b8f3e04b4645808c8df71fb6; admission147ЕЩЁНЕТ. После MOZHNOпрочитатьoriginalverdict, freshnessdev/нулевыеadmissions/livevalidator, затемsingleOwneradmission. REVISED_BODYнеиспользоватьбезновогоreview.
