@@ -36,6 +36,19 @@ trusted() {
     p=$(dirname -- "$p")
   done
 }
+# DEV train uses installed trusted code and never holds the deployment lock.
+if [[ $ENVIRONMENT == dev && $WATCHDOG == 0 ]]; then
+  # Bounded input, finite read time; no eval, no shell commands supplied by CI.
+  REQUEST=$(timeout 10 head -c 8193) || fail 'request read timeout'
+  (( ${#REQUEST} <= 8192 )) || fail 'oversize request'
+  jq -e 'type=="object" and (.action|type=="string")' <<<"$REQUEST" >/dev/null || fail 'invalid JSON'
+  ACTION=$(jq -r .action <<<"$REQUEST")
+  if [[ $ACTION == train ]]; then
+    [[ $ENVIRONMENT == dev ]] || fail 'train is DEV-only'
+    trusted /usr/local/lib/gb-actions-train/receiver.py
+    exec /usr/bin/python3 -I -B -c 'import sys,runpy; sys.path.insert(0,"/usr/local/lib/gb-actions-train"); runpy.run_module("receiver",run_name="__main__")' <<<"$REQUEST"
+  fi
+fi
 trusted "$CONFIG_ROOT/$ENVIRONMENT.conf"
 # This is root-provisioned code, never downloaded from a job or supplied over SSH.
 # shellcheck disable=SC1090
@@ -162,11 +175,13 @@ if (( WATCHDOG )); then
   fi
   exit 0
 fi
-# Bounded input, finite read time; no eval, no shell commands supplied by CI.
-REQUEST=$(timeout 10 head -c 8193) || fail 'request read timeout'
-(( ${#REQUEST} <= 8192 )) || fail 'oversize request'
-jq -e 'type=="object" and (.action|type=="string")' <<<"$REQUEST" >/dev/null || fail 'invalid JSON'
-ACTION=$(jq -r .action <<<"$REQUEST")
+if [[ $ENVIRONMENT != dev ]]; then
+  # Bounded input, finite read time; no eval, no shell commands supplied by CI.
+  REQUEST=$(timeout 10 head -c 8193) || fail 'request read timeout'
+  (( ${#REQUEST} <= 8192 )) || fail 'oversize request'
+  jq -e 'type=="object" and (.action|type=="string")' <<<"$REQUEST" >/dev/null || fail 'invalid JSON'
+  ACTION=$(jq -r .action <<<"$REQUEST")
+fi
 if [[ $ACTION == status ]]; then
   jq -e 'keys==["action"]' <<<"$REQUEST" >/dev/null || fail 'unknown status fields'
   status; exit 0
