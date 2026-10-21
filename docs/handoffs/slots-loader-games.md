@@ -1,5 +1,58 @@
 # MAP-PERF1 — Games map module loading
 
+## Current CI repair handoff — 2026-10-22
+
+- From: source author (Codex), assigned `issue-151` worktree.
+- To: PM for independent QA, full Product CI and publication outside the author sandbox.
+- Status: WORKING_DRAFT / SOURCE_ONLY; narrow type repair authored, compiler/lint/test execution **NOT_TESTED** because the offline package manager is unavailable. No new independent QA, CI, acceptance or deployment result is claimed.
+- Exact repair base / checkout HEAD: `b9aebc69f2d61f232554d030645432ad1cf8f789`, branch `automation/issue-151`; initial working diff was empty. [Candidate](https://github.com/anpavel84-afk/gobadminton-clean/tree/b9aebc69f2d61f232554d030645432ad1cf8f789).
+- Original task base: `9d3e092cc30796ffc0096c50584a771e60c18ef3`. Both commit objects are now readable. The earlier alternate-object blocker recorded below is historical and no longer applies.
+- Supplied prior independent QA: PASS, findings `[]`, reviewed SHA `b9aebc69f2d61f232554d030645432ad1cf8f789`. This is assignment evidence for the existing candidate, not this author's review or a result for the repair.
+- Supplied failure: [Product CI 39640478582, attempt 1](https://github.com/anpavel84-afk/gobadminton-clean/actions/runs/39640478582/attempts/1), `source (web)` / `Run pnpm --filter @gobadminton/web run typecheck`, `test/games-map-module-loading.test.tsx(46,33)` TS2349: `Loader` includes a non-callable `LoaderComponent`.
+
+### Repair and retained D1–D5 scope
+
+Only the test's loader type and this handoff change relative to the repair base. `MapLoader = Extract<Loader<MapProps>, () => unknown>` selects Next's callable loader member. Both the mock parameter and captured loader use it, so `resolveMap` can call the actual registered function while retaining Next's return type. The promise alternative accepted by Next is outside this mock's actual input contract. No `any`, cast, diagnostic suppression or runtime workaround was added.
+
+- **D1:** the full original-base-to-working-tree diff contains exactly the five allowed paths listed in the historical handoff below, including the substantive test. This repair retains the three implementation files byte-for-byte from the candidate.
+- **D2:** loading markup, accessibility assertions and all temporary CSS remain unchanged.
+- **D3:** the real loader is still invoked for successful and rejected mocked imports; exact export identity, stable error component, SSR and subsequent mock dynamic rendering assertions remain unchanged. This mock does not prove real Next/browser/chunk timing.
+- **D4:** the Moscow/other-city/venue branches and return-button assertions remain unchanged. SSR does not execute availability effects or prove populated-list behavior.
+- **D5:** all seven test cases and every assertion are preserved. Production behavior, map props, catalogue statuses, privacy, requests, timers and map instances remain unchanged by this repair. No files outside allowed paths, existing checks, configuration or dependencies were edited.
+
+### D6 — exact local command evidence
+
+Commands were invoked separately from the repository root. Before editing, both the CI typecheck script and the required non-incremental compiler command were attempted. Both stopped before TypeScript started; the supplied TS2349 could therefore **not be reproduced locally**. After the edit, both commands were repeated, alongside the required lint and targeted test commands.
+
+| Exact command | Before edit | After edit | Result |
+| --- | --- | --- | --- |
+| `COREPACK_ENABLE_NETWORK=0 pnpm --filter @gobadminton/web run typecheck` | exit 1 | exit 1 | NOT_TESTED: Corepack cannot obtain pnpm 10.18.0 offline; TypeScript did not start. |
+| `COREPACK_ENABLE_NETWORK=0 pnpm --filter @gobadminton/web exec tsc -p tsconfig.json --noEmit --incremental false` | exit 1 | exit 1 | NOT_TESTED: same package-manager blocker. |
+| `COREPACK_ENABLE_NETWORK=0 pnpm --filter @gobadminton/web run lint` | — | exit 1 | NOT_TESTED: same blocker; ESLint did not start. |
+| `COREPACK_ENABLE_NETWORK=0 pnpm --filter @gobadminton/web exec vitest run --no-cache test/games-map-module-loading.test.tsx` | — | exit 1 | NOT_TESTED: same blocker; Vitest did not start. |
+| `git diff --check` | — | exit 0 | No whitespace diagnostics. |
+
+Substantive output for every pnpm attempt:
+
+```text
+! Corepack is about to download https://registry.npmjs.org/pnpm/-/pnpm-10.18.0.tgz
+Network access disabled by the environment; can't reach https://registry.npmjs.org/pnpm/-/pnpm-10.18.0.tgz
+```
+
+Neither root nor web `node_modules` is present; installed Next documentation is unavailable. No dependency installation or network operation was performed. The known CI source failure is recorded above and is not reclassified as an environment failure; the repair still needs compiler validation outside this sandbox.
+
+### D7 / STYLE_GUIDE_PARITY, limits and next action
+
+No visual/composition change is part of this repair. The existing Progress and ErrorState composition is retained as described below. The Owner Style Guide First decision was read. Frozen `style-guide/src/App.tsx` and `src/index.css` returned `Permission denied`; the referenced repository operations guide is absent. Canonical visual parity remains **UNVERIFIED**, with no `STYLE_GUIDE_GAP` or `OWNER_VISUAL_OVERRIDE` asserted. Browser/iPhone, actual effects, Next transitions and load timing remain **NOT_TESTED**. Local author command attempts do not constitute independent QA or CI.
+
+No commit, push, Git metadata change, automation/service/secret change, network publication or PROD action was performed. The next bounded action belongs to PM: collect this repair with the existing five-file candidate, publish the durable artifact/permalink, obtain independent QA, and run full Product CI for the resulting exact SHA. No new result permalink exists in this source-only sandbox.
+
+Rollback: the integrator may remove only this repair's test-type and handoff diff relative to `b9aebc69f2d61f232554d030645432ad1cf8f789`; retain the candidate's existing implementation and seven tests. If rolling back the entire MAP-PERF1 task instead, remove only its five-path diff relative to the original base and preserve unrelated work.
+
+## Historical handoff — retained from the candidate
+
+The following records the earlier attempt and its then-current environment. The current repair section above supersedes its QA, Git-object availability, date, command evidence and next-action statements.
+
 - From: source author (Codex), task worktree `issue-151`.
 - To: PM, for independent QA and publication outside the author sandbox.
 - Date: 2026-10-21.

@@ -7,8 +7,10 @@ import type { GamesVenueMap } from "../src/components/consumer/games/GamesVenueM
 import { MOSCOW_BUNDLE } from "../src/lib/radar-map-assets";
 
 type MapProps = ComponentProps<typeof GamesVenueMap>;
+// This mock accepts the loader function, not Next's alternative promise form.
+type MapLoader = Extract<Loader<MapProps>, () => unknown>;
 type DynamicCapture = {
-  loader: Loader<MapProps>;
+  loader: MapLoader;
   options: DynamicOptions<MapProps>;
   resolved?: ComponentType<MapProps>;
 };
@@ -24,7 +26,7 @@ async function importView(outcome: "success" | "failure" = "success") {
 
   const registration: { current?: DynamicCapture } = {};
   vi.doMock("next/dynamic", () => ({
-    default: (loader: Loader<MapProps>, options: DynamicOptions<MapProps>): ComponentType<MapProps> => {
+    default: (loader: MapLoader, options: DynamicOptions<MapProps>): ComponentType<MapProps> => {
       const current: DynamicCapture = { loader, options };
       registration.current = current;
       return function MockDynamicMap(props: MapProps) {
