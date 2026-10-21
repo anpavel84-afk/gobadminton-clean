@@ -1,0 +1,222 @@
+"""Closed wire contract, authenticated API and finite Actions planning. No model execution."""
+import datetime as dt
+import email.utils
+import hashlib
+import importlib.util
+import json
+import os
+from pathlib import Path
+import re
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+HERE = Path(__file__).resolve().parent
+REPO = 'anpavel84-afk/gobadminton-clean'
+REPO_ID = 1416250340
+OWNER = 318610566
+SINCE = '2026-10-15T02:27:00+00:00'
+PINS = {'autonomous_issues.py': '9995d0f268185c56d91cd0e15f986905abf093feb07c6edffec0c9b211e2fec7',
+        'slots.py': '19d07c8d680d31ff65e13b3d8611b93fab1898461a918e69390a77bf8bb5ad02',
+        'check_foundation.py': 'c2975b19bd46d00acbdbc08227545b8f9c9501d7b8e8783e9b397751c612bd13'}
+STAGES = ('claim', 'author', 'publish', 'qa', 'ci', 'integrate', 'promote', 'dev')
+PROFILES = ('auto', 'codex', 'cursor', 'agy')
+SHA = re.compile('[0-9a-f]{40}')
+
+class Refused(Exception):
+    pass
+
+class Retry(Refused):
+    def __init__(self, reason, after=30):
+        super().__init__(reason)
+        self.after = max(1, int(after))
+
+def need(ok, reason):
+    if not ok:
+        raise Refused(reason)
+
+def unique(pairs):
+    result = {}
+    for k, v in pairs:
+        need(k not in result, 'duplicate JSON key')
+        result[k] = v
+    return result
+
+def loads(raw):
+    return json.loads(raw, object_pairs_hook=unique)
+
+def digest(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+def live():
+    modules = []
+    for filename in ('slots.py', 'autonomous_issues.py'):
+        path = HERE / 'live' / filename
+        need(hashlib.sha256(path.read_bytes()).hexdigest() == PINS[filename], 'LIVE library drift')
+        spec = importlib.util.spec_from_file_location('train_' + filename[:-3], path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        modules.append(module)
+    need(hashlib.sha256((HERE / 'live/check_foundation.py').read_bytes()).hexdigest()
+         == PINS['check_foundation.py'], 'foundation drift')
+    return modules[1], modules[0]
+
+class API:
+    """Token kept only in trusted process memory. Never included in exceptions/URLs/env/models."""
+    def __init__(self, token, opener=urllib.request.urlopen):
+        need(isinstance(token, str) and 10 <= len(token) <= 4096 and '\n' not in token, 'invalid API credential')
+        self._token, self.opener = token, opener
+
+    def __call__(self, path, data=None, method=None):
+        public = path == 'https://dev.gobadminton.ru/v1/meta'
+        need(public or (not path.startswith('/') and '://' not in path and '..' not in path), 'API path refused')
+        url = path if public else f'https://api.github.com/repos/{REPO}/{path}'
+        headers = {'Accept': 'application/vnd.github+json', 'User-Agent': 'gb-actions-train',
+                   'X-GitHub-Api-Version': '2022-11-28'}
+        if not public:
+            headers['Authorization'] = 'Bearer ' + self._token
+        req = urllib.request.Request(url, headers=headers, method=method,
+                                     data=None if data is None else json.dumps(data).encode())
+        # Retry only GET. Non-idempotent dispatch/comment failures are reconciled from durable state.
+        for attempt in range(3):
+            try:
+                with self.opener(req, timeout=30) as response:
+                    raw = response.read(2097153)
+                need(len(raw) <= 2097152, 'API response too large')
+                return loads(raw) if raw else None
+            except urllib.error.HTTPError as error:
+                if error.code in (403, 429):
+                    h = error.headers
+                    try:
+                        retry = h.get('Retry-After')
+                        delay = (float(retry) if retry and retry.isdigit() else
+                                 email.utils.parsedate_to_datetime(retry).timestamp() - time.time() if retry else 0)
+                        if h.get('X-RateLimit-Remaining') == '0':
+                            delay = max(delay, float(h.get('X-RateLimit-Reset', 0)) - time.time())
+                    except (TypeError, ValueError):
+                        delay = 60
+                    raise Retry('GitHub rate/permission response ' + str(error.code), max(1, delay)) from None
+                if error.code < 500:
+                    raise Refused('GitHub response ' + str(error.code)) from None
+            except (urllib.error.URLError, TimeoutError, ConnectionError):
+                pass
+            if data is not None or method not in (None, 'GET') or attempt == 2:
+                raise Retry('API unavailable; reconcile before retry') from None
+            time.sleep(2 ** attempt)
+
+    def pages(self, path, key=None):
+        items = []
+        for page in range(1, 101):
+            value = self(path + ('&' if '?' in path else '?') + f'per_page=100&page={page}')
+            rows = value[key] if key else value
+            need(isinstance(rows, list), 'invalid API page')
+            items.extend(rows)
+            if len(rows) < 100:
+                return items
+        raise Refused('pagination exhausted')
+
+    def identity(self):
+        repo = self('')
+        need(repo['id'] == REPO_ID and repo['full_name'] == REPO and repo['default_branch'] == 'main',
+             'repository identity mismatch')
+
+def request(value):
+    need(isinstance(value, dict) and value.get('action') == 'train', 'invalid train envelope')
+    if value.get('stage') == 'status':
+        need(set(value) == {'action', 'stage'}, 'unknown status fields')
+        return value
+    need(set(value) == {'action', 'stage', 'slot', 'issue', 'phase', 'head', 'attempt',
+                        'generation', 'run', 'run_attempt', 'profile', 'gh_token'}, 'unknown stage fields')
+    need(value['stage'] in STAGES and value['slot'] in ('slot1', 'slot2'), 'unknown stage/slot')
+    for k, lo, hi in (('issue', 1, 10**9), ('attempt', 0, 3), ('generation', 0, 10**9),
+                      ('run', 1, 10**18), ('run_attempt', 1, 10000)):
+        need(type(value[k]) is int and lo <= value[k] <= hi, 'invalid ' + k)
+    need(value['phase'] in ('idle', 'claimed', 'developing', 'candidate', 'pr_wait', 'qa', 'ci',
+                             'integrating', 'promoting', 'dev_wait', 'done', 'blocked'), 'invalid phase')
+    need(value['head'] is None or isinstance(value['head'], str) and SHA.fullmatch(value['head']), 'invalid head')
+    need(value['profile'] in PROFILES, 'unknown profile')
+    need(isinstance(value['gh_token'], str) and re.fullmatch('[A-Za-z0-9_]+', value['gh_token'])
+         and 10 <= len(value['gh_token']) <= 4096, 'invalid API credential')
+    return value
+
+def binding(req):
+    return {k: v for k, v in req.items() if k not in ('gh_token', 'run', 'run_attempt')}
+
+def route(slots, task, role, profile, budget, slot):
+    requested = task.get('model')
+    names = ['codex', 'cursor', 'agy'] if profile == 'auto' else [profile]
+    options, refusals = [], {}
+    for name in names:
+        ok, why = slots.adapter_status(name, role, budget, slot)
+        # Only the installed/proven Codex adapter has a closed exact model mapping today.
+        if ok and (name != 'codex' or requested not in (None, 'gpt-6.1-sol')):
+            ok, why = False, 'no proven exact model adapter'
+        if role == 'qa' and name != 'codex':
+            ok, why = False, 'independent QA is approved only for Codex'
+        if ok:
+            left = budget.remaining(name, role, slot)
+            used = budget.used(name, role, slot)
+            options.append((used / (used + left), name))
+        else:
+            refusals[name] = why
+    need(options, 'profile unavailable: ' + json.dumps(refusals, sort_keys=True))
+    name = min(options)[1]
+    return dict(profile=profile, provider=name, requested_model=requested,
+                effective_model='gpt-6.1-sol', role=role,
+                fallback_reason=('only proven available provider with positive measured budget' if profile == 'auto' else None),
+                unavailable=refusals, remaining_calls=budget.remaining(name, role, slot),
+                used_calls=budget.used(name, role, slot))
+
+def next_stage(active):
+    if not active or active['phase'] == 'done':
+        return None
+    p = active['phase']
+    if p == 'claimed': return 'author'
+    if p == 'candidate': return 'publish'
+    if p == 'pr_wait': return 'qa'
+    if p == 'qa': return 'ci' if (active.get('qa') or {}).get('verdict') == 'PASS' else 'author'
+    if p == 'ci': return 'author' if active.get('ci_failure') else 'integrate' if active.get('ci') else 'ci'
+    if p == 'promoting': return 'promote'
+    if p == 'dev_wait': return 'dev'
+    return None
+
+def plan(a, s, snapshot, candidates, profile='auto'):
+    """One finite pass. Issues are durable intent; no dispatch queue is treated as a task store."""
+    occupied, completed, blocked = [], set(), set()
+    for card in snapshot['slots'].values():
+        completed.update(card['done'])
+        blocked.update(card['parked'])
+        active = card.get('active')
+        if card.get('reservation'):
+            occupied.append(card['reservation'])
+        if active and active['phase'] != 'done':
+            occupied.append(s.task_record(active['issue'], active['task']))
+    out = []
+    for name, card in snapshot['slots'].items():
+        if not card['owned']:
+            continue
+        pending = card.get('pending')
+        if pending:
+            if pending['status'] == 'unknown' and pending.get('recoverable', True) and pending['binding']['stage'] in ('publish', 'integrate', 'promote', 'dev'):
+                out.append({k: v for k, v in pending['binding'].items() if k != 'action'})
+            continue
+        active = card.get('active')
+        if active and active['phase'] != 'done':
+            stage = next_stage(active)
+            if stage:
+                out.append(dict(slot=name, issue=active['issue'], stage=stage, phase=active['phase'],
+                                head=active['head'], attempt=active['attempt'], generation=card['generation'],
+                                profile=card.get('profile') or profile))
+            continue
+        for issue, task in candidates:
+            record = s.task_record(issue, task)
+            if issue in completed | blocked or any(s.conflicts(record, r) for r in occupied):
+                continue
+            if not set(task.get('depends_on', [])) <= completed:
+                continue
+            out.append(dict(slot=name, issue=issue, stage='claim', phase='idle', head=None,
+                            attempt=0, generation=card['generation'], profile=profile))
+            occupied.append(record)
+            break
+    return out
