@@ -342,7 +342,10 @@ class Installer:
                             and pids <= allowed, 'unknown process while stopping: ' + unit)
                     settled = False
                 else:
-                    self.unit_state(value, unit, recovery=recovery)
+                    # A service we explicitly stopped may settle as failed/failed when
+                    # its Python process exits 143 under Restart=on-failure. Accept
+                    # only a quiescent PID0/empty cgroup; initial checks remain strict.
+                    self.unit_state(value, unit, recovery=True)
                     require(value['ActiveState'] != 'active' and value['MainPID'] == '0' and not pids,
                             'control group not quiescent: ' + unit)
                     if value['ControlGroup'] != stopping[unit]['ControlGroup']:
@@ -358,7 +361,10 @@ class Installer:
         for unit in UNITS:
             try:
                 current = self.system.status(unit)
-                self.unit_state(current, unit, recovery=recovery)
+                # Only reached after this installer's controlled stop. A stopped
+                # service can be failed/failed with no processes; it may be started
+                # from that state without weakening entry or completion gates.
+                self.unit_state(current, unit, recovery=True)
                 require(current['UnitFileState'] == states[unit]['UnitFileState'], 'unit enabled state changed')
                 if current['ActiveState'] == 'failed':
                     require(not self.system.pids(current), 'control group not quiescent: ' + unit)

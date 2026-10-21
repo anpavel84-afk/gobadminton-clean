@@ -784,6 +784,34 @@ class InstallerTests(unittest.TestCase):
                 self.assertNotEqual(self.managed(installer), before)
                 self.assertFalse(installer.pending.exists())
 
+    def test_real_systemd_sigterm_143_failed_is_quiescent_after_controlled_stop(self):
+        # systemd can report failed/failed (exit 143) after a successful stop.
+        # Never treat this as an initially valid unit or allow remaining children.
+        with self.fixture(parsed=True) as (_, installer, system):
+            before, units = self.managed(installer), copy.deepcopy(system.states)
+            def stopped(event):
+                if event[1] == 'stop':
+                    for unit in i.UNITS[:2]:
+                        system.states[unit].update(
+                            ActiveState='failed', SubState='failed', MainPID='0',
+                            FreezerState='running')
+            system.after = stopped
+            installer.apply()
+            self.assertFalse(installer.pending.exists())
+            self.assertEqual(system.states, units)
+            self.assertEqual([u for verb, us in system.events
+                              if verb == 'start' for u in us], list(i.UNITS[:2]))
+            installer.apply(remove=True)
+            self.assert_restored(installer, system, before, units)
+        with self.fixture(parsed=True) as (_, installer, system):
+            stopping = installer.statuses()
+            unit = i.UNITS[1]
+            system.command('stop', *i.UNITS)
+            system.states[unit].update(ActiveState='failed', SubState='failed', MainPID='0')
+            system.extra_by_unit[unit] = {9999}
+            with self.assertRaisesRegex(RuntimeError, 'control group not quiescent'):
+                installer.wait_stopped(stopping)
+
     def test_stop_poll_deadline_signal_unknown_state_and_children_fail_before_switch(self):
         for mode in ('timeout', 'signal', 'children', 'pid', 'group', 'enabled', 'activating', 'unknown-stop'):
             with self.subTest(mode=mode), self.fixture(parsed=True) as (_, installer, system):
