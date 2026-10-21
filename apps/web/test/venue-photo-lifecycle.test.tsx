@@ -151,11 +151,12 @@ class Harness {
   }
   ref(ref: React.Ref<Dom> | undefined, value: Dom | null) { if (typeof ref === "function") ref(value); else if (ref) ref.current = value; }
   rerender() { this.render(this.root); }
-  host(label: string) {
-    const found = [...this.hosts.values()].find(({ node }) => node.props["aria-label"] === label || node.props.className === label || textContent(node.props.children) === label);
+  host(label: string, tag?: string) {
+    const found = [...this.hosts.values()].find(({ node }) =>
+      (!tag || node.type === tag) && (node.props["aria-label"] === label || node.props.className === label || textContent(node.props.children) === label));
     if (!found) throw new Error(`Missing host ${label}`); return found;
   }
-  click(label: string) { const fn = this.host(label).node.props.onClick; if (typeof fn !== "function") throw new Error("Missing click"); fn(); this.rerender(); }
+  click(label: string) { const fn = this.host(label, "button").node.props.onClick; if (typeof fn !== "function") throw new Error(`Missing click handler for button ${label}`); fn(); this.rerender(); }
   text() {
     const values: string[] = []; let count = 0;
     const visit = (node: React.ReactNode, depth: number): void => {
