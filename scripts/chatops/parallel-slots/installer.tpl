@@ -172,7 +172,7 @@ path, uid, expected = sys.argv[1:4]
 limit = 1024 * 1024
 def validate(info):
     owner_ok = info.st_uid == int(uid) or (info.st_uid == 0 and path == expected)
-    if not stat.S_ISREG(info.st_mode) or not owner_ok or not 0 < info.st_size <= limit:
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or not owner_ok or not 0 < info.st_size <= limit:
         raise ValueError('invalid known_hosts')
 def validate_content(data):
     if b'\0' in data:
@@ -669,14 +669,40 @@ remove_created_group() {
 # when the migration manifest proves that its checkpoint still represents all slot work.
 record_completed() {
   python3 -I - "$L_STATE" "${2:-$VAR}" "$BK/completed-issues.json" "${1:-1}" "${3:-0}" <<'PYDONE'
-import hashlib, json, os, re, sys
+import hashlib, json, os, re, stat, sys
 from pathlib import Path
+def safe_bytes(path, limit=16 * 1024 * 1024):
+    path = os.fspath(path)
+    if not os.path.isabs(path) or ".." in path.split("/"):
+        raise ValueError("unsafe public file path")
+    parts = path.split("/")[1:]
+    parent = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for part in parts[:-1]:
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+            os.close(parent)
+            parent = child
+        fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+        try:
+            before = os.fstat(fd)
+            if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_size > limit:
+                raise ValueError("unsafe public file metadata")
+            with os.fdopen(os.dup(fd), "rb") as source:
+                data = source.read(limit + 1)
+            after = os.fstat(fd)
+            current = os.stat(parts[-1], dir_fd=parent, follow_symlinks=False)
+            signature = lambda s: (s.st_dev,s.st_ino,s.st_mode,s.st_uid,s.st_gid,s.st_nlink,s.st_size,s.st_mtime_ns,s.st_ctime_ns)
+            if signature(before) != signature(after) or signature(before) != signature(current) or len(data) != before.st_size:
+                raise ValueError("public file changed during read")
+            return data
+        finally:
+            os.close(fd)
+    finally:
+        os.close(parent)
 legacy, var, output = map(Path, sys.argv[1:4])
 try:
     def read(path):
-        if path.is_symlink():
-            raise ValueError('symlink checkpoint')
-        return json.loads(path.read_bytes())
+        return json.loads(safe_bytes(path))
     old = read(legacy / 'state.json')
     done = set(read(output)['done']) if output.exists() else set()
     states = sorted((var / 'slots').glob('slot*/state.json'))
@@ -713,9 +739,7 @@ try:
                 raise ValueError('invalid manifest path')
             for root in (legacy, slot1):
                 path = root / name
-                if path.is_symlink():
-                    raise ValueError('symlink checkpoint')
-                matches = hashlib.sha256(path.read_bytes()).hexdigest() == digest
+                matches = hashlib.sha256(safe_bytes(path)).hexdigest() == digest
                 safe = safe and matches
                 if root == legacy:
                     legacy_matches = legacy_matches and matches
@@ -784,7 +808,42 @@ if [ "$MODE" = install ]; then
 # preflight C: exact installed baseline, reconciled against supplied live bytes (PARK drift + finite failures).
 L_PY=$(arg --python)
 if [ -n "$L_PY" ] && [ -r "$L_PY" ]; then
-  L_PY_SHA=$(sha256sum <"$L_PY" | cut -d' ' -f1)
+  L_PY_SHA=$(python3 -I - "$L_PY" <<'PYBASE'
+import hashlib,os,stat,sys
+def safe_bytes(path, limit=16 * 1024 * 1024):
+    path = os.fspath(path)
+    if not os.path.isabs(path) or ".." in path.split("/"):
+        raise ValueError("unsafe public file path")
+    parts = path.split("/")[1:]
+    parent = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for part in parts[:-1]:
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+            os.close(parent)
+            parent = child
+        fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+        try:
+            before = os.fstat(fd)
+            if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_size > limit:
+                raise ValueError("unsafe public file metadata")
+            with os.fdopen(os.dup(fd), "rb") as source:
+                data = source.read(limit + 1)
+            after = os.fstat(fd)
+            current = os.stat(parts[-1], dir_fd=parent, follow_symlinks=False)
+            signature = lambda s: (s.st_dev,s.st_ino,s.st_mode,s.st_uid,s.st_gid,s.st_nlink,s.st_size,s.st_mtime_ns,s.st_ctime_ns)
+            if signature(before) != signature(after) or signature(before) != signature(current) or len(data) != before.st_size:
+                raise ValueError("public file changed during read")
+            return data
+        finally:
+            os.close(fd)
+    finally:
+        os.close(parent)
+try:
+    print(hashlib.sha256(safe_bytes(sys.argv[1],2*1024*1024)).hexdigest())
+except (OSError,ValueError):
+    sys.exit(1)
+PYBASE
+  ) || bad "legacy code is not a stable single-link regular file through pinned non-symlink directories"
   if [ "$L_PY_SHA" = "$SHA_BASE_EXEC" ]; then say "legacy код = сверенный live baseline ${SHA_BASE_EXEC:0:12} (sha256 ok)"; else chk "legacy код ($L_PY) sha256 ${L_PY_SHA:0:12} != сверенный live baseline ${SHA_BASE_EXEC:0:12}: сначала сверить, что установлено"; fi
 else chk "не прочитан legacy autonomous_issues.py из ExecStart (${L_PY:-не найден})"; fi
 # preflight D: resolve and probe the local common dir as its owner, before stopping legacy
@@ -805,16 +864,39 @@ check_units || chk "unit-ы не совпадают с шаблонами уст
 
 idle_of() { # idle_of STATE_DIR -> prints idle|busy:<phase>:<issue>|missing
   python3 -I -c 'import json,sys,os,stat
+def safe_bytes(path, limit=16 * 1024 * 1024):
+    path = os.fspath(path)
+    if not os.path.isabs(path) or ".." in path.split("/"):
+        raise ValueError("unsafe public file path")
+    parts = path.split("/")[1:]
+    parent = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for part in parts[:-1]:
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+            os.close(parent)
+            parent = child
+        fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+        try:
+            before = os.fstat(fd)
+            if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_size > limit:
+                raise ValueError("unsafe public file metadata")
+            with os.fdopen(os.dup(fd), "rb") as source:
+                data = source.read(limit + 1)
+            after = os.fstat(fd)
+            current = os.stat(parts[-1], dir_fd=parent, follow_symlinks=False)
+            signature = lambda s: (s.st_dev,s.st_ino,s.st_mode,s.st_uid,s.st_gid,s.st_nlink,s.st_size,s.st_mtime_ns,s.st_ctime_ns)
+            if signature(before) != signature(after) or signature(before) != signature(current) or len(data) != before.st_size:
+                raise ValueError("public file changed during read")
+            return data
+        finally:
+            os.close(fd)
+    finally:
+        os.close(parent)
 p=os.path.join(sys.argv[1],"state.json")
 try:
-    fd=os.open(p,os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    raw=safe_bytes(p,2097152)
 except FileNotFoundError:
     print("missing"); sys.exit()
-try:
-    if not stat.S_ISREG(os.fstat(fd).st_mode): raise ValueError("non-regular checkpoint")
-    raw=os.read(fd,2097153)
-finally: os.close(fd)
-if len(raw)>2097152: raise ValueError("oversize checkpoint")
 d=json.loads(raw)
 if set(d)!={"active","done"} or not isinstance(d["done"],list): raise ValueError("invalid checkpoint")
 if any(type(n) is not int or n<=0 for n in d["done"]): raise ValueError("invalid done")
@@ -1396,10 +1478,11 @@ install -d -m 0755 -o root -g root "$ETC" "$SRV"
 config_files write || bad "не удалось безопасно записать конфигурацию: $ETC"
 
 # 7. git: one read-only object store, own clone per slot
-# Root-private destination prevents unprivileged hardlink/symlink injection during publication.
-# Trust only this exact local Git source; ignore all inherited/global configuration and hooks.
+# The source owner streams a Git bundle; root never opens the user-controlled Git tree.
+# The root-owned bundle and destination cannot receive unprivileged hardlink injection.
+as "$LU" /usr/bin/env -i PATH=/usr/bin:/bin HOME=/home/agentagency-dev LANG=C.UTF-8 GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git --git-dir="$L_COMMON_DIR" -c core.hooksPath=/dev/null -c core.fsmonitor=false bundle create - --all "$HEAD_SHA" "$BASE_SHA" >"$TMP/legacy-common.bundle" || bad "не удалось получить Git bundle от legacy owner"
 install -d -m 0700 -o root -g root "$SRV/base.git.tmp"
-/usr/bin/env -i PATH=/usr/bin:/bin HOME=/nonexistent LANG=C.UTF-8 GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -c safe.directory="$L_COMMON_DIR" -c core.hooksPath=/dev/null -c core.fsmonitor=false -c protocol.ext.allow=never -c protocol.file.allow=always clone -q --mirror --no-hardlinks "$L_COMMON_DIR" "$SRV/base.git.tmp" || bad "не удалось клонировать локальный git common dir legacy в закрытый root каталог"
+/usr/bin/env -i PATH=/usr/bin:/bin HOME=/nonexistent LANG=C.UTF-8 GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c protocol.ext.allow=never -c protocol.file.allow=always clone -q --mirror --no-hardlinks "$TMP/legacy-common.bundle" "$SRV/base.git.tmp" || bad "не удалось клонировать root-owned Git bundle в закрытый root каталог"
 chmod -R a+rX,go-w "$SRV/base.git.tmp"
 mv "$SRV/base.git.tmp" "$SRV/base.git"
 git --git-dir="$SRV/base.git" show-ref --verify --quiet refs/heads/dev || bad "base.git не содержит refs/heads/dev"
@@ -1407,9 +1490,9 @@ for sha in "$HEAD_SHA" "$BASE_SHA"; do
   git --git-dir="$SRV/base.git" cat-file -e "$sha^{commit}" || bad "base.git не содержит коммит $sha"
 done
 install -d -m 0700 -o "$LU" -g "$LG" "$SRV/slot1" "$SRV/slot1/worktrees"
-as "$LU" git -c safe.directory="$SRV/base.git" clone -q --shared --no-checkout "$SRV/base.git" "$SRV/slot1/repo"
+as "$LU" git -c safe.directory="$SRV/base.git" clone -q --shared --no-checkout --upload-pack="git -c safe.directory=$SRV/base.git -c core.hooksPath=/dev/null -c core.fsmonitor=false upload-pack" "$SRV/base.git" "$SRV/slot1/repo"
 install -d -m 0700 -o "$S2" -g "$S2" "$SRV/slot2" "$SRV/slot2/worktrees" "$SRV/slot2/home"
-as "$S2" git -c safe.directory="$SRV/base.git" clone -q --shared --branch dev "$SRV/base.git" "$SRV/slot2/repo"
+as "$S2" git -c safe.directory="$SRV/base.git" clone -q --shared --branch dev --upload-pack="git -c safe.directory=$SRV/base.git -c core.hooksPath=/dev/null -c core.fsmonitor=false upload-pack" "$SRV/base.git" "$SRV/slot2/repo"
 chmod 0700 "$SRV/slot2/repo"
 say "git: base.git + slot1/repo + slot2/repo (alternates; slot2 disabled)"
 
@@ -1546,8 +1629,39 @@ for u in gobadminton-slot@slot1.service gobadminton-supervisor.service; do
     bad "$u не активен"
   }
 done
-python3 -I -c 'import json,sys; s=json.load(open(sys.argv[1])); l=json.load(open(sys.argv[2]))
-assert s["slot"]=="slot1" and s["done"]==l["done"], "status.json slot1 != legacy"' "$VAR/outbox/slot1/status.json" "$VAR/slots/slot1/state.json" || bad "status slot1"
+python3 -I - "$VAR/outbox/slot1/status.json" "$VAR/slots/slot1/state.json" <<'PYSTATUS' || bad "status slot1"
+import json,os,stat,sys
+def safe_bytes(path, limit=16 * 1024 * 1024):
+    path = os.fspath(path)
+    if not os.path.isabs(path) or ".." in path.split("/"):
+        raise ValueError("unsafe public file path")
+    parts = path.split("/")[1:]
+    parent = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for part in parts[:-1]:
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+            os.close(parent)
+            parent = child
+        fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+        try:
+            before = os.fstat(fd)
+            if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_size > limit:
+                raise ValueError("unsafe public file metadata")
+            with os.fdopen(os.dup(fd), "rb") as source:
+                data = source.read(limit + 1)
+            after = os.fstat(fd)
+            current = os.stat(parts[-1], dir_fd=parent, follow_symlinks=False)
+            signature = lambda s: (s.st_dev,s.st_ino,s.st_mode,s.st_uid,s.st_gid,s.st_nlink,s.st_size,s.st_mtime_ns,s.st_ctime_ns)
+            if signature(before) != signature(after) or signature(before) != signature(current) or len(data) != before.st_size:
+                raise ValueError("public file changed during read")
+            return data
+        finally:
+            os.close(fd)
+    finally:
+        os.close(parent)
+s=json.loads(safe_bytes(sys.argv[1]));l=json.loads(safe_bytes(sys.argv[2]))
+assert s["slot"]=="slot1" and s["done"]==l["done"], "status.json slot1 != legacy"
+PYSTATUS
 say "проверка 11: public status.json и done сверены; содержимое журналов не читается"
 trap 'rm -rf "$TMP"' EXIT
 logl "installed head=$HEAD_SHA backup=$BK"

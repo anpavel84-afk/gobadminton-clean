@@ -108,6 +108,28 @@ exit 23
             self.assertEqual(json.loads(files['var/slots/slot1/state.json'])['done'],[30,41])
             self.assertEqual(json.loads(files['legacy/state.json'])['done'],[30])
 
+    def test_public_reader_rejects_links_and_special_files_before_reading(self):
+        code = INSTALLER.split("<<'PYBASE'\n",1)[1].split('\ntry:\n    print(hashlib',1)[0]
+        namespace = {}; exec(compile(code,'<public-reader-fixture>','exec'),namespace)
+        read = namespace['safe_bytes']
+        for scenario in ('safe','symlink','hardlink','fifo','parent_symlink','oversize'):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp); public = root/'public.py'; public.write_bytes(b'public fixture')
+                if scenario == 'hardlink': os.link(public,root/'other')
+                if scenario in ('symlink','fifo'):
+                    public.unlink()
+                    if scenario == 'symlink': public.symlink_to(root/'private')
+                    else: os.mkfifo(public)
+                if scenario == 'parent_symlink':
+                    (root/'real').mkdir(); (root/'real/file').write_bytes(b'private fixture')
+                    (root/'redirect').symlink_to(root/'real',target_is_directory=True)
+                    public = root/'redirect/file'
+                if scenario == 'safe': self.assertEqual(read(public),b'public fixture')
+                else:
+                    with patch.object(os,'fdopen',side_effect=AssertionError('must not read rejected file bytes')):
+                        with self.assertRaises((OSError,ValueError)):
+                            read(public,1 if scenario=='oversize' else 1024)
+
     def test_legacy_scope_rejects_other_repositories_and_state_paths(self):
         for old, new in (
             ('/srv/gobadminton-clean/worktrees/autonomy-existing-issues-20261015', '/srv/PROD/repo'),
