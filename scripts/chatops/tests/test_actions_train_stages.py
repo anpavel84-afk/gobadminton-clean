@@ -155,6 +155,24 @@ class StageBoundaries(unittest.TestCase):
         archive=json.loads((self.folder/'actions-deferred.json').read_text())
         self.assertEqual(archive['entries'][0]['snapshot']['attempt'],2)
         self.assertEqual(self.store.data['done'],[152]);self.assertIn('stopped',self.bridge.calls)
+    def test_actual_integration_limit_defers_clean_task_without_losing_history(self):
+        import copy
+        active=self.store.data['active']
+        active.update(phase='ci',integration=3,ci={'sha':HEAD});self.exact_qa()
+        self.bridge.remote='e'*40;self.bridge.clean=lambda head:None
+        self.bridge.integrate=lambda current,dev:A.Bridge.integrate(self.bridge,current,dev)
+        before=copy.deepcopy(self.store.data)
+        with patch.object(A,'continuity',return_value={'max_integrations':3}), \
+             patch.object(stage,'setup',return_value=self.context), \
+             patch.object(stage,'run_result',return_value={'sha':HEAD}):
+            result=stage.entry(req('integrate','ci'),{})
+        self.assertEqual(result['status'],'deferred');self.assertTrue(result['safe_release'])
+        self.assertIsNone(self.store.data['active']);self.assertEqual(self.store.data['done'],before['done'])
+        archive=json.loads((self.folder/'actions-deferred.json').read_text())
+        self.assertEqual(archive['entries'][0]['snapshot'],before['active'])
+        self.assertEqual(archive['entries'][0]['reason'],'integration bound exhausted')
+        self.assertIn('stopped',self.bridge.calls)
+
     def test_unknown_author_exception_retains_checkpoint(self):
         def uncertain(a,**_):a['phase']='developing';raise RuntimeError('process lost')
         self.bridge.author=uncertain

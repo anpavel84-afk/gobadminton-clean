@@ -294,7 +294,7 @@ def entry(req, config):
                                       'codex qa quota UNKNOWN; refusing model call',
                                       'codex author daily budget exhausted', 'codex qa daily budget exhausted'))
             known = (reason == 'attempts exhausted' or reason.startswith('profile unavailable:')
-                     or reason == 'integration conflict with new dev' or unavailable)
+                     or reason in ('integration conflict with new dev', 'integration bound exhausted') or unavailable)
             if active and known and (active['phase'] in ('claimed', 'qa', 'ci') or
                                      unavailable and active['phase'] == 'developing'):
                 try:
