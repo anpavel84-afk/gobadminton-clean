@@ -1,5 +1,5 @@
 "use client";
-import { useLayoutEffect, useMemo, type RefCallback } from "react";
+import { useEffect, useMemo, type RefCallback } from "react";
 import { venueCoverUrl } from "./VenueCover";
 
 const court = "/discovery/badminton-courts.jpg";
@@ -70,7 +70,7 @@ function createResource(url: string | null) {
 export function useSelectedVenueCover(cityId: string, venue?: { id: string; name: string; cover?: { uploadedUrl: string | null } }) {
   const url = venueCoverUrl(venue?.cover?.uploadedUrl);
   const resource = useMemo(() => createResource(url), [cityId, venue?.id, url]);
-  useLayoutEffect(() => { resource.rename(venue?.name ?? ""); }, [resource, venue?.name]);
+  useEffect(() => { resource.rename(venue?.name ?? ""); }, [resource, venue?.name]);
   return resource;
 }
 export function SelectedVenueCover({ slotRef, position }: { slotRef: RefCallback<HTMLSpanElement>; position: Position }) {

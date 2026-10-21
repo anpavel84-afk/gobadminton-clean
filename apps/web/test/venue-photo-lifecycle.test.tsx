@@ -43,7 +43,13 @@ vi.mock("next/dynamic", () => ({ default: (loader: Loader) => {
 vi.mock("next/navigation", () => ({ usePathname: () => "/games" }));
 vi.mock("next/link", () => ({ default: ({ href, children }: { href: string; children: React.ReactNode }) => <a href={href}>{children}</a> }));
 const transport = vi.hoisted(() => ({ venues: vi.fn(), games: vi.fn() }));
-vi.mock("../src/lib/api-client", () => ({ listAllCityVenues: () => transport.venues(), listAllUpcomingCityGames: () => transport.games() }));
+vi.mock("../src/lib/api-client", () => ({
+  apiFetch: vi.fn<typeof import("../src/lib/api-client").apiFetch>(async () => ({
+    ok: false, status: 503, error: "Transport unavailable in photo lifecycle tests",
+  })),
+  listAllCityVenues: () => transport.venues(),
+  listAllUpcomingCityGames: () => transport.games(),
+}));
 vi.mock("pmtiles", () => ({ Protocol: class { tile = vi.fn(); } }));
 vi.mock("maplibre-gl", () => ({
   setWorkerUrl: vi.fn(), addProtocol: vi.fn(),

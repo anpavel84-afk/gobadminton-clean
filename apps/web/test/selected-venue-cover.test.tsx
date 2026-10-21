@@ -7,7 +7,7 @@ vi.mock("react", async original => ({ ...await original<typeof React>(),
     if (!previous || deps.some((value, index) => value !== previous.deps[index])) hooks.slots[i] = { deps, value: factory() };
     return hooks.slots[i]?.value;
   },
-  useLayoutEffect(effect: () => void) { hooks.effects.push(effect); },
+  useEffect(effect: () => void) { hooks.effects.push(effect); },
 }));
 import { SelectedVenueCover, useSelectedVenueCover } from "../src/components/consumer/venues/SelectedVenueCover";
 class Slot {
