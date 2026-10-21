@@ -79,8 +79,8 @@ class Node extends EventTarget {
   get isConnected(): boolean { return this === body || !!this.parentNode?.isConnected; }
   focus() { dom.activeElement = this; }
   contains(node: unknown): boolean { return node === this || [...this.children, ...this.rendered].some(child => child.contains(node)); }
-  matches(selector: string) {
-    return selector.split(",").some(part => {
+  matches(selector: string): boolean {
+    return selector.split(",").some((part): boolean => {
       const value = part.trim();
       if (value === "[hidden]") return !!this.props.hidden;
       if (value.includes("[role=dialog]")) return this.props.role === "dialog";
