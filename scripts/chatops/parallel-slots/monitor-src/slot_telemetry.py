@@ -3,7 +3,7 @@
 import os, sys, json, stat, time, re, pwd, tempfile, subprocess
 from pathlib import Path
 USERS={'slot1':'agentagency-dev','slot2':'gb-slot2'}
-PHASES={'claimed','developing','candidate','pr_wait','qa','ci','promoting','dev_wait','done','blocked'}
+PHASES={'claimed','developing','candidate','pr_wait','qa','ci','integrating','promoting','dev_wait','done','blocked'}
 def number(v):
  return v if type(v) is int and 0<=v<10**14 else None
 def sha(v):
@@ -26,6 +26,8 @@ def project(a):
  if number(a.get('issue')) is None or a.get('phase') not in PHASES: raise ValueError('task')
  head=sha(a.get('head')); q=a.get('qa') or {}; ci=a.get('ci') or {}; task=a.get('task') or {}
  if not all(isinstance(x,dict) for x in (q,ci,task)): raise ValueError('evidence')
+ # Integration has no exact new candidate gates yet; prior source evidence stays private.
+ if a['phase']=='integrating': q={};ci={}
  qsha=sha(q.get('reviewed_sha')); verdict=q.get('verdict')
  if verdict not in ('PASS','FAIL','BLOCKED'): verdict=None
  if verdict=='PASS' and (not head or qsha!=head): verdict='MISMATCH'
@@ -60,6 +62,7 @@ def validate(v,slot):
   if not isinstance(q,dict) or set(q)!={'verdict','reviewed_sha'} or q['verdict'] not in (None,'PASS','FAIL','BLOCKED','MISMATCH') or q['reviewed_sha']!=sha(q['reviewed_sha']): raise ValueError('qa')
   if q['verdict']=='PASS' and (not a['head_sha'] or q['reviewed_sha']!=a['head_sha']): raise ValueError('qa sha')
   ci=a['ci']
+  if a['phase']=='integrating' and (q['verdict'] is not None or q['reviewed_sha'] is not None or ci is not None): raise ValueError('integration gates pending')
   if ci is not None:
    if not isinstance(ci,dict) or set(ci)!={'total','passed','failed','pending','sha','run_id','result'}: raise ValueError('ci')
    if any(type(ci[k]) is not int or not 0<=ci[k]<=40 for k in ('total','passed','failed','pending')) or ci['total']!=ci['passed']+ci['failed']+ci['pending']: raise ValueError('counts')

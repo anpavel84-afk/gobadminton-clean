@@ -11,7 +11,7 @@ and the DEV receipt; never a private slot checkpoint or the retired legacy state
 import datetime, json, os, pwd, re, stat, subprocess, sys, tempfile
 
 MAX_ATTEMPTS = 3
-ALLOWED_PHASES = ('claimed', 'developing', 'candidate', 'pr_wait', 'qa', 'ci',
+ALLOWED_PHASES = ('claimed', 'developing', 'candidate', 'pr_wait', 'qa', 'ci', 'integrating',
                   'promoting', 'dev_wait', 'blocked', 'parked', 'done')
 SECRET_RE = re.compile(r'(?i)password|passwd|secret|token|private|credential|cookie|bearer|api.?key|ssh-|https?://|@')
 JOURNAL_MAX = 30

@@ -10,6 +10,9 @@ import zlib
 PINNED = {
     'autonomous_issues.py': '0b367097be3aa5596327ebec14807b6f8ca39904e6a7279dbcb67b057c23f293',
     'slots.py': '4fc51152b0f8a5bc97743101feca7e5f5e97c7ad791d6783def0b3bd3d6324b7',
+    'slot_telemetry.py': '070eaa290c72ba7a13af8accbd996f3fbe8473e00b857f3f293a868b4d8e5b3f',
+    'writer.py': '9a2364f1ca6175da6c26bcab4ae02884605edf108023d69ce8278f880fdbe132',
+    'app.js': '9e9980c6c0580e54b01e42eda52bff573b45af9cd43b2f060cf70fea4f6ea379',
 }
 
 
@@ -20,8 +23,10 @@ def build(original):
         old = (original / name).read_bytes()
         if hashlib.sha256(old).hexdigest() != old_sha:
             raise ValueError('pinned original mismatch: ' + name)
-        raw = (here.parent / name).read_bytes()
-        compile(raw, name, 'exec')
+        raw = (here.parent / name if name in ('autonomous_issues.py', 'slots.py')
+               else here / 'monitor-src' / name).read_bytes()
+        if name.endswith('.py'):
+            compile(raw, name, 'exec')
         payloads[name] = dict(old=old_sha, new=hashlib.sha256(raw).hexdigest(),
                               data=base64.b64encode(zlib.compress(raw, 9)).decode())
     controller = (here / 'continuity-src/install.py').read_text()
@@ -35,7 +40,7 @@ def build(original):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--original', type=Path, required=True, help='directory with the two pinned originals')
+    parser.add_argument('--original', type=Path, required=True, help='directory with the five pinned deployed originals')
     args = parser.parse_args()
     target = Path(__file__).with_name('slots-continuity.sh')
     target.write_text(build(args.original))

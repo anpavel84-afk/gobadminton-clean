@@ -24,3 +24,9 @@ Next action: finish source review/fix these findings, run meaningful regression 
 V1 CLI author completed: 138 core tests + 2 installer tests PASS; this is author self-check only, NOT INSTALLED. Source candidate committed for continuity. Known commissioning defects are enumerated in docs/prompts/slots-continuity-v2.md; second CLI author PID1427819 is correcting them in isolated source. Do not install V1.
 
 #156 prompt v5 exact SHA256 21b0bbc2ecdf9a695e076118378523d9e0114f987b1c0bf18543c56576c2713e received independent MOZHNO on DEV4977074e; report SHA256 4e1fcf5d19cb03566503bae910db747c77cdc1e49fa9634301a0f35730fce922. This is task definition review, not code/installation/admission. Admission waits for runtime compatibility fix. #157 prompt v3 independent review PID1444011.
+
+## 2026-10-21T20:09:12.147185+00:00 checkpoint
+
+V2 final source candidate fixes the enumerated commissioning issues. CLI self-check: 151 executor/installer tests and 8 monitor tests PASS. Installer SHA256 dc4e3d52a86f7b06d1fc6145c787cfe34292c6c11ccee3cd9772ebf9cca3ab6b is undergoing independent security review PID1552692; NOT INSTALLED. Separate literal metadata-pin helper SHA25657400728a9fdccdae9957a8097bca156db6a9d74a31473d10321a2c6edeef5be review PID1560587; no gate/instruction changes.
+
+#157 final prompt v4 SHA256 cc6ed0d9227c3052d19e90863427b422659f0c4a28c66f24d14e998a9bd7e30b has MOZHNO (report83ddcca807e5ebbe457f94361912949019bd786dedbb985b068946a985ff3dcc). Both #156 and #157 await runtime installation before immutable admission comments. Pending visual gates remain separate from source QA.

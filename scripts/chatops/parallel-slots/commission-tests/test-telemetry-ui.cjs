@@ -4,7 +4,7 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const source = fs.readFileSync(process.argv[2], 'utf8');
 class Element {
-  constructor(tag) { this.tagName=tag; this.children=[]; this.style={}; this._text=''; }
+  constructor(tag) { this.tagName=tag; this.className=''; this.children=[]; this.style={}; this._text=''; }
   appendChild(n) { this.children.push(n); n.parentNode=this; return n; }
   removeChild(n) { this.children.splice(this.children.indexOf(n),1); }
   get firstChild() { return this.children[0] || null; }
@@ -45,6 +45,15 @@ async function render(snapshot) {
   assert.ok(bar);assert.equal(bar.children.length,7);
   assert.equal(bar.children.filter(n=>n.className==='done').length,4);
   assert.equal(bar.children[4].className,'cur');
+  const integrating=await render({...base,source_mode:'slots',slots:[{slot:'slot1',status:'FRESH',claim:{issue:151,phase:'integrating',qa:{verdict:null,reviewed_sha:null},ci:null}}]});
+  assert.match(integrating.now.textContent,/интеграция с текущим DEV/);
+  assert.match(integrating.now.textContent,/новые QA и CI ожидаются/);
+  assert.doesNotMatch(integrating.now.textContent,/PASS/);
+  const integrationBar=flatten(integrating.now).find(n=>n.className==='steps');
+  assert.equal(integrationBar.children.length,7);
+  assert.equal(integrationBar.children[2].className,'cur');
+  assert.equal(integrationBar.children[3].className,'');
+  assert.equal(integrationBar.children[4].className,'');
   const blockedSlot=await render({...base,source_mode:'slots',slots:[{slot:'slot2',status:'FRESH',claim:{issue:152,phase:'blocked',resume_phase:'ci'}}]});
   const failedBar=flatten(blockedSlot.now).find(n=>n.className==='steps');
   assert.equal(failedBar.children[4].className,'fail');

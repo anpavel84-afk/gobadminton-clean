@@ -35,6 +35,7 @@ async function render(snapshot) {
   assert.match(idle.now.textContent,/Исполнитель свободен/);
   const slots=await render({...base,source_mode:'slots',claim:null,slots:[{slot:'slot1',status:'FRESH',claim:null}]});
   assert.match(slots.now.textContent,/Состояние слотов/);
-  assert.match(slots.now.textContent,/состояние процесса UNKNOWN/);
+  assert.match(slots.now.textContent,/Состояние службы неизвестно/);
+  assert.doesNotMatch(slots.now.textContent,/Исполнитель запущен/);
   console.log('PASS: completed, active, idle and slot-publication states; snapshot freshness does not claim task progress');
 })().catch(error=>{console.error(error);process.exitCode=1;});

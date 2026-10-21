@@ -70,6 +70,9 @@ class LocalTrain:
         self.bridge.work = self.work
         self.prompts, self.gated, self.comments = [], [], []
         self.bridge.model = self.model
+        self.git('remote', 'set-url', 'origin', '/srv/gb-slots/base.git')
+        self.git('remote', 'set-url', 'origin', '/srv/gb-slots/base.git', cwd=self.second)
+        self.transports = []
 
     def close(self):
         self.rt.release_lease()
@@ -77,6 +80,8 @@ class LocalTrain:
         os.close(self.st.lock)
 
     def git(self, *args, cwd=None):
+        if args[0] in ('push', 'fetch'):
+            args = tuple(str(self.origin) if arg == 'origin' else arg for arg in args)
         return subprocess.run(['git', '-c', 'user.name=Offline', '-c', 'user.email=offline@example.invalid',
             '-c', 'commit.gpgsign=false', *args], cwd=cwd or self.repo, env=self.rt.env(),
             capture_output=True, text=True, check=True).stdout.strip()
@@ -126,9 +131,13 @@ class LocalTrain:
         def run(argv, *args, **kwargs):
             if argv[0] == 'python3' and argv[-1].endswith('check_foundation.py'):
                 return ''  # source-repository foundation fixture is outside this disposable Git repo
+            if argv[0] == 'git' and any(cmd in argv for cmd in ('fetch', 'push', 'ls-remote')):
+                self.transports.append(list(argv))
+                if a.READ_REMOTE not in argv and a.WRITE_REMOTE not in argv:
+                    raise AssertionError('runtime must use explicit GitHub transport')
+                argv = [str(self.origin) if arg in (a.READ_REMOTE, a.WRITE_REMOTE) else arg for arg in argv]
             return real_run(argv, *args, **kwargs)
-        with patch.object(a, 'READ_REMOTE', str(self.origin)), patch.object(a, 'WRITE_REMOTE', str(self.origin)), \
-                patch.object(a, 'api', side_effect=self.api), patch.object(a, 'pages', side_effect=self.pages), \
+        with patch.object(a, 'api', side_effect=self.api), patch.object(a, 'pages', side_effect=self.pages), \
                 patch.object(a, 'run', side_effect=run), \
                 patch.object(a, 'server_evidence', return_value={'accepted': 'offline-receipt'}):
             yield

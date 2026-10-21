@@ -71,14 +71,15 @@ def fake_root():
 class InstallerTests(unittest.TestCase):
     @contextlib.contextmanager
     def fixture(self, policy=False):
-        with tempfile.TemporaryDirectory() as tmp, fake_root():
+        with tempfile.TemporaryDirectory() as tmp, fake_root(), patch.object(i, 'validate_style_guide'):
             root = Path(tmp)
-            for name in ('code', 'etc', 'state/slot1', 'state/slot2', 'run'):
+            for name in ('code', 'monitor/opsmon', 'monitor/web', 'etc', 'state/slot1', 'state/slot2', 'run'):
                 (root / name).mkdir(parents=True, mode=0o700, exist_ok=True)
             payloads = {}
-            for name in ('autonomous_issues.py', 'slots.py'):
+            for name in ('autonomous_issues.py', 'slots.py', 'slot_telemetry.py', 'writer.py', 'app.js'):
                 old, new = ('# original ' + name + '\n').encode(), ('# reviewed ' + name + '\n').encode()
-                (root / 'code' / name).write_bytes(old)
+                directory = 'code' if name in ('autonomous_issues.py', 'slots.py') else 'monitor/web' if name == 'app.js' else 'monitor/opsmon'
+                (root / directory / name).write_bytes(old)
                 payloads[name] = dict(old=i.digest(old), new=i.digest(new),
                                       data=base64.b64encode(zlib.compress(new)).decode())
             for slot in ('slot1', 'slot2'):
@@ -88,7 +89,7 @@ class InstallerTests(unittest.TestCase):
                 path.chmod(0o600)
             system = FakeSystem()
             installer = i.Installer(payloads, system, code=root / 'code', policy=root / 'etc/continuity.json',
-                backup=root / 'backup', lock=root / 'run/continuity.lock', state=root / 'state')
+                backup=root / 'backup', lock=root / 'run/continuity.lock', state=root / 'state', monitor=root / 'monitor')
             if policy:
                 installer.policy.write_bytes(installer.disabled)
                 installer.policy.chmod(0o640)
@@ -117,7 +118,7 @@ class InstallerTests(unittest.TestCase):
                 self.assertEqual(system.states, units)
                 self.assertEqual(set(p.name for p in installer.backup.iterdir()), {'managed.json'})
                 manifest = i.decode(base64.b64decode(installer.read(installer.backup / 'managed.json')['data']))
-                self.assertEqual(set(manifest['old']), {'autonomous_issues.py', 'slots.py', 'continuity.json'})
+                self.assertEqual(set(manifest['old']), {'autonomous_issues.py', 'slots.py', 'slot_telemetry.py', 'writer.py', 'app.js', 'continuity.json'})
                 events = list(system.events)
                 installer.apply()
                 self.assertEqual(events, system.events)
@@ -301,16 +302,51 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(system.events, events)
             self.assert_restored(installer, system, before, units)
 
-    def test_remove_preserves_policy_archive_outside_legacy_owner_parked_schema(self):
+    def test_remove_refuses_nonempty_deferred_without_mutating_files_units_or_checkpoints(self):
         with self.fixture() as (root, installer, system):
-            before, units = self.managed(installer), copy.deepcopy(system.states)
             installer.apply()
             path = root / 'state/slot1/deferred.json'
             raw = b'{"deferred":[{"kind":"policy","issue":151,"attempt":3}]}'
             path.write_bytes(raw); path.chmod(0o600)
-            installer.apply(remove=True)
+            before, units, events = self.managed(installer), copy.deepcopy(system.states), list(system.events)
+            journal = (installer.backup / 'managed.json').read_bytes()
+            for dry in (True, False):
+                with self.assertRaisesRegex(RuntimeError, 'ignores policy deferrals'):
+                    installer.apply(remove=True, dry=dry)
             self.assertEqual(path.read_bytes(), raw)
             self.assertFalse((path.parent / 'parked.json').exists())
+            self.assertEqual((installer.backup / 'managed.json').read_bytes(), journal)
+            self.assertEqual(system.events, events)
+            self.assert_restored(installer, system, before, units)
+
+    def test_partial_restart_new_deferral_refuses_automatic_unsafe_rollback(self):
+        with self.fixture() as (root, installer, system):
+            fired = [False]
+            def started(event):
+                if event[1] == 'start' and not fired[0]:
+                    fired[0] = True
+                    path = root / 'state/slot1/deferred.json'
+                    path.write_text('{"deferred":[{"kind":"policy","issue":151}]}')
+                    path.chmod(0o600)
+                    raise OSError('start failed after task was deferred')
+            system.after = started
+            with self.assertRaisesRegex(RuntimeError, 'ROLLBACK INCOMPLETE'):
+                installer.apply()
+            self.assertEqual(sum(verb == 'stop' for verb, _ in system.events), 1)
+            self.assertTrue(all(self.managed(installer)[p.name]['sha256'] == i.digest(installer.new[p.name])
+                                for p in installer.paths))
+            manifest = i.decode(base64.b64decode(installer.read(installer.backup / 'managed.json')['data']))
+            self.assertEqual(manifest['phase'], 'installed')
+            self.assertTrue(all(v['FreezerState'] == 'running' for v in system.states.values()))
+
+    def test_empty_deferred_allows_exact_rollback_and_is_untouched(self):
+        with self.fixture() as (root, installer, system):
+            before, units = self.managed(installer), copy.deepcopy(system.states)
+            installer.apply()
+            path = root / 'state/slot1/deferred.json'
+            path.write_text('{"deferred":[]}'); path.chmod(0o600)
+            installer.apply(remove=True)
+            self.assertEqual(path.read_text(), '{"deferred":[]}')
             self.assert_restored(installer, system, before, units)
 
     def test_generated_installer_contains_current_sources_pins_and_exact_controller(self):
@@ -321,11 +357,12 @@ class InstallerTests(unittest.TestCase):
                             and any(isinstance(t, ast.Name) and t.id == 'PAYLOADS' for t in node.targets))
         payloads = ast.literal_eval(payload_node.value)
         self.assertIn((HERE / 'continuity-src/install.py').read_text(), controller)
-        pins = ('0b367097be3aa5596327ebec14807b6f8ca39904e6a7279dbcb67b057c23f293',
-                '4fc51152b0f8a5bc97743101feca7e5f5e97c7ad791d6783def0b3bd3d6324b7')
+        originals = HERE.parents[2] / 'pinned-originals'
+        pins = json.loads((originals / 'manifest.json').read_text()).values()
         self.assertEqual(set(item['old'] for item in payloads.values()), set(pins))
         for name, item in payloads.items():
-            raw = (HERE.parent / name).read_bytes()
+            raw = (HERE.parent / name if name in ('autonomous_issues.py', 'slots.py') else HERE / 'monitor-src' / name).read_bytes()
+            self.assertEqual(hashlib.sha256((originals / name).read_bytes()).hexdigest(), item['old'])
             self.assertEqual(zlib.decompress(base64.b64decode(item['data'])), raw)
             self.assertEqual(hashlib.sha256(raw).hexdigest(), item['new'])
 

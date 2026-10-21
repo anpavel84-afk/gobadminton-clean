@@ -1,0 +1,7 @@
+Node v24 verification by integrator. Corrected two test-only issues: synthetic DOM Element.className defaults to empty string, and old idle fixture expected wording from before the installed telemetry release. The wording failure was reproduced against unchanged installed app.js, then the assertion was updated to current unknown-service wording plus a negative running assertion. No production payload changed.
+
+test-telemetry-ui.cjs exit=0
+PASS: completed, active, idle and slot-publication states; snapshot freshness does not claim task progress
+
+test-monitor-idle-ui.cjs exit=0
+PASS: completed, active, idle and slot-publication states; snapshot freshness does not claim task progress

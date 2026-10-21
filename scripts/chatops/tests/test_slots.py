@@ -61,7 +61,8 @@ def host(tmp, budgets=None):
 def slot_mode(tmp, name='slot1', **kw):
     saved = {k: getattr(a, k) for k in GLOBALS}
     try:
-        yield a.activate_slot(name, **(host(tmp, **kw)))
+        with patch.object(a, 'validate_style_guide'):
+            yield a.activate_slot(name, **(host(tmp, **kw)))
     finally:
         for k, v in saved.items():
             setattr(a, k, v)
@@ -844,6 +845,7 @@ def model_barrier(argv, *args, **kw):
     sys.stdin.readline()
     Path(argv[argv.index('-o')+1]).write_text('{}')
 a.run = model_barrier
+a.validate_style_guide = lambda: None  # synthetic host has no installed public tree
 with patch.object(Path, 'parents', property(lambda path: (root,))):
     bridge.model('offline role overlap barrier', qa=name == 'slot1')
 rt.release_lease()

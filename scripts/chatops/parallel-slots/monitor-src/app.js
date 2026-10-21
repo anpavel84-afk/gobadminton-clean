@@ -2,9 +2,9 @@
 (function () {
   var $ = function (id) { return document.getElementById(id); };
   var STAGES = ['Задача', 'Код', 'PR', 'QA', 'CI', 'DEV', 'Принято'];
-  var CUR = { claimed: 1, developing: 1, candidate: 2, pr_wait: 2, qa: 3, ci: 4, promoting: 5, dev_wait: 5, done: 6 };
+  var CUR = { claimed: 1, developing: 1, candidate: 2, pr_wait: 2, integrating: 2, qa: 3, ci: 4, promoting: 5, dev_wait: 5, done: 6 };
   var PHASE_RU = { claimed: 'задача взята', developing: 'идёт разработка кода', candidate: 'код готов; подготовка публикации', pr_wait: 'код опубликован; ожидание PR',
-    qa: 'независимая QA', ci: 'CI (проверки на GitHub)', promoting: 'вливание в dev', dev_wait: 'выкладка на DEV, ждём приёмку',
+    qa: 'независимая QA', ci: 'CI (проверки на GitHub)', integrating: 'интеграция с текущим DEV; новые QA и CI ожидаются', promoting: 'вливание в dev', dev_wait: 'выкладка на DEV, ждём приёмку',
     blocked: 'ЗАБЛОКИРОВАНО (держит слот)', parked: 'на паузе', done: 'готово' };
   var timer = null;
 

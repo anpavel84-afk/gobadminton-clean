@@ -613,15 +613,10 @@ class Runtime:
             summary = dict(issue=active['issue'], phase=active['phase'], attempt=active.get('attempt'),
                            head=active.get('head'), base=active.get('base'),
                            integration=active.get('integration', 0),
-                           reason=active.get('reason'), resume_phase=active.get('resume_phase'),
-                           wait=active.get('wait'),
                            **{k: v for k, v in task_record(active['issue'], active['task']).items() if k != 'issue'})
         atomic(self.layout.outbox / 'status.json',
                dict(schema=STATUS_SCHEMA, slot=self.slot, active=summary, done=list(data.get('done', [])),
                     parked=[e['issue'] for e in parked], at=int(time.time()),
-                    deferred=[dict(issue=e['issue'], reason=e.get('reason'),
-                                   kind='policy' if e.get('kind') == 'policy' else 'owner',
-                                   head=e.get('head'), attempt=e.get('attempt')) for e in parked],
                     integrating=self.mutex.held), 0o644)
 
 
@@ -932,6 +927,10 @@ def tick(cfg, state_root=STATE_ROOT, config_root=CONFIG_ROOT, fetch=None, owners
         if asg['issue'] in finished and not (active and active['issue'] == asg['issue'] and active['phase'] != 'done'):
             os.unlink(Path(state_root) / 'assign' / f'{slot}.json')
             del assignments[slot]
+    busy = {name for name in slots if name in assignments or
+            ((statuses.get(name) or {}).get('active') or {}).get('phase') not in (None, 'done')}
+    if len(busy) >= cfg['max_parallel'] or not any(name in statuses and name not in busy for name in slots):
+        return {}, {'queue': 'busy: no free slot/capacity'}
     budget = Budget(Path(config_root) / 'budgets.json', Path(state_root) / 'outbox', Path(state_root) / 'locks' / 'registry.lock')
     if fetch is None:
         issues = a.pages('issues?state=open')

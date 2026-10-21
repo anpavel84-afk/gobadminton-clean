@@ -20,6 +20,7 @@ import zlib
 UNITS = ('gobadminton-supervisor.service', 'gobadminton-slot@slot1.service',
          'gobadminton-slot@slot2.service')
 CODE = Path('/usr/local/lib/gobadminton-slots')
+MONITOR = Path('/usr/local/lib/gb-ops-monitor')
 POLICY = Path('/etc/gobadminton-slots/continuity.json')
 BACKUP = Path('/var/lib/gobadminton-slots-continuity')
 LOCK = Path('/run/gobadminton-slots-continuity.lock')
@@ -47,6 +48,35 @@ def unique(pairs):
 
 def decode(raw):
     return json.loads(raw, object_pairs_hook=unique)
+
+
+STYLE_GUIDE = Path('/opt/gobadminton-clean-qa/style-guide')
+STYLE_PINS = {'src/App.tsx': '04187d4d7d70c8c61e9ca2f08b6b6325a98539a3ec90c711c48ab771f675b61c',
+              'src/index.css': 'f660e31973a6142784308f22728c751d7bb7432fb2ac0136bac032dbc6b1db2a'}
+
+
+def validate_style_guide():
+    """Grant only the frozen public tree, never a symlink into private sibling data."""
+    for path in (*reversed(STYLE_GUIDE.parents), STYLE_GUIDE):
+        info = path.lstat()
+        require(stat.S_ISDIR(info.st_mode) and info.st_uid == 0 and not info.st_mode & 0o022,
+                'untrusted Style Guide directory')
+    require((STYLE_GUIDE / 'refs').is_dir(), 'missing Style Guide refs')
+    for path in STYLE_GUIDE.rglob('*'):
+        info = path.lstat()
+        directory = stat.S_ISDIR(info.st_mode)
+        require(info.st_uid == 0 and not info.st_mode & 0o7022
+                and (directory or stat.S_ISREG(info.st_mode) and info.st_nlink == 1)
+                and info.st_mode & (0o005 if directory else 0o004) == (0o005 if directory else 0o004),
+                'non-public or untrusted Style Guide entry')
+    for name, expected in STYLE_PINS.items():
+        fd = os.open(STYLE_GUIDE / name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            raw = os.read(fd, 2 * 1024 * 1024 + 1)
+            require(len(raw) <= 2 * 1024 * 1024 and hashlib.sha256(raw).hexdigest() == expected,
+                    'frozen Style Guide checksum mismatch')
+        finally:
+            os.close(fd)
 
 
 class System:
@@ -85,18 +115,21 @@ class System:
 
 class Installer:
     def __init__(self, payloads, system=None, code=CODE, policy=POLICY, backup=BACKUP,
-                 lock=LOCK, state=STATE):
+                 lock=LOCK, state=STATE, monitor=MONITOR):
         self.system = system or System()
         self.code, self.policy, self.backup = Path(code), Path(policy), Path(backup)
         self.lock, self.state = Path(lock), Path(state)
-        self.paths = [self.code / 'autonomous_issues.py', self.code / 'slots.py', self.policy]
+        self.paths = [self.code / 'autonomous_issues.py', self.code / 'slots.py',
+                      Path(monitor) / 'opsmon/slot_telemetry.py', Path(monitor) / 'opsmon/writer.py',
+                      Path(monitor) / 'web/app.js', self.policy]
         self.payloads = payloads
         self.new = {}
-        for name in ('autonomous_issues.py', 'slots.py'):
+        for name in (p.name for p in self.paths if p != self.policy):
             item = payloads[name]
             raw = zlib.decompress(base64.b64decode(item['data'], validate=True))
             require(digest(raw) == item['new'], 'payload checksum mismatch')
-            compile(raw, name, 'exec')
+            if name.endswith('.py'):
+                compile(raw, name, 'exec')
             self.new[name] = raw
         self.new['continuity.json'] = (json.dumps(POLICY_VALUE, sort_keys=True) + '\n').encode()
         self.disabled = (json.dumps(POLICY_VALUE | {'enabled': False}, sort_keys=True) + '\n').encode()
@@ -187,8 +220,27 @@ class Installer:
                     ('blocked', 'done', 'candidate', 'pr_wait', 'ci'),
                     'active author/QA/claim/integration/deploy; installation refused')
             if original:
+                # The pinned runtime ignores this archive entirely: retaining the bytes alone
+                # would allow policy-deferred tasks to be admitted again after rollback.
+                deferred = directory / 'deferred.json'
+                try:
+                    fd = os.open(deferred, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                except FileNotFoundError:
+                    pass
+                else:
+                    try:
+                        info = os.fstat(fd)
+                        require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_uid == uid
+                                and not info.st_mode & 0o077, 'unsafe deferred checkpoint')
+                        raw = os.read(fd, 2 * 1024 * 1024 + 1)
+                        require(len(raw) <= 2 * 1024 * 1024, 'oversize deferred checkpoint')
+                        deferred_value = decode(raw)
+                    finally:
+                        os.close(fd)
+                    require(set(deferred_value) == {'deferred'} and deferred_value['deferred'] == [],
+                            'original runtime ignores policy deferrals; reconciliation required before rollback')
                 # Original Store requires a real integer park_comment. Executor policy records
-                # live separately in deferred.json, which removal deliberately leaves intact.
+                # live separately; neither path is ever rewritten by this installer.
                 try:
                     fd = os.open(directory / 'parked.json', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
                 except FileNotFoundError:
@@ -260,6 +312,8 @@ class Installer:
                 os.close(lock_fd)
 
     def transaction(self, remove, dry):
+        if not remove:
+            validate_style_guide()
         if self.backup.exists():
             info = self.backup.lstat()
             require(stat.S_ISDIR(info.st_mode) and info.st_uid == 0 and not info.st_mode & 0o077,
@@ -385,6 +439,7 @@ class Installer:
                     self.safe_slots(original=not remove)
                     self.system.command('stop', *UNITS)
                     self.statuses(stopped=True)
+                    self.safe_slots(original=not remove)
                 except BaseException as error:
                     errors.append(type(error).__name__)
                     # No file restoration occurred. Unfreeze retained workers; the private

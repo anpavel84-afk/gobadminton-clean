@@ -359,7 +359,7 @@ def activate_slot(name, **roots):
 def slot_discover(store, since):
     """Slot mode: claim ONLY the issue the supervisor assigned to this slot (no free-for-all)."""
     if not (store.data['active'] and store.data['active']['phase'] != 'done'):
-        _SLOTS.release_lease()
+        store.publish_free()  # also finish a checkpointed park after a failed release/publication
     assigned = slot(_SLOTS.assignment)
     if assigned is None or assigned in store.data['done'] or any(e['issue'] == assigned for e in store.parked):
         return store.claim([], since)
@@ -452,10 +452,16 @@ class Store:
         if self.data['active']:
             require(self.data['active'].get('phase') in PHASES, 'unknown phase')
 
-    def save(self):
+    def save(self, *, publish=True):
         atomic(self.path, self.data)
-        if _SLOTS is not None:
+        if publish and _SLOTS is not None:
             slot(_SLOTS.publish, self.data, self.parked)
+
+    def publish_free(self):
+        require(not self.data['active'] or self.data['active']['phase'] == 'done', 'slot is still active')
+        _SLOTS.mutex.release()
+        _SLOTS.release_lease()
+        slot(_SLOTS.publish, self.data, self.parked)
 
     def claim(self, issues, since, comments=None):
         if self.data['active'] and self.data['active']['phase'] != 'done':
@@ -522,7 +528,11 @@ class Store:
                    {'deferred' if automatic else 'parked': entries})
             self.parked = self.parked + [entry]
         self.data['active'] = None  # never appended to done
-        self.save()
+        if _SLOTS is None:
+            self.save()
+        else:
+            self.save(publish=False)
+            self.publish_free()
         event = dict(phase='parked', issue=entry['issue'], sha=entry['head'])
         if entry.get('kind') == 'policy':
             event.update(phase='deferred', reason=entry['reason'], policy=entry['policy']['sha256'])
@@ -691,6 +701,35 @@ def clean_env():
             'GIT_TERMINAL_PROMPT': '0'}
 
 
+STYLE_GUIDE = Path('/opt/gobadminton-clean-qa/style-guide')
+STYLE_PINS = {'src/App.tsx': '04187d4d7d70c8c61e9ca2f08b6b6325a98539a3ec90c711c48ab771f675b61c',
+              'src/index.css': 'f660e31973a6142784308f22728c751d7bb7432fb2ac0136bac032dbc6b1db2a'}
+
+
+def validate_style_guide():
+    """Grant only the frozen public tree, never a symlink into private sibling data."""
+    for path in (*reversed(STYLE_GUIDE.parents), STYLE_GUIDE):
+        info = path.lstat()
+        require(stat.S_ISDIR(info.st_mode) and info.st_uid == 0 and not info.st_mode & 0o022,
+                'untrusted Style Guide directory')
+    require((STYLE_GUIDE / 'refs').is_dir(), 'missing Style Guide refs')
+    for path in STYLE_GUIDE.rglob('*'):
+        info = path.lstat()
+        directory = stat.S_ISDIR(info.st_mode)
+        require(info.st_uid == 0 and not info.st_mode & 0o7022
+                and (directory or stat.S_ISREG(info.st_mode) and info.st_nlink == 1)
+                and info.st_mode & (0o005 if directory else 0o004) == (0o005 if directory else 0o004),
+                'non-public or untrusted Style Guide entry')
+    for name, expected in STYLE_PINS.items():
+        fd = os.open(STYLE_GUIDE / name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            raw = os.read(fd, 2 * 1024 * 1024 + 1)
+            require(len(raw) <= 2 * 1024 * 1024 and hashlib.sha256(raw).hexdigest() == expected,
+                    'frozen Style Guide checksum mismatch')
+        finally:
+            os.close(fd)
+
+
 def permission_config(work, job, common, state, qa=False, denied=()):
     """Whole inline TOML table: quoted path keys must not go through dotted -c parsing."""
     work, job, common, state = [Path(p).resolve() for p in (work, job, common, state)]
@@ -700,6 +739,9 @@ def permission_config(work, job, common, state, qa=False, denied=()):
                   str(job): 'write', str(common): 'read', str(work / '.git'): 'read'}
     for path in RUNTIME_READS:
         filesystem[str(path.resolve())] = 'read'
+    if _SLOTS is not None:
+        filesystem[str(STYLE_GUIDE.parent)] = 'deny'
+        filesystem[str(STYLE_GUIDE)] = 'read'
     for path in (KEY.parent, state, *denied):
         filesystem[str(Path(path).resolve())] = 'deny'
     def table(mapping):
@@ -834,19 +876,23 @@ class Bridge:
                 'Git transport configuration changed')
         for direction in ((), ('--push',)):
             urls = self.git('remote', 'get-url', '--all', *direction, 'origin').splitlines()
-            require(len(urls) == 1 and urls[0] in (READ_REMOTE, WRITE_REMOTE), 'Git remote changed')
+            allowed = (READ_REMOTE, WRITE_REMOTE) + (('/srv/gb-slots/base.git',) if _SLOTS is not None else ())
+            require(len(urls) == 1 and urls[0] in allowed, 'Git remote changed')
 
     def candidate_identity(self, active):
         """Policy gates use the pinned repository, exact branch and a clean stopped writer."""
-        self.clean(active['head'])
-        for marker in ('MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'rebase-merge', 'rebase-apply', 'sequencer'):
-            path = self.git('rev-parse', '--path-format=absolute', '--git-path', marker, cwd=self.work)
-            require(not os.path.lexists(path), 'unfinished Git mutation; refusing continuity')
+        self.stopped_writer(active['head'])
         ref = f'refs/heads/automation/issue-{active["issue"]}'
         require(self.git('ls-remote', '--heads', READ_REMOTE, ref) == active['head'] + '\t' + ref,
                 'remote candidate branch differs from checkpoint')
         require(self.git('merge-base', active['base'], active['head'], cwd=self.work) == active['base'],
                 'candidate history changed')
+
+    def stopped_writer(self, head):
+        self.clean(head)
+        for marker in ('MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'rebase-merge', 'rebase-apply', 'sequencer'):
+            path = self.git('rev-parse', '--path-format=absolute', '--git-path', marker, cwd=self.work)
+            require(not os.path.lexists(path), 'unfinished Git mutation; refusing continuity')
 
     def remote_dev(self):
         self.git('fetch', '--no-tags', READ_REMOTE, 'refs/heads/dev')
@@ -906,6 +952,8 @@ class Bridge:
         return readable, [job] + ([] if qa else [self.work])
 
     def model(self, prompt, qa=False):
+        if _SLOTS is not None:
+            validate_style_guide()
         with tempfile.TemporaryDirectory(prefix='gb-model-') as temp:
             job = Path(temp)
             result = job / 'result.json'
@@ -1168,7 +1216,7 @@ class Bridge:
                     and backup.exists() and not backup.is_symlink()
                     and loads(backup.read_bytes()) == self.store.data,
                     'parked entry/backup differ from checkpoint; reconcile')
-            self.store.park(entry)
+            self.finish_park(entry)
             return True
         if self.defer(active):
             return True
@@ -1199,10 +1247,17 @@ class Bridge:
         entry = dict(issue=active['issue'], head=active['head'], attempt=active['attempt'],
                      park_comment=comment['id'], allow_successors=value['allow_successors'],
                      reason=value['reason'], snapshot=snapshot)
-        self.store.park(entry)
+        self.finish_park(entry)
         if drift:
             print('Park allowed: dev baseline drift', flush=True)
         return True
+
+    def finish_park(self, entry):
+        if _SLOTS is not None:
+            active = self.store.data['active']
+            self.work = self.c.worktrees_root / f'issue-{active["issue"]}'
+            self.stopped_writer(active['head'] or active['base'])
+        self.store.park(entry)
 
     def defer(self, active):
         """Only proven terminal source failures release a slot. Integrity/unknown blocks retain it."""
@@ -1245,7 +1300,7 @@ class Bridge:
             require(loads(backup.read_bytes()) == self.store.data, 'deferral backup differs; reconcile')
         else:
             atomic(backup, self.store.data)
-        self.store.park(dict(kind='policy', policy=policy, issue=active['issue'], head=active['head'],
+        self.finish_park(dict(kind='policy', policy=policy, issue=active['issue'], head=active['head'],
                              attempt=active['attempt'], allow_successors=[], reason=reason,
                              evidence=failure, snapshot=json.loads(json.dumps(active))))
         return True
@@ -1273,6 +1328,7 @@ class Bridge:
             raise Hold('dev history does not contain the claimed base; integration refused') from None
         policy = continuity(active)
         if policy:
+            self.stopped_writer(active['head'])
             require(active.get('integration', 0) < policy['max_integrations'], 'integration bound exhausted')
             self.store.phase('integrating', integration_target=dev)
         try:
@@ -1307,7 +1363,7 @@ class Bridge:
         if continuity(active):
             require(self.git('show', '-s', '--format=%P', head, cwd=self.work).split()
                     == [active['head'], dev], 'integration commit identity mismatch')
-            self.clean(head)
+            self.stopped_writer(head)
         changed = set(self.git('diff', '--name-only', '-z', dev, head, cwd=self.work).split('\0'))
         changed.discard('')
         require(changed, 'zero diff')
@@ -1500,7 +1556,9 @@ def main():
     if _SLOTS is not None:
         if store.data['active'] and store.data['active']['phase'] != 'done':
             slot(_SLOTS.lease, store.data['active'])  # restart: re-take own lease before any effect
-        slot(_SLOTS.publish, store.data, store.parked)
+            slot(_SLOTS.publish, store.data, store.parked)
+        else:
+            store.publish_free()
     bridge = Bridge(config, store)
     recovery = bool(store.data['active'])
     resume_drift = None
