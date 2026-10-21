@@ -1,6 +1,6 @@
 # Two-slot commissioning — 21 October 2026
 
-From: PM/OPS → next PM/OPS. Status: WORKING_DRAFT, commissioning incomplete.
+From: PM/OPS → next PM/OPS. Status: INSTALLED_AND_ACTIVATED, real-task commissioning incomplete.
 Base: dev `9d3e092cc30796ffc0096c50584a771e60c18ef3`.
 Owner authorized completion in the PM chat. Target Germany `vmi3510488`, GoBadminton CLEAN only. PROD and unrelated services are out of scope.
 
@@ -21,11 +21,11 @@ Installed installer SHA256:
 | slots-codex-runtime | 299213044b1adca2f3a6d052926c69e016bd4966307da9dd69fa0685cc5ebe1b |
 | slots-code-mode-runtime | 5ccc92a1a04008b9dc42722e3dca92d5ebf6dbe52944703981890bd1153acfbf |
 
-The legacy user executor is still the active executor. Core slots are not installed or activated. Supporting component installation must not be reported as successful parallel execution.
+Core and both slots are now installed and activated. The legacy user executor is stopped/disabled after byte-verified migration of all 34 done issues and parked/history state. Both slot units and supervisor are active with max_parallel=2. Real task execution and acceptance remain pending.
 
 ## Current core candidate and review
 
-Candidate `60477b1fb8370b277d8310c7a3ed70c6c124abcf8ad86310c90d2968c73a5a0d` is undergoing independent review (PID7306, `/var/lib/gb-ops-stage/files/slots-final-commission-review16.log`). Do not start duplicate reviews or install a candidate with FAIL. Root allowlist must match exact installer bytes.
+Candidate `60477b1fb8370b277d8310c7a3ed70c6c124abcf8ad86310c90d2968c73a5a0d` passed independent review16 (PID7306, `/var/lib/gb-ops-stage/files/slots-final-commission-review16.log`). Do not start duplicate reviews or install a candidate with FAIL. Root allowlist must match exact installer bytes.
 
 Corrections preserve executor/slot payloads and full budget history. Shared locks use distinct group gb-slots-clean/GID65042. Root inventory found no existing files, groups or running process references to that GID; receipt `/root/gb-slots-gid65042-audit.json` expires after four hours. Historical gb-slots/GID970 and its archives remain untouched. Existing service accounts are validated, not modified. Legacy paths are pinned to the exact CLEAN checkout/state/trust locations; Git common directory is pinned to `/srv/gobadminton-clean/repo/.git`.
 
@@ -35,9 +35,7 @@ Backups open eligible single-link regular files through verified descriptors; ta
 
 ## Next bounded action
 
-Read review16 and expanded test results; resolve findings, obtain exact-SHA PASS and run current live DRY. Then install the core once. Move slot2 own new enrollment directories by rename to its canonical home (no legacy session/key copying), verify normal clients, publish factual root-owned capability proof. Configure conservative host author/QA daily limits of 30, per-slot limits at most 30, accounting for pre-cutover calls rather than resetting the approved ceiling40. Current-day prior legacy work conservatively counts six calls per role; capability probes currently add three author and two QA calls. OPS installer/body reviews use their separate review role.
-
-Run slot2 preflight and activation only when idle. Then admit two exact independently reviewed disjoint real tasks, observe concurrent author/QA progress, serial integration/CI and accepted DEV evidence. Proposed bounded tasks are map-module loading feedback for games and Radar; neither closes all of MAP-PERF1. Their drafts are on the server; optional-fields prompt review must wait for installed slot support (first games body review correctly rejected absent installation evidence). Do not publish failed or merely revised bodies as approved.
+Core installation, byte-verified migration, own slot2 enrollment finalization and max_parallel=2 activation are complete. Next: obtain exact-body independent approval for the two disjoint map-module loading tasks, publish immutable Owner issues, and observe both independent task runs through exact-SHA QA/CI and accepted DEV evidence. Their scope excludes full MAP-PERF1. Do not publish failed or merely revised bodies as approved.
 
 ## Recovery and non-loss requirements
 
@@ -66,4 +64,23 @@ The previous full core candidate (23344282...) obtained independent PASS in revi
 
 Review14 rejected arbitrary unit symlinks and aliases. The candidate now pins root-owned regular unit bytes and systemd Id/Names/FragmentPath/DropInPaths/NeedDaemonReload before any service mutation, including rollback. Legacy identity also requires its exact Id/Names. Offline fixtures reject foreign aliases, fragments, drop-ins, stale metadata and missing or nonregular units before mutation.
 
-Review15 rejected zero-status signal exits that could skip rollback after stopping legacy. HUP/INT/TERM now explicitly exit 129/130/143 and trigger the existing EXIT rollback; recovery ignores repeated catchable termination until history and service recovery finishes. A regression executes all three real signals for install, activation and removal, checking nonzero status, retained checkpoint history and appropriate service recovery. SIGKILL and host power loss remain outside shell trap guarantees. 150 offline tests and the exact live DRY passed. Review16 remains pending; no core installation has occurred.
+Review15 rejected zero-status signal exits that could skip rollback after stopping legacy. HUP/INT/TERM now explicitly exit 129/130/143 and trigger the existing EXIT rollback; recovery ignores repeated catchable termination until history and service recovery finishes. A regression executes all three real signals for install, activation and removal, checking nonzero status, retained checkpoint history and appropriate service recovery. SIGKILL and host power loss remain outside shell trap guarantees. 150 offline tests and the exact live DRY passed. Review16 subsequently PASSed; see actual cutover evidence below.
+
+
+## Trusted installed-format metadata
+
+The read-only slot-review-metadata patch was independently approved (review-slot-review-metadata-20261021T160342Z-4183504), dry-run and installed through gb-run. Installer SHA256 6b74c56e0722456f06baf171e17fc2e60e6ee88531b0157911081c12ea7f7790; protected review wrapper exact after SHA256 8f627b8945255d1a251703e87f4aad8f0634b448d4685c7ddab96681bf52b8a4. This reports installed optional task-format support only after exact pinned root-owned parser and slots files are present; otherwise it explicitly reports NOT_INSTALLED_OR_UNVERIFIED. It grants no admission, task verdict or gate bypass. This avoids treating older DEV source schema as proof of runtime installation. A root-controlled exception records the previously authorized exact compatibility scope.
+
+
+## Actual core installation and two-slot activation
+
+Independent core review16 PASS: `/var/lib/gb-ops-stage/ops-patches/review-parallel-slots-final-20261021T160541Z-7306/`. Exact SHA256 60477b1fb8370b277d8310c7a3ed70c6c124abcf8ad86310c90d2968c73a5a0d is allowlisted. gb-run live DRY passed. Applying through gb-run exposed nested acquisition of the same global lock (wrapper FD9 and installer FD8); the waiting flock was terminated before any changes. No lock or reviewed code was changed. The exact allowlisted bytes were copied root:root0600 to `/root/gb-parallel-slots-reviewed-20261021.sh` and executed with the installer's own global transaction lock. Direct execution completed successfully, including descriptor-backed migration check and all isolation checks. Backup `/root/gb-parallel-slots.20261021-181415`; log `/var/lib/gb-ops-stage/files/slots-final-root-install16.log`.
+
+The same slot2 user's own freshly enrolled .ssh/.codex directories were renamed intact into its canonical private home; no credential bytes were read or copied. Canonical-home normal Codex login status and authenticated GitHub push --dry-run passed. Root capability proof binds the actual prior separate author/QA inference receipts and exact runtime executable. Conservative new host caps30/role and explicit per-slot caps30 reserve the prior legacy and manual probe calls under the approved ceiling40; no historical counters were reset.
+
+Exact reviewed `--preflight-slot2` returned ready=true with failures=[], activation DRY passed, and `--activate-slot2` completed. Both slot units and supervisor are enabled/active, max_parallel=2. Logs: slot2-finalize-enrollment.log, slot2-final-preflight.log, slot2-activation-dry.log, slot2-activation.log under `/var/lib/gb-ops-stage/files/`. At this point task assignment was empty: concurrent product execution, exact-SHA independent QA/CI and accepted DEV releases are not yet claimed. Games and Radar module-loading tasks remain subject to exact-body review before issue publication.
+
+
+## Backlog display correction during commissioning
+
+An OPS metadata update used unsupported status “в работе”; the existing strict backlog validator rejects the whole data file if any item has an unknown status. This was an operator data error, not loss of backlog records. Restored supported “ожидает” while retaining the note that both slots are installed/active and await actual task commissioning. Both temporary and final files passed the actual load_backlog_strict validator before republishing. Published snapshot available=true with42 visible items and all49 source records retained (2026-10-21T16:18:27Z). Further metadata writes must pass the actual validator before replacement.
