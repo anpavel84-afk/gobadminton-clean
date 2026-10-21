@@ -49,7 +49,7 @@ class SlotTrust(unittest.TestCase):
             with self.assertRaises(core.Refused):receiver.no_models(1002,'slot1')
     def test_unproven_promoting_checkpoint_never_accepted(self):
         state={'active':active('promoting'),'done':[]}
-        with patch.object(installer,'checkpoint',return_value=(state,[])),patch.object(installer,'no_models'),patch.object(installer,'free_lock'):
+        with patch.object(installer,'checkpoint',return_value=(state,[])),patch.object(installer,'no_models'),patch.object(installer,'free_lock'),patch.object(installer.pwd,'getpwnam',return_value=SimpleNamespace(pw_uid=1002)):
             with self.assertRaises(core.Refused):installer.safe_state('slot1',True,{})
     def test_monitor_payload_is_exact_additive_patch(self):
         package=ROOT/'scripts/chatops/actions_train'

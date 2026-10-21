@@ -368,7 +368,8 @@ class Migration(unittest.TestCase):
                 with self.assertRaises(core.Refused):installer.prepare(bundle,installer.sha(manifest))
     def test_unknown_writer_migration_refused_without_stopping_units(self):
         with patch.object(installer,'checkpoint',return_value=({'active':active('developing'),'done':[152]},[])), \
-             patch.object(installer,'no_models'),patch.object(installer,'free_lock'):
+             patch.object(installer,'no_models'),patch.object(installer,'free_lock'), \
+             patch.object(installer.pwd,'getpwnam',return_value=SimpleNamespace(pw_uid=1002)):
             with self.assertRaises(core.Refused):installer.safe_state('slot1',True)
     def test_rollback_disables_dispatch_before_unknown_refusal_and_keeps_history(self):
         policy=dict(mode='active',owned={'slot1':'hash'})
