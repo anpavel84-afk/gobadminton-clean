@@ -30,7 +30,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: d4567dfddbfc26d95236839343d841841067e72c
+          ref: d4ddf1a3f21ee279535e6c220b13c6456ee97435
           persist-credentials: false
       - id: stage
         name: Submit one stage and query its durable result
