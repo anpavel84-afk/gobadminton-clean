@@ -1,4 +1,5 @@
 "use client";
+import type { ReactNode } from "react";
 import Link from "next/link";
 import { venueCreatePath } from "../../../lib/games-venue-map";
 import { useEffect, useId, useRef, useState } from "react";
@@ -56,9 +57,9 @@ function VenuePublicContacts({ value }: { value: unknown }) {
   </section>;
 }
 
-export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDeselect, embedded = false, active = true }: {
+export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDeselect, embedded = false, active = true, coverSlot }: {
   venue: VenueSummary; games: readonly Game[]; gamesReady: boolean; now: number;
-  onCollapse: () => void; onDeselect: () => void; embedded?: boolean; active?: boolean;
+  onCollapse: () => void; onDeselect: () => void; embedded?: boolean; active?: boolean; coverSlot?: ReactNode;
 }) {
   const [view, setView] = useState<"info" | "schedule" | "game">("info");
   const [selectedDate, setSelectedDate] = useState("");
@@ -111,7 +112,7 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
         <button ref={close} className="gb-venue-sheet-close" type="button" aria-label="Закрыть" onClick={onCollapse}>×</button>
       </header>
       {currentView === "info" ? <div className="gb-venue-sheet-info">
-        <VenueCover cover={venue.cover} name={venue.name} className="gb-venue-sheet-cover" />
+        {coverSlot ?? <VenueCover cover={venue.cover} name={venue.name} className="gb-venue-sheet-cover" />}
         <h3>{venue.name}</h3><p>{venue.address}</p>
         <VenuePublicContacts value={venue.publicContacts} />
         {!gamesReady && <p role="status">Расписание временно недоступно</p>}
