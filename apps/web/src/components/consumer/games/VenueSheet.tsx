@@ -5,6 +5,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import type { Game, VenueSummary } from "../../../lib/consumer-types";
 import { venueDays, venueDayLabel } from "../../../lib/venue-popup";
 import { formatSeats } from "../../../lib/game-presentation";
+import type { ReactNode } from "react";
 import { VenueCover } from "../venues/VenueCover";
 import { Avatar } from "../players/ProfileComposition";
 import { GameHero, GameTerms } from "./GameDetailComposition";
@@ -56,8 +57,8 @@ function VenuePublicContacts({ value }: { value: unknown }) {
   </section>;
 }
 
-export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDeselect, embedded = false, active = true }: {
-  venue: VenueSummary; games: readonly Game[]; gamesReady: boolean; now: number;
+export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDeselect, embedded = false, active = true, coverSlot }: {
+  coverSlot?: ReactNode; venue: VenueSummary; games: readonly Game[]; gamesReady: boolean; now: number;
   onCollapse: () => void; onDeselect: () => void; embedded?: boolean; active?: boolean;
 }) {
   const [view, setView] = useState<"info" | "schedule" | "game">("info");
@@ -111,7 +112,7 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
         <button ref={close} className="gb-venue-sheet-close" type="button" aria-label="Закрыть" onClick={onCollapse}>×</button>
       </header>
       {currentView === "info" ? <div className="gb-venue-sheet-info">
-        <VenueCover cover={venue.cover} name={venue.name} className="gb-venue-sheet-cover" />
+        {coverSlot ?? <VenueCover cover={venue.cover} name={venue.name} className="gb-venue-sheet-cover" />}
         <h3>{venue.name}</h3><p>{venue.address}</p>
         <VenuePublicContacts value={venue.publicContacts} />
         {!gamesReady && <p role="status">Расписание временно недоступно</p>}
