@@ -1,0 +1,20 @@
+# OPS continuity repair — #155
+
+WORKING DRAFT — NOT APPROVED — NOT CANONICAL
+
+From: PM/integrator. To: OPS author → independent review → installer → live verification.
+Date: 2026-10-21. No installed continuity fix claimed by this checkpoint.
+
+Owner requested automatic handling of normal DEV advancement / recoverable CI failure, isolation of terminal task failures and continuation of independent admitted backlog. Existing slot1 #151 blocked on CI TypeScript; manual RESUME refused new DEV. Slot2 #152 is DONE, QA PASS, CI7/7, DEV ACCEPTED 4977074ee7b45ea612dde592b88b354d99839aea (r39642935622-a1).
+
+Existing integration path already merges new DEV AFTER green CI. Missing path is CI repair when DEV moved, and safe continuation after bounded failures. No force push, counter reset, fake done, relaxed QA/CI/PROD gates, second writers, PLAN or VPN changes.
+
+Assignment: ../.. / prompts/slots-continuity-v1.md (see repository docs/prompts directly), GitHub Issue155. Active isolated OPS author PID1236004, no duplicate author. Required real Git fixtures, restart/fault/rollback tests and exact installer independent review before installation.
+
+Next product assignments: #156 popup covers/contacts/embedded creation; #157 shared close button. Both draft NOT ADMITTED at this checkpoint. #156 v4 independent prompt review running; #157 v2 awaits review. Files intersect and must serialize; draft backlog prose is never an executable assignment.
+
+Reference operational guide restored verbatim from archive commit50f5a4473f8ed4ca133eac1d406d6745f589383a, SHA256d0339e1505047a4080d3eb7e7b95c23a034cfc8333623c550bb55c035d689fb9; root-owned read-only copy under /opt/gobadminton-clean-qa/style-guide/refs for offline reviewer. No guide text/authority changed; historical host paths confer no execution authority. Prior prompt review reports preserved verbatim here; not application QA PASS.
+
+Concrete review risks already found before author completion: bootstrap origin is /srv/gb-slots/base.git in BOTH own repos; new origin checks must accept this exact trusted local source. Preserve public-status V1 schema or update monitor in same reviewed package. New integration phase needs compatible telemetry. Rollback cannot restore a runtime unable to parse deferred-policy records. Keep supervisor public API calls bounded while all slots busy. Author and QA need the existing public frozen reference in their read-only sandbox.
+
+Next action: finish source review/fix these findings, run meaningful regression tests, independent installer review, DRY and apply with rollback, then verify actual #151 progress and admit reviewed #156/#157. Preparation is not installation.
