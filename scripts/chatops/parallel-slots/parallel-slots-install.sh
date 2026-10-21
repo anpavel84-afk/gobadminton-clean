@@ -8,9 +8,9 @@
 #
 # Installs : /usr/local/lib/gobadminton-slots/{autonomous_issues.py,slots.py} (root 0644, sha256-checked final offline sidecars; PR ancestry + reconciled live fixes)
 #            /usr/local/lib/gobadminton-slots/check_foundation.py (root 0644, sha256-checked, reviewed source)
-#            users gb-supervisor, gb-slot2 (system, nologin, NO keys, NO Codex login); group gb-slots
+#            validates existing gb-supervisor/gb-slot2 accounts; creates only supplementary group gb-slots-clean
 #            /var/lib/gobadminton-autonomy/{slots,outbox,assign,locks}, /srv/gb-slots/{base.git,slot1,slot2}
-#            /etc/gobadminton-slots/{budgets.json,supervisor.json} (existing trusted known_hosts path is reused)
+#            /etc/gobadminton-slots/{budgets.json,supervisor.json}; slot2 uses its own preinstalled public trust file
 #            gobadminton-slot@.service (+ slot1 drop-in: User=agentagency-dev), gobadminton-supervisor.service
 # Starts   : ONLY gobadminton-slot@slot1 + supervisor, max_parallel=1. slot2 is NOT started and has no credentials.
 # Migrates : legacy state -> slots/slot1 byte-identical (sha256), no counter/history reset; legacy gets RETIRED_TO_SLOT.json
@@ -646,23 +646,8 @@ PYLIB
 }
 
 remove_created_group() {
-  local marker=$1 entry gid passwd_entries dependencies
-  [ -f "$marker" ] && [ ! -L "$marker" ] || return 0
-  entry=$(getent group "$GRP") || return 0
-  gid=$(printf '%s\n' "$entry" | cut -d: -f3)
-  [ -n "$gid" ] && [ "$(cat "$marker")" = "$gid" ] || return 0
-  passwd_entries=$(getent passwd) || { say "группа $GRP сохранена: не удалось проверить участников"; return 0; }
-  if [ -n "$(printf '%s\n' "$entry" | cut -d: -f4)" ] || printf '%s\n' "$passwd_entries" | awk -F: -v gid="$gid" '$4 == gid {found=1} END {exit !found}'; then
-    say "группа $GRP имеет постоянных участников и сохранена: нужна сверка вручную"
-    return 0
-  fi
-  # Archived locks also retain their group. Stop at SSH directories without inspecting keys;
-  # any unverified subtree or traversal error conservatively keeps the group.
-  if ! dependencies=$(find "$BK" / \( -name .ssh -o -path /etc/ssh -o -gid "$gid" \) -print -quit 2>/dev/null) || [ -n "$dependencies" ]; then
-    say "группа $GRP сохранена: файлы или непроверенные каталоги могут зависеть от неё"
-    return 0
-  fi
-  groupdel "$GRP" || say "группа $GRP сохранена: перед повторной установкой нужна сверка вручную"
+  # Historical files retain this GID. Never scan unrelated host paths or delete its mapping.
+  say "удаление группы $GRP не выполнялось: GID и архивы сохранены; постоянные участники не добавлялись. Перед повторной установкой нужна OPS-сверка metadata новой группы"
 }
 
 # Record only issue ids, never restore or edit executor data. Restart the old executor only
@@ -1284,7 +1269,7 @@ PYGID
 if getent group "$GRP" >/dev/null; then chk "группа $GRP уже существует: её доступ вне locks не проверен; STOP. OPS: сверить gid970 и /root/gb-parallel-slots.20261019-231505; отдельный reviewed cleanup только при доказанном отсутствии primary/supplementary members, файлов gid970 и зависимостей units/ACL; пустой список members не разрешает reuse/groupdel"; fi
 verify_new_group_gid || chk "не подтверждён свободный gid65042: дождаться root inventory, не выдавать непроверенные права"
 [ ! -e "$ETC" ] || [ "$(stat -c %u:%g:%a -- "$ETC")" = 0:0:755 ] || chk "existing config directory must already be root:root 0755; permission changes are refused"
-for t in git python3 setpriv flock systemctl groupadd groupdel tar sha256sum base64; do command -v "$t" >/dev/null || chk "нет $t"; done
+for t in git python3 setpriv flock systemctl groupadd tar sha256sum base64; do command -v "$t" >/dev/null || chk "нет $t"; done
 python3 -I -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' || chk "нужен python3 >= 3.10"
 
 check_accounts || chk "существующий пользователь не соответствует expected metadata/scope"

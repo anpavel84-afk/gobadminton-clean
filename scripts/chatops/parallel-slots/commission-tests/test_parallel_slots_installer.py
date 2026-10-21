@@ -130,6 +130,17 @@ exit 23
                         with self.assertRaises((OSError,ValueError)):
                             read(public,1 if scenario=='oversize' else 1024)
 
+    def test_group_cleanup_preserves_mapping_without_global_scan_or_deletion(self):
+        result, events, _ = self.shell(r'''
+find() { say forbidden-global-scan; return 91; }
+groupdel() { say forbidden-group-delete; return 92; }
+remove_created_group "$LIB/.gb-slots-group-created"
+''')
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertNotIn('forbidden-global-scan',events)
+        self.assertNotIn('forbidden-group-delete',events)
+        self.assertIn('GID и архивы сохранены',events)
+
     def test_legacy_scope_rejects_other_repositories_and_state_paths(self):
         for old, new in (
             ('/srv/gobadminton-clean/worktrees/autonomy-existing-issues-20261015', '/srv/PROD/repo'),
