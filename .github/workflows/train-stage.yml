@@ -1,0 +1,70 @@
+name: Train stage
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        required: true
+        type: string
+        description: 'Closed issue/phase/head/attempt/generation/slot/profile descriptor'
+permissions:
+  contents: read
+concurrency:
+  group: gobadminton-train-stage-${{ fromJSON(inputs.operation).slot }}
+  cancel-in-progress: false
+  queue: max
+jobs:
+  execute:
+    if: >-
+      github.repository_id == '1416250340' && github.ref == 'refs/heads/dev' &&
+      (github.actor_id == '318610566' || github.actor == 'github-actions[bot]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: dev
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+      actions: read
+    outputs:
+      changed: ${{ steps.stage.outputs.changed }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: d4567dfddbfc26d95236839343d841841067e72c
+          persist-credentials: false
+      - id: stage
+        name: Submit one stage and query its durable result
+        run: python3 -B scripts/chatops/actions_train/client.py stage
+        env:
+          TRAIN_OPERATION: ${{ inputs.operation }}
+          GH_TOKEN: ${{ github.token }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ vars.DEPLOY_PORT }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with: {name: train-stage, path: evidence/, retention-days: 90}
+  continue:
+    needs: execute
+    if: needs.execute.outputs.changed == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      # No SSH secrets, no controller/candidate checkout, and no token forwarded to Germany.
+      - name: Explicit reconciliation after a confirmed transition
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 -B - <<'PY'
+          import json, os, urllib.request
+          request = urllib.request.Request(
+              'https://api.github.com/repos/anpavel84-afk/gobadminton-clean/actions/workflows/train-dispatch.yml/dispatches',
+              data=json.dumps({'ref': 'dev', 'inputs': {'profile': 'auto'}}).encode(),
+              headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                       'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28'})
+          with urllib.request.urlopen(request, timeout=30) as response:
+              assert response.status == 204
+          PY
