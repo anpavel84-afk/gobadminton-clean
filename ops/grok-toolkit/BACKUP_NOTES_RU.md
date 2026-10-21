@@ -311,3 +311,9 @@
 - СозданhumanWORKING_DRAFT149 https://github.com/anpavel84-afk/gobadminton-clean/issues/149 — M2R+M2R-Gединымрезультатом(API+web+privacy), неустаревшийTR1cleanupи неwebбезигр. Admission149НЕТ.
 - /var/lib/gb-ops-stage/files/M2R-complete-149.brief.md SHA256e6e171968452e9e40f7585dcf8cf4e792c91e24d5bb0d3138f9679c1901f7dd6; codex-write PID2685420 вработе на13d0f76c сM2R_mockup.png. Требованиеэкономичности: reuseexistingtesthelpers, no customgeneralReactrenderer, толькоnecessarynewbehavior/privacychecks. Подготовкаполногоscope, nochangesauthorities.
 - Текущийcodex-reviewp7ceilingТОЛЬКОpublicvenuecontacts, M2RAPIнепокрыт. PMдолжендатьточныйREVIEW_SCOPE_REQUIRED; невыдумыватьtrustedpermission/необходитьзащиту/неужиматьпродуктдопустогоcleanup. СледомразобратьреальныйreviewablediffдоставкиscopeсуществующимOPSмаршрутом; protectedизменениянеавторизованыэтойзаписью.
+
+
+## 21.10 — Owner поднял OPS-slots; реальное состояние проверено
+- PR100 open/unmerged, branchops/parallel-slots-v1. Последнийreview20Oct023212Z-2125543 VERDICTFAIL: known_hosts installer947 scopeRule2 и штатныйSSHpush decodedexecutor770 scopeRule3. WAIVEDтолькоgb-slotsmembership/locks. Нетslotunitв/etc/systemd/systeminventory, installationнеподтверждена/не выполнена.
+- BacklogOPS-slots stale noteисправлена, priority0; gb-run monitor-slots-priority-audit rc0/strict49PASS. Лог /var/log/gb-ops/runs/20261021-135015-monitor-slots-priority-audit-2699276.log. Прежнее«окнопростоя/OwnerGO»скрывалоFAIL.
+- Не устанавливатьстарыйpayloadповерхновогоexecutor. Сначалаbaseline/diff/independentreview, actualcapabilityslot2 иизоляция; дизайнinitial1active значитдля2активныхещёготовность. ВопроспараллельностиподнятOwnerдляускорения, deployment/newrightsневыводятсяизодноговопроса. Не копироватьключи/auth. Сериализоватьmerge/DEV; общийanonymousAPIостаётсяузкимместом.
