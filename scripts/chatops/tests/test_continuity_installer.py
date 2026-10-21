@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import subprocess
 import tempfile
 import types
 import unittest
@@ -53,6 +54,52 @@ class FakeSystem(i.System):
         self.after(('system', verb, units))
 
 
+class MockSystemctl(FakeSystem):
+    """Mock only systemctl's subprocess edge; use production status/pids and scratch cgroups."""
+    def __init__(self, root):
+        super().__init__()
+        self.cgroups = root / 'cgroup'
+        self.cgroups.mkdir()
+        self.start_failures = {}
+        self.failed_group = ''
+        self.missing_groups = set()
+        self.extra_by_unit = {}
+
+    def run(self, argv, **kwargs):
+        assert argv[0] == '/usr/bin/systemctl'
+        verb = argv[1]
+        if verb == 'show':
+            assert len(argv) == 4 and argv[2] in i.UNITS
+            assert argv[3] == ('--property=LoadState,UnitFileState,ActiveState,SubState,MainPID,'
+                               'KillMode,ControlGroup,FreezerState')
+            assert kwargs == dict(check=True, capture_output=True, text=True, timeout=15)
+            unit = argv[2]
+            value = self.states[unit]
+            group = value.get('ControlGroup', '')
+            if group.startswith('/') and '..' not in group.split('/') and group not in self.missing_groups:
+                directory = self.cgroups / group[1:]
+                directory.mkdir(parents=True, exist_ok=True)
+                pids = ({int(value['MainPID'])} if value.get('MainPID', '').isdecimal()
+                        and int(value['MainPID']) else set()) | self.extra | self.extra_by_unit.get(unit, set())
+                (directory / 'cgroup.procs').write_text('\n'.join(map(str, sorted(pids))))
+            return types.SimpleNamespace(stdout=''.join(f'{key}={item}\n' for key, item in value.items()))
+        assert kwargs == dict(check=True, timeout=60, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        units = tuple(argv[2:])
+        if verb == 'start' and self.start_failures.get(units[0], 0):
+            unit, = units
+            self.start_failures[unit] -= 1  # negative means persistent failure
+            self.events.append((verb, units))
+            self.states[unit].update(ActiveState='failed', SubState='failed', MainPID='0',
+                                     ControlGroup=self.failed_group, FreezerState='running')
+            self.after(('system', verb, units))
+            raise subprocess.CalledProcessError(1, argv)
+        if verb in ('start', 'stop'):
+            for unit in units:
+                self.states[unit]['ControlGroup'] = '/system.slice/' + unit
+        self.command(verb, *units)
+        return types.SimpleNamespace(returncode=0)
+
+
 @contextlib.contextmanager
 def fake_root():
     """Preserve real types, permissions and link counts; synthesize UID/GID only, never elevate."""
@@ -70,8 +117,9 @@ def fake_root():
 
 class InstallerTests(unittest.TestCase):
     @contextlib.contextmanager
-    def fixture(self, policy=False):
-        with tempfile.TemporaryDirectory() as tmp, fake_root(), patch.object(i, 'validate_style_guide'):
+    def fixture(self, policy=False, parsed=False):
+        with tempfile.TemporaryDirectory() as tmp, fake_root(), patch.object(i, 'validate_style_guide'), \
+                contextlib.ExitStack() as mocks:
             root = Path(tmp)
             for name in ('code', 'monitor/opsmon', 'monitor/web', 'etc', 'state/slot1', 'state/slot2', 'run'):
                 (root / name).mkdir(parents=True, mode=0o700, exist_ok=True)
@@ -87,8 +135,15 @@ class InstallerTests(unittest.TestCase):
                 path.write_text(json.dumps(dict(active=None if slot == 'slot2' else
                     dict(phase='blocked', attempt=2, issue=151, reason='Actions failed'), done=[])))
                 path.chmod(0o600)
-            system = FakeSystem()
-            installer = i.Installer(payloads, system, code=root / 'code', policy=root / 'etc/continuity.json',
+            system = MockSystemctl(root) if parsed else FakeSystem()
+            if parsed:
+                mocks.enter_context(patch.object(i.subprocess, 'run', side_effect=system.run))
+                def scratch_path(*args):
+                    path = Path(*args)
+                    return system.cgroups if path == Path('/sys/fs/cgroup') else path
+                mocks.enter_context(patch.object(i, 'Path', side_effect=scratch_path))
+            installer = i.Installer(payloads, i.System() if parsed else system,
+                code=root / 'code', policy=root / 'etc/continuity.json',
                 backup=root / 'backup', lock=root / 'run/continuity.lock', state=root / 'state', monitor=root / 'monitor')
             if policy:
                 installer.policy.write_bytes(installer.disabled)
@@ -348,6 +403,201 @@ class InstallerTests(unittest.TestCase):
             installer.apply(remove=True)
             self.assertEqual(path.read_text(), '{"deferred":[]}')
             self.assert_restored(installer, system, before, units)
+
+    def test_production_parser_accepts_only_proven_quiescent_failed_recovery(self):
+        for group in ('', '/missing.service', '/empty.service'):
+            with self.subTest(group=group), self.fixture(parsed=True) as (_, installer, system):
+                unit = i.UNITS[0]
+                system.missing_groups.add('/missing.service')
+                system.states[unit].update(ActiveState='failed', SubState='failed', MainPID='0',
+                                          ControlGroup=group)
+                value = installer.system.status(unit)
+                self.assertEqual((value['ActiveState'], value['SubState']), ('failed', 'failed'))
+                self.assertEqual(installer.system.pids(value), set())
+                self.assertEqual(installer.statuses(recovery=True)[unit], value)
+                with self.assertRaisesRegex(RuntimeError, 'unsupported/busy'):
+                    installer.apply()
+                self.assertEqual(system.events, [])
+                self.assertFalse(installer.backup.exists())
+
+    def test_production_parser_rejects_failed_pid_or_descendant_even_during_recovery(self):
+        for mode in ('pid', 'descendant'):
+            with self.subTest(mode=mode), self.fixture(parsed=True) as (_, installer, system):
+                unit = i.UNITS[0]
+                system.states[unit].update(ActiveState='failed', SubState='failed',
+                                          MainPID='99' if mode == 'pid' else '0')
+                value = installer.system.status(unit)
+                if mode == 'descendant':
+                    child = system.cgroups / value['ControlGroup'][1:] / 'worker'
+                    child.mkdir()
+                    (child / 'cgroup.procs').write_text('9999\n')
+                    self.assertEqual(installer.system.pids(value), {9999})
+                for kwargs in ({}, {'stopped': True}, {'frozen': True}):
+                    with self.assertRaisesRegex(RuntimeError, 'MainPID|active children|not quiescent'):
+                        installer.statuses(recovery=True, **kwargs)
+                self.assertEqual(system.events, [])
+
+    def test_production_status_preserves_structural_and_operation_guards(self):
+        for key, value in (('LoadState', 'not-found'), ('KillMode', 'process'),
+                           ('UnitFileState', 'masked'), ('FreezerState', 'unknown'),
+                           ('MainPID', '-1'), ('MainPID', ''), ('MainPID', 'unknown')):
+            with self.subTest(key=key, value=value), self.fixture(parsed=True) as (_, installer, system):
+                system.states[i.UNITS[0]][key] = value
+                with self.assertRaises(RuntimeError):
+                    installer.system.status(i.UNITS[0])
+                self.assertEqual(system.events, [])
+        for active, sub in (('activating', 'start'), ('deactivating', 'stop'),
+                            ('active', 'exited'), ('reloading', 'reload'),
+                            ('failed', 'running'), ('unknown', 'unknown')):
+            with self.subTest(active=active, sub=sub), self.fixture(parsed=True) as (_, installer, system):
+                system.states[i.UNITS[0]].update(ActiveState=active, SubState=sub)
+                for recovery in (False, True):
+                    with self.assertRaisesRegex(RuntimeError, 'unsupported/busy'):
+                        installer.statuses(recovery=recovery)
+                self.assertEqual(system.events, [])
+
+    def test_production_cgroup_trust_and_missing_active_group_guards(self):
+        for group in ('', '/missing.service', 'relative', '/system.slice/../escape', '/linked'):
+            with self.subTest(group=group), self.fixture(parsed=True) as (_, installer, system):
+                unit = i.UNITS[0]
+                system.missing_groups.update(('/missing.service', '/linked'))
+                system.states[unit]['ControlGroup'] = group
+                if group == '/linked':
+                    (system.cgroups / 'target').mkdir()
+                    (system.cgroups / 'linked').symlink_to(system.cgroups / 'target')
+                with self.assertRaisesRegex(RuntimeError, 'cgroup'):
+                    installer.statuses(recovery=True)
+                self.assertEqual(system.events, [])
+
+    def test_real_failed_first_second_or_third_start_rolls_back_all_files_manifest_and_states(self):
+        for failed_unit in i.UNITS:
+            for group in ('', '/missing.service', '/empty.service'):
+                for policy in (False, True):
+                    with self.subTest(unit=failed_unit, group=group, policy=policy), \
+                            self.fixture(policy, parsed=True) as (_, installer, system):
+                        system.states[i.UNITS[1]]['UnitFileState'] = 'static'
+                        if failed_unit == i.UNITS[2]:
+                            system.states[failed_unit].update(ActiveState='active', SubState='running', MainPID='102')
+                        before, units = self.managed(installer), copy.deepcopy(system.states)
+                        system.failed_group = group
+                        system.missing_groups.add('/missing.service')
+                        system.start_failures[failed_unit] = 1
+                        with self.assertRaises(subprocess.CalledProcessError):
+                            installer.apply()
+                        self.assert_restored(installer, system, before, units)
+                        manifest = json.loads((installer.backup / 'managed.json').read_text())
+                        self.assertEqual(manifest['phase'], 'removed')
+                        self.assertEqual(manifest['old'], before)
+                        self.assertEqual(manifest['units'], units)
+                        self.assertEqual(manifest['new'], {
+                            p.name: installer.record(installer.new[p.name], before[p.name]['mode']
+                                if before[p.name] else 0o644) for p in installer.paths})
+
+    def test_persistent_start_failure_restores_files_reports_incomplete_and_remove_recovers(self):
+        for failed_unit in i.UNITS:
+            with self.subTest(unit=failed_unit), self.fixture(True, parsed=True) as (_, installer, system):
+                system.states[i.UNITS[2]].update(ActiveState='active', SubState='running', MainPID='102')
+                before, units = self.managed(installer), copy.deepcopy(system.states)
+                system.start_failures[failed_unit] = -1
+                with patch('builtins.print') as output, self.assertRaisesRegex(RuntimeError, 'ROLLBACK INCOMPLETE'):
+                    installer.apply()
+                self.assertFalse(output.called)
+                self.assertEqual(self.managed(installer), before)
+                self.assertEqual(system.states[failed_unit]['ActiveState'], 'failed')
+                for other in i.UNITS:
+                    self.assertEqual(system.states[other]['UnitFileState'], units[other]['UnitFileState'])
+                    if other != failed_unit:
+                        self.assertEqual(system.states[other], units[other])
+                self.assertTrue(all(v['FreezerState'] == 'running' for v in system.states.values()))
+                manifest_path = installer.backup / 'managed.json'
+                manifest = manifest_path.read_bytes()
+                self.assertEqual(json.loads(manifest)['phase'], 'removed')
+                events = list(system.events)
+                installer.apply(remove=True, dry=True)
+                self.assertEqual(system.events, events)
+                self.assertEqual(manifest_path.read_bytes(), manifest)
+                with patch('builtins.print') as output, self.assertRaises(subprocess.CalledProcessError):
+                    installer.apply(remove=True)
+                self.assertFalse(output.called)
+                self.assertEqual(self.managed(installer), before)
+                self.assertEqual(manifest_path.read_bytes(), manifest)
+                system.start_failures[failed_unit] = 0
+                installer.apply(remove=True)
+                self.assert_restored(installer, system, before, units)
+                self.assertEqual(manifest_path.read_bytes(), manifest)
+                events = list(system.events)
+                installer.apply(remove=True)
+                self.assertEqual(system.events, events)
+
+    def test_remove_installed_files_with_quiescent_failed_unit_preserves_enabled_pin(self):
+        for group in ('', '/missing.service', '/empty.service'):
+            with self.subTest(group=group), self.fixture(parsed=True) as (_, installer, system):
+                system.states[i.UNITS[1]]['UnitFileState'] = 'static'
+                before, units = self.managed(installer), copy.deepcopy(system.states)
+                installer.apply()
+                system.states[i.UNITS[0]].update(ActiveState='failed', SubState='failed', MainPID='0',
+                                               ControlGroup=group)
+                system.missing_groups.add('/missing.service')
+                installer.apply(remove=True)
+                self.assert_restored(installer, system, before, units)
+
+    def test_remove_failed_unit_with_descendants_or_enabled_drift_refuses_before_mutations(self):
+        for mode in ('descendants', 'enabled'):
+            with self.subTest(mode=mode), self.fixture(parsed=True) as (_, installer, system):
+                installer.apply()
+                unit = i.UNITS[0]
+                system.states[unit].update(ActiveState='failed', SubState='failed', MainPID='0')
+                if mode == 'descendants':
+                    system.extra_by_unit[unit] = {9999}
+                else:
+                    system.states[unit]['UnitFileState'] = 'disabled'
+                before, units = self.managed(installer), copy.deepcopy(system.states)
+                manifest = (installer.backup / 'managed.json').read_bytes()
+                events = list(system.events)
+                for dry in (False, True):
+                    with self.assertRaisesRegex(RuntimeError, 'active children|enabled state changed'):
+                        installer.apply(remove=True, dry=dry)
+                self.assert_restored(installer, system, before, units)
+                self.assertEqual(system.events, events)
+                self.assertEqual((installer.backup / 'managed.json').read_bytes(), manifest)
+
+    def test_real_failed_later_start_never_stops_new_writer_or_rolls_back_deferrals(self):
+        for failed_unit, retained_unit in zip(i.UNITS[1:], i.UNITS):
+            for mode in ('children', 'developing', 'qa', 'integrating', 'promoting', 'dev_wait', 'deferred', 'enabled'):
+                with self.subTest(unit=failed_unit, mode=mode), self.fixture(parsed=True) as (root, installer, system):
+                    system.states[i.UNITS[2]].update(ActiveState='active', SubState='running', MainPID='102')
+                    system.start_failures[failed_unit] = 1
+                    def started(event):
+                        if event[1:] != ('start', (failed_unit,)):
+                            return
+                        if mode == 'children':
+                            system.extra_by_unit[retained_unit] = {9999}
+                        elif mode == 'deferred':
+                            path = root / 'state/slot1/deferred.json'
+                            path.write_text('{"deferred":[{"kind":"policy","issue":151}]}')
+                            path.chmod(0o600)
+                        elif mode == 'enabled':
+                            system.states[retained_unit]['UnitFileState'] = 'static'
+                        else:
+                            (root / 'state/slot1/state.json').write_text(json.dumps(
+                                dict(active=dict(phase=mode), done=[])))
+                    system.after = started
+                    with self.assertRaisesRegex(RuntimeError, 'ROLLBACK INCOMPLETE'):
+                        installer.apply()
+                    self.assertEqual(sum(verb == 'stop' for verb, _ in system.events), 1)
+                    self.assertTrue(all(self.managed(installer)[p.name]['sha256'] == i.digest(installer.new[p.name])
+                                        for p in installer.paths))
+                    self.assertEqual(system.states[retained_unit]['ActiveState'], 'active')
+                    self.assertEqual(system.states[failed_unit]['ActiveState'], 'failed')
+                    self.assertTrue(all(v['FreezerState'] == 'running' for v in system.states.values()))
+                    manifest = (installer.backup / 'managed.json').read_bytes()
+                    self.assertEqual(json.loads(manifest)['phase'], 'installed')
+                    events = list(system.events)
+                    for dry in (False, True):
+                        with self.assertRaises(RuntimeError):
+                            installer.apply(remove=True, dry=dry)
+                    self.assertEqual(system.events, events)
+                    self.assertEqual((installer.backup / 'managed.json').read_bytes(), manifest)
 
     def test_generated_installer_contains_current_sources_pins_and_exact_controller(self):
         text = (HERE / 'slots-continuity.sh').read_text()

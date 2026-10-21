@@ -1,33 +1,67 @@
-# OPS #155 — continuity v2: offline evidence, 2026-10-21
+# OPS #155 — continuity v3: offline evidence, 2026-10-21
 
 Работа выполнена только в supplied writable copy; сеть, модели, реальные службы и live checkpoints
 не использовались. Это source candidate для независимого security review и root DRY, не live install
 и не review PASS. Пять deployed originals и manifest в pinned-originals оставлены byte-identical.
 Wrapper/reviewer pins, прежний slot-live-telemetry.sh, foundation checker и оба sanitized context JSON
-также не изменены. Installer пересобран из supplied deployed originals, не из v1 candidate.
+также не изменены. Все пять executor/slots/monitor payload sources, их embedded data и old/new pins
+byte-identical входному v2; admission/model/QA/CI/policy поведение не менялось.
+Installer пересобран существующим builder из supplied deployed originals.
+Исправлен FAILED independent review installer
+`dc4e3d52a86f7b06d1fc6145c787cfe34292c6c11ccee3cd9772ebf9cca3ab6b`:
+failed service больше не блокирует безопасное восстановление файлов до проверки quiescence.
 
 Все Python tests запускались с `PYTHONDONTWRITEBYTECODE=1` и
-`TMPDIR=/var/lib/gobadminton-clean-prompt-writer/ops/run.mLZnVt/tmp`.
+`TMPDIR=/var/lib/gobadminton-clean-prompt-writer/ops/run.N8Qu9Y/tmp`.
 Текущая директория команд — writable copy из METADATA.
 
 | Команда / проверка | Итог |
 | --- | --- |
-| `python3 -m unittest discover -s slots-continuity-v2/scripts/chatops/tests -v` | **151 tests, OK**, 33.498 s; весь прежний набор + новые regression tests |
-| `python3 -m unittest discover -s slots-continuity-v2/scripts/chatops/parallel-slots/commission-tests -v` | **8 tests, OK**, 0.189 s; 5 прежних + 3 DOM/UI tests через локальную libduktape |
-| `python3 slots-continuity-v2/scripts/chatops/parallel-slots/build_continuity_installer.py --original slots-continuity-v2/pinned-originals` | PASS; пять exact original pins проверены, пять актуальных payloads пересобраны |
-| `bash -n slots-continuity-v2/scripts/chatops/parallel-slots/slots-continuity.sh` | PASS, exit 0 |
-| `PYTHONPYCACHEPREFIX=/var/lib/gobadminton-clean-prompt-writer/ops/run.mLZnVt/tmp/pycache python3 -m compileall -q slots-continuity-v2` | PASS, exit 0; также выполнен py_compile для **19 файлов**, включая supplied pinned originals, cfile в scratch |
-| Embedded controller compile + AST extraction/decompress/hash payloads; `test_generated_installer_contains_current_sources_pins_and_exact_controller` | PASS; controller соответствует исходнику, все 5 original/new SHA256 соответствуют manifest/исходникам; повторный builder output byte-identical |
-| `git diff --no-index --check -- /var/lib/gobadminton-clean-prompt-writer/ops/run.mLZnVt/orig/slots-continuity-v2 slots-continuity-v2` | Пустой вывод; exit 1 означает наличие diff, whitespace diagnostics нет |
-| `node slots-continuity-v2/scripts/chatops/parallel-slots/commission-tests/test-telemetry-ui.cjs slots-continuity-v2/scripts/chatops/parallel-slots/monitor-src/app.js` | Node недоступен, exit 127. Попытка второго fixture test-monitor-idle-ui.cjs и `/usr/local/bin/node --version` тоже exit 127: dangling link. Node fixtures не заявлены PASS |
+| `python3 -m unittest discover -s slots-continuity-v3/scripts/chatops/tests -v` | **160 tests, OK**, 37.585 s; все прежние 151 + 9 новых installer regression tests; включая все 23 installer test methods |
+| `python3 -m unittest discover -s slots-continuity-v3/scripts/chatops/parallel-slots/commission-tests -v` | **8 tests, OK**, 0.175 s; 5 прежних + 3 DOM/UI tests через локальную libduktape |
+| `python3 slots-continuity-v3/scripts/chatops/parallel-slots/build_continuity_installer.py --original slots-continuity-v3/pinned-originals` | PASS; пять exact original pins проверены, installer пересобран |
+| `bash -n slots-continuity-v3/scripts/chatops/parallel-slots/slots-continuity.sh` | PASS, exit 0 |
+| `python3 /var/lib/gobadminton-clean-prompt-writer/ops/run.N8Qu9Y/tmp/verify-candidate.py` | PASS; **19 Python sources + embedded controller** с cfile только в scratch; AST/decompress/SHA256 и точное соответствие controller исходнику; повторный builder output byte-identical; embedded payload dictionaries и pinned-originals byte-identical read-only original; изменены только пять разрешённых файлов, modes соответствуют supplied writable copy |
+| `python3 -` original-controller reproduction через новый MockSystemctl fixture | PASS: на неизменённом v2 controller одноразовые сбои первого/второго start дают ROLLBACK INCOMPLETE и оставляют **все 6 replacement files**; дефект воспроизведён через production parser, без реальных служб |
+| `git diff --no-index --check -- /var/lib/gobadminton-clean-prompt-writer/ops/run.N8Qu9Y/orig/slots-continuity-v3 slots-continuity-v3` | Пустой вывод; exit 1 означает наличие diff, whitespace diagnostics нет |
 | `command -v shellcheck` | Недоступен; shellcheck не выполнялся |
 
-Полные финальные логи: scratch `final-tests.log`, `commission-tests.log`.
-Первые прогоны обнаружили несовместимость аргумента save() со старыми legacy PARK crash fixtures
-и umask в новом Style Guide fixture. Legacy вызов восстановлен, fixture явно задаёт публичные modes;
-финальный полный прогон выше зелёный. Правки test_slots ограничены synthetic-host fixture:
-root-owned Style Guide не установлен в disposable host, поэтому его validation замокан там явно.
-Реальные security/permission отрицательные проверки Style Guide находятся в test_continuity_v2.py.
+Полные финальные логи в scratch: `final-tests.log`, `commission-tests.log`, `verify-candidate.log`.
+Права generated installer возвращены к исходному mode supplied writable copy после chmod в builder;
+новых permission bits в итоговом кандидате нет.
+Первый targeted прогон выявил избыточное изменение прежнего pre-switch recovery при inactive unit
+с непустым cgroup; новые проверки в restore_units ограничены failed state, прежний regression сохранён.
+Итоговые проверки quiescence перед переключением файлов не ослаблены.
+`test_slots.py` и `test_continuity_v2.py` в v3 не менялись; security/permission tests Style Guide
+и весь прежний runtime coverage повторно пройдены.
+
+## Новые v3 regression tests
+
+Девять новых test methods используют настоящий `Installer` и production `System.status/pids/command`.
+MockSystemctl подменяет только `/usr/bin/systemctl` subprocess edge, возвращает полные property lines
+и создаёт реальные cgroup.procs в scratch. Единственный filesystem mapping — `/sys/fs/cgroup` в scratch.
+Root UID/GID и ownership остаются симуляцией; никаких service mutations на host не было.
+
+Проверены failed/failed PID0 с пустым, отсутствующим и существующим пустым cgroup; ненулевой MainPID;
+живые descendants в дочернем cgroup; invalid/relative/traversal/symlink cgroup и missing active cgroup.
+Сохранены LoadState, KillMode, enabled/static/disabled и FreezerState checks; activating/deactivating,
+active/exited и unknown states запрещены в обычном и recovery режимах. Первичный install failed unit
+не принимает и backup не создаёт.
+
+Одноразовые ошибки первого, второго и третьего start при отсутствующей либо disabled policy
+проверяют все шесть файлов, bytes/modes/ownership, полный manifest и исходные active/enabled states.
+Постоянная ошибка каждого из трёх units возвращает исходные файлы, восстанавливает остальные службы,
+сохраняет backup и выдаёт ROLLBACK INCOMPLETE без сообщения PASS. DRY remove читает этот manifest
+без mutations; повторный remove при продолжающейся ошибке тоже не объявляет успех, а после снятия
+инъекции возвращает исходные active states даже при уже `removed` manifest. Повторный remove идемпотентен.
+Прямой remove установленного набора из quiescent failed состояния также восстанавливает исходные states.
+
+При втором/третьем failed start после успешного запуска предыдущих units новый child,
+author/QA/integration/promotion/deploy,
+policy deferral либо enabled-state drift запрещают cleanup stop и возврат старых файлов.
+Все шесть новых файлов и installed manifest сохраняются, retained active unit размораживается,
+backup остаётся; дальнейшие remove/DRY remove тоже отказывают без mutations. Отдельно проверены
+remove failed unit с живыми descendants и changed enabled-state pin.
 
 ## Покрытие конкретных замечаний
 
@@ -43,10 +77,10 @@ root-owned Style Guide не установлен в disposable host, поэто�
 3. **Telemetry/UI.** Реальные Runtime → telemetry.project/validate → writer.slot_publications
    дают FRESH integrating card. Предыдущие QA/CI PASS скрываются на фазе integrating;
    попытка экспортировать их отвергается validator, mismatch другого candidate SHA не проходит как PASS.
-   Новый DOM fixture исполняет **неизменённый app.js** в локальной libduktape с mock DOM и synchronous
+   Прежний DOM fixture исполняет **неизменённый app.js** в локальной libduktape с mock DOM и synchronous
    fetch delivery. Проверены семь этапов, подпись текущего DEV, отсутствие QA/CI PASS во время integration,
-   legacy done/active/idle, slot CI/blocked/done/idle/stale. Node fixture также расширен integration case,
-   но Node недоступен. Это не проверка настоящего браузера, nginx или таймера.
+   legacy done/active/idle, slot CI/blocked/done/idle/stale. Node fixtures в v3 не менялись;
+   DOM tests выполнены через libduktape. Это не проверка настоящего браузера, nginx или таймера.
 4. **Cheap busy.** Оба слота заняты checkpoint либо assignments; fixture fetch и API pages падают
    при вызове. Ни один не вызван; Budget также не создаётся; возвращён truthful busy reason.
 5. **Public Style Guide.** Для slot1/slot2 × author/QA inline TOML содержит только read публичного
@@ -84,8 +118,9 @@ root-owned Style Guide не установлен в disposable host, поэто�
 | `writer.py` | `9a2364f1ca6175da6c26bcab4ae02884605edf108023d69ce8278f880fdbe132` | `957ebb3fb201efea31c7f29aa174bf142466c09e3222c03e5880b3467a14bc24` |
 | `app.js` | `9e9980c6c0580e54b01e42eda52bff573b45af9cd43b2f060cf70fea4f6ea379` | `b8d617d74d3b707cd459c305b90054b5ab263c0f8184bc877c943730bbd13f3b` |
 
-Самодостаточный `slots-continuity.sh`: `dc4e3d52a86f7b06d1fc6145c787cfe34292c6c11ccee3cd9772ebf9cca3ab6b`.
-Все embedded payload SHA256 обновлены builder; собственного self-hash в installer нет.
+Самодостаточный `slots-continuity.sh`: `6e909fbf0abc0c7292e39444cf83ae289895d8a1e9b7fb893795c2fcb1b213cb`.
+Embedded payload SHA256 повторно проверены builder и не изменились относительно входного v2;
+изменился controller и SHA256 installer. Собственного self-hash в installer нет.
 Policy bytes (sorted JSON + newline): `1587e5881d6ef6429d29f3f033aff330faf0dd40ec11f83bfc20ba7e861bce6c`.
 Frozen Style Guide pins:
 
@@ -93,6 +128,6 @@ Frozen Style Guide pins:
 - `src/index.css`: `f660e31973a6142784308f22728c751d7bb7432fb2ac0136bac032dbc6b1db2a`.
 
 Live commissioning, model/SSH credentials, реальный systemd freezer, monitor next tick и root metadata
-требуют независимого deployment/security review и DRY точного итогового installer.
+требуют НОВЫХ независимого deployment/security review и DRY точного итогового installer.
 Откат допускается только при quiescent compatible state; unresolved policy deferrals требуют
 отдельной reconciliation и не исчезают от возврата старого кода. Подробности — CONTINUITY.md.

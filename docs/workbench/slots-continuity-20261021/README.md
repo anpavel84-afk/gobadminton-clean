@@ -38,3 +38,7 @@ Independent review found Rule7 rollback defect: System.status rejects failed ser
 Metadata helper exact57400728… independently PASS and gb-run DRY rc0 (20261021-221500-inst-slot-review-continuity-meta-1604121.log). It is NOT INSTALLED; apply only after main runtime passes review/DRY and installs. Initial metadata rejection came from authorization-record mode0600; loader requires0644. Corrected mode only, reran independent review; no instruction/gate alteration.
 
 Monitor now reports #156/#157 definitions independently reviewed but not started. No immutable admission comments yet. Live #151 blocked, #152 done; source slots fresh and backlog available.
+
+## 2026-10-21T20:28:31.850401+00:00 — V3 exact candidate
+
+CLI correction complete: known failed/failed PID0 empty-cgroup recovery supported, initial unhealthy install still refused, unsafe live writers/deferrals stay excluded. 160 core/installer tests and 8 commissioning tests PASS (author self-check); five runtime payloads unchanged. New installer SHA2566e909fbf0abc0c7292e39444cf83ae289895d8a1e9b7fb893795c2fcb1b213cb. Independent security review PID1694070, log /var/lib/gb-ops-stage/files/slots-continuity-review2.log. NOT INSTALLED until exact PASS and root DRY. #156/#157 issue descriptions updated with final exact reviewed artifact links before any claim; immutable admission comments remain absent.

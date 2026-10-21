@@ -1,4 +1,4 @@
-# OPS #155 — continuity v2, изолированная коррекция, 2026-10-21
+# OPS #155 — continuity v3, изолированная коррекция installer, 2026-10-21
 
 From: OPS / isolated source copy. To: PM и независимый root installer security review.
 Статус: исправленные исходники, offline tests и самодостаточный installer; установки на VPS не было.
@@ -116,6 +116,27 @@ installer не убивает его ради отката. То же относ
 выдаётся **ROLLBACK INCOMPLETE**, private backup сохраняется для безопасного ручного разбора.
 Неустранимая ошибка systemd/диска
 также не маскируется как PASS. Бюджетные и security/PROD gates остаются fail closed.
+
+Коррекция v3 закрывает finding независимого review о failed service после неудачного start.
+`System.status()` проверяет структуру systemctl show, LoadState, KillMode, enabled-state и freezer;
+допустимые runtime states определяются отдельно для операции. Первичная установка по-прежнему
+принимает только healthy active/running либо inactive/dead. Rollback и `--remove` дополнительно
+принимают failed/failed только при MainPID=0, пустом либо отсутствующем trusted cgroup и отсутствии
+процессов во всех descendant cgroups. Активные units проходят прежние freeze/children/checkpoint
+guards; activating/deactivating, неизвестные states и failed с живыми descendants запрещены.
+Enable/disable/reset-failed не вызываются; enabled-state pin сохраняется.
+
+Одноразовый failed start любого из трёх units, включая сбой после успешного запуска другого,
+при безопасном состоянии возвращает весь managed set, manifest и исходные active/enabled states.
+При постоянном сбое start файлы восстанавливаются целиком, остальные службы восстанавливаются
+независимо от неисправной, выдаётся ROLLBACK INCOMPLETE, backup сохраняется. Фаза manifest `removed`
+означает восстановленные файлы; повторный `--remove` проверяет службы до сообщения «Уже удалено.»
+и при несовпадении active states повторяет безопасное восстановление. DRY remove только проверяет
+этот путь. Состояние failed перед recovery означает quiescence; при неудаче самой операции remove
+оно может остаться inactive/dead, без попытки искусственно воспроизвести failed.
+Новый writer либо policy deferral по-прежнему запрещают откат к старому runtime; retained units
+размораживаются, backup остаётся для reconciliation. Payloads executor/slots/monitor и их pins в v3
+byte-identical входному v2. Точный новый installer требует НОВЫХ независимого security review и DRY.
 
 Проверки — в EVIDENCE.md. Disposable Git histories настоящие; Actions, QA/author model edges,
 root metadata и systemd в tests симулируются. Эти tests не доказывают live CI, systemd freezer

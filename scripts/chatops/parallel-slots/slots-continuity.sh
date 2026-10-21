@@ -96,23 +96,28 @@ class System:
             '--property=LoadState,UnitFileState,ActiveState,SubState,MainPID,KillMode,ControlGroup,FreezerState'],
             check=True, capture_output=True, text=True, timeout=15)
         value = dict(line.split('=', 1) for line in result.stdout.splitlines())
+        # Parse structural properties here; Installer decides which runtime states an
+        # install or recovery operation may reconcile after inspecting the cgroup.
         require(value.get('LoadState') == 'loaded' and value.get('KillMode') == 'control-group'
                 and value.get('UnitFileState') in ('enabled', 'disabled', 'static')
-                and (value.get('ActiveState'), value.get('SubState')) in
-                    (('active', 'running'), ('inactive', 'dead')), 'unsupported/busy unit: ' + unit)
+                and value.get('ActiveState') and value.get('SubState')
+                and value.get('MainPID', '').isascii() and value['MainPID'].isdecimal(),
+                'unsupported/busy unit: ' + unit)
         require(value.get('FreezerState') in ('running', 'frozen'), 'unknown freezer state')
         return value
 
     def pids(self, status):
         group = status.get('ControlGroup', '')
+        quiescent = (status['ActiveState'], status['SubState']) in (
+            ('inactive', 'dead'), ('failed', 'failed')) and status['MainPID'] == '0'
         if not group:
-            require(status['ActiveState'] == 'inactive', 'active unit without cgroup')
+            require(quiescent, 'active unit without cgroup')
             return set()
         require(group.startswith('/') and '..' not in group.split('/'), 'invalid cgroup')
         path = Path('/sys/fs/cgroup') / group[1:]
         require(path == path.resolve(), 'symlink cgroup')
         if not path.exists():
-            require(status['ActiveState'] == 'inactive', 'missing active cgroup')
+            require(quiescent, 'missing active cgroup')
             return set()
         return {int(pid) for file in path.rglob('cgroup.procs') for pid in file.read_text().split()}
 
@@ -263,13 +268,23 @@ class Installer:
                                 for e in value['parked']),
                         'original Store cannot read parked state; refused without checkpoint edits')
 
-    def statuses(self, *, stopped=False, frozen=False):
+    @staticmethod
+    def unit_state(value, unit, *, recovery=False):
+        allowed = {('active', 'running'), ('inactive', 'dead')}
+        if recovery:
+            allowed.add(('failed', 'failed'))
+        require((value['ActiveState'], value['SubState']) in allowed, 'unsupported/busy unit: ' + unit)
+        require(int(value['MainPID']) > 0 if value['ActiveState'] == 'active'
+                else value['MainPID'] == '0', 'invalid unit MainPID')
+
+    def statuses(self, *, stopped=False, frozen=False, recovery=False):
         result = {}
         for unit in UNITS:
             value = self.system.status(unit)
+            self.unit_state(value, unit, recovery=recovery)
             pids = self.system.pids(value)
             if stopped:
-                require(value['ActiveState'] == 'inactive' and value['MainPID'] == '0' and not pids,
+                require(value['ActiveState'] != 'active' and value['MainPID'] == '0' and not pids,
                         'control group not quiescent: ' + unit)
             else:
                 allowed = {int(value['MainPID'])} if value['ActiveState'] == 'active' else set()
@@ -279,19 +294,47 @@ class Installer:
             result[unit] = value
         return result
 
-    def restore_units(self, states):
+    def restore_units(self, states, *, recovery=False):
+        errors = []
         for unit in UNITS:
-            current = self.system.status(unit)
-            require(current['UnitFileState'] == states[unit]['UnitFileState'], 'unit enabled state changed')
-            if current['FreezerState'] == 'frozen':
-                self.system.command('thaw', unit)
-            wanted = states[unit]['ActiveState']
-            if current['ActiveState'] != wanted:
-                self.system.command('start' if wanted == 'active' else 'stop', unit)
+            try:
+                current = self.system.status(unit)
+                self.unit_state(current, unit, recovery=recovery)
+                require(current['UnitFileState'] == states[unit]['UnitFileState'], 'unit enabled state changed')
+                if current['ActiveState'] == 'failed':
+                    require(not self.system.pids(current), 'control group not quiescent: ' + unit)
+                if current['FreezerState'] == 'frozen':
+                    self.system.command('thaw', unit)
+                wanted = states[unit]['ActiveState']
+                # A failed prior state in a recovery operation promises quiescence, not a
+                # reproducible service failure. Never start it merely to recreate "failed".
+                if current['ActiveState'] != wanted and not (
+                        wanted == 'failed' and current['ActiveState'] == 'inactive'):
+                    if current['ActiveState'] == 'active':
+                        require(self.system.pids(current) == {int(current['MainPID'])},
+                                'unit has active children or unknown processes: ' + unit)
+                    self.system.command('start' if wanted == 'active' else 'stop', unit)
+            except BaseException as error:
+                if not recovery:
+                    raise
+                errors.append(error)
         for unit in UNITS:
-            value = self.system.status(unit)
-            require(value['ActiveState'] == states[unit]['ActiveState']
-                    and value['UnitFileState'] == states[unit]['UnitFileState'], 'unit restoration failed')
+            try:
+                value = self.system.status(unit)
+                self.unit_state(value, unit, recovery=recovery)
+                wanted = states[unit]['ActiveState']
+                require((value['ActiveState'] == wanted or wanted == 'failed'
+                         and value['ActiveState'] == 'inactive')
+                        and value['UnitFileState'] == states[unit]['UnitFileState']
+                        and value['FreezerState'] == 'running', 'unit restoration failed')
+                if value['ActiveState'] == 'failed':
+                    require(not self.system.pids(value), 'control group not quiescent: ' + unit)
+            except BaseException as error:
+                if not recovery:
+                    raise
+                errors.append(error)
+        if errors:
+            raise errors[0]
 
     def journal(self, value):
         self.write(self.backup / 'managed.json', self.record(
@@ -366,8 +409,8 @@ class Installer:
         elif saved:
             expected = saved['new'] if saved['phase'] == 'installed' else saved['old']
             require(before == expected, 'managed files drifted since installation/removal')
-            if (remove and saved['phase'] == 'removed') or (not remove and saved['phase'] == 'installed'):
-                print('Уже удалено.' if remove else 'Уже установлено.')
+            if not remove and saved['phase'] == 'installed':
+                print('Уже установлено.')
                 return
         if remove:
             require(saved is not None, 'no preinstall backup; removal refused')
@@ -383,10 +426,14 @@ class Installer:
                                         gid=before[p.name]['gid'] if before[p.name] else 0) for p in self.paths}
             wanted_units = None
         self.safe_slots(original=remove)
-        prior = self.statuses()
+        prior = self.statuses(recovery=remove)
         wanted_units = wanted_units or prior
         require(all(prior[u]['UnitFileState'] == wanted_units[u]['UnitFileState'] for u in UNITS),
                 'enabled state changed since preinstall; refusing')
+        if remove and saved['phase'] == 'removed' and all(
+                prior[u]['ActiveState'] == wanted_units[u]['ActiveState'] for u in UNITS):
+            print('Уже удалено.')
+            return
         if dry:
             print('DRY PASS: проверены исходные байты, policy, состояния и cgroup; изменений нет.')
             return
@@ -407,10 +454,10 @@ class Installer:
                 if prior[unit]['ActiveState'] == 'active':
                     frozen.append(unit)  # includes a command whose completion is uncertain
                     self.system.command('freeze', unit)
-            self.statuses(frozen=True)
+            self.statuses(frozen=True, recovery=remove)
             self.safe_slots(original=remove)  # frozen processes cannot cross into a writer
             self.system.command('stop', *UNITS)
-            self.statuses(stopped=True)  # all descendant cgroups must be empty
+            self.statuses(stopped=True, recovery=remove)  # all descendant cgroups must be empty
             self.safe_slots(original=remove)
             require({p.name: self.read(p, optional=p == self.policy) for p in self.paths} == before,
                     'concurrent managed-file change')
@@ -420,7 +467,7 @@ class Installer:
             # Commit the durable manifest BEFORE starting workers. A failed start restores both
             # files and the old manifest; a crash leaves a complete backup for --remove.
             self.journal(manifest | {'phase': 'removed' if remove else 'installed'})
-            self.restore_units(wanted_units)
+            self.restore_units(wanted_units, recovery=remove)
             print('Удалено: восстановлены preinstall код, policy и active/enabled состояния.' if remove else
                   'Установлено: bounded continuity включена только для slot-режима.')
         except BaseException:
@@ -439,10 +486,12 @@ class Installer:
                     for unit in UNITS:
                         if self.system.status(unit)['ActiveState'] == 'active':
                             self.system.command('freeze', unit)
-                    self.statuses(frozen=True)
+                    current = self.statuses(frozen=True, recovery=True)
+                    require(all(current[u]['UnitFileState'] == prior[u]['UnitFileState'] for u in UNITS),
+                            'unit enabled state changed')
                     self.safe_slots(original=not remove)
                     self.system.command('stop', *UNITS)
-                    self.statuses(stopped=True)
+                    self.statuses(stopped=True, recovery=True)
                     self.safe_slots(original=not remove)
                 except BaseException as error:
                     errors.append(type(error).__name__)
@@ -460,7 +509,7 @@ class Installer:
                     elif not errors:
                         cleanup(lambda: self.journal(manifest | {'phase': 'removed'}))
             if not errors:
-                cleanup(lambda: self.restore_units(prior))
+                cleanup(lambda: self.restore_units(prior, recovery=True))
             if errors:
                 raise RuntimeError('ROLLBACK INCOMPLETE; backup retained; manual reconciliation required: '
                                    + ','.join(errors)) from None
