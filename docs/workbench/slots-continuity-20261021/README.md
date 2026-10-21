@@ -42,3 +42,9 @@ Monitor now reports #156/#157 definitions independently reviewed but not started
 ## 2026-10-21T20:28:31.850401+00:00 — V3 exact candidate
 
 CLI correction complete: known failed/failed PID0 empty-cgroup recovery supported, initial unhealthy install still refused, unsafe live writers/deferrals stay excluded. 160 core/installer tests and 8 commissioning tests PASS (author self-check); five runtime payloads unchanged. New installer SHA2566e909fbf0abc0c7292e39444cf83ae289895d8a1e9b7fb893795c2fcb1b213cb. Independent security review PID1694070, log /var/lib/gb-ops-stage/files/slots-continuity-review2.log. NOT INSTALLED until exact PASS and root DRY. #156/#157 issue descriptions updated with final exact reviewed artifact links before any claim; immutable admission comments remain absent.
+
+## 2026-10-21T20:46:10.839757+00:00 — V3 REJECTED, V4 active
+
+Do NOT install6e909fbf…: independent review3 identified frozen --remove rejection and a startup race (first worker can author before second service startup succeeds, preventing safe rollback). No runtime installation took place. V4 CLI correction PID1815915 adds a small persistent root-managed startup barrier in existing slots.Runtime/supervisor + controlled installer commit, with frozen recovery. Exact brief in docs/prompts/slots-continuity-v4.md. All real Rule7 findings must be fixed, not waived. Existing browser PIN login suffix was verified byte-identical1613565f…; normal-auth scope was recorded separately, no secret values accessed.
+
+V4 changes slots.py hash, so metadata helper57400728… and its approval are obsolete for V4 and MUST NOT be applied. Regenerate literal pin helper after final exact code review; fresh independent security review required. No task admission comments posted. Live system remains original #151 blocked/#152 done, DEV4977074e. Last GitHub check #156/#157 both0 comments.
