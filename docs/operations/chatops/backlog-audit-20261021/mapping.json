@@ -1,0 +1,286 @@
+{
+  "M6": {
+    "action": "retain",
+    "targets": [
+      "M6"
+    ]
+  },
+  "I1": {
+    "action": "retain",
+    "targets": [
+      "I1"
+    ]
+  },
+  "NAV1": {
+    "action": "retain",
+    "targets": [
+      "NAV1"
+    ]
+  },
+  "MAP-PERF1": {
+    "action": "retain",
+    "targets": [
+      "MAP-PERF1"
+    ]
+  },
+  "M2": {
+    "action": "retain",
+    "targets": [
+      "M2"
+    ]
+  },
+  "V0": {
+    "action": "retain",
+    "targets": [
+      "V0"
+    ]
+  },
+  "M3": {
+    "action": "retain",
+    "targets": [
+      "M3"
+    ]
+  },
+  "M4": {
+    "action": "merged",
+    "targets": [
+      "M3"
+    ]
+  },
+  "M2R": {
+    "action": "retain",
+    "targets": [
+      "M2R"
+    ]
+  },
+  "NAV1b": {
+    "action": "retain",
+    "targets": [
+      "NAV1b"
+    ]
+  },
+  "V3a": {
+    "action": "merged",
+    "targets": [
+      "V1a"
+    ]
+  },
+  "V1a": {
+    "action": "retain",
+    "targets": [
+      "V1a"
+    ]
+  },
+  "V1b": {
+    "action": "retain",
+    "targets": [
+      "V1b"
+    ]
+  },
+  "V3b": {
+    "action": "retain",
+    "targets": [
+      "V3b"
+    ]
+  },
+  "V2": {
+    "action": "retain",
+    "targets": [
+      "V2"
+    ]
+  },
+  "M1f": {
+    "action": "merged",
+    "targets": [
+      "MAP-FILTER"
+    ]
+  },
+  "OPS-slots": {
+    "action": "history-only",
+    "targets": []
+  },
+  "M0d": {
+    "action": "retain",
+    "targets": [
+      "M0d"
+    ]
+  },
+  "M5": {
+    "action": "retain",
+    "targets": [
+      "M5"
+    ]
+  },
+  "M7": {
+    "action": "retain",
+    "targets": [
+      "M7"
+    ]
+  },
+  "D1": {
+    "action": "retain",
+    "targets": [
+      "D1"
+    ]
+  },
+  "ML614": {
+    "action": "retain",
+    "targets": [
+      "ML614"
+    ]
+  },
+  "T0a-2": {
+    "action": "retain",
+    "targets": [
+      "T0a-2"
+    ]
+  },
+  "T0a-3": {
+    "action": "merged",
+    "targets": [
+      "V1b"
+    ]
+  },
+  "T0a-4": {
+    "action": "retain",
+    "targets": [
+      "T0a-4"
+    ]
+  },
+  "T1": {
+    "action": "merged",
+    "targets": [
+      "T2"
+    ]
+  },
+  "T2": {
+    "action": "retain",
+    "targets": [
+      "T2"
+    ]
+  },
+  "T3": {
+    "action": "merged",
+    "targets": [
+      "T2"
+    ]
+  },
+  "T4": {
+    "action": "retain",
+    "targets": [
+      "T4"
+    ]
+  },
+  "T5": {
+    "action": "retain",
+    "targets": [
+      "T5"
+    ]
+  },
+  "T6": {
+    "action": "retain",
+    "targets": [
+      "T6"
+    ]
+  },
+  "T7": {
+    "action": "retain",
+    "targets": [
+      "T7"
+    ]
+  },
+  "T8": {
+    "action": "retain",
+    "targets": [
+      "T8"
+    ]
+  },
+  "T9": {
+    "action": "merged",
+    "targets": [
+      "T2"
+    ]
+  },
+  "T10": {
+    "action": "distributed",
+    "targets": [
+      "T6",
+      "T7",
+      "T8"
+    ]
+  },
+  "#68": {
+    "action": "history-only",
+    "targets": []
+  },
+  "#76": {
+    "action": "history-only",
+    "targets": []
+  },
+  "#80": {
+    "action": "history-only",
+    "targets": []
+  },
+  "#86": {
+    "action": "history-only",
+    "targets": []
+  },
+  "#88": {
+    "action": "history-only",
+    "targets": []
+  },
+  "FR-2": {
+    "action": "retain",
+    "targets": [
+      "FR-2"
+    ]
+  },
+  "FR-3": {
+    "action": "retain",
+    "targets": [
+      "FR-3"
+    ]
+  },
+  "FR-4": {
+    "action": "merged",
+    "targets": [
+      "FR-3"
+    ]
+  },
+  "FR-5": {
+    "action": "merged",
+    "targets": [
+      "FR-3"
+    ]
+  },
+  "FR-7": {
+    "action": "merged",
+    "targets": [
+      "FR-3"
+    ]
+  },
+  "FR-8": {
+    "action": "retain",
+    "targets": [
+      "FR-8"
+    ]
+  },
+  "MAP-FILTER": {
+    "action": "retain",
+    "targets": [
+      "MAP-FILTER"
+    ]
+  },
+  "M2R-G": {
+    "action": "merged",
+    "targets": [
+      "M2R"
+    ]
+  },
+  "M3-PHOTO": {
+    "action": "retain",
+    "targets": [
+      "M3-PHOTO"
+    ]
+  }
+}
