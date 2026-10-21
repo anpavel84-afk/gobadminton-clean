@@ -41,6 +41,41 @@ STATUS_SCHEMA = 'GB_SLOT_STATUS_V1'
 RETIRED = 'RETIRED_TO_SLOT.json'
 MAX_FILE = 65536
 CONTINUITY_SCHEMA = 'GB_SLOT_CONTINUITY_V1'
+PENDING = CONFIG_ROOT / 'continuity.pending'
+PENDING_SCHEMA = 'GB_CONTINUITY_PENDING_V1'
+
+
+def deployment_pending(path):
+    """Read only public installer metadata; even an absent marker needs trusted parents."""
+    path = Path(path)
+    require(path.is_absolute(), 'absolute deployment barrier required')
+    for parent in reversed(path.parents):
+        try:
+            info = parent.lstat()
+        except FileNotFoundError:
+            return False
+        require(stat.S_ISDIR(info.st_mode) and info.st_uid == 0 and not info.st_mode & 0o022,
+                'untrusted deployment barrier directory')
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return False
+    try:
+        info = os.fstat(fd)
+        require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_uid == 0
+                and stat.S_IMODE(info.st_mode) == 0o644, 'untrusted deployment barrier')
+        raw = os.read(fd, 4097)
+    finally:
+        os.close(fd)
+    require(len(raw) <= 4096, 'deployment barrier too large')
+    require(loads(raw) == {'schema': PENDING_SCHEMA}, 'invalid deployment barrier')
+    return True
+
+
+def wait_for_activation():
+    # No state, lease, budget, API or model access before the installer durably commits.
+    while deployment_pending(PENDING):
+        time.sleep(0.25)
 
 
 def continuity_policy(path):
@@ -533,6 +568,7 @@ class Runtime:
 
     def __init__(self, slot, state_root=STATE_ROOT, slot_root=SLOT_ROOT, config_root=CONFIG_ROOT,
                  runtime_root=RUNTIME_ROOT, trusted_assigners=None, legacy_reads=()):
+        wait_for_activation()
         self.slot = slot
         self.layout = Layout(slot, state_root, slot_root)
         self.user = slot_user(slot)
@@ -829,14 +865,43 @@ def slot2_preflight(rt, codex, model, effort, known_hosts, proof=None, *, activa
         import subprocess
         def git(*args):
             result = subprocess.run(['git', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false',
-                                     '-C', str(rt.layout.repo), *args], env=rt.env() | {'GIT_OPTIONAL_LOCKS': '0'},
+                                     '-C', str(rt.layout.repo), *args], env=rt.env() | {
+                                         'GIT_OPTIONAL_LOCKS': '0', 'GIT_NO_LAZY_FETCH': '1',
+                                         'GIT_NO_REPLACE_OBJECTS': '1'},
                                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=15)
             require(result.returncode == 0, 'git readiness')
             return result.stdout.strip()
         require(git('rev-parse', '--path-format=absolute', '--git-common-dir') ==
                 str(rt.layout.repo / '.git'), 'own Git common dir')
-        require((rt.layout.repo / '.git/objects/info/alternates').read_text().strip() ==
-                str(rt.layout.root.parent / 'base.git/objects'), 'read-only base alternates')
+        common = rt.layout.repo / '.git'
+        objects = common / 'objects'
+        require(common == common.resolve() and objects == objects.resolve()
+                and all(p.is_dir() and p.stat().st_uid == uid and not p.stat().st_mode & 0o022
+                        for p in (common, objects)), 'own Git objects')
+        alternates = objects / 'info/alternates'
+        if os.path.lexists(alternates):
+            require(stat.S_ISREG(alternates.lstat().st_mode) and
+                    alternates.read_text().strip() == str(rt.layout.root.parent / 'base.git/objects'),
+                    'read-only base alternates')
+        else:
+            # A repacked clone may intentionally have no alternates. Prove its local
+            # object closure without lazy fetch, shallow history, grafts or promisor data.
+            for path in objects.rglob('*'):
+                info = path.lstat()
+                require(stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode),
+                        'external or special Git object dependency')
+            require(not any(os.path.lexists(p) for p in
+                            (objects / 'info/http-alternates', common / 'shallow', common / 'info/grafts'))
+                    and not list((objects / 'pack').glob('*.promisor'))
+                    and not any(name.lower() == 'extensions.partialclone' or
+                                name.lower().startswith('remote.') and name.lower().endswith('.promisor')
+                                for name in git('config', '--local', '--name-only', '--list').splitlines())
+                    and not any(line.startswith('alternate:') for line in git('count-objects', '-v').splitlines()),
+                    'self-contained Git objects required')
+            require(git('for-each-ref', '--format=%(objectname)'), 'local Git refs required')
+            git('cat-file', '-e', 'HEAD^{commit}')
+            git('rev-list', '--objects', '--all', '--missing=error')
+            git('fsck', '--full', '--no-dangling')
         git('cat-file', '-e', 'refs/heads/dev^{commit}')
         return not git('status', '--porcelain', '--untracked-files=all')
     check('own Git clone/common dir/dev/clean checkout', git_ready)
@@ -973,6 +1038,8 @@ def main(argv=None):
     mg.add_argument('--dst', type=Path, default=STATE_ROOT / 'slots' / 'slot1')
     mg.add_argument('--apply', action='store_true', help='without it: dry-run only')
     args = parser.parse_args(argv)
+    if args.cmd == 'supervise':
+        wait_for_activation()
     if args.cmd == 'preflight-slot2':
         result = slot2_preflight(Runtime('slot2'), args.codex, args.model, args.effort, args.known_hosts)
         print(json.dumps(result, sort_keys=True))

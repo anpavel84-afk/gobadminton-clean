@@ -6,10 +6,13 @@ import copy
 import hashlib
 import importlib.util
 import json
+import multiprocessing
 import os
 from pathlib import Path
+import select
 import signal
 import subprocess
+import sys
 import tempfile
 import types
 import unittest
@@ -20,6 +23,58 @@ HERE = Path(__file__).resolve().parents[1] / 'parallel-slots'
 SPEC = importlib.util.spec_from_file_location('continuity_installer', HERE / 'continuity-src/install.py')
 i = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(i)
+sys.path.insert(0, str(HERE.parent))
+import slots as s
+REAL_SIGNAL = signal.signal
+
+
+# A real disposable process enters the production Runtime (or the pinned old
+# executor importing it). Only ownership is simulated; no runtime/barrier code
+# is replaced. Actual lease, task publication and budget charge follow entry.
+WORKER = r'''
+import importlib.util, os, sys, time
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import slots as s
+root, mode = Path(sys.argv[2]), sys.argv[3]
+real_lstat, real_fstat = Path.lstat, os.fstat
+def owned(info):
+    values = list(info); values[4:6] = [0, 0]
+    return os.stat_result(values)
+Path.lstat = lambda p: owned(real_lstat(p))
+os.fstat = lambda fd: owned(real_fstat(fd))
+s.PENDING = root / 'etc/continuity.pending'
+sleep = time.sleep
+announced = False
+def waiting(seconds):
+    global announced
+    if not announced:
+        print('WAIT', flush=True)
+        announced = True
+    sleep(seconds)
+s.time.sleep = waiting
+if mode == 'supervise':
+    def config(path):
+        (root / 'supervisor-work').write_text('scheduled/API/assignment entry')
+        raise SystemExit(0)
+    s.load_supervisor_config = config
+    s.main(['supervise'])
+    raise AssertionError('unreachable')
+roots = dict(state_root=root/'worker-state', slot_root=root/'srv', config_root=root/'etc',
+             trusted_assigners={0})
+if mode == 'old-slot1':
+    spec = importlib.util.spec_from_file_location('old_executor', sys.argv[4])
+    old = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(old)
+    rt = old.activate_slot('slot1', **roots)
+else:
+    rt = s.Runtime(mode, **roots)
+assert rt.registry.acquire(rt.slot, dict(issue=155, locks=['global'], allowed_paths=['apps/**']))
+s.atomic(root / 'task-mutation', dict(issue=155, phase='developing'), 0o600)
+rt.budget.charge(rt.slot, 'codex', 'author')
+rt.registry.release()
+print('RELEASED', flush=True)
+'''
 
 
 class FakeSystem(i.System):
@@ -35,7 +90,7 @@ class FakeSystem(i.System):
     def status(self, unit):
         return dict(self.states[unit])
 
-    def pids(self, value):
+    def pids(self, value, *, stopping=False):
         return ({int(value['MainPID'])} if value['ActiveState'] == 'active' else set()) | self.extra
 
     def command(self, verb, *units):
@@ -64,6 +119,7 @@ class MockSystemctl(FakeSystem):
         self.failed_group = ''
         self.missing_groups = set()
         self.extra_by_unit = {}
+        self.show_sequences = {}
 
     def run(self, argv, **kwargs):
         assert argv[0] == '/usr/bin/systemctl'
@@ -74,7 +130,8 @@ class MockSystemctl(FakeSystem):
                                'KillMode,ControlGroup,FreezerState')
             assert kwargs == dict(check=True, capture_output=True, text=True, timeout=15)
             unit = argv[2]
-            value = self.states[unit]
+            sequence = self.show_sequences.get(unit, [])
+            value = sequence.pop(0) if sequence else self.states[unit]
             group = value.get('ControlGroup', '')
             if group.startswith('/') and '..' not in group.split('/') and group not in self.missing_groups:
                 directory = self.cgroups / group[1:]
@@ -153,11 +210,246 @@ class InstallerTests(unittest.TestCase):
     def managed(self, installer):
         return {p.name: installer.read(p, optional=p == installer.policy) for p in installer.paths}
 
+    @contextlib.contextmanager
+    def removed_prior(self, policy=False):
+        with self.fixture(policy, parsed=True) as (root, installer, system):
+            system.states[i.UNITS[2]]['UnitFileState'] = 'enabled'
+            old = self.managed(installer)
+            new = {name: installer.record(raw, old[name]['mode'] if old[name] else 0o644)
+                   for name, raw in installer.new.items()}
+            new['slots.py'] = installer.record(b'# independently reviewed prior slots fixture\n')
+            units = copy.deepcopy(system.states)
+            # The operator stopped slot2 after the prior failed transaction. A fresh
+            # install must preserve CURRENT quiescence, while archiving this old fact.
+            units[i.UNITS[2]].update(ActiveState='active', SubState='running', MainPID='102')
+            manifest = dict(schema='GB_CONTINUITY_INSTALL_V1', phase='removed', old=old, new=new, units=units)
+            installer.backup.mkdir(mode=0o700)
+            installer.journal(manifest)
+            hashes = {name: record['sha256'] for name, record in new.items()}
+            # Only payload identities are synthetic; production manifest validation,
+            # file checksums, ownership/types, atomic writes and cgroup parser run.
+            with patch.object(i, 'PRIOR_REMOVED_SHA256', hashes):
+                yield root, installer, system, manifest
+
+    def test_removed_prior_migration_dry_no_writes_then_archive_before_fresh_snapshot(self):
+        for policy in (False, True):
+            with self.subTest(policy=policy), self.removed_prior(policy) as (root, installer, system, saved):
+                before, units = self.managed(installer), copy.deepcopy(system.states)
+                checkpoints = {p: p.read_bytes() for p in (root/'state').rglob('*') if p.is_file()}
+                journal = (installer.backup/'managed.json').read_bytes()
+                archive = installer.backup / ('removed-' + i.digest(journal) + '.json')
+                write = installer.write
+                with patch.object(installer, 'write', side_effect=AssertionError('DRY write')):
+                    installer.apply(dry=True)
+                self.assertEqual(system.events, [])
+                self.assertFalse(installer.lock.exists())
+                self.assertEqual((installer.backup/'managed.json').read_bytes(), journal)
+                self.assertFalse(archive.exists())
+                writes = []
+                def traced(path, record):
+                    if path.name == 'managed.json':
+                        self.assertEqual(archive.read_bytes(), journal)
+                    write(path, record)
+                    writes.append(path)
+                installer.write = traced
+                installer.apply()
+                self.assertEqual(writes[0], archive)
+                self.assertEqual(archive.read_bytes(), journal)
+                current = json.loads((installer.backup/'managed.json').read_text())
+                self.assertEqual(current['old'], before)
+                self.assertEqual(current['units'], units)
+                self.assertNotEqual(current['units'], saved['units'])
+                self.assertEqual(system.states, units)
+                self.assertNotIn(('start', (i.UNITS[2],)), system.events)
+                self.assertEqual({p: p.read_bytes() for p in checkpoints}, checkpoints)
+                installer.write = write
+                installer.apply(remove=True)
+                self.assert_restored(installer, system, before, units)
+                self.assertEqual(archive.read_bytes(), journal)
+
+    def test_removed_prior_migration_rejects_pending_unremoved_mixed_drift_and_bad_digests(self):
+        for mode in ('prepared', 'installed', 'pending', 'old-checksum', 'old-metadata', 'new-checksum',
+                     'unknown-candidate', 'current-drift', 'mixed', 'enabled', 'children', 'writer', 'archive',
+                     'empty-manifest', 'null-manifest', 'missing-old-digest', 'missing-new-digest', 'bad-units',
+                     'missing-managed'):
+            with self.subTest(mode=mode), self.removed_prior() as (root, installer, system, saved):
+                if mode in ('prepared', 'installed'):
+                    saved['phase'] = mode
+                elif mode == 'pending':
+                    installer.write(installer.pending, installer.record(i.PENDING_RAW))
+                elif mode == 'old-checksum':
+                    saved['old']['slots.py']['sha256'] = '0' * 64
+                elif mode == 'old-metadata':
+                    saved['old']['slots.py']['mode'] = 0o640
+                elif mode == 'new-checksum':
+                    saved['new']['slots.py']['sha256'] = '0' * 64
+                elif mode == 'unknown-candidate':
+                    saved['new']['slots.py'] = installer.record(b'# unreviewed candidate\n')
+                elif mode == 'current-drift':
+                    installer.paths[0].chmod(0o640)
+                elif mode == 'mixed':
+                    installer.write(installer.paths[0], saved['new'][installer.paths[0].name])
+                elif mode == 'enabled':
+                    system.states[i.UNITS[2]]['UnitFileState'] = 'disabled'
+                elif mode == 'children':
+                    system.extra_by_unit[i.UNITS[1]] = {9999}
+                elif mode == 'writer':
+                    (root/'state/slot1/state.json').write_text('{"active":{"phase":"qa"},"done":[]}')
+                elif mode == 'archive':
+                    (installer.backup / ('removed-' + '0' * 64 + '.json')).write_bytes(b'corrupt')
+                    (installer.backup / ('removed-' + '0' * 64 + '.json')).chmod(0o600)
+                elif mode == 'empty-manifest':
+                    saved = {}
+                elif mode == 'null-manifest':
+                    saved = None
+                elif mode == 'missing-old-digest':
+                    saved['old']['slots.py'].pop('sha256')
+                elif mode == 'missing-new-digest':
+                    saved['new']['slots.py'].pop('sha256')
+                elif mode == 'bad-units':
+                    saved['units'][i.UNITS[2]]['MainPID'] = 'unknown'
+                installer.journal(saved)
+                if mode == 'missing-managed':
+                    raw = (installer.backup/'managed.json').read_bytes()
+                    installer.write(installer.backup / ('removed-' + i.digest(raw) + '.json'), installer.record(raw, 0o600))
+                    (installer.backup/'managed.json').unlink()
+                before = self.managed(installer)
+                backup = {p.name: p.read_bytes() for p in installer.backup.iterdir()}
+                for dry in (True, False):
+                    with patch.object(installer, 'write', side_effect=AssertionError('unsafe write')), \
+                            self.assertRaises(RuntimeError):
+                        installer.apply(dry=dry)
+                    self.assertEqual(system.events, [])
+                    self.assertEqual(self.managed(installer), before)
+                    self.assertEqual({p.name: p.read_bytes() for p in installer.backup.iterdir()}, backup)
+
+    def test_removed_prior_archive_interruption_preserves_complete_journal_and_retry(self):
+        for failure in (OSError, SystemExit):
+            with self.subTest(failure=failure.__name__), self.removed_prior() as (_, installer, system, saved):
+                journal = (installer.backup/'managed.json').read_bytes()
+                write = installer.write
+                def fail(path, record):
+                    write(path, record)
+                    if path.name.startswith('removed-'):
+                        raise failure('interrupted after durable archive')
+                installer.write = fail
+                with self.assertRaises(failure):
+                    installer.apply()
+                self.assertEqual(system.events, [])
+                self.assertEqual((installer.backup/'managed.json').read_bytes(), journal)
+                self.assertEqual(self.managed(installer), saved['old'])
+                self.assertFalse(installer.pending.exists())
+                self.assertEqual(next(installer.backup.glob('removed-*')).read_bytes(), journal)
+                installer.write = write
+                installer.apply()
+
+    def test_removed_prior_failed_start_rollback_retains_fresh_slot2_state_and_recovery(self):
+        for persistent in (False, True):
+            with self.subTest(persistent=persistent), self.removed_prior() as (_, installer, system, _):
+                before, units = self.managed(installer), copy.deepcopy(system.states)
+                journal = (installer.backup/'managed.json').read_bytes()
+                system.start_failures[i.UNITS[0]] = -1 if persistent else 1
+                expected = RuntimeError if persistent else subprocess.CalledProcessError
+                with self.assertRaises(expected):
+                    installer.apply()
+                self.assertEqual(self.managed(installer), before)
+                saved = json.loads((installer.backup/'managed.json').read_text())
+                self.assertEqual(saved['phase'], 'removed')
+                self.assertEqual(saved['units'], units)
+                self.assertEqual(saved['new']['slots.py']['sha256'], installer.payloads['slots.py']['new'])
+                self.assertEqual(next(installer.backup.glob('removed-*')).read_bytes(), journal)
+                self.assertNotIn(('start', (i.UNITS[2],)), system.events)
+                self.assertFalse(installer.pending.exists())
+                system.start_failures.clear()
+                installer.apply(remove=True, dry=True)
+                installer.apply(remove=True)
+                self.assert_restored(installer, system, before, units)
+
+    def test_removed_prior_migration_crash_boundaries_keep_audit_and_explicit_recovery(self):
+        with self.removed_prior() as (_, installer, system, _):
+            sequence = []
+            write = installer.write
+            def trace(path, record):
+                write(path, record); sequence.append(('write', path.name))
+            installer.write, system.after = trace, sequence.append
+            installer.apply()
+        self.assertTrue(sequence[0][1].startswith('removed-'))
+        for number, boundary in enumerate(sequence):
+            with self.subTest(number=number, boundary=boundary), self.removed_prior() as (root, installer, system, _):
+                before, units = self.managed(installer), copy.deepcopy(system.states)
+                journal = (installer.backup/'managed.json').read_bytes()
+                snapshot = root/'services.json'
+                remaining = [number]
+                write = installer.write
+                def crash(event):
+                    snapshot.write_text(json.dumps(system.states))
+                    remaining[0] -= 1
+                    if remaining[0] == -1:
+                        os._exit(73)
+                def crashing_write(path, record):
+                    write(path, record); crash(('write', path.name))
+                def run():
+                    installer.write, system.after = crashing_write, crash
+                    installer.apply()
+                child = multiprocessing.get_context('fork').Process(target=run)
+                child.start(); child.join(timeout=20)
+                if child.is_alive():
+                    child.kill(); child.join()
+                self.assertEqual(child.exitcode, 73)
+                system.states = json.loads(snapshot.read_text())
+                fresh = i.Installer(installer.payloads, i.System(), code=installer.code,
+                    policy=installer.policy, backup=installer.backup, lock=installer.lock,
+                    state=installer.state, monitor=root/'monitor')
+                archive = next(fresh.backup.glob('removed-*'))
+                self.assertEqual(archive.read_bytes(), journal)
+                if number == 0:
+                    self.assertEqual((fresh.backup/'managed.json').read_bytes(), journal)
+                    fresh.apply(dry=True)
+                    fresh.apply()
+                elif number != len(sequence) - 1:
+                    with self.assertRaisesRegex(RuntimeError, 'interrupted installation'):
+                        fresh.apply()
+                fresh.apply(remove=True, dry=True)
+                fresh.apply(remove=True)
+                self.assert_restored(fresh, system, before, units)
+                self.assertEqual(archive.read_bytes(), journal)
+                self.assertFalse(fresh.pending.exists())
+
     def assert_restored(self, installer, system, before, units):
         self.assertEqual(self.managed(installer), before)
         self.assertEqual(system.states, units)
         self.assertFalse(any(verb in ('enable', 'disable', 'restart', 'daemon-reload')
                              for verb, _ in system.events))
+
+    @contextlib.contextmanager
+    def worker(self, root, mode='slot1'):
+        for directory in ('worker-state/locks', 'worker-state/outbox/slot1',
+                          'worker-state/outbox/slot2', 'srv'):
+            (root / directory).mkdir(parents=True, exist_ok=True)
+        for name in ('registry.lock', 'integration.lock', 'api.clock'):
+            (root/'worker-state/locks'/name).touch()
+        (root / 'etc/budgets.json').write_text(json.dumps(dict(
+            schema=1, providers={'codex': {'author': 40, 'qa': 40}},
+            slots={slot: {'codex': {'author': 20, 'qa': 20}} for slot in ('slot1', 'slot2')})))
+        original = HERE.parents[2] / 'pinned-originals/autonomous_issues.py'
+        process = subprocess.Popen([sys.executable, '-I', '-B', '-c', WORKER, str(HERE.parent),
+            str(root), mode, str(original)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            ready, _, _ = select.select([process.stdout], [], [], 10)
+            self.assertTrue(ready, 'worker did not reach barrier')
+            self.assertEqual(process.stdout.readline().strip(), 'WAIT')
+            self.assertIsNone(process.poll())
+            yield process
+        finally:
+            if process.poll() is None:
+                process.terminate()
+            process.communicate(timeout=10)
+
+    def assert_no_work(self, root):
+        self.assertFalse((root / 'task-mutation').exists())
+        self.assertFalse((root / 'supervisor-work').exists())
+        self.assertFalse(list((root / 'worker-state').rglob('*.lease')))
+        self.assertFalse(list((root / 'worker-state').rglob('ledger.json*')))
 
     def test_dry_is_read_only_and_install_remove_restores_bytes_modes_states(self):
         for policy in (False, True):
@@ -212,7 +504,18 @@ class InstallerTests(unittest.TestCase):
                     system.after = fault
                     with self.assertRaises(failure):
                         installer.apply()
-                    self.assert_restored(installer, system, before, units)
+                    if number == len(sequence) - 1:
+                        # Activation unlink has happened: writers may have entered, so
+                        # neither an I/O error nor a signal may restore old code.
+                        self.assertFalse(installer.pending.exists())
+                        self.assertEqual(self.managed(installer),
+                                         json.loads((installer.backup/'managed.json').read_text())['new'])
+                        self.assertEqual(system.states, units)
+                        self.assertEqual(json.loads((installer.backup/'managed.json').read_text())['phase'],
+                                         'installed')
+                    else:
+                        self.assert_restored(installer, system, before, units)
+                        self.assertFalse(installer.pending.exists())
 
     def test_remove_failure_restores_installed_set_and_operation_active_states(self):
         with self.fixture(True) as (_, installer, system):
@@ -391,7 +694,8 @@ class InstallerTests(unittest.TestCase):
             self.assertTrue(all(self.managed(installer)[p.name]['sha256'] == i.digest(installer.new[p.name])
                                 for p in installer.paths))
             manifest = i.decode(base64.b64decode(installer.read(installer.backup / 'managed.json')['data']))
-            self.assertEqual(manifest['phase'], 'installed')
+            self.assertEqual(manifest['phase'], 'prepared')
+            self.assertIsNotNone(installer.barrier())
             self.assertTrue(all(v['FreezerState'] == 'running' for v in system.states.values()))
 
     def test_empty_deferred_allows_exact_rollback_and_is_untouched(self):
@@ -446,6 +750,7 @@ class InstallerTests(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     installer.system.status(i.UNITS[0])
                 self.assertEqual(system.events, [])
+
         for active, sub in (('activating', 'start'), ('deactivating', 'stop'),
                             ('active', 'exited'), ('reloading', 'reload'),
                             ('failed', 'running'), ('unknown', 'unknown')):
@@ -455,6 +760,106 @@ class InstallerTests(unittest.TestCase):
                     with self.assertRaisesRegex(RuntimeError, 'unsupported/busy'):
                         installer.statuses(recovery=recovery)
                 self.assertEqual(system.events, [])
+
+    def test_stop_poll_accepts_only_our_transition_then_empty_inactive_cgroups(self):
+        for removing in (False, True):
+            with self.subTest(remove=removing), self.fixture(parsed=True) as (_, installer, system):
+                if removing:
+                    installer.apply()
+                before = self.managed(installer)
+                units = copy.deepcopy(system.states)
+                sleeps = []
+                def stopped(event):
+                    if event[1] == 'stop':
+                        for unit in i.UNITS[:2]:
+                            transient = units[unit] | dict(ActiveState='deactivating', SubState='stop-sigterm')
+                            system.show_sequences[unit] = [transient, transient | dict(MainPID='0'),
+                                                           transient | dict(MainPID='0', ControlGroup='')]
+                system.after = stopped
+                with patch.object(i.time, 'sleep', side_effect=sleeps.append):
+                    installer.apply(remove=removing)
+                self.assertEqual(len(sleeps), 3)
+                self.assertEqual(system.states, units)
+                self.assertEqual(sum(verb == 'stop' for verb, _ in system.events), 2 if removing else 1)
+                self.assertNotEqual(self.managed(installer), before)
+                self.assertFalse(installer.pending.exists())
+
+    def test_stop_poll_deadline_signal_unknown_state_and_children_fail_before_switch(self):
+        for mode in ('timeout', 'signal', 'children', 'pid', 'group', 'enabled', 'activating', 'unknown-stop'):
+            with self.subTest(mode=mode), self.fixture(parsed=True) as (_, installer, system):
+                before, units = self.managed(installer), copy.deepcopy(system.states)
+                unit = i.UNITS[1]
+                transient = units[unit] | dict(ActiveState='deactivating', SubState='stop-sigterm')
+                if mode == 'pid':
+                    transient['MainPID'] = '9999'
+                elif mode == 'group':
+                    transient['ControlGroup'] = '/another.service'
+                elif mode == 'enabled':
+                    transient['UnitFileState'] = 'disabled'
+                elif mode == 'activating':
+                    transient.update(ActiveState='activating', SubState='start')
+                elif mode == 'unknown-stop':
+                    transient['SubState'] = 'unknown'
+                def stopped(event):
+                    if event[1] == 'stop':
+                        system.show_sequences[unit] = [transient] * 20
+                        if mode == 'children':
+                            system.extra_by_unit[unit] = {9999}
+                system.after = stopped
+                clock = [0.0]
+                def sleep(seconds):
+                    if mode == 'signal':
+                        raise SystemExit(143)
+                    clock[0] += seconds
+                with patch.object(i, 'STOP_TIMEOUT', 1), patch.object(i.time, 'monotonic', side_effect=lambda: clock[0]), \
+                        patch.object(i.time, 'sleep', side_effect=sleep), self.assertRaises((RuntimeError, SystemExit)):
+                    installer.apply()
+                self.assertEqual(self.managed(installer), before)
+                self.assertLessEqual(clock[0], 1)
+                self.assertEqual(sum(verb == 'stop' for verb, _ in system.events), 1)
+
+    def test_stop_poll_cleared_cgroup_checks_bound_descendants_and_missing_pid0_group(self):
+        import shutil
+        for mode in ('missing', 'descendant'):
+            with self.subTest(mode=mode), self.fixture(parsed=True) as (_, installer, system):
+                stopping = installer.statuses()
+                unit = i.UNITS[1]
+                group = stopping[unit]['ControlGroup']
+                directory = system.cgroups / group[1:]
+                system.command('stop', *i.UNITS)
+                if mode == 'missing':
+                    shutil.rmtree(directory)
+                    system.missing_groups.add(group)
+                else:
+                    (directory / 'child').mkdir()
+                    (directory / 'child/cgroup.procs').write_text('9999\n')
+                system.show_sequences[unit] = [stopping[unit] | dict(ActiveState='deactivating',
+                    SubState='stop-post', MainPID='0', ControlGroup='')]
+                events = list(system.events)
+                with patch.object(i.time, 'sleep'):
+                    if mode == 'missing':
+                        installer.wait_stopped(stopping)
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, 'unknown process while stopping'):
+                            installer.wait_stopped(stopping)
+                self.assertEqual(system.events, events)
+
+    def test_enabled_but_inactive_slot2_stays_inactive_through_barrier_verification(self):
+        with self.fixture(parsed=True) as (_, installer, system):
+            system.states[i.UNITS[2]]['UnitFileState'] = 'enabled'
+            before, units = self.managed(installer), copy.deepcopy(system.states)
+            activate = installer.activate
+            def verify():
+                self.assertIsNotNone(installer.barrier())
+                self.assertEqual(system.states, units)
+                self.assertEqual(json.loads((installer.backup/'managed.json').read_text())['phase'], 'installed')
+                self.assertEqual([u for verb, us in system.events if verb == 'start' for u in us], list(i.UNITS[:2]))
+                activate()
+            installer.activate = verify
+            installer.apply()
+            installer.activate = activate
+            installer.apply(remove=True)
+            self.assert_restored(installer, system, before, units)
 
     def test_production_cgroup_trust_and_missing_active_group_guards(self):
         for group in ('', '/missing.service', 'relative', '/system.slice/../escape', '/linked'):
@@ -591,13 +996,405 @@ class InstallerTests(unittest.TestCase):
                     self.assertEqual(system.states[failed_unit]['ActiveState'], 'failed')
                     self.assertTrue(all(v['FreezerState'] == 'running' for v in system.states.values()))
                     manifest = (installer.backup / 'managed.json').read_bytes()
-                    self.assertEqual(json.loads(manifest)['phase'], 'installed')
+                    self.assertEqual(json.loads(manifest)['phase'], 'prepared')
+                    self.assertIsNotNone(installer.barrier())
                     events = list(system.events)
                     for dry in (False, True):
                         with self.assertRaises(RuntimeError):
                             installer.apply(remove=True, dry=dry)
                     self.assertEqual(system.events, events)
                     self.assertEqual((installer.backup / 'managed.json').read_bytes(), manifest)
+
+    def test_barrier_is_first_runtime_and_supervisor_work_and_status_remains_available(self):
+        class Waiting(Exception):
+            pass
+        with self.fixture() as (root, installer, _), patch.object(s, 'PENDING', installer.pending):
+            installer.write(installer.pending, installer.record(i.PENDING_RAW))
+            for slot in ('slot1', 'slot2'):
+                with patch.object(s, 'Layout', side_effect=AssertionError('layout before activation')), \
+                        patch.object(s, 'Budget', side_effect=AssertionError('budget before activation')), \
+                        patch.object(s.time, 'sleep', side_effect=Waiting), self.assertRaises(Waiting):
+                    s.Runtime(slot)
+            with patch.object(s, 'load_supervisor_config', side_effect=AssertionError('config before barrier')), \
+                    patch.object(s, '_executor', side_effect=AssertionError('API before barrier')), \
+                    patch.object(s, 'tick', side_effect=AssertionError('assignment before barrier')), \
+                    patch.object(s.time, 'sleep', side_effect=Waiting), self.assertRaises(Waiting):
+                s.main(['supervise'])
+            with patch.object(s, 'load_supervisor_config', return_value={'slots': []}), \
+                    patch.object(s, 'wait_for_activation', side_effect=AssertionError('read-only status blocked')):
+                self.assertEqual(s.main(['status']), 0)
+            installer.write(installer.pending, None)
+            with patch.object(s, 'Layout', side_effect=Waiting), self.assertRaises(Waiting):
+                s.Runtime('slot1')
+
+    def test_marker_metadata_schema_and_absent_parent_trust_fail_closed(self):
+        for bad in ('unknown', 'extra', 'duplicate', 'oversize', 'symlink', 'hardlink',
+                    'directory', 'fifo', 'mode', 'special', 'parent', 'parent-link', 'owner', 'absent-parent'):
+            with self.subTest(bad=bad), self.fixture() as (root, installer, system):
+                path = installer.pending
+                installer.write(path, installer.record(i.PENDING_RAW))
+                if bad in ('unknown', 'extra', 'duplicate', 'oversize'):
+                    path.write_bytes({'unknown': b'{"schema":"unknown"}',
+                        'extra': b'{"schema":"GB_CONTINUITY_PENDING_V1","extra":1}',
+                        'duplicate': b'{"schema":"GB_CONTINUITY_PENDING_V1","schema":"GB_CONTINUITY_PENDING_V1"}',
+                        'oversize': b' ' * 5000}[bad])
+                elif bad == 'symlink':
+                    path.unlink(); path.symlink_to(root / 'missing')
+                elif bad == 'hardlink':
+                    os.link(path, root / 'linked')
+                elif bad == 'directory':
+                    path.unlink(); path.mkdir()
+                elif bad == 'fifo':
+                    path.unlink(); os.mkfifo(path)
+                elif bad in ('mode', 'special'):
+                    path.chmod(0o666 if bad == 'mode' else 0o4644)
+                elif bad == 'parent-link':
+                    path.parent.rename(root / 'real-etc'); path.parent.symlink_to(root / 'real-etc')
+                elif bad in ('parent', 'absent-parent'):
+                    if bad == 'absent-parent':
+                        path.unlink()
+                    path.parent.chmod(0o777)
+                with contextlib.ExitStack() as mocks:
+                    if bad == 'owner':
+                        real = os.fstat
+                        def wrong(fd):
+                            values = list(real(fd)); values[4] = 123
+                            return os.stat_result(values)
+                        mocks.enter_context(patch.object(os, 'fstat', side_effect=wrong))
+                    with self.assertRaises((s.Hold, OSError, ValueError)):
+                        s.deployment_pending(path)
+                    for dry in (True, False):
+                        with self.assertRaises((RuntimeError, OSError, ValueError)):
+                            installer.apply(dry=dry)
+                self.assertFalse(system.events)
+                self.assertFalse(installer.backup.exists())
+        with self.fixture() as (_, installer, _):
+            self.assertFalse(s.deployment_pending(installer.pending))
+            installer.write(installer.pending, installer.record(i.PENDING_RAW))
+            self.assertTrue(s.deployment_pending(installer.pending))
+            with self.assertRaisesRegex(RuntimeError, 'without backup'):
+                installer.apply(dry=True)
+
+    def test_production_parser_frozen_recovery_stops_before_any_thaw_and_preserves_guards(self):
+        for phase in ('prepared', 'installed', 'removed'):
+            for failed in (False, True):
+                with self.subTest(phase=phase, failed=failed), self.fixture(parsed=True) as (_, installer, system):
+                    before, units = self.managed(installer), copy.deepcopy(system.states)
+                    installer.apply()
+                    manifest = json.loads((installer.backup/'managed.json').read_text())
+                    installer.journal(manifest | {'phase': phase})
+                    installer.write(installer.pending, installer.record(i.PENDING_RAW))
+                    if phase == 'removed':
+                        for path in reversed(installer.paths):
+                            installer.write(path, before[path.name])
+                    for unit in i.UNITS[:2]:
+                        system.states[unit]['FreezerState'] = 'frozen'
+                    if failed:
+                        system.states[i.UNITS[1]].update(ActiveState='failed', SubState='failed', MainPID='0',
+                                                        ControlGroup='')
+                    installer.statuses(recovery=True)
+                    events, journal = list(system.events), (installer.backup/'managed.json').read_bytes()
+                    installer.apply(remove=True, dry=True)
+                    self.assertEqual(system.events, events)
+                    self.assertEqual((installer.backup/'managed.json').read_bytes(), journal)
+                    installer.apply(remove=True)
+                    self.assertNotIn('thaw', [verb for verb, _ in system.events[len(events):]])
+                    self.assert_restored(installer, system, before, units)
+                    self.assertFalse(installer.pending.exists())
+                    events = list(system.events)
+                    installer.apply(remove=True)
+                    self.assertEqual(system.events, events)
+        for bad in ('children', 'writer', 'deferred', 'enabled'):
+            with self.subTest(bad=bad), self.fixture(parsed=True) as (root, installer, system):
+                installer.apply()
+                system.states[i.UNITS[0]]['FreezerState'] = 'frozen'
+                if bad == 'children':
+                    system.extra_by_unit[i.UNITS[0]] = {9999}
+                elif bad == 'enabled':
+                    system.states[i.UNITS[0]]['UnitFileState'] = 'disabled'
+                elif bad == 'writer':
+                    (root/'state/slot1/state.json').write_text('{"active":{"phase":"developing"},"done":[]}')
+                else:
+                    path = root/'state/slot1/deferred.json'
+                    path.write_text('{"deferred":[{"issue":155}]}'); path.chmod(0o600)
+                before, units, events = self.managed(installer), copy.deepcopy(system.states), list(system.events)
+                for dry in (True, False):
+                    with self.assertRaises(RuntimeError):
+                        installer.apply(remove=True, dry=dry)
+                self.assert_restored(installer, system, before, units)
+                self.assertEqual(system.events, events)
+
+    def test_real_waiters_release_only_after_all_healthy_and_durable_installed_journal(self):
+        for mode in ('slot1', 'slot2', 'old-slot1', 'supervise'):
+            with self.subTest(mode=mode), self.fixture(parsed=True) as (root, installer, system), \
+                    contextlib.ExitStack() as workers:
+                system.states[i.UNITS[2]].update(ActiveState='active', SubState='running', MainPID='102')
+                entered = []
+                def started(event):
+                    if event[1] == 'start':
+                        self.assertIsNotNone(installer.barrier())
+                        if not entered:
+                            entered.append(workers.enter_context(self.worker(root, mode)))
+                        self.assert_no_work(root)
+                system.after = started
+                activate = installer.activate
+                def release():
+                    self.assertEqual(json.loads((installer.backup/'managed.json').read_text())['phase'], 'installed')
+                    self.assertEqual([u for verb, units in system.events if verb == 'start' for u in units], list(i.UNITS))
+                    self.assertTrue(all(v['ActiveState'] == 'active' and v['FreezerState'] == 'running'
+                                        for v in system.states.values()))
+                    self.assert_no_work(root)
+                    activate()
+                installer.activate = release
+                installer.apply()
+                output, error = entered[0].communicate(timeout=10)
+                self.assertEqual(entered[0].returncode, 0, error)
+                if mode == 'supervise':
+                    self.assertTrue((root/'supervisor-work').exists())
+                else:
+                    self.assertIn('RELEASED', output)
+                    self.assertTrue((root/'task-mutation').exists())
+                    ledger = json.loads(next((root/'worker-state').rglob('ledger.json')).read_text())
+                    self.assertEqual(sum(cell['codex']['author'] for cell in ledger.values()), 1)
+
+    def test_first_started_real_waiter_cannot_author_before_second_or_third_start_failure(self):
+        for failed_unit in i.UNITS[1:]:
+            for mode in ('slot1', 'slot2', 'old-slot1', 'supervise'):
+                with self.subTest(unit=failed_unit, mode=mode), self.fixture(parsed=True) as (root, installer, system), \
+                        contextlib.ExitStack() as workers:
+                    system.states[i.UNITS[2]].update(ActiveState='active', SubState='running', MainPID='102')
+                    before, units = self.managed(installer), copy.deepcopy(system.states)
+                    checkpoints = {p: p.read_bytes() for p in (root/'state').rglob('*.json')}
+                    system.start_failures[failed_unit] = 1
+                    entered = []
+                    def event(value):
+                        verb = value[1]
+                        if verb == 'start' and self.managed(installer)['slots.py']['sha256'] == installer.payloads['slots.py']['new']:
+                            self.assertIsNotNone(installer.barrier())
+                            if not entered:
+                                entered.append(workers.enter_context(self.worker(root, mode)))
+                            self.assert_no_work(root)
+                        if verb == 'stop':
+                            for process in entered:
+                                process.terminate(); process.communicate(timeout=10)
+                    system.after = event
+                    with self.assertRaises(subprocess.CalledProcessError):
+                        installer.apply()
+                    self.assertTrue(entered)
+                    self.assert_no_work(root)
+                    self.assertEqual({p: p.read_bytes() for p in checkpoints}, checkpoints)
+                    self.assert_restored(installer, system, before, units)
+                    self.assertFalse(installer.pending.exists())
+                    self.assertEqual(json.loads((installer.backup/'managed.json').read_text())['phase'], 'removed')
+
+    def test_process_crash_at_every_install_and_remove_mutation_boundary_is_recoverable(self):
+        for removing in (False, True):
+            with self.fixture(parsed=True) as (_, installer, system):
+                if removing:
+                    installer.apply()
+                sequence = []
+                write = installer.write
+                def trace(path, value):
+                    write(path, value); sequence.append(('write', path.name))
+                installer.write, system.after = trace, sequence.append
+                installer.apply(remove=removing)
+            self.assertEqual(sequence[-1], ('write', 'continuity.pending'))
+            for number, boundary in enumerate(sequence):
+                with self.subTest(remove=removing, number=number, boundary=boundary), \
+                        self.fixture(True, parsed=True) as (root, installer, system):
+                    before, units = self.managed(installer), copy.deepcopy(system.states)
+                    if removing:
+                        installer.apply()
+                    state_file = root/'simulated-services.json'
+                    state_file.write_text(json.dumps(system.states))
+                    write = installer.write
+                    remaining = [number]
+                    def crash(event):
+                        state_file.write_text(json.dumps(system.states))
+                        remaining[0] -= 1
+                        if remaining[0] == -1:
+                            os._exit(73)  # no Python rollback/finally, like SIGKILL/power loss
+                    def crashing_write(path, value):
+                        write(path, value); crash(('write', path.name))
+                    def run():
+                        installer.write, system.after = crashing_write, crash
+                        installer.apply(remove=removing)
+                    child = multiprocessing.get_context('fork').Process(target=run)
+                    child.start(); child.join(timeout=20)
+                    if child.is_alive():
+                        child.kill(); child.join()
+                    self.assertEqual(child.exitcode, 73)
+                    system.states = json.loads(state_file.read_text())
+                    # A new Installer has no process-local progress flags. The journal,
+                    # persistent marker and parsed systemd properties are all it has.
+                    fresh = i.Installer(installer.payloads, i.System(), code=installer.code,
+                        policy=installer.policy, backup=installer.backup, lock=installer.lock,
+                        state=installer.state, monitor=root/'monitor')
+                    committed = number == len(sequence) - 1
+                    if not committed:
+                        with self.assertRaisesRegex(RuntimeError, 'interrupted installation'):
+                            fresh.apply()
+                        if self.managed(fresh)['slots.py']['sha256'] == fresh.payloads['slots.py']['new']:
+                            self.assertIsNotNone(fresh.barrier())
+                            with self.worker(root, 'old-slot1'):
+                                self.assert_no_work(root)
+                    journal = (fresh.backup/'managed.json').read_bytes()
+                    pending, events = fresh.barrier(), list(system.events)
+                    fresh.apply(remove=True, dry=True)
+                    self.assertEqual((fresh.backup/'managed.json').read_bytes(), journal)
+                    self.assertEqual(fresh.barrier(), pending)
+                    self.assertEqual(system.events, events)
+                    fresh.apply(remove=True)
+                    self.assert_restored(fresh, system, before, units)
+                    self.assertFalse(fresh.pending.exists())
+                    events = list(system.events)
+                    fresh.apply(remove=True)
+                    self.assertEqual(system.events, events)
+
+    def test_unlink_uncertainty_and_postcommit_logging_failure_never_roll_back_new_code(self):
+        for boundary in ('before-unlink', 'directory-fsync', 'after-fsync', 'logging'):
+            with self.subTest(boundary=boundary), self.fixture(parsed=True) as (_, installer, system):
+                write, activate, fsync = installer.write, installer.activate, os.fsync
+                reached = []
+                def fail_fsync(fd):
+                    if not installer.pending.exists():
+                        raise OSError('commit directory fsync uncertain')
+                    return fsync(fd)
+                def fail_write(path, value):
+                    if path == installer.pending and value is None:
+                        if boundary == 'before-unlink':
+                            raise OSError('commit unlink not attempted')
+                        write(path, value)
+                        if boundary == 'after-fsync':
+                            raise OSError('error after durable commit')
+                    else:
+                        write(path, value)
+                def commit():
+                    reached.append(list(system.events))
+                    if boundary == 'directory-fsync':
+                        with patch.object(os, 'fsync', side_effect=fail_fsync):
+                            activate()
+                    else:
+                        activate()
+                installer.write, installer.activate = fail_write, commit
+                with patch('builtins.print', side_effect=OSError('log failed') if boundary == 'logging' else None), \
+                        self.assertRaises(OSError):
+                    installer.apply()
+                self.assertTrue(reached)
+                self.assertEqual(system.events, reached[0])
+                self.assertEqual(self.managed(installer),
+                                 json.loads((installer.backup/'managed.json').read_text())['new'])
+                self.assertEqual(json.loads((installer.backup/'managed.json').read_text())['phase'], 'installed')
+                self.assertEqual(installer.pending.exists(), boundary == 'before-unlink')
+                if installer.pending.exists():
+                    with self.assertRaisesRegex(RuntimeError, 'interrupted installation'):
+                        installer.apply()
+                installer.write, installer.activate = write, activate
+                installer.apply(remove=True)
+
+    def test_real_termination_before_and_during_final_unlink_preserves_commit_direction(self):
+        for boundary, termination in ((b, n) for b in ('before-commit', 'before-unlink', 'after-unlink')
+                                      for n in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)):
+            with self.subTest(boundary=boundary, signal=termination), self.fixture(parsed=True) as (_, installer, system):
+                activate, unlink, fsync = installer.activate, Path.unlink, os.fsync
+                reached, durable = [], []
+                def interrupted(number, frame):
+                    if boundary != 'before-commit':
+                        self.assertTrue(durable, 'termination delivered before commit fsync')
+                    raise SystemExit(128 + number)
+                def interrupted_unlink(path, *args, **kwargs):
+                    if path == installer.pending and boundary == 'before-unlink':
+                        os.kill(os.getpid(), termination)
+                    result = unlink(path, *args, **kwargs)
+                    if path == installer.pending and boundary == 'after-unlink':
+                        os.kill(os.getpid(), termination)
+                    return result
+                def synced(fd):
+                    fsync(fd)
+                    if reached and not installer.pending.exists():
+                        durable.append(True)
+                def commit():
+                    reached.append(list(system.events))
+                    if boundary == 'before-commit':
+                        os.kill(os.getpid(), termination)
+                    activate()
+                installer.activate = commit
+                previous = REAL_SIGNAL(termination, interrupted)
+                mask = signal.pthread_sigmask(signal.SIG_BLOCK, [])
+                try:
+                    with patch.object(Path, 'unlink', interrupted_unlink), patch.object(os, 'fsync', side_effect=synced), \
+                            self.assertRaises(SystemExit) as error:
+                        installer.apply()
+                    self.assertEqual(error.exception.code, 128 + termination)
+                finally:
+                    REAL_SIGNAL(termination, previous)
+                self.assertEqual(signal.pthread_sigmask(signal.SIG_BLOCK, []), mask)
+                self.assertEqual(system.events, reached[0])
+                self.assertEqual(installer.pending.exists(), boundary == 'before-commit')
+                self.assertEqual(json.loads((installer.backup/'managed.json').read_text())['phase'], 'installed')
+                self.assertTrue(all(self.managed(installer)[p.name]['sha256'] == i.digest(installer.new[p.name])
+                                    for p in installer.paths))
+                installer.activate = activate
+                installer.apply(remove=True)
+
+    def test_abrupt_process_crash_immediately_before_or_after_activation_unlink(self):
+        for after in (False, True):
+            with self.subTest(after_unlink=after), self.fixture(parsed=True) as (root, installer, system):
+                before, units = self.managed(installer), copy.deepcopy(system.states)
+                snapshot = root/'services.json'
+                unlink, activate = Path.unlink, installer.activate
+                def crash_unlink(path, *args, **kwargs):
+                    if path == installer.pending:
+                        if after:
+                            unlink(path, *args, **kwargs)
+                        os._exit(74)  # after unlink deliberately precedes directory fsync
+                    return unlink(path, *args, **kwargs)
+                def commit():
+                    snapshot.write_text(json.dumps(system.states))
+                    with patch.object(Path, 'unlink', crash_unlink):
+                        activate()
+                def run():
+                    installer.activate = commit
+                    installer.apply()
+                child = multiprocessing.get_context('fork').Process(target=run)
+                child.start(); child.join(timeout=20)
+                if child.is_alive():
+                    child.kill(); child.join()
+                self.assertEqual(child.exitcode, 74)
+                system.states = json.loads(snapshot.read_text())
+                self.assertEqual(json.loads((installer.backup/'managed.json').read_text())['phase'], 'installed')
+                self.assertEqual(installer.pending.exists(), not after)
+                self.assertTrue(all(self.managed(installer)[p.name]['sha256'] == i.digest(installer.new[p.name])
+                                    for p in installer.paths))
+                if not after:
+                    with self.worker(root, 'slot2'):
+                        self.assert_no_work(root)
+                    with self.assertRaisesRegex(RuntimeError, 'interrupted installation'):
+                        installer.apply()
+                else:
+                    installer.apply()  # observed release never causes implicit rollback
+                installer.apply(remove=True)
+                self.assert_restored(installer, system, before, units)
+
+    def test_gate_first_upgrade_and_reverse_restore_are_durable_before_service_starts(self):
+        with self.fixture(parsed=True) as (_, installer, system):
+            writes = []
+            write = installer.write
+            def traced(path, value):
+                write(path, value)
+                writes.append(path)
+                if path in installer.paths:
+                    self.assertIsNotNone(installer.barrier())
+                    self.assertEqual(json.loads((installer.backup/'managed.json').read_text())['phase'], 'prepared')
+            installer.write = traced
+            installer.apply()
+            self.assertEqual([p.name for p in writes if p in installer.paths],
+                             ['slots.py', 'autonomous_issues.py', 'slot_telemetry.py', 'writer.py', 'app.js', 'continuity.json'])
+            self.assertEqual(writes[-1], installer.pending)
+            writes.clear()
+            installer.apply(remove=True)
+            self.assertEqual([p for p in writes if p in installer.paths], list(reversed(installer.paths)))
+            self.assertEqual(writes[-1], installer.pending)
 
     def test_generated_installer_contains_current_sources_pins_and_exact_controller(self):
         text = (HERE / 'slots-continuity.sh').read_text()

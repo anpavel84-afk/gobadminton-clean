@@ -15,6 +15,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import zlib
 
 UNITS = ('gobadminton-supervisor.service', 'gobadminton-slot@slot1.service',
@@ -27,6 +28,21 @@ LOCK = Path('/run/gobadminton-slots-continuity.lock')
 STATE = Path('/var/lib/gobadminton-autonomy/slots')
 POLICY_VALUE = dict(schema='GB_SLOT_CONTINUITY_V1', enabled=True, max_attempts=3,
                     max_integrations=3, read_backoff_seconds=240)
+PENDING_VALUE = {'schema': 'GB_CONTINUITY_PENDING_V1'}
+PENDING_RAW = (json.dumps(PENDING_VALUE, sort_keys=True) + '\n').encode()
+# Only this independently reviewed V4 candidate may seed a fresh V5 install after
+# complete removal. Its payload bytes must still verify against these exact hashes.
+PRIOR_REMOVED_SHA256 = {
+    'autonomous_issues.py': '9995d0f268185c56d91cd0e15f986905abf093feb07c6edffec0c9b211e2fec7',
+    'slots.py': 'bf23d7f46c1bd99fe16208d3dd0d0a9c91c7c381a9d5337d175556fd996f4ef1',
+    'slot_telemetry.py': '2546f8409c57bd4db25af895518ed77ff46ac21a9e80af10d4bb977945687229',
+    'writer.py': '957ebb3fb201efea31c7f29aa174bf142466c09e3222c03e5880b3467a14bc24',
+    'app.js': 'b8d617d74d3b707cd459c305b90054b5ab263c0f8184bc877c943730bbd13f3b',
+    'continuity.json': '1587e5881d6ef6429d29f3f033aff330faf0dd40ec11f83bfc20ba7e861bce6c',
+}
+STOP_TIMEOUT = 30
+STOP_POLL = 0.25
+STOPPING_SUBSTATES = ('stop', 'stop-sigterm', 'stop-post', 'final-sigterm')
 
 
 def require(ok, message):
@@ -102,10 +118,12 @@ class System:
         require(value.get('FreezerState') in ('running', 'frozen'), 'unknown freezer state')
         return value
 
-    def pids(self, status):
+    def pids(self, status, *, stopping=False):
         group = status.get('ControlGroup', '')
-        quiescent = (status['ActiveState'], status['SubState']) in (
-            ('inactive', 'dead'), ('failed', 'failed')) and status['MainPID'] == '0'
+        quiescent = ((status['ActiveState'], status['SubState']) in (
+            ('inactive', 'dead'), ('failed', 'failed')) or stopping
+            and status['ActiveState'] == 'deactivating' and status['SubState'] in STOPPING_SUBSTATES
+            ) and status['MainPID'] == '0'
         if not group:
             require(quiescent, 'active unit without cgroup')
             return set()
@@ -124,7 +142,10 @@ class Installer:
         self.system = system or System()
         self.code, self.policy, self.backup = Path(code), Path(policy), Path(backup)
         self.lock, self.state = Path(lock), Path(state)
-        self.paths = [self.code / 'autonomous_issues.py', self.code / 'slots.py',
+        self.pending = self.policy.with_name('continuity.pending')
+        # Gate first on upgrade; remove/restore originals in reverse order so an old
+        # executor importing the new Runtime is also held during a partial switch.
+        self.paths = [self.code / 'slots.py', self.code / 'autonomous_issues.py',
                       Path(monitor) / 'opsmon/slot_telemetry.py', Path(monitor) / 'opsmon/writer.py',
                       Path(monitor) / 'web/app.js', self.policy]
         self.payloads = payloads
@@ -285,10 +306,52 @@ class Installer:
             else:
                 allowed = {int(value['MainPID'])} if value['ActiveState'] == 'active' else set()
                 require(pids == allowed, 'unit has active children or unknown processes: ' + unit)
-                require(value['FreezerState'] == ('frozen' if frozen and allowed else 'running'),
+                require(value['FreezerState'] in ('running', 'frozen')
+                        if recovery and (not frozen or not allowed) else
+                        value['FreezerState'] == ('frozen' if frozen and allowed else 'running'),
                         'unexpected freezer state: ' + unit)
             result[unit] = value
         return result
+
+    def wait_stopped(self, stopping, *, recovery=False):
+        # Called ONLY after our own controlled stop. Entry/recovery checks remain
+        # strict. Poll read-only; never stop again, kill a child or force a thaw.
+        deadline = time.monotonic() + STOP_TIMEOUT
+        while True:
+            require(time.monotonic() < deadline, 'stop deadline exceeded; units did not settle')
+            settled = True
+            for unit in UNITS:
+                value = self.system.status(unit)
+                require(time.monotonic() <= deadline, 'stop deadline exceeded: ' + unit)
+                require(value['UnitFileState'] == stopping[unit]['UnitFileState'],
+                        'unit enabled state changed')
+                transitional = value['ActiveState'] == 'deactivating'
+                if transitional:
+                    require(value['SubState'] in STOPPING_SUBSTATES,
+                            'unsupported stopping state: ' + unit)
+                    require(value['ControlGroup'] == stopping[unit]['ControlGroup']
+                            or value['ControlGroup'] == '' and value['MainPID'] == '0',
+                            'unit cgroup changed while stopping: ' + unit)
+                # systemd may clear ControlGroup before SubState settles. Still inspect
+                # the previously bound cgroup and every descendant, even if now absent.
+                pids = self.system.pids(value | {'ControlGroup': value['ControlGroup']
+                                        or stopping[unit]['ControlGroup']}, stopping=transitional)
+                if transitional:
+                    allowed = {int(stopping[unit]['MainPID'])} if int(stopping[unit]['MainPID']) else set()
+                    require(value['MainPID'] in ('0', stopping[unit]['MainPID'])
+                            and pids <= allowed, 'unknown process while stopping: ' + unit)
+                    settled = False
+                else:
+                    self.unit_state(value, unit, recovery=recovery)
+                    require(value['ActiveState'] != 'active' and value['MainPID'] == '0' and not pids,
+                            'control group not quiescent: ' + unit)
+                    if value['ControlGroup'] != stopping[unit]['ControlGroup']:
+                        require(not self.system.pids(value | {'ControlGroup': stopping[unit]['ControlGroup']}),
+                                'previous control group not quiescent: ' + unit)
+            require(time.monotonic() <= deadline, 'stop deadline exceeded; units did not settle')
+            if settled:
+                return
+            time.sleep(min(STOP_POLL, max(0, deadline - time.monotonic())))
 
     def restore_units(self, states, *, recovery=False):
         errors = []
@@ -336,9 +399,68 @@ class Installer:
         self.write(self.backup / 'managed.json', self.record(
             (json.dumps(value, sort_keys=True) + '\n').encode(), 0o600))
 
+    def validate_manifest(self, saved):
+        require(isinstance(saved, dict) and set(saved) == {'schema', 'phase', 'old', 'new', 'units'}
+                and saved['schema'] == 'GB_CONTINUITY_INSTALL_V1'
+                and saved['phase'] in ('prepared', 'installed', 'removed'), 'invalid backup manifest')
+        require(all(isinstance(saved[key], dict) for key in ('old', 'new', 'units'))
+                and set(saved['old']) == set(saved['new']) == {p.name for p in self.paths}
+                and set(saved['units']) == set(UNITS), 'backup manifest binding mismatch')
+        for path in self.paths:
+            for record in (saved['new'][path.name], saved['old'][path.name]):
+                if record is None:
+                    continue
+                require(isinstance(record, dict) and set(record) == {'data', 'sha256', 'mode', 'uid', 'gid'}
+                        and type(record['uid']) is int and record['uid'] == 0,
+                        'invalid backup record binding')
+                raw = base64.b64decode(record['data'], validate=True)
+                require(type(record['mode']) is int and 0 <= record['mode'] <= 0o777
+                        and not record['mode'] & 0o022
+                        and type(record['gid']) is int and record['gid'] >= 0
+                        and record == self.record(raw, record['mode'], gid=record['gid']),
+                        'invalid backup metadata/checksum')
+            require(saved['new'][path.name] is not None, 'missing candidate backup')
+            old = saved['old'][path.name]
+            if path != self.policy:
+                require(old and old['sha256'] == self.payloads[path.name]['old'], 'unrecognized backup code')
+            elif old:
+                require(base64.b64decode(old['data']) == self.disabled, 'unrecognized backup policy')
+        for unit, value in saved['units'].items():
+            require(isinstance(value, dict) and set(value) == {'LoadState', 'UnitFileState', 'ActiveState', 'SubState', 'MainPID',
+                                   'KillMode', 'ControlGroup', 'FreezerState'}
+                    and value['LoadState'] == 'loaded' and value['KillMode'] == 'control-group'
+                    and value['UnitFileState'] in ('enabled', 'disabled', 'static')
+                    and isinstance(value['MainPID'], str) and value['MainPID'].isascii()
+                    and value['MainPID'].isdecimal() and value['FreezerState'] == 'running'
+                    and isinstance(value['ControlGroup'], str), 'invalid backup unit state')
+            self.unit_state(value, unit)
+        hashes = {name: record['sha256'] for name, record in saved['new'].items()}
+        current = {name: digest(raw) for name, raw in self.new.items()}
+        require(hashes in (current, PRIOR_REMOVED_SHA256),
+                'backup belongs to an unrecognized installer; use its reviewed recovery installer')
+        return hashes != current
+
+    def barrier(self):
+        value = self.read(self.pending, optional=True)
+        require(value is None or value == self.record(PENDING_RAW), 'invalid deployment barrier')
+        return value
+
+    def activate(self):
+        # Unlink is the point of no return: a worker may observe it immediately.
+        # Block catchable termination through directory fsync. Any I/O uncertainty or
+        # pending signal escapes WITHOUT rollback, including a failure after unlink.
+        numbers = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
+        previous = signal.pthread_sigmask(signal.SIG_BLOCK, numbers)
+        try:
+            require(self.barrier() is not None, 'missing deployment barrier at commit')
+            self.write(self.pending, None)
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+
     def apply(self, *, remove=False, dry=False):
         for path in self.paths:
             self.parents(path)
+        self.parents(self.pending)
         self.parents(self.backup)
         self.parents(self.lock)
         lock_fd = None
@@ -357,36 +479,32 @@ class Installer:
     def transaction(self, remove, dry):
         if not remove:
             validate_style_guide()
+        pending_before = self.barrier()
+        archived_prior = False
         if self.backup.exists():
             info = self.backup.lstat()
             require(stat.S_ISDIR(info.st_mode) and info.st_uid == 0 and not info.st_mode & 0o077,
                     'unsafe backup directory')
-            require(set(os.listdir(self.backup)) <= {'managed.json'}, 'unknown backup contents')
-        saved = self.read(self.backup / 'managed.json', optional=True, private=True) if self.backup.exists() else None
-        saved = decode(base64.b64decode(saved['data'])) if saved else None
-        if saved:
-            require(set(saved) == {'schema', 'phase', 'old', 'new', 'units'}
-                    and saved['schema'] == 'GB_CONTINUITY_INSTALL_V1'
-                    and saved['phase'] in ('prepared', 'installed', 'removed'), 'invalid backup manifest')
-            require(set(saved['old']) == set(saved['new']) == {p.name for p in self.paths}
-                    and set(saved['units']) == set(UNITS), 'backup manifest binding mismatch')
-            for path in self.paths:
-                record = saved['new'][path.name]
-                require(record is not None and type(record['mode']) is int
-                        and 0 <= record['mode'] <= 0o777 and not record['mode'] & 0o022
-                        and type(record['gid']) is int and record['gid'] >= 0
-                        and record == self.record(self.new[path.name], record['mode'], gid=record['gid']),
-                        'backup belongs to a different installer')
-                old = saved['old'][path.name]
-                if old:
-                    raw = base64.b64decode(old['data'], validate=True)
-                    require(old == self.record(raw, old['mode'], gid=old['gid'])
-                            and 0 <= old['mode'] <= 0o777 and not old['mode'] & 0o022
-                            and old['gid'] >= 0, 'invalid original metadata/checksum')
-                if path != self.policy:
-                    require(old and old['sha256'] == self.payloads[path.name]['old'], 'unrecognized backup code')
-                elif old:
-                    require(base64.b64decode(old['data']) == self.disabled, 'unrecognized backup policy')
+            for name in os.listdir(self.backup):
+                if name == 'managed.json':
+                    continue
+                require(name.startswith('removed-') and name.endswith('.json'), 'unknown backup contents')
+                archive = self.read(self.backup / name, private=True)
+                require(name == 'removed-' + archive['sha256'] + '.json', 'audit archive checksum/name mismatch')
+                archived = decode(base64.b64decode(archive['data']))
+                self.validate_manifest(archived)
+                require(archived['phase'] == 'removed', 'audit archive is not fully removed')
+                archived_prior = True
+        saved_record = self.read(self.backup / 'managed.json', optional=True, private=True) if self.backup.exists() else None
+        require(saved_record is not None or not archived_prior,
+                'audit archive without managed journal; manual reconciliation required')
+        saved = decode(base64.b64decode(saved_record['data'])) if saved_record else None
+        require(saved_record is not None or pending_before is None, 'deployment barrier without backup; refused')
+        migrate = False
+        if saved_record is not None:
+            migrate = self.validate_manifest(saved)
+            require(not migrate or saved['phase'] == 'removed' and pending_before is None and not remove,
+                    'different installer journal is not an uninstalled removal; use the prior reviewed --remove')
         before = {p.name: self.read(p, optional=p == self.policy) for p in self.paths}
         for path in self.paths:
             value = before[path.name]
@@ -396,7 +514,7 @@ class Installer:
             else:
                 require(value is None or base64.b64decode(value['data']) in
                         (self.new[path.name], self.disabled), 'unrecognized policy bytes')
-        if saved and saved['phase'] == 'prepared':
+        if saved and (saved['phase'] == 'prepared' or pending_before is not None):
             # A killed installer may have switched only part of the files. --remove is the
             # explicit recovery action, using only this private, bound preinstall manifest.
             require(remove, 'interrupted installation: use --remove to restore the complete backup')
@@ -423,11 +541,18 @@ class Installer:
             wanted_units = None
         self.safe_slots(original=remove)
         prior = self.statuses(recovery=remove)
+        if migrate:
+            # A fresh snapshot preserves the current quiescent slot2, even when the
+            # prior install journal recorded that unit active. Never rewrite task state.
+            require(before == saved['old'], 'prior removal is not byte/metadata exact')
+            require(all(prior[u]['UnitFileState'] == saved['units'][u]['UnitFileState'] for u in UNITS),
+                    'enabled state changed since prior removal; refusing migration')
         wanted_units = wanted_units or prior
         require(all(prior[u]['UnitFileState'] == wanted_units[u]['UnitFileState'] for u in UNITS),
                 'enabled state changed since preinstall; refusing')
-        if remove and saved['phase'] == 'removed' and all(
-                prior[u]['ActiveState'] == wanted_units[u]['ActiveState'] for u in UNITS):
+        if remove and pending_before is None and saved['phase'] == 'removed' and all(
+                prior[u]['ActiveState'] == wanted_units[u]['ActiveState']
+                and prior[u]['FreezerState'] == 'running' for u in UNITS):
             print('Уже удалено.')
             return
         if dry:
@@ -440,32 +565,49 @@ class Installer:
                 os.fsync(directory_fd)
             finally:
                 os.close(directory_fd)
-        original_saved = saved
+        if migrate:
+            archive_path = self.backup / ('removed-' + saved_record['sha256'] + '.json')
+            archived_record = self.read(archive_path, optional=True, private=True)
+            require(archived_record is None or archived_record == saved_record, 'audit archive drift')
+            # write fsyncs the complete prior journal and directory BEFORE prepared
+            # replaces managed.json. A crash here is safe to retry without any units.
+            self.write(archive_path, saved_record)
+            require(self.read(archive_path, private=True) == saved_record, 'audit archive verification failed')
+        # The prior journal is durable in its archive. A failed migration must keep
+        # the fresh V5 snapshot for recovery, including slot2's current inactive state.
+        original_saved = None if migrate else saved
         manifest = saved if remove else dict(schema='GB_CONTINUITY_INSTALL_V1', phase='prepared',
                                               old=before, new=target, units=prior)
-        frozen, switched = [], False
+        switched = False
         try:
+            if remove:
+                # Removal already has a durable bound backup. Hold new entries even
+                # if recovery is interrupted before changing its journal phase.
+                self.write(self.pending, self.record(PENDING_RAW))
             self.journal(manifest | {'phase': 'prepared'})
+            if not remove:
+                self.write(self.pending, self.record(PENDING_RAW))
             for unit in UNITS:
                 if prior[unit]['ActiveState'] == 'active':
-                    frozen.append(unit)  # includes a command whose completion is uncertain
                     self.system.command('freeze', unit)
-            self.statuses(frozen=True, recovery=remove)
+            stopping = self.statuses(frozen=True, recovery=remove)
             self.safe_slots(original=remove)  # frozen processes cannot cross into a writer
             self.system.command('stop', *UNITS)
-            self.statuses(stopped=True, recovery=remove)  # all descendant cgroups must be empty
+            self.wait_stopped(stopping, recovery=remove)  # all descendant cgroups must be empty
             self.safe_slots(original=remove)
             require({p.name: self.read(p, optional=p == self.policy) for p in self.paths} == before,
                     'concurrent managed-file change')
-            for path in self.paths:
+            for path in reversed(self.paths) if remove else self.paths:
                 switched = True
                 self.write(path, target[path.name])
-            # Commit the durable manifest BEFORE starting workers. A failed start restores both
-            # files and the old manifest; a crash leaves a complete backup for --remove.
-            self.journal(manifest | {'phase': 'removed' if remove else 'installed'})
+            # Old code ignores the gate. Record complete removal before restarting it,
+            # so persistent service failure still has an exact, recoverable file journal.
+            if remove:
+                self.journal(manifest | {'phase': 'removed'})
             self.restore_units(wanted_units, recovery=remove)
-            print('Удалено: восстановлены preinstall код, policy и active/enabled состояния.' if remove else
-                  'Установлено: bounded continuity включена только для slot-режима.')
+            if not remove:
+                self.statuses()  # all intended starts healthy, still blocked and child-free
+                self.journal(manifest | {'phase': 'installed'})
         except BaseException:
             for number in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
                 signal.signal(number, signal.SIG_IGN)
@@ -487,7 +629,7 @@ class Installer:
                             'unit enabled state changed')
                     self.safe_slots(original=not remove)
                     self.system.command('stop', *UNITS)
-                    self.statuses(stopped=True, recovery=True)
+                    self.wait_stopped(current, recovery=True)
                     self.safe_slots(original=not remove)
                 except BaseException as error:
                     errors.append(type(error).__name__)
@@ -498,18 +640,33 @@ class Installer:
                                 if self.system.status(unit)['FreezerState'] == 'frozen' else None)
                 else:
                     cleanup(lambda: self.journal(manifest | {'phase': 'prepared'}))
-                    for path in reversed(self.paths):
-                        cleanup(lambda path=path: self.write(path, before[path.name]))
+                    if not errors:
+                        for path in self.paths if remove else reversed(self.paths):
+                            cleanup(lambda path=path: self.write(path, before[path.name]))
                     if not errors and original_saved:
                         cleanup(lambda: self.journal(original_saved))
                     elif not errors:
                         cleanup(lambda: self.journal(manifest | {'phase': 'removed'}))
+            elif not errors:
+                cleanup(lambda: self.journal(original_saved or (manifest | {'phase': 'removed'})))
+            # An install rollback returns ungated originals. Drop only our marker after
+            # the complete file/journal restore, before restarting those originals.
+            if not errors and not remove:
+                cleanup(lambda: self.write(self.pending, pending_before))
             if not errors:
                 cleanup(lambda: self.restore_units(prior, recovery=True))
+            if not errors and remove:
+                cleanup(lambda: self.write(self.pending, pending_before))
             if errors:
                 raise RuntimeError('ROLLBACK INCOMPLETE; backup retained; manual reconciliation required: '
                                    + ','.join(errors)) from None
             raise
+        # No fallible managed mutation or service action follows release. In particular,
+        # signals, unlink/fsync uncertainty and logging errors must never roll code back
+        # underneath workers that may already have crossed the barrier.
+        self.activate()
+        print('Удалено: восстановлены preinstall код, policy и active/enabled состояния.' if remove else
+              'Установлено: bounded continuity включена только для slot-режима.')
 
 
 def main(payloads):

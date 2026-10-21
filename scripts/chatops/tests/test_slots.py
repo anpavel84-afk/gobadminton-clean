@@ -61,7 +61,9 @@ def host(tmp, budgets=None):
 def slot_mode(tmp, name='slot1', **kw):
     saved = {k: getattr(a, k) for k in GLOBALS}
     try:
-        with patch.object(a, 'validate_style_guide'):
+        # This fixture represents a commissioned host with no pending deployment.
+        # Real marker metadata/entry/crash coverage lives in test_continuity_installer.
+        with patch.object(a, 'validate_style_guide'), patch.object(s, 'wait_for_activation'):
             yield a.activate_slot(name, **(host(tmp, **kw)))
     finally:
         for k, v in saved.items():
@@ -96,6 +98,7 @@ class DefaultSlotUnchanged(unittest.TestCase):
             with patch.object(sys, 'argv', ['x', '--repo', '/r', '--state-dir', '/s', '--worktrees-root', '/w',
                                             '--known-hosts', '/k', '--approved-since', SINCE.isoformat()] + argv), \
                     patch.object(a, 'run', side_effect=fake_run), patch.object(a.signal, 'signal'), \
+                    patch.object(s, 'wait_for_activation'), \
                     self.assertRaises(SystemExit):
                 a.main()
         finally:
@@ -804,6 +807,12 @@ class SlotExecutor(unittest.TestCase):
 
 
 class TwoSlotRegression(unittest.TestCase):
+    def setUp(self):
+        # No installer transaction in these runtime/model regressions; no host metadata reads.
+        self.activation = patch.object(s, 'wait_for_activation')
+        self.activation.start()
+        self.addCleanup(self.activation.stop)
+
     def test_real_admission_in_two_processes_author_b_during_qa_a(self):
         # Same supervisor admission and executor Store.claim/slot_discover as production;
         # only GitHub/model side effects are stubbed. Real processes hold real independent leases.
@@ -827,6 +836,7 @@ from unittest.mock import patch
 sys.path.insert(0, sys.argv[1])
 import autonomous_issues as a
 import slots as s
+s.wait_for_activation = lambda: None  # commissioned host fixture; barrier tested separately
 root, name, raw = Path(sys.argv[2]), sys.argv[3], sys.argv[4]
 rt = a.activate_slot(name, state_root=root/'var', slot_root=root/'srv', config_root=root/'etc', trusted_assigners={os.getuid()})
 a.api = lambda path: json.loads(raw)
@@ -1000,7 +1010,8 @@ os.close(store.lock)
             finally:
                 os.close(st.lock)
 
-    def test_preflight_success_and_stale_or_mismatched_external_proofs(self):
+    @contextlib.contextmanager
+    def preflight_fixture(self):
         # Metadata/DAC only are simulated, as in the existing installer harness. Git is real/local.
         with tempfile.TemporaryDirectory() as tmp:
             roots = host(tmp)
@@ -1037,7 +1048,7 @@ os.close(store.lock)
             private = {rt.layout.root, rt.layout.repo, rt.layout.worktrees, rt.layout.state_dir, rt.home, rt.codex_home, rt.key.parent, rt.key}
             def metadata(path, *args, **kw):
                 info = original_stat(path, *args, **kw)
-                values = list(info); values[4] = 978 if path in private else 0
+                values = list(info); values[4] = 978 if path in private or path.is_relative_to(rt.layout.repo / '.git') else 0
                 values[0] &= ~0o022
                 return os.stat_result(values)
             def access(path, mode, *args, **kw):
@@ -1049,17 +1060,95 @@ os.close(store.lock)
                     patch.object(s.pwd, 'getpwnam', return_value=account), \
                     patch.object(s.os, 'getuid', return_value=978), patch.object(s.os, 'getgroups', return_value=[968]), \
                     patch.object(s.os, 'access', side_effect=access), patch.object(s, 'root_document', return_value=proof):
-                result = s.slot2_preflight(rt, executable, 'gpt-6.1-sol', 'high', kh)
+                yield rt, executable, kh, proof, git, base
+
+    def test_preflight_success_and_stale_or_mismatched_external_proofs(self):
+        with self.preflight_fixture() as (rt, executable, kh, proof, git, base):
+            now = int(s.time.time())
+            result = s.slot2_preflight(rt, executable, 'gpt-6.1-sol', 'high', kh)
+            self.assertTrue(result['ready'], result)
+            proof['probes']['ssh_push'] = now - 14401
+            self.assertFalse(s.slot2_preflight(rt, executable, 'gpt-6.1-sol', 'high', kh)['ready'])
+            # Restart may finish CI/deploy with an aged bootstrap proof, while new calls
+            # still go through Budget.charge (covered by shared exhaustion regressions).
+            with patch.object(rt.budget, 'remaining', return_value=0):
+                self.assertTrue(s.slot2_preflight(rt, executable, 'gpt-6.1-sol', 'high', kh, activation=False)['ready'])
+            proof['probes']['ssh_push'] = now
+            proof['codex_sha256'] = '0'*64
+            self.assertFalse(s.slot2_preflight(rt, executable, 'gpt-6.1-sol', 'high', kh)['ready'])
+
+    def test_preflight_accepts_repacked_self_contained_clone_without_writes_or_remote_changes(self):
+        with self.preflight_fixture() as (rt, executable, kh, proof, git, base):
+            git('-C', str(rt.layout.repo), 'repack', '-a', '-d')
+            (rt.layout.repo / '.git/objects/info/alternates').unlink()
+            before = {p.relative_to(rt.layout.repo): p.read_bytes()
+                      for p in rt.layout.repo.rglob('*') if p.is_file()}
+            for activation in (False, True):
+                result = s.slot2_preflight(rt, executable, 'gpt-6.1-sol', 'high', kh, activation=activation)
                 self.assertTrue(result['ready'], result)
-                proof['probes']['ssh_push'] = now - 14401
-                self.assertFalse(s.slot2_preflight(rt, executable, 'gpt-6.1-sol', 'high', kh)['ready'])
-                # Restart may finish CI/deploy with an aged bootstrap proof, while new calls
-                # still go through Budget.charge (covered by shared exhaustion regressions).
-                with patch.object(rt.budget, 'remaining', return_value=0):
-                    self.assertTrue(s.slot2_preflight(rt, executable, 'gpt-6.1-sol', 'high', kh, activation=False)['ready'])
-                proof['probes']['ssh_push'] = now
-                proof['codex_sha256'] = '0'*64
-                self.assertFalse(s.slot2_preflight(rt, executable, 'gpt-6.1-sol', 'high', kh)['ready'])
+            self.assertEqual({p.relative_to(rt.layout.repo): p.read_bytes()
+                              for p in rt.layout.repo.rglob('*') if p.is_file()}, before)
+            self.assertFalse((rt.layout.repo / '.git/objects/info/alternates').exists())
+
+    def test_preflight_rejects_invalid_present_alternates(self):
+        for mode in ('empty', 'relative', 'other', 'multiple', 'symlink', 'dangling'):
+            with self.subTest(mode=mode), self.preflight_fixture() as (rt, executable, kh, proof, git, base):
+                alt = rt.layout.repo / '.git/objects/info/alternates'
+                if mode in ('symlink', 'dangling'):
+                    alt.unlink()
+                    target = base / 'alternate-fixture'
+                    if mode == 'symlink':
+                        target.write_text(str(base/'objects') + '\n')
+                    alt.symlink_to(target)
+                else:
+                    alt.write_text(dict(empty='', relative='../../base.git/objects\n', other='/other/objects\n',
+                                        multiple=str(base/'objects') + '\n/other/objects\n')[mode])
+                result = s.slot2_preflight(rt, executable, 'gpt-6.1-sol', 'high', kh)
+                self.assertEqual(result['failures'], ['own Git clone/common dir/dev/clean checkout'])
+
+    def test_preflight_rejects_missing_objects_dirty_tree_and_mismatched_common_dir(self):
+        import shutil
+        for mode in ('missing-commit', 'missing-blob', 'dirty', 'untracked', 'common-dir', 'symlink-objects'):
+            with self.subTest(mode=mode), self.preflight_fixture() as (rt, executable, kh, proof, git, base):
+                repo = rt.layout.repo
+                if mode == 'missing-blob':
+                    shutil.copytree(base / '.git/objects', repo / '.git/objects', dirs_exist_ok=True)
+                    blob = git('-C', str(repo), 'rev-parse', 'HEAD:file').stdout.strip()
+                    (repo / '.git/objects' / blob[:2] / blob[2:]).unlink()
+                elif mode != 'missing-commit':
+                    git('-C', str(repo), 'repack', '-a', '-d')
+                (repo / '.git/objects/info/alternates').unlink()
+                if mode == 'dirty':
+                    (repo / 'file').write_text('dirty\n')
+                elif mode == 'untracked':
+                    (repo / 'untracked').write_text('untracked\n')
+                elif mode == 'common-dir':
+                    (repo / '.git/commondir').write_text(str(base / '.git') + '\n')
+                elif mode == 'symlink-objects':
+                    (repo / '.git/objects').rename(repo / '.git/moved-objects')
+                    (repo / '.git/objects').symlink_to(repo / '.git/moved-objects')
+                result = s.slot2_preflight(rt, executable, 'gpt-6.1-sol', 'high', kh)
+                self.assertEqual(result['failures'], ['own Git clone/common dir/dev/clean checkout'])
+
+    def test_preflight_rejects_hidden_self_contained_object_dependencies(self):
+        for mode in ('http-alternates', 'shallow', 'grafts', 'promisor-config', 'partial-clone', 'promisor-pack', 'linked-pack'):
+            with self.subTest(mode=mode), self.preflight_fixture() as (rt, executable, kh, proof, git, base):
+                repo = rt.layout.repo
+                git('-C', str(repo), 'repack', '-a', '-d')
+                (repo / '.git/objects/info/alternates').unlink()
+                if mode == 'promisor-config':
+                    git('-C', str(repo), 'config', 'remote.origin.promisor', 'true')
+                elif mode == 'partial-clone':
+                    git('-C', str(repo), 'config', 'extensions.partialclone', 'origin')
+                elif mode == 'linked-pack':
+                    (repo / '.git/objects/pack').rename(repo / '.git/moved-pack')
+                    (repo / '.git/objects/pack').symlink_to(repo / '.git/moved-pack')
+                else:
+                    path = {'http-alternates': 'objects/info/http-alternates', 'shallow': 'shallow',
+                            'grafts': 'info/grafts', 'promisor-pack': 'objects/pack/fixture.promisor'}[mode]
+                    (repo / '.git' / path).write_text('')
+                result = s.slot2_preflight(rt, executable, 'gpt-6.1-sol', 'high', kh)
+                self.assertEqual(result['failures'], ['own Git clone/common dir/dev/clean checkout'])
 
 
 if __name__ == '__main__':

@@ -1,133 +1,140 @@
-# OPS #155 — continuity v3: offline evidence, 2026-10-21
+# OPS #155 — continuity v5: offline evidence, 2026-10-21
 
-Работа выполнена только в supplied writable copy; сеть, модели, реальные службы и live checkpoints
-не использовались. Это source candidate для независимого security review и root DRY, не live install
-и не review PASS. Пять deployed originals и manifest в pinned-originals оставлены byte-identical.
-Wrapper/reviewer pins, прежний slot-live-telemetry.sh, foundation checker и оба sanitized context JSON
-также не изменены. Все пять executor/slots/monitor payload sources, их embedded data и old/new pins
-byte-identical входному v2; admission/model/QA/CI/policy поведение не менялось.
-Installer пересобран существующим builder из supplied deployed originals.
-Исправлен FAILED independent review installer
-`dc4e3d52a86f7b06d1fc6145c787cfe34292c6c11ccee3cd9772ebf9cca3ab6b`:
-failed service больше не блокирует безопасное восстановление файлов до проверки quiescence.
+Только isolated source candidate: сеть, live services/checkpoints, credentials и VPS не использовались.
+Исправлены post-stop regression, fully removed V4 journal migration и alternates-absent slot2 preflight.
+Это не security review PASS и не live/root DRY.
+Точный входной V4 installer: `0f0be31059e7f0ce6ea0768de733627137b93eaee0e42b95df632def4a5f5c3b`.
+Все пять pinned deployed originals и manifest, autonomous_issues.py, monitor payloads, protected
+wrappers/reviewer pins, telemetry installer, foundation checker и sanitized contexts byte-identical входу.
+Из payloads изменён только Git readiness slots.py; startup barrier v4, task/scheduler/budget/auth logic сохранены.
 
-Все Python tests запускались с `PYTHONDONTWRITEBYTECODE=1` и
-`TMPDIR=/var/lib/gobadminton-clean-prompt-writer/ops/run.N8Qu9Y/tmp`.
-Текущая директория команд — writable copy из METADATA.
+Команды выполнялись из `slots-continuity-v5` в writable copy METADATA, с
+`PYTHONDONTWRITEBYTECODE=1` и `TMPDIR=/var/lib/gobadminton-clean-prompt-writer/ops/run.h2KxOV/tmp`.
 
-| Команда / проверка | Итог |
+| Проверка | Результат |
 | --- | --- |
-| `python3 -m unittest discover -s slots-continuity-v3/scripts/chatops/tests -v` | **160 tests, OK**, 37.585 s; все прежние 151 + 9 новых installer regression tests; включая все 23 installer test methods |
-| `python3 -m unittest discover -s slots-continuity-v3/scripts/chatops/parallel-slots/commission-tests -v` | **8 tests, OK**, 0.175 s; 5 прежних + 3 DOM/UI tests через локальную libduktape |
-| `python3 slots-continuity-v3/scripts/chatops/parallel-slots/build_continuity_installer.py --original slots-continuity-v3/pinned-originals` | PASS; пять exact original pins проверены, installer пересобран |
-| `bash -n slots-continuity-v3/scripts/chatops/parallel-slots/slots-continuity.sh` | PASS, exit 0 |
-| `python3 /var/lib/gobadminton-clean-prompt-writer/ops/run.N8Qu9Y/tmp/verify-candidate.py` | PASS; **19 Python sources + embedded controller** с cfile только в scratch; AST/decompress/SHA256 и точное соответствие controller исходнику; повторный builder output byte-identical; embedded payload dictionaries и pinned-originals byte-identical read-only original; изменены только пять разрешённых файлов, modes соответствуют supplied writable copy |
-| `python3 -` original-controller reproduction через новый MockSystemctl fixture | PASS: на неизменённом v2 controller одноразовые сбои первого/второго start дают ROLLBACK INCOMPLETE и оставляют **все 6 replacement files**; дефект воспроизведён через production parser, без реальных служб |
-| `git diff --no-index --check -- /var/lib/gobadminton-clean-prompt-writer/ops/run.N8Qu9Y/orig/slots-continuity-v3 slots-continuity-v3` | Пустой вывод; exit 1 означает наличие diff, whitespace diagnostics нет |
-| `command -v shellcheck` | Недоступен; shellcheck не выполнялся |
+| `python3 -m unittest discover -s scripts/chatops/tests -v` | **183 tests, OK**, 52.168 s, 0 failures/errors; прежние 170 + 9 installer и 4 slot regression methods; всего 42 installer methods |
+| `python3 -m unittest discover -s scripts/chatops/parallel-slots/commission-tests -v` | **8 tests, OK**, 0.162 s, 0 failures/errors, включая DOM/UI через локальную libduktape |
+| `python3 scripts/chatops/parallel-slots/build_continuity_installer.py --original pinned-originals` | PASS; exact deployed pins, новый slots SHA256 и embedded controller/payload |
+| `bash -n scripts/chatops/parallel-slots/slots-continuity.sh` | PASS |
+| `python3 /var/lib/gobadminton-clean-prompt-writer/ops/run.h2KxOV/tmp/verify-candidate.py` | PASS: 19 Python sources + embedded controller, compilation только в scratch, AST/decompression/SHA256, reproducible builder, allowed diff и неизменные payloads/pins |
+| Scratch verifier: byte-exact V4 controller/slots.py + actual embedded payloads | V4 post-stop failure и sole alternates-absent preflight failure воспроизведены; V5 проходит те же fixtures, archive/install/remove и read-only DRY с unpatched V4 SHA allowlist |
+| `git diff --no-index --check -- /var/lib/gobadminton-clean-prompt-writer/ops/run.h2KxOV/orig/slots-continuity-v5 .` | Нет whitespace diagnostics; exit 1 означает наличие diff |
+| `command -v shellcheck` | Недоступен; shellcheck не запускался |
 
-Полные финальные логи в scratch: `final-tests.log`, `commission-tests.log`, `verify-candidate.log`.
-Права generated installer возвращены к исходному mode supplied writable copy после chmod в builder;
-новых permission bits в итоговом кандидате нет.
-Первый targeted прогон выявил избыточное изменение прежнего pre-switch recovery при inactive unit
-с непустым cgroup; новые проверки в restore_units ограничены failed state, прежний regression сохранён.
-Итоговые проверки quiescence перед переключением файлов не ослаблены.
-`test_slots.py` и `test_continuity_v2.py` в v3 не менялись; security/permission tests Style Guide
-и весь прежний runtime coverage повторно пройдены.
+Полные логи: scratch `core-tests.log`, `commission-tests.log`, `verify-candidate.log`.
+Generated installer после builder возвращён к mode 0600 supplied writable copy; wrapper представляет
+read-only originals как 0400. Новых permission bits в итоговом кандидате нет.
+Собственного self-hash в installer нет; embedded slots payload data/new SHA обновлены builder.
+Все old pins и четыре остальных embedded payload dictionaries сохранены точно.
 
-## Новые v3 regression tests
+## Проверки v5
 
-Девять новых test methods используют настоящий `Installer` и production `System.status/pids/command`.
-MockSystemctl подменяет только `/usr/bin/systemctl` subprocess edge, возвращает полные property lines
-и создаёт реальные cgroup.procs в scratch. Единственный filesystem mapping — `/sys/fs/cgroup` в scratch.
-Root UID/GID и ownership остаются симуляцией; никаких service mutations на host не было.
+1. Post-stop polling проверен через production System.status/pids/command, mock subprocess show
+   и реальные scratch cgroup.procs: stop-sigterm → PID0 → cleared ControlGroup → inactive/dead;
+   исчезнувший bound cgroup с PID0; живой descendant при очищенном поле отвергается.
+   Never-settles исчерпывает monotonic deadline; сигнал, чужой PID/cgroup/child, enabled drift,
+   activating и unknown stop substate не допускают file switch. Install, remove и прежние rollback
+   tests проходят; transient states по-прежнему запрещены при entry и вне собственного stop poll.
+2. Removed prior journal мигрируется только после проверки всех old/new data/SHA/metadata и current
+   originals, safe slots/units, неизменного enablement и отсутствия pending. Архив содержит полные
+   исходные journal bytes, metadata и unit history; durable archive предшествует новому prepared.
+   DRY не вызывает write/service actions и не создаёт lock/archive. Fault/signal после archive
+   допускает retry; abrupt process exit после КАЖДОЙ migration mutation сохраняет audit и recovery.
+   Prepared/installed/pending, mixed/drift, unknown candidate, недостающие/ложные digest, null/empty
+   manifest, invalid units, corrupted archive и archive без managed journal отвергаются до mutations.
+3. Исходное active/active/inactive с enabled slot2 сохраняется, даже если V4 journal содержал три
+   active. До commit проверены все intended active units и installed journal при существующем barrier.
+   Одноразовый и постоянный failed start при migration возвращают originals и свежий V5 removed
+   journal с ТЕКУЩИМ inactive slot2; prior V4 journal остаётся в архиве. Повторный V5 --remove
+   восстанавливает остальные units без запуска slot2. Checkpoint bytes не меняются.
+4. Реальные disposable local Git repos: shared exact-base alternates и repacked self-contained без
+   alternates проходят; проверено отсутствие Git writes/смены remote. Empty/relative/other/multiple/
+   symlink/dangling alternates, missing commit/blob, dirty/untracked tree, mismatched common-dir,
+   linked objects/pack, http-alternates, shallow/grafts и promisor config/pack отвергаются.
+   UID/GID/groups, capabilities, proof freshness/binding и budget regressions сохранены.
 
-Проверены failed/failed PID0 с пустым, отсутствующим и существующим пустым cgroup; ненулевой MainPID;
-живые descendants в дочернем cgroup; invalid/relative/traversal/symlink cgroup и missing active cgroup.
-Сохранены LoadState, KillMode, enabled/static/disabled и FreezerState checks; activating/deactivating,
-active/exited и unknown states запрещены в обычном и recovery режимах. Первичный install failed unit
-не принимает и backup не создаёт.
+Первый полный промежуточный запуск: 181 tests, 3 failures + 32 subtest errors из-за слишком строгого
+сравнения cgroup path при recovery failed units. Исправлено проверкой пустоты обоих trusted cgroups;
+финальный полный запуск выше — 183 tests, 0 failures/errors. Лог первого запуска сохранён в scratch
+`core-tests-first-run.log`; это не нерешённый defect итогового candidate.
 
-Одноразовые ошибки первого, второго и третьего start при отсутствующей либо disabled policy
-проверяют все шесть файлов, bytes/modes/ownership, полный manifest и исходные active/enabled states.
-Постоянная ошибка каждого из трёх units возвращает исходные файлы, восстанавливает остальные службы,
-сохраняет backup и выдаёт ROLLBACK INCOMPLETE без сообщения PASS. DRY remove читает этот manifest
-без mutations; повторный remove при продолжающейся ошибке тоже не объявляет успех, а после снятия
-инъекции возвращает исходные active states даже при уже `removed` manifest. Повторный remove идемпотентен.
-Прямой remove установленного набора из quiescent failed состояния также восстанавливает исходные states.
+## Сохранённые проверки v4 (выполнены в общей suite v5)
 
-При втором/третьем failed start после успешного запуска предыдущих units новый child,
-author/QA/integration/promotion/deploy,
-policy deferral либо enabled-state drift запрещают cleanup stop и возврат старых файлов.
-Все шесть новых файлов и installed manifest сохраняются, retained active unit размораживается,
-backup остаётся; дальнейшие remove/DRY remove тоже отказывают без mutations. Отдельно проверены
-remove failed unit с живыми descendants и changed enabled-state pin.
+1. **Первая работа runtime/supervisor.** Настоящие wait/deployment_pending проверяются до Layout,
+   Budget, supervisor config/API/tick. Пока marker существует, downstream entry недостижим;
+   read-only status доступен. Marker отсутствует — entry проходит. Metadata tests сохраняют реальные
+   file types/modes/link counts и синтезируют только root UID/GID. Unknown/extra/duplicate schema,
+   oversized marker, symlink/hardlink/directory/FIFO, неправильные mode/owner, untrusted/symlink parent
+   и untrusted parent даже без marker fail closed. Installer также отказывает orphan marker без backup.
+2. **Реальные disposable workers.** Отдельные Python processes входят через настоящий Runtime slot1,
+   slot2, pinned старый autonomous_issues.activate_slot с новым Runtime и supervisor main.
+   WAIT handshake означает фактическое чтение persistent marker; timing не служит activation proof.
+   До commit отсутствуют lease, task mutation, ledger/charge и supervisor work.
+   В успешном пути проверяются все три starts и active/running states, затем durable installed journal,
+   затем unlink/fsync. Только после release выполняются настоящие registry.acquire, atomic task write
+   и Budget.charge (ровно одна author charge); supervisor достигает config/scheduling entry.
+   Никакая настоящая модель или API не вызывается.
+3. **Второй/третий failed start.** Первый real process уже находится внутри barrier до injected
+   systemctl failure. До freeze/stop нет task/lease/charge, stop завершает disposable process.
+   Все шесть managed files (bytes/modes/owner), исходные unit states, policy absence/disabled policy,
+   checkpoints и removed journal проверяются; pending marker исчезает только после безопасного restore.
+   Сохраняются v3 tests одноразового/постоянного сбоя всех трёх starts, восстановление остальных служб,
+   честный ROLLBACK INCOMPLETE при persistent failure и последующий повторный remove.
+4. **Crash/restart.** Отдельный installer process вызывает os._exit без Python rollback/finally после
+   каждой write/system mutation install и remove: prepared journal, marker, каждый freeze, stop,
+   каждый из шести file switches, каждый start, installed/removed journal, final marker removal.
+   Parent восстанавливает только simulated systemd state; новый Installer читает persistent disk state.
+   До activation новый worker/restarted старый executor с новым Runtime остаётся на marker.
+   Pending installed journal не позволяет shortcut «Уже установлено». DRY remove не меняет marker,
+   journal, units. Повторный remove возвращает весь original set и исходные states, затем идемпотентен.
+   Отдельно abrupt exit непосредственно до unlink и после unlink ДО directory fsync: код не откатывается
+   после возможного release; surviving marker удерживает entries до явного remove.
+5. **Commit uncertainty/signals/logging.** Реальные HUP/INT/TERM до commit и до/после unlink внутри
+   commit проверены. В критическом участке сигнал доставляется после fsync и восстановления mask.
+   Ошибка до unlink, directory fsync, после fsync либо print не запускает rollback под новыми workers.
+   Полный новый код и installed journal сохраняются; наличие marker определяет blocked/released entry.
+   Проверено отсутствие service actions после входа в final activation; logging error не превращает
+   доказанный commit в uncommitted installation.
+6. **Frozen/failed recovery.** MockSystemctl подменяет только subprocess systemctl edge, production
+   System.status/pids/command разбирают полные property lines и настоящие scratch cgroup.procs.
+   Recovery prepared/installed/removed journal проверен с frozen active units и с frozen failed PID0,
+   пустым/отсутствующим cgroup. Early thaw не вызывается: simulated normal stop thaw повторяет
+   документированную systemd job semantics. Все bytes/states восстанавливаются, repeat remove безопасен.
+   Child/unsafe writer/nonempty deferral/enabled drift отвергаются до mutations также при frozen units.
+   LoadState/KillMode/FreezerState, descendants, unknown/transitional states и failed PID guards сохранены.
+7. **Порядок и DRY.** Durable prepared journal + marker предшествуют slots.py, затем autonomous_issues;
+   originals возвращаются в обратном порядке. Последняя managed mutation успешного пути — marker unlink.
+   Сохраняются прежние DRY no-lock/no-backup/no-managed-write/no-service-mutation assertions,
+   inactive/disabled/static unit states и guards на непустой deferred.json/несовместимый parked.json.
+   Искусственно появившиеся unsafe child/writer/policy deferral не разрешают небезопасный rollback:
+   код не заменяется, backup/marker сохраняются, retained workers thaw, результат ROLLBACK INCOMPLETE.
 
-## Покрытие конкретных замечаний
-
-1. **Bootstrap transport.** Оба настоящих disposable slot clones содержат literal origin
-   `/srv/gb-slots/base.git` для fetch/push. Production READ_REMOTE/WRITE_REMOTE не подменены:
-   только тестовый subprocess edge заменяет явный GitHub URL локальным bare repo и запрещает
-   неявный transport. Пройдены repair → интеграция нового DEV → свежие QA/CI → promotion.
-   Другие локальные fetch/push origins, URL rewrite, core.sshCommand/core.gitProxy отвергаются;
-   исключение bootstrap origin не добавлено для default mode. Exact branch/head проверки сохранены.
-2. **Точная V1 публикация.** Реальный Runtime.publish пишет status.json с blocked/private wait и
-   policy archive; supplied original writer._slot_status принимает результат. Новые подробности
-   не попадают в V1. Idle также принимается исходным validator; integrating — новым строгим writer.
-3. **Telemetry/UI.** Реальные Runtime → telemetry.project/validate → writer.slot_publications
-   дают FRESH integrating card. Предыдущие QA/CI PASS скрываются на фазе integrating;
-   попытка экспортировать их отвергается validator, mismatch другого candidate SHA не проходит как PASS.
-   Прежний DOM fixture исполняет **неизменённый app.js** в локальной libduktape с mock DOM и synchronous
-   fetch delivery. Проверены семь этапов, подпись текущего DEV, отсутствие QA/CI PASS во время integration,
-   legacy done/active/idle, slot CI/blocked/done/idle/stale. Node fixtures в v3 не менялись;
-   DOM tests выполнены через libduktape. Это не проверка настоящего браузера, nginx или таймера.
-4. **Cheap busy.** Оба слота заняты checkpoint либо assignments; fixture fetch и API pages падают
-   при вызове. Ни один не вызван; Budget также не создаётся; возвращён truthful busy reason.
-5. **Public Style Guide.** Для slot1/slot2 × author/QA inline TOML содержит только read публичного
-   дерева, deny его родителя; исходные filesystem denials совпадают, сеть выключена.
-   Проверены root ownership, non-writable parents/tree, symlink root/refs/file, отсутствие refs,
-   altered App pin. Один и тот же frozen pin set проверяется runtime и installer preflight.
-   UID/GID root в fixtures симулируются, фактическая metadata на VPS здесь не проверялась.
-6. **Archive/state/release/free.** Настоящий local Git writer и настоящий registry/mutex:
-   durable archive → durable active=None → mutex release → lease release → V1 public free.
-   На publication конфликтующий successor уже может взять lock. Проверены policy и Owner PARK;
-   dirty/unfinished Owner writer сохраняет exclusion. Crash между archive/state, а также сбой
-   release/publication после checkpoint восстанавливаются без network или re-admission.
-   Legacy Owner PARK, headless PARK и его crash recovery прошли прежние tests.
-7. **Безопасный rollback.** Nonempty deferred.json запрещает remove и DRY remove без изменений
-   managed files, backup manifest, units или checkpoints. Empty archive допускает exact restore.
-   Если после частичного restart появился новый writer либо policy deferral, автоматический rollback
-   возвращает ROLLBACK INCOMPLETE, сохраняет полный новый код/policy и backup, размораживает retained
-   units и не запускает старый runtime. Никаких fake park_comment/checkpoint edits.
-8. **Restart и root safety.** Сохранены прежние tests exact two-parent merge adoption без повторного
-   merge/author, interrupted developing/QA fail closed, read backoff с сохранением phase/attempt,
-   budgets/ledger, identity/scope, новая QA/CI на каждом SHA, неизвестные promotion/deploy blocks.
-   Installer проверяет все пять файлов кода плюс policy, dedicated lock, trusted metadata, exact inputs,
-   frozen/stopped cgroups. Ошибки и SystemExit инжектируются после **каждой** mutation boundary
-   полного install, включая все 3 monitor payloads; проверяется полное восстановление bytes/modes/
-   ownership/active/enabled states. Partial install/remove recovery, children, phase/freeze races,
-   unsafe links/parents, drift и corrupt payload также проверены. Реального root/service DRY не было.
+Core suite повторно проверяет прежние local Git integration/restart, admission, legacy default mode,
+budgets, exact-head QA/CI, deferral/archive/release, Style Guide security и telemetry compatibility.
+Старые no-deployment runtime fixtures явно симулируют уже активированный host; новые barrier tests
+используют реальное ожидание и отдельные процессы. Metadata ownership/systemd остаются симуляцией:
+проверки не доказывают реальный freezer, service start или crash durability диска на VPS.
 
 ## SHA256
 
-| Файл | Deployed original | Новый payload |
+| Payload | Deployed original | Новый payload |
 | --- | --- | --- |
-| `autonomous_issues.py` | `0b367097be3aa5596327ebec14807b6f8ca39904e6a7279dbcb67b057c23f293` | `9995d0f268185c56d91cd0e15f986905abf093feb07c6edffec0c9b211e2fec7` |
-| `slots.py` | `4fc51152b0f8a5bc97743101feca7e5f5e97c7ad791d6783def0b3bd3d6324b7` | `1b4708b6ff64071074399cfcfd3c4c73f93501efdcd9266e9dafc61b927fb98c` |
-| `slot_telemetry.py` | `070eaa290c72ba7a13af8accbd996f3fbe8473e00b857f3f293a868b4d8e5b3f` | `2546f8409c57bd4db25af895518ed77ff46ac21a9e80af10d4bb977945687229` |
-| `writer.py` | `9a2364f1ca6175da6c26bcab4ae02884605edf108023d69ce8278f880fdbe132` | `957ebb3fb201efea31c7f29aa174bf142466c09e3222c03e5880b3467a14bc24` |
-| `app.js` | `9e9980c6c0580e54b01e42eda52bff573b45af9cd43b2f060cf70fea4f6ea379` | `b8d617d74d3b707cd459c305b90054b5ab263c0f8184bc877c943730bbd13f3b` |
+| autonomous_issues.py | `0b367097be3aa5596327ebec14807b6f8ca39904e6a7279dbcb67b057c23f293` | `9995d0f268185c56d91cd0e15f986905abf093feb07c6edffec0c9b211e2fec7` |
+| slots.py | `4fc51152b0f8a5bc97743101feca7e5f5e97c7ad791d6783def0b3bd3d6324b7` | `19d07c8d680d31ff65e13b3d8611b93fab1898461a918e69390a77bf8bb5ad02` |
+| slot_telemetry.py | `070eaa290c72ba7a13af8accbd996f3fbe8473e00b857f3f293a868b4d8e5b3f` | `2546f8409c57bd4db25af895518ed77ff46ac21a9e80af10d4bb977945687229` |
+| writer.py | `9a2364f1ca6175da6c26bcab4ae02884605edf108023d69ce8278f880fdbe132` | `957ebb3fb201efea31c7f29aa174bf142466c09e3222c03e5880b3467a14bc24` |
+| app.js | `9e9980c6c0580e54b01e42eda52bff573b45af9cd43b2f060cf70fea4f6ea379` | `b8d617d74d3b707cd459c305b90054b5ab263c0f8184bc877c943730bbd13f3b` |
 
-Самодостаточный `slots-continuity.sh`: `6e909fbf0abc0c7292e39444cf83ae289895d8a1e9b7fb893795c2fcb1b213cb`.
-Embedded payload SHA256 повторно проверены builder и не изменились относительно входного v2;
-изменился controller и SHA256 installer. Собственного self-hash в installer нет.
-Policy bytes (sorted JSON + newline): `1587e5881d6ef6429d29f3f033aff330faf0dd40ec11f83bfc20ba7e861bce6c`.
-Frozen Style Guide pins:
+Самодостаточный slots-continuity.sh: `117e38e3ab9890c60d39533a78f8340e366fbafceb8ba09b58f329d7817b50e9`.
+Policy SHA256: `1587e5881d6ef6429d29f3f033aff330faf0dd40ec11f83bfc20ba7e861bce6c`.
+Style Guide pins неизменны: App.tsx `04187d4d7d70c8c61e9ca2f08b6b6325a98539a3ec90c711c48ab771f675b61c`,
+index.css `f660e31973a6142784308f22728c751d7bb7432fb2ac0136bac032dbc6b1db2a`.
 
-- `src/App.tsx`: `04187d4d7d70c8c61e9ca2f08b6b6325a98539a3ec90c711c48ab771f675b61c`.
-- `src/index.css`: `f660e31973a6142784308f22728c751d7bb7432fb2ac0136bac032dbc6b1db2a`.
-
-Live commissioning, model/SSH credentials, реальный systemd freezer, monitor next tick и root metadata
-требуют НОВЫХ независимого deployment/security review и DRY точного итогового installer.
-Откат допускается только при quiescent compatible state; unresolved policy deferrals требуют
-отдельной reconciliation и не исчезают от возврата старого кода. Подробности — CONTINUITY.md.
+Нужны НОВЫЙ независимый exact-SHA security review и root DRY итогового installer; metadata pin refresh
+выполняется отдельно после review. Внешний reviewer должен проверить exact-SHA `DRY=1 bash slots-continuity.sh`
+на реальном removed V4 journal и `DRY=1 bash slots-continuity.sh --remove` по применимому состоянию.
+Unknown/pending prior V4 требует его reviewed recovery, не V5 migration. При post-install проверке
+slot2 должен оставаться inactive/enabled до отдельного явного start от PMA; preflight/реальный systemd
+freezer, start, stop timing и disk crash durability здесь не доказаны.
+Здесь ни live install, ни claims об успешном VPS commissioning нет.
