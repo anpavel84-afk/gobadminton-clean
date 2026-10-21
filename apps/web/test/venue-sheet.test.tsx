@@ -34,7 +34,8 @@ vi.mock("react", async importOriginal => ({
   },
 }));
 
-import { VenueSheet } from "../src/components/consumer/games/VenueSheet";
+import { CreateGamePage } from "../src/components/consumer/pages/CreateGamePage";
+import { VenueSheet, VenueSheetGameRow } from "../src/components/consumer/games/VenueSheet";
 import { GameTerms } from "../src/components/consumer/games/GameDetailComposition";
 import { formatSeats } from "../src/lib/game-presentation";
 import { venueDays, venueDayLabel } from "../src/lib/venue-popup";
@@ -50,10 +51,21 @@ function fixture(id: string, startsAt = "2026-10-25T00:30:00Z"): Game {
 }
 function elements(node: React.ReactNode): React.ReactElement<Record<string, unknown>>[] {
   if (!isValidElement<Record<string, unknown>>(node)) return [];
+  if (node.type === VenueSheetGameRow) return elements(VenueSheetGameRow(node.props as React.ComponentProps<typeof VenueSheetGameRow>));
   return [node, ...Children.toArray(node.props.children as React.ReactNode).flatMap(elements)];
 }
 class FocusTarget {
   isConnected = true;
+  tabIndex = 0;
+  disabled = false;
+  hidden = false;
+  inert = false;
+  inputHidden = false;
+  visibility = "visible";
+  rendered = true;
+  matches = () => this.disabled || this.inputHidden;
+  closest = () => this.hidden || this.inert ? this : null;
+  getClientRects = () => this.rendered ? [{}] : [];
   focus = vi.fn(() => { Object.assign(document, { activeElement: this }); });
 }
 const first = new FocusTarget(); const last = new FocusTarget(); const initiator = new FocusTarget();
@@ -68,8 +80,10 @@ function render() {
   hooks.effects.splice(0).forEach(effect => effect()); return tree;
 }
 const handle = new FocusTarget();
-const popupBoundary = { contains: (target: unknown) => target === handle || target === first || target === last, querySelectorAll: () => [handle, first, last] };
-const panel = { closest: () => popupBoundary, scrollTop: 0, contains: (target: unknown) => target === first || target === last, querySelectorAll: () => [first, last] };
+let excludedTargets: FocusTarget[] = [];
+let nestedDialog: string | null = null;
+const popupBoundary = { contains: (target: unknown) => target === handle || target === first || target === last, querySelectorAll: () => [...excludedTargets, handle, first, last, ...excludedTargets] };
+const panel = { closest: () => popupBoundary, scrollTop: 0, contains: (target: unknown) => target === first || target === last, querySelectorAll: () => [...excludedTargets, first, last, ...excludedTargets] };
 function click(tree: React.ReactNode, text: string) {
   const button = elements(tree).find(node => node.type === "button" && (node.props["aria-label"] === text || renderToStaticMarkup(node).includes(text)));
   if (!button) throw new Error(`Missing ${text}`);
@@ -77,9 +91,10 @@ function click(tree: React.ReactNode, text: string) {
 }
 beforeEach(() => {
   hooks.slots = []; hooks.effects = []; hooks.cleanups = []; hooks.cursor = 0; collapse.mockClear(); deselect.mockClear(); focus.mockClear(); panel.scrollTop = 0; last.focus.mockClear(); initiator.focus.mockClear();
+  excludedTargets = []; nestedDialog = null;
   props = { venue, games: [fixture("b"), fixture("a"), fixture("c", "2026-10-26T12:00:00Z")], gamesReady: true, now: Date.parse("2026-10-24T22:30:00Z"), onCollapse: collapse, onDeselect: deselect };
-  vi.stubGlobal("window", new EventTarget());
-  vi.stubGlobal("document", { activeElement: initiator, body: { style: { overflow: "auto" } }, querySelector: () => ({ focus }) });
+  vi.stubGlobal("window", Object.assign(new EventTarget(), { getComputedStyle: (target: FocusTarget) => ({ visibility: target.visibility }) }));
+  vi.stubGlobal("document", { activeElement: initiator, body: { style: { overflow: "auto" } }, querySelector: (selector: string) => selector === ".gb-venue-picker, dialog[open]" ? nestedDialog ? { className: nestedDialog } : null : ({ focus }) });
   vi.stubGlobal("HTMLElement", FocusTarget);
 });
 afterEach(() => { hooks.cleanups.forEach(fn => fn?.()); vi.useRealTimers(); vi.unstubAllGlobals(); });
@@ -319,12 +334,12 @@ it("does not lock the body or mount expanded controls in settled compact mode", 
   expect(arrowKey.preventDefault).toHaveBeenCalledOnce(); expect(h.change).toHaveBeenLastCalledWith(true); h.dispose();
 });
 
-it("offers the exact encoded create link only for a verified empty schedule", () => {
+it("offers a local create button only for a verified empty schedule", () => {
   props = { ...props, venue: { ...venue, id: "зал /?&=+" }, games: [] };
   const html = renderToStaticMarkup(render());
   expect(html).toContain("Создать игру на этой площадке");
-  const cta = elements(render()).find(node => node.props.children === "Создать игру на этой площадке");
-  expect(cta?.props.href).toBe("/games/create?" + new URLSearchParams({ venueId: props.venue.id }).toString());
+  const cta = elements(render()).find(node => node.type === "button" && renderToStaticMarkup(node).includes("Создать игру на этой площадке"));
+  expect(cta).toBeDefined(); expect(cta?.props.href).toBeUndefined();
   expect(html).not.toContain("Показать игры на этой площадке");
   props = { ...props, gamesReady: false };
   const unavailable = renderToStaticMarkup(render());
@@ -386,4 +401,45 @@ it("embedded modal Tab includes the shared handle in both directions", () => {
   expect(popup.click(0).preventDefault).not.toHaveBeenCalled();
   (popup.find("gb-venue-handle").props.onClick as () => void)();
   expect(popup.change).toHaveBeenLastCalledWith(false); popup.dispose();
+});
+
+
+it.each([".gb-venue-picker", "dialog[open]"])("yields Tab and Escape to an existing %s", selector => {
+  render(); nestedDialog = selector; Object.assign(document, { activeElement: last });
+  for (const key of ["Tab", "Escape"]) {
+    const event = Object.assign(new Event("keydown", { cancelable: true }), { key, shiftKey: false });
+    window.dispatchEvent(event); expect(event.defaultPrevented).toBe(false);
+  }
+  expect(collapse).not.toHaveBeenCalled(); expect(document.activeElement).toBe(last);
+});
+it("excludes hidden, inert, disabled, negative-tabindex and unrendered focus targets", () => {
+  excludedTargets = [
+    { hidden: true }, { inert: true }, { disabled: true }, { inputHidden: true },
+    { tabIndex: -1 }, { visibility: "hidden" }, { visibility: "collapse" }, { rendered: false },
+  ].map(properties => Object.assign(new FocusTarget(), properties));
+  render();
+  for (const shiftKey of [false, true]) {
+    Object.assign(document, { activeElement: shiftKey ? first : last });
+    const event = Object.assign(new Event("keydown", { cancelable: true }), { key: "Tab", shiftKey });
+    window.dispatchEvent(event); expect(event.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(shiftKey ? last : first);
+  }
+  expect(excludedTargets.every(target => target.focus.mock.calls.length === 0)).toBe(true);
+});
+
+it("keeps local create open through unavailable/empty schedules and keys its draft by popup venue/city", () => {
+  props = { ...props, games: [] }; click(render(), "Создать игру на этой площадке");
+  const create = () => {
+    const node = elements(render()).find(element => element.type === CreateGamePage);
+    if (!node) throw new Error("No embedded create");
+    return node;
+  };
+  const initial = create(); expect(initial.props.embedded).toBe(true); expect(initial.props.initialVenue).toBe(props.venue);
+  props = { ...props, gamesReady: false }; expect(create().key).toBe(initial.key);
+  props = { ...props, gamesReady: true, games: [] }; expect(create().key).toBe(initial.key);
+  props = { ...props, games: [fixture("later")] }; expect(create().key).toBe(initial.key);
+  props = { ...props, venue: { ...venue, id: "next" } }; const next = create(); expect(next.key).not.toBe(initial.key);
+  props = { ...props, venue: { ...props.venue, cityId: "other" } }; expect(create().key).not.toBe(next.key);
+  (create().props.onClose as () => void)();
+  expect(elements(render()).some(element => element.type === CreateGamePage)).toBe(false);
 });

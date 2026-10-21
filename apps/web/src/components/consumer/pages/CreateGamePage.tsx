@@ -1,4 +1,6 @@
 "use client";
+import { initialCreateVenue, selectCreateVenue } from "../../../lib/venue-popup-create";
+import { profileSetupPath, safeAuthReturnPath } from "../../../lib/auth-return";
 import { venueCreatePath } from "../../../lib/games-venue-map";
 
 import { GamePhotoSelection } from "../games/GamePhotoSelection";
@@ -66,7 +68,7 @@ type Draft = {
   trainerFeeTerms: string;
 };
 
-const emptyDraft = (): Draft => ({
+export const emptyDraft = (): Draft => ({
   title: "",
   venueId: "",
   venueName: "",
@@ -92,7 +94,18 @@ import { GameActionBar } from "../games/GameActionBar";
 import { gameDurationMinutes, gameSchedule, gameStartIsFuture, MAX_GAME_DURATION_MINUTES } from "../../../lib/game-form";
 import { cityDate, nextCalendarDay } from "../../../lib/discovery-presentation";
 
-export function CreateGamePage() {
+export type CreateGamePageProps = {
+  embedded?: boolean;
+  initialVenue?: VenueSummary | null;
+  onClose?: () => void;
+};
+
+export function CreateGamePage({ embedded = false, initialVenue, onClose }: CreateGamePageProps = {}) {
+  const model = useCreateGameController(initialVenue);
+  return <CreateGamePresentation {...model} embedded={embedded} onClose={onClose} />;
+}
+
+function useCreateGameController(initialVenue?: VenueSummary | null) {
   const { location } = useDiscoveryCity();
   const [preferences, setPreferences] = useState<GamePreferences | null>(null);
   const [saveContact, setSaveContact] = useState(false);
@@ -112,6 +125,7 @@ export function CreateGamePage() {
   const [venueStatus, setVenueStatus] = useState<"loading" | "ready" | "error">("loading");
   const [venueReload, setVenueReload] = useState(0);
   const [venuePickerOpen, setVenuePickerOpen] = useState(false);
+  const venueManuallySelected = useRef(false);
   const venueTriggerRef = useRef<HTMLButtonElement>(null);
   const [created, setCreated] = useState<Game | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -158,7 +172,7 @@ export function CreateGamePage() {
   }, [reload, location]);
 
   useEffect(() => {
-    const changed = () => { ++sessionEpoch.current; contactEdited.current = false; setMe(null); setTrainer(null); setPreferences(null); setSaveContact(false); setDraft(emptyDraft()); setCreated(null); setPhoto(null); setPhotoReady(true); setCreatorSeat(null); setStep("loading"); setReload(n => n + 1); };
+    const changed = () => { ++sessionEpoch.current; contactEdited.current = false; setMe(null); setTrainer(null); setPreferences(null); setSaveContact(false); venueManuallySelected.current = false; setSelectedVenueCache(null); setDraft(emptyDraft()); setCreated(null); setPhoto(null); setPhotoReady(true); setCreatorSeat(null); setStep("loading"); setReload(n => n + 1); };
     window.addEventListener("gb-session-changed", changed);
     return () => { ++sessionEpoch.current; window.removeEventListener("gb-session-changed", changed); };
   }, []);
@@ -166,6 +180,7 @@ export function CreateGamePage() {
   useEffect(() => {
     if (!location) return;
     // A deliberate city change invalidates an incompatible draft venue.
+    venueManuallySelected.current = false;
     setDraft(d => ({ ...d, venueId: "", createNewVenue: false })); setSelectedVenueCache(null);
   }, [location?.cityId]);
 
@@ -178,12 +193,6 @@ export function CreateGamePage() {
       if (cancelled) return;
       if (result.ok) {
         setKnownVenues(result.data);
-        const requested = new URLSearchParams(window.location.search).get("venueId");
-        const preselected = result.data.find(venue => venue.id === requested && venue.cityId === location.cityId);
-        if (preselected) {
-          setSelectedVenueCache(preselected);
-          setDraft(d => ({ ...d, venueId: d.venueId || preselected.id, createNewVenue: false }));
-        }
         setVenueStatus("ready");
       } else {
         setKnownVenues([]);
@@ -192,6 +201,26 @@ export function CreateGamePage() {
     });
     return () => { cancelled = true; };
   }, [location, venueReload]);
+
+  useEffect(() => {
+    const candidate = initialCreateVenue({ initialVenue, cityId: location?.cityId,
+      search: window.location.search, venues: knownVenues });
+    if (!venueManuallySelected.current && candidate) setSelectedVenueCache(cached => cached ?? candidate);
+    setDraft(value => selectCreateVenue(value, candidate, venueManuallySelected.current));
+  }, [initialVenue, location?.cityId, knownVenues, reload]);
+
+  function onVenueModeChange(createNewVenue: boolean) {
+    venueManuallySelected.current = true;
+    setDraft(value => ({ ...value, createNewVenue, venueId: "" }));
+  }
+
+  function onVenueSelect(venue: VenueSummary) {
+    venueManuallySelected.current = true;
+    setSelectedVenueCache(venue);
+    setDraft(value => ({ ...value, venueId: venue.id }));
+    setVenuePickerOpen(false);
+    venueTriggerRef.current?.focus();
+  }
 
   const previewPayload = useMemo(() => {
     if (!me || !location) return null;
@@ -380,7 +409,7 @@ export function CreateGamePage() {
     } finally { mutation.current = false; setBusy(false); }
   }
 
-  const selectedVenue = resolveSelectedVenue(knownVenues, selectedVenueCache, draft.venueId, location?.cityId);
+  const selectedVenue = resolveSelectedVenue(knownVenues, selectedVenueCache ?? initialCreateVenue({ initialVenue, cityId: location?.cityId, search: "", venues: [] }), draft.venueId, location?.cityId);
   const previewVenue = draft.createNewVenue ? {
     id: "preview", cityId: location?.cityId ?? "", name: draft.venueName, address: draft.venueAddress, timezone: location?.timezone ?? "UTC",
   } : selectedVenue;
@@ -399,14 +428,35 @@ export function CreateGamePage() {
     }
   }, []);
 
-  return (
-    <ConsumerShell active="games" title="Создать игру" mode="local">
-      <div className="gb-game-create">
-      <Button variant="ghost" className="gb-game-back" href="/games">← Все игры</Button>
+  const returnPath = safeAuthReturnPath(venueCreatePath(initialVenue !== undefined
+    ? new URLSearchParams({ venueId: initialVenue?.id ?? "" }).toString()
+    : typeof window === "undefined" ? "" : window.location.search));
+  return {
+    step, preferences, saveContact, setSaveContact, creatorSeat, trainer, setReload,
+    activityKind, setActivityKind, dateChoice, setDateChoice, customDuration, setCustomDuration,
+    draft, setDraft, knownVenues, selectedVenue, venueStatus, setVenueReload, venuePickerOpen,
+    setVenuePickerOpen, venueTriggerRef, onVenueModeChange, onVenueSelect, created, error, busy,
+    setBusy, photo, setPhoto, photoReady, setPhotoReady, photoUrl, contactEdited, previewPayload,
+    previewGame, location, onCheck, onPublish, setStep, recoveryChecked, rereadResult, returnPath,
+  };
+}
+
+/** The route and popup render the same fields, validation, photo, preview and actions. */
+export function CreateGamePresentation({ embedded = false, onClose,
+  step, preferences, saveContact, setSaveContact, creatorSeat, trainer, setReload,
+  activityKind, setActivityKind, dateChoice, setDateChoice, customDuration, setCustomDuration,
+  draft, setDraft, knownVenues, selectedVenue, venueStatus, setVenueReload, venuePickerOpen,
+  setVenuePickerOpen, venueTriggerRef, onVenueModeChange, onVenueSelect, created, error, busy,
+  setBusy, photo, setPhoto, photoReady, setPhotoReady, photoUrl, contactEdited, previewPayload,
+  previewGame, location, onCheck, onPublish, setStep, recoveryChecked, rereadResult, returnPath,
+}: ReturnType<typeof useCreateGameController> & Pick<CreateGamePageProps, "embedded" | "onClose">) {
+  const content = (
+      <div className={`gb-game-create${embedded ? " gb-game-create--embedded" : ""}`}>
+      {!embedded && <Button variant="ghost" className="gb-game-back" href="/games">← Все игры</Button>}
       {step === "loading" && <div className="gb-game-feedback" role="status"><h1>Готовим создание игры</h1></div>}
-      {step === "setup" && <div className="gb-game-feedback" data-state="setup"><h1>Укажите город, чтобы создать игру</h1><p>Сначала сохраните город в игровом профиле. Затем вы вернётесь к созданию игры и сможете проверить её перед публикацией.</p><Button href={`/profile/setup?returnTo=${encodeURIComponent(venueCreatePath(typeof window === "undefined" ? "" : window.location.search))}`}>Указать город</Button></div>}
+      {step === "setup" && <div className="gb-game-feedback" data-state="setup"><h1>Укажите город, чтобы создать игру</h1><p>Сначала сохраните город в игровом профиле. Затем вы вернётесь к созданию игры и сможете проверить её перед публикацией.</p><Button href={profileSetupPath(returnPath)}>Указать город</Button></div>}
       {step === "load-error" && <div className="gb-game-feedback" data-state="error" role="alert"><h1>Не удалось проверить профиль</h1><p>Проверьте соединение и попробуйте снова. Создание игры продолжится после проверки входа и города.</p><Button onClick={() => setReload(n => n + 1)}>Повторить проверку</Button></div>}
-      {step === "auth" && <div className="gb-game-feedback" data-state="auth"><h1>Войдите, чтобы создать игру</h1><p>После входа вы сможете заполнить игру и проверить её перед публикацией.</p><AuthEntry returnPath={venueCreatePath(typeof window === "undefined" ? "" : window.location.search)} intent={{ kind: "create", activityKind }} />{error && <p role="alert">{error}</p>}</div>}
+      {step === "auth" && <div className="gb-game-feedback" data-state="auth"><h1>Войдите, чтобы создать игру</h1><p>После входа вы сможете заполнить игру и проверить её перед публикацией.</p><AuthEntry returnPath={returnPath} intent={{ kind: "create", activityKind }} />{error && <p role="alert">{error}</p>}</div>}
       {/* Keep local photo/crop state alive for the preview → edit round trip. */}
       {(step === "form" || step === "preview") && <>
         <header className="gb-create-header" hidden={step !== "form"} style={step !== "form" ? { display: "none" } : undefined}><span className="gb-game-kicker">Соберите свою игру</span><h1>Создать игру</h1><p>Выберите место, время и условия. Перед публикацией вы сможете всё проверить.</p></header>
@@ -416,7 +466,7 @@ export function CreateGamePage() {
             <label className="gb-game-field gb-game-field--wide">Название (необязательно)<input id="title" maxLength={160} value={draft.title} onChange={e => setDraft({ ...draft, title: e.target.value })} placeholder="Например, парная игра в субботу" /></label>
           </div></section>
           <section className="gb-game-form-group" aria-labelledby="gb-create-game-section-2"><h2 id="gb-create-game-section-2" className="gb-game-form-group-title">Место и время</h2><div className="gb-game-fields">
-            <label className="gb-game-field gb-game-field--wide">Площадка<select id="venueMode" value={draft.createNewVenue ? "new" : "known"} onChange={e => setDraft({ ...draft, createNewVenue: e.target.value === "new", venueId: "" })}><option value="known">Из каталога площадок</option><option value="new">Новая площадка</option></select><small>Договоритесь о корте с площадкой заранее.</small></label>
+            <label className="gb-game-field gb-game-field--wide">Площадка<select id="venueMode" value={draft.createNewVenue ? "new" : "known"} onChange={e => onVenueModeChange(e.target.value === "new")}><option value="known">Из каталога площадок</option><option value="new">Новая площадка</option></select><small>Договоритесь о корте с площадкой заранее.</small></label>
             {!draft.createNewVenue ? <div className="gb-game-field gb-game-field--wide">
               <label htmlFor="venueId">Известная площадка</label>
               <button
@@ -435,7 +485,7 @@ export function CreateGamePage() {
                 </span>
                 <span aria-hidden="true">⌄</span>
               </button>
-              {selectedVenue && <Button variant="ghost" href={`/venues/${selectedVenue.id}`}>Открыть площадку</Button>}
+              {!embedded && selectedVenue && <Button variant="ghost" href={`/venues/${selectedVenue.id}`}>Открыть площадку</Button>}
               <small>{venueStatus === "loading" ? "Загружаем все площадки…" :
                 venueStatus === "error" ? "Каталог временно недоступен. Откройте список, чтобы повторить загрузку." :
                 knownVenues.length ? `В каталоге ${knownVenues.length} площадок. Поиск по названию и адресу.` :
@@ -446,12 +496,7 @@ export function CreateGamePage() {
                 status={venueStatus}
                 onRetry={() => setVenueReload(value => value + 1)}
                 onClose={() => { setVenuePickerOpen(false); venueTriggerRef.current?.focus(); }}
-                onSelect={venue => {
-                  setSelectedVenueCache(venue);
-                  setDraft(value => ({ ...value, venueId: venue.id }));
-                  setVenuePickerOpen(false);
-                  venueTriggerRef.current?.focus();
-                }}
+                onSelect={onVenueSelect}
               />}
             </div> : <>
               <label className="gb-game-field gb-game-field--wide">Название площадки<input id="venueName" required value={draft.venueName} onChange={e => setDraft({ ...draft, venueName: e.target.value })} /></label>
@@ -487,24 +532,24 @@ export function CreateGamePage() {
           </div></section>
           <GamePhotoSelection onChange={setPhoto} onReady={setPhotoReady} disabled={busy}/>
           {error && <div className="gb-game-notice" role="alert"><p>{error}</p><Button variant="outline" type="button" onClick={() => setReload(n => n + 1)}>Обновить проверку входа</Button></div>}
-          <div className="gb-game-form-actions"><Button variant="outline" href="/games">Отмена</Button><Button type="submit" disabled={!photoReady}>Проверить игру</Button></div>
+          <div className="gb-game-form-actions">{embedded ? <Button variant="outline" onClick={onClose}>Отмена</Button> : <Button variant="outline" href="/games">Отмена</Button>}<Button type="submit" disabled={!photoReady}>Проверить игру</Button></div>
         </form>
       </>}
       {step === "preview" && previewGame && <div className="gb-game-preview" data-surface="create-preview">
         <header className="gb-game-preview-heading"><h2>Проверка перед публикацией</h2><p>Проверьте данные. Игра появится после нажатия «Опубликовать игру».</p></header>
         <GameHero game={previewGame} preview localPreview={photoUrl} />
         <p>{photo ? "Выбрано своё фото этой игры. Перед публикацией сервер проверит изображение." : "Будет использована текущая одобренная обложка площадки или стандартная."}</p>
-        <div className="gb-game-detail-grid"><div><GameTerms game={previewGame} /><section className="gb-game-section"><h2>Кто увидит игру</h2><p>{draft.visibility === "public" ? "Игра появится в поиске" : "Только те, у кого есть ссылка"}</p></section></div>
+        <div className="gb-game-detail-grid"><div><GameTerms game={previewGame} onVenueClick={embedded ? () => { setStep("form"); setVenuePickerOpen(true); } : undefined} /><section className="gb-game-section"><h2>Кто увидит игру</h2><p>{draft.visibility === "public" ? "Игра появится в поиске" : "Только те, у кого есть ссылка"}</p></section></div>
           <aside className="gb-game-booking"><div className="gb-game-booking__terms"><strong>Готово к публикации</strong><p>{activityKind === "regular" ? "При создании обычной игры ваше участие подтверждает сервер." : "Тренер не занимает место игрока."}</p></div><GameActionBar><Button disabled={busy} loading={busy} onClick={() => void onPublish()}>{busy ? "Публикуем…" : "Опубликовать игру"}</Button><Button variant="outline" disabled={busy} onClick={() => setStep("form")}>Назад к редактированию</Button></GameActionBar></aside>
         </div>
       </div>}
-      {step === "published" && created && <div className="gb-game-feedback" data-state="ready" data-result="success"><span className="gb-game-kicker">Всё готово</span><h1>Игра опубликована</h1><p>{created.title} · {formatGameWhen(created)}</p><p>Подтверждено: {created.confirmedCount} · Свободно: {created.availablePlaces} · Вместимость: {created.capacity}</p><p>{creatorSeat || "Проверяем ваше участие…"}</p><p>Вы можете открыть игру или перейти к её сводке.</p><div className="gb-game-form-actions"><Button variant="outline" href={`/games/${created.id}`}>Открыть игру</Button><Button href={`/my-games/${created.id}`}>Открыть сводку созданной игры</Button></div></div>}
+      {step === "published" && created && <div className="gb-game-feedback" data-state="ready" data-result="success"><span className="gb-game-kicker">Всё готово</span><h1>Игра опубликована</h1><p>{created.title} · {formatGameWhen(created)}</p><p>Подтверждено: {created.confirmedCount} · Свободно: {created.availablePlaces} · Вместимость: {created.capacity}</p><p>{creatorSeat || "Проверяем ваше участие…"}</p><p>Вы можете открыть игру или перейти к её сводке.</p><div className="gb-game-form-actions"><Button variant="outline" href={`/games/${created.id}`}>Открыть игру</Button><Button href={`/my-games/${created.id}`}>Открыть сводку созданной игры</Button>{embedded && <Button variant="outline" onClick={onClose}>К площадке</Button>}</div></div>}
       {(step === "unknown" || step === "conflict") && <div className="gb-game-feedback" data-state="error" data-result={step}>
         <h1>{step === "unknown" ? "Результат публикации неизвестен" : "Данные игры изменились"}</h1><p>{error}</p><p>Проверьте список своих игр перед повторной публикацией.</p>
         <p role="status">{recoveryChecked ? created ? (created.status === "draft" ? "Игра сохранена как черновик. Публикация не подтверждена." : "Статус игры обновлён.") : "Список обновлён. Откройте созданные игры и проверьте результат." : "Не удалось проверить результат. Обновите состояние ещё раз."}</p>
         <div className="gb-game-form-actions"><Button variant="outline" disabled={busy} onClick={async () => { setBusy(true); try { await rereadResult(created); } finally { setBusy(false); } }}>Проверить состояние</Button><Button href={created ? `/my-games/${created.id}` : "/my-games?tab=created"}>{created ? "Открыть сводку" : "К созданным играм"}</Button></div>
       </div>}
       </div>
-    </ConsumerShell>
   );
+  return embedded ? content : <ConsumerShell active="games" title="Создать игру" mode="local">{content}</ConsumerShell>;
 }

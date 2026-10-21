@@ -29,21 +29,21 @@ describe("VenueSheet public organization contacts",()=>{
   const {nodes,html}=render(result.data[0]?.publicContacts);
   const anchors=nodes.filter(n=>n.type==='a' && !String(n.props.href).startsWith('/'));
   expect(anchors.map(n=>n.props.href)).toEqual(["tel:+79991234567","https://xn--e1afmkfd.xn--p1ai/contact","https://t.me/club","https://wa.me/79991234567","https://vk.com/club"]);
-  expect(anchors.map(n=>n.props.children)).toEqual(["+7 (999) 123-45-67","Сайт площадки","Telegram","WhatsApp","ВКонтакте"]);
+  expect(anchors.map(n=>renderToStaticMarkup(n).replace(/<[^>]*>/g,""))).toEqual(["+7 (999) 123-45-67","xn--e1afmkfd.xn--p1ai↗","Telegram","WhatsApp","ВКонтакте"]);
   expect(anchors[0]?.props.target).toBeUndefined();
   expect(anchors[0]?.props.rel).toBeUndefined();
   for(const a of anchors.slice(1)){expect(a.props.target).toBe('_blank');expect(a.props.rel).toBe('noopener noreferrer');}
-  expect(html).toContain("Публичные контакты организации");
-  const labels=["Сайт площадки","Telegram","WhatsApp","ВКонтакте"];expect(labels.map(l=>html.indexOf(l))).toEqual(labels.map(l=>html.indexOf(l)).sort((a,b)=>a-b));
+  expect(html).toContain("Контакты площадки");expect(html).not.toContain("Публичные контакты организации");
+  const labels=["xn--e1afmkfd.xn--p1ai","Telegram","WhatsApp","ВКонтакте"];expect(labels.map(l=>html.indexOf(l))).toEqual(labels.map(l=>html.indexOf(l)).sort((a,b)=>a-b));
  });
  it("missing/old/unsafe data shows empty independent of schedules; private fields ignored",()=>{
   for(const ready of [true,false])for(const value of [undefined,null,[],{contact_phone:"+79991234567",contactWebsite:"https://private.example"},{phone:"123\n4567",website:"https://foo／bar.example/path",messengers:[{kind:"telegram",url:"https://t.me/a/.."}]}]){
-   const {html}=render(value,ready);expect(html).toContain("Публичные контакты не указаны");expect(html).not.toContain("private.example");
+   const {html}=render(value,ready);expect(html).toContain("Контакты пока не добавлены");expect(html).not.toContain("private.example");
   }
  });
  it("retains safe neighbors and independently enforces URL policy",()=>{
   const bad=["https://a@b/","https://b:444/","https://b/\n","https://b/\\x","javascript:x","https://example.com/"+"я".repeat(100)];
-  for(const website of bad){const {html}=render({phone:"+1234567",website,messengers:[]});expect(html).toContain('tel:+1234567');expect(html).not.toContain('Сайт площадки');}
+  for(const website of bad){const {html,nodes}=render({phone:"+1234567",website,messengers:[]});expect(html).toContain('tel:+1234567');expect(nodes.filter(n=>n.type==='a' && !String(n.props.href).startsWith('tel:'))).toHaveLength(0);}
   for(const [raw,expected] of [[" HTTP://Example.COM:80/a/../b ","http://example.com/b"],["https://[::1]/","https://[::1]/"],["https://127.0.0.1/","https://127.0.0.1/"],[" ".repeat(310)+"https://example.com/","https://example.com/"]]){
    expect(render({phone:null,website:raw,messengers:[]}).nodes.some(n=>n.props.href===expected)).toBe(true);
   }

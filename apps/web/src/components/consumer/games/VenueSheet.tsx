@@ -1,11 +1,11 @@
 "use client";
 import type { ReactNode } from "react";
-import Link from "next/link";
-import { venueCreatePath } from "../../../lib/games-venue-map";
 import { useEffect, useId, useRef, useState } from "react";
 import type { Game, VenueSummary } from "../../../lib/consumer-types";
 import { venueDays, venueDayLabel } from "../../../lib/venue-popup";
 import { formatSeats } from "../../../lib/game-presentation";
+import { CreateGamePage } from "../pages/CreateGamePage";
+import { GameCover } from "./GameCover";
 import { VenueCover } from "../venues/VenueCover";
 import { Avatar } from "../players/ProfileComposition";
 import { GameHero, GameTerms } from "./GameDetailComposition";
@@ -31,7 +31,7 @@ function contactUrl(value: unknown, kind?: string): string | null {
     return url.href;
   } catch { return null; }
 }
-function VenuePublicContacts({ value }: { value: unknown }) {
+export function VenuePublicContacts({ value }: { value: unknown }) {
   const row = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
   const rawPhone = row.phone;
   const trimmed = typeof rawPhone === "string" ? rawPhone.trim() : "";
@@ -49,28 +49,53 @@ function VenuePublicContacts({ value }: { value: unknown }) {
       if (url) { links.push({kind,url,label}); break; }
     }
   }
-  return <section aria-label="Контакты площадки"><h3>Контакты площадки</h3><p>Публичные контакты организации</p>
-    {phone && <p><a href={`tel:${trimmed.startsWith("+") ? "+" : ""}${digits}`}>{phone}</a></p>}
-    {website && <p><a href={website} target="_blank" rel="noopener noreferrer">Сайт площадки</a></p>}
-    {links.map(link => <p key={link.kind}><a href={link.url} target="_blank" rel="noopener noreferrer">{link.label}</a></p>)}
-    {!phone && !website && !links.length && <p>Публичные контакты не указаны</p>}
+  return <section className="gb-venue-contacts" aria-label="Контакты площадки"><h3>Контакты площадки</h3>
+    <div className="gb-venue-contact-rows">
+      {phone && <a className="gb-venue-contact-row" href={`tel:${trimmed.startsWith("+") ? "+" : ""}${digits}`}><ContactIcon kind="phone" /><span>{phone}</span></a>}
+      {website && <a className="gb-venue-contact-row" href={website} target="_blank" rel="noopener noreferrer"><ContactIcon kind="website" /><span>{new URL(website).hostname}</span><span aria-hidden="true">↗</span></a>}
+      {links.length > 0 && <div className="gb-venue-contact-messengers">{links.map(link => <a className="gb-venue-contact-row" key={link.kind} href={link.url} target="_blank" rel="noopener noreferrer"><ContactIcon kind={link.kind} /><span>{link.label}</span></a>)}</div>}
+    </div>
+    {!phone && !website && !links.length && <p>Контакты пока не добавлены</p>}
   </section>;
+}
+
+function ContactIcon({ kind }: { kind: string }) {
+  return <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    {kind === "website" ? <><circle cx="12" cy="12" r="9" /><ellipse cx="12" cy="12" rx="4" ry="9" /><path d="M3 12h18" /></>
+      : kind === "phone" ? <path d="M7 3H4a1 1 0 0 0-1 1c0 9.4 7.6 17 17 17a1 1 0 0 0 1-1v-3l-5-2-2 2a15 15 0 0 1-7-7l2-2-2-5Z" />
+      : kind === "telegram" ? <path d="m3 11 18-7-4 16-6-5-4 3 1-6 9-5-6 8" />
+      : kind === "whatsapp" ? <><path d="m4 20 1-5a9 9 0 1 1 4 5l-5 1Z" /><path d="m9 8-1 2c1 3 3 5 6 6l2-2-3-2-1 1-2-2 1-1-2-2Z" /></>
+      : <path d="M3 7c1 6 4 10 9 10h1v-4c2 0 3 2 5 4h3l-5-6 4-4h-3l-4 4V7h-3v7c-2-1-3-4-4-7H3Z" />}
+  </svg>;
+}
+
+/** One accessible action; media and organizer identity are presentation only. */
+export function VenueSheetGameRow({ game, timezone, onOpen }: { game: Game; timezone: string; onOpen: () => void }) {
+  const time = (value: string) => new Intl.DateTimeFormat("ru-RU", { timeZone: timezone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(value));
+  return <button type="button" className="gb-venue-sheet-game" onClick={onOpen}>
+    <GameCover game={game} className="gb-venue-sheet-game-cover" />
+    <span><span>{time(game.startsAt)}–{time(game.endsAt)}</span><strong>{game.title}</strong>
+      {game.levelRule.allowedLevelIds.length > 0 && <span>{game.levelRule.allowedLevelIds.join(", ")}</span>}
+      <small>Организатор</small><span className="gb-game-identity"><Avatar name={game.organizer.displayName} avatar={game.organizer.avatar} className="gb-discovery-avatar" />{game.organizer.displayName}</span>
+      <span className="gb-venue-sheet-count">{formatSeats(game)}</span>
+    </span>
+  </button>;
 }
 
 export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDeselect, embedded = false, active = true, coverSlot }: {
   venue: VenueSummary; games: readonly Game[]; gamesReady: boolean; now: number;
   onCollapse: () => void; onDeselect: () => void; embedded?: boolean; active?: boolean; coverSlot?: ReactNode;
 }) {
-  const [view, setView] = useState<"info" | "schedule" | "game">("info");
+  const [view, setView] = useState<"info" | "schedule" | "game" | "create">("info");
   const [selectedDate, setSelectedDate] = useState("");
   const [gameId, setGameId] = useState<string | null>(null);
   const days = venueDays(gamesReady ? games : [], venue.timezone);
   const day = days.find(item => item.date === selectedDate) ?? days[0];
   const game = gamesReady ? games.find(item => item.id === gameId) : undefined;
   // Render invalidation immediately; effects also clear the old selection permanently.
-  const currentView = !gamesReady || !days.length ? "info" : view === "game" && !game ? "schedule" : view;
+  const currentView = view === "create" ? "create" : !gamesReady || !days.length ? "info" : view === "game" && !game ? "schedule" : view;
   useEffect(() => {
-    if (!gamesReady || !days.length) { setView("info"); setGameId(null); }
+    if (view !== "create" && (!gamesReady || !days.length)) { setView("info"); setGameId(null); }
     else if (view === "game" && !game) { setView("schedule"); setGameId(null); }
     if (selectedDate !== day?.date) setSelectedDate(day?.date ?? "");
   }, [gamesReady, days.length, day?.date, selectedDate, view, game]);
@@ -85,10 +110,16 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
     document.body.style.overflow = "hidden";
     close.current?.focus();
     const keydown = (event: KeyboardEvent) => {
+      // The portal/native dialog owns its own keyboard and focus lifecycle.
+      if (document.querySelector(".gb-venue-picker, dialog[open]")) return;
       if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); collapse.current(); }
       if (event.key !== "Tab") return;
       const boundary = embedded ? panel.current?.closest?.<HTMLElement>(".gb-venue-popup") ?? panel.current : panel.current;
-      const targets = [...boundary?.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], [tabindex="0"]') ?? []];
+      const targets = [...boundary?.querySelectorAll<HTMLElement>('button, a[href], input, select, textarea, [tabindex]') ?? []].filter(target => {
+        if (target.tabIndex < 0 || target.matches(':disabled, [aria-disabled="true"], input[type="hidden"]') || target.closest('[hidden], [inert]')) return false;
+        const style = window.getComputedStyle(target);
+        return style.visibility !== 'hidden' && style.visibility !== 'collapse' && target.getClientRects().length > 0;
+      });
       const first = targets[0]; const last = targets.at(-1);
       if (event.shiftKey && (document.activeElement === first || !boundary?.contains(document.activeElement))) { event.preventDefault(); last?.focus(); }
       else if (!event.shiftKey && (document.activeElement === last || !boundary?.contains(document.activeElement))) { event.preventDefault(); first?.focus(); }
@@ -101,7 +132,6 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
       else (document.querySelector<HTMLButtonElement>('.gb-venue-popup .gb-venue-handle') ?? document.querySelector<HTMLButtonElement>('.gb-venue-preview-button'))?.focus();
     };
   }, [active, embedded]);
-  const time = (value: string) => new Intl.DateTimeFormat("ru-RU", { timeZone: venue.timezone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(value));
   return <>
     {!embedded && <div className="gb-venue-sheet-backdrop" onClick={onDeselect} />}
     <div ref={panel} className="gb-venue-sheet" role={active && !embedded ? "dialog" : undefined} aria-modal={active && !embedded ? "true" : undefined} aria-labelledby={label}>
@@ -116,9 +146,9 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
         <h3>{venue.name}</h3><p>{venue.address}</p>
         <VenuePublicContacts value={venue.publicContacts} />
         {!gamesReady && <p role="status">Расписание временно недоступно</p>}
-        {gamesReady && games.length === 0 && <Link className="gb-venue-sheet-primary" href={venueCreatePath(new URLSearchParams({ venueId: venue.id }).toString())}>Создать игру на этой площадке</Link>}
-        {gamesReady && days.length > 0 && <button type="button" className="gb-venue-sheet-primary" onClick={() => setView("schedule")}>Показать игры на этой площадке</button>}
-      </div> : currentView === "game" && game ? <div className="gb-venue-sheet-detail"><GameHero game={game} /><GameTerms game={game} onVenueClick={() => setView("info")} /></div>
+        {gamesReady && games.length === 0 && <button type="button" className="gb-venue-sheet-primary" onClick={() => setView("create")}>Создать игру на этой площадке<span aria-hidden="true">→</span></button>}
+        {gamesReady && days.length > 0 && <button type="button" className="gb-venue-sheet-primary" onClick={() => setView("schedule")}>Показать игры на этой площадке<span aria-hidden="true">→</span></button>}
+      </div> : currentView === "create" ? <CreateGamePage key={`${venue.cityId}:${venue.id}`} embedded initialVenue={venue} onClose={() => setView("info")} /> : currentView === "game" && game ? <div className="gb-venue-sheet-detail"><GameHero game={game} /><GameTerms game={game} onVenueClick={() => setView("info")} /></div>
         : <div><h3>Игры на этой площадке</h3>
           <div className="gb-venue-sheet-dates" aria-label="Даты игр">{days.map(item => {
             const first = item.games[0]; if (!first) return null;
@@ -127,12 +157,7 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
               <span>{new Intl.DateTimeFormat("ru-RU", { timeZone: venue.timezone, day: "numeric", month: "short" }).format(new Date(first.startsAt))}</span>
             </button>;
           })}</div>
-          {day?.games.map(item => <button type="button" className="gb-venue-sheet-game" key={item.id} onClick={() => { setGameId(item.id); setView("game"); }}>
-            <span>{time(item.startsAt)}–{time(item.endsAt)}</span><span><strong>{item.title}</strong>
-              {item.levelRule.allowedLevelIds.length > 0 && <span>{item.levelRule.allowedLevelIds.join(", ")}</span>}
-              <small>Организатор</small><span className="gb-game-identity"><Avatar name={item.organizer.displayName} avatar={item.organizer.avatar} className="gb-discovery-avatar" />{item.organizer.displayName}</span>
-              <span className="gb-venue-sheet-count">{formatSeats(item)}</span></span>
-          </button>)}
+          {day?.games.map(item => <VenueSheetGameRow key={item.id} game={item} timezone={venue.timezone} onOpen={() => { setGameId(item.id); setView("game"); }} />)}
         </div>}
     </div>
   </>;

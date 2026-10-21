@@ -30,8 +30,9 @@ vi.mock("react", async importOriginal => ({
   },
 }));
 
-import { CreateGamePage } from "../src/components/consumer/pages/CreateGamePage";
+import { CreateGamePage, CreateGamePresentation } from "../src/components/consumer/pages/CreateGamePage";
 import { VenueSheet } from "../src/components/consumer/games/VenueSheet";
+import { venueCreatePath } from "../src/lib/games-venue-map";
 import { AuthEntry } from "../src/components/consumer/players/ProfileComposition";
 const city = { cityId: "city", timezone: "Europe/Moscow", cityName: "Москва" };
 vi.mock("../src/components/consumer/discovery/DiscoveryCityProvider", () => ({ useDiscoveryCity: () => ({ location: city }) }));
@@ -44,22 +45,31 @@ function elements(node: React.ReactNode): React.ReactElement<Record<string, unkn
   if (!isValidElement<Record<string, unknown>>(node)) return [];
   return [node, ...Children.toArray(node.props.children as React.ReactNode).flatMap(elements)];
 }
+let pageProps: React.ComponentProps<typeof CreateGamePage> = {};
 function render() {
-  hooks.cursor = 0; const tree = CreateGamePage(); hooks.effects.splice(0).forEach(effect => effect()); return tree;
+  hooks.cursor = 0; const page = CreateGamePage(pageProps);
+  const tree = CreateGamePresentation(page.props as React.ComponentProps<typeof CreateGamePresentation>);
+  hooks.effects.splice(0).forEach(effect => effect()); return tree;
 }
 function fromCta() {
   // Separate component instance: do not mix sheet and form hook slots.
-  const tree = VenueSheet({ venue, games: [], gamesReady: true, now: 0, active: false, embedded: true, onCollapse() {}, onDeselect() {} });
-  const cta = elements(tree).find(node => node.props.children === "Создать игру на этой площадке");
-  if (!cta || typeof cta.props.href !== "string") throw new Error("Missing create CTA");
-  const route = new URL(cta.props.href, "https://dev.gobadminton.ru");
+  const sheetProps = { venue, games: [], gamesReady: true, now: 0, active: false, embedded: true, onCollapse() {}, onDeselect() {} };
+  const tree = VenueSheet(sheetProps);
+  const cta = elements(tree).find(node => node.type === "button" && Children.toArray(node.props.children as React.ReactNode).includes("Создать игру на этой площадке"));
+  if (!cta) throw new Error("Missing create CTA");
+  expect(cta.props.href).toBeUndefined(); (cta.props.onClick as () => void)();
+  hooks.cursor = 0;
+  const create = elements(VenueSheet(sheetProps)).find(node => node.type === CreateGamePage);
+  if (!create) throw new Error("Missing embedded create");
+  pageProps = create.props as React.ComponentProps<typeof CreateGamePage>;
+  const route = new URL(venueCreatePath(new URLSearchParams({ venueId: venue.id }).toString()), "https://dev.gobadminton.ru");
   expect(route.pathname).toBe("/games/create"); expect(route.searchParams.get("venueId")).toBe(venue.id);
-  Object.assign(window.location, { search: route.search });
+  Object.assign(window.location, { search: "?venueId=unrelated" });
   hooks.slots = []; hooks.effects = []; hooks.cleanups = []; hooks.cursor = 0;
   return route;
 }
 beforeEach(() => {
-  mode = "ready"; catalog = [venue]; finishCatalog = undefined; requests.length = 0;
+  pageProps = {}; mode = "ready"; catalog = [venue]; finishCatalog = undefined; requests.length = 0;
   hooks.slots = []; hooks.effects = []; hooks.cleanups = []; hooks.cursor = 0;
   vi.stubGlobal("window", Object.assign(new EventTarget(), { location: { search: "" }, sessionStorage: { getItem: () => null, removeItem() {} } }));
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
@@ -98,7 +108,7 @@ it.each(["guest", "setup"] as const)("preserves encoded venueId through %s retur
 });
 it.each(["same", "foreign", "unknown"] as const)("selects only a loaded same-city catalog ID (%s)", kind => {
   catalog = kind === "foreign" ? [{ ...venue, cityId: "other" }] : kind === "unknown" ? [{ ...venue, id: "unknown" }] : [venue];
-  fromCta(); render();
+  const route = fromCta(); pageProps = {}; Object.assign(window.location, { search: route.search }); render();
   const triggerBefore = elements(render()).find(node => node.props.id === "venueId");
   if (triggerBefore) expect(elements(triggerBefore).some(node => node.props.children === venue.name)).toBe(false);
   return (async () => {

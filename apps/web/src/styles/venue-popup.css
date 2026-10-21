@@ -46,3 +46,42 @@
 .gb-consumer a.gb-venue-sheet-primary { display:block; box-sizing:border-box; text-align:center; text-decoration:none; color:var(--gb-ink); }
 @media (min-width:768px) { .gb-consumer .gb-venue-popup { left:auto; right:16px; width:420px; max-width:calc(100% - 32px); } }
 @media (prefers-reduced-motion:reduce) { .gb-consumer .gb-venue-popup { transition:none !important; } }
+
+/* ListRow + MediaBlock; the media pipeline belongs to GameCover. */
+.gb-consumer .gb-venue-sheet-game { grid-template-columns:88px minmax(0,1fr); }
+.gb-consumer .gb-venue-sheet-game-cover { width:100%; aspect-ratio:16/9; align-self:start; border-radius:var(--gb-radius-sm); overflow:hidden; }
+.gb-consumer .gb-venue-sheet-game-cover img { display:block; width:100%; height:100%; object-fit:cover; }
+.gb-consumer .gb-venue-contacts { margin:24px 0; }
+.gb-consumer .gb-venue-sheet-info .gb-venue-contacts h3 { font-size:18px; }
+.gb-consumer .gb-venue-contact-rows { display:grid; gap:8px; }
+.gb-consumer .gb-venue-contact-row { display:flex; align-items:center; gap:8px; min-height:44px; padding:10px 12px; border:1px solid var(--gb-line); border-radius:var(--gb-radius-sm); color:var(--gb-ink); text-decoration:none; }
+.gb-consumer .gb-venue-contact-row svg { flex-shrink:0; }
+.gb-consumer .gb-venue-contact-row > span:first-of-type { flex:1; }
+.gb-consumer .gb-venue-contact-messengers { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
+.gb-consumer .gb-venue-sheet-primary { display:flex; justify-content:space-between; align-items:center; gap:8px; text-align:left; }
+
+/* FormGroup / FormActions inside the bounded Drawer/BottomSheet, including popup420.
+   Keep mobile actions in the popup's scrolling surface, with no viewport-fixed bar. */
+.gb-consumer .gb-game-create--embedded { width:100%; max-width:100%; }
+.gb-consumer .gb-game-create--embedded .gb-game-fields,
+.gb-consumer .gb-game-create--embedded .gb-game-detail-grid,
+.gb-consumer .gb-game-create--embedded .gb-game-hero,
+.gb-consumer .gb-game-create--embedded .gb-game-schedule,
+.gb-consumer .gb-game-create--embedded .gb-game-facts { display:grid; grid-template-columns:minmax(0,1fr); }
+.gb-consumer .gb-game-create--embedded .gb-game-field--wide { grid-column:auto; }
+.gb-consumer .gb-game-create--embedded .gb-game-form-group { padding:20px 12px; }
+.gb-consumer .gb-game-create--embedded .gb-game-form-actions { display:flex; flex-direction:column; align-items:stretch; }
+.gb-consumer .gb-game-create--embedded .gb-game-form-actions .gb-c23-btn { width:100%; white-space:normal; }
+.gb-consumer .gb-game-create--embedded .gb-game-action { position:static; inset:auto; width:100%; max-height:none; padding:12px 0; box-shadow:none; }
+.gb-consumer .gb-game-create--embedded .gb-game-booking { position:static; padding:16px 0; box-shadow:none; }
+.gb-consumer .gb-game-create--embedded .gb-game-preview { padding-bottom:0; }
+.gb-consumer .gb-game-create--embedded .gb-game-hero { min-height:0; }
+.gb-consumer .gb-game-create--embedded .gb-game-hero__image { min-height:0; height:auto; aspect-ratio:16/9; }
+.gb-consumer .gb-game-create--embedded .gb-game-hero__copy { padding:20px 16px; }
+.gb-consumer .gb-game-create--embedded .gb-game-hero h1,
+.gb-consumer .gb-game-create--embedded .gb-create-header h1 { font-size:28px; }
+.gb-consumer .gb-game-create--embedded input:not([type="checkbox"]),
+.gb-consumer .gb-game-create--embedded select,
+.gb-consumer .gb-game-create--embedded textarea { max-width:100%; min-height:44px; }
+.gb-consumer .gb-game-create--embedded .gb-discovery-chips { flex-wrap:wrap; }
+.gb-consumer .gb-venue-sheet :focus-visible { outline:2px solid var(--gb-ink); outline-offset:2px; }
