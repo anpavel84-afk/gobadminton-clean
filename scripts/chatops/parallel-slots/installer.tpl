@@ -76,11 +76,51 @@ as_slots() { local u=$1; shift; setpriv --reuid="$u" --regid="$(id -g "$u")" --g
 luctl() { local uid; uid=$(lu_uid); setpriv --reuid="$LU" --regid="$(id -g "$LU")" --init-groups -- /usr/bin/env -i PATH=/usr/bin:/bin HOME="/home/$LU" XDG_RUNTIME_DIR="/run/user/$uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" systemctl --user "$@"; }
 must_fail() { local what=$1; shift; if "$@" >/dev/null 2>&1; then bad "изоляция: $what УДАЛОСЬ (ожидался отказ)"; fi; say "изоляция ok: $what -> отказ"; }
 
+# Mutations are limited to exact effective identities of the three owned services.
+unit_identities() {
+  local allow_missing=${1:-0} u fragment drop load identity names reload actual_fragment actual_drop
+  for u in gobadminton-slot@slot1.service gobadminton-slot@slot2.service gobadminton-supervisor.service; do
+    load=$(command systemctl show "$u" -p LoadState --value) || return 1
+    identity=$(command systemctl show "$u" -p Id --value) || return 1
+    names=$(command systemctl show "$u" -p Names --value) || return 1
+    actual_fragment=$(command systemctl show "$u" -p FragmentPath --value) || return 1
+    actual_drop=$(command systemctl show "$u" -p DropInPaths --value) || return 1
+    reload=$(command systemctl show "$u" -p NeedDaemonReload --value) || return 1
+    [ "$identity" = "$u" ] && [ "$names" = "$u" ] && [ "$reload" = no ] || return 1
+    if [ "$load" = not-found ] && [ "$allow_missing" = 1 ]; then
+      [ -z "$actual_fragment$actual_drop" ] || return 1
+      [ "$(command systemctl show "$u" -p ActiveState --value)" = inactive ] || return 1
+      continue
+    fi
+    [ "$load" = loaded ] || return 1
+    case "$u" in
+      gobadminton-slot@slot1.service) fragment=$UNITDIR/gobadminton-slot@.service; drop=$UNITDIR/gobadminton-slot@slot1.service.d/10-legacy-account.conf ;;
+      gobadminton-slot@slot2.service) fragment=$UNITDIR/gobadminton-slot@.service; drop=$UNITDIR/gobadminton-slot@slot2.service.d/20-runtime.conf ;;
+      gobadminton-supervisor.service) fragment=$UNITDIR/gobadminton-supervisor.service; drop= ;;
+    esac
+    [ "$actual_fragment" = "$fragment" ] && [ "$actual_drop" = "$drop" ] || return 1
+    [ -f "$fragment" ] && [ ! -L "$fragment" ] && [ "$(realpath -e -- "$fragment")" = "$fragment" ] || return 1
+    if [ -n "$drop" ]; then [ -f "$drop" ] && [ ! -L "$drop" ] && [ "$(realpath -e -- "$drop")" = "$drop" ] || return 1; fi
+  done
+}
+systemctl() {
+  case "${1:-}" in
+    start|stop|restart|try-restart|reload|reload-or-restart|enable|disable|mask|unmask)
+      local arg
+      for arg in "${@:2}"; do
+        case "$arg" in --now|--runtime|gobadminton-slot@slot1.service|gobadminton-slot@slot2.service|gobadminton-supervisor.service) ;; *) return 1 ;; esac
+      done
+      check_units && unit_identities || { echo "[parallel-slots] service identity/file validation failed; no service mutation attempted" >&2; return 1; }
+      ;;
+  esac
+  command systemctl "$@"
+}
+
 # Only these public properties are requested. Never read unit text, environment or credentials.
 # ExecStart is parsed in the pipe; only validated public arguments and file metadata leave it.
 legacy_properties() {
   local property value
-  for property in LoadState NeedDaemonReload FragmentPath DropInPaths ExecStart; do
+  for property in LoadState NeedDaemonReload Id Names FragmentPath DropInPaths ExecStart; do
     value=$(luctl show "$LUNIT" -p "$property" --value) || return 1
     printf '%s=%s\n' "$property" "$value"
   done
@@ -91,10 +131,12 @@ legacy_snapshot() {
 import json, os, re, shlex, stat, sys
 try:
     properties = dict(line.rstrip("\n").split("=", 1) for line in sys.stdin)
-    if set(properties) != {"LoadState", "NeedDaemonReload", "FragmentPath", "DropInPaths", "ExecStart"}:
+    if set(properties) != {"LoadState", "NeedDaemonReload", "Id", "Names", "FragmentPath", "DropInPaths", "ExecStart"}:
         raise ValueError("invalid properties")
     if properties["LoadState"] != "loaded" or properties["NeedDaemonReload"] != "no":
         raise ValueError("unloaded or stale unit")
+    if properties["Id"] != "gobadminton-autonomy.service" or properties["Names"] != "gobadminton-autonomy.service":
+        raise ValueError("legacy unit alias prohibited")
     def public_path(value):
         if not re.fullmatch(r"/[A-Za-z0-9_./:+-]+", value) or ".." in value.split("/"):
             raise ValueError("invalid public path")
@@ -309,20 +351,15 @@ expected = sys.stdin.buffer.read()
 try:
     info = os.lstat(path)
     if stat.S_ISLNK(info.st_mode):
-        if os.listxattr(path, follow_symlinks=False):
-            raise ValueError("unrecognized unit metadata")
-        target = os.readlink(path)
-        if dest:
-            os.symlink(target, dest)
-            os.chown(dest, info.st_uid, info.st_gid, follow_symlinks=False)
+        raise ValueError("unit symlinks/aliases prohibited")
     else:
-        if not stat.S_ISREG(info.st_mode):
-            raise ValueError("non-regular unit")
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_gid != 0 or info.st_nlink != 1 or stat.S_IMODE(info.st_mode) != 0o644:
+            raise ValueError("untrusted unit metadata")
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         with os.fdopen(fd, "rb") as source:
             info = os.fstat(source.fileno())
             # Reject metadata we cannot restore without copying unverified values.
-            if not stat.S_ISREG(info.st_mode) or os.listxattr(source.fileno()) or source.read(len(expected) + 1) != expected:
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_gid != 0 or info.st_nlink != 1 or stat.S_IMODE(info.st_mode) != 0o644 or os.listxattr(source.fileno()) or source.read(len(expected) + 1) != expected:
                 raise ValueError("unrecognized unit")
         if dest:
             with open(dest, "xb", opener=lambda p, flags: os.open(p, flags, 0o600)) as output:
@@ -336,6 +373,7 @@ except (OSError, ValueError):
 }
 
 check_units() {
+  [ "$(realpath -e -- "$UNITDIR")" = "$UNITDIR" ] || return 1
   local f d
   for d in "$UNITDIR/gobadminton-slot@slot1.service.d" "$UNITDIR/gobadminton-slot@slot2.service.d"; do
     [ ! -L "$d" ] && { [ ! -e "$d" ] || [ -d "$d" ]; } || return 1
@@ -760,6 +798,10 @@ write_unit() {
 [ "$(hostname)" = vmi3510488 ] || chk "это не vmi3510488"
 if [ "$DRY" != 1 ] && [ "$MODE" != preflight ]; then exec 8>/run/gb-ops.lock; flock -w 120 8 || bad "занята другая операция gb-ops"; fi
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/parallel-slots-install.XXXXXX"); trap 'rm -rf "$TMP"' EXIT
+# Signals must become nonzero EXIT status so transaction rollback cannot be skipped.
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # ------------------------------------------------------------------ embedded files (sha256-checked)
 unpack() { # unpack NAME SHA  (payload follows the marker line @@NAME@@)
@@ -846,6 +888,8 @@ fi
 if [ "$MODE" = install ]; then as "$LU" test -r "$L_KH" || chk "legacy account не читает исходный trusted known_hosts"; fi
 
 check_units || chk "unit-ы не совпадают с шаблонами установщика; неизвестное содержимое не сохраняется"
+if [ "$MODE" = install ]; then unit_identities 1 || chk "unrecognized effective slot/supervisor unit identity"
+else unit_identities || chk "unrecognized effective installed service identity"; fi
 
 idle_of() { # idle_of STATE_DIR -> prints idle|busy:<phase>:<issue>|missing
   python3 -I -c 'import json,sys,os,stat
@@ -955,6 +999,7 @@ slot2_readiness() {
   config_files check || { say "небезопасная конфигурация installed slots"; return 1; }
   installed_payloads || { say "установленные payload не совпадают с reviewed installer"; return 1; }
   check_units || { say "unit-ы не совпадают с reviewed installer"; return 1; }
+  unit_identities || { say "effective slot/supervisor unit identity not confirmed"; return 1; }
   [ "$(systemctl show gobadminton-slot@slot2.service -p User --value)" = "$S2" ] \
     && [ "$(systemctl show gobadminton-slot@slot2.service -p KillMode --value)" = control-group ] \
     && [ "$(systemctl show gobadminton-slot@slot2.service -p ProtectHome --value)" = yes ] \
@@ -1021,6 +1066,7 @@ if [ "$MODE" = preflight ] || [ "$MODE" = activate ]; then
     local rc=$? i
     [ "$rc" = 0 ] && return 0
     trap - EXIT
+    trap '' HUP INT TERM
     set +e
     if [ "$ACT_STARTED" = 1 ]; then
       # Stop dispatch first; never discard an active/blocked checkpoint or lower capacity under it.
@@ -1128,6 +1174,7 @@ if [ "$MODE" = remove ]; then
     local rc=$? d i
     [ "$rc" = 0 ] && return 0
     trap - EXIT
+    trap '' HUP INT TERM
     set +e
     echo "[parallel-slots] ОТКАТ --remove после ошибки (rc=$rc)" >&2
     if [ "$REMOVE_LEGACY_START" = 1 ]; then
@@ -1314,7 +1361,11 @@ try:
 finally:
     if os.path.exists(tmp): os.unlink(tmp)
 PY
-  systemctl enable --now gobadminton-slot@slot1.service gobadminton-supervisor.service || echo "[parallel-slots] НЕ удалось запустить slot1 + supervisor: запустите вручную, max_parallel=1" >&2
+  if ! systemctl enable --now gobadminton-slot@slot1.service gobadminton-supervisor.service; then
+    echo "[parallel-slots] checkpoint сохранён; запуск slot1 + supervisor не подтверждён, нужна OPS-сверка unit identity, max_parallel=1" >&2
+    logl "rollback HELD: checkpoints retained; service identity/start unconfirmed"
+    return 1
+  fi
   echo "[parallel-slots] slot1 уже взял задачу: автоматический откат состояния запрещён; slot1 оставлен запущенным, supervisor max_parallel=1. Нужна сверка вручную; резерв $BK" >&2
   logl "rollback HELD: slot1 busy; slot1 + supervisor max_parallel=1; reconciliation required"
 }
@@ -1324,6 +1375,7 @@ rollback() {
   local -a rollback_errors=()
   [ "$rc" = 0 ] && return 0
   trap - EXIT
+    trap '' HUP INT TERM
   set +e
   echo "[parallel-slots] ОТКАТ после ошибки (rc=$rc)" >&2
   if [ "$DONE_STARTED" = 1 ]; then

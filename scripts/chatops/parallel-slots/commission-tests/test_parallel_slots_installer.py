@@ -44,6 +44,8 @@ luctl() {
     [[ $# = 5 && $1 = show && $2 = "$LUNIT" && $3 = -p && $5 = --value ]] || return 91
     case "$4" in
         LoadState) printf 'loaded\n' ;;
+        Id) printf '%s\n' "${TEST_ID:-$LUNIT}" ;;
+        Names) printf '%s\n' "${TEST_NAMES:-$LUNIT}" ;;
         NeedDaemonReload) printf '%s\n' "${RELOAD:-no}" ;;
         FragmentPath) printf '%s\n' "${FRAGMENT:-$TEST_ROOT/legacy.service}" ;;
         DropInPaths) printf '%s\n' "${DROPINS:-$TEST_ROOT/dropin.conf}" ;;
@@ -140,6 +142,72 @@ remove_created_group "$LIB/.gb-slots-group-created"
         self.assertNotIn('forbidden-global-scan',events)
         self.assertNotIn('forbidden-group-delete',events)
         self.assertIn('GID и архивы сохранены',events)
+
+    def test_service_control_refuses_aliases_foreign_fragments_and_stale_units(self):
+        helpers = '# Mutations are limited' + INSTALLER.split('# Mutations are limited',1)[1].split('# Only these public properties',1)[0]
+        fixture = r'''
+mkdir -p "$UNITDIR/gobadminton-slot@slot1.service.d" "$UNITDIR/gobadminton-slot@slot2.service.d" "$TEST_ROOT/bin"
+touch "$UNITDIR/gobadminton-slot@.service" "$UNITDIR/gobadminton-supervisor.service" "$UNITDIR/gobadminton-slot@slot1.service.d/10-legacy-account.conf" "$UNITDIR/gobadminton-slot@slot2.service.d/20-runtime.conf"
+if [ "$TEST_CASE" = symlink ]; then
+    rm "$UNITDIR/gobadminton-supervisor.service"
+    touch "$UNITDIR/unrelated.service"
+    ln -s "$UNITDIR/unrelated.service" "$UNITDIR/gobadminton-supervisor.service"
+fi
+cat > "$TEST_ROOT/bin/systemctl" <<'FAKE'
+#!/bin/bash
+if [ "$1" != show ]; then printf 'MUTATION %s\n' "$*" >> "$TEST_ROOT/events"; exit 0; fi
+u=$2; p=$4
+case "$p" in
+  LoadState) if [ "$TEST_CASE" = missing ]; then echo not-found; else echo loaded; fi ;;
+  Id) if [ "$TEST_CASE:$u" = id:gobadminton-supervisor.service ]; then echo unrelated.service; else echo "$u"; fi ;;
+  Names) if [ "$TEST_CASE:$u" = names:gobadminton-supervisor.service ]; then echo "$u unrelated.service"; else echo "$u"; fi ;;
+  NeedDaemonReload) if [ "$TEST_CASE" = reload ]; then echo yes; else echo no; fi ;;
+  ActiveState) echo inactive ;;
+  FragmentPath)
+    if [ "$TEST_CASE" = missing ]; then exit 0; fi
+    if [ "$TEST_CASE:$u" = fragment:gobadminton-supervisor.service ]; then echo /unrelated.service
+    elif [ "$u" = gobadminton-supervisor.service ]; then echo "$TEST_ROOT/units/gobadminton-supervisor.service"
+    else echo "$TEST_ROOT/units/gobadminton-slot@.service"; fi ;;
+  DropInPaths)
+    if [ "$TEST_CASE" = missing ]; then exit 0; fi
+    if [ "$TEST_CASE" = dropin ]; then echo /unrelated.conf
+    elif [ "$u" = gobadminton-slot@slot1.service ]; then echo "$TEST_ROOT/units/gobadminton-slot@slot1.service.d/10-legacy-account.conf"
+    elif [ "$u" = gobadminton-slot@slot2.service ]; then echo "$TEST_ROOT/units/gobadminton-slot@slot2.service.d/20-runtime.conf"; fi ;;
+  *) exit 91 ;;
+esac
+FAKE
+chmod 700 "$TEST_ROOT/bin/systemctl"
+PATH="$TEST_ROOT/bin:$PATH"; export PATH
+check_units() { return 0; } # File-byte validation has a separate adversarial regression.
+systemctl stop gobadminton-supervisor.service
+'''
+        for scenario in ('safe','id','names','fragment','dropin','reload','missing','symlink'):
+            with self.subTest(scenario=scenario):
+                result, events, _ = self.shell(helpers+fixture,TEST_CASE=scenario)
+                self.assertEqual(result.returncode==0,scenario=='safe',result.stderr)
+                self.assertEqual('MUTATION stop' in events,scenario=='safe',events)
+
+    def test_unit_file_validation_rejects_symlinks_hardlinks_and_foreign_owners_before_read(self):
+        import sys
+        code = COMMON.split('checked_unit() {',1)[1].split("python3 -I -c '\n",1)[1].split("' \"$@\"",1)[0]
+        for scenario in ('safe','symlink','hardlink','fifo','foreign'):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp); path=root/'unit.service'; path.write_bytes(b'expected public unit'); path.chmod(0o644)
+                if scenario=='hardlink': os.link(path,root/'other')
+                if scenario in ('symlink','fifo'):
+                    path.unlink()
+                    if scenario=='symlink': path.symlink_to(root/'private-fixture')
+                    else: os.mkfifo(path)
+                real_lstat,real_fstat=os.lstat,os.fstat
+                def metadata(info):
+                    attrs={key:getattr(info,key) for key in ('st_mode','st_nlink','st_dev','st_ino','st_size','st_atime_ns','st_mtime_ns','st_ctime_ns')}
+                    return types.SimpleNamespace(**attrs,st_uid=1002 if scenario=='foreign' else 0,st_gid=0)
+                with patch.object(sys,'argv',['-',str(path)]),patch.object(sys,'stdin',types.SimpleNamespace(buffer=io.BytesIO(b'expected public unit'))),patch.object(os,'lstat',side_effect=lambda p:metadata(real_lstat(p))),patch.object(os,'fstat',side_effect=lambda fd:metadata(real_fstat(fd))):
+                    if scenario=='safe': exec(compile(code,'<unit-public-metadata-fixture>','exec'),{})
+                    else:
+                        with patch.object(os,'fdopen',side_effect=AssertionError('rejected unit bytes must not be read')),self.assertRaises(SystemExit) as error:
+                            exec(compile(code,'<unit-public-metadata-fixture>','exec'),{})
+                        self.assertEqual(error.exception.code,1)
 
     def test_legacy_scope_rejects_other_repositories_and_state_paths(self):
         for old, new in (
@@ -317,7 +385,7 @@ printf '%s\\n' "$LEGACY_META" | legacy_args
 ''')
         self.assertEqual(result.returncode, 0, result.stderr)
         requested = [line.split(' -p ')[1].split()[0] for line in events.splitlines()]
-        self.assertEqual(requested, ['LoadState', 'NeedDaemonReload', 'FragmentPath', 'DropInPaths', 'ExecStart'])
+        self.assertEqual(requested, ['LoadState', 'NeedDaemonReload', 'Id', 'Names', 'FragmentPath', 'DropInPaths', 'ExecStart'])
         self.assertIn('--known-hosts=/home/agentagency-dev/.ssh/known_hosts', result.stdout)
         self.assertNotIn('luctl cat', INSTALLER)
         self.assertNotIn('redact_unit', INSTALLER)
@@ -325,7 +393,7 @@ printf '%s\\n' "$LEGACY_META" | legacy_args
     def test_legacy_fragment_dropin_effective_args_and_reload_drift_block(self):
         for change in ('printf changed >> "$TEST_ROOT/dropin.conf"',
                        'printf changed >> "$TEST_ROOT/legacy.service"',
-                       'TEST_START="$TEST_START --wait-timeout 123"', 'RELOAD=yes',
+                       'TEST_START="$TEST_START --wait-timeout 123"', 'RELOAD=yes', 'TEST_ID=unrelated.service', 'TEST_NAMES=unrelated.service',
                        'touch "$TEST_ROOT/new.conf"; DROPINS="$TEST_ROOT/new.conf"',
                        'touch "$TEST_ROOT/new.service"; FRAGMENT="$TEST_ROOT/new.service"'):
             result, _, _ = self.shell(LEGACY_FIXTURE + '\nLEGACY_META=$(legacy_snapshot)\n' + change + '\nlegacy_unchanged\n')
@@ -541,6 +609,56 @@ slot2_readiness() { return 0; }
         self.assertNotIn('systemctl', events)
         self.assertNotIn('etc/supervisor.json', files)
         self.assertNotIn('legacy/RETIRED_TO_SLOT.json', files)
+
+    def test_signals_run_transaction_rollback_with_nonzero_status(self):
+        signals = INSTALLER.split('# Signals must become nonzero EXIT status so transaction rollback cannot be skipped.\n', 1)[1].split('#', 1)[0].split('\n', 3)[:3]
+        handlers = '\n'.join(signals) + '\n'
+        for signal, code in (('HUP', 129), ('INT', 130), ('TERM', 143)):
+            for phase in ('install', 'activation', 'remove'):
+                with self.subTest(signal=signal, phase=phase):
+                    if phase == 'install':
+                        body = """
+DONE_STARTED=0 LEGACY_STOPPED=1 LEGACY_ENABLED=enabled LEGACY_MIGRATION_STARTED=1
+UNITS_CHANGED=0 ETC_CHANGED=0 GROUP_CREATED=0
+printf 'tombstone\\n' > "$L_STATE/RETIRED_TO_SLOT.json"
+restore_units() { return 0; }
+trap rollback EXIT
+""" + handlers + 'kill -s ' + signal + ' "$$"\n'
+                        result, events, files = self.shell(body)
+                        self.assertIn('legacy start', events)
+                        self.assertNotIn('legacy/RETIRED_TO_SLOT.json', files)
+                    elif phase == 'activation':
+                        body = """
+printf '{"slots":["slot1","slot2"],"max_parallel":1}\\n' > "$ETC/supervisor.json"
+slot2_readiness() { return 0; }
+systemctl() {
+ printf '%s\\n' "systemctl $*" >> "$TEST_ROOT/events"
+ case "$1" in
+  is-enabled) printf 'disabled\\n' ;;
+  is-active) printf 'inactive\\n' ;;
+  stop) kill -s "$TEST_SIGNAL" "$$" ;;
+ esac
+}
+""" + handlers + ACTIVATION
+                        result, events, files = self.shell(body, TEST_SIGNAL=signal)
+                        self.assertIn('activation rolled back', events)
+                        self.assertEqual(json.loads(files['etc/supervisor.json'])['max_parallel'], 1)
+                    else:
+                        remove = '  remove_rollback() {' + INSTALLER.split('  remove_rollback() {', 1)[1].split("  trap 'remove_rollback;", 1)[0]
+                        body = """
+REMOVE_STOPPED=1 REMOVE_LEGACY_START=0 REMOVE_CONFIG_RESTORED=0 REMOVE_LIBRARY_STARTED=0
+REMOVE_DIRS_MOVED=()
+REMOVE_UNITS=(gobadminton-supervisor.service gobadminton-slot@slot1.service gobadminton-slot@slot2.service)
+REMOVE_ACTIVE=(active active inactive)
+REMOVE_ENABLED=(enabled enabled disabled)
+REMOVE_LEGACY_ENABLED=disabled
+restore_units() { say restored-units; }
+""" + remove + '\ntrap remove_rollback EXIT\n' + handlers + 'kill -s ' + signal + ' "$$"\n'
+                        result, events, files = self.shell(body)
+                        self.assertIn('systemctl start gobadminton-slot@slot1.service', events)
+                        self.assertNotIn('legacy start', events)
+                    self.assertEqual(result.returncode, code, result.stderr)
+                    self.assertEqual(files['legacy/state.json'], b'{"active": null, "done": [30]}')
 
     def test_failed_migration_install_resumes_untouched_legacy_and_keeps_backup(self):
         result, events, files = self.shell('''
