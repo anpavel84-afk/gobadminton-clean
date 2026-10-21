@@ -30,3 +30,11 @@ V1 CLI author completed: 138 core tests + 2 installer tests PASS; this is author
 V2 final source candidate fixes the enumerated commissioning issues. CLI self-check: 151 executor/installer tests and 8 monitor tests PASS. Installer SHA256 dc4e3d52a86f7b06d1fc6145c787cfe34292c6c11ccee3cd9772ebf9cca3ab6b is undergoing independent security review PID1552692; NOT INSTALLED. Separate literal metadata-pin helper SHA25657400728a9fdccdae9957a8097bca156db6a9d74a31473d10321a2c6edeef5be review PID1560587; no gate/instruction changes.
 
 #157 final prompt v4 SHA256 cc6ed0d9227c3052d19e90863427b422659f0c4a28c66f24d14e998a9bd7e30b has MOZHNO (report83ddcca807e5ebbe457f94361912949019bd786dedbb985b068946a985ff3dcc). Both #156 and #157 await runtime installation before immutable admission comments. Pending visual gates remain separate from source QA.
+
+## 2026-10-21T20:16:45.879031+00:00 — V2 INSTALLER REJECTED
+
+Independent review found Rule7 rollback defect: System.status rejects failed service startup state before restoration, leaving new files and partial service state. Exact V2 installer dc4e3d52… is NOT APPROVED and NOT INSTALLED. V3 narrow CLI correction running PID1586806, run.N8Qu9Y. Executor/slots/monitor payload hashes must remain unchanged; only installer recovery, tests, docs and generated shell may change.
+
+Metadata helper exact57400728… independently PASS and gb-run DRY rc0 (20261021-221500-inst-slot-review-continuity-meta-1604121.log). It is NOT INSTALLED; apply only after main runtime passes review/DRY and installs. Initial metadata rejection came from authorization-record mode0600; loader requires0644. Corrected mode only, reran independent review; no instruction/gate alteration.
+
+Monitor now reports #156/#157 definitions independently reviewed but not started. No immutable admission comments yet. Live #151 blocked, #152 done; source slots fresh and backlog available.
