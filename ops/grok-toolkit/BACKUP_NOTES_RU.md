@@ -317,3 +317,13 @@
 - PR100 open/unmerged, branchops/parallel-slots-v1. Последнийreview20Oct023212Z-2125543 VERDICTFAIL: known_hosts installer947 scopeRule2 и штатныйSSHpush decodedexecutor770 scopeRule3. WAIVEDтолькоgb-slotsmembership/locks. Нетslotunitв/etc/systemd/systeminventory, installationнеподтверждена/не выполнена.
 - BacklogOPS-slots stale noteисправлена, priority0; gb-run monitor-slots-priority-audit rc0/strict49PASS. Лог /var/log/gb-ops/runs/20261021-135015-monitor-slots-priority-audit-2699276.log. Прежнее«окнопростоя/OwnerGO»скрывалоFAIL.
 - Не устанавливатьстарыйpayloadповерхновогоexecutor. Сначалаbaseline/diff/independentreview, actualcapabilityslot2 иизоляция; дизайнinitial1active значитдля2активныхещёготовность. ВопроспараллельностиподнятOwnerдляускорения, deployment/newrightsневыводятсяизодноговопроса. Не копироватьключи/auth. Сериализоватьmerge/DEV; общийanonymousAPIостаётсяузкимместом.
+
+
+## 21.10 — Owner поручил довести два слота до запуска
+- Прямое поручение: подготовить предварительные работы, снять блокеры, глубоко изучить процесс, выполнить и назвать только необходимые Owner-действия. Рутинные команды не перекладывать на Павла; permissions/review/idle не обходить.
+- Codex OPS r10 PID2765011 запущен: parallel-slots-r10.brief.md / target parallel-slots-r10. Isolated input содержит exact installer0d42b69a..., decoded payload, live executor788c5f75..., прежний FAIL и park-drift recovery. Ничего live не изменено. Забрать результат, проверить diff/tests и точное независимое review до apply.
+- Подтверждено metadata-only: gb-slot2 uid978/home /srv/gb-slots/slot2/home отсутствует; own Codex/Git setup отсутствует. gb-supervisor uid979 существует. Не создавать/копировать credentials автоматически и не удалять существующих пользователей.
+- Дополнительные operational blockers: задачи без locks => global; общий docs/handoffs/** конфликтует. Подготовить реальные независимые scopes/точные handoff paths, не ослаблять collision checks. Monitor writer пока читает legacy service/state — после миграции нужна совместимая доставка статусов обоих слотов с сохранением49backlog IDs.
+- Budget в slots.py — локальные daily call caps, не измеренная недельная квота. Не утверждать, что weeklyUNKNOWN требует блокировать утверждённые daily limits; автоматическая межпровайдерная балансировка остаётся выключена.
+- PR100 audit: https://github.com/anpavel84-afk/gobadminton-clean/pull/100#issuecomment-6315393091 . Все прежние findings переданы в r10; свежие monitor/admission findings проверить после результата.
+- #147 RESUME обработан: attempt3/head9d3e092cc30796ffc0096c50584a771e60c18ef3, последняяphasepr_wait, QA ещёnull. Не прерывать ради install. M2R149 planning2685420 ещёработает, admissionнет.
