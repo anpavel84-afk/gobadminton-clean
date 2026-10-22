@@ -78,11 +78,19 @@ def reconcile(api, ssh, event, name):
     # Routing selection belongs to root config or an explicit authorized dispatch; never task mutation.
     profile = event.get('inputs', {}).get('profile') or 'auto'
     intents = plan(a, s, snap, candidates, profile)
+    from queue_diagnostics import explain
+    report = explain(s, snap, issues, candidates, intents, profile)
     Path('evidence').mkdir(exist_ok=True)
-    Path('evidence/reconcile.json').write_text(json.dumps(dict(snapshot=snap, intents=intents), sort_keys=True))
+    Path('evidence/reconcile.json').write_text(json.dumps(dict(snapshot=snap, intents=intents, planning=report), sort_keys=True))
     if snap['mode'] != 'active':
         print('Shadow: source effects disabled; admitted intents=' + str(len(candidates)))
         return
+    # Existing authenticated restricted SSH: this closed DATA-ONLY report cannot start a
+    # task, alter any checkpoint/budget/lease, or mark a process running. No write token leaves Actions.
+    controller = subprocess.check_output(['/usr/bin/git','rev-parse','HEAD'], text=True).strip()
+    ssh({'action':'train','stage':'planning','controller_sha':controller,
+         'run':int(os.environ['GITHUB_RUN_ID']),'run_attempt':int(os.environ['GITHUB_RUN_ATTEMPT']),
+         'report':report})
     for descriptor in intents:
         api('actions/workflows/train-stage.yml/dispatches', dict(ref='dev', inputs={
             'operation': json.dumps(descriptor, sort_keys=True, separators=(',', ':'))}))

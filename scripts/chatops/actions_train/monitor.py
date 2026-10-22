@@ -31,19 +31,37 @@ def project(card, now=None):
     elif last.get('status') == 'deferred': status = 'error'
     elif confirmed and now - confirmed > 3600: status = 'stale'
     elif phase == 'done': status = 'confirmed'
+    idle = not a or phase == 'done'
+    planning = card.get('planning')
+    reason = last.get('reason') or ('root migration not activated' if not card['owned'] else 'stage not_started' if not pending else None)
+    if idle and not pending:
+        status = 'waiting' if card['owned'] else 'not_started'
+        if planning:
+            labels = {'no_eligible_admission':'Нет допущенных готовых задач',
+                      'provider_or_budget':'Нет доступной пары автор/QA или исчерпан бюджет',
+                      'dispatch_pending':'Подходящая задача передана Actions; запуск ещё не подтверждён',
+                      'dependencies_or_conflicts':'Ожидание зависимостей или освобождения путей',
+                      'not_owned':'Управление слотом не передано Actions','occupied':'Слот занят'}
+            counts = planning['counts']
+            reason = (labels[planning['reason']] + ': без допуска ' + str(counts['not_admitted']) +
+                      ', отложено ' + str(counts['deferred']) + ', зависимости ' + str(counts['dependency']) +
+                      ', конфликты ' + str(counts['conflict']) + '. Проверка очереди: run ' + str(planning['workflow_run']))
+            if now - planning['observed_at'] > 3600:
+                status = 'stale'; reason = 'Проверка очереди устарела. Последнее подтверждение: ' + reason
+        else: reason = 'Нет активной задачи; свежий результат планирования ещё не получен'
     return dict(schema='GB_ACTIONS_MONITOR_V1', stages=list(STAGES), stage=stage,
                 status=status, issue=a.get('issue'), attempt=a.get('attempt'), head=head, pr=a.get('pr'),
                 qa=dict(status='not_started' if not qa else ('error' if qa.get('verdict') == 'FAIL' else 'confirmed') if qa.get('reviewed_sha') == head else 'unknown',
                         verdict=qa.get('verdict'), head=qa.get('reviewed_sha')),
                 ci=dict(status='not_started' if not ci else ('error' if ci.get('failed') else 'confirmed') if ci.get('sha') == head else 'unknown',
                         run=ci.get('id'), head=ci.get('sha')),
-                workflow_run=last.get('workflow_run'), workflow_attempt=last.get('workflow_attempt'),
+                workflow_run=(pending or last).get('workflow_run'), workflow_attempt=(pending or last).get('workflow_attempt'),
                 operation=pending.get('stage') if pending else last.get('stage'),
                 process=cli.get('process'), supervisor=pending.get('process') if pending else None,
-                model=cli.get('model') if pending else (last.get('routing') or confirmed_event.get('routing')),
+                model=cli.get('model') if pending else None if idle else (last.get('routing') or confirmed_event.get('routing')),
                 process_observed_at=cli.get('observed_at'), last_confirmed_event=confirmed,
-                wait_reason=last.get('reason') or ('root migration not activated' if not card['owned'] else
-                                                  'stage not_started' if not pending else None),
+                wait_reason=reason, planning=planning,
+                previous_result=dict(issue=last.get('issue'), reason=last.get('reason'), status=last.get('status')) if idle else None,
                 alerts='not_applicable')  # This package does not invent a notification channel.
 
 
