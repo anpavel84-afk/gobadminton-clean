@@ -153,6 +153,14 @@ def journal(slot):
     return dict(generation=0, operations={}, pending=None, deferred=[], last=None, stage_counts={})
 
 
+def recovery_journal():
+    from recovery import empty, SCHEMA
+    path = STATE / 'recovery.json'
+    value = read(path, 0) if path.exists() else empty()
+    need(value.get('schema') == SCHEMA, 'invalid recovery receipt cache')
+    return value
+
+
 def snapshot(policy):
     result = dict(schema='GB_ACTIONS_TRAIN_V1', mode=policy['mode'], slots={})
     try: planning = read(STATE / 'planning.json', 0, 65536)
@@ -168,8 +176,10 @@ def snapshot(policy):
             pending = dict(key=pending, status='running' if alive(op.get('process')) else 'unknown',
                            stage=op['binding']['stage'], process=op.get('process'), binding=op['binding'],
                            workflow_run=op['run'], workflow_attempt=op['run_attempt'],
-                           recoverable=op['binding']['stage'] in ('publish', 'integrate', 'promote', 'dev')
-                           and op.get('recovery_attempts', 0) < 3)
+                           recoverable=(op['binding']['stage'] in ('publish', 'integrate', 'promote', 'dev')
+                           and op.get('recovery_attempts', 0) < 3) or (op['binding']['stage'] == 'qa'
+                           and op.get('recovery_attempts', 0) < 1
+                           and __import__('qa_recovery').safe_pending(j,state,alive)))
         process = None
         try:
             user = pwd.getpwnam('agentagency-dev' if slot == 'slot1' else 'gb-slot2')
@@ -199,6 +209,14 @@ def snapshot(policy):
             result['slots'][slot]['planning'] = dict(planning['report']['slots'][slot],
                 counts=planning['report']['counts'], decisions=planning['report']['decisions'],
                 observed_at=planning['observed_at'], workflow_run=planning['run'])
+    if policy.get('recovery', {}).get('enabled'):
+        result['recovery'] = recovery_journal()
+        # A lost process never resets a model reservation. Expose the honest limitation.
+        for r in result['recovery']['receipts'].values():
+            if r['status'].endswith('_pending'):
+                c = result['slots'][r['frozen']['slot']]
+                if not c['pending'] or c['pending']['status'] != 'running':
+                    r.update(status='review-needed', reason='ambiguous read-only model outcome; reservation spent; no automatic replay')
     return result
 
 
@@ -275,6 +293,10 @@ def supervisor(req, policy, key, root_lock):
             os.environ.clear()
             os.environ.update(PATH='/usr/bin:/bin', LANG='C.UTF-8', HOME=user.pw_dir, USER=user.pw_name)
             req['_task_hash'] = j['operations'][key].get('task_hash')
+            if j['operations'][key].get('recovery_admission'):
+                req['_recovery_admission'] = j['operations'][key]['recovery_admission']
+            if j['operations'][key].get('recovery_data'):
+                req['_recovery_data'] = j['operations'][key]['recovery_data']
             from stage import entry
             value = entry(dict(req), policy)
             raw = json.dumps(value).encode()
@@ -318,6 +340,18 @@ def supervisor(req, policy, key, root_lock):
         op = j['operations'][key]
         state, _ = checkpoint(slot)
         changed = digest(state) != op['before']
+        recovery_record = None
+        if op.get('recovery_key'):
+            from recovery import finish
+            cache = recovery_journal()
+            current_policy = read(POLICY, 0, 16384)
+            recovery_record = finish(cache, op['recovery_key'], req['stage'], value, current_policy)
+            if recovery_record['status'] == 'publish_ready':
+                cache['receipts'][op['recovery_key']]['publication_run'] = {'run': req['run'], 'attempt': req['run_attempt']}
+                recovery_record = dict(cache['receipts'][op['recovery_key']])
+            atomic(STATE / 'recovery.json', cache)
+            changed = True  # receipt transition, NEVER a product/source completion
+            value = dict(status='confirmed', recovery=recovery_record)
         active = state['active']
         value['checkpoint'] = None if not active else {k: active.get(k) for k in (
             'issue', 'phase', 'head', 'attempt', 'pr', 'release_id')}
@@ -337,10 +371,28 @@ def supervisor(req, policy, key, root_lock):
                          workflow_run=req['run'], workflow_attempt=req['run_attempt'], changed=changed,
                          routing=value.get('routing'), checkpoint=value['checkpoint'])
         if value['status'] == 'confirmed': j['confirmed'] = dict(j['last'])
+        if recovery_record: j['last']['recovery'] = recovery_record
         if value['status'] != 'unknown': j['pending'] = None
         if value.get('safe_release'):
             j['deferred'].append(dict(issue=req['issue'], reason=value.get('reason'), operation=key))
             j['generation'] += 1
+            if policy.get('recovery', {}).get('enabled'):
+                # Only the exact pre-effect terminal snapshot can enter diagnosis. Never trust
+                # an edited/unrelated slot archive as a new product authorization.
+                from recovery import enroll
+                cache = recovery_journal()
+                try:
+                    user = pwd.getpwnam('agentagency-dev' if slot == 'slot1' else 'gb-slot2')
+                    entries = read(AUTONOMY / 'slots' / slot / 'actions-deferred.json', user.pw_uid)['entries']
+                    entry = entries[-1]
+                    need(entry['snapshot'] == op.get('checkpoint_before', {}).get('active')
+                         and entry['issue'] == req['issue'], 'deferral differs from frozen pre-effect checkpoint')
+                    done = checkpoint('slot1')[0]['done'] + checkpoint('slot2')[0]['done']
+                    enroll(cache, entry, slot, read(POLICY, 0, 16384), future=True, done=done)
+                except (Refused, KeyError, ValueError, TypeError, OSError):
+                    cache['blocked'][key] = dict(issue=req['issue'], slot=slot, status='needs-owner',
+                         reason='safe deferral not eligible for exact recovery enrollment; preserve archive for review')
+                atomic(STATE / 'recovery.json', cache)
         integration = STATE / 'integration.json'
         active = state['active']
         if integration.exists() and read(integration, 0)['slot'] == slot and (value['status'] == 'confirmed' or value.get('safe_release')) and (
@@ -379,6 +431,59 @@ def hosted_identity(req, policy):
          and ('ref: ' + policy['controller_sha']).encode() in raw, 'trusted workflow/checkout changed')
 
 
+def recovery_request(req, policy):
+    """Same root lock, same single-flight slot operation; never claims/resets a product issue."""
+    from recovery import reserve
+    slot = req['slot']; key = digest(binding(req)); j = journal(slot)
+    archive = STATE / 'history' / slot / (key + '.json')
+    if key not in j['operations'] and archive.exists():
+        old = read(archive, 0)
+        return dict(status=old['result']['status'], key=key, result=old['result'])
+    if key in j['operations']:
+        op = j['operations'][key]
+        if j['pending'] == key:
+            return dict(status='running' if alive(op.get('process')) else 'unknown', key=key,
+                        reason='read-only recovery reservation cannot be replayed')
+        return dict(status=op['result']['status'], key=key, last=j['last'], result=op['result'])
+    need(not j['pending'] and req['generation'] == j['generation'], 'stale/pending recovery generation')
+    state, _ = checkpoint(slot)
+    need(not state['active'] or state['active']['phase'] == 'done', 'normal source slot occupied')
+    guard(slot, policy)
+    cache = recovery_journal()
+    receipt_key, recovery_data = reserve(cache, req, policy)
+    done = checkpoint('slot1')[0]['done'] + checkpoint('slot2')[0]['done']
+    need(req['issue'] not in done, 'accepted task must never be resurrected')
+    _, s = live()
+    frozen = recovery_data['frozen']
+    record = s.task_record(frozen['issue'], frozen['snapshot']['task'])
+    other = 'slot2' if slot=='slot1' else 'slot1'
+    other_state, _ = checkpoint(other); other_active=other_state.get('active')
+    other_j=journal(other); other_op=other_j.get('operations',{}).get(other_j.get('pending'),{})
+    if other_active and other_active['phase']!='done':
+        need(not s.conflicts(record,s.task_record(other_active['issue'],other_active['task'])),
+             'recovery waiting for conflicting product paths; reservation not spent')
+    if other_op.get('record'):
+        need(not s.conflicts(record,other_op['record']), 'recovery waiting for pending source claim')
+    # A depleted subscription-call budget is a wait reason, not a spent diagnostic run.
+    from core import route
+    budget=s.Budget(Path('/etc/gobadminton-slots/budgets.json'),AUTONOMY/'outbox',AUTONOMY/'locks/registry.lock')
+    route(s,frozen['snapshot']['task'],'qa','codex',budget,slot)
+    op = dict(record=record,
+         task_hash=frozen['task_hash'], binding=binding(req), run=req['run'], run_attempt=req['run_attempt'],
+         before=digest(state), started_at=int(time.time()), process=None,
+         recovery_key=receipt_key, recovery_data=recovery_data)
+    # Write-ahead model reservation first. A crash between journals consumes the reservation
+    # and exposes review-needed; it NEVER repeats diagnosis or review after restart.
+    atomic(STATE / 'recovery.json', cache)
+    j['operations'][key] = op; j['pending'] = key
+    atomic(STATE / (slot + '.json'), j)
+    pid = os.fork()
+    if pid == 0: supervisor(req, policy, key, ROOT_LOCK)
+    j['operations'][key]['process'] = identity(pid)
+    atomic(STATE / (slot + '.json'), j)
+    return dict(status='running', key=key, process=identity(pid))
+
+
 def handle(req, policy):
     request(req)
     if req['stage'] == 'status': return snapshot(policy)
@@ -397,6 +502,8 @@ def handle(req, policy):
         return dict(status='recorded')
     slot = req['slot']
     hosted_identity(req, policy)
+    if req['stage'] in ('diagnose', 'task_review'):
+        return recovery_request(req, policy)
     key = digest(binding(req))
     j = journal(slot)
     archive = STATE / 'history' / slot / (key + '.json')
@@ -408,12 +515,18 @@ def handle(req, policy):
         if j['pending'] == key:
             if alive(op.get('process')):
                 return dict(status='running', key=key)
-            if req['stage'] not in ('publish', 'integrate', 'promote', 'dev') or op.get('recovery_attempts', 0) >= 3:
+            if req['stage'] not in ('publish', 'integrate', 'promote', 'dev', 'qa') or op.get('recovery_attempts', 0) >= (1 if req['stage']=='qa' else 3):
                 return dict(status='unknown', key=key)
+            if req['stage']=='qa':
+                from qa_recovery import safe_pending
+                need(safe_pending(j,checkpoint(slot)[0],alive),'unknown QA state changed; no model replay')
             guard(slot, policy)
             # Only read/reconcile remote identity. Never replay an uncertain side effect.
             req['_recover'] = True
+            op.setdefault('recovery_history', []).append({k: op.get(k) for k in
+                ('run','run_attempt','process','started_at','finished_at','before','after','result')})
             op['recovery_attempts'] = op.get('recovery_attempts', 0) + 1
+            op.update(run=req['run'], run_attempt=req['run_attempt'], started_at=int(time.time()))
             pid = os.fork()
             if pid == 0: supervisor(req, policy, key, ROOT_LOCK)
             j['operations'][key]['process'] = identity(pid)
@@ -444,6 +557,7 @@ def handle(req, policy):
     other_journal = journal(other)
     other_reservation = (other_journal['operations'][other_journal['pending']].get('record')
                          if other_journal['pending'] else None)
+    recovery_admission = None
     if req['stage'] == 'claim':
         from core import API, SINCE
         import datetime as dt
@@ -451,7 +565,14 @@ def handle(req, policy):
         api.identity()
         issue = api(f'issues/{req["issue"]}')
         candidates = s.admitted(a, [issue], api.pages(f'issues/{req["issue"]}/comments'), dt.datetime.fromisoformat(SINCE))
-        need(len(candidates) == 1, 'no exact unique Owner task')
+        if (issue.get('body') or '').startswith('GOBADMINTON_RECOVERY_185_V1\n'):
+            need(not candidates, 'ambiguous Owner/delegated recovery admission')
+            from recovery_admission import root_admission
+            cache = recovery_journal()
+            recovery_admission = root_admission(a, api, cache, issue, policy)
+            candidates = [(issue['number'], recovery_admission['task'])]
+            atomic(STATE / 'recovery.json', cache)
+        need(len(candidates) == 1, 'no exact unique Owner or reviewed delegated task')
         record = s.task_record(*candidates[0])
         task_hash = digest(candidates[0][1])
         completed = set(state['done']) | set(other_state['done'])
@@ -462,6 +583,13 @@ def handle(req, policy):
     else:
         record = s.task_record(active['issue'], active['task'])
         task_hash = digest(active['task'])
+        if active.get('recovery_receipt'):
+            from core import API
+            from recovery_admission import root_admission
+            api = API(req['gh_token']); api.identity()
+            cache = recovery_journal()
+            recovery_admission = root_admission(a, api, cache, api(f'issues/{active["issue"]}'), policy)
+            need(recovery_admission['key'] == active['recovery_receipt'], 'wrong active recovery receipt')
     if other_active and other_active['phase'] != 'done':
         need(not s.conflicts(record, s.task_record(other_active['issue'], other_active['task'])), 'overlapping source slots')
     if other_reservation:
@@ -482,7 +610,9 @@ def handle(req, policy):
         else:
             atomic(integration, dict(slot=slot, issue=req['issue']))
     op = dict(record=record, task_hash=task_hash, binding=binding(req), run=req['run'], run_attempt=req['run_attempt'], before=digest(state),
+              checkpoint_before=state,
               started_at=int(time.time()), process=None, read_attempts=j['operations'].get(key, {}).get('read_attempts', 0) + 1)
+    if recovery_admission: op['recovery_admission'] = recovery_admission
     profiles[str(req['issue'])] = req['profile']
     j['operations'][key] = op
     j['pending'] = key
