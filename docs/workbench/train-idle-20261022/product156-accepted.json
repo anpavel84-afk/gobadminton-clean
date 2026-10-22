@@ -1,0 +1,14 @@
+{
+  "issue": 156,
+  "kind": "manual-recovery-after-exhausted3-preserved",
+  "candidate": "7a1f9b794924dbe6fa62fac2f423a789c7344dcb",
+  "qa": {
+    "verdict": "PASS",
+    "findings": [],
+    "reviewed_sha": "7a1f9b794924dbe6fa62fac2f423a789c7344dcb"
+  },
+  "release_id": "r39719460938-a1",
+  "accepted_sha": "08da9e4c53a6b16656a0581f070174c83d02238b",
+  "live_sha": "08da9e4c53a6b16656a0581f070174c83d02238b",
+  "attempts_reset": false
+}

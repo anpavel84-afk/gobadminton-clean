@@ -1,0 +1,18 @@
+VERDICT: PASS
+
+Required corrections: none.
+
+- All 14 paths match `scope.json`: 11 exist; three are explicitly CREATE:
+  - `apps/api/test/unit/radar-player-games.test.ts`
+  - `apps/web/test/radar-player-games.test.tsx`
+  - `docs/handoffs/radar-player-games.md`
+- The Games-owned projection and fresh reads after Game-lock waits are feasible within scope. Existing proof, session, TTL, consent, block, restriction and revision fences can cover the added work without changing helpers or architecture.
+- Confirmed participation remains restricted to active owner/manager viewers. Ordinary viewers receive only authorized directory-public creator associations.
+- C1–C9 distinguish mandatory source/tests from later DB, browser, hosted CI and DEV gates. The visual gap and absent mockup are handled honestly.
+- Independent QA remains mandatory; `max_attempts=3`, conflict-lock semantics and the p7 ceiling are preserved. No bypass or credential copying is requested.
+
+Reviewed body SHA256: `67930490d01e1d627faff935f221fe73d231c9384491a4ca6e93b513ca9cc7ce`
+
+Supplied source SHA: `6fb9b0cbaad3c1989c521d0612d036ddf4342d7c`
+
+Read-only definition review only. No installation, admission, implementation acceptance or runtime verification is claimed.

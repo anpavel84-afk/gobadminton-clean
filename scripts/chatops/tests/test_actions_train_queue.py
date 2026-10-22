@@ -90,6 +90,15 @@ class IdleMonitor(unittest.TestCase):
         self.assertIn('без допуска 30',v['wait_reason']);self.assertIn('123',v['wait_reason'])
         self.assertEqual(v['status'],'waiting')
         self.assertEqual(monitor.project(c,now=4000)['status'],'stale')
+    def test_free_slot_does_not_report_nonexistent_dependency_or_conflict(self):
+        c=card();c['planning']={'reason':'dependencies_or_conflicts','counts':{k:0 for k in q.CODES},'observed_at':100,'workflow_run':123}
+        c['planning']['counts']['assigned']=1
+        v=monitor.project(c,now=200)
+        self.assertIn('Все готовые задачи уже назначены другим слотам',v['wait_reason'])
+        self.assertNotIn('Ожидание зависимостей',v['wait_reason'])
+        c['planning']['counts']['dependency']=1
+        self.assertIn('Ожидание зависимостей',monitor.project(c,now=200)['wait_reason'])
+
     def test_running_stage_links_current_run_not_previous(self):
         c=card(active('qa'));c['pending']={'status':'running','stage':'qa','workflow_run':456,'workflow_attempt':2};c['last']={'workflow_run':123,'workflow_attempt':1}
         v=monitor.project(c,now=100)

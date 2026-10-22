@@ -1,0 +1,26 @@
+{
+  "schema": "GB_PMA_REVIEW_SCOPE_V1",
+  "issue": 149,
+  "authority": "Owner22Oct continued approved backlog; approved149 M2R API+web read-only projection; source changes only after independent review and immutable admission",
+  "source_sha": "6fb9b0cbaad3c1989c521d0612d036ddf4342d7c",
+  "body_sha256": "67930490d01e1d627faff935f221fe73d231c9384491a4ca6e93b513ca9cc7ce",
+  "allowed_paths": [
+    "apps/api/src/radar/radar.service.ts",
+    "apps/api/src/games/games.service.ts",
+    "packages/contracts/openapi.json",
+    "packages/contracts/src/unified.generated.ts",
+    "apps/api/test/unit/radar-player-games.test.ts",
+    "apps/api/test/integration/radar.unified.test.ts",
+    "apps/web/src/lib/unified-directory.ts",
+    "apps/web/src/components/consumer/radar/RadarPage.tsx",
+    "apps/web/src/components/consumer/radar/UnifiedPlayerPreview.tsx",
+    "apps/web/src/styles/radar-geographic.css",
+    "apps/web/test/unified-directory.test.ts",
+    "apps/web/test/radar-player-games.test.tsx",
+    "docs/api/UNIFIED_PLAYERS_RADAR_V001.md",
+    "docs/handoffs/radar-player-games.md"
+  ],
+  "purpose": "Existing Radar proof-authorized player preview plus viewer-authorized upcoming PUBLIC Games; no broader participation visibility, no database schema/runner/auth/model permission changes",
+  "effects": "independent read-only definition review only; own test/job outputs; no source modifications, network or operational writes",
+  "p7_contact_wrapper_used": false
+}

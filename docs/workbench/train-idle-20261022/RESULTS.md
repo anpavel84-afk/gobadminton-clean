@@ -1,0 +1,27 @@
+# Train idle recovery — 22 October 2026
+From PMA to Owner/next integrator. Status: actual automatic product start verified; source task149 not yet accepted.
+
+## Factual cause
+Audit of60 open Issues reproduced an empty plan:30 exact immutable admissions,26 already done,4 deferred/parked(134,141,144,156);30 nonadmitted. #149 was a draft; the monitor also displayed conceptual entries without Issue/admission as though executable backlog. Neither task quota(Codex27author/24QA), current path/dependency occupancy nor GitHub authorization prevented an eligible task: no eligible task existed. Full per-Issue reasons in planning-audit.json. No new dispatcher architecture or credentials needed.
+
+A separate later integration reservation PID4046198 held slot2 during authorized manual156 recovery. It was not the original2h40 idle cause. Exact process was childless non-model hold.py, designed to release via release-lock. After independentQA+CI+DEV ACCEPTED/live match, the existing release protocol exited normally; no forced kill, lock deletion or bypass.
+
+## Product pass complete
+#151 already passed Actions QA/CI/DEV:422c109893bd6092fd177ccd3ef2162ccc897e0d, release r39699415055-a1. Its initial QA failure was an executable path outside existing sandbox allowlist, fixed without widening access; failed charge preserved.
+#157 already passed sourceQA/CI/DEV6fb9b0cbaad3c1989c521d0612d036ddf4342d7c, release r39701854535-a1.
+#156 retained failed3/3 history. Existing independent recoveryQA4057978 finishedPASS exact7a1f9b794924dbe6fa62fac2f423a789c7344dcb. Existing ProductCI39716949910/39716863482 PASS. PR166 merged normally; merge08da9e4c53a6b16656a0581f070174c83d02238b has identical Git tree to reviewed candidate. DEV39719460938 completed success, server r39719460938-a1 ACCEPTED and live meta exact match. No fourth autonomous author attempt, no model duplicate, no archive/budget reset. Historical156 Actions deferral is not falsely rewritten as old-train success; recovery is separately evidenced.
+
+## Installed queue correction
+PR167 merged869d07b921a48737facf8e53afd71543bf9ff8c1; mandatory ProductCI39719319969 PASS. Independent changed-boundary review38focused checks PASS; separate integrator30queue/journal checks PASS. Controller6f48c999a09c9a4102692cf98780269ce8174f22 is immutable. Stage-workflow SHA25606414b3edc28034478c190cbf318f99e34960085f40ec8c026db3f1aa1918760. RootDRY/apply exact15payloads, old runtime/manifest/ownership backed up, task+budget hashes unchanged. Actual hosted disabled probe39720330128 PASS, then activated. Source writes still require exact hosted run and immutable Owner admission; data-only planning reports cannot start models or mutate source/checkpoints/attempts/budgets. Existing forced-command SSH authenticates reporting; no Actions-write token goes to VPS.
+
+New claim order chooses longest-idle eligible slot; author/QA availability follows existing provider/budget gates. Full concrete planning decisions appear in Actions evidence and root planning.json. Monitor idle state is separate from previous_result; stale156 error no longer explains a free slot. Current model workflow is linked rather than previous completed run. Conceptual backlog remains data, not authorization. Accepted156 is removed from remaining backlog with prior entry preserved in backlog-resolution.json; GitHub Issue and original3/3 archive remain.
+
+## New actual task
+#149 independent definition reviewPASS body67930490d01e1d627faff935f221fe73d231c9384491a4ca6e93b513ca9cc7ce;14explicitpaths, privacy-scopedAPI+web preview, max3attempts, existing Codex role. General read-only reviewer used its OWN configured identity and exact external purpose/path scope; the contact-only p7 wrapper was neither changed nor misrepresented. ImmutableOwnercomment6332442731 byte-identical and unedited, numericOwner318610566.
+Events/dispatcher automatically selected slot2; claim39720681550 succeeded and its continuation dispatched author39720804863. At04:10:18UTC the exact modelPID82363 UID978 was alive, task149 developing attempt1, base869d07b. No manual CLI author launch. Process start/boot binding and old156 archive SHA are in automatic-start149.json. Result code/QA/CI/DEV for149 are still pending; this is a proven start, not completion.
+
+## Scope left
+Other backlog work needs genuine definitions/admission/dependencies: M2R149 now running; MAP-FILTER follows149; MAP-PERF followsfilters; V1a not yet an exact reviewed task, V1b/V3b/V2 dependonit; FR2 is a bounded DEV operational activation/smoke, not a source-only body; FR3 dependsFR2. No fabricated tasks or fake approvals were added to fill slots. Cursor/agy retain existing explicit unavailable/role restrictions; only proven Codex executes. Original old Supervisor/slot unit autostarts remain disabled.
+
+## Rollback
+idle-upgrade-and-rollback.py is the exact bounded installer record. Never roll back task/ledger files. Original migration restore images retained; queue-generation prior code in /var/lib/gb-idle-install-20261022/backup. Before any runtime reversal disable new dispatch, prove no pending/unknown/source process and obtain coherent current code/checkpoint boundary; never clear pending, release another writer or reset task counters to satisfy guard. Installation phase journal prevents blind replay. A later pure monitor-wording correction distinguishes all-ready-work-dispatched-elsewhere from actual zero-count dependency/conflict; its tests are isolated, no scheduling or authority code changed.

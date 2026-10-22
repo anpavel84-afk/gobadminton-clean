@@ -1,0 +1,19 @@
+{
+  "removed_from_remaining_backlog": [
+    {
+      "id": "M3-OWNER",
+      "issue": 156,
+      "title_ru": "Попап площадки по макету: фото игр, контакты и создание игры",
+      "status": "в планах",
+      "priority": 0,
+      "depends_on": [
+        "M3-PHOTO"
+      ],
+      "meaning_ru": "Текущий размер фото сохраняется. Информационный блок и контакты по макету; обложки игр в расписании; создание игры внутри попапа с выбранной площадкой.",
+      "note_ru": "#156: независимое ревью постановки пройдено. Ожидает установки исправления слотов; ещё не запущена. Размер фото сохраняется, данные не выдумываются."
+    }
+  ],
+  "reason": "actual manual recovery DEV ACCEPTED; Issue/history retained",
+  "updated149": "admitted and automatically started",
+  "root_156_archive_unchanged": "0c8fc4935af02bbd3515ee52c6d56c30a6b6e6805a246dcab28e4eacbd6ce2e9"
+}
