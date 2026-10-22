@@ -1,4 +1,6 @@
-# Архитектура системы v1
+# Архитектура пользовательского приложения v1
+
+> **Система разработки, PMA и AI-исполнители описаны в едином [эталоне ENGINEERING_OPERATING_MODEL.md](../rules/ENGINEERING_OPERATING_MODEL.md).** Этот файл описывает приложение, а не runner. Ниже — исходная архитектурная база v1; датированные deployment/DNS предположения не являются текущими host facts. Перед операциями использовать актуальные [окружения](../operations/ENVIRONMENTS.md), Owner decisions и runtime evidence.
 
 Статус: **TECH_SELECTED** по OD-006/OD-010.
 
