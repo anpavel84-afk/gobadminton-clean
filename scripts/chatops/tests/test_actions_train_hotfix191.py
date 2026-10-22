@@ -1,5 +1,6 @@
 """Pure synthetic tests for fail-closed, two-phase root hotfix #191. No external effects."""
 import copy
+from contextlib import ExitStack
 import hashlib
 import importlib.util
 import json
@@ -62,19 +63,23 @@ class Hotfix191(unittest.TestCase):
             def read(path,owner=0):
                 return json.loads(pathlib.Path(path).read_text())
             def put(a,b,mode): pathlib.Path(b).write_bytes(pathlib.Path(a).read_bytes())
-            with patch.object(H,'STATE',state),patch.object(H,'POLICY',root/'policy.json'),\
-                 patch.object(H,'INSTALL',inst),patch.object(H,'RECOVERY',oldrec),\
-                 patch.object(H,'RECEIVER',oldrecv),patch.object(H,'JOURNAL',state/'hotfix-191.json'),\
-                 patch.object(H,'BACKUP',state/'hotfix-191-backup'),patch.object(H,'OLD',old),\
-                 patch.object(H,'NEW',new),patch.object(H.receiver,'trusted_tree'),\
-                 patch.object(H,'quiet'),patch.object(H,'callbacks_drained') as drained,\
-                 patch.object(H,'state_hashes',return_value={'ledger':'frozen'}),\
-                 patch.object(H.receiver,'atomic',side_effect=atomic),\
-                 patch.object(H.receiver,'read',side_effect=read),\
-                 patch.object(H.installer,'put',side_effect=put),\
-                 patch.object(H,'plan',return_value=(policy,backup,proposed,nextrec,payload)),\
-                 patch.object(H,'validated_payload',return_value=payload),\
-                 patch.object(H.recovery,'policy',return_value=None):
+            patches = [
+                patch.object(H,'STATE',state), patch.object(H,'POLICY',root/'policy.json'),
+                patch.object(H,'INSTALL',inst), patch.object(H,'RECOVERY',oldrec),
+                patch.object(H,'RECEIVER',oldrecv), patch.object(H,'JOURNAL',state/'hotfix-191.json'),
+                patch.object(H,'BACKUP',state/'hotfix-191-backup'), patch.object(H,'OLD',old),
+                patch.object(H,'NEW',new), patch.object(H.receiver,'trusted_tree'),
+                patch.object(H,'quiet'), patch.object(H,'state_hashes',return_value={'ledger':'frozen'}),
+                patch.object(H.receiver,'atomic',side_effect=atomic),
+                patch.object(H.receiver,'read',side_effect=read),
+                patch.object(H.installer,'put',side_effect=put),
+                patch.object(H,'plan',return_value=(policy,backup,proposed,nextrec,payload)),
+                patch.object(H,'validated_payload',return_value=payload),
+                patch.object(H.recovery,'policy',return_value=None),
+            ]
+            with ExitStack() as stack:
+                for p in patches: stack.enter_context(p)
+                drained = stack.enter_context(patch.object(H,'callbacks_drained'))
                 a=H.transaction('apply',root,'new-manifest','c'*40,'1'*64)
                 self.assertEqual(a['status'],'DISABLED_DRAIN')
                 self.assertEqual(oldrec.read_bytes(),b'OLD-REC')
@@ -106,19 +111,23 @@ class Hotfix191(unittest.TestCase):
                 if str(b)==str(oldrec) and pathlib.Path(a)==newrec and calls[0]==0:
                     calls[0]+=1
                     raise RuntimeError('interrupted after first trusted atomic file')
-            with patch.object(H,'STATE',state),patch.object(H,'POLICY',root/'policy.json'),\
-                 patch.object(H,'INSTALL',inst),patch.object(H,'RECOVERY',oldrec),\
-                 patch.object(H,'RECEIVER',oldrecv),patch.object(H,'JOURNAL',state/'hotfix-191.json'),\
-                 patch.object(H,'BACKUP',state/'hotfix-191-backup'),patch.object(H,'OLD',old),\
-                 patch.object(H,'NEW',new),patch.object(H.receiver,'trusted_tree'),\
-                 patch.object(H,'quiet'),patch.object(H,'callbacks_drained'),\
-                 patch.object(H,'state_hashes',return_value={'ledger':'frozen'}),\
-                 patch.object(H.receiver,'atomic',side_effect=atomic),\
-                 patch.object(H.receiver,'read',side_effect=read),\
-                 patch.object(H.installer,'put',side_effect=put),\
-                 patch.object(H,'plan',return_value=(policy,backup,proposed,nextrec,payload)),\
-                 patch.object(H,'validated_payload',return_value=payload),\
-                 patch.object(H.recovery,'policy',return_value=None):
+            patches = [
+                patch.object(H,'STATE',state), patch.object(H,'POLICY',root/'policy.json'),
+                patch.object(H,'INSTALL',inst), patch.object(H,'RECOVERY',oldrec),
+                patch.object(H,'RECEIVER',oldrecv), patch.object(H,'JOURNAL',state/'hotfix-191.json'),
+                patch.object(H,'BACKUP',state/'hotfix-191-backup'), patch.object(H,'OLD',old),
+                patch.object(H,'NEW',new), patch.object(H.receiver,'trusted_tree'),
+                patch.object(H,'quiet'), patch.object(H,'callbacks_drained'),
+                patch.object(H,'state_hashes',return_value={'ledger':'frozen'}),
+                patch.object(H.receiver,'atomic',side_effect=atomic),
+                patch.object(H.receiver,'read',side_effect=read),
+                patch.object(H.installer,'put',side_effect=put),
+                patch.object(H,'plan',return_value=(policy,backup,proposed,nextrec,payload)),
+                patch.object(H,'validated_payload',return_value=payload),
+                patch.object(H.recovery,'policy',return_value=None),
+            ]
+            with ExitStack() as stack:
+                for p in patches: stack.enter_context(p)
                 H.transaction('apply',root,'new-manifest','c'*40,'1'*64)
                 with self.assertRaises(RuntimeError):
                     H.transaction('apply',root,'new-manifest','c'*40,'1'*64)
