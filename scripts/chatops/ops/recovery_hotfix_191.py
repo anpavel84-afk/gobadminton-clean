@@ -29,7 +29,6 @@ NEW_SHA = '579ea87375a1008481f29a736f818944adb40bd5d924719824bee410849050ea'
 OLD_CONTROLLER = 'ba02b9d9f9d56c7b07379da22d128c3dfa7341e1'
 
 def state_hashes():
-    from recovery_upgrade import preserved
     # Operational journals and budgets can change only across real stage transitions.
     # The monitor's derived telemetry is not authoritative task state.
     names = (STATE / 'slot1.json', STATE / 'slot2.json', STATE / 'recovery.json',
