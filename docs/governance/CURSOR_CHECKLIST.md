@@ -1,44 +1,24 @@
-# Cursor Preflight / Closeout Checklist
+# Checklist исполнения
 
-## Before write
+Применять [единый регламент](../rules/ENGINEERING_OPERATING_MODEL.md); список не выдаёт новых прав.
 
-- [ ] AGENTS.md read
-- [ ] CURSOR.md read
-- [ ] project-local .cursor/rules loaded
-- [ ] exact assignment identified
-- [ ] exact base SHA identified
-- [ ] canonical docs loaded
-- [ ] branch/HEAD verified
-- [ ] dirty state understood
-- [ ] no overlapping writer conflict
-- [ ] target/runtime boundaries understood
-- [ ] secrets handled outside Git
+## До эффектов
 
-## Before PR
+- Прочитаны root AGENTS и полный регламент; записан принятый rules commit.
+- Установлены exact assignment/base, allowed paths/effects, роль и acceptance.
+- Проверены repository identity, Germany task worktree, dirty state и отсутствие второго writer.
+- Подтверждены role-specific adapter, sandbox, маршрут/fallback и доступные лимиты.
+- Обязательный предметный контекст доступен; неизвестное не заменено догадкой.
 
-- [ ] scope did not expand
-- [ ] relevant docs/contracts updated
-- [ ] real checks executed
-- [ ] no fake PASS
-- [ ] no unrelated files/services touched
-- [ ] no secret committed
-- [ ] exact changed resources known
+## До передачи
 
-## Before deploy
+- Diff не расширяет scope, contracts/tests отражают изменение.
+- Нет secrets и unrelated изменений; self-check не выдан за independent QA.
+- Невыполненные проверки названы NOT_TESTED с местом обязательного выполнения.
+- Handoff содержит точный commit/PR, evidence, ограничения и следующий шаг.
 
-- [ ] exact candidate SHA
-- [ ] CI status known
-- [ ] target preflight captured
-- [ ] rollback path known
-- [ ] shared-host collision check complete
-- [ ] public exposure explicitly permitted
+## До утверждения результата
 
-## Before handoff
-
-- [ ] PR/commit permalinks
-- [ ] test/CI evidence
-- [ ] runtime smoke if applicable
-- [ ] limitations/not checked
-- [ ] rollback
-- [ ] next bounded action
-- [ ] GitHub handoff committed
+- QA, CI и DEV относятся к требуемому candidate; интеграционный diff не унаследовал чужой PASS.
+- DEV ACCEPTED подтверждён фактически; Owner acceptance не придумана.
+- PROD не выведен из DEV-разрешения. История, попытки и rollback сохранены.

@@ -1,47 +1,11 @@
-# Cursor Repository & Source Map
+# Карта источников и исполнения — CLEAN
 
-## Product repository
+Код, правила, prompts и handoffs: `anpavel84-afk/gobadminton-clean`. [Главная инструкция](../../AGENTS.md), [единый регламент](../rules/ENGINEERING_OPERATING_MODEL.md), [индекс предметных документов](../README.md).
 
-`anpavel84-afk/gobadminton` owns code, contracts, canonical docs, prompts, handoffs and runtime records.
+Germany `vmi3510488` — разрешённый host модельных задач. Task worktree, service identity, CLI path и installed controller pin определяются фактическим назначением/проверенными receipts, а не копируются из исторического onboarding. Рабочая копия может быть старой даже при правильном имени каталога.
 
-## Agent launcher repository
+Git metadata/push принадлежат разрешённому bridge/интегратору. Проверять effective remote и repository-specific identity; не переносить широкие credentials. PLAN не исполняет задания.
 
-`anpavel84-afk/agents` owns role bootstrap/authority launchers. Do not put GoBadminton application code there.
+DEV — изолированные web/API/DB/media в Германии. PROD web в Москве, API/DB в Германии; отдельные права/данные и отдельный Owner GO. Подробности и границы — [окружения](../operations/ENVIRONMENTS.md).
 
-## Primary development execution host
-
-Germany VPS `vmi3510488`:
-- repo: `/srv/gobadminton-dev/repo`;
-- worktrees: `/srv/gobadminton-dev/worktrees`;
-- runner: `/srv/gobadminton-dev/runner`;
-- Git remote host alias: `github-gobadminton`;
-- repository-specific GitHub write access: enabled.
-
-The live backend tree `/srv/gobadminton` is separate deployment material and is not the development checkout.
-
-## PLAN recovery workspace
-
-`C:\Users\PLAN\Documents\gobadminton`
-
-PLAN is paused recovery/reference only. Do not use it as a concurrent writer after Germany VPS cutover.
-
-## Runtime aliases
-
-### Moscow web
-`gobadminton-moscow`
-→ root@194.87.214.217  
-→ device `ruvds-68jzd`
-
-### Germany backend
-`gobadminton-backend`
-→ root@169.58.183.182  
-→ device `vmi3510488`
-
-Both aliases use project-dedicated ED25519 identities and strict host-key checking.
-
-## Runtime ownership
-
-Moscow: web/nginx only.  
-Germany: API/DB/worker only.
-
-Do not infer authority from SSH access. Exact assignment controls writes.
+Внешние launcher repositories и архивные checkout не являются обязательным источником текущей постановки. Исторические источники — только provenance; никакого наследования старой очереди/разрешений.

@@ -1,3 +1,7 @@
+# GoBadminton web — дополнительный контекст
+
+Сначала [корневой AGENTS.md](../../AGENTS.md) и [единый регламент](../../docs/rules/ENGINEERING_OPERATING_MODEL.md) из принятой ревизии. Этот вложенный файл уточняет framework context и не расширяет права/маршруты. Для визуальных изменений действует [Style Guide first](../../docs/decisions/OWNER_DECISION_FRONTEND_STYLE_GUIDE_FIRST_V001.md).
+
 <!-- BEGIN:nextjs-agent-rules -->
 
 # This is NOT the Next.js you know
