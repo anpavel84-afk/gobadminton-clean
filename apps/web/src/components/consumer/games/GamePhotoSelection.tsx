@@ -20,7 +20,7 @@ export function GamePhotoSelection({onChange,onReady,disabled=false}:{onChange:(
     return ()=>{controller.abort();if(url)URL.revokeObjectURL(url);};
   },[file,crop]);
   function invalidate(){onChange(null);onReady(false);setMessage("");}
-  return <section className="gb-game-form-group" aria-label="Фото этой игры" aria-busy={preparing}>
+  return <section className="gb-game-form-group gb-game-photo-selection" aria-label="Фото этой игры" aria-busy={preparing}>
     <h2 className="gb-game-form-group-title">Фото этой игры · необязательно</h2>
     <p>Без своего фото используется текущая одобренная обложка выбранной площадки, а если её нет — стандартная. Своё фото относится только к этой игре и не меняет площадку или другие игры.</p>
     <label className="gb-game-field">JPEG, PNG или WebP<input type="file" accept="image/jpeg,image/png,image/webp" disabled={disabled} onChange={e=>{const next=e.target.files?.[0];e.target.value="";if(next){invalidate();setFile(next);setCrop({x:.5,y:.5});}}}/></label>
@@ -31,7 +31,7 @@ export function GamePhotoSelection({onChange,onReady,disabled=false}:{onChange:(
       <p>В карточках будет показан широкий центральный фрагмент. Перед сохранением фото проверяется сервером.</p>
       <Button type="button" disabled={disabled||preparing||!draft} onClick={()=>{if(draft){onChange(draft.blob);onReady(true);setMessage("Фото выбрано. Оно будет проверено при сохранении игры.");}}}>Подтвердить выбор фото</Button>
     </>}
-    <Button type="button" variant="outline" disabled={disabled} onClick={()=>{setFile(null);setDraft(null);setPreparing(false);onChange(null);onReady(true);setMessage("Используется текущая обложка площадки или стандартная.");}}>Без своего фото</Button>
+    <Button type="button" variant="outline" className="gb-game-photo-reset" disabled={disabled} onClick={()=>{setFile(null);setDraft(null);setPreparing(false);onChange(null);onReady(true);setMessage("Используется текущая обложка площадки или стандартная.");}}>Без своего фото</Button>
     <p role="status">{preparing?"Подготавливаем фото…":message}</p>
   </section>;
 }
