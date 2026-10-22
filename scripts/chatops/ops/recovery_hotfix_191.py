@@ -147,7 +147,7 @@ def transaction(action,bundle=None,manifest=None,controller=None,stage_sha=None,
             return dict(status='DISABLED_DRAIN',next='After old receivers finish, call apply again')
         journal=receiver.read(JOURNAL,0)
         policy=receiver.read(POLICY,0)
-        receiver.need(journal['phase'] in ('draining','installed-disabled','active'),
+        receiver.need(journal['phase'] in ('draining','installing','installed-disabled','active'),
                       'invalid one-time hotfix phase')
         if action=='apply':
             receiver.need(journal['phase']=='draining' and policy['mode']=='disabled',
