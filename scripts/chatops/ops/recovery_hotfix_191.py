@@ -11,6 +11,7 @@ import os
 import pathlib
 import pwd
 import re
+import stat
 import sys
 
 INSTALL = pathlib.Path('/usr/local/lib/gb-actions-train')
@@ -123,6 +124,20 @@ def plan(bundle,manifest,controller,stage_sha):
     nextrecord['manifest']=manifest
     return policy,record,proposed,nextrecord,payload
 
+def clear_interrupted_put(target):
+    """Delete ONLY root-owned temporary file left by this reviewed installer after a crash."""
+    temp = target.with_name('.' + target.name + '.install')
+    try:
+        info = temp.lstat()
+    except FileNotFoundError:
+        return
+    receiver.trusted_tree(temp.parent)
+    receiver.need(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and
+                  info.st_nlink == 1 and stat.S_IMODE(info.st_mode) in (0o600,0o644),
+                  'unsafe interrupted installer temporary file')
+    temp.unlink()
+
+
 def transaction(action,bundle=None,manifest=None,controller=None,stage_sha=None,probe=0):
     for p in (INSTALL,STATE,POLICY):receiver.trusted_tree(p)
     fd=os.open(STATE/'controller.lock',os.O_RDWR|os.O_NOFOLLOW)
@@ -149,6 +164,14 @@ def transaction(action,bundle=None,manifest=None,controller=None,stage_sha=None,
         policy=receiver.read(POLICY,0)
         receiver.need(journal['phase'] in ('draining','installing','installed-disabled','active'),
                       'invalid one-time hotfix phase')
+        if action=='apply' and journal['phase']=='draining' and policy['mode']=='active':
+            # Crash between write-ahead journal and first fail-closed policy write.
+            receiver.need(policy['controller_sha']==OLD_CONTROLLER and
+                          all(installer.sha(pathlib.Path(p))==h for p,h in OLD.items()) and
+                          all(installer.sha(BACKUP/pathlib.Path(p).name)==h for p,h in OLD.items()),
+                          'drain interrupted with unknown source/backup')
+            receiver.atomic(POLICY,policy|{'mode':'disabled'},mode=0o644)
+            return dict(status='DISABLED_DRAIN',next='Wait old callbacks, then apply')
         if action=='apply':
             receiver.need(journal['phase']=='draining' and policy['mode']=='disabled',
                           'source already installed or dispatch not disabled')
@@ -202,6 +225,11 @@ def transaction(action,bundle=None,manifest=None,controller=None,stage_sha=None,
             receiver.atomic(JOURNAL,journal)
             return dict(status='ACTIVE',controller=journal['controller'],probe_run=probe)
         if action=='rollback':
+            if journal['phase']=='draining' and policy['mode']=='active':
+                receiver.need(policy['controller_sha']==OLD_CONTROLLER,
+                              'cannot recover untrusted pre-disable policy')
+                receiver.atomic(POLICY,policy|{'mode':'disabled'},mode=0o644)
+                policy = receiver.read(POLICY,0)
             receiver.need(journal['phase'] in ('draining','installing','installed-disabled')
                           and policy['mode']=='disabled',
                           'rollback forbidden after activation or before dispatch disabled')
@@ -214,6 +242,8 @@ def transaction(action,bundle=None,manifest=None,controller=None,stage_sha=None,
             for path in (RECOVERY,RECEIVER):
                 receiver.need(installer.sha(BACKUP/path.name)==OLD[str(path)],
                               'root backup hash drift')
+                if journal['phase']=='installing':
+                    clear_interrupted_put(path)
                 installer.put(BACKUP/path.name,path,0o644)
             receiver.atomic(STATE/'backup.json',receiver.read(BACKUP/'record.json',0))
             prior=receiver.read(BACKUP/'policy.json',0)
