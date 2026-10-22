@@ -316,6 +316,33 @@ it("opens by dragging any part of the compact card, while retaining an ordinary 
   swipe.dispose();
 });
 
+it("keeps the compact preview mounted and pointer-addressable during a real swipe", () => {
+  // Regression for Owner iPhone UAT FAIL #179: the old hidden={moving} turned
+  // the original touch target display:none on the first move. WebKit then
+  // cancelled the pointer stream even though the root had pointer capture.
+  const h = popupHarness(false, false);
+  const before = h.find("gb-venue-popup-preview-surface");
+  expect(before.props.hidden).toBeUndefined();
+  expect(before.props.style).toMatchObject({ opacity: 1, pointerEvents: "auto" });
+  h.pointerCard("onPointerDown", 600, 0);
+  h.pointerCard("onPointerMove", 575, 20);
+  const movingPreview = h.find("gb-venue-popup-preview-surface");
+  expect(movingPreview.props.hidden).toBeUndefined();
+  expect(movingPreview.props.style).toMatchObject({ opacity: 0, pointerEvents: "auto" });
+  expect(h.find("gb-venue-popup").props["data-moving"]).toBe(true);
+  expect(h.capture.has(3)).toBe(true);
+  // Subsequent pointermove is still deliverable after preview transitions.
+  h.pointerCard("onPointerMove", 505, 80);
+  expect(h.height()).toBe("calc(172px + 95px)");
+  h.pointerCard("onPointerUp", 505, 100);
+  expect(h.change).toHaveBeenLastCalledWith(true);
+  const openedPreview = h.find("gb-venue-popup-preview-surface");
+  expect(openedPreview.props.hidden).toBeUndefined();
+  expect(openedPreview.props.style).toMatchObject({ opacity: 0, pointerEvents: "none" });
+  expect(h.capture.size).toBe(0);
+  h.dispose();
+});
+
 it("dismisses the selected venue on a downward compact-card swipe, also from its handle", () => {
   const card = popupHarness(false, true);
   card.pointerCard("onPointerDown", 500, 0);
