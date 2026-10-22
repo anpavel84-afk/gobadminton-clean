@@ -12,6 +12,10 @@
 
 Prompts, рабочие artifacts, handoffs, review/evidence и принятые документы должны иметь durable GitHub representation согласно правилам. Значимый результат не должен оставаться только в чате, временном attachment или sandbox.
 
+## AI delivery target and runtime reality
+
+Before selecting Cursor, Codex, Antigravity or independent QA, read [AI delivery target configuration](docs/operations/AI_DELIVERY_TARGET_CONFIG_V001.md) along with the active exact Issue/authorization. The target configuration is a **review proposal until accepted** and does **not** activate a provider, grant effects, or supersede security gates. Use actual runtime capability/evidence for route selection; report unavailable providers and remediation without weakening sandbox or hiding fallback costs.
+
 ## Cursor / implementation runtime
 
 Cursor является частью GoBadminton delivery system.
