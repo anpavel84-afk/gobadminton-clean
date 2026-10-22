@@ -3,16 +3,49 @@
 From: assigned source author. To: independent source QA, then existing PM/Actions release route.
 Date: 2026-10-22. Status: SOURCE DRAFT / NOT_TESTED / NOT ACCEPTED.
 Assignment: [#181](https://github.com/anpavel84-afk/gobadminton-clean/issues/181); depends on
-[#12](https://github.com/anpavel84-afk/gobadminton-clean/issues/12). Prior independent QA supplied
-with assignment: `{}`; historical FR-2 live 8/8 is assignment context, not this author's evidence.
+[#12](https://github.com/anpavel84-afk/gobadminton-clean/issues/12). Prior independent QA verdict:
+FAIL on `71d0b9f0fc02bba973e89c69f2aa0d26da42e495`, with two source/test incompatibilities recorded
+below. Historical FR-2 live 8/8 is assignment context, not this author's evidence.
 
-Exact initial source: `645490379034a205eb43c941ea86c4ff6be90c76`, branch `automation/issue-181`;
-working tree was clean at start. [Base permalink](https://github.com/anpavel84-afk/gobadminton-clean/tree/645490379034a205eb43c941ea86c4ff6be90c76).
+Exact correction base: `71d0b9f0fc02bba973e89c69f2aa0d26da42e495`, branch `automation/issue-181`;
+working tree was clean at start. [Base permalink](https://github.com/anpavel84-afk/gobadminton-clean/tree/71d0b9f0fc02bba973e89c69f2aa0d26da42e495).
+The initial FR-3A implementation handoff used source `645490379034a205eb43c941ea86c4ff6be90c76`;
+the correction base above is the actual source for this author turn, not a live DEV acceptance claim.
 Repository is the assigned GoBadminton Clean worktree. No other writer was observed in its initial
 changes. This is a source baseline, not independent verification of the current live DEV server.
 No new SHA or artifact permalink exists: author was explicitly forbidden to commit/push or use the
 network. Authorized publisher must publish this exact delta and add candidate permalinks to #181;
 this local document alone is not a claim of GitHub durability or release acceptance.
+
+## Prior QA correction — source only, NOT_TESTED
+
+The supplied independent QA identified two failures against the correction base:
+
+1. `migration.smoke.test.ts` expected exactly 39 migration IDs, ending at0039, although the
+   migrator also installs0040. Added the exact `0040_game_recommendations` ID to the strict ordered
+   expectation. Existing table, FK, index and privacy assertions remain in place; no historical SQL
+   or migration automation changed.
+2. `FriendshipsService.capabilities` made `gameRecommendations` true when0040 was installed,
+   contradicting `friends-s1.disposable.test.ts`'s accepted false expectation. Restored the false
+   value in FR-3A regardless of schema installation. The API retains its independent Friends/schema
+   admission. The recommendation disposable suite now expects the complete unchanged S1 capability
+   response after0040, and asserts it for both accepted actors before exercising real send/replay/
+   list/hide/withdraw. The existing S1 suite is outside allowed_paths and was not edited. This is
+   a runtime compatibility correction, not removal or weakening of the existing S1 regression gate.
+
+Current correction edits only six allowed files: `apps/api/src/friendships/friendships.service.ts`,
+`apps/api/test/integration/migration.smoke.test.ts`,
+`apps/api/test/integration/game-recommendations.disposable.test.ts`, `packages/contracts/openapi.json`,
+`docs/api/GAME_RECOMMENDATIONS_V001.md` and this handoff. OpenAPI and API documentation explicitly
+preserve the false product capability until the separately assigned FR-3B slice reviews activation.
+The broader implementation inventory below describes the inherited FR-3A source, not additional
+edits performed in this correction.
+
+NOT_TESTED: no self-QA, test, build, lint, typecheck, source-check script, DB/SQL, migration, network,
+Git mutation, service or deployment command was run. Source/context reads and allowed source edits
+are the only author actions. Prior FAIL remains the last independent verdict; these edits do not
+constitute a QA PASS. An authorized publisher must create the new candidate SHA before independent
+QA reruns migration smoke, the unchanged Friends S1 suite, the recommendation suite and full Product CI.
 
 ## Scope, authority and source record
 
@@ -48,7 +81,8 @@ Frontend Style Guide rule is inapplicable to this API-only slice; no visual patt
   produces no new row/audit/rate charge; unknown commit is not converted into success. Safe terminal
   receipts confer no content rights. Full semantics in [API document](../api/GAME_RECOMMENDATIONS_V001.md).
 - Strict OpenAPI bodies/responses/statuses; admission and N-1 behavior documented. Friends capability
-  indicates API/schema availability while preserving gameAttention/socialPush false. No web changes.
+  preserves gameRecommendations/gameAttention/socialPush false throughout FR-3A. Protected API
+  admission is separate from future FR-3B product capability activation. No web changes.
 - Authored synthetic unit and disposable integration tests: accepted actors, duplicates/replay/lists,
   hide/withdraw and stale/role fences, strict request/cursor privacy, no seat/invitation/outbox effect,
   missing/nonfriend/declined/cancelled/removed/blocked/restricted/inactive/opt-out/absent profile,

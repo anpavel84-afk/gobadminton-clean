@@ -211,9 +211,9 @@ export class FriendshipsService {
       const installed = (await client.query("SELECT to_regclass('friendships') AS name")).rows[0]?.name;
       const friends = Boolean(installed && friendsEnabled(this.env)
         && eligible((await this.profiles(client, actor))[0]));
-      const recommendationsInstalled = friends && Boolean((await client.query(
-        "SELECT to_regclass('game_recommendations') AS name")).rows[0]?.name);
-      return { friends, gameRecommendations: recommendationsInstalled, gameAttention: false, socialPush: false };
+      // Preserve Friends S1 capability semantics in the API-only FR-3A slice.
+      // Installing 0040 does not activate the future FR-3B product surface.
+      return { friends, gameRecommendations: false, gameAttention: false, socialPush: false };
     });
   }
   private async view(client: PoolClient, actor: string, row: FriendshipRow, ctx: Context): Promise<FriendshipView> {

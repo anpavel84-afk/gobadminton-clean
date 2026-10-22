@@ -12,9 +12,11 @@ notification, outbox event, delivery job, push, message or new social edge.
 ## Admission and source ownership
 
 Reuse existing `friendsEnabled` admission, including its default OFF and exact DEV/local bounds.
-No new flag or runtime setting. `GET /v1/me/social-capabilities` reports `gameRecommendations`
-only when Friends is available to the actor and migration0040 is installed. This is API availability;
-it does not announce the FR-3 UI or completion. FR-3B must consume and refresh this capability.
+No new flag or runtime setting. `GET /v1/me/social-capabilities` preserves the accepted Friends S1
+contract: `gameRecommendations`, `gameAttention` and `socialPush` remain false, including after
+migration0040. Installing the API schema does not activate the product UI. Recommendation routes
+independently enforce existing Friends admission and schema availability. The separately assigned
+FR-3B slice must define and review capability activation along with its UI; FR-3A does not enable it.
 
 Games owns the recommendation-safe projection through `GamesService.recommendationSummary`.
 It uses the same `eligibleGames(normalizeDiscovery({temporalScope:'upcoming'}))` and effective venue

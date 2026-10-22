@@ -86,7 +86,9 @@ run("FR-3A protected recommendations — disposable synthetic PostGIS",()=>{
       expect((await client.query("SELECT to_regclass('game_recommendations') AS name")).rows[0].name).toBeNull();
       expect((await client.query("SELECT count(*)::int AS n FROM schema_migrations")).rows[0].n).toBe(39);
     }finally{await client.query("ROLLBACK");client.release();}
-    expect((await get(old,"/v1/me/social-capabilities")).json().gameRecommendations).toBe(true);
+    // Additive API/schema installation preserves the accepted Friends S1 capabilities.
+    expect((await get(old,"/v1/me/social-capabilities")).json()).toEqual({
+      friends:true,gameRecommendations:false,gameAttention:false,socialPush:false});
   },60000);
   async function migrate(file:string){const client=await pool.connect();try{
     await client.query("BEGIN");await client.query(await readFile(path.join(migrations,file),"utf8"));
@@ -145,6 +147,9 @@ run("FR-3A protected recommendations — disposable synthetic PostGIS",()=>{
   }
   it("two accepted actors send/replay/list/hide/withdraw; audit only, no seats or delivery effects",async()=>{
     const f=await accepted(),g=await game(),before=await effects(g.id),idem=key();
+    // The protected API uses Friends admission; the future UI capability stays OFF.
+    for(const who of [a,b]) expect((await get(who,"/v1/me/social-capabilities")).json()).toEqual({
+      friends:true,gameRecommendations:false,gameAttention:false,socialPush:false});
     const sent=await send(a,g.id,f.friendshipId,idem);expect(sent.statusCode).toBe(201);const r=sent.json() as Receipt;
     expect(sent.headers["cache-control"]).toBe("no-store");expect(r).toEqual({id:expect.any(String),version:1,outcome:"sent"});
     const replay=await send(a,g.id,f.friendshipId,idem);expect(replay.statusCode).toBe(201);expect(replay.json()).toEqual(r);

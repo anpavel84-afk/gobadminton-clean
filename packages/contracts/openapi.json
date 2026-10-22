@@ -25460,7 +25460,8 @@
             "type": "boolean"
           },
           "gameRecommendations": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "Remains false in the API-only FR-3A slice, including with migration 0040 installed. Product UI activation belongs to the separately assigned FR-3B slice. Recommendation routes enforce existing Friends admission independently."
           },
           "gameAttention": {
             "type": "boolean"
