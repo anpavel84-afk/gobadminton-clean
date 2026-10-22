@@ -390,6 +390,7 @@ it("does not let iPhone viewport resizing cancel a compact card swipe", () => {
 });
 
 it("keeps the compact preview mounted and pointer-addressable during a real swipe", () => {
+  vi.useFakeTimers();
   // Regression for Owner iPhone UAT FAIL #179: the old hidden={moving} turned
   // the original touch target display:none on the first move. WebKit then
   // cancelled the pointer stream even though the root had pointer capture.
