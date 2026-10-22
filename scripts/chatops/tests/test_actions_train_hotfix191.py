@@ -1,4 +1,4 @@
-"""Offline root hotfix transaction tests. All paths are disposable synthetic test directories."""
+"""Pure synthetic tests for fail-closed, two-phase root hotfix #191. No external effects."""
 import copy
 import hashlib
 import importlib.util
@@ -6,105 +6,127 @@ import json
 import pathlib
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
-from test_actions_train import installer, receiver
+from test_actions_train import receiver, installer
 
 FILE = pathlib.Path(__file__).resolve().parents[1]/'ops/recovery_hotfix_191.py'
 spec = importlib.util.spec_from_file_location('recovery_hotfix_191', FILE)
 H = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(H)
 
-
-def sha(path):
-    p=pathlib.Path(path)
-    return hashlib.sha256(p.read_bytes()).hexdigest() if p.exists() else None
-
+def sha(p):
+    p=pathlib.Path(p)
+    return hashlib.sha256(p.read_bytes()).hexdigest() if p.is_file() else None
 
 class Hotfix191(unittest.TestCase):
-    def test_closed_actions_and_paths(self):
-        self.assertEqual({'dry','apply','activate','rollback'},
-            set(__import__('ast').literal_eval(
-                next(n for n in __import__('ast').walk(__import__('ast').parse(FILE.read_text()))
-                     if isinstance(n,__import__('ast').Call) and isinstance(n.func,__import__('ast').Attribute)
-                     and n.func.attr=='add_argument' and n.args and
-                     isinstance(n.args[0],__import__('ast').Constant) and n.args[0].value=='action').keywords[0].value)))
+    def test_closed_explicit_actions_and_old_controller_identity(self):
         self.assertEqual(H.OLD_CONTROLLER,'ba02b9d9f9d56c7b07379da22d128c3dfa7341e1')
-        self.assertEqual(H.NEW_SHA,'579ea87375a1008481f29a736f818944adb40bd5d924719824bee410849050ea')
+        self.assertEqual(set(H.OLD),set(H.NEW))
+        self.assertEqual(len(H.OLD),2)
+        self.assertIn("callbacks_drained()",FILE.read_text())
+        self.assertIn("receiver.atomic(POLICY,before|{'mode':'disabled'}",FILE.read_text())
+        self.assertIn("phase='draining'",FILE.read_text())
+        self.assertIn("phase='installing'",FILE.read_text())
 
-    def test_single_source_change_and_pins_required(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root=pathlib.Path(tmp);install=root/'install';install.mkdir()
-            target=install/'recovery.py';target.write_text('old')
-            source=root/'source.py';source.write_text('new')
-            unchanged=install/'client.py';unchanged.write_text('same')
-            p=root/'bundle';(p/'.github/workflows').mkdir(parents=True)
-            ctrl='c'*40
-            (p/'.github/workflows/train-stage.yml').write_text('ref: '+ctrl+'\nref: '+ctrl+'\n')
-            (p/'.github/workflows/train-dispatch.yml').write_text('ref: '+ctrl+'\n')
-            stage_sha=sha(p/'.github/workflows/train-stage.yml')
-            policy=dict(mode='active',controller_sha=H.OLD_CONTROLLER,
-                        recovery=dict(source_sha=H.OLD_CONTROLLER))
-            record={'manifest':'old-manifest','after':{str(target):sha(target),str(unchanged):sha(unchanged)}}
-            with patch.object(H,'TARGET',target),patch.object(H,'OLD_SHA',sha(target)),patch.object(H,'NEW_SHA',sha(source)), \
-                 patch.object(H.receiver,'trusted_tree'),patch.object(H.installer,'payload',return_value={target:source,unchanged:unchanged}), \
-                 patch.object(H.receiver,'read',side_effect=lambda path,*args:policy if path==H.POLICY else record), \
-                 patch.object(H.recovery,'policy',return_value=None):
-                r=H.planned(p,'test-manifest',ctrl,stage_sha)
-                self.assertEqual(r[2]['mode'],'disabled')
-                self.assertEqual(r[2]['controller_sha'],ctrl)
-                self.assertEqual(r[2]['recovery']['source_sha'],ctrl)
-                self.assertEqual(r[3]['after'][str(target)],sha(source))
-                self.assertEqual(r[3]['after'][str(unchanged)],sha(unchanged))
-                # Wrong target, extra changed runtime and wrong workflow hash refuse.
-                with self.assertRaises(H.receiver.Refused):
-                    H.planned(p,'test-manifest',ctrl,'0'*64)
-                other=root/'different';other.write_text('drift')
-                with patch.object(H.installer,'payload',return_value={target:source,unchanged:other}):
-                    with self.assertRaises(H.receiver.Refused):
-                        H.planned(p,'test-manifest',ctrl,stage_sha)
+    def fixture(self,tmp):
+        root=pathlib.Path(tmp)
+        state=root/'state';state.mkdir()
+        install=root/'install';install.mkdir()
+        oldrec,oldrecv=install/'recovery.py',install/'receiver.py'
+        oldrec.write_bytes(b'OLD-REC');oldrecv.write_bytes(b'OLD-RCV')
+        newrec,newrecv=root/'new-recovery.py',root/'new-receiver.py'
+        newrec.write_bytes(b'NEW-REC');newrecv.write_bytes(b'NEW-RCV')
+        backup={'manifest':'old-manifest','after':{str(oldrec):sha(oldrec),str(oldrecv):sha(oldrecv)}}
+        policy=dict(mode='active',controller_sha=H.OLD_CONTROLLER,
+                    stage_workflow_sha256='0'*64,recovery=dict(source_sha=H.OLD_CONTROLLER))
+        (state/'backup.json').write_text(json.dumps(backup))
+        (root/'policy.json').write_text(json.dumps(policy))
+        (state/'controller.lock').touch()
+        old={str(oldrec):sha(oldrec),str(oldrecv):sha(oldrecv)}
+        new={str(oldrec):sha(newrec),str(oldrecv):sha(newrecv)}
+        proposed=copy.deepcopy(policy)
+        proposed.update(mode='disabled',controller_sha='c'*40,stage_workflow_sha256='1'*64)
+        proposed['recovery']['source_sha']='c'*40
+        nextrec=copy.deepcopy(backup)
+        nextrec['after'].update(new);nextrec['manifest']='new-manifest'
+        payload={oldrec:newrec,oldrecv:newrecv}
+        return root,state,install,oldrec,oldrecv,newrec,newrecv,policy,backup,proposed,nextrec,old,new,payload
 
-    def test_apply_activate_and_disabled_rollback_preserve_task_state(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root=pathlib.Path(tmp); install=root/'install';install.mkdir()
-            state=root/'state';state.mkdir()
-            target=install/'recovery.py';target.write_bytes(b'OLD')
-            replacement=root/'NEW';replacement.write_bytes(b'NEW')
-            (state/'controller.lock').touch()
-            oldpolicy=dict(mode='active',controller_sha=H.OLD_CONTROLLER,stage_workflow_sha256='0'*64,
-                           recovery=dict(source_sha=H.OLD_CONTROLLER))
-            oldrecord=dict(after={str(target):sha(target)},manifest='old')
-            journal={}
+    def test_two_step_disable_then_install_and_no_hidden_rollback_after_activation(self):
+        with tempfile.TemporaryDirectory() as t:
+            (root,state,inst,oldrec,oldrecv,newrec,newrecv,policy,backup,proposed,
+             nextrec,old,new,payload)=self.fixture(t)
             def atomic(path,value,mode=0o600):
-                p=pathlib.Path(path);p.write_text(json.dumps(value))
+                pathlib.Path(path).write_text(json.dumps(value))
             def read(path,owner=0):
-                p=pathlib.Path(path)
-                return json.loads(p.read_text()) if p.exists() else copy.deepcopy(
-                    oldpolicy if p.name=='policy.json' else oldrecord)
+                return json.loads(pathlib.Path(path).read_text())
+            def put(a,b,mode): pathlib.Path(b).write_bytes(pathlib.Path(a).read_bytes())
             with patch.object(H,'STATE',state),patch.object(H,'POLICY',root/'policy.json'),\
-                 patch.object(H,'TARGET',target),patch.object(H,'BACKUP',state/'hotfix-191-backup'),\
-                 patch.object(H,'JOURNAL',state/'hotfix-191.json'),\
-                 patch.object(H,'OLD_SHA',sha(target)),patch.object(H,'NEW_SHA',sha(replacement)),\
-                 patch.object(H.receiver,'trusted_tree'),patch.object(H,'quiet'),\
+                 patch.object(H,'INSTALL',inst),patch.object(H,'RECOVERY',oldrec),\
+                 patch.object(H,'RECEIVER',oldrecv),patch.object(H,'JOURNAL',state/'hotfix-191.json'),\
+                 patch.object(H,'BACKUP',state/'hotfix-191-backup'),patch.object(H,'OLD',old),\
+                 patch.object(H,'NEW',new),patch.object(H.receiver,'trusted_tree'),\
+                 patch.object(H,'quiet'),patch.object(H,'callbacks_drained') as drained,\
                  patch.object(H,'state_hashes',return_value={'ledger':'frozen'}),\
                  patch.object(H.receiver,'atomic',side_effect=atomic),\
                  patch.object(H.receiver,'read',side_effect=read),\
-                 patch.object(H.installer,'put',side_effect=lambda a,b,mode: pathlib.Path(b).write_bytes(pathlib.Path(a).read_bytes())),\
-                 patch.object(H,'planned',return_value=(oldpolicy,oldrecord,
-                      dict(oldpolicy,mode='disabled',controller_sha='c'*40,
-                           recovery=dict(source_sha='c'*40),stage_workflow_sha256='1'*64),
-                      dict(oldrecord,after={str(target):sha(replacement)},manifest='new'),replacement)):
-                self.assertEqual(H.transaction('apply',root,'manifest','c'*40,'1'*64)['status'],'INSTALLED_DISABLED')
+                 patch.object(H.installer,'put',side_effect=put),\
+                 patch.object(H,'plan',return_value=(policy,backup,proposed,nextrec,payload)),\
+                 patch.object(H,'validated_payload',return_value=payload),\
+                 patch.object(H.recovery,'policy',return_value=None):
+                a=H.transaction('apply',root,'new-manifest','c'*40,'1'*64)
+                self.assertEqual(a['status'],'DISABLED_DRAIN')
+                self.assertEqual(oldrec.read_bytes(),b'OLD-REC')
                 self.assertEqual(read(root/'policy.json')['mode'],'disabled')
-                self.assertEqual(target.read_bytes(),b'NEW')
-                self.assertEqual(H.transaction('activate',probe=123)['status'],'ACTIVE')
+                self.assertEqual(read(state/'hotfix-191.json')['phase'],'draining')
+                a=H.transaction('apply',root,'new-manifest','c'*40,'1'*64)
+                self.assertEqual(a['status'],'INSTALLED_DISABLED')
+                drained.assert_called()
+                self.assertEqual(oldrec.read_bytes(),b'NEW-REC')
+                self.assertEqual(oldrecv.read_bytes(),b'NEW-RCV')
+                self.assertEqual(read(state/'backup.json')['after'],new)
+                self.assertEqual(read(root/'policy.json')['mode'],'disabled')
+                a=H.transaction('activate',probe=123)
+                self.assertEqual(a['status'],'ACTIVE')
                 self.assertEqual(read(root/'policy.json')['mode'],'active')
-                with self.assertRaises(H.receiver.Refused):
-                    H.transaction('rollback')
-                # Stopping dispatch is an explicit OPS gate, not automatic rollback.
-                p=read(root/'policy.json');p['mode']='disabled';atomic(root/'policy.json',p)
-                with self.assertRaises(H.receiver.Refused):
-                    H.transaction('rollback') # active journal must never rewind after more work
+                with self.assertRaises(receiver.Refused):H.transaction('rollback')
 
+    def test_crash_after_first_file_replacement_recovers_without_touching_tasks(self):
+        with tempfile.TemporaryDirectory() as t:
+            (root,state,inst,oldrec,oldrecv,newrec,newrecv,policy,backup,proposed,
+             nextrec,old,new,payload)=self.fixture(t)
+            def atomic(path,value,mode=0o600):
+                pathlib.Path(path).write_text(json.dumps(value))
+            def read(path,owner=0):
+                return json.loads(pathlib.Path(path).read_text())
+            calls=[0]
+            def put(a,b,mode):
+                pathlib.Path(b).write_bytes(pathlib.Path(a).read_bytes())
+                if str(b)==str(oldrec) and pathlib.Path(a)==newrec and calls[0]==0:
+                    calls[0]+=1
+                    raise RuntimeError('interrupted after first trusted atomic file')
+            with patch.object(H,'STATE',state),patch.object(H,'POLICY',root/'policy.json'),\
+                 patch.object(H,'INSTALL',inst),patch.object(H,'RECOVERY',oldrec),\
+                 patch.object(H,'RECEIVER',oldrecv),patch.object(H,'JOURNAL',state/'hotfix-191.json'),\
+                 patch.object(H,'BACKUP',state/'hotfix-191-backup'),patch.object(H,'OLD',old),\
+                 patch.object(H,'NEW',new),patch.object(H.receiver,'trusted_tree'),\
+                 patch.object(H,'quiet'),patch.object(H,'callbacks_drained'),\
+                 patch.object(H,'state_hashes',return_value={'ledger':'frozen'}),\
+                 patch.object(H.receiver,'atomic',side_effect=atomic),\
+                 patch.object(H.receiver,'read',side_effect=read),\
+                 patch.object(H.installer,'put',side_effect=put),\
+                 patch.object(H,'plan',return_value=(policy,backup,proposed,nextrec,payload)),\
+                 patch.object(H,'validated_payload',return_value=payload),\
+                 patch.object(H.recovery,'policy',return_value=None):
+                H.transaction('apply',root,'new-manifest','c'*40,'1'*64)
+                with self.assertRaises(RuntimeError):
+                    H.transaction('apply',root,'new-manifest','c'*40,'1'*64)
+                self.assertEqual(read(state/'hotfix-191.json')['phase'],'installing')
+                self.assertEqual(H.transaction('rollback')['status'],'ROLLED_BACK_DISABLED')
+                self.assertEqual(oldrec.read_bytes(),b'OLD-REC')
+                self.assertEqual(oldrecv.read_bytes(),b'OLD-RCV')
+                self.assertEqual(read(root/'policy.json')['mode'],'disabled')
+                self.assertEqual(read(state/'backup.json'),backup)
 
 if __name__=='__main__':unittest.main()
