@@ -124,7 +124,10 @@ class Receipts(unittest.TestCase):
         self.assertIn('Bounded diagnosed repair requirements', result['goal'])
         for invalid in ([doc_api], [doc_handoff], [doc_api, doc_handoff],
                         ['apps/api/README.md', doc_api], ['packages/contracts/README.md', doc_handoff],
-                        ['apps/api/docs/fix.md', doc_api]):
+                        ['apps/api/docs/fix.md', doc_api],
+                        ['apps/web/public/discovery/provenance.json', doc_api],
+                        ['apps/api/package.json', doc_api],
+                        ['packages/contracts/package.json', doc_handoff]):
             allowed = copy.deepcopy(parent)
             allowed['allowed_paths'] = list(dict.fromkeys([*allowed['allowed_paths'], *invalid]))
             with self.subTest(invalid=invalid), self.assertRaisesRegex(core.Refused, 'no product source/test'):
