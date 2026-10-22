@@ -317,12 +317,17 @@ def transaction(action,bundle=None,manifest_sha=None,controller=None,stage_sha=N
                 receiver.need(policy['mode']=='disabled' and
                               state_hashes()==journal['state_hashes'],
                               'cannot start activation with changed task state')
-                # Write-ahead activation marker precedes ACTIVE policy mutation.
-                journal.update(phase='activating',shadow_run=probe)
+                proof=verify_hosted_probe(probe,journal)
+                # Verified proof + write-ahead marker precedes ACTIVE policy
+                # mutation; the next call can recover without fabricating a run.
+                journal.update(phase='activating',shadow_run=probe,shadow_proof=proof)
                 receiver.atomic(JOURNAL,journal)
             else:
                 receiver.need(journal.get('shadow_run')==probe,
                               'activation proof changed during recovery')
+                proof=verify_hosted_probe(probe,journal)
+                receiver.need(journal.get('shadow_proof')==proof,
+                              'hosted GitHub proof changed during activation recovery')
             if policy['mode']=='disabled':
                 receiver.need(state_hashes()==journal['state_hashes'],
                               'task state changed before activation')
