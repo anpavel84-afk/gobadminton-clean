@@ -196,10 +196,6 @@
 .gb-venue-picker-header{display:flex;justify-content:space-between;align-items:center;gap:15px;padding:20px 22px 12px}
 .gb-venue-picker-header h2{margin:0;font-size:20px;line-height:1.2}
 .gb-venue-picker-header p{margin:6px 0 0;font-size:12px;color:var(--gb-ink-soft)}
-.gb-venue-picker-close{
- flex:none;display:grid;place-items:center;width:42px;height:42px;border:1px solid var(--gb-line);
- border-radius:50%;background:white;color:var(--gb-ink);font-size:17px;cursor:pointer;
-}
 .gb-venue-picker-search{
  display:flex;align-items:center;gap:9px;flex:none;margin:4px 22px 0;padding:0 12px;
  border:1px solid var(--gb-line);border-radius:12px;background:#f9faf9;

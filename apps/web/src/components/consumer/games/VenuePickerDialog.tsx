@@ -1,4 +1,5 @@
 "use client";
+import { CloseButton } from "../CloseButton";
 
 import { VenueCover } from "../venues/VenueCover";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -69,7 +70,7 @@ export function VenuePickerDialog({ venues, selectedId, status, onSelect, onClos
             <h2 id="gb-venue-picker-title">Выберите площадку</h2>
             <p>Все площадки выбранного города и области</p>
           </div>
-          <button type="button" className="gb-venue-picker-close" aria-label="Закрыть выбор площадки" onClick={onClose}>✕</button>
+          <CloseButton aria-label="Закрыть выбор площадки" onClick={onClose} />
         </header>
         <div className="gb-venue-picker-search">
           <span aria-hidden="true">⌕</span>

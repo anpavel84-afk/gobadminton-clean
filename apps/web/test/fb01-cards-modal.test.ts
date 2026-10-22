@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 const discovery = readFileSync(new URL("../src/styles/discovery.css", import.meta.url), "utf8");
 const games = readFileSync(new URL("../src/styles/games.css", import.meta.url), "utf8");
-const players = readFileSync(new URL("../src/styles/players.css", import.meta.url), "utf8");
+const consumer = readFileSync(new URL("../src/styles/consumer.css", import.meta.url), "utf8");
 
 describe("FB01 mobile card footer and profile dialog close control", () => {
   it("keeps organizer identity and both normal-size actions in one row at phone widths", () => {
@@ -14,6 +14,6 @@ describe("FB01 mobile card footer and profile dialog close control", () => {
   });
 
   it("makes the profile dialog close button a centered 44px circle with normal hit area", () => {
-    expect(players).toMatch(/\.fr3 \.profile-dialog > header > button\s*\{[^}]*box-sizing:\s*border-box;[^}]*display:\s*grid;[^}]*place-items:\s*center;[^}]*width:\s*44px;[^}]*height:\s*44px;[^}]*padding:\s*0;[^}]*border-radius:\s*50%/);
+    expect(consumer).toMatch(/button\.gb-close-button\.gb-close-button\s*\{[^}]*box-sizing:\s*border-box;[^}]*display:\s*grid;[^}]*place-items:\s*center;[^}]*width:\s*44px;[^}]*height:\s*44px;[^}]*min-width:\s*44px;[^}]*min-height:\s*44px;[^}]*padding:\s*0;[^}]*border-radius:\s*50%/);
   });
 });
