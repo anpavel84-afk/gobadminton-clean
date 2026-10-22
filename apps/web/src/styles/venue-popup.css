@@ -41,6 +41,9 @@
 
 /* BottomSheet surface: one measured shell; only its handle captures pointers. */
 .gb-consumer .gb-venue-popup { position:fixed; z-index:104; left:12px; right:12px; bottom:calc(12px + var(--gb-safe-bottom)); max-height:88dvh; overflow:hidden; background:var(--gb-white); color:var(--gb-ink); border-radius:var(--gb-radius-lg); box-shadow:var(--gb-shadow-elevated); }
+/* The compact card is one touch surface. Horizontal browser gestures and pinch-zoom
+   remain native; vertical swipes are interpreted by VenuePopup only while collapsed. */
+.gb-consumer .gb-venue-popup[data-expanded="false"] { touch-action:pan-x pinch-zoom; }
 .gb-consumer .gb-venue-popup-compact-measure { position:absolute; height:172px; width:0; pointer-events:none; }
 .gb-consumer .gb-venue-popup-full-measure { position:absolute; height:88dvh; width:0; pointer-events:none; }
 .gb-consumer .gb-venue-popup .gb-venue-preview { position:static; height:128px; box-shadow:none; }
