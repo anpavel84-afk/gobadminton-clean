@@ -190,13 +190,64 @@ def binding(req):
     return {k: v for k, v in req.items() if k not in ('gh_token', 'run', 'run_attempt')}
 
 def route(slots, task, role, profile, budget, slot):
+    """Choose a model by immutable stage preferences, not by relative token usage.
+
+    V1 scalar-model Issues retain their previous route. For new V2 stage routes,
+    the order is explicitly Owner-admitted: Cursor Auto implementation first,
+    Codex as pre-call fallback, and Antigravity as a QA candidate. Until native
+    sandboxed adapters are actually qualified, only Codex may execute.
+    """
+    need(role in ('author', 'qa'), 'invalid route role')
+    stage_key = 'author_routes' if role == 'author' else 'qa_routes'
+    if stage_key in task:
+        need(task.get('work_kind') in ('architecture', 'implementation', 'ux', 'contract', 'test')
+             and task.get('risk') in ('routine', 'complex', 'critical'),
+             'invalid stage routing metadata')
+        refusal = {}
+        for entry in task[stage_key]:
+            pieces = entry.split(':')
+            need(len(pieces) in (2, 3), 'invalid immutable model route')
+            provider, model = pieces[:2]
+            effort = pieces[2] if len(pieces) == 3 else None
+            need(provider in ('codex', 'cursor', 'agy'), 'invalid provider')
+            if profile != 'auto' and provider != profile:
+                refusal[entry] = 'provider profile mismatch'
+                continue
+            # Preserve the existing Codex permission/landlock guarantees.
+            # Other providers can be enabled ONLY alongside a reviewed native
+            # sandbox adapter; merely flipping an Adapter flag cannot mint it.
+            if provider != 'codex':
+                refusal[entry] = 'native sandbox adapter not installed'
+                continue
+            if model not in slots.MODEL_ADAPTER or slots.MODEL_ADAPTER[model] != provider:
+                refusal[entry] = 'exact Codex model not supported by installed bridge'
+                continue
+            need(model in ('gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-luna')
+                 and effort in ('medium', 'high'), 'model/effort out of closed route registry')
+            if model == 'gpt-6-luna':
+                need(effort == 'medium', 'Luna effort not admitted')
+            ok, why = slots.adapter_status(provider, role, budget, slot)
+            if not ok:
+                refusal[entry] = why
+                continue
+            return dict(profile=profile, provider=provider, requested_model=model,
+                        effective_model=model, effort=effort, role=role,
+                        work_kind=task['work_kind'], risk=task['risk'],
+                        fallback_reason=('previous preferred providers unavailable'
+                                         if refusal else None),
+                        unavailable=refusal,
+                        remaining_calls=budget.remaining(provider, role, slot),
+                        used_calls=budget.used(provider, role, slot))
+        need(False, 'no safe role-specific provider: ' + json.dumps(refusal, sort_keys=True))
+
+    # Existing immutable V1 Issue approvals are interpreted as before.
     requested = task.get('model')
     names = ['codex', 'cursor', 'agy'] if profile == 'auto' else [profile]
     options, refusals = [], {}
     for name in names:
         ok, why = slots.adapter_status(name, role, budget, slot)
-        # Only the installed/proven Codex adapter has a closed exact model mapping today.
-        if ok and (name != 'codex' or requested not in (None, 'gpt-6.1-sol')):
+        if ok and (name != 'codex' or requested not in
+                   (None, 'gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-luna')):
             ok, why = False, 'no proven exact model adapter'
         if role == 'qa' and name != 'codex':
             ok, why = False, 'independent QA is approved only for Codex'
@@ -208,9 +259,12 @@ def route(slots, task, role, profile, budget, slot):
             refusals[name] = why
     need(options, 'profile unavailable: ' + json.dumps(refusals, sort_keys=True))
     name = min(options)[1]
+    model = (requested or 'gpt-6.1-sol') if role == 'author' else 'gpt-6.1-sol'
+    effort = task.get('effort', 'high') if role == 'author' else 'high'
     return dict(profile=profile, provider=name, requested_model=requested,
-                effective_model='gpt-6.1-sol', role=role,
-                fallback_reason=('only proven available provider with positive measured budget' if profile == 'auto' else None),
+                effective_model=model, effort=effort, role=role,
+                fallback_reason=('only proven available provider with positive measured budget'
+                                 if profile == 'auto' else None),
                 unavailable=refusals, remaining_calls=budget.remaining(name, role, slot),
                 used_calls=budget.used(name, role, slot))
 
