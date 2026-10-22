@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState, type PointerEvent, type ReactNode } from "react";
 
 type Drag = { id: number; x: number; y: number; lastY: number; time: number; velocity: number; origin: boolean; start: number; travel: number; axis: "pending" | "vertical"; target: HTMLButtonElement };
-type CompactDrag = { id: number; x: number; y: number; travel: number; axis: "pending" | "vertical"; target: HTMLDivElement };
+type CompactDrag = { id: number; x: number; y: number; travel: number; axis: "pending" | "vertical"; target: HTMLElement };
 
 /** The handle retains its old expanded gesture. Only the compact surface gains full-card swipes. */
 export function VenuePopup({ expanded, onExpandedChange, onDeselect, preview, children }: {
@@ -30,8 +30,14 @@ export function VenuePopup({ expanded, onExpandedChange, onDeselect, preview, ch
   const clearTimer = () => { if (timer.current !== null) clearTimeout(timer.current); timer.current = null; };
   const reset = () => { release(); releaseCompact(); clearTimer(); setMoving(false); setSettling(false); setPosition(null); };
   useEffect(() => {
-    window.addEventListener("resize", reset);
-    return () => { window.removeEventListener("resize", reset); release(); releaseCompact(); clearTimer(); };
+    const onResize = () => {
+      // On iOS the browser bars can change viewport size while a finger is moving.
+      // Never reset the compact gesture mid-touch; expanded/handle keep their old behavior.
+      if (compactDrag.current) return;
+      reset();
+    };
+    window.addEventListener("resize", onResize);
+    return () => { window.removeEventListener("resize", onResize); release(); releaseCompact(); clearTimer(); };
   }, []);
   const settle = (value: boolean) => {
     const current = drag.current;
@@ -50,9 +56,10 @@ export function VenuePopup({ expanded, onExpandedChange, onDeselect, preview, ch
     settle(drag.current.origin);
   };
 
-  // Do not capture on pointerdown: short taps must still click the real preview button.
-  // After a vertical threshold capture the persistent popup shell, not the disappearing
-  // preview DOM, so a live swipe keeps receiving pointer moves as the panel expands.
+  // Use the same immediate pointer capture as the working handle on iPhone Safari.
+  // Capture the original preview button when present: this preserves its native tap/click
+  // and keeps receiving subsequent pointer moves even when the finger leaves the card.
+  // The preview remains mounted and the compact-only CSS prevents native vertical panning.
   const compactPointerDown = (event: PointerEvent<HTMLDivElement>) => {
     if (expanded || moving || settling || drag.current || compactDrag.current ||
         !event.isPrimary || event.button !== 0 ||
@@ -61,8 +68,12 @@ export function VenuePopup({ expanded, onExpandedChange, onDeselect, preview, ch
       (compact.current?.getBoundingClientRect().height ?? 0);
     if (travel <= 0) return;
     suppress.current = false;
+    const source = event.target as HTMLElement;
+    const previewButton = source.closest?.(".gb-venue-preview-button") as HTMLButtonElement | null;
+    const captureTarget = previewButton ?? event.currentTarget;
+    captureTarget.setPointerCapture(event.pointerId);
     compactDrag.current = { id: event.pointerId, x: event.clientX, y: event.clientY,
-      travel, axis: "pending", target: event.currentTarget };
+      travel, axis: "pending", target: captureTarget };
   };
   const compactPointerMove = (event: PointerEvent<HTMLDivElement>) => {
     const current = compactDrag.current;
@@ -74,7 +85,6 @@ export function VenuePopup({ expanded, onExpandedChange, onDeselect, preview, ch
       if (Math.abs(dx) >= Math.abs(dy)) { compactDrag.current = null; return; }
       current.axis = "vertical";
       suppress.current = true;
-      event.currentTarget.setPointerCapture(event.pointerId);
     }
     event.preventDefault();
     setPosition(Math.max(0, Math.min(current.travel, -dy)));
