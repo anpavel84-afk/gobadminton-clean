@@ -51,7 +51,55 @@ jobs:
           PY
       - name: Compile changed Runner modules
         run: |
-          python -m py_compile runner.py autopilot.py backlog_sync.py publication_guard.py control_agent.py writer_bridge.py queue_recovery.py test_job_contract.py compact_pm_brief.py compact_task_capsule.py
+          python -m py_compile runner.py autopilot.py backlog_sync.py publication_guard.py control_agent.py writer_bridge.py queue_recovery.py test_job_contract.py compact_pm_brief.py compact_task_capsule.py github_owner_issue_intake.py clean_runtime_access.py clean_publisher.py clean_publish_submit.py clean_qa_job.py clean_dev_release.py monitor_snapshot.py
       - name: Clean-root binding, DAG and protected QA tests
         run: |
           python -m unittest -v             test_clean_git_binding_20261013             test_friends_dag_auto_advance_v001             test_qa23001_protected_job_identity_v001 test_qa_pr11_git_alias_v001 test_qa_pr11_compact_capsule_v001 test_qa_pr11_sandbox_control_r3_v001
+      - name: Clean Owner Issue intake and Codex confinement
+        run: python -m unittest -v test_clean_issue_commissioning_v001 test_owner_planner_retry_v001 test_clean_runtime_access test_clean_publisher test_clean_qa_job_v001 test_clean_publish_submit_v001 test_clean_dev_release test_clean_managed_pm_planner_v001 test_clean_dependency_seed_v001 test_clean_monitor_transport_v001
+
+  candidate-dev-source-checks:
+    name: Exact clean candidate ${{ matrix.candidate }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - candidate: radar-map-pr19
+            commit: ed1ad372751b25f1d4bddae1f13e1b3876ef5bec
+            package: web
+            focused_test: test
+          - candidate: friends-api-pr20
+            commit: f98b1ed42e3f3847ac305e487cf3a706d6a458f2
+            package: api
+            focused_test: test/unit/friendships.test.ts
+    steps:
+      - name: Checkout exact immutable candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.commit }}
+          persist-credentials: false
+      - name: Verify candidate pin
+        run: test "$(git rev-parse HEAD)" = "${{ matrix.commit }}"
+      - name: Node 24.21.0
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.21.0
+      - name: pnpm 10.18.0
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.18.0 --activate
+          node --version
+          pnpm --version
+      - name: Install pinned clean dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Check contracts, types and focused tests
+        run: |
+          pnpm --filter @gobadminton/contracts run check
+          pnpm --filter "@gobadminton/${{ matrix.package }}" run typecheck
+          pnpm --filter "@gobadminton/${{ matrix.package }}" exec vitest run "${{ matrix.focused_test }}"
+      - name: Source-only marker
+        run: |
+          echo "SOURCE_TESTED_ONLY=${{ matrix.commit }}"
+          echo "INDEPENDENT_QA=NOT_RUN DEV_DEPLOY=NOT_RUN PROD_DEPLOY=NOT_RUN"

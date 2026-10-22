@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import writer_bridge
+import clean_runtime_access
 import fcntl
 import hashlib
 import json
@@ -598,8 +599,11 @@ def bootstrap_head(repo: Path, head: str, runtime_blob: str) -> str:
 
 def atomic_write(path: Path, content: bytes, mode: int = 0o600) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    mode, gid = clean_runtime_access.file_access(path, mode)
     fd, temp = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
+        if gid is not None:
+            os.fchown(fd, -1, gid)
         os.fchmod(fd, mode)
         with os.fdopen(fd, "wb") as fp:
             fp.write(content)
