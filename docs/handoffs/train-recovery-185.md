@@ -24,7 +24,7 @@ Base: 705db4860f3378253fe33652569ecd4664294de1. Task: https://github.com/anpavel
 A scoped source author call ended at its900s budget timeout; its substantive source was retained and completed manually by the integrator. No second source author and no false completion claim. No application product modifications in this OPS worktree.
 
 ## Source surfaces
-Existing core/client/receiver/stage; recovery.py, recovery_admission.py, recovery_publish.py, qa_recovery.py, recovery_upgrade.py; closed manifest; train-stage and trusted checkout pins; focused tests. Pinned live libraries, monitor.py, deploy-helper implementation and application code remain unchanged. No new daemon or permanent worker.
+Existing core/client/receiver/stage; recovery.py, recovery_admission.py, recovery_publish.py, qa_recovery.py, recovery_upgrade.py; closed manifest; train-stage and trusted checkout pins; existing Product CI receiver job also runs the focused Actions regression suite; focused tests. Pinned live libraries, monitor.py, deploy-helper implementation and application code remain unchanged. No new daemon or permanent worker.
 
 ## Safe install and rollback
 Runtime upgrade is reviewed-only, exact manifest and proof digest. Hold existing controller.lock, verify disabled old services and no live CLI, worker/lease locks, no integration pending. Known stopped QA178 may remain pending ONLY when the exact after-hash/process/finished receipt proves no active work. Never erase its pending receipt to make upgrade pass.
@@ -33,3 +33,5 @@ Rollback restores runtime/control files only, never task counters, source branch
 
 ## Remaining gates
 Exact independent OPS review; Product CI; mechanical workflow checkout pin to immutable controller commit; safe root dry/apply and active-policy probe; prove actual recovery and normal-queue transitions. Monitor/Projects UI #175 is separate. Until real evidence is recorded, this file does not claim installed, autonomous product completion, Owner acceptance or PROD authorization.
+
+Immutable controller source: `096fc67ee9ceef4f8a2111dc04856354ed25bc14`. Both train workflow checkouts are pinned to this commit in the follow-up mechanical workflow commit; root policy must match this controller and the final train-stage.yml SHA256. This avoids a self-referential source/workflow hash.
