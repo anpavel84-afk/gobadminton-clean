@@ -1,10 +1,11 @@
-# GoBadminton — Clean baseline
+# GoBadminton CLEAN
 
-Current application source as a fresh Git root. This is NOT a production deployment or an independent QA acceptance.
+Рабочий monorepo: `anpavel84-afk/gobadminton-clean`.
 
-Code: apps/web (Next.js), apps/api (NestJS), apps/worker, packages, infra.
-See docs/ACTIVE_BACKLOG.md for the new short priorities and docs/LEGACY_ARCHIVE.md for old SHA/provenance.
-DEV target: Germany web + isolated DEV API/DB. PROD stays Moscow web + Germany PROD API/DB.
-No Runner or production operation may start until explicitly authorized; OPERATOR_PAUSED remains.
+Начать с [AGENTS.md](AGENTS.md) и [единого регламента разработки/PMA](docs/rules/ENGINEERING_OPERATING_MODEL.md). [Документация продукта](docs/README.md).
 
-QA screenshots belong in the restricted project archive at files.anpavel.ru, not Git.
+Код: `apps/web`, `apps/api`, `apps/worker`, `apps/admin`, `apps/mobile`, `packages`, `infra`. Задачи и приоритеты — существующие GitHub Issues/Projects; исполнение — действующий GitHub Actions train с защищёнными исполнителями на Germany VPS.
+
+`dev` — продуктовая интеграция и изолированный DEV. `main`/контроллер/PROD не обновляются автоматически от изменения документа. PROD требует отдельного Owner GO на конкретный выпуск.
+
+Операционный статус проверять по Actions и серверным receipts. Старое утверждение о постоянном OPERATOR_PAUSED не является текущим статусом. Архивы и dated handoffs сохраняют историю, но не дают полномочий запускать старые службы.

@@ -1,71 +1,13 @@
-# Cursor Execution Workflow
+# Cursor execution workflow — прикладной маршрут
 
-## Phase 0 — admission
+Все полномочия — в [едином регламенте](../rules/ENGINEERING_OPERATING_MODEL.md), а не в этом списке.
 
-Receive one exact assignment.
+1. Получить exact assignment, принятую ревизию правил, base и допустимые эффекты.
+2. На назначенной Германии проверить worktree/lease/изоляцию и квалифицированную роль адаптера. PLAN не использовать.
+3. Выполнить ограниченный source slice и доступные самопроверки; сохранить ограничения офлайн-среды.
+4. Передать результат доверенному bridge/интегратору для разрешённых Git/publish операций. Не считать наличие CLI правом самостоятельного push/deploy.
+5. Отдельный QA проверяет точный candidate; обязательные CI checks и интеграция проходят существующим train.
+6. DEV проверяется по ACCEPTED и live smoke; PROD требует отдельного Owner GO.
+7. Сохранить exact handoff и вернуть управление контроллеру.
 
-Confirm:
-- scope;
-- base SHA;
-- allowed effects;
-- target resources;
-- acceptance criteria;
-- stop boundary.
-
-## Phase 1 — preflight
-
-On PLAN:
-- fetch;
-- verify remote;
-- verify branch/base;
-- verify clean state;
-- inspect existing worktree;
-- verify required toolchain/access.
-
-For VPS work:
-- inspect host health/resources;
-- inspect existing containers/networks/volumes/listeners;
-- confirm GoBadminton boundary is free/non-conflicting.
-
-## Phase 2 — implementation
-
-Use Cursor AUTO in the local product checkout.
-Make the smallest bounded change.
-
-Do not silently redesign architecture, product semantics or deployment topology.
-
-## Phase 3 — self-check
-
-Run exact required checks.
-Repair only inside scope.
-Bound repeated repair loops.
-
-## Phase 4 — GitHub candidate
-
-Commit branch.
-Push.
-Open/update PR.
-Wait for relevant CI.
-Record exact candidate SHA.
-
-## Phase 5 — target verification
-
-If deployment is admitted:
-- deploy exact candidate;
-- do not deploy a dirty local tree;
-- run smoke;
-- compare unrelated shared-host services before/after;
-- capture exact resource names/ports/images/volumes.
-
-## Phase 6 — handoff
-
-Write durable handoff under `docs/handoffs/`.
-
-Return:
-- PR and candidate;
-- evidence;
-- limitations;
-- rollback;
-- next bounded recommendation.
-
-Do not automatically start the next slice.
+Ограниченные retry/fallback, независимость и состояние неизвестного writer — разделы 5–9 регламента. Этот workflow не запускает старые службы и не является дополнительным scheduler.
