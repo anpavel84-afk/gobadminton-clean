@@ -122,7 +122,9 @@ class Receipts(unittest.TestCase):
         self.assertEqual(result.get('depends_on'), parent.get('depends_on'))
         self.assertTrue(result['goal'].startswith(parent['goal']))
         self.assertIn('Bounded diagnosed repair requirements', result['goal'])
-        for invalid in ([doc_api], [doc_handoff], [doc_api, doc_handoff]):
+        for invalid in ([doc_api], [doc_handoff], [doc_api, doc_handoff],
+                        ['apps/api/README.md', doc_api], ['packages/contracts/README.md', doc_handoff],
+                        ['apps/api/docs/fix.md', doc_api]):
             with self.subTest(invalid=invalid), self.assertRaisesRegex(core.Refused, 'no product source/test'):
                 R.revised(parent, proposal | {'paths': invalid})
 
@@ -136,6 +138,13 @@ class Receipts(unittest.TestCase):
                 parent['allowed_paths'] = [source, path]
                 with self.assertRaises(core.Refused):
                     R.revised(parent, diagnosis() | {'paths': [source, path]})
+        # Real source/test extension required, including expected JS/CSS/SQL/contract data.
+        for path in ('apps/web/src/fix.tsx', 'apps/web/src/styles/fix.css',
+                     'apps/api/migrations/0040.sql', 'packages/contracts/openapi.json'):
+            parent = copy.deepcopy(TASK)
+            parent['allowed_paths'] = [path, 'docs/api/PRODUCT_V001.md']
+            proposal = diagnosis() | {'paths': parent['allowed_paths']}
+            self.assertEqual(R.revised(parent, proposal)['max_attempts'], 2)
         # No broad docs/ prefix: only existing product API/handoff documents.
         parent = copy.deepcopy(TASK)
         parent['allowed_paths'] = [source, 'docs/random.md']
