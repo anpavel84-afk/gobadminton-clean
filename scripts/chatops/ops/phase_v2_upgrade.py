@@ -6,6 +6,8 @@ budgets and other projects are not written. The root policy remains disabled
 through installation, hosted shadow proof and separate explicit activation.
 """
 import argparse
+import base64
+import hashlib
 import copy
 import fcntl
 import json
@@ -158,6 +160,96 @@ def clear_installer_temporary(path):
                   and stat.S_IMODE(info.st_mode) in (0o600,0o640,0o644),
                   'foreign/unsafe temporary installation file')
     temp.unlink()
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise receiver.Refused('untrusted GitHub public API redirect')
+
+
+def public_github(path):
+    """Read only public repository REST endpoints, with no credential forwarding."""
+    receiver.need(isinstance(path, str) and not path.startswith('/')
+                  and '..' not in path and '://' not in path,
+                  'unsafe GitHub proof path')
+    req=urllib.request.Request(
+        'https://api.github.com/repos/anpavel84-afk/gobadminton-clean/'+path,
+        headers={'Accept':'application/vnd.github+json',
+                 'User-Agent':'GoBadminton-PhaseV2-Root-ReadOnly',
+                 'X-GitHub-Api-Version':'2022-11-28'})
+    opener=urllib.request.build_opener(_NoRedirect())
+    with opener.open(req,timeout=10) as response:
+        receiver.need(response.status==200,'GitHub proof HTTP not successful')
+        raw=response.read(524289)
+    receiver.need(len(raw)<=524288,'GitHub proof body too large')
+    try:data=json.loads(raw)
+    except ValueError:raise receiver.Refused('GitHub proof body not JSON') from None
+    receiver.need(type(data) is dict,'GitHub proof response not object')
+    return data
+
+
+def verify_hosted_probe(run_id, journal):
+    """Independently verify exact public hosted dispatcher+planning job.
+
+    The human-supplied run ID cannot itself serve as evidence. GitHub must
+    confirm a completed post-install run on DEV with both real jobs successful
+    and its exact workflow bytes equal to the separately reviewed pin.
+    """
+    receiver.need(type(run_id) is int and 0<run_id<10**15,
+                  'invalid shadow-run ID')
+    installed_at=journal.get('installed_at')
+    receiver.need(type(installed_at) is int and installed_at>0,
+                  'missing installation time fence')
+    result=public_github('actions/runs/'+str(run_id))
+    receiver.need(
+        result.get('id')==run_id and
+        result.get('name')=='Train dispatcher' and
+        result.get('path')=='.github/workflows/train-dispatch.yml' and
+        result.get('event')=='workflow_dispatch' and
+        result.get('head_branch')=='dev' and
+        result.get('status')=='completed' and
+        result.get('conclusion')=='success' and
+        (result.get('repository') or {}).get('id')==REPO_ID and
+        (result.get('head_repository') or {}).get('id')==REPO_ID and
+        (result.get('actor') or {}).get('id') in (318610566,41898282) and
+        re.fullmatch('[a-f0-9]{40}',result.get('head_sha') or '') and
+        type(result.get('run_attempt')) is int and result['run_attempt']>=1,
+        'GitHub run not the trusted completed DEV dispatcher')
+    started=result.get('run_started_at') or result.get('created_at')
+    receiver.need(isinstance(started,str),'missing exact GitHub run time')
+    try:
+        start_dt=dt.datetime.fromisoformat(started.replace('Z','+00:00'))
+        time_ok=start_dt.tzinfo is not None and start_dt.timestamp()>=installed_at
+    except (ValueError,OverflowError):time_ok=False
+    receiver.need(time_ok,'shadow run not after installed disabled controller')
+    jobs=public_github('actions/runs/'+str(run_id)+'/jobs?per_page=40')
+    jobrows=jobs.get('jobs',[])
+    receiver.need(type(jobrows) is list and 2<=len(jobrows)<=40 and
+                  jobs.get('total_count')==len(jobrows),
+                  'ambiguous or truncated shadow jobs')
+    required=('reconcile','publish_phase_drafts')
+    for name in required:
+        selected=[j for j in jobrows if j.get('name')==name]
+        receiver.need(len(selected)==1 and
+                      selected[0].get('status')=='completed' and
+                      selected[0].get('conclusion')=='success' and
+                      selected[0].get('head_sha')==result['head_sha'],
+                      'required hosted shadow job not successful: '+name)
+    # The run's actual source revision must contain the reviewed dispatcher
+    # workflow; a successful old/altered workflow does not prove this version.
+    item=public_github('contents/.github/workflows/train-dispatch.yml?ref='+result['head_sha'])
+    receiver.need(item.get('encoding')=='base64' and
+                  type(item.get('content')) is str and
+                  item.get('path')=='.github/workflows/train-dispatch.yml',
+                  'hosted run workflow revision unavailable')
+    try:raw=base64.b64decode(item['content'],validate=False)
+    except (ValueError,TypeError):raise receiver.Refused('bad hosted workflow encoding') from None
+    receiver.need(len(raw)<=131072 and
+                  hashlib.sha256(raw).hexdigest()==REVIEWED_DISPATCH_SHA,
+                  'hosted run used an unexpected workflow')
+    return {'run_id':run_id,'head_sha':result['head_sha'],
+            'run_started_at':started,'verified_jobs':list(required),
+            'reviewed_dispatcher_sha256':REVIEWED_DISPATCH_SHA}
 
 
 def transaction(action,bundle=None,manifest_sha=None,controller=None,stage_sha=None,probe=0):
