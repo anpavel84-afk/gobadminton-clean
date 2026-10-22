@@ -1,0 +1,26 @@
+{
+  "schema": "GB_PMA_REVIEW_SCOPE_V1",
+  "issue": 170,
+  "authority": "Owner22Oct directly requests exact approved V1a preparation/admission and filling eligible slot1; permanent product record issue170 and canonical backlog V1a priority7. This scopes definition review only.",
+  "source_sha": "865d02c7ea39ae8210172629c3cb8e20c8fa52a8",
+  "body_sha256": "a3244e1db1efdfd38c6fe922461c43063b60084bd11ee2e5454ab3782f6e2324",
+  "allowed_paths": [
+    "apps/api/migrations/0039_venue_public_profile.sql",
+    "apps/api/src/database/schema.ts",
+    "apps/api/src/venues/venue-profile.ts",
+    "apps/api/src/admin/venues.dto.ts",
+    "apps/api/src/venues/admin-venues.service.ts",
+    "apps/api/src/venues/venues.service.ts",
+    "packages/contracts/openapi.json",
+    "apps/api/test/unit/venue-profile.test.ts",
+    "apps/api/test/integration/venue-profile.test.ts",
+    "apps/api/test/integration/migration.smoke.test.ts",
+    "docs/api/API_POLICY.md",
+    "docs/api/P4_ADMIN_VENUES.md",
+    "docs/handoffs/V1a-venue-profile-source.md"
+  ],
+  "purpose": "One-pass missing Venues persisted facts, truthful public date, existing safe public/admin API projection. ExistingContacts not reimplemented; role-private bookingdata remains private. No UI/media platform/rating invention/Actions changes.",
+  "effects": "Independent read-only exact task-definition review; own job artifacts only; no source edits/network/DB/runtime/admission/deploy.",
+  "known_active_conflict": "149 occupies OpenAPI and schema-contracts; overlap explicitly retained, cannot bypass locks.",
+  "p7_contact_wrapper_used": false
+}
