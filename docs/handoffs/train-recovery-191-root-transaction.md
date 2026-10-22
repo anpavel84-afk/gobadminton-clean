@@ -42,3 +42,13 @@ Initial synthetic transaction tests: `test_actions_train_hotfix191.py`, 3 focuse
 Owner-approved product backlog still needs admission preparation. An automatic Owner Issue-comment relay has separately been installed in default-branch GitHub via PR #194; it triggers existing dev dispatcher after real exact signed Owner assignment. It does not invent task authority.
 
 This handoff is a continuation checkpoint, not an acceptance statement or permission for weakened security checks.
+
+
+## Addressed independent R1/R2 blocker review
+Initial independent security review returned FAIL: stale root policy before controller.lock, unrollbackable crash window and mutable bundle path race. Follow-up R2 found journal-to-disable crash and a leftover `.install` temp file blocking rollback. Both FAIL reports remain part of PR #195 evidence.
+
+Current corrected implementation additionally updates exact installed `receiver.py`: old SHA256 `bff85b1f5574c7c29df1dd9235c31622e2358a6289f506ec7fb1edc5dfcf4261`, new SHA256 `05612203fb15fab569a55cac5f81defc22f9ac18f340850e62e8d9e7948cafd6`. Root receiver now reads active/disabled policy *inside* controller.lock, not before lock acquisition.
+
+The root transaction is explicitly **two-phase**: first `apply` journals `draining` and disables dispatch; separate second `apply` runs only after existing callbacks have drained, and replaces exactly two reviewed root-owned files. A crash between journal and disable is recoverable by repeating `apply` (disable only). Partial module installation leaves `installing` journal phase; `rollback` accepts this and removes only a validated root-owned temporary `.install` file before restoring original trusted backups. All source and receipts/attempt archives, budgets, and checkpoint hashes are validated. Rollback never silently reactivates the old checkout pin. Existing `upgrade-185` artifacts remain unchanged.
+
+Four focused synthetic transaction tests pass, including interrupted-before-disable and interrupted-before-rename cases. Independent final R3 review and CI on the final SHA are still required; no root install or activation is claimed by this document.
