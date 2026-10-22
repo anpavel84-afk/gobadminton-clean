@@ -53,6 +53,14 @@ cleanup() {
   exit "$rc"
 }
 trap cleanup EXIT
+# Prepare the same pinned smoke browser BEFORE the first receiver deploy request.
+# Installing OS libraries on an ephemeral GitHub runner can outlive the existing
+# pending-smoke rollback deadline if it runs AFTER that request.
+# Smoke, watchdog and rollback stay mandatory; no browser runs on a VPS.
+# All browser execution is on the ephemeral GitHub runner, not on the VPS.
+PLAY="$DIR/playwright"
+npm install --prefix "$PLAY" --ignore-scripts --no-audit --no-fund playwright@1.56.1 >&2
+"$PLAY/node_modules/.bin/playwright" install --with-deps chromium >&2
 jq --arg id "$ID" --argjson seq "$SEQUENCE" --argjson admin "$ADMIN" \
   '. as $manifest | {action:"deploy",release_id:$id,sequence:$seq,source_sha,api_digest,web_digest,
     expected_previous_sha:(.expected_previous_sha // "")} +
@@ -67,10 +75,6 @@ for host in "${HOSTS[@]}"; do
     jq -e --arg sha "$SHA" --arg digest "$(jq -r .admin_digest "$FILE")"       '(.pending // .accepted) | .source_sha==$sha and .admin_digest==$digest' "$DIR/result.json" >/dev/null
   fi
  done
-# All browser execution is on the ephemeral GitHub runner, not on the VPS.
-PLAY="$DIR/playwright"
-npm install --prefix "$PLAY" --ignore-scripts --no-audit --no-fund playwright@1.56.1 >&2
-"$PLAY/node_modules/.bin/playwright" install --with-deps chromium >&2
 if [[ $ADMIN == true ]]; then export EXPECTED_ADMIN_DIGEST="$(jq -r .admin_digest "$FILE")"; fi
 export PLAYWRIGHT_MODULE="$PLAY/node_modules/playwright" EXPECTED_SHA="$SHA"
 node scripts/chatops/smoke.mjs
