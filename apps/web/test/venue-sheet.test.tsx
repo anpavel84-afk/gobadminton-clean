@@ -321,7 +321,7 @@ it("captures the original preview button on pointerdown before any iPhone moveme
   // The working gray handle captures immediately; the former compact implementation
   // waited until >8px and iOS could cancel the pointer before it got captured.
   const h = popupHarness(false, true);
-  const source = { closest: () => h.target };
+  const source = { closest: (selector: string) => selector === ".gb-venue-preview-button" ? h.target : null };
   h.pointerCard("onPointerDown", 600, 0, { target: source });
   expect(h.target.setPointerCapture).toHaveBeenCalledWith(3);
   expect(h.capture.has(3)).toBe(true);
