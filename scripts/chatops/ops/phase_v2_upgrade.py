@@ -125,7 +125,7 @@ def plan(bundle,manifest_sha,controller,stage_sha):
     for path in (stage,dispatch):receiver.trusted_tree(path)
     receiver.need(installer.sha(stage)==stage_sha and
                   stage.read_bytes().count(('ref: '+controller).encode())==2 and
-                  dispatch.read_bytes().count(('ref: '+controller).encode())==1,
+                  dispatch.read_bytes().count(('ref: '+controller).encode())==2,
                   'hosted workflows not pinned to exact reviewed controller')
     nextpolicy=copy.deepcopy(policy)
     nextpolicy.update(mode='disabled',controller_sha=controller,
