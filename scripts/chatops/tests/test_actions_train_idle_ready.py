@@ -32,6 +32,15 @@ class IdleReady(unittest.TestCase):
         w.reconcile(ledger,incident,1062,lambda *a:sent.append(a) or "id")
         w.reconcile(ledger,incident,1123,lambda *a:sent.append(a) or "id")
         self.assertEqual(len(sent),1)
+    def test_unrelated_global_assignments_do_not_reset_slot_or_fabricate_target(self):
+        state,_=w.idle_ready(snapshot(),{},100)
+        s=snapshot(400);s["slots"]["slot1"]["planning"]["decisions"]=[{"issue":205,"code":"assigned"},{"issue":207,"code":"assigned"}]
+        with patch.object(w,"read_json",return_value=s):
+            state,events,incident=w.collect_idle(state,1001)
+        self.assertEqual(state["slots"]["slot1"]["since"],100)
+        self.assertIsNone(incident["issue"])
+        self.assertNotIn("issues",events[0]["key"])
+
     def test_global_ready_count_never_grants_per_slot_readiness(self):
         s=snapshot();s["slots"]["slot1"]["planning"]["reason"]="dependencies_or_conflicts"
         s["slots"]["slot1"]["planning"]["counts"]={"ready":10}

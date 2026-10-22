@@ -233,12 +233,11 @@ def idle_ready(snapshot, previous, now):
         idle = card.get("status") == "waiting" and card.get("stage") in (None, "Accepted")
         if not idle or planning.get("reason") != "dispatch_pending":
             continue
-        issues = sorted(r["issue"] for r in planning.get("decisions", [])
-                        if r.get("code") == "assigned" and type(r.get("issue")) is int)
         generation = planning.get("generation")
-        if not issues or type(generation) is not int:
+        if type(generation) is not int:
             continue
-        key = {"generation": generation, "issues": issues}
+        # Global decisions do not map an Issue to this slot. Track a slot episode only.
+        key = {"generation": generation}
         old = previous.get("slots", {}).get(slot, {})
         started = old.get("since", now) if old.get("key") == key else now
         duration = max(0, now - started)
@@ -269,7 +268,7 @@ def collect_idle(previous, now):
     if prolonged:
         # Stable fingerprint: elapsed time/run refresh must not produce email spam.
         incident = {"kind": "slot_idle", "slot": prolonged["slot"],
-                    "issue": prolonged["key"]["issues"][0], "phase": "dispatch",
+                    "issue": None, "phase": "dispatch",
                     "sha": "", "reason": prolonged["reason"]}
     return state, events, incident
 
