@@ -481,7 +481,7 @@ class MonitorAndWorkflows(unittest.TestCase):
     def test_workflows_hosted_dev_pinned_queue_and_no_candidate_secrets(self):
         for name in ('train-dispatch.yml','train-stage.yml'):
             text=(ROOT/'.github/workflows'/name).read_text()
-            self.assertIn('queue: max',text);self.assertIn('cancel-in-progress: false',text)
+            self.assertIn('queue: single' if name == 'train-dispatch.yml' else 'queue: max',text);self.assertIn('cancel-in-progress: false',text)
             self.assertNotIn('self-hosted',text)
             self.assertRegex(text,r'ref: [0-9a-f]{40}')
             self.assertIn('persist-credentials: false',text)

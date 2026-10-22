@@ -187,3 +187,10 @@ run attempt отвергается до первого pull. Запись фик
 не создаётся автоматически из Issue, CI PASS, actor login или публикации release.
 Root bootstrap credentials никогда не передаются execution agent.
 Никакая такая запись сейчас не создана; PROD не подключён.
+
+
+## Owner rule · 2026-10-22 · Discussion-safe admission
+
+For a task that will receive discussion or reports, create an ordinary Issue and publish exactly one immutable Owner comment containing the exact GOBADMINTON_AUTONOMY_V1 marker and approved JSON. Do not also keep a valid body admission. Never edit that admission comment; ordinary later comments do not replace approval. The existing validator deliberately requires updated_at == created_at on the authorization object. Reports on a body-admitted Issue change its updated_at and can invalidate the body; restore only through the existing single immutable Owner-comment path, never weaken validation or create duplicate Issues.
+
+Reconcile wake-ups carry no task authority: the dispatcher rereads the complete durable Issue/comment queue. Only pending reconcile wake-ups may coalesce (queue: single, cancel-in-progress:false). Task stage runs, journals, leases, generations, attempts and admission gates remain unchanged. A transient requested dispatch profile never expands immutable task model routes.

@@ -20,7 +20,7 @@ class HostedPhaseV2(unittest.TestCase):
         text=(ROOT/'.github/workflows/train-dispatch.yml').read_text()
         self.assertIn('group: gobadminton-train-dispatch',text)
         self.assertIn('cancel-in-progress: false',text)
-        self.assertIn('queue: max',text)
+        self.assertIn('queue: single',text)
         self.assertEqual(text.count('  publish_phase_drafts:'),1)
         publish=text.split('  publish_phase_drafts:')[1]
         self.assertIn('needs: reconcile',publish)
