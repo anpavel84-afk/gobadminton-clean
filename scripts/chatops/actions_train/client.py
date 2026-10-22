@@ -75,26 +75,38 @@ def reconcile(api, ssh, event, name):
         if 'pull_request' not in issue:
             comments.extend(api.pages(f'issues/{issue["number"]}/comments'))
     candidates = s.admitted(a, issues, comments, dt.datetime.fromisoformat(SINCE))
+    from recovery_admission import candidates as recovery_candidates
+    candidates.extend(recovery_candidates(a, snap, issues))
     # Routing selection belongs to root config or an explicit authorized dispatch; never task mutation.
     profile = event.get('inputs', {}).get('profile') or 'auto'
     intents = plan(a, s, snap, candidates, profile)
+    from recovery import descriptors
+    recovery_intents = descriptors(snap, intents)
     from queue_diagnostics import explain
     report = explain(s, snap, issues, candidates, intents, profile)
     Path('evidence').mkdir(exist_ok=True)
-    Path('evidence/reconcile.json').write_text(json.dumps(dict(snapshot=snap, intents=intents, planning=report), sort_keys=True))
+    Path('evidence/reconcile.json').write_text(json.dumps(dict(snapshot=snap, intents=intents,
+        recovery_intents=recovery_intents, planning=report), sort_keys=True))
     if snap['mode'] != 'active':
         print('Shadow: source effects disabled; admitted intents=' + str(len(candidates)))
         return
+    from recovery_admission import retry_publications
+    try:
+        publication_retries = retry_publications(api, snap)
+    except (Refused, KeyError, TypeError, ValueError, OSError) as error:
+        # Recovery reporting/publication never becomes a gate for ordinary ready stages.
+        publication_retries = [dict(status='publication-waiting', reason=type(error).__name__)]
+    Path('evidence/publication-retries.json').write_text(json.dumps(publication_retries, sort_keys=True))
     # Existing authenticated restricted SSH: this closed DATA-ONLY report cannot start a
     # task, alter any checkpoint/budget/lease, or mark a process running. No write token leaves Actions.
     controller = subprocess.check_output(['/usr/bin/git','rev-parse','HEAD'], text=True).strip()
     ssh({'action':'train','stage':'planning','controller_sha':controller,
          'run':int(os.environ['GITHUB_RUN_ID']),'run_attempt':int(os.environ['GITHUB_RUN_ATTEMPT']),
          'report':report})
-    for descriptor in intents:
+    for descriptor in intents + recovery_intents:
         api('actions/workflows/train-stage.yml/dispatches', dict(ref='dev', inputs={
             'operation': json.dumps(descriptor, sort_keys=True, separators=(',', ':'))}))
-    print('Dispatched bounded stages: ' + str(len(intents)))
+    print('Dispatched bounded stages: ' + str(len(intents) + len(recovery_intents)))
 
 
 def execute(api, ssh, descriptor):
@@ -131,6 +143,8 @@ def execute(api, ssh, descriptor):
     # The remote token is READ-ONLY. A separate hosted job owns actions:write continuation.
     with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
         out.write('changed=' + ('true' if changed else 'false') + '\n')
+        ready = changed and (last.get('recovery') or {}).get('status') == 'publish_ready'
+        out.write('recovery_ready=' + ('true' if ready else 'false') + '\n')
     print('Stage result: ' + value['status'])
     if value['status'] in ('unknown', 'refused'): raise Refused('stage requires reconciliation')
 
