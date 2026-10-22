@@ -15,7 +15,13 @@ const hooks=vi.hoisted(()=>({slots:[] as unknown[],cursor:0,effects:[] as (()=>v
 const context=vi.hoisted(()=>({directory:{} as Record<string,unknown>, session:{} as Record<string,unknown>, config:{} as Record<string,unknown>}));
 vi.mock("react",async original=>({
   ...await original<typeof React>(),
-  useState<T>(initial:T) { const i=hooks.cursor++; if(!(i in hooks.slots))hooks.slots[i]=initial; return [hooks.slots[i],(next:T|((old:T)=>T))=>{hooks.slots[i]=typeof next==='function'?(next as (old:T)=>T)(hooks.slots[i] as T):next;}]; },
+  useState<T>(initial:T) {
+    const i=hooks.cursor++,slots=hooks.slots;
+    if(!(i in slots))slots[i]=initial;
+    // Event callbacks run after the page/child render scopes restore ambient hooks.
+    // Keep each setter bound to the storage that created it, as in venue-preview-card.
+    return [slots[i],(next:T|((old:T)=>T))=>{slots[i]=typeof next==='function'?(next as (old:T)=>T)(slots[i] as T):next;}];
+  },
   useRef(initial:unknown) { const i=hooks.cursor++; return hooks.slots[i]??={current:initial}; },
   useMemo(fn:()=>unknown,deps:unknown[]) { const i=hooks.cursor++,old=hooks.slots[i] as {deps:unknown[];value:unknown}|undefined;if(!old||deps.some((v,n)=>v!==old.deps[n]))hooks.slots[i]={deps,value:fn()};return (hooks.slots[i] as {value:unknown}).value; },
   useEffect(fn:()=>void|(()=>void),deps:unknown[]) { const i=hooks.cursor++,old=hooks.slots[i] as unknown[]|undefined;if(!old||deps.some((v,n)=>v!==old[n])){hooks.slots[i]=deps;hooks.effects.push(()=>{hooks.cleanups[i]?.();hooks.cleanups[i]=fn()||(()=>{});});} },
@@ -75,6 +81,7 @@ beforeEach(()=>{
 afterEach(()=>{hooks.cleanups.forEach(fn=>fn?.());vi.useRealTimers();vi.unstubAllGlobals();});
 it('marker selection expands/collapses over the same map element with real API rows and approved cover',async()=>{
   const h=pageHarness(),before=h.layer();
+  const ambientSlots=hooks.slots,ambientState=[...ambientSlots];
   await (before.props.onSelect as (row:UnifiedRow)=>Promise<void>)(view.pins[0]!);h.render();
   const compact=h.child();expect(compact.props.expanded).toBe(false);expect(compact.props.dialog).toBeUndefined();
   const compactHtml=markup(compact);expect(compactHtml).toContain('Player A');expect(compactHtml).not.toContain('From API');expect(compactHtml).not.toContain('/players/');
@@ -82,9 +89,11 @@ it('marker selection expands/collapses over the same map element with real API r
   const keyboardToggle=elements(compactContent).find(node=>node.props.className==='unified-preview-toggle')!;
   expect(keyboardToggle.type).toBe('button');expect(keyboardToggle.props.type).toBe('button');expect(keyboardToggle.props['aria-expanded']).toBe(false);
   (keyboardToggle.props.onClick as ()=>void)();const expanded=h.child();expect(expanded.props.expanded).toBe(true);
+  expect(hooks.slots).toBe(ambientSlots);expect(ambientSlots).toEqual(ambientState);
   const html=markup(expanded);expect(html).toContain('From API');expect(html).toContain('API hall');expect(html).toContain('/v1/media/game-covers/');expect(html).not.toContain('/players/');expect(html).not.toContain('<dialog');
   expect(h.layer().type).toBe(before.type);expect(h.layer().key).toBe(before.key);expect(h.layer().props.sharedMap).toBe(h.map);expect(h.layer().props.rows).toBe(before.props.rows);
-  (expanded.props.onToggle as ()=>void)();expect(h.child().props.expanded).toBe(false);h.dispose();
+  (expanded.props.onToggle as ()=>void)();expect(h.child().props.expanded).toBe(false);
+  expect(hooks.slots).toBe(ambientSlots);expect(ambientSlots).toEqual(ambientState);h.dispose();
 });
 it('selection change resets expanded detail; Escape/back/CloseButton close and restore the map trigger',async()=>{
   const h=pageHarness();(h.layer().props.onSelect as (row:UnifiedRow)=>void)(view.pins[0]!);h.render();(h.child().props.onToggle as ()=>void)();expect(h.child().props.expanded).toBe(true);
