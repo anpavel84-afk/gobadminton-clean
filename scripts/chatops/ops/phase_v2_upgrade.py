@@ -15,6 +15,10 @@ import pwd
 import re
 import stat
 import sys
+import time
+import datetime as dt
+import urllib.request
+import urllib.error
 
 INSTALL=pathlib.Path('/usr/local/lib/gb-actions-train')
 sys.path.insert(0,str(INSTALL))
@@ -27,6 +31,10 @@ POLICY=receiver.POLICY
 JOURNAL=STATE/'hotfix-phase-v2.json'
 BACKUP=STATE/'hotfix-phase-v2-backup'
 PRIOR_CONTROLLER='6b24848520ba01f66d764917a577aa1d2d189a45'
+REVIEWED_STAGE_SHA='694740ef02a6d4908c4656d1e42d4eec0373d3f10955bb3cd55dded3e4ef7605'
+REVIEWED_DISPATCH_SHA='064106884feb13f89323f6856d1714e517816fbbfe9ffa8144524ab364f908a1'
+REPO_ID=1416250340
+
 FILES={
  'client.py':(
    'f23895f31d7ad941feec0a37d27538bc9554af94140e3224d52e0c890c3580c7',
@@ -91,8 +99,8 @@ def quiet():
 def plan(bundle,manifest_sha,controller,stage_sha):
     receiver.need(re.fullmatch('[a-f0-9]{40}',controller or '') and
                   controller != PRIOR_CONTROLLER,'immutable controller SHA required')
-    receiver.need(re.fullmatch('[a-f0-9]{64}',stage_sha or ''),
-                  'reviewed workflow checksum required')
+    receiver.need(stage_sha == REVIEWED_STAGE_SHA,
+                  'stage workflow not the exact independently-reviewed bytes')
     receiver.trusted_tree(bundle)
     items=installer.payload(bundle,manifest_sha)
     for path in items.values():
@@ -123,10 +131,11 @@ def plan(bundle,manifest_sha,controller,stage_sha):
     stage=bundle/'.github/workflows/train-stage.yml'
     dispatch=bundle/'.github/workflows/train-dispatch.yml'
     for path in (stage,dispatch):receiver.trusted_tree(path)
-    receiver.need(installer.sha(stage)==stage_sha and
+    receiver.need(installer.sha(stage)==REVIEWED_STAGE_SHA and
+                  installer.sha(dispatch)==REVIEWED_DISPATCH_SHA and
                   stage.read_bytes().count(('ref: '+controller).encode())==2 and
                   dispatch.read_bytes().count(('ref: '+controller).encode())==2,
-                  'hosted workflows not pinned to exact reviewed controller')
+                  'hosted workflows not exact reviewed, immutable controller pins')
     nextpolicy=copy.deepcopy(policy)
     nextpolicy.update(mode='disabled',controller_sha=controller,
                       stage_workflow_sha256=stage_sha)
@@ -166,7 +175,13 @@ def transaction(action,bundle=None,manifest_sha=None,controller=None,stage_sha=N
                 return dict(status='DRY_PASS',old_controller=PRIOR_CONTROLLER,
                     proposed_controller=controller,changed=sorted(FILES),
                     preserved_ledgers=len(before),mode='disabled')
-            # Root-owned journal/backup BEFORE any installed file is modified.
+            # Journal FIRST: if backup creation is interrupted, an authorized
+            # rollback can prove nothing was installed and retain full history.
+            journal=dict(schema='GB_PHASE_V2_UPGRADE_V1',phase='preparing',
+                controller=controller,stage_sha=stage_sha,manifest=manifest_sha,
+                before_controller=PRIOR_CONTROLLER,
+                state_hashes=before,files=copy.deepcopy(FILES))
+            receiver.atomic(JOURNAL,journal)
             BACKUP.mkdir(mode=0o700)
             for suffix in FILES:
                 source=INSTALL/suffix
@@ -175,10 +190,7 @@ def transaction(action,bundle=None,manifest_sha=None,controller=None,stage_sha=N
                 installer.put(source,dst,0o600)
             receiver.atomic(BACKUP/'policy.json',old)
             receiver.atomic(BACKUP/'record.json',record)
-            journal=dict(schema='GB_PHASE_V2_UPGRADE_V1',phase='installing',
-                controller=controller,stage_sha=stage_sha,manifest=manifest_sha,
-                before_controller=PRIOR_CONTROLLER,
-                state_hashes=before,files=copy.deepcopy(FILES))
+            journal['phase']='installing'
             receiver.atomic(JOURNAL,journal)
             for suffix in FILES:
                 source=items[INSTALL/suffix]
@@ -189,13 +201,14 @@ def transaction(action,bundle=None,manifest_sha=None,controller=None,stage_sha=N
                           all(installer.sha(INSTALL/suffix)==new for suffix,(_,new) in FILES.items()),
                           'post-install ledger or payload drift')
             journal['phase']='installed-disabled'
+            journal['installed_at']=int(time.time())
             receiver.atomic(JOURNAL,journal)
             return dict(status='INSTALLED_DISABLED',changed=sorted(FILES),
                         controller=controller,preserved_ledgers=len(before))
         journal=receiver.read(JOURNAL,0)
         receiver.need(journal.get('schema')=='GB_PHASE_V2_UPGRADE_V1'
                       and journal.get('phase') in
-                      ('installing','installed-disabled','activating','active'),
+                      ('preparing','installing','installed-disabled','activating','active'),
                       'unknown V2 upgrade journal')
         policy=receiver.read(POLICY,0)
         if action=='activate':
@@ -232,6 +245,18 @@ def transaction(action,bundle=None,manifest_sha=None,controller=None,stage_sha=N
             journal['phase']='active'
             receiver.atomic(JOURNAL,journal)
             return dict(status='ACTIVE',controller=journal['controller'],shadow_run=probe)
+        if action=='rollback' and journal['phase']=='preparing':
+            receiver.need(policy['mode']=='disabled' and
+                          policy['controller_sha']==PRIOR_CONTROLLER and
+                          state_hashes()==journal['state_hashes'] and
+                          all(installer.sha(INSTALL/name)==old for name,(old,_) in FILES.items()),
+                          'preparing-stage rollback requires exact original disabled controller')
+            # Incomplete backup is preserved for forensics; zero installed files
+            # or task state have been touched. A new deployment needs new review.
+            journal['phase']='aborted-preparing-disabled'
+            receiver.atomic(JOURNAL,journal)
+            return dict(status='ABORTED_PREPARATION_DISABLED',
+                        preserved_ledgers=len(journal['state_hashes']))
         if action=='rollback':
             receiver.need(journal['phase'] in ('installing','installed-disabled','activating')
                           and policy['mode']=='disabled' and
