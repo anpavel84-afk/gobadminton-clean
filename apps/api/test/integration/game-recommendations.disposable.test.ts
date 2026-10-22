@@ -64,7 +64,7 @@ run("FR-3A protected recommendations — disposable synthetic PostGIS",()=>{
     for(const file of (await readdir(migrations)).filter(f=>f.endsWith(".sql")&&f<"0040").sort()) await migrate(file);
     env=loadEnv({NODE_ENV:"test",APP_ENV:"local",DATABASE_URL:databaseUrl,PUBLIC_API_ORIGIN:"http://127.0.0.1:3000",
       PUBLIC_WEB_ORIGIN:origin,COOKIE_SECURE:"false",AUTH_PEPPER:"fr3a-synthetic-fixture-pepper-only",
-      CONTENT_MODERATION_PROVIDER:"fake",CONTENT_MODERATION_FINGERPRINT_SECRET:"fr3a-synthetic-fingerprint-only",
+      CONTENT_MODERATION_PROVIDER:"fake",CONTENT_MODERATION_FINGERPRINT_SECRET:"fr3a-synthetic-fingerprint-fixture-only",
       SOCIAL_DIRECTORY_ENABLED:"1",FRIENDS_INTERNAL_ENABLED:"1",FRIENDS_REQUEST_TTL_SECONDS:"120",
       FRIENDS_RATE_WINDOW_SECONDS:"600",FRIENDS_SEND_LIMIT:"100",FRIENDS_RECEIVE_LIMIT:"100"});
     // Test-only constructed environment: exercise existing local policy overlays without enabling Admin runtime.

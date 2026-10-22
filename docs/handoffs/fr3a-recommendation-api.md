@@ -1,5 +1,62 @@
 # Issue #181 / FR-3A source handoff
 
+## CI repair record — 2026-10-22
+
+From: assigned source author. To: authorized publisher, independent QA and existing Actions route.
+Status: SOURCE DRAFT / DB NOT_TESTED / NOT ACCEPTED.
+Exact repair base: `34b8af774d3ef5f7710f309653bda16f36c746d5`, branch `automation/issue-181`,
+initially clean. [Base permalink](https://github.com/anpavel84-afk/gobadminton-clean/tree/34b8af774d3ef5f7710f309653bda16f36c746d5).
+The supplied latest independent QA was PASS on that base; this is external evidence, not author QA
+or verification of the new delta. The earlier handoff below is retained as historical source context;
+its prior FAIL, correction base and unexecuted-check statements describe that earlier author turn.
+
+Repair only [database job 119749040979, run 39756300897 attempt 1](https://github.com/anpavel84-afk/gobadminton-clean/actions/runs/39756300897/job/119749040979).
+Supplied log SHA-256: `eab1c3a94e412bf9fcf45cb2aa8cb65f61dc593a78e428b940ff9dba46c70ecb`.
+The recommendation suite's `loadEnv` rejected the synthetic fingerprint fixture: 31 characters,
+where the unchanged canonical schema requires at least 32. Change only that fixture to the
+39-character `fr3a-synthetic-fingerprint-fixture-only`, plus this handoff. This is public synthetic
+test data, not a runtime credential. All inherited candidate changes, production validation,
+integration assertions, guards and automation remain intact. No application behavior changes.
+
+The CI repair instruction explicitly requested before/after reproduction. With no installed
+`node_modules` and no authority to run DB, only the source-level fixture/minimum assertion below
+was run, identically before and after the fix, from the repository root. It reads both source files;
+it does not execute `loadEnv`, Vitest, SQL or an application. Before: exit 1, one failed assertion,
+`CONTENT_MODERATION_FINGERPRINT_SECRET: 31 characters; expected >=32`. After: exit 0, one passed
+assertion, zero skipped. This narrow check is not the original DB suite or independent QA.
+
+```bash
+node --input-type=module <<'NODE'
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+
+test('FR-3A synthetic fingerprint satisfies the canonical configuration minimum', () => {
+  const fixture = readFileSync('apps/api/test/integration/game-recommendations.disposable.test.ts', 'utf8');
+  const schema = readFileSync('apps/api/src/config/env.ts', 'utf8');
+  const value = fixture.match(/CONTENT_MODERATION_FINGERPRINT_SECRET:"([^"]+)"/)[1];
+  const minimum = Number(schema.match(/CONTENT_MODERATION_FINGERPRINT_SECRET: z\.string\(\)\.min\((\d+)\)/)[1]);
+  assert.ok(value.length >= minimum,
+    `CONTENT_MODERATION_FINGERPRINT_SECRET: ${value.length} characters; expected >=${minimum}`);
+});
+NODE
+```
+
+An initial invocation of the same heredoc with `node --test --input-type=module` mistakenly invoked
+test-file discovery instead of stdin. It exited 1 with `ERR_INPUT_TYPE_NOT_ALLOWED` during module
+resolution; it is not valid product-test evidence. The corrected invocation above was used before
+any edit and repeated after the fixture change. No dependency installation or external network.
+
+NOT_TESTED: actual failing Vitest/database job, DB/migrations/rollback, typecheck, lint, build,
+contracts, full Product CI, independent QA of the new delta and DEV acceptance. No commit/push,
+Git metadata mutation, service or deployment action. No new candidate SHA/permalink exists locally.
+Rollback: selectively restore the single fixture string and this repair record; no SQL/runtime action.
+Next bounded action: authorized publisher creates the new exact SHA, publishes this record in #181,
+then independent QA and the unchanged full Product CI (including `bash scripts/chatops/db-ci.sh`)
+must run on that SHA. DEV ACCEPTED server/gitSHA remains required; no PROD or FR-3B work authorized.
+
+## Historical source handoff
+
 From: assigned source author. To: independent source QA, then existing PM/Actions release route.
 Date: 2026-10-22. Status: SOURCE DRAFT / NOT_TESTED / NOT ACCEPTED.
 Assignment: [#181](https://github.com/anpavel84-afk/gobadminton-clean/issues/181); depends on
