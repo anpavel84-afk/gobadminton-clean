@@ -17,8 +17,8 @@ REPO = 'anpavel84-afk/gobadminton-clean'
 REPO_ID = 1416250340
 OWNER = 318610566
 SINCE = '2026-10-15T02:27:00+00:00'
-PINS = {'autonomous_issues.py': '9995d0f268185c56d91cd0e15f986905abf093feb07c6edffec0c9b211e2fec7',
-        'slots.py': '19d07c8d680d31ff65e13b3d8611b93fab1898461a918e69390a77bf8bb5ad02',
+PINS = {'autonomous_issues.py': '8d8baae3089f0a0cafeb047af8d9241dbc756be6a7b30bdc6306ee389361f2fe',
+        'slots.py': 'e586703954551d5af212c0f347bb83679cb8cdecffa4e48465f3889df318ad5a',
         'check_foundation.py': 'c2975b19bd46d00acbdbc08227545b8f9c9501d7b8e8783e9b397751c612bd13'}
 RECOVERY_STAGES = ('diagnose', 'task_review')
 STAGES = ('claim', 'author', 'publish', 'qa', 'ci', 'integrate', 'promote', 'dev') + RECOVERY_STAGES
