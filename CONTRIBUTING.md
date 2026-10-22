@@ -1,9 +1,13 @@
-# Изменения GoBadminton
+# Участие в GoBadminton CLEAN
 
-Рабочая ветка создаётся от проверенного актуального main. Начальная foundation опубликована по прямому разрешению владельца; дальнейшие изменения — небольшими pull request. Защита ветки и required checks должны быть включены отдельно; наличие этого документа не означает включённых настроек GitHub.
+Обязательны [AGENTS.md](AGENTS.md), [единый регламент](docs/rules/ENGINEERING_OPERATING_MODEL.md) и [Project Record Policy](docs/rules/PROJECT_RECORD_POLICY.md).
 
-PR описывает цель, затронутые решения/контракты, точный scope, обратную совместимость, проверки и rollback. Изменения API и БД включают соответствующие документы и тесты. Не менять уже применённую миграцию; добавлять следующую. Не добавлять production-секреты или реальные пользовательские fixtures.
+Перед изменением: точное назначение, принятый commit правил, base SHA, границы файлов/эффектов, проверка чужой работы и writer ownership. Для продуктовой работы использовать проверенную назначенную базу интеграции, а не историческое требование всегда начинать от main. Публиковать ограниченный diff через разрешённую ветку/PR; не force-push и не расширять scope.
 
-Основные команды F-01: `pnpm install --frozen-lockfile`, `pnpm run foundation:check`, `pnpm run contracts:check`, `pnpm run typecheck`, `pnpm run lint`, `pnpm run test:unit`, `pnpm run build:api`, `pnpm run build:web`. DB smoke требует реального PostgreSQL/PostGIS и `RUN_DB_INTEGRATION=1`.
+PR описывает цель, scope, совместимость, проверки и rollback. Изменения API/БД сопровождаются контрактами и тестами. Уже применённую миграцию не переписывать — добавлять следующую. Не использовать production-секреты или реальные пользовательские fixtures.
 
-Общие правила: [AGENTS.md](AGENTS.md). Обязательная политика project memory/handoffs/prompts: [PROJECT_RECORD_POLICY](docs/rules/PROJECT_RECORD_POLICY.md). Правила API: [API_POLICY](docs/api/API_POLICY.md). Проверки: [TEST_STRATEGY](docs/quality/TEST_STRATEGY.md). ADR: [индекс](docs/decisions/README.md).
+Визуальные изменения следуют существующему каноническому Style Guide. Проверки выбирать по реальным workspace scripts и действующим CI workflows, не по устаревшим командам из чата. Офлайн ограничение фиксировать как NOT_TESTED с обязательной проверкой в разрешённом CI до приёмки.
+
+Авторская самопроверка, независимая QA, Product CI и DEV acceptance — разные результаты. Приложить exact evidence и ограничения. По умолчанию использовать `Refs #...`, не автозакрытие до установленного Definition of Done.
+
+Изменение правил — отдельный reviewed docs diff с синхронизацией точек входа. Самоизменение правил в candidate не снижает критерии его QA. Не менять workflow/права/production под видом правки документа.
