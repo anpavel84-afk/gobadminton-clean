@@ -317,6 +317,42 @@ it("opens by dragging any part of the compact card, while retaining an ordinary 
   swipe.dispose();
 });
 
+it("does not swallow the first real Close tap after an iPhone swipe without a synthetic click", () => {
+  const h = popupHarness(false, true);
+  h.pointerCard("onPointerDown", 600, 0);
+  h.pointerCard("onPointerMove", 480, 100);
+  h.pointerCard("onPointerUp", 470, 150);
+  expect(h.change).toHaveBeenLastCalledWith(true);
+
+  // iOS may omit the post-swipe synthetic click. A new pointerdown on the X
+  // must therefore disarm stale swipe-click suppression before its click event.
+  const popup = h.find("gb-venue-popup");
+  expect(popup.props.onPointerDown).toBeUndefined(); // full popup never handles gestures
+  (popup.props.onPointerDownCapture as () => void)();
+  const clickOnClose = h.click(1);
+  expect(clickOnClose.preventDefault).not.toHaveBeenCalled();
+  expect(clickOnClose.stopPropagation).not.toHaveBeenCalled();
+
+  const sheet = popupElements(h.render()).find(node => node.type === VenueSheet);
+  if (!sheet) throw new Error("Expected expanded venue sheet");
+  (sheet.props.onCollapse as () => void)(); // CloseButton routes to onCollapse
+  expect(h.change).toHaveBeenLastCalledWith(false);
+  h.dispose();
+});
+
+it("still consumes a swipe-generated ghost click when no fresh press occurs", () => {
+  const h = popupHarness(false, true);
+  h.pointerCard("onPointerDown", 600, 0);
+  h.pointerCard("onPointerMove", 480, 100);
+  h.pointerCard("onPointerUp", 470, 150);
+  expect(h.change).toHaveBeenLastCalledWith(true);
+  expect(h.click(1).preventDefault).toHaveBeenCalledOnce();
+  const nextRealPress = h.find("gb-venue-popup").props.onPointerDownCapture as () => void;
+  nextRealPress();
+  expect(h.click(1).preventDefault).not.toHaveBeenCalled();
+  h.dispose();
+});
+
 it("captures the original preview button on pointerdown before any iPhone movement", () => {
   // The working gray handle captures immediately; the former compact implementation
   // waited until >8px and iOS could cancel the pointer before it got captured.
