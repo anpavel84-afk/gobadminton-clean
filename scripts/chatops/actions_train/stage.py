@@ -28,6 +28,9 @@ def setup(req, config):
     store = a.Store(c.state_dir)  # exact worker.lock rejects a second author/legacy worker
     need(rt.continuity(), 'reviewed V6 continuity policy must be enabled')
     bridge = a.Bridge(c, store)
+    # Resolve trusted context before a stage can consume an author attempt.
+    from context_policy import load as load_rules
+    accepted_rules = load_rules() if req['stage'] in ('author', 'qa', 'task_review') else None
     def effect_gate():
         from receiver import POLICY, units_quiet
         policy = s.read_json(POLICY, trusted_uids={0}, limit=16384)
@@ -54,9 +57,15 @@ def setup(req, config):
     class ObservedSubprocess:
         def __getattr__(self, name): return getattr(original_subprocess, name)
         def Popen(self, argv, *args, **kwargs):
+            if argv[0] == str(c.codex):
+                need('--ignore-rules' in argv and '--ignore-user-config' in argv,
+                     'untrusted automatic instruction loading enabled')
             process = original_subprocess.Popen(argv, *args, **kwargs)
             if argv[0] == str(c.codex):
                 try:
+                    trace['context_source'] = dict(cwd=str(bridge.work.resolve()),
+                        cli_sha256=__import__('hashlib').sha256(Path(argv[0]).read_bytes()).hexdigest(),
+                        ignore_rules=True, ignore_user_config=True)
                     trace['process'] = identity(process.pid)
                     publish_process()
                 except BaseException:
@@ -76,6 +85,9 @@ def setup(req, config):
         # A role-specific route MUST match the actual CLI. Never run Codex under a
         # trace claiming Cursor/Antigravity; those need their own reviewed adapter.
         need(choice['provider'] == 'codex', 'unimplemented native model adapter')
+        from context_policy import inject
+        wrapped, rules_receipt = inject(prompt, qa, bridge.work, accepted_rules)
+        choice['rules_context'] = rules_receipt
         trace['model'] = choice
         old_model, old_effort = c.model, c.effort
         c.model, c.effort = choice['effective_model'], choice['effort']
@@ -83,7 +95,7 @@ def setup(req, config):
         before = rt.budget.used('codex', role, req['slot'])
         completed, answer = 'raised', None
         try:
-            answer = original_model(prompt, qa)
+            answer = original_model(wrapped, qa)
             completed = 'returned'
             return answer
         finally:
