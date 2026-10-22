@@ -1,6 +1,8 @@
 """Independent-of-network contract simulations for the explicit Issue185 delegation."""
 import copy
 import json
+import os
+import tempfile
 import unittest
 from unittest.mock import Mock, patch
 from test_actions_train_recovery import R, config, terminal, diagnosis, core, A, S, req, card, issue, STAMP
@@ -106,6 +108,34 @@ class HostedPublisher(unittest.TestCase):
         doc=copy.deepcopy(self.doc);doc['last']['recovery']['review']['verdict']='FAIL'
         with self.assertRaises(core.Refused):P.publish(api,doc,901)
         self.assertFalse(any(x.args[0]=='issues' for x in api.call_args_list))
+    def test_publisher_error_is_recorded_per_receipt_and_does_not_block_normal_dispatch(self):
+        from pathlib import Path
+        from test_actions_train import client, ROOT, HEAD
+        import recovery_admission
+        import recovery
+        import queue_diagnostics
+        r=copy.deepcopy(self.r);r['publication_run']={'run':901,'attempt':1}
+        api=Mock(side_effect=core.Refused('GitHub response 404'))
+        rows=D.retry_publications(api,{'recovery':{'receipts':{self.key:r}}})
+        self.assertEqual(rows[0]['status'],'publication-waiting')
+        descriptor=dict(slot='slot2',issue=300,stage='author',phase='claimed',head=HEAD,attempt=0,generation=0,profile='codex')
+        api=Mock();api.pages.return_value=[]
+        ssh=Mock(return_value={'mode':'active','slots':{}})
+        old=os.getcwd()
+        try:
+            with tempfile.TemporaryDirectory(dir=ROOT,prefix='.train-tests-') as tmp:
+                os.chdir(tmp)
+                with patch.object(client,'trusted_event'),patch.object(client,'live',return_value=(A,S)), \
+                     patch.object(S,'admitted',return_value=[]),patch.object(D,'candidates',return_value=[]), \
+                     patch.object(client,'plan',return_value=[descriptor]),patch.object(R,'descriptors',return_value=[]), \
+                     patch.object(queue_diagnostics,'explain',return_value={}), \
+                     patch.object(client.subprocess,'check_output',return_value=HEAD), \
+                     patch.dict(os.environ,{'GITHUB_RUN_ID':'901','GITHUB_RUN_ATTEMPT':'1'}), \
+                     patch.object(D,'retry_publications',side_effect=core.Refused('GitHub response 404')):
+                    client.reconcile(api,ssh,{},'workflow_dispatch')
+                self.assertTrue(any(x.args[0]=='actions/workflows/train-stage.yml/dispatches' for x in api.call_args_list))
+                self.assertEqual(json.loads(Path('evidence/publication-retries.json').read_text())[0]['status'],'publication-waiting')
+        finally:os.chdir(old)
     def test_publisher_has_no_ssh_secret_and_execute_has_no_issue_write(self):
         from pathlib import Path
         from test_actions_train import ROOT

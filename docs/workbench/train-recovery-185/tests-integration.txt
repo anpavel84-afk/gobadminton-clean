@@ -58,6 +58,7 @@ test_unproven_promoting_checkpoint_never_accepted (test_actions_train_integratio
 test_exact_saved_verdict_reconciles_without_second_model_or_author (test_actions_train_qa_recovery.Recovery.test_exact_saved_verdict_reconciles_without_second_model_or_author) ... ok
 test_old_sha_verdict_never_promoted_and_one_new_read_only_qa_keeps_it_in_history (test_actions_train_qa_recovery.Recovery.test_old_sha_verdict_never_promoted_and_one_new_read_only_qa_keeps_it_in_history) ... ok
 test_only_stopped_completed_unknown_qa_with_unchanged_checkpoint_is_safe (test_actions_train_qa_recovery.Recovery.test_only_stopped_completed_unknown_qa_with_unchanged_checkpoint_is_safe) ... ok
+test_saved_pass_from_dirty_or_wrong_head_review_is_not_reused (test_actions_train_qa_recovery.Recovery.test_saved_pass_from_dirty_or_wrong_head_review_is_not_reused) ... ok
 test_free_slot_does_not_report_nonexistent_dependency_or_conflict (test_actions_train_queue.IdleMonitor.test_free_slot_does_not_report_nonexistent_dependency_or_conflict) ... ok
 test_idle_uses_real_planning_counts_and_run (test_actions_train_queue.IdleMonitor.test_idle_uses_real_planning_counts_and_run) ... ok
 test_old_exhausted_error_is_history_not_new_idle_reason (test_actions_train_queue.IdleMonitor.test_old_exhausted_error_is_history_not_new_idle_reason) ... ok
@@ -105,6 +106,7 @@ test_unknown_receipt_duplicate_publication_and_revoked_policy_do_not_admit (test
 test_foreign_artifact_run_or_failed_review_does_not_write (test_actions_train_recovery_admission.HostedPublisher.test_foreign_artifact_run_or_failed_review_does_not_write) ... ok
 test_publication_is_idempotent_and_never_posts_a_second_identical_child (test_actions_train_recovery_admission.HostedPublisher.test_publication_is_idempotent_and_never_posts_a_second_identical_child) ... ok
 test_publication_job_retry_cap_never_reruns_model_stage (test_actions_train_recovery_admission.HostedPublisher.test_publication_job_retry_cap_never_reruns_model_stage) ... ok
+test_publisher_error_is_recorded_per_receipt_and_does_not_block_normal_dispatch (test_actions_train_recovery_admission.HostedPublisher.test_publisher_error_is_recorded_per_receipt_and_does_not_block_normal_dispatch) ... ok
 test_publisher_has_no_ssh_secret_and_execute_has_no_issue_write (test_actions_train_recovery_admission.HostedPublisher.test_publisher_has_no_ssh_secret_and_execute_has_no_issue_write) ... ok
 test_read_only_job_emits_continuation_only_for_its_actual_transition (test_actions_train_stages.HostedContinuation.test_read_only_job_emits_continuation_only_for_its_actual_transition) ... ok
 test_isolated_prepare_activation_rollback_restores_code_and_flags_only (test_actions_train_stages.ReversibleInstaller.test_isolated_prepare_activation_rollback_restores_code_and_flags_only) ... ok
@@ -126,6 +128,7 @@ test_unknown_author_exception_retains_checkpoint (test_actions_train_stages.Stag
 test_unknown_push_recovery_reads_remote_without_push (test_actions_train_stages.StageBoundaries.test_unknown_push_recovery_reads_remote_without_push) ... ok
 
 ----------------------------------------------------------------------
-Ran 126 tests in 1.704s
+Ran 128 tests in 2.196s
 
 OK
+Dispatched bounded stages: 1

@@ -28,7 +28,17 @@ def reconcile(a, b, rt, store, req):
     if primary.exists():
         need(not primary.is_symlink() and primary.stat().st_size <= 65536, 'unsafe QA receipt')
         saved = a.loads(primary.read_bytes())
-        if isinstance(saved,dict) and saved.get('reviewed_sha') == active['head']:
+        review_work = b.c.worktrees_root / f'qa-issue-{active["issue"]}-a{active["attempt"]}{a.integ(active)}'
+        # Pinned Bridge.review writes the JSON BEFORE verifying worktree cleanliness.
+        # A saved exact SHA alone therefore is NOT sufficient evidence of accepted QA.
+        clean_review = False
+        if review_work.is_dir() and not review_work.is_symlink():
+            try:
+                clean_review = (b.git('rev-parse','HEAD',cwd=review_work)==active['head']
+                    and not b.git('status','--porcelain','--untracked-files=all',cwd=review_work))
+            except (a.Hold, OSError):
+                clean_review = False
+        if clean_review and isinstance(saved,dict) and saved.get('reviewed_sha') == active['head']:
             a.qa_result(saved,active['head'])  # validates FAIL as well as PASS, never old-SHA acceptance
             store.phase('qa',qa=saved)
             return dict(status='confirmed',recovered=True,qa=saved,source='saved exact QA receipt')

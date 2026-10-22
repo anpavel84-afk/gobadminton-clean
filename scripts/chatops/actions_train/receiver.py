@@ -523,7 +523,10 @@ def handle(req, policy):
             guard(slot, policy)
             # Only read/reconcile remote identity. Never replay an uncertain side effect.
             req['_recover'] = True
+            op.setdefault('recovery_history', []).append({k: op.get(k) for k in
+                ('run','run_attempt','process','started_at','finished_at','before','after','result')})
             op['recovery_attempts'] = op.get('recovery_attempts', 0) + 1
+            op.update(run=req['run'], run_attempt=req['run_attempt'], started_at=int(time.time()))
             pid = os.fork()
             if pid == 0: supervisor(req, policy, key, ROOT_LOCK)
             j['operations'][key]['process'] = identity(pid)

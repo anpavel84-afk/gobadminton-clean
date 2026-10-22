@@ -11,9 +11,8 @@ import re
 from core import REPO, REPO_ID, SHA, RECOVERY_STAGES, Refused, digest, need
 
 SCHEMA = 'GB_RECOVERY_185_V1'
-BLOCKER = ('needs-owner: delegated recovery publication/admission is unavailable in the pinned '
-           'live Owner-only Store.claim/admitted/Bridge.unchanged_issue contract; '
-           'a bot comment is not Owner approval. No successor created or admitted.')
+BLOCKER = ('Generic publication is refused: a bot comment is not Owner approval; '
+           'only the separate exact root-reviewed recovery185 proof authorizes a bounded successor.')
 MANUAL = {'149': 177, '170': 178}
 
 

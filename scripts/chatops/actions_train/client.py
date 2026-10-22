@@ -91,7 +91,11 @@ def reconcile(api, ssh, event, name):
         print('Shadow: source effects disabled; admitted intents=' + str(len(candidates)))
         return
     from recovery_admission import retry_publications
-    publication_retries = retry_publications(api, snap)
+    try:
+        publication_retries = retry_publications(api, snap)
+    except (Refused, KeyError, TypeError, ValueError, OSError) as error:
+        # Recovery reporting/publication never becomes a gate for ordinary ready stages.
+        publication_retries = [dict(status='publication-waiting', reason=type(error).__name__)]
     Path('evidence/publication-retries.json').write_text(json.dumps(publication_retries, sort_keys=True))
     # Existing authenticated restricted SSH: this closed DATA-ONLY report cannot start a
     # task, alter any checkpoint/budget/lease, or mark a process running. No write token leaves Actions.

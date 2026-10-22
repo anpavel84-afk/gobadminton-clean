@@ -1,0 +1,2 @@
+REPRODUCED: rejected dirty-worktree QA receipt becomes confirmed PASS without a new review
+REPRODUCED: publisher-only API failure aborts reconciliation before ready normal task dispatch

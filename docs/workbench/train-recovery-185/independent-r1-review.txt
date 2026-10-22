@@ -1,0 +1,37 @@
+Independent focused OPS/Security source review, recovery185
+Candidate supplied: 62c8f2475bfae8f9bfcbb59192208b1d5d79fe98
+Base supplied: 705db4860f3378253fe33652569ecd4664294de1
+Read-only source snapshot and REVIEW_DIFF.patch inspected. Git metadata is absent;
+candidate identity is the supplied snapshot identity, not an independently resolved HEAD.
+
+P1: scripts/chatops/actions_train/qa_recovery.py:28-34
+Saved exact-SHA PASS is reused without checking whether its original QA worktree
+passed the integrity check. The pinned Bridge.review writes the receipt BEFORE
+checking QA worktree cleanliness (live/autonomous_issues.py:1078-1082). A QA stage
+rejected as 'QA modified candidate' leaves this receipt with an unknown operation.
+safe_pending accepts the completed stopped operation, and reconciliation promotes
+that receipt to confirmed PASS without inspecting the rejected QA worktree or
+performing a new review. Exact reviewed_sha/schema alone do not establish that
+the original review completed on a clean candidate.
+Minimal fix: require verified original detached review-worktree HEAD/cleanliness
+and a bound integrity receipt before saved verdict reuse; otherwise use the one
+permitted fresh read-only review. Do not accept the early raw result file alone.
+
+P2: scripts/chatops/actions_train/client.py:93-104
+retry_publications runs before all normal dispatches without exception isolation.
+A recovery-only failure (e.g. GET for a deleted publication run returns 404, or
+rerun submission fails) escapes reconcile and prevents every already-planned
+ordinary stage from dispatching. The bad receipt remains publish_ready, so the
+same failure can recur on subsequent reconciliations and stall unrelated work.
+Minimal fix: isolate failures per publication receipt, record a bounded retry or
+needs-owner diagnostic, and continue dispatching ordinary tasks.
+
+Validation performed as nonroot UID981, offline, without installation or packages:
+- 126 existing stdlib tests passed. TemporaryDirectory calls targeting source
+  were redirected into this writable review directory; source was not edited.
+- focused_failures.py reproduced both defects against the supplied modules with
+  mocked model/Git/API effects. See focused-results.txt and stdlib-results.txt.
+- No network, live-service, credential access, deployment, or root installation.
+This is source review only, not environment/runtime installation acceptance.
+
+VERDICT FAIL

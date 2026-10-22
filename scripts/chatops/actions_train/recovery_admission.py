@@ -137,23 +137,28 @@ def assert_certificate(a, api, active, cert, config):
 
 
 def retry_publications(api, snapshot):
-    """Retry only a known FAILED hosted publisher job, never diagnosis/review or unknown writes."""
+    """Retry only a FAILED hosted publisher; each failure is isolated from ordinary work."""
     outcomes = []
     for key, r in snapshot.get('recovery', {}).get('receipts', {}).items():
         source = r.get('publication_run')
         if r.get('status') != 'publish_ready' or not source: continue
-        run = api(f'actions/runs/{source["run"]}')
-        if run.get('status') != 'completed': continue
-        need(run.get('id') == source['run'] and run.get('path') == '.github/workflows/train-stage.yml'
-             and run.get('event') == 'workflow_dispatch' and run.get('head_branch') == 'dev'
-             and run.get('repository', {}).get('full_name') == REPO, 'invalid publisher retry provenance')
-        if run.get('run_attempt', 100) >= 3:
-            outcomes.append(dict(receipt=key, reason='hosted publication retry cap; needs-owner')); continue
-        jobs = api.pages(f'actions/runs/{source["run"]}/jobs', 'jobs')
-        matches = [j for j in jobs if j.get('name') == 'publish_recovery']
-        if len(matches) == 1 and matches[0].get('status') == 'completed' and matches[0].get('conclusion') == 'failure':
-            api(f'actions/jobs/{matches[0]["id"]}/rerun', {})
-            outcomes.append(dict(receipt=key, rerun_job=matches[0]['id']))
+        try:
+            run = api(f'actions/runs/{source["run"]}')
+            if run.get('status') != 'completed': continue
+            need(run.get('id') == source['run'] and run.get('path') == '.github/workflows/train-stage.yml'
+                 and run.get('event') == 'workflow_dispatch' and run.get('head_branch') == 'dev'
+                 and run.get('repository', {}).get('full_name') == REPO, 'invalid publisher retry provenance')
+            if run.get('run_attempt', 100) >= 3:
+                outcomes.append(dict(receipt=key, reason='hosted publication retry cap; needs-owner')); continue
+            jobs = api.pages(f'actions/runs/{source["run"]}/jobs', 'jobs')
+            matches = [j for j in jobs if j.get('name') == 'publish_recovery']
+            if len(matches) == 1 and matches[0].get('status') == 'completed' and matches[0].get('conclusion') == 'failure':
+                api(f'actions/jobs/{matches[0]["id"]}/rerun', {})
+                outcomes.append(dict(receipt=key, rerun_job=matches[0]['id']))
+        except (Refused, KeyError, TypeError, ValueError, OSError) as error:
+            # Unknown write results are not replayed here. Next pass reconciles the job.
+            outcomes.append(dict(receipt=key, status='publication-waiting',
+                reason=str(error)[:300] if isinstance(error,Refused) else type(error).__name__))
     return outcomes
 
 

@@ -23,10 +23,30 @@ class Recovery(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=ROOT,prefix='.train-tests-') as tmp:
             p=Path(tmp);a=active('qa');store=Store(a);b=Bridge(store,p);b.model=Mock()
             result={'verdict':'PASS','findings':[],'reviewed_sha':HEAD}
+            (p/f'qa-issue-{a["issue"]}-a{a["attempt"]}').mkdir()
+            b.git=Mock(side_effect=lambda *args,**kwargs:HEAD if args[0]=='rev-parse' else '')
             (p/f'qa-{a["issue"]}-a{a["attempt"]}.json').write_text(json.dumps(result))
             x=Q.reconcile(A,b,Mock(),store,req('qa','pr_wait')|{'issue':a['issue'],'attempt':a['attempt'],'head':HEAD})
             self.assertTrue(x['recovered']);self.assertEqual(store.data['active']['qa'],result)
             b.model.assert_not_called();self.assertEqual(a['attempt'],1)
+    def test_saved_pass_from_dirty_or_wrong_head_review_is_not_reused(self):
+        for bad_head, dirty in ((False,True),(True,False)):
+            with self.subTest(bad_head=bad_head,dirty=dirty),tempfile.TemporaryDirectory(dir=ROOT,prefix='.train-tests-') as tmp:
+                p=Path(tmp);a=active('qa');store=Store(a);b=Bridge(store,p)
+                old={'verdict':'PASS','findings':[],'reviewed_sha':HEAD}
+                main=p/f'qa-{a["issue"]}-a{a["attempt"]}.json';main.write_text(json.dumps(old))
+                original=p/f'qa-issue-{a["issue"]}-a{a["attempt"]}';original.mkdir()
+                actual={'verdict':'FAIL','findings':['independent new review finds real defect'],'reviewed_sha':HEAD}
+                b.model=Mock(return_value=actual)
+                def git(*args,**kw):
+                    previous=kw.get('cwd')==original
+                    if args[0]=='rev-parse':return BASE if previous and bad_head else HEAD
+                    if args[0]=='status':return ' M source.py' if previous and dirty else ''
+                    return ''
+                b.git=Mock(side_effect=git)
+                x=Q.reconcile(A,b,Mock(),store,req('qa','pr_wait')|{'issue':a['issue'],'attempt':a['attempt'],'head':HEAD})
+                self.assertEqual(x['qa'],actual);b.model.assert_called_once()
+                self.assertEqual(store.data['active']['attempt'],1)
     def test_old_sha_verdict_never_promoted_and_one_new_read_only_qa_keeps_it_in_history(self):
         with tempfile.TemporaryDirectory(dir=ROOT,prefix='.train-tests-') as tmp:
             p=Path(tmp);a=active('qa');store=Store(a);b=Bridge(store,p)
