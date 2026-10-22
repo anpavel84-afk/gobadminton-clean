@@ -87,7 +87,9 @@ class StageBoundaries(unittest.TestCase):
         diagnostic={'head':HEAD,'run':999,'failed':[{'job':'source (web)','steps':['typecheck']}]}
         self.store.data['active'].update(phase='ci',ci_failure=diagnostic);self.exact_qa()
         before=copy.deepcopy(self.store.data)
-        self.run_stage('author')
+        with patch('recovery.ci_evidence',return_value=[{'head':HEAD,'log':{'excerpt':'AssertionError expected2 received0'}}]) as evidence:
+            self.run_stage('author')
+        evidence.assert_called_once()
         a=self.store.data['active']
         self.assertEqual(a['ci_failure'],diagnostic)
         self.assertEqual(a['history'][-1]['head'],HEAD)
@@ -195,7 +197,7 @@ class HostedContinuation(unittest.TestCase):
                         ssh=Mock(return_value=dict(status='confirmed',last=dict(changed=True,status='confirmed',
                                    workflow_run=99 if previous else 100,workflow_attempt=1)))
                         with contextlib.redirect_stdout(io.StringIO()):client.execute(api,ssh,descriptor)
-                        self.assertEqual(output.read_text(),'changed='+('false' if previous else 'true')+'\n')
+                        self.assertEqual(output.read_text(),'changed='+('false' if previous else 'true')+'\nrecovery_ready=false\n')
                         self.assertNotIn(TOKEN,(folder/'evidence/stage.json').read_text())
                         api.assert_not_called()  # actions:write is confined to the separate hosted job
                 finally:os.chdir(old)

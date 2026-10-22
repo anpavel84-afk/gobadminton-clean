@@ -76,6 +76,14 @@ def setup(req, config):
             trace['process'] = None
             publish_process()
     bridge.model = measured_model
+    ordinary_unchanged = bridge.unchanged_issue
+    def unchanged(active):
+        if active.get('recovery_receipt'):
+            from recovery_admission import assert_certificate
+            assert_certificate(a, api, active, req.get('_recovery_admission'), config)
+        else:
+            ordinary_unchanged(active)
+    bridge.unchanged_issue = unchanged
     return a, s, rt, api, store, bridge
 
 
@@ -113,7 +121,10 @@ def perform(req, config, context):
         rt.lease(active)
         b.work = b.c.worktrees_root / f'issue-{active["issue"]}'
         b.unchanged_issue(active)
-        if stage == 'publish':
+        if stage == 'qa':
+            from qa_recovery import reconcile
+            return reconcile(a,b,rt,store,req)
+        elif stage == 'publish':
             need(active['phase'] in ('candidate', 'pr_wait') and active['head'] == req['head'], 'publication recovery identity')
             b.candidate_identity(active)  # remote must ALREADY match; no push here
             store.phase('pr_wait')
@@ -146,8 +157,12 @@ def perform(req, config, context):
         need(not active or active['phase'] == 'done', 'slot occupied')
         issue = api(f'issues/{req["issue"]}')
         comments = api.pages(f'issues/{req["issue"]}/comments')
-        active = store.claim([issue], dt.datetime.fromisoformat(SINCE), comments)
-        need(active and active['issue'] == req['issue'], 'no unique immutable Owner admission')
+        if req.get('_recovery_admission'):
+            from recovery_admission import claim
+            active = claim(a, api, store, req['_recovery_admission'], config)
+        else:
+            active = store.claim([issue], dt.datetime.fromisoformat(SINCE), comments)
+        need(active and active['issue'] == req['issue'], 'no unique immutable task admission')
         need(not req.get('_task_hash') or __import__('core').digest(active['task']) == req['_task_hash'],
              'task changed between admission and claim')
         b.unchanged_issue(active)
@@ -157,9 +172,18 @@ def perform(req, config, context):
              'existing source worktree/branch; reconcile')
         need(not b.git('ls-remote', '--heads', a.READ_REMOTE,
                        f'refs/heads/automation/issue-{active["issue"]}'), 'remote branch already exists')
-        base = b.remote_dev()
-        store.phase('claimed', base=base)
-        b.git('worktree', 'add', '-b', f'automation/issue-{active["issue"]}', str(b.work), base)
+        if req.get('_recovery_admission'):
+            f = req['_recovery_admission']['frozen']
+            # Retain the exact old candidate without touching its old branch or attempts.
+            b.git('fetch', '--no-tags', a.READ_REMOTE, f['head'])
+            need(b.git('rev-parse', 'FETCH_HEAD') == f['head'], 'parent candidate not fetched exactly')
+            b.git('worktree', 'add', '-b', f'automation/issue-{active["issue"]}', str(b.work), f['head'])
+            need(b.git('merge-base', f['base'], f['head'], cwd=b.work) == f['base'], 'parent candidate ancestry drift')
+            b.clean(f['head'])
+        else:
+            base = b.remote_dev()
+            store.phase('claimed', base=base)
+            b.git('worktree', 'add', '-b', f'automation/issue-{active["issue"]}', str(b.work), base)
     else:
         need(active and active['issue'] == req['issue'] and active['phase'] == req['phase']
              and active.get('head') == req['head'] and active['attempt'] == req['attempt'], 'stale checkpoint')
@@ -190,7 +214,13 @@ def perform(req, config, context):
                     attempt=active['attempt'], head=active['head'], base=active['base'],
                     qa=active.get('qa'), ci=active.get('ci'), ci_failure=diagnostic,
                     source='actions bounded repair')]
-            b.author(active, fix=diagnostic, ci_failure=diagnostic, **checkpoint)
+            fix_details = diagnostic
+            if diagnostic:
+                from recovery import ci_evidence
+                exact = ci_evidence(api, {'snapshot': active, 'head': active['head'], 'issue': active['issue']})
+                need(exact, 'exact CI failure evidence missing; do not spend another author attempt blindly')
+                fix_details = {'failure': diagnostic, 'assertion_evidence': exact}
+            b.author(active, fix=fix_details, ci_failure=diagnostic, **checkpoint)
         elif stage == 'publish':
             need(active['phase'] == 'candidate', 'publish phase gate')
             b.stopped_writer(active['head'])
@@ -277,6 +307,9 @@ def entry(req, config):
     context = None
     try:
         context = setup(req, config)
+        if req['stage'] in ('diagnose', 'task_review'):
+            from recovery import perform as recover
+            return recover(req, config, context)
         return perform(req, config, context)
     except Retry as error:
         return dict(status='waiting', reason=str(error), retry_after=error.after)

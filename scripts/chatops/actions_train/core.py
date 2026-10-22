@@ -20,7 +20,8 @@ SINCE = '2026-10-15T02:27:00+00:00'
 PINS = {'autonomous_issues.py': '9995d0f268185c56d91cd0e15f986905abf093feb07c6edffec0c9b211e2fec7',
         'slots.py': '19d07c8d680d31ff65e13b3d8611b93fab1898461a918e69390a77bf8bb5ad02',
         'check_foundation.py': 'c2975b19bd46d00acbdbc08227545b8f9c9501d7b8e8783e9b397751c612bd13'}
-STAGES = ('claim', 'author', 'publish', 'qa', 'ci', 'integrate', 'promote', 'dev')
+RECOVERY_STAGES = ('diagnose', 'task_review')
+STAGES = ('claim', 'author', 'publish', 'qa', 'ci', 'integrate', 'promote', 'dev') + RECOVERY_STAGES
 PROFILES = ('auto', 'codex', 'cursor', 'agy')
 SHA = re.compile('[0-9a-f]{40}')
 
@@ -135,6 +136,30 @@ class API:
         need(repo['id'] == REPO_ID and repo['full_name'] == REPO and repo['default_branch'] == 'main',
              'repository identity mismatch')
 
+    def job_log(self, job_id):
+        """One fixed GET; signed blob redirect gets NO GitHub credential. No write/retry."""
+        need(type(job_id) is int and job_id > 0, 'invalid log job')
+        class Capture(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, *args): return None
+        opener = urllib.request.build_opener(Capture()).open
+        req = urllib.request.Request(f'https://api.github.com/repos/{REPO}/actions/jobs/{job_id}/logs',
+                headers={'Authorization': 'Bearer ' + self._token, 'User-Agent': 'gb-actions-train'})
+        try:
+            response = opener(req, timeout=30)
+        except urllib.error.HTTPError as error:
+            need(error.code == 302, 'exact job log unavailable')
+            target = urllib.parse.urlsplit(error.headers.get('Location', ''))
+            need(target.scheme == 'https' and target.hostname is not None
+                 and target.hostname.endswith('.blob.core.windows.net') and target.port in (None, 443)
+                 and not target.username and not target.password and not target.fragment,
+                 'untrusted log redirect')
+            response = urllib.request.build_opener(_NoRedirect()).open(
+                urllib.request.Request(target.geturl(), headers={'User-Agent': 'gb-actions-train'}), timeout=30)
+        with response:
+            raw = response.read(1048577)
+        need(len(raw) <= 1048576, 'exact job log exceeds evidence bound')
+        return raw.decode('utf-8', errors='replace')
+
 def request(value):
     need(isinstance(value, dict) and value.get('action') == 'train', 'invalid train envelope')
     if value.get('stage') == 'status':
@@ -223,7 +248,7 @@ def plan(a, s, snapshot, candidates, profile='auto'):
             continue
         pending = card.get('pending')
         if pending:
-            if pending['status'] == 'unknown' and pending.get('recoverable', True) and pending['binding']['stage'] in ('publish', 'integrate', 'promote', 'dev'):
+            if pending['status'] == 'unknown' and pending.get('recoverable', True) and pending['binding']['stage'] in ('publish', 'integrate', 'promote', 'dev', 'qa'):
                 out.append({k: v for k, v in pending['binding'].items() if k != 'action'})
             continue
         active = card.get('active')
