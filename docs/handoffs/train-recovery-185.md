@@ -41,3 +41,5 @@ Independent read-only review of62c8f2475bfae8f9bfcbb59192208b1d5d79fe98 returned
 P1: an exact-SHA receipt written before original QA cleanliness checks could be reaccepted after QA rejected its modified worktree. Corrected: original QA worktree must exist, have the exact HEAD, and be clean before receipt reuse; otherwise the finite new read-only QA path is required. Added dirty/wrong-head reproductions.
 P2: a publisher retry API failure aborted ordinary task dispatch. Corrected: failures are isolated per receipt and defensively at the caller, with evidence; normal ready tasks still dispatch. Added actual planner/dispatcher regression.
 Current integrator suite128 PASS, including both failure regressions. Pending recovery rerun now retains old operation receipt in recovery_history and reports the current workflow identity. Independent targeted R2 remains a required gate; original R1 FAIL is not rewritten.
+
+Final R1-corrected controller source: `ba02b9d9f9d56c7b07379da22d128c3dfa7341e1`; supersedes the initial096fc67 controller pin. Mechanical train workflow pin update follows this immutable commit.
