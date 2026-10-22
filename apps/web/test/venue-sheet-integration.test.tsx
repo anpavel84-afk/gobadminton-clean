@@ -203,10 +203,11 @@ it.each(["games", "venues", "reject"] as const)("keeps the real Moscow map throu
   const firstPosition = elements(popupTree).find(node => node.props.className === "gb-venue-popup")?.props.style;
   pointer("onPointerMove", 200, 2000); cycle();
   expect(elements(popupTree).find(node => node.props.className === "gb-venue-popup")?.props.style).not.toEqual(firstPosition);
-  expect(renderToStaticMarkup(sheetTree)).toContain("Показать игры на этой площадке");
+  expect(sheetTree).toBeNull(); // do not mount expanded cover at first swipe movement
   expect(transport.games).toHaveBeenCalledTimes(callsBefore); expect(transport.venues).toHaveBeenCalledTimes(venueCallsBefore);
-  pointer("onPointerUp", 200, 2200); const expanded = cycle();
-  await vi.advanceTimersByTimeAsync(220); cycle(); const popup = elements(expanded).find(node => node.type === VenueSheet);
+  pointer("onPointerUp", 200, 2200); cycle();
+  expect(sheetTree).toBeNull(); // keep cover in compact DOM until settle
+  await vi.advanceTimersByTimeAsync(220); const expanded = cycle(); const popup = elements(expanded).find(node => node.type === VenueSheet);
   if (!popup) throw new Error("No sheet");
   expect(h.maps).toHaveLength(1); expect(map.remove).not.toHaveBeenCalled();
   sheetClick("Показать игры"); cycle();
