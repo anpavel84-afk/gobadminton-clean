@@ -50,6 +50,7 @@ export type DirectoryView = {
   preview: UnifiedPreview | null;
   busy: boolean;
   previewBusy: boolean;
+  previewError: string;
   notice: string;
   stale: boolean;
   capabilityUnavailable: boolean;
@@ -77,13 +78,51 @@ export function mergeRadarCatalog(players: PublicPlayer[], view: DirectoryView, 
   // with an explicit More boundary before them; never hide other cities.
   return { radar, ordinary, moreRadar };
 }
-const initial = (): DirectoryView => ({ mode: "ordinary", snapshot: null, rows: [], pins: [], mapPage: null, selected: null, preview: null, busy: false, previewBusy: false, notice: "", stale: false, capabilityUnavailable: false, authenticationRequired: false });
+/** Admission and render fence for the whole private schedule, including malformed
+ * successful responses. No missing/invalid deadline is treated as an infinite TTL.
+ */
+export function liveUnifiedPreview(data: UnifiedPreview | null, playerId: string, now: number): data is UnifiedPreview {
+  if (!data || data.player?.publicPlayerId !== playerId || typeof data.player.displayName !== "string" ||
+      !data.radar?.geo || !Number.isFinite(Date.parse(data.radar.validUntil)) || Date.parse(data.radar.validUntil) <= now ||
+      !Array.isArray(data.upcomingGames) || data.upcomingGames.length > 3) return false;
+  const exactKeys = (value: object, keys: string[]) => Object.keys(value).every(key => keys.includes(key));
+  if (data.proximityBand !== null || !exactKeys(data, ["player", "proximityBand", "radar", "upcomingGames"]) ||
+      !exactKeys(data.player, ["publicPlayerId", "displayName", "level", "trainer", "avatar", "canRequestContact"]) ||
+      !Number.isFinite(data.radar.geo.uncertaintyMeters) || !Number.isFinite(data.radar.geo.sourceAgeSeconds) ||
+      !["approximate", "degraded"].includes(data.radar.geo.quality)) return false;
+  const level = data.player.level;
+  if (level && (typeof level.scaleId !== "string" || typeof level.levelId !== "string" ||
+      !Number.isInteger(level.scaleVersion) || level.provenance !== "self_declared")) return false;
+  const distance = data.radar.distance;
+  if (distance && (!["estimate", "range"].includes(distance.kind) ||
+      ![100, 500, 1000].includes(distance.roundingStepMeters) ||
+      !Number.isFinite(distance.kind === "range" ? distance.upperMeters : distance.roundedMeters))) return false;
+  const ids = new Set<string>();
+  let previous = "";
+  return data.upcomingGames.every(game => {
+    if (!game || typeof game.id !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(game.id) || ids.has(game.id) ||
+        typeof game.title !== "string" || !["regular", "trainer_led"].includes(game.activityKind) ||
+        !Number.isFinite(Date.parse(game.startsAt)) || !Number.isFinite(Date.parse(game.endsAt)) ||
+        Date.parse(game.endsAt) <= Date.parse(game.startsAt) || typeof game.timezone !== "string" ||
+        typeof game.venue?.name !== "string" || !game.cover || !game.venue.cover ||
+        ![game.cover.uploadedUrl, game.venue.cover.uploadedUrl].every(url => url === null || typeof url === "string")) return false;
+    if (!exactKeys(game, ["id", "title", "activityKind", "startsAt", "endsAt", "timezone", "cover", "venue"]) ||
+        !exactKeys(game.venue, ["name", "cover"]) || !exactKeys(game.cover, ["uploadedUrl"]) ||
+        !exactKeys(game.venue.cover, ["uploadedUrl"])) return false;
+    try { new Intl.DateTimeFormat("ru-RU", { timeZone: game.timezone }); } catch { return false; }
+    const order = `${new Date(game.startsAt).toISOString()}:${game.id}`;
+    if (previous && order < previous) return false;
+    previous = order; ids.add(game.id); return true;
+  });
+}
+const initial = (): DirectoryView => ({ mode: "ordinary", snapshot: null, rows: [], pins: [], mapPage: null, selected: null, preview: null, busy: false, previewBusy: false, previewError: "", notice: "", stale: false, capabilityUnavailable: false, authenticationRequired: false });
 /** Private contexts/proofs/origins live only in this root-client session, never URLs/storage. */
 export class UnifiedDirectoryController {
   view = initial();
   private listeners = new Set<() => void>();
   private epoch = 0;
   private selectionEpoch = 0;
+  private selectionAbort = new AbortController();
   private abort = new AbortController();
   private me: Me | null = null;
   private visible = true;
@@ -101,8 +140,8 @@ export class UnifiedDirectoryController {
   constructor(private request = apiFetch, private clock = Date.now) {}
   private set(patch: Partial<DirectoryView>) { this.view = { ...this.view, ...patch }; this.listeners.forEach(fn => fn()); }
   private invalidate(notice = "", stale = false) {
-    ++this.epoch; ++this.selectionEpoch; this.abort.abort(); this.abort = new AbortController(); this.pending = false;
-    this.set({ snapshot: null, rows: [], pins: [], mapPage: null, selected: null, preview: null, busy: false, previewBusy: false, notice, stale });
+    ++this.epoch; ++this.selectionEpoch; this.selectionAbort.abort(); this.abort.abort(); this.abort = new AbortController(); this.pending = false;
+    this.set({ snapshot: null, rows: [], pins: [], mapPage: null, selected: null, preview: null, busy: false, previewBusy: false, previewError: "", notice, stale });
   }
   bind(me: Me | null) {
     if (this.me?.id === me?.id && this.me?.csrfToken === me?.csrfToken) return;
@@ -130,7 +169,7 @@ export class UnifiedDirectoryController {
   }
   tick() {
     const now = this.clock();
-    const snapshotExpired = this.view.snapshot && now >= Date.parse(this.view.snapshot.validUntil);
+    const snapshotExpired = this.view.snapshot && (!Number.isFinite(Date.parse(this.view.snapshot.validUntil)) || now >= Date.parse(this.view.snapshot.validUntil));
     // Target proof/lease may expire sooner than the enclosing 45-second
     // private query. Never retain its selection, preview or map pins after TTL.
     const rowExpired = [...this.view.rows, ...this.view.pins].some(row =>
@@ -199,6 +238,7 @@ export class UnifiedDirectoryController {
     const snapshot = this.view.snapshot, me = this.me;
     if (!snapshot || !me || this.pending || (next && !this.view.mapPage?.nextMapCursor)) return;
     this.tick(); if (!this.view.snapshot) return;
+    this.close();
     const epoch = this.epoch; this.pending = true; this.set({ busy: true });
     const r = await this.request<UnifiedMapSnapshot>("/v1/players/query/map", { method: "POST", csrfToken: me.csrfToken, signal: this.abort.signal, body: JSON.stringify({ contractVersion: UNIFIED_WIRE, queryRef: snapshot.query.queryRef, ...(next ? { mapCursor: this.view.mapPage!.nextMapCursor } : {}), limit: 100 }) });
     if (!this.valid(epoch)) return;
@@ -207,22 +247,28 @@ export class UnifiedDirectoryController {
     if (!this.acceptable(r.data) || r.data.query.queryRef !== snapshot.query.queryRef) { this.invalidate("Список изменился. Обновите участников Radar.", true); return; }
     ++this.selectionEpoch;
     // Replace the map window; never silently accumulate/export the entire city.
-    this.set({ pins: r.data.items.filter(row => row.radar !== null).slice(0, 200), mapPage: r.data.mapPage, selected: null, preview: null, previewBusy: false });
+    this.set({ pins: r.data.items.filter(row => row.radar !== null).slice(0, 200), mapPage: r.data.mapPage, selected: null, preview: null, previewBusy: false, previewError: "" });
   }
-  close() { ++this.selectionEpoch; this.set({ selected: null, preview: null, previewBusy: false }); }
+  close() { ++this.selectionEpoch; this.selectionAbort.abort(); this.set({ selected: null, preview: null, previewBusy: false, previewError: "" }); }
   async select(row: UnifiedRow) {
     if (!row.radar || !this.me || this.pending || this.clock() < this.retryAt) return;
     this.tick(); if (!this.view.snapshot || ![...this.view.pins, ...this.view.rows].includes(row)) return;
+    this.selectionAbort.abort(); this.selectionAbort = new AbortController();
     const epoch = this.epoch, selection = ++this.selectionEpoch;
-    this.set({ selected: row.publicPlayerId, preview: null, previewBusy: true });
-    const r = await this.request<UnifiedPreview>("/v1/radar/results/preview", { method: "POST", csrfToken: this.me.csrfToken, signal: this.abort.signal, body: JSON.stringify({ resultRef: row.radar.resultRef }) });
+    this.set({ selected: row.publicPlayerId, preview: null, previewBusy: true, previewError: "" });
+    const r = await this.request<UnifiedPreview>("/v1/radar/results/preview", { method: "POST", csrfToken: this.me.csrfToken, signal: this.selectionAbort.signal, body: JSON.stringify({ resultRef: row.radar.resultRef }) });
     if (!this.valid(epoch) || selection !== this.selectionEpoch) return;
     this.tick(); if (!this.view.snapshot) return;
-    if (!r.ok) { this.fail(r); return; }
-    if (r.data.player.publicPlayerId !== row.publicPlayerId || Date.parse(r.data.radar.validUntil) <= this.clock()) {
+    if (!r.ok) {
+      if (r.status === 0 || r.status >= 500) {
+        this.set({ preview: null, previewBusy: false, previewError: "Не удалось загрузить данные игрока. Попробуйте снова." });
+      } else this.fail(r);
+      return;
+    }
+    if (!liveUnifiedPreview(r.data, row.publicPlayerId, this.clock())) {
       this.close(); this.set({ notice: "Игрок сейчас недоступен. Обновите список." }); return;
     }
-    this.set({ preview: r.data, previewBusy: false });
+    this.set({ preview: r.data, previewBusy: false, previewError: "" });
   }
   dispose() { this.me = null; this.invalidate(); this.listeners.clear(); }
 }

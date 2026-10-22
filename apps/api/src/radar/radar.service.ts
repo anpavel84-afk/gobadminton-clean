@@ -1,3 +1,5 @@
+import { readRadarPlayerGames } from "../games/games.service";
+import type { UnifiedUpcomingGame } from "@gobadminton/contracts/src/unified.generated";
 import { UNIFIED_POLICY } from "./unified-contract";
 import { isDemoUuid } from "../database/demo-ids";
 import { ensureGeographicConsent } from "./geographic-consent";
@@ -144,6 +146,7 @@ export type NearbyDto = {
 export type PreviewDto = {
   player: NearbyItemDto["player"];
   proximityBand: "near" | "middle" | "outer" | null;
+  upcomingGames?: UnifiedUpcomingGame[];
   displayLocation?: ReturnType<typeof import("./geographic-contract").displayLocation>;
   radar?: import("./radar-proof.service").RedeemedRadarProof["radar"];
 };
@@ -974,6 +977,14 @@ export class RadarService {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
+      const unified = input.resultRef.startsWith("u1.");
+      if (unified) {
+        await client.query("SET LOCAL statement_timeout = '2s'");
+        await client.query("SET LOCAL lock_timeout = '2s'");
+      }
+      const revision = unified ? (await client.query<{ revision: string }>(
+        "SELECT revision FROM players_query_revision WHERE singleton",
+      )).rows[0]?.revision : undefined;
       await this.actorFence.assertActiveConsumerInTransaction(client, {
         actorId: userId,
         sessionId,
@@ -1010,7 +1021,22 @@ export class RadarService {
         ...(redeemed.displayLocation ? { displayLocation: redeemed.displayLocation } : {}),
         ...(redeemed.radar ? { radar: redeemed.radar } : {}),
       };
-      if(redeemed.radar) await this.proofs.assertFinalGeographicProof(client,{actorId:userId,sessionId,targetUserId:redeemed.targetUserId,discoveryProof:input.resultRef});
+      if (unified) {
+        const projectGames = await readRadarPlayerGames(client, this.env, userId, redeemed.targetUserId);
+        const final = await client.query<{ revision: string }>(
+          "SELECT revision FROM players_query_revision WHERE singleton FOR SHARE",
+        );
+        if (!revision || final.rows[0]?.revision !== revision) {
+          throw notFound("RESOURCE_UNAVAILABLE", "Результат Radar недоступен");
+        }
+        await this.actorFence.assertActiveConsumerInTransaction(client, { actorId: userId, sessionId });
+        // The held revision fence covers directory identity and session writers;
+        // pair/presence and Game fences remain held through COMMIT.
+        await this.proofs.assertFinalGeographicProof(client, { actorId: userId, sessionId,
+          targetUserId: redeemed.targetUserId, discoveryProof: input.resultRef });
+        response.upcomingGames = await projectGames();
+      }
+      if(unified || redeemed.radar) await this.proofs.assertFinalGeographicProof(client,{actorId:userId,sessionId,targetUserId:redeemed.targetUserId,discoveryProof:input.resultRef});
       await client.query("COMMIT");
       return response;
     } catch (error) {
