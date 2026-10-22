@@ -1,6 +1,57 @@
 # Venue popup owner fixes — source handoff, refs #156
 
-## CI repair — current source record
+## CI repair 2 — current source record
+
+- From: source author (Codex).
+- To: integrator / independent QA.
+- Date: 2026-10-22.
+- Status: PARTIAL_REPAIR_SOURCE_ONLY; CI_FAILURE_NOT_REPRODUCED / NOT_TESTED; NOT_READY_FOR_MERGE. This record is not independent QA or visual acceptance.
+- Exact repair base / unchanged HEAD: `1519768cab2db41d93d869d327992e4d0ee568a6`, branch `automation/issue-156`; initial tracked diff empty. Original implementation base remains `4977074ee7b45ea612dde592b88b354d99839aea`.
+- Supplied candidate: https://github.com/anpavel84-afk/gobadminton-clean/tree/1519768cab2db41d93d869d327992e4d0ee568a6
+- Reported CI: https://github.com/anpavel84-afk/gobadminton-clean/actions/runs/39698597948/attempts/1 — `source (web)` / `Run pnpm --filter @gobadminton/web run test:unit`. Assertion-level output was not supplied; no network access was attempted.
+- Supplied prior independent QA: `reviewed_sha=1519768cab2db41d93d869d327992e4d0ee568a6`, `findings=[]`, `verdict=PASS`. This is reported evidence for those prior bytes, not a verdict on this repair.
+- Scope: the reported unit-test failure only. Actual edits: `apps/web/src/components/consumer/games/VenueSheet.tsx`, `apps/web/test/venue-popup-owner-fixes.test.tsx`, and this handoff. Every other candidate change is retained. No Git metadata, commits, pushes, dependencies, automation, secrets, services, network deployment or PROD changes.
+
+### Diagnosis and bounded change (D1–D3)
+
+Static inspection of `venue-photo-lifecycle.test.tsx` found that its `Renderer.find` accepts an exact `aria-label` or exact recursive text. The schedule CTA's added decorative `→` changes that recursive text, so `click(renderer, "Показать игры на этой площадке")` cannot find the button. Both primary CTAs now have explicit `aria-label` values matching their existing visible action wording; the decorative arrow, styling, layout and handlers remain intact. The real React SSR test additionally asserts those labels and retention of the visible wording/arrow. Existing assertions and test cases remain unchanged. This is a concrete source incompatibility, but its relationship to the reported CI run is UNVERIFIED because Vitest cannot start locally.
+
+An additional unresolved source incompatibility exists in that same test's Tab cases: its `Node` fixture has no `getClientRects`, and its window fixture has no `getComputedStyle`. The production focus filter requires both APIs to exclude unrendered or invisible controls. `venue-photo-lifecycle.test.tsx` is outside the immutable `allowed_paths`; it was read but not changed. No production visibility checks were removed, guarded away or replaced with weaker fallbacks to accommodate the fixture. Consequently this diff does not claim to repair the complete web unit suite. The missing fixture APIs need resolution within an authorized scope before a successful CI result can be established.
+
+D1: only three allowed paths changed, including production code and the existing real SSR test. D2: production row/contacts/presentation SSR and all three original harnesses are retained; no mocks, suppressions, skips or weaker assertions were introduced. D3: selection, auth/mutation/photo/recovery, create persistence, focus filtering, polling and draft/map independence are preserved; behavioral acceptance is not inferred from static inspection.
+
+### D4 exact author command results
+
+The failing command was attempted before changing code, followed by all three D4 dependency commands. All four commands were repeated after the code/test edits, offline from `/srv/gb-slots/slot2/worktrees/issue-156`.
+
+| Exact command | Before exit | After exit | Result |
+| --- | --- | --- | --- |
+| `COREPACK_ENABLE_NETWORK=0 pnpm --filter @gobadminton/web run test:unit` | 1 | 1 | NOT_TESTED: `vitest: not found`, `spawn ENOENT`; local `node_modules` missing. No tests ran; the CI assertion failure was not reproduced. |
+| `COREPACK_ENABLE_NETWORK=0 pnpm --filter @gobadminton/web exec tsc -p tsconfig.json --noEmit --incremental false` | 254 | 254 | NOT_TESTED: `Command "tsc" not found`. |
+| `COREPACK_ENABLE_NETWORK=0 pnpm --filter @gobadminton/web run lint` | 1 | 1 | NOT_TESTED: `eslint: not found`, `spawn ENOENT`; local `node_modules` missing. |
+| `COREPACK_ENABLE_NETWORK=0 pnpm --filter @gobadminton/web exec vitest run --no-cache test/venue-popup-owner-fixes.test.tsx test/venue-public-contacts.test.tsx test/venue-sheet.test.tsx test/create-game-venue-cta.test.tsx` | 254 | 254 | NOT_TESTED: `Command "vitest" not found`. |
+| `git diff --check` | — | 0 | No whitespace diagnostics after code/test edits; repeated after this handoff update. |
+
+No install or network fallback was attempted. These are author command results, not self-issued independent QA. No type/lint/test PASS is claimed.
+
+### D5–D6, continuity and rollback
+
+STYLE_GUIDE_PARITY: UI → frozen Drawer/BottomSheet, ListRow/MediaBlock, FormGroup/Validation and FormActions/StickyActionBar families → existing VenueSheet/CreateGamePresentation mapping remains documented below. This repair adds accessible action labels without changing visual composition. The operations guide is absent in the repository; reads of frozen App/CSS, the required guide snapshot/provenance and all three review reports returned `Permission denied`. Existing STYLE_GUIDE_GAP / UNVERIFIED labels remain. Exact frozen contact glyphs, popup/create composition and real venue/game/avatar/contact data remain unavailable. No OWNER_VISUAL_OVERRIDE or visual PASS is claimed. Rendered390/430/1440, popup420, photo, focus, picker, auth/create/preview/publish/return and map/camera behavior remain NOT_TESTED without observation. Separate merge/CI, behavioral QA and visual gates remain required.
+
+D6 historical IDs/mappings and decoded assignment bounds (`goal=4985 <= 5000`, `acceptance=3373 <= 3500`) are retained below as historical assignment records. The #156 association and absence of source attempts remain PM_REPORTED / UNVERIFIED_BY_THIS_REVIEW. a1/a2 are prompt reviews, not code QA. Historical code/PASS was not checked; no historical verdict transfers to these bytes. Earlier sections and manifests below are historical evidence.
+
+Current SHA-256 for the two artifacts changed in this repair:
+
+```text
+c4a3a6696aca77bdfa6488e9809f66ee49dd66c52a3ce2e58c2be4d5595584f1  apps/web/src/components/consumer/games/VenueSheet.tsx
+123a24a7dd7206d7052b0cdb21b73179c92220df8ee6b234ef0508275727de31  apps/web/test/venue-popup-owner-fixes.test.tsx
+```
+
+Next bounded action: integrator retains the assertion-level log for the supplied CI candidate, resolves the out-of-scope DOM fixture incompatibility through the assignment owner, and runs the full web unit suite plus D4 on the captured candidate. The integrator adds the exact new candidate permalink and recomputes the nine-path digest using the algorithm below, then obtains a new independent review on those final bytes. No final digest is embedded in its own input handoff; any byte change requires recomputation.
+
+Rollback: integrator applies the inverse of this three-file repair diff against `1519768cab2db41d93d869d327992e4d0ee568a6`, preserving all other candidate changes. No rollback or Git write is executed by this author.
+
+## CI repair 1 — historical source record
 
 - From: source author (Codex).
 - To: integrator / independent QA.

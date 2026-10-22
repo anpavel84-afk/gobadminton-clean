@@ -121,6 +121,10 @@ describe("production venue popup presentation with real React", () => {
     expect(textContent(html).indexOf("Контакты площадки")).toBeLessThan(textContent(html).indexOf("Создать игру"));
     expect(render(false, [])).not.toContain("Создать игру на этой площадке");
     expect(render(true, [game])).not.toContain("Создать игру на этой площадке");
+    for (const [markup, label] of [[html, "Создать игру на этой площадке"], [render(true, [game]), "Показать игры на этой площадке"]]) {
+      expect(markup).toContain(`aria-label="${label}"`);
+      expect(markup).toContain(`${label}<span aria-hidden="true">→</span></button>`);
+    }
   });
   it.each(["form", "preview"] as const)("shares actual fields and actions in embedded/full %s", step => {
     const props = presentation({ step });
