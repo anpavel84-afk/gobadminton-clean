@@ -61,6 +61,7 @@ def jobs(dev=False):
         for n in sorted(A.DEV_JOBS if dev else A.CI_JOBS)]
 
 class Admission(unittest.TestCase):
+    @patch("cost_policy.EPOCH", "2100-01-01T00:00:00+00:00")
     def test_exact_numeric_immutable_schema(self):
         self.assertEqual(S.admitted(A, [issue()], [], NOW-dt.timedelta(days=1)), [(200, TASK)])
         for bad in (issue() | {'user': {'id': str(core.OWNER)}}, issue() | {'pull_request': {}},
@@ -70,6 +71,7 @@ class Admission(unittest.TestCase):
             with self.subTest(bad=bad):
                 self.assertEqual(S.admitted(A, [bad], [], NOW-dt.timedelta(days=1)), [])
 
+    @patch("cost_policy.EPOCH", "2100-01-01T00:00:00+00:00")
     def test_duplicate_body_comment_not_authorized(self):
         parent = issue()
         comment = dict(id=1, issue_url=f'https://api.github.com/repos/{core.REPO}/issues/200',
@@ -112,6 +114,7 @@ class Planning(unittest.TestCase):
         snap['slots']['slot1']['pending'] = {'status': 'running'}
         self.assertEqual([x['issue'] for x in core.plan(A,S,snap,choices)], [201])
 
+    @patch("cost_policy.EPOCH", "2100-01-01T00:00:00+00:00")
     def test_dropped_overflow_cancelled_intent_rescued_from_issue(self):
         snap = dict(slots={'slot1': card(), 'slot2': card(owned=False)})
         # No transient event queue is consulted. Repeat reconcile rediscovers original immutable Issue.
@@ -367,6 +370,7 @@ class Journal(unittest.TestCase):
     def test_stale_expected_head(self):
         with self.assertRaises(core.Refused):receiver.handle(req()|{'head':BASE},self.policy)
         self.assertFalse((self.folder/'slot1.json').exists())
+    @patch("cost_policy.EPOCH", "2100-01-01T00:00:00+00:00")
     def test_parallel_pending_claims_overlap_rejected(self):
         self.state['active']=None
         receiver.handle(req('claim','idle')|{'head':None,'attempt':0},self.policy)
@@ -481,7 +485,7 @@ class MonitorAndWorkflows(unittest.TestCase):
     def test_workflows_hosted_dev_pinned_queue_and_no_candidate_secrets(self):
         for name in ('train-dispatch.yml','train-stage.yml'):
             text=(ROOT/'.github/workflows'/name).read_text()
-            self.assertIn('queue: max',text);self.assertIn('cancel-in-progress: false',text)
+            self.assertIn('queue: single' if name == 'train-dispatch.yml' else 'queue: max',text);self.assertIn('cancel-in-progress: false',text)
             self.assertNotIn('self-hosted',text)
             self.assertRegex(text,r'ref: [0-9a-f]{40}')
             self.assertIn('persist-credentials: false',text)

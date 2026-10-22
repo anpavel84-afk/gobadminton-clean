@@ -11,10 +11,12 @@ import subprocess
 import sys
 import time
 from core import HERE, Refused, binding, digest, live, loads, need, request
+import qa_recovery
 
 POLICY = Path('/etc/gobadminton-actions-train/policy.json')
 STATE = Path('/var/lib/gobadminton-actions-train')
 AUTONOMY = Path('/var/lib/gobadminton-autonomy')
+BUDGET = Path('/etc/gobadminton-slots/budgets.json')
 GROUP = 65042
 UNITS = ('gobadminton-supervisor.service', 'gobadminton-slot@slot1.service', 'gobadminton-slot@slot2.service')
 
@@ -161,6 +163,13 @@ def recovery_journal():
     return value
 
 
+
+def budget_preflight_retry(j, state):
+    if not qa_recovery.preflight_candidate(j, state, alive): return False
+    try: return qa_recovery.preflight_unlimited(j, read(BUDGET, 0, 16384))
+    except (OSError, Refused, ValueError, TypeError): return False
+
+
 def snapshot(policy):
     result = dict(schema='GB_ACTIONS_TRAIN_V1', mode=policy['mode'], slots={})
     try: planning = read(STATE / 'planning.json', 0, 65536)
@@ -179,7 +188,8 @@ def snapshot(policy):
                            recoverable=(op['binding']['stage'] in ('publish', 'integrate', 'promote', 'dev')
                            and op.get('recovery_attempts', 0) < 3) or (op['binding']['stage'] == 'qa'
                            and op.get('recovery_attempts', 0) < 1
-                           and __import__('qa_recovery').safe_pending(j,state,alive)))
+                           and __import__('qa_recovery').safe_pending(j,state,alive))
+                           or budget_preflight_retry(j,state))
         process = None
         try:
             user = pwd.getpwnam('agentagency-dev' if slot == 'slot1' else 'gb-slot2')
@@ -515,7 +525,8 @@ def handle(req, policy):
         if j['pending'] == key:
             if alive(op.get('process')):
                 return dict(status='running', key=key)
-            if req['stage'] not in ('publish', 'integrate', 'promote', 'dev', 'qa') or op.get('recovery_attempts', 0) >= (1 if req['stage']=='qa' else 3):
+            budget_retry = req['stage'] == 'qa' and budget_preflight_retry(j, checkpoint(slot)[0])
+            if req['stage'] not in ('publish', 'integrate', 'promote', 'dev', 'qa') or (op.get('recovery_attempts', 0) >= (1 if req['stage']=='qa' else 3) and not budget_retry):
                 return dict(status='unknown', key=key)
             if req['stage']=='qa':
                 from qa_recovery import safe_pending
@@ -527,6 +538,10 @@ def handle(req, policy):
                 ('run','run_attempt','process','started_at','finished_at','before','after','result')})
             op['recovery_attempts'] = op.get('recovery_attempts', 0) + 1
             op.update(run=req['run'], run_attempt=req['run_attempt'], started_at=int(time.time()))
+            if budget_retry:
+                req['_budget_preflight_retry'] = True  # internal only; wire schema rejects this key
+                op['budget_preflight_used'] = dict(reason='proven pre-call budget refusal', at=int(time.time()))
+                atomic(STATE / (slot + '.json'), j)  # one-use certificate/counter durable BEFORE fork
             pid = os.fork()
             if pid == 0: supervisor(req, policy, key, ROOT_LOCK)
             j['operations'][key]['process'] = identity(pid)

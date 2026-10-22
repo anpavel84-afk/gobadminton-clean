@@ -70,7 +70,7 @@ _API_NEXT = 0.0
 TASK_FIELDS = {'schema', 'target', 'kind', 'goal', 'acceptance', 'allowed_paths', 'max_attempts'}
 # PM V1: optional, validated links. The executor records them; only --slot mode acts on them.
 OPTIONAL_FIELDS = {'depends_on', 'locks', 'model', 'effort',
-                   'work_kind', 'risk', 'author_routes', 'qa_routes'}
+                   'work_kind', 'risk', 'author_routes', 'qa_routes', 'routing_policy'}
 LOCK_RE = re.compile(r'[a-z0-9][a-z0-9-]{0,23}(:[a-z0-9][a-z0-9-]{0,23}){0,2}')
 # Exact model IDs supported by the existing secure Codex runtime. Do not enable
 # a new provider merely because its binary or remote model catalog exists.
@@ -229,6 +229,8 @@ def validate_issue(issue, since, now=None):
     require(updated == issue['created_at'], 'edited or ambiguous Issue')
     now = now or dt.datetime.now(dt.timezone.utc)
     require(since <= created <= now and now - created <= dt.timedelta(days=7), 'stale Issue')
+    from cost_policy import EPOCH
+    policy_since = dt.datetime.fromisoformat(EPOCH)
     task = loads(raw)
     require(isinstance(task, dict) and TASK_FIELDS <= set(task) <= TASK_FIELDS | OPTIONAL_FIELDS,
             'unexpected task fields')
@@ -238,6 +240,12 @@ def validate_issue(issue, since, now=None):
     require(isinstance(task['goal'], str) and 1 <= len(task['goal']) <= 6000, 'goal size')
     require(isinstance(task['acceptance'], str) and 1 <= len(task['acceptance']) <= 6000,
             'invalid acceptance')
+    if created >= policy_since:
+        require('routing_policy' in task, 'new authorization requires stage-specific cost policy')
+    if 'routing_policy' in task:
+        from cost_policy import validate_policy
+        try: validate_policy(task)
+        except ValueError as error: raise Hold(str(error)) from None
     patterns(task['allowed_paths'])
     check_links(task, issue['number'])
     canary_paths = set(task['allowed_paths']) & set(CANARIES.values())
@@ -1000,8 +1008,9 @@ class Bridge:
                                      denied=_SLOTS.denied())
             if _SLOTS is not None:
                 task = self.store.data['active']['task']
-                model = self.c.model if qa else task.get('model', self.c.model)
-                effort = self.c.effort if qa else task.get('effort', self.c.effort)
+                enforced = qa or getattr(self.c, 'stage_route_enforced', False)
+                model = self.c.model if enforced else task.get('model', self.c.model)
+                effort = self.c.effort if enforced else task.get('effort', self.c.effort)
                 require(model in MODELS and effort in MODELS[model], 'model/effort not in registry')
                 argv += ['--model', model, '-c', 'model_reasoning_effort=' + json.dumps(effort)]
             argv += ['-o', str(result), '-']

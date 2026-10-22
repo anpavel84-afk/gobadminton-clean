@@ -4,7 +4,7 @@ import re
 import unittest
 
 ROOT=pathlib.Path(__file__).resolve().parents[3]
-PIN='dfef68ccd8e5a8214b18576708d8a167084ef845'
+PIN='0f769e3e053c79621c5dae9c27b3772a0f84678d'
 
 
 class HostedPhaseV2(unittest.TestCase):
@@ -20,7 +20,7 @@ class HostedPhaseV2(unittest.TestCase):
         text=(ROOT/'.github/workflows/train-dispatch.yml').read_text()
         self.assertIn('group: gobadminton-train-dispatch',text)
         self.assertIn('cancel-in-progress: false',text)
-        self.assertIn('queue: max',text)
+        self.assertIn('queue: single',text)
         self.assertEqual(text.count('  publish_phase_drafts:'),1)
         publish=text.split('  publish_phase_drafts:')[1]
         self.assertIn('needs: reconcile',publish)
