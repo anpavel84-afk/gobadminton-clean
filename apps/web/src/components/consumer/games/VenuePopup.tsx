@@ -126,6 +126,12 @@ export function VenuePopup({ expanded, onExpandedChange, onDeselect, preview, ch
     {expanded && <div className="gb-venue-sheet-backdrop" onClick={onDeselect} />}
     <div ref={surface} className="gb-venue-popup" role={expanded ? "dialog" : undefined} aria-modal={expanded ? "true" : undefined} aria-label={expanded ? "Выбранная площадка" : undefined} data-expanded={expanded} data-moving={moving}
       style={{ height: position === null ? (expanded ? "88dvh" : "172px") : `calc(172px + ${position}px)`, transition: moving ? "none" : "height 220ms cubic-bezier(.2,.8,.2,1)" }}
+      // A swipe's synthetic click has no new pointerdown. A later real tap does.
+      // Clear only stale suppression at the start of a fresh press so the first
+      // expanded Close/Back tap is never swallowed after an iPhone swipe.
+      onPointerDownCapture={() => {
+        if (!drag.current && !compactDrag.current) suppress.current = false;
+      }}
       onPointerDown={expanded ? undefined : compactPointerDown}
       onPointerMove={expanded ? undefined : compactPointerMove}
       onPointerUp={expanded ? undefined : compactPointerUp}
