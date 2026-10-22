@@ -232,10 +232,12 @@ def revised(parent, diagnosis):
     # never grants a new write: paths are already restricted to the immutable Owner
     # allowed_paths above. Keep system governance/workflows/scripts explicitly forbidden.
     code_suffix = ('.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.sql', '.py',
-                   '.css', '.scss', '.json', '.proto', '.graphql', '.gql')
+                   '.css', '.scss', '.proto', '.graphql', '.gql')
+    # Generic JSON may only be metadata/attribution, not code. Existing canonical
+    # OpenAPI contract is a source artifact; all other JSON is documentation here.
     source = [p for p in paths if p.startswith(('apps/', 'packages/'))
               and not p.startswith('packages/tooling/')
-              and p.endswith(code_suffix)]
+              and (p.endswith(code_suffix) or p == 'packages/contracts/openapi.json')]
     need(bool(source), 'no product source/test repair path; documentation-only is not a fix')
     safe = ('docs/api/', 'docs/handoffs/')
     need(all('..' not in p.split('/') and
