@@ -291,8 +291,9 @@ it("opens by dragging any part of the compact card, while retaining an ordinary 
   // A touch on the preview title/photo/arrow bubbles to the compact popup shell.
   h.pointerCard("onPointerDown", 600, 0);
   h.pointerCard("onPointerMove", 597, 15);
-  expect(h.height()).toBe("172px"); expect(h.capture.size).toBe(0);
+  expect(h.height()).toBe("172px"); expect(h.capture.size).toBe(1); // immediate capture before threshold
   h.pointerCard("onPointerUp", 597, 18);
+  expect(h.capture.size).toBe(0);
   expect(h.change).not.toHaveBeenCalled();
   expect(h.click(1).preventDefault).not.toHaveBeenCalled(); // normal button click survives
   const preview = popupElements(h.render()).find(node => node.type === VenuePreviewCard);
@@ -314,6 +315,40 @@ it("opens by dragging any part of the compact card, while retaining an ordinary 
   expect(swipe.capture.size).toBe(0);
   expect(swipe.click(1).preventDefault).toHaveBeenCalledOnce();
   swipe.dispose();
+});
+
+it("captures the original preview button on pointerdown before any iPhone movement", () => {
+  // The working gray handle captures immediately; the former compact implementation
+  // waited until >8px and iOS could cancel the pointer before it got captured.
+  const h = popupHarness(false, true);
+  const source = { closest: () => h.target };
+  h.pointerCard("onPointerDown", 600, 0, { target: source });
+  expect(h.target.setPointerCapture).toHaveBeenCalledWith(3);
+  expect(h.capture.has(3)).toBe(true);
+  // A small tap releases capture without suppressing the ordinary preview click.
+  h.pointerCard("onPointerMove", 597, 15);
+  h.pointerCard("onPointerUp", 597, 16);
+  expect(h.capture.size).toBe(0);
+  expect(h.click(1).preventDefault).not.toHaveBeenCalled();
+  expect(h.change).not.toHaveBeenCalled();
+  h.dispose();
+});
+
+it("does not let iPhone viewport resizing cancel a compact card swipe", () => {
+  const h = popupHarness(false, true);
+  h.pointerCard("onPointerDown", 620, 0);
+  expect(h.capture.has(3)).toBe(true);
+  window.dispatchEvent(new Event("resize"));
+  expect(h.capture.has(3)).toBe(true);
+  h.pointerCard("onPointerMove", 530, 100);
+  expect(h.height()).toBe("calc(172px + 90px)");
+  window.dispatchEvent(new Event("resize"));
+  expect(h.capture.has(3)).toBe(true);
+  expect(h.height()).toBe("calc(172px + 90px)");
+  h.pointerCard("onPointerUp", 520, 140);
+  expect(h.change).toHaveBeenLastCalledWith(true);
+  expect(h.capture.size).toBe(0);
+  h.dispose();
 });
 
 it("keeps the compact preview mounted and pointer-addressable during a real swipe", () => {
