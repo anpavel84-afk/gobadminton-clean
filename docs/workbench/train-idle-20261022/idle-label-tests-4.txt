@@ -1,0 +1,9 @@
+test_free_slot_does_not_report_nonexistent_dependency_or_conflict (test_actions_train_queue.IdleMonitor.test_free_slot_does_not_report_nonexistent_dependency_or_conflict) ... ok
+test_idle_uses_real_planning_counts_and_run (test_actions_train_queue.IdleMonitor.test_idle_uses_real_planning_counts_and_run) ... ok
+test_old_exhausted_error_is_history_not_new_idle_reason (test_actions_train_queue.IdleMonitor.test_old_exhausted_error_is_history_not_new_idle_reason) ... ok
+test_running_stage_links_current_run_not_previous (test_actions_train_queue.IdleMonitor.test_running_stage_links_current_run_not_previous) ... ok
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.000s
+
+OK

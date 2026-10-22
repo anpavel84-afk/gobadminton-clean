@@ -1,0 +1,35 @@
+test_idle_uses_real_planning_counts_and_run (test_actions_train_queue.IdleMonitor.test_idle_uses_real_planning_counts_and_run) ... ok
+test_old_exhausted_error_is_history_not_new_idle_reason (test_actions_train_queue.IdleMonitor.test_old_exhausted_error_is_history_not_new_idle_reason) ... ok
+test_running_stage_links_current_run_not_previous (test_actions_train_queue.IdleMonitor.test_running_stage_links_current_run_not_previous) ... ok
+test_actual_unknown_or_exhausted_budget_does_not_claim (test_actions_train_queue.QueuePlanning.test_actual_unknown_or_exhausted_budget_does_not_claim) ... ok
+test_conflict_with_active_task_is_explicit (test_actions_train_queue.QueuePlanning.test_conflict_with_active_task_is_explicit) ... ok
+test_disjoint_task_can_follow_deferred_task_but_not_its_dependency (test_actions_train_queue.QueuePlanning.test_disjoint_task_can_follow_deferred_task_but_not_its_dependency) ... ok
+test_empty_queue_distinguishes_done_deferred_and_missing_admission (test_actions_train_queue.QueuePlanning.test_empty_queue_distinguishes_done_deferred_and_missing_admission) ... ok
+test_oldest_idle_slot_selected_without_resetting_finished_history (test_actions_train_queue.QueuePlanning.test_oldest_idle_slot_selected_without_resetting_finished_history) ... ok
+test_report_does_not_turn_draft_into_candidate (test_actions_train_queue.QueuePlanning.test_report_does_not_turn_draft_into_candidate) ... ok
+test_closed_data_report_no_secret_author_or_source_fields (test_actions_train_queue.ReportBoundary.test_closed_data_report_no_secret_author_or_source_fields) ... ok
+test_no_budget_or_authorization_fields_in_report (test_actions_train_queue.ReportBoundary.test_no_budget_or_authorization_fields_in_report) ... ok
+test_stale_generation_cannot_replace_current_plan (test_actions_train_queue.ReportBoundary.test_stale_generation_cannot_replace_current_plan) ... ok
+test_valid_report_records_only_planning_no_task_effect (test_actions_train_queue.ReportBoundary.test_valid_report_records_only_planning_no_task_effect) ... ok
+test_wrong_controller_refused_no_file (test_actions_train_queue.ReportBoundary.test_wrong_controller_refused_no_file) ... ok
+test_dropped_overflow_cancelled_intent_rescued_from_issue (test_actions_train.Planning.test_dropped_overflow_cancelled_intent_rescued_from_issue) ... ok
+test_failure_isolation_dependencies_and_done_preserved (test_actions_train.Planning.test_failure_isolation_dependencies_and_done_preserved) ... ok
+test_repair_routes_only_diagnostic_and_bound_enforced (test_actions_train.Planning.test_repair_routes_only_diagnostic_and_bound_enforced) ... ok
+test_two_disjoint_slots_but_not_overlapping (test_actions_train.Planning.test_two_disjoint_slots_but_not_overlapping) ... ok
+test_unknown_author_never_replayed_safe_effect_reconciled (test_actions_train.Planning.test_unknown_author_never_replayed_safe_effect_reconciled) ... ok
+test_cancel_reboot_unknown_writer_not_recharged (test_actions_train.Journal.test_cancel_reboot_unknown_writer_not_recharged) ... ok
+test_completed_receipts_archived_without_replaying_old_operation (test_actions_train.Journal.test_completed_receipts_archived_without_replaying_old_operation) ... ok
+test_double_author_new_workflow_and_generation_rejected (test_actions_train.Journal.test_double_author_new_workflow_and_generation_rejected) ... ok
+test_parallel_pending_claims_overlap_rejected (test_actions_train.Journal.test_parallel_pending_claims_overlap_rejected) ... ok
+test_pending_before_fork_and_no_token_persisted (test_actions_train.Journal.test_pending_before_fork_and_no_token_persisted) ... ok
+test_profile_disabled_shadow_refuses_effect (test_actions_train.Journal.test_profile_disabled_shadow_refuses_effect) ... ok
+test_recovery_attempts_bounded (test_actions_train.Journal.test_recovery_attempts_bounded) ... ok
+test_root_dev_reservation_survives_stage_process (test_actions_train.Journal.test_root_dev_reservation_survives_stage_process) ... ok
+test_safe_unknown_publish_only_reconciles (test_actions_train.Journal.test_safe_unknown_publish_only_reconciles) ... ok
+test_stale_expected_head (test_actions_train.Journal.test_stale_expected_head) ... ok
+test_task_generation_bound_survives_operation_archival (test_actions_train.Journal.test_task_generation_bound_survives_operation_archival) ... ok
+
+----------------------------------------------------------------------
+Ran 30 tests in 0.563s
+
+OK

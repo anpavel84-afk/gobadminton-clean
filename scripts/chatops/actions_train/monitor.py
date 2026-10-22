@@ -43,7 +43,11 @@ def project(card, now=None):
                       'dependencies_or_conflicts':'Ожидание зависимостей или освобождения путей',
                       'not_owned':'Управление слотом не передано Actions','occupied':'Слот занят'}
             counts = planning['counts']
-            reason = (labels[planning['reason']] + ': без допуска ' + str(counts['not_admitted']) +
+            label = labels[planning['reason']]
+            if (planning['reason'] == 'dependencies_or_conflicts' and counts.get('assigned', 0)
+                    and not counts['dependency'] and not counts['conflict'] and not counts.get('ready', 0)):
+                label = 'Все готовые задачи уже назначены другим слотам; других допущенных задач нет'
+            reason = (label + ': без допуска ' + str(counts['not_admitted']) +
                       ', отложено ' + str(counts['deferred']) + ', зависимости ' + str(counts['dependency']) +
                       ', конфликты ' + str(counts['conflict']) + '. Проверка очереди: run ' + str(planning['workflow_run']))
             if now - planning['observed_at'] > 3600:
