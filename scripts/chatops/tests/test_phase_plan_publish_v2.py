@@ -100,6 +100,30 @@ class StageDraftPublishing(unittest.TestCase):
             V.publish_one(api,stage)
         self.assertFalse(api.writes)
 
+    def test_untrusted_matching_comment_is_not_idempotence_proof(self):
+        api=API()
+        stage=P.proposal(api.the_issue,api.comments)
+        api.comments.append(dict(id=55,body=V.exact_published_body(stage),
+                                 user={"id":700,"login":"other","type":"User"},
+                                 created_at="2026-10-22T14:00:00Z",
+                                 updated_at="2026-10-22T14:00:00Z",
+                                 html_url="https://github.com/anpavel84-afk/gobadminton-clean/issues/210#issuecomment-55"))
+        with self.assertRaisesRegex(V.Refused,"untrusted/duplicate"):
+            V.publish_one(api,stage)
+        self.assertEqual(api.writes,[])
+
+    def test_modified_bot_comment_is_not_immutable_proof(self):
+        api=API()
+        stage=P.proposal(api.the_issue,api.comments)
+        api.comments.append(dict(id=56,body=V.exact_published_body(stage),
+                                 user={"id":41898282,"login":"github-actions[bot]","type":"Bot"},
+                                 created_at="2026-10-22T14:00:00Z",
+                                 updated_at="2026-10-22T14:01:00Z",
+                                 html_url="https://github.com/anpavel84-afk/gobadminton-clean/issues/210#issuecomment-56"))
+        with self.assertRaisesRegex(V.Refused,"untrusted/duplicate"):
+            V.publish_one(api,stage)
+        self.assertEqual(api.writes,[])
+
     def test_incomplete_owner_scope_is_not_autopublished(self):
         api=API()
         api.comments=[]
