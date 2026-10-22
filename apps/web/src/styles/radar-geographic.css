@@ -124,3 +124,26 @@ svg.gb-venue-court-glyph { width:28px; height:28px; border-radius:0; box-shadow:
 .gb-fullscreen-map-viewport .gb-games-map-area { position:absolute; inset:0; }
 .gb-fullscreen-map-viewport .gb-games-map > .gb-map-sr-only,
 .gb-map-sr-only { position:absolute; width:1px; height:1px; margin:-1px; padding:0; border:0; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
+
+/* Issue #149 bounded gap: RadarPlayerPreview + CompactUpcomingGame composed
+ * inside the mounted map's Drawer/BottomSheet, with existing foundation tokens. */
+.g2-map-panel:not(.is-expanded) { bottom:auto; max-height:38dvh; }
+.unified-preview-identity { display:flex; align-items:center; gap:12px; }
+.unified-preview-identity .avatar { width:56px; height:56px; flex:none; }
+.unified-preview-identity h2 { margin:0; }
+.unified-preview-identity p { margin:4px 0; }
+.unified-preview-toggle { min-height:44px; margin-top:8px; padding:8px 12px; border:1px solid var(--gb-line); border-radius:var(--gb-radius-sm); background:var(--gb-white); color:var(--gb-purple); cursor:pointer; font:inherit; font-weight:600; }
+.unified-player-games h3 { font-size:18px; margin:20px 0 12px; }
+.unified-player-games ul { list-style:none; margin:0; padding:0; }
+.unified-player-games li { display:flex; gap:12px; padding:12px 0; border-top:1px solid var(--gb-line); }
+.unified-player-games li > div { display:grid; gap:4px; overflow-wrap:anywhere; min-width:0; }
+.unified-player-games li span,.unified-player-games time { font-size:14px; color:var(--gb-ink-soft); }
+.unified-player-game-cover { flex:none; width:72px; height:72px; border-radius:var(--gb-radius-sm); overflow:hidden; }
+.gb-radar-layer button:focus-visible { outline:3px solid var(--gb-purple); outline-offset:3px; }
+@media(max-width:720px) {
+  .g2-map-panel:not(.is-expanded) { bottom:calc(36px + env(safe-area-inset-bottom,0px)); max-height:38dvh; }
+  .g2-map-panel.is-expanded { max-height:78dvh; }
+}
+@media(prefers-reduced-motion:reduce) {
+  .gb-radar-layer .g2-map-panel { transition:none; }
+}
