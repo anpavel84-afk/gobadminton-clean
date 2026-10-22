@@ -70,7 +70,7 @@ def _scope(issue, comments):
     if issue.get("updated_at") == issue.get("created_at") and body.startswith(PARENT_MARKER+"\n"):
         sources.append(body)
     for c in comments:
-        if (c.get("user") or {}).get("id") == OWNER_ID and
+        if ((c.get("user") or {}).get("id") == OWNER_ID and
             c.get("updated_at") == c.get("created_at") and
             c.get("issue_url") == f"https://api.github.com/repos/anpavel84-afk/gobadminton-clean/issues/{issue['number']}" and
             isinstance(c.get("body"),str) and c["body"].startswith(PARENT_MARKER+"\n")):
