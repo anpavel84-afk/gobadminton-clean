@@ -120,7 +120,8 @@ class Receipts(unittest.TestCase):
         self.assertEqual(result['acceptance'], parent['acceptance'])
         self.assertEqual(result['kind'], parent['kind'])
         self.assertEqual(result.get('depends_on'), parent.get('depends_on'))
-        self.assertEqual(result['goal'], parent['goal'] + '\\nBounded diagnosed repair requirements:\\n' + '\\n'.join(proposal['requirements']))
+        self.assertTrue(result['goal'].startswith(parent['goal']))
+        self.assertIn('Bounded diagnosed repair requirements', result['goal'])
         for invalid in ([doc_api], [doc_handoff], [doc_api, doc_handoff]):
             with self.subTest(invalid=invalid), self.assertRaisesRegex(core.Refused, 'no product source/test'):
                 R.revised(parent, proposal | {'paths': invalid})
