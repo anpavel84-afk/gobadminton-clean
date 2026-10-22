@@ -1,0 +1,13 @@
+test_actual_exhaustion (__main__.Attention.test_actual_exhaustion) ... ok
+test_outcomes (__main__.Attention.test_outcomes) ... ok
+test_safe_zip_parse (__main__.Attention.test_safe_zip_parse) ... ok
+test_size_bound (__main__.Attention.test_size_bound) ... ok
+test_trusted_origin (__main__.Attention.test_trusted_origin) ... ok
+test_untrusted_strings_not_echoed (__main__.Attention.test_untrusted_strings_not_echoed) ... ok
+test_workflow_failure_without_artifact (__main__.Attention.test_workflow_failure_without_artifact) ... ok
+test_zip_paths_not_extracted (__main__.Attention.test_zip_paths_not_extracted) ... ok
+
+----------------------------------------------------------------------
+Ran 8 tests in 0.007s
+
+OK
