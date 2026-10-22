@@ -23,6 +23,12 @@ vi.mock("react", async original => ({
   },
 }));
 vi.mock("../src/components/consumer/radar/RadarPage", () => ({ RadarPage: () => null }));
+// This suite verifies map lifetime and venue navigation, not authenticated Game UI.
+// Its global hook-array fixture intentionally does not model nested client actions.
+// Real VenueGameActions contract has a separate SSR test in venue-popup-actions-174.
+vi.mock("../src/components/consumer/games/VenueGameActions", () => ({
+  VenueGameActions: ({ gameId }: { gameId: string }) => <section data-game-actions-for={gameId} />,
+}));
 vi.mock("../src/components/consumer/NavIcon", () => ({ shuttlecockElement: () => ({ setAttribute() {} }) }));
 vi.mock("pmtiles", () => ({ Protocol: class { tile = vi.fn(); } }));
 vi.mock("maplibre-gl", () => ({
