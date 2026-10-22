@@ -75,3 +75,10 @@ export function emptyView(): FriendshipView {
   return { friendshipId: null, relationship: "unavailable", version: null, request: null, peer: null,
     capabilities: { canRequest: false, canAccept: false, canDecline: false, canCancel: false, canRemove: false } };
 }
+
+/** Accepted friendship rights are current, never inferred from a historical row. */
+export function effectiveAccepted(row: FriendshipRow, profiles: Availability[], blocked: boolean): boolean {
+  return row.state === "accepted" && !blocked && profiles.length === 2 && profiles.every(eligible)
+    && profiles.find(p => p.user_id === row.requester_user_id)?.social_action_epoch === row.requester_epoch
+    && profiles.find(p => p.user_id === row.recipient_user_id)?.social_action_epoch === row.recipient_epoch;
+}

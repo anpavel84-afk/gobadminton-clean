@@ -72,6 +72,22 @@ export class FriendshipsService {
     if (!r.rows[0]) unavailable();
     return r.rows[0];
   }
+  /** Local transaction seam for FR-3A; caller takes all Game fences first.
+   * Batch readers preload every profile before taking any pair fence. */
+  async fenceRecommendationProfiles(client: PoolClient, users: string[]) {
+    const ids = [...new Set(users)].sort();
+    // Restrictions writers take User FOR UPDATE. KEY SHARE fences those writers
+    // without conflicting with the opposite consumer's NO KEY UPDATE ActorFence.
+    // Take all user fences before profiles; status writers also take user -> profile.
+    for (const user of ids) await client.query("SELECT id FROM users WHERE id=$1 FOR KEY SHARE", [user]);
+    for (const user of ids) await this.profiles(client, user);
+  }
+  async recommendationContext(client: PoolClient, actor: string, friendshipId: string, readOnly = false) {
+    await this.schema(client);
+    const locator = await this.locate(client, actor, friendshipId);
+    await this.fenceRecommendationProfiles(client, [locator.requester_user_id, locator.recipient_user_id]);
+    return this.lock(client, actor, locator, readOnly);
+  }
   private receipt(row: FriendshipRow, outcome: FriendshipReceipt["outcome"]): FriendshipReceipt {
     return { friendshipId: row.id, requestId: row.request_id, version: row.version, outcome };
   }
@@ -195,7 +211,9 @@ export class FriendshipsService {
       const installed = (await client.query("SELECT to_regclass('friendships') AS name")).rows[0]?.name;
       const friends = Boolean(installed && friendsEnabled(this.env)
         && eligible((await this.profiles(client, actor))[0]));
-      return { friends, gameRecommendations: false, gameAttention: false, socialPush: false };
+      const recommendationsInstalled = friends && Boolean((await client.query(
+        "SELECT to_regclass('game_recommendations') AS name")).rows[0]?.name);
+      return { friends, gameRecommendations: recommendationsInstalled, gameAttention: false, socialPush: false };
     });
   }
   private async view(client: PoolClient, actor: string, row: FriendshipRow, ctx: Context): Promise<FriendshipView> {

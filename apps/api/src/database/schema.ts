@@ -4,6 +4,8 @@ import {
   check,
   customType,
   integer,
+  index,
+  uniqueIndex,
   jsonb,
   pgTable,
   bigint,
@@ -258,6 +260,7 @@ export const participationTransitions = pgTable("participation_transitions", {
 });
 
 export const playerSocialProfiles = pgTable("player_social_profiles", {
+  socialActionEpoch: bigint("social_action_epoch", { mode: "bigint" }).notNull().default(1n),
   avatarKey: text("avatar_key"),
   avatarModerationApprovalId: uuid("avatar_moderation_approval_id"),
   userId: uuid("user_id").primaryKey(),
@@ -656,3 +659,50 @@ export const venueAdminActions = pgTable("venue_admin_actions", {
   auditId: uuid("audit_id").notNull(),
   createdAt: timestamp("created_at", {withTimezone:true}).notNull().defaultNow(),
 });
+
+/** Existing migration0032 relationship; no new graph or ownership. */
+export const friendships = pgTable("friendships", {
+  id:uuid("id").defaultRandom().primaryKey(),pairId:uuid("pair_id").notNull().unique().references(()=>socialPairs.id),
+  requesterUserId:uuid("requester_user_id").notNull().references(()=>users.id),
+  recipientUserId:uuid("recipient_user_id").notNull().references(()=>users.id),
+  requestId:uuid("request_id").notNull().unique(),generation:bigint("generation",{mode:"bigint"}).notNull().default(1n),
+  version:bigint("version",{mode:"bigint"}).notNull().default(1n),state:text("state").notNull(),
+  requesterEpoch:bigint("requester_epoch",{mode:"bigint"}).notNull(),recipientEpoch:bigint("recipient_epoch",{mode:"bigint"}).notNull(),
+  requestedAt:timestamp("requested_at",{withTimezone:true}).notNull().defaultNow(),
+  expiresAt:timestamp("expires_at",{withTimezone:true}),acceptedAt:timestamp("accepted_at",{withTimezone:true}),
+  updatedAt:timestamp("updated_at",{withTimezone:true}).notNull().defaultNow(),
+});
+
+/** FR-3A typed projections. Migration0040 owns relationship membership,
+ * unique direction, state/version guards, inbox indexes and immutable audit. */
+export const gameRecommendations = pgTable("game_recommendations", {
+  id:uuid("id").defaultRandom().primaryKey(), friendshipId:uuid("friendship_id").notNull().references(()=>friendships.id),
+  friendshipGeneration:bigint("friendship_generation",{mode:"bigint"}).notNull(),
+  gameId:uuid("game_id").notNull().references(()=>games.id),
+  senderUserId:uuid("sender_user_id").notNull().references(()=>users.id),
+  recipientUserId:uuid("recipient_user_id").notNull().references(()=>users.id),
+  senderEpoch:bigint("sender_epoch",{mode:"bigint"}).notNull(),
+  recipientEpoch:bigint("recipient_epoch",{mode:"bigint"}).notNull(),
+  expiresAt:timestamp("expires_at",{withTimezone:true}).notNull(),
+  state:text("state").notNull().default("active"),recipientHidden:boolean("recipient_hidden").notNull().default(false),
+  version:integer("version").notNull().default(1),
+  createdAt:timestamp("created_at",{withTimezone:true}).notNull().defaultNow(),
+  updatedAt:timestamp("updated_at",{withTimezone:true}).notNull().defaultNow(),
+},t=>[
+  uniqueIndex("game_recommendations_direction_idx").on(t.friendshipId,t.gameId,t.senderUserId),
+  index("game_recommendations_received_idx").on(t.recipientUserId,t.id).where(sql`${t.state}='active' AND NOT ${t.recipientHidden}`),
+  index("game_recommendations_sent_idx").on(t.senderUserId,t.id),
+  check("game_recommendations_version_check",sql`${t.version} BETWEEN 1 AND 2147483647`),
+  check("game_recommendations_state_check",sql`${t.state} IN ('active','withdrawn')`),
+  check("game_recommendations_not_self",sql`${t.senderUserId} <> ${t.recipientUserId}`),
+  check("game_recommendations_generation_check",sql`${t.friendshipGeneration} >= 1`),
+  check("game_recommendations_sender_epoch_check",sql`${t.senderEpoch} >= 1`),
+  check("game_recommendations_recipient_epoch_check",sql`${t.recipientEpoch} >= 1`),
+  check("game_recommendations_expiry_check",sql`${t.expiresAt}>${t.createdAt} AND ${t.expiresAt}<=${t.createdAt}+interval '30 days'`),
+]);
+export const gameRecommendationActions = pgTable("game_recommendation_actions", {
+  recommendationId:uuid("recommendation_id").notNull().references(()=>gameRecommendations.id),
+  version:integer("version").notNull(),action:text("action").notNull(),
+  actorUserId:uuid("actor_user_id").notNull().references(()=>users.id),
+  createdAt:timestamp("created_at",{withTimezone:true}).notNull().defaultNow(),
+},t=>[primaryKey({columns:[t.recommendationId,t.version]})]);
