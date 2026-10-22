@@ -1,8 +1,8 @@
 # Cursor Onboarding — GoBadminton v002
 
-Status: **OWNER_CONFIRMED project operating rule**
+Status: **OWNER_CONFIRMED onboarding steps; runtime location and provider status must be reverified**
 
-Cursor must be able to recover project context without chat memory.
+Cursor must be able to recover project context without chat memory. **Read current [`AGENTS.md`](../../AGENTS.md) and the [AI delivery target](../operations/AI_DELIVERY_TARGET_CONFIG_V001.md) first.** The latter is proposed until reviewed and is not proof of Cursor readiness. Historical details below must not override current `gobadminton-clean` live facts.
 
 ## Startup
 
@@ -17,7 +17,7 @@ Cursor must be able to recover project context without chat memory.
 ## Repositories
 
 Product/code/docs:
-`https://github.com/anpavel84-afk/gobadminton`
+`https://github.com/anpavel84-afk/gobadminton-clean`
 
 Launchers/professional governance:
 `https://github.com/anpavel84-afk/agents`
@@ -30,17 +30,18 @@ Host:
 `vmi3510488`
 
 Development paths:
-- repo `/srv/gobadminton-dev/repo`;
-- worktrees `/srv/gobadminton-dev/worktrees`;
-- runner `/srv/gobadminton-dev/runner`.
+- repo `/srv/gobadminton-clean/repo`;
+- worktrees `/srv/gobadminton-clean/worktrees`;
+- runner `[historical; no assumed active runner path — verify installed Actions train and restricted adapter]`.
 
 Available executors:
-- Cursor Agent;
-- Codex CLI;
-- task-selected model/effort within the admitted assignment.
+- Cursor Agent: **target preference, currently not verified as sandbox-ready** (OPS #199 AppArmor blocker);
+- Codex CLI: authorized routes only, exact model/effort from admission and stage routing;
+- Antigravity: advisory/research or independent QA only after role-specific permissions and protected trial;
+- task-selected model/effort within the admitted assignment; route listing is never runtime proof.
 
 GitHub transport:
-- SSH alias `github-gobadminton`;
+- SSH alias `github-gobadminton-clean` (verify effective alias on target host);
 - repo-specific write access to `anpavel84-afk/gobadminton`;
 - do not copy broad PLAN/account credentials.
 
