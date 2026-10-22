@@ -73,6 +73,11 @@ class AcceptedFile(unittest.TestCase):
 
 class StageDelivery(unittest.TestCase):
     def test_actual_wrapped_stage_prompt_flags_process_and_usage(self):
+        self.exercise_stage('qa')
+    def test_recovery_diagnose_and_task_review_receive_full_accepted_context(self):
+        for name in ('diagnose','task_review'):
+            with self.subTest(stage=name):self.exercise_stage(name)
+    def exercise_stage(self,stage_name):
         with tempfile.TemporaryDirectory(prefix='.context-stage-') as temp:
             root=Path(temp);cli=root/'fake-codex';cli.write_text('trusted test fixture, never executed')
             count=[0];inputs=[];traces=[];store=SimpleNamespace(data={'active':{'task':{},'head':'a'*40,'attempt':1}})
@@ -99,7 +104,7 @@ class StageDelivery(unittest.TestCase):
                  patch.object(stage.os,'getgid',return_value=1002),patch.object(stage,'API',return_value=api), \
                  patch.object(C,'load',return_value=accepted()),patch.object(stage,'route',return_value=choice), \
                  patch.object(receiver,'units_quiet'),patch.object(receiver,'identity',return_value={'pid':424242,'start':'1','boot':'test'}):
-                _,_,_,_,_,b=stage.setup(req('qa','pr_wait'),{'codex':{'slot1':str(cli)}})
+                _,_,_,_,_,b=stage.setup(req(stage_name,'pr_wait'),{'codex':{'slot1':str(cli)}})
                 b.model('bounded immutable task',qa=True)
                 self.assertEqual(count[0],1);self.assertIn(TEXT,inputs[0]);self.assertTrue(inputs[0].endswith('bounded immutable task'))
                 r=b.routing_receipts[0]['rules_context'];self.assertEqual(r['role'],'qa')

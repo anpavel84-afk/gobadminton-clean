@@ -30,7 +30,7 @@ def setup(req, config):
     bridge = a.Bridge(c, store)
     # Resolve trusted context before a stage can consume an author attempt.
     from context_policy import load as load_rules
-    accepted_rules = load_rules() if req['stage'] in ('author', 'qa', 'task_review') else None
+    accepted_rules = load_rules() if req['stage'] in ('author', 'qa', 'diagnose', 'task_review') else None
     def effect_gate():
         from receiver import POLICY, units_quiet
         policy = s.read_json(POLICY, trusted_uids={0}, limit=16384)
