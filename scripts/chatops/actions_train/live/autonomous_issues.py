@@ -1008,8 +1008,9 @@ class Bridge:
                                      denied=_SLOTS.denied())
             if _SLOTS is not None:
                 task = self.store.data['active']['task']
-                model = self.c.model if qa else task.get('model', self.c.model)
-                effort = self.c.effort if qa else task.get('effort', self.c.effort)
+                enforced = qa or getattr(self.c, 'stage_route_enforced', False)
+                model = self.c.model if enforced else task.get('model', self.c.model)
+                effort = self.c.effort if enforced else task.get('effort', self.c.effort)
                 require(model in MODELS and effort in MODELS[model], 'model/effort not in registry')
                 argv += ['--model', model, '-c', 'model_reasoning_effort=' + json.dumps(effort)]
             argv += ['-o', str(result), '-']

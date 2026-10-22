@@ -55,6 +55,21 @@ class Routes(unittest.TestCase):
         u=policy.usage(30,31,"raised")
         self.assertEqual(u["charged_calls"],1);self.assertIsNone(u["tokens"]);self.assertIsNone(u["money"])
         self.assertTrue(u["repeat_needed"])
+    def test_author_actual_argv_uses_approved_stage_route_over_legacy_scalar(self):
+        from types import SimpleNamespace
+        task=cost_task();task.update(model="gpt-6-astra",effort="high")
+        c=SimpleNamespace(model="gpt-6.1-sol",effort="medium",stage_route_enforced=True,
+                          codex=Path("/synthetic/codex"),state_dir=Path("/synthetic/state"),model_timeout=1)
+        b=A.Bridge(c,SimpleNamespace(data={"active":{"task":task}}));b.work=Path("/synthetic/work")
+        b.git=Mock(return_value="/synthetic/common")
+        with patch.object(A,"_SLOTS",Mock()),patch.object(A,"validate_style_guide"),patch.object(A,"slot"), \
+             patch.object(A,"model_command",return_value=["/synthetic/codex","exec"]),patch.object(A,"run") as run:
+            b.model("synthetic prompt",qa=False)
+        argv=run.call_args.args[0]
+        self.assertEqual(argv[argv.index("--model")+1],"gpt-6.1-sol")
+        self.assertIn('model_reasoning_effort="medium"',argv)
+        self.assertEqual(task["model"],"gpt-6-astra")
+
     def test_failed_stage_retains_actual_call_receipt(self):
         b=Mock(routing_receipts=[{"effective_model":"gpt-6.1-sol","usage":policy.usage(30,31,"raised")}])
         r=stage.model_receipt({"status":"unknown"},(None,None,None,None,None,b))

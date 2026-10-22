@@ -23,7 +23,7 @@ def setup(req, config):
     c = SimpleNamespace(repo=rt.layout.repo, state_dir=rt.layout.state_dir,
                         worktrees_root=rt.layout.worktrees, known_hosts=(rt.home / '.ssh/known_hosts' if req['slot'] == 'slot1' else Path('/etc/gobadminton-slots/slot2-known_hosts')),
                         codex=config['codex'][req['slot']], model='gpt-6.1-sol', effort='high',
-                        model_timeout=1800, poll=1, wait_timeout=1)
+                        model_timeout=1800, poll=1, wait_timeout=1, stage_route_enforced=True)
     rt.check_paths(c.repo, c.state_dir, c.worktrees_root)
     store = a.Store(c.state_dir)  # exact worker.lock rejects a second author/legacy worker
     need(rt.continuity(), 'reviewed V6 continuity policy must be enabled')
