@@ -82,7 +82,7 @@ describe("production venue popup presentation with real React", () => {
     expect(html).toContain('class="gb-venue-sheet-game-organizer"');
     expect(html.indexOf('gb-venue-sheet-game-main')).toBeLessThan(html.indexOf('gb-venue-sheet-game-footer'));
     expect(html.indexOf('gb-venue-sheet-game-organizer')).toBeLessThan(html.indexOf('gb-venue-sheet-count'));
-    expect(html.match(/<button\\b/g)).toHaveLength(1);
+    expect(html.match(/<button\b/g)).toHaveLength(1);
     expect(textContent(html)).toContain(formatSeats(game));
   });
   it("uses one publish action surface in the embedded preview without changing the full-page preview", () => {
