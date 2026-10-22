@@ -44,7 +44,9 @@ class API:
             return self.the_issue
         if path=="issues/210/comments" and data:
             self.writes.append(data)
-            new=dict(id=123456,body=data["body"],user={"id":41898282},
+            new=dict(id=123456,body=data["body"],user={"id":41898282,
+                     "login":"github-actions[bot]","type":"Bot"},
+                     created_at="2026-10-22T14:00:00Z",updated_at="2026-10-22T14:00:00Z",
                      html_url="https://github.com/anpavel84-afk/gobadminton-clean/issues/210#issuecomment-123456")
             self.comments.append(new)
             return new
