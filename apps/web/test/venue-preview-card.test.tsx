@@ -153,7 +153,7 @@ it.each(["mouse", "touch", "pen"])("moves the real surface continuously before r
   h.pointer("onPointerMove", 400, 2000, { pointerType });
   expect(firstHeight).toBe("calc(172px + 100px)"); expect(h.height()).toBe("calc(172px + 300px)");
   expect(h.find("gb-venue-popup").props.style).toMatchObject({ transition: "none" });
-  expect(popupElements(h.render()).some(node => node.type === VenueSheet)).toBe(true);
+  expect(popupElements(h.render()).some(node => node.type === VenueSheet)).toBe(false); // the image stays compact until animation ends
   // Render actual expanded info using a separate hook scope before release.
   const saved = { slots: hooks.slots, cursor: hooks.cursor, effects: hooks.effects };
   hooks.slots = []; hooks.cursor = 0; hooks.effects = [];
@@ -163,6 +163,7 @@ it.each(["mouse", "touch", "pen"])("moves the real surface continuously before r
   expect(h.change).not.toHaveBeenCalled();
   h.pointer("onPointerUp", 400, 2200); expect(h.change).toHaveBeenLastCalledWith(true);
   vi.advanceTimersByTime(220); expect(h.height()).toBe("88dvh");
+  expect(popupElements(h.render()).some(node => node.type === VenueSheet)).toBe(true);
   h.pointer("onPointerDown", 100, 3000); h.pointer("onPointerMove", 350, 4000); const down = h.height();
   h.pointer("onPointerMove", 600, 5000); expect(h.height()).not.toBe(down);
   h.pointer("onPointerUp", 600, 5200); expect(h.change).toHaveBeenLastCalledWith(false);
