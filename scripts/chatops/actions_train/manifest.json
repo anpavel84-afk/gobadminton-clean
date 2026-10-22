@@ -1,11 +1,11 @@
 {
   "files": {
-    "scripts/chatops/actions_train/client.py": "f23895f31d7ad941feec0a37d27538bc9554af94140e3224d52e0c890c3580c7",
-    "scripts/chatops/actions_train/core.py": "15ff397878a50c1435b47b15740411b26c66de4bd12c0454fd6b2ff8c0f526bc",
+    "scripts/chatops/actions_train/client.py": "6567f8c0c3748e711ded4ef231812e397b4c8c7db9757a2128fdb34a61600ca3",
+    "scripts/chatops/actions_train/core.py": "25d257127deaff7f2e1afb35a27cb13b6ce265620c02694b3d19ce9aa8af7a4e",
     "scripts/chatops/actions_train/installer.py": "efed82cd43d26abe917c76091743feda5437445630aa9aecb65af3075c2a9d26",
-    "scripts/chatops/actions_train/live/autonomous_issues.py": "9995d0f268185c56d91cd0e15f986905abf093feb07c6edffec0c9b211e2fec7",
+    "scripts/chatops/actions_train/live/autonomous_issues.py": "8d8baae3089f0a0cafeb047af8d9241dbc756be6a7b30bdc6306ee389361f2fe",
     "scripts/chatops/actions_train/live/check_foundation.py": "c2975b19bd46d00acbdbc08227545b8f9c9501d7b8e8783e9b397751c612bd13",
-    "scripts/chatops/actions_train/live/slots.py": "19d07c8d680d31ff65e13b3d8611b93fab1898461a918e69390a77bf8bb5ad02",
+    "scripts/chatops/actions_train/live/slots.py": "e586703954551d5af212c0f347bb83679cb8cdecffa4e48465f3889df318ad5a",
     "scripts/chatops/actions_train/monitor-mapping.json": "c9c6c4069aaa7138db56ca8234177f0f1ce9c3eea6640ffd61e4dd22d072e29a",
     "scripts/chatops/actions_train/monitor.py": "099a7a0e64bc6afc67d90091d4b965946e32d4c27c02c2203f5bf86fd813ea5b",
     "scripts/chatops/actions_train/monitor_extension.js": "4564704aeeb122ee4da79fa2c8b1eba740db1b3432da5c5d473d6a0bd9f084d7",
@@ -18,7 +18,7 @@
     "scripts/chatops/actions_train/recovery_admission.py": "e3b05f2a0c350de531a28706949618c2d59cc1874a5c4bbbcadcb0393ea7b948",
     "scripts/chatops/actions_train/recovery_publish.py": "51e110d5beaf1a0e46b98eaffb2691d7e4e975c36ab939575e93e87d2850a8c9",
     "scripts/chatops/actions_train/recovery_upgrade.py": "ce8cc88f3cb3230b51f425d9082e826511c35332ca363d2af97bb8b18e4498f6",
-    "scripts/chatops/actions_train/stage.py": "bf5cbcc77742b31c8b22abac1f7ed2ef77cd95aee287eb5ba19933e8c07426bb",
+    "scripts/chatops/actions_train/stage.py": "85925ed97a7fb170a556f2769b0851bf4c49dabce77012ce258180ecaa41c007",
     "scripts/chatops/server/gb-deploy-helper.sh": "c023a71bd1362e8a9347bc06c89b69546efd6c3856e1e6dce1c4c57304538f99"
   },
   "schema": "GB_ACTIONS_TRAIN_INSTALL_V1"
