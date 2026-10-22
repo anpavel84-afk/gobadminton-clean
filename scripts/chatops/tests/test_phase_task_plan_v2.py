@@ -85,9 +85,15 @@ class StagePlanner(unittest.TestCase):
     def test_paths_cannot_mutate_operations_or_escape_scope(self):
         issue=owned_issue()
         for path in ("docs/operations/SUPERVISOR.md","docs/rules/README.md",
-                     "../secret","/root/.ssh/id","apps//api.ts"):
+                     "docs/decisions/OWNER_DECISION.md","../secret","/root/.ssh/id","apps//api.ts"):
             with self.subTest(path=path),self.assertRaises(P.InvalidPlan):
                 P.proposal(issue,[comment(issue,scope(paths=[path]))])
+
+    def test_parent_overlapping_glob_cannot_double_count_child_paths(self):
+        issue=owned_issue()
+        data=scope(paths=["apps/api/**","apps/api/src/games/games.service.ts"])
+        with self.assertRaisesRegex(P.InvalidPlan,"overlapping"):
+            P.proposal(issue,[comment(issue,data)])
 
     def test_parent_model_never_expands_relative_path_scope(self):
         issue=owned_issue()
