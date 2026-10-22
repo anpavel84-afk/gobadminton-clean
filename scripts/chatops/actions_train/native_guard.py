@@ -93,3 +93,65 @@ def restrict(readonly, writable, executables):
     """Use only as trusted Popen preexec_fn, with close_fds and a fresh session."""
     _landlock(readonly, writable, executables)
     _seccomp()
+
+
+CURSOR_PIN = Path('/opt/gobadminton-cursor-cli/2026.10.01-e373342')
+BWRAP_SHA256 = 'e318903862396f96de3df57264e0158682b952fd3fb53ac23d876413e7b30f71'
+
+
+def cursor_namespace_argv(base, command):
+    """Whole-client empty-root boundary compatible with native mount sandbox.
+
+    Qualification only: no provider registration or admission. No host HOME,
+    controller/state, Git/SSH/deploy credentials, Docker socket or other project
+    mounts. All descendants inherit the private mount/PID namespaces. Native
+    Cursor sandbox and executable-specific AppArmor remain enabled. Provider
+    transport uses the existing network; tool network qualification is separate.
+    """
+    import hashlib
+    base = Path(base)
+    need(os.geteuid() == 1002, 'Cursor qualification requires UID1002')
+    need(base.is_absolute() and base.parent == Path('/tmp')
+         and base.name.startswith('gb-cursor-211-'), 'unqualified Cursor private root')
+    for path in (base, *(base / name for name in ('home', 'config', 'data', 'cache', 'tmp', 'work'))):
+        info = path.lstat()
+        need(stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid()
+             and info.st_mode & 0o077 == 0, 'Cursor root must be private and not a symlink')
+    for path in (CURSOR_PIN, *CURSOR_PIN.parents):
+        info = path.lstat()
+        need(stat.S_ISDIR(info.st_mode) and info.st_uid == 0
+             and not info.st_mode & 0o022, 'untrusted Cursor installation')
+    bwrap = CURSOR_PIN/'gb-bwrap'
+    info = bwrap.lstat()
+    need(stat.S_ISREG(info.st_mode) and info.st_uid == 0
+         and info.st_nlink == 1 and not info.st_mode & 0o7022 and hashlib.sha256(bwrap.read_bytes()).hexdigest() == BWRAP_SHA256,
+         'unreviewed namespace helper')
+    try:
+        caps = os.getxattr(bwrap, 'security.capability', follow_symlinks=False)
+    except OSError as e:
+        need(e.errno in (61, 95), 'cannot verify namespace helper capabilities'); caps = b''
+    need(not caps, 'namespace helper capabilities refused')
+    need(isinstance(command, list) and command and command[0] in
+         (str(CURSOR_PIN/'node'), str(CURSOR_PIN/'cursorsandbox')), 'unqualified native executable')
+    argv = [str(bwrap), '--unshare-all', '--share-net', '--die-with-parent',
+            '--new-session', '--cap-drop', 'ALL', '--tmpfs', '/tmp',
+            '--proc', '/proc', '--dev', '/dev', '--dir', '/usr', '--dir', '/usr/bin',
+            '--symlink', 'usr/bin', '/bin', '--symlink', 'usr/lib', '/lib',
+            '--symlink', 'usr/lib64', '/lib64']
+    # Libraries and exact runtime files only; never bind /, /etc, /home, /srv,
+    # /run, /var or the actual provider credential store.
+    for name in ('/usr/lib', '/usr/lib64', '/usr/bin/true', '/etc/ld.so.cache',
+                 '/etc/ssl/openssl.cnf', '/etc/ssl/certs', '/etc/resolv.conf',
+                 '/etc/hosts', '/etc/nsswitch.conf', '/etc/gai.conf'):
+        if Path(name).exists():
+            argv += ['--ro-bind', name, name]
+    argv += ['--ro-bind', str(CURSOR_PIN), str(CURSOR_PIN),
+             '--ro-bind', str(base/'config'), str(base/'config')]
+    for name in ('home', 'data', 'cache', 'tmp', 'work'):
+        argv += ['--bind', str(base/name), str(base/name)]
+    return argv + ['--chdir', str(base/'work'), '--', *command]
+
+
+def no_new_privileges():
+    libc = ctypes.CDLL(None, use_errno=True)
+    need(libc.prctl(38, 1, 0, 0, 0) == 0, 'no_new_privs failed')
