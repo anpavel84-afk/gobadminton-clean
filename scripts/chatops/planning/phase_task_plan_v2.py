@@ -54,8 +54,14 @@ def _paths(values):
         need(value[0] not in ('.','/') and '\\' not in value and
              value.startswith(("apps/","packages/","docs/")) and
              all(part not in ("", ".", "..") for part in value.split("/")) and
-             not value.startswith(("docs/operations/","docs/rules/","docs/governance/","docs/manifest/")),
+             not value.startswith(("docs/operations/","docs/rules/","docs/governance/",
+                                   "docs/manifest/","docs/decisions/")) and
+             not any(k in value.split("/") for k in (".git",".cursor","node_modules","secrets","credentials")),
              "unsafe or control parent path")
+    for broad in (p[:-3] for p in values if p.endswith("/**")):
+        need(not any(p != broad + "/**" and (p == broad or p.startswith(broad + "/"))
+                     for p in values),
+             "overlapping wildcard and explicit path")
     return values
 
 
