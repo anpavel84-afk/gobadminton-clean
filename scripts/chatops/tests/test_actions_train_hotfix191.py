@@ -113,6 +113,11 @@ class Hotfix191(unittest.TestCase):
             with patch.object(H.receiver,'trusted_tree'),patch.object(pathlib.Path,'lstat',return_value=info):
                 H.clear_interrupted_put(target)
             self.assertFalse(tmp.exists())
+            tmp.write_bytes(b'safe restrictive umask')
+            safe=SimpleNamespace(st_mode=stat.S_IFREG|0o640,st_uid=0,st_nlink=1)
+            with patch.object(H.receiver,'trusted_tree'),patch.object(pathlib.Path,'lstat',return_value=safe):
+                H.clear_interrupted_put(target)
+            self.assertFalse(tmp.exists())
             tmp.write_bytes(b'intruder')
             bad=SimpleNamespace(st_mode=stat.S_IFREG|0o644,st_uid=1001,st_nlink=1)
             with patch.object(H.receiver,'trusted_tree'),patch.object(pathlib.Path,'lstat',return_value=bad):
