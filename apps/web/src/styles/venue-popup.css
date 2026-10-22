@@ -30,7 +30,7 @@
 .gb-consumer .gb-venue-sheet-cover, .gb-consumer .gb-venue-sheet-cover img { display:block; width:100%; height:auto; aspect-ratio:16/9; object-fit:cover; border-radius:var(--gb-radius-md); overflow:hidden; }
 .gb-consumer .gb-venue-sheet-info h3 { font-size:24px; font-weight:800; }
 .gb-consumer .gb-venue-sheet-info p { font-size:15px; }
-.gb-consumer .gb-venue-sheet-primary { width:100%; border:0; border-radius:var(--gb-radius-pill); padding:12px 16px; background:var(--gb-lime); }
+.gb-consumer .gb-venue-sheet-primary { width:100%; border:0; border-radius:var(--gb-radius-pill); padding:12px 16px; background:var(--gb-lime); color:var(--gb-ink); }
 .gb-consumer .gb-venue-sheet-dates { display:flex; gap:8px; overflow-x:auto; padding:4px 0; }
 .gb-consumer .gb-venue-sheet-dates button { flex-shrink:0; display:grid; gap:4px; border:1px solid var(--gb-line); border-radius:var(--gb-radius-sm); padding:8px 12px; background:var(--gb-white); color:var(--gb-ink-soft); }
 .gb-consumer .gb-venue-sheet-dates button[aria-pressed="true"] { background:var(--gb-ink); color:var(--gb-white); }
@@ -129,3 +129,35 @@
 .gb-consumer .gb-game-create--embedded textarea { max-width:100%; min-height:44px; }
 .gb-consumer .gb-game-create--embedded .gb-discovery-chips { flex-wrap:wrap; }
 .gb-consumer .gb-venue-sheet :focus-visible { outline:2px solid var(--gb-ink); outline-offset:2px; }
+
+
+/* #174: A real map-game action surface, not a fake in-app friend invitation. */
+.gb-consumer .gb-venue-game-actions {
+  display:grid; gap:12px; width:100%; min-width:0;
+  padding:16px; margin:16px 0;
+  background:var(--gb-white); border:1px solid var(--gb-line);
+  border-radius:var(--gb-radius-md);
+}
+.gb-consumer .gb-venue-game-actions-primary { display:grid; gap:8px; min-width:0; }
+.gb-consumer .gb-venue-game-actions-primary > .gb-c23-btn { width:100%; min-height:48px; }
+.gb-consumer .gb-venue-game-actions-primary small { color:var(--gb-ink-soft); line-height:1.4; }
+.gb-consumer .gb-venue-game-actions-primary p { margin:0; }
+.gb-consumer .gb-venue-game-actions-status { display:grid; gap:8px; }
+.gb-consumer .gb-venue-game-actions-status > .gb-c23-btn { width:100%; }
+.gb-consumer .gb-venue-game-actions .gb-game-share { width:100%; min-width:0; }
+.gb-consumer .gb-venue-game-actions .gb-game-share__button--text {
+  width:100%; min-height:48px; display:flex; align-items:center; justify-content:center; gap:10px;
+  padding:10px 14px; border-radius:var(--gb-radius-pill); background:var(--gb-white); color:var(--gb-ink);
+  font-size:14px; line-height:1.35;
+}
+.gb-consumer .gb-venue-game-notice { margin:0; color:var(--gb-ink-soft); font-size:13px; }
+
+/* Separate the native file picker and the reset action on the form and popup. */
+.gb-consumer .gb-game-photo-selection .gb-game-field { display:flex; flex-direction:column; gap:10px; }
+.gb-consumer .gb-game-photo-selection input[type="file"] { display:block; width:100%; min-width:0; max-width:100%; }
+.gb-consumer .gb-game-photo-selection .gb-game-photo-reset {
+  display:inline-flex; align-items:center; justify-content:center;
+  width:fit-content; max-width:100%; margin-top:18px; min-height:44px;
+  color:var(--gb-ink); background:var(--gb-white);
+}
+.gb-consumer .gb-game-create--embedded .gb-game-photo-selection .gb-game-photo-reset { max-width:100%; }
