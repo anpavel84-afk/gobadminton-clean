@@ -225,7 +225,7 @@ it("does not lock the body or mount expanded controls in settled compact mode", 
   const h = popupHarness(false); const tree = h.render();
   expect(popupElements(tree).some(node => node.type === VenueSheet)).toBe(false);
   expect(popupElements(tree).some(node => node.props.role === "dialog")).toBe(false);
-  expect(h.find("gb-venue-popup").props.onPointerMove).toBeUndefined();
+  expect(typeof h.find("gb-venue-popup").props.onPointerMove).toBe("function"); // compact-only swipe
   const arrowKey = { key: "ArrowUp", preventDefault: vi.fn() };
   (h.find("gb-venue-handle").props.onKeyDown as (event: unknown) => void)(arrowKey);
   expect(arrowKey.preventDefault).toHaveBeenCalledOnce(); expect(h.change).toHaveBeenLastCalledWith(true); h.dispose();

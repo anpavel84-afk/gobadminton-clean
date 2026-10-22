@@ -240,8 +240,16 @@ function popupHarness(initial: boolean, reduced = false) {
     const event = { clientX: 0, clientY: y, timeStamp: time, pointerId: 1, isPrimary: true, button: 0, pointerType: "touch", currentTarget: target, preventDefault: vi.fn(), ...extra };
     (find("gb-venue-handle").props[handler] as (event: unknown) => void)(event); return event;
   };
+  const pointerCard = (handler: string, y: number, time: number, extra: Record<string, unknown> = {}) => {
+    const event = { clientX: 0, clientY: y, timeStamp: time, pointerId: 3, isPrimary: true,
+      button: 0, pointerType: "touch", currentTarget: target,
+      target: { closest: () => null }, preventDefault: vi.fn(), ...extra };
+    const action = find("gb-venue-popup").props[handler] as ((event: unknown) => void) | undefined;
+    if (!action) throw new Error("Missing compact-only handler: " + handler);
+    action(event); return event;
+  };
   Object.assign(window, { matchMedia: () => ({ matches: reduced }) });
-  return { render: renderPopup, find, pointer, change, capture, target,
+  return { render: renderPopup, find, pointer, pointerCard, change, deselect: deselectPopup, capture, target,
     click(detail: number) { const event = { detail, preventDefault: vi.fn(), stopPropagation: vi.fn() }; (find("gb-venue-popup").props.onClickCapture as (event: unknown) => void)(event); return event; },
     dispose() { state.cleanups.forEach(fn => fn?.()); },
     height() { return (find("gb-venue-popup").props.style as { height: string }).height; },
@@ -278,6 +286,91 @@ it.each(["mouse", "touch", "pen"])("moves the real surface continuously before r
   h.pointer("onPointerUp", 600, 5200); expect(h.change).toHaveBeenLastCalledWith(false);
   vi.advanceTimersByTime(220); expect(h.height()).toBe("172px"); h.dispose();
 });
+it("opens by dragging any part of the compact card, while retaining an ordinary tap", () => {
+  const h = popupHarness(false, true);
+  // A touch on the preview title/photo/arrow bubbles to the compact popup shell.
+  h.pointerCard("onPointerDown", 600, 0);
+  h.pointerCard("onPointerMove", 597, 15);
+  expect(h.height()).toBe("172px"); expect(h.capture.size).toBe(0);
+  h.pointerCard("onPointerUp", 597, 18);
+  expect(h.change).not.toHaveBeenCalled();
+  expect(h.click(1).preventDefault).not.toHaveBeenCalled(); // normal button click survives
+  const preview = popupElements(h.render()).find(node => node.type === VenuePreviewCard);
+  if (!preview) throw new Error("No preview card");
+  (preview.props.onOpen as () => void)();
+  expect(h.change).toHaveBeenLastCalledWith(true);
+  h.dispose();
+
+  const swipe = popupHarness(false, true);
+  swipe.pointerCard("onPointerDown", 600, 0);
+  swipe.pointerCard("onPointerMove", 480, 1000);
+  expect(swipe.height()).toBe("calc(172px + 120px)");
+  expect(swipe.capture.has(3)).toBe(true);
+  swipe.pointerCard("onPointerUp", 470, 1200);
+  expect(swipe.change).toHaveBeenCalledOnce();
+  expect(swipe.change).toHaveBeenLastCalledWith(true);
+  expect(swipe.deselect).not.toHaveBeenCalled();
+  expect(swipe.height()).toBe("88dvh");
+  expect(swipe.capture.size).toBe(0);
+  expect(swipe.click(1).preventDefault).toHaveBeenCalledOnce();
+  swipe.dispose();
+});
+
+it("dismisses the selected venue on a downward compact-card swipe, also from its handle", () => {
+  const card = popupHarness(false, true);
+  card.pointerCard("onPointerDown", 500, 0);
+  card.pointerCard("onPointerMove", 590, 200);
+  card.pointerCard("onPointerUp", 600, 320);
+  expect(card.deselect).toHaveBeenCalledOnce();
+  expect(card.change).not.toHaveBeenCalled();
+  expect(card.capture.size).toBe(0);
+  expect(card.click(1).preventDefault).toHaveBeenCalledOnce();
+  card.dispose();
+
+  const handle = popupHarness(false, true);
+  handle.pointer("onPointerDown", 500, 0);
+  handle.pointer("onPointerMove", 590, 200);
+  handle.pointer("onPointerUp", 600, 320);
+  expect(handle.deselect).toHaveBeenCalledOnce();
+  expect(handle.change).not.toHaveBeenCalled();
+  handle.dispose();
+});
+
+it("ignores compact horizontal/secondary/cancel gestures without changing expanded interactions", () => {
+  const compact = popupHarness(false, true);
+  compact.pointerCard("onPointerDown", 600, 0, { isPrimary: false });
+  compact.pointerCard("onPointerDown", 600, 1, { button: 2 });
+  expect(compact.capture.size).toBe(0);
+  compact.pointerCard("onPointerDown", 600, 10);
+  compact.pointerCard("onPointerMove", 590, 30, { clientX: 100 });
+  compact.pointerCard("onPointerUp", 590, 35, { clientX: 100 });
+  expect(compact.height()).toBe("172px");
+  expect(compact.deselect).not.toHaveBeenCalled();
+  expect(compact.change).not.toHaveBeenCalled();
+  expect(compact.click(1).preventDefault).not.toHaveBeenCalled();
+  compact.pointerCard("onPointerDown", 600, 50);
+  compact.pointerCard("onPointerMove", 510, 100);
+  compact.pointerCard("onPointerCancel", 510, 110);
+  expect(compact.height()).toBe("172px");
+  expect(compact.capture.size).toBe(0);
+  expect(compact.change).not.toHaveBeenCalled();
+  expect(compact.deselect).not.toHaveBeenCalled();
+  compact.dispose();
+
+  const expanded = popupHarness(true, true);
+  const surface = expanded.find("gb-venue-popup");
+  expect(surface.props.onPointerDown).toBeUndefined();
+  expect(surface.props.onPointerMove).toBeUndefined();
+  expect(surface.props.onPointerUp).toBeUndefined();
+  // The original handle gesture in the expanded sheet is retained.
+  expanded.pointer("onPointerDown", 100, 0);
+  expanded.pointer("onPointerMove", 500, 1000);
+  expanded.pointer("onPointerUp", 500, 1200);
+  expect(expanded.change).toHaveBeenLastCalledWith(false);
+  expect(expanded.deselect).not.toHaveBeenCalled();
+  expanded.dispose();
+});
+
 it.each([false, true])("clamps geometry and snaps with velocity, reduced motion=%s", reduced => {
   vi.useFakeTimers(); const h = popupHarness(false, reduced);
   h.pointer("onPointerDown", 700, 0); h.pointer("onPointerMove", 650, 20);
@@ -335,7 +428,7 @@ it("does not lock the body or mount expanded controls in settled compact mode", 
   const h = popupHarness(false); const tree = h.render();
   expect(popupElements(tree).some(node => node.type === VenueSheet)).toBe(false);
   expect(popupElements(tree).some(node => node.props.role === "dialog")).toBe(false);
-  expect(h.find("gb-venue-popup").props.onPointerMove).toBeUndefined();
+  expect(typeof h.find("gb-venue-popup").props.onPointerMove).toBe("function");
   const arrowKey = { key: "ArrowUp", preventDefault: vi.fn() };
   (h.find("gb-venue-handle").props.onKeyDown as (event: unknown) => void)(arrowKey);
   expect(arrowKey.preventDefault).toHaveBeenCalledOnce(); expect(h.change).toHaveBeenLastCalledWith(true); h.dispose();
