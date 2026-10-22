@@ -29,7 +29,10 @@ function galleryPhoto(value: unknown, cover: Venue["cover"]): VenueProfile["gall
   if (!url || url !== venueCoverUrl(cover?.uploadedUrl) || credit.kind !== "photo"
     || typeof credit.text !== "string" || !credit.text.startsWith("Фото: ")
     || credit.text.trim().length <= 6 || credit.text.length > 120
-    || /[\u0000-\u001f\u007f-\u009f]/.test(credit.text)
+    || Array.from(credit.text).some(character => {
+      const code = character.charCodeAt(0);
+      return code <= 0x1f || (code >= 0x7f && code <= 0x9f);
+    })
     || typeof credit.url !== "string" || credit.url.length > 300
     || !credit.url.startsWith("https://") || /[^\x21-\x7e]|[\\<>"{}|^`]|%(?![0-9a-f]{2})/i.test(credit.url)) return null;
   try {

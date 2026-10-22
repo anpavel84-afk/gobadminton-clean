@@ -7,14 +7,45 @@
   first bounded V1b web slice; depends on completed API
   [#178](https://github.com/anpavel84-afk/gobadminton-clean/issues/178).
   This is not recovery of #177/#181; their attempts and receipts are untouched.
-- Exact source/base HEAD:
+- Original implementation base (last supplied accepted DEV reference):
   [`0e1d79e8d9ad2797817b6b134693fb2cf8fea766`](https://github.com/anpavel84-afk/gobadminton-clean/tree/0e1d79e8d9ad2797817b6b134693fb2cf8fea766).
+  Correction source/base HEAD:
+  [`bbccc7262dcc512ea4156d9f4f2273ca6df09ff8`](https://github.com/anpavel84-afk/gobadminton-clean/tree/bbccc7262dcc512ea4156d9f4f2273ca6df09ff8).
   Observed branch `automation/issue-205`, supplied task worktree
-  `/srv/gb-slots/slot2/worktrees/issue-205`; initial `git status --short` empty.
+  `/srv/gb-slots/slot2/worktrees/issue-205`; correction-start `git status --short` empty.
 - New candidate SHA / GitHub artifact permalink: **NOT AVAILABLE**. Author is
   forbidden to commit/push or mutate Git metadata. This base SHA is not the new
-  source candidate. The existing authorized bridge must publish these seven
-  paths and attach actual immutable candidate/handoff permalinks to #205.
+  source candidate. The existing authorized bridge must publish this two-file
+  correction and attach actual immutable candidate/handoff permalinks to #205.
+
+## Prior independent QA and bounded correction
+
+Supplied independent QA verdict: **FAIL**, reviewed SHA
+`bbccc7262dcc512ea4156d9f4f2273ca6df09ff8`. The finding identifies the gallery
+credit control-character regex in `VenuePublicProfile.tsx:32` as incompatible
+with ESLint `no-control-regex`, inherited from `js.configs.recommended` in
+`packages/tooling/eslint.config.mjs`. QA reported full lint/Vitest unavailable
+because dependencies were absent; its dependency-free helper checks passed.
+Those reported checks do not validate this correction or constitute a release.
+
+This correction edits only `VenuePublicProfile.tsx` and this handoff. It replaces
+that regex with `Array.from(...).some(...)` and `charCodeAt(0)`, following the
+existing character-code checks in `VenueSheet.tsx` and the V1a API projection.
+The rejected ranges remain U+0000–U+001F and U+007F–U+009F. No ESLint suppression,
+configuration change, guard removal or presentation change is introduced.
+
+Correction references at the exact reviewed source:
+
+- [Reported gallery credit guard](https://github.com/anpavel84-afk/gobadminton-clean/blob/bbccc7262dcc512ea4156d9f4f2273ca6df09ff8/apps/web/src/components/consumer/venues/VenuePublicProfile.tsx#L32).
+- [Existing public contact character-code pattern](https://github.com/anpavel84-afk/gobadminton-clean/blob/bbccc7262dcc512ea4156d9f4f2273ca6df09ff8/apps/web/src/components/consumer/games/VenueSheet.tsx).
+- [Actual V1a gallery eligibility checks](https://github.com/anpavel84-afk/gobadminton-clean/blob/bbccc7262dcc512ea4156d9f4f2273ca6df09ff8/apps/api/src/venues/venue-profile.ts).
+- [Shared ESLint configuration](https://github.com/anpavel84-afk/gobadminton-clean/blob/bbccc7262dcc512ea4156d9f4f2273ca6df09ff8/packages/tooling/eslint.config.mjs).
+
+Author verification: **NOT_TESTED**. No lint, tests, helper checks, browser or
+self-QA was run. Existing focused tests and visual evidence dispositions below
+remain unchanged. Independent QA must review the new published SHA and execute
+the required checks, including web lint. All required Product CI gates must be
+SUCCESS and actual DEV ACCEPTED is required before any release claim.
 
 ## Authority and exact references
 
@@ -22,8 +53,8 @@ AGENTS, rules/index and Project Record Policy, Owner decisions, manifest,
 bootstrap, architecture/module boundaries, ChatOps/PM route/onboarding and
 `apps/web/AGENTS.md` were read. The explicit source-only assignment overrides
 older general instructions about publication, runtime paths and author checks.
-No independent QA was supplied (`{}`). No acceptance is inferred from the base
-or the V1a handoff's historical checks.
+Prior independent QA is recorded above; it remains FAIL on its reviewed SHA.
+No acceptance is inferred from either base or the V1a handoff's historical checks.
 
 Read-only references at the exact base above:
 
@@ -42,7 +73,8 @@ runtime lock/lease operation, old-attempt recovery or next slice was started.
 
 ## Source changes and boundaries
 
-Exactly seven allowed paths form this candidate:
+The original implementation spans the following seven allowed paths. This
+correction changes only the profile component and handoff, as recorded above:
 
 | Path | Authored behavior |
 | --- | --- |
@@ -129,7 +161,7 @@ PASS. Existing safety guards/assertions were retained; new tests are unexecuted.
 | Guest/member public-only access, cover/credit/schedule, map return/day/activity | NOT_TESTED; existing assertions retained and extended. |
 | Web TypeScript/lint/build and broader existing venue/contact/navigation suites | NOT_TESTED; external CI required. |
 | Canonical source comparison; real browser 390/430 overflow, links/focus/44px | NOT_TESTED; no screenshots/browser evidence supplied. |
-| Independent NEW exact-SHA source QA (`codex:gpt-6-astra:high`) | NOT_TESTED / pending; prior independent QA `{}`. |
+| Independent NEW exact-SHA source QA (`codex:gpt-6-astra:high`) | NOT_TESTED / pending; supplied prior QA FAIL on `bbccc7262dcc512ea4156d9f4f2273ca6df09ff8`, finding recorded above. |
 | All required exact-candidate Product CI gates | NOT_TESTED / pending; every required gate must be SUCCESS. |
 | Actual protected DEV deployment acceptance | NOT_TESTED / pending; actual DEV ACCEPTED is mandatory before a release claim. |
 
