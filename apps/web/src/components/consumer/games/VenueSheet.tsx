@@ -74,10 +74,20 @@ function ContactIcon({ kind }: { kind: string }) {
 export function VenueSheetGameRow({ game, timezone, onOpen }: { game: Game; timezone: string; onOpen: () => void }) {
   const time = (value: string) => new Intl.DateTimeFormat("ru-RU", { timeZone: timezone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(value));
   return <button key={game.id} type="button" className="gb-venue-sheet-game" onClick={onOpen}>
-    <GameCover game={game} className="gb-venue-sheet-game-cover" />
-    <span><span>{time(game.startsAt)}–{time(game.endsAt)}</span><strong>{game.title}</strong>
-      {game.levelRule.allowedLevelIds.length > 0 && <span>{game.levelRule.allowedLevelIds.join(", ")}</span>}
-      <small>Организатор</small><span className="gb-game-identity"><Avatar name={game.organizer.displayName} avatar={game.organizer.avatar} className="gb-discovery-avatar" />{game.organizer.displayName}</span>
+    <span className="gb-venue-sheet-game-main">
+      <GameCover game={game} className="gb-venue-sheet-game-cover" />
+      <span className="gb-venue-sheet-game-summary">
+        <span className="gb-venue-sheet-game-time">{time(game.startsAt)}–{time(game.endsAt)}</span>
+        <strong>{game.title}</strong>
+        {game.levelRule.allowedLevelIds.length > 0 && <span className="gb-venue-sheet-game-levels">{game.levelRule.allowedLevelIds.join(", ")}</span>}
+      </span>
+    </span>
+    <span className="gb-venue-sheet-game-footer">
+      <span className="gb-venue-sheet-game-organizer">
+        <span className="gb-venue-sheet-game-organizer-label">Организатор</span>
+        <Avatar name={game.organizer.displayName} avatar={game.organizer.avatar} className="gb-discovery-avatar" />
+        <span className="gb-venue-sheet-game-organizer-name">{game.organizer.displayName}</span>
+      </span>
       <span className="gb-venue-sheet-count">{formatSeats(game)}</span>
     </span>
   </button>;
@@ -135,7 +145,7 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
   }, [active, embedded]);
   return <>
     {!embedded && <div className="gb-venue-sheet-backdrop" onClick={onDeselect} />}
-    <div ref={panel} className="gb-venue-sheet" role={active && !embedded ? "dialog" : undefined} aria-modal={active && !embedded ? "true" : undefined} aria-labelledby={label}>
+    <div ref={panel} className="gb-venue-sheet" data-view={currentView} role={active && !embedded ? "dialog" : undefined} aria-modal={active && !embedded ? "true" : undefined} aria-labelledby={label}>
       {!embedded && <button type="button" className="gb-venue-handle" aria-label="Свернуть площадку" onClick={onCollapse}><span /></button>}
       <header className="gb-venue-sheet-header">
         {currentView !== "info" && <button type="button" aria-label={currentView === "game" ? "К расписанию" : "К информации о площадке"} onClick={() => setView(currentView === "game" ? "schedule" : "info")}>←</button>}
