@@ -4,7 +4,7 @@ import { copyGameUrl, publicGameUrl, shareGameUrl, type GameShareResult } from "
 import { ProfileDialog } from "../players/ProfileComposition";
 import { Button } from "../Button";
 
-export function GameShare({ gameId }: { gameId: string }) {
+export function GameShare({ gameId, label }: { gameId: string; label?: string }) {
   const [result, setResult] = useState<GameShareResult | null>(null);
   const [busy, setBusy] = useState(false);
   const lock = useRef(false);
@@ -17,8 +17,8 @@ export function GameShare({ gameId }: { gameId: string }) {
     } finally { lock.current = false; setBusy(false); }
   }
   return <span className="gb-game-share">
-    <button type="button" className="gb-game-share__button" aria-label="Поделиться игрой" title="Поделиться игрой" disabled={busy} onClick={() => void act()}>
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 16V3m-4 4 4-4 4 4M5 12v8a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-8" /></svg>
+    <button type="button" className={`gb-game-share__button${label ? " gb-game-share__button--text" : ""}`} aria-label={label ?? "Поделиться игрой"} title="Поделиться игрой" disabled={busy} onClick={() => void act()}>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 16V3m-4 4 4-4 4 4M5 12v8a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-8" /></svg>{label && <span>{label}</span>}
     </button>
     {(result === "copied" || result === "shared" || result === "cancelled") && <span className="gb-game-share__notice" role="status">{result === "copied" ? "Ссылка скопирована." : result === "shared" ? "Ссылка отправлена." : "Отправка отменена."}</span>}
     {(result === "fallback" || result === "copy_failed") && <ProfileDialog title="Поделиться игрой" onClose={() => { if (!busy) setResult(null); }}>
