@@ -635,14 +635,16 @@ def main():
     trusted_tree(STATE)
     for path in HERE.rglob('*'):
         if path.is_file(): trusted_tree(path)
-    policy = read(POLICY, 0, 16384)
-    need(policy['schema'] == 'GB_ACTIONS_TRAIN_POLICY_V1' and policy['mode'] in ('disabled', 'shadow', 'active'), 'invalid root policy')
-    need(set(policy['owned']) <= {'slot1', 'slot2'}, 'invalid ownership')
     raw = sys.stdin.buffer.read(8193)
     need(len(raw) <= 8192, 'request too large')
     req = loads(raw)
     ROOT_LOCK = locked(STATE / 'controller.lock')
     try:
+        # Revalidate under the controller lock. A request waiting during an
+        # authorized runtime upgrade must never use a cached ACTIVE policy.
+        policy = read(POLICY, 0, 16384)
+        need(policy['schema'] == 'GB_ACTIONS_TRAIN_POLICY_V1' and policy['mode'] in ('disabled', 'shadow', 'active'), 'invalid root policy')
+        need(set(policy['owned']) <= {'slot1', 'slot2'}, 'invalid ownership')
         result = handle(req, policy)
         publish_monitor(policy)
     finally: os.close(ROOT_LOCK)
