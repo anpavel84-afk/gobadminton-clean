@@ -67,10 +67,16 @@ export function Venues({session,onAuthorityLoss,stepup}:{session:Session;onAutho
    pending.current=null;setUncertain(false);
    setNotice(result.reviewRequired?"Совпадение направлено на проверку. Данные площадки сохранены без изменений.":"Действие сохранено.");
   }catch(e){
-   const definite=e instanceof AdminError&&e.status<500&&e.status!==408&&e.code!=="ADMIN_UPSTREAM_UNAVAILABLE"&&e.code!=="ADMIN_STEP_UP_REQUIRED";
+   // Rate limiting runs before receipt lookup, so even a throttled replay
+   // cannot resolve the original outcome. Keep its exact body/key and lock.
+   const definite=e instanceof AdminError&&e.status<500&&e.status!==408&&e.status!==429&&e.code!=="ADMIN_UPSTREAM_UNAVAILABLE"&&e.code!=="ADMIN_STEP_UP_REQUIRED";
    if(!p.result&&definite){pending.current=null;setUncertain(false);}
    else setUncertain(true);
-   fail(e);
+   // CREATE identity collisions reject this draft; there is no selected
+   // version to refresh. Existing-venue 409s still require an explicit read.
+   if(p.path==="venues"&&e instanceof AdminError&&e.status===409&&e.code==="VENUE_IDENTITY_CONFLICT"){
+    setError("Такая площадка уже существует. Проверьте каталог или измените данные новой площадки.");
+   }else fail(e);
   }finally{operationBusy.current=false;setBusy(false);}
  }
  function beginEdit(){

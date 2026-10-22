@@ -272,6 +272,73 @@ describe("existing venue EDIT UI and transport", () => {
     await h.click("Редактировать данные"); expect(h.control("Количество кортов").props.value).toBe("6");
   });
 
+  for (const flow of ["edit", "create"] as const) {
+    it("retains the unresolved " + flow + " operation across throttled explicit replays", async () => {
+      const h = harness(); await h.mount();
+      if (flow === "edit") { await h.edit(); h.change("Количество кортов", "5"); }
+      else {
+        await h.click("Создать площадку");
+        h.change("Идентификатор города (создание)", venue().cityId);
+        h.change("Название", "Новый зал"); h.change("Адрес", "Новый адрес");
+      }
+      const staleSave = h.button("Подтвердить сохранение").props.onClick as () => void;
+      h.loseNextResponse(async () => { throw new TypeError("response lost after commit"); });
+      await h.click("Подтвердить сохранение");
+      expect(h.posts()).toHaveLength(1);
+      const first = h.posts()[0]!;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        h.rejectNext(429, "ADMIN_RATE_LIMIT"); await h.click("Проверить результат");
+        expect(h.button("Проверить результат").disabled).toBe(false);
+        for (const name of ["Подтвердить сохранение", "Отмена", "Создать площадку", "Зал А · Открыть / Редактировать"]) {
+          expect(h.button(name).disabled).toBe(true);
+        }
+        expect(h.control("Название").disabled).toBe(true);
+        expect(h.view().some(node => node.props.role === "alert" && text(node.props.children).includes("Слишком много попыток"))).toBe(true);
+        expect(h.view().some(node => node.props.role === "status" && text(node.props.children).includes("Действие сохранено"))).toBe(false);
+        staleSave(); await settle(); expect(h.posts()).toHaveLength(attempt + 2);
+      }
+      await h.click("Проверить результат");
+      expect(h.posts()).toHaveLength(4);
+      for (const [url, replay] of h.posts()) {
+        expect(url).toBe(first[0]); expect(replay.body).toBe(first[1].body); expect(replay.headers).toEqual(first[1].headers);
+      }
+      expect(h.records.get(a)!.version).toBe(8);
+      expect(h.view().some(node => node.type === "button" && text(node.props.children) === "Проверить результат")).toBe(false);
+      expect(h.view().some(node => node.props.role === "status" && text(node.props.children) === "Действие сохранено.")).toBe(true);
+    });
+  }
+
+  for (const selected of [false, true]) {
+    for (const cancel of [false, true]) {
+      it(`recovers a CREATE identity conflict with selected=${selected}, cancel=${cancel}`, async () => {
+        const h = harness(); await h.mount();
+        if (selected) await h.click("Зал А · Открыть / Редактировать");
+        await h.click("Создать площадку");
+        h.change("Идентификатор города (создание)", venue().cityId);
+        h.change("Название", "Совпадающий зал"); h.change("Адрес", "Совпадающий адрес");
+        h.rejectNext(409, "VENUE_IDENTITY_CONFLICT"); await h.click("Подтвердить сохранение");
+        expect(h.posts()).toHaveLength(1);
+        expect(h.button("Подтвердить сохранение").disabled).toBe(false);
+        expect(h.button("Создать площадку").disabled).toBe(false);
+        expect(h.view().some(node => node.type === "button" && ["Проверить результат", "Обновить выбранную площадку"].includes(text(node.props.children)))).toBe(false);
+        expect(h.view().some(node => node.props.role === "alert" && text(node.props.children).includes("Такая площадка уже существует"))).toBe(true);
+        if (cancel) {
+          await h.click("Отмена"); expect(h.posts()).toHaveLength(1);
+          await h.click("Создать площадку");
+          h.change("Идентификатор города (создание)", venue().cityId);
+          h.change("Название", "Другой зал"); h.change("Адрес", "Другой адрес");
+        } else h.change("Название", "Другой зал");
+        await h.click("Подтвердить сохранение");
+        expect(h.posts()).toHaveLength(2);
+        expect(h.posts()[1]![0].endsWith("/venues")).toBe(true);
+        const body = JSON.parse(h.posts()[1]![1].body as string);
+        expect(body.name).toBe("Другой зал"); expect(body).not.toHaveProperty("fields");
+        expect(body).not.toHaveProperty("publicContacts"); expect(body).not.toHaveProperty("profile");
+        expect(h.posts()[1]![1].headers).not.toEqual(h.posts()[0]![1].headers);
+      });
+    }
+  }
+
   it("requires refresh and new confirmation after 409, with a new version/key", async () => {
     const h = harness(); await h.mount(); await h.edit(); h.change("Количество кортов", "5"); h.rejectNext(409, "VENUE_VERSION_CONFLICT");
     await h.click("Подтвердить сохранение"); expect(h.button("Подтвердить сохранение").disabled).toBe(true);

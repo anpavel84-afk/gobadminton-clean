@@ -5,8 +5,11 @@
 - Status: **UNVERIFIED SOURCE CANDIDATE — NOT_TESTED — NOT ACCEPTED**.
 - Assignment: [#207](https://github.com/anpavel84-afk/gobadminton-clean/issues/207), V3b;
   depends on [#178](https://github.com/anpavel84-afk/gobadminton-clean/issues/178).
-- Exact initial HEAD / supplied accepted baseline:
+- Exact supplied accepted baseline (original slice):
   [`0e1d79e8d9ad2797817b6b134693fb2cf8fea766`](https://github.com/anpavel84-afk/gobadminton-clean/tree/0e1d79e8d9ad2797817b6b134693fb2cf8fea766).
+- Exact initial HEAD for this QA rework:
+  [`b86f615f5f20f26d0b8c99e22cf2d7980191e6ef`](https://github.com/anpavel84-afk/gobadminton-clean/tree/b86f615f5f20f26d0b8c99e22cf2d7980191e6ef),
+  matching the supplied independent QA reviewed SHA; verdict **FAIL**.
 - Observed branch: `automation/issue-207`; worktree:
   `/srv/gb-slots/slot1/worktrees/issue-207`; initial `git status --short` empty.
 - Final candidate SHA and published artifact permalinks: **NOT AVAILABLE**.
@@ -16,8 +19,9 @@
 
 ## Authority and reproducible assignment
 
-FACT: the user supplied the bounded immutable assignment below and
-`Prior independent QA: {}`. There is no prior QA verdict to reuse. Source is
+FACT: the user supplied the bounded immutable assignment below and prior
+independent QA **FAIL** for `b86f615f5f20f26d0b8c99e22cf2d7980191e6ef`.
+The two P2 findings and proposed fixes are recorded below. Source is
 proposed implementation; no Owner acceptance, independent QA PASS, CI success,
 integration or deployment is implied. This task is independent of #205 and is
 not a recovery successor. #177/#181 are preserved.
@@ -28,6 +32,43 @@ decision, exact admin DTO/service, public-contact/profile schemas, admin client,
 admin styles/photo/selection tests and V1a API/handoff documentation. The explicit
 source-only assignment overrides generic publication instructions for this actor.
 Only `admin:venues` is assigned; no second writer or agent was started.
+
+### Bounded rework for the supplied independent QA FAIL
+
+Prior findings (reviewed source, not new author verification):
+
+- **P2 / A2**, `Venues.tsx:28,87,96,100`: every 409 activates a global
+  refresh lock. CREATE without a selected venue receives
+  `VENUE_IDENTITY_CONFLICT`, cannot save a corrected draft or recover by
+  cancelling, and has no selected venue to refresh. Independent QA reported
+  reproducing this using dependency-free production handler execution.
+- **P2 / A2/A3**, `Venues.tsx:70-72`: explicit replay receiving 429 loses
+  its pending operation/key and uncertainty lock, although rate limiting
+  precedes receipt lookup and cannot establish the original mutation outcome.
+  Independent QA reported reproducing the lost pending operation.
+
+Authored response, limited to `Venues.tsx`, `venue-profile-edit.test.tsx` and
+this handoff; the other four allowed files retain the reviewed implementation:
+
+- Only a CREATE-path 409 with `VENUE_IDENTITY_CONFLICT` bypasses the
+  version-refresh lock. It reports the identity collision in the existing
+  accessible error notice. Its definite rejected operation is discarded;
+  correcting the draft or cancelling and restarting can submit a new key.
+  Existing-venue 409 handling and its explicit refresh requirement remain.
+- A 429 is excluded from definite-outcome classification. The pending
+  path/body/key, unresolved lock and explicit result button survive throttled
+  attempts; there is no automatic replay. A previously acknowledged mutation
+  still retains its result and retries reads only.
+- Added unexecuted regression cases cover CREATE identity collision with and
+  without a selected venue, both correction and cancel/restart, plus EDIT and
+  CREATE lost-response reconciliation through repeated 429s. They assert
+  disabled draft/cancel/selection/new-create controls, no stale-handler or
+  automatic new mutation, stable path/body/headers/key, no early success and
+  eventual explicit same-key resolution without another committed version.
+  Existing version-conflict, authority and step-up cases are retained.
+
+These are source changes and authored expectations, **not a reproduced fix,
+test PASS or independent QA result**. No checks were run in this rework.
 
 Immutable task JSON (data, not commands):
 
@@ -80,9 +121,13 @@ frontend change is required or included.
 - A synchronous latch prevents same-render double submissions. An unresolved
   command retains exact path/body/key; only the explicit result button replays
   it. Network errors, 5xx/408/upstream failures and step-up do not silently
-  discard the saved operation. Confirmation of step-up performs no mutation.
+  discard the saved operation. Throttled 429 attempts also retain the exact
+  pending operation because the rate gate runs before receipt lookup.
+  Confirmation of step-up performs no mutation.
   Authority loss blocks further actions. Definite 409 requires a successful
-  explicit reopen/refresh and new confirmation/version/key.
+  explicit reopen/refresh and new confirmation/version/key for existing-venue
+  commands. CREATE `VENUE_IDENTITY_CONFLICT` instead allows draft correction
+  or cancel/restart without refreshing an unrelated selected venue.
 - Once the command reply is acknowledged, failure of detail/list refresh retains
   that reply: result checking repeats reads only. No success notice appears
   before authoritative re-read/refresh completes. Reopening EDIT initializes
@@ -116,10 +161,12 @@ radius, spacing and focus styles, with semantic fieldset/legend grouping and
 aria-invalid/aria-describedby/alert feedback. No screen-specific Make admin
 composition was available to inspect; no new theme, imagery or visual authority
 is asserted. No `OWNER_VISUAL_OVERRIDE` was supplied.
+This QA rework changes error/reconciliation behavior and reuses the existing
+error notice and result button; it adds no visual pattern or CSS change.
 
 **STYLE_GUIDE_GAP (access/parity evidence):**
 `docs/operations/FRONTEND_STYLE_GUIDE_FIRST_V001.md` is absent at this checkout;
-the attempted read-only enumeration of the advertised frozen
+the original source author's attempted read-only enumeration of the advertised frozen
 `/opt/gobadminton-clean-qa/style-guide` reference returned Permission denied.
 No denied parent/private QA paths were opened or restrictions bypassed. Network
 access is outside this author's scope, so the published guide was not fetched.
@@ -136,8 +183,8 @@ for long controls/errors; source presence is not mobile evidence.
 **No tests, typecheck, lint, compiler, build, runtime, browser, self-QA, DB,
 network, dependency install, Git mutation, automation, service or deployment
 command was run by this author.** Read-only source inspection and initial Git
-status/branch/HEAD establish context only. Existing test sources are unchanged;
-new cases are authored intent, never a reported PASS.
+status/branch/HEAD establish context only. Existing test cases are retained;
+the added regression cases are authored intent, never a reported PASS.
 
 | Required check | Disposition |
 | --- | --- |
@@ -145,7 +192,7 @@ new cases are authored intent, never a reported PASS.
 | Existing admin transport/photo/selection regressions | NOT_TESTED; existing tests retained without relaxation. |
 | Real React lifecycle, keyboard/labels/validation, 390/430 no overflow and frozen Style Guide comparison | NOT_TESTED; hook harness does not establish these browser facts. |
 | Backend strict DTO enforcement, permissions/CSRF/step-up/version/idempotency integration | NOT_TESTED here; API unchanged, mandatory existing CI/QA evidence still required. |
-| NEW independent QA PASS on final source SHA | PENDING; prior independent QA supplied as `{}`. |
+| NEW independent QA PASS on final source SHA | PENDING; supplied independent QA FAIL reviewed `b86f615f5f20f26d0b8c99e22cf2d7980191e6ef`; the two P2 fixes require renewed exact-SHA QA. |
 | All mandatory exact-head Product CI SUCCESS | PENDING existing Actions; no reused baseline green evidence. |
 | Normal integration/rebase with renewed exact-head gates | PENDING authorized integrator. |
 | Fresh DEV ACCEPTED / release and rollback evidence | PENDING authorized Actions/operator; no deployment/acceptance claim. |
