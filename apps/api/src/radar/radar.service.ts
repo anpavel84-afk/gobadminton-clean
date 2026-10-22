@@ -1,5 +1,5 @@
 import { readRadarPlayerGames } from "../games/games.service";
-import type { UnifiedUpcomingGame } from "@gobadminton/contracts";
+import type { UnifiedUpcomingGame } from "@gobadminton/contracts/src/unified.generated";
 import { UNIFIED_POLICY } from "./unified-contract";
 import { isDemoUuid } from "../database/demo-ids";
 import { ensureGeographicConsent } from "./geographic-consent";

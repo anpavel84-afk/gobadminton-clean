@@ -1,4 +1,4 @@
-import type { UnifiedPreview, UnifiedUpcomingGame } from "@gobadminton/contracts";
+import type { UnifiedPreview, UnifiedUpcomingGame } from "@gobadminton/contracts/src/unified.generated";
 import { DEV_MOSCOW_PEER_IDS } from "../../src/radar/dev-moscow-test";
 import { redeemUnifiedProof } from "../../src/radar/unified-proof";
 import { GeographicRadarService } from "../../src/radar/geographic.service";
@@ -277,6 +277,18 @@ dbDescribe("Unified Players / isolated synthetic PostGIS and HTTP", () => {
     async function proofFor(p: Person) {
       await clearBudget(); return (await query()).items.find(row => row.publicPlayerId === p.publicId)!.radar!.resultRef;
     }
+    async function optOut(p: Person) {
+      const profile = await pool.query<{ version: number }>(
+        "SELECT version FROM player_social_profiles WHERE user_id=$1", [p.id],
+      );
+      const result = await app.get(ProfilesService).patchOwn(p.id, p.issued.session.id, randomUUID(), {
+        expectedVersion: profile.rows[0]!.version,
+        radarConsented: false,
+      });
+      expect(result.statusCode).toBe(200);
+      expect(result.body.radarConsented).toBe(false);
+      expect((await pool.query("SELECT 1 FROM radar_presences WHERE user_id=$1", [p.id])).rowCount).toBe(0);
+    }
     async function gamesFor(proof: string, p = viewer): Promise<UnifiedUpcomingGame[]> {
       await clearBudget(p); const response = await preview(proof, p);
       expect(response.statusCode, response.body).toBe(200);
@@ -412,7 +424,7 @@ dbDescribe("Unified Players / isolated synthetic PostGIS and HTTP", () => {
         const pending=preview(proof); let waiting=false;
         for(let n=0;n<100;n++) { waiting=(await pool.query("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND $1=ANY(pg_blocking_pids(pid))) waiting",[pid])).rows[0].waiting; if(waiting)break; await new Promise(resolve=>setTimeout(resolve,10)); }
         expect(waiting).toBe(true);
-        await app.get(ProfilesService).patchOwn(target.id,target.issued.session.id,randomUUID(),{radarConsented:false});
+        await optOut(target);
         await lock.query('COMMIT'); const response=await pending;
         expect(response.statusCode,response.body).toBe(404); expect(response.json()).not.toHaveProperty('upcomingGames');
       } finally { await lock.query('ROLLBACK'); lock.release(); }
@@ -430,7 +442,7 @@ dbDescribe("Unified Players / isolated synthetic PostGIS and HTTP", () => {
     });
     it.each(['opt-out','block','restriction','owner-session','ttl'])("retires games with the existing target proof fence: %s", async change => {
       const target=await person('Creator'); await start(target); await gameFixture(target); const proof=await proofFor(target);
-      if(change==='opt-out') await app.get(ProfilesService).patchOwn(target.id,target.issued.session.id,randomUUID(),{radarConsented:false});
+      if(change==='opt-out') await optOut(target);
       if(change==='block') await app.get(SafetyService).block(target.id,target.issued.session.id,randomUUID(),viewer.publicId);
       if(change==='restriction') {
         const principal=(await pool.query("INSERT INTO admin_principals(user_id,status) VALUES($1,'active') RETURNING id",[viewer.id])).rows[0].id;

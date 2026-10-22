@@ -1,4 +1,4 @@
-import type { UnifiedUpcomingGame } from "@gobadminton/contracts";
+import type { UnifiedUpcomingGame } from "@gobadminton/contracts/src/unified.generated";
 import { unrestrictedSql } from "../restrictions/policy";
 import { avatarForGameCreator, type PlayerAvatar } from "../profiles/avatar-presentation";
 import { GamePreferencesService, normalizePublicGameContact, validatePreferenceVersion } from "../profiles/game-preferences.service";
