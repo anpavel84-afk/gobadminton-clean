@@ -2,6 +2,7 @@
 import copy
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[3]
@@ -123,6 +124,22 @@ class StagePlanner(unittest.TestCase):
         self.assertTrue(all(child["can_start_execution"] is False
                             for child in out["results"][0]["children"]))
         self.assertEqual(out["results"][0]["review_gates"][-1],"provider sandbox qualified")
+
+    def test_live_dispatch_client_writes_only_inert_actions_artifact(self):
+        sys.path.insert(0,str(ROOT/"scripts/chatops/actions_train"))
+        import client
+        issue=owned_issue()
+        record=comment(issue)
+        with tempfile.TemporaryDirectory() as tmp:
+            target=Path(tmp)
+            out=client.stage_planning_evidence([issue],[record],target)
+            self.assertEqual(out["results"][0]["status"],"PLAN_PROPOSED_NOT_ADMITTED")
+            saved=json.loads((target/"phase-plan-preview-v2.json").read_text())
+            self.assertEqual(saved["schema"],"GB_PHASE_PREVIEW_V2")
+            self.assertFalse(saved["can_start_execution"])
+            self.assertTrue(all(not item["can_start_execution"]
+                                for item in saved["results"][0]["children"]))
+            self.assertEqual(len(list(target.iterdir())),1)
 
     def test_edited_or_ambiguous_parent_cannot_publish_children(self):
         issue=owned_issue()
