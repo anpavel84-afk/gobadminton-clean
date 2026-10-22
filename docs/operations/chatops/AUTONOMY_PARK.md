@@ -27,8 +27,18 @@ finishes the park from durable evidence only (the `parked.json` entry must equal
 `before-park-*.json` must equal the current state). The Owner comment is not re-read, so editing or deleting it
 meanwhile changes nothing. Any mismatch stops with a Hold for manual reconciliation (state untouched).
 
-Known limits: parking requires the Issue to be open and unchanged (`unchanged_issue`); a blocked task with no candidate
-head cannot be parked.
+Known limits: parking requires the Issue to be open and unchanged (`unchanged_issue`).
+
+## PARK_V1.1: headless `zero diff` task
+A blocked task with no candidate head can be parked ONLY in this exact shape (strict equality, nothing else):
+`phase == blocked`, `resume_phase == developing`, `reason == "zero diff"`, `head is null`, `pr is null`, valid `base` SHA, and `attempt` is an integer (a bool or a string is rejected); the comment `attempt` must be an integer equal to it.
+Such a task is never resumable (RESUME_V1 needs a head and a CI failure) and is unchanged by this release.
+The Owner comment keeps the same marker `GOBADMINTON_PARK_V1` and all PARK_V1 checks (Owner id, not edited, parent Issue,
+after enrollment, one-time comment id, exactly one valid comment) but carries exactly 7 JSON keys:
+`schema`, `issue`, `head` (must be `null`), `base` (must equal the checkpoint base), `attempt`, `reason`, `allow_successors`.
+A head-style comment (6 keys, or a non-null head) is rejected for a headless task, and a headless comment is rejected for
+a task that has a head. `parked.json` records `head: null`; the park order, crash recovery from durable evidence,
+never-reclaim and `state.json` schema are unchanged.
 
 Not included: unparking, a new attempt budget, dev sync. A malformed `parked.json` stops the executor (fail closed).
 Rollout: PR -> independent QA on the exact SHA -> CI -> backup of adapter and state dir -> install -> restart -> verify.
