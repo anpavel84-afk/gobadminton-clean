@@ -228,8 +228,21 @@ def revised(parent, diagnosis):
     paths = diagnosis['paths']
     need(isinstance(paths, list) and paths and len(set(paths)) == len(paths)
          and set(paths) <= set(parent['allowed_paths']), 'recovery scope expansion')
-    need(all(p.startswith(('apps/', 'packages/')) and '..' not in p.split('/') and not p.startswith('packages/tooling/')
-         for p in paths), 'recovery control path forbidden')
+    # Product API/handoff documents are DATA, not runtime control code. Their inclusion
+    # never grants a new write: paths are already restricted to the immutable Owner
+    # allowed_paths above. Keep system governance/workflows/scripts explicitly forbidden.
+    code_suffix = ('.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.sql', '.py',
+                   '.css', '.scss', '.proto', '.graphql', '.gql')
+    # Generic JSON may only be metadata/attribution, not code. Existing canonical
+    # OpenAPI contract is a source artifact; all other JSON is documentation here.
+    source = [p for p in paths if p.startswith(('apps/', 'packages/'))
+              and not p.startswith('packages/tooling/')
+              and (p.endswith(code_suffix) or p == 'packages/contracts/openapi.json')]
+    need(bool(source), 'no product source/test repair path; documentation-only is not a fix')
+    safe = ('docs/api/', 'docs/handoffs/')
+    need(all('..' not in p.split('/') and
+             (p in source or p.startswith(safe)) for p in paths),
+         'recovery control path forbidden')
     need(isinstance(diagnosis['citations'], list) and diagnosis['citations']
          and all(isinstance(x, str) and re.fullmatch(r'qa:findings:[0-9]+|ci:[0-9]+', x)
                  for x in diagnosis['citations']), 'missing exact evidence citations')
@@ -309,6 +322,9 @@ def perform(req, config, context):
                   'Missing vitest/tsc/eslint is environmental NOT_TESTED, not proof of a code defect. '
                   'Preserve original product goal, acceptance, locks, dependencies, privacy and API policy. '
                   'Keep all repairs within original product allowed_paths; no control changes. '
+                  'In JSON paths include at least one REAL code, contract or test file in apps/ or packages/, not README/markdown. '
+                  'Only existing docs/api/ and docs/handoffs/ product DATA may accompany a real code fix; '
+                  'never choose scripts/, .github/, docs/operations/, governance, tooling or new paths. '
                   'Environmental/insufficient evidence must say so; do not fabricate fixture fixes. ')
         if req['stage'] == 'diagnose':
             prompt = common + ('Diagnose frozen candidate against exact QA and CI assertion/log excerpts. '
