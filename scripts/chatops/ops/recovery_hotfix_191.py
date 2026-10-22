@@ -133,7 +133,7 @@ def clear_interrupted_put(target):
         return
     receiver.trusted_tree(temp.parent)
     receiver.need(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and
-                  info.st_nlink == 1 and stat.S_IMODE(info.st_mode) in (0o600,0o644),
+                  info.st_nlink == 1 and stat.S_IMODE(info.st_mode) in (0o600,0o640,0o644),
                   'unsafe interrupted installer temporary file')
     temp.unlink()
 
