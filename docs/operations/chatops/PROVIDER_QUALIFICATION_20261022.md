@@ -31,3 +31,9 @@ Previous candidate `9eda3980dfa5d49cd6ebba2c1002c3f3154fff6a` failed independent
 Existing tools-empty agent configuration is not an OS permission boundary; old probes advertised baseline tools and emitted denied tool errors despite final SUCCESS. Native --sandbox help is not proof of complete isolation.
 
 Remaining: exact-SHA public-source-only bundle, isolated home, OS filesystem/network/credential restrictions, complete stream event audit, actual effective model/policy receipts, exact reviewed SHA, fail on missing context or unexpected tools, bounded process-group cleanup. Qualify restricted independent review before lifting the existing author/QA prohibition. Stale agy PID3366685 started Oct19 was neither killed nor reused; no duplicate inference was launched.
+
+## Later actual file-tool trial
+
+UID1002 real Auto canary, epoch1792702659–1792702692: exit0, empty stderr; allowed README read and output.txt edit succeeded, exact `CURSOR_AUTHOR_CANARY_OK` plus newline. Explicit outside read returned Permission denied; edit returned readPermissionDenied. Outside synthetic file unchanged; sandbox/permission fields unchanged. Cursor stream usage: input6767, output520, cacheRead25472, cacheWrite0; no monetary estimate. Full durable receipt: https://github.com/anpavel84-afk/gobadminton-clean/issues/211#issuecomment-6351225134 .
+
+Initial root-readonly CLI config caused pre-inference EACCES on mandatory atomic settings writes; private per-invocation config outside the worktree resolved it without changing global config/auth. This trial proves the explicit tested rules, not generic cross-worktree protection or every shell/network/MCP/plugin path. Outside edit was blocked on pre-read. Router activation remains unclaimed.
