@@ -231,8 +231,11 @@ def revised(parent, diagnosis):
     # Product API/handoff documents are DATA, not runtime control code. Their inclusion
     # never grants a new write: paths are already restricted to the immutable Owner
     # allowed_paths above. Keep system governance/workflows/scripts explicitly forbidden.
+    code_suffix = ('.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.sql', '.py',
+                   '.css', '.scss', '.json', '.proto', '.graphql', '.gql')
     source = [p for p in paths if p.startswith(('apps/', 'packages/'))
-              and not p.startswith('packages/tooling/')]
+              and not p.startswith('packages/tooling/')
+              and p.endswith(code_suffix)]
     need(bool(source), 'no product source/test repair path; documentation-only is not a fix')
     safe = ('docs/api/', 'docs/handoffs/')
     need(all('..' not in p.split('/') and
@@ -317,7 +320,7 @@ def perform(req, config, context):
                   'Missing vitest/tsc/eslint is environmental NOT_TESTED, not proof of a code defect. '
                   'Preserve original product goal, acceptance, locks, dependencies, privacy and API policy. '
                   'Keep all repairs within original product allowed_paths; no control changes. '
-                  'In JSON paths include at least one REAL apps/ or packages/ source/test change. '
+                  'In JSON paths include at least one REAL code, contract or test file in apps/ or packages/, not README/markdown. '
                   'Only existing docs/api/ and docs/handoffs/ product DATA may accompany a real code fix; '
                   'never choose scripts/, .github/, docs/operations/, governance, tooling or new paths. '
                   'Environmental/insufficient evidence must say so; do not fabricate fixture fixes. ')
