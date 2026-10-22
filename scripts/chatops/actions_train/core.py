@@ -69,11 +69,18 @@ def safe_credential(value):
             and all(33 <= ord(char) <= 126 for char in value))
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # Fixed GitHub/public DEV endpoints must never forward credentials via redirects.
+        raise Refused('API redirect refused')
+
+
 class API:
     """Token kept only in trusted process memory. Never included in exceptions/URLs/env/models."""
-    def __init__(self, token, opener=urllib.request.urlopen):
+    def __init__(self, token, opener=None):
         need(safe_credential(token), 'invalid API credential')
-        self._token, self.opener = token, opener
+        self._token = token
+        self.opener = opener if opener is not None else urllib.request.build_opener(_NoRedirect()).open
 
     def __call__(self, path, data=None, method=None):
         public = path == 'https://dev.gobadminton.ru/v1/meta'

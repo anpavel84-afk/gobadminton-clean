@@ -186,6 +186,32 @@ class OpaqueGitHubCredentials(unittest.TestCase):
 
 
 class APIReads(unittest.TestCase):
+    def test_default_opener_never_forwards_redirect_credentials(self):
+        from email.message import Message
+        from urllib.response import addinfourl
+        for code in (301,302,303,307,308):
+            for target in ('https://attacker.invalid/collect','https://api.github.com/redirected'):
+                calls=[]
+                class FakeHTTPS(core.urllib.request.HTTPSHandler):
+                    def https_open(self, request):
+                        calls.append(request)
+                        headers=Message();headers['Location']=target
+                        response=addinfourl(io.BytesIO(b''),headers,request.full_url,code)
+                        response.msg='redirect'
+                        return response
+                build=core.urllib.request.build_opener
+                with patch.object(core.urllib.request,'build_opener',side_effect=lambda *handlers:build(FakeHTTPS(),*handlers)):
+                    api=core.API(TOKEN)
+                with self.assertRaises(core.Refused) as error:api('issues/151')
+                self.assertEqual(str(error.exception),'API redirect refused')
+                self.assertEqual(len(calls),1)
+                self.assertTrue(calls[0].full_url.startswith('https://api.github.com/'))
+                self.assertNotIn(TOKEN,str(error.exception))
+    def test_public_dev_meta_remains_unauthenticated(self):
+        seen=[]
+        def opener(request, **_):seen.append(request);return io.BytesIO(b'{}')
+        core.API(TOKEN,opener=opener)('https://dev.gobadminton.ru/v1/meta')
+        self.assertIsNone(seen[0].get_header('Authorization'))
     def test_repository_identity_uses_canonical_root_without_trailing_slash(self):
         seen=[]
         def opener(req, **_):
