@@ -304,9 +304,12 @@ it.each([false, true])("keeps selected photo before/after load=%s through moving
   if (loaded) image.dispatchEvent(new Event("load"));
   const requests = transport.venues.mock.calls.length; const mapFetches = vi.mocked(fetch).mock.calls.length;
   gesture(renderer, "onPointerDown", 0, 600); gesture(renderer, "onPointerMove", 0, 200, 100);
-  expect(surface(renderer).props["data-moving"]).toBe(true); expect(image.parentNode?.className).toContain("gb-venue-sheet-cover");
+  expect(surface(renderer).props["data-moving"]).toBe(true);
+  expect(image.parentNode?.className).toContain("gb-venue-preview-cover"); // one photo stays compact while morphing
   gesture(renderer, "onPointerUp", 0, 200, 110); expect(surface(renderer).props.role).toBe("dialog");
+  expect(image.parentNode?.className).toContain("gb-venue-preview-cover");
   await vi.advanceTimersByTimeAsync(220); renderer.render();
+  expect(image.parentNode?.className).toContain("gb-venue-sheet-cover"); // same photo transfers once at end
   click(renderer, "Показать игры на этой площадке"); expect(output(renderer)).toContain("Игры на этой площадке"); expect(output(renderer)).toContain("Вечерняя игра");
   expect(image.parentNode?.className).toContain("gb-venue-preview-cover");
   click(renderer, "К информации о площадке"); expect(image.parentNode?.className).toContain("gb-venue-sheet-cover");
