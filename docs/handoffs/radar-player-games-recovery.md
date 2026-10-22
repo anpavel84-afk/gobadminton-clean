@@ -253,3 +253,55 @@ assertion and handoff changes relative to `f52ffc06d8fe4475d4043145b814ab9466e9c
 Rollback for the full recovery: integrator reverts the bounded sixteen-path source change and renews
 checks through existing gates; no schema/data/runtime mutation is part of the
 patch. The source author performs no revert, Git publication or deployment.
+
+## CI repair intake — 2026-10-22 — BLOCKED, no source fix
+
+From: source AUTHOR. To: existing Actions bridge/integrator. Status:
+**UNVERIFIED / NOT_RELEASED — failure reproduction unavailable**. This section
+records the current CI-repair intake; the earlier author-session descriptions
+and their NOT_TESTED statements above remain historical.
+
+Observed clean starting HEAD on `automation/issue-177`:
+[`a80a448504a69b2fffc56d3f90724a52ab4e74ea`](https://github.com/anpavel84-afk/gobadminton-clean/commit/a80a448504a69b2fffc56d3f90724a52ab4e74ea).
+The supplied independent QA verdict for that SHA is PASS with no findings; this
+is supplied evidence, not an author QA verdict. The supplied CI failure is
+[`39736065444`, attempt 1](https://github.com/anpavel84-afk/gobadminton-clean/actions/runs/39736065444/attempts/1),
+job `database`, step `Run bash scripts/chatops/db-ci.sh`. No failing test name,
+diagnostic, stack trace or test report was included. No local CI report was found
+in the worktree.
+
+The repair instruction requires reproducing the failing check before changing
+code and rerunning it after a fix. The following targeted integration command
+was attempted from the repository root before any edit:
+
+```text
+pnpm --filter @gobadminton/api exec vitest run --project integration test/integration/radar.unified.test.ts
+```
+
+Actual result: exit **254**, `ERR_PNPM_RECURSIVE_EXEC_FIRST_FAIL`,
+`Command "vitest" not found`. No tests ran, so this does **not** reproduce or
+diagnose the CI database failure. There is no post-fix run because no source fix
+was made. No PASS is claimed. Local dependency directories are absent; dependency
+installation and network access are forbidden by this assignment.
+
+Read-only inspection of `scripts/chatops/db-ci.sh` confirms that executing the
+full job would create and run a disposable PostGIS container and execute
+migrations/integration tests. DB execution and service/runtime mutation remain
+outside this source actor's authorization; the script was not run, and its
+GitHub Actions guard was not bypassed. Typechecks, lint, builds, independent QA,
+DEV smoke and server acceptance were not run in this repair intake.
+
+All candidate implementation, contracts, tests, assertions and CI automation
+remain unchanged. The only edit is this handoff addition. No Git metadata,
+attempt counter, lock or runtime state was changed. Rollback of this intake is
+removal of this appended section by the authorized integrator.
+
+Next bounded action: the existing bridge/integrator supplies the exact failing
+diagnostic/test report from the linked run and enables reproduction in the
+already authorized disposable CI environment. The author requested that
+diagnostic in the current session. Until the failure can be reproduced within
+the actor's permitted effects, a speculative source change would violate the
+repair instruction. Preserve the full `a80a448` candidate and the independent
+QA record; exact-head Product CI and all subsequent release gates remain open.
+The bridge must publish this handoff through its existing Git transport; no new
+commit or publication is claimed by the source author.
