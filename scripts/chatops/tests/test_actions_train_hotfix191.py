@@ -5,7 +5,9 @@ import hashlib
 import importlib.util
 import json
 import pathlib
+import stat
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
@@ -85,6 +87,11 @@ class Hotfix191(unittest.TestCase):
                 self.assertEqual(oldrec.read_bytes(),b'OLD-REC')
                 self.assertEqual(read(root/'policy.json')['mode'],'disabled')
                 self.assertEqual(read(state/'hotfix-191.json')['phase'],'draining')
+                # Recover a power loss between journal write and initial policy disable.
+                atomic(root/'policy.json',policy)
+                self.assertEqual(H.transaction('apply',root,'new-manifest','c'*40,'1'*64)['status'],
+                                 'DISABLED_DRAIN')
+                self.assertEqual(read(root/'policy.json')['mode'],'disabled')
                 a=H.transaction('apply',root,'new-manifest','c'*40,'1'*64)
                 self.assertEqual(a['status'],'INSTALLED_DISABLED')
                 drained.assert_called()
@@ -96,6 +103,21 @@ class Hotfix191(unittest.TestCase):
                 self.assertEqual(a['status'],'ACTIVE')
                 self.assertEqual(read(root/'policy.json')['mode'],'active')
                 with self.assertRaises(receiver.Refused):H.transaction('rollback')
+
+    def test_interrupted_installer_temp_is_removed_only_if_root_owned_regular_and_safe(self):
+        with tempfile.TemporaryDirectory() as folder:
+            target=pathlib.Path(folder)/'recovery.py'
+            tmp=target.with_name('.recovery.py.install')
+            tmp.write_bytes(b'partially written')
+            info=SimpleNamespace(st_mode=stat.S_IFREG|0o644,st_uid=0,st_nlink=1)
+            with patch.object(H.receiver,'trusted_tree'),patch.object(pathlib.Path,'lstat',return_value=info):
+                H.clear_interrupted_put(target)
+            self.assertFalse(tmp.exists())
+            tmp.write_bytes(b'intruder')
+            bad=SimpleNamespace(st_mode=stat.S_IFREG|0o644,st_uid=1001,st_nlink=1)
+            with patch.object(H.receiver,'trusted_tree'),patch.object(pathlib.Path,'lstat',return_value=bad):
+                with self.assertRaises(receiver.Refused):H.clear_interrupted_put(target)
+            self.assertTrue(tmp.exists())
 
     def test_crash_after_first_file_replacement_recovers_without_touching_tasks(self):
         with tempfile.TemporaryDirectory() as t:
