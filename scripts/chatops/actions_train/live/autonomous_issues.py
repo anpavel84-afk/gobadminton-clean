@@ -69,9 +69,24 @@ for package in ('api', 'web', 'admin', 'contracts'):
 _API_NEXT = 0.0
 TASK_FIELDS = {'schema', 'target', 'kind', 'goal', 'acceptance', 'allowed_paths', 'max_attempts'}
 # PM V1: optional, validated links. The executor records them; only --slot mode acts on them.
-OPTIONAL_FIELDS = {'depends_on', 'locks', 'model', 'effort'}
+OPTIONAL_FIELDS = {'depends_on', 'locks', 'model', 'effort',
+                   'work_kind', 'risk', 'author_routes', 'qa_routes'}
 LOCK_RE = re.compile(r'[a-z0-9][a-z0-9-]{0,23}(:[a-z0-9][a-z0-9-]{0,23}){0,2}')
-MODELS = {'gpt-6.1-sol': {'high', 'medium'}}  # closed registry for supported models.
+# Exact model IDs supported by the existing secure Codex runtime. Do not enable
+# a new provider merely because its binary or remote model catalog exists.
+MODELS = {'gpt-6.1-sol': {'medium', 'high'},
+          'gpt-6-astra': {'medium', 'high'},
+          'gpt-6-luna': {'medium'}}
+PHASE_WORK_KINDS = {'architecture', 'implementation', 'ux', 'contract', 'test'}
+PHASE_RISKS = {'routine', 'complex', 'critical'}
+# V2 stage preferences are immutable authorization DATA, never executable CLI input.
+PHASE_ROUTES = {
+    'codex:gpt-6.1-sol:medium', 'codex:gpt-6.1-sol:high',
+    'codex:gpt-6-astra:medium', 'codex:gpt-6-astra:high',
+    'codex:gpt-6-luna:medium',
+    'cursor:auto', 'agy:claude-sonnet-5-5-medium',
+    'agy:claude-sonnet-5-5-high', 'agy:claude-opus-5-5-high',
+}
 # PARALLEL_SLOTS_V1. 'default' keeps every path, unit, env, file name and API spacing exactly as before;
 # slots.py is imported only for --slot slotN.
 SLOT = 'default'
@@ -181,6 +196,23 @@ def check_links(task, issue_number):
         require(isinstance(task['model'], str) and task['model'] in MODELS
                 and isinstance(task['effort'], str) and task['effort'] in MODELS[task['model']],
                 'model/effort not in registry')
+    phase_fields = ('work_kind', 'risk', 'author_routes', 'qa_routes')
+    if any(k in task for k in phase_fields):
+        require(all(k in task for k in phase_fields) and 'model' not in task
+                and 'effort' not in task, 'phase route must be complete and not override scalar V1')
+        require(type(task['work_kind']) is str and task['work_kind'] in PHASE_WORK_KINDS
+                and type(task['risk']) is str and task['risk'] in PHASE_RISKS,
+                'unknown role or risk')
+        for label in ('author_routes', 'qa_routes'):
+            values = task[label]
+            require(type(values) is list and 1 <= len(values) <= 4
+                    and len(values) == len(set(values))
+                    and all(type(x) is str and x in PHASE_ROUTES for x in values),
+                    'invalid immutable stage routes')
+        # Mandatory frozen architecture is an independently admitted child Issue,
+        # not an arbitrary architecture bit supplied by the author.
+        if task['work_kind'] in {'implementation', 'contract'} and task['risk'] == 'critical':
+            require(bool(task.get('depends_on')), 'critical source requires separate approved architecture dependency')
 
 
 def validate_issue(issue, since, now=None):
