@@ -1,5 +1,64 @@
 # V1b public venue profile — #205
 
+## Current CI repair disposition — 2026-10-22
+
+From: assigned source author. To: authorized integrator / PM.
+Status: **BLOCKED BY ASSIGNMENT SCOPE — CI FAILURE NOT FIXED**.
+This section is the latest disposition; the implementation and earlier correction
+records below are retained as history.
+
+- Repair base / observed HEAD:
+  [`1e45be74a0ff7ff1dd2f158e34045979461ce378`](https://github.com/anpavel84-afk/gobadminton-clean/tree/1e45be74a0ff7ff1dd2f158e34045979461ce378).
+  Branch `automation/issue-205`; initial `git status --short` output empty.
+- Supplied independent QA: **PASS**, no findings, reviewed that exact SHA.
+  This is supplied evidence, not author self-QA or CI/DEV acceptance.
+- Supplied Product CI failure: run `39843625827`, attempt `1`, database job
+  [`120050985890`](https://github.com/anpavel84-afk/gobadminton-clean/actions/runs/39843625827/job/120050985890),
+  step `Run bash scripts/chatops/db-ci.sh`, exit `1`.
+  Supplied log SHA-256:
+  `f13ecddb77ee035f18a0303b8366f439fced26a67226205a81bd17b2a4b5b1bf`.
+  Logs were supplied in the assignment; no network retrieval was performed.
+
+The actual failing assertion is in
+[`apps/api/test/integration/venue-profile.test.ts:247`](https://github.com/anpavel84-afk/gobadminton-clean/blob/1e45be74a0ff7ff1dd2f158e34045979461ce378/apps/api/test/integration/venue-profile.test.ts#L247):
+after a direct SQL cover replacement it expects the new public content date to
+be strictly greater than the previous date. Both numeric Date values in CI are
+`1792698992264`. The synthetic error messages from other passing suites are not
+the reported failed assertion.
+
+Read-only source inspection found that
+[`0039_venue_public_profile.sql`](https://github.com/anpavel84-afk/gobadminton-clean/blob/1e45be74a0ff7ff1dd2f158e34045979461ce378/apps/api/migrations/0039_venue_public_profile.sql)
+assigns `clock_timestamp()` on stored public content changes. Two adjacent writes
+can produce the same JavaScript millisecond Date value; this is a plausible
+precision-related explanation, **not a locally reproduced diagnosis**. The
+failing suite imports API modules and issues SQL directly; it does not import
+the allowed web files. No permitted frontend edit repairs this assertion.
+The API test, DB implementation and CI runner are outside `allowed_paths`.
+Previously applied migration SQL must remain immutable under canonical rules.
+
+Local reproduction / post-fix rerun: **NOT RUN — NOT REPRODUCED — NO FIX**.
+The exact failed job command is `bash scripts/chatops/db-ci.sh`; it requires
+GitHub Actions and starts disposable Docker/PostGIS. Its focused test command is
+`pnpm --filter @gobadminton/api exec vitest run --project integration test/integration/venue-profile.test.ts`;
+execution requires the synthetic DB environment and `RUN_DB_INTEGRATION=1`.
+The immutable assignment prohibits model DB/services/install/network effects.
+Neither command was executed, no guard was bypassed, and no skipped run is
+reported as PASS. No author tests, lint, typecheck or self-QA were performed.
+
+Only this allowed handoff is edited in this repair attempt; every application
+change, test, assertion, safety guard and visual evidence disposition is retained.
+No commit, push, Git metadata mutation, automation change or deployment occurred.
+There is no new SHA/permalink until the authorized bridge publishes this record.
+
+Next bounded action: PM/integrator must provide a repair assignment covering the
+API/DB timestamp assertion and authorized disposable DB reproduction, preserving
+the strict assertion and immutable historical migrations. This web-only task
+cannot authorize that work. Reproduce before changing code, rerun after the fix,
+then obtain independent QA and all required Product CI gates on the exact new
+SHA; actual DEV ACCEPTED is still required before a release claim.
+Rollback remains revert of the dedicated PR through the normal protected DEV
+path. This documentation-only attempt introduces no runtime rollback requirement.
+
 - From: assigned GoBadminton source author (Codex). To: existing source bridge /
   integrator, then independent QA. Date: 2026-10-22.
 - Status: **WORKING_DRAFT — UNVERIFIED SOURCE CANDIDATE — NOT_TESTED — NOT ACCEPTED**.
