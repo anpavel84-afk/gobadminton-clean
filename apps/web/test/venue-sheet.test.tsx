@@ -364,8 +364,8 @@ it("ignores compact horizontal/secondary/cancel gestures without changing expand
   expect(surface.props.onPointerUp).toBeUndefined();
   // The original handle gesture in the expanded sheet is retained.
   expanded.pointer("onPointerDown", 100, 0);
-  expanded.pointer("onPointerMove", 350, 1000);
-  expanded.pointer("onPointerUp", 350, 1200);
+  expanded.pointer("onPointerMove", 500, 1000);
+  expanded.pointer("onPointerUp", 500, 1200);
   expect(expanded.change).toHaveBeenLastCalledWith(false);
   expect(expanded.deselect).not.toHaveBeenCalled();
   expanded.dispose();
