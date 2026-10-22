@@ -3,7 +3,7 @@
 import argparse,copy,fcntl,hashlib,importlib.util,json,os,pathlib,re,subprocess,sys,time,tomllib
 sys.path.insert(0,'/usr/local/lib/gb-actions-train')
 import receiver as r, installer as i
-import stat
+import stat,pwd,grp
 COST_HELPER_SHA256='781c89f8fac0b234a5aefc81dd10c6df10b91adc080d703bd7fb2d458a7e7094'
 STATE=r.STATE
 JOURNAL=STATE/'context-stability-216.json'
@@ -92,6 +92,17 @@ def mask(path):
     os.symlink('/dev/null',temp)
     try:os.replace(temp,path);sync_directory(path.parent)
     finally:temp.unlink(missing_ok=True)
+def config_ancestor(info,name):
+    # Existing .codex is0775 in the user's private primary group. This is
+    # user-owned non-authoritative settings, never root executable context.
+    # Accept only that exact directory/group after verifying there is no second
+    # primary/supplementary identity with write access; do not chmod login data.
+    private=(name=='.codex' and info.st_uid==1002 and info.st_gid==1002
+             and grp.getgrgid(1002).gr_name=='agentagency-dev'
+             and set(grp.getgrgid(1002).gr_mem)<={'agentagency-dev'}
+             and {p.pw_uid for p in pwd.getpwall() if p.pw_gid==1002}=={1002})
+    r.need(info.st_uid in (0,1002) and not info.st_mode&0o002
+           and (not info.st_mode&0o020 or private),'untrusted settings ancestor')
 def config_parent():
     # Fixed user settings target; do not weaken installer.trusted_tree for root code.
     r.need(CONFIG==pathlib.Path('/home/agentagency-dev/.codex/config.toml'),'unexpected config target')
@@ -100,7 +111,7 @@ def config_parent():
         for name in CONFIG.parent.parts[1:]:
             child=os.open(name,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=fd)
             os.close(fd);fd=child;s=os.fstat(fd)
-            r.need(s.st_uid in (0,1002) and not s.st_mode&0o022,'untrusted settings ancestor')
+            config_ancestor(s,name)
         return fd
     except BaseException:os.close(fd);raise
 def config_read_at(parent):

@@ -32,6 +32,20 @@ class Upgrade216(unittest.TestCase):
             with self.assertRaises(core.Refused):U.quiet()
             op['after']='x';r.alive=lambda _:True
             with self.assertRaises(core.Refused):U.quiet()
+    def test_only_exact_private_codex_group_writable_ancestor_is_accepted(self):
+        info=SimpleNamespace(st_uid=1002,st_gid=1002,st_mode=0o40775)
+        group=SimpleNamespace(gr_name='agentagency-dev',gr_mem=[])
+        user=SimpleNamespace(pw_uid=1002,pw_gid=1002)
+        with patch.object(U.grp,'getgrgid',return_value=group),patch.object(U.pwd,'getpwall',return_value=[user]):
+            U.config_ancestor(info,'.codex')
+            with self.assertRaises(core.Refused):U.config_ancestor(info,'another')
+            info.st_mode=0o40777
+            with self.assertRaises(core.Refused):U.config_ancestor(info,'.codex')
+            info.st_mode=0o40775;group.gr_mem=['other-user']
+            with self.assertRaises(core.Refused):U.config_ancestor(info,'.codex')
+            group.gr_mem=[]
+            with patch.object(U.pwd,'getpwall',return_value=[user,SimpleNamespace(pw_uid=2000,pw_gid=1002)]):
+                with self.assertRaises(core.Refused):U.config_ancestor(info,'.codex')
     def test_wrong_manifest_rejected_before_import(self):
         with tempfile.TemporaryDirectory() as td:
             bundle=Path(td);f=bundle/'scripts/chatops/actions_train/manifest.json';f.parent.mkdir(parents=True);f.write_text('{}')
