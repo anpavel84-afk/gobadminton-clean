@@ -151,13 +151,3 @@
   font-size:14px; line-height:1.35;
 }
 .gb-consumer .gb-venue-game-notice { margin:0; color:var(--gb-ink-soft); font-size:13px; }
-
-/* Separate the native file picker and the reset action on the form and popup. */
-.gb-consumer .gb-game-photo-selection .gb-game-field { display:flex; flex-direction:column; gap:10px; }
-.gb-consumer .gb-game-photo-selection input[type="file"] { display:block; width:100%; min-width:0; max-width:100%; }
-.gb-consumer .gb-game-photo-selection .gb-game-photo-reset {
-  display:inline-flex; align-items:center; justify-content:center;
-  width:fit-content; max-width:100%; margin-top:18px; min-height:44px;
-  color:var(--gb-ink); background:var(--gb-white);
-}
-.gb-consumer .gb-game-create--embedded .gb-game-photo-selection .gb-game-photo-reset { max-width:100%; }
