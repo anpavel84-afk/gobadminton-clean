@@ -1,0 +1,19 @@
+{
+  "files": {
+    "scripts/chatops/actions_train/client.py": "12e729b6761616d01fcc1136d2d33c8b88509e269832f717ee0f3c8638e7f3a5",
+    "scripts/chatops/actions_train/core.py": "c2b62343210ae6474538fcb39ca203f36546135d70e9dd020441eafed77d0776",
+    "scripts/chatops/actions_train/installer.py": "efed82cd43d26abe917c76091743feda5437445630aa9aecb65af3075c2a9d26",
+    "scripts/chatops/actions_train/live/autonomous_issues.py": "9995d0f268185c56d91cd0e15f986905abf093feb07c6edffec0c9b211e2fec7",
+    "scripts/chatops/actions_train/live/check_foundation.py": "c2975b19bd46d00acbdbc08227545b8f9c9501d7b8e8783e9b397751c612bd13",
+    "scripts/chatops/actions_train/live/slots.py": "19d07c8d680d31ff65e13b3d8611b93fab1898461a918e69390a77bf8bb5ad02",
+    "scripts/chatops/actions_train/monitor-mapping.json": "c9c6c4069aaa7138db56ca8234177f0f1ce9c3eea6640ffd61e4dd22d072e29a",
+    "scripts/chatops/actions_train/monitor.py": "cc4470d758f7708b838aa3cce210e235027c0b46de03b74e623584d54867f53a",
+    "scripts/chatops/actions_train/monitor_extension.js": "4564704aeeb122ee4da79fa2c8b1eba740db1b3432da5c5d473d6a0bd9f084d7",
+    "scripts/chatops/actions_train/monitor_payload/app.js": "c400e4f2fe9aed4f3c9e5ac4a07f1f17e7260ed61233a8166860303369d2117b",
+    "scripts/chatops/actions_train/monitor_payload/writer.py": "01d72d2ebb194f6657a59cdcc4be14fa7a9e9cd08a3fe6b77aaa3567f600564b",
+    "scripts/chatops/actions_train/receiver.py": "62e1bf394e34c1c92c04866afea26b788f1996318928bb113e64806b8e05a9b1",
+    "scripts/chatops/actions_train/stage.py": "24fd12d4eb0d1cec403e56ae4930da7e15421a92e48c388e340b0efd9433155e",
+    "scripts/chatops/server/gb-deploy-helper.sh": "c023a71bd1362e8a9347bc06c89b69546efd6c3856e1e6dce1c4c57304538f99"
+  },
+  "schema": "GB_ACTIONS_TRAIN_INSTALL_V1"
+}

@@ -1,0 +1,12 @@
+VERDICT: FAIL
+
+Candidate: `c021b6b7b528a8111a22199599b9d48e16aabdc5`
+Manifest SHA256: `c51ff938677617a5f7bd852a3139c5051fce0d9915655b5f0d0f283da91d64c0`
+
+- **Blocking: exhausted integration limit stalls both slots.** [stage.py:296](/var/lib/gb-actions-review/candidate/scripts/chatops/actions_train/stage.py:296) omits `integration bound exhausted` from known clean failures. When DEV advances after the integration limit, V6 refuses before mutation, but the adapter returns `unknown` with `safe_release=false`. [receiver.py:325](/var/lib/gb-actions-review/candidate/scripts/chatops/actions_train/receiver.py:325) retains pending ownership and the DEV reservation; a disjoint second task receives `DEV acceptance queue waiting`. Recovery cannot resolve the unchanged `ci` checkpoint.
+
+  Reproduced using existing fixtures and the actual V6 integration primitive: checkpoint unchanged, result `unknown`, second slot blocked. Reproduction: [review_boundaries.py](/var/lib/gb-actions-review/job/review_boundaries.py).
+
+  **Minimal correction:** classify this exact pre-mutation limit failure as eligible for the existing clean deferral path, retaining stopped-writer verification and releasing the reservation.
+
+Five focused manifest/library/helper/workflow/monitor integrity checks passed. Candidate untouched.
