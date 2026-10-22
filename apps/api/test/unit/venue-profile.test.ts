@@ -5,10 +5,10 @@ import addFormats from "ajv-formats";
 import type { FastifyRequest } from "fastify";
 import type { Pool, PoolClient, QueryResult, QueryResultRow } from "pg";
 import { describe, expect, it } from "vitest";
-import { AdminService, type AdminActor } from "../../src/admin/admin.service";
+import type { AdminService, AdminActor } from "../../src/admin/admin.service";
 import { venueCommand, venueCreate } from "../../src/admin/venues.dto";
-import { IdempotencyService } from "../../src/common/idempotency.service";
-import { MutationRunner } from "../../src/common/mutation-runner.service";
+import type { IdempotencyService } from "../../src/common/idempotency.service";
+import type { MutationRunner } from "../../src/common/mutation-runner.service";
 import { AdminVenuesService } from "../../src/venues/admin-venues.service";
 import { VenuesService } from "../../src/venues/venues.service";
 import { readVenueProfile, venueProfileEditSchema, venueProfileSelectSql } from "../../src/venues/venue-profile";
@@ -108,6 +108,36 @@ describe("venue profile production validation and safe mapping", () => {
 });
 
 describe("production service bindings and runtime responses against actual OpenAPI", () => {
+  it("validates unchanged gallery attribution, failing closed when only its normalized URL is a URI", async () => {
+    const validProfile = validator("VenueProfile");
+    for (const attribution of ["https://example.com/a b", "https://example.com/фото", "https://example.com/a|b", "https://example.com/%zz"]) {
+      // Existing cover storage can contain these WHATWG-parseable values.
+      expect(publicContactUrl(attribution)).not.toBeNull();
+      const invalid = readVenueProfile(base);
+      invalid.gallery.items[0]!.credit.url = attribution;
+      expect(validProfile(invalid)).toBe(false);
+      expect(validProfile.errors).toEqual(expect.arrayContaining([expect.objectContaining({ keyword: "format" })]));
+
+      const row = { ...base, cover_credit_url: attribution };
+      const service = publicService((async () => result([row])) as Pool["query"]);
+      const detail = await service.getById(id), page = await service.searchCatalog({ cityId });
+      for (const response of [detail, page.items[0]!]) {
+        expect(response.profile?.gallery).toEqual({ coverage: "cover_only", items: [] });
+        matches(validVenue, response);
+      }
+      const admin: Pick<AdminService, "privilegedRead"> = {
+        privilegedRead: async (_r, _permission, read) => read({ query: (async () => result([row])) as PoolClient["query"] } as PoolClient, actor),
+      };
+      const adminPage = await new AdminVenuesService(admin as AdminService).list(request, { limit: 20 });
+      expect(adminPage.items[0]?.profile.gallery.items).toEqual([]);
+      matches(validAdmin, adminPage.items[0]);
+    }
+    for (const attribution of ["https://example.com", "https://example.com/a%20b", "https://example.com/%D1%84%D0%BE%D1%82%D0%BE"]) {
+      const response = await publicService((async () => result([{ ...base, cover_credit_url: attribution }])) as Pool["query"]).getById(id);
+      expect(response.profile?.gallery.items[0]?.credit.url).toBe(attribution);
+      matches(validVenue, response);
+    }
+  });
   it("catalog, canonical alias and missing rollout columns use the same complete profile", async () => {
     const sqls: string[] = [];
     let alias = false;

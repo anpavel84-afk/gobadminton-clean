@@ -69,7 +69,9 @@ and roll back together on failure; audit/outbox contain metadata, not profile or
 contact payloads.
 
 Gallery is always coverage=cover_only with zero or one actual current moderated
-photo and its safe HTTPS credit, derived from venue_cover_url. Logo/illustration/
+photo and its safe HTTPS credit, derived from venue_cover_url. The unchanged
+attribution string itself must pass URI-format validation; normalizable but
+invalid URI text (such as a literal space) excludes the photo. Logo/illustration/
 unclassified/unsafe credits, denied moderation, inactive cover actor, retirement,
 replacement/removal leave no eligible photo. Empty items assert no full-gallery
 inspection. Existing cover stays intact. Full multi-photo gallery remains a

@@ -1,5 +1,13 @@
+import Ajv2020 from "ajv/dist/2020";
+import addFormats from "ajv-formats";
 import { z } from "zod";
 import { publicContactUrl } from "./public-venue-contacts";
+
+const ajv = new Ajv2020();
+addFormats(ajv);
+// Credit is emitted unchanged. Validate that exact string, not just the WHATWG
+// serialization, which can turn invalid URI characters (e.g. spaces) into escapes.
+const attributionUri = ajv.compile({ type: "string", format: "uri" });
 
 export const venueProfileEditSchema = z.object({
   courtCount: z.number().int().min(0).max(2147483647).nullable(),
@@ -48,7 +56,7 @@ export function readVenueProfile(row: VenueProfileRow): VenueProfile {
     && text.startsWith("Фото: ") && text.trim().length > 6 && text.length <= 120
     && !Array.from(text).some(char => char.charCodeAt(0) <= 31 || (char.charCodeAt(0) >= 127 && char.charCodeAt(0) <= 159))
     && attribution && attribution.length <= 300 && attribution === attribution.trim() && attribution.startsWith("https://")
-    && safeAttribution?.startsWith("https://")) {
+    && safeAttribution?.startsWith("https://") && attributionUri(attribution)) {
     items.push({ url, credit: { kind: "photo", text, url: attribution } });
   }
   const rawDate = row.public_profile_updated_at;

@@ -389,7 +389,11 @@ admin transaction on command or audit failure; payloads contain metadata only.
 
 Gallery coverage is always `cover_only`: at most one actual current
 `venue_cover_url` with kind=photo, nonempty photo credit and safe HTTPS attribution.
-The existing credit is retained. Denied moderation, inactive cover actor, retired
+The existing credit is retained unchanged only if the emitted attribution itself
+passes URI-format validation as well as HTTPS safety checks. A WHATWG-parseable
+value containing a literal space or another invalid URI character fails closed;
+the mapper does not silently rewrite its credit. Denied moderation, inactive
+cover actor, retired
 venue, absent/replaced/removed cover, logo, illustration, unclassified or unsafe
 credit yields empty items. Existing `cover` response behavior is preserved.
 Empty items never mean that a full gallery was inspected. The single-cover
