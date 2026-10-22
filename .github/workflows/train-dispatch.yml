@@ -40,7 +40,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: dfef68ccd8e5a8214b18576708d8a167084ef845
+          ref: a731fc9434495e33a5cb300deebb818154d0c2cc
           persist-credentials: false
       - name: One finite authenticated reconciliation; disabled server remains read-only
         run: python3 -B scripts/chatops/actions_train/client.py reconcile
@@ -71,7 +71,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: dfef68ccd8e5a8214b18576708d8a167084ef845
+          ref: a731fc9434495e33a5cb300deebb818154d0c2cc
           persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:

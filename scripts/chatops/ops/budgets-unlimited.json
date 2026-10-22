@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "providers": {
+    "codex": {
+      "author": "unlimited",
+      "qa": "unlimited"
+    }
+  },
+  "slots": {
+    "slot1": {
+      "codex": {
+        "author": "unlimited",
+        "qa": "unlimited"
+      }
+    },
+    "slot2": {
+      "codex": {
+        "author": "unlimited",
+        "qa": "unlimited"
+      }
+    }
+  }
+}

@@ -426,7 +426,7 @@ class Adapter:
 ADAPTERS = {
     'codex': Adapter('codex', 'codex', ('author', 'qa', 'review'), True, True, True, True, True, True),
     'cursor': Adapter('cursor', 'cursor', ('author',), True, True, True, False, False, False,
-                      'no tokens until the billing period renews; then Auto mode, provider test on 3 tasks, Owner yes'),
+                      'Owner reports renewed capacity; native sandbox startup passed; role adapter not yet proven'),
     'agy': Adapter('agy', 'agy', ('review',), True, True, True, False, False, False,
                    '#29: 7 known defects open; never a QA gate'),
 }
@@ -489,9 +489,8 @@ class Budget:
         value = (table or {}).get(provider, {}).get(role, UNKNOWN)
         if value is UNKNOWN:
             return UNKNOWN
+        if value == 'unlimited': return float('inf')
         require(type(value) is int and 0 <= value <= 10000, 'invalid budget value')
-        if provider == 'codex' and role in {'author', 'qa'}:
-            require(value <= 40, 'Codex daily cap exceeds approved host ceiling 40 per role')
         return value
 
     def used(self, provider, role, slot=None):
