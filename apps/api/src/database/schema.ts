@@ -1,5 +1,7 @@
+import { sql } from "drizzle-orm";
 import {
   boolean,
+  check,
   customType,
   integer,
   jsonb,
@@ -105,6 +107,10 @@ export const cities = pgTable("cities", {
 
 export const venues = pgTable("venues", {
   publicContacts: jsonb("public_contacts"),
+  courtCount: integer("court_count"),
+  amenityParking: boolean("amenity_parking"),
+  amenityShowers: boolean("amenity_showers"),
+  publicProfileUpdatedAt: timestamp("public_profile_updated_at", { withTimezone: true }),
   contactPhone: text("contact_phone"),
   contactWebsite: text("contact_website"),
   bookingNote: text("booking_note"),
@@ -126,7 +132,7 @@ export const venues = pgTable("venues", {
   identityDiscriminator: text("identity_discriminator").notNull().default(""),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
+}, table => [check("venues_court_count_check", sql`${table.courtCount} >= 0`)]);
 
 export const trainerProfiles = pgTable("trainer_profiles", {
   id: uuid("id").defaultRandom().primaryKey(),

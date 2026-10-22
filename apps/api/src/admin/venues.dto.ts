@@ -1,3 +1,4 @@
+import { venueProfileEditSchema } from "../venues/venue-profile";
 import { publicVenueContactsSchema } from "../venues/public-venue-contacts";
 import { z } from "zod";
 import { uuid, reason } from "./dto";
@@ -13,7 +14,7 @@ const contactFields = {
   contactWebsite: z.string().trim().max(300).refine(v => v === "" || /^https?:\/\//.test(v), "Нужен адрес http:// или https://").optional(),
   bookingNote: z.string().trim().max(500).optional(),
 };
-const venueEditFields = venueFields.extend({...contactFields, publicContacts: publicVenueContactsSchema.optional()}).strict();
+const venueEditFields = venueFields.extend({...contactFields, publicContacts: publicVenueContactsSchema.optional(), profile: venueProfileEditSchema.optional()}).strict();
 const base = {expectedVersion:z.number().int().positive(),reasonCode:reason};
 export const venueCreate = venueCreateFields.extend({reasonCode:reason}).strict();
 export const venueCommand = z.discriminatedUnion("action", [
