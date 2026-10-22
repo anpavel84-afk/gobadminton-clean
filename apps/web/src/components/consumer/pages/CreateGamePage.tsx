@@ -450,6 +450,11 @@ export function CreateGamePresentation({ embedded = false, onClose,
   setBusy, photo, setPhoto, photoReady, setPhotoReady, photoUrl, contactEdited, previewPayload,
   previewGame, location, onCheck, onPublish, setStep, recoveryChecked, rereadResult, returnPath,
 }: ReturnType<typeof useCreateGameController> & Pick<CreateGamePageProps, "embedded" | "onClose">) {
+  // One publish action surface. The embedded variant renders it as a sticky popup footer.
+  const publishActionBar = <GameActionBar>
+    <Button disabled={busy} loading={busy} onClick={() => void onPublish()}>{busy ? "Публикуем…" : "Опубликовать игру"}</Button>
+    <Button variant="outline" disabled={busy} onClick={() => setStep("form")}>Назад к редактированию</Button>
+  </GameActionBar>;
   const content = (
       <div className={`gb-game-create${embedded ? " gb-game-create--embedded" : ""}`}>
       {!embedded && <Button variant="ghost" className="gb-game-back" href="/games">← Все игры</Button>}
@@ -540,8 +545,9 @@ export function CreateGamePresentation({ embedded = false, onClose,
         <GameHero game={previewGame} preview localPreview={photoUrl} />
         <p>{photo ? "Выбрано своё фото этой игры. Перед публикацией сервер проверит изображение." : "Будет использована текущая одобренная обложка площадки или стандартная."}</p>
         <div className="gb-game-detail-grid"><div><GameTerms game={previewGame} onVenueClick={embedded ? () => { setStep("form"); setVenuePickerOpen(true); } : undefined} /><section className="gb-game-section"><h2>Кто увидит игру</h2><p>{draft.visibility === "public" ? "Игра появится в поиске" : "Только те, у кого есть ссылка"}</p></section></div>
-          <aside className="gb-game-booking"><div className="gb-game-booking__terms"><strong>Готово к публикации</strong><p>{activityKind === "regular" ? "При создании обычной игры ваше участие подтверждает сервер." : "Тренер не занимает место игрока."}</p></div><GameActionBar><Button disabled={busy} loading={busy} onClick={() => void onPublish()}>{busy ? "Публикуем…" : "Опубликовать игру"}</Button><Button variant="outline" disabled={busy} onClick={() => setStep("form")}>Назад к редактированию</Button></GameActionBar></aside>
+          <aside className="gb-game-booking"><div className="gb-game-booking__terms"><strong>Готово к публикации</strong><p>{activityKind === "regular" ? "При создании обычной игры ваше участие подтверждает сервер." : "Тренер не занимает место игрока."}</p></div>{!embedded && publishActionBar}</aside>
         </div>
+        {embedded && <div className="gb-game-popup-preview-actions">{publishActionBar}</div>}
       </div>}
       {step === "published" && created && <div className="gb-game-feedback" data-state="ready" data-result="success"><span className="gb-game-kicker">Всё готово</span><h1>Игра опубликована</h1><p>{created.title} · {formatGameWhen(created)}</p><p>Подтверждено: {created.confirmedCount} · Свободно: {created.availablePlaces} · Вместимость: {created.capacity}</p><p>{creatorSeat || "Проверяем ваше участие…"}</p><p>Вы можете открыть игру или перейти к её сводке.</p><div className="gb-game-form-actions"><Button variant="outline" href={`/games/${created.id}`}>Открыть игру</Button><Button href={`/my-games/${created.id}`}>Открыть сводку созданной игры</Button>{embedded && <Button variant="outline" onClick={onClose}>К площадке</Button>}</div></div>}
       {(step === "unknown" || step === "conflict") && <div className="gb-game-feedback" data-state="error" data-result={step}>

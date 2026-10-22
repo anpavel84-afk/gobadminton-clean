@@ -73,6 +73,31 @@ describe("production venue popup presentation with real React", () => {
     expect(html.match(/<\/button>/g)).toHaveLength(1);
     expect(html).not.toMatch(/<a\b/);
   });
+  it("keeps square game media separate from the organizer and free-seat footer", () => {
+    const html = ssr(<VenueSheetGameRow game={game} timezone={venue.timezone} onOpen={noop} />);
+    expect(html).toContain('class="gb-venue-sheet-game-main"');
+    expect(html).toContain('class="gb-venue-sheet-game-summary"');
+    expect(html).toContain('gb-venue-sheet-game-cover');
+    expect(html).toContain('class="gb-venue-sheet-game-footer"');
+    expect(html).toContain('class="gb-venue-sheet-game-organizer"');
+    expect(html.indexOf('gb-venue-sheet-game-main')).toBeLessThan(html.indexOf('gb-venue-sheet-game-footer'));
+    expect(html.indexOf('gb-venue-sheet-game-organizer')).toBeLessThan(html.indexOf('gb-venue-sheet-count'));
+    expect(html.match(/<button\b/g)).toHaveLength(1);
+    expect(textContent(html)).toContain(formatSeats(game));
+  });
+  it("uses one publish action surface in the embedded preview without changing the full-page preview", () => {
+    const embeddedForm = ssr(<CreateGamePresentation {...presentation()} embedded onClose={noop} />);
+    const embeddedPreview = ssr(<CreateGamePresentation {...presentation({ step: "preview" })} embedded onClose={noop} />);
+    const standalonePreview = ssr(<CreateGamePresentation {...presentation({ step: "preview" })} />);
+    expect(embeddedForm).toContain('class="gb-game-form-actions"');
+    expect(embeddedForm).not.toContain('gb-game-popup-preview-actions');
+    expect(embeddedPreview).toContain('class="gb-game-popup-preview-actions"');
+    expect(standalonePreview).not.toContain('gb-game-popup-preview-actions');
+    expect(embeddedPreview.match(/aria-label="Действия игры"/g)).toHaveLength(1);
+    expect(standalonePreview.match(/aria-label="Действия игры"/g)).toHaveLength(1);
+    expect(embeddedPreview).toContain("Опубликовать игру");
+    expect(embeddedPreview).toContain("Назад к редактированию");
+  });
   it("keeps trainer fallback distinct from organizer identity", () => {
     const html = ssr(<VenueSheetGameRow game={{ ...game, activityKind: "trainer_led" }} timezone={venue.timezone} onOpen={noop} />);
     expect(html).toContain('src="/discovery/badminton-gear.jpg"');
