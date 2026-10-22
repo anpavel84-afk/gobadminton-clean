@@ -431,7 +431,7 @@ ADAPTERS = {
                    '#29: 7 known defects open; never a QA gate'),
 }
 FORBIDDEN = {'agy': {'qa', 'author'}}    # hard rule, independent of flags
-MODEL_ADAPTER = {'gpt-6.1-sol': 'codex'}  # task "model" -> adapter; absent model -> codex default
+MODEL_ADAPTER = {'gpt-6.1-sol': 'codex', 'gpt-6-astra': 'codex', 'gpt-6-luna': 'codex'}  # exact proven secure CLI provider
 QA_ADAPTER = 'codex'
 
 
