@@ -1,0 +1,6 @@
+# Owner map assets · Germany DEV (source-only Release/Ops input)
+Owner [#14](https://github.com/anpavel84-afk/gobadminton-clean/issues/14), prerequisite Radar UI [#13](https://github.com/anpavel84-afk/gobadminton-clean/issues/13).
+
+Source is the preexisting publicly served Moscow asset release `moscow-20261007-p4-098a869f-v001`, original PMTiles 208978904 B SHA256 `098a869fbddff6f9fb4b7b2cf31128fb5c108b7d88f234d18e7f62af6b347a01`, style SHA256 `a9d887c39bbdfca6ce2c1ab46b73b1d72217a50855aec033b2ad57a2087b8e03`, 1038 other manifest assets. Original manifest status CANDIDATE_NOT_REGISTERED. Germany staging is only from **public official HTTPS** with every SHA pinned; do not use unauthorized remote SSH command.
+
+Develop narrow DEV-only static nginx patch and source manifest/rewrite of style absolute references to local `https://dev.gobadminton.ru/map-assets/releases/...`. Test PMTiles HTTP 206 Range, CORS/CSP/font/sprite/style and rollback under original-host operator. All 1038 asset hashes must match public manifest before install; no data inference or personal coordinates. Output exact SHA of new source, bundle manifest and minimal install/rollback instructions. **Do not trigger production, touch Xray/VPN or claim installed runtime without a real original-host receipt.** Follow independent QA #14.

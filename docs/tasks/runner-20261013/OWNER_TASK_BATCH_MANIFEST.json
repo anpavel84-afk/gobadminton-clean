@@ -1,0 +1,108 @@
+{
+  "schema": "gobadminton.clean.owner-task-batch.pre-admission.v001",
+  "status": "OWNER_SCOPE_RECORDED_SOURCE_TASK_CAPSULES_ONLY_NOT_CANONICAL_ENQUEUED",
+  "created_at_utc": "2026-10-13",
+  "owner_task_issues": [
+    12,
+    13,
+    14,
+    15
+  ],
+  "source_repo": "anpavel84-afk/gobadminton-clean",
+  "prod_authorized": false,
+  "legacy_backlog_import": false,
+  "real_qa_receipts_issued": false,
+  "source_tasks": [
+    {
+      "priority": 1,
+      "producer_id": "friends-dev-s1-api-20261013-v001",
+      "qa_id": "qa-friends-dev-s1-api-20261013-v001",
+      "source": "friends-s1-implementation.md",
+      "qa_source": "friends-s1-qa.md",
+      "locks": [
+        "api:friendships",
+        "schema:friends"
+      ],
+      "write_paths": [
+        "apps/api/src/friendships",
+        "apps/api/migrations/0032_friendship_core.sql",
+        "packages/contracts"
+      ],
+      "depends_on_accepted": [],
+      "issue": 12,
+      "model": "gpt-6.1-sol",
+      "sandbox": "workspace"
+    },
+    {
+      "priority": 2,
+      "producer_id": "radar-dev-map-hosting-20261013-v001",
+      "qa_id": "qa-radar-dev-map-hosting-20261013-v001",
+      "source": "radar-map-hosting-implementation.md",
+      "qa_source": "radar-map-hosting-qa.md",
+      "locks": [
+        "infra:dev-map-assets"
+      ],
+      "write_paths": [
+        "infra/maps",
+        "docs/operations"
+      ],
+      "depends_on_accepted": [
+        "qa-friends-dev-s1-api-20261013-v001"
+      ],
+      "issue": 14,
+      "model": "gpt-6.1-sol",
+      "sandbox": "workspace"
+    },
+    {
+      "priority": 3,
+      "producer_id": "radar-dev-map-ui-20261013-v001",
+      "qa_id": "qa-radar-dev-map-ui-20261013-v001",
+      "source": "radar-map-ui-implementation.md",
+      "qa_source": "radar-map-ui-qa.md",
+      "locks": [
+        "web:radar",
+        "api:radar"
+      ],
+      "write_paths": [
+        "apps/web/src/components/consumer/radar",
+        "apps/web/src/lib/radar-map-assets.ts",
+        "apps/api/src/radar"
+      ],
+      "depends_on_accepted": [
+        "qa-radar-dev-map-hosting-20261013-v001"
+      ],
+      "issue": 13,
+      "model": "gpt-6.1-sol",
+      "sandbox": "workspace"
+    },
+    {
+      "priority": 4,
+      "producer_id": "created-games-avatar-dev-20261013-v001",
+      "qa_id": "qa-created-games-avatar-dev-20261013-v001",
+      "source": "created-games-avatar-implementation.md",
+      "qa_source": "created-games-avatar-qa.md",
+      "locks": [
+        "web:games",
+        "api:games"
+      ],
+      "write_paths": [
+        "apps/web/src/components/consumer/discovery/DiscoveryGameCard.tsx",
+        "apps/web/src/components/account/MyGamesView.tsx",
+        "apps/api/src/games"
+      ],
+      "depends_on_accepted": [
+        "qa-friends-dev-s1-api-20261013-v001"
+      ],
+      "issue": 15,
+      "model": "gpt-6.1-sol",
+      "sandbox": "workspace"
+    }
+  ],
+  "admission_constraints": [
+    "First source/QA pair only when root-protected clean QA issuer and single Publisher writer authorized",
+    "All source/admission links pinned to exact new clean commit SHA and branch",
+    "Independent QA uses actual read-only Codex sandbox and separate nonauthor verifier",
+    "Source changes DO NOT claim DEV release; deploy requires real Germany release job and rollback",
+    "Reject real PROD database migrations and consent inference"
+  ]
+}
