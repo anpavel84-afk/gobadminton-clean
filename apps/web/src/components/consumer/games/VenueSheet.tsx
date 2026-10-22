@@ -10,6 +10,7 @@ import { GameCover } from "./GameCover";
 import { VenueCover } from "../venues/VenueCover";
 import { Avatar } from "../players/ProfileComposition";
 import { GameHero, GameTerms } from "./GameDetailComposition";
+import { VenueGameActions } from "./VenueGameActions";
 import "../../../styles/venue-popup.css";
 
 // Validate untrusted/older API data independently of server normalization.
@@ -159,7 +160,7 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
         {!gamesReady && <p role="status">Расписание временно недоступно</p>}
         {gamesReady && games.length === 0 && <button type="button" className="gb-venue-sheet-primary" aria-label="Создать игру на этой площадке" onClick={() => setView("create")}>Создать игру на этой площадке<span aria-hidden="true">→</span></button>}
         {gamesReady && days.length > 0 && <button type="button" className="gb-venue-sheet-primary" aria-label="Показать игры на этой площадке" onClick={() => setView("schedule")}>Показать игры на этой площадке<span aria-hidden="true">→</span></button>}
-      </div> : currentView === "create" ? <CreateGamePage key={`${venue.cityId}:${venue.id}`} embedded initialVenue={venue} onClose={() => setView("info")} /> : currentView === "game" && game ? <div className="gb-venue-sheet-detail"><GameHero game={game} /><GameTerms game={game} onVenueClick={() => setView("info")} /></div>
+      </div> : currentView === "create" ? <CreateGamePage key={`${venue.cityId}:${venue.id}`} embedded initialVenue={venue} onClose={() => setView("info")} /> : currentView === "game" && game ? <div className="gb-venue-sheet-detail"><GameHero game={game} /><VenueGameActions key={game.id} gameId={game.id} /><GameTerms game={game} onVenueClick={() => setView("info")} /></div>
         : <div><h3>Игры на этой площадке</h3>
           <div className="gb-venue-sheet-dates" aria-label="Даты игр">{days.map(item => {
             const first = item.games[0]; if (!first) return null;
