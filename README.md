@@ -2,10 +2,10 @@
 
 Рабочий monorepo: `anpavel84-afk/gobadminton-clean`.
 
-Начать с [AGENTS.md](AGENTS.md) и [единого регламента разработки/PMA](docs/rules/ENGINEERING_OPERATING_MODEL.md). [Документация продукта](docs/README.md).
+**[Эталонная архитектура системы разработки и регламент PMA](docs/rules/ENGINEERING_OPERATING_MODEL.md)** — один полный документ для PMA, технического PM, авторов, эксперта Astra, QA и OPS. Обязательная точка входа: [AGENTS.md](AGENTS.md). [Документация приложения](docs/README.md).
 
-Код: `apps/web`, `apps/api`, `apps/worker`, `apps/admin`, `apps/mobile`, `packages`, `infra`. Задачи и приоритеты — существующие GitHub Issues/Projects; исполнение — действующий GitHub Actions train с защищёнными исполнителями на Germany VPS.
+Целевая схема: Owner → PMA из ChatGPT Work или Grok-бота → GitHub Issues/Projects → Actions → два защищённых слота Germany → автор/тесты/QA → DEV. Содержательный FAIL → Astra High → точный repair brief → автор → новые проверки. Возможность в эталоне не считается установленной без evidence.
 
-`dev` — продуктовая интеграция и изолированный DEV. `main`/контроллер/PROD не обновляются автоматически от изменения документа. PROD требует отдельного Owner GO на конкретный выпуск.
+Код: `apps/web`, `apps/api`, `apps/worker`, `apps/admin`, `apps/mobile`, `packages`, `infra`. `dev` — продуктовая интеграция. Документ не обновляет автоматически main, controller pin или PROD; production требует отдельного Owner GO.
 
-Операционный статус проверять по Actions и серверным receipts. Старое утверждение о постоянном OPERATOR_PAUSED не является текущим статусом. Архивы и dated handoffs сохраняют историю, но не дают полномочий запускать старые службы.
+Операционное состояние — Actions и server receipts. Старые очереди/архивы не являются текущим источником запуска. Изменять архитектуру в том же каноническом файле через reviewed PR, не создавать параллельный «финальный» регламент.

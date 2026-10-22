@@ -1,4 +1,6 @@
-# Архитектура системы v1
+# Архитектура пользовательского приложения v1
+
+> **Система разработки, PMA и AI-исполнители описаны в едином [эталоне ENGINEERING_OPERATING_MODEL.md](../rules/ENGINEERING_OPERATING_MODEL.md).** Этот файл описывает приложение, а не runner. Ниже — исходная архитектурная база v1; датированные deployment/DNS предположения не являются текущими host facts. Перед операциями использовать актуальные [окружения](../operations/ENVIRONMENTS.md), Owner decisions и runtime evidence.
 
 Статус: **TECH_SELECTED** по OD-006/OD-010.
 
@@ -44,4 +46,4 @@ No microservices/Kubernetes/Kafka/GraphQL/event sourcing/CMS dependency for tran
 
 The technical topology does not itself establish legal compliance for public personal-data processing. With primary DB in Germany, public real-data launch still requires O-02 review.
 
-Details: [STACK](STACK.md), [MODULE_BOUNDARIES](MODULE_BOUNDARIES.md), [ENVIRONMENTS](../operations/ENVIRONMENTS.md), [MVP runtime](../operations/MVP_VPS_RUNTIME.md), [ADR](../decisions/README.md).
+Details: [STACK](STACK.md), [MODULE_BOUNDARIES](MODULE_BOUNDARIES.md), [ENVIRONMENTS](../operations/ENVIRONMENTS.md), [ADR](../decisions/README.md). Historical `MVP_VPS_RUNTIME.md` is not included in Clean extraction.
