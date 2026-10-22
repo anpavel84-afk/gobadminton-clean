@@ -155,6 +155,10 @@ def journal(slot):
 
 def snapshot(policy):
     result = dict(schema='GB_ACTIONS_TRAIN_V1', mode=policy['mode'], slots={})
+    try: planning = read(STATE / 'planning.json', 0, 65536)
+    except FileNotFoundError: planning = None
+    a, s = live()
+    budget = s.Budget(Path('/etc/gobadminton-slots/budgets.json'), AUTONOMY/'outbox', AUTONOMY/'locks/registry.lock')
     for slot in ('slot1', 'slot2'):
         state, parked = checkpoint(slot)
         j = journal(slot)
@@ -163,6 +167,7 @@ def snapshot(policy):
             op = j['operations'][pending]
             pending = dict(key=pending, status='running' if alive(op.get('process')) else 'unknown',
                            stage=op['binding']['stage'], process=op.get('process'), binding=op['binding'],
+                           workflow_run=op['run'], workflow_attempt=op['run_attempt'],
                            recoverable=op['binding']['stage'] in ('publish', 'integrate', 'promote', 'dev')
                            and op.get('recovery_attempts', 0) < 3)
         process = None
@@ -184,6 +189,16 @@ def snapshot(policy):
                                     owned=slot in policy['owned'], last=j['last'], confirmed=j.get('confirmed'),
                                     profile=j.get('profiles', {}).get(str((state.get('active') or {}).get('issue'))),
                                     reservation=j['operations'][j['pending']].get('record') if j['pending'] else None)
+        try:
+            result['slots'][slot]['availability'] = {
+                provider: {role: s.adapter_status(provider, role, budget, slot)[0] for role in ('author','qa')}
+                for provider in ('codex','cursor','agy')}
+        except (OSError, ValueError, s.Hold):
+            result['slots'][slot]['availability'] = {}  # UNKNOWN budget never authorizes a model
+        if planning and planning['report']['slots'][slot]['generation'] == j['generation']:
+            result['slots'][slot]['planning'] = dict(planning['report']['slots'][slot],
+                counts=planning['report']['counts'], decisions=planning['report']['decisions'],
+                observed_at=planning['observed_at'], workflow_run=planning['run'])
     return result
 
 
@@ -367,6 +382,19 @@ def hosted_identity(req, policy):
 def handle(req, policy):
     request(req)
     if req['stage'] == 'status': return snapshot(policy)
+    if req['stage'] == 'planning':
+        # Informational report through the existing forced-command DEV SSH identity.
+        # No API credential, code/path/shell input, journal mutation or execution authority.
+        need(policy['mode'] == 'active' and req['controller_sha'] == policy['controller_sha'], 'planning controller mismatch')
+        stale = [slot for slot, c in req['report']['slots'].items() if c['generation'] != journal(slot)['generation']]
+        if stale: return dict(status='obsolete', slots=stale)
+        path = STATE / 'planning.json'
+        old = read(path, 0, 65536) if path.exists() else None
+        if old and (req['run'], req['run_attempt']) < (old['run'], old['run_attempt']):
+            return dict(status='obsolete')
+        atomic(path, dict(report=req['report'], observed_at=int(time.time()), run=req['run'], run_attempt=req['run_attempt']))
+        publish_monitor(policy)
+        return dict(status='recorded')
     slot = req['slot']
     hosted_identity(req, policy)
     key = digest(binding(req))

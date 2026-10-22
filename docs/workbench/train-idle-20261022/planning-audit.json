@@ -1,0 +1,718 @@
+{
+  "at": "2026-10-22T03:36:05.651826+00:00",
+  "issues": [
+    {
+      "issue": 1,
+      "title": "P0 · Restore stable Profile/Games API transport",
+      "comments": 7,
+      "admitted": false,
+      "reason": "not admitted",
+      "details": [
+        "body: no exact approval marker"
+      ]
+    },
+    {
+      "issue": 2,
+      "title": "P0 · Revalidate Radar/Profile and repair real product defects",
+      "comments": 1,
+      "admitted": false,
+      "reason": "not admitted",
+      "details": [
+        "body: no exact approval marker"
+      ]
+    },
+    {
+      "issue": 3,
+      "title": "P1 · Commission fully isolated Germany DEV Web+API+PostGIS",
+      "comments": 5,
+      "admitted": false,
+      "reason": "not admitted",
+      "details": [
+        "body: no exact approval marker"
+      ]
+    },
+    {
+      "issue": 4,
+      "title": "P1 · Establish independent QA, DEV delivery and bounded PROD release",
+      "comments": 22,
+      "admitted": false,
+      "reason": "not admitted",
+      "details": [
+        "body: no exact approval marker"
+      ]
+    },
+    {
+      "issue": 5,
+      "title": "P2 · Fresh Friends, Messaging and Games roadmap after DEV stabilization",
+      "comments": 1,
+      "admitted": false,
+      "reason": "not admitted",
+      "details": [
+        "body: no exact approval marker"
+      ]
+    },
+    {
+      "issue": 6,
+      "title": "P0 · Canonical Git cutover: archive legacy, rebind authorized executors",
+      "comments": 0,
+      "admitted": false,
+      "reason": "not admitted",
+      "details": [
+        "body: no exact approval marker"
+      ]
+    },
+    {
+      "issue": 12,
+      "title": "Friends · S1 API + S2 UI + independent QA → live Germany DEV",
+      "comments": 8,
+      "admitted": true,
+      "reason": "done",
+      "depends_on": [],
+      "locks": []
+    },
+    {
+      "issue": 13,
+      "title": "Radar P0 · bring back map button, render approved players and venues on DEV",
+      "comments": 10,
+      "admitted": true,
+      "reason": "done",
+      "depends_on": [],
+      "locks": []
+    },
+    {
+      "issue": 14,
+      "title": "Germany DEV · publish pinned Moscow MapLibre/PMTiles assets locally, with rollback",
+      "comments": 2,
+      "admitted": false,
+      "reason": "not admitted",
+      "details": [
+        "body: no exact approval marker"
+      ]
+    },
+    {
+      "issue": 15,
+      "title": "My Games / Created Games · show organizer profile photos, not initials-only circles",
+      "comments": 5,
+      "admitted": true,
+      "reason": "done",
+      "depends_on": [],
+      "locks": []
+    },
+    {
+      "issue": 23,
+      "title": "CI blocker: restore foundation references and reconcile auth/avatar mutation contracts",
+      "comments": 0,
+      "admitted": false,
+      "reason": "not admitted",
+      "details": [
+        "body: no exact approval marker"
+      ]
+    },
+    {
+      "issue": 28,
+      "title": "Product #24 · Игры на карте — единая карта площадок с расписанием игр",
+      "comments": 13,
+      "admitted": true,
+      "reason": "done",
+      "depends_on": [],
+      "locks": []
+    },
+    {
+      "issue": 29,
+      "title": "P0 · Commission autonomous GitHub Issue → Codex → QA → CI → DEV loop",
+      "comments": 38,
+      "admitted": false,
+      "reason": "not admitted",
+      "details": [
+        "body: no exact approval marker"
+      ]
+    },
+    {
+      "issue": 30,
+      "title": "AUTONOMY CANARY A · bounded docs-only DEV release",
+      "comments": 0,
+      "admitted": false,
+      "reason": "not admitted",
+      "details": [
+        "body: stale Issue"
+      ]
+    },
+    {
+      "issue": 31,
+      "title": "AUTONOMY CANARY B · next Issue automatic continuation",
+      "comments": 0,
+      "admitted": false,
+      "reason": "not admitted",
+      "details": [
+        "body: stale Issue"
+      ]
+    },
+    {
+      "issue": 36,
+      "title": "Profile · обложка шапки профиля: загрузка, замена и безопасное отображение на DEV",
+      "comments": 7,
+      "admitted": true,
+      "reason": "done",
+      "depends_on": [],
+      "locks": []
+    },
+    {
+      "issue": 37,
+      "title": "Venues · обложки площадок, безопасный default и существующие admin-права на DEV",
+      "comments": 4,
+      "admitted": true,
+      "reason": "done",
+      "depends_on": [],
+      "locks": []
+    },
+    {
+      "issue": 46,
+      "title": "DEV Admin: activate existing administrative access for Owner accounts",
+      "comments": 6,
+      "admitted": true,
+      "reason": "done",
+      "depends_on": [],
+      "locks": []
+    },
+    {
+      "issue": 47,
+      "title": "Обложка игры: своё фото организатора, иначе текущее фото площадки; обязательная модерация",
+      "comments": 5,
+      "admitted": true,
+      "reason": "done",
+      "depends_on": [],
+      "locks": []
+    },
+    {
+      "issue": 53,
+      "title": "Owner: audit venue photo library — real badminton court and net imagery",
+      "comments": 7,
+      "admitted": false,
+      "reason": "not admitted",
+      "details": [
+        "body: no exact approval marker"
+      ]
+    },
+    {
+      "issue": 52,
+      "title": "Owner mobile bug: left-align venue picker rows with fixed preview column",
+      "comments": 2,
+      "admitted": true,
+      "reason": "done",
+      "depends_on": [],
+      "locks": []
+    },
+    {
+      "issue": 54,
+      "title": "BUG · Игры на карте: горизонтальное переполнение страницы на мобильном (Owner IMG_5481)",
+      "comments": 8,
+      "admitted": true,
+      "reason": "done",
+      "depends_on": [],
+      "locks": []
+    },
+    {
+      "issue": 57,
+      "title": "#47 follow-up: repair executable create-photo preview round-trip regression",
+      "comments": 1,
+      "admitted": false,
+      "reason": "not admitted",
+      "details": [
+        "body: edited or ambiguous Issue"
+      ]
+    },
+    {
+      "issue": 62,
+      "title": "Owner UX · выделить вход «Все игры на карте» и предложить мобильное переключение",
+      "comments": 5,
+      "admitted": true,
+      "reason": "done",
+      "depends_on": [],
+      "locks": []
+    },
+    {
+      "issue": 61,
+      "title": "Owner UX · убрать россыпь площадок с числом игр под картой",
+      "comments": 3,
+      "admitted": true,
+      "reason": "done",
+      "depends_on": [],
+      "locks": []
+    },
+    {
+      "issue": 64,
+      "title": "Admin · полноценное редактирование площадок и управление обложками каталога",
+      "comments": 8,
+      "admitted": true,
+      "reason": "done",
+      "depends_on": [],
+      "locks": []
+    },
+    {
+      "issue": 66,
+      "title": "UAT · карта сжимается до 101px на коротком мобильном экране",
+      "comments": 1,
+      "admitted": false,
+      "reason": "not admitted",
+      "details": [
+        "body: edited or ambiguous Issue"
+      ]
+    },
+    {
+      "issue": 69,
+      "title": "Owner · VPS watchdog трейна без GPT и уведомления через SMTP",
+      "comments": 1,
+      "admitted": false,
+      "reason": "not admitted",
+      "details": [
+        "body: no exact approval marker"
+      ]
+    },
+    {
+      "issue": 78,
+      "title": "Narrow successor of #76: web lint fix and A1 test updates on top of the #76 candidate (Radar on the shared map)",
+      "comments": 0,
+      "admitted": true,
+      "reason": "done",
+      "depends_on": [],
+      "locks": []
+    },
+    {
+      "issue": 82,
+      "title": "T0a-1: venue contact data + privacy-gated game read (API + contracts)",
+      "comments": 1,
+      "admitted": false,
+      "reason": "not admitted",
+      "details": [
+        "body: edited or ambiguous Issue"
+      ]
+    },
+    {
+      "issue": 84,
+      "title": "M0: восстановить подложку карты и честная ошибка",
+      "comments": 0,
+      "admitted": true,
+      "reason": "done",
+      "depends_on": [],
+      "locks": []
+    },
+    {
+      "issue": 92,
+      "title": "M1e: преемник M1c — кнопка К списку и раскладка (реальный код, без fetch)",
+      "comments": 0,
+      "admitted": true,
+      "reason": "done",
+      "depends_on": [],
+      "locks": []
+    },
+    {
+      "issue": 94,
+      "title": "M1d: состояния маркеров и разведение пересекающихся точек",
+      "comments": 1,
+      "admitted": false,
+      "reason": "not admitted",
+      "details": [
+        "body: edited or ambiguous Issue"
+      ]
+    },
+    {
+      "issue": 96,
+      "title": "M0b: карта не должна пропадать на iPhone (жизненный цикл, лог, mapdebug)",
+      "comments": 2,
+      "admitted": false,
+      "reason": "not admitted",
+      "details": [
+        "body: edited or ambiguous Issue"
+      ]
+    },
+    {
+      "issue": 98,
+      "title": "M0c: ядро стабильности карты на iPhone (WebGL grace, маркеры, resize, сбои данных)",
+      "comments": 1,
+      "admitted": false,
+      "reason": "not admitted",
+      "details": [
+        "body: edited or ambiguous Issue"
+      ]
+    },
+    {
+      "issue": 101,
+      "title": "M0e: убрать непрозрачный слой над подложкой карты",
+      "comments": 1,
+      "admitted": false,
+      "reason": "not admitted",
+      "details": [
+        "body: edited or ambiguous Issue"
+      ]
+    },
+    {
+      "issue": 104,
+      "title": "P1: заглушка обложки по типу игры вместо серого значка (корт / корт с ракеткой)",
+      "comments": 0,
+      "admitted": true,
+      "reason": "done",
+      "depends_on": [],
+      "locks": []
+    },
+    {
+      "issue": 106,
+      "title": "M6: подпись источника обложки площадки (Фото / Логотип / Иллюстрация)",
+      "comments": 1,
+      "admitted": false,
+      "reason": "not admitted",
+      "details": [
+        "body: edited or ambiguous Issue"
+      ]
+    },
+    {
+      "issue": 108,
+      "title": "NAV1: новые иконки нижнего меню (вариант B)",
+      "comments": 0,
+      "admitted": true,
+      "reason": "done",
+      "depends_on": [],
+      "locks": []
+    },
+    {
+      "issue": 109,
+      "title": "I1: импорт 20 фото площадок (DEV)",
+      "comments": 0,
+      "admitted": true,
+      "reason": "done",
+      "depends_on": [],
+      "locks": []
+    },
+    {
+      "issue": 112,
+      "title": "M2: тап по маркеру — карточка поверх карты, без перехода",
+      "comments": 1,
+      "admitted": false,
+      "reason": "not admitted",
+      "details": [
+        "body: edited or ambiguous Issue"
+      ]
+    },
+    {
+      "issue": 114,
+      "title": "V0: без вызова админки для гостей (убрать 401) на карте, в попапе и на странице площадки",
+      "comments": 0,
+      "admitted": true,
+      "reason": "done",
+      "depends_on": [],
+      "locks": []
+    },
+    {
+      "issue": 117,
+      "title": "M3: развёрнутый попап площадки поверх карты (стрелка вверх, без переходов)",
+      "comments": 1,
+      "admitted": false,
+      "reason": "not admitted",
+      "details": [
+        "body: edited or ambiguous Issue"
+      ]
+    },
+    {
+      "issue": 127,
+      "title": "M3 v8: развёрнутый попап площадки поверх карты (преемник #117)",
+      "comments": 2,
+      "admitted": false,
+      "reason": "not admitted",
+      "details": [
+        "body: edited or ambiguous Issue"
+      ]
+    },
+    {
+      "issue": 131,
+      "title": "M3-FIX: исправить три падения проверок попапа площадки",
+      "comments": 1,
+      "admitted": false,
+      "reason": "not admitted",
+      "details": [
+        "body: no exact approval marker",
+        "comment 6290000263: attempt bound"
+      ]
+    },
+    {
+      "issue": 133,
+      "title": "M3 UAT: живая шторка, контакты площадки и создание игры",
+      "comments": 4,
+      "admitted": true,
+      "reason": "done",
+      "depends_on": [],
+      "locks": []
+    },
+    {
+      "issue": 134,
+      "title": "M3 UAT 2/2 — публичные контакты площадки в попапе",
+      "comments": 6,
+      "admitted": true,
+      "reason": "parked/deferred",
+      "depends_on": [],
+      "locks": []
+    },
+    {
+      "issue": 136,
+      "title": "NAV1b — волан во вкладке «Игры», уточнение формы варианта B",
+      "comments": 4,
+      "admitted": false,
+      "reason": "not admitted",
+      "details": [
+        "body: no exact approval marker",
+        "comment 6294404645: attempt bound"
+      ]
+    },
+    {
+      "issue": 138,
+      "title": "NAV1b: завершить готовую иконку волана после исправления требований QA/CI",
+      "comments": 4,
+      "admitted": true,
+      "reason": "done",
+      "depends_on": [],
+      "locks": []
+    },
+    {
+      "issue": 141,
+      "title": "M3-PHOTO: фото выбранной площадки без позднего появления в попапе",
+      "comments": 9,
+      "admitted": true,
+      "reason": "parked/deferred",
+      "depends_on": [],
+      "locks": []
+    },
+    {
+      "issue": 142,
+      "title": "M3-CONTACTS-R2: публичные контакты — согласовать URL и проверку БД",
+      "comments": 6,
+      "admitted": true,
+      "reason": "done",
+      "depends_on": [],
+      "locks": []
+    },
+    {
+      "issue": 144,
+      "title": "M3-PHOTO-R2: устранить зависание теста и выпустить ускорение фото",
+      "comments": 7,
+      "admitted": true,
+      "reason": "parked/deferred",
+      "depends_on": [],
+      "locks": []
+    },
+    {
+      "issue": 147,
+      "title": "M3-PHOTO-R3: фото площадки без повторной загрузки; исправить lifecycle harness",
+      "comments": 6,
+      "admitted": true,
+      "reason": "done",
+      "depends_on": [],
+      "locks": []
+    },
+    {
+      "issue": 149,
+      "title": "M2R: карточка игрока и ближайшие публичные игры поверх карты",
+      "comments": 1,
+      "admitted": false,
+      "reason": "not admitted",
+      "details": [
+        "body: no exact approval marker"
+      ]
+    },
+    {
+      "issue": 151,
+      "title": "MAP-PERF1 · Игры: видимое ожидание модуля карты и ошибка загрузки",
+      "comments": 1,
+      "admitted": false,
+      "reason": "not admitted",
+      "details": [
+        "body: edited or ambiguous Issue"
+      ]
+    },
+    {
+      "issue": 152,
+      "title": "MAP-PERF1 · Radar: видимое ожидание модуля карты и ошибка загрузки",
+      "comments": 0,
+      "admitted": true,
+      "reason": "done",
+      "depends_on": [],
+      "locks": [
+        "web:radar-map-loader"
+      ]
+    },
+    {
+      "issue": 155,
+      "title": "OPS: продолжение двух слотов при обновлении DEV, сбое CI и блокировке отдельной задачи",
+      "comments": 3,
+      "admitted": false,
+      "reason": "not admitted",
+      "details": [
+        "body: no exact approval marker"
+      ]
+    },
+    {
+      "issue": 157,
+      "title": "UI-CLOSE: единый SVG-крестик для модальных окон и шторок",
+      "comments": 1,
+      "admitted": true,
+      "reason": "done",
+      "depends_on": [],
+      "locks": [
+        "web:modal-close",
+        "web:venue-popup"
+      ]
+    },
+    {
+      "issue": 156,
+      "title": "M3-OWNER: фото игр, контакты по макету и создание игры внутри попапа",
+      "comments": 3,
+      "admitted": true,
+      "reason": "parked/deferred",
+      "depends_on": [],
+      "locks": [
+        "web:venue-popup",
+        "web:game-create"
+      ]
+    },
+    {
+      "issue": 158,
+      "title": "OPS · Actions-owned train: bounded VPS stages, preserved budgets and multi-CLI routing",
+      "comments": 14,
+      "admitted": false,
+      "reason": "not admitted",
+      "details": [
+        "body: no exact approval marker"
+      ]
+    }
+  ],
+  "intents": [],
+  "budgets": {
+    "slot1": {
+      "author": 27,
+      "qa": 24
+    },
+    "slot2": {
+      "author": 27,
+      "qa": 24
+    }
+  },
+  "done": [
+    12,
+    13,
+    15,
+    28,
+    30,
+    31,
+    36,
+    37,
+    46,
+    47,
+    52,
+    54,
+    57,
+    61,
+    62,
+    64,
+    66,
+    78,
+    82,
+    84,
+    92,
+    98,
+    101,
+    104,
+    106,
+    108,
+    109,
+    112,
+    114,
+    131,
+    133,
+    138,
+    142,
+    147,
+    151,
+    152,
+    157
+  ],
+  "parked": [
+    68,
+    76,
+    80,
+    86,
+    88,
+    90,
+    94,
+    96,
+    117,
+    127,
+    134,
+    136,
+    141,
+    144,
+    156
+  ],
+  "latest_dispatchers": [
+    {
+      "id": 39707523665,
+      "status": "completed",
+      "conclusion": "success",
+      "head_sha": "6fb9b0cbaad3c1989c521d0612d036ddf4342d7c",
+      "created_at": "2026-10-22T01:45:33Z",
+      "updated_at": "2026-10-22T01:46:13Z"
+    },
+    {
+      "id": 39702431967,
+      "status": "completed",
+      "conclusion": "success",
+      "head_sha": "6fb9b0cbaad3c1989c521d0612d036ddf4342d7c",
+      "created_at": "2026-10-22T00:53:39Z",
+      "updated_at": "2026-10-22T00:54:10Z"
+    },
+    {
+      "id": 39702284542,
+      "status": "completed",
+      "conclusion": "success",
+      "head_sha": "6fb9b0cbaad3c1989c521d0612d036ddf4342d7c",
+      "created_at": "2026-10-22T00:52:13Z",
+      "updated_at": "2026-10-22T00:52:56Z"
+    },
+    {
+      "id": 39701895116,
+      "status": "completed",
+      "conclusion": "success",
+      "head_sha": "6fb9b0cbaad3c1989c521d0612d036ddf4342d7c",
+      "created_at": "2026-10-22T00:48:22Z",
+      "updated_at": "2026-10-22T00:49:03Z"
+    },
+    {
+      "id": 39701771336,
+      "status": "completed",
+      "conclusion": "success",
+      "head_sha": "422c109893bd6092fd177ccd3ef2162ccc897e0d",
+      "created_at": "2026-10-22T00:47:08Z",
+      "updated_at": "2026-10-22T00:47:43Z"
+    },
+    {
+      "id": 39701650943,
+      "status": "completed",
+      "conclusion": "success",
+      "head_sha": "422c109893bd6092fd177ccd3ef2162ccc897e0d",
+      "created_at": "2026-10-22T00:45:55Z",
+      "updated_at": "2026-10-22T00:46:28Z"
+    },
+    {
+      "id": 39701573932,
+      "status": "completed",
+      "conclusion": "success",
+      "head_sha": "422c109893bd6092fd177ccd3ef2162ccc897e0d",
+      "created_at": "2026-10-22T00:45:12Z",
+      "updated_at": "2026-10-22T00:45:48Z"
+    },
+    {
+      "id": 39701509813,
+      "status": "completed",
+      "conclusion": "success",
+      "head_sha": "422c109893bd6092fd177ccd3ef2162ccc897e0d",
+      "created_at": "2026-10-22T00:44:35Z",
+      "updated_at": "2026-10-22T00:45:16Z"
+    }
+  ]
+}

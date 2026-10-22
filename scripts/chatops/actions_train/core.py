@@ -140,6 +140,14 @@ def request(value):
     if value.get('stage') == 'status':
         need(set(value) == {'action', 'stage'}, 'unknown status fields')
         return value
+    if value.get('stage') == 'planning':
+        from queue_diagnostics import valid_report
+        need(set(value) == {'action','stage','controller_sha','run','run_attempt','report'}, 'unknown planning fields')
+        need(isinstance(value['controller_sha'],str) and SHA.fullmatch(value['controller_sha']), 'invalid planning controller')
+        need(type(value['run']) is int and 0 < value['run'] < 10**18 and
+             type(value['run_attempt']) is int and 0 < value['run_attempt'] < 10000, 'invalid planning run')
+        need(valid_report(value['report']), 'invalid planning report')
+        return value
     need(set(value) == {'action', 'stage', 'slot', 'issue', 'phase', 'head', 'attempt',
                         'generation', 'run', 'run_attempt', 'profile', 'gh_token'}, 'unknown stage fields')
     need(value['stage'] in STAGES and value['slot'] in ('slot1', 'slot2'), 'unknown stage/slot')
@@ -206,7 +214,11 @@ def plan(a, s, snapshot, candidates, profile='auto'):
         if active and active['phase'] != 'done':
             occupied.append(s.task_record(active['issue'], active['task']))
     out = []
-    for name, card in snapshot['slots'].items():
+    # Prefer the longest-idle slot, not slot1 on every empty-queue wake.
+    def last_confirmed(item):
+        card = item[1]
+        return ((card.get('confirmed') or card.get('last') or {}).get('confirmed_at') or 0, item[0])
+    for name, card in sorted(snapshot['slots'].items(), key=last_confirmed):
         if not card['owned']:
             continue
         pending = card.get('pending')
@@ -221,6 +233,9 @@ def plan(a, s, snapshot, candidates, profile='auto'):
                 out.append(dict(slot=name, issue=active['issue'], stage=stage, phase=active['phase'],
                                 head=active['head'], attempt=active['attempt'], generation=card['generation'],
                                 profile=card.get('profile') or profile))
+            continue
+        from queue_diagnostics import provider_ready
+        if not provider_ready(card, profile):
             continue
         for issue, task in candidates:
             record = s.task_record(issue, task)
