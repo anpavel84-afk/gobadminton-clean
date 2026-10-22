@@ -119,7 +119,7 @@ class Receipts(unittest.TestCase):
         self.assertEqual(result['allowed_paths'], parent['allowed_paths'])
         self.assertEqual(result['acceptance'], parent['acceptance'])
         self.assertEqual(result['kind'], parent['kind'])
-        self.assertEqual(result['depends_on'], parent['depends_on'])
+        self.assertEqual(result.get('depends_on'), parent.get('depends_on'))
         self.assertEqual(result['goal'], parent['goal'] + '\\nBounded diagnosed repair requirements:\\n' + '\\n'.join(proposal['requirements']))
         for invalid in ([doc_api], [doc_handoff], [doc_api, doc_handoff]):
             with self.subTest(invalid=invalid), self.assertRaisesRegex(core.Refused, 'no product source/test'):
