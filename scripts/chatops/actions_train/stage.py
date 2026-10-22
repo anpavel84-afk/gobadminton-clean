@@ -69,10 +69,18 @@ def setup(req, config):
     original_model = bridge.model
     def measured_model(prompt, qa=False):
         effect_gate()
-        trace['model'] = route(s, store.data['active']['task'], 'qa' if qa else 'author',
-                               'codex' if qa else req['profile'], rt.budget, req['slot'])
+        choice = route(s, store.data['active']['task'], 'qa' if qa else 'author',
+                       'auto' if qa and 'qa_routes' in store.data['active']['task']
+                       else 'codex' if qa else req['profile'], rt.budget, req['slot'])
+        # A role-specific route MUST match the actual CLI. Never run Codex under a
+        # trace claiming Cursor/Antigravity; those need their own reviewed adapter.
+        need(choice['provider'] == 'codex', 'unimplemented native model adapter')
+        trace['model'] = choice
+        old_model, old_effort = c.model, c.effort
+        c.model, c.effort = choice['effective_model'], choice['effort']
         try: return original_model(prompt, qa)
         finally:
+            c.model, c.effort = old_model, old_effort
             trace['process'] = None
             publish_process()
     bridge.model = measured_model
@@ -239,7 +247,9 @@ def perform(req, config, context):
                    and p['base']['ref'] == 'dev']
             need(len(prs) <= 1, 'ambiguous PR')
             if not prs: raise Retry('PR not_started; Autonomy PR must be enabled', 60)
-            metadata['routing'] = route(s, active['task'], 'qa', 'codex', rt.budget, req['slot'])
+            metadata['routing'] = route(s, active['task'], 'qa',
+                                        'auto' if 'qa_routes' in active['task'] else 'codex',
+                                        rt.budget, req['slot'])
             store.phase('qa', pr=prs[0]['number'])
             b.review(active)  # new detached exact SHA, read-only sandbox, independent new CLI session
         elif stage == 'ci':

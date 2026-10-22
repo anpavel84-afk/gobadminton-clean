@@ -71,6 +71,7 @@ jobs:
           find scripts/chatops -name '*.sh' -exec bash -n {} +
           python3 -B scripts/chatops/tests/test_ci_workflow.py
           python3 -B -m unittest discover -s scripts/chatops/tests -p "test_actions_train*.py"
+          python3 -B -m unittest discover -s scripts/chatops/tests -p "test_phase_*.py"
           python3 -B scripts/chatops/tests/test_autonomous_issues.py
           node --check scripts/chatops/smoke.mjs
           python3 -B scripts/chatops/tests/test_admin_deploy.py

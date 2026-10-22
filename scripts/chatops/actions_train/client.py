@@ -63,6 +63,37 @@ def trusted_event(event, name, api):
         need(name == 'schedule', 'untrusted event type')
 
 
+def stage_planning_evidence(issues, comments, directory=Path('evidence')):
+    """Read-only, bounded stage DAG proposal; never makes Issue/Git/CLI writes.
+
+    An Owner's exact GOBADMINTON_PHASE_SCOPE_V2 grants a draft plan only.
+    No new admission, root reservation, stage dispatch or Project field mutation.
+    """
+    import importlib.util
+    from urllib.parse import urlparse
+    source = Path(__file__).resolve().parent.parent / 'planning' / 'phase_task_plan_v2.py'
+    spec = importlib.util.spec_from_file_location('gobadminton_phase_task_plan_v2', source)
+    need(spec is not None and spec.loader is not None, 'phase planner unavailable')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    grouped = {}
+    for comment in comments:
+        raw = comment.get('issue_url', '')
+        try:
+            path = urlparse(raw).path.rsplit('/', 1)[-1]
+            number = int(path)
+        except (ValueError, TypeError, AttributeError):
+            continue
+        grouped.setdefault(number, []).append(comment)
+    result = module.preview_for_issues(issues, grouped)
+    need(result['schema'] == 'GB_PHASE_PREVIEW_V2'
+         and result['can_start_execution'] is False, 'unsafe planner side effect marker')
+    directory.mkdir(exist_ok=True)
+    (directory / 'phase-plan-preview-v2.json').write_text(
+        json.dumps(result, ensure_ascii=False, sort_keys=True))
+    return result
+
+
 def reconcile(api, ssh, event, name):
     import datetime as dt
     trusted_event(event, name, api)
@@ -74,6 +105,15 @@ def reconcile(api, ssh, event, name):
     for issue in issues:
         if 'pull_request' not in issue:
             comments.extend(api.pages(f'issues/{issue["number"]}/comments'))
+    # Side-effect-free planning is independent of source dispatch and cannot
+    # stall an already approved stage due to a malformed draft parent.
+    try:
+        stage_planning_evidence(issues, comments)
+    except (OSError, ValueError, KeyError, TypeError, Refused) as error:
+        Path('evidence').mkdir(exist_ok=True)
+        Path('evidence/phase-plan-preview-v2.json').write_text(
+            json.dumps({'schema':'GB_PHASE_PREVIEW_V2','status':'NOT_AVAILABLE',
+                        'reason':type(error).__name__,'can_start_execution':False}))
     candidates = s.admitted(a, issues, comments, dt.datetime.fromisoformat(SINCE))
     from recovery_admission import candidates as recovery_candidates
     candidates.extend(recovery_candidates(a, snap, issues))
