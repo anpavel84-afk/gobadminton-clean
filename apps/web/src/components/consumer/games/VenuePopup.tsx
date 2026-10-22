@@ -167,7 +167,14 @@ export function VenuePopup({ expanded, onExpandedChange, onDeselect, preview, ch
           const velocity = event.timeStamp - current.time > 100 ? 0 : current.velocity;
           settle(Math.abs(velocity) >= .5 ? velocity > 0 : progress >= current.travel / 2);
         }} onPointerCancel={cancel} onLostPointerCapture={cancel}><span /></button>
-      <div hidden={visible}>{preview}</div>
+      {/* Never display:none the touched preview while the compact card is being dragged.
+          Safari drops the pointer stream when its original hit target disappears.
+          The popup shell captures the pointer, and this stable layer remains mounted. */}
+      <div className="gb-venue-popup-preview-surface"
+        aria-hidden={visible}
+        style={{ opacity: visible ? 0 : 1, pointerEvents: expanded || settling ? "none" : "auto" }}>
+        {preview}
+      </div>
       {visible && <div className="gb-venue-popup-content">{children}</div>}
     </div>
   </>;
