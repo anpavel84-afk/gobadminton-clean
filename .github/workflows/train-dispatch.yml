@@ -15,7 +15,8 @@ permissions:
 concurrency:
   group: gobadminton-train-dispatch
   cancel-in-progress: false
-  queue: max
+  # Reconcile rereads the complete durable queue; retain only the latest wake-up.
+  queue: single
 jobs:
   commissioning:
     if: github.event_name == 'push' && github.repository_id == '1416250340'
