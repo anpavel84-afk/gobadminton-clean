@@ -47,14 +47,29 @@ def publish_one(api, plan, engine=None):
     need(refreshed == plan, 'plan/source bytes no longer match Owner scope')
     body = exact_published_body(plan)
     need(len(body.encode()) <= 65536, 'plan too large to publish')
+    # A random participant may paste the same draft body, but this must not
+    # be accepted as the trusted Actions publication receipt. An edited bot
+    # comment must not be silently interpreted as immutable planner evidence.
     existing = [v for v in comments if v.get('body') == body]
-    need(len(existing) <= 1, 'duplicate immutable phase plan publication')
+    def is_trusted_receipt(value):
+        author = value.get('user') or {}
+        return (author.get('id') == 41898282
+                and author.get('login') == 'github-actions[bot]'
+                and author.get('type') == 'Bot'
+                and type(value.get('id')) is int and value['id'] > 0
+                and value.get('created_at') == value.get('updated_at')
+                and value.get('html_url') ==
+                    f'https://github.com/{REPO}/issues/{number}#issuecomment-{value["id"]}')
+    need(len(existing) <= 1 and all(is_trusted_receipt(v) for v in existing),
+         'untrusted/duplicate phase plan publication collision')
     if existing:
         return dict(status='already-published', parent_issue=number,
-                    url=existing[0].get('html_url'), comment_id=existing[0].get('id'))
+                    url=existing[0]['html_url'], comment_id=existing[0]['id'])
+    # The workflow serializes publication under the same global dispatcher
+    # concurrency group. Verify before and after a write; an unknown network
+    # outcome is never blindly retried, and the next run re-reads comments.
     record = api(f'issues/{number}/comments', dict(body=body))
-    need(record.get('body') == body
-         and record.get('user', {}).get('id') in (41898282, OWNER),
+    need(record.get('body') == body and is_trusted_receipt(record),
          'untrusted publication receipt')
     return dict(status='published-draft-not-admitted', parent_issue=number,
                 comment_id=record.get('id'), url=record.get('html_url'))
