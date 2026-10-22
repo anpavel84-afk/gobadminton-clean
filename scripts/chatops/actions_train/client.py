@@ -44,9 +44,20 @@ class SSH:
 
 def trusted_event(event, name, api):
     need(event.get('repository', {}).get('id') == REPO_ID, 'wrong event repository')
-    if name in ('issues', 'issue_comment'):
+    if name == 'issue_comment':
+        issue, comment = event.get('issue') or {}, event.get('comment') or {}
+        body = comment.get('body')
+        need(event.get('action') == 'created' and 'pull_request' not in issue
+             and type(issue.get('number')) is int and issue['number'] > 0
+             and event.get('sender', {}).get('id') == OWNER
+             and comment.get('user', {}).get('id') == OWNER
+             and isinstance(body, str) and len(body.encode()) <= 32768
+             and (body.startswith('GOBADMINTON_AUTONOMY_V1\\n{')
+                  or body.startswith('GOBADMINTON_TRAIN_RECONCILE_V1\\n{')),
+             'untrusted or irrelevant Issue comment')
+    elif name == 'issues':
         need(event.get('sender', {}).get('id') == OWNER and
-             event.get('action') in ('opened', 'created'), 'untrusted Issue event')
+             event.get('action') == 'opened', 'untrusted Issue event')
     elif name == 'workflow_run':
         r = event['workflow_run']
         fresh = api(f'actions/runs/{r["id"]}')
@@ -150,12 +161,22 @@ def execute(api, ssh, descriptor):
 
 
 def main():
-    need(os.environ.get('GITHUB_REPOSITORY') == REPO and os.environ.get('GITHUB_REF') == 'refs/heads/dev', 'trusted dev controller only')
+    need(os.environ.get('GITHUB_REPOSITORY') == REPO, 'wrong repository')
+    action = sys.argv[1]
+    event_name = os.environ['GITHUB_EVENT_NAME']
+    event_ref = os.environ['GITHUB_REF']
+    # GitHub delivers Issue comments from the default main ref; the trusted
+    # controller still comes from a pinned immutable checkout, not main code.
+    need((action == 'reconcile' and
+          ((event_name == 'workflow_dispatch' and event_ref == 'refs/heads/dev')
+           or (event_name == 'issue_comment' and event_ref == 'refs/heads/main')))
+         or (action == 'stage' and event_name == 'workflow_dispatch'
+             and event_ref == 'refs/heads/dev'), 'untrusted workflow event/ref')
     api = API(os.environ['GH_TOKEN'])
     with SSH() as ssh:
-        if sys.argv[1] == 'reconcile':
-            reconcile(api, ssh, loads(Path(os.environ['GITHUB_EVENT_PATH']).read_bytes()), os.environ['GITHUB_EVENT_NAME'])
-        elif sys.argv[1] == 'stage':
+        if action == 'reconcile':
+            reconcile(api, ssh, loads(Path(os.environ['GITHUB_EVENT_PATH']).read_bytes()), event_name)
+        elif action == 'stage':
             execute(api, ssh, loads(os.environ['TRAIN_OPERATION']))
         else: raise Refused('unknown client operation')
 
