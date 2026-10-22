@@ -1,0 +1,52 @@
+{
+  "schema": "GB_FR2_LIVE_SYNTHETIC_SMOKE_V1",
+  "started_at": "2026-10-22T04:56:33.230Z",
+  "result": "PASS",
+  "checks": [
+    {
+      "name": "actual_capabilities_both",
+      "result": "PASS"
+    },
+    {
+      "name": "send_actual_request",
+      "result": "PASS"
+    },
+    {
+      "name": "same_key_replay_no_duplicate",
+      "result": "PASS"
+    },
+    {
+      "name": "recipient_sees_incoming",
+      "result": "PASS"
+    },
+    {
+      "name": "recipient_accepts",
+      "result": "PASS"
+    },
+    {
+      "name": "both_accepted_lists",
+      "result": "PASS"
+    },
+    {
+      "name": "API_remove_cleanup",
+      "result": "PASS"
+    },
+    {
+      "name": "both_lists_after_remove",
+      "result": "PASS"
+    }
+  ],
+  "sessions_revoked": 2,
+  "real_users_touched": false,
+  "flags_changed": false,
+  "source_changed": false,
+  "before_sha": "865d02c7ea39ae8210172629c3cb8e20c8fa52a8",
+  "synthetic_users": [
+    "d0f00001-0000-4000-8000-000000000001",
+    "d0f00001-0000-4000-8000-000000000002"
+  ],
+  "relationship_cleanup": "API_TERMINAL_STATE",
+  "after_sha": "865d02c7ea39ae8210172629c3cb8e20c8fa52a8",
+  "friendship_id": "aefa0c52-927e-429b-9549-6c7aea03e187",
+  "finished_at": "2026-10-22T04:56:34.088Z"
+}
