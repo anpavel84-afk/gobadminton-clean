@@ -1,0 +1,228 @@
+# V1a venue profile source — #170
+
+- From: assigned GoBadminton source author (Codex), 2026-10-22.
+- To: integrator / NEW independent read-only source QA session.
+- Status: **UNVERIFIED — source candidate only**. No independent QA, admission,
+  acceptance, deployment or full-gallery completion is asserted.
+- Product record: https://github.com/anpavel84-afk/gobadminton-clean/issues/170.
+- Exact base/observed HEAD: `865d02c7ea39ae8210172629c3cb8e20c8fa52a8`;
+  [base source](https://github.com/anpavel84-afk/gobadminton-clean/tree/865d02c7ea39ae8210172629c3cb8e20c8fa52a8).
+- Branch observed: `automation/issue-170`; worktree
+  `/srv/gb-slots/slot1/worktrees/issue-170`, initially clean.
+- Actual candidate commit/permalinks: **NOT PUBLISHED / not available**. Author
+  was explicitly forbidden Git mutations/publication. Never substitute base SHA
+  for candidate SHA. Integrator must publish the actual source/body/handoff as a
+  versioned GitHub record tied to #170 and supply its exact commit/permalinks.
+
+## Assignment and authority record
+
+The supplied immutable `GOBADMINTON_AUTONOMY_V1` task for #170 is the bounded
+source-only assignment, target dev. It allows only the 13 paths below, source/test/
+doc edits and the listed offline author checks. It forbids commits/push/Git
+metadata changes, other models, DB/SQL/migration execution, runtime/services,
+network/dependency installation, automation/config changes, secrets, deployment
+and PROD. It does not authorize another task or acceptance. Prior independent
+QA supplied with the assignment was `{}`. Canonical rules/Owner decisions,
+manifest/bootstrap/module boundaries, ChatOps/onboarding, API docs and the
+V1a/V1b/V3b/V2 backlog snapshot were read from this checkout.
+
+Owner-approved **product scope** is one coherent venue profile + organization
+contacts model/API (V1a). The trigger/projection/validation/compatibility details
+below are **proposed technical source choices** within that scope, not new Owner
+product facts or an acceptance decision. V1b consumer UI, V3b admin UI, V2 real
+contact import and Friends/operational FR-2 stay separate. No frontend work or
+new visual pattern, game/Radar changes, permission expansion or media platform.
+Assigned exclusions are api:venues, db:migrations, schema-contracts. The integrator
+must preserve schema-contracts file occupancy exclusion with #149; this is not a
+product dependency on149. No other slot, private runtime state or forbidden path
+was opened, and no lock/automation metadata was changed by this author.
+
+## Changed artifacts
+
+Only these assigned paths form the candidate; NEW markers distinguish new files:
+
+1. NEW [migration0039](../../apps/api/migrations/0039_venue_public_profile.sql):
+   additive facts/date + venue-owned trigger; historical migrations untouched.
+2. [schema mirror](../../apps/api/src/database/schema.ts): nullable columns and
+   matching nonnegative court-count CHECK.
+3. NEW [shared profile](../../apps/api/src/venues/venue-profile.ts): strict bounded
+   edit schema, complete safe mapper and N-1 per-key SQL projection helper.
+4. [admin DTO](../../apps/api/src/admin/venues.dto.ts): profile on edit only.
+5. [admin venue service](../../apps/api/src/venues/admin-venues.service.ts):
+   profile on list/detail/receipts, existing moderated URL projection, bounded
+   preserve/clear/replace SQL bindings within the existing transaction.
+6. [public venue service](../../apps/api/src/venues/venues.service.ts): same mapper
+   on catalog, alias/detail, fuzzy, proposal/reuse/INSERT RETURNING.
+7. [OpenAPI](../../packages/contracts/openapi.json): VenueProfile/VenueProfileEdit,
+   optional full Venue/AdminVenue extension, strict edit, existing cityName.
+8. NEW [unit tests](../../apps/api/test/unit/venue-profile.test.ts): production
+   validators/mappers/service SQL bindings with typed fakes; actual service
+   output/command fixtures checked against actual OpenAPI using existing AJV.
+9. NEW [DB integration tests](../../apps/api/test/integration/venue-profile.test.ts):
+   authored only; RUN_DB_INTEGRATION=1 gate, synthetic test/local/loopback guard,
+   isolated random databases and cleanup. Never executed by source author.
+10. [migration smoke](../../apps/api/test/integration/migration.smoke.test.ts):
+    ledger0039 plus physical columns/CHECK/trigger; prior assertions retained.
+11. [API policy](../api/API_POLICY.md): public semantics/compatibility/privacy.
+12. [admin API](../api/P4_ADMIN_VENUES.md): strict edit/date/gallery/security.
+13. NEW this handoff: reproducible source record, evidence and next action.
+
+## Field and write semantics
+
+Every current full Venue/AdminVenue response emits:
+
+```json
+{"courtCount":null,"amenities":{"parking":null,"showers":null},"updatedAt":null,"gallery":{"coverage":"cover_only","items":[]}}
+```
+
+`court_count` is nullable PostgreSQL integer with CHECK >=0; DTO bound matches
+0..2147483647. `amenity_parking`/`amenity_showers` are nullable booleans. NULL is
+unknown; 0/false are explicit known facts and survive mapping/binding. No defaults,
+legacy backfill, private-contact copy, data inference from games/names/demo data,
+or real factual import. No established rating/review-count source exists; no
+rating/review/count fields or computations are added.
+
+Existing admin edit only accepts optional `profile`: omission preserves all
+three facts, null clears all three SQL values, complete strict object replaces.
+Object requires courtCount and amenities; amenities requires parking and showers.
+No coercion or unknown/private/read-only keys. updatedAt/gallery are server-owned
+and rejected as input. Create/propose inputs remain unchanged. No arbitrary
+media URL write. Existing admin cookie/exact Origin/CSRF/current venue.manage/
+fresh step-up/CAS409/idempotent replay/catalog locks/identity collision review
+continue. Collision leaves venue/profile/version unchanged and commits only the
+existing audited review metadata. Audit/outbox never contain profile/contact
+payloads. Command/audit/history/outbox/receipt failure rolls all venue changes,
+date and effects back in the existing transaction.
+
+## Public date and gallery limits
+
+The BEFORE INSERT/UPDATE trigger generates DB clock time at insertion or actual
+stored change of name/address/timezone/location/identity discriminator,
+public_contacts, facts, cover binding or credit. PostgreSQL name ordering runs
+it after existing cover-credit reset. Null-safe comparison of stored normalized
+values preserves the old date for equivalent normalized public input, no-op/
+omission, private-only edit, provenance/version/lifecycle-only write and replay.
+Legacy rows retain NULL until a tracked content change. Trigger ignores supplied
+dates; no private contact_updated_at/generic updated_at is reused.
+
+Meaning: last recorded stored public-profile **content edit since0039**, not
+verification, factual freshness/import time or every dynamic moderation visibility
+change. A moderation-decision-only change does not touch the venue date; an
+inactive actor's existing retirement trigger that clears a cover does change
+stored public content and therefore the date. Replay returns its stored snapshot.
+
+Gallery always says coverage=cover_only, with zero or one actual current owned
+cover returned by venue_cover_url and classified photo with nonempty text and
+safe HTTPS attribution, retaining its credit. Denied moderation/inactive actor/
+venue retirement/no cover/replacement/removal/logo/illustration/unclassified or
+unsafe credit means no eligible photo. Existing cover behavior is retained.
+No generated pictures, gallery total, rating, review count or full-gallery claim.
+Empty items do not say a complete gallery was checked. A real multi-photo gallery
+is an explicit residual of the single-cover platform, not implemented here.
+
+## Preserved privacy and compatibility
+
+Public organization contacts come **only** from public_contacts through existing
+#142 validator/reader. Phone: trim after rejecting controls, 7–15 ASCII digits,
+max40 chars and existing ASCII punctuation, no country-code guessing. URL:
+WHATWG HTTP(S)/IDN serialization, canonical href length<=300, no controls,
+backslash, credentials or nondefault port. Messengers: unique kinds, HTTPS
+whitelist t.me/wa.me/vk.com and non-root normalized path. Tolerant reads null
+invalid neighbors/filter invalid messengers. Private contactPhone/contactWebsite/
+bookingNote are never republished. #82 remains active owner/manager or confirmed
+participant of **THAT game only**; all other viewers omit private keys. No
+Game/VenueSummary/Unified/Radar schema/projection changes.
+
+Per-key to_jsonb extraction makes schema0037 missing columns NULL without SQL
+parse-time new-column references. Catalog lifecycle/order/limit and canonical
+alias resolution are preserved. Old API explicit SQL still works on additive
+schema; old responses/receipts may omit profile. AdminVenue.cityName, already
+emitted, is now declared under additionalProperties:false and retained.
+
+Current generators cover Game/Participation/CreateGame-related, Unified* and
+Friendship* closures, excluding full Venue/AdminVenue/AdminVenueCommand. No new
+generator or fabricated generated edit. Runtime-vs-OpenAPI AJV assertions cover
+this currently ungenerated surface, representative actual service results and
+strict edit fixtures, including negative types/bounds/private/read-only keys.
+
+## Authored coverage, not executed evidence
+
+Unit source exercises validation and safe/tolerant mapping, explicit 0/false,
+unknown/null values, current photo eligibility/unsafe attribution, #142 phone/URL/
+messenger regressions; typed service fakes check catalog/canonical aliases/fuzzy/
+reuse/INSERT RETURNING, shared projections, admin list/detail/edit receipt,
+omission/null/replacement, CAS/collision no-write and metadata-only audit/outbox.
+AJV loads the actual updated OpenAPI and validates actual mapped service results
+and admin edit fixtures, plus negative cases and optional old response bodies.
+
+New integration suite is **AUTHORED ONLY / NOT EXECUTED**. It describes fresh
+schema/no-default/check/bounds and forged-date prevention; schema0037 public reads;
+0038→0039 upgrade seeded with legacy public and private contacts, legacy NULL
+date, real ledger-runner rerun preservation, old API SQL on additive schema;
+admin cookie/Origin/CSRF/step-up/current-role revocation before replay, version
+and collision no-write; normalized/no-op/private/lifecycle/public-content date
+cases; real moderated photo/credit, replacement/removal/denial/inactive actor/
+retirement; command/audit/history/outbox/receipt failure atomic rollback. Existing
+#82/#142 venue-contacts DB cases remain unchanged and must also run in hosted CI.
+No authored case or skip is independent QA or a PASS.
+
+## Offline author command evidence
+
+All commands were invoked from repository root with `COREPACK_ENABLE_NETWORK=0`.
+No installation or network fallback was attempted. At this author environment,
+Corepack cannot find locally available pnpm10.18.0. Each pnpm command below
+exited1 before the requested compiler/linter/test/check could execute, with:
+
+```text
+! Corepack is about to download https://registry.npmjs.org/pnpm/-/pnpm-10.18.0.tgz
+Network access disabled by the environment; can't reach https://registry.npmjs.org/pnpm/-/pnpm-10.18.0.tgz
+```
+
+| Command (each prefixed COREPACK_ENABLE_NETWORK=0) | Exit / disposition |
+| --- | --- |
+| `pnpm --filter @gobadminton/api exec tsc -p tsconfig.json --noEmit` | 1; NOT_TESTED: unavailable offline pnpm, compiler never started |
+| `pnpm --filter @gobadminton/api run lint` | 1; NOT_TESTED: same Corepack reason, linter never started |
+| `RUN_DB_INTEGRATION=0 pnpm --filter @gobadminton/api exec vitest run --project unit --no-cache test/unit/venue-profile.test.ts` | 1; NOT_TESTED: same reason, unit/AJV tests never started |
+| `RUN_DB_INTEGRATION=0 pnpm --filter @gobadminton/api exec vitest run --project integration --no-cache test/integration/venue-contacts.test.ts` | 1; NOT_TESTED: same reason, existing ungated offline cases never started; DB cases not executed |
+| `pnpm run check:contracts` | 1; NOT_TESTED: same reason; contract check never started |
+| `python3 scripts/check_foundation.py` | Initial exit1 while this referenced handoff was not yet created; final exit0 after file creation |
+| `node packages/contracts/scripts/generate-game-types.mjs` | 0; `Game types verified: .../packages/contracts/src/game.generated.ts` |
+| `node packages/contracts/scripts/generate-unified-types.mjs` | 0; `Unified types verified: .../packages/contracts/src/unified.generated.ts` |
+| `node packages/contracts/scripts/generate-friendship-types.mjs` | 0; `Friendship types verified: .../packages/contracts/src/friendship.generated.ts` |
+
+All three generators ran individually with their default read-only behavior,
+WITHOUT --write, and verified byte equality with current generated source.
+These successful narrow checks do not substitute for the unexecuted contract,
+compiler, lint, tests, independent QA or release gates.
+
+Final Foundation invocation exited0:
+
+```text
+FOUNDATION STATIC CHECK: PASS (227 Markdown files, 168 draft API operations)
+Scope: local paths, required files, JSON/local refs and bounded contract rules only.
+Not runtime, full OpenAPI validation, independent QA, deployment or store approval.
+```
+
+NOT_TESTED by assignment: RUN_DB_INTEGRATION=1, SQL/migrations/real DB, runtime,
+full source/database/restore/actual old-image compatibility gates, hosted CI,
+DEV/PROD effects and independent QA. No gate was skipped by weakening its source.
+Existing Actions/integrator must run unchanged full gates against the actual
+candidate before release, including all new and existing integration suites.
+
+## Rollback and next bounded action
+
+Application rollback retains migration0039 additive columns, data and trigger;
+old API explicit SQL continues. Do not run destructive down migrations, erase
+facts/public contacts or copy private contacts. Historical migrations remain
+immutable. Pre-publication source can be reverted only within these assigned
+paths by the authorized integrator after preserving this candidate; do not
+reset/overwrite unrelated concurrent work.
+
+Next action: integrator preserves this exact uncommitted source as a versioned
+GitHub candidate tied to #170, publishes the immutable task body + this handoff
+with actual candidate SHA/permalinks, and hands that exact candidate to a NEW
+independent read-only source QA session. QA never implements fixes. Integrator/
+hosted CI then runs the required unchanged checks, full disposable DB/restore
+and actual old-image gates, attaching evidence to that revision. Fix findings
+only under the bounded assignment; do not advance to V1b/V3b/V2/FR-2 or declare
+admission/acceptance/DEV release from this handoff. Owner is not the file courier.
