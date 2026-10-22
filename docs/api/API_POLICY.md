@@ -337,3 +337,91 @@ These are public organization contacts, distinct from private `contact_phone`,
 `contact_website`, `booking_note`. Private game-detail fields remain available
 only to an active owner/manager or a confirmed participant of that game. Game
 contracts and authorization are unchanged. Audit/outbox omit contact values.
+
+### V1a venue public profile — #170, source candidate UNVERIFIED
+
+Owner-approved product scope is V1a: one venue profile and organization contacts
+model/API. The bounded technical implementation below is proposed source, not
+independent QA, admission, acceptance or deployment. Base:
+`865d02c7ea39ae8210172629c3cb8e20c8fa52a8`. Evidence, remaining gates and publication
+responsibilities: [source handoff](../handoffs/V1a-venue-profile-source.md).
+V1b consumer presentation, V3b admin UI, V2 real import and operational FR-2 remain
+separate assignments. No Game/VenueSummary/Unified/Radar schema or flow changes.
+
+Full `Venue` and `AdminVenue` have optional-for-rollout `profile`; the current
+server emits the complete object on catalog, canonical alias/detail, fuzzy
+candidates, proposal/reuse/INSERT RETURNING and existing privileged receipts:
+
+```json
+{"courtCount":null,"amenities":{"parking":null,"showers":null},"updatedAt":null,"gallery":{"coverage":"cover_only","items":[]}}
+```
+
+`court_count` is nullable PostgreSQL integer, CHECK >=0, with matching DTO range
+0..2147483647. `amenity_parking` and `amenity_showers` are nullable booleans.
+Unknown facts are NULL, never inferred from names, games or demo data; known
+zero courts and false amenities survive. Migration0039 adds these columns and
+nullable `public_profile_updated_at` with no defaults/backfill/private data copy.
+No factual venue import or rating/review-count source is established here; no
+ratings, fake counts, generated photos or numeric placeholders are emitted.
+
+Only existing admin `edit.fields.profile` accepts writes: omission preserves all
+three facts; null clears all three to SQL NULL; object replaces them. Object
+requires courtCount and amenities; amenities requires parking and showers. Both
+levels reject unknown/private/read-only keys and coercion. `updatedAt` and
+`gallery` are server-owned, rejected as edit input. Create/propose inputs and
+private contact behavior are preserved; no arbitrary media URL input or endpoint.
+`AdminVenue.cityName`, already emitted, is now explicitly declared in OpenAPI.
+
+The venue-owned BEFORE trigger sets DB time on INSERT and an actual stored
+change of name/address/timezone/location/identity discriminator, public_contacts,
+the three facts, cover binding or cover credit. It compares persisted values
+null-safely after cover-credit reset, so normalized equivalent public contact
+input, omit/no-op, private-only, provenance/version-only and lifecycle-only writes
+preserve the date. Legacy rows stay NULL until a tracked write. Supplied dates
+cannot override the trigger; private contact_updated_at and generic updated_at
+are never used as public dates. The date means last recorded **stored public
+content edit since migration**, not verification, factual freshness or import
+time. Dynamic moderation visibility changes alone do not update the venue;
+actor retirement that actually clears a cover is a tracked content change.
+Authorized replay returns its original receipt/date without another write.
+Profile/contact/date, audit/history/outbox and receipt roll back in one existing
+admin transaction on command or audit failure; payloads contain metadata only.
+
+Gallery coverage is always `cover_only`: at most one actual current
+`venue_cover_url` with kind=photo, nonempty photo credit and safe HTTPS attribution.
+The existing credit is retained unchanged only if the emitted attribution itself
+passes URI-format validation as well as HTTPS safety checks. A WHATWG-parseable
+value containing a literal space or another invalid URI character fails closed;
+the mapper does not silently rewrite its credit. Denied moderation, inactive
+cover actor, retired
+venue, absent/replaced/removed cover, logo, illustration, unclassified or unsafe
+credit yields empty items. Existing `cover` response behavior is preserved.
+Empty items never mean that a full gallery was inspected. The single-cover
+platform cannot supply a real multi-photo gallery; that remains an explicit
+residual, with no full-gallery completion claim or new media infrastructure.
+
+Public contacts still come exclusively from `public_contacts` and the existing
+#142 strict validator/tolerant reader: phone trim with ASCII 7–15 digit/40-character
+bounds; pre-trim control/backslash rejection; WHATWG HTTP(S)/IDN href serialization
+with 300-character normalized bound, no credentials/nondefault ports; unique
+HTTPS messenger whitelist t.me/wa.me/vk.com and non-root normalized path. Do not
+guess country codes or republish contactPhone/contactWebsite/bookingNote.
+The #82 private game-detail rule remains current active owner/manager or confirmed
+participant of **that game** only; no public profile permission expands it.
+AdminSessionCookie, exact Origin/CSRF, current venue.manage, fresh step-up,
+expectedVersion409, authorized replay, catalog locks and collision review remain.
+Identity collision returns unchanged venue/profile/version plus reviewRequired;
+only the existing duplicate-review metadata is committed.
+
+Compatibility: public profile projections use per-key `to_jsonb` extraction, so
+schema0037 missing columns return null without parse-time new-column references.
+Old API SQL continues on the new additive schema; old bodies/receipts may omit
+profile. Full Venue/AdminVenue/AdminVenueCommand are outside current generated
+Game/Participation/CreateGame, Unified* and Friendship* reference closures;
+existing generated files must remain byte-identical under default read-only
+scripts. Authored AJV tests check actual service outputs and edit fixtures against
+OpenAPI, including negative cases. An actual old-image gate, full source/DB/restore
+gates and independent read-only QA on the published candidate remain required;
+authored/skipped cases and author checks are not independent QA or PASS.
+Application rollback retains additive schema, data and trigger; no destructive
+down migration or private data removal is part of rollback.

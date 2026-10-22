@@ -161,7 +161,17 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
         "0036_venue_contacts",
         "0037_venue_cover_credit",
         "0038_public_venue_contacts",
+        "0039_venue_public_profile",
       ]);
+      const profileColumns = await pool.query("SELECT column_name,data_type,is_nullable,column_default FROM information_schema.columns WHERE table_schema='public' AND table_name='venues' AND column_name IN ('court_count','amenity_parking','amenity_showers','public_profile_updated_at') ORDER BY column_name");
+      expect(profileColumns.rows).toEqual([
+        {column_name:"amenity_parking",data_type:"boolean",is_nullable:"YES",column_default:null},
+        {column_name:"amenity_showers",data_type:"boolean",is_nullable:"YES",column_default:null},
+        {column_name:"court_count",data_type:"integer",is_nullable:"YES",column_default:null},
+        {column_name:"public_profile_updated_at",data_type:"timestamp with time zone",is_nullable:"YES",column_default:null},
+      ]);
+      expect((await pool.query("SELECT conname FROM pg_constraint WHERE conrelid='venues'::regclass AND conname='venues_court_count_check'")).rows).toHaveLength(1);
+      expect((await pool.query("SELECT tgname FROM pg_trigger WHERE tgrelid='venues'::regclass AND tgname='venue_public_profile_change' AND NOT tgisinternal AND tgenabled='O'")).rows).toHaveLength(1);
       const publicContactsColumn = await pool.query<{data_type:string;is_nullable:string;column_default:string|null}>(
         "SELECT data_type,is_nullable,column_default FROM information_schema.columns WHERE table_name='venues' AND column_name='public_contacts'",
       );

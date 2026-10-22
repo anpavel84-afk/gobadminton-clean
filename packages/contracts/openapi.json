@@ -16207,6 +16207,9 @@
           },
           "publicContacts": {
             "$ref": "#/components/schemas/PublicVenueContacts"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/VenueProfile"
           }
         }
       },
@@ -24133,6 +24136,9 @@
                   },
                   "publicContacts": {
                     "$ref": "#/components/schemas/PublicVenueContacts"
+                  },
+                  "profile": {
+                    "$ref": "#/components/schemas/VenueProfileEdit"
                   }
                 },
                 "required": [
@@ -24384,6 +24390,13 @@
           },
           "publicContacts": {
             "$ref": "#/components/schemas/PublicVenueContacts"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/VenueProfile"
+          },
+          "cityName": {
+            "type": "string",
+            "description": "Existing city display name, retained in list/detail/command responses."
           }
         },
         "required": [
@@ -25090,6 +25103,163 @@
             }
           }
         }
+      },
+      "VenueProfileEdit": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "additionalProperties": false,
+        "required": [
+          "courtCount",
+          "amenities"
+        ],
+        "properties": {
+          "courtCount": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 2147483647,
+            "description": "NULL unknown; 0 is a known fact. PostgreSQL signed integer bound."
+          },
+          "amenities": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "parking",
+              "showers"
+            ],
+            "properties": {
+              "parking": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "showers": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        "description": "Admin edit only. Omission preserves all facts; null clears all three; complete strict object replaces facts. Unknown/private/read-only keys rejected. No media URL writes."
+      },
+      "VenueProfile": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "courtCount",
+          "amenities",
+          "updatedAt",
+          "gallery"
+        ],
+        "properties": {
+          "courtCount": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 2147483647,
+            "description": "NULL unknown; 0 is a known fact. PostgreSQL signed integer bound."
+          },
+          "amenities": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "parking",
+              "showers"
+            ],
+            "properties": {
+              "parking": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "showers": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              }
+            }
+          },
+          "updatedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "readOnly": true,
+            "description": "DB-generated last recorded stored public content edit since migration0039; legacy NULL until tracked write. Not verification/freshness/import time or every moderation visibility change. Never private contact_updated_at/generic updated_at."
+          },
+          "gallery": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "coverage",
+              "items"
+            ],
+            "properties": {
+              "coverage": {
+                "type": "string",
+                "const": "cover_only"
+              },
+              "items": {
+                "type": "array",
+                "maxItems": 1,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "url",
+                    "credit"
+                  ],
+                  "properties": {
+                    "url": {
+                      "type": "string",
+                      "pattern": "^/v1/media/venue-covers/[a-f0-9]{64}\\.png$"
+                    },
+                    "credit": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "kind",
+                        "text",
+                        "url"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "const": "photo"
+                        },
+                        "text": {
+                          "type": "string",
+                          "maxLength": 120,
+                          "pattern": "^Фото: .+"
+                        },
+                        "url": {
+                          "type": "string",
+                          "format": "uri",
+                          "pattern": "^https://",
+                          "maxLength": 300
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "readOnly": true
+          }
+        },
+        "description": "Complete server projection. Unknown facts remain null, false/0 survive. Optional on Venue/AdminVenue during rollout/old receipts; current server emits all keys. Gallery has at most one current eligible moderated photo with safe HTTPS attribution; empty never asserts full gallery inspection/completion. No rating or review/count source."
       }
     }
   }
