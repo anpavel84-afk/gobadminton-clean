@@ -23,7 +23,9 @@ const GeographicRadarMap = dynamic(() => import("./GeographicRadarMap")
   .catch(() => RadarMapModuleError), { ssr: false, loading: RadarMapModuleLoading });
 export function RadarPage({ sharedMap, resumeCamera = false }: { sharedMap?: LibreMap; resumeCamera?: boolean } = {}) {
   const { view: session } = useRadarSession(); const { controller, view } = useUnifiedDirectory();
-  const [failed, setFailed] = useState(false); const [listOpen, setListOpen] = useState(false); const [expanded, setExpanded] = useState(false);
+  const [failed, setFailed] = useState(false); const [listOpen, setListOpen] = useState(false); const [expandedPlayer, setExpandedPlayer] = useState<string | null>(null);
+  const expanded = expandedPlayer !== null && expandedPlayer === view.selected;
+  function setExpanded(value: boolean) { setExpandedPlayer(value ? view.selected : null); }
   const [candidate, setCandidate] = useState(false); const sheet = useRef<HTMLElement>(null); const touchY = useRef<number | null>(null); const trigger = useRef<HTMLElement | null>(null);
   const snapshot = view.snapshot;
   // Keep the map marker identity stable between one-second header ticks;
@@ -73,11 +75,11 @@ export function RadarPage({ sharedMap, resumeCamera = false }: { sharedMap?: Lib
   useEffect(() => {
     if (sharedMap && candidate && controller && snapshot && !view.mapPage && !view.busy) void controller.map();
   }, [candidate, controller, snapshot?.query.queryRef, view.mapPage, view.busy]);
-  useEffect(() => { if (!sharedMap) return; if (view.selected) { setExpanded(false); } else { if (trigger.current?.isConnected) trigger.current.focus(); } }, [view.selected]);
+  useEffect(() => { if (!sharedMap) return; if (view.selected) { setExpanded(false); } else { if (trigger.current) restoreTriggerFocus(); } }, [view.selected]);
   useEffect(() => { if (listOpen) sheet.current?.focus(); }, [listOpen]);
   useEffect(() => {
     if (!sharedMap || !view.selected) return;
-    window.history.pushState({ ...window.history.state, gbRadarPreview: true }, "", window.location.href);
+    if (!window.history.state?.gbRadarPreview) window.history.pushState({ ...window.history.state, gbRadarPreview: true }, "", window.location.href);
     const back = () => { controller?.close(); setListOpen(false); setExpanded(false); };
     window.addEventListener("popstate", back);
     return () => window.removeEventListener("popstate", back);
@@ -100,8 +102,16 @@ export function RadarPage({ sharedMap, resumeCamera = false }: { sharedMap?: Lib
     window.addEventListener("gb-radar-map-list", openList);
     return () => { window.removeEventListener("gb-radar-map-list", openList); canvas.removeEventListener("keydown", key); sharedMap.off("dragend", next); canvas.removeAttribute("aria-description"); };
   }, [sharedMap, controller, activationId]);
+  useEffect(() => {
+    controller?.close(); setExpanded(false);
+  }, [controller, activationKey, filterKey, cityId, session.me?.id, session.me?.csrfToken]);
+  useEffect(() => () => { controller?.close(); }, [controller]);
   const mapped = candidate && !failed && controller && session.me;
-  function close() { if (window.history.state?.gbRadarPreview) window.history.back(); controller?.close(); setListOpen(false); setExpanded(false); requestAnimationFrame(() => { if (trigger.current?.isConnected) trigger.current.focus({ preventScroll: true }); }); }
+  function restoreTriggerFocus() {
+    const target = trigger.current?.isConnected ? trigger.current : sharedMap?.getCanvas();
+    target?.focus({ preventScroll: true });
+  }
+  function close() { if (window.history.state?.gbRadarPreview) window.history.back(); controller?.close(); setListOpen(false); setExpanded(false); requestAnimationFrame(restoreTriggerFocus); }
   const mapLayer = mapped && sharedMap ? <GeographicRadarMap resumeCamera={resumeCamera} sharedMap={sharedMap} controller={controller} rows={session.phase === "active" && session.confirmedOn && !session.pendingStop ? safeMapPins : []} selected={view.selected} onSelect={row => { trigger.current = document.activeElement as HTMLElement; setListOpen(false); void controller.select(row); }} onUnavailable={() => setFailed(true)} /> : null;
   if (!sharedMap) return <main id="gb-main" className="gb-consumer g2-radar-map gb-shared-fullscreen" aria-label="Карта игр, площадок и Radar"><GamesMapViewport fullscreen><GamesMapView cityId={cityId ?? MOSCOW_BUNDLE.cityId} day="" /></GamesMapViewport><Link className="gb-map-return" href="/players" onClick={() => window.dispatchEvent(new Event("gb-map-return"))}><span aria-hidden="true">←</span>К списку</Link><div className="gb-map-radar"><RadarStatusAffordance mapControls /></div></main>;
   return <div className="gb-consumer gb-radar-layer fr3" aria-label="Карта участников Radar">
@@ -110,9 +120,9 @@ export function RadarPage({ sharedMap, resumeCamera = false }: { sharedMap?: Lib
     {session.confirmedOn && session.status?.state === "active" && !session.status.coarseCenter && <p role="status" className="gb-map-position-unavailable">Опубликованная геопозиция недоступна. Площадки города остаются на карте.</p>}
     {mapped && <><div hidden className="g2-map-summary gb-map-layer-summary"><button aria-expanded={listOpen} aria-controls="g2-map-panel" onClick={() => { trigger.current = document.activeElement as HTMLElement; if (!listOpen) controller.close(); setListOpen(!listOpen); }}>{view.busy ? "Загружаем игроков…" : `На карте: ${view.pins.length} из ${snapshot?.totals.radarTotal ?? 0}`}</button><small>Приблизительные геопозиции. {view.mapPage?.hasMore ? "Показана часть участников." : ""}</small>{view.mapPage?.nextMapCursor && <Button variant="outline" disabled={view.busy} onClick={() => void controller.map(true)}>Следующие точки</Button>}{view.notice && <small role="status">{view.notice}</small>}</div>
       {!sharedMap && !view.busy && !view.pins.length && <p className="g2-map-empty" role="status">{view.stale || !snapshot ? "Обновляем участников Radar. Карта города доступна." : "Нет участников с геопозицией. Обычные профили доступны в списке."}</p>}
-      {(listOpen || view.selected) && <aside id="g2-map-panel" ref={sheet} tabIndex={-1} aria-label="Игроки на карте" className={`g2-map-panel ${expanded || listOpen ? "is-expanded" : ""}`} onKeyDown={e => { if (e.key === "Escape" && !(e.target as Element).closest("dialog")) { e.stopPropagation(); close(); } }}>
-        <header onTouchStart={e => { touchY.current = e.touches[0]?.clientY ?? null; }} onTouchEnd={e => { const y = e.changedTouches[0]?.clientY; if (touchY.current !== null && y !== undefined) { if (y - touchY.current > 70) setExpanded(false); if (touchY.current - y > 70) setExpanded(true); } touchY.current = null; }}><button aria-label={expanded ? "Свернуть карточку" : "Развернуть карточку"} aria-expanded={expanded} className="g2-sheet-handle" onClick={() => setExpanded(!expanded)}>—</button><CloseButton aria-label="Закрыть карточку игрока" onClick={close} /></header>
-        {view.selected ? <UnifiedPlayerPreview dialog onClose={close} /> : <><h2>Игроки на карте</h2>{view.pins.map(row => <button className="g2-map-list-row" key={row.publicPlayerId} onClick={() => { trigger.current = document.activeElement as HTMLElement; setListOpen(false); void controller.select(row); }}><strong>{row.player.displayName}</strong><small>{distanceText(row.radar?.distance ?? null) ?? "Расстояние неизвестно"}</small></button>)}</>}
+      {activationId && controller.matches(queryFilters, activationKey) && (listOpen || view.selected) && <aside id="g2-map-panel" ref={sheet} tabIndex={-1} aria-label="Игроки на карте" className={`g2-map-panel ${expanded || listOpen ? "is-expanded" : ""}`} onKeyDown={e => { if (e.key === "Escape" && !(e.target as Element).closest("dialog")) { e.stopPropagation(); close(); } }}>
+        <header onTouchStart={e => { touchY.current = e.touches[0]?.clientY ?? null; }} onTouchEnd={e => { const y = e.changedTouches[0]?.clientY; if (touchY.current !== null && y !== undefined) { if (y - touchY.current > 70) setExpanded(false); if (touchY.current - y > 70) setExpanded(true); } touchY.current = null; }}><button aria-label={expanded ? "Свернуть карточку" : "Развернуть карточку"} aria-expanded={expanded} aria-controls="unified-player-detail" className="g2-sheet-handle" onClick={() => setExpanded(!expanded)}>—</button><CloseButton aria-label="Закрыть карточку игрока" onClick={close} /></header>
+        {view.selected ? <UnifiedPlayerPreview onMap expanded={expanded} onToggle={() => setExpanded(!expanded)} onClose={close} /> : <><h2>Игроки на карте</h2>{view.pins.map(row => <button className="g2-map-list-row" key={row.publicPlayerId} onClick={() => { trigger.current = document.activeElement as HTMLElement; setListOpen(false); void controller.select(row); }}><strong>{row.player.displayName}</strong><small>{distanceText(row.radar?.distance ?? null) ?? "Расстояние неизвестно"}</small></button>)}</>}
       </aside>}
     </>}
   </div>;

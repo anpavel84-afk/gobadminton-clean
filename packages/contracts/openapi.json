@@ -20786,7 +20786,8 @@
         "required": [
           "player",
           "proximityBand",
-          "radar"
+          "radar",
+          "upcomingGames"
         ],
         "properties": {
           "player": {
@@ -20797,6 +20798,13 @@
           },
           "radar": {
             "$ref": "#/components/schemas/UnifiedPreviewRadar"
+          },
+          "upcomingGames": {
+            "type": "array",
+            "maxItems": 3,
+            "items": {
+              "$ref": "#/components/schemas/UnifiedUpcomingGame"
+            }
           }
         }
       },
@@ -25085,6 +25093,90 @@
                 "url": {
                   "type": "string",
                   "description": "Canonical HTTPS href; max 300 after serialization."
+                }
+              }
+            }
+          }
+        }
+      },
+      "UnifiedUpcomingGame": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "title",
+          "activityKind",
+          "startsAt",
+          "endsAt",
+          "timezone",
+          "cover",
+          "venue"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string"
+          },
+          "activityKind": {
+            "type": "string",
+            "enum": [
+              "regular",
+              "trainer_led"
+            ]
+          },
+          "startsAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "endsAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "timezone": {
+            "type": "string"
+          },
+          "cover": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "uploadedUrl"
+            ],
+            "properties": {
+              "uploadedUrl": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          "venue": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "cover"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "cover": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "uploadedUrl"
+                ],
+                "properties": {
+                  "uploadedUrl": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
                 }
               }
             }
