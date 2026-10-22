@@ -1,0 +1,60 @@
+--- autonomous_issues.orig.py	2026-10-19 02:50:48.682741032 -0300
++++ autonomous_issues.patched.py	2026-10-19 02:51:37.402741032 -0300
+@@ -57,6 +57,11 @@
+         f'Run pnpm --filter @gobadminton/{package} run {command}'
+         for command in ('typecheck', 'lint', 'test:unit')}
+ _API_NEXT = 0.0
++TASK_FIELDS = {'schema', 'target', 'kind', 'goal', 'acceptance', 'allowed_paths', 'max_attempts'}
++# PM V1 (stage 0): optional, validated, RECORDED ONLY. Claiming/execution ignore them.
++OPTIONAL_FIELDS = {'depends_on', 'locks', 'model', 'effort'}
++LOCK_RE = re.compile(r'[a-z0-9][a-z0-9-]{0,23}(:[a-z0-9][a-z0-9-]{0,23}){0,2}')
++MODELS = {'gpt-6.1-sol': {'high', 'medium'}}  # closed registry approved by the Owner
+ 
+ 
+ class QuotaWait(Exception):
+@@ -131,6 +136,27 @@
+     return any(path.startswith(p[:-2]) if p.endswith('/**') else path == p for p in allowed)
+ 
+ 
++def check_links(task, issue_number):
++    """Validate the OPTIONAL PM V1 fields; raises Hold on any problem."""
++    if 'depends_on' in task:
++        d = task['depends_on']
++        require(isinstance(d, list) and len(d) <= 8 and len(set(d)) == len(d)
++                and all(type(x) is int and x > 0 and x != issue_number for x in d),
++                'invalid depends_on')
++    if 'locks' in task:
++        locks = task['locks']
++        require(isinstance(locks, list) and 1 <= len(locks) <= 8
++                and len(set(locks)) == len(locks)
++                and all(isinstance(x, str) and (x == 'global' or LOCK_RE.fullmatch(x))
++                        for x in locks), 'invalid locks')
++        require('global' not in locks or locks == ['global'], 'global lock must be alone')
++    require(('model' in task) == ('effort' in task), 'model and effort go together')
++    if 'model' in task:
++        require(isinstance(task['model'], str) and task['model'] in MODELS
++                and isinstance(task['effort'], str) and task['effort'] in MODELS[task['model']],
++                'model/effort not in registry')
++
++
+ def validate_issue(issue, since, now=None):
+     require('pull_request' not in issue and issue.get('state') == 'open', 'not an open Issue')
+     require(type(issue.get('user', {}).get('id')) is int
+@@ -146,8 +172,7 @@
+     now = now or dt.datetime.now(dt.timezone.utc)
+     require(since <= created <= now and now - created <= dt.timedelta(days=7), 'stale Issue')
+     task = loads(raw)
+-    require(isinstance(task, dict) and set(task) == {
+-        'schema', 'target', 'kind', 'goal', 'acceptance', 'allowed_paths', 'max_attempts'},
++    require(isinstance(task, dict) and TASK_FIELDS <= set(task) <= TASK_FIELDS | OPTIONAL_FIELDS,
+         'unexpected task fields')
+     require(type(task['schema']) is str and task['schema'] == MARKER
+             and task['target'] == 'dev' and task['kind'] == 'source_only', 'task scope')
+@@ -156,6 +181,7 @@
+     require(isinstance(task['acceptance'], str) and 1 <= len(task['acceptance']) <= 6000,
+             'invalid acceptance')
+     patterns(task['allowed_paths'])
++    check_links(task, issue['number'])  # PM V1: optional links, recorded only
+     canary_paths = set(task['allowed_paths']) & set(CANARIES.values())
+     if canary_paths or issue['number'] in CANARIES:
+         require(task['allowed_paths'] == [CANARIES.get(issue['number'])], 'canary scope')

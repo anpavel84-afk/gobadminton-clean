@@ -1,0 +1,2 @@
+GOBADMINTON_PARK_V1
+{"schema": "GOBADMINTON_PARK_V1", "issue": 90, "head": "dc1d1b9fe9460ed6fd734c95ac3e2a9a19220c90", "attempt": 3, "reason": "M1c QA FAIL on dc1d1b9f; attempts 3 of 3 exhausted. Parked to free the slot; work continues in narrower successor M1e.", "allow_successors": []}

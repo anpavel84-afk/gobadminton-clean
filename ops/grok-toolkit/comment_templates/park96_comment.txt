@@ -1,0 +1,2 @@
+GOBADMINTON_PARK_V1
+{"schema": "GOBADMINTON_PARK_V1", "issue": 96, "head": "765aebc247269012615f69ed22ba8d5412aeffb3", "attempt": 3, "reason": "M0b QA FAIL on 765aebc2 (PR 97) after RESUME ci_fix of TS2339 (CI green on attempt 3); attempts 3 of 3 exhausted. Parked by Owner; replaced by narrow successor M0c (map lifecycle core).", "allow_successors": []}
