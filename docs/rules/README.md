@@ -1,11 +1,11 @@
-# Реестр правил GoBadminton CLEAN
+# Канонические правила GoBadminton CLEAN
 
-Организация разработки, PMA, модели, автономия, QA и DEV определяются только [ENGINEERING_OPERATING_MODEL.md](ENGINEERING_OPERATING_MODEL.md). Хранение и передача — [PROJECT_RECORD_POLICY.md](PROJECT_RECORD_POLICY.md). Корневой [AGENTS.md](../../AGENTS.md) — обязательная точка загрузки, а не другая версия регламента.
+**[ENGINEERING_OPERATING_MODEL.md](ENGINEERING_OPERATING_MODEL.md) — единственная полная эталонная архитектура системы разработки и регламент её ролей.** Включает PMA из ChatGPT/Grok, техническое планирование, выбор моделей, Astra FAIL diagnosis, ограниченную доработку, независимую QA, CI/DEV и границы PROD.
 
-Предметные решения/контракты перечислены в [индексе документации](../README.md) и читаются по scope задачи. Их старые описания очереди, execution host и статуса установки не заменяют принятый операционный регламент.
+[AGENTS.md](../../AGENTS.md) — обязательный вход, не альтернативная версия. [PROJECT_RECORD_POLICY.md](PROJECT_RECORD_POLICY.md) — узкая политика хранения и передачи. [Предметные документы](../README.md) читаются по scope и сохраняют свои бизнес/privacy-контракты.
 
-Cursor/GitHub инструкции, governance onboarding и ChatOps checklist ссылаются на один текст. Внешний launcher или недоступный Hub не требуется для восстановления контекста CLEAN и не создаёт вторую очередь.
+Cursor/GitHub instructions, governance onboarding и ChatOps checklist направляют к одному полному тексту. Внешний launcher/Hub не является обязательной проектной памятью и не создаёт вторую очередь. Реальная поддержка каждого интерфейса и adapter проверяется отдельно.
 
-Проверенные runtime facts хранятся отдельно от правил с временем, версией и evidence. Старый handoff, working draft, первоначальный commissioning и архивный repository URL не являются действующим разрешением.
+Принятая ревизия подаётся доверенным launcher и фиксируется в evidence; ссылки и наличие файла не доказывают фактическую загрузку. Правила из candidate не могут ослабить его собственную QA.
 
-Порядок принятия изменений и пределы supersession — раздел 11 регламента. [Карта ревизии](../workbench/rules-revision-20261022/REVIEW.md).
+История, dated handoffs и старые очереди сохраняются как provenance, не runtime authority. Порядок изменения эталона и приёмки — разделы 11–12 самого документа. [Инструкция PMA](../prompts/pma-adopt-engineering-rules-20261022.md).
