@@ -1,5 +1,58 @@
 # Venue popup owner fixes — source handoff, refs #156
 
+## CI repair — current source record
+
+- From: source author (Codex).
+- To: integrator / independent QA.
+- Date: 2026-10-22.
+- Status: READY_FOR_REVIEW_SOURCE_ONLY; CI_FAILURE_NOT_REPRODUCED / NOT_TESTED because local dependencies are absent. No independent QA, visual acceptance, merge or deployment verdict is issued.
+- Exact repair base / unchanged HEAD: `6f8b0cf318db7cd5a37330fd8bba2ba51755659b`, branch `automation/issue-156`; initial tracked diff empty. Original implementation base remains `4977074ee7b45ea612dde592b88b354d99839aea`.
+- Candidate supplied by assignment: https://github.com/anpavel84-afk/gobadminton-clean/tree/6f8b0cf318db7cd5a37330fd8bba2ba51755659b
+- Reported failing CI: https://github.com/anpavel84-afk/gobadminton-clean/actions/runs/39687490658/attempts/1 — `source (web)` / `Run pnpm --filter @gobadminton/web run test:unit`. No assertion-level CI log was supplied or fetched (offline scope).
+- Supplied prior independent QA: `reviewed_sha=6f8b0cf318db7cd5a37330fd8bba2ba51755659b`, `findings=[]`, `verdict=PASS`. This is assignment evidence for the old bytes only; it is not transferred to this repair.
+- Authorized scope: diagnose and repair this unit-test failure only; expected/actual edits are `VenueSheet.tsx`, `venue-sheet.test.tsx` and this handoff, all within allowed paths. Other candidate files are retained. No Git metadata, commit, push, install, network, automation, service, secret or PROD changes.
+
+### Diagnosis and bounded change (D1–D3)
+
+Static diagnosis found an incompatibility with the unchanged `venue-sheet-integration.test.tsx`: its `elements` walker traverses element children without executing `VenueSheetGameRow`. The candidate returned that component as an opaque element, so the walker cannot find the native game button when `sheetClick("Вечерняя игра")` runs. This is a concrete source-level incompatibility, but its correspondence to the reported CI failure is UNVERIFIED without runnable Vitest or assertion-level CI output.
+
+The hook-free exported `VenueSheetGameRow` now returns a button keyed by game ID and is invoked as a pure presentation helper by the schedule map. It remains the same production row exercised by real React SSR. `GameCover` and `Avatar` remain React child components with their own hook lifecycles. The native row button is again present in the `VenueSheet` element tree. The special row-expansion branch in the allowed `venue-sheet.test.tsx` walker was removed, so its existing schedule/detail/date assertions exercise the same traversal contract as the integration harness. No assertions, checks or test cases were removed or weakened; no mocks, skips or suppressions were added. The integration file itself is unchanged.
+
+D1: the existing A–D implementation is retained; this repair changes only row assembly and its harness traversal. D2: real SSR tests and all three historical harnesses remain; the permitted walker adaptation now exposes the native button directly. D3: selection, mutation/auth/photo/recovery, create persistence/keying, focus handling, picker and CSS are unchanged by the repair; their behavioral acceptance remains subject to executed checks and independent review.
+
+### D4 exact author command results
+
+Commands ran from `/srv/gb-slots/slot2/worktrees/issue-156`. The first `test:unit` attempt and all three D4 dependency commands ran before edits; the same commands ran again after the code/test edits. No dependency installation or network fallback was attempted.
+
+| Exact command | Before exit | After exit | Result |
+| --- | --- | --- | --- |
+| `COREPACK_ENABLE_NETWORK=0 pnpm --filter @gobadminton/web run test:unit` | 1 | 1 | NOT_TESTED: `vitest: not found`, `spawn ENOENT`; local `node_modules` missing. Tests never started, so the CI assertion failure was not reproduced locally. |
+| `COREPACK_ENABLE_NETWORK=0 pnpm --filter @gobadminton/web exec tsc -p tsconfig.json --noEmit --incremental false` | 254 | 254 | NOT_TESTED: `Command "tsc" not found`. |
+| `COREPACK_ENABLE_NETWORK=0 pnpm --filter @gobadminton/web run lint` | 1 | 1 | NOT_TESTED: `eslint: not found`, `spawn ENOENT`; local `node_modules` missing. |
+| `COREPACK_ENABLE_NETWORK=0 pnpm --filter @gobadminton/web exec vitest run --no-cache test/venue-popup-owner-fixes.test.tsx test/venue-public-contacts.test.tsx test/venue-sheet.test.tsx test/create-game-venue-cta.test.tsx` | 254 | 254 | NOT_TESTED: `Command "vitest" not found`. |
+| `git diff --check` | — | 0 | No whitespace diagnostics in the final repair diff. |
+
+These are source-author command results, not self-issued independent QA. No runtime/type/lint/test PASS is claimed. Local Next documentation is also absent with `node_modules`.
+
+### D5–D6, continuity and rollback
+
+STYLE_GUIDE_PARITY: this repair retains the existing UI → frozen Drawer/BottomSheet, ListRow/MediaBlock and form/action family → production mapping documented below. It changes no rendered composition, style or geometry. The in-repository operations guide remains absent; reads of the supplied frozen App/CSS, guide snapshot/provenance and three review reports returned `Permission denied` in this session. Existing UNVERIFIED / STYLE_GUIDE_GAP labels remain; no override or visual PASS is inferred. Exact frozen contact glyphs, screen-specific popup/create composition and real venue/game/avatar/contact data remain unavailable. Rendered390/430/1440, popup420, photos, focus, picker, auth/create/preview/publish/return and map/camera behavior remain NOT_TESTED without observation. Separate merge/CI, behavioral QA and frozen-guide visual gates remain required.
+
+D6 historical IDs/mappings and decoded goal/acceptance bounds are retained in the original record below, rather than reclassified as code QA. The #156 association and absence of source attempts remain PM_REPORTED / UNVERIFIED_BY_THIS_REVIEW; a1/a2 are prompt reviews. No historical code or PASS was independently checked here. The original source session's dependency results, base/HEAD and hashes below are historical evidence, not the repair's current state.
+
+Current SHA-256 for the two changed code/test artifacts (all six other code/test artifacts retain the manifest below):
+
+```text
+2b01f76ae0be1b37921e49b09a52a831ae345cd698c644af8365f468a7d6cfac  apps/web/src/components/consumer/games/VenueSheet.tsx
+c425f188148f44efb580f12710b80c1b76ee4df6d35f46b2b2f5ac62e7c087e7  apps/web/test/venue-sheet.test.tsx
+```
+
+Next bounded action: integrator captures the repair, adds its exact candidate permalink and new nine-path digest using the algorithm below, runs the full web unit suite plus D4, and obtains a new independent review on those exact bytes. A final digest is not embedded in its own input handoff; any byte change requires recomputation. If CI reports a different failure, retain the assertion-level log for that candidate. This source session cannot establish CI success from missing executables.
+
+Rollback: integrator applies the inverse of this three-file repair diff against `6f8b0cf318db7cd5a37330fd8bba2ba51755659b`, preserving the original candidate and unrelated changes. No Git/runtime rollback is executed by the source author.
+
+## Original implementation record (historical, retained)
+
 - From: source author (Codex).
 - To: integrator / independent QA and visual reviewer.
 - Date: 2026-10-22.

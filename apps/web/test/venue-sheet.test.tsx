@@ -35,7 +35,7 @@ vi.mock("react", async importOriginal => ({
 }));
 
 import { CreateGamePage } from "../src/components/consumer/pages/CreateGamePage";
-import { VenueSheet, VenueSheetGameRow } from "../src/components/consumer/games/VenueSheet";
+import { VenueSheet } from "../src/components/consumer/games/VenueSheet";
 import { GameTerms } from "../src/components/consumer/games/GameDetailComposition";
 import { formatSeats } from "../src/lib/game-presentation";
 import { venueDays, venueDayLabel } from "../src/lib/venue-popup";
@@ -51,7 +51,6 @@ function fixture(id: string, startsAt = "2026-10-25T00:30:00Z"): Game {
 }
 function elements(node: React.ReactNode): React.ReactElement<Record<string, unknown>>[] {
   if (!isValidElement<Record<string, unknown>>(node)) return [];
-  if (node.type === VenueSheetGameRow) return elements(VenueSheetGameRow(node.props as React.ComponentProps<typeof VenueSheetGameRow>));
   return [node, ...Children.toArray(node.props.children as React.ReactNode).flatMap(elements)];
 }
 class FocusTarget {

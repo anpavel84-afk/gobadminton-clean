@@ -69,10 +69,10 @@ function ContactIcon({ kind }: { kind: string }) {
   </svg>;
 }
 
-/** One accessible action; media and organizer identity are presentation only. */
+/** Hook-free row presentation: one accessible action, with media/identity in child components. */
 export function VenueSheetGameRow({ game, timezone, onOpen }: { game: Game; timezone: string; onOpen: () => void }) {
   const time = (value: string) => new Intl.DateTimeFormat("ru-RU", { timeZone: timezone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(value));
-  return <button type="button" className="gb-venue-sheet-game" onClick={onOpen}>
+  return <button key={game.id} type="button" className="gb-venue-sheet-game" onClick={onOpen}>
     <GameCover game={game} className="gb-venue-sheet-game-cover" />
     <span><span>{time(game.startsAt)}–{time(game.endsAt)}</span><strong>{game.title}</strong>
       {game.levelRule.allowedLevelIds.length > 0 && <span>{game.levelRule.allowedLevelIds.join(", ")}</span>}
@@ -157,7 +157,7 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
               <span>{new Intl.DateTimeFormat("ru-RU", { timeZone: venue.timezone, day: "numeric", month: "short" }).format(new Date(first.startsAt))}</span>
             </button>;
           })}</div>
-          {day?.games.map(item => <VenueSheetGameRow key={item.id} game={item} timezone={venue.timezone} onOpen={() => { setGameId(item.id); setView("game"); }} />)}
+          {day?.games.map(item => VenueSheetGameRow({ game: item, timezone: venue.timezone, onOpen: () => { setGameId(item.id); setView("game"); } }))}
         </div>}
     </div>
   </>;
