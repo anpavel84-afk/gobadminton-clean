@@ -77,12 +77,28 @@ class Node extends EventTarget {
   replaceChildren() { this.children.forEach(node => { node.parentNode = null; }); this.children = []; }
   get parentElement() { return this.parentNode; }
   get isConnected(): boolean { return this === body || !!this.parentNode?.isConnected; }
+  // Browser focus/layout primitives used by the production visibility filter.
+  get tabIndex(): number {
+    if (typeof this.props.tabIndex === "number") return this.props.tabIndex;
+    return ["button", "input", "select", "textarea"].includes(this.tag) || (this.tag === "a" && !!this.props.href) ? 0 : -1;
+  }
+  get visibility(): string { return String(this.style.visibility ?? this.parentNode?.visibility ?? "visible"); }
+  get hasLayoutBox(): boolean { return !this.props.hidden && this.style.display !== "none" && (this.parentNode?.hasLayoutBox ?? true); }
+  getClientRects() {
+    return !this.hasLayoutBox || (this.tag === "input" && this.props.type === "hidden") ? [] : [this.getBoundingClientRect()];
+  }
   focus() { dom.activeElement = this; }
   contains(node: unknown): boolean { return node === this || [...this.children, ...this.rendered].some(child => child.contains(node)); }
   matches(selector: string): boolean {
     return selector.split(",").some((part): boolean => {
       const value = part.trim();
       if (value === "[hidden]") return !!this.props.hidden;
+      if (value === "[inert]") return !!this.props.inert;
+      if (value === ":disabled") return !!this.props.disabled;
+      if (value === '[aria-disabled="true"]') return this.props["aria-disabled"] === "true";
+      if (value === 'input[type="hidden"]') return this.tag === "input" && this.props.type === "hidden";
+      if (value === "[tabindex]") return typeof this.props.tabIndex === "number";
+      if (["button", "input", "select", "textarea"].includes(value)) return this.tag === value;
       if (value.includes("[role=dialog]")) return this.props.role === "dialog";
       if (value.startsWith("dialog")) return this.tag === "dialog" && !!this.props.open;
       if (value.includes(" ")) { const pieces = value.split(" "); const last = pieces.pop(); return !!last && this.matches(last) && !!this.parentNode?.closest(pieces.join(" ")); }
@@ -254,7 +270,7 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date", "performance"] }); maps.length = 0; markerButtons.length = 0; currentCity = MOSCOW_BUNDLE.cityId; navigation.mockClear(); returnToList.mockClear();
   transport.venues.mockReset().mockResolvedValue({ ok: true, data: [venue, { ...venue, id: "unselected", name: "Другой зал" }] });
   transport.games.mockReset().mockResolvedValue({ ok: true, data: [game] }); transport.apiFetch.mockReset();
-  vi.stubGlobal("window", Object.assign(new EventTarget(), { location: { origin: new URL(MOSCOW_BUNDLE.prefix).origin, assign: navigation }, matchMedia: () => ({ matches: false }), innerHeight: 800 }));
+  vi.stubGlobal("window", Object.assign(new EventTarget(), { location: { origin: new URL(MOSCOW_BUNDLE.prefix).origin, assign: navigation }, matchMedia: () => ({ matches: false }), innerHeight: 800, getComputedStyle: (node: Node) => ({ visibility: node.visibility }) }));
   vi.stubGlobal("sessionStorage", { getItem: () => null, setItem() {}, removeItem() {} });
   vi.stubGlobal("requestAnimationFrame", (fn: FrameRequestCallback) => setTimeout(() => fn(0), 16)); vi.stubGlobal("cancelAnimationFrame", clearTimeout);
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
@@ -352,6 +368,28 @@ it.each([false, true])("traps Tab shift=%s within the common dialog boundary, cl
   if (!entry) throw new Error("Missing capture key listener");
   expect(remove.mock.calls.some(([name, listener, options]) => name === entry[0] && listener === entry[1] && options === entry[2])).toBe(true);
   expect(body.style.overflow).toBeUndefined();
+});
+it.each(["hidden", "inert", "disabled", "aria-disabled", "negative-tabindex", "display-none", "visibility-hidden", "hidden-input"])("Tab excludes %s controls with the production visibility filter", async kind => {
+  const { renderer } = await start(); click(renderer, "Развернуть площадку");
+  const boundary = surface(renderer);
+  const original = boundary.querySelectorAll('button:not([disabled]), a[href], [tabindex="0"]');
+  const first = original[0]; const last = original.at(-1);
+  if (!first || !last) throw new Error("Missing focus targets");
+  const wrapper = new Node(); const excluded = new Node(kind === "hidden-input" ? "input" : "button");
+  wrapper.appendChild(excluded); boundary.appendChild(wrapper);
+  if (kind === "hidden") wrapper.props.hidden = true;
+  if (kind === "inert") wrapper.props.inert = true;
+  if (kind === "disabled") excluded.props.disabled = true;
+  if (kind === "aria-disabled") excluded.props["aria-disabled"] = "true";
+  if (kind === "negative-tabindex") excluded.props.tabIndex = -1;
+  if (kind === "display-none") wrapper.style.display = "none";
+  if (kind === "visibility-hidden") wrapper.style.visibility = "hidden";
+  if (kind === "hidden-input") excluded.props.type = "hidden";
+  last.focus();
+  const event = Object.assign(new Event("keydown", { cancelable: true }), { key: "Tab", shiftKey: false });
+  window.dispatchEvent(event);
+  expect(event.defaultPrevented).toBe(true); expect(dom.activeElement).toBe(first);
+  expect(dom.activeElement).not.toBe(excluded);
 });
 it("retains empty and unavailable schedule messages", async () => {
   transport.games.mockResolvedValue({ ok: true, data: [] }); const { renderer } = await start(); click(renderer, "Развернуть площадку");

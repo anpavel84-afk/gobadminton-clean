@@ -1,0 +1,32 @@
+{
+  "status": "PMA_TESTED_NOT_INDEPENDENT_QA",
+  "date_utc": "2026-10-22T03:25:26.807902+00:00",
+  "issue": 156,
+  "prior_candidate": "360aeee8a4f47243e80d802e5f389ec99c8b6d95",
+  "base_dev": "6fb9b0cbaad3c1989c521d0612d036ddf4342d7c",
+  "autonomous_author_attempts_preserved": 3,
+  "additional_author_model_calls": 0,
+  "manual_correction_round": 1,
+  "typecheck_rc": 0,
+  "lint_rc": 0,
+  "web_test_files": 97,
+  "web_tests_passed": 790,
+  "logs": {
+    "before-photo.log": {
+      "sha256": "9de6622abaf9ba49f3a38c848f1681cb27802d795f96a3c6644e6417e6bc4ddd",
+      "bytes": 5716
+    },
+    "typecheck-final.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "lint-final.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "full-web-final.log": {
+      "sha256": "ee2acdda5cb695483303d24570dfcf598688eb9f1d4bcb80f8406ad3349d760e",
+      "bytes": 5962
+    }
+  }
+}
