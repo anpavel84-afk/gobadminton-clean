@@ -66,6 +66,7 @@ def setup(req, config):
                     raise
             return process
     a.subprocess = ObservedSubprocess()
+    bridge.routing_receipts = []
     original_model = bridge.model
     def measured_model(prompt, qa=False):
         effect_gate()
@@ -78,8 +79,22 @@ def setup(req, config):
         trace['model'] = choice
         old_model, old_effort = c.model, c.effort
         c.model, c.effort = choice['effective_model'], choice['effort']
-        try: return original_model(prompt, qa)
+        role = 'qa' if qa else 'author'
+        before = rt.budget.used('codex', role, req['slot'])
+        completed, answer = 'raised', None
+        try:
+            answer = original_model(prompt, qa)
+            completed = 'returned'
+            return answer
         finally:
+            from cost_policy import usage
+            try: after = rt.budget.used('codex', role, req['slot'])
+            except Exception: after = None
+            choice['usage'] = usage(before, after, completed, answer if qa else None)
+            choice['head'] = store.data['active'].get('head')
+            choice['attempt'] = store.data['active'].get('attempt')
+            bridge.routing_receipts.append(dict(choice))
+            trace['model'] = choice
             c.model, c.effort = old_model, old_effort
             trace['process'] = None
             publish_process()
@@ -201,10 +216,11 @@ def perform(req, config, context):
         if stage == 'author':
             need(active['phase'] == 'claimed' or active['phase'] == 'qa' and
                  (active.get('qa') or {}).get('verdict') == 'FAIL' or
-                 active['phase'] == 'ci' and active.get('ci_failure'), 'author phase gate')
+                 active['phase'] == 'ci' and active.get('ci_failure') or
+                 active['phase'] == 'pr_wait' and active.get('deterministic_failure'), 'author phase gate')
             need(active['attempt'] < active['task']['max_attempts'], 'attempts exhausted')
             metadata['routing'] = route(s, active['task'], 'author', req['profile'], rt.budget, req['slot'])
-            diagnostic = active.get('ci_failure')
+            diagnostic = active.get('ci_failure') or active.get('deterministic_failure')
             checkpoint = {}
             if active['phase'] != 'claimed':
                 b.candidate_identity(active)
@@ -214,6 +230,8 @@ def perform(req, config, context):
                     dev = b.remote_dev()
                     need(b.git('merge-base', active['base'], dev, cwd=b.work) == active['base'],
                          'DEV history changed; repair refused')
+                if active.get('deterministic_failure'):
+                    need(b.failed_ci(active) == diagnostic, 'deterministic CI evidence changed')
                 before = b.c.state_dir / f'actions-before-repair-{active["issue"]}-a{active["attempt"]}.json'
                 need(not before.is_symlink(), 'repair backup symlink')
                 if before.exists(): need(a.loads(before.read_bytes()) == store.data, 'repair backup drift')
@@ -228,7 +246,7 @@ def perform(req, config, context):
                 exact = ci_evidence(api, {'snapshot': active, 'head': active['head'], 'issue': active['issue']})
                 need(exact, 'exact CI failure evidence missing; do not spend another author attempt blindly')
                 fix_details = {'failure': diagnostic, 'assertion_evidence': exact}
-            b.author(active, fix=fix_details, ci_failure=diagnostic, **checkpoint)
+            b.author(active, fix=fix_details, ci_failure=diagnostic, deterministic_failure=None, **checkpoint)
         elif stage == 'publish':
             need(active['phase'] == 'candidate', 'publish phase gate')
             b.stopped_writer(active['head'])
@@ -247,11 +265,26 @@ def perform(req, config, context):
                    and p['base']['ref'] == 'dev']
             need(len(prs) <= 1, 'ambiguous PR')
             if not prs: raise Retry('PR not_started; Autonomy PR must be enabled', 60)
+            if 'routing_policy' in active['task']:
+                # Cheap exact-SHA mandatory checks run first. They NEVER certify independent QA.
+                try:
+                    checks = run_result(a, api, active)
+                except a.Hold as error:
+                    if str(error) != 'Actions failed': raise
+                    failure = b.failed_ci(active)
+                    store.phase('pr_wait', pr=prs[0]['number'], deterministic_failure=failure,
+                                independent_qa_pending=True)
+                    rt.publish(store.data, store.parked)
+                    return dict(status='confirmed', deterministic_checks=dict(status='failure', **failure),
+                                model_call_skipped='mandatory deterministic check failed; bounded author repair next')
+                metadata['deterministic_checks'] = dict(status='success', run=checks['id'], sha=checks['sha'])
             metadata['routing'] = route(s, active['task'], 'qa',
                                         'auto' if 'qa_routes' in active['task'] else 'codex',
                                         rt.budget, req['slot'])
             store.phase('qa', pr=prs[0]['number'])
             b.review(active)  # new detached exact SHA, read-only sandbox, independent new CLI session
+            if 'routing_policy' in active['task']:
+                store.phase('qa', independent_qa_pending=False, deterministic_failure=None)
         elif stage == 'ci':
             need(active['phase'] == 'qa' or active['phase'] == 'ci', 'CI phase gate')
             b.candidate_identity(active)
@@ -320,7 +353,7 @@ def entry(req, config):
         if req['stage'] in ('diagnose', 'task_review'):
             from recovery import perform as recover
             return recover(req, config, context)
-        return perform(req, config, context)
+        return model_receipt(perform(req, config, context), context)
     except Retry as error:
         return dict(status='waiting', reason=str(error), retry_after=error.after)
     except Exception as error:
@@ -353,4 +386,12 @@ def entry(req, config):
                 except Exception:
                     pass
         uncertain = context and not safe and (req['stage'] in ('author', 'qa', 'publish', 'integrate', 'promote'))
-        return dict(status='unknown' if uncertain else 'deferred', reason=reason, safe_release=safe)
+        return model_receipt(dict(status='unknown' if uncertain else 'deferred', reason=reason, safe_release=safe), context)
+
+
+def model_receipt(result, context):
+    calls = getattr(context[-1], 'routing_receipts', []) if context else []
+    if calls:
+        result['routing'] = calls[-1] | {'stage_result': result.get('status')}
+        result['model_calls'] = calls
+    return result

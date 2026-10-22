@@ -12,6 +12,12 @@ window.GBTrainMonitor = {
       ['CLI process', process ? 'PID ' + process.pid + ' / start ' + process.start + (a.status === 'stale' ? ' (last observation)' : '') : 'not_started'],
       ['Provider / role', model.provider ? model.provider + ' / ' + model.role : 'unknown'],
       ['Requested / effective model', (model.requested_model || 'default') + ' / ' + (model.effective_model || 'unknown')],
+      ['Effort requested / effective', (model.requested_effort || model.effort || 'unknown') + ' / ' + (model.effective_effort || model.effort || 'unknown')],
+      ['Stage complexity', model.stage_complexity || 'legacy immutable'],
+      ['Selection reason', model.selection_reason || 'not recorded'],
+      ['Escalation', model.escalation_reason || 'none'],
+      ['Cost diagnostic', model.expense_diagnostic || 'none'],
+      ['Measured calls / tokens', model.usage ? String(model.usage.charged_calls) + ' / ' + (model.usage.tokens === null ? 'unavailable' : String(model.usage.tokens)) : 'not recorded'],
       ['Fallback', model.fallback_reason || 'not_applicable'],
       ['Last CONFIRMED event', last],
       ['Wait reason', a.wait_reason || 'not_applicable']

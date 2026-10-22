@@ -59,6 +59,7 @@ class IdleReady(unittest.TestCase):
             _,events=w.idle_ready(snapshot(100),state,now)
             self.assertEqual(events[0]["code"],"SLOT_IDLE_EVIDENCE_STALE")
             self.assertEqual(events[0]["reason"],"planning_evidence_stale")
+    @patch("cost_policy.EPOCH", "2100-01-01T00:00:00+00:00")
     def test_edited_issue_comment_restores_single_admission_without_relaxation(self):
         parent=issue(207);parent["updated_at"]=(NOW+dt.timedelta(seconds=1)).isoformat()
         comment={"id":123,"issue_url":f"https://api.github.com/repos/{core.REPO}/issues/207",

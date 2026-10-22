@@ -17,8 +17,8 @@ REPO = 'anpavel84-afk/gobadminton-clean'
 REPO_ID = 1416250340
 OWNER = 318610566
 SINCE = '2026-10-15T02:27:00+00:00'
-PINS = {'autonomous_issues.py': '8d8baae3089f0a0cafeb047af8d9241dbc756be6a7b30bdc6306ee389361f2fe',
-        'slots.py': 'e586703954551d5af212c0f347bb83679cb8cdecffa4e48465f3889df318ad5a',
+PINS = {'autonomous_issues.py': '1c6fff50532326e8d7b2c90f8d0e90080348eaef19ea2ba9385289255fe547a1',
+        'slots.py': '4d17f73b54008242dfee4dc3773945e34e0a1ffc832849573902a3c1f1818def',
         'check_foundation.py': 'c2975b19bd46d00acbdbc08227545b8f9c9501d7b8e8783e9b397751c612bd13'}
 RECOVERY_STAGES = ('diagnose', 'task_review')
 STAGES = ('claim', 'author', 'publish', 'qa', 'ci', 'integrate', 'promote', 'dev') + RECOVERY_STAGES
@@ -189,7 +189,7 @@ def request(value):
 def binding(req):
     return {k: v for k, v in req.items() if k not in ('gh_token', 'run', 'run_attempt')}
 
-def route(slots, task, role, profile, budget, slot):
+def _route_immutable(slots, task, role, profile, budget, slot):
     """Choose a model by immutable stage preferences, not by relative token usage.
 
     V1 scalar-model Issues retain their previous route. For new V2 stage routes,
@@ -268,13 +268,38 @@ def route(slots, task, role, profile, budget, slot):
                 unavailable=refusals, remaining_calls=budget.remaining(name, role, slot),
                 used_calls=budget.used(name, role, slot))
 
+def route(slots, task, role, profile, budget, slot):
+    from cost_policy import selection, annotate_legacy
+    if "routing_policy" in task:
+        try:
+            approved, rationale = selection(task, role)
+        except ValueError as error:
+            raise Refused(str(error)) from None
+        # Internal routing view only; the immutable task/checkpoint is never changed.
+        view = dict(task, **{role + "_routes": [approved]})
+        choice = _route_immutable(slots, view, role, profile, budget, slot)
+        choice.update(rationale)
+        choice["requested_route"] = approved
+    else:
+        choice = _route_immutable(slots, task, role, profile, budget, slot)
+        choice.update(annotate_legacy(task, choice))
+        choice["requested_route"] = choice["provider"] + ":" + str(choice["requested_model"] or "default") + ":" + str(task.get("effort", "high"))
+    if choice.get("remaining_calls") == float("inf"):
+        choice["remaining_calls"] = None
+        choice["budget_policy"] = "unlimited_daily_metered"
+    else:
+        choice["budget_policy"] = "finite_daily"
+    choice["requested_effort"] = choice["effort"]
+    choice["effective_effort"] = choice["effort"]
+    return choice
+
 def next_stage(active):
     if not active or active['phase'] == 'done':
         return None
     p = active['phase']
     if p == 'claimed': return 'author'
     if p == 'candidate': return 'publish'
-    if p == 'pr_wait': return 'qa'
+    if p == 'pr_wait': return 'author' if active.get('deterministic_failure') else 'qa'
     if p == 'qa': return 'ci' if (active.get('qa') or {}).get('verdict') == 'PASS' else 'author'
     if p == 'ci': return 'author' if active.get('ci_failure') else 'integrate' if active.get('ci') else 'ci'
     if p == 'promoting': return 'promote'
