@@ -194,27 +194,46 @@ def transaction(action,bundle=None,manifest_sha=None,controller=None,stage_sha=N
                         controller=controller,preserved_ledgers=len(before))
         journal=receiver.read(JOURNAL,0)
         receiver.need(journal.get('schema')=='GB_PHASE_V2_UPGRADE_V1'
-                      and journal.get('phase') in ('installing','installed-disabled','active'),
+                      and journal.get('phase') in
+                      ('installing','installed-disabled','activating','active'),
                       'unknown V2 upgrade journal')
         policy=receiver.read(POLICY,0)
         if action=='activate':
-            receiver.need(journal['phase']=='installed-disabled' and
-                          policy['mode']=='disabled' and type(probe) is int and probe>0,
+            receiver.need(journal['phase'] in ('installed-disabled','activating')
+                          and type(probe) is int and probe>0,
                           'requires confirmed hosted readonly shadow run')
             receiver.need(policy['controller_sha']==journal['controller']
                           and policy['stage_workflow_sha256']==journal['stage_sha']
                           and policy['recovery']['source_sha']==journal['controller']
                           and all(installer.sha(INSTALL/name)==new
-                                  for name,(_,new) in FILES.items())
-                          and state_hashes()==journal['state_hashes'],
-                          'invalid exact installed source/policy/ledger before activation')
-            policy['mode']='active'
-            receiver.atomic(POLICY,policy,mode=0o644)
-            journal.update(phase='active',shadow_run=probe)
+                                  for name,(_,new) in FILES.items()),
+                          'installed source/policy controller drift')
+            if journal['phase']=='installed-disabled':
+                receiver.need(policy['mode']=='disabled' and
+                              state_hashes()==journal['state_hashes'],
+                              'cannot start activation with changed task state')
+                # Write-ahead activation marker precedes ACTIVE policy mutation.
+                journal.update(phase='activating',shadow_run=probe)
+                receiver.atomic(JOURNAL,journal)
+            else:
+                receiver.need(journal.get('shadow_run')==probe,
+                              'activation proof changed during recovery')
+            if policy['mode']=='disabled':
+                receiver.need(state_hashes()==journal['state_hashes'],
+                              'task state changed before activation')
+                policy['mode']='active'
+                receiver.atomic(POLICY,policy,mode=0o644)
+            else:
+                # Power loss after ACTIVE policy but before last journal write:
+                # never rewind or replay a possibly running product stage.
+                receiver.need(policy['mode']=='active' and
+                              journal['phase']=='activating',
+                              'unexpected activation state')
+            journal['phase']='active'
             receiver.atomic(JOURNAL,journal)
             return dict(status='ACTIVE',controller=journal['controller'],shadow_run=probe)
         if action=='rollback':
-            receiver.need(journal['phase'] in ('installing','installed-disabled')
+            receiver.need(journal['phase'] in ('installing','installed-disabled','activating')
                           and policy['mode']=='disabled' and
                           state_hashes()==journal['state_hashes'],
                           'cannot rollback live effects or unknown task state')
