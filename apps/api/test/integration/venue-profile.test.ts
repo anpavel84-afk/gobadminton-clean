@@ -105,7 +105,7 @@ run("0039 venue profile — disposable synthetic DB, authored only", () => {
   }
   it("fresh schema has nullable/no-default facts, SQL bounds and DB-generated insert date", async () => {
     const x = await fixture(), row = await stored(x.v.id);
-    const inserted = await pool.query("INSERT INTO venues(city_id,name,address,timezone,location,created_by_user_id,normalized_name,normalized_address,public_profile_updated_at) SELECT city_id,name,address,timezone,location,created_by_user_id,normalized_name,normalized_address,'1900-01-01'::timestamptz FROM venues WHERE id=$1 RETURNING public_profile_updated_at", [x.v.id]);
+    const inserted = await pool.query("INSERT INTO venues(city_id,name,address,timezone,location,created_by_user_id,lifecycle_state,normalized_name,normalized_address,public_profile_updated_at) SELECT city_id,name,address,timezone,location,created_by_user_id,'unverified',normalized_name,normalized_address,'1900-01-01'::timestamptz FROM venues WHERE id=$1 RETURNING public_profile_updated_at", [x.v.id]);
     expect(inserted.rows[0]?.public_profile_updated_at).toBeInstanceOf(Date);
     expect(inserted.rows[0]?.public_profile_updated_at.getUTCFullYear()).not.toBe(1900);
     expect(row).toMatchObject({ court_count: null, amenity_parking: null, amenity_showers: null });
