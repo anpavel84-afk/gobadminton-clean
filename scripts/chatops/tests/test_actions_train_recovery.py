@@ -125,8 +125,10 @@ class Receipts(unittest.TestCase):
         for invalid in ([doc_api], [doc_handoff], [doc_api, doc_handoff],
                         ['apps/api/README.md', doc_api], ['packages/contracts/README.md', doc_handoff],
                         ['apps/api/docs/fix.md', doc_api]):
+            allowed = copy.deepcopy(parent)
+            allowed['allowed_paths'] = list(dict.fromkeys([*allowed['allowed_paths'], *invalid]))
             with self.subTest(invalid=invalid), self.assertRaisesRegex(core.Refused, 'no product source/test'):
-                R.revised(parent, proposal | {'paths': invalid})
+                R.revised(allowed, proposal | {'paths': invalid})
 
     def test_original_task_allowlist_never_authorizes_control_or_traversal(self):
         source = 'apps/api/src/sample.ts'
