@@ -1,3 +1,4 @@
+import type { UnifiedPreview, UnifiedUpcomingGame } from "@gobadminton/contracts/src/unified.generated";
 import { DEV_MOSCOW_PEER_IDS } from "../../src/radar/dev-moscow-test";
 import { redeemUnifiedProof } from "../../src/radar/unified-proof";
 import { GeographicRadarService } from "../../src/radar/geographic.service";
@@ -111,6 +112,7 @@ dbDescribe("Unified Players / isolated synthetic PostGIS and HTTP", () => {
       SOCIAL_RADAR_UNIFIED_ENABLED: "1",
       SOCIAL_RADAR_PUBLISHING_V2_ENABLED: "1",
       CONTENT_MODERATION_PROVIDER: "fake",
+      GAME_MODERATION_INTERNAL_ENABLED: "1",
       ADMIN_INTERNAL_ENABLED:"1", ADMIN_ORIGIN:"http://localhost:19470",
       ADMIN_AUTH_PEPPER:"p4-unified-synthetic-admin-pepper-only", USER_RESTRICTIONS_INTERNAL_ENABLED:"1",
     });
@@ -248,6 +250,218 @@ dbDescribe("Unified Players / isolated synthetic PostGIS and HTTP", () => {
       limit,
     });
   }
+  // Issue #149. Authored for the existing disposable-DB harness only.
+  // SOURCE-ONLY EXECUTION: NOT_TESTED; integrator must run this suite.
+  describe("u1 player upcomingGames relationship privacy", () => {
+    async function gameFixture(creator: Person, offsetMinutes = 60) {
+      const venue = (await pool.query<{ id: string }>(`INSERT INTO venues
+        (city_id,name,address,timezone,location,created_by_user_id,contact_phone,booking_note)
+        VALUES($1,'Synthetic public hall','Synthetic address','Europe/Moscow',
+          ST_SetSRID(ST_MakePoint(37.61,55.75),4326)::geography,$2,'PRIVATE_PHONE','PRIVATE_NOTE') RETURNING id`,
+      [MOSCOW_CITY_ID, creator.id])).rows[0]!.id;
+      return (await pool.query<{ id: string }>(`INSERT INTO games
+        (venue_id,title,host_display_name,host_public_contact,status,visibility,starts_at,ends_at,timezone,
+         application_deadline_at,capacity,format_key,level_scale_id,level_scale_version,allowed_level_ids,
+         settlement_mode,settlement_terms,activity_kind,settlement_purpose,created_by_user_id)
+        VALUES($1,'Synthetic public game','Host','PRIVATE_CONTACT','published','public',
+         clock_timestamp()+$3::int*interval '1 minute',clock_timestamp()+($3::int+60)*interval '1 minute',
+         'Europe/Moscow',clock_timestamp(),4,'doubles','synthetic',1,'[]','external','PRIVATE_TERMS',
+         'regular','no_trainer_fee',$2) RETURNING id`, [venue, creator.id, offsetMinutes])).rows[0]!.id;
+    }
+    async function participation(gameId: string, target: Person, status = 'confirmed') {
+      await pool.query("INSERT INTO participations(game_id,user_id,status,decision_reason) VALUES($1,$2,$3,'PRIVATE_REASON')", [gameId, target.id, status]);
+    }
+    async function manager(gameId: string, p = viewer, role = 'manager', status = 'active') {
+      await pool.query("INSERT INTO game_managers(game_id,user_id,role,status) VALUES($1,$2,$3,$4)", [gameId, p.id, role, status]);
+    }
+    async function proofFor(p: Person) {
+      await clearBudget(); return (await query()).items.find(row => row.publicPlayerId === p.publicId)!.radar!.resultRef;
+    }
+    async function optOut(p: Person) {
+      const profile = await pool.query<{ version: number }>(
+        "SELECT version FROM player_social_profiles WHERE user_id=$1", [p.id],
+      );
+      const result = await app.get(ProfilesService).patchOwn(p.id, p.issued.session.id, randomUUID(), {
+        expectedVersion: profile.rows[0]!.version,
+        radarConsented: false,
+      });
+      expect(result.statusCode).toBe(200);
+      expect(result.body.radarConsented).toBe(false);
+      expect((await pool.query("SELECT 1 FROM radar_presences WHERE user_id=$1", [p.id])).rowCount).toBe(0);
+    }
+    async function gamesFor(proof: string, p = viewer): Promise<UnifiedUpcomingGame[]> {
+      await clearBudget(p); const response = await preview(proof, p);
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.headers['cache-control']).toContain('no-store');
+      return response.json<UnifiedPreview>().upcomingGames;
+    }
+    it("limits distinct eligible creator games AFTER privacy/discovery filtering and uses only canonical media", async () => {
+      const target = await person('Public creator'); await start(target);
+      const permitted = [await gameFixture(target, 90), await gameFixture(target, 60), await gameFixture(target, 60), await gameFixture(target, 120)];
+      // A game authorized by both branches must occur only once.
+      await participation(permitted[1]!, target); await manager(permitted[1]!);
+      const tie = new Date(Date.now() + 3600000);
+      await pool.query("UPDATE games SET starts_at=$2,ends_at=$2::timestamptz+interval '1 hour' WHERE id=ANY($1::uuid[])", [permitted.slice(1, 3), tie]);
+      for (const kind of ['unlisted', 'draft', 'cancelled', 'past', 'unclassified', 'hidden', 'taken_down']) {
+        const id = await gameFixture(target, 10);
+        if (kind === 'unlisted') await pool.query("UPDATE games SET visibility='unlisted' WHERE id=$1", [id]);
+        if (kind === 'draft' || kind === 'cancelled') await pool.query("UPDATE games SET status=$2 WHERE id=$1", [id, kind]);
+        if (kind === 'past') await pool.query("UPDATE games SET application_deadline_at=clock_timestamp()-interval '3 hours',starts_at=clock_timestamp()-interval '2 hours',ends_at=clock_timestamp()-interval '1 hour' WHERE id=$1", [id]);
+        if (kind === 'unclassified') await pool.query("UPDATE games SET activity_kind=NULL,settlement_purpose=NULL WHERE id=$1", [id]);
+        if (kind === 'hidden' || kind === 'taken_down') await pool.query("INSERT INTO game_moderation_state(game_id,state) VALUES($1,$2)", [id, kind]);
+      }
+      const result = await gamesFor(await proofFor(target));
+      const expected = (await pool.query<{ id: string }>("SELECT id FROM games WHERE id=ANY($1::uuid[]) ORDER BY starts_at,id LIMIT 3", [permitted])).rows.map(row => row.id);
+      expect(result.map(row => row.id)).toEqual(expected); expect(new Set(result.map(row => row.id)).size).toBe(3);
+      for (const game of result) {
+        expect(Object.keys(game).sort()).toEqual(['activityKind','cover','endsAt','id','startsAt','timezone','title','venue']);
+        expect(Object.keys(game.venue).sort()).toEqual(['cover','name']);
+        expect(Object.keys(game.cover)).toEqual(['uploadedUrl']); expect(Object.keys(game.venue.cover)).toEqual(['uploadedUrl']);
+        const media = (await pool.query("SELECT game_effective_cover_url($1) game,venue_cover_url(venue_id) venue FROM games WHERE id=$1", [game.id])).rows[0];
+        expect(game.cover.uploadedUrl).toBe(media.game); expect(game.venue.cover.uploadedUrl).toBe(media.venue);
+      }
+      expect(JSON.stringify(result)).not.toMatch(/PRIVATE_|userId|participation|manager|latitude|longitude|organizer|contact|booking|provider/);
+    });
+    it.each(['owner','manager'])("permits confirmed target participation only for the current active viewer %s", async role => {
+      const creator = await person('Creator', false), target = await person('Radar only', false); await start(target);
+      const id = await gameFixture(creator); await participation(id, target); await manager(id, viewer, role);
+      expect((await gamesFor(await proofFor(target))).map(row => row.id)).toEqual([id]);
+      // An ordinary viewer's OWN confirmed membership confers no roster authority.
+      await pool.query("UPDATE game_managers SET status='revoked' WHERE game_id=$1", [id]);
+      await participation(id, viewer);
+      expect(await gamesFor(await proofFor(target))).toEqual([]);
+    });
+    it("does not equate public creator, arbitrary manager/trainer, invitation or nonconfirmed participation", async () => {
+      const target = await person('Radar only', false), creator = await person('Other creator', false); await start(target);
+      await gameFixture(target); // Radar-only creator shortcut is forbidden.
+      const unrelated = await gameFixture(creator); await manager(unrelated, target);
+      const trainer=(await pool.query("INSERT INTO trainer_profiles(user_id,display_name) VALUES($1,'Synthetic trainer') RETURNING id", [target.id])).rows[0].id;
+      await pool.query("UPDATE games SET activity_kind='trainer_led',trainer_profile_id=$2,trainer_display_name_snapshot='Synthetic trainer',settlement_purpose='trainer_fee',price_status='by_agreement' WHERE id=$1",[unrelated,trainer]);
+      for (const status of ['pending','rejected','withdrawn','removed','expired','cancelled_by_game']) {
+        const id = await gameFixture(creator); await participation(id, target, status); await manager(id);
+      }
+      // Invitation has no participation and must not contribute even for a roster manager.
+      const invited = await gameFixture(creator); await manager(invited);
+      const pair=(await pool.query("INSERT INTO social_pairs(user_low,user_high) VALUES(LEAST($1::uuid,$2::uuid),GREATEST($1::uuid,$2::uuid)) ON CONFLICT(user_low,user_high) DO UPDATE SET version=social_pairs.version RETURNING id",[target.id,viewer.id])).rows[0].id;
+      await pool.query("INSERT INTO game_invitations(game_id,invitee_user_id,inviter_user_id,pair_id,status,expires_at) VALUES($1,$2,$3,$4,'pending',clock_timestamp()+interval '1 hour')", [invited,target.id,viewer.id,pair]);
+      expect(await gamesFor(await proofFor(target))).toEqual([]);
+    });
+    it.each([true,false])("confirmed membership stays private to ordinary viewers, directoryVisible=%s", async visible => {
+      const target=await person('Member',visible), creator=await person('Other creator',false); await start(target);
+      const id=await gameFixture(creator); await participation(id,target); await participation(id,viewer);
+      expect(await gamesFor(await proofFor(target))).toEqual([]);
+    });
+    it("directory opt-out, feature and directory restriction remove only the creator shortcut", async () => {
+      const target = await person('Creator'); await start(target); const id = await gameFixture(target);
+      expect((await gamesFor(await proofFor(target))).map(row => row.id)).toEqual([id]);
+      await pool.query("UPDATE player_social_profiles SET directory_visible=false WHERE user_id=$1", [target.id]);
+      expect(await gamesFor(await proofFor(target))).toEqual([]);
+      await pool.query("UPDATE player_social_profiles SET directory_visible=true WHERE user_id=$1", [target.id]);
+      env.SOCIAL_DIRECTORY_ENABLED = false;
+      try { expect(await gamesFor(await proofFor(target))).toEqual([]); } finally { env.SOCIAL_DIRECTORY_ENABLED = true; }
+      const principal = (await pool.query("INSERT INTO admin_principals(user_id,status) VALUES($1,'active') RETURNING id", [viewer.id])).rows[0].id;
+      await pool.query("INSERT INTO user_restrictions(user_id,capability,reason_code,expires_at,created_by) VALUES($1,'social.directory','synthetic_fixture',clock_timestamp()+interval '1 hour',$2)", [target.id,principal]);
+      expect(await gamesFor(await proofFor(target))).toEqual([]);
+    });
+    it.each(['withdraw','revoke','cancel','hide','takedown'])("fresh relationship/eligibility after Game lock wait: %s", async change => {
+      const target = await person('Radar only',false), creator = await person('Creator',false); await start(target);
+      const id = await gameFixture(creator); await participation(id,target); await manager(id);
+      const proof = await proofFor(target), lock = await pool.connect();
+      try {
+        await lock.query('BEGIN'); await lock.query('SELECT id FROM games WHERE id=$1 FOR UPDATE',[id]);
+        const pid = (await lock.query('SELECT pg_backend_pid() pid')).rows[0].pid;
+        const pending = preview(proof);
+        // Observe an actual blocked reader, rather than infer a race from a sleep.
+        let waiting = false;
+        for (let n=0;n<100;n++) {
+          waiting = (await pool.query("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND $1=ANY(pg_blocking_pids(pid))) waiting",[pid])).rows[0].waiting;
+          if (waiting) break; await new Promise(resolve => setTimeout(resolve,10));
+        }
+        expect(waiting).toBe(true);
+        if (change==='withdraw') await lock.query("UPDATE participations SET status='withdrawn' WHERE game_id=$1 AND user_id=$2",[id,target.id]);
+        if (change==='revoke') await lock.query("UPDATE game_managers SET status='revoked' WHERE game_id=$1 AND user_id=$2",[id,viewer.id]);
+        if (change==='cancel') await lock.query("UPDATE games SET status='cancelled' WHERE id=$1",[id]);
+        if (change==='hide' || change==='takedown') await lock.query("INSERT INTO game_moderation_state(game_id,state) VALUES($1,$2)",[id,change==='hide'?'hidden':'taken_down']);
+        await lock.query('COMMIT'); const response=await pending;
+        expect(response.statusCode,response.body).toBe(200); expect(response.json<UnifiedPreview>().upcomingGames).toEqual([]);
+      } finally { await lock.query('ROLLBACK'); lock.release(); }
+    });
+    it("final revision retires directory identity changed during a Game wait", async () => {
+      const target=await person('Creator'); await start(target); const id=await gameFixture(target);
+      const proof=await proofFor(target), lock=await pool.connect();
+      try {
+        await lock.query('BEGIN'); await lock.query('SELECT id FROM games WHERE id=$1 FOR UPDATE',[id]);
+        const pid=(await lock.query('SELECT pg_backend_pid() pid')).rows[0].pid;
+        const pending=preview(proof); let waiting=false;
+        for(let n=0;n<100;n++) { waiting=(await pool.query("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND $1=ANY(pg_blocking_pids(pid))) waiting",[pid])).rows[0].waiting; if(waiting)break; await new Promise(resolve=>setTimeout(resolve,10)); }
+        expect(waiting).toBe(true);
+        await pool.query("UPDATE player_social_profiles SET directory_visible=false WHERE user_id=$1",[target.id]);
+        await lock.query('COMMIT'); const response=await pending;
+        expect(response.statusCode,response.body).toBe(404); expect(response.json()).not.toHaveProperty('upcomingGames');
+      } finally { await lock.query('ROLLBACK'); lock.release(); }
+    });
+    it("proof TTL expiring across a Game wait fails closed at final wall clock", async () => {
+      const target=await person('Creator'); await start(target); const id=await gameFixture(target);
+      const original=await proofFor(target), opened=openUnified(env,'result',original,proofSchema)!;
+      const proof=sealUnified(env,'result',{...opened,expiresAt:Date.now()+500});
+      const lock=await pool.connect();
+      try {
+        await lock.query('BEGIN'); await lock.query('SELECT id FROM games WHERE id=$1 FOR UPDATE',[id]);
+        const pid=(await lock.query('SELECT pg_backend_pid() pid')).rows[0].pid;
+        const pending=preview(proof); let waiting=false;
+        for(let n=0;n<100;n++) { waiting=(await pool.query("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND $1=ANY(pg_blocking_pids(pid))) waiting",[pid])).rows[0].waiting; if(waiting)break; await new Promise(resolve=>setTimeout(resolve,5)); }
+        expect(waiting).toBe(true); await new Promise(resolve=>setTimeout(resolve,550));
+        await lock.query('COMMIT'); const response=await pending;
+        expect(response.statusCode,response.body).toBe(404); expect(response.json()).not.toHaveProperty('upcomingGames');
+      } finally { await lock.query('ROLLBACK'); lock.release(); }
+    });
+    it("opt-out committed during the existing pair wait cannot release a schedule", async () => {
+      const target=await person('Creator'); await start(target); await gameFixture(target); const proof=await proofFor(target);
+      const pairs=app.get((await import('../../src/safety/pair-fence.service')).PairFenceService),lock=await pool.connect();
+      try {
+        await lock.query('BEGIN'); await pairs.lockOrCreate(lock,viewer.id,target.id);
+        const pid=(await lock.query('SELECT pg_backend_pid() pid')).rows[0].pid;
+        const pending=preview(proof); let waiting=false;
+        for(let n=0;n<100;n++) { waiting=(await pool.query("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND $1=ANY(pg_blocking_pids(pid))) waiting",[pid])).rows[0].waiting; if(waiting)break; await new Promise(resolve=>setTimeout(resolve,10)); }
+        expect(waiting).toBe(true);
+        await optOut(target);
+        await lock.query('COMMIT'); const response=await pending;
+        expect(response.statusCode,response.body).toBe(404); expect(response.json()).not.toHaveProperty('upcomingGames');
+      } finally { await lock.query('ROLLBACK'); lock.release(); }
+    });
+    it("missing/forged/expired/cross-viewer/cross-session/namespace proofs never return games", async () => {
+      const target=await person('Creator'); await start(target); await gameFixture(target);
+      const proof=await proofFor(target), opened=openUnified(env,'result',proof,proofSchema)!;
+      const second={...viewer,issued:await sessions.createConsumerSession(viewer.id)}, other=await person('Other viewer',false);
+      for(const [token,actor] of [[undefined,viewer],['u1.forged',viewer],[proof,second],[proof,other],
+        [sealUnified(env,'result',{...opened,expiresAt:Date.now()-1}),viewer],
+        [sealUnified(env,'result',{...opened,context:{...opened.context,mode:'synthetic_demo'}}),viewer]] as const) {
+        const response=await app.inject({method:'POST',url:'/v1/radar/results/preview',headers:headers(actor),payload:token?{resultRef:token}:{}});
+        expect(response.statusCode,response.body).toBe(404); expect(response.json()).not.toHaveProperty('upcomingGames');
+      }
+    });
+    it.each(['revoked', 'expired'])("denies the entire schedule for an invalidated viewer session: %s", async state => {
+      const target = await person('Creator'); await start(target); await gameFixture(target);
+      const proof = await proofFor(target);
+      if (state === 'revoked') await sessions.revokeSession(viewer.issued.session.id);
+      else await pool.query("UPDATE app_sessions SET expires_at=clock_timestamp()-interval '1 second' WHERE id=$1", [viewer.issued.session.id]);
+      const response = await preview(proof);
+      expect(response.statusCode, response.body).toBe(401);
+      expect(response.json()).not.toHaveProperty('upcomingGames');
+    });
+    it.each(['opt-out','block','restriction','owner-session','ttl'])("retires games with the existing target proof fence: %s", async change => {
+      const target=await person('Creator'); await start(target); await gameFixture(target); const proof=await proofFor(target);
+      if(change==='opt-out') await optOut(target);
+      if(change==='block') await app.get(SafetyService).block(target.id,target.issued.session.id,randomUUID(),viewer.publicId);
+      if(change==='restriction') {
+        const principal=(await pool.query("INSERT INTO admin_principals(user_id,status) VALUES($1,'active') RETURNING id",[viewer.id])).rows[0].id;
+        await pool.query("INSERT INTO user_restrictions(user_id,capability,reason_code,expires_at,created_by) VALUES($1,'profile.public','synthetic_fixture',clock_timestamp()+interval '1 hour',$2)",[target.id,principal]);
+      }
+      if(change==='owner-session') await sessions.revokeSession(target.issued.session.id);
+      if(change==='ttl') await pool.query("UPDATE radar_presences SET foreground_until=clock_timestamp()-interval '1 second' WHERE user_id=$1",[target.id]);
+      const response=await preview(proof); expect(response.statusCode,response.body).toBe(404); expect(response.json()).not.toHaveProperty('upcomingGames');
+    });
+  });
   it("P4 restrictions preserve directory/Radar separation and deny fresh publication and old proofs", async () => {
     const publisher=await person("P4 publisher",true);await start(publisher);
     const initialPage=await query();const proof=initialPage.items.find(x=>x.publicPlayerId===publisher.publicId)!.radar!.resultRef;

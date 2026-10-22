@@ -50,6 +50,7 @@ export type DirectoryView = {
   preview: UnifiedPreview | null;
   busy: boolean;
   previewBusy: boolean;
+  previewError: string;
   notice: string;
   stale: boolean;
   capabilityUnavailable: boolean;
@@ -77,13 +78,72 @@ export function mergeRadarCatalog(players: PublicPlayer[], view: DirectoryView, 
   // with an explicit More boundary before them; never hide other cities.
   return { radar, ordinary, moreRadar };
 }
-const initial = (): DirectoryView => ({ mode: "ordinary", snapshot: null, rows: [], pins: [], mapPage: null, selected: null, preview: null, busy: false, previewBusy: false, notice: "", stale: false, capabilityUnavailable: false, authenticationRequired: false });
+/** Admission and render fence for the whole private schedule, including malformed
+ * successful responses. No missing/invalid deadline is treated as an infinite TTL.
+ */
+export function liveUnifiedPreview(data: UnifiedPreview | null, playerId: string, now: number): data is UnifiedPreview {
+  const closed = (value: unknown, required: string[], optional: string[] = []) =>
+    value !== null && typeof value === "object" && !Array.isArray(value) &&
+    required.every(key => Object.prototype.hasOwnProperty.call(value, key)) &&
+    Object.keys(value).every(key => required.includes(key) || optional.includes(key));
+  const instant = (value: unknown) => typeof value === "string" && Number.isFinite(Date.parse(value));
+  const nonnegative = (value: number) => Number.isInteger(value) && value >= 0;
+  const uuid = (value: unknown) => typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+  const nullableUrl = (value: unknown) => value === null || typeof value === "string";
+  if (!data || !closed(data, ["player", "proximityBand", "radar", "upcomingGames"]) || data.proximityBand !== null ||
+      !closed(data.player, ["publicPlayerId", "displayName", "level", "trainer"], ["avatar", "canRequestContact"]) ||
+      !uuid(data.player.publicPlayerId) || data.player.publicPlayerId !== playerId || typeof data.player.displayName !== "string" ||
+      typeof data.player.trainer !== "boolean" ||
+      (data.player.canRequestContact !== undefined && typeof data.player.canRequestContact !== "boolean")) return false;
+  const level = data.player.level;
+  if (level !== null && (!closed(level, ["scaleId", "scaleVersion", "levelId", "provenance"]) ||
+      typeof level.scaleId !== "string" || typeof level.levelId !== "string" ||
+      !Number.isInteger(level.scaleVersion) || level.provenance !== "self_declared")) return false;
+  const avatar = data.player.avatar;
+  if (avatar !== undefined && (!closed(avatar, ["uploadedUrl", "providerUrl"]) ||
+      !nullableUrl(avatar.uploadedUrl) || !nullableUrl(avatar.providerUrl))) return false;
+  if (!closed(data.radar, ["consentPolicyVersion", "geo", "validUntil", "distance"]) ||
+      data.radar.consentPolicyVersion !== "radar-geographic-sharing-v2" ||
+      !instant(data.radar.validUntil) || Date.parse(data.radar.validUntil) <= now) return false;
+  const geo = data.radar.geo;
+  if (!closed(geo, ["latitude", "longitude", "crs", "model", "gridSizeMeters", "uncertaintyMeters", "quality", "sourceTimestampBucket", "sourceAgeSeconds"]) ||
+      !Number.isFinite(geo.latitude) || geo.latitude < -90 || geo.latitude > 90 ||
+      !Number.isFinite(geo.longitude) || geo.longitude < -180 || geo.longitude > 180 || geo.crs !== "EPSG:4326" ||
+      !["regional_grid_100m_v1", "regional_grid_1000m_v1"].includes(geo.model) ||
+      geo.gridSizeMeters !== (geo.model === "regional_grid_100m_v1" ? 100 : 1000) ||
+      !nonnegative(geo.uncertaintyMeters) || !nonnegative(geo.sourceAgeSeconds) ||
+      !instant(geo.sourceTimestampBucket) || !["approximate", "degraded"].includes(geo.quality)) return false;
+  const distance = data.radar.distance;
+  if (distance !== null && (!closed(distance, ["kind", "roundedMeters", "roundingStepMeters", "uncertaintyMeters", "lowerMeters", "upperMeters", "basis", "approximate"]) ||
+      ![100, 500, 1000].includes(distance.roundingStepMeters) || !nonnegative(distance.uncertaintyMeters) ||
+      distance.basis !== "published_centers_geodesic" || distance.approximate !== true ||
+      (distance.kind === "estimate" ? !nonnegative(distance.roundedMeters) || distance.lowerMeters !== null || distance.upperMeters !== null :
+        distance.kind !== "range" || distance.roundedMeters !== null || distance.lowerMeters !== 0 || !nonnegative(distance.upperMeters)))) return false;
+  if (!Array.isArray(data.upcomingGames) || data.upcomingGames.length > 3) return false;
+  const ids = new Set<string>();
+  let previous = "";
+  return data.upcomingGames.every(game => {
+    if (!closed(game, ["id", "title", "activityKind", "startsAt", "endsAt", "timezone", "cover", "venue"]) ||
+        !uuid(game.id) || ids.has(game.id) || typeof game.title !== "string" ||
+        !["regular", "trainer_led"].includes(game.activityKind) || !instant(game.startsAt) || !instant(game.endsAt) ||
+        Date.parse(game.startsAt) <= now || Date.parse(game.endsAt) <= Date.parse(game.startsAt) || typeof game.timezone !== "string" ||
+        !closed(game.venue, ["name", "cover"]) || typeof game.venue.name !== "string" ||
+        !closed(game.cover, ["uploadedUrl"]) || !closed(game.venue.cover, ["uploadedUrl"]) ||
+        !nullableUrl(game.cover.uploadedUrl) || !nullableUrl(game.venue.cover.uploadedUrl)) return false;
+    try { new Intl.DateTimeFormat("ru-RU", { timeZone: game.timezone }); } catch { return false; }
+    const order = `${new Date(game.startsAt).toISOString()}:${game.id}`;
+    if (previous && order < previous) return false;
+    previous = order; ids.add(game.id); return true;
+  });
+}
+const initial = (): DirectoryView => ({ mode: "ordinary", snapshot: null, rows: [], pins: [], mapPage: null, selected: null, preview: null, busy: false, previewBusy: false, previewError: "", notice: "", stale: false, capabilityUnavailable: false, authenticationRequired: false });
 /** Private contexts/proofs/origins live only in this root-client session, never URLs/storage. */
 export class UnifiedDirectoryController {
   view = initial();
   private listeners = new Set<() => void>();
   private epoch = 0;
   private selectionEpoch = 0;
+  private selectionAbort = new AbortController();
   private abort = new AbortController();
   private me: Me | null = null;
   private visible = true;
@@ -101,8 +161,8 @@ export class UnifiedDirectoryController {
   constructor(private request = apiFetch, private clock = Date.now) {}
   private set(patch: Partial<DirectoryView>) { this.view = { ...this.view, ...patch }; this.listeners.forEach(fn => fn()); }
   private invalidate(notice = "", stale = false) {
-    ++this.epoch; ++this.selectionEpoch; this.abort.abort(); this.abort = new AbortController(); this.pending = false;
-    this.set({ snapshot: null, rows: [], pins: [], mapPage: null, selected: null, preview: null, busy: false, previewBusy: false, notice, stale });
+    ++this.epoch; ++this.selectionEpoch; this.selectionAbort.abort(); this.abort.abort(); this.abort = new AbortController(); this.pending = false;
+    this.set({ snapshot: null, rows: [], pins: [], mapPage: null, selected: null, preview: null, busy: false, previewBusy: false, previewError: "", notice, stale });
   }
   bind(me: Me | null) {
     if (this.me?.id === me?.id && this.me?.csrfToken === me?.csrfToken) return;
@@ -130,13 +190,13 @@ export class UnifiedDirectoryController {
   }
   tick() {
     const now = this.clock();
-    const snapshotExpired = this.view.snapshot && now >= Date.parse(this.view.snapshot.validUntil);
+    const snapshotExpired = this.view.snapshot && (!Number.isFinite(Date.parse(this.view.snapshot.validUntil)) || now >= Date.parse(this.view.snapshot.validUntil));
     // Target proof/lease may expire sooner than the enclosing 45-second
     // private query. Never retain its selection, preview or map pins after TTL.
     const rowExpired = [...this.view.rows, ...this.view.pins].some(row =>
       row.radar && (!Number.isFinite(Date.parse(row.radar.validUntil)) || Date.parse(row.radar.validUntil) <= now));
-    const previewExpired = this.view.preview && (!Number.isFinite(Date.parse(this.view.preview.radar.validUntil))
-      || Date.parse(this.view.preview.radar.validUntil) <= now);
+    const previewExpired = this.view.preview &&
+      !liveUnifiedPreview(this.view.preview, this.view.selected ?? "", now);
     if (snapshotExpired || rowExpired || previewExpired) {
       this.origin = { kind: "none" };
       this.invalidate("Список участников Radar устарел. Обновляем данные.", true);
@@ -199,6 +259,7 @@ export class UnifiedDirectoryController {
     const snapshot = this.view.snapshot, me = this.me;
     if (!snapshot || !me || this.pending || (next && !this.view.mapPage?.nextMapCursor)) return;
     this.tick(); if (!this.view.snapshot) return;
+    this.close();
     const epoch = this.epoch; this.pending = true; this.set({ busy: true });
     const r = await this.request<UnifiedMapSnapshot>("/v1/players/query/map", { method: "POST", csrfToken: me.csrfToken, signal: this.abort.signal, body: JSON.stringify({ contractVersion: UNIFIED_WIRE, queryRef: snapshot.query.queryRef, ...(next ? { mapCursor: this.view.mapPage!.nextMapCursor } : {}), limit: 100 }) });
     if (!this.valid(epoch)) return;
@@ -207,22 +268,28 @@ export class UnifiedDirectoryController {
     if (!this.acceptable(r.data) || r.data.query.queryRef !== snapshot.query.queryRef) { this.invalidate("Список изменился. Обновите участников Radar.", true); return; }
     ++this.selectionEpoch;
     // Replace the map window; never silently accumulate/export the entire city.
-    this.set({ pins: r.data.items.filter(row => row.radar !== null).slice(0, 200), mapPage: r.data.mapPage, selected: null, preview: null, previewBusy: false });
+    this.set({ pins: r.data.items.filter(row => row.radar !== null).slice(0, 200), mapPage: r.data.mapPage, selected: null, preview: null, previewBusy: false, previewError: "" });
   }
-  close() { ++this.selectionEpoch; this.set({ selected: null, preview: null, previewBusy: false }); }
+  close() { ++this.selectionEpoch; this.selectionAbort.abort(); this.set({ selected: null, preview: null, previewBusy: false, previewError: "" }); }
   async select(row: UnifiedRow) {
     if (!row.radar || !this.me || this.pending || this.clock() < this.retryAt) return;
     this.tick(); if (!this.view.snapshot || ![...this.view.pins, ...this.view.rows].includes(row)) return;
+    this.selectionAbort.abort(); this.selectionAbort = new AbortController();
     const epoch = this.epoch, selection = ++this.selectionEpoch;
-    this.set({ selected: row.publicPlayerId, preview: null, previewBusy: true });
-    const r = await this.request<UnifiedPreview>("/v1/radar/results/preview", { method: "POST", csrfToken: this.me.csrfToken, signal: this.abort.signal, body: JSON.stringify({ resultRef: row.radar.resultRef }) });
+    this.set({ selected: row.publicPlayerId, preview: null, previewBusy: true, previewError: "" });
+    const r = await this.request<UnifiedPreview>("/v1/radar/results/preview", { method: "POST", csrfToken: this.me.csrfToken, signal: this.selectionAbort.signal, body: JSON.stringify({ resultRef: row.radar.resultRef }) });
     if (!this.valid(epoch) || selection !== this.selectionEpoch) return;
     this.tick(); if (!this.view.snapshot) return;
-    if (!r.ok) { this.fail(r); return; }
-    if (r.data.player.publicPlayerId !== row.publicPlayerId || Date.parse(r.data.radar.validUntil) <= this.clock()) {
+    if (!r.ok) {
+      if (r.status === 0 || r.status >= 500) {
+        this.set({ preview: null, previewBusy: false, previewError: "Не удалось загрузить данные игрока. Попробуйте снова." });
+      } else this.fail(r);
+      return;
+    }
+    if (!liveUnifiedPreview(r.data, row.publicPlayerId, this.clock())) {
       this.close(); this.set({ notice: "Игрок сейчас недоступен. Обновите список." }); return;
     }
-    this.set({ preview: r.data, previewBusy: false });
+    this.set({ preview: r.data, previewBusy: false, previewError: "" });
   }
   dispose() { this.me = null; this.invalidate(); this.listeners.clear(); }
 }

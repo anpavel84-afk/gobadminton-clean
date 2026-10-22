@@ -17,3 +17,89 @@ Encrypted authenticated tokens bind purposes, account/session, city/namespace, f
 Unified results redeem through current target identity/model/receipt/generation/owner-session/filter/region/origin checks without cap20 or reciprocity. Preview/contact revalidate after persistence waits with existing pair/presence fences; directory contact and Game authority remain independent. Errors are no-store problem+json. Query/map/result bodies are absent from idempotency records. Keep operational SQL/HTTP logging free of bodies/parameters; synthetic evidence is separate from real-data logging/release acceptance.
 
 Recovery: retire current v2 generations before older source serves traffic; never adapt100m into a1km G1 DTO. Logical dump excludes radar_presences data, restored presence is cleared, and token epoch rotates. Old v1 rows remain metadata-null and outside unified P; no backfill/consent upgrade. No source acceptance, deployment, map asset, browser/device/legal gate is implied. Producer evidence and next admitted independent QA live in the task handoff/workbench.
+
+## Issue #177 · recovery of the approved #149 player games preview (source candidate)
+
+Only the existing `POST /v1/radar/results/preview` **u1** branch adds required
+`UnifiedPreview.upcomingGames`. The request remains `{resultRef}` only. Cookie
+mutation auth, CSRF, transport Idempotency-Key, budgets and no-store remain under
+the existing controller. Legacy non-u1 response shapes remain unchanged. No
+public-player-ID schedule lookup, `/me` schedule substitution, or browser roster
+scraping is introduced. The normal directory/list remains available.
+
+`UnifiedUpcomingGame` is a closed object: public Game `id`, `title`, `activityKind`,
+`startsAt`, `endsAt`, `timezone`, `cover.uploadedUrl`, `venue.name`, and
+`venue.cover.uploadedUrl`, with closed nested objects. No internal identities,
+participation status/reason, roster identity, contacts, access/booking notes,
+coordinates, source location metadata, totals or counts are serialized. Covers
+come from `game_effective_cover_url` / `venue_cover_url` through the canonical
+Game mapper; web uses GameCover's approved URL and venue/court/trainer fallback.
+Existing player avatar/level/trainer/geo projection is unchanged; P-only fields
+are not broadened into directory detail.
+
+Games owns `readRadarPlayerGames(PoolClient, env, viewer, redeemedTarget)`. Radar
+calls it inside the existing preview transaction after actor/budget/proof
+redemption. Eligibility is the canonical
+`eligibleGames(normalizeDiscovery({temporalScope:'upcoming'}))` predicate,
+including discovery moderation when enabled: published, public, classified,
+future start. Relationship authorization happens **before** the three-game limit:
+
+| Current relationship | Schedule disclosure |
+| --- | --- |
+| Target is immutable `created_by_user_id`, currently active and directory-public; directory feature enabled, social eligibility/restrictions and bilateral blocks allow it | Eligible public creator games only |
+| Target has confirmed participation AND viewer has active game_managers owner/manager authority | Eligible public games whose roster viewer may manage |
+| Ordinary viewer (including a confirmed co-participant), arbitrary organizer/manager/trainer association, nonconfirmed participation, invitation only | No membership disclosure |
+| Radar-only target without viewer roster authority | May truthfully be empty, including when the target created games |
+| Invalid/expired/wrong viewer/session/namespace/activation/model/consent/receipt/owner-session proof, block, radar/account/public-profile restriction | Preview fails closed; no games |
+
+The two permitted relationship branches form an OR over Game rows, not a joined
+roster. Up to three distinct games are selected by `startsAt,id`, after
+eligibility and authorization, with no hidden total. At most three Game shared
+fences are acquired in deterministic UUID order after existing pair/presence
+fences. Membership, management and moderation writers use the same Game fence.
+A separate READ COMMITTED statement after all waits rechecks both relationships,
+eligibility and moderation over the held Game ids. A candidate retired during a
+wait is omitted; this response can contain fewer than three games and does not
+refill from unfenced games. Reopening redeems a fresh preview.
+
+Preview captures the current `players_query_revision`, then compares it under
+the existing final SHARE fence after the Game wait. This captures directory
+identity/avatar/session changes without treating a queryRef as schedule
+authority. Actor/session and final wall-clock target proof checks cover the added
+work through COMMIT. u1 lock/statement waits are bounded at two seconds. Game
+rows are reread after those waits and final proof is checked again immediately
+before COMMIT. Errors release no partial response.
+
+On the mounted map a marker opens a compact authorized player card. Explicit
+expansion/collapse shows player detail and these permitted games within the same
+panel. The basemap instance/camera/marker window is independent of expansion;
+this transition has no profile navigation. Ordinary directory dialog/profile
+actions remain. Loading and failure/retry are separate from an authorized empty
+result: **«Нет доступных ближайших публичных игр»** does not assert absence of
+private games or memberships. Close, Escape, browser back, selection/map page,
+filter/city/activation changes, pending stop, hide/background, actor/session/CSRF
+replacement, unmount and snapshot/row/preview deadlines retire retained schedule.
+Admission and rendering require matching player identity and finite live
+deadlines. The whole preview is a closed allowlist, including player, level, avatar,
+Radar, geo, distance, game, cover and venue objects; missing required fields and
+extra private fields fail closed. Game starts must still be in the future at
+admission and rendering; a start-time timer retires a loaded schedule when that
+boundary is reached. All private
+proofs/schedules remain in memory, absent from URL state, storage and logs.
+
+This is authored source, not independent QA or acceptance. See
+[recovery handoff](../handoffs/radar-player-games-recovery.md) for the source-only restrictions
+and the remaining DB, CI, browser and DEV gates.
+
+
+The #177 port uses fresh worktree base `47feaf78828b5984097bc54803350622b842ae6c`.
+PR [#169](https://github.com/anpavel84-afk/gobadminton-clean/pull/169), head
+`f1e1a83ff59a79d7a54304d5320e232bc61ffc47`, is a read-only source reference;
+#149 remains deferred at its original 3/3. The two existing shared-map and legacy
+compatibility fixtures now construct complete `UnifiedPreview` values rather
+than passing directory players/map proof envelopes as previews. Selection,
+reference-only refresh, late-response and strict rejection assertions remain.
+The shared `schema-contracts` publication lock must serialize this contract
+change with the V1a successor; V1a is not a product dependency of this recovery.
+No author test execution, QA PASS, CI success, merge, release or DEV acceptance
+is claimed by this document.

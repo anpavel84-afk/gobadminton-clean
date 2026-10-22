@@ -1,3 +1,5 @@
+import type { UnifiedUpcomingGame } from "@gobadminton/contracts/src/unified.generated";
+import { unrestrictedSql } from "../restrictions/policy";
 import { avatarForGameCreator, type PlayerAvatar } from "../profiles/avatar-presentation";
 import { GamePreferencesService, normalizePublicGameContact, validatePreferenceVersion } from "../profiles/game-preferences.service";
 import type { AppEnv } from "../config/env";
@@ -764,6 +766,71 @@ export class GamesService {
   private async withCreatorAvatar(db: Pool | PoolClient, game: GameDto, viewerId: string | null = null): Promise<GameDto> {
     return { ...game, organizer: { ...game.organizer, avatar: await avatarForGameCreator(db, game.id, this.env.USER_RESTRICTIONS_INTERNAL_ENABLED, viewerId) } };
   }
+}
+
+/** Private Radar projection. Caller has redeemed the viewer/session-bound proof and
+ * owns pair/presence fences. All writes to membership, authority and moderation
+ * serialize through Game; acquire at most three Game SHARE fences in UUID order.
+ * Return a fresh read callback so the orchestrator can finish its other waits
+ * before projecting anything. Never expose GameDto or relationship metadata.
+ */
+export async function readRadarPlayerGames(
+  client: PoolClient,
+  env: Pick<AppEnv, "SOCIAL_DIRECTORY_ENABLED" | "USER_RESTRICTIONS_INTERNAL_ENABLED" | "GAME_MODERATION_INTERNAL_ENABLED">,
+  viewerId: string,
+  targetUserId: string,
+): Promise<() => Promise<UnifiedUpcomingGame[]>> {
+  const eligible = eligibleGames(normalizeDiscovery({ temporalScope: "upcoming" }), env.GAME_MODERATION_INTERNAL_ENABLED);
+  // No discovery parameters for the unfiltered upcoming scope. These IDs come
+  // exclusively from the redeemed proof, never a browser publicPlayerId lookup.
+  const relationship = `(
+    (g.created_by_user_id=$2 AND $3::boolean AND EXISTS (
+      SELECT 1 FROM player_social_profiles p JOIN users u ON u.id=p.user_id
+      WHERE p.user_id=$2 AND p.directory_visible AND p.social_eligible
+        AND u.status='active'
+        AND ${unrestrictedSql(env.USER_RESTRICTIONS_INTERNAL_ENABLED, "p.user_id", ["account.access", "profile.public", "social.directory"])}
+        AND NOT EXISTS (SELECT 1 FROM user_blocks b WHERE
+          (b.blocker_user_id=$1 AND b.blocked_user_id=p.user_id) OR
+          (b.blocked_user_id=$1 AND b.blocker_user_id=p.user_id))
+    )) OR (
+      EXISTS (SELECT 1 FROM participations p WHERE p.game_id=g.id
+        AND p.user_id=$2 AND p.status='confirmed')
+      AND EXISTS (SELECT 1 FROM game_managers gm WHERE gm.game_id=g.id
+        AND gm.user_id=$1 AND gm.status='active' AND gm.role IN ('owner','manager'))
+    )
+  )`;
+  const params = [viewerId, targetUserId, env.SOCIAL_DIRECTORY_ENABLED];
+  const from = `FROM games g JOIN effective_venues v ON v.source_id=g.venue_id
+    WHERE ${eligible.where} AND ${relationship}`;
+  const candidates = await client.query<{ id: string }>(`${effectiveVenueCtes()}
+    SELECT g.id ${from} ORDER BY g.starts_at,g.id LIMIT 3`, params);
+  const ids = [...new Set(candidates.rows.map(row => row.id))].slice(0, 3).sort();
+  const locked = ids.length ? await client.query<{ id: string }>(
+    "SELECT id FROM games WHERE id=ANY($1::uuid[]) ORDER BY id FOR SHARE", [ids]) : { rows: [] };
+  const fencedIds = locked.rows.map(row => row.id).filter(id => ids.includes(id));
+  return async () => {
+    if (!fencedIds.length) return [];
+    // Separate READ COMMITTED statement AFTER all lock waits. Re-check both
+    // relationship branches, eligibility, moderation and wall-clock start time.
+    // A retired candidate is omitted; never refill with an unfenced Game.
+    const result = await client.query<GameRow>(`${effectiveVenueCtes()}
+      SELECT ${gameSelectColumns()} ${from} AND g.id=ANY($4::uuid[])
+      ORDER BY g.starts_at,g.id LIMIT 3`, [...params, fencedIds]);
+    const seen = new Set<string>();
+    // Defensive wire bound as well as SQL bound; never admit an unfenced id.
+    const rows = result.rows.filter(row => fencedIds.includes(row.id))
+      .sort((a, b) => a.starts_at.getTime() - b.starts_at.getTime() || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+      .filter(row => { if (seen.has(row.id)) return false; seen.add(row.id); return true; }).slice(0, 3);
+    return rows.map(row => {
+      const game = mapGameRow(row);
+      return {
+        id: game.id, title: game.title, activityKind: game.activityKind,
+        startsAt: game.startsAt, endsAt: game.endsAt, timezone: game.timezone,
+        cover: { uploadedUrl: game.cover?.uploadedUrl ?? null },
+        venue: { name: game.venue.name, cover: { uploadedUrl: game.venue.cover?.uploadedUrl ?? null } },
+      };
+    });
+  };
 }
 
 function gameSelectColumns(): string {
