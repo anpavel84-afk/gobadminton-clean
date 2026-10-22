@@ -297,3 +297,13 @@
 .gb-c23-card__media[data-cover="uploaded"]::after { display:none; }
 .gb-venue-picker-option-copy, .gb-venue-picker-trigger-copy { min-width:0; }
 .gb-venue-picker-option-name, .gb-venue-picker-option-address { overflow-wrap:anywhere; }
+
+/* Separate the native file picker and the reset action on the form and popup. */
+.gb-consumer .gb-game-photo-selection .gb-game-field { display:flex; flex-direction:column; gap:10px; }
+.gb-consumer .gb-game-photo-selection input[type="file"] { display:block; width:100%; min-width:0; max-width:100%; }
+.gb-consumer .gb-game-photo-selection .gb-game-photo-reset {
+  display:inline-flex; align-items:center; justify-content:center;
+  width:fit-content; max-width:100%; margin-top:18px; min-height:44px;
+  color:var(--gb-ink); background:var(--gb-white);
+}
+.gb-consumer .gb-game-create--embedded .gb-game-photo-selection .gb-game-photo-reset { max-width:100%; }
