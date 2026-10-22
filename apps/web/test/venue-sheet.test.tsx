@@ -36,6 +36,7 @@ vi.mock("react", async importOriginal => ({
 
 import { CreateGamePage } from "../src/components/consumer/pages/CreateGamePage";
 import { VenueSheet } from "../src/components/consumer/games/VenueSheet";
+import { CloseButton } from "../src/components/consumer/CloseButton";
 import { GameTerms } from "../src/components/consumer/games/GameDetailComposition";
 import { formatSeats } from "../src/lib/game-presentation";
 import { venueDays, venueDayLabel } from "../src/lib/venue-popup";
@@ -84,7 +85,7 @@ let nestedDialog: string | null = null;
 const popupBoundary = { contains: (target: unknown) => target === handle || target === first || target === last, querySelectorAll: () => [...excludedTargets, handle, first, last, ...excludedTargets] };
 const panel = { closest: () => popupBoundary, scrollTop: 0, contains: (target: unknown) => target === first || target === last, querySelectorAll: () => [...excludedTargets, first, last, ...excludedTargets] };
 function click(tree: React.ReactNode, text: string) {
-  const button = elements(tree).find(node => node.type === "button" && (node.props["aria-label"] === text || renderToStaticMarkup(node).includes(text)));
+  const button = elements(tree).find(node => (node.type === "button" || node.type === CloseButton) && (node.props["aria-label"] === text || renderToStaticMarkup(node).includes(text)));
   if (!button) throw new Error(`Missing ${text}`);
   (button.props.onClick as () => void)();
 }
@@ -174,7 +175,14 @@ it("restores preview focus when the initiating element was removed", () => {
   initiator.isConnected = true;
 });
 it("background deselects, close collapses, inner clicks do neither", () => {
-  const tree = render(); expect(collapse).not.toHaveBeenCalled(); expect(deselect).not.toHaveBeenCalled(); click(tree, "Закрыть"); expect(collapse).toHaveBeenCalledOnce();
+  const tree = render(); expect(collapse).not.toHaveBeenCalled(); expect(deselect).not.toHaveBeenCalled();
+  const close = elements(tree).find(node => node.type === CloseButton);
+  if (!isValidElement<React.ComponentProps<typeof CloseButton>>(close)) throw new Error("No production CloseButton");
+  expect(close.props.onClick).toBe(collapse);
+  expect(close.props.ref).toEqual({ current: first });
+  const native = CloseButton(close.props);
+  expect(native.type).toBe("button"); expect(native.props.ref).toBe(close.props.ref);
+  click(tree, "Закрыть"); expect(collapse).toHaveBeenCalledOnce();
   const backdrop = elements(tree).find(node => node.props.className === "gb-venue-sheet-backdrop");
   if (!backdrop) throw new Error("No backdrop"); (backdrop.props.onClick as () => void)(); expect(deselect).toHaveBeenCalledOnce();
 });

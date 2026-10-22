@@ -229,3 +229,24 @@ Integrator must capture all nine paths, including the three created/untracked ar
 Next bounded action: integrator captures these bytes into a reviewable Git candidate, adds exact permalinks, and routes that exact candidate through D4/independent QA and the frozen-guide visual gate before any manual dev merge. Publication and CI are integrator effects, not facts established here.
 
 Rollback: integrator applies the inverse candidate diff against the exact captured base, including removal of the three new files, preserving any later unrelated changes. No force push, reset or runtime rollback is performed by this author.
+
+
+## PMA bounded product recovery · 2026-10-22
+
+Authority: Owner current continuation; durable PMA record in issue #156 comment6331842610. This is one manual integration correction, NOT author attempt4, an attempt reset, or an infrastructure change. Original autonomous attempts1–3 and FAIL reports remain unchanged.
+
+Retained candidate: `360aeee8a4f47243e80d802e5f389ec99c8b6d95`; integrated latest accepted DEV `6fb9b0cbaad3c1989c521d0612d036ddf4342d7c` with an ordinary merge, preserving #151 and #157 including CloseButton. Production #156 changes retained; no test-specific weakening of its focus/visibility behavior.
+
+Reproduced before correction: venue-photo-lifecycle suite, 2 failed / 9 passed plus2 uncaught errors, `TypeError: window.getComputedStyle is not a function`. The legacy synthetic DOM also lacked getClientRects, tabIndex and full focus selectors. Extended only that existing fixture with these browser primitives and8 negative focus cases (hidden/inert/disabled/aria-disabled/negative tabindex/display:none/visibility:hidden/hidden input). All existing photo/focus/map/cleanup assertions retained.
+
+Full web validation found two existing API mocks lacking the apiFetch export imported by embedded CreateGamePage's dependency graph: venue-sheet-integration.test.tsx and games-map-continuity.test.tsx. Added exports that THROW on unexpected calls, not permissive fake success. These3 concrete fixture files are the bounded PMA recovery supplement to original task paths. No product, API, dependency or config scope expansion.
+
+Offline deterministic validation used existing root-owned dependency snapshot with exact matching pnpm-lock SHA256 bb20010d42570cdca82f0f597394684dd69091428082bb96a5f0c9c3abc07e11. Nothing downloaded/installed; no package manifest changed.
+- `node ../../node_modules/typescript/bin/tsc -p tsconfig.json --noEmit --incremental false`: rc0.
+- `node ../../node_modules/eslint/bin/eslint.js .`: rc0.
+- `node ../../node_modules/vitest/vitest.mjs run --no-cache`: rc0,97 files/790 tests PASS.
+- `git diff --check`: PASS.
+
+These are integrator tests, NOT independent QA or DEV acceptance. Independent exact-SHA read-only QA and ordinary Product CI/DEV smoke/ACCEPTED remain required. Browser rendering/focus at390/430/1440 remains pending separate observation; SSR is not rendered evidence.
+
+Rollback: revert only this product recovery diff against its current DEV base; preserve later history, existing accepted #151/#157, original failed candidates/attempts and ledgers. No force push or old state restore.

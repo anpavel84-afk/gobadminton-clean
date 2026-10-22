@@ -1,4 +1,5 @@
 "use client";
+import { CloseButton } from "../CloseButton";
 import type { ReactNode } from "react";
 import { useEffect, useId, useRef, useState } from "react";
 import type { Game, VenueSummary } from "../../../lib/consumer-types";
@@ -139,7 +140,7 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
       <header className="gb-venue-sheet-header">
         {currentView !== "info" && <button type="button" aria-label={currentView === "game" ? "К расписанию" : "К информации о площадке"} onClick={() => setView(currentView === "game" ? "schedule" : "info")}>←</button>}
         <h2 id={label}>{venue.name}</h2>
-        <button ref={close} className="gb-venue-sheet-close" type="button" aria-label="Закрыть" onClick={onCollapse}>×</button>
+        <CloseButton ref={close} className="gb-venue-sheet-close" onClick={onCollapse} />
       </header>
       {currentView === "info" ? <div className="gb-venue-sheet-info">
         {coverSlot ?? <VenueCover cover={venue.cover} name={venue.name} className="gb-venue-sheet-cover" />}

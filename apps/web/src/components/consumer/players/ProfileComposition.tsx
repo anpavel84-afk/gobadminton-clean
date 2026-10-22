@@ -1,4 +1,5 @@
 "use client";
+import { CloseButton } from "../CloseButton";
 
 import Link from "next/link";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -56,7 +57,7 @@ export function Toggle({ label, helper, on, disabled, onClick, describedBy, id }
 export function ProfileDialog({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => { const dialog = ref.current; const trigger = document.activeElement as HTMLElement | null; dialog?.showModal(); return () => { dialog?.close(); if (trigger?.isConnected) trigger.focus(); }; }, []);
-  return <dialog ref={ref} className="profile-dialog" aria-label={title} onCancel={e => { e.preventDefault(); onClose(); }} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}><header><h2>{title}</h2><button type="button" aria-label="Закрыть" onClick={onClose}>×</button></header>{children}</dialog>;
+  return <dialog ref={ref} className="profile-dialog" aria-label={title} onCancel={e => { e.preventDefault(); onClose(); }} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}><header><h2>{title}</h2><CloseButton onClick={onClose} /></header>{children}</dialog>;
 }
 /** Shared chooser: provider starts only after an explicit selection, even for one provider. */
 export function AuthChooser({ returnPath, intent, onClose }: { returnPath: string; intent?: AuthIntent; onClose: () => void }) {

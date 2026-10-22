@@ -44,6 +44,7 @@ vi.mock("next/dynamic", async () => {
   return { default: () => module.GamesVenueMap };
 });
 vi.mock("../src/lib/api-client", () => ({
+  apiFetch: vi.fn(() => { throw new Error("Unexpected apiFetch in map-only harness"); }),
   listAllCityVenues: () => transport.venues(),
   listAllUpcomingCityGames: () => transport.games(),
 }));
