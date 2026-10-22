@@ -223,7 +223,20 @@ export type CreateVenueInput = {
   longitude: number;
 };
 
+/** Existing V1a public projection; absent on older API versions. */
+export type VenueProfile = {
+  courtCount: number | null;
+  amenities: { parking: boolean | null; showers: boolean | null };
+  /** Server-recorded public content edit, not verification/factual freshness. */
+  updatedAt: string | null;
+  gallery: {
+    coverage: "cover_only";
+    items: { url: string; credit: { kind: "photo"; text: string; url: string } }[];
+  };
+};
+
 export type Venue = CreateVenueInput & {
+  profile?: VenueProfile | null;
   publicContacts?: PublicVenueContacts | null;
   cover?: { uploadedUrl: string | null; credit?: { kind: "photo" | "logo" | "illustration"; text: string; url: string | null } | null };
   id: string;

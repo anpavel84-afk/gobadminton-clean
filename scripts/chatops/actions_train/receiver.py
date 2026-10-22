@@ -128,6 +128,8 @@ def free_lock(path):
 
 def guard(slot, policy):
     need(policy['mode'] == 'active' and slot in policy['owned'], 'root migration ownership absent')
+    from context_policy import preflight as context_preflight
+    context_preflight()
     units_quiet(('gobadminton-supervisor.service', f'gobadminton-slot@{slot}.service'))
     user = pwd.getpwnam('agentagency-dev' if slot == 'slot1' else 'gb-slot2')
     no_models(user.pw_uid, slot)
