@@ -1,0 +1,38 @@
+{
+  "schema": "GB_AUTOMATIC_PRODUCT_START_V1",
+  "observed_at": "2026-10-22T05:10:47.982434+00:00",
+  "issue": 170,
+  "slot": "slot1",
+  "phase": "developing",
+  "attempt": 1,
+  "base": "865d02c7ea39ae8210172629c3cb8e20c8fa52a8",
+  "claim_run": 39726228302,
+  "author_run": 39726359628,
+  "dispatcher_run": 39726293963,
+  "author_process": {
+    "boot": "447e18ce-024d-4230-b88f-bd8ca81e2a9e",
+    "pid": 397902,
+    "start": "29961374"
+  },
+  "uid": 1002,
+  "comm": "codex",
+  "cwd": "/srv/gb-slots/slot1/worktrees/issue-170",
+  "model": {
+    "effective_model": "gpt-6.1-sol",
+    "fallback_reason": "only proven available provider with positive measured budget",
+    "profile": "auto",
+    "provider": "codex",
+    "remaining_calls": 24,
+    "requested_model": "gpt-6.1-sol",
+    "role": "author",
+    "unavailable": {
+      "agy": "agy may never act as author",
+      "cursor": "inference_proven=false (no tokens until the billing period renews; then Auto mode, provider test on 3 tasks, Owner yes)"
+    },
+    "used_calls": 1
+  },
+  "admission_comment": 6333202527,
+  "body_sha256": "a3244e1db1efdfd38c6fe922461c43063b60084bd11ee2e5454ab3782f6e2324",
+  "manual_author_launch": false,
+  "old157_in_done": true
+}

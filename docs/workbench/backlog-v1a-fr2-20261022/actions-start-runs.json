@@ -1,0 +1,50 @@
+{
+  "observed_at": "2026-10-22T05:11:42.387927+00:00",
+  "runs": [
+    {
+      "id": 39726293963,
+      "name": "Train dispatcher",
+      "path": ".github/workflows/train-dispatch.yml",
+      "event": "workflow_dispatch",
+      "head_branch": "dev",
+      "head_sha": "865d02c7ea39ae8210172629c3cb8e20c8fa52a8",
+      "status": "completed",
+      "conclusion": "success",
+      "run_attempt": 1,
+      "created_at": "2026-10-22T05:08:15Z",
+      "updated_at": "2026-10-22T05:09:00Z",
+      "html_url": "https://github.com/anpavel84-afk/gobadminton-clean/actions/runs/39726293963",
+      "actor": "github-actions[bot]"
+    },
+    {
+      "id": 39726228302,
+      "name": "Train stage",
+      "path": ".github/workflows/train-stage.yml",
+      "event": "workflow_dispatch",
+      "head_branch": "dev",
+      "head_sha": "865d02c7ea39ae8210172629c3cb8e20c8fa52a8",
+      "status": "completed",
+      "conclusion": "success",
+      "run_attempt": 1,
+      "created_at": "2026-10-22T05:07:33Z",
+      "updated_at": "2026-10-22T05:08:18Z",
+      "html_url": "https://github.com/anpavel84-afk/gobadminton-clean/actions/runs/39726228302",
+      "actor": "github-actions[bot]"
+    },
+    {
+      "id": 39726359628,
+      "name": "Train stage",
+      "path": ".github/workflows/train-stage.yml",
+      "event": "workflow_dispatch",
+      "head_branch": "dev",
+      "head_sha": "865d02c7ea39ae8210172629c3cb8e20c8fa52a8",
+      "status": "in_progress",
+      "conclusion": null,
+      "run_attempt": 1,
+      "created_at": "2026-10-22T05:08:56Z",
+      "updated_at": "2026-10-22T05:09:02Z",
+      "html_url": "https://github.com/anpavel84-afk/gobadminton-clean/actions/runs/39726359628",
+      "actor": "github-actions[bot]"
+    }
+  ]
+}

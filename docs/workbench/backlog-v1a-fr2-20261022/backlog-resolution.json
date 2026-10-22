@@ -1,0 +1,22 @@
+{
+  "schema": "GB_BACKLOG_DATA_RESOLUTION_V1",
+  "at": "2026-10-22T05:08:08.486899+00:00",
+  "scope": "data-only; no executor or workflow changes",
+  "before_sha256": "338f32db1ffb2c4124debbb4c7f4c0b49854f740235052e3d7a3aec454ee8d69",
+  "after_sha256": "2f305020eda1901e0ef3a6ce30bfa6a76d029352a534872b815b30589deb610f",
+  "v1a_issue": 170,
+  "admission": 6333202527,
+  "completed_fr2": {
+    "id": "FR-2",
+    "issue": null,
+    "title_ru": "Друзья на DEV: включить и проверить",
+    "meaning_ru": "Включить FRIENDS_INTERNAL_ENABLED только на DEV, смоук заявка→принять→список (#12 S3)",
+    "note_ru": "Сохранить смысл реестра: включение FRIENDS_INTERNAL_ENABLED только на DEV и проверка заявки, принятия, списка. Отдельная операция без повторной реализации Friends.",
+    "status": "в планах",
+    "priority": 11,
+    "depends_on": []
+  },
+  "FR3_dependency_fulfilled_not_admitted": true,
+  "checks": "existing strict monitor loader passed",
+  "source_history_attempts_budget_changed": false
+}

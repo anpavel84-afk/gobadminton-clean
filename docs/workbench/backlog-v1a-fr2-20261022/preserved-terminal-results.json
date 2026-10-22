@@ -1,0 +1,36 @@
+{
+  "observed_at": "2026-10-22T05:11:42.388757+00:00",
+  "entries": [
+    {
+      "issue": 156,
+      "reason": "attempts exhausted",
+      "attempt": 3,
+      "max_attempts": 3,
+      "head": "360aeee8a4f47243e80d802e5f389ec99c8b6d95",
+      "qa": {
+        "findings": [
+          "[P1] VenueSheet.tsx:120–121 breaks the existing venue-photo-lifecycle.test.tsx Tab cases (lines 341–349): its window fixture lacks getComputedStyle and its Node fixture lacks getClientRects. Independently executing the production handler with those fixtures reproduced TypeError: window.getComputedStyle is not a function, leaving defaultPrevented=false; the base handler prevents Tab successfully. The CI repair remains incomplete. Full Vitest, typecheck and lint were NOT_TESTED because dependencies/executables are absent; this finding is an independently reproduced source incompatibility."
+        ],
+        "reviewed_sha": "360aeee8a4f47243e80d802e5f389ec99c8b6d95",
+        "verdict": "FAIL"
+      },
+      "history_entries": 2
+    },
+    {
+      "issue": 149,
+      "reason": "attempts exhausted",
+      "attempt": 3,
+      "max_attempts": 3,
+      "head": "f1e1a83ff59a79d7a54304d5320e232bc61ffc47",
+      "qa": {
+        "findings": [
+          "Web test regressions remain: shared-map-controller.test.ts (R4) and unified-legacy-compat.test.ts ('preserves current API map, preview and reference-only refresh') supply previews rejected by the new liveUnifiedPreview guard. Independent Node diagnostics using the actual controller and existing fixtures pass on base but fail on reviewed SHA: null !== 'one' and null !== 'peer'. Update fixtures to the closed UnifiedPreview contract while preserving strict validation and assertions. Full Vitest/typecheck/lint execution was unavailable because dependencies are absent."
+        ],
+        "reviewed_sha": "f1e1a83ff59a79d7a54304d5320e232bc61ffc47",
+        "verdict": "FAIL"
+      },
+      "history_entries": 2
+    }
+  ],
+  "modified_by_this_continuation": false
+}
