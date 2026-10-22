@@ -90,7 +90,19 @@ beforeEach(()=>{
   vi.stubGlobal('window',Object.assign(windowStub,{location:{origin:'https://dev.gobadminton.ru',href:'https://dev.gobadminton.ru/map'},history,setTimeout,clearTimeout}));
   vi.stubGlobal('document',{activeElement:trigger,body:{style:{overflow:''}},querySelector:()=>null});
   vi.stubGlobal('requestAnimationFrame',(fn:()=>void)=>{fn();return 1;});
-  const p=pin();view={mode:'unified',snapshot:{validUntil:new Date(now+45000).toISOString(),query:{queryRef:'private'}} as UnifiedSnapshot,rows:[p],pins:[p],mapPage:{nextMapCursor:null} as DirectoryView['mapPage'],selected:null,preview:null,previewBusy:false,previewError:'',busy:false,notice:'',stale:false,capabilityUnavailable:false,authenticationRequired:false};
+  const p=pin();
+  // Keep the mapped render on the real snapshot contract; a type assertion hides
+  // missing fields such as totals, which RadarPage reads once the map is active.
+  const snapshot: UnifiedSnapshot = {
+    contractVersion: 'players-unified-radar-v1', policyVersion: 'radar-geographic-sharing-v2',
+    exposureMode: 'authenticated_live', cityId: MOSCOW_BUNDLE.cityId, regionId: 'moscow',
+    generatedAt: new Date(now).toISOString(), validUntil: new Date(now+45000).toISOString(), refreshAfterSeconds: 30,
+    query: { queryRef: 'private', asOf: new Date(now).toISOString(), ordering: 'radar_city_then_directory', originState: 'none', originRef: null },
+    totals: { matchingTotal: 1, radarTotal: 1, ordinaryOnlyTotal: 0, completeness: 'exact_at_asOf' },
+    map: { availability: 'dev_preview', mapId: 'moscow', version: 'moscow-20261007-p4-098a869f-v001' },
+    items: [p], page: { returnedCount: 1, rankStart: 1, rankEnd: 1, hasMore: false, nextCursor: null },
+  };
+  view={mode:'unified',snapshot,rows:[p],pins:[p],mapPage:{returnedCount:1,rankStart:1,rankEnd:1,hasMore:false,nextMapCursor:null},selected:null,preview:null,previewBusy:false,previewError:'',busy:false,notice:'',stale:false,capabilityUnavailable:false,authenticationRequired:false};
   controller={close:vi.fn(()=>{view.selected=null;view.preview=null;}),select:vi.fn(async(row:UnifiedRow)=>{view.selected=row.publicPlayerId;view.preview=payload(row);}),matches:vi.fn(()=>true),snapshot:()=>view,map:vi.fn(),tick:vi.fn()};
   context.directory={view,controller};context.session={phase:'active',confirmedOn:true,pendingStop:false,me:{id:'viewer',csrfToken:'csrf'},status:{state:'active',contractVersion:'players-unified-radar-v1',activationId:'activation',version:1,coarseCenter:{latitude:55.75,longitude:37.61}}};
   context.config={exposureMode:'live',unifiedDirectory:{enabled:true},cities:[{cityId:MOSCOW_BUNDLE.cityId,map:{availability:'dev_preview',version:MOSCOW_BUNDLE.version,mapId:'moscow'}}]};
@@ -98,6 +110,7 @@ beforeEach(()=>{
 afterEach(()=>{hooks.cleanups.forEach(fn=>fn?.());vi.useRealTimers();vi.unstubAllGlobals();});
 it('marker selection expands/collapses over the same map element with real API rows and approved cover',async()=>{
   const h=pageHarness(),before=h.layer();
+  expect(markup(h.render())).toContain('На карте: 1 из 1');
   const ambientSlots=hooks.slots,ambientState=[...ambientSlots];
   await (before.props.onSelect as (row:UnifiedRow)=>Promise<void>)(view.pins[0]!);h.render();
   const compact=h.child();expect(compact.props.expanded).toBe(false);expect(compact.props.dialog).toBeUndefined();

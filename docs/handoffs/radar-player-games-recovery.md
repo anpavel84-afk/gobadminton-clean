@@ -18,8 +18,8 @@ The assignment specifies gpt-6.1-sol/high, max_attempts 3, depends_on #151/#157
 state. #149 remains deferred at its original **3/3**; neither #149 nor PR #169 is
 resumed or modified.
 
-Observed clean starting worktree: `/srv/gb-slots/slot2/worktrees/issue-177`, branch
-`automation/issue-177`, exact HEAD/base
+Original recovery's clean starting worktree: `/srv/gb-slots/slot2/worktrees/issue-177`, branch
+`automation/issue-177`, original accepted DEV base
 [`47feaf78828b5984097bc54803350622b842ae6c`](https://github.com/anpavel84-afk/gobadminton-clean/commit/47feaf78828b5984097bc54803350622b842ae6c).
 Accepted-DEV status is supplied by the assignment, not independently established
 by the author. Git was used only for status/branch/HEAD/log/show/diff reads.
@@ -28,20 +28,26 @@ Read-only source reference: [PR #169](https://github.com/anpavel84-afk/gobadmint
 head [`f1e1a83ff59a79d7a54304d5320e232bc61ffc47`](https://github.com/anpavel84-afk/gobadminton-clean/commit/f1e1a83ff59a79d7a54304d5320e232bc61ffc47),
 reference base [`865d02c7ea39ae8210172629c3cb8e20c8fa52a8`](https://github.com/anpavel84-afk/gobadminton-clean/commit/865d02c7ea39ae8210172629c3cb8e20c8fa52a8).
 The allowed implementation/contract/test/API-document paths had no intervening
-committed changes between that reference base and the supplied worktree HEAD;
+committed changes between that reference base and the original accepted DEV base;
 only their bounded product changes were ported. The fresh base's other work,
 including #174/#176 map game actions, remains outside the patch. No old
 handoff, prompt deletion, workbench deletion or automation hunk was ported.
 
-No candidate commit exists yet: the source actor cannot write Git. The existing
-Actions bridge must publish this patch and handoff, then attach exact candidate,
+The bridge published the original #177 source candidate as
+[`f52ffc06d8fe4475d4043145b814ab9466e9c4c1`](https://github.com/anpavel84-afk/gobadminton-clean/commit/f52ffc06d8fe4475d4043145b814ab9466e9c4c1).
+That is the observed clean HEAD/base for this QA-finding correction on
+`automation/issue-177`; its full API/web/contract implementation is retained.
+No new candidate commit exists yet: the source actor cannot write Git. The existing
+Actions bridge must publish this correction and handoff, then attach exact candidate,
 review and CI permalinks to #177. A future new commit permalink cannot honestly
 be supplied before that publication. This local handoff is not yet durable
 GitHub publication.
 
 ## Scoped artifacts and implemented behavior
 
-Only the sixteen task-allowed paths are edited/created:
+The original recovery edits/creates the sixteen task-allowed paths below.
+This correction edits only `apps/web/test/radar-player-games.test.tsx` and this
+handoff. Runtime source, contract and visual composition are unchanged by the correction.
 
 - API: `apps/api/src/radar/radar.service.ts`, `apps/api/src/games/games.service.ts`.
 - Contract: `packages/contracts/openapi.json`, `packages/contracts/src/unified.generated.ts`.
@@ -138,7 +144,23 @@ fixture fix, both retained here. It also diagnoses the two formerly out-of-scope
 fixtures now authorized by #177. These are historical records, not a new review
 or a claim that those diagnostics have passed on this patch. Network was not
 used to fetch the original issue comment or current hosted logs. Prior independent
-QA for this #177 assignment was supplied as `{}`; no new verdict is invented.
+QA for the original #177 author session was supplied as `{}`. The current
+assignment supplies an independent **FAIL** against `f52ffc06d8fe4475d4043145b814ab9466e9c4c1`:
+`apps/web/test/radar-player-games.test.tsx:93` asserted an incomplete object as
+`UnifiedSnapshot`. On pageHarness's second render the map becomes active and
+`RadarPage.tsx:121` reads `snapshot?.totals.radarTotal`; absent totals throws before
+the expansion, navigation and unmount assertions. QA reproduced that expression
+with dependency-free Node; full Vitest was unavailable because dependencies were
+absent. This is supplied evidence, not a command executed by this source author.
+
+The correction supplies a complete explicitly typed `UnifiedSnapshot` with query
+metadata, exact totals, map registration, items and page metadata. It also fills
+the existing mapPage fixture to its complete contract and removes both type
+assertions hiding those incomplete shapes. The existing marker/expansion test
+now asserts the rendered map summary `На карте: 1 из 1`; its map-reference,
+selection, collapse and API-content assertions remain. Navigation, Escape/back,
+focus restoration and unmount scenarios remain intact. No live guard is relaxed
+and the existing QA-a3 valid/invalid preview coverage is retained.
 
 ## Authored checks and actual execution
 
@@ -164,10 +186,11 @@ were executed in this #177 author session**, per the explicit author-role ceilin
 No PASS is claimed. Historical missing-dependency failures are not represented
 as newly attempted commands. Current package dependencies were not installed.
 
-The one executed generation command was
+The original author session recorded one executed generation command:
 `node packages/contracts/scripts/generate-unified-types.mjs --write` (exit 0): it
 produced the allowed generated source from openapi.json. This is source
-generation, not contract validation or independent evidence. OpenAPI equality,
+generation, not contract validation or independent evidence. This correction
+executes no generation, tests or self-QA. OpenAPI equality,
 Swagger validation, TypeScript, lint and all test execution remain **NOT_TESTED**.
 Read-only Git/source inspection is not a QA verdict.
 
@@ -225,6 +248,8 @@ insufficient. PROD still requires separate Owner GO.
 No network, Git write, dependency install, auth/secret access, service startup,
 DB/migration execution, deployment, PROD, PLAN, VPN, automation edit or other
 project access was performed. No additional agent or source writer was started.
-Rollback: integrator reverts this bounded sixteen-path source change and renews
+Rollback for this correction: integrator reverts only its test fixture/summary
+assertion and handoff changes relative to `f52ffc06d8fe4475d4043145b814ab9466e9c4c1`.
+Rollback for the full recovery: integrator reverts the bounded sixteen-path source change and renews
 checks through existing gates; no schema/data/runtime mutation is part of the
 patch. The source author performs no revert, Git publication or deployment.
