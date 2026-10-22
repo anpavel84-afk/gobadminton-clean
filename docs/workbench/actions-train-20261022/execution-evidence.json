@@ -1,0 +1,330 @@
+{
+  "schema": "GB_ACTIONS_TRAIN_COMMISSIONING_EVIDENCE_V1",
+  "observed_at": 1792629853,
+  "controller_sha": "1dc7f0e51ed10ef9b529c2ab846c126549e08a07",
+  "stage_workflow_sha256": "804cd9ba9d1e52acfdeb612029e658b3223f0343ea12aa6db40dd4ac28402e12",
+  "installed_manifest": "f434bb707a694f67141beb465fda6ceac2fec7a08cfc9cdb5a7cdcd338fe73a1",
+  "installed_payload_count": 14,
+  "slots": {
+    "slot1": {
+      "task": {
+        "issue": 157,
+        "phase": "qa",
+        "attempt": 1,
+        "head": "6fb9b0cbaad3c1989c521d0612d036ddf4342d7c",
+        "base": "422c109893bd6092fd177ccd3ef2162ccc897e0d",
+        "pr": 164,
+        "integration": null,
+        "qa": {
+          "findings": [],
+          "reviewed_sha": "6fb9b0cbaad3c1989c521d0612d036ddf4342d7c",
+          "verdict": "PASS"
+        }
+      },
+      "done_count": 35,
+      "done_issues": [
+        30,
+        31,
+        13,
+        15,
+        36,
+        37,
+        46,
+        12,
+        28,
+        47,
+        52,
+        54,
+        57,
+        61,
+        62,
+        64,
+        66,
+        78,
+        82,
+        84,
+        92,
+        98,
+        101,
+        104,
+        106,
+        108,
+        109,
+        112,
+        114,
+        131,
+        133,
+        138,
+        142,
+        147,
+        151
+      ],
+      "last": {
+        "stage": "ci",
+        "status": "waiting",
+        "reason": "exact workflow waiting",
+        "workflow_run": 39701334125,
+        "confirmed_at": null
+      },
+      "deferred": [],
+      "operations": [
+        {
+          "stage": "qa",
+          "issue": 151,
+          "attempt": 3,
+          "run": 39698316961,
+          "started_at": 1792627979,
+          "finished_at": 1792627985,
+          "status": "unknown"
+        },
+        {
+          "stage": "publish",
+          "issue": 151,
+          "attempt": 3,
+          "run": 39698191193,
+          "started_at": 1792627908,
+          "finished_at": 1792627912,
+          "status": "confirmed"
+        },
+        {
+          "stage": "qa",
+          "issue": 157,
+          "attempt": 1,
+          "run": 39701053936,
+          "started_at": 1792629618,
+          "finished_at": 1792629713,
+          "status": "confirmed"
+        },
+        {
+          "stage": "promote",
+          "issue": 151,
+          "attempt": 3,
+          "run": 39697926520,
+          "started_at": 1792627759,
+          "finished_at": 1792627763,
+          "status": "confirmed"
+        },
+        {
+          "stage": "promote",
+          "issue": 151,
+          "attempt": 3,
+          "run": 39699386490,
+          "started_at": 1792628613,
+          "finished_at": 1792628617,
+          "status": "confirmed"
+        },
+        {
+          "stage": "ci",
+          "issue": 151,
+          "attempt": 3,
+          "run": 39699218061,
+          "started_at": 1792628510,
+          "finished_at": 1792628513,
+          "status": "confirmed"
+        },
+        {
+          "stage": "author",
+          "issue": 157,
+          "attempt": 0,
+          "run": 39700380835,
+          "started_at": 1792629205,
+          "finished_at": 1792629502,
+          "status": "confirmed"
+        },
+        {
+          "stage": "publish",
+          "issue": 157,
+          "attempt": 1,
+          "run": 39700963871,
+          "started_at": 1792629560,
+          "finished_at": 1792629564,
+          "status": "confirmed"
+        },
+        {
+          "stage": "integrate",
+          "issue": 151,
+          "attempt": 3,
+          "run": 39699277975,
+          "started_at": 1792628554,
+          "finished_at": 1792628557,
+          "status": "confirmed"
+        },
+        {
+          "stage": "dev",
+          "issue": 151,
+          "attempt": 3,
+          "run": 39699865418,
+          "started_at": 1792628905,
+          "finished_at": 1792628908,
+          "status": "confirmed"
+        },
+        {
+          "stage": "qa",
+          "issue": 151,
+          "attempt": 3,
+          "run": 39699003221,
+          "started_at": 1792628384,
+          "finished_at": 1792628444,
+          "status": "confirmed"
+        },
+        {
+          "stage": "ci",
+          "issue": 157,
+          "attempt": 1,
+          "run": 39701334125,
+          "started_at": 1792629785,
+          "finished_at": 1792629788,
+          "status": "waiting"
+        },
+        {
+          "stage": "claim",
+          "issue": 157,
+          "attempt": 0,
+          "run": 39700264816,
+          "started_at": 1792629138,
+          "finished_at": 1792629142,
+          "status": "confirmed"
+        },
+        {
+          "stage": "integrate",
+          "issue": 151,
+          "attempt": 3,
+          "run": 39698068846,
+          "started_at": 1792627837,
+          "finished_at": 1792627840,
+          "status": "confirmed"
+        }
+      ]
+    },
+    "slot2": {
+      "task": {
+        "issue": null,
+        "phase": null,
+        "attempt": null,
+        "head": null,
+        "base": null,
+        "pr": null,
+        "integration": null,
+        "qa": null
+      },
+      "done_count": 1,
+      "done_issues": [
+        152
+      ],
+      "last": {
+        "stage": "author",
+        "status": "deferred",
+        "reason": "attempts exhausted",
+        "workflow_run": 39700144216,
+        "confirmed_at": null
+      },
+      "deferred": [
+        {
+          "issue": 156,
+          "operation": "d2302eb4563cf9fcb1f01e75b721b219daaeb7d0b213dc552ce3cd847ba5a0c0",
+          "reason": "attempts exhausted"
+        }
+      ],
+      "operations": [
+        {
+          "stage": "ci",
+          "issue": 156,
+          "attempt": 2,
+          "run": 39699219860,
+          "started_at": 1792628511,
+          "finished_at": 1792628516,
+          "status": "confirmed"
+        },
+        {
+          "stage": "qa",
+          "issue": 156,
+          "attempt": 3,
+          "run": 39699813345,
+          "started_at": 1792628872,
+          "finished_at": 1792629001,
+          "status": "confirmed"
+        },
+        {
+          "stage": "qa",
+          "issue": 156,
+          "attempt": 2,
+          "run": 39698664121,
+          "started_at": 1792628177,
+          "finished_at": 1792628315,
+          "status": "confirmed"
+        },
+        {
+          "stage": "author",
+          "issue": 156,
+          "attempt": 2,
+          "run": 39699329980,
+          "started_at": 1792628580,
+          "finished_at": 1792628756,
+          "status": "confirmed"
+        },
+        {
+          "stage": "publish",
+          "issue": 156,
+          "attempt": 2,
+          "run": 39698562716,
+          "started_at": 1792628124,
+          "finished_at": 1792628128,
+          "status": "confirmed"
+        },
+        {
+          "stage": "author",
+          "issue": 156,
+          "attempt": 3,
+          "run": 39700144216,
+          "started_at": 1792629066,
+          "finished_at": 1792629068,
+          "status": "deferred"
+        },
+        {
+          "stage": "author",
+          "issue": 156,
+          "attempt": 1,
+          "run": 39698071373,
+          "started_at": 1792627840,
+          "finished_at": 1792628050,
+          "status": "confirmed"
+        },
+        {
+          "stage": "publish",
+          "issue": 156,
+          "attempt": 3,
+          "run": 39699719357,
+          "started_at": 1792628815,
+          "finished_at": 1792628819,
+          "status": "confirmed"
+        },
+        {
+          "stage": "ci",
+          "issue": 156,
+          "attempt": 1,
+          "run": 39697928321,
+          "started_at": 1792627760,
+          "finished_at": 1792627764,
+          "status": "confirmed"
+        }
+      ]
+    }
+  },
+  "legacy_services": {
+    "gobadminton-supervisor.service": {
+      "MainPID": "0",
+      "ActiveState": "inactive",
+      "UnitFileState": "disabled"
+    },
+    "gobadminton-slot@slot1.service": {
+      "MainPID": "0",
+      "ActiveState": "inactive",
+      "UnitFileState": "disabled"
+    },
+    "gobadminton-slot@slot2.service": {
+      "MainPID": "0",
+      "ActiveState": "inactive",
+      "UnitFileState": "disabled"
+    }
+  }
+}

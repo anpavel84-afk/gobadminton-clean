@@ -1,0 +1,9 @@
+PASS for the prior Authorization redirect blocker.
+
+The exact delta installs `_NoRedirect` in the default opener. Independently reproduced 10 offline cases through actual urllib handlers: 301/302/303/307/308, cross-origin and same-origin. Each refused after one request, with no credential in the diagnostic.
+
+Core SHA-256: `c2b62343210ae6474538fcb39ca203f36546135d70e9dd020441eafed77d0776`
+
+Source unchanged. No networking or full suite run. No installation or live acceptance claim.
+
+VERDICT: PASS

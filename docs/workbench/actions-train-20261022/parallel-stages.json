@@ -1,0 +1,57 @@
+[
+  {
+    "issue1": 151,
+    "stage1": "qa",
+    "run1": 39698316961,
+    "issue2": 156,
+    "stage2": "author",
+    "run2": 39698071373,
+    "start": 1792627979,
+    "end": 1792627985,
+    "seconds": 6
+  },
+  {
+    "issue1": 151,
+    "stage1": "publish",
+    "run1": 39698191193,
+    "issue2": 156,
+    "stage2": "author",
+    "run2": 39698071373,
+    "start": 1792627908,
+    "end": 1792627912,
+    "seconds": 4
+  },
+  {
+    "issue1": 151,
+    "stage1": "promote",
+    "run1": 39697926520,
+    "issue2": 156,
+    "stage2": "ci",
+    "run2": 39697928321,
+    "start": 1792627760,
+    "end": 1792627763,
+    "seconds": 3
+  },
+  {
+    "issue1": 151,
+    "stage1": "promote",
+    "run1": 39699386490,
+    "issue2": 156,
+    "stage2": "author",
+    "run2": 39699329980,
+    "start": 1792628613,
+    "end": 1792628617,
+    "seconds": 4
+  },
+  {
+    "issue1": 151,
+    "stage1": "ci",
+    "run1": 39699218061,
+    "issue2": 156,
+    "stage2": "ci",
+    "run2": 39699219860,
+    "start": 1792628511,
+    "end": 1792628513,
+    "seconds": 2
+  }
+]
