@@ -44,6 +44,16 @@
 /* The compact card is one touch surface. Horizontal browser gestures and pinch-zoom
    remain native; vertical swipes are interpreted by VenuePopup only while collapsed. */
 .gb-consumer .gb-venue-popup[data-expanded="false"] { touch-action:pan-x pinch-zoom; }
+/* Stable original pointer target during compact swipes. Avoid display:none or
+   changing its containing box when the sheet starts revealing full content. */
+.gb-consumer .gb-venue-popup-preview-surface {
+  position:absolute; top:44px; left:0; right:0; height:128px;
+}
+/* Stop mobile Safari from claiming a touch-scroll before pointer capture;
+   only the compact card is affected, never the expanded popup content. */
+.gb-consumer .gb-venue-popup[data-expanded="false"] .gb-venue-popup-preview-surface {
+  touch-action:none;
+}
 .gb-consumer .gb-venue-popup-compact-measure { position:absolute; height:172px; width:0; pointer-events:none; }
 .gb-consumer .gb-venue-popup-full-measure { position:absolute; height:88dvh; width:0; pointer-events:none; }
 .gb-consumer .gb-venue-popup .gb-venue-preview { position:static; height:128px; box-shadow:none; }
