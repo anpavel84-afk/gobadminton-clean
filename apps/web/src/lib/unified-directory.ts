@@ -34,6 +34,13 @@ export function distanceExplanation(row: UnifiedRow): string {
   if (!radar) return "";
   return `Приблизительное положение; погрешность ${radar.distance?.uncertaintyMeters ?? radar.geo.uncertaintyMeters} м. Возраст геопозиции: до ${radar.geo.sourceAgeSeconds} с.${radar.geo.quality === "degraded" ? " Местоположение определяется неточно." : ""}`;
 }
+/** Defense in depth for server-approved map rows; never derive geo from profiles. */
+export function activeRadarRow(row: UnifiedRow, now = Date.now()): boolean {
+  const radar = row.radar;
+  return Boolean(radar && radar.consentPolicyVersion === "radar-geographic-sharing-v2" &&
+    radar.resultRef && Date.parse(radar.validUntil) > now && radar.geo?.crs === "EPSG:4326" &&
+    Number.isFinite(radar.geo.latitude) && Number.isFinite(radar.geo.longitude));
+}
 export type DirectoryView = {
   mode: "ordinary" | "unified";
   snapshot: UnifiedSnapshot | null;
@@ -64,6 +71,7 @@ export class UnifiedDirectoryController {
   private nextInitial = 0;
   private retryAt = 0;
   private pending = false;
+  private mapValidUntil: number | null = null;
   private activationOriginKey: string | null = null;
   matches(filters: UnifiedFilters, activationKey: string | null) { return Boolean(this.view.snapshot && Date.parse(this.view.snapshot.validUntil) > this.clock() && JSON.stringify(this.filters) === JSON.stringify(filters) && this.activationOriginKey === activationKey); }
   camera: { center: [number, number]; zoom: number } | null = null;
@@ -73,6 +81,7 @@ export class UnifiedDirectoryController {
   constructor(private request = apiFetch, private clock = Date.now) {}
   private set(patch: Partial<DirectoryView>) { this.view = { ...this.view, ...patch }; this.listeners.forEach(fn => fn()); }
   private invalidate(notice = "", stale = false) {
+    this.mapValidUntil = null;
     ++this.epoch; ++this.selectionEpoch; this.abort.abort(); this.abort = new AbortController(); this.pending = false;
     this.set({ snapshot: null, rows: [], pins: [], mapPage: null, selected: null, preview: null, busy: false, previewBusy: false, notice, stale });
   }
@@ -101,7 +110,7 @@ export class UnifiedDirectoryController {
     if (result.status === 401) this.set({ mode: "ordinary", authenticationRequired: true });
   }
   tick() {
-    if (this.view.snapshot && this.clock() >= Date.parse(this.view.snapshot.validUntil)) {
+    if (this.view.snapshot && (!(Date.parse(this.view.snapshot.validUntil) > this.clock()) || (this.mapValidUntil !== null && !(this.mapValidUntil > this.clock())) || this.view.pins.some(row => !activeRadarRow(row, this.clock())))) {
       this.origin = { kind: "none" }; this.invalidate("Список устарел. Обновите участников Radar.", true);
     }
   }
@@ -126,7 +135,7 @@ export class UnifiedDirectoryController {
     this.set({ snapshot: result.data, rows: result.data.items, notice: result.data.query.originState === "none" ? "Участники Radar по городу. Расстояние неизвестно." : "Расстояние приблизительное, по опубликованным геопозициям." });
   }
   private acceptable(data: UnifiedSnapshot | UnifiedMapSnapshot) {
-    return data.contractVersion === UNIFIED_WIRE && data.cityId === this.filters?.cityId && Date.parse(data.validUntil) > this.clock();
+    return data.contractVersion === UNIFIED_WIRE && data.policyVersion === "radar-geographic-sharing-v2" && ["authenticated_live", "synthetic_demo"].includes(data.exposureMode) && data.cityId === this.filters?.cityId && Date.parse(data.validUntil) > this.clock();
   }
   async refresh() { if (this.filters && !this.pending) await this.query(this.filters, this.origin, this.activationOriginKey); }
   async more() {
@@ -138,7 +147,7 @@ export class UnifiedDirectoryController {
     if (!this.valid(epoch)) return;
     this.pending = false; this.set({ busy: false });
     if (!r.ok) { this.fail(r); return; }
-    if (!this.acceptable(r.data) || r.data.query.queryRef !== snapshot.query.queryRef) { this.invalidate("Список изменился. Обновите участников Radar.", true); return; }
+    if (!this.acceptable(r.data) || r.data.query.queryRef !== snapshot.query.queryRef || r.data.exposureMode !== snapshot.exposureMode) { this.invalidate("Список изменился. Обновите участников Radar.", true); return; }
     this.set({ snapshot: r.data, rows: [...this.view.rows, ...r.data.items.filter(row => !this.view.rows.some(old => old.publicPlayerId === row.publicPlayerId))] });
   }
   async map(next = false) {
@@ -150,10 +159,11 @@ export class UnifiedDirectoryController {
     if (!this.valid(epoch)) return;
     this.pending = false; this.set({ busy: false });
     if (!r.ok) { this.fail(r); return; }
-    if (!this.acceptable(r.data) || r.data.query.queryRef !== snapshot.query.queryRef) { this.invalidate("Список изменился. Обновите участников Radar.", true); return; }
+    if (!this.acceptable(r.data) || r.data.query.queryRef !== snapshot.query.queryRef || r.data.exposureMode !== snapshot.exposureMode) { this.invalidate("Список изменился. Обновите участников Radar.", true); return; }
     ++this.selectionEpoch;
     // Replace the map window; never silently accumulate/export the entire city.
-    this.set({ pins: r.data.items.filter(row => row.radar !== null).slice(0, 200), mapPage: r.data.mapPage, selected: null, preview: null, previewBusy: false });
+    this.mapValidUntil = Date.parse(r.data.validUntil);
+    this.set({ pins: r.data.items.filter(row => activeRadarRow(row, this.clock())).slice(0, 200), mapPage: r.data.mapPage, selected: null, preview: null, previewBusy: false });
   }
   close() { ++this.selectionEpoch; this.set({ selected: null, preview: null, previewBusy: false }); }
   async select(row: UnifiedRow) {
