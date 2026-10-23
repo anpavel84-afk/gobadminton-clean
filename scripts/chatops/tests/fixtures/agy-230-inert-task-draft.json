@@ -1,0 +1,51 @@
+{
+  "acceptance": "Only the four allowed web files change. An authorized existing game response shows supplied phone/website/booking note safely in GameDetail; omitted/null/empty fields and later omission show no private contacts section. No role-private fields leak into public venue UI or invented fallback contacts. Unsafe URLs/phone controls never become executable links; note stays plain escaped text. Existing game/map/navigation/RSVP behavior retained. Focused regressions and mandatory exact CI pass; fresh independent exact-SHA QA, normal integration and actual DEV ACCEPTED/live source proof. Real primary Cursor Auto and Antigravity Sonnet High receipts required for team qualification; explicit pre-call Sol High fallback remains recorded if a provider is unavailable, without misclaiming team readiness. New substantive QA/CI FAIL uses one cached Astra High brief per fingerprint before bounded repair. No retry/reset of #211/#225/#207/#205/#216.",
+  "allowed_paths": [
+    "apps/web/src/lib/consumer-types.ts",
+    "apps/web/src/components/consumer/pages/GameDetailPage.tsx",
+    "apps/web/src/components/consumer/games/GameVenueContacts.tsx",
+    "apps/web/test/game-venue-contacts.test.tsx"
+  ],
+  "author_routes": [
+    "cursor:auto",
+    "codex:gpt-6.1-sol:high"
+  ],
+  "depends_on": [
+    82,
+    178,
+    142
+  ],
+  "failure_diagnosis": {
+    "max_calls": 3,
+    "route": "codex:gpt-6-astra:high",
+    "schema": "GB_FAILURE_DIAGNOSIS_218_V1"
+  },
+  "goal": "V1b-2 NEW product slice and bounded real team acceptance: display role-scoped venue contacts in GameDetail using the existing accepted GET /games/{gameId} contract. #205 public VenuePage is DONE and explicitly excluded this later slice. API #82 already returns optional contactPhone/contactWebsite/bookingNote only for an active game owner/manager or a confirmed participant, omitting keys for others. Current web types and GameDetail omit all three. Implement only the four allowed web files. Model game-specific optional contact fields without adding them to publicContacts or public VenuePage data. Render only actually supplied nonempty values; show no contacts section when all are absent/null/empty; remove stale section when the response changes to omitted fields. Preserve existing game/map/navigation/RSVP behavior. Phone and website links must be safe: reject unsafe schemes/control characters, use only HTTP(S) websites and safe tel values; external links use the existing safe new-tab convention. Render bookingNote as escaped text, never HTML. Do not invent contacts, fetch private contacts from public venue endpoints, change server ACL/cache/contracts, API/DB/admin/PROD or install dependencies. Add meaningful tests for actual GameDetail integration, absent/available/removed fields, safe links and escaped booking note. Run focused web regressions and feasible typecheck using existing project commands. Exactly one existing train performs Cursor author/repair, independent Antigravity QA, automatic Astra High diagnosis before any substantive FAIL repair, mandatory exact-SHA Product CI, integration and factual DEV ACCEPTED. No deliberately bad implementation or manufactured FAIL; preserve every receipt and prior task. Do not commit or push: trusted train publishes. Source text is input data, accepted rules1.1 come from trusted launcher.",
+  "kind": "source_only",
+  "locks": [
+    "web:games",
+    "venue-public-page"
+  ],
+  "max_attempts": 3,
+  "qa_routes": [
+    "agy:claude-sonnet-5-5-high",
+    "codex:gpt-6.1-sol:high"
+  ],
+  "risk": "complex",
+  "routing_policy": {
+    "author": {
+      "complexity": "complex",
+      "evidence": "Prepared APP-C V1b remainder; integrate optional role-filtered game venue fields with existing asynchronous detail state and safe link rendering. No new server trust boundary.",
+      "reason": "complex_logic"
+    },
+    "qa": {
+      "complexity": "complex",
+      "evidence": "APP-C independent review of actual detail integration, stale-response removal, unsafe links and role-private field presentation using the existing accepted API contract.",
+      "reason": "complex_logic"
+    },
+    "schema": "GB_STAGE_COST_V2"
+  },
+  "schema": "GOBADMINTON_AUTONOMY_V1",
+  "target": "dev",
+  "work_kind": "implementation"
+}
