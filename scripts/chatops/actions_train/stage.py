@@ -542,7 +542,7 @@ def qualify_qa(req, config, context):
         accepted_rules=accepted_rules, evidence_dir=b.c.state_dir/'antigravity-evidence',
         **({'analysis_grant':q['qualification_grant']} if analysis else
            {'compact_files':True} if is_addressed and
-           q['qualification_grant'].get('owner_comment') in (6370661776,6372450456) else {}))
+           (q['qualification_grant'].get('owner_comment') in (6370661776,6372450456) or __import__('antigravity_qa_recovery').owner_package(q['qualification_grant'])) else {}))
     need(digest(store.data) == before, 'QA qualification changed source checkpoint')
     if grant(q):receipt['qualification_grant']=q['qualification_grant']
     receipt['qualification_task_sha256'] = q['task_sha256']

@@ -852,7 +852,7 @@ def review(work, base, head, prompt, timeout, *, slot, task_hash, charge, model=
                  'analysis source/model drift')
             material=addressed_input(work,analysis_grant)
             from antigravity_qa_recovery import SUPPLEMENT_OWNER_COMMENT
-            strict_source=(analysis_grant['owner_comment']==SUPPLEMENT_OWNER_COMMENT)
+            strict_source=(analysis_grant['owner_comment']==SUPPLEMENT_OWNER_COMMENT or __import__('antigravity_qa_recovery').owner_package(analysis_grant))
             source_root=Path(work).resolve(strict=strict_source)
             if strict_source:
                 need(source_root==QUALIFICATION_WORK.resolve(strict=True)
