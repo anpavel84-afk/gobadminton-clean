@@ -90,6 +90,58 @@ class Evidence(unittest.TestCase):
         with patch.object(stage,'setup',side_effect=err):result=stage.entry({'stage':'qa_qualification'},{})
         self.assertEqual(result,dict(status='unknown',reason='AGY_PARSE_FAILED',safe_release=False,adapter_error=err.public()))
 
+class RunpyEntrypoint(unittest.TestCase):
+    def test_actual_default_runpy_subprocess_and_ordinary_import_share_exact_contract(self):
+        script=r"""
+import io,runpy,sys
+from contextlib import redirect_stdout
+from types import SimpleNamespace
+from unittest.mock import patch
+import receiver
+from test_actions_train_antigravity_recovery import Successor
+from core import Refused
+sentinel=SimpleNamespace(launcher_sentinel=True)
+sys.modules['__main__']=sentinel
+with patch('os.geteuid',return_value=1),patch('sys.exit') as stop,redirect_stdout(io.StringIO()):
+    namespace=runpy.run_module('receiver',run_name='__main__')
+stop.assert_called_once_with(1)
+assert sys.modules['__main__'] is sentinel
+assert not hasattr(sentinel,'STATE') and not hasattr(sentinel,'read')
+for namespace in (namespace,receiver.__dict__):
+    fixture=Successor();fixture.setUp()
+    try:
+        with fixture.date_fixture('2026-10-24') as (ordinary,budget,clock,req,fork,_):
+            for name in ('STATE','read','atomic','journal','checkpoint','guard','live','identity','alive'):
+                namespace[name]=getattr(ordinary,name)
+            card=dict(owned=True,active=None,pending=None,generation=86)
+            assert namespace['qualification_plan']({'mode':'active'},card,budget)['stage']=='qa_qualification'
+            original_atomic=namespace['atomic']
+            def checked_atomic(path,value):
+                if path.name=='slot2.json':
+                    op=next((op for op in value.get('operations',{}).values()
+                             if op.get('task_hash')==fixture.q['task_sha256']),{})
+                    if op.get('process') is None:assert fork.call_count==0
+                else:assert fork.call_count==0
+                return original_atomic(path,value)
+            namespace['atomic']=checked_atomic
+            assert namespace['qualification_request'](req,{})['status']=='running'
+            fork.assert_called_once()
+            assert fixture.data[fixture.Q.LINEAGE]['used_calls']==2
+            assert namespace['qualification_plan']({'mode':'active'},card,budget) is None
+            fixture.j=fixture.data['slot2.json'];clock[0]='2026-10-25'
+            assert namespace['qualification_request'](req|{'run':124},{})['status']=='unknown'
+            fork.assert_called_once()
+    finally:fixture.doCleanups()
+assert sys.modules['__main__'] is sentinel and vars(sentinel)=={'launcher_sentinel':True}
+print('runpy and ordinary import PASS')
+"""
+        script=script.replace('fixture.Q.','R.')
+        script=script.replace('import receiver','import receiver\nimport antigravity_qa_recovery as R',1)
+        env=dict(os.environ,PYTHONPATH=os.pathsep.join((str(Path(__file__).parent),str(Path(__file__).parents[1]/'actions_train'))))
+        result=subprocess.run([sys.executable,'-c',script],env=env,capture_output=True,text=True,timeout=30)
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertIn('runpy and ordinary import PASS',result.stdout)
+
 class Successor(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup);self.root=Path(self.tmp.name)
