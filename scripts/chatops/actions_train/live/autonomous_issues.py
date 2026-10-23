@@ -1024,6 +1024,8 @@ class Bridge:
                 return loads(result.read_text())
 
     def author(self, active, fix=None, **checkpoint):
+        from qa_equivalence import prior_origin
+        original_review = prior_origin(active)
         if _SLOTS is not None:
             _SLOTS.mutex.release()  # never hold the merge queue while authoring
         self.unchanged_issue(active)
@@ -1072,7 +1074,7 @@ class Bridge:
                  cwd=self.work)
         head = self.git('rev-parse', 'HEAD', cwd=self.work)
         require(SHA.fullmatch(head), 'invalid candidate')
-        self.store.phase('candidate', head=head, qa=None, ci=None)
+        self.store.phase('candidate', head=head, qa=None, ci=None, qa_origin=original_review, qa_equivalence=None)
 
     def wait_pr(self, active):
         deadline = time.monotonic() + self.c.wait_timeout
@@ -1103,7 +1105,9 @@ class Bridge:
                              'typecheck/lint/test and check the fix locally. Reject suppressed diagnostics, '
                              'deleted/disabled checks or weaker assertions. ') if (
                                  active.get('ci_failure') and continuity(active)) else ''
-            result = self.model('Independent QA in a NEW session; never implement fixes. Review EXACT '
+            from qa_equivalence import addressed_review_context
+            addressed = addressed_review_context(self, active)
+            result = self.model(addressed + 'Independent QA in a NEW session; never implement fixes. Review EXACT '
                                 + active['head'] + ' against base ' + active['base']
                                 + '. This is SOURCE QA before CI and DEV. Inspect the diff against '
                                 'the immutable task goal, allowed paths, project rules and source-level '
@@ -1120,12 +1124,15 @@ class Bridge:
                                 '(array of strings; empty for PASS), reviewed_sha (exact SHA). '
                                 + repair_checks + 'TASK: '
                                 + json.dumps(active['task'], ensure_ascii=False), qa=True)
-            atomic(self.c.state_dir / f'qa-{active["issue"]}-a{active["attempt"]}{integ(active)}.json', result)
             require(self.git('rev-parse', 'HEAD', cwd=qa_work) == active['head']
                     and not self.git('status', '--porcelain', '--untracked-files=all', cwd=qa_work),
                     'QA modified candidate')
             passed = qa_result(result, active['head'])
-            self.store.phase('qa', qa=result)
+            from qa_equivalence import immutable, name
+            immutable(self.c.state_dir, name(active), result, atomic)
+            self.store.phase('qa', qa=result, qa_equivalence=None, qa_origin=None)
+            from qa_equivalence import record
+            record(self, active, result, atomic)
             return passed
         finally:
             self.work = author_work
@@ -1152,11 +1159,27 @@ class Bridge:
         raise Hold(f'{name} timeout/absent')
 
     def saved_qa(self, active):
+        if active.get('qa_equivalence'):
+            from qa_equivalence import verify
+            return verify(self, active)
         path = self.c.state_dir / f'qa-{active["issue"]}-a{active["attempt"]}{integ(active)}.json'
         require(not path.is_symlink() and path.stat().st_size <= 65536, 'invalid saved QA')
         result = loads(path.read_bytes())
         require(result == active['qa'] and qa_result(result, active['head']),
                 'saved independent QA not PASS for exact SHA')
+
+    def try_reuse_qa(self, active):
+        # An already saved exact-SHA PASS is never purchased twice, including
+        # historical receipts without the newer provenance sidecar.
+        path = self.c.state_dir / f'qa-{active["issue"]}-a{active["attempt"]}{integ(active)}.json'
+        if path.exists() and not path.is_symlink():
+            result = loads(path.read_bytes())
+            if qa_result(result, active['head']):
+                self.store.phase('qa', qa=result, qa_equivalence=None)
+                self.saved_qa(active)
+                return True
+        from qa_equivalence import try_reuse
+        return try_reuse(self, active, atomic)
 
     def failed_ci(self, active):
         """Exact-head Product CI must be completed/failure; returns a bounded, log-free summary."""
@@ -1417,8 +1440,11 @@ class Bridge:
         self.git('diff', '--check', dev, head, cwd=self.work)
         history = list(active.get('history', [])) + [dict(
             attempt=active['attempt'], head=active['head'], base=active['base'], qa=active.get('qa'),
-            ci=active.get('ci'), integrated_onto=dev)]
+            ci=active.get('ci'), integrated_onto=dev, qa_equivalence=active.get('qa_equivalence'))]
+        from qa_equivalence import prior_origin
+        original = prior_origin(active)
         self.store.phase('candidate', base=dev, head=head, qa=None, ci=None,
+                         qa_origin=original, qa_equivalence=None,
                          integration=active.get('integration', 0) + 1, history=history,
                          integration_target=None, integration_conflict=None)
 

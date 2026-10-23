@@ -113,3 +113,58 @@ class OwnerPackageTests(unittest.TestCase):
                 with self.assertRaises(Exception):A.authorize(COMMENT,CONTROLLER)
 
 if __name__=='__main__':unittest.main()
+
+class AdmissionRepairTests(unittest.TestCase):
+    def test_bootstrap_exact_task_does_not_require_future_marker(self):
+        g=grant('technical_pm_product_analyst')
+        with patch.object(N,'trusted',side_effect=RuntimeError('marker not yet installed')):
+            q=A.exact_qualification(g,CONTROLLER)
+        expected=dict(schema='GB_ANTIGRAVITY_29_ADDRESSED_TASK_V1',issue=29,
+            role='technical_pm_product_analyst',slot='slot2',base=A.SOURCE_BASE,
+            head=A.SOURCE_HEAD,model=N.MODEL,max_calls=1,
+            adapter_revision=CONTROLLER,qualification_grant=g)
+        self.assertEqual(q['task_sha256'],digest(expected))
+        self.assertEqual(q['qualification_grant'],g)
+
+    def test_separate_QA_marker_eligible_only_after_real_complete(self):
+        l=ledger()
+        roles={row['grant']['role']:row for row in l['grants'].values()}
+        roles['technical_pm_product_analyst']['operation']='a'*64
+        l['used_calls']=1
+        slot={'generation':98,'pending':None,'operations':{
+            'a'*64:{'result':{'status':'confirmed','analysis_complete':True,
+                'analysis':{'completion':'COMPLETE','source_reads':[{'path':'a'},{'path':'b'}]},
+                'native_receipt':{'tool_names':['view_file','run_command']}}}}}
+        marker={'phase':'canary','executor_uid':978,
+                'qualification':{'qualification_grant':grant('technical_pm_product_analyst')}}
+        q,nextmarker,nextslot=A.transition_plan('qa',COMMENT,CONTROLLER,slot,marker,l)
+        self.assertEqual(q['qualification_grant']['role'],'independent_qa')
+        self.assertEqual(nextslot['generation'],99)
+        self.assertEqual(nextmarker['qualification']['qualification_grant'],grant('independent_qa'))
+        for result_update in ({'analysis_complete':False},
+                {'analysis':{'completion':'INCOMPLETE','source_reads':[{'path':'a'},{'path':'b'}]}},
+                {'native_receipt':{'tool_names':['view_file']}}):
+            wrong=json.loads(json.dumps(slot))
+            wrong['operations']['a'*64]['result'].update(result_update)
+            with self.assertRaises(Exception):A.transition_plan(
+                'qa',COMMENT,CONTROLLER,wrong,marker,l)
+        l['grants'][digest(grant('independent_qa'))]['operation']='b'*64
+        l['used_calls']=2
+        with self.assertRaises(Exception):A.transition_plan('qa',COMMENT,CONTROLLER,slot,marker,l)
+
+    def test_existing_atomic_writes_resume_idempotently(self):
+        import tempfile
+        import hashlib
+        with tempfile.TemporaryDirectory() as root:
+            p=Path(root)/'slot2.json'
+            original={'generation':96,'pending':None}
+            new={'generation':97,'pending':None}
+            p.write_bytes(A.encoded(original))
+            before=hashlib.sha256(p.read_bytes()).hexdigest()
+            after=hashlib.sha256(A.encoded(new)).hexdigest()
+            A.safe_put(p,new,before,after)
+            self.assertEqual(hashlib.sha256(p.read_bytes()).hexdigest(),after)
+            A.safe_put(p,new,before,after)
+            self.assertEqual(hashlib.sha256(p.read_bytes()).hexdigest(),after)
+            p.write_text('foreign state')
+            with self.assertRaises(Exception):A.safe_put(p,new,before,after)

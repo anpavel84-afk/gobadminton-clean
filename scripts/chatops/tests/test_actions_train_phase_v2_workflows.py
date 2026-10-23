@@ -73,7 +73,14 @@ class HostedPhaseV2(unittest.TestCase):
         return pin,manifest
 
     def test_every_hosted_checkout_exact_same_reviewed_controller(self):
-        pin,manifest=self.pinned_payload()
+        # The actual release C -> R is immutable provenance. Later source
+        # candidates are validated by their own manifest/tests and require a new
+        # operator release only when executable identity changes.
+        spec=importlib.util.spec_from_file_location('train_release',ROOT/'scripts/chatops/ops/prepare_train_release.py')
+        validator=importlib.util.module_from_spec(spec);spec.loader.exec_module(validator)
+        evidence=validator.check(ROOT,git('rev-parse','HEAD').decode().strip())
+        pin=evidence['implementation']
+        manifest=json.loads(git('show',pin+':scripts/chatops/actions_train/manifest.json'))
         def blob(path):return git('show',pin+':'+path)
         with tempfile.TemporaryDirectory(dir=os.environ.get('JOB')) as temp:
             bundle=pathlib.Path(temp)

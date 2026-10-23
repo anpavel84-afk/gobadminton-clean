@@ -109,7 +109,7 @@ def authorize(comment_id,controller):
 
 def quiescent(controller):
     policy=R.read(R.POLICY,0)
-    need(policy.get('mode')=='active' and policy.get('controller_sha')==controller,
+    need(policy.get('mode') in ('active','disabled') and policy.get('controller_sha')==controller,
          'controller must be ACTIVE and exact')
     R.units_quiet(R.UNITS)
     for slot,uid in (('slot1',1002),('slot2',978)):
@@ -132,68 +132,225 @@ def quiescent(controller):
          'installed rules changed')
     return s
 
+def exact_qualification(grant, controller):
+    """Construct existing addressed task under root pre-enrollment validation.
+
+    Runtime still calls native_antigravity.qualification_descriptor after the
+    atomic marker write, with its full ordinary strict validation.
+    """
+    Q.validate_addressed_grant(grant,enrollment=True)
+    task=dict(schema='GB_ANTIGRAVITY_29_ADDRESSED_TASK_V1',issue=29,
+        role=grant['role'],slot='slot2',base=SOURCE_BASE,head=SOURCE_HEAD,
+        model=N.MODEL,max_calls=1,adapter_revision=controller,
+        qualification_grant=grant)
+    q=dict(issue=29,base=SOURCE_BASE,head=SOURCE_HEAD,
+        work=str(N.QUALIFICATION_WORK),adapter_revision=controller,
+        qualification_grant=grant,task_sha256=digest(task))
+    return q
+
+
+def qa_ready(slot, ledger):
+    """One confirmed, tool-supported analysis before any QA marker transition."""
+    Q.owner_package_ledger(ledger)
+    need(ledger['used_calls']==1,'QA transition requires one spent analysis')
+    roles={row['grant']['role']:row for row in ledger['grants'].values()}
+    analysis=roles['technical_pm_product_analyst']
+    need(analysis['operation'] is not None and roles['independent_qa']['operation'] is None,
+         'QA requires exact unspent QA grant')
+    op=slot['operations'].get(analysis['operation'],{})
+    result=op.get('result') or {}
+    native=result.get('native_receipt') or {}
+    need(result.get('status')=='confirmed' and result.get('analysis_complete') is True
+         and result.get('analysis',{}).get('completion')=='COMPLETE'
+         and {'view_file','run_command'} <= set(native.get('tool_names') or [])
+         and len(result.get('analysis',{}).get('source_reads') or [])==2,
+         'independent QA cannot start before real native analysis COMPLETE')
+
+
+def transition_plan(action,comment_id,controller,slot,marker,package):
+    """Finite occupancy/marker effect only; no grant consumption or provider call."""
+    roles={row['grant']['role']:row for row in package['grants'].values()}
+    role='technical_pm_product_analyst' if action=='analysis' else 'independent_qa'
+    grant=roles[role]['grant']
+    if action=='qa':
+        qa_ready(slot,package)
+        need(marker.get('qualification',{}).get('qualification_grant')==
+             roles['technical_pm_product_analyst']['grant'],
+             'QA transition must follow this package analysis marker')
+    else:
+        need(package['used_calls']==0 and
+             all(row['operation'] is None for row in package['grants'].values()),
+             'analysis package must be unspent')
+    q=exact_qualification(grant,controller)
+    need(q['task_sha256'] not in {x.get('task_hash') for x in slot['operations'].values()},
+         'qualification task already used')
+    nextmark=copy.deepcopy(marker)
+    nextmark.update(phase='canary',adapter_revision=controller,
+        canary_task_sha256=q['task_sha256'],qualification=q,modules={
+            'native_antigravity.py':sha(Path(N.__file__)),
+            'native_guard.py':sha(Path(N.__file__).with_name('native_guard.py'))})
+    nextslot=copy.deepcopy(slot)
+    nextslot['generation']+=1
+    need(set(nextslot)==set(slot) and nextslot['pending'] is None and
+         nextslot['operations']==slot['operations'] and
+         all(nextslot[k]==slot[k] for k in slot if k!='generation'),
+         'transition would modify more than generation')
+    return q,nextmark,nextslot
+
+
+def encoded(value):
+    return json.dumps(value,sort_keys=True).encode()
+
+
+def safe_put(path, value, before_sha, after_sha, *, mode=0o600):
+    """Idempotent exact-before/exact-after write. Any third value fails closed."""
+    now=sha(path) if path.exists() else None
+    need(now in (before_sha,after_sha),'admission target drift before write')
+    if now==before_sha:
+        R.atomic(path,value,mode=mode)
+    need(sha(path)==after_sha,'admission target write readback mismatch')
+
+
 def main():
-    need(os.geteuid()==0 and len(sys.argv)==3 and sys.argv[1] in ('--dry-run','--apply'),
-         'one root authenticated package admission only')
+    need(os.geteuid()==0 and len(sys.argv)==3 and
+         sys.argv[1] in ('--dry-run','--apply','--qa'),
+         'one root authenticated package enrollment or post-COMPLETE QA transition')
+    action='qa' if sys.argv[1]=='--qa' else 'analysis'
     comment_id=int(sys.argv[2])
     R.trusted_tree(Path(__file__).resolve())
     fd=os.open(R.STATE/'controller.lock',os.O_RDWR|os.O_NOFOLLOW|os.O_CLOEXEC)
     try:
         fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
-        controller=R.read(R.POLICY,0)['controller_sha']
-        before=quiescent(controller)
-        ledger=authorize(comment_id,controller)
+        policy=R.read(R.POLICY,0)
+        controller=policy['controller_sha']
+        receipt=R.STATE/(RECEIPT_PREFIX+str(comment_id)+
+                         ('-qa.json' if action=='qa' else '.json'))
         path=R.STATE/(Q.OWNER_PACKAGE_LEDGER_PREFIX+str(comment_id)+'.json')
-        receipt=R.STATE/(RECEIPT_PREFIX+str(comment_id)+'.json')
-        need(not path.exists() and not receipt.exists(),'Owner package already admitted')
+        oldreceipt=R.STATE/(RECEIPT_PREFIX+str(comment_id)+'.json')
+        ledger_authorized=authorize(comment_id,controller)
+        if action=='qa':
+            need(oldreceipt.exists() and R.read(oldreceipt,0)['phase']=='complete',
+                 'original package enrollment not complete')
+            package=Q.owner_package_ledger(R.read(path,0))
+            need(package['body_sha256']==ledger_authorized['body_sha256'] and
+                 package['controller_sha']==controller and
+                 set(package['grants'])==set(ledger_authorized['grants']),
+                 'QA transition package origin drift')
+        else:
+            package=ledger_authorized
+        existing=R.read(receipt,0) if receipt.exists() else None
+        if existing is not None:
+            need(existing.get('schema')=='GB_AGY_29_OWNER_PACKAGE_TRANSACTION_V2'
+                 and existing.get('action')==action and
+                 existing.get('owner_comment')==comment_id and
+                 existing.get('controller_sha')==controller and
+                 existing.get('body_sha256')==package['body_sha256'] and
+                 existing.get('phase') in ('intent','complete'),
+                 'unknown or changed admission intent')
+        slot=quiescent(controller)
         marker=R.read(N.MARKER,0)
-        need(marker.get('phase')=='canary' and marker['executor_uid']==978,
-             'existing canary marker changed')
-        analysis=next(row['grant'] for row in ledger['grants'].values()
-                      if row['grant']['role']=='technical_pm_product_analyst')
-        q=dict(issue=29,base=SOURCE_BASE,head=SOURCE_HEAD,
-              work=str(N.QUALIFICATION_WORK),adapter_revision=controller,
-              qualification_grant=analysis)
-        q['task_sha256']=digest(N.qualification_task(SOURCE_BASE,SOURCE_HEAD,
-                adapter_revision=controller,qualification_grant=analysis))
-        need(q['task_sha256'] not in {x.get('task_hash') for x in before['operations'].values()},
-             'duplicate exact analysis task')
-        newmarker=copy.deepcopy(marker)
-        newmarker.update(adapter_revision=controller,canary_task_sha256=q['task_sha256'],
-          qualification=q,modules={
-            'native_antigravity.py':sha(Path(N.__file__)),
-            'native_guard.py':sha(Path(N.__file__).with_name('native_guard.py'))})
-        newslot=copy.deepcopy(before)
-        newslot['generation']+=1
-        # validate marker after root authoritative file exists only; offline structure check here.
-        need(set(newslot)==set(before) and newslot['operations']==before['operations']
-             and newslot['pending'] is None,'foreign slot changes')
+        need(marker.get('phase')=='canary' and marker.get('executor_uid')==978,
+             'existing isolated canary marker required')
+        if existing:
+            # Recovery computes the same reviewed operation from write-ahead
+            # snapshots, not from whichever half-written state happens to exist.
+            prior_slot=json.loads(existing['slot_before_raw'])
+            prior_marker=existing['marker_before']
+            if action=='analysis':
+                need(sha(path) in (None,existing['package_sha256']),
+                     'partial package ledger changed')
+            q,newmarker,newslot=transition_plan(
+                action,comment_id,controller,prior_slot,prior_marker,package)
+            need(existing['slot_before_sha256']==hashlib.sha256(
+                 existing['slot_before_raw'].encode()).hexdigest()
+                 and existing['slot_after_sha256']==hashlib.sha256(encoded(newslot)).hexdigest()
+                 and existing['marker_before_sha256']==hashlib.sha256(encoded(prior_marker)).hexdigest()
+                 and existing['marker_after_sha256']==hashlib.sha256(encoded(newmarker)).hexdigest()
+                 and existing['task_sha256']==q['task_sha256'],
+                 'intent/changed target drift')
+        else:
+            need(policy['mode']=='active','new registration requires active controller')
+            if action=='analysis':
+                need(not path.exists(),'new Owner package already registered')
+            q,newmarker,newslot=transition_plan(
+                action,comment_id,controller,slot,marker,package)
+        expected_slot_before=sha(R.STATE/'slot2.json') if not existing else existing['slot_before_sha256']
+        expected_marker_before=sha(N.MARKER) if not existing else existing['marker_before_sha256']
+        expected_package=hashlib.sha256(encoded(package)).hexdigest() if action=='analysis' else sha(path)
+        if existing is None:
+            before_raw=(R.STATE/'slot2.json').read_bytes()
+            transaction=dict(schema='GB_AGY_29_OWNER_PACKAGE_TRANSACTION_V2',
+                 phase='intent',action=action,owner_comment=comment_id,
+                 controller_sha=controller,body_sha256=package['body_sha256'],
+                 slot_before_raw=before_raw.decode(),
+                 slot_before_sha256=expected_slot_before,
+                 slot_after_sha256=hashlib.sha256(encoded(newslot)).hexdigest(),
+                 marker_before=marker,marker_before_sha256=expected_marker_before,
+                 marker_after_sha256=hashlib.sha256(encoded(newmarker)).hexdigest(),
+                 task_sha256=q['task_sha256'],package_sha256=expected_package,
+                 policy_before=policy,historic_sha256=HIST,
+                 supplement_sha256=SUP,budget_sha256=BUDGET,
+                 charged_calls=0,role=q['qualification_grant']['role'])
+        else:transaction=existing
+        # Ordinary runtime has never been given a new authorization while the
+        # complete signed admission receipt is missing.
+        now_slot=sha(R.STATE/'slot2.json')
+        now_marker=sha(N.MARKER)
+        need(now_slot in (transaction['slot_before_sha256'],
+                          transaction['slot_after_sha256'])
+             and now_marker in (transaction['marker_before_sha256'],
+                                transaction['marker_after_sha256']),
+             'foreign change during admission')
+        if policy['mode']=='active' and existing and existing['phase']=='intent':
+            need(now_slot==transaction['slot_before_sha256'] and
+                 now_marker==transaction['marker_before_sha256'] and
+                 (action=='qa' or not path.exists()),
+                 'incomplete active admission with exposed new grants')
         if sys.argv[1]=='--dry-run':
+            need(not existing,'dry-run cannot resume real intent')
             print(json.dumps(dict(status='DRY_RUN_PASS',owner_comment=comment_id,
-                  bound_controller=controller,old_generation=before['generation'],
-                  new_generation=newslot['generation'],model_calls=0,
-                  grant_digests=list(ledger['grants']),ledger_count=2),sort_keys=True))
+                 action=action,controller=controller,generation_before=slot['generation'],
+                 generation_after=newslot['generation'],task_sha256=q['task_sha256'],
+                 grants=2,provider_calls=0,protected_writes=0),sort_keys=True))
             return
-        original=dict(marker=marker,slot=before)
-        evidence=dict(schema='GB_AGY_29_OWNER_PACKAGE_ADMISSION_V1',phase='intent',
-             comment_id=comment_id,body_sha256=ledger['body_sha256'],
-             controller_sha=controller,prior=original,
-             changed={'marker':sha(N.MARKER),'slot':sha(R.STATE/'slot2.json')},
-             historic_sha256=HIST,supplement_sha256=SUP,budget_sha256=BUDGET,
-             package_ledger_sha256=hashlib.sha256(json.dumps(ledger,sort_keys=True).encode()).hexdigest())
-        R.atomic(receipt,evidence)
-        R.atomic(path,ledger)
-        R.atomic(N.MARKER,newmarker,mode=0o644)
-        R.atomic(R.STATE/'slot2.json',newslot)
-        need(N.qualification_descriptor(R.read(N.MARKER,0))==q,'new dynamic canary rejected')
-        need(Q.owner_package_read(R,analysis)['used_calls']==0,'new package ledger readback failed')
-        need(R.journal('slot2')['generation']==newslot['generation'],'slot generation drift')
-        quiescent(controller)
-        R.atomic(receipt,dict(evidence,phase='complete'))
-        print(json.dumps(dict(status='ADMITTED',owner_comment=comment_id,
-          generation=newslot['generation'],controller=controller,
-          grant_digests=list(ledger['grants']),new_model_calls=0),sort_keys=True))
+        if existing is None:
+            R.atomic(receipt,transaction)
+        if policy['mode']=='active' and existing and existing['phase']=='complete':
+            need(now_slot==transaction['slot_after_sha256'] and
+                 now_marker==transaction['marker_after_sha256'],
+                 'completed admission runtime mismatch')
+            print(json.dumps(dict(status='ALREADY_COMPLETE',action=action,
+                 controller=controller,owner_comment=comment_id,model_calls=0)))
+            return
+        if policy['mode']=='active':
+            R.atomic(R.POLICY,dict(policy,mode='disabled'),mode=0o644)
+        # No dispatch while any of the three protected files is half-written.
+        if action=='analysis':
+            safe_put(path,package,None,transaction['package_sha256'])
+        safe_put(N.MARKER,newmarker,
+                 transaction['marker_before_sha256'],
+                 transaction['marker_after_sha256'],mode=0o644)
+        safe_put(R.STATE/'slot2.json',newslot,
+                 transaction['slot_before_sha256'],transaction['slot_after_sha256'])
+        need(N.qualification_descriptor(R.read(N.MARKER,0))==q,
+             'post-enrollment native descriptor rejected')
+        check=Q.owner_package_ledger(R.read(path,0))
+        need(check==package,'per-role grants/ledger changed during admission')
+        need(sha(R.STATE/Q.ADDRESSED_LEDGER)==HIST and
+             sha(R.STATE/Q.SUPPLEMENT_LEDGER)==SUP and
+             sha(R.BUDGET)==BUDGET,'historical grants or budget modified')
+        R.atomic(receipt,dict(transaction,phase='complete'))
+        R.atomic(R.POLICY,dict(transaction['policy_before'],mode='active'),mode=0o644)
+        need(R.read(R.POLICY,0)['mode']=='active'
+             and R.read(R.POLICY,0)['controller_sha']==controller,
+             'controller could not reactivate after complete admission')
+        print(json.dumps(dict(status='ADMITTED',action=action,
+             owner_comment=comment_id,controller=controller,
+             generation=newslot['generation'],
+             task_sha256=q['task_sha256'],
+             receipt=str(receipt),models_started=0),sort_keys=True))
     finally:
         os.close(fd)
+
 
 if __name__=='__main__':main()

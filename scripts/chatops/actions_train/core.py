@@ -17,7 +17,7 @@ REPO = 'anpavel84-afk/gobadminton-clean'
 REPO_ID = 1416250340
 OWNER = 318610566
 SINCE = '2026-10-15T02:27:00+00:00'
-PINS = {'autonomous_issues.py': '24cb669114fcea70c6cf284a278dcefaae1ab9e1835a9e5aef3adcd52d7cbeba',
+PINS = {'autonomous_issues.py': 'f3ca85b4392fa1e2ba76a09ec1140d78ebc6c708ba42397bee047184fec3ebe0',
         'slots.py': '3c7b4ab36dd3cd8b41c3309a4d58c54ffc99027b1d7c1e5ad2235b5cd1f72a76',
         'check_foundation.py': 'c2975b19bd46d00acbdbc08227545b8f9c9501d7b8e8783e9b397751c612bd13'}
 RECOVERY_STAGES = ('diagnose', 'task_review')
@@ -32,6 +32,12 @@ class Retry(Refused):
     def __init__(self, reason, after=30):
         super().__init__(reason)
         self.after = max(1, int(after))
+
+class SubmissionFailed(Refused):
+    """A definitive per-request HTTP validation refusal, not an authority failure."""
+
+class SubmissionUnknown(Retry):
+    """The HTTP submission may have succeeded; never retry within this pass."""
 
 def need(ok, reason):
     if not ok:
@@ -113,11 +119,16 @@ class API:
                         delay = 60
                     raise Retry('GitHub rate/permission response ' + str(error.code), max(1, delay)) from None
                 if error.code < 500:
-                    raise Refused('GitHub response ' + str(error.code)) from None
+                    specific = (data is not None and path == 'actions/workflows/train-stage.yml/dispatches'
+                                and error.code in (400, 409, 422))
+                    kind = SubmissionFailed if specific else Refused
+                    raise kind('GitHub response ' + str(error.code)) from None
             except (urllib.error.URLError, TimeoutError, ConnectionError):
                 pass
             if data is not None or method not in (None, 'GET') or attempt == 2:
-                raise Retry('API unavailable; reconcile before retry') from None
+                kind = (SubmissionUnknown if data is not None
+                        and path == 'actions/workflows/train-stage.yml/dispatches' else Retry)
+                raise kind('API unavailable; reconcile before retry') from None
             time.sleep(2 ** attempt)
 
     def pages(self, path, key=None):

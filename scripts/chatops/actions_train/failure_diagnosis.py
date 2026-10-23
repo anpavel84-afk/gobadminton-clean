@@ -44,7 +44,7 @@ def failure(active):
         return dict(kind='qa', result=qa)
     raise Refused('no confirmed source FAIL for diagnosis')
 
-def inputs(active, api):
+def inputs(active, api, *, qa_evidence=None):
     p = policy(active['task'])
     f = failure(active)
     evidence = []
@@ -65,6 +65,12 @@ def inputs(active, api):
                  rules_commit=RULES_COMMIT, rules_sha256=RULES_SHA256,
                  failure=f, evidence=evidence, history=active.get('history', []),
                  policy=p)
+    if active.get('parent_qa_provenance'):
+        value['parent_qa_provenance'] = copy.deepcopy(active['parent_qa_provenance'])
+    if active.get('qa') and active['qa'].get('reviewed_sha') != active['head']:
+        from qa_equivalence import evidence_binding
+        evidence_binding(active, qa_evidence)
+        value['qa_evidence'] = copy.deepcopy(qa_evidence)
     return copy.deepcopy(value)
 
 def cache(active):
@@ -92,6 +98,8 @@ def next_stage(active):
                 and v.get('base') == active['base'] and v.get('attempt') == active['attempt']
                 and v.get('integration') == active.get('integration', 0)
                 and v.get('history') == active.get('history', [])
+                and (not active.get('qa_equivalence') or
+                     (v.get('qa_evidence') or {}).get('equivalence_receipt') == active['qa_equivalence'])
                 and v.get('rules_commit') == RULES_COMMIT and v.get('rules_sha256') == RULES_SHA256):
             return 'author'
     return 'failure_diagnosis'
@@ -158,7 +166,8 @@ def perform(context):
     b.candidate_identity(active)
     b.stopped_writer(active['head'])
     b.clean(active['head'])
-    value = inputs(active, api)
+    proof = b.saved_qa(active) if active['phase'] == 'ci' else None
+    value = inputs(active, api, qa_evidence=proof)
     if value['failure']['kind'] == 'ci':
         need(b.failed_ci(active) == value['failure']['result'], 'CI diagnostic changed; re-observe gate')
     key = digest(value)
@@ -178,7 +187,8 @@ def perform(context):
     outcome = b.model(prompt, qa=True)
     b.clean(active['head'])
     b.unchanged_issue(active)
-    need(inputs(active, api) == value, 'failure evidence changed during diagnosis')
+    proof = b.saved_qa(active) if active['phase'] == 'ci' else None
+    need(inputs(active, api, qa_evidence=proof) == value, 'failure evidence changed during diagnosis')
     brief = validate_brief(active, value, outcome)
     receipt = c['receipts'][key]
     receipt.update(status='ready' if brief['kind'] == 'source_defect' else 'blocked',
@@ -187,8 +197,8 @@ def perform(context):
     store.phase(active['phase'], **{FIELD: c})
     return dict(status='confirmed', failure_diagnosis=receipt, cached=False)
 
-def repair(active, api):
-    value = inputs(active, api)
+def repair(active, api, *, qa_evidence=None):
+    value = inputs(active, api, qa_evidence=qa_evidence)
     need(ready(active, value), 'bound Astra repair brief required before source repair')
     r = cache(active)['receipts'][digest(value)]
     return dict(failure=value['failure'], assertion_evidence=value['evidence'],
