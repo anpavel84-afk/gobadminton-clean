@@ -23,6 +23,10 @@ sys.path.insert(0, str(ROOT / 'scripts/chatops/actions_train'))
 import core
 # Bind source policy before OPS helper modules temporarily add their install path.
 import cost_policy
+import context_policy
+import failure_diagnosis
+import recovery
+import recovery_admission
 import receiver
 import stage
 import client

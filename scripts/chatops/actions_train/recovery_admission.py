@@ -116,6 +116,8 @@ def root_admission(a, api, cache, issue, config):
          'ambiguous recovery publication; do not choose an arbitrary duplicate')
     cert = dict(key=key, issue=issue['number'], body_hash=digest(raw), created_at=issue['created_at'],
                 task=copy.deepcopy(task), frozen=copy.deepcopy(r['frozen']), policy_hash=r['policy_hash'])
+    if 'failure_diagnosis' in r:
+        cert['failure_diagnosis'] = copy.deepcopy(r['failure_diagnosis'])
     if r.get('successor'): need(r['successor'] == {k:cert[k] for k in ('issue','body_hash','created_at')}, 'successor binding drift')
     r['successor'] = {k:cert[k] for k in ('issue','body_hash','created_at')}
     r['status'] = 'successor_bound'

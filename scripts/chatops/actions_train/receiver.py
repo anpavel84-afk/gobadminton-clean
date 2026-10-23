@@ -351,7 +351,11 @@ def supervisor(req, policy, key, root_lock):
             req['_task_hash'] = j['operations'][key].get('task_hash')
             if j['operations'][key].get('qa_qualification'):
                 req['_qa_qualification'] = j['operations'][key]['qa_qualification']
-                if 'qualification_grant' in req['_qa_qualification']:req['_qa_grant_operation']=key
+                if 'qualification_grant' in req['_qa_qualification']:
+                    req['_qa_grant_operation']=key
+                    from antigravity_qa_recovery import addressed
+                    if addressed(req['_qa_qualification']):
+                        req['_qa_addressed_grant']=req['_qa_qualification']['qualification_grant']
             if j['operations'][key].get('recovery_admission'):
                 req['_recovery_admission'] = j['operations'][key]['recovery_admission']
             if j['operations'][key].get('recovery_data'):
@@ -540,7 +544,15 @@ def recovery_request(req, policy):
     # A depleted subscription-call budget is a wait reason, not a spent diagnostic run.
     from core import route
     budget=s.Budget(Path('/etc/gobadminton-slots/budgets.json'),AUTONOMY/'outbox',AUTONOMY/'locks/registry.lock')
-    route(s,frozen['snapshot']['task'],'qa','codex',budget,slot)
+    from failure_diagnosis import enabled
+    if req['stage'] == 'diagnose' and enabled(frozen['snapshot']):
+        from core import diagnosis_route
+        diagnosis_route(s, frozen['snapshot']['task'], budget, slot)
+    elif req['stage'] == 'task_review':
+        from core import task_review_route
+        task_review_route(s,frozen['snapshot']['task'],budget,slot)
+    else:
+        route(s,frozen['snapshot']['task'],'qa','codex',budget,slot)
     op = dict(record=record,
          task_hash=frozen['task_hash'], binding=binding(req), run=req['run'], run_attempt=req['run_attempt'],
          before=digest(state), started_at=int(time.time()), process=None,
@@ -630,6 +642,13 @@ def handle(req, policy):
         publish_monitor(policy)
         return dict(status='recorded')
     slot = req['slot']
+    if slot=='slot2' and req['stage']!='qa_qualification' \
+            and (STATE/'antigravity-29-addressed-ledger.json').exists():
+        from native_antigravity import MARKER, trusted
+        from antigravity_qa_recovery import addressed
+        marker=loads(trusted(MARKER)) if MARKER.exists() else {}
+        need(not (marker.get('phase')=='canary' and addressed(marker.get('qualification') or {})),
+             'addressed qualification bootstrap cannot activate product stages')
     hosted_identity(req, policy)
     if req['stage'] == 'qa_qualification':
         return qualification_request(req, policy)

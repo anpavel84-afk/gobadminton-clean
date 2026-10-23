@@ -7,6 +7,8 @@ window.GBTrainMonitor = {
     var model = a.model || {}, process = a.process;
     var last = a.last_confirmed_event ? new Date(a.last_confirmed_event * 1000).toISOString() : 'unknown';
     parent.appendChild(kv([
+      ['Failure loop', (a.failure_loop || {}).status || 'not_applicable'],
+      ['Failure / brief hash', ((a.failure_loop || {}).failure_fingerprint || 'none') + ' / ' + ((a.failure_loop || {}).brief_hash || 'none')],
       ['Actions stage', (a.operation || 'not_started') + ' / ' + a.status],
       ['Workflow', a.workflow_run ? String(a.workflow_run) + ' attempt ' + a.workflow_attempt : 'not_started'],
       ['CLI process', process ? 'PID ' + process.pid + ' / start ' + process.start + (a.status === 'stale' ? ' (last observation)' : '') : 'not_started'],
