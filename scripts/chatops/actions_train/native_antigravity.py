@@ -774,7 +774,9 @@ def analysis_source_gate(result, evidence, work, head):
         return result
     reads=result['source_reads']
     paths={row['path'] for row in reads}
-    valid=READ_TOOLS <= set(evidence['tool_names']) and paths == set(REQUIRED_ANALYSIS_PATHS)
+    valid=(READ_TOOLS <= set(evidence['tool_names']) and
+           len(reads)==len(REQUIRED_ANALYSIS_PATHS) and
+           paths==set(REQUIRED_ANALYSIS_PATHS))
     for row in reads:
         try:
             actual=git(work,'show',head+':'+row['path'])
