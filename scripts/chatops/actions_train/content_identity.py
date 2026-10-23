@@ -171,7 +171,10 @@ def independence(files, sources, changed):
                         # Support repository-local search paths without assuming cwd/sys.path.
                         matches |= {q for q in files for a in alternatives
                                     if q.endswith('/' + a)}
-                    if required and not matches and (alternatives or p.endswith('.py')):
+                    consumed = sorted(matches & changed)
+                    if consumed:
+                        return 'runtime consumer: ' + p + ' -> ' + consumed[0]
+                    if (required or p.endswith('.py')) and not matches:
                         return 'unresolved local import/alias: ' + p
                     targets |= matches
                 if p.endswith('.py'):
@@ -187,6 +190,9 @@ def independence(files, sources, changed):
                              'SourceFileLoader', 'exec', 'eval', 'open', 'read_text', 'read_bytes', 'glob', 'rglob',
                              'globals', 'locals', 'vars', '__getattribute__'}
                     for n in ast.walk(parsed):
+                        if isinstance(n, (ast.ClassDef, ast.With, ast.AsyncWith)) or (
+                                isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.decorator_list):
+                            return 'implicit runtime execution requires addressed QA: ' + p
                         if isinstance(n, ast.ImportFrom):
                             if n.module in ('importlib', 'importlib.util', 'importlib.machinery', 'builtins', 'io', 'runpy', 'pathlib'):
                                 names.update(a.asname or a.name for a in n.names)
@@ -199,15 +205,16 @@ def independence(files, sources, changed):
                         if isinstance(n, ast.Name) and n.id in loader_refs:
                             return 'dynamic loader alias requires addressed QA: ' + p
                         if isinstance(n, ast.Call):
-                            f = n.func
-                            name = f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else ''
-                            if name in names or name in ('getattr', 'setattr', 'globals', 'locals', 'vars'):
-                                # Literal and computed loaders both need addressed QA. This
-                                # includes aliased imports; static deps alone cannot prove absence.
-                                return 'dynamic module/file loader requires addressed QA: ' + p
+                            # General call-target inference is deliberately out of
+                            # scope. A computed/aliased callable is not proof of
+                            # test independence; use genuine addressed delta QA.
+                            return 'runtime call graph requires addressed QA: ' + p
                     if re.search(r'\b(?:sys\.path|__path__|meta_path|path_hooks)\b', text):
                         return 'mutable Python import search path: ' + p
                 else:
+                    if any(c in text for c in ('(', '[', '`')) or re.search(
+                            r'\b(?:new|globalThis|global|window|process|Function|Proxy|Reflect)\b', text):
+                        return 'dynamic JS execution requires addressed QA: ' + p
                     if re.search(r'\b(?:require|import)\s*\(\s*[^\s\'"]', text) or re.search(
                             r'\b(?:createRequire|eval|readFile|readFileSync|glob|require\.resolve)\b|(?:=|:)\s*require\b|\b(?:import|require)\s*/[/*]', text):
                         return 'dynamic JS loader requires addressed QA: ' + p
@@ -240,8 +247,8 @@ def independence(files, sources, changed):
                             matches = {q for t in resolved for q in js_paths(t) if q in files}
                             if not matches: return 'unresolved build alias: ' + p
                             targets |= matches
-                        elif spec.startswith(('@/', '~/', '#')):
-                            return 'unresolved build alias: ' + p
+                        else:
+                            return 'unresolved package/import dependency: ' + p
             else:
                 # Config is data. Test discovery and noEmit checking are not runtime
                 # consumption; all other build references/globs need an exclusion proof.

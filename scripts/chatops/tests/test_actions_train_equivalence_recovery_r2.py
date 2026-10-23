@@ -107,6 +107,10 @@ class BoundedRepair(GitFixture):
             'import runpy as rp\nload=rp.run_path\nVALUE=load("'+TEST+'")["VALUE"]\n',
             'from pathlib import Path\nreader=Path("'+TEST+'").read_text\nVALUE=reader()\n',
             'from io import open as reader\nVALUE=reader("'+TEST+'").read()\n',
+            'from os import system as reader\nreader("python '+TEST+'")\n',
+            'import helper\nVALUE=helper.compute()\n',
+            'import external_bootstrap\nVALUE=0\n',
+            '@loader\ndef value(): return 0\n',
             'reader=__builtins__["open"]\nVALUE=reader("'+TEST+'").read()\n',
         )
         for text in loaders:
