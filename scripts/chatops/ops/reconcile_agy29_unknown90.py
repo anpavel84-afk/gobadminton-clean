@@ -289,5 +289,3 @@ def main():
 
 if __name__=='__main__':
     main()
-
-[executed on device: vmi3510488 (1a468667-a6be-443b-80d7-8c20ff9228ff)]
