@@ -595,12 +595,16 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=
                  'HOME':str(root/'home'),'LANG':'C.UTF-8','TMPDIR':str(out)}
             common=Path(dec(git(work,'rev-parse','--path-format=absolute','--git-common-dir')).strip()).resolve()
             need(common.name == '.git' and common != Path(work).resolve(),'unexpected candidate Git metadata root')
-            source_root=Path(work).resolve(strict=True)
-            need(source_root.is_dir() and not Path(work).is_symlink()
-                 and source_root not in (root,root/'ws')
-                 and str(source_root)==str(Path(work)),
-                 'native source root must be canonical read-only worktree')
-            readonly,writable,executables=filesystem_roots(root,source_root,common)
+            source_root=None
+            if analysis:
+                # Only the addressed analysis needs --add-dir. Preserve the
+                # existing ordinary-QA source path validation and test seam.
+                source_root=Path(work).resolve(strict=True)
+                need(source_root.is_dir() and not Path(work).is_symlink()
+                     and source_root not in (root,root/'ws')
+                     and str(source_root)==str(Path(work)),
+                     'analysis source must be canonical read-only worktree')
+            readonly,writable,executables=filesystem_roots(root,source_root or work,common)
             def child():
                 from native_guard import _landlock,no_new_privileges
                 os.setsid();no_new_privileges();_landlock(readonly,writable,executables)
