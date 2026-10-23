@@ -24,7 +24,7 @@ def rows():
         {'event': 'init', 'conversation_id': CID, 'init': {
             'model': 'claude-sonnet-5-5-medium', 'agent': 'gobadminton-text-review',
             'tools': ['finish', 'view_file', 'run_command', 'call_mcp_tool'],
-            'permission_mode': 'request-review', 'json_schema': copy.deepcopy(N.SCHEMA)}},
+            'permission_mode': 'always-proceed', 'json_schema': copy.deepcopy(N.SCHEMA)}},
         {'event': 'step_update', 'step_update': {'conversation_id': CID, 'step_index': 0,
             'step_type': 'user_input', 'state': 'DONE'}},
         {'event': 'step_update', 'step_update': {'conversation_id': CID, 'step_index': 1,
@@ -56,7 +56,7 @@ class Protocol(EvidenceTestCase):
         self.assertEqual(result, {'verdict': 'PASS', 'findings': [], 'reviewed_sha': SHA})
         self.assertEqual(receipt['effective_model'], 'claude-sonnet-5-5-medium')
         self.assertEqual(receipt['effective_tools'], events[0]['init']['tools'])
-        self.assertEqual(receipt['effective_permission_mode'], 'request-review')
+        self.assertEqual(receipt['effective_permission_mode'], 'always-proceed')
         self.assertEqual(receipt['transcript_sha256'], hashlib.sha256(wire(events)).hexdigest())
         self.assertEqual(receipt['tool_events'], 0)
 
@@ -100,12 +100,14 @@ class Protocol(EvidenceTestCase):
 
     def test_exact_cli_prompt_duration_and_native_flags(self):
         cmd = N.command(90, 'PUBLIC_SOURCE_SENTINEL')
-        self.assertEqual(cmd[-2:], ['-p', 'PUBLIC_SOURCE_SENTINEL'])
+        self.assertNotIn('PUBLIC_SOURCE_SENTINEL',cmd)
+        self.assertIn('--dangerously-skip-permissions',cmd)
+        self.assertEqual(cmd[cmd.index('--input-format')+1],'stream-json')
         self.assertEqual(cmd[cmd.index('--print-timeout') + 1], '90s')
         self.assertEqual(cmd[cmd.index('--output-format') + 1], 'stream-json')
         self.assertIn('--sandbox', cmd)
         self.assertIn('--disable-slash-commands', cmd)
-        for forbidden in ('--dangerously-skip-permissions', '--continue', '--conversation', '--remote-control'):
+        for forbidden in ('-p','--print','--prompt','--continue', '--conversation', '--remote-control'):
             self.assertNotIn(forbidden, cmd)
 
     def test_unqualified_executor_refuses_before_popen_or_temp_workspace(self):
@@ -179,7 +181,7 @@ class Collection(EvidenceTestCase):
             self.assertNotIn('TRUSTED_ACCEPTED_POLICY',source)
             return 'TRUSTED_ACCEPTED_POLICY\n'+source, {'delivered':'synthetic'}
         def invoke(text,*args,**kwargs):
-            seen.append(text);return wire(events),{'qualification_phase':'canary'}
+            seen.append(text);return wire(events),{'qualification_phase':'canary','input_delivery':'written'}
         with patch('context_policy.inject',inject),patch.object(N,'invoke',invoke):
             result,receipt=N.review(self.root,self.base,head,'raw task',60,slot='slot2',
                 task_hash='x',charge=Mock(),accepted_rules=rules)
@@ -187,9 +189,10 @@ class Collection(EvidenceTestCase):
         self.assertEqual(seen[0].count('TRUSTED_ACCEPTED_POLICY'),1)
         self.assertEqual(receipt['input_sha256'],hashlib.sha256(seen[0].encode()).hexdigest())
         self.assertEqual(receipt['rules_context'],{'delivered':'synthetic',
-            'delivery':'explicit_full_argv','prompt_sha256':receipt['input_sha256']})
+            'delivery':'explicit_full_stream_json_stdin','prompt_sha256':receipt['input_sha256'],
+            **{k:v for k,v in N.input_payload(seen[0])[1].items() if k!='input_transport'}})
 
-    def test_real_rules_receipt_matches_exact_argv_transport_without_mutating_metadata(self):
+    def test_real_rules_receipt_matches_exact_stdin_transport_without_mutating_metadata(self):
         import context_policy as C
         text=(Path(__file__).resolve().parents[3]/'docs/rules/ENGINEERING_OPERATING_MODEL.md').read_text()
         metadata={'commit':C.RULES_COMMIT,'sha256':C.RULES_SHA256,'bytes':C.RULES_SIZE,
@@ -199,15 +202,14 @@ class Collection(EvidenceTestCase):
         events=rows();events[-1]['result']['structured_output']['reviewed_sha']=head
         seen=[]
         def invoke(prompt,*args,**kwargs):
-            seen.append(N.command(50,prompt));return wire(events),{'qualification_phase':'canary'}
+            seen.append(prompt);return wire(events),{'qualification_phase':'canary','input_delivery':'written'}
         with patch.object(N,'invoke',invoke):
             result,receipt=N.review(self.root,self.base,head,'raw task',60,slot='slot2',
                 task_hash='x',charge=Mock(),accepted_rules=(text,metadata))
         self.assertEqual(result['verdict'],'PASS');self.assertEqual(metadata,original)
-        self.assertEqual(seen[0][-2],'-p')
-        context=receipt['rules_context'];actual=hashlib.sha256(seen[0][-1].encode()).hexdigest()
-        self.assertEqual(context['delivery'],'explicit_full_argv')
-        self.assertNotIn('stdin_sha256',context)
+        context=receipt['rules_context'];actual=hashlib.sha256(seen[0].encode()).hexdigest()
+        self.assertEqual(context['delivery'],'explicit_full_stream_json_stdin')
+        self.assertEqual(context['stdin_sha256'],hashlib.sha256(N.input_payload(seen[0])[0]).hexdigest())
         self.assertEqual(context['prompt_sha256'],actual);self.assertEqual(receipt['input_sha256'],actual)
         self.assertEqual(context['commit'],C.RULES_COMMIT);self.assertEqual(context['sha256'],C.RULES_SHA256)
         self.assertEqual(context['bytes'],C.RULES_SIZE)
@@ -277,7 +279,8 @@ class NativeToolScope(EvidenceTestCase):
             (work/'source.py').write_text('original')
             outside=root/'outside-key';outside.write_text('synthetic outside canary')
             script = """
-import json,os,pathlib,subprocess
+import json,os,pathlib,subprocess,sys
+sys.stdin.buffer.read()
 work=pathlib.Path(os.environ['WORK']);outside=pathlib.Path(os.environ['OUTSIDE'])
 def allowed(fn):
  try:fn();return True
@@ -292,7 +295,7 @@ print(json.dumps(result))
             original=N.filesystem_roots
             def roots(private,candidate):
                 return original(private,candidate)
-            def cmd(timeout,prompt,model=N.MODEL):return [sys.executable,'-I','-c',script]
+            def cmd(timeout,prompt=None,model=N.MODEL):return [sys.executable,'-I','-c',script]
             original_popen=subprocess.Popen; charged=[]
             def popen(argv,**kwargs):
                 self.assertEqual(charged,['one'])

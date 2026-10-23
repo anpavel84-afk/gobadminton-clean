@@ -18,7 +18,9 @@ class ModelProtocol(unittest.TestCase):
             with self.subTest(model=model):
                 cmd=N.command(30,'EXACT_FINAL_PROMPT',model=model)
                 self.assertEqual(cmd[cmd.index('--model')+1],model)
-                self.assertEqual(cmd[-2:],['-p','EXACT_FINAL_PROMPT'])
+                self.assertNotIn('-p',cmd);self.assertNotIn('EXACT_FINAL_PROMPT',cmd)
+                self.assertIn('--dangerously-skip-permissions',cmd)
+                self.assertEqual(cmd[cmd.index('--input-format')+1],'stream-json')
                 events=A.rows();events[0]['init']['model']=model
                 result,receipt=N.parse_stream(A.wire(events),A.SHA,model=model)
                 self.assertEqual(result['verdict'],'PASS')
@@ -36,10 +38,10 @@ class ModelProtocol(unittest.TestCase):
             return A.SHA.encode() if args[0]=='rev-parse' else b''
         def invoke(prompt,*args,**kwargs):
             seen.append((prompt,kwargs['model']))
-            return A.wire(events),{'qualification_phase':'ready'}
+            return A.wire(events),{'qualification_phase':'ready','input_delivery':'written'}
         with tempfile.TemporaryDirectory(prefix='gb-team-qa-evidence-') as temp, \
              patch.object(N,'git',side_effect=git),patch.object(N,'collect',return_value=('SOURCE_SENTINEL',{})), \
-             patch('context_policy.inject',return_value=('TRUSTED_FINAL_ARGV_SOURCE_SENTINEL',{'stdin_sha256':'legacy'})), \
+             patch('context_policy.inject',return_value=('TRUSTED_FINAL_STDIN_SOURCE_SENTINEL',{'stdin_sha256':'legacy'})), \
              patch.object(N,'invoke',side_effect=invoke):
             result,r=N.review(Path('/candidate'),'b'*40,A.SHA,'task',60,
                 slot='slot2',task_hash='hash',charge=Mock(),model=model,accepted_rules=('rules',{}),evidence_dir=Path(temp)/'evidence')
@@ -48,12 +50,38 @@ class ModelProtocol(unittest.TestCase):
             self.assertEqual(metadata['effective_model'],model)
             self.assertEqual(metadata['status'],'success')
 
-        self.assertEqual(seen,[('TRUSTED_FINAL_ARGV_SOURCE_SENTINEL',model)])
+        self.assertEqual(seen,[('TRUSTED_FINAL_STDIN_SOURCE_SENTINEL',model)])
         self.assertEqual(r['requested_model'],model)
         self.assertEqual(r['effective_model'],model)
         self.assertEqual(r['input_sha256'],hashlib.sha256(seen[0][0].encode()).hexdigest())
-        self.assertEqual(r['rules_context']['delivery'],'explicit_full_argv')
-        self.assertNotIn('stdin_sha256',r['rules_context'])
+        self.assertEqual(r['rules_context']['delivery'],'explicit_full_stream_json_stdin')
+        self.assertEqual(r['stdin_sha256'],hashlib.sha256(N.input_payload(seen[0][0])[0]).hexdigest())
+        self.assertEqual(r['rules_context']['stdin_sha256'],r['stdin_sha256'])
+    def test_all_three_models_reach_native_stdin_launch_with_exact_effective_receipts(self):
+        import subprocess
+        for model in N.MODELS:
+            with self.subTest(model=model),tempfile.TemporaryDirectory() as temp:
+                events=A.rows();events[0]['init']['model']=model
+                charge=Mock();seen={}
+                class Process:
+                    pid=99999999;returncode=0
+                    def communicate(self,input,timeout):
+                        seen['wire']=input;self._input_offset=len(input)
+                    def wait(self):return 0
+                    def poll(self):return 0
+                def popen(argv,**kwargs):
+                    charge.assert_called_once();seen['argv']=argv
+                    self.assertEqual(kwargs['stdin'],subprocess.PIPE)
+                    kwargs['stdout'].write(A.wire(events));kwargs['stdout'].flush()
+                    return Process()
+                with patch.object(N,'qualification',return_value={'phase':'ready'}),patch.object(N.os,'geteuid',return_value=978),patch.object(N,'trusted',return_value=b'PRIVATE_AUTH'),patch.object(N,'git',return_value=b'/tmp/candidate/.git'),patch.object(N,'filesystem_roots',return_value=([],[],[])),patch.object(N.os,'killpg'):
+                    raw,execution=N.invoke('full model context 漢字',30,work=Path('/tmp/candidate'),slot='slot2',task_hash='x',charge=charge,popen=popen,model=model,evidence_dir=Path(temp)/'evidence')
+                self.assertEqual(seen['argv'][seen['argv'].index('--model')+1],model)
+                self.assertEqual(json.loads(seen['wire'])['message']['content'],'full model context 漢字')
+                result,receipt=N.parse_stream(raw,A.SHA,model=model)
+                self.assertEqual(receipt['requested_model'],model);self.assertEqual(receipt['effective_model'],model)
+                self.assertEqual(receipt['effective_permission_mode'],'always-proceed')
+                self.assertEqual(execution['input_delivery'],'written')
     def test_unknown_models_fail_before_invocation(self):
         with patch.object(N,'invoke',side_effect=AssertionError('provider called')):
             for model in ('gemini-3.8-flash-medium','claude-sonnet-5-5','auto'):

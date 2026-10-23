@@ -45,7 +45,8 @@ class Evidence(unittest.TestCase):
         class Process:
             pid=99999999
             returncode=None
-            def communicate(self,timeout):
+            def communicate(self,input,timeout):
+                self._input_offset=len(input)
                 if kind=='timeout':raise subprocess.TimeoutExpired('SECRET_ARGV',timeout)
                 self.returncode=3 if kind=='nonzero' else 0
             def wait(self):
@@ -78,7 +79,7 @@ class Evidence(unittest.TestCase):
         def invoke(*a,**kw):
             out=self.root/'outputs';out.mkdir();(out/'stdout').write_bytes(b'{malformed');(out/'stderr').write_bytes(b'private')
             kw['evidence'].streams(out)
-            return b'{malformed',{}
+            return b'{malformed',{'input_delivery':'written'}
         with patch.object(N,'git',side_effect=lambda work,*args:b'b'*40 if args==('rev-parse','HEAD') else b''),patch.object(N,'collect',return_value=('source',{})),patch('context_policy.inject',return_value=('final prompt',rules[1])),patch.object(N,'invoke',invoke):
             with self.assertRaisesRegex(N.ReviewError,'AGY_PARSE_FAILED'):
                 N.review(Path('/tmp'),'a'*40,'b'*40,'task',30,slot='slot2',task_hash='f'*64,charge=Mock(),evidence_dir=self.directory)
