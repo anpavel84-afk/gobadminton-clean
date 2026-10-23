@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path.cwd().resolve()  # Installed checker validates the slot worktree (cwd).
 METHODS = {"get", "post", "put", "patch", "delete", "head", "options", "trace"}
 MUTATIONS = {"post", "put", "patch", "delete"}
 REQUIRED = [
@@ -93,7 +93,7 @@ def dereference(document: dict, node: dict) -> dict:
     return node
 
 
-# Owner direct, Clean issue #23: exact existing proof/bodyless operations only.
+# Clean issue #23: bounded set of exact existing proof/bodyless operations only
 ADMIN_PROOF_ROUTES = {
     "/admin/auth/{provider}/start",
     "/admin/auth/webauthn/options",
