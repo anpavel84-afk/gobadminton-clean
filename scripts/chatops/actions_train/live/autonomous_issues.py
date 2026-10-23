@@ -70,7 +70,7 @@ _API_NEXT = 0.0
 TASK_FIELDS = {'schema', 'target', 'kind', 'goal', 'acceptance', 'allowed_paths', 'max_attempts'}
 # PM V1: optional, validated links. The executor records them; only --slot mode acts on them.
 OPTIONAL_FIELDS = {'depends_on', 'locks', 'model', 'effort',
-                   'work_kind', 'risk', 'author_routes', 'qa_routes', 'routing_policy'}
+                   'work_kind', 'risk', 'author_routes', 'qa_routes', 'routing_policy', 'failure_diagnosis'}
 LOCK_RE = re.compile(r'[a-z0-9][a-z0-9-]{0,23}(:[a-z0-9][a-z0-9-]{0,23}){0,2}')
 # Exact model IDs supported by the existing secure Codex runtime. Do not enable
 # a new provider merely because its binary or remote model catalog exists.
@@ -246,6 +246,10 @@ def validate_issue(issue, since, now=None):
         from cost_policy import validate_policy
         try: validate_policy(task)
         except ValueError as error: raise Hold(str(error)) from None
+    if 'failure_diagnosis' in task:
+        from failure_diagnosis import policy
+        try: policy(task)
+        except Exception as error: raise Hold(str(error)) from None
     patterns(task['allowed_paths'])
     check_links(task, issue['number'])
     canary_paths = set(task['allowed_paths']) & set(CANARIES.values())

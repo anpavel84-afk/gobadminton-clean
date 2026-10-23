@@ -527,7 +527,12 @@ def recovery_request(req, policy):
     # A depleted subscription-call budget is a wait reason, not a spent diagnostic run.
     from core import route
     budget=s.Budget(Path('/etc/gobadminton-slots/budgets.json'),AUTONOMY/'outbox',AUTONOMY/'locks/registry.lock')
-    route(s,frozen['snapshot']['task'],'qa','codex',budget,slot)
+    from failure_diagnosis import enabled
+    if req['stage'] == 'diagnose' and enabled(frozen['snapshot']):
+        from core import diagnosis_route
+        diagnosis_route(s, frozen['snapshot']['task'], budget, slot)
+    else:
+        route(s,frozen['snapshot']['task'],'qa','codex',budget,slot)
     op = dict(record=record,
          task_hash=frozen['task_hash'], binding=binding(req), run=req['run'], run_attempt=req['run_attempt'],
          before=digest(state), started_at=int(time.time()), process=None,

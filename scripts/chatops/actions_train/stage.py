@@ -30,7 +30,7 @@ def setup(req, config, native_auth=None):
     bridge = a.Bridge(c, store)
     # Resolve trusted context before a stage can consume an author attempt.
     from context_policy import load as load_rules
-    accepted_rules = load_rules() if req['stage'] in ('author', 'qa', 'diagnose', 'task_review', 'qa_qualification') else None
+    accepted_rules = load_rules() if req['stage'] in ('author', 'qa', 'diagnose', 'task_review', 'qa_qualification', 'failure_diagnosis') else None
     def effect_gate():
         from receiver import POLICY, units_quiet
         policy = s.read_json(POLICY, trusted_uids={0}, limit=16384)
@@ -81,9 +81,23 @@ def setup(req, config, native_auth=None):
     original_model = bridge.model
     def measured_model(prompt, qa=False):
         effect_gate()
-        choice = route(s, store.data['active']['task'], 'qa' if qa else 'author',
-                       'auto' if qa and 'qa_routes' in store.data['active']['task']
-                       else 'codex' if qa else req['profile'], rt.budget, req['slot'])
+        from failure_diagnosis import enabled
+        if req['stage'] == 'failure_diagnosis' or (req['stage'] == 'diagnose'
+                and enabled(store.data['active'])):
+            need(qa, 'diagnosis must use read-only QA permissions')
+            from core import diagnosis_route
+            choice = diagnosis_route(s, store.data['active']['task'], rt.budget, req['slot'])
+            pending = store.data['active'].get('failure_diagnosis', {}).get('receipts', {})
+            keys = [k for k, r in pending.items() if r.get('status') == 'pending'
+                    and r.get('inputs', {}).get('head') == store.data['active']['head']]
+            need(len(keys) == 1, 'no unique write-ahead diagnosis reservation')
+            choice['failure_fingerprint'] = keys[0]
+            choice['diagnosis_call'] = store.data['active']['failure_diagnosis']['calls']
+            choice['diagnosis_cap'] = store.data['active']['task']['failure_diagnosis']['max_calls']
+        else:
+            choice = route(s, store.data['active']['task'], 'qa' if qa else 'author',
+                           'auto' if qa and 'qa_routes' in store.data['active']['task']
+                           else 'codex' if qa else req['profile'], rt.budget, req['slot'])
         # A role-specific route MUST match the actual CLI. Never run Codex under a
         # trace claiming Cursor/Antigravity; those need their own reviewed adapter.
         need(choice['provider'] in ('codex','cursor','agy') and (choice['provider'] != 'cursor' or not qa)
@@ -93,7 +107,7 @@ def setup(req, config, native_auth=None):
         if choice['provider'] == 'agy':
             wrapped, rules_receipt = prompt, None  # Native adapter injects after assembling source DATA.
         else:
-            wrapped, rules_receipt = inject(prompt, qa, bridge.work, accepted_rules)
+            wrapped, rules_receipt = inject(prompt, qa, bridge.work, accepted_rules, role=choice.get('role', 'qa' if qa else 'author'))
         choice['rules_context'] = rules_receipt
         trace['model'] = choice
         old_model, old_effort = c.model, c.effort
@@ -268,6 +282,10 @@ def perform(req, config, context):
         if req.get('_recovery_admission'):
             from recovery_admission import claim
             active = claim(a, api, store, req['_recovery_admission'], config)
+            inherited = req['_recovery_admission'].get('failure_diagnosis') or (
+                req['_recovery_admission']['frozen']['snapshot'].get('failure_diagnosis'))
+            if inherited:
+                store.phase(active['phase'], failure_diagnosis=json.loads(json.dumps(inherited)))
         else:
             active = store.claim([issue], dt.datetime.fromisoformat(SINCE), comments)
         need(active and active['issue'] == req['issue'], 'no unique immutable task admission')
@@ -308,7 +326,10 @@ def perform(req, config, context):
         rt.lease(active)
         b.work = b.c.worktrees_root / f'issue-{active["issue"]}'
         b.unchanged_issue(active)
-        if stage == 'author':
+        if stage == 'failure_diagnosis':
+            from failure_diagnosis import perform as diagnose
+            return diagnose(context)
+        elif stage == 'author':
             need(active['phase'] == 'claimed' or active['phase'] == 'qa' and
                  (active.get('qa') or {}).get('verdict') == 'FAIL' or
                  active['phase'] == 'ci' and active.get('ci_failure') or
@@ -317,6 +338,8 @@ def perform(req, config, context):
             metadata['routing'] = route(s, active['task'], 'author', req['profile'], rt.budget, req['slot'])
             diagnostic = active.get('ci_failure') or active.get('deterministic_failure')
             checkpoint = {}
+            from failure_diagnosis import enabled, repair
+            fix_details = repair(active, api) if active['phase'] != 'claimed' and enabled(active) else None
             if active['phase'] != 'claimed':
                 b.candidate_identity(active)
                 if active['phase'] == 'ci':
@@ -335,8 +358,7 @@ def perform(req, config, context):
                     attempt=active['attempt'], head=active['head'], base=active['base'],
                     qa=active.get('qa'), ci=active.get('ci'), ci_failure=diagnostic,
                     source='actions bounded repair')]
-            fix_details = diagnostic
-            if diagnostic:
+            if fix_details is None and diagnostic:
                 from recovery import ci_evidence
                 exact = ci_evidence(api, {'snapshot': active, 'head': active['head'], 'issue': active['issue']})
                 need(exact, 'exact CI failure evidence missing; do not spend another author attempt blindly')
@@ -518,7 +540,7 @@ def entry(req, config, native_auth=None):
                     safe = True
                 except Exception:
                     pass
-        uncertain = context and not safe and (req['stage'] in ('author', 'qa', 'qa_qualification', 'publish', 'integrate', 'promote'))
+        uncertain = context and not safe and (req['stage'] in ('author', 'qa', 'qa_qualification', 'publish', 'integrate', 'promote', 'failure_diagnosis'))
         return model_receipt(dict(status='unknown' if uncertain else 'deferred', reason=reason, safe_release=safe), context)
 
 

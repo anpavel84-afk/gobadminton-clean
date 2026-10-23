@@ -17,11 +17,11 @@ REPO = 'anpavel84-afk/gobadminton-clean'
 REPO_ID = 1416250340
 OWNER = 318610566
 SINCE = '2026-10-15T02:27:00+00:00'
-PINS = {'autonomous_issues.py': '7eecb7d37cbf28eb8d6a967f62e155a3cb0b7590c28632eec4dace18fcda5659',
+PINS = {'autonomous_issues.py': '24cb669114fcea70c6cf284a278dcefaae1ab9e1835a9e5aef3adcd52d7cbeba',
         'slots.py': '3c7b4ab36dd3cd8b41c3309a4d58c54ffc99027b1d7c1e5ad2235b5cd1f72a76',
         'check_foundation.py': 'c2975b19bd46d00acbdbc08227545b8f9c9501d7b8e8783e9b397751c612bd13'}
 RECOVERY_STAGES = ('diagnose', 'task_review')
-STAGES = ('claim', 'author', 'publish', 'qa', 'ci', 'integrate', 'promote', 'dev', 'qa_qualification') + RECOVERY_STAGES
+STAGES = ('failure_diagnosis', 'claim', 'author', 'publish', 'qa', 'ci', 'integrate', 'promote', 'dev', 'qa_qualification') + RECOVERY_STAGES
 PROFILES = ('auto', 'codex', 'cursor', 'agy')
 SHA = re.compile('[0-9a-f]{40}')
 
@@ -329,15 +329,32 @@ def route(slots, task, role, profile, budget, slot):
     choice["effective_effort"] = choice["effort"]
     return choice
 
+def diagnosis_route(slots, task, budget, slot):
+    """#218 uses qualified Codex QA permissions/ledger, never ordinary QA selection."""
+    from failure_diagnosis import policy
+    policy(task)
+    need(slots.MODEL_ADAPTER.get('gpt-6-astra') == 'codex', 'Astra exact model unavailable')
+    ok, why = slots.adapter_status('codex', 'qa', budget, slot)
+    need(ok, 'Astra failure diagnosis unavailable: ' + str(why))
+    left = budget.remaining('codex', 'qa', slot)
+    return dict(profile='codex', provider='codex', role='failure_diagnosis', permission_role='qa',
+                requested_route='codex:gpt-6-astra:high', requested_model='gpt-6-astra',
+                effective_model='gpt-6-astra', effort='high', requested_effort='high',
+                effective_effort='high', fallback_reason=None, unavailable={},
+                selection_reason='mandatory_source_FAIL_218', used_calls=budget.used('codex','qa',slot),
+                remaining_calls=None if left == float('inf') else left,
+                budget_policy='unlimited_daily_metered' if left == float('inf') else 'finite_daily')
+
 def next_stage(active):
     if not active or active['phase'] == 'done':
         return None
     p = active['phase']
     if p == 'claimed': return 'author'
     if p == 'candidate': return 'publish'
-    if p == 'pr_wait': return 'author' if active.get('deterministic_failure') else 'qa'
-    if p == 'qa': return 'ci' if (active.get('qa') or {}).get('verdict') == 'PASS' else 'author'
-    if p == 'ci': return 'author' if active.get('ci_failure') else 'integrate' if active.get('ci') else 'ci'
+    from failure_diagnosis import next_stage as repair_stage
+    if p == 'pr_wait': return repair_stage(active) if active.get('deterministic_failure') else 'qa'
+    if p == 'qa': return 'ci' if (active.get('qa') or {}).get('verdict') == 'PASS' else repair_stage(active)
+    if p == 'ci': return repair_stage(active) if active.get('ci_failure') else 'integrate' if active.get('ci') else 'ci'
     if p == 'promoting': return 'promote'
     if p == 'dev_wait': return 'dev'
     return None

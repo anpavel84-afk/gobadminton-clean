@@ -44,7 +44,7 @@ def load(path=RULES_PATH, *, trusted_uids=(0,)):
         os.close(fd)
 
 
-def inject(prompt, qa, cwd, accepted):
+def inject(prompt, qa, cwd, accepted, *, role=None):
     text, metadata = accepted
     need(isinstance(prompt, str) and prompt, 'empty model prompt')
     # Recheck the bytes about to be delivered, not merely a previously-read link.
@@ -54,7 +54,9 @@ def inject(prompt, qa, cwd, accepted):
     need(metadata.get('commit') == RULES_COMMIT and metadata.get('sha256') == RULES_SHA256
          and metadata.get('bytes') == RULES_SIZE and metadata.get('delivery') == 'explicit_full_stdin',
          'accepted context receipt drift')
-    role = 'qa' if qa else 'author'
+    role = role or ('qa' if qa else 'author')
+    need(role in ('qa', 'author', 'failure_diagnosis'), 'invalid context role')
+    need(role != 'failure_diagnosis' or qa, 'diagnosis context requires read-only permissions')
     payload = ('TRUSTED CLEAN OPERATING RULES; accepted commit ' + RULES_COMMIT
                + '; SHA256 ' + RULES_SHA256 + '\n' + text
                + '\nEND TRUSTED OPERATING RULES.\n'
