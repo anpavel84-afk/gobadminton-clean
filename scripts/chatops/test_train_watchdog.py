@@ -128,5 +128,106 @@ class WatchdogTests(unittest.TestCase):
             self.assertEqual(w.read_json(p, private=True), {"status": "pending"})
 
 
+class ActionsWatchdogTests(unittest.TestCase):
+    def snapshot(self,status='waiting',now=100,**extra):
+        card={'status':status,'stage':'QA','issue':207,'head':'a'*40,
+              'operation':'qa','workflow_run':123,'supervisor':{'pid':12,'start':'100','boot':'synthetic'}}
+        card.update(extra)
+        return {'schema':'GB_ACTIONS_MONITOR_SOURCE_V1','mode':'active','observed_at':now,
+                'slots':{'slot1':card}}
+
+    def test_unknown_is_wired_to_main_collect_and_does_not_rearm_as_projection_ages(self):
+        snap=self.snapshot('unknown')
+        with patch.object(w,'read_json',return_value=snap):
+            state,events,incident=w.collect_idle({},100)
+            self.assertEqual(incident['kind'],'operation_unknown')
+            self.assertEqual(events[0]['code'],'TRAIN_OPERATION_UNKNOWN')
+            sent=[];ledger={}
+            send=lambda *a:sent.append(a) or 'id'
+            w.reconcile(ledger,incident,100,send)
+            _,_,same=w.collect_idle(state,220)
+            self.assertEqual(same,incident)
+            w.reconcile(ledger,same,220,send)
+            _,_,same=w.collect_idle(state,340)
+            self.assertEqual(w.reconcile(ledger,same,340,send),'already_notified')
+            self.assertEqual(len(sent),1)
+
+    def test_global_staleness_respects_existing_fifteen_minute_rescue_cadence(self):
+        snap=self.snapshot(stage=None)
+        for now in (220,1000,1900):
+            self.assertEqual(w.actions_incidents(snap,{},now)[2],[])
+        operations,events,incidents=w.actions_incidents(snap,{},1901)
+        self.assertEqual(incidents[0]['kind'],'monitor_stale')
+        self.assertEqual(events[0]['code'],'TRAIN_EVIDENCE_STALE')
+        self.assertNotIn('ready',str(incidents))
+        snap['mode']='shadow'
+        self.assertEqual(w.actions_incidents(snap,{},99999)[2],[])
+
+    def test_running_requires_exact_process_deadline_not_old_checkpoint(self):
+        snap=self.snapshot('running')
+        before=json.loads(json.dumps(snap))
+        for seconds in (10,1800,2400):
+            self.assertEqual(w.actions_incidents(snap,{},100,lambda _:dict(state='alive',seconds=seconds))[2],[])
+        incidents=w.actions_incidents(snap,{},100,lambda _:dict(state='alive',seconds=2401))[2]
+        self.assertEqual(incidents[0]['kind'],'operation_stalled')
+        self.assertEqual(snap,before)
+        snap['slots']['slot1']['status']='waiting'
+        self.assertEqual(w.actions_incidents(snap,{},100,lambda _:dict(state='alive',seconds=999999))[2],[])
+
+    def test_gone_or_uninspectable_process_is_unknown_without_restart(self):
+        snap=self.snapshot('running')
+        incidents=w.actions_incidents(snap,{},100,lambda _:dict(state='gone'))[2]
+        self.assertEqual(incidents[0]['kind'],'operation_unknown')
+        state,_,first=w.actions_incidents(snap,{},100,lambda _:dict(state='unknown'))
+        self.assertFalse(first)
+        _,_,second=w.actions_incidents(snap,{'operations':state},220,lambda _:dict(state='unknown'))
+        self.assertEqual(second[0]['kind'],'operation_unknown')
+        self.assertNotIn('repair',json.dumps(second))
+
+    def test_blocked_and_exhausted_are_wired_without_raw_reason_leak(self):
+        snap=self.snapshot('error',previous_result={'issue':225,'status':'deferred','reason':'attempts exhausted'})
+        with patch.object(w,'read_json',return_value=snap):
+            _,_,incident=w.collect_idle({},100)
+        self.assertEqual(incident['kind'],'qa_exhausted')
+        snap['slots']['slot1']['previous_result']['reason']='SECRET_RAW_DIAGNOSTIC'
+        with patch.object(w,'read_json',return_value=snap):
+            _,_,incident=w.collect_idle({},100)
+        self.assertEqual(incident['kind'],'train_blocked')
+        self.assertNotIn('SECRET_RAW_DIAGNOSTIC',json.dumps(incident))
+
+    def test_stale_planning_never_fabricates_current_eligible_task(self):
+        snap=self.snapshot('waiting',now=2001,stage=None,issue=None,planning={
+            'observed_at':100,'reason':'no_eligible_admission'})
+        incident=w.actions_incidents(snap,{},2001)[2][0]
+        self.assertEqual(incident['kind'],'planning_stale')
+        self.assertIsNone(incident['issue'])
+        self.assertNotIn('ready',json.dumps(incident))
+
+    def test_process_identity_reads_only_exact_stat_boot_uptime(self):
+        stat_tail=['S']+['0']*18+['100']
+        seen=[]
+        def read(path,*args,**kwargs):
+            seen.append(str(path))
+            if str(path).endswith('/boot_id'):return 'synthetic'
+            if str(path)=='/proc/12/stat':return '12 (safe name) '+' '.join(stat_tail)
+            if str(path)=='/proc/uptime':return '50 0'
+            raise AssertionError('unscoped process read')
+        with patch.object(Path,'read_text',read),patch.object(w.os,'sysconf',return_value=10):
+            self.assertEqual(w.process_observation({'pid':12,'start':'100','boot':'synthetic'}),
+                             {'state':'alive','seconds':40})
+            self.assertEqual(w.process_observation({'pid':12,'start':'101','boot':'synthetic'}),{'state':'gone'})
+        self.assertFalse(any('cmdline' in p or 'environ' in p for p in seen))
+
+    def test_disabled_smtp_still_records_incident_and_bounded_delivery_backoff(self):
+        ledger={};incident=w.actions_incidents(self.snapshot('unknown'),{},100)[2][0]
+        send=lambda *_:(_ for _ in ()).throw(ValueError('smtp_not_configured'))
+        self.assertEqual(w.reconcile(ledger,incident,100,send),'confirming')
+        self.assertEqual(w.reconcile(ledger,incident,220,send),'delivery_failed')
+        self.assertEqual(ledger['status'],'pending')
+        self.assertEqual(ledger['delivery_error'],'ValueError')
+        self.assertEqual(w.reconcile(ledger,incident,340,send),'delivery_backoff')
+        self.assertLessEqual(ledger['retry_at']-220,3600)
+
+
 if __name__ == "__main__":
     unittest.main()

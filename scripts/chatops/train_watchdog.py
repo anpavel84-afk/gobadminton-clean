@@ -190,7 +190,11 @@ def send_mail(incident, episode, config=None):
                "worker_stopped": "Исполнитель не запущен, имеются незавершённые задачи.",
                "worker_lock_missing": "Не подтверждён ожидаемый владелец блокировки исполнителя.",
                "slot_idle": "Свободный слот более 15 минут ожидает ранее подтверждённого назначения Actions. Проверьте свежесть планирования и очередь GitHub.",
-               "monitor_unavailable": "Watchdog не смог достоверно прочитать состояние трейна. Остановка самого трейна не установлена."}
+               "monitor_unavailable": "Watchdog не смог достоверно прочитать состояние трейна. Остановка самого трейна не установлена.",
+               "monitor_stale": "Серверное подтверждение состояния не обновлялось более двух 15-минутных окон штатного Actions rescue. Текущая готовность задач не установлена.",
+               "planning_stale": "Проверка очереди устарела более двух штатных окон Actions rescue. Нужна сверка существующего dispatcher, без нового автора.",
+               "operation_unknown": "Исход операции UNKNOWN или её точный процесс не подтверждён. Сначала сверка журнала и эффектов; автора не повторять.",
+               "operation_stalled": "Подтверждённый процесс операции превысил существующий серверный deadline с запасом. Watchdog только уведомляет, не завершает и не повторяет процесс."}
     issue = incident.get("issue")
     link = f"https://github.com/anpavel84-afk/gobadminton-clean/issues/{issue}" if issue else "https://github.com/anpavel84-afk/gobadminton-clean/issues"
     msg.set_content("\n".join(["Время UTC: " + dt.datetime.now(dt.timezone.utc).isoformat(),
@@ -258,14 +262,105 @@ def idle_ready(snapshot, previous, now):
 ACTIONS = Path("/var/lib/gobadminton-deploy-evidence/actions-train.json")
 
 
+# Existing main-branch Train events rescues every15 minutes. Do not mistake one
+# ordinary idle interval for a stall; stale evidence means uncertainty, not READY.
+EVIDENCE_STALE_SECONDS = 1800
+OPERATION_DEADLINE_SECONDS = 2400  # Existing receiver2200s plus observation grace.
+
+
+def process_observation(identity):
+    """Read only the exact projected PID's stat/start/boot, never argv/environ."""
+    if type(identity) is not dict or type(identity.get('pid')) is not int or not 0 < identity['pid'] < 2**31:
+        return {'state': 'unknown'}
+    try:
+        boot = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+        if identity.get('boot') != boot:
+            return {'state': 'gone'}
+        fields = Path('/proc') / str(identity['pid']) / 'stat'
+        tail = fields.read_text().rsplit(')', 1)[1].split()
+        if str(identity.get('start')) != tail[19] or tail[0] in ('Z','X'):
+            return {'state': 'gone'}
+        age = float(Path('/proc/uptime').read_text().split()[0]) - int(tail[19]) / os.sysconf('SC_CLK_TCK')
+        return {'state': 'alive', 'seconds': max(0, age)}
+    except FileNotFoundError:
+        return {'state': 'gone'}
+    except (OSError, ValueError, IndexError):
+        return {'state': 'unknown'}
+
+
+def actions_incidents(snapshot, previous, now, inspect_process=process_observation):
+    """Classify current Actions observations, never infer a model retry or admission."""
+    operations, events, incidents = {}, [], []
+    if snapshot.get('mode') != 'active':
+        return operations, events, incidents
+    observed = snapshot.get('observed_at')
+    age = now - observed if type(observed) in (int,float) else -1
+    if age < 0:
+        return operations, events, [{'kind':'monitor_unavailable','issue':None,'phase':None,'sha':'',
+                                      'reason':'invalid_observation_time'}]
+    if age > EVIDENCE_STALE_SECONDS:
+        event = {'code':'TRAIN_EVIDENCE_STALE','seconds':age}
+        return operations, [event], [{'kind':'monitor_stale','issue':None,'phase':None,'sha':'',
+                                     'reason':'actions_projection_stale'}]
+    # UNKNOWN/deferred are durable unresolved observations. Aging must not
+    # silently mark them healthy and rearm the same notification every timer.
+    # Live-process claims below use an exact independent PID/start/boot check.
+    for slot, card in snapshot.get('slots', {}).items():
+        if slot not in ('slot1','slot2') or type(card) is not dict:
+            continue
+        issue = card.get('issue')
+        issue = issue if type(issue) is int and issue > 0 else None
+        sha = card.get('head') or ''
+        sha = sha if isinstance(sha,str) and re.fullmatch('[0-9a-f]{40}',sha) else ''
+        phase = card.get('stage') if card.get('stage') in ('Task','Code','PR','QA','CI','DEV','Accepted') else None
+        common = dict(slot=slot,issue=issue,phase=phase,sha=sha)
+        status = card.get('status')
+        prior = card.get('previous_result') or {}
+        if status == 'unknown':
+            incidents.append(dict(common,kind='operation_unknown',reason='root_operation_unknown'))
+            events.append(dict(code='TRAIN_OPERATION_UNKNOWN',**common))
+        elif status == 'error' or prior.get('status') == 'deferred':
+            if issue is None and type(prior.get('issue')) is int:common['issue']=prior['issue']
+            exhausted = prior.get('reason') in ('attempts exhausted','QA FAIL; attempts exhausted')
+            incidents.append(dict(common,kind='qa_exhausted' if exhausted else 'train_blocked',
+                                  reason='source_stage_deferred' if prior.get('status') == 'deferred' else 'source_stage_error'))
+            events.append(dict(code='TRAIN_OPERATION_BLOCKED',**common))
+        elif status == 'running':
+            key = dict(issue=issue,head=sha,operation=card.get('operation'),workflow_run=card.get('workflow_run'))
+            old = previous.get('operations',{}).get(slot,{})
+            since = old.get('since',now) if old.get('key') == key else now
+            operations[slot] = dict(key=key,since=since)
+            process = inspect_process(card.get('supervisor'))
+            if process.get('state') == 'alive' and process.get('seconds',0) > OPERATION_DEADLINE_SECONDS:
+                incidents.append(dict(common,kind='operation_stalled',reason='server_operation_deadline_exceeded'))
+                events.append(dict(code='TRAIN_OPERATION_DEADLINE_EXCEEDED',**common))
+            elif process.get('state') == 'gone' or (process.get('state') == 'unknown' and now-since >= 120):
+                incidents.append(dict(common,kind='operation_unknown',reason='projected_process_not_confirmed'))
+                events.append(dict(code='TRAIN_OPERATION_PROCESS_UNKNOWN',**common))
+        else:
+            planning = card.get('planning') or {}
+            plan_time = planning.get('observed_at')
+            if status in ('waiting','stale','not_started') and type(plan_time) in (int,float) \
+                    and now-plan_time > EVIDENCE_STALE_SECONDS:
+                incidents.append(dict(common,kind='planning_stale',reason='queue_planning_evidence_stale'))
+                events.append(dict(code='TRAIN_PLANNING_STALE',**common))
+    return operations, events, incidents
+
+
 def collect_idle(previous, now):
     snapshot = read_json(ACTIONS, owners={0})
     if snapshot.get("schema") != "GB_ACTIONS_MONITOR_SOURCE_V1":
         raise ValueError("invalid_actions_monitor")
     state, events = idle_ready(snapshot, previous, now)
-    prolonged = next((e for e in events if e["seconds"] >= 900), None)
-    incident = None
-    if prolonged:
+    operations, current_events, incidents = actions_incidents(snapshot, previous, now)
+    state['operations'] = operations
+    events.extend(current_events)
+    prolonged = next((e for e in events if e.get("seconds",0) >= 900
+                      and e.get('code') in ('SLOT_IDLE_WITH_READY_TASK','SLOT_IDLE_EVIDENCE_STALE')), None)
+    priority = {'monitor_unavailable':0,'monitor_stale':0,'operation_stalled':1,
+                'qa_exhausted':2,'train_blocked':2,'operation_unknown':3,'planning_stale':4}
+    incident = min(incidents,key=lambda item:priority.get(item['kind'],5)) if incidents else None
+    if prolonged and incident is None:
         # Stable fingerprint: elapsed time/run refresh must not produce email spam.
         incident = {"kind": "slot_idle", "slot": prolonged["slot"],
                     "issue": None, "phase": "dispatch",
