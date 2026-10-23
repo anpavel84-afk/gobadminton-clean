@@ -19,7 +19,7 @@ def require(ok, reason):
 def validate_policy(task):
     policy = task.get("routing_policy")
     require(type(policy) is dict and set(policy) == {"schema", "author", "qa"}
-            and policy["schema"] == SCHEMA, "invalid stage cost policy")
+            and policy["schema"] in (SCHEMA, "GB_STAGE_COST_V2"), "invalid stage cost policy")
     require(all(k in task for k in ("author_routes", "qa_routes", "work_kind", "risk")),
             "cost policy requires explicit immutable V2 routes")
     for role in ("author", "qa"):
@@ -31,7 +31,9 @@ def validate_policy(task):
                 "unknown stage classification")
         require(type(evidence) is str and 1 <= len(evidence.strip()) and len(evidence) <= 1200
                 and all(c.isprintable() for c in evidence), "stage evidence required")
-        require(MATRIX[level] in task[role + "_routes"], "minimum stage route not explicitly admitted")
+        preferred = ("cursor:auto" if policy["schema"] == "GB_STAGE_COST_V2" and role == "author"
+                     and level in ("simple", "standard", "complex") and task[role + "_routes"][0] == "cursor:auto" else MATRIX[level])
+        require(preferred in task[role + "_routes"], "minimum stage route not explicitly admitted")
         if level == "critical":
             require(reason in CRITICAL and len(evidence.strip()) >= 20,
                     "Astra High requires specific critical escalation evidence")
@@ -44,8 +46,12 @@ def selection(task, role):
     """Never add a route; pick the approved minimum for the classified STAGE."""
     p = validate_policy(task)
     row = p[role]
-    return MATRIX[row["complexity"]], {
-        "policy": SCHEMA, "stage_complexity": row["complexity"],
+    minimum = MATRIX[row["complexity"]]
+    preferred = ("cursor:auto" if p["schema"] == "GB_STAGE_COST_V2" and role == "author"
+                 and row["complexity"] in ("simple", "standard", "complex") and task[role + "_routes"][0] == "cursor:auto" else minimum)
+    return preferred, {
+        "approved_fallback_routes": [minimum] if preferred == "cursor:auto" and minimum in task[role + "_routes"] else [],
+        "policy": p["schema"], "stage_complexity": row["complexity"],
         "selection_reason": row["reason"], "selection_evidence": row["evidence"],
         "escalation_reason": row["reason"] if row["complexity"] in ("expert", "critical") else None,
         "expense_diagnostic": None, "risk_is_not_complexity": True,

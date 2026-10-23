@@ -425,8 +425,8 @@ class Adapter:
 # Closed registry. Flipping a flag is a reviewed code change, never runtime input.
 ADAPTERS = {
     'codex': Adapter('codex', 'codex', ('author', 'qa', 'review'), True, True, True, True, True, True),
-    'cursor': Adapter('cursor', 'cursor', ('author',), True, True, True, False, False, False,
-                      'Owner reports renewed capacity; native sandbox startup passed; role adapter not yet proven'),
+    'cursor': Adapter('cursor', 'cursor', ('author',), True, True, True, True, True, True,
+                      '#211 exact native adapter; root qualification marker still required'),
     'agy': Adapter('agy', 'agy', ('review',), True, True, True, False, False, False,
                    '#29: 7 known defects open; never a QA gate'),
 }
@@ -455,6 +455,10 @@ def adapter_status(name, role, budget=None, slot=None, adapters=None):
     for flag in ('installed', 'in_catalog', 'authenticated', 'inference_proven', 'owner_approved', 'executable'):
         if not getattr(ad, flag):
             return False, f'{flag}=false' + (f' ({ad.reason})' if ad.reason else '')
+    if name == 'cursor' and adapters is None:
+        from native_cursor import available
+        ok, reason = available(slot, None)
+        if not ok:return False, reason
     if budget is not None:
         left = budget.remaining(ad.provider, role, slot)
         if left is UNKNOWN:

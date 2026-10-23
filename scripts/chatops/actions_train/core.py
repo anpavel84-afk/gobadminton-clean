@@ -18,7 +18,7 @@ REPO_ID = 1416250340
 OWNER = 318610566
 SINCE = '2026-10-15T02:27:00+00:00'
 PINS = {'autonomous_issues.py': '7eecb7d37cbf28eb8d6a967f62e155a3cb0b7590c28632eec4dace18fcda5659',
-        'slots.py': '4d17f73b54008242dfee4dc3773945e34e0a1ffc832849573902a3c1f1818def',
+        'slots.py': '3c7b4ab36dd3cd8b41c3309a4d58c54ffc99027b1d7c1e5ad2235b5cd1f72a76',
         'check_foundation.py': 'c2975b19bd46d00acbdbc08227545b8f9c9501d7b8e8783e9b397751c612bd13'}
 RECOVERY_STAGES = ('diagnose', 'task_review')
 STAGES = ('claim', 'author', 'publish', 'qa', 'ci', 'integrate', 'promote', 'dev') + RECOVERY_STAGES
@@ -189,7 +189,7 @@ def request(value):
 def binding(req):
     return {k: v for k, v in req.items() if k not in ('gh_token', 'run', 'run_attempt')}
 
-def _route_immutable(slots, task, role, profile, budget, slot):
+def _route_immutable(slots, task, role, profile, budget, slot, task_hash=None):
     """Choose a model by immutable stage preferences, not by relative token usage.
 
     V1 scalar-model Issues retain their previous route. For new V2 stage routes,
@@ -216,6 +216,20 @@ def _route_immutable(slots, task, role, profile, budget, slot):
             # Preserve the existing Codex permission/landlock guarantees.
             # Other providers can be enabled ONLY alongside a reviewed native
             # sandbox adapter; merely flipping an Adapter flag cannot mint it.
+            if provider == 'cursor':
+                need(model == 'auto' and effort is None and role == 'author', 'unqualified Cursor role/model')
+                from native_cursor import available
+                ok, why = available(slot, task_hash or digest(task))
+                if ok:
+                    left = budget.remaining('cursor', role, slot)
+                    ok = left is not slots.UNKNOWN and left > 0
+                    why = 'Cursor author budget UNKNOWN/exhausted' if not ok else why
+                if not ok:
+                    refusal[entry] = why; continue
+                return dict(profile=profile, provider='cursor', requested_model='auto', effective_model='Auto',
+                            underlying_model=None, effort=None, role=role, work_kind=task['work_kind'],risk=task['risk'],
+                            fallback_reason=('previous preferred providers unavailable' if refusal else None),
+                            unavailable=refusal, remaining_calls=left, used_calls=budget.used('cursor', role, slot))
             if provider != 'codex':
                 refusal[entry] = 'native sandbox adapter not installed'
                 continue
@@ -276,8 +290,9 @@ def route(slots, task, role, profile, budget, slot):
         except ValueError as error:
             raise Refused(str(error)) from None
         # Internal routing view only; the immutable task/checkpoint is never changed.
-        view = dict(task, **{role + "_routes": [approved]})
-        choice = _route_immutable(slots, view, role, profile, budget, slot)
+        fallback = rationale.pop('approved_fallback_routes', [])
+        view = dict(task, **{role + "_routes": [approved, *fallback]})
+        choice = _route_immutable(slots, view, role, profile, budget, slot, task_hash=digest(task))
         choice.update(rationale)
         choice["requested_route"] = approved
     else:

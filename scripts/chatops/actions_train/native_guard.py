@@ -102,7 +102,7 @@ BWRAP_SHA256 = 'e318903862396f96de3df57264e0158682b952fd3fb53ac23d876413e7b30f71
 def cursor_namespace_argv(base, command):
     """Whole-client empty-root boundary compatible with native mount sandbox.
 
-    Qualification only: no provider registration or admission. No host HOME,
+    Boundary only: provider registration/admission remains in the router. No host HOME,
     controller/state, Git/SSH/deploy credentials, Docker socket or other project
     mounts. All descendants inherit the private mount/PID namespaces. Native
     Cursor sandbox and executable-specific AppArmor remain enabled. Provider
@@ -110,7 +110,7 @@ def cursor_namespace_argv(base, command):
     """
     import hashlib
     base = Path(base)
-    need(os.geteuid() == 1002, 'Cursor qualification requires UID1002')
+    need(os.geteuid() in (1002, 978), 'Cursor adapter requires exact GoBadminton slot UID')
     need(base.is_absolute() and base.parent == Path('/tmp')
          and base.name.startswith('gb-cursor-211-'), 'unqualified Cursor private root')
     for path in (base, *(base / name for name in ('home', 'config', 'data', 'cache', 'tmp', 'work'))):
@@ -135,19 +135,21 @@ def cursor_namespace_argv(base, command):
          (str(CURSOR_PIN/'node'), str(CURSOR_PIN/'cursorsandbox')), 'unqualified native executable')
     argv = [str(bwrap), '--unshare-all', '--share-net', '--die-with-parent',
             '--new-session', '--cap-drop', 'ALL', '--tmpfs', '/tmp',
-            '--proc', '/proc', '--dev', '/dev', '--dir', '/usr', '--dir', '/usr/bin',
+            '--proc', '/proc', '--dev', '/dev', '--dir', '/usr',
             '--symlink', 'usr/bin', '/bin', '--symlink', 'usr/lib', '/lib',
             '--symlink', 'usr/lib64', '/lib64']
-    # Libraries and exact runtime files only; never bind /, /etc, /home, /srv,
+    # Read-only development tools/libraries, never bind /, /etc, /home, /srv,
     # /run, /var or the actual provider credential store.
-    for name in ('/usr/lib', '/usr/lib64', '/usr/bin/true', '/etc/ld.so.cache',
+    for name in ('/usr/bin', '/usr/lib', '/usr/lib64', '/usr/share',
+                 '/opt/gb-slots/runtime/node', '/opt/gb-slots/runtime/pnpm', '/etc/ld.so.cache',
                  '/etc/ssl/openssl.cnf', '/etc/ssl/certs', '/etc/resolv.conf',
                  '/etc/hosts', '/etc/nsswitch.conf', '/etc/gai.conf'):
         if Path(name).exists():
             argv += ['--ro-bind', name, name]
-    argv += ['--ro-bind', str(CURSOR_PIN), str(CURSOR_PIN),
-             '--ro-bind', str(base/'config'), str(base/'config')]
-    for name in ('home', 'data', 'cache', 'tmp', 'work'):
+    argv += ['--ro-bind', str(CURSOR_PIN), str(CURSOR_PIN)]
+    # The CLI atomically maintains its own invocation-private config. Its
+    # settings cannot add a host mount, host capabilities or a provider login.
+    for name in ('home', 'config', 'data', 'cache', 'tmp', 'work'):
         argv += ['--bind', str(base/name), str(base/name)]
     return argv + ['--chdir', str(base/'work'), '--', *command]
 

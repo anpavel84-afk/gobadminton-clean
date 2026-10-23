@@ -9,7 +9,7 @@ import urllib.parse
 from core import API, Refused, Retry, SINCE, live, need, route
 
 
-def setup(req, config):
+def setup(req, config, native_auth=None):
     a, s = live()
     rt = s.Runtime(req['slot'], legacy_reads=a.RUNTIME_READS)
     need(os.getuid() != 0 and os.getuid() == s.uid_of(rt.user) and os.getgid() != 0,
@@ -61,11 +61,12 @@ def setup(req, config):
                 need('--ignore-rules' in argv and '--ignore-user-config' in argv,
                      'untrusted automatic instruction loading enabled')
             process = original_subprocess.Popen(argv, *args, **kwargs)
-            if argv[0] == str(c.codex):
+            if argv[0] in (str(c.codex), '/opt/gobadminton-cursor-cli/2026.10.01-e373342/gb-bwrap'):
                 try:
-                    trace['context_source'] = dict(cwd=str(bridge.work.resolve()),
+                    trace['context_source'] = dict(cwd=str(kwargs.get('cwd',bridge.work)),
                         cli_sha256=__import__('hashlib').sha256(Path(argv[0]).read_bytes()).hexdigest(),
-                        ignore_rules=True, ignore_user_config=True)
+                        ignore_rules=argv[0] == str(c.codex), ignore_user_config=argv[0] == str(c.codex),
+                        native_namespace=argv[0] != str(c.codex))
                     trace['process'] = identity(process.pid)
                     publish_process()
                 except BaseException:
@@ -84,7 +85,8 @@ def setup(req, config):
                        else 'codex' if qa else req['profile'], rt.budget, req['slot'])
         # A role-specific route MUST match the actual CLI. Never run Codex under a
         # trace claiming Cursor/Antigravity; those need their own reviewed adapter.
-        need(choice['provider'] == 'codex', 'unimplemented native model adapter')
+        need(choice['provider'] in ('codex','cursor') and (choice['provider'] != 'cursor' or not qa),
+             'unimplemented native model adapter')
         from context_policy import inject
         wrapped, rules_receipt = inject(prompt, qa, bridge.work, accepted_rules)
         choice['rules_context'] = rules_receipt
@@ -92,17 +94,29 @@ def setup(req, config):
         old_model, old_effort = c.model, c.effort
         c.model, c.effort = choice['effective_model'], choice['effort']
         role = 'qa' if qa else 'author'
-        before = rt.budget.used('codex', role, req['slot'])
+        provider = choice['provider']
+        before = rt.budget.used(provider, role, req['slot'])
         completed, answer = 'raised', None
         try:
-            answer = original_model(wrapped, qa)
+            if provider == 'cursor':
+                from native_cursor import invoke
+                answer = invoke(bridge, rt, wrapped, native_auth, choice, popen=a.subprocess.Popen,
+                                atomic=a.atomic, permitted=a.permitted)
+                choice['rules_context'] = choice['native_receipt']['rules_context']
+            else:
+                answer = original_model(wrapped, qa)
             completed = 'returned'
             return answer
         finally:
             from cost_policy import usage
-            try: after = rt.budget.used('codex', role, req['slot'])
+            try: after = rt.budget.used(provider, role, req['slot'])
             except Exception: after = None
             choice['usage'] = usage(before, after, completed, answer if qa else None)
+            if provider == 'cursor' and isinstance(answer, dict):
+                choice['usage'].update(tokens=answer.get('provider_reported_usage'),
+                    usage_source='provider_reported_usage_plus_same_slot_invocation_ledger',
+                    token_usage_reason=None, observed_model_call_ids=answer.get('observed_model_call_ids'),
+                    provider_internal_calls=answer.get('provider_internal_calls'))
             choice['head'] = store.data['active'].get('head')
             choice['attempt'] = store.data['active'].get('attempt')
             bridge.routing_receipts.append(dict(choice))
@@ -110,6 +124,10 @@ def setup(req, config):
             c.model, c.effort = old_model, old_effort
             trace['process'] = None
             publish_process()
+    if req['stage'] == 'author' and store.data['active']:
+        selected = route(s, store.data['active']['task'], 'author', req['profile'], rt.budget, req['slot'])
+        if selected['provider'] == 'cursor':
+            need(isinstance(native_auth,str) and native_auth, 'Cursor authentication unavailable before author attempt')
     bridge.model = measured_model
     ordinary_unchanged = bridge.unchanged_issue
     def unchanged(active):
@@ -358,10 +376,10 @@ def perform(req, config, context):
     return dict(status='confirmed', **metadata)
 
 
-def entry(req, config):
+def entry(req, config, native_auth=None):
     context = None
     try:
-        context = setup(req, config)
+        context = setup(req, config, native_auth=native_auth)
         if req['stage'] in ('diagnose', 'task_review'):
             from recovery import perform as recover
             return recover(req, config, context)
