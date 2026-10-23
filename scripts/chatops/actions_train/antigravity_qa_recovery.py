@@ -329,6 +329,12 @@ INSTALLED_BASELINE='b51e7c1c18103247606d35a414c82b04f5dd53ee'
 # Historic grants are immutable. Owner #29 authorization 6370661776 grants only
 # TWO new calls under rules 1.3; do not reinterpret the previous 2/4 charges.
 FRESH_OWNER_COMMENT=6370661776
+# The historical addressed ledger remains ceiling=4, used_calls=3, immutable.
+# The Owner's new package is a separate, finite one-analysis/one-QA journal.
+SUPPLEMENT_OWNER_COMMENT=6372450456
+SUPPLEMENT_SCHEMA='GB_AGY_29_STAGE3_SUPPLEMENT_V1'
+SUPPLEMENT_LEDGER='antigravity-29-stage3-supplement.json'
+SUPPLEMENT_ORIGINAL_ANALYSIS_OP='aa17df106db0de1aa816bae35111b16d0f0bb6f3788c35eade2f22f9bab244ee'
 LEGACY_RULES_SHA256='0755f8b5eb2cce575e58137a0f0462448109d8af0173e36d67f6551342b35ba6'
 LEGACY_CONTROLLER='3ce9a1339a73e1c9b3fb2ca5b269483faf2fc4f8'
 LEGACY_GRANT_DIGESTS=frozenset((
@@ -360,12 +366,14 @@ def validate_addressed_grant(g):
     historical=(g['owner_comment']==6362661117 and digest(g) in LEGACY_GRANT_DIGESTS)
     original_owner=(g['owner_comment']==6362661117)
     fresh=(g['owner_comment']==FRESH_OWNER_COMMENT)
-    need(original_owner or fresh,'only original Owner or fresh Stage3 grant authorization allowed')
+    supplemental=(g['owner_comment']==SUPPLEMENT_OWNER_COMMENT)
+    need(original_owner or fresh or supplemental,
+         'only original or exact supplemental Stage3 Owner authorization allowed')
     if historical:
         need(g['controller_revision']==LEGACY_CONTROLLER
              and g['rules_sha256']==LEGACY_RULES_SHA256,
              'immutable historical grant identity altered')
-    elif fresh:
+    elif fresh or supplemental:
         need(g['rules_sha256']==RULES_SHA256 and
              (g['base'],g['head'])==(FRESH_SOURCE_BASE,FRESH_SOURCE_HEAD),
              'new qualification source/rules identity drift')
@@ -392,7 +400,7 @@ def validate_addressed_grant(g):
         need(type(g['input_path']) is str and re.fullmatch(
             r'scripts/chatops/tests/fixtures/agy-[a-z0-9-]+\.json',g['input_path']),
             'exact QA source/test-receipt contract required')
-        if fresh:
+        if fresh or supplemental:
             need((g['input_revision'],g['input_path'],g['input_sha256'])==
                  (FRESH_QA_INPUT_REVISION,FRESH_QA_INPUT_PATH,FRESH_QA_INPUT_SHA256),
                  'reviewed independent QA fixture changed')
@@ -480,16 +488,64 @@ def addressed_ledger(value):
     return value
 
 
+def supplemental_ledger(value):
+    """Closed two-call continuation; NEVER mutate/recount the historical 3/4."""
+    need(type(value) is dict and set(value)==
+         {'schema','owner_comment','ceiling','used_calls','grants','legacy_used_calls'},
+         'unrecognized supplemental ledger')
+    need(value['schema']==SUPPLEMENT_SCHEMA and
+         type(value['owner_comment']) is int and
+         value['owner_comment']==SUPPLEMENT_OWNER_COMMENT and
+         type(value['ceiling']) is int and value['ceiling']==2 and
+         type(value['legacy_used_calls']) is int and value['legacy_used_calls']==3,
+         'supplement authority or historical baseline drift')
+    grants=value['grants']
+    need(type(grants) is dict and 1<=len(grants)<=2,'exact two-role ledger only')
+    spent=0;roles=[]
+    for key,row in grants.items():
+        need(type(row) is dict and set(row)=={'grant','operation'},'invalid supplement grant row')
+        g=validate_addressed_grant(row['grant'])
+        need(g['owner_comment']==SUPPLEMENT_OWNER_COMMENT and key==digest(g),
+             'non supplemental or counterfeit grant')
+        roles.append(g['role'])
+        op=row['operation']
+        need(op is None or type(op) is str and len(op)==64 and
+             all(c in '0123456789abcdef' for c in op),'invalid supplement operation')
+        spent+=op is not None
+    need(len(roles)==len(set(roles)) and set(roles)<=
+         {'technical_pm_product_analyst','independent_qa'},'duplicate supplemental role')
+    need(type(value['used_calls']) is int and value['used_calls']==spent<=2,
+         'supplement usage cannot reset or exceed 2')
+    return value
+
+
+def supplemental_baseline(r):
+    legacy=addressed_ledger(r.read(r.STATE/ADDRESSED_LEDGER,0))
+    need(legacy['ceiling']==4 and legacy['used_calls']==3 and len(legacy['grants'])==3,
+         'historic 3/4 ledger must remain spent')
+    row=next((v for v in legacy['grants'].values()
+              if v['operation']==SUPPLEMENT_ORIGINAL_ANALYSIS_OP),None)
+    need(row is not None and row['grant']['owner_comment']==FRESH_OWNER_COMMENT
+         and row['grant']['role']=='technical_pm_product_analyst',
+         'original INCOMPLETE analysis grant altered')
+    op=r.read(r.STATE/'slot2.json',0)['operations'].get(SUPPLEMENT_ORIGINAL_ANALYSIS_OP,{})
+    res=op.get('result',{})
+    need(res.get('status')=='confirmed' and res.get('analysis_complete') is False
+         and res.get('analysis',{}).get('completion')=='INCOMPLETE',
+         'must retain prior confirmed INCOMPLETE analysis')
+    return legacy
+
+
 def addressed_ready(r,q):
     g=validate_addressed_grant(q['qualification_grant'])
-    if g['owner_comment']==FRESH_OWNER_COMMENT:
+    if g['owner_comment'] in (FRESH_OWNER_COMMENT,SUPPLEMENT_OWNER_COMMENT):
         # qualification_api() exposes read/STATE/atomic, not POLICY. Pin the
         # existing receiver path rather than weakening the controller match.
         from receiver import POLICY as installed_policy
         policy=r.read(getattr(r,'POLICY',installed_policy),0)
         need(g['controller_revision']==policy['controller_sha'],'fresh grant requires installed controller SHA')
         # Analysis must finish and be retained before the separately admitted QA call.
-        if g['role']=='independent_qa':
+        if g['role']=='independent_qa' and g['owner_comment']==FRESH_OWNER_COMMENT:
             ledger=r.read(r.STATE/ADDRESSED_LEDGER,0)
             analyses=[row.get('operation') for row in ledger.get('grants',{}).values()
                  if row.get('grant',{}).get('owner_comment')==FRESH_OWNER_COMMENT
@@ -506,6 +562,27 @@ def addressed_ready(r,q):
     need(reconciliation.get('phase')=='complete'
          and reconciliation.get('third_operation_sha256')==THIRD_DIGEST,
          'exact fac7 scheduling reconciliation required')
+    if g['owner_comment']==SUPPLEMENT_OWNER_COMMENT:
+        supplemental_baseline(r)  # Read-only original 3/4 verification.
+        value=supplemental_ledger(r.read(r.STATE/SUPPLEMENT_LEDGER,0))
+        if g['role']=='independent_qa':
+            analyses=[row['operation'] for row in value['grants'].values()
+                     if row['grant']['role']=='technical_pm_product_analyst']
+            need(len(analyses)==1 and analyses[0],
+                 'supplemental analysis must be charged first')
+            op=r.read(r.STATE/'slot2.json',0)['operations'].get(analyses[0],{})
+            result=op.get('result',{})
+            native=result.get('native_receipt') or {}
+            need(result.get('status')=='confirmed'
+                 and result.get('analysis_complete') is True
+                 and result.get('analysis',{}).get('completion')=='COMPLETE'
+                 and {'view_file','run_command'} <= set(native.get('tool_names') or [])
+                 and len(result.get('analysis',{}).get('source_reads') or [])==2,
+                 'real supplemental analysis COMPLETE with tools is required before QA')
+        row=value['grants'].get(digest(g))
+        need(row and row['grant']==g and row['operation'] is None and value['used_calls']<2,
+             'supplement exact grant absent or spent')
+        return value
     value=addressed_ledger(r.read(r.STATE/ADDRESSED_LEDGER,0))
     row=value['grants'].get(digest(g))
     need(row and row['grant']==g and row['operation'] is None and value['used_calls']<4,
@@ -515,9 +592,15 @@ def addressed_ready(r,q):
 
 def reserve_addressed(r,q,key):
     value=copy.deepcopy(addressed_ready(r,q))
-    value['grants'][digest(q['qualification_grant'])]['operation']=key
+    grant=q['qualification_grant']
+    value['grants'][digest(grant)]['operation']=key
     value['used_calls']+=1
-    r.atomic(r.STATE/ADDRESSED_LEDGER,value)  # Lost/unknown call stays consumed.
+    if grant['owner_comment']==SUPPLEMENT_OWNER_COMMENT:
+        supplemental_ledger(value)
+        r.atomic(r.STATE/SUPPLEMENT_LEDGER,value)
+    else:
+        addressed_ledger(value)
+        r.atomic(r.STATE/ADDRESSED_LEDGER,value)  # Old UNKNOWN remains spent.
 
 
 def addressed_reconciliation_state(r,proof_sha256,slot_before_sha256):
