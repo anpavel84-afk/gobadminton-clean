@@ -188,16 +188,20 @@ def independence(files, sources, changed):
                              'globals', 'locals', 'vars', '__getattribute__'}
                     for n in ast.walk(parsed):
                         if isinstance(n, ast.ImportFrom):
-                            if n.module in ('importlib', 'importlib.util', 'importlib.machinery', 'builtins', 'io'):
+                            if n.module in ('importlib', 'importlib.util', 'importlib.machinery', 'builtins', 'io', 'runpy', 'pathlib'):
                                 names.update(a.asname or a.name for a in n.names)
-                        if isinstance(n, ast.Attribute) and n.attr in names - {'open', 'read_text', 'read_bytes', 'glob', 'rglob'}:
+                        # Reading/binding a loader object is already ambiguous:
+                        # aliases need not call the original attribute/name directly.
+                        loader_refs = names | {'run_path', 'run_module', 'system', 'popen',
+                            'Popen', 'execv', 'execve', 'spawnv', 'load_module', '__builtins__'}
+                        if isinstance(n, ast.Attribute) and n.attr in loader_refs:
                             return 'dynamic loader alias requires addressed QA: ' + p
-                        if isinstance(n, ast.Name) and n.id == '__import__':
+                        if isinstance(n, ast.Name) and n.id in loader_refs:
                             return 'dynamic loader alias requires addressed QA: ' + p
                         if isinstance(n, ast.Call):
                             f = n.func
                             name = f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else ''
-                            if name in names or name in ('getattr', 'setattr'):
+                            if name in names or name in ('getattr', 'setattr', 'globals', 'locals', 'vars'):
                                 # Literal and computed loaders both need addressed QA. This
                                 # includes aliased imports; static deps alone cannot prove absence.
                                 return 'dynamic module/file loader requires addressed QA: ' + p

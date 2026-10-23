@@ -519,6 +519,11 @@ def protected_qa_inputs(active, folder, owner):
     expected = name(active) + '.equivalence.json'
     need(active.get('qa_equivalence') == expected, 'wrong equivalence filename')
     proof = read(folder / expected, owner, 262144)
+    need(type(proof) is dict and proof.get('schema') == 'GB_QA_EQUIVALENCE_V1'
+         and type(proof.get('origin')) is dict and type(proof.get('projection')) is dict
+         and type(proof.get('obligations')) is list
+         and (proof.get('delta') is None or type(proof.get('delta')) is dict),
+         'malformed protected QA equivalence receipt')
     origin = active.get('qa_origin')
     import re
     need(isinstance(origin, str) and re.fullmatch(

@@ -100,6 +100,39 @@ class BoundedRepair(GitFixture):
             self.c, verification=self.trusted if verification else None)
         return j, key
 
+    def test_loader_reference_aliases_require_addressed_review(self):
+        loaders = (
+            'reader = open\nVALUE = reader("'+TEST+'").read()\n',
+            'from runpy import run_path as load\nVALUE=load("'+TEST+'")["VALUE"]\n',
+            'import runpy as rp\nload=rp.run_path\nVALUE=load("'+TEST+'")["VALUE"]\n',
+            'from pathlib import Path\nreader=Path("'+TEST+'").read_text\nVALUE=reader()\n',
+            'from io import open as reader\nVALUE=reader("'+TEST+'").read()\n',
+            'reader=__builtins__["open"]\nVALUE=reader("'+TEST+'").read()\n',
+        )
+        for text in loaders:
+            with self.subTest(text=text):
+                self.reviewed({SOURCE:text});self.candidate(attempt=2)
+                projection=identity.equivalence(self.repo,self.original,self.active['head'])
+                self.assertFalse(projection['reusable'])
+                self.assertFalse(self.bridge.try_reuse_qa(self.active))
+                self.bridge.model.assert_not_called()
+                self.assertEqual((self.state/self.origin).read_bytes(),self.original_raw)
+
+    def test_non_object_proof_is_local_blocked_recovery_not_uncaught_exception(self):
+        self.defer()
+        path=self.state/self.entry['snapshot']['qa_equivalence'];original=path.read_bytes()
+        try:
+            for value in ([],None,True,1,'foreign',{},dict(schema='GB_QA_EQUIVALENCE_V1',origin=[])):
+                with self.subTest(value=value):
+                    path.write_text(json.dumps(value))
+                    cache,key=self.enroll()
+                    self.assertIsNone(key)
+                    self.assertIn(core.digest(self.entry),cache['blocked'])
+                    self.assertEqual(cache['receipts'],{})
+                    self.assertEqual(self.entry['snapshot'],self.before)
+        finally:path.write_bytes(original)
+        cache,key=self.enroll();self.assertIsNotNone(key)
+
     def test_real_imported_VALUE_refuses_reuse_and_calls_addressed_bridge_QA(self):
         self.reviewed({SOURCE: 'from scripts.chatops.tests.test_example import VALUE\n'})
         self.candidate(attempt=2)
