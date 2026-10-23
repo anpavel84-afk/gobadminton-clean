@@ -128,7 +128,8 @@ class CompleteAcceptancePath(unittest.TestCase):
        patch.object(R,'publish_monitor'),patch.object(U.time,'time',return_value=12345):
    result=U.accept_canary();self.assertEqual(result['phase'],'active-ready')
    self.assertEqual(result['accepted_canary']['qa_run'],3)
-   self.assertEqual(result['accepted_canary']['dev_run'],5)
+   self.assertEqual(result['accepted_canary']['dev_run'],102)
+   self.assertEqual(set(files[U.JOURNAL]['qualification_intent']['operations']),{'author','qa-final','dev-final'})
    self.assertEqual(result['accepted_canary']['author_run'],1)
    first=copy.deepcopy(files);count=len(writes);U.accept_canary()
    self.assertEqual(files,first);self.assertEqual(len(writes),count)
