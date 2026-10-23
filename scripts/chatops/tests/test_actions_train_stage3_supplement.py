@@ -41,9 +41,9 @@ def analysis():
         completion='COMPLETE',analysis='Inspected actual source via native tool.',
         evidence=['view_file and run_command source evidence'],limitations=[],
         source_reads=[
-            dict(path=SOURCE_A,sha256=hashlib.sha256(b'first').hexdigest(),
+            dict(path=SOURCE_A,sha256=hashlib.sha256(b'// Inspected TypeScript game detail types\n').hexdigest(),
                  observation='Inspected TypeScript game detail types'),
-            dict(path=SOURCE_B,sha256=hashlib.sha256(b'second').hexdigest(),
+            dict(path=SOURCE_B,sha256=hashlib.sha256(b'// Inspected GameDetailPage data access\n').hexdigest(),
                  observation='Inspected GameDetailPage data access')])
         
 
@@ -109,7 +109,8 @@ class NativeReadEvidence(unittest.TestCase):
             self.assertTrue(downgraded['limitations'])
         def source(_w,command,path):
             self.assertEqual(command,'show')
-            return b'first' if path.endswith(SOURCE_A) else b'second'
+            return (b'// Inspected TypeScript game detail types\n' if path.endswith(SOURCE_A)
+                    else b'// Inspected GameDetailPage data access\n')
         with patch.object(N,'git',side_effect=source) as read:
             complete=N.analysis_source_gate(good,dict(tool_names=['view_file','run_command']),'/work','f'*40)
         self.assertEqual(complete['completion'],'COMPLETE')
