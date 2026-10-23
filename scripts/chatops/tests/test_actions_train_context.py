@@ -19,7 +19,7 @@ TEXT = (ROOT/'docs/rules/ENGINEERING_OPERATING_MODEL.md').read_text()
 
 
 def accepted():
-    return TEXT, dict(schema='GB_RULES_CONTEXT_V1', revision='1.1', commit=C.RULES_COMMIT,
+    return TEXT, dict(schema='GB_RULES_CONTEXT_V1', revision='1.2', commit=C.RULES_COMMIT,
         sha256=C.RULES_SHA256, bytes=C.RULES_SIZE, source=str(C.RULES_PATH),
         delivery='explicit_full_stdin', automatic_rules='disabled', user_config='ignored',
         candidate_instructions='untrusted_data')
@@ -43,7 +43,8 @@ class AcceptedFile(unittest.TestCase):
     def test_exact_accepted_bytes_and_commit(self):
         text,receipt=self.load();self.assertEqual(text,TEXT)
         self.assertEqual(receipt['sha256'],hashlib.sha256(text.encode()).hexdigest())
-        self.assertEqual(receipt['commit'],'b4a746a0b9834d80b8c65ecb9a093257f989bae7')
+        self.assertEqual(receipt['commit'],'a4a9291bc7c7b510efd38040c42c21a9d5323f2a')
+        self.assertEqual(receipt['revision'],'1.2')
     def test_changed_or_missing_rules_never_fall_back(self):
         self.path.write_text(TEXT+'candidate override')
         with self.assertRaises(core.Refused):self.load()
