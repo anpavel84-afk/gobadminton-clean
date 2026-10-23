@@ -46,8 +46,14 @@ def preferred_route(policy, task, role, level):
     if policy['schema'] == 'GB_STAGE_COST_V2':
         if role == 'author' and level in ('simple', 'standard', 'complex') and first == 'cursor:auto':
             return first
-        if role == 'qa' and level in ('simple', 'standard') and first == 'agy:claude-sonnet-5-5-medium':
-            return first  # Qualification is still mandatory in core._route_immutable.
+        if role == 'qa':
+            preferred = {'simple': 'agy:claude-sonnet-5-5-medium',
+                         'standard': 'agy:claude-sonnet-5-5-medium',
+                         'complex': 'agy:claude-sonnet-5-5-high',
+                         'critical': 'agy:claude-opus-5-5-high'}.get(level)
+            if first == preferred:
+                return first  # Exact model qualification remains mandatory in core.
+
     return MATRIX[level]
 
 def selection(task, role):
@@ -56,8 +62,17 @@ def selection(task, role):
     row = p[role]
     minimum = MATRIX[row["complexity"]]
     preferred = preferred_route(p, task, role, row['complexity'])
+    fallback = [minimum] if preferred != minimum and minimum in task[role + '_routes'] else []
+    if p['schema'] == 'GB_STAGE_COST_V2' and preferred == 'cursor:auto' and row['complexity'] == 'simple':
+        # UI-S's explicitly admitted Sol Medium is sufficient above Luna's minimum.
+        allowed = {minimum, 'codex:gpt-6.1-sol:medium'}
+        fallback = [r for r in task['author_routes'] if r in allowed]
+    if preferred == 'agy:claude-opus-5-5-high' and row['complexity'] == 'critical':
+        # No separate exact-risk Codex QA qualification mechanism is installed.
+        # A listed Sol route alone is insufficient; Astra is not ordinary QA fallback.
+        fallback = []
     return preferred, {
-        "approved_fallback_routes": [minimum] if preferred != minimum and minimum in task[role + "_routes"] else [],
+        "approved_fallback_routes": fallback,
         "policy": p["schema"], "stage_complexity": row["complexity"],
         "selection_reason": row["reason"], "selection_evidence": row["evidence"],
         "escalation_reason": row["reason"] if row["complexity"] in ("expert", "critical") else None,

@@ -127,7 +127,7 @@ def setup(req, config, native_auth=None):
                 active = store.data['active']
                 from core import digest
                 answer, receipt = review(bridge.work, active['base'], active['head'], wrapped, c.model_timeout,
-                    slot=req['slot'], task_hash=digest(active['task']),
+                    slot=req['slot'], task_hash=digest(active['task']), model=choice['effective_model'],
                     charge=lambda: rt.budget.charge(req['slot'], 'agy', 'qa'), popen=a.subprocess.Popen,
                     accepted_rules=accepted_rules)
                 save_receipt(c.state_dir, active['issue'], active['attempt'], receipt)

@@ -283,7 +283,7 @@ print(json.dumps(result))
             original=N.filesystem_roots
             def roots(private,candidate):
                 return original(private,candidate)
-            def cmd(timeout,prompt):return [sys.executable,'-I','-c',script]
+            def cmd(timeout,prompt,model=N.MODEL):return [sys.executable,'-I','-c',script]
             original_popen=subprocess.Popen; charged=[]
             def popen(argv,**kwargs):
                 self.assertEqual(charged,['one'])

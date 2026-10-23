@@ -21,7 +21,8 @@ AGY = '/opt/gb-slots/runtime/antigravity/agy'
 MARKER = Path('/etc/gobadminton-slots/antigravity-qa.json')
 EXECUTOR_UID = 978
 AUTH = Path('/srv/gb-slots/slot2/home/.gemini/antigravity-cli/antigravity-oauth-token')
-MODEL = 'claude-sonnet-5-5-medium'
+MODEL = 'claude-sonnet-5-5-medium'  # Existing one-call qualification remains this exact model.
+MODELS = frozenset((MODEL, 'claude-sonnet-5-5-high', 'claude-opus-5-5-high'))
 AGENT = 'gobadminton-text-review'
 MAX_INPUT = 1 << 20
 MAX_OUT = 4 << 20
@@ -254,7 +255,8 @@ def trusted(path, owner=0, limit=65536):
         os.close(fd)
 
 
-def qualification(slot, task_hash):
+def qualification(slot, task_hash, model=MODEL):
+    need(model in MODELS, 'unsupported native QA model')
     need(slot == 'slot2', 'Antigravity QA currently supports existing isolated slot2 only')
     m = loads(trusted(MARKER))
     need(m.get('schema') == 'GB_ANTIGRAVITY_QA_29_V1' and m.get('phase') in ('canary', 'ready')
@@ -262,6 +264,15 @@ def qualification(slot, task_hash):
          'Antigravity QA executor not qualified')
     need(m['phase'] == 'ready' or task_hash is not None and m.get('canary_task_sha256') == task_hash,
          'Antigravity restricted to exact reviewed QA canary')
+    # Existing ready/canary markers admit Medium only. Higher catalogue IDs
+    # require explicit root-reviewed admission, not another commissioning call.
+    # The Medium canary qualifies the executor protocol; normal QA receipts
+    # prove actual use of each requested model only after that call completes.
+    models = m.get('admitted_models', [MODEL])
+    need(type(models) is list and models and all(type(x) is str and x in MODELS for x in models)
+         and len(models) == len(set(models)), 'invalid admitted QA models')
+    need(model == MODEL if m['phase'] == 'canary' else model in models,
+         'exact native QA model not admitted')
     for name in ('native_antigravity.py', 'native_guard.py'):
         need(m.get('modules', {}).get(name) == hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest(),
              'Antigravity installed module drift')
@@ -273,9 +284,9 @@ def qualification(slot, task_hash):
     return m
 
 
-def available(slot, task_hash):
+def available(slot, task_hash, model=MODEL):
     try:
-        qualification(slot, task_hash)
+        qualification(slot, task_hash, model=model)
         return True, 'qualified native QA executor'
     except (OSError, ReviewError) as error:
         return False, 'Antigravity QA unavailable: ' + (str(error)[:180] if isinstance(error, ReviewError)
@@ -319,12 +330,13 @@ def filesystem_roots(root, work, common=None):
     return readonly, writable, executables
 
 
-def command(print_timeout, prompt):
+def command(print_timeout, prompt, model=MODEL):
+    need(model in MODELS, 'unsupported native QA model')
     need(type(print_timeout) is int and 1 <= print_timeout <= 3600, 'invalid print timeout')
     need(isinstance(prompt, str) and 0 < len(prompt.encode()) <= min(MAX_INPUT, 120 << 10), 'invalid prompt')
     # Observed 1.3.6 accepts duration strings and a full -p prompt. A fixed -p
     # string plus stdin did not establish source delivery. Never use resume.
-    return [AGY, '--model', MODEL, '--sandbox', '--disable-slash-commands', '--agent', AGENT,
+    return [AGY, '--model', model, '--sandbox', '--disable-slash-commands', '--agent', AGENT,
             '--output-format', 'stream-json', '--json-schema',
             json.dumps(SCHEMA, sort_keys=True, separators=(',', ':')),
             '--print-timeout', str(print_timeout) + 's', '-p', prompt]
@@ -338,8 +350,8 @@ def reap(process):
     process.wait()
 
 
-def invoke(stdin, timeout, *, work, slot, task_hash, charge, popen=subprocess.Popen):
-    marker = qualification(slot, task_hash)
+def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=subprocess.Popen):
+    marker = qualification(slot, task_hash, model=model)
     need(os.geteuid() == EXECUTOR_UID, 'wrong native QA executor UID')
     need(type(timeout) is int and MIN_TIMEOUT <= timeout <= 3600, 'invalid timeout')
     with tempfile.TemporaryDirectory(prefix='gb-agy-') as temp:
@@ -369,7 +381,7 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, popen=subprocess.Po
 
         with open(out / 'stdout', 'wb') as stdout, open(out / 'stderr', 'wb') as stderr:
             try:
-                argv = command(max(1, timeout - 10), stdin)
+                argv = command(max(1, timeout - 10), stdin, model=model)
                 charge()  # One durable provider-role charge before Popen, never replay on error.
                 process = popen(argv, cwd=root / 'ws', env=env,
                                            stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr,
@@ -412,7 +424,8 @@ def audit(value):
             audit(item)
 
 
-def parse_stream(raw, head):
+def parse_stream(raw, head, model=MODEL):
+    need(model in MODELS, 'unsupported native QA model')
     need(isinstance(raw, bytes) and len(raw) <= MAX_OUT, 'provider output too large')
     events = [loads(line) for line in dec(raw).splitlines() if line.strip()]
     need(2 <= len(events) <= 20000 and all(type(e) is dict for e in events), 'invalid provider stream')
@@ -421,7 +434,7 @@ def parse_stream(raw, head):
     need(sum(e.get('event') == 'init' for e in events) == 1
          and sum(e.get('event') == 'result' for e in events) == 1, 'duplicate init/result')
     init = events[0].get('init')
-    need(type(init) is dict and init.get('model') == MODEL and init.get('agent') == AGENT,
+    need(type(init) is dict and init.get('model') == model and init.get('agent') == AGENT,
          'unexpected effective model or agent')
     tools = init.get('tools')
     need(type(tools) is list and tools and all(type(t) is str and t for t in tools)
@@ -458,7 +471,7 @@ def parse_stream(raw, head):
     usage = out.get('usage')
     need(usage is None or type(usage) is dict and all(type(v) is int and v >= 0 for v in usage.values()),
          'invalid provider usage')
-    evidence = dict(requested_model=MODEL, effective_model=init['model'], effort=None,
+    evidence = dict(requested_model=model, effective_model=init['model'], effort=None,
                     requested_agent=AGENT, effective_agent=init['agent'],
                     requested_tools='native_qa_tools', effective_tools=init['tools'],
                     effective_permission_mode=init['permission_mode'],
@@ -478,8 +491,9 @@ def canonical(value, head):
     return {'verdict': value['verdict'], 'findings': list(findings), 'reviewed_sha': head}
 
 
-def review(work, base, head, prompt, timeout, *, slot, task_hash, charge, popen=subprocess.Popen, accepted_rules=None):
+def review(work, base, head, prompt, timeout, *, slot, task_hash, charge, model=MODEL, popen=subprocess.Popen, accepted_rules=None):
     """Return (canonical result, separate receipt). Fails closed; never promotes anything."""
+    need(model in MODELS, 'unsupported native QA model')
     need(not git(work, 'status', '--porcelain'), 'candidate must be clean before QA')
     source, _ = collect(work, base, head, prompt + '\nRead-only candidate root: ' + str(Path(work).resolve()))
     from context_policy import inject
@@ -488,11 +502,11 @@ def review(work, base, head, prompt, timeout, *, slot, task_hash, charge, popen=
     rules_context = dict(rules_context, delivery='explicit_full_argv', prompt_sha256=input_sha)
     rules_context.pop('stdin_sha256', None)  # AGY uses -p with stdin=DEVNULL; other clients retain stdin metadata.
     raw, execution = invoke(stdin, timeout, work=work, slot=slot, task_hash=task_hash,
-                            charge=charge, popen=popen)
+                            charge=charge, model=model, popen=popen)
     need(not git(work, 'status', '--porcelain') and dec(git(work,'rev-parse','HEAD')).strip() == head,
          'checked candidate changed during QA')
     try:
-        result, evidence = parse_stream(raw, head)
+        result, evidence = parse_stream(raw, head, model=model)
     except RecursionError:
         raise ReviewError('malformed provider JSON') from None
     receipt = {'schema': 2, 'provider': 'agy', 'status': 'SUCCESS',

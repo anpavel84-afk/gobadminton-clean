@@ -235,13 +235,14 @@ def _route_immutable(slots, task, role, profile, budget, slot, task_hash=None):
                             fallback_reason=('previous preferred providers unavailable' if refusal else None),
                             unavailable=refusal, remaining_calls=left, used_calls=budget.used('cursor', role, slot))
             if provider == 'agy':
-                if role != 'qa' or model != 'claude-sonnet-5-5-medium' or effort is not None:
+                from native_antigravity import MODELS as AGY_MODELS
+                if role != 'qa' or model not in AGY_MODELS or effort is not None:
                     refusal[entry] = 'Antigravity role/model/effort not supported by native QA adapter'
                     continue
                 from native_antigravity import available
-                ok, why = available(slot, task_hash or digest(task))
-                # No AGY authority qualification exists yet. No budget charge or
-                # call may occur merely because immutable routes mention AGY.
+                ok, why = available(slot, task_hash or digest(task), model=model)
+                # Exact model admission and executor qualification remain mandatory.
+                # A route string alone cannot charge a budget or start a provider.
                 if not ok:
                     refusal[entry] = why; continue
                 left = budget.remaining('agy', role, slot)
