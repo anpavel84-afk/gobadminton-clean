@@ -10,6 +10,7 @@ import stat
 import subprocess
 import sys
 import time
+from types import SimpleNamespace
 from core import HERE, Refused, binding, digest, live, loads, need, request
 import qa_recovery
 
@@ -172,6 +173,10 @@ def budget_preflight_retry(j, state):
     except (OSError, Refused, ValueError, TypeError): return False
 
 
+def qualification_api():
+    return SimpleNamespace(read=read,STATE=STATE,atomic=atomic)
+
+
 def qualification_plan(policy, card, budget):
     """Read-only root canary proposal; reservation/launch remains in handle()."""
     if policy.get('mode') != 'active' or not card.get('owned') or card.get('active') is not None \
@@ -186,7 +191,7 @@ def qualification_plan(policy, card, budget):
         q = qualification_descriptor(marker)
         import antigravity_qa_recovery as recovery
         if recovery.reservation_path(STATE,q).exists():return None
-        if recovery.successor(q):recovery.lineage_ready(sys.modules[__name__],q)
+        if recovery.successor(q):recovery.lineage_ready(qualification_api(),q)
         left=budget.remaining('agy','qa','slot2')
         if not (type(left) is int and (left>=1 if recovery.successor(q) else left==1)):return None
         return dict(slot='slot2',issue=29,stage='qa_qualification',phase='idle',head=q['head'],
@@ -583,7 +588,7 @@ def qualification_request(req, policy):
     path = recovery.reservation_path(STATE,q)
     if recovery.successor(q):
         need(digest(state)==recovery.CHECKPOINT,'successor checkpoint changed')
-        recovery.lineage_ready(sys.modules[__name__],q)
+        recovery.lineage_ready(qualification_api(),q)
     need(not path.exists(), 'QA qualification already reserved; reconcile without another call')
     _, s = live()
     budget = s.Budget(BUDGET, AUTONOMY/'outbox', AUTONOMY/'locks/registry.lock')
@@ -593,7 +598,7 @@ def qualification_request(req, policy):
     reservation = dict(schema='GB_ANTIGRAVITY_QA_29_RESERVATION_V1', operation=key,
         task_hash=q['task_sha256'], descriptor=q, started_at=int(time.time()), result=None)
     # Reservation first: a crash between writes consumes the canary, never replays it.
-    if recovery.successor(q):recovery.reserve_lineage(sys.modules[__name__],q,key)
+    if recovery.successor(q):recovery.reserve_lineage(qualification_api(),q,key)
     atomic(path, reservation)
     j['operations'][key] = dict(task_hash=q['task_sha256'], qa_qualification=q, binding=binding(req),
         run=req['run'], run_attempt=req['run_attempt'], before=digest(state), checkpoint_before=state,
