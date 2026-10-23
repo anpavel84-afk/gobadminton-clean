@@ -593,6 +593,10 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=
             (agents/(AGENT+'.md')).write_text(ANALYSIS_AGENT_DEF if analysis else AGENT_DEF)
             env={'PATH':'/opt/gb-slots/runtime/node/bin:/opt/gb-slots/runtime/pnpm/bin:/usr/bin:/bin',
                  'HOME':str(root/'home'),'LANG':'C.UTF-8','TMPDIR':str(out)}
+            if analysis:
+                # Git's read-only commands must not open host /etc/gitconfig:
+                # unavailable under Landlock on some GitHub runner images.
+                env['GIT_CONFIG_NOSYSTEM']='1'
             common=Path(dec(git(work,'rev-parse','--path-format=absolute','--git-common-dir')).strip()).resolve()
             need(common.name == '.git' and common != Path(work).resolve(),'unexpected candidate Git metadata root')
             source_root=None
