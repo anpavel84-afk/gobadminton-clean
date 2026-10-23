@@ -129,7 +129,7 @@ def setup(req, config, native_auth=None):
                 answer, receipt = review(bridge.work, active['base'], active['head'], wrapped, c.model_timeout,
                     slot=req['slot'], task_hash=digest(active['task']), model=choice['effective_model'],
                     charge=lambda: rt.budget.charge(req['slot'], 'agy', 'qa'), popen=a.subprocess.Popen,
-                    accepted_rules=accepted_rules)
+                    accepted_rules=accepted_rules, evidence_dir=c.state_dir/'antigravity-evidence')
                 save_receipt(c.state_dir, active['issue'], active['attempt'], receipt)
                 choice['native_receipt'] = receipt
                 choice['rules_context'] = receipt['rules_context']
@@ -487,9 +487,10 @@ def qualify_qa(req, config, context):
     result, receipt = review(work, q['base'], q['head'], text, 1800,
         slot=req['slot'], task_hash=q['task_sha256'],
         charge=lambda:rt.budget.charge(req['slot'], 'agy', 'qa'), popen=a.subprocess.Popen,
-        accepted_rules=accepted_rules)
+        accepted_rules=accepted_rules, evidence_dir=b.c.state_dir/'antigravity-evidence')
     need(digest(store.data) == before, 'QA qualification changed source checkpoint')
     receipt['qualification_task_sha256'] = q['task_sha256']
+    receipt['qualification_lineage'] = {k:q[k] for k in ('parent_task_sha256','parent_operation','adapter_revision') if k in q}
     receipt['charged_calls'] = rt.budget.used('agy', 'qa', req['slot']) - before_calls
     need(receipt['charged_calls'] == 1, 'QA qualification ledger mismatch')
     passed = result['verdict'] == 'PASS' and 'run_command' in receipt.get('tool_names', [])
@@ -512,6 +513,10 @@ def entry(req, config, native_auth=None):
     except Retry as error:
         return dict(status='waiting', reason=str(error), retry_after=error.after)
     except Exception as error:
+        from native_antigravity import ReviewError
+        if isinstance(error, ReviewError):
+            return model_receipt(dict(status='unknown',reason=error.code,safe_release=False,
+                                      adapter_error=error.public()),context)
         reason = str(error)[:1000] if isinstance(error, Refused) or error.__class__.__name__ in (
             'Hold', 'AdapterDisabled') else type(error).__name__
         # Only proven stopped source failures can release occupancy. Unknown author/push/QA

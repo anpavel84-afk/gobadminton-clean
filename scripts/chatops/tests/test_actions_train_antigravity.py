@@ -40,7 +40,15 @@ def wire(events):
     return b'\n'.join(json.dumps(e).encode() for e in events) + b'\n'
 
 
-class Protocol(unittest.TestCase):
+class EvidenceTestCase(unittest.TestCase):
+    def setUp(self):
+        tmp=tempfile.TemporaryDirectory(prefix='gb-agy-evidence-test-');self.addCleanup(tmp.cleanup)
+        self.evidence=Path(tmp.name)/'private'
+        self._evidence_patch=patch.object(N,'EVIDENCE',self.evidence)
+        self._evidence_patch.start();self.addCleanup(self._evidence_patch.stop)
+
+
+class Protocol(EvidenceTestCase):
     def test_real_envelope_uses_structured_output_and_effective_receipts(self):
         events = rows()
         events[-1]['result']['response'] = 'noncanonical prose is never a verdict'
@@ -104,14 +112,15 @@ class Protocol(unittest.TestCase):
         with patch.object(N.subprocess, 'Popen', side_effect=AssertionError('provider started')), \
              patch.object(N.tempfile, 'TemporaryDirectory', side_effect=AssertionError('workspace created')):
             with patch.object(N, 'qualification', side_effect=N.ReviewError('missing qualification')):
-                with self.assertRaisesRegex(N.ReviewError, 'qualification'):
+                with self.assertRaisesRegex(N.ReviewError, 'AGY_PRECHECK_FAILED'):
                     N.invoke('public prompt', 60, work=Path('/tmp'), slot='slot2', task_hash='x', charge=Mock())
         with patch.object(N, 'qualification', side_effect=N.ReviewError('native auth unavailable')):
-            self.assertEqual(N.available('slot2', 'x'), (False, 'Antigravity QA unavailable: native auth unavailable'))
+            self.assertEqual(N.available('slot2', 'x'), (False, 'Antigravity QA unavailable: AGY_PRECHECK_FAILED:preflight'))
 
 
-class Collection(unittest.TestCase):
+class Collection(EvidenceTestCase):
     def setUp(self):
+        super().setUp()
         self.tmp = tempfile.TemporaryDirectory(prefix='gb-agy-29-test-')
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
@@ -235,7 +244,7 @@ class Routing(unittest.TestCase):
         budget.charge.assert_not_called()
 
 
-class NativeToolScope(unittest.TestCase):
+class NativeToolScope(EvidenceTestCase):
     def test_authorized_successful_native_tool_steps_are_receipted(self):
         events=rows()
         for state in ('ACTIVE','DONE'):
@@ -252,13 +261,13 @@ class NativeToolScope(unittest.TestCase):
             for state in states:
                 events.insert(-2,{'event':'step_update','step_update':{'conversation_id':CID,
                     'step_index':4,'step_type':'tool','tool_name':'run_command','state':state}})
-            with self.subTest(states=states),self.assertRaisesRegex(N.ReviewError,'incomplete native tool'):
+            with self.subTest(states=states),self.assertRaisesRegex(N.ReviewError,'AGY_PRECHECK_FAILED'):
                 N.parse_stream(wire(events),SHA)
         events=rows()
         for index,state in [(4,'ACTIVE'),(5,'ACTIVE'),(4,'DONE'),(5,'DONE'),(4,'ACTIVE')]:
             events.insert(-2,{'event':'step_update','step_update':{'conversation_id':CID,
                 'step_index':index,'step_type':'tool','tool_name':'run_command','state':state}})
-        with self.assertRaisesRegex(N.ReviewError,'incomplete native tool'):
+        with self.assertRaisesRegex(N.ReviewError,'AGY_PRECHECK_FAILED'):
             N.parse_stream(wire(events),SHA)
 
     def test_ordinary_executor_reuses_existing_landlock_readonly_and_subprocesses(self):
@@ -426,9 +435,9 @@ class QualificationSeam(unittest.TestCase):
         def review(*args,**kwargs):return N.parse_stream(wire(events),SHA)
         with patch.object(N,'qualification',return_value=m),patch.object(N,'review',review), \
              patch('context_policy.load',return_value=('trusted',{})),patch.object(N,'save_receipt') as save:
-            with self.assertRaisesRegex(N.ReviewError,'incomplete native tool'):
+            with self.assertRaisesRegex(N.ReviewError,'AGY_PRECHECK_FAILED'):
                 stage.qualify_qa(self.request()|{'_qa_qualification':m['qualification']},{},
-                    (SimpleNamespace(subprocess=SimpleNamespace(Popen=Mock())),None,rt,None,store,None))
+                    (SimpleNamespace(subprocess=SimpleNamespace(Popen=Mock())),None,rt,None,store,SimpleNamespace(c=SimpleNamespace(state_dir=Path('/tmp')))))
             save.assert_not_called()
         self.assertEqual(store.data,before)
 

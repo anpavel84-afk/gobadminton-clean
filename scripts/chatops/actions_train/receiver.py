@@ -175,7 +175,7 @@ def budget_preflight_retry(j, state):
 def qualification_plan(policy, card, budget):
     """Read-only root canary proposal; reservation/launch remains in handle()."""
     if policy.get('mode') != 'active' or not card.get('owned') or card.get('active') is not None \
-            or card.get('pending') or (STATE/'antigravity-qa-qualification.json').exists():
+            or card.get('pending'):
         return None
     from native_antigravity import MARKER, trusted, qualification_descriptor, ReviewError
     try:
@@ -184,10 +184,13 @@ def qualification_plan(policy, card, budget):
                 or marker.get('slot') != 'slot2' or marker.get('executor_uid') != 978:
             return None
         q = qualification_descriptor(marker)
+        import antigravity_qa_recovery as recovery
+        if recovery.reservation_path(STATE,q).exists():return None
+        if recovery.successor(q):recovery.lineage_ready(sys.modules[__name__],q)
         if budget.remaining('agy','qa','slot2') != 1: return None
         return dict(slot='slot2',issue=29,stage='qa_qualification',phase='idle',head=q['head'],
                     attempt=0,generation=card['generation'],profile='agy')
-    except (OSError, ValueError, ReviewError, KeyError, TypeError):
+    except (OSError, ValueError, ReviewError, Refused, KeyError, TypeError):
         return None  # Missing/malformed qualification never authorizes a call.
 
 
@@ -401,11 +404,13 @@ def supervisor(req, policy, key, root_lock):
             changed = True  # receipt transition, NEVER a product/source completion
             value = dict(status='confirmed', recovery=recovery_record)
         if op.get('qa_qualification'):
-            reservation = read(STATE / 'antigravity-qa-qualification.json', 0)
+            from antigravity_qa_recovery import reservation_path
+            qualification_path=reservation_path(STATE,op['qa_qualification'])
+            reservation = read(qualification_path, 0)
             need(reservation.get('operation') == key and reservation.get('task_hash') == op['task_hash'],
                  'QA qualification reservation drift')
             reservation.update(result=value, finished_at=int(time.time()))
-            atomic(STATE / 'antigravity-qa-qualification.json', reservation)
+            atomic(qualification_path, reservation)
         active = state['active']
         value['checkpoint'] = None if not active else {k: active.get(k) for k in (
             'issue', 'phase', 'head', 'attempt', 'pr', 'release_id')}
@@ -573,7 +578,11 @@ def qualification_request(req, policy):
     m = loads(trusted(MARKER)); q = qualification_descriptor(m)
     qualification(slot, q['task_sha256'])
     need(m['phase'] == 'canary' and req['head'] == q['head'], 'qualification source/phase mismatch')
-    path = STATE / 'antigravity-qa-qualification.json'
+    import antigravity_qa_recovery as recovery
+    path = recovery.reservation_path(STATE,q)
+    if recovery.successor(q):
+        need(digest(state)==recovery.CHECKPOINT,'successor checkpoint changed')
+        recovery.lineage_ready(sys.modules[__name__],q)
     need(not path.exists(), 'QA qualification already reserved; reconcile without another call')
     _, s = live()
     budget = s.Budget(BUDGET, AUTONOMY/'outbox', AUTONOMY/'locks/registry.lock')
@@ -582,6 +591,7 @@ def qualification_request(req, policy):
     reservation = dict(schema='GB_ANTIGRAVITY_QA_29_RESERVATION_V1', operation=key,
         task_hash=q['task_sha256'], descriptor=q, started_at=int(time.time()), result=None)
     # Reservation first: a crash between writes consumes the canary, never replays it.
+    if recovery.successor(q):recovery.reserve_lineage(sys.modules[__name__],q,key)
     atomic(path, reservation)
     j['operations'][key] = dict(task_hash=q['task_sha256'], qa_qualification=q, binding=binding(req),
         run=req['run'], run_attempt=req['run_attempt'], before=digest(state), checkpoint_before=state,

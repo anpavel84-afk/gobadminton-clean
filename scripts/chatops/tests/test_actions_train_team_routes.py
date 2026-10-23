@@ -2,6 +2,7 @@
 import copy
 import hashlib
 import json
+import tempfile
 from pathlib import Path
 import unittest
 from unittest.mock import Mock, patch
@@ -26,7 +27,7 @@ class ModelProtocol(unittest.TestCase):
                 self.assertIsNone(receipt['effort'])
                 wrong='claude-opus-5-5-high' if model==N.MODEL else N.MODEL
                 events[0]['init']['model']=wrong
-                with self.assertRaisesRegex(N.ReviewError,'effective model'):
+                with self.assertRaises(N.ReviewError):
                     N.parse_stream(A.wire(events),A.SHA,model=model)
     def test_review_threads_selected_model_into_exact_final_prompt_and_receipt(self):
         model='claude-sonnet-5-5-high';events=A.rows();events[0]['init']['model']=model
@@ -36,11 +37,17 @@ class ModelProtocol(unittest.TestCase):
         def invoke(prompt,*args,**kwargs):
             seen.append((prompt,kwargs['model']))
             return A.wire(events),{'qualification_phase':'ready'}
-        with patch.object(N,'git',side_effect=git),patch.object(N,'collect',return_value=('SOURCE_SENTINEL',{})), \
+        with tempfile.TemporaryDirectory(prefix='gb-team-qa-evidence-') as temp, \
+             patch.object(N,'git',side_effect=git),patch.object(N,'collect',return_value=('SOURCE_SENTINEL',{})), \
              patch('context_policy.inject',return_value=('TRUSTED_FINAL_ARGV_SOURCE_SENTINEL',{'stdin_sha256':'legacy'})), \
              patch.object(N,'invoke',side_effect=invoke):
             result,r=N.review(Path('/candidate'),'b'*40,A.SHA,'task',60,
-                slot='slot2',task_hash='hash',charge=Mock(),model=model,accepted_rules=('rules',{}))
+                slot='slot2',task_hash='hash',charge=Mock(),model=model,accepted_rules=('rules',{}),evidence_dir=Path(temp)/'evidence')
+            metadata=json.loads(sorted((Path(temp)/'evidence').glob('*/phase-*.json'))[-1].read_text())
+            self.assertEqual(metadata['requested_model'],model)
+            self.assertEqual(metadata['effective_model'],model)
+            self.assertEqual(metadata['status'],'success')
+
         self.assertEqual(seen,[('TRUSTED_FINAL_ARGV_SOURCE_SENTINEL',model)])
         self.assertEqual(r['requested_model'],model)
         self.assertEqual(r['effective_model'],model)
@@ -69,17 +76,17 @@ class ModelProtocol(unittest.TestCase):
         marker=self.marker('canary');marker['admitted_models']=list(N.MODELS)
         self.check(marker,N.MODEL)
         for model in N.MODELS-{N.MODEL}:
-            with self.assertRaisesRegex(N.ReviewError,'not admitted'):self.check(marker,model)
+            with self.assertRaises(N.ReviewError):self.check(marker,model)
         self.assertEqual(N.qualification_task('a'*40,'b'*40)['model'],N.MODEL)
         self.assertEqual(N.qualification_task('a'*40,'b'*40)['max_calls'],1)
     def test_ready_medium_marker_needs_explicit_per_model_admission(self):
         marker=self.marker();self.check(marker,N.MODEL)
         for model in N.MODELS-{N.MODEL}:
-            with self.assertRaisesRegex(N.ReviewError,'not admitted'):self.check(marker,model)
+            with self.assertRaises(N.ReviewError):self.check(marker,model)
             explicit=marker|dict(admitted_models=[N.MODEL,model])
             self.check(explicit,model)
         for models in (['auto'],[N.MODEL,N.MODEL],[],True):
-            with self.assertRaisesRegex(N.ReviewError,'admitted QA models'):
+            with self.assertRaises(N.ReviewError):
                 self.check(marker|dict(admitted_models=models),N.MODEL)
 
 class CostRoutes(unittest.TestCase):
