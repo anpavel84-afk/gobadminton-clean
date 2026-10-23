@@ -22,6 +22,7 @@ def successor(q):
 
 
 def reservation_path(state,q):
+    if addressed(q):return Path(state)/('antigravity-29-addressed-'+q['task_sha256']+'.json')
     if grant(q):return Path(state)/('antigravity-qa-one-shot-'+q['task_sha256']+'.json')
     if successor(q):return Path(state)/('antigravity-qa-qualification-'+q['task_sha256']+'.json')
     return Path(state)/FIXED
@@ -123,8 +124,9 @@ def reconcile_parent(r,q):
 def acceptance_match(op,q):
     """Historical UNKNOWNs with the same Issue are history, not the new candidate."""
     if op.get('task_hash')!=q['task_sha256']:return False
+    if addressed(q) and q['qualification_grant']['role']=='technical_pm_product_analyst':return False
     if grant(q):
-        validate_grant(q['qualification_grant'])
+        (validate_addressed_grant if addressed(q) else validate_grant)(q['qualification_grant'])
         need(op.get('before')==op.get('after')==CHECKPOINT,'one-shot acceptance checkpoint drift')
         import re
         receipt=op.get('result',{}).get('native_receipt',{})
@@ -135,6 +137,12 @@ def acceptance_match(op,q):
              and type(receipt.get('stdin_bytes')) is int and receipt['stdin_bytes']>receipt['semantic_input_bytes']
              and all(re.fullmatch('[a-f0-9]{64}',receipt.get(k,'') or '') for k in ('semantic_input_sha256','stdin_sha256')),
              'one-shot transport/mode receipt missing')
+    if addressed(q):
+        receipt=op.get('result',{}).get('native_receipt',{})
+        need(receipt.get('review_kind')=='native_source_qa'
+             and receipt.get('addressed_role')=='independent_qa'
+             and receipt.get('addressed_input_sha256')==q['qualification_grant']['input_sha256']
+             and 'run_command' in receipt.get('tool_names',[]), 'fresh exact QA contract receipt required')
     b=op.get('binding',{});result=op.get('result',{});receipt=result.get('native_receipt',{});qa=result.get('qa',{})
     need(b.get('stage')=='qa_qualification' and b.get('issue')==29 and b.get('slot')=='slot2'
          and b.get('head')==q['head'] and result.get('status')=='confirmed'
@@ -204,6 +212,7 @@ def grant_history(r,j):
 
 
 def grant_ready(r,q):
+    if addressed(q):return addressed_ready(r,q)
     validate_grant(q['qualification_grant'])
     grant_history(r,r.read(r.STATE/'slot2.json',0))
     value=r.read(r.STATE/GRANT_LEDGER,0)
@@ -217,6 +226,7 @@ def grant_ready(r,q):
 
 
 def reserve_grant(r,q,key):
+    if addressed(q):return reserve_addressed(r,q,key)
     value=grant_ready(r,q)
     r.atomic(r.STATE/GRANT_LEDGER,dict(value,used_calls=1,reserved_operation=key))
 
@@ -271,6 +281,7 @@ def charge_grant(q,req,budget,state_dir,slots):
     Exclusive executor intent is consumed even if ledger charge fails or crashes.
     This override is local to this single charge, never installed on Runtime.budget.
     """
+    if addressed(q):return charge_addressed(q,req,budget,state_dir,slots)
     import json
     from core import binding
     validate_grant(q['qualification_grant'])
@@ -301,6 +312,221 @@ def charge_grant(q,req,budget,state_dir,slots):
             need(limits.get('providers',{}).get('agy')=={'qa':2}
                  and limits.get('slots',{}).get('slot2',{}).get('agy')=={'qa':2},'one-shot requires unchanged finite original caps')
             self.used(provider,role,slot)  # Reject malformed existing accounting.
+            return 1
+    exact=ExactBudget(budget.limits_path,budget.outbox_root,budget.registry_lock,today=budget.today)
+    return exact.charge('slot2','agy','qa')
+
+# Owner comment6362661117: addressed correction only, separate from old 2/2+1/1.
+ADDRESSED_SCHEMA='GB_AGY_29_ADDRESSED_CALL_V1'
+ADDRESSED_LINEAGE='owner-6362661117-agy29-218'
+ADDRESSED_LEDGER='antigravity-29-addressed-ledger.json'
+ADDRESSED_RECONCILIATION='antigravity-29-addressed-reconcile.json'
+THIRD_OPERATION='fac7bdfc68acc80136ab0d333a385bea51a9311f4058cb17695a43f86a8fa6a0'
+THIRD_DIGEST='0961f5ac0ef72436b033b62665e95bb02809e009462f16dccf90543c65923a2e'
+THIRD_PROCESS=dict(pid=894070,start='40142230',boot='447e18ce-024d-4230-b88f-bd8ca81e2a9e')
+THIRD_TASK='c18f960ed911d650828f105e8c7bb6df95391c9c8f0621b7b692dd64ca83ffdb'
+INSTALLED_BASELINE='b51e7c1c18103247606d35a414c82b04f5dd53ee'
+ANALYSIS_INPUT='scripts/chatops/tests/fixtures/agy-230-inert-task-draft.json'
+ANALYSIS_INPUT_SHA256='40c79986904243c77d0e06231f1a82802018b17137242212aec2513e0258bd55'
+
+
+def addressed(q):
+    g=q.get('qualification_grant')
+    return type(g) is dict and g.get('schema')==ADDRESSED_SCHEMA
+
+
+def validate_addressed_grant(g):
+    import re
+    from context_policy import RULES_SHA256
+    fields={'schema','lineage','owner_comment','role','controller_revision','cli_sha256',
+            'rules_sha256','base','head','input_revision','input_path','input_sha256','timeout','max_output_bytes',
+            'permission_mode','input_transport','ceiling'}
+    need(type(g) is dict and set(g)==fields and g['schema']==ADDRESSED_SCHEMA
+         and g['lineage']==ADDRESSED_LINEAGE and type(g['owner_comment']) is int
+         and g['owner_comment']==6362661117,'invalid addressed Issue29 grant')
+    need(g['role'] in ('technical_pm_product_analyst','independent_qa')
+         and all(type(g[k]) is str and re.fullmatch('[a-f0-9]{40}',g[k])
+                 for k in ('controller_revision','base','head','input_revision'))
+         and g['controller_revision']!=INSTALLED_BASELINE and g['base']!=g['head']
+         and type(g['input_sha256']) is str and re.fullmatch('[a-f0-9]{64}',g['input_sha256'])
+         and g['cli_sha256']=='8af8e7a2a68f72fa7164e00bb59b8902c018fa43e528fc401ad7db8c2972583c'
+         and g['rules_sha256']==RULES_SHA256
+         and g['permission_mode']=='always-proceed' and g['input_transport']=='stream-json'
+         and type(g['timeout']) is int and g['timeout']==1800
+         and type(g['max_output_bytes']) is int and g['max_output_bytes']==4<<20
+         and type(g['ceiling']) is int and g['ceiling']==1,'addressed grant pins/bounds drift')
+    if g['role']=='technical_pm_product_analyst':
+        need(g['input_revision']==g['head'] and g['input_path']==ANALYSIS_INPUT and g['input_sha256']==ANALYSIS_INPUT_SHA256,
+             'exact INERT Issue230 material required')
+    else:
+        need(type(g['input_path']) is str and re.fullmatch(
+            r'scripts/chatops/tests/fixtures/agy-[a-z0-9-]+\.json',g['input_path']),
+            'exact QA source/test-receipt contract required')
+    return g
+
+
+def addressed_task(base,head,g):
+    validate_addressed_grant(g)
+    need((base,head)==(g['base'],g['head']),'addressed candidate mismatch')
+    return dict(schema='GB_ANTIGRAVITY_29_ADDRESSED_TASK_V1',issue=29,role=g['role'],
+        slot='slot2',base=base,head=head,model='claude-sonnet-5-5-medium',max_calls=1,
+        adapter_revision=g['controller_revision'],qualification_grant=g)
+
+
+def addressed_input(work,g):
+    """Immutable input bytes only; QA additionally binds real reviewed test receipts."""
+    import hashlib
+    from native_antigravity import git,dec,loads
+    validate_addressed_grant(g)
+    need(dec(git(work,'rev-parse','HEAD')).strip()==g['head'],'addressed input source drift')
+    raw=git(work,'show',g['input_revision']+':'+g['input_path'])
+    need(hashlib.sha256(raw).hexdigest()==g['input_sha256'],'addressed exact input hash mismatch')
+    value=loads(raw)
+    if g['role']=='independent_qa':
+        need(type(value) is dict and set(value)=={'schema','source_sha','requirements','checks'}
+             and value['schema']=='GB_AGY_29_QA_TEST_CONTRACT_V1'
+             and value['source_sha']==g['head'] and type(value['requirements']) is str
+             and 0<len(value['requirements'])<=16000
+             and type(value['checks']) is list and 1<=len(value['checks'])<=16,
+             'missing exact QA source/test contract')
+        import re
+        for c in value['checks']:
+            need(type(c) is dict and set(c)=={'command','exit_code','output_sha256','source_sha'}
+                 and c['source_sha']==g['head'] and type(c['command']) is str
+                 and 0<len(c['command'])<=2000 and type(c['exit_code']) is int and c['exit_code']==0
+                 and type(c['output_sha256']) is str and re.fullmatch('[a-f0-9]{64}',c['output_sha256']),
+                 'invalid reviewed exact test receipt')
+    return dec(raw)
+
+
+def addressed_history(r,j):
+    grant_history(r,j)  # Original 2/2 and UNKNOWNs are still immutable.
+    op=j.get('operations',{}).get(THIRD_OPERATION)
+    need(digest(op)==THIRD_DIGEST and op.get('task_hash')==THIRD_TASK
+         and op.get('run')==39931790318 and op.get('process')==THIRD_PROCESS
+         and op.get('before')==op.get('after')==CHECKPOINT
+         and op.get('result',{}).get('status')=='unknown'
+         and op.get('result',{}).get('safe_release') is False,'third UNKNOWN evidence changed')
+    old=r.read(r.STATE/GRANT_LEDGER,0)
+    need(old.get('schema')==GRANT_SCHEMA and old.get('used_calls')==old.get('ceiling')==1
+         and old.get('reserved_operation')==THIRD_OPERATION and old.get('task_sha256')==THIRD_TASK,
+         'historical one-shot must remain spent')
+    reservation=r.read(r.STATE/('antigravity-qa-one-shot-'+THIRD_TASK+'.json'),0)
+    need(reservation.get('operation')==THIRD_OPERATION and reservation.get('task_hash')==THIRD_TASK
+         and reservation.get('result',{}).get('status')=='unknown'
+         and reservation.get('result',{}).get('safe_release') is False,
+         'historical UNKNOWN reservation changed')
+
+
+def addressed_ledger(value):
+    need(type(value) is dict and set(value)=={'schema','lineage','ceiling','grants','used_calls'}
+         and value['schema']==ADDRESSED_SCHEMA and value['lineage']==ADDRESSED_LINEAGE
+         and type(value['ceiling']) is int and value['ceiling']==4
+         and type(value['grants']) is dict and 1<=len(value['grants'])<=4,
+         'closed max4 addressed ledger required')
+    count=0
+    for key,row in value['grants'].items():
+        need(type(row) is dict and set(row)=={'grant','operation'},'invalid per-call ledger')
+        validate_addressed_grant(row['grant'])
+        need(key==digest(row['grant']),'forged per-call grant')
+        op=row['operation']
+        need(op is None or type(op) is str and len(op)==64 and all(x in '0123456789abcdef' for x in op),
+             'invalid consumed operation')
+        count+=op is not None
+    need(type(value['used_calls']) is int and value['used_calls']==count<=4,'addressed usage drift')
+    return value
+
+
+def addressed_ready(r,q):
+    g=validate_addressed_grant(q['qualification_grant'])
+    need(digest(addressed_task(q['base'],q['head'],g))==q['task_sha256'],'forged addressed task')
+    addressed_history(r,r.read(r.STATE/'slot2.json',0))
+    reconciliation=r.read(r.STATE/ADDRESSED_RECONCILIATION,0)
+    need(reconciliation.get('phase')=='complete'
+         and reconciliation.get('third_operation_sha256')==THIRD_DIGEST,
+         'exact fac7 scheduling reconciliation required')
+    value=addressed_ledger(r.read(r.STATE/ADDRESSED_LEDGER,0))
+    row=value['grants'].get(digest(g))
+    need(row and row['grant']==g and row['operation'] is None and value['used_calls']<4,
+         'addressed exact grant absent/spent')
+    return value
+
+
+def reserve_addressed(r,q,key):
+    value=copy.deepcopy(addressed_ready(r,q))
+    value['grants'][digest(q['qualification_grant'])]['operation']=key
+    value['used_calls']+=1
+    r.atomic(r.STATE/ADDRESSED_LEDGER,value)  # Lost/unknown call stays consumed.
+
+
+def reconcile_addressed(r):
+    """Separate scheduling effect; caller holds existing controller lock, policy disabled.
+
+    Never writes original op/result/reservation/old ledgers or calls safe_release.
+    """
+    need(os.geteuid()==0 and r.read(r.POLICY,0)['mode']=='disabled','disabled root reconciliation only')
+    j=r.journal('slot2');addressed_history(r,j)
+    path=r.STATE/ADDRESSED_RECONCILIATION
+    receipt=r.read(path,0) if path.exists() else None
+    if receipt:
+        need(set(receipt)=={'schema','phase','third_operation_sha256','checkpoint','generation_before','generation_after'}
+             and receipt['schema']==ADDRESSED_SCHEMA and receipt['third_operation_sha256']==THIRD_DIGEST
+             and receipt['checkpoint']==CHECKPOINT and receipt['generation_before']==87
+             and receipt['generation_after']==88 and receipt['phase'] in ('intent','complete'),
+             'foreign addressed reconciliation')
+        if receipt['phase']=='complete':return receipt
+    state,_=r.checkpoint('slot2')
+    need(state.get('active') is None and digest(state)==CHECKPOINT,'fac7 checkpoint changed')
+    actual=r.identity(THIRD_PROCESS['pid'])
+    need(actual is None or actual==THIRD_PROCESS,'fac7 PID reused/identity unknown')
+    need(not r.alive(THIRD_PROCESS),'fac7 process alive')
+    if actual is None:
+        need(not Path('/proc',str(THIRD_PROCESS['pid'])).exists(),'fac7 process identity unknown')
+    executor_quiet()
+    r.units_quiet(('gobadminton-supervisor.service','gobadminton-slot@slot2.service'))
+    r.free_lock(r.AUTONOMY/'slots/slot2/worker.lock');r.free_lock(r.AUTONOMY/'locks/slot2.lease')
+    before=j.get('pending')==THIRD_OPERATION and j.get('generation')==87
+    after=j.get('pending') is None and j.get('generation')==88
+    need(before or receipt is not None and after,'fac7 pending/generation mismatch')
+    if receipt is None:
+        receipt=dict(schema=ADDRESSED_SCHEMA,phase='intent',third_operation_sha256=THIRD_DIGEST,
+                     checkpoint=CHECKPOINT,generation_before=87,generation_after=88)
+        r.atomic(path,receipt)
+    if before:
+        updated=copy.deepcopy(j);updated.update(pending=None,generation=88)
+        r.atomic(r.STATE/'slot2.json',updated)
+    receipt=dict(receipt,phase='complete');r.atomic(path,receipt)
+    return receipt
+
+
+def charge_addressed(q,req,budget,state_dir,slots):
+    """Existing finite Budget ledger; no change to global caps or historical counters."""
+    import json,hashlib
+    from core import binding
+    from native_antigravity import qualification_task
+    g=validate_addressed_grant(q['qualification_grant'])
+    operation=digest(binding({k:v for k,v in req.items() if not k.startswith('_')}))
+    need(req.get('stage')=='qa_qualification' and req.get('slot')=='slot2' and req.get('issue')==29
+         and req.get('head')==q['head'] and req.get('_qa_qualification')==q
+         and req.get('_task_hash')==q['task_sha256'] and req.get('_qa_grant_operation')==operation
+         and digest(qualification_task(q['base'],q['head'],adapter_revision=q['adapter_revision'],
+              qualification_grant=g))==q['task_sha256'],'addressed charge outside exact reservation')
+    need(req.get('_qa_addressed_grant')==g,'missing trusted addressed grant binding')
+    need(hashlib.sha256(Path(budget.limits_path).read_bytes()).hexdigest()==BUDGET_RAW,'global caps changed')
+    path=Path(state_dir)/('antigravity-29-addressed-charge-'+digest(g)+'.json')
+    fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+    with os.fdopen(fd,'w') as out:
+        json.dump(dict(schema=ADDRESSED_SCHEMA,grant=g,operation=operation,phase='charge-intent'),out,sort_keys=True)
+        out.flush();os.fsync(out.fileno())
+    directory=os.open(path.parent,os.O_DIRECTORY);os.fsync(directory);os.close(directory)
+    class ExactBudget(slots.Budget):
+        def remaining(self,provider,role,slot=None):
+            need((provider,role,slot)==('agy','qa','slot2'),'addressed budget scope mismatch')
+            need(hashlib.sha256(Path(self.limits_path).read_bytes()).hexdigest()==BUDGET_RAW,'global caps changed before charge')
+            limits=self.limits()
+            need(limits.get('providers',{}).get('agy')=={'qa':2}
+                 and limits.get('slots',{}).get('slot2',{}).get('agy')=={'qa':2},'original finite caps required')
+            self.used(provider,role,slot)
             return 1
     exact=ExactBudget(budget.limits_path,budget.outbox_root,budget.registry_lock,today=budget.today)
     return exact.charge('slot2','agy','qa')

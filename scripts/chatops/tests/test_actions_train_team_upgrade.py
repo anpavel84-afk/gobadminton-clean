@@ -20,8 +20,8 @@ def proof():
               author_routes=['cursor:auto','codex:gpt-6.1-sol:high'],
               failure_diagnosis=dict(schema='GB_FAILURE_DIAGNOSIS_218_V1',
                                     route='codex:gpt-6-astra:high',max_calls=3))
-    return dict(schema='GB_TEAM_RUNTIME_218_PROOF_V1',reviewed=True,baseline_controller='a'*40,
-        baseline_record_sha256='1'*64,controller='b'*40,manifest_sha256='2'*64,
+    return dict(schema='GB_TEAM_RUNTIME_218_PROOF_V2',reviewed=True,baseline_controller='a'*40,
+        baseline_record_sha256='1'*64,controller='b'*40,release_revision='e'*40,manifest_sha256='2'*64,
         stage_workflow_sha256='3'*64,dispatch_workflow_sha256='4'*64,
         changes={'/reviewed/target':dict(before=None,after='5'*64)},
         agy_marker_sha256='6'*64,cursor_marker_sha256='7'*64,
@@ -121,10 +121,17 @@ class ExactPlanAndWatchdog(unittest.TestCase):
             p['changes']={str(target):dict(before=U.i.sha(target),after=U.i.sha(candidate)),
                           str(watchdog):dict(before=U.i.sha(watchdog),after=U.i.sha(wdsource))}
             C=SimpleNamespace(quiet=Mock())
-            with patch.multiple(U,STATE=state,INSTALL=install,WATCHDOG=watchdog,WATCHDOG_BEFORE=U.i.sha(watchdog),ALLOWED={target}), \
+            original_lstat=Path.lstat
+            def metadata(path,*args,**kwargs):
+                info=original_lstat(path,*args,**kwargs)
+                if path==watchdog:
+                    fields=list(info);fields[4]=1002;return os.stat_result(fields)
+                return info
+            with patch.object(Path,'lstat',metadata),patch.multiple(U,STATE=state,INSTALL=install,WATCHDOG=watchdog,WATCHDOG_BEFORE=U.i.sha(watchdog),ALLOWED={target}), \
                  patch.object(U.r,'read',side_effect=lambda path,*a:record if path==state/'backup.json' else policy), \
                  patch.object(U.r,'trusted_tree'),patch.object(U.i,'payload',return_value={target:candidate}), \
                  patch.object(U,'admission') as admission,patch.object(U,'markers',return_value={}), \
+                 patch.object(U,'verify_release'),patch.object(U,'protocol_probe'), \
                  patch.object(U,'preserved',return_value={'ledger':'unchanged'}):
                 self.assertEqual(U.plan(bundle,p,'a'*40,C,None,Mock())[5],p['changes'])
                 admission.assert_called_once()
@@ -141,14 +148,19 @@ class ExactPlanAndWatchdog(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='team218-watchdog-') as t:
             root=Path(t);target=root/'watchdog';target.write_text('old');target.chmod(0o755)
             source=root/'new';source.write_text('new');info=target.stat()
-            with patch.object(U,'WATCHDOG',target), \
+            real_fstat=os.fstat
+            def owner_metadata(fd):
+                fields=list(real_fstat(fd));fields[4]=1002;return os.stat_result(fields)
+            with patch.object(U.os,'fstat',side_effect=owner_metadata),patch.object(U.os,'fchown') as chown, \
+                 patch.object(U,'WATCHDOG',target), \
                  patch.object(U,'watchdog_parent',side_effect=lambda p:os.open(root,os.O_RDONLY|os.O_DIRECTORY)):
-                U.put(source,target,0o755,info.st_uid,info.st_gid)
+                U.put(source,target,0o755,1002,info.st_gid)
                 self.assertEqual(target.read_text(),'new')
+                chown.assert_called_once_with(unittest.mock.ANY,1002,info.st_gid)
                 self.assertEqual(target.stat().st_mode&0o777,0o755)
                 target.unlink();outside=root/'outside';outside.write_text('preserve')
                 target.symlink_to(outside)
-                with self.assertRaises(OSError):U.put(source,target,0o755,info.st_uid,info.st_gid)
+                with self.assertRaises(OSError):U.put(source,target,0o755,1002,info.st_gid)
                 self.assertEqual(outside.read_text(),'preserve')
 
 class Transaction(unittest.TestCase):

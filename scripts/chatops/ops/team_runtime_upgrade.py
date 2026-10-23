@@ -19,6 +19,7 @@ import os
 from pathlib import Path
 import re
 import stat
+import subprocess
 import sys
 import time
 
@@ -45,7 +46,7 @@ ALLOWED |= {Path('/usr/local/lib/gb-ops-monitor/web/app.js')}
 PROOF_KEYS = {'schema','reviewed','baseline_controller','baseline_record_sha256','controller',
     'manifest_sha256','stage_workflow_sha256','dispatch_workflow_sha256','changes',
     'agy_marker_sha256','cursor_marker_sha256','agy_operation','agy_operation_sha256',
-    'task','task_sha256','admission_comment'}
+    'task','task_sha256','admission_comment','release_revision'}
 
 
 def encoded(value):
@@ -77,12 +78,15 @@ def preserved(C,u):
 
 def validate_proof(proof,baseline):
     r.need(type(proof) is dict and set(proof)==PROOF_KEYS
-           and proof['schema']=='GB_TEAM_RUNTIME_218_PROOF_V1' and proof['reviewed'] is True,
+           and proof['schema']=='GB_TEAM_RUNTIME_218_PROOF_V2' and proof['reviewed'] is True,
            'exact reviewed team proof required')
     r.need(isinstance(baseline,str) and re.fullmatch('[a-f0-9]{40}',baseline)
            and proof['baseline_controller']==baseline
            and re.fullmatch('[a-f0-9]{40}',proof['controller'])
-           and proof['controller']!=baseline,'explicit future AGY-ready baseline required')
+           and proof['controller']!=baseline
+           and type(proof['release_revision']) is str
+           and re.fullmatch('[a-f0-9]{40}',proof['release_revision'])
+           and proof['release_revision']!=proof['controller'],'explicit future AGY-ready baseline required')
     for key in ('baseline_record_sha256','manifest_sha256','stage_workflow_sha256',
                 'dispatch_workflow_sha256','agy_marker_sha256','cursor_marker_sha256',
                 'agy_operation_sha256','task_sha256'):
@@ -227,6 +231,92 @@ def put(source,target,mode,uid=0,gid=0):
         os.close(parent)
 
 
+PROTOCOL_PROBE = r"""
+import sys,json,datetime as dt
+from pathlib import Path
+sys.path.insert(0,str(Path(sys.argv[1])/'scripts/chatops/actions_train'))
+import core
+A,S=core.live()
+task=json.loads(sys.argv[2]);now=dt.datetime.now(dt.timezone.utc);stamp=now.isoformat()
+issue=dict(number=230,user={'id':core.OWNER},state='open',created_at=stamp,updated_at=stamp,
+           body=A.MARKER+'\n'+json.dumps(task))
+assert A.validate_issue(issue,now-dt.timedelta(days=1))==task
+head='a'*40
+active=dict(issue=230,task=task,phase='qa',head=head,base='b'*40,attempt=1,
+            qa=dict(verdict='FAIL',findings=['AssertionError: timeout cleanup'],reviewed_sha=head))
+assert core.next_stage(active)=='failure_diagnosis'
+active.update(phase='ci',qa=None,ci_failure={'head':head})
+assert core.next_stage(active)=='failure_diagnosis'
+request=dict(action='train',stage='failure_diagnosis',phase='ci',head=head,attempt=1,
+             generation=0,slot='slot2',issue=230,profile='codex',run=1,run_attempt=1,
+             gh_token='offline-protocol-placeholder')
+core.request(request)
+card=dict(active=active,done=[],parked=[],owned=True,pending=None,generation=0,last=None)
+assert core.plan(A,S,{'slots':{'slot2':card}},[])[0]['stage']=='failure_diagnosis'
+print(json.dumps({'admission':True,'request':True,'qa_fail':True,'ci_fail':True,'plan':True}))
+"""
+
+
+def protocol_probe(bundle,task):
+    """Deterministic probe of the reviewed, provenance-checked payload, never a model.
+
+    Root drops to the existing QA executor UID before importing source. No tokens,
+    HOME, installed imports, services or provider are supplied to this process.
+    """
+    def drop():
+        if os.geteuid()==0:
+            os.setgroups([]);os.setgid(978);os.setuid(978)
+    done=subprocess.run(['/usr/bin/python3','-I','-B','-c',PROTOCOL_PROBE,str(bundle),json.dumps(task)],
+        cwd=bundle,env={'PATH':'/usr/bin:/bin','LANG':'C.UTF-8','HOME':'/nonexistent'},
+        capture_output=True,timeout=30,preexec_fn=drop)
+    r.need(done.returncode==0 and len(done.stdout)<=4096 and len(done.stderr)<=4096,
+           'pinned payload protocol probe failed')
+    value=loads(done.stdout)
+    r.need(value==dict(admission=True,request=True,qa_fail=True,ci_fail=True,plan=True),
+           'incomplete pinned payload protocol proof')
+    return value
+
+
+def verify_release(bundle,proof):
+    """C contains implementation; R contains only the four real checkout refs.
+
+    Compare every installed manifest blob to C, not merely ref counts. A local,
+    immutable reviewed repository is required; no fetch or guessed future SHA.
+    """
+    from native_antigravity import git
+    bundle=Path(bundle)
+    r.need(git(bundle,'rev-parse','HEAD').decode().strip()==proof['release_revision'],
+           'release checkout is not exact reviewed R')
+    manifest_path='scripts/chatops/actions_train/manifest.json'
+    raw=git(bundle,'show',proof['controller']+':'+manifest_path)
+    r.need(hashlib.sha256(raw).hexdigest()==proof['manifest_sha256']
+           and raw==(bundle/manifest_path).read_bytes(),'C manifest/release payload mismatch')
+    manifest=loads(raw)
+    r.need(manifest.get('schema')=='GB_ACTIONS_TRAIN_INSTALL_V1','pinned manifest schema mismatch')
+    for name,sha in manifest['files'].items():
+        r.need(type(name) is str and '..' not in name.split('/') and name.startswith('scripts/chatops/'),
+               'pinned manifest path invalid')
+        pinned=git(bundle,'show',proof['controller']+':'+name,limit=4<<20)
+        r.need(hashlib.sha256(pinned).hexdigest()==sha and pinned==(bundle/name).read_bytes(),
+               'pinned C payload provenance mismatch')
+    for name,key in (('train-stage.yml','stage_workflow_sha256'),('train-dispatch.yml','dispatch_workflow_sha256')):
+        path='.github/workflows/'+name;wf=(bundle/path).read_bytes()
+        r.need(git(bundle,'show',proof['release_revision']+':'+path)==wf
+               and hashlib.sha256(wf).hexdigest()==proof[key], 'reviewed R workflow mismatch')
+        # Match actual checkout steps and their ref, not unrelated ref-like strings.
+        refs=re.findall(rb'uses: actions/checkout@[^\n]+\n[ \t]+with:\n[ \t]+ref: ([a-f0-9]{40})[ \t]*\n',wf)
+        r.need(len(refs)==2 and all(ref.decode()==proof['controller'] for ref in refs),
+               'all four hosted checkouts must pin reviewed C')
+        before=git(bundle,'show',proof['controller']+':'+path)
+        pattern=rb'(uses: actions/checkout@[^\n]+\n[ \t]+with:\n[ \t]+ref: )[a-f0-9]{40}([ \t]*\n)'
+        expected,count=re.subn(pattern,lambda m:m[1]+proof['controller'].encode()+m[2],before)
+        r.need(count==2 and expected==wf,'R may change only existing checkout refs')
+    changed=set(git(bundle,'diff','--name-only',proof['controller'],proof['release_revision']).decode().splitlines())
+    r.need(changed=={'.github/workflows/train-stage.yml','.github/workflows/train-dispatch.yml'},
+           'R must only release the reviewed implementation C')
+    return True
+
+
 def plan(bundle,proof,baseline,C,u,api):
     validate_proof(proof,baseline);C.quiet()
     policy=r.read(r.POLICY,0);record=r.read(STATE/'backup.json',0)
@@ -235,10 +325,8 @@ def plan(bundle,proof,baseline,C,u,api):
     r.need(all(i.sha(Path(k))==v for k,v in record['after'].items()),'baseline code drift')
     items=i.payload(bundle,proof['manifest_sha256'])
     for source in items.values():r.trusted_tree(source)
-    for name,key in (('train-stage.yml','stage_workflow_sha256'),('train-dispatch.yml','dispatch_workflow_sha256')):
-        wf=bundle/'.github/workflows'/name
-        r.need(i.sha(wf)==proof[key] and wf.read_bytes().count(('ref: '+proof['controller']).encode())==2,
-               'reviewed workflow/checkout mismatch')
+    verify_release(bundle,proof)
+    protocol_probe(bundle,proof['task'])
     changed={target:source for target,source in items.items() if i.sha(target)!=i.sha(source)}
     r.need(changed and set(changed)<=ALLOWED,'out-of-scope team payload')
     watchdog=bundle/'scripts/chatops/train_watchdog.py';r.trusted_tree(watchdog)

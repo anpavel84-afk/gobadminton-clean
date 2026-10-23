@@ -8,10 +8,11 @@ from context_policy import RULES_COMMIT, RULES_SHA256
 SCHEMA = 'GB_FAILURE_DIAGNOSIS_218_V1'
 ROUTE = 'codex:gpt-6-astra:high'
 FIELD = 'failure_diagnosis'
-INFRA = re.compile(r'model authentication rejected|authentication unauthorized|401.?unauthorized|'
-                   r'(?:provider |model )?quota exhausted|rate.limit.exceeded|timed?.?out|timeout|'
-                   r'transport.failure|unknown.process|network.error|service.unavailable|'
-                   r'environment(?:al)? (?:error|failure|not_tested)|command not found|not_tested', re.I)
+# Only complete, recognized pre-call diagnostics are infrastructure evidence.
+# Words inside findings/logs cannot classify a product timeout/network defect.
+PREFLIGHT = frozenset(('authentication unauthorized', 'quota exhausted',
+    'environment not_tested', 'timeout unknown process',
+    'blocked: model authentication rejected (401/unauthorized)'))
 SOURCE = re.compile(r'AssertionError|error TS\d+|Expected:|Received:|Assertion failed|\bFAIL\b')
 
 def policy(task):
@@ -38,7 +39,7 @@ def failure(active):
              and isinstance(qa['findings'], list) and qa['findings']
              and all(isinstance(x, str) and x.strip() and len(x) <= 4000 for x in qa['findings']),
              'missing exact semantic QA findings')
-        need(not INFRA.search(json.dumps(qa['findings'])),
+        need(not all(x.strip().lower() in PREFLIGHT for x in qa['findings']),
              'QA infrastructure/unknown evidence; no source repair')
         return dict(kind='qa', result=qa)
     raise Refused('no confirmed source FAIL for diagnosis')
@@ -54,7 +55,7 @@ def inputs(active, api):
         evidence = ci_evidence(api, dict(snapshot=view, head=active['head'], issue=active['issue']))
         need(evidence and all(e['head'] == active['head'] for e in evidence), 'exact current CI logs missing')
         logs = '\n'.join(e['log']['excerpt'] for e in evidence)
-        need(SOURCE.search(logs) and not INFRA.search(logs),
+        need(SOURCE.search(logs),
              'CI infrastructure/unknown evidence; no source repair')
     value = dict(schema=SCHEMA, issue=active['issue'], task_hash=digest(active['task']),
                  admission=dict(issue_fingerprint=active.get('fingerprint'),

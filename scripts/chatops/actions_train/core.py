@@ -330,6 +330,12 @@ def route(slots, task, role, profile, budget, slot):
     choice["effective_effort"] = choice["effort"]
     return choice
 
+def task_review_route(slots, task, budget, slot):
+    """Task-definition review has a Codex JSON contract, using admitted QA routes."""
+    choice = route(slots, task, 'qa', 'codex', budget, slot)
+    need(choice['provider'] == 'codex', 'task_review requires an admitted compatible Codex route')
+    return dict(choice, stage_role='task_review', permission_role='qa')
+
 def diagnosis_route(slots, task, budget, slot):
     """#218 uses qualified Codex QA permissions/ledger, never ordinary QA selection."""
     from failure_diagnosis import policy

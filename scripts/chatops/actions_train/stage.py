@@ -94,6 +94,10 @@ def setup(req, config, native_auth=None):
             choice['failure_fingerprint'] = keys[0]
             choice['diagnosis_call'] = store.data['active']['failure_diagnosis']['calls']
             choice['diagnosis_cap'] = store.data['active']['task']['failure_diagnosis']['max_calls']
+        elif req['stage'] == 'task_review':
+            need(qa, 'task_review must use read-only QA permissions')
+            from core import task_review_route
+            choice = task_review_route(s, store.data['active']['task'], rt.budget, req['slot'])
         else:
             choice = route(s, store.data['active']['task'], 'qa' if qa else 'author',
                            'auto' if qa and 'qa_routes' in store.data['active']['task']
@@ -484,18 +488,33 @@ def qualify_qa(req, config, context):
             'or credentials. Do not deliberately trigger denied tools. Return canonical QA JSON.')
     accepted_rules = load()
     before_calls = rt.budget.used('agy', 'qa', req['slot'])
-    from antigravity_qa_recovery import grant,charge_grant
+    from antigravity_qa_recovery import grant,charge_grant,addressed,addressed_input
+    is_addressed=addressed(q)
+    analysis=is_addressed and q['qualification_grant']['role']=='technical_pm_product_analyst'
+    if is_addressed:
+        contract=addressed_input(work,q['qualification_grant'])
+        if not analysis:text += '\nExact reviewed source/test contract DATA:\n'+contract
     charge=(lambda:charge_grant(q,req,rt.budget,b.c.state_dir,s)) if grant(q) else (lambda:rt.budget.charge(req['slot'],'agy','qa'))
     result, receipt = review(work, q['base'], q['head'], text, 1800,
         slot=req['slot'], task_hash=q['task_sha256'],
         charge=charge, popen=a.subprocess.Popen,
-        accepted_rules=accepted_rules, evidence_dir=b.c.state_dir/'antigravity-evidence')
+        accepted_rules=accepted_rules, evidence_dir=b.c.state_dir/'antigravity-evidence',
+        **({'analysis_grant':q['qualification_grant']} if analysis else {}))
     need(digest(store.data) == before, 'QA qualification changed source checkpoint')
     if grant(q):receipt['qualification_grant']=q['qualification_grant']
     receipt['qualification_task_sha256'] = q['task_sha256']
     receipt['qualification_lineage'] = {k:q[k] for k in ('parent_task_sha256','parent_operation','adapter_revision') if k in q}
     receipt['charged_calls'] = rt.budget.used('agy', 'qa', req['slot']) - before_calls
     need(receipt['charged_calls'] == 1, 'QA qualification ledger mismatch')
+    if is_addressed:
+        receipt['addressed_input_sha256']=q['qualification_grant']['input_sha256']
+        receipt['addressed_role']=q['qualification_grant']['role']
+    if analysis:
+        receipt['qualification_passed']=False
+        name=save_receipt(b.c.state_dir,29,0,receipt)
+        return dict(status='confirmed',analysis_complete=result['completion']=='COMPLETE',
+            analysis=result,qualification_passed=False,native_receipt=receipt,receipt_file=name,
+            checkpoint_changed=False)
     passed = result['verdict'] == 'PASS' and 'run_command' in receipt.get('tool_names', [])
     receipt['qualification_passed'] = passed
     name = save_receipt(b.c.state_dir, 29, 0, receipt)
