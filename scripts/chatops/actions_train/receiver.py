@@ -187,7 +187,8 @@ def qualification_plan(policy, card, budget):
         import antigravity_qa_recovery as recovery
         if recovery.reservation_path(STATE,q).exists():return None
         if recovery.successor(q):recovery.lineage_ready(sys.modules[__name__],q)
-        if budget.remaining('agy','qa','slot2') != 1: return None
+        left=budget.remaining('agy','qa','slot2')
+        if not (type(left) is int and (left>=1 if recovery.successor(q) else left==1)):return None
         return dict(slot='slot2',issue=29,stage='qa_qualification',phase='idle',head=q['head'],
                     attempt=0,generation=card['generation'],profile='agy')
     except (OSError, ValueError, ReviewError, Refused, KeyError, TypeError):
@@ -587,7 +588,8 @@ def qualification_request(req, policy):
     _, s = live()
     budget = s.Budget(BUDGET, AUTONOMY/'outbox', AUTONOMY/'locks/registry.lock')
     left = budget.remaining('agy', 'qa', slot)
-    need(type(left) is int and left == 1, 'QA qualification requires exactly one finite remaining call')
+    need(type(left) is int and (left>=1 if recovery.successor(q) else left==1),
+         'QA qualification requires finite eligible daily budget')
     reservation = dict(schema='GB_ANTIGRAVITY_QA_29_RESERVATION_V1', operation=key,
         task_hash=q['task_sha256'], descriptor=q, started_at=int(time.time()), result=None)
     # Reservation first: a crash between writes consumes the canary, never replays it.
