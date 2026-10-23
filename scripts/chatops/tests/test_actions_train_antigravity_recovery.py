@@ -1,5 +1,6 @@
 """Offline Issue29 failure retention and exact one-successor regressions."""
 import copy,json,os,subprocess,sys,tempfile,unittest
+from contextlib import contextmanager,ExitStack
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock,patch
@@ -153,6 +154,87 @@ class Successor(unittest.TestCase):
             self.assertIsNone(receiver.qualification_plan({'mode':'active'},card,budget))
             self.assertIsNone(receiver.qualification_plan({'mode':'shadow'},card,budget))
         self.assertEqual((self.root/R.FIXED).read_text(),'original reservation remains')
+    @contextmanager
+    def date_fixture(self,day='2026-10-23'):
+        import receiver
+        from test_actions_train import S
+        self.reconcile();self.j=self.data['slot2.json'];self.j['last']=None
+        limits=self.root/'budgets.json';outbox=self.root/'outbox';locks=self.root/'locks';locks.mkdir();(locks/'registry.lock').touch()
+        (outbox/'slot2').mkdir(parents=True)
+        original={'2026-10-23':{'agy':{'qa':1}}}
+        (outbox/'slot2/ledger.json').write_text(json.dumps(original))
+        caps={'providers':{'agy':{'qa':2}},'slots':{'slot2':{'agy':{'qa':2}}}}
+        limits.write_text(json.dumps(caps));clock=[day]
+        budget=S.Budget(limits,outbox,locks/'registry.lock',today=lambda:clock[0])
+        req=dict(action='train',stage='qa_qualification',slot='slot2',issue=29,phase='idle',head=self.q['head'],attempt=0,generation=86,profile='agy',run=123,run_attempt=1,gh_token='synthetic-read-token')
+        with ExitStack() as stack:
+            for name,value in [('STATE',self.root),('read',self.r.read),('atomic',self.r.atomic),('journal',self.r.journal),('checkpoint',self.r.checkpoint),('guard',Mock()),('live',lambda:(None,SimpleNamespace(Budget=lambda *a:budget))),('identity',lambda pid:{'pid':pid}),('alive',lambda proc:False)]:
+                stack.enter_context(patch.object(receiver,name,value))
+            stack.enter_context(patch.object(N,'qualification',return_value=self.marker))
+            stack.enter_context(patch.object(N,'trusted',side_effect=lambda *a,**k:json.dumps(self.marker).encode()))
+            fork=stack.enter_context(patch.object(receiver.os,'fork',return_value=12345))
+            yield receiver,budget,clock,req,fork,original
+    def test_real_daily_budget_same_day_plan_cross_midnight_execution_and_no_third_day_replay(self):
+        with self.date_fixture() as (receiver,budget,clock,req,fork,original):
+            card=dict(owned=True,active=None,pending=None,generation=86)
+            self.assertEqual(budget.remaining('agy','qa','slot2'),1)
+            self.assertIsNotNone(receiver.qualification_plan({'mode':'active'},card,budget))
+            clock[0]='2026-10-24'
+            self.assertEqual(budget.remaining('agy','qa','slot2'),2)
+            self.assertIsNotNone(receiver.qualification_plan({'mode':'active'},card,budget))
+            answer=receiver.qualification_request(req,{})
+            self.assertEqual(answer['status'],'running');fork.assert_called_once()
+            self.assertEqual(self.data[R.LINEAGE]['used_calls'],2)
+            # Reservation precedes provider charge; the untouched day1 ledger proves no reset.
+            self.assertEqual(json.loads((budget.outbox_root/'slot2/ledger.json').read_text()),original)
+            budget.charge('slot2','agy','qa')
+            ledger=json.loads((budget.outbox_root/'slot2/ledger.json').read_text())
+            self.assertEqual(ledger['2026-10-23'],original['2026-10-23']);self.assertEqual(ledger['2026-10-24']['agy']['qa'],1)
+            self.j=self.data['slot2.json'];clock[0]='2026-10-25'
+            self.assertEqual(receiver.qualification_request(req|{'run':124},{})['status'],'unknown')
+            self.j['pending']=None;self.j['generation']=87
+            self.assertIsNone(receiver.qualification_plan({'mode':'active'},card|{'generation':87},budget))
+            with self.assertRaises(Refused):receiver.qualification_request(req|{'run':125,'generation':87},{})
+            fork.assert_called_once()
+    def test_real_same_day_request_remains_eligible(self):
+        with self.date_fixture() as (receiver,budget,clock,req,fork,_):
+            self.assertEqual(receiver.qualification_request(req,{})['status'],'running')
+            fork.assert_called_once();self.assertEqual(self.data[R.LINEAGE]['used_calls'],2)
+    def test_daily_invalid_unknown_unlimited_zero_negative_never_reserves_or_forks(self):
+        with self.date_fixture('2026-10-24') as (receiver,budget,clock,req,fork,_):
+            from test_actions_train import S
+            card=dict(owned=True,active=None,pending=None,generation=86)
+            for left in (0,-1,S.UNKNOWN,float('inf'),True,None,'2',{},1.0):
+                with self.subTest(left=repr(left)),patch.object(budget,'remaining',return_value=left):
+                    self.assertIsNone(receiver.qualification_plan({'mode':'active'},card,budget))
+                    with self.assertRaises(Refused):receiver.qualification_request(req,{})
+                    self.assertEqual(self.data[R.LINEAGE]['used_calls'],1)
+                    self.assertFalse(R.reservation_path(self.root,self.q).exists())
+            fork.assert_not_called()
+    def test_original_v1_remains_exact_integer_one_in_both_predicates(self):
+        with self.date_fixture() as (receiver,budget,clock,req,fork,_):
+            q={k:self.q[k] for k in ('issue','base','head','work')};q['task_sha256']=digest(N.qualification_task(q['base'],q['head']))
+            self.marker['qualification']=q;self.marker['canary_task_sha256']=q['task_sha256']
+            card=dict(owned=True,active=None,pending=None,generation=86)
+            with patch.object(budget,'remaining',return_value=2):
+                self.assertIsNone(receiver.qualification_plan({'mode':'active'},card,budget))
+                with self.assertRaises(Refused):receiver.qualification_request(req,{})
+            with patch.object(budget,'remaining',return_value=1):
+                self.assertIsNotNone(receiver.qualification_plan({'mode':'active'},card,budget))
+                self.assertEqual(receiver.qualification_request(req,{})['status'],'running')
+            fork.assert_called_once();self.assertEqual(self.data[R.LINEAGE]['used_calls'],1)
+    def test_registry_charge_race_refuses_popen_without_refunding_lineage(self):
+        with self.date_fixture('2026-10-24') as (receiver,budget,clock,req,fork,_):
+            receiver.qualification_request(req,{})
+            budget.charge('slot2','agy','qa');budget.charge('slot2','agy','qa')
+            self.assertEqual(budget.remaining('agy','qa','slot2'),0)
+            evidence=self.root/'race-evidence'
+            with patch.object(N.os,'geteuid',return_value=978),patch.object(N,'trusted',return_value=b'PRIVATE_AUTH'),patch.object(N,'git',return_value=b'/tmp/candidate/.git'),patch.object(N,'filesystem_roots',return_value=([],[],[])):
+                popen=Mock(side_effect=AssertionError('provider launched despite exhausted budget'))
+                with self.assertRaisesRegex(N.ReviewError,'AGY_CHARGE_FAILED'):
+                    N.invoke('prompt',30,work=Path('/tmp/candidate'),slot='slot2',task_hash=self.q['task_sha256'],charge=lambda:budget.charge('slot2','agy','qa'),popen=popen,evidence_dir=evidence)
+                popen.assert_not_called()
+            self.assertEqual(self.data[R.LINEAGE]['used_calls'],2)
     def test_executor_live_metadata_unknown_and_zombie(self):
         proc=self.root/'proc';proc.mkdir();entry=proc/'100';entry.mkdir();(entry/'stat').write_text('100 (no command read) S')
         # Use synthetic metadata UID only; no live process/provider is involved.
