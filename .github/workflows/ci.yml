@@ -70,7 +70,7 @@ jobs:
       - name: Checkout immutable release generator
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          ref: 61b8dc7900f1276a702a7fad1a301675110bde96
+          ref: 35e037c932dd89e0e4c341501ea98d382b142099
           path: _train-release-tools
           persist-credentials: false
       - run: |
@@ -89,7 +89,7 @@ jobs:
         env:
           TRAIN_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           TRAIN_BASE_SHA: ${{ github.event.pull_request.base.sha || '3ac82ea068a5b2b0539caa552342d320e4b216ef' }}
-          TRAIN_TOOLS_SHA: 61b8dc7900f1276a702a7fad1a301675110bde96
+          TRAIN_TOOLS_SHA: 35e037c932dd89e0e4c341501ea98d382b142099
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
