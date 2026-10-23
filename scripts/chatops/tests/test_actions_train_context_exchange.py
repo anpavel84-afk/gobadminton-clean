@@ -1,0 +1,152 @@
+"""Focused offline context invariants. No provider, network or installed state."""
+import copy
+import hashlib
+import json
+from pathlib import Path
+import unittest
+
+from test_actions_train import ROOT
+import context_exchange as E
+
+BASE='a'*40
+HEAD='b'*40
+TASK={'goal':'Проверить обработчик', 'acceptance':'Не терять критерии', 'allowed_paths':['apps/a.py'], 'max_attempts':3}
+BIND={'repository':'anpavel84-afk/gobadminton-clean', 'base_sha':BASE, 'candidate_sha':HEAD}
+
+
+def fixture_rules():
+    blocks=[]
+    for r in ('common',*sorted(E.ROLES)):
+        blocks.append('<!-- GB_CONTEXT_V1:'+r+':BEGIN -->\n'+r+' exact policy\n<!-- GB_CONTEXT_V1:'+r+':END -->')
+    return '\n'.join(blocks)+'\nHuman reference '+'x'*10000
+
+
+def metadata(t):
+    return {'commit':BASE,'sha256':hashlib.sha256(t.encode()).hexdigest(),'bytes':len(t.encode())}
+
+
+class ContextExchange(unittest.TestCase):
+    def test_canonical_capsules_all_roles_verbatim_and_hash_bound(self):
+        text=(ROOT/'docs/rules/ENGINEERING_OPERATING_MODEL.md').read_text()
+        for role in E.ROLES:
+            capsule=E.compile_capsule(text,role,metadata(text)['sha256'])
+            self.assertIn('anpavel84-afk/gobadminton-clean',capsule)
+            self.assertLess(len(capsule.encode()),12000)
+        with self.assertRaisesRegex(ValueError,'provenance'):
+            E.compile_capsule(text,'qa','0'*64)
+
+    def test_capsule_missing_duplicate_or_nested_refused(self):
+        t=fixture_rules()
+        with self.assertRaises(ValueError):E.compile_capsule(t,'unknown',metadata(t)['sha256'])
+        for bad in (t.replace('qa:END','qa:STOP'),t+t):
+            with self.assertRaises(ValueError):E.compile_capsule(bad,'qa',metadata(bad)['sha256'])
+
+    def test_compact_requires_actual_recipient_access_else_full_fallback(self):
+        t=fixture_rules();m=metadata(t);ref={'path':'context/rules.md','revision':BASE,'sha256':m['sha256'],'bytes':m['bytes']}
+        full,m1=E.rules_prefix(text=t,metadata=m,role='qa',compact=True,full_rules_reference=ref)
+        self.assertIn(t,full);self.assertEqual(m1['policy_profile'],'full')
+        seen=[]
+        compact,m2=E.rules_prefix(text=t,metadata=m,role='qa',compact=True,full_rules_reference=ref,
+            verified_access=lambda r:seen.append(r) or True)
+        self.assertEqual(seen,[ref]);self.assertEqual(m2['policy_profile'],'scoped_v1')
+        self.assertNotIn('Human reference',compact);self.assertIn('FULL_RULES_REFERENCE',compact)
+        self.assertLess(m2['prefix_bytes'],m1['prefix_bytes'])
+
+    def test_prefix_stable_but_separated_by_role(self):
+        t=fixture_rules();m=metadata(t)
+        a,_=E.rules_prefix(text=t,metadata=m,role='author')
+        b,_=E.rules_prefix(text=t,metadata=m,role='author')
+        q,_=E.rules_prefix(text=t,metadata=m,role='qa')
+        self.assertEqual(a,b);self.assertNotEqual(a,q)
+
+    def test_task_acceptance_not_compressed_and_inputs_unchanged(self):
+        before=copy.deepcopy((TASK,BIND));p,m=E.build_packet(role='qa',task=TASK,binding=BIND)
+        self.assertEqual(p['task'],TASK);self.assertEqual(p['task_sha256'],E.digest(TASK))
+        self.assertEqual((TASK,BIND),before);self.assertIsNone(m['input_tokens'])
+
+    def test_duplicate_blob_once_but_both_path_aliases_remain(self):
+        refs=[E.Artifact('one','apps/a.py',HEAD,'same'*200),E.Artifact('two','apps/b.py',HEAD,'same'*200)]
+        p,m=E.build_packet(role='qa',task=TASK,binding=BIND,artifacts=refs)
+        self.assertEqual(len(p['content']),1);self.assertEqual(len(p['artifacts']),2)
+        self.assertEqual(m['deduplicated_bytes'],800)
+
+    def test_large_source_reference_only_after_verified_exact_access(self):
+        a=E.Artifact('one','apps/a.py',HEAD,'x'*20000)
+        p,m=E.build_packet(role='qa',task=TASK,binding=BIND,artifacts=[a],verified_access=lambda r:True)
+        self.assertFalse(p['content']);self.assertEqual(m['reference_bytes'],20000)
+        p,m=E.build_packet(role='qa',task=TASK,binding=BIND,artifacts=[a],verified_access=lambda r:False)
+        self.assertEqual(next(iter(p['content'].values())),a.text)
+        self.assertEqual(m['warnings'][0]['code'],'REFERENCE_UNAVAILABLE_INLINE_FALLBACK')
+
+    def test_essential_artifact_always_inline_and_soft_limit_never_truncates(self):
+        a=E.Artifact('criteria','docs/spec.md',HEAD,'я'*20000,kind='contract',essential=True)
+        p,m=E.build_packet(role='pma',task=TASK,binding=BIND,artifacts=[a],verified_access=lambda r:True)
+        self.assertEqual(next(iter(p['content'].values())),a.text)
+        self.assertTrue(any(x['code']=='SOFT_CONTEXT_TARGET_EXCEEDED' for x in m['warnings']))
+
+    def test_bad_identity_path_or_duplicate_id_rejected_without_side_effect(self):
+        for path in ('../x','/root/a','apps/../x','apps//x'):
+            with self.assertRaises(ValueError):E.Artifact('a',path,HEAD,'x').reference()
+        a=E.Artifact('a','apps/a.py',HEAD,'x')
+        with self.assertRaises(ValueError):E.build_packet(role='qa',task=TASK,binding=BIND,artifacts=[a,a])
+        with self.assertRaises(ValueError):E.build_packet(role='qa',task=TASK,binding={**BIND,'candidate_sha':'dev'})
+
+    def test_diagnosis_projects_receipts_not_nested_inputs_and_preserves_briefs(self):
+        current={'head':HEAD,'failure':{'findings':['real current failure']},'evidence':[{'assertion':'expected != actual'}],
+                 'history':[{'head':BASE,'qa':{'verdict':'FAIL','findings':['old failure']},'failure_diagnosis':{'large':'x'*20000}}]}
+        cache={'receipts':{'1'*64:{'status':'ready','inputs':copy.deepcopy(current),'brief_hash':'2'*64,'brief':{'diagnosis':'actual earlier cause'}}}}
+        original=copy.deepcopy((current,cache,TASK))
+        view=E.diagnosis_view({'task':TASK},current,cache)
+        self.assertEqual(view['inputs']['failure'],current['failure'])
+        self.assertEqual(view['inputs']['evidence'],current['evidence'])
+        self.assertEqual(view['inputs']['history'][0]['qa'],current['history'][0]['qa'])
+        self.assertEqual(view['previous'][0]['brief'],cache['receipts']['1'*64]['brief'])
+        self.assertNotIn('inputs',view['previous'][0]);self.assertNotIn('large',E.encoded(view).decode())
+        self.assertEqual((current,cache,TASK),original)
+        self.assertEqual(len(view['omitted_duplicate_history']),1)
+
+    def test_changed_historical_task_is_not_discarded_as_duplicate(self):
+        old={**TASK, 'goal':'previous approved goal'}
+        value={'head':HEAD,'history':[{'task':old},{'task':copy.deepcopy(TASK)}]}
+        result=E.diagnosis_view({'task':TASK},value,{'receipts':{}})
+        self.assertEqual(result['inputs']['history'][0]['task'],old)
+        self.assertNotIn('task',result['inputs']['history'][1])
+        self.assertEqual(len(result['omitted_duplicate_history']),1)
+
+    def test_inject_opt_in_keeps_default_full_and_proves_exact_scoped_delivery(self):
+        import context_policy as C
+        text=(ROOT/'docs/rules/ENGINEERING_OPERATING_MODEL.md').read_text()
+        m={'commit':C.RULES_COMMIT,'sha256':C.RULES_SHA256,'bytes':C.RULES_SIZE,
+           'delivery':'explicit_full_stdin'}
+        full,full_receipt=C.inject('exact task',True,ROOT,(text,m))
+        self.assertIn(text,full)
+        self.assertEqual(full_receipt['context_metrics']['policy_profile'],'full')
+        ref={'path':'context/accepted-rules.md','revision':C.RULES_COMMIT,
+             'sha256':C.RULES_SHA256,'bytes':C.RULES_SIZE}
+        scoped,receipt=C.inject('exact task',True,ROOT,(text,m),context_profile='scoped_v1',
+            full_rules_reference=ref,verified_access=lambda r:True)
+        self.assertEqual(receipt['delivery'],'explicit_scoped_stdin')
+        self.assertIn(E.compile_capsule(text,'qa',C.RULES_SHA256),scoped)
+        self.assertEqual(receipt['stdin_sha256'],hashlib.sha256(scoped.encode()).hexdigest())
+        self.assertTrue(scoped.endswith('exact task'))
+        self.assertLess(len(scoped),len(full))
+        fallback,receipt=C.inject('exact task',True,ROOT,(text,m),context_profile='scoped_v1',
+            full_rules_reference=ref,verified_access=lambda r:False)
+        self.assertIn(text,fallback)
+        self.assertEqual(receipt['delivery'],'explicit_full_stdin')
+
+    def test_unknown_prior_status_is_not_erased_by_context_projection(self):
+        c={'receipts':{'a'*64:{'status':'pending','inputs':{'head':HEAD},'brief':None},
+                       'b'*64:{'status':'unknown','inputs':{'head':BASE},'brief':None}}}
+        v=E.diagnosis_view({'task':TASK},{'head':HEAD,'history':[]},c)
+        self.assertEqual({x['status'] for x in v['previous']},{'pending','unknown'})
+
+    def test_tool_excerpt_requires_saved_accessible_artifact_and_never_claims_PASS(self):
+        text='начало\n'+'x'*10000+'\nERROR end';ref={'path':'evidence/test.txt','sha256':hashlib.sha256(text.encode()).hexdigest(),'bytes':len(text.encode()),'available':True}
+        v=E.tool_excerpt(text,exit_code=1,full_artifact=ref,limit=1024)
+        self.assertTrue(v['truncated']);self.assertEqual(v['exit_code'],1)
+        self.assertIn('ERROR end',v['excerpt']);self.assertEqual(v['verdict'],'NOT_INFERRED_FROM_EXCERPT')
+        with self.assertRaises(ValueError):E.tool_excerpt(text,exit_code=1,full_artifact={**ref,'available':False})
+
+
+if __name__=='__main__':unittest.main()

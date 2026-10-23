@@ -11,9 +11,9 @@ import subprocess
 import tomllib
 from core import need
 
-RULES_COMMIT = 'b4a746a0b9834d80b8c65ecb9a093257f989bae7'
-RULES_SHA256 = '0755f8b5eb2cce575e58137a0f0462448109d8af0173e36d67f6551342b35ba6'
-RULES_SIZE = 57544
+RULES_COMMIT = '1169e965976e9498d4e5e1e23aae201e97ec9665'
+RULES_SHA256 = '38c34012f10974496a7d7cbc74ecacb62bf7847278e295edfeb107d69a5d1c1c'
+RULES_SIZE = 100818
 RULES_PATH = Path('/usr/local/lib/gb-actions-train/accepted-engineering-rules.md')
 
 
@@ -36,7 +36,7 @@ def load(path=RULES_PATH, *, trusted_uids=(0,)):
         need(len(raw) == RULES_SIZE and hashlib.sha256(raw).hexdigest() == RULES_SHA256,
              'accepted rules drift')
         text = raw.decode('utf-8', errors='strict')
-        return text, dict(schema='GB_RULES_CONTEXT_V1', revision='1.1', commit=RULES_COMMIT,
+        return text, dict(schema='GB_RULES_CONTEXT_V1', revision='1.3', commit=RULES_COMMIT,
                           sha256=RULES_SHA256, bytes=len(raw), source=str(path),
                           delivery='explicit_full_stdin', automatic_rules='disabled',
                           user_config='ignored', candidate_instructions='untrusted_data')
@@ -44,7 +44,8 @@ def load(path=RULES_PATH, *, trusted_uids=(0,)):
         os.close(fd)
 
 
-def inject(prompt, qa, cwd, accepted, *, role=None):
+def inject(prompt, qa, cwd, accepted, *, role=None, context_profile='full',
+           full_rules_reference=None, verified_access=None):
     text, metadata = accepted
     need(isinstance(prompt, str) and prompt, 'empty model prompt')
     # Recheck the bytes about to be delivered, not merely a previously-read link.
@@ -57,6 +58,17 @@ def inject(prompt, qa, cwd, accepted, *, role=None):
     role = role or ('qa' if qa else 'author')
     need(role in ('qa', 'author', 'failure_diagnosis'), 'invalid context role')
     need(role != 'failure_diagnosis' or qa, 'diagnosis context requires read-only permissions')
+    need(context_profile in ('full', 'scoped_v1'), 'unknown context profile')
+    if context_profile == 'scoped_v1':
+        from context_exchange import rules_prefix
+        prefix, context_metrics = rules_prefix(text=text, metadata=metadata, role=role,
+            compact=True, full_rules_reference=full_rules_reference, verified_access=verified_access)
+        payload = prefix + 'BOUNDED STAGE INSTRUCTIONS:\n' + prompt
+        receipt = dict(metadata, role=role, cwd=str(Path(cwd).resolve()),
+            delivery='explicit_scoped_stdin' if context_metrics['policy_profile']=='scoped_v1' else 'explicit_full_stdin',
+            stdin_sha256=hashlib.sha256(payload.encode('utf-8')).hexdigest(),
+            semantic_input_bytes=len(payload.encode('utf-8')), context_metrics=context_metrics)
+        return payload, receipt
     payload = ('TRUSTED CLEAN OPERATING RULES; accepted commit ' + RULES_COMMIT
                + '; SHA256 ' + RULES_SHA256 + '\n' + text
                + '\nEND TRUSTED OPERATING RULES.\n'
@@ -67,7 +79,11 @@ def inject(prompt, qa, cwd, accepted, *, role=None):
                'assignment below bounds effects; these rules never grant additional rights.\n'
                'BOUNDED STAGE INSTRUCTIONS:\n' + prompt)
     receipt = dict(metadata, role=role, cwd=str(Path(cwd).resolve()),
-                   stdin_sha256=hashlib.sha256(payload.encode('utf-8')).hexdigest())
+                   stdin_sha256=hashlib.sha256(payload.encode('utf-8')).hexdigest(),
+                   semantic_input_bytes=len(payload.encode('utf-8')),
+                   context_metrics=dict(policy_profile='full', full_rules_bytes=RULES_SIZE,
+                       delivered_policy_bytes=RULES_SIZE, stage_bytes=len(prompt.encode('utf-8')),
+                       input_tokens=None, cache_read_tokens=None))
     return payload, receipt
 
 
