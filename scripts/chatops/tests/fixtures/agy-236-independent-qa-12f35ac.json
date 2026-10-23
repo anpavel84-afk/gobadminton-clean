@@ -1,0 +1,13 @@
+{
+  "checks": [
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=scripts/chatops/tests python3 -B -m unittest -v test_actions_train_addressed_analysis.AnalysisProtocol",
+      "exit_code": 0,
+      "output_sha256": "54fdb57c1a417f0ea9fac71acbb22e2b21136e23d574c01dcc69223a86ed4daf",
+      "source_sha": "12f35ac4430348ae811cf712d9bb24d2a19b62e6"
+    }
+  ],
+  "requirements": "Independently review the exact PR236 source candidate 12f35ac4430348ae811cf712d9bb24d2a19b62e6 against base b0e4d233bc150f42ada86c4c0f56897c57e0d0fe. Requirements: retain strict QA canonical SHA binding and no PASS after denied/errors/incomplete output; analysis COMPLETE or INCOMPLETE never qualifies QA; preserve old UNKNOWN/reservations/spend, closed finite per-call grants and root/UID978 isolation; preserve #218 source-assertion classification and stage-compatible routing; implementation/release provenance must bind actual C/R payloads. Inspect actual relevant source files/diff through native tools. Run the supplied small deterministic parser check using run_command with cwd /srv/gb-slots/slot2/worktrees/antigravity-qa-29-canary; verify git rev-parse HEAD matches exact candidate before and after. Supplied check output hash is a real reference receipt, not a claim that you executed it. Record actual checks honestly. Use only allowed native tools, keep source and Git unchanged, use TMPDIR for generated output. If native shell/file tools or necessary evidence are unavailable, return FAIL; never claim unexecuted checks. Return exactly canonical {verdict,findings,reviewed_sha} once, using native finish completion when supported. This is real independent QA, not analyst acceptance.",
+  "schema": "GB_AGY_29_QA_TEST_CONTRACT_V1",
+  "source_sha": "12f35ac4430348ae811cf712d9bb24d2a19b62e6"
+}
