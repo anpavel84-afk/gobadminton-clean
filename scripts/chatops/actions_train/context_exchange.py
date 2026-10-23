@@ -31,6 +31,11 @@ def digest(value) -> str:
     return hashlib.sha256(encoded(value)).hexdigest()
 
 
+def exact_json_equal(a, b):
+    """Canonical JSON byte equality, never Python bool/int coercion."""
+    return encoded(a) == encoded(b)
+
+
 def _check(ok, message):
     if not ok:
         raise ValueError(message)
@@ -211,7 +216,7 @@ def diagnosis_view(active: Mapping, inputs: Mapping, cache: Mapping) -> dict:
                     brief_hash=receipt.get('brief_hash'), brief=copy.deepcopy(receipt.get('brief')),
                     durable_record_ref='failure_diagnosis.receipts.' + fingerprint)
         if 'failure' in source:
-            if source['failure'] == now.get('failure'):
+            if exact_json_equal(source['failure'], now.get('failure')):
                 item['failure_delivered_at'] = 'inputs.failure'
             else:
                 item['failure'] = copy.deepcopy(source['failure'])
@@ -219,7 +224,7 @@ def diagnosis_view(active: Mapping, inputs: Mapping, cache: Mapping) -> dict:
         # distinct prior assertion; use an in-packet pointer only for equality
         # with the already delivered current inputs.evidence.
         if 'evidence' in source:
-            if source['evidence'] == now.get('evidence'):
+            if exact_json_equal(source['evidence'], now.get('evidence')):
                 item['evidence_delivered_at'] = 'inputs.evidence'
             else:
                 item['evidence'] = copy.deepcopy(source['evidence'])
@@ -231,9 +236,9 @@ def diagnosis_view(active: Mapping, inputs: Mapping, cache: Mapping) -> dict:
         for field, value in source.items():
             if field in ('head', 'attempt', 'failure', 'evidence'):
                 continue  # Bound above, including equality-to-current pointers.
-            if field == 'task' and value == active['task']:
+            if field == 'task' and exact_json_equal(value, active['task']):
                 prior_equal[field] = 'task'
-            elif field in inputs and value == inputs[field]:
+            elif field in inputs and exact_json_equal(value, inputs[field]):
                 prior_equal[field] = 'inputs.' + field
             else:
                 prior_extra[field] = copy.deepcopy(value)

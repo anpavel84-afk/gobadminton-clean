@@ -262,4 +262,25 @@ class ContextExchange(unittest.TestCase):
         self.assertEqual((current,cache,TASK),original)
 
 
+    def test_json_type_distinctions_prevent_false_historical_dedup(self):
+        current={'head':HEAD,'history':[],'misc_diagnostic':{'assertion':True},
+                 'failure':{'code':True},'evidence':[{'flag':True}]}
+        prior={'head':BASE,'attempt':1,'history':[],
+               'misc_diagnostic':{'assertion':1},
+               'failure':{'code':1},'evidence':[{'flag':1}]}
+        cache={'receipts':{'b'*64:{'status':'unknown','inputs':copy.deepcopy(prior),
+                                   'brief':None,'brief_hash':None}}}
+        result=E.diagnosis_view({'task':TASK},current,cache)
+        item=result['previous'][0]
+        self.assertIs(type(item['additional_inputs']['misc_diagnostic']['assertion']),int)
+        self.assertEqual(item['additional_inputs']['misc_diagnostic']['assertion'],1)
+        self.assertIs(type(item['failure']['code']),int)
+        self.assertIs(type(item['evidence'][0]['flag']),int)
+        self.assertNotIn('failure_delivered_at',item)
+        self.assertNotIn('evidence_delivered_at',item)
+        self.assertTrue(E.exact_json_equal({'a':1},{'a':1}))
+        self.assertFalse(E.exact_json_equal({'a':1},{'a':True}))
+        self.assertFalse(E.exact_json_equal([0],[False]))
+
+
 if __name__=='__main__':unittest.main()

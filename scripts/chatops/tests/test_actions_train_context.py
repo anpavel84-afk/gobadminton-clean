@@ -100,10 +100,12 @@ class StageDelivery(unittest.TestCase):
         self.exercise_stage('qa')
     def test_scoped_profile_only_for_explicit_codex_source_qa_when_git_access_verified(self):
         self.exercise_stage('qa',scoped=True)
+    def test_recovering_unknown_qa_never_switches_to_compact_mode(self):
+        self.exercise_stage('qa',scoped=True,recover=True)
     def test_recovery_diagnose_and_task_review_receive_full_accepted_context(self):
         for name in ('diagnose','task_review'):
             with self.subTest(stage=name):self.exercise_stage(name)
-    def exercise_stage(self,stage_name,scoped=False):
+    def exercise_stage(self,stage_name,scoped=False,recover=False):
         with tempfile.TemporaryDirectory(prefix='.context-stage-') as temp:
             root=Path(temp);cli=root/'fake-codex';cli.write_text('trusted test fixture, never executed')
             count=[0];inputs=[];traces=[];store=SimpleNamespace(data={'active':{'task':{},'head':'a'*40,'attempt':1}})
@@ -132,11 +134,13 @@ class StageDelivery(unittest.TestCase):
                  patch.object(C,'verified_git_rules',return_value=scoped) as git_proof, \
                  patch.object(core,'task_review_route',return_value=choice), \
                  patch.object(receiver,'units_quiet'),patch.object(receiver,'identity',return_value={'pid':424242,'start':'1','boot':'test'}):
-                _,_,_,_,_,b=stage.setup(req(stage_name,'pr_wait'),{'codex':{'slot1':str(cli)}})
+                request=req(stage_name,'pr_wait')
+                if recover:request['_recover']=True
+                _,_,_,_,_,b=stage.setup(request,{'codex':{'slot1':str(cli)}})
                 b.model('bounded immutable task',qa=True)
                 self.assertEqual(count[0],1);self.assertTrue(inputs[0].endswith('bounded immutable task'))
                 r=b.routing_receipts[0]['rules_context'];self.assertEqual(r['role'],'qa')
-                if scoped:
+                if scoped and not recover:
                     self.assertNotIn(TEXT,inputs[0])
                     self.assertIn('CONTEXT_PROFILE scoped_v1',inputs[0])
                     self.assertEqual(r['context_metrics']['policy_profile'],'scoped_v1')
@@ -144,6 +148,7 @@ class StageDelivery(unittest.TestCase):
                 else:
                     self.assertIn(TEXT,inputs[0])
                     self.assertEqual(r['context_metrics']['policy_profile'],'full')
+                    if recover:git_proof.assert_not_called()
                 self.assertEqual(r['stdin_sha256'],hashlib.sha256(inputs[0].encode()).hexdigest())
                 self.assertEqual(b.routing_receipts[0]['usage']['charged_calls'],1)
                 self.assertTrue(any(t.get('process',{}).get('pid')==424242 for t in traces if t.get('process')))

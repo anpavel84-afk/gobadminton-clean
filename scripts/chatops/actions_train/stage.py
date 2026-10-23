@@ -110,7 +110,8 @@ def setup(req, config, native_auth=None):
         from context_policy import inject
         if choice['provider'] == 'agy':
             wrapped, rules_receipt = prompt, None  # Native adapter injects after assembling source DATA.
-        elif qa and req['stage']=='qa' and choice['provider']=='codex':
+        elif (qa and req['stage']=='qa' and choice['provider']=='codex'
+              and not req.get('_recover') and not req.get('_budget_preflight_retry')):
             # One scoped role only. The model can read the exact canonical Git
             # object through its existing read-only source/Git access. A missing
             # object or denied recipient probe uses the unchanged full profile.
