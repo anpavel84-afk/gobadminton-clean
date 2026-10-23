@@ -63,7 +63,7 @@ class SupplementalLedger(unittest.TestCase):
                        {'used_calls':3},{'schema':'foreign'}):
             with self.subTest(change=change),self.assertRaises(core.Refused):
                 Q.supplemental_ledger(supplement()|change)
-        for change in ({'owner_comment':6370661776},{'rules_sha256':'0'*64},
+        for change in ({'owner_comment':123},{'rules_sha256':'0'*64},
                        {'base':'a'*40},{'role':'author'},{'timeout':10}):
             with self.subTest(change=change),self.assertRaises(core.Refused):
                 Q.validate_addressed_grant(a|change)
@@ -122,13 +122,13 @@ class NativeReadEvidence(unittest.TestCase):
         for row in (dict(path='../.env',sha256='a'*64,observation='Bad directory'),
                     dict(path=SOURCE_A,sha256='a'*64,observation='x'),
                     dict(path=SOURCE_B,sha256='n'*64,observation='Inspected source')):
-            with self.subTest(row=row),self.assertRaises(core.Refused):
+            with self.subTest(row=row),self.assertRaises(N.ReviewError):
                 N.analysis_canonical(good|dict(source_reads=[row]),binding,strict_source_evidence=True)
-        with self.assertRaises(core.Refused):
+        with self.assertRaises(N.ReviewError):
             N.analysis_canonical(good,binding)
         old={k:v for k,v in good.items() if k!='source_reads'}
         self.assertEqual(N.analysis_canonical(old,binding),old)
-        with self.assertRaises(core.Refused):
+        with self.assertRaises(N.ReviewError):
             N.analysis_canonical(old,binding,strict_source_evidence=True)
 
 if __name__=='__main__':
