@@ -326,6 +326,19 @@ THIRD_DIGEST='0961f5ac0ef72436b033b62665e95bb02809e009462f16dccf90543c65923a2e'
 THIRD_PROCESS=dict(pid=894070,start='40142230',boot='447e18ce-024d-4230-b88f-bd8ca81e2a9e')
 THIRD_TASK='c18f960ed911d650828f105e8c7bb6df95391c9c8f0621b7b692dd64ca83ffdb'
 INSTALLED_BASELINE='b51e7c1c18103247606d35a414c82b04f5dd53ee'
+# Historic grants are immutable. Owner #29 authorization 6370661776 grants only
+# TWO new calls under rules 1.3; do not reinterpret the previous 2/4 charges.
+FRESH_OWNER_COMMENT=6370661776
+LEGACY_RULES_SHA256='0755f8b5eb2cce575e58137a0f0462448109d8af0173e36d67f6551342b35ba6'
+LEGACY_CONTROLLER='3ce9a1339a73e1c9b3fb2ca5b269483faf2fc4f8'
+LEGACY_GRANT_DIGESTS=frozenset((
+    'b71a53f0760e20cedf7eb240a93f0e9a15730a14731cbdbfc695acb07f210840',
+    'feda0b12e4dc8efec8807dba1df8935c8e9622dd6785ebfaf4d96a1cc850e928'))
+FRESH_SOURCE_BASE='b0e4d233bc150f42ada86c4c0f56897c57e0d0fe'
+FRESH_SOURCE_HEAD='12f35ac4430348ae811cf712d9bb24d2a19b62e6'
+FRESH_QA_INPUT_REVISION='6a53099160f0ae7312f6d282b061c5230e7d2536'
+FRESH_QA_INPUT_PATH='scripts/chatops/tests/fixtures/agy-236-independent-qa-12f35ac.json'
+FRESH_QA_INPUT_SHA256='c1672961885bea637d1ff21ffd05accc73837fe669e853f4b911d9f7ad7dcee9'
 ANALYSIS_INPUT='scripts/chatops/tests/fixtures/agy-230-inert-task-draft.json'
 ANALYSIS_INPUT_SHA256='40c79986904243c77d0e06231f1a82802018b17137242212aec2513e0258bd55'
 
@@ -342,15 +355,32 @@ def validate_addressed_grant(g):
             'rules_sha256','base','head','input_revision','input_path','input_sha256','timeout','max_output_bytes',
             'permission_mode','input_transport','ceiling'}
     need(type(g) is dict and set(g)==fields and g['schema']==ADDRESSED_SCHEMA
-         and g['lineage']==ADDRESSED_LINEAGE and type(g['owner_comment']) is int
-         and g['owner_comment']==6362661117,'invalid addressed Issue29 grant')
+         and g['lineage']==ADDRESSED_LINEAGE and type(g['owner_comment']) is int,
+         'invalid addressed Issue29 grant')
+    historical=(g['owner_comment']==6362661117 and digest(g) in LEGACY_GRANT_DIGESTS)
+    original_owner=(g['owner_comment']==6362661117)
+    fresh=(g['owner_comment']==FRESH_OWNER_COMMENT)
+    need(original_owner or fresh,'only original Owner or fresh Stage3 grant authorization allowed')
+    if historical:
+        need(g['controller_revision']==LEGACY_CONTROLLER
+             and g['rules_sha256']==LEGACY_RULES_SHA256,
+             'immutable historical grant identity altered')
+    elif fresh:
+        need(g['rules_sha256']==RULES_SHA256 and
+             (g['base'],g['head'])==(FRESH_SOURCE_BASE,FRESH_SOURCE_HEAD),
+             'new qualification source/rules identity drift')
+    else:
+        # Preserve existing closed original-owner grant test contract without
+        # rewriting its historical JSON. Unspent calls still require root-owned
+        # ledger reservation and never bypass the finite ceiling.
+        need(g['rules_sha256']==RULES_SHA256,
+             'nonhistorical grant must bind current accepted rules')
     need(g['role'] in ('technical_pm_product_analyst','independent_qa')
          and all(type(g[k]) is str and re.fullmatch('[a-f0-9]{40}',g[k])
                  for k in ('controller_revision','base','head','input_revision'))
          and g['controller_revision']!=INSTALLED_BASELINE and g['base']!=g['head']
          and type(g['input_sha256']) is str and re.fullmatch('[a-f0-9]{64}',g['input_sha256'])
          and g['cli_sha256']=='8af8e7a2a68f72fa7164e00bb59b8902c018fa43e528fc401ad7db8c2972583c'
-         and g['rules_sha256']==RULES_SHA256
          and g['permission_mode']=='always-proceed' and g['input_transport']=='stream-json'
          and type(g['timeout']) is int and g['timeout']==1800
          and type(g['max_output_bytes']) is int and g['max_output_bytes']==4<<20
@@ -362,6 +392,10 @@ def validate_addressed_grant(g):
         need(type(g['input_path']) is str and re.fullmatch(
             r'scripts/chatops/tests/fixtures/agy-[a-z0-9-]+\.json',g['input_path']),
             'exact QA source/test-receipt contract required')
+        if fresh:
+            need((g['input_revision'],g['input_path'],g['input_sha256'])==
+                 (FRESH_QA_INPUT_REVISION,FRESH_QA_INPUT_PATH,FRESH_QA_INPUT_SHA256),
+                 'reviewed independent QA fixture changed')
     return g
 
 
@@ -428,20 +462,41 @@ def addressed_ledger(value):
          and type(value['grants']) is dict and 1<=len(value['grants'])<=4,
          'closed max4 addressed ledger required')
     count=0
+    roles=[]
     for key,row in value['grants'].items():
         need(type(row) is dict and set(row)=={'grant','operation'},'invalid per-call ledger')
         validate_addressed_grant(row['grant'])
+        if row['grant']['owner_comment']==FRESH_OWNER_COMMENT:
+            roles.append(row['grant']['role'])
         need(key==digest(row['grant']),'forged per-call grant')
         op=row['operation']
         need(op is None or type(op) is str and len(op)==64 and all(x in '0123456789abcdef' for x in op),
              'invalid consumed operation')
         count+=op is not None
     need(type(value['used_calls']) is int and value['used_calls']==count<=4,'addressed usage drift')
+    need(len(roles)==len(set(roles)) and set(roles)<=
+         {'technical_pm_product_analyst','independent_qa'},
+         'Owner Stage3 allows one fresh call per distinct role')
     return value
 
 
 def addressed_ready(r,q):
     g=validate_addressed_grant(q['qualification_grant'])
+    if g['owner_comment']==FRESH_OWNER_COMMENT:
+        policy=r.read(r.POLICY,0)
+        need(g['controller_revision']==policy['controller_sha'],'fresh grant requires installed controller SHA')
+        # Analysis must finish and be retained before the separately admitted QA call.
+        if g['role']=='independent_qa':
+            ledger=r.read(r.STATE/ADDRESSED_LEDGER,0)
+            analyses=[row.get('operation') for row in ledger.get('grants',{}).values()
+                 if row.get('grant',{}).get('owner_comment')==FRESH_OWNER_COMMENT
+                 and row.get('grant',{}).get('role')=='technical_pm_product_analyst']
+            need(len(analyses)==1 and analyses[0],'fresh analysis reservation missing')
+            op=r.journal('slot2')['operations'].get(analyses[0],{})
+            need(op.get('result',{}).get('status')=='confirmed'
+                 and op.get('result',{}).get('analysis_complete') is True
+                 and op.get('result',{}).get('analysis',{}).get('completion')=='COMPLETE',
+                 'fresh analysis not COMPLETE before independent QA')
     need(digest(addressed_task(q['base'],q['head'],g))==q['task_sha256'],'forged addressed task')
     addressed_history(r,r.read(r.STATE/'slot2.json',0))
     reconciliation=r.read(r.STATE/ADDRESSED_RECONCILIATION,0)
