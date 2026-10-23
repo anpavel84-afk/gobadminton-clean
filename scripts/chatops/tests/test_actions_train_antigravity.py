@@ -214,20 +214,37 @@ class Collection(EvidenceTestCase):
         self.assertEqual(context['commit'],C.RULES_COMMIT);self.assertEqual(context['sha256'],C.RULES_SHA256)
         self.assertEqual(context['bytes'],C.RULES_SIZE)
 
-    def test_real_secret_traversal_symlink_binary_and_size_guards_remain(self):
+    def test_protected_paths_binary_and_size_guards_remain_without_source_content_filter(self):
         for name in ('.env', '.env.production', '.ssh/config', 'credentials.json', 'key.pem', '.git/config', '../x'):
             with self.subTest(name=name), self.assertRaises(N.ReviewError): N.safe_path(name)
         for name in ('tokens.ts', 'auth/crypto.ts', 'config/env.ts', 'design-tokens/colors.ts'):
             self.assertEqual(N.safe_path(name), name)
-        for name, data in [('pkg/private.py', '-----BEGIN PRIVATE KEY-----'),
-                           ('pkg/blob.py', '\0'), ('pkg/big.py', 'x'*(N.MAX_INPUT+1))]:
-            self.write(name, data); head=self.commit()
+
+        # This intentionally tests ordinary source containing a key-looking example.
+        # Both the file and the Git diff must reach independent QA as ordinary data.
+        key_marker = '-----BEGIN ' + 'PRIVATE' + ' ' + 'KEY' + '-----'
+        example = 'EXAMPLE = ' + repr(key_marker) + '\n'
+        self.write('pkg/example_key.py', example)
+        head = self.commit()
+        collected, _ = N.collect(self.root, self.base, head, 'task')
+        context = json.loads(collected.split('DATA_JSON:\n', 1)[1])
+        self.assertEqual(context['files']['pkg/example_key.py'], example)
+        self.assertIn(example.strip(), context['diff'])
+        (self.root/'pkg/example_key.py').unlink()
+        self.commit()
+
+        # Path protection, NUL bytes, size limits and symlinks remain forbidden.
+        for name, data in [('pkg/blob.py', '\0'), ('pkg/big.py', 'x'*(N.MAX_INPUT+1))]:
+            self.write(name, data)
+            head = self.commit()
             with self.subTest(name=name), self.assertRaises(N.ReviewError):
                 N.collect(self.root, self.base, head, 'task')
-            (self.root/name).unlink(); self.commit()
-        (self.root/'pkg/link.py').symlink_to('b.py'); head=self.commit()
-        with self.assertRaises(N.ReviewError): N.collect(self.root,self.base,head,'task')
-
+            (self.root/name).unlink()
+            self.commit()
+        (self.root/'pkg/link.py').symlink_to('b.py')
+        head = self.commit()
+        with self.assertRaises(N.ReviewError):
+            N.collect(self.root, self.base, head, 'task')
 
 class Routing(unittest.TestCase):
     def test_unqualified_agy_falls_back_without_charge_or_call(self):
