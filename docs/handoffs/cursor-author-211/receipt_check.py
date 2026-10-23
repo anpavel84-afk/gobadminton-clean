@@ -82,13 +82,23 @@ def _unique_object_pairs(pairs):
     return out
 
 
+def _reject_nonfinite_constant(name: str):
+    # json.loads calls this for literal NaN / Infinity / -Infinity at any depth.
+    # Must raise; returning a value would silently accept non-JSON numbers.
+    raise ValueError("non-finite constant")
+
+
 def _load_receipt(path: str) -> Any:
     with open(path, "rb") as fh:
         raw = fh.read(MAX_BYTES + 1)
     if len(raw) > MAX_BYTES:
         raise ValueError("oversized")
     text = raw.decode("utf-8")
-    return json.loads(text, object_pairs_hook=_unique_object_pairs)
+    return json.loads(
+        text,
+        object_pairs_hook=_unique_object_pairs,
+        parse_constant=_reject_nonfinite_constant,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:

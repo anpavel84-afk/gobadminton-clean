@@ -158,6 +158,76 @@ class CliReceiptCheck(unittest.TestCase):
         self.assertNotIn(secret, joined)
         self.assertEqual(texts, ["FAIL"])
 
+    def test_cli_reject_literal_nan_infinity_top_and_nested(self):
+        literals = ("NaN", "Infinity", "-Infinity")
+        for lit in literals:
+            with self.subTest(placement="top", lit=lit):
+                path = self._write(f"top-{lit}.json", lit)
+                code, texts = self._run([str(path)])
+                self.assertEqual(code, 1)
+                self.assertEqual(texts, ["FAIL"])
+                joined = " ".join(str(t) for t in texts)
+                self.assertNotIn(lit, joined)
+                self.assertNotIn("Traceback", joined)
+
+            with self.subTest(placement="object", lit=lit):
+                path = self._write(
+                    f"obj-{lit}.json",
+                    '{"schema":"GB_CURSOR_AUTHOR_RECEIPT_V1","x":' + lit + "}",
+                )
+                code, texts = self._run([str(path)])
+                self.assertEqual(code, 1)
+                self.assertEqual(texts, ["FAIL"])
+                joined = " ".join(str(t) for t in texts)
+                self.assertNotIn(lit, joined)
+                self.assertNotIn("Traceback", joined)
+
+            with self.subTest(placement="array", lit=lit):
+                path = self._write(
+                    f"arr-{lit}.json",
+                    '{"schema":"GB_CURSOR_AUTHOR_RECEIPT_V1","xs":[1,'
+                    + lit
+                    + ",2]}",
+                )
+                code, texts = self._run([str(path)])
+                self.assertEqual(code, 1)
+                self.assertEqual(texts, ["FAIL"])
+                joined = " ".join(str(t) for t in texts)
+                self.assertNotIn(lit, joined)
+                self.assertNotIn("Traceback", joined)
+
+    def test_cli_accept_null_finite_and_quoted_nonfinite_strings(self):
+        # Valid receipt already uses null for underlying_model / provider_internal_calls.
+        path = self._write("null-ok.json", json.dumps(valid_receipt()))
+        code, texts = self._run([str(path)])
+        self.assertEqual(code, 0)
+        self.assertEqual(texts, ["PASS"])
+
+        finite = valid_receipt(provider_internal_calls=7)
+        path = self._write("finite-ok.json", json.dumps(finite))
+        code, texts = self._run([str(path)])
+        self.assertEqual(code, 0)
+        self.assertEqual(texts, ["PASS"])
+
+        # Quoted string forms are legal JSON and must not trip parse_constant.
+        for lit in ("NaN", "Infinity", "-Infinity"):
+            with self.subTest(lit=lit):
+                body = (
+                    '{"schema":"GB_CURSOR_AUTHOR_RECEIPT_V1",'
+                    '"phase":"imported",'
+                    '"requested_route":"cursor:auto",'
+                    '"effective_route":"Auto",'
+                    '"underlying_model":null,'
+                    '"provider_internal_calls":null,'
+                    '"changed_paths":["docs/handoffs/cursor-author-211/receipt_check.py"],'
+                    '"rules_context":{"commit":"abc","sha256":"def"},'
+                    '"note":"' + lit + '"}'
+                )
+                path = self._write(f"quoted-{lit}.json", body)
+                code, texts = self._run([str(path)])
+                self.assertEqual(code, 0)
+                self.assertEqual(texts, ["PASS"])
+
 
 if __name__ == "__main__":
     unittest.main()
