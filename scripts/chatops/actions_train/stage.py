@@ -30,7 +30,7 @@ def setup(req, config, native_auth=None):
     bridge = a.Bridge(c, store)
     # Resolve trusted context before a stage can consume an author attempt.
     from context_policy import load as load_rules
-    accepted_rules = load_rules() if req['stage'] in ('author', 'qa', 'diagnose', 'task_review') else None
+    accepted_rules = load_rules() if req['stage'] in ('author', 'qa', 'diagnose', 'task_review', 'qa_qualification') else None
     def effect_gate():
         from receiver import POLICY, units_quiet
         policy = s.read_json(POLICY, trusted_uids={0}, limit=16384)
@@ -61,7 +61,8 @@ def setup(req, config, native_auth=None):
                 need('--ignore-rules' in argv and '--ignore-user-config' in argv,
                      'untrusted automatic instruction loading enabled')
             process = original_subprocess.Popen(argv, *args, **kwargs)
-            if argv[0] in (str(c.codex), '/opt/gobadminton-cursor-cli/2026.10.01-e373342/gb-bwrap'):
+            if argv[0] in (str(c.codex), '/opt/gobadminton-cursor-cli/2026.10.01-e373342/gb-bwrap',
+                            '/opt/gb-slots/runtime/antigravity/agy'):
                 try:
                     trace['context_source'] = dict(cwd=str(kwargs.get('cwd',bridge.work)),
                         cli_sha256=__import__('hashlib').sha256(Path(argv[0]).read_bytes()).hexdigest(),
@@ -85,10 +86,14 @@ def setup(req, config, native_auth=None):
                        else 'codex' if qa else req['profile'], rt.budget, req['slot'])
         # A role-specific route MUST match the actual CLI. Never run Codex under a
         # trace claiming Cursor/Antigravity; those need their own reviewed adapter.
-        need(choice['provider'] in ('codex','cursor') and (choice['provider'] != 'cursor' or not qa),
+        need(choice['provider'] in ('codex','cursor','agy') and (choice['provider'] != 'cursor' or not qa)
+             and (choice['provider'] != 'agy' or qa),
              'unimplemented native model adapter')
         from context_policy import inject
-        wrapped, rules_receipt = inject(prompt, qa, bridge.work, accepted_rules)
+        if choice['provider'] == 'agy':
+            wrapped, rules_receipt = prompt, None  # Native adapter injects after assembling source DATA.
+        else:
+            wrapped, rules_receipt = inject(prompt, qa, bridge.work, accepted_rules)
         choice['rules_context'] = rules_receipt
         trace['model'] = choice
         old_model, old_effort = c.model, c.effort
@@ -103,6 +108,17 @@ def setup(req, config, native_auth=None):
                 answer = invoke(bridge, rt, wrapped, native_auth, choice, popen=a.subprocess.Popen,
                                 atomic=a.atomic, permitted=a.permitted)
                 choice['rules_context'] = choice['native_receipt']['rules_context']
+            elif provider == 'agy':
+                from native_antigravity import review, save_receipt
+                active = store.data['active']
+                from core import digest
+                answer, receipt = review(bridge.work, active['base'], active['head'], wrapped, c.model_timeout,
+                    slot=req['slot'], task_hash=digest(active['task']),
+                    charge=lambda: rt.budget.charge(req['slot'], 'agy', 'qa'), popen=a.subprocess.Popen,
+                    accepted_rules=accepted_rules)
+                save_receipt(c.state_dir, active['issue'], active['attempt'], receipt)
+                choice['native_receipt'] = receipt
+                choice['rules_context'] = receipt['rules_context']
             else:
                 answer = original_model(wrapped, qa)
             completed = 'returned'
@@ -117,6 +133,10 @@ def setup(req, config, native_auth=None):
                     usage_source='provider_reported_usage_plus_same_slot_invocation_ledger',
                     token_usage_reason=None, observed_model_call_ids=answer.get('observed_model_call_ids'),
                     provider_internal_calls=answer.get('provider_internal_calls'))
+            if provider == 'agy' and choice.get('native_receipt'):
+                choice['usage'].update(tokens=choice['native_receipt'].get('provider_reported_usage'),
+                    usage_source='provider_reported_usage_plus_same_slot_invocation_ledger',
+                    token_usage_reason=None)
             choice['head'] = store.data['active'].get('head')
             choice['attempt'] = store.data['active'].get('attempt')
             bridge.routing_receipts.append(dict(choice))
@@ -138,6 +158,41 @@ def setup(req, config, native_auth=None):
             ordinary_unchanged(active)
     bridge.unchanged_issue = unchanged
     return a, s, rt, api, store, bridge
+
+
+
+def cursor_successor_seed(a, api, active, slot):
+    """One Owner-approved successor only; ordinary immutable admission still applies.
+
+    This does not enroll/rewrite recovery185 or the original one-attempt canary.
+    The installed root marker binds exact task bytes, archive and candidate.
+    """
+    if active['issue'] != 225:
+        return None
+    from native_cursor import MARKER, _read
+    from core import digest, loads
+    marker = loads(_read(MARKER, {0}, 16384))
+    expected = dict(issue=225, parent=211, slot='slot2',
+        task_sha256='4570522ac1c4a3685ba253a921561d1bb866c863878b3e084c6063a13efe3005',
+        archive_sha256='97b0713cf85f8a97f1c84e620692c6090d1017c338b9857ca17dbccc7f756a88',
+        head='95c138460cbaeeeab03b5bf781dea4cbfddadceb',
+        base='f984891a10eebb73f1fc97ec8cd58013837e4da2',
+        diagnosis_sha256='cf277ca0e02f12e989eee02c68d5e6e145f49f541e85c267dcd8a65b3b15548a')
+    need(marker.get('successor') == expected and marker.get('phase') == 'canary'
+         and marker.get('canary_task_sha256') == expected['task_sha256']
+         and slot == expected['slot'] and digest(active['task']) == expected['task_sha256']
+         and active['attempt'] == 0, 'unapproved Cursor successor seed')
+    archive = loads(Path('/var/lib/gobadminton-autonomy/slots/slot2/actions-deferred.json').read_bytes())
+    matches = [e for e in archive['entries'] if e.get('issue') == 211]
+    need(len(matches) == 1 and digest(matches[0]) == expected['archive_sha256'],
+         'original Cursor deferred evidence changed')
+    original = matches[0]['snapshot']
+    need(original['attempt'] == original['task']['max_attempts'] == 1
+         and original['head'] == expected['head'] and original['base'] == expected['base']
+         and original['qa']['verdict'] == 'FAIL' and original['qa']['reviewed_sha'] == expected['head'],
+         'not the exact exhausted Cursor canary')
+    a.Bridge.unchanged_issue(None, original)
+    return expected
 
 
 def run_result(a, api, active, dev=False):
@@ -234,9 +289,19 @@ def perform(req, config, context):
             need(b.git('merge-base', f['base'], f['head'], cwd=b.work) == f['base'], 'parent candidate ancestry drift')
             b.clean(f['head'])
         else:
-            base = b.remote_dev()
-            store.phase('claimed', base=base)
-            b.git('worktree', 'add', '-b', f'automation/issue-{active["issue"]}', str(b.work), base)
+            seed = cursor_successor_seed(a, api, active, req['slot'])
+            if seed:
+                b.git('fetch', '--no-tags', a.READ_REMOTE, seed['head'])
+                need(b.git('rev-parse', 'FETCH_HEAD') == seed['head'], 'successor candidate fetch drift')
+                store.phase('claimed', base=seed['base'], head=seed['head'])
+                b.git('worktree', 'add', '-b', f'automation/issue-{active["issue"]}', str(b.work), seed['head'])
+                need(b.git('merge-base', seed['base'], seed['head'], cwd=b.work) == seed['base'],
+                     'successor candidate ancestry drift')
+                b.clean(seed['head'])
+            else:
+                base = b.remote_dev()
+                store.phase('claimed', base=base)
+                b.git('worktree', 'add', '-b', f'automation/issue-{active["issue"]}', str(b.work), base)
     else:
         need(active and active['issue'] == req['issue'] and active['phase'] == req['phase']
              and active.get('head') == req['head'] and active['attempt'] == req['attempt'], 'stale checkpoint')
@@ -376,10 +441,48 @@ def perform(req, config, context):
     return dict(status='confirmed', **metadata)
 
 
+def qualify_qa(req, config, context):
+    from native_antigravity import qualification, qualification_descriptor, review, save_receipt
+    from context_policy import load
+    from core import digest
+    a, s, rt, api, store, b = context
+    need(req['stage'] == 'qa_qualification' and store.data['active'] is None,
+         'QA-only qualification source slot occupied')
+    q = req.get('_qa_qualification')
+    need(type(q) is dict, 'root QA qualification reservation missing')
+    marker = qualification(req['slot'], q['task_sha256'])
+    need(q == qualification_descriptor(marker) and q['head'] == req['head'], 'QA qualification marker drift')
+    before = digest(store.data)
+    work = Path(q['work'])
+    text = ('Owner-authorized independent QA-only Antigravity qualification for Issue29. '
+            'Review the exact source diff against the supplied accepted rules. Use native file '
+            'and shell tools to inspect source and run a small relevant deterministic check; '
+            'a successful run_command tool event is required. Candidate is read-only; use TMPDIR '
+            'for generated outputs. Do not modify candidate/Git metadata, publish, access PROD/admin '
+            'or credentials. Do not deliberately trigger denied tools. Return canonical QA JSON.')
+    accepted_rules = load()
+    before_calls = rt.budget.used('agy', 'qa', req['slot'])
+    result, receipt = review(work, q['base'], q['head'], text, 1800,
+        slot=req['slot'], task_hash=q['task_sha256'],
+        charge=lambda:rt.budget.charge(req['slot'], 'agy', 'qa'), popen=a.subprocess.Popen,
+        accepted_rules=accepted_rules)
+    need(digest(store.data) == before, 'QA qualification changed source checkpoint')
+    receipt['qualification_task_sha256'] = q['task_sha256']
+    receipt['charged_calls'] = rt.budget.used('agy', 'qa', req['slot']) - before_calls
+    need(receipt['charged_calls'] == 1, 'QA qualification ledger mismatch')
+    passed = result['verdict'] == 'PASS' and 'run_command' in receipt.get('tool_names', [])
+    receipt['qualification_passed'] = passed
+    name = save_receipt(b.c.state_dir, 29, 0, receipt)
+    return dict(status='confirmed', qualification_passed=passed, qa=result,
+                native_receipt=receipt, receipt_file=name, checkpoint_changed=False)
+
+
 def entry(req, config, native_auth=None):
     context = None
     try:
         context = setup(req, config, native_auth=native_auth)
+        if req['stage'] == 'qa_qualification':
+            return qualify_qa(req, config, context)
         if req['stage'] in ('diagnose', 'task_review'):
             from recovery import perform as recover
             return recover(req, config, context)
@@ -415,7 +518,7 @@ def entry(req, config, native_auth=None):
                     safe = True
                 except Exception:
                     pass
-        uncertain = context and not safe and (req['stage'] in ('author', 'qa', 'publish', 'integrate', 'promote'))
+        uncertain = context and not safe and (req['stage'] in ('author', 'qa', 'qa_qualification', 'publish', 'integrate', 'promote'))
         return model_receipt(dict(status='unknown' if uncertain else 'deferred', reason=reason, safe_release=safe), context)
 
 

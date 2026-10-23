@@ -172,6 +172,25 @@ def budget_preflight_retry(j, state):
     except (OSError, Refused, ValueError, TypeError): return False
 
 
+def qualification_plan(policy, card, budget):
+    """Read-only root canary proposal; reservation/launch remains in handle()."""
+    if policy.get('mode') != 'active' or not card.get('owned') or card.get('active') is not None \
+            or card.get('pending') or (STATE/'antigravity-qa-qualification.json').exists():
+        return None
+    from native_antigravity import MARKER, trusted, qualification_descriptor, ReviewError
+    try:
+        marker = loads(trusted(MARKER))
+        if marker.get('phase') != 'canary' or marker.get('schema') != 'GB_ANTIGRAVITY_QA_29_V1' \
+                or marker.get('slot') != 'slot2' or marker.get('executor_uid') != 978:
+            return None
+        q = qualification_descriptor(marker)
+        if budget.remaining('agy','qa','slot2') != 1: return None
+        return dict(slot='slot2',issue=29,stage='qa_qualification',phase='idle',head=q['head'],
+                    attempt=0,generation=card['generation'],profile='agy')
+    except (OSError, ValueError, ReviewError, KeyError, TypeError):
+        return None  # Missing/malformed qualification never authorizes a call.
+
+
 def snapshot(policy):
     result = dict(schema='GB_ACTIONS_TRAIN_V1', mode=policy['mode'], slots={})
     try: planning = read(STATE / 'planning.json', 0, 65536)
@@ -221,6 +240,8 @@ def snapshot(policy):
             result['slots'][slot]['planning'] = dict(planning['report']['slots'][slot],
                 counts=planning['report']['counts'], decisions=planning['report']['decisions'],
                 observed_at=planning['observed_at'], workflow_run=planning['run'])
+    proposed = qualification_plan(policy, result['slots']['slot2'], budget)
+    if proposed: result['slots']['slot2']['qa_qualification'] = proposed
     if policy.get('recovery', {}).get('enabled'):
         result['recovery'] = recovery_journal()
         # A lost process never resets a model reservation. Expose the honest limitation.
@@ -318,6 +339,8 @@ def supervisor(req, policy, key, root_lock):
             os.environ.clear()
             os.environ.update(PATH='/usr/bin:/bin', LANG='C.UTF-8', HOME=user.pw_dir, USER=user.pw_name)
             req['_task_hash'] = j['operations'][key].get('task_hash')
+            if j['operations'][key].get('qa_qualification'):
+                req['_qa_qualification'] = j['operations'][key]['qa_qualification']
             if j['operations'][key].get('recovery_admission'):
                 req['_recovery_admission'] = j['operations'][key]['recovery_admission']
             if j['operations'][key].get('recovery_data'):
@@ -377,6 +400,12 @@ def supervisor(req, policy, key, root_lock):
             atomic(STATE / 'recovery.json', cache)
             changed = True  # receipt transition, NEVER a product/source completion
             value = dict(status='confirmed', recovery=recovery_record)
+        if op.get('qa_qualification'):
+            reservation = read(STATE / 'antigravity-qa-qualification.json', 0)
+            need(reservation.get('operation') == key and reservation.get('task_hash') == op['task_hash'],
+                 'QA qualification reservation drift')
+            reservation.update(result=value, finished_at=int(time.time()))
+            atomic(STATE / 'antigravity-qa-qualification.json', reservation)
         active = state['active']
         value['checkpoint'] = None if not active else {k: active.get(k) for k in (
             'issue', 'phase', 'head', 'attempt', 'pr', 'release_id')}
@@ -395,6 +424,12 @@ def supervisor(req, policy, key, root_lock):
                          reason=value.get('reason'), confirmed_at=int(time.time()) if value['status'] == 'confirmed' else None,
                          workflow_run=req['run'], workflow_attempt=req['run_attempt'], changed=changed,
                          routing=value.get('routing'), checkpoint=value['checkpoint'])
+        if op.get('qa_qualification'):
+            j['last']['qualification'] = dict(passed=value.get('qualification_passed', False),
+                reviewed_sha=(value.get('qa') or {}).get('reviewed_sha'),
+                receipt_file=value.get('receipt_file'),
+                charged_calls=(value.get('native_receipt') or {}).get('charged_calls'),
+                effective_model=(value.get('native_receipt') or {}).get('effective_model'))
         if value['status'] == 'confirmed': j['confirmed'] = dict(j['last'])
         if recovery_record: j['last']['recovery'] = recovery_record
         if value['status'] != 'unknown': j['pending'] = None
@@ -509,6 +544,52 @@ def recovery_request(req, policy):
     return dict(status='running', key=key, process=identity(pid))
 
 
+def qualification_request(req, policy):
+    """One QA-only canary, using existing slot journal/worker lock. Never creates active."""
+    from native_antigravity import qualification, qualification_descriptor
+    key = digest(binding(req)); slot = req['slot']; j = journal(slot)
+    archive = STATE / 'history' / slot / (key + '.json')
+    if key not in j['operations'] and archive.exists():
+        old = read(archive, 0)
+        return dict(status=old['result']['status'], key=key, result=old['result'])
+    if key in j['operations']:
+        op = j['operations'][key]
+        if j['pending'] == key:
+            return dict(status='running' if alive(op.get('process')) else 'unknown', key=key,
+                        reason='QA qualification never replays after unknown outcome')
+        return dict(status=op.get('result', {}).get('status', 'unknown'), key=key,
+                    result=op.get('result'), last=j['last'])
+    need(not j['pending'] and req['generation'] == j['generation'], 'stale/pending QA qualification generation')
+    state, _ = checkpoint(slot)
+    need(state['active'] is None, 'QA qualification requires idle source slot')
+    guard(slot, policy)
+    # Root marker is the exact Owner-authorized QA-only admission, not a product task.
+    from native_antigravity import MARKER, trusted
+    m = loads(trusted(MARKER)); q = qualification_descriptor(m)
+    qualification(slot, q['task_sha256'])
+    need(m['phase'] == 'canary' and req['head'] == q['head'], 'qualification source/phase mismatch')
+    path = STATE / 'antigravity-qa-qualification.json'
+    need(not path.exists(), 'QA qualification already reserved; reconcile without another call')
+    _, s = live()
+    budget = s.Budget(BUDGET, AUTONOMY/'outbox', AUTONOMY/'locks/registry.lock')
+    left = budget.remaining('agy', 'qa', slot)
+    need(type(left) is int and left == 1, 'QA qualification requires exactly one finite remaining call')
+    reservation = dict(schema='GB_ANTIGRAVITY_QA_29_RESERVATION_V1', operation=key,
+        task_hash=q['task_sha256'], descriptor=q, started_at=int(time.time()), result=None)
+    # Reservation first: a crash between writes consumes the canary, never replays it.
+    atomic(path, reservation)
+    j['operations'][key] = dict(task_hash=q['task_sha256'], qa_qualification=q, binding=binding(req),
+        run=req['run'], run_attempt=req['run_attempt'], before=digest(state), checkpoint_before=state,
+        started_at=int(time.time()), process=None)
+    j['pending'] = key
+    atomic(STATE / (slot+'.json'), j)
+    pid = os.fork()
+    if pid == 0: supervisor(req, policy, key, ROOT_LOCK)
+    j['operations'][key]['process'] = identity(pid)
+    atomic(STATE / (slot+'.json'), j)
+    return dict(status='running', key=key, process=identity(pid))
+
+
 def handle(req, policy):
     request(req)
     if req['stage'] == 'status': return snapshot(policy)
@@ -527,6 +608,8 @@ def handle(req, policy):
         return dict(status='recorded')
     slot = req['slot']
     hosted_identity(req, policy)
+    if req['stage'] == 'qa_qualification':
+        return qualification_request(req, policy)
     if req['stage'] in ('diagnose', 'task_review'):
         return recovery_request(req, policy)
     key = digest(binding(req))
