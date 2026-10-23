@@ -28,6 +28,7 @@
 | #53 | Библиотека фото, not_admitted | COVERS-LIB: Gemini research, Sonnet QA, отдельный инструмент иллюстраций, операторский импорт |
 | #52 | done venue picker layout | Сохранить; будущий UI-S |
 | #54 | done horizontal overflow | Сохранить; будущий UI-S |
+| #57 | done create-photo preview follow-up #47 | Сохранить; будущий APP-C только при новом media/preview дефекте |
 | #62 | done map entry/mobile switch | Сохранить; будущий UI-S |
 | #61 | done removal of count-chip cloud | Сохранить; будущий UI-S |
 | #64 | done admin venue covers | Сохранить; не повторять UI; V3b отдельный remaining result |
@@ -92,7 +93,7 @@
 1. Старый backlog T6: «игрокам 1–5»; утверждённый post-game: peer categorical feedback, organization 1–5, всё private. Использован второй вариант.
 2. T7 «проверка уровня» не становится разрешённой частью post-game: skill mutation/ranking там исключены. Оставлен HOLD.
 3. Open GitHub Issue не доказывает отсутствие результата: 40 записей в planning уже done, #179 имеет ручной DEV release. Не пересоздавать.
-4. I1 importer done не означает, что площадки получили реальные обложки. Остаток выделен без нового importer.
+4. I1 importer done не означает, что площадки получили реальные обложки. Остаток выделён без нового importer.
 5. Старые #205/#207 имеют Sol High + Astra High; исторические назначения не переписаны экономным target.
 6. Исторический phase planner предлагает High для обычной QA; этот пакет выбирает Sonnet Medium для обычных задач согласно действующему канону, а не механически копирует старую таблицу.
 7. Cost-policy/router ещё требует согласования target AGY QA с фактической selection; не выдавать этот JSON за установленный pipeline.
