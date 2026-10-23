@@ -144,6 +144,9 @@ class NativeAnalysisTransport(unittest.TestCase):
         import subprocess
         with tempfile.TemporaryDirectory() as d:
             captured={};charge=Mock()
+            candidate=Path(d)/'synthetic-candidate'
+            candidate.mkdir()
+            (candidate/'.git').mkdir()
             class Process:
                 pid=99999999;returncode=0
                 def communicate(self,input,timeout):captured['stdin']=input;self._input_offset=len(input)
@@ -159,13 +162,15 @@ class NativeAnalysisTransport(unittest.TestCase):
                 return Process()
             with patch.object(N,'qualification',return_value={'phase':'canary'}),patch.object(N.os,'geteuid',return_value=978), \
                  patch.object(N,'trusted',return_value=b'synthetic-auth-not-a-credential'), \
-                 patch.object(N,'git',return_value=b'/synthetic-candidate/.git'), \
+                 patch.object(N,'git',return_value=str(candidate/'.git').encode()), \
                  patch.object(N,'filesystem_roots',return_value=([],[],[])) as roots,patch.object(N.os,'killpg'):
-                raw,receipt=N.invoke('EXACT INPUT 漢字',1800,work=Path('/synthetic-candidate'),slot='slot2',task_hash='f'*64,
+                raw,receipt=N.invoke('EXACT INPUT 漢字',1800,work=candidate,slot='slot2',task_hash='f'*64,
                     charge=charge,popen=popen,analysis=True,evidence_dir=Path(d)/'evidence')
             self.assertEqual(json.loads(captured['stdin'])['message']['content'],'EXACT INPUT 漢字')
             self.assertTrue(captured['stdin'].endswith(b'\n'));self.assertNotIn('--json-schema',captured['argv'])
             self.assertIn('--sandbox',captured['argv']);self.assertIn('--dangerously-skip-permissions',captured['argv'])
+            self.assertIn('--add-dir',captured['argv'])
+            self.assertEqual(captured['argv'][captured['argv'].index('--add-dir')+1],str(candidate.resolve()))
             self.assertEqual(receipt['input_delivery'],'written');self.assertEqual(receipt['filesystem_boundary'],'existing_native_guard_landlock')
             roots.assert_called_once()
             meta=json.loads(sorted((Path(d)/'evidence').glob('*/phase-*.json'))[-1].read_text())
