@@ -230,6 +230,22 @@ def _route_immutable(slots, task, role, profile, budget, slot, task_hash=None):
                             underlying_model=None, effort=None, role=role, work_kind=task['work_kind'],risk=task['risk'],
                             fallback_reason=('previous preferred providers unavailable' if refusal else None),
                             unavailable=refusal, remaining_calls=left, used_calls=budget.used('cursor', role, slot))
+            if provider == 'agy':
+                need(role == 'qa' and model == 'claude-sonnet-5-5-medium' and effort is None,
+                     'unqualified Antigravity role/model')
+                from native_antigravity import available
+                ok, why = available(slot, task_hash or digest(task))
+                # No AGY authority qualification exists yet. No budget charge or
+                # call may occur merely because immutable routes mention AGY.
+                if not ok:
+                    refusal[entry] = why; continue
+                left = budget.remaining('agy', role, slot)
+                if left is slots.UNKNOWN or left <= 0:
+                    refusal[entry] = 'Antigravity QA budget UNKNOWN/exhausted'; continue
+                return dict(profile=profile, provider='agy', requested_model=model, effective_model=model,
+                            underlying_model=None, effort=None, role=role, work_kind=task['work_kind'], risk=task['risk'],
+                            fallback_reason=('previous preferred providers unavailable' if refusal else None),
+                            unavailable=refusal, remaining_calls=left, used_calls=budget.used('agy', role, slot))
             if provider != 'codex':
                 refusal[entry] = 'native sandbox adapter not installed'
                 continue

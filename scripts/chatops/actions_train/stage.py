@@ -85,7 +85,8 @@ def setup(req, config, native_auth=None):
                        else 'codex' if qa else req['profile'], rt.budget, req['slot'])
         # A role-specific route MUST match the actual CLI. Never run Codex under a
         # trace claiming Cursor/Antigravity; those need their own reviewed adapter.
-        need(choice['provider'] in ('codex','cursor') and (choice['provider'] != 'cursor' or not qa),
+        need(choice['provider'] in ('codex','cursor','agy') and (choice['provider'] != 'cursor' or not qa)
+             and (choice['provider'] != 'agy' or qa),
              'unimplemented native model adapter')
         from context_policy import inject
         wrapped, rules_receipt = inject(prompt, qa, bridge.work, accepted_rules)
@@ -103,6 +104,12 @@ def setup(req, config, native_auth=None):
                 answer = invoke(bridge, rt, wrapped, native_auth, choice, popen=a.subprocess.Popen,
                                 atomic=a.atomic, permitted=a.permitted)
                 choice['rules_context'] = choice['native_receipt']['rules_context']
+            elif provider == 'agy':
+                from native_antigravity import review, save_receipt
+                active = store.data['active']
+                answer, receipt = review(bridge.work, active['base'], active['head'], wrapped, c.model_timeout)
+                save_receipt(c.state_dir, active['issue'], active['attempt'], receipt)
+                choice['native_receipt'] = receipt
             else:
                 answer = original_model(wrapped, qa)
             completed = 'returned'
