@@ -11,6 +11,8 @@ import re
 import stat
 import sys
 import time
+from contextlib import contextmanager
+from types import SimpleNamespace
 sys.path.insert(0, '/usr/local/lib/gb-actions-train')
 import receiver as r
 import installer as i
@@ -25,6 +27,72 @@ OLD = 'f377bb1e393de93d6faf211886ae1b8c36c4a45b'
 ALLOWED = {'core.py','stage.py','receiver.py','cost_policy.py','native_antigravity.py'}
 HELPERS = {'context_stability_upgrade.py':'26f9032e6a47e478f45666be9a73004d6b415e85358908e02e9b495316dc408f',
            'cost_policy_upgrade.py':'781c89f8fac0b234a5aefc81dd10c6df10b91adc080d703bd7fb2d458a7e7094'}
+
+LEGACY_JOURNAL=JOURNAL
+LEGACY_BACKUP=BACKUP
+RECOVERY=False
+RECOVERY_MODULE=None
+RECOVERY_OLD='f68a4472f4f7478f007dc328f04569cf96b36f81'
+RECOVERY_ALLOWED={'native_antigravity.py','antigravity_qa_recovery.py','stage.py','receiver.py'}
+
+
+def recovery_module():
+    if RECOVERY_MODULE is not None:return RECOVERY_MODULE
+    import antigravity_qa_recovery
+    return antigravity_qa_recovery
+
+
+def recovery_mode():
+    global RECOVERY,JOURNAL,BACKUP,OLD,ALLOWED
+    RECOVERY=True
+    JOURNAL=STATE/'antigravity-qa-29-recovery-upgrade.json'
+    BACKUP=STATE/'antigravity-qa-29-recovery-backup'
+    OLD=RECOVERY_OLD;ALLOWED=RECOVERY_ALLOWED
+
+
+def recovery_ledger():
+    """Cumulative original usage, independent of the daily Budget window."""
+    counts={}
+    for slot in ('slot1','slot2'):
+        path=r.AUTONOMY/'outbox'/slot/'ledger.json'
+        ledger=r.read(path) if path.exists() else {}
+        values=[day.get('agy',{}).get('qa',0) for day in ledger.values()]
+        r.need(all(type(x) is int and x>=0 for x in values),'invalid cumulative AGY ledger')
+        counts[slot]=sum(values)
+    r.need(counts=={'slot1':0,'slot2':1},'exact original AGY used1 must be retained')
+    return counts
+
+
+@contextmanager
+def recovery_quiescence(C):
+    """Exact read-only proof view; never alter C.quiet or any on-disk journal."""
+    if not RECOVERY:
+        yield C;return
+    recovery=recovery_module()
+    original=C.r
+    def quiet():
+        j=r.journal('slot2');recovery.original_proof(r,j)
+        state,_=r.checkpoint('slot2')
+        r.need(state.get('active') is None and digest(state)==recovery.CHECKPOINT,'original checkpoint changed')
+        r.need(not r.alive(recovery.PARENT_PROCESS),'original process alive')
+        actual=r.identity(recovery.PARENT_PROCESS['pid'])
+        r.need(actual is not None or not Path('/proc',str(recovery.PARENT_PROCESS['pid'])).exists(),
+               'original process identity unknown')
+        recovery.executor_quiet();r.no_models(978,'slot2')
+        r.free_lock(r.AUTONOMY/'slots/slot2/worker.lock');r.free_lock(r.AUTONOMY/'locks/slot2.lease')
+        r.need(j.get('pending')==recovery.PARENT_OPERATION and j.get('generation')==recovery.GENERATION,
+               'exact parent pending/generation required')
+        def view(slot):
+            value=original.journal(slot)
+            if slot=='slot2':value=copy.deepcopy(value);value['pending']=None
+            return value
+        C.r=SimpleNamespace(**(vars(original)|{'journal':view}))
+        try:original_quiet()
+        finally:C.r=original
+    original_quiet=C.quiet
+    # A proxy calls the existing helper with a scoped view and restores it even on failure.
+    yield SimpleNamespace(**(vars(C)|{'quiet':quiet}))
+
 
 SOURCE_UID=1002
 BIN_SOURCE=Path('/home/agentagency-dev/.local/bin/agy')
@@ -86,6 +154,11 @@ def preserved(C, u):
     for name in ('cursor-author-211.json','cursor-successor-211.json','context-stability-216.json'):
         out[str(STATE/name)] = i.sha(STATE/name)
     out['/etc/gobadminton-slots/cursor-author.json'] = i.sha(Path('/etc/gobadminton-slots/cursor-author.json'))
+    if RECOVERY:
+        for root in (LEGACY_JOURNAL,LEGACY_BACKUP,STATE/'antigravity-qa-qualification.json'):
+            r.need(root.exists(),'missing original AGY history')
+            paths=[root] if root.is_file() else sorted(x for x in root.rglob('*') if x.is_file())
+            for path in paths:out[str(path)]=i.sha(path)
     return out
 
 
@@ -137,6 +210,9 @@ def accept_canary(j,p):
                and encoded_hash(budget)==j['changes'][str(BUDGET)]['after'],'qualification config drift')
         q=marker['qualification'];matches=[]
         for key,op in ops['operations'].items():
+            if RECOVERY:
+                if recovery_module().acceptance_match(op,q):matches.append((key,op))
+                continue
             b=op.get('binding',{});result=op.get('result',{})
             if b.get('stage')!='qa_qualification' or b.get('issue')!=29:continue
             receipt=result.get('native_receipt',{});qa=result.get('qa',{})
@@ -185,6 +261,26 @@ def reviewed_configuration(proof,budget,module_hashes):
            and marker.get('executor_uid')==978 and marker.get('slot')=='slot2'
            and re.fullmatch('[a-f0-9]{64}',marker.get('canary_task_sha256','')),
            'invalid bounded canary marker')
+    if RECOVERY:
+        q=marker.get('qualification',{});recovery=recovery_module()
+        extra={'parent_task_sha256','parent_operation','adapter_revision'}
+        r.need(set(q)=={'issue','base','head','work','task_sha256'}|extra and q.get('issue')==29
+               and q.get('work')=='/srv/gb-slots/slot2/worktrees/antigravity-qa-29-canary'
+               and all(re.fullmatch('[a-f0-9]{40}',q.get(k,'') or '') for k in ('base','head','adapter_revision'))
+               and marker.get('adapter_revision')==q['adapter_revision'] and recovery.successor(q),
+               'exact original parent and reviewed successor required')
+        task=dict(schema='GB_ANTIGRAVITY_QA_29_TASK_V2',issue=29,role='qa_qualification',slot='slot2',
+                  base=q['base'],head=q['head'],model='claude-sonnet-5-5-medium',max_calls=1,
+                  **{k:q[k] for k in extra})
+        r.need(q['task_sha256']==marker['canary_task_sha256']==digest(task),'successor task drift')
+        r.need(marker.get('modules')=={k:module_hashes[k] for k in ('native_antigravity.py','native_guard.py')},
+               'qualification module pin mismatch')
+        r.need(budget.get('providers',{}).get('agy')=={'qa':1}
+               and budget.get('slots',{}).get('slot2',{}).get('agy')=={'qa':1}
+               and 'agy' not in budget.get('slots',{}).get('slot1',{}),'exact finite original caps required')
+        nextbudget=copy.deepcopy(budget)
+        nextbudget['providers']['agy']['qa']=2;nextbudget['slots']['slot2']['agy']['qa']=2
+        return marker,nextbudget
     q=marker.get('qualification',{})
     r.need(set(q)=={'issue','base','head','work','task_sha256'} and q['issue']==29
            and all(re.fullmatch('[a-f0-9]{40}',q[k] or '') for k in ('base','head'))
@@ -205,7 +301,24 @@ def reviewed_configuration(proof,budget,module_hashes):
     return marker,nextbudget
 
 
-def execute(action, bundle, manifest, controller, stage_hash, dispatch_hash, run_id=None, proof_sha=None):
+def execute(action,bundle,manifest,controller,stage_hash,dispatch_hash,run_id=None,proof_sha=None):
+    # Fresh invocation selects a closed mode; shared existing implementation remains unchanged.
+    r.need(os.geteuid()==0,'reviewed root integrator only')
+    r.trusted_tree(bundle)
+    if RECOVERY:
+        global RECOVERY_MODULE
+        payload=i.payload(bundle,manifest)
+        source=payload.get(INSTALL/'antigravity_qa_recovery.py')
+        r.need(source is not None,'reviewed recovery helper missing')
+        r.trusted_tree(source)
+        spec=importlib.util.spec_from_file_location('_reviewed_agy29_recovery',source)
+        RECOVERY_MODULE=importlib.util.module_from_spec(spec);spec.loader.exec_module(RECOVERY_MODULE)
+    C,u=helpers(bundle)
+    with recovery_quiescence(C) as checked:
+        return execute_checked(action,bundle,manifest,controller,stage_hash,dispatch_hash,run_id,proof_sha,checked,u)
+
+
+def execute_checked(action, bundle, manifest, controller, stage_hash, dispatch_hash, run_id, proof_sha,C,u):
     r.need(os.geteuid() == 0, 'reviewed root integrator only')
     r.trusted_tree(bundle)
     if action=='accept':
@@ -214,8 +327,17 @@ def execute(action, bundle, manifest, controller, stage_hash, dispatch_hash, run
                (j['manifest'],j['controller'],j['stage_sha256'],j['dispatch_sha256'],j['proof_sha256']),
                'acceptance release identity changed')
         return accept_canary(j,p)
-    C, u = helpers(bundle)
     p = r.read(r.POLICY,0)
+    if action=='reconcile':
+        r.need(RECOVERY,'reconciliation is exact recovery mode only')
+        j=r.read(JOURNAL,0)
+        r.need((manifest,controller,stage_hash,dispatch_hash,proof_sha)==
+               (j['manifest'],j['controller'],j['stage_sha256'],j['dispatch_sha256'],j['proof_sha256'])
+               and j['phase']=='active-canary' and p['mode']=='active' and p['controller_sha']==controller,
+               'reviewed active recovery release required')
+        r.need(all(i.sha(Path(k))==v['after'] for k,v in j['changes'].items()),'installed recovery drift')
+        from native_antigravity import qualification_descriptor
+        return recovery_module().reconcile_parent(r,qualification_descriptor(r.read(MARKER,0)))
     if action=='activate':
         j=r.read(JOURNAL,0)
         r.need((manifest,controller,stage_hash,dispatch_hash)==
@@ -265,14 +387,20 @@ def execute(action, bundle, manifest, controller, stage_hash, dispatch_hash, run
     r.need(re.fullmatch('[a-f0-9]{64}',proof_sha or '') and i.sha(proof_path)==proof_sha,
            'unreviewed qualification proof digest')
     proof=json.loads(proof_path.read_text())
-    r.need(proof.get('schema')=='GB_AGY_INSTALL_PROOF_29_V1' and proof.get('reviewed') is True,
+    r.need(proof.get('schema')==('GB_AGY_RECOVERY_PROOF_29_V1' if RECOVERY else 'GB_AGY_INSTALL_PROOF_29_V1') and proof.get('reviewed') is True,
            'missing reviewed exact qualification proof')
-    r.need(not MARKER.exists(),'existing AGY qualification; preserve and inspect')
+    if RECOVERY:
+        oldmarker=r.read(MARKER,0)
+        r.need(oldmarker.get('phase')=='canary' and oldmarker.get('canary_task_sha256')==recovery_module().PARENT_TASK,
+               'exact original marker required')
+        r.need(proof.get('baseline_marker_sha256')==i.sha(MARKER),'original marker drift')
+        recovery_ledger()
+    else:r.need(not MARKER.exists(),'existing AGY qualification; preserve and inspect')
     marker,nextbudget=reviewed_configuration(proof,r.read(BUDGET,0),
         {name:i.sha(bundle/'scripts/chatops/actions_train'/name) for name in ('native_antigravity.py','native_guard.py')})
     virtual={MARKER:marker,BUDGET:nextbudget}
     def encoded(value):return json.dumps(value,sort_keys=True).encode()
-    changed.update(provisioning())
+    if not RECOVERY:changed.update(provisioning())
     changes = {str(k):{'before':i.sha(k),'after':i.sha(v)} for k,v in changed.items()}
     for target,value in virtual.items():
         changes[str(target)]={'before':i.sha(target),'after':hashlib.sha256(encoded(value)).hexdigest()}
@@ -307,14 +435,18 @@ def execute(action, bundle, manifest, controller, stage_hash, dispatch_hash, run
 
 def main():
     ap=argparse.ArgumentParser()
-    ap.add_argument('action',choices=('dry','apply','activate','rollback','accept'))
+    ap.add_argument('action',choices=('dry','apply','activate','rollback','accept','reconcile'))
+    ap.add_argument('--qualification-recovery',action='store_true')
     ap.add_argument('--bundle',required=True,type=Path);ap.add_argument('--manifest',required=True)
     ap.add_argument('--controller',required=True);ap.add_argument('--stage-hash',required=True)
     ap.add_argument('--dispatch-hash',required=True);ap.add_argument('--run',type=int)
     ap.add_argument('--proof-sha256',required=True)
-    a=ap.parse_args();lock=r.locked(STATE/'controller.lock')
+    a=ap.parse_args()
+    if a.qualification_recovery:recovery_mode()
+    lock=None if a.action=='reconcile' else r.locked(STATE/'controller.lock')
     try: print(json.dumps(execute(a.action,a.bundle,a.manifest,a.controller,a.stage_hash,a.dispatch_hash,a.run,a.proof_sha256),sort_keys=True))
-    finally: os.close(lock)
+    finally:
+        if lock is not None:os.close(lock)
 
 
 if __name__=='__main__': main()
