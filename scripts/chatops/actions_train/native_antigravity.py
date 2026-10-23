@@ -73,7 +73,7 @@ Before claiming COMPLETE, actually call native view_file on both required source
 files apps/web/src/lib/consumer-types.ts and
 apps/web/src/components/consumer/pages/GameDetailPage.tsx; run_command must
 inspect exact Git HEAD and the relevant imports/dependencies. Supply
-source_reads entries with actual path, sha256 and a concrete source observation.
+source_reads entries with actual path, sha256 and a verbatim excerpt from each file.
 No claimed tool call, fabricated hash or inferred dependency is acceptable.
 If either read is impossible, return INCOMPLETE with the limitation.
 No implementation writes. Return exactly one JSON object as requested.
@@ -780,7 +780,8 @@ def analysis_source_gate(result, evidence, work, head):
     for row in reads:
         try:
             actual=git(work,'show',head+':'+row['path'])
-            valid = valid and hashlib.sha256(actual).hexdigest()==row['sha256']
+            valid = (valid and hashlib.sha256(actual).hexdigest()==row['sha256']
+                     and row['observation'] in dec(actual))
         except (OSError, ValueError, ReviewError):
             valid=False
     if valid:
