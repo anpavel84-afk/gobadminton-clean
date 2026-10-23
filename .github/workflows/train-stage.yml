@@ -32,7 +32,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 65fedd4c80fdd4264fef71fb3e1c24220ce202b7
+          ref: 948c5150bc64d6d34204e0a3d70ba8525bf6fa3a
           persist-credentials: false
       - id: stage
         name: Submit one stage and query its durable result
@@ -60,7 +60,7 @@ jobs:
       # This job has NO environment/SSH key and never sends its write token to the VPS.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 65fedd4c80fdd4264fef71fb3e1c24220ce202b7
+          ref: 948c5150bc64d6d34204e0a3d70ba8525bf6fa3a
           persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with: {name: train-stage, path: evidence}
