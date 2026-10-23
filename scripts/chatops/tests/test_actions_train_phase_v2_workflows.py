@@ -4,7 +4,7 @@ import re
 import unittest
 
 ROOT=pathlib.Path(__file__).resolve().parents[3]
-PIN='fa403afc57b903780a04087eff7c3649a09b2241'
+PIN='c70608bd5ed03c409e0bfd53e51974c68dd19deb'
 
 
 class HostedPhaseV2(unittest.TestCase):
