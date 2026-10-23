@@ -78,6 +78,34 @@ class FreshContract(unittest.TestCase):
             with self.subTest(change=str(change)[:55]),self.assertRaises(core.Refused):
                 Q.addressed_ledger(v|change)
 
+    def test_trusted_receiver_qualification_api_without_policy_member(self):
+        from pathlib import Path
+        from receiver import POLICY
+        g=fresh('technical_pm_product_analyst')
+        task=Q.addressed_task(g['base'],g['head'],g)
+        q=dict(issue=29,base=g['base'],head=g['head'],work=str(N.QUALIFICATION_WORK),
+               adapter_revision=g['controller_revision'],qualification_grant=g,
+               task_sha256=core.digest(task))
+        root=Path('/state')
+        prior=old_grant()
+        prior2=prior|dict(role='independent_qa',
+            input_path='scripts/chatops/tests/fixtures/agy-reviewed-tests.json')
+        values={root/Q.ADDRESSED_LEDGER:dict(schema=Q.ADDRESSED_SCHEMA,
+             lineage=Q.ADDRESSED_LINEAGE,used_calls=2,ceiling=4,
+             grants={core.digest(prior):dict(grant=prior,operation='a'*64),
+                     core.digest(prior2):dict(grant=prior2,operation='b'*64),
+                     core.digest(g):dict(grant=g,operation=None)}),
+             root/Q.ADDRESSED_RECONCILIATION:dict(phase='complete',
+             third_operation_sha256=Q.THIRD_DIGEST),
+             root/'slot2.json':dict(operations={})}
+        def read(path,*_):
+            if path==POLICY:return dict(controller_sha=g['controller_revision'])
+            return copy.deepcopy(values[path])
+        api=SimpleNamespace(read=read,STATE=root,atomic=lambda *_:None)
+        self.assertFalse(hasattr(api,'POLICY'))
+        with patch.object(Q,'addressed_history'):
+            self.assertEqual(Q.addressed_ready(api,q)['used_calls'],2)
+
     def test_current_runtime_controller_required_and_qa_after_analysis_only(self):
         g=fresh('independent_qa')
         task=Q.addressed_task(g['base'],g['head'],g)
