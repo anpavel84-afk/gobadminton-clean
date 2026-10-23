@@ -188,7 +188,7 @@ def independence(files, sources, changed):
                              'globals', 'locals', 'vars', '__getattribute__'}
                     for n in ast.walk(parsed):
                         if isinstance(n, ast.ImportFrom):
-                            if n.module in ('importlib', 'importlib.util', 'importlib.machinery', 'builtins', 'io', 'runpy', 'pathlib'):
+                            if n.module in ('importlib', 'importlib.util', 'importlib.machinery', 'builtins', 'io', 'runpy'):
                                 names.update(a.asname or a.name for a in n.names)
                         # Reading/binding a loader object is already ambiguous:
                         # aliases need not call the original attribute/name directly.

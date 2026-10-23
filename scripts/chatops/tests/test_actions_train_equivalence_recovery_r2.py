@@ -118,6 +118,15 @@ class BoundedRepair(GitFixture):
                 self.bridge.model.assert_not_called()
                 self.assertEqual((self.state/self.origin).read_bytes(),self.original_raw)
 
+    def test_harmless_path_constructor_does_not_force_runtime_rereview(self):
+        self.reviewed({SOURCE: 'from pathlib import Path\ncache = Path("README.md")\n'})
+        self.candidate(attempt=2)
+        projection = identity.equivalence(self.repo, self.original, self.active['head'])
+        self.assertTrue(projection['reusable'], projection['reason'])
+        self.assertTrue(self.bridge.try_reuse_qa(self.active))
+        self.assertEqual(self.active['qa']['reviewed_sha'], self.original)
+        self.assertEqual((self.state/self.origin).read_bytes(), self.original_raw)
+
     def test_non_object_proof_is_local_blocked_recovery_not_uncaught_exception(self):
         self.defer()
         path=self.state/self.entry['snapshot']['qa_equivalence'];original=path.read_bytes()
