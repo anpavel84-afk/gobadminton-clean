@@ -32,6 +32,7 @@ LEGACY_JOURNAL=JOURNAL
 LEGACY_BACKUP=BACKUP
 RECOVERY=False
 ENTRYPOINT_PATCH=False
+ONE_SHOT=False
 RECOVERY_MODULE=None
 RECOVERY_OLD='f68a4472f4f7478f007dc328f04569cf96b36f81'
 RECOVERY_ALLOWED={'native_antigravity.py','antigravity_qa_recovery.py','stage.py','receiver.py'}
@@ -44,6 +45,47 @@ PATCH_PARENT_BACKUP=STATE/'antigravity-qa-29-recovery-backup'
 PATCH_PARENT_SHA='bf267895d9b74c48e4caff58e8aaa73d31567133b93e4a32395bd95168b1f9d0'
 PATCH_MARKER_SHA='6186e98b8f60dc3c6592a934dc3a89ca3c7632c5fa2532bcd7e8eada814824c6'
 PATCH_BUDGET_SHA='8f6752295c2ee65924b5a95ddc42bb9774f8f73ce146481e52aaf200e142ed8d'
+
+
+def one_shot_mode():
+    global ONE_SHOT,RECOVERY,JOURNAL,BACKUP,OLD,ALLOWED
+    ONE_SHOT=True;RECOVERY=True
+    JOURNAL=STATE/'antigravity-29-one-shot-upgrade.json'
+    BACKUP=STATE/'antigravity-29-one-shot-backup'
+    OLD='6efeca2391bff566e1aec980847b0322bc7f206f';ALLOWED=RECOVERY_ALLOWED
+
+
+def one_shot_configuration(proof,budget,module_hashes):
+    recovery=recovery_module()
+    r.need(set(proof)=={'schema','reviewed','marker','baseline_marker_sha256',
+                       'baseline_inventory_sha256','parent_journal_sha256'},'closed one-shot proof required')
+    r.need(proof['baseline_inventory_sha256']=='0ef1ec368d9402b279f46636927c069afb017a0892675b3f3cf7047ed747e281'
+           and i.sha(STATE/'backup.json')==proof['baseline_inventory_sha256'],'one-shot baseline inventory drift')
+    parent=STATE/'antigravity-qa-29-entrypoint-patch.json'
+    r.need(proof['parent_journal_sha256']=='b445479d6de88d6a66806ae897327e613c095f6342548c35a718e114b603c5ac'
+           and i.sha(parent)==proof['parent_journal_sha256'],'immutable entrypoint parent drift')
+    r.need(proof['baseline_marker_sha256']==PATCH_MARKER_SHA and i.sha(MARKER)==PATCH_MARKER_SHA
+           and i.sha(BUDGET)==recovery.BUDGET_RAW,'old marker/budget bytes changed')
+    recovery.grant_history(r,r.journal('slot2'))
+    marker=proof['marker'];q=marker.get('qualification',{})
+    required={'issue','base','head','work','task_sha256','adapter_revision','qualification_grant'}
+    r.need(set(q)==required and q['issue']==29 and q['work']=='/srv/gb-slots/slot2/worktrees/antigravity-qa-29-canary'
+           and all(re.fullmatch('[a-f0-9]{40}',q[k] or '') for k in ('base','head','adapter_revision')),
+           'exact one-shot fixture descriptor required')
+    g=recovery.validate_grant(q['qualification_grant'])
+    r.need(g['controller_revision']==q['adapter_revision']==marker.get('adapter_revision')
+           and g['fixture_sha256']==digest({k:q[k] for k in ('base','head','work')}),'one-shot revision/fixture drift')
+    task=dict(schema='GB_ANTIGRAVITY_QA_29_TASK_V3',issue=29,role='qa_qualification',slot='slot2',
+              base=q['base'],head=q['head'],model='claude-sonnet-5-5-medium',max_calls=1,
+              adapter_revision=q['adapter_revision'],qualification_grant=g)
+    r.need(marker.get('schema')=='GB_ANTIGRAVITY_QA_29_V1' and marker.get('phase')=='canary'
+           and marker.get('slot')=='slot2' and marker.get('executor_uid')==978
+           and q['task_sha256']==marker.get('canary_task_sha256')==digest(task)
+           and marker.get('modules')=={k:module_hashes[k] for k in ('native_antigravity.py','native_guard.py')},
+           'exact one-shot marker pins required')
+    r.need(not (STATE/recovery.GRANT_LEDGER).exists() and not (STATE/recovery.GRANT_RECONCILIATION).exists(),
+           'one-shot already admitted; no renewal')
+    return marker,copy.deepcopy(budget)  # No quota change before actual accepted qualification.
 
 
 def entrypoint_patch_mode():
@@ -150,16 +192,21 @@ def recovery_quiescence(C):
     recovery=recovery_module()
     original=C.r
     def quiet():
-        j=r.journal('slot2');recovery.original_proof(r,j)
+        j=r.journal('slot2')
+        if ONE_SHOT:recovery.grant_history(r,j)
+        else:recovery.original_proof(r,j)
+        process=recovery.SECOND_PROCESS if ONE_SHOT else recovery.PARENT_PROCESS
+        operation=recovery.SECOND_OPERATION if ONE_SHOT else recovery.PARENT_OPERATION
+        generation=86 if ONE_SHOT else recovery.GENERATION
         state,_=r.checkpoint('slot2')
         r.need(state.get('active') is None and digest(state)==recovery.CHECKPOINT,'original checkpoint changed')
-        r.need(not r.alive(recovery.PARENT_PROCESS),'original process alive')
-        actual=r.identity(recovery.PARENT_PROCESS['pid'])
-        r.need(actual is not None or not Path('/proc',str(recovery.PARENT_PROCESS['pid'])).exists(),
+        r.need(not r.alive(process),'original process alive')
+        actual=r.identity(process['pid'])
+        r.need(actual is not None or not Path('/proc',str(process['pid'])).exists(),
                'original process identity unknown')
         recovery.executor_quiet();r.no_models(978,'slot2')
         r.free_lock(r.AUTONOMY/'slots/slot2/worker.lock');r.free_lock(r.AUTONOMY/'locks/slot2.lease')
-        r.need(j.get('pending')==recovery.PARENT_OPERATION and j.get('generation')==recovery.GENERATION,
+        r.need(j.get('pending')==operation and j.get('generation')==generation,
                'exact parent pending/generation required')
         def view(slot):
             value=original.journal(slot)
@@ -238,6 +285,11 @@ def preserved(C, u):
             r.need(root.exists(),'missing original AGY history')
             paths=[root] if root.is_file() else sorted(x for x in root.rglob('*') if x.is_file())
             for path in paths:out[str(path)]=i.sha(path)
+    if ONE_SHOT:
+        for path in STATE.rglob('*'):
+            if path.is_file() and path not in (JOURNAL,STATE/'backup.json',STATE/'planning.json') and BACKUP not in path.parents:
+                out[str(path)]=i.sha(path)
+        out[str(BUDGET)]=i.sha(BUDGET)
     if ENTRYPOINT_PATCH:
         r.need(PATCH_PARENT_BACKUP.is_dir(),'missing original recovery backup')
         for path in sorted(x for x in PATCH_PARENT_BACKUP.rglob('*') if x.is_file()):out[str(path)]=i.sha(path)
@@ -292,7 +344,7 @@ def accept_canary(j,p):
         r.free_lock(r.AUTONOMY/'locks/slot2.lease')
         marker=r.read(MARKER,0);budget=r.read(BUDGET,0)
         marker_pin=j['patch_chain']['marker_sha256'] if ENTRYPOINT_PATCH else j['changes'][str(MARKER)]['after']
-        budget_pin=j['patch_chain']['budget_sha256'] if ENTRYPOINT_PATCH else j['changes'][str(BUDGET)]['after']
+        budget_pin=PATCH_BUDGET_SHA if ONE_SHOT else j['patch_chain']['budget_sha256'] if ENTRYPOINT_PATCH else j['changes'][str(BUDGET)]['after']
         r.need(marker['phase']=='canary' and encoded_hash(marker)==marker_pin
                and encoded_hash(budget)==budget_pin,'qualification config drift')
         q=marker['qualification'];matches=[]
@@ -319,6 +371,8 @@ def accept_canary(j,p):
         nextmarker=marker|{'phase':'ready','accepted_canary':{'operation':key,'run':op['run'],
                           'source_sha':q['head'],'task_sha256':j['canary_task_sha256']}}
         nextbudget=copy.deepcopy(budget)
+        # Standard normal QA authorization only AFTER exact fresh qualification.
+        # This never resets counters or authorizes another qualification grant.
         nextbudget['providers']['agy']['qa']='unlimited'
         nextbudget['slots']['slot2']['agy']['qa']='unlimited'
         intent={'operation':key,'operation_sha256':digest(op),'marker_before':marker,'marker_after':nextmarker,
@@ -335,7 +389,8 @@ def accept_canary(j,p):
             r.atomic(target,new,mode=0o644)
     if j['phase']!='active-ready':
         for target,key in ((MARKER,'marker'),(BUDGET,'budget')):
-            if not ENTRYPOINT_PATCH:j['changes'][str(target)]['after']=encoded_hash(intent[key+'_after'])
+            if ONE_SHOT and target==BUDGET:j['normal_qa_budget_sha256']=encoded_hash(intent[key+'_after'])
+            elif not ENTRYPOINT_PATCH:j['changes'][str(target)]['after']=encoded_hash(intent[key+'_after'])
         j['phase']='active-ready';r.atomic(JOURNAL,j)
     r.publish_monitor(p)
     return {'phase':'active-ready','accepted_canary':intent['marker_after']['accepted_canary'],
@@ -343,6 +398,7 @@ def accept_canary(j,p):
 
 
 def reviewed_configuration(proof,budget,module_hashes):
+    if ONE_SHOT:return one_shot_configuration(proof,budget,module_hashes)
     marker=proof['marker']
     r.need(marker.get('schema')=='GB_ANTIGRAVITY_QA_29_V1' and marker.get('phase')=='canary'
            and marker.get('executor_uid')==978 and marker.get('slot')=='slot2'
@@ -424,7 +480,7 @@ def execute_checked(action, bundle, manifest, controller, stage_hash, dispatch_h
                'reviewed active recovery release required')
         r.need(all(i.sha(Path(k))==v['after'] for k,v in j['changes'].items()),'installed recovery drift')
         from native_antigravity import qualification_descriptor
-        return recovery_module().reconcile_parent(r,qualification_descriptor(r.read(MARKER,0)))
+        return (recovery_module().reconcile_grant if ONE_SHOT else recovery_module().reconcile_parent)(r,qualification_descriptor(r.read(MARKER,0)))
     if action=='activate':
         j=r.read(JOURNAL,0)
         if ENTRYPOINT_PATCH:verify_patch_chain(j,p)
@@ -475,14 +531,14 @@ def execute_checked(action, bundle, manifest, controller, stage_hash, dispatch_h
     r.need(re.fullmatch('[a-f0-9]{64}',proof_sha or '') and i.sha(proof_path)==proof_sha,
            'unreviewed qualification proof digest')
     proof=json.loads(proof_path.read_text())
-    r.need(proof.get('schema')==('GB_AGY_ENTRYPOINT_PATCH_PROOF_29_V1' if ENTRYPOINT_PATCH else 'GB_AGY_RECOVERY_PROOF_29_V1' if RECOVERY else 'GB_AGY_INSTALL_PROOF_29_V1') and proof.get('reviewed') is True,
+    r.need(proof.get('schema')==('GB_AGY_ONE_SHOT_PROOF_29_V1' if ONE_SHOT else 'GB_AGY_ENTRYPOINT_PATCH_PROOF_29_V1' if ENTRYPOINT_PATCH else 'GB_AGY_RECOVERY_PROOF_29_V1' if RECOVERY else 'GB_AGY_INSTALL_PROOF_29_V1') and proof.get('reviewed') is True,
            'missing reviewed exact qualification proof')
     chain=None
     if ENTRYPOINT_PATCH:
         marker,chain=patch_configuration(proof,record)
         virtual={}
     else:
-        if RECOVERY:
+        if RECOVERY and not ONE_SHOT:
             oldmarker=r.read(MARKER,0)
             r.need(oldmarker.get('phase')=='canary' and oldmarker.get('canary_task_sha256')==recovery_module().PARENT_TASK,
                    'exact original marker required')
@@ -491,7 +547,8 @@ def execute_checked(action, bundle, manifest, controller, stage_hash, dispatch_h
         else:r.need(not MARKER.exists(),'existing AGY qualification; preserve and inspect')
         marker,nextbudget=reviewed_configuration(proof,r.read(BUDGET,0),
             {name:i.sha(bundle/'scripts/chatops/actions_train'/name) for name in ('native_antigravity.py','native_guard.py')})
-        virtual={MARKER:marker,BUDGET:nextbudget}
+        if ONE_SHOT:r.need(marker['qualification']['qualification_grant']['controller_revision']==controller,'one-shot controller proof drift')
+        virtual={MARKER:marker} if ONE_SHOT else {MARKER:marker,BUDGET:nextbudget}
     def encoded(value):return json.dumps(value,sort_keys=True).encode()
     if not RECOVERY:changed.update(provisioning())
     changes = {str(k):{'before':i.sha(k),'after':i.sha(v)} for k,v in changed.items()}
@@ -505,6 +562,7 @@ def execute_checked(action, bundle, manifest, controller, stage_hash, dispatch_h
          'controller':controller,'stage_sha256':stage_hash,'dispatch_sha256':dispatch_hash,'changes':changes,'preserved':snapshot,
          'policy_before':p,'record_before':record,'canary_task_sha256':marker['canary_task_sha256'],
          'manifest':manifest,'proof_sha256':proof_sha}
+    if ONE_SHOT:j.update(schema='GB_AGY_ONE_SHOT_UPGRADE_29_V1',one_shot_grant=marker['qualification']['qualification_grant'])
     if ENTRYPOINT_PATCH:
         chain.update(controller_after=controller,receiver_after_sha256=changes[str(INSTALL/'receiver.py')]['after'])
         j.update(schema='GB_AGY_ENTRYPOINT_PATCH_29_V1',patch_chain=chain)
@@ -537,6 +595,7 @@ def main():
     mode=ap.add_mutually_exclusive_group()
     mode.add_argument('--qualification-recovery',action='store_true')
     mode.add_argument('--entrypoint-patch',action='store_true')
+    mode.add_argument('--one-shot-qualification',action='store_true')
     ap.add_argument('--bundle',required=True,type=Path);ap.add_argument('--manifest',required=True)
     ap.add_argument('--controller',required=True);ap.add_argument('--stage-hash',required=True)
     ap.add_argument('--dispatch-hash',required=True);ap.add_argument('--run',type=int)
@@ -544,6 +603,7 @@ def main():
     a=ap.parse_args()
     if a.qualification_recovery:recovery_mode()
     if a.entrypoint_patch:entrypoint_patch_mode()
+    if a.one_shot_qualification:one_shot_mode()
     lock=None if a.action=='reconcile' else r.locked(STATE/'controller.lock')
     try: print(json.dumps(execute(a.action,a.bundle,a.manifest,a.controller,a.stage_hash,a.dispatch_hash,a.run,a.proof_sha256),sort_keys=True))
     finally:

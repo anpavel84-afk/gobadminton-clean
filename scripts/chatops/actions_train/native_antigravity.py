@@ -375,11 +375,21 @@ def available(slot, task_hash):
 QUALIFICATION_WORK = Path('/srv/gb-slots/slot2/worktrees/antigravity-qa-29-canary')
 
 
-def qualification_task(base, head, *, parent_task_sha256=None, parent_operation=None, adapter_revision=None):
+def qualification_task(base, head, *, parent_task_sha256=None, parent_operation=None, adapter_revision=None, qualification_grant=None):
     need(isinstance(base,str) and SHA.fullmatch(base) and isinstance(head,str) and SHA.fullmatch(head),
          'invalid qualification source')
     task=dict(schema='GB_ANTIGRAVITY_QA_29_TASK_V1',issue=29,role='qa_qualification',
               slot='slot2',base=base,head=head,model=MODEL,max_calls=1)
+    if qualification_grant is not None:
+        from antigravity_qa_recovery import validate_grant
+        validate_grant(qualification_grant)
+        from core import digest
+        need(qualification_grant['fixture_sha256']==digest(dict(base=base,head=head,work=str(QUALIFICATION_WORK))),'separate qualification fixture drift')
+        need(parent_task_sha256 is None and parent_operation is None
+             and adapter_revision==qualification_grant['controller_revision'],'invalid separate qualification revision')
+        task.update(schema='GB_ANTIGRAVITY_QA_29_TASK_V3',adapter_revision=adapter_revision,
+                    qualification_grant=qualification_grant)
+        return task
     if any(x is not None for x in (parent_task_sha256,parent_operation,adapter_revision)):
         from antigravity_qa_recovery import PARENT_TASK,PARENT_OPERATION
         need(parent_task_sha256==PARENT_TASK and parent_operation==PARENT_OPERATION
@@ -393,9 +403,10 @@ def qualification_descriptor(marker):
     from core import digest
     q=marker.get('qualification');basic={'issue','base','head','task_sha256','work'}
     extra={'parent_task_sha256','parent_operation','adapter_revision'}
-    need(type(q) is dict and set(q) in (basic,basic|extra) and q['issue']==29
+    need(type(q) is dict and set(q) in (basic,basic|extra,basic|{'adapter_revision','qualification_grant'}) and q['issue']==29
          and q['work']==str(QUALIFICATION_WORK),'invalid QA qualification descriptor')
     fields={k:q[k] for k in extra} if set(q)==basic|extra else {}
+    if 'qualification_grant' in q:fields={k:q[k] for k in ('adapter_revision','qualification_grant')}
     task=qualification_task(q['base'],q['head'],**fields)
     if fields:need(marker.get('adapter_revision')==q['adapter_revision'],'successor adapter revision mismatch')
     need(q['task_sha256']==digest(task)==marker.get('canary_task_sha256'),'qualification task binding mismatch')
