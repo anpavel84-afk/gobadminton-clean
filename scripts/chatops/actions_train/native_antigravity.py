@@ -300,7 +300,7 @@ def deps(path, source):
     return groups
 
 
-def collect(work, base, head, prompt):
+def collect(work, base, head, prompt, *, compact_files=False):
     need(isinstance(prompt, str) and isinstance(base, str) and isinstance(head, str)
          and SHA.fullmatch(base) and SHA.fullmatch(head), 'invalid review identity')
     for sha in (base, head):
@@ -346,6 +346,27 @@ def collect(work, base, head, prompt):
                    base, head, '--', *changed))
     need('\0' not in diff and total + len(diff.encode()) <= MAX_INPUT,
          'diff exceeds 1 MiB or contains binary data')
+    if compact_files:
+        # Preserve dependency resolution and entire Git diff. For large source
+        # bodies, keep exact SHA-bound paths only when THIS executor can read
+        # the same bytes in the clean checked-out tree. Unavailable references
+        # remain full inline: never claim access from a filename alone.
+        root=Path(work).resolve()
+        for path,source in list(files.items()):
+            raw=source.encode('utf-8')
+            if len(raw)<=4096:continue
+            target=root/path
+            try:
+                resolved=target.resolve(strict=True)
+                accessible=(resolved.is_relative_to(root) and
+                    resolved.is_file() and not target.is_symlink() and
+                    resolved.read_bytes()==raw)
+            except (OSError,ValueError):
+                accessible=False
+            if accessible:
+                files[path]=dict(delivery='verified_read_only_source',
+                    path=str(resolved),revision=head,
+                    bytes=len(raw),sha256=hashlib.sha256(raw).hexdigest())
     payload = json.dumps({'caller_task': prompt, 'base_sha': base, 'reviewed_sha': head,
                           'missing_context': missing, 'diff': diff, 'files': files},
                          sort_keys=True, ensure_ascii=False)
@@ -356,7 +377,10 @@ def collect(work, base, head, prompt):
             'If missing_context is non-empty or the data is insufficient, return verdict FAIL with '
             'findings explaining what is missing. Return only JSON with exactly verdict, findings, '
             'reviewed_sha; PASS requires empty findings; reviewed_sha must be ' + head
-            + '.\nDATA_JSON:\n' + payload)
+            + '. Source values with delivery=verified_read_only_source are SHA-bound read-only '
+            'absolute paths to inspect using native file and shell tools. They are not '
+            'proof that a test was run; read and verify their bytes before conclusions.'
+            + '\nDATA_JSON:\n' + payload)
     need(len(text.encode()) <= MAX_INPUT, 'input exceeds 1 MiB; refusing to truncate')
     need(not missing, 'incomplete review context; refusing provider call')
     return text, hashlib.sha256(text.encode()).hexdigest()
@@ -726,7 +750,7 @@ def canonical(value, head):
 
 
 def review(work, base, head, prompt, timeout, *, slot, task_hash, charge, model=MODEL, popen=subprocess.Popen,
-           accepted_rules=None, evidence_dir=None, analysis_grant=None):
+           accepted_rules=None, evidence_dir=None, analysis_grant=None, compact_files=False):
     """Canonical result plus receipt; private evidence survives every terminal path."""
     ev=ReviewEvidence(evidence_dir or EVIDENCE,task_hash,base,head)
     try:
@@ -735,7 +759,8 @@ def review(work, base, head, prompt, timeout, *, slot, task_hash, charge, model=
         need(not git(work, 'status', '--porcelain'), 'candidate must be clean before QA')
         binding=None
         if analysis_grant is None:
-            source, _ = collect(work, base, head, prompt + '\nRead-only candidate root: ' + str(Path(work).resolve()))
+            source, _ = collect(work, base, head, prompt + '\nRead-only candidate root: ' + str(Path(work).resolve()),
+                                compact_files=compact_files)
         else:
             from antigravity_qa_recovery import validate_addressed_grant, addressed_input
             from core import digest

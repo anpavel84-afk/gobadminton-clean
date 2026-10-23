@@ -214,6 +214,28 @@ class Collection(EvidenceTestCase):
         self.assertEqual(context['commit'],C.RULES_COMMIT);self.assertEqual(context['sha256'],C.RULES_SHA256)
         self.assertEqual(context['bytes'],C.RULES_SIZE)
 
+    def test_compact_source_reference_only_for_exact_readable_checkout(self):
+        huge='# '+('a'*9000)+'\n'
+        self.write('pkg/a.py',huge)
+        head=self.commit()
+        full,_=N.collect(self.root,self.base,head,'task')
+        full_data=json.loads(full.split('DATA_JSON:\n',1)[1])
+        self.assertEqual(full_data['files']['pkg/a.py'],huge)
+        compact,_=N.collect(self.root,self.base,head,'task',compact_files=True)
+        data=json.loads(compact.split('DATA_JSON:\n',1)[1])
+        ref=data['files']['pkg/a.py']
+        self.assertEqual(ref['delivery'],'verified_read_only_source')
+        self.assertEqual(ref['revision'],head)
+        self.assertEqual(ref['bytes'],len(huge.encode()))
+        self.assertEqual(ref['sha256'],hashlib.sha256(huge.encode()).hexdigest())
+        self.assertEqual(Path(ref['path']).read_text(),huge)
+        self.assertIn(huge.strip(),data['diff'])
+        self.assertLess(len(compact.encode()),len(full.encode()))
+        self.write('pkg/a.py',huge+'# changed after commit\n')
+        fallback,_=N.collect(self.root,self.base,head,'task',compact_files=True)
+        self.assertEqual(json.loads(fallback.split('DATA_JSON:\n',1)[1])['files']['pkg/a.py'],huge)
+        self.assertIsInstance(json.loads(fallback.split('DATA_JSON:\n',1)[1])['files']['pkg/a.py'],str)
+
     def test_protected_paths_binary_and_size_guards_remain_without_source_content_filter(self):
         for name in ('.env', '.env.production', '.ssh/config', 'credentials.json', 'key.pem', '.git/config', '../x'):
             with self.subTest(name=name), self.assertRaises(N.ReviewError): N.safe_path(name)

@@ -516,7 +516,9 @@ def qualify_qa(req, config, context):
         slot=req['slot'], task_hash=q['task_sha256'],
         charge=charge, popen=a.subprocess.Popen,
         accepted_rules=accepted_rules, evidence_dir=b.c.state_dir/'antigravity-evidence',
-        **({'analysis_grant':q['qualification_grant']} if analysis else {}))
+        **({'analysis_grant':q['qualification_grant']} if analysis else
+           {'compact_files':True} if is_addressed and
+           q['qualification_grant'].get('owner_comment')==6370661776 else {}))
     need(digest(store.data) == before, 'QA qualification changed source checkpoint')
     if grant(q):receipt['qualification_grant']=q['qualification_grant']
     receipt['qualification_task_sha256'] = q['task_sha256']
