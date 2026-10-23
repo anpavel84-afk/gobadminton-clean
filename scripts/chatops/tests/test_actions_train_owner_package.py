@@ -168,3 +168,58 @@ class AdmissionRepairTests(unittest.TestCase):
             self.assertEqual(hashlib.sha256(p.read_bytes()).hexdigest(),after)
             p.write_text('foreign state')
             with self.assertRaises(Exception):A.safe_put(p,new,before,after)
+
+class CrashBoundaryRepairTests(unittest.TestCase):
+    def test_resume_after_every_durable_write(self):
+        """Independent QA's actual 7-point failure-injection repro, now permanent."""
+        import contextlib,copy,io,tempfile
+        R=A.R
+        real_sha=A.sha
+        real_atomic=R.atomic
+        for crash_at in range(1,8):
+            with self.subTest(crash_after_write=crash_at):
+                with tempfile.TemporaryDirectory() as root,contextlib.ExitStack() as stack:
+                    root=Path(root);state=root/'state';state.mkdir()
+                    policy=root/'policy.json';marker=root/'marker.json';budget=root/'budget.json'
+                    original={'generation':96,'pending':None,'operations':{}}
+                    real_atomic(state/'slot2.json',original)
+                    real_atomic(policy,{'mode':'active','controller_sha':CONTROLLER})
+                    real_atomic(marker,{'phase':'canary','executor_uid':978})
+                    (state/'controller.lock').touch()
+                    for obj,name,value in ((R,'STATE',state),(R,'POLICY',policy),
+                                           (R,'BUDGET',budget),(N,'MARKER',marker)):
+                        stack.enter_context(patch.object(obj,name,value))
+                    stack.enter_context(patch.object(R,'trusted_tree'))
+                    stack.enter_context(patch.object(A.os,'geteuid',return_value=0))
+                    stack.enter_context(patch.object(R,'read',
+                         side_effect=lambda p,*args:json.loads(p.read_bytes())))
+                    stack.enter_context(patch.object(N,'trusted',
+                         side_effect=lambda p:p.read_bytes()))
+                    stack.enter_context(patch.object(A,'authorize',
+                         side_effect=lambda *args:json.loads(json.dumps(ledger()))))
+                    stack.enter_context(patch.object(A,'quiescent',
+                         side_effect=lambda *args:json.loads((state/'slot2.json').read_bytes())))
+                    def file_sha(p):
+                        p=Path(p)
+                        if p==state/Q.ADDRESSED_LEDGER:return A.HIST
+                        if p==state/Q.SUPPLEMENT_LEDGER:return A.SUP
+                        if p==budget:return A.BUDGET
+                        return real_sha(p)
+                    stack.enter_context(patch.object(A,'sha',side_effect=file_sha))
+                    stack.enter_context(patch.object(A.sys,'argv',
+                         ['owner_package_admission','--apply',str(COMMENT)]))
+                    calls=[0]
+                    def interrupted(p,v,mode=0o600):
+                        real_atomic(p,v,mode)
+                        calls[0]+=1
+                        if calls[0]==crash_at:
+                            raise RuntimeError('simulated interruption after durable write')
+                    with patch.object(R,'atomic',side_effect=interrupted),contextlib.redirect_stdout(io.StringIO()):
+                        with self.assertRaises(RuntimeError):
+                            A.main()
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        A.main()
+                    self.assertEqual(json.loads(policy.read_bytes())['mode'],'active')
+                    receipt=json.loads((state/(A.RECEIPT_PREFIX+str(COMMENT)+'.json')).read_bytes())
+                    self.assertEqual(receipt['phase'],'complete')
+                    self.assertEqual(json.loads((state/'slot2.json').read_bytes())['generation'],97)

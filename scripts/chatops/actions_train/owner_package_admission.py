@@ -257,7 +257,7 @@ def main():
             prior_slot=json.loads(existing['slot_before_raw'])
             prior_marker=existing['marker_before']
             if action=='analysis':
-                need(sha(path) in (None,existing['package_sha256']),
+                need((sha(path) if path.exists() else None) in (None,existing['package_sha256']),
                      'partial package ledger changed')
             q,newmarker,newslot=transition_plan(
                 action,comment_id,controller,prior_slot,prior_marker,package)
