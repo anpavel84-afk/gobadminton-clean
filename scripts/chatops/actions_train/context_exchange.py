@@ -119,7 +119,7 @@ def build_packet(*, role: str, task: Mapping, binding: Mapping,
             # The access probe is read-only; errors never authorize dropping evidence.
             try:
                 can_reference = verified_access(copy.deepcopy(ref)) is True
-            except (OSError, ValueError, RuntimeError):
+            except Exception:
                 can_reference = False
         if can_reference:
             ref['delivery'] = 'verified_local_reference'
@@ -161,7 +161,7 @@ def rules_prefix(*, text: str, metadata: Mapping, role: str, compact: bool = Fal
             _path(ref['path'])
             if verified_access(copy.deepcopy(ref)) is True:
                 selected = compile_capsule(text, role, metadata['sha256']); mode = 'scoped_v1'
-        except (OSError, ValueError, RuntimeError):
+        except Exception:
             reason = 'CAPSULE_OR_RECIPIENT_ACCESS_UNVERIFIED'
     if compact and mode == 'full':
         reason = reason or 'RECIPIENT_RULES_ACCESS_UNVERIFIED'
@@ -223,10 +223,28 @@ def diagnosis_view(active: Mapping, inputs: Mapping, cache: Mapping) -> dict:
                 item['evidence_delivered_at'] = 'inputs.evidence'
             else:
                 item['evidence'] = copy.deepcopy(source['evidence'])
+        # Preserve any unique fields from previous inputs, including historical
+        # QA/CI assertions nested in their own history. Equal content is already
+        # delivered in this very packet and may be addressed by an in-packet path.
+        # A durable journal reference ALONE never authorizes discarding content.
+        prior_extra, prior_equal = {}, {}
+        for field, value in source.items():
+            if field in ('head', 'attempt', 'failure', 'evidence'):
+                continue  # Bound above, including equality-to-current pointers.
+            if field == 'task' and value == active['task']:
+                prior_equal[field] = 'task'
+            elif field in inputs and value == inputs[field]:
+                prior_equal[field] = 'inputs.' + field
+            else:
+                prior_extra[field] = copy.deepcopy(value)
+        if prior_extra:
+            item['additional_inputs'] = prior_extra
+        if prior_equal:
+            item['equal_inputs_delivered_at'] = prior_equal
         previous.append(item)
     return dict(task=copy.deepcopy(dict(active['task'])), inputs=now, previous=previous,
                 omitted_duplicate_history=omitted,
-                history_policy='Journal intact; unique past FAIL/UNKNOWN/evidence inline, proven duplicates referenced.')
+                history_policy='Journal intact; unique prior input/history facts inline, only exact in-packet duplicates referenced.')
 
 
 

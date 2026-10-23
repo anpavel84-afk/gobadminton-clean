@@ -110,6 +110,22 @@ def setup(req, config, native_auth=None):
         from context_policy import inject
         if choice['provider'] == 'agy':
             wrapped, rules_receipt = prompt, None  # Native adapter injects after assembling source DATA.
+        elif qa and req['stage']=='qa' and choice['provider']=='codex':
+            # One scoped role only. The model can read the exact canonical Git
+            # object through its existing read-only source/Git access. A missing
+            # object or denied recipient probe uses the unchanged full profile.
+            from context_policy import (RULES_COMMIT, RULES_SHA256, RULES_SIZE,
+                                        CANONICAL_GIT_RULES_PATH, verified_git_rules)
+            reference=dict(path=CANONICAL_GIT_RULES_PATH,revision=RULES_COMMIT,
+                           sha256=RULES_SHA256,bytes=RULES_SIZE)
+            guidance=('If you need the complete accepted rules, read the IMMUTABLE '
+                      'Git object with git show '+RULES_COMMIT+':'
+                      +CANONICAL_GIT_RULES_PATH+'; do not trust modified '
+                      'working-tree policy files.\n')
+            wrapped, rules_receipt = inject(guidance+prompt, qa, bridge.work,
+                accepted_rules, role='qa', context_profile='scoped_v1',
+                full_rules_reference=reference,
+                verified_access=lambda ref: verified_git_rules(bridge.work,ref))
         else:
             wrapped, rules_receipt = inject(prompt, qa, bridge.work, accepted_rules, role=choice.get('role', 'qa' if qa else 'author'))
         choice['rules_context'] = rules_receipt
