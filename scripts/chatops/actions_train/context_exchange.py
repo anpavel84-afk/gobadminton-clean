@@ -247,7 +247,7 @@ def tool_excerpt(text: str, *, exit_code: int | None, full_artifact: Mapping,
     if len(raw) > limit and verified_access is not None:
         try:
             shortened = verified_access(copy.deepcopy(ref)) is True
-        except (OSError, ValueError, RuntimeError, TypeError):
+        except Exception:
             shortened = False
     excerpt = (raw[:limit//2].decode('utf-8', errors='replace') + '\n[EXCERPT; FULL RESULT IN ARTIFACT]\n'
                + raw[-limit//2:].decode('utf-8', errors='replace')) if shortened else text

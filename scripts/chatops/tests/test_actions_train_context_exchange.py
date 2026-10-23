@@ -202,7 +202,8 @@ class ContextExchange(unittest.TestCase):
                 raise kind('no actual recipient access')
             return inner
         for probe in (None,lambda _:False,lambda _:'truthy but not boolean',
-                      fail(OSError),fail(ValueError),fail(RuntimeError),fail(TypeError)):
+                      fail(OSError),fail(ValueError),fail(RuntimeError),fail(TypeError),
+                      fail(KeyError),fail(AttributeError),fail(AssertionError),fail(Exception)):
             with self.subTest(probe=repr(probe)):
                 v=E.tool_excerpt(text,exit_code=1,full_artifact=ref,limit=512,verified_access=probe)
                 self.assertEqual(v['excerpt'],text)
