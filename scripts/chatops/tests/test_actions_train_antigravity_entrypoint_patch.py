@@ -123,6 +123,47 @@ class EntrypointPatch(unittest.TestCase):
     s.execute('accept');stable=s.journal.read_bytes();s.execute('accept');self.assertEqual(s.journal.read_bytes(),stable)
     self.assertEqual(s.read(s.journal)['phase'],'active-ready');self.assertEqual(s.read(s.markerpath)['accepted_canary']['operation'],'actual-a76')
     self.assertEqual(s.parentpath.read_bytes(),oldparent);self.assertEqual(s.read(s.state/'slot2.json'),j)
+ def test_before_hash_chain_refuses_all_eight_tampers_before_any_effect(self):
+  cases=('zero-before','missing-before','null-before','record-before','joint-before-record',
+         'missing-record-receiver','activate-before','qualifying-ready-before')
+  for kind in cases:
+   with self.subTest(kind=kind),self.scenario() as s:
+    s.execute('apply')
+    if kind!='activate-before':
+     s.execute('activate')
+     q=s.q
+     receipt=dict(source_sha=q['head'],base_sha=q['base'],qualification_task_sha256=U.PATCH_TASK,
+       qualification_lineage={k:q[k] for k in ('parent_task_sha256','parent_operation','adapter_revision')},
+       qualification_passed=True,charged_calls=1,effective_model=N.MODEL)
+     op=dict(task_hash=U.PATCH_TASK,run=999,finished_at=1,before='same',after='same',
+       binding=dict(stage='qa_qualification',issue=29,slot='slot2',head=q['head']),
+       result=dict(status='confirmed',qualification_passed=True,checkpoint_changed=False,
+       qa=dict(verdict='PASS',reviewed_sha=q['head']),native_receipt=receipt))
+     slot=s.read(s.state/'slot2.json');slot['operations']['actual-a76']=op;s.write(s.state/'slot2.json',slot)
+    if kind=='qualifying-ready-before':
+     def interrupt(path,value,**kw):
+      s.write(path,value,**kw)
+      raise OSError('stop after readiness intent')
+     with patch.object(R,'atomic',side_effect=interrupt):
+      with self.assertRaises(OSError):s.execute('accept')
+     self.assertEqual(s.read(s.journal)['phase'],'qualifying-ready')
+    j=s.read(s.journal);key=str(s.receiver)
+    if kind=='missing-before':del j['changes'][key]['before']
+    elif kind=='null-before':j['changes'][key]['before']=None
+    elif kind in ('zero-before','activate-before','qualifying-ready-before','joint-before-record'):
+     j['changes'][key]['before']='0'*64
+    if kind in ('record-before','joint-before-record','missing-record-receiver'):
+     if kind=='missing-record-receiver':del j['record_before']['after'][key]
+     else:j['record_before']['after'][key]='0'*64
+     # Recomputed digest alone cannot substitute the immutable parent's installed after hash.
+     j['patch_chain']['inventory_before_sha256']=core.digest(j['record_before'])
+    s.write(s.journal,j)
+    snapshot={p:p.read_bytes() for p in s.root.rglob('*') if p.is_file()}
+    with patch.object(R,'atomic') as atomic:
+     with self.assertRaisesRegex(core.Refused,'receiver before hash'):
+      s.execute('activate' if kind=='activate-before' else 'accept')
+     atomic.assert_not_called()
+    self.assertEqual({p:p.read_bytes() for p in s.root.rglob('*') if p.is_file()},snapshot)
  def test_accept_refuses_parent_or_current_inventory_drift_and_unknown_canary(self):
   for kind in ('parent','inventory','unknown'):
    with self.subTest(kind=kind),self.scenario() as s:
