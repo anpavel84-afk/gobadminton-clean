@@ -103,6 +103,7 @@ class StageDelivery(unittest.TestCase):
             with patch.object(stage,'live',return_value=(a,s)),patch.object(stage.os,'getuid',return_value=1002), \
                  patch.object(stage.os,'getgid',return_value=1002),patch.object(stage,'API',return_value=api), \
                  patch.object(C,'load',return_value=accepted()),patch.object(stage,'route',return_value=choice), \
+                 patch.object(core,'task_review_route',return_value=choice), \
                  patch.object(receiver,'units_quiet'),patch.object(receiver,'identity',return_value={'pid':424242,'start':'1','boot':'test'}):
                 _,_,_,_,_,b=stage.setup(req(stage_name,'pr_wait'),{'codex':{'slot1':str(cli)}})
                 b.model('bounded immutable task',qa=True)

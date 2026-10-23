@@ -66,7 +66,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with: {persist-credentials: false}
+        with: {fetch-depth: 0, persist-credentials: false}
       - run: |
           find scripts/chatops -name '*.sh' -exec bash -n {} +
           python3 -B scripts/chatops/tests/test_ci_workflow.py

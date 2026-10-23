@@ -193,13 +193,47 @@ def safe_path(path):
     return path
 
 
-def git(work, *args, limit=MAX_INPUT + 1):
+def addressed_git_identity(work):
+    """Only the fixed canary's standalone repository may cross root/UID978.
+
+    No safe.directory exception, worktree redirect, alternate object store or
+    inherited config is admitted. This is not a general privileged Git runner.
+    """
+    import pwd
+    work=Path(work)
+    need(os.geteuid()==0 and work==QUALIFICATION_WORK and work.is_absolute()
+         and work.resolve()==work, 'exact root canary Git precheck required')
+    account=pwd.getpwuid(EXECUTOR_UID)
+    need(account.pw_uid==EXECUTOR_UID and account.pw_gid>0, 'invalid canary executor identity')
+    for path in (work,*work.parents):
+        info=path.lstat()
+        need(stat.S_ISDIR(info.st_mode) and not info.st_mode & 0o022
+             and info.st_uid in ((EXECUTOR_UID,) if path==work else (0,EXECUTOR_UID)),
+             'unsafe canary ancestry')
+    metadata=work/'.git'
+    need(metadata.is_dir() and not metadata.is_symlink(), 'standalone canary Git metadata required')
+    for path in (metadata,*metadata.rglob('*')):
+        info=path.lstat()
+        need(not stat.S_ISLNK(info.st_mode) and info.st_uid==EXECUTOR_UID
+             and not info.st_mode & 0o022
+             and (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)), 'unsafe canary Git metadata')
+    need(not (metadata/'commondir').exists() and not (metadata/'objects/info/alternates').exists()
+         and not (metadata/'objects/info/http-alternates').exists(), 'redirected canary Git metadata')
+    return dict(user=EXECUTOR_UID,group=account.pw_gid,extra_groups=[])
+
+
+def git(work, *args, limit=MAX_INPUT + 1, _addressed_installer=False):
+    identity=addressed_git_identity(work) if _addressed_installer else {}
+    if _addressed_installer:
+        need(args==('rev-parse','HEAD') or len(args)==2 and args[0]=='show'
+             and re.fullmatch(r'[a-f0-9]{40}:scripts/chatops/tests/fixtures/agy-[a-z0-9-]+\.json',args[1]),
+             'unsupported addressed Git read')
     env = {'PATH': '/usr/bin:/bin', 'HOME': '/nonexistent', 'LANG': 'C.UTF-8',
            'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_TERMINAL_PROMPT': '0'}
     try:
         done = subprocess.run(['git', '--no-pager', '--literal-pathspecs', '-c', 'core.hooksPath=/dev/null',
                                '-c', 'core.fsmonitor=false', *args], cwd=work, env=env,
-                              capture_output=True, timeout=60)
+                              capture_output=True, timeout=60, **identity)
     except (OSError, subprocess.SubprocessError):
         raise ReviewError('git failed') from None
     need(done.returncode == 0 and len(done.stdout) <= limit, 'git failed or output too large')

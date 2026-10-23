@@ -103,9 +103,12 @@ def descriptor(g):
         adapter_revision=g['controller_revision'],qualification_grant=g,task_sha256=digest(task))
 
 
-def history(proof):
+def history(proof,*,reconcile_sha256=None):
     for name,sha in proof['history'].items():
-        r.read(STATE/name,0);r.need(i.sha(STATE/name)==sha,'reviewed history drift')
+        allowed={sha}
+        if name=='slot2.json' and reconcile_sha256 is not None:
+            _,allowed=Q.addressed_reconciliation_state(r,reconcile_sha256,sha)
+        r.read(STATE/name,0);r.need(i.sha(STATE/name) in allowed,'reviewed history drift')
     Q.addressed_history(r,r.journal('slot2'))
     r.need(i.sha(r.BUDGET)==Q.BUDGET_RAW,'global caps must remain untouched')
 
@@ -154,7 +157,7 @@ def plan(bundle,proof,T,C,u):
     task=loads((bundle/Q.ANALYSIS_INPUT).read_bytes());T.protocol_probe(bundle,task)
     changed={target:source for target,source in items.items() if i.sha(target)!=i.sha(source)}
     r.need(changed and set(changed)<=ALLOWED,'addressed payload outside reviewed targets')
-    Q.addressed_input(Path(descriptor(proof['grant'])['work']),proof['grant'])
+    Q.addressed_input(Path(descriptor(proof['grant'])['work']),proof['grant'],installer=True)
     virtual=configuration(proof,items)
     changes={str(t):dict(before=i.sha(t),after=i.sha(s)) for t,s in changed.items()}
     for target,value in virtual.items():changes[str(target)]=dict(before=i.sha(target),after=hashlib.sha256(encoded(value)).hexdigest())
@@ -175,7 +178,7 @@ def admit(proof,j,C,u):
         'installed source drift')
     r.need(not r.journal('slot2')['pending'],'unknown outcomes require their own exact reconciliation; no replay')
     g=proof['grant'];key=digest(g);q=descriptor(g)
-    Q.addressed_input(Path(q['work']),g)
+    Q.addressed_input(Path(q['work']),g,installer=True)
     path=STATE/('antigravity-addressed-admit-'+key+'.json')
     if path.exists():
         intent=r.read(path,0)
@@ -290,8 +293,9 @@ def execute(action,bundle,proof_path,proof_sha256,*,run_id=None):
         if action=='reconcile':
             p=r.read(r.POLICY,0)
             r.need(p['mode']=='disabled' and p['controller_sha']==Q.INSTALLED_BASELINE,'exact b51 scheduling boundary required')
-            history(proof)
-            return Q.reconcile_addressed(r)  # Not installation; no op/result rewrite.
+            history(proof,reconcile_sha256=proof_sha256)
+            return Q.reconcile_addressed(r,proof_sha256=proof_sha256,
+                slot_before_sha256=proof['history']['slot2.json'])  # No op/result rewrite.
         if action in ('dry','apply'):
             p,record,items,changed,virtual,changes,snapshot=plan(bundle,proof,T,C,u)
             if action=='dry':return dict(dry=True,changes=changes,provider_calls=0)

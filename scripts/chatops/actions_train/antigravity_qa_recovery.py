@@ -373,10 +373,13 @@ def addressed_task(base,head,g):
         adapter_revision=g['controller_revision'],qualification_grant=g)
 
 
-def addressed_input(work,g):
+def addressed_input(work,g,*,installer=False):
     """Immutable input bytes only; QA additionally binds real reviewed test receipts."""
     import hashlib
     from native_antigravity import git,dec,loads
+    if installer:
+        from functools import partial
+        git=partial(git,_addressed_installer=True)
     validate_addressed_grant(g)
     need(dec(git(work,'rev-parse','HEAD')).strip()==g['head'],'addressed input source drift')
     raw=git(work,'show',g['input_revision']+':'+g['input_path'])
@@ -459,7 +462,37 @@ def reserve_addressed(r,q,key):
     r.atomic(r.STATE/ADDRESSED_LEDGER,value)  # Lost/unknown call stays consumed.
 
 
-def reconcile_addressed(r):
+def addressed_reconciliation_state(r,proof_sha256,slot_before_sha256):
+    """Authenticate the whole scheduling transition, never just generation/pending."""
+    import hashlib,json,re
+    from core import loads
+    need(all(type(v) is str and re.fullmatch('[a-f0-9]{64}',v)
+             for v in (proof_sha256,slot_before_sha256)), 'exact reconciliation proof/history pins required')
+    path=r.STATE/ADDRESSED_RECONCILIATION
+    if not path.exists():return None,{slot_before_sha256}
+    receipt=r.read(path,0)
+    fields={'schema','phase','third_operation_sha256','checkpoint','generation_before','generation_after',
+            'proof_sha256','slot_before_raw','slot_before_sha256','slot_after_sha256'}
+    need(type(receipt) is dict and set(receipt)==fields
+         and receipt['schema']=='GB_AGY_29_ADDRESSED_RECONCILIATION_V2'
+         and receipt['third_operation_sha256']==THIRD_DIGEST and receipt['checkpoint']==CHECKPOINT
+         and type(receipt['generation_before']) is int and receipt['generation_before']==87
+         and type(receipt['generation_after']) is int and receipt['generation_after']==88
+         and receipt['phase'] in ('intent','complete') and receipt['proof_sha256']==proof_sha256
+         and receipt['slot_before_sha256']==slot_before_sha256
+         and type(receipt['slot_before_raw']) is str, 'foreign addressed reconciliation')
+    raw=receipt['slot_before_raw'].encode()
+    need(hashlib.sha256(raw).hexdigest()==slot_before_sha256,'reconciliation before history drift')
+    before=loads(raw)
+    need(type(before) is dict and before.get('pending')==THIRD_OPERATION
+         and type(before.get('generation')) is int and before['generation']==87, 'invalid reconciliation before state')
+    after=copy.deepcopy(before);after.update(pending=None,generation=88)
+    after_sha=hashlib.sha256(json.dumps(after,sort_keys=True).encode()).hexdigest()
+    need(receipt['slot_after_sha256']==after_sha,'reconciliation after history drift')
+    return receipt,({after_sha} if receipt['phase']=='complete' else {slot_before_sha256,after_sha})
+
+
+def reconcile_addressed(r,*,proof_sha256,slot_before_sha256):
     """Separate scheduling effect; caller holds existing controller lock, policy disabled.
 
     Never writes original op/result/reservation/old ledgers or calls safe_release.
@@ -467,14 +500,12 @@ def reconcile_addressed(r):
     need(os.geteuid()==0 and r.read(r.POLICY,0)['mode']=='disabled','disabled root reconciliation only')
     j=r.journal('slot2');addressed_history(r,j)
     path=r.STATE/ADDRESSED_RECONCILIATION
-    receipt=r.read(path,0) if path.exists() else None
-    if receipt:
-        need(set(receipt)=={'schema','phase','third_operation_sha256','checkpoint','generation_before','generation_after'}
-             and receipt['schema']==ADDRESSED_SCHEMA and receipt['third_operation_sha256']==THIRD_DIGEST
-             and receipt['checkpoint']==CHECKPOINT and receipt['generation_before']==87
-             and receipt['generation_after']==88 and receipt['phase'] in ('intent','complete'),
-             'foreign addressed reconciliation')
-        if receipt['phase']=='complete':return receipt
+    import hashlib,json
+    receipt,allowed=addressed_reconciliation_state(r,proof_sha256,slot_before_sha256)
+    r.read(r.STATE/'slot2.json',0)
+    raw=(r.STATE/'slot2.json').read_bytes()
+    need(hashlib.sha256(raw).hexdigest() in allowed,'reconciliation slot history drift')
+    if receipt and receipt['phase']=='complete':return receipt
     state,_=r.checkpoint('slot2')
     need(state.get('active') is None and digest(state)==CHECKPOINT,'fac7 checkpoint changed')
     actual=r.identity(THIRD_PROCESS['pid'])
@@ -485,12 +516,15 @@ def reconcile_addressed(r):
     executor_quiet()
     r.units_quiet(('gobadminton-supervisor.service','gobadminton-slot@slot2.service'))
     r.free_lock(r.AUTONOMY/'slots/slot2/worker.lock');r.free_lock(r.AUTONOMY/'locks/slot2.lease')
-    before=j.get('pending')==THIRD_OPERATION and j.get('generation')==87
-    after=j.get('pending') is None and j.get('generation')==88
+    before=j.get('pending')==THIRD_OPERATION and type(j.get('generation')) is int and j['generation']==87
+    after=j.get('pending') is None and type(j.get('generation')) is int and j['generation']==88
     need(before or receipt is not None and after,'fac7 pending/generation mismatch')
     if receipt is None:
-        receipt=dict(schema=ADDRESSED_SCHEMA,phase='intent',third_operation_sha256=THIRD_DIGEST,
-                     checkpoint=CHECKPOINT,generation_before=87,generation_after=88)
+        updated=copy.deepcopy(j);updated.update(pending=None,generation=88)
+        receipt=dict(schema='GB_AGY_29_ADDRESSED_RECONCILIATION_V2',phase='intent',third_operation_sha256=THIRD_DIGEST,
+                     checkpoint=CHECKPOINT,generation_before=87,generation_after=88,proof_sha256=proof_sha256,
+                     slot_before_raw=raw.decode(),slot_before_sha256=slot_before_sha256,
+                     slot_after_sha256=hashlib.sha256(json.dumps(updated,sort_keys=True).encode()).hexdigest())
         r.atomic(path,receipt)
     if before:
         updated=copy.deepcopy(j);updated.update(pending=None,generation=88)

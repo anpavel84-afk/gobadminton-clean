@@ -1,5 +1,6 @@
 """Addressed lineage/reconciliation simulations, no runtime reads or model calls."""
 import copy
+import hashlib
 import json
 import tempfile
 from pathlib import Path
@@ -74,9 +75,11 @@ class SchedulingReconciliation(unittest.TestCase):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
         self.root=Path(self.tmp.name);self.op=dict(result=dict(status='unknown',safe_release=False),immutable='fac7')
         self.j=dict(pending=Q.THIRD_OPERATION,generation=87,operations={Q.THIRD_OPERATION:self.op},last={'status':'unknown'})
-        self.saved={};self.writes=[]
+        self.saved={self.root/'slot2.json':copy.deepcopy(self.j)};self.writes=[]
+        (self.root/'slot2.json').write_text(json.dumps(self.j,sort_keys=True))
+        self.before_sha=hashlib.sha256((self.root/'slot2.json').read_bytes()).hexdigest()
         def atomic(path,value):
-            self.writes.append((path,copy.deepcopy(value)));self.saved[path]=copy.deepcopy(value);path.touch()
+            self.writes.append((path,copy.deepcopy(value)));self.saved[path]=copy.deepcopy(value);path.write_text(json.dumps(value,sort_keys=True))
             if path==self.root/'slot2.json':self.j=copy.deepcopy(value)
         self.api=SimpleNamespace(STATE=self.root,POLICY=self.root/'policy',AUTONOMY=self.root,
             read=lambda path,*a:dict(mode='disabled') if path.name=='policy' else copy.deepcopy(self.saved[path]),
@@ -85,13 +88,15 @@ class SchedulingReconciliation(unittest.TestCase):
         self.patches=[patch.object(Q,'addressed_history'),patch.object(Q,'executor_quiet'),
             patch.object(Q.os,'geteuid',return_value=0),patch.object(Q,'digest',side_effect=lambda v:Q.CHECKPOINT if v=={'active':None,'done':[]} else core.digest(v))]
         for p in self.patches:p.start();self.addCleanup(p.stop)
+    def reconcile(self):
+        return Q.reconcile_addressed(self.api,proof_sha256='a'*64,slot_before_sha256=self.before_sha)
     def test_only_scheduling_pending_generation_change_and_original_unknown_preserved(self):
         before=copy.deepcopy(self.j)
-        out=Q.reconcile_addressed(self.api)
+        out=self.reconcile()
         self.assertEqual(out['phase'],'complete');self.assertIsNone(self.j['pending']);self.assertEqual(self.j['generation'],88)
         self.assertEqual(self.j['operations'],before['operations']);self.assertEqual(self.j['last'],before['last'])
         self.assertEqual(self.writes[0][1]['phase'],'intent')
-        count=len(self.writes);Q.reconcile_addressed(self.api);self.assertEqual(len(self.writes),count)
+        count=len(self.writes);self.reconcile();self.assertEqual(len(self.writes),count)
         self.assertTrue(all(p.name in (Q.ADDRESSED_RECONCILIATION,'slot2.json') for p,v in self.writes))
     def test_live_reused_process_generation_or_checkpoint_refuses_without_writes(self):
         for change in ('live','reused','generation','checkpoint'):
@@ -101,7 +106,7 @@ class SchedulingReconciliation(unittest.TestCase):
             elif change=='reused':self.api.identity.return_value=dict(pid=Q.THIRD_PROCESS['pid'],start='other')
             elif change=='generation':self.j['generation']=88
             else:self.api.checkpoint=lambda slot:({'active':{'unknown':'writer'},'done':[]},[])
-            with self.subTest(change=change),self.assertRaises(core.Refused):Q.reconcile_addressed(self.api)
+            with self.subTest(change=change),self.assertRaises(core.Refused):self.reconcile()
             self.assertEqual(self.writes,[])
     def test_writeahead_reentry_finishes_only_exact_scheduling_effect(self):
         original=self.api.atomic
@@ -109,9 +114,9 @@ class SchedulingReconciliation(unittest.TestCase):
             original(path,v)
             if path.name==Q.ADDRESSED_RECONCILIATION and v['phase']=='intent':raise OSError('lost after intent')
         self.api.atomic=fail_after_intent
-        with self.assertRaises(OSError):Q.reconcile_addressed(self.api)
+        with self.assertRaises(OSError):self.reconcile()
         self.assertEqual(self.j['pending'],Q.THIRD_OPERATION)
-        self.api.atomic=original;Q.reconcile_addressed(self.api)
+        self.api.atomic=original;self.reconcile()
         self.assertIsNone(self.j['pending']);self.assertEqual(self.j['operations'][Q.THIRD_OPERATION],self.op)
 
 class AddressedScopedCharge(unittest.TestCase):
