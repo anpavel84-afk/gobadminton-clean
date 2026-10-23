@@ -177,7 +177,31 @@ class Collection(unittest.TestCase):
         self.assertEqual(result['verdict'],'PASS')
         self.assertEqual(seen[0].count('TRUSTED_ACCEPTED_POLICY'),1)
         self.assertEqual(receipt['input_sha256'],hashlib.sha256(seen[0].encode()).hexdigest())
-        self.assertEqual(receipt['rules_context'],{'delivered':'synthetic'})
+        self.assertEqual(receipt['rules_context'],{'delivered':'synthetic',
+            'delivery':'explicit_full_argv','prompt_sha256':receipt['input_sha256']})
+
+    def test_real_rules_receipt_matches_exact_argv_transport_without_mutating_metadata(self):
+        import context_policy as C
+        text=(Path(__file__).resolve().parents[3]/'docs/rules/ENGINEERING_OPERATING_MODEL.md').read_text()
+        metadata={'commit':C.RULES_COMMIT,'sha256':C.RULES_SHA256,'bytes':C.RULES_SIZE,
+                  'delivery':'explicit_full_stdin','revision':'1.1'}
+        original=copy.deepcopy(metadata)
+        self.write('pkg/a.py','x = 2\n');head=self.commit()
+        events=rows();events[-1]['result']['structured_output']['reviewed_sha']=head
+        seen=[]
+        def invoke(prompt,*args,**kwargs):
+            seen.append(N.command(50,prompt));return wire(events),{'qualification_phase':'canary'}
+        with patch.object(N,'invoke',invoke):
+            result,receipt=N.review(self.root,self.base,head,'raw task',60,slot='slot2',
+                task_hash='x',charge=Mock(),accepted_rules=(text,metadata))
+        self.assertEqual(result['verdict'],'PASS');self.assertEqual(metadata,original)
+        self.assertEqual(seen[0][-2],'-p')
+        context=receipt['rules_context'];actual=hashlib.sha256(seen[0][-1].encode()).hexdigest()
+        self.assertEqual(context['delivery'],'explicit_full_argv')
+        self.assertNotIn('stdin_sha256',context)
+        self.assertEqual(context['prompt_sha256'],actual);self.assertEqual(receipt['input_sha256'],actual)
+        self.assertEqual(context['commit'],C.RULES_COMMIT);self.assertEqual(context['sha256'],C.RULES_SHA256)
+        self.assertEqual(context['bytes'],C.RULES_SIZE)
 
     def test_real_secret_traversal_symlink_binary_and_size_guards_remain(self):
         for name in ('.env', '.env.production', '.ssh/config', 'credentials.json', 'key.pem', '.git/config', '../x'):
@@ -221,6 +245,21 @@ class NativeToolScope(unittest.TestCase):
         self.assertEqual(result['verdict'],'PASS')
         self.assertEqual(evidence['tool_events'],1)
         self.assertEqual(evidence['tool_names'],['run_command'])
+
+    def test_last_tool_state_must_be_done_even_after_prior_completion(self):
+        for states in [('DONE','ACTIVE'),('ACTIVE','DONE','ACTIVE')]:
+            events=rows()
+            for state in states:
+                events.insert(-2,{'event':'step_update','step_update':{'conversation_id':CID,
+                    'step_index':4,'step_type':'tool','tool_name':'run_command','state':state}})
+            with self.subTest(states=states),self.assertRaisesRegex(N.ReviewError,'incomplete native tool'):
+                N.parse_stream(wire(events),SHA)
+        events=rows()
+        for index,state in [(4,'ACTIVE'),(5,'ACTIVE'),(4,'DONE'),(5,'DONE'),(4,'ACTIVE')]:
+            events.insert(-2,{'event':'step_update','step_update':{'conversation_id':CID,
+                'step_index':index,'step_type':'tool','tool_name':'run_command','state':state}})
+        with self.assertRaisesRegex(N.ReviewError,'incomplete native tool'):
+            N.parse_stream(wire(events),SHA)
 
     def test_ordinary_executor_reuses_existing_landlock_readonly_and_subprocesses(self):
         with tempfile.TemporaryDirectory(prefix='gb-agy-synthetic-') as temp:
@@ -375,6 +414,23 @@ class QualificationSeam(unittest.TestCase):
             self.assertEqual(saved['qualification_task_sha256'],q['task_sha256'])
             self.assertEqual(saved['charged_calls'],1)
             self.assertTrue(saved['qualification_passed'])
+    def test_stale_done_parser_cannot_become_qualification_pass(self):
+        import stage
+        from types import SimpleNamespace
+        m=self.marker();events=rows()
+        for state in ('DONE','ACTIVE'):
+            events.insert(-2,{'event':'step_update','step_update':{'conversation_id':CID,
+                'step_index':4,'step_type':'tool','tool_name':'run_command','state':state}})
+        store=SimpleNamespace(data={'active':None,'done':[]});before=copy.deepcopy(store.data)
+        rt=SimpleNamespace(budget=Mock(used=Mock(return_value=0)))
+        def review(*args,**kwargs):return N.parse_stream(wire(events),SHA)
+        with patch.object(N,'qualification',return_value=m),patch.object(N,'review',review), \
+             patch('context_policy.load',return_value=('trusted',{})),patch.object(N,'save_receipt') as save:
+            with self.assertRaisesRegex(N.ReviewError,'incomplete native tool'):
+                stage.qualify_qa(self.request()|{'_qa_qualification':m['qualification']},{},
+                    (SimpleNamespace(subprocess=SimpleNamespace(Popen=Mock())),None,rt,None,store,None))
+            save.assert_not_called()
+        self.assertEqual(store.data,before)
 
 
 class QualificationPlanning(unittest.TestCase):

@@ -432,9 +432,8 @@ def parse_stream(raw, head):
     need(isinstance(conversation, str) and conversation, 'missing conversation identity')
     finish = False
     inference = False
-    tool_steps = set()
+    tool_steps = {}
     tool_names = set()
-    tool_done = set()
     for event in events[1:-1]:
         need(event.get('event') == 'step_update', 'unknown provider event')
         step = event.get('step_update')
@@ -447,11 +446,10 @@ def parse_stream(raw, head):
             name, index = step.get('tool_name'), step.get('step_index')
             need(isinstance(name, str) and name in tools and type(index) is int and index >= 0,
                  'unadvertised or unidentified tool')
-            tool_steps.add((index, name)); tool_names.add(name)
-            if step.get('state') == 'DONE': tool_done.add((index, name))
+            tool_steps[(index, name)] = step['state']; tool_names.add(name)
         inference |= step.get('step_type') == 'agent_response' and step.get('state') == 'DONE'
         finish |= step.get('step_type') == 'finish' and step.get('state') == 'DONE'
-    need(tool_done == tool_steps, 'incomplete native tool execution')
+    need(all(state == 'DONE' for state in tool_steps.values()), 'incomplete native tool execution')
     out = events[-1].get('result')
     need(type(out) is dict and out.get('status') == 'SUCCESS'
          and out.get('conversation_id') == conversation and finish and inference, 'terminal completion missing')
@@ -487,6 +485,8 @@ def review(work, base, head, prompt, timeout, *, slot, task_hash, charge, popen=
     from context_policy import inject
     stdin, rules_context = inject(source, True, Path(work), accepted_rules)
     input_sha = hashlib.sha256(stdin.encode()).hexdigest()
+    rules_context = dict(rules_context, delivery='explicit_full_argv', prompt_sha256=input_sha)
+    rules_context.pop('stdin_sha256', None)  # AGY uses -p with stdin=DEVNULL; other clients retain stdin metadata.
     raw, execution = invoke(stdin, timeout, work=work, slot=slot, task_hash=task_hash,
                             charge=charge, popen=popen)
     need(not git(work, 'status', '--porcelain') and dec(git(work,'rev-parse','HEAD')).strip() == head,
