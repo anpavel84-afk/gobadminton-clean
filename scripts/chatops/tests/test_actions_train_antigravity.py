@@ -352,6 +352,119 @@ print(json.dumps(result))
             self.assertEqual(evidence['filesystem_boundary'],'existing_native_guard_landlock')
             self.assertEqual(charged,['one'])
 
+    def test_native_add_dir_private_ws_real_git_source_access_and_no_write(self):
+        """Actual Landlock child, two source files + Git HEAD; zero model calls.
+
+        Native tool DONE envelopes are separately tied to verified source
+        excerpts/digests. CLI agent inference is deliberately not invoked.
+        """
+        from test_actions_train_addressed_analysis import stream,binding,answer
+        with tempfile.TemporaryDirectory(prefix='gb-agy-source-root-') as temp:
+            outer=Path(temp);work=outer/'candidate';work.mkdir()
+            paths=N.REQUIRED_ANALYSIS_PATHS
+            data=['// FIRST_NATIVE_SOURCE_EXCERPT: types and fields\n',
+                  '// SECOND_NATIVE_SOURCE_EXCERPT: GameDetail reads\n']
+            subprocess.run(['git','init','-q',str(work)],check=True,capture_output=True)
+            for rel,src in zip(paths,data):
+                dest=work/rel;dest.parent.mkdir(parents=True,exist_ok=True)
+                dest.write_text(src)
+            subprocess.run(['git','-C',str(work),'add','--',*paths],check=True,capture_output=True)
+            subprocess.run(['git','-C',str(work),'-c','user.name=CI','-c',
+                'user.email=qa@example.invalid','commit','-qm','source canary'],check=True)
+            head=subprocess.check_output(['git','-C',str(work),'rev-parse','HEAD'],text=True).strip()
+            outside=outer/'outside-secret';outside.write_text('outside boundary')
+            full_argv=N.command(60,analysis=True,source_root=str(work.resolve()))
+            self.assertEqual(full_argv.count('--add-dir'),1)
+            self.assertEqual(full_argv[full_argv.index('--add-dir')+1],str(work.resolve()))
+            self.assertIn('--sandbox',full_argv)
+            with self.assertRaises(N.ReviewError):
+                N.command(60,analysis=True,source_root=str(outside))
+            with self.assertRaises(N.ReviewError):
+                N.command(60,analysis=False,source_root=str(work.resolve()))
+            sandbox_probe=r"""
+import hashlib,json,os,pathlib,subprocess,sys
+sys.stdin.buffer.read()
+source=pathlib.Path(os.environ['SOURCE_ROOT'])
+outside=pathlib.Path(os.environ['OUTSIDE'])
+paths=json.loads(os.environ['FILES'])
+contents=[]
+for rel in paths:
+    b=(source/rel).read_bytes()
+    contents.append({'path':rel,'sha256':hashlib.sha256(b).hexdigest(),
+                     'excerpt':b.decode().strip()})
+git=subprocess.run(['/usr/bin/git','-C',str(source),'rev-parse','HEAD'],
+                   capture_output=True,text=True)
+def can_write(path):
+    try:
+        path.write_text('UNAUTHORIZED_CHANGE')
+        return True
+    except OSError:
+        return False
+def can_read(path):
+    try:path.read_bytes();return True
+    except OSError:return False
+print(json.dumps({'cwd':os.getcwd(),'head':git.stdout.strip(),
+                  'sources':contents,'write':can_write(source/paths[0]),
+                  'outside_readable':can_read(outside),
+                  'git_ok':git.returncode==0,'git_error':git.stderr[:700]}))
+"""
+            seen=[];charged=[]
+            original_command=N.command
+            def child_command(timeout,prompt=None,model=N.MODEL,*,analysis=False,source_root=None):
+                self.assertTrue(analysis)
+                self.assertEqual(source_root,str(work.resolve()))
+                actual=original_command(timeout,model=model,analysis=analysis,source_root=source_root)
+                self.assertEqual(actual[actual.index('--add-dir')+1],str(work.resolve()))
+                seen.append(actual)
+                return [sys.executable,'-I','-c',sandbox_probe]
+            def child_popen(argv,**kwargs):
+                self.assertEqual(charged,['one-synthetic-call'])
+                self.assertEqual(kwargs['cwd'].name,'ws')
+                self.assertNotEqual(kwargs['cwd'],work)
+                kwargs['env'].update(SOURCE_ROOT=str(work),OUTSIDE=str(outside),
+                                    FILES=json.dumps(paths))
+                return subprocess.Popen(argv,**kwargs)
+            with patch.object(N,'qualification',return_value={'phase':'canary'}), \
+                 patch.object(N.os,'geteuid',return_value=978), \
+                 patch.object(N,'trusted',return_value=b'synthetic-not-real-oauth'), \
+                 patch.object(N,'command',child_command), \
+                 patch.object(N,'AGY',sys.executable):
+                try:
+                    raw,receipt=N.invoke('probe only',45,work=work,slot='slot2',
+                        task_hash='x'*64,charge=lambda:charged.append('one-synthetic-call'),
+                        popen=child_popen,analysis=True)
+                except N.ReviewError as error:
+                    logs=[v.read_text(errors='replace') for v in self.evidence.glob('*/stderr')]
+                    raise AssertionError(str(error)+' child_stderr='+repr(logs[-1:] )) from None
+            observed=json.loads(raw)
+            self.assertEqual(observed['head'],head,msg=observed.get('git_error'))
+            self.assertEqual(len(observed['sources']),2)
+            self.assertIn('/ws',observed['cwd'])
+            self.assertFalse(observed['write'])
+            self.assertFalse(observed['outside_readable'])
+            self.assertEqual(len(seen),1)
+            self.assertEqual(receipt['filesystem_boundary'],'existing_native_guard_landlock')
+            self.assertEqual(receipt['writable_roots'],['invocation_private_root','/dev/null'])
+            rows=stream()
+            rows[0]['init']['tools']=['view_file','run_command']
+            answer_data=answer()|dict(completion='COMPLETE',source_reads=[
+                dict(path=x['path'],sha256=x['sha256'],observation=x['excerpt'])
+                for x in observed['sources']])
+            rows[-1]['result']['response']=json.dumps(answer_data)
+            for index,name in ((3,'view_file'),(4,'run_command')):
+                rows.insert(-1,{'event':'step_update','step_update':dict(
+                    conversation_id=CID,step_type='tool',step_index=index,
+                    tool_name=name,state='DONE')})
+            parsed,events=N.parse_stream(wire(rows),head,
+                analysis_binding=binding(),strict_source_evidence=True)
+            self.assertEqual(set(events['tool_names']),{'view_file','run_command'})
+            with patch.object(N,'git',side_effect=lambda _w,cmd,ref:(
+                work/ref.split(':',1)[1]).read_bytes()):
+                verified=N.analysis_source_gate(parsed,events,work,head)
+            self.assertEqual(verified['completion'],'COMPLETE')
+            self.assertEqual([(work/x).read_text() for x in paths],data)
+            self.assertEqual(charged,['one-synthetic-call'])
+
     def test_unsupported_historical_routes_do_not_probe_or_charge_agy(self):
         from test_actions_train import core,S
         from test_actions_train_cost_policy import cost_task
