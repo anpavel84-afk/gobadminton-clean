@@ -295,6 +295,19 @@ def supervisor(req, policy, key, root_lock):
         try:
             # Recheck immediately before dropping privilege. Root never imports candidate code.
             user = guard(slot, policy)
+            native_auth = None
+            if req['stage'] == 'author':
+                state, _ = checkpoint(slot)
+                active = state.get('active')
+                if active:
+                    a, s = live()
+                    budget = s.Budget(Path('/etc/gobadminton-slots/budgets.json'),
+                                      AUTONOMY/'outbox', AUTONOMY/'locks/registry.lock')
+                    from core import route
+                    selected = route(s,active['task'],'author',req['profile'],budget,slot)
+                    if selected['provider'] == 'cursor':
+                        from native_cursor import existing_auth_for_stage
+                        native_auth = existing_auth_for_stage(slot,digest(active['task']))
             os.setgroups([GROUP])
             os.setgid(user.pw_gid)
             os.setuid(user.pw_uid)
@@ -310,7 +323,7 @@ def supervisor(req, policy, key, root_lock):
             if j['operations'][key].get('recovery_data'):
                 req['_recovery_data'] = j['operations'][key]['recovery_data']
             from stage import entry
-            value = entry(dict(req), policy)
+            value = entry(dict(req), policy, native_auth=native_auth)
             raw = json.dumps(value).encode()
             # Keep detailed gates private in checkpoints, pipe result only carries bounded facts.
             os.write(w, raw[:2097152])
