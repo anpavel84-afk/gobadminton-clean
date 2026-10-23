@@ -196,9 +196,9 @@ def diagnosis_view(active: Mapping, inputs: Mapping, cache: Mapping) -> dict:
             history_view.append(copy.deepcopy(row)); continue
         item = {}
         for key, value in row.items():
-            if (key == 'task' and digest(value) == digest(active['task'])) or key in ('failure_diagnosis', 'routing_receipts', 'provider_receipts'):
+            if key == 'task' and digest(value) == digest(active['task']):
                 omitted.append(dict(history_index=index, field=key, sha256=digest(value),
-                                    bytes=len(encoded(value)), storage='original_task_history'))
+                                    bytes=len(encoded(value)), delivered_at='task'))
             else:
                 item[key] = copy.deepcopy(value)
         history_view.append(item)
@@ -206,23 +206,36 @@ def diagnosis_view(active: Mapping, inputs: Mapping, cache: Mapping) -> dict:
     previous = []
     for fingerprint, receipt in sorted(cache.get('receipts', {}).items()):
         source = receipt.get('inputs') or {}
-        previous.append(dict(fingerprint=fingerprint, status=receipt.get('status'),
-                             head=source.get('head'), attempt=source.get('attempt'),
-                             brief_hash=receipt.get('brief_hash'), brief=copy.deepcopy(receipt.get('brief')),
-                             failure=None if source == inputs else copy.deepcopy(source.get('failure')),
-                             durable_record_ref='failure_diagnosis.receipts.' + fingerprint,
-                             extra_evidence_access='operator_resolved_if_needed; not a model-readable path'))
+        item = dict(fingerprint=fingerprint, status=receipt.get('status'),
+                    head=source.get('head'), attempt=source.get('attempt'),
+                    brief_hash=receipt.get('brief_hash'), brief=copy.deepcopy(receipt.get('brief')),
+                    durable_record_ref='failure_diagnosis.receipts.' + fingerprint)
+        if 'failure' in source:
+            if source['failure'] == now.get('failure'):
+                item['failure_delivered_at'] = 'inputs.failure'
+            else:
+                item['failure'] = copy.deepcopy(source['failure'])
+        # Operator provenance is not a model-readable reference. Inline every
+        # distinct prior assertion; use an in-packet pointer only for equality
+        # with the already delivered current inputs.evidence.
+        if 'evidence' in source:
+            if source['evidence'] == now.get('evidence'):
+                item['evidence_delivered_at'] = 'inputs.evidence'
+            else:
+                item['evidence'] = copy.deepcopy(source['evidence'])
+        previous.append(item)
     return dict(task=copy.deepcopy(dict(active['task'])), inputs=now, previous=previous,
                 omitted_duplicate_history=omitted,
-                history_policy='Original immutable journal retained; no previous input trees in model prompt.')
+                history_policy='Journal intact; unique past FAIL/UNKNOWN/evidence inline, proven duplicates referenced.')
+
 
 
 def tool_excerpt(text: str, *, exit_code: int | None, full_artifact: Mapping,
-                 limit: int = 4096) -> dict:
-    """Opt-in display view, only AFTER saving a retrievable full tool artifact.
+                 limit: int = 4096, verified_access: Callable[[dict], bool] | None = None) -> dict:
+    """Shorten only when actual recipient-readability of full output is proven.
 
-    A caller must separately keep exact failure assertions/structured verdicts.
-    A display excerpt never establishes PASS or replaces required QA evidence.
+    No probe / refused access / probe error => lossless full inline fallback.
+    Excerpts never establish PASS or replace structured failure assertions.
     """
     _check(type(limit) is int and limit >= 256, 'excerpt limit')
     raw = text.encode('utf-8'); ref = copy.deepcopy(dict(full_artifact))
@@ -230,7 +243,12 @@ def tool_excerpt(text: str, *, exit_code: int | None, full_artifact: Mapping,
            and ref.get('available') is True and isinstance(ref.get('path'), str),
            'full tool result must be preserved and accessible')
     _path(ref['path'])
-    shortened = len(raw) > limit
+    shortened = False
+    if len(raw) > limit and verified_access is not None:
+        try:
+            shortened = verified_access(copy.deepcopy(ref)) is True
+        except (OSError, ValueError, RuntimeError, TypeError):
+            shortened = False
     excerpt = (raw[:limit//2].decode('utf-8', errors='replace') + '\n[EXCERPT; FULL RESULT IN ARTIFACT]\n'
                + raw[-limit//2:].decode('utf-8', errors='replace')) if shortened else text
     return dict(exit_code=exit_code, excerpt=excerpt, truncated=shortened,

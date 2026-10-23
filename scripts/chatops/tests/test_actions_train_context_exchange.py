@@ -99,11 +99,43 @@ class ContextExchange(unittest.TestCase):
         view=E.diagnosis_view({'task':TASK},current,cache)
         self.assertEqual(view['inputs']['failure'],current['failure'])
         self.assertEqual(view['inputs']['evidence'],current['evidence'])
-        self.assertEqual(view['inputs']['history'][0]['qa'],current['history'][0]['qa'])
+        self.assertEqual(view['inputs']['history'],current['history'])
         self.assertEqual(view['previous'][0]['brief'],cache['receipts']['1'*64]['brief'])
-        self.assertNotIn('inputs',view['previous'][0]);self.assertNotIn('large',E.encoded(view).decode())
+        self.assertNotIn('inputs',view['previous'][0])
+        self.assertEqual(view['previous'][0]['evidence_delivered_at'],'inputs.evidence')
+        self.assertIn('large',E.encoded(view).decode())
         self.assertEqual((current,cache,TASK),original)
-        self.assertEqual(len(view['omitted_duplicate_history']),1)
+        self.assertEqual(view['omitted_duplicate_history'],[])
+
+    def test_unique_history_and_prior_evidence_are_model_readable(self):
+        historic={'head':BASE,'failure_diagnosis':{'unique_unknown':'pending grant'},
+                  'routing_receipts':[{'route':'unique route'}],
+                  'provider_receipts':[{'usage':'unique provider usage'}],
+                  'unrecognized_field':{'old_assertion':'HISTORY_FAIL'}}
+        current={'head':HEAD,'failure':{'findings':['CURRENT_FAIL']},
+                 'evidence':[{'assertion':'CURRENT_CI_ASSERTION'}],
+                 'history':[historic,{'task':copy.deepcopy(TASK)}]}
+        prior={'head':BASE,'attempt':1,'failure':{'kind':'CI_FAIL'},
+               'evidence':[{'assertion':'UNIQUE_PRIOR_CI_ASSERTION'}]}
+        cache={'receipts':{'1'*64:{'status':'ready','inputs':prior,
+                    'brief':{'diagnosis':'UNIQUE_PRIOR_BRIEF'},'brief_hash':'2'*64},
+                           '2'*64:{'status':'unknown','inputs':copy.deepcopy(current),
+                    'brief':None,'brief_hash':None}}}
+        original=copy.deepcopy((current,cache,TASK))
+        view=E.diagnosis_view({'task':TASK},current,cache)
+        self.assertEqual(view['inputs']['history'][0],historic)
+        self.assertNotIn('task',view['inputs']['history'][1])
+        self.assertEqual(view['omitted_duplicate_history'][0]['delivered_at'],'task')
+        self.assertEqual(view['previous'][0]['evidence'],prior['evidence'])
+        self.assertEqual(view['previous'][0]['brief']['diagnosis'],'UNIQUE_PRIOR_BRIEF')
+        self.assertEqual(view['previous'][1]['status'],'unknown')
+        self.assertEqual(view['previous'][1]['evidence_delivered_at'],'inputs.evidence')
+        self.assertEqual(view['previous'][1]['failure_delivered_at'],'inputs.failure')
+        self.assertNotIn('inputs',view['previous'][0])
+        serialized=E.encoded(view).decode()
+        for marker in ('UNIQUE_PRIOR_CI_ASSERTION','HISTORY_FAIL','unique_unknown','unique route','unique provider usage','CURRENT_CI_ASSERTION'):
+            self.assertIn(marker,serialized)
+        self.assertEqual((current,cache,TASK),original)
 
     def test_changed_historical_task_is_not_discarded_as_duplicate(self):
         old={**TASK, 'goal':'previous approved goal'}
@@ -142,11 +174,47 @@ class ContextExchange(unittest.TestCase):
         self.assertEqual({x['status'] for x in v['previous']},{'pending','unknown'})
 
     def test_tool_excerpt_requires_saved_accessible_artifact_and_never_claims_PASS(self):
-        text='начало\n'+'x'*10000+'\nERROR end';ref={'path':'evidence/test.txt','sha256':hashlib.sha256(text.encode()).hexdigest(),'bytes':len(text.encode()),'available':True}
-        v=E.tool_excerpt(text,exit_code=1,full_artifact=ref,limit=1024)
+        text='начало\n'+'x'*10000+'\nERROR end'
+        ref={'path':'evidence/test.txt','sha256':hashlib.sha256(text.encode()).hexdigest(),
+             'bytes':len(text.encode()),'available':True}
+        original=copy.deepcopy(ref)
+        seen=[]
+        def verified(v):
+            seen.append(copy.deepcopy(v))
+            self.assertEqual(v,ref)
+            return True
+        v=E.tool_excerpt(text,exit_code=1,full_artifact=ref,limit=1024,verified_access=verified)
         self.assertTrue(v['truncated']);self.assertEqual(v['exit_code'],1)
         self.assertIn('ERROR end',v['excerpt']);self.assertEqual(v['verdict'],'NOT_INFERRED_FROM_EXCERPT')
-        with self.assertRaises(ValueError):E.tool_excerpt(text,exit_code=1,full_artifact={**ref,'available':False})
+        self.assertEqual(seen,[ref])
+        self.assertEqual(ref,original)
+        for bad in ({**ref,'available':False},{**ref,'sha256':'0'*64},
+                    {**ref,'path':'../not-authorized'}):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                E.tool_excerpt(text,exit_code=1,full_artifact=bad,verified_access=verified)
+
+    def test_tool_excerpt_unverified_access_falls_back_full_without_losing_middle_assertions(self):
+        text='start\n'+'a'*5000+'\nMIDDLE_ASSERTION_MUST_SURVIVE\n'+'z'*5000+'\nend'
+        ref={'path':'evidence/full-result.log','sha256':hashlib.sha256(text.encode()).hexdigest(),
+             'bytes':len(text.encode()),'available':True}
+        def fail(kind):
+            def inner(_):
+                raise kind('no actual recipient access')
+            return inner
+        for probe in (None,lambda _:False,lambda _:'truthy but not boolean',
+                      fail(OSError),fail(ValueError),fail(RuntimeError),fail(TypeError)):
+            with self.subTest(probe=repr(probe)):
+                v=E.tool_excerpt(text,exit_code=1,full_artifact=ref,limit=512,verified_access=probe)
+                self.assertEqual(v['excerpt'],text)
+                self.assertFalse(v['truncated'])
+                self.assertIn('MIDDLE_ASSERTION_MUST_SURVIVE',v['excerpt'])
+                self.assertEqual(v['verdict'],'NOT_INFERRED_FROM_EXCERPT')
+                self.assertEqual(v['exit_code'],1)
+        short=E.tool_excerpt('short',exit_code=0,full_artifact={
+            'path':'evidence/short','sha256':hashlib.sha256(b'short').hexdigest(),
+            'bytes':5,'available':True},verified_access=lambda _:True)
+        self.assertEqual(short['excerpt'],'short')
+        self.assertFalse(short['truncated'])
 
 
 if __name__=='__main__':unittest.main()
