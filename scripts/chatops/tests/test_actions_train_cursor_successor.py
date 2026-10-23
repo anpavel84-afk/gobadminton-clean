@@ -87,6 +87,19 @@ class SuccessorAcceptance(unittest.TestCase):
   self.assertEqual(preserved[str(U.STATE/'cursor-author-211.json')],'old-hash')
 
 
+class IntegrationAcceptance(unittest.TestCase):
+ def op(self,stage,head):
+  return {'binding':{'issue':225,'stage':stage},'task_hash':'task','finished_at':123,
+   'result':{'status':'confirmed','checkpoint':{'head':head}}}
+ def test_only_final_exact_sha_qa_selected_after_integration(self):
+  old=self.op('qa','old');new=self.op('qa','final')
+  self.assertEqual(U.acceptance_operations({'before':old,'after':new},'qa','task','final'),{'after':new})
+  self.assertEqual(old['result']['checkpoint']['head'],'old')
+ def test_every_confirmed_author_counts_even_before_integration(self):
+  ops={'one':self.op('author','before'),'two':self.op('author','after')}
+  self.assertEqual(len(U.acceptance_operations(ops,'author','task','final')),2)
+
+
 class InterruptedTransitions(unittest.TestCase):
  def atomic_store(self,files,fail_at=None,before=False):
   calls=[]

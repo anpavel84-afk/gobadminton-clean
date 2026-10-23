@@ -108,6 +108,16 @@ def complete_qualification(j,p,marker):
     return {'phase':'active-ready','accepted_canary':intent['proof']}
 
 
+
+def acceptance_operations(operations,stage,task_hash,head):
+    # Integration may require a second independent QA. Only the final exact-SHA
+    # QA/DEV is acceptance evidence; preserve earlier verdicts and count every author.
+    return {k:v for k,v in operations.items() if v['binding']['issue']==225
+        and v['binding']['stage']==stage and v.get('task_hash')==task_hash
+        and v.get('finished_at') and v.get('result',{}).get('status')=='confirmed'
+        and (stage=='author' or (v['result'].get('checkpoint') or {}).get('head')==head)}
+
+
 def accept_canary():
     # Promotion is metadata-only and occurs after existing exact QA/CI/DEV gates.
     j = r.read(JOURNAL,0); p = r.read(r.POLICY,0); marker = r.read(MARKER,0)
@@ -129,14 +139,11 @@ def accept_canary():
                and active['server']['accepted']['source_sha']==active['head'], 'incomplete canary lifecycle')
         stages={}; operation_hashes={}
         for stage in ('author','qa','dev'):
-            found=[v for v in ops['operations'].values() if v['binding']['issue']==225
-                   and v['binding']['stage']==stage and v.get('task_hash')==j['canary_task_sha256']
-                   and v.get('finished_at') and v.get('result',{}).get('status')=='confirmed']
+            found=acceptance_operations(ops['operations'],stage,j['canary_task_sha256'],active['head'])
             r.need(len(found)==1,'ambiguous or incomplete canary stage')
-            stages[stage]=found[0]
-            keys=[k for k,v in ops['operations'].items() if v is found[0]]
-            r.need(len(keys)==1,'ambiguous operation identity')
-            operation_hashes[keys[0]]=digest(found[0])
+            key,value=next(iter(found.items()))
+            stages[stage]=value
+            operation_hashes[key]=digest(value)
         author=stages['author']['result']['routing']; qa=stages['qa']['result']['routing']
         r.need(author['provider']=='cursor' and author['effective_model']=='Auto'
                and author['usage']['charged_calls']==1
