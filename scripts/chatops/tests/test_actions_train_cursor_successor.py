@@ -86,4 +86,82 @@ class SuccessorAcceptance(unittest.TestCase):
   self.assertEqual(preserved[str(U.BUDGET)],'old-hash')
   self.assertEqual(preserved[str(U.STATE/'cursor-author-211.json')],'old-hash')
 
+
+class InterruptedTransitions(unittest.TestCase):
+ def atomic_store(self,files,fail_at=None,before=False):
+  calls=[]
+  def write(path,value,**kwargs):
+   calls.append(str(path))
+   if len(calls)==fail_at and before:raise OSError('simulated interruption before durable write')
+   files[path]=copy.deepcopy(value)
+   if len(calls)==fail_at and not before:raise OSError('simulated interruption after durable write')
+  return write,calls
+ def activation(self,fail_at=None,before=False,monitor_failure=False):
+  policy={'mode':'disabled','controller_sha':'a'*40};j={'phase':'installed-disabled','controller':'a'*40,'changes':{},'preserved':{}}
+  files={U.JOURNAL:j,R.POLICY:policy};C=SimpleNamespace(quiet=Mock());u=SimpleNamespace(probe=Mock(return_value={'run':123}))
+  write,calls=self.atomic_store(files,fail_at,before)
+  monitor=Mock(side_effect=OSError('monitor unavailable') if monitor_failure else None)
+  with patch.object(R,'atomic',side_effect=write),patch.object(R,'publish_monitor',monitor),patch.object(U,'preserved',return_value={}):
+   try:U.activate_release(C,u,copy.deepcopy(files[U.JOURNAL]),copy.deepcopy(files[R.POLICY]),123)
+   except OSError:pass
+  # Simulate real task/ledger progress after dispatch became active: no history rewind or frozen-state requirement.
+  progress={'attempts':7,'unknown207':'retained','pending':'existing-operation'}
+  frozen=copy.deepcopy(progress);write2,repeat=self.atomic_store(files)
+  changed={} if files[R.POLICY]['mode']=='disabled' else {'legitimate-progress':1}
+  with patch.object(R,'atomic',side_effect=write2),patch.object(R,'publish_monitor'),patch.object(U,'preserved',return_value=changed):
+   U.activate_release(C,u,copy.deepcopy(files[U.JOURNAL]),copy.deepcopy(files[R.POLICY]),123)
+   stable=copy.deepcopy(files);count=len(repeat)
+   U.activate_release(C,u,copy.deepcopy(files[U.JOURNAL]),copy.deepcopy(files[R.POLICY]),123)
+   self.assertEqual(files,stable);self.assertEqual(len(repeat),count)
+  self.assertEqual(files[R.POLICY]['mode'],'active');self.assertEqual(files[U.JOURNAL]['phase'],'active-canary')
+  self.assertEqual(progress,frozen)
+  # An intent persisted before the policy effect is reused; no repeated hosted probe.
+  self.assertLessEqual(u.probe.call_count,2 if fail_at==1 and before else 1)
+ def test_activation_recovers_before_and_after_every_durable_write(self):
+  for index in (1,2,3):
+   for before in (False,True):
+    with self.subTest(write=index,before=before):self.activation(index,before)
+ def test_activation_monitor_failure_is_idempotently_reportable(self):self.activation(monitor_failure=True)
+ def qualification(self,fail_at=None,before=False,monitor_failure=False):
+  policy={'mode':'active','controller_sha':'a'*40};old={'phase':'canary','modules':{}};proof={'slot':'slot2','head':'b'*40}
+  operation={'status':'confirmed','head':'b'*40};new=old | {'phase':'ready','accepted_canary':proof,'qualified_at':12345}
+  intent={'policy':policy,'controller':'a'*40,'task_sha256':core.digest(TASK),'successor':EXPECTED,
+   'proof':proof,'operations':{'exact-op':core.digest(operation)},'old_marker':old,'old_hash':U.encoded_hash(old),
+   'next_marker':new,'next_hash':U.encoded_hash(new),'qualified_at':12345}
+  j={'phase':'qualifying-ready','controller':'a'*40,'canary_task_sha256':core.digest(TASK),'successor':EXPECTED,
+   'qualification_intent':intent,'changes':{str(U.MARKER):{'before':U.encoded_hash(old),'after':U.encoded_hash(old)}}}
+  files={U.JOURNAL:j,U.MARKER:old};write,calls=self.atomic_store(files,fail_at,before)
+  with patch.object(R,'journal',return_value={'operations':{'exact-op':operation}}),patch.object(R,'atomic',side_effect=write), \
+       patch.object(R,'publish_monitor',side_effect=OSError('monitor unavailable') if monitor_failure else None):
+   try:U.complete_qualification(copy.deepcopy(files[U.JOURNAL]),policy,copy.deepcopy(files[U.MARKER]))
+   except OSError:pass
+  write2,repeat=self.atomic_store(files)
+  with patch.object(R,'journal',return_value={'operations':{'exact-op':operation}}),patch.object(R,'atomic',side_effect=write2),patch.object(R,'publish_monitor'):
+   U.complete_qualification(copy.deepcopy(files[U.JOURNAL]),policy,copy.deepcopy(files[U.MARKER]))
+   stable=copy.deepcopy(files);count=len(repeat)
+   U.complete_qualification(copy.deepcopy(files[U.JOURNAL]),policy,copy.deepcopy(files[U.MARKER]))
+   self.assertEqual(files,stable);self.assertEqual(len(repeat),count)
+  self.assertEqual(files[U.MARKER],new);self.assertEqual(files[U.JOURNAL]['phase'],'active-ready')
+  self.assertEqual(files[U.JOURNAL]['changes'][str(U.MARKER)]['after'],U.encoded_hash(new))
+ def test_qualification_recovers_before_and_after_each_effect(self):
+  for index in (1,2):
+   for before in (False,True):
+    with self.subTest(write=index,before=before):self.qualification(index,before)
+ def test_qualification_monitor_failure_does_not_repeat_effects(self):self.qualification(monitor_failure=True)
+ def test_foreign_qualification_marker_and_changed_operation_refused(self):
+  # Existing intent cannot bless arbitrary marker data, even if its shape looks ready.
+  p={'mode':'active'};old={'phase':'canary','modules':{}};proof={'slot':'slot2'}
+  new=old | {'phase':'ready','accepted_canary':proof,'qualified_at':123}
+  intent={'policy':p,'controller':'a','task_sha256':'task','successor':EXPECTED,'old_marker':old,
+   'old_hash':U.encoded_hash(old),'next_marker':new,'next_hash':U.encoded_hash(new),'proof':proof,
+   'qualified_at':123,'operations':{'op':'original-hash'}}
+  j={'phase':'qualifying-ready','controller':'a','canary_task_sha256':'task','successor':EXPECTED,'qualification_intent':intent}
+  with patch.object(R,'journal',return_value={'operations':{'op':{'changed':True}}}),patch.object(R,'atomic') as write:
+   with self.assertRaises(core.Refused):U.complete_qualification(j,p,old)
+   write.assert_not_called()
+  intent['operations']={}
+  with patch.object(R,'journal',return_value={'operations':{}}),patch.object(R,'atomic') as write:
+   with self.assertRaises(core.Refused):U.complete_qualification(j,p,{'phase':'ready','unrelated':True})
+   write.assert_not_called()
+
 if __name__=='__main__':unittest.main()

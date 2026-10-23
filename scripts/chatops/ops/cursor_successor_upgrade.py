@@ -2,6 +2,7 @@
 """Reviewed #211 native author upgrade using existing quiescence/shadow/rollback."""
 import argparse
 import copy
+import hashlib
 import importlib.util
 import json
 import os
@@ -44,9 +45,74 @@ def preserved(C, u):
     return out
 
 
+
+def encoded_hash(value):
+    return hashlib.sha256(json.dumps(value,sort_keys=True).encode()).hexdigest()
+
+
+def activate_release(C,u,j,p,run_id):
+    """Resume only recorded effects; never rewind progress after policy activation."""
+    r.need(j['phase'] in ('installed-disabled','activating','active-canary'), 'invalid activation phase')
+    r.need(all(i.sha(Path(k))==v['after'] for k,v in j['changes'].items()), 'installed code drift')
+    if j['phase']=='installed-disabled':
+        r.need(p['mode']=='disabled' and p['controller_sha']==j['controller'], 'not installed-disabled candidate')
+        C.quiet()
+        r.need(preserved(C,u)==j['preserved'], 'authoritative state changed before activation')
+        proof=u.probe(run_id,j)
+        j.update(phase='activating',activation_intent={'disabled_policy':copy.deepcopy(p),
+            'active_policy':p | {'mode':'active'},'shadow':proof})
+        r.atomic(JOURNAL,j)  # Intent precedes enabling dispatch.
+    intent=j.get('activation_intent')
+    r.need(isinstance(intent,dict) and intent['active_policy']==intent['disabled_policy'] | {'mode':'active'}
+           and intent['disabled_policy']['mode']=='disabled'
+           and intent['disabled_policy']['controller_sha']==j['controller'], 'invalid activation intent')
+    if p==intent['disabled_policy']:
+        r.need(j['phase']=='activating', 'completed activation policy changed')
+        C.quiet()
+        r.need(preserved(C,u)==j['preserved'], 'authoritative state changed before activation')
+        r.atomic(r.POLICY,intent['active_policy'],mode=0o644)
+    else:
+        r.need(p==intent['active_policy'], 'foreign activation policy drift')
+    if j['phase']!='active-canary':
+        j.update(phase='active-canary',shadow=intent['shadow']);r.atomic(JOURNAL,j)
+    r.publish_monitor(intent['active_policy'])
+    return {'phase':'active-canary','shadow':intent['shadow'],'history_preserved':True}
+
+
+def complete_qualification(j,p,marker):
+    """Replay only the exact, durably validated qualification intent."""
+    intent=j.get('qualification_intent')
+    r.need(j['phase'] in ('qualifying-ready','active-ready') and isinstance(intent,dict)
+           and intent['policy']==p and intent['controller']==j['controller']
+           and intent['task_sha256']==j['canary_task_sha256']
+           and intent['successor']==j['successor'], 'qualification intent drift')
+    r.need(encoded_hash(intent['old_marker'])==intent['old_hash']
+           and encoded_hash(intent['next_marker'])==intent['next_hash']
+           and intent['next_marker']==intent['old_marker'] | {'phase':'ready',
+               'accepted_canary':intent['proof'],'qualified_at':intent['qualified_at']},
+           'qualification marker intent changed')
+    for name,sha in intent['old_marker']['modules'].items():
+        r.need(i.sha(INSTALL/name)==sha,'qualified adapter drift')
+    ops=r.journal(intent['proof']['slot'])['operations']
+    r.need(all(k in ops and digest(ops[k])==v for k,v in intent['operations'].items()),
+           'qualification operation evidence changed')
+    actual=encoded_hash(marker)
+    r.need(actual in (intent['old_hash'],intent['next_hash']), 'foreign qualification marker drift')
+    if actual==intent['old_hash']:
+        r.need(j['phase']=='qualifying-ready', 'completed qualification marker changed')
+        r.atomic(MARKER,intent['next_marker'],mode=0o644)
+    if j['phase']!='active-ready':
+        j['changes'][str(MARKER)]['after']=intent['next_hash']
+        j['phase']='active-ready';r.atomic(JOURNAL,j)
+    r.publish_monitor(p)
+    return {'phase':'active-ready','accepted_canary':intent['proof']}
+
+
 def accept_canary():
     # Promotion is metadata-only and occurs after existing exact QA/CI/DEV gates.
     j = r.read(JOURNAL,0); p = r.read(r.POLICY,0); marker = r.read(MARKER,0)
+    if j['phase'] in ('qualifying-ready','active-ready'):
+        return complete_qualification(j,p,marker)
     r.need(j['phase']=='active-canary' and p['mode']=='active' and p['controller_sha']==j['controller']
            and marker['phase']=='canary' and marker['canary_task_sha256']==j['canary_task_sha256']
            and marker.get('successor')==j['successor'],
@@ -61,13 +127,16 @@ def accept_canary():
                and active['live']['gitSha']==active['head']
                and active['server']['accepted']['status']=='ACCEPTED'
                and active['server']['accepted']['source_sha']==active['head'], 'incomplete canary lifecycle')
-        stages={}
+        stages={}; operation_hashes={}
         for stage in ('author','qa','dev'):
             found=[v for v in ops['operations'].values() if v['binding']['issue']==225
                    and v['binding']['stage']==stage and v.get('task_hash')==j['canary_task_sha256']
                    and v.get('finished_at') and v.get('result',{}).get('status')=='confirmed']
             r.need(len(found)==1,'ambiguous or incomplete canary stage')
             stages[stage]=found[0]
+            keys=[k for k,v in ops['operations'].items() if v is found[0]]
+            r.need(len(keys)==1,'ambiguous operation identity')
+            operation_hashes[keys[0]]=digest(found[0])
         author=stages['author']['result']['routing']; qa=stages['qa']['result']['routing']
         r.need(author['provider']=='cursor' and author['effective_model']=='Auto'
                and author['usage']['charged_calls']==1
@@ -79,41 +148,44 @@ def accept_canary():
         matches.append({'slot':slot,'head':active['head'],'release_id':active['release_id'],
                         'ci':active['ci']['id'],'dev_run':active['run']['id'],
                         'author_run':stages['author']['run'],'qa_run':stages['qa']['run']})
+        acceptance_operations=operation_hashes
     r.need(len(matches)==1,'one actual completed Cursor canary required')
     proof=matches[0]
-    nextmarker=marker | {'phase':'ready','accepted_canary':proof,'qualified_at':int(time.time())}
-    j.update(phase='qualifying-ready',accepted_canary=proof)
-    r.atomic(JOURNAL,j)  # Write-ahead; no task, attempt, lease or ledger mutation.
-    r.atomic(MARKER,nextmarker,mode=0o644)
-    j['changes'][str(MARKER)]['after']=i.sha(MARKER)
-    j['phase']='active-ready';r.atomic(JOURNAL,j);r.publish_monitor(p)
-    return {'phase':'active-ready','accepted_canary':proof}
+    qualified_at=int(time.time())
+    nextmarker=marker | {'phase':'ready','accepted_canary':proof,'qualified_at':qualified_at}
+    intent={'policy':p,'controller':j['controller'],'task_sha256':j['canary_task_sha256'],
+        'successor':j['successor'],'proof':proof,'operations':acceptance_operations,
+        'old_marker':marker,'old_hash':encoded_hash(marker),'next_marker':nextmarker,
+        'next_hash':encoded_hash(nextmarker),'qualified_at':qualified_at}
+    j.update(phase='qualifying-ready',accepted_canary=proof,qualification_intent=intent)
+    r.atomic(JOURNAL,j)  # Complete deterministic intent before marker effects.
+    return complete_qualification(j,p,marker)
 
 
 def execute(action, bundle, manifest, controller, stage_hash, dispatch_hash, run_id=None):
     r.need(os.geteuid() == 0, 'reviewed root integrator only')
     r.trusted_tree(bundle)
     if action == 'accept':
-        r.need(manifest == r.read(JOURNAL,0)['manifest'], 'unreviewed acceptance helper bundle')
+        j=r.read(JOURNAL,0)
+        r.need((manifest,controller,stage_hash,dispatch_hash)==
+            (j['manifest'],j['controller'],j['stage_sha256'],j['dispatch_sha256']),
+            'unreviewed acceptance helper bundle')
         return accept_canary()
     C, u = helpers(bundle)
-    C.quiet()  # Existing exact UNKNOWN proof; never grants #207 replay.
-    p = r.read(r.POLICY, 0)
-    if action in ('activate', 'rollback'):
-        j = r.read(JOURNAL, 0)
-        r.need(p['mode'] == 'disabled' and preserved(C, u) == j['preserved'],
+    p = r.read(r.POLICY,0)
+    if action=='activate':
+        j=r.read(JOURNAL,0)
+        r.need((manifest,controller,stage_hash,dispatch_hash)==
+            (j['manifest'],j['controller'],j['stage_sha256'],j['dispatch_sha256']),
+            'activation release identity changed')
+        return activate_release(C,u,j,p,run_id)
+    C.quiet()  # Preactivation changes and rollback still require disabled/quiescent policy.
+    if action=='rollback':
+        j=r.read(JOURNAL,0)
+        r.need(p['mode']=='disabled' and preserved(C,u)==j['preserved'],
                'authoritative state changed; never rewind it')
-        r.need(p['controller_sha'] in (j['controller'], j['policy_before']['controller_sha']),
+        r.need(p['controller_sha'] in (j['controller'],j['policy_before']['controller_sha']),
                'foreign controller change')
-        if action == 'activate':
-            r.need(j['phase'] == 'installed-disabled' and p['controller_sha'] == j['controller'],
-                   'not installed-disabled candidate')
-            r.need(all(i.sha(Path(k)) == v['after'] for k,v in j['changes'].items()), 'installed code drift')
-            proof = u.probe(run_id, j)
-            r.atomic(r.POLICY, p | {'mode':'active'}, mode=0o644)
-            j.update(phase='active-canary', shadow=proof); r.atomic(JOURNAL, j)
-            r.publish_monitor(p | {'mode':'active'})
-            return {'phase':'active-canary', 'shadow':proof, 'history_preserved':True}
         r.need(j['phase'] in ('backing-up','applying','installed-disabled'), 'rollback after activation refused')
         for n,(name,v) in enumerate(sorted(j['changes'].items())):
             target = Path(name)
@@ -167,7 +239,6 @@ def execute(action, bundle, manifest, controller, stage_hash, dispatch_hash, run
     virtual = {MARKER:marker}
     # Same atomic JSON encoding as receiver.atomic.
     def encoded(value): return json.dumps(value, sort_keys=True).encode()
-    import hashlib
     changes = {str(k):{'before':i.sha(k),'after':i.sha(v)} for k,v in changed.items()}
     for target,value in virtual.items():
         changes[str(target)]={'before':i.sha(target),'after':hashlib.sha256(encoded(value)).hexdigest()}
@@ -176,7 +247,7 @@ def execute(action, bundle, manifest, controller, stage_hash, dispatch_hash, run
         return {'dry':True,'changes':changes,'canary_task_sha256':digest(task),'preserved_files':len(snapshot)}
     r.need(not JOURNAL.exists() and not BACKUP.exists(), 'prior installation exists; inspect/rollback')
     j = {'schema':'GB_CURSOR_UPGRADE_211_V1','phase':'backing-up','installed_at':int(time.time()),
-         'controller':controller,'dispatch_sha256':dispatch_hash,'changes':changes,'preserved':snapshot,
+         'controller':controller,'stage_sha256':stage_hash,'dispatch_sha256':dispatch_hash,'changes':changes,'preserved':snapshot,
          'policy_before':p,'record_before':record,'canary_task_sha256':digest(task),
          'manifest':manifest,'successor':successor}
     r.atomic(JOURNAL,j)  # Write-ahead before any backup or target write.
