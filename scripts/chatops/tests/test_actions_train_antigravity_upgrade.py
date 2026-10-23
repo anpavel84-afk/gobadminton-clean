@@ -3,6 +3,7 @@ import copy
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -54,7 +55,7 @@ class AgYUpgrade(unittest.TestCase):
    binary.write_bytes(b'fake pinned executable');binary.chmod(0o700)
    auth.write_text(json.dumps({'auth_method':'synthetic','id_token':'inert','token':'inert'}));auth.chmod(0o600)
    with patch.multiple(U,BIN_SOURCE=binary,AUTH_SOURCE=auth,BIN_TARGET=target,AUTH_TARGET=auth_target,
-                       AGY_SHA=hashlib.sha256(binary.read_bytes()).hexdigest()):
+                       AGY_SHA=hashlib.sha256(binary.read_bytes()).hexdigest(),SOURCE_UID=os.getuid()):
     self.assertEqual(U.provisioning(),{target:binary,auth_target:auth})
     auth.chmod(0o644)
     with self.assertRaises(core.Refused):U.provisioning()

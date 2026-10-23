@@ -26,6 +26,7 @@ ALLOWED = {'core.py','stage.py','receiver.py','cost_policy.py','native_antigravi
 HELPERS = {'context_stability_upgrade.py':'26f9032e6a47e478f45666be9a73004d6b415e85358908e02e9b495316dc408f',
            'cost_policy_upgrade.py':'781c89f8fac0b234a5aefc81dd10c6df10b91adc080d703bd7fb2d458a7e7094'}
 
+SOURCE_UID=1002
 BIN_SOURCE=Path('/home/agentagency-dev/.local/bin/agy')
 BIN_TARGET=Path('/opt/gb-slots/runtime/antigravity/agy')
 AGY_SHA='8af8e7a2a68f72fa7164e00bb59b8902c018fa43e528fc401ad7db8c2972583c'
@@ -36,7 +37,7 @@ AUTH_TARGET=Path('/srv/gb-slots/slot2/home/.gemini/antigravity-cli/antigravity-o
 def provisioning():
     for source in (BIN_SOURCE,AUTH_SOURCE):
         info=source.lstat()
-        r.need(stat.S_ISREG(info.st_mode) and info.st_uid==1002 and info.st_nlink==1
+        r.need(stat.S_ISREG(info.st_mode) and info.st_uid==SOURCE_UID and info.st_nlink==1
                and not info.st_mode&0o022,'untrusted existing native source')
     r.need(i.sha(BIN_SOURCE)==AGY_SHA,'native CLI pin drift')
     r.need(stat.S_IMODE(AUTH_SOURCE.stat().st_mode)==0o600,'native auth must remain private')
