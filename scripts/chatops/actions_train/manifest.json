@@ -2,10 +2,11 @@
   "files": {
     "scripts/chatops/actions_train/antigravity_qa_recovery.py": "c35179693683621b8c1cd1b2d8a6a087472fef3fae088e097694062b3b56cab5",
     "scripts/chatops/actions_train/client.py": "6567f8c0c3748e711ded4ef231812e397b4c8c7db9757a2128fdb34a61600ca3",
-    "scripts/chatops/actions_train/context_policy.py": "3922452f37b3578f5826c3af5aa36926793aa2eac20f6bd2611d0e1b22f0182d",
+    "scripts/chatops/actions_train/context_exchange.py": "6370f1d25560723055b34d1c49a46aa41655fe6a9a33be081b6ac997ba0eb781",
+    "scripts/chatops/actions_train/context_policy.py": "6ca0b2a51ac31c734601a001d3d04a9c0f24010a28d1507b1755914a34d91339",
     "scripts/chatops/actions_train/core.py": "f8863d98edba23f32e991fb136d00a8bca689147b7002a052d6f17c4ca91942f",
     "scripts/chatops/actions_train/cost_policy.py": "18f303fae73b3edf9b73249ae9d904050f65ed4089712dac3bbb98c1c9f58fad",
-    "scripts/chatops/actions_train/failure_diagnosis.py": "93c6bdc94f5aa0fa14236afb2b15bd1c7b252f273ab86d19001c43d6d4f85ed5",
+    "scripts/chatops/actions_train/failure_diagnosis.py": "784eb8d8443ef905eb751473984d4486a7992bb15a110c33d05ef252c4f05245",
     "scripts/chatops/actions_train/installer.py": "efed82cd43d26abe917c76091743feda5437445630aa9aecb65af3075c2a9d26",
     "scripts/chatops/actions_train/live/autonomous_issues.py": "24cb669114fcea70c6cf284a278dcefaae1ab9e1835a9e5aef3adcd52d7cbeba",
     "scripts/chatops/actions_train/live/check_foundation.py": "c2975b19bd46d00acbdbc08227545b8f9c9501d7b8e8783e9b397751c612bd13",

@@ -7,12 +7,13 @@ import test_actions_train_antigravity_recovery as old
 import antigravity_qa_recovery as R
 import native_antigravity as N
 from core import digest,Refused
+from context_policy import RULES_SHA256
 
 
 def descriptor():
     q=dict(issue=29,base='a'*40,head='b'*40,work=str(N.QUALIFICATION_WORK),adapter_revision='c'*40)
     g=dict(schema=R.GRANT_SCHEMA,controller_revision=q['adapter_revision'],cli_sha256=N.AGY_SHA256,
-           rules_sha256='0755f8b5eb2cce575e58137a0f0462448109d8af0173e36d67f6551342b35ba6',
+           rules_sha256=RULES_SHA256,  # prospective fixture; real historical grants remain untouched
            fixture_sha256=digest({k:q[k] for k in ('base','head','work')}),permission_mode='always-proceed',
            input_transport='stream-json',timeout=1800,ceiling=1,
            prior_operations=[R.PARENT_OPERATION,R.SECOND_OPERATION],lineage_sha256=R.LINEAGE_RAW)
@@ -38,7 +39,7 @@ class OneShot(unittest.TestCase):
     def test_descriptor_closed_binds_every_field_and_does_not_reuse_old_lineage(self):
         self.assertEqual(N.qualification_descriptor(self.f.marker),self.q)
         self.assertFalse(R.successor(self.q));self.assertNotEqual(R.reservation_path(self.f.root,self.q),R.reservation_path(self.f.root,self.f.q))
-        for field,value in [('ceiling',2),('permission_mode','request-review'),('input_transport','argv'),('timeout',1801),('unknown',True)]:
+        for field,value in [('ceiling',2),('permission_mode','request-review'),('input_transport','argv'),('timeout',1801),('unknown',True),('rules_sha256','0'*64)]:
             marker=copy.deepcopy(self.f.marker);marker['qualification']['qualification_grant'][field]=value
             with self.subTest(field=field),self.assertRaises((Refused,N.ReviewError)):N.qualification_descriptor(marker)
     def test_reconcile_and_duplicate_reservation_preserve_both_unknowns_and_old_2_of_2(self):
