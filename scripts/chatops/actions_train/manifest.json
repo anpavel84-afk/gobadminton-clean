@@ -1,14 +1,15 @@
 {
   "files": {
     "scripts/chatops/actions_train/antigravity_qa_recovery.py": "1c92806bc642eb929dd82e0bb88ba8e54fafa2e8fef4404ed413e3bf5d1cf689",
-    "scripts/chatops/actions_train/client.py": "6567f8c0c3748e711ded4ef231812e397b4c8c7db9757a2128fdb34a61600ca3",
+    "scripts/chatops/actions_train/client.py": "1c63f4a53709f749cd6d7e88ee6cf1fd479a76762b385dc3a94764f4d42bce65",
+    "scripts/chatops/actions_train/content_identity.py": "ea7073d501edeb41218342be507e126ff070e685941eb2b0e064b9e6aebfbdef",
     "scripts/chatops/actions_train/context_exchange.py": "baa4463cc6919e015ceabb1c05f398e095beb8c22a633191125442435586e132",
     "scripts/chatops/actions_train/context_policy.py": "c53502af3e81a4f2b0991ccb05082707f0aa4a8efcd81aedb8189c0254559291",
-    "scripts/chatops/actions_train/core.py": "f8863d98edba23f32e991fb136d00a8bca689147b7002a052d6f17c4ca91942f",
+    "scripts/chatops/actions_train/core.py": "d13c4e7959ff0d7c7171500c240ae03860738f9ec5e4b728219701efcaf84951",
     "scripts/chatops/actions_train/cost_policy.py": "18f303fae73b3edf9b73249ae9d904050f65ed4089712dac3bbb98c1c9f58fad",
     "scripts/chatops/actions_train/failure_diagnosis.py": "784eb8d8443ef905eb751473984d4486a7992bb15a110c33d05ef252c4f05245",
     "scripts/chatops/actions_train/installer.py": "efed82cd43d26abe917c76091743feda5437445630aa9aecb65af3075c2a9d26",
-    "scripts/chatops/actions_train/live/autonomous_issues.py": "24cb669114fcea70c6cf284a278dcefaae1ab9e1835a9e5aef3adcd52d7cbeba",
+    "scripts/chatops/actions_train/live/autonomous_issues.py": "0ea14328529c1631a2a19a496e627ac1236813cb5fd8cc810badd5a2815baf7b",
     "scripts/chatops/actions_train/live/check_foundation.py": "c2975b19bd46d00acbdbc08227545b8f9c9501d7b8e8783e9b397751c612bd13",
     "scripts/chatops/actions_train/live/slots.py": "3c7b4ab36dd3cd8b41c3309a4d58c54ffc99027b1d7c1e5ad2235b5cd1f72a76",
     "scripts/chatops/actions_train/monitor-mapping.json": "c9c6c4069aaa7138db56ca8234177f0f1ce9c3eea6640ffd61e4dd22d072e29a",
@@ -19,6 +20,7 @@
     "scripts/chatops/actions_train/native_antigravity.py": "3bea0050b2682ad0de8bb00211063acd1772dbe65fff274aa1d3fcc1168f48c9",
     "scripts/chatops/actions_train/native_cursor.py": "02d26f8be9766bbeb1e92dd8514dfc496c1b3e1b0fc8035c1c65cc9aba6b6089",
     "scripts/chatops/actions_train/native_guard.py": "dd2e0a0c6c0dea0d353b7dc5f16c1a5d4c4c21f022947ceaa640470c59fb0762",
+    "scripts/chatops/actions_train/qa_equivalence.py": "fb9391f2afa6ea50eff359aacb3787437f9b5f426026da730c7e4c04ea9dead9",
     "scripts/chatops/actions_train/qa_recovery.py": "1d8a93beb61b871e5321e5b3b9a6803731e40a9687a4d48f2ce8c52ffe1cd185",
     "scripts/chatops/actions_train/queue_diagnostics.py": "0ee6b2628fb4d1a65e50ceb5b33b1fbc9d5f2838d9a425882d977bf3ffabbd14",
     "scripts/chatops/actions_train/receiver.py": "ec1d3eeda534fb3d96c1e96a39dc517147d99949c1888d4b8533d5405610844d",
@@ -26,7 +28,7 @@
     "scripts/chatops/actions_train/recovery_admission.py": "f9fa00a8479abcae0a68b598c61b3efa7856acc501efad44b4a0ac5ef839ec1a",
     "scripts/chatops/actions_train/recovery_publish.py": "51e110d5beaf1a0e46b98eaffb2691d7e4e975c36ab939575e93e87d2850a8c9",
     "scripts/chatops/actions_train/recovery_upgrade.py": "ce8cc88f3cb3230b51f425d9082e826511c35332ca363d2af97bb8b18e4498f6",
-    "scripts/chatops/actions_train/stage.py": "26c844f9edf1ce47c798fbb483f5bafeb1cbe58fa1876c5dcef69432cd7772d3",
+    "scripts/chatops/actions_train/stage.py": "83154a4e96811a04704b3830a16f30c4b8431f1dc29588eff17e5afa8e62f769",
     "scripts/chatops/server/gb-deploy-helper.sh": "c023a71bd1362e8a9347bc06c89b69546efd6c3856e1e6dce1c4c57304538f99"
   },
   "schema": "GB_ACTIONS_TRAIN_INSTALL_V1"
