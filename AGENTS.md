@@ -2,6 +2,10 @@
 
 Единственный рабочий репозиторий: `anpavel84-afk/gobadminton-clean`.
 
+## Единый мастер-план PMA
+
+**[AI_TRAIN_MASTER_PLAN.md](docs/ops/AI_TRAIN_MASTER_PLAN.md)** — обязательная навигационная точка при каждом возобновлении PMA: сначала прочитать план, затем сверить текущий этап с live GitHub/Actions/VPS и продолжить с доказанного checkpoint. Это не machine admission, не второй backlog и не замена эталонного регламента ниже.
+
 ## Эталон системы разработки
 
 **[ENGINEERING_OPERATING_MODEL.md](docs/rules/ENGINEERING_OPERATING_MODEL.md) — единственная полная целевая архитектура и регламент PMA/исполнителей.** PMA/Advisor и reviewer правил читают полный принятый текст при takeover/изменении канона. Worker получает full либо проверенный common+role capsule по §10.3 из той же принятой ревизии, затем exact assignment и необходимые предметные документы; до квалификации role-access используется full fallback. Ссылка не означает, что текст загружен. При недоступности обязательного входа сообщить точный пробел; не восстанавливать полномочия по памяти.
