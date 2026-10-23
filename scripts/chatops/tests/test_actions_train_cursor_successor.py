@@ -100,6 +100,43 @@ class IntegrationAcceptance(unittest.TestCase):
   self.assertEqual(len(U.acceptance_operations(ops,'author','task','final')),2)
 
 
+class CompleteAcceptancePath(unittest.TestCase):
+ def test_integrated_canary_qualifies_once_from_final_evidence(self):
+  head='a'*40;task_hash=core.digest(TASK)
+  active={'issue':225,'phase':'done','task':copy.deepcopy(TASK),'attempt':1,'head':head,
+   'qa':{'verdict':'PASS','reviewed_sha':head},'ci':{'sha':head,'id':101},'run':{'sha':head,'id':102},
+   'live':{'gitSha':head},'server':{'accepted':{'status':'ACCEPTED','source_sha':head}},'release_id':'test-release'}
+  state={'active':active,'done':[225]}
+  def op(stage,sha,run):
+   return {'binding':{'issue':225,'stage':stage},'task_hash':task_hash,'finished_at':1,'run':run,
+    'after':core.digest(state),'result':{'status':'confirmed','checkpoint':{'head':sha},'routing':
+     {'provider':'cursor' if stage=='author' else 'codex','effective_model':'Auto','usage':{'charged_calls':1},
+      'native_receipt':{'phase':'imported'}}}}
+  operations={'author':op('author','before-integration',1),'qa-before':op('qa','before-integration',2),
+   'qa-final':op('qa',head,3),'dev-before':op('dev','before-integration',4),'dev-final':op('dev',head,5)}
+  original=copy.deepcopy(operations)
+  journal={'phase':'active-canary','controller':'c'*40,'canary_task_sha256':task_hash,'successor':EXPECTED,
+   'changes':{str(U.MARKER):{'before':'original','after':'canary'}}}
+  policy={'mode':'active','controller_sha':'c'*40}
+  marker={'phase':'canary','canary_task_sha256':task_hash,'successor':EXPECTED,'modules':{}}
+  files={U.JOURNAL:journal,R.POLICY:policy,U.MARKER:marker};writes=[]
+  def read(path,*args):return copy.deepcopy(files[path])
+  def write(path,value,**kwargs):files[path]=copy.deepcopy(value);writes.append(path)
+  def checkpoint(slot):return (copy.deepcopy(state) if slot=='slot2' else {'active':None}),[]
+  with patch.object(R,'read',side_effect=read),patch.object(R,'atomic',side_effect=write), \
+       patch.object(R,'checkpoint',side_effect=checkpoint),patch.object(R,'journal',return_value={'operations':operations}), \
+       patch.object(R,'publish_monitor'),patch.object(U.time,'time',return_value=12345):
+   result=U.accept_canary();self.assertEqual(result['phase'],'active-ready')
+   self.assertEqual(result['accepted_canary']['qa_run'],3)
+   self.assertEqual(result['accepted_canary']['dev_run'],5)
+   self.assertEqual(result['accepted_canary']['author_run'],1)
+   first=copy.deepcopy(files);count=len(writes);U.accept_canary()
+   self.assertEqual(files,first);self.assertEqual(len(writes),count)
+  self.assertEqual(files[U.MARKER]['qualified_at'],12345)
+  self.assertEqual(operations,original)
+  self.assertEqual(set(writes),{U.JOURNAL,U.MARKER})
+
+
 class InterruptedTransitions(unittest.TestCase):
  def atomic_store(self,files,fail_at=None,before=False):
   calls=[]

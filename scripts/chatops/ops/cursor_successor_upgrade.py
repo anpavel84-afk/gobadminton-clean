@@ -155,13 +155,13 @@ def accept_canary():
         matches.append({'slot':slot,'head':active['head'],'release_id':active['release_id'],
                         'ci':active['ci']['id'],'dev_run':active['run']['id'],
                         'author_run':stages['author']['run'],'qa_run':stages['qa']['run']})
-        acceptance_operations=operation_hashes
+        accepted_operation_hashes=operation_hashes
     r.need(len(matches)==1,'one actual completed Cursor canary required')
     proof=matches[0]
     qualified_at=int(time.time())
     nextmarker=marker | {'phase':'ready','accepted_canary':proof,'qualified_at':qualified_at}
     intent={'policy':p,'controller':j['controller'],'task_sha256':j['canary_task_sha256'],
-        'successor':j['successor'],'proof':proof,'operations':acceptance_operations,
+        'successor':j['successor'],'proof':proof,'operations':accepted_operation_hashes,
         'old_marker':marker,'old_hash':encoded_hash(marker),'next_marker':nextmarker,
         'next_hash':encoded_hash(nextmarker),'qualified_at':qualified_at}
     j.update(phase='qualifying-ready',accepted_canary=proof,qualification_intent=intent)
