@@ -360,11 +360,11 @@ def perform(req, config, context):
             diagnostic = active.get('ci_failure') or active.get('deterministic_failure')
             checkpoint = {}
             from failure_diagnosis import enabled, repair
-            fix_details = repair(active, api) if active['phase'] != 'claimed' and enabled(active) else None
+            proof = b.saved_qa(active) if active['phase'] == 'ci' else None
+            fix_details = repair(active, api, qa_evidence=proof) if active['phase'] != 'claimed' and enabled(active) else None
             if active['phase'] != 'claimed':
                 b.candidate_identity(active)
                 if active['phase'] == 'ci':
-                    b.saved_qa(active)
                     need(b.failed_ci(active) == diagnostic, 'CI diagnostic changed; re-observe gate')
                     dev = b.remote_dev()
                     need(b.git('merge-base', active['base'], dev, cwd=b.work) == active['base'],
@@ -425,6 +425,8 @@ def perform(req, config, context):
                     if passed: b.saved_qa(active)
                     rt.publish(store.data, store.parked)
                     return dict(status='confirmed', runtime_review_reused=passed, **metadata)
+                refusal = getattr(b, 'qa_reuse_refusal', None)
+                if isinstance(refusal, str): metadata['qa_reuse_refusal'] = refusal
             if 'routing_policy' in active['task']:
                 # Cheap exact-SHA mandatory checks run first. They NEVER certify independent QA.
                 try:
@@ -600,8 +602,13 @@ def entry(req, config, native_auth=None):
                     b.stopped_writer(active['head'] or active['base'])
                     path = b.c.state_dir / 'actions-deferred.json'
                     archive = a.loads(path.read_bytes()) if path.exists() else {'schema': 'GB_ACTIONS_DEFERRED_V1', 'entries': []}
-                    archive['entries'].append(dict(issue=active['issue'], reason=reason,
-                                                   snapshot=json.loads(json.dumps(active))))
+                    deferred = dict(issue=active['issue'], reason=reason,
+                                    snapshot=json.loads(json.dumps(active)))
+                    if (reason == 'attempts exhausted' and active['phase'] == 'ci'
+                            and (active.get('qa') or {}).get('reviewed_sha') != active['head']):
+                        from qa_equivalence import supplemental
+                        deferred['qa_evidence'] = supplemental(active, req['slot'], b.saved_qa(active))
+                    archive['entries'].append(deferred)
                     a.atomic(path, archive)  # archive first; never alter done/parked/history/budget
                     store.data['active'] = None
                     store.save()

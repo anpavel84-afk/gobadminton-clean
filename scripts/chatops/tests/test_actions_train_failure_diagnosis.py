@@ -266,12 +266,15 @@ class Recovery185Budget(unittest.TestCase):
         self.assertEqual(j['receipts'][key]['counts']['diagnose'],0)
     def test_exact_cached_astra_brief_reused_by_185_without_extra_call(self):
         R,entry,config,j,key,r=self.fixture(3)
-        active=j['receipts'][key]['frozen']['snapshot']
+        active=entry['snapshot']
         value=F.inputs(active,Mock())
         outcome=brief()
         active['failure_diagnosis']['receipts'][core.digest(value)]=dict(
             status='ready',inputs=copy.deepcopy(value),input_hash=core.digest(value),
             brief=outcome,brief_hash=core.digest(outcome),routing={'effective_model':'gpt-6-astra'})
+        # The cached brief exists before terminal enrollment, as on the real path.
+        from test_actions_train_recovery import config as recovery_config
+        config=recovery_config(entry);j=R.empty();key=R.enroll(j,entry,'slot1',config)
         _,reserved=self.reserve(R,entry,config,j,key,r)
         self.assertTrue(reserved['diagnosis_cached'])
         self.assertEqual(reserved['failure_diagnosis']['calls'],3)

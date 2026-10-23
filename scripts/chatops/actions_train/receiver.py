@@ -456,16 +456,14 @@ def supervisor(req, policy, key, root_lock):
             if policy.get('recovery', {}).get('enabled'):
                 # Only the exact pre-effect terminal snapshot can enter diagnosis. Never trust
                 # an edited/unrelated slot archive as a new product authorization.
-                from recovery import enroll
                 cache = recovery_journal()
                 try:
                     user = pwd.getpwnam('agentagency-dev' if slot == 'slot1' else 'gb-slot2')
                     entries = read(AUTONOMY / 'slots' / slot / 'actions-deferred.json', user.pw_uid)['entries']
                     entry = entries[-1]
-                    need(entry['snapshot'] == op.get('checkpoint_before', {}).get('active')
-                         and entry['issue'] == req['issue'], 'deferral differs from frozen pre-effect checkpoint')
                     done = checkpoint('slot1')[0]['done'] + checkpoint('slot2')[0]['done']
-                    enroll(cache, entry, slot, read(POLICY, 0, 16384), future=True, done=done)
+                    enroll_deferral(cache, entry, slot, op.get('checkpoint_before', {}), req['issue'],
+                        read(POLICY, 0, 16384), done=done, verification=verified_slot_qa)
                 except (Refused, KeyError, ValueError, TypeError, OSError):
                     cache['blocked'][key] = dict(issue=req['issue'], slot=slot, status='needs-owner',
                          reason='safe deferral not eligible for exact recovery enrollment; preserve archive for review')
@@ -508,6 +506,87 @@ def hosted_identity(req, policy):
          and ('ref: ' + policy['controller_sha']).encode() in raw, 'trusted workflow/checkout changed')
 
 
+def enroll_deferral(cache, entry, slot, checkpoint_before, issue, config, *, done=(), verification=None):
+    """Keep archive supplement outside the exact pre-effect checkpoint."""
+    from recovery import enroll
+    need(entry['snapshot'] == checkpoint_before.get('active') and entry['issue'] == issue,
+         'deferral differs from frozen pre-effect checkpoint')
+    return enroll(cache, entry, slot, config, future=True, done=done, verification=verification)
+
+
+def protected_qa_inputs(active, folder, owner):
+    from qa_equivalence import name
+    expected = name(active) + '.equivalence.json'
+    need(active.get('qa_equivalence') == expected, 'wrong equivalence filename')
+    proof = read(folder / expected, owner, 262144)
+    origin = active.get('qa_origin')
+    import re
+    need(isinstance(origin, str) and re.fullmatch(
+        rf'qa-{active["issue"]}-a[1-9][0-9]*(?:-i[1-9][0-9]*)?\.json', origin), 'wrong origin filename')
+    read(folder / origin, owner, 262144)
+    read(folder / (origin + '.origin.json'), owner, 262144)
+    if proof.get('delta') is not None:
+        need(proof['delta']['receipt'] == name(active) + '.delta.json', 'wrong delta filename')
+        read(folder / proof['delta']['receipt'], owner, 262144)
+
+def verified_slot_qa(active, slot):
+    """Root checks the fixed protected layout; only a slot-UID child reads Git.
+
+    The child uses installed extraction code and cat-file, never candidate Python.
+    This is read-only verification, with no stage, credential or model setup.
+    """
+    need(slot in ('slot1', 'slot2') and type(active['issue']) is int and active['issue'] > 0,
+         'invalid QA verification slot/task')
+    user = pwd.getpwnam('agentagency-dev' if slot == 'slot1' else 'gb-slot2')
+    _, slots = live()
+    layout = slots.Layout(slot)
+    folder = layout.state_dir
+    need(folder == AUTONOMY / 'slots' / slot, 'QA verification layout drift')
+    protected_qa_inputs(active, folder, user.pw_uid)
+    need(os.getuid() == 0, 'root QA verification must drop to fixed slot UID')
+    r, w = os.pipe()
+    pid = os.fork()
+    if pid == 0:
+        os.close(r)
+        try:
+            os.setgroups([GROUP]); os.setgid(user.pw_gid); os.setuid(user.pw_uid)
+            import ctypes
+            need(ctypes.CDLL(None, use_errno=True).prctl(4, 0, 0, 0, 0) == 0,
+                 'cannot protect verifier memory')
+            from qa_equivalence import verify
+            bridge = SimpleNamespace(c=SimpleNamespace(state_dir=folder),
+                work=layout.worktrees / f'issue-{active["issue"]}')
+            raw = json.dumps(verify(bridge, active)).encode()
+            need(len(raw) <= 1048576, 'QA verification evidence bound')
+            with os.fdopen(w, 'wb') as output: output.write(raw)
+        except BaseException:
+            try: os.close(w)
+            except OSError: pass
+        finally: os._exit(0)
+    os.close(w)
+    import select
+    chunks, total, deadline = [], 0, time.monotonic() + 120
+    try:
+        while True:
+            remaining = deadline - time.monotonic()
+            need(remaining > 0 and select.select([r], [], [], max(0, remaining))[0],
+                 'QA verification timeout')
+            chunk = os.read(r, 65536)
+            if not chunk: break
+            chunks.append(chunk); total += len(chunk)
+            need(total <= 1048576, 'QA verification evidence bound')
+        _, status = os.waitpid(pid, 0)
+        need(status == 0 and chunks, 'protected QA verification failed')
+        return loads(b''.join(chunks))
+    except BaseException:
+        try: os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError: pass
+        try: os.waitpid(pid, 0)
+        except ChildProcessError: pass
+        raise
+    finally: os.close(r)
+
+
 def recovery_request(req, policy):
     """Same root lock, same single-flight slot operation; never claims/resets a product issue."""
     from recovery import reserve
@@ -527,7 +606,7 @@ def recovery_request(req, policy):
     need(not state['active'] or state['active']['phase'] == 'done', 'normal source slot occupied')
     guard(slot, policy)
     cache = recovery_journal()
-    receipt_key, recovery_data = reserve(cache, req, policy)
+    receipt_key, recovery_data = reserve(cache, req, policy, verification=verified_slot_qa)
     done = checkpoint('slot1')[0]['done'] + checkpoint('slot2')[0]['done']
     need(req['issue'] not in done, 'accepted task must never be resurrected')
     _, s = live()
@@ -724,7 +803,7 @@ def handle(req, policy):
             need(not candidates, 'ambiguous Owner/delegated recovery admission')
             from recovery_admission import root_admission
             cache = recovery_journal()
-            recovery_admission = root_admission(a, api, cache, issue, policy)
+            recovery_admission = root_admission(a, api, cache, issue, policy, verification=verified_slot_qa)
             candidates = [(issue['number'], recovery_admission['task'])]
             atomic(STATE / 'recovery.json', cache)
         need(len(candidates) == 1, 'no exact unique Owner or reviewed delegated task')
@@ -743,7 +822,7 @@ def handle(req, policy):
             from recovery_admission import root_admission
             api = API(req['gh_token']); api.identity()
             cache = recovery_journal()
-            recovery_admission = root_admission(a, api, cache, api(f'issues/{active["issue"]}'), policy)
+            recovery_admission = root_admission(a, api, cache, api(f'issues/{active["issue"]}'), policy, verification=verified_slot_qa)
             need(recovery_admission['key'] == active['recovery_receipt'], 'wrong active recovery receipt')
     if other_active and other_active['phase'] != 'done':
         need(not s.conflicts(record, s.task_record(other_active['issue'], other_active['task'])), 'overlapping source slots')

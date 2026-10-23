@@ -67,13 +67,33 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with: {fetch-depth: 0, persist-credentials: false}
+      - name: Checkout immutable release generator
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: 61b8dc7900f1276a702a7fad1a301675110bde96
+          path: _train-release-tools
+          persist-credentials: false
       - run: |
           find scripts/chatops -name '*.sh' -exec bash -n {} +
           python3 -B scripts/chatops/tests/test_ci_workflow.py
           python3 -B -m unittest discover -s scripts/chatops/tests -p "test_actions_train*.py"
-          python3 -B scripts/chatops/ops/prepare_train_release.py check
           python3 -B -m unittest discover -s scripts/chatops/tests -p "test_phase_*.py"
           python3 -B scripts/chatops/tests/test_autonomous_issues.py
           node --check scripts/chatops/smoke.mjs
           python3 -B scripts/chatops/tests/test_admin_deploy.py
           sudo python3 scripts/chatops/tests/test_helper.py
+          python3 -B "$GITHUB_WORKSPACE/_train-release-tools/scripts/chatops/ops/prepare_train_release.py" auto \
+            --repo "$GITHUB_WORKSPACE" --revision "$TRAIN_SOURCE_SHA" --base "$TRAIN_BASE_SHA" \
+            --checkout-sha "$GITHUB_SHA" --tool-revision "$TRAIN_TOOLS_SHA" \
+            --output "$RUNNER_TEMP/train-release"
+        env:
+          TRAIN_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          TRAIN_BASE_SHA: ${{ github.event.pull_request.base.sha || '3ac82ea068a5b2b0539caa552342d320e4b216ef' }}
+          TRAIN_TOOLS_SHA: 61b8dc7900f1276a702a7fad1a301675110bde96
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: train-release
+          path: ${{ runner.temp }}/train-release/
+          retention-days: 90
+          if-no-files-found: warn

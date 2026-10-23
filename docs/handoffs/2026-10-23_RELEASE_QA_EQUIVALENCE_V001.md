@@ -38,3 +38,20 @@ No production train tasks, native Antigravity calls, protected-state edits or ru
 ## Rollout and rollback
 
 Keep PMA's active Antigravity operation untouched. Source acceptance is not installation. Install only on the existing quiescent OPS boundary with exact manifest, reviewed backup/rollback, and no overlap with PMA. Preserve historical receipts and state. A rollback of code must never rewind task outcomes or grant usage.
+
+
+## R2 repair after independent R1 FAIL
+
+Original R1 FAIL receipt `4032cb9f9fe24c802cea7628956341732f29aa9b98cc2a2a3856c0b1d14978d6` remains immutable. A separate Astra High diagnosis confirmed exactly F1/F2/F3, receipt `73bf0a80a45d1e2dad0dc2cdd67c664ddbbe860b017d37afb01450415e5b857b`. Source repair and operator integration are not independent acceptance.
+
+F1: task QA equivalence now inspects immutable endpoint dependency blobs with the existing native import extractor, without changing the native adapter. Direct/transitive imports, package initializers, aliases, dynamic/file-loader uncertainty, build inputs and changed base are addressed. An uncertain dependency proof declines automatic reuse locally. A valid previous receipt instead scopes a real NEW independent review to the changed files and affected dependency/base risks; it never manufactures a new PASS or repeatedly orders a global audit. Strict original task/acceptance still applies. Safe isolated test changes retain the original runtime PASS plus actual test-delta review. The dependency extractor is intentionally conservative; arbitrary loaders are not claimed statically solved.
+
+F2: the existing receiver CI job now automatically invokes `auto` using a separately checked-out immutable tools revision, with contents:read and no new credentials. It selects the actual PR head (not GitHub's synthetic merge SHA), tolerates base advancement through the real fork point, validates current manifest, and either reuses an existing controller release or forms deterministic C→R and uploads a reconstructible Git bundle/proof. Source HEAD/index/refs remain unchanged. Publication of that exact artifact is still the existing trusted OPS action, not an automatic merge/admission. No new workflow/service/scheduler.
+
+There are two distinct identities. Release packaging checks the complete **installed controller manifest**, exact workflow lineage and non-runtime descendant paths; it is not permission to reuse a task's QA. The real #247 d07a7f test-only descendant therefore keeps its identical installed controller identity, while still requiring exact-candidate CI and test review. Task QA separately requires dependency-aware equivalence or fresh addressed review. This avoids making an unrelated application tsconfig invalidate identical installed controller bytes.
+
+F3: structured verified evidence travels outside the unchanged terminal snapshot. Root enrollment rechecks protected receipts and Git under the fixed slot UID. Frozen recovery, diagnosis cache, execution and successor certificates preserve the evidence; a successor gets parent provenance, not the parent's current-task PASS. Historical exact-SHA frozen serialization remains unchanged. Unverified cross-SHA proof remains refused.
+
+Operator combined regression run: **511 tests PASS, one existing skip**, including seven actual automatic release/artifact reconstruction cases, real Git merge/rebase, imported-test negative cases, original QA receipt preservation, terminal CI failure/recovery/successor chain and real HTTP two-descriptor isolation. A previous standalone F2 probe passed seven cases. These are real Git/HTTP operations with fixture tasks, not live product/model E2E. Hosted CI and fresh exact-release independent QA remain separate gates.
+
+Current PMA runtime and Antigravity task state are outside this repair. Source acceptance must not be confused with safe runtime installation; check current controller, grants and PMA ownership before any rollout.

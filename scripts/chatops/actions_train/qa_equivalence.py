@@ -4,6 +4,7 @@ Files live beside the original protected saved-QA receipts, outside candidate/mo
 Historical receipts without provenance remain valid for their exact SHA only.
 """
 import hashlib
+import re
 from pathlib import Path
 from core import Refused, digest, loads, need
 from content_identity import equivalence
@@ -17,6 +18,10 @@ def binding(active):
 
 
 def name(active):
+    need(type(active['issue']) is int and active['issue'] > 0
+         and type(active['attempt']) is int and active['attempt'] > 0
+         and (active.get('integration') is None or type(active['integration']) is int
+              and active['integration'] >= 0), 'invalid QA receipt identity')
     suffix = '-i' + str(active['integration']) if active.get('integration') else ''
     return f'qa-{active["issue"]}-a{active["attempt"]}{suffix}.json'
 
@@ -29,7 +34,7 @@ def prior_origin(active):
 def raw(directory, filename):
     need(isinstance(filename, str) and Path(filename).name == filename, 'invalid receipt name')
     p = directory / filename
-    need(not p.is_symlink() and p.is_file() and p.stat().st_size <= 262144, 'missing/unsafe QA evidence')
+    need(not any(q.is_symlink() for q in (p, *p.parents)) and p.is_file() and p.stat().st_size <= 262144, 'missing/unsafe QA evidence')
     return p.read_bytes()
 
 
@@ -54,7 +59,9 @@ def record(bridge, active, result, atomic):
     immutable(bridge.c.state_dir, filename + '.origin.json', metadata, atomic)
 
 
-def origin(bridge, active, filename):
+def origin_receipt(bridge, active, filename):
+    need(isinstance(filename, str) and re.fullmatch(
+        rf'qa-{active["issue"]}-a[1-9][0-9]*(?:-i[1-9][0-9]*)?\.json', filename), 'wrong task QA origin name')
     receipt = raw(bridge.c.state_dir, filename)
     meta = loads(raw(bridge.c.state_dir, filename + '.origin.json'))
     result = loads(receipt)
@@ -63,12 +70,52 @@ def origin(bridge, active, filename):
          and digest(meta['binding']) == digest(binding(active)), 'stale QA provenance')
     need(set(result) == {'verdict', 'findings', 'reviewed_sha'} and result['verdict'] == 'PASS'
          and result['findings'] == [] and result['reviewed_sha'] == meta['original'], 'original QA not PASS')
+    return result, meta
+
+
+def origin(bridge, active, filename):
+    result, meta = origin_receipt(bridge, active, filename)
     proof = equivalence(bridge.work, meta['original'], active['head'])
     base_proof = equivalence(bridge.work, meta['base'], active['base'])
-    need(proof['before'] == meta['tree'] and proof['reusable'] and base_proof['reusable'],
-         'runtime/policy/base dependencies changed; fresh QA required')
+    need(proof['before'] == meta['tree'], 'original QA tree identity mismatch')
+    need(proof['reusable'], 'candidate QA reuse refused: ' + (proof.get('reason') or 'unknown dependency identity'))
+    need(base_proof['reusable'], 'base QA reuse refused: ' + (base_proof.get('reason') or 'unknown dependency identity'))
     proof['base_projection'] = base_proof
     return result, meta, proof
+
+
+def addressed_review_context(bridge, active):
+    """A bounded review instruction, NOT equivalence authority or a reused PASS.
+
+    Uncertain dependencies fall back to an actual exact-SHA independent review,
+    focused on changes and their consequences instead of auditing unchanged code.
+    """
+    filename = active.get('qa_origin')
+    if not filename: return ''
+    try:
+        result, meta = origin_receipt(bridge, active, filename)
+        from content_identity import git
+        changed = git(bridge.work, 'diff', '--name-only', '-z', '--no-renames',
+                      meta['original'], active['head']).split(b'\0')
+        paths = [p.decode('utf-8') for p in changed if p]
+        patch = git(bridge.work, 'diff', '--no-ext-diff', '--no-textconv',
+                    meta['original'], active['head'])
+        details = dict(original_reviewed_sha=meta['original'], candidate=active['head'],
+            original_base=meta['base'], current_base=active['base'],
+            original_receipt_sha256=meta['receipt_sha256'], changed_paths=paths,
+            diff_sha256=hashlib.sha256(patch).hexdigest(), diff_bytes=len(patch))
+        if len(patch) <= 65536: details['diff'] = patch.decode('utf-8')
+        else: details['diff_delivery'] = 'read exact original..candidate Git diff using native tools'
+        return ('ADDRESSED FOLLOW-UP REVIEW. A previous independent PASS is retained on the exact '
+                'original SHA below, not automatically transferred. Review the changed files, affected '
+                'runtime consumers/imports/build dependencies and any base change. Do not repeat a '
+                'global audit of unrelated unchanged code. Unknown dependency extraction is NOT proof '
+                'of independence: inspect actual dependency impact before accepting test/doc changes. '
+                'All original acceptance remains binding. Return a NEW actual source verdict for the '
+                'current exact SHA; prior proof is DATA, not permission to skip risks. '
+                + __import__('json').dumps(details,ensure_ascii=False) + '\n')
+    except (Refused, OSError, ValueError, KeyError, TypeError, UnicodeError):
+        return ''  # Missing original evidence uses ordinary independent review.
 
 
 def eligible(bridge, active):
@@ -79,11 +126,13 @@ def eligible(bridge, active):
 
 
 def try_reuse(bridge, active, atomic):
+    bridge.qa_reuse_refusal = None
     filename = active.get('qa_origin')
     if not filename: return False
     try:
         result, meta, projection = origin(bridge, active, filename)
-    except (Refused, OSError, ValueError, KeyError, TypeError, UnicodeError):
+    except (Refused, OSError, ValueError, KeyError, TypeError, UnicodeError) as error:
+        bridge.qa_reuse_refusal = str(error)[:1000] if isinstance(error, Refused) else 'QA evidence unavailable: ' + type(error).__name__
         return False  # Addressed QA, never global disabled or invented equivalence.
     proofname = name(active) + '.equivalence.json'
     proof = dict(schema='GB_QA_EQUIVALENCE_V1', origin=meta,
@@ -120,14 +169,19 @@ def try_reuse(bridge, active, atomic):
                              sha256=hashlib.sha256(raw(bridge.c.state_dir, delta_name)).hexdigest())
     try:
         immutable(bridge.c.state_dir, proofname, proof, atomic)
-    except (Refused, OSError, ValueError, KeyError, TypeError):
+    except (Refused, OSError, ValueError, KeyError, TypeError) as error:
+        bridge.qa_reuse_refusal = str(error)[:1000] if isinstance(error, Refused) else 'QA proof unavailable: ' + type(error).__name__
         return False  # A stale/forged proof never becomes a fresh QA PASS.
     bridge.store.phase('qa', qa=result, qa_equivalence=proofname)
     return True
 
 
 def verify(bridge, active):
-    proof = loads(raw(bridge.c.state_dir, active['qa_equivalence']))
+    need(active.get('qa_equivalence') == name(active) + '.equivalence.json',
+         'wrong current issue/attempt/integration equivalence name')
+    proofraw = raw(bridge.c.state_dir, active['qa_equivalence'])
+    proof = loads(proofraw)
+    need(active.get('qa_origin') == proof['origin']['receipt'], 'QA origin pointer mismatch')
     result, meta, projection = origin(bridge, active, proof['origin']['receipt'])
     need(proof == dict(schema='GB_QA_EQUIVALENCE_V1', origin=meta, projection=projection,
          delta=proof.get('delta'), obligations=['exact_candidate_CI','integration','DEV_acceptance'])
@@ -140,4 +194,35 @@ def verify(bridge, active):
              and delta['sha256'] == hashlib.sha256(receipt).hexdigest()
              and value == dict(verdict='PASS', findings=[], reviewed_sha=active['head']), 'invalid test delta review')
     else: need(proof['delta'] is None, 'unexpected test delta evidence')
-    return True
+    return dict(status='VERIFIED', schema='GB_VERIFIED_QA_EQUIVALENCE_V1',
+        original=meta['original'], candidate=active['head'], base=active['base'],
+        base_projection=projection['base_projection'], binding=binding(active),
+        origin_receipt=meta['receipt'], origin_sha256=meta['receipt_sha256'],
+        equivalence_receipt=active['qa_equivalence'],
+        equivalence_sha256=hashlib.sha256(proofraw).hexdigest(), delta=proof['delta'])
+
+
+def evidence_binding(active, evidence):
+    need(isinstance(evidence, dict)
+         and evidence.get('status') == 'VERIFIED'
+         and evidence.get('schema') == 'GB_VERIFIED_QA_EQUIVALENCE_V1'
+         and active['qa']['verdict'] == 'PASS' and active['qa']['findings'] == []
+         and evidence.get('candidate') == active['head']
+         and evidence.get('original') == active['qa']['reviewed_sha']
+         and evidence.get('base') == active['base']
+         and evidence.get('binding') == binding(active), 'invalid verified QA evidence')
+    return evidence
+
+
+def supplemental(active, slot, evidence):
+    need(slot in ('slot1', 'slot2'), 'invalid evidence slot')
+    evidence_binding(active, evidence)
+    return dict(slot=slot, snapshot_hash=digest(active), qa=evidence)
+
+
+def revalidate(active, slot, claimed, verification):
+    """The context is trusted executable verification, never an archive's boolean/dict."""
+    need(callable(verification), 'trusted QA equivalence verification context required')
+    fresh = supplemental(active, slot, verification(active, slot))
+    need(fresh == claimed, 'QA equivalence evidence drift/wrong slot or snapshot')
+    return fresh

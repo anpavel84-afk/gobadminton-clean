@@ -225,6 +225,28 @@ class ContentReuse(GitFixture):
         self.assertFalse(self.reuse())
         self.assertEqual((self.state/self.filename).read_bytes(),self.receipt)
 
+    def test_dependency_uncertainty_gets_real_addressed_review_not_invented_reuse(self):
+        self.write('apps/runtime.py','import importlib\nvalue=importlib.import_module("plugin").value\n')
+        runtime=self.commit('dynamic runtime dependency')
+        self.current.update(head=runtime,phase='pr_wait',integration=1,qa=None,qa_origin=None,qa_equivalence=None)
+        original=dict(verdict='PASS',findings=[],reviewed_sha=runtime)
+        self.bridge.model=Mock(return_value=original);self.bridge.review(self.current)
+        origin_name=qa.name(self.current);origin_bytes=(self.state/origin_name).read_bytes()
+        self.write('scripts/chatops/tests/test_example.py','assert 1 != 2\n');candidate=self.commit('only test delta')
+        self.current.update(head=candidate,phase='pr_wait',integration=2,qa=None,qa_origin=origin_name,qa_equivalence=None)
+        self.bridge.model=Mock(return_value=dict(verdict='PASS',findings=[],reviewed_sha=candidate))
+        self.assertFalse(self.bridge.try_reuse_qa(self.current))
+        self.assertTrue(self.bridge.review(self.current))
+        prompt=self.bridge.model.call_args.args[0]
+        self.assertIn('ADDRESSED FOLLOW-UP REVIEW',prompt)
+        self.assertIn('runtime consumers/imports/build dependencies',prompt)
+        self.assertIn(runtime,prompt);self.assertIn(candidate,prompt)
+        self.assertEqual(self.current['qa']['reviewed_sha'],candidate)
+        self.assertIsNone(self.current.get('qa_equivalence'))
+        self.assertEqual((self.state/origin_name).read_bytes(),origin_bytes)
+        self.bridge.saved_qa(self.current)
+
+
 class ReleaseTests(GitFixture):
     def setUp(self):
         super().setUp()

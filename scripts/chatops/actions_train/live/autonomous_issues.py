@@ -1105,7 +1105,9 @@ class Bridge:
                              'typecheck/lint/test and check the fix locally. Reject suppressed diagnostics, '
                              'deleted/disabled checks or weaker assertions. ') if (
                                  active.get('ci_failure') and continuity(active)) else ''
-            result = self.model('Independent QA in a NEW session; never implement fixes. Review EXACT '
+            from qa_equivalence import addressed_review_context
+            addressed = addressed_review_context(self, active)
+            result = self.model(addressed + 'Independent QA in a NEW session; never implement fixes. Review EXACT '
                                 + active['head'] + ' against base ' + active['base']
                                 + '. This is SOURCE QA before CI and DEV. Inspect the diff against '
                                 'the immutable task goal, allowed paths, project rules and source-level '
@@ -1128,7 +1130,7 @@ class Bridge:
             passed = qa_result(result, active['head'])
             from qa_equivalence import immutable, name
             immutable(self.c.state_dir, name(active), result, atomic)
-            self.store.phase('qa', qa=result)
+            self.store.phase('qa', qa=result, qa_equivalence=None, qa_origin=None)
             from qa_equivalence import record
             record(self, active, result, atomic)
             return passed
@@ -1159,8 +1161,7 @@ class Bridge:
     def saved_qa(self, active):
         if active.get('qa_equivalence'):
             from qa_equivalence import verify
-            require(verify(self, active), 'invalid QA equivalence')
-            return
+            return verify(self, active)
         path = self.c.state_dir / f'qa-{active["issue"]}-a{active["attempt"]}{integ(active)}.json'
         require(not path.is_symlink() and path.stat().st_size <= 65536, 'invalid saved QA')
         result = loads(path.read_bytes())
