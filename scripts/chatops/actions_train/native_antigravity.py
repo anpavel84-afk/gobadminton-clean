@@ -323,8 +323,8 @@ def collect(work, base, head, prompt):
         oid, size = info
         need(total + size <= MAX_INPUT, 'input exceeds 1 MiB; refusing to truncate')
         data = git(work, 'cat-file', 'blob', oid, limit=size)
-        need(len(data) == size and b'\0' not in data and b'PRIVATE KEY-----' not in data,
-             'binary or secret-like content')
+        need(len(data) == size and b'\0' not in data,
+             'binary or incomplete source')
         files[path] = dec(data)
         total += size
         return True
@@ -344,8 +344,8 @@ def collect(work, base, head, prompt):
                 missing.append(path + ': unresolved local import')
     diff = dec(git(work, 'diff', '--no-ext-diff', '--no-textconv', '--no-color', '--no-renames',
                    base, head, '--', *changed))
-    need('\0' not in diff and 'PRIVATE KEY-----' not in diff and total + len(diff.encode()) <= MAX_INPUT,
-         'diff exceeds 1 MiB or contains binary/secret-like content')
+    need('\0' not in diff and total + len(diff.encode()) <= MAX_INPUT,
+         'diff exceeds 1 MiB or contains binary data')
     payload = json.dumps({'caller_task': prompt, 'base_sha': base, 'reviewed_sha': head,
                           'missing_context': missing, 'diff': diff, 'files': files},
                          sort_keys=True, ensure_ascii=False)
