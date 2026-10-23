@@ -21,7 +21,7 @@ PINS = {'autonomous_issues.py': '7eecb7d37cbf28eb8d6a967f62e155a3cb0b7590c28632e
         'slots.py': '3c7b4ab36dd3cd8b41c3309a4d58c54ffc99027b1d7c1e5ad2235b5cd1f72a76',
         'check_foundation.py': 'c2975b19bd46d00acbdbc08227545b8f9c9501d7b8e8783e9b397751c612bd13'}
 RECOVERY_STAGES = ('diagnose', 'task_review')
-STAGES = ('claim', 'author', 'publish', 'qa', 'ci', 'integrate', 'promote', 'dev') + RECOVERY_STAGES
+STAGES = ('claim', 'author', 'publish', 'qa', 'ci', 'integrate', 'promote', 'dev', 'qa_qualification') + RECOVERY_STAGES
 PROFILES = ('auto', 'codex', 'cursor', 'agy')
 SHA = re.compile('[0-9a-f]{40}')
 
@@ -184,6 +184,10 @@ def request(value):
     need(value['head'] is None or isinstance(value['head'], str) and SHA.fullmatch(value['head']), 'invalid head')
     need(value['profile'] in PROFILES, 'unknown profile')
     need(safe_credential(value['gh_token']), 'invalid API credential')
+    if value['stage'] == 'qa_qualification':
+        need(value['slot'] == 'slot2' and value['issue'] == 29 and value['phase'] == 'idle'
+             and value['attempt'] == 0 and value['profile'] == 'agy' and value['head'] is not None,
+             'invalid bounded QA qualification request')
     return value
 
 def binding(req):
@@ -231,8 +235,9 @@ def _route_immutable(slots, task, role, profile, budget, slot, task_hash=None):
                             fallback_reason=('previous preferred providers unavailable' if refusal else None),
                             unavailable=refusal, remaining_calls=left, used_calls=budget.used('cursor', role, slot))
             if provider == 'agy':
-                need(role == 'qa' and model == 'claude-sonnet-5-5-medium' and effort is None,
-                     'unqualified Antigravity role/model')
+                if role != 'qa' or model != 'claude-sonnet-5-5-medium' or effort is not None:
+                    refusal[entry] = 'Antigravity role/model/effort not supported by native QA adapter'
+                    continue
                 from native_antigravity import available
                 ok, why = available(slot, task_hash or digest(task))
                 # No AGY authority qualification exists yet. No budget charge or
@@ -362,6 +367,17 @@ def plan(a, s, snapshot, candidates, profile='auto'):
                 out.append({k: v for k, v in pending['binding'].items() if k != 'action'})
             continue
         active = card.get('active')
+        qualification = card.get('qa_qualification')
+        if snapshot.get('mode') == 'active' and name == 'slot2' and active is None and qualification:
+            need(set(qualification) == {'slot','issue','stage','phase','head','attempt','generation','profile'}
+                 and qualification['slot'] == name and qualification['issue'] == 29
+                 and qualification['stage'] == 'qa_qualification' and qualification['phase'] == 'idle'
+                 and qualification['attempt'] == 0 and qualification['profile'] == 'agy'
+                 and qualification['generation'] == card['generation']
+                 and isinstance(qualification['head'], str) and SHA.fullmatch(qualification['head']),
+                 'invalid root QA qualification proposal')
+            out.append(dict(qualification))
+            continue  # Only this free slot; no product claim/author checkpoint is manufactured.
         if active and active['phase'] != 'done':
             stage = next_stage(active)
             if stage:
