@@ -128,6 +128,10 @@ class ExactPlanAndWatchdog(unittest.TestCase):
                  patch.object(U,'preserved',return_value={'ledger':'unchanged'}):
                 self.assertEqual(U.plan(bundle,p,'a'*40,C,None,Mock())[5],p['changes'])
                 admission.assert_called_once()
+                policy['mode']='active'
+                with self.assertRaisesRegex(core.Refused,'future ready baseline'):U.plan(bundle,p,'a'*40,C,None,Mock())
+                admission.assert_called_once()  # Refuse before consulting the new admission.
+                policy['mode']='disabled'
                 changed=copy.deepcopy(p);changed['changes'][str(target)]['after']='f'*64
                 with self.assertRaisesRegex(core.Refused,'target deltas'):U.plan(bundle,changed,'a'*40,C,None,Mock())
                 target.write_text('foreign module')
@@ -198,6 +202,13 @@ class Transaction(unittest.TestCase):
             with self.assertRaises(OSError):self.call('apply')
         self.assertEqual(self.target.read_bytes(),b'old-module')
         self.assertEqual(self.call('rollback')['phase'],'rolled-back-disabled')
+    def test_active_policy_cannot_run_disabled_shadow(self):
+        self.call('apply')
+        policy=json.loads(self.policy.read_text());policy['mode']='active'
+        self.policy.write_text(json.dumps(policy))
+        with self.assertRaisesRegex(core.Refused,'wrong disabled team policy'):self.call('activate',999)
+        self.helper.probe.assert_not_called()
+        self.assertEqual(json.loads(self.journal.read_text())['phase'],'installed-disabled')
     def test_activation_resume_does_not_rewind_new_live_progress(self):
         self.call('apply');original=U.r.atomic
         def crash(path,value,**kwargs):

@@ -3,6 +3,12 @@
 No runtime proof/baseline is guessed. This module has no auto-install entrypoint.
 Use only a reviewed root caller with an exact proof after AGY is actually ready.
 Reuses existing quiescence, payload, shadow and rollback primitives; no services.
+
+Activation ordering: the reviewed caller first disables policy under the existing
+controller lock/quiescence, before posting the immutable NEW #230 admission.
+Then bind its exact comment in proof, apply while disabled, complete the hosted
+disabled shadow, and activate. Do not admit #230 while the old active router and
+#225-bound Cursor marker can select a fallback. This helper never posts admission.
 """
 import copy
 import datetime as dt
