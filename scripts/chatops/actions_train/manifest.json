@@ -22,7 +22,7 @@
     "scripts/chatops/actions_train/recovery_admission.py": "e3b05f2a0c350de531a28706949618c2d59cc1874a5c4bbbcadcb0393ea7b948",
     "scripts/chatops/actions_train/recovery_publish.py": "51e110d5beaf1a0e46b98eaffb2691d7e4e975c36ab939575e93e87d2850a8c9",
     "scripts/chatops/actions_train/recovery_upgrade.py": "ce8cc88f3cb3230b51f425d9082e826511c35332ca363d2af97bb8b18e4498f6",
-    "scripts/chatops/actions_train/stage.py": "cf7fdeb782799dc3aec29f06b6352501ecd73b2de91237891508f41ea1100169",
+    "scripts/chatops/actions_train/stage.py": "b364cd62eb348a49c4cfce8a45f90cee28f34c4c1a303eb284454208ad955072",
     "scripts/chatops/server/gb-deploy-helper.sh": "c023a71bd1362e8a9347bc06c89b69546efd6c3856e1e6dce1c4c57304538f99"
   },
   "schema": "GB_ACTIONS_TRAIN_INSTALL_V1"

@@ -140,6 +140,41 @@ def setup(req, config, native_auth=None):
     return a, s, rt, api, store, bridge
 
 
+
+def cursor_successor_seed(a, api, active, slot):
+    """One Owner-approved successor only; ordinary immutable admission still applies.
+
+    This does not enroll/rewrite recovery185 or the original one-attempt canary.
+    The installed root marker binds exact task bytes, archive and candidate.
+    """
+    if active['issue'] != 225:
+        return None
+    from native_cursor import MARKER, _read
+    from core import digest, loads
+    marker = loads(_read(MARKER, {0}, 16384))
+    expected = dict(issue=225, parent=211, slot='slot2',
+        task_sha256='4570522ac1c4a3685ba253a921561d1bb866c863878b3e084c6063a13efe3005',
+        archive_sha256='97b0713cf85f8a97f1c84e620692c6090d1017c338b9857ca17dbccc7f756a88',
+        head='95c138460cbaeeeab03b5bf781dea4cbfddadceb',
+        base='f984891a10eebb73f1fc97ec8cd58013837e4da2',
+        diagnosis_sha256='cf277ca0e02f12e989eee02c68d5e6e145f49f541e85c267dcd8a65b3b15548a')
+    need(marker.get('successor') == expected and marker.get('phase') == 'canary'
+         and marker.get('canary_task_sha256') == expected['task_sha256']
+         and slot == expected['slot'] and digest(active['task']) == expected['task_sha256']
+         and active['attempt'] == 0, 'unapproved Cursor successor seed')
+    archive = loads(Path('/var/lib/gobadminton-autonomy/slots/slot2/actions-deferred.json').read_bytes())
+    matches = [e for e in archive['entries'] if e.get('issue') == 211]
+    need(len(matches) == 1 and digest(matches[0]) == expected['archive_sha256'],
+         'original Cursor deferred evidence changed')
+    original = matches[0]['snapshot']
+    need(original['attempt'] == original['task']['max_attempts'] == 1
+         and original['head'] == expected['head'] and original['base'] == expected['base']
+         and original['qa']['verdict'] == 'FAIL' and original['qa']['reviewed_sha'] == expected['head'],
+         'not the exact exhausted Cursor canary')
+    a.Bridge.unchanged_issue(None, original)
+    return expected
+
+
 def run_result(a, api, active, dev=False):
     workflow, name, branch = ('dev-deploy.yml', 'DEV deploy', 'dev') if dev else (
         'ci.yml', 'Product CI', f'automation/issue-{active["issue"]}')
@@ -234,9 +269,19 @@ def perform(req, config, context):
             need(b.git('merge-base', f['base'], f['head'], cwd=b.work) == f['base'], 'parent candidate ancestry drift')
             b.clean(f['head'])
         else:
-            base = b.remote_dev()
-            store.phase('claimed', base=base)
-            b.git('worktree', 'add', '-b', f'automation/issue-{active["issue"]}', str(b.work), base)
+            seed = cursor_successor_seed(a, api, active, req['slot'])
+            if seed:
+                b.git('fetch', '--no-tags', a.READ_REMOTE, seed['head'])
+                need(b.git('rev-parse', 'FETCH_HEAD') == seed['head'], 'successor candidate fetch drift')
+                store.phase('claimed', base=seed['base'], head=seed['head'])
+                b.git('worktree', 'add', '-b', f'automation/issue-{active["issue"]}', str(b.work), seed['head'])
+                need(b.git('merge-base', seed['base'], seed['head'], cwd=b.work) == seed['base'],
+                     'successor candidate ancestry drift')
+                b.clean(seed['head'])
+            else:
+                base = b.remote_dev()
+                store.phase('claimed', base=base)
+                b.git('worktree', 'add', '-b', f'automation/issue-{active["issue"]}', str(b.work), base)
     else:
         need(active and active['issue'] == req['issue'] and active['phase'] == req['phase']
              and active.get('head') == req['head'] and active['attempt'] == req['attempt'], 'stale checkpoint')
