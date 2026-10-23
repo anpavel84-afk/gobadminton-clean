@@ -544,7 +544,7 @@ def execute_checked(action, bundle, manifest, controller, stage_hash, dispatch_h
                    'exact original marker required')
             r.need(proof.get('baseline_marker_sha256')==i.sha(MARKER),'original marker drift')
             recovery_ledger()
-        else:r.need(not MARKER.exists(),'existing AGY qualification; preserve and inspect')
+        elif not RECOVERY:r.need(not MARKER.exists(),'existing AGY qualification; preserve and inspect')
         marker,nextbudget=reviewed_configuration(proof,r.read(BUDGET,0),
             {name:i.sha(bundle/'scripts/chatops/actions_train'/name) for name in ('native_antigravity.py','native_guard.py')})
         if ONE_SHOT:r.need(marker['qualification']['qualification_grant']['controller_revision']==controller,'one-shot controller proof drift')
