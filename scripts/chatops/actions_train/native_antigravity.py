@@ -43,6 +43,9 @@ SCHEMA = {'type': 'object', 'additionalProperties': False,
 AGENT_DEF = '''---
 name: gobadminton-text-review
 description: Independent source QA with native analytical tools.
+tools:
+  - view_file
+  - run_command
 mainAgent: true
 subagent: false
 inheritCustomizations: false
