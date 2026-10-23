@@ -483,7 +483,10 @@ def addressed_ledger(value):
 def addressed_ready(r,q):
     g=validate_addressed_grant(q['qualification_grant'])
     if g['owner_comment']==FRESH_OWNER_COMMENT:
-        policy=r.read(r.POLICY,0)
+        # qualification_api() exposes read/STATE/atomic, not POLICY. Pin the
+        # existing receiver path rather than weakening the controller match.
+        from receiver import POLICY as installed_policy
+        policy=r.read(getattr(r,'POLICY',installed_policy),0)
         need(g['controller_revision']==policy['controller_sha'],'fresh grant requires installed controller SHA')
         # Analysis must finish and be retained before the separately admitted QA call.
         if g['role']=='independent_qa':
