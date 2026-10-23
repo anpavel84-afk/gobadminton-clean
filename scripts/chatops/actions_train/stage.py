@@ -484,11 +484,14 @@ def qualify_qa(req, config, context):
             'or credentials. Do not deliberately trigger denied tools. Return canonical QA JSON.')
     accepted_rules = load()
     before_calls = rt.budget.used('agy', 'qa', req['slot'])
+    from antigravity_qa_recovery import grant,charge_grant
+    charge=(lambda:charge_grant(q,req,rt.budget,b.c.state_dir,s)) if grant(q) else (lambda:rt.budget.charge(req['slot'],'agy','qa'))
     result, receipt = review(work, q['base'], q['head'], text, 1800,
         slot=req['slot'], task_hash=q['task_sha256'],
-        charge=lambda:rt.budget.charge(req['slot'], 'agy', 'qa'), popen=a.subprocess.Popen,
+        charge=charge, popen=a.subprocess.Popen,
         accepted_rules=accepted_rules, evidence_dir=b.c.state_dir/'antigravity-evidence')
     need(digest(store.data) == before, 'QA qualification changed source checkpoint')
+    if grant(q):receipt['qualification_grant']=q['qualification_grant']
     receipt['qualification_task_sha256'] = q['task_sha256']
     receipt['qualification_lineage'] = {k:q[k] for k in ('parent_task_sha256','parent_operation','adapter_revision') if k in q}
     receipt['charged_calls'] = rt.budget.used('agy', 'qa', req['slot']) - before_calls

@@ -191,9 +191,10 @@ def qualification_plan(policy, card, budget):
         q = qualification_descriptor(marker)
         import antigravity_qa_recovery as recovery
         if recovery.reservation_path(STATE,q).exists():return None
-        if recovery.successor(q):recovery.lineage_ready(qualification_api(),q)
+        if recovery.grant(q):recovery.grant_ready(qualification_api(),q)
+        elif recovery.successor(q):recovery.lineage_ready(qualification_api(),q)
         left=budget.remaining('agy','qa','slot2')
-        if not (type(left) is int and (left>=1 if recovery.successor(q) else left==1)):return None
+        if not recovery.grant(q) and not (type(left) is int and (left>=1 if recovery.successor(q) else left==1)):return None
         return dict(slot='slot2',issue=29,stage='qa_qualification',phase='idle',head=q['head'],
                     attempt=0,generation=card['generation'],profile='agy')
     except (OSError, ValueError, ReviewError, Refused, KeyError, TypeError):
@@ -350,6 +351,7 @@ def supervisor(req, policy, key, root_lock):
             req['_task_hash'] = j['operations'][key].get('task_hash')
             if j['operations'][key].get('qa_qualification'):
                 req['_qa_qualification'] = j['operations'][key]['qa_qualification']
+                if 'qualification_grant' in req['_qa_qualification']:req['_qa_grant_operation']=key
             if j['operations'][key].get('recovery_admission'):
                 req['_recovery_admission'] = j['operations'][key]['recovery_admission']
             if j['operations'][key].get('recovery_data'):
@@ -586,19 +588,23 @@ def qualification_request(req, policy):
     need(m['phase'] == 'canary' and req['head'] == q['head'], 'qualification source/phase mismatch')
     import antigravity_qa_recovery as recovery
     path = recovery.reservation_path(STATE,q)
-    if recovery.successor(q):
+    if recovery.grant(q):
+        need(digest(state)==recovery.CHECKPOINT,'one-shot checkpoint changed')
+        recovery.grant_ready(qualification_api(),q)
+    elif recovery.successor(q):
         need(digest(state)==recovery.CHECKPOINT,'successor checkpoint changed')
         recovery.lineage_ready(qualification_api(),q)
     need(not path.exists(), 'QA qualification already reserved; reconcile without another call')
     _, s = live()
     budget = s.Budget(BUDGET, AUTONOMY/'outbox', AUTONOMY/'locks/registry.lock')
     left = budget.remaining('agy', 'qa', slot)
-    need(type(left) is int and (left>=1 if recovery.successor(q) else left==1),
+    need(recovery.grant(q) or type(left) is int and (left>=1 if recovery.successor(q) else left==1),
          'QA qualification requires finite eligible daily budget')
     reservation = dict(schema='GB_ANTIGRAVITY_QA_29_RESERVATION_V1', operation=key,
         task_hash=q['task_sha256'], descriptor=q, started_at=int(time.time()), result=None)
     # Reservation first: a crash between writes consumes the canary, never replays it.
-    if recovery.successor(q):recovery.reserve_lineage(qualification_api(),q,key)
+    if recovery.grant(q):recovery.reserve_grant(qualification_api(),q,key)
+    elif recovery.successor(q):recovery.reserve_lineage(qualification_api(),q,key)
     atomic(path, reservation)
     j['operations'][key] = dict(task_hash=q['task_sha256'], qa_qualification=q, binding=binding(req),
         run=req['run'], run_attempt=req['run_attempt'], before=digest(state), checkpoint_before=state,
