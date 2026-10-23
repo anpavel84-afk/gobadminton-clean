@@ -9,7 +9,7 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
-from test_actions_train import core, S
+from test_actions_train import core, S, A, ROOT, NOW, issue
 from test_actions_train_cost_policy import cost_task
 import native_cursor as N
 
@@ -97,6 +97,12 @@ class ProspectiveRouting(unittest.TestCase):
             self.assertEqual(core.route(S, t, 'author', 'auto', self.budget, 'slot2')['provider'], 'codex')
             t = self.cursor_task()
             self.assertEqual(core.route(S, t, 'qa', 'auto', self.budget, 'slot2')['provider'], 'codex')
+
+    def test_prepared_canary_uses_existing_immutable_admission_contract(self):
+        import datetime as dt
+        task=json.loads((ROOT/'scripts/chatops/ops/cursor-author-canary-task.json').read_text())
+        parent=issue(211,task)
+        self.assertEqual(A.validate_issue(parent,NOW-dt.timedelta(days=1),NOW),task)
 
     def test_marker_is_exact_task_bound_and_modules_pinned(self):
         marker = {'schema': 'GB_CURSOR_AUTHOR_211_V1', 'phase': 'canary',
