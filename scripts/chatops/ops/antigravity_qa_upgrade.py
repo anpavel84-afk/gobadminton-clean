@@ -96,7 +96,16 @@ def verify_patch_chain(j,p):
            and chain.get('native_sha256')==PATCH_NATIVE and chain.get('controller_after')==j['controller']
            and chain.get('receiver_after_sha256')==j.get('changes',{}).get(str(INSTALL/'receiver.py'),{}).get('after'),
            'invalid entrypoint patch lineage')
-    patch_parent(chain.get('parent_journal_sha256'))
+    parent=patch_parent(chain.get('parent_journal_sha256'))
+    key=str(INSTALL/'receiver.py')
+    before=j['changes'][key].get('before')
+    parent_change=parent.get('changes',{}).get(key)
+    record_before=j.get('record_before')
+    prior=record_before.get('after') if isinstance(record_before,dict) else None
+    r.need(isinstance(before,str) and re.fullmatch('[a-f0-9]{64}',before)
+           and isinstance(parent_change,dict) and isinstance(prior,dict)
+           and before==parent_change.get('after')==prior.get(key),
+           'receiver before hash must match pinned parent and original inventory')
     r.need(p.get('controller_sha')==j['controller'],'patch controller drift')
     record=r.read(STATE/'backup.json',0)
     r.need(digest(record)==j.get('inventory_after_sha256') and record.get('manifest')==j['manifest']
