@@ -75,8 +75,13 @@ apps/web/src/components/consumer/pages/GameDetailPage.tsx; run_command must
 inspect exact Git HEAD and the relevant imports/dependencies. Supply
 source_reads entries with actual path, sha256 and a verbatim excerpt from each file.
 No claimed tool call, fabricated hash or inferred dependency is acceptable.
-If either read is impossible, return INCOMPLETE with the limitation.
-No implementation writes. Return exactly one JSON object as requested.
+Use ONLY the absolute source root and absolute paths explicitly supplied
+in the trusted analysis input. The temporary CLI current directory is an
+empty private workspace, NOT the source checkout. Invoke view_file using
+the absolute checkout paths; run_command may use git -C <source root> but
+must not write to that directory. If either read is impossible, return
+INCOMPLETE with the limitation. No implementation writes. Return exactly
+one JSON object as requested.
 """
 
 
@@ -519,7 +524,9 @@ def filesystem_roots(root, work, common=None):
              '/etc/ld.so.cache', '/etc/ssl', '/etc/resolv.conf', '/etc/hosts', '/etc/nsswitch.conf',
              '/etc/gai.conf', '/opt/gb-slots/runtime/node', '/opt/gb-slots/runtime/pnpm', '/dev/null', '/dev/random', '/dev/urandom') if Path(p).exists()]
     readonly = roots + [Path(work), Path(AGY)] + ([Path(common)] if common is not None else [])
-    writable = [Path(root)]
+    # Git's read-only commands open /dev/null O_RDWR; allow this exact sink,
+    # never granting write access to the source checkout or its Git objects.
+    writable = [Path(root), Path('/dev/null')]
     executables = [Path(p) for p in ('/usr/bin', '/usr/lib', '/usr/lib64', '/lib', '/lib64', '/opt/gb-slots/runtime/node', '/opt/gb-slots/runtime/pnpm', AGY)
                    if Path(p).exists()] + [Path(root)]
     return readonly, writable, executables
@@ -536,7 +543,7 @@ def input_payload(prompt):
         semantic_input_bytes=len(semantic),stdin_sha256=hashlib.sha256(wire).hexdigest(),stdin_bytes=len(wire))
 
 
-def command(print_timeout,prompt=None,model=MODEL,*,analysis=False):
+def command(print_timeout,prompt=None,model=MODEL,*,analysis=False,source_root=None):
     need(model in MODELS,'unsupported native QA model')
     need(type(print_timeout) is int and 1<=print_timeout<=3600,'invalid print timeout')
     if prompt is not None:input_payload(prompt)
@@ -545,6 +552,14 @@ def command(print_timeout,prompt=None,model=MODEL,*,analysis=False):
     argv = [AGY,'--model',model,'--sandbox','--dangerously-skip-permissions',
             '--disable-slash-commands','--agent',AGENT,'--input-format','stream-json',
             '--output-format','stream-json']
+    if source_root is not None:
+        need(analysis and type(source_root) is str and source_root.startswith('/')
+             and source_root == str(Path(source_root).resolve(strict=True))
+             and Path(source_root).is_dir() and not Path(source_root).is_symlink(),
+             'native source root must be a verified absolute checkout')
+        # --add-dir is an official CLI workspace option; NEVER copy/mount
+        # source into the temporary writable ws.
+        argv += ['--add-dir',source_root]
     if not analysis:
         argv += ['--json-schema',json.dumps(SCHEMA,sort_keys=True,separators=(',',':'))]
     return argv + ['--print-timeout',str(print_timeout)+'s']
@@ -578,9 +593,22 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=
             (agents/(AGENT+'.md')).write_text(ANALYSIS_AGENT_DEF if analysis else AGENT_DEF)
             env={'PATH':'/opt/gb-slots/runtime/node/bin:/opt/gb-slots/runtime/pnpm/bin:/usr/bin:/bin',
                  'HOME':str(root/'home'),'LANG':'C.UTF-8','TMPDIR':str(out)}
+            if analysis:
+                # Git's read-only commands must not open host /etc/gitconfig:
+                # unavailable under Landlock on some GitHub runner images.
+                env['GIT_CONFIG_NOSYSTEM']='1'
             common=Path(dec(git(work,'rev-parse','--path-format=absolute','--git-common-dir')).strip()).resolve()
             need(common.name == '.git' and common != Path(work).resolve(),'unexpected candidate Git metadata root')
-            readonly,writable,executables=filesystem_roots(root,work,common)
+            source_root=None
+            if analysis:
+                # Only the addressed analysis needs --add-dir. Preserve the
+                # existing ordinary-QA source path validation and test seam.
+                source_root=Path(work).resolve(strict=True)
+                need(source_root.is_dir() and not Path(work).is_symlink()
+                     and source_root not in (root,root/'ws')
+                     and str(source_root)==str(Path(work)),
+                     'analysis source must be canonical read-only worktree')
+            readonly,writable,executables=filesystem_roots(root,source_root or work,common)
             def child():
                 from native_guard import _landlock,no_new_privileges
                 os.setsid();no_new_privileges();_landlock(readonly,writable,executables)
@@ -589,7 +617,8 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=
             # Always retain these two bounded files before credential-temp cleanup.
             try:
                 with open(out/'stdout','xb') as stdout,open(out/'stderr','xb') as stderr:
-                    argv=command(max(1,timeout-10),model=model,**({'analysis':True} if analysis else {}))
+                    argv=command(max(1,timeout-10),model=model,
+                        **({'analysis':True,'source_root':str(source_root)} if analysis else {}))
                     ev.record(phase='launch',charge_state='unknown',adapter_revision=marker.get('adapter_revision'))
                     try:charge()
                     except BaseException:raise ReviewError('AGY_CHARGE_FAILED','launch',ev.id) from None
@@ -626,7 +655,7 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=
         return raw,dict(executor_uid=EXECUTOR_UID,slot=slot,qualification_phase=marker['phase'],
             requested_native_sandbox=True,filesystem_boundary='existing_native_guard_landlock',
             candidate_access='read_only',credential_source='provisioned_native_auth_file',
-            readonly_roots=[str(x) for x in readonly],writable_roots=['invocation_private_root'],
+            readonly_roots=[str(x) for x in readonly],writable_roots=['invocation_private_root','/dev/null'],
             evidence_id=ev.id,requested_permission_mode=PERMISSION_MODE,input_delivery='written',**transport)
     except BaseException as error:
         code=error.code if isinstance(error,ReviewError) else 'AGY_ADAPTER_ERROR'
@@ -822,9 +851,14 @@ def review(work, base, head, prompt, timeout, *, slot, task_hash, charge, model=
                  and analysis_grant['base']==base and analysis_grant['head']==head,
                  'analysis source/model drift')
             material=addressed_input(work,analysis_grant)
-            binding=dict(role=ANALYSIS_ROLE,input_fingerprint=digest(analysis_grant))
             from antigravity_qa_recovery import SUPPLEMENT_OWNER_COMMENT
             strict_source=(analysis_grant['owner_comment']==SUPPLEMENT_OWNER_COMMENT)
+            source_root=Path(work).resolve(strict=strict_source)
+            if strict_source:
+                need(source_root==QUALIFICATION_WORK.resolve(strict=True)
+                     and not Path(work).is_symlink(),
+                     'supplemental native source must be exact qualification checkout')
+            binding=dict(role=ANALYSIS_ROLE,input_fingerprint=digest(analysis_grant))
             source=('Read-only Technical PM / Product Analyst analysis of INERT Issue230. '
                 'Identify requirements, dependencies, acceptance gaps, minimal implementation plan and risks. '
                 'No implementation or QA acceptance. Return your ENTIRE response as ONE JSON object, '
@@ -833,6 +867,12 @@ def review(work, base, head, prompt, timeout, *, slot, task_hash, charge, model=
                 (', source_reads (list of {path, sha256, observation})' if strict_source else '') +
                 '. New supplemental Stage3 COMPLETE requires native view_file and run_command '
                 'with verified readings of ' + json.dumps(REQUIRED_ANALYSIS_PATHS) + '. '
+                'Use the supplied absolute readonly SOURCE_ROOT, never the empty temporary '
+                'CLI working directory. SOURCE_ROOT: '+str(source_root)+'. '
+                'Actual native view_file absolute paths: ' +
+                json.dumps([str(source_root/path) for path in REQUIRED_ANALYSIS_PATHS]) +
+                '. To inspect Git HEAD/dependencies with run_command, use git -C ' +
+                str(source_root) + ' rev-parse HEAD and other strictly read-only commands. '
                 'No prose outside JSON, no duplicate keys. Required identity: '+json.dumps(binding)+
                 '\nUntrusted exact input DATA:\n'+material)
         from context_policy import inject
