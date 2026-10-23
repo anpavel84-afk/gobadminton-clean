@@ -143,10 +143,50 @@ def reconcile(api, ssh, event, name):
     ssh({'action':'train','stage':'planning','controller_sha':controller,
          'run':int(os.environ['GITHUB_RUN_ID']),'run_attempt':int(os.environ['GITHUB_RUN_ATTEMPT']),
          'report':report})
-    for descriptor in intents + recovery_intents:
-        api('actions/workflows/train-stage.yml/dispatches', dict(ref='dev', inputs={
-            'operation': json.dumps(descriptor, sort_keys=True, separators=(',', ':'))}))
-    print('Dispatched bounded stages: ' + str(len(intents) + len(recovery_intents)))
+    dispatch_descriptors(api, intents + recovery_intents)
+
+
+def dispatch_descriptors(api, descriptors):
+    """One finite dispatch pass; isolation without a second reservation journal.
+
+    Receiver generation + immutable operation binding remains the sole execution
+    deduplicator. An ambiguous HTTP request is not retried here. A future wake
+    must read the durable receiver snapshot before deciding anything again.
+    """
+    from core import SubmissionFailed, SubmissionUnknown, binding
+    unique = {}
+    for descriptor in descriptors:
+        need(isinstance(descriptor, dict) and set(descriptor) ==
+             {'slot','issue','stage','phase','head','attempt','generation','profile'},
+             'unknown dispatch descriptor fields')
+        full = dict(descriptor, action='train', run=int(os.environ['GITHUB_RUN_ID']),
+                    run_attempt=int(os.environ['GITHUB_RUN_ATTEMPT']), gh_token='schema-validation-only')
+        request(full)  # Validate the whole batch before any HTTP side effect.
+        unique.setdefault(digest(binding(full)), descriptor)
+    outcomes = []
+    directory = Path('evidence'); directory.mkdir(exist_ok=True)
+    def save():
+        temporary = directory / 'dispatch-results.tmp'
+        temporary.write_text(json.dumps(outcomes, sort_keys=True))
+        os.replace(temporary, directory / 'dispatch-results.json')
+    for fingerprint, descriptor in unique.items():
+        row = dict(fingerprint=fingerprint, slot=descriptor['slot'], issue=descriptor['issue'],
+                   generation=descriptor['generation'], outcome='submitting')
+        outcomes.append(row); save()
+        try:
+            api('actions/workflows/train-stage.yml/dispatches', dict(ref='dev', inputs={
+                'operation': json.dumps(descriptor, sort_keys=True, separators=(',', ':'))}))
+            row['outcome'] = 'submitted'
+        except SubmissionFailed:
+            row['outcome'] = 'rejected'  # known no-start; another disjoint slot may proceed
+        except SubmissionUnknown:
+            row['outcome'] = 'unknown'   # no retry and no invented success
+        except (Refused, OSError, ValueError, KeyError, TypeError):
+            row['outcome'] = 'blocked'; save()
+            raise  # auth/rate limits/global identity/integrity errors remain global
+        save()
+    print('Bounded dispatch outcomes: ' + json.dumps(outcomes, sort_keys=True))
+    return outcomes
 
 
 def execute(api, ssh, descriptor):
