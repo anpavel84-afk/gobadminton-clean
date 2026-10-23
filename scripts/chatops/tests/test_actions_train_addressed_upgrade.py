@@ -227,7 +227,11 @@ class InstallerInputIdentity(unittest.TestCase):
             owner=978 if path==self.work or self.work in path.parents else 0
             mode=info.st_mode & ~0o022 if path in self.work.parents else info.st_mode
             return SimpleNamespace(st_uid=owner,st_mode=mode)
-        with patch.object(self.N.os,'geteuid',return_value=0),patch.object(Path,'lstat',trusted_stat):
+        def account(uid):
+            self.assertEqual(uid,978)
+            return SimpleNamespace(pw_uid=uid,pw_gid=968)
+        with patch.object(self.N.os,'geteuid',return_value=0),patch.object(Path,'lstat',trusted_stat), \
+             patch('pwd.getpwuid',side_effect=account):
             identity=self.N.addressed_git_identity(self.work);self.assertEqual(identity['user'],978)
             def foreign_owner(path):
                 info=trusted_stat(path)
