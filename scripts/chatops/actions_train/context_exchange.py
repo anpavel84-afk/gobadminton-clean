@@ -31,6 +31,11 @@ def digest(value) -> str:
     return hashlib.sha256(encoded(value)).hexdigest()
 
 
+def exact_json_equal(a, b):
+    """Canonical JSON byte equality, never Python bool/int coercion."""
+    return encoded(a) == encoded(b)
+
+
 def _check(ok, message):
     if not ok:
         raise ValueError(message)
@@ -119,7 +124,7 @@ def build_packet(*, role: str, task: Mapping, binding: Mapping,
             # The access probe is read-only; errors never authorize dropping evidence.
             try:
                 can_reference = verified_access(copy.deepcopy(ref)) is True
-            except (OSError, ValueError, RuntimeError):
+            except Exception:
                 can_reference = False
         if can_reference:
             ref['delivery'] = 'verified_local_reference'
@@ -161,7 +166,7 @@ def rules_prefix(*, text: str, metadata: Mapping, role: str, compact: bool = Fal
             _path(ref['path'])
             if verified_access(copy.deepcopy(ref)) is True:
                 selected = compile_capsule(text, role, metadata['sha256']); mode = 'scoped_v1'
-        except (OSError, ValueError, RuntimeError):
+        except Exception:
             reason = 'CAPSULE_OR_RECIPIENT_ACCESS_UNVERIFIED'
     if compact and mode == 'full':
         reason = reason or 'RECIPIENT_RULES_ACCESS_UNVERIFIED'
@@ -211,7 +216,7 @@ def diagnosis_view(active: Mapping, inputs: Mapping, cache: Mapping) -> dict:
                     brief_hash=receipt.get('brief_hash'), brief=copy.deepcopy(receipt.get('brief')),
                     durable_record_ref='failure_diagnosis.receipts.' + fingerprint)
         if 'failure' in source:
-            if source['failure'] == now.get('failure'):
+            if exact_json_equal(source['failure'], now.get('failure')):
                 item['failure_delivered_at'] = 'inputs.failure'
             else:
                 item['failure'] = copy.deepcopy(source['failure'])
@@ -219,14 +224,32 @@ def diagnosis_view(active: Mapping, inputs: Mapping, cache: Mapping) -> dict:
         # distinct prior assertion; use an in-packet pointer only for equality
         # with the already delivered current inputs.evidence.
         if 'evidence' in source:
-            if source['evidence'] == now.get('evidence'):
+            if exact_json_equal(source['evidence'], now.get('evidence')):
                 item['evidence_delivered_at'] = 'inputs.evidence'
             else:
                 item['evidence'] = copy.deepcopy(source['evidence'])
+        # Preserve any unique fields from previous inputs, including historical
+        # QA/CI assertions nested in their own history. Equal content is already
+        # delivered in this very packet and may be addressed by an in-packet path.
+        # A durable journal reference ALONE never authorizes discarding content.
+        prior_extra, prior_equal = {}, {}
+        for field, value in source.items():
+            if field in ('head', 'attempt', 'failure', 'evidence'):
+                continue  # Bound above, including equality-to-current pointers.
+            if field == 'task' and exact_json_equal(value, active['task']):
+                prior_equal[field] = 'task'
+            elif field in inputs and exact_json_equal(value, inputs[field]):
+                prior_equal[field] = 'inputs.' + field
+            else:
+                prior_extra[field] = copy.deepcopy(value)
+        if prior_extra:
+            item['additional_inputs'] = prior_extra
+        if prior_equal:
+            item['equal_inputs_delivered_at'] = prior_equal
         previous.append(item)
     return dict(task=copy.deepcopy(dict(active['task'])), inputs=now, previous=previous,
                 omitted_duplicate_history=omitted,
-                history_policy='Journal intact; unique past FAIL/UNKNOWN/evidence inline, proven duplicates referenced.')
+                history_policy='Journal intact; unique prior input/history facts inline, only exact in-packet duplicates referenced.')
 
 
 

@@ -87,6 +87,36 @@ def inject(prompt, qa, cwd, accepted, *, role=None, context_profile='full',
     return payload, receipt
 
 
+# Existing read-only Git objects are a trusted reference transport only after
+# this exact recipient UID can retrieve the immutable canonical blob. No changes
+# to the candidate worktree or to installed root rules are required.
+CANONICAL_GIT_RULES_PATH = 'docs/rules/ENGINEERING_OPERATING_MODEL.md'
+
+
+def verified_git_rules(work, reference):
+    expected=dict(path=CANONICAL_GIT_RULES_PATH,revision=RULES_COMMIT,
+                  sha256=RULES_SHA256,bytes=RULES_SIZE)
+    if not isinstance(reference,dict) or reference != expected:
+        return False
+    try:
+        cwd=Path(work)
+        if not cwd.is_dir() or cwd.is_symlink():
+            return False
+        completed=subprocess.run(['/usr/bin/git','-c','core.hooksPath=/dev/null',
+                                  '-c','core.fsmonitor=false','show',
+                                  RULES_COMMIT+':'+CANONICAL_GIT_RULES_PATH],
+            cwd=cwd,env={'PATH':'/usr/bin:/bin','HOME':'/nonexistent',
+                'LANG':'C.UTF-8','GIT_CONFIG_NOSYSTEM':'1',
+                'GIT_CONFIG_GLOBAL':'/dev/null','GIT_TERMINAL_PROMPT':'0'},
+            capture_output=True,timeout=12)
+        return (completed.returncode==0 and len(completed.stdout)==RULES_SIZE
+                and hashlib.sha256(completed.stdout).hexdigest()==RULES_SHA256)
+    except Exception:
+        # No privilege escalation, no alternate source, no model credit on a
+        # missing Git object: the caller must deliver full rules inline.
+        return False
+
+
 # Independently classified inactive legacy entrypoints; never apps/transport/monitor.
 LEGACY_UNITS = ('gb-pipeline.service', 'gobadminton-autopilot.service', 'gobadminton-backlog-sync.service', 'gobadminton-backlog-sync.timer', 'gobadminton-clean-autopilot.service', 'gobadminton-clean-dev-release.service', 'gobadminton-clean-dev-release.timer', 'gobadminton-clean-publisher.service', 'gobadminton-clean-publisher.timer', 'gobadminton-clean-qa-friends-dev-s1-api-20261013-v001.service', 'gobadminton-clean-qa-friends-dev-s1-api-20261013-v001.timer', 'gobadminton-clean-qa-friends-dev-s1-api-20261013-v002.service', 'gobadminton-clean-qa-friends-dev-s1-api-20261013-v002.timer', 'gobadminton-clean-qa-radar-dev-map-ui-20261013-v001.service', 'gobadminton-clean-qa-radar-dev-map-ui-20261013-v001.timer', 'gobadminton-clean-qa-radar-dev-map-ui-20261013-v002.service', 'gobadminton-clean-qa-radar-dev-map-ui-20261013-v002.timer', 'gobadminton-clean-runner-monitor-snapshot.service', 'gobadminton-clean-runner-monitor-snapshot.timer', 'gobadminton-clean-runner.service', 'gobadminton-control-agent.service', 'gobadminton-control-plane-v3-publisher.service', 'gobadminton-control-plane-v3-shadow.service', 'gobadminton-dashboard.service', 'gobadminton-gemini-broker.service', 'gobadminton-monitor-push.service', 'gobadminton-product-backlog-bridge.service', 'gobadminton-product-backlog-push.service', 'gobadminton-product-backlog-push.timer', 'gobadminton-product-backlog-sync.service', 'gobadminton-product-backlog-sync.timer', 'gobadminton-runner.service', 'gobadminton-slot@slot1.service', 'gobadminton-slot@slot2.service', 'gobadminton-supervisor.service')
 

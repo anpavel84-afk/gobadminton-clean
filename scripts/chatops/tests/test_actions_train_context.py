@@ -71,13 +71,41 @@ class AcceptedFile(unittest.TestCase):
         with self.assertRaises(core.Refused):C.inject('task',False,self.root,(text,r|{'sha256':'0'*64}))
 
 
+class AcceptedGitRulesReference(unittest.TestCase):
+    def test_immutable_rules_git_probe_validates_actual_blob_bytes_and_identity(self):
+        reference=dict(path=C.CANONICAL_GIT_RULES_PATH,revision=C.RULES_COMMIT,
+                       sha256=C.RULES_SHA256,bytes=C.RULES_SIZE)
+        good=SimpleNamespace(returncode=0,stdout=TEXT.encode(),stderr=b'')
+        with patch.object(C.subprocess,'run',return_value=good) as proc:
+            self.assertTrue(C.verified_git_rules(ROOT,reference))
+            args=proc.call_args.args[0]
+            self.assertIn(C.RULES_COMMIT+':'+C.CANONICAL_GIT_RULES_PATH,args)
+            self.assertEqual(proc.call_args.kwargs['cwd'],ROOT)
+            self.assertEqual(proc.call_args.kwargs['env']['GIT_TERMINAL_PROMPT'],'0')
+        for field,wrong in (('path','./untrusted.md'),('revision','a'*40),
+                            ('sha256','0'*64),('bytes',C.RULES_SIZE+1)):
+            with self.subTest(field=field),patch.object(C.subprocess,'run') as proc:
+                self.assertFalse(C.verified_git_rules(ROOT,reference|{field:wrong}))
+                proc.assert_not_called()
+        for result in (SimpleNamespace(returncode=1,stdout=b'',stderr=b'no revision'),
+                       SimpleNamespace(returncode=0,stdout=TEXT.encode()+b'altered',stderr=b'')):
+            with patch.object(C.subprocess,'run',return_value=result):
+                self.assertFalse(C.verified_git_rules(ROOT,reference))
+        with patch.object(C.subprocess,'run',side_effect=OSError('source unreadable')):
+            self.assertFalse(C.verified_git_rules(ROOT,reference))
+
+
 class StageDelivery(unittest.TestCase):
     def test_actual_wrapped_stage_prompt_flags_process_and_usage(self):
         self.exercise_stage('qa')
+    def test_scoped_profile_only_for_explicit_codex_source_qa_when_git_access_verified(self):
+        self.exercise_stage('qa',scoped=True)
+    def test_recovering_unknown_qa_never_switches_to_compact_mode(self):
+        self.exercise_stage('qa',scoped=True,recover=True)
     def test_recovery_diagnose_and_task_review_receive_full_accepted_context(self):
         for name in ('diagnose','task_review'):
             with self.subTest(stage=name):self.exercise_stage(name)
-    def exercise_stage(self,stage_name):
+    def exercise_stage(self,stage_name,scoped=False,recover=False):
         with tempfile.TemporaryDirectory(prefix='.context-stage-') as temp:
             root=Path(temp);cli=root/'fake-codex';cli.write_text('trusted test fixture, never executed')
             count=[0];inputs=[];traces=[];store=SimpleNamespace(data={'active':{'task':{},'head':'a'*40,'attempt':1}})
@@ -103,12 +131,24 @@ class StageDelivery(unittest.TestCase):
             with patch.object(stage,'live',return_value=(a,s)),patch.object(stage.os,'getuid',return_value=1002), \
                  patch.object(stage.os,'getgid',return_value=1002),patch.object(stage,'API',return_value=api), \
                  patch.object(C,'load',return_value=accepted()),patch.object(stage,'route',return_value=choice), \
+                 patch.object(C,'verified_git_rules',return_value=scoped) as git_proof, \
                  patch.object(core,'task_review_route',return_value=choice), \
                  patch.object(receiver,'units_quiet'),patch.object(receiver,'identity',return_value={'pid':424242,'start':'1','boot':'test'}):
-                _,_,_,_,_,b=stage.setup(req(stage_name,'pr_wait'),{'codex':{'slot1':str(cli)}})
+                request=req(stage_name,'pr_wait')
+                if recover:request['_recover']=True
+                _,_,_,_,_,b=stage.setup(request,{'codex':{'slot1':str(cli)}})
                 b.model('bounded immutable task',qa=True)
-                self.assertEqual(count[0],1);self.assertIn(TEXT,inputs[0]);self.assertTrue(inputs[0].endswith('bounded immutable task'))
+                self.assertEqual(count[0],1);self.assertTrue(inputs[0].endswith('bounded immutable task'))
                 r=b.routing_receipts[0]['rules_context'];self.assertEqual(r['role'],'qa')
+                if scoped and not recover:
+                    self.assertNotIn(TEXT,inputs[0])
+                    self.assertIn('CONTEXT_PROFILE scoped_v1',inputs[0])
+                    self.assertEqual(r['context_metrics']['policy_profile'],'scoped_v1')
+                    git_proof.assert_called_once()
+                else:
+                    self.assertIn(TEXT,inputs[0])
+                    self.assertEqual(r['context_metrics']['policy_profile'],'full')
+                    if recover:git_proof.assert_not_called()
                 self.assertEqual(r['stdin_sha256'],hashlib.sha256(inputs[0].encode()).hexdigest())
                 self.assertEqual(b.routing_receipts[0]['usage']['charged_calls'],1)
                 self.assertTrue(any(t.get('process',{}).get('pid')==424242 for t in traces if t.get('process')))

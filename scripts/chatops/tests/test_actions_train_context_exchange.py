@@ -218,4 +218,69 @@ class ContextExchange(unittest.TestCase):
         self.assertFalse(short['truncated'])
 
 
+    def test_all_access_probe_exceptions_fall_back_to_lossless_input(self):
+        text=fixture_rules(); m=metadata(text)
+        ref={'path':'context/rules.md','revision':BASE,'sha256':m['sha256'],'bytes':m['bytes']}
+        art=E.Artifact('source','apps/a.py',HEAD,'FIRST_ASSERTION\n'+'x'*9000+'\nLAST_ASSERTION')
+        for exc in (TypeError, KeyError, AssertionError, AttributeError, Exception):
+            def probe(_r, error=exc):
+                raise error('recipient read failed')
+            with self.subTest(error=exc.__name__):
+                packet,metrics=E.build_packet(role='qa',task=TASK,binding=BIND,artifacts=[art],
+                                              verified_access=probe,inline_threshold=1024)
+                self.assertEqual(next(iter(packet['content'].values())),art.text)
+                self.assertEqual(packet['artifacts'][0]['delivery'],'inline')
+                self.assertEqual(metrics['reference_bytes'],0)
+                prefix,detail=E.rules_prefix(text=text,metadata=m,role='qa',compact=True,
+                                             full_rules_reference=ref,verified_access=probe)
+                self.assertEqual(detail['policy_profile'],'full')
+                self.assertIn(text,prefix)
+
+    def test_prior_receipt_unique_nested_history_and_opaque_input_are_not_lost(self):
+        current={'head':HEAD,'history':[],'failure':{'kind':'source_defect'},
+                 'evidence':[{'assertion':'CURRENT_ASSERTION'}]}
+        prior={'head':BASE,'attempt':1,'history':[
+            {'qa':{'verdict':'FAIL','findings':['UNIQUE_PRIOR_HISTORY_ASSERTION']}}],
+            'misc_diagnostic':{'nested':'EXTRA_PRIOR_SIGNAL'},
+            'failure':{'kind':'different_prior_failure'}}
+        cache={'receipts':{'1'*64:{'status':'unknown','inputs':copy.deepcopy(prior),
+                                   'brief':None,'brief_hash':None},
+                           '2'*64:{'status':'pending','inputs':copy.deepcopy(current),
+                                   'brief':None,'brief_hash':None}}}
+        original=copy.deepcopy((current,cache,TASK))
+        view=E.diagnosis_view({'task':TASK},current,cache)
+        extra=view['previous'][0]['additional_inputs']
+        self.assertEqual(extra['history'],prior['history'])
+        self.assertEqual(extra['misc_diagnostic'],prior['misc_diagnostic'])
+        self.assertEqual(view['previous'][0]['status'],'unknown')
+        self.assertEqual(view['previous'][1]['equal_inputs_delivered_at']['history'],'inputs.history')
+        self.assertEqual(view['previous'][1]['evidence_delivered_at'],'inputs.evidence')
+        blob=E.encoded(view).decode('utf-8')
+        self.assertIn('UNIQUE_PRIOR_HISTORY_ASSERTION',blob)
+        self.assertIn('EXTRA_PRIOR_SIGNAL',blob)
+        self.assertIn('CURRENT_ASSERTION',blob)
+        self.assertEqual((current,cache,TASK),original)
+
+
+    def test_json_type_distinctions_prevent_false_historical_dedup(self):
+        current={'head':HEAD,'history':[],'misc_diagnostic':{'assertion':True},
+                 'failure':{'code':True},'evidence':[{'flag':True}]}
+        prior={'head':BASE,'attempt':1,'history':[],
+               'misc_diagnostic':{'assertion':1},
+               'failure':{'code':1},'evidence':[{'flag':1}]}
+        cache={'receipts':{'b'*64:{'status':'unknown','inputs':copy.deepcopy(prior),
+                                   'brief':None,'brief_hash':None}}}
+        result=E.diagnosis_view({'task':TASK},current,cache)
+        item=result['previous'][0]
+        self.assertIs(type(item['additional_inputs']['misc_diagnostic']['assertion']),int)
+        self.assertEqual(item['additional_inputs']['misc_diagnostic']['assertion'],1)
+        self.assertIs(type(item['failure']['code']),int)
+        self.assertIs(type(item['evidence'][0]['flag']),int)
+        self.assertNotIn('failure_delivered_at',item)
+        self.assertNotIn('evidence_delivered_at',item)
+        self.assertTrue(E.exact_json_equal({'a':1},{'a':1}))
+        self.assertFalse(E.exact_json_equal({'a':1},{'a':True}))
+        self.assertFalse(E.exact_json_equal([0],[False]))
+
+
 if __name__=='__main__':unittest.main()
