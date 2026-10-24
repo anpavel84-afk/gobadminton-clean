@@ -608,9 +608,21 @@ def _verify_apparmor_precharge():
     if hashlib.sha256(content).hexdigest() != APPARMOR_POLICY_SHA256:
         raise PermissionError('AppArmor policy SHA mismatch')
 
-    profiles = Path('/sys/kernel/security/apparmor/profiles').read_bytes()
-    if b'gb-agy-runtime (enforce)' not in profiles.splitlines():
-        raise PermissionError('AppArmor enforce profile not loaded')
+    # UID978 cannot read kernel securityfs/profiles. Verify the actual
+    # effective label in a tiny same-UID child, before any model charge.
+    def probe_child():
+        from native_guard import no_new_privileges
+        _arm_apparmor_onexec()
+        no_new_privileges()
+
+    observed = subprocess.run(
+        ['/usr/bin/python3', '-I', '-c',
+         "from pathlib import Path; print(Path('/proc/self/attr/current').read_text().strip())"],
+        cwd='/', env={'PATH':'/usr/bin:/bin', 'LANG':'C.UTF-8'},
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        preexec_fn=probe_child, timeout=10, check=False)
+    if observed.returncode != 0 or observed.stdout.strip() != b'gb-agy-runtime (enforce)':
+        raise PermissionError('AppArmor enforce transition could not be verified')
 
 
 def _arm_apparmor_onexec():

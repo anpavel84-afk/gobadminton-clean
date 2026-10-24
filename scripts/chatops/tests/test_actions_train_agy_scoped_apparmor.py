@@ -68,30 +68,23 @@ class ScopedAgySecurity(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             installed = pathlib.Path(tmp) / "installed-policy"
             installed.write_bytes(policy)
-            labels = [b'gb-agy-runtime (complain)\n']
-
-            original_read = pathlib.Path.read_bytes
-
-            def read_bytes(path):
-                if str(path) == '/sys/kernel/security/apparmor/profiles':
-                    return labels[0]
-                return original_read(path)
-
+            status = SimpleNamespace(
+                returncode=0, stdout=b'gb-agy-runtime (complain)\n')
             metadata = SimpleNamespace(
-                st_mode=stat.S_IFREG | 0o644,
-                st_uid=0,
-                st_nlink=1
-            )
+                st_mode=stat.S_IFREG | 0o644, st_uid=0, st_nlink=1)
 
             with patch.object(N, 'APPARMOR_POLICY_FILE', installed), \
                  patch.object(N.os, 'fstat', return_value=metadata), \
-                 patch.object(pathlib.Path, 'read_bytes', read_bytes):
-
+                 patch.object(N.subprocess, 'run', return_value=status):
                 with self.assertRaises(PermissionError):
                     N._verify_apparmor_precharge()
 
-                labels[0] = b'gb-agy-runtime (enforce)\n'
+                status.stdout = b'gb-agy-runtime (enforce)\n'
                 self.assertIsNone(N._verify_apparmor_precharge())
+                status.returncode = 1
+                with self.assertRaises(PermissionError):
+                    N._verify_apparmor_precharge()
+                status.returncode = 0
 
                 with patch.object(N, 'APPARMOR_POLICY_SHA256', '0' * 64):
                     with self.assertRaises(PermissionError):
