@@ -5,18 +5,25 @@
 ## Читать при входе или возобновлении
 
 1. [AGENTS.md](AGENTS.md) — границы действий и обязательная постановка инструментальных операций.
-2. [ENGINEERING_OPERATING_MODEL.md](docs/rules/ENGINEERING_OPERATING_MODEL.md) — **единственный полный регламент системы разработки**. PMA/Advisor и reviewer правил читают полный принятый текст. Worker получает полный текст либо разрешённый common+role capsule из той же проверенной редакции по §10.3.
-3. [AI_TRAIN_MASTER_PLAN.md](docs/ops/AI_TRAIN_MASTER_PLAN.md) — последовательность приёмки и текущие незавершённые этапы; сверить с живыми Issues/PR/Actions и доступными receipts перед действием.
-4. [CURRENT.md](docs/handoffs/CURRENT.md) — точка продолжения и передача PMA, а не новый backlog.
-5. Exact assignment и [предметные источники](docs/README.md) своего scope. [Project Record Policy](docs/rules/PROJECT_RECORD_POLICY.md) определяет сохранение результата.
+2. [ENGINEERING_OPERATING_MODEL.md](docs/rules/ENGINEERING_OPERATING_MODEL.md) — **единственный полный регламент системы разработки** (редакция 1.4). PMA/Advisor и reviewer правил читают полный принятый текст. Worker получает полный текст либо разрешённый common+role capsule из той же проверенной редакции по §10.3.
+3. [SMART_ROUTING.md](docs/rules/SMART_ROUTING.md) — **принятая специализированная политика маршрутизации** (1.0): Technical PM, role × risk матрица, классы QA/CI FAIL, Fast Fix. Принята только на стадии SR0; установка (SR1–SR6) не выполнена, до неё контроллер применяет прежний FAIL-маршрут.
+4. [AI_TRAIN_MASTER_PLAN.md](docs/ops/AI_TRAIN_MASTER_PLAN.md) — последовательность приёмки и текущие незавершённые этапы; сверить с живыми Issues/PR/Actions и доступными receipts перед действием.
+5. [CURRENT.md](docs/handoffs/CURRENT.md) — точка продолжения и передача PMA, а не новый backlog.
+6. Exact assignment и [предметные источники](docs/README.md) своего scope. [Project Record Policy](docs/rules/PROJECT_RECORD_POLICY.md) определяет сохранение результата.
 
-**Матрица моделей находится только в §5 полного регламента.** Роли — §3; продолжение и попытки — §6; содержательный FAIL → диагноз → авторская доработка — §8.1; доставка контекста — §10. Не восстанавливать эту схему из памяти чата, свободного резюме, имени модели или старой таблицы.
+**Матрица моделей: семейства/уровни — §5 полного регламента; детальная role × risk матрица и классы FAIL — только SMART_ROUTING.md; второй таблицы нет.** Роли — §3; продолжение и попытки — §6 (3 + до 2, без изменений); классификация FAIL → direct / Technical PM / Astra → авторская доработка — §8.1 и SMART_ROUTING §8; доставка контекста — §10. Не восстанавливать эту схему из памяти чата, свободного резюме, имени модели или старой таблицы.
 
 ## Какая редакция принята
 
-[CONTEXT_SOURCES.json](docs/rules/CONTEXT_SOURCES.json) содержит проверяемый адрес полного канона: commit `1169e965976e9498d4e5e1e23aae201e97ec9665`, путь `docs/rules/ENGINEERING_OPERATING_MODEL.md`, SHA-256 `38c34012f10974496a7d7cbc74ecacb62bf7847278e295edfeb107d69a5d1c1c`, **100818 байт UTF-8**, редакция 1.3. Этот текст при консолидации не изменён; существующий runtime pin не переписан.
+[CONTEXT_SOURCES.json](docs/rules/CONTEXT_SOURCES.json) содержит проверяемые адреса **пары принятых документов** (поправка SR0, решение Owner 24.10.2026 16:11, America/Sao_Paulo):
 
-[Неизменяемый канон](https://github.com/anpavel84-afk/gobadminton-clean/blob/1169e965976e9498d4e5e1e23aae201e97ec9665/docs/rules/ENGINEERING_OPERATING_MODEL.md) доступен через GitHub/Raw/Git. Branch URL служит навигацией; exact commit и hash — проверкой входа. Наличие файла или ссылки не означает, что модель получила его содержимое.
+- **Канон EOM 1.4:** commit `8f32d58b0c29ab3cf1550e147a990f0b7290d197`, путь `docs/rules/ENGINEERING_OPERATING_MODEL.md`, SHA-256 `0c09d9dd09c323d3dfe60e05152fa56d116ed9af04c6b3b598eed10282db688f`, **110710 байт UTF-8**.
+- **Политика SMART_ROUTING 1.0:** тот же commit, путь `docs/rules/SMART_ROUTING.md`, SHA-256 `cfb22df374c80a577a0c8d555b205cbe2f2a2e06caa00c8719444441f38df62e`, **71275 байт UTF-8**. Статус: POLICY_ACCEPTED (только SR0); IMPLEMENTED / ROLE_QUALIFIED / RUNTIME_VERIFIED — NOT_STARTED/UNKNOWN.
+- **Предыдущая принятая редакция EOM 1.3:** commit `1169e965976e9498d4e5e1e23aae201e97ec9665`, SHA-256 `38c34012f10974496a7d7cbc74ecacb62bf7847278e295edfeb107d69a5d1c1c`, 100818 байт. **Это по-прежнему pin, который проверяет установленный runtime**: код контроллера и его тесты не менялись; их переход на 1.4 — отдельный reviewed code-pin. Публикация документов не переписывает runtime pin, grants, budgets и существующие immutable assignments.
+
+Неизменяемые тексты: [EOM 1.4](https://github.com/anpavel84-afk/gobadminton-clean/blob/8f32d58b0c29ab3cf1550e147a990f0b7290d197/docs/rules/ENGINEERING_OPERATING_MODEL.md), [SMART_ROUTING 1.0](https://github.com/anpavel84-afk/gobadminton-clean/blob/8f32d58b0c29ab3cf1550e147a990f0b7290d197/docs/rules/SMART_ROUTING.md), [EOM 1.3](https://github.com/anpavel84-afk/gobadminton-clean/blob/1169e965976e9498d4e5e1e23aae201e97ec9665/docs/rules/ENGINEERING_OPERATING_MODEL.md). Branch URL служит навигацией; exact commit и hash — проверкой входа. Наличие файла или ссылки не означает, что модель получила его содержимое.
+
+**Что действует сейчас.** Нормативный текст классификации FAIL, роль Technical PM и граница Astra — принятая политика. Пока versioned классификатор не установлен и не проверен, контроллер продолжает прежний маршрут «содержательный FAIL → Astra failure_diagnosis»; Grok, Technical PM и автор не пропускают Astra по собственному слову «простая ошибка».
 
 ## Как контекст получают разные участники
 

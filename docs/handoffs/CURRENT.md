@@ -8,7 +8,7 @@ Grok — единственный mutating/runtime PMA по [решению Owne
 
 ## Что читать
 
-[START_HERE.md](../../START_HERE.md) → принятый полный [регламент](../rules/ENGINEERING_OPERATING_MODEL.md) → [Master Plan](../ops/AI_TRAIN_MASTER_PLAN.md) → текущие Issues/PR/Actions и доступные protected receipts. Сохранить роль, exact rules/source SHA, активного writer и незавершённые эффекты до любого нового запуска.
+[START_HERE.md](../../START_HERE.md) → принятый полный [регламент](../rules/ENGINEERING_OPERATING_MODEL.md) 1.4 → принятая политика [SMART_ROUTING](../rules/SMART_ROUTING.md) (SR0; не установлена — SR1–SR6 NOT_STARTED, прежний FAIL-маршрут контроллера действует) → [Master Plan](../ops/AI_TRAIN_MASTER_PLAN.md) → текущие Issues/PR/Actions и доступные protected receipts. Сохранить роль, exact rules/source SHA, активного writer и незавершённые эффекты до любого нового запуска.
 
 ## Источники живого состояния
 

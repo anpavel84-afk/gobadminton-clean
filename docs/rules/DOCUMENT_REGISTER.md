@@ -12,7 +12,8 @@
 
 | Область | Источник и предел |
 |---|---|
-| Организация разработки, роли/модели, попытки, QA/FAIL, trusted context | [ENGINEERING_OPERATING_MODEL.md](ENGINEERING_OPERATING_MODEL.md), единственный полный текст v1.3; exact bytes в [CONTEXT_SOURCES.json](CONTEXT_SOURCES.json) |
+| Организация разработки, роли, попытки, trusted context | [ENGINEERING_OPERATING_MODEL.md](ENGINEERING_OPERATING_MODEL.md), единственный полный текст v1.4 (поправка SR0 24.10.2026; v1.3 — предыдущий принятый pin runtime); exact bytes в [CONTEXT_SOURCES.json](CONTEXT_SOURCES.json) |
+| Маршрутизация моделей, Technical PM, классы QA/CI FAIL, Fast Fix | [SMART_ROUTING.md](SMART_ROUTING.md) 1.0 — **POLICY_ACCEPTED только SR0** (Owner 24.10.2026 16:11 America/Sao_Paulo); единственная специализированная политика, EOM хранит полномочия/роли/безопасность/continuation; IMPLEMENTED/ROLE_QUALIFIED/RUNTIME_VERIFIED NOT_STARTED/UNKNOWN; до SR1–SR5 контроллер применяет прежний FAIL-маршрут |
 | Ограничения входа и Owner Addendum о tool refusals | [AGENTS.md](../../AGENTS.md), короткий обязательный вход; не альтернативная матрица моделей |
 | Хранение/передача | [PROJECT_RECORD_POLICY.md](PROJECT_RECORD_POLICY.md), scoped политика; не расширяет execution authority |
 | Исходные продуктовые решения | [Owner decisions](../manifest/OWNER_DECISIONS.md), exact Owner Issues и [все ADR/Owner records](../decisions/README.md); статус/область каждого решения сохраняются |
@@ -22,7 +23,7 @@
 | PMA takeover | [CURRENT.md](../handoffs/CURRENT.md) и подтверждённое Owner-решение, не имя старого чата |
 | Фактическое исполнение/установка | Exact Actions, controller/adapter pin, operation/lease и receipts; документы не заменяют их |
 
-Синхронизированный core имеет те же 100818 байт и SHA-256 `38c34012f10974496a7d7cbc74ecacb62bf7847278e295edfeb107d69a5d1c1c`, что и принятый commit `1169e965976e9498d4e5e1e23aae201e97ec9665`. Поэтому консолидация не требует молчаливой смены установленного rules pin. Новые Owner-уточнения применяются в своей области и не переписывают прежние admissions.
+Консолидация 24.10.2026 сохраняла core v1.3 (100818 байт, SHA-256 `38c34012f10974496a7d7cbc74ecacb62bf7847278e295edfeb107d69a5d1c1c`, commit `1169e965976e9498d4e5e1e23aae201e97ec9665`). Поправка SR0 выпускает EOM v1.4 (110710 байт, SHA-256 `0c09d9dd09c323d3dfe60e05152fa56d116ed9af04c6b3b598eed10282db688f`) и SMART_ROUTING 1.0 (71275 байт, SHA-256 `cfb22df374c80a577a0c8d555b205cbe2f2a2e06caa00c8719444441f38df62e`) в commit `8f32d58b0c29ab3cf1550e147a990f0b7290d197`; v1.3 остаётся pin установленного runtime до отдельного reviewed code-pin, молчаливой смены pin нет. Новые Owner-уточнения применяются в своей области и не переписывают прежние admissions.
 
 ## Покрытие остальных документов
 
@@ -54,15 +55,16 @@
 
 | Прежнее расхождение | Однозначное применение |
 |---|---|
-| Разный core на `main` и `dev` | Один byte-identical принятый v1.3 на обеих ветках; приёмка сверяет hash. Не переносить product code в main ради документов |
+| Разный core на `main` и `dev` | Один byte-identical принятый core на обеих ветках (v1.3 до SR0; v1.4 + SMART_ROUTING 1.0 после docs-only transfer обоих PR SR0); приёмка сверяет hash. Не переносить product code в main ради документов |
 | Корневые и provider entrypoints требовали разные способы чтения | Все ведут в START_HERE. Полный канон для PMA/reviewer правил; full либо квалифицированный capsule для worker по §10.3 |
 | `pma-adopt-engineering-rules-20261022.md` требовал заново v1.1/PR217/#216 | Исторический текст сохранён immutable; текущая страница — указатель на §10/11 и актуальную редакцию |
-| `MODEL_ECONOMY_V001.md` содержал самостоятельную старую матрицу и dated availability | Текущая матрица только §5, лимиты §6, usage §10; старая записка — evidence |
+| `MODEL_ECONOMY_V001.md` содержал самостоятельную старую матрицу и dated availability | Текущие семейства — §5, детальная матрица — SMART_ROUTING §6, лимиты §6, usage §10; старая записка — evidence |
 | Launcher/Supervisor handoff 13.10 предлагал старую роль/Runner | Совместимые страницы направляют в CURRENT; полный original snapshot сохранён по commit |
 | Grok handoff существовал только в Draft PR276 | На постоянном пути опубликован current/history указатель с проверенным immutable полным snapshot; никакой второй изменяемой матрицы |
 | Master Plan смешивал текущий следующий шаг с длинной историей AGY/Gemini/HOLD | Один компактный текущий Master Plan; исходная история сохранена по immutable commit и связана через handoffs |
 | Старое «3 попытки — только Owner / один successor навсегда» | §6 канона определяет делегацию 3→до2→переоценка. Нынешний валидатор/immutable пакет сохраняется; не ставить 5 в неподдерживаемый wire и не сбрасывать usage |
 | Старые широкие разрешения continuous product train | Только exact уже допущенная задача/приоритет. Текущая работа над управлением не создаёт новый продуктовый admission; `Owner DIRECT` внутри bot-текста не доказательство нового Owner-решения |
+| «Любой содержательный FAIL → Astra» в EOM 1.3 §4.2/§5/§8.1 | Заменено поправкой SR0 в EOM 1.4 классификацией SMART_ROUTING §8; машинный маршрут прежний до SR1–SR5 |
 | Cross-Model QA drafts #264/#266 | Предложение/отдельное направление; не дополнительный обязательный gate обычных задач до принятия |
 
 ## Предметный supersession без выдуманных решений
