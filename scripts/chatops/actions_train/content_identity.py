@@ -151,6 +151,59 @@ def independence(files, sources, changed):
         def js_paths(target):
             return [target] + ([target[:-3] + e for e in ('.ts', '.tsx')] if target.endswith('.js') else []) + [
                 target + e for e in (*JS, '/index.ts', '/index.tsx', '/index.js')]
+        def trivial_python_runtime(parsed):
+            """Proof is intentionally very narrow. All executable/dynamic roots
+            need addressed QA instead of trying to enumerate Python loaders.
+            Only literal assignments and three harmless stdlib surface shapes
+            qualify. This is a *reuse* optimization, never a QA waiver.
+            """
+            mod_os, mod_sub, path_names = set(), set(), set()
+            for n in parsed.body:
+                if isinstance(n, ast.Import):
+                    for a in n.names:
+                        if a.name == 'os': mod_os.add(a.asname or 'os')
+                        elif a.name == 'subprocess': mod_sub.add(a.asname or 'subprocess')
+                        else: return False
+                elif isinstance(n, ast.ImportFrom):
+                    if n.module != 'pathlib' or n.level != 0 or any(
+                            a.name != 'Path' for a in n.names):
+                        return False
+                    path_names.update(a.asname or 'Path' for a in n.names)
+            def constant(value):
+                return isinstance(value, ast.Constant) and type(value.value) in (
+                    str, int, float, bool, type(None))
+            def plain(value):
+                if constant(value): return True
+                if isinstance(value, ast.UnaryOp) and isinstance(value.op, (ast.USub, ast.UAdd)):
+                    return isinstance(value.operand, ast.Constant) and type(
+                        value.operand.value) in (int, float)
+                if isinstance(value, ast.Attribute):
+                    return (value.attr == 'PIPE' and isinstance(value.value, ast.Name)
+                            and value.value.id in mod_sub)
+                if isinstance(value, ast.Call) and not value.keywords and all(
+                        constant(a) and type(a.value) is str for a in value.args):
+                    func = value.func
+                    if isinstance(func, ast.Name) and func.id in path_names:
+                        return len(value.args) == 1
+                    if (isinstance(func, ast.Attribute) and func.attr == 'join'
+                            and isinstance(func.value, ast.Attribute)
+                            and func.value.attr == 'path'
+                            and isinstance(func.value.value, ast.Name)
+                            and func.value.value.id in mod_os):
+                        return len(value.args) >= 1
+                return False
+            for n in parsed.body:
+                if isinstance(n, (ast.Import, ast.ImportFrom, ast.Pass)): continue
+                if isinstance(n, ast.Expr) and constant(n.value) and type(
+                        n.value.value) is str: continue
+                if (isinstance(n, ast.Assign) and n.targets
+                        and all(isinstance(t, ast.Name) for t in n.targets)
+                        and all(not t.id.startswith('__') for t in n.targets)
+                        and plain(n.value)):
+                    continue
+                return False
+            return True
+
         while queue:
             p = queue.pop()
             if p in seen: continue
@@ -162,6 +215,20 @@ def independence(files, sources, changed):
             if files[p]['mode'] not in ('100644', '100755'):
                 return 'nonregular dependency consumer: ' + p
             text = source(p)
+            if p.endswith('.py') and changed and not trivial_python_runtime(ast.parse(text)):
+                return ('unprovable executable Python runtime loader requires addressed QA: '
+                        + p + ' -> ' + ', '.join(sorted(changed)))
+            # A runtime consumer naming changed executable/test bytes has an
+            # implicit dependency regardless of how its process loader is
+            # imported or rebound. Reject literal paths and stitched test-tree
+            # fragments before attempting incomplete Python call-graph proof.
+            if p.endswith('.py') and changed:
+                for changed_path in sorted(changed):
+                    if changed_path in text or PurePosixPath(changed_path).name in text:
+                        return 'runtime Python loader references changed path: ' + p
+                if re.search(r'(?i)(?:tests[/\\]|__tests__|test_[a-z0-9_]+)', text):
+                    return ('runtime Python loader may consume changed test-tree bytes: ' + p
+                            + ' -> ' + ', '.join(sorted(changed)))
             targets = set()
             if p.endswith(code):
                 groups = deps(p, text)  # existing extractor; no native collect/model path
@@ -176,6 +243,30 @@ def independence(files, sources, changed):
                     targets |= matches
                 if p.endswith('.py'):
                     parsed = ast.parse(text)
+                    # Python exposes additional executable loaders through
+                    # native posix modules, importlib internals and foreign
+                    # function interfaces. No finite alias list proves these
+                    # modules independent from changed executable tests.
+                    # Refuse optimization locally and require addressed QA.
+                    dynamic_roots = frozenset((
+                        'posix', 'posixpath', 'ntpath', 'importlib', 'runpy', 'sys',
+                        'ctypes', 'pkgutil', 'zipimport', 'multiprocessing',
+                        'pickle', 'marshal'
+                    ))
+                    for entry in ast.walk(parsed):
+                        if isinstance(entry, ast.Import):
+                            if any(a.name.split('.')[0] in dynamic_roots
+                                   for a in entry.names):
+                                return 'unprovable Python module loader requires addressed QA: ' + p
+                        elif isinstance(entry, ast.ImportFrom):
+                            module_root = (entry.module or '').split('.')[0]
+                            if module_root in dynamic_roots:
+                                return 'unprovable Python module loader requires addressed QA: ' + p
+                            if module_root in ('subprocess', 'os') and any(
+                                    a.name in ('os', 'sys', 'importlib', 'runpy',
+                                               'builtins', 'ctypes', 'posix')
+                                    for a in entry.names):
+                                return 'reexported Python module loader requires addressed QA: ' + p
                     # Include package initialization/re-exports for every resolved module.
                     for q in list(targets):
                         folder = posixpath.dirname(q)
@@ -186,7 +277,82 @@ def independence(files, sources, changed):
                     names = {'__import__', 'import_module', 'spec_from_file_location',
                              'SourceFileLoader', 'exec', 'eval', 'open', 'read_text', 'read_bytes', 'glob', 'rglob',
                              'globals', 'locals', 'vars', '__getattribute__'}
+                    # Local Python process loaders can execute changed tests even
+                    # when no static import references them. Resolve explicit
+                    # stdlib module and from-import aliases before scanning calls.
+                    # Conservative uncertainty triggers addressed QA, never reuse.
+                    subprocess_exec = {
+                        'run', 'Popen', 'call', 'check_call', 'check_output',
+                        'getoutput', 'getstatusoutput'
+                    }
+                    os_exec = {
+                        'system', 'popen', 'execl', 'execle', 'execlp', 'execlpe',
+                        'execv', 'execve', 'execvp', 'execvpe', 'posix_spawn',
+                        'posix_spawnp', 'spawnl', 'spawnle', 'spawnlp', 'spawnlpe',
+                        'spawnv', 'spawnve', 'spawnvp', 'spawnvpe', 'startfile'
+                    }
+                    subprocess_aliases, os_aliases = set(), set()
+                    for node in ast.walk(parsed):
+                        if isinstance(node, ast.Import):
+                            for alias in node.names:
+                                # import os.path binds os unless explicitly
+                                # renamed; renamed dotted imports bind the
+                                # dotted module, which may expose os itself.
+                                if alias.name == 'subprocess' or alias.name.startswith('subprocess.'):
+                                    subprocess_aliases.add(alias.asname or alias.name.split('.')[0])
+                                elif alias.name == 'os' or alias.name.startswith('os.'):
+                                    os_aliases.add(alias.asname or alias.name.split('.')[0])
+                        elif isinstance(node, ast.ImportFrom):
+                            if node.module in ('subprocess', 'os'):
+                                # A wildcard can bind any executable loader
+                                # without an explicit alias to inspect.
+                                if any(alias.name == '*' for alias in node.names):
+                                    return 'wildcard process loader requires addressed QA: ' + p
+                                operations = subprocess_exec if node.module == 'subprocess' else os_exec
+                                names.update(alias.asname or alias.name for alias in node.names
+                                             if alias.name in operations)
+                                if node.module == 'subprocess':
+                                    # subprocess re-exports its imported os module.
+                                    os_aliases.update(a.asname or a.name for a in node.names
+                                                      if a.name == 'os')
+                                elif node.module == 'os':
+                                    # os.path is a module and can re-export os.
+                                    os_aliases.update(a.asname or a.name for a in node.names
+                                                      if a.name in ('os', 'path'))
+                            elif node.module in ('os.path', 'posixpath', 'ntpath'):
+                                if any(a.name == '*' for a in node.names):
+                                    return 'wildcard process loader requires addressed QA: ' + p
+                                os_aliases.update(a.asname or a.name for a in node.names
+                                                  if a.name == 'os')
+                    # A module object can escape by assignment, tuple unpacking,
+                    # function argument or return, after which its process-launch
+                    # methods are invisible under the original import alias.
+                    # Any such escape makes test-only QA reuse unprovable.
+                    process_modules = subprocess_aliases | os_aliases
+                    parent_of = {id(child): parent for parent in ast.walk(parsed)
+                                 for child in ast.iter_child_nodes(parent)}
+                    for node in ast.walk(parsed):
+                        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) \
+                                and node.id in process_modules:
+                            parent = parent_of.get(id(node))
+                            if not (isinstance(parent, ast.Attribute)
+                                    and parent.value is node):
+                                return 'escaped process module loader requires addressed QA: ' + p
+                            if parent.attr in ('__dict__', '__class__', '__getattribute__'):
+                                return 'dynamic process module introspection loader requires addressed QA: ' + p
                     for n in ast.walk(parsed):
+                        if isinstance(n, ast.Attribute):
+                            root = n
+                            while isinstance(root, (ast.Attribute, ast.Subscript)):
+                                root = root.value
+                            if (isinstance(root, ast.Name) and root.id in process_modules
+                                    and n.attr in (subprocess_exec | os_exec |
+                                                   {'os', 'subprocess', '__dict__',
+                                                    '__class__', '__getattribute__'})):
+                                # Includes subprocess.os.execl, os.path.os.execl
+                                # and dotted-import aliases. Refuse reuse before
+                                # parsing any candidate-controlled tool result.
+                                return 'nested process loader requires addressed QA: ' + p
                         if isinstance(n, ast.ImportFrom):
                             if n.module in ('importlib', 'importlib.util', 'importlib.machinery', 'builtins', 'io', 'runpy'):
                                 names.update(a.asname or a.name for a in n.names)
