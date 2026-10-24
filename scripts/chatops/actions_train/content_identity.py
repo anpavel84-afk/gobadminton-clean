@@ -187,6 +187,30 @@ def independence(files, sources, changed):
                     targets |= matches
                 if p.endswith('.py'):
                     parsed = ast.parse(text)
+                    # Python exposes additional executable loaders through
+                    # native posix modules, importlib internals and foreign
+                    # function interfaces. No finite alias list proves these
+                    # modules independent from changed executable tests.
+                    # Refuse optimization locally and require addressed QA.
+                    dynamic_roots = frozenset((
+                        'posix', 'posixpath', 'ntpath', 'importlib', 'runpy',
+                        'ctypes', 'pkgutil', 'zipimport', 'multiprocessing',
+                        'pickle', 'marshal'
+                    ))
+                    for entry in ast.walk(parsed):
+                        if isinstance(entry, ast.Import):
+                            if any(a.name.split('.')[0] in dynamic_roots
+                                   for a in entry.names):
+                                return 'unprovable Python module loader requires addressed QA: ' + p
+                        elif isinstance(entry, ast.ImportFrom):
+                            module_root = (entry.module or '').split('.')[0]
+                            if module_root in dynamic_roots:
+                                return 'unprovable Python module loader requires addressed QA: ' + p
+                            if module_root in ('subprocess', 'os') and any(
+                                    a.name in ('os', 'sys', 'importlib', 'runpy',
+                                               'builtins', 'ctypes', 'posix')
+                                    for a in entry.names):
+                                return 'reexported Python module loader requires addressed QA: ' + p
                     # Include package initialization/re-exports for every resolved module.
                     for q in list(targets):
                         folder = posixpath.dirname(q)
