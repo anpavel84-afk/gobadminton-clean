@@ -210,6 +210,10 @@ def independence(files, sources, changed):
                                     os_aliases.add(alias.asname or alias.name)
                         elif isinstance(node, ast.ImportFrom):
                             if node.module in ('subprocess', 'os'):
+                                # A wildcard can bind any executable loader
+                                # without an explicit alias to inspect.
+                                if any(alias.name == '*' for alias in node.names):
+                                    return 'wildcard process loader requires addressed QA: ' + p
                                 operations = subprocess_exec if node.module == 'subprocess' else os_exec
                                 names.update(alias.asname or alias.name for alias in node.names
                                              if alias.name in operations)
