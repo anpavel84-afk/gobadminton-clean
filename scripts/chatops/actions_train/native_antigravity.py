@@ -698,7 +698,7 @@ def catalog_precharge(cwd, env, child, model):
     # Official example rows start with "* model-id" (some clients omit '*').
     ids = set()
     for line in result.stdout.decode('utf-8',errors='replace').splitlines():
-        match = re.match(r'^\\s*(?:[*•-]\\s*)?((?:claude|gemini)-[a-z0-9][a-z0-9.-]*)\\s*(?:\\(|$|\\s)',line)
+        match = re.match(r'^\s*(?:[*•-]\s*)?((?:claude|gemini)-[a-z0-9][a-z0-9.-]*)\s*(?:\(|$|\s)',line)
         if match:
             ids.add(match.group(1))
     if model not in ids:
