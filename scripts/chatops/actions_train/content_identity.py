@@ -162,6 +162,16 @@ def independence(files, sources, changed):
             if files[p]['mode'] not in ('100644', '100755'):
                 return 'nonregular dependency consumer: ' + p
             text = source(p)
+            # A runtime consumer naming changed executable/test bytes has an
+            # implicit dependency regardless of how its process loader is
+            # imported or rebound. Reject literal paths and stitched test-tree
+            # fragments before attempting incomplete Python call-graph proof.
+            if p.endswith('.py') and changed:
+                for changed_path in sorted(changed):
+                    if changed_path in text or PurePosixPath(changed_path).name in text:
+                        return 'runtime Python loader references changed path: ' + p
+                if re.search(r'(?i)(?:tests[/\\]|__tests__|test_[a-z0-9_]+)', text):
+                    return 'runtime Python loader may consume test-tree bytes: ' + p
             targets = set()
             if p.endswith(code):
                 groups = deps(p, text)  # existing extractor; no native collect/model path
