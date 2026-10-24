@@ -66,6 +66,29 @@ class CatalogPrecharge(unittest.TestCase):
             call.assert_not_called()
 
 
+    def test_catalog_failure_precedes_charge_and_model_launch(self):
+        # Integration negative, not just a unit test for the model-ID parser:
+        # no grant may be spent until an exact account catalog passed in the
+        # actual invocation's private HOME. All data are inert synthetic.
+        charge=Mock()
+        model_popen=Mock(side_effect=AssertionError('model must not start'))
+        with tempfile.TemporaryDirectory(prefix='gb-agy-precharge-negative-') as scratch, \
+             patch.object(N,'qualification',return_value={'phase':'canary','adapter_revision':'a'*40}), \
+             patch.object(N.os,'geteuid',return_value=N.EXECUTOR_UID), \
+             patch.object(N,'_verify_apparmor_precharge',return_value=None), \
+             patch.object(N,'trusted',return_value=b'{"access_token":"SYNTHETIC_ONLY"}'), \
+             patch.object(N,'git',return_value=b'/tmp/gb-agy-inert-candidate/.git'), \
+             patch.object(N,'catalog_precharge',
+                 side_effect=N.ReviewError('AGY_PRECHECK_FAILED','preflight')), \
+             patch.object(N,'retain_oauth_refresh',return_value='unchanged'):
+            with self.assertRaisesRegex(N.ReviewError,'AGY_PRECHECK_FAILED'):
+                N.invoke('inert analysis task',45,work=Path('/tmp/gb-agy-inert-candidate'),
+                    slot='slot2',task_hash='f'*64,charge=charge,popen=model_popen,
+                    evidence_dir=Path(scratch)/'evidence')
+        charge.assert_not_called()
+        model_popen.assert_not_called()
+
+
 class AtomicSyntheticOAuth(unittest.TestCase):
     def test_changed_token_is_atomically_retained_and_unmodified_not_rewritten(self):
         # Disposable fake OAuth bytes only. The real protected credential is
