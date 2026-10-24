@@ -69,17 +69,19 @@ class ScopedAgySecurity(unittest.TestCase):
             installed = pathlib.Path(tmp) / "installed-policy"
             installed.write_bytes(policy)
             status = SimpleNamespace(
-                returncode=0, stdout=b'gb-agy-runtime (complain)\n')
+                returncode=0, stdout=b'978:968:gb-agy-runtime (complain)\n')
             metadata = SimpleNamespace(
                 st_mode=stat.S_IFREG | 0o644, st_uid=0, st_nlink=1)
 
             with patch.object(N, 'APPARMOR_POLICY_FILE', installed), \
                  patch.object(N.os, 'fstat', return_value=metadata), \
+                 patch.object(N.os, 'geteuid', return_value=978), \
+                 patch.object(N.os, 'getegid', return_value=968), \
                  patch.object(N.subprocess, 'run', return_value=status):
                 with self.assertRaises(PermissionError):
                     N._verify_apparmor_precharge()
 
-                status.stdout = b'gb-agy-runtime (enforce)\n'
+                status.stdout = b'978:968:gb-agy-runtime (enforce)\n'
                 self.assertIsNone(N._verify_apparmor_precharge())
                 status.returncode = 1
                 with self.assertRaises(PermissionError):

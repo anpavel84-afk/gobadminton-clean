@@ -452,10 +452,10 @@ def validate_addressed_grant(g, *, enrollment=False):
             # Unprivileged UID978 cannot read root-only ledgers. Validate against
             # the exact root-owned 0644 admission marker; root checks its ledger.
             import json
-            from native_antigravity import MARKER,trusted
+            from native_antigravity import MARKER,trusted,ReviewError
             try:
                 marker=json.loads(trusted(MARKER))
-            except (OSError,ValueError,TypeError,KeyError):
+            except (OSError,ValueError,TypeError,KeyError,ReviewError):
                 need(False,'unadmitted package grant; trusted marker unavailable')
             need(marker.get('phase')=='canary'
                  and marker.get('adapter_revision')==g['controller_revision']

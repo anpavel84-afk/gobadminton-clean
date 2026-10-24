@@ -470,6 +470,10 @@ def qualification(slot, task_hash, model=MODEL):
          'Antigravity executable pin drift')
     # Auth is consumed only by the CLI transport and never added to prompt,
     # argv, receipts or exceptions. Provisioning is a separate root OPS action.
+    try:
+        _verify_apparmor_precharge()
+    except OSError:
+        raise ReviewError('AGY_PRECHECK_FAILED', 'preflight') from None
     trusted(AUTH, owner=EXECUTOR_UID)
     return m
 
@@ -608,21 +612,52 @@ def _verify_apparmor_precharge():
     if hashlib.sha256(content).hexdigest() != APPARMOR_POLICY_SHA256:
         raise PermissionError('AppArmor policy SHA mismatch')
 
-    # UID978 cannot read kernel securityfs/profiles. Verify the actual
-    # effective label in a tiny same-UID child, before any model charge.
+    # The root receiver must verify the slot2 identity, never itself.
+    import pwd
+    uid = os.geteuid()
+    if uid == 0:
+        try:
+            account = pwd.getpwuid(EXECUTOR_UID)
+        except KeyError:
+            raise PermissionError('UID978 account unavailable') from None
+        if account.pw_name != 'gb-slot2' or account.pw_gid != 968:
+            raise PermissionError('unexpected slot2 identity')
+        identity = dict(user=EXECUTOR_UID, group=968, extra_groups=[])
+    elif uid == EXECUTOR_UID and os.getegid() == 968:
+        identity = {}
+    else:
+        raise PermissionError('wrong AppArmor preflight identity')
+
     def probe_child():
         from native_guard import no_new_privileges
         _arm_apparmor_onexec()
         no_new_privileges()
 
-    observed = subprocess.run(
-        ['/usr/bin/python3', '-I', '-c',
-         "from pathlib import Path; print(Path('/proc/self/attr/current').read_text().strip())"],
-        cwd='/', env={'PATH':'/usr/bin:/bin', 'LANG':'C.UTF-8'},
-        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-        preexec_fn=probe_child, timeout=10, check=False)
-    if observed.returncode != 0 or observed.stdout.strip() != b'gb-agy-runtime (enforce)':
+    script = (
+        "import os; from pathlib import Path; "
+        "label = Path('/proc/self/attr/current').read_text().strip(); "
+        "print(f'{os.geteuid()}:{os.getegid()}:{label}')"
+    )
+    try:
+        observed = subprocess.run(
+            ['/usr/bin/python3', '-I', '-c', script],
+            cwd='/',
+            env={'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8'},
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            preexec_fn=probe_child,
+            timeout=10,
+            check=False,
+            **identity
+        )
+    except (OSError, subprocess.SubprocessError):
+        raise PermissionError('AppArmor preflight execution failed') from None
+
+    if (observed.returncode != 0 or
+            observed.stdout.strip() != b'978:968:gb-agy-runtime (enforce)'):
         raise PermissionError('AppArmor enforce transition could not be verified')
+
 
 
 def _arm_apparmor_onexec():

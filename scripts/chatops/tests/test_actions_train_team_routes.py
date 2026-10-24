@@ -97,8 +97,11 @@ class ModelProtocol(unittest.TestCase):
             if path==N.MARKER:return json.dumps(marker).encode()
             if str(path)==N.AGY:return b'trusted-cli-fixture'
             return b'private-auth-fixture'
+        # Synthetic model-admission fixture only. AppArmor denial is
+        # separately tested at every actual qualification entrypoint.
         with patch.object(N,'trusted',side_effect=trusted), \
-             patch.object(N,'AGY_SHA256',hashlib.sha256(b'trusted-cli-fixture').hexdigest()):
+             patch.object(N,'AGY_SHA256',hashlib.sha256(b'trusted-cli-fixture').hexdigest()), \
+             patch.object(N,'_verify_apparmor_precharge',return_value=None):
             return N.qualification('slot2','exact',model=model)
     def test_medium_canary_never_qualifies_other_models(self):
         marker=self.marker('canary');marker['admitted_models']=list(N.MODELS)
