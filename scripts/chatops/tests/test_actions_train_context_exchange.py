@@ -166,6 +166,9 @@ class ContextExchange(unittest.TestCase):
             full_rules_reference=ref,verified_access=lambda r:False)
         self.assertIn(text,fallback)
         self.assertEqual(receipt['delivery'],'explicit_full_stdin')
+        self.assertEqual(fallback,full)
+        self.assertEqual(receipt['stdin_sha256'],full_receipt['stdin_sha256'])
+        self.assertIn('Role: qa.',fallback)
 
     def test_unknown_prior_status_is_not_erased_by_context_projection(self):
         c={'receipts':{'a'*64:{'status':'pending','inputs':{'head':HEAD},'brief':None},
