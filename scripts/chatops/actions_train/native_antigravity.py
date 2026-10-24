@@ -810,6 +810,7 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=
                 resource.setrlimit(resource.RLIMIT_CORE,(0,0))
                 resource.setrlimit(resource.RLIMIT_FSIZE,(MAX_OUT+1,MAX_OUT+1))
             # Always retain these two bounded files before credential-temp cleanup.
+            primary_failure = None
             try:
                 with open(out/'stdout','xb') as stdout,open(out/'stderr','xb') as stderr:
                     argv=command(max(1,timeout-10),model=model,
@@ -853,13 +854,35 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=
                     raise ReviewError('AGY_OUTPUT_LIMIT','output',ev.id)
                 if process.returncode != 0:raise ReviewError('AGY_EXIT_NONZERO','output',ev.id)
                 raw=(out/'stdout').read_bytes()
+            except BaseException as error:
+                primary_failure = error
+                raise
             finally:
-                if process is not None and process.poll() is None:reap(process)
-                # The model child may refresh its own temporary credential.
-                # Preserve that refresh before TemporaryDirectory cleanup.
-                # Any failed persistence keeps the charged operation UNKNOWN.
-                retain_oauth_refresh(auth,original_oauth)
-                ev.streams(out)
+                # Independent finalizers: neither reaping nor OAuth refresh can
+                # skip private stream retention before TemporaryDirectory cleanup.
+                reap_failed = False
+                try:
+                    if process is not None and process.poll() is None:reap(process)
+                except BaseException:
+                    reap_failed = True
+                stream_error = None
+                try:
+                    ev.streams(out)
+                except BaseException as error:
+                    stream_error = error
+                refresh_failed = False
+                try:
+                    retain_oauth_refresh(auth,original_oauth)
+                except BaseException:
+                    refresh_failed = True
+                # Only bounded closed metadata, never credential bytes or
+                # untrusted exception text. Preserve any earlier stage error.
+                if reap_failed: ev.record(process_reap='failed')
+                if refresh_failed: ev.record(oauth_refresh='failed')
+                if stream_error is not None: raise stream_error
+                if primary_failure is None:
+                    if reap_failed or refresh_failed:
+                        raise ReviewError('AGY_ADAPTER_ERROR','output',ev.id) from None
         ev.record(phase='output',terminal=owned,status='invoke_success')
         return raw,dict(executor_uid=EXECUTOR_UID,slot=slot,qualification_phase=marker['phase'],
             requested_native_sandbox=True,filesystem_boundary='uid978_apparmor_enforce_and_native_cli_sandbox',
