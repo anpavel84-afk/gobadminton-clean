@@ -72,6 +72,16 @@ class AcceptedFile(unittest.TestCase):
 
 
 class AcceptedGitRulesReference(unittest.TestCase):
+    def test_verified_git_rules_rejects_symlink_workdir_without_git(self):
+        reference=dict(path=C.CANONICAL_GIT_RULES_PATH,revision=C.RULES_COMMIT,
+                       sha256=C.RULES_SHA256,bytes=C.RULES_SIZE)
+        with tempfile.TemporaryDirectory(prefix='.context-symlink-') as temp:
+            root=Path(temp);work=root/'work';work.mkdir()
+            link=root/'link';link.symlink_to(work,target_is_directory=True)
+            with patch.object(C.subprocess,'run') as proc:
+                self.assertFalse(C.verified_git_rules(link,reference))
+                proc.assert_not_called()
+
     def test_immutable_rules_git_probe_validates_actual_blob_bytes_and_identity(self):
         reference=dict(path=C.CANONICAL_GIT_RULES_PATH,revision=C.RULES_COMMIT,
                        sha256=C.RULES_SHA256,bytes=C.RULES_SIZE)
@@ -115,15 +125,73 @@ class StageDelivery(unittest.TestCase):
                 with self.subTest(stage=stage_name,scoped=scoped):
                     self.exercise_stage(stage_name,scoped=scoped,qa=qa,role=role)
 
-    def exercise_stage(self,stage_name,scoped=False,recover=False,qa=True,role='qa'):
+    def test_codex_author_fallback_equals_legacy_full(self):
+        self.fallback_equals_legacy_full('author',False,'author')
+    def test_codex_task_review_fallback_equals_legacy_full(self):
+        self.fallback_equals_legacy_full('task_review',True,'qa')
+    def test_codex_failure_diagnosis_fallback_equals_legacy_full(self):
+        self.fallback_equals_legacy_full('failure_diagnosis',True,'failure_diagnosis')
+    def test_codex_scoped_guidance_once_without_full_rules(self):
+        for name,qa,role in (('author',False,'author'),('task_review',True,'qa'),
+                            ('failure_diagnosis',True,'failure_diagnosis'),('qa',True,'qa')):
+            with self.subTest(stage=name):
+                self.assert_scoped_guidance(*self.exercise_stage(name,scoped=True,qa=qa,role=role))
+    def test_codex_diagnose_context_mapping_and_fallback(self):
+        for diagnosis in (False,True):
+            role='failure_diagnosis' if diagnosis else 'qa'
+            with self.subTest(diagnosis=diagnosis):
+                self.assert_scoped_guidance(*self.exercise_stage('diagnose',scoped=True,
+                    role=role,diagnosis=diagnosis))
+                self.fallback_equals_legacy_full('diagnose',True,role,diagnosis=diagnosis)
+    def test_codex_recovery_and_budget_retry_use_exact_full_without_probe(self):
+        for name,qa,role in (('author',False,'author'),('qa',True,'qa'),
+                            ('task_review',True,'qa'),('failure_diagnosis',True,'failure_diagnosis')):
+            for guard in ('recover','budget_retry'):
+                with self.subTest(stage=name,guard=guard), \
+                     tempfile.TemporaryDirectory(prefix='.context-guard-') as temp:
+                    actual=self.exercise_stage(name,scoped=True,qa=qa,role=role,work=temp,**{guard:True})
+                    self.assert_exact_full(actual,C.inject('bounded immutable task',qa,temp,accepted(),role=role))
+
+    def assert_exact_full(self,actual,expected):
+        payload,receipt=actual;full,baseline=expected
+        self.assertEqual(payload.encode('utf-8'),full.encode('utf-8'))
+        self.assertEqual(receipt['stdin_sha256'],baseline['stdin_sha256'])
+        self.assertEqual(receipt['semantic_input_bytes'],baseline['semantic_input_bytes'])
+        self.assertEqual(receipt['context_metrics']['stage_bytes'],baseline['context_metrics']['stage_bytes'])
+        self.assertEqual(receipt,baseline)
+        self.assertIn(TEXT,payload);self.assertEqual(receipt['delivery'],'explicit_full_stdin')
+
+    def fallback_equals_legacy_full(self,name,qa,role,diagnosis=False):
+        with tempfile.TemporaryDirectory(prefix='.context-equality-') as temp:
+            fallback=self.exercise_stage(name,qa=qa,role=role,work=temp,diagnosis=diagnosis)
+            self.assert_exact_full(fallback,C.inject('bounded immutable task',qa,temp,accepted(),role=role))
+            recovered=self.exercise_stage(name,scoped=True,recover=True,qa=qa,role=role,
+                                          work=temp,diagnosis=diagnosis)
+            self.assert_exact_full(fallback,recovered)
+
+    def assert_scoped_guidance(self,payload,receipt):
+        guidance=('If you need the complete accepted rules, read the IMMUTABLE '
+                  'Git object with git show '+C.RULES_COMMIT+':'
+                  +C.CANONICAL_GIT_RULES_PATH+'; do not trust modified '
+                  'working-tree policy files.\n')
+        self.assertEqual(payload.count(guidance),1)
+        self.assertTrue(payload.endswith('BOUNDED STAGE INSTRUCTIONS:\n'+guidance+'bounded immutable task'))
+        self.assertNotIn(TEXT,payload)
+        self.assertEqual(receipt['delivery'],'explicit_scoped_stdin')
+        self.assertEqual(receipt['context_metrics']['policy_profile'],'scoped_v1')
+        self.assertEqual(receipt['stdin_sha256'],hashlib.sha256(payload.encode('utf-8')).hexdigest())
+        self.assertEqual(receipt['semantic_input_bytes'],len(payload.encode('utf-8')))
+
+    def exercise_stage(self,stage_name,scoped=False,recover=False,qa=True,role='qa',
+                       work=None,budget_retry=False,diagnosis=False):
         with tempfile.TemporaryDirectory(prefix='.context-stage-') as temp:
-            root=Path(temp);cli=root/'fake-codex';cli.write_text('trusted test fixture, never executed')
+            root=Path(work or temp);cli=root/'fake-codex';cli.write_text('trusted test fixture, never executed')
             count=[0];inputs=[];traces=[];store=SimpleNamespace(data={'active':{'task':{},'head':'a'*40,'attempt':1}})
             layout=SimpleNamespace(repo=root,state_dir=root,worktrees=root,outbox=root)
             rt=SimpleNamespace(user='test',legacy=True,home=root,key=root/'key',layout=layout,
                 check_paths=Mock(),continuity=lambda:True,lease=Mock(),
                 budget=SimpleNamespace(used=lambda *_:count[0]))
-            if stage_name == 'failure_diagnosis':
+            if stage_name == 'failure_diagnosis' or (stage_name == 'diagnose' and diagnosis):
                 store.data['active']['task']['failure_diagnosis']={'max_calls':1}
                 store.data['active']['failure_diagnosis']={
                     'calls':1,'receipts':{'current':{
@@ -153,11 +221,12 @@ class StageDelivery(unittest.TestCase):
                  patch.object(receiver,'units_quiet'),patch.object(receiver,'identity',return_value={'pid':424242,'start':'1','boot':'test'}):
                 request=req(stage_name,'pr_wait')
                 if recover:request['_recover']=True
+                if budget_retry:request['_budget_preflight_retry']=True
                 _,_,_,_,_,b=stage.setup(request,{'codex':{'slot1':str(cli)}})
                 b.model('bounded immutable task',qa=qa)
                 self.assertEqual(count[0],1);self.assertTrue(inputs[0].endswith('bounded immutable task'))
                 r=b.routing_receipts[0]['rules_context'];self.assertEqual(r['role'],role)
-                if scoped and not recover:
+                if scoped and not recover and not budget_retry:
                     self.assertNotIn(TEXT,inputs[0])
                     self.assertIn('CONTEXT_PROFILE scoped_v1',inputs[0])
                     self.assertEqual(r['context_metrics']['policy_profile'],'scoped_v1')
@@ -165,7 +234,7 @@ class StageDelivery(unittest.TestCase):
                 else:
                     self.assertIn(TEXT,inputs[0])
                     self.assertEqual(r['context_metrics']['policy_profile'],'full')
-                    if recover:git_proof.assert_not_called()
+                    if recover or budget_retry:git_proof.assert_not_called()
                 self.assertEqual(r['stdin_sha256'],hashlib.sha256(inputs[0].encode()).hexdigest())
                 self.assertEqual(b.routing_receipts[0]['usage']['charged_calls'],1)
                 self.assertTrue(any(t.get('process',{}).get('pid')==424242 for t in traces if t.get('process')))
@@ -173,6 +242,7 @@ class StageDelivery(unittest.TestCase):
                 before=popen.call_count
                 with self.assertRaises(core.Refused):a.subprocess.Popen([str(cli)])
                 self.assertEqual(popen.call_count,before)
+                return inputs[0],copy.deepcopy(r)
 
 
 class DriftPreflight(unittest.TestCase):

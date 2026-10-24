@@ -45,7 +45,7 @@ def load(path=RULES_PATH, *, trusted_uids=(0,)):
 
 
 def inject(prompt, qa, cwd, accepted, *, role=None, context_profile='full',
-           full_rules_reference=None, verified_access=None):
+           full_rules_reference=None, verified_access=None, scoped_guidance=''):
     text, metadata = accepted
     need(isinstance(prompt, str) and prompt, 'empty model prompt')
     # Recheck the bytes about to be delivered, not merely a previously-read link.
@@ -68,7 +68,7 @@ def inject(prompt, qa, cwd, accepted, *, role=None, context_profile='full',
             # all accepted bytes. Missing recipient access cannot silently
             # switch ordinary Codex tasks to a different full-prompt format.
             return inject(prompt, qa, cwd, accepted, role=role, context_profile='full')
-        payload = prefix + 'BOUNDED STAGE INSTRUCTIONS:\n' + prompt
+        payload = prefix + 'BOUNDED STAGE INSTRUCTIONS:\n' + scoped_guidance + prompt
         receipt = dict(metadata, role=role, cwd=str(Path(cwd).resolve()),
             delivery='explicit_scoped_stdin' if context_metrics['policy_profile']=='scoped_v1' else 'explicit_full_stdin',
             stdin_sha256=hashlib.sha256(payload.encode('utf-8')).hexdigest(),

@@ -127,9 +127,9 @@ def setup(req, config, native_auth=None):
                       'Git object with git show '+RULES_COMMIT+':'
                       +CANONICAL_GIT_RULES_PATH+'; do not trust modified '
                       'working-tree policy files.\n')
-            wrapped, rules_receipt = inject(guidance+prompt, qa, bridge.work,
+            wrapped, rules_receipt = inject(prompt, qa, bridge.work,
                 accepted_rules, role=context_role, context_profile='scoped_v1',
-                full_rules_reference=reference,
+                full_rules_reference=reference, scoped_guidance=guidance,
                 verified_access=lambda ref: verified_git_rules(bridge.work,ref))
         else:
             wrapped, rules_receipt = inject(prompt, qa, bridge.work, accepted_rules, role=choice.get('role', 'qa' if qa else 'author'))
