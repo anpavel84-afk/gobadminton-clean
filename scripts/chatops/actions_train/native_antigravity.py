@@ -650,7 +650,7 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=
     try:
         wire,transport=input_payload(stdin)
         ev.record(**transport,input_delivery='prepared',requested_permission_mode=PERMISSION_MODE,requested_model=model)
-        marker=qualification(slot,task_hash,model=model)
+        # Fail BEFORE qualification() touches the pinned OAuth credential.
         need(os.geteuid() == EXECUTOR_UID, 'wrong native QA executor UID')
         try:
             _verify_apparmor_precharge()
@@ -658,6 +658,7 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=
             raise ReviewError('AGY_PRECHECK_FAILED', 'preflight', ev.id) from None
         ev.record(apparmor_policy_sha256=APPARMOR_POLICY_SHA256,
                   apparmor_mode='enforce', apparmor_preflight='source_and_label')
+        marker=qualification(slot,task_hash,model=model)
         need(type(timeout) is int and MIN_TIMEOUT <= timeout <= 3600, 'invalid timeout')
         with tempfile.TemporaryDirectory(prefix='gb-agy-') as temp:
             root=Path(temp);agents=root/'ws/.agents/agents';out=root/'out'

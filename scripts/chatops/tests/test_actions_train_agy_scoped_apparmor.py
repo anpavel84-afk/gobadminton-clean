@@ -90,6 +90,25 @@ class ScopedAgySecurity(unittest.TestCase):
                     with self.assertRaises(PermissionError):
                         N._verify_apparmor_precharge()
 
+    def test_precharge_refusal_precedes_all_credential_access_and_charge(self):
+        import tempfile
+        with tempfile.TemporaryDirectory(prefix='gb-agy-precharge-negative-') as temp:
+            checked = []
+            def should_never_qualify(*_a, **_kw):
+                checked.append('credential_qualification')
+                raise AssertionError('precharge must precede credentials')
+            with patch.object(N.os,'geteuid',return_value=978), \
+                 patch.object(N,'_verify_apparmor_precharge',side_effect=PermissionError('no enforce')), \
+                 patch.object(N,'qualification',side_effect=should_never_qualify), \
+                 patch.object(N,'trusted',side_effect=should_never_qualify):
+                with self.assertRaises(N.ReviewError) as failure:
+                    N.invoke('synthetic precharge negative',45,
+                             work=pathlib.Path(temp),slot='slot2',task_hash='0'*64,
+                             charge=lambda:checked.append('charged'),
+                             evidence_dir=pathlib.Path(temp))
+            self.assertEqual(failure.exception.code,'AGY_PRECHECK_FAILED')
+            self.assertEqual(checked, [])
+
     def test_profile_absence_raises_without_fallback(self):
         class Fn:
             def __call__(self,_name):
