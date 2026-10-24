@@ -47,7 +47,7 @@ class ScopedAgySecurity(unittest.TestCase):
         for body in (N.AGENT_DEF,N.ANALYSIS_AGENT_DEF):
             self.assertIn('tools:\n  - view_file\n  - run_command',body)
         self.assertEqual(N.command(45)[0],N.AGY)
-        self.assertIn('--sandbox',N.command(45))
+        self.assertNotIn('--sandbox',N.command(45))
         self.assertNotIn('--mode',N.command(45))
 
     def test_systemd_resolved_symlink_target_only_read_access(self):
@@ -149,7 +149,8 @@ class ScopedAgySecurity(unittest.TestCase):
         self.assertIn('no_new_privileges()',src)
         self.assertLess(src.index('_arm_apparmor_onexec()'),src.index('no_new_privileges()'))
         self.assertNotIn('_landlock(',src)
-        self.assertIn("filesystem_boundary='uid978_apparmor_enforce_and_native_cli_sandbox'",src)
+        self.assertIn("requested_native_sandbox=False,filesystem_boundary='uid978_apparmor_enforce',",src)
+        self.assertNotIn('native_cli_sandbox',src)
         self.assertIn('resource.setrlimit(resource.RLIMIT_CORE,(0,0))',src)
         self.assertEqual(N.EXECUTOR_UID,978)
         self.assertEqual(N.APPARMOR_PROFILE,b'gb-agy-runtime')

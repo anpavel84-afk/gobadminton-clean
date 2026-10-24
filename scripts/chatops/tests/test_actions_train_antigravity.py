@@ -105,7 +105,7 @@ class Protocol(EvidenceTestCase):
         self.assertEqual(cmd[cmd.index('--input-format')+1],'stream-json')
         self.assertEqual(cmd[cmd.index('--print-timeout') + 1], '90s')
         self.assertEqual(cmd[cmd.index('--output-format') + 1], 'stream-json')
-        self.assertIn('--sandbox', cmd)
+        self.assertNotIn('--sandbox', cmd)
         self.assertIn('--disable-slash-commands', cmd)
         for forbidden in ('-p','--print','--prompt','--continue', '--conversation', '--remote-control'):
             self.assertNotIn(forbidden, cmd)
@@ -363,7 +363,8 @@ print(json.dumps(result))
             self.assertEqual(json.loads(raw),{'read':True,'write':False,'chmod_then_write':False,
                                                'outside':False,'shell':True})
             self.assertEqual((work/'source.py').read_text(),'original')
-            self.assertEqual(evidence['filesystem_boundary'],'uid978_apparmor_enforce_and_native_cli_sandbox')
+            self.assertEqual(evidence['filesystem_boundary'],'uid978_apparmor_enforce')
+            self.assertIs(evidence['requested_native_sandbox'], False)
             self.assertEqual(charged,['one'])
 
     def test_synthetic_legacy_landlock_git_fixture_and_strict_gate(self):
@@ -390,7 +391,7 @@ print(json.dumps(result))
             full_argv=N.command(60,analysis=True,source_root=str(work.resolve()))
             self.assertEqual(full_argv.count('--add-dir'),1)
             self.assertEqual(full_argv[full_argv.index('--add-dir')+1],str(work.resolve()))
-            self.assertIn('--sandbox',full_argv)
+            self.assertNotIn('--sandbox',full_argv)
             with self.assertRaises(N.ReviewError):
                 N.command(60,analysis=True,source_root=str(outside))
             with self.assertRaises(N.ReviewError):
@@ -467,7 +468,8 @@ print(json.dumps({'cwd':os.getcwd(),'head':git.stdout.strip(),
             self.assertFalse(observed['write'])
             self.assertFalse(observed['outside_readable'])
             self.assertEqual(len(seen),1)
-            self.assertEqual(receipt['filesystem_boundary'],'uid978_apparmor_enforce_and_native_cli_sandbox')
+            self.assertEqual(receipt['filesystem_boundary'],'uid978_apparmor_enforce')
+            self.assertIs(receipt['requested_native_sandbox'], False)
             self.assertEqual(receipt['writable_roots'],['invocation_private_root','/dev/null'])
             rows=stream()
             rows[0]['init']['tools']=['view_file','run_command']
