@@ -12,8 +12,8 @@
 
 | Область | Источник и предел |
 |---|---|
-| Организация разработки, роли/модели, попытки, QA/FAIL, trusted context | [ENGINEERING_OPERATING_MODEL.md](ENGINEERING_OPERATING_MODEL.md), единственный полный текст v1.3; exact bytes в [CONTEXT_SOURCES.json](CONTEXT_SOURCES.json) |
-| Ограничения входа и Owner Addendum о tool refusals | [AGENTS.md](../../AGENTS.md), короткий обязательный вход; не альтернативная матрица моделей |
+| Организация разработки, роли/модели, попытки, QA/FAIL, trusted context | [ENGINEERING_OPERATING_MODEL.md](ENGINEERING_OPERATING_MODEL.md), единственный полный текст v1.4 (Owner-directed отказ провайдера ≠ запрет проекта); exact bytes в [CONTEXT_SOURCES.json](CONTEXT_SOURCES.json) |
+| Уточнение Owner: отказ OpenAI/провайдера не блокирует другие инженерные маршруты | [AGENTS.md](../../AGENTS.md), короткий обязательный вход; не альтернативная матрица моделей |
 | Хранение/передача | [PROJECT_RECORD_POLICY.md](PROJECT_RECORD_POLICY.md), scoped политика; не расширяет execution authority |
 | Исходные продуктовые решения | [Owner decisions](../manifest/OWNER_DECISIONS.md), exact Owner Issues и [все ADR/Owner records](../decisions/README.md); статус/область каждого решения сохраняются |
 | Domain/API/privacy/data | [Предметный индекс](../README.md); читать exact source/design revision своего assignment, не произвольный latest branch |
@@ -22,7 +22,7 @@
 | PMA takeover | [CURRENT.md](../handoffs/CURRENT.md) и подтверждённое Owner-решение, не имя старого чата |
 | Фактическое исполнение/установка | Exact Actions, controller/adapter pin, operation/lease и receipts; документы не заменяют их |
 
-Синхронизированный core имеет те же 100818 байт и SHA-256 `38c34012f10974496a7d7cbc74ecacb62bf7847278e295edfeb107d69a5d1c1c`, что и принятый commit `1169e965976e9498d4e5e1e23aae201e97ec9665`. Поэтому консолидация не требует молчаливой смены установленного rules pin. Новые Owner-уточнения применяются в своей области и не переписывают прежние admissions.
+Редакция v1.4 по прямому решению Owner имеет **104492 UTF-8 байта** и SHA-256 `96690bc66680bca085bf004083e21a4efe29e1409293cf3e5ceb1eeb4f0bffe0`, закреплена документным коммитом `89c974875ead4c9bb3f17add7a19548758ecf2bc`; exact источник указан в [CONTEXT_SOURCES.json](CONTEXT_SOURCES.json). Предыдущая v1.3 (`1169e965…`, 100818 байт) сохраняется в истории и может ещё быть привязана к установленному runtime. Публикация новых правил не означает автоматической смены установленного pin или active admission; приведение runtime выполняет Grok после штатной проверки.
 
 ## Покрытие остальных документов
 
