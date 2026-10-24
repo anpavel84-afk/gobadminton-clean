@@ -140,6 +140,9 @@ class AnalysisStage(unittest.TestCase):
             self.assertEqual(receipt['analysis_completion'],'COMPLETE')
 
 class NativeAnalysisTransport(unittest.TestCase):
+    def setUp(self):
+        from test_actions_train_agy_oauth_precharge import synthetic_vendor_preflight
+        synthetic_vendor_preflight(self)
     def test_full_stdin_eof_private_agent_and_unchanged_boundary_without_schema(self):
         import subprocess
         with tempfile.TemporaryDirectory() as d:
