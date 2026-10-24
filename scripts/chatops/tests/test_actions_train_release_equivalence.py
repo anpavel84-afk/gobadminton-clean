@@ -215,6 +215,47 @@ class DynamicProcessLoader(GitFixture):
             'result = name\n',
             reusable=False)
 
+    def test_posixpath_reexport_requires_addressed_qa(self):
+        self.check_loader(
+            'import posixpath as x\n'
+            'x.os.execl("/usr/bin/python3", "python3", '
+            '"scripts/chatops/tests/test_example.py")\n',
+            reusable=False)
+
+    def test_ntpath_reexport_requires_addressed_qa(self):
+        self.check_loader(
+            'import ntpath as x\n'
+            'x.os.execl("/usr/bin/python3", "python3", '
+            '"scripts/chatops/tests/test_example.py")\n',
+            reusable=False)
+
+    def test_posix_spawn_import_requires_addressed_qa(self):
+        self.check_loader(
+            'from posix import posix_spawn as launch\n'
+            'launch("/usr/bin/python3", '
+            '["python3", "scripts/chatops/tests/test_example.py"], {})\n',
+            reusable=False)
+
+    def test_importlib_dictionary_alias_requires_addressed_qa(self):
+        self.check_loader(
+            'import importlib as x\n'
+            'launch = x.__dict__["import_" + "module"]\n'
+            'launch("scripts.chatops.tests.test_example")\n',
+            reusable=False)
+
+    def test_ctypes_process_launch_requires_addressed_qa(self):
+        self.check_loader(
+            'import ctypes\n'
+            'ctypes.CDLL(None).system(b"python3 scripts/chatops/tests/test_example.py")\n',
+            reusable=False)
+
+    def test_subprocess_reexported_sys_requires_addressed_qa(self):
+        self.check_loader(
+            'from subprocess import sys as x\n'
+            'x.modules["os"].execl("/usr/bin/python3", "python3", '
+            '"scripts/chatops/tests/test_example.py")\n',
+            reusable=False)
+
     def test_benign_path_literal_preserves_test_only_reuse(self):
         self.check_loader(
             'from pathlib import Path\n'
