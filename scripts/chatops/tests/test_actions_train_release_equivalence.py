@@ -201,6 +201,20 @@ class DynamicProcessLoader(GitFixture):
             '"scripts/chatops/tests/test_example.py")\n',
             reusable=False)
 
+    def test_literal_changed_test_path_in_python_runtime_requires_addressed_qa(self):
+        self.check_loader(
+            'class Consumer:\n'
+            '    def read(self, path):\n'
+            '        return path\n'
+            'result = Consumer().read("scripts/chatops/tests/test_example.py")\n',
+            reusable=False)
+
+    def test_stitched_test_tree_in_python_runtime_requires_addressed_qa(self):
+        self.check_loader(
+            'name = "scripts/chatops/" + "tests/" + "test_" + "example.py"\n'
+            'result = name\n',
+            reusable=False)
+
     def test_benign_path_literal_preserves_test_only_reuse(self):
         self.check_loader(
             'from pathlib import Path\n'
