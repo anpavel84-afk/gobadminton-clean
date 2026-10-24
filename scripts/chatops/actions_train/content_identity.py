@@ -186,7 +186,38 @@ def independence(files, sources, changed):
                     names = {'__import__', 'import_module', 'spec_from_file_location',
                              'SourceFileLoader', 'exec', 'eval', 'open', 'read_text', 'read_bytes', 'glob', 'rglob',
                              'globals', 'locals', 'vars', '__getattribute__'}
+                    # Local Python process loaders can execute changed tests even
+                    # when no static import references them. Resolve explicit
+                    # stdlib module and from-import aliases before scanning calls.
+                    # Conservative uncertainty triggers addressed QA, never reuse.
+                    subprocess_exec = {
+                        'run', 'Popen', 'call', 'check_call', 'check_output',
+                        'getoutput', 'getstatusoutput'
+                    }
+                    os_exec = {
+                        'system', 'popen', 'execl', 'execle', 'execlp', 'execlpe',
+                        'execv', 'execve', 'execvp', 'execvpe', 'posix_spawn',
+                        'posix_spawnp', 'spawnl', 'spawnle', 'spawnlp', 'spawnlpe',
+                        'spawnv', 'spawnve', 'spawnvp', 'spawnvpe', 'startfile'
+                    }
+                    subprocess_aliases, os_aliases = set(), set()
+                    for node in ast.walk(parsed):
+                        if isinstance(node, ast.Import):
+                            for alias in node.names:
+                                if alias.name == 'subprocess':
+                                    subprocess_aliases.add(alias.asname or alias.name)
+                                elif alias.name == 'os':
+                                    os_aliases.add(alias.asname or alias.name)
+                        elif isinstance(node, ast.ImportFrom):
+                            if node.module in ('subprocess', 'os'):
+                                operations = subprocess_exec if node.module == 'subprocess' else os_exec
+                                names.update(alias.asname or alias.name for alias in node.names
+                                             if alias.name in operations)
                     for n in ast.walk(parsed):
+                        if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name):
+                            if (n.value.id in subprocess_aliases and n.attr in subprocess_exec
+                                    or n.value.id in os_aliases and n.attr in os_exec):
+                                return 'dynamic process loader requires addressed QA: ' + p
                         if isinstance(n, ast.ImportFrom):
                             if n.module in ('importlib', 'importlib.util', 'importlib.machinery', 'builtins', 'io', 'runpy'):
                                 names.update(a.asname or a.name for a in n.names)
