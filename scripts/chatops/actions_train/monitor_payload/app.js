@@ -255,8 +255,43 @@ window.GBTrainMonitor = {
     });
   }
 
+  // External evidence metadata only; reuse the existing snapshot poll and styles.
+  function renderExternal(x) {
+    var s = $('external');
+    if (!s) { s = el('section'); s.id = 'external'; $('infra').parentNode.insertBefore(s, $('infra')); }
+    clear(s); s.appendChild(el('h2', null, 'Внешние запуски (вне слотов)'));
+    if (!x || x.available === false) { s.appendChild(el('div', 'mut', 'Данные о внешних запусках недоступны.')); return; }
+    s.appendChild(el('div', 'mut', 'Выполняется сейчас: ' + x.running));
+    if (x.stale > 0) s.appendChild(el('div', 'mut', 'без событий >15 мин: ' + x.stale));
+    var runs = x.runs || [];
+    if (x.omitted > 0) s.appendChild(el('div', 'mut', 'Показано ' + runs.length + ' из ' + (runs.length + x.omitted)));
+    if (x.truncated === true) s.appendChild(el('div', 'mut', 'Показаны не все запуски; охват может быть неполным.'));
+    if (!runs.length) { s.appendChild(el('div', 'mut', x.truncated ? 'Нет строк для отображения; наличие других запусков неизвестно.' : 'Внешних запусков нет.')); return; }
+    var states = { running: ['идёт', 'ok'], stale: ['нет событий >15 мин', 'warn'],
+      done: ['завершён', 'ok'], failed: ['ошибка', 'bad'] };
+    var kinds = { qa: 'QA', diagnosis: 'диагностика', author: 'автор' };
+    runs.forEach(function (r) {
+      var b = el('div', 'item'), title = el('div', null, r.tag), state = states[r.state];
+      if (state) title.appendChild(chip(state[0], state[1]));
+      b.appendChild(title);
+      var parts = [kinds[r.kind] || '—'];
+      if (r.role) parts.push(r.role);
+      if (r.model) parts.push(r.model);
+      parts.push('начало (прибл.): ' + (r.started_utc || 'неизвестно'));
+      parts.push('последнее событие ' + (r.last_event_utc ? ago(r.age_s) : 'неизвестно'));
+      b.appendChild(el('div', 'mut', parts.join(' · ')));
+      if (r.state === 'done') {
+        if (r.verdict) b.appendChild(chip(r.verdict, r.verdict === 'PASS' ? 'ok' : (r.verdict === 'FAIL' ? 'bad' : 'warn')));
+        if (r.reviewed_sha) b.appendChild(kv([['Коммит', sh(r.reviewed_sha)]]));
+      }
+      if (r.exit_code != null && r.exit_code !== 0) b.appendChild(el('div', 'mut', 'Код выхода: ' + r.exit_code));
+      s.appendChild(b);
+    });
+  }
+
   function render(d) {
     renderPipeline(d.pipeline);
+    renderExternal(d.external_runs);
     var f = $('fresh'), bn = $('banner');
     var stale = d.available === false || d.stale;
     f.className = 'chip ' + (stale ? 'bad' : 'ok');
@@ -272,7 +307,7 @@ window.GBTrainMonitor = {
     else if (d.source_mode === 'slots' && d.source_ok === false) { bn.hidden = false; bn.textContent = d.source_error || 'Статусы слотов недоступны.'; }
     else if (d.executor && d.executor.running === false) { bn.hidden = false; bn.className = 'warn'; bn.textContent = 'Исполнитель остановлен.'; }
     if (d.available === false) { ['now', 'backlog', 'infra', 'paused', 'done', 'doneall', 'outside'].forEach(function (k) { clear($(k)); }); renderNext({}); return; }
-    var dim = stale ? 0.55 : 1; ['now', 'backlog', 'infra', 'paused', 'next', 'done', 'doneall', 'outside'].forEach(function (k) { $(k).style.opacity = dim; });
+    var dim = stale ? 0.55 : 1; ['now', 'backlog', 'infra', 'paused', 'next', 'done', 'doneall', 'outside', 'external'].forEach(function (k) { $(k).style.opacity = dim; });
     renderNow(d); renderBacklog(d); renderInfra(d); renderPaused(d); renderNext(d); renderDone(d); renderDoneAll(d); renderOutside(d);
     $('updated').textContent = 'обновлено ' + new Date().toLocaleTimeString('ru-RU');
   }
