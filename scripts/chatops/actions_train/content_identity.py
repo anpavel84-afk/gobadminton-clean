@@ -204,10 +204,13 @@ def independence(files, sources, changed):
                     for node in ast.walk(parsed):
                         if isinstance(node, ast.Import):
                             for alias in node.names:
-                                if alias.name == 'subprocess':
-                                    subprocess_aliases.add(alias.asname or alias.name)
-                                elif alias.name == 'os':
-                                    os_aliases.add(alias.asname or alias.name)
+                                # import os.path binds os unless explicitly
+                                # renamed; renamed dotted imports bind the
+                                # dotted module, which may expose os itself.
+                                if alias.name == 'subprocess' or alias.name.startswith('subprocess.'):
+                                    subprocess_aliases.add(alias.asname or alias.name.split('.')[0])
+                                elif alias.name == 'os' or alias.name.startswith('os.'):
+                                    os_aliases.add(alias.asname or alias.name.split('.')[0])
                         elif isinstance(node, ast.ImportFrom):
                             if node.module in ('subprocess', 'os'):
                                 # A wildcard can bind any executable loader
@@ -217,6 +220,19 @@ def independence(files, sources, changed):
                                 operations = subprocess_exec if node.module == 'subprocess' else os_exec
                                 names.update(alias.asname or alias.name for alias in node.names
                                              if alias.name in operations)
+                                if node.module == 'subprocess':
+                                    # subprocess re-exports its imported os module.
+                                    os_aliases.update(a.asname or a.name for a in node.names
+                                                      if a.name == 'os')
+                                elif node.module == 'os':
+                                    # os.path is a module and can re-export os.
+                                    os_aliases.update(a.asname or a.name for a in node.names
+                                                      if a.name in ('os', 'path'))
+                            elif node.module in ('os.path', 'posixpath', 'ntpath'):
+                                if any(a.name == '*' for a in node.names):
+                                    return 'wildcard process loader requires addressed QA: ' + p
+                                os_aliases.update(a.asname or a.name for a in node.names
+                                                  if a.name == 'os')
                     # A module object can escape by assignment, tuple unpacking,
                     # function argument or return, after which its process-launch
                     # methods are invisible under the original import alias.
@@ -234,10 +250,18 @@ def independence(files, sources, changed):
                             if parent.attr in ('__dict__', '__class__', '__getattribute__'):
                                 return 'dynamic process module introspection loader requires addressed QA: ' + p
                     for n in ast.walk(parsed):
-                        if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name):
-                            if (n.value.id in subprocess_aliases and n.attr in subprocess_exec
-                                    or n.value.id in os_aliases and n.attr in os_exec):
-                                return 'dynamic process loader requires addressed QA: ' + p
+                        if isinstance(n, ast.Attribute):
+                            root = n
+                            while isinstance(root, (ast.Attribute, ast.Subscript)):
+                                root = root.value
+                            if (isinstance(root, ast.Name) and root.id in process_modules
+                                    and n.attr in (subprocess_exec | os_exec |
+                                                   {'os', 'subprocess', '__dict__',
+                                                    '__class__', '__getattribute__'})):
+                                # Includes subprocess.os.execl, os.path.os.execl
+                                # and dotted-import aliases. Refuse reuse before
+                                # parsing any candidate-controlled tool result.
+                                return 'nested process loader requires addressed QA: ' + p
                         if isinstance(n, ast.ImportFrom):
                             if n.module in ('importlib', 'importlib.util', 'importlib.machinery', 'builtins', 'io', 'runpy'):
                                 names.update(a.asname or a.name for a in n.names)
