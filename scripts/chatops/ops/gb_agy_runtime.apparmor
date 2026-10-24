@@ -1,0 +1,31 @@
+# GoBadminton Antigravity UID978 dedicated executable profile.
+# Unlike system unprivileged_userns, this allows nested userns and mounts.
+# Still subject to real Unix UID978, no_new_privs and vendor --sandbox.
+abi <abi/4.0>,
+include <tunables/global>
+
+profile gb-agy-runtime /opt/gb-slots/runtime/antigravity/agy flags=(attach_disconnected) {
+    # The profile stays in enforce mode. Unix UID978 and nnp apply independently.
+    file rwlkm /**,
+    /** ix,
+    network,
+    unix,
+    signal,
+    ptrace,
+    dbus,
+    mqueue,
+    userns,
+    mount,
+    umount,
+    pivot_root,
+    capability sys_admin,
+    # Preserve stronger denials around unrelated private and protected state.
+    deny /root/** rwklmx,
+    deny /etc/gobadminton-actions-train/** rwklmx,
+    deny /etc/gobadminton-slots/** rwklmx,
+    deny /var/lib/gobadminton-actions-train/** rwklmx,
+    deny /srv/gb-slots/slot2/home/** rwklmx,
+    deny /home/agentagency-dev/** rwklmx,
+    # Prevent provider shell from changing source or Git metadata.
+    deny /srv/gb-slots/slot2/worktrees/** wkl,
+}

@@ -171,7 +171,7 @@ class NativeAnalysisTransport(unittest.TestCase):
             self.assertIn('--sandbox',captured['argv']);self.assertIn('--dangerously-skip-permissions',captured['argv'])
             self.assertIn('--add-dir',captured['argv'])
             self.assertEqual(captured['argv'][captured['argv'].index('--add-dir')+1],str(candidate.resolve()))
-            self.assertEqual(receipt['input_delivery'],'written');self.assertEqual(receipt['filesystem_boundary'],'existing_native_guard_landlock')
+            self.assertEqual(receipt['input_delivery'],'written');self.assertEqual(receipt['filesystem_boundary'],'uid978_apparmor_enforce_and_native_cli_sandbox')
             roots.assert_called_once()
             meta=json.loads(sorted((Path(d)/'evidence').glob('*/phase-*.json'))[-1].read_text())
             self.assertEqual(meta['exit_code'],0);self.assertTrue(meta['terminal'])

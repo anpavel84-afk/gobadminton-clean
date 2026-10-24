@@ -55,13 +55,15 @@ class NativeAgentExposure(unittest.TestCase):
             self.assertIn('--sandbox',opts)
             self.assertEqual(opts[opts.index('--input-format')+1],'stream-json')
 
-    def test_review_gate_and_landlock_are_not_weakened(self):
+    def test_review_gate_and_mandatory_apparmor_are_not_weakened(self):
         self.assertEqual(N.READ_TOOLS,frozenset({'view_file','run_command'}))
         code=inspect.getsource(N.analysis_source_gate)
         self.assertIn('READ_TOOLS <= set(evidence[',code)
         self.assertIn("downgraded=dict(result,completion='INCOMPLETE')",code)
         source=inspect.getsource(N.invoke)
-        self.assertIn('_landlock(readonly,writable,executables)',source)
+        self.assertIn('_arm_apparmor_onexec()',source)
+        self.assertIn('no_new_privileges()',source)
+        self.assertNotIn('_landlock(readonly,writable,executables)',source)
         self.assertIn('ANALYSIS_AGENT_DEF if analysis else AGENT_DEF',source)
         self.assertIn("writable_roots=['invocation_private_root','/dev/null']",source)
 

@@ -5,6 +5,7 @@ Uses saved CLI evidence from #29, not an inferred Codex-compatible protocol.
 No host settings, qualification marker, login, budget or active runtime is changed.
 """
 import ast
+import ctypes
 import hashlib
 import json
 import os
@@ -19,6 +20,9 @@ import uuid
 from pathlib import Path
 
 AGY = '/opt/gb-slots/runtime/antigravity/agy'
+# The independent UID978 AppArmor profile is mandatory on the AGY exec edge.
+# Do not permit an unconfined fallback if the profile is not loaded.
+APPARMOR_PROFILE = b'gb-agy-runtime'
 MARKER = Path('/etc/gobadminton-slots/antigravity-qa.json')
 EXECUTOR_UID = 978
 AUTH = Path('/srv/gb-slots/slot2/home/.gemini/antigravity-cli/antigravity-oauth-token')
@@ -583,6 +587,23 @@ def reap(process):
     process.wait()
 
 
+def _arm_apparmor_onexec():
+    """Fail closed: ensure the next exec transitions to the fixed enforced profile.
+
+    The vendor's internal sandbox must manage its own user+mount namespaces;
+    the former outer Landlock forbade Go's /proc/<child>/uid_map write, preventing
+    CLI selfexec before the command was ever launched. The AppArmor profile
+    deliberately allows native namespace creation while denying protected
+    roots, the original credentials, and candidate checkout writes.
+    """
+    lib = ctypes.CDLL('libapparmor.so.1', use_errno=True)
+    fn = lib.aa_change_onexec
+    fn.argtypes = (ctypes.c_char_p,)
+    fn.restype = ctypes.c_int
+    if fn(APPARMOR_PROFILE) != 0:
+        raise OSError(ctypes.get_errno(), 'required UID978 AppArmor profile unavailable')
+
+
 def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=subprocess.Popen,
            evidence=None, evidence_dir=None, analysis=False):
     owned = evidence is None
@@ -619,8 +640,10 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=
                      'analysis source must be canonical read-only worktree')
             readonly,writable,executables=filesystem_roots(root,source_root or work,common)
             def child():
-                from native_guard import _landlock,no_new_privileges
-                os.setsid();no_new_privileges();_landlock(readonly,writable,executables)
+                from native_guard import no_new_privileges
+                os.setsid()
+                _arm_apparmor_onexec()  # Required profile; failure aborts Popen.
+                no_new_privileges()     # Retained: no UID or capability escalation.
                 resource.setrlimit(resource.RLIMIT_CORE,(0,0))
                 resource.setrlimit(resource.RLIMIT_FSIZE,(MAX_OUT+1,MAX_OUT+1))
             # Always retain these two bounded files before credential-temp cleanup.
@@ -662,9 +685,10 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=
                 ev.streams(out)
         ev.record(phase='output',terminal=owned,status='invoke_success')
         return raw,dict(executor_uid=EXECUTOR_UID,slot=slot,qualification_phase=marker['phase'],
-            requested_native_sandbox=True,filesystem_boundary='existing_native_guard_landlock',
+            requested_native_sandbox=True,filesystem_boundary='uid978_apparmor_enforce_and_native_cli_sandbox',
             candidate_access='read_only',credential_source='provisioned_native_auth_file',
-            readonly_roots=[str(x) for x in readonly],writable_roots=['invocation_private_root','/dev/null'],
+            readonly_roots=[str(source_root or work)],writable_roots=['invocation_private_root','/dev/null'],
+            apparmor_profile=APPARMOR_PROFILE.decode('ascii'),
             evidence_id=ev.id,requested_permission_mode=PERMISSION_MODE,input_delivery='written',**transport)
     except BaseException as error:
         code=error.code if isinstance(error,ReviewError) else 'AGY_ADAPTER_ERROR'
