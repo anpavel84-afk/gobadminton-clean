@@ -12,6 +12,8 @@ from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'actions_train'))
 import native_antigravity as N
+import native_guard as G
+_REAL_NNP = G.no_new_privileges
 
 SHA = 'a' * 40
 CID = 'synthetic-conversation'
@@ -342,9 +344,11 @@ print(json.dumps(result))
                 captured['roots']=result
                 return result
             def mock_legacy_landlock():
-                # Synthetic test-seam only. The production AGY path now
-                # requires AppArmor-on-exec (independently tested on Germany).
+                # Synthetic test-seam only. The production AGY path applies no
+                # Landlock/MAC layer; this fixture proves the read-only
+                # expectations of the declared roots on a synthetic child.
                 from native_guard import _landlock
+                _REAL_NNP()
                 _landlock(*captured['roots'])
             def cmd(timeout,prompt=None,model=N.MODEL):return [sys.executable,'-I','-c',script]
             original_popen=subprocess.Popen; charged=[]
@@ -357,13 +361,13 @@ print(json.dumps(result))
                  patch.object(N,'trusted',return_value=b'{"token":"synthetic"}'), \
                  patch.object(N,'command',cmd), patch.object(N,'AGY',sys.executable), \
                  patch.object(N,'filesystem_roots',side_effect=roots), \
-                 patch.object(N,'_arm_apparmor_onexec',side_effect=mock_legacy_landlock),patch.object(N,'_verify_apparmor_precharge',return_value=None):
+                 patch.object(G,'no_new_privileges',side_effect=mock_legacy_landlock),patch.object(N,'_verify_executor_boundary',return_value=None),patch.object(N,'_candidate_state',return_value=('H','')) :
                 raw, evidence=N.invoke('synthetic prompt',30,work=work,slot='slot2',task_hash='x',
                     charge=lambda:charged.append('one'),popen=popen)
             self.assertEqual(json.loads(raw),{'read':True,'write':False,'chmod_then_write':False,
                                                'outside':False,'shell':True})
             self.assertEqual((work/'source.py').read_text(),'original')
-            self.assertEqual(evidence['filesystem_boundary'],'uid978_apparmor_enforce')
+            self.assertEqual(evidence['filesystem_boundary'],'uid978_unix_permissions_nnp')
             self.assertIs(evidence['requested_native_sandbox'], False)
             self.assertEqual(charged,['one'])
 
@@ -453,7 +457,7 @@ print(json.dumps({'cwd':os.getcwd(),'head':git.stdout.strip(),
                  patch.object(N,'command',child_command), \
                  patch.object(N,'AGY',sys.executable), \
                  patch.object(N,'filesystem_roots',side_effect=roots), \
-                 patch.object(N,'_arm_apparmor_onexec',side_effect=mock_legacy_landlock),patch.object(N,'_verify_apparmor_precharge',return_value=None):
+                 patch.object(G,'no_new_privileges',side_effect=mock_legacy_landlock),patch.object(N,'_verify_executor_boundary',return_value=None),patch.object(N,'_candidate_state',return_value=('H','')) :
                 try:
                     raw,receipt=N.invoke('probe only',45,work=work,slot='slot2',
                         task_hash='x'*64,charge=lambda:charged.append('one-synthetic-call'),
@@ -468,7 +472,7 @@ print(json.dumps({'cwd':os.getcwd(),'head':git.stdout.strip(),
             self.assertFalse(observed['write'])
             self.assertFalse(observed['outside_readable'])
             self.assertEqual(len(seen),1)
-            self.assertEqual(receipt['filesystem_boundary'],'uid978_apparmor_enforce')
+            self.assertEqual(receipt['filesystem_boundary'],'uid978_unix_permissions_nnp')
             self.assertIs(receipt['requested_native_sandbox'], False)
             self.assertEqual(receipt['writable_roots'],['invocation_private_root','/dev/null'])
             rows=stream()

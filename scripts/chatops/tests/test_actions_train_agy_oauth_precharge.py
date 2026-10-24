@@ -75,7 +75,7 @@ class CatalogPrecharge(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='gb-agy-precharge-negative-') as scratch, \
              patch.object(N,'qualification',return_value={'phase':'canary','adapter_revision':'a'*40}), \
              patch.object(N.os,'geteuid',return_value=N.EXECUTOR_UID), \
-             patch.object(N,'_verify_apparmor_precharge',return_value=None), \
+             patch.object(N,'_verify_executor_boundary',return_value=None),patch.object(N,'_candidate_state',return_value=('H','')) , \
              patch.object(N,'trusted',return_value=b'{"access_token":"SYNTHETIC_ONLY"}'), \
              patch.object(N,'git',return_value=b'/tmp/gb-agy-inert-candidate/.git'), \
              patch.object(N,'catalog_precharge',
@@ -312,7 +312,7 @@ class ChargedEvidenceRetention(unittest.TestCase):
             with patch.object(N,'EXECUTOR_UID',os.getuid()), \
                  patch.object(N.os,'geteuid',return_value=os.getuid()), \
                  patch.object(N,'qualification',return_value={'phase':'canary','adapter_revision':'a'*40}), \
-                 patch.object(N,'_verify_apparmor_precharge',return_value=None), \
+                 patch.object(N,'_verify_executor_boundary',return_value=None),patch.object(N,'_candidate_state',return_value=('H','')) , \
                  patch.object(N,'trusted',return_value=b'{"token":"FAKE_SAVED"}'), \
                  patch.object(N,'git',return_value=b'/tmp/gb-agy-inert-candidate/.git'), \
                  patch.object(N,'catalog_precharge',return_value=13), \

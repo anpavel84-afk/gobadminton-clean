@@ -125,3 +125,11 @@ Thus **namespace creation succeeds; the parent cannot open the child's `uid_map`
 - **In this stage:** assessment only, **no Gemini installation, credential access, model call, new architecture, new grants or product work**. #248 remains downstream of a correctly qualified route, not DONE merely because a new provider is proposed.
 
 [Canonical protected checkpoint and full exact trace summary](https://github.com/anpavel84-afk/gobadminton-clean/issues/29#issuecomment-6377524003).
+
+## Addendum 2026-10-24 — AppArmor profile `gb-agy-runtime` abandoned (Owner decision, Issue #29)
+
+The Stage 3 canary failed with `failed to create PTY: open /dev/ptmx: permission denied` under profile `gb-agy-runtime`. The Owner abandoned the special profile for Antigravity only and rejected piecemeal profile allowances. The AGY adapter now relies on ordinary Unix permissions for the unprivileged slot2 account: UID978, GID968, no supplementary groups, no capabilities, `no_new_privs`, not root, separation of system users, and real file permissions on controller state. Evidence field `filesystem_boundary` is `uid978_unix_permissions_nnp`.
+
+**Owner waiver (not verified safety):** Antigravity (UID978) may read other projects' files, secrets and PROD data on the Owner's server, and the unprivileged account can write world-writable paths owned by other projects. The Owner accepted this explicitly; no chmod/ACL/firewall hardening is claimed. The candidate checkout is UID978-owned and writable, so the adapter records `candidate_access='uid_owned_checkout_state_verified_unchanged'` and refuses a dirty checkout before charge and a changed HEAD/status after the call (`AGY_CANDIDATE_CHANGED`).
+
+The profile source file `scripts/chatops/ops/gb_agy_runtime.apparmor` is removed from the repository. Removing the already loaded profile from the host (profile-scoped only, global AppArmor untouched) is a separate guarded OPS action. The kernel `unprivileged_userns` restriction remains global; whether the vendor `run_command` needs a user namespace is settled only by the next canary.

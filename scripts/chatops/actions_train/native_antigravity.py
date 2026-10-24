@@ -5,7 +5,6 @@ Uses saved CLI evidence from #29, not an inferred Codex-compatible protocol.
 No host settings, qualification marker, login, budget or active runtime is changed.
 """
 import ast
-import ctypes
 import hashlib
 import json
 import os
@@ -20,11 +19,11 @@ import uuid
 from pathlib import Path
 
 AGY = '/opt/gb-slots/runtime/antigravity/agy'
-# The independent UID978 AppArmor profile is mandatory on the AGY exec edge.
-# Do not permit an unconfined fallback if the profile is not loaded.
-APPARMOR_PROFILE = b'gb-agy-runtime'
-APPARMOR_POLICY_SHA256 = '771033253ed459b9bcd3617bb5a2b623e4fdbc120bee83d62ea1d591d571c589'
-APPARMOR_POLICY_FILE = Path('/etc/apparmor.d/gb-agy-runtime')
+# Filesystem boundary: ordinary Linux ownership and modes for the unprivileged
+# UID978/GID968 account (no supplementary groups, no capabilities,
+# no_new_privs). No AppArmor or other MAC profile is required or consulted.
+FILESYSTEM_BOUNDARY = 'uid978_unix_permissions_nnp'
+EXECUTOR_GID = 968
 MARKER = Path('/etc/gobadminton-slots/antigravity-qa.json')
 EXECUTOR_UID = 978
 AUTH = Path('/srv/gb-slots/slot2/home/.gemini/antigravity-cli/antigravity-oauth-token')
@@ -472,7 +471,7 @@ def qualification(slot, task_hash, model=MODEL):
     # Auth is consumed only by the CLI transport and never added to prompt,
     # argv, receipts or exceptions. Provisioning is a separate root OPS action.
     try:
-        _verify_apparmor_precharge()
+        _verify_executor_boundary()
     except OSError:
         raise ReviewError('AGY_PRECHECK_FAILED', 'preflight') from None
     trusted(AUTH, owner=EXECUTOR_UID)
@@ -535,17 +534,18 @@ def qualification_descriptor(marker):
 
 
 def filesystem_roots(root, work, common=None):
-    """Reuse existing Landlock filesystem layer; subprocess/native tools permitted.
+    """Historical root lists for the synthetic Landlock fixture only.
 
-    No slot HOME, publish key, controller state, /srv siblings, PROD/admin paths,
-    /proc process inspection, Docker socket or whole /etc mount is granted.
+    Production invoke applies no Landlock and no MAC profile. These lists are
+    not a grant and do not hide other projects' files, secrets or PROD data;
+    that exposure is an Owner waiver, not a verified boundary.
     """
     roots = [Path(p) for p in ('/usr/bin', '/usr/lib', '/usr/lib64', '/usr/share', '/lib', '/lib64',
              '/etc/ld.so.cache', '/etc/ssl', '/etc/resolv.conf', '/etc/hosts', '/etc/nsswitch.conf',
              '/etc/gai.conf', '/opt/gb-slots/runtime/node', '/opt/gb-slots/runtime/pnpm', '/dev/null', '/dev/random', '/dev/urandom') if Path(p).exists()]
     readonly = roots + [Path(work), Path(AGY)] + ([Path(common)] if common is not None else [])
-    # Git's read-only commands open /dev/null O_RDWR; allow this exact sink,
-    # never granting write access to the source checkout or its Git objects.
+    # Git's read-only commands open /dev/null O_RDWR. This list is the
+    # synthetic fixture's writable set, not the live UID978 boundary.
     writable = [Path(root), Path('/dev/null')]
     executables = [Path(p) for p in ('/usr/bin', '/usr/lib', '/usr/lib64', '/lib', '/lib64', '/opt/gb-slots/runtime/node', '/opt/gb-slots/runtime/pnpm', AGY)
                    if Path(p).exists()] + [Path(root)]
@@ -595,49 +595,40 @@ def reap(process):
 
 
 
-def _verify_apparmor_precharge():
-    """Verify trusted installed source and enforce label before model charging.
+def _verify_executor_boundary():
+    """Verify, before model charging, the unprivileged execution identity.
 
-    Loaded kernel policy bytes need separate installer/negative-test proof.
+    The filesystem boundary is ordinary Unix ownership and modes for UID978;
+    this check proves only the identity facts that boundary relies on: the
+    exact non-root user, no supplementary groups, no capabilities and
+    no_new_privs after the same child setup used for the vendor CLI.
     """
-    fd = os.open(APPARMOR_POLICY_FILE,
-                 os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
-    with os.fdopen(fd, 'rb') as stream:
-        info = os.fstat(stream.fileno())
-        if (not stat.S_ISREG(info.st_mode)
-                or info.st_uid != 0
-                or info.st_nlink != 1
-                or (info.st_mode & 0o022)):
-            raise PermissionError('unsafe AppArmor policy file')
-        content = stream.read(65537)
-    if hashlib.sha256(content).hexdigest() != APPARMOR_POLICY_SHA256:
-        raise PermissionError('AppArmor policy SHA mismatch')
-
-    # The root receiver must verify the slot2 identity, never itself.
     import pwd
     uid = os.geteuid()
     if uid == 0:
+        # The root receiver must verify the slot2 identity, never itself.
         try:
             account = pwd.getpwuid(EXECUTOR_UID)
         except KeyError:
             raise PermissionError('UID978 account unavailable') from None
-        if account.pw_name != 'gb-slot2' or account.pw_gid != 968:
+        if account.pw_name != 'gb-slot2' or account.pw_gid != EXECUTOR_GID:
             raise PermissionError('unexpected slot2 identity')
-        identity = dict(user=EXECUTOR_UID, group=968, extra_groups=[])
-    elif uid == EXECUTOR_UID and os.getegid() == 968:
+        identity = dict(user=EXECUTOR_UID, group=EXECUTOR_GID, extra_groups=[])
+    elif (uid == EXECUTOR_UID and os.getegid() == EXECUTOR_GID
+          and os.getuid() == EXECUTOR_UID and os.getgid() == EXECUTOR_GID
+          and os.getgroups() == []):
         identity = {}
     else:
-        raise PermissionError('wrong AppArmor preflight identity')
+        raise PermissionError('wrong executor preflight identity')
 
     def probe_child():
         from native_guard import no_new_privileges
-        _arm_apparmor_onexec()
         no_new_privileges()
 
     script = (
-        "import os; from pathlib import Path; "
-        "label = Path('/proc/self/attr/current').read_text().strip(); "
-        "print(f'{os.geteuid()}:{os.getegid()}:{label}')"
+        "import os; "
+        "st = dict(l.split(':\\t', 1) for l in open('/proc/self/status').read().splitlines() if ':\\t' in l); "
+        "print(f\"{os.geteuid()}:{os.getegid()}:{os.getgroups()}:{st['NoNewPrivs']}:{int(st['CapEff'], 16)}\")"
     )
     try:
         observed = subprocess.run(
@@ -653,34 +644,21 @@ def _verify_apparmor_precharge():
             **identity
         )
     except (OSError, subprocess.SubprocessError):
-        raise PermissionError('AppArmor preflight execution failed') from None
+        raise PermissionError('executor preflight execution failed') from None
 
     if (observed.returncode != 0 or
-            observed.stdout.strip() != b'978:968:gb-agy-runtime (enforce)'):
-        raise PermissionError('AppArmor enforce transition could not be verified')
+            observed.stdout.strip() != b'978:968:[]:1:0'):
+        raise PermissionError('executor identity or no_new_privs could not be verified')
 
 
-
-def _arm_apparmor_onexec():
-    """Fail closed: ensure the next exec transitions to the fixed enforced profile.
-
-    The vendor's internal sandbox must manage its own user+mount namespaces;
-    the former outer Landlock forbade Go's /proc/<child>/uid_map write, preventing
-    CLI selfexec before the command was ever launched. The AppArmor profile
-    deliberately allows native namespace creation while denying protected
-    roots, the original credentials, and candidate checkout writes.
-    """
-    lib = ctypes.CDLL('libapparmor.so.1', use_errno=True)
-    fn = lib.aa_change_onexec
-    fn.argtypes = (ctypes.c_char_p,)
-    fn.restype = ctypes.c_int
-    if fn(APPARMOR_PROFILE) != 0:
-        raise OSError(ctypes.get_errno(), 'required UID978 AppArmor profile unavailable')
-
+def _candidate_state(work):
+    """HEAD plus porcelain status of the candidate checkout (no index refresh)."""
+    return (dec(git(work, 'rev-parse', 'HEAD')).strip(),
+            dec(git(work, '--no-optional-locks', 'status', '--porcelain')))
 
 
 def catalog_precharge(cwd, env, child, model):
-    """No inference and no ledger charge. Exactly the headless invocation's UID/HOME/AA/NNP.
+    """No inference and no ledger charge. Exactly the headless invocation's UID/HOME/NNP.
 
     Do not serialize raw catalogue or vendor stderr (both are untrusted).
     The vendor's documented 'agy models' table lists one exact model ID per row.
@@ -712,7 +690,7 @@ def retain_oauth_refresh(private_auth, previous):
 
     No credential bytes/hashes/fields leave this function in model receipts.
     Uses an atomic same-directory replace; avoids overwriting a changed original
-    or following links. The caller operates as UID978 outside child AppArmor.
+    or following links. The caller operates as UID978.
     """
     path = Path(private_auth)
     # The parent is opened component-by-component with O_NOFOLLOW, not by
@@ -788,12 +766,17 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=
         # Fail BEFORE qualification() touches the pinned OAuth credential.
         need(os.geteuid() == EXECUTOR_UID, 'wrong native QA executor UID')
         try:
-            _verify_apparmor_precharge()
+            _verify_executor_boundary()
         except OSError:
             raise ReviewError('AGY_PRECHECK_FAILED', 'preflight', ev.id) from None
-        ev.record(apparmor_policy_sha256=APPARMOR_POLICY_SHA256,
-                  apparmor_mode='enforce', apparmor_preflight='source_and_label')
+        ev.record(filesystem_boundary=FILESYSTEM_BOUNDARY,
+                  executor_preflight='identity_groups_caps_nnp')
         marker=qualification(slot,task_hash,model=model)
+        # Without a MAC profile the UID-owned checkout is writable by the vendor
+        # tool; detect rather than assume read-only.
+        candidate_before=_candidate_state(work)
+        if candidate_before[1] != '':
+            raise ReviewError('AGY_CANDIDATE_CHANGED','preflight',ev.id)
         need(type(timeout) is int and MIN_TIMEOUT <= timeout <= 3600, 'invalid timeout')
         with tempfile.TemporaryDirectory(prefix='gb-agy-') as temp:
             root=Path(temp);agents=root/'ws/.agents/agents';out=root/'out'
@@ -818,12 +801,11 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=
                 need(source_root.is_dir() and not Path(work).is_symlink()
                      and source_root not in (root,root/'ws')
                      and str(source_root)==str(Path(work)),
-                     'analysis source must be canonical read-only worktree')
+                     'analysis source must be a canonical checkout')
             readonly,writable,executables=filesystem_roots(root,source_root or work,common)
             def child():
                 from native_guard import no_new_privileges
                 os.setsid()
-                _arm_apparmor_onexec()  # Required profile; failure aborts Popen.
                 no_new_privileges()     # Retained: no UID or capability escalation.
                 resource.setrlimit(resource.RLIMIT_CORE,(0,0))
                 resource.setrlimit(resource.RLIMIT_FSIZE,(MAX_OUT+1,MAX_OUT+1))
@@ -833,7 +815,7 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=
                 with open(out/'stdout','xb') as stdout,open(out/'stderr','xb') as stderr:
                     argv=command(max(1,timeout-10),model=model,
                         **({'analysis':True,'source_root':str(source_root)} if analysis else {}))
-                    # Same private HOME, UID978, AppArmor and NNP as the
+                    # Same private HOME, UID978 and NNP as the
                     # actual stream-json CLI. This probe performs no inference.
                     # Zero ledger usage until the exact account model is listed.
                     catalog_count = catalog_precharge(root/'ws',env,child,model)
@@ -872,6 +854,9 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=
                     raise ReviewError('AGY_OUTPUT_LIMIT','output',ev.id)
                 if process.returncode != 0:raise ReviewError('AGY_EXIT_NONZERO','output',ev.id)
                 raw=(out/'stdout').read_bytes()
+                if _candidate_state(work)!=candidate_before:
+                    raise ReviewError('AGY_CANDIDATE_CHANGED','output',ev.id)
+                ev.record(candidate_state='unchanged')
             except BaseException as error:
                 primary_failure = error
                 raise
@@ -903,10 +888,9 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=
                         raise ReviewError('AGY_ADAPTER_ERROR','output',ev.id) from None
         ev.record(phase='output',terminal=owned,status='invoke_success')
         return raw,dict(executor_uid=EXECUTOR_UID,slot=slot,qualification_phase=marker['phase'],
-            requested_native_sandbox=False,filesystem_boundary='uid978_apparmor_enforce',
-            candidate_access='read_only',credential_source='provisioned_native_auth_file',
+            requested_native_sandbox=False,filesystem_boundary=FILESYSTEM_BOUNDARY,
+            candidate_access='uid_owned_checkout_state_verified_unchanged',credential_source='provisioned_native_auth_file',
             readonly_roots=[str(source_root or work)],writable_roots=['invocation_private_root','/dev/null'],
-            apparmor_profile=APPARMOR_PROFILE.decode('ascii'),
             evidence_id=ev.id,requested_permission_mode=PERMISSION_MODE,input_delivery='written',**transport)
     except BaseException as error:
         code=error.code if isinstance(error,ReviewError) else 'AGY_ADAPTER_ERROR'

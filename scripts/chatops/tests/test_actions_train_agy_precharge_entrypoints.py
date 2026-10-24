@@ -39,15 +39,15 @@ def setup_qualification_sentinels(stack, credential_reads, preflight_calls):
             return MOCK_BINARY
         if pathlib.Path(path) == N.AUTH:
             credential_reads.append("UNAUTHORIZED_AUTH_READ")
-            raise AssertionError("OAuth must not be accessed before AppArmor precharge")
+            raise AssertionError("OAuth must not be accessed before executor-boundary precharge")
         raise AssertionError("Unexpected trusted path")
     def deny_precharge():
         preflight_calls.append("DENIED_BEFORE_AUTH")
-        raise PermissionError("synthetic missing AppArmor enforce profile")
+        raise PermissionError("synthetic failed executor boundary")
 
     stack.enter_context(patch.object(N, "AGY_SHA256", hashlib.sha256(MOCK_BINARY).hexdigest()))
     stack.enter_context(patch.object(N, "trusted", side_effect=synthetic_trusted))
-    stack.enter_context(patch.object(N, "_verify_apparmor_precharge", side_effect=deny_precharge))
+    stack.enter_context(patch.object(N, "_verify_executor_boundary", side_effect=deny_precharge))
     return marker
 
 
@@ -117,47 +117,58 @@ class QualificationPrechargeEntryPoints(unittest.TestCase):
 class RootPrechargeIdentityContract(unittest.TestCase):
     def test_root_verified_probe_runs_as_actual_slot2_uid_gid(self):
         import native_antigravity as A
-        with tempfile.TemporaryDirectory(prefix="gb-agy29-probeidentity-") as tmp:
-            policy = pathlib.Path(tmp) / "reviewed-policy"
-            policy.write_bytes(pathlib.Path(__file__).resolve().parents[1]
-                               .joinpath("ops/gb_agy_runtime.apparmor").read_bytes())
-            policy.chmod(0o600)
-            expected = hashlib.sha256(policy.read_bytes()).hexdigest()
-            # GitHub Actions runner does not have slot2 UID978; root metadata
-            # and POSIX identity are synthetic here, NOT evidence of enforcement.
-            rootfile = SimpleNamespace(st_mode=stat.S_IFREG | 0o600, st_uid=0, st_nlink=1)
-            account = SimpleNamespace(pw_name="gb-slot2", pw_gid=968)
-            with patch.object(A, "APPARMOR_POLICY_FILE", policy), \
-                 patch.object(A, "APPARMOR_POLICY_SHA256", expected), \
-                 patch.object(A.os, "fstat", return_value=rootfile), \
-                 patch.object(A.os, "geteuid", return_value=0), \
-                 patch("pwd.getpwuid", return_value=account), \
-                 patch.object(A.subprocess, "run", return_value=SimpleNamespace(
-                     returncode=0, stdout=b"978:968:gb-agy-runtime (enforce)\n")) as run:
-                A._verify_apparmor_precharge()
-            kwargs = run.call_args.kwargs
-            self.assertEqual(kwargs["user"], 978)
-            self.assertEqual(kwargs["group"], 968)
-            self.assertEqual(kwargs["extra_groups"], [])
-            self.assertEqual(kwargs["timeout"], 10)
-            self.assertTrue(callable(kwargs["preexec_fn"]))
+        # GitHub Actions runner does not have slot2 UID978; identity is
+        # synthetic here, NOT evidence of the live boundary.
+        account = SimpleNamespace(pw_name="gb-slot2", pw_gid=968)
+        with patch.object(A.os, "geteuid", return_value=0), \
+             patch("pwd.getpwuid", return_value=account), \
+             patch.object(A.subprocess, "run", return_value=SimpleNamespace(
+                 returncode=0, stdout=b"978:968:[]:1:0\n")) as run:
+            A._verify_executor_boundary()
+        kwargs = run.call_args.kwargs
+        self.assertEqual(kwargs["user"], 978)
+        self.assertEqual(kwargs["group"], 968)
+        self.assertEqual(kwargs["extra_groups"], [])
+        self.assertEqual(kwargs["timeout"], 10)
+        self.assertTrue(callable(kwargs["preexec_fn"]))
 
     def test_wrong_precharge_identity_fails_without_launch(self):
-        with tempfile.TemporaryDirectory(prefix="gb-agy29-wrong-identity-") as tmp:
-            policy = pathlib.Path(tmp) / "reviewed-policy"
-            policy.write_bytes(pathlib.Path(__file__).resolve().parents[1]
-                               .joinpath("ops/gb_agy_runtime.apparmor").read_bytes())
-            policy.chmod(0o600)
-            expected = hashlib.sha256(policy.read_bytes()).hexdigest()
-            rootfile = SimpleNamespace(st_mode=stat.S_IFREG | 0o600, st_uid=0, st_nlink=1)
-            with patch.object(N, "APPARMOR_POLICY_FILE", policy), \
-                 patch.object(N, "APPARMOR_POLICY_SHA256", expected), \
-                 patch.object(N.os, "fstat", return_value=rootfile), \
-                 patch.object(N.os, "geteuid", return_value=1002), \
+        for euid in (1002, 0):
+            with patch.object(N.os, "geteuid", return_value=euid), \
+                 patch("pwd.getpwuid", return_value=SimpleNamespace(pw_name="someone", pw_gid=1)), \
                  patch.object(N.subprocess, "run",
                               side_effect=AssertionError("wrong UID cannot launch probe")):
                 with self.assertRaises(PermissionError):
-                    N._verify_apparmor_precharge()
+                    N._verify_executor_boundary()
 
-if __name__ == "__main__":
-    unittest.main()
+    def test_probe_must_report_uid_gid_no_groups_nnp_and_zero_caps(self):
+        account = SimpleNamespace(pw_name="gb-slot2", pw_gid=968)
+        for stdout in (b"978:968:[]:0:0\n", b"978:968:[]:1:1\n", b"978:968:[5]:1:0\n",
+                       b"0:0:[]:1:0\n", b""):
+            with patch.object(N.os, "geteuid", return_value=0), \
+                 patch("pwd.getpwuid", return_value=account), \
+                 patch.object(N.subprocess, "run", return_value=SimpleNamespace(
+                     returncode=0, stdout=stdout)):
+                with self.assertRaises(PermissionError, msg=stdout):
+                    N._verify_executor_boundary()
+        with patch.object(N.os, "geteuid", return_value=0), \
+             patch("pwd.getpwuid", return_value=account), \
+             patch.object(N.subprocess, "run", return_value=SimpleNamespace(
+                 returncode=1, stdout=b"978:968:[]:1:0\n")):
+            with self.assertRaises(PermissionError):
+                N._verify_executor_boundary()
+
+    def test_non_root_executor_requires_exact_identity_and_no_groups(self):
+        with patch.object(N.os, "geteuid", return_value=978), patch.object(N.os, "getuid", return_value=978), \
+             patch.object(N.os, "getegid", return_value=968), patch.object(N.os, "getgid", return_value=968), \
+             patch.object(N.os, "getgroups", return_value=[968]), \
+             patch.object(N.subprocess, "run", side_effect=AssertionError("must not launch")):
+            with self.assertRaises(PermissionError):
+                N._verify_executor_boundary()
+        with patch.object(N.os, "geteuid", return_value=978), patch.object(N.os, "getuid", return_value=978), \
+             patch.object(N.os, "getegid", return_value=968), patch.object(N.os, "getgid", return_value=968), \
+             patch.object(N.os, "getgroups", return_value=[]), \
+             patch.object(N.subprocess, "run", return_value=SimpleNamespace(
+                 returncode=0, stdout=b"978:968:[]:1:0\n")) as run:
+            N._verify_executor_boundary()
+        self.assertNotIn("user", run.call_args.kwargs)
