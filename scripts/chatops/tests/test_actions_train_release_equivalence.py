@@ -13,7 +13,14 @@ import unittest
 from unittest.mock import Mock, patch
 from test_actions_train import A, S, ROOT, TASK, core, client, stage, card
 from test_actions_train_stages import Store
-import content_identity as identity
+# Always review the exact candidate source in this checkout, never the
+# installed receiver's content_identity from /usr/local/lib/gb-actions-train.
+# Full-suite test discovery can preload the older installed module by name.
+identity_spec = importlib.util.spec_from_file_location(
+    'gb_248_candidate_content_identity',
+    ROOT/'scripts/chatops/actions_train/content_identity.py')
+identity = importlib.util.module_from_spec(identity_spec)
+identity_spec.loader.exec_module(identity)
 import qa_equivalence as qa
 
 spec = importlib.util.spec_from_file_location('prepare_train_release', ROOT/'scripts/chatops/ops/prepare_train_release.py')
