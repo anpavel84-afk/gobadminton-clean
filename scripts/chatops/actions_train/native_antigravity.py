@@ -684,7 +684,7 @@ def catalog_precharge(cwd, env, child, model):
     Do not serialize raw catalogue or vendor stderr (both are untrusted).
     The vendor's documented 'agy models' table lists one exact model ID per row.
     """
-    need(model == MODEL, 'unreviewed Antigravity qualification model')
+    need(model in MODELS, 'unreviewed Antigravity qualification model')
     try:
         result = subprocess.run([AGY, 'models'], cwd=cwd, env=env,
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
