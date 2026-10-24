@@ -152,6 +152,15 @@ export type GamePage = {
   nextCursor: string | null;
 };
 
+/** #82: private projection from GET /games/{id} only, never public venue/list fallback. */
+export type GameDetail = Omit<Game, "venue"> & {
+  venue: VenueSummary & {
+    contactPhone?: string | null;
+    contactWebsite?: string | null;
+    bookingNote?: string | null;
+  };
+};
+
 export type GameManagement = {
   role: "owner" | "manager";
   /** Server-derived from games.created_by_user_id; never client-supplied. */
