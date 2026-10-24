@@ -105,7 +105,17 @@ class StageDelivery(unittest.TestCase):
     def test_recovery_diagnose_and_task_review_receive_full_accepted_context(self):
         for name in ('diagnose','task_review'):
             with self.subTest(stage=name):self.exercise_stage(name)
-    def exercise_stage(self,stage_name,scoped=False,recover=False):
+    def test_codex_author_task_review_and_astra_context_fallback(self):
+        # Offline stage transport only; native source consumption needs canary.
+        for stage_name, qa, role in (
+                ('author', False, 'author'),
+                ('task_review', True, 'qa'),
+                ('failure_diagnosis', True, 'failure_diagnosis')):
+            for scoped in (False, True):
+                with self.subTest(stage=stage_name,scoped=scoped):
+                    self.exercise_stage(stage_name,scoped=scoped,qa=qa,role=role)
+
+    def exercise_stage(self,stage_name,scoped=False,recover=False,qa=True,role='qa'):
         with tempfile.TemporaryDirectory(prefix='.context-stage-') as temp:
             root=Path(temp);cli=root/'fake-codex';cli.write_text('trusted test fixture, never executed')
             count=[0];inputs=[];traces=[];store=SimpleNamespace(data={'active':{'task':{},'head':'a'*40,'attempt':1}})
@@ -113,6 +123,11 @@ class StageDelivery(unittest.TestCase):
             rt=SimpleNamespace(user='test',legacy=True,home=root,key=root/'key',layout=layout,
                 check_paths=Mock(),continuity=lambda:True,lease=Mock(),
                 budget=SimpleNamespace(used=lambda *_:count[0]))
+            if stage_name == 'failure_diagnosis':
+                store.data['active']['task']['failure_diagnosis']={'max_calls':1}
+                store.data['active']['failure_diagnosis']={
+                    'calls':1,'receipts':{'current':{
+                        'status':'pending','inputs':{'head':'a'*40}}}}
             popen=Mock(return_value=SimpleNamespace(pid=424242))
             a=SimpleNamespace(RUNTIME_READS=(),Store=lambda *_:store,atomic=lambda p,v:traces.append(copy.deepcopy(v)),
                               subprocess=SimpleNamespace(Popen=popen))
@@ -127,19 +142,21 @@ class StageDelivery(unittest.TestCase):
             a.Bridge=factory
             s=SimpleNamespace(Runtime=lambda *_args,**_kw:rt,uid_of=lambda _:1002,Hold=RuntimeError,
                               read_json=lambda *_args,**_kw:{'mode':'active','owned':{'slot1':'x'}})
-            api=Mock();choice={'provider':'codex','effective_model':'gpt-6.1-sol','effort':'medium'}
+            api=Mock();choice={'provider':'codex','effective_model':'gpt-6.1-sol',
+                                'effort':'medium','role':role}
             with patch.object(stage,'live',return_value=(a,s)),patch.object(stage.os,'getuid',return_value=1002), \
                  patch.object(stage.os,'getgid',return_value=1002),patch.object(stage,'API',return_value=api), \
                  patch.object(C,'load',return_value=accepted()),patch.object(stage,'route',return_value=choice), \
                  patch.object(C,'verified_git_rules',return_value=scoped) as git_proof, \
                  patch.object(core,'task_review_route',return_value=choice), \
+                 patch.object(core,'diagnosis_route',return_value=choice), \
                  patch.object(receiver,'units_quiet'),patch.object(receiver,'identity',return_value={'pid':424242,'start':'1','boot':'test'}):
                 request=req(stage_name,'pr_wait')
                 if recover:request['_recover']=True
                 _,_,_,_,_,b=stage.setup(request,{'codex':{'slot1':str(cli)}})
-                b.model('bounded immutable task',qa=True)
+                b.model('bounded immutable task',qa=qa)
                 self.assertEqual(count[0],1);self.assertTrue(inputs[0].endswith('bounded immutable task'))
-                r=b.routing_receipts[0]['rules_context'];self.assertEqual(r['role'],'qa')
+                r=b.routing_receipts[0]['rules_context'];self.assertEqual(r['role'],role)
                 if scoped and not recover:
                     self.assertNotIn(TEXT,inputs[0])
                     self.assertIn('CONTEXT_PROFILE scoped_v1',inputs[0])
