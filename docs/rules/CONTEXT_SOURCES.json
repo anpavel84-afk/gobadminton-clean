@@ -6,19 +6,28 @@
   "boundaries": "AGENTS.md",
   "accepted_operating_model": {
     "path": "docs/rules/ENGINEERING_OPERATING_MODEL.md",
-    "revision": "1.3",
-    "commit": "1169e965976e9498d4e5e1e23aae201e97ec9665",
-    "sha256": "38c34012f10974496a7d7cbc74ecacb62bf7847278e295edfeb107d69a5d1c1c",
-    "bytes": 100818,
+    "revision": "1.4",
+    "commit": "89c974875ead4c9bb3f17add7a19548758ecf2bc",
+    "sha256": "96690bc66680bca085bf004083e21a4efe29e1409293cf3e5ceb1eeb4f0bffe0",
+    "bytes": 104492,
     "encoding": "utf-8",
-    "content_changed_by_consolidation": false
+    "content_changed_by_consolidation": false,
+    "content_changed_by_owner_refusal_amendment_20261024": true
   },
   "roles_and_routing_section": "3,5",
   "continuation_section": "6",
   "failure_cycle_section": "8.1",
   "context_delivery_section": "10",
   "capsule_source": "accepted_operating_model_only",
-  "capsule_markers": ["common", "author", "qa", "failure_diagnosis", "planner", "pma", "research"],
+  "capsule_markers": [
+    "common",
+    "author",
+    "qa",
+    "failure_diagnosis",
+    "planner",
+    "pma",
+    "research"
+  ],
   "record_policy": "docs/rules/PROJECT_RECORD_POLICY.md",
   "master_plan": "docs/ops/AI_TRAIN_MASTER_PLAN.md",
   "current_handoff": "docs/handoffs/CURRENT.md",
@@ -26,6 +35,9 @@
   "subject_index": "docs/README.md",
   "fallback": "verified_full_inline_when_recipient_reference_access_unproven",
   "evidence_limit": "hash_proves_bytes_not_model_understanding_or_runtime_readiness",
-  "navigation_mirrors": ["main", "dev"],
-  "runtime_pin_change": "not_performed_by_documentation_publication"
+  "navigation_mirrors": [
+    "main",
+    "dev"
+  ],
+  "runtime_pin_change": "not_performed_by_docs_amendment"
 }
