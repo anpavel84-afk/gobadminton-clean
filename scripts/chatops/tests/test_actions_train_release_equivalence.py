@@ -286,6 +286,24 @@ class DynamicProcessLoader(GitFixture):
         self.assertEqual(Path(identity.__file__).resolve(),
                          (ROOT/'scripts/chatops/actions_train/content_identity.py').resolve())
 
+    def test_threading_sys_modules_hex_loader_requires_addressed_qa(self):
+        # Independent R-b438 reviewer reproduced a real runtime execution via
+        # threading._sys.modules when the changed test path was hex-encoded.
+        changed = 'scripts/chatops/tests/test_example.py'.encode().hex()
+        self.check_loader(
+            'import threading\n'
+            'launch = threading._sys.modules["os"].execl\n'
+            'target = bytes.fromhex("' + changed + '").decode()\n'
+            'launch("/usr/bin/python3", "python3", target)\n',
+            reusable=False)
+
+    def test_unprovable_python_callable_requires_addressed_qa(self):
+        self.check_loader(
+            'def retrieve_data():\n'
+            '    return 1\n'
+            'value = retrieve_data()\n',
+            reusable=False)
+
     def test_benign_path_literal_preserves_test_only_reuse(self):
         self.check_loader(
             'from pathlib import Path\n'
