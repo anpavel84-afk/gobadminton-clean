@@ -9,6 +9,10 @@ on:
         description: 'Requested author profile; exact task model and existing role/budget gates stay mandatory'
   issue_comment:
     types: [created]
+  # Scheduled workflows fire ONLY from the default branch (main).
+  # Dispatch the existing finite train on dev; this workflow never executes models.
+  schedule:
+    - cron: '*/30 * * * *'
   push:
     branches: [chatops/actions-train-20261021]
     paths: ['.github/workflows/train-*.yml', 'scripts/chatops/actions_train/**', 'scripts/chatops/tests/test_actions_train*.py']
@@ -19,6 +23,40 @@ concurrency:
   cancel-in-progress: false
   queue: max
 jobs:
+  # GitHub only schedules workflows from the repository default branch (main).
+  # This is a wake-up signal, not a second queue, admission or executor.
+  scheduled_train_wake:
+    if: >-
+      github.event_name == 'schedule' && github.repository_id == '1416250340' &&
+      github.ref == 'refs/heads/main' && github.event.schedule == '*/30 * * * *'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Wake existing DEV train; no authority, models or SSH here
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_EVENT: ${{ github.event_name }}
+          GH_REF: ${{ github.ref }}
+          GH_REPO_ID: ${{ github.repository_id }}
+          GH_CRON: ${{ github.event.schedule }}
+        run: |
+          python3 -B - <<'PY'
+          import json, os, urllib.request
+          assert (os.environ['GH_EVENT'],os.environ['GH_REF'],os.environ['GH_REPO_ID'],os.environ['GH_CRON']) == (
+              'schedule','refs/heads/main','1416250340','*/30 * * * *')
+          req = urllib.request.Request(
+              'https://api.github.com/repos/anpavel84-afk/gobadminton-clean/actions/workflows/train-dispatch.yml/dispatches',
+              data=json.dumps({'ref':'dev','inputs':{'profile':'auto'}}).encode(),
+              headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],
+                       'Accept':'application/vnd.github+json',
+                       'X-GitHub-Api-Version':'2022-11-28',
+                       'Content-Type':'application/json'},method='POST')
+          with urllib.request.urlopen(req,timeout=30) as response:
+              assert response.status == 204
+          print('GB_TRAIN_WAKE_V1: schedule accepted; dev dispatcher signalled; no direct stage/model execution')
+          PY
   # Default branch receives Issue events. Relay only authentic Owner admissions to
   # the already permitted DEV dispatcher; no model/SSH/DEV secrets or new task authority.
   owner_admission_reconcile:
