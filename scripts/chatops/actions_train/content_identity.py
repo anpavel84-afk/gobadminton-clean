@@ -217,6 +217,22 @@ def independence(files, sources, changed):
                                 operations = subprocess_exec if node.module == 'subprocess' else os_exec
                                 names.update(alias.asname or alias.name for alias in node.names
                                              if alias.name in operations)
+                    # A module object can escape by assignment, tuple unpacking,
+                    # function argument or return, after which its process-launch
+                    # methods are invisible under the original import alias.
+                    # Any such escape makes test-only QA reuse unprovable.
+                    process_modules = subprocess_aliases | os_aliases
+                    parent_of = {id(child): parent for parent in ast.walk(parsed)
+                                 for child in ast.iter_child_nodes(parent)}
+                    for node in ast.walk(parsed):
+                        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) \
+                                and node.id in process_modules:
+                            parent = parent_of.get(id(node))
+                            if not (isinstance(parent, ast.Attribute)
+                                    and parent.value is node):
+                                return 'escaped process module loader requires addressed QA: ' + p
+                            if parent.attr in ('__dict__', '__class__', '__getattribute__'):
+                                return 'dynamic process module introspection requires addressed QA: ' + p
                     for n in ast.walk(parsed):
                         if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name):
                             if (n.value.id in subprocess_aliases and n.attr in subprocess_exec
