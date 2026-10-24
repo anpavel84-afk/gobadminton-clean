@@ -89,6 +89,18 @@ class DynamicProcessLoader(GitFixture):
             '["python3", "scripts/chatops/tests/test_example.py"], {})\n',
             reusable=False)
 
+    def test_subprocess_wildcard_requires_addressed_qa(self):
+        self.check_loader(
+            'from subprocess import *\n'
+            'run(["python3", "scripts/chatops/tests/test_example.py"])\n',
+            reusable=False)
+
+    def test_os_wildcard_requires_addressed_qa(self):
+        self.check_loader(
+            'from os import *\n'
+            'execl("/usr/bin/python3", "python3", "scripts/chatops/tests/test_example.py")\n',
+            reusable=False)
+
     def test_benign_path_literal_preserves_test_only_reuse(self):
         self.check_loader(
             'from pathlib import Path\n'
