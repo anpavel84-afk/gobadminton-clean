@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getGame, getMe, listAllMyParticipations, requestParticipation } from "../../../lib/api-client";
 import { getGameChat } from "../../../lib/messaging-api";
-import type { Game, Me, Participation } from "../../../lib/consumer-types";
+import type { Game, GameDetail, Me, Participation } from "../../../lib/consumer-types";
 import { canRequestParticipation, capacityStatusLabel, dominantParticipation, participationLabel, settlementTerms } from "../../../lib/game-presentation";
 import { AuthChooser } from "../players/ProfileComposition";
 import { Button } from "../Button";
@@ -11,6 +11,7 @@ import { ConsumerShell } from "../ConsumerShell";
 import { GameHero, GameTerms, GameStatusBadge } from "../games/GameDetailComposition";
 import { GameShare } from "../games/GameShare";
 import { GameActionBar } from "../games/GameActionBar";
+import { GameVenueContacts } from "../games/GameVenueContacts";
 
 function ParticipationActions({ game, own, busy, notice, readable, onRequest, onReload }: {
   game: Game; own: Participation | null; busy: boolean; notice: string | null;
@@ -37,7 +38,7 @@ function ParticipationActions({ game, own, busy, notice, readable, onRequest, on
 
 export function GameDetailPage({ gameId }: { gameId: string }) {
   const [authOpen, setAuthOpen] = useState(false);
-  const [game, setGame] = useState<Game | null>(null);
+  const [game, setGame] = useState<GameDetail | null>(null);
   const [me, setMe] = useState<Me | null>(null);
   const [own, setOwn] = useState<Participation | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
@@ -50,7 +51,7 @@ export function GameDetailPage({ gameId }: { gameId: string }) {
 
   const reload = useCallback(async () => {
     const current = ++generation.current;
-    setState("loading"); setChatAvailable(false); setReadable(false); setOwn(null); setMe(null);
+    setState("loading"); setGame(null); setChatAvailable(false); setReadable(false); setOwn(null); setMe(null);
     const result = await getGame(gameId);
     if (current !== generation.current) return;
     if (!result.ok) { setGame(null); setState("error"); return; }
@@ -67,7 +68,19 @@ export function GameDetailPage({ gameId }: { gameId: string }) {
     setState("ready");
   }, [gameId]);
 
-  useEffect(() => { void reload(); return () => { generation.current++; }; }, [reload]);
+  useEffect(() => {
+    const refresh = () => { void reload(); };
+    void reload();
+    window.addEventListener("gb-session-changed", refresh);
+    window.addEventListener("gb-private-expired", refresh);
+    window.addEventListener("focus", refresh);
+    return () => {
+      generation.current++;
+      window.removeEventListener("gb-session-changed", refresh);
+      window.removeEventListener("gb-private-expired", refresh);
+      window.removeEventListener("focus", refresh);
+    };
+  }, [reload]);
 
   async function onRequest() {
     if (!game || !readable || mutation.current) return;
@@ -89,10 +102,10 @@ export function GameDetailPage({ gameId }: { gameId: string }) {
       <div className="gb-game-detail-actions"><Button variant="ghost" className="gb-game-back" href="/games">← Все игры</Button>{state === "ready" && game && <GameShare gameId={game.id} />}</div>
       {state === "loading" && <div className="gb-game-feedback" data-state="loading" role="status"><h1>Загружаем игру</h1><p>Скоро покажем место, время и условия.</p></div>}
       {state === "error" && <div className="gb-game-feedback" data-state="error"><h1>Игра недоступна</h1><p>Не удалось загрузить игру. Проверьте соединение и попробуйте ещё раз.</p><Button onClick={() => void reload()}>Обновить</Button></div>}
-      {state === "ready" && game && <div data-state="ready">
+      {state === "ready" && game && game.id === gameId && <div data-state="ready">
         <GameHero game={game} />
         <div className="gb-game-detail-grid">
-          <div><GameTerms game={game} />{chatAvailable && <Button variant="outline" href={`/messages?game=${encodeURIComponent(gameId)}`}>Чат игры →</Button>}</div>
+          <div><GameTerms game={game} />{me && <GameVenueContacts venue={game.venue} />}{chatAvailable && <Button variant="outline" href={`/messages?game=${encodeURIComponent(gameId)}`}>Чат игры →</Button>}</div>
           <aside className="gb-game-booking">
             <div className="gb-game-booking__terms"><strong>{capacityStatusLabel(game)}</strong><p>{settlementTerms(game.settlement)}</p><small>{game.venue.name}</small><p>{game.venue.address}</p></div>
             <ParticipationActions game={game} own={own} busy={busy} notice={notice} readable={readable} onRequest={() => void onRequest()} onReload={() => void reload()} />
