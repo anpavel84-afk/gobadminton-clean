@@ -12,7 +12,7 @@ on:
   # Scheduled workflows fire ONLY from the default branch (main).
   # Dispatch the existing finite train on dev; this workflow never executes models.
   schedule:
-    - cron: '*/30 * * * *'
+    - cron: '17,47 * * * *'
   push:
     branches: [chatops/actions-train-20261021]
     paths: ['.github/workflows/train-*.yml', 'scripts/chatops/actions_train/**', 'scripts/chatops/tests/test_actions_train*.py']
@@ -28,7 +28,7 @@ jobs:
   scheduled_train_wake:
     if: >-
       github.event_name == 'schedule' && github.repository_id == '1416250340' &&
-      github.ref == 'refs/heads/main' && github.event.schedule == '*/30 * * * *'
+      github.ref == 'refs/heads/main' && github.event.schedule == '17,47 * * * *'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -45,7 +45,7 @@ jobs:
           python3 -B - <<'PY'
           import json, os, urllib.request
           assert (os.environ['GH_EVENT'],os.environ['GH_REF'],os.environ['GH_REPO_ID'],os.environ['GH_CRON']) == (
-              'schedule','refs/heads/main','1416250340','*/30 * * * *')
+              'schedule','refs/heads/main','1416250340','17,47 * * * *')
           req = urllib.request.Request(
               'https://api.github.com/repos/anpavel84-afk/gobadminton-clean/actions/workflows/train-dispatch.yml/dispatches',
               data=json.dumps({'ref':'dev','inputs':{'profile':'auto'}}).encode(),
