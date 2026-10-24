@@ -12,6 +12,7 @@ profile gb-agy-runtime /opt/gb-slots/runtime/antigravity/agy flags=(attach_disco
   /etc/ssl/** r,
   /etc/hosts r,
   /etc/resolv.conf r,
+  /run/systemd/resolve/stub-resolv.conf r,
   /etc/nsswitch.conf r,
   /etc/gai.conf r,
   /etc/localtime r,
