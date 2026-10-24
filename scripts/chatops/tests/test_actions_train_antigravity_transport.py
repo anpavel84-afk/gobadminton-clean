@@ -7,6 +7,9 @@ ROOT=Path(__file__).resolve().parents[3]
 FIXTURES=Path(__file__).with_name('fixtures')
 
 class Transport(unittest.TestCase):
+ def setUp(self):
+  from test_actions_train_agy_oauth_precharge import synthetic_vendor_preflight
+  synthetic_vendor_preflight(self)
  def test_explicit_mode_and_actual_failure_stay_fail_closed(self):
   events=rows();_,receipt=N.parse_stream(wire(events),SHA)
   self.assertEqual(receipt['requested_permission_mode'],'always-proceed')
