@@ -714,16 +714,26 @@ def retain_oauth_refresh(private_auth, previous):
     or following links. The caller operates as UID978 outside child AppArmor.
     """
     path = Path(private_auth)
-    # The same descriptor supplies both trusted inode metadata and token bytes.
-    # Never reopen a pathname after an lstat: an in-between symlink/hardlink
-    # swap could bypass the intended private-credential boundary.
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
-    with os.fdopen(fd, 'rb') as stream:
-        info = os.fstat(stream.fileno())
-        need(stat.S_ISREG(info.st_mode) and info.st_uid == EXECUTOR_UID
-             and stat.S_IMODE(info.st_mode) == 0o600 and info.st_nlink == 1,
-             'unexpected transient OAuth metadata')
-        updated = stream.read(65537)
+    # The parent is opened component-by-component with O_NOFOLLOW, not by
+    # resolving an untrusted absolute pathname. Pin that private directory
+    # before opening the exact file basename relative to its descriptor.
+    parent_fd = private_directory(path.parent, create=False)
+    try:
+        fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                     dir_fd=parent_fd)
+        try:
+            source = os.fdopen(fd, 'rb')
+        except BaseException:
+            os.close(fd)
+            raise
+        with source:
+            info = os.fstat(source.fileno())
+            need(stat.S_ISREG(info.st_mode) and info.st_uid == EXECUTOR_UID
+                 and stat.S_IMODE(info.st_mode) == 0o600 and info.st_nlink == 1,
+                 'unexpected transient OAuth metadata')
+            updated = source.read(65537)
+    finally:
+        os.close(parent_fd)
     need(0 < len(updated) <= 65536 and type(json.loads(updated)) is dict,
          'invalid transient OAuth format')
     if hashlib.sha256(updated).digest() == hashlib.sha256(previous).digest():
