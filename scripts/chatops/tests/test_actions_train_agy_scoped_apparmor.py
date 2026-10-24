@@ -20,13 +20,25 @@ class ScopedAgySecurity(unittest.TestCase):
         text=POLICY.read_text()
         self.assertIn('profile gb-agy-runtime /opt/gb-slots/runtime/antigravity/agy flags=(attach_disconnected)',text)
         self.assertNotIn('default_allow',text)
-        for requirement in ('    userns,','    mount,','    umount,','    pivot_root,','    capability sys_admin,',
-                            '    deny /srv/gb-slots/slot2/worktrees/** wkl,',
-                            '    deny /srv/gb-slots/slot2/home/** rwklmx,',
-                            '    deny /var/lib/gobadminton-actions-train/** rwklmx,',
-                            '    deny /etc/gobadminton-slots/** rwklmx,',
-                            '    deny /root/** rwklmx,'):
-            self.assertIn(requirement,text)
+        for requirement in (
+            '  userns,',
+            '  capability sys_admin,',
+            '  /usr/** rmix,',
+            '  /tmp/gb-agy-*/** rwkmix,',
+            '  mount options=(rw, make-rprivate) -> /,',
+            '  mount options=(bind) /usr/** -> /tmp/gb-agy-*/**,',
+            '  /srv/gb-slots/slot2/worktrees/antigravity-qa-29-canary/** r,',
+        ):
+            self.assertIn(requirement, text)
+        for forbidden in (
+            'file rwlkm /**',
+            '/** ix,',
+            '\n  mount,\n',
+            '\n  umount,\n',
+            '\n  pivot_root,\n',
+            'mount options=(bind) /srv/gb-slots/slot2/worktrees/',
+        ):
+            self.assertNotIn(forbidden, text)
         self.assertEqual(N.APPARMOR_PROFILE,b'gb-agy-runtime')
         self.assertEqual(N.READ_TOOLS,frozenset({'view_file','run_command'}))
         for body in (N.AGENT_DEF,N.ANALYSIS_AGENT_DEF):
@@ -34,6 +46,56 @@ class ScopedAgySecurity(unittest.TestCase):
         self.assertEqual(N.command(45)[0],N.AGY)
         self.assertIn('--sandbox',N.command(45))
         self.assertNotIn('--mode',N.command(45))
+
+    def test_precharge_hash_and_enforce_are_required(self):
+        import hashlib
+        import stat
+        import tempfile
+        from types import SimpleNamespace
+
+        policy = POLICY.read_bytes()
+        self.assertEqual(
+            hashlib.sha256(policy).hexdigest(),
+            N.APPARMOR_POLICY_SHA256
+        )
+
+        source = inspect.getsource(N.invoke)
+        self.assertLess(
+            source.index('_verify_apparmor_precharge()'),
+            source.index('try:charge()')
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            installed = pathlib.Path(tmp) / "installed-policy"
+            installed.write_bytes(policy)
+            labels = [b'gb-agy-runtime (complain)\n']
+
+            original_read = pathlib.Path.read_bytes
+
+            def read_bytes(path):
+                if str(path) == '/sys/kernel/security/apparmor/profiles':
+                    return labels[0]
+                return original_read(path)
+
+            metadata = SimpleNamespace(
+                st_mode=stat.S_IFREG | 0o644,
+                st_uid=0,
+                st_nlink=1
+            )
+
+            with patch.object(N, 'APPARMOR_POLICY_FILE', installed), \
+                 patch.object(N.os, 'fstat', return_value=metadata), \
+                 patch.object(pathlib.Path, 'read_bytes', read_bytes):
+
+                with self.assertRaises(PermissionError):
+                    N._verify_apparmor_precharge()
+
+                labels[0] = b'gb-agy-runtime (enforce)\n'
+                self.assertIsNone(N._verify_apparmor_precharge())
+
+                with patch.object(N, 'APPARMOR_POLICY_SHA256', '0' * 64):
+                    with self.assertRaises(PermissionError):
+                        N._verify_apparmor_precharge()
 
     def test_profile_absence_raises_without_fallback(self):
         class Fn:

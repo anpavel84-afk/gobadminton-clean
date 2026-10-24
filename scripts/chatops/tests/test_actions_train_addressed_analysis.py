@@ -163,7 +163,7 @@ class NativeAnalysisTransport(unittest.TestCase):
             with patch.object(N,'qualification',return_value={'phase':'canary'}),patch.object(N.os,'geteuid',return_value=978), \
                  patch.object(N,'trusted',return_value=b'synthetic-auth-not-a-credential'), \
                  patch.object(N,'git',return_value=str(candidate/'.git').encode()), \
-                 patch.object(N,'filesystem_roots',return_value=([],[],[])) as roots,patch.object(N.os,'killpg'):
+                 patch.object(N,'filesystem_roots',return_value=([],[],[])) as roots,patch.object(N.os,'killpg'),patch.object(N,'_verify_apparmor_precharge',return_value=None):
                 raw,receipt=N.invoke('EXACT INPUT 漢字',1800,work=candidate,slot='slot2',task_hash='f'*64,
                     charge=charge,popen=popen,analysis=True,evidence_dir=Path(d)/'evidence')
             self.assertEqual(json.loads(captured['stdin'])['message']['content'],'EXACT INPUT 漢字')

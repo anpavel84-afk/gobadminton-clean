@@ -23,6 +23,8 @@ AGY = '/opt/gb-slots/runtime/antigravity/agy'
 # The independent UID978 AppArmor profile is mandatory on the AGY exec edge.
 # Do not permit an unconfined fallback if the profile is not loaded.
 APPARMOR_PROFILE = b'gb-agy-runtime'
+APPARMOR_POLICY_SHA256 = '250d1b67ac03705b33f6264a83ee00035401c0dc7a7d65924739f8be0beaf458'
+APPARMOR_POLICY_FILE = Path('/etc/apparmor.d/gb-agy-runtime')
 MARKER = Path('/etc/gobadminton-slots/antigravity-qa.json')
 EXECUTOR_UID = 978
 AUTH = Path('/srv/gb-slots/slot2/home/.gemini/antigravity-cli/antigravity-oauth-token')
@@ -587,6 +589,30 @@ def reap(process):
     process.wait()
 
 
+
+def _verify_apparmor_precharge():
+    """Verify trusted installed source and enforce label before model charging.
+
+    Loaded kernel policy bytes need separate installer/negative-test proof.
+    """
+    fd = os.open(APPARMOR_POLICY_FILE,
+                 os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    with os.fdopen(fd, 'rb') as stream:
+        info = os.fstat(stream.fileno())
+        if (not stat.S_ISREG(info.st_mode)
+                or info.st_uid != 0
+                or info.st_nlink != 1
+                or (info.st_mode & 0o022)):
+            raise PermissionError('unsafe AppArmor policy file')
+        content = stream.read(65537)
+    if hashlib.sha256(content).hexdigest() != APPARMOR_POLICY_SHA256:
+        raise PermissionError('AppArmor policy SHA mismatch')
+
+    profiles = Path('/sys/kernel/security/apparmor/profiles').read_bytes()
+    if b'gb-agy-runtime (enforce)' not in profiles.splitlines():
+        raise PermissionError('AppArmor enforce profile not loaded')
+
+
 def _arm_apparmor_onexec():
     """Fail closed: ensure the next exec transitions to the fixed enforced profile.
 
@@ -614,6 +640,12 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=
         ev.record(**transport,input_delivery='prepared',requested_permission_mode=PERMISSION_MODE,requested_model=model)
         marker=qualification(slot,task_hash,model=model)
         need(os.geteuid() == EXECUTOR_UID, 'wrong native QA executor UID')
+        try:
+            _verify_apparmor_precharge()
+        except OSError:
+            raise ReviewError('AGY_PRECHECK_FAILED', 'preflight', ev.id) from None
+        ev.record(apparmor_policy_sha256=APPARMOR_POLICY_SHA256,
+                  apparmor_mode='enforce', apparmor_preflight='source_and_label')
         need(type(timeout) is int and MIN_TIMEOUT <= timeout <= 3600, 'invalid timeout')
         with tempfile.TemporaryDirectory(prefix='gb-agy-') as temp:
             root=Path(temp);agents=root/'ws/.agents/agents';out=root/'out'

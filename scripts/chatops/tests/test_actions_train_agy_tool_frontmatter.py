@@ -83,7 +83,10 @@ class NativeAgentExposure(unittest.TestCase):
             with patch.object(N,'qualification',return_value={'phase':'canary'}),\
                  patch.object(N.os,'geteuid',return_value=978),\
                  patch.object(N,'trusted',return_value=b'synthetic-token'),\
-                 patch.object(N,'AGY','/usr/bin/python3'):
+                 patch.object(N,'AGY','/usr/bin/python3'),\
+                 patch.object(N,'_arm_apparmor_onexec',return_value=None),patch.object(N,'_verify_apparmor_precharge',return_value=None):
+                # This fake-Popen test validates agent-file emission only; the
+                # required AppArmor-enforce transition is tested separately.
                 raw,receipt=N.invoke('test inert no-model',45,
                     work=work,slot='slot2',task_hash='0'*64,
                     charge=lambda:charged.append('test_seam'),

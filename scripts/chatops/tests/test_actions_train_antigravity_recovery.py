@@ -59,7 +59,7 @@ class Evidence(unittest.TestCase):
             kw['stderr'].write(b'SECRET_PRIVATE_DIAGNOSTIC');kw['stdout'].flush();kw['stderr'].flush()
             if kind in ('launch','preexec'):raise (OSError('secret launch') if kind=='launch' else subprocess.SubprocessError('secret preexec'))
             return Process()
-        with patch.object(N,'qualification',return_value={'phase':'canary','adapter_revision':'a'*40}),patch.object(N.os,'geteuid',return_value=978),patch.object(N,'trusted',return_value=b'PRIVATE_AUTH'),patch.object(N,'git',return_value=b'/tmp/candidate/.git'),patch.object(N.os,'killpg'),patch.object(N,'filesystem_roots',return_value=([],[],[])):
+        with patch.object(N,'qualification',return_value={'phase':'canary','adapter_revision':'a'*40}),patch.object(N.os,'geteuid',return_value=978),patch.object(N,'trusted',return_value=b'PRIVATE_AUTH'),patch.object(N,'git',return_value=b'/tmp/candidate/.git'),patch.object(N.os,'killpg'),patch.object(N,'filesystem_roots',return_value=([],[],[])),patch.object(N,'_verify_apparmor_precharge',return_value=None):
             if kind=='success':N.invoke('SECRET_PROMPT',30,work=Path('/tmp/candidate'),slot='slot2',task_hash='f'*64,charge=charge,popen=popen,evidence_dir=self.directory)
             else:
                 code={'timeout':'AGY_TIMEOUT','launch':'AGY_LAUNCH_FAILED','preexec':'AGY_LAUNCH_FAILED','nonzero':'AGY_EXIT_NONZERO','overflow':'AGY_OUTPUT_LIMIT'}[kind]
@@ -282,7 +282,7 @@ class Successor(unittest.TestCase):
             budget.charge('slot2','agy','qa');budget.charge('slot2','agy','qa')
             self.assertEqual(budget.remaining('agy','qa','slot2'),0)
             evidence=self.root/'race-evidence'
-            with patch.object(N.os,'geteuid',return_value=978),patch.object(N,'trusted',return_value=b'PRIVATE_AUTH'),patch.object(N,'git',return_value=b'/tmp/candidate/.git'),patch.object(N,'filesystem_roots',return_value=([],[],[])):
+            with patch.object(N.os,'geteuid',return_value=978),patch.object(N,'trusted',return_value=b'PRIVATE_AUTH'),patch.object(N,'git',return_value=b'/tmp/candidate/.git'),patch.object(N,'filesystem_roots',return_value=([],[],[])),patch.object(N,'_verify_apparmor_precharge',return_value=None):
                 popen=Mock(side_effect=AssertionError('provider launched despite exhausted budget'))
                 with self.assertRaisesRegex(N.ReviewError,'AGY_CHARGE_FAILED'):
                     N.invoke('prompt',30,work=Path('/tmp/candidate'),slot='slot2',task_hash=self.q['task_sha256'],charge=lambda:budget.charge('slot2','agy','qa'),popen=popen,evidence_dir=evidence)

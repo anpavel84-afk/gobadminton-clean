@@ -74,7 +74,7 @@ class ModelProtocol(unittest.TestCase):
                     self.assertEqual(kwargs['stdin'],subprocess.PIPE)
                     kwargs['stdout'].write(A.wire(events));kwargs['stdout'].flush()
                     return Process()
-                with patch.object(N,'qualification',return_value={'phase':'ready'}),patch.object(N.os,'geteuid',return_value=978),patch.object(N,'trusted',return_value=b'PRIVATE_AUTH'),patch.object(N,'git',return_value=b'/tmp/candidate/.git'),patch.object(N,'filesystem_roots',return_value=([],[],[])),patch.object(N.os,'killpg'):
+                with patch.object(N,'qualification',return_value={'phase':'ready'}),patch.object(N.os,'geteuid',return_value=978),patch.object(N,'trusted',return_value=b'PRIVATE_AUTH'),patch.object(N,'git',return_value=b'/tmp/candidate/.git'),patch.object(N,'filesystem_roots',return_value=([],[],[])),patch.object(N.os,'killpg'),patch.object(N,'_verify_apparmor_precharge',return_value=None):
                     raw,execution=N.invoke('full model context 漢字',30,work=Path('/tmp/candidate'),slot='slot2',task_hash='x',charge=charge,popen=popen,model=model,evidence_dir=Path(temp)/'evidence')
                 self.assertEqual(seen['argv'][seen['argv'].index('--model')+1],model)
                 self.assertEqual(json.loads(seen['wire'])['message']['content'],'full model context 漢字')

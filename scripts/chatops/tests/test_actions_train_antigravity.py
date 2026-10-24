@@ -352,7 +352,7 @@ print(json.dumps(result))
                  patch.object(N,'trusted',return_value=b'{"token":"synthetic"}'), \
                  patch.object(N,'command',cmd), patch.object(N,'AGY',sys.executable), \
                  patch.object(N,'filesystem_roots',side_effect=roots), \
-                 patch.object(N,'_arm_apparmor_onexec',side_effect=mock_legacy_landlock):
+                 patch.object(N,'_arm_apparmor_onexec',side_effect=mock_legacy_landlock),patch.object(N,'_verify_apparmor_precharge',return_value=None):
                 raw, evidence=N.invoke('synthetic prompt',30,work=work,slot='slot2',task_hash='x',
                     charge=lambda:charged.append('one'),popen=popen)
             self.assertEqual(json.loads(raw),{'read':True,'write':False,'chmod_then_write':False,
@@ -447,7 +447,7 @@ print(json.dumps({'cwd':os.getcwd(),'head':git.stdout.strip(),
                  patch.object(N,'command',child_command), \
                  patch.object(N,'AGY',sys.executable), \
                  patch.object(N,'filesystem_roots',side_effect=roots), \
-                 patch.object(N,'_arm_apparmor_onexec',side_effect=mock_legacy_landlock):
+                 patch.object(N,'_arm_apparmor_onexec',side_effect=mock_legacy_landlock),patch.object(N,'_verify_apparmor_precharge',return_value=None):
                 try:
                     raw,receipt=N.invoke('probe only',45,work=work,slot='slot2',
                         task_hash='x'*64,charge=lambda:charged.append('one-synthetic-call'),
