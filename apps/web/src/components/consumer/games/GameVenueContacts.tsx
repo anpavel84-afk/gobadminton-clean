@@ -15,10 +15,12 @@ function phoneLink(value: unknown): { text: string; href: string } | null {
 }
 
 function websiteLink(value: unknown): string | null {
-  if (typeof value !== "string" || value.length > 300 || forbidden(value)) return null;
+  if (typeof value !== "string" || value.length > 300 || forbidden(value) || /[\ud800-\udfff]/u.test(value)) return null;
   const text = value.trim();
-  if (!/^https?:\/\//i.test(text) || text.split(/[/?#]/)[2]?.includes("@") || /%[01][0-9a-f]|%7f|%[89][0-9a-f]/i.test(text)) return null;
+  if (!/^https?:\/\//i.test(text) || text.split(/[/?#]/)[2]?.includes("@")) return null;
   try {
+    // Decode only for validation; keep the original URL as the destination.
+    if (forbidden(decodeURIComponent(text))) return null;
     const url = new URL(text);
     return ["http:", "https:"].includes(url.protocol) && url.hostname && !url.username && !url.password && url.href.length <= 300 ? url.href : null;
   } catch { return null; }

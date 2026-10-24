@@ -78,6 +78,39 @@ describe("game-only venue contacts", () => {
     expect(html).not.toContain("tel:");
   });
   it.each(["javascript:alert(1)", "data:text/html,x", "//example.org", "https://user:pass@example.org", "https://@example.org", "https://example.org/\nfoo", "https://example.org/%0afoo", "https://example.org\\@evil.test"])("rejects unsafe website %s", value => { expect(markup({ ...publicVenue, contactWebsite: value })).toBe(""); });
+  it("renders the QA percent-encoded Cyrillic website destination", () => {
+    expect(markup({ ...publicVenue, contactWebsite: "https://example.org/%D0%BA%D0%BE%D0%BD%D1%82%D0%B0%D0%BA%D1%82%D1%8B" })).toContain('href="https://example.org/%D0%BA%D0%BE%D0%BD%D1%82%D0%B0%D0%BA%D1%82%D1%8B"');
+  });
+  it.each([
+    ["https://example.org/контакты", "https://example.org/%D0%BA%D0%BE%D0%BD%D1%82%D0%B0%D0%BA%D1%82%D1%8B"],
+    ["https://example.org/%d0%ba", "https://example.org/%d0%ba"],
+    ["https://example.org/%D0%bA", "https://example.org/%D0%bA"],
+    ["https://example.org/%d0%ba%d0%be%d0%bd%d1%82%d0%b0%d0%ba%d1%82%d1%8b", "https://example.org/%d0%ba%d0%be%d0%bd%d1%82%d0%b0%d0%ba%d1%82%d1%8b"],
+    ["https://example.org/?q=%D0%BA%D0%BE%D0%BD%D1%82%D0%B0%D0%BA%D1%82%D1%8B#%F0%9F%98%80", "https://example.org/?q=%D0%BA%D0%BE%D0%BD%D1%82%D0%B0%D0%BA%D1%82%D1%8B#%F0%9F%98%80"],
+    ["https://example.org/?q=контакты#😀", "https://example.org/?q=%D0%BA%D0%BE%D0%BD%D1%82%D0%B0%D0%BA%D1%82%D1%8B#%F0%9F%98%80"],
+    ["https://example.org/%C4%80", "https://example.org/%C4%80"],
+    ["https://example.org/%E3%81%82", "https://example.org/%E3%81%82"],
+    ["https://example.org/%F0%9F%98%80", "https://example.org/%F0%9F%98%80"],
+    ["https://example.org/%C3%A9", "https://example.org/%C3%A9"],
+    ["http://example.org/booking", "http://example.org/booking"],
+    ["HtTpS://example.org/booking", "https://example.org/booking"],
+    ["https://example.org/%2F%2Fevil.test", "https://example.org/%2F%2Fevil.test"],
+    ["https://example.org/?next=https%3A%2F%2Fevil.test", "https://example.org/?next=https%3A%2F%2Fevil.test"],
+    ["https://example.org/%25", "https://example.org/%25"],
+    ["https://example.org/%250A", "https://example.org/%250A"],
+    ["https://example.org/" + "a".repeat(280), "https://example.org/" + "a".repeat(280)],
+  ])("accepts valid website %s with its original serialized destination", (value, href) => { expect(markup({ ...publicVenue, contactWebsite: value })).toContain(`href="${href}"`); });
+  it.each([
+    ...["%C0%AF", "%FF", "%80", "%AF", "%C2", "%E2%82", "%ED%A0%80", "%F4%90%80%80", "%A", "%", "%ZZ"].map(value => `https://example.org/${value}`),
+    "https://example.org/?q=%ZZ", "https://example.org/#%A", "https://example.org/?q=%A", "https://example.org/#%ZZ", "https://example.org/?q=%", "https://example.org/#%",
+    "JaVaScRiPt:alert(1)", "DaTa:text/html,x", "ftp://example.org/", "/relative", "https:example.org", "javascript%3Aalert(1)",
+    "https://user@example.org", "https://%75ser:%70ass@example.org",
+    ...["\0", "\t", "\n", "\r", "\x7f", "\u0085"].map(value => `https://example.org/${value}foo`),
+    ...["%00", "%09", "%0A", "%0d", "%1F", "%7F", "%C2%80", "%C2%85", "%C2%9F"].map(value => `https://example.org/${value}`),
+    "https://example.org/?q=%00", "https://example.org/#%09", "https://example.org/?q=%0A", "https://example.org/#%1F", "https://example.org/?q=%7F", "https://example.org/#%C2%85",
+    "https://example.org/%5C", "https://example.org/?q=%5c",
+    42, false, {}, null, undefined, "", "https://", "https://example.org/" + "a".repeat(281), "https://example.org/" + "я".repeat(47), "https://example.org/\ud800", "https://example.org/\udc00",
+  ])("rejects invalid website encoding or destination %s", value => { expect(markup({ ...publicVenue, contactWebsite: value as GameDetail["venue"]["contactWebsite"] })).toBe(""); });
   it.each(["123", "+7999;ext=1234567", "javascript:123456789", "+79991234567\n", "1".repeat(41)])("rejects unsafe phone %s", value => { expect(markup({ ...publicVenue, contactPhone: value })).toBe(""); });
   it("removes private fields on role-change omission and refresh, and clears immediately on logout", async () => {
     expect(await settle()).toContain("PRIVATE_SENTINEL");

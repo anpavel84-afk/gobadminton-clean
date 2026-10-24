@@ -118,3 +118,44 @@ Do not close the product result from this source handoff.
 Rollback: revert the dedicated product PR through the existing reviewed DEV
 pipeline; no schema/data changes or database restore is needed. No deployment,
 PROD, services, credentials, user data or remote Git effects occurred here.
+
+## Author attempt 3/3 — bounded website sanitizer repair
+
+24 October 2026, Issue #271 / PR #272. Repair input HEAD:
+`9783a62d104f6fe41f59b8ef1bc145bd1111c726`; base and accepted rules/hash above
+were verified locally and are unchanged. This is the uncommitted three-file
+repair for the supplied Codex author assignment; publication/SHA and effective
+route/attempt accounting remain harness-owned. Binding supplied Astra diagnosis:
+`result.json` SHA256 `9304ede099136de717ea1d9936d3c7b14997f694f3e4b40f949e4be85fdecb94`
+(artifact provenance/live admission not independently verified offline).
+
+Replaced byte-level percent rejection with exactly one strict decodeURIComponent
+validation pass and the unchanged forbidden-character predicate. Added a
+website-only unpaired-surrogate guard because decoding leaves raw surrogates
+intact. Original URL parsing/href, HTTP(S), authority/userinfo, hostname and both
+300-character bounds remain. Phone, note, privacy, lifecycle and JSX are unchanged.
+Added the exact QA anchor assertion and diagnosis-compatible renderer fixtures;
+every original assertion remains verbatim. Deliberately added no whitespace
+rejection or whitespace-negative assertions: existing edge trimming and accepted
+raw/encoded spaces, including NBSP, remain unchanged per this repair's scope.
+
+Offline command (exit 0): with `TMPDIR=/home/agentagency-dev/author-evidence-agy271-a3-20261024`,
+`/home/agentagency-dev/.local/node-v24.21.0/bin/node "$TMPDIR/website-sanitizer-attempt3-probe.mjs"`.
+TMPDIR was initially unset; this authorized scratch is outside the repo. The
+script extracts both helpers from shell-provided `git show 9783a62d:<path>`
+snapshots and current source, hand-strips their types and runs the test fixtures.
+Node 24.21.0: 96 cases (18 positive, 59 negative, 13 pre-existing website fixtures,
+6 whitespace compatibility); all pass on repaired helpers, 23 fail on old helpers,
+including the QA URL. All 13 pre-existing results match (booking/public URL data
+accepted; missing/null/empty and eight unsafe fixtures rejected). The public URL
+data probe does not imply that the private renderer consumes publicContacts.
+Full old failures, fixture results and source/test hashes are in
+`/home/agentagency-dev/author-evidence-agy271-a3-20261024/website-sanitizer-attempt3-report.json`.
+
+Manual type/syntax review completed: balanced added blocks, unchanged imports,
+string narrowing before validation, ES2022-compatible Unicode regex and typed
+negative-fixture casts. `git diff --check`: PASS. Vitest/React renderer, typecheck,
+lint, build and browser checks: NOT_TESTED; dependencies (including local Next
+guides) are absent, with no installs/network attempted. Independent exact-SHA QA,
+CI and DEV remain unverified and required through the existing gates above.
+No commit/push, deployment or PROD action; harness publication is the next step.
