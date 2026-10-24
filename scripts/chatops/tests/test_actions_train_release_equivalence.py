@@ -13,7 +13,14 @@ import unittest
 from unittest.mock import Mock, patch
 from test_actions_train import A, S, ROOT, TASK, core, client, stage, card
 from test_actions_train_stages import Store
-import content_identity as identity
+# Always review the exact candidate source in this checkout, never the
+# installed receiver's content_identity from /usr/local/lib/gb-actions-train.
+# Full-suite test discovery can preload the older installed module by name.
+identity_spec = importlib.util.spec_from_file_location(
+    'gb_248_candidate_content_identity',
+    ROOT/'scripts/chatops/actions_train/content_identity.py')
+identity = importlib.util.module_from_spec(identity_spec)
+identity_spec.loader.exec_module(identity)
 import qa_equivalence as qa
 
 spec = importlib.util.spec_from_file_location('prepare_train_release', ROOT/'scripts/chatops/ops/prepare_train_release.py')
@@ -22,6 +29,13 @@ release = importlib.util.module_from_spec(spec); spec.loader.exec_module(release
 
 class GitFixture(unittest.TestCase):
     def setUp(self):
+        # The old installed bridge imports qa_equivalence from its runtime,
+        # whose function reference otherwise remains bound to installed
+        # content_identity. Bind the exact candidate for this disposable
+        # test only, and restore the original binding after each test.
+        candidate_binding = patch.object(qa, 'equivalence', identity.equivalence)
+        candidate_binding.start()
+        self.addCleanup(candidate_binding.stop)
         self.temp = tempfile.TemporaryDirectory(prefix='train248-')
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name); self.repo = self.root/'source'; self.repo.mkdir()
@@ -42,6 +56,259 @@ class GitFixture(unittest.TestCase):
     def commit(self, message='fixture'):
         self.git('add','.'); self.git('-c','commit.gpgsign=false','commit','-qm',message)
         return self.git('rev-parse','HEAD')
+
+
+
+class DynamicProcessLoader(GitFixture):
+    """#248: unchanged runtime process loaders consume changed test bytes."""
+
+    def check_loader(self, runtime, *, reusable):
+        self.write('apps/api/src/sample.py', runtime)
+        self.write('scripts/chatops/tests/test_example.py', 'VALUE = 1\n')
+        original = self.commit('original with runtime process consumer')
+        self.write('scripts/chatops/tests/test_example.py', 'VALUE = 2\n')
+        candidate = self.commit('test-only candidate')
+        result = identity.equivalence(self.repo, original, candidate)
+        self.assertIs(result['reusable'], reusable, result)
+        if not reusable:
+            self.assertIn('loader', result['reason'])
+            self.assertIn('apps/api/src/sample.py', result['reason'])
+            self.assertTrue(all(c['kind'] == 'runtime' for c in result['changes']))
+        else:
+            self.assertIsNone(result['reason'])
+            self.assertEqual(result['changes'][0]['kind'], 'test')
+
+    def test_subprocess_run_as_loader_requires_addressed_qa(self):
+        self.check_loader(
+            'from subprocess import run as loader\n'
+            'loader(["python3", "scripts/chatops/tests/test_example.py"])\n',
+            reusable=False)
+
+    def test_subprocess_module_as_alias_requires_addressed_qa(self):
+        self.check_loader(
+            'import subprocess as executor\n'
+            'executor.run(["python3", "scripts/chatops/tests/test_example.py"])\n',
+            reusable=False)
+
+    def test_os_exec_from_import_alias_requires_addressed_qa(self):
+        self.check_loader(
+            'from os import execl as launcher\n'
+            'launcher("/bin/sh", "sh", "scripts/chatops/tests/test_example.py")\n',
+            reusable=False)
+
+    def test_os_exec_module_alias_requires_addressed_qa(self):
+        self.check_loader(
+            'import os as operating_system\n'
+            'operating_system.execve("/usr/bin/python3", '
+            '["python3", "scripts/chatops/tests/test_example.py"], {})\n',
+            reusable=False)
+
+    def test_subprocess_wildcard_requires_addressed_qa(self):
+        self.check_loader(
+            'from subprocess import *\n'
+            'run(["python3", "scripts/chatops/tests/test_example.py"])\n',
+            reusable=False)
+
+    def test_os_wildcard_requires_addressed_qa(self):
+        self.check_loader(
+            'from os import *\n'
+            'execl("/usr/bin/python3", "python3", "scripts/chatops/tests/test_example.py")\n',
+            reusable=False)
+
+    def test_rebound_subprocess_module_requires_addressed_qa(self):
+        self.check_loader(
+            'import subprocess\n'
+            'executor = subprocess\n'
+            'executor.run(["python3", "scripts/chatops/tests/test_example.py"])\n',
+            reusable=False)
+
+    def test_rebound_os_module_requires_addressed_qa(self):
+        self.check_loader(
+            'import os\n'
+            'launcher = os\n'
+            'launcher.execl("/usr/bin/python3", "python3", '
+            '"scripts/chatops/tests/test_example.py")\n',
+            reusable=False)
+
+    def test_tuple_rebound_process_modules_requires_addressed_qa(self):
+        self.check_loader(
+            'import subprocess, os\n'
+            'executor, launcher = subprocess, os\n'
+            'executor.run(["python3", "scripts/chatops/tests/test_example.py"])\n',
+            reusable=False)
+
+    def test_passed_subprocess_module_requires_addressed_qa(self):
+        self.check_loader(
+            'import subprocess\n'
+            'def invoke(executor):\n'
+            '    return executor.run(["python3", "scripts/chatops/tests/test_example.py"])\n'
+            'invoke(subprocess)\n',
+            reusable=False)
+
+    def test_module_introspection_requires_addressed_qa(self):
+        self.check_loader(
+            'import os\n'
+            'invoke = os.__dict__["execve"]\n'
+            'invoke("/usr/bin/python3", ["python3", '
+            '"scripts/chatops/tests/test_example.py"], {})\n',
+            reusable=False)
+
+    def test_benign_os_path_member_preserves_test_only_reuse(self):
+        self.check_loader(
+            'import os\n'
+            'README = os.path.join("docs", "README.md")\n',
+            reusable=True)
+
+    def test_benign_subprocess_pipe_constant_preserves_test_only_reuse(self):
+        self.check_loader(
+            'import subprocess\n'
+            'PIPE = subprocess.PIPE\n',
+            reusable=True)
+
+    def test_subprocess_nested_os_module_requires_addressed_qa(self):
+        self.check_loader(
+            'import subprocess\n'
+            'subprocess.os.execl("/usr/bin/python3", "python3", '
+            '"scripts/chatops/tests/test_example.py")\n',
+            reusable=False)
+
+    def test_os_path_nested_os_module_requires_addressed_qa(self):
+        self.check_loader(
+            'import os\n'
+            'os.path.os.execl("/usr/bin/python3", "python3", '
+            '"scripts/chatops/tests/test_example.py")\n',
+            reusable=False)
+
+    def test_dotted_import_os_path_binds_os_requires_addressed_qa(self):
+        self.check_loader(
+            'import os.path\n'
+            'os.execl("/usr/bin/python3", "python3", '
+            '"scripts/chatops/tests/test_example.py")\n',
+            reusable=False)
+
+    def test_dotted_import_alias_exposes_os_module_requires_addressed_qa(self):
+        self.check_loader(
+            'import os.path as osp\n'
+            'osp.os.execl("/usr/bin/python3", "python3", '
+            '"scripts/chatops/tests/test_example.py")\n',
+            reusable=False)
+
+    def test_subprocess_os_from_import_requires_addressed_qa(self):
+        self.check_loader(
+            'from subprocess import os as operating_system\n'
+            'operating_system.execl("/usr/bin/python3", "python3", '
+            '"scripts/chatops/tests/test_example.py")\n',
+            reusable=False)
+
+    def test_os_path_os_from_import_requires_addressed_qa(self):
+        self.check_loader(
+            'from os.path import os as operating_system\n'
+            'operating_system.execl("/usr/bin/python3", "python3", '
+            '"scripts/chatops/tests/test_example.py")\n',
+            reusable=False)
+
+    def test_subprocess_module_reexport_requires_addressed_qa(self):
+        self.check_loader(
+            'import subprocess\n'
+            'launcher = subprocess.os\n'
+            'launcher.execl("/usr/bin/python3", "python3", '
+            '"scripts/chatops/tests/test_example.py")\n',
+            reusable=False)
+
+    def test_literal_changed_test_path_in_python_runtime_requires_addressed_qa(self):
+        self.check_loader(
+            'class Consumer:\n'
+            '    def read(self, path):\n'
+            '        return path\n'
+            'result = Consumer().read("scripts/chatops/tests/test_example.py")\n',
+            reusable=False)
+
+    def test_stitched_test_tree_in_python_runtime_requires_addressed_qa(self):
+        self.check_loader(
+            'name = "scripts/chatops/" + "tests/" + "test_" + "example.py"\n'
+            'result = name\n',
+            reusable=False)
+
+    def test_posixpath_reexport_requires_addressed_qa(self):
+        self.check_loader(
+            'import posixpath as x\n'
+            'x.os.execl("/usr/bin/python3", "python3", '
+            '"scripts/chatops/tests/test_example.py")\n',
+            reusable=False)
+
+    def test_ntpath_reexport_requires_addressed_qa(self):
+        self.check_loader(
+            'import ntpath as x\n'
+            'x.os.execl("/usr/bin/python3", "python3", '
+            '"scripts/chatops/tests/test_example.py")\n',
+            reusable=False)
+
+    def test_posix_spawn_import_requires_addressed_qa(self):
+        self.check_loader(
+            'from posix import posix_spawn as launch\n'
+            'launch("/usr/bin/python3", '
+            '["python3", "scripts/chatops/tests/test_example.py"], {})\n',
+            reusable=False)
+
+    def test_importlib_dictionary_alias_requires_addressed_qa(self):
+        self.check_loader(
+            'import importlib as x\n'
+            'launch = x.__dict__["import_" + "module"]\n'
+            'launch("scripts.chatops.tests.test_example")\n',
+            reusable=False)
+
+    def test_ctypes_process_launch_requires_addressed_qa(self):
+        self.check_loader(
+            'import ctypes\n'
+            'ctypes.CDLL(None).system(b"python3 scripts/chatops/tests/test_example.py")\n',
+            reusable=False)
+
+    def test_subprocess_reexported_sys_requires_addressed_qa(self):
+        self.check_loader(
+            'from subprocess import sys as x\n'
+            'x.modules["os"].execl("/usr/bin/python3", "python3", '
+            '"scripts/chatops/tests/test_example.py")\n',
+            reusable=False)
+
+    def test_sys_modules_dynamic_loader_requires_addressed_qa(self):
+        # Path is hex-encoded and cannot be caught by literal-path matching.
+        value = 'scripts/chatops/tests/test_example.py'
+        coded = value.encode().hex()
+        self.check_loader(
+            'import sys\n'
+            'launch = sys.modules["os"].execl\n'
+            'target = bytes.fromhex("' + coded + '").decode()\n'
+            'launch("/usr/bin/python3", "python3", target)\n',
+            reusable=False)
+
+    def test_bridge_receipt_uses_exact_candidate_equivalence(self):
+        self.assertIs(qa.equivalence, identity.equivalence)
+        self.assertEqual(Path(identity.__file__).resolve(),
+                         (ROOT/'scripts/chatops/actions_train/content_identity.py').resolve())
+
+    def test_threading_sys_modules_hex_loader_requires_addressed_qa(self):
+        # Independent R-b438 reviewer reproduced a real runtime execution via
+        # threading._sys.modules when the changed test path was hex-encoded.
+        changed = 'scripts/chatops/tests/test_example.py'.encode().hex()
+        self.check_loader(
+            'import threading\n'
+            'launch = threading._sys.modules["os"].execl\n'
+            'target = bytes.fromhex("' + changed + '").decode()\n'
+            'launch("/usr/bin/python3", "python3", target)\n',
+            reusable=False)
+
+    def test_unprovable_python_callable_requires_addressed_qa(self):
+        self.check_loader(
+            'def retrieve_data():\n'
+            '    return 1\n'
+            'value = retrieve_data()\n',
+            reusable=False)
+
+    def test_benign_path_literal_preserves_test_only_reuse(self):
+        self.check_loader(
+            'from pathlib import Path\n'
+            'README = Path("README.md")\n',
+            reusable=True)
 
 
 class ContentReuse(GitFixture):
