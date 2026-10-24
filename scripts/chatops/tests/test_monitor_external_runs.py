@@ -6,6 +6,7 @@ import importlib.util
 import io
 import json
 import os
+import random
 from pathlib import Path
 import shutil
 import subprocess
@@ -99,7 +100,7 @@ class ExternalRunsTests(unittest.TestCase):
         self.evidence('boundary', age=900)
         states = {r['tag']: r['state'] for r in self.scan()['runs']}
         self.assertEqual(states, {'stale': 'stale', 'boundary': 'running'})
-        self.assertEqual(self.scan()['running'], 2)
+        self.assertEqual((self.scan()['running'], self.scan()['stale']), (1, 1))
 
     def test_future_activity_is_stale_beyond_clock_tolerance(self):
         self.evidence('future', age=-61)
@@ -207,9 +208,9 @@ class ExternalRunsTests(unittest.TestCase):
         runs = {r['tag']: r for r in self.scan()['runs']}
         self.assertTrue(all(r['state'] == 'stale' and r['exit_code'] is None
                             for tag, r in runs.items() if tag.startswith('invalid-')))
-        self.assertEqual(runs['no-events']['state'], 'running')
+        self.assertEqual(runs['no-events']['state'], 'stale')
         self.assertIsNone(runs['no-events']['last_event_utc'])
-        self.assertEqual(runs['no-events']['age_s'], 150)
+        self.assertEqual(runs['no-events']['age_s'], 20)
 
     def test_symlink_and_nonregular_files_are_not_read(self):
         d = self.evidence('safe')
@@ -254,32 +255,36 @@ class ExternalRunsTests(unittest.TestCase):
         for i in range(10):
             self.evidence('active-%02d' % i, age=1000 + i)
         block = self.scan()
-        self.assertEqual((block['running'], len(block['runs'])), (10, 20))
+        self.assertEqual((block['running'], block['stale'], block['omitted'], len(block['runs'])), (0, 10, 15, 20))
         self.assertEqual([r['tag'] for r in block['runs'][:10]], ['finished-%02d' % i for i in range(10)])
         self.assertEqual({r['tag'] for r in block['runs'][10:]}, {'active-%02d' % i for i in range(10)})
         self.assertLess(len(json.dumps(block, separators=(',', ':')).encode()), 8000)
         self.evidence('active-more', age=20)
-        self.assertEqual((self.scan()['running'], len(self.scan()['runs'])), (11, 20))
+        self.assertEqual((self.scan()['running'], self.scan()['stale'], self.scan()['omitted'], len(self.scan()['runs'])), (1, 10, 16, 20))
         self.assertIn('active-more', [r['tag'] for r in self.scan()['runs']])
 
-    def test_scan_limit_keeps_newest_400(self):
+    def test_all_402_candidates_counted_before_selection(self):
         for i in reversed(range(402)):
             self.evidence('%03d' % i, age=i)
-        self.assertEqual(self.scan()['running'], 400)
+        self.assertEqual((self.scan()['running'], self.scan()['omitted']), (402, 392))
         self.assertTrue(all(int(r['tag']) < 400 for r in self.scan()['runs']))
         self.assertTrue(self.scan()['truncated'])
         self.assertEqual(self.scan(), self.scan())
 
-    def test_recent_running_survives_999_old_directories(self):
+    def test_qa279_001_fresh_events_in_very_old_directory(self):
         for i in range(999):
             self.evidence('old-%03d' % i, exit_value='0', age=2000 + i)
-        self.evidence('zz-current', age=10)
+        current = self.evidence('zz-current', age=10000)
+        self.stamp(current / 'events.jsonl', 5)
         with patch.object(writer.os, 'listdir', side_effect=AssertionError('unbounded listdir')):
             block = self.scan()
         self.assertTrue(block['available'])
         self.assertTrue(block['truncated'])
         self.assertEqual(block['running'], 1)
         self.assertEqual((block['runs'][0]['tag'], block['runs'][0]['state']), ('zz-current', 'running'))
+        self.assertEqual(block['runs'][0]['age_s'], 5)
+        self.assertEqual(block['runs'][0]['last_event_utc'], (NOW - datetime.timedelta(seconds=5)).isoformat())
+        self.assertEqual(block['omitted'], 989)
         self.assertLess(len(json.dumps(block).encode()), 8000)
 
     def test_scandir_enumeration_stops_at_5000_including_nonmatches(self):
@@ -306,9 +311,284 @@ class ExternalRunsTests(unittest.TestCase):
         self.assertEqual(len(seen), 5000)
         self.assertEqual([r['tag'] for r in block['runs']], ['current'])
 
+    def test_finished_activity_never_evicts_unfinished_fresh_or_stale(self):
+        for i in range(401):
+            self.evidence('finished-%03d' % i, exit_value='0', age=1)
+        fresh = self.evidence('fresh', age=10000)
+        self.stamp(fresh / 'events.jsonl', 5)
+        self.evidence('stale', age=20000)
+        block = self.scan()
+        rows = {r['tag']: r for r in block['runs']}
+        self.assertEqual((block['running'], block['stale'], block['omitted']), (1, 1, 391))
+        self.assertEqual((rows['fresh']['state'], rows['fresh']['age_s']), ('running', 5))
+        self.assertEqual((rows['stale']['state'], rows['stale']['age_s']), ('stale', 20000))
+
+    def test_directory_metadata_does_not_refresh_events(self):
+        d = self.evidence('stale', age=10000)
+        before = self.one()
+        (d / 'unrelated').write_text('')
+        self.stamp(d, 1)
+        after = self.one()
+        self.assertEqual((after['state'], after['last_event_utc'], after['age_s']),
+                         (before['state'], before['last_event_utc'], before['age_s']))
+        self.assertEqual((self.scan()['running'], self.scan()['stale']), (0, 1))
+
+    def test_equal_activity_selection_uses_full_name_independent_of_order(self):
+        for prefix in ('qa', 'author'):
+            for i in range(12):
+                self.evidence('same-%02d' % i, prefix=prefix, age=20)
+                self.evidence('done-%02d' % i, prefix=prefix, age=20, exit_value='0')
+        real_scandir = os.scandir
+        with real_scandir(self.root) as it:
+            entries = list(it)
+        expected = self.scan()
+        self.assertEqual({r['kind'] for r in expected['runs']}, {'qa'})
+        self.assertEqual({r['tag'] for r in expected['runs']},
+                         {kind + '-%02d' % i for kind in ('same', 'done') for i in range(2, 12)})
+        shuffled = entries[:]
+        random.Random(279).shuffle(shuffled)
+        for ordered in (entries[::-1], shuffled):
+            @contextmanager
+            def ordered_scandir(_):
+                yield iter(ordered)
+            with patch.object(writer.os, 'scandir', side_effect=ordered_scandir):
+                self.assertEqual(self.scan(), expected)
+
+    def test_ten_and_eleven_unfinished_and_400_401_candidates(self):
+        for i in range(10):
+            self.evidence('active-%02d' % i, age=10)
+        block = self.scan()
+        self.assertEqual((block['running'], block['stale'], block['omitted'], block['truncated']),
+                         (10, 0, 0, False))
+        self.evidence('extra', age=1000)
+        block = self.scan()
+        self.assertEqual((block['running'], block['stale'], block['omitted'], len(block['runs'])),
+                         (10, 1, 1, 10))
+        self.assertTrue(block['truncated'])
+        for i in range(389):
+            self.evidence('done-%03d' % i, exit_value='0', age=1)
+        block = self.scan()
+        self.assertEqual((block['running'], block['stale'], block['omitted'], len(block['runs'])),
+                         (10, 1, 380, 20))
+        self.evidence('done-extra', exit_value='0', age=1)
+        self.assertEqual(self.scan()['omitted'], 381)
+
+    def test_enumeration_positions_4999_5000_5001_and_incomplete_zero(self):
+        d = self.evidence('boundary')
+        with os.scandir(self.root) as entries:
+            match = next(e for e in entries if e.name == d.name)
+        for position in (4999, 5000, 5001):
+            seen = []
+            @contextmanager
+            def injected(_):
+                def generate():
+                    for n in range(1, 5002):
+                        seen.append(n)
+                        yield match if n == position else type('Entry', (), {'name': 'ordinary'})()
+                yield generate()
+            with self.subTest(position=position), patch.object(writer.os, 'scandir', side_effect=injected):
+                block = self.scan()
+            self.assertEqual(len(seen), 5000)
+            self.assertTrue(block['truncated'])
+            self.assertTrue(block['available'])
+            self.assertEqual(block['running'], int(position <= 5000))
+            self.assertEqual(len(block['runs']), int(position <= 5000))
+
+    def test_5000_matching_entries_bounded_io_and_descriptors(self):
+        for i in range(5000):
+            self.evidence('%04d' % i, age=10, exit_value='0',
+                          result={'verdict': 'PASS'}, meta={'role': 'QA'})
+        real_open, real_close, real_read = os.open, os.close, os.read
+        live, opened, requested, actual = set(), [], [], []
+        peak = 0
+
+        def track_open(path, *args, **kwargs):
+            nonlocal peak
+            fd = real_open(path, *args, **kwargs)
+            live.add(fd)
+            opened.append(os.fspath(path))
+            peak = max(peak, len(live))
+            return fd
+
+        def track_close(fd):
+            live.remove(fd)
+            real_close(fd)
+
+        def track_read(fd, size):
+            requested.append(size)
+            data = real_read(fd, size)
+            actual.append(len(data))
+            return data
+
+        with self.private_content_guard(), \
+                patch.object(writer.os, 'open', side_effect=track_open), \
+                patch.object(writer.os, 'close', side_effect=track_close), \
+                patch.object(writer.os, 'read', side_effect=track_read), \
+                patch.object(writer.os, 'lstat', wraps=os.lstat) as stats, \
+                patch.object(writer.os, 'fstat', wraps=os.fstat) as fstats, \
+                patch.object(writer.os, 'listdir', side_effect=AssertionError('no listdir')):
+            block = self.scan()
+        self.assertTrue(block['available'])
+        self.assertTrue(block['truncated'])
+        self.assertEqual((block['running'], block['stale'], block['omitted'], len(block['runs'])),
+                         (0, 0, 4990, 10))
+        self.assertLessEqual(peak, 3)
+        self.assertFalse(live)
+        self.assertLess(len(opened), 10100)
+        self.assertLess(stats.call_count, 25200)
+        self.assertLess(fstats.call_count, 10200)
+        self.assertEqual(opened.count('result.json'), 10)
+        self.assertEqual(opened.count('meta.json'), 10)
+        self.assertLessEqual(len(requested), 5040)
+        self.assertLessEqual(max(requested), 65537)
+        self.assertLessEqual(sum(requested), 5020 * 17 + 10 * (65537 + 1025))
+        self.assertLess(sum(actual), 10000)
+
+    def test_no_events_invalid_exit_is_stale_even_with_fresh_start_markers(self):
+        d = self.evidence('no-events', events=False, exit_value='invalid', age=10000)
+        (d / '.codex').mkdir()
+        self.stamp(d / '.codex', 1)
+        self.stamp(d, 10000)
+        r = self.one()
+        self.assertEqual((r['state'], r['last_event_utc'], r['age_s']), ('stale', None, 10000))
+        self.assertEqual((self.scan()['running'], self.scan()['stale']), (0, 1))
+
+    def test_event_symlink_foreign_owner_and_fifo_do_not_invent_running(self):
+        d = self.evidence('unsafe', events=False, exit_value='invalid', age=5)
+        target = self.root / 'private-events'
+        target.write_text(SECRET)
+        events = d / 'events.jsonl'
+        events.symlink_to(target)
+        with self.private_content_guard():
+            self.assertEqual(self.one()['state'], 'stale')
+            self.assertIsNone(self.one()['last_event_utc'])
+        events.unlink()
+        os.mkfifo(events)
+        with self.private_content_guard():
+            self.assertEqual(self.one()['state'], 'stale')
+        events.unlink()
+        events.write_text(SECRET)
+        real_stat = os.lstat
+
+        def foreign(path, *args, **kwargs):
+            value = real_stat(path, *args, **kwargs)
+            if os.fspath(path) == 'events.jsonl':
+                fields = list(value)
+                fields[4] = os.geteuid() + 1
+                return os.stat_result(fields)
+            return value
+        with self.private_content_guard(), patch.object(writer.os, 'lstat', side_effect=foreign):
+            self.assertEqual(self.one()['state'], 'stale')
+            self.assertIsNone(self.one()['last_event_utc'])
+        (d / 'exit.txt').unlink()
+        events.unlink()
+        events.symlink_to(target)
+        self.assertEqual(self.scan()['runs'], [])
+
+    def test_directory_replacement_between_selection_and_reopen_is_omitted(self):
+        d = self.evidence('replace')
+        replacement = self.evidence('replacement', exit_value='0', result={'verdict': 'PASS'})
+        replacement.rename(self.root / 'ordinary-replacement')
+        real_open = os.open
+        opens = 0
+
+        def replace(path, *args, **kwargs):
+            nonlocal opens
+            if os.fspath(path) == d.name:
+                opens += 1
+                if opens == 2:
+                    d.rename(self.root / 'retired')
+                    (self.root / 'ordinary-replacement').rename(d)
+            return real_open(path, *args, **kwargs)
+        with self.private_content_guard(), patch.object(writer.os, 'open', side_effect=replace):
+            block = self.scan()
+        self.assertTrue(block['truncated'])
+        self.assertEqual((block['running'], block['omitted'], block['runs']), (1, 1, []))
+
+    def test_completion_during_selected_reopen_updates_counts_conservatively(self):
+        d = self.evidence('finishing')
+        real_open = os.open
+        opens = 0
+
+        def complete(path, *args, **kwargs):
+            nonlocal opens
+            if os.fspath(path) == d.name:
+                opens += 1
+                if opens == 2:
+                    (d / 'exit.txt').write_text('0')
+                    self.stamp(d / 'exit.txt', 1)
+            return real_open(path, *args, **kwargs)
+        with patch.object(writer.os, 'open', side_effect=complete):
+            block = self.scan()
+        self.assertEqual((block['running'], block['stale'], block['omitted'], block['runs']), (0, 0, 1, []))
+        self.assertTrue(block['truncated'])
+
+    def test_errors_close_all_descriptors_and_mark_coverage_incomplete(self):
+        d = self.evidence('error', exit_value='0', result={'verdict': 'PASS'})
+        real_open, real_close, real_stat, real_read = os.open, os.close, os.lstat, os.read
+        for operation in ('stat', 'read', 'json', 'fstat', 'directory-fstat'):
+            live = set()
+            def track_open(path, *args, **kwargs):
+                if operation == 'json' and os.fspath(path) == 'result.json':
+                    raise PermissionError('json denied')
+                fd = real_open(path, *args, **kwargs)
+                live.add(fd)
+                return fd
+            def track_close(fd):
+                live.remove(fd)
+                real_close(fd)
+            def bad_stat(path, *args, **kwargs):
+                if operation == 'stat' and os.fspath(path) == 'events.jsonl':
+                    raise PermissionError('metadata denied')
+                return real_stat(path, *args, **kwargs)
+            def bad_read(fd, size):
+                if operation == 'read':
+                    raise OSError('read failed')
+                return real_read(fd, size)
+            real_fstat = os.fstat
+            def bad_fstat(fd):
+                if operation == 'fstat' and len(live) == 3:
+                    raise OSError('fstat failed')
+                if operation == 'directory-fstat' and len(live) == 2:
+                    raise OSError('directory fstat failed')
+                return real_fstat(fd)
+            with self.subTest(operation=operation), \
+                    patch.object(writer.os, 'open', side_effect=track_open), \
+                    patch.object(writer.os, 'close', side_effect=track_close), \
+                    patch.object(writer.os, 'lstat', side_effect=bad_stat), \
+                    patch.object(writer.os, 'read', side_effect=bad_read), \
+                    patch.object(writer.os, 'fstat', side_effect=bad_fstat):
+                block = self.scan()
+            self.assertFalse(live)
+            self.assertTrue(block['available'])
+            self.assertTrue(block['truncated'])
+        self.assertTrue(d.is_dir())
+
+    def test_maximum_fields_keep_block_below_eight_kilobytes(self):
+        for i in range(20):
+            self.evidence('%02d' % i + 'x' * 98, age=10,
+                          exit_value='0' if i < 10 else None,
+                          result={'verdict': 'BLOCKED', 'reviewed_sha': 'a' * 40},
+                          meta={'role': 'r' * 40, 'model': 'm' * 40})
+        block = self.scan()
+        self.assertLess(len(json.dumps(block, separators=(',', ':')).encode()), 8000)
+        self.assertEqual(block['omitted'], 20 - len(block['runs']))
+        self.assertEqual(block['running'], 10)
+        self.assertEqual(sum(r['exit_code'] is None for r in block['runs']), 10)
+
+    def test_exit_activity_only_ranks_parsed_completions(self):
+        completed = self.evidence('completed', exit_value='0', age=10000)
+        invalid = self.evidence('invalid', exit_value='invalid', age=10000)
+        for d in (completed, invalid):
+            self.stamp(d / 'exit.txt', 1)
+        self.evidence('active', age=5)
+        block = self.scan()
+        self.assertEqual([r['tag'] for r in block['runs']], ['completed', 'active', 'invalid'])
+        self.assertEqual([r['state'] for r in block['runs']], ['done', 'running', 'stale'])
+
     def test_missing_unreadable_root_and_per_directory_error(self):
         unavailable = {'available': False, 'generated_utc': NOW.isoformat(),
-                       'running': 0, 'runs': [], 'truncated': False}
+                       'running': 0, 'stale': 0, 'omitted': 0, 'runs': [], 'truncated': False}
         self.assertEqual(writer.external_runs(self.root / 'missing', NOW), unavailable)
         with patch.object(writer.os, 'scandir', side_effect=PermissionError):
             self.assertEqual(self.scan(), unavailable)
@@ -336,7 +616,7 @@ class ExternalRunsTests(unittest.TestCase):
         ordinary = self.root / 'ordinary-file'
         ordinary.write_text('')
         unavailable = {'available': False, 'generated_utc': NOW.isoformat(),
-                       'running': 0, 'runs': [], 'truncated': False}
+                       'running': 0, 'stale': 0, 'omitted': 0, 'runs': [], 'truncated': False}
         for root in (link / 'nested', ordinary / 'nested', Path('.')):
             with self.subTest(root=root):
                 self.assertEqual(writer.external_runs(root, NOW), unavailable)
@@ -344,7 +624,7 @@ class ExternalRunsTests(unittest.TestCase):
 
     def test_empty_root(self):
         self.assertEqual(self.scan(), {'available': True, 'generated_utc': NOW.isoformat(),
-                                      'running': 0, 'runs': [], 'truncated': False})
+                                      'running': 0, 'stale': 0, 'omitted': 0, 'runs': [], 'truncated': False})
 
     def test_main_adds_block_without_changing_build(self):
         self.evidence('main', exit_value='0', result={'verdict': 'PASS'})
@@ -399,9 +679,60 @@ class ExternalRunsTests(unittest.TestCase):
         self.assertIn('Внешние запуски (вне слотов)', new_code)
         self.assertIn("s.id = 'external'", new_code)
         self.assertIn("if (x.truncated === true)", new_code)
-        self.assertIn("'mut', 'Показаны не все запуски (ограничение сканирования).'", new_code)
+        self.assertIn('Показаны не все запуски; охват может быть неполным.', new_code)
+        self.assertIn('без событий >15 мин: ', new_code)
+        self.assertIn("'Показано ' + runs.length + ' из '", new_code)
+        self.assertIn('начало (прибл.): ', new_code)
+        self.assertIn("x.truncated ? 'Нет строк для отображения; наличие других запусков неизвестно.'", new_code)
+        self.assertIn('setTimeout(poll, 30000)', app)
         self.assertNotIn('fetch(', new_code)
         self.assertNotIn('setTimeout', new_code)
+
+    @unittest.skipUnless(shutil.which('node'), 'node is unavailable')
+    def test_ui_counts_overflow_incomplete_zero_and_text_rendering(self):
+        app = (PAYLOAD / 'app.js').read_text()
+        function = 'function renderExternal(x) {' + app.split('  function renderExternal(x) {', 1)[1].split('  function render(d) {', 1)[0]
+        harness = r'''
+const assert = require('node:assert/strict');
+const elements = {};
+function el(tag, cls, text) {
+  const e = {tag, className: cls, textContent: text || '', children: [],
+    appendChild(child) { this.children.push(child); }};
+  Object.defineProperty(e, 'innerHTML', {set() {throw Error('innerHTML forbidden');}});
+  return e;
+}
+function $(id) {return elements[id];}
+function clear(e) {e.children = []; e.textContent = '';}
+function chip(text, cls) {return el('span', cls, text);}
+function kv(x) {return el('div', null, JSON.stringify(x));}
+function sh(x) {return x;}
+function ago(x) {return x + ' с назад';}
+elements.infra = {parentNode: {insertBefore(e) {elements[e.id] = e;}}};
+function lines(e) {return [e.textContent].concat(e.children.flatMap(lines));}
+renderExternal({available: true, running: 12, stale: 3, omitted: 14, truncated: true,
+  runs: [{tag: '<img src=x>', state: 'running', kind: 'qa', started_utc: 'date', age_s: 5}]});
+let text = lines(elements.external);
+assert(text.includes('Выполняется сейчас: 12'));
+assert(text.includes('без событий >15 мин: 3'));
+assert(text.includes('Показано 1 из 15'));
+assert(text.includes('<img src=x>'));
+assert(text.some(x => x.includes('начало (прибл.): date')));
+renderExternal({available: true, running: 0, stale: 0, omitted: 0, truncated: true, runs: []});
+text = lines(elements.external);
+assert(!text.includes('Внешних запусков нет.'));
+assert(text.some(x => x.includes('наличие других запусков неизвестно')));
+renderExternal({available: true, running: 0, stale: 0, omitted: 0, truncated: false, runs: []});
+text = lines(elements.external);
+assert(text.includes('Внешних запусков нет.'));
+assert(!text.some(x => x.includes('без событий >15 мин:')));
+for (const x of [undefined, null, {available: false}]) {
+  renderExternal(x);
+  assert(lines(elements.external).includes('Данные о внешних запусках недоступны.'));
+}
+'''
+        result = subprocess.run([shutil.which('node'), '-e', function + harness],
+                                capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     @unittest.skipUnless(shutil.which('node'), 'node is unavailable')
     def test_javascript_syntax(self):

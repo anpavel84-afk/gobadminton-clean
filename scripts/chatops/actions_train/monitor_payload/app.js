@@ -262,9 +262,11 @@ window.GBTrainMonitor = {
     clear(s); s.appendChild(el('h2', null, 'Внешние запуски (вне слотов)'));
     if (!x || x.available === false) { s.appendChild(el('div', 'mut', 'Данные о внешних запусках недоступны.')); return; }
     s.appendChild(el('div', 'mut', 'Выполняется сейчас: ' + x.running));
-    if (x.truncated === true) s.appendChild(el('div', 'mut', 'Показаны не все запуски (ограничение сканирования).'));
+    if (x.stale > 0) s.appendChild(el('div', 'mut', 'без событий >15 мин: ' + x.stale));
     var runs = x.runs || [];
-    if (!runs.length) { s.appendChild(el('div', 'mut', 'Внешних запусков нет.')); return; }
+    if (x.omitted > 0) s.appendChild(el('div', 'mut', 'Показано ' + runs.length + ' из ' + (runs.length + x.omitted)));
+    if (x.truncated === true) s.appendChild(el('div', 'mut', 'Показаны не все запуски; охват может быть неполным.'));
+    if (!runs.length) { s.appendChild(el('div', 'mut', x.truncated ? 'Нет строк для отображения; наличие других запусков неизвестно.' : 'Внешних запусков нет.')); return; }
     var states = { running: ['идёт', 'ok'], stale: ['нет событий >15 мин', 'warn'],
       done: ['завершён', 'ok'], failed: ['ошибка', 'bad'] };
     var kinds = { qa: 'QA', diagnosis: 'диагностика', author: 'автор' };
@@ -275,7 +277,7 @@ window.GBTrainMonitor = {
       var parts = [kinds[r.kind] || '—'];
       if (r.role) parts.push(r.role);
       if (r.model) parts.push(r.model);
-      parts.push('начало: ' + (r.started_utc || 'неизвестно'));
+      parts.push('начало (прибл.): ' + (r.started_utc || 'неизвестно'));
       parts.push('последнее событие ' + (r.last_event_utc ? ago(r.age_s) : 'неизвестно'));
       b.appendChild(el('div', 'mut', parts.join(' · ')));
       if (r.state === 'done') {

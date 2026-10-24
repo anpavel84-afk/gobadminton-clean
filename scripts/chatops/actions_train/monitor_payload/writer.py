@@ -83,23 +83,61 @@ def external_runs(root, now):
             return fd, after
 
         def optional_json(fd, name, limit):
+            nonlocal read_errors
             try:
                 if owned_stat(fd, name) is None:
                     return {}
                 value = read_json(name, limit, owner=uid, dir_fd=fd)
                 return value if isinstance(value, dict) else {}
+            except FileNotFoundError:
+                return {}
+            except OSError:
+                read_errors += 1
+                return {}
             except Exception:
                 return {}
 
         def utc(timestamp):
             return datetime.datetime.fromtimestamp(timestamp, datetime.timezone.utc).isoformat(timespec='seconds')
 
+        def classify(fd, ds):
+            events = owned_stat(fd, 'events.jsonl')
+            exit_stat = owned_stat(fd, 'exit.txt')
+            if events is None and exit_stat is None:
+                return None  # legacy review-only directory, not a run
+            exit_code = None
+            if exit_stat is not None and 0 < exit_stat.st_size <= 16:
+                ef = os.open('exit.txt', flags | os.O_NONBLOCK, dir_fd=fd)
+                try:
+                    es = os.fstat(ef)
+                    if (not stat.S_ISREG(es.st_mode) or es.st_uid != uid
+                            or (es.st_dev, es.st_ino) != (exit_stat.st_dev, exit_stat.st_ino)):
+                        raise ValueError('exit marker changed')
+                    if 0 < es.st_size <= 16:
+                        raw = os.read(ef, 17)
+                        raw = raw.strip() if len(raw) <= 16 else b''
+                        if raw == b'TIMEOUT':
+                            exit_code = 'TIMEOUT'
+                        elif re.fullmatch(rb'[0-9]{1,16}', raw):
+                            exit_code = int(raw)
+                finally:
+                    os.close(ef)
+            last = events.st_mtime if events is not None else ds.st_mtime
+            state = ('done' if exit_code == 0 else 'failed') if exit_code is not None else (
+                'running' if events is not None and -60 <= now.timestamp() - last <= EXTERNAL_STALE_S else 'stale')
+            activity = max(last, exit_stat.st_mtime) if exit_code is not None else last
+            return {'events': events, 'exit_code': exit_code, 'state': state, 'activity': activity}
+
         root = os.fspath(root)
         if not os.path.isabs(root):
             raise ValueError('absolute root required')
         root_fd = os.open('/', flags | os.O_DIRECTORY)
+        unfinished, finished = [], []
+        unfinished_count = finished_count = 0
+        counts = {'running': 0, 'stale': 0, 'done': 0, 'failed': 0}
+        scan_incomplete = False
+        read_errors = 0
         runs = []
-        truncated = False
         try:
             for component in root.split('/'):
                 if component:
@@ -108,7 +146,6 @@ def external_runs(root, now):
                     root_fd = child
             if os.fstat(root_fd).st_uid != uid:
                 raise ValueError('unexpected root owner')
-            newest = []
             with os.scandir(root_fd) as entries:
                 for _ in range(5000):
                     entry = next(entries, None)
@@ -124,79 +161,94 @@ def external_runs(root, now):
                         ds = owned_stat(root_fd, name, directory=True)
                         if ds is None:
                             continue
-                        candidate = (ds.st_mtime, name)
-                        if len(newest) < 400:
-                            heapq.heappush(newest, candidate)
-                        else:
-                            truncated = True
-                            heapq.heappushpop(newest, candidate)
-                    except OSError:
-                        continue
+                        fd, ds = open_dir(root_fd, name)
+                        try:
+                            observed = classify(fd, ds)
+                            if observed is None:
+                                continue
+                            counts[observed['state']] += 1
+                            if observed['exit_code'] is None:
+                                unfinished_count += 1
+                                heap = unfinished
+                            else:
+                                finished_count += 1
+                                heap = finished
+                            candidate = (observed['activity'], name,
+                                         (ds.st_dev, ds.st_ino), observed)
+                            if len(heap) < 10:
+                                heapq.heappush(heap, candidate)
+                            else:
+                                heapq.heappushpop(heap, candidate)
+                        finally:
+                            os.close(fd)
+                    except Exception:
+                        read_errors += 1
                 else:
-                    truncated = True  # cap reached; the iterator was not exhausted
-            for _, name in sorted(newest, reverse=True):
+                    scan_incomplete = True  # do not consume entry 5001 to prove exhaustion
+            for _, name, identity, observed in sorted(unfinished + finished, reverse=True):
                 tag = name.split('-evidence-', 1)[1]
                 try:
                     fd, ds = open_dir(root_fd, name)
                     try:
-                        events = owned_stat(fd, 'events.jsonl')
-                        exit_stat = owned_stat(fd, 'exit.txt')
-                        if events is None and exit_stat is None:
-                            continue  # legacy review-only directories are not runs
+                        if (ds.st_dev, ds.st_ino) != identity:
+                            raise ValueError('selected directory replaced')
+                        current = classify(fd, ds)
+                        if current is None:
+                            raise ValueError('selected markers disappeared')
+                        if current != observed:
+                            scan_incomplete = True
+                        if current['state'] != observed['state']:
+                            counts[observed['state']] -= 1
+                            counts[current['state']] += 1
+                        if (current['exit_code'] is None) != (observed['exit_code'] is None):
+                            # Completion changed tiers after selection. Count the new
+                            # observation, omit this row rather than exceed either heap.
+                            scan_incomplete = True
+                            continue
+                        events = current['events']
                         started = ds.st_mtime
                         for marker in ('.codex', 'stderr', 'prompt.md'):
-                            s = owned_stat(fd, marker, directory=marker == '.codex')
-                            if s is not None:
-                                started = s.st_mtime
+                            marker_stat = owned_stat(fd, marker, directory=marker == '.codex')
+                            if marker_stat is not None:
+                                started = marker_stat.st_mtime
                                 break
-                        exit_code = None
-                        if exit_stat is not None and 0 < exit_stat.st_size <= 16:
-                            ef = os.open('exit.txt', flags | os.O_NONBLOCK, dir_fd=fd)
-                            try:
-                                es = os.fstat(ef)
-                                if stat.S_ISREG(es.st_mode) and es.st_uid == uid and 0 < es.st_size <= 16:
-                                    raw = os.read(ef, 16).strip()
-                                    if len(raw) <= 16:
-                                        if raw == b'TIMEOUT':
-                                            exit_code = 'TIMEOUT'
-                                        elif re.fullmatch(rb'[0-9]{1,16}', raw):
-                                            exit_code = int(raw)
-                            finally:
-                                os.close(ef)
-                        last = events.st_mtime if events is not None else ds.st_mtime
-                        state = ('done' if exit_code == 0 else 'failed') if exit_code is not None else (
-                            'running' if -60 <= now.timestamp() - last <= EXTERNAL_STALE_S else 'stale')
                         result = optional_json(fd, 'result.json', 65536)
                         meta = optional_json(fd, 'meta.json', 1024)
                         reviewed = sha(result.get('reviewed_sha'))
                         run = {'tag': tag, 'kind': 'author' if name.startswith('author-evidence-') else (
                             'diagnosis' if 'diagnosis' in tag else 'qa'),
-                            'state': state, 'started_utc': utc(started),
+                            'state': current['state'], 'started_utc': utc(started),
                             'last_event_utc': utc(events.st_mtime) if events is not None else None,
-                            'age_s': max(0, int(now.timestamp() - (events.st_mtime if events is not None else started))),
-                            'exit_code': exit_code,
+                            'age_s': max(0, int(now.timestamp() - (events.st_mtime if events is not None else ds.st_mtime))),
+                            'exit_code': current['exit_code'],
                             'verdict': result.get('verdict') if result.get('verdict') in ('PASS', 'FAIL', 'BLOCKED') else None,
                             'reviewed_sha': reviewed[:12] if reviewed else None}
                         for key in ('role', 'model'):
                             value = meta.get(key)
                             run[key] = value if isinstance(value, str) and re.fullmatch(r'[A-Za-z0-9._ -]{1,40}', value) else None
-                        activity = max(last, exit_stat.st_mtime) if exit_stat is not None else last
-                        runs.append((activity, name, run))
+                        runs.append((current['activity'], name, run))
                     finally:
                         os.close(fd)
                 except Exception:
-                    continue
+                    read_errors += 1
         finally:
             os.close(root_fd)
         runs.sort(key=lambda r: (r[0], r[1]), reverse=True)
-        active = [r for r in runs if r[2]['state'] in ('running', 'stale')]
-        finished = [r for r in runs if r[2]['state'] in ('done', 'failed')]
-        selected = sorted(active[:10] + finished[:10], key=lambda r: (r[0], r[1]), reverse=True)
+        # Reserve the byte budget for unfinished rows first, then finished rows.
+        selected, row_bytes = [], 0
+        for activity, name, run in sorted(runs, key=lambda r: r[2]['exit_code'] is not None):
+            size = len(json.dumps(run, separators=(',', ':')).encode()) + 1
+            if row_bytes + size <= 7600:
+                selected.append((activity, name, run))
+                row_bytes += size
+        selected.sort(key=lambda r: (r[0], r[1]), reverse=True)
+        omitted = unfinished_count + finished_count - len(selected)
         return {'available': True, 'generated_utc': now.isoformat(timespec='seconds'),
-                'running': len(active), 'runs': [r[2] for r in selected], 'truncated': truncated}
+                'running': counts['running'], 'stale': counts['stale'], 'omitted': omitted,
+                'runs': [r[2] for r in selected], 'truncated': bool(scan_incomplete or read_errors or omitted)}
     except Exception:
         return {'available': False, 'generated_utc': now.isoformat(timespec='seconds'),
-                'running': 0, 'runs': [], 'truncated': False}
+                'running': 0, 'stale': 0, 'omitted': 0, 'runs': [], 'truncated': False}
 
 
 def load_titles(path):
