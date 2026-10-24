@@ -101,6 +101,56 @@ class DynamicProcessLoader(GitFixture):
             'execl("/usr/bin/python3", "python3", "scripts/chatops/tests/test_example.py")\n',
             reusable=False)
 
+    def test_rebound_subprocess_module_requires_addressed_qa(self):
+        self.check_loader(
+            'import subprocess\n'
+            'executor = subprocess\n'
+            'executor.run(["python3", "scripts/chatops/tests/test_example.py"])\n',
+            reusable=False)
+
+    def test_rebound_os_module_requires_addressed_qa(self):
+        self.check_loader(
+            'import os\n'
+            'launcher = os\n'
+            'launcher.execl("/usr/bin/python3", "python3", '
+            '"scripts/chatops/tests/test_example.py")\n',
+            reusable=False)
+
+    def test_tuple_rebound_process_modules_requires_addressed_qa(self):
+        self.check_loader(
+            'import subprocess, os\n'
+            'executor, launcher = subprocess, os\n'
+            'executor.run(["python3", "scripts/chatops/tests/test_example.py"])\n',
+            reusable=False)
+
+    def test_passed_subprocess_module_requires_addressed_qa(self):
+        self.check_loader(
+            'import subprocess\n'
+            'def invoke(executor):\n'
+            '    return executor.run(["python3", "scripts/chatops/tests/test_example.py"])\n'
+            'invoke(subprocess)\n',
+            reusable=False)
+
+    def test_module_introspection_requires_addressed_qa(self):
+        self.check_loader(
+            'import os\n'
+            'invoke = os.__dict__["execve"]\n'
+            'invoke("/usr/bin/python3", ["python3", '
+            '"scripts/chatops/tests/test_example.py"], {})\n',
+            reusable=False)
+
+    def test_benign_os_path_member_preserves_test_only_reuse(self):
+        self.check_loader(
+            'import os\n'
+            'README = os.path.join("docs", "README.md")\n',
+            reusable=True)
+
+    def test_benign_subprocess_pipe_constant_preserves_test_only_reuse(self):
+        self.check_loader(
+            'import subprocess\n'
+            'PIPE = subprocess.PIPE\n',
+            reusable=True)
+
     def test_benign_path_literal_preserves_test_only_reuse(self):
         self.check_loader(
             'from pathlib import Path\n'
