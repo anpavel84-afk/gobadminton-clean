@@ -1,6 +1,6 @@
 # Стратегия качества
 
-Статус: **TECH_SELECTED**, тесты приложения ещё не реализованы. Проверка foundation не является независимым QA.
+Статус: **TECH_SELECTED — стратегия и критерии проверки**, не отчёт о текущем покрытии приложения. Фактически реализованные тесты и их результат подтверждаются exact-source CI/evidence; проверка foundation не является независимым QA. Устаревшее утверждение foundation-этапа об отсутствии всех тестов не переносится на сегодняшнюю реализацию.
 
 ## Уровни проверки
 
@@ -25,4 +25,4 @@ Design Director принимает направление; Visual Designer со�
 
 ## Release blockers
 
-Любой обход прав, утечка PII/секретов, overbooking, потеря committed participation, невозможность отмены или непроверенное восстановление real-data системы блокирует соответствующий release. SLO и store/legal gates: [наблюдаемость](../operations/OBSERVABILITY_AND_SLO.md), [открытые решения](../manifest/OPEN_DECISIONS.md).
+Любой обход прав, утечка PII/секретов, overbooking, потеря committed participation, невозможность отмены или непроверенное восстановление real-data системы блокирует соответствующий release. SLO и store/legal gates: исторический `OBSERVABILITY_AND_SLO.md` (отсутствует в Clean extraction; требования не отменены), [открытые решения](../manifest/OPEN_DECISIONS.md).
