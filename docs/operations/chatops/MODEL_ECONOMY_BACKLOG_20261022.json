@@ -1,0 +1,535 @@
+{
+  "schema": "GB_BACKLOG_COST_AUDIT_V1",
+  "as_of": "2026-10-22",
+  "source_scope": "Canonical Issues/current root planning plus historically recorded future scope; NOT a Projects-priority synchronization or new admission.",
+  "current": [
+    {
+      "issue": 1,
+      "title": "Historical controller/backlog record",
+      "scope_state": "ops_or_historical_not_an_executor_admission",
+      "author_route": null,
+      "qa_route": null,
+      "risk": "no fresh scope",
+      "reason": "No automatic replay/admission. Existing root budgets, recovery and assignments preserved.",
+      "deterministic_checks": "First inspect exact current durable authorization/evidence; no model run just to fill a slot."
+    },
+    {
+      "issue": 2,
+      "title": "Historical controller/backlog record",
+      "scope_state": "ops_or_historical_not_an_executor_admission",
+      "author_route": null,
+      "qa_route": null,
+      "risk": "no fresh scope",
+      "reason": "No automatic replay/admission. Existing root budgets, recovery and assignments preserved.",
+      "deterministic_checks": "First inspect exact current durable authorization/evidence; no model run just to fill a slot."
+    },
+    {
+      "issue": 3,
+      "title": "Historical controller/backlog record",
+      "scope_state": "ops_or_historical_not_an_executor_admission",
+      "author_route": null,
+      "qa_route": null,
+      "risk": "no fresh scope",
+      "reason": "No automatic replay/admission. Existing root budgets, recovery and assignments preserved.",
+      "deterministic_checks": "First inspect exact current durable authorization/evidence; no model run just to fill a slot."
+    },
+    {
+      "issue": 4,
+      "title": "Historical controller/backlog record",
+      "scope_state": "ops_or_historical_not_an_executor_admission",
+      "author_route": null,
+      "qa_route": null,
+      "risk": "no fresh scope",
+      "reason": "No automatic replay/admission. Existing root budgets, recovery and assignments preserved.",
+      "deterministic_checks": "First inspect exact current durable authorization/evidence; no model run just to fill a slot."
+    },
+    {
+      "issue": 5,
+      "title": "P2 · Fresh Friends, Messaging and Games roadmap after DEV stabilization",
+      "scope_state": "ops_or_historical_not_an_executor_admission",
+      "author_route": null,
+      "qa_route": null,
+      "risk": "no fresh scope",
+      "reason": "No automatic replay/admission. Existing root budgets, recovery and assignments preserved.",
+      "deterministic_checks": "First inspect exact current durable authorization/evidence; no model run just to fill a slot."
+    },
+    {
+      "issue": 6,
+      "title": "P0 · Canonical Git cutover: archive legacy, rebind authorized executors",
+      "scope_state": "ops_or_historical_not_an_executor_admission",
+      "author_route": null,
+      "qa_route": null,
+      "risk": "no fresh scope",
+      "reason": "No automatic replay/admission. Existing root budgets, recovery and assignments preserved.",
+      "deterministic_checks": "First inspect exact current durable authorization/evidence; no model run just to fill a slot."
+    },
+    {
+      "issue": 14,
+      "title": "Germany DEV · publish pinned Moscow MapLibre/PMTiles assets locally, with rollback",
+      "scope_state": "ops_or_historical_not_an_executor_admission",
+      "author_route": null,
+      "qa_route": null,
+      "risk": "no fresh scope",
+      "reason": "No automatic replay/admission. Existing root budgets, recovery and assignments preserved.",
+      "deterministic_checks": "First inspect exact current durable authorization/evidence; no model run just to fill a slot."
+    },
+    {
+      "issue": 23,
+      "title": "CI blocker: restore foundation references and reconcile auth/avatar mutation contracts",
+      "scope_state": "ops_or_historical_not_an_executor_admission",
+      "author_route": null,
+      "qa_route": null,
+      "risk": "no fresh scope",
+      "reason": "No automatic replay/admission. Existing root budgets, recovery and assignments preserved.",
+      "deterministic_checks": "First inspect exact current durable authorization/evidence; no model run just to fill a slot."
+    },
+    {
+      "issue": 29,
+      "title": "P0 · Commission autonomous GitHub Issue → Codex → QA → CI → DEV loop",
+      "scope_state": "ops_or_historical_not_an_executor_admission",
+      "author_route": null,
+      "qa_route": null,
+      "risk": "no fresh scope",
+      "reason": "No automatic replay/admission. Existing root budgets, recovery and assignments preserved.",
+      "deterministic_checks": "First inspect exact current durable authorization/evidence; no model run just to fill a slot."
+    },
+    {
+      "issue": 53,
+      "title": "Owner: audit venue photo library — real badminton court and net imagery",
+      "scope_state": "proposed_route_not_an_amendment",
+      "author_route": "codex:gpt-6-luna:medium",
+      "qa_route": "codex:gpt-6-luna:medium",
+      "risk": "low",
+      "reason": "Photo-library content audit, not software architecture.",
+      "deterministic_checks": "inventory/source/license/image checks by operator"
+    },
+    {
+      "issue": 69,
+      "title": "Owner · VPS watchdog трейна без GPT и уведомления через SMTP",
+      "scope_state": "proposed_route_not_an_amendment",
+      "author_route": "codex:gpt-6.1-sol:high",
+      "qa_route": "codex:gpt-6.1-sol:medium",
+      "risk": "medium",
+      "reason": "Existing non-LLM watchdog configuration and SMTP commissioning.",
+      "deterministic_checks": "unit/dedup/backoff/actual transport receipts"
+    },
+    {
+      "issue": 94,
+      "title": "M1d: состояния маркеров и разведение пересекающихся точек",
+      "scope_state": "preserve_deferred_history_no_new_call",
+      "author_route": null,
+      "qa_route": null,
+      "risk": "no fresh scope",
+      "reason": "No automatic replay/admission. Existing root budgets, recovery and assignments preserved.",
+      "deterministic_checks": "First inspect exact current durable authorization/evidence; no model run just to fill a slot."
+    },
+    {
+      "issue": 96,
+      "title": "M0b: карта не должна пропадать на iPhone (жизненный цикл, лог, mapdebug)",
+      "scope_state": "preserve_deferred_history_no_new_call",
+      "author_route": null,
+      "qa_route": null,
+      "risk": "no fresh scope",
+      "reason": "No automatic replay/admission. Existing root budgets, recovery and assignments preserved.",
+      "deterministic_checks": "First inspect exact current durable authorization/evidence; no model run just to fill a slot."
+    },
+    {
+      "issue": 117,
+      "title": "M3: развёрнутый попап площадки поверх карты (стрелка вверх, без переходов)",
+      "scope_state": "preserve_deferred_history_no_new_call",
+      "author_route": null,
+      "qa_route": null,
+      "risk": "no fresh scope",
+      "reason": "No automatic replay/admission. Existing root budgets, recovery and assignments preserved.",
+      "deterministic_checks": "First inspect exact current durable authorization/evidence; no model run just to fill a slot."
+    },
+    {
+      "issue": 127,
+      "title": "M3 v8: развёрнутый попап площадки поверх карты (преемник #117)",
+      "scope_state": "preserve_deferred_history_no_new_call",
+      "author_route": null,
+      "qa_route": null,
+      "risk": "no fresh scope",
+      "reason": "No automatic replay/admission. Existing root budgets, recovery and assignments preserved.",
+      "deterministic_checks": "First inspect exact current durable authorization/evidence; no model run just to fill a slot."
+    },
+    {
+      "issue": 134,
+      "title": "M3 UAT 2/2 — публичные контакты площадки в попапе",
+      "scope_state": "preserve_deferred_history_no_new_call",
+      "author_route": null,
+      "qa_route": null,
+      "risk": "no fresh scope",
+      "reason": "No automatic replay/admission. Existing root budgets, recovery and assignments preserved.",
+      "deterministic_checks": "First inspect exact current durable authorization/evidence; no model run just to fill a slot."
+    },
+    {
+      "issue": 136,
+      "title": "NAV1b — волан во вкладке «Игры», уточнение формы варианта B",
+      "scope_state": "preserve_deferred_history_no_new_call",
+      "author_route": null,
+      "qa_route": null,
+      "risk": "no fresh scope",
+      "reason": "No automatic replay/admission. Existing root budgets, recovery and assignments preserved.",
+      "deterministic_checks": "First inspect exact current durable authorization/evidence; no model run just to fill a slot."
+    },
+    {
+      "issue": 141,
+      "title": "M3-PHOTO: фото выбранной площадки без позднего появления в попапе",
+      "scope_state": "preserve_deferred_history_no_new_call",
+      "author_route": null,
+      "qa_route": null,
+      "risk": "no fresh scope",
+      "reason": "No automatic replay/admission. Existing root budgets, recovery and assignments preserved.",
+      "deterministic_checks": "First inspect exact current durable authorization/evidence; no model run just to fill a slot."
+    },
+    {
+      "issue": 144,
+      "title": "M3-PHOTO-R2: устранить зависание теста и выпустить ускорение фото",
+      "scope_state": "preserve_deferred_history_no_new_call",
+      "author_route": null,
+      "qa_route": null,
+      "risk": "no fresh scope",
+      "reason": "No automatic replay/admission. Existing root budgets, recovery and assignments preserved.",
+      "deterministic_checks": "First inspect exact current durable authorization/evidence; no model run just to fill a slot."
+    },
+    {
+      "issue": 149,
+      "title": "M2R: карточка игрока и ближайшие публичные игры поверх карты",
+      "scope_state": "preserve_deferred_history_no_new_call",
+      "author_route": null,
+      "qa_route": null,
+      "risk": "no fresh scope",
+      "reason": "No automatic replay/admission. Existing root budgets, recovery and assignments preserved.",
+      "deterministic_checks": "First inspect exact current durable authorization/evidence; no model run just to fill a slot."
+    },
+    {
+      "issue": 156,
+      "title": "M3-OWNER: фото игр, контакты по макету и создание игры внутри попапа",
+      "scope_state": "preserve_deferred_history_no_new_call",
+      "author_route": null,
+      "qa_route": null,
+      "risk": "no fresh scope",
+      "reason": "No automatic replay/admission. Existing root budgets, recovery and assignments preserved.",
+      "deterministic_checks": "First inspect exact current durable authorization/evidence; no model run just to fill a slot."
+    },
+    {
+      "issue": 170,
+      "title": "V1a · Профиль площадки: единая модель, публичные данные и API",
+      "scope_state": "preserve_deferred_history_no_new_call",
+      "author_route": null,
+      "qa_route": null,
+      "risk": "no fresh scope",
+      "reason": "No automatic replay/admission. Existing root budgets, recovery and assignments preserved.",
+      "deterministic_checks": "First inspect exact current durable authorization/evidence; no model run just to fill a slot."
+    },
+    {
+      "issue": 155,
+      "title": "OPS: продолжение двух слотов при обновлении DEV, сбое CI и блокировке отдельной задачи",
+      "scope_state": "ops_or_historical_not_an_executor_admission",
+      "author_route": null,
+      "qa_route": null,
+      "risk": "no fresh scope",
+      "reason": "No automatic replay/admission. Existing root budgets, recovery and assignments preserved.",
+      "deterministic_checks": "First inspect exact current durable authorization/evidence; no model run just to fill a slot."
+    },
+    {
+      "issue": 158,
+      "title": "OPS · Actions-owned train: bounded VPS stages, preserved budgets and multi-CLI routing",
+      "scope_state": "ops_or_historical_not_an_executor_admission",
+      "author_route": null,
+      "qa_route": null,
+      "risk": "no fresh scope",
+      "reason": "No automatic replay/admission. Existing root budgets, recovery and assignments preserved.",
+      "deterministic_checks": "First inspect exact current durable authorization/evidence; no model run just to fill a slot."
+    },
+    {
+      "issue": 171,
+      "title": "UAT · Мобильная форма создания игры и компактные карточки в попапе площадки (#156)",
+      "scope_state": "proposed_route_not_an_amendment",
+      "author_route": "codex:gpt-6.1-sol:high",
+      "qa_route": "codex:gpt-6.1-sol:medium",
+      "risk": "medium",
+      "reason": "Existing narrow UAT forms/layout; already released via dedicated path.",
+      "deterministic_checks": "type/lint/UI geometry, iPhone Owner evidence"
+    },
+    {
+      "issue": 174,
+      "title": "UAT · Контраст CTA, отступ выбора фото и действия с игрой в попапе карты",
+      "scope_state": "proposed_route_not_an_amendment",
+      "author_route": "codex:gpt-6.1-sol:high",
+      "qa_route": "codex:gpt-6.1-sol:medium",
+      "risk": "medium",
+      "reason": "Existing participation/share UI reused; no new invitation API.",
+      "deterministic_checks": "mutation/share/guest/unknown-response fixtures"
+    },
+    {
+      "issue": 175,
+      "title": "Монитор владельца: понятные статусы и GitHub Projects как единственный бэклог",
+      "scope_state": "proposed_route_not_an_amendment",
+      "author_route": "codex:gpt-6.1-sol:medium",
+      "qa_route": "codex:gpt-6.1-sol:medium",
+      "risk": "medium",
+      "reason": "Read-only owner monitor; privileged installer separately SolHigh review.",
+      "deterministic_checks": "Python/DOM/XSS/provenance/installer deterministic checks"
+    },
+    {
+      "issue": 177,
+      "title": "M2R-R4 · Довести карточку игрока Radar и публичные игры до DEV без сброса #149",
+      "scope_state": "proposed_route_not_an_amendment",
+      "author_route": "codex:gpt-6.1-sol:high",
+      "qa_route": "codex:gpt-6-astra:medium",
+      "risk": "high",
+      "reason": "Server viewer-scoped private-proof projection; expert privacy review may be justified, no automatic successor/reset.",
+      "deterministic_checks": "exact-CI failure reproduction, strict projection/privacy fixtures"
+    },
+    {
+      "issue": 179,
+      "title": "UAT · Жест вверх и вниз по всей свёрнутой карточке площадки",
+      "scope_state": "proposed_route_not_an_amendment",
+      "author_route": "codex:gpt-6.1-sol:medium",
+      "qa_route": "codex:gpt-6.1-sol:medium",
+      "risk": "medium",
+      "reason": "Gesture hit area in existing component; source finished separately, do not duplicate.",
+      "deterministic_checks": "touch cancel/horizontal/click/expanded state tests"
+    },
+    {
+      "issue": 181,
+      "title": "FR-3A · Рекомендация публичной игры другу: защищённый API и хранение",
+      "scope_state": "proposed_route_not_an_amendment",
+      "author_route": "codex:gpt-6.1-sol:high",
+      "qa_route": "codex:gpt-6-astra:medium",
+      "risk": "high",
+      "reason": "Accepted-friend recommendation authorization, actor/pair locks and replay; expert security QA.",
+      "deterministic_checks": "disposable DB races/idempotency/block/revocation fixtures"
+    },
+    {
+      "issue": 182,
+      "title": "FR-3B · Посоветовать игру другу и получить рекомендацию в «Моих играх»",
+      "scope_state": "proposed_route_not_an_amendment",
+      "author_route": "codex:gpt-6.1-sol:medium",
+      "qa_route": "codex:gpt-6.1-sol:medium",
+      "risk": "medium",
+      "reason": "Dependent recommendations UI; no server permission changes in scope.",
+      "deterministic_checks": "UI/session/API-contract fixtures; dependency181 required"
+    },
+    {
+      "issue": 184,
+      "title": "MAP-FILTER · Фильтры площадок и игроков на общей карте",
+      "scope_state": "proposed_route_not_an_amendment",
+      "author_route": "codex:gpt-6.1-sol:high",
+      "qa_route": "codex:gpt-6.1-sol:medium",
+      "risk": "medium",
+      "reason": "Shared map state/camera/filter interactions; QA checks existing components and layer consent.",
+      "deterministic_checks": "map lifecycle/filter/consent snapshots and mobile evidence"
+    },
+    {
+      "issue": 185,
+      "title": "OPS · Ограниченный пересмотр отложенных задач и продолжение Actions train",
+      "scope_state": "ops_or_historical_not_an_executor_admission",
+      "author_route": null,
+      "qa_route": null,
+      "risk": "no fresh scope",
+      "reason": "No automatic replay/admission. Existing root budgets, recovery and assignments preserved.",
+      "deterministic_checks": "First inspect exact current durable authorization/evidence; no model run just to fill a slot."
+    },
+    {
+      "issue": 199,
+      "title": "OPS V2 · Этапное планирование задач и маршрутизация Cursor / Codex Astra / Antigravity",
+      "scope_state": "completed_ops_no_new_call",
+      "author_route": null,
+      "qa_route": null,
+      "risk": "no fresh scope",
+      "reason": "No automatic replay/admission. Existing root budgets, recovery and assignments preserved.",
+      "deterministic_checks": "First inspect exact current durable authorization/evidence; no model run just to fill a slot."
+    },
+    {
+      "issue": 205,
+      "title": "V1b-1 · Публичный профиль площадки: факты и безопасные контакты",
+      "scope_state": "proposed_route_not_an_amendment",
+      "author_route": "codex:gpt-6.1-sol:medium",
+      "qa_route": "codex:gpt-6.1-sol:medium",
+      "risk": "medium",
+      "reason": "Existing public projection and UI guards; ESLint caught the only a1 finding.",
+      "deterministic_checks": "ESLint/typecheck/UI null-private-stale fixtures"
+    },
+    {
+      "issue": 207,
+      "title": "V3b · Редактирование публичных контактов и профиля площадки в админке",
+      "scope_state": "proposed_route_not_an_amendment",
+      "author_route": "codex:gpt-6.1-sol:high",
+      "qa_route": "codex:gpt-6.1-sol:medium",
+      "risk": "high",
+      "reason": "Author handles edit/replay/unknown-outcome state; ordinary QA SolMedium, SolHigh only on reproduced blocker.",
+      "deterministic_checks": "admin transport/state-machine tests, CSRF/version/409/429 fixtures"
+    },
+    {
+      "issue": 208,
+      "title": "OPS · Допуск через Owner-комментарий, объединение reconcile и измеримый простой слотов",
+      "scope_state": "completed_ops_no_new_call",
+      "author_route": null,
+      "qa_route": null,
+      "risk": "no fresh scope",
+      "reason": "No automatic replay/admission. Existing root budgets, recovery and assignments preserved.",
+      "deterministic_checks": "First inspect exact current durable authorization/evidence; no model run just to fill a slot."
+    },
+    {
+      "issue": 211,
+      "title": "Historical controller/backlog record",
+      "scope_state": "proposed_route_not_an_amendment",
+      "author_route": "codex:gpt-6.1-sol:high",
+      "qa_route": "codex:gpt-6.1-sol:high",
+      "risk": "high",
+      "reason": "Routing/immutable-admission/runtime boundary code; independent source and installer QA.",
+      "deterministic_checks": "171+ source regressions, interruption/preservation/hosted proof"
+    }
+  ],
+  "future": [
+    {
+      "backlog": "MAP-PERF1",
+      "author_complexity": "complex",
+      "qa_complexity": "standard",
+      "reason": "Map preload/lifecycle; preserve existing accepted loaders.",
+      "admitted": false
+    },
+    {
+      "backlog": "V1b remaining game contacts",
+      "author_complexity": "complex",
+      "qa_complexity": "complex",
+      "reason": "Use existing role-scoped contract; no private instructions to guests.",
+      "admitted": false
+    },
+    {
+      "backlog": "V2 contact import",
+      "author_complexity": "simple",
+      "qa_complexity": "simple",
+      "reason": "Operator deterministic import/source report; no LLM needed for file/SQL execution.",
+      "admitted": false
+    },
+    {
+      "backlog": "M0d mapdebug",
+      "author_complexity": "standard",
+      "qa_complexity": "standard",
+      "reason": "No coordinates/tokens in logging.",
+      "admitted": false
+    },
+    {
+      "backlog": "M5 animation",
+      "author_complexity": "standard",
+      "qa_complexity": "standard",
+      "reason": "Reduced motion and existing patterns.",
+      "admitted": false
+    },
+    {
+      "backlog": "M7 city registry",
+      "author_complexity": "complex",
+      "qa_complexity": "standard",
+      "reason": "Separate future approved city/map data scope.",
+      "admitted": false
+    },
+    {
+      "backlog": "D1 phone/create-game",
+      "author_complexity": "standard",
+      "qa_complexity": "standard",
+      "reason": "Deferred product decision; not admitted by this audit.",
+      "admitted": false
+    },
+    {
+      "backlog": "ML614 Safari",
+      "author_complexity": "complex",
+      "qa_complexity": "complex",
+      "reason": "Reproduce first, avoid unproven dependency updates.",
+      "admitted": false
+    },
+    {
+      "backlog": "T0a-2 booking checklist",
+      "author_complexity": "standard",
+      "qa_complexity": "standard",
+      "reason": "Existing contacts, no platform booking.",
+      "admitted": false
+    },
+    {
+      "backlog": "T0a-4 booking status",
+      "author_complexity": "standard",
+      "qa_complexity": "standard",
+      "reason": "Organizer flag, no seat reservation.",
+      "admitted": false
+    },
+    {
+      "backlog": "T2 attendance/outcomes",
+      "author_complexity": "complex",
+      "qa_complexity": "complex",
+      "reason": "State/concurrency fixtures first; expert escalation only concrete safety evidence.",
+      "admitted": false
+    },
+    {
+      "backlog": "T4 dispute moderation",
+      "author_complexity": "complex",
+      "qa_complexity": "complex",
+      "reason": "Existing authority/audit/appeal boundaries.",
+      "admitted": false
+    },
+    {
+      "backlog": "T5 reminders",
+      "author_complexity": "complex",
+      "qa_complexity": "standard",
+      "reason": "Bounded scheduling, idempotent dedup.",
+      "admitted": false
+    },
+    {
+      "backlog": "T6 reviews/replies",
+      "author_complexity": "complex",
+      "qa_complexity": "complex",
+      "reason": "Participant rights, single reply/report semantics.",
+      "admitted": false
+    },
+    {
+      "backlog": "T7 level appeals",
+      "author_complexity": "complex",
+      "qa_complexity": "complex",
+      "reason": "Bounded abuse controls and Owner-approved scope first.",
+      "admitted": false
+    },
+    {
+      "backlog": "T8 trainer rating",
+      "author_complexity": "standard",
+      "qa_complexity": "standard",
+      "reason": "Depends on approved rating/participation model.",
+      "admitted": false
+    },
+    {
+      "backlog": "FR8 private recommendations",
+      "author_complexity": "complex",
+      "qa_complexity": "expert",
+      "reason": "Not authorized; explicit future visibility/security decision required.",
+      "admitted": false
+    },
+    {
+      "backlog": "I1 actual cover import",
+      "author_complexity": "simple",
+      "qa_complexity": "simple",
+      "reason": "Check real report then bounded operator operation, no duplicate CLI development.",
+      "admitted": false
+    }
+  ],
+  "usage": {
+    "observed_astra_high_calls": [
+      {
+        "issue": 203,
+        "qa_calls": 1
+      },
+      {
+        "issue": 205,
+        "qa_calls": 2
+      },
+      {
+        "issue": 207,
+        "qa_calls": 1
+      }
+    ],
+    "source": "Exact root operation routing receipts",
+    "money": null,
+    "tokens": null,
+    "savings": "No monetary or realized savings claimed. Compare measured future model-call classes and deterministic checks skipped, preserving quality."
+  }
+}

@@ -4,13 +4,11 @@
 
 ## Источники реализации
 
-На default branch код контроллера не копируется: ссылки ниже указывают exact принятую dev-ревизию, а не установленный runtime.
-
 - [train-dispatch.yml](../../../.github/workflows/train-dispatch.yml) — bounded reconcile.
 - [train-stage.yml](../../../.github/workflows/train-stage.yml) — один ограниченный этап.
-- [core.py](https://github.com/anpavel84-afk/gobadminton-clean/blob/0da396b4dcd5eefceb0cae11ba118cc1941fb53a/scripts/chatops/actions_train/core.py) — закрытый wire contract, проверка и маршрутизация.
-- [stage.py](https://github.com/anpavel84-afk/gobadminton-clean/blob/0da396b4dcd5eefceb0cae11ba118cc1941fb53a/scripts/chatops/actions_train/stage.py), [receiver.py](https://github.com/anpavel84-afk/gobadminton-clean/blob/0da396b4dcd5eefceb0cae11ba118cc1941fb53a/scripts/chatops/actions_train/receiver.py) — этап и серверная граница.
-- [manifest.json](https://github.com/anpavel84-afk/gobadminton-clean/blob/0da396b4dcd5eefceb0cae11ba118cc1941fb53a/scripts/chatops/actions_train/manifest.json) и проверенные host receipts — происхождение bundle/установки, не interchangeable evidence.
+- [core.py](../../../scripts/chatops/actions_train/core.py) — закрытый wire contract, проверка и маршрутизация.
+- [stage.py](../../../scripts/chatops/actions_train/stage.py), [receiver.py](../../../scripts/chatops/actions_train/receiver.py) — этап и серверная граница.
+- [manifest.json](../../../scripts/chatops/actions_train/manifest.json) и проверенные host receipts — происхождение bundle/установки, не interchangeable evidence.
 
 Читать конкретную принятую ревизию, а не брать latest из старого текста. Код на ветке, зарегистрированный workflow, checkout SHA workflow и установленный root pin могут различаться.
 
