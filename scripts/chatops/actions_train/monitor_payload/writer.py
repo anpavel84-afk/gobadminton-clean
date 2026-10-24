@@ -390,6 +390,130 @@ def load_backlog_strict(path, allowed_uids):
     return out
 
 
+PMA_WORK_MAX_BYTES = 65536
+PMA_WORK_MAX_ITEMS = 30
+PMA_WORK_KINDS = ('установка', 'QA-ревью', 'черновой PR', 'разбор', 'решение Owner', 'другое')
+PMA_WORK_STATUSES = ('идёт', 'ждёт Pavel', 'ждёт внешнего', 'заблокировано', 'готово')
+PMA_WORK_KEYS = {'id', 'title_ru', 'kind', 'stage_ru', 'status', 'link', 'waiting_for_ru', 'updated_utc', 'fresh_hours'}
+PMA_WORK_LINK_RE = re.compile(r'https://github\.com/anpavel84-afk/gobadminton-clean/'
+                              r'(?:(?:issues|pull)/[0-9]{1,6}(?:#[A-Za-z0-9_-]{1,40})?|commit/[0-9a-f]{7,40}|actions/runs/[0-9]{1,15})')
+PMA_WORK_FRESH_H = {'идёт': 4, 'ждёт Pavel': 24, 'ждёт внешнего': 24, 'заблокировано': 24, 'готово': 24}
+PMA_WORK_DROP_H = 72         # an unconfirmed item older than this is hidden (counted in hidden_stale)
+PMA_WORK_FILE_STALE_S = 86400
+PMA_WORK_FUTURE_S = 300
+
+
+def _pma_time(v):
+    """ISO-8601 with an explicit zone -> epoch seconds, or None."""
+    if not (isinstance(v, str) and re.fullmatch(r'20[0-9]{2}-[01][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]:[0-5][0-9](?:\.[0-9]{1,6})?(?:Z|[+-][0-9]{2}:[0-9]{2})', v)):
+        return None
+    try:
+        return datetime.datetime.fromisoformat(v.replace('Z', '+00:00')).timestamp()
+    except ValueError:
+        return None
+
+
+def load_pma_work_strict(path, allowed_uids):
+    """Strict loader for the external PMA work file (data only, updatable without root, same channel as
+    titles/backlog). Shape: {"_readme": str?, "updated_utc": ISO?, "items": [{id, title_ru, kind, stage_ru?,
+    status, link?, waiting_for_ru?, updated_utc, fresh_hours?}]}. Returns {'updated': epoch|None, 'items': [...]}
+    or None if the file is missing or invalid in ANY way. Never raises."""
+    try:
+        raw = read_json(path, PMA_WORK_MAX_BYTES, owner=None, owners=allowed_uids)
+    except Exception:
+        return None
+    if not isinstance(raw, dict) or not set(raw) <= {'_readme', 'updated_utc', 'items'} or not isinstance(raw.get('items'), list):
+        return None
+    if '_readme' in raw and not isinstance(raw['_readme'], str):
+        return None
+    updated = None
+    if 'updated_utc' in raw:
+        updated = _pma_time(raw['updated_utc'])
+        if updated is None:
+            return None
+    if len(raw['items']) > PMA_WORK_MAX_ITEMS:
+        return None
+    out, seen = [], set()
+    for v in raw['items']:
+        if not isinstance(v, dict) or not set(v) <= PMA_WORK_KEYS or not {'id', 'title_ru', 'kind', 'status', 'updated_utc'} <= set(v):
+            return None
+        i = v['id']
+        if not (isinstance(i, str) and BACKLOG_ID_RE.fullmatch(i)) or i in seen:
+            return None
+        seen.add(i)
+        if v['kind'] not in PMA_WORK_KINDS or v['status'] not in PMA_WORK_STATUSES:
+            return None
+        ts = _pma_time(v['updated_utc'])
+        if ts is None:
+            return None
+        e = {'id': i, 'kind': v['kind'], 'status': v['status'], 'updated': ts, 'link': None}
+        fh = v.get('fresh_hours')
+        if fh is not None and not (type(fh) is int and 1 <= fh <= 168):
+            return None
+        e['fresh_hours'] = fh
+        if v.get('link') is not None:
+            if not (isinstance(v['link'], str) and PMA_WORK_LINK_RE.fullmatch(v['link'])):
+                return None
+            e['link'] = v['link']
+        for f, n in (('title_ru', 160), ('stage_ru', 120), ('waiting_for_ru', 300)):
+            if f in v:
+                if not isinstance(v[f], str):
+                    return None
+                t = _clean_text(v[f])[:n]
+                if t and not SECRET_RE.search(t):   # secret-looking text is dropped, not shown
+                    e[f] = t
+        if 'title_ru' not in e:
+            return None
+        out.append(e)
+    return {'updated': updated, 'items': out}
+
+
+def pick_pma_work(ext_path):
+    uids = {0}
+    try:
+        uids.add(pwd.getpwnam(EXT_TITLES_USER).pw_uid)
+    except KeyError:
+        pass
+    return load_pma_work_strict(ext_path, uids) if ext_path else None
+
+
+def pma_work_view(data, now_ts):
+    """Public block for the monitor. Every item carries its age; items nobody confirmed within
+    fresh_hours are marked stale; very old unconfirmed items are hidden but counted; a finished item
+    disappears after 24 h. Time is recomputed on every writer run, so the page stays honest by itself."""
+    if data is None:
+        return {'available': False, 'note': 'файл «Работа вне слотов» отсутствует или не прошёл проверку',
+                'items': [], 'hidden_stale': 0, 'file_age_s': None}
+    pr = {'ждёт Pavel': 0, 'идёт': 1, 'ждёт внешнего': 2, 'заблокировано': 3, 'готово': 4}
+    items, hidden = [], 0
+    for e in data['items']:
+        age = now_ts - e['updated']
+        future = age < -PMA_WORK_FUTURE_S
+        age = max(0, int(age))
+        if e['status'] == 'готово' and age > 86400:
+            continue
+        limit = (e['fresh_hours'] or PMA_WORK_FRESH_H[e['status']]) * 3600
+        stale = future or (e['status'] != 'готово' and age > limit)
+        if stale and age > PMA_WORK_DROP_H * 3600:
+            hidden += 1
+            continue
+        v = {k: e[k] for k in ('id', 'title_ru', 'kind', 'status', 'link') }
+        for k in ('stage_ru', 'waiting_for_ru'):
+            if k in e:
+                v[k] = e[k]
+        v.update(updated_utc=datetime.datetime.fromtimestamp(e['updated'], datetime.timezone.utc).isoformat(timespec='seconds'),
+                 age_s=age, fresh=not stale, future_time=future)
+        items.append(v)
+    items.sort(key=lambda v: (pr[v['status']], not v['fresh'], v['age_s']))
+    file_age = None
+    if data['updated'] is not None:
+        file_age = max(0, int(now_ts - data['updated']))
+    elif data['items']:
+        file_age = max(0, int(now_ts - max(e['updated'] for e in data['items'])))
+    return {'available': True, 'note': None, 'items': items, 'hidden_stale': hidden, 'file_age_s': file_age,
+            'file_stale': file_age is not None and file_age > PMA_WORK_FILE_STALE_S}
+
+
 def backlog_view(items, done=(), active_issue=None, parked=()):
     """Sorted by priority (nulls last, then file order); drops items already done or currently claimed."""
     if items is None:
@@ -837,6 +961,7 @@ def main(argv=None):
     p.add_argument('--titles', default=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'titles_ru.json'))
     p.add_argument('--titles-external', default=None, help='data-only titles file updatable without root; falls back to --titles')
     p.add_argument('--backlog-external', default=None, help='data-only backlog file updatable without root (optional)')
+    p.add_argument('--pma-work-external', default='/var/lib/gb-ops-titles/pma_work_ru.json', help='data-only "work outside slots" file updatable without root (optional)')
     p.add_argument('--slot-outbox', default=SLOT_OUTBOX, help='public slot1/slot2 outbox; auto-discovery, never private slot state')
     p.add_argument('--no-systemd', action='store_true')
     p.add_argument('--external-root', default=pwd.getpwuid(os.geteuid()).pw_dir)
@@ -851,6 +976,7 @@ def main(argv=None):
     snap, j = build(a.state_dir, a.receipt, journal, now_utc(), show, checkpoint_owner=os.geteuid(), receipt_owner=a.receipt_owner,
                     titles=titles, titles_source=tsrc, backlog=pick_backlog(a.backlog_external), slot_outbox=a.slot_outbox)
     snap['external_runs'] = external_runs(a.external_root, now_utc())
+    snap['pma_work'] = pma_work_view(pick_pma_work(a.pma_work_external), now_utc().timestamp())
     import importlib.util
     spec = importlib.util.spec_from_file_location('gb_train_monitor', '/usr/local/lib/gb-actions-train/monitor.py')
     train_monitor = importlib.util.module_from_spec(spec); spec.loader.exec_module(train_monitor)

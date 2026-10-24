@@ -1,0 +1,25 @@
+{
+  "_readme": "Пример (тестовые данные). Живой файл: /var/lib/gb-ops-titles/pma_work_ru.json. Только русский текст, без секретов, токенов, путей и содержимого слотов.",
+  "updated_utc": "2026-10-24T20:35:00+00:00",
+  "items": [
+    {
+      "id": "pma-273",
+      "title_ru": "Установка компонента #273",
+      "kind": "установка",
+      "stage_ru": "код готов, откат подготовлен",
+      "status": "ждёт Pavel",
+      "waiting_for_ru": "Разрешить установку на VPS.",
+      "link": "https://github.com/anpavel84-afk/gobadminton-clean/issues/273",
+      "updated_utc": "2026-10-24T20:05:00+00:00"
+    },
+    {
+      "id": "pma-qa-review",
+      "title_ru": "Независимое QA-ревью через Cursor",
+      "kind": "QA-ревью",
+      "stage_ru": "ревью выполняется",
+      "status": "идёт",
+      "updated_utc": "2026-10-24T20:20:00+00:00",
+      "fresh_hours": 2
+    }
+  ]
+}

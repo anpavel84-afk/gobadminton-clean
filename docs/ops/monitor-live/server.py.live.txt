@@ -16,7 +16,7 @@ STALE_AFTER_S = 90
 KNOWN = {
     'top': ('schema', 'generated_utc', 'host', 'source_ok', 'source_error', 'queue', 'model', 'product_outside',
             'executor', 'dev', 'claim', 'parked', 'done_count', 'changed_utc', 'recent_done', 'done_all', 'backlog',
-            'source_mode', 'slots', 'counts_complete', 'parked_count', 'external_runs'),
+            'source_mode', 'slots', 'counts_complete', 'parked_count', 'external_runs', 'pma_work'),
 }
 
 

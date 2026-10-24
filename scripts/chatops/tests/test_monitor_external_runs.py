@@ -669,6 +669,7 @@ class ExternalRunsTests(unittest.TestCase):
                          '--slot-outbox', str(slots), '--titles', str(titles)])
         snapshot = json.loads((out / 'snapshot.json').read_text())
         self.assertEqual(snapshot.pop('external_runs'), self.scan())
+        self.assertEqual(snapshot.pop('pma_work')['available'], False)  # no work file in this fixture
         self.assertEqual(snapshot, baseline)
 
     def test_ui_uses_text_only_and_existing_poll(self):
