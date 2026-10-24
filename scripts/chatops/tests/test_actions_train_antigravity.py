@@ -194,7 +194,8 @@ class Collection(EvidenceTestCase):
 
     def test_real_rules_receipt_matches_exact_stdin_transport_without_mutating_metadata(self):
         import context_policy as C
-        text=(Path(__file__).resolve().parents[3]/'docs/rules/ENGINEERING_OPERATING_MODEL.md').read_text()
+        from accepted_rules_fixture import accepted_rules_text
+        text=accepted_rules_text()
         metadata={'commit':C.RULES_COMMIT,'sha256':C.RULES_SHA256,'bytes':C.RULES_SIZE,
                   'delivery':'explicit_full_stdin','revision':'1.1'}
         original=copy.deepcopy(metadata)

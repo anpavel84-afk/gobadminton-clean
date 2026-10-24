@@ -27,7 +27,7 @@ def metadata(t):
 
 class ContextExchange(unittest.TestCase):
     def test_canonical_capsules_all_roles_verbatim_and_hash_bound(self):
-        text=(ROOT/'docs/rules/ENGINEERING_OPERATING_MODEL.md').read_text()
+        text=__import__('accepted_rules_fixture').accepted_rules_text(ROOT)
         for role in E.ROLES:
             capsule=E.compile_capsule(text,role,metadata(text)['sha256'])
             self.assertIn('anpavel84-afk/gobadminton-clean',capsule)
@@ -147,7 +147,7 @@ class ContextExchange(unittest.TestCase):
 
     def test_inject_opt_in_keeps_default_full_and_proves_exact_scoped_delivery(self):
         import context_policy as C
-        text=(ROOT/'docs/rules/ENGINEERING_OPERATING_MODEL.md').read_text()
+        text=__import__('accepted_rules_fixture').accepted_rules_text(ROOT)
         m={'commit':C.RULES_COMMIT,'sha256':C.RULES_SHA256,'bytes':C.RULES_SIZE,
            'delivery':'explicit_full_stdin'}
         full,full_receipt=C.inject('exact task',True,ROOT,(text,m))
