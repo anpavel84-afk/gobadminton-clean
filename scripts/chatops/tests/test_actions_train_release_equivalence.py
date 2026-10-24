@@ -44,6 +44,58 @@ class GitFixture(unittest.TestCase):
         return self.git('rev-parse','HEAD')
 
 
+
+class DynamicProcessLoader(GitFixture):
+    """#248: unchanged runtime process loaders consume changed test bytes."""
+
+    def check_loader(self, runtime, *, reusable):
+        self.write('apps/api/src/sample.py', runtime)
+        self.write('scripts/chatops/tests/test_example.py', 'VALUE = 1\n')
+        original = self.commit('original with runtime process consumer')
+        self.write('scripts/chatops/tests/test_example.py', 'VALUE = 2\n')
+        candidate = self.commit('test-only candidate')
+        result = identity.equivalence(self.repo, original, candidate)
+        self.assertIs(result['reusable'], reusable, result)
+        if not reusable:
+            self.assertIn('loader', result['reason'])
+            self.assertIn('apps/api/src/sample.py', result['reason'])
+            self.assertTrue(all(c['kind'] == 'runtime' for c in result['changes']))
+        else:
+            self.assertIsNone(result['reason'])
+            self.assertEqual(result['changes'][0]['kind'], 'test')
+
+    def test_subprocess_run_as_loader_requires_addressed_qa(self):
+        self.check_loader(
+            'from subprocess import run as loader\n'
+            'loader(["python3", "scripts/chatops/tests/test_example.py"])\n',
+            reusable=False)
+
+    def test_subprocess_module_as_alias_requires_addressed_qa(self):
+        self.check_loader(
+            'import subprocess as executor\n'
+            'executor.run(["python3", "scripts/chatops/tests/test_example.py"])\n',
+            reusable=False)
+
+    def test_os_exec_from_import_alias_requires_addressed_qa(self):
+        self.check_loader(
+            'from os import execl as launcher\n'
+            'launcher("/bin/sh", "sh", "scripts/chatops/tests/test_example.py")\n',
+            reusable=False)
+
+    def test_os_exec_module_alias_requires_addressed_qa(self):
+        self.check_loader(
+            'import os as operating_system\n'
+            'operating_system.execve("/usr/bin/python3", '
+            '["python3", "scripts/chatops/tests/test_example.py"], {})\n',
+            reusable=False)
+
+    def test_benign_path_literal_preserves_test_only_reuse(self):
+        self.check_loader(
+            'from pathlib import Path\n'
+            'README = Path("README.md")\n',
+            reusable=True)
+
+
 class ContentReuse(GitFixture):
     def setUp(self):
         super().setUp()
