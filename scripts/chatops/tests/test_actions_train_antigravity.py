@@ -286,6 +286,10 @@ class Routing(unittest.TestCase):
 
 
 class NativeToolScope(EvidenceTestCase):
+    def setUp(self):
+        super().setUp()
+        from test_actions_train_agy_oauth_precharge import synthetic_vendor_preflight
+        synthetic_vendor_preflight(self)
     def test_authorized_successful_native_tool_steps_are_receipted(self):
         events=rows()
         for state in ('ACTIVE','DONE'):

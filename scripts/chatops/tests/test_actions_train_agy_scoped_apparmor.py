@@ -16,6 +16,9 @@ import native_antigravity as N
 POLICY=pathlib.Path(__file__).resolve().parents[1]/'ops/gb_agy_runtime.apparmor'
 
 class ScopedAgySecurity(unittest.TestCase):
+    def setUp(self):
+        from test_actions_train_agy_oauth_precharge import synthetic_vendor_preflight
+        synthetic_vendor_preflight(self)
     def test_per_executable_enforced_profile_exact_tools(self):
         text=POLICY.read_text()
         self.assertIn('profile gb-agy-runtime /opt/gb-slots/runtime/antigravity/agy flags=(attach_disconnected)',text)

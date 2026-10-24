@@ -677,6 +677,105 @@ def _arm_apparmor_onexec():
         raise OSError(ctypes.get_errno(), 'required UID978 AppArmor profile unavailable')
 
 
+
+def catalog_precharge(cwd, env, child, model):
+    """No inference and no ledger charge. Exactly the headless invocation's UID/HOME/AA/NNP.
+
+    Do not serialize raw catalogue or vendor stderr (both are untrusted).
+    The vendor's documented 'agy models' table lists one exact model ID per row.
+    """
+    need(model in MODELS, 'unreviewed Antigravity qualification model')
+    try:
+        result = subprocess.run([AGY, 'models'], cwd=cwd, env=env,
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            preexec_fn=child, timeout=60, check=False)
+    except (OSError, subprocess.SubprocessError):
+        raise ReviewError('AGY_PRECHECK_FAILED','preflight') from None
+    if (result.returncode != 0 or len(result.stdout) > 131072 or
+            len(result.stderr) > 131072):
+        raise ReviewError('AGY_PRECHECK_FAILED','preflight')
+    # Match a table row, not incidental text in an error or a descriptive line.
+    # Official example rows start with "* model-id" (some clients omit '*').
+    ids = set()
+    for line in result.stdout.decode('utf-8',errors='replace').splitlines():
+        match = re.match(r'^\s*(?:[*•-]\s*)?((?:claude|gemini)-[a-z0-9][a-z0-9.-]*)\s*(?:\(|$|\s)',line)
+        if match:
+            ids.add(match.group(1))
+    if model not in ids:
+        raise ReviewError('AGY_PRECHECK_FAILED','preflight')
+    return len(ids)
+
+
+def retain_oauth_refresh(private_auth, previous):
+    """Fail closed on a refreshed token until safely retained in 0600 UID978 store.
+
+    No credential bytes/hashes/fields leave this function in model receipts.
+    Uses an atomic same-directory replace; avoids overwriting a changed original
+    or following links. The caller operates as UID978 outside child AppArmor.
+    """
+    path = Path(private_auth)
+    # The parent is opened component-by-component with O_NOFOLLOW, not by
+    # resolving an untrusted absolute pathname. Pin that private directory
+    # before opening the exact file basename relative to its descriptor.
+    parent_fd = private_directory(path.parent, create=False)
+    try:
+        fd = os.open(path.name, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
+                     dir_fd=parent_fd)
+        try:
+            source = os.fdopen(fd, 'rb')
+        except BaseException:
+            os.close(fd)
+            raise
+        with source:
+            info = os.fstat(source.fileno())
+            need(stat.S_ISREG(info.st_mode) and info.st_uid == EXECUTOR_UID
+                 and stat.S_IMODE(info.st_mode) == 0o600 and info.st_nlink == 1,
+                 'unexpected transient OAuth metadata')
+            updated = source.read(65537)
+    finally:
+        os.close(parent_fd)
+    need(0 < len(updated) <= 65536 and type(json.loads(updated)) is dict,
+         'invalid transient OAuth format')
+    if hashlib.sha256(updated).digest() == hashlib.sha256(previous).digest():
+        return 'unchanged'
+    current = trusted(AUTH,owner=EXECUTOR_UID)
+    need(hashlib.sha256(current).digest() == hashlib.sha256(previous).digest(),
+         'persistent OAuth changed concurrently')
+    root = AUTH.parent
+    dir_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    temp_name = '.agy-refresh-' + uuid.uuid4().hex
+    created = False
+    try:
+        di = os.fstat(dir_fd)
+        need(di.st_uid == EXECUTOR_UID and not di.st_mode & 0o077,
+             'persistent OAuth directory not private')
+        fd = os.open(temp_name,os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                     0o600,dir_fd=dir_fd)
+        created = True
+        try:
+            # fdopen may fail before taking ownership of the raw descriptor.
+            # Once constructed, the context manager is the sole FD owner.
+            try:
+                target = os.fdopen(fd,'wb')
+            except BaseException:
+                os.close(fd)
+                raise
+            with target as out:
+                out.write(updated);out.flush();os.fsync(out.fileno())
+            # Another parent process cannot change the original unnoticed
+            # under this slot's existing exclusive lease; recheck immediately.
+            need(hashlib.sha256(trusted(AUTH,owner=EXECUTOR_UID)).digest()
+                 == hashlib.sha256(previous).digest(), 'OAuth replaced by another writer')
+            os.replace(temp_name,AUTH.name,src_dir_fd=dir_fd,dst_dir_fd=dir_fd)
+            created = False
+            os.fsync(dir_fd)
+        finally:
+            if created: os.unlink(temp_name,dir_fd=dir_fd)
+    finally:
+        os.close(dir_fd)
+    need(trusted(AUTH,owner=EXECUTOR_UID)==updated,'OAuth refresh durability check failed')
+    return 'persisted'
+
 def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=subprocess.Popen,
            evidence=None, evidence_dir=None, analysis=False):
     owned = evidence is None
@@ -699,7 +798,8 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=
             root=Path(temp);agents=root/'ws/.agents/agents';out=root/'out'
             native=root/'home/.gemini/antigravity-cli'
             native.mkdir(parents=True,mode=0o700);agents.mkdir(parents=True,mode=0o700);out.mkdir(mode=0o700)
-            auth=native/'antigravity-oauth-token';auth.write_bytes(trusted(AUTH,owner=EXECUTOR_UID));auth.chmod(0o600)
+            original_oauth = trusted(AUTH,owner=EXECUTOR_UID)
+            auth=native/'antigravity-oauth-token';auth.write_bytes(original_oauth);auth.chmod(0o600)
             (agents/(AGENT+'.md')).write_text(ANALYSIS_AGENT_DEF if analysis else AGENT_DEF)
             env={'PATH':'/opt/gb-slots/runtime/node/bin:/opt/gb-slots/runtime/pnpm/bin:/usr/bin:/bin',
                  'HOME':str(root/'home'),'LANG':'C.UTF-8','TMPDIR':str(out)}
@@ -727,11 +827,22 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=
                 resource.setrlimit(resource.RLIMIT_CORE,(0,0))
                 resource.setrlimit(resource.RLIMIT_FSIZE,(MAX_OUT+1,MAX_OUT+1))
             # Always retain these two bounded files before credential-temp cleanup.
+            primary_failure = None
             try:
                 with open(out/'stdout','xb') as stdout,open(out/'stderr','xb') as stderr:
                     argv=command(max(1,timeout-10),model=model,
                         **({'analysis':True,'source_root':str(source_root)} if analysis else {}))
-                    ev.record(phase='launch',charge_state='unknown',adapter_revision=marker.get('adapter_revision'))
+                    # Same private HOME, UID978, AppArmor and NNP as the
+                    # actual stream-json CLI. This probe performs no inference.
+                    # Zero ledger usage until the exact account model is listed.
+                    catalog_count = catalog_precharge(root/'ws',env,child,model)
+                    refresh_state = retain_oauth_refresh(auth,original_oauth)
+                    if refresh_state == 'persisted':
+                        original_oauth = trusted(AUTH,owner=EXECUTOR_UID)
+                    ev.record(phase='launch',charge_state='unknown',
+                        adapter_revision=marker.get('adapter_revision'),
+                        oauth_catalog_precharge='pass',catalog_model_count=catalog_count,
+                        oauth_refresh=refresh_state)
                     try:charge()
                     except BaseException:raise ReviewError('AGY_CHARGE_FAILED','launch',ev.id) from None
                     ev.record(charge_state='charged')
@@ -760,9 +871,35 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=
                     raise ReviewError('AGY_OUTPUT_LIMIT','output',ev.id)
                 if process.returncode != 0:raise ReviewError('AGY_EXIT_NONZERO','output',ev.id)
                 raw=(out/'stdout').read_bytes()
+            except BaseException as error:
+                primary_failure = error
+                raise
             finally:
-                if process is not None and process.poll() is None:reap(process)
-                ev.streams(out)
+                # Independent finalizers: neither reaping nor OAuth refresh can
+                # skip private stream retention before TemporaryDirectory cleanup.
+                reap_failed = False
+                try:
+                    if process is not None and process.poll() is None:reap(process)
+                except BaseException:
+                    reap_failed = True
+                stream_error = None
+                try:
+                    ev.streams(out)
+                except BaseException as error:
+                    stream_error = error
+                refresh_failed = False
+                try:
+                    retain_oauth_refresh(auth,original_oauth)
+                except BaseException:
+                    refresh_failed = True
+                # Only bounded closed metadata, never credential bytes or
+                # untrusted exception text. Preserve any earlier stage error.
+                if reap_failed: ev.record(process_reap='failed')
+                if refresh_failed: ev.record(oauth_refresh='failed')
+                if stream_error is not None: raise stream_error
+                if primary_failure is None:
+                    if reap_failed or refresh_failed:
+                        raise ReviewError('AGY_ADAPTER_ERROR','output',ev.id) from None
         ev.record(phase='output',terminal=owned,status='invoke_success')
         return raw,dict(executor_uid=EXECUTOR_UID,slot=slot,qualification_phase=marker['phase'],
             requested_native_sandbox=True,filesystem_boundary='uid978_apparmor_enforce_and_native_cli_sandbox',

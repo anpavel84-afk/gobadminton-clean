@@ -31,6 +31,9 @@ def metadata(definition):
 
 
 class NativeAgentExposure(unittest.TestCase):
+    def setUp(self):
+        from test_actions_train_agy_oauth_precharge import synthetic_vendor_preflight
+        synthetic_vendor_preflight(self)
     def test_both_roles_have_exact_two_native_tools(self):
         for name,definition in (('qa',N.AGENT_DEF),('analysis',N.ANALYSIS_AGENT_DEF)):
             with self.subTest(role=name):
