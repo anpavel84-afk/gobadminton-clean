@@ -13,6 +13,9 @@ import native_antigravity as N
 import cost_policy as P
 
 class ModelProtocol(unittest.TestCase):
+    def setUp(self):
+        from test_actions_train_agy_oauth_precharge import synthetic_vendor_preflight
+        synthetic_vendor_preflight(self)
     def test_requested_catalog_model_reaches_argv_and_exact_init_receipt(self):
         for model in N.MODELS:
             with self.subTest(model=model):
