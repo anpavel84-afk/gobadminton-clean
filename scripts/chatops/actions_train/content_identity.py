@@ -216,7 +216,7 @@ def independence(files, sources, changed):
                 return 'nonregular dependency consumer: ' + p
             text = source(p)
             if p.endswith('.py') and changed and not trivial_python_runtime(ast.parse(text)):
-                return ('unprovable executable Python runtime requires addressed QA: '
+                return ('unprovable executable Python runtime loader requires addressed QA: '
                         + p + ' -> ' + ', '.join(sorted(changed)))
             # A runtime consumer naming changed executable/test bytes has an
             # implicit dependency regardless of how its process loader is
