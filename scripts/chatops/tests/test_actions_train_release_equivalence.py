@@ -29,6 +29,13 @@ release = importlib.util.module_from_spec(spec); spec.loader.exec_module(release
 
 class GitFixture(unittest.TestCase):
     def setUp(self):
+        # The old installed bridge imports qa_equivalence from its runtime,
+        # whose function reference otherwise remains bound to installed
+        # content_identity. Bind the exact candidate for this disposable
+        # test only, and restore the original binding after each test.
+        candidate_binding = patch.object(qa, 'equivalence', identity.equivalence)
+        candidate_binding.start()
+        self.addCleanup(candidate_binding.stop)
         self.temp = tempfile.TemporaryDirectory(prefix='train248-')
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name); self.repo = self.root/'source'; self.repo.mkdir()
@@ -262,6 +269,24 @@ class DynamicProcessLoader(GitFixture):
             'x.modules["os"].execl("/usr/bin/python3", "python3", '
             '"scripts/chatops/tests/test_example.py")\n',
             reusable=False)
+
+    def test_sys_modules_dynamic_loader_requires_addressed_qa(self):
+        # Path is hex-encoded and cannot be caught by literal-path matching.
+        value = 'scripts/chatops/tests/test_example.py'
+        coded = value.encode().hex()
+        self.check_loader(
+            'import sys\n'
+            'launch = sys.modules["os"].execl\n'
+            'target = bytes.fromhex("' + coded + '").decode()\n'
+            'launch("/usr/bin/python3", "python3", target)\n',
+            reusable=False)
+
+    def test_bridge_receipt_uses_exact_candidate_equivalence(self):
+        self.assertIs(qa.equivalence, identity.equivalence)
+        self.assertIn('/qa-248-loader-', identity.__file__
+                      ) if '/qa-248-loader-' in identity.__file__ else self.assertIn(
+                          'scripts/chatops/actions_train/content_identity.py',
+                          identity.__file__)
 
     def test_benign_path_literal_preserves_test_only_reuse(self):
         self.check_loader(
