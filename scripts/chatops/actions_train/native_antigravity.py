@@ -23,7 +23,7 @@ AGY = '/opt/gb-slots/runtime/antigravity/agy'
 # The independent UID978 AppArmor profile is mandatory on the AGY exec edge.
 # Do not permit an unconfined fallback if the profile is not loaded.
 APPARMOR_PROFILE = b'gb-agy-runtime'
-APPARMOR_POLICY_SHA256 = '250d1b67ac03705b33f6264a83ee00035401c0dc7a7d65924739f8be0beaf458'
+APPARMOR_POLICY_SHA256 = '771033253ed459b9bcd3617bb5a2b623e4fdbc120bee83d62ea1d591d571c589'
 APPARMOR_POLICY_FILE = Path('/etc/apparmor.d/gb-agy-runtime')
 MARKER = Path('/etc/gobadminton-slots/antigravity-qa.json')
 EXECUTOR_UID = 978

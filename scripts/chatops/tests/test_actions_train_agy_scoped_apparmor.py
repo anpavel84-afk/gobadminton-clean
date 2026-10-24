@@ -47,6 +47,22 @@ class ScopedAgySecurity(unittest.TestCase):
         self.assertIn('--sandbox',N.command(45))
         self.assertNotIn('--mode',N.command(45))
 
+    def test_systemd_resolved_symlink_target_only_read_access(self):
+        # /etc/resolv.conf on Germany points to the systemd-resolved
+        # stub. AppArmor checks the resolved target, not just the link.
+        profile = POLICY.read_text()
+        exact = '  /run/systemd/resolve/stub-resolv.conf r,'
+        self.assertEqual(profile.splitlines().count(exact), 1)
+        self.assertIn('  /etc/resolv.conf r,\n' + exact + '\n', profile)
+        for forbidden in (
+            '  /run/** r,',
+            '  /run/systemd/** r,',
+            '  /run/systemd/resolve/** r,',
+            '  /run/systemd/resolve/** rw,',
+            '  /run/systemd/resolve/stub-resolv.conf rw,',
+        ):
+            self.assertNotIn(forbidden, profile)
+
     def test_precharge_hash_and_enforce_are_required(self):
         import hashlib
         import stat
