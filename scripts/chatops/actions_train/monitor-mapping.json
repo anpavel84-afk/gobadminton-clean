@@ -1,7 +1,7 @@
 {
   "schema": "GB_ACTIONS_MONITOR_MAPPING_V1",
-  "writer_before_sha256": "b16437a0336840b3b51f5ba0229225716c20e11714eda0268bad48008b6e3372",
-  "app_before_sha256": "5cc97226f17a829c8e66e55f0c03eff8a2ae0f2201e36985944e856d38287ce9",
+  "writer_before_sha256": "41f8276af830362cf0ef1d9b17b0cc428f68b49ddc70f59fd30747fcb7510de4",
+  "app_before_sha256": "1dcf052970e0ab8b06767aa74445402c1f82b8a26d618448a22bc1ffec3533c8",
   "python_module": "/usr/local/lib/gb-actions-train/monitor.py",
   "source": "/var/lib/gobadminton-deploy-evidence/actions-train.json",
   "writer_insert_before": "    data = json.dumps(snap, ensure_ascii=False, sort_keys=True, separators=(',', ':'))",

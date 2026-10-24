@@ -1,6 +1,9 @@
 """Offline metadata/privacy checks for evidence runs outside train slots."""
+import builtins
+from contextlib import contextmanager, ExitStack
 import datetime
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -55,6 +58,27 @@ class ExternalRunsTests(unittest.TestCase):
         self.assertEqual(len(block['runs']), 1)
         return block['runs'][0]
 
+    @contextmanager
+    def private_content_guard(self):
+        opened = []
+
+        def guarded(real_open):
+            def record(path, *args, **kwargs):
+                opened.append(path if isinstance(path, int) else os.fspath(path))
+                return real_open(path, *args, **kwargs)
+            return record
+
+        with ExitStack() as stack:
+            for module in (os, builtins, io):
+                stack.enter_context(patch.object(module, 'open', side_effect=guarded(module.open)))
+            try:
+                yield opened
+            finally:
+                forbidden = {'events.jsonl', 'stderr', 'prompt.md'}
+                self.assertFalse([path for path in opened if not isinstance(path, int)
+                                  and os.fsdecode(os.path.basename(path)) in forbidden],
+                                 'private content opened')
+
     def test_running_and_metadata(self):
         d = self.evidence('running', meta={'role': 'QA reviewer', 'model': 'gpt-6.1-sol'})
         (d / '.codex').mkdir()
@@ -76,6 +100,16 @@ class ExternalRunsTests(unittest.TestCase):
         states = {r['tag']: r['state'] for r in self.scan()['runs']}
         self.assertEqual(states, {'stale': 'stale', 'boundary': 'running'})
         self.assertEqual(self.scan()['running'], 2)
+
+    def test_future_activity_is_stale_beyond_clock_tolerance(self):
+        self.evidence('future', age=-61)
+        self.evidence('tolerated', age=-60)
+        self.evidence('future-no-events', events=False, exit_value='', age=-61)
+        runs = {r['tag']: r for r in self.scan()['runs']}
+        self.assertEqual(runs['future']['state'], 'stale')
+        self.assertEqual(runs['future-no-events']['state'], 'stale')
+        self.assertEqual(runs['tolerated']['state'], 'running')
+        self.assertTrue(all(r['age_s'] == 0 for r in runs.values()))
 
     def test_finished_verdicts_and_sha(self):
         for verdict in ('PASS', 'FAIL', 'BLOCKED'):
@@ -108,20 +142,31 @@ class ExternalRunsTests(unittest.TestCase):
         self.stamp(d / 'events.jsonl', 30)
         self.stamp(d / 'stderr', 120)
         self.stamp(d / 'prompt.md', 150)
-        real_open = os.open
-
-        def guarded(path, *args, **kwargs):
-            self.assertNotIn(os.fspath(path).split('/')[-1], ('events.jsonl', 'stderr', 'prompt.md'))
-            return real_open(path, *args, **kwargs)
-
-        with patch.object(writer.os, 'open', side_effect=guarded):
+        with self.private_content_guard() as opened:
             block = self.scan()
+        self.assertTrue(opened)
         runs = {r['tag']: r for r in block['runs']}
         self.assertEqual(runs['astra-diagnosis-r3']['kind'], 'diagnosis')
         self.assertIsNone(runs['astra-diagnosis-r3']['verdict'])
         self.assertEqual((runs['author-r1']['kind'], runs['author-r1']['state']), ('author', 'failed'))
         self.assertEqual(runs['author-r1']['started_utc'], (NOW - datetime.timedelta(seconds=120)).isoformat())
         self.assertNotIn(SECRET, json.dumps(block))
+
+    def test_private_content_guard_detects_mutated_open_on_every_api(self):
+        d = self.evidence('mutation')
+        (d / 'stderr').write_text(SECRET)
+        (d / 'prompt.md').write_text(SECRET)
+        for module in (os, builtins, io):
+            for name in ('events.jsonl', 'stderr', 'prompt.md'):
+                with self.subTest(api=module.__name__, name=name):
+                    with self.assertRaisesRegex(AssertionError, 'private content opened'):
+                        with self.private_content_guard() as opened:
+                            handle = module.open(d / name, os.O_RDONLY if module is os else 'r')
+                            if module is os:
+                                os.close(handle)
+                            else:
+                                handle.close()
+                    self.assertIn(str(d / name), opened)
 
     def test_legacy_nonmatching_invalid_tags_and_symlinks_ignored(self):
         d = self.evidence('legacy', events=False)
@@ -217,17 +262,55 @@ class ExternalRunsTests(unittest.TestCase):
         self.assertEqual((self.scan()['running'], len(self.scan()['runs'])), (11, 20))
         self.assertIn('active-more', [r['tag'] for r in self.scan()['runs']])
 
-    def test_scan_limit_is_sorted_and_at_most_400(self):
+    def test_scan_limit_keeps_newest_400(self):
         for i in reversed(range(402)):
-            self.evidence('%03d' % i)
+            self.evidence('%03d' % i, age=i)
         self.assertEqual(self.scan()['running'], 400)
         self.assertTrue(all(int(r['tag']) < 400 for r in self.scan()['runs']))
+        self.assertTrue(self.scan()['truncated'])
         self.assertEqual(self.scan(), self.scan())
 
+    def test_recent_running_survives_999_old_directories(self):
+        for i in range(999):
+            self.evidence('old-%03d' % i, exit_value='0', age=2000 + i)
+        self.evidence('zz-current', age=10)
+        with patch.object(writer.os, 'listdir', side_effect=AssertionError('unbounded listdir')):
+            block = self.scan()
+        self.assertTrue(block['available'])
+        self.assertTrue(block['truncated'])
+        self.assertEqual(block['running'], 1)
+        self.assertEqual((block['runs'][0]['tag'], block['runs'][0]['state']), ('zz-current', 'running'))
+        self.assertLess(len(json.dumps(block).encode()), 8000)
+
+    def test_scandir_enumeration_stops_at_5000_including_nonmatches(self):
+        d = self.evidence('current')
+        real_scandir = os.scandir
+        seen = []
+
+        @contextmanager
+        def bounded_entries(fd):
+            with real_scandir(fd) as entries:
+                current = next(entry for entry in entries if entry.name == d.name)
+
+            def generate():
+                for i in range(6000):
+                    seen.append(i)
+                    self.assertLess(i, 5000, 'enumeration cap exceeded')
+                    yield current if i == 4999 else type('Entry', (), {'name': 'ordinary'})()
+            yield generate()
+
+        with patch.object(writer.os, 'scandir', side_effect=bounded_entries):
+            block = self.scan()
+        self.assertTrue(block['available'])
+        self.assertTrue(block['truncated'])
+        self.assertEqual(len(seen), 5000)
+        self.assertEqual([r['tag'] for r in block['runs']], ['current'])
+
     def test_missing_unreadable_root_and_per_directory_error(self):
-        unavailable = {'available': False, 'runs': []}
+        unavailable = {'available': False, 'generated_utc': NOW.isoformat(),
+                       'running': 0, 'runs': [], 'truncated': False}
         self.assertEqual(writer.external_runs(self.root / 'missing', NOW), unavailable)
-        with patch.object(writer.os, 'listdir', side_effect=PermissionError):
+        with patch.object(writer.os, 'scandir', side_effect=PermissionError):
             self.assertEqual(self.scan(), unavailable)
         (self.root / 'linked-root').symlink_to(self.root, target_is_directory=True)
         self.assertEqual(writer.external_runs(self.root / 'linked-root', NOW), unavailable)
@@ -243,8 +326,25 @@ class ExternalRunsTests(unittest.TestCase):
         with patch.object(writer.os, 'open', side_effect=broken):
             self.assertEqual([r['tag'] for r in self.scan()['runs']], ['good'])
 
+    def test_root_rejects_symlinked_ancestor_nondirectory_and_relative_path(self):
+        self.evidence('visible')
+        real = self.root / 'real'
+        nested = real / 'nested'
+        nested.mkdir(parents=True)
+        link = self.root / 'linked-ancestor'
+        link.symlink_to(real, target_is_directory=True)
+        ordinary = self.root / 'ordinary-file'
+        ordinary.write_text('')
+        unavailable = {'available': False, 'generated_utc': NOW.isoformat(),
+                       'running': 0, 'runs': [], 'truncated': False}
+        for root in (link / 'nested', ordinary / 'nested', Path('.')):
+            with self.subTest(root=root):
+                self.assertEqual(writer.external_runs(root, NOW), unavailable)
+        self.assertTrue(writer.external_runs(nested, NOW)['available'])
+
     def test_empty_root(self):
-        self.assertEqual(self.scan(), {'available': True, 'generated_utc': NOW.isoformat(), 'running': 0, 'runs': []})
+        self.assertEqual(self.scan(), {'available': True, 'generated_utc': NOW.isoformat(),
+                                      'running': 0, 'runs': [], 'truncated': False})
 
     def test_main_adds_block_without_changing_build(self):
         self.evidence('main', exit_value='0', result={'verdict': 'PASS'})
@@ -298,6 +398,8 @@ class ExternalRunsTests(unittest.TestCase):
         self.assertIn('renderExternal(d.external_runs)', app)
         self.assertIn('Внешние запуски (вне слотов)', new_code)
         self.assertIn("s.id = 'external'", new_code)
+        self.assertIn("if (x.truncated === true)", new_code)
+        self.assertIn("'mut', 'Показаны не все запуски (ограничение сканирования).'", new_code)
         self.assertNotIn('fetch(', new_code)
         self.assertNotIn('setTimeout', new_code)
 

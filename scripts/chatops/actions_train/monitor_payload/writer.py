@@ -8,7 +8,7 @@ Runs as the executor's uid (like gb-grok-status) from a systemd timer, every 30 
 After public slot discovery/legacy retirement, reads only slot1/slot2 public status
 and the DEV receipt; never a private slot checkpoint or the retired legacy state.
 """
-import datetime, json, os, pwd, re, stat, subprocess, sys, tempfile
+import datetime, heapq, json, os, pwd, re, stat, subprocess, sys, tempfile
 
 MAX_ATTEMPTS = 3
 ALLOWED_PHASES = ('claimed', 'developing', 'candidate', 'pr_wait', 'qa', 'ci', 'integrating',
@@ -94,15 +94,48 @@ def external_runs(root, now):
         def utc(timestamp):
             return datetime.datetime.fromtimestamp(timestamp, datetime.timezone.utc).isoformat(timespec='seconds')
 
-        root_fd, _ = open_dir(None, root)
+        root = os.fspath(root)
+        if not os.path.isabs(root):
+            raise ValueError('absolute root required')
+        root_fd = os.open('/', flags | os.O_DIRECTORY)
         runs = []
+        truncated = False
         try:
-            names = sorted(n for n in os.listdir(root_fd)
-                           if n.startswith(('qa-evidence-', 'author-evidence-')))[:400]
-            for name in names:
+            for component in root.split('/'):
+                if component:
+                    child = os.open(component, flags | os.O_DIRECTORY, dir_fd=root_fd)
+                    os.close(root_fd)
+                    root_fd = child
+            if os.fstat(root_fd).st_uid != uid:
+                raise ValueError('unexpected root owner')
+            newest = []
+            with os.scandir(root_fd) as entries:
+                for _ in range(5000):
+                    entry = next(entries, None)
+                    if entry is None:
+                        break
+                    name = entry.name
+                    if not name.startswith(('qa-evidence-', 'author-evidence-')):
+                        continue
+                    tag = name.split('-evidence-', 1)[1]
+                    if not re.fullmatch(r'[A-Za-z0-9._-]{1,100}', tag):
+                        continue
+                    try:
+                        ds = owned_stat(root_fd, name, directory=True)
+                        if ds is None:
+                            continue
+                        candidate = (ds.st_mtime, name)
+                        if len(newest) < 400:
+                            heapq.heappush(newest, candidate)
+                        else:
+                            truncated = True
+                            heapq.heappushpop(newest, candidate)
+                    except OSError:
+                        continue
+                else:
+                    truncated = True  # cap reached; the iterator was not exhausted
+            for _, name in sorted(newest, reverse=True):
                 tag = name.split('-evidence-', 1)[1]
-                if not re.fullmatch(r'[A-Za-z0-9._-]{1,100}', tag):
-                    continue
                 try:
                     fd, ds = open_dir(root_fd, name)
                     try:
@@ -132,7 +165,7 @@ def external_runs(root, now):
                                 os.close(ef)
                         last = events.st_mtime if events is not None else ds.st_mtime
                         state = ('done' if exit_code == 0 else 'failed') if exit_code is not None else (
-                            'running' if now.timestamp() - last <= EXTERNAL_STALE_S else 'stale')
+                            'running' if -60 <= now.timestamp() - last <= EXTERNAL_STALE_S else 'stale')
                         result = optional_json(fd, 'result.json', 65536)
                         meta = optional_json(fd, 'meta.json', 1024)
                         reviewed = sha(result.get('reviewed_sha'))
@@ -160,9 +193,10 @@ def external_runs(root, now):
         finished = [r for r in runs if r[2]['state'] in ('done', 'failed')]
         selected = sorted(active[:10] + finished[:10], key=lambda r: (r[0], r[1]), reverse=True)
         return {'available': True, 'generated_utc': now.isoformat(timespec='seconds'),
-                'running': len(active), 'runs': [r[2] for r in selected]}
+                'running': len(active), 'runs': [r[2] for r in selected], 'truncated': truncated}
     except Exception:
-        return {'available': False, 'runs': []}
+        return {'available': False, 'generated_utc': now.isoformat(timespec='seconds'),
+                'running': 0, 'runs': [], 'truncated': False}
 
 
 def load_titles(path):

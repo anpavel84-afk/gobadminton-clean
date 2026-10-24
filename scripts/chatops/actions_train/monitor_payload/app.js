@@ -262,6 +262,7 @@ window.GBTrainMonitor = {
     clear(s); s.appendChild(el('h2', null, 'Внешние запуски (вне слотов)'));
     if (!x || x.available === false) { s.appendChild(el('div', 'mut', 'Данные о внешних запусках недоступны.')); return; }
     s.appendChild(el('div', 'mut', 'Выполняется сейчас: ' + x.running));
+    if (x.truncated === true) s.appendChild(el('div', 'mut', 'Показаны не все запуски (ограничение сканирования).'));
     var runs = x.runs || [];
     if (!runs.length) { s.appendChild(el('div', 'mut', 'Внешних запусков нет.')); return; }
     var states = { running: ['идёт', 'ok'], stale: ['нет событий >15 мин', 'warn'],
