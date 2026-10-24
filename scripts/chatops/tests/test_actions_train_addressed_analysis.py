@@ -28,6 +28,15 @@ def answer():return dict(**binding(),completion='COMPLETE',analysis='Requirement
                          evidence=['Exact INERT task goal and acceptance'],limitations=[])
 
 
+RAW_JSON_INSTRUCTION = (
+    'Your final message must be the raw JSON object only: first character `{`, last character `}`, '
+    'no Markdown fence, no backticks, also when the result is INCOMPLETE. Obtain each file\'s sha256 '
+    'by an actual run_command `/usr/bin/sha256sum <absolute path>` (or `git -C <root> show HEAD:<path> | sha256sum`) '
+    'and copy it exactly; never compute or guess it. `observation` must be one single-line verbatim substring '
+    '(no changed newlines/tabs) of 40\u2013300 characters copied from the view_file output.'
+)
+
+
 def stream():
     e=rows();e=[x for x in e if x.get('step_update',{}).get('step_type')!='finish']
     e[0]['init'].pop('json_schema');e[0]['init']['tools']=['view_file','manage_task']
@@ -42,7 +51,7 @@ class AnalysisProtocol(unittest.TestCase):
         self.assertEqual(receipt['tool_names'],[])
         self.assertNotIn('--json-schema',N.command(30,analysis=True))
         self.assertIn('--json-schema',N.command(30))
-        self.assertIn('--sandbox',N.command(30,analysis=True))
+        self.assertNotIn('--sandbox',N.command(30,analysis=True))
         self.assertEqual(N.input_payload('full stdin')[1]['input_transport'],'stream-json')
         for completion in ('COMPLETE','INCOMPLETE'):
             value=answer()|{'completion':completion}
@@ -97,6 +106,52 @@ class AnalysisProtocol(unittest.TestCase):
     def test_strict_old_qa_and_canonical_are_unchanged(self):
         self.assertEqual(N.parse_stream(wire(rows()),HEAD)[0]['verdict'],'PASS')
         with self.assertRaises(N.ReviewError):N.canonical(answer(),HEAD)
+    def test_analysis_prompts_require_raw_json_sha_and_observation(self):
+        self.assertIn(RAW_JSON_INSTRUCTION, N.ANALYSIS_AGENT_DEF)
+        self.assertNotIn('excerpt', N.ANALYSIS_AGENT_DEF)
+        self.assertIn('verbatim observation', N.ANALYSIS_AGENT_DEF)
+        captured={}
+        def inject(text,*_a,**_k):
+            captured['source']=text
+            return ('TRUSTED_RULES\nEND TRUSTED OPERATING RULES.\nRole: qa.\n'+text,{'sha256':'f'*64})
+        def invoke(text,*_a,**_k):
+            captured['stdin']=text
+            return wire(stream()),{'input_delivery':'written'}
+        with tempfile.TemporaryDirectory() as d:
+            with patch.object(N,'git',side_effect=lambda work,*args,**kw: HEAD.encode() if args[0]=='rev-parse' else b''), \
+                 patch.object(Q,'addressed_input',return_value='EXACT_INERT_INPUT'), \
+                 patch('context_policy.inject',side_effect=inject), \
+                 patch.object(N,'invoke',side_effect=invoke):
+                N.review(Path('/candidate'),BASE,HEAD,'ignored QA text',1800,
+                    slot='slot2',task_hash='f'*64,charge=Mock(),analysis_grant=grant(),
+                    evidence_dir=Path(d)/'evidence')
+        self.assertIn(RAW_JSON_INSTRUCTION, captured['source'])
+        self.assertIn(RAW_JSON_INSTRUCTION, captured['stdin'])
+    def test_markdown_json_fence_still_yields_agy_parse_failed(self):
+        raw=json.dumps(answer())
+        accepted=stream();accepted[-1]['result']['response']=raw
+        value,_receipt=N.parse_stream(wire(accepted),HEAD,analysis_binding=binding())
+        self.assertEqual(value,answer())
+        for completion in ('COMPLETE','INCOMPLETE'):
+            body=json.dumps(answer()|{'completion':completion})
+            fenced='```json\n'+body+'\n```'
+            events=stream();events[-1]['result']['response']=fenced
+            with self.subTest(completion=completion),self.assertRaises(N.ReviewError):
+                N.parse_stream(wire(events),HEAD,analysis_binding=binding())
+        def invoke(_text,*_a,**_k):
+            events=stream();events[-1]['result']['response']='```json\n'+raw+'\n```'
+            return wire(events),{'input_delivery':'written'}
+        with tempfile.TemporaryDirectory() as d:
+            with patch.object(N,'git',side_effect=lambda work,*args,**kw: HEAD.encode() if args[0]=='rev-parse' else b''), \
+                 patch.object(Q,'addressed_input',return_value='EXACT_INERT_INPUT'), \
+                 patch('context_policy.inject',side_effect=lambda text,*a:('TRUSTED_RULES\nEND TRUSTED OPERATING RULES.\nRole: qa.\n'+text,{'sha256':'f'*64})), \
+                 patch.object(N,'invoke',side_effect=invoke):
+                with self.assertRaises(N.ReviewError) as failure:
+                    N.review(Path('/candidate'),BASE,HEAD,'ignored QA text',1800,
+                        slot='slot2',task_hash='f'*64,charge=Mock(),analysis_grant=grant(),
+                        evidence_dir=Path(d)/'evidence')
+        self.assertEqual(failure.exception.code,'AGY_PARSE_FAILED')
+        self.assertEqual(failure.exception.phase,'parse')
 
 
 class AnalysisStage(unittest.TestCase):
@@ -171,10 +226,11 @@ class NativeAnalysisTransport(unittest.TestCase):
                     charge=charge,popen=popen,analysis=True,evidence_dir=Path(d)/'evidence')
             self.assertEqual(json.loads(captured['stdin'])['message']['content'],'EXACT INPUT 漢字')
             self.assertTrue(captured['stdin'].endswith(b'\n'));self.assertNotIn('--json-schema',captured['argv'])
-            self.assertIn('--sandbox',captured['argv']);self.assertIn('--dangerously-skip-permissions',captured['argv'])
+            self.assertNotIn('--sandbox',captured['argv']);self.assertIn('--dangerously-skip-permissions',captured['argv'])
             self.assertIn('--add-dir',captured['argv'])
             self.assertEqual(captured['argv'][captured['argv'].index('--add-dir')+1],str(candidate.resolve()))
-            self.assertEqual(receipt['input_delivery'],'written');self.assertEqual(receipt['filesystem_boundary'],'uid978_apparmor_enforce_and_native_cli_sandbox')
+            self.assertEqual(receipt['input_delivery'],'written');self.assertEqual(receipt['filesystem_boundary'],'uid978_apparmor_enforce')
+            self.assertIs(receipt['requested_native_sandbox'], False)
             roots.assert_called_once()
             meta=json.loads(sorted((Path(d)/'evidence').glob('*/phase-*.json'))[-1].read_text())
             self.assertEqual(meta['exit_code'],0);self.assertTrue(meta['terminal'])

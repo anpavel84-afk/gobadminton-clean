@@ -55,8 +55,22 @@ class NativeAgentExposure(unittest.TestCase):
             opts=N.command(60,analysis=True,source_root=str(source))
             self.assertEqual(opts[opts.index('--agent')+1],N.AGENT)
             self.assertEqual(opts[opts.index('--add-dir')+1],str(source))
-            self.assertIn('--sandbox',opts)
+            self.assertNotIn('--sandbox',opts)
             self.assertEqual(opts[opts.index('--input-format')+1],'stream-json')
+
+    def test_argv_has_no_vendor_sandbox_and_tool_allowlist_unchanged(self):
+        qa=N.command(45)
+        self.assertNotIn('--sandbox',qa)
+        with tempfile.TemporaryDirectory(prefix='gb-agy-nosandbox-') as tmp:
+            root=str(pathlib.Path(tmp).resolve())
+            analysis=N.command(45,analysis=True,source_root=root)
+        self.assertNotIn('--sandbox',analysis)
+        self.assertEqual(analysis[analysis.index('--add-dir')+1],root)
+        for definition in (N.AGENT_DEF,N.ANALYSIS_AGENT_DEF):
+            _agent,tools,body=metadata(definition)
+            self.assertEqual(tools,['view_file','run_command'])
+            self.assertIn('tools:\n  - view_file\n  - run_command\n',definition)
+            self.assertNotIn('tools:',body)
 
     def test_review_gate_and_mandatory_apparmor_are_not_weakened(self):
         self.assertEqual(N.READ_TOOLS,frozenset({'view_file','run_command'}))

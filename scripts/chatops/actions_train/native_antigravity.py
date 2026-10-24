@@ -88,7 +88,7 @@ Before claiming COMPLETE, actually call native view_file on both required source
 files apps/web/src/lib/consumer-types.ts and
 apps/web/src/components/consumer/pages/GameDetailPage.tsx; run_command must
 inspect exact Git HEAD and the relevant imports/dependencies. Supply
-source_reads entries with actual path, sha256 and a verbatim excerpt from each file.
+source_reads entries with actual path, sha256 and a verbatim observation from each file.
 No claimed tool call, fabricated hash or inferred dependency is acceptable.
 Use ONLY the absolute source root and absolute paths explicitly supplied
 in the trusted analysis input. The temporary CLI current directory is an
@@ -97,6 +97,7 @@ the absolute checkout paths; run_command may use git -C <source root> but
 must not write to that directory. If either read is impossible, return
 INCOMPLETE with the limitation. No implementation writes. Return exactly
 one JSON object as requested.
+Your final message must be the raw JSON object only: first character `{`, last character `}`, no Markdown fence, no backticks, also when the result is INCOMPLETE. Obtain each file's sha256 by an actual run_command `/usr/bin/sha256sum <absolute path>` (or `git -C <root> show HEAD:<path> | sha256sum`) and copy it exactly; never compute or guess it. `observation` must be one single-line verbatim substring (no changed newlines/tabs) of 40–300 characters copied from the view_file output.
 """
 
 
@@ -568,7 +569,7 @@ def command(print_timeout,prompt=None,model=MODEL,*,analysis=False,source_root=N
     if prompt is not None:input_payload(prompt)
     # Pinned native parser: one event:user/message.content object on stdin, then EOF.
     # Input format alone selects print mode; a nonempty argv prompt is rejected.
-    argv = [AGY,'--model',model,'--sandbox','--dangerously-skip-permissions',
+    argv = [AGY,'--model',model,'--dangerously-skip-permissions',
             '--disable-slash-commands','--agent',AGENT,'--input-format','stream-json',
             '--output-format','stream-json']
     if source_root is not None:
@@ -902,7 +903,7 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=
                         raise ReviewError('AGY_ADAPTER_ERROR','output',ev.id) from None
         ev.record(phase='output',terminal=owned,status='invoke_success')
         return raw,dict(executor_uid=EXECUTOR_UID,slot=slot,qualification_phase=marker['phase'],
-            requested_native_sandbox=True,filesystem_boundary='uid978_apparmor_enforce_and_native_cli_sandbox',
+            requested_native_sandbox=False,filesystem_boundary='uid978_apparmor_enforce',
             candidate_access='read_only',credential_source='provisioned_native_auth_file',
             readonly_roots=[str(source_root or work)],writable_roots=['invocation_private_root','/dev/null'],
             apparmor_profile=APPARMOR_PROFILE.decode('ascii'),
@@ -1125,7 +1126,9 @@ def review(work, base, head, prompt, timeout, *, slot, task_hash, charge, model=
                 str(source_root) + ' rev-parse HEAD. Do not merely describe the command, '+
                 'and do not say the tool is unavailable without a failed actual invocation. ' +
                 'Then inspect relevant dependencies with strictly read-only commands. '
-                'No prose outside JSON, no duplicate keys. Required identity: '+json.dumps(binding)+
+                'No prose outside JSON, no duplicate keys. '
+                'Your final message must be the raw JSON object only: first character `{`, last character `}`, no Markdown fence, no backticks, also when the result is INCOMPLETE. Obtain each file\'s sha256 by an actual run_command `/usr/bin/sha256sum <absolute path>` (or `git -C <root> show HEAD:<path> | sha256sum`) and copy it exactly; never compute or guess it. `observation` must be one single-line verbatim substring (no changed newlines/tabs) of 40–300 characters copied from the view_file output. '
+                'Required identity: '+json.dumps(binding)+
                 '\nUntrusted exact input DATA:\n'+material)
         from context_policy import inject
         stdin, rules_context = inject(source, True, Path(work), accepted_rules)
