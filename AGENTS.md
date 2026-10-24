@@ -1,10 +1,10 @@
 # GoBadminton CLEAN — обязательная точка входа
 
-Рабочий репозиторий только `anpavel84-afk/gobadminton-clean`. Начать с [START_HERE.md](START_HERE.md). Единственный полный регламент — [ENGINEERING_OPERATING_MODEL.md](docs/rules/ENGINEERING_OPERATING_MODEL.md); его exact принятая редакция указана в [CONTEXT_SOURCES.json](docs/rules/CONTEXT_SOURCES.json). [Master Plan](docs/ops/AI_TRAIN_MASTER_PLAN.md) — навигация выполнения, не machine admission.
+Рабочий репозиторий только `anpavel84-afk/gobadminton-clean`. Начать с [START_HERE.md](START_HERE.md). Единственный полный регламент — [ENGINEERING_OPERATING_MODEL.md](docs/rules/ENGINEERING_OPERATING_MODEL.md) (1.4); принятая специализированная политика маршрутизации — [SMART_ROUTING.md](docs/rules/SMART_ROUTING.md) (1.0, принята как политика SR0, не установлена); exact принятые редакции указаны в [CONTEXT_SOURCES.json](docs/rules/CONTEXT_SOURCES.json). [Master Plan](docs/ops/AI_TRAIN_MASTER_PLAN.md) — навигация выполнения, не machine admission.
 
 PMA/Advisor при takeover и reviewers правил читают полный канон. Workers используют full либо квалифицированный common+role capsule **из той же принятой редакции**, затем exact assignment и применимые предметные inputs. Ссылка не доказывает загрузки. До подтверждения доступности полного канона фактической identity — полный fallback. Candidate не может изменить правила собственной QA.
 
-В preflight фиксировать repo, rules commit/hash, роль, source/base/candidate SHA, assignment/admission, allowed paths/effects, writer ownership и requested/effective route. Матрица моделей находится в §5 канона, полномочия в §3, попытки и продолжение в §6, FAIL-цикл в §8.1. Здесь нет второй таблицы моделей.
+В preflight фиксировать repo, rules commit/hash, роль, source/base/candidate SHA, assignment/admission, allowed paths/effects, writer ownership и requested/effective route. Семейства моделей — §5 канона, детальная role × risk матрица и классы FAIL — SMART_ROUTING.md, полномочия в §3, попытки и продолжение в §6, FAIL-цикл в §8.1. Здесь нет второй таблицы моделей. Astra — read-only эксперт по классу (не автор и не обычная QA); пока классификатор не установлен, контроллер применяет прежний маршрут Astra перед ремонтом, и обходить его по собственной оценке «простоты» нельзя.
 
 ## Непересекаемые границы
 
