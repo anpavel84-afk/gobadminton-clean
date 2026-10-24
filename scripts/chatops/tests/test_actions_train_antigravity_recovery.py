@@ -11,6 +11,8 @@ from core import digest,Refused
 
 class Evidence(unittest.TestCase):
     def setUp(self):
+        from test_actions_train_agy_oauth_precharge import synthetic_vendor_preflight
+        synthetic_vendor_preflight(self)
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
         self.root=Path(self.tmp.name);self.directory=self.root/'evidence'
     def records(self):
@@ -145,6 +147,8 @@ print('runpy and ordinary import PASS')
 
 class Successor(unittest.TestCase):
     def setUp(self):
+        from test_actions_train_agy_oauth_precharge import synthetic_vendor_preflight
+        synthetic_vendor_preflight(self)
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup);self.root=Path(self.tmp.name)
         self.state={'active':None};self.q=dict(issue=29,base='a'*40,head='b'*40,work=str(N.QUALIFICATION_WORK),parent_task_sha256=R.PARENT_TASK,parent_operation=R.PARENT_OPERATION,adapter_revision='c'*40)
         self.q['task_sha256']=digest(N.qualification_task(self.q['base'],self.q['head'],**{k:self.q[k] for k in ('parent_task_sha256','parent_operation','adapter_revision')}))
