@@ -283,10 +283,8 @@ class DynamicProcessLoader(GitFixture):
 
     def test_bridge_receipt_uses_exact_candidate_equivalence(self):
         self.assertIs(qa.equivalence, identity.equivalence)
-        self.assertIn('/qa-248-loader-', identity.__file__
-                      ) if '/qa-248-loader-' in identity.__file__ else self.assertIn(
-                          'scripts/chatops/actions_train/content_identity.py',
-                          identity.__file__)
+        self.assertEqual(Path(identity.__file__).resolve(),
+                         (ROOT/'scripts/chatops/actions_train/content_identity.py').resolve())
 
     def test_benign_path_literal_preserves_test_only_reuse(self):
         self.check_loader(
