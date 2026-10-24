@@ -193,7 +193,7 @@ def independence(files, sources, changed):
                     # modules independent from changed executable tests.
                     # Refuse optimization locally and require addressed QA.
                     dynamic_roots = frozenset((
-                        'posix', 'posixpath', 'ntpath', 'importlib', 'runpy',
+                        'posix', 'posixpath', 'ntpath', 'importlib', 'runpy', 'sys',
                         'ctypes', 'pkgutil', 'zipimport', 'multiprocessing',
                         'pickle', 'marshal'
                     ))
