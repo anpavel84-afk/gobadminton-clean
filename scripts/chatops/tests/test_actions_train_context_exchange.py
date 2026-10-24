@@ -155,17 +155,24 @@ class ContextExchange(unittest.TestCase):
         self.assertEqual(full_receipt['context_metrics']['policy_profile'],'full')
         ref={'path':'context/accepted-rules.md','revision':C.RULES_COMMIT,
              'sha256':C.RULES_SHA256,'bytes':C.RULES_SIZE}
+        guidance='Read the immutable accepted rules if needed.\n'
         scoped,receipt=C.inject('exact task',True,ROOT,(text,m),context_profile='scoped_v1',
-            full_rules_reference=ref,verified_access=lambda r:True)
+            full_rules_reference=ref,verified_access=lambda r:True,scoped_guidance=guidance)
         self.assertEqual(receipt['delivery'],'explicit_scoped_stdin')
         self.assertIn(E.compile_capsule(text,'qa',C.RULES_SHA256),scoped)
         self.assertEqual(receipt['stdin_sha256'],hashlib.sha256(scoped.encode()).hexdigest())
-        self.assertTrue(scoped.endswith('exact task'))
+        self.assertEqual(receipt['semantic_input_bytes'],len(scoped.encode()))
+        self.assertEqual(scoped.count(guidance),1)
+        self.assertTrue(scoped.endswith('BOUNDED STAGE INSTRUCTIONS:\n'+guidance+'exact task'))
         self.assertLess(len(scoped),len(full))
         fallback,receipt=C.inject('exact task',True,ROOT,(text,m),context_profile='scoped_v1',
-            full_rules_reference=ref,verified_access=lambda r:False)
+            full_rules_reference=ref,verified_access=lambda r:False,scoped_guidance=guidance)
         self.assertIn(text,fallback)
         self.assertEqual(receipt['delivery'],'explicit_full_stdin')
+        self.assertEqual(fallback,full)
+        self.assertEqual(receipt['stdin_sha256'],full_receipt['stdin_sha256'])
+        self.assertEqual(receipt,full_receipt)
+        self.assertIn('Role: qa.',fallback)
 
     def test_unknown_prior_status_is_not_erased_by_context_projection(self):
         c={'receipts':{'a'*64:{'status':'pending','inputs':{'head':HEAD},'brief':None},
