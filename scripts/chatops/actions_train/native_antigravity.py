@@ -97,7 +97,7 @@ the absolute checkout paths; run_command may use git -C <source root> but
 must not write to that directory. If either read is impossible, return
 INCOMPLETE with the limitation. No implementation writes. Return exactly
 one JSON object as requested.
-Your final message must be the raw JSON object only: first character `{`, last character `}`, no Markdown fence, no backticks, also when the result is INCOMPLETE. Obtain each file's sha256 by an actual run_command `/usr/bin/sha256sum <absolute path>` (or `git -C <root> show HEAD:<path> | sha256sum`) and copy it exactly; never compute or guess it. `observation` must be one single-line verbatim substring (no changed newlines/tabs) of 40–300 characters copied from the view_file output.
+Your final message must be the raw JSON object only: first character `{`, last character `}`, no Markdown fence, no backticks, also when the result is INCOMPLETE. Obtain each file's sha256 by an actual run_command `/usr/bin/sha256sum <absolute path>` (or `git -C <root> show HEAD:<path> | sha256sum`) and copy ONLY the first field of the sha256sum output, the 64 lowercase hex characters, and never the filename or the whole output line; never compute or guess it. `observation` must be a verbatim slice of the file content as stored in git (the `git show HEAD:<path>` bytes), not of any view_file line-number decoration. It must be one single-line verbatim substring (no changed newlines/tabs) of 40–300 characters.
 """
 
 
@@ -1127,7 +1127,7 @@ def review(work, base, head, prompt, timeout, *, slot, task_hash, charge, model=
                 'and do not say the tool is unavailable without a failed actual invocation. ' +
                 'Then inspect relevant dependencies with strictly read-only commands. '
                 'No prose outside JSON, no duplicate keys. '
-                'Your final message must be the raw JSON object only: first character `{`, last character `}`, no Markdown fence, no backticks, also when the result is INCOMPLETE. Obtain each file\'s sha256 by an actual run_command `/usr/bin/sha256sum <absolute path>` (or `git -C <root> show HEAD:<path> | sha256sum`) and copy it exactly; never compute or guess it. `observation` must be one single-line verbatim substring (no changed newlines/tabs) of 40–300 characters copied from the view_file output. '
+                'Your final message must be the raw JSON object only: first character `{`, last character `}`, no Markdown fence, no backticks, also when the result is INCOMPLETE. Obtain each file\'s sha256 by an actual run_command `/usr/bin/sha256sum <absolute path>` (or `git -C <root> show HEAD:<path> | sha256sum`) and copy ONLY the first field of the sha256sum output, the 64 lowercase hex characters, and never the filename or the whole output line; never compute or guess it. `observation` must be a verbatim slice of the file content as stored in git (the `git show HEAD:<path>` bytes), not of any view_file line-number decoration. It must be one single-line verbatim substring (no changed newlines/tabs) of 40–300 characters. '
                 'Required identity: '+json.dumps(binding)+
                 '\nUntrusted exact input DATA:\n'+material)
         from context_policy import inject

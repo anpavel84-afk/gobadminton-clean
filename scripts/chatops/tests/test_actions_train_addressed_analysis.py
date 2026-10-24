@@ -32,8 +32,17 @@ RAW_JSON_INSTRUCTION = (
     'Your final message must be the raw JSON object only: first character `{`, last character `}`, '
     'no Markdown fence, no backticks, also when the result is INCOMPLETE. Obtain each file\'s sha256 '
     'by an actual run_command `/usr/bin/sha256sum <absolute path>` (or `git -C <root> show HEAD:<path> | sha256sum`) '
-    'and copy it exactly; never compute or guess it. `observation` must be one single-line verbatim substring '
-    '(no changed newlines/tabs) of 40\u2013300 characters copied from the view_file output.'
+    'and copy ONLY the first field of the sha256sum output, the 64 lowercase hex characters, and never the filename or the whole output line; never compute or guess it. '
+    '`observation` must be a verbatim slice of the file content as stored in git (the `git show HEAD:<path>` bytes), not of any view_file line-number decoration. '
+    'It must be one single-line verbatim substring (no changed newlines/tabs) of 40\u2013300 characters.'
+)
+SHA_FIELD_PHRASE = (
+    'copy ONLY the first field of the sha256sum output, the 64 lowercase hex characters, '
+    'and never the filename or the whole output line'
+)
+OBSERVATION_GIT_PHRASE = (
+    '`observation` must be a verbatim slice of the file content as stored in git '
+    '(the `git show HEAD:<path>` bytes), not of any view_file line-number decoration'
 )
 
 
@@ -108,7 +117,10 @@ class AnalysisProtocol(unittest.TestCase):
         with self.assertRaises(N.ReviewError):N.canonical(answer(),HEAD)
     def test_analysis_prompts_require_raw_json_sha_and_observation(self):
         self.assertIn(RAW_JSON_INSTRUCTION, N.ANALYSIS_AGENT_DEF)
+        self.assertIn(SHA_FIELD_PHRASE, N.ANALYSIS_AGENT_DEF)
+        self.assertIn(OBSERVATION_GIT_PHRASE, N.ANALYSIS_AGENT_DEF)
         self.assertNotIn('excerpt', N.ANALYSIS_AGENT_DEF)
+        self.assertNotIn('copied from the view_file output', N.ANALYSIS_AGENT_DEF)
         self.assertIn('verbatim observation', N.ANALYSIS_AGENT_DEF)
         captured={}
         def inject(text,*_a,**_k):
@@ -126,6 +138,9 @@ class AnalysisProtocol(unittest.TestCase):
                     slot='slot2',task_hash='f'*64,charge=Mock(),analysis_grant=grant(),
                     evidence_dir=Path(d)/'evidence')
         self.assertIn(RAW_JSON_INSTRUCTION, captured['source'])
+        self.assertIn(SHA_FIELD_PHRASE, captured['source'])
+        self.assertIn(OBSERVATION_GIT_PHRASE, captured['source'])
+        self.assertNotIn('copied from the view_file output', captured['source'])
         self.assertIn(RAW_JSON_INSTRUCTION, captured['stdin'])
     def test_markdown_json_fence_still_yields_agy_parse_failed(self):
         raw=json.dumps(answer())
