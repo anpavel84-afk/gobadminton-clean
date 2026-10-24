@@ -155,6 +155,78 @@ class AtomicSyntheticOAuth(unittest.TestCase):
                 self.assertEqual(N.retain_oauth_refresh(token,fake),'unchanged')
 
 
+
+class AncestorDescriptorScope(unittest.TestCase):
+    """No external path can replace an ephemeral OAuth ancestor. Inert bytes."""
+
+    def test_symlink_ancestor_rejected_before_persistent_access(self):
+        with tempfile.TemporaryDirectory(prefix='gb-agy-ancestor-') as tmp:
+            root=Path(tmp);outside=root/'external';outside.mkdir(mode=0o700)
+            original=b'{"token":"SYNTHETIC_ORIGINAL"}'
+            injected=b'{"token":"SYNTHETIC_EXTERNAL"}'
+            persistent=root/'persistent';persistent.write_bytes(original);persistent.chmod(0o600)
+            (outside/'antigravity-oauth-token').write_bytes(injected)
+            (outside/'antigravity-oauth-token').chmod(0o600)
+            redirected=root/'redirected';redirected.symlink_to(outside,target_is_directory=True)
+            with patch.object(N,'EXECUTOR_UID',os.getuid()), \
+                 patch.object(N,'AUTH',persistent), \
+                 patch.object(N,'trusted',side_effect=lambda *a,**k:persistent.read_bytes()) as read:
+                with self.assertRaises(OSError):
+                    N.retain_oauth_refresh(redirected/'antigravity-oauth-token',original)
+                read.assert_not_called()
+            self.assertEqual(persistent.read_bytes(),original)
+
+    def test_pinned_parent_fd_survives_rename_and_external_symlink_swap(self):
+        with tempfile.TemporaryDirectory(prefix='gb-agy-parent-fd-') as tmp:
+            root=Path(tmp);native=root/'native';native.mkdir(mode=0o700)
+            original=b'{"token":"SYNTHETIC_ORIGINAL"}'
+            (native/'antigravity-oauth-token').write_bytes(original)
+            (native/'antigravity-oauth-token').chmod(0o600)
+            external=root/'external';external.mkdir(mode=0o700)
+            (external/'antigravity-oauth-token').write_bytes(b'{"token":"EXTERNAL"}')
+            (external/'antigravity-oauth-token').chmod(0o600)
+            captured=[]
+            real=N.private_directory
+            def rename_after_open(path,create=False):
+                fd=real(path,create=create)
+                captured.append(fd)
+                native.rename(root/'native-moved')
+                native.symlink_to(external,target_is_directory=True)
+                return fd
+            with patch.object(N,'EXECUTOR_UID',os.getuid()), \
+                 patch.object(N,'private_directory',side_effect=rename_after_open), \
+                 patch.object(N,'trusted',side_effect=AssertionError('persistent read not needed')):
+                self.assertEqual(N.retain_oauth_refresh(
+                    native/'antigravity-oauth-token',original),'unchanged')
+            self.assertEqual(len(captured),1)
+            with self.assertRaises(OSError):os.fstat(captured[0])
+            self.assertEqual((root/'native-moved'/'antigravity-oauth-token').read_bytes(),original)
+
+    def test_nested_private_home_preserves_valid_atomic_refresh(self):
+        with tempfile.TemporaryDirectory(prefix='gb-agy-nested-home-') as tmp:
+            root=Path(tmp)
+            native=root/'home/.gemini/antigravity-cli';native.mkdir(parents=True,mode=0o700)
+            original=b'{"token":"FAKE_OLD"}';refreshed=b'{"token":"FAKE_REFRESHED"}'
+            token=native/'antigravity-oauth-token';token.write_bytes(refreshed);token.chmod(0o600)
+            persistent=root/'persistent';persistent.write_bytes(original);persistent.chmod(0o600)
+            with patch.object(N,'EXECUTOR_UID',os.getuid()), \
+                 patch.object(N,'AUTH',persistent), \
+                 patch.object(N,'trusted',side_effect=lambda *a,**k:persistent.read_bytes()):
+                self.assertEqual(N.retain_oauth_refresh(token,original),'persisted')
+                self.assertEqual(persistent.read_bytes(),refreshed)
+            self.assertEqual(stat.S_IMODE(persistent.stat().st_mode),0o600)
+            self.assertEqual(list(root.glob('.agy-refresh-*')),[])
+
+    def test_nonprivate_parent_rejected_even_if_token_mode_is_private(self):
+        with tempfile.TemporaryDirectory(prefix='gb-agy-parent-negative-') as tmp:
+            root=Path(tmp);native=root/'not-private';native.mkdir(mode=0o755)
+            token=native/'antigravity-oauth-token';raw=b'{"token":"FAKE"}'
+            token.write_bytes(raw);token.chmod(0o600)
+            with patch.object(N,'EXECUTOR_UID',os.getuid()):
+                with self.assertRaises(OSError):
+                    N.retain_oauth_refresh(token,raw)
+
+
 class ChargedEvidenceRetention(unittest.TestCase):
     """Real invoke/finalizer, synthetic credential and fake CLI, zero provider calls."""
 
