@@ -151,6 +151,59 @@ def independence(files, sources, changed):
         def js_paths(target):
             return [target] + ([target[:-3] + e for e in ('.ts', '.tsx')] if target.endswith('.js') else []) + [
                 target + e for e in (*JS, '/index.ts', '/index.tsx', '/index.js')]
+        def trivial_python_runtime(parsed):
+            """Proof is intentionally very narrow. All executable/dynamic roots
+            need addressed QA instead of trying to enumerate Python loaders.
+            Only literal assignments and three harmless stdlib surface shapes
+            qualify. This is a *reuse* optimization, never a QA waiver.
+            """
+            mod_os, mod_sub, path_names = set(), set(), set()
+            for n in parsed.body:
+                if isinstance(n, ast.Import):
+                    for a in n.names:
+                        if a.name == 'os': mod_os.add(a.asname or 'os')
+                        elif a.name == 'subprocess': mod_sub.add(a.asname or 'subprocess')
+                        else: return False
+                elif isinstance(n, ast.ImportFrom):
+                    if n.module != 'pathlib' or n.level != 0 or any(
+                            a.name != 'Path' for a in n.names):
+                        return False
+                    path_names.update(a.asname or 'Path' for a in n.names)
+            def constant(value):
+                return isinstance(value, ast.Constant) and type(value.value) in (
+                    str, int, float, bool, type(None))
+            def plain(value):
+                if constant(value): return True
+                if isinstance(value, ast.UnaryOp) and isinstance(value.op, (ast.USub, ast.UAdd)):
+                    return isinstance(value.operand, ast.Constant) and type(
+                        value.operand.value) in (int, float)
+                if isinstance(value, ast.Attribute):
+                    return (value.attr == 'PIPE' and isinstance(value.value, ast.Name)
+                            and value.value.id in mod_sub)
+                if isinstance(value, ast.Call) and not value.keywords and all(
+                        constant(a) and type(a.value) is str for a in value.args):
+                    func = value.func
+                    if isinstance(func, ast.Name) and func.id in path_names:
+                        return len(value.args) == 1
+                    if (isinstance(func, ast.Attribute) and func.attr == 'join'
+                            and isinstance(func.value, ast.Attribute)
+                            and func.value.attr == 'path'
+                            and isinstance(func.value.value, ast.Name)
+                            and func.value.value.id in mod_os):
+                        return len(value.args) >= 1
+                return False
+            for n in parsed.body:
+                if isinstance(n, (ast.Import, ast.ImportFrom, ast.Pass)): continue
+                if isinstance(n, ast.Expr) and constant(n.value) and type(
+                        n.value.value) is str: continue
+                if (isinstance(n, ast.Assign) and n.targets
+                        and all(isinstance(t, ast.Name) for t in n.targets)
+                        and all(not t.id.startswith('__') for t in n.targets)
+                        and plain(n.value)):
+                    continue
+                return False
+            return True
+
         while queue:
             p = queue.pop()
             if p in seen: continue
@@ -162,6 +215,9 @@ def independence(files, sources, changed):
             if files[p]['mode'] not in ('100644', '100755'):
                 return 'nonregular dependency consumer: ' + p
             text = source(p)
+            if p.endswith('.py') and changed and not trivial_python_runtime(ast.parse(text)):
+                return ('unprovable executable Python runtime requires addressed QA: '
+                        + p + ' -> ' + ', '.join(sorted(changed)))
             # A runtime consumer naming changed executable/test bytes has an
             # implicit dependency regardless of how its process loader is
             # imported or rebound. Reject literal paths and stitched test-tree
