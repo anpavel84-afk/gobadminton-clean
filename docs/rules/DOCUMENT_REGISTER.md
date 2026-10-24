@@ -23,7 +23,7 @@
 | PMA takeover | [CURRENT.md](../handoffs/CURRENT.md) и подтверждённое Owner-решение, не имя старого чата |
 | Фактическое исполнение/установка | Exact Actions, controller/adapter pin, operation/lease и receipts; документы не заменяют их |
 
-Консолидация 24.10.2026 сохраняла core v1.3 (100818 байт, SHA-256 `38c34012f10974496a7d7cbc74ecacb62bf7847278e295edfeb107d69a5d1c1c`, commit `1169e965976e9498d4e5e1e23aae201e97ec9665`). Поправка SR0 выпускает EOM v1.4 (110710 байт, SHA-256 `0c09d9dd09c323d3dfe60e05152fa56d116ed9af04c6b3b598eed10282db688f`) и SMART_ROUTING 1.0 (71275 байт, SHA-256 `cfb22df374c80a577a0c8d555b205cbe2f2a2e06caa00c8719444441f38df62e`) в commit `8f32d58b0c29ab3cf1550e147a990f0b7290d197`; v1.3 остаётся pin установленного runtime до отдельного reviewed code-pin, молчаливой смены pin нет. Новые Owner-уточнения применяются в своей области и не переписывают прежние admissions.
+Консолидация 24.10.2026 сохраняла core v1.3 (100818 байт, SHA-256 `38c34012f10974496a7d7cbc74ecacb62bf7847278e295edfeb107d69a5d1c1c`, commit `1169e965976e9498d4e5e1e23aae201e97ec9665`). Поправка SR0 выпускает EOM v1.4 (113203 байт, SHA-256 `017441dec5ba197a1065b6ef90efdddb090b286ba48687241a7fbc09dd002269`) и SMART_ROUTING 1.0 (76720 байт, SHA-256 `1a8c1ed6f6ea11d08ecb1703df1a3bc1540520f7f4d02b7d48bb1f66a8786c63`) в commit `bc8bad0c38a861f8e72296d0a323e2941b9322e0`; v1.3 остаётся pin установленного runtime до отдельного reviewed code-pin, молчаливой смены pin нет. Новые Owner-уточнения применяются в своей области и не переписывают прежние admissions.
 
 ## Покрытие остальных документов
 
