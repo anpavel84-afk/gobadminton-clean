@@ -232,7 +232,7 @@ def independence(files, sources, changed):
                                     and parent.value is node):
                                 return 'escaped process module loader requires addressed QA: ' + p
                             if parent.attr in ('__dict__', '__class__', '__getattribute__'):
-                                return 'dynamic process module introspection requires addressed QA: ' + p
+                                return 'dynamic process module introspection loader requires addressed QA: ' + p
                     for n in ast.walk(parsed):
                         if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name):
                             if (n.value.id in subprocess_aliases and n.attr in subprocess_exec
