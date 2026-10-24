@@ -227,6 +227,47 @@ class AncestorDescriptorScope(unittest.TestCase):
                     N.retain_oauth_refresh(token,raw)
 
 
+class NonRegularAndDescriptorSafety(unittest.TestCase):
+    """R3 findings: writerless FIFO must not block; failed fdopen must not leak. Inert bytes."""
+
+    def test_writerless_fifo_oauth_is_rejected_without_blocking(self):
+        import signal
+        with tempfile.TemporaryDirectory(prefix='gb-agy-fifo-') as tmp:
+            folder=Path(tmp)/'private';folder.mkdir(mode=0o700)
+            fifo=folder/'antigravity-oauth-token';os.mkfifo(fifo,0o600)
+            def timed_out(*_):raise AssertionError('open blocked on writerless FIFO')
+            old=signal.signal(signal.SIGALRM,timed_out);signal.alarm(5)
+            try:
+                with patch.object(N,'EXECUTOR_UID',os.getuid()), \
+                     patch.object(N,'trusted',side_effect=AssertionError('persistent read not needed')):
+                    with self.assertRaises(N.ReviewError):
+                        N.retain_oauth_refresh(fifo,b'{"token":"FAKE"}')
+            finally:
+                signal.alarm(0);signal.signal(signal.SIGALRM,old)
+
+    def test_persistent_writer_fd_closed_when_fdopen_construction_fails(self):
+        def open_fds():
+            return set(os.listdir('/proc/self/fd'))
+        with tempfile.TemporaryDirectory(prefix='gb-agy-fdleak-') as tmp:
+            root=Path(tmp);folder=root/'private';folder.mkdir(mode=0o700)
+            prior=b'{"token":"FAKE-OLD"}';newer=b'{"token":"FAKE-NEW"}'
+            token=folder/'antigravity-oauth-token';token.write_bytes(newer);token.chmod(0o600)
+            persistent=root/'persistent';persistent.write_bytes(prior);persistent.chmod(0o600)
+            real_fdopen=os.fdopen
+            def failing(fd,mode='r',*a,**k):
+                if 'w' in mode:raise MemoryError('synthetic fdopen failure')
+                return real_fdopen(fd,mode,*a,**k)
+            before=open_fds()
+            with patch.object(N,'EXECUTOR_UID',os.getuid()),patch.object(N,'AUTH',persistent), \
+                 patch.object(N,'trusted',side_effect=lambda *a,**k:persistent.read_bytes()), \
+                 patch.object(N.os,'fdopen',side_effect=failing):
+                with self.assertRaises(MemoryError):
+                    N.retain_oauth_refresh(token,prior)
+            self.assertEqual(open_fds()-before,set())
+            self.assertEqual(persistent.read_bytes(),prior)
+            self.assertEqual(list(root.glob('.agy-refresh-*')),[])
+
+
 class ChargedEvidenceRetention(unittest.TestCase):
     """Real invoke/finalizer, synthetic credential and fake CLI, zero provider calls."""
 
