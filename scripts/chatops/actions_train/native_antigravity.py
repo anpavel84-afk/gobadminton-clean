@@ -714,11 +714,13 @@ def retain_oauth_refresh(private_auth, previous):
     or following links. The caller operates as UID978 outside child AppArmor.
     """
     path = Path(private_auth)
-    info = path.lstat()
-    need(stat.S_ISREG(info.st_mode) and info.st_uid == EXECUTOR_UID
-         and stat.S_IMODE(info.st_mode) == 0o600 and info.st_nlink == 1,
-         'unexpected transient OAuth metadata')
-    updated = path.read_bytes()
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    with os.fdopen(fd, 'rb') as stream:
+        info = os.fstat(stream.fileno())
+        need(stat.S_ISREG(info.st_mode) and info.st_uid == EXECUTOR_UID
+             and stat.S_IMODE(info.st_mode) == 0o600 and info.st_nlink == 1,
+             'unexpected transient OAuth metadata')
+        updated = stream.read(65537)
     need(0 < len(updated) <= 65536 and type(json.loads(updated)) is dict,
          'invalid transient OAuth format')
     if hashlib.sha256(updated).digest() == hashlib.sha256(previous).digest():
