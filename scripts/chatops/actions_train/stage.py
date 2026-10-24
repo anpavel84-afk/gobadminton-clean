@@ -110,13 +110,17 @@ def setup(req, config, native_auth=None):
         from context_policy import inject
         if choice['provider'] == 'agy':
             wrapped, rules_receipt = prompt, None  # Native adapter injects after assembling source DATA.
-        elif (qa and req['stage']=='qa' and choice['provider']=='codex'
+        elif (choice['provider'] == 'codex' and req['stage'] in
+              ('author', 'qa', 'task_review', 'diagnose', 'failure_diagnosis')
               and not req.get('_recover') and not req.get('_budget_preflight_retry')):
-            # One scoped role only. The model can read the exact canonical Git
-            # object through its existing read-only source/Git access. A missing
-            # object or denied recipient probe uses the unchanged full profile.
+            # Stage 5 is scoped to this existing Codex transport only. Probe
+            # immutable rules bytes as the actual slot identity before any
+            # charged model invocation; failure preserves full rules inline.
+            # Native Cursor/AGY need separate recipient and tool qualifications.
             from context_policy import (RULES_COMMIT, RULES_SHA256, RULES_SIZE,
                                         CANONICAL_GIT_RULES_PATH, verified_git_rules)
+            context_role = ('failure_diagnosis' if choice.get('role') == 'failure_diagnosis'
+                            else 'qa' if qa else 'author')
             reference=dict(path=CANONICAL_GIT_RULES_PATH,revision=RULES_COMMIT,
                            sha256=RULES_SHA256,bytes=RULES_SIZE)
             guidance=('If you need the complete accepted rules, read the IMMUTABLE '
@@ -124,7 +128,7 @@ def setup(req, config, native_auth=None):
                       +CANONICAL_GIT_RULES_PATH+'; do not trust modified '
                       'working-tree policy files.\n')
             wrapped, rules_receipt = inject(guidance+prompt, qa, bridge.work,
-                accepted_rules, role='qa', context_profile='scoped_v1',
+                accepted_rules, role=context_role, context_profile='scoped_v1',
                 full_rules_reference=reference,
                 verified_access=lambda ref: verified_git_rules(bridge.work,ref))
         else:
