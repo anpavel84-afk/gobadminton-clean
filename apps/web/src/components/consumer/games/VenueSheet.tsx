@@ -3,6 +3,7 @@ import { CloseButton } from "../CloseButton";
 import type { ReactNode } from "react";
 import { useEffect, useId, useRef, useState } from "react";
 import type { Game, VenueSummary } from "../../../lib/consumer-types";
+import { forbiddenUrlScalars, httpUrlAgreesWithOriginalAuthority } from "../../../lib/original-http-authority";
 import { venueDays, venueDayLabel } from "../../../lib/venue-popup";
 import { formatSeats } from "../../../lib/game-presentation";
 import { CreateGamePage } from "../pages/CreateGamePage";
@@ -14,24 +15,18 @@ import { VenueGameActions } from "./VenueGameActions";
 import "../../../styles/venue-popup.css";
 
 // Validate untrusted/older API data independently of server normalization.
-function hasForbiddenContactCharacters(value: string): boolean {
-  return Array.from(value).some(character => {
-    const code = character.charCodeAt(0);
-    return code <= 0x1f || (code >= 0x7f && code <= 0x9f) || character === "\\";
-  });
-}
+const hasForbiddenContactCharacters = forbiddenUrlScalars;
 function contactUrl(value: unknown, kind?: string): string | null {
   if (typeof value !== "string" || hasForbiddenContactCharacters(value)) return null;
   const raw = value.trim();
-  if (!/^https?:\/\//i.test(raw) || raw.split(/[/?#]/)[2]?.includes("@")) return null;
-  try {
-    const url = new URL(raw);
-    if (!url.hostname.startsWith("[") && (url.hostname.length > 253 || !url.hostname.split(".").every(label => /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(label)))) return null;
-    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.port || url.href.length > 300) return null;
-    const host = kind === "telegram" ? "t.me" : kind === "whatsapp" ? "wa.me" : kind === "vk" ? "vk.com" : null;
-    if (kind && (!host || url.protocol !== "https:" || url.hostname !== host || url.pathname === "/")) return null;
-    return url.href;
-  } catch { return null; }
+  if (!/^https?:\/\//i.test(raw)) return null;
+  const url = httpUrlAgreesWithOriginalAuthority(raw, hasForbiddenContactCharacters);
+  if (!url) return null;
+  if (!url.hostname.startsWith("[") && (url.hostname.length > 253 || !url.hostname.split(".").every(label => /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(label)))) return null;
+  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.port || url.href.length > 300) return null;
+  const host = kind === "telegram" ? "t.me" : kind === "whatsapp" ? "wa.me" : kind === "vk" ? "vk.com" : null;
+  if (kind && (!host || url.protocol !== "https:" || url.hostname !== host || url.pathname === "/")) return null;
+  return url.href;
 }
 export function VenuePublicContacts({ value }: { value: unknown }) {
   const row = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};

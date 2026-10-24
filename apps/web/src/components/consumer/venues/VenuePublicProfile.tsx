@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import type { Venue, VenueProfile } from "../../../lib/consumer-types";
+import { forbiddenUrlScalars, httpUrlAgreesWithOriginalAuthority } from "../../../lib/original-http-authority";
 import { VenuePublicContacts } from "../games/VenueSheet";
 import { VenueCoverCredit } from "./VenueCoverCredit";
 import { venueCoverUrl } from "./VenueCover";
@@ -35,12 +36,9 @@ function galleryPhoto(value: unknown, cover: Venue["cover"]): VenueProfile["gall
     })
     || typeof credit.url !== "string" || credit.url.length > 300
     || !credit.url.startsWith("https://") || /[^\x21-\x7e]|[\\<>"{}|^`]|%(?![0-9a-f]{2})/i.test(credit.url)) return null;
-  try {
-    const attribution = new URL(credit.url);
-    if (attribution.protocol !== "https:" || attribution.username || attribution.password || attribution.port
-      || credit.url.split(/[/?#]/)[2]?.includes("@")
-      || (!attribution.hostname.startsWith("[") && (attribution.hostname.length > 253 || !attribution.hostname.split(".").every(label => /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(label))))) return null;
-  } catch { return null; }
+  const attribution = httpUrlAgreesWithOriginalAuthority(credit.url, forbiddenUrlScalars);
+  if (!attribution || attribution.protocol !== "https:" || attribution.username || attribution.password || attribution.port
+    || (!attribution.hostname.startsWith("[") && (attribution.hostname.length > 253 || !attribution.hostname.split(".").every(label => /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(label))))) return null;
   return { url, credit: { kind: "photo", text: credit.text, url: credit.url } };
 }
 
