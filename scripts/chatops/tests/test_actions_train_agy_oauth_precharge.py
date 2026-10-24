@@ -155,5 +155,88 @@ class AtomicSyntheticOAuth(unittest.TestCase):
                 self.assertEqual(N.retain_oauth_refresh(token,fake),'unchanged')
 
 
+class ChargedEvidenceRetention(unittest.TestCase):
+    """Real invoke/finalizer, synthetic credential and fake CLI, zero provider calls."""
+
+    def exercise(self, corruption='chmod', timeout=False):
+        charged=Mock();launches=[]
+        class Process:
+            pid=99999999
+            returncode=None
+            def communicate(self, input, timeout):
+                self._input_offset=len(input)
+                if self.should_timeout:
+                    raise N.subprocess.TimeoutExpired('inert-cli', timeout)
+                self.returncode=0
+            def wait(self):
+                if self.returncode is None:self.returncode=-9
+                return self.returncode
+            def poll(self):return self.returncode
+        Process.should_timeout=timeout
+        with tempfile.TemporaryDirectory(prefix='gb-agy-charged-evidence-') as tmp:
+            root=Path(tmp);evidence=root/'evidence'
+            def fake_popen(argv, **kw):
+                launches.append(argv)
+                kw['stdout'].write(b'INERT_NATIVE_STDOUT\n')
+                kw['stderr'].write(b'INERT_NATIVE_STDERR\n')
+                kw['stdout'].flush();kw['stderr'].flush()
+                auth=Path(kw['env']['HOME'])/'.gemini/antigravity-cli/antigravity-oauth-token'
+                if corruption=='chmod':
+                    auth.chmod(0o644)
+                elif corruption=='missing':
+                    auth.unlink()
+                elif corruption=='symlink':
+                    target=auth.parent/'synthetic-other';target.write_text('{"token":"FAKE_OTHER"}')
+                    auth.unlink();auth.symlink_to(target)
+                elif corruption=='hardlink':
+                    os.link(auth,auth.parent/'synthetic-hardlink')
+                elif corruption=='malformed':
+                    auth.write_bytes(b'{invalid')
+                elif corruption=='oversized':
+                    auth.write_bytes(b'x'*65537)
+                else:raise AssertionError('unknown synthetic action')
+                return Process()
+            with patch.object(N,'EXECUTOR_UID',os.getuid()), \
+                 patch.object(N.os,'geteuid',return_value=os.getuid()), \
+                 patch.object(N,'qualification',return_value={'phase':'canary','adapter_revision':'a'*40}), \
+                 patch.object(N,'_verify_apparmor_precharge',return_value=None), \
+                 patch.object(N,'trusted',return_value=b'{"token":"FAKE_SAVED"}'), \
+                 patch.object(N,'git',return_value=b'/tmp/gb-agy-inert-candidate/.git'), \
+                 patch.object(N,'catalog_precharge',return_value=13), \
+                 patch.object(N.os,'killpg',return_value=None):
+                with self.assertRaises(N.ReviewError) as caught:
+                    N.invoke('INERT TASK ONLY',45,work=Path('/tmp/gb-agy-inert-candidate'),
+                        slot='slot2',task_hash='f'*64,charge=charged,popen=fake_popen,
+                        evidence_dir=evidence)
+            charged.assert_called_once()
+            self.assertEqual(len(launches),1)
+            self.assertEqual(caught.exception.code,'AGY_TIMEOUT' if timeout else 'AGY_ADAPTER_ERROR')
+            self.assertEqual(caught.exception.phase,'running' if timeout else 'output')
+            outputs=list(evidence.glob('*/stdout'))
+            self.assertEqual(len(outputs),1)
+            private=outputs[0].parent
+            self.assertEqual((private/'stdout').read_bytes(),b'INERT_NATIVE_STDOUT\n')
+            self.assertEqual((private/'stderr').read_bytes(),b'INERT_NATIVE_STDERR\n')
+            phases=sorted(private.glob('phase-*.json'))
+            self.assertTrue(phases)
+            final=json.loads(phases[-1].read_text())
+            self.assertEqual(final['charge_state'],'charged')
+            self.assertEqual(final['error_code'],caught.exception.code)
+            self.assertEqual(final['oauth_refresh'],'failed')
+            self.assertEqual(final['streams']['stdout']['retained_bytes'],len(b'INERT_NATIVE_STDOUT\n'))
+            self.assertEqual(final['streams']['stderr']['retained_bytes'],len(b'INERT_NATIVE_STDERR\n'))
+            self.assertFalse(final.get('status')=='success')
+            self.assertNotIn('FAKE_SAVED',json.dumps(final))
+
+    def test_postcharge_oauth_failure_retains_both_streams_and_charged_unknown(self):
+        for corruption in ('chmod','missing','symlink','hardlink','malformed','oversized'):
+            with self.subTest(corruption=corruption):
+                self.exercise(corruption)
+
+    def test_original_timeout_remains_primary_with_secondary_refresh_failure(self):
+        self.exercise('chmod',timeout=True)
+
+
+
 if __name__ == '__main__':
     unittest.main()
