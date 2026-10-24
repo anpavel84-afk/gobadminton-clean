@@ -311,7 +311,7 @@ class NativeToolScope(EvidenceTestCase):
         with self.assertRaisesRegex(N.ReviewError,'AGY_PRECHECK_FAILED'):
             N.parse_stream(wire(events),SHA)
 
-    def test_ordinary_executor_reuses_existing_landlock_readonly_and_subprocesses(self):
+    def test_synthetic_legacy_landlock_fixture_remains_readonly(self):
         with tempfile.TemporaryDirectory(prefix='gb-agy-synthetic-') as temp:
             root=Path(temp); work=root/'candidate';work.mkdir()
             subprocess.run(['git','init','-q',str(work)],check=True,capture_output=True)
@@ -331,9 +331,16 @@ result={'read':allowed(lambda:(work/'source.py').read_bytes()),
  'shell':allowed(lambda:subprocess.run(['/bin/true'],check=True))}
 print(json.dumps(result))
 """
-            original=N.filesystem_roots
-            def roots(private,candidate):
-                return original(private,candidate)
+            original=N.filesystem_roots;captured={}
+            def roots(private,candidate,common=None):
+                result=original(private,candidate,common)
+                captured['roots']=result
+                return result
+            def mock_legacy_landlock():
+                # Synthetic test-seam only. The production AGY path now
+                # requires AppArmor-on-exec (independently tested on Germany).
+                from native_guard import _landlock
+                _landlock(*captured['roots'])
             def cmd(timeout,prompt=None,model=N.MODEL):return [sys.executable,'-I','-c',script]
             original_popen=subprocess.Popen; charged=[]
             def popen(argv,**kwargs):
@@ -343,17 +350,19 @@ print(json.dumps(result))
             with patch.object(N,'qualification',return_value={'phase':'canary'}), \
                  patch.object(N.os,'geteuid',return_value=978), \
                  patch.object(N,'trusted',return_value=b'{"token":"synthetic"}'), \
-                 patch.object(N,'command',cmd), patch.object(N,'AGY',sys.executable):
+                 patch.object(N,'command',cmd), patch.object(N,'AGY',sys.executable), \
+                 patch.object(N,'filesystem_roots',side_effect=roots), \
+                 patch.object(N,'_arm_apparmor_onexec',side_effect=mock_legacy_landlock),patch.object(N,'_verify_apparmor_precharge',return_value=None):
                 raw, evidence=N.invoke('synthetic prompt',30,work=work,slot='slot2',task_hash='x',
                     charge=lambda:charged.append('one'),popen=popen)
             self.assertEqual(json.loads(raw),{'read':True,'write':False,'chmod_then_write':False,
                                                'outside':False,'shell':True})
             self.assertEqual((work/'source.py').read_text(),'original')
-            self.assertEqual(evidence['filesystem_boundary'],'existing_native_guard_landlock')
+            self.assertEqual(evidence['filesystem_boundary'],'uid978_apparmor_enforce_and_native_cli_sandbox')
             self.assertEqual(charged,['one'])
 
-    def test_native_add_dir_private_ws_real_git_source_access_and_no_write(self):
-        """Actual Landlock child, two source files + Git HEAD; zero model calls.
+    def test_synthetic_legacy_landlock_git_fixture_and_strict_gate(self):
+        """Explicitly simulated legacy Landlock child, two source files + HEAD.
 
         Native tool DONE envelopes are separately tied to verified source
         excerpts/digests. CLI agent inference is deliberately not invoked.
@@ -409,6 +418,14 @@ print(json.dumps({'cwd':os.getcwd(),'head':git.stdout.strip(),
                   'git_ok':git.returncode==0,'git_error':git.stderr[:700]}))
 """
             seen=[];charged=[]
+            original_roots=N.filesystem_roots;captured={}
+            def roots(private,candidate,common=None):
+                result=original_roots(private,candidate,common)
+                captured['roots']=result
+                return result
+            def mock_legacy_landlock():
+                from native_guard import _landlock
+                _landlock(*captured['roots'])
             original_command=N.command
             def child_command(timeout,prompt=None,model=N.MODEL,*,analysis=False,source_root=None):
                 self.assertTrue(analysis)
@@ -428,7 +445,9 @@ print(json.dumps({'cwd':os.getcwd(),'head':git.stdout.strip(),
                  patch.object(N.os,'geteuid',return_value=978), \
                  patch.object(N,'trusted',return_value=b'synthetic-not-real-oauth'), \
                  patch.object(N,'command',child_command), \
-                 patch.object(N,'AGY',sys.executable):
+                 patch.object(N,'AGY',sys.executable), \
+                 patch.object(N,'filesystem_roots',side_effect=roots), \
+                 patch.object(N,'_arm_apparmor_onexec',side_effect=mock_legacy_landlock),patch.object(N,'_verify_apparmor_precharge',return_value=None):
                 try:
                     raw,receipt=N.invoke('probe only',45,work=work,slot='slot2',
                         task_hash='x'*64,charge=lambda:charged.append('one-synthetic-call'),
@@ -443,7 +462,7 @@ print(json.dumps({'cwd':os.getcwd(),'head':git.stdout.strip(),
             self.assertFalse(observed['write'])
             self.assertFalse(observed['outside_readable'])
             self.assertEqual(len(seen),1)
-            self.assertEqual(receipt['filesystem_boundary'],'existing_native_guard_landlock')
+            self.assertEqual(receipt['filesystem_boundary'],'uid978_apparmor_enforce_and_native_cli_sandbox')
             self.assertEqual(receipt['writable_roots'],['invocation_private_root','/dev/null'])
             rows=stream()
             rows[0]['init']['tools']=['view_file','run_command']

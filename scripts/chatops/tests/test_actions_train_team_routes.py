@@ -74,7 +74,7 @@ class ModelProtocol(unittest.TestCase):
                     self.assertEqual(kwargs['stdin'],subprocess.PIPE)
                     kwargs['stdout'].write(A.wire(events));kwargs['stdout'].flush()
                     return Process()
-                with patch.object(N,'qualification',return_value={'phase':'ready'}),patch.object(N.os,'geteuid',return_value=978),patch.object(N,'trusted',return_value=b'PRIVATE_AUTH'),patch.object(N,'git',return_value=b'/tmp/candidate/.git'),patch.object(N,'filesystem_roots',return_value=([],[],[])),patch.object(N.os,'killpg'):
+                with patch.object(N,'qualification',return_value={'phase':'ready'}),patch.object(N.os,'geteuid',return_value=978),patch.object(N,'trusted',return_value=b'PRIVATE_AUTH'),patch.object(N,'git',return_value=b'/tmp/candidate/.git'),patch.object(N,'filesystem_roots',return_value=([],[],[])),patch.object(N.os,'killpg'),patch.object(N,'_verify_apparmor_precharge',return_value=None):
                     raw,execution=N.invoke('full model context 漢字',30,work=Path('/tmp/candidate'),slot='slot2',task_hash='x',charge=charge,popen=popen,model=model,evidence_dir=Path(temp)/'evidence')
                 self.assertEqual(seen['argv'][seen['argv'].index('--model')+1],model)
                 self.assertEqual(json.loads(seen['wire'])['message']['content'],'full model context 漢字')
@@ -97,8 +97,11 @@ class ModelProtocol(unittest.TestCase):
             if path==N.MARKER:return json.dumps(marker).encode()
             if str(path)==N.AGY:return b'trusted-cli-fixture'
             return b'private-auth-fixture'
+        # Synthetic model-admission fixture only. AppArmor denial is
+        # separately tested at every actual qualification entrypoint.
         with patch.object(N,'trusted',side_effect=trusted), \
-             patch.object(N,'AGY_SHA256',hashlib.sha256(b'trusted-cli-fixture').hexdigest()):
+             patch.object(N,'AGY_SHA256',hashlib.sha256(b'trusted-cli-fixture').hexdigest()), \
+             patch.object(N,'_verify_apparmor_precharge',return_value=None):
             return N.qualification('slot2','exact',model=model)
     def test_medium_canary_never_qualifies_other_models(self):
         marker=self.marker('canary');marker['admitted_models']=list(N.MODELS)

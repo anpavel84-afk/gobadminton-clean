@@ -1,0 +1,53 @@
+abi <abi/4.0>,
+include <tunables/global>
+profile gb-agy-runtime /opt/gb-slots/runtime/antigravity/agy flags=(attach_disconnected) {
+  /usr/** rmix,
+  /bin/** rmix,
+  /lib/** rmix,
+  /lib64/** rmix,
+  /opt/gb-slots/runtime/antigravity/agy rmix,
+  /opt/gb-slots/runtime/node/** rmix,
+  /opt/gb-slots/runtime/pnpm/** rmix,
+  /etc/ld.so.cache r,
+  /etc/ssl/** r,
+  /etc/hosts r,
+  /etc/resolv.conf r,
+  /etc/nsswitch.conf r,
+  /etc/gai.conf r,
+  /etc/localtime r,
+  /etc/passwd r,
+  /etc/group r,
+  /dev/null rw,
+  /dev/random r,
+  /dev/urandom r,
+  /dev/zero rw,
+  /tmp/gb-agy-*/** rwkmix,
+  /proc/self/** r,
+  /proc/[0-9]*/attr/current r,
+  /proc/[0-9]*/uid_map rw,
+  /proc/[0-9]*/gid_map rw,
+  /proc/[0-9]*/setgroups rw,
+  /srv/gb-slots/slot2/worktrees/antigravity-qa-29-canary/** r,
+  network,
+  unix,
+  signal,
+  userns,
+  capability sys_admin,
+  # The only permitted propagation change is a private mount root.
+  mount options=(rw, make-rprivate) -> /,
+  # Bind-mount ONLY public/executable roots; QA candidate is never a mount source.
+  # Arbitrary bind-mount source to private destination is forbidden.
+  # The copied CLI authentication material is NEVER a bind-mount source.
+  deny mount options=(bind) /tmp/gb-agy-*/home/** -> /tmp/gb-agy-*/**,
+  mount options=(bind) /usr/** -> /tmp/gb-agy-*/**,
+  mount options=(bind) /bin/** -> /tmp/gb-agy-*/**,
+  mount options=(bind) /lib/** -> /tmp/gb-agy-*/**,
+  mount options=(bind) /lib64/** -> /tmp/gb-agy-*/**,
+  mount options=(bind) /opt/gb-slots/runtime/antigravity/agy -> /tmp/gb-agy-*/**,
+  mount options=(bind) /opt/gb-slots/runtime/node/** -> /tmp/gb-agy-*/**,
+  mount options=(bind) /opt/gb-slots/runtime/pnpm/** -> /tmp/gb-agy-*/**,
+
+  mount fstype=tmpfs -> /tmp/gb-agy-*/**,
+  mount fstype=proc -> /tmp/gb-agy-*/**,
+  # No unrestricted bind mounts or pivot_root aliases.
+}

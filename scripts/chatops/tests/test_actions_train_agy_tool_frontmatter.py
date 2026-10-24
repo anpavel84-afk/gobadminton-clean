@@ -55,13 +55,15 @@ class NativeAgentExposure(unittest.TestCase):
             self.assertIn('--sandbox',opts)
             self.assertEqual(opts[opts.index('--input-format')+1],'stream-json')
 
-    def test_review_gate_and_landlock_are_not_weakened(self):
+    def test_review_gate_and_mandatory_apparmor_are_not_weakened(self):
         self.assertEqual(N.READ_TOOLS,frozenset({'view_file','run_command'}))
         code=inspect.getsource(N.analysis_source_gate)
         self.assertIn('READ_TOOLS <= set(evidence[',code)
         self.assertIn("downgraded=dict(result,completion='INCOMPLETE')",code)
         source=inspect.getsource(N.invoke)
-        self.assertIn('_landlock(readonly,writable,executables)',source)
+        self.assertIn('_arm_apparmor_onexec()',source)
+        self.assertIn('no_new_privileges()',source)
+        self.assertNotIn('_landlock(readonly,writable,executables)',source)
         self.assertIn('ANALYSIS_AGENT_DEF if analysis else AGENT_DEF',source)
         self.assertIn("writable_roots=['invocation_private_root','/dev/null']",source)
 
@@ -81,7 +83,10 @@ class NativeAgentExposure(unittest.TestCase):
             with patch.object(N,'qualification',return_value={'phase':'canary'}),\
                  patch.object(N.os,'geteuid',return_value=978),\
                  patch.object(N,'trusted',return_value=b'synthetic-token'),\
-                 patch.object(N,'AGY','/usr/bin/python3'):
+                 patch.object(N,'AGY','/usr/bin/python3'),\
+                 patch.object(N,'_arm_apparmor_onexec',return_value=None),patch.object(N,'_verify_apparmor_precharge',return_value=None):
+                # This fake-Popen test validates agent-file emission only; the
+                # required AppArmor-enforce transition is tested separately.
                 raw,receipt=N.invoke('test inert no-model',45,
                     work=work,slot='slot2',task_hash='0'*64,
                     charge=lambda:charged.append('test_seam'),

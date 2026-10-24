@@ -5,6 +5,7 @@ Uses saved CLI evidence from #29, not an inferred Codex-compatible protocol.
 No host settings, qualification marker, login, budget or active runtime is changed.
 """
 import ast
+import ctypes
 import hashlib
 import json
 import os
@@ -19,6 +20,11 @@ import uuid
 from pathlib import Path
 
 AGY = '/opt/gb-slots/runtime/antigravity/agy'
+# The independent UID978 AppArmor profile is mandatory on the AGY exec edge.
+# Do not permit an unconfined fallback if the profile is not loaded.
+APPARMOR_PROFILE = b'gb-agy-runtime'
+APPARMOR_POLICY_SHA256 = '250d1b67ac03705b33f6264a83ee00035401c0dc7a7d65924739f8be0beaf458'
+APPARMOR_POLICY_FILE = Path('/etc/apparmor.d/gb-agy-runtime')
 MARKER = Path('/etc/gobadminton-slots/antigravity-qa.json')
 EXECUTOR_UID = 978
 AUTH = Path('/srv/gb-slots/slot2/home/.gemini/antigravity-cli/antigravity-oauth-token')
@@ -464,6 +470,10 @@ def qualification(slot, task_hash, model=MODEL):
          'Antigravity executable pin drift')
     # Auth is consumed only by the CLI transport and never added to prompt,
     # argv, receipts or exceptions. Provisioning is a separate root OPS action.
+    try:
+        _verify_apparmor_precharge()
+    except OSError:
+        raise ReviewError('AGY_PRECHECK_FAILED', 'preflight') from None
     trusted(AUTH, owner=EXECUTOR_UID)
     return m
 
@@ -583,6 +593,90 @@ def reap(process):
     process.wait()
 
 
+
+def _verify_apparmor_precharge():
+    """Verify trusted installed source and enforce label before model charging.
+
+    Loaded kernel policy bytes need separate installer/negative-test proof.
+    """
+    fd = os.open(APPARMOR_POLICY_FILE,
+                 os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    with os.fdopen(fd, 'rb') as stream:
+        info = os.fstat(stream.fileno())
+        if (not stat.S_ISREG(info.st_mode)
+                or info.st_uid != 0
+                or info.st_nlink != 1
+                or (info.st_mode & 0o022)):
+            raise PermissionError('unsafe AppArmor policy file')
+        content = stream.read(65537)
+    if hashlib.sha256(content).hexdigest() != APPARMOR_POLICY_SHA256:
+        raise PermissionError('AppArmor policy SHA mismatch')
+
+    # The root receiver must verify the slot2 identity, never itself.
+    import pwd
+    uid = os.geteuid()
+    if uid == 0:
+        try:
+            account = pwd.getpwuid(EXECUTOR_UID)
+        except KeyError:
+            raise PermissionError('UID978 account unavailable') from None
+        if account.pw_name != 'gb-slot2' or account.pw_gid != 968:
+            raise PermissionError('unexpected slot2 identity')
+        identity = dict(user=EXECUTOR_UID, group=968, extra_groups=[])
+    elif uid == EXECUTOR_UID and os.getegid() == 968:
+        identity = {}
+    else:
+        raise PermissionError('wrong AppArmor preflight identity')
+
+    def probe_child():
+        from native_guard import no_new_privileges
+        _arm_apparmor_onexec()
+        no_new_privileges()
+
+    script = (
+        "import os; from pathlib import Path; "
+        "label = Path('/proc/self/attr/current').read_text().strip(); "
+        "print(f'{os.geteuid()}:{os.getegid()}:{label}')"
+    )
+    try:
+        observed = subprocess.run(
+            ['/usr/bin/python3', '-I', '-c', script],
+            cwd='/',
+            env={'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8'},
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            preexec_fn=probe_child,
+            timeout=10,
+            check=False,
+            **identity
+        )
+    except (OSError, subprocess.SubprocessError):
+        raise PermissionError('AppArmor preflight execution failed') from None
+
+    if (observed.returncode != 0 or
+            observed.stdout.strip() != b'978:968:gb-agy-runtime (enforce)'):
+        raise PermissionError('AppArmor enforce transition could not be verified')
+
+
+
+def _arm_apparmor_onexec():
+    """Fail closed: ensure the next exec transitions to the fixed enforced profile.
+
+    The vendor's internal sandbox must manage its own user+mount namespaces;
+    the former outer Landlock forbade Go's /proc/<child>/uid_map write, preventing
+    CLI selfexec before the command was ever launched. The AppArmor profile
+    deliberately allows native namespace creation while denying protected
+    roots, the original credentials, and candidate checkout writes.
+    """
+    lib = ctypes.CDLL('libapparmor.so.1', use_errno=True)
+    fn = lib.aa_change_onexec
+    fn.argtypes = (ctypes.c_char_p,)
+    fn.restype = ctypes.c_int
+    if fn(APPARMOR_PROFILE) != 0:
+        raise OSError(ctypes.get_errno(), 'required UID978 AppArmor profile unavailable')
+
+
 def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=subprocess.Popen,
            evidence=None, evidence_dir=None, analysis=False):
     owned = evidence is None
@@ -591,8 +685,15 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=
     try:
         wire,transport=input_payload(stdin)
         ev.record(**transport,input_delivery='prepared',requested_permission_mode=PERMISSION_MODE,requested_model=model)
-        marker=qualification(slot,task_hash,model=model)
+        # Fail BEFORE qualification() touches the pinned OAuth credential.
         need(os.geteuid() == EXECUTOR_UID, 'wrong native QA executor UID')
+        try:
+            _verify_apparmor_precharge()
+        except OSError:
+            raise ReviewError('AGY_PRECHECK_FAILED', 'preflight', ev.id) from None
+        ev.record(apparmor_policy_sha256=APPARMOR_POLICY_SHA256,
+                  apparmor_mode='enforce', apparmor_preflight='source_and_label')
+        marker=qualification(slot,task_hash,model=model)
         need(type(timeout) is int and MIN_TIMEOUT <= timeout <= 3600, 'invalid timeout')
         with tempfile.TemporaryDirectory(prefix='gb-agy-') as temp:
             root=Path(temp);agents=root/'ws/.agents/agents';out=root/'out'
@@ -619,8 +720,10 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=
                      'analysis source must be canonical read-only worktree')
             readonly,writable,executables=filesystem_roots(root,source_root or work,common)
             def child():
-                from native_guard import _landlock,no_new_privileges
-                os.setsid();no_new_privileges();_landlock(readonly,writable,executables)
+                from native_guard import no_new_privileges
+                os.setsid()
+                _arm_apparmor_onexec()  # Required profile; failure aborts Popen.
+                no_new_privileges()     # Retained: no UID or capability escalation.
                 resource.setrlimit(resource.RLIMIT_CORE,(0,0))
                 resource.setrlimit(resource.RLIMIT_FSIZE,(MAX_OUT+1,MAX_OUT+1))
             # Always retain these two bounded files before credential-temp cleanup.
@@ -662,9 +765,10 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=
                 ev.streams(out)
         ev.record(phase='output',terminal=owned,status='invoke_success')
         return raw,dict(executor_uid=EXECUTOR_UID,slot=slot,qualification_phase=marker['phase'],
-            requested_native_sandbox=True,filesystem_boundary='existing_native_guard_landlock',
+            requested_native_sandbox=True,filesystem_boundary='uid978_apparmor_enforce_and_native_cli_sandbox',
             candidate_access='read_only',credential_source='provisioned_native_auth_file',
-            readonly_roots=[str(x) for x in readonly],writable_roots=['invocation_private_root','/dev/null'],
+            readonly_roots=[str(source_root or work)],writable_roots=['invocation_private_root','/dev/null'],
+            apparmor_profile=APPARMOR_PROFILE.decode('ascii'),
             evidence_id=ev.id,requested_permission_mode=PERMISSION_MODE,input_delivery='written',**transport)
     except BaseException as error:
         code=error.code if isinstance(error,ReviewError) else 'AGY_ADAPTER_ERROR'
