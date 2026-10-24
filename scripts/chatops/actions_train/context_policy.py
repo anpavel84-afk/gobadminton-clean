@@ -63,6 +63,11 @@ def inject(prompt, qa, cwd, accepted, *, role=None, context_profile='full',
         from context_exchange import rules_prefix
         prefix, context_metrics = rules_prefix(text=text, metadata=metadata, role=role,
             compact=True, full_rules_reference=full_rules_reference, verified_access=verified_access)
+        if context_metrics['policy_profile'] != 'scoped_v1':
+            # Preserve the exact legacy full-context wire contract as well as
+            # all accepted bytes. Missing recipient access cannot silently
+            # switch ordinary Codex tasks to a different full-prompt format.
+            return inject(prompt, qa, cwd, accepted, role=role, context_profile='full')
         payload = prefix + 'BOUNDED STAGE INSTRUCTIONS:\n' + prompt
         receipt = dict(metadata, role=role, cwd=str(Path(cwd).resolve()),
             delivery='explicit_scoped_stdin' if context_metrics['policy_profile']=='scoped_v1' else 'explicit_full_stdin',
