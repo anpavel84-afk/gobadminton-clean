@@ -1,13 +1,13 @@
 {
   "schema": "GB_ACTIONS_MONITOR_MAPPING_V1",
-  "writer_before_sha256": "eaded5a19de2f16d1b935d8d3d5a3ad72e00a04dc984b6ae66b8019fc18799cf",
-  "app_before_sha256": "10d89e0ccb578cd046548af06a23ef2d74a866711ab68d17ee773b57ece48ad7",
+  "writer_before_sha256": "210950bbb82db59a04d13629ebe723737a7f74d77034264eb21e0639771349df",
+  "app_before_sha256": "e534385f61a1f2c2c4ab55e311e6046b4c4722a6f102df93a59809dccd8eb2bb",
   "python_module": "/usr/local/lib/gb-actions-train/monitor.py",
   "source": "/var/lib/gobadminton-deploy-evidence/actions-train.json",
   "writer_insert_before": "    data = json.dumps(snap, ensure_ascii=False, sort_keys=True, separators=(',', ':'))",
   "writer_insert": "    import importlib.util\n    spec = importlib.util.spec_from_file_location('gb_train_monitor', '/usr/local/lib/gb-actions-train/monitor.py')\n    train_monitor = importlib.util.module_from_spec(spec); spec.loader.exec_module(train_monitor)\n    try:\n        snap = train_monitor.extend(snap, read_json('/var/lib/gobadminton-deploy-evidence/actions-train.json', 65536))\n    except (OSError, ValueError, KeyError, TypeError):\n        snap['actions_train_source'] = 'unknown'\n",
-  "app_insert_before": "        s.appendChild(b);",
-  "app_insert": "        if (window.GBTrainMonitor) window.GBTrainMonitor.render(slot, b, el, kv);\n",
+  "app_insert_before": "        b.appendChild(tech);",
+  "app_insert": "        if (window.GBTrainMonitor) window.GBTrainMonitor.render(slot, tech, el, kv);\n",
   "browser_script": "/usr/local/lib/gb-actions-train/monitor_extension.js",
   "browser_mapping": "Serve monitor_extension.js on the existing monitor static origin and load it before app.js. Keep CSP, existing static auth and schedule unchanged.",
   "authority": "PMA applies these exact insertions to actual reviewed installed paths after matching before hashes and backs up those files; author does not install or modify monitor runtime. No new monitor unit."

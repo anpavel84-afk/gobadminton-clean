@@ -5,24 +5,27 @@ window.GBTrainMonitor = {
     var a = slot.actions_train;
     if (!a) return;
     var model = a.model || {}, process = a.process;
+    var T = { not_applicable: '—', none: 'нет', not_started: 'не запущено', unknown: 'неизвестно', 'not recorded': 'не записано',
+      stale: 'давно не обновлялось', running: 'выполняется', waiting: 'ожидание', confirmed: 'подтверждено', error: 'ошибка', unavailable: 'недоступно' };
+    function t(v) { return Object.prototype.hasOwnProperty.call(T, v) ? T[v] : v; }
     var last = a.last_confirmed_event ? new Date(a.last_confirmed_event * 1000).toISOString() : 'unknown';
     parent.appendChild(kv([
-      ['Failure loop', (a.failure_loop || {}).status || 'not_applicable'],
-      ['Failure / brief hash', ((a.failure_loop || {}).failure_fingerprint || 'none') + ' / ' + ((a.failure_loop || {}).brief_hash || 'none')],
-      ['Actions stage', (a.operation || 'not_started') + ' / ' + a.status],
-      ['Workflow', a.workflow_run ? String(a.workflow_run) + ' attempt ' + a.workflow_attempt : 'not_started'],
-      ['CLI process', process ? 'PID ' + process.pid + ' / start ' + process.start + (a.status === 'stale' ? ' (last observation)' : '') : 'not_started'],
-      ['Provider / role', model.provider ? model.provider + ' / ' + model.role : 'unknown'],
-      ['Requested / effective model', (model.requested_model || 'default') + ' / ' + (model.effective_model || 'unknown')],
-      ['Effort requested / effective', (model.requested_effort || model.effort || 'unknown') + ' / ' + (model.effective_effort || model.effort || 'unknown')],
-      ['Stage complexity', model.stage_complexity || 'legacy immutable'],
-      ['Selection reason', model.selection_reason || 'not recorded'],
-      ['Escalation', model.escalation_reason || 'none'],
-      ['Cost diagnostic', model.expense_diagnostic || 'none'],
-      ['Measured calls / tokens', model.usage ? String(model.usage.charged_calls) + ' / ' + (model.usage.tokens === null ? 'unavailable' : String(model.usage.tokens)) : 'not recorded'],
-      ['Fallback', model.fallback_reason || 'not_applicable'],
-      ['Last CONFIRMED event', last],
-      ['Wait reason', a.wait_reason || 'not_applicable']
+      ['Цикл починки', t((a.failure_loop || {}).status || 'not_applicable')],
+      ['Отпечаток сбоя / бриф', ((a.failure_loop || {}).failure_fingerprint || 'нет') + ' / ' + ((a.failure_loop || {}).brief_hash || 'нет')],
+      ['Этап в Actions', t(a.operation || 'not_started') + ' / ' + t(a.status) + (a.status === 'stale' ? ' (контроллер публикует этап только при событиях конвейера)' : '')],
+      ['Запуск workflow', a.workflow_run ? String(a.workflow_run) + ', попытка ' + a.workflow_attempt : 'не запущено'],
+      ['Процесс CLI', process ? 'PID ' + process.pid + ', старт ' + process.start + (a.status === 'stale' ? ' (последнее наблюдение)' : '') : 'не запущено'],
+      ['Провайдер / роль', model.provider ? model.provider + ' / ' + model.role : 'неизвестно'],
+      ['Модель: запрошена / фактическая', (model.requested_model || 'по умолчанию') + ' / ' + (model.effective_model || 'неизвестно')],
+      ['Усилие: запрошено / фактическое', (model.requested_effort || model.effort || 'неизвестно') + ' / ' + (model.effective_effort || model.effort || 'неизвестно')],
+      ['Сложность этапа', model.stage_complexity || 'как раньше (без изменений)'],
+      ['Причина выбора модели', t(model.selection_reason || 'not recorded')],
+      ['Эскалация', t(model.escalation_reason || 'none')],
+      ['Диагностика затрат', t(model.expense_diagnostic || 'none')],
+      ['Вызовы / токены', model.usage ? String(model.usage.charged_calls) + ' / ' + (model.usage.tokens === null ? 'недоступно' : String(model.usage.tokens)) : 'не записано'],
+      ['Запасной вариант', t(model.fallback_reason || 'not_applicable')],
+      ['Последнее подтверждённое событие', last === 'unknown' ? 'неизвестно' : last],
+      ['Причина ожидания', t(a.wait_reason || 'not_applicable')]
     ]));
   }
 };
@@ -53,18 +56,32 @@ window.GBTrainMonitor = {
     rows.forEach(function (r) { dl.appendChild(el('dt', null, r[0])); var dd = el('dd'); if (r[1] instanceof Node) dd.appendChild(r[1]); else dd.textContent = r[1]; dl.appendChild(dd); });
     return dl;
   }
-  function steps(claim) {
+  function steps(claim, neutral) {
     var ol = el('ol', 'steps'), ph = claim.phase, blocked = ph === 'blocked';
     var idx = blocked ? (claim.resume_phase && CUR[claim.resume_phase] != null ? CUR[claim.resume_phase] : -1) : (CUR[ph] != null ? CUR[ph] : -1);
     STAGES.forEach(function (s, i) {
       var c = '';
-      if (idx >= 0) { if (i < idx || ph === 'done') c = 'done'; else if (i === idx) c = blocked ? 'fail' : 'cur'; }
+      if (idx >= 0 && !neutral) { if (i < idx || ph === 'done') c = 'done'; else if (i === idx) c = blocked ? 'fail' : 'cur'; }
       ol.appendChild(el('li', c, s));
     });
     return ol;
   }
 
+  // A checkpoint is only the last record the controller wrote. Without a running service, a running
+  // Actions stage or a recent confirmed event it is not evidence of current work (not a claim that the task is finished).
+  var STALE_CHECKPOINT_S = 1800;
+  function slotIdle(slot, nowS) {
+    var c = slot.claim, p = slot.process, a = slot.actions_train;
+    if (!c || c.phase === 'done' || c.phase === 'blocked' || slot.status !== 'FRESH') return false;
+    if (slot.checkpoint_age_s == null || slot.checkpoint_age_s < STALE_CHECKPOINT_S) return false;
+    if (p && p.active === 'active') return false;
+    if (a && a.status === 'running') return false;
+    if (a && a.last_confirmed_event && nowS != null && nowS - a.last_confirmed_event < STALE_CHECKPOINT_S) return false;
+    return true;
+  }
+
   function nm(n, desc, fallbackTitle) {
+    if (desc && desc.described === false && !fallbackTitle) return 'Задача #' + n + ' · описание не добавлено';
     var t = (desc && desc.described && desc.title_ru) || fallbackTitle || (desc && desc.title_ru) || 'Задача #' + n + ' (описание не добавлено)';
     return '#' + n + ' ' + t;
   }
@@ -80,31 +97,47 @@ window.GBTrainMonitor = {
     s.appendChild(el('h2', null, d.source_mode === 'slots' ? 'Состояние слотов' : (finished || !d.claim ? 'Состояние исполнителя' : 'Сейчас выполняется')));
     if (d.slots) {
       if (d.source_mode === 'legacy') s.appendChild(el('div', 'mut', 'Публикации слотов ещё не прошли проверку; показан legacy.'));
+      var nowS = d.server_utc ? Date.parse(d.server_utc) / 1000 : null;
       d.slots.forEach(function (slot) {
-        var b = el('div', 'item'), c = slot.claim;
+        var b = el('div', 'item'), c = slot.claim, idle = slotIdle(slot, nowS), at = slot.actions_train;
+        var proc = slot.process, live = slot.status === 'FRESH', tech = el('details', 'blmore');
         b.appendChild(el('div', 'big', slot.slot));
-        var names = { FRESH: 'публикация свежая', STALE: 'данные устарели', MISSING: 'нет публикации',
-          INVALID: 'публикация отклонена', ERROR: 'ошибка чтения', OWNER_UNKNOWN: 'владелец UNKNOWN' };
-        b.appendChild(chip(names[slot.status] || 'UNKNOWN', slot.status === 'FRESH' ? 'info' : 'bad'));
-        b.appendChild(el('div', 'mut', slot.note || 'UNKNOWN'));
-        var proc = slot.process, live = slot.status === 'FRESH';
-        b.appendChild(el('div', 'mut', proc ? 'Служба: ' + proc.active + ' / ' + proc.sub + ' · PID ' + proc.pid + (live ? '' : ' (последнее наблюдение)') : 'Состояние службы неизвестно'));
+        var names = { FRESH: 'данные слота получены', STALE: 'данные устарели', MISSING: 'нет публикации',
+          INVALID: 'публикация отклонена', ERROR: 'ошибка чтения', OWNER_UNKNOWN: 'владелец слота неизвестен' };
+        if (idle) b.appendChild(chip('нет подтверждённой активности', 'warn'));
+        else if (live && !c) b.appendChild(chip('нет задачи', 'info'));
+        else if (!live || !c || c.phase === 'done') b.appendChild(chip(names[slot.status] || 'неизвестно', slot.status === 'FRESH' ? 'info' : 'bad'));
+        if (slot.note) b.appendChild(el('div', 'mut', slot.note));
         if (c && c.phase === 'done') b.appendChild(el('div', 'mut', 'Активной задачи нет. Последний завершённый результат:'));
         if (c) {
           b.appendChild(el('div', 'big', nm(c.issue, c.desc)));
           descLines(b, c.desc);
-          b.appendChild(chip(PHASE_RU[c.phase] || c.phase, c.phase === 'blocked' ? 'bad' : 'info'));
-          b.appendChild(steps(c));
-        } else b.appendChild(el('div', 'mut', live && proc && proc.active === 'active' ? 'Исполнитель запущен; активной задачи нет.' : 'Активная задача не подтверждена.'));
-        b.appendChild(kv([['Попытка', c && c.attempt != null ? String(c.attempt) : 'UNKNOWN'],
-          ['Коммит', c && c.head_sha ? sh(c.head_sha) : 'ещё не создан'],
+          if (idle) {
+            b.appendChild(el('div', null, 'Последняя запись контроллера: ' + (PHASE_RU[c.phase] || c.phase) + (c.attempt != null ? ', попытка ' + c.attempt : '') + (c.pr ? ', PR #' + c.pr : '') + '.'));
+            b.appendChild(el('div', 'mut', 'Служба не запущена, свежих подтверждений работы нет; чекпоинт не менялся ' + ago(slot.checkpoint_age_s).replace(' назад', '') + '. Это последняя запись, а не текущая работа: слот контроллером не освобождён.'));
+            if (c.desc && c.desc.closed) b.appendChild(el('div', 'mut', 'В описаниях задача помечена закрытой.'));
+            b.appendChild(steps(c, true));
+          } else {
+            b.appendChild(chip(PHASE_RU[c.phase] || c.phase, c.phase === 'blocked' ? 'bad' : 'info'));
+            b.appendChild(steps(c));
+          }
+        } else {
+          var why = at && at.wait_reason && /[А-Яа-я]/.test(at.wait_reason) ? ' ' + at.wait_reason : '';
+          b.appendChild(el('div', 'mut', live && proc && proc.active === 'active' ? 'Исполнитель запущен; активной задачи нет.' : 'Нет задачи.' + why));
+        }
+        if (c) b.appendChild(kv([['Попытка', c.attempt != null ? String(c.attempt) : 'не записана'],
+          ['PR', c.pr ? '#' + c.pr : 'ещё не создан'],
+          ['Коммит', c.head_sha ? sh(c.head_sha) : 'ещё не создан'],
+          ['QA', c.qa && c.qa.verdict ? c.qa.verdict + (c.qa.reviewed_sha ? ' (' + sh(c.qa.reviewed_sha) + ')' : '') : 'результат ещё не получен'],
+          ['CI', c.ci ? c.ci.result + ' · ' + c.ci.passed + '/' + c.ci.total + ' (' + sh(c.ci.sha) + ')' : 'результат ещё не получен'],
+          ['Чекпоинт менялся', slot.checkpoint_age_s != null ? ago(slot.checkpoint_age_s) : 'нет чекпоинта']]));
+        else if (slot.checkpoint_age_s != null) b.appendChild(kv([['Чекпоинт менялся', ago(slot.checkpoint_age_s)]]));
+        tech.appendChild(el('summary', null, 'Технические подробности'));
+        tech.appendChild(kv([['Служба', proc ? proc.active + ' / ' + proc.sub + ' · PID ' + proc.pid + (live ? '' : ' (последнее наблюдение)') : 'состояние неизвестно'],
           ['Запрошенная модель', c && c.requested_model ? c.requested_model + ' / ' + c.requested_effort : 'не указана'],
-          ['QA', c && c.qa && c.qa.verdict ? c.qa.verdict + (c.qa.reviewed_sha ? ' (' + sh(c.qa.reviewed_sha) + ')' : '') : 'результат ещё не получен'],
-          ['CI', c && c.ci ? c.ci.result + ' · ' + c.ci.passed + '/' + c.ci.total + ' (' + sh(c.ci.sha) + ')' : 'результат ещё не получен'],
-          ['PR', c && c.pr ? '#' + c.pr : 'ещё не создан'],
-          ['Изменение чекпоинта', slot.checkpoint_age_s != null ? ago(slot.checkpoint_age_s) : 'нет чекпоинта'],
-          ['Публикация', slot.published_utc || 'UNKNOWN'], ['Возраст публикации', ago(slot.age_s)]]));
-        if (window.GBTrainMonitor) window.GBTrainMonitor.render(slot, b, el, kv);
+          ['Данные слота получены', slot.published_utc || 'неизвестно'], ['Возраст этих данных', ago(slot.age_s)]]));
+        if (window.GBTrainMonitor) window.GBTrainMonitor.render(slot, tech, el, kv);
+        b.appendChild(tech);
         s.appendChild(b);
       });
       if (d.source_mode === 'slots') return;
@@ -255,6 +288,35 @@ window.GBTrainMonitor = {
     });
   }
 
+  // Curated "work outside slots" feed (PMA tasks). Text only; a link is shown only for this repository.
+  var PMA_KIND = { 'идёт': 'info', 'ждёт Pavel': 'warn', 'ждёт внешнего': 'info', 'заблокировано': 'bad', 'готово': 'ok' };
+  var PMA_REPO = 'https://github.com/anpavel84-afk/gobadminton-clean/';
+  function renderPma(w) {
+    var s = $('pma-work');
+    if (!s) { s = el('section'); s.id = 'pma-work'; $('infra').parentNode.insertBefore(s, $('infra')); }
+    clear(s); s.appendChild(el('h2', null, 'Работа вне слотов'));
+    if (!w || w.available === false) { s.appendChild(el('div', 'mut', 'Список недоступен: ' + ((w && w.note) || 'нет данных') + '.')); return; }
+    var items = w.items || [], waiting = items.filter(function (x) { return x.status === 'ждёт Pavel'; }).length;
+    s.appendChild(el('div', 'mut', 'Задачи PMA вне слотов: установки, независимые QA-ревью, черновые PR, разборы. Ждут решения Pavel: ' + waiting + '.'));
+    if (w.file_stale) s.appendChild(chip('список не обновлялся ' + ago(w.file_age_s) + ' — актуальность не подтверждена', 'warn'));
+    if (!items.length) s.appendChild(el('div', 'mut', 'Записей нет.'));
+    items.forEach(function (x) {
+      var b = el('div', 'item'), title = el('div', null, x.title_ru);
+      title.appendChild(chip(x.status, PMA_KIND[x.status]));
+      if (!x.fresh) title.appendChild(chip('не подтверждено вовремя', 'warn'));
+      b.appendChild(title);
+      b.appendChild(el('div', 'mut', x.kind + (x.stage_ru ? ' · ' + x.stage_ru : '') + ' · обновлено ' + (x.future_time ? 'время записи в будущем' : ago(x.age_s))));
+      if (x.waiting_for_ru) b.appendChild(el('div', null, 'Что нужно: ' + x.waiting_for_ru));
+      if (!x.fresh) b.appendChild(el('div', 'mut', 'Запись давно не подтверждалась; состояние может быть уже другим.'));
+      if (x.link && x.link.indexOf(PMA_REPO) === 0) {
+        var a = el('a', null, 'Открыть на GitHub'); a.href = x.link; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.style.color = '#58a6ff'; b.appendChild(a);
+      }
+      if (!x.fresh) b.style.opacity = 0.6;
+      s.appendChild(b);
+    });
+    if (w.hidden_stale > 0) s.appendChild(el('div', 'mut', 'Скрыто давно не подтверждавшихся записей: ' + w.hidden_stale + '.'));
+  }
+
   // External evidence metadata only; reuse the existing snapshot poll and styles.
   function renderExternal(x) {
     var s = $('external');
@@ -291,6 +353,7 @@ window.GBTrainMonitor = {
 
   function render(d) {
     renderPipeline(d.pipeline);
+    renderPma(d.pma_work);
     renderExternal(d.external_runs);
     var f = $('fresh'), bn = $('banner');
     var stale = d.available === false || d.stale;
@@ -307,7 +370,7 @@ window.GBTrainMonitor = {
     else if (d.source_mode === 'slots' && d.source_ok === false) { bn.hidden = false; bn.textContent = d.source_error || 'Статусы слотов недоступны.'; }
     else if (d.executor && d.executor.running === false) { bn.hidden = false; bn.className = 'warn'; bn.textContent = 'Исполнитель остановлен.'; }
     if (d.available === false) { ['now', 'backlog', 'infra', 'paused', 'done', 'doneall', 'outside'].forEach(function (k) { clear($(k)); }); renderNext({}); return; }
-    var dim = stale ? 0.55 : 1; ['now', 'backlog', 'infra', 'paused', 'next', 'done', 'doneall', 'outside', 'external'].forEach(function (k) { $(k).style.opacity = dim; });
+    var dim = stale ? 0.55 : 1; ['now', 'backlog', 'infra', 'paused', 'next', 'done', 'doneall', 'outside', 'pma-work', 'external'].forEach(function (k) { $(k).style.opacity = dim; });
     renderNow(d); renderBacklog(d); renderInfra(d); renderPaused(d); renderNext(d); renderDone(d); renderDoneAll(d); renderOutside(d);
     $('updated').textContent = 'обновлено ' + new Date().toLocaleTimeString('ru-RU');
   }
