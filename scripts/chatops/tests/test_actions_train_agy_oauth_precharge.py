@@ -104,5 +104,33 @@ class AtomicSyntheticOAuth(unittest.TestCase):
                     N.retain_oauth_refresh(p,b'{}')
 
 
+    def test_symlink_and_hardlink_credentials_are_rejected_without_original_write(self):
+        # Regression: never use a pathname twice between lstat and read.
+        with tempfile.TemporaryDirectory(prefix='gb-agy-fake-auth-') as tmp:
+            root=Path(tmp)
+            original=root/'persistent';original.write_text('{"token":"FAKE"}');original.chmod(0o600)
+            transient=root/'transient'
+            transient.symlink_to(original)
+            with patch.object(N,'EXECUTOR_UID',os.getuid()):
+                with self.assertRaises(OSError):
+                    N.retain_oauth_refresh(transient,b'previous')
+            self.assertEqual(original.read_text(),'{"token":"FAKE"}')
+            transient.unlink()
+            os.link(original,transient)
+            with patch.object(N,'EXECUTOR_UID',os.getuid()):
+                with self.assertRaises(N.ReviewError):
+                    N.retain_oauth_refresh(transient,b'previous')
+            self.assertEqual(original.read_text(),'{"token":"FAKE"}')
+
+    def test_oauth_read_uses_single_descriptor_and_fstat_not_path_reopen(self):
+        with tempfile.TemporaryDirectory(prefix='gb-agy-fake-auth-') as tmp:
+            token=Path(tmp)/'token';fake=b'{"token":"SYNTHETIC"}'
+            token.write_bytes(fake);token.chmod(0o600)
+            with patch.object(N,'EXECUTOR_UID',os.getuid()), \
+                 patch.object(Path,'read_bytes',side_effect=AssertionError('path reopened')), \
+                 patch.object(Path,'lstat',side_effect=AssertionError('path metadata raced')):
+                self.assertEqual(N.retain_oauth_refresh(token,fake),'unchanged')
+
+
 if __name__ == '__main__':
     unittest.main()
