@@ -13,6 +13,19 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'actions_train'))
 import native_antigravity as N
 
 
+def synthetic_vendor_preflight(case):
+    """Only pre-existing offline transport fixtures may simulate catalog/auth refresh.
+
+    The real precharge fail-closed and atomic credential paths are exercised in
+    this file's dedicated positive/negative tests without provider or secrets.
+    """
+    one=patch.object(N,'catalog_precharge',return_value=13)
+    two=patch.object(N,'retain_oauth_refresh',return_value='unchanged')
+    one.start();case.addCleanup(one.stop)
+    two.start();case.addCleanup(two.stop)
+
+
+
 class CatalogPrecharge(unittest.TestCase):
     def test_catalog_contains_exact_model_from_realistic_vendor_rows(self):
         output = ('Fetching available models...\n'
