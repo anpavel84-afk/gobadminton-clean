@@ -29,9 +29,12 @@ def now_utc():
     return datetime.datetime.now(datetime.timezone.utc)
 
 
-def read_json(path, limit, owner=None, owners=None):
+def read_json(path, limit, owner=None, owners=None, dir_fd=None):
     """Safe read: regular file, no symlink, size-limited, optional owner check."""
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
+    if dir_fd is not None:
+        flags |= os.O_NONBLOCK
+    fd = os.open(path, flags, dir_fd=dir_fd)
     try:
         s = os.fstat(fd)
         if not stat.S_ISREG(s.st_mode) or not 2 <= s.st_size <= limit:
@@ -45,6 +48,121 @@ def read_json(path, limit, owner=None, owners=None):
         return json.loads(os.read(fd, limit + 1))
     finally:
         os.close(fd)
+
+
+EXTERNAL_STALE_S = 900
+
+
+def external_runs(root, now):
+    """Bounded metadata view; never reads prompts, stderr or event streams."""
+    try:
+        uid = os.geteuid()
+        flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
+
+        def owned_stat(parent, name, directory=False):
+            try:
+                s = os.lstat(name, dir_fd=parent)
+            except FileNotFoundError:
+                return None
+            valid = stat.S_ISDIR(s.st_mode) if directory else stat.S_ISREG(s.st_mode)
+            return s if valid and s.st_uid == uid else None
+
+        def open_dir(parent, name):
+            before = owned_stat(parent, name, directory=True)
+            if before is None:
+                raise ValueError('invalid directory')
+            fd = os.open(name, flags | os.O_DIRECTORY, dir_fd=parent)
+            try:
+                after = os.fstat(fd)
+                if (after.st_uid != uid or not stat.S_ISDIR(after.st_mode)
+                        or (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino)):
+                    raise ValueError('directory changed')
+            except Exception:
+                os.close(fd)
+                raise
+            return fd, after
+
+        def optional_json(fd, name, limit):
+            try:
+                if owned_stat(fd, name) is None:
+                    return {}
+                value = read_json(name, limit, owner=uid, dir_fd=fd)
+                return value if isinstance(value, dict) else {}
+            except Exception:
+                return {}
+
+        def utc(timestamp):
+            return datetime.datetime.fromtimestamp(timestamp, datetime.timezone.utc).isoformat(timespec='seconds')
+
+        root_fd, _ = open_dir(None, root)
+        runs = []
+        try:
+            names = sorted(n for n in os.listdir(root_fd)
+                           if n.startswith(('qa-evidence-', 'author-evidence-')))[:400]
+            for name in names:
+                tag = name.split('-evidence-', 1)[1]
+                if not re.fullmatch(r'[A-Za-z0-9._-]{1,100}', tag):
+                    continue
+                try:
+                    fd, ds = open_dir(root_fd, name)
+                    try:
+                        events = owned_stat(fd, 'events.jsonl')
+                        exit_stat = owned_stat(fd, 'exit.txt')
+                        if events is None and exit_stat is None:
+                            continue  # legacy review-only directories are not runs
+                        started = ds.st_mtime
+                        for marker in ('.codex', 'stderr', 'prompt.md'):
+                            s = owned_stat(fd, marker, directory=marker == '.codex')
+                            if s is not None:
+                                started = s.st_mtime
+                                break
+                        exit_code = None
+                        if exit_stat is not None and 0 < exit_stat.st_size <= 16:
+                            ef = os.open('exit.txt', flags | os.O_NONBLOCK, dir_fd=fd)
+                            try:
+                                es = os.fstat(ef)
+                                if stat.S_ISREG(es.st_mode) and es.st_uid == uid and 0 < es.st_size <= 16:
+                                    raw = os.read(ef, 16).strip()
+                                    if len(raw) <= 16:
+                                        if raw == b'TIMEOUT':
+                                            exit_code = 'TIMEOUT'
+                                        elif re.fullmatch(rb'[0-9]{1,16}', raw):
+                                            exit_code = int(raw)
+                            finally:
+                                os.close(ef)
+                        last = events.st_mtime if events is not None else ds.st_mtime
+                        state = ('done' if exit_code == 0 else 'failed') if exit_code is not None else (
+                            'running' if now.timestamp() - last <= EXTERNAL_STALE_S else 'stale')
+                        result = optional_json(fd, 'result.json', 65536)
+                        meta = optional_json(fd, 'meta.json', 1024)
+                        reviewed = sha(result.get('reviewed_sha'))
+                        run = {'tag': tag, 'kind': 'author' if name.startswith('author-evidence-') else (
+                            'diagnosis' if 'diagnosis' in tag else 'qa'),
+                            'state': state, 'started_utc': utc(started),
+                            'last_event_utc': utc(events.st_mtime) if events is not None else None,
+                            'age_s': max(0, int(now.timestamp() - (events.st_mtime if events is not None else started))),
+                            'exit_code': exit_code,
+                            'verdict': result.get('verdict') if result.get('verdict') in ('PASS', 'FAIL', 'BLOCKED') else None,
+                            'reviewed_sha': reviewed[:12] if reviewed else None}
+                        for key in ('role', 'model'):
+                            value = meta.get(key)
+                            run[key] = value if isinstance(value, str) and re.fullmatch(r'[A-Za-z0-9._ -]{1,40}', value) else None
+                        activity = max(last, exit_stat.st_mtime) if exit_stat is not None else last
+                        runs.append((activity, name, run))
+                    finally:
+                        os.close(fd)
+                except Exception:
+                    continue
+        finally:
+            os.close(root_fd)
+        runs.sort(key=lambda r: (r[0], r[1]), reverse=True)
+        active = [r for r in runs if r[2]['state'] in ('running', 'stale')]
+        finished = [r for r in runs if r[2]['state'] in ('done', 'failed')]
+        selected = sorted(active[:10] + finished[:10], key=lambda r: (r[0], r[1]), reverse=True)
+        return {'available': True, 'generated_utc': now.isoformat(timespec='seconds'),
+                'running': len(active), 'runs': [r[2] for r in selected]}
+    except Exception:
+        return {'available': False, 'runs': []}
 
 
 def load_titles(path):
@@ -635,6 +753,7 @@ def main(argv=None):
     p.add_argument('--backlog-external', default=None, help='data-only backlog file updatable without root (optional)')
     p.add_argument('--slot-outbox', default=SLOT_OUTBOX, help='public slot1/slot2 outbox; auto-discovery, never private slot state')
     p.add_argument('--no-systemd', action='store_true')
+    p.add_argument('--external-root', default=pwd.getpwuid(os.geteuid()).pw_dir)
     a = p.parse_args(argv)
     jpath = os.path.join(a.out_dir, 'journal.json')
     try:
@@ -645,6 +764,7 @@ def main(argv=None):
     show = (lambda: {}) if a.no_systemd else systemd_show
     snap, j = build(a.state_dir, a.receipt, journal, now_utc(), show, checkpoint_owner=os.geteuid(), receipt_owner=a.receipt_owner,
                     titles=titles, titles_source=tsrc, backlog=pick_backlog(a.backlog_external), slot_outbox=a.slot_outbox)
+    snap['external_runs'] = external_runs(a.external_root, now_utc())
     import importlib.util
     spec = importlib.util.spec_from_file_location('gb_train_monitor', '/usr/local/lib/gb-actions-train/monitor.py')
     train_monitor = importlib.util.module_from_spec(spec); spec.loader.exec_module(train_monitor)
