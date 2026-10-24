@@ -719,7 +719,7 @@ def retain_oauth_refresh(private_auth, previous):
     # before opening the exact file basename relative to its descriptor.
     parent_fd = private_directory(path.parent, create=False)
     try:
-        fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+        fd = os.open(path.name, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
                      dir_fd=parent_fd)
         try:
             source = os.fdopen(fd, 'rb')
@@ -753,7 +753,14 @@ def retain_oauth_refresh(private_auth, previous):
                      0o600,dir_fd=dir_fd)
         created = True
         try:
-            with os.fdopen(fd,'wb') as out:
+            # fdopen may fail before taking ownership of the raw descriptor.
+            # Once constructed, the context manager is the sole FD owner.
+            try:
+                target = os.fdopen(fd,'wb')
+            except BaseException:
+                os.close(fd)
+                raise
+            with target as out:
                 out.write(updated);out.flush();os.fsync(out.fileno())
             # Another parent process cannot change the original unnoticed
             # under this slot's existing exclusive lease; recheck immediately.
