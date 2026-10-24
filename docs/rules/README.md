@@ -1,11 +1,9 @@
-# Канонические правила GoBadminton CLEAN
+# Правила GoBadminton CLEAN — один канон
 
-**[ENGINEERING_OPERATING_MODEL.md](ENGINEERING_OPERATING_MODEL.md) — единственная полная эталонная архитектура системы разработки и регламент её ролей.** Включает PMA из ChatGPT/Grok, техническое планирование, выбор моделей, Astra FAIL diagnosis, ограниченную доработку, независимую QA, CI/DEV и границы PROD.
+Вход для каждой модели: [START_HERE.md](../../START_HERE.md) → [AGENTS.md](../../AGENTS.md) → **[ENGINEERING_OPERATING_MODEL.md](ENGINEERING_OPERATING_MODEL.md)** и принятая политика маршрутизации **[SMART_ROUTING.md](SMART_ROUTING.md)**. Полный канон содержит роли (§3), семейства моделей (§5), попытки/делегацию (§6), FAIL-цикл (§8.1), контекст (§10) и изменение правил (§11); SMART_ROUTING — единственный источник детальной матрицы и классов FAIL.
 
-[AGENTS.md](../../AGENTS.md) — обязательный вход, не альтернативная версия. [PROJECT_RECORD_POLICY.md](PROJECT_RECORD_POLICY.md) — узкая политика хранения и передачи. [Предметные документы](../README.md) читаются по scope и сохраняют свои бизнес/privacy-контракты.
+[CONTEXT_SOURCES.json](CONTEXT_SOURCES.json) фиксирует accepted commit/hash/size, а не новую runtime policy. [DOCUMENT_REGISTER.md](DOCUMENT_REGISTER.md) определяет статус источников и указывает точные supersession; он не добавляет вторую таблицу моделей или backlog. [PROJECT_RECORD_POLICY.md](PROJECT_RECORD_POLICY.md) остаётся единственной специализированной политикой хранения/передачи.
 
-Cursor/GitHub instructions, governance onboarding и ChatOps checklist направляют к одному полному тексту. Внешний launcher/Hub не является обязательной проектной памятью и не создаёт вторую очередь. Реальная поддержка каждого интерфейса и adapter проверяется отдельно.
+[Master Plan](../ops/AI_TRAIN_MASTER_PLAN.md) — состояние приёмки, [CURRENT handoff](../handoffs/CURRENT.md) — продолжение. [Предметные контракты](../README.md) сохраняют бизнес/privacy-инварианты. Dated evidence, draft-предложения и старые launchers не становятся действующим регламентом из-за наличия в Git.
 
-Принятая ревизия подаётся доверенным launcher и фиксируется в evidence; ссылки и наличие файла не доказывают фактическую загрузку. Правила из candidate не могут ослабить его собственную QA.
-
-История, dated handoffs и старые очереди сохраняются как provenance, не runtime authority. Порядок изменения эталона и приёмки — разделы 11–12 самого документа. [Инструкция PMA](../prompts/pma-adopt-engineering-rules-20261022.md).
+Принятый core v1.3 при консолидации 24.10.2026 был сохранён byte-for-byte; поправка SR0 (24.10.2026, решение Owner) выпустила редакцию 1.4 и принятую политику SMART_ROUTING 1.0, предыдущий pin 1.3 сохранён в CONTEXT_SOURCES.json. Синхронизация документации не переписывает installed pin, grants или правила активного candidate; перевод кода на 1.4 — отдельный reviewed code-pin. Реальная доставка каждой роли проверяется отдельно; если full reference недоступен, применим lossless full fallback по §10.3.

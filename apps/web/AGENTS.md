@@ -1,6 +1,6 @@
 # GoBadminton web — дополнительный контекст
 
-Сначала [корневой AGENTS.md](../../AGENTS.md) и [единый регламент](../../docs/rules/ENGINEERING_OPERATING_MODEL.md) из принятой ревизии. Этот вложенный файл уточняет framework context и не расширяет права/маршруты. Для визуальных изменений действует [Style Guide first](../../docs/decisions/OWNER_DECISION_FRONTEND_STYLE_GUIDE_FIRST_V001.md).
+Сначала [START_HERE.md](../../START_HERE.md) и [корневой AGENTS.md](../../AGENTS.md); принятая редакция полного регламента и правила full/scoped delivery указаны там. Этот вложенный файл уточняет framework context, не расширяет права и не задаёт маршруты моделей. Для визуальных изменений действует [Style Guide first](../../docs/decisions/OWNER_DECISION_FRONTEND_STYLE_GUIDE_FIRST_V001.md).
 
 <!-- BEGIN:nextjs-agent-rules -->
 

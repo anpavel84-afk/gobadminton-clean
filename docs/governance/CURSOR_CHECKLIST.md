@@ -1,24 +1,9 @@
-# Checklist исполнения
+# Checklist исполнения — без второй политики
 
-Применять [единый регламент](../rules/ENGINEERING_OPERATING_MODEL.md); список не выдаёт новых прав.
+Нормативные условия — [единый регламент](../rules/ENGINEERING_OPERATING_MODEL.md). Вход — [START_HERE.md](../../START_HERE.md).
 
-## До эффектов
+До эффектов: получены и проверены accepted rules commit/hash и full либо квалифицированный common+role capsule (§10.3); установлены exact assignment/base/candidate, критерии, allowed paths/effects; проверены worktree/identity/ownership, реальная квалификация маршрута и доступность необходимых inputs. Невыполненная проверка не считается пройденной.
 
-- Прочитаны root AGENTS и полный регламент; записан принятый rules commit.
-- Установлены exact assignment/base, allowed paths/effects, роль и acceptance.
-- Проверены repository identity, Germany task worktree, dirty state и отсутствие второго writer.
-- Подтверждены role-specific adapter, sandbox, маршрут/fallback и доступные лимиты.
-- Обязательный предметный контекст доступен; неизвестное не заменено догадкой.
+До передачи: diff остаётся в scope, существенные assertions сохранены, source/test результаты отделены от независимой QA; нет secrets/unrelated изменений; NOT_TESTED указан явно. Handoff содержит exact commit/PR, evidence, ограничения и следующий допустимый шаг.
 
-## До передачи
-
-- Diff не расширяет scope, contracts/tests отражают изменение.
-- Нет secrets и unrelated изменений; self-check не выдан за independent QA.
-- Невыполненные проверки названы NOT_TESTED с местом обязательного выполнения.
-- Handoff содержит точный commit/PR, evidence, ограничения и следующий шаг.
-
-## До утверждения результата
-
-- QA, CI и DEV относятся к требуемому candidate; интеграционный diff не унаследовал чужой PASS.
-- DEV ACCEPTED подтверждён фактически; Owner acceptance не придумана.
-- PROD не выведен из DEV-разрешения. История, попытки и rollback сохранены.
+До приёмки: exact-SHA независимая QA, обязательный CI, интеграционные и DEV gates подтверждены в нужной стадии; stale PASS не переносится на изменённый candidate без предусмотренного доказательства. PROD не выводится из DEV-разрешения. История, budgets и rollback сохраняются.

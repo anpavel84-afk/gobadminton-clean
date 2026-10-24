@@ -2,10 +2,12 @@
 
 Рабочий monorepo: `anpavel84-afk/gobadminton-clean`.
 
-**[Эталонная архитектура системы разработки и регламент PMA](docs/rules/ENGINEERING_OPERATING_MODEL.md)** — один полный документ для PMA, технического PM, авторов, эксперта Astra, QA и OPS. Обязательная точка входа: [AGENTS.md](AGENTS.md). [Документация приложения](docs/README.md).
+## Один вход для всех моделей
 
-Целевая схема: Owner → PMA из ChatGPT Work или Grok-бота → GitHub Issues/Projects → Actions → два защищённых слота Germany → автор/тесты/QA → DEV. Содержательный FAIL → Astra High → точный repair brief → автор → новые проверки. Возможность в эталоне не считается установленной без evidence.
+**[START_HERE.md](START_HERE.md)** — начинать здесь в Grok, ChatGPT, Cursor, Codex и других разрешённых клиентах. [AGENTS.md](AGENTS.md) — обязательные границы. [Полный регламент](docs/rules/ENGINEERING_OPERATING_MODEL.md) — единственное место организации разработки, матрицы моделей и FAIL-цикла. [Master Plan](docs/ops/AI_TRAIN_MASTER_PLAN.md) — последовательность приёмки. [Текущая передача](docs/handoffs/CURRENT.md) — продолжение работы без повторного запуска.
 
-Код: `apps/web`, `apps/api`, `apps/worker`, `apps/admin`, `apps/mobile`, `packages`, `infra`. `dev` — продуктовая интеграция. Документ не обновляет автоматически main, controller pin или PROD; production требует отдельного Owner GO.
+[Документация приложения](docs/README.md) · [реестр документов](docs/rules/DOCUMENT_REGISTER.md) · [точная редакция контекста](docs/rules/CONTEXT_SOURCES.json) · [backlog](docs/ACTIVE_BACKLOG.md).
 
-Операционное состояние — Actions и server receipts. Старые очереди/архивы не являются текущим источником запуска. Изменять архитектуру в том же каноническом файле через reviewed PR, не создавать параллельный «финальный» регламент.
+Код: `apps/web`, `apps/api`, `apps/worker`, `apps/admin`, `apps/mobile`, `packages`, `infra`. `dev` — продуктовая интеграция. `main` — default discovery; общие entrypoints и принятый канон синхронизируются только как документация, без переноса продуктового кода.
+
+Наличие правила в репозитории не доказывает его получение моделью или установленную функцию. Для исполнения нужны exact assignment, квалифицированная роль и действующие runtime gates. PROD — отдельный Owner GO. Архивные очереди, snapshots и Draft PR не являются текущим допуском.
