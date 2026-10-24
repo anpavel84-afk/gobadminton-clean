@@ -151,6 +151,56 @@ class DynamicProcessLoader(GitFixture):
             'PIPE = subprocess.PIPE\n',
             reusable=True)
 
+    def test_subprocess_nested_os_module_requires_addressed_qa(self):
+        self.check_loader(
+            'import subprocess\n'
+            'subprocess.os.execl("/usr/bin/python3", "python3", '
+            '"scripts/chatops/tests/test_example.py")\n',
+            reusable=False)
+
+    def test_os_path_nested_os_module_requires_addressed_qa(self):
+        self.check_loader(
+            'import os\n'
+            'os.path.os.execl("/usr/bin/python3", "python3", '
+            '"scripts/chatops/tests/test_example.py")\n',
+            reusable=False)
+
+    def test_dotted_import_os_path_binds_os_requires_addressed_qa(self):
+        self.check_loader(
+            'import os.path\n'
+            'os.execl("/usr/bin/python3", "python3", '
+            '"scripts/chatops/tests/test_example.py")\n',
+            reusable=False)
+
+    def test_dotted_import_alias_exposes_os_module_requires_addressed_qa(self):
+        self.check_loader(
+            'import os.path as osp\n'
+            'osp.os.execl("/usr/bin/python3", "python3", '
+            '"scripts/chatops/tests/test_example.py")\n',
+            reusable=False)
+
+    def test_subprocess_os_from_import_requires_addressed_qa(self):
+        self.check_loader(
+            'from subprocess import os as operating_system\n'
+            'operating_system.execl("/usr/bin/python3", "python3", '
+            '"scripts/chatops/tests/test_example.py")\n',
+            reusable=False)
+
+    def test_os_path_os_from_import_requires_addressed_qa(self):
+        self.check_loader(
+            'from os.path import os as operating_system\n'
+            'operating_system.execl("/usr/bin/python3", "python3", '
+            '"scripts/chatops/tests/test_example.py")\n',
+            reusable=False)
+
+    def test_subprocess_module_reexport_requires_addressed_qa(self):
+        self.check_loader(
+            'import subprocess\n'
+            'launcher = subprocess.os\n'
+            'launcher.execl("/usr/bin/python3", "python3", '
+            '"scripts/chatops/tests/test_example.py")\n',
+            reusable=False)
+
     def test_benign_path_literal_preserves_test_only_reuse(self):
         self.check_loader(
             'from pathlib import Path\n'
