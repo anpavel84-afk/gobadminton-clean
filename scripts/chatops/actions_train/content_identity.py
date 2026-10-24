@@ -171,7 +171,8 @@ def independence(files, sources, changed):
                     if changed_path in text or PurePosixPath(changed_path).name in text:
                         return 'runtime Python loader references changed path: ' + p
                 if re.search(r'(?i)(?:tests[/\\]|__tests__|test_[a-z0-9_]+)', text):
-                    return 'runtime Python loader may consume test-tree bytes: ' + p
+                    return ('runtime Python loader may consume changed test-tree bytes: ' + p
+                            + ' -> ' + ', '.join(sorted(changed)))
             targets = set()
             if p.endswith(code):
                 groups = deps(p, text)  # existing extractor; no native collect/model path
