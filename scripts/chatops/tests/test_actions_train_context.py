@@ -14,8 +14,9 @@ from unittest.mock import Mock, patch
 from test_actions_train import ROOT, core, stage, receiver, req
 import context_policy as C
 
-# Explicit Owner-accepted candidate, copied into this branch only after docs PR merge.
-TEXT = (ROOT/'docs/rules/ENGINEERING_OPERATING_MODEL.md').read_text()
+# Accepted rules = the immutable pinned Git object (not the moving docs working tree).
+from accepted_rules_fixture import accepted_rules_text
+TEXT = accepted_rules_text(ROOT)
 
 
 def accepted():

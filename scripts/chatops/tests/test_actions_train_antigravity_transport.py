@@ -63,7 +63,7 @@ class Transport(unittest.TestCase):
    data=json.loads(source.split('DATA_JSON:\n')[1]);self.assertEqual(data['missing_context'],[])
    self.assertIn('Offline transport fixture comment',data['diff'])
    import context_policy as C
-   rules=(ROOT/'docs/rules/ENGINEERING_OPERATING_MODEL.md').read_text()
+   rules=__import__('accepted_rules_fixture').accepted_rules_text(ROOT)
    assembled,context=C.inject(source,True,work,(rules,dict(commit=C.RULES_COMMIT,sha256=C.RULES_SHA256,bytes=C.RULES_SIZE,revision='1.1',delivery='explicit_full_stdin')))
    payload,meta=N.input_payload(assembled)
    self.assertGreater(meta['semantic_input_bytes'],120<<10)
@@ -72,7 +72,7 @@ class Transport(unittest.TestCase):
    print('230 baseline+inert draft+fixture diff bytes:',meta['semantic_input_bytes'],'wire:',meta['stdin_bytes'])
  def test_review_receipt_matches_exact_captured_wire_and_preserves_rules(self):
   import context_policy as C
-  rules=(ROOT/'docs/rules/ENGINEERING_OPERATING_MODEL.md').read_text()
+  rules=__import__('accepted_rules_fixture').accepted_rules_text(ROOT)
   accepted=(rules,dict(commit=C.RULES_COMMIT,sha256=C.RULES_SHA256,bytes=C.RULES_SIZE,delivery='explicit_full_stdin'))
   before=copy.deepcopy(accepted);captured={};charge=Mock()
   with tempfile.TemporaryDirectory() as temp:
