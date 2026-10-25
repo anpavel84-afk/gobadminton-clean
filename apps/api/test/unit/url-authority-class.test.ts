@@ -29,8 +29,13 @@ const privatePorts = new Set(["https://example.org:444/", "https://example.org:8
 const preserved = [
   "https://club.example", "https://club.example/logo", "https://example.org/photos",
   "https://example.com", "https://example.com/", "https://example.invalid/",
-  "https://example.org/@user", "https://example.org:443/a", "https://example.org/%D0%BA%D0%BE%D0%BD%D1%82%D0%B0%D0%BA%D1%82%D1%8B",
+  "https://example.org/@user", "https://example.org/path?q=a@b", "https://example.org:443/a",
+  "https://[::1]:443/", "https://example.org/%D0%BA%D0%BE%D0%BD%D1%82%D0%B0%D0%BA%D1%82%D1%8B",
   "https://[::1]/", "https:///example.org/path", "https://example.org/%40",
+];
+const badCreditPorts = [
+  "https://example.org:0443/a", "https://example.org:00443/a", "https://example.org:/a",
+  "https://[::1]:0443/", "https://[::1]:/",
 ];
 const id = "a0000000-0000-4000-8000-000000000003";
 const cityId = "a0000000-0000-4000-8000-000000000001";
@@ -71,6 +76,8 @@ describe("public URL authority class", () => {
       expect(httpsCreditUrl(url)).toBe(href);
     }
     for (const url of grammar) expect(httpsCreditUrl(url)).toBeNull();
+    for (const url of badCreditPorts) expect(httpsCreditUrl(url)).toBeNull();
+    expect(httpsCreditUrl("https://example.org/" + "a".repeat(280))).toBe("https://example.org/" + "a".repeat(280));
   });
 
   it("rejects the grammar at import while a reviewed https credit still imports", () => {
@@ -91,6 +98,14 @@ describe("public URL authority class", () => {
       if (typeof url !== "string") continue;
       expect(readVenueProfile({ ...row(url), cover_credit_url: url }).gallery.items).toEqual([]);
       expect((await mapped(url)).cover?.credit).toEqual({ kind: "photo", text: "Фото: Клуб", url: null });
+    }
+    for (const url of badCreditPorts) {
+      const profile = readVenueProfile({ ...row(url), cover_credit_url: url });
+      const venue = await mapped(url);
+      expect(profile.gallery.items).toEqual([]);
+      expect(venue.cover?.credit).toEqual({ kind: "photo", text: "Фото: Клуб", url: null });
+      expect(JSON.stringify(profile)).not.toContain(url);
+      expect(JSON.stringify(venue.cover)).not.toContain(url);
     }
   });
 

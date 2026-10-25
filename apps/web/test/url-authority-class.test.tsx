@@ -84,7 +84,11 @@ function creditHref(input: string): string | null {
     const authority = boundary < 0 ? remainder : remainder.slice(0, boundary);
     const parts = /^(\[[0-9a-f:.]+\]|[^:[\]@/\\?#]+)(?::([0-9]*))?$/i.exec(authority);
     if (!parts) return null;
-    const rawPort = parts[2] === undefined || parts[2] === "" ? "" : parts[2].replace(/^0+/, "") || "0";
+    // Credit port spelling is absent or the digits 443. An empty port and leading zeros are not canonicalized.
+    const writtenPort: string | undefined = parts[2];
+    if (writtenPort === "") return null;
+    if (writtenPort !== undefined && writtenPort !== "443") return null;
+    const rawPort = writtenPort === undefined ? "" : writtenPort.replace(/^0+/, "") || "0";
     if (rawPort.length > 5 || (rawPort.length === 5 && rawPort > "65535")) return null;
     const port = rawPort === "443" ? "" : rawPort;
     if (port !== url.port) return null;

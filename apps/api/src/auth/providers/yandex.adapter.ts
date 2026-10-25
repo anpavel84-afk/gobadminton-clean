@@ -1,4 +1,5 @@
 import type { AppEnv } from "../../config/env";
+import { safeProviderAvatar } from "../../profiles/avatar-presentation";
 import { serviceUnavailable } from "../problem";
 import type {
   AuthProviderAdapter,
@@ -139,7 +140,7 @@ export class YandexAuthProvider implements AuthProviderAdapter {
     }
     let avatarUrl: string | null = null;
     if (json.default_avatar_id && json.is_avatar_empty === false) {
-      avatarUrl = `https://avatars.yandex.net/get-yapic/${json.default_avatar_id}/islands-200`;
+      avatarUrl = safeProviderAvatar(`https://avatars.yandex.net/get-yapic/${json.default_avatar_id}/islands-200`);
     }
     return {
       provider: "yandex",

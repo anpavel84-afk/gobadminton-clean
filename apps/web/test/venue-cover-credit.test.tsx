@@ -98,6 +98,16 @@ describe("venue cover credit authority class", () => {
       if (!legacyCredit(input) && expected) missed.push(`weakened ${input}`);
     }
     expect(missed).toEqual([]);
+    for (const url of [
+      "https://example.org:0443/a", "https://example.org:00443/a", "https://example.org:/a",
+      "https://[::1]:0443/", "https://[::1]:/",
+    ]) {
+      const html = credit(url);
+      expect(httpsCreditUrl(url)).toBeNull();
+      expect(html).not.toContain("<a");
+      expect(html).not.toContain(url);
+      expect(hrefs(html)).toEqual([]);
+    }
   });
 
   it.each(authorityGrammar)("does not put authority-class credit %s into href", url => {

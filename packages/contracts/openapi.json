@@ -15481,7 +15481,8 @@
               "null"
             ],
             "maxLength": 300,
-            "description": "Только в GET /games/{gameId} для активного управляющего или подтверждённого участника; иначе ключ отсутствует."
+            "description": "Только в GET /games/{gameId} для активного управляющего или подтверждённого участника; иначе ключ отсутствует. Шаблон отсекает userinfo (@ в authority), обратную косую и управляющие символы; строгую проверку делает приложение.",
+            "pattern": "^(?:$|https?:///*[^@/?#\\\\\\u0000-\\u001F\\u007F-\\u009F]+(?:[/?#][^\\\\\\u0000-\\u001F\\u007F-\\u009F]*)?)$"
           },
           "bookingNote": {
             "type": [
@@ -24126,8 +24127,8 @@
                   "contactWebsite": {
                     "type": "string",
                     "maxLength": 300,
-                    "description": "Пробелы по краям удаляются; пустая строка очищает значение. Пропуск сохраняет значение.",
-                    "pattern": "^(https?://|$)"
+                    "description": "Пробелы по краям удаляются; пустая строка очищает значение. Пропуск сохраняет значение. Шаблон отсекает userinfo (@ в authority), обратную косую и управляющие символы; строгую проверку делает приложение.",
+                    "pattern": "^(?:$|https?:///*[^@/?#\\\\\\u0000-\\u001F\\u007F-\\u009F]+(?:[/?#][^\\\\\\u0000-\\u001F\\u007F-\\u009F]*)?)$"
                   },
                   "bookingNote": {
                     "type": "string",
@@ -24271,8 +24272,8 @@
           "contactWebsite": {
             "type": "string",
             "maxLength": 300,
-            "description": "Пробелы по краям удаляются; пустая строка очищает значение. Пропуск сохраняет значение.",
-            "pattern": "^(https?://|$)"
+            "description": "Пробелы по краям удаляются; пустая строка очищает значение. Пропуск сохраняет значение. Шаблон отсекает userinfo (@ в authority), обратную косую и управляющие символы; строгую проверку делает приложение.",
+            "pattern": "^(?:$|https?:///*[^@/?#\\\\\\u0000-\\u001F\\u007F-\\u009F]+(?:[/?#][^\\\\\\u0000-\\u001F\\u007F-\\u009F]*)?)$"
           },
           "bookingNote": {
             "type": "string",
@@ -24925,7 +24926,8 @@
                       "string",
                       "null"
                     ],
-                    "pattern": "^https://",
+                    "description": "Original HTTPS credit string. Port is absent or the exact digits 443 (no empty port, no leading zeros). The pattern also rejects userinfo, a backslash and controls where a regex can; httpsCreditUrl remains the strict check.",
+                    "pattern": "^https:///*(?:\\[[0-9A-Fa-f:.]+\\]|(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\.)*[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(?::443)?(?:[/?#](?:%[0-9A-Fa-f]{2}|[!#$&'(-;=?-[\\]_a-z~-])*)?$",
                     "maxLength": 300
                   }
                 }
@@ -25247,7 +25249,8 @@
                         "url": {
                           "type": "string",
                           "format": "uri",
-                          "pattern": "^https://",
+                          "description": "Original HTTPS credit string. format uri is not the authority check. Port is absent or the exact digits 443 (no empty port, no leading zeros). The pattern also rejects userinfo, a backslash and controls where a regex can; httpsCreditUrl remains the strict check.",
+                          "pattern": "^https:///*(?:\\[[0-9A-Fa-f:.]+\\]|(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\.)*[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(?::443)?(?:[/?#](?:%[0-9A-Fa-f]{2}|[!#$&'(-;=?-[\\]_a-z~-])*)?$",
                           "maxLength": 300
                         }
                       }
