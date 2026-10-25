@@ -1,0 +1,55 @@
+{
+  "acceptance_basis": "runtime_qualification",
+  "canary_task_sha256": "4570522ac1c4a3685ba253a921561d1bb866c863878b3e084c6063a13efe3005",
+  "evidence": {
+    "author_canary": {
+      "path": "/var/lib/gobadminton-actions-train/cursor-qualification-20261022/author-canary.json",
+      "sha256": "7bbbb6bf7b6a8537b7d6d39d0e375a81d44456dae9e5a553bfe31137863d442b"
+    },
+    "author_private_config": {
+      "path": "/var/lib/gobadminton-actions-train/cursor-qualification-20261022/author-canary-private-config.json",
+      "sha256": "517e8adac61d6ae901a34eaf814a55bdaf20921f158ab775a14b7e2a535f9379"
+    },
+    "author_private_config_stream": {
+      "path": "/var/lib/gobadminton-actions-train/cursor-qualification-20261022/author-canary-private-config-stream.jsonl",
+      "sha256": "958a03c8201ed99b9af3836f6a859f1e834a52b6162cfddb1d6b150da463f85f"
+    },
+    "author_receipt": {
+      "path": "/var/lib/gobadminton-actions-train/cursor-successor-225-result/cursor-author-receipt.json",
+      "sha256": "b48880aaf8281c139b973d39a36a8c0c2a4ca49c71e81fd74754b7606e04e850"
+    },
+    "boundaries": {
+      "path": "/var/lib/gobadminton-actions-train/cursor-qualification-20261022/boundaries.json",
+      "sha256": "9e705f5acace5dcb12af20acccc6d7810532018cdf236cab8296cdaa421f0ab5"
+    },
+    "boundaries_corrected": {
+      "path": "/var/lib/gobadminton-actions-train/cursor-qualification-20261022/boundaries-corrected.json",
+      "sha256": "fb8d46024fdbf4aca7a9e7a13172fef8dbfb89230124e0a66478482276414074"
+    },
+    "manifest": {
+      "path": "/var/lib/gobadminton-actions-train/cursor-qualification-20261022/manifest.json",
+      "sha256": "5aa6a2d70ef44363b6651e55d4aadc29f6c886e6f5cbe4720bce1d110c1fa46f"
+    },
+    "probe": {
+      "path": "/var/lib/gobadminton-actions-train/cursor-qualification-20261022/probe.json",
+      "sha256": "9374706705fe275a40b2448b713bd292f11d67bdf3f16990ed53f0a39a02b67c"
+    },
+    "runtime_qa_v18_launcher": {
+      "path": "/var/lib/gobadminton-actions-train/cursor-qualification-20261022/runtime-qa-v18-launcher.py",
+      "sha256": "8f35a86f64119661cecdc7710e8df4acd63baddd83ed66a5a02e3eb39e9bf481"
+    },
+    "runtime_qa_v18_stream": {
+      "path": "/var/lib/gobadminton-actions-train/cursor-qualification-20261022/runtime-qa-v18-stream.jsonl",
+      "sha256": "a70fc6301962bb84efad730498f1856401cf319d6f160421c09ae8058f1117aa"
+    },
+    "runtime_qa_v20_qa": {
+      "path": "/var/lib/gobadminton-actions-train/cursor-qualification-20261022/runtime-qa-v20-qa.json",
+      "sha256": "af8d263e5c29f97626d85998067b2fc836aa7906c013b1f19c0176229e3e3d12"
+    },
+    "runtime_qa_v20_stream": {
+      "path": "/var/lib/gobadminton-actions-train/cursor-qualification-20261022/runtime-qa-v20-stream.jsonl",
+      "sha256": "e3730ce3f9f8e4f0b8eec575d351d2dc2ae8fa263a83154ce7705d59bc511a70"
+    }
+  },
+  "schema": "GB_CURSOR_RUNTIME_QUALIFICATION_PROOF_V1"
+}
