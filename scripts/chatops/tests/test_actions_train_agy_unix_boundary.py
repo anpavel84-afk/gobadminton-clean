@@ -14,6 +14,7 @@ import pathlib
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 sys.path.insert(0,str(pathlib.Path(__file__).resolve().parents[1]/'actions_train'))
@@ -28,6 +29,10 @@ class UnixBoundarySource(unittest.TestCase):
         for needle in ('aa_change_onexec','libapparmor','/etc/apparmor.d','gb-agy-runtime','_arm_apparmor_onexec',
                        '_verify_apparmor_precharge','uid978_apparmor_enforce','apparmor_policy_sha256','apparmor_mode'):
             self.assertNotIn(needle,source,needle)
+        self.assertNotIn('uid978_read_only_foreign_owned_tree',source)
+        self.assertNotIn('_live_executor_write_probe',source)
+        self.assertIn('detected_accidental_modification_only',source)
+        self.assertIn('978:968:[]:1:0',source)
         ops=pathlib.Path(__file__).resolve().parents[1]/'ops'
         self.assertFalse((ops/'gb_agy_runtime.apparmor').exists())
 
@@ -85,6 +90,9 @@ class CandidateIntegrity(unittest.TestCase):
         self.git(work,'add','.');self.git(work,'commit','-qm','c')
         return work
 
+    def allow_write(self,path):
+        path.chmod(path.stat().st_mode | 0o222)
+
     def run_invoke(self,work,mutate,transient_dir):
         seen=[]
         def popen(_argv,**kwargs):
@@ -118,7 +126,7 @@ class CandidateIntegrity(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as ev:
             work=self.make_repo(tmp)
             with self.assertRaises(N.ReviewError) as err:
-                self.run_invoke(work,lambda:(work/'tampered.txt').write_text('model wrote'),ev)
+                self.run_invoke(work,lambda:(self.allow_write(work),(work/'tampered.txt').write_text('model wrote')),ev)
             self.assertEqual(err.exception.code,'AGY_CANDIDATE_CHANGED')
 
     def test_dirty_checkout_refused_before_charge(self):
@@ -142,9 +150,12 @@ class CandidateIntegrity(unittest.TestCase):
             (raw,receipt),seen=self.run_invoke(work,None,ev)
             self.assertEqual(seen,['charged'])
             self.assertEqual(receipt['filesystem_boundary'],'uid978_unix_permissions_nnp')
-            self.assertEqual(receipt['candidate_access'],N.CANDIDATE_ACCESS)
-            self.assertNotIn('verified_unchanged',receipt['candidate_access'])
-            self.assertIn('not a proof against a same-uid writer',receipt['candidate_boundary'])
+            self.assertEqual(receipt['candidate_integrity'],'detected_accidental_modification_only')
+            self.assertEqual(receipt['write_guard'],N.WRITE_GUARD)
+            self.assertNotIn('candidate_access',receipt)
+            self.assertNotIn('uid978_read_only_foreign_owned_tree',json.dumps(receipt))
+            self.assertIn('malicious same-uid',receipt['residual_risk'])
+            self.assertIn('guard, not a boundary',receipt['residual_risk'])
             self.assertNotIn('apparmor_profile',receipt)
             self.assertNotIn('readonly_roots',receipt)
             self.assertNotIn('writable_roots',receipt)
@@ -162,7 +173,7 @@ class CandidateIntegrity(unittest.TestCase):
         with self.assertRaises(N.ReviewError) as err:
             self.run_invoke(work,mutate,ev)
         self.assertEqual(err.exception.code,'AGY_CANDIDATE_CHANGED')
-        self.assertNotEqual(getattr(err.exception,'candidate_access',None),N.CANDIDATE_ACCESS)
+        self.assertEqual(N.CANDIDATE_INTEGRITY,'detected_accidental_modification_only')
         return err
 
     def test_each_status_bypass_is_candidate_changed(self):
@@ -172,15 +183,18 @@ class CandidateIntegrity(unittest.TestCase):
 
         def skip(work):
             self.git(work,'update-index','--skip-worktree','a.txt')
+            self.allow_write(work/'a.txt')
             (work/'a.txt').write_text('tampered\n')
 
         def assume(work):
             self.git(work,'update-index','--assume-unchanged','a.txt')
+            self.allow_write(work/'a.txt')
             (work/'a.txt').write_text('tampered\n')
 
         def exclude(work):
             path=work/'.git'/'info'/'exclude'
             path.write_text(path.read_text()+'*.hidden\n')
+            self.allow_write(work)
             (work/'secret.hidden').write_text('hidden\n')
 
         def prepare_ignored(work):
@@ -189,6 +203,7 @@ class CandidateIntegrity(unittest.TestCase):
             self.git(work,'commit','-qm','ignore')
 
         def ignored(work):
+            self.allow_write(work)
             (work/'token.secret').write_text('secret\n')
 
         def config(work):
@@ -298,7 +313,7 @@ class CandidateIntegrity(unittest.TestCase):
                 self.assertEqual(clean_err.exception.code,'AGY_EXIT_NONZERO')
                 with self.assertRaises(N.ReviewError) as both:
                     N.invoke('inert',45,work=work,slot='slot2',task_hash='0'*64,charge=lambda:None,
-                             popen=popen_exit(3,lambda:(work/'a.txt').write_text('tampered\n')),
+                             popen=popen_exit(3,lambda:(self.allow_write(work/'a.txt'),(work/'a.txt').write_text('tampered\n'))),
                              analysis=True,evidence_dir=pathlib.Path(ev)/'both')
             self.assertEqual(both.exception.code,'AGY_CANDIDATE_CHANGED')
             meta=json.loads(sorted((pathlib.Path(ev)/'both'/both.exception.evidence_id).glob('phase-*.json'))[-1].read_text())
@@ -314,7 +329,9 @@ class CandidateIntegrity(unittest.TestCase):
             original=N._read_only_git
             def raced(repo,*args):
                 if args[:2]==('rev-parse','--show-object-format'):
-                    (pathlib.Path(repo)/'a.txt').write_text('raced-bytes\n')
+                    target=pathlib.Path(repo)/'a.txt'
+                    self.allow_write(target)
+                    target.write_text('raced-bytes\n')
                 return original(repo,*args)
             with patch.object(N,'_read_only_git',side_effect=raced):
                 state=N._candidate_state(work)
@@ -391,59 +408,138 @@ class CandidateIntegrity(unittest.TestCase):
             (work/'empty').rmdir()
             os.chmod(work/'a.txt',0o600)
             mode_state=N._candidate_state(work)
-            self.assertIn('mode',mode_state[1])
+            # 0600 is a legal slot-checkout mode, so it is not a dirty tree.
+            # The binding still changes, which is what a before/after check sees.
+            self.assertEqual(mode_state[1],'')
             self.assertNotEqual(mode_state,before)
 
-    def test_uid978_write_is_denied_by_mode_and_live_probe_is_marked(self):
-        self.assertFalse(N._stat_writable_by_executor(1000,1000,0o644))
-        self.assertFalse(N._stat_writable_by_executor(1000,N.EXECUTOR_GID,0o644))
-        self.assertTrue(N._stat_writable_by_executor(N.EXECUTOR_UID,N.EXECUTOR_GID,0o444))
-        self.assertTrue(N._stat_writable_by_executor(1000,1000,0o666))
-        self.assertTrue(N._stat_writable_by_executor(1000,N.EXECUTOR_GID,0o775))
-        self.assertEqual(N._live_executor_write_probe(pathlib.Path('/')),'skipped-not-uid978')
+    def test_include_tilde_hooks_path_worktree_and_symlink_commondir(self):
+        """The old write predicate missed these. The snapshot must not."""
+        home_include=pathlib.Path.home()/('.agy-qa-include-%d.gitconfig'%os.getpid())
+        try:
+            home_include.write_text('[core]\n\tlogAllRefUpdates = true\n')
+            with tempfile.TemporaryDirectory() as tmp:
+                work=self.make_repo(tmp)
+                self.git(work,'config','include.path','~/'+home_include.name)
+                before=N._candidate_state(work)
+                self.assertEqual(before[1],'')
+                home_include.write_text('[core]\n\tlogAllRefUpdates = false\n')
+                self.assertNotEqual(N._candidate_state(work),before)
+                home_include.write_text('[core]\n\tlogAllRefUpdates = true\n')
+                self.git(work,'config','--unset','include.path')
+                before=N._candidate_state(work)
+                self.git(work,'config','core.worktree',str(work))
+                moved=N._candidate_state(work)
+                self.assertEqual(moved[1],'')
+                self.assertNotEqual(moved,before)
+                self.git(work,'config','--unset','core.worktree')
+                hooks=pathlib.Path(tmp)/'external-hooks'
+                hooks.mkdir()
+                self.git(work,'config','core.hooksPath',str(hooks))
+                before=N._candidate_state(work)
+                self.assertEqual(before[1],'')
+                (hooks/'post-checkout').write_text('#!/bin/sh\n')
+                self.assertNotEqual(N._candidate_state(work),before)
+        finally:
+            home_include.unlink(missing_ok=True)
         with tempfile.TemporaryDirectory() as tmp:
-            parent=pathlib.Path(tmp)/'parent'
-            parent.mkdir()
-            work=self.make_repo(parent)
-            parent.chmod(0o777)
-            self.assertTrue(N._executor_can_rename(parent,work))
-            with self.assertRaises(N.ReviewError) as err:
-                N._candidate_state(work)
-            self.assertEqual(err.exception.code,'AGY_PRECHECK_FAILED')
-            parent.chmod(0o1777)
-            self.assertFalse(N._executor_can_rename(parent,work))
-            self.assertEqual(N._candidate_state(work)[1],'')
+            work=self.make_repo(tmp)
+            linked=pathlib.Path(tmp)/'linked'
+            self.git(work,'worktree','add','--detach',str(linked),'HEAD')
+            gitdir=pathlib.Path((linked/'.git').read_text().split(':',1)[1].strip())
+            pointer=gitdir/'commondir'
+            holder=pathlib.Path(tmp)/'commondir-file'
+            holder.write_text(pointer.read_text())
+            pointer.unlink()
+            pointer.symlink_to(holder)
+            before=N._candidate_state(linked)
+            self.assertEqual(before[1],'')
+            (work/'.git'/'hooks'/'post-checkout').write_text('#!/bin/sh\n')
+            self.assertNotEqual(N._candidate_state(linked),before)
+            pointer.unlink()
+            target=pathlib.Path(tmp)/'commondir-dir'
+            (target/'hooks').mkdir(parents=True)
+            pointer.symlink_to(target)
+            hostile=N._candidate_state(linked)
+            self.assertNotEqual(hostile[1],'')
+
+    def test_slot_worktree_contract_accepts_uid_owned_private_tree(self):
+        """Receiver shape: git worktree add --detach, owner is the caller, mode & 077 == 0.
+
+        slot2_preflight requires repo/.git and objects to be owned by uid978
+        with no group/other write. This host is not uid978; the same contract
+        is checked for the current uid. A root-owned tree is not required.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root=pathlib.Path(tmp)/'slot2'
+            repo=root/'repo'
+            worktrees=root/'worktrees'
+            repo.mkdir(parents=True)
+            worktrees.mkdir()
+            for path in (root,repo,worktrees):
+                path.chmod(0o700)
+            self.git(repo,'init','-q')
+            (repo/'a.txt').write_text('x\n')
+            self.git(repo,'add','.')
+            self.git(repo,'commit','-qm','c')
+            for path in (repo/'.git',repo/'.git'/'objects'):
+                path.chmod(0o700)
+                info=path.stat()
+                self.assertEqual(info.st_uid,os.getuid())
+                self.assertEqual(info.st_mode & 0o077,0)
+                self.assertEqual(info.st_mode & 0o022,0)
+            qa=worktrees/'qa-issue-1-a1'
+            self.git(repo,'worktree','add','--detach',str(qa),'HEAD')
+            for dirpath,dirnames,filenames in os.walk(qa):
+                os.chmod(dirpath,0o700)
+                for name in filenames:
+                    os.chmod(pathlib.Path(dirpath)/name,0o600)
+            head=subprocess.check_output(['/usr/bin/git','-C',str(qa),'rev-parse','HEAD'],text=True).strip()
+            state=N._candidate_state(qa)
+            self.assertEqual(state[0],head)
+            self.assertEqual(state[1],'')
+            N._guard_accidental_writes(qa)
+            guarded=N._candidate_state(qa)
+            self.assertEqual(guarded[0],head)
+            self.assertEqual(guarded[1],'')
+            self.assertEqual((qa/'a.txt').stat().st_mode & 0o222,0)
+            self.assertEqual((repo/'.git'/'objects').stat().st_mode & 0o222,0o200)
+            self.assertEqual(qa.stat().st_uid,os.getuid())
+            self.assertEqual((repo/'.git').stat().st_uid,os.getuid())
+
+    def test_setsid_writer_cannot_land_after_a_clean_return(self):
+        """A grandchild that leaves the session must not change bytes after SUCCESS."""
         with tempfile.TemporaryDirectory() as tmp,tempfile.TemporaryDirectory() as ev:
             work=self.make_repo(tmp)
-            os.chmod(work/'a.txt',0o666)
-            charged=[]
+            target=work/'a.txt'
+            script=(
+                'import os,sys,time\n'
+                'path=sys.argv[1]\n'
+                'if os.fork()==0:\n'
+                ' os.setsid()\n'
+                ' if os.fork()==0:\n'
+                '  time.sleep(0.4)\n'
+                '  os.chmod(path,0o644)\n'
+                '  open(path,"w").write("tampered\\n")\n'
+                '  os._exit(0)\n'
+                ' os._exit(0)\n'
+                'os._exit(0)\n'
+            )
+            def popen(_argv,**kwargs):
+                return subprocess.Popen(['/usr/bin/python3','-I','-c',script,str(target)],**kwargs)
             with patch.object(N,'qualification',return_value={'phase':'canary'}), \
                  patch.object(N.os,'geteuid',return_value=978), \
                  patch.object(N,'trusted',return_value=b'synthetic-token'), \
-                 patch.object(N,'_verify_executor_boundary',return_value=None):
-                with self.assertRaises(N.ReviewError) as err:
-                    N.invoke('inert',45,work=work,slot='slot2',task_hash='0'*64,
-                             charge=lambda:charged.append(1),evidence_dir=pathlib.Path(ev),analysis=True)
-            self.assertEqual(err.exception.code,'AGY_PRECHECK_FAILED')
-            self.assertEqual(err.exception.phase,'preflight')
-            self.assertEqual(charged,[])
-        nobody=subprocess.run(['sudo','-n','-u','nobody','true'],capture_output=True)
-        if nobody.returncode!=0:
-            self.assertEqual(N._live_executor_write_probe(pathlib.Path('.')),'skipped-not-uid978')
-            return
-        with tempfile.TemporaryDirectory() as tmp:
-            blocked=pathlib.Path(tmp)/'ro'
-            blocked.mkdir(mode=0o755)
-            (blocked/'a.txt').write_text('x\n')
-            os.chmod(blocked/'a.txt',0o644)
-            probe=blocked/'.probe'
-            attempt=subprocess.run(
-                ['sudo','-n','-u','nobody','python3','-c',
-                 'import os,sys; p=sys.argv[1]\n'
-                 'try:\n os.open(p, os.O_CREAT|os.O_EXCL|os.O_WRONLY, 0o600)\nexcept PermissionError:\n raise SystemExit(13)\n'
-                 'raise SystemExit(0)',str(probe)],
-                capture_output=True)
-            self.assertEqual(attempt.returncode,13,attempt.stderr.decode(errors='replace'))
-            self.assertFalse(probe.exists())
+                 patch.object(N,'AGY','/usr/bin/python3'), \
+                 patch.object(N,'_verify_executor_boundary',return_value=None), \
+                 patch('native_guard.no_new_privileges',return_value=None):
+                try:
+                    N.invoke('inert no-model',45,work=work,slot='slot2',task_hash='0'*64,
+                             charge=lambda:None,popen=popen,analysis=True,
+                             evidence_dir=pathlib.Path(ev))
+                except N.ReviewError as err:
+                    self.assertEqual(err.code,'AGY_CANDIDATE_CHANGED')
+            time.sleep(0.6)
+            self.assertEqual(target.read_text(),'x\n')
 
 if __name__=='__main__': unittest.main()

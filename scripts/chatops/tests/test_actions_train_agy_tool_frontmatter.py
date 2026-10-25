@@ -118,8 +118,10 @@ class NativeAgentExposure(unittest.TestCase):
             self.assertEqual(seen[0][0],N.AGENT)
             self.assertEqual(seen[0][1],['view_file','run_command'])
             self.assertEqual(charged,['test_seam'])
-            self.assertEqual(receipt['candidate_access'],N.CANDIDATE_ACCESS)
-            self.assertIn('not a proof against a same-uid writer',receipt['candidate_boundary'])
+            self.assertEqual(receipt['candidate_integrity'],'detected_accidental_modification_only')
+            self.assertEqual(receipt['filesystem_boundary'],'uid978_unix_permissions_nnp')
+            self.assertIn('malicious same-uid',receipt['residual_risk'])
+            self.assertNotIn('candidate_access',receipt)
 
 if __name__=='__main__':
     unittest.main()
