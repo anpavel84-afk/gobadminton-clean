@@ -8,10 +8,16 @@ A new-policy decision is produced only when the case explicitly selects the
 classifier, semantics are new, and the code, capsule, and policy pins agree.
 Legacy tasks never receive Fast Fix or a rewritten route. The new policy is not
 stored inside GOBADMINTON_AUTONOMY_V1.
+
+Fast Fix and every source writer need positive structured proof: a closed safe
+surface, a diff tool result for unchanged limits, and a class search that names
+one identifier from the diff. Free text can raise the risk floor or block. It
+is never required to be clean, and a quiet sentence is not proof.
 """
 import copy
 import re
 import unicodedata
+import urllib.parse
 
 CASE_SCHEMA = "GB_SMART_ROUTING_CASE_V1"
 PLAN_SCHEMA = "GB_SMART_ROUTING_PLAN_V1"
@@ -30,28 +36,29 @@ MODELS = frozenset((
     "gpt-6.1-sol", "gpt-6-astra", "gpt-6-luna",
     "claude-sonnet-5-5-medium", "claude-sonnet-5-5-high", "claude-opus-5-5-high",
 ))
-# §5 critical surfaces. Match is normalized; a bare "author" is not "auth".
-_SENSITIVE_TOKENS = frozenset((
-    "auth", "authentication", "authorization", "authorisation", "authenticated",
-    "authority", "authorize", "authorized", "authorised", "unauthorized", "unauthorised",
-    "identity", "pii", "secret", "secrets", "credential", "credentials",
-    "sandbox", "apparmor", "admission", "budget", "guard", "permission", "permissions",
-    "concurrency", "concurrent", "money", "payment", "payments", "billing",
-    "migration", "migrate", "rollback", "irreversible", "privilege", "rbac",
-    "password", "passwd", "rights", "oauth", "oauth2",
-))
+# Free text never proves a surface is clean. It can only raise the floor or block.
+# Stems are substrings of the collapsed skeleton. "author" is not "auth".
+_EN_STEMS = (
+    "authoriz", "authoris", "authorit", "authent", "oauth", "identit", "password",
+    "passwd", "credential", "sandbox", "apparmor", "admission", "budget", "permiss",
+    "concurren", "payment", "billing", "migrat", "rollback", "irreversib", "privilege",
+    "rbac", "money", "pii", "qareuse", "dataloss", "guard", "rights",
+)
 _SENSITIVE_PHRASES = (("qa", "reuse"), ("data", "loss"), ("roll", "back"))
-# Real words, checked before homoglyph folding so Russian stays Russian.
-_CYRILLIC_STEMS = ("авторизац", "аутентиф", "идентичн", "персональн", "секрет", "парол")
-# Look-alike letters folded to Latin. "author" is not in this set.
+# Checked on Cyrillic letters before any Latin confusable fold.
+_RU_STEMS = (
+    "авториз", "аутентиф", "идентиф", "идентичн", "миграц", "откат", "деньг", "плат",
+    "персональн", "парол", "токен", "сесси", "секрет",
+)
+_RU_DESTRUCTIVE = ("удал", "отключ", "пропуст", "закомментир", "тест", "ослаб", "повыс")
+# Lowercase look-alikes. Casefold runs first; mixed-script tokens are already critical.
 _CONFUSABLE = str.maketrans({
-    "а": "a", "А": "a", "е": "e", "Е": "e", "о": "o", "О": "o", "р": "p", "Р": "p",
-    "с": "c", "С": "c", "у": "y", "У": "y", "х": "x", "Х": "x", "і": "i", "І": "i",
-    "ї": "i", "Ї": "i", "ј": "j", "Ј": "j", "ѕ": "s", "Ѕ": "s", "һ": "h", "Һ": "h",
-    "ԁ": "d", "Ԁ": "d", "ԛ": "q", "Ԛ": "q", "ɡ": "g", "ο": "o", "Ο": "o", "ν": "v",
-    "Α": "a", "Β": "b", "Ε": "e", "Ζ": "z", "Η": "h", "Ι": "i", "Κ": "k", "Μ": "m",
-    "Ν": "n", "Ρ": "p", "Τ": "t", "Υ": "y", "Χ": "x", "В": "b", "К": "k", "М": "m",
-    "Н": "h", "Т": "t",
+    "а": "a", "б": "b", "в": "b", "е": "e", "ё": "e", "к": "k", "м": "m", "н": "h",
+    "о": "o", "р": "p", "с": "c", "т": "t", "у": "y", "х": "x", "і": "i", "ї": "i",
+    "ј": "j", "ѕ": "s", "һ": "h", "ԁ": "d", "ԛ": "q", "ү": "y", "ғ": "f", "ь": "",
+    "ъ": "", "ɡ": "g", "α": "a", "β": "b", "γ": "y", "ε": "e", "ζ": "z", "η": "n",
+    "ι": "i", "κ": "k", "μ": "u", "ν": "v", "ο": "o", "ρ": "p", "τ": "t", "υ": "u",
+    "χ": "x", "ω": "w",
 })
 _DIAGNOSTIC_WORDS = frozenset((
     "error", "errors", "ts", "assertionerror", "assertion", "assertions", "failed",
@@ -64,22 +71,9 @@ _GENERIC_WORDS = _DIAGNOSTIC_WORDS | frozenset((
     "line", "lines", "code", "path", "dir", "dirs", "pkg", "mod", "module", "fn",
     "var", "let", "const", "true", "false", "null", "none", "py", "js", "tsx", "jsx",
 ))
-_DIAGNOSTIC_ONLY = re.compile(
-    r"(?i)^(?:error[\s_-]*ts\d+|assertion(?:error|\s+failed)?|expected\s*:.*|"
-    r"received\s*:.*|permission[\s_-]*denied|timeouts?|fails?|\d{3})$")
-_WEAKENING = re.compile(
-    r"(?i)(?:"
-    r"(?:delet|remov|drop|strip)\w*[\s_/-]+(?:the[\s_/-]+)?(?:assertions?|tests?|expects?|timeouts?|таймаут\w*|ассерт\w*|тест\w*|проверк\w*)|"
-    r"comment(?:ed)?[\s_/-]*out[\s_/-]+(?:the[\s_/-]+)?(?:assertions?|tests?|timeouts?)|"
-    r"(?:skip|disable|xit|xfail)\w*[\s_/-]+(?:the[\s_/-]+)?(?:tests?|assertions?|timeouts?|qa|auth\w*|security|таймаут\w*)|"
-    r"(?:rais|increas|extend)\w*[\s_/-]+(?:the[\s_/-]+)?(?:timeouts?|таймаут\w*)|"
-    r"weaken\w*[\s_/-]+(?:the[\s_/-]+)?(?:auth\w*|qa|security|timeouts?|таймаут\w*)|"
-    r"(?:updat|adjust|chang|fitt?)\w*[\s_/-]+(?:the[\s_/-]+)?expected|"
-    r"loosen\w*|"
-    r"удал\w*[\s_/-]+(?:ассерт\w*|тест\w*|проверк\w*)|"
-    r"ослаб\w*[\s_/-]+(?:auth\w*|qa|timeout\w*|таймаут\w*|проверк\w*)|"
-    r"повыс\w*[\s_/-]+(?:timeout\w*|таймаут\w*)|"
-    r"закоммент\w*[\s_/-]+(?:ассерт\w*|тест\w*|проверк\w*))")
+# Fast Fix is an allowlist. An unknown surface is not fast, even when the text looks quiet.
+_SAFE_SURFACES = frozenset(("rename", "comment", "docs", "formatting", "format", "test-name"))
+_MARK_CATEGORIES = frozenset(("Mn", "Me", "Cf", "Cc"))
 # Condition 7 is proven only by these explicit fields, on the evidence and on the plan.
 _UNCHANGED = ("assertions_unchanged", "expected_values_unchanged", "qa_unchanged",
               "timeout_unchanged", "auth_unchanged")
@@ -128,8 +122,12 @@ _EVIDENCE_KEYS = frozenset((
     "auth_unchanged", "fast_fix_history_checked", "critical_qa_qualified",
     "line_count", "event_text", "goal", "paths", "diagnostics", "whole_class_plan",
     "author_qa_same_snapshot", "complexity",
-    "event_kind", "requirement_conflict", "plan",
+    "event_kind", "requirement_conflict", "plan", "diff_check",
 ))
+_SEARCH_BASE = frozenset(("saved", "method", "pattern", "scope", "instances", "assurance_only"))
+_SEARCH_OPTIONAL = frozenset(("matched_count", "scope_listing", "diff_identifiers"))
+_DIFF_KEYS = frozenset(("tool", "hunks") + _UNCHANGED)
+_DIFF_TOOLS = frozenset(("diff", "git", "ast"))
 
 
 def _finish(base, **updates):
@@ -232,6 +230,14 @@ def _decision(**updates):
 
 def refuse_unsupported_task(task):
     """Refuse to store this policy inside an unsupported admission schema."""
+    try:
+        return _refuse_unsupported_task(task)
+    except (TypeError, RecursionError, ValueError):
+        return _decision(rejected=True, executed=False, writer=False, reason="invalid case",
+                         event_class="REJECTED", route="hold")
+
+
+def _refuse_unsupported_task(task):
     if type(task) is not dict or type(task.get("schema")) is not str:
         return _decision(rejected=True, executed=False, reason="unsupported schema",
                          event_class="REJECTED", route="hold")
@@ -249,6 +255,13 @@ def refuse_unsupported_task(task):
 
 def validate_plan(plan):
     """Return an error string, or None when the plan schema is closed and safe."""
+    try:
+        return _validate_plan(plan)
+    except (TypeError, RecursionError, ValueError):
+        return "incompatible plan"
+
+
+def _validate_plan(plan):
     if type(plan) is not dict or set(plan) != _PLAN_KEYS:
         return "incompatible plan"
     if plan["schema"] != PLAN_SCHEMA:
@@ -282,6 +295,14 @@ def validate_plan(plan):
 
 def decide(case):
     """One deterministic classification. Does not call a provider or write source."""
+    try:
+        return _decide(case)
+    except (TypeError, RecursionError, ValueError):
+        return _decision(rejected=True, executed=False, writer=False, fast_fix=False,
+                         reason="invalid case", event_class="REJECTED", route="hold")
+
+
+def _decide(case):
     error = _case_error(case)
     if error:
         return _decision(rejected=True, reason=error, event_class="REJECTED", route="hold")
@@ -375,9 +396,17 @@ def _classify(base, evidence, plan):
     prior_closed = _prior_closed(evidence)
     if risk == "critical" or evidence["difficult_or_repeating"]:
         return _expert(base, evidence, plan, risk, class_open, prior_closed, honored)
+    # Continuation exists only on the third ordinary attempt. Later counters hold.
+    if evidence["author_attempts"] > 3:
+        return _finish(base, policy_applied=True, executed=False, writer=False, risk=risk,
+                       continuation_granted=False, fast_fix=False,
+                       reason="continuation is only available on the third author attempt",
+                       event_class="LIMIT", route="hold")
     if evidence["template_applicable"] and _norm_id(evidence["template_id"]):
-        if not _template_ok(evidence, risk):
-            return _pm(base, evidence, risk, whole_class=False, fast_fix_closed=prior_closed,
+        # A template writer needs a closed single-instance search, not a clean sentence.
+        if not (_template_ok(evidence, risk) and _class_closed(evidence["class_search"])
+                and not prior_closed):
+            return _pm(base, evidence, risk, whole_class=class_open, fast_fix_closed=prior_closed,
                        reason="template preconditions are not proven")
         tool = evidence["template_tool"] == "deterministic_tool"
         route = "deterministic_tool" if tool else "cursor:auto"
@@ -391,9 +420,10 @@ def _classify(base, evidence, plan):
     if class_open or prior_closed:
         return _pm(base, evidence, risk, whole_class=class_open, fast_fix_closed=prior_closed,
                    reason="Fast Fix refused; defect class is not closed for a single repair")
-    if evidence["author_attempts"] >= 3 and evidence["brief_usable"] and evidence["progress"]:
-        if evidence["continuation_used"] >= 2:
+    if evidence["author_attempts"] == 3 and evidence["brief_usable"] and evidence["progress"]:
+        if evidence["continuation_used"] not in (0, 1):
             return _finish(base, policy_applied=True, executed=False, writer=False, risk=risk,
+                           continuation_granted=False, fast_fix=False,
                            reason="continuation budget is exhausted", event_class="LIMIT", route="hold")
         if evidence["architecture_research_required"] or evidence["minimal_action_known"] is not True:
             return _pm(base, evidence, risk, whole_class=False, fast_fix_closed=False,
@@ -488,16 +518,26 @@ def _quota(base, evidence):
     route = evidence["fallback_route"]
     risk = _floor(evidence)
     proofs = evidence["effects_proven_absent"] is True and evidence["fallback_equivalent"] is True
-    ordinary = (risk in ("low", "moderate") and route in ROUTES
-                and not (type(route) is str and route.startswith("agy:")))
-    specialist = risk == "critical" and (
-        route == SPECIALIST_SOL or (route == SPECIALIST_AGY and evidence["agy_qa_qualified"] is True))
-    if proofs and (ordinary or specialist):
+    # Astra diagnoses. It is never an author, including on an ordinary quota fallback.
+    astra = type(route) is str and "gpt-6-astra" in route
+    ordinary = (risk in ("low", "moderate") and type(route) is str and route in ROUTES
+                and not route.startswith("agy:") and not astra)
+    qa = _critical_qa(evidence)
+    # Critical fallback keeps the same specialist QA proof as the critical path.
+    specialist = (risk == "critical" and not astra and qa is not None and (
+        route == SPECIALIST_SOL or (route == SPECIALIST_AGY and evidence["agy_qa_qualified"] is True)))
+    if proofs and ordinary:
         return _finish(base, policy_applied=True, executed=True, writer=False, model_calls=1,
                        risk=risk, route=route, author_route=route,
                        fallback_reason="quota_exhausted_equivalent_fallback",
                        reason="quota exhausted equivalent fallback",
                        event_class="QUOTA", qa_route=_ordinary_qa(evidence))
+    if proofs and specialist:
+        return _finish(base, policy_applied=True, executed=True, writer=False, model_calls=1,
+                       risk=risk, route=route, author_route=route, qa_route=qa,
+                       fallback_reason="quota_exhausted_equivalent_fallback",
+                       reason="quota exhausted equivalent fallback",
+                       event_class="QUOTA")
     reason = ("critical quota fallback is not a specialist route" if risk == "critical"
               else "quota exhausted without an admitted equivalent fallback")
     return _finish(base, policy_applied=True, executed=False, writer=False, risk=risk,
@@ -614,10 +654,13 @@ def _search_saved(evidence):
 
 
 def _search_state(search):
+    """The old six keys stay valid. Proof keys are optional, and missing proof is not closure."""
     if search is None:
         return None
-    if type(search) is not dict or set(search) != {
-            "saved", "method", "pattern", "scope", "instances", "assurance_only"}:
+    if type(search) is not dict:
+        return "invalid class search"
+    keys = set(search)
+    if not _SEARCH_BASE <= keys or keys - _SEARCH_BASE - _SEARCH_OPTIONAL:
         return "invalid class search"
     if type(search["saved"]) is not bool or type(search["assurance_only"]) is not bool:
         return "invalid class search"
@@ -629,29 +672,44 @@ def _search_state(search):
         return "invalid class search"
     if len(search["pattern"]) > 200 or len(search["scope"]) > 240:
         return "invalid class search"
+    if "matched_count" in search and (
+            type(search["matched_count"]) is not int or search["matched_count"] < 0):
+        return "invalid class search"
+    listing = search.get("scope_listing", None)
+    if "scope_listing" in search and (
+            type(listing) is not list or len(listing) > 32
+            or any(type(item) is not str or len(item) > 240 for item in listing)):
+        return "invalid class search"
+    identifiers = search.get("diff_identifiers", None)
+    if "diff_identifiers" in search and (
+            type(identifiers) is not list or len(identifiers) > 32
+            or any(type(item) is not str or len(item) > 200 for item in identifiers)):
+        return "invalid class search"
     return None
 
 
 def _prior_closed(evidence):
     prior = evidence["prior_fast_fix"]
-    fingerprint = _norm_id(evidence["defect_fingerprint"])
+    fingerprint = _fingerprint_key(evidence["defect_fingerprint"])
     if type(prior) is not dict or not fingerprint:
         return False
-    return prior.get("result") == "fail" and _norm_id(prior.get("fingerprint")) == fingerprint
+    return prior.get("result") == "fail" and _fingerprint_key(prior.get("fingerprint")) == fingerprint
 
 
 def _class_closed(search):
+    """Closure is a tool result, not a shape that merely looks like an identifier."""
     return (type(search) is dict and search.get("saved") is True and search.get("assurance_only") is False
             and search.get("method") in SEARCH_METHODS and search.get("instances") == 1
-            and _pattern_proves_class(search.get("pattern"), search.get("scope")))
+            and _pattern_proves_class(search))
 
 
 def _fast_fix_block(evidence, risk):
     """Return (allowed, reason). Every condition is default-deny: missing proof is failure."""
     plan = evidence["plan"]
     checks = (
+        (_safe_surface(evidence), "change surface is not a fast-fix surface"),
         (evidence["cause"] == "proven" and evidence["acceptance_unchanged"] is True
-         and bool(_norm_id(evidence["defect_fingerprint"])),
+         and bool(_fingerprint_key(evidence["defect_fingerprint"])),
          "condition 1 cause or acceptance"),
         (evidence["minimal_action_known"] is True and evidence["architecture_research_required"] is False,
          "condition 2 architecture still open"),
@@ -674,7 +732,9 @@ def _fast_fix_block(evidence, risk):
 
 
 def _condition_seven(evidence, plan):
-    """No plan and no explicit unchanged-fields means the limit was not proven."""
+    """Limits are a diff tool result. A sentence or a lone boolean is not that result."""
+    if not _diff_proven(evidence.get("diff_check")):
+        return False
     if type(plan) is not dict or plan.get("executable") is not True:
         return False
     if any(evidence.get(flag) is not True or plan.get(flag) is not True for flag in _UNCHANGED):
@@ -686,89 +746,119 @@ def _condition_seven(evidence, plan):
     return True
 
 
-def _prepared(value):
-    """NFKC, then drop BOM, zero-width and other format/control characters."""
-    if type(value) is not str:
-        return ""
-    text = unicodedata.normalize("NFKC", value)
+def _percent(value):
+    text = value
+    for _ in range(2):
+        decoded = urllib.parse.unquote(text)
+        if decoded == text:
+            break
+        text = decoded
+    return text
+
+
+def _strip_marks(text):
+    """NFKD, then drop marks, format, and controls. Spaces stay, so words do not glue together."""
+    text = unicodedata.normalize("NFKD", text)
     kept = []
     for char in text:
-        category = unicodedata.category(char)
-        if category == "Cf":
+        if unicodedata.category(char) in _MARK_CATEGORIES and unicodedata.category(char) != "Zs":
             continue
-        if category == "Cc" and char not in "\t\n\r":
+        code = ord(char)
+        if 0xFE00 <= code <= 0xFE0F or 0xE0100 <= code <= 0xE01EF:
             continue
         kept.append(char)
     return "".join(kept)
 
 
-def _iter_texts(value, key=None):
-    if key in ("binding", "schema"):
+def _camel_split(text):
+    text = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", text)
+    text = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", text)
+    return text
+
+
+def _script(char):
+    if not char.isalpha():
+        return None
+    code = ord(char)
+    if code <= 0x7F or 0x00C0 <= code <= 0x024F or 0x1E00 <= code <= 0x1EFF:
+        return "lat"
+    if (0x0400 <= code <= 0x052F or 0xA640 <= code <= 0xA69F
+            or 0x1C80 <= code <= 0x1C8F or 0x2DE0 <= code <= 0x2DFF):
+        return "cyr"
+    if 0x0370 <= code <= 0x03FF or 0x1F00 <= code <= 0x1FFF:
+        return "gre"
+    return "other"
+
+
+def _mixed_script(text):
+    for token in re.findall(r"[^\W\d_]+", text, flags=re.UNICODE):
+        scripts = {script for script in (_script(char) for char in token) if script}
+        if len(scripts) >= 2:
+            return True
+    return False
+
+
+def _cyr_letters(text):
+    return "".join(char for char in text if ("а" <= char <= "я") or char == "ё")
+
+
+def _latin_view(text):
+    """Camel-split, casefold, fold confusables. Hyphens and other separators drop out."""
+    translated = _camel_split(text).casefold().translate(_CONFUSABLE)
+    tokens = [token for token in re.split(r"[^0-9a-z]+", translated) if token]
+    return tokens, "".join(tokens)
+
+
+def _iter_texts(value, key=None, seen=None, depth=0):
+    if depth > 32 or key in ("binding", "schema"):
         return
     if type(value) is str:
         yield value
-    elif type(value) is dict:
+        return
+    if type(value) is not dict and type(value) is not list and type(value) is not tuple:
+        return
+    if seen is None:
+        seen = set()
+    marker = id(value)
+    if marker in seen:
+        return
+    seen.add(marker)
+    if type(value) is dict:
         for child_key, child in value.items():
-            yield from _iter_texts(child, child_key)
-    elif type(value) is list or type(value) is tuple:
+            yield from _iter_texts(child, child_key, seen, depth + 1)
+    else:
         for child in value:
-            yield from _iter_texts(child)
-
-
-def _tokens(value):
-    text = _prepared(value).translate(_CONFUSABLE)
-    if not text:
-        return []
-    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", text)
-    spaced = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", spaced)
-    return [token.casefold() for token in re.split(r"[^0-9A-Za-z]+", spaced) if token]
-
-
-def _letter_runs(tokens):
-    run = []
-    for token in tokens:
-        if len(token) == 1 and token.isalpha():
-            run.append(token)
-            continue
-        if run:
-            yield "".join(run)
-            run = []
-    if run:
-        yield "".join(run)
-
-
-def _cyrillic_sensitive(value):
-    folded = _prepared(value).casefold()
-    return any(stem in folded for stem in _CYRILLIC_STEMS)
+            yield from _iter_texts(child, None, seen, depth + 1)
+    seen.discard(marker)
 
 
 def _sensitive(value):
     if type(value) is not str or not value:
         return False
-    if _cyrillic_sensitive(value):
-        return True
-    tokens = _tokens(value)
-    if not tokens:
+    stripped = _strip_marks(_percent(value))
+    if not stripped:
         return False
+    if _mixed_script(stripped):
+        return True
+    folded = stripped.casefold()
+    cyr = _cyr_letters(folded)
+    if cyr and any(stem in cyr for stem in _RU_STEMS):
+        return True
+    tokens, compact = _latin_view(stripped)
+    if not compact:
+        return False
+    scrubbed = compact
     for token in tokens:
-        if token in _SENSITIVE_TOKENS:
-            return True
-        # "author" is a person, not an authorization surface.
+        if token.startswith("secretary"):
+            scrubbed = scrubbed.replace("secretary", "")
+    if "secret" in scrubbed:
+        return True
+    if any(stem in compact for stem in _EN_STEMS):
+        return True
+    for token in tokens:
+        # Exact auth, not the prefix of "author" / "authors" / "secretary".
         if token.startswith("auth") and not token.startswith("author"):
             return True
-        if token == "pii" or token.startswith("pii") or token.endswith("pii"):
-            return True
-        if token.startswith("oauth"):
-            return True
-        if token.startswith("secret") and not token.startswith("secretary"):
-            return True
-        if token.startswith(("payment", "billing")):
-            return True
-    if any(word in _SENSITIVE_TOKENS or word in ("pii", "auth", "oauth") for word in _letter_runs(tokens)):
-        return True
-    compact = "".join(tokens)
-    if any(stem in compact for stem in ("rollback", "migration", "identity", "dataloss", "qareuse")):
-        return True
     for phrase in _SENSITIVE_PHRASES:
         span = len(phrase)
         if any(tokens[index:index + span] == list(phrase) for index in range(len(tokens) - span + 1)):
@@ -780,49 +870,129 @@ def _sensitive_any(evidence):
     return any(_sensitive(text) for text in _iter_texts(evidence))
 
 
-def _norm_id(value):
+def _fingerprint_key(value):
+    """Identity keeps hyphens. Marks, spaces, and newlines do not make a new defect."""
     if type(value) is not str:
         return ""
-    text = " ".join(_prepared(value).casefold().translate(_CONFUSABLE).split())
+    text = _strip_marks(_percent(value)).casefold().translate(_CONFUSABLE)
+    text = "".join(char for char in text if unicodedata.category(char) != "Zs" and char not in "\t\n\r")
     if not text or not re.search(r"[a-z0-9]", text):
         return ""
     return text
 
 
-def _token(value):
-    return _norm_id(value)
+def _norm_id(value):
+    return _fingerprint_key(value)
 
 
-def _structural(ident):
-    folded = ident.casefold()
-    if folded in _GENERIC_WORDS or re.fullmatch(r"ts\d+", folded):
+def _has_cycle(value, seen=None, depth=0):
+    if depth > 32:
+        return True
+    if type(value) is not dict and type(value) is not list and type(value) is not tuple:
         return False
-    if "_" in ident and len(folded) >= 3:
+    if seen is None:
+        seen = set()
+    marker = id(value)
+    if marker in seen:
         return True
-    if re.search(r"[A-Z]", ident[1:]):
-        return True
+    seen.add(marker)
+    nested = value.values() if type(value) is dict else value
+    for child in nested:
+        if _has_cycle(child, seen, depth + 1):
+            return True
+    seen.remove(marker)
     return False
 
 
-def _pattern_proves_class(pattern, scope):
-    text = _norm_id(pattern)
-    where = _norm_id(scope)
-    if not text or not where:
+def _concrete_path(value):
+    if type(value) is not str:
         return False
-    if _DIAGNOSTIC_ONLY.match(text):
+    text = value.strip()
+    if not text or text.casefold() in _GENERIC_WORDS:
         return False
-    raw = _prepared(pattern).translate(_CONFUSABLE) if type(pattern) is str else ""
-    idents = re.findall(r"[A-Za-z_][A-Za-z0-9_]*", raw)
-    return any(_structural(ident) for ident in idents)
+    return "/" in text or "." in text
+
+
+def _generic_part(part):
+    folded = part.casefold()
+    return (folded in _GENERIC_WORDS or folded.isdigit() or len(folded) <= 1
+            or re.fullmatch(r"ts\d+", folded) is not None)
+
+
+def _ident_parts(pattern):
+    parts = []
+    for ident in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", pattern):
+        spaced = _camel_split(ident).replace(" ", "_")
+        parts.extend(piece.casefold() for piece in spaced.split("_") if piece)
+    return parts
+
+
+def _pattern_proves_class(search):
+    pattern = search.get("pattern")
+    if type(pattern) is not str or not _concrete_path(search.get("scope")):
+        return False
+    identifiers = search.get("diff_identifiers")
+    if type(identifiers) is not list or pattern not in identifiers:
+        return False
+    listing = search.get("scope_listing")
+    if type(listing) is not list or not any(_concrete_path(item) for item in listing):
+        return False
+    if type(search.get("matched_count")) is not int or search.get("matched_count") != 1:
+        return False
+    if search.get("instances") != 1:
+        return False
+    parts = _ident_parts(pattern)
+    # A generic or diagnostic fragment left after the split does not name a class.
+    return bool(parts) and not all(_generic_part(part) for part in parts)
+
+
+def _diff_proven(diff):
+    if type(diff) is not dict or set(diff) != _DIFF_KEYS:
+        return False
+    if diff.get("tool") not in _DIFF_TOOLS:
+        return False
+    hunks = diff.get("hunks")
+    if type(hunks) is not int or hunks < 1:
+        return False
+    return all(diff.get(flag) is True for flag in _UNCHANGED)
+
+
+def _safe_surface(evidence):
+    surface = evidence.get("change_surface")
+    if type(surface) is not str:
+        return False
+    return surface.strip().casefold() in _SAFE_SURFACES
 
 
 def _weakens(value):
-    if type(value) is not str:
+    """Destructive intent blocks. Quiet text does not grant a route."""
+    if type(value) is not str or not value:
         return False
-    text = _prepared(value)
-    if not text.strip():
+    stripped = _strip_marks(_percent(value))
+    if not stripped:
         return False
-    return _WEAKENING.search(text) is not None
+    folded = _camel_split(stripped).casefold()
+    cyr = _cyr_letters(folded)
+    if cyr and any(stem in cyr for stem in _RU_DESTRUCTIVE):
+        return True
+    tokens, compact = _latin_view(stripped)
+    if not compact:
+        return False
+    if any(verb in compact for verb in ("delet", "remov", "drop", "strip")) and any(
+            noun in compact for noun in ("assert", "test", "timeout", "expect")):
+        return True
+    if "commentout" in compact or "commentedout" in compact:
+        return True
+    gated = any(verb in compact for verb in ("skip", "disable", "xfail")) or "xit" in tokens
+    if gated and any(noun in compact for noun in ("test", "assert", "timeout", "qa", "security", "auth")):
+        return True
+    if "weaken" in compact or "loosen" in compact:
+        return True
+    if any(verb in compact for verb in ("rais", "increas", "extend")) and "timeout" in compact:
+        return True
+    if any(verb in compact for verb in ("adjust", "updat", "chang")) and "expected" in compact:
+        return True
+    return False
 
 
 def _weakens_any(evidence):
@@ -843,14 +1013,18 @@ def _case_error(case):
     return None
 
 
+def _matches(pattern, value):
+    return type(value) is str and pattern.fullmatch(value) is not None
+
+
 def _binding_error(binding):
     if type(binding) is not dict or set(binding) != _BIND_KEYS:
         return "invalid binding"
-    if not _SHA64.fullmatch(binding["task_sha"]) or not _SHA64.fullmatch(binding["rules_sha256"]):
+    if not _matches(_SHA64, binding["task_sha"]) or not _matches(_SHA64, binding["rules_sha256"]):
         return "invalid binding"
-    if not _SHA40.fullmatch(binding["rules_commit"]) or not _SHA40.fullmatch(binding["head"]):
+    if not _matches(_SHA40, binding["rules_commit"]) or not _matches(_SHA40, binding["head"]):
         return "invalid binding"
-    if not _OP.fullmatch(binding["operation_id"]):
+    if not _matches(_OP, binding["operation_id"]):
         return "invalid binding"
     return None
 
@@ -859,10 +1033,10 @@ def _pin_error(pins):
     if type(pins) is not dict or set(pins) != _PIN_KEYS:
         return "invalid pins"
     for key in ("code_commit", "capsule_commit", "policy_commit"):
-        if not _SHA40.fullmatch(pins[key]):
+        if not _matches(_SHA40, pins[key]):
             return "invalid pins"
     for key in ("code_sha256", "capsule_sha256", "policy_sha256"):
-        if not _SHA64.fullmatch(pins[key]):
+        if not _matches(_SHA64, pins[key]):
             return "invalid pins"
     if type(pins["policy_bytes_match"]) is not bool:
         return "invalid pins"
@@ -870,6 +1044,10 @@ def _pin_error(pins):
 
 
 def _evidence(raw):
+    if type(raw) is not dict:
+        return "invalid evidence"
+    if _has_cycle(raw):
+        return "cyclic evidence"
     if set(raw) - _EVIDENCE_KEYS:
         return "unknown evidence"
     try:
@@ -891,6 +1069,8 @@ def _evidence(raw):
         evidence["prior_fast_fix"] = copy.deepcopy(evidence["prior_fast_fix"])
     if evidence["plan"] is not None:
         evidence["plan"] = copy.deepcopy(evidence["plan"])
+    if evidence["diff_check"] is not None:
+        evidence["diff_check"] = copy.deepcopy(evidence["diff_check"])
     return evidence
 
 
@@ -918,7 +1098,7 @@ def _defaults():
         "line_count": None, "event_text": "", "goal": "", "paths": [], "diagnostics": "",
         "whole_class_plan": False,
         "author_qa_same_snapshot": False, "complexity": "standard", "event_kind": None,
-        "requirement_conflict": False, "plan": None,
+        "requirement_conflict": False, "plan": None, "diff_check": None,
     }
 
 
@@ -998,3 +1178,5 @@ def _check_evidence(evidence):
             raise ValueError("invalid prior fast fix")
     if evidence["plan"] is not None and type(evidence["plan"]) is not dict:
         raise ValueError("invalid plan")
+    if evidence["diff_check"] is not None and type(evidence["diff_check"]) is not dict:
+        raise ValueError("invalid diff check")
