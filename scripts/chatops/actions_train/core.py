@@ -250,6 +250,19 @@ def _route_immutable(slots, task, role, profile, budget, slot, task_hash=None):
                 if model not in AUTHOR_MODELS or effort is not None:
                     refusal[entry] = 'Antigravity author role/model/effort unsupported'
                     continue
+                # Only a supported, explicitly listed non-AGY QA route satisfies
+                # independence. Cursor QA is not admitted by this immutable path.
+                qa_routes = task.get('qa_routes', [])
+                independent = any(
+                    len(parts := route.split(':')) == 3 and parts[0] == 'codex'
+                    and slots.MODEL_ADAPTER.get(parts[1]) == 'codex'
+                    and parts[1] in ('gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-luna')
+                    and parts[2] in ('medium', 'high')
+                    and (parts[1] != 'gpt-6-luna' or parts[2] == 'medium')
+                    for route in qa_routes)
+                if not independent:
+                    refusal[entry] = 'AGY author requires an admitted independent non-agy QA route'
+                    continue
                 ok, why = available(slot, task_hash or digest(task), model=model)
                 if not ok:
                     refusal[entry] = why; continue
@@ -265,8 +278,8 @@ def _route_immutable(slots, task, role, profile, budget, slot, task_hash=None):
                             underlying_model=None, effort=None, role=role, work_kind=task['work_kind'], risk=task['risk'],
                             fallback_reason=('previous preferred providers unavailable' if refusal else None),
                             unavailable=refusal, remaining_calls=left, used_calls=used)
-            if (provider == 'agy' and role == 'qa' and task.get('author_routes')
-                    and task['author_routes'][0].split(':')[0] == 'agy'):
+            if (provider == 'agy' and role == 'qa'
+                    and any(r.split(':')[0] == 'agy' for r in task.get('author_routes', []))):
                 refusal[entry] = 'independent QA must be a different provider'
                 continue
             if provider == 'agy':

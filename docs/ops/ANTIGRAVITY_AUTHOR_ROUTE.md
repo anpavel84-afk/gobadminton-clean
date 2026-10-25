@@ -35,9 +35,10 @@ by importing or invoking the adapter. No installed scheduler flags are changed.
 Only explicit V2 author_routes can choose AGY. The cost-policy extension prefers
 Medium for simple/standard, Sonnet High for complex, Opus High for critical; it
 requires the existing minimum Codex route as a listed fallback, and never adds a
-route. QA's existing critical fallback restriction is preserved. If the first
+route. QA's existing critical fallback restriction is preserved. If any listed
 author route is AGY, every AGY QA entry is refused with “independent QA must be a
-different provider”, including when author selection fell back. Codex QA remains
+different provider”, including QA fallback and cost-policy selection. AGY author
+selection requires a listed, supported non-AGY QA route. Codex QA remains
 subject to its existing admission and isolation. V1 FORBIDDEN/ADAPTERS are intact.
 
 Trusted rules are injected in full for the author, through the ordinary stage
@@ -204,3 +205,127 @@ No root script, controller activation, real model invocation, independent QA,
 hosted CI or DEV acceptance was performed. Next authorized action is review of
 this uncommitted source candidate; enabling remains the separately admitted
 root sequence above.
+
+
+## PR #312 — independent-QA repair round 2 (25 October 2026)
+
+AUTHOR/fix-author only, by the direct bounded assignment in this session; no
+independent QA claim. Input/source/PR HEAD is
+`395221d89e903956d6e099747adfa26c02c6da9a`. Assigned PR branch:
+`agy-author-route-20261025`; the actual checkout is detached at that exact HEAD.
+Original dev base is
+`c9d0cb6b59c9099857810ef9a6e8d1eb9047e30b`. Candidate is the working-tree diff,
+without a new commit. Accepted EOM/SMART_ROUTING commits and hashes above were
+verified unchanged. This assignment owns only its listed local source, tests,
+manifest and runbook paths. It does not create a second PMA/runtime, change
+admission, or invoke a model route. Requested role: fix-author; effective live
+provider route: NOT RUN. The supplied confirmed findings/reproductions are the
+repair inputs; the installed FAIL/Astra policy is unchanged.
+
+1. Credential leak: raw JSON bytes were checked, but decoded usage keys entered
+   a shared mutable receipt before validation. Usage now has at most 32 keys
+   matching `[a-z][a-z0-9_]{0,63}`, with nonnegative integer values only. Both
+   streams receive raw, decoded-line, decoded-event and recursive string key/value
+   checks against all original/refreshed token bytes. Parsing and proposed receipt
+   fields stay local until verified; stage receives a detached validated receipt.
+   Failure reconstructs a bounded whitelist of safe scalar metadata, drops
+   provider structures/usage and reports a closed ReviewError. No raw exception
+   text is persisted. Tests cover escaped usage keys, result values, nested keys
+   and values, tool arguments/responses and response text, both via invoke and
+   the actual stage.setup/model finalizer/export; all require one charge, a durable
+   failed_no_automatic_replay phase, no credential in disk/choice/trace/result,
+   unchanged source and removed private trees.
+2. Independence: the old check looked only at author_routes[0]. Any listed AGY
+   author now excludes AGY QA, including immutable and cost-policy paths and
+   fallback after Codex exhaustion. AGY authors also require a supported listed
+   non-AGY QA route (currently Codex; Cursor QA is not admitted by this path).
+   Availability/budget gates for other providers and QA-only AGY remain intact.
+3. Payload race: snapshot hashes did not bind the later file read. Each payload
+   is now read once for SHA-256 comparison, credential scan and import. Changed
+   deletions must remain absent. A second existing cgroup reaping-state check
+   precedes payload reads; cgroup-absent retains its documented residual risk.
+   output_manifest_sha256 binds the validated tree; imported_payload_sha256
+   binds the canonical digest of the imported path-to-content-hash map.
+4. Cleanup: one exception previously skipped remaining cleanup. Guard restore,
+   OAuth unlink, private-tree removal, cgroup removal and evidence close are
+   attempted independently, in that order. Private-tree removal repairs directory
+   permissions and retries after partial failure. Any observed failure remains
+   failed_no_automatic_replay with cleanup='failed' and fixed per-step flags
+   (cleanup_restore_guard, cleanup_oauth_copy, cleanup_private_tree,
+   cleanup_cgroup, cleanup_evidence); exceptions remain closed ReviewError.
+
+Additional defects of the same class: encoded JSON/string/plain-text stderr
+could otherwise enter evidence; the cgroup helper can return without removing
+its directory; a reaping exception during failure handling could skip the safe
+failure receipt. These paths are now checked/contained. Unicode surrogate pairs
+in valid provider JSON remain supported. The existing stage finalizer was read
+in full: its AGY author receipt/usage projection is now fed only verified data,
+so no stage.py change is required. The upgrade script derives module pins from
+the reviewed manifest/bundle and needs no change. Only changed runtime file hash
+entries are recomputed; protected adapters, receiver, slots and cost policy are
+unchanged.
+
+Regression method names are in the two changed test files. Credential cases:
+test_escaped_usage_key, test_escaped_result_value,
+test_escaped_nested_keys_and_values, test_escaped_tool_arguments,
+test_escaped_tool_response, test_escaped_response_text,
+test_decoded_stderr_json_is_checked_before_evidence,
+test_decoded_string_stderr_is_checked_before_evidence,
+test_escaped_plain_stderr_is_checked_before_evidence,
+test_real_stage_finalizer_never_exports_decoded_credentials and the five
+test_real_stage_escaped_* methods,
+test_failure_receipt_rebuild_discards_untrusted_fields,
+test_usage_keys_are_closed_and_bounded. Routing:
+test_any_agy_author_entry_blocks_qa_with_or_without_cost_policy,
+test_agy_qa_fallback_refused_after_codex_exhaustion,
+test_agy_author_requires_listed_non_agy_admitted_qa. Payload:
+test_payload_snapshot_race_refuses_import,
+test_payload_deleted_after_snapshot_refuses_import,
+test_deletion_replaced_with_write_refuses_import,
+test_imported_payload_digest_binds_actual_bytes,
+test_cgroup_rechecked_before_payload_read. Cleanup:
+test_cgroup_cleanup_exception_still_removes_private_tree,
+test_real_cgroup_helper_eacces_still_removes_private_tree,
+test_guard_restore_failure_does_not_skip_tree_or_cgroup,
+test_partial_rmtree_retries_and_removes_oauth_first,
+test_cgroup_helper_silent_failure_is_not_success,
+test_real_rmtree_permission_repair_is_failed_closed.
+
+Final AUTHOR self-check results (synthetic data only):
+
+- All 31 new test methods execute and fail on exact original HEAD 395221d8 in
+  a separate archive under writable TMPDIR, with only the new tests copied in.
+  There are 31 failing assertions/subtest events and 8 errors (unexpected old
+  exception types/missing receipt fields), covering all 31 distinct methods;
+  there are no test-module import errors or unexpectedly passing new methods.
+- The three AGY author modules pass 90/90 tests after the fix, including all
+  31 regressions. The existing qualification fixture now explicitly lists the
+  required independent Codex QA route; its original admission assertions remain.
+- Full Actions discovery from scripts/chatops/tests: original HEAD 988 tests;
+  final candidate 1019 tests. Both have zero failures, the exact same 30 error
+  labels including subtest parameters, and one skip. These are 23 existing OPS
+  fixture errors (EACCES/downstream journals), five Cursor /tmp fixture errors,
+  the addressed_grants missing relative fixture, and a denied local socket.
+  They remain errors/NOT_TESTED, not PASS. No environment permission was changed.
+- Both phase discovery runs pass 51/51. Both foundation checks pass (292 Markdown
+  files, 168 draft API operations). git diff --check passes. All manifest entries
+  match their file bytes; only core.py and native_antigravity_author.py hash
+  entries changed. The forbidden adapters/receiver/slots remain byte-identical.
+
+An intermediate full run is retained in after-actions.log: 1019 tests, the same
+30 errors/one skip, plus one new fixture failure. That fixture incorrectly
+triggered its permission fault at refresh call 3, while the exit-path has two
+calls. Correcting the trigger to call 2 exercises the real permission failure;
+its assertions pass in both the final 90-test and complete 1019-test runs.
+The intermediate result is not the final candidate verification.
+
+Raw local logs, full-comparison.json (exact error labels), new-tests.json,
+new-tests-old.json, candidate.patch and verification.json are retained under
+`/home/agentagency-dev/author-evidence-agyfix2-20261025`. The exact baseline is
+pristine/; the isolated added-test check is tmp/pristine-new-tests/ (both use
+local copied Git metadata for immutable offline rules reads). No network,
+model CLI, real credentials, successful protected-state read, root operation,
+commit, push, installation, hosted CI or DEV deployment is part of this repair.
+Next authorized step is fresh independent QA of this uncommitted candidate,
+followed by the existing required CI/installation/DEV gates under their separate
+authority. AUTHOR self-checks are not independent QA or runtime qualification.

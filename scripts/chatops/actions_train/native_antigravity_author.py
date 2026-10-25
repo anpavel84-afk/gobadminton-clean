@@ -3,10 +3,12 @@
 The private export and trusted import limit accepted source effects. They do not
 confine uid978: the chmod guard detects accidental checkout writes only.
 """
+import copy
 import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import resource
 import shutil
 import stat
@@ -90,7 +92,7 @@ def command(timeout, model=MODEL):
             '--output-format', 'stream-json', '--print-timeout', str(timeout)+'s']
 
 
-def parse_stream(raw, model=MODEL):
+def parse_stream(raw, model=MODEL, *, tokens=()):
     """Author protocol, no verdict/schema parser and no guessed finish tolerance.
 
     Saved ordinary envelopes include a DONE finish step. Require it until a
@@ -98,7 +100,7 @@ def parse_stream(raw, model=MODEL):
     finish is a step type, never an implicitly advertised author tool.
     """
     need(model in MODELS and type(raw) is bytes and len(raw) <= MAX_OUT, 'invalid author stream')
-    events = [loads(line) for line in dec(raw).splitlines() if line.strip()]
+    events = _stream_events(raw, tokens, strict=True)
     need(3 <= len(events) <= 20000 and all(type(e) is dict for e in events), 'invalid author events')
     need(events[0].get('event') == 'init' and events[-1].get('event') == 'result'
          and sum(e.get('event') == 'init' for e in events) == 1
@@ -138,7 +140,9 @@ def parse_stream(raw, model=MODEL):
          and inference and finish and all(state == 'DONE' for _, state in steps.values()),
          'author terminal completion missing')
     usage = out.get('usage')
-    need(usage is None or type(usage) is dict and all(type(v) is int and v >= 0 for v in usage.values()),
+    need(usage is None or type(usage) is dict and len(usage) <= 32
+         and all(type(k) is str and re.fullmatch(r'[a-z][a-z0-9_]{0,63}', k)
+                 and type(v) is int and v >= 0 for k, v in usage.items()),
          'invalid author usage')
     return dict(requested_model=model, effective_model=model, effort=None,
                 effective_agent=init['agent'], effective_tools=tools,
@@ -168,6 +172,72 @@ def _credentials(raw):
 
 def _no_credentials(raw, tokens):
     need(not any(token in raw for token in tokens), 'credential output refused')
+
+
+def _decoded_credentials(value, tokens):
+    """Check decoded keys/values as well as their lossless JSON projection."""
+    _no_credentials(json.dumps(value, ensure_ascii=False).encode(), tokens)
+    pending = [value]
+    while pending:
+        item = pending.pop()
+        if type(item) is str:
+            _no_credentials(item.encode(), tokens)
+        elif type(item) is dict:
+            pending.extend(item.keys()); pending.extend(item.values())
+        elif type(item) is list:
+            pending.extend(item)
+
+
+def _stream_events(raw, tokens, *, strict=False):
+    _no_credentials(raw, tokens)
+    events = []
+    for line in dec(raw).splitlines():
+        if not line.strip(): continue
+        # Scan decoded textual escapes too, even in a non-JSON diagnostic line.
+        decoded_line = re.sub(r'(?:\\u[0-9a-fA-F]{4})+|\\["\\/bfnrt]',
+                              lambda m: json.loads('"'+m[0]+'"'), line)
+        _no_credentials(decoded_line.encode(), tokens)
+        # stderr may be ordinary text. JSON lines, including JSON strings, must
+        # receive the same decoded scan as stdout before any evidence write.
+        try:
+            event = loads(line)
+        except ReviewError:
+            if strict: raise
+            continue
+        _decoded_credentials(event, tokens)
+        events.append(event)
+    _decoded_credentials(events, tokens)
+    return events
+
+
+# A failed receipt never reuses provider dictionaries, paths, tools or context.
+# Keep only bounded, credential-checked scalars under these fixed field names.
+_FAILURE_FIELDS = (
+    'schema', 'issue', 'attempt', 'task_sha256', 'source_head', 'requested_route',
+    'requested_model', 'effective_model', 'requested_effort', 'qualification_phase',
+    'started_at', 'finished_at', 'exit_code', 'filesystem_boundary',
+    'filesystem_roots_enforced', 'requested_native_sandbox', 'owner_waiver',
+    'residual_risk', 'candidate_integrity', 'write_guard', 'executor_uid',
+    'executor_gid', 'evidence_id', 'executor_reap', 'source_export_sha256',
+    'charge_state', 'error_code', 'oauth_refresh', 'cleanup',
+    'cleanup_restore_guard', 'cleanup_private_tree', 'cleanup_oauth_copy',
+    'cleanup_cgroup', 'cleanup_evidence', 'cleanup_reap',
+)
+
+
+def _failed_receipt(receipt, tokens):
+    safe = {}
+    for key in _FAILURE_FIELDS:
+        if key not in receipt: continue
+        value = receipt[key]
+        if type(value) not in (str, int, bool, type(None)): continue
+        if type(value) is str and len(value) > 512: continue
+        try: _decoded_credentials(value, tokens)
+        except Exception: continue
+        safe[key] = value
+    safe.update(schema='GB_AGY_AUTHOR_RECEIPT_V1', phase='failed_no_automatic_replay',
+                provider_reported_usage=None, finished_at=int(time.time()))
+    return safe
 
 
 def _source_name(name):
@@ -267,12 +337,19 @@ def invoke(bridge, rt, prompt, choice, *, popen, atomic, permitted, evidence_dir
         transcript_sha256=None, provider_reported_usage=None, charge_state='not_charged', **transport)
     path = rt.layout.outbox/'agy-author-receipt.json'
     def save(phase):
-        _no_credentials(json.dumps(receipt, sort_keys=True).encode(), tokens)
-        receipt['phase'] = phase
-        atomic(path, receipt)
-        choice['native_receipt'] = receipt
+        nonlocal receipt
+        proposed = dict(receipt, phase=phase)
+        _decoded_credentials(proposed, tokens)
+        atomic(path, proposed)
+        receipt = proposed
+        choice['native_receipt'] = copy.deepcopy(proposed)
         ev.record(phase='complete' if phase == 'imported' else 'running', receipt_phase=phase,
                   charge_state=receipt['charge_state'], terminal=phase in ('imported', 'failed_no_automatic_replay'))
+    def fail():
+        nonlocal receipt
+        receipt = _failed_receipt(receipt, tokens)
+        save('failed_no_automatic_replay')
+
     base = None; process = None; cgroup = None; guard = None; membership = False
     auth = None; original = None; tokens = []
     try:
@@ -329,17 +406,32 @@ def invoke(bridge, rt, prompt, choice, *, popen, atomic, permitted, evidence_dir
         for name in ('stdout', 'stderr'):
             streams[name] = _source(out/name, out)
             need(len(streams[name]) <= MAX_OUT, 'author output exceeds bound')
-            _no_credentials(streams[name], tokens)
-        result = parse_stream(streams['stdout'], model); receipt.update(result)
+            _stream_events(streams[name], tokens, strict=name == 'stdout')
+        result = parse_stream(streams['stdout'], model, tokens=tokens)
+        # Validate in private memory BEFORE touching the receipt shared with stage.
+        _decoded_credentials(result, tokens)
         _remove_agent(work); _output_policy(work, tokens)
         after = snapshot(work, bridge, before)
         changed = sorted(n for n in set(before) | set(after) if before.get(n) != after.get(n))
         need(changed and all(permitted(n, task['allowed_paths']) for n in changed), 'empty or unauthorized author diff')
-        payloads = {n: _source(work/n, work) for n in changed if n in after}
-        for name, raw in payloads.items(): _no_credentials(raw, tokens)
+        receipt['executor_reap'] = _executor_reap_state(cgroup, membership)
+        need(receipt['executor_reap'] != 'cgroup-busy', 'AGY_CANDIDATE_CHANGED')
+        payloads = {}; payload_hashes = {}
+        for name in changed:
+            if name not in after:
+                need(not os.path.lexists(work/name), 'author deletion changed after snapshot')
+                continue
+            raw = _source(work/name, work)  # One read supplies hash, scan AND import.
+            payload_hash = hashlib.sha256(raw).hexdigest()
+            need(payload_hash == after[name], 'author payload changed after snapshot')
+            _no_credentials(raw, tokens)
+            payloads[name] = raw; payload_hashes[name] = payload_hash
+        proposed = dict(receipt, **result, changed_paths=changed,
+                        output_manifest_sha256=digest(after), imported_payload_sha256=digest(payload_hashes))
+        _decoded_credentials(proposed, tokens)
         # Stream bytes are retained only after every credential check succeeds.
         for name, raw in streams.items(): ev.write(name, raw)
-        receipt.update(changed_paths=changed, output_manifest_sha256=digest(after))
+        receipt = proposed
         save('validated')
         _restore_write_guard(guard); guard = None  # BEFORE the trusted writer imports.
         _import(bridge, changed, payloads)
@@ -347,30 +439,78 @@ def invoke(bridge, rt, prompt, choice, *, popen, atomic, permitted, evidence_dir
         return result
     except BaseException as error:
         if process is not None:
-            reap(process)
-            receipt['executor_reap'] = _executor_reap_state(cgroup, membership)
-            receipt['exit_code'] = process.returncode
-        receipt['finished_at'] = int(time.time())
+            try:
+                reap(process)
+                receipt['executor_reap'] = _executor_reap_state(cgroup, membership)
+                receipt['exit_code'] = process.returncode
+            except BaseException:
+                receipt['cleanup_reap'] = 'failed'
         # No provider exception text, prompt, OAuth bytes or raw output retained.
         receipt['error_code'] = 'AGY_CANDIDATE_CHANGED' if str(error) == 'AGY_CANDIDATE_CHANGED' else 'AGY_ADAPTER_ERROR'
-        save('failed_no_automatic_replay')
+        fail()
         raise ReviewError(receipt['error_code'], 'output', ev.id) from None
     finally:
+        cleanup_failed = False
+        def failed(step):
+            nonlocal cleanup_failed
+            cleanup_failed = True
+            receipt['cleanup'] = 'failed'
+            receipt['cleanup_'+step] = 'failed'
+
         try:
-            if receipt['phase'] != 'imported' and auth is not None and auth.exists() and original is not None:
+            if receipt['phase'] != 'imported' and auth is not None and original is not None:
                 try:
-                    retain_oauth_refresh(auth, original)
+                    if auth.exists(): retain_oauth_refresh(auth, original)
                 except BaseException:
-                    receipt['oauth_refresh'] = 'failed'
-                    save('failed_no_automatic_replay')
+                    receipt['oauth_refresh'] = 'failed'; cleanup_failed = True
+            # Every step is independent. Remove credentials/tree BEFORE cgroup
+            # cleanup, even when guard restoration or refresh has failed.
+            try: _restore_write_guard(guard)
+            except BaseException: failed('restore_guard')
+            if auth is not None:
+                try: auth.unlink(missing_ok=True)
+                except BaseException: failed('oauth_copy')
+            if base is not None:
+                def repair(function, name, exc_info):
+                    failed('private_tree')
+                    target = Path(name)
+                    # Never chmod through a link or outside this private tree.
+                    need(target == base or base in target.parents, 'invalid private cleanup path')
+                    if target != base: target.parent.chmod(0o700)
+                    if not target.is_symlink() and target.is_dir(): target.chmod(0o700)
+                    if function in (os.unlink, os.remove, os.rmdir): function(name)
+                    else: raise exc_info[1]  # open/scandir need more than a path
+                try: shutil.rmtree(base, onerror=repair)
+                except BaseException:
+                    failed('private_tree')
+                    # A partial removal/denied directory still gets an independent
+                    # retry with permission repair; the invocation remains failed.
+                    try:
+                        if not base.is_symlink():
+                            base.chmod(0o700)
+                            for parent, dirs, _ in os.walk(base, followlinks=False):
+                                for name in dirs:
+                                    directory = Path(parent)/name
+                                    if not directory.is_symlink(): directory.chmod(0o700)
+                        shutil.rmtree(base, onerror=repair)
+                    except BaseException: pass
+            try:
+                _remove_cgroup(cgroup)
+                # The shared helper can return after unsuccessful bounded retries.
+                need(cgroup is None or not cgroup.exists(), 'cgroup cleanup incomplete')
+            except BaseException: failed('cgroup')
         finally:
             try:
-                _restore_write_guard(guard)
-                _remove_cgroup(cgroup)
-                if base is not None: shutil.rmtree(base)
-            except BaseException:
-                receipt['cleanup'] = 'failed'
-                save('failed_no_automatic_replay')
-                raise ReviewError('AGY_ADAPTER_ERROR', 'output', ev.id) from None
+                if cleanup_failed:
+                    receipt['error_code'] = 'AGY_ADAPTER_ERROR'
+                    fail()
             finally:
-                ev.close()
+                try: ev.close()
+                except BaseException:
+                    failed('evidence')
+                    receipt['error_code'] = 'AGY_ADAPTER_ERROR'
+                    # The receipt write is independent of private evidence close.
+                    receipt = _failed_receipt(receipt, tokens)
+                    atomic(path, receipt); choice['native_receipt'] = copy.deepcopy(receipt)
+            if cleanup_failed:
+                raise ReviewError('AGY_ADAPTER_ERROR', 'output', ev.id) from None

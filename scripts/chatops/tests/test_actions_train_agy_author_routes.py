@@ -112,6 +112,44 @@ class Routing(unittest.TestCase):
             self.assertEqual(choice['provider'],'codex')
 
 
+    def test_any_agy_author_entry_blocks_qa_with_or_without_cost_policy(self):
+        import native_cursor as C
+        import native_antigravity_author as N
+        for policy in (False, True):
+            task = author_task()
+            if not policy: task.pop('routing_policy')
+            task['author_routes'] = ['cursor:auto','agy:'+QA.MODEL,'codex:gpt-6.1-sol:medium']
+            task['qa_routes'] = ['agy:'+QA.MODEL,'codex:gpt-6.1-sol:medium']
+            with self.subTest(policy=policy), patch.object(C,'available',return_value=(False,'synthetic unavailable')), \
+                 patch.object(N,'available',return_value=(True,'synthetic qualified')), \
+                 patch.object(QA,'available',return_value=(True,'synthetic qualified')):
+                if not policy: self.assertEqual(core.route(S,task,'author','auto',self.budget,'slot2')['provider'],'agy')
+                qa = core.route(S,task,'qa','auto',self.budget,'slot2')
+                self.assertEqual(qa['provider'],'codex')
+                self.assertEqual(qa['unavailable']['agy:'+QA.MODEL], 'independent QA must be a different provider')
+
+    def test_agy_qa_fallback_refused_after_codex_exhaustion(self):
+        task = author_task(); task.pop('routing_policy')
+        task['author_routes'] = ['cursor:auto','agy:'+QA.MODEL,'codex:gpt-6.1-sol:medium']
+        task['qa_routes'] = ['codex:gpt-6.1-sol:medium','agy:'+QA.MODEL]
+        budget = Mock(remaining=lambda p,r,s: 0 if (p,r)==('codex','qa') else 10, used=lambda *a: 0)
+        with patch.object(QA,'available',return_value=(True,'qualified')), \
+             self.assertRaisesRegex(core.Refused, 'independent QA must be a different provider'):
+            core.route(S,task,'qa','auto',budget,'slot2')
+
+    def test_agy_author_requires_listed_non_agy_admitted_qa(self):
+        import native_antigravity_author as N
+        with patch.object(N,'available',return_value=(True,'qualified')):
+            for qa in ([], ['agy:'+QA.MODEL], ['codex:unsupported:medium'], ['codex:gpt-6-luna:high'], ['cursor:auto']):
+                task = author_task(); task.pop('routing_policy'); task['qa_routes'] = qa
+                with self.subTest(qa=qa):
+                    choice = core.route(S,task,'author','auto',self.budget,'slot2')
+                    self.assertEqual(choice['provider'],'codex')
+                    self.assertIn('independent',choice['unavailable']['agy:'+QA.MODEL])
+            task['author_routes'] = ['agy:'+QA.MODEL]; task['qa_routes'] = ['codex:gpt-6.1-sol:medium']
+            self.assertEqual(core.route(S,task,'author','auto',self.budget,'slot2')['provider'],'agy')
+
+
 class Dispatch(unittest.TestCase):
     def exercise(self,provider,qa=False,fail=False):
         # Actual stage.setup/measured_model including ObservedSubprocess and

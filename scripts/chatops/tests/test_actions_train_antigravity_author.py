@@ -79,6 +79,17 @@ class Parser(unittest.TestCase):
         with self.assertRaises(N.ReviewError): N.parse_stream(b'{"event":"init","event":"result"}')
 
 
+    def test_usage_keys_are_closed_and_bounded(self):
+        events = rows(); events[1]['step_update']['text'] = 'Тест 🏸'
+        self.assertEqual(N.parse_stream(wire(events))['effective_model'], N.MODEL)
+        for usage in ({'UPPER': 1}, {'a' * 65: 1}, {'hyphen-key': 1},
+                      {f'tokens_{i}': 1 for i in range(33)}, {'tokens': -1},
+                      {'tokens': {'nested': 1}}):
+            events = rows(); events[-1]['result']['usage'] = usage
+            with self.subTest(usage=usage), self.assertRaises(core.Refused):
+                N.parse_stream(wire(events))
+
+
 class Qualification(unittest.TestCase):
     def setUp(self):
         self.marker = dict(schema='GB_ANTIGRAVITY_AUTHOR_V1', phase='canary', slot='slot2', executor_uid=978,
@@ -103,7 +114,8 @@ class Qualification(unittest.TestCase):
 
         # Exercise the actual route -> available -> qualification chain too.
         task = dict(work_kind='implementation', risk='routine',
-                    author_routes=['agy:'+N.MODEL, 'codex:gpt-6.1-sol:medium'])
+                    author_routes=['agy:'+N.MODEL, 'codex:gpt-6.1-sol:medium'],
+                    qa_routes=['codex:gpt-6.1-sol:medium'])
         budget = Mock(remaining=lambda *a:10, used=lambda *a:0)
         self.marker['canary_task_sha256'] = core.digest(task)
         self.assertEqual(core.route(S,task,'author','auto',budget,'slot2')['provider'],'agy')
@@ -397,6 +409,215 @@ class Invocation(unittest.TestCase):
         self.refresh.side_effect = N.ReviewError()
         with self.assertRaises(N.ReviewError): self.invoke()
         self.rt.budget.charge.assert_not_called(); self.assertEqual(self.called,0)
+
+
+    def credential_events(self, variant):
+        events = rows()
+        if variant == 'key': events[-1]['result']['usage'] = {TOKEN: 5}
+        elif variant == 'value': events[-1]['result']['text'] = TOKEN
+        elif variant == 'nested': events[-1]['result']['data'] = [{'deep': {TOKEN: [REFRESH]}}]
+        elif variant == 'tool_args': events[2]['step_update']['arguments'] = {'content': TOKEN}
+        elif variant == 'tool_response': events[2]['step_update']['response'] = {'text': REFRESH}
+        elif variant == 'response': events[1]['step_update']['text'] = TOKEN
+        return events
+
+    def escaped_wire(self, events):
+        return wire(events).replace(TOKEN.encode(), b'\\u0073'+TOKEN[1:].encode()).replace(
+            REFRESH.encode(), b'\\u0073'+REFRESH[1:].encode())
+
+    def reject_encoded(self, variant):
+        events = self.credential_events(variant)
+        raw = self.escaped_wire(events)
+        with patch(__name__+'.wire', return_value=raw), self.assertRaises(N.ReviewError) as raised:
+            self.invoke(events=events)
+        self.assertEqual(type(raised.exception), N.ReviewError)
+        self.assertNotIn(TOKEN, str(raised.exception)); self.assertNotIn(REFRESH, str(raised.exception))
+        self.assertNotIn(TOKEN, json.dumps(self.choice)); self.assertNotIn(REFRESH, json.dumps(self.choice))
+        self.assert_failed()
+
+    def test_escaped_usage_key(self): self.reject_encoded('key')
+    def test_escaped_result_value(self): self.reject_encoded('value')
+    def test_escaped_nested_keys_and_values(self): self.reject_encoded('nested')
+    def test_escaped_tool_arguments(self): self.reject_encoded('tool_args')
+    def test_escaped_tool_response(self): self.reject_encoded('tool_response')
+    def test_escaped_response_text(self): self.reject_encoded('response')
+
+    def test_decoded_stderr_json_is_checked_before_evidence(self):
+        source = N._source
+        def stream(path, root):
+            if path.name == 'stderr': return json.dumps({'diagnostic': TOKEN}).encode().replace(
+                TOKEN.encode(), b'\\u0073'+TOKEN[1:].encode())
+            return source(path, root)
+        with patch.object(N, '_source', side_effect=stream), self.assertRaises(N.ReviewError): self.invoke()
+        self.assert_failed()
+
+    def test_decoded_string_stderr_is_checked_before_evidence(self):
+        source = N._source
+        def stream(path, root):
+            if path.name == 'stderr': return json.dumps(TOKEN).encode().replace(TOKEN.encode(), b'\\u0073'+TOKEN[1:].encode())
+            return source(path, root)
+        with patch.object(N, '_source', side_effect=stream), self.assertRaises(N.ReviewError): self.invoke()
+        self.assert_failed()
+
+    def test_real_stage_finalizer_never_exports_decoded_credentials(self, variant="key"):
+        from test_actions_train import stage, req, receiver
+        import context_policy
+        self.bridge.model = Mock(); self.bridge.unchanged_issue = Mock()
+        self.rt.user = 'fixture'; self.rt.legacy = True; self.rt.home = self.root; self.rt.key = self.root/'key'
+        self.rt.layout.repo = self.source; self.rt.layout.state_dir = self.outbox; self.rt.layout.worktrees = self.root
+        self.rt.check_paths = Mock(); self.rt.continuity = lambda: True; self.rt.lease = Mock()
+        self.rt.budget.used = lambda *args: self.rt.budget.charge.call_count
+        traces = []
+        a = SimpleNamespace(RUNTIME_READS=(), Store=lambda *_: self.bridge.store, permitted=lambda *_: True,
+            atomic=lambda p,v: traces.append(copy.deepcopy(v)), subprocess=SimpleNamespace(Popen=Mock()))
+        def factory(c, store): self.bridge.c = c; return self.bridge
+        a.Bridge = factory
+        runtime = SimpleNamespace(Runtime=lambda *_a,**_k: self.rt, uid_of=lambda _: os.getuid(),
+            Hold=RuntimeError, read_json=lambda *_a,**_k: {'mode':'active','owned':{'slot2':'fixture'}})
+        original_invoke = N.invoke
+        # One charged invocation per isolated stage instance, including its finally/export.
+        events = self.credential_events(variant); raw = self.escaped_wire(events)
+        def invoke_fixture(bridge, rt, prompt, routing, **kw):
+            self.choice = routing
+            with patch.object(N, 'invoke', original_invoke): return self.invoke(events=events)
+        choice = dict(provider='agy', effective_model=N.MODEL, effort=None, role='author')
+        with patch.object(stage, 'live', return_value=(a,runtime)), patch.object(stage, 'API', return_value=Mock()), \
+             patch.object(stage, 'route', return_value=choice), patch.object(context_policy, 'load', return_value=('TRUSTED_FULL_RULES',{})), \
+             patch.object(context_policy, 'inject', return_value=('TRUSTED_FULL_RULES',{'role':'author'})), \
+             patch.object(receiver, 'units_quiet'), patch.object(N, 'invoke', side_effect=invoke_fixture), \
+             patch(__name__+'.wire', return_value=raw):
+            request = req('author','candidate'); request['slot'] = 'slot2'
+            context = stage.setup(request, {'codex':{'slot2':str(self.root/'vendor')}})
+            with self.assertRaises(N.ReviewError) as raised: context[-1].model('task data')
+            exported = stage.model_receipt({'status':'unknown'}, context)
+        self.assertEqual(type(raised.exception), N.ReviewError)
+        for token in (TOKEN, REFRESH):
+            self.assertNotIn(token, json.dumps(traces)); self.assertNotIn(token, json.dumps(exported))
+        self.assertEqual(exported['routing']['usage']['charged_calls'], 1)
+        self.assert_failed()
+
+    def test_real_stage_escaped_value(self): self.test_real_stage_finalizer_never_exports_decoded_credentials('value')
+    def test_real_stage_escaped_nested(self): self.test_real_stage_finalizer_never_exports_decoded_credentials('nested')
+    def test_real_stage_escaped_tool_args(self): self.test_real_stage_finalizer_never_exports_decoded_credentials('tool_args')
+    def test_real_stage_escaped_tool_response(self): self.test_real_stage_finalizer_never_exports_decoded_credentials('tool_response')
+    def test_real_stage_escaped_response(self): self.test_real_stage_finalizer_never_exports_decoded_credentials('response')
+
+    def test_escaped_plain_stderr_is_checked_before_evidence(self):
+        source = N._source
+        def stream(path, root):
+            if path.name == 'stderr': return b'diagnostic: \\u0073'+TOKEN[1:].encode()
+            return source(path, root)
+        with patch.object(N, '_source', side_effect=stream), self.assertRaises(N.ReviewError): self.invoke()
+        self.assert_failed()
+
+    def test_failure_receipt_rebuild_discards_untrusted_fields(self):
+        parse = N.parse_stream
+        def tainted(*args, **kwargs):
+            return parse(*args, **kwargs) | {'provider_reported_usage': {TOKEN: 5}}
+        with patch.object(N, 'parse_stream', side_effect=tainted), self.assertRaises(N.ReviewError): self.invoke()
+        self.assertNotIn(TOKEN, json.dumps(self.choice)); self.assert_failed()
+
+    def test_payload_snapshot_race_refuses_import(self):
+        snapshot = N.snapshot
+        def race(work, bridge, before):
+            after = snapshot(work, bridge, before)
+            (work/'allowed.txt').write_bytes(b'different-after-validation\n')
+            return after
+        with patch.object(N, 'snapshot', side_effect=race), self.assertRaises(N.ReviewError): self.invoke()
+        self.assert_failed()
+
+    def test_payload_deleted_after_snapshot_refuses_import(self):
+        snapshot = N.snapshot
+        def race(work, bridge, before):
+            after = snapshot(work, bridge, before)
+            (work/'allowed.txt').unlink()
+            return after
+        # A missing payload must also discard previously parsed provider fields
+        # from the durable failure receipt, rather than retaining stale usage.
+        with patch.object(N, 'snapshot', side_effect=race), self.assertRaises(N.ReviewError): self.invoke()
+        self.assert_failed()
+        self.assertEqual(self.choice['native_receipt'].get('imported_payload_sha256'), None)
+        self.assertIsNone(self.choice['native_receipt'].get('provider_reported_usage'))
+
+    def test_deletion_replaced_with_write_refuses_import(self):
+        snapshot = N.snapshot
+        def race(work, bridge, before):
+            after = snapshot(work, bridge, before)
+            (work/'allowed.txt').write_bytes(b'recreated-after-deletion\n')
+            return after
+        with patch.object(N, 'snapshot', side_effect=race), self.assertRaises(N.ReviewError): self.invoke('delete')
+        self.assert_failed()
+
+    def test_imported_payload_digest_binds_actual_bytes(self):
+        self.invoke()
+        expected = {'allowed.txt': hashlib.sha256((self.source/'allowed.txt').read_bytes()).hexdigest()}
+        self.assertEqual(self.choice['native_receipt']['imported_payload_sha256'], core.digest(expected))
+
+    def test_cgroup_rechecked_before_payload_read(self):
+        self.reap_state.side_effect = ['cgroup-quiet', 'cgroup-busy', 'cgroup-busy']
+        with self.assertRaises(N.ReviewError): self.invoke()
+        self.assert_failed()
+
+    def assert_cleanup_failure(self, step):
+        receipt = json.loads((self.outbox/'agy-author-receipt.json').read_text())
+        self.assertEqual(receipt['cleanup'], 'failed')
+        self.assertEqual(receipt['cleanup_'+step], 'failed')
+        self.assert_failed()
+
+    def test_cgroup_cleanup_exception_still_removes_private_tree(self):
+        with patch.object(N, '_remove_cgroup', side_effect=OSError('synthetic cleanup failure')), \
+             self.assertRaises(N.ReviewError): self.invoke('exit')
+        self.assert_cleanup_failure('cgroup')
+
+    def test_real_cgroup_helper_eacces_still_removes_private_tree(self):
+        import native_antigravity as QA
+        locked = self.root/'cgroup-parent'; locked.mkdir(); cgroup = locked/'invocation'; cgroup.mkdir()
+        self.addCleanup(locked.chmod, 0o700)
+        self.stack.enter_context(patch.object(N, '_prepare_invocation_cgroup', return_value=cgroup))
+        locked.chmod(0)
+        with patch.object(N, '_remove_cgroup', side_effect=QA._remove_cgroup), self.assertRaises(N.ReviewError): self.invoke('exit')
+        self.assert_cleanup_failure('cgroup')
+
+    def test_cgroup_helper_silent_failure_is_not_success(self):
+        cgroup = self.root/'cgroup'; cgroup.mkdir()
+        self.stack.enter_context(patch.object(N, '_prepare_invocation_cgroup', return_value=cgroup))
+        with self.assertRaises(N.ReviewError): self.invoke('exit')
+        self.assert_cleanup_failure('cgroup')
+
+    def test_real_rmtree_permission_repair_is_failed_closed(self):
+        count = [0]
+        def refresh(auth, original):
+            count[0] += 1
+            if count[0] == 2: (auth.parents[3]/'out').chmod(0)
+            return 'unchanged'
+        self.refresh.side_effect = refresh
+        with self.assertRaises(N.ReviewError): self.invoke('exit')
+        self.assert_cleanup_failure('private_tree')
+
+    def test_guard_restore_failure_does_not_skip_tree_or_cgroup(self):
+        restore = N._restore_write_guard
+        guard = N._guard_accidental_writes
+        saved = []
+        def remember(work):
+            value = guard(work); saved.append(value); return value
+        # The fixture alone restores its real permissions after observing refusal.
+        with patch.object(N, '_guard_accidental_writes', side_effect=remember), \
+             patch.object(N, '_restore_write_guard', side_effect=OSError('synthetic restore failure')), \
+             patch.object(N, '_remove_cgroup') as remove, self.assertRaises(N.ReviewError): self.invoke('exit')
+        for value in saved: restore(value)
+        remove.assert_called_once(); self.assert_cleanup_failure('restore_guard')
+
+    def test_partial_rmtree_retries_and_removes_oauth_first(self):
+        rmtree = N.shutil.rmtree; calls = []
+        def partial(path, **kwargs):
+            calls.append(path)
+            self.assertFalse((Path(path)/'home/.gemini/antigravity-cli/antigravity-oauth-token').exists())
+            if len(calls) == 1:
+                (Path(path)/'out').chmod(0)
+                raise PermissionError('synthetic partial rmtree failure')
+            return rmtree(path, **kwargs)
+        with patch.object(N.shutil, 'rmtree', side_effect=partial), self.assertRaises(N.ReviewError): self.invoke('exit')
+        self.assertGreaterEqual(len(calls), 2); self.assert_cleanup_failure('private_tree')
 
 
 if __name__ == '__main__': unittest.main()
