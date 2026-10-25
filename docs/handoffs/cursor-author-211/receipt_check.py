@@ -6,6 +6,7 @@ Dependency-free. Makes no provider, server, security-confinement, or lifecycle c
 from __future__ import annotations
 
 import json
+import math
 import sys
 from typing import Any
 
@@ -88,6 +89,15 @@ def _reject_nonfinite_constant(name: str):
     raise ValueError("non-finite constant")
 
 
+def _reject_nonfinite_float(text: str):
+    # Exponent overflow (1e999, -1e999, 1E400, -1E400) is a JSON number, not a
+    # named constant. parse_constant does not see it. parse_int stays default.
+    value = float(text)
+    if not math.isfinite(value):
+        raise ValueError("non-finite number")
+    return value
+
+
 def _load_receipt(path: str) -> Any:
     with open(path, "rb") as fh:
         raw = fh.read(MAX_BYTES + 1)
@@ -98,6 +108,7 @@ def _load_receipt(path: str) -> Any:
         text,
         object_pairs_hook=_unique_object_pairs,
         parse_constant=_reject_nonfinite_constant,
+        parse_float=_reject_nonfinite_float,
     )
 
 

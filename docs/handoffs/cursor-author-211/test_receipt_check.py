@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import math
 import tempfile
 import unittest
 from pathlib import Path
@@ -251,6 +252,39 @@ class CliReceiptCheck(unittest.TestCase):
                     joined = " ".join(str(t) for t in texts)
                     self.assertNotIn(lit, joined)
                     self.assertNotIn("Traceback", joined)
+
+    def test_exponent_overflow_fails_a_valid_receipt(self):
+        # Eight cases: 1e999, -1e999, 1E400, -1E400 in extra object and extra array.
+        # Default json.loads turns each into a non-finite float and validate()
+        # still returns True, so a PASS here would miss the overflow.
+        literals = ("1e999", "-1e999", "1E400", "-1E400")
+        for lit in literals:
+            for kind in ("object", "array"):
+                with self.subTest(lit=lit, kind=kind):
+                    body = valid_receipt_with_extra_literal(lit, kind)
+                    naive = json.loads(body)
+                    self.assertTrue(RC.validate(naive))
+                    overflow = naive["extra"]["nested"] if kind == "object" else naive["extra"][1]
+                    self.assertIsInstance(overflow, float)
+                    self.assertFalse(math.isfinite(overflow))
+                    path = self._write(f"overflow-{kind}-{lit}.json", body)
+                    with self.assertRaises(ValueError):
+                        RC._load_receipt(str(path))
+                    code, texts = self._run([str(path)])
+                    self.assertEqual(code, 1)
+                    self.assertEqual(texts, ["FAIL"])
+                    joined = " ".join(str(t) for t in texts)
+                    self.assertNotIn(lit, joined)
+                    self.assertNotIn("Traceback", joined)
+
+    def test_finite_exponent_and_integer_still_pass(self):
+        for lit in ("1.5", "1e2", "9007199254740993"):
+            with self.subTest(lit=lit):
+                body = valid_receipt_with_extra_literal(lit, "object")
+                path = self._write(f"finite-{lit}.json", body)
+                code, texts = self._run([str(path)])
+                self.assertEqual(code, 0)
+                self.assertEqual(texts, ["PASS"])
 
     def test_cli_accept_null_finite_and_quoted_nonfinite_strings(self):
         # Valid receipt already uses null for underlying_model / provider_internal_calls.

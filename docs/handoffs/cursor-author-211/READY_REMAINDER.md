@@ -34,8 +34,8 @@
 
 ## Что сделано в этом candidate
 
-- `docs/handoffs/cursor-author-211/receipt_check.py`: `parse_constant` поднимает `ValueError` на литералы NaN/Infinity/-Infinity. Поведение схемы, duplicate-key и лимита размера сохранено. Это source-кандидат по открытому дефекту QA, не повтор вызова Cursor и не сброс 1/1.
-- `docs/handoffs/cursor-author-211/test_receipt_check.py`: прежние проверки плюс прямой отказ парсера и extra object/array внутри валидного receipt. Для extra-фикстуры тест показывает, что обычный `json.loads` плюс `validate()` дали бы PASS.
+- `docs/handoffs/cursor-author-211/receipt_check.py`: `parse_constant` поднимает `ValueError` на литералы NaN/Infinity/-Infinity. `parse_float` поднимает `ValueError`, если результат не finite (1e999, -1e999, 1E400, -1E400). `parse_int` остаётся стандартным. Поведение схемы, duplicate-key и лимита размера сохранено. Это source-кандидат по открытому дефекту QA, не повтор вызова Cursor и не сброс 1/1. Независимая QA head `5af744fe` нашла, что одного `parse_constant` недостаточно: переполнение экспоненты проходило как PASS.
+- `docs/handoffs/cursor-author-211/test_receipt_check.py`: прежние проверки плюс прямой отказ парсера, extra object/array внутри валидного receipt и 8 случаев экспонентного переполнения. Для extra-фикстуры тест показывает, что обычный `json.loads` плюс `validate()` дали бы PASS.
 - `scripts/chatops/tests/test_actions_train_cursor_receipt.py`: тот же набор виден обычному `unittest discover` train CI.
 - `scripts/chatops/tests/test_actions_train_cursor.py`: `phase=ready` пускает другой task hash через тот же `qualification` + `core.route` и не вызывает `invoke`; `phase=canary` по-прежнему отказывает; ready не назначает Cursor задаче без допущенного первого `cursor:auto` и не переписывает immutable V1. Классификатор SMART_ROUTING не включается.
 
@@ -62,11 +62,3 @@
 **Блокер:** автор не выдаёт grant. Внутренний `budgets.json` (`cursor.author=unlimited`) — не подписка Cursor и не квалификация роли (EOM §6.1). Старые attempts, receipts и #207 UNKNOWN не переписываются.
 
 Разрешённый следующий шаг после независимого exact-SHA QA и обычного CI этого candidate: PMA решает, принимать ли source как ремонт покрытия без нового model call или оформлять новый bounded admission на тот же scope. Marker `accept` — только после QA PASS, CI и DEV ACCEPTED exact head по правилам successor-скрипта.
-
-## Учёт CLI Auto в подписке
-
-Репозиторий не называет план login `agentagency-dev` и не содержит цену Auto.
-
-Что фиксируют receipts и код: effective route `Auto`; `underlying_model` null; `provider_internal_calls` null; `effort` null; provider-reported token counts, когда CLI их отдал (v18 input 29185 / output 1246 / cacheRead 30080 / cacheWrite 0, три `model_call_id`; v20 input 35946 / output 2514 / cacheRead 80768 / cacheWrite 0, пять id; ранний file-tool trial input 6767 / output 520 / cacheRead 25472 / cacheWrite 0). Поле `money` в `cost_policy.usage` остаётся null. Внутренний ledger считает `charged_calls` вызова, это не счётчик подписки. EOM §6.1 и SMART_ROUTING SR-T23: неизвестные usage и цена остаются UNKNOWN, не ноль и не выдуманная модель.
-
-Публичные страницы Cursor на 2026-10-25 (не receipt этого login): [Usage and limits](https://cursor.com/help/models-and-usage/usage-limits), [Legacy plans](https://cursor.com/docs/account/pricing/legacy-cursor-plans). Для legacy Pro+ ($60/mo) включённый расход — два месячных пула, Cursor Models и Other Models; on-demand для индивидуального плана выключен, пока его не включат. Та же страница limits говорит, что Cost mode (classic Auto) на индивидуальном плане списывается как запрос Cursor-model из включённого пула, какой бы backend ни ответил, и что у individual plans только Cost mode. Страница legacy plans отдельно говорит, что Auto, ушедший в стороннюю модель, списывается из Other Models по цене этой модели. Какой из двух текстов применяет CLI `--model auto` бандла `2026.10.01-e373342`, в какой пул попали вызовы #211/#225 и включён ли on-demand — в репозитории нет. Деньги, пул и backend — UNKNOWN.
