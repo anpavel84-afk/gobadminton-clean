@@ -22,6 +22,7 @@ DRAFT = HERE / 'install_c5.py'
 FILLED = TMP / 'install_c5_filled.py'
 F.fill(REPO, C5, R5, DRAFT, FILLED)
 M = load(FILLED, 'install_c5')
+REAL = {n: getattr(M, n) for n in ('script_sane', 'profile_label', 'idle', 'next_values', 'old_values')}   # Sim setUp stubs some of these
 def tearDownModule(): shutil.rmtree(TMP, ignore_errors=True)
 
 class Draft(unittest.TestCase):
@@ -33,7 +34,7 @@ class Draft(unittest.TestCase):
         with self.assertRaises(Exception): d.main()   # ... but main() refuses before anything else (even without root/argv)
     def test_shape_and_scope(self):
         text = FILLED.read_text()
-        self.assertIn('INSTALL294_REFUSED', text)
+        self.assertIn('INSTALL_C5_REFUSED', text)
         for bad in ('GH_PUSH_TOKEN', 'systemctl start', 'systemctl enable', 'systemctl unmask', 'apparmor_parser', 'SOURCE_POLICY', 'api.anthropic', 'curl '):
             self.assertNotIn(bad, text)
         for verb in ('dry', 'apply', 'verify', 'verify-merged', 'rollback'): self.assertIn("'" + verb + "'", text)
@@ -106,11 +107,11 @@ class Smoke(unittest.TestCase):
                               env=dict(PATH='/usr/bin:/bin', HOME='/nonexistent', LANG='C.UTF-8'), capture_output=True, timeout=60)
     def test_c5_passes_c4_fails(self):
         out = self.run_smoke(MODS, M.TARGETS[M.NATIVE][1])
-        self.assertIn(b'SMOKE294_PASS', out.stdout, out.stderr.decode()[-800:])
-        self.assertNotIn(b'SMOKE294_PASS', self.run_smoke(MODS, 'f' * 64).stdout)
+        self.assertIn(b'SMOKE_C5_PASS', out.stdout, out.stderr.decode()[-800:])
+        self.assertNotIn(b'SMOKE_C5_PASS', self.run_smoke(MODS, 'f' * 64).stdout)
         old = TMP / 'c4mod'; shutil.copytree(MODS, old)
         (old / 'native_antigravity.py').write_bytes(git('show', M.OLD + ':' + BASE + 'native_antigravity.py'))   # AppArmor-dependent C4 adapter
-        self.assertNotIn(b'SMOKE294_PASS', self.run_smoke(old, M.TARGETS[M.NATIVE][0]).stdout)
+        self.assertNotIn(b'SMOKE_C5_PASS', self.run_smoke(old, M.TARGETS[M.NATIVE][0]).stdout)
 
     def test_rules_probe_accepts_eom14_refuses_eom13_and_tamper(self):
         good = TMP / 'rules' / 'ENGINEERING_OPERATING_MODEL.md'; good.parent.mkdir(exist_ok=True)
@@ -118,13 +119,13 @@ class Smoke(unittest.TestCase):
             return subprocess.run(['/usr/bin/python3', '-I', '-B', '-c', M.RULES_CODE, str(MODS), str(path), sha or M.RULES_SHA, str(M.RULES_SIZE),
                                    M.RULES_COMMIT, M.RULES_REVISION, '0,' + str(os.getuid())], capture_output=True, timeout=60)
         good.write_bytes(git('show', M.RULES_COMMIT + ':' + M.RULES_SOURCE_PATH)); os.chmod(good, 0o644)
-        self.assertIn(b'RULES294_PASS', probe(good).stdout, probe(good).stderr.decode()[-600:])
+        self.assertIn(b'RULES_C5_PASS', probe(good).stdout, probe(good).stderr.decode()[-600:])
         old = TMP / 'rules' / 'old.md'; old.write_bytes(git('show', M.RULES_OLD_COMMIT + ':' + M.RULES_SOURCE_PATH)); os.chmod(old, 0o644)
-        self.assertNotIn(b'RULES294_PASS', probe(old).stdout)                       # EOM 1.3 bytes are refused by the 1.4 pin
+        self.assertNotIn(b'RULES_C5_PASS', probe(old).stdout)                       # EOM 1.3 bytes are refused by the 1.4 pin
         bad = TMP / 'rules' / 'bad.md'; bad.write_bytes(good.read_bytes()[:-1] + b'x'); os.chmod(bad, 0o644)
-        self.assertNotIn(b'RULES294_PASS', probe(bad).stdout)                       # same size, one byte changed
-        os.chmod(good, 0o664); self.assertNotIn(b'RULES294_PASS', probe(good).stdout)   # group-writable file is refused
-        os.chmod(good, 0o644); self.assertNotIn(b'RULES294_PASS', probe(good, 'f' * 64).stdout)
+        self.assertNotIn(b'RULES_C5_PASS', probe(bad).stdout)                       # same size, one byte changed
+        os.chmod(good, 0o664); self.assertNotIn(b'RULES_C5_PASS', probe(good).stdout)   # group-writable file is refused
+        os.chmod(good, 0o644); self.assertNotIn(b'RULES_C5_PASS', probe(good, 'f' * 64).stdout)
     def test_contour_and_registry_note_code_shape(self):
         compile(M.CONTOUR_CODE, 'contour', 'exec'); compile(M.RULES_CODE, 'rules', 'exec')
         self.assertIn("os.getgroups() == [65042]", M.CONTOUR_CODE); self.assertIn("os.getgroups() == []", M.CONTOUR_CODE)
@@ -165,7 +166,7 @@ class Sim(unittest.TestCase):
         patch(M, MANIFEST_FILE=M.BK / 'state-manifest.json',
               BACKUP_PATHS={'native': L / 'native_antigravity.py', 'context': L / 'context_policy.py', 'admission': L / 'owner_package_admission.py',
                             'rules': L / 'accepted-engineering-rules.md', 'policy': t / 'policy.json', 'inventory': t / 'state' / 'backup.json'},
-              live_slots=lambda: {'slot1': {'generation': 1}}, assert_manifest=lambda r: None, trusted_target=lambda p: None, profile_label=lambda: None)
+              live_slots=lambda: {'slot1': {'generation': 1}}, assert_manifest=lambda r: None, trusted_target=lambda p: None, profile_label=lambda: None, script_sane=lambda *a, **k: None)
         patch(M.R, trusted_tree=lambda p: None, POLICY=t / 'policy.json', STATE=t / 'state',
               read=lambda p, owner=None, limit=2097152: json.loads(pathlib.Path(p).read_text()), atomic=lambda p, v, mode=0o600: self._atomic(p, v, mode))
         patch(M.I, put=lambda src, dst, mode: (shutil.copyfile(src, dst), os.chmod(dst, mode)))
@@ -225,6 +226,228 @@ class Sim(unittest.TestCase):
         M.restore(receipt)
         for n, b in self.olds.items(): self.assertEqual((self.L / n).read_bytes(), b)
         self.assertEqual(M.RULES.read_bytes(), self.rules_old)
+
+    # ---------------------------------------------------------------- QA6 fixes: idempotency of every verb, recovery pin, script/profile checks
+    def snapshot(self):
+        out = {}
+        for p in sorted(self.t.rglob('*')):
+            if p.is_file(): out[str(p.relative_to(self.t))] = (p.read_bytes(), stat.S_IMODE(p.stat().st_mode))
+        return out
+    def posted(self, phase='active', policy=None):
+        receipt = self.install(); receipt['phase'] = phase; M.atomic(M.J, receipt); (self.t / 'state' / 'controller.lock').write_bytes(b'')
+        if policy is not None: (self.t / 'policy.json').write_text(json.dumps(policy, sort_keys=True))
+        return receipt
+    def refused(self, fn, *needle):
+        with self.assertRaises(M.Refused) as cm: fn()
+        for n in needle: self.assertIn(n, str(cm.exception))
+    def test_second_rollback_after_rolled_back_is_clean_refusal_no_write(self):
+        self.posted()
+        import io, contextlib
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf): M.rollback()
+        self.assertIn('ROLLBACK_PASS_PRIOR_CONTROLLER_ACTIVE_HISTORY_PRESERVED', buf.getvalue())
+        self.assertEqual(json.loads(M.J.read_text())['phase'], 'rolled_back')
+        pol = json.loads((self.t / 'policy.json').read_text()); self.assertEqual((pol['mode'], pol['controller_sha']), ('active', M.OLD))
+        before = self.snapshot()
+        self.refused(M.rollback, 'already rolled back')
+        self.assertEqual(self.snapshot(), before)          # no disable(), no mode change, no write at all
+        self.refused(M.rollback, 'already rolled back'); self.assertEqual(self.snapshot(), before)
+    def test_restore_after_failed_apply_then_rollback_is_noop(self):
+        receipt = self.posted(); M.restore(receipt)         # what apply() does after a failure
+        self.assertEqual(json.loads(M.J.read_text())['phase'], 'rolled_back')
+        before = self.snapshot(); self.refused(M.rollback, 'already rolled back'); self.assertEqual(self.snapshot(), before)
+    def test_rollback_refuses_unrecognized_receipts_before_any_write(self):
+        self.posted()
+        for patch_ in (dict(phase='weird'), dict(phase=None), dict(schema='other'), dict(source_sha='0' * 40), dict(release_sha='1' * 40)):
+            receipt = json.loads(M.J.read_text()); receipt.update(patch_); M.J.write_text(json.dumps(receipt, sort_keys=True))
+            before = self.snapshot(); self.refused(M.rollback); self.assertEqual(self.snapshot(), before, patch_)
+    def test_rollback_without_receipt_changes_nothing(self):
+        (self.t / 'state' / 'controller.lock').write_bytes(b''); before = self.snapshot()
+        with self.assertRaises(Exception): M.rollback()
+        self.assertEqual(self.snapshot(), before)
+    def test_rollback_does_not_disable_a_foreign_controller_policy(self):
+        pol = dict(self.pol, controller_sha='f' * 40)
+        self.posted(policy=pol); before = self.snapshot()
+        self.refused(M.rollback, 'another controller'); self.assertEqual(self.snapshot(), before)
+        self.assertEqual(json.loads((self.t / 'policy.json').read_text())['mode'], 'active')
+    def test_rollback_still_works_for_every_pending_phase(self):
+        for phase in M.ROLLBACK_PHASES:
+            self.posted(phase)
+            M.rollback()
+            self.assertEqual(json.loads(M.J.read_text())['phase'], 'rolled_back', phase)
+            self.assertEqual(M.RULES.read_bytes(), self.rules_old)
+            shutil.rmtree(M.BK); M.J.unlink()                # next iteration starts from a fresh transaction on the restored tree
+            for n, b in self.olds.items(): self.assertEqual((self.L / n).read_bytes(), b)
+    def test_rollback_is_retryable_after_rollback_failed_and_stays_disabling(self):
+        self.posted('rollback_failed'); M.NATIVE.write_bytes(b'someone else')
+        before = self.snapshot()
+        with self.assertRaises(Exception): M.rollback()
+        self.assertEqual(json.loads((self.t / 'policy.json').read_text())['mode'], 'disabled')   # failed restoration keeps the receiver disabled
+        self.assertEqual(M.NATIVE.read_bytes(), b'someone else')
+    def test_no_other_verb_modifies_state_after_any_non_active_phase(self):
+        saved_ci = M.clone_identity; M.clone_identity = lambda: None; self.addCleanup(lambda: setattr(M, 'clone_identity', saved_ci))
+        for phase in ('rolled_back', 'rollback_failed', 'restored_disabled', 'content_installed', 'disabled', 'backed_up', 'active'):
+            self.posted(phase); before = self.snapshot()
+            self.refused(M.dry, 'existing guarded transaction')
+            self.assertEqual(self.snapshot(), before, 'dry ' + phase)
+            self.refused(M.apply, 'existing guarded transaction')
+            self.assertEqual(self.snapshot(), before, 'apply ' + phase)
+            if phase != 'active':
+                self.refused(M.verify); self.assertEqual(self.snapshot(), before, 'verify ' + phase)
+                self.refused(lambda: M.verify(True)); self.assertEqual(self.snapshot(), before, 'verify-merged ' + phase)
+            shutil.rmtree(M.BK); M.J.unlink()
+            self.setUp_restore()
+    def setUp_restore(self):
+        # return the temp tree to the pristine C4 state for the next phase iteration
+        for n, b in self.olds.items(): (self.L / n).write_bytes(b)
+        M.RULES.write_bytes(self.rules_old); os.chmod(M.RULES, 0o644)
+        (self.t / 'policy.json').write_text(json.dumps(self.pol, sort_keys=True)); os.chmod(self.t / 'policy.json', 0o644)
+        (self.t / 'state' / 'backup.json').write_text(json.dumps(self.inv, sort_keys=True)); os.chmod(self.t / 'state' / 'backup.json', 0o600)
+    def idle_ready(self):
+        t = self.t; rec = {}
+        for name, ctl, extra in (('J274', '86801eb601a453f8e8db39266c3558beb26f60d3', {}), ('J269', 'cbc7099223590c3e4ce44e520d0da50f7fced0e0', {}),
+                                 ('J273', '53ff2cc23d2f4d3bd676c61c5a9c601a12cc8998', {}), ('J292', M.OLD, dict(release_sha=M.OLD_RELEASE))):
+            path = t / 'state' / (name + '.json'); path.write_text(json.dumps(dict(phase='active', controller_sha=ctl, **extra), sort_keys=True))
+            rec[name] = path
+        marker = t / 'marker.json'; marker.write_bytes(b'{}')
+        saved = {k: getattr(M, k) for k in ('J274', 'J269', 'J273', 'J292', 'MARKER', 'MARKER_SHA')}
+        for k, v in rec.items(): setattr(M, k, v)
+        M.MARKER = marker; M.MARKER_SHA = H(b'{}')
+        self.addCleanup(lambda: [setattr(M, k, v) for k, v in saved.items()])
+    def test_idle_requires_recovery_source_sha_exactly_c4(self):
+        self.idle_ready(); M.idle()                                            # sane baseline
+        for recovery in (dict(source_sha=M.C), dict(source_sha='0' * 40), dict(), None, 'x', dict(source_sha=None)):
+            pol = dict(self.pol)
+            if recovery is None: pol.pop('recovery')
+            else: pol['recovery'] = recovery
+            (self.t / 'policy.json').write_text(json.dumps(pol, sort_keys=True))
+            self.refused(M.idle, 'recovery.source_sha')
+    def test_next_and_old_values_require_recovery_pin_c4(self):
+        for bad in (dict(source_sha='0' * 40), dict(source_sha=M.C), {}, None):
+            pol = dict(self.pol)
+            if bad is None: pol.pop('recovery')
+            else: pol['recovery'] = bad
+            self.refused(lambda: M.next_values(pol, self.inv), 'recovery.source_sha')
+        saved = M.backups(); M.atomic(M.MANIFEST_FILE, {'m': 1}); r = self.receipt(saved, 'active'); M.old_values(r)
+        bad = dict(self.pol, recovery=dict(source_sha=M.C)); (M.BK / 'policy').write_text(json.dumps(bad, sort_keys=True))
+        r['backups']['policy']['sha256'] = M.sha(M.BK / 'policy')
+        self.refused(lambda: M.old_values(r), 'wrong backup policy')
+    def test_manual_texts_put_unload_rollback_after_install_rollback(self):
+        import io, contextlib
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err): M.manual_failure()
+        text = err.getvalue()
+        self.assertIn(M.MANUAL, text); self.assertIn('FIRST', text); self.assertIn('then the host profile unload rollback', text)
+        self.assertIn('/root/gb-agy-profile-unload-20261024.py rollback', text); self.assertIn('does not require the profile to be loaded', text)
+        self.assertLess(text.index('this rollback FIRST'.replace('this', 'run this')), text.index('then the host profile unload rollback'))
+        self.assertNotIn('before this rollback', text)
+        for state in ('absent', 'loaded', 'unknown'):                          # informative only: rollback passes whatever the profile state is
+            self.posted(); orig = M.profile_note; M.profile_note = lambda s=state: s
+            out = io.StringIO()
+            try:
+                with contextlib.redirect_stdout(out): M.rollback()
+            finally: M.profile_note = orig
+            self.assertIn('profile is ' + state, out.getvalue()); self.assertEqual(json.loads(M.J.read_text())['phase'], 'rolled_back')
+            shutil.rmtree(M.BK); M.J.unlink(); self.setUp_restore()
+        self.assertIn('ROLLBACK ORDER', M.__doc__)
+    def test_profile_label_covers_children_and_has_no_false_positive(self):
+        t = self.t; parked = t / 'parked'; parked.write_bytes(b'profile'); orig = pathlib.Path.read_text
+        M.PROFILE_PARKED = parked; M.PROFILE_SHA = H(b'profile'); M.PROFILE_FILE = t / 'absent-profile'
+        def with_profiles(text):
+            def fake(self_, *a, **k): return text if str(self_) == '/sys/kernel/security/apparmor/profiles' else orig(self_, *a, **k)
+            pathlib.Path.read_text = fake
+        try:
+            with_profiles('other (enforce)\ngb-agy-runtimeX (enforce)\n'); REAL['profile_label']()
+            for line in ('gb-agy-runtime (enforce)', 'gb-agy-runtime//child (enforce)', 'gb-agy-runtime//null-x (complain)'):
+                with_profiles('other (enforce)\n' + line + '\n'); self.refused(REAL['profile_label'], 'still loaded')
+        finally: pathlib.Path.read_text = orig
+
+class ScriptSane(unittest.TestCase):
+    def mk(self, mode=0o700, dmode=0o755):
+        d = pathlib.Path(tempfile.mkdtemp(dir=str(TMP))); os.chmod(d, dmode); f = d / 'installer.py'; f.write_text('x'); os.chmod(f, mode); return f
+    def test_requires_root_owned_0700_regular_single_link_in_sane_dir(self):
+        uid = os.getuid(); sane = REAL['script_sane']
+        sane(self.mk(), uid=uid)
+        for mode in (0o600, 0o750, 0o755, 0o701, 0o770, 0o4700):
+            with self.assertRaises(M.Refused, msg=oct(mode)): sane(self.mk(mode), uid=uid)
+        for dmode in (0o777, 0o775, 0o757):
+            with self.assertRaises(M.Refused, msg=oct(dmode)): sane(self.mk(dmode=dmode), uid=uid)
+        f = self.mk(); link = f.with_name('l.py'); os.symlink(f, link)
+        with self.assertRaises(M.Refused): sane(link, uid=uid)
+        f = self.mk(); os.link(f, f.with_name('hard.py'))
+        with self.assertRaises(M.Refused): sane(f, uid=uid)
+        if os.getuid() != 0:
+            with self.assertRaises(M.Refused): sane(self.mk())          # default uid=0: a file owned by anyone else is refused
+    def test_enforced_in_main_and_preflight(self):
+        text = FILLED.read_text()
+        self.assertIn('    R.trusted_tree(SCRIPT)\n    script_sane()\n', text)
+        self.assertIn('def preflight(fetch=False):\n    script_sane()\n', text)
+
+class Owner(unittest.TestCase):
+    """The generated Issue #29 body must pass the REAL owner_package_admission.py of C5 (offline: only the HTTP fetch and the installed work tree are stubbed)."""
+    @classmethod
+    def setUpClass(cls):
+        cls.A = load(MODS / 'owner_package_admission.py', 'owner_package_admission_c5')
+    def body(self, cid=None):
+        argv = ['/usr/bin/python3', '-B', str(HERE / 'make_owner_comment_c5.py'), C5] + ([str(cid)] if cid is not None else [])
+        return subprocess.run(argv, capture_output=True, check=True).stdout
+    def serve(self, cid, raw_body):
+        A = self.A
+        class Resp:
+            status = 200
+            def __enter__(s): return s
+            def __exit__(s, *a): return False
+            def read(s, n): return json.dumps(dict(id=cid, issue_url=A.ISSUE_URL, user=dict(id=A.OWNER_ID, login='anpavel84-afk'),
+                                                    author_association='OWNER', body=raw_body.decode())).encode()
+        saved = (A.urllib.request.urlopen, A.Q.addressed_input)
+        A.urllib.request.urlopen = lambda req, timeout=15: Resp()
+        A.Q.addressed_input = lambda *a, **k: None       # needs the installed qualification work tree: not available offline
+        self.addCleanup(lambda: (setattr(A.urllib.request, 'urlopen', saved[0]), setattr(A.Q, 'addressed_input', saved[1])))
+    def test_no_trailing_newline_and_exact_canonical_json(self):
+        raw = self.body(); self.assertTrue(raw.startswith(b'GOBADMINTON_AGY_PACKAGE_V1\n{')); self.assertTrue(raw.endswith(b'}')); self.assertFalse(raw.endswith(b'\n'))
+        content = raw[len(b'GOBADMINTON_AGY_PACKAGE_V1\n'):].decode()
+        self.assertEqual(json.dumps(json.loads(content), sort_keys=True, separators=(',', ':')), content)
+        self.assertEqual(raw, (HERE / 'owner_comment_body_C5_REAL.txt').read_bytes())     # the shipped REAL body is exactly the generator output
+    def test_placeholder_zero_flow_then_edit_with_real_id_stays_canonical_and_is_admitted(self):
+        A = self.A; cid = 4242424242
+        zero = self.body(); self.assertIn(b'"owner_comment":0', zero)
+        self.serve(cid, zero)
+        body, value = A.owner_comment(cid)                                    # parses canonically (what the first post would pass)...
+        self.assertEqual(value['owner_comment'], 0)
+        with self.assertRaises(Exception): A.authorize(cid, C5)               # ...but is NOT an authorization until the id is set
+        edited = zero.replace(b'"owner_comment":0', b'"owner_comment":' + str(cid).encode()); self.assertEqual(edited, self.body(cid))
+        self.serve(cid, edited)
+        ledger = A.authorize(cid, C5)
+        self.assertEqual((ledger['owner_comment'], ledger['controller_sha'], ledger['rules_sha256'], ledger['ceiling'], ledger['used_calls']),
+                         (cid, C5, M.RULES_SHA, 2, 0))
+        self.assertEqual(ledger['body_sha256'], H(edited))
+    def test_nonzero_id_directly_and_wrong_controller_refused(self):
+        A = self.A; cid = 77
+        self.serve(cid, self.body(cid)); self.assertEqual(A.authorize(cid, C5)['owner_comment'], cid)
+        with self.assertRaises(Exception): A.authorize(cid, M.OLD)            # body is bound to C5
+    def test_old_trailing_newline_body_is_refused_by_admission(self):
+        A = self.A; cid = 78; legacy = self.body(cid) + b'\n'
+        self.serve(cid, legacy)
+        with self.assertRaises(Exception) as cm: A.owner_comment(cid)
+        self.assertIn('not canonical', str(cm.exception))
+
+class Install291C5(unittest.TestCase):
+    """install291_c5.py (rebased on C5): apparmor_absent must also see child profiles gb-agy-runtime//..."""
+    @classmethod
+    def setUpClass(cls):
+        cls.X = load(HERE / 'i291' / 'install291_c5.py', 'install291_c5')
+    def test_apparmor_absent_covers_children(self):
+        X = self.X; orig = pathlib.Path.read_text; missing = TMP / 'no-such-profile'; saved = X.APPARMOR; X.APPARMOR = missing
+        def with_profiles(text):
+            def fake(self_, *a, **k): return text if str(self_) == '/sys/kernel/security/apparmor/profiles' else orig(self_, *a, **k)
+            pathlib.Path.read_text = fake
+        try:
+            with_profiles('other (enforce)\ngb-agy-runtimeX (enforce)\n'); X.apparmor_absent()
+            for line in ('gb-agy-runtime (enforce)', 'gb-agy-runtime//child (enforce)'):
+                with_profiles(line + '\n')
+                with self.assertRaises(X.Refused): X.apparmor_absent()
+        finally: pathlib.Path.read_text = orig; X.APPARMOR = saved
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

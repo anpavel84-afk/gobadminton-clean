@@ -356,7 +356,7 @@ def apparmor_absent():
     """After host unload + install_c5 the per-binary profile is gone (file parked, not loaded); #291 must not change that."""
     need(not os.path.lexists(APPARMOR), 'gb-agy-runtime profile file reappeared')
     loaded = pathlib.Path('/sys/kernel/security/apparmor/profiles').read_text().splitlines()
-    need(not any(line.startswith('gb-agy-runtime (') for line in loaded), 'gb-agy-runtime profile loaded')
+    need(not any(line.startswith('gb-agy-runtime (') or line.startswith('gb-agy-runtime//') for line in loaded), 'gb-agy-runtime profile (or child) loaded')
 
 
 def idle():

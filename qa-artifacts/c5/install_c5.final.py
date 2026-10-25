@@ -12,6 +12,9 @@ PRECONDITION (enforced): gb-agy-runtime is NOT loaded and /etc/apparmor.d/gb-agy
 The canary marker is NOT changed here; it is bound to C4/old native and is re-issued later by owner_package_admission.
 Owner-scoped Slot1 checkpoint #271 idle exception carried over from install292 (must be confirmed in the Owner grant).
 Root usage: /usr/bin/python3 -B /root/gb-agy29-nopolicy294-scoped-install-20261024.py <dry|apply|verify|verify-merged|rollback>
+ROLLBACK ORDER: this installer's rollback FIRST, then the host profile unload rollback (never the reverse). A second rollback after
+'rolled_back' refuses before any write; rollback does not need the profile loaded (it only reports its state read-only).
+The script file must be root:root mode 0700 in a root-owned, not group/world writable directory (enforced for every verb).
 """
 import contextlib
 import copy
@@ -109,6 +112,10 @@ PROC_LOCKS = pathlib.Path('/proc/locks')
 SCHEMA = 'GB_AGY29_NOPOLICY294_INSTALL_V1'
 MANIFEST_FILE = BK / 'state-manifest.json'
 MANUAL = '/usr/bin/python3 -B ' + str(SCRIPT) + ' rollback'
+HOST_UNLOAD = '/root/gb-agy-profile-unload-20261024.py'  # host script (separate grant); its rollback is run AFTER this installer's rollback
+ROLLBACK_PHASES = ('backed_up', 'disabled', 'content_installed', 'active', 'restored_disabled', 'rollback_failed')  # phases that still need a rollback (rolled_back does not)
+ROLLBACK_ORDER = ('ROLLBACK ORDER: run this rollback FIRST, then the host profile unload rollback (' + HOST_UNLOAD + ' rollback); '
+                  'never the other way round. This rollback does not require the profile to be loaded and never loads it.')
 SLOTS = (('slot1', 1002), ('slot2', 978))
 REQUIRED=[
  R.STATE/'slot1.json',R.STATE/'slot2.json',
@@ -270,7 +277,7 @@ for argv in (N.command(60), N.command(60, analysis=False)):
     assert argv[argv.index('--agent') + 1] == N.AGENT and '--input-format' in argv
 for text in (N.ANALYSIS_AGENT_DEF, N.AGENT_DEF):
     assert '--sandbox' not in text
-print('SMOKE294_PASS')
+print('SMOKE_C5_PASS')
 """
 
 # Root-side identity probe: the receiver (root) runs the same pre-charge check the adapter runs (child as 978:968, no groups, NNP, CapEff 0).
@@ -281,7 +288,7 @@ sys.path.insert(0, sys.argv[1])
 import native_antigravity as N
 assert os.geteuid() == 0
 N._verify_executor_boundary()
-print('BOUNDARY294_PASS')
+print('BOUNDARY_C5_PASS')
 """
 
 # Non-root contour probe (the installed receiver leaves 978:968 + supplementary 65042): exactly [65042] is accepted, [] is refused.
@@ -294,13 +301,13 @@ assert (os.geteuid(), os.getegid()) == (978, 968)
 if sys.argv[2] == 'accept':
     assert os.getgroups() == [65042]
     N._verify_executor_boundary()
-    print('CONTOUR294_ACCEPT_PASS')
+    print('CONTOUR_C5_ACCEPT_PASS')
 else:
     assert os.getgroups() == []
     try:
         N._verify_executor_boundary()
     except PermissionError:
-        print('CONTOUR294_REFUSE_PASS')
+        print('CONTOUR_C5_REFUSE_PASS')
 """
 
 # Root probe: context_policy pins (EOM 1.4) match the rules bytes at RULES_PATH and the owner-package admission pin.
@@ -314,7 +321,7 @@ assert (P.RULES_SHA256, P.RULES_SIZE, P.RULES_COMMIT, P.RULES_REVISION) == (SHA,
 text, meta = P.load(pathlib.Path(RPATH), trusted_uids=tuple(int(x) for x in UID.split(',')))
 assert (meta['sha256'], meta['bytes'], meta['revision'], meta['commit']) == (SHA, int(SIZE), REV, COMMIT)
 assert re.search(r"^RULES='" + SHA + r"'$", pathlib.Path(MOD, 'owner_package_admission.py').read_text(), re.M)
-print('RULES294_PASS')
+print('RULES_C5_PASS')
 """
 
 
@@ -342,11 +349,11 @@ def smoke(module_dir, label):
             out = run(['/usr/bin/unshare', '-n', '/usr/bin/setpriv', '--reuid', str(uid), '--regid', str(uid), '--clear-groups',
                        '/usr/bin/env', '-i', 'PATH=/usr/bin:/bin', 'HOME=/nonexistent', 'LANG=C.UTF-8',
                        '/usr/bin/python3', '-I', '-B', '-c', SMOKE_CODE, str(mod), str(work), expect], timeout=60)
-            need(b'SMOKE294_PASS' in out, 'unix-boundary native smoke failed for ' + slot)
+            need(b'SMOKE_C5_PASS' in out, 'unix-boundary native smoke failed for ' + slot)
         out = run(['/usr/bin/unshare', '-n', '/usr/bin/env', '-i', 'PATH=/usr/bin:/bin', 'LANG=C.UTF-8',
                    '/usr/bin/python3', '-I', '-B', '-c', BOUNDARY_CODE, str(mod)], timeout=60)
-        need(b'BOUNDARY294_PASS' in out, 'executor identity/NNP probe failed as root receiver')
-        for mode, want, groups in (('accept', b'CONTOUR294_ACCEPT_PASS', str(REGISTRY_GROUP)), ('refuse', b'CONTOUR294_REFUSE_PASS', '')):
+        need(b'BOUNDARY_C5_PASS' in out, 'executor identity/NNP probe failed as root receiver')
+        for mode, want, groups in (('accept', b'CONTOUR_C5_ACCEPT_PASS', str(REGISTRY_GROUP)), ('refuse', b'CONTOUR_C5_REFUSE_PASS', '')):
             gflag = ['--groups', groups] if groups else ['--clear-groups']
             out = run(['/usr/bin/unshare', '-n', '/usr/bin/setpriv', '--reuid', '978', '--regid', '968', *gflag,
                        '/usr/bin/env', '-i', 'PATH=/usr/bin:/bin', 'HOME=/nonexistent', 'LANG=C.UTF-8',
@@ -356,7 +363,7 @@ def smoke(module_dir, label):
         out = run(['/usr/bin/unshare', '-n', '/usr/bin/env', '-i', 'PATH=/usr/bin:/bin', 'LANG=C.UTF-8',
                    '/usr/bin/python3', '-I', '-B', '-c', RULES_CODE, str(mod), str(rules_path), RULES_SHA, str(RULES_SIZE),
                    RULES_COMMIT, RULES_REVISION, '0'], timeout=60)
-        need(b'RULES294_PASS' in out, 'EOM 1.4 rules/context_policy/admission pin probe failed')
+        need(b'RULES_C5_PASS' in out, 'EOM 1.4 rules/context_policy/admission pin probe failed')
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     return dict(smoke294='pass', boundary='uid978_nnp_probe', registry_group_probe='accept[65042]+refuse[]', rules_probe='eom1.4', target=label, uids=[uid for _, uid in SLOTS], network='unshared', model_calls=0)
@@ -468,6 +475,8 @@ def idle():
     policy = R.read(R.POLICY, 0)
     need(policy['mode'] == 'active' and policy['controller_sha'] == OLD
          and policy.get('stage_workflow_sha256') == DEV_SHA, 'wrong active controller (#292/C4 not active?)')
+    need(isinstance(policy.get('recovery'), dict) and policy['recovery'].get('source_sha') == OLD,
+         'policy recovery.source_sha is not exactly the installed C4 controller')
     for path, controller in ((J274, '86801eb601a453f8e8db39266c3558beb26f60d3'),
                              (J269, 'cbc7099223590c3e4ce44e520d0da50f7fced0e0'),
                              (J273, '53ff2cc23d2f4d3bd676c61c5a9c601a12cc8998'), (J292, OLD)):
@@ -616,7 +625,8 @@ def profile_label():
     """C5 precondition/postcondition: the per-binary AppArmor profile is gone from the kernel and from /etc/apparmor.d.
     Global AppArmor and every other profile are not inspected beyond this name (host script owns that proof)."""
     loaded = pathlib.Path('/sys/kernel/security/apparmor/profiles').read_text().splitlines()
-    need(not any(line.startswith(PROFILE_NAME + ' (') for line in loaded), 'gb-agy-runtime still loaded: run the host unload script first')
+    need(not any(line.startswith(PROFILE_NAME + ' (') or line.startswith(PROFILE_NAME + '//') for line in loaded),
+         'gb-agy-runtime (or a child profile) still loaded: run the host unload script first')
     need(not os.path.lexists(PROFILE_FILE), 'gb-agy-runtime profile file still present in /etc/apparmor.d')
     need(PROFILE_PARKED.is_file() and sha(PROFILE_PARKED) == PROFILE_SHA, 'parked profile backup missing or changed')
 
@@ -625,8 +635,8 @@ def next_values(old_policy, old_inventory):
     policy = copy.deepcopy(old_policy)
     policy['controller_sha'] = C
     policy['stage_workflow_sha256'] = STAGE_SHA
-    if policy.get('recovery', {}).get('source_sha') == OLD:
-        policy['recovery']['source_sha'] = C
+    need(isinstance(policy.get('recovery'), dict) and policy['recovery'].get('source_sha') == OLD, 'recovery.source_sha is not the C4 controller')
+    policy['recovery']['source_sha'] = C
     inventory = copy.deepcopy(old_inventory)
     for target, (_, new) in TARGETS.items():
         inventory['after'][str(target)] = new
@@ -641,8 +651,7 @@ def old_values(receipt):
     need(receipt.get('schema') == SCHEMA and receipt.get('source_sha') == C
          and receipt.get('release_sha') == RELEASE and receipt.get('manifest_sha256') == MANIFEST,
          'unrecognized rollback transaction')
-    need(receipt.get('phase') in ('backed_up', 'disabled', 'content_installed', 'active',
-                                  'restored_disabled', 'rollback_failed'), 'invalid rollback phase')
+    need(receipt.get('phase') in ROLLBACK_PHASES, 'invalid rollback phase')
     R.trusted_tree(BK)
     R.trusted_tree(MANIFEST_FILE)
     need(set(receipt['backups']) == set(BACKUP_PATHS), 'backup inventory mismatch')
@@ -657,12 +666,36 @@ def old_values(receipt):
     policy = R.read(BK / 'policy', 0)
     inventory = R.read(BK / 'inventory', 0)
     need(policy.get('mode') == 'active' and policy.get('controller_sha') == OLD
-         and policy.get('stage_workflow_sha256') == DEV_SHA, 'wrong backup policy')
+         and policy.get('stage_workflow_sha256') == DEV_SHA
+         and isinstance(policy.get('recovery'), dict) and policy['recovery'].get('source_sha') == OLD, 'wrong backup policy')
     need(inventory.get('manifest') == MANIFEST_OLD
          and all(inventory.get('after', {}).get(str(t)) == v[0] for t, v in TARGETS.items())
          and all(inventory.get('after', {}).get(n) == v[0] for n, v in MONITOR.items()),
          'wrong backup inventory')
     return policy, inventory
+
+
+def rollback_gate(receipt):
+    """Decide BEFORE any write whether this receipt still needs a rollback. Refusals here change nothing (no disable(), no mode change)."""
+    need(isinstance(receipt, dict) and receipt.get('schema') == SCHEMA and receipt.get('source_sha') == C
+         and receipt.get('release_sha') == RELEASE, 'unrecognized rollback transaction')
+    need(receipt.get('phase') != 'rolled_back', 'transaction already rolled back: nothing to do (no policy or file was changed)')
+    need(receipt.get('phase') in ROLLBACK_PHASES, 'invalid rollback phase')
+    try:
+        current = R.read(R.POLICY, 0)
+    except Exception:
+        return  # unreadable policy: disable() has an explicit fail-closed path for it
+    if isinstance(current, dict):
+        need(current.get('controller_sha') in (OLD, C), 'live policy belongs to another controller: refusing to disable or restore over it')
+
+
+def profile_note():
+    """Read-only and informative only: rollback never requires the profile to be loaded or absent."""
+    try:
+        lines = pathlib.Path('/sys/kernel/security/apparmor/profiles').read_text().splitlines()
+    except Exception:
+        return 'unknown'
+    return 'loaded' if any(l.startswith(PROFILE_NAME + ' (') or l.startswith(PROFILE_NAME + '//') for l in lines) else 'absent'
 
 
 def disable():
@@ -730,7 +763,7 @@ def restore(receipt):
 
 
 def manual_failure():
-    print('Exact restoration could not be proven; receiver must remain DISABLED. Manual rollback: ' + MANUAL,
+    print('Exact restoration could not be proven; receiver must remain DISABLED. Manual rollback: ' + MANUAL + '\n' + ROLLBACK_ORDER,
           file=sys.stderr)
 
 
@@ -762,7 +795,19 @@ def scrub_partial_backup():
         os.close(fd)
 
 
+def script_sane(path=SCRIPT, uid=0):
+    """The installer itself must be a root-owned regular file, mode exactly 0700, single link, in a root-owned non-writable directory."""
+    info = path.lstat()
+    need(stat.S_ISREG(info.st_mode) and info.st_uid == uid and info.st_gid == (0 if uid == 0 else info.st_gid)
+         and info.st_nlink == 1 and stat.S_IMODE(info.st_mode) == 0o700,
+         'installer script must be a root-owned regular file, mode 0700, single link')
+    parent = path.parent.lstat()
+    need(stat.S_ISDIR(parent.st_mode) and parent.st_uid == uid and not stat.S_IMODE(parent.st_mode) & 0o022,
+         'installer directory must be root-owned and not group/world writable')
+
+
 def preflight(fetch=False):
+    script_sane()
     need(not os.path.lexists(J) and not os.path.lexists(BK), 'existing guarded transaction')
     need(stat.S_IMODE(CONTENT.parent.stat().st_mode) == 0o755, 'install directory mode drift')
     for path in (*TARGETS, R.STATE / 'backup.json', R.POLICY):
@@ -881,6 +926,7 @@ def rollback():
     with controller_lock():
         R.trusted_tree(J)
         receipt = R.read(J, 0, 67108864)
+        rollback_gate(receipt)
         try:
             disable()  # Block new dispatch even if quiescence/state proof refuses restoration.
             old_policy, old_inventory = old_values(receipt)
@@ -900,6 +946,8 @@ def rollback():
             manual_failure()
             raise
         print('ROLLBACK_PASS_PRIOR_CONTROLLER_ACTIVE_HISTORY_PRESERVED')
+        print('NOTE gb-agy-runtime profile is ' + profile_note() + ' (read-only observation, not a rollback condition). '
+              'The restored C4 adapter expects the profile: NEXT run the host unload rollback (' + HOST_UNLOAD + ' rollback). ' + ROLLBACK_ORDER)
 
 
 def verify(strict=False):
@@ -937,6 +985,7 @@ def main():
     # Do not resolve symlinks before checking this exact deployment path.
     need(pathlib.Path(__file__).absolute() == SCRIPT, 'wrong root installer path')
     R.trusted_tree(SCRIPT)
+    script_sane()
     import resource
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     return {'dry': dry, 'apply': apply, 'verify': verify, 'verify-merged': lambda: verify(True), 'rollback': rollback}[sys.argv[1]]()
@@ -947,5 +996,5 @@ if __name__ == '__main__':
         main()
     except BaseException as error:
         # Fixed refusal messages only; never show subprocess stderr, request data or tracebacks.
-        print('INSTALL294_REFUSED: ' + (str(error) if isinstance(error, Refused) else type(error).__name__), file=sys.stderr)
+        print('INSTALL_C5_REFUSED: ' + (str(error) if isinstance(error, Refused) else type(error).__name__), file=sys.stderr)
         sys.exit(1)
