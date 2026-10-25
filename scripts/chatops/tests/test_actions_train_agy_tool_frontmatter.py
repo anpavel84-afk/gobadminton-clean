@@ -72,17 +72,21 @@ class NativeAgentExposure(unittest.TestCase):
             self.assertIn('tools:\n  - view_file\n  - run_command\n',definition)
             self.assertNotIn('tools:',body)
 
-    def test_review_gate_and_mandatory_apparmor_are_not_weakened(self):
+    def test_review_gate_and_executor_boundary_are_not_weakened(self):
         self.assertEqual(N.READ_TOOLS,frozenset({'view_file','run_command'}))
         code=inspect.getsource(N.analysis_source_gate)
         self.assertIn('READ_TOOLS <= set(evidence[',code)
         self.assertIn("downgraded=dict(result,completion='INCOMPLETE')",code)
         source=inspect.getsource(N.invoke)
-        self.assertIn('_arm_apparmor_onexec()',source)
+        self.assertNotIn('apparmor',source.lower())
+        self.assertIn('_verify_executor_boundary()',source)
         self.assertIn('no_new_privileges()',source)
         self.assertNotIn('_landlock(readonly,writable,executables)',source)
         self.assertIn('ANALYSIS_AGENT_DEF if analysis else AGENT_DEF',source)
-        self.assertIn("writable_roots=['invocation_private_root','/dev/null']",source)
+        self.assertNotIn('writable_roots',source)
+        self.assertNotIn('readonly_roots',source)
+        self.assertIn('owner_waiver=OWNER_WAIVER',source)
+        self.assertIn('not verified safety',N.OWNER_WAIVER)
 
     def test_exact_agent_definition_is_written_before_native_exec(self):
         """Fake Popen: inspect the actual private .agents/agents path; 0 provider calls."""
@@ -101,9 +105,9 @@ class NativeAgentExposure(unittest.TestCase):
                  patch.object(N.os,'geteuid',return_value=978),\
                  patch.object(N,'trusted',return_value=b'synthetic-token'),\
                  patch.object(N,'AGY','/usr/bin/python3'),\
-                 patch.object(N,'_arm_apparmor_onexec',return_value=None),patch.object(N,'_verify_apparmor_precharge',return_value=None):
+                 patch('native_guard.no_new_privileges',return_value=None),patch.object(N,'_verify_executor_boundary',return_value=None),patch.object(N,'_candidate_state',return_value=('H','')) :
                 # This fake-Popen test validates agent-file emission only; the
-                # required AppArmor-enforce transition is tested separately.
+                # executor-boundary preflight is tested separately.
                 raw,receipt=N.invoke('test inert no-model',45,
                     work=work,slot='slot2',task_hash='0'*64,
                     charge=lambda:charged.append('test_seam'),
@@ -114,7 +118,10 @@ class NativeAgentExposure(unittest.TestCase):
             self.assertEqual(seen[0][0],N.AGENT)
             self.assertEqual(seen[0][1],['view_file','run_command'])
             self.assertEqual(charged,['test_seam'])
-            self.assertEqual(receipt['candidate_access'],'read_only')
+            self.assertEqual(receipt['candidate_integrity'],'detected_accidental_modification_only')
+            self.assertEqual(receipt['filesystem_boundary'],'uid978_unix_permissions_nnp')
+            self.assertIn('malicious same-uid',receipt['residual_risk'])
+            self.assertNotIn('candidate_access',receipt)
 
 if __name__=='__main__':
     unittest.main()

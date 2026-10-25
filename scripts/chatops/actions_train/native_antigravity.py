@@ -5,7 +5,6 @@ Uses saved CLI evidence from #29, not an inferred Codex-compatible protocol.
 No host settings, qualification marker, login, budget or active runtime is changed.
 """
 import ast
-import ctypes
 import hashlib
 import json
 import os
@@ -16,15 +15,46 @@ import signal
 import stat
 import subprocess
 import tempfile
+import time
 import uuid
 from pathlib import Path
 
 AGY = '/opt/gb-slots/runtime/antigravity/agy'
-# The independent UID978 AppArmor profile is mandatory on the AGY exec edge.
-# Do not permit an unconfined fallback if the profile is not loaded.
-APPARMOR_PROFILE = b'gb-agy-runtime'
-APPARMOR_POLICY_SHA256 = '771033253ed459b9bcd3617bb5a2b623e4fdbc120bee83d62ea1d591d571c589'
-APPARMOR_POLICY_FILE = Path('/etc/apparmor.d/gb-agy-runtime')
+# Identity boundary: UID978, primary GID968, exactly the receiver's
+# supplementary registry group 65042, no capabilities, no_new_privs.
+# No AppArmor profile. The candidate checkout stays owned by uid978.
+REGISTRY_GROUP = 65042
+REGISTRY_GROUP_NOTE = (
+    'Supplementary group 65042 is the registry group the installed receiver '
+    'sets with setgroups before setgid/setuid. It lets the executor use '
+    'group permissions on objects with gid 65042, including the registry '
+    'lock, and on any other host object with that group. This uid cannot '
+    'drop the group: setgroups requires CAP_SETGID. The Owner waiver covers '
+    'uid978 reading other projects and trusting its own tasks. It does not '
+    'name gid 65042; keeping the group preserves the installed slot identity '
+    'and is not a new grant from the waiver.'
+)
+FILESYSTEM_BOUNDARY = 'uid978_unix_permissions_nnp'
+# Receipt fact: the Owner accepted cross-project read exposure and trusts
+# this uid's own tasks. It is not a verified confinement.
+OWNER_WAIVER = (
+    'Owner waiver (not verified safety): UID978 may read other projects\' '
+    'files, secrets and PROD data on this server, and its own tasks are '
+    'trusted. No writable or readonly root confinement is enforced.'
+)
+# Accidental writes are detected. A malicious same-uid writer is out of scope.
+CANDIDATE_INTEGRITY = 'detected_accidental_modification_only'
+WRITE_GUARD = 'worktree_chmod_a_w_excluding_gitdir'
+RESIDUAL_RISK = (
+    'Residual risk, explicitly out of scope: a malicious same-uid writer '
+    'can chmod the worktree and change the candidate. Detection covers '
+    'accidental modification only. chmod a-w is a guard, not a boundary, '
+    'and the Git metadata directory stays writable. A process that has left '
+    'the session is killed before the after snapshot only when the host '
+    'delegates an invocation cgroup and the vendor pid was observed in it. '
+    'An empty cgroup.procs list alone is cgroup-absent.'
+)
+EXECUTOR_GID = 968
 MARKER = Path('/etc/gobadminton-slots/antigravity-qa.json')
 EXECUTOR_UID = 978
 AUTH = Path('/srv/gb-slots/slot2/home/.gemini/antigravity-cli/antigravity-oauth-token')
@@ -257,17 +287,24 @@ def addressed_git_identity(work):
     return dict(user=EXECUTOR_UID,group=account.pw_gid,extra_groups=[])
 
 
-def git(work, *args, limit=MAX_INPUT + 1, _addressed_installer=False):
+def git(work, *args, limit=MAX_INPUT + 1, _addressed_installer=False, _overrides=True):
     identity=addressed_git_identity(work) if _addressed_installer else {}
     if _addressed_installer:
         need(args==('rev-parse','HEAD') or len(args)==2 and args[0]=='show'
              and re.fullmatch(r'[a-f0-9]{40}:scripts/chatops/tests/fixtures/agy-[a-z0-9-]+\.json',args[1]),
              'unsupported addressed Git read')
     env = {'PATH': '/usr/bin:/bin', 'HOME': '/nonexistent', 'LANG': 'C.UTF-8',
-           'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_TERMINAL_PROMPT': '0'}
+           'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_TERMINAL_PROMPT': '0',
+           'GIT_OPTIONAL_LOCKS': '0'}
+    # The effective-config snapshot omits these -c overrides so a repository
+    # core.hooksPath or core.fsmonitor stays visible. Other reads keep them
+    # so hooks and fsmonitor do not run. safe.directory is never set.
+    argv = ['git', '--no-pager', '--literal-pathspecs']
+    if _overrides:
+        argv += ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false']
+    argv += list(args)
     try:
-        done = subprocess.run(['git', '--no-pager', '--literal-pathspecs', '-c', 'core.hooksPath=/dev/null',
-                               '-c', 'core.fsmonitor=false', *args], cwd=work, env=env,
+        done = subprocess.run(argv, cwd=work, env=env,
                               capture_output=True, timeout=60, **identity)
     except (OSError, subprocess.SubprocessError):
         raise ReviewError('git failed') from None
@@ -472,7 +509,7 @@ def qualification(slot, task_hash, model=MODEL):
     # Auth is consumed only by the CLI transport and never added to prompt,
     # argv, receipts or exceptions. Provisioning is a separate root OPS action.
     try:
-        _verify_apparmor_precharge()
+        _verify_executor_boundary()
     except OSError:
         raise ReviewError('AGY_PRECHECK_FAILED', 'preflight') from None
     trusted(AUTH, owner=EXECUTOR_UID)
@@ -535,17 +572,18 @@ def qualification_descriptor(marker):
 
 
 def filesystem_roots(root, work, common=None):
-    """Reuse existing Landlock filesystem layer; subprocess/native tools permitted.
+    """Historical root lists for the synthetic Landlock fixture only.
 
-    No slot HOME, publish key, controller state, /srv siblings, PROD/admin paths,
-    /proc process inspection, Docker socket or whole /etc mount is granted.
+    Production invoke applies no Landlock and no MAC profile. These lists are
+    not a grant and do not hide other projects' files, secrets or PROD data;
+    that exposure is an Owner waiver, not a verified boundary.
     """
     roots = [Path(p) for p in ('/usr/bin', '/usr/lib', '/usr/lib64', '/usr/share', '/lib', '/lib64',
              '/etc/ld.so.cache', '/etc/ssl', '/etc/resolv.conf', '/etc/hosts', '/etc/nsswitch.conf',
              '/etc/gai.conf', '/opt/gb-slots/runtime/node', '/opt/gb-slots/runtime/pnpm', '/dev/null', '/dev/random', '/dev/urandom') if Path(p).exists()]
     readonly = roots + [Path(work), Path(AGY)] + ([Path(common)] if common is not None else [])
-    # Git's read-only commands open /dev/null O_RDWR; allow this exact sink,
-    # never granting write access to the source checkout or its Git objects.
+    # Git's read-only commands open /dev/null O_RDWR. This list is the
+    # synthetic fixture's writable set, not the live UID978 boundary.
     writable = [Path(root), Path('/dev/null')]
     executables = [Path(p) for p in ('/usr/bin', '/usr/lib', '/usr/lib64', '/lib', '/lib64', '/opt/gb-slots/runtime/node', '/opt/gb-slots/runtime/pnpm', AGY)
                    if Path(p).exists()] + [Path(root)]
@@ -586,58 +624,290 @@ def command(print_timeout,prompt=None,model=MODEL,*,analysis=False,source_root=N
 
 
 
-def reap(process):
+def _proc_ppid(pid):
     try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except (ProcessLookupError, PermissionError):
-        pass
-    process.wait()
+        statline = Path(f'/proc/{pid}/stat').read_text(encoding='ascii', errors='replace')
+    except OSError:
+        return None
+    try:
+        return int(statline.rsplit(')', 1)[1].split()[1])
+    except (IndexError, ValueError):
+        return None
 
 
+def _descendants(root):
+    """Child pids, including a setsid grandchild that has not been reparented yet."""
+    children = {}
+    for entry in os.listdir('/proc'):
+        if not entry.isdigit():
+            continue
+        pid = int(entry)
+        ppid = _proc_ppid(pid)
+        if ppid is None:
+            continue
+        children.setdefault(ppid, []).append(pid)
+    out = []
+    stack = [root]
+    seen = set()
+    while stack:
+        pid = stack.pop()
+        for child in children.get(pid, ()):
+            if child in seen or child == root:
+                continue
+            seen.add(child)
+            out.append(child)
+            stack.append(child)
+    return out
 
-def _verify_apparmor_precharge():
-    """Verify trusted installed source and enforce label before model charging.
 
-    Loaded kernel policy bytes need separate installer/negative-test proof.
+def reap(process):
+    """Kill the vendor session and descendants that already called setsid.
+
+    Repeat so a child cannot exit and leave a grandchild untracked in the
+    same window. A process that has already been reparented to init is not
+    in this tree; the invocation cgroup covers that case.
     """
-    fd = os.open(APPARMOR_POLICY_FILE,
-                 os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
-    with os.fdopen(fd, 'rb') as stream:
-        info = os.fstat(stream.fileno())
-        if (not stat.S_ISREG(info.st_mode)
-                or info.st_uid != 0
-                or info.st_nlink != 1
-                or (info.st_mode & 0o022)):
-            raise PermissionError('unsafe AppArmor policy file')
-        content = stream.read(65537)
-    if hashlib.sha256(content).hexdigest() != APPARMOR_POLICY_SHA256:
-        raise PermissionError('AppArmor policy SHA mismatch')
+    for _ in range(20):
+        victims = _descendants(process.pid) if process.pid else []
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+        for pid in victims:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError, OSError):
+                pass
+        if process.poll() is not None and not victims:
+            break
+        time.sleep(0.02)
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        pass
+    except TypeError:
+        # Test doubles expose wait() without a timeout argument.
+        try:
+            process.wait()
+        except Exception:
+            pass
 
-    # The root receiver must verify the slot2 identity, never itself.
+
+def _prepare_invocation_cgroup():
+    """A private child cgroup for this call, or None when the host does not delegate one.
+
+    Membership survives setsid, so a writer that leaves the session is still
+    killed before the after snapshot. Failure to create one is not a pass
+    for a same-uid attacker; the receipt does not claim that boundary.
+    """
+    try:
+        text = Path('/proc/self/cgroup').read_text(encoding='ascii')
+    except OSError:
+        return None
+    rel = None
+    for line in text.splitlines():
+        parts = line.split(':', 2)
+        if len(parts) == 3 and parts[0] == '0' and parts[1] == '':
+            rel = parts[2]
+            break
+    if not rel or not rel.startswith('/') or '..' in rel.split('/'):
+        return None
+    parent = Path('/sys/fs/cgroup') / rel.lstrip('/')
+    try:
+        parent = parent.resolve()
+    except OSError:
+        return None
+    child = parent / ('agy-' + uuid.uuid4().hex)
+    try:
+        child.mkdir(mode=0o755)
+    except OSError:
+        return None
+    return child
+
+
+def _enter_invocation_cgroup(directory):
+    """Ask the kernel to move this process. Membership is proved by the parent."""
+    if directory is None:
+        return
+    try:
+        fd = os.open(directory / 'cgroup.procs', os.O_WRONLY | os.O_CLOEXEC)
+    except OSError:
+        return
+    try:
+        os.write(fd, str(os.getpid()).encode('ascii'))
+    except OSError:
+        return
+    finally:
+        os.close(fd)
+
+
+def _read_cgroup_procs(directory):
+    """('empty'|'pids'|'tampered'|'unreadable', pids).
+
+    A non-numeric body is not an empty cgroup and is not reported as quiet.
+    """
+    try:
+        files = list(Path(directory).rglob('cgroup.procs'))
+    except OSError:
+        return 'unreadable', []
+    if not files:
+        return 'unreadable', []
+    pids = []
+    for child in files:
+        try:
+            text = child.read_text(encoding='ascii')
+        except OSError:
+            return 'unreadable', []
+        if any(ch not in '0123456789\n\t ' for ch in text):
+            return 'tampered', []
+        pids.extend(item for item in text.split() if item)
+    return ('pids', pids) if pids else ('empty', [])
+
+
+def _pid_in_invocation_cgroup(pid, directory):
+    """True only when /proc/<pid>/cgroup and cgroup.procs both show this pid."""
+    if directory is None or not isinstance(pid, int) or pid <= 0:
+        return False
+    needle = '/' + directory.name
+    try:
+        text = Path(f'/proc/{pid}/cgroup').read_text(encoding='ascii')
+    except OSError:
+        return False
+    listed = False
+    for line in text.splitlines():
+        parts = line.split(':', 2)
+        if len(parts) == 3 and parts[0] == '0' and parts[1] == '' and parts[2].endswith(needle):
+            listed = True
+            break
+    if not listed:
+        return False
+    kind, pids = _read_cgroup_procs(directory)
+    return kind == 'pids' and str(pid) in pids
+
+
+def _observe_cgroup_membership(pid, directory):
+    """Prove the live vendor pid entered. A missing /proc entry is not quiet."""
+    if directory is None or not isinstance(pid, int) or pid <= 0:
+        return False
+    if not Path(f'/proc/{pid}/cgroup').exists():
+        return False
+    for _ in range(5):
+        if _pid_in_invocation_cgroup(pid, directory):
+            return True
+        if not Path(f'/proc/{pid}').exists():
+            return False
+        time.sleep(0.01)
+    return False
+
+
+def _quiesce_cgroup(directory):
+    """Kill every pid in the invocation cgroup and wait until none remain."""
+    if directory is None or not directory.is_dir():
+        return 'cgroup-absent'
+    kill = directory / 'cgroup.kill'
+    try:
+        kill.write_text('1', encoding='ascii')
+    except OSError:
+        pass
+    deadline = time.monotonic() + 2
+    while True:
+        kind, procs = _read_cgroup_procs(directory)
+        if kind == 'tampered':
+            return 'cgroup-busy'
+        if kind == 'empty':
+            return 'cgroup-quiet'
+        if kind == 'unreadable':
+            if time.monotonic() >= deadline:
+                return 'cgroup-busy'
+            time.sleep(0.05)
+            continue
+        for pid in procs:
+            try:
+                os.kill(int(pid), signal.SIGKILL)
+            except (ProcessLookupError, PermissionError, ValueError, OSError):
+                pass
+        if time.monotonic() >= deadline:
+            return 'cgroup-busy'
+        time.sleep(0.05)
+
+
+def _executor_reap_state(directory, membership_proven):
+    """cgroup-quiet only after the vendor pid was observed and procs is empty.
+
+    An empty cgroup.procs list without that observation is cgroup-absent.
+    A non-numeric procs body or a pid that will not die is cgroup-busy.
+    """
+    if directory is not None:
+        quiesced = _quiesce_cgroup(directory)
+    else:
+        quiesced = 'cgroup-absent'
+    if quiesced == 'cgroup-busy':
+        return 'cgroup-busy'
+    if not membership_proven:
+        return 'cgroup-absent'
+    return quiesced
+
+
+def _remove_cgroup(directory):
+    if directory is None or not directory.exists():
+        return
+    _quiesce_cgroup(directory)
+    try:
+        children = sorted((p for p in directory.rglob('*') if p.is_dir()), key=lambda p: len(p.parts), reverse=True)
+    except OSError:
+        children = []
+    for _ in range(10):
+        for child in children:
+            try:
+                child.rmdir()
+            except OSError:
+                pass
+        try:
+            directory.rmdir()
+            return
+        except OSError:
+            time.sleep(0.02)
+
+
+
+def _verify_executor_boundary():
+    """Verify, before model charging, the unprivileged execution identity.
+
+    The installed receiver has already dropped root with setgroups([65042]).
+    This process cannot clear that group. The non-root path therefore
+    accepts exactly that one supplementary group and the probe must print
+    it. A root caller still spawns the probe with extra_groups=[], which
+    is not the installed contour. Capabilities and no_new_privs are
+    required either way. This does not claim the checkout is immutable.
+    """
     import pwd
     uid = os.geteuid()
     if uid == 0:
+        # The root receiver must verify the slot2 identity, never itself.
         try:
             account = pwd.getpwuid(EXECUTOR_UID)
         except KeyError:
             raise PermissionError('UID978 account unavailable') from None
-        if account.pw_name != 'gb-slot2' or account.pw_gid != 968:
+        if account.pw_name != 'gb-slot2' or account.pw_gid != EXECUTOR_GID:
             raise PermissionError('unexpected slot2 identity')
-        identity = dict(user=EXECUTOR_UID, group=968, extra_groups=[])
-    elif uid == EXECUTOR_UID and os.getegid() == 968:
+        identity = dict(user=EXECUTOR_UID, group=EXECUTOR_GID, extra_groups=[])
+        expected = b'978:968:[]:1:0'
+    elif (uid == EXECUTOR_UID and os.getegid() == EXECUTOR_GID
+          and os.getuid() == EXECUTOR_UID and os.getgid() == EXECUTOR_GID
+          and os.getgroups() == [REGISTRY_GROUP]):
         identity = {}
+        expected = b'978:968:[65042]:1:0'
     else:
-        raise PermissionError('wrong AppArmor preflight identity')
+        raise PermissionError('wrong executor preflight identity')
 
     def probe_child():
         from native_guard import no_new_privileges
-        _arm_apparmor_onexec()
         no_new_privileges()
 
     script = (
-        "import os; from pathlib import Path; "
-        "label = Path('/proc/self/attr/current').read_text().strip(); "
-        "print(f'{os.geteuid()}:{os.getegid()}:{label}')"
+        "import os; "
+        "st = dict(l.split(':\\t', 1) for l in open('/proc/self/status').read().splitlines() if ':\\t' in l); "
+        "print(f\"{os.geteuid()}:{os.getegid()}:{os.getgroups()}:{st['NoNewPrivs']}:{int(st['CapEff'], 16)}\")"
     )
     try:
         observed = subprocess.run(
@@ -653,34 +923,542 @@ def _verify_apparmor_precharge():
             **identity
         )
     except (OSError, subprocess.SubprocessError):
-        raise PermissionError('AppArmor preflight execution failed') from None
+        raise PermissionError('executor preflight execution failed') from None
 
-    if (observed.returncode != 0 or
-            observed.stdout.strip() != b'978:968:gb-agy-runtime (enforce)'):
-        raise PermissionError('AppArmor enforce transition could not be verified')
-
+    if observed.returncode != 0 or observed.stdout.strip() != expected:
+        raise PermissionError('executor identity or no_new_privs could not be verified')
 
 
-def _arm_apparmor_onexec():
-    """Fail closed: ensure the next exec transitions to the fixed enforced profile.
+# Git metadata that `status` does not treat as a dirty checkout. Hashes cover
+# the checkout gitdir and the common dir (linked worktrees keep config, hooks,
+# info and alternates in the common dir; config.worktree stays per worktree).
+# The index file itself is not fingerprinted. Its stat cache changes when
+# git refreshes ctime after a chmod or a same-byte rewrite, which is not a
+# candidate edit. Logical index changes are write-tree, diff-index and ls-files.
+_GIT_DIR_META = ('HEAD', 'ORIG_HEAD', 'config', 'config.worktree',
+                 'commondir', 'gitdir')
+_COMMON_META = ('config', 'config.worktree', 'hooks', 'info',
+                'objects/info/alternates', 'objects/info/http-alternates',
+                'refs/replace')
 
-    The vendor's internal sandbox must manage its own user+mount namespaces;
-    the former outer Landlock forbade Go's /proc/<child>/uid_map write, preventing
-    CLI selfexec before the command was ever launched. The AppArmor profile
-    deliberately allows native namespace creation while denying protected
-    roots, the original credentials, and candidate checkout writes.
+
+def _blob_oid(data, oid_len):
+    algo = {40: 'sha1', 64: 'sha256'}.get(oid_len)
+    if algo is None:
+        raise ValueError('unsupported git object hash length')
+    digest = hashlib.new(algo)
+    digest.update(f'blob {len(data)}\0'.encode())
+    digest.update(data)
+    return digest.hexdigest()
+
+
+def _hash_file_fd(path):
+    """SHA-256 and permission bits of one regular file, from the same descriptor.
+
+    The digest and mode are both taken before the descriptor is closed, so a
+    chmod or rewrite cannot land between the hash and the metadata.
     """
-    lib = ctypes.CDLL('libapparmor.so.1', use_errno=True)
-    fn = lib.aa_change_onexec
-    fn.argtypes = (ctypes.c_char_p,)
-    fn.restype = ctypes.c_int
-    if fn(APPARMOR_PROFILE) != 0:
-        raise OSError(ctypes.get_errno(), 'required UID978 AppArmor profile unavailable')
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        info = os.fstat(fd)
+        mode = stat.S_IMODE(info.st_mode)
+        if not stat.S_ISREG(info.st_mode):
+            return b'not-file', mode
+        digest = hashlib.sha256()
+        while True:
+            block = os.read(fd, 1 << 20)
+            if not block:
+                break
+            digest.update(block)
+        return digest.digest(), mode
+    finally:
+        os.close(fd)
 
 
+def _fingerprint(path, seen=None, depth=0):
+    """Content identity of one metadata path.
+
+    A symlink to a directory includes the target listing, so a new hook file
+    behind `.git/hooks` is visible. Bytes are hashed from the open descriptor.
+    """
+    if seen is None:
+        seen = set()
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return b'absent'
+    if stat.S_ISLNK(info.st_mode):
+        target = os.fsencode(os.readlink(path))
+        try:
+            followed = path.resolve()
+        except (OSError, RuntimeError):
+            return b'link-broken:' + target
+        key = str(followed)
+        if key in seen or depth > 6:
+            return b'link-stop:' + target
+        try:
+            followed_info = followed.lstat()
+        except FileNotFoundError:
+            return b'link-broken:' + target
+        if stat.S_ISDIR(followed_info.st_mode):
+            # The directory walk records `key`. Marking it seen here made the
+            # walk return dir-stop and ignore files added in the target.
+            return b'linkdir:' + target + _fingerprint(followed, seen, depth + 1)
+        if stat.S_ISREG(followed_info.st_mode):
+            try:
+                body, mode = _hash_file_fd(followed)
+            except OSError:
+                body, mode = b'unreadable', 0
+            return b'link:' + target + body + b':' + str(mode).encode()
+        return b'link-other:' + target
+    if stat.S_ISREG(info.st_mode):
+        try:
+            body, mode = _hash_file_fd(path)
+        except OSError:
+            body, mode = b'unreadable', 0
+        return b'file:' + body + b':' + str(mode).encode()
+    if stat.S_ISDIR(info.st_mode):
+        try:
+            key = str(path.resolve())
+        except (OSError, RuntimeError):
+            return b'dir-unresolved'
+        if key in seen or depth > 6:
+            return b'dir-stop'
+        seen.add(key)
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        except OSError:
+            return b'dir-unreadable'
+        try:
+            names = sorted(os.listdir(fd))
+            mode = stat.S_IMODE(os.fstat(fd).st_mode)
+        finally:
+            os.close(fd)
+        parts = [str(mode).encode()]
+        for name in names:
+            parts.append(os.fsencode(name) + b'\0' + _fingerprint(path / name, seen, depth + 1))
+        return b'dir:' + hashlib.sha256(b''.join(parts)).digest()
+    return b'other:' + str(info.st_mode).encode()
+
+
+def _config_include_paths(path, seen=None):
+    """Files pulled in by include.path / includeIf.path. Relative to the including file."""
+    if seen is None:
+        seen = set()
+    try:
+        key = str(path.resolve())
+    except OSError:
+        key = str(path)
+    if key in seen or not path.is_file():
+        return []
+    seen.add(key)
+    try:
+        text = path.read_text(encoding='utf-8', errors='replace')
+    except OSError:
+        return []
+    found = []
+    section = ''
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith('[') and ']' in stripped:
+            section = stripped[1:stripped.index(']')].split(None, 1)[0].lower()
+            continue
+        if not section.startswith('include'):
+            continue
+        key_name, sep, value = stripped.partition('=')
+        if not sep or key_name.strip().lower() != 'path':
+            continue
+        raw = value.strip().strip('"').strip("'")
+        if not raw:
+            continue
+        target = Path(raw)
+        if not target.is_absolute():
+            target = path.parent / target
+        found.append(target)
+        found.extend(_config_include_paths(target, seen))
+    return found
+
+
+def _git_metadata(work):
+    """(records, redirected, git_dir, common_dir)."""
+    entry = Path(work) / '.git'
+    info = entry.lstat()
+    redirected = stat.S_ISLNK(info.st_mode)
+    records = [('checkout/.git', b'directory' if stat.S_ISDIR(info.st_mode) and not redirected
+                else _fingerprint(entry))]
+    if redirected or not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
+        return records, True, None, None
+    if stat.S_ISREG(info.st_mode):
+        text = entry.read_text(encoding='utf-8')
+        if not text.startswith('gitdir:'):
+            return records, True, None, None
+        raw = text.split(':', 1)[1].strip()
+        git_dir = Path(raw)
+        if not git_dir.is_absolute():
+            git_dir = (Path(work) / git_dir).resolve()
+    else:
+        git_dir = entry
+    common = git_dir
+    commondir = git_dir / 'commondir'
+    try:
+        common_info = commondir.lstat()
+    except FileNotFoundError:
+        common_info = None
+    if common_info is not None:
+        # A symlink commondir is followed. Git reads through it, so a new
+        # file in the target must change this fingerprint.
+        try:
+            followed = commondir.resolve()
+        except (OSError, RuntimeError):
+            followed = None
+        if stat.S_ISLNK(common_info.st_mode) and followed is not None and followed.is_dir():
+            common = followed
+        elif followed is not None and (followed.is_file() or stat.S_ISREG(common_info.st_mode)):
+            try:
+                raw = followed.read_text(encoding='utf-8').strip()
+            except OSError:
+                raw = ''
+            if raw:
+                common = Path(raw)
+                if not common.is_absolute():
+                    common = (git_dir / raw).resolve()
+    for rel in _GIT_DIR_META:
+        records.append(('gitdir/' + rel, _fingerprint(git_dir / rel)))
+    for rel in _COMMON_META:
+        records.append(('commondir/' + rel, _fingerprint(common / rel)))
+    for config in (git_dir / 'config', common / 'config', git_dir / 'config.worktree', common / 'config.worktree'):
+        for include in _config_include_paths(config):
+            records.append(('include/' + str(include), _fingerprint(include)))
+    return records, redirected, git_dir, common
+
+
+def _worktree_entries(work, oid_len):
+    """Independent identities, including ignored, untracked and empty directories.
+
+    File bytes and fstat mode come from the same open descriptor and are
+    hashed before that descriptor is closed. Unix mode 0600 is not 0644.
+    """
+    files = {}
+    directories = {}
+    root = Path(work)
+
+    def walk(directory, relative):
+        fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            info = os.fstat(fd)
+            names = sorted(os.listdir(fd))
+            if relative:
+                directories[relative] = stat.S_IMODE(info.st_mode)
+        finally:
+            os.close(fd)
+        for name in names:
+            if relative == '' and name == '.git':
+                continue
+            path = directory / name
+            child = name if not relative else relative + '/' + name
+            info = path.lstat()
+            if stat.S_ISLNK(info.st_mode):
+                data = os.fsencode(os.readlink(path))
+                files[child] = ('symlink', stat.S_IMODE(info.st_mode), _blob_oid(data, oid_len))
+            elif stat.S_ISDIR(info.st_mode):
+                walk(path, child)
+            elif stat.S_ISREG(info.st_mode):
+                descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+                try:
+                    st = os.fstat(descriptor)
+                    chunks = []
+                    while True:
+                        block = os.read(descriptor, 1 << 20)
+                        if not block:
+                            break
+                        chunks.append(block)
+                    files[child] = ('file', stat.S_IMODE(st.st_mode), _blob_oid(b''.join(chunks), oid_len))
+                finally:
+                    os.close(descriptor)
+            else:
+                files[child] = ('special', stat.S_IMODE(info.st_mode), '')
+
+    walk(root, '')
+    return files, directories
+
+
+def _read_only_git(work, *args):
+    return git(work, '--no-replace-objects', *args, limit=8 << 20)
+
+
+def _guard_accidental_writes(work):
+    """Clear write bits on the worktree. Leave Git metadata writable.
+
+    A guard against accidental writes, not a boundary. The owner can chmod
+    the bits back. Git's index and objects stay writable so the read checks
+    can run. Returns the previous modes for `_restore_write_guard`.
+    """
+    root = Path(work)
+    # A fake or missing checkout has no Git metadata. Do not walk it: a path
+    # such as /tmp is not the candidate, and clearing its write bits is not
+    # this guard. The snapshot still rejects a tree it cannot read.
+    try:
+        root.joinpath('.git').lstat()
+    except OSError:
+        return []
+    saved = []
+
+    def clear(path):
+        try:
+            info = path.lstat()
+        except OSError:
+            return
+        if stat.S_ISLNK(info.st_mode):
+            return
+        mode = stat.S_IMODE(info.st_mode)
+        cleared = mode & ~0o222
+        if cleared == mode:
+            return
+        try:
+            os.chmod(path, cleared)
+        except OSError:
+            return
+        saved.append((path, mode))
+
+    clear(root)
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        base = Path(dirpath)
+        if '.git' in dirnames:
+            pointer = base / '.git'
+            if not pointer.is_dir():
+                clear(pointer)
+            dirnames.remove('.git')
+        for name in dirnames:
+            clear(base / name)
+        for name in filenames:
+            clear(base / name)
+    return saved
+
+
+def _restore_write_guard(saved):
+    if not saved:
+        return
+    for path, mode in saved:
+        try:
+            if not path.is_symlink():
+                os.chmod(path, mode)
+        except OSError:
+            pass
+
+
+def _expand_config_path(value):
+    """Expand a leading ~ with the executor passwd home, not git's closed HOME."""
+    text = value.strip().strip('"').strip("'")
+    if not text:
+        return None
+    if text == '~' or text.startswith('~/') or text.startswith('~' + os.sep):
+        home = None
+        try:
+            import pwd
+            home = pwd.getpwuid(os.geteuid()).pw_dir
+        except (KeyError, OSError):
+            home = os.environ.get('HOME')
+        if not home:
+            return None
+        text = home + text[1:]
+    return Path(text)
+
+
+def _origin_file(work, raw):
+    text = os.fsdecode(raw)
+    path = Path(text)
+    if not path.is_absolute():
+        path = Path(work) / path
+    return path
+
+
+def _effective_config_records(work):
+    """Fingerprint of `git config --show-origin --list` without our -c overrides.
+
+    include.path (including a leading ~), includeIf paths and core.hooksPath
+    targets are hashed. core.worktree and core.fsmonitor are inside the raw
+    listing, so changing either changes the binding. A hooks symlink's target
+    directory is hashed by `_fingerprint`.
+    """
+    raw = git(work, 'config', '--show-origin', '--list', _overrides=False)
+    records = [('effective-config', hashlib.sha256(raw).digest())]
+    seen = set()
+
+    def add(label, path):
+        if path is None:
+            return
+        key = str(path)
+        if key in seen:
+            return
+        seen.add(key)
+        records.append((label, _fingerprint(path)))
+
+    for line in raw.splitlines():
+        origin, sep, rest = line.partition(b'\t')
+        if not sep:
+            continue
+        key, sep2, value = rest.partition(b'=')
+        if not sep2:
+            continue
+        if origin.startswith(b'file:'):
+            add('origin/' + os.fsdecode(origin[5:]), _origin_file(work, origin[5:]))
+        key_text = key.decode('utf-8', 'replace').lower()
+        interesting = (
+            key_text == 'include.path'
+            or (key_text.endswith('.path') and 'includeif' in key_text)
+            or key_text == 'core.hookspath'
+        )
+        if interesting:
+            add('setting/' + key_text, _expand_config_path(value.decode('utf-8', 'replace')))
+    return records
+
+
+def _nul_rows(raw):
+    return [row for row in raw.split(b'\0') if row]
+
+
+def _confirmed_worktree_diff(raw, files):
+    """True when `diff-files --raw -z` is a real content or git-mode change.
+
+    GIT_OPTIONAL_LOCKS=0 makes a stat-dirty file (ctime after chmod, or a
+    rewrite of the same bytes) show up as `M` with a zero new oid. The bytes
+    still match the index, and `status` stays empty. That is not a candidate
+    change. A different blob, a 100644/100755 change, or a deletion is.
+    """
+    rows = raw.split(b'\0')
+    i = 0
+    while i < len(rows):
+        header = rows[i]
+        if header == b'':
+            i += 1
+            continue
+        if i + 1 >= len(rows) or not header.startswith(b':'):
+            return True
+        path = os.fsdecode(rows[i + 1])
+        i += 2
+        parts = header[1:].split()
+        if len(parts) < 5:
+            return True
+        oldmode, newmode, oldoid, _newoid, status = (part.decode('ascii', 'replace') for part in parts[:5])
+        if status[:1] in ('R', 'C'):
+            return True
+        if status[:1] == 'D' or oldmode != newmode:
+            return True
+        got = files.get(path)
+        if got is None or got[2] != oldoid:
+            return True
+    return False
+
+
+def _candidate_state_once(work):
+    """One git-native snapshot. File hash and mode share one descriptor.
+
+    Git reads happen first. The worktree is hashed last, so a write during
+    those reads is part of this pass. A clean result requires HEAD's tree,
+    an empty `status --porcelain=v1 --ignored --untracked-files=all`, clean
+    `diff-index --cached` and `diff-files`, `write-tree` equal to HEAD^{tree},
+    index tags `H` only, no empty directories, and blob bytes equal to HEAD.
+    Unix mode 0600 is legal for a slot checkout (umask 077) and is part of
+    the binding, so a later chmod is visible without rejecting the slot tree.
+    """
+    fmt = dec(_read_only_git(work, 'rev-parse', '--show-object-format')).strip()
+    oid_len = 64 if fmt == 'sha256' else 40
+    head = dec(_read_only_git(work, 'rev-parse', 'HEAD')).strip()
+    head_tree = dec(_read_only_git(work, 'rev-parse', 'HEAD^{tree}')).strip()
+    index_tree = dec(_read_only_git(work, 'write-tree')).strip()
+    status = _read_only_git(
+        work, 'status', '--porcelain=v1', '--ignored', '--untracked-files=all', '-z')
+    cached = _read_only_git(work, 'diff-index', '--cached', '-z', '--name-status', 'HEAD')
+    unstaged = _read_only_git(work, 'diff-files', '-z', '--raw')
+    raw_tree = _read_only_git(work, 'ls-tree', '-r', '-z', 'HEAD')
+    tree = {}
+    for row in _nul_rows(raw_tree):
+        meta, _, name = row.partition(b'\t')
+        mode, kind, oid = meta.split()
+        tree[os.fsdecode(name)] = (mode.decode('ascii'), kind.decode('ascii'), oid.decode('ascii'))
+    blobs = {path: (mode, oid) for path, (mode, kind, oid) in tree.items() if kind == 'blob'}
+    raw_flags = _read_only_git(work, 'ls-files', '-s', '-v', '-z')
+    flags = []
+    flags_ok = True
+    indexed = []
+    for row in _nul_rows(raw_flags):
+        if len(row) < 3 or row[1:2] != b' ':
+            flags_ok = False
+            break
+        tag = row[:1].decode('ascii', 'replace')
+        meta, _, name = row[2:].partition(b'\t')
+        flags.append((tag, os.fsdecode(name)))
+        indexed.append(os.fsdecode(name))
+    flags.sort()
+    records, redirected, _git_dir, _common = _git_metadata(work)
+    records.extend(_effective_config_records(work))
+    files, directories = _worktree_entries(work, oid_len)
+    reasons = []
+    if status.strip(b'\0'):
+        reasons.append('status')
+    if cached.strip(b'\0'):
+        reasons.append('index-diff')
+    if _confirmed_worktree_diff(unstaged, files):
+        reasons.append('worktree-diff')
+    if index_tree != head_tree:
+        reasons.append('index-tree')
+    if (not flags_ok or any(tag != 'H' for tag, _path in flags)
+            or sorted(indexed) != sorted(blobs)):
+        reasons.append('index-flags')
+    if redirected or any(kind != 'blob' for _mode, kind, _oid in tree.values()):
+        reasons.append('git-metadata')
+    expected_dirs = set()
+    for path in blobs:
+        parent = posixpath.dirname(path)
+        while parent:
+            expected_dirs.add(parent)
+            parent = posixpath.dirname(parent)
+    if set(directories) != expected_dirs:
+        reasons.append('directories')
+    mismatch = set(files) != set(blobs)
+    if not mismatch:
+        for path, (_git_mode, oid) in blobs.items():
+            kind, _unix_mode, got = files[path]
+            expect = 'symlink' if _git_mode == '120000' else 'file'
+            if kind != expect or got != oid:
+                mismatch = True
+                break
+    if mismatch:
+        reasons.append('worktree')
+    divergence = ','.join(reasons)
+    payload = json.dumps({
+        'head': head,
+        'head_tree': head_tree,
+        'index_tree': index_tree,
+        'divergence': divergence,
+        'files': sorted((path, kind, mode, oid) for path, (kind, mode, oid) in files.items()),
+        'directories': sorted(directories.items()),
+        'flags': flags,
+        'meta': [(name, hashlib.sha256(digest if isinstance(digest, (bytes, bytearray)) else str(digest).encode())
+                  .hexdigest()) for name, digest in records],
+    }, sort_keys=True, separators=(',', ':')).encode()
+    return (head, divergence, hashlib.sha256(payload).hexdigest())
+
+
+def _candidate_state(work):
+    """Observed checkout identity. Not a proof against a same-uid writer.
+
+    Returns (head, divergence, binding). Two passes must agree, so a write
+    between the git reads and the final descriptor hash cannot be reported
+    as a clean tree. Mode 0600 and 0644 are both legal; a change from one
+    to the other changes the binding. Empty directories are divergence.
+    """
+    try:
+        first = _candidate_state_once(work)
+        second = _candidate_state_once(work)
+        if first != second:
+            return ('', 'torn-read', 'torn-read')
+        return first
+    except (OSError, ReviewError, ValueError, UnicodeError, RuntimeError):
+        return ('', 'unverified', 'unverified')
 
 def catalog_precharge(cwd, env, child, model):
-    """No inference and no ledger charge. Exactly the headless invocation's UID/HOME/AA/NNP.
+    """No inference and no ledger charge. Exactly the headless invocation's UID/HOME/NNP.
 
     Do not serialize raw catalogue or vendor stderr (both are untrusted).
     The vendor's documented 'agy models' table lists one exact model ID per row.
@@ -712,7 +1490,7 @@ def retain_oauth_refresh(private_auth, previous):
 
     No credential bytes/hashes/fields leave this function in model receipts.
     Uses an atomic same-directory replace; avoids overwriting a changed original
-    or following links. The caller operates as UID978 outside child AppArmor.
+    or following links. The caller operates as UID978.
     """
     path = Path(private_auth)
     # The parent is opened component-by-component with O_NOFOLLOW, not by
@@ -782,18 +1560,28 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=
     owned = evidence is None
     ev = evidence or ReviewEvidence(evidence_dir or EVIDENCE,task_hash)
     process=None
+    invocation_cgroup=None
+    guard_saved=None
+    reap_state=None
+    membership_proven=False
     try:
         wire,transport=input_payload(stdin)
         ev.record(**transport,input_delivery='prepared',requested_permission_mode=PERMISSION_MODE,requested_model=model)
         # Fail BEFORE qualification() touches the pinned OAuth credential.
         need(os.geteuid() == EXECUTOR_UID, 'wrong native QA executor UID')
         try:
-            _verify_apparmor_precharge()
+            _verify_executor_boundary()
         except OSError:
             raise ReviewError('AGY_PRECHECK_FAILED', 'preflight', ev.id) from None
-        ev.record(apparmor_policy_sha256=APPARMOR_POLICY_SHA256,
-                  apparmor_mode='enforce', apparmor_preflight='source_and_label')
+        ev.record(filesystem_boundary=FILESYSTEM_BOUNDARY,
+                  executor_preflight='identity_groups_caps_nnp')
         marker=qualification(slot,task_hash,model=model)
+        # Guard, not a boundary: clear worktree write bits, then snapshot.
+        # The checkout stays owned by uid978. A same-uid chmod is residual risk.
+        guard_saved=_guard_accidental_writes(work)
+        candidate_before=_candidate_state(work)
+        if candidate_before[1] != '':
+            raise ReviewError('AGY_CANDIDATE_CHANGED','preflight',ev.id)
         need(type(timeout) is int and MIN_TIMEOUT <= timeout <= 3600, 'invalid timeout')
         with tempfile.TemporaryDirectory(prefix='gb-agy-') as temp:
             root=Path(temp);agents=root/'ws/.agents/agents';out=root/'out'
@@ -803,7 +1591,8 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=
             auth=native/'antigravity-oauth-token';auth.write_bytes(original_oauth);auth.chmod(0o600)
             (agents/(AGENT+'.md')).write_text(ANALYSIS_AGENT_DEF if analysis else AGENT_DEF)
             env={'PATH':'/opt/gb-slots/runtime/node/bin:/opt/gb-slots/runtime/pnpm/bin:/usr/bin:/bin',
-                 'HOME':str(root/'home'),'LANG':'C.UTF-8','TMPDIR':str(out)}
+                 'HOME':str(root/'home'),'LANG':'C.UTF-8','TMPDIR':str(out),
+                 'GIT_OPTIONAL_LOCKS':'0'}
             if analysis:
                 # Git's read-only commands must not open host /etc/gitconfig:
                 # unavailable under Landlock on some GitHub runner images.
@@ -818,12 +1607,13 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=
                 need(source_root.is_dir() and not Path(work).is_symlink()
                      and source_root not in (root,root/'ws')
                      and str(source_root)==str(Path(work)),
-                     'analysis source must be canonical read-only worktree')
+                     'analysis source must be a canonical checkout')
             readonly,writable,executables=filesystem_roots(root,source_root or work,common)
+            invocation_cgroup=_prepare_invocation_cgroup()
             def child():
                 from native_guard import no_new_privileges
                 os.setsid()
-                _arm_apparmor_onexec()  # Required profile; failure aborts Popen.
+                _enter_invocation_cgroup(invocation_cgroup)
                 no_new_privileges()     # Retained: no UID or capability escalation.
                 resource.setrlimit(resource.RLIMIT_CORE,(0,0))
                 resource.setrlimit(resource.RLIMIT_FSIZE,(MAX_OUT+1,MAX_OUT+1))
@@ -833,7 +1623,7 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=
                 with open(out/'stdout','xb') as stdout,open(out/'stderr','xb') as stderr:
                     argv=command(max(1,timeout-10),model=model,
                         **({'analysis':True,'source_root':str(source_root)} if analysis else {}))
-                    # Same private HOME, UID978, AppArmor and NNP as the
+                    # Same private HOME, UID978 and NNP as the
                     # actual stream-json CLI. This probe performs no inference.
                     # Zero ledger usage until the exact account model is listed.
                     catalog_count = catalog_precharge(root/'ws',env,child,model)
@@ -850,7 +1640,8 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=
                     try:process=popen(argv,cwd=root/'ws',env=env,stdin=subprocess.PIPE,
                                       stdout=stdout,stderr=stderr,preexec_fn=child)
                     except (OSError,subprocess.SubprocessError):raise ReviewError('AGY_LAUNCH_FAILED','launch',ev.id) from None
-                    ev.record(phase='running')
+                    membership_proven=_observe_cgroup_membership(getattr(process,'pid',None), invocation_cgroup)
+                    ev.record(phase='running',executor_cgroup_membership='proven' if membership_proven else 'absent')
                     try:process.communicate(input=wire,timeout=timeout)
                     except subprocess.TimeoutExpired:
                         reap(process);ev.meta.update(timeout=True,exit_code=process.returncode,input_delivery='unknown')
@@ -860,7 +1651,14 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=
                         raise ReviewError('AGY_STDIN_FAILED','running',ev.id) from None
                     except BaseException:
                         reap(process);ev.meta.update(exit_code=process.returncode,input_delivery='unknown');raise
-                    reap(process);ev.meta['exit_code']=process.returncode
+                    reap(process)
+                    ev.meta['exit_code']=process.returncode
+                    reap_state=_executor_reap_state(invocation_cgroup, membership_proven)
+                    ev.record(executor_reap=reap_state)
+                    if reap_state=='cgroup-busy':
+                        ev.record(candidate_state='writer-alive',
+                                  concurrent_exit_code=process.returncode)
+                        raise ReviewError('AGY_CANDIDATE_CHANGED','output',ev.id)
                     # CPython POSIX communicate ignores EPIPE. Its write offset is the
                     # actual os.write byte count; completion alone cannot prove delivery.
                     if getattr(process,'_input_offset',None)!=len(wire):
@@ -868,10 +1666,18 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=
                         raise ReviewError('AGY_STDIN_FAILED','running',ev.id)
                     ev.record(input_delivery='written')
                 ev.record(phase='output')
+                # Checkout integrity is decided before AGY_EXIT_NONZERO / output
+                # limit. A tampered tree must not collapse into the exit code.
+                # The nonzero status stays on the evidence either way.
+                after=_candidate_state(work)
+                if after!=candidate_before or after[1]!='':
+                    ev.record(candidate_state='changed',concurrent_exit_code=process.returncode)
+                    raise ReviewError('AGY_CANDIDATE_CHANGED','output',ev.id)
                 if any((out/name).stat().st_size>MAX_OUT for name in ('stdout','stderr')):
                     raise ReviewError('AGY_OUTPUT_LIMIT','output',ev.id)
                 if process.returncode != 0:raise ReviewError('AGY_EXIT_NONZERO','output',ev.id)
                 raw=(out/'stdout').read_bytes()
+                ev.record(candidate_state='unchanged')
             except BaseException as error:
                 primary_failure = error
                 raise
@@ -903,10 +1709,13 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=
                         raise ReviewError('AGY_ADAPTER_ERROR','output',ev.id) from None
         ev.record(phase='output',terminal=owned,status='invoke_success')
         return raw,dict(executor_uid=EXECUTOR_UID,slot=slot,qualification_phase=marker['phase'],
-            requested_native_sandbox=False,filesystem_boundary='uid978_apparmor_enforce',
-            candidate_access='read_only',credential_source='provisioned_native_auth_file',
-            readonly_roots=[str(source_root or work)],writable_roots=['invocation_private_root','/dev/null'],
-            apparmor_profile=APPARMOR_PROFILE.decode('ascii'),
+            requested_native_sandbox=False,filesystem_boundary=FILESYSTEM_BOUNDARY,
+            candidate_integrity=CANDIDATE_INTEGRITY,write_guard=WRITE_GUARD,
+            executor_reap=reap_state,
+            executor_supplementary_groups=[REGISTRY_GROUP],
+            registry_group_note=REGISTRY_GROUP_NOTE,residual_risk=RESIDUAL_RISK,
+            credential_source='provisioned_native_auth_file',
+            owner_waiver=OWNER_WAIVER,filesystem_roots_enforced=False,
             evidence_id=ev.id,requested_permission_mode=PERMISSION_MODE,input_delivery='written',**transport)
     except BaseException as error:
         code=error.code if isinstance(error,ReviewError) else 'AGY_ADAPTER_ERROR'
@@ -914,6 +1723,8 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=
         if code != 'AGY_EVIDENCE_WRITE_FAILED':ev.record(terminal=True,status='unknown',error_code=code,phase=phase)
         raise ReviewError(code,phase,ev.id) from None
     finally:
+        _restore_write_guard(guard_saved)
+        _remove_cgroup(invocation_cgroup)
         if owned:ev.close()
 
 
@@ -1086,10 +1897,17 @@ def review(work, base, head, prompt, timeout, *, slot, task_hash, charge, model=
            accepted_rules=None, evidence_dir=None, analysis_grant=None, compact_files=False):
     """Canonical result plus receipt; private evidence survives every terminal path."""
     ev=ReviewEvidence(evidence_dir or EVIDENCE,task_hash,base,head)
+    guard_saved=None
     try:
         ev.record(requested_model=model)
         need(model in MODELS, 'unsupported native QA model')
-        need(not git(work, 'status', '--porcelain'), 'candidate must be clean before QA')
+        # Same AGY_CANDIDATE_CHANGED code as invoke(), before charge. Porcelain
+        # alone is not the gate: skip-worktree, exclude and git metadata bypass it.
+        # The chmod guard is applied first so the before/after modes match.
+        guard_saved=_guard_accidental_writes(work)
+        candidate_before=_candidate_state(work)
+        if candidate_before[1] != '' or candidate_before[0] != head:
+            raise ReviewError('AGY_CANDIDATE_CHANGED','preflight',ev.id)
         binding=None
         if analysis_grant is None:
             source, _ = collect(work, base, head, prompt + '\nRead-only candidate root: ' + str(Path(work).resolve()),
@@ -1152,7 +1970,8 @@ def review(work, base, head, prompt, timeout, *, slot, task_hash, charge, model=
                                 **({'analysis':True} if binding else {}))
         need(execution.get('input_delivery')=='written','stdin delivery unconfirmed')
         rules_context['delivery']='explicit_full_stream_json_stdin'
-        if git(work,'status','--porcelain') or dec(git(work,'rev-parse','HEAD')).strip()!=head:
+        after=_candidate_state(work)
+        if after != candidate_before or after[1] != '' or after[0] != head:
             raise ReviewError('AGY_CANDIDATE_CHANGED','parse',ev.id)
         ev.record(phase='parse')
         try:
@@ -1181,7 +2000,9 @@ def review(work, base, head, prompt, timeout, *, slot, task_hash, charge, model=
         phase=error.phase if isinstance(error,ReviewError) else ev.meta['phase']
         if code != 'AGY_EVIDENCE_WRITE_FAILED':ev.record(terminal=True,status='unknown',error_code=code,phase=phase)
         raise ReviewError(code,phase,ev.id) from None
-    finally:ev.close()
+    finally:
+        _restore_write_guard(guard_saved)
+        ev.close()
 
 
 def save_receipt(state_dir, issue, attempt, receipt):

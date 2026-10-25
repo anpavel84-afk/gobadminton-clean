@@ -168,7 +168,8 @@ class InstallerInputIdentity(unittest.TestCase):
         calls=[];run=subprocess.run
         def child(argv,**kw):
             self.assertEqual(kw['user'],978);self.assertGreater(kw['group'],0);self.assertEqual(kw['extra_groups'],[])
-            self.assertEqual(set(kw['env']),{'PATH','HOME','LANG','GIT_CONFIG_NOSYSTEM','GIT_CONFIG_GLOBAL','GIT_TERMINAL_PROMPT'})
+            self.assertEqual(set(kw['env']),{'PATH','HOME','LANG','GIT_CONFIG_NOSYSTEM','GIT_CONFIG_GLOBAL','GIT_TERMINAL_PROMPT','GIT_OPTIONAL_LOCKS'})
+            self.assertEqual(kw['env']['GIT_OPTIONAL_LOCKS'],'0')
             calls.append(argv)
             for key in ('user','group','extra_groups'):kw.pop(key)
             return run(argv,**kw)

@@ -131,6 +131,7 @@ class AnalysisProtocol(unittest.TestCase):
             return wire(stream()),{'input_delivery':'written'}
         with tempfile.TemporaryDirectory() as d:
             with patch.object(N,'git',side_effect=lambda work,*args,**kw: HEAD.encode() if args[0]=='rev-parse' else b''), \
+                 patch.object(N,'_candidate_state',return_value=(HEAD,'')), \
                  patch.object(Q,'addressed_input',return_value='EXACT_INERT_INPUT'), \
                  patch('context_policy.inject',side_effect=inject), \
                  patch.object(N,'invoke',side_effect=invoke):
@@ -158,6 +159,7 @@ class AnalysisProtocol(unittest.TestCase):
             return wire(events),{'input_delivery':'written'}
         with tempfile.TemporaryDirectory() as d:
             with patch.object(N,'git',side_effect=lambda work,*args,**kw: HEAD.encode() if args[0]=='rev-parse' else b''), \
+                 patch.object(N,'_candidate_state',return_value=(HEAD,'')), \
                  patch.object(Q,'addressed_input',return_value='EXACT_INERT_INPUT'), \
                  patch('context_policy.inject',side_effect=lambda text,*a:('TRUSTED_RULES\nEND TRUSTED OPERATING RULES.\nRole: qa.\n'+text,{'sha256':'f'*64})), \
                  patch.object(N,'invoke',side_effect=invoke):
@@ -197,7 +199,8 @@ class AnalysisStage(unittest.TestCase):
             def invoke(text,*args,**kw):
                 captured.update(text=text,kwargs=kw)
                 return wire(stream()),{'input_delivery':'written'}
-            with patch.object(N,'git',side_effect=git),patch.object(Q,'addressed_input',return_value='EXACT_INERT_INPUT'), \
+            with patch.object(N,'git',side_effect=git),patch.object(N,'_candidate_state',return_value=(HEAD,'')), \
+                 patch.object(Q,'addressed_input',return_value='EXACT_INERT_INPUT'), \
                  patch('context_policy.inject',side_effect=lambda text,*a:('TRUSTED_RULES\nEND TRUSTED OPERATING RULES.\nRole: qa.\n'+text,{'sha256':'f'*64})), \
                  patch.object(N,'invoke',side_effect=invoke):
                 value,receipt=N.review(Path('/candidate'),BASE,HEAD,'ignored QA text',1800,
@@ -236,7 +239,7 @@ class NativeAnalysisTransport(unittest.TestCase):
             with patch.object(N,'qualification',return_value={'phase':'canary'}),patch.object(N.os,'geteuid',return_value=978), \
                  patch.object(N,'trusted',return_value=b'synthetic-auth-not-a-credential'), \
                  patch.object(N,'git',return_value=str(candidate/'.git').encode()), \
-                 patch.object(N,'filesystem_roots',return_value=([],[],[])) as roots,patch.object(N.os,'killpg'),patch.object(N,'_verify_apparmor_precharge',return_value=None):
+                 patch.object(N,'filesystem_roots',return_value=([],[],[])) as roots,patch.object(N.os,'killpg'),patch.object(N,'_verify_executor_boundary',return_value=None),patch.object(N,'_candidate_state',return_value=('H','')) :
                 raw,receipt=N.invoke('EXACT INPUT 漢字',1800,work=candidate,slot='slot2',task_hash='f'*64,
                     charge=charge,popen=popen,analysis=True,evidence_dir=Path(d)/'evidence')
             self.assertEqual(json.loads(captured['stdin'])['message']['content'],'EXACT INPUT 漢字')
@@ -244,7 +247,7 @@ class NativeAnalysisTransport(unittest.TestCase):
             self.assertNotIn('--sandbox',captured['argv']);self.assertIn('--dangerously-skip-permissions',captured['argv'])
             self.assertIn('--add-dir',captured['argv'])
             self.assertEqual(captured['argv'][captured['argv'].index('--add-dir')+1],str(candidate.resolve()))
-            self.assertEqual(receipt['input_delivery'],'written');self.assertEqual(receipt['filesystem_boundary'],'uid978_apparmor_enforce')
+            self.assertEqual(receipt['input_delivery'],'written');self.assertEqual(receipt['filesystem_boundary'],'uid978_unix_permissions_nnp')
             self.assertIs(receipt['requested_native_sandbox'], False)
             roots.assert_called_once()
             meta=json.loads(sorted((Path(d)/'evidence').glob('*/phase-*.json'))[-1].read_text())
