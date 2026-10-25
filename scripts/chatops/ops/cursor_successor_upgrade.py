@@ -2,9 +2,11 @@
 """Reviewed #211 native author upgrade using existing quiescence/shadow/rollback."""
 import argparse
 import copy
+from functools import wraps
 import hashlib
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -14,7 +16,7 @@ import time
 sys.path.insert(0, '/usr/local/lib/gb-actions-train')
 import receiver as r
 import installer as i
-from core import digest
+from core import digest, Refused
 STATE = r.STATE
 JOURNAL = STATE/'cursor-successor-211.json'
 BACKUP = STATE/'cursor-successor-211-backup'
@@ -58,6 +60,106 @@ RUNTIME_EVIDENCE = {
         'b48880aaf8281c139b973d39a36a8c0c2a4ca49c71e81fd74754b7606e04e850')}
 
 
+def runtime_preflight(function):
+    """Only read/validate/prepare here. Never wrap atomic writes or publication."""
+    @wraps(function)
+    def validate(*args, **kwargs):
+        try:
+            return function(*args, **kwargs)
+        except Refused:
+            raise
+        except Exception as error:
+            raise Refused('runtime acceptance refused: malformed or unreadable state ('+
+                          type(error).__name__+')') from error
+    return validate
+
+
+def runtime_fields(value, fields, reason):
+    r.need(isinstance(value,dict), reason)
+    for key, kind in fields.items():
+        r.need(key in value and type(value[key]) is kind, reason+': '+key)
+
+
+def runtime_timestamp(value):
+    # receiver.finish writes int(time.time()); permit finite numeric timestamps,
+    # including zero (unfinished), but never bool or incomparable strings.
+    return type(value) is int or (type(value) is float and math.isfinite(value))
+
+
+def runtime_marker_shape(marker):
+    reason = 'malformed runtime marker'
+    runtime_fields(marker, {'phase':str,'canary_task_sha256':str,'successor':dict,'modules':dict}, reason)
+    r.need(all(isinstance(k,str) and isinstance(v,str) for k,v in marker['modules'].items()), reason+': modules')
+
+
+def runtime_state_shape(j, p, marker):
+    runtime_fields(j, {'phase':str,'manifest':str,'controller':str,'canary_task_sha256':str,
+                      'successor':dict}, 'malformed journal')
+    runtime_fields(p, {'mode':str,'controller_sha':str}, 'malformed runtime policy')
+    runtime_marker_shape(marker)
+    if 'qualification_history' in j:
+        r.need(isinstance(j['qualification_history'],list), 'malformed journal: qualification_history')
+        for entry in j['qualification_history']:
+            runtime_fields(entry, {'intent':dict}, 'malformed journal: qualification_history')
+            r.need(runtime_timestamp(entry.get('rolled_back_at')), 'malformed journal: rolled_back_at')
+            runtime_intent_shape(entry['intent'])
+
+
+def runtime_intent_shape(intent):
+    reason = 'malformed qualification intent'
+    runtime_fields(intent, {'policy':dict,'controller':str,'task_sha256':str,'successor':dict,
+        'proof':dict,'proof_path':str,'operations':dict,'old_marker':dict,'next_marker':dict,
+        'old_hash':str,'next_hash':str}, reason)
+    runtime_fields(intent['policy'], {'mode':str,'controller_sha':str}, reason+': policy')
+    r.need(runtime_timestamp(intent.get('qualified_at')), reason+': qualified_at')
+    for name in ('old_marker','next_marker'): runtime_marker_shape(intent[name])
+    proof = intent['proof']
+    runtime_fields(proof, {'acceptance_basis':str,'slot':str,'author_run':int,
+                          'qualification_proof_sha256':str,'evidence':dict}, reason+': proof')
+    r.need(proof['acceptance_basis']=='runtime_qualification', reason+': acceptance_basis')
+    r.need(proof['slot'] in ('slot1','slot2'), reason+': slot')
+    for key, item in proof['evidence'].items():
+        r.need(isinstance(key,str), reason+': evidence key')
+        runtime_fields(item, {'path':str,'sha256':str}, reason+': evidence')
+    r.need(all(isinstance(k,str) and isinstance(v,str) for k,v in intent['operations'].items()),
+           reason+': operations')
+
+
+def runtime_slot_operations(slot):
+    journal = r.journal(slot)
+    runtime_fields(journal, {'operations':dict}, 'malformed slot structure')
+    ops = journal['operations']
+    # Validate identity before any filtering, including historical operations.
+    for key, op in ops.items():
+        r.need(isinstance(key,str), 'malformed operation record: key')
+        runtime_fields(op, {'binding':dict}, 'malformed operation record')
+        runtime_fields(op['binding'], {'issue':int,'stage':str}, 'malformed operation record: binding')
+        if op['binding']['issue']==225 and op['binding']['stage'] in ('author','qa','dev'):
+            r.need(op.get('task_hash') is None or isinstance(op['task_hash'],str),
+                   'malformed operation record: task_hash')
+            r.need(op.get('finished_at') is None or runtime_timestamp(op['finished_at']),
+                   'malformed operation record: finished_at')
+    return ops
+
+
+def runtime_author_shape(op):
+    reason = 'malformed operation record'
+    runtime_fields(op, {'result':dict,'run':int}, reason)
+    result = op['result']
+    if 'status' in result: r.need(isinstance(result['status'],str), reason+': status')
+    # Preserve the old null-routing => empty routing => executor mismatch rule.
+    route = result.get('routing')
+    r.need(route is None or isinstance(route,dict), reason+': routing')
+    if route is not None:
+        for field in ('provider','effective_model'):
+            if field in route: r.need(isinstance(route[field],str), reason+': '+field)
+        for field in ('usage','native_receipt'):
+            if field in route: r.need(isinstance(route[field],dict), reason+': '+field)
+        receipt = route.get('native_receipt',{})
+        for field, kind in (('phase',str),('task_sha256',str),('issue',int)):
+            if field in receipt: r.need(type(receipt[field]) is kind, reason+': receipt '+field)
+
+
 def runtime_bytes(path, limit=64 << 20):
     """Read one immutable root-owned regular file through no-follow descriptors."""
     path = Path(path)
@@ -96,11 +198,15 @@ def runtime_evidence(proof_path, task_hash, expected_sha=None):
         data = runtime_bytes(item['path'])
         r.need(hashlib.sha256(data).hexdigest() == item['sha256'], 'runtime evidence sha256 mismatch: '+key)
         if key == 'author_receipt': artifacts[key] = r.loads(data)
-    return proof_sha, proof['evidence'], artifacts['author_receipt']
+    receipt = artifacts['author_receipt']
+    runtime_fields(receipt, {'phase':str,'issue':int,'task_sha256':str}, 'malformed runtime receipt')
+    return proof_sha, proof['evidence'], receipt
 
 
 def runtime_installed_code(j, marker):
     """Recompute the recorded payload union, without trusting marker.modules as inventory."""
+    runtime_fields(j, {'manifest':str}, 'malformed journal')
+    runtime_marker_shape(marker)
     try:
         record = r.loads(runtime_bytes(STATE/'backup.json'))
     except (ValueError, UnicodeError):
@@ -114,14 +220,26 @@ def runtime_installed_code(j, marker):
                and isinstance(value.get('before'),dict) and isinstance(value.get('units'),dict)
                and type(value.get('activated')) is bool and isinstance(value.get('targets'),list),
                'installed code drift: invalid backup schema')
+        r.need(isinstance(value['manifest'],str)
+               and all(isinstance(k,str) and isinstance(v,str) for k,v in value['after'].items())
+               and all(isinstance(k,str) and (v is None or isinstance(v,str)) for k,v in value['before'].items())
+               and all(isinstance(k,str) and isinstance(v,dict)
+                       and all(isinstance(a,str) and isinstance(b,str) for a,b in v.items())
+                       for k,v in value['units'].items())
+               and all(isinstance(v,str) for v in value['targets']),
+               'malformed backup record: members')
     r.need({k:v for k,v in record.items() if k not in ('after','manifest')}==
            {k:v for k,v in prior.items() if k not in ('after','manifest')}
            and record['manifest']==j['manifest'], 'installed code drift: backup identity')
     changes = j.get('changes')
     r.need(isinstance(changes,dict), 'installed code drift: invalid changes')
+    r.need(str(MARKER) in changes, 'malformed journal: missing marker change')
     pins = {}
     for name, change in changes.items():
-        if name == str(MARKER): continue
+        r.need(isinstance(name,str), 'installed code drift: invalid change path')
+        if name == str(MARKER):
+            runtime_fields(change, {'after':str}, 'malformed journal: marker change')
+            continue
         r.need(isinstance(change,dict) and isinstance(change.get('after'),str),
                'installed code drift: invalid change pin')
         pins[name] = change['after']
@@ -149,6 +267,7 @@ def runtime_installed_code(j, marker):
 
 
 def runtime_identity(j, p, marker):
+    runtime_state_shape(j,p,marker)
     r.need(p['mode']=='active' and p['controller_sha']==j['controller']
            and marker.get('phase')=='canary'
            and marker.get('canary_task_sha256')==j['canary_task_sha256']
@@ -164,7 +283,7 @@ def runtime_identity(j, p, marker):
 def runtime_author(task_hash):
     matches = []
     for slot in ('slot1','slot2'):
-        ops = r.journal(slot)['operations']
+        ops = runtime_slot_operations(slot)
         # Count every issue-225 author, even with a missing/different task hash
         # or an unfinished/unconfirmed result. Such attempts cannot disappear
         # from qualification accounting by changing status or task binding.
@@ -173,6 +292,7 @@ def runtime_author(task_hash):
                 matches.append((slot, key, op, ops))
     r.need(len(matches)==1, 'one confirmed runtime canary author required')
     slot, key, op, ops = matches[0]
+    runtime_author_shape(op)
     r.need(op.get('task_hash')==task_hash and op.get('finished_at')
            and op.get('result',{}).get('status')=='confirmed',
            'one confirmed runtime canary author required')
@@ -191,6 +311,7 @@ def runtime_author(task_hash):
 
 
 def runtime_validation(j, p, intent):
+    runtime_intent_shape(intent)
     runtime_identity(j,p,intent['old_marker'])
     proof = intent['proof']
     proof_sha, evidence, receipt = runtime_evidence(Path(intent['proof_path']),
@@ -204,17 +325,20 @@ def runtime_validation(j, p, intent):
            'runtime qualification operation evidence changed')
 
 
-def accept_runtime(bundle, dry_run=False, proof_sha256=None):
+@runtime_preflight
+def runtime_accept_preflight(bundle, dry_run=False, proof_sha256=None):
     j = r.read(JOURNAL,0); p = r.read(r.POLICY,0); marker = r.read(MARKER,0)
+    runtime_state_shape(j,p,marker)
     r.need(dry_run or re.fullmatch('[a-f0-9]{64}',proof_sha256 or ''),
            'apply requires --proof-sha256 from reviewed dry-run')
     if j['phase'] in ('qualifying-ready','active-ready'):
-        intent = j['qualification_intent']
+        intent = j.get('qualification_intent')
+        runtime_intent_shape(intent)
         r.need(intent['proof'].get('acceptance_basis')=='runtime_qualification'
                and intent['proof_path']==str(bundle/QUALIFICATION_PROOF)
                and (proof_sha256 is None or intent['proof']['qualification_proof_sha256']==proof_sha256),
                'runtime qualification intent identity changed')
-        return complete_qualification(j,p,marker,dry_run=dry_run)
+        return runtime_completion_preflight(j,p,marker,dry_run=dry_run), False
     r.need(j['phase']=='active-canary', 'runtime acceptance requires active-canary')
     runtime_identity(j,p,marker)
     r.need(encoded_hash(marker)==j['changes'][str(MARKER)]['after']
@@ -233,8 +357,13 @@ def accept_runtime(bundle, dry_run=False, proof_sha256=None):
         'next_hash':encoded_hash(nextmarker),'qualified_at':qualified_at}
     runtime_validation(j,p,intent)
     j.update(phase='qualifying-ready',accepted_canary=proof,qualification_intent=intent)
-    if not dry_run: r.atomic(JOURNAL,j)
-    return complete_qualification(j,p,marker,dry_run=dry_run)
+    return runtime_completion_preflight(j,p,marker,dry_run=dry_run), True
+
+
+def accept_runtime(bundle, dry_run=False, proof_sha256=None):
+    prepared, initial = runtime_accept_preflight(bundle,dry_run,proof_sha256)
+    if initial and not dry_run: r.atomic(JOURNAL,prepared[0])
+    return runtime_completion_write(*prepared,dry_run=dry_run)
 
 
 def helpers(bundle):
@@ -290,7 +419,78 @@ def activate_release(C,u,j,p,run_id):
     return {'phase':'active-canary','shadow':intent['shadow'],'history_preserved':True}
 
 
+@runtime_preflight
+def runtime_completion_preflight(j,p,marker,dry_run=False):
+    """Replay only the exact, durably validated qualification intent."""
+    runtime_state_shape(j,p,marker)
+    runtime_installed_code(j,marker)  # Validate changes before replay dereferences them.
+    intent=j.get('qualification_intent')
+    runtime_intent_shape(intent)
+    r.need(j['phase'] in ('qualifying-ready','active-ready') and isinstance(intent,dict)
+           and intent['policy']==p and intent['controller']==j['controller']
+           and intent['task_sha256']==j['canary_task_sha256']
+           and intent['successor']==j['successor'], 'qualification intent drift')
+    r.need(encoded_hash(intent['old_marker'])==intent['old_hash']
+           and encoded_hash(intent['next_marker'])==intent['next_hash']
+           and intent['next_marker']==intent['old_marker'] | {'phase':'ready',
+               'accepted_canary':intent['proof'],'qualified_at':intent['qualified_at']},
+           'qualification marker intent changed')
+    for name,sha in intent['old_marker']['modules'].items():
+        actual_sha = (hashlib.sha256(runtime_bytes(INSTALL/name)).hexdigest()
+                      if intent['proof'].get('acceptance_basis')=='runtime_qualification'
+                      else i.sha(INSTALL/name))
+        r.need(actual_sha==sha,'qualified adapter drift')
+    runtime_author(j['canary_task_sha256'])  # Refuse malformed sole-author fields before digest filtering.
+    ops=runtime_slot_operations(intent['proof']['slot'])
+    r.need(all(k in ops and digest(ops[k])==v for k,v in intent['operations'].items()),
+           'qualification operation evidence changed')
+    actual=encoded_hash(marker)
+    r.need(actual in (intent['old_hash'],intent['next_hash']), 'foreign qualification marker drift')
+    if intent['proof'].get('acceptance_basis')=='runtime_qualification':
+        r.need(hashlib.sha256(runtime_bytes(MARKER,65536)).hexdigest()==actual,
+               'foreign qualification marker bytes drift')
+        r.need(j['changes'][str(MARKER)]['after']==
+               (intent['next_hash'] if j['phase']=='active-ready' else intent['old_hash']),
+               'runtime qualification journal marker drift')
+        runtime_validation(j,p,intent)
+    if dry_run:
+        r.need(actual!=intent['old_hash'] or j['phase']=='qualifying-ready',
+               'completed qualification marker changed')
+    elif actual==intent['old_hash']:
+        r.need(j['phase']=='qualifying-ready', 'completed qualification marker changed')
+    preview = {'dry_run':True,'phase':j['phase'],'would_change':{'marker_phase':'ready',
+        'journal_phase':'active-ready','old_hash':intent['old_hash'],'new_hash':intent['next_hash']},
+        'accepted_canary':intent['proof']}
+    return j, p, intent, actual, preview
+
+
+def runtime_completion_write(j,p,intent,actual,preview,dry_run=False):
+    """All reads/checks finished before entry; write/monitor failures stay visible."""
+    if dry_run: return preview
+    if actual==intent['old_hash']:
+        r.atomic(MARKER,intent['next_marker'],mode=0o644)
+    if j['phase']!='active-ready':
+        j['changes'][str(MARKER)]['after']=intent['next_hash']
+        j['phase']='active-ready';r.atomic(JOURNAL,j)
+    r.publish_monitor(p)
+    return {'phase':'active-ready','accepted_canary':intent['proof']}
+
+
 def complete_qualification(j,p,marker,dry_run=False):
+    # Keep legacy product replay; runtime records carry separate proof fields.
+    intent = j.get('qualification_intent') if isinstance(j,dict) else None
+    proof = intent.get('proof') if isinstance(intent,dict) else None
+    accepted = j.get('accepted_canary') if isinstance(j,dict) else None
+    if (isinstance(proof,dict) and not any(k in proof for k in
+            ('acceptance_basis','qualification_proof_sha256','evidence'))
+            and 'proof_path' not in intent
+            and not (isinstance(accepted,dict) and accepted.get('acceptance_basis')=='runtime_qualification')):
+        return complete_product_qualification(j,p,marker,dry_run=dry_run)
+    return runtime_completion_write(*runtime_completion_preflight(j,p,marker,dry_run=dry_run),
+                                    dry_run=dry_run)
+
+
+def complete_product_qualification(j,p,marker,dry_run=False):
     """Replay only the exact, durably validated qualification intent."""
     intent=j.get('qualification_intent')
     r.need(j['phase'] in ('qualifying-ready','active-ready') and isinstance(intent,dict)
@@ -335,21 +535,25 @@ def complete_qualification(j,p,marker,dry_run=False):
     return {'phase':'active-ready','accepted_canary':intent['proof']}
 
 
-def rollback_runtime(C):
+@runtime_preflight
+def runtime_rollback_preflight(C):
     """Metadata-only, write-ahead revert; retain every qualification and task receipt."""
     C.quiet()  # Existing disabled/quiescent window, including workers and recovery.
     j = r.read(JOURNAL,0); p = r.read(r.POLICY,0); marker = r.read(MARKER,0)
+    runtime_state_shape(j,p,marker)
     r.need(hashlib.sha256(runtime_bytes(MARKER,65536)).hexdigest()==encoded_hash(marker),
            'foreign runtime rollback marker bytes drift')
     if j['phase']=='active-canary' and j.get('qualification_history'):
         previous = j['qualification_history'][-1]['intent']
+        runtime_identity(j,previous['policy'],previous['old_marker'])
         r.need(p==previous['policy'] | {'mode':'disabled'}
                and encoded_hash(marker)==previous['old_hash']
                and j['changes'][str(MARKER)]['after']==previous['old_hash'], 'runtime rollback replay drift')
-        return {'phase':'active-canary','history_preserved':True}
+        return {'phase':'active-canary','history_preserved':True}, []
     r.need(j['phase'] in ('qualifying-ready','active-ready','reverting-canary'),
            'runtime rollback requires qualification intent')
-    intent = j['qualification_intent']
+    intent = j.get('qualification_intent')
+    runtime_intent_shape(intent)
     r.need(intent['proof'].get('acceptance_basis')=='runtime_qualification'
            and p==intent['policy'] | {'mode':'disabled'}
            and intent['controller']==j['controller'] and intent['successor']==j['successor']
@@ -363,16 +567,28 @@ def rollback_runtime(C):
     r.need(encoded_hash(marker) in (intent['old_hash'],intent['next_hash'])
            and j['changes'][str(MARKER)]['after'] in (intent['old_hash'],intent['next_hash']),
            'foreign runtime rollback marker drift')
+    writes = []
+    if j['phase']=='reverting-canary':
+        r.need(runtime_timestamp(j.get('runtime_rollback_at')), 'malformed journal: runtime_rollback_at')
     if j['phase']!='reverting-canary':
         j.update(phase='reverting-canary',runtime_rollback_at=int(time.time()))
-        r.atomic(JOURNAL,j)
+        writes.append((JOURNAL,copy.deepcopy(j)))
     if encoded_hash(marker)!=intent['old_hash']:
-        r.atomic(MARKER,intent['old_marker'],mode=0o644)
+        writes.append((MARKER,intent['old_marker']))
     j.setdefault('qualification_history',[]).append({'intent':intent,'rolled_back_at':j['runtime_rollback_at']})
     j.pop('qualification_intent'); j.pop('accepted_canary',None)
     j['changes'][str(MARKER)]['after']=intent['old_hash']
-    j['phase']='active-canary'; r.atomic(JOURNAL,j)
-    return {'phase':'active-canary','history_preserved':True}
+    j['phase']='active-canary'; writes.append((JOURNAL,j))
+    return {'phase':'active-canary','history_preserved':True}, writes
+
+
+
+def rollback_runtime(C):
+    result, writes = runtime_rollback_preflight(C)
+    for path, value in writes:
+        if path==MARKER: r.atomic(path,value,mode=0o644)
+        else: r.atomic(path,value)
+    return result
 
 
 
@@ -551,6 +767,39 @@ def execute(action, bundle, manifest, controller, stage_hash, dispatch_hash, run
     r.atomic(r.POLICY,nextpolicy,mode=0o644)
     j['phase']='installed-disabled';r.atomic(JOURNAL,j)  # Fresh process publishes; no cached imported pins.
     return {'phase':j['phase'],'canary_task_sha256':digest(task),'history_preserved':True}
+
+
+@runtime_preflight
+def runtime_dispatch_preflight(action,bundle,manifest,controller,stage_hash,dispatch_hash,
+                               dry_run=False,proof_sha256=None):
+    r.need(os.geteuid() == 0, 'reviewed root integrator only')
+    r.trusted_tree(bundle)
+    r.need(not dry_run or action=='accept-runtime', '--dry-run requires accept-runtime')
+    r.need(proof_sha256 is None or action=='accept-runtime', '--proof-sha256 requires accept-runtime')
+    j = r.read(JOURNAL,0)
+    runtime_fields(j, {'manifest':str,'controller':str,'stage_sha256':str,'dispatch_sha256':str},
+                   'malformed journal: release identity')
+    r.need((manifest,controller,stage_hash,dispatch_hash)==
+           (j['manifest'],j['controller'],j['stage_sha256'],j['dispatch_sha256']),
+           'unreviewed acceptance helper bundle')
+    return helpers(bundle)[0] if action=='rollback-runtime' else None
+
+
+def runtime_dispatch(original):
+    @wraps(original)
+    def dispatch(action,bundle,manifest,controller,stage_hash,dispatch_hash,run_id=None,
+                 dry_run=False,proof_sha256=None):
+        if action not in ('accept-runtime','rollback-runtime'):
+            return original(action,bundle,manifest,controller,stage_hash,dispatch_hash,run_id,
+                            dry_run=dry_run,proof_sha256=proof_sha256)
+        helper = runtime_dispatch_preflight(action,bundle,manifest,controller,stage_hash,dispatch_hash,
+                                            dry_run,proof_sha256)
+        if action=='rollback-runtime': return rollback_runtime(helper)
+        return accept_runtime(bundle,dry_run=dry_run,proof_sha256=proof_sha256)
+    return dispatch
+
+
+execute = runtime_dispatch(execute)
 
 
 def main():

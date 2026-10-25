@@ -16,6 +16,9 @@ from test_actions_train_cursor_successor import U, TASK, EXPECTED
 import native_cursor as N
 
 
+MISSING = object()
+
+
 class RuntimeStat:
     """Override trust metadata while retaining every other real stat attribute."""
     def __init__(self, actual, uid, mode):
@@ -707,6 +710,376 @@ class RuntimeAcceptance(unittest.TestCase):
             choice=core.route(S,task,'author','auto',budget,'slot2')
             self.assertEqual(choice['provider'],'cursor'); self.assertEqual(choice['effective_model'],'Auto')
             self.assertEqual(choice['requested_route'],'cursor:auto'); self.assertEqual(choice['policy'],'GB_STAGE_COST_V2')
+
+
+    # R3: each table case runs against pristine initial, pending and completed
+    # state, with both dry-run and apply, and checks a full byte snapshot.
+    def shape_cases(self, cases, mutate, reason, phases=('initial','pending','completed')):
+        initial=self.snapshot(); initial_ops=copy.deepcopy(self.ops)
+        effects=[(mock,mock.side_effect) for mock in (R.journal,R.loads,U.runtime_identity) if isinstance(mock,Mock)]
+        for phase in phases:
+            for mock,effect in effects: mock.side_effect=effect
+            for name,raw in initial.items(): Path(name).write_bytes(raw)
+            self.ops=copy.deepcopy(initial_ops); self.writes.clear()
+            if phase=='pending': self.interrupt_before_marker()
+            if phase=='completed': self.call()
+            baseline=self.snapshot(); operations=copy.deepcopy(self.ops)
+            for dry_run in (True,False):
+                for case in cases:
+                    with self.subTest(phase=phase,dry_run=dry_run,case=case):
+                        for name,raw in baseline.items(): Path(name).write_bytes(raw)
+                        self.ops=copy.deepcopy(operations)
+                        for mock,effect in effects: mock.side_effect=effect
+                        mutate(case)
+                        self.assert_no_writes(lambda:self.call(dry_run=dry_run),reason(case) if callable(reason) else reason)
+        for mock,effect in effects: mock.side_effect=effect
+
+    def assert_no_writes(self, invoke, reason):
+        before=self.snapshot(); count=len(self.writes)
+        publications=R.publish_monitor.call_count
+        with self.assertRaisesRegex(core.Refused,reason): invoke()
+        self.assertEqual(self.snapshot(),before); self.assertEqual(len(self.writes),count)
+        self.assertEqual(R.publish_monitor.call_count,publications)
+
+    @staticmethod
+    def replace_field(value, field, replacement):
+        if replacement is MISSING: value.pop(field,None)
+        else: value[field]=copy.deepcopy(replacement)
+
+    def mutate_file(self, path, field, value):
+        record=json.loads(path.read_text()); self.replace_field(record,field,value)
+        self.real_atomic(path,record)
+
+    def malformed_extra(self, field, values):
+        def mutate(case):
+            slot,value=case; self.extra_author(slot=slot,status='unknown',calls=1)
+            self.replace_field(self.ops[slot]['second-author']['binding'],field,value)
+        self.shape_cases([(slot,v) for slot in ('slot1','slot2') for v in values],
+                         mutate,'malformed operation record')
+
+    def test_r3_extra_author_issue_identity_types(self):
+        self.malformed_extra('issue',('225',None,225.0,True,[],MISSING))
+
+    def test_r3_extra_author_stage_identity_types(self):
+        self.malformed_extra('stage',(None,5,MISSING))
+
+    def test_r3_extra_author_binding_shapes(self):
+        def mutate(case):
+            slot,value=case; self.extra_author(slot=slot,status='unknown',calls=1)
+            self.replace_field(self.ops[slot]['second-author'],'binding',value)
+        self.shape_cases([(slot,v) for slot in ('slot1','slot2') for v in (None,[],MISSING,{})],
+                         mutate,'malformed operation record')
+
+    def test_r3_operation_shapes(self):
+        def mutate(case):
+            slot,value=case; self.ops[slot]['bad']=copy.deepcopy(value)
+        self.shape_cases([(slot,v) for slot in ('slot1','slot2') for v in ({},None,[],'x',5)],
+                         mutate,'malformed operation record')
+
+    def test_r3_operation_key_type(self):
+        # Real receiver keys are string digests; never stringify a corrupt key.
+        self.shape_cases(('slot1','slot2'),lambda slot:self.ops[slot].update({5:{'binding':{'issue':226,'stage':'author'}}}),
+                         'malformed operation record: key')
+
+    def test_r3_slot_journal_shapes(self):
+        original=R.journal.side_effect
+        def mutate(value):
+            R.journal.side_effect=lambda slot:copy.deepcopy(value) if slot=='slot1' else original(slot)
+        try:
+            self.shape_cases((None,[], 'x',{}, {'operations':None},{'operations':[]},{'operations':'x'}),
+                             mutate,'malformed slot structure')
+        finally: R.journal.side_effect=original
+
+    def sole_shapes(self, field, values, reason='malformed operation record'):
+        self.shape_cases(values,lambda value:self.replace_field(self.ops['slot2']['author'],field,value),reason)
+
+    def route_shapes(self, field, values):
+        self.shape_cases(values,lambda value:self.replace_field(
+            self.ops['slot2']['author']['result']['routing'],field,value),'malformed operation record')
+
+    def test_r3_sole_author_result_shapes(self):
+        self.sole_shapes('result',(None,[],'x',MISSING))
+
+    def test_r3_sole_author_routing_shapes(self):
+        self.shape_cases(([],['bad'],'x',''),lambda value:self.replace_field(
+            self.ops['slot2']['author']['result'],'routing',value),'malformed operation record: routing')
+
+    def test_r3_sole_author_null_routing_retains_executor_refusal(self):
+        self.shape_cases((None,),lambda value:self.replace_field(
+            self.ops['slot2']['author']['result'],'routing',value),'executor')
+
+    def test_r3_sole_author_usage_shapes(self):
+        self.route_shapes('usage',(None,[],'bad'))
+
+    def test_r3_sole_author_receipt_shapes(self):
+        self.route_shapes('native_receipt',(None,[],'x'))
+
+    def test_r3_evidence_receipt_shape(self):
+        raw=(self.state/self.evidence['author_receipt'][0]).read_bytes(); loads=R.loads
+        def mutate(value):
+            R.loads.side_effect=lambda data:copy.deepcopy(value) if data==raw else loads(data)
+        with patch.object(R,'loads',wraps=loads):
+            self.shape_cases((None,[],'x',5,{},
+                dict(self.receipt,issue=225.0),dict(self.receipt,issue=True)),
+                mutate,'malformed runtime receipt')
+
+    def test_r3_sole_author_run_shapes(self):
+        self.sole_shapes('run',(MISSING,'101',True))
+
+    def test_r3_sole_author_task_hash_only(self):
+        # No status/finish drift: deleting only the exact-task conjunct must fail.
+        self.sole_shapes('task_hash',('different',None,MISSING),'one confirmed runtime canary author required')
+
+    def test_r3_sole_author_finished_at_only(self):
+        # Zero is numeric but unfinished: catches deletion of the truth conjunct.
+        self.sole_shapes('finished_at',(0,None,MISSING),'one confirmed runtime canary author required')
+
+    def test_r3_sole_author_status_only(self):
+        self.shape_cases(('unknown','failed','rejected'),lambda value:self.replace_field(
+            self.ops['slot2']['author']['result'],'status',value),'one confirmed runtime canary author required')
+
+    def test_r3_sole_author_scalar_field_types(self):
+        def mutate(case):
+            field,value=case; self.replace_field(self.ops['slot2']['author'],field,value)
+        self.shape_cases((('task_hash',[]),('task_hash',5),('finished_at','100'),
+                          ('finished_at',[]),('finished_at',True),('finished_at',float('inf'))),
+                         mutate,'malformed operation record')
+
+    def test_r3_sole_author_status_and_route_member_types(self):
+        def mutate(case):
+            field,value=case; result=self.ops['slot2']['author']['result']
+            if field=='status': result[field]=value
+            elif field in ('provider','effective_model'): result['routing'][field]=value
+            else: result['routing']['native_receipt'][field]=value
+        self.shape_cases((('status',None),('status',[]),('provider',[]),('effective_model',5),
+                          ('phase',[]),('task_sha256',5),('issue',True)),mutate,'malformed operation record')
+
+    def test_r3_qa_dev_fields_read_by_runtime(self):
+        def mutate(case):
+            slot,stage,field,value=case
+            op={'binding':{'issue':225,'stage':stage},'task_hash':self.task_hash,'finished_at':201}
+            self.replace_field(op,field,value); self.ops[slot]['outcome']=op
+        self.shape_cases([(slot,stage,field,value) for slot in ('slot1','slot2') for stage in ('qa','dev')
+                          for field,values in (('task_hash',([],5)),('finished_at',([],{},'201',True)))
+                          for value in values],mutate,'malformed operation record')
+
+    def test_r3_installed_changes_container_guard(self):
+        self.shape_cases((None,[],'x',MISSING),lambda value:self.mutate_file(self.journal,'changes',value),
+                         'invalid changes')
+
+    def test_r3_installed_change_pin_guard(self):
+        def mutate(value):
+            j=json.loads(self.journal.read_text()); j['changes'][str(self.stage)]=copy.deepcopy(value)
+            self.real_atomic(self.journal,j)
+        self.shape_cases((None,[],{}, {'after':5},{'after':None}),mutate,'invalid change pin')
+
+    def test_r3_marker_change_shape(self):
+        def mutate(value):
+            j=json.loads(self.journal.read_text()); changes=j['changes']
+            self.replace_field(changes,str(self.marker),value); self.real_atomic(self.journal,j)
+        self.shape_cases((None,[],{}, {'after':5},MISSING),mutate,'malformed journal')
+
+    def test_r3_backup_member_types(self):
+        def mutate(case):
+            location,field,value=case
+            if location=='backup': self.mutate_file(self.backup,field,value)
+            else:
+                j=json.loads(self.journal.read_text()); self.replace_field(j['record_before'],field,value)
+                self.real_atomic(self.journal,j)
+        values=(('manifest',5),('after',{'bad':None}),('before',{'bad':[]}),
+                ('units',{'bad':[]}),('units',{'bad':{'ActiveState':5}}),('targets',[None]))
+        self.shape_cases([(location,f,v) for location in ('backup','prior') for f,v in values],
+                         mutate,'malformed backup record')
+
+    def test_r3_marker_module_shapes(self):
+        self.shape_cases((None,[], 'x', {'native_cursor.py':5}),
+                         lambda value:self.mutate_file(self.marker,'modules',value),'malformed runtime marker')
+
+    def test_r3_journal_required_identity_fields(self):
+        self.shape_cases(('manifest','controller','canary_task_sha256','successor','phase'),
+                         lambda field:self.mutate_file(self.journal,field,MISSING),'malformed journal')
+
+    def test_r3_journal_identity_types(self):
+        self.shape_cases((('manifest',[]),('controller',5),('canary_task_sha256',None),
+                          ('successor',[]),('phase',None)),
+                         lambda case:self.mutate_file(self.journal,*case),'malformed journal')
+
+    def test_r3_record_before_missing_or_wrong_shape(self):
+        self.shape_cases((None,[], 'x',MISSING),lambda value:self.mutate_file(self.journal,'record_before',value),
+                         'invalid backup schema')
+
+    def test_r3_top_level_state_shapes(self):
+        def mutate(case):
+            target,value=case; self.real_atomic(getattr(self,target),value)
+        self.shape_cases([(target,value) for target in ('journal','policy','marker') for value in (None,[],'x')],
+                         mutate,'malformed (journal|runtime policy|runtime marker)')
+
+    def test_r3_policy_and_marker_required_fields(self):
+        def mutate(case):
+            target,field=case; self.mutate_file(getattr(self,target),field,MISSING)
+        self.shape_cases((('policy','mode'),('policy','controller_sha'),('marker','phase'),
+                          ('marker','canary_task_sha256'),('marker','successor'),('marker','modules')),
+                         mutate,'malformed runtime (policy|marker)')
+
+    def intent_cases(self, cases, mutate):
+        def change(case):
+            j=json.loads(self.journal.read_text()); mutate(j,case); self.real_atomic(self.journal,j)
+        self.shape_cases(cases,change,'malformed (qualification intent|runtime marker)',phases=('pending','completed'))
+
+    def test_r3_qualification_intent_container(self):
+        self.intent_cases((None,[],'x',MISSING),lambda j,value:self.replace_field(j,'qualification_intent',value))
+
+    def test_r3_qualification_intent_required_keys(self):
+        keys=('policy','controller','task_sha256','successor','proof','proof_path','operations',
+              'old_marker','next_marker','old_hash','next_hash','qualified_at')
+        self.intent_cases(keys,lambda j,field:j['qualification_intent'].pop(field))
+
+    def test_r3_qualification_intent_member_types(self):
+        cases=(('policy',[]),('controller',5),('task_sha256',None),('successor',[]),('proof',[]),
+               ('proof_path',[]),('operations',[]),('operations',{'author':5}),('old_marker',None),
+               ('next_marker',[]),('old_hash',None),('next_hash',5),('qualified_at',[]))
+        self.intent_cases(cases,lambda j,case:self.replace_field(j['qualification_intent'],*case))
+
+    def test_r3_intent_proof_required_keys(self):
+        self.intent_cases(('acceptance_basis','slot','author_run','qualification_proof_sha256','evidence'),
+                          lambda j,field:j['qualification_intent']['proof'].pop(field))
+
+    def test_r3_intent_proof_and_marker_member_types(self):
+        def mutate(j,case):
+            target,field,value=case; self.replace_field(j['qualification_intent'][target],field,value)
+        cases=(('proof','slot',[]),('proof','slot','slot3'),('proof','author_run',True),
+               ('proof','qualification_proof_sha256',None),('proof','evidence',[]),
+               ('proof','evidence',{'probe':None}),('proof','evidence',{'probe':{'path':5,'sha256':'x'}}),
+               ('old_marker','modules',[]),('next_marker','modules',{'native_cursor.py':None}))
+        self.intent_cases(cases,mutate)
+
+    def test_r3_unexpected_validation_exceptions(self):
+        errors=(KeyError('binding'),TypeError('bad shape'),AttributeError('bad shape'),ValueError('bad'),
+                IndexError('bad'),UnicodeDecodeError('utf-8',b'\xff',0,1,'bad'),OSError('unreadable'),
+                RuntimeError('unexpected'))
+        def mutate(error): U.runtime_identity.side_effect=error
+        with patch.object(U,'runtime_identity',wraps=U.runtime_identity):
+            self.shape_cases(errors,mutate,lambda error:
+                'runtime acceptance refused: malformed or unreadable state \\('+type(error).__name__+'\\)')
+
+    def test_r3_refused_passes_through_unchanged(self):
+        sentinel=core.Refused('exact refusal')
+        before=self.snapshot()
+        with patch.object(U,'runtime_identity',side_effect=sentinel):
+            with self.assertRaises(core.Refused) as caught: self.call()
+        self.assertIs(caught.exception,sentinel); self.assertEqual(before,self.snapshot()); self.assertEqual(self.writes,[])
+
+    def test_r3_base_exceptions_are_not_converted(self):
+        for error in (KeyboardInterrupt(),SystemExit(2)):
+            with self.subTest(error=type(error).__name__),patch.object(U,'runtime_identity',side_effect=error):
+                with self.assertRaises(type(error)): self.call()
+                self.assertEqual(self.writes,[])
+
+    def test_r3_last_validation_precedes_first_write(self):
+        # Initial acceptance used to persist intent before a later journal read.
+        original=R.journal.side_effect; reads=0
+        def journal(slot):
+            nonlocal reads
+            reads+=1
+            if reads==5: raise RuntimeError('late validation read')
+            return original(slot)
+        with patch.object(R,'journal',side_effect=journal):
+            self.assert_no_writes(self.call,'runtime acceptance refused.*RuntimeError')
+
+    def test_r3_write_exceptions_remain_unconverted(self):
+        for error in (OSError('write failed'),KeyError('write failed'),RuntimeError('write failed')):
+            with self.subTest(error=type(error).__name__):
+                before=self.snapshot(); sentinel=error
+                def write(path,value,**kwargs):
+                    self.real_atomic(path,value,**kwargs); raise sentinel
+                with patch.object(R,'atomic',side_effect=write):
+                    with self.assertRaises(type(error)) as caught: self.call()
+                self.assertIs(caught.exception,sentinel)
+                self.assertNotEqual(self.snapshot(),before)
+                # Restore initial state for the next exception kind.
+                for name,raw in before.items(): Path(name).write_bytes(raw)
+
+    def test_r3_direct_runtime_replay_exception_boundary(self):
+        self.interrupt_before_marker()
+        j=json.loads(self.journal.read_text()); p=json.loads(self.policy.read_text()); m=json.loads(self.marker.read_text())
+        with patch.object(U,'runtime_identity',side_effect=KeyError('unexpected')):
+            self.assert_no_writes(lambda:U.complete_qualification(j,p,m),'runtime acceptance refused.*KeyError')
+
+    def test_r3_execute_runtime_release_shape_boundary(self):
+        args=('accept-runtime',self.bundle,'m','c'*40,'s','d')
+        with patch.object(U.os,'geteuid',return_value=0),patch.object(R,'trusted_tree'):
+            for field in ('manifest','controller','stage_sha256','dispatch_sha256'):
+                before=self.journal.read_bytes(); self.mutate_file(self.journal,field,MISSING)
+                self.assert_no_writes(lambda:U.execute(*args,dry_run=True),'malformed journal')
+                self.journal.write_bytes(before)
+
+    def test_r3_rollback_shape_preflight_and_exception_boundary(self):
+        C=SimpleNamespace(quiet=Mock())
+        self.call(); self.change(self.policy,mode='disabled'); baseline=self.snapshot()
+        mutations=(('qualification_intent',None),('qualification_history',{}),
+                   ('qualification_history',[None]),('qualification_history',[{'intent':None}]))
+        for field,value in mutations:
+            with self.subTest(field=field,value=value):
+                for name,raw in baseline.items(): Path(name).write_bytes(raw)
+                self.mutate_file(self.journal,field,value)
+                self.assert_no_writes(lambda:U.rollback_runtime(C),'malformed (journal|qualification intent)')
+        for name,raw in baseline.items(): Path(name).write_bytes(raw)
+        with patch.object(U,'runtime_identity',side_effect=UnicodeDecodeError('utf-8',b'\xff',0,1,'bad')):
+            self.assert_no_writes(lambda:U.rollback_runtime(C),'runtime acceptance refused.*UnicodeDecodeError')
+
+    def test_r3_rollback_shapes_in_pending_reverting_and_completed_replay(self):
+        C=SimpleNamespace(quiet=Mock()); initial=self.snapshot()
+        for phase in ('pending','completed','reverting','rolled-back'):
+            for name,raw in initial.items(): Path(name).write_bytes(raw)
+            self.writes.clear()
+            if phase=='pending': self.interrupt_before_marker()
+            else: self.call()
+            self.change(self.policy,mode='disabled')
+            if phase=='reverting':
+                self.writes.clear(); self.fail_at=2; self.fail_before=True
+                with self.assertRaises(OSError): U.rollback_runtime(C)
+                self.fail_at=None
+            if phase=='rolled-back': U.rollback_runtime(C)
+            baseline=self.snapshot()
+            cases=[('phase',MISSING,'malformed journal'),('changes',None,'invalid changes'),
+                   ('record_before',None,'invalid backup schema'),
+                   ('qualification_history',[{}],'malformed journal')]
+            if phase!='rolled-back': cases.append(('qualification_intent',MISSING,'malformed qualification intent'))
+            if phase=='reverting': cases.append(('runtime_rollback_at',[],'malformed journal'))
+            for field,value,reason in cases:
+                with self.subTest(phase=phase,field=field):
+                    for name,raw in baseline.items(): Path(name).write_bytes(raw)
+                    self.mutate_file(self.journal,field,value)
+                    self.assert_no_writes(lambda:U.rollback_runtime(C),reason)
+
+    def test_r3_direct_replay_validates_intent_shape(self):
+        initial=self.snapshot()
+        for phase in ('pending','completed'):
+            for name,raw in initial.items(): Path(name).write_bytes(raw)
+            self.writes.clear()
+            if phase=='pending': self.interrupt_before_marker()
+            else: self.call()
+            for dry_run in (True,False):
+                for field,value in (('proof',None),('operations',[]),('old_marker',None)):
+                    with self.subTest(phase=phase,dry_run=dry_run,field=field):
+                        j=json.loads(self.journal.read_text()); p=json.loads(self.policy.read_text())
+                        m=json.loads(self.marker.read_text()); j['qualification_intent'][field]=value
+                        self.assert_no_writes(lambda:U.complete_qualification(j,p,m,dry_run=dry_run),
+                                              'malformed qualification intent')
+
+    def test_r3_historical_operations_positive_control(self):
+        for slot in ('slot1','slot2'):
+            for issue,stage,status in ((29,'author','unknown'),(226,'author','failed'),
+                                       (271,'qa','unknown'),(225,'qa_qualification','failed')):
+                # Unread result/routing shapes on unrelated issues are intentional.
+                self.ops[slot][f'{issue}-{stage}']={'binding':{'issue':issue,'stage':stage},
+                    'result':None,'routing':[],'reason':'zero diff','status':status}
+            for stage in ('qa','dev'):
+                self.ops[slot]['extra-'+stage]={'binding':{'issue':225,'stage':stage},
+                    'task_hash':self.task_hash,'finished_at':201,'result':None}
+        self.assertTrue(self.call(dry_run=True)['dry_run'])
+        self.assertEqual(self.call()['phase'],'active-ready')
+        self.assertEqual(self.call()['phase'],'active-ready')
 
 
 class CommittedProof(unittest.TestCase):
