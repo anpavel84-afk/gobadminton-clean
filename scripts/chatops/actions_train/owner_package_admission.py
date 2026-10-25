@@ -13,7 +13,7 @@ from pathlib import Path
 import sys
 import urllib.request
 
-sys.path.insert(0, '/usr/local/lib/gb-actions-train')
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import receiver as R
 import native_antigravity as N
 import antigravity_qa_recovery as Q
@@ -140,10 +140,10 @@ def exact_qualification(grant, controller):
     """
     Q.validate_addressed_grant(grant,enrollment=True)
     task=dict(schema='GB_ANTIGRAVITY_29_ADDRESSED_TASK_V1',issue=29,
-        role=grant['role'],slot='slot2',base=SOURCE_BASE,head=SOURCE_HEAD,
+        role=grant['role'],slot='slot2',base=grant['base'],head=grant['head'],
         model=N.MODEL,max_calls=1,adapter_revision=controller,
         qualification_grant=grant)
-    q=dict(issue=29,base=SOURCE_BASE,head=SOURCE_HEAD,
+    q=dict(issue=29,base=grant['base'],head=grant['head'],
         work=str(N.QUALIFICATION_WORK),adapter_revision=controller,
         qualification_grant=grant,task_sha256=digest(task))
     return q
@@ -152,10 +152,11 @@ def exact_qualification(grant, controller):
 def qa_ready(slot, ledger):
     """One confirmed, tool-supported analysis before any QA marker transition."""
     Q.owner_package_ledger(ledger)
-    need(ledger['used_calls']==1,'QA transition requires one spent analysis')
+    need(ledger['used_calls']==1 or 'delegation' in ledger,
+         'QA transition requires one spent analysis')
     roles={row['grant']['role']:row for row in ledger['grants'].values()}
-    analysis=roles['technical_pm_product_analyst']
-    need(analysis['operation'] is not None and roles['independent_qa']['operation'] is None,
+    analysis=roles.get('technical_pm_product_analyst') or ledger.get('delegation',{}).get('analysis')
+    need(analysis is not None and analysis['operation'] is not None and roles['independent_qa']['operation'] is None,
          'QA requires exact unspent QA grant')
     op=slot['operations'].get(analysis['operation'],{})
     result=op.get('result') or {}
@@ -175,10 +176,10 @@ def transition_plan(action,comment_id,controller,slot,marker,package):
     if action=='qa':
         qa_ready(slot,package)
         need(marker.get('qualification',{}).get('qualification_grant')==
-             roles['technical_pm_product_analyst']['grant'],
+             (roles.get('technical_pm_product_analyst') or package.get('delegation',{}).get('analysis'))['grant'],
              'QA transition must follow this package analysis marker')
     else:
-        need(package['used_calls']==0 and
+        need((package['used_calls']==0 or 'delegation' in package) and
              all(row['operation'] is None for row in package['grants'].values()),
              'analysis package must be unspent')
     q=exact_qualification(grant,controller)
@@ -209,6 +210,45 @@ def safe_put(path, value, before_sha, after_sha, *, mode=0o600):
     if now==before_sha:
         R.atomic(path,value,mode=mode)
     need(sha(path)==after_sha,'admission target write readback mismatch')
+
+
+def commit_transaction(*, existing, receipt, transaction, policy, action, path, package,
+                       newmarker, newslot, q, now_slot, now_marker, controller):
+    """Shared trusted write-ahead commit; caller holds controller/receiver lock.
+
+    Exact before/after writes, disabled window, readback and historical pins are
+    identical for personal Owner enrollment and delegated finite packages.
+    """
+    if existing is None:
+        R.atomic(receipt,transaction)
+    if policy['mode']=='active' and existing and existing['phase']=='complete':
+        need(now_slot==transaction['slot_after_sha256'] and
+             now_marker==transaction['marker_after_sha256'],
+             'completed admission runtime mismatch')
+        return False
+    if policy['mode']=='active':
+        R.atomic(R.POLICY,dict(policy,mode='disabled'),mode=0o644)
+    # No dispatch while any of the three protected files is half-written.
+    if action=='analysis' or 'delegation' in package:
+        safe_put(path,package,None,transaction['package_sha256'])
+    safe_put(N.MARKER,newmarker,
+             transaction['marker_before_sha256'],
+             transaction['marker_after_sha256'],mode=0o644)
+    safe_put(R.STATE/'slot2.json',newslot,
+             transaction['slot_before_sha256'],transaction['slot_after_sha256'])
+    need(N.qualification_descriptor(R.read(N.MARKER,0))==q,
+         'post-enrollment native descriptor rejected')
+    check=Q.owner_package_ledger(R.read(path,0))
+    need(check==package,'per-role grants/ledger changed during admission')
+    need(sha(R.STATE/Q.ADDRESSED_LEDGER)==HIST and
+         sha(R.STATE/Q.SUPPLEMENT_LEDGER)==SUP and
+         sha(R.BUDGET)==BUDGET,'historical grants or budget modified')
+    R.atomic(receipt,dict(transaction,phase='complete'))
+    R.atomic(R.POLICY,dict(transaction['policy_before'],mode='active'),mode=0o644)
+    need(R.read(R.POLICY,0)['mode']=='active'
+         and R.read(R.POLICY,0)['controller_sha']==controller,
+         'controller could not reactivate after complete admission')
+    return True
 
 
 def main():
@@ -313,37 +353,13 @@ def main():
                  generation_after=newslot['generation'],task_sha256=q['task_sha256'],
                  grants=2,provider_calls=0,protected_writes=0),sort_keys=True))
             return
-        if existing is None:
-            R.atomic(receipt,transaction)
-        if policy['mode']=='active' and existing and existing['phase']=='complete':
-            need(now_slot==transaction['slot_after_sha256'] and
-                 now_marker==transaction['marker_after_sha256'],
-                 'completed admission runtime mismatch')
+        committed=commit_transaction(existing=existing,receipt=receipt,transaction=transaction,
+             policy=policy,action=action,path=path,package=package,newmarker=newmarker,
+             newslot=newslot,q=q,now_slot=now_slot,now_marker=now_marker,controller=controller)
+        if not committed:
             print(json.dumps(dict(status='ALREADY_COMPLETE',action=action,
                  controller=controller,owner_comment=comment_id,model_calls=0)))
             return
-        if policy['mode']=='active':
-            R.atomic(R.POLICY,dict(policy,mode='disabled'),mode=0o644)
-        # No dispatch while any of the three protected files is half-written.
-        if action=='analysis':
-            safe_put(path,package,None,transaction['package_sha256'])
-        safe_put(N.MARKER,newmarker,
-                 transaction['marker_before_sha256'],
-                 transaction['marker_after_sha256'],mode=0o644)
-        safe_put(R.STATE/'slot2.json',newslot,
-                 transaction['slot_before_sha256'],transaction['slot_after_sha256'])
-        need(N.qualification_descriptor(R.read(N.MARKER,0))==q,
-             'post-enrollment native descriptor rejected')
-        check=Q.owner_package_ledger(R.read(path,0))
-        need(check==package,'per-role grants/ledger changed during admission')
-        need(sha(R.STATE/Q.ADDRESSED_LEDGER)==HIST and
-             sha(R.STATE/Q.SUPPLEMENT_LEDGER)==SUP and
-             sha(R.BUDGET)==BUDGET,'historical grants or budget modified')
-        R.atomic(receipt,dict(transaction,phase='complete'))
-        R.atomic(R.POLICY,dict(transaction['policy_before'],mode='active'),mode=0o644)
-        need(R.read(R.POLICY,0)['mode']=='active'
-             and R.read(R.POLICY,0)['controller_sha']==controller,
-             'controller could not reactivate after complete admission')
         print(json.dumps(dict(status='ADMITTED',action=action,
              owner_comment=comment_id,controller=controller,
              generation=newslot['generation'],
