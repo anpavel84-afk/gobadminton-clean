@@ -38,7 +38,9 @@ RESIDUAL_RISK = (
     'Residual risk, explicitly out of scope: a malicious same-uid writer '
     'can chmod the worktree and change the candidate. Detection covers '
     'accidental modification only. chmod a-w is a guard, not a boundary, '
-    'and the Git metadata directory stays writable.'
+    'and the Git metadata directory stays writable. A process that has left '
+    'the session is killed before the after snapshot only when the host '
+    'delegates an invocation cgroup.'
 )
 EXECUTOR_GID = 968
 MARKER = Path('/etc/gobadminton-slots/antigravity-qa.json')
@@ -1436,6 +1438,7 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=
     process=None
     invocation_cgroup=None
     guard_saved=None
+    reap_state=None
     try:
         wire,transport=input_payload(stdin)
         ev.record(**transport,input_delivery='prepared',requested_permission_mode=PERMISSION_MODE,requested_model=model)
@@ -1524,8 +1527,10 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=
                         reap(process);ev.meta.update(exit_code=process.returncode,input_delivery='unknown');raise
                     reap(process)
                     ev.meta['exit_code']=process.returncode
-                    if _quiesce_cgroup(invocation_cgroup)=='cgroup-busy':
-                        ev.record(executor_reap='cgroup-busy',candidate_state='writer-alive',
+                    reap_state=_quiesce_cgroup(invocation_cgroup)
+                    ev.record(executor_reap=reap_state)
+                    if reap_state=='cgroup-busy':
+                        ev.record(candidate_state='writer-alive',
                                   concurrent_exit_code=process.returncode)
                         raise ReviewError('AGY_CANDIDATE_CHANGED','output',ev.id)
                     # CPython POSIX communicate ignores EPIPE. Its write offset is the
@@ -1580,7 +1585,7 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=
         return raw,dict(executor_uid=EXECUTOR_UID,slot=slot,qualification_phase=marker['phase'],
             requested_native_sandbox=False,filesystem_boundary=FILESYSTEM_BOUNDARY,
             candidate_integrity=CANDIDATE_INTEGRITY,write_guard=WRITE_GUARD,
-            residual_risk=RESIDUAL_RISK,
+            executor_reap=reap_state,residual_risk=RESIDUAL_RISK,
             credential_source='provisioned_native_auth_file',
             owner_waiver=OWNER_WAIVER,filesystem_roots_enforced=False,
             evidence_id=ev.id,requested_permission_mode=PERMISSION_MODE,input_delivery='written',**transport)

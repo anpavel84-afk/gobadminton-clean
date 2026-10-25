@@ -508,7 +508,12 @@ class CandidateIntegrity(unittest.TestCase):
             self.assertEqual((repo/'.git').stat().st_uid,os.getuid())
 
     def test_setsid_writer_cannot_land_after_a_clean_return(self):
-        """A grandchild that leaves the session must not change bytes after SUCCESS."""
+        """A quiet invocation cgroup kills a setsid grandchild before SUCCESS.
+
+        A host that does not delegate a cgroup cannot see a process that has
+        already been reparented. That late write is the named residual risk,
+        and a success receipt must say so instead of claiming a boundary.
+        """
         with tempfile.TemporaryDirectory() as tmp,tempfile.TemporaryDirectory() as ev:
             work=self.make_repo(tmp)
             target=work/'a.txt'
@@ -527,6 +532,7 @@ class CandidateIntegrity(unittest.TestCase):
             )
             def popen(_argv,**kwargs):
                 return subprocess.Popen(['/usr/bin/python3','-I','-c',script,str(target)],**kwargs)
+            receipt=None
             with patch.object(N,'qualification',return_value={'phase':'canary'}), \
                  patch.object(N.os,'geteuid',return_value=978), \
                  patch.object(N,'trusted',return_value=b'synthetic-token'), \
@@ -534,12 +540,25 @@ class CandidateIntegrity(unittest.TestCase):
                  patch.object(N,'_verify_executor_boundary',return_value=None), \
                  patch('native_guard.no_new_privileges',return_value=None):
                 try:
-                    N.invoke('inert no-model',45,work=work,slot='slot2',task_hash='0'*64,
+                    _raw,receipt=N.invoke('inert no-model',45,work=work,slot='slot2',task_hash='0'*64,
                              charge=lambda:None,popen=popen,analysis=True,
                              evidence_dir=pathlib.Path(ev))
                 except N.ReviewError as err:
                     self.assertEqual(err.code,'AGY_CANDIDATE_CHANGED')
+            phases=[]
+            for path in pathlib.Path(ev).rglob('phase-*.json'):
+                phases.append(json.loads(path.read_text()))
+            reap_state=next(row['executor_reap'] for row in reversed(phases) if 'executor_reap' in row)
             time.sleep(0.6)
-            self.assertEqual(target.read_text(),'x\n')
+            if reap_state=='cgroup-quiet':
+                self.assertEqual(target.read_text(),'x\n')
+            elif reap_state=='cgroup-busy':
+                self.assertIsNone(receipt)
+            else:
+                self.assertEqual(reap_state,'cgroup-absent')
+                self.assertIn('left the session',N.RESIDUAL_RISK)
+                if receipt is not None:
+                    self.assertEqual(receipt['executor_reap'],'cgroup-absent')
+                    self.assertEqual(receipt['candidate_integrity'],'detected_accidental_modification_only')
 
 if __name__=='__main__': unittest.main()
