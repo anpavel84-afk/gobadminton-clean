@@ -565,7 +565,23 @@
             }
           },
           {
-            "$ref": "#/components/parameters/CsrfToken"
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "description": "Required session-bound CSRF token; bearer credentials rejected."
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Exact allowed consumer web Origin; validated by requireCookieMutation."
           }
         ],
         "requestBody": {
@@ -617,7 +633,14 @@
           "default": {
             "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "x-auth-challenge-protocol": "consumer-oauth-link-bound-single-use-v1",
+        "description": "Each initiation creates fresh one-time OAuth state/PKCE bound to the exact user, session and auth-binding cookie. No business receipt or credential replay; Idempotency-Key, if supplied, is ignored. Callback consumes state once before provider exchange; failures after consumption require a new initiation."
       }
     },
     "/me/linked-providers/{provider}": {
@@ -641,12 +664,31 @@
             }
           },
           {
-            "$ref": "#/components/parameters/CsrfToken"
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "description": "Required session-bound CSRF token; bearer credentials rejected."
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Exact allowed consumer web Origin; validated by requireCookieMutation."
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "responses": {
           "200": {
-            "description": "Updated provider status list",
+            "description": "Transactional response snapshot; authorized same-key replay returns the original snapshot.",
             "content": {
               "application/json": {
                 "schema": {
@@ -670,7 +712,12 @@
           "default": {
             "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ]
       }
     },
     "/me/sessions": {
@@ -725,12 +772,31 @@
             }
           },
           {
-            "$ref": "#/components/parameters/CsrfToken"
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "description": "Required session-bound CSRF token; bearer credentials rejected."
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Exact allowed consumer web Origin; validated by requireCookieMutation."
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "responses": {
           "200": {
-            "description": "Updated session list",
+            "description": "Transactional response snapshot; authorized same-key replay returns the original snapshot.",
             "content": {
               "application/json": {
                 "schema": {
@@ -753,8 +819,16 @@
           },
           "default": {
             "$ref": "#/components/responses/Problem"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ]
       }
     },
     "/me/sessions/revoke-others": {
@@ -4891,6 +4965,18 @@
               "type": "integer",
               "minimum": 0
             }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Exact allowed consumer web Origin; validated by requireCookieMutation."
           }
         ],
         "responses": {
@@ -4956,7 +5042,12 @@
             }
           }
         },
-        "description": "Direct owned uploads require approval for the exact sanitized 512x512 PNG (maximum 2 MiB derivative) before file staging/publication. Provider preflight is outside the publication transaction; profile version and derivative fingerprint are rechecked at commit. Failure preserves the previous avatar. Existing avatars remain legacy/unreviewed. Trusted VK/Yandex provider fallback is not re-moderated."
+        "description": "Direct owned uploads require approval for the exact sanitized 512x512 PNG (maximum 2 MiB derivative) before file staging/publication. Provider preflight is outside the publication transaction; profile version and derivative fingerprint are rechecked at commit. Failure preserves the previous avatar. Existing avatars remain legacy/unreviewed. Trusted VK/Yandex provider fallback is not re-moderated.",
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ]
       },
       "delete": {
         "operationId": "removeMyAvatar",
@@ -4981,6 +5072,18 @@
               "type": "integer",
               "minimum": 0
             }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Exact allowed consumer web Origin; validated by requireCookieMutation."
           }
         ],
         "responses": {
@@ -5019,7 +5122,12 @@
             "$ref": "#/components/responses/AvatarProblem"
           }
         },
-        "description": "Provider-independent removal clears both owned media and its internal approval binding, preserving trusted provider fallback. Works during moderation outage and upload saturation."
+        "description": "Provider-independent removal clears both owned media and its internal approval binding, preserving trusted provider fallback. Works during moderation outage and upload saturation.",
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ]
       }
     },
     "/media/avatars/{key}": {
@@ -12586,6 +12694,2396 @@
           }
         }
       }
+    },
+    "/me/social-capabilities": {
+      "get": {
+        "operationId": "getSocialCapabilities",
+        "tags": [
+          "Friends"
+        ],
+        "summary": "getSocialCapabilities",
+        "description": "S1 source only. Friends contact is OFF by default; only explicit local synthetic fixture configuration may enable. No public graph or recommendations.",
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Actor-owned result",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SocialCapabilities"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/me/friendships": {
+      "get": {
+        "operationId": "listFriendships",
+        "tags": [
+          "Friends"
+        ],
+        "summary": "listFriendships",
+        "description": "S1 source only. Friends contact is OFF by default; only explicit local synthetic fixture configuration may enable. No public graph or recommendations.",
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "view",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "accepted",
+                "incoming",
+                "outgoing"
+              ]
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 80
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 2048
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Actor-owned result",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FriendshipList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/me/friendship-states": {
+      "get": {
+        "operationId": "getFriendshipStates",
+        "tags": [
+          "Friends"
+        ],
+        "summary": "getFriendshipStates",
+        "description": "S1 source only. Friends contact is OFF by default; only explicit local synthetic fixture configuration may enable. No public graph or recommendations.",
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "publicPlayerId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 50,
+              "items": {
+                "type": "string",
+                "format": "uuid"
+              }
+            },
+            "style": "form",
+            "explode": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Actor-owned result",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FriendshipStates"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/friendships/{friendshipId}": {
+      "get": {
+        "operationId": "getFriendship",
+        "tags": [
+          "Friends"
+        ],
+        "summary": "getFriendship",
+        "description": "S1 source only. Friends contact is OFF by default; only explicit local synthetic fixture configuration may enable. No public graph or recommendations.",
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "friendshipId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Actor-owned result",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FriendshipView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/friend-requests": {
+      "post": {
+        "operationId": "createFriendRequest",
+        "tags": [
+          "Friends"
+        ],
+        "summary": "createFriendRequest",
+        "description": "S1 source only. Friends contact is OFF by default; only explicit local synthetic fixture configuration may enable. No public graph or recommendations.",
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Must match a configured consumer web origin."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Actor-owned result",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FriendshipReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Actor-owned result",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FriendshipReceipt"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Actor send cap; Retry-After. Recipient cap uses generic resource unavailable.",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FriendshipCreateRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/friend-requests/{requestId}/accept": {
+      "post": {
+        "operationId": "acceptFriendship",
+        "tags": [
+          "Friends"
+        ],
+        "summary": "acceptFriendship",
+        "description": "S1 source only. Friends contact is OFF by default; only explicit local synthetic fixture configuration may enable. No public graph or recommendations.",
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "requestId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Must match a configured consumer web origin."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Actor-owned result",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FriendshipReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FriendshipDecisionRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/friend-requests/{requestId}/decline": {
+      "post": {
+        "operationId": "declineFriendship",
+        "tags": [
+          "Friends"
+        ],
+        "summary": "declineFriendship",
+        "description": "S1 source only. Friends contact is OFF by default; only explicit local synthetic fixture configuration may enable. No public graph or recommendations.",
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "requestId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Must match a configured consumer web origin."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Actor-owned result",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FriendshipReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FriendshipDecisionRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/friend-requests/{requestId}/cancel": {
+      "post": {
+        "operationId": "cancelFriendship",
+        "tags": [
+          "Friends"
+        ],
+        "summary": "cancelFriendship",
+        "description": "S1 source only. Friends contact is OFF by default; only explicit local synthetic fixture configuration may enable. No public graph or recommendations.",
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "requestId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Must match a configured consumer web origin."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Actor-owned result",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FriendshipReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FriendshipDecisionRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/friendships/{friendshipId}/remove": {
+      "post": {
+        "operationId": "removeFriendship",
+        "tags": [
+          "Friends"
+        ],
+        "summary": "removeFriendship",
+        "description": "S1 source only. Friends contact is OFF by default; only explicit local synthetic fixture configuration may enable. No public graph or recommendations.",
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "friendshipId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Must match a configured consumer web origin."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Actor-owned result",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FriendshipReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Safe problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FriendshipDecisionRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/me/cover": {
+      "put": {
+        "operationId": "replaceMyCover",
+        "tags": [
+          "Profiles"
+        ],
+        "summary": "Own cover mutation: cookie + Origin + CSRF + idempotency; shared profile version. Removal restores default header.",
+        "parameters": [
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Profile-Version",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Exact allowed consumer web Origin; validated by requireCookieMutation."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Committed cover receipt; no-store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoverReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "401": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "403": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "409": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "413": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "415": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "422": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "503": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "429": {
+            "$ref": "#/components/responses/AvatarProblem"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "description": "Raw JPEG/PNG/WebP derivative only. Browser source stays local (existing maximum 10 MiB/50 MP); user confirms 1200x400 crop, mobile preview uses centered 2:1 framing. Browser derivative maximum 524288 bytes. Server maximum 5 MiB, 16 MP, 8192px per side, single frame, actual MIME/signature and safe decode; re-encode to 1200x400 PNG without metadata (maximum 2 MiB). No URLs, paths, SVG or HTML.",
+          "content": {
+            "image/jpeg": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "image/png": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "image/webp": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
+        "description": "Existing owned-media store, session epoch/actor fence, CAS, durable replay and GC. Exact sanitized 1200x400 PNG must receive cover_image moderation approval before publication; same image moderation policy and budgets as avatar. Replacement/deletion invalidate the prior URL immediately. Hidden profiles are owner-only; other viewers require directory visibility, eligibility, active status, no restrictions and no bilateral block.",
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ]
+      },
+      "delete": {
+        "operationId": "removeMyCover",
+        "tags": [
+          "Profiles"
+        ],
+        "summary": "Own cover mutation: cookie + Origin + CSRF + idempotency; shared profile version. Removal restores default header.",
+        "parameters": [
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Profile-Version",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2147483647
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Exact allowed consumer web Origin; validated by requireCookieMutation."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Committed cover receipt; no-store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoverReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "401": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "403": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "409": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "413": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "415": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "422": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "503": {
+            "$ref": "#/components/responses/AvatarProblem"
+          }
+        },
+        "description": "Existing owned-media store, session epoch/actor fence, CAS, durable replay and GC. Exact sanitized 1200x400 PNG must receive cover_image moderation approval before publication; same image moderation policy and budgets as avatar. Replacement/deletion invalidate the prior URL immediately. Hidden profiles are owner-only; other viewers require directory visibility, eligibility, active status, no restrictions and no bilateral block. Required JSON command expectedVersion must equal X-Profile-Version; missing, extra, malformed or disagreeing fields return 400 before mutation.",
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteCoverCommand"
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "Read own cover and current shared profile version",
+        "responses": {
+          "200": {
+            "description": "Authenticated own cover, no-store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoverReceipt"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Session required"
+          }
+        },
+        "operationId": "getMyCover",
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ]
+      }
+    },
+    "/media/covers/{key}": {
+      "get": {
+        "summary": "Read current authorized cover derivative; no-store, Vary Cookie. Hidden profiles are owner-only; blocked viewers receive 404.",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}\\.png$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Re-encoded 1200x400 PNG without metadata",
+            "content": {
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unavailable or unauthorized"
+          }
+        },
+        "operationId": "getProfileCoverMedia"
+      }
+    },
+    "/admin/venues/{id}/cover": {
+      "get": {
+        "operationId": "getManagedVenueCover",
+        "tags": [
+          "Admin"
+        ],
+        "summary": "getManagedVenueCover",
+        "security": [
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "x-client-surface": "admin-only",
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Audited result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VenueCoverReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Admin session required",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission, Origin, CSRF or step-up rejected",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Version, identity or merge conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "description": "Existing internal admin gate remains unchanged. Current active user must have venue.manage AND own created_by_user_id. No grant by venueId. No-store; public current derivative reads also require current venue lifecycle and cover_image allow approval. Games resolve current cover by immutable venueId; no game snapshot cache."
+      },
+      "put": {
+        "operationId": "replaceManagedVenueCover",
+        "tags": [
+          "Admin"
+        ],
+        "summary": "replaceManagedVenueCover",
+        "security": [
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "x-client-surface": "admin-only",
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "name": "X-Venue-Version",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483647
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Audited result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VenueCoverReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Admin session required",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission, Origin, CSRF or step-up rejected",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Version, identity or merge conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "415": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "422": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "503": {
+            "$ref": "#/components/responses/AvatarProblem"
+          }
+        },
+        "description": "Existing internal admin gate remains unchanged. Current active user must have venue.manage AND own created_by_user_id. No grant by venueId. No-store; public current derivative reads also require current venue lifecycle and cover_image allow approval. Games resolve current cover by immutable venueId; no game snapshot cache. Fresh existing admin step-up and principal generation/session fence, origin, CSRF, rate budget, durable replay, row lock and shared venue version required at every mutation. Replays reauthorize current ownership/role/session before returning the original receipt. Replacement/removal/hide invalidate prior URL on new reads; journal GC retains all current references.",
+        "requestBody": {
+          "required": true,
+          "description": "Raw JPEG/PNG/WebP only, no URLs, SVG, HTML or paths. Existing cover sanitizer: max 5 MiB input, 16 MP, 8192px/side, single frame, MIME/signature decode, strict container validation, stripped metadata, 1200x400 PNG max 2 MiB. Browser bounded preprocessing max 10 MiB/50 MP, 512 KiB derivative; explicit confirmation with centered 16:9 preview.",
+          "content": {
+            "image/jpeg": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "image/png": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "image/webp": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "removeManagedVenueCover",
+        "tags": [
+          "Admin"
+        ],
+        "summary": "removeManagedVenueCover",
+        "security": [
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "x-client-surface": "admin-only",
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Audited result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VenueCoverReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Admin session required",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission, Origin, CSRF or step-up rejected",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Version, identity or merge conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "415": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "422": {
+            "$ref": "#/components/responses/AvatarProblem"
+          },
+          "503": {
+            "$ref": "#/components/responses/AvatarProblem"
+          }
+        },
+        "description": "Existing internal admin gate remains unchanged. Current active user must have venue.manage AND own created_by_user_id. No grant by venueId. No-store; public current derivative reads also require current venue lifecycle and cover_image allow approval. Games resolve current cover by immutable venueId; no game snapshot cache. Fresh existing admin step-up and principal generation/session fence, origin, CSRF, rate budget, durable replay, row lock and shared venue version required at every mutation. Replays reauthorize current ownership/role/session before returning the original receipt. Replacement/removal/hide invalidate prior URL on new reads; journal GC retains all current references.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteVenueCoverCommand"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/venues/{id}/cover/access": {
+      "get": {
+        "operationId": "getManagedVenueCoverAccess",
+        "tags": [
+          "Admin"
+        ],
+        "summary": "getManagedVenueCoverAccess",
+        "security": [
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "x-client-surface": "admin-only",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Exact ADMIN_ORIGIN when supplied. Browser GET fallback is restricted to same-origin Fetch Metadata + exact Referer."
+          },
+          {
+            "name": "Sec-Fetch-Site",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Referer",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Admin session required",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission, Origin, CSRF or step-up rejected",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Version, identity or merge conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Audited result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VenueCoverAccess"
+                }
+              }
+            }
+          }
+        },
+        "description": "Read-only scoped access bootstrap. Existing internal admin gate, active AdminSessionCookie, venue.manage AND created_by_user_id required. No-store. Exact ADMIN_ORIGIN header, or ONLY for this GET: absent Origin, Sec-Fetch-Site same-origin and exact Referer origin. Cross-site, wrong Origin/Referer, consumer/foreign/revoked actor denied. Returns current receipt and existing admin CSRF token; does not mint a session or grant authority. All writes retain strict Origin plus CSRF, replay, CAS and fresh step-up."
+      }
+    },
+    "/media/venue-covers/{key}": {
+      "get": {
+        "summary": "Read only the current approved public venue PNG",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}\\.png$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Re-encoded 1200x400 PNG without metadata",
+            "content": {
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unavailable or unauthorized"
+          }
+        },
+        "operationId": "getPublicVenueCoverMedia",
+        "description": "No-store and nosniff; current venue lifecycle, active uploader and cover_image allow decision checked at each read. Replacement, deletion, retirement and moderation deny revoke old URLs. No private profile-media lookup, arbitrary path or external URL."
+      }
+    },
+    "/games/{gameId}/cover": {
+      "get": {
+        "operationId": "getManagedGameCover",
+        "summary": "Game managers only; current own → exact venue → default cover. No admin role required.",
+        "parameters": [
+          {
+            "name": "gameId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current authorized cover",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GameCoverReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid command"
+          },
+          "401": {
+            "description": "Session required"
+          },
+          "403": {
+            "description": "CSRF or session rejected"
+          },
+          "404": {
+            "description": "Game unavailable"
+          },
+          "409": {
+            "description": "CAS or replay conflict"
+          },
+          "413": {
+            "description": "Byte limit"
+          },
+          "415": {
+            "description": "Unsupported content"
+          },
+          "422": {
+            "description": "Image or moderation rejected"
+          },
+          "429": {
+            "description": "Rate budget"
+          },
+          "503": {
+            "description": "Provider or storage unavailable"
+          }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ]
+      },
+      "put": {
+        "operationId": "replaceManagedGameCover",
+        "summary": "Game managers only; current own → exact venue → default cover. No admin role required.",
+        "parameters": [
+          {
+            "name": "gameId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Game-Version",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current authorized cover",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GameCoverReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid command"
+          },
+          "401": {
+            "description": "Session required"
+          },
+          "403": {
+            "description": "CSRF or session rejected"
+          },
+          "404": {
+            "description": "Game unavailable"
+          },
+          "409": {
+            "description": "CAS or replay conflict"
+          },
+          "413": {
+            "description": "Byte limit"
+          },
+          "415": {
+            "description": "Unsupported content"
+          },
+          "422": {
+            "description": "Image or moderation rejected"
+          },
+          "429": {
+            "description": "Rate budget"
+          },
+          "503": {
+            "description": "Provider or storage unavailable"
+          }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "image/jpeg": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "image/png": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "image/webp": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "removeManagedGameCover",
+        "summary": "Game managers only; current own → exact venue → default cover. No admin role required.",
+        "parameters": [
+          {
+            "name": "gameId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Game-Version",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current authorized cover",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GameCoverReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid command"
+          },
+          "401": {
+            "description": "Session required"
+          },
+          "403": {
+            "description": "CSRF or session rejected"
+          },
+          "404": {
+            "description": "Game unavailable"
+          },
+          "409": {
+            "description": "CAS or replay conflict"
+          },
+          "413": {
+            "description": "Byte limit"
+          },
+          "415": {
+            "description": "Unsupported content"
+          },
+          "422": {
+            "description": "Image or moderation rejected"
+          },
+          "429": {
+            "description": "Rate budget"
+          },
+          "503": {
+            "description": "Provider or storage unavailable"
+          }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteGameCoverCommand"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/media/game-covers/{key}": {
+      "get": {
+        "operationId": "getGameCoverMedia",
+        "summary": "Reauthorizes the owning game and current approved key on every read; no-store, Vary Cookie. Private/draft/unlisted games require active game management, matching current detail rights.",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}\\.png$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sanitized approved PNG",
+            "content": {
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unavailable or unauthorized"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -12965,6 +15463,33 @@
             "type": "number",
             "minimum": -180,
             "maximum": 180
+          },
+          "cover": {
+            "$ref": "#/components/schemas/VenueCover"
+          },
+          "contactPhone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 40,
+            "description": "Только в GET /games/{gameId} для активного управляющего или подтверждённого участника; иначе ключ отсутствует."
+          },
+          "contactWebsite": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 300,
+            "description": "Только в GET /games/{gameId} для активного управляющего или подтверждённого участника; иначе ключ отсутствует."
+          },
+          "bookingNote": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 500,
+            "description": "Только в GET /games/{gameId} для активного управляющего или подтверждённого участника; иначе ключ отсутствует."
           }
         }
       },
@@ -12994,6 +15519,28 @@
           "publicContact": {
             "type": "string",
             "description": "Explicit per-game host contact snapshot, not a player's private contact"
+          },
+          "avatar": {
+            "type": "object",
+            "description": "Current permitted avatar of games.created_by_user_id only. Trainer and legacy organizer identities are never used.",
+            "required": [
+              "uploadedUrl",
+              "providerUrl"
+            ],
+            "properties": {
+              "uploadedUrl": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "providerUrl": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
           }
         }
       },
@@ -13119,6 +15666,9 @@
               "null"
             ],
             "maxLength": 2000
+          },
+          "cover": {
+            "$ref": "#/components/schemas/GameCover"
           }
         }
       },
@@ -13651,6 +16201,15 @@
           },
           "resolvedFromVenueId": {
             "$ref": "#/components/schemas/Id"
+          },
+          "cover": {
+            "$ref": "#/components/schemas/VenueCover"
+          },
+          "publicContacts": {
+            "$ref": "#/components/schemas/PublicVenueContacts"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/VenueProfile"
           }
         }
       },
@@ -14098,6 +16657,9 @@
           },
           "avatar": {
             "$ref": "#/components/schemas/PlayerAvatar"
+          },
+          "cover": {
+            "$ref": "#/components/schemas/PlayerCover"
           }
         }
       },
@@ -14166,6 +16728,9 @@
           "canRequestContact": {
             "type": "boolean",
             "description": "Current server-owned first-contact eligibility for this authenticated viewer. False for guests/self, feature-off, ineligible actors/targets, blocks or an existing direct conversation. Missing on an older server must be treated as unavailable. Read only; POST revalidates current state. No private policy or location fields are exposed."
+          },
+          "cover": {
+            "$ref": "#/components/schemas/PlayerCover"
           }
         }
       },
@@ -16511,17 +19076,24 @@
         }
       },
       "RadarGeographicMap": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "availability"
-        ],
-        "properties": {
-          "availability": {
-            "type": "string",
-            "const": "missing"
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "availability"
+            ],
+            "properties": {
+              "availability": {
+                "type": "string",
+                "const": "missing"
+              }
+            }
+          },
+          {
+            "$ref": "#/components/schemas/UnifiedMap"
           }
-        }
+        ]
       },
       "RadarGeographicSnapshot": {
         "type": "object",
@@ -17555,24 +20127,48 @@
         }
       },
       "UnifiedMap": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "availability",
-          "mapId",
-          "version"
-        ],
-        "properties": {
-          "availability": {
-            "const": "missing"
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "availability",
+              "mapId",
+              "version"
+            ],
+            "properties": {
+              "availability": {
+                "const": "missing"
+              },
+              "mapId": {
+                "type": "null"
+              },
+              "version": {
+                "type": "null"
+              }
+            }
           },
-          "mapId": {
-            "type": "null"
-          },
-          "version": {
-            "type": "null"
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "availability",
+              "mapId",
+              "version"
+            ],
+            "properties": {
+              "availability": {
+                "const": "dev_preview"
+              },
+              "mapId": {
+                "const": "moscow"
+              },
+              "version": {
+                "const": "moscow-20261007-p4-098a869f-v001"
+              }
+            }
           }
-        }
+        ]
       },
       "UnifiedQueryInfo": {
         "type": "object",
@@ -18094,6 +20690,27 @@
           },
           "updateRequired": {
             "type": "boolean"
+          },
+          "coarseCenter": {
+            "type": "object",
+            "description": "Owner-session only, published coarse center; never a raw browser fix. Omitted for owned_elsewhere.",
+            "additionalProperties": false,
+            "required": [
+              "latitude",
+              "longitude"
+            ],
+            "properties": {
+              "latitude": {
+                "type": "number",
+                "minimum": -90,
+                "maximum": 90
+              },
+              "longitude": {
+                "type": "number",
+                "minimum": -180,
+                "maximum": 180
+              }
+            }
           }
         }
       },
@@ -18615,6 +21232,9 @@
           "availablePlaces": {
             "type": "integer",
             "minimum": 0
+          },
+          "cover": {
+            "$ref": "#/components/schemas/GameCover"
           }
         }
       },
@@ -21497,6 +24117,28 @@
                   "identityDiscriminator": {
                     "type": "string",
                     "maxLength": 80
+                  },
+                  "contactPhone": {
+                    "type": "string",
+                    "maxLength": 40,
+                    "description": "Пробелы по краям удаляются; пустая строка очищает значение. Пропуск сохраняет значение."
+                  },
+                  "contactWebsite": {
+                    "type": "string",
+                    "maxLength": 300,
+                    "description": "Пробелы по краям удаляются; пустая строка очищает значение. Пропуск сохраняет значение.",
+                    "pattern": "^(https?://|$)"
+                  },
+                  "bookingNote": {
+                    "type": "string",
+                    "maxLength": 500,
+                    "description": "Пробелы по краям удаляются; пустая строка очищает значение. Пропуск сохраняет значение."
+                  },
+                  "publicContacts": {
+                    "$ref": "#/components/schemas/PublicVenueContacts"
+                  },
+                  "profile": {
+                    "$ref": "#/components/schemas/VenueProfileEdit"
                   }
                 },
                 "required": [
@@ -21620,6 +24262,22 @@
           "identityDiscriminator": {
             "type": "string",
             "maxLength": 80
+          },
+          "contactPhone": {
+            "type": "string",
+            "maxLength": 40,
+            "description": "Пробелы по краям удаляются; пустая строка очищает значение. Пропуск сохраняет значение."
+          },
+          "contactWebsite": {
+            "type": "string",
+            "maxLength": 300,
+            "description": "Пробелы по краям удаляются; пустая строка очищает значение. Пропуск сохраняет значение.",
+            "pattern": "^(https?://|$)"
+          },
+          "bookingNote": {
+            "type": "string",
+            "maxLength": 500,
+            "description": "Пробелы по краям удаляются; пустая строка очищает значение. Пропуск сохраняет значение."
           }
         },
         "required": [
@@ -21729,6 +24387,16 @@
               "integer",
               "null"
             ]
+          },
+          "publicContacts": {
+            "$ref": "#/components/schemas/PublicVenueContacts"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/VenueProfile"
+          },
+          "cityName": {
+            "type": "string",
+            "description": "Existing city display name, retained in list/detail/command responses."
           }
         },
         "required": [
@@ -21903,6 +24571,695 @@
           "nextBeforeId"
         ],
         "additionalProperties": false
+      },
+      "FriendshipView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "friendshipId",
+          "relationship",
+          "version",
+          "request",
+          "peer",
+          "capabilities"
+        ],
+        "properties": {
+          "friendshipId": {
+            "oneOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "relationship": {
+            "type": "string",
+            "enum": [
+              "none",
+              "outgoing_pending",
+              "incoming_pending",
+              "friends",
+              "unavailable"
+            ]
+          },
+          "version": {
+            "oneOf": [
+              {
+                "type": "string",
+                "pattern": "^[1-9][0-9]{0,18}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "request": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id",
+                  "expiresAt"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "expiresAt": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "peer": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "publicPlayerId",
+                  "displayName",
+                  "avatar"
+                ],
+                "properties": {
+                  "publicPlayerId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "displayName": {
+                    "type": "string"
+                  },
+                  "avatar": {
+                    "$ref": "#/components/schemas/PlayerAvatar"
+                  }
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "capabilities": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "canRequest",
+              "canAccept",
+              "canDecline",
+              "canCancel",
+              "canRemove"
+            ],
+            "properties": {
+              "canRequest": {
+                "type": "boolean"
+              },
+              "canAccept": {
+                "type": "boolean"
+              },
+              "canDecline": {
+                "type": "boolean"
+              },
+              "canCancel": {
+                "type": "boolean"
+              },
+              "canRemove": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      },
+      "FriendshipReceipt": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "friendshipId",
+          "requestId",
+          "version",
+          "outcome"
+        ],
+        "properties": {
+          "friendshipId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "requestId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "version": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,18}$"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "accepted",
+              "declined",
+              "cancelled",
+              "removed"
+            ]
+          }
+        }
+      },
+      "FriendshipCreateRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "targetPublicPlayerId"
+        ],
+        "properties": {
+          "targetPublicPlayerId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "FriendshipDecisionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "expectedVersion"
+        ],
+        "properties": {
+          "expectedVersion": {
+            "type": "string",
+            "pattern": "^(?:[1-9][0-9]{0,17}|(?:[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6]|9223372036854775807))$",
+            "description": "Canonical unsigned decimal string, 1 through signed PostgreSQL BIGINT maximum 9223372036854775807."
+          }
+        }
+      },
+      "FriendshipList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items",
+          "nextCursor",
+          "asOf"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "maxItems": 50,
+            "items": {
+              "$ref": "#/components/schemas/FriendshipView"
+            }
+          },
+          "nextCursor": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "asOf": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "FriendshipStates": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "maxItems": 50,
+            "items": {
+              "$ref": "#/components/schemas/FriendshipView"
+            }
+          }
+        }
+      },
+      "SocialCapabilities": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "friends",
+          "gameRecommendations",
+          "gameAttention",
+          "socialPush"
+        ],
+        "properties": {
+          "friends": {
+            "type": "boolean"
+          },
+          "gameRecommendations": {
+            "type": "boolean"
+          },
+          "gameAttention": {
+            "type": "boolean"
+          },
+          "socialPush": {
+            "type": "boolean"
+          }
+        }
+      },
+      "PlayerCover": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "uploadedUrl"
+        ],
+        "properties": {
+          "uploadedUrl": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^/v1/media/covers/[a-f0-9]{64}\\.png$"
+          }
+        }
+      },
+      "CoverReceipt": {
+        "type": "object",
+        "required": [
+          "version",
+          "cover"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "cover": {
+            "$ref": "#/components/schemas/PlayerCover"
+          }
+        }
+      },
+      "DeleteCoverCommand": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "expectedVersion"
+        ],
+        "properties": {
+          "expectedVersion": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647
+          }
+        },
+        "description": "Required shared profile CAS version; must equal X-Profile-Version."
+      },
+      "VenueCover": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "uploadedUrl"
+        ],
+        "properties": {
+          "uploadedUrl": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^/v1/media/venue-covers/[a-f0-9]{64}\\.png$",
+            "description": "Current approved venue derivative or null for canonical default. Never an external URL or storage path."
+          },
+          "credit": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "kind",
+                  "text",
+                  "url"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "photo",
+                      "logo",
+                      "illustration"
+                    ]
+                  },
+                  "text": {
+                    "type": "string",
+                    "maxLength": 120
+                  },
+                  "url": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "pattern": "^https://",
+                    "maxLength": 300
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "VenueCoverReceipt": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "version",
+          "hasCover",
+          "cover"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "hasCover": {
+            "type": "boolean",
+            "description": "Retained cover exists, including when moderation hides its public URL. Only returned after venue-management authorization; mutations always reauthorize."
+          },
+          "cover": {
+            "$ref": "#/components/schemas/VenueCover"
+          }
+        }
+      },
+      "VenueCoverAccess": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "version",
+          "hasCover",
+          "cover",
+          "csrfToken"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "hasCover": {
+            "type": "boolean",
+            "description": "Retained cover exists, including when moderation hides its public URL. Only returned after venue-management authorization; mutations always reauthorize."
+          },
+          "cover": {
+            "$ref": "#/components/schemas/VenueCover"
+          },
+          "csrfToken": {
+            "type": "string"
+          }
+        }
+      },
+      "DeleteVenueCoverCommand": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "expectedVersion"
+        ],
+        "properties": {
+          "expectedVersion": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          }
+        }
+      },
+      "GameCover": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "uploadedUrl"
+        ],
+        "properties": {
+          "uploadedUrl": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^/v1/media/(game|venue)-covers/[a-f0-9]{64}\\.png$"
+          }
+        }
+      },
+      "GameCoverReceipt": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "version",
+          "hasCover",
+          "cover"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "hasCover": {
+            "type": "boolean"
+          },
+          "cover": {
+            "$ref": "#/components/schemas/GameCover"
+          }
+        }
+      },
+      "DeleteGameCoverCommand": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "expectedVersion"
+        ],
+        "properties": {
+          "expectedVersion": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          }
+        }
+      },
+      "PublicVenueContacts": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "additionalProperties": false,
+        "required": [
+          "phone",
+          "website",
+          "messengers"
+        ],
+        "description": "Public organization contacts only. Strict edit input: trim phone, forbid controls; WHATWG HTTP(S) URL normalization accepts IDN, stores/outputs ASCII punycode href, removes default ports; 300 characters after serialization. No credentials, backslash or nondefault ports. Omission preserves; null clears SQL value.",
+        "properties": {
+          "phone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 40,
+            "description": "7–15 ASCII digits; optional leading +; ASCII spaces, parentheses and hyphens only; controls forbidden before trim."
+          },
+          "website": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "HTTP(S) URL, max 300 after WHATWG serialization; IDN input allowed; ASCII output."
+          },
+          "messengers": {
+            "type": "array",
+            "maxItems": 3,
+            "description": "Unique kind; HTTPS t.me/wa.me/vk.com respectively, non-root normalized pathname.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "url"
+              ],
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "telegram",
+                    "whatsapp",
+                    "vk"
+                  ]
+                },
+                "url": {
+                  "type": "string",
+                  "description": "Canonical HTTPS href; max 300 after serialization."
+                }
+              }
+            }
+          }
+        }
+      },
+      "VenueProfileEdit": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "additionalProperties": false,
+        "required": [
+          "courtCount",
+          "amenities"
+        ],
+        "properties": {
+          "courtCount": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 2147483647,
+            "description": "NULL unknown; 0 is a known fact. PostgreSQL signed integer bound."
+          },
+          "amenities": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "parking",
+              "showers"
+            ],
+            "properties": {
+              "parking": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "showers": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        "description": "Admin edit only. Omission preserves all facts; null clears all three; complete strict object replaces facts. Unknown/private/read-only keys rejected. No media URL writes."
+      },
+      "VenueProfile": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "courtCount",
+          "amenities",
+          "updatedAt",
+          "gallery"
+        ],
+        "properties": {
+          "courtCount": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 2147483647,
+            "description": "NULL unknown; 0 is a known fact. PostgreSQL signed integer bound."
+          },
+          "amenities": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "parking",
+              "showers"
+            ],
+            "properties": {
+              "parking": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "showers": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              }
+            }
+          },
+          "updatedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "readOnly": true,
+            "description": "DB-generated last recorded stored public content edit since migration0039; legacy NULL until tracked write. Not verification/freshness/import time or every moderation visibility change. Never private contact_updated_at/generic updated_at."
+          },
+          "gallery": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "coverage",
+              "items"
+            ],
+            "properties": {
+              "coverage": {
+                "type": "string",
+                "const": "cover_only"
+              },
+              "items": {
+                "type": "array",
+                "maxItems": 1,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "url",
+                    "credit"
+                  ],
+                  "properties": {
+                    "url": {
+                      "type": "string",
+                      "pattern": "^/v1/media/venue-covers/[a-f0-9]{64}\\.png$"
+                    },
+                    "credit": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "kind",
+                        "text",
+                        "url"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "const": "photo"
+                        },
+                        "text": {
+                          "type": "string",
+                          "maxLength": 120,
+                          "pattern": "^Фото: .+"
+                        },
+                        "url": {
+                          "type": "string",
+                          "format": "uri",
+                          "pattern": "^https://",
+                          "maxLength": 300
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "readOnly": true
+          }
+        },
+        "description": "Complete server projection. Unknown facts remain null, false/0 survive. Optional on Venue/AdminVenue during rollout/old receipts; current server emits all keys. Gallery has at most one current eligible moderated photo with safe HTTPS attribution; empty never asserts full gallery inspection/completion. No rating or review/count source."
       }
     }
   }

@@ -1,3 +1,6 @@
+import { ProfilesModule } from "../profiles/profiles.module";
+import { ModerationModule } from "../moderation/moderation.module";
+import { VenueCoverService } from "../venues/venue-cover.service";
 import { AdminVenuesService } from "../venues/admin-venues.service";
 import { AdminVenuesController } from "./venues.controller";
 import { AdminCasesController } from "./cases.controller";
@@ -13,13 +16,14 @@ import { AdminController } from "./admin.controller";
 import { AdminService } from "./admin.service";
 import { ADMIN_PROVIDER_OVERRIDES, AdminProviders } from "./admin-providers";
 @Module({
-  imports: [GamesModule],
+  imports: [GamesModule, ProfilesModule, ModerationModule],
   controllers: [AdminVenuesController, AdminCasesController, AdminController, AdminGameModerationController, AdminUserRestrictionsController],
   providers: [
     AdminCasesService,
     { provide: CASE_EVIDENCE_POLICY, useClass: SyntheticCaseEvidencePolicy },
     AdminService,
     AdminVenuesService,
+    VenueCoverService,
     AdminUserRestrictionsService,
     AdminGameModerationService,
     AdminProviders,

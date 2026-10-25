@@ -82,7 +82,13 @@ describe("WEB-02 Players / Profile", () => {
     expect(page).toContain("trainer");
     expect(page).toContain("areaKey");
     expect(page).toContain("cityId");
-    expect(page).toContain("RadarSwitchControl");
+    // Wave A requires visible Players enable/recovery controls; the header owns consent.
+    const provider = await readSource("../src/components/consumer/radar/RadarSessionProvider.tsx");
+    expect(page).toContain("<RadarSwitchControl />");
+    expect(page).toContain("<RadarStatusControls />");
+    expect(provider).toContain("export function RadarStatusAffordance(");
+    expect(provider).toContain("gb-radar-progress");
+    expect(provider).toContain("Управление Radar");
     expect(page).not.toMatch(/fixture players|fake player|mockPlayers/i);
     expect(page).not.toMatch(/levelId|level filter|фильтр по уровню.*select/i);
   });

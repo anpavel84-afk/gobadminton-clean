@@ -1,4 +1,5 @@
 "use client";
+import { adminPath } from "../lib/admin-path";
 import { Venues } from "./Venues";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AdminError, adminRequest, errorMessage, freshStepUp, visibleNavigation, type Session, type Ticket } from "../lib/admin-client";
@@ -55,10 +56,10 @@ export function AdminApp() {
     mounted.current = true;
     async function init() {
       const status = new URLSearchParams(location.search).get("auth");
-      history.replaceState(null, "", "/");
+      history.replaceState(null, "", adminPath("/"));
       try {
         if (status === "complete") {
-          const response = await fetch("/internal/auth-ticket", { cache: "no-store", credentials: "same-origin" });
+          const response = await fetch(adminPath("/internal/auth-ticket"), { cache: "no-store", credentials: "same-origin" });
           if (!response.ok) throw new AdminError("ADMIN_MFA_REQUIRED", 401);
           const pending = await response.json() as Ticket;
           if (mounted.current) setTicket(pending);
@@ -160,7 +161,7 @@ export function AdminApp() {
   const nav = visibleNavigation(session?.roles ?? []);
   const fresh = session && freshStepUp(session, now);
   return <>
-    <header className="topbar"><div className="topbar-inner"><img src="/brand/go-badminton.svg" width="144" height="40" alt="GoBadminton" /><span className="badge">Администрирование</span>{session && <button className="button outline" disabled={busy} onClick={() => void logout()}>Выйти</button>}</div></header>
+    <header className="topbar"><div className="topbar-inner"><img src={adminPath("/brand/go-badminton.svg")} width="144" height="40" alt="GoBadminton" /><span className="badge">Администрирование</span>{session && <button className="button outline" disabled={busy} onClick={() => void logout()}>Выйти</button>}</div></header>
     <main className={`container ${session ? "" : "narrow"}`}>
       <div className="section-header"><span className="eyebrow">Команда GoBadminton</span><h1>{session ? "Рабочий кабинет" : ticket ? "Подтверждение входа" : "Вход для команды"}</h1><p>{session ? "Доступные разделы зависят от ваших текущих ролей." : "Вход доступен только сотрудникам с предоставленным доступом."}</p></div>
       {error && <div className="notice danger" role="alert">{error}</div>}
@@ -174,7 +175,7 @@ export function AdminApp() {
           : section === "users" ? <UserRestrictions key={session.principalId} session={session} busy={busy} fresh={Boolean(fresh)} run={run} stepup={() => prove("step_up")} />
           : section === "games" ? <GameModeration key={session.principalId} session={session} busy={busy} fresh={Boolean(fresh)} run={run} stepup={() => prove("step_up")} />
           : section === "security" ? <><h2>Журнал безопасности</h2><p>Последние события доступа и изменения учётных записей.</p>{audit ? audit.items.length ? <ul className="events">{audit.items.map(item => <li key={item.id}><strong>{item.action_key}</strong><small>{new Date(item.created_at).toLocaleString("ru-RU")}</small></li>)}</ul> : <div className="notice">Событий пока нет.</div> : <p role="status">Загружаем журнал…</p>}</>
-          : section === "venues" ? <Venues session={session} onAuthorityLoss={() => { clear(); }} />
+          : section === "venues" ? <Venues session={session} stepup={() => prove("step_up")} onAuthorityLoss={clear} />
           : <><h2>{nav.find(item => item.id === section)?.label}</h2><div className="notice"><strong>Раздел готовится</strong><p>Работа с этими данными пока недоступна.</p></div></>}
         </section>
       </div> : ticket ? <section className="panel">

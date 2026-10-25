@@ -1,0 +1,5 @@
+# /etc/ssh/authorized_keys/gb-deploy-dev (root:root, directory root-owned)
+restrict,command="/usr/bin/sudo -n /usr/local/sbin/gb-deploy-helper.sh dev" ssh-ed25519 REPLACE_WITH_DEV_PUBLIC_KEY github-actions-dev
+
+# /etc/ssh/authorized_keys/gb-deploy-prod — a DIFFERENT key
+restrict,command="/usr/bin/sudo -n /usr/local/sbin/gb-deploy-helper.sh prod" ssh-ed25519 REPLACE_WITH_PROD_PUBLIC_KEY github-actions-prod

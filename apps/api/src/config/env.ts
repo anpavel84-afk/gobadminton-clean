@@ -66,6 +66,8 @@ export const envSchema = z
     USER_RESTRICTIONS_INTERNAL_ENABLED: z.enum(["0", "1"]).default("0"),
     GAME_MODERATION_INTERNAL_ENABLED: z.enum(["0", "1"]).default("0"),
     ADMIN_INTERNAL_ENABLED: z.enum(["0", "1"]).default("0"),
+    ADMIN_DEV_ENABLED: z.enum(["0", "1"]).default("0"),
+    ADMIN_DEV_PATH_ENABLED: z.enum(["0", "1"]).default("0"),
     ADMIN_ORIGIN: z.string().url().default("http://localhost:18540"),
     ADMIN_AUTH_PEPPER: z.string().min(32).optional(),
     ADMIN_VK_REDIRECT_URI: z.string().url().optional(),
@@ -97,10 +99,21 @@ export const envSchema = z
     YANDEX_CLIENT_ID: z.string().optional(),
     YANDEX_CLIENT_SECRET: z.string().optional(),
     YANDEX_REDIRECT_URI: z.string().url().optional().or(z.literal("")),
+    FRIENDS_INTERNAL_ENABLED: z.enum(["0", "1"]).default("0"),
+    FRIENDS_REQUEST_TTL_SECONDS: z.coerce.number().int().positive().safe().optional(),
+    FRIENDS_RATE_WINDOW_SECONDS: z.coerce.number().int().positive().safe().optional(),
+    FRIENDS_SEND_LIMIT: z.coerce.number().int().positive().max(2147483647).optional(),
+    FRIENDS_RECEIVE_LIMIT: z.coerce.number().int().positive().max(2147483647).optional(),
     SOCIAL_DIRECTORY_ENABLED: z
       .enum(["0", "1", "true", "false"])
       .optional()
       .transform((value) => value === "1" || value === "true"),
+    /** Root-only DEV opt-in; owner receives simulated GPS, authenticated viewers see TEST peers. */
+    RADAR_DEV_MAP_PREVIEW_ENABLED: z.enum(["0", "1"]).default("0"),
+    RADAR_DEV_MAP_PREVIEW_VERSION: z.string().optional(),
+    RADAR_DEV_MAP_PREVIEW_STYLE_SHA256: z.string().optional(),
+    RADAR_DEV_TEST_OWNER_USER_ID: z.uuid().optional(),
+    RADAR_DEV_TEST_SECOND_USER_ID: z.uuid().optional(),
     /** Source-staged geographic cutover; default off, separate from legacy mode flags. */
     RADAR_GEOGRAPHIC_TOKEN_EPOCH: z.string().min(1).max(128).default("source-stage-v1"),
     SOCIAL_RADAR_UNIFIED_ENABLED: z.enum(["0", "1", "true", "false"]).optional().transform(value => value === "1" || value === "true"),
@@ -162,6 +175,25 @@ export const envSchema = z
       .transform((value) => value === "1" || value === "true"),
   })
   .superRefine((raw, ctx) => {
+    if (raw.FRIENDS_INTERNAL_ENABLED === "1" && (raw.NODE_ENV === "production" || raw.APP_ENV === "prod")) {
+      const dev = ["mvp", "stage"].includes(raw.APP_ENV)
+        && raw.PUBLIC_WEB_ORIGIN === "https://dev.gobadminton.ru"
+        && raw.PUBLIC_API_ORIGIN === "https://dev.gobadminton.ru";
+      const bounded = raw.FRIENDS_REQUEST_TTL_SECONDS !== undefined && raw.FRIENDS_REQUEST_TTL_SECONDS <= 30 * 86400
+        && raw.FRIENDS_RATE_WINDOW_SECONDS !== undefined && raw.FRIENDS_RATE_WINDOW_SECONDS <= 86400
+        && raw.FRIENDS_SEND_LIMIT !== undefined && raw.FRIENDS_SEND_LIMIT <= 100
+        && raw.FRIENDS_RECEIVE_LIMIT !== undefined && raw.FRIENDS_RECEIVE_LIMIT <= 100;
+      if (!dev || !raw.SOCIAL_DIRECTORY_ENABLED || !bounded) {
+        ctx.addIssue({code:"custom", path:["FRIENDS_INTERNAL_ENABLED"],
+          message:"Friends production runtime requires exact DEV origins, mvp/stage, directory and bounded explicit TTL/rate limits; PROD forbidden"});
+      }
+    }
+    if (raw.RADAR_DEV_TEST_SECOND_USER_ID && !raw.RADAR_DEV_TEST_OWNER_USER_ID) {
+      ctx.addIssue({code:"custom",path:["RADAR_DEV_TEST_SECOND_USER_ID"],message:"Second Moscow test actor requires the existing owner capability"});
+    }
+    if ((raw.RADAR_DEV_TEST_OWNER_USER_ID || raw.RADAR_DEV_TEST_SECOND_USER_ID) && (!["mvp", "stage"].includes(raw.APP_ENV) || raw.PUBLIC_WEB_ORIGIN !== "https://dev.gobadminton.ru" || raw.PUBLIC_API_ORIGIN !== "https://dev.gobadminton.ru")) {
+      ctx.addIssue({code:"custom",path:["RADAR_DEV_TEST_OWNER_USER_ID"],message:"Moscow test capability requires exact DEV API/web origins and mvp/stage; forbidden in PROD"});
+    }
     if (raw.CASES_INTERNAL_ENABLED === "1" && raw.ADMIN_INTERNAL_ENABLED !== "1") {
       ctx.addIssue({code:"custom",path:["CASES_INTERNAL_ENABLED"],message:"Cases require local internal Admin"});
     }
@@ -174,18 +206,40 @@ export const envSchema = z
     if (raw.GAME_MODERATION_INTERNAL_ENABLED === "1" && raw.ADMIN_INTERNAL_ENABLED !== "1") {
       ctx.addIssue({code:"custom",path:["GAME_MODERATION_INTERNAL_ENABLED"],message:"Game moderation is local Admin simulation only; public rollout disabled"});
     }
+    if (raw.ADMIN_DEV_PATH_ENABLED === "1" && (raw.ADMIN_DEV_ENABLED !== "1" || raw.ADMIN_INTERNAL_ENABLED !== "1")) {
+      ctx.addIssue({code:"custom",path:["ADMIN_DEV_PATH_ENABLED"],message:"Path mount requires explicit enabled DEV Admin"});
+    }
+    if (raw.ADMIN_DEV_ENABLED === "1" && raw.ADMIN_INTERNAL_ENABLED !== "1") {
+      ctx.addIssue({code:"custom",path:["ADMIN_DEV_ENABLED"],message:"DEV opt-in requires Admin enabled"});
+    }
     if (raw.ADMIN_INTERNAL_ENABLED === "1") {
       const origin = new URL(raw.ADMIN_ORIGIN);
       const db = new URL(raw.DATABASE_URL);
-      const adminRedirects = [raw.ADMIN_VK_REDIRECT_URI, raw.ADMIN_YANDEX_REDIRECT_URI].filter((x): x is string => Boolean(x));
-      if (raw.NODE_ENV !== "test" || raw.APP_ENV !== "local" ||
-          !["localhost", "127.0.0.1", "::1"].includes(raw.HOST) ||
-          !["localhost", "127.0.0.1", "[::1]"].includes(db.hostname) ||
-          origin.origin !== raw.ADMIN_ORIGIN || origin.hostname !== "localhost" ||
-          raw.ADMIN_ORIGIN === raw.PUBLIC_WEB_ORIGIN || splitCsv(raw.ALLOWED_WEB_ORIGINS).includes(raw.ADMIN_ORIGIN) ||
-          !adminRedirects.every(uri => uri.startsWith(raw.ADMIN_ORIGIN + "/v1/admin/auth/") && new URL(uri).origin === raw.ADMIN_ORIGIN) ||
-          !raw.ADMIN_AUTH_PEPPER || raw.ADMIN_AUTH_PEPPER === raw.AUTH_PEPPER) {
-        ctx.addIssue({code:"custom",path:["ADMIN_INTERNAL_ENABLED"],message:"Admin A0a requires isolated loopback local test origin/database and dedicated secret/redirects"});
+      const local = raw.ADMIN_DEV_ENABLED === "0" && raw.NODE_ENV === "test" && raw.APP_ENV === "local"
+        && ["localhost", "127.0.0.1", "::1"].includes(raw.HOST)
+        && ["localhost", "127.0.0.1", "[::1]"].includes(db.hostname)
+        && origin.hostname === "localhost" && ["http:", "https:"].includes(origin.protocol);
+      const dev = raw.ADMIN_DEV_ENABLED === "1" && raw.NODE_ENV === "production"
+        && ["mvp", "stage"].includes(raw.APP_ENV)
+        && raw.PUBLIC_WEB_ORIGIN === "https://dev.gobadminton.ru"
+        && raw.PUBLIC_API_ORIGIN === "https://dev.gobadminton.ru"
+        && raw.ADMIN_ORIGIN === (raw.ADMIN_DEV_PATH_ENABLED === "1" ? "https://dev.gobadminton.ru" : "https://dev-admin.gobadminton.ru")
+        && raw.COOKIE_SECURE !== false;
+      const redirects = (["VK", "YANDEX"] as const).every(provider => {
+        const uri = raw[provider === "VK" ? "ADMIN_VK_REDIRECT_URI" : "ADMIN_YANDEX_REDIRECT_URI"];
+        if (!uri) return !dev;
+        return uri === `${raw.ADMIN_ORIGIN}${raw.ADMIN_DEV_PATH_ENABLED === "1" ? "/admin" : ""}/v1/admin/auth/${provider.toLowerCase()}/callback`;
+      });
+      const providerConfigured = Boolean(
+        (raw.VK_CLIENT_ID?.trim() && raw.VK_CLIENT_SECRET?.trim() && raw.ADMIN_VK_REDIRECT_URI) ||
+        (raw.YANDEX_CLIENT_ID?.trim() && raw.YANDEX_CLIENT_SECRET?.trim() && raw.ADMIN_YANDEX_REDIRECT_URI));
+      const sharedSecrets = [raw.AUTH_PEPPER, raw.EMAIL_AUTH_HMAC_SECRET, raw.EMAIL_AUTH_ENCRYPTION_SECRET,
+        raw.EMAIL_AUTH_RATE_SECRET, raw.CONTENT_MODERATION_FINGERPRINT_SECRET, raw.VK_CLIENT_SECRET, raw.YANDEX_CLIENT_SECRET];
+      if ((!local && !dev) || origin.origin !== raw.ADMIN_ORIGIN || origin.username || origin.password ||
+          (raw.ADMIN_DEV_PATH_ENABLED !== "1" && (raw.ADMIN_ORIGIN === raw.PUBLIC_WEB_ORIGIN || splitCsv(raw.ALLOWED_WEB_ORIGINS).includes(raw.ADMIN_ORIGIN))) ||
+          !redirects || (dev && !providerConfigured) ||
+          !raw.ADMIN_AUTH_PEPPER || sharedSecrets.includes(raw.ADMIN_AUTH_PEPPER)) {
+        ctx.addIssue({code:"custom",path:["ADMIN_INTERNAL_ENABLED"],message:"Admin requires isolated local test or explicit Germany DEV, exact origin and mode-specific callbacks with dedicated secret; PROD forbidden"});
       }
     }
     if (raw.EMAIL_AUTH_TRANSPORT) {
@@ -240,6 +294,7 @@ export const envSchema = z
       USER_RESTRICTIONS_INTERNAL_ENABLED: raw.USER_RESTRICTIONS_INTERNAL_ENABLED === "1",
       GAME_MODERATION_INTERNAL_ENABLED: raw.GAME_MODERATION_INTERNAL_ENABLED === "1",
       ADMIN_INTERNAL_ENABLED: raw.ADMIN_INTERNAL_ENABLED === "1",
+      ADMIN_DEV_ENABLED: raw.ADMIN_DEV_ENABLED === "1",
       ADMIN_ORIGIN: raw.ADMIN_ORIGIN,
       ADMIN_AUTH_PEPPER: raw.ADMIN_AUTH_PEPPER,
       ADMIN_VK_REDIRECT_URI: raw.ADMIN_VK_REDIRECT_URI,
@@ -265,7 +320,17 @@ export const envSchema = z
       YANDEX_CLIENT_ID: optionalNonEmpty(raw.YANDEX_CLIENT_ID),
       YANDEX_CLIENT_SECRET: optionalNonEmpty(raw.YANDEX_CLIENT_SECRET),
       YANDEX_REDIRECT_URI: optionalNonEmpty(raw.YANDEX_REDIRECT_URI),
+      FRIENDS_INTERNAL_ENABLED: raw.FRIENDS_INTERNAL_ENABLED === "1",
+      FRIENDS_REQUEST_TTL_SECONDS: raw.FRIENDS_REQUEST_TTL_SECONDS,
+      FRIENDS_RATE_WINDOW_SECONDS: raw.FRIENDS_RATE_WINDOW_SECONDS,
+      FRIENDS_SEND_LIMIT: raw.FRIENDS_SEND_LIMIT,
+      FRIENDS_RECEIVE_LIMIT: raw.FRIENDS_RECEIVE_LIMIT,
       SOCIAL_DIRECTORY_ENABLED: raw.SOCIAL_DIRECTORY_ENABLED ?? false,
+      RADAR_DEV_MAP_PREVIEW_ENABLED: raw.RADAR_DEV_MAP_PREVIEW_ENABLED === "1",
+      RADAR_DEV_MAP_PREVIEW_VERSION: raw.RADAR_DEV_MAP_PREVIEW_VERSION,
+      RADAR_DEV_MAP_PREVIEW_STYLE_SHA256: raw.RADAR_DEV_MAP_PREVIEW_STYLE_SHA256,
+      RADAR_DEV_TEST_OWNER_USER_ID: raw.RADAR_DEV_TEST_OWNER_USER_ID,
+      RADAR_DEV_TEST_SECOND_USER_ID: raw.RADAR_DEV_TEST_SECOND_USER_ID,
       RADAR_GEOGRAPHIC_TOKEN_EPOCH: raw.RADAR_GEOGRAPHIC_TOKEN_EPOCH,
       SOCIAL_RADAR_UNIFIED_ENABLED: raw.SOCIAL_RADAR_UNIFIED_ENABLED ?? false,
       SOCIAL_RADAR_PUBLISHING_V2_ENABLED: raw.SOCIAL_RADAR_PUBLISHING_V2_ENABLED ?? false,

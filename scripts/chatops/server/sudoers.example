@@ -1,0 +1,5 @@
+# Install with visudo validation as /etc/sudoers.d/gobadminton-deploy
+Defaults:gb-deploy-dev env_reset,secure_path=/usr/sbin:/usr/bin:/sbin:/bin
+Defaults:gb-deploy-prod env_reset,secure_path=/usr/sbin:/usr/bin:/sbin:/bin
+gb-deploy-dev ALL=(root) NOPASSWD: /usr/local/sbin/gb-deploy-helper.sh dev
+gb-deploy-prod ALL=(root) NOPASSWD: /usr/local/sbin/gb-deploy-helper.sh prod

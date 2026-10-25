@@ -6,6 +6,7 @@ export type RadarExposureMode = "live" | "synthetic_demo";
 export type RadarItem = { resultId: string; resultRef: string; player: RadarPlayer; proximityBand: ProximityBand; displaySlot: number };
 export type RadarPreview = Pick<RadarItem, "player" | "proximityBand">;
 export type RadarActivation = {
+  coarseCenter?: { latitude: number; longitude: number };
   state: "active"; activationId: string; version: number; ownerHere: true; policyVersion: string;
   regionId: string; radiusBucketKm: 3 | 5 | 10; startedAt: string; expiresAt: string; hardExpiresAt: string;
   foregroundUntil: string; locationValidUntil: string; nextLocationUpdateAt: string; nextRadiusChangeAt: string;

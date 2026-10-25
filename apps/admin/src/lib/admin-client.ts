@@ -1,3 +1,4 @@
+import { adminPath } from "./admin-path";
 export type Ticket = { principalId: string; status: "active" | "pending_mfa"; csrfToken: string };
 export type Session = { principalId: string; userId: string; status: string; version: number; roles: string[]; sessionId: string; expiresAt: string; stepUpAt: string; csrfToken: string };
 export class AdminError extends Error {
@@ -8,7 +9,7 @@ export async function adminRequest<T>(path: string, body?: unknown, csrf?: strin
   if (body !== undefined) headers["Content-Type"] = "application/json";
   if (csrf) headers["X-CSRF-Token"] = csrf;
   if (key) headers["Idempotency-Key"] = key;
-  const response = await fetch("/v1/admin/" + path, {
+  const response = await fetch(adminPath("/v1/admin/" + path), {
     method: body === undefined ? "GET" : "POST", headers,
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     credentials: "same-origin", cache: "no-store", signal: AbortSignal.timeout(20000),
@@ -22,6 +23,8 @@ export async function adminRequest<T>(path: string, body?: unknown, csrf?: strin
 
 export function errorMessage(error: unknown) {
   if (error instanceof AdminError) {
+    if (error.code === "VENUE_VERSION_CONFLICT") return "Площадка изменилась. Откройте её заново, проверьте данные и подтвердите действие.";
+    if (["CONTENT_MODERATION_UNAVAILABLE", "MODERATION_UNAVAILABLE", "MODERATION_TEMPORARILY_UNAVAILABLE", "AVATAR_BUSY"].includes(error.code)) return "Проверка фото временно недоступна. Прежнее фото сохранено. Повторите попытку позже.";
     if (error.status === 401) return "Вход истёк или доступ отозван. Войдите заново.";
     if (error.code === "ADMIN_STEP_UP_REQUIRED") return "Подтвердите вход ключом доступа ещё раз.";
     if (error.code === "ADMIN_ACTIVATION_REQUIRED") return "Код активации недействителен или истёк.";

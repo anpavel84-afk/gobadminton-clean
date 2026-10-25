@@ -1,3 +1,4 @@
+import { DEV_MOSCOW_PEER_IDS } from "./dev-moscow-test";
 import { unrestrictedSql } from "../restrictions/policy";
 import type { PoolClient } from "pg";
 import type { UnifiedContext, UnifiedCursor } from "./unified-contract";
@@ -45,6 +46,7 @@ export async function selectUnified(
   limit: number,
   map = false,
   restrictionsEnabled = false,
+  devTestAllowed = false,
 ): Promise<UnifiedRow[]> {
   const f = context.filters;
   const name = (f.name ?? "").trim().toLowerCase();
@@ -82,6 +84,7 @@ export async function selectUnified(
   LEFT JOIN publishers r ON r.user_id=p.user_id CROSS JOIN origin o
   LEFT JOIN LATERAL (SELECT min(expires_at) deadline FROM player_looking_intents WHERE user_id=p.user_id AND active AND expires_at>to_timestamp($8::float8/1000)) li ON true
   WHERE ${unrestrictedSql(restrictionsEnabled,"p.user_id",["account.access","profile.public"])} AND p.social_eligible AND btrim(p.display_name)<>'' AND p.user_id<>$1 AND ((p.directory_visible AND ${unrestrictedSql(restrictionsEnabled,"p.user_id",["social.directory"])}) OR r.user_id IS NOT NULL)
+   AND (NOT p.user_id=ANY($19::uuid[]) OR $20::boolean AND $4='live')
    AND (p.user_id::text ~ '^d0f0[0-9a-f]{4}-0000-4000-8000-[0-9a-f]{12}$')=($4='synthetic_demo')
    AND NOT EXISTS(SELECT 1 FROM user_blocks b WHERE (b.blocker_user_id=$1 AND b.blocked_user_id=p.user_id) OR (b.blocker_user_id=p.user_id AND b.blocked_user_id=$1))
  ), filtered AS MATERIALIZED (
@@ -116,6 +119,8 @@ export async function selectUnified(
       cursor?.publicId ?? null,
       limit + 1,
       map,
+      DEV_MOSCOW_PEER_IDS,
+      devTestAllowed,
     ],
   );
   return r.rows;

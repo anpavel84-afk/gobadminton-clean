@@ -1,3 +1,6 @@
+import { privateContactWebsite } from "../lib/original-http-authority";
+import { venueProfileEditSchema } from "../venues/venue-profile";
+import { publicVenueContactsSchema } from "../venues/public-venue-contacts";
 import { z } from "zod";
 import { uuid, reason } from "./dto";
 export const venueFields = z.object({
@@ -6,10 +9,17 @@ export const venueFields = z.object({
   latitude: z.number().min(-90).max(90), longitude: z.number().min(-180).max(180),
   identityDiscriminator: z.string().trim().max(80).optional(),
 }).strict();
+const venueCreateFields = venueFields;
+const contactFields = {
+  contactPhone: z.string().trim().max(40).optional(),
+  contactWebsite: z.string().trim().max(300).refine(v => v === "" || /^https?:\/\//.test(v), "Нужен адрес http:// или https://").refine(v => v === "" || privateContactWebsite(v) !== null, "Некорректный URL площадки").optional(),
+  bookingNote: z.string().trim().max(500).optional(),
+};
+const venueEditFields = venueFields.extend({...contactFields, publicContacts: publicVenueContactsSchema.optional(), profile: venueProfileEditSchema.optional()}).strict();
 const base = {expectedVersion:z.number().int().positive(),reasonCode:reason};
-export const venueCreate = venueFields.extend({reasonCode:reason}).strict();
+export const venueCreate = venueCreateFields.extend({reasonCode:reason}).strict();
 export const venueCommand = z.discriminatedUnion("action", [
-  z.object({...base,action:z.literal("edit"),fields:venueFields}).strict(),
+  z.object({...base,action:z.literal("edit"),fields:venueEditFields}).strict(),
   z.object({...base,action:z.enum(["verify","retire","restore"])}).strict(),
   z.object({...base,action:z.literal("merge"),targetId:uuid,expectedTargetVersion:z.number().int().positive()}).strict(),
 ]);

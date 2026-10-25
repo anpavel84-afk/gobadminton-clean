@@ -1,3 +1,4 @@
+import { coverForUser, type PlayerCover } from "./cover-presentation";
 import { withdrawGeographicConsent } from "../radar/geographic-consent";
 import { unrestrictedSql } from "../restrictions/policy";
 import { avatarForUser, avatarForPlayer, type PlayerAvatar } from "./avatar-presentation";
@@ -45,6 +46,7 @@ export type LookingIntentDto = {
 
 export type OwnSocialProfileDto = {
   avatar?: PlayerAvatar;
+  cover?: PlayerCover;
   publicPlayerId: string | null;
   version: number;
   displayName: string;
@@ -65,6 +67,7 @@ export type OwnSocialProfileDto = {
 };
 
 export type PublicPlayerDto = {
+  cover?: PlayerCover;
   canRequestContact: boolean;
   avatar?: PlayerAvatar;
   publicPlayerId: string;
@@ -159,9 +162,9 @@ export class ProfilesService {
     const looking = await this.loadLookingEffective(this.pool, userId);
     const trainer = await this.hasActiveTrainer(this.pool, userId);
     if (!profile) {
-      return { ...emptyOwnProfile(trainer), avatar: await avatarForUser(this.pool, userId) };
+      return { ...emptyOwnProfile(trainer), cover: await coverForUser(this.pool, userId), avatar: await avatarForUser(this.pool, userId) };
     }
-    return { ...mapOwn(profile, looking, trainer), avatar: await avatarForUser(this.pool, userId) };
+    return { ...mapOwn(profile, looking, trainer), cover: await coverForUser(this.pool, userId), avatar: await avatarForUser(this.pool, userId) };
   }
 
   async patchOwn(
@@ -361,7 +364,7 @@ export class ProfilesService {
         }
         const looking = await this.loadLookingEffective(client, userId);
         const trainer = await this.hasActiveTrainer(client, userId);
-        return { statusCode, body: { ...mapOwn(row, looking, trainer), avatar: await avatarForUser(client, userId) } };
+        return { statusCode, body: { ...mapOwn(row, looking, trainer), cover: await coverForUser(client, userId), avatar: await avatarForUser(client, userId) } };
       },
     });
   }
@@ -450,7 +453,7 @@ export class ProfilesService {
         );
         const looking = await this.loadLookingEffective(client, userId);
         const trainer = await this.hasActiveTrainer(client, userId);
-        return { statusCode: 200, body: { ...mapOwn(updated.rows[0]!, looking, trainer), avatar: await avatarForUser(client, userId) } };
+        return { statusCode: 200, body: { ...mapOwn(updated.rows[0]!, looking, trainer), cover: await coverForUser(client, userId), avatar: await avatarForUser(client, userId) } };
       },
     });
   }
@@ -820,7 +823,7 @@ export class ProfilesService {
       }
     }
     const contactable = await this.contactableTargets(this.pool, viewerId, [row.user_id]);
-    return { ...mapPublic(row), canRequestContact: contactable.has(row.user_id), avatar: await avatarForUser(this.pool, row.user_id) };
+    return { ...mapPublic(row), cover: await coverForUser(this.pool, row.user_id), canRequestContact: contactable.has(row.user_id), avatar: await avatarForUser(this.pool, row.user_id) };
   }
 
   /** Read projection only. Commands still lock/revalidate all current fences. */

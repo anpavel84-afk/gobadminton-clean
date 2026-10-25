@@ -1,4 +1,4 @@
-import { ADMIN_COOKIES, HANDOFF_COOKIE, adminCookies, internalConfig, sameOriginRequest } from "../../../../lib/server-config";
+import { ADMIN_COOKIES, HANDOFF_COOKIE, adminCookies, internalConfig, adminRequestOrigin, adminRequestPath } from "../../../../lib/server-config";
 
 export const dynamic = "force-dynamic";
 const allowedGet = new Set(["auth/me", "audit/security", "games", "reports", "cases"]);
@@ -8,6 +8,15 @@ async function proxy(request: Request, context: { params: Promise<{ path: string
   const config = internalConfig();
   if (!config) return new Response(null, { status: 404, headers: { "Cache-Control": "no-store" } });
   const path = (await context.params).path.join("/");
+  if (!adminRequestPath(request, config, "/v1/admin/" + path))
+    return new Response(null, { status: 404, headers: { "Cache-Control": "no-store" } });
+  const uuid = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+  const cover = new RegExp("^venues/" + uuid + "/cover$").test(path);
+  const coverAccess = new RegExp("^venues/" + uuid + "/cover/access$").test(path);
+  const coverRoute = (request.method === "GET" && (cover || coverAccess)) || (cover && ["PUT", "DELETE"].includes(request.method));
+  if (!["GET", "POST"].includes(request.method) && !coverRoute)
+    return new Response(null, {status:404});
+  if (coverRoute && new URL(request.url).search) return new Response(null,{status:400});
   const callback = request.method === "GET" && /^auth\/(vk|yandex)\/callback$/.test(path);
   const caseDetail = /^cases\/[0-9a-f-]{36}$/.test(path);
   const caseEvidence = /^cases\/[0-9a-f-]{36}\/evidence(?:\/[0-9a-f-]{36})?$/.test(path);
@@ -17,15 +26,36 @@ async function proxy(request: Request, context: { params: Promise<{ path: string
   const gameDetail = /^games\/[0-9a-f-]{36}$/.test(path);
   const gameCommand = /^games\/[0-9a-f-]{36}\/moderation\/commands$/.test(path);
   const venueRoute = request.method === "GET" ? /^venues(?:\/(?:duplicates|[0-9a-f-]{36}(?:\/games)?))?$/.test(path) : /^venues(?:\/(?:[0-9a-f-]{36}\/commands|duplicates\/[0-9a-f-]{36}\/dismiss))?$/.test(path);
-  if (!(venueRoute || callback || (request.method === "GET" ? allowedGet.has(path) || gameDetail || userDetail || caseDetail || caseEvidence : allowedPost.has(path) || gameCommand || userCommand || caseCommand)))
+  if (!(coverRoute || venueRoute || callback || (request.method === "GET" ? allowedGet.has(path) || gameDetail || userDetail || caseDetail || caseEvidence : allowedPost.has(path) || gameCommand || userCommand || caseCommand)))
     return new Response(null, { status: 404, headers: { "Cache-Control": "no-store" } });
-  if (!sameOriginRequest(request, config.origin, callback))
+  if (!adminRequestOrigin(request, config, callback))
     return Response.json({ code: "ADMIN_ORIGIN_REJECTED" }, { status: 403, headers: { "Cache-Control": "no-store" } });
   const headers = new Headers({ Origin: config.origin, Cookie: adminCookies(request.headers.get("cookie") ?? "") });
-  for (const name of ["content-type", "x-csrf-token", "idempotency-key"])
+  for (const name of ["content-type", "x-csrf-token", "idempotency-key", ...(coverRoute ? ["x-venue-version"] : [])])
     if (request.headers.has(name)) headers.set(name, request.headers.get(name)!);
-  const body = request.method === "POST" ? await request.text() : undefined;
-  if (body && body.length > 65536) return new Response(null, { status: 413, headers: { "Cache-Control": "no-store" } });
+  let body: ArrayBuffer | undefined;
+  if (["POST", "PUT", "DELETE"].includes(request.method)) {
+    const limit = cover && request.method === "PUT" ? 5 * 1024 * 1024 : 65536;
+    if (cover && request.method === "PUT" && !["image/jpeg", "image/png", "image/webp"].includes(headers.get("content-type") ?? ""))
+      return new Response(null, {status:415});
+    const reader = request.body?.getReader();
+    const chunks: Uint8Array[] = []; let size = 0;
+    if (reader) {
+      let expired = false;
+      const timer = setTimeout(() => { expired = true; void reader.cancel(); },15000);
+      try {
+        for (;;) { const {done,value} = await reader.read(); if (expired) return new Response(null,{status:408}); if (done) break;
+          size += value.byteLength;
+          if (size > limit) { await reader.cancel(); return new Response(null,{status:413}); }
+          chunks.push(value);
+        }
+      } catch { return new Response(null,{status:400}); }
+      finally { clearTimeout(timer); reader.releaseLock(); }
+    }
+    const bytes = new Uint8Array(size); let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk,offset); offset += chunk.byteLength; }
+    body = bytes.buffer;
+  }
   try {
     const url = new URL("/v1/admin/" + path, config.api);
     if (venueRoute && request.method === "GET") url.search = new URL(request.url).search;
@@ -55,7 +85,7 @@ async function proxy(request: Request, context: { params: Promise<{ path: string
         if (typeof data.csrfToken === "string" && typeof data.principalId === "string" && ["active", "pending_mfa"].includes(data.status))
           ticket = { csrfToken: data.csrfToken, principalId: data.principalId, status: data.status };
       }
-      responseHeaders.set("Location", config.origin + (ticket ? "/?auth=complete" : "/?auth=failed"));
+      responseHeaders.set("Location", config.origin + (config.basePath ?? "") + (ticket ? "/?auth=complete" : "/?auth=failed"));
       responseHeaders.append("Set-Cookie", `${HANDOFF_COOKIE}=${ticket ? encodeURIComponent(JSON.stringify(ticket)) : ""}; Path=/; Max-Age=${ticket ? 600 : 0}; Secure; HttpOnly; SameSite=Strict`);
       return new Response(null, { status: 303, headers: responseHeaders });
     }
@@ -67,3 +97,6 @@ async function proxy(request: Request, context: { params: Promise<{ path: string
 }
 export const GET = proxy;
 export const POST = proxy;
+
+export const PUT = proxy;
+export const DELETE = proxy;

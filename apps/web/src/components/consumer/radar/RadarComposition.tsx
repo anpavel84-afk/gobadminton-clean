@@ -1,4 +1,5 @@
 "use client";
+import { CloseButton } from "../CloseButton";
 import { useEffect, useRef, type ReactNode } from "react";
 import { bandLabel, RADAR_DISCLOSURE, radarLevel, radarPosition } from "../../../lib/radar-presentation";
 import type { RadarItem, RadarPreview } from "../../../lib/radar-types";
@@ -29,5 +30,5 @@ export function RadarPanel({ open, onClose, children }: { open: boolean; onClose
     panel.current?.focus();
     return () => { if (trigger?.isConnected) trigger.focus(); };
   }, [open]);
-  return <aside ref={panel} id="radar-results" tabIndex={-1} className={`radar-panel ${open ? "is-open" : ""}`} aria-label="Список и профиль игроков" onKeyDown={e => { if (e.key === "Escape") onClose(); }}><div className="radar-panel-toolbar"><i className="radar-sheet-handle" /><Button variant="ghost" onClick={onClose}>Закрыть список</Button></div><div className="radar-panel-scroll">{children}</div></aside>;
+  return <aside ref={panel} id="radar-results" tabIndex={-1} className={`radar-panel ${open ? "is-open" : ""}`} aria-label="Список и профиль игроков" onKeyDown={e => { if (e.key === "Escape") onClose(); }}><div className="radar-panel-toolbar"><i className="radar-sheet-handle" /><CloseButton aria-label="Закрыть список" onClick={onClose} /></div><div className="radar-panel-scroll">{children}</div></aside>;
 }

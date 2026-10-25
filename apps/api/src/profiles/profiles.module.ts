@@ -2,6 +2,7 @@ import { DiscoveryPreferencesService } from "./discovery-preferences.service";
 import { MeDiscoveryPreferenceController } from "./me-discovery-preference.controller";
 import { GamePreferencesService } from "./game-preferences.service";
 import { MeGamePreferencesController } from "./me-game-preferences.controller";
+import { CoverController } from "./cover.controller";
 import { AvatarController } from "./avatar.controller";
 import { AvatarService } from "./avatar.service";
 import { Module } from "@nestjs/common";
@@ -19,11 +20,12 @@ import { SocialFeatureService } from "./social-feature";
     MeDiscoveryPreferenceController,
     MeGamePreferencesController,
     AvatarController,
+    CoverController,
     MeSocialProfileController,
     MeLookingController,
     PlayersController,
   ],
   providers: [DiscoveryPreferencesService, GamePreferencesService, AvatarService, ProfilesService, SocialFeatureService],
-  exports: [GamePreferencesService, ProfilesService, SocialFeatureService],
+  exports: [AvatarService, GamePreferencesService, ProfilesService, SocialFeatureService],
 })
 export class ProfilesModule {}

@@ -13,6 +13,8 @@ describe("header image sink bounds", () => {
     "https://userapi.com/photo", "https://eviluserapi.com/photo", "https://userapi.com.evil.test/photo",
     "https://evil.test/photo", "https://name:secret@avatars.yandex.net/photo",
     "https://avatars.yandex.net:8443/photo", "//avatars.yandex.net/photo", "data:image/png;base64,AA",
+    "https:///@avatars.yandex.net/a", "https:///:@avatars.yandex.net/", "https:////@sun9.userapi.com/a",
+    "https://avatars.yandex.net@evil.example/phish",
   ])("denies unknown or credential-bearing provider %s", providerUrl => {
     expect(headerAvatarUrls({ uploadedUrl: null, providerUrl })).toEqual([]);
   });

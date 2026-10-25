@@ -1,10 +1,6 @@
 /* G2 uses canonical map controls, PlayerCard metadata and Drawer/BottomSheet tokens. */
 .unified-actions { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin:12px 0 20px; }
 .unified-actions p { width:100%; color:var(--gb-ink-soft); font-size:14px; }
-.unified-row { position:relative; }
-.unified-row .player-card { padding-right:112px; }
-.unified-detail { position:absolute; right:20px; bottom:20px; border:1px solid var(--gb-line); border-radius:12px; padding:10px; background:var(--gb-white); cursor:pointer; }
-.unified-public { width:100%; text-align:left; color:var(--gb-ink); cursor:pointer; }
 .unified-distance { color:var(--gb-ink); font-weight:600; }
 .unified-distance small { display:block; color:var(--gb-ink-soft); font-weight:400; }
 .unified-preview { outline:none; }
@@ -21,7 +17,7 @@
 .g2-map-header { position:absolute; z-index:3; top:env(safe-area-inset-top,0px); left:16px; right:16px; display:flex; align-items:center; gap:16px; padding:12px 16px; border:1px solid var(--gb-line); border-radius:18px; background:var(--gb-white); box-shadow:0 4px 16px rgba(19,34,26,.08); }
 .g2-radar-map .g2-map-header .radar-entry { width:auto; flex:none; }
 .g2-radar-map .g2-map-header .radar-entry .toggle-row { width:auto; min-height:44px; }
-.g2-map-header > span { flex:1; }.g2-map-header strong,.g2-map-header small { display:block; }.g2-map-header small { color:var(--gb-ink-soft); font-size:12px; }
+.g2-map-header > span:not(.gb-radar-indicator) { flex:1; }.g2-map-header > span:not(.gb-radar-indicator) strong { display:block; }
 .g2-map-header .radar-entry > .gb-c23-btn,.g2-map-header .radar-entry > small { display:none; }
 .g2-map-header .toggle-row { min-height:44px; padding:8px; }.g2-map-back { min-height:44px; display:flex; align-items:center; font-weight:600; }
 .g2-map-session { position:absolute; z-index:5; top:88px; left:16px; right:80px; max-width:480px; }
@@ -42,10 +38,89 @@
 .g2-radar-map .maplibregl-ctrl-attrib { font-family:inherit; max-width:100%; font-size:12px; background:var(--gb-white); }.g2-radar-map .maplibregl-ctrl-bottom-right { right:8px; bottom:calc(8px + env(safe-area-inset-bottom,0px)); }
 @media(max-width:900px) { .g2-map-panel { right:16px; width:340px; } }
 @media(max-width:720px) {
-  .unified-row .player-card { padding-right:20px; padding-bottom:62px; }.unified-detail { right:16px; bottom:12px; }
   .g2-map-header { left:8px; right:8px; padding:8px; gap:8px; }.g2-map-header > span strong { font-size:14px; }.g2-map-header > span small { font-size:10px; }.g2-map-header .radar-entry .toggle-row > span { display:none; }.g2-map-back { font-size:13px; }
   .g2-map-camera,.g2-map-summary { top:88px; }.g2-map-summary { left:8px; padding:8px; }.g2-map-summary small { max-width:220px; }
   .g2-map-panel { top:auto; bottom:calc(36px + env(safe-area-inset-bottom,0px)); left:0; right:0; width:100%; max-width:100%; max-height:30dvh; border-radius:28px 28px 0 0; padding:8px 16px 16px; transition:max-height 220ms var(--gb-ease); }
   .g2-map-panel.is-expanded { max-height:68dvh; }.g2-map-panel > header { touch-action:none; justify-content:space-between; }.g2-sheet-handle { display:block; flex:1; }.g2-map-panel .unified-preview > .avatar { display:none; }.g2-map-panel h2 { margin:0 0 8px; }
 }
 @media(prefers-reduced-motion:reduce) { .g2-radar-map * { transition:none !important; } }
+
+.g2-map-venue-marker { width: 32px; height: 32px; border: 2px solid var(--gb-purple); border-radius: 8px; background: var(--gb-surface); color: var(--gb-purple); cursor: pointer; font-size: 20px; }
+.g2-map-venues { position: absolute; left: 16px; bottom: 100px; padding: 8px; background: var(--gb-surface); border-radius: 8px; font-size: 12px; }
+
+/* The fullscreen map header is already flush right: never use the topbar's
+ * mobile avatar offset or the action sheet protrudes past the viewport. */
+@media (max-width:720px) {
+  .g2-radar-map .gb-radar-popover { right:0; }
+}
+
+/* #62: canonical court asset, purple on white; compact art with a 44px target. */
+.gb-games-map .g2-map-venue-marker { width: 44px; height: 44px; padding: 6px; border: 0; border-radius: 50%; background: transparent; display: grid; place-items: center; }
+.gb-venue-court-glyph { display: block; width: 32px; height: 32px; border-radius: 50%; background: var(--gb-white); box-shadow: 0 2px 8px rgba(19,34,26,.22); position: relative; }
+.gb-venue-court-glyph::after { content: ""; position: absolute; inset: 6px; background: var(--gb-purple); mask: url('/brand/games.svg') center / contain no-repeat; }
+.gb-games-map button.maplibregl-marker:focus-visible { outline: 3px solid var(--gb-purple); outline-offset: 3px; z-index: 2; }
+.gb-games-map button.maplibregl-marker[aria-pressed="true"] { outline: 3px solid var(--gb-purple); outline-offset: 2px; z-index: 1; }
+
+/* Issue 76: Owner Option3, shared map frame and token-based capsule primitives. */
+.gb-fullscreen-map-viewport { position:fixed; inset:0; z-index:100; width:100%; height:100dvh; background:var(--gb-paper); }
+.gb-fullscreen-map-viewport .gb-games-map { position:relative; width:100%; height:100%; }
+.gb-fullscreen-map-viewport .gb-games-map-canvas { position:absolute; inset:0; width:100%; height:100%; }
+.gb-fullscreen-map-viewport .gb-games-map-toolbar { position:absolute; z-index:2; top:calc(72px + env(safe-area-inset-top,0px)); left:16px; right:16px; background:var(--gb-white); }
+.gb-fullscreen-map-viewport .gb-games-map:has([data-map-ready="true"]):not(:has([role="alert"])) .gb-games-map-toolbar { display:none; }
+.gb-fullscreen-map-viewport .gb-games-map > p { position:absolute; z-index:2; top:calc(128px + env(safe-area-inset-top,0px)); left:16px; right:16px; padding:12px; max-width:480px; border-radius:var(--gb-radius-sm); background:var(--gb-white); }
+.gb-fullscreen-map-viewport .gb-games-map:has([data-map-ready="true"]) > p[role="status"] { position:absolute; width:1px; height:1px; padding:0; clip-path:inset(50%); }
+.gb-fullscreen-map-viewport .gb-games-map-fallback { position:absolute; z-index:2; bottom:calc(40px + env(safe-area-inset-bottom,0px)); left:16px; right:16px; padding:12px; background:var(--gb-white); border-radius:var(--gb-radius-sm); }
+.gb-fullscreen-map-viewport .maplibregl-ctrl-bottom-right { bottom:env(safe-area-inset-bottom,0px); right:0; max-width:100%; }
+.gb-fullscreen-map-viewport .maplibregl-ctrl-attrib { font-size:11px; background:var(--gb-white); color:var(--gb-ink); }
+.gb-app-shell:has(.gb-discovery[data-view="map"]) .gb-topbar,
+.gb-app-shell:has(.gb-discovery[data-view="map"]) .gb-bottom-nav,
+.gb-app-shell:has(.gb-discovery[data-view="map"]) .gb-site-footer,
+.gb-discovery[data-view="map"] > .gb-discovery-search,
+.gb-discovery[data-view="map"] > .gb-games-map-context,
+.gb-discovery[data-view="map"] > .gb-discovery-notice { display:none; }
+.gb-map-return,.gb-consumer .gb-games-view-action.is-map > button { min-height:44px; padding:6px 14px 6px 6px; display:flex; align-items:center; gap:8px; border:1px solid var(--gb-line); border-radius:var(--gb-radius-pill); color:var(--gb-ink); background:var(--gb-white); box-shadow:var(--c23-shadow-lift); font-weight:600; text-decoration:none; }
+.gb-map-return { position:fixed; z-index:102; top:calc(12px + env(safe-area-inset-top,0px)); left:16px; }
+.gb-map-return > span,.gb-map-return-accent { width:30px; height:30px; display:grid; place-items:center; border-radius:50%; background:var(--gb-purple); color:var(--gb-white); }
+.gb-consumer .gb-games-view-action { height:auto; padding:12px 0; background:transparent; }
+.gb-consumer .gb-games-view-action > button,.gb-consumer .gb-map-desktop-entry { min-height:48px; min-width:190px; gap:10px; padding:6px 16px 6px 6px; color:var(--gb-ink); background:var(--gb-white); border:1px solid var(--gb-line); border-radius:var(--gb-radius-pill); box-shadow:var(--c23-shadow-lift); font-weight:600; }
+.gb-map-entry-tile { display:grid; place-items:center; width:36px; height:36px; flex:none; border-radius:10px; background:var(--gb-lime); color:var(--gb-purple); }
+.gb-map-entry-tile svg { width:24px; height:24px; }
+.gb-consumer .gb-games-view-action.is-map { display:flex; position:fixed; z-index:102; top:calc(12px + env(safe-area-inset-top,0px)); left:16px; right:auto; bottom:auto !important; padding:0; }
+.gb-consumer .gb-games-view-action.is-map > button { min-width:0; }
+.gb-map-radar { position:fixed; z-index:102; right:16px; top:calc(12px + env(safe-area-inset-top,0px)); }
+.gb-map-radar .gb-radar-popover { right:0; max-width:calc(100vw - 32px); }
+.gb-radar-layer { position:absolute; inset:0; pointer-events:none; }
+.gb-radar-layer .gb-radar-map-module-loading {
+  position:absolute; z-index:3; margin:0;
+  top:calc(72px + env(safe-area-inset-top,0px)); left:16px;
+  width:max-content; max-width:calc(100% - 32px); box-sizing:border-box;
+  padding:12px; display:flex; align-items:center; gap:10px;
+  border-radius:var(--gb-radius-sm); background:var(--gb-ink); color:var(--gb-white);
+  font-size:14px; white-space:normal; overflow-wrap:anywhere; pointer-events:none;
+}
+.gb-radar-layer .gb-radar-map-module-loading > [aria-hidden="true"] {
+  width:9px; height:9px; flex:none; border-radius:50%; background:var(--gb-lime);
+}
+.gb-consumer.gb-radar-layer { background: transparent; min-height: 0; }
+.gb-radar-layer .g2-map-panel,.gb-radar-layer dialog,.gb-radar-layer .gb-map-layer-summary { pointer-events:auto; }
+.gb-map-layer-summary:not(:focus-within) { width:1px; height:1px; padding:0; clip-path:inset(50%); }
+.gb-map-layer-summary:focus-within { top:calc(72px + env(safe-area-inset-top,0px)); }
+.gb-games-map .g2-map-venue-marker { width:44px; height:44px; padding:7px; border:1px solid var(--gb-line); border-radius:50%; background:var(--gb-white); color:var(--gb-purple); box-shadow:var(--c23-shadow-lift); }
+svg.gb-venue-court-glyph { width:28px; height:28px; border-radius:0; box-shadow:none; background:transparent; }
+.g2-person-marker { width:48px; height:48px; padding:0; background:var(--gb-white); border:3px solid var(--gb-white); }
+.g2-person-marker .avatar { width:100%; height:100%; min-width:0; border-radius:50%; display:grid; place-items:center; font-size:14px; background:var(--gb-purple-soft); color:var(--gb-purple); }
+.g2-person-marker img { width:100%; height:100%; object-fit:cover; border-radius:50%; }
+.g2-own-marker { width:60px; height:60px; border-color:var(--gb-purple); box-shadow:0 0 0 3px var(--gb-white),var(--c23-shadow-lift); }
+.gb-games-map .g2-map-venue-marker,.gb-games-map .g2-map-marker:not(.g2-person-marker) { z-index:2; }
+.g2-person-marker:focus-visible { outline:3px solid var(--gb-purple); outline-offset:3px; }
+.gb-map-layer-summary[hidden] { display:none; }
+.gb-map-position-unavailable { position:absolute; z-index:3; top:calc(72px + env(safe-area-inset-top,0px)); left:16px; right:16px; max-width:480px; padding:12px; border-radius:var(--gb-radius-sm); background:var(--gb-white); pointer-events:auto; }
+.gb-fullscreen-map-viewport .maplibregl-ctrl-attrib { font-size:12px; }
+.gb-games-map .g2-map-marker:not(.g2-person-marker)[aria-pressed="true"] { background:var(--gb-lime); color:var(--gb-ink); border-color:var(--gb-white); }
+
+.gb-games-map-back { min-width:44px; min-height:44px; max-width:calc(100% - 112px); cursor:pointer; font:inherit; }
+.gb-games-map-back:focus-visible { outline:3px solid var(--gb-purple); outline-offset:3px; }
+.gb-fullscreen-map-viewport { overflow:hidden; max-width:100vw; }
+.gb-fullscreen-map-viewport .gb-games-map-area { position:absolute; inset:0; }
+.gb-fullscreen-map-viewport .gb-games-map > .gb-map-sr-only,
+.gb-map-sr-only { position:absolute; width:1px; height:1px; margin:-1px; padding:0; border:0; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }

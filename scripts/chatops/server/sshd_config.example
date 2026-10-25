@@ -1,0 +1,11 @@
+# Place in an appropriate sshd_config.d file; sshd -t before reload.
+# Homes and authorized_keys must not be writable by these accounts.
+Match User gb-deploy-dev,gb-deploy-prod
+    AuthorizedKeysFile /etc/ssh/authorized_keys/%u
+    AuthenticationMethods publickey
+    PasswordAuthentication no
+    KbdInteractiveAuthentication no
+    PermitTTY no
+    DisableForwarding yes
+    PermitUserRC no
+Match all

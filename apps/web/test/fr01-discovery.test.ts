@@ -63,6 +63,9 @@ describe("FR-01 API-backed card semantics", () => {
     const full = { ...game, activityKind: "trainer_led" as const, trainer: { profileId: "trainer", displayName: "Ирина Т.", declarationSource: "self_declared" as const }, availablePlaces: 0 };
     const html = renderToStaticMarkup(createElement(DiscoveryGameCard, { game: full }));
     expect(html).toContain("С тренером"); expect(html).toContain("Ирина Т."); expect(html).toContain("Мест нет");
+    expect(html).toContain(game.organizer.displayName);
+    expect(html).toContain("Тренер · самостоятельно указано");
+    expect(html).toContain("Организатор");
     expect(renderToStaticMarkup(createElement(DiscoveryGameCard, { game: { ...game, status: "cancelled" } }))).toContain("Игра отменена");
   });
 });

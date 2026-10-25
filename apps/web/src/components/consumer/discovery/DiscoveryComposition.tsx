@@ -1,3 +1,4 @@
+import { FoldedMapGlyph } from "../NavIcon";
 /* frozen local branded assets; decorative imagery, not venue photography. */
 import { Button } from "../Button";
 import { discoveryCityHeading } from "../../../lib/discovery-presentation";
@@ -31,10 +32,10 @@ export function CreateBanner({ onClick, busy }: { onClick: () => void; busy: boo
   </button>;
 }
 
-export function DiscoverySidebar({ city }: { city: string }) {
+export function DiscoverySidebar({ city, onMap }: { city: string; onMap: () => void }) {
   return <aside className="gb-discovery-sidebar" aria-label="Город и сообщество">
     <section className="gb-discovery-map-card">
-      <header><small>Рядом с вами</small><h2>{city} на карте</h2></header>
+      <header><small>Рядом с вами</small><h2>Все игры на карте</h2></header>
       <div className="gb-discovery-map" aria-hidden="true">
         <span className="gb-discovery-map__river" />
         <span className="gb-discovery-pin gb-discovery-pin--one" />
@@ -42,8 +43,8 @@ export function DiscoverySidebar({ city }: { city: string }) {
         <span className="gb-discovery-pin gb-discovery-pin--three" />
         <span className="gb-discovery-map__label">{city}</span>
       </div>
-      <p className="gb-discovery-map-caption">Иллюстрация города. Адрес каждой игры — в её карточке.</p>
-      <Button variant="dark" disabled>Карта скоро появится</Button>
+      <p className="gb-discovery-map-caption">Площадки {city}: доступные публичные игры и расписание.</p>
+      <Button className="gb-map-desktop-entry" variant="dark" onClick={onMap}><span className="gb-map-entry-tile"><FoldedMapGlyph /></span>Все игры на карте</Button>
     </section>
     <section className="gb-discovery-community">
       <small>Game first</small>

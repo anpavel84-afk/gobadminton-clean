@@ -1,3 +1,5 @@
+import { DiscoveryGameCard } from "../src/components/consumer/discovery/DiscoveryGameCard";
+import { GameCard } from "../src/components/consumer/GameCard";
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { gameLocalToIso } from "../src/lib/game-form";
@@ -70,5 +72,54 @@ describe("FR-02 canonical Games", () => {
     const result = await listAllMyParticipations(); expect(result.ok && result.data).toEqual([part]); expect(fetcher.mock.calls[1]?.[0]).toContain("cursor=next");
     fetcher.mockResolvedValueOnce(new Response(JSON.stringify({ items: [], nextCursor: "next" }))).mockResolvedValueOnce(new Response("{}", { status: 503 }));
     expect((await listAllMyParticipations()).ok).toBe(false);
+  });
+});
+
+// Render the components actually used by discovery, created/managed games and details.
+describe("creator avatar across game surfaces", () => {
+  const photo = (key: string) => ({ uploadedUrl: `/v1/media/avatars/${key.repeat(64)}.png`, providerUrl: null });
+  const surfaces = [
+    (value: Game) => <DiscoveryGameCard game={value} />,
+    (value: Game) => <PersonalGameCard game={value} owned managementRelation="Создана мной" />,
+    (value: Game) => <PersonalGameCard game={value} owned managementRelation="Управляю" />,
+    (value: Game) => <PersonalGameCard game={value} ownStatus="confirmed" />,
+    (value: Game) => <GameTerms game={value} />,
+    (value: Game) => <GameCard game={value} />,
+  ];
+  it.each(surfaces)("renders current creator photo, replacement and removal", surface => {
+    const creator = { ...game.organizer, displayName: "Анна Автор", avatar: photo("a") };
+    const value = { ...game, activityKind: "trainer_led" as const, trainer: { profileId: "unrelated", displayName: "Другой Тренер", declarationSource: "self_declared" as const }, organizer: creator };
+    expect(renderToStaticMarkup(surface(value))).toContain(photo("a").uploadedUrl);
+    const replaced = renderToStaticMarkup(surface({ ...value, organizer: { ...creator, avatar: photo("b") } }));
+    expect(replaced).toContain(photo("b").uploadedUrl);
+    expect(replaced).not.toContain(photo("a").uploadedUrl);
+    const removed = renderToStaticMarkup(surface({ ...value, organizer: { ...creator, avatar: { uploadedUrl: null, providerUrl: null } } }));
+    expect(removed).toContain("АА");
+    expect(removed).not.toContain("/v1/media/avatars/");
+  });
+  it.each(["javascript:alert(1)", "//evil.test/a", "/v1/media/avatars/../../private", "https://avatars.yandex.net.evil.test/a", "https://user:password@avatars.yandex.net/a", "data:image/svg+xml,<svg onload=alert(1)>"])("rejects unsafe media %s", url => {
+    for (const surface of surfaces) {
+      const html = renderToStaticMarkup(surface({ ...game, organizer: { ...game.organizer, displayName: "Анна Автор", avatar: { uploadedUrl: url, providerUrl: url } } }));
+      expect(html).toContain("АА");
+      expect(html).not.toContain(`src="${url}`);
+    }
+  });
+});
+
+// #15 bounded kit extension preserves the published personal-card hierarchy.
+describe("personal creator identity composition", () => {
+  it("keeps identity after body metadata and before the trailing action", () => {
+    const html = renderToStaticMarkup(<PersonalGameCard game={game} owned />);
+    const body = html.indexOf('class="gb-personal-card__body"');
+    const venue = html.indexOf(game.venue.name, body);
+    const metadata = html.indexOf(game.levelRule.allowedLevelIds.join(", "), venue);
+    const identity = html.indexOf('class="gb-game-identity gb-personal-card__organizer"');
+    const action = html.indexOf('class="gb-personal-card__action"');
+    expect(body).toBeGreaterThan(-1);
+    expect(venue).toBeGreaterThan(body);
+    expect(metadata).toBeGreaterThan(venue);
+    expect(identity).toBeGreaterThan(metadata);
+    expect(action).toBeGreaterThan(identity);
+    expect(html).not.toContain('class="gb-discovery-host"');
   });
 });

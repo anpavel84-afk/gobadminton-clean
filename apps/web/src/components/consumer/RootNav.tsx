@@ -48,7 +48,7 @@ export function RootNav({ active }: { active: ConsumerNavActive }) {
         const link = <Link href={item.href} aria-current={active === item.id ? "page" : undefined}>
           <NavIcon name={item.icon} />{item.id === "messages" && <InboxBadge count={count} />}<span>{item.label}</span>
         </Link>;
-        return item.id === "messages" ? <div key={item.id} className="gb-mobile-messages"><RadarStatusAffordance />{link}</div> : <div key={item.id} className="gb-mobile-tab">{link}</div>;
+        return <div key={item.id} className="gb-mobile-tab">{link}</div>;
       })}
     </nav>
   );
@@ -137,7 +137,7 @@ function HeaderNavigation({ active }: { active: ConsumerNavActive }) {
           ))}
         </nav>
         <div className="gb-topbar-actions">
-          <RadarStatusAffordance /><MessagesAction /><ProfileAction />
+          <MessagesAction /><RadarStatusAffordance /><ProfileAction />
           <button ref={triggerRef} type="button" className="gb-menu-trigger" aria-expanded={menuOpen}
             aria-controls={menuId} onClick={() => setMenuOpen((open) => !open)}>
             Меню <b aria-hidden="true">{menuOpen ? "×" : "≡"}</b>

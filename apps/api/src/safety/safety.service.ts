@@ -89,6 +89,14 @@ export class SafetyService {
            ON CONFLICT (blocker_user_id, blocked_user_id) DO NOTHING`,
           [actorId, targetUserId, pair.id],
         );
+        // S1 source compatibility: schema0031 has no friendship table. Pair is
+        // already locked; block permanently ends the current generation.
+        const friendshipSchema = await client.query("SELECT to_regclass('friendships') AS name");
+        if (friendshipSchema.rows[0]?.name) {
+          await client.query(`UPDATE friendships SET state='blocked',version=version+1,
+            accepted_at=NULL,updated_at=clock_timestamp()
+            WHERE pair_id=$1 AND state IN ('pending','accepted')`, [pair.id]);
+        }
         // LS-03 fence: pending DM first-contact cannot complete after block.
         // Accepted history remains readable; send path fails closed on block.
         await client.query(

@@ -1,3 +1,6 @@
+import { DEV_MOSCOW_PEER_IDS } from "../../src/radar/dev-moscow-test";
+import { redeemUnifiedProof } from "../../src/radar/unified-proof";
+import { GeographicRadarService } from "../../src/radar/geographic.service";
 import cookie from "@fastify/cookie";
 import { Test } from "@nestjs/testing";
 import {
@@ -434,6 +437,10 @@ dbDescribe("Unified Players / isolated synthetic PostGIS and HTTP", () => {
       viewer,
       true,
     );
+    // A continuation MUST preserve the exact encrypted query reference:
+    // sealUnified uses randomized AES-GCM and its raw tokens cannot otherwise
+    // be compared by the Web client even for the same valid signed context.
+    expect(m.query.queryRef).toBe(s.query.queryRef);
     expect(m.items).toHaveLength(7);
     expect(m.totals).toEqual(s.totals);
     expect(m.items.every((i) => i.radar !== null)).toBe(true);
@@ -447,6 +454,7 @@ dbDescribe("Unified Players / isolated synthetic PostGIS and HTTP", () => {
       viewer,
       true,
     );
+    expect(n.query.queryRef).toBe(s.query.queryRef);
     expect(n.mapPage!.rankStart).toBe(8);
     expect(
       (
@@ -465,6 +473,8 @@ dbDescribe("Unified Players / isolated synthetic PostGIS and HTTP", () => {
     const n = await next(s, 11),
       r = await next(s, 11);
     expect(n.items).toEqual(r.items);
+    expect(n.query.queryRef).toBe(s.query.queryRef);
+    expect(r.query.queryRef).toBe(s.query.queryRef);
     expect(n.page).toMatchObject({
       rankStart: 51,
       rankEnd: 61,
@@ -1278,4 +1288,96 @@ dbDescribe("Unified Players / isolated synthetic PostGIS and HTTP", () => {
       update.json().locationValidUntil,
     );
   });
+  it("all authenticated DEV viewers see fixtures, refresh before RR and retain proof isolation", async () => {
+    const saved = { APP_ENV: env.APP_ENV, PUBLIC_WEB_ORIGIN: env.PUBLIC_WEB_ORIGIN, PUBLIC_API_ORIGIN: env.PUBLIC_API_ORIGIN, RADAR_DEV_TEST_OWNER_USER_ID: env.RADAR_DEV_TEST_OWNER_USER_ID, RADAR_DEV_TEST_SECOND_USER_ID: env.RADAR_DEV_TEST_SECOND_USER_ID };
+    const owner = await person("Synthetic owner", false, MOSCOW_CITY_ID);
+    const service = app.get(UnifiedPlayersService);
+    const before = (await pool.query("SELECT * FROM player_social_profiles WHERE user_id=$1", [owner.id])).rows[0];
+    try {
+      env.APP_ENV = "stage";
+      env.PUBLIC_WEB_ORIGIN = env.PUBLIC_API_ORIGIN = "https://dev.gobadminton.ru";
+      env.RADAR_DEV_TEST_OWNER_USER_ID = owner.id;
+      expect((await app.get(GeographicRadarService).config(owner.id, owner.issued.session.id))).toHaveProperty("devMoscowTest", { latitude:55.7558, longitude:37.6173, accuracyMeters:25 });
+      expect((await app.get(GeographicRadarService).config(viewer.id, viewer.issued.session.id))).not.toHaveProperty("devMoscowTest");
+      const second = await person("Second test actor", false, MOSCOW_CITY_ID);
+      env.RADAR_DEV_TEST_SECOND_USER_ID = second.id;
+      const secondConfig = await app.get(GeographicRadarService).config(second.id, second.issued.session.id);
+      expect(secondConfig).toHaveProperty("devMoscowTest");
+      expect(JSON.stringify(secondConfig)).not.toContain(second.id);
+      expect(JSON.stringify(secondConfig)).not.toContain(owner.id);
+      expect((await app.get(GeographicRadarService).config(viewer.id, viewer.issued.session.id))).not.toHaveProperty("devMoscowTest");
+      // Capability does not bypass an explicit disclosure receipt.
+      const noConsent = await app.inject({ method: "POST", url: "/v1/me/radar/activations", headers: headers(second), payload: { contractVersion: UNIFIED_WIRE, consentPolicyVersion: UNIFIED_POLICY, location: fix() } });
+      expect(noConsent.statusCode).toBeGreaterThanOrEqual(400);
+      expect((await pool.query("SELECT 1 FROM radar_presences WHERE user_id=$1", [second.id])).rowCount).toBe(0);
+      const configWithoutOrigin = await app.inject({ method: "GET", url: "/v1/radar/config", headers: { cookie: `${SESSION_COOKIE}=${owner.issued.sessionToken}` } });
+      expect(configWithoutOrigin.statusCode).toBe(200);
+      expect(configWithoutOrigin.json()).toHaveProperty("devMoscowTest");
+
+      env.PUBLIC_API_ORIGIN = "https://gobadminton.ru";
+      expect((await app.get(GeographicRadarService).config(owner.id, owner.issued.session.id))).not.toHaveProperty("devMoscowTest");
+      expect((await service.query(owner.id, owner.issued.session.id, initial())).items.some(r=>r.player.displayName.startsWith("TEST"))).toBe(false);
+      expect((await pool.query("SELECT 1 FROM users WHERE id=ANY($1::uuid[])",[DEV_MOSCOW_PEER_IDS])).rowCount).toBe(0);
+      env.PUBLIC_API_ORIGIN = "https://dev.gobadminton.ru";
+      await expect(service.query(owner.id, viewer.issued.session.id, initial(), false)).rejects.toThrow();
+      expect((await pool.query("SELECT 1 FROM users WHERE id=ANY($1::uuid[])",[DEV_MOSCOW_PEER_IDS])).rowCount).toBe(0);
+      await clearBudget(owner);
+      await clearBudget(viewer);
+      const first = await service.query(viewer.id, viewer.issued.session.id, initial(50, { kind:"foreground_fix", location:fix() }), false);
+      const peers = first.items.filter(r => r.player.displayName.startsWith("TEST · DEV Москва"));
+      expect(peers).toHaveLength(6);
+      expect(peers.every(r => r.projection === "radar_public" && r.radar?.geo.gridSizeMeters === 100 && r.radar.distance !== null)).toBe(true);
+      const evidence = await pool.query(`SELECT r.*,ST_AsText(coarse_center) center FROM radar_presences r WHERE user_id=ANY($1::uuid[])`, [DEV_MOSCOW_PEER_IDS]);
+      expect(new Set(evidence.rows.map(r => r.center)).size).toBe(6);
+      for (const r of evidence.rows) {
+        expect(r.foreground_until.getTime()-r.started_at.getTime()).toBeCloseTo(90000,-2);
+        expect(r.location_valid_until.getTime()-r.started_at.getTime()).toBeCloseTo(360000,-2);
+        expect(r.expires_at.getTime()-r.started_at.getTime()).toBeCloseTo(900000,-2);
+        expect(r.hard_expires_at.getTime()-r.started_at.getTime()).toBeCloseTo(1800000,-2);
+      }
+      expect((await pool.query("SELECT * FROM player_social_profiles WHERE user_id=$1", [owner.id])).rows[0]).toEqual(before);
+      expect((await pool.query("SELECT 1 FROM radar_presences WHERE user_id=$1", [owner.id])).rowCount).toBe(0);
+      expect((await pool.query("SELECT 1 FROM external_identities WHERE user_id=ANY($1::uuid[])", [DEV_MOSCOW_PEER_IDS])).rowCount).toBe(0);
+      expect((await pool.query("SELECT csrf_ciphertext FROM app_sessions WHERE user_id=ANY($1::uuid[])", [DEV_MOSCOW_PEER_IDS])).rows.every(r => r.csrf_ciphertext === "!fixture-no-login")).toBe(true);
+      const proof = openUnified(env,"result",peers[0]!.radar!.resultRef,proofSchema)!;
+      const client = await pool.connect();
+      try {
+        expect((await redeemUnifiedProof(client,proof,false,false,env)).displayName).toMatch(/^TEST/);
+        await expect(redeemUnifiedProof(client,{...proof,context:{...proof.context,sessionId:owner.issued.session.id}},false,false,env)).rejects.toThrow();
+        await expect(redeemUnifiedProof(client,proof,false,false,{...env,RADAR_DEV_TEST_OWNER_USER_ID:undefined})).rejects.toThrow();
+        await expect(redeemUnifiedProof(client,proof,false,false,{...env,APP_ENV:"prod"})).rejects.toThrow();
+      } finally { client.release(); }
+      await clearBudget(owner);
+      await service.query(owner.id,owner.issued.session.id,initial(), false);
+      expect((await pool.query("SELECT activation_id FROM radar_presences WHERE user_id=ANY($1::uuid[]) ORDER BY user_id",[DEV_MOSCOW_PEER_IDS])).rows.map(r=>r.activation_id)).toEqual(evidence.rows.sort((a,b)=>a.user_id.localeCompare(b.user_id)).map(r=>r.activation_id));
+      await clearBudget(viewer);
+      expect((await service.query(viewer.id,viewer.issued.session.id,initial())).items.filter(r=>r.player.displayName.startsWith("TEST"))).toHaveLength(6);
+      await pool.query("UPDATE radar_presences SET foreground_until=clock_timestamp()-interval '1 second' WHERE user_id=ANY($1::uuid[])",[DEV_MOSCOW_PEER_IDS]);
+      await clearBudget(owner);
+      await clearBudget(viewer);
+      const refreshed = await service.query(viewer.id,viewer.issued.session.id,initial(), false);
+      expect(refreshed.items.filter(r=>r.player.displayName.startsWith("TEST"))).toHaveLength(6);
+      expect(refreshed.items.find(r=>r.publicPlayerId===peers[0]!.publicPlayerId)!.radar!.resultRef).not.toBe(peers[0]!.radar!.resultRef);
+      const expiredClient = await pool.connect();
+      try { await expect(redeemUnifiedProof(expiredClient,proof,false,false,env)).rejects.toThrow(); }
+      finally { expiredClient.release(); }
+      // Adversarial over-budget request must fail before obtaining the shared
+      // fixture lock: even expired peers may not be refreshed by a 429.
+      await pool.query("UPDATE radar_presences SET foreground_until=clock_timestamp()-interval '1 second' WHERE user_id=ANY($1::uuid[])", [DEV_MOSCOW_PEER_IDS]);
+      const before429 = (await pool.query("SELECT user_id,activation_id,foreground_until FROM radar_presences WHERE user_id=ANY($1::uuid[]) ORDER BY user_id", [DEV_MOSCOW_PEER_IDS])).rows;
+      const revision429 = (await pool.query("SELECT revision::text AS revision FROM players_query_revision WHERE singleton")).rows[0].revision;
+      await expect(service.query(viewer.id,viewer.issued.session.id,initial())).rejects.toMatchObject({status:429});
+      expect((await pool.query("SELECT user_id,activation_id,foreground_until FROM radar_presences WHERE user_id=ANY($1::uuid[]) ORDER BY user_id", [DEV_MOSCOW_PEER_IDS])).rows).toEqual(before429);
+      expect((await pool.query("SELECT revision::text AS revision FROM players_query_revision WHERE singleton")).rows[0].revision).toBe(revision429);
+      env.APP_ENV = "prod";
+      await clearBudget(viewer);
+      expect((await service.query(viewer.id,viewer.issued.session.id,initial())).items.some(r=>r.player.displayName.startsWith("TEST"))).toBe(false);
+      expect((await app.get(GeographicRadarService).config(owner.id, owner.issued.session.id))).not.toHaveProperty("devMoscowTest");
+      env.APP_ENV = "stage";
+      env.RADAR_DEV_TEST_OWNER_USER_ID = undefined;
+      await clearBudget(owner);
+      expect((await service.query(owner.id,owner.issued.session.id,initial(), false)).items.some(r=>r.player.displayName.startsWith("TEST"))).toBe(false);
+    } finally { Object.assign(env,saved); }
+  });
+
 });

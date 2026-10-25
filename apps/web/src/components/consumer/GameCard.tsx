@@ -1,9 +1,10 @@
+import { GameCover } from "./games/GameCover";
+import { Avatar } from "./players/ProfileComposition";
 import Link from "next/link";
 import type { Game, ParticipationStatus } from "../../lib/consumer-types";
 import {
   formatGameWhen,
   formatSeats,
-  hostLine,
   isTrainerLed,
   levelFormatLine,
   participationChipKind,
@@ -34,7 +35,7 @@ export function GameCard({
       className={`gb-c23-card${trainer ? " gb-c23-card--trainer" : ""}`}
       data-activity={game.activityKind}
     >
-      <div className="gb-c23-card__media" aria-hidden="true" />
+      <GameCover className="gb-c23-card__media" game={game} />
       <div className="gb-c23-card__body">
         <p className="gb-c23-card__when">{formatGameWhen(game)}</p>
         <p className="gb-c23-card__seats" data-tone={seatsTone}>
@@ -43,7 +44,7 @@ export function GameCard({
         <h2 className="gb-c23-card__venue">{game.venue.name}</h2>
         <p className="gb-c23-card__meta">{game.venue.address}</p>
         <p className="gb-c23-card__meta">{levelFormatLine(game)}</p>
-        <p className="gb-c23-card__meta">{hostLine(game)}</p>
+        <div className="gb-discovery-host"><Avatar className="gb-discovery-avatar" name={game.organizer.displayName} avatar={game.organizer.avatar} /><span>{game.organizer.displayName}</span></div>
         <div className="gb-c23-card__row">
           {trainer ? <span className="gb-c23-chip gb-c23-chip--trainer">С тренером</span> : null}
           {ownStatus ? (

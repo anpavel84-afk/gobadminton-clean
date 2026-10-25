@@ -176,13 +176,14 @@
 
 /* Owner mobile Venue catalog picker: full-height search sheet, compact alphabetic entries. */
 .gb-venue-picker-trigger {
- display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;
+ display:grid;grid-template-columns:minmax(0,1fr) 20px;align-items:center;gap:12px;width:100%;
  min-height:52px;padding:11px 14px;border:1px solid var(--gb-line);border-radius:12px;
  background:var(--gb-paper);color:var(--gb-ink);font:inherit;text-align:left;cursor:pointer;
 }
+.gb-venue-picker-trigger:has(> .gb-venue-cover--thumb){grid-template-columns:80px minmax(0,1fr) 20px}
 .gb-venue-picker-trigger-copy{display:grid;min-width:0;gap:3px}
 .gb-venue-picker-trigger-title{font-size:14px;font-weight:600;overflow-wrap:anywhere}
-.gb-venue-picker-trigger-address{color:var(--gb-ink-soft);font-size:12px;font-weight:400;line-height:1.3}
+.gb-venue-picker-trigger-address{color:var(--gb-ink-soft);font-size:12px;font-weight:400;line-height:1.3;overflow-wrap:anywhere}
 .gb-venue-picker-backdrop{
  position:fixed;inset:0;z-index:5000;display:grid;place-items:center;
  padding:20px;background:rgba(16,29,22,.55);
@@ -195,10 +196,6 @@
 .gb-venue-picker-header{display:flex;justify-content:space-between;align-items:center;gap:15px;padding:20px 22px 12px}
 .gb-venue-picker-header h2{margin:0;font-size:20px;line-height:1.2}
 .gb-venue-picker-header p{margin:6px 0 0;font-size:12px;color:var(--gb-ink-soft)}
-.gb-venue-picker-close{
- flex:none;display:grid;place-items:center;width:42px;height:42px;border:1px solid var(--gb-line);
- border-radius:50%;background:white;color:var(--gb-ink);font-size:17px;cursor:pointer;
-}
 .gb-venue-picker-search{
  display:flex;align-items:center;gap:9px;flex:none;margin:4px 22px 0;padding:0 12px;
  border:1px solid var(--gb-line);border-radius:12px;background:#f9faf9;
@@ -214,7 +211,7 @@
 }
 .gb-venue-picker-scroll{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain}
 .gb-venue-picker-option{
- display:flex;align-items:center;justify-content:space-between;gap:12px;
+ display:grid;grid-template-columns:80px minmax(0,1fr) 20px;align-items:center;gap:12px;
  width:100%;min-height:58px;padding:9px 22px;border:0;border-bottom:1px solid var(--gb-line);
  border-radius:0;background:white;color:var(--gb-ink);text-align:left;cursor:pointer;
 }
@@ -283,3 +280,30 @@
   .gb-owned-summary .gb-applicants__row { grid-template-columns: minmax(0,1fr); }
   .gb-owned-summary .gb-applicants__actions { grid-column: auto; }
 }
+
+/* STYLE_GUIDE_GAP #37: MediaBlock shell reused in venue list/detail/editor. */
+.gb-venue-cover { display:block; position:relative; overflow:hidden; width:100%; height:100%; min-height:1px; background:var(--c23-surface); }
+.gb-venue-cover > img { display:block; width:100%; height:100%; object-fit:cover; }
+.gb-venue-cover__default { display:grid; width:100%; height:100%; place-items:center; color:var(--c23-muted); background:var(--c23-surface); }
+.gb-venue-cover__default > span { font-size:3rem; }
+.gb-venue-cover--thumb { width:80px; height:45px; flex:0 0 80px; border-radius:8px; }
+.gb-venue-media { aspect-ratio:16/9; width:100%; overflow:hidden; border-radius:16px; }
+.gb-venue-page { max-width:960px; margin:0 auto; padding:24px; }
+.gb-venue-editor { display:grid; gap:16px; margin-top:24px; }
+.gb-venue-editor input { max-width:100%; }
+.gb-venue-editor__actions { display:flex; flex-wrap:wrap; gap:12px; }
+@media (max-width:600px) { .gb-venue-page { padding:16px; } }
+.gb-discovery-card__image > .gb-venue-cover, .gb-game-hero__image > .gb-venue-cover { position:absolute; inset:0; }
+.gb-c23-card__media[data-cover="uploaded"]::after { display:none; }
+.gb-venue-picker-option-copy, .gb-venue-picker-trigger-copy { min-width:0; }
+.gb-venue-picker-option-name, .gb-venue-picker-option-address { overflow-wrap:anywhere; }
+
+/* Separate the native file picker and the reset action on the form and popup. */
+.gb-consumer .gb-game-photo-selection .gb-game-field { display:flex; flex-direction:column; gap:10px; }
+.gb-consumer .gb-game-photo-selection input[type="file"] { display:block; width:100%; min-width:0; max-width:100%; }
+.gb-consumer .gb-game-photo-selection .gb-game-photo-reset {
+  display:inline-flex; align-items:center; justify-content:center;
+  width:fit-content; max-width:100%; margin-top:18px; min-height:44px;
+  color:var(--gb-ink); background:var(--gb-white);
+}
+.gb-consumer .gb-game-create--embedded .gb-game-photo-selection .gb-game-photo-reset { max-width:100%; }

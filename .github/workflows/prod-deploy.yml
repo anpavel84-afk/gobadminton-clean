@@ -1,0 +1,85 @@
+name: PROD deploy
+on:
+  release:
+    types: [published]
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: gobadminton-prod
+  cancel-in-progress: false
+jobs:
+  qa:
+    if: github.event.release.prerelease == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    outputs:
+      sha: ${{ steps.candidate.outputs.source_sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with: {fetch-depth: 0, persist-credentials: false}
+      - name: Require the designated release principal
+        run: |
+          test -n "$AUTHORIZED_ACTOR"
+          test "$ACTOR" = "$AUTHORIZED_ACTOR"
+        env:
+          ACTOR: ${{ github.actor }}
+          AUTHORIZED_ACTOR: ${{ vars.RELEASE_ACTOR }}
+      - id: candidate
+        run: bash scripts/chatops/prepare-prod.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INITIAL_PROD_SHA: ${{ vars.INITIAL_PROD_SHA }}
+      - uses: ./.github/actions/ci-setup
+      - name: Strict tests + fresh/upgrade migrations + restore
+        run: bash scripts/chatops/ci.sh full
+        env:
+          BASE_SHA: ${{ steps.candidate.outputs.base_sha }}
+          REQUIRE_BASELINE: '1'
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: prod-candidate
+          path: _out/release.json
+          if-no-files-found: error
+          retention-days: 90
+  deploy:
+    if: vars.CHATOPS_PROD_COMMISSIONED == 'true'
+    needs: qa
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment:
+      name: prod
+      url: https://gobadminton.ru
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ needs.qa.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with: {node-version: '24.21.0'}
+      - name: Download this run's verified candidate
+        run: gh run download "$GITHUB_RUN_ID" --name prod-candidate --dir _out --repo "$GITHUB_REPOSITORY"
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Promote the SAME images; no PROD rebuild
+        run: bash scripts/chatops/deploy.sh prod _out/release.json
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          # Empty on a single-host PROD; Moscow on the existing split topology.
+          DEPLOY_WEB_HOST: ${{ secrets.DEPLOY_WEB_HOST }}
+          DEPLOY_PORT: ${{ vars.DEPLOY_PORT }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          PUBLIC_URL: https://gobadminton.ru
+          REQUIRE_RADAR: '1'
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: prod-release
+          path: _out/release.json
+          if-no-files-found: error
+          retention-days: 90
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: prod-smoke-evidence
+          path: _out/radar/

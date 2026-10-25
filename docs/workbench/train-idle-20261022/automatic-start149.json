@@ -1,0 +1,33 @@
+{
+  "observed_at": 1792642218,
+  "issue": 149,
+  "phase": "developing",
+  "attempt": 1,
+  "base": "869d07b921a48737facf8e53afd71543bf9ff8c1",
+  "slot": "slot2",
+  "run": 39720804863,
+  "stage": "author",
+  "process": {
+    "boot": "447e18ce-024d-4230-b88f-bd8ca81e2a9e",
+    "pid": 82363,
+    "start": "29605909"
+  },
+  "process_alive": true,
+  "model": {
+    "effective_model": "gpt-6.1-sol",
+    "fallback_reason": "only proven available provider with positive measured budget",
+    "profile": "auto",
+    "provider": "codex",
+    "remaining_calls": 27,
+    "requested_model": "gpt-6.1-sol",
+    "role": "author",
+    "unavailable": {
+      "agy": "agy may never act as author",
+      "cursor": "inference_proven=false (no tokens until the billing period renews; then Auto mode, provider test on 3 tasks, Owner yes)"
+    },
+    "used_calls": 2
+  },
+  "old156_archive_sha256": "0c8fc4935af02bbd3515ee52c6d56c30a6b6e6805a246dcab28e4eacbd6ce2e9",
+  "uid": 978,
+  "comm": "codex"
+}

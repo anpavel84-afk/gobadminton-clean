@@ -154,8 +154,92 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
         "0029_game_moderation",
         "0030_user_capability_restrictions",
         "0031_support_cases",
-
+        "0032_friendship_core",
+        "0033_owned_cover",
+        "0034_venue_cover",
+        "0035_game_cover",
+        "0036_venue_contacts",
+        "0037_venue_cover_credit",
+        "0038_public_venue_contacts",
+        "0039_venue_public_profile",
       ]);
+      const profileColumns = await pool.query("SELECT column_name,data_type,is_nullable,column_default FROM information_schema.columns WHERE table_schema='public' AND table_name='venues' AND column_name IN ('court_count','amenity_parking','amenity_showers','public_profile_updated_at') ORDER BY column_name");
+      expect(profileColumns.rows).toEqual([
+        {column_name:"amenity_parking",data_type:"boolean",is_nullable:"YES",column_default:null},
+        {column_name:"amenity_showers",data_type:"boolean",is_nullable:"YES",column_default:null},
+        {column_name:"court_count",data_type:"integer",is_nullable:"YES",column_default:null},
+        {column_name:"public_profile_updated_at",data_type:"timestamp with time zone",is_nullable:"YES",column_default:null},
+      ]);
+      expect((await pool.query("SELECT conname FROM pg_constraint WHERE conrelid='venues'::regclass AND conname='venues_court_count_check'")).rows).toHaveLength(1);
+      expect((await pool.query("SELECT tgname FROM pg_trigger WHERE tgrelid='venues'::regclass AND tgname='venue_public_profile_change' AND NOT tgisinternal AND tgenabled='O'")).rows).toHaveLength(1);
+      const publicContactsColumn = await pool.query<{data_type:string;is_nullable:string;column_default:string|null}>(
+        "SELECT data_type,is_nullable,column_default FROM information_schema.columns WHERE table_name='venues' AND column_name='public_contacts'",
+      );
+      expect(publicContactsColumn.rows).toEqual([{data_type:"jsonb",is_nullable:"YES",column_default:null}]);
+      const publicCheck = await pool.query("SELECT conname FROM pg_constraint WHERE conrelid='venues'::regclass AND conname='venues_public_contacts_check'");
+      expect(publicCheck.rows).toHaveLength(1);
+      // Verify the additive game slot exists, beyond its migration record.
+      const gameCoverColumns = await pool.query<{
+        column_name: string; data_type: string; is_nullable: string;
+      }>(
+        `SELECT column_name, data_type, is_nullable
+         FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = 'games'
+           AND column_name IN ('cover_key', 'cover_moderation_approval_id', 'cover_actor_id')
+         ORDER BY column_name`,
+      );
+      expect(gameCoverColumns.rows).toEqual([
+        { column_name: "cover_actor_id", data_type: "uuid", is_nullable: "YES" },
+        { column_name: "cover_key", data_type: "text", is_nullable: "YES" },
+        { column_name: "cover_moderation_approval_id", data_type: "uuid", is_nullable: "YES" },
+      ]);
+      const gameCoverConstraints = await pool.query<{ conname: string; contype: string }>(
+        `SELECT conname, contype::text
+         FROM pg_constraint
+         WHERE conrelid = 'public.games'::regclass
+           AND conname IN ('game_cover_binding', 'games_cover_key_check',
+             'games_cover_key_key', 'games_cover_actor_id_fkey',
+             'games_cover_moderation_approval_id_fkey')
+         ORDER BY conname`,
+      );
+      expect(gameCoverConstraints.rows).toEqual([
+        { conname: "game_cover_binding", contype: "c" },
+        { conname: "games_cover_actor_id_fkey", contype: "f" },
+        { conname: "games_cover_key_check", contype: "c" },
+        { conname: "games_cover_key_key", contype: "u" },
+        { conname: "games_cover_moderation_approval_id_fkey", contype: "f" },
+      ]);
+      const gameCoverFunctions = await pool.query<{ own: boolean; effective: boolean; retire: boolean }>(
+        `SELECT to_regprocedure('public.game_own_cover_url(uuid)') IS NOT NULL AS own,
+           to_regprocedure('public.game_effective_cover_url(uuid)') IS NOT NULL AS effective,
+           to_regprocedure('public.retire_inactive_game_cover()') IS NOT NULL AS retire`,
+      );
+      expect(gameCoverFunctions.rows).toEqual([{ own: true, effective: true, retire: true }]);
+      const gameCoverTriggers = await pool.query<{ tgname: string }>(
+        `SELECT tgname FROM pg_trigger
+         WHERE NOT tgisinternal AND tgenabled = 'O'
+           AND ((tgrelid = 'public.games'::regclass AND tgname = 'game_cover_cleanup')
+             OR (tgrelid = 'public.users'::regclass AND tgname = 'inactive_game_cover'))
+         ORDER BY tgname`,
+      );
+      expect(gameCoverTriggers.rows).toEqual([
+        { tgname: "game_cover_cleanup" },
+        { tgname: "inactive_game_cover" },
+      ]);
+      // Additive Friends S1 upgrade must be physically present in the
+      // migration smoke; merely recording the filename is insufficient.
+      const friendships = await pool.query<{ name: string | null }>(
+        "SELECT to_regclass('public.friendships')::text AS name",
+      );
+      expect(friendships.rows[0]?.name).toBe("friendships");
+      const attempts = await pool.query<{ name: string | null }>(
+        "SELECT to_regclass('public.friendship_request_attempts')::text AS name",
+      );
+      expect(attempts.rows[0]?.name).toBe("friendship_request_attempts");
+      const epoch = await pool.query<{column_name: string}>(
+        "SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='player_social_profiles' AND column_name='social_action_epoch'",
+      );
+      expect(epoch.rows).toHaveLength(1);
 
       const ls02Indexes = await pool.query<{ indexname: string }>(
         `SELECT indexname

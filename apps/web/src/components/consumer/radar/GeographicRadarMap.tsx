@@ -1,12 +1,18 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import * as maplibregl from "maplibre-gl";
 import type { Map as LibreMap, StyleSpecification } from "maplibre-gl";
 import { Protocol } from "pmtiles";
 import "maplibre-gl/dist/maplibre-gl.css";
+import { apiFetch, listAllCityVenues } from "../../../lib/api-client";
+import type { OwnSocialProfile } from "../../../lib/consumer-types";
 import type { UnifiedRow } from "@gobadminton/contracts";
 import { MOSCOW_BUNDLE, allowedMapResource } from "../../../lib/radar-map-assets";
-import { initialsFromName } from "../../../lib/player-presentation";
+import { createRadarEntryCamera, radarNeighborhood } from "../../../lib/radar-camera";
+import { useRadarSession } from "./RadarSessionProvider";
+import { shuttlecockElement } from "../NavIcon";
+import { createRoot } from "react-dom/client";
+import { Avatar } from "../players/ProfileComposition";
 import type { UnifiedDirectoryController } from "../../../lib/unified-directory";
 let protocol: Protocol | undefined;
 function installProtocol() {
@@ -16,22 +22,38 @@ function installProtocol() {
     protocol = new Protocol(); maplibregl.addProtocol("pmtiles", protocol.tile);
   }
 }
-export function GeographicRadarMap({ controller, rows, selected, onSelect, onUnavailable }: { controller: UnifiedDirectoryController; rows: UnifiedRow[]; selected: string | null; onSelect: (row: UnifiedRow) => void; onUnavailable: () => void }) {
+export function GeographicRadarMap({ controller, rows, selected, onSelect, onUnavailable, sharedMap, resumeCamera = false }: { resumeCamera?: boolean; sharedMap?: LibreMap; controller: UnifiedDirectoryController; rows: UnifiedRow[]; selected: string | null; onSelect: (row: UnifiedRow) => void; onUnavailable: () => void }) {
+  const { view: session } = useRadarSession();
+  const center = session.phase === "active" && session.confirmedOn && !session.pendingStop && session.status?.state === "active" ? session.status.coarseCenter : undefined;
+  const centerLatitude = center?.latitude, centerLongitude = center?.longitude;
   const container = useRef<HTMLDivElement>(null); const map = useRef<LibreMap | null>(null);
-  const markers = useRef<Array<{ marker: maplibregl.Marker; button: HTMLButtonElement; id: string }>>([]);
+  const markers = useRef<Array<{ marker: maplibregl.Marker; button: HTMLButtonElement; id: string; dispose?: () => void }>>([]);
   const callbacks = useRef({ onSelect, onUnavailable }); callbacks.current = { onSelect, onUnavailable };
+  const entryCamera = useRef(createRadarEntryCamera(resumeCamera));
+  const [ownProfile, setOwnProfile] = useState<OwnSocialProfile | null>(null);
+  useEffect(() => {
+    const abort = new AbortController(); setOwnProfile(null);
+    if (session.me) void apiFetch<OwnSocialProfile>("/v1/me/social-profile", { signal: abort.signal }).then(result => { if (!abort.signal.aborted && result.ok) setOwnProfile(result.data); });
+    return () => abort.abort();
+  }, [session.me?.id]);
+  const [venueCount, setVenueCount] = useState<number | null>(null);
+  const [venuesFailed, setVenuesFailed] = useState(false);
   const [ready, setReady] = useState(false); const [status, setStatus] = useState("Загружаем карту города…");
   useEffect(() => {
+    if (sharedMap) { map.current = sharedMap; setReady(true); setStatus(""); return () => { markers.current.forEach(m => { m.marker.remove(); m.dispose?.(); }); markers.current = []; map.current = null; }; }
     let alive = true; const abort = new AbortController(); let instance: LibreMap | undefined;
     const timeout = setTimeout(() => { if (alive && !instance?.loaded()) callbacks.current.onUnavailable(); }, 20000);
     async function start() {
       try {
-        const response = await fetch(MOSCOW_BUNDLE.prefix + "style.json", { credentials: "omit", signal: abort.signal });
+        const response = await fetch(MOSCOW_BUNDLE.prefix + "style-dev.json", { credentials: "omit", signal: abort.signal });
         if (!response.ok) throw new Error("style");
         const bytes = await response.arrayBuffer();
         const hash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map(b => b.toString(16).padStart(2, "0")).join("");
         if (hash !== MOSCOW_BUNDLE.styleHash) throw new Error("style identity");
         const style = JSON.parse(new TextDecoder().decode(bytes)) as StyleSpecification;
+        // PMTiles fetches its archive internally: validate style URLs before installing it.
+        const resources = [style.glyphs, ...(typeof style.sprite === "string" ? [style.sprite] : (style.sprite ?? []).map(sprite => sprite.url)), ...Object.values(style.sources).flatMap(source => ["url" in source ? source.url : undefined, ...("tiles" in source ? source.tiles ?? [] : [])])];
+        if (resources.some(url => typeof url === "string" && !allowedMapResource(url))) throw new Error("Unapproved style resource");
         if (!alive || !container.current) return;
         installProtocol();
         instance = new maplibregl.Map({ container: container.current, style, center: controller.camera?.center ?? MOSCOW_BUNDLE.center, zoom: controller.camera?.zoom ?? 10.5, maxBounds: MOSCOW_BUNDLE.bounds, maxZoom: 16, attributionControl: { compact: false }, dragRotate: false, pitchWithRotate: false,
@@ -46,29 +68,63 @@ export function GeographicRadarMap({ controller, rows, selected, onSelect, onUna
     }
     void start();
     const resize = new ResizeObserver(() => instance?.resize()); if (container.current) resize.observe(container.current);
-    return () => { alive = false; abort.abort(); clearTimeout(timeout); resize.disconnect(); markers.current.forEach(m => m.marker.remove()); markers.current = []; instance?.remove(); map.current = null; };
-  }, [controller]);
+    return () => { alive = false; abort.abort(); clearTimeout(timeout); resize.disconnect(); markers.current.forEach(m => { m.marker.remove(); m.dispose?.(); }); markers.current = []; instance?.remove(); map.current = null; };
+  }, [controller, sharedMap]);
   useEffect(() => {
     if (!ready || !map.current) return;
-    markers.current.forEach(m => m.marker.remove()); markers.current = [];
+    markers.current.forEach(m => { m.marker.remove(); m.dispose?.(); }); markers.current = [];
     for (const row of rows) {
+      if (row.publicPlayerId === ownProfile?.publicPlayerId) continue;
       const geo = row.radar?.geo;
       if (!geo || geo.crs !== "EPSG:4326" || !Number.isFinite(geo.latitude) || !Number.isFinite(geo.longitude) || geo.longitude < 36 || geo.longitude > 39.5 || geo.latitude < 54.5 || geo.latitude > 56.5) { callbacks.current.onUnavailable(); return; }
-      const button = document.createElement("button"); button.type = "button"; button.className = "g2-map-marker";
-      button.textContent = initialsFromName(row.player.displayName); button.setAttribute("aria-label", `Показать игрока: ${row.player.displayName}`); button.setAttribute("aria-pressed", String(row.publicPlayerId === selected));
-      button.addEventListener("click", () => callbacks.current.onSelect(row));
+      const button = document.createElement("button"); button.type = "button"; button.className = "g2-map-marker g2-person-marker";
+      const root = createRoot(button); root.render(<Avatar name={row.player.displayName} avatar={row.player.avatar} />); button.setAttribute("aria-label", `Показать игрока: ${row.player.displayName}`); button.setAttribute("aria-pressed", String(row.publicPlayerId === selected));
+      button.addEventListener("click", () => { button.focus({ preventScroll: true }); callbacks.current.onSelect(row); });
       const marker = new maplibregl.Marker({ element: button, anchor: "center" }).setLngLat([geo.longitude, geo.latitude]).addTo(map.current);
-      markers.current.push({ marker, button, id: row.publicPlayerId });
+      markers.current.push({ marker, button, id: row.publicPlayerId, dispose: () => root.unmount() });
     }
     // Selection focus survives subsequent tick renders; source rows change only on a new window.
-  }, [rows, ready]);
+  }, [rows, ready, ownProfile?.publicPlayerId]);
+  useEffect(() => {
+    if (sharedMap || !ready || !map.current) return;
+    let alive = true; const venueMarkers: maplibregl.Marker[] = [];
+    void listAllCityVenues(MOSCOW_BUNDLE.cityId).then(result => {
+      if (!alive || !map.current) return;
+      if (!result.ok) { setVenuesFailed(true); return; }
+      for (const venue of result.data) {
+        const { latitude: lat, longitude: lon } = venue;
+        if (venue.cityId !== MOSCOW_BUNDLE.cityId || typeof lat !== "number" || typeof lon !== "number" || !Number.isFinite(lat) || !Number.isFinite(lon) || lon < 36 || lon > 39.5 || lat < 54.5 || lat > 56.5) continue;
+        const button = document.createElement("button"); button.type = "button"; button.className = "g2-map-venue-marker"; button.append(shuttlecockElement()); button.setAttribute("aria-label", `Площадка: ${venue.name}`);
+        const content = document.createElement("div"); const title = document.createElement("strong"); title.textContent = venue.name; const address = document.createElement("p"); address.textContent = venue.address; content.append(title, address);
+        const marker = new maplibregl.Marker({ element: button }).setLngLat([lon, lat]).setPopup(new maplibregl.Popup().setDOMContent(content)).addTo(map.current);
+        venueMarkers.push(marker);
+      }
+      setVenueCount(venueMarkers.length);
+    }).catch(() => { if (alive) setVenuesFailed(true); });
+    return () => { alive = false; venueMarkers.forEach(marker => marker.remove()); };
+  }, [ready, sharedMap]);
   useEffect(() => { for (const marker of markers.current) marker.button.setAttribute("aria-pressed", String(marker.id === selected)); }, [selected]);
-  function fit() {
+  const fit = useCallback(() => {
     if (!map.current) return;
-    const points = rows.flatMap(row => row.radar ? [[row.radar.geo.longitude, row.radar.geo.latitude] as [number, number]] : []);
-    if (!points.length) { map.current.easeTo({ center: MOSCOW_BUNDLE.center, zoom: 10.5, duration: 0 }); return; }
-    const bounds = new maplibregl.LngLatBounds(); points.forEach(p => bounds.extend(p));
-    map.current.fitBounds(bounds, { padding: { top: 100, bottom: 180, left: 60, right: 60 }, maxZoom: 13, duration: 0 });
-  }
-  return <><div ref={container} className="g2-map-canvas" data-map-ready={ready} />{status && <p className="g2-map-loading" role="status">{status}</p>}<div className="g2-map-camera" aria-label="Управление картой"><button aria-label="Увеличить карту" onClick={() => map.current?.zoomIn()}>+</button><button aria-label="Уменьшить карту" onClick={() => map.current?.zoomOut()}>−</button><button aria-label="Показать всех полученных игроков" onClick={fit}><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="7" /><circle cx="12" cy="12" r="2" /><path d="M12 2v3m0 14v3M2 12h3m14 0h3" /></svg></button></div></>;
+    const bounds = radarNeighborhood(centerLatitude === undefined || centerLongitude === undefined ? undefined : { latitude: centerLatitude, longitude: centerLongitude });
+    if (!bounds) {
+      map.current.easeTo({ center: MOSCOW_BUNDLE.center, zoom: 10.5, duration: 0 }); return;
+    }
+    // Only the server-published coarse center; never the acquired browser fix.
+    map.current.fitBounds(bounds, { padding: 48, duration: 0 });
+  }, [centerLatitude, centerLongitude]);
+  useEffect(() => {
+    if (!ready || !map.current || centerLatitude === undefined || centerLongitude === undefined || !radarNeighborhood(center)) return;
+    const button = document.createElement("button"); button.type = "button"; button.className = "g2-map-marker g2-person-marker g2-own-marker";
+    button.setAttribute("aria-label", "Вы: опубликованная геопозиция Radar");
+    button.dataset.longitude = String(centerLongitude); button.dataset.latitude = String(centerLatitude);
+    const root = createRoot(button); root.render(<Avatar name={session.me?.displayName ?? "Вы"} avatar={ownProfile?.avatar} />);
+    const own = new maplibregl.Marker({ element: button, anchor: "center" }).setLngLat([centerLongitude, centerLatitude]).addTo(map.current);
+    window.dispatchEvent(new Event("gb-map-own-marker"));
+    const initialBounds = entryCamera.current.claim(center);
+    if (initialBounds) map.current.fitBounds(initialBounds, { padding: 48, duration: 0 });
+    return () => { own.remove(); root.unmount(); window.dispatchEvent(new Event("gb-map-own-marker")); };
+  }, [ready, centerLatitude, centerLongitude, session.me, ownProfile, fit]);
+  if (sharedMap) return null;
+  return <><div ref={container} className="g2-map-canvas" data-map-ready={ready} />{status && <p className="g2-map-loading" role="status">{status}</p>}<p className="g2-map-venues" role="status">{venuesFailed ? "Площадки не удалось загрузить" : venueCount === null ? "Загружаем площадки…" : `Площадки на карте: ${venueCount}`}</p><div className="g2-map-camera" aria-label="Управление картой"><button aria-label="Увеличить карту" onClick={() => map.current?.zoomIn()}>+</button><button aria-label="Уменьшить карту" onClick={() => map.current?.zoomOut()}>−</button><button aria-label="Показать район Radar около 10 км" onClick={fit}><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="7" /><circle cx="12" cy="12" r="2" /><path d="M12 2v3m0 14v3M2 12h3m14 0h3" /></svg></button></div></>;
 }

@@ -1,0 +1,48 @@
+name: Autonomy PR
+on:
+  push:
+    branches: ['automation/issue-*']
+permissions:
+  contents: read
+  pull-requests: write
+concurrency:
+  group: autonomy-pr-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  create:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Ensure Issue PR to dev
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          python3 -B - <<'PY'
+          import json, os, re, urllib.parse, urllib.request
+          branch = os.environ['BRANCH']
+          match = re.fullmatch(r'automation/issue-([1-9][0-9]*)', branch)
+          if not match:
+              raise SystemExit('Invalid automation branch')
+          repo = os.environ['REPOSITORY']
+          if repo != 'anpavel84-afk/gobadminton-clean':
+              raise SystemExit('Unexpected repository')
+          def api(path, data=None):
+              request = urllib.request.Request(
+                  f'https://api.github.com/repos/{repo}/{path}',
+                  data=json.dumps(data).encode() if data is not None else None,
+                  headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                           'Accept': 'application/vnd.github+json',
+                           'X-GitHub-Api-Version': '2022-11-28'})
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  return json.load(response)
+          query = urllib.parse.urlencode({'state': 'open', 'base': 'dev',
+                                          'head': repo.split('/')[0] + ':' + branch})
+          existing = api('pulls?' + query)
+          if len(existing) > 1:
+              raise SystemExit('Ambiguous PRs')
+          if not existing:
+              api('pulls', {'base': 'dev', 'head': branch,
+                            'title': f'Refs #{match[1]}: autonomous source candidate',
+                            'body': f'Refs #{match[1]}. Requires independent QA and exact SHA Product CI before DEV promotion.'})
+          PY

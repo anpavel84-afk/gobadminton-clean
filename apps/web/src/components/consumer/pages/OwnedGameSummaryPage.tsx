@@ -1,4 +1,6 @@
 "use client";
+import { GameCoverEditor } from "../games/GameCoverEditor";
+import { publishGame } from "../../../lib/api-client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -221,6 +223,14 @@ export function OwnedGameSummaryPage({ gameId }: { gameId: string }) {
       {state === "ready" && game ? (
         <div className="gb-owned-summary" data-surface="owned-summary">
           <GameHero game={game} preview={game.status === "draft"} />
+          {me && (game.status === "draft" || game.status === "published") && <GameCoverEditor gameId={game.id} csrfToken={me.csrfToken} onChange={()=>setReloadToken(n=>n+1)}/>}
+          {me && game.status === "draft" && <Button disabled={busyId!==null} onClick={async()=>{
+            if(mutation.current)return;mutation.current=true;setBusyId("publish");const request=epoch.current;
+            try {const result=await publishGame(game.id,game.version,me.csrfToken);if(request!==epoch.current)return;
+              setNotice(result.ok?"Игра опубликована.":"Публикация не подтверждена. Проверьте состояние игры.");setReloadToken(n=>n+1);
+            } finally {mutation.current=false;setBusyId(null);}
+          }}>Опубликовать черновик</Button>}
+
           <div className="gb-game-detail-grid">
             <GameTerms game={game} showCapacity={false} />
             <aside className="gb-management-summary" aria-label="Управление игрой">

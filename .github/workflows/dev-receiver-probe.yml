@@ -1,0 +1,55 @@
+name: DEV receiver commissioning probe
+on:
+  push:
+    branches: [chatops/github-actions-20261013]
+    paths:
+      - '.github/workflows/dev-receiver-probe.yml'
+      - 'scripts/chatops/server/**'
+permissions:
+  contents: read
+jobs:
+  restricted-ssh:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: dev
+    steps:
+      - name: Verify pinned host, forced command and forbidden operations
+        shell: bash
+        env:
+          KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          KNOWN: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -Eeuo pipefail
+          d=$(mktemp -d)
+          trap 'rm -rf -- "$d"' EXIT
+          chmod 700 "$d"
+          printf '%s\n' "$KEY" > "$d/key"
+          printf '%s\n' "$KNOWN" > "$d/known"
+          chmod 600 "$d/key" "$d/known"
+          unset KEY
+          ssh=(ssh -F /dev/null -T -i "$d/key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$d/known" -o ConnectTimeout=15 "gb-deploy-dev@$HOST")
+          mkdir -p evidence
+          printf '{"action":"status"}\n' | "${ssh[@]}" > evidence/status.json
+          jq -e '.pending == null and has("accepted")' evidence/status.json
+          # Supplied shell commands must be ignored; only the fixed receiver runs.
+          printf '{"action":"status"}\n' | "${ssh[@]}" 'id' > evidence/forced-command.json
+          jq -e 'has("accepted") and has("pending")' evidence/forced-command.json
+          if printf '{"action":"shell","release_id":"r1-a1"}\n' | "${ssh[@]}" > "$d/rejected.out" 2>evidence/rejected.err; then
+            echo 'FAIL: unsupported operation succeeded'; exit 1
+          fi
+          grep -q 'unsupported action' evidence/rejected.err
+          if printf '{"action":"status","environment":"prod"}\n' | "${ssh[@]}" > "$d/rejected.out" 2>evidence/environment.err; then
+            echo 'FAIL: caller-selected environment accepted'; exit 1
+          fi
+          grep -q 'unknown status fields' evidence/environment.err
+          if timeout 20 "${ssh[@]:0:${#ssh[@]}-1}" -W 127.0.0.1:18084 "gb-deploy-dev@$HOST" </dev/null > "$d/forward.out" 2>evidence/forward.err; then
+            echo 'FAIL: forwarding succeeded'; exit 1
+          fi
+          grep -q 'administratively prohibited' evidence/forward.err
+          echo 'PASS: status only; forced command, request allowlist and forwarding restriction verified' | tee evidence/result.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: dev-receiver-commissioning
+          path: evidence/

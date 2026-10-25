@@ -1,5 +1,7 @@
 "use client";
+import { CloseButton } from "../CloseButton";
 
+import { VenueCover } from "../venues/VenueCover";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { KeyboardEvent } from "react";
@@ -68,7 +70,7 @@ export function VenuePickerDialog({ venues, selectedId, status, onSelect, onClos
             <h2 id="gb-venue-picker-title">Выберите площадку</h2>
             <p>Все площадки выбранного города и области</p>
           </div>
-          <button type="button" className="gb-venue-picker-close" aria-label="Закрыть выбор площадки" onClick={onClose}>✕</button>
+          <CloseButton aria-label="Закрыть выбор площадки" onClick={onClose} />
         </header>
         <div className="gb-venue-picker-search">
           <span aria-hidden="true">⌕</span>
@@ -104,6 +106,7 @@ export function VenuePickerDialog({ venues, selectedId, status, onSelect, onClos
               aria-pressed={selectedId === venue.id}
               onClick={() => onSelect(venue)}
             >
+              <VenueCover className="gb-venue-cover--thumb" cover={venue.cover} name={venue.name} />
               <span className="gb-venue-picker-option-copy">
                 <span className="gb-venue-picker-option-name">{venue.name}</span>
                 <span className="gb-venue-picker-option-address">{venue.address}</span>

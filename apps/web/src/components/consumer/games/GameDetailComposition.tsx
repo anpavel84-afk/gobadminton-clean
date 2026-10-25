@@ -1,3 +1,6 @@
+import Link from "next/link";
+import { GameCover } from "./GameCover";
+import { Avatar } from "../players/ProfileComposition";
 import type { ReactNode } from "react";
 import type { Game, ParticipationStatus } from "../../../lib/consumer-types";
 import { discoveryGameWhen, discoveryFormat } from "../../../lib/discovery-presentation";
@@ -8,13 +11,13 @@ export function GameStatusBadge({ tone, children }: { tone: string; children: Re
   return <span className="gb-game-status" data-tone={tone}>{children}</span>;
 }
 
-/** Frozen TrainerDetail / MediaBlock. The supplied photograph is editorial, not a venue photo. */
-export function GameHero({ game, preview = false }: { game: Game; preview?: boolean }) {
+/** Existing TrainerDetail / MediaBlock composition with the current venue cover/default. */
+export function GameHero({ game, preview = false, localPreview }: { game: Game; preview?: boolean; localPreview?: string }) {
   const when = discoveryGameWhen(game);
   const trainer = game.activityKind === "trainer_led";
   return <section className="gb-game-hero" data-activity={game.activityKind}>
     <div className="gb-game-hero__image">
-      <img src="/discovery/badminton-courts.jpg" alt="" />
+      {preview && localPreview?.startsWith("blob:") ? <span className="gb-venue-cover"><img src={localPreview} alt="Предпросмотр фото игры" /></span> : <GameCover game={game} />}
       <span className="gb-game-ribbon" data-trainer={trainer}>{trainer ? "Тренировка с тренером" : "Обычная игра"}</span>
     </div>
     <div className="gb-game-hero__copy">
@@ -32,7 +35,7 @@ export function GameHero({ game, preview = false }: { game: Game; preview?: bool
   </section>;
 }
 
-export function GameTerms({ game, showCapacity = true }: { game: Game; showCapacity?: boolean }) {
+export function GameTerms({ game, showCapacity = true, onVenueClick }: { game: Game; showCapacity?: boolean; onVenueClick?: () => void }) {
   const trainer = game.activityKind === "trainer_led";
   return <div className="gb-game-content">
     {trainer && game.trainer && <section className="gb-game-coach" aria-label="Тренер">
@@ -42,8 +45,8 @@ export function GameTerms({ game, showCapacity = true }: { game: Game; showCapac
     <section className="gb-game-section">
       <span className="gb-game-kicker">Встречаемся на корте</span><h2>Место и организатор</h2>
       <dl className="gb-game-facts">
-        <div><dt>Площадка</dt><dd>{game.venue.name}<small>{game.venue.address}</small></dd></div>
-        <div><dt>Организует</dt><dd>{game.organizer.displayName}<small>{game.organizer.publicContact}</small></dd></div>
+        <div><dt>Площадка</dt><dd>{onVenueClick ? <button type="button" onClick={onVenueClick}>{game.venue.name}</button> : <Link href={`/venues/${game.venue.id}`}>{game.venue.name}</Link>}<small>{game.venue.address}</small></dd></div>
+        <div><dt>Организует</dt><dd><span className="gb-game-identity"><Avatar className="gb-discovery-avatar" name={game.organizer.displayName} avatar={game.organizer.avatar} /><span>{game.organizer.displayName}</span></span><small>{game.organizer.publicContact}</small></dd></div>
         {showCapacity && <div><dt>Состав</dt><dd>До {game.capacity} игроков<small>Подтверждено: {game.confirmedCount} · Занято вне сервиса: {game.externalReservedCount}</small></dd></div>}
       </dl>
     </section>
@@ -81,8 +84,11 @@ export function PersonalGameCard({
     </div>
     <div className="gb-personal-card__body">
       <span className="gb-game-type" data-trainer={game.activityKind === "trainer_led"}>{game.activityKind === "trainer_led" ? "С тренером" : "Обычная игра"}</span>
-      <h3>{game.title}</h3><strong>{when.day} · {when.time}</strong>
-      <p>{game.venue.name}</p><small>{game.levelRule.allowedLevelIds.join(", ")} · {capacityStatusLabel(game)}</small>
+      <GameCover game={game} /><h3>{game.title}</h3><strong>{when.day} · {when.time}</strong>
+      <p>{game.venue.name}</p>
+      <small>{game.levelRule.allowedLevelIds.join(", ")} · {capacityStatusLabel(game)}</small>
+      {/* STYLE_GUIDE_GAP #15: kit IdentityRow inside the canonical card body; no footer/divider. */}
+      <div className="gb-game-identity gb-personal-card__organizer"><Avatar className="gb-discovery-avatar" name={game.organizer.displayName} avatar={game.organizer.avatar} /><span><small>Организатор</small><strong>{game.organizer.displayName}</strong></span></div>
     </div>
     <div className="gb-personal-card__action"><Button variant={tone === "draft" ? "dark" : "outline"} href={owned ? `/my-games/${game.id}` : `/games/${game.id}`}>{owned ? (game.status === "draft" ? "Продолжить" : "Управление") : "Открыть игру"} →</Button></div>
   </article>;

@@ -49,6 +49,41 @@ body.gb-consumer-body {
   outline-offset: 2px;
 }
 
+/* Repeated class beats consumer resets and broad sheet/map header rules,
+   regardless of stylesheet order. Fallbacks also cover body-level portals. */
+button.gb-close-button.gb-close-button {
+  box-sizing: border-box;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  flex: none;
+  padding: 0;
+  border: 1px solid var(--gb-line, #dfe4dc);
+  border-radius: 50%;
+  background: var(--gb-white, #ffffff);
+  color: var(--gb-ink, #13221a);
+  cursor: pointer;
+}
+
+button.gb-close-button.gb-close-button > svg {
+  display: block;
+  width: 24px;
+  height: 24px;
+}
+
+button.gb-close-button.gb-close-button:focus-visible {
+  outline: 3px solid var(--c23-focus, #7945de);
+  outline-offset: 2px;
+}
+
+button.gb-close-button.gb-close-button:disabled {
+  color: var(--c23-disabled-ink, #6b766f);
+  cursor: not-allowed;
+}
+
 .gb-players-gated__eyebrow {
   margin: 0 0 8px;
   color: var(--c23-purple);

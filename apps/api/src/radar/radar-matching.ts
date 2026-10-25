@@ -1,3 +1,4 @@
+import { DEV_MOSCOW_PEER_IDS } from "./dev-moscow-test";
 import { unrestrictedSql } from "../restrictions/policy";
 import type { PoolClient } from "pg";
 import {
@@ -73,6 +74,7 @@ export async function selectEligibleNearbyCandidates(
       AND s.expires_at > $2
      WHERE r.user_id <> $1
        -- Partition before cohort counting/cap/proof selection; demo cannot seed a live cohort.
+       AND r.user_id NOT IN (${DEV_MOSCOW_PEER_IDS.map(id => `'${id}'::uuid`).join(',')})
        AND (r.user_id::text ~ '^d0f0[0-9a-f]{4}-0000-4000-8000-[0-9a-f]{12}$')
          = ($1::text ~ '^d0f0[0-9a-f]{4}-0000-4000-8000-[0-9a-f]{12}$')
        AND r.policy_version = $3

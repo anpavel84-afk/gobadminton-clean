@@ -1,4 +1,5 @@
 "use client";
+import { GameCover } from "../games/GameCover";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { getGame, listAllMyParticipations, listMyManagedGames } from "../../../lib/api-client";
@@ -39,6 +40,6 @@ export function OwnUpcomingGames() {
   }, [reload]);
   return <section className="profile-upcoming-section own-upcoming-games" data-surface="op-07"><header className="profile-upcoming-header"><span><small>Подтверждённое участие и организация</small><h2>Мои ближайшие игры</h2></span><Link href="/my-games">Все мои игры →</Link></header>
     {state === "loading" && <p role="status">Загружаем игры…</p>}{state === "error" && <ProfileState title="Не удалось загрузить игры" state="error" retry={() => setReload(n => n + 1)} />}{state === "ready" && !rows.length && <p>Ближайших подтверждённых игр пока нет.</p>}
-    {state === "ready" && rows.map(({ game, relation }) => <article className="upcoming-game-row" key={game.id}><img src="/discovery/badminton-courts.jpg" alt="" /><div><span><span className={`status-badge status-badge--${game.activityKind === "trainer_led" ? "attention" : "past"}`}>{game.activityKind === "trainer_led" ? "С тренером" : "Обычная игра"}</span><span className="status-badge status-badge--confirmed">{relation}</span></span><h3>{game.title}</h3><strong>{formatGameWhen(game)}</strong><p>{game.venue.name}</p></div><Button variant="outline" href={`/games/${game.id}`}>Открыть игру</Button></article>)}
+    {state === "ready" && rows.map(({ game, relation }) => <article className="upcoming-game-row" key={game.id}><GameCover game={game} /><div><span><span className={`status-badge status-badge--${game.activityKind === "trainer_led" ? "attention" : "past"}`}>{game.activityKind === "trainer_led" ? "С тренером" : "Обычная игра"}</span><span className="status-badge status-badge--confirmed">{relation}</span></span><h3>{game.title}</h3><strong>{formatGameWhen(game)}</strong><p>{game.venue.name}</p></div><Button variant="outline" href={`/games/${game.id}`}>Открыть игру</Button></article>)}
   </section>;
 }

@@ -1,3 +1,5 @@
+import type { AppEnv } from "../config/env";
+import { DEV_MOSCOW_PEER_IDS, devMoscowFixturesEnabled } from "./dev-moscow-test";
 import { unrestrictedSql } from "../restrictions/policy";
 import type { PoolClient } from "pg";
 import { notFound } from "../auth/problem";
@@ -20,6 +22,7 @@ export async function redeemUnifiedProof(
   p: UnifiedProof,
   held = false,
   restrictionsEnabled = false,
+  env?: AppEnv,
 ): Promise<RedeemedRadarProof> {
   const c = p.context;
   if (
@@ -30,6 +33,7 @@ export async function redeemUnifiedProof(
         c.origin.cityId !== c.filters.cityId ||
         c.origin.regionId !== c.regionId ||
         c.origin.mode !== c.mode)) ||
+    (DEV_MOSCOW_PEER_IDS.includes(p.targetId) && (!devMoscowFixturesEnabled(env) || c.mode !== "live")) ||
     c.viewerId === p.targetId ||
     isDemoUuid(c.viewerId) !== isDemoUuid(p.targetId) ||
     isDemoUuid(p.targetId) !== (c.mode === "synthetic_demo")

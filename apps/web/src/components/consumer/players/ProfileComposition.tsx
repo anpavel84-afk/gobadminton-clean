@@ -1,4 +1,5 @@
 "use client";
+import { CloseButton } from "../CloseButton";
 
 import Link from "next/link";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -10,29 +11,36 @@ import { profileSetupPath, safeAuthReturnPath } from "../../../lib/auth-return";
 import { Button } from "../Button";
 import { listAuthMethods } from "../../../lib/email-auth";
 import { EmailCodeForm } from "./EmailCodeForm";
+import { forbiddenUrlScalars, httpUrlAgreesWithOriginalAuthority } from "../../../lib/original-http-authority";
 
-export function Avatar({ name, tone = "lime", avatar }: { name: string; tone?: "lime" | "purple" | "yellow"; avatar?: PlayerAvatar }) {
+export function safeAvatarUrl(raw: string): boolean {
+  if (/^\/v1\/media\/avatars\/[a-f0-9]{64}\.png$/.test(raw)) return true;
+  if (raw.length > 2048 || !httpUrlAgreesWithOriginalAuthority(raw, forbiddenUrlScalars)) return false;
+  try { const url = new URL(raw); return url.protocol === "https:" && !url.username && !url.password && !url.port && (url.hostname === "avatars.yandex.net" || url.hostname.endsWith(".userapi.com")); } catch { return false; }
+}
+export function Avatar({ name, tone = "lime", avatar, className }: { name: string; tone?: "lime" | "purple" | "yellow"; avatar?: PlayerAvatar; className?: string }) {
   const [failed, setFailed] = useState<string[]>([]);
-  const candidates = [avatar?.uploadedUrl, avatar?.providerUrl].filter((url): url is string => Boolean(url));
+  const candidates = [avatar?.uploadedUrl, avatar?.providerUrl].filter((url): url is string => Boolean(url) && safeAvatarUrl(url!));
   const src = candidates.find(url => !failed.includes(url));
-  return <span className={`avatar avatar--${tone}`} aria-hidden="true">{src ? <img key={src} src={src} alt="" referrerPolicy="no-referrer" onError={() => setFailed(previous => [...previous, src])} /> : initialsFromName(name)}</span>;
+  return <span className={className ?? `avatar avatar--${tone}`} aria-hidden="true">{src ? <img key={src} src={src} alt="" referrerPolicy="no-referrer" onError={() => setFailed(previous => [...previous, src])} /> : initialsFromName(name)}</span>;
 }
 export function Badge({ children, trainer = false }: { children: ReactNode; trainer?: boolean }) {
   return <span className={`status-badge status-badge--${trainer ? "attention" : "available"}`}>{children}</span>;
 }
-export function PlayerCard({ player, city, metadata }: { player: PublicPlayer; city?: string; metadata?: ReactNode }) {
-  return <Link className="player-card" href={`/players/${player.publicPlayerId}`}>
+export function PlayerCard({ player, city, metadata, onSelect }: { player: PublicPlayer; city?: string; metadata?: ReactNode; onSelect?: () => void }) {
+  const content = <>
     <Avatar avatar={player.avatar} name={player.displayName} tone={player.trainer ? "purple" : "yellow"} />
     <div className="player-card__main">
       <div className="player-card__title"><h3>{player.displayName}</h3>{player.lookingForGame && <Badge>Ищу игру</Badge>}</div>
-      <strong>{formatSocialLevel(player.level)}</strong>
+      {player.level && <strong>{formatSocialLevel(player.level)}</strong>}
       {(city || player.areaKey) && <span><img className="profile-icon" src="/discovery/pin.svg" alt="" />{[city, player.areaKey].filter(Boolean).join(" · ")}</span>}
       {metadata}
       {player.bio && <p>{player.bio}</p>}
       {player.trainer && <em>Тренер</em>}
       {player.canRequestContact === true && <small>Принимает запросы на общение</small>}
     </div><span className="player-card__arrow" aria-hidden="true"><img className="profile-icon" src="/discovery/arrow.svg" alt="" /></span>
-  </Link>;
+  </>;
+  return onSelect ? <button type="button" className="player-card" onClick={onSelect}>{content}</button> : <Link className="player-card" href={`/players/${player.publicPlayerId}`}>{content}</Link>;
 }
 export function SectionHeader({ title, eyebrow, action }: { title: string; eyebrow?: string; action?: ReactNode }) {
   return <header className="editable-section-header"><span>{eyebrow && <small>{eyebrow}</small>}<h2>{title}</h2></span>{action}</header>;
@@ -50,7 +58,7 @@ export function Toggle({ label, helper, on, disabled, onClick, describedBy, id }
 export function ProfileDialog({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => { const dialog = ref.current; const trigger = document.activeElement as HTMLElement | null; dialog?.showModal(); return () => { dialog?.close(); if (trigger?.isConnected) trigger.focus(); }; }, []);
-  return <dialog ref={ref} className="profile-dialog" aria-label={title} onCancel={e => { e.preventDefault(); onClose(); }} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}><header><h2>{title}</h2><button type="button" aria-label="Закрыть" onClick={onClose}>×</button></header>{children}</dialog>;
+  return <dialog ref={ref} className="profile-dialog" aria-label={title} onCancel={e => { e.preventDefault(); onClose(); }} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}><header><h2>{title}</h2><CloseButton onClick={onClose} /></header>{children}</dialog>;
 }
 /** Shared chooser: provider starts only after an explicit selection, even for one provider. */
 export function AuthChooser({ returnPath, intent, onClose }: { returnPath: string; intent?: AuthIntent; onClose: () => void }) {

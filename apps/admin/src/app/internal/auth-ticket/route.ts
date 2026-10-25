@@ -1,10 +1,11 @@
 import { cookies } from "next/headers";
-import { HANDOFF_COOKIE, internalConfig, sameOriginRequest } from "../../../lib/server-config";
+import { HANDOFF_COOKIE, internalConfig, adminRequestOrigin, adminRequestPath } from "../../../lib/server-config";
 export const dynamic = "force-dynamic";
 export async function GET(request: Request) {
   const config = internalConfig();
   if (!config) return new Response(null, { status: 404 });
-  if (!sameOriginRequest(request, config.origin)) return new Response(null, { status: 403 });
+  if (!adminRequestPath(request, config, "/internal/auth-ticket")) return new Response(null, { status: 404 });
+  if (!adminRequestOrigin(request, config)) return new Response(null, { status: 403 });
   const raw = (await cookies()).get(HANDOFF_COOKIE)?.value;
   const headers = { "Cache-Control": "no-store", "Set-Cookie": `${HANDOFF_COOKIE}=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Strict` };
   try {

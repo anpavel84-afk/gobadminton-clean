@@ -21,3 +21,10 @@ export const foundationPaths = ["/health", "/ready", "/meta"] as const;
 export type * from "./unified.generated.js";
 
 export type * from "./game.generated.js";
+
+export type { FriendshipView, FriendshipReceipt, FriendshipCreateRequest, FriendshipDecisionRequest,
+  FriendshipList, FriendshipStates, SocialCapabilities } from "./friendship.generated.js";
+
+export type { PlayerCover, CoverReceipt, DeleteCoverCommand } from "./profile-cover.js";
+export type { VenueCover, VenueCoverReceipt, VenueCoverAccess, DeleteVenueCoverCommand } from "./venue-cover.js";
+export type { GameCoverReceipt, DeleteGameCoverCommand } from "./game-cover.js";

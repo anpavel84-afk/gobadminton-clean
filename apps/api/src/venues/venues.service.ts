@@ -1,3 +1,6 @@
+import { httpsCreditUrl } from "../lib/original-http-authority";
+import { readVenueProfile, venueProfileSelectSql, type VenueProfile, type VenueProfileRow } from "./venue-profile";
+import { readPublicVenueContacts, type PublicVenueContacts } from "./public-venue-contacts";
 import { randomBytes, randomUUID } from "node:crypto";
 import { Inject, Injectable } from "@nestjs/common";
 import type { Pool, PoolClient } from "pg";
@@ -25,6 +28,9 @@ export type CityDto = {
 };
 
 export type VenueDto = {
+  profile?: VenueProfile;
+  publicContacts?: PublicVenueContacts | null;
+  cover?: { uploadedUrl: string | null; credit: { kind: "photo" | "logo" | "illustration"; text: string; url: string | null } | null };
   id: string;
   name: string;
   cityId: string;
@@ -76,7 +82,12 @@ const CATALOG_DEFAULT_LIMIT = 20;
 const CATALOG_MAX_LIMIT = 50;
 const SELECTABLE_LIFECYCLES = ["unverified", "verified"] as const;
 
-type VenueRow = {
+type VenueRow = VenueProfileRow & {
+  public_contacts?: unknown;
+  cover_url?: string | null;
+  cover_credit_kind: "photo" | "logo" | "illustration" | null;
+  cover_credit_text: string | null;
+  cover_credit_url: string | null;
   id: string;
   name: string;
   city_id: string;
@@ -164,7 +175,7 @@ export class VenuesService {
     let pointSql = "";
     let sql = `
       SELECT
-        id, name, city_id, address, timezone, data_status, provenance,
+        ${venueProfileSelectSql("venues")}, to_jsonb(venues)->'public_contacts' AS public_contacts, venue_cover_url(id) AS cover_url, cover_credit_kind, cover_credit_text, cover_credit_url, id, name, city_id, address, timezone, data_status, provenance,
         lifecycle_state, identity_discriminator,
         normalized_name, normalized_address, canonical_venue_id,
         ST_Y(location::geometry) AS latitude,
@@ -458,7 +469,7 @@ export class VenuesService {
          'unverified',$9,$10,$11,$12
        )
        RETURNING
-         id, name, city_id, address, timezone, data_status, provenance,
+         ${venueProfileSelectSql("venues")}, to_jsonb(venues)->'public_contacts' AS public_contacts, venue_cover_url(id) AS cover_url, cover_credit_kind, cover_credit_text, cover_credit_url, id, name, city_id, address, timezone, data_status, provenance,
          lifecycle_state, identity_discriminator,
          normalized_name, normalized_address, canonical_venue_id,
          ST_Y(location::geometry) AS latitude,
@@ -604,7 +615,7 @@ export class VenuesService {
   ): Promise<VenueRow[]> {
     const result = await client.query<VenueRow>(
       `SELECT
-         id, name, city_id, address, timezone, data_status, provenance,
+         ${venueProfileSelectSql("venues")}, to_jsonb(venues)->'public_contacts' AS public_contacts, venue_cover_url(id) AS cover_url, cover_credit_kind, cover_credit_text, cover_credit_url, id, name, city_id, address, timezone, data_status, provenance,
          lifecycle_state, identity_discriminator,
          normalized_name, normalized_address, canonical_venue_id,
          ST_Y(location::geometry) AS latitude,
@@ -743,10 +754,13 @@ function buildIdentity(parsed: ParsedVenueInput): BuiltIdentity {
   };
 }
 
+// Extract only the public key from the row so reads also work on schema 0037.
+// PostgreSQL returns SQL NULL for an absent JSON key; private keys never leave SQL.
+// Catalog, fuzzy and INSERT RETURNING use the same projection.
 function venueSelectSql(where: string): string {
   return `
     SELECT
-      v.id, v.name, v.city_id, v.address, v.timezone, v.data_status, v.provenance,
+      ${venueProfileSelectSql("v")}, to_jsonb(v)->'public_contacts' AS public_contacts, venue_cover_url(v.id) AS cover_url, v.cover_credit_kind, v.cover_credit_text, v.cover_credit_url, v.id, v.name, v.city_id, v.address, v.timezone, v.data_status, v.provenance,
       v.lifecycle_state, v.identity_discriminator,
       v.normalized_name, v.normalized_address, v.canonical_venue_id,
       ST_Y(v.location::geometry) AS latitude,
@@ -795,6 +809,9 @@ async function loadVenue(client: PoolClient, venueId: string): Promise<VenueRow>
 
 function mapVenue(row: VenueRow, resolvedFromVenueId?: string): VenueDto {
   const dto: VenueDto = {
+    profile: readVenueProfile(row),
+    publicContacts: readPublicVenueContacts(row.public_contacts),
+    cover: { uploadedUrl: row.cover_url ?? null, credit: row.cover_url && row.cover_credit_kind && row.cover_credit_text !== null ? { kind: row.cover_credit_kind, text: row.cover_credit_text, url: row.cover_credit_url != null && httpsCreditUrl(row.cover_credit_url) !== null ? row.cover_credit_url : null } : null },
     id: row.id,
     name: row.name,
     cityId: row.city_id,

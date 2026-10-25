@@ -7,12 +7,6 @@ on:
         options: [auto, codex, cursor, agy]
         default: auto
         description: 'Requested author profile; exact task model and existing role/budget gates stay mandatory'
-  issue_comment:
-    types: [created]
-  # Scheduled workflows fire ONLY from the default branch (main).
-  # Dispatch the existing finite train on dev; this workflow never executes models.
-  schedule:
-    - cron: '17,47 * * * *'
   push:
     branches: [chatops/actions-train-20261021]
     paths: ['.github/workflows/train-*.yml', 'scripts/chatops/actions_train/**', 'scripts/chatops/tests/test_actions_train*.py']
@@ -21,85 +15,9 @@ permissions:
 concurrency:
   group: gobadminton-train-dispatch
   cancel-in-progress: false
-  queue: max
+  # Reconcile rereads the complete durable queue; retain only the latest wake-up.
+  queue: single
 jobs:
-  # GitHub only schedules workflows from the repository default branch (main).
-  # This is a wake-up signal, not a second queue, admission or executor.
-  scheduled_train_wake:
-    if: >-
-      github.event_name == 'schedule' && github.repository_id == '1416250340' &&
-      github.ref == 'refs/heads/main' && github.event.schedule == '17,47 * * * *'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      actions: write
-    steps:
-      - name: Wake existing DEV train; no authority, models or SSH here
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_EVENT: ${{ github.event_name }}
-          GH_REF: ${{ github.ref }}
-          GH_REPO_ID: ${{ github.repository_id }}
-          GH_CRON: ${{ github.event.schedule }}
-        run: |
-          python3 -B - <<'PY'
-          import json, os, urllib.request
-          assert (os.environ['GH_EVENT'],os.environ['GH_REF'],os.environ['GH_REPO_ID'],os.environ['GH_CRON']) == (
-              'schedule','refs/heads/main','1416250340','17,47 * * * *')
-          req = urllib.request.Request(
-              'https://api.github.com/repos/anpavel84-afk/gobadminton-clean/actions/workflows/train-dispatch.yml/dispatches',
-              data=json.dumps({'ref':'dev','inputs':{'profile':'auto'}}).encode(),
-              headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],
-                       'Accept':'application/vnd.github+json',
-                       'X-GitHub-Api-Version':'2022-11-28',
-                       'Content-Type':'application/json'},method='POST')
-          with urllib.request.urlopen(req,timeout=30) as response:
-              assert response.status == 204
-          print('GB_TRAIN_WAKE_V1: schedule accepted; dev dispatcher signalled; no direct stage/model execution')
-          PY
-  # Default branch receives Issue events. Relay only authentic Owner admissions to
-  # the already permitted DEV dispatcher; no model/SSH/DEV secrets or new task authority.
-  owner_admission_reconcile:
-    if: >-
-      github.event_name == 'issue_comment' && github.repository_id == '1416250340' &&
-      github.actor_id == '318610566' && !github.event.issue.pull_request &&
-      (startsWith(github.event.comment.body, 'GOBADMINTON_AUTONOMY_V1') ||
-       startsWith(github.event.comment.body, 'GOBADMINTON_TRAIN_RECONCILE_V1'))
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      actions: write
-    steps:
-      - name: Validate Owner Issue event and dispatch existing DEV train
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          python3 -B - <<'PY'
-          import json, os, pathlib, urllib.request
-          e = json.loads(pathlib.Path(os.environ['GITHUB_EVENT_PATH']).read_text())
-          assert e['repository']['id'] == 1416250340 and e['action'] == 'created'
-          assert e['sender']['id'] == e['comment']['user']['id'] == 318610566
-          assert 'pull_request' not in e['issue'] and isinstance(e['issue']['number'], int)
-          body = e['comment']['body']
-          assert isinstance(body, str) and len(body.encode()) <= 32768
-          marker, sep, raw = body.partition('\n')
-          assert sep and marker in ('GOBADMINTON_AUTONOMY_V1', 'GOBADMINTON_TRAIN_RECONCILE_V1')
-          record = json.loads(raw)
-          assert isinstance(record, dict) and record.get('schema') == marker
-          if marker == 'GOBADMINTON_AUTONOMY_V1':
-              assert record.get('target') == 'dev' and record.get('kind') == 'source_only'
-          else:
-              assert record.get('profile') == 'auto'
-          url = 'https://api.github.com/repos/anpavel84-afk/gobadminton-clean/actions/workflows/train-dispatch.yml/dispatches'
-          req = urllib.request.Request(url,
-              data=json.dumps({'ref':'dev','inputs':{'profile':'auto'}}).encode(),
-              headers={'Authorization': 'Bearer '+os.environ['GH_TOKEN'],
-                       'Accept':'application/vnd.github+json',
-                       'X-GitHub-Api-Version':'2022-11-28'})
-          with urllib.request.urlopen(req, timeout=30) as response:
-              assert response.status == 204
-          print('Owner admission event relayed to existing DEV dispatcher (no task authority minted)')
-          PY
   commissioning:
     if: github.event_name == 'push' && github.repository_id == '1416250340'
     runs-on: ubuntu-24.04
@@ -122,7 +40,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: d4567dfddbfc26d95236839343d841841067e72c
+          ref: 41e12be2d551158e97ea30eaf8e95f992f998615
           persist-credentials: false
       - name: One finite authenticated reconciliation; disabled server remains read-only
         run: python3 -B scripts/chatops/actions_train/client.py reconcile
@@ -135,3 +53,37 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with: {name: train-reconcile, path: evidence/, retention-days: 90}
+  # A separate hosted job may publish only a reviewed DRAFT. No DEV server,
+  # source writer, SSH key or model token is present. The workflow-wide
+  # gobadminton-train-dispatch concurrency group serializes all such writes.
+  publish_phase_drafts:
+    needs: reconcile
+    if: >-
+      needs.reconcile.result == 'success' && github.event_name == 'workflow_dispatch' &&
+      github.repository_id == '1416250340' && github.ref == 'refs/heads/dev' &&
+      (github.actor_id == '318610566' || github.actor == 'github-actions[bot]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 41e12be2d551158e97ea30eaf8e95f992f998615
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: train-reconcile
+          path: evidence
+      - name: Publish immutable Owner-scoped planning DRAFT only
+        run: python3 -B scripts/chatops/planning/phase_plan_publish_v2.py
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: phase-plan-publication
+          path: evidence/phase-plan-publication-v2.json
+          retention-days: 90

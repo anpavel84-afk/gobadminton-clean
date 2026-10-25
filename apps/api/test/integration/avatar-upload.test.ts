@@ -37,7 +37,7 @@ run("owned avatar integration", () => {
     registerAvatarHttp(app.getHttpAdapter().getInstance());
     await app.register(cookie); app.setGlobalPrefix("v1"); app.useGlobalFilters(new ProblemExceptionFilter()); await app.init(); await app.getHttpAdapter().getInstance().ready();
   }
-  const upload = (payload: Buffer = png, overrides: Record<string,string> = {}) => app.inject({method:"PUT",url:"/v1/me/avatar",headers:{...headers,"x-profile-version":String(version),...overrides},payload});
+  const upload = (payload: Buffer = png, overrides: Record<string,string> = {}) => app.inject({method:"PUT",url:"/v1/me/avatar",headers:{...headers,"idempotency-key":randomUUID(),"x-profile-version":String(version),...overrides},payload});
   beforeAll(async () => {
     execFileSync('pnpm',['exec','tsx','src/database/migrate.ts'],{cwd:path.resolve(__dirname,'../..'),env:{...process.env,PUBLIC_API_ORIGIN:env.PUBLIC_API_ORIGIN},stdio:'inherit'});
     pool = new Pool({connectionString:env.DATABASE_URL});
@@ -52,13 +52,24 @@ run("owned avatar integration", () => {
     png=await sharp(randomBytes(800*800*3),{raw:{width:800,height:800,channels:3}}).withMetadata({orientation:6}).png().toBuffer();
     expect(png.length).toBeGreaterThan(1024*1024);
   });
-  afterAll(async()=>{await app?.close();if(pool){for (const table of ['external_identities','app_sessions','player_social_profiles']) await pool.query(`DELETE FROM ${table} WHERE user_id = ANY($1::uuid[])`,[[userId,otherId]]);await pool.query('DELETE FROM users WHERE id = ANY($1::uuid[])',[[userId,otherId]]);await pool.end();}});
+  afterAll(async()=>{await app?.close();if(pool){await pool.query('DELETE FROM idempotency_records WHERE actor_id=ANY($1::uuid[])',[[userId,otherId]]);for (const table of ['external_identities','app_sessions','player_social_profiles']) await pool.query(`DELETE FROM ${table} WHERE user_id = ANY($1::uuid[])`,[[userId,otherId]]);await pool.query('DELETE FROM users WHERE id = ANY($1::uuid[])',[[userId,otherId]]);await pool.end();}});
   it("auth/CSRF and Origin fence every mutation",async()=>{
     expect((await upload(png,{cookie:""})).statusCode).toBe(401);
     expect((await upload(png,{"x-csrf-token":""})).statusCode).toBe(403);
     expect((await upload(png,{"x-csrf-token":"wrong"})).statusCode).toBe(403);
     expect((await upload(png,{origin:"https://evil.invalid"})).statusCode).toBe(403);
-    expect((await app.inject({method:'DELETE',url:'/v1/me/avatar',headers:{...headers,'x-csrf-token':''}})).statusCode).toBe(403);
+    expect((await app.inject({method:'DELETE',url:'/v1/me/avatar',headers:{...headers,'idempotency-key':randomUUID(),'x-csrf-token':''}})).statusCode).toBe(403);
+    expect((await app.inject({method:'DELETE',url:'/v1/me/avatar',headers:{...headers,'idempotency-key':randomUUID(),'x-csrf-token':'wrong'}})).statusCode).toBe(403);
+  });
+  it("requires a 16–128 character key on both commands",async()=>{
+    for(const method of ["PUT","DELETE"] as const){
+      for(const key of [undefined,"", "x".repeat(15), "x".repeat(129)]){
+        const requestHeaders={...headers,"x-profile-version":"0",...(key===undefined?{}:{"idempotency-key":key})};
+        const response=await app.inject({method,url:"/v1/me/avatar",headers:requestHeaders,...(method==="PUT"?{payload:png}:{})});
+        expect(response.statusCode,response.body).toBe(400);expect(response.json().code).toBe("IDEMPOTENCY_KEY_INVALID");
+      }
+    }
+    expect((await pool.query("SELECT 1 FROM idempotency_records WHERE actor_id=$1",[userId])).rowCount).toBe(0);
   });
   it("reject matrix is bounded and leaves DB unchanged",async()=>{
     expect((await upload(png,{'content-type':'image/jpeg'})).statusCode).toBe(415);
@@ -113,12 +124,12 @@ run("owned avatar integration", () => {
     const winner=results.find(r=>r.statusCode===200)!.json();version=winner.version;url=winner.avatar.uploadedUrl;
     expect((await app.inject({method:'GET',url:old})).statusCode).toBe(404);
     expect(await readdir(media)).not.toContain(old.split('/').pop());
-    const r=await app.inject({method:'DELETE',url:'/v1/me/avatar',headers:{...other,'x-profile-version':'0'}});expect(r.statusCode).toBe(200);
+    const r=await app.inject({method:'DELETE',url:'/v1/me/avatar',headers:{...other,'idempotency-key':randomUUID(),'x-profile-version':'0'}});expect(r.statusCode).toBe(200);
     expect((await app.inject({method:'GET',url})).statusCode).toBe(200);
     expect((await app.inject({method:'PUT',url:`/v1/players/${userId}/avatar`,headers,payload:png.subarray(0,100)})).statusCode).toBe(404);
   });
   it("remove restores provider and retires owned bytes",async()=>{
-    const r=await app.inject({method:'DELETE',url:'/v1/me/avatar',headers:{...headers,'x-profile-version':String(version)}});expect(r.statusCode).toBe(200);version=r.json().version;
+    const r=await app.inject({method:'DELETE',url:'/v1/me/avatar',headers:{...headers,'idempotency-key':randomUUID(),'x-profile-version':String(version)}});expect(r.statusCode).toBe(200);version=r.json().version;
     expect(r.json().avatar).toEqual({uploadedUrl:null,providerUrl:'https://avatars.yandex.net/test'});expect((await app.inject({method:'GET',url})).statusCode).toBe(404);
     expect(await readdir(media)).not.toContain(url.split('/').pop());
   });
@@ -132,7 +143,7 @@ run("owned avatar integration", () => {
     await app.get(AvatarService).cleanup();expect(await readdir(media)).not.toContain(url.split('/').pop());expect((await app.inject({method:'GET',url})).statusCode).toBe(404);
   });
   it("explicit profile deletion journals cleanup without enabling account deletion product", async () => {
-    const r = await app.inject({method:'PUT',url:'/v1/me/avatar',headers:{...other,'x-profile-version':'1'},payload:png});
+    const r = await app.inject({method:'PUT',url:'/v1/me/avatar',headers:{...other,'idempotency-key':randomUUID(),'x-profile-version':'1'},payload:png});
     expect(r.statusCode,r.body).toBe(200);
     const oldUrl = r.json().avatar.uploadedUrl;
     await pool.query('DELETE FROM player_social_profiles WHERE user_id=$1',[otherId]);

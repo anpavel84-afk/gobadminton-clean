@@ -1,3 +1,6 @@
+import { devMapPreview } from "./dev-map-preview";
+import { devMoscowFixturesEnabled, refreshDevMoscowPeers } from "./dev-moscow-test";
+import { MOSCOW_CITY_ID } from "../venues/venues.service";
 import { Inject, Injectable } from "@nestjs/common";
 import { randomUUID, createHash } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
@@ -86,8 +89,35 @@ export class UnifiedPlayersService {
       throw badRequest("INVALID_REQUEST", "Некорректный запрос Players");
     }
     const input = parsed.data;
+    const devTestAllowed = devMoscowFixturesEnabled(this.env);
+    const devInitial = initial && "filters" in input && input.filters.cityId === MOSCOW_CITY_ID && mode === "live" && devTestAllowed;
+    if (devInitial) {
+      const client = await this.pool.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query("SET LOCAL statement_timeout='2s'");
+        await client.query("SET LOCAL lock_timeout='2s'");
+        await this.fence.assertActiveConsumerInTransaction(client, { actorId: viewerId, sessionId });
+        const eligible = await client.query("SELECT 1 FROM player_social_profiles WHERE user_id=$1 AND NOT social_eligible", [viewerId]);
+        if (eligible.rowCount) throw forbidden("VIEWER_RESTRICTED", "Социальный профиль недоступен");
+        // Reserve the existing initial-query budget BEFORE the shared fixture
+        // advisory lock. A 429 must never mutate or refresh shared test peers.
+        await this.budgets.consumeUnified(client, viewerId, true, new Date());
+        await refreshDevMoscowPeers(client, this.env, this.fence, { actorId: viewerId, sessionId });
+        await this.fence.assertActiveConsumerInTransaction(client, { actorId: viewerId, sessionId });
+        // Deferred epoch bump commits BEFORE the RR snapshot, never after its final fence.
+        await client.query("COMMIT");
+      } catch (e) {
+        await client.query("ROLLBACK").catch(() => undefined);
+        if (["57014", "55P03"].includes((e as { code?: string }).code ?? ""))
+          throw serviceUnavailable("DISCOVERY_TIMEOUT", "Каталог временно недоступен");
+        throw e;
+      } finally { client.release(); }
+    }
     return this.read(viewerId, sessionId, async (client, sessionExpires) => {
-      await this.budgets.consumeUnified(client, viewerId, initial, new Date());
+      // The DEV initial request already consumed its budget in the short,
+      // fenced fixture transaction; never double-charge in the RR read.
+      if (!devInitial) await this.budgets.consumeUnified(client, viewerId, initial, new Date());
       let context: UnifiedContext;
       let cursor: UnifiedCursor | null = null;
       const revision = (
@@ -253,7 +283,7 @@ export class UnifiedPlayersService {
         const expiry = (await client.query<{deadline:Date|null}>("SELECT min(expires_at) AS deadline FROM user_restrictions WHERE revoked_at IS NULL AND expires_at>clock_timestamp() AND capability IN ('account.access','profile.public','social.directory','social.radar')")).rows[0]?.deadline;
         if (expiry) context.expiresAt = Math.min(context.expiresAt, expiry.getTime());
       }
-      const rows = await selectUnified(client, context, cursor, limit, map, this.env.USER_RESTRICTIONS_INTERNAL_ENABLED);
+      const rows = await selectUnified(client, context, cursor, limit, map, this.env.USER_RESTRICTIONS_INTERNAL_ENABLED, devTestAllowed);
       const stats = rows[0]!;
       const deadline = stats.set_deadline?.getTime() ?? Infinity;
       if (initial) context.expiresAt = Math.min(context.expiresAt, deadline);
@@ -396,7 +426,11 @@ export class UnifiedPlayersService {
         validUntil: new Date(context.expiresAt).toISOString(),
         refreshAfterSeconds: 30,
         query: {
-          queryRef: sealUnified(this.env, "query", context),
+          // AES-GCM uses a fresh random IV. Re-encrypting the SAME context gives
+          // different opaque bytes, so a client cannot compare returned refs.
+          // Continuations (including the map window) echo the authenticated
+          // incoming reference without relaxing actor/session/revision fences.
+          queryRef: "queryRef" in input ? input.queryRef : sealUnified(this.env, "query", context),
           asOf: new Date(context.asOf).toISOString(),
           ordering: context.origin
             ? "radar_distance_then_directory"
@@ -412,7 +446,7 @@ export class UnifiedPlayersService {
           ordinaryOnlyTotal: Number(stats.ordinary_total),
           completeness: "exact_at_asOf",
         },
-        map: { availability: "missing", mapId: null, version: null },
+        map: devMapPreview(this.env, context.filters.cityId),
         ...(map
           ? { mapPage: { ...pagination, nextMapCursor: next } }
           : { page: { ...pagination, nextCursor: next } }),

@@ -1,0 +1,522 @@
+{
+  "schema": "GB_PHASE_PLAN_V2_PROPOSAL",
+  "status": "WORKING_DRAFT_NOT_AUTHORIZED",
+  "created_at": "2026-10-22",
+  "runtime_effects": "NONE",
+  "note": "Stage assignments are proposals. Existing GOBADMINTON_AUTONOMY_V1 authorization is NOT replaced.",
+  "approval_boundary": "Owner-approved parent scope / bounded delegation; never model-generated self-admission.",
+  "models": {
+    "planner": "codex:gpt-6.1-sol:medium",
+    "architect_complex": "codex:gpt-6-astra:medium",
+    "architect_critical": "codex:gpt-6-astra:high",
+    "architect_local": "codex:gpt-6.1-sol:high",
+    "author_default": "cursor:auto",
+    "author_fallback": "codex:gpt-6.1-sol:medium",
+    "qa_default": "agy:claude-sonnet-5-5-high",
+    "qa_critical": "agy:claude-opus-5-5-high",
+    "safe_readonly_optional": "codex:gpt-6-luna:medium"
+  },
+  "examples": [
+    {
+      "key": "OPS-185",
+      "parent_issue": 185,
+      "goal": "Finish pending protected train activation and exact recovery proof",
+      "status": "INSTALLED_DISABLED",
+      "model_stages": [
+        [
+          "security_review",
+          "codex:gpt-6-astra:high"
+        ],
+        [
+          "quiescent_activation",
+          "deterministic_ops"
+        ],
+        [
+          "dispatcher_probe",
+          "github_actions"
+        ]
+      ],
+      "blocked_by": [
+        "Owner-approved exact controlled activation path"
+      ],
+      "can_start_execution": false
+    },
+    {
+      "key": "MODEL-V2",
+      "parent_issue": 185,
+      "goal": "Phase-aware model routing and verified adapter fallback",
+      "status": "PROPOSED_NOT_ADMITTED",
+      "model_stages": [
+        [
+          "threat_model",
+          "codex:gpt-6-astra:high"
+        ],
+        [
+          "adapter_implementation",
+          "cursor:auto"
+        ],
+        [
+          "independent_ops_qa",
+          "agy:claude-opus-5-5-high"
+        ],
+        [
+          "dry_run",
+          "github_actions"
+        ]
+      ],
+      "blocked_by": [
+        "Current scalar model admission; unproved adapters and stage permissions"
+      ],
+      "can_start_execution": false
+    },
+    {
+      "key": "UAT-179",
+      "parent_issue": 179,
+      "goal": "Compact popup cover transitions without first-touch photo jump",
+      "status": "OWNER_UAT_REMAINDER",
+      "model_stages": [
+        [
+          "scope",
+          "codex:gpt-6.1-sol:medium"
+        ],
+        [
+          "implementation",
+          "cursor:auto"
+        ],
+        [
+          "independent_qa",
+          "agy:claude-sonnet-5-5-high"
+        ],
+        [
+          "ci_and_dev",
+          "github_actions"
+        ]
+      ],
+      "blocked_by": [
+        "Separate exact admission and model route enablement"
+      ],
+      "can_start_execution": false
+    },
+    {
+      "key": "MONITOR-175",
+      "parent_issue": 175,
+      "goal": "Owner-visible backlog, truthful task names, history and model stage",
+      "status": "PLANNING",
+      "model_stages": [
+        [
+          "ux_spec",
+          "agy:claude-sonnet-5-5-medium"
+        ],
+        [
+          "ui_implementation",
+          "cursor:auto"
+        ],
+        [
+          "source_qa",
+          "agy:claude-sonnet-5-5-high"
+        ],
+        [
+          "projects_access",
+          "authenticated_gh_projects"
+        ]
+      ],
+      "blocked_by": [
+        "Projects read/write authorization unverified; no local second backlog"
+      ],
+      "can_start_execution": false
+    },
+    {
+      "key": "RADAR-177",
+      "parent_issue": 177,
+      "original_issue": 149,
+      "goal": "Radar player popup and nearest publicly visible games",
+      "status": "DEFERRED_3_OF_3_NEEDS_OWNER",
+      "model_stages": [
+        [
+          "read_only_diagnosis",
+          "codex:gpt-6-astra:high"
+        ],
+        [
+          "permission_review",
+          "agy:claude-opus-5-5-high"
+        ],
+        [
+          "bounded_successor_implementation",
+          "cursor:auto"
+        ],
+        [
+          "privacy_qa",
+          "agy:claude-opus-5-5-high"
+        ],
+        [
+          "ci_dev",
+          "github_actions"
+        ]
+      ],
+      "blocked_by": [
+        "Spent recovery receipt cannot be replayed; exact permitted successor required"
+      ],
+      "can_start_execution": false
+    },
+    {
+      "key": "FR3-API-181",
+      "parent_issue": 181,
+      "goal": "Protected recommendations from accepted friend to friend",
+      "status": "DEFERRED_3_OF_3_NEEDS_OWNER",
+      "model_stages": [
+        [
+          "acl_idempotency_contract",
+          "codex:gpt-6-astra:high"
+        ],
+        [
+          "new_authorized_successor_code",
+          "cursor:auto"
+        ],
+        [
+          "adversarial_qa",
+          "agy:claude-opus-5-5-high"
+        ],
+        [
+          "ci_dev",
+          "github_actions"
+        ]
+      ],
+      "blocked_by": [
+        "Spent diagnosis; bound successor or Owner decision"
+      ],
+      "can_start_execution": false
+    },
+    {
+      "key": "FR3-WEB-182",
+      "parent_issue": 182,
+      "depends_on": [
+        181
+      ],
+      "goal": "Send recommendation and show received items in My Games",
+      "status": "DEPENDENCY",
+      "model_stages": [
+        [
+          "ux_flow",
+          "agy:claude-sonnet-5-5-medium"
+        ],
+        [
+          "implementation",
+          "cursor:auto"
+        ],
+        [
+          "source_qa",
+          "agy:claude-sonnet-5-5-high"
+        ],
+        [
+          "ci_dev",
+          "github_actions"
+        ]
+      ],
+      "blocked_by": [
+        "#181 API must be DEV ACCEPTED; recommendation != invitation"
+      ],
+      "can_start_execution": false
+    },
+    {
+      "key": "MAP-FILTER-184",
+      "parent_issue": 184,
+      "depends_on": [
+        177
+      ],
+      "goal": "Venue and nearby-player map layer filters",
+      "status": "DEPENDENCY",
+      "model_stages": [
+        [
+          "ux_states",
+          "codex:gpt-6.1-sol:medium"
+        ],
+        [
+          "implementation",
+          "cursor:auto"
+        ],
+        [
+          "privacy_qa",
+          "agy:claude-sonnet-5-5-high"
+        ],
+        [
+          "ci_dev",
+          "github_actions"
+        ]
+      ],
+      "blocked_by": [
+        "#177 must be completed and existing Radar privacy fence retained"
+      ],
+      "can_start_execution": false
+    },
+    {
+      "key": "VENUE-V1b",
+      "parent_issue": 178,
+      "goal": "Public venue profile and safe contacts UI",
+      "status": "BACKLOG_DRAFT_CHILD_MISSING",
+      "model_stages": [
+        [
+          "public_private_projection",
+          "codex:gpt-6.1-sol:high"
+        ],
+        [
+          "implementation",
+          "cursor:auto"
+        ],
+        [
+          "read_rights_review",
+          "agy:claude-opus-5-5-high"
+        ],
+        [
+          "ci_dev",
+          "github_actions"
+        ]
+      ],
+      "blocked_by": [
+        "Register bounded child Issue and confirm existing #178 accepted fields"
+      ],
+      "can_start_execution": false
+    },
+    {
+      "key": "VENUE-V3b",
+      "parent_issue": 64,
+      "goal": "Admin editing venue profile and contact fields",
+      "status": "BACKLOG_DRAFT_CHILD_MISSING",
+      "model_stages": [
+        [
+          "admin_acl_contract",
+          "codex:gpt-6-astra:high"
+        ],
+        [
+          "implementation",
+          "cursor:auto"
+        ],
+        [
+          "admin_security_qa",
+          "agy:claude-opus-5-5-high"
+        ],
+        [
+          "ci_dev",
+          "github_actions"
+        ]
+      ],
+      "blocked_by": [
+        "Model fields V1a done; exact Admin owner rights validated"
+      ],
+      "can_start_execution": false
+    },
+    {
+      "key": "MAP-PERF1",
+      "parent_issue": null,
+      "goal": "City map prefetch/loading state after existing #151/#152",
+      "status": "BACKLOG_DRAFT_NO_ISSUE",
+      "model_stages": [
+        [
+          "performance_baseline",
+          "codex:gpt-6.1-sol:medium"
+        ],
+        [
+          "implementation",
+          "cursor:auto"
+        ],
+        [
+          "performance_qa",
+          "agy:claude-sonnet-5-5-high"
+        ]
+      ],
+      "blocked_by": [
+        "MAP-FILTER and new bounded parent Issue"
+      ],
+      "can_start_execution": false
+    },
+    {
+      "key": "VENUE-V2",
+      "parent_issue": 109,
+      "goal": "DEV-only verified venue contact import",
+      "status": "BACKLOG_DRAFT_CHILD_MISSING",
+      "model_stages": [
+        [
+          "import_plan",
+          "codex:gpt-6.1-sol:high"
+        ],
+        [
+          "ops_execution",
+          "deterministic_ops"
+        ],
+        [
+          "data_qa",
+          "agy:claude-sonnet-5-5-high"
+        ]
+      ],
+      "blocked_by": [
+        "V1a and V3b, exact operator privilege and reviewed manifest"
+      ],
+      "can_start_execution": false
+    },
+    {
+      "key": "POSTGAME-PG0",
+      "parent_issue": 73,
+      "goal": "Postgame exact contract/schema/privacy model and UI delta",
+      "status": "PRODUCT_APPROVED_BUT_NOT_IMPL_ADMITTED",
+      "model_stages": [
+        [
+          "contract_architecture",
+          "codex:gpt-6-astra:high"
+        ],
+        [
+          "independent_threat_review",
+          "agy:claude-opus-5-5-high"
+        ]
+      ],
+      "blocked_by": [
+        "Reconcile unmerged historical PR #73 against current DEV; no automatic implementation admission"
+      ],
+      "can_start_execution": false
+    },
+    {
+      "key": "POSTGAME-PG1",
+      "parent_issue": 73,
+      "depends_on": [
+        "POSTGAME-PG0"
+      ],
+      "goal": "Outcome and attendance with revision history and durable notices",
+      "status": "PLANNED",
+      "model_stages": [
+        [
+          "architecture_fence",
+          "codex:gpt-6-astra:high"
+        ],
+        [
+          "source_implementation",
+          "cursor:auto"
+        ],
+        [
+          "privacy_concurrency_qa",
+          "agy:claude-opus-5-5-high"
+        ],
+        [
+          "ci_dev",
+          "github_actions"
+        ]
+      ],
+      "blocked_by": [
+        "PG0 exact contract, recourse/not-held invariants"
+      ],
+      "can_start_execution": false
+    },
+    {
+      "key": "POSTGAME-PG2",
+      "parent_issue": 73,
+      "depends_on": [
+        "POSTGAME-PG1"
+      ],
+      "goal": "Disputes and independent support case linkage",
+      "status": "PLANNED",
+      "model_stages": [
+        [
+          "security_architecture",
+          "codex:gpt-6-astra:high"
+        ],
+        [
+          "source_implementation",
+          "cursor:auto"
+        ],
+        [
+          "trust_qa",
+          "agy:claude-opus-5-5-high"
+        ]
+      ],
+      "blocked_by": [
+        "PG1 + actual real-data Trust readiness"
+      ],
+      "can_start_execution": false
+    },
+    {
+      "key": "POSTGAME-PG3",
+      "parent_issue": 73,
+      "depends_on": [
+        "POSTGAME-PG1",
+        "POSTGAME-PG2"
+      ],
+      "goal": "Private peer, trainer and organization reviews",
+      "status": "PLANNED",
+      "model_stages": [
+        [
+          "privacy_contract",
+          "codex:gpt-6-astra:medium"
+        ],
+        [
+          "source_implementation",
+          "cursor:auto"
+        ],
+        [
+          "acl_qa",
+          "agy:claude-opus-5-5-high"
+        ]
+      ],
+      "blocked_by": [
+        "PG1/PG2 contracts, no public reputation"
+      ],
+      "can_start_execution": false
+    },
+    {
+      "key": "POSTGAME-PG4",
+      "parent_issue": 73,
+      "depends_on": [
+        "POSTGAME-PG1",
+        "POSTGAME-PG2",
+        "POSTGAME-PG3"
+      ],
+      "goal": "My Games + Participants / Results UI",
+      "status": "PLANNED",
+      "model_stages": [
+        [
+          "ux_flow",
+          "agy:claude-sonnet-5-5-medium"
+        ],
+        [
+          "web_implementation",
+          "cursor:auto"
+        ],
+        [
+          "mobile_qa",
+          "agy:claude-sonnet-5-5-high"
+        ],
+        [
+          "ci_dev",
+          "github_actions"
+        ]
+      ],
+      "blocked_by": [
+        "Trusted postgame APIs + role privacy checks"
+      ],
+      "can_start_execution": false
+    },
+    {
+      "key": "POSTGAME-PG5",
+      "parent_issue": 73,
+      "depends_on": [
+        "POSTGAME-PG4"
+      ],
+      "goal": "Integrated QA and DEV UAT",
+      "status": "PLANNED",
+      "model_stages": [
+        [
+          "integrated_qa",
+          "agy:claude-opus-5-5-high"
+        ],
+        [
+          "ci_dev",
+          "github_actions"
+        ],
+        [
+          "owner_uat",
+          "owner"
+        ]
+      ],
+      "blocked_by": [
+        "PG1-4 exact acceptance; no PROD without GO"
+      ],
+      "can_start_execution": false
+    }
+  ]
+}

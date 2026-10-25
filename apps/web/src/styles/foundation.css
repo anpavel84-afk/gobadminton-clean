@@ -128,6 +128,7 @@
   .gb-bottom-nav .gb-message-count { top: 5px; right: calc(50% - 25px); }
   .gb-bottom-nav a[aria-current="page"] { color: var(--gb-ink); }
   .gb-bottom-nav a[aria-current="page"]::after { content: ""; position: absolute; bottom: -3px; width: 30px; height: 3px; border-radius: 3px; background: var(--gb-lime-deep); }
+  .gb-bottom-nav a[aria-current="page"] .gb-nav-icon { border-radius: 50%; background-color: var(--gb-lime-soft); box-shadow: 0 0 0 4px var(--gb-lime-soft); }
   .gb-shell-content--focused { padding: 0; }
   .gb-shell-content--document :is(h2,h3) { scroll-margin-top: 16px; }
 }
@@ -137,25 +138,31 @@
   .gb-consumer .gb-c23-btn:hover:not(:disabled):not([aria-disabled="true"]) { transform: none; }
 }
 
-/* FB01 016: IconButton/tooltip composed with the frozen header and BottomNav. */
-.gb-radar-indicator { position: relative; display: inline-flex; flex: none; }
-.gb-radar-indicator__link { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 50%; color: var(--gb-ink-soft); background: var(--gb-surface); }
-.gb-radar-indicator__link svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.7; }
-.gb-radar-indicator[data-tone="active"] .gb-radar-indicator__link { color: var(--gb-lime-deep); background: var(--gb-lime-soft); }
-.gb-radar-indicator[data-tone="attention"] .gb-radar-indicator__link { color: var(--gb-purple); background: var(--gb-purple-soft); }
-.gb-radar-indicator__link:focus-visible { outline: 2px solid var(--gb-purple); outline-offset: 2px; }
-.gb-radar-tooltip { position: absolute; z-index: 90; right: 0; top: 100%; width: max-content; max-width: min(260px, calc(100vw - 32px)); padding: 12px 16px; border-radius: 12px; background: var(--gb-ink); color: white; font-size: 12px; line-height: 1.5; box-shadow: var(--gb-shadow-elevated); }
-.gb-radar-tooltip small { display: block; }
+/* Single compact Radar control: existing header, four mobile bottom tabs unchanged. */
+.gb-radar-indicator { position:relative; display:inline-flex; align-items:center; flex:none; z-index:61; }
+.gb-radar-indicator__link { display:grid; place-items:center; flex:none; width:48px; height:48px; padding:0; border:0; border-radius:50%; background:transparent; color:var(--gb-ink-soft); cursor:pointer; }
+.gb-radar-indicator__link .gb-radar-symbol { display:block; width:48px; height:48px; }
+.gb-radar-indicator .gb-radar-symbol__disc { fill:var(--gb-surface); }
+.gb-radar-indicator[data-tone="active"] .gb-radar-symbol__disc { fill:var(--gb-lime-soft); }
+.gb-radar-indicator[data-tone="active"] .gb-radar-symbol__glyph { color:var(--gb-ink); }
+.gb-radar-indicator[data-tone="attention"] .gb-radar-symbol__disc { fill:var(--gb-surface); }
+.gb-radar-indicator[data-tone="attention"] .gb-radar-symbol__glyph { color:var(--gb-ink-soft); }
+.gb-radar-indicator__link:focus-visible { outline:2px solid var(--gb-purple); outline-offset:2px; }
+.gb-radar-progress { transition:stroke-dashoffset 700ms linear; }
+.gb-radar-popover { position:absolute; z-index:110; right:0; top:calc(100% + 10px); box-sizing:border-box; display:grid; gap:14px; width:280px; max-width:calc(100vw - 32px); padding:18px; border:1px solid var(--gb-line); border-radius:18px; background:var(--gb-white); color:var(--gb-ink); box-shadow:var(--gb-shadow-elevated); text-align:left; }
+.gb-radar-popover > strong { font-size:16px; }
+.gb-radar-popover__time { display:flex; align-items:baseline; flex-wrap:wrap; gap:8px; }
+.gb-radar-popover__time b { font-weight:700; font-size:26px; font-variant-numeric:tabular-nums; }
+.gb-radar-popover__time small,.gb-radar-popover > p { color:var(--gb-ink-soft); font-size:12px; line-height:1.4; }
+.gb-radar-popover__track { height:5px; overflow:hidden; border-radius:999px; background:var(--gb-line); }
+.gb-radar-popover__track span { display:block; height:100%; border-radius:999px; background:var(--gb-lime); transition:width 700ms linear; }
+.gb-radar-popover__actions { display:flex; flex-wrap:wrap; gap:8px; }
+.gb-radar-popover__actions > * { flex:1 1 auto; }
 @media (max-width:720px) {
-  .gb-topbar .gb-radar-indicator { display: none; }
-  .gb-mobile-tab { min-width: 0; }
-  .gb-mobile-messages { min-width: 0; display: flex; align-items: center; justify-content: center; }
-  .gb-mobile-messages > a { flex: 1; }
-  .gb-bottom-nav:has(.gb-radar-indicator) { padding-left: 12px; padding-right: 12px; grid-template-columns: repeat(3,minmax(0,1fr)) 88px; }
-  .gb-mobile-messages:has(.gb-radar-indicator) { position: relative; align-items: flex-start; }
-  .gb-bottom-nav .gb-radar-indicator__link { min-height: 44px; width: 44px; height: 44px; margin-top: 2px; display: grid; gap: 0; }
-  .gb-mobile-messages:has(.gb-radar-indicator) > a { width: 44px; flex: none; padding-bottom: 18px; }
-  .gb-mobile-messages:has(.gb-radar-indicator) > a > span:last-child { position: absolute; bottom: 0; right: 0; width: 88px; text-align: center; }
-  .gb-mobile-messages:has(.gb-radar-indicator) .gb-message-count { right: 0; }
-  .gb-radar-tooltip { top: auto; bottom: 100%; right: -44px; }
+  .gb-mobile-tab { min-width:0; }
+  .gb-topbar-actions { gap:8px; }
+  .gb-radar-popover { right:-54px; }
+}
+@media (prefers-reduced-motion:reduce) {
+  .gb-radar-progress,.gb-radar-popover__track span { transition:none; }
 }

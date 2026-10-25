@@ -1,0 +1,197 @@
+.gb-consumer .gb-venue-preview { position:absolute; z-index:3; left:12px; right:12px; bottom:calc(12px + var(--gb-safe-bottom)); height:172px; box-sizing:border-box; min-width:0; background:var(--gb-white); border-radius:var(--gb-radius-lg); box-shadow:var(--gb-shadow-elevated); }
+.gb-consumer .gb-venue-handle { display:flex; align-items:center; justify-content:center; width:100%; height:44px; min-height:44px; padding:0; border:0; background:transparent; touch-action:none; }
+.gb-consumer .gb-venue-handle > span { display:block; width:40px; height:4px; border-radius:var(--gb-radius-pill); background:var(--gb-line-dark); }
+.gb-consumer .gb-venue-preview-button { display:grid; grid-template-columns:64px minmax(0,1fr) 44px; align-items:center; gap:12px; width:100%; min-width:0; height:128px; box-sizing:border-box; border:0; padding:0 16px 16px; text-align:left; font:inherit; cursor:pointer; background:transparent; color:var(--gb-ink); }
+.gb-consumer .gb-venue-preview-cover { display:block; width:64px; height:64px; border-radius:var(--gb-radius-sm); overflow:hidden; }
+.gb-consumer .gb-venue-preview-cover img { display:block; width:100%; height:100%; object-fit:cover; }
+.gb-consumer .gb-venue-preview-copy { display:grid; min-width:0; gap:4px; }
+.gb-consumer .gb-venue-preview-copy > * { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+.gb-consumer .gb-venue-preview-copy strong { font-size:17px; font-weight:700; }
+.gb-consumer .gb-venue-preview-address { font-size:14px; color:var(--gb-ink-soft); }
+.gb-consumer .gb-venue-preview-time, .gb-consumer .gb-venue-preview-count { font-size:13px; line-height:18px; min-height:18px; color:var(--gb-ink-soft); }
+.gb-consumer .gb-venue-preview-count { color:var(--gb-lime-deep); }
+.gb-consumer .gb-venue-preview-arrow { display:grid; place-items:center; width:44px; height:44px; border-radius:var(--gb-radius-pill); background:var(--gb-lime); color:var(--gb-ink); }
+.gb-consumer .gb-games-map[data-venue-preview="true"] .maplibregl-ctrl-bottom-right,
+.gb-consumer .gb-games-map[data-venue-preview="true"] .maplibregl-ctrl-bottom-left { bottom:calc(172px + 24px + var(--gb-safe-bottom)); }
+.gb-consumer .gb-venue-sheet-backdrop { position:fixed; inset:0; background:color-mix(in srgb, var(--gb-ink) 32%, transparent); z-index:103; }
+.gb-consumer .gb-venue-sheet { position:fixed; bottom:0; right:0; width:100%; max-height:88dvh; overflow:auto; z-index:104; background:var(--gb-white); color:var(--gb-ink); border-radius:var(--gb-radius-lg) var(--gb-radius-lg) 0 0; padding:0 16px calc(16px + var(--gb-safe-bottom)); box-sizing:border-box; min-width:0; overflow-wrap:anywhere; }
+.gb-consumer .gb-venue-sheet * { box-sizing:border-box; min-width:0; }
+.gb-consumer .gb-venue-sheet button { min-height:44px; min-width:44px; font:inherit; cursor:pointer; }
+.gb-consumer .gb-venue-sheet-header > button { color:var(--gb-ink); }
+/* Keep back/close reachable while the long embedded form scrolls beneath them. */
+.gb-consumer .gb-venue-popup .gb-venue-sheet:not([data-view="info"]) .gb-venue-sheet-header { position:sticky; top:0; z-index:8; background:var(--gb-white); min-height:64px; padding:8px 0 12px; margin-bottom:8px; border-bottom:1px solid var(--gb-line); }
+.gb-consumer .gb-venue-popup .gb-venue-sheet:not([data-view="info"]) .gb-venue-sheet-header h2 { min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.gb-consumer .gb-venue-sheet-header { display:flex; align-items:center; gap:8px; }
+.gb-consumer .gb-venue-sheet-header h2 { flex:1; font-size:18px; }
+.gb-consumer .gb-venue-sheet-close { position:sticky; top:0; z-index:1; }
+.gb-consumer .gb-venue-sheet:has(.gb-venue-sheet-info) .gb-venue-sheet-header { height:0; position:relative; z-index:1; }
+.gb-consumer .gb-venue-sheet:has(.gb-venue-sheet-info) .gb-venue-sheet-header h2 { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
+.gb-consumer .gb-venue-sheet:has(.gb-venue-sheet-info) .gb-venue-sheet-close { position:absolute; right:8px; top:8px; }
+.gb-consumer .gb-venue-sheet-cover, .gb-consumer .gb-venue-sheet-cover img { display:block; width:100%; height:auto; aspect-ratio:16/9; object-fit:cover; border-radius:var(--gb-radius-md); overflow:hidden; }
+.gb-consumer .gb-venue-sheet-info h3 { font-size:24px; font-weight:800; }
+.gb-consumer .gb-venue-sheet-info p { font-size:15px; }
+.gb-consumer .gb-venue-sheet-primary { width:100%; border:0; border-radius:var(--gb-radius-pill); padding:12px 16px; background:var(--gb-lime); color:var(--gb-ink); }
+.gb-consumer .gb-venue-sheet-dates { display:flex; gap:8px; overflow-x:auto; padding:4px 0; }
+.gb-consumer .gb-venue-sheet-dates button { flex-shrink:0; display:grid; gap:4px; border:1px solid var(--gb-line); border-radius:var(--gb-radius-sm); padding:8px 12px; background:var(--gb-white); color:var(--gb-ink-soft); }
+.gb-consumer .gb-venue-sheet-dates button[aria-pressed="true"] { background:var(--gb-ink); color:var(--gb-white); }
+.gb-consumer .gb-venue-sheet-game { width:100%; display:flex; flex-direction:column; gap:12px; margin-top:12px; padding:16px; border:1px solid var(--gb-line); border-radius:var(--gb-radius-md); background:var(--gb-white); color:var(--gb-ink); text-align:left; }
+.gb-consumer .gb-venue-sheet-count { color:var(--gb-lime-deep); }
+.gb-consumer .gb-venue-sheet-detail .gb-game-hero, .gb-consumer .gb-venue-sheet-detail .gb-game-content, .gb-consumer .gb-venue-sheet-detail .gb-game-schedule, .gb-consumer .gb-venue-sheet-detail .gb-game-facts { display:grid; grid-template-columns:minmax(0,1fr); }
+@media (min-width:768px) { .gb-consumer .gb-venue-sheet { right:16px; width:420px; max-width:calc(100% - 32px); } }
+
+/* BottomSheet surface: compact card or handle captures its own pointer; expanded content scrolls normally. */
+.gb-consumer .gb-venue-popup { position:fixed; z-index:104; left:12px; right:12px; bottom:calc(12px + var(--gb-safe-bottom)); max-height:88dvh; overflow:hidden; background:var(--gb-white); color:var(--gb-ink); border-radius:var(--gb-radius-lg); box-shadow:var(--gb-shadow-elevated); }
+/* The compact card is one touch surface. Horizontal browser gestures and pinch-zoom
+   remain native; vertical swipes are interpreted by VenuePopup only while collapsed. */
+.gb-consumer .gb-venue-popup[data-expanded="false"] { touch-action:pan-x pinch-zoom; }
+/* Stable original pointer target during compact swipes. Avoid display:none or
+   changing its containing box when the sheet starts revealing full content. */
+.gb-consumer .gb-venue-popup-preview-surface {
+  position:absolute; top:44px; left:0; right:0; height:128px;
+}
+/* Stop mobile Safari from claiming a touch-scroll before pointer capture;
+   only the compact card is affected, never the expanded popup content. */
+.gb-consumer .gb-venue-popup[data-expanded="false"] .gb-venue-popup-preview-surface,
+.gb-consumer .gb-venue-popup[data-expanded="false"] .gb-venue-preview-button {
+  touch-action:none;
+  -webkit-user-select:none;
+  user-select:none;
+}
+.gb-consumer .gb-venue-popup-compact-measure { position:absolute; height:172px; width:0; pointer-events:none; }
+.gb-consumer .gb-venue-popup-full-measure { position:absolute; height:88dvh; width:0; pointer-events:none; }
+.gb-consumer .gb-venue-popup .gb-venue-preview { position:static; height:128px; box-shadow:none; }
+/* Owner #179: the selected venue owns ONE image. While the compact sheet grows,
+   enlarge that existing thumbnail in-place; do not move it to the info slot
+   until the 220ms settle completes. A downward compact swipe stays unchanged. */
+.gb-consumer .gb-venue-popup[data-compact-morph="true"] .gb-venue-preview-cover {
+  position:absolute;
+  left:16px;
+  top:var(--gb-venue-cover-top);
+  width:var(--gb-venue-cover-width);
+  height:var(--gb-venue-cover-height);
+  max-width:none;
+  aspect-ratio:auto;
+  z-index:2;
+}
+.gb-consumer .gb-venue-popup[data-compact-morph="true"] .gb-venue-preview-copy {
+  grid-column:2;
+  opacity:var(--gb-venue-copy-opacity);
+}
+.gb-consumer .gb-venue-popup[data-compact-morph="true"] .gb-venue-preview-arrow {
+  grid-column:3;
+  opacity:var(--gb-venue-copy-opacity);
+}
+.gb-consumer .gb-venue-popup[data-compact-morph="true"][data-settling="true"] .gb-venue-preview-cover {
+  transition:width 220ms cubic-bezier(.2,.8,.2,1), height 220ms cubic-bezier(.2,.8,.2,1), top 220ms cubic-bezier(.2,.8,.2,1);
+}
+.gb-consumer .gb-venue-popup[data-compact-morph="true"][data-settling="true"] :is(.gb-venue-preview-copy,.gb-venue-preview-arrow) {
+  transition:opacity 220ms cubic-bezier(.2,.8,.2,1);
+}
+
+.gb-consumer .gb-venue-popup-content { width:100%; min-width:0; height:calc(100% - 44px); overflow-y:auto; overflow-x:clip; overscroll-behavior:contain; scroll-padding-top:80px; scroll-padding-bottom:96px; box-sizing:border-box; -webkit-overflow-scrolling:touch; }
+.gb-consumer .gb-venue-popup .gb-venue-sheet { position:static; width:100%; max-width:none; max-height:none; overflow:visible; border-radius:0; }
+.gb-consumer a.gb-venue-sheet-primary { display:block; box-sizing:border-box; text-align:center; text-decoration:none; color:var(--gb-ink); }
+@media (min-width:768px) { .gb-consumer .gb-venue-popup { left:auto; right:16px; width:420px; max-width:calc(100% - 32px); } }
+@media (prefers-reduced-motion:reduce) { .gb-consumer .gb-venue-popup { transition:none !important; } }
+
+/* ListRow + MediaBlock; the media pipeline belongs to GameCover. */
+/* Compact schedule list row: square media, details above, organizer and seats below. */
+.gb-consumer .gb-venue-sheet-game-main { display:grid; grid-template-columns:104px minmax(0,1fr); align-items:start; gap:12px; width:100%; min-width:0; }
+.gb-consumer .gb-venue-sheet-game-cover { display:block; width:104px; height:104px; aspect-ratio:1/1; align-self:start; border-radius:var(--gb-radius-sm); overflow:hidden; }
+.gb-consumer .gb-venue-sheet-game-cover img { display:block; width:100%; height:100%; object-fit:cover; }
+.gb-consumer .gb-venue-sheet-game-summary { display:flex; flex-direction:column; gap:6px; min-width:0; overflow-wrap:anywhere; line-height:1.35; }
+.gb-consumer .gb-venue-sheet-game-time { color:var(--gb-ink-soft); font-size:14px; }
+.gb-consumer .gb-venue-sheet-game-summary strong { font-size:16px; font-weight:700; }
+.gb-consumer .gb-venue-sheet-game-levels { font-size:13px; color:var(--gb-ink-soft); }
+.gb-consumer .gb-venue-sheet-game-footer { display:flex; justify-content:space-between; align-items:center; gap:8px; width:100%; min-width:0; padding-top:10px; border-top:1px solid var(--gb-line); }
+.gb-consumer .gb-venue-sheet-game-organizer { display:flex; align-items:center; gap:8px; flex:1 1 auto; min-width:0; font-size:13px; }
+.gb-consumer .gb-venue-sheet-game-organizer .gb-discovery-avatar { flex:0 0 auto; width:28px; height:28px; }
+.gb-consumer .gb-venue-sheet-game-organizer-name { display:block; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.gb-consumer .gb-venue-sheet-game-organizer-label { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
+.gb-consumer .gb-venue-sheet-game-footer .gb-venue-sheet-count { flex:0 0 auto; color:var(--gb-lime-deep); text-align:right; font-size:13px; font-weight:600; }
+@media (max-width:430px) {
+  .gb-consumer .gb-venue-sheet-game-main { grid-template-columns:96px minmax(0,1fr); }
+  .gb-consumer .gb-venue-sheet-game-cover { width:96px; height:96px; }
+}
+.gb-consumer .gb-venue-contacts { margin:24px 0; }
+.gb-consumer .gb-venue-sheet-info .gb-venue-contacts h3 { font-size:18px; }
+.gb-consumer .gb-venue-contact-rows { display:grid; gap:8px; }
+.gb-consumer .gb-venue-contact-row { display:flex; align-items:center; gap:8px; min-height:44px; padding:10px 12px; border:1px solid var(--gb-line); border-radius:var(--gb-radius-sm); color:var(--gb-ink); text-decoration:none; }
+.gb-consumer .gb-venue-contact-row svg { flex-shrink:0; }
+.gb-consumer .gb-venue-contact-row > span:first-of-type { flex:1; }
+.gb-consumer .gb-venue-contact-messengers { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
+.gb-consumer .gb-venue-sheet-primary { display:flex; justify-content:space-between; align-items:center; gap:8px; text-align:left; }
+
+/* Scoped embedded creation: one scrollable popup, sticky controls inside that popup only.
+   Standalone /games/create retains its existing form and mobile action bar. */
+.gb-consumer .gb-game-create--embedded { width:100%; max-width:100%; min-width:0; box-sizing:border-box; }
+.gb-consumer .gb-game-create--embedded :is(.gb-game-form,.gb-game-form-group,.gb-game-fields,.gb-game-field,.gb-game-preview,.gb-game-detail-grid,.gb-game-hero) { width:100%; max-width:100%; min-width:0; box-sizing:border-box; }
+.gb-consumer .gb-game-create--embedded .gb-game-form { gap:20px; }
+.gb-consumer .gb-game-create--embedded .gb-game-stepper { min-width:0; max-width:100%; }
+.gb-consumer .gb-game-create--embedded .gb-game-stepper input { flex:1 1 0; width:100%; min-width:0; }
+.gb-consumer .gb-game-create--embedded .gb-game-field :is(input,select,textarea,button) { max-width:100%; min-width:0; }
+.gb-consumer .gb-game-create--embedded .gb-discovery-chips { flex-wrap:wrap; overflow:visible; }
+.gb-consumer .gb-game-create--embedded .gb-game-form-group > .gb-game-form-group-title { background:var(--gb-white); }
+.gb-consumer .gb-game-create--embedded .gb-discovery-chip[aria-pressed="true"],
+.gb-consumer .gb-game-create--embedded .gb-game-segmented button[aria-pressed="true"] { color:var(--gb-white); background:var(--gb-ink); border-color:var(--gb-ink); }
+.gb-consumer .gb-game-create--embedded .gb-discovery-chip[aria-pressed="false"] { color:var(--gb-ink-soft); background:var(--gb-white); }
+.gb-consumer .gb-game-create--embedded .gb-game-fields,
+.gb-consumer .gb-game-create--embedded .gb-game-detail-grid,
+.gb-consumer .gb-game-create--embedded .gb-game-hero,
+.gb-consumer .gb-game-create--embedded .gb-game-schedule,
+.gb-consumer .gb-game-create--embedded .gb-game-facts { display:grid; grid-template-columns:minmax(0,1fr); }
+.gb-consumer .gb-game-create--embedded .gb-game-field--wide { grid-column:auto; }
+.gb-consumer .gb-game-create--embedded .gb-game-form-group { padding:20px 12px; }
+.gb-consumer .gb-game-create--embedded .gb-game-form-actions {
+  position:sticky; bottom:0; z-index:7; width:100%; display:grid;
+  grid-template-columns:minmax(0, .85fr) minmax(0, 1.5fr); gap:8px;
+  align-items:stretch; margin-top:8px; padding:12px 0 max(12px, var(--gb-safe-bottom));
+  background:var(--gb-white); border-top:1px solid var(--gb-line);
+}
+.gb-consumer .gb-game-create--embedded .gb-game-form-actions .gb-c23-btn { min-width:0; }
+.gb-consumer .gb-game-create--embedded .gb-game-popup-preview-actions {
+  position:sticky; bottom:0; z-index:7; background:var(--gb-white);
+  border-top:1px solid var(--gb-line); padding:12px 0 max(12px, var(--gb-safe-bottom));
+}
+.gb-consumer .gb-game-create--embedded .gb-game-popup-preview-actions .gb-game-action {
+  display:grid; grid-template-columns:minmax(0,1.5fr) minmax(0,.85fr); gap:8px;
+  padding:0; background:transparent; box-shadow:none; border:0;
+}
+.gb-consumer .gb-game-create--embedded .gb-game-popup-preview-actions .gb-c23-btn { min-width:0; width:100%; }
+
+.gb-consumer .gb-game-create--embedded .gb-game-form-actions .gb-c23-btn { width:100%; white-space:normal; }
+.gb-consumer .gb-game-create--embedded .gb-game-action { position:static; inset:auto; width:100%; max-height:none; padding:12px 0; box-shadow:none; }
+.gb-consumer .gb-game-create--embedded .gb-game-booking { position:static; padding:16px 0; box-shadow:none; }
+.gb-consumer .gb-game-create--embedded .gb-game-preview { padding-bottom:0; }
+.gb-consumer .gb-game-create--embedded .gb-game-hero { min-height:0; }
+.gb-consumer .gb-game-create--embedded .gb-game-hero__image { min-height:0; height:auto; aspect-ratio:16/9; }
+.gb-consumer .gb-game-create--embedded .gb-game-hero__copy { padding:20px 16px; }
+.gb-consumer .gb-game-create--embedded .gb-game-hero h1,
+.gb-consumer .gb-game-create--embedded .gb-create-header h1 { font-size:28px; }
+.gb-consumer .gb-game-create--embedded input:not([type="checkbox"]),
+.gb-consumer .gb-game-create--embedded select,
+.gb-consumer .gb-game-create--embedded textarea { max-width:100%; min-height:44px; }
+.gb-consumer .gb-game-create--embedded .gb-discovery-chips { flex-wrap:wrap; }
+.gb-consumer .gb-venue-sheet :focus-visible { outline:2px solid var(--gb-ink); outline-offset:2px; }
+
+
+/* #174: A real map-game action surface, not a fake in-app friend invitation. */
+.gb-consumer .gb-venue-game-actions {
+  display:grid; gap:12px; width:100%; min-width:0;
+  padding:16px; margin:16px 0;
+  background:var(--gb-white); border:1px solid var(--gb-line);
+  border-radius:var(--gb-radius-md);
+}
+.gb-consumer .gb-venue-game-actions-primary { display:grid; gap:8px; min-width:0; }
+.gb-consumer .gb-venue-game-actions-primary > .gb-c23-btn { width:100%; min-height:48px; }
+.gb-consumer .gb-venue-game-actions-primary small { color:var(--gb-ink-soft); line-height:1.4; }
+.gb-consumer .gb-venue-game-actions-primary p { margin:0; }
+.gb-consumer .gb-venue-game-actions-status { display:grid; gap:8px; }
+.gb-consumer .gb-venue-game-actions-status > .gb-c23-btn { width:100%; }
+.gb-consumer .gb-venue-game-actions .gb-game-share { width:100%; min-width:0; }
+.gb-consumer .gb-venue-game-actions .gb-game-share__button--text {
+  width:100%; min-height:48px; display:flex; align-items:center; justify-content:center; gap:10px;
+  padding:10px 14px; border-radius:var(--gb-radius-pill); background:var(--gb-white); color:var(--gb-ink);
+  font-size:14px; line-height:1.35;
+}
+.gb-consumer .gb-venue-game-notice { margin:0; color:var(--gb-ink-soft); font-size:13px; }

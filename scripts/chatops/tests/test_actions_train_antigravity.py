@@ -1,0 +1,664 @@
+"""Offline regressions from saved #29 evidence; no provider or credentials."""
+import copy
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest.mock import Mock, patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'actions_train'))
+import native_antigravity as N
+import native_guard as G
+_REAL_NNP = G.no_new_privileges
+
+SHA = 'a' * 40
+CID = 'synthetic-conversation'
+
+
+def rows():
+    # Observed AGY event envelopes/states, sanitized independently of adapter.
+    # Baseline advertisement is evidence, not proof of authority or execution.
+    return [
+        {'event': 'init', 'conversation_id': CID, 'init': {
+            'model': 'claude-sonnet-5-5-medium', 'agent': 'gobadminton-text-review',
+            'tools': ['finish', 'view_file', 'run_command', 'call_mcp_tool'],
+            'permission_mode': 'always-proceed', 'json_schema': copy.deepcopy(N.SCHEMA)}},
+        {'event': 'step_update', 'step_update': {'conversation_id': CID, 'step_index': 0,
+            'step_type': 'user_input', 'state': 'DONE'}},
+        {'event': 'step_update', 'step_update': {'conversation_id': CID, 'step_index': 1,
+            'step_type': 'agent_response', 'state': 'DONE'}},
+        {'event': 'step_update', 'step_update': {'conversation_id': CID, 'step_index': 2,
+            'step_type': 'finish', 'state': 'DONE'}},
+        {'event': 'result', 'result': {'conversation_id': CID, 'status': 'SUCCESS',
+            'structured_output': {'verdict': 'PASS', 'findings': [], 'reviewed_sha': SHA},
+            'usage': {'input_tokens': 12, 'output_tokens': 3}}}]
+
+
+def wire(events):
+    return b'\n'.join(json.dumps(e).encode() for e in events) + b'\n'
+
+
+class EvidenceTestCase(unittest.TestCase):
+    def setUp(self):
+        tmp=tempfile.TemporaryDirectory(prefix='gb-agy-evidence-test-');self.addCleanup(tmp.cleanup)
+        self.evidence=Path(tmp.name)/'private'
+        self._evidence_patch=patch.object(N,'EVIDENCE',self.evidence)
+        self._evidence_patch.start();self.addCleanup(self._evidence_patch.stop)
+
+
+class Protocol(EvidenceTestCase):
+    def test_real_envelope_uses_structured_output_and_effective_receipts(self):
+        events = rows()
+        events[-1]['result']['response'] = 'noncanonical prose is never a verdict'
+        result, receipt = N.parse_stream(wire(events), SHA)
+        self.assertEqual(result, {'verdict': 'PASS', 'findings': [], 'reviewed_sha': SHA})
+        self.assertEqual(receipt['effective_model'], 'claude-sonnet-5-5-medium')
+        self.assertEqual(receipt['effective_tools'], events[0]['init']['tools'])
+        self.assertEqual(receipt['effective_permission_mode'], 'always-proceed')
+        self.assertEqual(receipt['transcript_sha256'], hashlib.sha256(wire(events)).hexdigest())
+        self.assertEqual(receipt['tool_events'], 0)
+
+    def test_denied_or_successful_tool_is_rejected_despite_terminal_success(self):
+        for state in ('ACTIVE', 'ERROR'):
+            events = rows()
+            events.insert(3, {'event': 'step_update', 'step_update': {
+                'conversation_id': CID, 'step_type': 'tool', 'tool_name': 'view_file', 'step_index': 9,
+                'state': state, 'tool_info': {'error': {'type': 'TOOL_ERROR'}} if state == 'ERROR' else {}}})
+            with self.subTest(state=state), self.assertRaises(N.ReviewError):
+                N.parse_stream(wire(events), SHA)
+
+    def test_all_nested_denial_evidence_rejected(self):
+        for item in ({'error': 'denied'}, {'state': 'ERROR'}, {'permissionDenied': True},
+                     {'permission': 'DENIED'}, {'decision': 'SKIPPED'}, {'is_error': True}):
+            events = rows()
+            events[-1]['result']['nested'] = item
+            with self.subTest(item=item), self.assertRaises(N.ReviewError):
+                N.parse_stream(wire(events), SHA)
+
+    def test_bad_stream_identities_and_canonical_schema_rejected(self):
+        cases = []
+        for key, value in (('model', 'other'), ('agent', 'other'), ('permission_mode', 'auto'),
+                           ('tools', []), ('tools', ['finish', 'finish']), ('json_schema', {})):
+            e = rows(); e[0]['init'][key] = value; cases.append(e)
+        for patch_value in ({'status': 'ERROR'}, {'conversation_id': 'other'},
+                            {'structured_output': None}, {'structured_output': {
+                                'verdict': 'PASS', 'findings': ['hidden failure'], 'reviewed_sha': SHA}},
+                            {'structured_output': {'verdict': 'PASS', 'findings': [], 'reviewed_sha': 'b'*40}},
+                            {'usage': {'input_tokens': True}}):
+            e = rows(); e[-1]['result'].update(patch_value); cases.append(e)
+        e = rows(); e[2]['step_update']['state'] = 'ERROR'; cases.append(e)
+        e = rows(); e[2]['step_update']['conversation_id'] = 'other'; cases.append(e)
+        cases += [rows()[:-1], rows()[1:], rows()+[rows()[-1]], rows()[:-2]+rows()[-1:],
+                  rows()+[{'event': 'unknown'}]]
+        for e in cases:
+            with self.subTest(e=e), self.assertRaises(N.ReviewError): N.parse_stream(wire(e), SHA)
+        for raw in (b'{bad', b'{"event":"init","event":"result"}\n', b'\xff',
+                    json.dumps({'status': 'SUCCESS', 'result': {}}).encode()):
+            with self.subTest(raw=raw), self.assertRaises(N.ReviewError): N.parse_stream(raw, SHA)
+
+    def test_exact_cli_prompt_duration_and_native_flags(self):
+        cmd = N.command(90, 'PUBLIC_SOURCE_SENTINEL')
+        self.assertNotIn('PUBLIC_SOURCE_SENTINEL',cmd)
+        self.assertIn('--dangerously-skip-permissions',cmd)
+        self.assertEqual(cmd[cmd.index('--input-format')+1],'stream-json')
+        self.assertEqual(cmd[cmd.index('--print-timeout') + 1], '90s')
+        self.assertEqual(cmd[cmd.index('--output-format') + 1], 'stream-json')
+        self.assertNotIn('--sandbox', cmd)
+        self.assertIn('--disable-slash-commands', cmd)
+        for forbidden in ('-p','--print','--prompt','--continue', '--conversation', '--remote-control'):
+            self.assertNotIn(forbidden, cmd)
+
+    def test_unqualified_executor_refuses_before_popen_or_temp_workspace(self):
+        with patch.object(N.subprocess, 'Popen', side_effect=AssertionError('provider started')), \
+             patch.object(N.tempfile, 'TemporaryDirectory', side_effect=AssertionError('workspace created')):
+            with patch.object(N, 'qualification', side_effect=N.ReviewError('missing qualification')):
+                with self.assertRaisesRegex(N.ReviewError, 'AGY_PRECHECK_FAILED'):
+                    N.invoke('public prompt', 60, work=Path('/tmp'), slot='slot2', task_hash='x', charge=Mock())
+        with patch.object(N, 'qualification', side_effect=N.ReviewError('native auth unavailable')):
+            self.assertEqual(N.available('slot2', 'x'), (False, 'Antigravity QA unavailable: AGY_PRECHECK_FAILED:preflight'))
+
+
+class Collection(EvidenceTestCase):
+    def setUp(self):
+        super().setUp()
+        self.tmp = tempfile.TemporaryDirectory(prefix='gb-agy-29-test-')
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.git('init', '-q')
+        self.write('pkg/a.py', 'x = 1\n')
+        self.write('pkg/b.py', 'y = 2\n')
+        self.write('pkg/__init__.py', '')
+        self.commit()
+        self.base = self.git('rev-parse', 'HEAD')
+
+    def git(self, *args):
+        return subprocess.run(['git', '-c', 'user.name=offline', '-c', 'user.email=offline@example.invalid',
+            '-c', 'commit.gpgsign=false', *args], cwd=self.root,
+            env=dict(os.environ, GIT_CONFIG_GLOBAL='/dev/null', GIT_CONFIG_NOSYSTEM='1'),
+            check=True, capture_output=True, text=True).stdout.strip()
+
+    def write(self, name, text):
+        p = self.root/name; p.parent.mkdir(parents=True, exist_ok=True); p.write_text(text)
+
+    def commit(self):
+        self.git('add', '-A'); self.git('commit', '-qm', 'offline fixture')
+        return self.git('rev-parse', 'HEAD')
+
+    def test_legitimate_tokens_and_local_absolute_import_are_collected(self):
+        self.write('pkg/a.py', 'from pkg.b import y\nx = y\n')
+        self.write('apps/api/src/tokens.ts', 'export const tokenLifetime = 60;\n')
+        head = self.commit()
+        text, _ = N.collect(self.root, self.base, head, 'trusted rules and task')
+        data = json.loads(text.split('DATA_JSON:\n', 1)[1])
+        self.assertIn('pkg/b.py', data['files'])
+        self.assertIn('apps/api/src/tokens.ts', data['files'])
+
+    def test_js_extension_resolution_collects_typescript_dependency(self):
+        self.write('apps/web/src/a.ts', 'import {x} from "./tokens.js";\n')
+        self.write('apps/web/src/tokens.ts', 'export const x=1;\n')
+        head = self.commit()
+        text, _ = N.collect(self.root, self.base, head, 'task')
+        self.assertIn('apps/web/src/tokens.ts', json.loads(text.split('DATA_JSON:\n')[1])['files'])
+
+    def test_missing_relative_alias_or_syntax_fails_before_model_even_if_it_would_pass(self):
+        for source, suffix in [('from .absent import x\n', '.py'), ('this is invalid python!\n', '.py'),
+                               ('import x from "@/lib/tokens";\n', '.ts')]:
+            name = 'pkg/c' + suffix; self.write(name, source); head = self.commit()
+            with self.subTest(source=source), patch.object(N, 'invoke', return_value=wire(rows())) as call:
+                with self.assertRaises(N.ReviewError): N.review(self.root, self.base, head, 'task', 60, slot='slot2',task_hash='x',charge=Mock())
+                call.assert_not_called()
+            (self.root/name).unlink(); self.commit()
+
+    def test_trusted_rules_wrap_final_source_once_and_hash_exact_delivered_prompt(self):
+        self.write('pkg/a.py','x = 2\n');head=self.commit()
+        events=rows();events[-1]['result']['structured_output']['reviewed_sha']=head
+        seen=[]; rules=('TRUSTED_ACCEPTED_POLICY',{'pin':'synthetic'})
+        def inject(source,qa,work,accepted):
+            self.assertEqual(accepted,rules);self.assertTrue(qa)
+            self.assertIn('DATA_JSON:',source)
+            self.assertNotIn('TRUSTED_ACCEPTED_POLICY',source)
+            return 'TRUSTED_ACCEPTED_POLICY\n'+source, {'delivered':'synthetic'}
+        def invoke(text,*args,**kwargs):
+            seen.append(text);return wire(events),{'qualification_phase':'canary','input_delivery':'written'}
+        with patch('context_policy.inject',inject),patch.object(N,'invoke',invoke):
+            result,receipt=N.review(self.root,self.base,head,'raw task',60,slot='slot2',
+                task_hash='x',charge=Mock(),accepted_rules=rules)
+        self.assertEqual(result['verdict'],'PASS')
+        self.assertEqual(seen[0].count('TRUSTED_ACCEPTED_POLICY'),1)
+        self.assertEqual(receipt['input_sha256'],hashlib.sha256(seen[0].encode()).hexdigest())
+        self.assertEqual(receipt['rules_context'],{'delivered':'synthetic',
+            'delivery':'explicit_full_stream_json_stdin','prompt_sha256':receipt['input_sha256'],
+            **{k:v for k,v in N.input_payload(seen[0])[1].items() if k!='input_transport'}})
+
+    def test_real_rules_receipt_matches_exact_stdin_transport_without_mutating_metadata(self):
+        import context_policy as C
+        from accepted_rules_fixture import accepted_rules_text
+        text=accepted_rules_text()
+        metadata={'commit':C.RULES_COMMIT,'sha256':C.RULES_SHA256,'bytes':C.RULES_SIZE,
+                  'delivery':'explicit_full_stdin','revision':'1.1'}
+        original=copy.deepcopy(metadata)
+        self.write('pkg/a.py','x = 2\n');head=self.commit()
+        events=rows();events[-1]['result']['structured_output']['reviewed_sha']=head
+        seen=[]
+        def invoke(prompt,*args,**kwargs):
+            seen.append(prompt);return wire(events),{'qualification_phase':'canary','input_delivery':'written'}
+        with patch.object(N,'invoke',invoke):
+            result,receipt=N.review(self.root,self.base,head,'raw task',60,slot='slot2',
+                task_hash='x',charge=Mock(),accepted_rules=(text,metadata))
+        self.assertEqual(result['verdict'],'PASS');self.assertEqual(metadata,original)
+        context=receipt['rules_context'];actual=hashlib.sha256(seen[0].encode()).hexdigest()
+        self.assertEqual(context['delivery'],'explicit_full_stream_json_stdin')
+        self.assertEqual(context['stdin_sha256'],hashlib.sha256(N.input_payload(seen[0])[0]).hexdigest())
+        self.assertEqual(context['prompt_sha256'],actual);self.assertEqual(receipt['input_sha256'],actual)
+        self.assertEqual(context['commit'],C.RULES_COMMIT);self.assertEqual(context['sha256'],C.RULES_SHA256)
+        self.assertEqual(context['bytes'],C.RULES_SIZE)
+
+    def test_compact_source_reference_only_for_exact_readable_checkout(self):
+        huge='# '+('a'*9000)+'\n'
+        self.write('pkg/a.py',huge)
+        head=self.commit()
+        full,_=N.collect(self.root,self.base,head,'task')
+        full_data=json.loads(full.split('DATA_JSON:\n',1)[1])
+        self.assertEqual(full_data['files']['pkg/a.py'],huge)
+        compact,_=N.collect(self.root,self.base,head,'task',compact_files=True)
+        data=json.loads(compact.split('DATA_JSON:\n',1)[1])
+        ref=data['files']['pkg/a.py']
+        self.assertEqual(ref['delivery'],'verified_read_only_source')
+        self.assertEqual(ref['revision'],head)
+        self.assertEqual(ref['bytes'],len(huge.encode()))
+        self.assertEqual(ref['sha256'],hashlib.sha256(huge.encode()).hexdigest())
+        self.assertEqual(Path(ref['path']).read_text(),huge)
+        self.assertIn(huge.strip(),data['diff'])
+        self.assertLess(len(compact.encode()),len(full.encode()))
+        self.write('pkg/a.py',huge+'# changed after commit\n')
+        fallback,_=N.collect(self.root,self.base,head,'task',compact_files=True)
+        self.assertEqual(json.loads(fallback.split('DATA_JSON:\n',1)[1])['files']['pkg/a.py'],huge)
+        self.assertIsInstance(json.loads(fallback.split('DATA_JSON:\n',1)[1])['files']['pkg/a.py'],str)
+
+    def test_protected_paths_binary_and_size_guards_remain_without_source_content_filter(self):
+        for name in ('.env', '.env.production', '.ssh/config', 'credentials.json', 'key.pem', '.git/config', '../x'):
+            with self.subTest(name=name), self.assertRaises(N.ReviewError): N.safe_path(name)
+        for name in ('tokens.ts', 'auth/crypto.ts', 'config/env.ts', 'design-tokens/colors.ts'):
+            self.assertEqual(N.safe_path(name), name)
+
+        # This intentionally tests ordinary source containing a key-looking example.
+        # Both the file and the Git diff must reach independent QA as ordinary data.
+        key_marker = '-----BEGIN ' + 'PRIVATE' + ' ' + 'KEY' + '-----'
+        example = 'EXAMPLE = ' + repr(key_marker) + '\n'
+        self.write('pkg/example_key.py', example)
+        head = self.commit()
+        collected, _ = N.collect(self.root, self.base, head, 'task')
+        context = json.loads(collected.split('DATA_JSON:\n', 1)[1])
+        self.assertEqual(context['files']['pkg/example_key.py'], example)
+        self.assertIn(example.strip(), context['diff'])
+        (self.root/'pkg/example_key.py').unlink()
+        self.commit()
+
+        # Path protection, NUL bytes, size limits and symlinks remain forbidden.
+        for name, data in [('pkg/blob.py', '\0'), ('pkg/big.py', 'x'*(N.MAX_INPUT+1))]:
+            self.write(name, data)
+            head = self.commit()
+            with self.subTest(name=name), self.assertRaises(N.ReviewError):
+                N.collect(self.root, self.base, head, 'task')
+            (self.root/name).unlink()
+            self.commit()
+        (self.root/'pkg/link.py').symlink_to('b.py')
+        head = self.commit()
+        with self.assertRaises(N.ReviewError):
+            N.collect(self.root, self.base, head, 'task')
+
+class Routing(unittest.TestCase):
+    def test_unqualified_agy_falls_back_without_charge_or_call(self):
+        from test_actions_train import core, S
+        from test_actions_train_cost_policy import cost_task
+        task = cost_task(); task['routing_policy']['schema'] = 'GB_STAGE_COST_V2'
+        task['qa_routes'] = ['agy:claude-sonnet-5-5-medium', 'codex:gpt-6.1-sol:medium']
+        before = copy.deepcopy(task)
+        budget = Mock(remaining=lambda *a:10, used=lambda *a:2)
+        with patch.object(N, 'qualification', side_effect=N.ReviewError('executor not provisioned')), \
+             patch.object(N, 'invoke', side_effect=AssertionError('model started')):
+            choice = core.route(S, task, 'qa', 'auto', budget, 'slot2')
+        self.assertEqual(choice['provider'], 'codex')
+        self.assertIn('Antigravity QA unavailable', choice['unavailable']['agy:claude-sonnet-5-5-medium'])
+        self.assertEqual(task, before)
+        budget.charge.assert_not_called()
+
+
+class NativeToolScope(EvidenceTestCase):
+    def setUp(self):
+        super().setUp()
+        from test_actions_train_agy_oauth_precharge import synthetic_vendor_preflight
+        synthetic_vendor_preflight(self)
+    def test_authorized_successful_native_tool_steps_are_receipted(self):
+        events=rows()
+        for state in ('ACTIVE','DONE'):
+            events.insert(-2, {'event':'step_update','step_update':{'conversation_id':CID,
+                'step_index':4,'step_type':'tool','tool_name':'run_command','state':state}})
+        result, evidence=N.parse_stream(wire(events),SHA)
+        self.assertEqual(result['verdict'],'PASS')
+        self.assertEqual(evidence['tool_events'],1)
+        self.assertEqual(evidence['tool_names'],['run_command'])
+
+    def test_last_tool_state_must_be_done_even_after_prior_completion(self):
+        for states in [('DONE','ACTIVE'),('ACTIVE','DONE','ACTIVE')]:
+            events=rows()
+            for state in states:
+                events.insert(-2,{'event':'step_update','step_update':{'conversation_id':CID,
+                    'step_index':4,'step_type':'tool','tool_name':'run_command','state':state}})
+            with self.subTest(states=states),self.assertRaisesRegex(N.ReviewError,'AGY_PRECHECK_FAILED'):
+                N.parse_stream(wire(events),SHA)
+        events=rows()
+        for index,state in [(4,'ACTIVE'),(5,'ACTIVE'),(4,'DONE'),(5,'DONE'),(4,'ACTIVE')]:
+            events.insert(-2,{'event':'step_update','step_update':{'conversation_id':CID,
+                'step_index':index,'step_type':'tool','tool_name':'run_command','state':state}})
+        with self.assertRaisesRegex(N.ReviewError,'AGY_PRECHECK_FAILED'):
+            N.parse_stream(wire(events),SHA)
+
+    def test_synthetic_legacy_landlock_fixture_remains_readonly(self):
+        with tempfile.TemporaryDirectory(prefix='gb-agy-synthetic-') as temp:
+            root=Path(temp); work=root/'candidate';work.mkdir()
+            subprocess.run(['git','init','-q',str(work)],check=True,capture_output=True)
+            (work/'source.py').write_text('original')
+            outside=root/'outside-key';outside.write_text('synthetic outside canary')
+            script = """
+import json,os,pathlib,subprocess,sys
+sys.stdin.buffer.read()
+work=pathlib.Path(os.environ['WORK']);outside=pathlib.Path(os.environ['OUTSIDE'])
+def allowed(fn):
+ try:fn();return True
+ except OSError:return False
+result={'read':allowed(lambda:(work/'source.py').read_bytes()),
+ 'write':allowed(lambda:(work/'source.py').write_text('bad')),
+ 'chmod_then_write':allowed(lambda:((work/'source.py').chmod(0o777),(work/'source.py').write_text('bad'))),
+ 'outside':allowed(lambda:outside.read_bytes()),
+ 'shell':allowed(lambda:subprocess.run(['/bin/true'],check=True))}
+print(json.dumps(result))
+"""
+            original=N.filesystem_roots;captured={}
+            def roots(private,candidate,common=None):
+                result=original(private,candidate,common)
+                captured['roots']=result
+                return result
+            def mock_legacy_landlock():
+                # Synthetic test-seam only. The production AGY path applies no
+                # Landlock/MAC layer; this fixture proves the read-only
+                # expectations of the declared roots on a synthetic child.
+                from native_guard import _landlock
+                _REAL_NNP()
+                _landlock(*captured['roots'])
+            def cmd(timeout,prompt=None,model=N.MODEL):return [sys.executable,'-I','-c',script]
+            original_popen=subprocess.Popen; charged=[]
+            def popen(argv,**kwargs):
+                self.assertEqual(charged,['one'])
+                kwargs['env'].update(WORK=str(work),OUTSIDE=str(outside))
+                return original_popen(argv,**kwargs)
+            with patch.object(N,'qualification',return_value={'phase':'canary'}), \
+                 patch.object(N.os,'geteuid',return_value=978), \
+                 patch.object(N,'trusted',return_value=b'{"token":"synthetic"}'), \
+                 patch.object(N,'command',cmd), patch.object(N,'AGY',sys.executable), \
+                 patch.object(N,'filesystem_roots',side_effect=roots), \
+                 patch.object(G,'no_new_privileges',side_effect=mock_legacy_landlock),patch.object(N,'_verify_executor_boundary',return_value=None),patch.object(N,'_candidate_state',return_value=('H','')) :
+                raw, evidence=N.invoke('synthetic prompt',30,work=work,slot='slot2',task_hash='x',
+                    charge=lambda:charged.append('one'),popen=popen)
+            self.assertEqual(json.loads(raw),{'read':True,'write':False,'chmod_then_write':False,
+                                               'outside':False,'shell':True})
+            self.assertEqual((work/'source.py').read_text(),'original')
+            self.assertEqual(evidence['filesystem_boundary'],'uid978_unix_permissions_nnp')
+            self.assertIs(evidence['requested_native_sandbox'], False)
+            self.assertEqual(charged,['one'])
+
+    def test_synthetic_legacy_landlock_git_fixture_and_strict_gate(self):
+        """Explicitly simulated legacy Landlock child, two source files + HEAD.
+
+        Native tool DONE envelopes are separately tied to verified source
+        excerpts/digests. CLI agent inference is deliberately not invoked.
+        """
+        from test_actions_train_addressed_analysis import stream,binding,answer
+        with tempfile.TemporaryDirectory(prefix='gb-agy-source-root-') as temp:
+            outer=Path(temp);work=outer/'candidate';work.mkdir()
+            paths=N.REQUIRED_ANALYSIS_PATHS
+            data=['// FIRST_NATIVE_SOURCE_EXCERPT: types and fields\n',
+                  '// SECOND_NATIVE_SOURCE_EXCERPT: GameDetail reads\n']
+            subprocess.run(['git','init','-q',str(work)],check=True,capture_output=True)
+            for rel,src in zip(paths,data):
+                dest=work/rel;dest.parent.mkdir(parents=True,exist_ok=True)
+                dest.write_text(src)
+            subprocess.run(['git','-C',str(work),'add','--',*paths],check=True,capture_output=True)
+            subprocess.run(['git','-C',str(work),'-c','user.name=CI','-c',
+                'user.email=qa@example.invalid','commit','-qm','source canary'],check=True)
+            head=subprocess.check_output(['git','-C',str(work),'rev-parse','HEAD'],text=True).strip()
+            outside=outer/'outside-secret';outside.write_text('outside boundary')
+            full_argv=N.command(60,analysis=True,source_root=str(work.resolve()))
+            self.assertEqual(full_argv.count('--add-dir'),1)
+            self.assertEqual(full_argv[full_argv.index('--add-dir')+1],str(work.resolve()))
+            self.assertNotIn('--sandbox',full_argv)
+            with self.assertRaises(N.ReviewError):
+                N.command(60,analysis=True,source_root=str(outside))
+            with self.assertRaises(N.ReviewError):
+                N.command(60,analysis=False,source_root=str(work.resolve()))
+            sandbox_probe=r"""
+import hashlib,json,os,pathlib,subprocess,sys
+sys.stdin.buffer.read()
+source=pathlib.Path(os.environ['SOURCE_ROOT'])
+outside=pathlib.Path(os.environ['OUTSIDE'])
+paths=json.loads(os.environ['FILES'])
+contents=[]
+for rel in paths:
+    b=(source/rel).read_bytes()
+    contents.append({'path':rel,'sha256':hashlib.sha256(b).hexdigest(),
+                     'excerpt':b.decode().strip()})
+git=subprocess.run(['/usr/bin/git','-C',str(source),'rev-parse','HEAD'],
+                   capture_output=True,text=True)
+def can_write(path):
+    try:
+        path.write_text('UNAUTHORIZED_CHANGE')
+        return True
+    except OSError:
+        return False
+def can_read(path):
+    try:path.read_bytes();return True
+    except OSError:return False
+print(json.dumps({'cwd':os.getcwd(),'head':git.stdout.strip(),
+                  'sources':contents,'write':can_write(source/paths[0]),
+                  'outside_readable':can_read(outside),
+                  'git_ok':git.returncode==0,'git_error':git.stderr[:700]}))
+"""
+            seen=[];charged=[]
+            original_roots=N.filesystem_roots;captured={}
+            def roots(private,candidate,common=None):
+                result=original_roots(private,candidate,common)
+                captured['roots']=result
+                return result
+            def mock_legacy_landlock():
+                from native_guard import _landlock
+                _landlock(*captured['roots'])
+            original_command=N.command
+            def child_command(timeout,prompt=None,model=N.MODEL,*,analysis=False,source_root=None):
+                self.assertTrue(analysis)
+                self.assertEqual(source_root,str(work.resolve()))
+                actual=original_command(timeout,model=model,analysis=analysis,source_root=source_root)
+                self.assertEqual(actual[actual.index('--add-dir')+1],str(work.resolve()))
+                seen.append(actual)
+                return [sys.executable,'-I','-c',sandbox_probe]
+            def child_popen(argv,**kwargs):
+                self.assertEqual(charged,['one-synthetic-call'])
+                self.assertEqual(kwargs['cwd'].name,'ws')
+                self.assertNotEqual(kwargs['cwd'],work)
+                kwargs['env'].update(SOURCE_ROOT=str(work),OUTSIDE=str(outside),
+                                    FILES=json.dumps(paths))
+                return subprocess.Popen(argv,**kwargs)
+            with patch.object(N,'qualification',return_value={'phase':'canary'}), \
+                 patch.object(N.os,'geteuid',return_value=978), \
+                 patch.object(N,'trusted',return_value=b'synthetic-not-real-oauth'), \
+                 patch.object(N,'command',child_command), \
+                 patch.object(N,'AGY',sys.executable), \
+                 patch.object(N,'filesystem_roots',side_effect=roots), \
+                 patch.object(G,'no_new_privileges',side_effect=mock_legacy_landlock),patch.object(N,'_verify_executor_boundary',return_value=None),patch.object(N,'_candidate_state',return_value=('H','')) :
+                try:
+                    raw,receipt=N.invoke('probe only',45,work=work,slot='slot2',
+                        task_hash='x'*64,charge=lambda:charged.append('one-synthetic-call'),
+                        popen=child_popen,analysis=True)
+                except N.ReviewError as error:
+                    logs=[v.read_text(errors='replace') for v in self.evidence.glob('*/stderr')]
+                    raise AssertionError(str(error)+' child_stderr='+repr(logs[-1:] )) from None
+            observed=json.loads(raw)
+            self.assertEqual(observed['head'],head,msg=observed.get('git_error'))
+            self.assertEqual(len(observed['sources']),2)
+            self.assertIn('/ws',observed['cwd'])
+            self.assertFalse(observed['write'])
+            self.assertFalse(observed['outside_readable'])
+            self.assertEqual(len(seen),1)
+            self.assertEqual(receipt['filesystem_boundary'],'uid978_unix_permissions_nnp')
+            self.assertIs(receipt['requested_native_sandbox'], False)
+            self.assertNotIn('writable_roots',receipt)
+            self.assertNotIn('readonly_roots',receipt)
+            self.assertIs(receipt['filesystem_roots_enforced'],False)
+            self.assertIn('not verified safety',receipt['owner_waiver'])
+            rows=stream()
+            rows[0]['init']['tools']=['view_file','run_command']
+            answer_data=answer()|dict(completion='COMPLETE',source_reads=[
+                dict(path=x['path'],sha256=x['sha256'],observation=x['excerpt'])
+                for x in observed['sources']])
+            rows[-1]['result']['response']=json.dumps(answer_data)
+            for index,name in ((3,'view_file'),(4,'run_command')):
+                rows.insert(-1,{'event':'step_update','step_update':dict(
+                    conversation_id=CID,step_type='tool',step_index=index,
+                    tool_name=name,state='DONE')})
+            parsed,events=N.parse_stream(wire(rows),head,
+                analysis_binding=binding(),strict_source_evidence=True)
+            self.assertEqual(set(events['tool_names']),{'view_file','run_command'})
+            with patch.object(N,'git',side_effect=lambda _w,cmd,ref:(
+                work/ref.split(':',1)[1]).read_bytes()):
+                verified=N.analysis_source_gate(parsed,events,work,head)
+            self.assertEqual(verified['completion'],'COMPLETE')
+            self.assertEqual([(work/x).read_text() for x in paths],data)
+            self.assertEqual(charged,['one-synthetic-call'])
+
+    def test_unsupported_historical_routes_do_not_probe_or_charge_agy(self):
+        from test_actions_train import core,S
+        from test_actions_train_cost_policy import cost_task
+        task=cost_task();task.pop('routing_policy')
+        task['qa_routes']=['agy:historical-model:medium','codex:gpt-6.1-sol:medium']
+        budget=Mock(remaining=lambda *a:10,used=lambda *a:0)
+        with patch.object(N,'available',side_effect=AssertionError('unsupported AGY probe')):
+            chosen=core.route(S,task,'qa','auto',budget,'slot2')
+            self.assertEqual(chosen['provider'],'codex')
+            with self.assertRaisesRegex(core.Refused,'no safe role-specific provider'):
+                core.route(S,task,'qa','agy',budget,'slot2')
+        budget.charge.assert_not_called()
+
+    def test_exact_medium_route_qualified_unavailable_and_unknown_budget(self):
+        from test_actions_train import core,S
+        from test_actions_train_cost_policy import cost_task
+        task=cost_task();task['routing_policy']['schema']='GB_STAGE_COST_V2'
+        task['qa_routes']=['agy:claude-sonnet-5-5-medium','codex:gpt-6.1-sol:medium']
+        for available, remaining, expected in [(True,1,'agy'),(False,1,'codex'),(True,None,'codex')]:
+            budget=Mock(remaining=lambda provider,*a:remaining if provider=='agy' else 10,used=lambda *a:0)
+            with patch.object(N,'available',return_value=(available,'qualification evidence')):
+                chosen=core.route(S,task,'qa','auto',budget,'slot2')
+            self.assertEqual(chosen['provider'],expected)
+            budget.charge.assert_not_called()
+
+
+class QualificationSeam(unittest.TestCase):
+    def marker(self):
+        from core import digest
+        q=dict(issue=29,base='b'*40,head=SHA,work=str(N.QUALIFICATION_WORK),
+               task_sha256=digest(N.qualification_task('b'*40,SHA)))
+        return dict(schema='GB_ANTIGRAVITY_QA_29_V1',phase='canary',slot='slot2',
+            executor_uid=978,canary_task_sha256=q['task_sha256'],qualification=q)
+
+    def request(self):
+        return dict(action='train',stage='qa_qualification',slot='slot2',issue=29,
+            phase='idle',head=SHA,attempt=0,generation=0,profile='agy',
+            run=1234,run_attempt=1,gh_token='synthetic-read-token')
+
+    def test_wire_and_marker_bind_exact_qa_only_scope(self):
+        import core
+        req=self.request();core.request(req)
+        for fields in ({'issue':225},{'slot':'slot1'},{'phase':'pr_wait'},{'attempt':1},
+                       {'profile':'auto'},{'head':None},{'task_sha256':'invented'}):
+            with self.subTest(fields=fields),self.assertRaises(core.Refused):core.request(req|fields)
+        m=self.marker();self.assertEqual(N.qualification_descriptor(m),m['qualification'])
+        m['qualification']['head']='c'*40
+        with self.assertRaises(N.ReviewError):N.qualification_descriptor(m)
+
+    def test_durable_reservation_and_pending_unknown_never_replay_or_claim_source(self):
+        import receiver
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory(prefix='gb-agy-qa-seam-') as temp:
+            state={'active':None,'done':[152]};before=copy.deepcopy(state)
+            budget=Mock(remaining=lambda *a:1)
+            m=self.marker();original=receiver.read
+            with patch.object(receiver,'STATE',Path(temp)), \
+                 patch.object(receiver,'checkpoint',return_value=(state,[])), \
+                 patch.object(receiver,'guard',return_value=None), \
+                 patch.object(receiver,'live',return_value=(None,SimpleNamespace(Budget=lambda *a:budget))), \
+                 patch.object(receiver,'read',side_effect=lambda p,owner=None,limit=2097152:original(p,None,limit)), \
+                 patch.object(N,'qualification',return_value=m), \
+                 patch.object(N,'trusted',return_value=json.dumps(m).encode()), \
+                 patch.object(receiver.os,'fork',return_value=123) as fork, \
+                 patch.object(receiver,'identity',return_value={'pid':123}), \
+                 patch.object(receiver,'alive',return_value=False):
+                first=receiver.qualification_request(self.request(),{})
+                self.assertEqual(first['status'],'running')
+                self.assertEqual(fork.call_count,1)
+                reservation=json.loads((Path(temp)/'antigravity-qa-qualification.json').read_text())
+                self.assertEqual(reservation['task_hash'],m['canary_task_sha256'])
+                again=receiver.qualification_request(self.request()|{'run':1235},{})
+                self.assertEqual(again['status'],'unknown')
+                self.assertEqual(fork.call_count,1)
+                journal=json.loads((Path(temp)/'slot2.json').read_text())
+                journal['pending']=None; journal['generation']=1
+                (Path(temp)/'slot2.json').write_text(json.dumps(journal))
+                with self.assertRaisesRegex(receiver.Refused,'already reserved'):
+                    receiver.qualification_request(self.request()|{'generation':1}, {})
+                self.assertEqual(fork.call_count,1)
+                self.assertEqual(state,before)
+                budget.charge.assert_not_called()
+
+    def test_qa_only_handler_charges_once_saves_truth_and_leaves_checkpoint_untouched(self):
+        import stage
+        from types import SimpleNamespace
+        from core import digest
+        with tempfile.TemporaryDirectory(prefix='gb-agy-qa-handler-') as temp:
+            m=self.marker();q=m['qualification']
+            store=SimpleNamespace(data={'active':None,'done':[152]})
+            before=copy.deepcopy(store.data)
+            budget=Mock();budget.used.side_effect=[0,1]
+            rt=SimpleNamespace(budget=budget)
+            a=SimpleNamespace(subprocess=SimpleNamespace(Popen=Mock()))
+            b=SimpleNamespace(c=SimpleNamespace(state_dir=Path(temp)))
+            req=self.request()|{'_qa_qualification':q}
+            result={'verdict':'PASS','findings':[],'reviewed_sha':SHA}
+            def review(*args,**kwargs):
+                kwargs['charge']()
+                return result,dict(schema=2,source_sha=SHA,base_sha=q['base'],
+                    effective_model=N.MODEL,tool_names=['run_command'],tool_events=1)
+            with patch.object(N,'qualification',return_value=m),patch.object(N,'review',review), \
+                 patch('context_policy.load',return_value=('trusted',{})), \
+                 patch('context_policy.inject',return_value=('trusted',{'rules':'synthetic'})):
+                out=stage.qualify_qa(req,{},(a,None,rt,None,store,b))
+            budget.charge.assert_called_once_with('slot2','agy','qa')
+            self.assertEqual(store.data,before)
+            self.assertTrue(out['qualification_passed'])
+            self.assertFalse(out['checkpoint_changed'])
+            saved=json.loads((Path(temp)/out['receipt_file']).read_text())
+            self.assertEqual(saved['qualification_task_sha256'],q['task_sha256'])
+            self.assertEqual(saved['charged_calls'],1)
+            self.assertTrue(saved['qualification_passed'])
+    def test_stale_done_parser_cannot_become_qualification_pass(self):
+        import stage
+        from types import SimpleNamespace
+        m=self.marker();events=rows()
+        for state in ('DONE','ACTIVE'):
+            events.insert(-2,{'event':'step_update','step_update':{'conversation_id':CID,
+                'step_index':4,'step_type':'tool','tool_name':'run_command','state':state}})
+        store=SimpleNamespace(data={'active':None,'done':[]});before=copy.deepcopy(store.data)
+        rt=SimpleNamespace(budget=Mock(used=Mock(return_value=0)))
+        def review(*args,**kwargs):return N.parse_stream(wire(events),SHA)
+        with patch.object(N,'qualification',return_value=m),patch.object(N,'review',review), \
+             patch('context_policy.load',return_value=('trusted',{})),patch.object(N,'save_receipt') as save:
+            with self.assertRaisesRegex(N.ReviewError,'AGY_PRECHECK_FAILED'):
+                stage.qualify_qa(self.request()|{'_qa_qualification':m['qualification']},{},
+                    (SimpleNamespace(subprocess=SimpleNamespace(Popen=Mock())),None,rt,None,store,SimpleNamespace(c=SimpleNamespace(state_dir=Path('/tmp')))))
+            save.assert_not_called()
+        self.assertEqual(store.data,before)
+
+
+class QualificationPlanning(unittest.TestCase):
+    marker = QualificationSeam.marker
+    request = QualificationSeam.request
+    def test_root_proposal_only_active_idle_unspent_finite_canary(self):
+        import receiver
+        with tempfile.TemporaryDirectory(prefix='gb-agy-qa-plan-') as temp:
+            card=dict(owned=True,active=None,pending=None,generation=7)
+            budget=Mock(remaining=lambda *a:1);m=self.marker()
+            with patch.object(receiver,'STATE',Path(temp)),patch.object(N,'trusted',return_value=json.dumps(m).encode()) as read:
+                self.assertIsNone(receiver.qualification_plan({'mode':'shadow'},card,budget))
+                read.assert_not_called()
+                q=receiver.qualification_plan({'mode':'active'},card,budget)
+                self.assertEqual(q['stage'],'qa_qualification');self.assertEqual(q['generation'],7)
+                for change in ({'owned':False},{'active':{'issue':225}},{'pending':{'stage':'qa'}}):
+                    self.assertIsNone(receiver.qualification_plan({'mode':'active'},card|change,budget))
+                (Path(temp)/'antigravity-qa-qualification.json').write_text('{}')
+                self.assertIsNone(receiver.qualification_plan({'mode':'active'},card,budget))
+
+    def test_existing_plan_uses_only_free_slot2_without_touching_unknown_peer(self):
+        from test_actions_train import core,S
+        q={k:v for k,v in self.request().items() if k not in ('action','run','run_attempt','gh_token')}
+        empty=dict(owned=True,active=None,done=[],parked=[],generation=0,pending=None,last=None,reservation=None)
+        peer=empty|{'pending':{'status':'unknown','recoverable':False,'binding':{'stage':'author','issue':207}}}
+        snap=dict(mode='active',slots={'slot1':peer,'slot2':empty|{'qa_qualification':q}})
+        before=copy.deepcopy(snap)
+        self.assertEqual(core.plan(None,S,snap,[]),[q])
+        self.assertEqual(snap,before)
+        snap['mode']='shadow'
+        self.assertFalse(any(d['stage']=='qa_qualification' for d in core.plan(None,S,snap,[])))
+
+
+if __name__ == '__main__': unittest.main()

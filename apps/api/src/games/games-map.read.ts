@@ -17,6 +17,7 @@ addFormats(ajv);
 const validateMap = ajv.compile({ $ref: "#/components/schemas/GameMap", components: openapi.components });
 
 export type GameMapPreview = {
+  cover?: { uploadedUrl: string | null };
   id: string; version: number; title: string; startsAt: string; endsAt: string;
   timezone: string; activityKind: "regular" | "trainer_led"; availablePlaces: number;
 };

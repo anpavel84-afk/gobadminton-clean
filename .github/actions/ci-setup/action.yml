@@ -1,0 +1,12 @@
+name: GoBadminton CI toolchain
+description: Pinned Node and pnpm; dependencies installed only on GitHub runners
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      with:
+        node-version: '24.21.0'
+    - shell: bash
+      run: |
+        npm install --global pnpm@10.18.0
+        pnpm install --frozen-lockfile

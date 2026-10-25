@@ -1,0 +1,57 @@
+{
+  "schema": "GB_CONTEXT_OFFLINE_REPORT_V1",
+  "status": "AUTHOR_OFFLINE_ONLY_NOT_RUNTIME_VERIFIED",
+  "source_base": "ff0acea256d6f4717f2c5f8853128e7893150625",
+  "preserved_continuity_proposal": "7ded6ac5f9108b950c887d9953380006dbd70817",
+  "provider_calls": 0,
+  "live_mutations": 0,
+  "real_observation": {
+    "source": "existing AGY phase receipt b5c03a490452401693c6f64db5775231/phase-13.json",
+    "initial_semantic_input_bytes": 63015,
+    "wire_bytes": 63542,
+    "accepted_rules_bytes": 57544,
+    "rules_share_percent_of_initial_payload": 91.32,
+    "analysis_completion": "INCOMPLETE",
+    "provider_total_tokens_reported_earlier": 27122,
+    "input_tokens": null,
+    "output_tokens": null,
+    "causal_stall_attribution": "NOT_PROVEN",
+    "journal_is_in_model_prompt": false
+  },
+  "prospective_rules": {
+    "full_bytes": 100818,
+    "sha256": "38c34012f10974496a7d7cbc74ecacb62bf7847278e295edfeb107d69a5d1c1c",
+    "capsule_bytes": {
+      "author": 3726,
+      "failure_diagnosis": 3566,
+      "planner": 3404,
+      "pma": 3675,
+      "qa": 3939,
+      "research": 3248
+    },
+    "selected_in_live_consumers": false
+  },
+  "synthetic_diagnosis_replay": {
+    "old_bytes": 98497,
+    "new_bytes": 26193,
+    "saved_percent": 73.41,
+    "fixture": "24k assertion excerpt, three prior receipt inputs; current evidence and earlier briefs preserved",
+    "actual_provider_speed_or_cost": "NOT_MEASURED"
+  },
+  "validation": {
+    "new_focused_tests": 14,
+    "full_existing_train_suite_tests": 447,
+    "full_suite_skipped": 1,
+    "full_suite_seconds_observed": 10.218,
+    "result": "PASS except one existing skipped test, not claimed exercised",
+    "initial_failure": "old qualification unit fixture embedded previous policy hash; prospective fixture updated, wrong hash refusal kept",
+    "review": "author offline self-check; independent review and real provider canary pending"
+  },
+  "runtime_steps_pending": [
+    "reviewed accepted policy rollout",
+    "actual recipient full-rules/source access proof",
+    "select scoped delivery at trusted adapter boundary",
+    "native large-source reference integration after proof",
+    "one real quality/latency/cost comparison"
+  ]
+}

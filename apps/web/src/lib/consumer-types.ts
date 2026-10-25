@@ -1,3 +1,4 @@
+export type PublicVenueContacts = { phone: string | null; website: string | null; messengers: { kind: "telegram" | "whatsapp" | "vk"; url: string }[] };
 export type ActivityKind = "regular" | "trainer_led";
 export type GameStatus = "draft" | "published" | "cancelled" | "completed";
 export type GameVisibility = "public" | "unlisted";
@@ -65,6 +66,8 @@ export type City = {
 };
 
 export type VenueSummary = {
+  publicContacts?: PublicVenueContacts | null;
+  cover?: { uploadedUrl: string | null };
   id: string;
   name: string;
   cityId: string;
@@ -75,6 +78,7 @@ export type VenueSummary = {
 };
 
 export type OrganizerSummary = {
+  avatar?: PlayerAvatar;
   id: string | null;
   displayName: string;
   publicContact: string;
@@ -119,6 +123,7 @@ export type GameTrainerSummary = {
 };
 
 export type Game = {
+  cover?: { uploadedUrl: string | null };
   id: string;
   version: number;
   title: string;
@@ -145,6 +150,15 @@ export type Game = {
 export type GamePage = {
   items: Game[];
   nextCursor: string | null;
+};
+
+/** #82: private projection from GET /games/{id} only, never public venue/list fallback. */
+export type GameDetail = Omit<Game, "venue"> & {
+  venue: VenueSummary & {
+    contactPhone?: string | null;
+    contactWebsite?: string | null;
+    bookingNote?: string | null;
+  };
 };
 
 export type GameManagement = {
@@ -218,7 +232,22 @@ export type CreateVenueInput = {
   longitude: number;
 };
 
+/** Existing V1a public projection; absent on older API versions. */
+export type VenueProfile = {
+  courtCount: number | null;
+  amenities: { parking: boolean | null; showers: boolean | null };
+  /** Server-recorded public content edit, not verification/factual freshness. */
+  updatedAt: string | null;
+  gallery: {
+    coverage: "cover_only";
+    items: { url: string; credit: { kind: "photo"; text: string; url: string } }[];
+  };
+};
+
 export type Venue = CreateVenueInput & {
+  profile?: VenueProfile | null;
+  publicContacts?: PublicVenueContacts | null;
+  cover?: { uploadedUrl: string | null; credit?: { kind: "photo" | "logo" | "illustration"; text: string; url: string | null } | null };
   id: string;
   dataStatus: string;
   provenance: string;
@@ -244,6 +273,7 @@ export type LookingIntent = {
 };
 
 export type OwnSocialProfile = {
+  cover?: { uploadedUrl: string | null };
   avatar?: PlayerAvatar;
   publicPlayerId: string | null;
   version: number;
@@ -265,6 +295,7 @@ export type OwnSocialProfile = {
 };
 
 export type PublicPlayer = {
+  cover?: { uploadedUrl: string | null };
   /** Missing on older servers means unavailable. Commands revalidate. */
   canRequestContact?: boolean;
   avatar?: PlayerAvatar;

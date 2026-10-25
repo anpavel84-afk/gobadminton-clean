@@ -33,6 +33,7 @@ import {
 } from "./unified-contract";
 
 type Presence = {
+  coarse_latitude?: number; coarse_longitude?: number;
   user_id: string;
   activation_id: string;
   owner_session_id: string;
@@ -62,6 +63,7 @@ export function v2Metadata(row: Presence, sessionId: string) {
       row.owner_session_id === sessionId
         ? ("active" as const)
         : ("owned_elsewhere" as const),
+    ...(row.owner_session_id === sessionId && Number.isFinite(row.coarse_latitude) && Number.isFinite(row.coarse_longitude) ? { coarseCenter: { latitude: row.coarse_latitude, longitude: row.coarse_longitude } } : {}),
     contractVersion: UNIFIED_WIRE,
     activationId: row.activation_id,
     version: Number(row.version),
@@ -93,7 +95,7 @@ export class UnifiedPublishingService {
   ) {}
   async status(userId: string, sessionId: string) {
     const r = await this.pool.query<Presence>(
-      "SELECT * FROM radar_presences WHERE user_id=$1 AND policy_version=$2",
+      "SELECT *, ST_Y(coarse_center::geometry) AS coarse_latitude, ST_X(coarse_center::geometry) AS coarse_longitude FROM radar_presences WHERE user_id=$1 AND policy_version=$2",
       [userId, UNIFIED_POLICY],
     );
     const row = r.rows[0];
@@ -406,7 +408,7 @@ export class UnifiedPublishingService {
     // Durable receipt contains only the generation CAS. Re-read current ephemeral
     // metadata for transport; never persist model, point, accuracy or fix clocks.
     const current = await this.pool.query<Presence>(
-      "SELECT * FROM radar_presences WHERE user_id=$1 AND owner_session_id=$2 AND activation_id=$3 AND version=$4 AND policy_version=$5 AND LEAST(expires_at,hard_expires_at,foreground_until,location_valid_until)>clock_timestamp()",
+      "SELECT *, ST_Y(coarse_center::geometry) AS coarse_latitude, ST_X(coarse_center::geometry) AS coarse_longitude FROM radar_presences WHERE user_id=$1 AND owner_session_id=$2 AND activation_id=$3 AND version=$4 AND policy_version=$5 AND LEAST(expires_at,hard_expires_at,foreground_until,location_valid_until)>clock_timestamp()",
       [
         userId,
         sessionId,

@@ -1,13 +1,19 @@
 import type { UnifiedCapability, UnifiedFilters, UnifiedMapSnapshot, UnifiedOriginInput, UnifiedPreview, UnifiedRow, UnifiedSnapshot, UnifiedDistance } from "@gobadminton/contracts";
 import { apiFetch, type ApiResult } from "./api-client";
-import type { Me } from "./consumer-types";
+import type { Me, PublicPlayer } from "./consumer-types";
 
+export type ScopedCatalogCursor = { scope: string; value: string };
+/** Pagination tokens belong to one exact ordinary filter scope. */
+export function scopedCatalogCursor(cursor: ScopedCatalogCursor | null, scope: string): string | null {
+  return cursor?.scope === scope ? cursor.value : null;
+}
 export const UNIFIED_WIRE = "players-unified-radar-v1" as const;
 export type RadarConfig = {
+  devMoscowTest?: { latitude: number; longitude: number; accuracyMeters: number };
   exposureMode: "live" | "synthetic_demo";
   unifiedDirectory: UnifiedCapability;
   publishingV2: { enabled: boolean };
-  cities: Array<{ cityId: string; regionId: string; map: { availability: string } }>;
+  cities: Array<{ cityId: string; regionId: string; map: { availability: string; mapId?: string | null; version?: string | null } }>;
 };
 /** A successful HTTP response alone does not advertise a usable private capability. */
 export function compatibleRadarConfig(value: unknown): RadarConfig | null {
@@ -49,6 +55,28 @@ export type DirectoryView = {
   capabilityUnavailable: boolean;
   authenticationRequired: boolean;
 };
+/** Overlay only live private Radar rows; the public API remains catalog authority.
+ * The existing More boundary precedes the remainder until all Radar ranks load.
+ */
+export function mergeRadarCatalog(players: PublicPlayer[], view: DirectoryView, authorized: boolean, now = Date.now()) {
+  const live = authorized && view.mode === "unified" && !view.stale && !view.authenticationRequired && !view.capabilityUnavailable &&
+    view.snapshot !== null && Date.parse(view.snapshot.validUntil) > now;
+  const seen = new Set<string>();
+  const radar = live ? view.rows.filter(row => {
+    if (!row.radar || Date.parse(row.radar.validUntil) <= now || seen.has(row.publicPlayerId)) return false;
+    seen.add(row.publicPlayerId); return true;
+  }) : [];
+  const loadedRadar = live ? new Set(view.rows.filter(row => row.radar !== null).map(row => row.publicPlayerId)).size : 0;
+  const moreRadar = Boolean(live && view.snapshot?.page.nextCursor && loadedRadar < view.snapshot.totals.radarTotal);
+  const ordinary = players.filter(player => {
+    if (seen.has(player.publicPlayerId)) return false;
+    seen.add(player.publicPlayerId); return true;
+  });
+  // The owner requires the ordinary catalog to stay present even when Radar
+  // has another page. Show its existing rows after the bounded Radar window,
+  // with an explicit More boundary before them; never hide other cities.
+  return { radar, ordinary, moreRadar };
+}
 const initial = (): DirectoryView => ({ mode: "ordinary", snapshot: null, rows: [], pins: [], mapPage: null, selected: null, preview: null, busy: false, previewBusy: false, notice: "", stale: false, capabilityUnavailable: false, authenticationRequired: false });
 /** Private contexts/proofs/origins live only in this root-client session, never URLs/storage. */
 export class UnifiedDirectoryController {
@@ -101,19 +129,38 @@ export class UnifiedDirectoryController {
     if (result.status === 401) this.set({ mode: "ordinary", authenticationRequired: true });
   }
   tick() {
-    if (this.view.snapshot && this.clock() >= Date.parse(this.view.snapshot.validUntil)) {
-      this.origin = { kind: "none" }; this.invalidate("Список устарел. Обновите участников Radar.", true);
+    const now = this.clock();
+    const snapshotExpired = this.view.snapshot && now >= Date.parse(this.view.snapshot.validUntil);
+    // Target proof/lease may expire sooner than the enclosing 45-second
+    // private query. Never retain its selection, preview or map pins after TTL.
+    const rowExpired = [...this.view.rows, ...this.view.pins].some(row =>
+      row.radar && (!Number.isFinite(Date.parse(row.radar.validUntil)) || Date.parse(row.radar.validUntil) <= now));
+    const previewExpired = this.view.preview && (!Number.isFinite(Date.parse(this.view.preview.radar.validUntil))
+      || Date.parse(this.view.preview.radar.validUntil) <= now);
+    if (snapshotExpired || rowExpired || previewExpired) {
+      this.origin = { kind: "none" };
+      this.invalidate("Список участников Radar устарел. Обновляем данные.", true);
+      this.set({ mode: "ordinary" });
     }
   }
   async query(filters: UnifiedFilters, origin: UnifiedOriginInput = { kind: "none" }, activationKey: string | null = origin.kind === "current_activation" ? origin.activationId : null) {
     if (!this.me || !this.visible || this.view.capabilityUnavailable || this.view.authenticationRequired) return;
-    this.filters = filters; this.origin = origin; this.activationOriginKey = activationKey;
-    this.invalidate(); this.set({ mode: "unified" });
+    const changed = JSON.stringify(this.filters) !== JSON.stringify(filters) ||
+      this.activationOriginKey !== activationKey;
+    // A filter/activation change aborts and fences the old in-flight response.
+    if (this.pending) {
+      if (!changed) return;
+      this.invalidate();
+      this.set({ mode: "ordinary" });
+    }
     if (this.clock() < Math.max(this.nextInitial, this.retryAt)) {
-      // A declined query must not leave a raw foreground fix in controller memory.
+      if (changed) { this.invalidate(); this.set({ mode: "ordinary" }); }
+      // Never retain a raw foreground fix while waiting for the cooldown.
       this.origin = { kind: "none" };
       this.set({ stale: true, notice: "Обновить участников Radar можно через несколько секунд. Пока доступен обычный каталог." }); return;
     }
+    this.filters = filters; this.origin = origin; this.activationOriginKey = activationKey;
+    this.invalidate(); this.set({ mode: "unified" });
     this.nextInitial = this.clock() + 30000;
     const epoch = this.epoch; this.pending = true; this.set({ busy: true });
     const result = await this.request<UnifiedSnapshot>("/v1/players/query", { method: "POST", csrfToken: this.me.csrfToken, signal: this.abort.signal, body: JSON.stringify({ contractVersion: UNIFIED_WIRE, filters, origin, limit: 50 }) });
@@ -126,7 +173,14 @@ export class UnifiedDirectoryController {
     this.set({ snapshot: result.data, rows: result.data.items, notice: result.data.query.originState === "none" ? "Участники Radar по городу. Расстояние неизвестно." : "Расстояние приблизительное, по опубликованным геопозициям." });
   }
   private acceptable(data: UnifiedSnapshot | UnifiedMapSnapshot) {
-    return data.contractVersion === UNIFIED_WIRE && data.cityId === this.filters?.cityId && Date.parse(data.validUntil) > this.clock();
+    const now = this.clock();
+    // A queryRef can outlive an individual participant's Radar lease. Refuse
+    // entire late response before admitting even one expired private marker.
+    return data.contractVersion === UNIFIED_WIRE &&
+      data.cityId === this.filters?.cityId &&
+      Number.isFinite(Date.parse(data.validUntil)) && Date.parse(data.validUntil) > now &&
+      data.items.every(row => !row.radar ||
+        (Number.isFinite(Date.parse(row.radar.validUntil)) && Date.parse(row.radar.validUntil) > now));
   }
   async refresh() { if (this.filters && !this.pending) await this.query(this.filters, this.origin, this.activationOriginKey); }
   async more() {

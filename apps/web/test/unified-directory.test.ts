@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { UnifiedSnapshot, UnifiedRow, UnifiedDistance } from "@gobadminton/contracts";
-import { UnifiedDirectoryController, distanceText } from "../src/lib/unified-directory";
-import { candidateMapAllowed, MOSCOW_BUNDLE, allowedMapResource } from "../src/lib/radar-map-assets";
+import { UnifiedDirectoryController, distanceText, scopedCatalogCursor } from "../src/lib/unified-directory";
+import { candidateMapAllowed, candidateMapConfigAllowed, MOSCOW_BUNDLE, allowedMapResource } from "../src/lib/radar-map-assets";
+import type { RadarConfig } from "../src/lib/unified-directory";
 import type { Me } from "../src/lib/consumer-types";
 import type { apiFetch } from "../src/lib/api-client";
 const now = Date.parse("2030-01-01T00:00:00Z");
@@ -12,6 +13,22 @@ function snapshot(items: UnifiedRow[] = [row("first")]): UnifiedSnapshot {
 }
 const me = { id: "viewer", csrfToken: "csrf" } as Me;
 const filters = { cityId: MOSCOW_BUNDLE.cityId };
+describe("ordinary pagination follows only the ordinary filters", () => {
+  const allCities = JSON.stringify({ city: "", areaKey: "", name: "", lookingOnly: false, trainerOnly: false });
+  const moscow = JSON.stringify({ city: MOSCOW_BUNDLE.cityId, areaKey: "", name: "", lookingOnly: false, trainerOnly: false });
+  const oldPage = { scope: allCities, value: "all-cities-page-2" };
+  it("preserves All cities page2 across Radar OFF/ON, but not a city change", () => {
+    expect(scopedCatalogCursor(oldPage, allCities)).toBe("all-cities-page-2");
+    expect(scopedCatalogCursor(oldPage, moscow)).toBeNull();
+    // A city/filter transition clears saved tokens; returning to A starts fresh.
+    const cleared = null;
+    expect(scopedCatalogCursor(cleared, allCities)).toBeNull();
+  });
+  it("invalidates pagination on name filters", () => {
+    const nameChanged = JSON.stringify({ city: "", areaKey: "", name: "Anna", lookingOnly: false, trainerOnly: false });
+    expect(scopedCatalogCursor(oldPage, nameChanged)).toBeNull();
+  });
+});
 describe("unified directory privacy and global pagination", () => {
   it("keeps page order from the full-set server context, with no cap20 concatenation", async () => {
     const request = vi.fn(async (_path, init) => ok(JSON.parse(init.body).cursor ? { ...snapshot([row("server-rank51"), row("tail")]), page: { nextCursor: null } } : snapshot(Array.from({ length: 50 }, (_, i) => row(`rank${i + 1}`))))) as typeof apiFetch;
@@ -28,6 +45,25 @@ describe("unified directory privacy and global pagination", () => {
       if (action === "stop") c.ordinary(); else if (action === "hidden") c.visibility(false); else c.bind({ ...me, id: "another" });
       resolve(ok(snapshot())); await read; expect(c.view.rows).toEqual([]); expect(c.view.snapshot).toBeNull();
     }
+  });
+  it("drops the old pending response on a changed filter and rereads latest after cooldown", async () => {
+    let time = now;
+    let resolveFirst!: (v: ReturnType<typeof ok>) => void;
+    const first = new Promise<ReturnType<typeof ok>>(resolve => { resolveFirst = resolve; });
+    const request = vi.fn()
+      .mockImplementationOnce(async () => first)
+      .mockImplementationOnce(async () => ok({ ...snapshot([row("new-filter-only")]), validUntil: new Date(time + 45000).toISOString() })) as typeof apiFetch;
+    const c = new UnifiedDirectoryController(request, () => time); c.bind(me);
+    const oldRead = c.query(filters, { kind: "current_activation", activationId: "active" }, "active:1");
+    const newest = { ...filters, trainer: true };
+    await c.query(newest, { kind: "current_activation", activationId: "active" }, "active:1");
+    resolveFirst(ok(snapshot([row("old-filter")]))); await oldRead;
+    expect(c.view.rows).toEqual([]); expect(c.view.snapshot).toBeNull();
+    expect(c.view.mode).toBe("ordinary"); expect(request).toHaveBeenCalledTimes(1);
+    time += 30000;
+    await c.query(newest, { kind: "current_activation", activationId: "active" }, "active:1");
+    expect(c.view.rows.map(r => r.publicPlayerId)).toEqual(["new-filter-only"]);
+    expect(JSON.parse(vi.mocked(request).mock.calls[1]![1]!.body as string).filters).toMatchObject({ trainer: true });
   });
   it("clears the complete context on stale page2 and never appends a new epoch", async () => {
     let calls = 0;
@@ -51,6 +87,18 @@ describe("unified directory privacy and global pagination", () => {
     expect(c.matches(filters, "activation:1")).toBe(true);
     expect(JSON.parse(vi.mocked(request).mock.calls[1]![1]!.body as string).origin).toEqual({ kind: "reference", originRef: "private-reference" });
   });
+  it("recovers an expired private route context with the live activation and rate limit", async () => {
+    let time = now; const request = vi.fn(async () => ok({ ...snapshot(), validUntil: new Date(time + 45000).toISOString() })) as typeof apiFetch;
+    const c = new UnifiedDirectoryController(request, () => time); c.bind(me);
+    await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    expect(request).toHaveBeenCalledTimes(1); expect(c.view.snapshot).not.toBeNull();
+    time += 45000; c.tick(); expect(c.matches(filters, "activation:1")).toBe(false);
+    await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(vi.mocked(request).mock.calls[1]![1]!.body as string).origin).toEqual({ kind: "current_activation", activationId: "activation" });
+    expect(c.matches(filters, "activation:1")).toBe(true);
+  });
   it("respects initial-query cooldown on filter changes and carries no old cursor", async () => {
     const request = vi.fn(async () => ok(snapshot())) as typeof apiFetch;
     const c = new UnifiedDirectoryController(request, () => now); c.bind(me); await c.query(filters); await c.query({ ...filters, trainer: true });
@@ -64,10 +112,20 @@ describe("distance and map authority", () => {
     expect(distanceText({ kind: "range", upperMeters: 4000, roundingStepMeters: 1000 } as UnifiedDistance)).toBe("Рядом · до 4 км (примерно)"); expect(distanceText(null)).toBeNull();
   });
   it("never interprets missing registration as public map approval", () => {
-    expect(candidateMapAllowed(snapshot(), "gobadminton.ru", MOSCOW_BUNDLE.version)).toBe(false);
-    expect(candidateMapAllowed({ ...snapshot(), exposureMode: "authenticated_live" }, "localhost", MOSCOW_BUNDLE.version)).toBe(false);
-    expect(candidateMapAllowed(snapshot(), "localhost", undefined)).toBe(false);
-    expect(candidateMapAllowed(snapshot(), "localhost", MOSCOW_BUNDLE.version)).toBe(true);
+    const preview = { ...snapshot(), map: { availability: "dev_preview", mapId: "moscow", version: MOSCOW_BUNDLE.version } } as UnifiedSnapshot;
+    expect(candidateMapAllowed(preview, "https://gobadminton.ru")).toBe(false);
+    expect(candidateMapAllowed(preview, "http://localhost:3001")).toBe(false);
+    expect(candidateMapAllowed(snapshot(), "https://dev.gobadminton.ru")).toBe(false);
+    expect(candidateMapAllowed(preview, "https://dev.gobadminton.ru")).toBe(true);
+    expect(candidateMapAllowed({ ...preview, exposureMode: "authenticated_live" }, "https://dev.gobadminton.ru")).toBe(true);
+    expect(candidateMapAllowed({ ...preview, cityId: "other" }, "https://dev.gobadminton.ru")).toBe(false);
+    expect(candidateMapAllowed({ ...preview, map: { ...preview.map, version: "wrong" } } as unknown as UnifiedSnapshot, "https://dev.gobadminton.ru")).toBe(false);
+    const config = { exposureMode:"live", unifiedDirectory:{ enabled:true }, cities:[{ cityId:MOSCOW_BUNDLE.cityId,regionId:"moscow",map:{availability:"dev_preview",mapId:"moscow",version:MOSCOW_BUNDLE.version} }] } as RadarConfig;
+    expect(candidateMapConfigAllowed(config,MOSCOW_BUNDLE.cityId,"https://dev.gobadminton.ru")).toBe(true);
+    expect(candidateMapConfigAllowed(config,MOSCOW_BUNDLE.cityId,"https://gobadminton.ru")).toBe(false);
+    expect(candidateMapConfigAllowed(config,"another-city","https://dev.gobadminton.ru")).toBe(false);
+    expect(candidateMapConfigAllowed({ ...config, cities:[{ ...config.cities[0]!, map:{ availability:"missing" } }] },MOSCOW_BUNDLE.cityId,"https://dev.gobadminton.ru")).toBe(false);
+    expect(candidateMapConfigAllowed(null,MOSCOW_BUNDLE.cityId,"https://dev.gobadminton.ru")).toBe(false);
     expect(allowedMapResource(MOSCOW_BUNDLE.prefix + "style.json")).toBe(true); expect(allowedMapResource("https://evil.example/tiles")).toBe(false); expect(allowedMapResource(MOSCOW_BUNDLE.prefix + "../other/style.json")).toBe(false);
   });
 });

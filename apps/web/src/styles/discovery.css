@@ -37,7 +37,7 @@
 .gb-discovery-layout { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 28px; align-items: start; padding-bottom: 0; }
 .gb-discovery-feed { min-width: 0; }
 .gb-discovery-filters { display: flex; justify-content: space-between; gap: 14px; margin-bottom: 32px; }
-.gb-discovery-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.gb-discovery-chips { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; max-width: 100%; }
 .gb-consumer .gb-discovery-chip { min-height: 44px; padding: 0 15px; border: 1px solid var(--gb-line); border-radius: 999px; background: var(--gb-white); color: var(--gb-ink-soft); font-size: 13px; font-weight: 500; cursor: pointer; }
 .gb-discovery-chip[aria-pressed="true"] { border-color: var(--gb-ink); color: var(--gb-white); background: var(--gb-ink); }
 .gb-discovery-chip:disabled { cursor: not-allowed; color: var(--gb-ink-soft); background: var(--gb-paper); border-style: dashed; }
@@ -132,7 +132,8 @@
   .gb-discovery-create { min-height: 82px; }
   .gb-discovery-create__plus { width: 52px; height: 52px; }
   .gb-discovery-filters { margin: 2px 0 28px; padding: 3px; overflow-x: auto; overscroll-behavior-inline: contain; scrollbar-width: none; }
-  .gb-discovery-chips { flex-wrap: nowrap; }
+  .gb-discovery-chips { flex-wrap: nowrap; overflow-x: auto; overscroll-behavior-inline: contain; }
+  .gb-discovery-chips > * { flex-shrink: 0; }
   .gb-discovery-chip { white-space: nowrap; }
   .gb-discovery-sort { display: none; }
   .gb-discovery-feed-heading h2 { font-size: 30px; }
@@ -149,3 +150,93 @@
   .gb-discovery *, .gb-discovery *::before, .gb-discovery *::after { animation: none !important; transition: none !important; }
   .gb-discovery-card:hover, .gb-discovery-card:hover .gb-discovery-card__image > img { transform: none; }
 }
+
+/* Existing GameCard avatar slot, shared with the canonical Avatar fallback. */
+.gb-discovery-avatar { overflow: hidden; }
+.gb-discovery-avatar > img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+/* Published kit §08 Avatar/IdentityRow; bounded #15 composition, see source manifest. */
+.gb-game-identity { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.gb-game-identity > span:last-child { min-width: 0; overflow-wrap: anywhere; }
+.gb-game-identity small, .gb-game-identity strong { display: block; }
+.gb-game-identity small { color: var(--gb-ink-soft); font-size: 10px; }
+.gb-game-identity strong { font-size: 13px; font-weight: 600; }
+.gb-personal-card__organizer { margin-top: 8px; }
+.gb-game-facts .gb-game-identity .gb-discovery-avatar { width: 24px; height: 24px; font-size: 10px; }
+.gb-discovery-trainer { margin-bottom: 12px; }
+
+/* #61 Owner: map follows compact canonical selectors/tabs, list keeps its banners. */
+.gb-app-shell:has(.gb-discovery[data-view="map"]) .gb-site-footer { display: none; }
+.gb-shell-content:has(.gb-discovery[data-view="map"]) { padding-bottom: 0; }
+.gb-discovery[data-view="map"] .gb-discovery-search { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 8px; margin-bottom: 8px; box-shadow: none; }
+.gb-discovery[data-view="map"] .gb-discovery-selector { min-height: 44px; padding: 4px 8px; gap: 8px; }
+.gb-discovery[data-view="map"] .gb-discovery-selector__icon { width: 28px; height: 28px; }
+.gb-discovery[data-view="map"] .gb-discovery-selector small { display: none; }
+.gb-discovery[data-view="map"] > .gb-discovery-chips { margin-bottom: 8px; }
+.gb-games-map-viewport { height: 100dvh; min-height: 0; }
+ .gb-games-map { height: 100%; min-height: 0; display: flex; flex-direction: column; gap: 4px; }
+.gb-games-map-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; }
+.gb-games-map-help { flex: 1 1 auto; font-size: 12px; min-width: 0; }
+.gb-games-map-help summary, .gb-games-map-fallback summary { cursor: pointer; }
+.gb-games-map-toolbar > button { min-height: 32px; padding-block: 4px; font-size: 12px; }
+.gb-games-map > p { margin: 0; font-size: 12px; }
+.gb-games-map-canvas { flex: 1 1 0; min-width: 0; min-height: 0; position: relative; }
+.gb-games-map-fallback { flex: none; max-height: 40%; overflow: auto; font-size: 13px; }
+.gb-games-map-fallback [role="group"] { display: grid; gap: 8px; padding: 8px 0; }
+.gb-games-map-fallback button { overflow-wrap: anywhere; }
+
+/* #62 bounded view actions; activity chips remain filters only. */
+.gb-discovery-layout[hidden] { display: none; }
+.gb-games-map-context { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.gb-games-view-action { display: none; }
+@media (max-width: 720px) {
+  /* Mobile already has the above-nav List action; outrank foundation Button. */
+  .gb-consumer .gb-games-map-context > .gb-games-list-return { display: none; }
+  .gb-games-view-action { position: fixed; z-index: 20; left: 0; right: 0; height: 60px; display: flex; align-items: center; justify-content: center; pointer-events: none; background: var(--gb-white); }
+  .gb-games-view-action > button { pointer-events: auto; min-height: 44px; gap: 8px; }
+  .gb-discovery[data-view="list"] { padding-bottom: 60px; }
+  .gb-app-shell:has(.gb-games-view-action) .gb-site-footer { padding-bottom: 60px; }
+}
+
+/* #66: compact existing selector/chip/disclosure families; no overlay on the map.
+   Explicit specificity keeps canonical generic button dimensions from winning. */
+.gb-discovery[data-view="map"] .gb-discovery-search { padding: var(--gb-space-1); gap: var(--gb-space-1); margin-bottom: var(--gb-space-1); }
+.gb-discovery[data-view="map"] .gb-discovery-selector { gap: var(--gb-space-1); }
+.gb-games-map-context { gap: var(--gb-space-1); margin-bottom: var(--gb-space-1); }
+.gb-games-map-context > .gb-discovery-chips { min-width: 0; gap: var(--gb-space-1); }
+.gb-consumer .gb-games-map-context .gb-discovery-chip { padding-inline: var(--gb-space-3); }
+.gb-consumer .gb-games-map-context > .gb-games-list-return { min-height: 44px; padding-inline: var(--gb-space-2); }
+.gb-games-map-toolbar { flex: none; flex-wrap: nowrap; }
+.gb-games-map-help { flex: 1; }
+.gb-games-map-help summary { min-height: 44px; display: list-item; align-content: center; }
+.gb-games-map-help[open] { max-height: 30dvh; overflow: auto; }
+.gb-consumer .gb-games-map-toolbar > button { flex: none; min-height: 44px; padding: var(--gb-space-1) var(--gb-space-2); font-size: 12px; }
+.gb-games-map > p { flex: none; max-height: 25%; overflow: auto; }
+.gb-games-map-fallback { max-height: 30%; }
+@media (max-width: 720px) {
+  .gb-games-view-action { height: auto; padding-block: var(--gb-space-1); }
+  .gb-consumer .gb-games-view-action > button { min-height: 44px; }
+}
+
+/* M0: bounded Error + SurfacePanel + Button composition; attribution stays exposed. */
+.gb-games-map-area { flex: 1 1 0; min-height: 0; position: relative; display: flex; }
+.gb-games-map-error { position: absolute; z-index: 5; top: 16px; left: 16px; right: 16px; margin: auto; max-width: 420px; background: var(--gb-white); }
+.gb-games-map-error h2 { margin-top: 0; }
+.gb-games-map-error > div { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* MAP-PERF1: temporary module states share the existing map area's flex space. */
+.gb-games-map-module-loading, .gb-games-map-module-error-area { display: flex; min-height: 0; min-width: 0; align-items: center; justify-content: center; padding: 16px; color: var(--gb-ink); background: var(--gb-paper); }
+.gb-games-map-module-loading { flex-direction: column; gap: 12px; }
+.gb-games-map-module-loading__text { margin: 0; text-align: center; }
+.gb-games-map-module-loading__progress { flex: none; width: 160px; max-width: 100%; height: 6px; border-radius: 6px; overflow: hidden; background: var(--gb-line); }
+.gb-games-map-module-loading__progress > span { display: block; width: 40%; height: 100%; border-radius: inherit; background: var(--gb-lime-deep); animation: gb-games-map-module-progress 1.2s ease infinite; }
+@keyframes gb-games-map-module-progress {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(250%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .gb-games-map-module-loading__progress > span { animation: none; }
+}
+.gb-games-map-module-error-area { overflow: auto; }
+.gb-games-map-module-error { min-width: 0; width: 100%; max-width: 420px; }
+.gb-games-map-module-error h2 { margin-top: 0; }

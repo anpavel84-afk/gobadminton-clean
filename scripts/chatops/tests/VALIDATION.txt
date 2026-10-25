@@ -1,0 +1,15 @@
+2026-10-13
+PASS: bash -n on all delivered .sh files.
+PASS: node --check scripts/chatops/smoke.mjs.
+PASS: Python compilation of migration-ci.py and helper test harness.
+PASS: YAML parse, job dependency reference validation, full 40-hex action pin validation.
+PASS: 15 local helper tests with fake Docker/curl, in an isolated temporary /root directory:
+status, cross-environment credentials, extra fields, command injection in ID, malformed digest,
+PROD without baseline, group-writable config, symlinked config, deploy/accept,
+app update failure rollback, migration failure rollback, concurrent pending release,
+stale accept, watchdog expiry, compensating rollback after accept.
+
+These are author-run LOCAL tests, not an independent production security verdict.
+No real Docker daemon, registry, user VPS or production database used.
+Not run: real Actions, full repository CI, live GitHub Projects writes, actual SSH,
+PostGIS migrations, browser rendering, deploy/rollback on the original hosts.

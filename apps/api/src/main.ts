@@ -8,13 +8,15 @@ import {
 } from "@nestjs/platform-fastify";
 import { AppModule } from "./app.module";
 import { ProblemExceptionFilter } from "./common/problem.filter";
+import { apiLogger, ApiApplicationLogger } from "./common/api-logger";
 import { loadEnv } from "./config/env";
 
 async function bootstrap(): Promise<void> {
   const env = loadEnv();
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
-    new FastifyAdapter({ logger: true }),
+    new FastifyAdapter({ logger: apiLogger }),
+    { logger: new ApiApplicationLogger() },
   );
 
   registerAvatarHttp(app.getHttpAdapter().getInstance());
@@ -36,8 +38,8 @@ async function bootstrap(): Promise<void> {
   );
 }
 
-bootstrap().catch(async (error: unknown) => {
-  console.error(error instanceof Error ? error.stack ?? error.message : error);
+bootstrap().catch(async () => {
+  console.error("API startup failed; details suppressed to protect credentials");
   await AppModule.close().catch(() => undefined);
   process.exitCode = 1;
 });

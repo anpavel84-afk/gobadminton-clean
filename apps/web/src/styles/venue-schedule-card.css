@@ -1,0 +1,18 @@
+/* #28 bounded kit composition: ContentCard image-top, SurfacePanel, SectionHeader. */
+.gb-venue-schedule { margin-top:24px; overflow:hidden; border:1px solid var(--gb-line); border-radius:var(--gb-radius-md); background:var(--gb-white); }
+.gb-venue-schedule > .gb-venue-cover { display:block; width:100%; aspect-ratio:16 / 9; max-height:280px; }
+.gb-venue-schedule__body { padding:24px; }
+.gb-venue-schedule h2 { margin:0 0 8px; overflow-wrap:anywhere; }
+.gb-venue-schedule p { color:var(--gb-ink-soft); overflow-wrap:anywhere; }
+.gb-venue-schedule__actions { display:flex; flex-wrap:wrap; gap:8px; margin:16px 0 24px; }
+.gb-venue-schedule .gb-discovery-cards { min-width:0; }
+section[aria-label="Игры на карте"] .g2-map-marker:focus-visible,
+section[aria-label="Игры на карте"] .g2-map-venue-marker:focus-visible { outline:3px solid var(--gb-purple); outline-offset:3px; }
+@media(max-width:720px) { .gb-venue-schedule__body { padding:16px; } }
+
+/* Bound intrinsic width at the source; retain map gestures and every catalog chip. */
+section[aria-label="Игры на карте"], section[aria-label="Расписание площадки"],
+.gb-venue-page, .gb-venue-schedule { min-width:0; max-width:100%; }
+.gb-venue-page h1 { overflow-wrap:anywhere; }
+section[aria-label="Игры на карте"] .maplibregl-marker { pointer-events:auto; }
+section[aria-label="Игры на карте"] .g2-map-venue-marker { width:44px; height:44px; }

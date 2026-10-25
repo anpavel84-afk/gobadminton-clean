@@ -1,3 +1,4 @@
+import { DEV_MOSCOW_PEER_IDS } from "./dev-moscow-test";
 import { unrestrictedSql } from "../restrictions/policy";
 import type { PoolClient } from "pg";
 import { GEO_POLICY, type PrivateOrigin } from "./geographic-contract";
@@ -65,6 +66,7 @@ export async function geographicCandidates(
        AND p.social_eligible AND p.radar_consented AND p.radar_consent_policy_version=$4
        AND btrim(p.display_name)<>''
        AND NOT EXISTS(SELECT 1 FROM radar_consent_events w WHERE w.reverses_event_id=e.id AND w.event_type='withdrawn')
+       AND r.user_id NOT IN (${DEV_MOSCOW_PEER_IDS.map(id => `'${id}'::uuid`).join(',')})
        AND (r.user_id::text ~ '^d0f0[0-9a-f]{4}-0000-4000-8000-[0-9a-f]{12}$')=($3='synthetic_demo')
        AND ($7='city' OR ST_DWithin(r.coarse_center,o.g,$8::int*1000))
        AND NOT EXISTS(SELECT 1 FROM user_blocks b WHERE

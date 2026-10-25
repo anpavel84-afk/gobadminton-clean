@@ -1,3 +1,4 @@
+import { avatarForGameCreator, type PlayerAvatar } from "../profiles/avatar-presentation";
 import { GamePreferencesService, normalizePublicGameContact, validatePreferenceVersion } from "../profiles/game-preferences.service";
 import type { AppEnv } from "../config/env";
 import { readModeration } from "../game-moderation/projection";
@@ -21,6 +22,7 @@ import { InvitationsService } from "../invitations/invitations.service";
 import { ParticipationsService } from "../participations/participations.service";
 import { TrainersService } from "../trainers/trainers.service";
 import { APP_ENV, DATABASE_POOL } from "../tokens";
+import { privateContactWebsite } from "../lib/original-http-authority";
 import { effectiveVenueCtes } from "../venues/effective-venue.query";
 import { eligibleGames, normalizeDiscovery, type DiscoveryInput } from "./games-discovery.query";
 import { readGamesMap } from "./games-map.read";
@@ -60,6 +62,7 @@ export type GameTrainerSummary = {
 };
 
 export type GameDto = {
+  cover?: { uploadedUrl: string | null };
   id: string;
   version: number;
   title: string;
@@ -73,8 +76,13 @@ export type GameDto = {
     id: string | null;
     displayName: string;
     publicContact: string;
+    avatar?: PlayerAvatar;
   };
   venue: {
+    contactPhone?: string | null;
+    contactWebsite?: string | null;
+    bookingNote?: string | null;
+    cover?: { uploadedUrl: string | null };
     id: string;
     name: string;
     cityId: string;
@@ -169,7 +177,13 @@ type GameRow = {
   organizer_public_contact: string;
   venue_id: string;
   venue_name: string;
+  venue_contact_phone: string | null;
+  venue_contact_website: string | null;
+  venue_booking_note: string | null;
+  venue_contacts_allowed?: boolean;
   venue_city_id: string;
+  venue_cover_url: string | null;
+  game_cover_url: string | null;
   venue_address: string;
   venue_timezone: string;
   venue_latitude: number;
@@ -500,7 +514,7 @@ export class GamesService {
     try {
       let dto: GameDto;
       try {
-        dto = await this.loadGameDto(client, gameId);
+        dto = await this.loadGameDto(client, gameId, viewerUserId, true);
       } catch {
         throw notFound("GAME_NOT_FOUND", "Игра не найдена");
       }
@@ -540,7 +554,7 @@ export class GamesService {
   async listPublished(query: DiscoveryInput & {
     cursor?: string;
     limit?: number;
-  }): Promise<{ items: GameDto[]; nextCursor: string | null }> {
+  }, viewerId: string | null = null): Promise<{ items: GameDto[]; nextCursor: string | null }> {
     const limit = clampLimit(query.limit);
     const filter = normalizeDiscovery(query);
     let cursorStartsAt: Date | null = null;
@@ -575,7 +589,7 @@ export class GamesService {
     const rows = result.rows;
     const hasMore = rows.length > limit;
     const page = hasMore ? rows.slice(0, limit) : rows;
-    const items = page.map(mapGameRow);
+    const items = await Promise.all(page.map(async row => this.withCreatorAvatar(this.pool, mapGameRow(row), viewerId)));
     const last = page[page.length - 1];
     return {
       items,
@@ -640,8 +654,8 @@ export class GamesService {
     const rows = result.rows;
     const hasMore = rows.length > limit;
     const page = hasMore ? rows.slice(0, limit) : rows;
-    const items = page.map((row) => {
-      const game = mapGameRow(row);
+    const items = await Promise.all(page.map(async (row) => {
+      const game = await this.withCreatorAvatar(this.pool, mapGameRow(row), userId);
       return {
         ...game,
         management: {
@@ -649,7 +663,7 @@ export class GamesService {
           createdByMe: row.created_by_user_id === userId,
         },
       };
-    });
+    }));
     const last = page[page.length - 1];
     return {
       items,
@@ -726,18 +740,30 @@ export class GamesService {
   private async loadGameDto(
     client: PoolClient,
     gameId: string,
+    viewerId: string | null = null,
+    includeVenueContacts = false,
   ): Promise<GameDto> {
     const result = await client.query<GameRow>(
       ` ${effectiveVenueCtes("SELECT venue_id AS id FROM games WHERE id = $1")}
-       SELECT ${gameSelectColumns()}
+       SELECT ${gameSelectColumns()},
+         ($2::uuid IS NOT NULL AND (
+           EXISTS (SELECT 1 FROM game_managers gm WHERE gm.game_id=g.id
+             AND gm.user_id=$2 AND gm.status='active' AND gm.role IN ('owner','manager'))
+           OR EXISTS (SELECT 1 FROM participations p WHERE p.game_id=g.id
+             AND p.user_id=$2 AND p.status='confirmed')
+         )) AS venue_contacts_allowed
        FROM games g
        INNER JOIN effective_venues v ON v.source_id = g.venue_id
        WHERE g.id = $1`,
-      [gameId],
+      [gameId, includeVenueContacts ? viewerId : null],
     );
     const row = result.rows[0];
     if (!row) throw notFound("GAME_NOT_FOUND", "Игра не найдена");
-    return mapGameRow(row);
+    return this.withCreatorAvatar(client, mapGameRow(row), viewerId);
+  }
+
+  private async withCreatorAvatar(db: Pool | PoolClient, game: GameDto, viewerId: string | null = null): Promise<GameDto> {
+    return { ...game, organizer: { ...game.organizer, avatar: await avatarForGameCreator(db, game.id, this.env.USER_RESTRICTIONS_INTERNAL_ENABLED, viewerId) } };
   }
 }
 
@@ -754,7 +780,9 @@ function gameSelectColumns(): string {
     g.organizer_id AS organizer_id,
     g.host_display_name AS organizer_display_name,
     g.host_public_contact AS organizer_public_contact,
-    v.id AS venue_id, v.name AS venue_name, v.city_id AS venue_city_id, v.address AS venue_address,
+    game_effective_cover_url(g.id) AS game_cover_url, venue_cover_url(g.venue_id) AS venue_cover_url, v.id AS venue_id, v.name AS venue_name, v.city_id AS venue_city_id, v.address AS venue_address,
+    v.contact_phone AS venue_contact_phone, v.contact_website AS venue_contact_website,
+    v.booking_note AS venue_booking_note,
     v.timezone AS venue_timezone,
     ST_Y(v.location::geometry) AS venue_latitude,
     ST_X(v.location::geometry) AS venue_longitude,
@@ -795,12 +823,19 @@ function mapGameRow(row: GameRow): GameDto {
           }
         : null,
     trainingDescription: row.training_description,
+    cover: { uploadedUrl: row.game_cover_url ?? null },
     organizer: {
       id: row.organizer_id,
       displayName: row.organizer_display_name,
       publicContact: row.organizer_public_contact,
     },
     venue: {
+      ...(row.venue_contacts_allowed ? {
+        contactPhone: row.venue_contact_phone,
+        contactWebsite: privateContactWebsite(row.venue_contact_website),
+        bookingNote: row.venue_booking_note,
+      } : {}),
+      cover: { uploadedUrl: row.venue_cover_url ?? null },
       id: row.venue_id,
       name: row.venue_name,
       cityId: row.venue_city_id,

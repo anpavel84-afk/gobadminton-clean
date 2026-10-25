@@ -20,6 +20,129 @@ Public paths имеют `security: []`. Получение Game допускае
 
 Все бизнес-mutations требуют `Idempotency-Key` 16–128 символов. Scope записи — actor + operation + key; hash normalized payload (включая target resource identity) исключает reuse с другим содержимым. TTL default 24 часа.
 
+### Bounded Foundation scanner exceptions — Clean issue #23 (2026-10-14)
+
+Provenance: Owner direct source-only assignment for
+[Clean issue #23](https://github.com/anpavel84-afk/gobadminton-clean/issues/23),
+base `f0b085c9c0608c29bc5c0410fe5908576ab629df`; the declarations already exist
+in `packages/contracts/openapi.json` at that revision. This records scanner scope,
+not a new implementation, independent QA, release approval or PROD authorization.
+
+Only `POST /admin/auth/{provider}/start`, `POST /admin/auth/webauthn/options`
+and `POST /admin/auth/webauthn/verify` may omit Idempotency-Key in this check:
+they use the existing `x-auth-challenge-protocol: admin-bound-single-use-v1`
+proof ceremony rather than a replayable business-command receipt. The exemption
+requires the exact route and marker plus required string `Origin` with the existing
+`Exact isolated ADMIN_ORIGIN; consumer origins rejected.` declaration. OpenAPI
+has no literal Origin value here; actual Origin validation remains a runtime duty.
+Start requires explicit `security: []` and retains declared CSRF behavior.
+Options/verify require explicit OR alternatives `AdminSessionCookie: []` and
+`AdminMfaTicket: []`, bound respectively to apiKey cookies
+`__Host-gb_admin_session` and `__Host-gb_admin_mfa`, and required `X-CSRF-Token`.
+Wrong/missing declarations invalidate the exemption; the marker alone grants none.
+Required command-body and existing security checks remain in force.
+
+Only bodyless `DELETE /me/linked-providers/{provider}`,
+`DELETE /me/sessions/{sessionId}` and `DELETE /me/avatar` may omit requestBody:
+the target is identified by the route/current actor (avatar also declares the
+profile-version header), so an artificial command body is unnecessary. Their
+Idempotency-Key and declared CSRF checks remain blocking. A supplied requestBody
+must still be required; other POST/PUT/PATCH/DELETE body rules remain unchanged.
+### Identity/session first implementation slice — Clean issue #23
+
+Owner direct source-only assignment, exact base
+`55e3775cc284e4266f1537052e9a3260a73b79ef`. The frozen admin exceptions above
+were unchanged by this first slice. Avatar still had two blocking key findings at that stage; the subsequent isolated avatar source candidate is described below.
+
+`POST /me/linked-providers/{provider}/link` is OAuth initiation, not a replayable
+business command. Its sole scanner exemption requires this exact POST route,
+`x-auth-challenge-protocol: consumer-oauth-link-bound-single-use-v1`, required
+string `Origin` with the exact `requireCookieMutation` declaration, required
+string `X-CSRF-Token`, explicit `security: [{cookieSession: []}]`, and an apiKey
+cookie scheme named `__Host-gb_session`. Removing/altering those bindings restores
+the key finding. The marker is contract metadata, not a runtime request header.
+No other business route inherits this exemption.
+
+Actual runtime: `ConsumerAuthService.requireCookieMutation` rejects bearer
+credentials, missing/disallowed Origin, missing/invalid session-bound CSRF, and
+missing/revoked/expired/inactive cookie sessions. Initiation creates fresh random
+state and PKCE, hashes state/browser binding, encrypts the verifier, and stores
+`purpose=link`, exact user/session IDs and expiry in `auth_transactions`. It sets
+the HttpOnly auth-binding cookie and returns a no-store authorization URL.
+The callback requires the matching browser binding, provider and unexpired state;
+`consume` locks the transaction and marks it consumed exactly once. It then
+requires the same active user/session cookie before provider exchange/linking;
+`linkIdentityToUser` retains its actor/session and recent-auth checks. Provider
+identity/email collision never merges accounts.
+
+Limitations: every initiation is fresh, including retries with the same
+Idempotency-Key (the header is ignored here). Concurrent starts replace the
+browser's binding cookie; an earlier URL then requires its original cookie.
+The state is consumed before exact-session validation and provider exchange;
+a subsequent mismatch/provider failure requires a new initiation. Consumption
+and external exchange are separate operations, not an atomic business receipt.
+Start checks session/CSRF at the HTTP edge, not under MutationRunner's fence;
+callback linking revalidates the actor under the existing SQL locks. Runtime
+retains legacy optional body/query returnPath fallback, while OpenAPI declares
+its normal JSON command body. Callback GET does not require mutation Origin/CSRF;
+it uses one-time state, browser binding, exact session and PKCE instead. Never
+store/replay OAuth URLs, provider tokens or session credentials as success receipts.
+
+`DELETE /me/linked-providers/{provider}` and `DELETE /me/sessions/{sessionId}`
+require a real 16–128 character key via `IdempotencyService.requireKey` (400
+`IDEMPOTENCY_KEY_INVALID` after cookie authorization). Both contracts declare
+required key, Origin and CSRF with cookie-only security and no request body.
+The existing global MutationRunner owns the only transaction: actor/session
+fence before reservation/replay, insert-first reservation, client-bound mutation,
+response projection on that same client, completed receipt, COMMIT. Failure
+rolls back effects and receipt together; existing standalone service helpers
+retain their own transaction for other callers.
+
+Unlink uses operation `identity.provider.unlink` and hash `{provider}`. Its
+own-provider replay authority is the currently fenced actor, actor-scoped receipt,
+exact target hash and the existing `lockAuthActor(..., recent=true)` policy.
+A removed provider need not exist on replay; a subsequently relinked identity
+is not deleted again. Execution retains locked usable OAuth/email method counting,
+`PROVIDER_NOT_LINKED`, `LAST_AUTH_METHOD` and recent-auth protections.
+
+Revoke uses `identity.session.revoke` and hash `{sessionId,currentSessionId}`;
+the invoking session is included because the response has session-relative
+`current` flags. Execution and replay reject the current session and lock/check
+the target's owner and consumer audience, including an already revoked target.
+Execution revokes the target and deletes its radar presence atomically before
+reading active sessions. Changed target (or invoking session) with the same key
+returns 409 `IDEMPOTENCY_KEY_REUSED`. Authorized duplicates return the original
+200/status list snapshot, which may be stale; fetch the GET list for current state.
+Revoked/expired sessions or inactive actors cannot obtain a cached success.
+The web apiFetch already supplies a fresh key per non-GET call and preserves an
+explicit key; separate calls are separate commands unless the caller retains it.
+
+Verification: dependency-free `python3 -B scripts/test_check_foundation.py` and
+`python3 -B scripts/check_foundation.py`; the latter showed exactly two avatar key findings at the first-slice commit.
+The follow-up avatar source candidate must instead achieve full Foundation PASS.
+Integration/security tests use only the existing disposable PostGIS harness.
+Source-only results do not establish independent QA, deployment or Owner acceptance.
+
+### Avatar PUT/DELETE source follow-up — issue #23 (awaiting independent QA)
+
+The proposed source-only avatar implementation in
+[the exact handoff](../handoffs/ISSUE23_AVATAR_IDEMPOTENCY_SOURCE_20261014.md)
+requires the existing 16–128-character Idempotency-Key on both PUT and DELETE,
+alongside the explicitly required cookie session, Origin, CSRF and the
+X-Profile-Version optimistic concurrency guard. Both
+OpenAPI mutations reference the same required key definition. DELETE keeps
+its valid bodyless wire format; PUT keeps its original binary image body.
+A single receipt operation binds action, user, expected profile version, MIME
+and original-upload SHA256, preventing the same key from silently changing
+the command. Actor/session authorization precedes all cached replays.
+
+Existing moderation and disk staging remain outside the actor-locked write
+transaction; the authoritative profile/version mutation and completed receipt
+commit in one DB transaction. Losing staging artifacts are held in the existing
+media GC journal and never deleted if they remain referenced. This is a
+candidate implementation pending hosted integration and independent QA;
+it does not authorize DEV or PROD release or attest to runtime behavior.
+
 Протокол идемпотентности (S-00A / ADR-SOCIAL-003): в одной бизнес-транзакции сначала insert-first UNIQUE reservation (`reservation_state=processing`), затем авторизация и команда, затем `completed` receipt перед COMMIT. ROLLBACK снимает reservation вместе с эффектами. Параллельный waiter блокируется на UNIQUE; после commit победителя читает completed receipt. Timeout ожидания → `409 COMMAND_IN_PROGRESS` с `Retry-After` (не raw unique-violation 500). Same key / другое тело → `409 IDEMPOTENCY_KEY_REUSED`. Same key / то же тело → сохранённый status/body только после **текущей** actor/resource authorization. Отозванный менеджер/неактивный аккаунт не получает cached private success. TTL cleanup удаляет только expired `completed`, не active `processing`. До 3 технических DB-retry (deadlock/transient) с тем же ключом; business conflicts (capacity/version/authz) не ретраятся.
 
 `expectedVersion` относится к изменяемому ресурсу. Game version увеличивается при изменениях агрегата, включая изменение занятых мест (`pending→confirmed`, `confirmed→withdrawn/removed`, publish/cancel и прочие state/terms changes); pending-only request/reapply/reject/expire **не** увеличивают Game.version. Participation имеет отдельную version. Для новой заявки `expectedGameVersion` привязывает согласие к прочитанному Game snapshot. При stale version — `409 VERSION_CONFLICT`, получить свежие данные и явно повторить, не молча согласиться с новыми условиями. Confirm проверяет Participation version и текущую Game capacity в одной транзакции; required `expectedGameVersion` в confirm body **не** добавляется. Семантический diff условий может позднее получить отдельную revision через ADR.
@@ -169,3 +292,138 @@ Email proof commands are a narrow exception to business-command Idempotency-Key:
 routes. Exact Origin/flow/binding and atomic generation/consume prevent duplicate authority;
 an already consumed verify returns an error, never a cached session credential.
 The foundation checker recognizes only these exact routes with required binding headers.
+
+
+## Контакты площадки: T0a-1
+
+`GET /games/{gameId}` добавляет в `venue` необязательные `contactPhone`,
+`contactWebsite`, `bookingNote` только для текущего активного управляющего игры
+(`game_managers`: `owner` или `manager`, `status=active`) либо участника этой игры
+с `participations.status=confirmed`. Значения могут быть `null`.
+Для остальных, включая анонимных, pending/rejected/withdrawn/removed,
+`cancelled_by_game`, expired, посторонних и заблокированных без указанных прав,
+все три ключа отсутствуют. Сам факт блокировки не предоставляет прав.
+Списки игр (включая управляемые), карта, discovery и каталог/деталь `/venues`
+не раскрывают эти поля. Ответ детали игры остаётся `Cache-Control: no-store`.
+
+Существующая admin-команда `edit` принимает три необязательных строковых поля:
+`contactPhone` (до 40), `contactWebsite` (до 300, префикс `http://` или `https://`),
+`bookingNote` (до 500). Пробелы по краям удаляются, пустая строка записывает SQL
+`NULL`, пропуск сохраняет значение. `contact_updated_at` меняется только при
+изменении хотя бы одного значения. Контакты не добавлены в admin create или
+новые endpoint/UI; audit, step-up, expectedVersion и idempotency сохраняются.
+Ошибки валидации используют существующий problem-формат.
+
+### Public venue organization contacts (M3-CONTACTS-R2)
+
+Venue and AdminVenue may contain nullable `publicContacts` (PublicVenueContacts):
+required `phone`, `website`, `messengers`; each messenger has required `kind` and
+`url`. Only admin edit accepts this field. Omission preserves, null clears to SQL
+NULL, object replaces the entire value. Create/propose do not accept/write it.
+Unknown/private keys are rejected on write. Reads retain safe neighbors while
+nulling invalid phone/website and filtering/deduplicating messengers.
+
+Phone forbids controls before trim, has at most 40 characters after trim and
+7–15 ASCII digits, with optional initial + and ASCII spaces/parentheses/hyphens.
+URLs forbid controls and backslash before trim, require explicit HTTP(S):// and
+an authority without @, credentials or nondefault ports. Standard WHATWG URL
+serialization supplies stored/output href: IDN input becomes ASCII punycode,
+default ports disappear, dot segments normalize; the 300 character limit applies
+AFTER serialization (padding does not count). Messenger kinds are unique, at
+most three; HTTPS host is t.me / wa.me / vk.com and normalized path is non-root.
+SQL checks canonical ASCII storage rather than implementing WHATWG parsing.
+
+These are public organization contacts, distinct from private `contact_phone`,
+`contact_website`, `booking_note`. Private game-detail fields remain available
+only to an active owner/manager or a confirmed participant of that game. Game
+contracts and authorization are unchanged. Audit/outbox omit contact values.
+
+### V1a venue public profile — #178 recovery, source candidate UNVERIFIED
+
+Owner-approved product scope is V1a: one venue profile and organization contacts
+model/API. The bounded technical implementation below is proposed source, not
+independent QA, admission, acceptance or deployment. Base:
+`705db4860f3378253fe33652569ecd4664294de1`. Original #170 / PR #173 source
+`465db01c09b7a89bfb3a308c9abafb2561c73d90` is a read-only reference; its QA is not
+evidence for this successor. Evidence, remaining gates and publication
+responsibilities: [recovery handoff](../handoffs/V1a-venue-profile-recovery.md).
+V1b consumer presentation, V3b admin UI, V2 real import and operational FR-2 remain
+separate assignments. No Game/VenueSummary/Unified/Radar schema or flow changes.
+
+Full `Venue` and `AdminVenue` have optional-for-rollout `profile`; the current
+server emits the complete object on catalog, canonical alias/detail, fuzzy
+candidates, proposal/reuse/INSERT RETURNING and existing privileged receipts:
+
+```json
+{"courtCount":null,"amenities":{"parking":null,"showers":null},"updatedAt":null,"gallery":{"coverage":"cover_only","items":[]}}
+```
+
+`court_count` is nullable PostgreSQL integer, CHECK >=0, with matching DTO range
+0..2147483647. `amenity_parking` and `amenity_showers` are nullable booleans.
+Unknown facts are NULL, never inferred from names, games or demo data; known
+zero courts and false amenities survive. Migration0039 adds these columns and
+nullable `public_profile_updated_at` with no defaults/backfill/private data copy.
+No factual venue import or rating/review-count source is established here; no
+ratings, fake counts, generated photos or numeric placeholders are emitted.
+
+Only existing admin `edit.fields.profile` accepts writes: omission preserves all
+three facts; null clears all three to SQL NULL; object replaces them. Object
+requires courtCount and amenities; amenities requires parking and showers. Both
+levels reject unknown/private/read-only keys and coercion. `updatedAt` and
+`gallery` are server-owned, rejected as edit input. Create/propose inputs and
+private contact behavior are preserved; no arbitrary media URL input or endpoint.
+`AdminVenue.cityName`, already emitted, is now explicitly declared in OpenAPI.
+
+The venue-owned BEFORE trigger sets DB time on INSERT and an actual stored
+change of name/address/timezone/location/identity discriminator, public_contacts,
+the three facts, cover binding or cover credit. It compares persisted values
+null-safely after cover-credit reset, so normalized equivalent public contact
+input, omit/no-op, private-only, provenance/version-only and lifecycle-only writes
+preserve the date. Legacy rows stay NULL until a tracked write. Supplied dates
+cannot override the trigger; private contact_updated_at and generic updated_at
+are never used as public dates. The date means last recorded **stored public
+content edit since migration**, not verification, factual freshness or import
+time. Dynamic moderation visibility changes alone do not update the venue;
+actor retirement that actually clears a cover is a tracked content change.
+Authorized replay returns its original receipt/date without another write.
+Profile/contact/date, audit/history/outbox and receipt roll back in one existing
+admin transaction on command or audit failure; payloads contain metadata only.
+
+Gallery coverage is always `cover_only`: at most one actual current
+`venue_cover_url` with kind=photo, nonempty photo credit and safe HTTPS attribution.
+The existing credit is retained unchanged only if the emitted attribution itself
+passes URI-format validation as well as HTTPS safety checks. A WHATWG-parseable
+value containing a literal space or another invalid URI character fails closed;
+the mapper does not silently rewrite its credit. Denied moderation, inactive
+cover actor, retired
+venue, absent/replaced/removed cover, logo, illustration, unclassified or unsafe
+credit yields empty items. Existing `cover` response behavior is preserved.
+Empty items never mean that a full gallery was inspected. The single-cover
+platform cannot supply a real multi-photo gallery; that remains an explicit
+residual, with no full-gallery completion claim or new media infrastructure.
+
+Public contacts still come exclusively from `public_contacts` and the existing
+#142 strict validator/tolerant reader: phone trim with ASCII 7–15 digit/40-character
+bounds; pre-trim control/backslash rejection; WHATWG HTTP(S)/IDN href serialization
+with 300-character normalized bound, no credentials/nondefault ports; unique
+HTTPS messenger whitelist t.me/wa.me/vk.com and non-root normalized path. Do not
+guess country codes or republish contactPhone/contactWebsite/bookingNote.
+The #82 private game-detail rule remains current active owner/manager or confirmed
+participant of **that game** only; no public profile permission expands it.
+AdminSessionCookie, exact Origin/CSRF, current venue.manage, fresh step-up,
+expectedVersion409, authorized replay, catalog locks and collision review remain.
+Identity collision returns unchanged venue/profile/version plus reviewRequired;
+only the existing duplicate-review metadata is committed.
+
+Compatibility: public profile projections use per-key `to_jsonb` extraction, so
+schema0037 missing columns return null without parse-time new-column references.
+Old API SQL continues on the new additive schema; old bodies/receipts may omit
+profile. Full Venue/AdminVenue/AdminVenueCommand are outside current generated
+Game/Participation/CreateGame, Unified* and Friendship* reference closures;
+existing generated files must remain byte-identical under default read-only
+scripts. Authored AJV tests check actual service outputs and edit fixtures against
+OpenAPI, including negative cases. An actual old-image gate, full source/DB/restore
+gates and independent read-only QA on the published candidate remain required;
+authored/skipped cases and author checks are not independent QA or PASS.
+Application rollback retains additive schema, data and trigger; no destructive
+down migration or private data removal is part of rollback.

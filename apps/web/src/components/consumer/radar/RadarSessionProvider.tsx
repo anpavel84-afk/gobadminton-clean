@@ -1,11 +1,14 @@
 "use client";
-import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { createContext, useContext, useEffect, useId, useState, useSyncExternalStore, type ReactNode } from "react";
-import { radarHeaderStatus } from "../../../lib/radar-header";
+import { createContext, useContext, useEffect, useId, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { radarHeaderStatus, radarRingFraction } from "../../../lib/radar-header";
 import { RadarController, type RadarView } from "../../../lib/radar-controller";
+import { effectiveDeadline, remainingTime } from "../../../lib/radar-presentation";
+import { Button } from "../Button";
+import { AuthEntry, ProfileDialog } from "../players/ProfileComposition";
 import { syntheticDemoFix } from "../../../lib/radar-demo-fix";
 import { apiFetch } from "../../../lib/api-client";
+import { devMoscowFix, usesDevMoscowLocation } from "../../../lib/radar-dev-moscow";
 import { UnifiedDirectoryController, compatibleRadarConfig, type RadarConfig } from "../../../lib/unified-directory";
 import type { OwnSocialProfile } from "../../../lib/consumer-types";
 import { isAdmittedDemoCity } from "../../../lib/radar-demo-fix";
@@ -54,7 +57,7 @@ export function RadarSessionProvider({ children }: { children: ReactNode }) {
       // that recovery through the transient null, including CSRF rotation.
       // Guest or a different confirmed actor still resets the binding.
       if (view.me || !directory.view.authenticationRequired || view.phase === "guest") directory.bind(view.me);
-      if (view.pendingStop || (wasOn && !view.confirmedOn)) directory.ordinary();
+      if (view.pendingStop || (wasOn && (!view.confirmedOn || ["error", "owned_elsewhere", "expired", "guest"].includes(view.phase)))) directory.ordinary();
       wasOn = view.confirmedOn;
       const key = view.me ? `${view.me.id}:${view.me.csrfToken}` : "";
       if (key === identityKey) return;
@@ -106,33 +109,143 @@ export function RadarSessionProvider({ children }: { children: ReactNode }) {
 }
 function RadarPermissionObserver() {
   const { controller, view } = useRadarSession();
+  const config = useRadarConfig();
   useEffect(() => {
-    if (!controller || view.exposureMode !== "live" || !navigator.permissions) return;
+    if (!controller || usesDevMoscowLocation(config, window.location.origin) || view.exposureMode !== "live" || !navigator.permissions) return;
     let cancelled = false; let permission: PermissionStatus | undefined;
     const changed = () => { if (permission?.state === "denied") void controller.permissionDenied(); };
     void navigator.permissions.query({ name: "geolocation" }).then(p => { if (cancelled) return; permission = p; p.addEventListener("change", changed); changed(); }).catch(() => {});
     return () => { cancelled = true; permission?.removeEventListener("change", changed); };
-  }, [controller, view.exposureMode, view.confirmedOn]);
+  }, [controller, config, view.exposureMode, view.confirmedOn]);
   return null;
 }
-export function RadarStatusAffordance() {
-  const { view } = useRadarSession();
-  const status = radarHeaderStatus(view); const id = useId();
+/** Single owner-approved Radar control for desktop, mobile and map header.
+ * Public circular countdown is strictly projected from authoritative status;
+ * the popover owns explicit start/renew/stop actions, never automatic GPS. */
+export function RadarStatusAffordance({ mapControls = false }: { mapControls?: boolean } = {}) {
+  const { controller, view } = useRadarSession();
+  const directory = useUnifiedDirectory();
+  const config = useRadarConfig();
+  const status = radarHeaderStatus(view);
+  const popupId = useId();
   const [open, setOpen] = useState(false);
-  if (!status) return null;
-  return <span className="gb-radar-indicator" data-tone={status.tone} onPointerEnter={() => setOpen(true)} onPointerLeave={() => setOpen(false)}>
-    <Link className="gb-radar-indicator__link" href="/players" aria-label={`${status.text}. Перейти к управлению радаром`} aria-describedby={open ? id : undefined}
-      onFocus={() => setOpen(true)} onBlur={() => setOpen(false)} onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); setOpen(false); } }}>
-      <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="4" /><path d="M12 12 19 5" /><circle cx="12" cy="12" r="1" /></svg>
-    </Link>
-    {open && <span id={id} role="tooltip" className="gb-radar-tooltip">{status.text}{status.until && <small>До {new Date(status.until).toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit" })}</small>}</span>}
-  </span>;
+  const host = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const outside = (event: PointerEvent) => {
+      if (!host.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !document.querySelector("dialog[open]") && !(event.target instanceof Element && event.target.closest("[role=dialog]") && !host.current?.contains(event.target))) {
+        event.preventDefault();
+        setOpen(false);
+        trigger.current?.focus();
+      }
+    };
+    document.addEventListener("pointerdown", outside);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("pointerdown", outside);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [open]);
+  const activation = view.status?.state === "active" ? view.status : null;
+  const running = view.phase === "active" && Boolean(activation) && view.confirmedOn;
+  const progress = radarRingFraction(view);
+  const circumference = 2 * Math.PI * 21;
+  const busy = ["checking", "permission", "locating", "activating", "stopping", "background"].includes(view.phase);
+  const canStart = Boolean(controller && config?.publishingV2.enabled && !busy &&
+    ["off", "stopped", "expired", "denied", "location_error", "owned_elsewhere"].includes(view.phase));
+  const canRenew = Boolean(running && activation && Date.parse(activation.hardExpiresAt) > Date.parse(activation.expiresAt));
+  const needsLocation = Boolean(running && activation && view.now >= Date.parse(activation.nextLocationUpdateAt));
+  const canStop = Boolean(controller && view.me && view.status && "activationId" in view.status && !busy);
+  const remaining = running && activation ? remainingTime(new Date(effectiveDeadline(activation)).toISOString(), view.now) : null;
+  const caption = status?.text ?? (view.phase === "guest" ? "Войдите для Radar" : view.phase === "disabled" ? "Radar недоступен" : view.phase === "error" ? "Статус Radar неизвестен" : ["checking", "locating", "activating", "stopping"].includes(view.phase) ? "Проверяем Radar…" : "Radar выключен");
+  const diagnostic =
+    view.phase === "denied" ? "Доступ к геолокации запрещён. Разрешите его в настройках браузера." :
+    view.phase === "location_error" ? "Не удалось определить геопозицию. Проверьте разрешения и попробуйте снова." :
+    view.phase === "disabled" ? "Radar сейчас недоступен. Обычный каталог работает." :
+    view.phase === "error" ? (view.notice || "Не удалось проверить Radar. Повторите проверку статуса.") :
+    view.pendingStop || view.phase === "stopping" ? "Ожидаем подтверждения выключения Radar." :
+    view.phase === "background" ? "Radar приостановлен, пока приложение неактивно." :
+    view.phase === "expired" ? "Сессия завершена. Включите Radar снова." : "";
+  const close = () => { setOpen(false); trigger.current?.focus(); };
+  return <div ref={host} className="gb-radar-indicator" data-tone={status?.tone ?? "off"}>
+    <button ref={trigger} type="button" className="gb-radar-indicator__link"
+      aria-label={caption + ". Открыть управление Radar"} aria-haspopup="dialog"
+      aria-expanded={open} aria-controls={open ? popupId : undefined}
+      onClick={() => setOpen(value => !value)}>
+      <svg aria-hidden="true" viewBox="0 0 48 48" className="gb-radar-symbol">
+        <circle cx="24" cy="24" r="21" fill="none" stroke="currentColor" strokeWidth="3.5" opacity=".13"/>
+        {running && <circle className="gb-radar-progress" cx="24" cy="24" r="21" fill="none"
+          stroke="#8DE126" strokeWidth="3.5" strokeLinecap="round"
+          strokeDasharray={circumference} strokeDashoffset={circumference * (1 - progress)}
+          transform="rotate(-90 24 24)"/>}
+        <circle className="gb-radar-symbol__disc" cx="24" cy="24" r="16" />
+        <g className="gb-radar-symbol__glyph" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+          <circle cx="24" cy="24" r="11"/><circle cx="24" cy="24" r="6"/>
+          <path d="M24 24L31 17"/><circle cx="24" cy="24" r="1.3" fill="currentColor"/>
+        </g>
+      </svg>
+    </button>
+    {open && <section id={popupId} className="gb-radar-popover" role="dialog" aria-label="Управление Radar">
+      <strong>{caption}</strong>
+      {running && <><p role="status">Radar включён. Участники видят только приблизительное положение. Обновляйте геопозицию и продлевайте сессию на этом экране.</p><div className="gb-radar-popover__time" aria-live="off">
+        <b>{remaining}</b><small>до ближайшей проверки / окончания lease</small>
+      </div><div className="gb-radar-popover__track" aria-hidden="true"><span style={{ width: String(Math.round(progress * 100)) + "%" }}/></div></>}
+      {diagnostic && <p role="status">{diagnostic}</p>}
+      {needsLocation && <p role="status">Обновите геопозицию, чтобы Radar продолжал показывать участников.</p>}
+      {view.phase === "owned_elsewhere" && <p>Radar работает на другом устройстве. Можно перенести его сюда.</p>}
+      <div className="gb-radar-popover__actions">
+        {mapControls && running && !view.pendingStop && <Button variant="outline" disabled={!directory.controller || !directory.view.snapshot} aria-controls="g2-map-panel" onClick={() => { close(); window.dispatchEvent(new Event("gb-radar-map-list")); }}>Список участников</Button>}
+        {mapControls && running && !view.pendingStop && directory.view.mapPage?.nextMapCursor && <Button variant="outline" disabled={directory.view.busy || !directory.controller} onClick={() => { if (directory.controller) void directory.controller.map(true); }}>Следующие точки</Button>}
+        {view.phase === "guest" ? <AuthEntry returnPath="/players">Войти для Radar</AuthEntry> :
+          running ? <>
+            {canRenew && <Button disabled={!controller || busy} onClick={() => { close(); if (controller) void controller.activate(() => acquireRadarLocation(controller), "renew"); }}>Продлить</Button>}
+            {needsLocation && <Button variant="outline" disabled={!controller || busy} onClick={() => { close(); if (controller) void controller.activate(() => acquireRadarLocation(controller), "location"); }}>Обновить позицию</Button>}
+            <Button variant="outline" disabled={!canStop} onClick={() => { close(); if (controller) void controller.stop(); }}>Выключить</Button>
+          </> : <>
+            {view.confirmedOn && canStop && <Button variant="outline" onClick={() => { close(); if (controller) void controller.stop(); }}>Выключить</Button>}
+            {!view.confirmedOn && <Button disabled={!canStart} onClick={() => { close(); controller?.permission(); }}>Включить Radar</Button>}
+            {view.phase === "error" && <Button variant="outline" onClick={() => { close(); if (controller) void controller.reconcile(); }}>Проверить статус</Button>}
+            {view.phase === "owned_elsewhere" && <Button disabled={!canStart} onClick={() => { close(); controller?.permission(); }}>Перенести сюда</Button>}
+          </>}
+      </div>
+    </section>}
+    {view.phase === "permission" && controller && <div className="fr3"><ProfileDialog title="Включить Radar и поделиться геопозицией?"
+      onClose={() => controller.cancel()}>
+      <p>{config?.unifiedDirectory.disclosure.text ?? "Radar сейчас недоступен. Можно пользоваться обычным каталогом."}</p>
+      {view.status?.state === "owned_elsewhere" && <p>В другой сессии Radar выключится.</p>}
+      <RadarDurationChoice />
+      <div className="profile-form-actions radar-consent-actions">
+        <Button block disabled={!config?.publishingV2.enabled}
+          onClick={() => void controller.activate(() => acquireRadarLocation(controller))}>
+          {view.status?.state === "owned_elsewhere" ? "Перенести и включить" : "Согласен, включить Radar"}
+        </Button>
+        <Button variant="ghost" onClick={() => controller.cancel()}>Отмена</Button>
+      </div>
+    </ProfileDialog></div>}
+  </div>;
 }
 /** Called only by an explicit foreground intent. Synthetic never falls through to GPS. */
 export function acquireRadarLocation(controller: RadarController): Promise<RadarFix> {
   const view = controller.snapshot();
   if (document.hidden || compatibleRadarConfig(controller.config)?.publishingV2.enabled !== true) return Promise.reject({ code: 2 });
   if (view.exposureMode === "synthetic_demo") return controller.usesSyntheticLocation() && view.demoCityId ? Promise.resolve(syntheticDemoFix(view.demoCityId)) : Promise.reject({ code: 2 });
+  const testFix = view.me ? devMoscowFix(compatibleRadarConfig(controller.config), window.location.origin) : null;
+  if (view.exposureMode === "live" && testFix) return Promise.resolve(testFix);
   if (view.exposureMode !== "live" || !window.isSecureContext || !navigator.geolocation) return Promise.reject({ code: 2 });
   return new Promise((resolve, reject) => navigator.geolocation.getCurrentPosition(p => resolve({ latitude: p.coords.latitude, longitude: p.coords.longitude, accuracyMeters: p.coords.accuracy, capturedAt: new Date(p.timestamp).toISOString() }), reject, { maximumAge: 0, timeout: 15000, enableHighAccuracy: false }));
+}
+
+/** Local intent only: no duration field is sent to the lease API. */
+export function RadarDurationChoice() {
+  const { controller } = useRadarSession();
+  return <div className="radar-duration"><label>Желаемое время Radar
+    <select value={controller?.duration ?? "15m"} onChange={event => {
+      const value = event.target.value;
+      if (value === "15m" || value === "1h" || value === "until_off") controller?.chooseDuration(value);
+    }}><option value="15m">15 минут</option><option value="1h">1 час</option><option value="until_off">До выключения</option></select>
+  </label><p>Это намерение, а не бессрочная сессия. Сервер ограничивает срок и свежесть геопозиции. Допустимое продление выполняется только на переднем плане со свежей геопозицией; после истечения потребуется снова включить Radar с согласием. При перезагрузке проверим серверный срок.</p></div>;
 }

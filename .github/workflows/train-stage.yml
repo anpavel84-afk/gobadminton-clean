@@ -25,12 +25,14 @@ jobs:
       issues: read
       pull-requests: read
       actions: read
+      checks: read
     outputs:
       changed: ${{ steps.stage.outputs.changed }}
+      recovery_ready: ${{ steps.stage.outputs.recovery_ready }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: d4567dfddbfc26d95236839343d841841067e72c
+          ref: 41e12be2d551158e97ea30eaf8e95f992f998615
           persist-credentials: false
       - id: stage
         name: Submit one stage and query its durable result
@@ -45,9 +47,33 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with: {name: train-stage, path: evidence/, retention-days: 90}
-  continue:
+  publish_recovery:
     needs: execute
-    if: needs.execute.outputs.changed == 'true'
+    if: needs.execute.outputs.recovery_ready == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    steps:
+      # This job has NO environment/SSH key and never sends its write token to the VPS.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 41e12be2d551158e97ea30eaf8e95f992f998615
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with: {name: train-stage, path: evidence}
+      - name: Publish one exact independently reviewed recovery successor
+        run: python3 -B scripts/chatops/actions_train/recovery_publish.py
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with: {name: train-recovery-publication, path: evidence/recovery-publication.json, retention-days: 90}
+  continue:
+    needs: [execute, publish_recovery]
+    if: always() && needs.execute.result == 'success' && needs.execute.outputs.changed == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
