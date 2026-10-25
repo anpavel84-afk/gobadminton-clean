@@ -236,7 +236,8 @@ _FIELD_VALIDATORS = {
                "diff_identifiers": ("list", _TEXT)},
     "diff": {"tool": _enum(*_DIFF_TOOLS), "hunks": ("int", 0, 1000000),
              **dict.fromkeys(_UNCHANGED, _BOOL)},
-    "plan": {"schema": _enum(PLAN_SCHEMA), "author_route": _ROUTE, "qa_route": _ROUTE,
+    "plan": {"schema": _enum(PLAN_SCHEMA),
+             "author_route": _optional(_enum(*ROUTES, "deterministic_tool")), "qa_route": _ROUTE,
              "planner_calls": ("int", 0, 1), "astra_calls": ("int", 0, 1), "fast_fix": _BOOL,
              "effects": ("list", _enum(*ALLOWED_EFFECTS)), "model_ids": ("list", _enum(*MODELS)),
              "rights_delta": ("empty_list",), "binding": ("obj", "binding"),
@@ -432,27 +433,46 @@ def _emit(base, evidence, plan, **updates):
         return _finish(base, **_deny_write(updates, "plan is missing"))
     if plan.get("executable") is not True:
         return _finish(base, **_deny_write(updates, "plan is not executable"))
-    if (updates.get("writer") or updates.get("fast_fix")) and not _writer_proof(evidence):
+    # §8 permits a complex repair to name a nonempty non-Fast-Fix surface.
+    surface_proven = (_safe_surface(evidence) or
+                      (evidence["complexity"] == "complex" and bool(evidence["change_surface"].strip())))
+    if not _diff_proven(evidence.get("diff_check")) or not surface_proven:
         return _finish(base, **_deny_write(updates, "writer proof is incomplete"))
+    # All source actions (including a deterministic template) cross this gate.
+    # Enum membership alone does not admit the effect or the selected routes.
+    effects = set(plan["effects"])
+    if ("source_edit_within_scope" not in effects or "none" in effects
+            or (updates.get("author_route") == "deterministic_tool"
+                and "deterministic_tool" not in effects)):
+        return _pm(base, evidence, _floor(evidence), whole_class=False, executed=False,
+                   reason="plan effects do not admit the selected source action")
+    if not _routes_match(plan, updates):
+        return _pm(base, evidence, _floor(evidence), whole_class=False, executed=False,
+                   reason="requested plan routes conflict with the selected author or QA route")
+    if not _writer_proof(evidence, updates.get("event_class")):
+        return _pm(base, evidence, _floor(evidence), whole_class=True, executed=False,
+                   reason="writer proof is incomplete: defect class is not bound to this repair")
     if evidence["complexity"] == "complex" and updates.get("qa_route") is None:
         return _pm(base, evidence, _floor(evidence), whole_class=False,
                    reason="complex QA route is not proven")
+    updates["plan_honored"] = bool(updates.get("executed"))
     return _finish(base, **updates)
 
 
-def _writer_proof(evidence):
-    """A writer needs a diff result and one closed class. Fast Fix surfaces are allowlisted.
+def _routes_match(plan, decision):
+    return all(plan[requested] == decision.get(actual)
+               for requested, actual in _PLAN_ROUTE_FIELDS.items())
 
-    A complex cause may name another non-empty surface (§8). Missing proof is denial.
-    """
-    if not _diff_proven(evidence.get("diff_check")):
+
+def _writer_proof(evidence, action):
+    """One closed class bound to this repair and its diagnosed source class."""
+    if not _class_closed(evidence):
         return False
-    if not _class_closed(evidence.get("class_search")):
-        return False
-    if _safe_surface(evidence):
-        return True
-    surface = evidence.get("change_surface")
-    return evidence.get("complexity") == "complex" and type(surface) is str and bool(surface.strip())
+    suggested = evidence.get("suggested_class")
+    # A continuation reuses the diagnosed source class, rather than changing it.
+    compatible = ({"SOURCE_KNOWN_COMPLEX"} if evidence["complexity"] == "complex"
+                  else {"SOURCE_KNOWN_LOCAL", "SOURCE_KNOWN_STANDARD", "TEMPLATE"})
+    return suggested is None or suggested in (compatible if action == "CONTINUATION" else {action})
 
 
 def _decision(**updates):
@@ -514,7 +534,8 @@ def refuse_unsupported_task(task):
 
 
 def _refuse_unsupported_task(task):
-    if type(task) is not dict or type(task.get("schema")) is not str:
+    if (type(task) is not dict or any(type(key) is not str for key in task)
+            or type(task.get("schema")) is not str):
         return _decision(rejected=True, executed=False, reason="unsupported schema",
                          event_class="REJECTED", route="hold")
     if task.get("schema") == AUTONOMY_SCHEMA and FORBIDDEN_TASK_KEYS & set(task):
@@ -538,12 +559,13 @@ def validate_plan(plan):
 
 
 def _validate_plan(plan):
-    if type(plan) is not dict or len(plan) != len(_PLAN_KEYS) or set(plan) != _PLAN_KEYS:
+    if not _closed_keys(plan, _PLAN_KEYS):
         return "incompatible plan"
-    if plan["schema"] != PLAN_SCHEMA:
+    if type(plan["schema"]) is not str or plan["schema"] != PLAN_SCHEMA:
         return "incompatible plan"
     for label in ("author_route", "qa_route"):
-        if plan[label] is not None and plan[label] not in ROUTES:
+        allowed = ROUTES | {"deterministic_tool"} if label == "author_route" else ROUTES
+        if plan[label] is not None and (type(plan[label]) is not str or plan[label] not in allowed):
             return "disallowed model or route"
     if type(plan["planner_calls"]) is not int or not 0 <= plan["planner_calls"] <= 1:
         return "unbounded planner"
@@ -551,9 +573,11 @@ def _validate_plan(plan):
         return "unbounded expert escalation"
     if type(plan["fast_fix"]) is not bool:
         return "incompatible plan"
-    if type(plan["effects"]) is not list or any(item not in ALLOWED_EFFECTS for item in plan["effects"]):
+    if type(plan["effects"]) is not list or any(
+            type(item) is not str or item not in ALLOWED_EFFECTS for item in plan["effects"]):
         return "dangerous plan effect"
-    if type(plan["model_ids"]) is not list or any(item not in MODELS for item in plan["model_ids"]):
+    if type(plan["model_ids"]) is not list or any(
+            type(item) is not str or item not in MODELS for item in plan["model_ids"]):
         return "disallowed model or route"
     if type(plan["rights_delta"]) is not list or plan["rights_delta"]:
         return "new rights refused"
@@ -572,16 +596,9 @@ def _validate_plan(plan):
 def decide(case):
     """One deterministic classification. Does not call a provider or write source."""
     try:
-        decision = _decide(case)
-        if type(case) is dict and type(case.get("evidence")) is dict:
-            plan = case["evidence"].get("plan")
-            if type(plan) is dict:
-                decision["plan_honored"] = bool(
-                    plan.get("executable") is True and decision["executed"]
-                    and decision["event_class"] in _WRITER_EVENTS
-                    and all(plan.get(requested) == decision.get(actual)
-                            for requested, actual in _PLAN_ROUTE_FIELDS.items()))
-        return decision
+        # Accounting and enforcement share the validated, copied plan in _emit.
+        # Never revisit raw input here: even equality/hash/deepcopy can be hooks.
+        return _decide(case)
     except Exception:
         return _decision(rejected=True, executed=False, writer=False, fast_fix=False,
                          reason="invalid case", event_class="REJECTED", route="hold")
@@ -725,7 +742,7 @@ def _classify(base, evidence, plan):
     if (evidence["template_applicable"] and evidence["complexity"] != "complex"
             and _norm_id(evidence["template_id"])):
         # A template writer needs a closed single-instance search, not a clean sentence.
-        if not (_template_ok(evidence, risk) and _class_closed(evidence["class_search"])
+        if not (_template_ok(evidence, risk) and _class_closed(evidence)
                 and not prior_closed):
             return _pm(base, evidence, risk, whole_class=class_open, fast_fix_closed=prior_closed,
                        reason="template preconditions are not proven")
@@ -790,10 +807,10 @@ def _expert(base, evidence, plan, risk, class_open, prior_closed):
                  reason="critical or hard defect uses read-only Astra, whole-class when another instance exists")
 
 
-def _pm(base, evidence, risk, *, whole_class, reason, fast_fix_closed=False):
+def _pm(base, evidence, risk, *, whole_class, reason, fast_fix_closed=False, executed=True):
     nxt = evidence["author_attempts"] + 1 if fast_fix_closed else None
-    return _emit(base, evidence, evidence.get("plan"), policy_applied=True, executed=True, writer=False,
-                 risk=risk, planner_calls=1, astra_calls=0, model_calls=1, fast_fix=False,
+    return _emit(base, evidence, evidence.get("plan"), policy_applied=True, executed=executed, writer=False,
+                 risk=risk, planner_calls=int(executed), astra_calls=0, model_calls=int(executed), fast_fix=False,
                  fast_fix_closed=fast_fix_closed, whole_class=whole_class, next_ordinary_attempt=nxt,
                  route="codex:gpt-6.1-sol:high",
                  author_route="cursor:auto" if evidence["complexity"] != "complex" else SPECIALIST_SOL,
@@ -866,6 +883,7 @@ def _carry(case, evidence):
         "agy_ready": bool(evidence["agy_catalog"] and evidence["agy_qa_qualified"]),
         "owner_micro_go": False,
         "qa_verdict": None,
+        "plan_honored": False if evidence["plan"] is not None else None,
         "cost": None,
         "policy_rewritten": False,
         "rewritten_task": None,
@@ -943,7 +961,7 @@ def _class_open(evidence):
     search = evidence["class_search"]
     if type(search) is not dict:
         return False
-    return not _class_closed(search)
+    return not _class_closed(evidence)
 
 
 def _search_saved(evidence):
@@ -959,11 +977,12 @@ def _prior_closed(evidence):
     return prior.get("result") == "fail" and _fingerprint_key(prior.get("fingerprint")) == fingerprint
 
 
-def _class_closed(search):
+def _class_closed(evidence):
     """Closure is a tool result, not a shape that merely looks like an identifier."""
+    search = evidence.get("class_search")
     return (type(search) is dict and search.get("saved") is True and search.get("assurance_only") is False
             and search.get("method") in SEARCH_METHODS and search.get("instances") == 1
-            and _pattern_proves_class(search))
+            and _pattern_proves_class(search, evidence))
 
 
 def _fast_fix_block(evidence, risk):
@@ -986,7 +1005,7 @@ def _fast_fix_block(evidence, risk):
         (evidence["fast_fix_history_checked"] is True and not _prior_closed(evidence),
          "condition 6 Fast Fix history"),
         (_condition_seven(evidence, plan), "condition 7 assertions, expected values, QA or timeout"),
-        (_class_closed(evidence["class_search"]), "condition 8 defect class is not proven closed"),
+        (_class_closed(evidence), "condition 8 defect class is not proven closed"),
     )
     for ok, reason in checks:
         if not ok:
@@ -1388,7 +1407,7 @@ def _ident_parts(pattern):
     return parts
 
 
-def _pattern_proves_class(search):
+def _pattern_proves_class(search, evidence):
     pattern = search.get("pattern")
     if type(pattern) is not str or not _concrete_path(search.get("scope")):
         return False
@@ -1405,6 +1424,14 @@ def _pattern_proves_class(search):
         return False
     if not is_file and not all(item.startswith(scope + "/") for item in listing):
         return False
+    # Closure must cover EVERY repair/finding, not just a self-consistent search
+    # in an unrelated directory. A file scope never includes descendants.
+    repair_paths = evidence["paths"] + [item["location"] for item in evidence["findings"]]
+    if not all((path == scope if is_file else path.startswith(scope + "/"))
+               for path in repair_paths):
+        return False
+    if repair_paths and not any(path in listing for path in repair_paths):
+        return False
     if len(listing) != search.get("matched_count"):
         return False
     if (not identifiers or len(set(identifiers)) != len(identifiers)
@@ -1416,7 +1443,18 @@ def _pattern_proves_class(search):
         return False
     parts = _ident_parts(pattern)
     # A generic or diagnostic fragment left after the split does not name a class.
-    return bool(parts) and not all(_generic_part(part) for part in parts)
+    if not parts or all(_generic_part(part) for part in parts):
+        return False
+    # Bind the searched diff symbol to the diagnosed defect. The optional fp-
+    # label is metadata; the remaining complete identifier components must occur
+    # together in the pattern (fp-export -> OldExport / old_export). Never use a
+    # substring or a generic diagnostic token as the binding.
+    fingerprint = _camel_split(evidence["defect_fingerprint"]).replace(" ", "_")
+    defect = _ident_parts(_fingerprint_key(fingerprint))
+    if defect[:1] == ["fp"]:
+        defect = defect[1:]
+    return bool(defect) and not all(_generic_part(part) for part in defect) and any(
+        parts[start:start + len(defect)] == defect for start in range(len(parts) - len(defect) + 1))
 
 
 def _diff_proven(diff):
@@ -1521,9 +1559,10 @@ def _weakens_any(evidence):
 
 
 def _case_error(case):
-    if type(case) is not dict or len(case) != len(_CASE_KEYS) or set(case) != _CASE_KEYS:
+    if not _closed_keys(case, _CASE_KEYS):
         return "unexpected case fields"
-    if case["schema"] != CASE_SCHEMA or case["semantics"] not in ("legacy", "new"):
+    if (type(case["schema"]) is not str or type(case["semantics"]) is not str
+            or case["schema"] != CASE_SCHEMA or case["semantics"] not in ("legacy", "new")):
         return "unsupported case schema"
     if type(case["classifier_selected"]) is not bool:
         return "invalid classifier selection"
@@ -1538,8 +1577,14 @@ def _matches(pattern, value):
     return type(value) is str and pattern.fullmatch(value) is not None
 
 
+def _closed_keys(value, keys):
+    """Check exact key types BEFORE set/hash/equality or keyed access."""
+    return (type(value) is dict and len(value) == len(keys)
+            and all(type(key) is str for key in value) and set(value) == keys)
+
+
 def _binding_error(binding):
-    if type(binding) is not dict or len(binding) != len(_BIND_KEYS) or set(binding) != _BIND_KEYS:
+    if not _closed_keys(binding, _BIND_KEYS):
         return "invalid binding"
     if not _matches(_SHA64, binding["task_sha"]) or not _matches(_SHA64, binding["rules_sha256"]):
         return "invalid binding"
@@ -1551,7 +1596,7 @@ def _binding_error(binding):
 
 
 def _pin_error(pins):
-    if type(pins) is not dict or len(pins) != len(_PIN_KEYS) or set(pins) != _PIN_KEYS:
+    if not _closed_keys(pins, _PIN_KEYS):
         return "invalid pins"
     for key in ("code_commit", "capsule_commit", "policy_commit"):
         if not _matches(_SHA40, pins[key]):

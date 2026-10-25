@@ -38,6 +38,7 @@ def ready(**updates):
         "finite_budget": True, "acceptance_unchanged": True, "external_effects_unknown": False,
         "architecture_research_required": False, "reconciled": True, "qa_independent": True,
         "unknown_effect": False, "risk": "low", "cause": "proven", "effects_proven_absent": True,
+        "defect_fingerprint": "fp-export",
     }
     evidence.update(updates)
     return evidence
@@ -115,7 +116,9 @@ class SmartRoutingSR1(unittest.TestCase):
     def test_sr_t01_proven_template_skips_planner_and_astra(self):
         decision = check(sr.decide(case(ready(
             template_id="formatter", template_applicable=True, template_tool="deterministic_tool",
-            change_surface="format", risk="low", minimal_action_known=True, plan=plan(),
+            change_surface="format", risk="low", minimal_action_known=True,
+            plan=plan(author_route="deterministic_tool", effects=["source_edit_within_scope", "deterministic_tool"]),
+            diff_check=diff_check(),
             class_search=search()))))
         self.assertEqual(decision["event_class"], "TEMPLATE")
         self.assertEqual(decision["planner_calls"], 0)
@@ -146,7 +149,7 @@ class SmartRoutingSR1(unittest.TestCase):
         self.assertFalse(decision["writer"])
 
     def test_sr_t04_usable_brief_is_not_replayed(self):
-        # §8 STANDARD is a brief writer, not Fast Fix: no fingerprint, regression, or history.
+        # §8 STANDARD has a bound defect, but lacks Fast Fix regression/history proofs.
         decision = check(sr.decide(case(ready(
             brief_usable=True, cause="proven", risk="moderate", author_attempts=1,
             minimal_action_known=True, change_surface="rename", plan=plan(),
@@ -162,7 +165,8 @@ class SmartRoutingSR1(unittest.TestCase):
         decision = check(sr.decide(case(ready(
             cause="proven", complexity="complex", risk="moderate", change_surface="state",
             difficult_or_repeating=False, brief_usable=False, minimal_action_known=True,
-            plan=plan(), diff_check=diff_check(), class_search=search(), **QA))))
+            plan=plan(author_route=sr.SPECIALIST_SOL, qa_route=sr.SPECIALIST_SOL),
+            diff_check=diff_check(), class_search=search(), **QA))))
         self.assertEqual(decision["event_class"], "SOURCE_KNOWN_COMPLEX")
         self.assertEqual(decision["author_route"], "codex:gpt-6.1-sol:high")
         self.assertEqual(decision["astra_calls"], 0)
@@ -1332,6 +1336,7 @@ class SmartRoutingQaR4(unittest.TestCase):
                 self.assertTrue(decision["writer"])
         paths = check(sr.decide(case(fast(
             paths=["apps/api/index.ts", "apps/api/internal/export.ts"],
+            class_search=search(scope="apps/api", scope_listing=["apps/api/index.ts"]),
             goal="rename export to author"))))
         self.assertEqual(paths["risk"], "low")
         self.assertTrue(paths["fast_fix"])
@@ -2020,7 +2025,8 @@ class SmartRoutingQaR7(unittest.TestCase):
             e[rng.choice(("event_text", "goal"))] = " ".join(words)
             e["diagnostics"] = rng.sample(words, 2)
             e["findings"] = [{"id": "f1", "severity": "low", "location": "apps/web/src/export.ts"}]
-            e["paths"] = [rng.choice(("api_index.ts", "apps/web/src/export.ts"))]
+            e["paths"] = [rng.choice(("apps/web/src/index.ts", "apps/web/src/export.ts"))]
+            e["class_search"]["scope_listing"] = list(e["paths"])
             with self.subTest(sample=index):
                 d = sr.decide(case(e))
                 self.assertTrue(d["writer"], d)
@@ -2073,6 +2079,8 @@ class SmartRoutingQaR7(unittest.TestCase):
                 after = sr.decide(case(e))
                 matches = all(requested[key] == after[key] for key in requested)
                 self.assertEqual(after["plan_honored"], matches)
+                self.assertEqual(after["writer"], matches)
+                self.assertEqual(after["executed"], matches)
                 self.assertEqual(after["author_route"], before["author_route"])
                 self.assertEqual(after["qa_route"], before["qa_route"])
 
@@ -2122,6 +2130,286 @@ class SmartRoutingQaR7(unittest.TestCase):
                     target[key] = value
                     with self.subTest(schema=schema, key=key, value=value):
                         self._blocked(e, pm=True)
+
+
+class SmartRoutingQaR8(unittest.TestCase):
+    """Policy enforcement at the final source gate, plus exact-type envelopes."""
+
+    @staticmethod
+    def _writers():
+        return {
+            "fast": fast(),
+            "standard": _proven_brief(),
+            "continuation": _proven_brief(author_attempts=3, progress=True),
+            "complex": _proven_brief(
+                complexity="complex", change_surface="state", **QA,
+                plan=plan(author_route=sr.SPECIALIST_SOL, qa_route=sr.SPECIALIST_SOL)),
+        }
+
+    def _control(self, evidence):
+        d = check(sr.decide(case(evidence)))
+        self.assertTrue(d["writer"], d)
+        self.assertTrue(d["executed"], d)
+        self.assertTrue(d["plan_honored"], d)
+        return d
+
+    def _blocked(self, evidence, reason=None):
+        d = check(sr.decide(case(evidence)))
+        self.assertFalse(d["writer"], d)
+        self.assertFalse(d["fast_fix"], d)
+        self.assertFalse(d["continuation_granted"], d)
+        self.assertFalse(d["plan_honored"], d)
+        self.assertEqual(d["event_class"], "SOURCE_UNCERTAIN", d)
+        self.assertEqual(d["route"], sr.SPECIALIST_SOL, d)
+        if reason:
+            self.assertFalse(d["executed"], d)
+            self.assertIn(reason, d["reason"], d)
+        return d
+
+    def test_h1_effects_admit_the_selected_source_action(self):
+        for name, original in self._writers().items():
+            self._control(original)
+            for effects in (["read"], [], ["none"], ["deterministic_tool"],
+                            ["source_edit_within_scope", "none"]):
+                with self.subTest(writer=name, effects=effects):
+                    e = copy.deepcopy(original)
+                    e["plan"]["effects"] = effects
+                    self._blocked(e, "effects")
+            e = copy.deepcopy(original)
+            e["plan"]["effects"] = ["read", "source_edit_within_scope"]
+            self._control(e)
+        # A deterministic template edits source too and needs both permissions.
+        e = fast(template_id="formatter", template_applicable=True,
+                 template_tool="deterministic_tool", change_surface="format")
+        e["plan"].update(author_route="deterministic_tool")
+        self._blocked(e, "effects")
+        e["plan"]["effects"].append("deterministic_tool")
+        d = sr.decide(case(e))
+        self.assertEqual(d["route"], "deterministic_tool", d)
+        self.assertTrue(d["executed"], d)
+        self.assertTrue(d["plan_honored"], d)
+        self.assertFalse(d["writer"], d)
+        e["plan"]["author_route"] = "cursor:auto"
+        self._blocked(e, "routes")
+
+    def test_h2_every_requested_route_is_enforced(self):
+        for name, original in self._writers().items():
+            before = self._control(original)
+            requests = [dict(author_route=sr.SPECIALIST_SOL, qa_route=sr.SPECIALIST_SOL)]
+            for field in sr._PLAN_ROUTE_FIELDS:
+                for route in (None, "cursor:auto", "codex:gpt-6.1-sol:medium", sr.SPECIALIST_SOL):
+                    if route != before[field]:
+                        requests.append({field: route})
+            for requested in requests:
+                if all(requested[k] == before[k] for k in requested):
+                    continue
+                with self.subTest(writer=name, requested=requested):
+                    e = copy.deepcopy(original)
+                    e["plan"].update(requested)
+                    self._blocked(e, "routes")
+            # A qualified ordinary AGY QA is legitimate only when requested too.
+            if name != "complex":
+                e = copy.deepcopy(original)
+                e.update(agy_qa_qualified=True, qa_route_proof="agy:claude-sonnet-5-5-medium")
+                self._blocked(e, "routes")
+                e["plan"]["qa_route"] = e["qa_route_proof"]
+                self._control(e)
+
+    def test_h3_search_covers_every_repair_and_the_same_defect(self):
+        inside = "apps/web/src/export.ts"
+        finding = {"id": "f1", "severity": "low", "location": inside}
+        for name, original in self._writers().items():
+            self._control(original)
+            for updates in (
+                {"paths": ["apps/api/index.ts"], "findings": [dict(finding, location="apps/api/index.ts")]},
+                {"paths": [inside, "apps/api/index.ts"]},
+                {"findings": [finding, dict(finding, id="f2", location="apps/api/index.ts")]},
+                {"paths": ["apps/web/src_export.ts"]},
+                {"paths": ["apps/web/src"], "findings": [finding]},
+                {"paths": [inside], "findings": [dict(finding, location="apps/web/src")]},
+                {"defect_fingerprint": "fp-author"},
+                {"defect_fingerprint": ""},
+                {"defect_fingerprint": "fp-port"},
+                {"class_search": search(pattern="OldAuthor")},
+                {"class_search": search(diff_identifiers=["OtherExport"])},
+                {"suggested_class": "SOURCE_CRITICAL"},
+            ):
+                with self.subTest(writer=name, updates=updates):
+                    e = copy.deepcopy(original)
+                    e.update(updates)
+                    self._blocked(e)
+            for scope in ("apps/web/src", inside):
+                e = copy.deepcopy(original)
+                e.update(paths=[inside], findings=[finding],
+                         class_search=search(scope=scope, scope_listing=[inside]))
+                self._control(e)
+                if scope == inside:
+                    e["paths"].append(inside + "/index.ts")
+                    self._blocked(e)
+            e = copy.deepcopy(original)
+            e.update(paths=[inside, "apps/web/src/index.ts"], findings=[finding])
+            self._control(e)
+            e["defect_fingerprint"] = "fp-OldExport"
+            self._control(e)
+
+    def test_m1_outer_envelope_rejects_overloaded_equality(self):
+        class Forged(str):
+            def __eq__(self, other):
+                return True
+            def __ne__(self, other):
+                return False
+            __hash__ = str.__hash__
+
+        for name, e in self._writers().items():
+            self._control(e)
+            for field in ("schema", "semantics"):
+                c = case(copy.deepcopy(e))
+                c[field] = Forged("authorization")
+                with self.subTest(writer=name, field=field):
+                    d = sr.decide(c)
+                    self.assertTrue(d["rejected"], d)
+                    self.assertEqual(d["event_class"], "REJECTED", d)
+                    self.assertFalse(d["executed"], d)
+                    self.assertFalse(d["writer"], d)
+
+    def test_fixed_seed_effect_subsets_without_edit_never_write(self):
+        started = time.monotonic()
+        rng = random.Random(20261025)
+        for index in range(120):
+            e = rng.choice(list(self._writers().values()))
+            e["plan"]["effects"] = [x for x in ("read", "none", "deterministic_tool") if rng.getrandbits(1)]
+            with self.subTest(sample=index):
+                self._blocked(e, "effects")
+        self.assertLess(time.monotonic() - started, 20)
+
+    def test_fixed_seed_requested_route_conflicts_never_write(self):
+        started = time.monotonic()
+        rng = random.Random(20261025)
+        for index in range(120):
+            e = rng.choice(list(self._writers().values()))
+            before = self._control(e)
+            field = rng.choice(sorted(sr._PLAN_ROUTE_FIELDS))
+            e["plan"][field] = rng.choice([r for r in sorted(sr.ROUTES) + [None] if r != before[field]])
+            with self.subTest(sample=index):
+                self._blocked(e, "routes")
+        self.assertLess(time.monotonic() - started, 20)
+
+    def test_fixed_seed_outside_search_paths_never_write(self):
+        started = time.monotonic()
+        rng = random.Random(20261025)
+        for index in range(120):
+            e = rng.choice(list(self._writers().values()))
+            path = rng.choice(("apps/api/", "apps/web/", "apps/web/src_export/")) + rng.choice(("index.ts", "export.ts", "author.ts"))
+            e["paths"] = ["apps/web/src/export.ts"]
+            e["findings"] = [{"id": "f1", "severity": "low", "location": "apps/web/src/export.ts"}]
+            if rng.getrandbits(1):
+                e["paths"].append(path)
+            else:
+                e["findings"].append({"id": "f2", "severity": "low", "location": path})
+            with self.subTest(sample=index):
+                self._blocked(e)
+        self.assertLess(time.monotonic() - started, 20)
+
+    def test_fixed_seed_subclass_and_foreign_type_fuzz(self):
+        started = time.monotonic()
+        rng = random.Random(20261025)
+        hooks = []
+
+        class Foreign:
+            def __eq__(self, other):
+                hooks.append("eq")
+                return True
+            def __ne__(self, other):
+                hooks.append("ne")
+                return False
+            def __hash__(self):
+                hooks.append("hash")
+                return 0
+            def __deepcopy__(self, memo):
+                hooks.append("deepcopy")
+                return self
+
+        class Str(str, Foreign):
+            __eq__ = Foreign.__eq__
+            __ne__ = Foreign.__ne__
+            __hash__ = str.__hash__
+
+        class Int(int, Foreign):
+            pass
+        class List(list, Foreign):
+            pass
+        class Dict(dict, Foreign):
+            pass
+
+        # Every evidence descriptor is populated, as are both bindings, pins,
+        # search/diff/plan/finding/prior fields and nonempty list elements.
+        e = dict(sr._defaults(), **fast())
+        e.update(event_text="author", goal="rename export", diagnostics=["author"],
+                 paths=["apps/web/src/export.ts"], missing_inputs=["author"], history=["attempt-1"],
+                 findings=[{"id": "f1", "severity": "low", "location": "apps/web/src/export.ts"}],
+                 prior_fast_fix={"fingerprint": "fp-export", "result": "pass"})
+        e["plan"]["model_ids"] = ["gpt-6.1-sol"]
+        self._control(e)
+        original = case(e)
+
+        def paths(value, prefix=()):
+            yield prefix
+            if type(value) is dict:
+                for key, child in value.items():
+                    yield from paths(child, prefix + (key,))
+            elif type(value) is list:
+                for i, child in enumerate(value):
+                    yield from paths(child, prefix + (i,))
+
+        locations = list(paths(original))
+        rng.shuffle(locations)
+        for path in locations:
+            value = original
+            for part in path:
+                value = value[part]
+            # Same-value subclasses and all foreign categories at EVERY field.
+            bad = [Str(value if type(value) is str else "authorization"), Int(1), List(), Dict(), Foreign()]
+            if type(value) is dict:
+                bad.append(Dict(value))
+            elif type(value) is list:
+                bad.append(List(value))
+            for replacement in bad:
+                c = copy.deepcopy(original)
+                target = c
+                for part in path[:-1]:
+                    target = target[part]
+                if path:
+                    target[path[-1]] = replacement
+                else:
+                    c = replacement
+                with self.subTest(path=path, kind=type(replacement).__name__):
+                    hooks.clear()
+                    d = sr.decide(c)
+                    self.assertFalse(d["writer"], d)
+                    self.assertFalse(d["fast_fix"], d)
+                    self.assertEqual(hooks, [], "input hooks ran before exact-type rejection")
+                    if len(path) <= 1:
+                        self.assertTrue(d["rejected"], d)
+                    if path[:2] == ("evidence", "plan"):
+                        self.assertIsNotNone(sr.validate_plan(c["evidence"]["plan"]))
+                        self.assertEqual(hooks, [], "standalone plan validation ran input hooks")
+            # Keys must be exact strings before hashing or lookup, at every level.
+            if type(value) is dict:
+                for key in value:
+                    c = copy.deepcopy(original)
+                    target = c
+                    for part in path:
+                        target = target[part]
+                    item = target.pop(key)
+                    target[Str(key)] = item
+                    hooks.clear()
+                    with self.subTest(path=path, key=key):
+                        self.assertFalse(sr.decide(c)["writer"])
+                        self.assertEqual(hooks, [])
+                        if path[:2] == ("evidence", "plan"):
+                            self.assertIsNotNone(sr.validate_plan(c["evidence"]["plan"]))
+                            self.assertEqual(hooks, [])
+        self.assertLess(time.monotonic() - started, 20)
 
 
 if __name__ == "__main__":
