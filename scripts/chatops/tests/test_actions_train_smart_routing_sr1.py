@@ -1408,5 +1408,252 @@ class SmartRoutingQaR4(unittest.TestCase):
         self.assertIn("invalid", decision["reason"])
 
 
+def _encodings_of(char):
+    """One encoding class for a single character: percent, HTML, and literal escapes."""
+    code = ord(char)
+    hex4 = f"{code:04x}"
+    forms = [
+        f"%u{hex4}",
+        f"%{code:02x}",
+        f"\\u{hex4}",
+        f"\\u{{{code:x}}}",
+        f"\\u{{{hex4}}}",
+        f"&#{code};",
+        f"&#x{hex4};",
+        "&#" + "".join(chr(0xFF10 + int(digit)) for digit in str(code)) + ";",
+        f"\\x{code:02x}",
+        f"={code:02X}",
+    ]
+    if code < 0x100:
+        forms.append(f"\\{code:03o}")
+    return forms
+
+
+def _with_repeat(word, index=2):
+    return word[:index] + word[index] + word[index:]
+
+
+class SmartRoutingQaR5(unittest.TestCase):
+    """Fail closed. Fast Fix text is an allowlist; a split or encoded stem raises the floor."""
+
+    def _assert_blocked(self, text, carrier="event_text"):
+        evidence = fast(change_surface="rename")
+        if carrier == "event_text":
+            evidence["event_text"] = text
+        elif carrier == "goal":
+            evidence["goal"] = text
+        elif carrier == "scope":
+            evidence["class_search"] = search(scope=text if "/" in text or "." in text else "apps/" + text)
+        else:
+            evidence["class_search"] = search(scope_listing=[text if "." in text else text + ".ts"])
+        decision = _not_writer(self, evidence)
+        self.assertEqual(decision["risk"], "critical", text)
+        self.assertFalse(decision["fast_fix"])
+        self.assertFalse(decision["writer"])
+        self.assertFalse(decision["executed"])
+        brief = _not_writer(self, _proven_brief(event_text=text))
+        self.assertFalse(brief["writer"])
+        self.assertFalse(brief["executed"])
+        self.assertFalse(brief["fast_fix"])
+
+    def test_separator_and_encoding_matrix_cannot_hide_a_stem(self):
+        splits = (
+            ("authori", "zation"),
+            ("author", "ization"),
+            ("pass", "word"),
+            ("creden", "tial"),
+            ("sand", "box"),
+            ("migrat", "ion"),
+            ("ident", "ity"),
+            ("secre", "t"),
+        )
+        separators = (
+            " ", "/", "\\", "%20", "%2F", "\u00a0", "\u2028", "\u2029", "\u2003",
+            "\uff0f", "\u2044", "\u2215",
+        )
+        for left, right in splits:
+            for separator in separators:
+                text = left + separator + right
+                with self.subTest(text=text):
+                    self._assert_blocked(text)
+        stems = (
+            "authorization", "password", "credential", "sandbox", "migration",
+            "identity", "secret", "oauth",
+        )
+        for stem in stems:
+            pivot = max(1, len(stem) // 2)
+            for encoded in _encodings_of(stem[pivot]):
+                text = stem[:pivot] + encoded + stem[pivot + 1:]
+                with self.subTest(text=text):
+                    self._assert_blocked(text)
+            with self.subTest(text=_with_repeat(stem)):
+                self._assert_blocked(_with_repeat(stem))
+        # UTF-7 for "z", quoted as a class of residual encodings, not one string.
+        self._assert_blocked("authori+AHo-ation")
+
+    def test_encoded_stem_is_critical_in_scope_and_listing_too(self):
+        samples = (
+            "authori%20zation",
+            "authori\u00a0zation",
+            "authori\u2028zation",
+            "pass/word",
+            "author/ization",
+            "authori\\zation",
+            "passsword",
+            "authori%u007aation",
+            "authori\\u{7a}ation",
+            "authori&#１２２;ation",
+        )
+        for text in samples:
+            for carrier in ("event_text", "goal", "scope", "listing"):
+                with self.subTest(text=text, carrier=carrier):
+                    self._assert_blocked(text, carrier)
+
+    def test_cyrillic_digit_sign_and_translit_raise_the_floor(self):
+        words = ("пароль", "миграция", "доступ", "секрет")
+        for word in words:
+            pivot = max(1, len(word) // 2)
+            for noise in ("0", "1", "ь"):
+                text = "переименовать " + word[:pivot] + noise + word[pivot:]
+                with self.subTest(text=text):
+                    self._assert_blocked(text)
+            for separator in (" ", "/", "%20", "\u00a0", "\u2028"):
+                text = word[:pivot] + separator + word[pivot:]
+                with self.subTest(text=text):
+                    self._assert_blocked(text)
+        for text in ("пар0ль", "миг1рация", "дост1уп", "секьрет",
+                     "пассворд", "аутхоризейшн", "креденшл", "санбокс"):
+            with self.subTest(text=text):
+                self._assert_blocked(text)
+
+    def test_split_words_still_prove_condition_seven(self):
+        phrases = (
+            "delete the asser tions",
+            "delete the asser/tions",
+            "delete the asser\\tions",
+            "remove the time outs",
+            "уда лить проверки",
+            "уда/лить проверки",
+            "уда\u00a0лить проверки",
+        )
+        for phrase in phrases:
+            with self.subTest(phrase=phrase, path="fast"):
+                decision = _not_writer(self, fast(event_text=phrase))
+                self.assertFalse(decision["fast_fix"])
+                self.assertFalse(decision["writer"])
+                if decision["risk"] != "critical":
+                    self.assertIn("condition 7", decision["reason"])
+            with self.subTest(phrase=phrase, path="brief"):
+                decision = _not_writer(self, _proven_brief(event_text=phrase))
+                self.assertFalse(decision["writer"])
+                self.assertFalse(decision["executed"])
+                if decision["risk"] != "critical":
+                    self.assertIn("condition 7", decision["reason"])
+
+    def test_third_attempt_without_progress_does_not_write(self):
+        samples = {
+            "brief": ready(
+                brief_usable=True, cause="proven", risk="moderate", author_attempts=3,
+                progress=False, continuation_used=0, minimal_action_known=True,
+                change_surface="rename", plan=plan(), diff_check=diff_check(),
+                class_search=search()),
+            "complex": ready(
+                cause="proven", complexity="complex", risk="moderate", change_surface="state",
+                brief_usable=False, author_attempts=3, progress=False,
+                minimal_action_known=True, plan=plan(), diff_check=diff_check(),
+                class_search=search()),
+            "template": ready(
+                template_id="formatter", template_applicable=True, change_surface="format",
+                minimal_action_known=True, author_attempts=3, progress=False, plan=plan(),
+                class_search=search()),
+            "fast-proof": fast(author_attempts=3, progress=False),
+        }
+        for name, evidence in samples.items():
+            with self.subTest(name=name):
+                decision = check(sr.decide(case(evidence)))
+                self.assertFalse(decision["writer"])
+                self.assertFalse(decision["fast_fix"])
+                self.assertFalse(decision["executed"])
+                self.assertFalse(decision["continuation_granted"])
+                self.assertEqual(decision["event_class"], "LIMIT")
+                self.assertEqual(decision["route"], "hold")
+        granted = check(sr.decide(case(ready(
+            author_attempts=3, continuation_used=0, progress=True, brief_usable=True,
+            minimal_action_known=True, risk="moderate", plan=plan(),
+            change_surface="rename", diff_check=diff_check(), class_search=search()))))
+        self.assertTrue(granted["continuation_granted"])
+        self.assertTrue(granted["writer"])
+
+    def test_globs_are_not_concrete_and_real_paths_stay_low(self):
+        for scope in ("**/*.ts", "src/**", "*.js", "apps/**", "src/*", "*.ts", "**/*"):
+            with self.subTest(scope=scope):
+                self.assertFalse(sr._concrete_path(scope))
+                decision = _not_writer(self, fast(class_search=search(scope=scope)))
+                self.assertFalse(decision["rejected"])
+                self.assertFalse(decision["fast_fix"])
+                self.assertFalse(decision["writer"])
+                self.assertTrue(decision["whole_class"])
+        for listing in (["**/*.ts"], ["src/**"], ["*.js"], ["apps/**"], ["src/*"]):
+            with self.subTest(listing=listing):
+                decision = _not_writer(self, fast(class_search=search(scope_listing=listing)))
+                self.assertFalse(decision["fast_fix"])
+                self.assertFalse(decision["writer"])
+                self.assertTrue(decision["whole_class"])
+        for path in ("api_index.ts", "apps/api/index.ts", "apps\u2044api\u2044index.ts",
+                     "apps\u2215api\u2215index.ts"):
+            with self.subTest(path=path):
+                self.assertTrue(sr._concrete_path(path))
+                decision = check(sr.decide(case(fast(
+                    paths=[path], goal="rename export to author",
+                    class_search=search(scope=path, scope_listing=[path])))))
+                self.assertEqual(decision["risk"], "low")
+                self.assertTrue(decision["fast_fix"])
+                self.assertTrue(decision["writer"])
+
+    def test_any_exception_is_rejected(self):
+        class Odd(Exception):
+            pass
+
+        class Boom:
+            def __deepcopy__(self, memo):
+                raise Odd("odd")
+
+        evidence = fast()
+        evidence["class_search"] = search()
+        evidence["class_search"]["payload"] = Boom()
+        decision = sr.decide(case(evidence))
+        self.assertTrue(decision["rejected"])
+        self.assertEqual(decision["event_class"], "REJECTED")
+        self.assertFalse(decision["writer"])
+        self.assertFalse(decision["fast_fix"])
+        self.assertFalse(decision["executed"])
+        self.assertIn("invalid", decision["reason"])
+
+        class Bad(dict):
+            def __iter__(self):
+                raise Odd("odd")
+
+        self.assertEqual(sr.validate_plan(Bad()), "incompatible plan")
+        self.assertEqual(sr.refuse_unsupported_task(Bad())["event_class"], "REJECTED")
+        self.assertFalse(sr.refuse_unsupported_task(Bad())["writer"])
+
+    def test_legitimate_renames_stay_fast(self):
+        harmless = (
+            "author", "authors", "AUTHOR", "secretary", "секретарь", "автор",
+            "переименовать тестовый хелпер",
+            "переименовать платформу",
+            "переименовать правильно",
+            "remove the latest typo",
+            "remove the latest typo in the name",
+        )
+        for text in harmless:
+            with self.subTest(text=text):
+                decision = check(sr.decide(case(fast(event_text=text))))
+                self.assertEqual(decision["risk"], "low")
+                self.assertTrue(decision["fast_fix"])
+                self.assertTrue(decision["writer"])
+                self.assertEqual(decision["event_class"], "SOURCE_KNOWN_LOCAL")
+
+
 if __name__ == "__main__":
     unittest.main()

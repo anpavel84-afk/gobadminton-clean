@@ -11,12 +11,14 @@ stored inside GOBADMINTON_AUTONOMY_V1.
 
 Fast Fix (§9) needs every condition, including an allowlisted surface, a diff
 tool result for unchanged limits, and a class search that names one identifier
-from the diff. A source writer (brief, complex cause, continuation, or a model
-template) needs that same diff result and a closed class. A non-complex writer
-also needs the allowlisted surface; a complex writer may name another non-empty
-surface. Free text can only raise the risk floor or block. An undecoded residue
-and any letter outside Latin or Cyrillic raise the floor. A quiet sentence is
-not proof.
+from the diff. Fast Fix text is fail-closed: after normalization, event text,
+scope, and listings must be only the allowed alphabet (ASCII letters and digits,
+a normal space, limited punctuation, Cyrillic). An encoding residue, a slash or
+other separator that splits a word, a digit inside a Cyrillic word, a soft sign
+that hides a sensitive stem, or any other ambiguity raises the risk floor and
+refuses Fast Fix. A source
+writer also needs the diff result and a closed class. After three ordinary
+attempts the only writer is a continuation that still has progress.
 """
 import copy
 import html
@@ -70,11 +72,31 @@ _CONFUSABLE = str.maketrans({
     "χ": "x", "ω": "w", "ı": "i",
 })
 # Undecoded residue raises risk. The limit stops a nested encoding from looping.
+# The pattern is the class of encoding introducers, not a list of bypass strings.
 _DECODE_LIMIT = 8
 _RESIDUE = re.compile(
-    r"%[0-9A-Fa-f]{2}|&#x?[0-9A-Fa-f]+;?|&[A-Za-z][A-Za-z0-9]+;|"
-    r"\\u[0-9A-Fa-f]{4}|\\U[0-9A-Fa-f]{8}|\\x[0-9A-Fa-f]{2}")
-_ESCAPE = re.compile(r"\\(?:u([0-9A-Fa-f]{4})|U([0-9A-Fa-f]{8})|x([0-9A-Fa-f]{2}))")
+    r"%u[0-9A-Fa-f]{4}|%[0-9A-Fa-f]{2}|&#x?[0-9A-Za-z]+;?|&[A-Za-z][A-Za-z0-9]+;|"
+    r"\\u\{[0-9A-Fa-f]{1,6}\}|\\u[0-9A-Fa-f]{4}|\\U[0-9A-Fa-f]{8}|\\x[0-9A-Fa-f]{2}|"
+    r"\\[0-7]{3}|\\u\{")
+_ESCAPE = re.compile(
+    r"\\(?:u\{([0-9A-Fa-f]{1,6})\}|u([0-9A-Fa-f]{4})|U([0-9A-Fa-f]{8})|x([0-9A-Fa-f]{2})|([0-7]{3}))")
+_PCT_U = re.compile(r"%u([0-9A-Fa-f]{4})")
+# Fast Fix alphabet. Anything else is an ambiguity and raises the floor.
+_ALLOWED_PUNCT = frozenset(" ._-/:@")
+_SLASH_FOLD = str.maketrans({
+    "\u2044": "/", "\u2215": "/", "\u29f8": "/", "\uff0f": "/", "\uff3c": "\\",
+})
+_TRANSLIT = str.maketrans({
+    "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e", "ж": "zh",
+    "з": "z", "и": "i", "й": "y", "к": "k", "л": "l", "м": "m", "н": "n", "о": "o",
+    "п": "p", "р": "r", "с": "s", "т": "t", "у": "u", "ф": "f", "х": "h", "ц": "ts",
+    "ч": "ch", "ш": "sh", "щ": "sch", "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "yu",
+    "я": "ya",
+})
+_CANONICAL = (
+    "authorization", "password", "credential", "sandbox", "identity", "migration",
+    "payment", "rollback", "oauth", "permission", "privilege",
+)
 _DIAGNOSTIC_WORDS = frozenset((
     "error", "errors", "ts", "assertionerror", "assertion", "assertions", "failed",
     "expected", "received", "permission", "denied", "timeout", "timeouts", "fail",
@@ -264,7 +286,7 @@ def refuse_unsupported_task(task):
     """Refuse to store this policy inside an unsupported admission schema."""
     try:
         return _refuse_unsupported_task(task)
-    except (TypeError, RecursionError, ValueError, RuntimeError):
+    except Exception:
         return _decision(rejected=True, executed=False, writer=False, reason="invalid case",
                          event_class="REJECTED", route="hold")
 
@@ -289,7 +311,7 @@ def validate_plan(plan):
     """Return an error string, or None when the plan schema is closed and safe."""
     try:
         return _validate_plan(plan)
-    except (TypeError, RecursionError, ValueError, RuntimeError):
+    except Exception:
         return "incompatible plan"
 
 
@@ -329,7 +351,7 @@ def decide(case):
     """One deterministic classification. Does not call a provider or write source."""
     try:
         return _decide(case)
-    except (TypeError, RecursionError, ValueError, RuntimeError):
+    except Exception:
         return _decision(rejected=True, executed=False, writer=False, fast_fix=False,
                          reason="invalid case", event_class="REJECTED", route="hold")
 
@@ -417,6 +439,17 @@ def _decide(case):
     return _classify(base, evidence, plan)
 
 
+def _known_local(base, evidence, plan, risk, honored):
+    """Fast Fix does not spend an ordinary author attempt."""
+    model, cost = _auto_receipt("cursor:auto", evidence)
+    return _emit(base, evidence, plan, policy_applied=True, executed=True, writer=True, risk=risk,
+                 fast_fix=True, planner_calls=0, astra_calls=0, model_calls=1,
+                 author_attempts_delta=0, ledger_category="fast_fix", author_route="cursor:auto",
+                 qa_route=_ordinary_qa(evidence), route="cursor:auto", effective_model=model, cost=cost,
+                 whole_class=False, reason="all eight Fast Fix conditions hold",
+                 event_class="SOURCE_KNOWN_LOCAL", plan_honored=honored)
+
+
 def _classify(base, evidence, plan):
     risk = _floor(evidence)
     honored = None if plan is None else plan.get("executable") is True
@@ -433,6 +466,30 @@ def _classify(base, evidence, plan):
         return _finish(base, policy_applied=True, executed=False, writer=False, risk=risk,
                        continuation_granted=False, fast_fix=False,
                        reason="continuation is only available on the third author attempt",
+                       event_class="LIMIT", route="hold")
+    # The third attempt is not a fourth write. Continuation is the only writer
+    # here, and only while progress still holds (SR-T18). Fast Fix does not
+    # spend an earlier attempt, but it cannot open a writer once three are used.
+    if evidence["author_attempts"] == 3:
+        if evidence["brief_usable"] and evidence["progress"]:
+            if evidence["continuation_used"] not in (0, 1):
+                return _finish(base, policy_applied=True, executed=False, writer=False, risk=risk,
+                               continuation_granted=False, fast_fix=False,
+                               reason="continuation budget is exhausted", event_class="LIMIT", route="hold")
+            if evidence["architecture_research_required"] or evidence["minimal_action_known"] is not True:
+                return _pm(base, evidence, risk, whole_class=False, fast_fix_closed=False,
+                           reason="architecture is open or the minimal action is not proven")
+            return _emit(base, evidence, plan, policy_applied=True, executed=True, writer=True, risk=risk,
+                         planner_calls=0, astra_calls=0, model_calls=1, continuation_granted=True,
+                         owner_micro_go=False, history_reset=False,
+                         author_route="cursor:auto" if evidence["complexity"] != "complex" else SPECIALIST_SOL,
+                         qa_route=_ordinary_qa(evidence), route="continuation", ledger_category="ordinary",
+                         next_ordinary_attempt=evidence["author_attempts"] + evidence["continuation_used"] + 1,
+                         reason="bounded continuation reuses the brief; history is kept",
+                         event_class="CONTINUATION", cost=None, plan_honored=honored)
+        return _finish(base, policy_applied=True, executed=False, writer=False, risk=risk,
+                       continuation_granted=False, fast_fix=False,
+                       reason="ordinary attempts are exhausted; continuation needs progress",
                        event_class="LIMIT", route="hold")
     if evidence["template_applicable"] and _norm_id(evidence["template_id"]):
         # A template writer needs a closed single-instance search, not a clean sentence.
@@ -455,29 +512,7 @@ def _classify(base, evidence, plan):
     # All eight Fast Fix conditions outrank a usable brief (§8 LOCAL, §9).
     allowed, fast_reason = _fast_fix_block(evidence, risk)
     if allowed:
-        model, cost = _auto_receipt("cursor:auto", evidence)
-        return _emit(base, evidence, plan, policy_applied=True, executed=True, writer=True, risk=risk,
-                     fast_fix=True, planner_calls=0, astra_calls=0, model_calls=1,
-                     author_attempts_delta=0, ledger_category="fast_fix", author_route="cursor:auto",
-                     qa_route=_ordinary_qa(evidence), route="cursor:auto", effective_model=model, cost=cost,
-                     whole_class=False, reason="all eight Fast Fix conditions hold",
-                     event_class="SOURCE_KNOWN_LOCAL", plan_honored=honored)
-    if evidence["author_attempts"] == 3 and evidence["brief_usable"] and evidence["progress"]:
-        if evidence["continuation_used"] not in (0, 1):
-            return _finish(base, policy_applied=True, executed=False, writer=False, risk=risk,
-                           continuation_granted=False, fast_fix=False,
-                           reason="continuation budget is exhausted", event_class="LIMIT", route="hold")
-        if evidence["architecture_research_required"] or evidence["minimal_action_known"] is not True:
-            return _pm(base, evidence, risk, whole_class=False, fast_fix_closed=False,
-                       reason="architecture is open or the minimal action is not proven")
-        return _emit(base, evidence, plan, policy_applied=True, executed=True, writer=True, risk=risk,
-                     planner_calls=0, astra_calls=0, model_calls=1, continuation_granted=True,
-                     owner_micro_go=False, history_reset=False,
-                     author_route="cursor:auto" if evidence["complexity"] != "complex" else SPECIALIST_SOL,
-                     qa_route=_ordinary_qa(evidence), route="continuation", ledger_category="ordinary",
-                     next_ordinary_attempt=evidence["author_attempts"] + evidence["continuation_used"] + 1,
-                     reason="bounded continuation reuses the brief; history is kept",
-                     event_class="CONTINUATION", cost=None, plan_honored=honored)
+        return _known_local(base, evidence, plan, risk, honored)
     if evidence["brief_usable"] and evidence["cause"] in ("proven", "supported") and evidence["author_attempts"] < 3:
         if evidence["architecture_research_required"] or evidence["minimal_action_known"] is not True:
             return _pm(base, evidence, risk, whole_class=False, fast_fix_closed=False,
@@ -494,8 +529,9 @@ def _classify(base, evidence, plan):
             and evidence["minimal_action_known"] and not evidence["architecture_research_required"]):
         return _author(base, evidence, plan, risk, SPECIALIST_SOL, "SOURCE_KNOWN_COMPLEX",
                        "known complex noncritical cause; Astra is not required", honored)
-    if (evidence["cause"] == "proven" and evidence["minimal_action_known"]
-            and not evidence["architecture_research_required"] and evidence["brief_usable"]):
+    if (evidence["author_attempts"] < 3 and evidence["cause"] == "proven"
+            and evidence["minimal_action_known"] and not evidence["architecture_research_required"]
+            and evidence["brief_usable"]):
         return _author(base, evidence, plan, risk, "cursor:auto", "SOURCE_KNOWN_STANDARD",
                        "known cause uses an evidence-bound repair", honored)
     if evidence["cause"] == "missing_evidence":
@@ -779,17 +815,26 @@ def _condition_seven(evidence, plan):
     return True
 
 
-def _escape_char(match):
-    hexes = match.group(1) or match.group(2) or match.group(3)
-    code = int(hexes, 16)
+def _codepoint(code):
     if code > 0x10FFFF or 0xD800 <= code <= 0xDFFF:
-        return match.group(0)
+        return None
     return chr(code)
 
 
+def _escape_char(match):
+    if match.group(5):
+        char = _codepoint(int(match.group(5), 8))
+    else:
+        hexes = match.group(1) or match.group(2) or match.group(3) or match.group(4)
+        char = _codepoint(int(hexes, 16))
+    return match.group(0) if char is None else char
+
+
 def _decode_layer(text):
-    """One pass of percent-decoding, HTML entities, and literal hex escapes."""
-    return _ESCAPE.sub(_escape_char, html.unescape(urllib.parse.unquote(text)))
+    """One pass over the encoding class: percent, %u, HTML, and literal escapes."""
+    text = _PCT_U.sub(lambda match: _codepoint(int(match.group(1), 16)) or match.group(0),
+                      urllib.parse.unquote(text))
+    return _ESCAPE.sub(_escape_char, html.unescape(text))
 
 
 def _decode(text):
@@ -863,18 +908,62 @@ def _word_pieces(word):
     return pieces, "".join(pieces)
 
 
+def _stem_with_repeats(stem, token):
+    """A stem matches when the token only adds repeated letters, including a prefix."""
+    index = 0
+    cursor = 0
+    while index < len(stem) and cursor < len(token):
+        if stem[index] != token[cursor]:
+            return False
+        char = stem[index]
+        stem_run = token_run = 0
+        while index < len(stem) and stem[index] == char:
+            index += 1
+            stem_run += 1
+        while cursor < len(token) and token[cursor] == char:
+            cursor += 1
+            token_run += 1
+        if token_run < stem_run:
+            return False
+    return index == len(stem)
+
+
 def _token_risky(token):
     if token.startswith("secretary"):
         token = token[len("secretary"):]
     if not token:
         return False
-    if "secret" in token:
+    if "secret" in token or _stem_with_repeats("secret", token):
         return True
-    if any(stem in token for stem in _EN_STEMS):
-        return True
+    for stem in _EN_STEMS:
+        # Short stems such as "pii" match a whole token, not the seam of api+index.
+        if len(stem) >= 4 and stem in token:
+            return True
+        if token.startswith(stem) or _stem_with_repeats(stem, token):
+            return True
     # "auth" anywhere in the word, except the author/authors family.
     if "auth" in token and not token.startswith("author"):
         return True
+    return False
+
+
+def _cross_hit(left, right):
+    """A separator splits a word when the join, not either side, is the stem."""
+    if not left or not right:
+        return False
+    joined = left + right
+    if joined.startswith("secretary") or joined.startswith("author"):
+        # "author" is safe, but "author/ization" still extends past "author".
+        pass
+    for stem in _EN_STEMS:
+        if len(stem) <= len(left):
+            continue
+        if joined.startswith(stem) or _stem_with_repeats(stem, joined):
+            return True
+    if len("secret") > len(left) and (
+            joined.startswith("secret") or _stem_with_repeats("secret", joined)):
+        if not joined.startswith("secretary"):
+            return True
     return False
 
 
@@ -922,7 +1011,9 @@ def _latin_sensitive(text):
             return True
         if len(letter_run) >= 2:
             phrase_tokens.append("".join(letter_run))
-    return _phrase_hit(phrase_tokens)
+    if _phrase_hit(phrase_tokens):
+        return True
+    return any(_cross_hit(left, right) for left, right in zip(phrase_tokens, phrase_tokens[1:]))
 
 
 def _flat_pieces(text):
@@ -971,22 +1062,114 @@ def _foreign_script(text):
     return False
 
 
+def _outside_allowlist(text):
+    """Fast Fix text is an allowlist. Any other character is an ambiguity."""
+    for char in text:
+        if char.isascii() and (char.isalnum() or char in _ALLOWED_PUNCT):
+            continue
+        if "а" <= char <= "я" or char == "ё" or char in "ьъ":
+            continue
+        return True
+    return False
+
+
+def _cyr_plain(word):
+    """Drop signs that are used to split a stem. Ordinary spelling stays a word."""
+    return word.replace("ь", "").replace("ъ", "")
+
+
+def _cyr_noise(text):
+    """A digit inside a Cyrillic word, or a sign hiding a sensitive stem, is noise."""
+    for word in re.findall(r"[0-9а-яё]+", text.casefold()):
+        if not any(("а" <= char <= "я") or char == "ё" for char in word):
+            continue
+        if any(char.isdigit() for char in word):
+            return True
+        plain = _cyr_plain(word)
+        if plain != word and _ru_sensitive_word(plain):
+            return True
+    return False
+
+
+def _long_hex(text):
+    """A long hex blob is an encoded payload, not a rename."""
+    for token in re.findall(r"[0-9A-Za-z]{16,}", text):
+        body = token[2:] if token.lower().startswith("0x") else token
+        if len(body) >= 16 and re.fullmatch(r"[0-9a-fA-F]+", body):
+            return True
+    return False
+
+
+def _ambiguous(text):
+    return _outside_allowlist(text) or _cyr_noise(text) or _long_hex(text)
+
+
+def _cyr_sensitive(text):
+    words = [_cyr_plain(word) for word in re.findall(r"[а-яё]+", text.casefold())]
+    if any(_ru_sensitive_word(word) for word in words):
+        return True
+    for left, right in zip(words, words[1:]):
+        if _ru_sensitive_word(left + right):
+            return True
+    return False
+
+
+def _common_prefix(left, right):
+    count = 0
+    for left_char, right_char in zip(left, right):
+        if left_char != right_char:
+            break
+        count += 1
+    return count
+
+
+def _edit_distance(left, right):
+    if abs(len(left) - len(right)) > 2:
+        return 3
+    previous = list(range(len(right) + 1))
+    for index, left_char in enumerate(left, 1):
+        current = [index]
+        for inner, right_char in enumerate(right, 1):
+            current.append(min(previous[inner] + 1, current[-1] + 1,
+                               previous[inner - 1] + (left_char != right_char)))
+        previous = current
+    return previous[-1]
+
+
+def _translit_sensitive(text):
+    """Cyrillic transliteration of a sensitive word raises the floor."""
+    for word in re.findall(r"[а-яё]+", text.casefold()):
+        if word.startswith("секретар") or word == "автор":
+            continue
+        latin = word.translate(_TRANSLIT)
+        forms = {latin, latin.replace("v", "w"), latin.replace("k", "c"), latin.replace("ks", "x")}
+        for form in forms:
+            if _token_risky(form):
+                return True
+            for canonical in _CANONICAL:
+                if _common_prefix(form, canonical) >= 6 or _edit_distance(form, canonical) <= 1:
+                    return True
+    return False
+
+
 def _sensitive(value):
     if type(value) is not str or not value:
         return False
-    decoded, residue = _decode(value)
-    # An undecoded residue is the same class as a decoded sensitive word.
-    if residue:
-        return True
+    folded = unicodedata.normalize("NFKD", value).translate(_SLASH_FOLD)
+    decoded, residue = _decode(folded)
     stripped = _strip_marks(decoded)
+    # Residue and anything outside the allowlist are the same class: fail closed.
+    if residue or (stripped and _ambiguous(stripped)):
+        return True
     if not stripped:
         return False
     if _foreign_script(stripped) or _mixed_script(stripped):
         return True
-    folded = stripped.casefold()
-    if any(_ru_sensitive_word(word) for word in re.findall(r"[а-яё]+", folded)):
+    if _cyr_sensitive(stripped):
         return True
-    return _latin_sensitive(stripped)
+    if _latin_sensitive(stripped):
+        return True
+    return _translit_sensitive(stripped)
 
 
 def _sensitive_any(evidence):
@@ -1038,6 +1221,9 @@ def _concrete_path(value):
     if "/" not in text and "." not in text:
         return False
     if re.fullmatch(r"[\*/\\\.\s]+", text):
+        return False
+    # A glob is not one file. Condition 8 needs a concrete path (SR-T26).
+    if any(char in text for char in "*?[]{}"):
         return False
     if not re.search(r"[0-9A-Za-z]{2,}", text):
         return False
@@ -1103,19 +1289,24 @@ def _weakens(value):
     """
     if type(value) is not str or not value:
         return False
-    decoded, _residue = _decode(value)
+    folded = unicodedata.normalize("NFKD", value).translate(_SLASH_FOLD)
+    decoded, _residue = _decode(folded)
     stripped = _strip_marks(decoded)
     if not stripped:
         return False
-    folded = stripped.casefold()
-    if any(any(word.startswith(stem) for stem in _RU_DESTRUCTIVE)
-           for word in re.findall(r"[а-яё]+", folded)):
+    cyr_words = re.findall(r"[а-яё]+", stripped.casefold())
+    cyr_forms = list(cyr_words)
+    cyr_forms.extend(left + right for left, right in zip(cyr_words, cyr_words[1:]))
+    if any(any(word.startswith(stem) for stem in _RU_DESTRUCTIVE) for word in cyr_forms):
         return True
     tokens = _flat_pieces(stripped)
     if not tokens:
         return False
-    if _has_prefix(tokens, ("delet", "remov", "drop", "strip")) and _has_prefix(
-            tokens, ("assert", "test", "timeout", "expect")):
+    # A separator may split "assertions" or "удалить". Joins are extra tokens, not a glue of the sentence.
+    spanned = list(tokens)
+    spanned.extend(left + right for left, right in zip(tokens, tokens[1:]))
+    if _has_prefix(spanned, ("delet", "remov", "drop", "strip")) and _has_prefix(
+            spanned, ("assert", "test", "timeout", "expect")):
         return True
     if any(token.startswith("comment") for token in tokens) and (
             any(token == "out" for token in tokens)
@@ -1209,7 +1400,7 @@ def _evidence(raw):
             evidence["diff_check"] = copy.deepcopy(evidence["diff_check"])
     except ValueError as error:
         return str(error)
-    except RuntimeError:
+    except Exception:
         return "invalid evidence"
     return evidence
 
