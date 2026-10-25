@@ -1,0 +1,33 @@
+{
+  "at": 1792628999,
+  "expected_product_issue": 151,
+  "expected_sha": "422c109893bd6092fd177ccd3ef2162ccc897e0d",
+  "live_meta": {
+    "service": "gobadminton-dev-preview-api",
+    "apiVersion": "0.19.0",
+    "appEnv": "mvp",
+    "nodeEnv": "production",
+    "gitSha": "422c109893bd6092fd177ccd3ef2162ccc897e0d",
+    "publicOrigin": "https://dev.gobadminton.ru",
+    "contract": {
+      "title": "GoBadminton API \u2014 critical pilot design",
+      "version": "0.19.0",
+      "status": "DESIGN_DRAFT"
+    }
+  },
+  "server_projection": {
+    "schema": 1,
+    "environment": "dev",
+    "observed_at": 1792628990,
+    "pending": false,
+    "accepted": {
+      "release_id": "r39699415055-a1",
+      "source_sha": "422c109893bd6092fd177ccd3ef2162ccc897e0d",
+      "api_digest": "sha256:e092e9dd08d96c7658491dc5bea888a5a08aadda56a54314b83307de94f1771d",
+      "web_digest": "sha256:6789c4d357f93866f9868b5173572a980ba4f21fcd65facfca9f894c5b730514",
+      "status": "ACCEPTED",
+      "finished_at": 1792628860,
+      "admin_digest": "sha256:9594462620c0db55d5ccec66d48da88232afdf99f26b46846c9bbf7d9a86d823"
+    }
+  }
+}
