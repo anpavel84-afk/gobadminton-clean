@@ -2021,6 +2021,12 @@ _VERDICT_DECODE_DEPTH = 64
 _VERDICT_SCAN_NODES = 100000
 _VERDICT_SCAN_BYTES = 4 << 20
 _VERDICT_SCAN_STEPS = 4 << 20
+# QA_INPUT_LIMIT bounds rules-injected model INPUT stdin, not model OUTPUT.
+# MAX_OUT bounds the stream envelope at 4 MiB; bound verdict response UTF-8
+# separately, before scanning (all legitimate <=256 KiB responses fit).
+_VERDICT_TEXT_BYTES = 1 << 20
+_VERDICT_PROBE_WINDOW = 64
+_VERDICT_PROBE_LOOKAHEAD = 16
 
 
 class _VerdictScanBudget:
@@ -2031,6 +2037,11 @@ class _VerdictScanBudget:
         # decoded strings, with both an input-relative and hard cap. The ratio
         # also stops small malformed inputs with quadratic repeated rescans.
         self.steps = min(8 * text_size + 64, _VERDICT_SCAN_STEPS)
+        # Precharge every local decoder document, including copying it and
+        # JSONDecodeError's line/column calculation. A 64-char initial probe
+        # costs at most 64 per candidate; larger probes double geometrically.
+        # This is separate from retained bytes/nodes and traversal steps.
+        self.decode_work = 64 * text_size + 4096
 
     def consume(self, size):
         self.bytes -= size
@@ -2046,6 +2057,52 @@ class _VerdictScanBudget:
         self.steps -= steps
         if self.steps < 0:
             raise ReviewError('AGY_PARSE_FAILED', 'parse')
+
+    def decode(self, size):
+        self.decode_work -= size
+        if self.decode_work < 0:
+            raise ReviewError('AGY_PARSE_FAILED', 'parse')
+
+
+def _decode_verdict_candidate(decoder, text, start, budget):
+    """Decode only local documents: exceptions must never scan an absolute prefix.
+
+    Only object/array/string starts reach here. Their closing delimiter makes
+    a successful decode final, even exactly at the window end; its value and
+    end offset are identical on the full text. Both decoder hooks are pure
+    rejection checks (duplicate keys and non-JSON constants), and unchanged.
+
+    A failure is final only at real EOF, or with enough following characters
+    to rule out truncated lexer lookahead. JSON literals/constants need <=9
+    characters, number fraction/exponent tails <=3, and unicode escapes <=6;
+    16 is conservative for both CPython scanners. An unterminated string can
+    report its opening quote after reading the entire window: always grow it.
+    All other boundary cases also grow, rather than guessing invalidity.
+
+    Precharging window length bounds copying, decoder traversal, allocations,
+    hooks and exception construction together. Across this entire recursive
+    scan the sum is <=64*original_text_length+4096, even for late failures.
+    """
+    remaining = len(text) - start
+    size = min(_VERDICT_PROBE_WINDOW, remaining)
+    while True:
+        budget.decode(size)
+        window = text[start:start + size]
+        try:
+            value, end = decoder.raw_decode(window)
+        except json.JSONDecodeError as error:
+            unterminated = error.msg == 'Unterminated string starting at'
+            if size == remaining or (not unterminated and
+                                    error.pos + _VERDICT_PROBE_LOOKAHEAD < size):
+                consumed = size if unterminated else max(1, error.pos)
+                budget.consume(consumed)
+                budget.scan(consumed)
+                return None
+            size = min(2 * size, remaining)
+            continue
+        budget.consume(end)
+        budget.scan(end)
+        return value, start + end
 
 
 def _absorb_verdict_value(value, found, depth, budget, *, verdict_key=False):
@@ -2092,27 +2149,15 @@ def _collect_verdict_values(text, found, depth, budget):
         if start >= length:
             break
         budget.scan(1)
-        try:
-            value, end = decoder.raw_decode(text, start)
-        except json.JSONDecodeError as error:
-            # CPython's object/array errors report the failure offset; ordinary
-            # Markdown '[' usually fails one character in. Charging its entire
-            # tail rejects legitimate findings. String scanning is exceptional:
-            # an unterminated string reports its OPENING quote despite reading
-            # to EOF (also when nested in an object/array). Account for that
-            # traversal; other errors have only bounded token lookahead.
-            consumed = (length - start if error.msg == 'Unterminated string starting at'
-                        else max(1, error.pos - start))
-            budget.consume(consumed)
-            budget.scan(consumed)
+        decoded = _decode_verdict_candidate(decoder, text, start, budget)
+        if decoded is None:
             index = start + 1
             continue
+        value, end = decoded
         if end <= start:
             index = start + 1
             continue
         spans.append((start, end))
-        budget.consume(end - start)
-        budget.scan(end - start)
         _absorb_verdict_value(value, found, depth + 1, budget)
         index = end
     cursor = 0
@@ -2132,6 +2177,8 @@ def verdict_documents(text):
     and byte/work budgets. Identical copies stay for the byte identity check.
     """
     found = []
+    if len(text) > _VERDICT_TEXT_BYTES or len(text.encode('utf-8')) > _VERDICT_TEXT_BYTES:
+        raise ReviewError('AGY_PARSE_FAILED', 'parse')
     _absorb_verdict_value(text, found, 0, _VerdictScanBudget(len(text)))
     return found
 

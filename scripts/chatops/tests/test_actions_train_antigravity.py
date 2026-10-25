@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import random
 import subprocess
 import sys
 import tempfile
@@ -41,6 +42,22 @@ def rows():
 
 def wire(events):
     return b'\n'.join(json.dumps(e).encode() for e in events) + b'\n'
+
+
+class CountingVerdictDecoder:
+    """Count actual documents, including the prefix cost of error construction.
+
+    Counting only attempts or error.pos-start misses R5. Counting the length
+    of every document handed to raw_decode bounds copies, traversal AND error
+    construction independently of timing or the implementation's own charges.
+    """
+    def __init__(self, decoder, work):
+        self.decoder, self.work = decoder, work
+
+    def raw_decode(self, document, idx=0):
+        self.work['attempts'] += 1
+        self.work['characters'] += len(document)
+        return self.decoder.raw_decode(document, idx)
 
 
 class EvidenceTestCase(unittest.TestCase):
@@ -290,6 +307,104 @@ class GenericVerdictScanner(EvidenceTestCase):
         self.assertLess(len(response.encode()), 256 << 10)
         self.check_response(response, accepted=True, expected=value, max_seconds=2)
 
+    def test_linear_decoder_work_for_doubling_markdown_prefixes(self):
+        factory = N._verdict_decoder
+        for pattern in ('[x]', '{x}', '"x', '[1.2.3]', '[2024-01-01]',
+                        '[a,b]', '(see [file.py:42])'):
+            previous = None
+            for count in (1000, 2000, 4000, 8000):
+                response = pattern * count + '\n' + self.block()
+                work = dict(attempts=0, characters=0)
+                with self.subTest(pattern=pattern, count=count), patch.object(
+                        N, '_verdict_decoder', side_effect=lambda:
+                        CountingVerdictDecoder(factory(), work)):
+                    # Each assertion covers BOTH parse_stream and review.
+                    self.check_response(response, accepted=True)
+                    self.assertLessEqual(work['characters'], 64 * len(response) + 4096)
+                    self.assertLessEqual(work['attempts'], 2 * len(response))
+                    if previous is not None:
+                        self.assertLessEqual(work['characters'], 2.05 * previous + 4096)
+                previous = work['characters']
+
+    def test_linear_markdown_256k_and_one_mib_timeout_backstop(self):
+        for size in (262144, 1 << 20):
+            response = '[x]' * ((size - len(self.block()) - 1) // 3) + '\n' + self.block()
+            with self.subTest(size=size):
+                self.check_response_in_child(response, accepted=True)
+
+    def check_response_in_child(self, response, *, accepted=False):
+        # A hard deadline still works if the scanner never reaches an elapsed
+        # time assertion. The child exercises both parse_stream and review.
+        script = '''import sys
+sys.path.insert(0, sys.argv[1])
+import test_actions_train_antigravity as T
+case = T.GenericVerdictScanner()
+case.setUp()
+try:
+    case.check_response(T.json.loads(sys.stdin.read()),
+                        accepted=(sys.argv[2] == 'True'), max_seconds=3)
+finally:
+    case.doCleanups()
+'''
+        result = subprocess.run([sys.executable, '-c', script, str(Path(__file__).parent), str(accepted)],
+            input=json.dumps(response), text=True, capture_output=True, timeout=8,
+            env=dict(os.environ, PYTHONDONTWRITEBYTECODE='1'))
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_verdict_response_utf8_cap_is_separate_from_input_and_stream_caps(self):
+        for response in ('x' * (1 << 20) + self.block(),
+                         '🎾' * ((1 << 20) // 4) + self.block()):
+            with self.subTest(unicode=response.startswith('🎾')):
+                self.check_response(response, max_seconds=3)
+        # At exactly the cap, including UTF-8 rather than just character count.
+        block = self.block()
+        response = 'x' * ((1 << 20) - len(block)) + block
+        self.check_response(response, accepted=True, max_seconds=3)
+
+    def test_hidden_fail_after_100k_markdown_prefix(self):
+        fail = self.block(verdict='FAIL', findings=['hidden'])
+        escaped = '"' + ''.join('\\u%04x' % ord(c) for c in fail) + '"'
+        for suffix in (json.dumps({fail: 0}), json.dumps({'outer': [{fail: 0}]}),
+                       '{' + escaped + ':0}',
+                       json.dumps({json.dumps({fail: 0}): 0}),
+                       json.dumps({'\ud800': 0}),
+                       json.dumps({self.block(verdict='FAIL', findings=['\udfff']): 0}),
+                       'unparsed verdict: FAIL'):
+            with self.subTest(suffix=suffix):
+                self.check_response('[x]' * 35000 + '\n' + self.block() + '\n' + suffix,
+                                    max_seconds=3)
+
+    def test_100_markdown_findings_under_256k_with_schema_length_boundary(self):
+        pattern = '[text](url) [file.py:42] {missing} "quote" \\path '
+        findings = [(pattern * 100)[:4000]] + [(pattern * 100)[:2200]] * 99
+        value = dict(verdict='FAIL', findings=findings, reviewed_sha=SHA)
+        response = json.dumps(value)
+        self.assertLess(len(response.encode()), 256 << 10)
+        self.assertEqual(len(findings), 100)
+        self.assertEqual(len(findings[0]), 4000)
+        self.check_response(response, accepted=True, expected=value, max_seconds=3)
+
+    def test_decoder_window_work_precharged_across_recursive_strings(self):
+        response = self.block() + '\n' + json.dumps({'echo': '[x]' * 10000})
+        self.check_response(response, accepted=True)
+        with patch.object(N._VerdictScanBudget, 'decode', side_effect=N.ReviewError(
+                'AGY_PARSE_FAILED', 'parse')), patch.object(
+                N, '_verdict_decoder', return_value=Mock(raw_decode=Mock(
+                    side_effect=AssertionError('unbudgeted decode')))):
+            self.check_response(response)
+
+    def test_subcap_encoded_response_still_enforces_four_mib_byte_budget(self):
+        encoded = 'x' * 800000
+        for _ in range(5):
+            encoded = json.dumps(encoded)
+        response = self.block() + '\n' + encoded
+        self.assertLess(len(response.encode()), 1 << 20)
+        # Isolate retained/decoded bytes from the independent traversal gate.
+        with patch.object(N, '_VERDICT_SCAN_STEPS', 8 << 20):
+            self.check_response(response)
+            with patch.object(N, '_VERDICT_SCAN_BYTES', 16 << 20):
+                self.check_response(response, accepted=True)
+
     def test_markdown_punctuation_findings_at_schema_and_wire_sizes(self):
         pattern = 'See [text](http://x) [file.py:42] {missing} "quoted" \\path\\name. '
         finding = (pattern * 100)[:4000]
@@ -373,6 +488,15 @@ finally:
                         env=dict(os.environ, PYTHONDONTWRITEBYTECODE='1'))
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertLess(time.monotonic() - started, 5)
+
+    def test_one_mib_pathologies_have_hard_subprocess_timeout(self):
+        for pattern in ('[', '{"a":', '[1,', '{"a":[', '\\"', '"'):
+            response = (pattern * ((1 << 20) // len(pattern)))[:(1 << 20) - 1]
+            if pattern == '\\"':
+                response = '"' + '\\' * ((1 << 20) - 2)
+            with self.subTest(pattern=pattern):
+                self.check_response_in_child(response)
+        self.check_response_in_child('\\"' * (((1 << 20) // 2) - 1))
 
     def test_quadratic_decoder_rescans_fail_closed(self):
         # Below CPython's recursion limit, each candidate reads ~300 chars.
@@ -475,6 +599,111 @@ finally:
                          body + '\n' + json.dumps([{json.dumps({'echo': body}): 0}])):
             with self.subTest(response=response):
                 self.check_response(response, accepted=True)
+
+
+class VerdictProbeEquivalence(unittest.TestCase):
+    """A full-document decoder oracle, independent of probe classification."""
+
+    @staticmethod
+    def full_candidate(decoder, text, start, budget):
+        try:
+            value, end = decoder.raw_decode(text, start)
+        except json.JSONDecodeError as error:
+            consumed = (len(text) - start if error.msg == 'Unterminated string starting at'
+                        else max(1, error.pos - start))
+            budget.consume(consumed)
+            budget.scan(consumed)
+            return None
+        budget.consume(end - start)
+        budget.scan(end - start)
+        return value, end
+
+    def candidate_outcome(self, decode, text, start):
+        try:
+            return ('decoded', decode(N._verdict_decoder(), text, start,
+                                      N._VerdictScanBudget(len(text))))
+        except N.ReviewError as error:
+            return ('rejected', error.code)
+
+    def assert_candidate_matches_full(self, candidate):
+        text = 'ordinary prefix ' * 13 + candidate
+        start = len(text) - len(candidate)
+        self.assertEqual(self.candidate_outcome(N._decode_verdict_candidate, text, start),
+                         self.candidate_outcome(self.full_candidate, text, start), repr(candidate))
+
+    def test_window_boundary_values_and_errors_match_full_document(self):
+        width = N._VERDICT_PROBE_WINDOW
+        for size in (width - 1, width, width + 1, 2 * width):
+            # Every complete candidate has exactly the requested size. The
+            # number/literal may be nested because only {[" are scan starts.
+            candidates = (
+                '"' + 's' * (size - 2) + '"',
+                '[' + '1' * (size - 2) + ']',
+                '[' + ' ' * (size - 6) + 'true]',
+                '{"x":"' + 's' * (size - 8) + '"}',
+                '[["' + 's' * (size - 6) + '"]]',
+            )
+            for candidate in candidates:
+                self.assertEqual(len(candidate), size)
+                for suffix in ('', ' more prose', '\n[false]', '0'):
+                    with self.subTest(size=size, candidate=candidate, suffix=suffix):
+                        self.assert_candidate_matches_full(candidate + suffix)
+        cases = [
+            '[' + ' ' * (width - 1) + '?]',  # error exactly at window end
+            '[' + ' ' * (width - 2) + 'true]',  # literal straddles end
+            '[' + ' ' * (width - 2) + '1e+20]',  # partial number is not an error
+            '[' + ' ' * (width - 3) + '1.25]',
+            '["' + 'x' * (width - 5) + '\\u0076"]',
+            '["' + 'x' * (width - 5) + '\\u00',
+            '["' + 'x' * (width - 5) + '\\q"]',
+            '{"x":0,"x":1}', '[NaN]', '[Infinity]', '[-Infinity]',
+            '["\\ud800"]', '["\\udfff"]', '["\\ud83c\\udfbe"]',
+        ]
+        for offset in range(width - 18, width + 2):
+            for token in ('true', 'false', 'null', 'NaN', 'Infinity', '-Infinity',
+                          '1e+23', '-12.34e-56', '"\\u0076"', '"\\u12', '"\\ud800"'):
+                cases.append('[' + ' ' * offset + token + ']')
+        for candidate in cases:
+            with self.subTest(candidate=candidate):
+                self.assert_candidate_matches_full(candidate)
+
+    def test_seeded_4000_candidates_and_responses_match_full_decoder(self):
+        rng = random.Random(30405)
+        atoms = ['[x]', '{x}', '[1.2.3]', '[2024-01-01]', '[a,b]',
+                 '{"x":0,"x":1}', '[NaN]', '[Infinity]', '[-Infinity]',
+                 '"\\u0076erdict"', '"\\ud800"', '"\\udfff"', '"\\u12',
+                 '"trailing\\', '["\\q"]', '["\\ud83c\\udfbe"]',
+                 '{"verdict":"FAIL"}', '[[{"nested":[true,false,null]}]]']
+        passed = json.dumps(dict(verdict='PASS', findings=[], reviewed_sha=SHA))
+
+        def outcome(text):
+            try:
+                return ('accepted', N.parse_verdict_response(text, SHA))
+            except N.ReviewError as error:
+                return ('rejected', error.code)
+
+        for index in range(4000):
+            if index % 3:
+                candidate = rng.choice(atoms)
+            else:
+                value = rng.choice(['x' * rng.randrange(1, 1200),
+                    '[file.py:42] ' * rng.randrange(1, 40),
+                    {'nested': [rng.choice(atoms), {'漢字': '🎾'}]},
+                    {rng.choice(atoms): rng.choice(atoms)},
+                    [rng.choice(atoms), rng.randrange(10000), None]])
+                candidate = json.dumps(value, ensure_ascii=bool(index % 2))
+            if index % 5 == 0:
+                candidate = '[' + ' ' * rng.randrange(160) + candidate + ']'
+            if index % 7 == 0:
+                candidate = candidate[:rng.randrange(1, len(candidate) + 1)]
+            candidate += rng.choice(['', '\nprose', '[x]', '"', '\\', ' verdict '])
+            with self.subTest(index=index):
+                self.assert_candidate_matches_full(candidate)
+                response = passed + '\n' + candidate
+                actual = outcome(response)
+                with patch.object(N, '_decode_verdict_candidate', self.full_candidate):
+                    expected = outcome(response)
+                self.assertEqual(actual, expected)
 
 
 class Collection(EvidenceTestCase):

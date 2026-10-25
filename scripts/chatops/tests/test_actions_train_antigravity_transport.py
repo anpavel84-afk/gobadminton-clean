@@ -3,6 +3,7 @@ import copy,hashlib,json,os,shutil,subprocess,sys,tempfile,unittest
 from pathlib import Path
 from unittest.mock import Mock,patch
 from test_actions_train_antigravity import N,rows,wire,SHA
+import test_actions_train_antigravity as AT
 ROOT=Path(__file__).resolve().parents[3]
 FIXTURES=Path(__file__).with_name('fixtures')
 
@@ -148,5 +149,16 @@ class Transport(unittest.TestCase):
     evidence=next(directory.iterdir());meta=json.loads(sorted(evidence.glob('phase-*'))[-1].read_text())
     self.assertEqual(meta['input_delivery'],'written' if kind=='written' else 'incomplete' if kind in ('short','absent') else 'unknown')
     self.assertEqual(meta['charge_state'],'charged')
+
+class VerdictOutputTransport(unittest.TestCase):
+ def test_review_response_cap_does_not_reuse_stdin_input_limit(self):
+  # A model OUTPUT larger than 256 KiB is legitimate. INPUT remains capped
+  # before invocation, and the independent 1 MiB verdict cap is fail-closed.
+  case=AT.GenericVerdictScanner();case.setUp();self.addCleanup(case.doCleanups)
+  block=case.block()
+  with patch.object(N,'QA_INPUT_LIMIT',1024):
+   case.check_response('[x]'*90000+'\n'+block,accepted=True,max_seconds=3)
+   case.check_response('x'*(1<<20)+block,max_seconds=3)
+  self.assertEqual(N.QA_INPUT_LIMIT,256*1024)
 
 if __name__=='__main__':unittest.main()
