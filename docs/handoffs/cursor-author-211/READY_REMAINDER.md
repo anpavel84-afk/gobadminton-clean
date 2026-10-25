@@ -4,7 +4,7 @@
 
 - From: author (этот source candidate). To: PMA/OPS (единственный mutating PMA — Grok).
 - Дата: 2026-10-25.
-- Роль: author. Base: `dev` `0ebd58e57d31e4f273708dc98aab59f1572eedcf`.
+- Роль: author. Base: `dev` `0ebd58e57d31e4f273708dc98aab59f1572eedcf`. Candidate реализации: `ca79c962c98142aa5c77e9eb118a135b23eb4658`.
 - Правила, фактически прочитанные и сверенные по байтам: EOM 1.4 commit `13a8b6c54a45aaa57021e092a1bee54926d9eac4`, SHA-256 `8798ea76874ea5e42f708fff6d74f1ccbf526413c701e9f2349045fdc98be9d5`, 115079 bytes; SMART_ROUTING 1.0 commit `bc8bad0c38a861f8e72296d0a323e2941b9322e0`, SHA-256 `1a8c1ed6f6ea11d08ecb1703df1a3bc1540520f7f4d02b7d48bb1f66a8786c63`, 76720 bytes. Статус политики: POLICY_ACCEPTED, только SR0. SR1–SR6, ROLE_QUALIFIED, RUNTIME_VERIFIED — не выполнены.
 - Факты marker на VPS (сообщены Owner, read-only, этим candidate не перечитывались и не менялись): `/etc/gobadminton-slots/cursor-author.json`, schema `GB_CURSOR_AUTHOR_211_V1`, `phase=canary`, slots `slot1`/`slot2`, `canary_task_sha256=4570522ac1c4a3685ba253a921561d1bb866c863878b3e084c6063a13efe3005`, successor issue 225, parent 211. Установленные модули: `native_cursor.py` `02d26f8be9766bbeb1e92dd8514dfc496c1b3e1b0fc8035c1c65cc9aba6b6089`, `native_guard.py` `dd2e0a0c6c0dea0d353b7dc5f16c1a5d4c4c21f022947ceaa640470c59fb0762`. CLI bundle `/opt/gobadminton-cursor-cli/2026.10.01-e373342`, login уже есть.
 
