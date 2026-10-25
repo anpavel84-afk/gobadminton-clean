@@ -1,7 +1,7 @@
 """Antigravity UID978 boundary: ordinary Unix permissions + no_new_privs, no AppArmor profile.
 
 Owner decision (Issue #29): the special AppArmor profile for Antigravity is abandoned.
-Kept: UID978/GID968, no supplementary groups, no capabilities, no_new_privs, not root,
+Kept: UID978, primary GID968, supplementary registry group 65042, no capabilities, no_new_privs, not root,
 separation of system users, real file permissions on controller state.
 WAIVED by the Owner (not verified safety): Antigravity may read other projects'
 files/secrets/PROD data on this server. Offline tests only; no model calls.
@@ -33,6 +33,8 @@ class UnixBoundarySource(unittest.TestCase):
         self.assertNotIn('_live_executor_write_probe',source)
         self.assertIn('detected_accidental_modification_only',source)
         self.assertIn('978:968:[]:1:0',source)
+        self.assertIn('978:968:[65042]:1:0',source)
+        self.assertIn('os.getgroups() == [REGISTRY_GROUP]',source)
         ops=pathlib.Path(__file__).resolve().parents[1]/'ops'
         self.assertFalse((ops/'gb_agy_runtime.apparmor').exists())
 
@@ -168,6 +170,9 @@ class CandidateIntegrity(unittest.TestCase):
             self.assertIs(receipt['filesystem_roots_enforced'],False)
             self.assertIn('not verified safety',receipt['owner_waiver'])
             self.assertEqual(receipt['executor_uid'],978)
+            self.assertEqual(receipt['executor_supplementary_groups'],[65042])
+            self.assertIn('does not name gid 65042',receipt['registry_group_note'])
+            self.assertIn('CAP_SETGID',receipt['registry_group_note'])
 
     def test_snapshot_is_idempotent_on_a_clean_checkout(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -513,6 +518,21 @@ class CandidateIntegrity(unittest.TestCase):
             self.assertEqual(qa.stat().st_uid,os.getuid())
             self.assertEqual((repo/'.git').stat().st_uid,os.getuid())
 
+    def test_cgroup_quiet_requires_observed_membership_and_clean_procs(self):
+        """An empty cgroup.procs list is not proof the vendor entered."""
+        with tempfile.TemporaryDirectory() as tmp:
+            directory=pathlib.Path(tmp)
+            procs=directory/'cgroup.procs'
+            procs.write_text('')
+            self.assertEqual(N._quiesce_cgroup(directory),'cgroup-quiet')
+            self.assertEqual(N._executor_reap_state(directory, False),'cgroup-absent')
+            self.assertEqual(N._executor_reap_state(directory, True),'cgroup-quiet')
+            procs.write_text('tampered\n')
+            self.assertEqual(N._quiesce_cgroup(directory),'cgroup-busy')
+            self.assertEqual(N._executor_reap_state(directory, True),'cgroup-busy')
+            self.assertFalse(N._observe_cgroup_membership(2**31-1, directory))
+            self.assertFalse(N._pid_in_invocation_cgroup(None, directory))
+
     def test_setsid_writer_cannot_land_after_a_clean_return(self):
         """A quiet invocation cgroup kills a setsid grandchild before SUCCESS.
 
@@ -529,11 +549,12 @@ class CandidateIntegrity(unittest.TestCase):
                 'if os.fork()==0:\n'
                 ' os.setsid()\n'
                 ' if os.fork()==0:\n'
-                '  time.sleep(0.4)\n'
+                '  time.sleep(0.5)\n'
                 '  os.chmod(path,0o644)\n'
                 '  open(path,"w").write("tampered\\n")\n'
                 '  os._exit(0)\n'
                 ' os._exit(0)\n'
+                'time.sleep(0.2)\n'
                 'os._exit(0)\n'
             )
             def popen(_argv,**kwargs):

@@ -20,9 +20,20 @@ import uuid
 from pathlib import Path
 
 AGY = '/opt/gb-slots/runtime/antigravity/agy'
-# Identity boundary only: UID978/GID968, no supplementary groups, no
-# capabilities, no_new_privs. No AppArmor profile. The candidate checkout
-# stays owned by uid978, which is what the slot worktree and preflight require.
+# Identity boundary: UID978, primary GID968, exactly the receiver's
+# supplementary registry group 65042, no capabilities, no_new_privs.
+# No AppArmor profile. The candidate checkout stays owned by uid978.
+REGISTRY_GROUP = 65042
+REGISTRY_GROUP_NOTE = (
+    'Supplementary group 65042 is the registry group the installed receiver '
+    'sets with setgroups before setgid/setuid. It lets the executor use '
+    'group permissions on objects with gid 65042, including the registry '
+    'lock, and on any other host object with that group. This uid cannot '
+    'drop the group: setgroups requires CAP_SETGID. The Owner waiver covers '
+    'uid978 reading other projects and trusting its own tasks. It does not '
+    'name gid 65042; keeping the group preserves the installed slot identity '
+    'and is not a new grant from the waiver.'
+)
 FILESYSTEM_BOUNDARY = 'uid978_unix_permissions_nnp'
 # Receipt fact: the Owner accepted cross-project read exposure and trusts
 # this uid's own tasks. It is not a verified confinement.
@@ -40,7 +51,8 @@ RESIDUAL_RISK = (
     'accidental modification only. chmod a-w is a guard, not a boundary, '
     'and the Git metadata directory stays writable. A process that has left '
     'the session is killed before the after snapshot only when the host '
-    'delegates an invocation cgroup.'
+    'delegates an invocation cgroup and the vendor pid was observed in it. '
+    'An empty cgroup.procs list alone is cgroup-absent.'
 )
 EXECUTOR_GID = 968
 MARKER = Path('/etc/gobadminton-slots/antigravity-qa.json')
@@ -714,6 +726,7 @@ def _prepare_invocation_cgroup():
 
 
 def _enter_invocation_cgroup(directory):
+    """Ask the kernel to move this process. Membership is proved by the parent."""
     if directory is None:
         return
     try:
@@ -723,9 +736,68 @@ def _enter_invocation_cgroup(directory):
     try:
         os.write(fd, str(os.getpid()).encode('ascii'))
     except OSError:
-        pass
+        return
     finally:
         os.close(fd)
+
+
+def _read_cgroup_procs(directory):
+    """('empty'|'pids'|'tampered'|'unreadable', pids).
+
+    A non-numeric body is not an empty cgroup and is not reported as quiet.
+    """
+    try:
+        files = list(Path(directory).rglob('cgroup.procs'))
+    except OSError:
+        return 'unreadable', []
+    if not files:
+        return 'unreadable', []
+    pids = []
+    for child in files:
+        try:
+            text = child.read_text(encoding='ascii')
+        except OSError:
+            return 'unreadable', []
+        if any(ch not in '0123456789\n\t ' for ch in text):
+            return 'tampered', []
+        pids.extend(item for item in text.split() if item)
+    return ('pids', pids) if pids else ('empty', [])
+
+
+def _pid_in_invocation_cgroup(pid, directory):
+    """True only when /proc/<pid>/cgroup and cgroup.procs both show this pid."""
+    if directory is None or not isinstance(pid, int) or pid <= 0:
+        return False
+    needle = '/' + directory.name
+    try:
+        text = Path(f'/proc/{pid}/cgroup').read_text(encoding='ascii')
+    except OSError:
+        return False
+    listed = False
+    for line in text.splitlines():
+        parts = line.split(':', 2)
+        if len(parts) == 3 and parts[0] == '0' and parts[1] == '' and parts[2].endswith(needle):
+            listed = True
+            break
+    if not listed:
+        return False
+    kind, pids = _read_cgroup_procs(directory)
+    return kind == 'pids' and str(pid) in pids
+
+
+def _observe_cgroup_membership(pid, directory):
+    """Prove the live vendor pid entered. A missing /proc entry is not quiet."""
+    if directory is None or not isinstance(pid, int) or pid <= 0:
+        return False
+    if not Path(f'/proc/{pid}/cgroup').exists():
+        return False
+    for _ in range(5):
+        if _pid_in_invocation_cgroup(pid, directory):
+            return True
+        if not Path(f'/proc/{pid}').exists():
+            return False
+        time.sleep(0.01)
+    return False
 
 
 def _quiesce_cgroup(directory):
@@ -739,21 +811,16 @@ def _quiesce_cgroup(directory):
         pass
     deadline = time.monotonic() + 2
     while True:
-        procs = []
-        read_failed = False
-        try:
-            files = list(directory.rglob('cgroup.procs'))
-        except OSError:
-            files = []
-            read_failed = True
-        for child in files:
-            try:
-                procs.extend(pid for pid in child.read_text(encoding='ascii').split() if pid)
-            except OSError:
-                # A transient read is not an empty cgroup. Retry until the deadline.
-                read_failed = True
-        if not procs and not read_failed:
+        kind, procs = _read_cgroup_procs(directory)
+        if kind == 'tampered':
+            return 'cgroup-busy'
+        if kind == 'empty':
             return 'cgroup-quiet'
+        if kind == 'unreadable':
+            if time.monotonic() >= deadline:
+                return 'cgroup-busy'
+            time.sleep(0.05)
+            continue
         for pid in procs:
             try:
                 os.kill(int(pid), signal.SIGKILL)
@@ -762,6 +829,23 @@ def _quiesce_cgroup(directory):
         if time.monotonic() >= deadline:
             return 'cgroup-busy'
         time.sleep(0.05)
+
+
+def _executor_reap_state(directory, membership_proven):
+    """cgroup-quiet only after the vendor pid was observed and procs is empty.
+
+    An empty cgroup.procs list without that observation is cgroup-absent.
+    A non-numeric procs body or a pid that will not die is cgroup-busy.
+    """
+    if directory is not None:
+        quiesced = _quiesce_cgroup(directory)
+    else:
+        quiesced = 'cgroup-absent'
+    if quiesced == 'cgroup-busy':
+        return 'cgroup-busy'
+    if not membership_proven:
+        return 'cgroup-absent'
+    return quiesced
 
 
 def _remove_cgroup(directory):
@@ -789,9 +873,12 @@ def _remove_cgroup(directory):
 def _verify_executor_boundary():
     """Verify, before model charging, the unprivileged execution identity.
 
-    This proves the exact non-root user, no supplementary groups, no
-    capabilities and no_new_privs after the same child setup used for the
-    vendor CLI. It does not claim the checkout is immutable.
+    The installed receiver has already dropped root with setgroups([65042]).
+    This process cannot clear that group. The non-root path therefore
+    accepts exactly that one supplementary group and the probe must print
+    it. A root caller still spawns the probe with extra_groups=[], which
+    is not the installed contour. Capabilities and no_new_privs are
+    required either way. This does not claim the checkout is immutable.
     """
     import pwd
     uid = os.geteuid()
@@ -804,10 +891,12 @@ def _verify_executor_boundary():
         if account.pw_name != 'gb-slot2' or account.pw_gid != EXECUTOR_GID:
             raise PermissionError('unexpected slot2 identity')
         identity = dict(user=EXECUTOR_UID, group=EXECUTOR_GID, extra_groups=[])
+        expected = b'978:968:[]:1:0'
     elif (uid == EXECUTOR_UID and os.getegid() == EXECUTOR_GID
           and os.getuid() == EXECUTOR_UID and os.getgid() == EXECUTOR_GID
-          and os.getgroups() == []):
+          and os.getgroups() == [REGISTRY_GROUP]):
         identity = {}
+        expected = b'978:968:[65042]:1:0'
     else:
         raise PermissionError('wrong executor preflight identity')
 
@@ -836,8 +925,7 @@ def _verify_executor_boundary():
     except (OSError, subprocess.SubprocessError):
         raise PermissionError('executor preflight execution failed') from None
 
-    if (observed.returncode != 0 or
-            observed.stdout.strip() != b'978:968:[]:1:0'):
+    if observed.returncode != 0 or observed.stdout.strip() != expected:
         raise PermissionError('executor identity or no_new_privs could not be verified')
 
 
@@ -1475,6 +1563,7 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=
     invocation_cgroup=None
     guard_saved=None
     reap_state=None
+    membership_proven=False
     try:
         wire,transport=input_payload(stdin)
         ev.record(**transport,input_delivery='prepared',requested_permission_mode=PERMISSION_MODE,requested_model=model)
@@ -1551,7 +1640,8 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=
                     try:process=popen(argv,cwd=root/'ws',env=env,stdin=subprocess.PIPE,
                                       stdout=stdout,stderr=stderr,preexec_fn=child)
                     except (OSError,subprocess.SubprocessError):raise ReviewError('AGY_LAUNCH_FAILED','launch',ev.id) from None
-                    ev.record(phase='running')
+                    membership_proven=_observe_cgroup_membership(getattr(process,'pid',None), invocation_cgroup)
+                    ev.record(phase='running',executor_cgroup_membership='proven' if membership_proven else 'absent')
                     try:process.communicate(input=wire,timeout=timeout)
                     except subprocess.TimeoutExpired:
                         reap(process);ev.meta.update(timeout=True,exit_code=process.returncode,input_delivery='unknown')
@@ -1563,7 +1653,7 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=
                         reap(process);ev.meta.update(exit_code=process.returncode,input_delivery='unknown');raise
                     reap(process)
                     ev.meta['exit_code']=process.returncode
-                    reap_state=_quiesce_cgroup(invocation_cgroup)
+                    reap_state=_executor_reap_state(invocation_cgroup, membership_proven)
                     ev.record(executor_reap=reap_state)
                     if reap_state=='cgroup-busy':
                         ev.record(candidate_state='writer-alive',
@@ -1621,7 +1711,9 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=
         return raw,dict(executor_uid=EXECUTOR_UID,slot=slot,qualification_phase=marker['phase'],
             requested_native_sandbox=False,filesystem_boundary=FILESYSTEM_BOUNDARY,
             candidate_integrity=CANDIDATE_INTEGRITY,write_guard=WRITE_GUARD,
-            executor_reap=reap_state,residual_risk=RESIDUAL_RISK,
+            executor_reap=reap_state,
+            executor_supplementary_groups=[REGISTRY_GROUP],
+            registry_group_note=REGISTRY_GROUP_NOTE,residual_risk=RESIDUAL_RISK,
             credential_source='provisioned_native_auth_file',
             owner_waiver=OWNER_WAIVER,filesystem_roots_enforced=False,
             evidence_id=ev.id,requested_permission_mode=PERMISSION_MODE,input_delivery='written',**transport)

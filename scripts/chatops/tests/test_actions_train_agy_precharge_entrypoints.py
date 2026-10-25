@@ -158,17 +158,26 @@ class RootPrechargeIdentityContract(unittest.TestCase):
             with self.assertRaises(PermissionError):
                 N._verify_executor_boundary()
 
-    def test_non_root_executor_requires_exact_identity_and_no_groups(self):
+    def test_non_root_executor_accepts_only_the_receiver_registry_group(self):
+        """Installed receiver leaves supplementary group 65042. Empty is not that contour."""
+        for groups in ([], [968], [65042, 968], [7]):
+            with patch.object(N.os, "geteuid", return_value=978), patch.object(N.os, "getuid", return_value=978), \
+                 patch.object(N.os, "getegid", return_value=968), patch.object(N.os, "getgid", return_value=968), \
+                 patch.object(N.os, "getgroups", return_value=groups), \
+                 patch.object(N.subprocess, "run", side_effect=AssertionError("must not launch")):
+                with self.assertRaises(PermissionError, msg=groups):
+                    N._verify_executor_boundary()
         with patch.object(N.os, "geteuid", return_value=978), patch.object(N.os, "getuid", return_value=978), \
              patch.object(N.os, "getegid", return_value=968), patch.object(N.os, "getgid", return_value=968), \
-             patch.object(N.os, "getgroups", return_value=[968]), \
-             patch.object(N.subprocess, "run", side_effect=AssertionError("must not launch")):
-            with self.assertRaises(PermissionError):
-                N._verify_executor_boundary()
-        with patch.object(N.os, "geteuid", return_value=978), patch.object(N.os, "getuid", return_value=978), \
-             patch.object(N.os, "getegid", return_value=968), patch.object(N.os, "getgid", return_value=968), \
-             patch.object(N.os, "getgroups", return_value=[]), \
+             patch.object(N.os, "getgroups", return_value=[65042]), \
              patch.object(N.subprocess, "run", return_value=SimpleNamespace(
-                 returncode=0, stdout=b"978:968:[]:1:0\n")) as run:
+                 returncode=0, stdout=b"978:968:[65042]:1:0\n")) as run:
             N._verify_executor_boundary()
         self.assertNotIn("user", run.call_args.kwargs)
+        with patch.object(N.os, "geteuid", return_value=978), patch.object(N.os, "getuid", return_value=978), \
+             patch.object(N.os, "getegid", return_value=968), patch.object(N.os, "getgid", return_value=968), \
+             patch.object(N.os, "getgroups", return_value=[65042]), \
+             patch.object(N.subprocess, "run", return_value=SimpleNamespace(
+                 returncode=0, stdout=b"978:968:[]:1:0\n")):
+            with self.assertRaises(PermissionError):
+                N._verify_executor_boundary()
