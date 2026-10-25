@@ -127,38 +127,20 @@ On interruption, reconcile and repeat the same `rollback-runtime` command. Verif
 
 ## Source validation record
 
-Run all mandatory checks on the exact diff. No commit, installation, runtime promotion, network request, provider call or protected-directory read is performed by this author task. Independent QA and live OPS verification remain separate steps. Tests virtualize root ownership because the author cannot chown files to root; file bytes, SHA-256, no-follow traversal, modes, hardlinks, intent/marker writes and crash replay use synthetic files in an allowed workspace. Foundation checking is bounded static validation.
+Test-environment repair for [PR #307](https://github.com/anpavel84-afk/gobadminton-clean/pull/307), 2026-10-25: source/base HEAD `4bab74350735d3bd9cf62e84a9c17e4ffb2a6b7b` (PR branch `codex/cursor-ready-runtime-accept-20261025`; supplied checkout is detached). Candidate is the uncommitted diff against that exact head. Role AUTHOR, sole writer of `scripts/chatops/tests` and `docs/ops` under the direct bounded Owner assignment; no runtime admission or PMA takeover. Requested/effective route is this local author session, without provider CLI calls. Accepted EOM 1.4 commit/hash are recorded above; SMART_ROUTING 1.0 commit `bc8bad0c38a861f8e72296d0a323e2941b9322e0`, SHA-256 `1a8c1ed6f6ea11d08ecb1703df1a3bc1540520f7f4d02b7d48bb1f66a8786c63`. Both full local texts were read and their hashes verified. The production helper, native adapters, manifests and qualification proof are unchanged by this repair. No commit, installation, runtime promotion, network request, provider call or protected-directory read was performed.
 
-Author results on this uncommitted candidate:
+`test_actions_train_cursor_runtime_accept.py` is hermetic with respect to runner uid and TMPDIR, including default `/tmp`, other writable temporary locations and root/non-root execution. `TrustedRuntimeTree` patches only the `os.fstat` used by the upgrade module. It identifies fixture inodes by `(st_dev, st_ino)`, enumerated lazily on each call so later files and atomic replacements are included. Fixture ownership is modeled as root unless a test marks an inode uid 999; real modes, file types, link counts and all other stat attributes remain intact through a delegating result wrapper. Only real ancestors outside the fixture model a trusted system chain: uid 0 with group/world write bits cleared. This isolates host `/tmp`/home/TMPDIR metadata without sanitizing fixture permissions.
 
-- New runtime tests: **43 tests, PASS** using `python3 -m unittest discover -s scripts/chatops/tests -p 'test_actions_train_cursor_runtime_accept.py'`.
-- Existing successor regression file: **17 tests, PASS**; `accept_canary` and `acceptance_operations` also compared byte-for-byte against the base and remained unchanged.
-- Required direct `python3 -m unittest discover -s scripts/chatops/tests -p 'test_actions_train_cursor*.py'`: the initial invocation ran **71 tests, 5 errors**, all `PermissionError: [Errno 13]` from existing `SourceImport` fixtures requesting `tempfile.mkdtemp(..., dir='/tmp')` in the unchanged native adapter. The active filesystem profile forbids `/tmp`. This direct invocation is **not PASS**. It was not repeated with the same known-denied requests.
-- Final complete Cursor discovery with those five synthetic temporary-directory requests redirected into the permitted evidence workspace: **76 tests, PASS**, including the subsequent added boundary tests. No adapter code, CLI invocation, network, permission or protected-directory access was introduced by that fixture adjustment.
-- `python3 scripts/check_foundation.py`: **PASS, 287 tracked Markdown files and 168 draft API operations**. The new untracked runbook was separately checked with the same `markdown_errors` function: **1 file, PASS**; the foundation script uses `git ls-files`, so its reported count excludes this new file until integration.
-- `git diff --check`: **PASS**. Exact changed/untracked-file scope: **4 allowed files**. Both native module hashes and the qualification proof hash match the values above. The install manifest is unchanged; an OPS helper/proof is not an install payload entry.
+Runtime module, marker, proof and evidence walkers all use `runtime_bytes()` and its real no-follow `os.open` traversal plus `os.fstat`; none is bypassed or replaced. No `stat/lstat` patch is needed for these walkers. The existing receiver read and execute-dispatch boundary mocks remain scoped to their original tests. Real bytes, hashes, symlinks, parent symlinks, hardlinks, chmod, intent/marker writes and crash replay remain exercised. Explicit refusal reasons distinguish unsafe ownership/modes, unsafe paths, invalid file link counts, missing files and hash drift. New chmod cases reject evidence files 0664/0666 and fixture parents 0775/0777; the same trees pass after restoring 0644/0755. Proof and installed-module modes are also checked, with positive controls after restoration.
 
-Reproduce the permitted synthetic discovery (set both environment variables on the Python command; the direct command above still has the documented `/tmp` limitation):
+Author self-check results for this diff (uid 1002, no root privileges):
 
-```bash
-TMPDIR=/home/agentagency-dev/author-evidence-ready-20261025 \
-PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
-import os, tempfile, unittest
-from unittest.mock import patch
-original = tempfile.mkdtemp
-redirected = []
-def synthetic_temp(*args, **kwargs):
-    if kwargs.get('dir') == '/tmp':
-        kwargs['dir'] = os.environ['TMPDIR']
-        redirected.append(kwargs.get('prefix'))
-    return original(*args, **kwargs)
-with patch.object(tempfile, 'mkdtemp', side_effect=synthetic_temp):
-    suite = unittest.defaultTestLoader.discover(
-        'scripts/chatops/tests', pattern='test_actions_train_cursor*.py')
-    result = unittest.TextTestRunner(verbosity=1).run(suite)
-print('Synthetic /tmp fixture requests redirected:', len(redirected))
-raise SystemExit(not result.wasSuccessful())
-PY
-```
+- Required runtime discovery: **50 tests, PASS** (43 retained + 7 new) using `python3 -m unittest discover -s scripts/chatops/tests -p 'test_actions_train_cursor_runtime_accept.py'`, with TMPDIR in an allowed private directory.
+- CI reproduction: the original unmodified HEAD file in a real **1777** TMPDIR stand-in ran **43 tests, 23 FAIL + 18 ERROR**, matching [CI run 40203170876](https://github.com/anpavel84-afk/gobadminton-clean/actions/runs/40203170876). The fixed file in that same environment ran **50 tests, PASS**. The fixture and temporary-directory stand-ins were owned by uid 1002. The actual `/tmp` and a real root run were **NOT_TESTED** here: `/tmp` is denied by this sandbox and this task forbids privilege escalation.
+- Successor discovery: **17 tests, PASS**. Other permitted Cursor regressions: **33 tests, PASS** across `test_actions_train_cursor.py`, `test_actions_train_cursor_receipt.py` and `test_actions_train_cursor_upgrade.py`.
+- Separate pre-existing sandbox limitation: two unchanged `SourceImport` methods request five `tempfile.mkdtemp(dir='/tmp')` fixtures through the native adapter. Earlier direct discovery recorded five `/tmp` EACCES errors. Those two methods were excluded from the 33-test regression run; their fixtures were neither modified nor redirected, and known-denied requests were not repeated. This limitation does not apply to the runtime-acceptance test file or impose a TMPDIR requirement on it.
+- `python3 scripts/check_foundation.py`: **PASS, 289 Markdown files and 168 draft API operations**. `git diff --check`: **PASS**. Changed-file scope: only this runbook and `scripts/chatops/tests/test_actions_train_cursor_runtime_accept.py`; HEAD remains unchanged, with no commit.
 
-Next authorized step: independent QA of the exact source diff and existing integrator review/materialization, then the OPS dry-run/read-back above. The protected evidence bytes, actual native-receipt equality, root metadata and READY transition remain **NOT_TESTED on VPS** in this author session. Missing historical input `READY_REMAINDER.md` and the chosen runtime QA materialization destinations are explicit integration limitations, not invented runtime facts.
+For permitted local reproduction, set TMPDIR to an existing writable directory. To simulate CI without accessing `/tmp`, create a child directory there with mode 1777, select it as TMPDIR, and run the same runtime discovery in a fresh Python process. `TemporaryDirectory()` still uses its default location selection; the test file needs no special temporary path. The local verification stand-ins are disposable synthetic test artifacts.
+
+Independent QA and live OPS verification remain separate steps. Next authorized step: independent QA of the exact source diff and existing integrator review/materialization, then the OPS dry-run/read-back above. The protected evidence bytes, actual native-receipt equality, root metadata and READY transition remain **NOT_TESTED on VPS** in this author session. Missing historical input `READY_REMAINDER.md` and the chosen runtime QA materialization destinations remain explicit integration limitations.

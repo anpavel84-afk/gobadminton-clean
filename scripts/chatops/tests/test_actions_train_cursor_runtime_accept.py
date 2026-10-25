@@ -5,6 +5,7 @@ import io
 import json
 import os
 from pathlib import Path
+import stat
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -13,6 +14,45 @@ from unittest.mock import Mock, patch
 from test_actions_train import ROOT, core, receiver as R, S
 from test_actions_train_cursor_successor import U, TASK, EXPECTED
 import native_cursor as N
+
+
+class RuntimeStat:
+    """Override trust metadata while retaining every other real stat attribute."""
+    def __init__(self, actual, uid, mode):
+        self.actual = actual
+        self.st_uid = uid
+        self.st_mode = mode
+
+    def __getattr__(self, name):
+        return getattr(self.actual, name)
+
+
+class TrustedRuntimeTree:
+    """Root-owned fixture model for the real no-follow descriptor walker."""
+    def __init__(self, base):
+        self.base = base
+        self.real_fstat = os.fstat
+        self.foreign_owners = {}
+        self.ancestors = {self.inode(p.lstat()) for p in base.parents}
+
+    @staticmethod
+    def inode(info):
+        return info.st_dev, info.st_ino
+
+    def fstat(self, fd):
+        actual = self.real_fstat(fd)
+        identity = self.inode(actual)
+        # Recompute lazily: atomic replacements and files created after setUp
+        # must belong to the fixture too. lstat/rglob do not follow symlinks.
+        fixture = {self.inode(p.lstat()) for p in (self.base, *self.base.rglob('*'))}
+        if identity in fixture:
+            return RuntimeStat(actual, self.foreign_owners.get(identity, 0), actual.st_mode)
+        if identity in self.ancestors:
+            # The host's /tmp, home and TMPDIR chain stand in for a trusted
+            # system chain, independently of runner uid or real ancestor modes.
+            # Only external ancestors lose write bits; fixture modes stay real.
+            return RuntimeStat(actual, 0, actual.st_mode & ~0o022)
+        return actual
 
 
 class RuntimeAcceptance(unittest.TestCase):
@@ -68,14 +108,7 @@ class RuntimeAcceptance(unittest.TestCase):
         self.real_atomic = R.atomic
         self.writes = []
         self.fail_at = None; self.fail_before = False
-        self.bad_owner_inode = None
-        real_fstat = os.fstat
-
-        def metadata(fd):
-            actual = real_fstat(fd)
-            # Only ownership is virtualized: ordinary tests cannot chown to root.
-            return SimpleNamespace(st_uid=999 if actual.st_ino==self.bad_owner_inode else 0,
-                                   st_mode=actual.st_mode,st_nlink=actual.st_nlink)
+        self.metadata = TrustedRuntimeTree(self.base)
 
         def read(path,*args):
             self.assertIn(path,(self.marker,self.journal,self.policy))
@@ -94,7 +127,9 @@ class RuntimeAcceptance(unittest.TestCase):
                    patch.object(R,'read',side_effect=read),patch.object(R,'atomic',side_effect=write),
                    patch.object(R,'journal',side_effect=lambda slot:{'operations':copy.deepcopy(self.ops[slot])}),
                    patch.object(R,'checkpoint',side_effect=AssertionError('product checkpoint must not be needed')),
-                   patch.object(R,'publish_monitor'),patch.object(U.os,'fstat',side_effect=metadata),
+                   # runtime_bytes uses fstat for module, marker, proof and evidence
+                   # walks. R.read/trusted_tree have separate boundary mocks below.
+                   patch.object(R,'publish_monitor'),patch.object(U.os,'fstat',side_effect=self.metadata.fstat),
                    patch.object(U.time,'time',return_value=300),
                    patch('subprocess.run',side_effect=AssertionError('no commands/network/models')),
                    patch('subprocess.Popen',side_effect=AssertionError('no model process'))]
@@ -248,13 +283,16 @@ class RuntimeAcceptance(unittest.TestCase):
         self.refused_without_write('missing or unsafe')
 
     def test_evidence_wrong_owner(self):
-        self.bad_owner_inode=(self.state/self.evidence['probe'][0]).stat().st_ino
+        p=self.state/self.evidence['probe'][0]
+        self.metadata.foreign_owners[self.metadata.inode(p.lstat())]=999
         self.refused_without_write('untrusted runtime evidence metadata')
+        self.metadata.foreign_owners.clear()
+        self.assertTrue(self.call(dry_run=True)['dry_run'])
 
     def test_proof_unsafe_metadata_or_symlink_refused(self):
-        self.bad_owner_inode=self.proof_path.stat().st_ino
+        self.metadata.foreign_owners[self.metadata.inode(self.proof_path.lstat())]=999
         self.refused_without_write('untrusted runtime evidence metadata')
-        self.bad_owner_inode=None
+        self.metadata.foreign_owners.clear()
         target=self.base/'proof-copy'; target.write_bytes(self.proof_path.read_bytes())
         self.proof_path.unlink(); self.proof_path.symlink_to(target)
         self.refused_without_write('missing or unsafe')
@@ -264,6 +302,60 @@ class RuntimeAcceptance(unittest.TestCase):
         self.refused_without_write('untrusted runtime evidence metadata')
         p.chmod(0o600); os.link(p,self.base/'alias')
         self.refused_without_write('invalid runtime evidence file')
+
+    def test_trusted_modes_positive_control(self):
+        for p in (self.base, *self.base.rglob('*')):
+            p.chmod(0o755 if p.is_dir() else 0o644)
+        self.assertEqual(self.call()['phase'],'active-ready')
+
+    def test_fixture_directories_with_foreign_owner_refused(self):
+        for p in (self.base, self.state, (self.state/self.evidence['probe'][0]).parent):
+            with self.subTest(path=p.relative_to(self.base)):
+                self.metadata.foreign_owners[self.metadata.inode(p.lstat())]=999
+                self.refused_without_write('untrusted runtime evidence metadata')
+                self.metadata.foreign_owners.clear()
+                self.assertTrue(self.call(dry_run=True)['dry_run'])
+
+    def assert_writable_modes_refused(self, path, modes, safe_mode):
+        path.chmod(safe_mode)
+        self.assertTrue(self.call(dry_run=True)['dry_run'])
+        for mode in modes:
+            with self.subTest(path=path.relative_to(self.base),mode=oct(mode)):
+                path.chmod(mode)
+                try:
+                    self.refused_without_write('untrusted runtime evidence metadata')
+                finally:
+                    path.chmod(safe_mode)
+                # Same bytes/tree pass again when only the offending bits change.
+                self.assertTrue(self.call(dry_run=True)['dry_run'])
+
+    def test_group_and_world_writable_evidence_file_refused(self):
+        self.assert_writable_modes_refused(self.state/self.evidence['probe'][0],(0o664,0o666),0o644)
+
+    def test_group_and_world_writable_fixture_parents_refused(self):
+        for p in (self.base, self.state, (self.state/self.evidence['probe'][0]).parent):
+            self.assert_writable_modes_refused(p,(0o775,0o777),0o755)
+
+    def test_group_and_world_writable_proof_refused(self):
+        self.assert_writable_modes_refused(self.proof_path,(0o664,0o666),0o644)
+
+    def test_group_and_world_writable_installed_module_refused(self):
+        self.assert_writable_modes_refused(self.install/'native_guard.py',(0o664,0o666),0o644)
+
+    def test_metadata_covers_late_files_and_preserves_real_stat_attributes(self):
+        p=self.base/'late-file'; p.write_bytes(b'late'); p.chmod(0o664)
+        fd=os.open(p,os.O_RDONLY)
+        self.addCleanup(os.close,fd)
+        actual=self.metadata.real_fstat(fd); modeled=U.os.fstat(fd)
+        self.assertEqual(modeled.st_uid,0)
+        for name in dir(actual):
+            if name.startswith('st_') and name!='st_uid':
+                self.assertEqual(getattr(modeled,name),getattr(actual,name),name)
+        self.assertTrue(stat.S_ISREG(modeled.st_mode))
+        os.link(p,self.base/'late-alias')
+        self.assertEqual(U.os.fstat(fd).st_nlink,2)
+        self.metadata.foreign_owners[self.metadata.inode(actual)]=999
+        self.assertEqual(U.os.fstat(fd).st_uid,999)
 
     def test_strict_proof_refuses_extra_missing_duplicate_or_rewritten_pins(self):
         original=copy.deepcopy(self.proof)
