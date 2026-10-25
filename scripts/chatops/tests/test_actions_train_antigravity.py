@@ -205,6 +205,30 @@ class VerdictBlocks(unittest.TestCase):
             node = {'wrap': node}
         self._reject(json.dumps(node) + '\n' + self.block())
 
+    def test_encoded_fail_strings_fail_closed(self):
+        """A PASS beside an encoded FAIL string must not parse as PASS.
+
+        The encoded value may be a top-level JSON string, an array of that
+        string, a double-encoded object field, or unicode escapes that hide
+        both '{' and the letters verdict until the string is decoded.
+        """
+        passed = json.dumps({'verdict': 'PASS', 'findings': [], 'reviewed_sha': SHA})
+        fail = json.dumps({'verdict': 'FAIL', 'findings': ['hidden'], 'reviewed_sha': SHA})
+        unicode_fail = '"' + ''.join('\\u%04x' % ord(char) for char in fail) + '"'
+        cases = (
+            ('top-level json string', passed + '\n' + json.dumps(fail)),
+            ('array of encoded string', passed + '\n' + json.dumps([fail])),
+            ('double-encoded note', passed + '\n' + json.dumps({'note': json.dumps(fail)})),
+            ('unicode-escaped string', passed + '\n' + unicode_fail),
+            ('unicode-escaped string in array', passed + '\n' + '[' + unicode_fail + ']'),
+        )
+        for name, text in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(N.ReviewError) as direct:
+                    N.parse_verdict_response(text, SHA)
+                self.assertEqual(direct.exception.code, 'AGY_PARSE_FAILED')
+                self._reject(text)
+
     def test_only_none_structured_output_parses_text(self):
         events = rows()
         events[-1]['result']['structured_output'] = None

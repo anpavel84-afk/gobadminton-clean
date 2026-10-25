@@ -2012,47 +2012,77 @@ def _verdict_decoder():
                             parse_constant=lambda _value: need(False, 'non-JSON constant'))
 
 
-def verdict_documents(text):
-    """Every JSON object that has a verdict key, at any depth.
+# Encoded JSON strings are decoded again up to this many times. One more
+# encoded layer fails closed instead of being ignored beside a PASS.
+_VERDICT_DECODE_DEPTH = 64
 
-    Objects nested in other objects, arrays, or JSON strings count. A `{` that
-    is not a complete value is skipped one character ahead; a well-formed value
-    is walked, not merely accepted when its own keys are exactly the schema.
-    Duplicate keys and non-JSON constants fail closed. Identical copies of one
-    verdict stay in the list so the caller can require byte identity.
+
+def _absorb_verdict_value(value, found, depth):
+    """Walk a decoded JSON value. JSON strings are decoded again."""
+    if type(value) is dict:
+        if 'verdict' in value:
+            found.append(value)
+        for item in value.values():
+            _absorb_verdict_value(item, found, depth)
+    elif type(value) is list:
+        for item in value:
+            _absorb_verdict_value(item, found, depth)
+    elif type(value) is str and ('{' in value or '[' in value or '"' in value or 'verdict' in value):
+        if depth >= _VERDICT_DECODE_DEPTH:
+            raise ReviewError('AGY_PARSE_FAILED', 'parse')
+        _collect_verdict_values(value, found, depth + 1)
+
+
+def _collect_verdict_values(text, found, depth):
+    """Every JSON object, array, or string at any position in text.
+
+    A `{` `[` or `"` that is not a complete value is skipped one character
+    ahead. The rest of that gap is leftover. Leftover text that still
+    contains the substring verdict fails closed. Duplicate keys and
+    non-JSON constants fail closed via the shared decoder.
     """
+    if depth > _VERDICT_DECODE_DEPTH:
+        raise ReviewError('AGY_PARSE_FAILED', 'parse')
     decoder = _verdict_decoder()
-    found = []
-    pending = [text]
-    seen = set()
-    while pending:
-        chunk = pending.pop()
-        if chunk in seen:
+    spans = []
+    index = 0
+    length = len(text)
+    while index < length:
+        start = index
+        while start < length and text[start] not in '{["':
+            start += 1
+        if start >= length:
+            break
+        try:
+            value, end = decoder.raw_decode(text, start)
+        except json.JSONDecodeError:
+            index = start + 1
             continue
-        seen.add(chunk)
-        index = 0
-        length = len(chunk)
-        while index < length:
-            start = chunk.find('{', index)
-            if start < 0:
-                break
-            try:
-                value, end = decoder.raw_decode(chunk, start)
-            except json.JSONDecodeError:
-                index = start + 1
-                continue
-            stack = [value]
-            while stack:
-                item = stack.pop()
-                if type(item) is dict:
-                    if 'verdict' in item:
-                        found.append(item)
-                    stack.extend(item.values())
-                elif type(item) is list:
-                    stack.extend(item)
-                elif type(item) is str and '{' in item and item not in seen:
-                    pending.append(item)
-            index = end
+        if end <= start:
+            index = start + 1
+            continue
+        spans.append((start, end))
+        _absorb_verdict_value(value, found, depth)
+        index = end
+    cursor = 0
+    leftover = []
+    for start, end in spans:
+        leftover.append(text[cursor:start])
+        cursor = end
+    leftover.append(text[cursor:])
+    if 'verdict' in ''.join(leftover):
+        raise ReviewError('AGY_PARSE_FAILED', 'parse')
+
+
+def verdict_documents(text):
+    """Every object with a verdict key, including ones encoded inside strings.
+
+    Objects, arrays, and strings count at any top-level position. JSON strings
+    are decoded recursively up to _VERDICT_DECODE_DEPTH. Identical copies of
+    one verdict stay in the list so the caller can require byte identity.
+    """
+    found = []
+    _collect_verdict_values(text, found, 0)
     return found
 
 
@@ -2064,7 +2094,12 @@ def parse_verdict_response(text, head):
     findings array, and a verdict nested in an object, array, or JSON string.
     """
     need(type(text) is str and text.strip(), 'empty QA verdict response')
-    blocks = verdict_documents(text)
+    try:
+        blocks = verdict_documents(text)
+    except ReviewError as error:
+        if error.code != 'AGY_PARSE_FAILED':
+            raise ReviewError('AGY_PARSE_FAILED', 'parse') from None
+        raise
     need(blocks, 'no QA verdict block')
     rendered = []
     for block in blocks:
