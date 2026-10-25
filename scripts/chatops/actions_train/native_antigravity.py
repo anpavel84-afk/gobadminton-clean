@@ -844,7 +844,10 @@ def _verify_executor_boundary():
 # Git metadata that `status` does not treat as a dirty checkout. Hashes cover
 # the checkout gitdir and the common dir (linked worktrees keep config, hooks,
 # info and alternates in the common dir; config.worktree stays per worktree).
-_GIT_DIR_META = ('HEAD', 'ORIG_HEAD', 'index', 'config', 'config.worktree',
+# The index file itself is not fingerprinted. Its stat cache changes when
+# git refreshes ctime after a chmod or a same-byte rewrite, which is not a
+# candidate edit. Logical index changes are write-tree, diff-index and ls-files.
+_GIT_DIR_META = ('HEAD', 'ORIG_HEAD', 'config', 'config.worktree',
                  'commondir', 'gitdir')
 _COMMON_META = ('config', 'config.worktree', 'hooks', 'info',
                 'objects/info/alternates', 'objects/info/http-alternates',
@@ -1226,6 +1229,39 @@ def _nul_rows(raw):
     return [row for row in raw.split(b'\0') if row]
 
 
+def _confirmed_worktree_diff(raw, files):
+    """True when `diff-files --raw -z` is a real content or git-mode change.
+
+    GIT_OPTIONAL_LOCKS=0 makes a stat-dirty file (ctime after chmod, or a
+    rewrite of the same bytes) show up as `M` with a zero new oid. The bytes
+    still match the index, and `status` stays empty. That is not a candidate
+    change. A different blob, a 100644/100755 change, or a deletion is.
+    """
+    rows = raw.split(b'\0')
+    i = 0
+    while i < len(rows):
+        header = rows[i]
+        if header == b'':
+            i += 1
+            continue
+        if i + 1 >= len(rows) or not header.startswith(b':'):
+            return True
+        path = os.fsdecode(rows[i + 1])
+        i += 2
+        parts = header[1:].split()
+        if len(parts) < 5:
+            return True
+        oldmode, newmode, oldoid, _newoid, status = (part.decode('ascii', 'replace') for part in parts[:5])
+        if status[:1] in ('R', 'C'):
+            return True
+        if status[:1] == 'D' or oldmode != newmode:
+            return True
+        got = files.get(path)
+        if got is None or got[2] != oldoid:
+            return True
+    return False
+
+
 def _candidate_state_once(work):
     """One git-native snapshot. File hash and mode share one descriptor.
 
@@ -1245,7 +1281,7 @@ def _candidate_state_once(work):
     status = _read_only_git(
         work, 'status', '--porcelain=v1', '--ignored', '--untracked-files=all', '-z')
     cached = _read_only_git(work, 'diff-index', '--cached', '-z', '--name-status', 'HEAD')
-    unstaged = _read_only_git(work, 'diff-files', '-z', '--name-status')
+    unstaged = _read_only_git(work, 'diff-files', '-z', '--raw')
     raw_tree = _read_only_git(work, 'ls-tree', '-r', '-z', 'HEAD')
     tree = {}
     for row in _nul_rows(raw_tree):
@@ -1274,7 +1310,7 @@ def _candidate_state_once(work):
         reasons.append('status')
     if cached.strip(b'\0'):
         reasons.append('index-diff')
-    if unstaged.strip(b'\0'):
+    if _confirmed_worktree_diff(unstaged, files):
         reasons.append('worktree-diff')
     if index_tree != head_tree:
         reasons.append('index-tree')

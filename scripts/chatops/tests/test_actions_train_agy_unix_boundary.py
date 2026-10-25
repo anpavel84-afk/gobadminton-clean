@@ -119,6 +119,12 @@ class CandidateIntegrity(unittest.TestCase):
             self.assertNotEqual(N._candidate_state(work),before)
             (work/'a.txt').write_text('x\n')
             self.assertEqual(N._candidate_state(work),before)
+            # Same bytes with a new ctime. diff-files may print a stat-only M.
+            for _ in range(8):
+                (work/'a.txt').write_text('changed')
+                self.assertNotEqual(N._candidate_state(work)[1],'')
+                (work/'a.txt').write_text('x\n')
+                self.assertEqual(N._candidate_state(work),before)
             self.git(work,'commit','--allow-empty','-qm','moved')
             self.assertNotEqual(N._candidate_state(work),before)
 
