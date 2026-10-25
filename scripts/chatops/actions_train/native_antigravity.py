@@ -30,6 +30,18 @@ OWNER_WAIVER = (
     'files, secrets and PROD data on this server. No writable or readonly '
     'root confinement is enforced.'
 )
+# gb-slot2 is UID978. The candidate must be owned by someone else (root on
+# the VPS). UID978 must not be able to chmod the tree back to writable.
+CANDIDATE_ACCESS = 'uid978_read_only_foreign_owned_tree'
+CANDIDATE_BOUNDARY = (
+    'Prevention by ordinary Unix permissions: the candidate checkout and its '
+    '.git are not owned by uid978. Directories are 0555 or 0755 and files are '
+    '0444 or 0644, with no write bit for uid978 or gid968. A non-sticky '
+    'writable parent is refused. A sticky parent does not let uid978 rename a '
+    'checkout it does not own. Git runs with GIT_OPTIONAL_LOCKS=0. The '
+    'content snapshot is defense in depth, not a proof against a same-uid '
+    'writer. The live EACCES probe runs only when this process euid is 978.'
+)
 EXECUTOR_GID = 968
 MARKER = Path('/etc/gobadminton-slots/antigravity-qa.json')
 EXECUTOR_UID = 978
@@ -270,7 +282,8 @@ def git(work, *args, limit=MAX_INPUT + 1, _addressed_installer=False):
              and re.fullmatch(r'[a-f0-9]{40}:scripts/chatops/tests/fixtures/agy-[a-z0-9-]+\.json',args[1]),
              'unsupported addressed Git read')
     env = {'PATH': '/usr/bin:/bin', 'HOME': '/nonexistent', 'LANG': 'C.UTF-8',
-           'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_TERMINAL_PROMPT': '0'}
+           'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_TERMINAL_PROMPT': '0',
+           'GIT_OPTIONAL_LOCKS': '0'}
     try:
         done = subprocess.run(['git', '--no-pager', '--literal-pathspecs', '-c', 'core.hooksPath=/dev/null',
                                '-c', 'core.fsmonitor=false', *args], cwd=work, env=env,
@@ -678,8 +691,37 @@ def _blob_oid(data, oid_len):
     return digest.hexdigest()
 
 
-def _fingerprint(path):
-    """Content identity of one metadata path. Symlink targets are not a hideout."""
+def _hash_file_fd(path):
+    """SHA-256 and permission bits of one regular file, from the same descriptor.
+
+    The digest and mode are both taken before the descriptor is closed, so a
+    chmod or rewrite cannot land between the hash and the metadata.
+    """
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        info = os.fstat(fd)
+        mode = stat.S_IMODE(info.st_mode)
+        if not stat.S_ISREG(info.st_mode):
+            return b'not-file', mode
+        digest = hashlib.sha256()
+        while True:
+            block = os.read(fd, 1 << 20)
+            if not block:
+                break
+            digest.update(block)
+        return digest.digest(), mode
+    finally:
+        os.close(fd)
+
+
+def _fingerprint(path, seen=None, depth=0):
+    """Content identity of one metadata path.
+
+    A symlink to a directory includes the target listing, so a new hook file
+    behind `.git/hooks` is visible. Bytes are hashed from the open descriptor.
+    """
+    if seen is None:
+        seen = set()
     try:
         info = path.lstat()
     except FileNotFoundError:
@@ -687,41 +729,108 @@ def _fingerprint(path):
     if stat.S_ISLNK(info.st_mode):
         target = os.fsencode(os.readlink(path))
         try:
-            body = path.read_bytes() if path.is_file() else b''
-        except OSError:
-            body = b'unreadable'
-        return b'link:' + target + b'\0' + hashlib.sha256(body).digest()
+            followed = path.resolve()
+        except (OSError, RuntimeError):
+            return b'link-broken:' + target
+        key = str(followed)
+        if key in seen or depth > 6:
+            return b'link-stop:' + target
+        try:
+            followed_info = followed.lstat()
+        except FileNotFoundError:
+            return b'link-broken:' + target
+        if stat.S_ISDIR(followed_info.st_mode):
+            # The directory walk records `key`. Marking it seen here made the
+            # walk return dir-stop and ignore files added in the target.
+            return b'linkdir:' + target + _fingerprint(followed, seen, depth + 1)
+        if stat.S_ISREG(followed_info.st_mode):
+            try:
+                body, mode = _hash_file_fd(followed)
+            except OSError:
+                body, mode = b'unreadable', 0
+            return b'link:' + target + body + b':' + str(mode).encode()
+        return b'link-other:' + target
     if stat.S_ISREG(info.st_mode):
         try:
-            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
-            with os.fdopen(fd, 'rb') as handle:
-                body = handle.read()
+            body, mode = _hash_file_fd(path)
         except OSError:
-            body = b'unreadable'
-        return b'file:' + hashlib.sha256(body).digest()
+            body, mode = b'unreadable', 0
+        return b'file:' + body + b':' + str(mode).encode()
     if stat.S_ISDIR(info.st_mode):
         try:
-            children = sorted(path.iterdir(), key=lambda child: child.name)
+            key = str(path.resolve())
+        except (OSError, RuntimeError):
+            return b'dir-unresolved'
+        if key in seen or depth > 6:
+            return b'dir-stop'
+        seen.add(key)
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
         except OSError:
             return b'dir-unreadable'
-        parts = [os.fsencode(child.name) + b'\0' + _fingerprint(child) for child in children]
+        try:
+            names = sorted(os.listdir(fd))
+            mode = stat.S_IMODE(os.fstat(fd).st_mode)
+        finally:
+            os.close(fd)
+        parts = [str(mode).encode()]
+        for name in names:
+            parts.append(os.fsencode(name) + b'\0' + _fingerprint(path / name, seen, depth + 1))
         return b'dir:' + hashlib.sha256(b''.join(parts)).digest()
     return b'other:' + str(info.st_mode).encode()
 
 
+def _config_include_paths(path, seen=None):
+    """Files pulled in by include.path / includeIf.path. Relative to the including file."""
+    if seen is None:
+        seen = set()
+    try:
+        key = str(path.resolve())
+    except OSError:
+        key = str(path)
+    if key in seen or not path.is_file():
+        return []
+    seen.add(key)
+    try:
+        text = path.read_text(encoding='utf-8', errors='replace')
+    except OSError:
+        return []
+    found = []
+    section = ''
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith('[') and ']' in stripped:
+            section = stripped[1:stripped.index(']')].split(None, 1)[0].lower()
+            continue
+        if not section.startswith('include'):
+            continue
+        key_name, sep, value = stripped.partition('=')
+        if not sep or key_name.strip().lower() != 'path':
+            continue
+        raw = value.strip().strip('"').strip("'")
+        if not raw:
+            continue
+        target = Path(raw)
+        if not target.is_absolute():
+            target = path.parent / target
+        found.append(target)
+        found.extend(_config_include_paths(target, seen))
+    return found
+
+
 def _git_metadata(work):
-    """(records, redirected). records are stable (name, fingerprint) pairs."""
+    """(records, redirected, git_dir, common_dir)."""
     entry = Path(work) / '.git'
     info = entry.lstat()
     redirected = stat.S_ISLNK(info.st_mode)
     records = [('checkout/.git', b'directory' if stat.S_ISDIR(info.st_mode) and not redirected
                 else _fingerprint(entry))]
     if redirected or not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
-        return records, True
+        return records, True, None, None
     if stat.S_ISREG(info.st_mode):
         text = entry.read_text(encoding='utf-8')
         if not text.startswith('gitdir:'):
-            return records, True
+            return records, True, None, None
         raw = text.split(':', 1)[1].strip()
         git_dir = Path(raw)
         if not git_dir.is_absolute():
@@ -743,114 +852,324 @@ def _git_metadata(work):
         records.append(('gitdir/' + rel, _fingerprint(git_dir / rel)))
     for rel in _COMMON_META:
         records.append(('commondir/' + rel, _fingerprint(common / rel)))
-    return records, redirected
+    for config in (git_dir / 'config', common / 'config', git_dir / 'config.worktree', common / 'config.worktree'):
+        for include in _config_include_paths(config):
+            records.append(('include/' + str(include), _fingerprint(include)))
+    return records, redirected, git_dir, common
 
 
 def _worktree_entries(work, oid_len):
-    """Independent blob identities, including ignored and untracked paths.
+    """Independent identities, including ignored, untracked and empty directories.
 
-    Does not ask git to hash the files, so clean/smudge filters, exclude,
-    skip-worktree, assume-unchanged and fsmonitor cannot hide a byte change.
+    File bytes and fstat mode come from the same open descriptor and are
+    hashed before that descriptor is closed. Unix mode 0600 is not 0644.
     """
-    entries = {}
+    files = {}
+    directories = {}
     root = Path(work)
-    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
-        base = Path(dirpath)
-        relative_dir = base.relative_to(root)
-        next_dirs = []
-        linked_dirs = []
-        for name in dirnames:
-            if relative_dir == Path('.') and name == '.git':
+
+    def walk(directory, relative):
+        fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            info = os.fstat(fd)
+            names = sorted(os.listdir(fd))
+            if relative:
+                directories[relative] = stat.S_IMODE(info.st_mode)
+        finally:
+            os.close(fd)
+        for name in names:
+            if relative == '' and name == '.git':
                 continue
-            path = base / name
-            if path.is_symlink():
-                linked_dirs.append(name)
-            else:
-                next_dirs.append(name)
-        dirnames[:] = next_dirs
-        for name in list(filenames) + linked_dirs:
-            if relative_dir == Path('.') and name == '.git':
-                continue
-            path = base / name
-            rel = path.relative_to(root).as_posix()
+            path = directory / name
+            child = name if not relative else relative + '/' + name
             info = path.lstat()
             if stat.S_ISLNK(info.st_mode):
                 data = os.fsencode(os.readlink(path))
-                entries[rel] = ('120000', _blob_oid(data, oid_len))
+                files[child] = ('symlink', stat.S_IMODE(info.st_mode), _blob_oid(data, oid_len))
+            elif stat.S_ISDIR(info.st_mode):
+                walk(path, child)
             elif stat.S_ISREG(info.st_mode):
+                descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
                 try:
-                    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
-                    with os.fdopen(fd, 'rb') as handle:
-                        data = handle.read()
-                except OSError:
-                    entries[rel] = ('unreadable', '')
-                    continue
-                mode = '100755' if info.st_mode & 0o111 else '100644'
-                entries[rel] = (mode, _blob_oid(data, oid_len))
+                    st = os.fstat(descriptor)
+                    chunks = []
+                    while True:
+                        block = os.read(descriptor, 1 << 20)
+                        if not block:
+                            break
+                        chunks.append(block)
+                    files[child] = ('file', stat.S_IMODE(st.st_mode), _blob_oid(b''.join(chunks), oid_len))
+                finally:
+                    os.close(descriptor)
             else:
-                entries[rel] = ('special', '')
-    return entries
+                files[child] = ('special', stat.S_IMODE(info.st_mode), '')
+
+    walk(root, '')
+    return files, directories
 
 
 def _read_only_git(work, *args):
     return git(work, '--no-replace-objects', *args, limit=8 << 20)
 
 
-def _candidate_state(work):
-    """Unspoofable checkout snapshot.
+def _stat_writable_by_executor(owner, group, mode, uid=EXECUTOR_UID, gid=EXECUTOR_GID):
+    """True when uid978 can write this inode or can chmod it (it owns the inode)."""
+    if owner == uid:
+        return True
+    if group == gid and mode & 0o020:
+        return True
+    return bool(mode & 0o002)
 
-    Returns (head, divergence, binding). divergence is '' only when every
-    worktree path, including ignored and untracked files, matches
-    `git ls-tree -r HEAD` and `git ls-files -v` shows only ordinary cached
-    entries (tag H: no skip-worktree, no assume-unchanged). binding also
-    covers `.git` config, hooks, info (exclude), alternates and worktree
-    config, so a metadata-only edit changes the snapshot. Any discrepancy
-    is AGY_CANDIDATE_CHANGED at the caller. Callers compare snapshots with
-    equality; a test seam may return a shorter tuple whose second item is ''.
+
+def _inode_writable_by_executor(path):
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return False
+    if stat.S_ISLNK(info.st_mode):
+        try:
+            followed = path.resolve()
+            info = followed.stat()
+        except (OSError, RuntimeError):
+            return True
+    return _stat_writable_by_executor(info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode))
+
+
+def _executor_can_rename(parent, child):
+    """True when uid978 can rename or replace `child` through `parent`.
+
+    Owning the parent is a hole even at mode 0555. A sticky parent is not a
+    hole when the child itself is owned by someone else: uid978 cannot unlink
+    that name. A non-sticky other-writable or group-writable parent is a hole.
     """
     try:
-        fmt = dec(_read_only_git(work, 'rev-parse', '--show-object-format')).strip()
-        oid_len = 64 if fmt == 'sha256' else 40
-        head = dec(_read_only_git(work, 'rev-parse', 'HEAD')).strip()
-        raw_tree = _read_only_git(work, 'ls-tree', '-r', '-z', 'HEAD')
-        tree = {}
-        for row in raw_tree.split(b'\0'):
-            if not row:
-                continue
-            meta, _, name = row.partition(b'\t')
-            mode, kind, oid = meta.split()
-            tree[os.fsdecode(name)] = (mode.decode('ascii'), kind.decode('ascii'), oid.decode('ascii'))
-        blobs = {path: (mode, oid) for path, (mode, kind, oid) in tree.items() if kind == 'blob'}
-        files = _worktree_entries(work, oid_len)
-        raw_flags = _read_only_git(work, 'ls-files', '-v', '-z')
-        flags = []
-        flags_ok = True
-        for row in raw_flags.split(b'\0'):
-            if not row:
-                continue
-            if len(row) < 3 or row[1:2] != b' ':
-                flags_ok = False
+        info = parent.lstat()
+        child_info = child.lstat()
+    except OSError:
+        return True
+    if stat.S_ISLNK(info.st_mode):
+        return True
+    mode = stat.S_IMODE(info.st_mode)
+    if info.st_uid == EXECUTOR_UID:
+        return True
+    writable = bool((info.st_gid == EXECUTOR_GID and mode & 0o020) or (mode & 0o002))
+    if not writable:
+        return False
+    if mode & stat.S_ISVTX and child_info.st_uid != EXECUTOR_UID:
+        return False
+    return True
+
+
+def _executor_write_holes(work):
+    """Paths uid978 can modify. Ownership by 978 is a hole even at mode 0555."""
+    root = Path(work)
+    holes = []
+    parent = root.parent
+    if parent != root and _executor_can_rename(parent, root):
+        holes.append(str(parent))
+    if _inode_writable_by_executor(root):
+        holes.append(str(root))
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        base = Path(dirpath)
+        real_dirs = []
+        for name in dirnames:
+            path = base / name
+            if _inode_writable_by_executor(path):
+                holes.append(str(path))
+            if path.is_symlink():
+                try:
+                    target = path.resolve()
+                except (OSError, RuntimeError):
+                    holes.append(str(path))
+                    continue
+                if target.is_dir():
+                    for child in target.iterdir():
+                        if _inode_writable_by_executor(child):
+                            holes.append(str(child))
+            else:
+                real_dirs.append(name)
+        dirnames[:] = real_dirs
+        for name in filenames:
+            path = base / name
+            if _inode_writable_by_executor(path):
+                holes.append(str(path))
+    try:
+        _records, _redirected, git_dir, common = _git_metadata(root)
+    except OSError:
+        return holes or [str(root)]
+    if git_dir is not None:
+        for config in (git_dir / 'config', common / 'config', git_dir / 'config.worktree', common / 'config.worktree'):
+            for include in _config_include_paths(config):
+                if _inode_writable_by_executor(include):
+                    holes.append(str(include))
+                include_parent = include.parent
+                if include_parent != include and _executor_can_rename(include_parent, include):
+                    holes.append(str(include_parent))
+    for extra in (git_dir, common):
+        if extra is None or not extra.exists():
+            continue
+        extra_parent = extra.parent
+        if extra_parent != extra and _executor_can_rename(extra_parent, extra):
+            holes.append(str(extra_parent))
+        if _inode_writable_by_executor(extra):
+            holes.append(str(extra))
+        hooks = extra / 'hooks'
+        if hooks.is_symlink():
+            try:
+                target = hooks.resolve()
+            except (OSError, RuntimeError):
+                holes.append(str(hooks))
+            else:
+                if _inode_writable_by_executor(target):
+                    holes.append(str(target))
+                target_parent = target.parent
+                if target_parent != target and _executor_can_rename(target_parent, target):
+                    holes.append(str(target_parent))
+        if extra.is_dir():
+            for dirpath, dirnames, filenames in os.walk(extra, followlinks=False):
+                base = Path(dirpath)
+                for name in list(dirnames) + list(filenames):
+                    path = base / name
+                    if _inode_writable_by_executor(path):
+                        holes.append(str(path))
+    return holes
+
+
+def _real_euid():
+    """Effective uid from the kernel, not a patched os.geteuid."""
+    with open('/proc/self/status', encoding='ascii') as status:
+        for line in status:
+            if line.startswith('Uid:'):
+                return int(line.split()[2])
+    raise OSError('Uid line missing')
+
+
+def _live_executor_write_probe(work):
+    """Attempt a create inside the tree. Only meaningful as uid978.
+
+    Returns 'eacces' when the kernel refuses, or 'skipped-not-uid978' when
+    this process is not the executor. A successful create is a failed boundary.
+    """
+    if _real_euid() != EXECUTOR_UID:
+        return 'skipped-not-uid978'
+    root = Path(work)
+    probe = root / ('.agy-write-probe-' + uuid.uuid4().hex)
+    try:
+        fd = os.open(probe, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    except PermissionError:
+        return 'eacces'
+    else:
+        os.close(fd)
+        try:
+            os.unlink(probe)
+        except OSError:
+            pass
+        raise ReviewError('AGY_PRECHECK_FAILED', 'preflight')
+
+
+def _assert_executor_cannot_write(work):
+    if _executor_write_holes(work):
+        raise ReviewError('AGY_PRECHECK_FAILED', 'preflight')
+    _live_executor_write_probe(work)
+
+
+def _expected_unix_mode(git_mode):
+    if git_mode == '100644':
+        return frozenset((0o644, 0o444))
+    if git_mode == '100755':
+        return frozenset((0o755, 0o555))
+    if git_mode == '120000':
+        return frozenset((0o777,))
+    return frozenset()
+
+
+def _candidate_state_once(work):
+    fmt = dec(_read_only_git(work, 'rev-parse', '--show-object-format')).strip()
+    oid_len = 64 if fmt == 'sha256' else 40
+    head = dec(_read_only_git(work, 'rev-parse', 'HEAD')).strip()
+    raw_tree = _read_only_git(work, 'ls-tree', '-r', '-z', 'HEAD')
+    tree = {}
+    for row in raw_tree.split(b'\0'):
+        if not row:
+            continue
+        meta, _, name = row.partition(b'\t')
+        mode, kind, oid = meta.split()
+        tree[os.fsdecode(name)] = (mode.decode('ascii'), kind.decode('ascii'), oid.decode('ascii'))
+    blobs = {path: (mode, oid) for path, (mode, kind, oid) in tree.items() if kind == 'blob'}
+    raw_flags = _read_only_git(work, 'ls-files', '-v', '-z')
+    cached = _read_only_git(work, 'diff-index', '--cached', '-z', '--name-status', 'HEAD')
+    flags = []
+    flags_ok = True
+    for row in raw_flags.split(b'\0'):
+        if not row:
+            continue
+        if len(row) < 3 or row[1:2] != b' ':
+            flags_ok = False
+            break
+        flags.append((row[:1].decode('ascii'), os.fsdecode(row[2:])))
+    flags.sort()
+    records, redirected, _git_dir, _common = _git_metadata(work)
+    # Hash the worktree last, from open descriptors, so a write during the
+    # git/metadata reads above is part of the snapshot instead of a stale hash.
+    files, directories = _worktree_entries(work, oid_len)
+    reasons = []
+    if redirected or any(kind != 'blob' for _mode, kind, _oid in tree.values()):
+        reasons.append('git-metadata')
+    expected_dirs = set()
+    for path in blobs:
+        parent = posixpath.dirname(path)
+        while parent:
+            expected_dirs.add(parent)
+            parent = posixpath.dirname(parent)
+    if set(directories) != expected_dirs or any(mode not in (0o755, 0o555) for mode in directories.values()):
+        reasons.append('directories')
+    mismatch = set(files) != set(blobs)
+    if not mismatch:
+        for path, (git_mode, oid) in blobs.items():
+            kind, unix_mode, got = files[path]
+            expect = 'symlink' if git_mode == '120000' else 'file'
+            if kind != expect or got != oid or unix_mode not in _expected_unix_mode(git_mode):
+                mismatch = True
+                if unix_mode not in _expected_unix_mode(git_mode):
+                    reasons.append('mode')
                 break
-            flags.append((row[:1].decode('ascii'), os.fsdecode(row[2:])))
-        flags.sort()
-        records, redirected = _git_metadata(work)
-        reasons = []
-        if redirected or any(kind != 'blob' for _mode, kind, _oid in tree.values()):
-            reasons.append('git-metadata')
-        if files != blobs:
-            reasons.append('worktree')
-        if (not flags_ok or any(tag != 'H' for tag, _path in flags)
-                or [path for _tag, path in flags] != sorted(blobs)):
-            reasons.append('index-flags')
-        divergence = ','.join(reasons)
-        payload = json.dumps({
-            'head': head,
-            'divergence': divergence,
-            'files': sorted(files.items()),
-            'flags': flags,
-            'meta': [(name, hashlib.sha256(digest).hexdigest()) for name, digest in records],
-        }, sort_keys=True, separators=(',', ':')).encode()
-        return (head, divergence, hashlib.sha256(payload).hexdigest())
+    if mismatch:
+        reasons.append('worktree')
+    if (not flags_ok or any(tag != 'H' for tag, _path in flags)
+            or [path for _tag, path in flags] != sorted(blobs)):
+        reasons.append('index-flags')
+    if cached.strip(b'\0'):
+        reasons.append('index-diff')
+    divergence = ','.join(reasons)
+    payload = json.dumps({
+        'head': head,
+        'divergence': divergence,
+        'files': sorted((path, kind, mode, oid) for path, (kind, mode, oid) in files.items()),
+        'directories': sorted(directories.items()),
+        'flags': flags,
+        'meta': [(name, hashlib.sha256(digest).hexdigest()) for name, digest in records],
+    }, sort_keys=True, separators=(',', ':')).encode()
+    return (head, divergence, hashlib.sha256(payload).hexdigest())
+
+
+def _candidate_state(work):
+    """Defense-in-depth snapshot. Prevention is `_assert_executor_cannot_write`.
+
+    Returns (head, divergence, binding). Two passes must agree, so a write
+    between the git reads and the final descriptor hash cannot be reported as
+    a clean tree. divergence is '' only when the worktree matches HEAD,
+    including ignored and untracked paths, empty directories and unix modes
+    0644/0444 or 0755/0555, index flags are plain `H`, and `git diff-index
+    --cached` is empty. Metadata covers config includes and the directory a
+    hooks symlink points at.
+    """
+    _assert_executor_cannot_write(work)
+    try:
+        first = _candidate_state_once(work)
+        second = _candidate_state_once(work)
+        if first != second:
+            return ('', 'torn-read', 'torn-read')
+        return first
     except (OSError, ReviewError, ValueError, UnicodeError):
         return ('', 'unverified', 'unverified')
 
@@ -970,8 +1289,8 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=
         ev.record(filesystem_boundary=FILESYSTEM_BOUNDARY,
                   executor_preflight='identity_groups_caps_nnp')
         marker=qualification(slot,task_hash,model=model)
-        # Without a MAC profile the UID-owned checkout is writable by the vendor
-        # tool; detect rather than assume read-only.
+        # Prevention: uid978 must not own or be able to write the checkout.
+        # The snapshot below is defense in depth and runs inside _candidate_state.
         candidate_before=_candidate_state(work)
         if candidate_before[1] != '':
             raise ReviewError('AGY_CANDIDATE_CHANGED','preflight',ev.id)
@@ -984,7 +1303,8 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=
             auth=native/'antigravity-oauth-token';auth.write_bytes(original_oauth);auth.chmod(0o600)
             (agents/(AGENT+'.md')).write_text(ANALYSIS_AGENT_DEF if analysis else AGENT_DEF)
             env={'PATH':'/opt/gb-slots/runtime/node/bin:/opt/gb-slots/runtime/pnpm/bin:/usr/bin:/bin',
-                 'HOME':str(root/'home'),'LANG':'C.UTF-8','TMPDIR':str(out)}
+                 'HOME':str(root/'home'),'LANG':'C.UTF-8','TMPDIR':str(out),
+                 'GIT_OPTIONAL_LOCKS':'0'}
             if analysis:
                 # Git's read-only commands must not open host /etc/gitconfig:
                 # unavailable under Landlock on some GitHub runner images.
@@ -1092,7 +1412,8 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=
         ev.record(phase='output',terminal=owned,status='invoke_success')
         return raw,dict(executor_uid=EXECUTOR_UID,slot=slot,qualification_phase=marker['phase'],
             requested_native_sandbox=False,filesystem_boundary=FILESYSTEM_BOUNDARY,
-            candidate_access='uid_owned_checkout_state_verified_unchanged',credential_source='provisioned_native_auth_file',
+            candidate_access=CANDIDATE_ACCESS,candidate_boundary=CANDIDATE_BOUNDARY,
+            credential_source='provisioned_native_auth_file',
             owner_waiver=OWNER_WAIVER,filesystem_roots_enforced=False,
             evidence_id=ev.id,requested_permission_mode=PERMISSION_MODE,input_delivery='written',**transport)
     except BaseException as error:

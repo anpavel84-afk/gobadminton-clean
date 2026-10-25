@@ -9,6 +9,7 @@ files/secrets/PROD data on this server. Offline tests only; no model calls.
 import hashlib
 import inspect
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -141,7 +142,9 @@ class CandidateIntegrity(unittest.TestCase):
             (raw,receipt),seen=self.run_invoke(work,None,ev)
             self.assertEqual(seen,['charged'])
             self.assertEqual(receipt['filesystem_boundary'],'uid978_unix_permissions_nnp')
-            self.assertEqual(receipt['candidate_access'],'uid_owned_checkout_state_verified_unchanged')
+            self.assertEqual(receipt['candidate_access'],N.CANDIDATE_ACCESS)
+            self.assertNotIn('verified_unchanged',receipt['candidate_access'])
+            self.assertIn('not a proof against a same-uid writer',receipt['candidate_boundary'])
             self.assertNotIn('apparmor_profile',receipt)
             self.assertNotIn('readonly_roots',receipt)
             self.assertNotIn('writable_roots',receipt)
@@ -159,8 +162,7 @@ class CandidateIntegrity(unittest.TestCase):
         with self.assertRaises(N.ReviewError) as err:
             self.run_invoke(work,mutate,ev)
         self.assertEqual(err.exception.code,'AGY_CANDIDATE_CHANGED')
-        self.assertNotEqual(getattr(err.exception,'candidate_access',None),
-                            'uid_owned_checkout_state_verified_unchanged')
+        self.assertNotEqual(getattr(err.exception,'candidate_access',None),N.CANDIDATE_ACCESS)
         return err
 
     def test_each_status_bypass_is_candidate_changed(self):
@@ -303,5 +305,145 @@ class CandidateIntegrity(unittest.TestCase):
             self.assertEqual(meta['error_code'],'AGY_CANDIDATE_CHANGED')
             self.assertEqual(meta['concurrent_exit_code'],3)
             self.assertEqual(meta['exit_code'],3)
+
+    def test_n1_write_during_git_reads_is_not_a_clean_snapshot(self):
+        """A write after the file fd would have closed, during git, stays visible."""
+        with tempfile.TemporaryDirectory() as tmp,tempfile.TemporaryDirectory() as ev:
+            work=self.make_repo(tmp)
+            head=subprocess.check_output(['/usr/bin/git','-C',str(work),'rev-parse','HEAD'],text=True).strip()
+            original=N._read_only_git
+            def raced(repo,*args):
+                if args[:2]==('rev-parse','--show-object-format'):
+                    (pathlib.Path(repo)/'a.txt').write_text('raced-bytes\n')
+                return original(repo,*args)
+            with patch.object(N,'_read_only_git',side_effect=raced):
+                state=N._candidate_state(work)
+            self.assertNotEqual(state[1],'')
+            self.assertNotIn(state[1],('',))
+            charged=[]
+            with patch.object(N,'_read_only_git',side_effect=raced):
+                with self.assertRaises(N.ReviewError) as err:
+                    N.review(work,head,head,'task',45,slot='slot2',task_hash='0'*64,
+                             charge=lambda:charged.append(1),evidence_dir=pathlib.Path(ev)/'evidence')
+            self.assertEqual(err.exception.code,'AGY_CANDIDATE_CHANGED')
+            self.assertEqual(charged,[])
+            self.assertNotEqual((work/'a.txt').read_text(),'x\n')
+
+    def test_n2_include_path_and_hooks_symlink_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            work=self.make_repo(tmp)
+            included=pathlib.Path(tmp)/'included-config'
+            included.write_text('[core]\n\tlogAllRefUpdates = true\n')
+            self.git(work,'config','include.path',str(included))
+            before=N._candidate_state(work)
+            self.assertEqual(before[1],'')
+            included.write_text('[core]\n\tlogAllRefUpdates = false\n')
+            self.assertNotEqual(N._candidate_state(work),before)
+            (work/'a.txt').write_text('x\n')
+        with tempfile.TemporaryDirectory() as tmp,tempfile.TemporaryDirectory() as ev:
+            work=self.make_repo(tmp)
+            hook_dir=pathlib.Path(tmp)/'real-hooks'
+            hook_dir.mkdir()
+            hooks=work/'.git'/'hooks'
+            for child in list(hooks.iterdir()):
+                child.rename(hook_dir/child.name)
+            hooks.rmdir()
+            hooks.symlink_to(hook_dir)
+            before=N._candidate_state(work)
+            self.assertEqual(before[1],'')
+
+            def plant():
+                (hook_dir/'post-checkout').write_text('#!/bin/sh\n')
+
+            plant()
+            self.assertNotEqual(N._candidate_state(work),before)
+            (hook_dir/'post-checkout').unlink()
+            self.assert_invoke_rejects(work,plant,ev)
+
+    def test_n3_dirty_index_with_clean_or_mixed_worktree(self):
+        with tempfile.TemporaryDirectory() as tmp,tempfile.TemporaryDirectory() as ev:
+            work=self.make_repo(tmp)
+            (work/'a.txt').write_text('staged\n')
+            self.git(work,'add','a.txt')
+            self.git(work,'checkout','--','a.txt')
+            status=subprocess.check_output(['/usr/bin/git','-C',str(work),'status','--porcelain'])
+            self.assertTrue(status.startswith(b'M '),status)
+            state=N._candidate_state(work)
+            self.assertIn('index-diff',state[1])
+            self.assert_invoke_rejects(work,None,ev)
+        with tempfile.TemporaryDirectory() as tmp:
+            work=self.make_repo(tmp)
+            (work/'a.txt').write_text('staged\n')
+            self.git(work,'add','a.txt')
+            (work/'a.txt').write_text('staged\nand worktree\n')
+            status=subprocess.check_output(['/usr/bin/git','-C',str(work),'status','--porcelain'])
+            self.assertIn(b'MM',status)
+            self.assertNotEqual(N._candidate_state(work)[1],'')
+
+    def test_n4_empty_directory_and_mode_0600(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            work=self.make_repo(tmp)
+            before=N._candidate_state(work)
+            (work/'empty').mkdir()
+            changed=N._candidate_state(work)
+            self.assertIn('directories',changed[1])
+            self.assertNotEqual(changed,before)
+            (work/'empty').rmdir()
+            os.chmod(work/'a.txt',0o600)
+            mode_state=N._candidate_state(work)
+            self.assertIn('mode',mode_state[1])
+            self.assertNotEqual(mode_state,before)
+
+    def test_uid978_write_is_denied_by_mode_and_live_probe_is_marked(self):
+        self.assertFalse(N._stat_writable_by_executor(1000,1000,0o644))
+        self.assertFalse(N._stat_writable_by_executor(1000,N.EXECUTOR_GID,0o644))
+        self.assertTrue(N._stat_writable_by_executor(N.EXECUTOR_UID,N.EXECUTOR_GID,0o444))
+        self.assertTrue(N._stat_writable_by_executor(1000,1000,0o666))
+        self.assertTrue(N._stat_writable_by_executor(1000,N.EXECUTOR_GID,0o775))
+        self.assertEqual(N._live_executor_write_probe(pathlib.Path('/')),'skipped-not-uid978')
+        with tempfile.TemporaryDirectory() as tmp:
+            parent=pathlib.Path(tmp)/'parent'
+            parent.mkdir()
+            work=self.make_repo(parent)
+            parent.chmod(0o777)
+            self.assertTrue(N._executor_can_rename(parent,work))
+            with self.assertRaises(N.ReviewError) as err:
+                N._candidate_state(work)
+            self.assertEqual(err.exception.code,'AGY_PRECHECK_FAILED')
+            parent.chmod(0o1777)
+            self.assertFalse(N._executor_can_rename(parent,work))
+            self.assertEqual(N._candidate_state(work)[1],'')
+        with tempfile.TemporaryDirectory() as tmp,tempfile.TemporaryDirectory() as ev:
+            work=self.make_repo(tmp)
+            os.chmod(work/'a.txt',0o666)
+            charged=[]
+            with patch.object(N,'qualification',return_value={'phase':'canary'}), \
+                 patch.object(N.os,'geteuid',return_value=978), \
+                 patch.object(N,'trusted',return_value=b'synthetic-token'), \
+                 patch.object(N,'_verify_executor_boundary',return_value=None):
+                with self.assertRaises(N.ReviewError) as err:
+                    N.invoke('inert',45,work=work,slot='slot2',task_hash='0'*64,
+                             charge=lambda:charged.append(1),evidence_dir=pathlib.Path(ev),analysis=True)
+            self.assertEqual(err.exception.code,'AGY_PRECHECK_FAILED')
+            self.assertEqual(err.exception.phase,'preflight')
+            self.assertEqual(charged,[])
+        nobody=subprocess.run(['sudo','-n','-u','nobody','true'],capture_output=True)
+        if nobody.returncode!=0:
+            self.assertEqual(N._live_executor_write_probe(pathlib.Path('.')),'skipped-not-uid978')
+            return
+        with tempfile.TemporaryDirectory() as tmp:
+            blocked=pathlib.Path(tmp)/'ro'
+            blocked.mkdir(mode=0o755)
+            (blocked/'a.txt').write_text('x\n')
+            os.chmod(blocked/'a.txt',0o644)
+            probe=blocked/'.probe'
+            attempt=subprocess.run(
+                ['sudo','-n','-u','nobody','python3','-c',
+                 'import os,sys; p=sys.argv[1]\n'
+                 'try:\n os.open(p, os.O_CREAT|os.O_EXCL|os.O_WRONLY, 0o600)\nexcept PermissionError:\n raise SystemExit(13)\n'
+                 'raise SystemExit(0)',str(probe)],
+                capture_output=True)
+            self.assertEqual(attempt.returncode,13,attempt.stderr.decode(errors='replace'))
+            self.assertFalse(probe.exists())
 
 if __name__=='__main__': unittest.main()

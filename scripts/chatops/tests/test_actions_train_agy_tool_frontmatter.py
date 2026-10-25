@@ -118,7 +118,8 @@ class NativeAgentExposure(unittest.TestCase):
             self.assertEqual(seen[0][0],N.AGENT)
             self.assertEqual(seen[0][1],['view_file','run_command'])
             self.assertEqual(charged,['test_seam'])
-            self.assertEqual(receipt['candidate_access'],'uid_owned_checkout_state_verified_unchanged')
+            self.assertEqual(receipt['candidate_access'],N.CANDIDATE_ACCESS)
+            self.assertIn('not a proof against a same-uid writer',receipt['candidate_boundary'])
 
 if __name__=='__main__':
     unittest.main()
