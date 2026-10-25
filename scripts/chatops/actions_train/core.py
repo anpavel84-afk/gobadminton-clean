@@ -245,6 +245,30 @@ def _route_immutable(slots, task, role, profile, budget, slot, task_hash=None):
                             underlying_model=None, effort=None, role=role, work_kind=task['work_kind'],risk=task['risk'],
                             fallback_reason=('previous preferred providers unavailable' if refusal else None),
                             unavailable=refusal, remaining_calls=left, used_calls=budget.used('cursor', role, slot))
+            if provider == 'agy' and role == 'author':
+                from native_antigravity_author import available, MODELS as AUTHOR_MODELS
+                if model not in AUTHOR_MODELS or effort is not None:
+                    refusal[entry] = 'Antigravity author role/model/effort unsupported'
+                    continue
+                ok, why = available(slot, task_hash or digest(task), model=model)
+                if not ok:
+                    refusal[entry] = why; continue
+                try:
+                    left = budget.remaining('agy', 'author', slot)
+                    used = budget.used('agy', 'author', slot)
+                    ok = left is not slots.UNKNOWN and type(left) in (int, float) and left > 0
+                except Exception:
+                    ok = False
+                if not ok:
+                    refusal[entry] = 'Antigravity author budget UNKNOWN/exhausted'; continue
+                return dict(profile=profile, provider='agy', requested_model=model, effective_model=model,
+                            underlying_model=None, effort=None, role=role, work_kind=task['work_kind'], risk=task['risk'],
+                            fallback_reason=('previous preferred providers unavailable' if refusal else None),
+                            unavailable=refusal, remaining_calls=left, used_calls=used)
+            if (provider == 'agy' and role == 'qa' and task.get('author_routes')
+                    and task['author_routes'][0].split(':')[0] == 'agy'):
+                refusal[entry] = 'independent QA must be a different provider'
+                continue
             if provider == 'agy':
                 from native_antigravity import MODELS as AGY_MODELS
                 if role != 'qa' or model not in AGY_MODELS or effort is not None:

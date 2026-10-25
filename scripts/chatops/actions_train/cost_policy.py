@@ -33,6 +33,8 @@ def validate_policy(task):
                 and all(c.isprintable() for c in evidence), "stage evidence required")
         preferred = preferred_route(policy, task, role, level)
         require(preferred in task[role + "_routes"], "minimum stage route not explicitly admitted")
+        if role == 'author' and preferred.startswith('agy:'):
+            require(MATRIX[level] in task['author_routes'], 'AGY author requires explicit minimum Codex fallback')
         if level == "critical":
             require(reason in CRITICAL and len(evidence.strip()) >= 20,
                     "Astra High requires specific critical escalation evidence")
@@ -46,7 +48,7 @@ def preferred_route(policy, task, role, level):
     if policy['schema'] == 'GB_STAGE_COST_V2':
         if role == 'author' and level in ('simple', 'standard', 'complex') and first == 'cursor:auto':
             return first
-        if role == 'qa':
+        if role in ('author', 'qa'):
             preferred = {'simple': 'agy:claude-sonnet-5-5-medium',
                          'standard': 'agy:claude-sonnet-5-5-medium',
                          'complex': 'agy:claude-sonnet-5-5-high',
@@ -67,7 +69,7 @@ def selection(task, role):
         # UI-S's explicitly admitted Sol Medium is sufficient above Luna's minimum.
         allowed = {minimum, 'codex:gpt-6.1-sol:medium'}
         fallback = [r for r in task['author_routes'] if r in allowed]
-    if preferred == 'agy:claude-opus-5-5-high' and row['complexity'] == 'critical':
+    if role == 'qa' and preferred == 'agy:claude-opus-5-5-high' and row['complexity'] == 'critical':
         # No separate exact-risk Codex QA qualification mechanism is installed.
         # A listed Sol route alone is insufficient; Astra is not ordinary QA fallback.
         fallback = []
