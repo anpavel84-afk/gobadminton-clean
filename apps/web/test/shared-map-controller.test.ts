@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import type { UnifiedRow, UnifiedSnapshot } from "@gobadminton/contracts";
+import type { UnifiedPreview, UnifiedRow, UnifiedSnapshot } from "@gobadminton/contracts";
 import type { Me } from "../src/lib/consumer-types";
 import type { apiFetch } from "../src/lib/api-client";
 import { UnifiedDirectoryController } from "../src/lib/unified-directory";
@@ -33,7 +33,7 @@ function harness() {
     } };
     if (path === "/v1/radar/results/preview") {
       const row = [first, second, later].find(row => row.radar!.resultRef === body.resultRef)!;
-      return { ok: true, status: 200, data: { player: row.player, radar: row.radar } };
+      return { ok: true, status: 200, data: { player: { publicPlayerId: row.publicPlayerId, displayName: row.player.displayName, level: null, trainer: false, avatar: row.player.avatar, canRequestContact: false }, proximityBand: null, radar: { consentPolicyVersion: row.radar!.consentPolicyVersion, geo: row.radar!.geo, validUntil: row.radar!.validUntil, distance: row.radar!.distance }, upcomingGames: [] } satisfies UnifiedPreview };
     }
     return { ok: true, status: 200, data: base };
   });

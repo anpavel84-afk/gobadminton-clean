@@ -124,3 +124,17 @@ svg.gb-venue-court-glyph { width:28px; height:28px; border-radius:0; box-shadow:
 .gb-fullscreen-map-viewport .gb-games-map-area { position:absolute; inset:0; }
 .gb-fullscreen-map-viewport .gb-games-map > .gb-map-sr-only,
 .gb-map-sr-only { position:absolute; width:1px; height:1px; margin:-1px; padding:0; border:0; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
+
+/* Bounded on-map detail composition: existing panel, Avatar, Button, GameCover. */
+.g2-map-panel:not(.is-expanded) { bottom:auto; max-height:50dvh; }
+.g2-player-games { list-style:none; margin:0; padding:0; display:grid; gap:12px; }
+.g2-player-games li { display:flex; gap:12px; padding:12px 0; border-top:1px solid var(--gb-line); }
+.g2-player-games .gb-venue-cover { width:88px; height:64px; flex:none; overflow:hidden; border-radius:var(--gb-radius-sm); }
+.g2-player-games li > div { min-width:0; overflow-wrap:anywhere; }
+.g2-player-games p { margin:4px 0; }
+.g2-player-games a { color:var(--gb-purple); font-weight:600; }
+.gb-radar-layer button:focus-visible,.gb-radar-layer a:focus-visible { outline:3px solid var(--gb-purple); outline-offset:3px; }
+@media(max-width:720px) {
+  .g2-map-panel:not(.is-expanded) { bottom:calc(36px + env(safe-area-inset-bottom,0px)); max-height:30dvh; }
+}
+@media(prefers-reduced-motion:reduce) { .gb-radar-layer .g2-map-panel { transition:none; } }
