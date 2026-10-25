@@ -173,6 +173,9 @@ _CLOSED_VOCAB = frozenset((
     "автор", "хелпер", "не", "опечатки", "переименовать", "платформу",
     "правильно", "против", "протест", "секретарь", "таймаут", "тестовый", "трогать",
 ))
+# File names are data, not instructions to remove tests. Keep this extension
+# local to canonical paths; it does not admit new instruction vocabulary.
+_PATH_WORDS = frozenset(("spec", "fixture", "delete"))
 
 
 # Descriptors: text/path use the ONE vocabulary gate; enum/regex are closed
@@ -260,15 +263,16 @@ def _text_gate(value):
     """Bounded schema walk of EVERY key/value. Unknown keys/types cannot disappear.
 
     Structured strings are accepted only by their field's enum/ID schema. Every
-    other string takes the same normalization and vocabulary path. Leaf, field,
-    ordered, sorted and reversed views share the same weakening/sensitive scan.
+    other string takes the same normalization and vocabulary path. Sensitive
+    stems use all leaf/field/aggregate views; destructive intent uses instruction
+    text views so that metadata cannot supply an instruction's target.
     """
-    texts, fields = [], []
+    texts, fields, instructions, claims = [], [], [], []
     nodes = total = 0
     active = set()
     outside = False
 
-    def walk(item, rule, depth=0):
+    def walk(item, rule, depth=0, instruction=False):
         nonlocal nodes, total, outside
         nodes += 1
         if nodes > _MAX_NODES or depth > _MAX_DEPTH:
@@ -281,7 +285,7 @@ def _text_gate(value):
         if kind == "optional":
             if item is None:
                 return
-            return walk(item, rule[1], depth + 1)
+            return walk(item, rule[1], depth + 1, instruction)
         if kind == "obj":
             if type(item) is not dict:
                 raise ValueError("invalid closed schema object")
@@ -298,7 +302,10 @@ def _text_gate(value):
                 # Keys are closed enums too, never unexamined free text.
                 walk(key, key_rule, depth + 1)
                 try:
-                    walk(child, table[key], depth + 1)
+                    walk(child, table[key], depth + 1,
+                         (schema == "evidence" and key in
+                          ("event_text", "goal", "diagnostics"))
+                         or (schema == "finding" and key == "id"))
                 except ValueError as error:
                     raise ValueError(schema + "." + key + ": " + str(error)) from error
             if schema != "evidence":
@@ -314,7 +321,7 @@ def _text_gate(value):
             return
         if kind in ("list", "empty_list", "diagnostics"):
             if kind == "diagnostics" and type(item) is str:
-                return walk(item, _TEXT, depth + 1)
+                return walk(item, _TEXT, depth + 1, instruction)
             if (type(item) is not list or len(item) > (0 if kind == "empty_list" else 32)
                     or (kind == "diagnostics" and not item)):
                 raise ValueError("invalid closed schema list")
@@ -323,7 +330,7 @@ def _text_gate(value):
             active.add(id(item))
             start = len(texts)
             for child in item:
-                walk(child, _TEXT if kind == "diagnostics" else rule[1], depth + 1)
+                walk(child, _TEXT if kind == "diagnostics" else rule[1], depth + 1, instruction)
             fields.append(" ".join(texts[start:]))
             active.remove(id(item))
             return
@@ -347,15 +354,20 @@ def _text_gate(value):
         elif kind == "finding_id":
             valid = type(item) is str and (re.fullmatch(r"f[1-9][0-9]{0,5}", item) is not None)
             if not valid and type(item) is str:
-                return walk(item, _TEXT, depth + 1)
+                return walk(item, _TEXT, depth + 1, instruction)
         elif kind in ("text", "path"):
             if type(item) is not str:
                 raise ValueError("invalid closed vocabulary text")
             texts.append(item)
+            if kind == "text":
+                claims.append(item)
+            if instruction:
+                instructions.append(item)
             prepared, residue = _prepare(item)
             tokens = _vocab_tokens(prepared)
             if (residue or _ambiguous(prepared) or not tokens
-                    or any(token not in _VOCAB_WORDS for token in tokens)
+                    or any(token not in (_VOCAB_WORDS | _PATH_WORDS if kind == "path"
+                                         else _VOCAB_WORDS) for token in tokens)
                     or re.search(r"[0-9]", prepared)):
                 outside = True
             if kind == "path" and not _concrete_path(item):
@@ -383,7 +395,15 @@ def _text_gate(value):
                 for token in _vocab_tokens(_prepare(text)[0]))
     joined_stems = any(_collapsed_sensitive(_prepare(text)[0]) for text in joined)
     sensitive = sensitive or (not known and joined_stems)
-    weakens = any(_weakens(text) for text in views + joined)
+    # Preserve split/reordered instruction detection without borrowing a target
+    # such as "test" from a file name, search pattern, or history metadata.
+    # A complete destructive claim in any free-text leaf still refuses; only
+    # instruction/finding text may combine separate words across fields.
+    intent_views = list(claims)
+    for order in (instructions, sorted(instructions), list(reversed(instructions)),
+                  sorted(instructions, reverse=True)):
+        intent_views.extend((" ".join(order), "".join(order)))
+    weakens = any(_weakens(text) for text in intent_views)
     return {"outside": outside, "sensitive": sensitive, "weakens": weakens}
 
 
@@ -414,47 +434,12 @@ def _emit(base, evidence, plan, **updates):
                    or updates.get("event_class") in _WRITER_EVENTS)
     if not writing:
         return _finish(base, **updates)
-    if _floor(evidence) not in ("low", "moderate"):
-        return _finish(base, **_deny_write(updates, "risk is not proven"))
-    if (evidence.get("minimal_action_known") is not True
-            or evidence.get("architecture_research_required") is not False):
-        return _finish(base, **_deny_write(
-            updates, "architecture is open or the minimal action is not proven"))
-    if (evidence.get("external_effects_unknown") is not False
-            or evidence.get("unknown_effect") is not False):
-        return _finish(base, **_deny_write(updates, "external effect is not proven absent"))
-    if (evidence.get("scope_within_admission") is not True
-            or evidence.get("finite_budget") is not True):
-        return _finish(base, **_deny_write(updates, "scope is not inside the admission"))
-    if _weakens_any(evidence):
-        return _finish(base, **_deny_write(
-            updates, "condition 7 assertions, expected values, QA or timeout"))
-    if type(plan) is not dict:
-        return _finish(base, **_deny_write(updates, "plan is missing"))
-    if plan.get("executable") is not True:
-        return _finish(base, **_deny_write(updates, "plan is not executable"))
-    # §8 permits a complex repair to name a nonempty non-Fast-Fix surface.
-    surface_proven = (_safe_surface(evidence) or
-                      (evidence["complexity"] == "complex" and bool(evidence["change_surface"].strip())))
-    if not _diff_proven(evidence.get("diff_check")) or not surface_proven:
-        return _finish(base, **_deny_write(updates, "writer proof is incomplete"))
-    # All source actions (including a deterministic template) cross this gate.
-    # Enum membership alone does not admit the effect or the selected routes.
-    effects = set(plan["effects"])
-    if ("source_edit_within_scope" not in effects or "none" in effects
-            or (updates.get("author_route") == "deterministic_tool"
-                and "deterministic_tool" not in effects)):
-        return _pm(base, evidence, _floor(evidence), whole_class=False, executed=False,
-                   reason="plan effects do not admit the selected source action")
-    if not _routes_match(plan, updates):
-        return _pm(base, evidence, _floor(evidence), whole_class=False, executed=False,
-                   reason="requested plan routes conflict with the selected author or QA route")
-    if not _writer_proof(evidence, updates.get("event_class")):
-        return _pm(base, evidence, _floor(evidence), whole_class=True, executed=False,
-                   reason="writer proof is incomplete: defect class is not bound to this repair")
-    if evidence["complexity"] == "complex" and updates.get("qa_route") is None:
-        return _pm(base, evidence, _floor(evidence), whole_class=False,
-                   reason="complex QA route is not proven")
+    reason, replan, whole_class = _writer_proof(evidence, plan, updates)
+    if reason:
+        if replan:
+            return _pm(base, evidence, _floor(evidence), whole_class=whole_class,
+                       executed=False, reason=reason)
+        return _finish(base, **_deny_write(updates, reason))
     updates["plan_honored"] = bool(updates.get("executed"))
     return _finish(base, **updates)
 
@@ -464,15 +449,107 @@ def _routes_match(plan, decision):
                for requested, actual in _PLAN_ROUTE_FIELDS.items())
 
 
-def _writer_proof(evidence, action):
-    """One closed class bound to this repair and its diagnosed source class."""
-    if not _class_closed(evidence):
-        return False
-    suggested = evidence.get("suggested_class")
-    # A continuation reuses the diagnosed source class, rather than changing it.
+def _writer_conditions(evidence, action):
+    """§9's eight conditions, plus the route-specific direct-repair proofs.
+
+    1: cause/candidate fingerprint and immutable acceptance (§7/11, EOM §8.1).
+       §8 STANDARD/COMPLEX may use a supported cause; LOCAL must be proven.
+    2: known minimal action, no open architecture/semantics research.
+    3: noncritical risk/dependencies, no unknown external effects.
+    4: admitted scope and finite budget (effects/routes are checked below).
+    5: known regression check, also required in an ordinary repair brief (EOM §8.1).
+    6: checked history, no blind replay of the failed Fast Fix (§11, EOM §8.1).
+    7: intact tests/limits proven by diff. LOCAL additionally requires the
+       explicit unchanged declarations on evidence and plan (§9).
+    8: saved single-instance search covering every repair/finding, diff symbol
+       and the diagnosed fingerprint. A suggested class cannot change that class.
+
+    These facts are required for templates too. A usable brief is no waiver.
+    The enclosing envelope (pins, context, exact binding, duplicate/refusal and
+    reconciliation) is checked before classification and rechecked below for
+    writers. §3.3/13 add independent QA; §7/11/12 add executable bound routes
+    and the finite ordinary/continuation envelope.
+    """
+    local = action == "SOURCE_KNOWN_LOCAL"
+    plan = evidence["plan"]
+    return (
+        (evidence["acceptance_unchanged"] is True
+         and evidence["cause"] in (("proven",) if local else ("proven", "supported"))
+         and bool(_fingerprint_key(evidence["defect_fingerprint"])),
+         "condition 1 cause or acceptance"),
+        (evidence["minimal_action_known"] is True
+         and evidence["architecture_research_required"] is False,
+         "condition 2 architecture is open or the minimal action is not proven"),
+        (_floor(evidence) in ("low", "moderate") and not evidence["difficult_or_repeating"]
+         and evidence["external_effects_unknown"] is False and evidence["unknown_effect"] is False,
+         "condition 3 risk floor or unknown external effect"),
+        (evidence["scope_within_admission"] is True and evidence["finite_budget"] is True,
+         "condition 4 scope or budget is not inside the admission"),
+        (evidence["regression_known"] is True, "condition 5 regression check"),
+        (evidence["fast_fix_history_checked"] is True and not _prior_closed(evidence),
+         "condition 6 Fast Fix history"),
+        (_diff_proven(evidence.get("diff_check")) and not _weakens_any(evidence)
+         and (not local or _condition_seven(evidence, plan)),
+         "condition 7 writer proof is incomplete: assertions, expected values, QA or timeout"),
+        (_class_closed(evidence),
+         "condition 8 defect class is not proven closed or search coverage is incomplete"),
+    )
+
+
+def _writer_proof(evidence, plan, decision):
+    """The single final writer-admission predicate. Return a reason and disposition.
+
+    All executed source actions, including tools, reach this via _emit. Facts
+    come only from the validated case, never from a branch's success label.
+    """
+    action = decision["event_class"]
+    # Keep safety-specific reasons even for unknown instruction vocabulary.
+    if _weakens_any(evidence):
+        return "condition 7 assertions, expected values, QA or timeout", False, False
+    if type(plan) is not dict or plan.get("executable") is not True:
+        return "plan is missing or is not executable", False, False
+    for number, (ok, reason) in enumerate(_writer_conditions(evidence, action), 1):
+        if not ok:
+            return reason, number == 8, number == 8
+    if evidence.policy_active is not True or plan["binding"] != evidence.binding:
+        return "policy or exact plan binding requires revalidation", False, False
+    if (evidence["qa_independent"] is not True or evidence["session_shared"] is not False
+            or evidence["author_qa_same_snapshot"] is not False):
+        return "author and QA are not independent: qa_independent proof required", False, False
+    if (evidence["context_complete"] is not True or evidence["context_hash_ok"] is not True
+            or evidence["dispatch_duplicate"] or evidence["platform_refusal"]
+            or evidence["reconciled"] is not True or not evidence["plan_json_valid"]):
+        return "writer context, operation or reconciliation proof is incomplete", False, False
+    if evidence["no_progress_streak"] >= 2:
+        return "two repairs without progress", False, False
+    continuation = action == "CONTINUATION"
+    if ((continuation and not (evidence["author_attempts"] == 3
+                              and evidence["continuation_used"] in (0, 1)
+                              and evidence["progress"] is True and evidence["brief_usable"] is True))
+            or (not continuation and evidence["author_attempts"] >= 3)):
+        return "ordinary or continuation budget/progress is not proven", False, False
+    if action == "SOURCE_KNOWN_STANDARD" and evidence["brief_usable"] is not True:
+        return "standard repair brief is not usable", False, False
+    # §8 permits a complex repair to name a nonempty non-Fast-Fix surface.
+    surface_proven = (_safe_surface(evidence) or
+                      (evidence["complexity"] == "complex" and bool(evidence["change_surface"].strip())))
+    if not surface_proven:
+        return "writer proof is incomplete: change surface", False, False
+    effects = set(plan["effects"])
+    if ("source_edit_within_scope" not in effects or "none" in effects
+            or (decision.get("author_route") == "deterministic_tool"
+                and "deterministic_tool" not in effects)):
+        return "plan effects do not admit the selected source action", True, False
+    if not _routes_match(plan, decision):
+        return "requested plan routes conflict with the selected author or QA route", True, False
+    suggested = evidence["suggested_class"]
     compatible = ({"SOURCE_KNOWN_COMPLEX"} if evidence["complexity"] == "complex"
                   else {"SOURCE_KNOWN_LOCAL", "SOURCE_KNOWN_STANDARD", "TEMPLATE"})
-    return suggested is None or suggested in (compatible if action == "CONTINUATION" else {action})
+    if suggested is not None and suggested not in (compatible if continuation else {action}):
+        return "writer proof is incomplete: defect class is not bound to this repair", True, True
+    if evidence["complexity"] == "complex" and decision.get("qa_route") is None:
+        return "complex QA route is not proven", True, False
+    return None, False, False
 
 
 def _decision(**updates):
@@ -615,6 +692,8 @@ def _decide(case):
                          planner_calls=1, model_calls=1, plan_honored=False,
                          operation_id=case["binding"]["operation_id"])
     base = _carry(case, evidence)
+    # Trusted local envelope proof, never a field accepted from input evidence.
+    evidence.binding = dict(case["binding"])
     plan = evidence["plan"]
     if plan is not None:
         plan_error = validate_plan(plan)
@@ -623,6 +702,7 @@ def _decide(case):
                              policy_rewritten=False, reason=plan_error,
                              event_class="REJECTED", route="hold", plan_honored=False)
     active, why = _activation(case)
+    evidence.policy_active = active
     if not active:
         blocked = why == "pin_mismatch"
         return _finish(base, policy_applied=False, executed=False, writer=False,
@@ -764,7 +844,7 @@ def _classify(base, evidence, plan):
         return _author(base, evidence, plan, risk, SPECIALIST_SOL, "SOURCE_KNOWN_COMPLEX",
                        "known complex noncritical cause; Astra is not required")
     # All eight Fast Fix conditions outrank a usable brief (§8 LOCAL, §9).
-    allowed, fast_reason = _fast_fix_block(evidence, risk)
+    allowed, fast_reason = _fast_fix_block(evidence)
     if allowed:
         return _known_local(base, evidence, plan, risk)
     if (evidence["brief_usable"] and evidence["complexity"] != "complex"
@@ -985,28 +1065,10 @@ def _class_closed(evidence):
             and _pattern_proves_class(search, evidence))
 
 
-def _fast_fix_block(evidence, risk):
+def _fast_fix_block(evidence):
     """Return (allowed, reason). Every condition is default-deny: missing proof is failure."""
-    plan = evidence["plan"]
-    checks = (
-        (_safe_surface(evidence), "change surface is not a fast-fix surface"),
-        (evidence["cause"] == "proven" and evidence["acceptance_unchanged"] is True
-         and bool(_fingerprint_key(evidence["defect_fingerprint"])),
-         "condition 1 cause or acceptance"),
-        (evidence["minimal_action_known"] is True and evidence["architecture_research_required"] is False,
-         "condition 2 architecture still open"),
-        (risk in ("low", "moderate") and evidence["critical_signs"] is False
-         and not _sensitive_any(evidence) and evidence["external_effects_unknown"] is False
-         and evidence["unknown_effect"] is False,
-         "condition 3 risk floor or unknown effect"),
-        (evidence["scope_within_admission"] is True and evidence["finite_budget"] is True,
-         "condition 4 scope or budget"),
-        (evidence["regression_known"] is True, "condition 5 regression check"),
-        (evidence["fast_fix_history_checked"] is True and not _prior_closed(evidence),
-         "condition 6 Fast Fix history"),
-        (_condition_seven(evidence, plan), "condition 7 assertions, expected values, QA or timeout"),
-        (_class_closed(evidence), "condition 8 defect class is not proven closed"),
-    )
+    checks = ((_safe_surface(evidence), "change surface is not a fast-fix surface"),
+              *_writer_conditions(evidence, "SOURCE_KNOWN_LOCAL"))
     for ok, reason in checks:
         if not ok:
             return False, reason
@@ -1430,7 +1492,7 @@ def _pattern_proves_class(search, evidence):
     if not all((path == scope if is_file else path.startswith(scope + "/"))
                for path in repair_paths):
         return False
-    if repair_paths and not any(path in listing for path in repair_paths):
+    if not all(path in listing for path in repair_paths):
         return False
     if len(listing) != search.get("matched_count"):
         return False

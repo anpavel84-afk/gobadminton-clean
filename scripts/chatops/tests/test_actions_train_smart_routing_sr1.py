@@ -39,6 +39,7 @@ def ready(**updates):
         "architecture_research_required": False, "reconciled": True, "qa_independent": True,
         "unknown_effect": False, "risk": "low", "cause": "proven", "effects_proven_absent": True,
         "defect_fingerprint": "fp-export",
+        "regression_known": True, "fast_fix_history_checked": True,
     }
     evidence.update(updates)
     return evidence
@@ -149,7 +150,7 @@ class SmartRoutingSR1(unittest.TestCase):
         self.assertFalse(decision["writer"])
 
     def test_sr_t04_usable_brief_is_not_replayed(self):
-        # §8 STANDARD has a bound defect, but lacks Fast Fix regression/history proofs.
+        # §8 STANDARD has a bound defect and checks, without LOCAL declarations.
         decision = check(sr.decide(case(ready(
             brief_usable=True, cause="proven", risk="moderate", author_attempts=1,
             minimal_action_known=True, change_surface="rename", plan=plan(),
@@ -1248,7 +1249,7 @@ class SmartRoutingQaR3(unittest.TestCase):
 
 
 def _proven_brief(**updates):
-    """§8 STANDARD writer: diff and a closed class, without the Fast Fix-only proofs."""
+    """§8 STANDARD: known checks/history, diff and closure; no LOCAL declarations."""
     evidence = ready(
         brief_usable=True, cause="proven", risk="moderate", author_attempts=1,
         minimal_action_known=True, change_surface="rename", plan=plan(),
@@ -1339,8 +1340,15 @@ class SmartRoutingQaR4(unittest.TestCase):
             class_search=search(scope="apps/api", scope_listing=["apps/api/index.ts"]),
             goal="rename export to author"))))
         self.assertEqual(paths["risk"], "low")
-        self.assertTrue(paths["fast_fix"])
-        self.assertTrue(paths["writer"])
+        # Low risk alone cannot cover an unlisted second repair site (R9 H1).
+        self.assertFalse(paths["fast_fix"])
+        self.assertFalse(paths["writer"])
+        covered = check(sr.decide(case(fast(
+            paths=["apps/api/index.ts"],
+            class_search=search(scope="apps/api", scope_listing=["apps/api/index.ts"]),
+            goal="rename export to author"))))
+        self.assertTrue(covered["fast_fix"])
+        self.assertTrue(covered["writer"])
 
     def test_payment_migration_and_access_rights_raise_the_floor(self):
         for text in ("мигрируйте схему", "изменить права доступа", "платёж", "оплатить счёт"):
@@ -2024,8 +2032,8 @@ class SmartRoutingQaR7(unittest.TestCase):
             words = rng.sample(("author", "authors", "secretary", "автор", "секретарь", "latest", "typo", "export"), 3)
             e[rng.choice(("event_text", "goal"))] = " ".join(words)
             e["diagnostics"] = rng.sample(words, 2)
-            e["findings"] = [{"id": "f1", "severity": "low", "location": "apps/web/src/export.ts"}]
             e["paths"] = [rng.choice(("apps/web/src/index.ts", "apps/web/src/export.ts"))]
+            e["findings"] = [{"id": "f1", "severity": "low", "location": e["paths"][0]}]
             e["class_search"]["scope_listing"] = list(e["paths"])
             with self.subTest(sample=index):
                 d = sr.decide(case(e))
@@ -2248,7 +2256,8 @@ class SmartRoutingQaR8(unittest.TestCase):
                     self._blocked(e)
             e = copy.deepcopy(original)
             e.update(paths=[inside, "apps/web/src/index.ts"], findings=[finding])
-            self._control(e)
+            self._blocked(e)
+            e["paths"] = [inside]
             e["defect_fingerprint"] = "fp-OldExport"
             self._control(e)
 
@@ -2409,6 +2418,243 @@ class SmartRoutingQaR8(unittest.TestCase):
                         if path[:2] == ("evidence", "plan"):
                             self.assertIsNotNone(sr.validate_plan(c["evidence"]["plan"]))
                             self.assertEqual(hooks, [])
+        self.assertLess(time.monotonic() - started, 20)
+
+
+class SmartRoutingQaR9(unittest.TestCase):
+    """Writer admission is conjunctive across every source route, never a brief waiver."""
+
+    @staticmethod
+    def _writers():
+        inside = "apps/web/src/export.ts"
+        common = {"paths": [inside], "findings": [
+            {"id": "f1", "severity": "low", "location": inside}]}
+        return {
+            "fast": fast(**common),
+            "standard": _proven_brief(**common),
+            # A LOCAL-looking repair reuses an ordinary plan; its LOCAL-only
+            # declarations are not proven on that plan. It must use STANDARD.
+            "brief_reuse": fast(brief_usable=True, plan=plan(), **common),
+            "complex": _proven_brief(
+                complexity="complex", change_surface="state", **QA, **common,
+                plan=plan(author_route=sr.SPECIALIST_SOL, qa_route=sr.SPECIALIST_SOL)),
+            "continuation": _proven_brief(author_attempts=3, progress=True, **common),
+        }
+
+    def _control(self, name, evidence):
+        d = check(sr.decide(case(evidence)))
+        self.assertTrue(d["writer"], d)
+        self.assertTrue(d["executed"], d)
+        self.assertTrue(d["plan_honored"], d)
+        expected = {"fast": "SOURCE_KNOWN_LOCAL", "standard": "SOURCE_KNOWN_STANDARD",
+                    "brief_reuse": "SOURCE_KNOWN_STANDARD", "complex": "SOURCE_KNOWN_COMPLEX",
+                    "continuation": "CONTINUATION"}
+        self.assertEqual(d["event_class"], expected[name], d)
+        return d
+
+    def _refuse(self, evidence, reason=None):
+        d = check(sr.decide(case(evidence)))
+        self.assertFalse(d["writer"], d)
+        self.assertFalse(d["fast_fix"], d)
+        self.assertFalse(d["continuation_granted"], d)
+        self.assertFalse(d["plan_honored"], d)
+        self.assertTrue(d["reason"], d)
+        if reason:
+            self.assertIn(reason, d["reason"], d)
+        return d
+
+    def test_h1_every_repair_and_finding_is_in_matched_listing(self):
+        for name, original in self._writers().items():
+            self._control(name, original)
+            for carrier in ("paths", "findings", "both"):
+                e = copy.deepcopy(original)
+                if carrier in ("paths", "both"):
+                    e["paths"].append("apps/web/src/index.ts")
+                if carrier in ("findings", "both"):
+                    e["findings"].append({"id": "f2", "severity": "low",
+                                          "location": "apps/web/src/index.ts"})
+                with self.subTest(route=name, carrier=carrier):
+                    self._refuse(e)
+            # A second identifier/class is not silently hidden by one good match.
+            for updates in ({"class_search": search(diff_identifiers=["OldExport", "OldIndex"])},
+                            {"suggested_class": "SOURCE_CRITICAL"}):
+                e = copy.deepcopy(original)
+                e.update(updates)
+                self._refuse(e)
+            # Multiple findings of the same matched location keep closure.
+            e = copy.deepcopy(original)
+            e["findings"].append(dict(e["findings"][0], id="f2"))
+            self._control(name, e)
+
+    def test_h2_exact_independence_proof_on_every_writer(self):
+        missing = object()
+        for name, original in self._writers().items():
+            self._control(name, original)
+            for value in (False, missing):
+                e = copy.deepcopy(original)
+                if value is missing:
+                    del e["qa_independent"]
+                else:
+                    e["qa_independent"] = value
+                with self.subTest(route=name, missing=value is missing):
+                    self._refuse(e, "independent")
+        # The exact reported continuation, with the helper's ordinary brief.
+        self._refuse(_proven_brief(qa_independent=False, author_attempts=3, progress=True),
+                     "independent")
+
+    def test_h3_acceptance_is_immutable_even_with_usable_brief(self):
+        for name, original in self._writers().items():
+            self._control(name, original)
+            e = copy.deepcopy(original)
+            e["acceptance_unchanged"] = False
+            with self.subTest(route=name):
+                self._refuse(e, "acceptance")
+        for brief in (False, True):
+            self._refuse(fast(acceptance_unchanged=False, brief_usable=brief,
+                              paths=["apps/web/src/export.ts"]), "acceptance")
+
+    def test_m1_instruction_does_not_borrow_test_target_from_metadata(self):
+        for name, original in self._writers().items():
+            for path in ("apps/web/src/export.ts", "apps/web/src/test.ts",
+                         "apps/web/src/remove_test.ts", "apps/web/src/delete_fixture_spec.ts"):
+                e = copy.deepcopy(original)
+                e.update(event_text="remove the latest typo", paths=[path],
+                         findings=[{"id": "f1", "severity": "low", "location": path}],
+                         class_search=search(scope=path, scope_listing=[path]))
+                with self.subTest(route=name, path=path):
+                    self._control(name, e)
+                    if name != "complex":
+                        self._control(name, dict(e, change_surface="test-name"))
+                # Real deletion intent and failed diff proofs still refuse.
+                e["event_text"] = "remove the test"
+                self._refuse(e, "condition 7")
+                e["event_text"] = "remove the latest typo"
+                e["diff_check"]["assertions_unchanged"] = False
+                self._refuse(e, "condition 7")
+
+    def test_conditions_by_routes_matrix(self):
+        # Each mutation changes ONE fact of an all-true control. §9 conditions
+        # and §3.3/7/11/13 + EOM §8/8.1 envelope/continuation extras are explicit.
+        mutations = {
+            "1 cause": (("cause",), "unresolved"),
+            "1 acceptance": (("acceptance_unchanged",), False),
+            "2 minimal action": (("minimal_action_known",), False),
+            "2 architecture": (("architecture_research_required",), True),
+            "3 critical": (("risk",), "critical"),
+            "3 effects": (("external_effects_unknown",), True),
+            "3 unknown outcome": (("unknown_effect",), True),
+            "4 scope": (("scope_within_admission",), False),
+            "4 budget": (("finite_budget",), False),
+            "5 regression": (("regression_known",), False),
+            "6 history": (("fast_fix_history_checked",), False),
+            "6 failed fast fix": (("prior_fast_fix",), {"fingerprint": "fp-export", "result": "fail"}),
+            "7 diff assertions": (("diff_check", "assertions_unchanged"), False),
+            "7 diff expected": (("diff_check", "expected_values_unchanged"), False),
+            "7 diff QA": (("diff_check", "qa_unchanged"), False),
+            "7 diff timeout": (("diff_check", "timeout_unchanged"), False),
+            "7 diff auth": (("diff_check", "auth_unchanged"), False),
+            "7 textual deletion": (("event_text",), "remove the test"),
+            "8 saved search": (("class_search", "saved"), False),
+            "8 matched location": (("findings", 0, "location"), "apps/web/src/index.ts"),
+            "8 diff identifier": (("class_search", "diff_identifiers"), ["OtherExport"]),
+            "8 suggested class": (("suggested_class",), "SOURCE_CRITICAL"),
+            "independence": (("qa_independent",), False),
+            "fresh session": (("session_shared",), True),
+            "immutable snapshot": (("author_qa_same_snapshot",), True),
+            "context complete": (("context_complete",), False),
+            "context hash": (("context_hash_ok",), False),
+            "plan schema": (("plan_json_valid",), False),
+            "reconciliation": (("reconciled",), False),
+            "duplicate": (("dispatch_duplicate",), True),
+            "refusal": (("platform_refusal",), True),
+            "source effects": (("plan", "effects"), ["read"]),
+            "executable": (("plan", "executable"), False),
+            "binding": (("plan", "binding", "head"), "c" * 40),
+            "author route": (("plan", "author_route"), "codex:gpt-6-luna:medium"),
+            "QA route": (("plan", "qa_route"), "codex:gpt-6-luna:medium"),
+            "no progress": (("no_progress_streak",), 2),
+        }
+        for name, original in self._writers().items():
+            self._control(name, original)
+            for condition, (path, value) in mutations.items():
+                e = copy.deepcopy(original)
+                target = e
+                for part in path[:-1]:
+                    target = target[part]
+                target[path[-1]] = value
+                with self.subTest(route=name, condition=condition):
+                    self._refuse(e)
+        # Only continuation has progress/continuation-budget requirements.
+        for field, value in (("progress", False), ("brief_usable", False), ("continuation_used", 2)):
+            e = self._writers()["continuation"]
+            e[field] = value
+            self._refuse(e)
+        e = self._writers()["complex"]
+        e["critical_qa_qualified"] = False
+        self._refuse(e)
+
+    def test_fixed_seed_uncovered_subsets_never_write(self):
+        started = time.monotonic()
+        rng = random.Random(20261025)
+        pool = ["apps/web/src/" + name + ".ts" for name in ("export", "index", "author", "test")]
+        for index in range(90):
+            # One real matched instance, plus a random subset of unlisted sites.
+            covered = rng.choice(pool)
+            uncovered = rng.sample([p for p in pool if p != covered], rng.randint(1, 3))
+            for name, e in self._writers().items():
+                e.update(paths=[covered], findings=[{"id": "f1", "severity": "low", "location": covered}],
+                         class_search=search(scope_listing=[covered]))
+                for path in uncovered:
+                    if rng.getrandbits(1):
+                        e["paths"].append(path)
+                    else:
+                        e["findings"].append({"id": "f" + str(len(e["findings"]) + 1),
+                                              "severity": "low", "location": path})
+                with self.subTest(sample=index, route=name):
+                    self._refuse(e)
+        self.assertLess(time.monotonic() - started, 20)
+
+    def test_fixed_seed_nontrue_independence_and_acceptance_never_write(self):
+        started = time.monotonic()
+        rng = random.Random(20261025)
+        # bool cannot be subclassed in Python. int subclasses include a hostile
+        # bool-like object; exact schema validation must not call its hooks.
+        hooks = []
+        class Int(int):
+            def __bool__(self):
+                hooks.append("bool")
+                return True
+            def __eq__(self, other):
+                hooks.append("eq")
+                return True
+        missing = object()
+        values = [False, None, missing, 0, 1, "true", Int(0), Int(1)]
+        rng.shuffle(values)
+        for field in ("qa_independent", "acceptance_unchanged"):
+            for value in values:
+                for name, e in self._writers().items():
+                    if value is missing:
+                        del e[field]
+                    else:
+                        e[field] = value
+                    with self.subTest(field=field, value=repr(value), route=name):
+                        self._refuse(e)
+                    self.assertEqual(hooks, [])
+        self.assertLess(time.monotonic() - started, 20)
+
+    def test_fixed_seed_path_words_keep_legitimate_typo_fast(self):
+        started = time.monotonic()
+        rng = random.Random(20261025)
+        # Include test-only first: the exact reported false positive, with no
+        # newly accepted path words needed to reproduce it on the old code.
+        for index in range(100):
+            words = ["test"] if index == 0 else rng.sample(
+                ("test", "spec", "fixture", "remove", "delete", "export", "index"), rng.randint(1, 4))
+            path = "apps/web/src/" + "_".join(words) + ".ts"
+            e = fast(event_text="remove the latest typo", paths=[path],
+                     class_search=search(scope=path, scope_listing=[path]))
+            with self.subTest(sample=index, path=path):
+                self._control("fast", e)
         self.assertLess(time.monotonic() - started, 20)
 
 
