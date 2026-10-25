@@ -203,7 +203,7 @@ comment enrollment/QA CLI, fields, two-call limit and authentication are preserv
 
 ## Offline evidence
 
-`test_admission_pm.py` creates local synthetic Git commits for the adapter-fix and
+`test_actions_train_admission_pm.py` creates local synthetic Git commits for the adapter-fix and
 full-QA-input scenario; no production SHA is hard-coded into that scenario. It
 executes real immutable input reads, ledger validation, transaction writes,
 descriptor checks and root reservation logic, with host UID/quiescence metadata
@@ -219,7 +219,7 @@ overlap and are not a distinct-test total. Round-1 evidence remains in the
 
 | Check | Exact round-2 outcome |
 | --- | --- |
-| `python3 -m unittest discover -s scripts/chatops/tests -p 'test_admission_pm.py'` | 47 run, 47 PASS; both-role crash recovery and historical-spend recovery at all 7 durable writes |
+| `python3 -m unittest discover -s scripts/chatops/tests -p 'test_actions_train_admission_pm.py'` | 47 run, 47 PASS; both-role crash recovery and historical-spend recovery at all 7 durable writes |
 | `python3 -m unittest discover -s scripts/chatops/tests -p 'test_actions_train_owner_package.py'` | 9 run, 9 PASS; existing tests and Owner-only helper unchanged in round 2 |
 | `python3 -m unittest discover -s scripts/chatops/tests -p 'test_actions_train*recovery*.py'` | 76 run, 76 PASS |
 | `python3 -m unittest discover -s scripts/chatops/tests -p 'test_actions_train_addressed*.py'` | 51 run: 49 PASS, 1 FAIL, 1 skipped |
