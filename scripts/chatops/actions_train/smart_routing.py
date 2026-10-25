@@ -12,7 +12,8 @@ stored inside GOBADMINTON_AUTONOMY_V1.
 Fast Fix (§9) is granted only by structured facts: a closed surface enum, one
 concrete path whose segments are on the closed path vocabulary, a diff of at
 most _MAX_DIFF_HUNKS hunks, and the other §9 proofs. Free text (event text, goal,
-diagnostics, scope, pattern, listing) can only downgrade that eligibility. It
+diagnostics, findings, paths and all other evidence fields) passes one bounded
+schema/vocabulary walk before copying. It can only downgrade eligibility and
 never creates a writer. Downgrade collapses every separator and repeated letter,
 then matches stems in the original script and in Latin transliteration. Text
 outside the closed vocabulary goes to Technical PM with no writer. The same
@@ -51,6 +52,7 @@ _EN_STEMS = (
     "passwd", "credential", "sandbox", "apparmor", "admission", "budget", "permiss",
     "concurren", "payment", "billing", "migrat", "rollback", "irreversib", "privilege",
     "rbac", "money", "pii", "qareuse", "dataloss", "guard", "rights",
+    "access", "security", "session", "token",
 )
 # Word prefixes on Cyrillic, before any Latin confusable fold.
 # "платформу" is not a payment. "правильно" is not "права". "секретарь" is not "секрет".
@@ -59,8 +61,6 @@ _RU_PREFIXES = (
     "платеж", "оплат", "персональн", "парол", "токен", "сесси", "доступ",
 )
 _RU_RIGHTS = frozenset(("прав", "права", "право", "правом", "правами", "правах", "правам"))
-# Destructive verbs are word prefixes. "тестовый" and "протест" are not deletions.
-_RU_DESTRUCTIVE = ("удал", "отключ", "пропуст", "закомментир", "ослаб", "повыс")
 # Lowercase look-alikes, including Latin dotless i. Mixed-script tokens are already critical.
 _CONFUSABLE = str.maketrans({
     "а": "a", "б": "b", "в": "b", "е": "e", "ё": "e", "к": "k", "м": "m", "н": "h",
@@ -167,10 +167,223 @@ _MAX_DIFF_HUNKS = 32
 _CLOSED_VOCAB = frozenset((
     "a", "api", "apps", "author", "authors", "export", "in", "index",
     "internal", "latest", "name", "notes", "old", "remove", "rename", "secretary",
+    "fp", "other", "defect", "attempt", "rules", "state",
+    "comment", "docs", "formatting", "format", "test", "fast", "fix", "fail",
     "src", "the", "timeout", "to", "ts", "typo", "web",
     "автор", "хелпер", "не", "опечатки", "переименовать", "платформу",
     "правильно", "против", "протест", "секретарь", "таймаут", "тестовый", "трогать",
 ))
+
+
+# Descriptors: text/path use the ONE vocabulary gate; enum/regex are closed
+# string schemas, obj/list recurse, and optional admits only an explicit None.
+# No fallback validator: adding a field without a descriptor closes writing.
+def _enum(*values):
+    return ("enum", frozenset(values))
+
+
+def _optional(rule):
+    return ("optional", rule)
+
+
+_BOOL = ("bool",)
+_TEXT = ("text",)
+_PATH = ("path",)
+_COUNT = ("int", 0, 7)
+_ROUTE = _optional(_enum(*ROUTES))
+_FIELD_VALIDATORS = {
+    "evidence": {
+        "template_id": _optional(_enum("formatter", "eslint-simple")),
+        "template_tool": _optional(_enum("deterministic_tool")),
+        "risk": _optional(_enum("low", "moderate", "critical")),
+        "change_surface": _TEXT,
+        "suggested_class": _optional(_enum(*_WRITER_EVENTS, "SOURCE_CRITICAL", "SOURCE_UNCERTAIN")),
+        "cause": _enum("proven", "supported", "unresolved", "missing_evidence"),
+        "complexity": _enum("mechanical", "standard", "complex"),
+        "event_kind": _optional(_enum("pending", "config_precall", "transient_infra", "requirement_conflict")),
+        "defect_fingerprint": _TEXT,
+        "refusal_operation": ("operation",), "proposed_retry_operation": ("operation",),
+        "proposed_provider": _enum("", "cursor", "codex", "agy"),
+        "fallback_route": _ROUTE, "qa_route_proof": _ROUTE,
+        "invented_model_id": _optional(_enum(*MODELS)),
+        "line_count": _optional(("int", 0, 1000000)),
+        "event_text": _TEXT, "goal": _TEXT,
+        "paths": ("list", _PATH), "diagnostics": ("diagnostics",),
+        "findings": ("list", ("obj", "finding")),
+        "missing_inputs": ("list", _TEXT), "history": ("list", ("history",)),
+        "prior_fast_fix": _optional(("obj", "prior")),
+        "class_search": _optional(("obj", "search")),
+        "plan": _optional(("obj", "plan")),
+        "diff_check": _optional(("obj", "diff")),
+        **dict.fromkeys(("author_attempts", "continuation_used", "no_progress_streak", "schema_repair_attempts"), _COUNT),
+        **dict.fromkeys((
+            "template_applicable", "critical_signs", "difficult_or_repeating", "brief_usable",
+            "progress", "unknown_effect", "reconciled", "platform_refusal", "quota_exhausted",
+            "effects_proven_absent", "fallback_equivalent", "context_complete", "context_hash_ok",
+            "agy_catalog", "agy_qa_qualified", "qa_independent", "session_shared",
+            "effective_model_exposed", "invented_cost", "dispatch_duplicate", "plan_json_valid",
+            "acceptance_unchanged", "scope_within_admission", "finite_budget", "regression_known",
+            "minimal_action_known", "architecture_research_required", "external_effects_unknown",
+            "assertions_unchanged", "expected_values_unchanged", "qa_unchanged", "timeout_unchanged",
+            "auth_unchanged", "fast_fix_history_checked", "critical_qa_qualified", "whole_class_plan",
+            "author_qa_same_snapshot", "requirement_conflict"), _BOOL),
+    },
+    "finding": {"id": ("finding_id",), "severity": _enum("low", "moderate", "critical"), "location": _PATH},
+    "prior": {"fingerprint": _TEXT, "result": _enum("pass", "fail")},
+    "search": {"saved": _BOOL, "assurance_only": _BOOL, "method": _enum(*SEARCH_METHODS),
+               "pattern": _TEXT, "scope": _PATH, "instances": ("int", 0, 32),
+               "matched_count": ("int", 0, 32), "scope_listing": ("list", _PATH),
+               "diff_identifiers": ("list", _TEXT)},
+    "diff": {"tool": _enum(*_DIFF_TOOLS), "hunks": ("int", 0, 1000000),
+             **dict.fromkeys(_UNCHANGED, _BOOL)},
+    "plan": {"schema": _enum(PLAN_SCHEMA), "author_route": _ROUTE, "qa_route": _ROUTE,
+             "planner_calls": ("int", 0, 1), "astra_calls": ("int", 0, 1), "fast_fix": _BOOL,
+             "effects": ("list", _enum(*ALLOWED_EFFECTS)), "model_ids": ("list", _enum(*MODELS)),
+             "rights_delta": ("empty_list",), "binding": ("obj", "binding"),
+             **dict.fromkeys(_PLAN_WEAKEN + _UNCHANGED + ("executable",), _BOOL)},
+    "binding": {"task_sha": ("regex", _SHA64), "rules_sha256": ("regex", _SHA64),
+                "rules_commit": ("regex", _SHA40), "head": ("regex", _SHA40),
+                "operation_id": ("regex", _OP)},
+}
+_PLAN_ROUTE_FIELDS = {"author_route": "author_route", "qa_route": "qa_route"}
+_MAX_NODES = 1024
+_MAX_TEXT = 16384
+_MAX_DEPTH = 12
+
+
+class _ValidatedEvidence(dict):
+    """One local proof, computed before copying or classification; never input data."""
+
+
+def _text_gate(value):
+    """Bounded schema walk of EVERY key/value. Unknown keys/types cannot disappear.
+
+    Structured strings are accepted only by their field's enum/ID schema. Every
+    other string takes the same normalization and vocabulary path. Leaf, field,
+    ordered, sorted and reversed views share the same weakening/sensitive scan.
+    """
+    texts, fields = [], []
+    nodes = total = 0
+    active = set()
+    outside = False
+
+    def walk(item, rule, depth=0):
+        nonlocal nodes, total, outside
+        nodes += 1
+        if nodes > _MAX_NODES or depth > _MAX_DEPTH:
+            raise ValueError("evidence bounds exceeded")
+        if type(item) is str:
+            total += len(item)
+            if len(item) > 500 or total > _MAX_TEXT:
+                raise ValueError("evidence text bounds exceeded")
+        kind = rule[0]
+        if kind == "optional":
+            if item is None:
+                return
+            return walk(item, rule[1], depth + 1)
+        if kind == "obj":
+            if type(item) is not dict:
+                raise ValueError("invalid closed schema object")
+            schema = rule[1]
+            table = _FIELD_VALIDATORS[schema]
+            if len(item) > len(table):
+                raise ValueError("unknown closed schema fields")
+            if id(item) in active:
+                raise ValueError("cyclic evidence")
+            active.add(id(item))
+            start = len(texts)
+            key_rule = _enum(*table)
+            for key, child in item.items():
+                # Keys are closed enums too, never unexamined free text.
+                walk(key, key_rule, depth + 1)
+                try:
+                    walk(child, table[key], depth + 1)
+                except ValueError as error:
+                    raise ValueError(schema + "." + key + ": " + str(error)) from error
+            if schema != "evidence":
+                required = _SEARCH_BASE if schema == "search" else set(table)
+                if not required <= item.keys():
+                    raise ValueError("missing closed schema fields")
+            if schema == "evidence" and "findings" in item:
+                ids = [finding["id"] for finding in item["findings"]]
+                if len(ids) != len(set(ids)):
+                    raise ValueError("duplicate findings")
+            fields.append(" ".join(texts[start:]))
+            active.remove(id(item))
+            return
+        if kind in ("list", "empty_list", "diagnostics"):
+            if kind == "diagnostics" and type(item) is str:
+                return walk(item, _TEXT, depth + 1)
+            if (type(item) is not list or len(item) > (0 if kind == "empty_list" else 32)
+                    or (kind == "diagnostics" and not item)):
+                raise ValueError("invalid closed schema list")
+            if id(item) in active:
+                raise ValueError("cyclic evidence")
+            active.add(id(item))
+            start = len(texts)
+            for child in item:
+                walk(child, _TEXT if kind == "diagnostics" else rule[1], depth + 1)
+            fields.append(" ".join(texts[start:]))
+            active.remove(id(item))
+            return
+        if kind == "bool":
+            valid = type(item) is bool
+        elif kind == "int":
+            valid = type(item) is int and rule[1] <= item <= rule[2]
+        elif kind == "enum":
+            valid = type(item) is str and item in rule[1]
+        elif kind == "regex":
+            valid = _matches(rule[1], item)
+        elif kind == "operation":
+            valid = type(item) is str and (item == "" or _matches(_OP, item))
+            # Operation syntax is closed, but a sensitive operation still raises risk.
+            if valid and item:
+                texts.append(item)
+        elif kind == "history":
+            if _matches(re.compile(r"attempt-[1-7]\Z"), item):
+                return
+            return walk(item, _TEXT, depth + 1)
+        elif kind == "finding_id":
+            valid = type(item) is str and (re.fullmatch(r"f[1-9][0-9]{0,5}", item) is not None)
+            if not valid and type(item) is str:
+                return walk(item, _TEXT, depth + 1)
+        elif kind in ("text", "path"):
+            if type(item) is not str:
+                raise ValueError("invalid closed vocabulary text")
+            texts.append(item)
+            prepared, residue = _prepare(item)
+            tokens = _vocab_tokens(prepared)
+            if (residue or _ambiguous(prepared) or not tokens
+                    or any(token not in _VOCAB_WORDS for token in tokens)
+                    or re.search(r"[0-9]", prepared)):
+                outside = True
+            if kind == "path" and not _concrete_path(item):
+                outside = True
+            return
+        else:
+            raise ValueError("unknown validator")
+        if not valid:
+            raise ValueError("invalid closed schema " + kind)
+
+    walk(value, ("obj", "evidence"))
+    # Bound the aggregate once before normalization; no permutations or pairwise search.
+    views = list(texts) + fields
+    joined = []
+    for order in (texts, sorted(texts), list(reversed(texts)), sorted(texts, reverse=True)):
+        views.append(" ".join(order))
+        joined.append("".join(order))
+    views = list(dict.fromkeys(views))
+    joined = list(dict.fromkeys(joined))
+    sensitive = any(_sensitive(text) for text in views)
+    # Keep provenance of known word boundaries when removing separators. Otherwise
+    # "to author" becomes "oauth", or adjacent Russian/English words look mixed.
+    # Unknown fragments still reassemble; known words never license unknown text.
+    known = all(token in _VOCAB_WORDS for text in texts
+                for token in _vocab_tokens(_prepare(text)[0]))
+    joined_stems = any(_collapsed_sensitive(_prepare(text)[0]) for text in joined)
+    sensitive = sensitive or (not known and joined_stems)
+    weakens = any(_weakens(text) for text in views + joined)
+    return {"outside": outside, "sensitive": sensitive, "weakens": weakens}
 
 
 def _finish(base, **updates):
@@ -221,6 +434,9 @@ def _emit(base, evidence, plan, **updates):
         return _finish(base, **_deny_write(updates, "plan is not executable"))
     if (updates.get("writer") or updates.get("fast_fix")) and not _writer_proof(evidence):
         return _finish(base, **_deny_write(updates, "writer proof is incomplete"))
+    if evidence["complexity"] == "complex" and updates.get("qa_route") is None:
+        return _pm(base, evidence, _floor(evidence), whole_class=False,
+                   reason="complex QA route is not proven")
     return _finish(base, **updates)
 
 
@@ -322,7 +538,7 @@ def validate_plan(plan):
 
 
 def _validate_plan(plan):
-    if type(plan) is not dict or set(plan) != _PLAN_KEYS:
+    if type(plan) is not dict or len(plan) != len(_PLAN_KEYS) or set(plan) != _PLAN_KEYS:
         return "incompatible plan"
     if plan["schema"] != PLAN_SCHEMA:
         return "incompatible plan"
@@ -356,7 +572,16 @@ def _validate_plan(plan):
 def decide(case):
     """One deterministic classification. Does not call a provider or write source."""
     try:
-        return _decide(case)
+        decision = _decide(case)
+        if type(case) is dict and type(case.get("evidence")) is dict:
+            plan = case["evidence"].get("plan")
+            if type(plan) is dict:
+                decision["plan_honored"] = bool(
+                    plan.get("executable") is True and decision["executed"]
+                    and decision["event_class"] in _WRITER_EVENTS
+                    and all(plan.get(requested) == decision.get(actual)
+                            for requested, actual in _PLAN_ROUTE_FIELDS.items()))
+        return decision
     except Exception:
         return _decision(rejected=True, executed=False, writer=False, fast_fix=False,
                          reason="invalid case", event_class="REJECTED", route="hold")
@@ -368,7 +593,9 @@ def _decide(case):
         return _decision(rejected=True, reason=error, event_class="REJECTED", route="hold")
     evidence = _evidence(case["evidence"])
     if type(evidence) is str:
-        return _decision(rejected=True, reason=evidence, event_class="REJECTED", route="hold",
+        return _decision(policy_applied=True, reason="closed schema/vocabulary: " + evidence,
+                         event_class="SOURCE_UNCERTAIN", route=SPECIALIST_SOL,
+                         planner_calls=1, model_calls=1, plan_honored=False,
                          operation_id=case["binding"]["operation_id"])
     base = _carry(case, evidence)
     plan = evidence["plan"]
@@ -445,7 +672,7 @@ def _decide(case):
     return _classify(base, evidence, plan)
 
 
-def _known_local(base, evidence, plan, risk, honored):
+def _known_local(base, evidence, plan, risk):
     """Fast Fix does not spend an ordinary author attempt."""
     model, cost = _auto_receipt("cursor:auto", evidence)
     return _emit(base, evidence, plan, policy_applied=True, executed=True, writer=True, risk=risk,
@@ -453,20 +680,18 @@ def _known_local(base, evidence, plan, risk, honored):
                  author_attempts_delta=0, ledger_category="fast_fix", author_route="cursor:auto",
                  qa_route=_ordinary_qa(evidence), route="cursor:auto", effective_model=model, cost=cost,
                  whole_class=False, reason="all eight Fast Fix conditions hold",
-                 event_class="SOURCE_KNOWN_LOCAL", plan_honored=honored)
+                 event_class="SOURCE_KNOWN_LOCAL")
 
 
 def _classify(base, evidence, plan):
     risk = _floor(evidence)
-    honored = None if plan is None else plan.get("executable") is True
-    search_error = _search_state(evidence["class_search"])
-    if evidence["class_search"] is not None and search_error:
-        return _finish(base, rejected=True, reason=search_error, event_class="REJECTED",
-                       route="hold", risk=risk, plan_honored=False)
     class_open = _class_open(evidence)
     prior_closed = _prior_closed(evidence)
     if risk == "critical" or evidence["difficult_or_repeating"]:
-        return _expert(base, evidence, plan, risk, class_open, prior_closed, honored)
+        return _expert(base, evidence, plan, risk, class_open, prior_closed)
+    if _untrusted_blocks(evidence):
+        return _pm(base, evidence, risk, whole_class=class_open, fast_fix_closed=prior_closed,
+                   reason="free text is outside the closed vocabulary")
     # Continuation exists only on the third ordinary attempt. Later counters hold.
     if evidence["author_attempts"] > 3:
         return _finish(base, policy_applied=True, executed=False, writer=False, risk=risk,
@@ -485,9 +710,6 @@ def _classify(base, evidence, plan):
             if evidence["architecture_research_required"] or evidence["minimal_action_known"] is not True:
                 return _pm(base, evidence, risk, whole_class=False, fast_fix_closed=False,
                            reason="architecture is open or the minimal action is not proven")
-            if _untrusted_blocks(evidence):
-                return _pm(base, evidence, risk, whole_class=False, fast_fix_closed=False,
-                           reason="free text is outside the closed vocabulary")
             return _emit(base, evidence, plan, policy_applied=True, executed=True, writer=True, risk=risk,
                          planner_calls=0, astra_calls=0, model_calls=1, continuation_granted=True,
                          owner_micro_go=False, history_reset=False,
@@ -495,20 +717,18 @@ def _classify(base, evidence, plan):
                          qa_route=_ordinary_qa(evidence), route="continuation", ledger_category="ordinary",
                          next_ordinary_attempt=evidence["author_attempts"] + evidence["continuation_used"] + 1,
                          reason="bounded continuation reuses the brief; history is kept",
-                         event_class="CONTINUATION", cost=None, plan_honored=honored)
+                         event_class="CONTINUATION", cost=None)
         return _finish(base, policy_applied=True, executed=False, writer=False, risk=risk,
                        continuation_granted=False, fast_fix=False,
                        reason="ordinary attempts are exhausted; continuation needs progress",
                        event_class="LIMIT", route="hold")
-    if evidence["template_applicable"] and _norm_id(evidence["template_id"]):
+    if (evidence["template_applicable"] and evidence["complexity"] != "complex"
+            and _norm_id(evidence["template_id"])):
         # A template writer needs a closed single-instance search, not a clean sentence.
         if not (_template_ok(evidence, risk) and _class_closed(evidence["class_search"])
                 and not prior_closed):
             return _pm(base, evidence, risk, whole_class=class_open, fast_fix_closed=prior_closed,
                        reason="template preconditions are not proven")
-        if _untrusted_blocks(evidence):
-            return _pm(base, evidence, risk, whole_class=class_open, fast_fix_closed=prior_closed,
-                       reason="free text is outside the closed vocabulary")
         tool = evidence["template_tool"] == "deterministic_tool"
         route = "deterministic_tool" if tool else "cursor:auto"
         model, cost = _auto_receipt(route, evidence)
@@ -517,47 +737,31 @@ def _classify(base, evidence, plan):
                      fast_fix=False, route=route, author_route=route, qa_route=_ordinary_qa(evidence),
                      effective_model=model, cost=cost, risk=risk, ledger_category="ordinary",
                      reason="proven template; no planner or Astra",
-                     event_class="TEMPLATE", plan_honored=honored)
+                     event_class="TEMPLATE")
     if class_open or prior_closed:
         return _pm(base, evidence, risk, whole_class=class_open, fast_fix_closed=prior_closed,
                    reason="Fast Fix refused; defect class is not closed for a single repair")
+    # A usable brief does not lower author or QA complexity.
+    if (evidence["cause"] in ("proven", "supported") and evidence["complexity"] == "complex"
+            and evidence["minimal_action_known"] and not evidence["architecture_research_required"]):
+        return _author(base, evidence, plan, risk, SPECIALIST_SOL, "SOURCE_KNOWN_COMPLEX",
+                       "known complex noncritical cause; Astra is not required")
     # All eight Fast Fix conditions outrank a usable brief (§8 LOCAL, §9).
     allowed, fast_reason = _fast_fix_block(evidence, risk)
     if allowed:
-        if _untrusted_blocks(evidence):
-            return _pm(base, evidence, risk, whole_class=False, fast_fix_closed=prior_closed,
-                       reason="free text is outside the closed vocabulary")
-        return _known_local(base, evidence, plan, risk, honored)
-    if evidence["brief_usable"] and evidence["cause"] in ("proven", "supported") and evidence["author_attempts"] < 3:
+        return _known_local(base, evidence, plan, risk)
+    if (evidence["brief_usable"] and evidence["complexity"] != "complex"
+            and evidence["cause"] in ("proven", "supported") and evidence["author_attempts"] < 3):
         if evidence["architecture_research_required"] or evidence["minimal_action_known"] is not True:
             return _pm(base, evidence, risk, whole_class=False, fast_fix_closed=False,
                        reason="architecture is open or the minimal action is not proven")
-        if _untrusted_blocks(evidence):
-            return _pm(base, evidence, risk, whole_class=False, fast_fix_closed=False,
-                       reason="free text is outside the closed vocabulary")
         model, cost = _auto_receipt("cursor:auto", evidence)
         return _emit(base, evidence, plan, policy_applied=True, executed=True, writer=True, risk=risk,
                      planner_calls=0, astra_calls=0, model_calls=1, fast_fix=False,
                      author_route="cursor:auto", qa_route=_ordinary_qa(evidence), route="cursor:auto",
                      effective_model=model, cost=cost, ledger_category="ordinary",
                      reason="usable brief is reused; no extra planner or diagnosis",
-                     event_class="SOURCE_KNOWN_STANDARD", plan_honored=honored)
-    # Not a proven minimal repair: do not fall through to a source writer.
-    if (evidence["cause"] == "proven" and evidence["complexity"] == "complex"
-            and evidence["minimal_action_known"] and not evidence["architecture_research_required"]):
-        if _untrusted_blocks(evidence):
-            return _pm(base, evidence, risk, whole_class=False, fast_fix_closed=prior_closed,
-                       reason="free text is outside the closed vocabulary")
-        return _author(base, evidence, plan, risk, SPECIALIST_SOL, "SOURCE_KNOWN_COMPLEX",
-                       "known complex noncritical cause; Astra is not required", honored)
-    if (evidence["author_attempts"] < 3 and evidence["cause"] == "proven"
-            and evidence["minimal_action_known"] and not evidence["architecture_research_required"]
-            and evidence["brief_usable"]):
-        if _untrusted_blocks(evidence):
-            return _pm(base, evidence, risk, whole_class=False, fast_fix_closed=prior_closed,
-                       reason="free text is outside the closed vocabulary")
-        return _author(base, evidence, plan, risk, "cursor:auto", "SOURCE_KNOWN_STANDARD",
-                       "known cause uses an evidence-bound repair", honored)
+                     event_class="SOURCE_KNOWN_STANDARD")
     if evidence["cause"] == "missing_evidence":
         return _finish(base, policy_applied=True, executed=False, writer=False, risk=risk, qa_verdict=None,
                        missing_inputs=list(evidence["missing_inputs"]) or ["source evidence"],
@@ -568,7 +772,7 @@ def _classify(base, evidence, plan):
                fast_fix_closed=prior_closed, reason=reason)
 
 
-def _expert(base, evidence, plan, risk, class_open, prior_closed, honored):
+def _expert(base, evidence, plan, risk, class_open, prior_closed):
     qa = _critical_qa(evidence)
     nxt = evidence["author_attempts"] + 1 if prior_closed else None
     if qa is None:
@@ -583,7 +787,6 @@ def _expert(base, evidence, plan, risk, class_open, prior_closed, honored):
                  fast_fix_closed=prior_closed, whole_class=class_open, next_ordinary_attempt=nxt,
                  author_route=SPECIALIST_SOL, qa_route=qa, route="codex:gpt-6-astra:high",
                  ledger_category="ordinary", event_class="SOURCE_CRITICAL",
-                 plan_honored=False if class_open else honored,
                  reason="critical or hard defect uses read-only Astra, whole-class when another instance exists")
 
 
@@ -598,13 +801,13 @@ def _pm(base, evidence, risk, *, whole_class, reason, fast_fix_closed=False):
                  plan_honored=False)
 
 
-def _author(base, evidence, plan, risk, route, klass, reason, honored):
+def _author(base, evidence, plan, risk, route, klass, reason):
     model, cost = _auto_receipt(route, evidence)
     return _emit(base, evidence, plan, policy_applied=True, executed=True, writer=True, risk=risk,
                  planner_calls=0, astra_calls=0, model_calls=1, fast_fix=False,
                  author_route=route, qa_route=_ordinary_qa(evidence), route=route,
                  effective_model=model, cost=cost, ledger_category="ordinary",
-                 reason=reason, event_class=klass, plan_honored=honored)
+                 reason=reason, event_class=klass)
 
 
 def _quota(base, evidence):
@@ -703,6 +906,8 @@ def _template_ok(evidence, risk):
 
 
 def _ordinary_qa(evidence):
+    if evidence["complexity"] == "complex":
+        return _critical_qa(evidence)
     proof = evidence["qa_route_proof"]
     if evidence["agy_qa_qualified"] and type(proof) is str and proof.startswith("agy:") and proof in ROUTES:
         return proof
@@ -744,41 +949,6 @@ def _class_open(evidence):
 def _search_saved(evidence):
     search = evidence["class_search"]
     return type(search) is dict and search.get("saved") is True and search.get("assurance_only") is False
-
-
-def _search_state(search):
-    """The old six keys stay valid. Proof keys are optional, and missing proof is not closure."""
-    if search is None:
-        return None
-    if type(search) is not dict:
-        return "invalid class search"
-    keys = set(search)
-    if not _SEARCH_BASE <= keys or keys - _SEARCH_BASE - _SEARCH_OPTIONAL:
-        return "invalid class search"
-    if type(search["saved"]) is not bool or type(search["assurance_only"]) is not bool:
-        return "invalid class search"
-    if search["method"] not in SEARCH_METHODS:
-        return "invalid class search"
-    if type(search["instances"]) is not int or search["instances"] < 0:
-        return "invalid class search"
-    if type(search["pattern"]) is not str or type(search["scope"]) is not str:
-        return "invalid class search"
-    if len(search["pattern"]) > 200 or len(search["scope"]) > 240:
-        return "invalid class search"
-    if "matched_count" in search and (
-            type(search["matched_count"]) is not int or search["matched_count"] < 0):
-        return "invalid class search"
-    listing = search.get("scope_listing", None)
-    if "scope_listing" in search and (
-            type(listing) is not list or len(listing) > 32
-            or any(type(item) is not str or len(item) > 240 for item in listing)):
-        return "invalid class search"
-    identifiers = search.get("diff_identifiers", None)
-    if "diff_identifiers" in search and (
-            type(identifiers) is not list or len(identifiers) > 32
-            or any(type(item) is not str or len(item) > 200 for item in identifiers)):
-        return "invalid class search"
-    return None
 
 
 def _prior_closed(evidence):
@@ -921,29 +1091,6 @@ def _ru_sensitive_word(word):
     return word in _RU_RIGHTS
 
 
-def _iter_texts(value, key=None, seen=None, depth=0):
-    if depth > 32 or key in ("binding", "schema"):
-        return
-    if type(value) is str:
-        yield value
-        return
-    if type(value) is not dict and type(value) is not list and type(value) is not tuple:
-        return
-    if seen is None:
-        seen = set()
-    marker = id(value)
-    if marker in seen:
-        return
-    seen.add(marker)
-    if type(value) is dict:
-        for child_key, child in value.items():
-            yield from _iter_texts(child, child_key, seen, depth + 1)
-    else:
-        for child in value:
-            yield from _iter_texts(child, None, seen, depth + 1)
-    seen.discard(marker)
-
-
 def _foreign_script(text):
     """A letter outside Latin and Cyrillic is unrecognized. It raises the floor."""
     for char in text:
@@ -1052,6 +1199,9 @@ def _norm_token(word):
 
 
 _NORM_VOCAB = frozenset(_norm_token(word) for word in _CLOSED_VOCAB if _norm_token(word))
+# Vocabulary admission preserves spelling; repeat collapse belongs only to the
+# conservative stem scan. A misspelt path token is not a new admitted filename.
+_VOCAB_WORDS = frozenset(_strip_marks(word).casefold() for word in _CLOSED_VOCAB)
 
 
 def _letter_tokens(text):
@@ -1168,52 +1318,14 @@ def _collapsed_sensitive(text):
 
 
 def _vocab_tokens(text):
-    return _letter_tokens(_camel_split(text))
-
-
-def _vocab_sources(evidence):
-    for key in ("event_text", "goal"):
-        value = evidence.get(key)
-        if type(value) is str and value.strip():
-            yield value
-    diagnostics = evidence.get("diagnostics")
-    if type(diagnostics) is str and diagnostics.strip():
-        yield diagnostics
-    elif type(diagnostics) is list:
-        for item in diagnostics:
-            if type(item) is str and item.strip():
-                yield item
-    for item in evidence.get("paths") or []:
-        if type(item) is str and item.strip():
-            yield item
-    search = evidence.get("class_search")
-    if type(search) is not dict:
-        return
-    for key in ("pattern", "scope"):
-        value = search.get(key)
-        if type(value) is str and value.strip():
-            yield value
-    for key in ("scope_listing", "diff_identifiers"):
-        listing = search.get(key)
-        if type(listing) is not list:
-            continue
-        for item in listing:
-            if type(item) is str and item.strip():
-                yield item
+    return re.findall(r"[0-9a-zа-яё]+", _camel_split(text).casefold())
 
 
 def _outside_vocab(evidence):
-    """Free text outside the closed vocabulary downgrades. Empty text does not."""
-    for text in _vocab_sources(evidence):
-        prepared, _residue = _prepare(text)
-        for token in _vocab_tokens(prepared):
-            if token not in _NORM_VOCAB:
-                return True
-    return False
+    return evidence.text_proof["outside"]
 
 
 def _untrusted_blocks(evidence):
-    """Weakening keeps the condition-7 reason. Any other unknown text goes to PM."""
     return _outside_vocab(evidence) and not _weakens_any(evidence)
 
 
@@ -1232,7 +1344,7 @@ def _sensitive(value):
 
 
 def _sensitive_any(evidence):
-    return any(_sensitive(text) for text in _iter_texts(evidence))
+    return evidence.text_proof["sensitive"]
 
 
 def _fingerprint_key(value):
@@ -1251,42 +1363,15 @@ def _norm_id(value):
     return _fingerprint_key(value)
 
 
-def _has_cycle(value, seen=None, depth=0):
-    if depth > 32:
-        return True
-    if type(value) is not dict and type(value) is not list and type(value) is not tuple:
-        return False
-    if seen is None:
-        seen = set()
-    marker = id(value)
-    if marker in seen:
-        return True
-    seen.add(marker)
-    nested = value.values() if type(value) is dict else value
-    for child in nested:
-        if _has_cycle(child, seen, depth + 1):
-            return True
-    seen.remove(marker)
-    return False
-
-
 def _concrete_path(value):
-    """A concrete path names a file or directory. Dots, globs, and blanks do not."""
-    if type(value) is not str:
+    """Canonical relative ASCII path. Never repair or normalize an untrusted path."""
+    if type(value) is not str or not value or len(value) > 240 or not value.isascii():
         return False
-    text = value.strip()
-    if not text or text.casefold() in _GENERIC_WORDS:
+    if not re.fullmatch(r"[A-Za-z0-9_./-]+", value):
         return False
-    if "/" not in text and "." not in text:
+    if any(part in ("", ".", "..") for part in value.split("/")):
         return False
-    if re.fullmatch(r"[\*/\\\.\s]+", text):
-        return False
-    # A glob is not one file. Condition 8 needs a concrete path (SR-T26).
-    if any(char in text for char in "*?[]{}"):
-        return False
-    if not re.search(r"[0-9A-Za-z]{2,}", text):
-        return False
-    return True
+    return "/" in value or ("." in value and value not in (".", ".."))
 
 
 def _generic_part(part):
@@ -1311,7 +1396,19 @@ def _pattern_proves_class(search):
     if type(identifiers) is not list or pattern not in identifiers:
         return False
     listing = search.get("scope_listing")
-    if type(listing) is not list or not any(_concrete_path(item) for item in listing):
+    if (type(listing) is not list or not listing or len(set(listing)) != len(listing)
+            or not all(_concrete_path(item) for item in listing)):
+        return False
+    scope = search["scope"]
+    is_file = "." in scope.rsplit("/", 1)[-1]
+    if is_file and listing != [scope]:
+        return False
+    if not is_file and not all(item.startswith(scope + "/") for item in listing):
+        return False
+    if len(listing) != search.get("matched_count"):
+        return False
+    if (not identifiers or len(set(identifiers)) != len(identifiers)
+            or any(type(item) is not str or not item.strip() or item != pattern for item in identifiers)):
         return False
     if type(search.get("matched_count")) is not int or search.get("matched_count") != 1:
         return False
@@ -1374,7 +1471,8 @@ def _stem_active(stem, tokens):
     Repeated letters match either the spelled stem or the collapsed stem, so a
     double letter split across fragments still counts.
     """
-    collapsed = _collapse_runs(stem)
+    stem = _strip_marks(stem).casefold()
+    collapsed = _norm_token(stem)
     if _stem_occurs(stem, tokens):
         return True
     return collapsed != stem and _stem_occurs(collapsed, tokens)
@@ -1394,35 +1492,36 @@ def _weakens(value):
     tokens = _letter_tokens(stripped)
     if not tokens:
         return False
-    if any(_stem_active(stem, tokens) for stem in _RU_DESTRUCTIVE):
+    def has(*stems):
+        return any(_stem_active(stem, tokens) for stem in stems)
+
+    tests = has("test", "assert", "тест", "ассерт", "проверк")
+    timeout = has("timeout", "таймаут")
+    expected = has("expect", "ожида")
+    boundary = has("qa", "security", "auth", "защит", "безопас", "авториз", "доступ")
+    cuts = has("delet", "remov", "drop", "strip", "удал", "убрат")
+    gated = has("skip", "disable", "xfail", "xit", "отключ", "пропуст", "закомментир")
+    if cuts and (tests or timeout or expected or boundary):
         return True
-    if _stem_active("comment", tokens) and (
-            any(token == "out" for token in tokens) or _stem_active("out", tokens)):
+    if gated and (tests or timeout or boundary):
         return True
-    cuts = any(_stem_active(stem, tokens) for stem in ("delet", "remov", "drop", "strip"))
-    nouns = any(_stem_active(stem, tokens) for stem in ("assert", "test", "timeout", "expect"))
-    if cuts and nouns:
+    if has("comment") and has("out"):
         return True
-    gated = any(_stem_active(stem, tokens) for stem in ("skip", "disable", "xfail")) or "xit" in tokens
-    gated_nouns = any(_stem_active(stem, tokens) for stem in (
-        "test", "assert", "timeout", "qa", "security", "auth"))
-    if gated and gated_nouns:
+    if has("weaken", "loosen", "ослаб"):
         return True
-    if any(_stem_active(stem, tokens) for stem in ("weaken", "loosen")):
+    if has("rais", "increas", "extend", "повыс", "увелич", "продл") and timeout:
         return True
-    if any(_stem_active(stem, tokens) for stem in ("rais", "increas", "extend")) and _stem_active("timeout", tokens):
-        return True
-    if any(_stem_active(stem, tokens) for stem in ("adjust", "updat", "chang")) and _stem_active("expected", tokens):
+    if has("adjust", "updat", "chang", "измен", "подгон", "обнов") and expected:
         return True
     return False
 
 
 def _weakens_any(evidence):
-    return any(_weakens(text) for text in _iter_texts(evidence))
+    return evidence.text_proof["weakens"]
 
 
 def _case_error(case):
-    if type(case) is not dict or set(case) != _CASE_KEYS:
+    if type(case) is not dict or len(case) != len(_CASE_KEYS) or set(case) != _CASE_KEYS:
         return "unexpected case fields"
     if case["schema"] != CASE_SCHEMA or case["semantics"] not in ("legacy", "new"):
         return "unsupported case schema"
@@ -1440,7 +1539,7 @@ def _matches(pattern, value):
 
 
 def _binding_error(binding):
-    if type(binding) is not dict or set(binding) != _BIND_KEYS:
+    if type(binding) is not dict or len(binding) != len(_BIND_KEYS) or set(binding) != _BIND_KEYS:
         return "invalid binding"
     if not _matches(_SHA64, binding["task_sha"]) or not _matches(_SHA64, binding["rules_sha256"]):
         return "invalid binding"
@@ -1452,7 +1551,7 @@ def _binding_error(binding):
 
 
 def _pin_error(pins):
-    if type(pins) is not dict or set(pins) != _PIN_KEYS:
+    if type(pins) is not dict or len(pins) != len(_PIN_KEYS) or set(pins) != _PIN_KEYS:
         return "invalid pins"
     for key in ("code_commit", "capsule_commit", "policy_commit"):
         if not _matches(_SHA40, pins[key]):
@@ -1468,33 +1567,13 @@ def _pin_error(pins):
 def _evidence(raw):
     if type(raw) is not dict:
         return "invalid evidence"
-    if _has_cycle(raw):
-        return "cyclic evidence"
-    if set(raw) - _EVIDENCE_KEYS:
-        return "unknown evidence"
     try:
-        evidence = _defaults()
-        for key, value in raw.items():
-            evidence[key] = value
-        _check_evidence(evidence)
-        evidence["findings"] = copy.deepcopy(evidence["findings"])
-        evidence["history"] = copy.deepcopy(evidence["history"])
-        evidence["missing_inputs"] = list(evidence["missing_inputs"])
-        evidence["paths"] = list(evidence["paths"])
-        if type(evidence["diagnostics"]) is list:
-            evidence["diagnostics"] = list(evidence["diagnostics"])
-        if evidence["class_search"] is not None:
-            evidence["class_search"] = copy.deepcopy(evidence["class_search"])
-        if evidence["prior_fast_fix"] is not None:
-            evidence["prior_fast_fix"] = copy.deepcopy(evidence["prior_fast_fix"])
-        if evidence["plan"] is not None:
-            evidence["plan"] = copy.deepcopy(evidence["plan"])
-        if evidence["diff_check"] is not None:
-            evidence["diff_check"] = copy.deepcopy(evidence["diff_check"])
+        proof = _text_gate(raw)
     except ValueError as error:
         return str(error)
-    except Exception:
-        return "invalid evidence"
+    evidence = _ValidatedEvidence(_defaults())
+    evidence.update(copy.deepcopy(raw))
+    evidence.text_proof = proof
     return evidence
 
 
@@ -1524,83 +1603,3 @@ def _defaults():
         "author_qa_same_snapshot": False, "complexity": "standard", "event_kind": None,
         "requirement_conflict": False, "plan": None, "diff_check": None,
     }
-
-
-def _check_evidence(evidence):
-    if evidence["risk"] not in (None, "low", "moderate", "critical"):
-        raise ValueError("invalid risk")
-    if evidence["cause"] not in ("proven", "supported", "unresolved", "missing_evidence"):
-        raise ValueError("invalid cause")
-    if evidence["complexity"] not in ("mechanical", "standard", "complex"):
-        raise ValueError("invalid complexity")
-    if evidence["event_kind"] not in (None, "pending", "config_precall", "transient_infra", "requirement_conflict"):
-        raise ValueError("invalid event kind")
-    if evidence["template_tool"] not in (None, "deterministic_tool"):
-        raise ValueError("invalid template tool")
-    for key in ("template_applicable", "critical_signs", "difficult_or_repeating", "brief_usable",
-                "progress", "unknown_effect", "reconciled", "platform_refusal", "quota_exhausted",
-                "effects_proven_absent", "fallback_equivalent", "context_complete", "context_hash_ok",
-                "agy_catalog", "agy_qa_qualified", "qa_independent", "session_shared",
-                "effective_model_exposed", "invented_cost", "dispatch_duplicate", "plan_json_valid",
-                "acceptance_unchanged", "scope_within_admission", "finite_budget", "regression_known",
-                "minimal_action_known", "architecture_research_required", "external_effects_unknown",
-                "assertions_unchanged", "expected_values_unchanged", "qa_unchanged",
-                "timeout_unchanged", "auth_unchanged", "fast_fix_history_checked",
-                "critical_qa_qualified",
-                "whole_class_plan", "author_qa_same_snapshot", "requirement_conflict"):
-        if type(evidence[key]) is not bool:
-            raise ValueError("invalid evidence flag")
-    for key in ("author_attempts", "continuation_used", "no_progress_streak", "schema_repair_attempts"):
-        if type(evidence[key]) is not int or evidence[key] < 0 or evidence[key] > 7:
-            raise ValueError("invalid counter")
-    if evidence["line_count"] is not None and (type(evidence["line_count"]) is not int or evidence["line_count"] < 0):
-        raise ValueError("invalid line count")
-    if evidence["fallback_route"] is not None and evidence["fallback_route"] not in ROUTES:
-        raise ValueError("invalid fallback")
-    for key in ("template_id", "change_surface", "suggested_class", "defect_fingerprint",
-                "refusal_operation", "proposed_retry_operation", "proposed_provider",
-                "invented_model_id", "event_text", "goal", "qa_route_proof"):
-        if evidence[key] is not None and (type(evidence[key]) is not str or len(evidence[key]) > 500):
-            raise ValueError("invalid evidence string")
-    if type(evidence["paths"]) is not list or len(evidence["paths"]) > 32 or any(
-            type(item) is not str or len(item) > 240 for item in evidence["paths"]):
-        raise ValueError("invalid paths")
-    diagnostics = evidence["diagnostics"]
-    if type(diagnostics) is str:
-        if len(diagnostics) > 500:
-            raise ValueError("invalid diagnostics")
-    elif type(diagnostics) is list:
-        if len(diagnostics) > 32 or any(type(item) is not str or len(item) > 500 for item in diagnostics):
-            raise ValueError("invalid diagnostics")
-    else:
-        raise ValueError("invalid diagnostics")
-    if type(evidence["findings"]) is not list or len(evidence["findings"]) > 32:
-        raise ValueError("invalid findings")
-    seen = set()
-    for item in evidence["findings"]:
-        if type(item) is not dict or set(item) != {"id", "severity", "location"}:
-            raise ValueError("invalid finding")
-        if type(item["id"]) is not str or not item["id"] or item["id"] in seen:
-            raise ValueError("invalid finding")
-        if item["severity"] not in ("low", "moderate", "critical"):
-            raise ValueError("invalid finding")
-        if type(item["location"]) is not str or len(item["location"]) > 240:
-            raise ValueError("invalid finding")
-        seen.add(item["id"])
-    if type(evidence["missing_inputs"]) is not list or any(type(item) is not str or not item for item in evidence["missing_inputs"]):
-        raise ValueError("invalid missing inputs")
-    if type(evidence["history"]) is not list or len(evidence["history"]) > 32:
-        raise ValueError("invalid history")
-    for item in evidence["history"]:
-        if type(item) is not str or len(item) > 500:
-            raise ValueError("invalid history")
-    prior = evidence["prior_fast_fix"]
-    if prior is not None:
-        if type(prior) is not dict or set(prior) != {"fingerprint", "result"}:
-            raise ValueError("invalid prior fast fix")
-        if type(prior["fingerprint"]) is not str or prior["result"] not in ("pass", "fail"):
-            raise ValueError("invalid prior fast fix")
-    if evidence["plan"] is not None and type(evidence["plan"]) is not dict:
-        raise ValueError("invalid plan")
-    if evidence["diff_check"] is not None and type(evidence["diff_check"]) is not dict:
-        raise ValueError("invalid diff check")
