@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import { httpsCreditUrl } from "../lib/original-http-authority";
 
 const itemSchema = z.object({
   venueId: z.string().uuid(), file: z.string(), sha256: z.string().regex(/^[a-fA-F0-9]{64}$/),
   kind: z.enum(["photo", "logo", "illustration"]), credit_text: z.string().max(120),
-  source_page_url: z.string().max(300).url().refine(s => s.startsWith("https://")).nullable(),
+  source_page_url: z.string().max(300).refine(s => s.startsWith("https://") && httpsCreditUrl(s) !== null).url().nullable(),
   basis_note: z.string().max(600),
 }).strict().superRefine((v, ctx) => {
   if (v.file !== `${v.venueId}.jpg`) ctx.addIssue({code:"custom",message:"INVALID_FILE"});

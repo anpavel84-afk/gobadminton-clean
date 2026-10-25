@@ -1,21 +1,18 @@
 import { z } from "zod";
+import { forbiddenUrlScalars, httpUrlAgreesWithOriginalAuthority } from "../lib/original-http-authority";
 
 export type PublicVenueContacts = {
   phone: string | null;
   website: string | null;
   messengers: { kind: "telegram" | "whatsapp" | "vk"; url: string }[];
 };
-function hasForbiddenContactCharacters(value: string): boolean {
-  return Array.from(value).some(character => {
-    const code = character.charCodeAt(0);
-    return code <= 0x1f || (code >= 0x7f && code <= 0x9f) || character === "\\";
-  });
-}
+const hasForbiddenContactCharacters = forbiddenUrlScalars;
 const hosts = { telegram: "t.me", whatsapp: "wa.me", vk: "vk.com" } as const;
 export function publicContactUrl(value: unknown, kind?: keyof typeof hosts): string | null {
   if (typeof value !== "string" || hasForbiddenContactCharacters(value)) return null;
   const raw = value.trim();
   if (!/^https?:\/\//i.test(raw) || raw.split(/[/?#]/)[2]?.includes("@")) return null;
+  if (!httpUrlAgreesWithOriginalAuthority(raw, hasForbiddenContactCharacters)) return null;
   try {
     const url = new URL(raw);
     if (!url.hostname.startsWith("[") && (url.hostname.length > 253 || !url.hostname.split(".").every(label => /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(label)))) return null;

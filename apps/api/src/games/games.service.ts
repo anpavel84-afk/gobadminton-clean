@@ -22,6 +22,7 @@ import { InvitationsService } from "../invitations/invitations.service";
 import { ParticipationsService } from "../participations/participations.service";
 import { TrainersService } from "../trainers/trainers.service";
 import { APP_ENV, DATABASE_POOL } from "../tokens";
+import { privateContactWebsite } from "../lib/original-http-authority";
 import { effectiveVenueCtes } from "../venues/effective-venue.query";
 import { eligibleGames, normalizeDiscovery, type DiscoveryInput } from "./games-discovery.query";
 import { readGamesMap } from "./games-map.read";
@@ -831,7 +832,7 @@ function mapGameRow(row: GameRow): GameDto {
     venue: {
       ...(row.venue_contacts_allowed ? {
         contactPhone: row.venue_contact_phone,
-        contactWebsite: row.venue_contact_website,
+        contactWebsite: privateContactWebsite(row.venue_contact_website),
         bookingNote: row.venue_booking_note,
       } : {}),
       cover: { uploadedUrl: row.venue_cover_url ?? null },

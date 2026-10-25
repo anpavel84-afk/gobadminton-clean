@@ -14,8 +14,9 @@ function unescapeAttr(value: string) {
 function anchors(html: string) {
   return [...html.matchAll(/<a\b([^>]*)>/g)].map(match => unescapeAttr(/href="([^"]*)"/.exec(match[1] ?? "")?.[1] ?? ""));
 }
-function httpAnchors(html: string) {
-  return anchors(html).filter(href => href.startsWith("http://") || href.startsWith("https://"));
+/** Phone rows are tel:; every other anchor, including javascript: and data:, stays visible. */
+function nonTelAnchors(html: string) {
+  return anchors(html).filter(href => !href.startsWith("tel:"));
 }
 function contactHtml(value: unknown) {
   return renderToStaticMarkup(<VenuePublicContacts value={value} />);
@@ -69,12 +70,52 @@ function forbiddenScalar(input: string) {
     return code <= 31 || (code >= 127 && code <= 159) || character === "\\";
   });
 }
+/** Independent credit oracle: legacy charset/port/label policy, serialized length, and original-authority agreement. */
+function creditHref(input: string): string | null {
+  if (!legacyCredit(input) || /[\ud800-\udfff]/u.test(input)) return null;
+  try {
+    if (forbiddenScalar(decodeURIComponent(input))) return null;
+    const url = new URL(input);
+    if (url.href.length > 300 || url.username || url.password || url.port) return null;
+    const prefix = /^(https?):\/{2,}/i.exec(input);
+    if (!prefix || prefix[1]!.toLowerCase() !== "https") return null;
+    const remainder = input.slice(prefix[0].length);
+    const boundary = remainder.search(/[/?#]/);
+    const authority = boundary < 0 ? remainder : remainder.slice(0, boundary);
+    const parts = /^(\[[0-9a-f:.]+\]|[^:[\]@/\\?#]+)(?::([0-9]*))?$/i.exec(authority);
+    if (!parts) return null;
+    const rawPort = parts[2] === undefined || parts[2] === "" ? "" : parts[2].replace(/^0+/, "") || "0";
+    if (rawPort.length > 5 || (rawPort.length === 5 && rawPort > "65535")) return null;
+    const port = rawPort === "443" ? "" : rawPort;
+    if (port !== url.port) return null;
+    const hostOnly = new URL(`https://${parts[1]}/`);
+    if (hostOnly.hostname !== url.hostname || hostOnly.username || hostOnly.password || hostOnly.port) return null;
+    return url.href;
+  } catch { return null; }
+}
 
 describe("URL authority class in public venue contacts and gallery credit", () => {
+  it("fails when a javascript: or data: anchor is emitted", () => {
+    for (const website of ["javascript:alert(1)", "data:text/html,x", "JaVaScRiPt:alert(1)", "DaTa:text/html,x"]) {
+      expect(anchors(contactHtml({ website }))).toEqual([]);
+      expect(anchors(galleryHtml(website))).toEqual([]);
+    }
+  });
+
+  it("rejects a gallery credit whose serialized href exceeds 300 characters", () => {
+    const bomb = "https://a/?" + "'".repeat(97);
+    expect(bomb).toHaveLength(108);
+    expect(new URL(bomb).href).toHaveLength(302);
+    const html = galleryHtml(bomb);
+    expect(html).not.toContain("<img");
+    expect(anchors(html)).toEqual([]);
+    expect(nonTelAnchors(contactHtml({ website: bomb }))).toEqual([]);
+  });
+
   it("rejects the empty-userinfo family instead of publishing the normalized host", () => {
     const family = ["https:///@example.org/", "https:///:@example.org/", "https:////@example.org/", "https:////:@example.org/", "https:///@:@example.org/"];
     for (const website of family) {
-      expect(httpAnchors(contactHtml({ website }))).toEqual([]);
+      expect(nonTelAnchors(contactHtml({ website }))).toEqual([]);
       expect(contactHtml({ website })).not.toContain("example.org");
       expect(galleryHtml(website)).not.toContain("<img");
       expect(anchors(galleryHtml(website))).toEqual([]);
@@ -86,7 +127,7 @@ describe("URL authority class in public venue contacts and gallery credit", () =
     "https://:p@example.org/", "https://u:@example.org/", "https://@@example.org/", "https://a@b@example.org/",
     "https://%75ser:%70ass@example.org", "https://%40example.org/", "https:///%40example.org/",
   ])("rejects literal and encoded userinfo %s", website => {
-    expect(httpAnchors(contactHtml({ website }))).toEqual([]);
+    expect(nonTelAnchors(contactHtml({ website }))).toEqual([]);
     expect(galleryHtml(website)).not.toContain("href=");
   });
 
@@ -95,7 +136,7 @@ describe("URL authority class in public venue contacts and gallery credit", () =
     "https://example%00org/", "https://%2565xample.org/", "https://example.org:80:90/", "https://example.org:%38%30/",
     "https://example\uff20evil.org/", "https://example\uff0fevil.org/", "https://example\uff1a80/",
   ])("rejects encoded or confusable authority delimiters %s", website => {
-    expect(httpAnchors(contactHtml({ website }))).toEqual([]);
+    expect(nonTelAnchors(contactHtml({ website }))).toEqual([]);
     expect(anchors(galleryHtml(website))).toEqual([]);
   });
 
@@ -105,7 +146,7 @@ describe("URL authority class in public venue contacts and gallery credit", () =
     "//example.org", "/relative", "https:example.org", "https:/example.org", "http:\\host", "https:/\\example.org/",
     "https:\\\\example.org/", "https://example.org\\@evil.test",
   ])("rejects non-http(s) and slash-confused schemes %s", website => {
-    expect(httpAnchors(contactHtml({ website }))).toEqual([]);
+    expect(nonTelAnchors(contactHtml({ website }))).toEqual([]);
     expect(galleryHtml(website)).not.toContain("<img");
   });
 
@@ -113,7 +154,7 @@ describe("URL authority class in public venue contacts and gallery credit", () =
     "https://example.org:444/", "https://example.org:65536/", "https://example.org:x/", "https://example.org:+80/",
     "https://example.org:0/", "https://example.org:80/", "https://:80/", "https://example.org:00080/",
   ])("keeps the no-explicit-port policy, including non-default and overflow ports %s", website => {
-    expect(httpAnchors(contactHtml({ website }))).toEqual([]);
+    expect(nonTelAnchors(contactHtml({ website }))).toEqual([]);
     expect(anchors(galleryHtml(website))).toEqual([]);
   });
 
@@ -126,7 +167,7 @@ describe("URL authority class in public venue contacts and gallery credit", () =
       "", " ", 42, false, {}, [], null, undefined, new String("https://example.org/"), () => "https://example.org/", 1n,
     ];
     for (const website of inputs) {
-      expect(httpAnchors(contactHtml({ website }))).toEqual([]);
+      expect(nonTelAnchors(contactHtml({ website }))).toEqual([]);
       expect(galleryHtml(website)).not.toContain("<img");
     }
   });
@@ -141,7 +182,7 @@ describe("URL authority class in public venue contacts and gallery credit", () =
         `https:///${host}${path}`,
         `https://${host}:443${path}`,
       ]) {
-        expect(httpAnchors(contactHtml({ messengers: [{ kind, url: input }] }))).toEqual([`https://${host}${path}`]);
+        expect(nonTelAnchors(contactHtml({ messengers: [{ kind, url: input }] }))).toEqual([`https://${host}${path}`]);
       }
       for (const input of [
         `https:///@${host}${path}`, `https:////@${host}${path}`, `https:///:@${host}${path}`, `https:////:@${host}${path}`,
@@ -149,7 +190,7 @@ describe("URL authority class in public venue contacts and gallery credit", () =
         `http://${host}${path}`, `https://${host}/`, `https://${host}/a/..`, `https://${host}.evil.example${path}`,
         `https://${host}:444${path}`, `https://evil.example${path}`,
       ]) {
-        expect(httpAnchors(contactHtml({ messengers: [{ kind, url: input }] }))).toEqual([]);
+        expect(nonTelAnchors(contactHtml({ messengers: [{ kind, url: input }] }))).toEqual([]);
       }
     }
   });
@@ -158,10 +199,10 @@ describe("URL authority class in public venue contacts and gallery credit", () =
     for (const website of ["https:///@example.org/", "https:////:@example.org/", "https://%40example.org/", "https://example.org/\ud800"]) {
       const html = contactHtml({ phone: "+1234567", website, messengers: [{ kind: "telegram", url: "https://t.me/club" }] });
       expect(anchors(html).filter(href => href.startsWith("tel:"))).toEqual(["tel:+1234567"]);
-      expect(httpAnchors(html)).toEqual(["https://t.me/club"]);
+      expect(nonTelAnchors(html)).toEqual(["https://t.me/club"]);
     }
     const html = contactHtml({ phone: "+1234567", website: "https://example.org/a", messengers: [{ kind: "vk", url: "https:///@vk.com/club" }] });
-    expect(httpAnchors(html)).toEqual(["https://example.org/a"]);
+    expect(nonTelAnchors(html)).toEqual(["https://example.org/a"]);
     expect(html).toContain("tel:+1234567");
   });
 
@@ -176,7 +217,7 @@ describe("URL authority class in public venue contacts and gallery credit", () =
       ["https://[::1]/", "https://[::1]/"],
       [" ".repeat(310) + "https://example.com/", "https://example.com/"],
     ];
-    for (const [website, href] of rows) expect(httpAnchors(contactHtml({ website }))).toEqual([href]);
+    for (const [website, href] of rows) expect(nonTelAnchors(contactHtml({ website }))).toEqual([href]);
   });
 
   it("keeps a canonical gallery credit and rejects a bad credit without hiding the other facts", () => {
@@ -196,7 +237,7 @@ describe("URL authority class in public venue contacts and gallery credit", () =
     const trimmedSpace = `${" ".repeat(281)}https://example.org/`;
     const contact: string[] = [], gallery: string[] = [];
     for (const input of websiteMatrixNegative) {
-      const links = httpAnchors(contactHtml({ website: input }));
+      const links = nonTelAnchors(contactHtml({ website: input }));
       if (input === trimmedSpace) {
         if (links.join("|") !== "https://example.org/") contact.push(`${label(input)} => ${links.join("|")}`);
       } else if (links.length) contact.push(label(input));
@@ -210,14 +251,15 @@ describe("URL authority class in public venue contacts and gallery credit", () =
   it("keeps #272 positive destinations only where each sink's existing policy allows them", () => {
     const contact: string[] = [], gallery: string[] = [];
     for (const [input, href] of websiteMatrixPositive) {
-      const links = httpAnchors(contactHtml({ website: input }));
+      const links = nonTelAnchors(contactHtml({ website: input }));
       const allowed = legacyContactHref(href);
       if (allowed && links.join("|") !== href) contact.push(`${label(input)} => ${links.join("|")} expected ${href}`);
       if (!allowed && links.length) contact.push(`${label(input)} unexpectedly ${links.join("|")}`);
       const html = galleryHtml(input);
       const creditLinks = anchors(html);
-      if (legacyCredit(input)) {
-        if (creditLinks.join("|") !== input || !html.includes("<img")) gallery.push(`${label(input)} => ${creditLinks.join("|")}`);
+      const expected = creditHref(input);
+      if (expected) {
+        if (creditLinks.join("|") !== expected || !html.includes("<img")) gallery.push(`${label(input)} => ${creditLinks.join("|")} expected ${expected}`);
       } else if (creditLinks.length || html.includes("<img")) gallery.push(`${label(input)} unexpectedly ${creditLinks.join("|")}`);
     }
     expect(contact).toEqual([]);
@@ -228,7 +270,7 @@ describe("URL authority class in public venue contacts and gallery credit", () =
     const contact: string[] = [], gallery: string[] = [], messengers: string[] = [];
     const alphabet = ["/", "\\", "@", ":", "?", "#", "%"];
     const checkContact = (input: string) => {
-      const links = httpAnchors(contactHtml({ website: input }));
+      const links = nonTelAnchors(contactHtml({ website: input }));
       const trimmed = input.trim();
       let parsed: URL | null = null;
       try { parsed = new URL(trimmed); } catch { parsed = null; }
@@ -241,12 +283,12 @@ describe("URL authority class in public venue contacts and gallery credit", () =
     const checkGallery = (input: string) => {
       const html = galleryHtml(input);
       const links = anchors(html);
-      const accept = legacyCredit(input) && rawAuthority(input) === "example.org";
-      if (accept && (links.join("|") !== input || !html.includes("<img"))) gallery.push(`${label(input)} => ${links.join("|")}`);
-      if (!accept && (links.length || html.includes("<img"))) gallery.push(`${label(input)} unexpectedly ${links.join("|")}`);
+      const expected = creditHref(input);
+      if (expected && (links.join("|") !== expected || !html.includes("<img"))) gallery.push(`${label(input)} => ${links.join("|")} expected ${expected}`);
+      if (!expected && (links.length || html.includes("<img"))) gallery.push(`${label(input)} unexpectedly ${links.join("|")}`);
     };
     const checkMessenger = (input: string) => {
-      const links = httpAnchors(contactHtml({ messengers: [{ kind: "telegram", url: input }] }));
+      const links = nonTelAnchors(contactHtml({ messengers: [{ kind: "telegram", url: input }] }));
       let parsed: URL | null = null;
       try { parsed = new URL(input); } catch { parsed = null; }
       const accept = !forbiddenScalar(input) && rawAuthority(input) === "t.me" && parsed !== null

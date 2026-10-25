@@ -1,4 +1,5 @@
-/** Original HTTP(S) authority, recovered before WHATWG can discard empty userinfo.
+/** Same authority grammar as apps/api/src/lib/original-http-authority.ts.
+ * Original HTTP(S) authority, recovered before WHATWG can discard empty userinfo.
  * Host is a bracketed IPv6 candidate or one token with no structural delimiter,
  * plus an optional decimal port. Default ports are mapped away. Callers keep
  * their own length, label, scheme and allowlist policy. */
@@ -49,4 +50,18 @@ export function httpUrlAgreesWithOriginalAuthority(text: string, forbidden: (val
   } catch {
     return null;
   }
+}
+
+const creditCharset = /[^\x21-\x7e]|[\\<>"{}|^`]|%(?![0-9a-f]{2})/i;
+
+function creditDnsLabels(hostname: string): boolean {
+  return hostname.startsWith("[") || (hostname.length <= 253 && hostname.split(".").every(label => /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(label)));
+}
+
+/** HTTPS credit/source URL. Keeps the printable-ASCII, original-length, port and label policy, requires authority agreement, and returns the serialized href only when that href is at most 300 characters. */
+export function httpsCreditUrl(value: unknown): string | null {
+  if (typeof value !== "string" || value.length > 300 || !value.startsWith("https://") || creditCharset.test(value)) return null;
+  const url = httpUrlAgreesWithOriginalAuthority(value, forbiddenUrlScalars);
+  if (!url || url.protocol !== "https:" || url.username || url.password || url.port || url.href.length > 300 || !creditDnsLabels(url.hostname)) return null;
+  return url.href;
 }
