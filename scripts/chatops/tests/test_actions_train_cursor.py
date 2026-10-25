@@ -116,6 +116,71 @@ class ProspectiveRouting(unittest.TestCase):
             marker['modules']['native_cursor.py'] = 'bad'
             with self.assertRaises(core.Refused): N.qualification('slot2', 'approved')
 
+    def _modules(self):
+        return {n: hashlib.sha256(Path(N.__file__).with_name(n).read_bytes()).hexdigest()
+                for n in ('native_cursor.py', 'native_guard.py')}
+
+    def _bind(self, marker):
+        return patch.object(N, 'PIN_HASHES', {}), patch.object(
+            N, '_read', side_effect=lambda *a: json.dumps(marker).encode()), patch.object(
+            N, 'invoke', side_effect=AssertionError('cursor launch is not part of route selection'))
+
+    def test_ready_phase_uses_the_same_route_for_a_non_canary_task(self):
+        marker = {'schema': 'GB_CURSOR_AUTHOR_211_V1', 'phase': 'ready',
+                  'slots': ['slot1', 'slot2'], 'canary_task_sha256': '4570522a',
+                  'modules': self._modules()}
+        task = self.cursor_task()
+        task['goal'] = 'ordinary admitted author task after role qualification'
+        self.assertNotEqual(core.digest(task), marker['canary_task_sha256'])
+        pins, reader, launch = self._bind(marker)
+        with pins, reader, launch:
+            self.assertEqual(N.qualification('slot1', core.digest(task))['phase'], 'ready')
+            chosen = core.route(S, task, 'author', 'auto', self.budget, 'slot1')
+            qa = self.cursor_task()
+            self.assertEqual(core.route(S, qa, 'qa', 'auto', self.budget, 'slot1')['provider'], 'codex')
+        self.assertEqual(chosen['provider'], 'cursor')
+        self.assertEqual(chosen['requested_route'], 'cursor:auto')
+        self.assertEqual(chosen['effective_model'], 'Auto')
+        self.assertIsNone(chosen['effort'])
+        self.assertEqual(marker['phase'], 'ready')
+
+    def test_canary_phase_still_refuses_every_other_task_on_that_route(self):
+        marker = {'schema': 'GB_CURSOR_AUTHOR_211_V1', 'phase': 'canary',
+                  'slots': ['slot1', 'slot2'], 'canary_task_sha256': '4570522a',
+                  'modules': self._modules()}
+        task = self.cursor_task()
+        task['goal'] = 'not the reviewed canary'
+        pins, reader, launch = self._bind(marker)
+        with pins, reader, launch:
+            with self.assertRaises(core.Refused):
+                N.qualification('slot2', core.digest(task))
+            chosen = core.route(S, task, 'author', 'auto', self.budget, 'slot2')
+            task['author_routes'] = ['cursor:auto']
+            with self.assertRaises(core.Refused):
+                core.route(S, task, 'author', 'auto', self.budget, 'slot2')
+        self.assertEqual(chosen['provider'], 'codex')
+        self.assertIn('cursor:auto', chosen['unavailable'])
+        self.assertIn('reviewed train canary', chosen['unavailable']['cursor:auto'])
+        self.assertEqual(marker['phase'], 'canary')
+
+    def test_ready_marker_does_not_invent_a_cursor_route(self):
+        marker = {'schema': 'GB_CURSOR_AUTHOR_211_V1', 'phase': 'ready',
+                  'slots': ['slot1', 'slot2'], 'canary_task_sha256': '4570522a',
+                  'modules': self._modules()}
+        pins, reader, launch = self._bind(marker)
+        with pins, reader, launch:
+            legacy = cost_task()
+            legacy.pop('routing_policy')
+            self.assertEqual(core.route(S, legacy, 'author', 'auto', self.budget, 'slot2')['provider'], 'codex')
+            admitted = cost_task('complex', 'standard')
+            admitted['routing_policy']['schema'] = 'GB_STAGE_COST_V2'
+            admitted['author_routes'] = ['codex:gpt-6.1-sol:high', 'cursor:auto']
+            chosen = core.route(S, admitted, 'author', 'auto', self.budget, 'slot2')
+        self.assertEqual((chosen['provider'], chosen['effective_model'], chosen['effort']),
+                         ('codex', 'gpt-6.1-sol', 'high'))
+        self.assertEqual(chosen['requested_route'], 'codex:gpt-6.1-sol:high')
+        self.assertEqual(marker['phase'], 'ready')
+
 
 class SourceImport(unittest.TestCase):
     def setUp(self):
