@@ -1,4 +1,5 @@
 import type { AppEnv } from "../../config/env";
+import { safeProviderAvatar } from "../../profiles/avatar-presentation";
 import { serviceUnavailable } from "../problem";
 import type {
   AuthProviderAdapter,
@@ -177,7 +178,7 @@ export class VkAuthProvider implements AuthProviderAdapter {
       subject,
       email: optionalText(user.email),
       displayName: displayName || null,
-      avatarUrl: optionalText(user.avatar),
+      avatarUrl: safeProviderAvatar(optionalText(user.avatar)),
     };
   }
 }

@@ -1,6 +1,7 @@
 import { Inject, Injectable } from "@nestjs/common";
 import type { Pool, PoolClient } from "pg";
 import { DATABASE_POOL } from "../tokens";
+import { safeProviderAvatar } from "../profiles/avatar-presentation";
 import { lockAuthActor, usableAuthMethodCount } from "./auth-method.service";
 import { conflict } from "./problem";
 import type { VerifiedIdentity } from "./providers/types";
@@ -19,6 +20,7 @@ export class IdentityService {
   async resolveOrCreateUser(identity: VerifiedIdentity): Promise<UserRecord> {
     const client = await this.pool.connect();
     try {
+      const avatarUrl = safeProviderAvatar(identity.avatarUrl);
       await client.query("BEGIN");
       const existing = await client.query<{
         id: string;
@@ -44,7 +46,7 @@ export class IdentityService {
           [
             identity.email ?? null,
             identity.displayName ?? null,
-            identity.avatarUrl ?? null,
+            avatarUrl,
             identity.issuerNamespace,
             identity.subject,
           ],
@@ -90,7 +92,7 @@ export class IdentityService {
             identity.subject,
             identity.email ?? null,
             identity.displayName ?? null,
-            identity.avatarUrl ?? null,
+            avatarUrl,
           ],
         );
       } catch (_error) {
@@ -221,6 +223,7 @@ export class IdentityService {
   ): Promise<"linked" | "already_linked"> {
     const client = await this.pool.connect();
     try {
+      const avatarUrl = safeProviderAvatar(identity.avatarUrl);
       await client.query("BEGIN");
       await lockAuthActor(client, userId, sessionId, true);
 
@@ -240,7 +243,7 @@ export class IdentityService {
             [
               identity.email ?? null,
               identity.displayName ?? null,
-              identity.avatarUrl ?? null,
+              avatarUrl,
               identity.issuerNamespace,
               identity.subject,
             ],
@@ -282,7 +285,7 @@ export class IdentityService {
             identity.subject,
             identity.email ?? null,
             identity.displayName ?? null,
-            identity.avatarUrl ?? null,
+            avatarUrl,
           ],
         );
       } catch (_error) {
