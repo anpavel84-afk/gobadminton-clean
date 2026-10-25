@@ -577,6 +577,112 @@ class AdmissionPM(unittest.TestCase):
         self.atomic(P.package_path(P.identity(29, P.ROLES[0], COMMENT, self.request)), dict(schema='fake'))
         self.assertEqual(self.run_pm()['status'], 'BLOCKED')
 
+    def durable_snapshot(self):
+        return {str(p.relative_to(self.root)): p.read_bytes()
+                for p in (self.policy, self.marker, self.budget, *self.state.iterdir())}
+
+    def sized_journal(self, size, unit='x'):
+        """Completed synthetic operation; exact atomic byte size, real read gate."""
+        path = self.state / 'slot2.json'
+        slot = R.read(path, 0)
+        row = dict(finished_at=1, result=dict(status='confirmed', evidence=''))
+        slot['operations']['f'*64] = row
+        padding = size - len(A.encoded(slot))
+        self.assertGreaterEqual(padding, 0)
+        # Include adversarial JSON escaping when requested. Pad any byte-size
+        # remainder with ASCII so all sizes, including exact boundaries, exist.
+        count, tail = divmod(padding, len(json.dumps(unit).encode()) - 2)
+        row['result']['evidence'] = unit*count + 'x'*tail
+        self.atomic(path, slot)
+        self.assertEqual(path.stat().st_size, size)
+        self.assertEqual(R.read(path, 0), slot)
+        return slot
+
+    def assert_size_refusal_without_writes(self, mode='--apply'):
+        before = self.durable_snapshot()
+        with patch.object(R, 'atomic', wraps=self.atomic) as writes:
+            value = self.run_pm(mode)
+        self.assertEqual(value['status'], 'BLOCKED', value)
+        self.assertIn('recovery read limit', value['reason'])
+        self.assertFalse(value['replayed'])
+        writes.assert_not_called()
+        self.assertEqual(self.durable_snapshot(), before)
+        return value
+
+    def test_qa_2090201_byte_journal_refuses_before_any_mutation(self):
+        # QA R2b reproduction: the input is readable but its transaction envelope
+        # crosses 2 MiB. Refusal must precede even the intent/policy writes.
+        self.set_history(qualification=2, original=True)
+        self.sized_journal(2090201)
+        for mode in ('--dry-run', '--apply'):
+            with self.subTest(mode=mode):
+                value = self.assert_size_refusal_without_writes(mode)
+                self.assertIn('intent', value['reason'])
+
+    def test_input_journal_at_read_limit_and_limit_minus_one_remains_unchanged(self):
+        # Read accepts both inputs; the serialized envelope must still refuse.
+        for size in (2097152, 2097151):
+            self.sized_journal(size)
+            for mode in ('--dry-run', '--apply'):
+                with self.subTest(size=size, mode=mode):
+                    self.assert_size_refusal_without_writes(mode)
+
+    def test_complete_receipt_boundary_and_largest_accepted_round_trip(self):
+        # Measure the real envelope without bypassing any validation or write.
+        self.sized_journal(2000000)
+        with patch.object(P, 'recoverable_sizes', wraps=P.recoverable_sizes) as sizes:
+            self.assertEqual(self.run_pm('--dry-run')['status'], 'GRANTED')
+        transaction = sizes.call_args.args[0]
+        overhead = len(A.encoded(dict(transaction, phase='complete'))) - 2000000
+        self.assertGreater(overhead, 0)
+        for receipt_size in (2097153, 2097152):
+            self.sized_journal(receipt_size - overhead)
+            for mode in ('--dry-run', '--apply'):
+                with self.subTest(receipt_size=receipt_size, mode=mode):
+                    value = self.assert_size_refusal_without_writes(mode)
+                    # Intent is two bytes shorter and fits; complete must be
+                    # checked separately, before writing that valid intent.
+                    self.assertIn('complete receipt', value['reason'])
+        self.sized_journal(2097151 - overhead)
+        granted = self.run_pm()
+        self.assertEqual(granted['status'], 'GRANTED', granted)
+        self.assertEqual(Path(granted['receipt_path']).stat().st_size, 2097151)
+        for p in (self.policy, self.marker, *self.state.glob('*.json')):
+            self.assertLess(p.stat().st_size, 65536 if p == self.marker else 2097152)
+            R.read(p, 0)  # Same production recovery reader, no raised limits.
+        self.http.reset_mock()
+        self.http.side_effect = AssertionError('offline replay fetched')
+        before = self.durable_snapshot()
+        for mode in ('--apply', '--status'):
+            value = self.run_pm(mode)
+            self.assertEqual(value['status'], 'GRANTED', value)
+            self.assertTrue(value['replayed'])
+            self.assertEqual(value['admission_id'], granted['admission_id'])
+        self.http.assert_not_called()
+        self.assertEqual(before, self.durable_snapshot())
+
+    def test_json_escaped_journal_must_fit_its_envelope_before_writes(self):
+        # A much smaller readable journal can grow well beyond 2 MiB when its
+        # quotes, backslashes, newlines and Unicode escapes are encoded again.
+        self.sized_journal(1600000, unit='"\\\n\u2603')
+        for mode in ('--dry-run', '--apply'):
+            with self.subTest(mode=mode):
+                self.assert_size_refusal_without_writes(mode)
+
+    def test_large_accepted_journal_recovers_after_each_durable_write(self):
+        self.set_history(qualification=2, original=True)
+        original = self.sized_journal(2000000)
+        # Includes writes 1 (intent), 2 (disabled policy), 3 (package), marker,
+        # journal, complete receipt and reactivation, all with real readback.
+        self.test_crash_after_every_durable_write_is_idempotent(historical=2)
+        value = self.run_pm('--status')
+        self.assertEqual(value['status'], 'GRANTED', value)
+        self.assertTrue(value['replayed'])
+        for p in (self.policy, self.marker, *self.state.glob('*.json')):
+            self.assertLess(p.stat().st_size, 65536 if p == self.marker else 2097152)
+            R.read(p, 0)
+        self.assertEqual(R.read(self.state/'slot2.json', 0)['operations'], original['operations'])
+
     def test_crash_after_every_durable_write_is_idempotent(self, historical=0):
         original = {p.name: p.read_bytes() for p in self.state.iterdir()}
         policy_raw, marker_raw = self.policy.read_bytes(), self.marker.read_bytes()

@@ -29,6 +29,9 @@ FIELDS = {'schema', 'issue', 'repo_id', 'scope', 'roles',
           'controller_sha', 'rules_sha256', 'expires_at', 'allowed_input_paths'}
 REQUEST_FIELDS = {'source_base', 'source_head', 'input_revision', 'input_path', 'input_sha256'}
 RECEIPT_PREFIX = A.RECEIPT_PREFIX + 'delegated-'
+# Existing receiver.read and native_antigravity.trusted contracts; not new limits.
+METADATA_READ_LIMIT = 2097152
+MARKER_READ_LIMIT = 65536
 
 
 class NeedsOwner(Refused):
@@ -409,6 +412,29 @@ def result(status, *, admission_id, reason, remaining=None, dry_run=False, repla
                 needs_review=status in ('BLOCKED', 'NEEDS_OWNER'), dry_run=dry_run, replayed=replayed)
 
 
+def recoverable_sizes(transaction, package, newmarker, newslot):
+    """Check exact atomic JSON bytes for EVERY write before the first mutation.
+
+    The raw slot journal is JSON-escaped again inside the transaction. Its own
+    read limit therefore cannot guarantee the intent/complete receipt will fit.
+    Check both phases (complete is longer), including all other commit targets.
+    A.encoded uses the same serialization as receiver.atomic; keep one byte of
+    headroom even though the readers accept an object exactly at their limit.
+    This admission-only preflight leaves the personal Owner path unchanged.
+    """
+    for name, value, limit in (
+        ('intent', transaction, METADATA_READ_LIMIT),
+        ('complete receipt', dict(transaction, phase='complete'), METADATA_READ_LIMIT),
+        ('package', package, METADATA_READ_LIMIT),
+        ('marker', newmarker, MARKER_READ_LIMIT),
+        ('slot journal', newslot, METADATA_READ_LIMIT),
+        ('disabled policy', dict(transaction['policy_before'], mode='disabled'), METADATA_READ_LIMIT),
+        ('active policy', dict(transaction['policy_before'], mode='active'), METADATA_READ_LIMIT),
+    ):
+        need(len(A.encoded(value)) < limit,
+             'admission ' + name + ' must be strictly below recovery read limit: ' + str(limit) + ' bytes')
+
+
 def run(mode, issue, role, comment_id, request):
     """Caller holds the receiver lock; all state access uses trusted receiver helpers."""
     admission_id = identity(issue, role, comment_id, request)
@@ -471,7 +497,6 @@ def run(mode, issue, role, comment_id, request):
         prior_slot, prior_marker = slot, marker
     action = 'analysis' if role == ROLES[0] else 'qa'
     q, newmarker, newslot = A.transition_plan(action, comment_id, controller, prior_slot, prior_marker, package)
-    need(len(A.encoded(newmarker)) <= 65536, 'delegated marker exceeds existing native read limit')
     remaining = dict(used_calls=used, package_calls=package['ceiling'] - used,
                      total_calls=v['max_total_calls'] - used, packages=v['max_packages'] - len(packages) - 1)
     targets = dict(slot_after_sha256=hashlib.sha256(A.encoded(newslot)).hexdigest(),
@@ -492,6 +517,7 @@ def run(mode, issue, role, comment_id, request):
                            marker_before=marker, marker_before_sha256=A.sha(N.MARKER),
                            policy_before=policy, historic_sha256=A.HIST, supplement_sha256=A.SUP,
                            budget_sha256=A.BUDGET, charged_calls=0, role=role, remaining_budget=remaining, **targets)
+    recoverable_sizes(transaction, package, newmarker, newslot)
     now_slot, now_marker = A.sha(R.STATE / 'slot2.json'), A.sha(N.MARKER)
     need(now_slot in (transaction['slot_before_sha256'], transaction['slot_after_sha256'])
          and now_marker in (transaction['marker_before_sha256'], transaction['marker_after_sha256'])

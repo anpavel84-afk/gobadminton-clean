@@ -14,7 +14,8 @@ secrets, budgets, or historical state were changed. No installation or commit wa
 performed.
 
 Preflight source: `anpavel84-afk/gobadminton-clean`, supplied dev checkout at
-`c985b8e4271d123e9e7d0f120d616f2db83597d5` (draft PR #306, round-2 revision).
+`bf51da41a17557a5ebe04c93ecaa0d07a30a6a62` (draft PR #306, round-3 M3 revision;
+local checkout is detached at this exact SHA).
 Role: AUTHOR under the direct Owner assignment in this task; sole writer for the allowed-file revision, Grok retains runtime
 ownership. Base/source is that SHA; candidate is the uncommitted allowed-file diff.
 Accepted EOM 1.4: commit `13a8b6c54a45aaa57021e092a1bee54926d9eac4`, SHA-256
@@ -168,7 +169,23 @@ package/marker/generation through exact-before/exact-after `safe_put`, validates
 the native descriptor and historical pins, completes the receipt, and restores
 active policy. Interrupted operations resume only their exact snapshots under
 the same lock. Changed policy or targets fail closed; no historical rollback is
-performed. The marker retains the native 65536-byte limit. The personal Owner
+performed. Before dry-run succeeds or apply makes its first write, Admission PM
+checks the exact serialized bytes of **every** commit target: intent, complete
+receipt, package, marker, slot journal, disabled policy and restored active policy.
+Serialization uses the same sorted JSON and ASCII escaping as `receiver.atomic`.
+Intent and complete receipt are checked separately: `complete` is two bytes
+longer than `intent`. Embedding the raw journal can add JSON escaping and an
+envelope even when the input journal itself fits its read limit.
+
+Every output must be **strictly smaller** than its existing reader's limit:
+2097152 bytes for receiver metadata and 65536 bytes for the native marker. Limits
+are not raised. An oversized target returns `BLOCKED`, its deterministic
+`admission_id`, a reason naming the target and recovery read limit, and
+`model_calls=0`; neither an intent nor a disabled policy is written. This applies
+to exact-intent recovery as well as fresh enrollment. Historical journals retain
+all their bytes; no compaction, refunds or replacement accounting is introduced.
+Previously created unreadable intents are not repaired by this source change.
+The personal Owner
 comment enrollment/QA CLI, fields, two-call limit and authentication are preserved.
 
 ## Install and rollback (instructions only)
@@ -246,6 +263,38 @@ intended assertion. Production HTTPS fetching is exercised through a synthetic
 invocations remain blocked and their call counts are zero. Completed replay and
 status have zero transport calls as well. Manifest pins match the on-disk bytes
 of admission_pm.py, antigravity_qa_recovery.py and owner_package_admission.py.
+
+Round-3 M3 author verification (non-root UID 1002, default sandbox temporary
+directory, `TMPDIR` unset; no network, installation or commit):
+
+| Check | Exact round-3 outcome |
+| --- | --- |
+| `python3 -B -m unittest discover -s scripts/chatops/tests -p 'test_actions_train_admission_pm.py'` | 52 run, 52 PASS; all 47 previous tests retained plus 5 M3 regression tests |
+| `python3 -B -m unittest discover -s scripts/chatops/tests -p 'test_actions_train_owner_package.py'` | 9 run, 9 PASS; Owner-only source and tests unchanged |
+| `python3 -B -m unittest discover -s scripts/chatops/tests -p 'test_actions_train*recovery*.py'` | 76 run, 76 PASS |
+| `python3 -B -m unittest discover -s scripts/chatops/tests -p 'test_actions_train_addressed*.py'` | 51 run: 49 PASS, 1 baseline FAIL, 1 skipped |
+| `python3 scripts/check_foundation.py` | PASS: 289 Markdown files, 168 draft API operations |
+| Three new regression tests against original bf51da41 `run()` loaded in memory | 3 run, 8 expected subtest assertion failures, 0 errors; original source files untouched |
+| Original bf51da41 admission modules loaded in memory, exact failing addressed test | 1 run, 1 FAIL, 0 errors; confirmed same `Role: qa.` baseline failure |
+
+The new tests refuse the QA reproduction journal of **2090201 bytes** before any
+atomic write, in dry-run and apply, with byte-identical policy, marker, budget and
+all state files. Journal inputs exactly at 2097152 and 2097151 bytes are readable
+but refused before writing their larger envelopes. A separate serialized-complete
+receipt boundary test rejects sizes 2097152 and 2097153 while the intent still
+fits; a receipt of exactly **2097151 bytes** grants, replays and answers status
+offline with the same ID and unchanged files. Quote, backslash, newline and Unicode
+escaping are covered with a 1600000-byte journal. A 2000000-byte accepted journal
+with spent historical UNKNOWN charges recovers after each of all seven durable
+writes, including intent, policy disable and package; all resulting files pass
+the unchanged recovery reader. Refusal tests assert zero atomic calls as well as
+byte-identical state. No existing tests were deleted or weakened.
+
+The addressed baseline failure and protected-root skip described above remain;
+the mandatory addressed group is **not PASS**. The final manifest refresh pins
+the changed admission module bytes; owner_package_admission.py and
+antigravity_qa_recovery.py remain byte-identical to bf51da41. Only Admission PM,
+its synthetic test file, this procedure and the manifest changed in round 3.
 
 Independent exact-candidate QA, hosted CI, installed-state readback, real #29
 admission, provider calls and DEV verification: **NOT_TESTED**. Next permitted step
