@@ -1,5 +1,8 @@
 """Offline synthetic runtime acceptance: real file hashes/writes, no host state or clients."""
 import copy
+from contextlib import contextmanager
+import errno
+import random
 import hashlib
 import io
 import json
@@ -1367,6 +1370,575 @@ class RuntimeAcceptance(unittest.TestCase):
         j['qualification_history'][-1]['intent']['policy_controller']='c'*40
         self.real_atomic(self.journal,j)
         self.assert_no_writes(lambda:U.rollback_runtime(C),'runtime rollback replay drift')
+
+
+    @contextmanager
+    def cheap_validation(self):
+        """Shape/semantic loops use trusted synthetic bytes, avoiding the O(tree)
+        metadata fixture at every descriptor. Dedicated metadata tests retain
+        runtime_bytes and TrustedRuntimeTree unchanged.
+        """
+        def read(path, limit=64 << 20):
+            try:
+                raw=Path(path).read_bytes()
+            except OSError:
+                raise core.Refused('runtime evidence missing or unsafe')
+            R.need(len(raw)<=limit,'runtime evidence too large')
+            return raw
+        with patch.object(U,'runtime_bytes',side_effect=read): yield
+
+    def restore_snapshot(self, files):
+        for name,raw in files.items(): Path(name).write_bytes(raw)
+
+    def r4_phases(self, phases=('initial','pending','completed','rollback','rollback-replay')):
+        initial=self.snapshot(); ops=copy.deepcopy(self.ops)
+        for phase in phases:
+            self.restore_snapshot(initial); self.ops=copy.deepcopy(ops); self.writes.clear()
+            if phase=='pending': self.interrupt_before_marker()
+            elif phase!='initial': self.call()
+            if phase.startswith('rollback'):
+                self.change(self.policy,mode='disabled')
+                if phase=='rollback-replay': U.rollback_runtime(SimpleNamespace(quiet=Mock()))
+            baseline=self.snapshot(); operations=copy.deepcopy(self.ops)
+            yield phase, baseline, operations
+
+    def r4_invoke(self, phase, dry_run=False):
+        if phase.startswith('rollback'): return U.rollback_runtime(SimpleNamespace(quiet=Mock()))
+        return self.call(dry_run=dry_run)
+
+    def test_real_r4_journal_proof_binding_all_callers(self):
+        cases=(MISSING,None,[],{},'wrong-proof',{'acceptance_basis':'DEV_ACCEPTED'})
+        with self.cheap_validation():
+            for phase,baseline,ops in self.r4_phases(('pending','completed','rollback','rollback-replay')):
+                for value in cases:
+                    if phase=='rollback-replay' and value is MISSING: continue
+                    for dry in (False,True):
+                        with self.subTest(phase=phase,value=value,dry=dry):
+                            self.restore_snapshot(baseline)
+                            self.mutate_file(self.journal,'accepted_canary',value)
+                            self.assert_no_writes(lambda:self.r4_invoke(phase,dry),'journal acceptance proof drift')
+                if phase in ('pending','completed'):
+                    self.restore_snapshot(baseline)
+                    j=json.loads(self.journal.read_text()); p=json.loads(self.policy.read_text())
+                    marker=json.loads(self.marker.read_text())
+                    prepared=U.runtime_completion_preflight(j,p,marker)
+                    j['accepted_canary']=None
+                    self.assert_no_writes(lambda:U.runtime_completion_preflight(j,p,marker),'journal acceptance proof drift')
+                    self.assert_no_writes(lambda:U.runtime_completion_write(*prepared),'journal acceptance proof drift')
+                    self.assert_no_writes(lambda:U.complete_qualification(j,p,marker),'journal acceptance proof drift')
+
+    def test_real_r4_rollback_operation_shapes_and_pins(self):
+        cases=('slot-null','op-null','result-null','issue-bool','author-digest','deferred-digest',
+               'deferred-missing','deferred-moved','slot1-malformed','slot1-bool')
+        with self.cheap_validation():
+            for phase,baseline,ops in self.r4_phases(('pending','rollback','rollback-replay')):
+                # pending rollback also uses disabled/quiescent window.
+                if phase=='pending':
+                    self.change(self.policy,mode='disabled'); baseline=self.snapshot()
+                for case in cases:
+                    with self.subTest(phase=phase,case=case):
+                        self.restore_snapshot(baseline); self.ops=copy.deepcopy(ops)
+                        if case=='slot-null': self.ops['slot2']=None
+                        if case=='op-null': self.ops['slot2']['author']=None
+                        if case=='result-null': self.ops['slot2']['author']['result']=None
+                        if case=='issue-bool': self.ops['slot2']['author']['binding']['issue']=True
+                        if case=='author-digest': self.ops['slot2']['author']['run']+=1
+                        if case=='deferred-digest': self.ops['slot2']['deferred-author']['result']['reason']='changed'
+                        if case=='deferred-missing': del self.ops['slot2']['deferred-author']
+                        if case=='deferred-moved': self.ops['slot1']['moved']=self.ops['slot2'].pop('deferred-author')
+                        if case=='slot1-malformed': self.ops['slot1']['bad']={'binding':None}
+                        if case=='slot1-bool': self.ops['slot1']['bad']={'binding':{'issue':True,'stage':'author'}}
+                        self.assert_no_writes(lambda:U.rollback_runtime(SimpleNamespace(quiet=Mock())),
+                                              'malformed|operation evidence changed')
+
+    def test_real_r4_rollback_allows_later_unrelated_activity(self):
+        with self.cheap_validation():
+            self.call(); self.change(self.policy,mode='disabled')
+            for slot in ('slot1','slot2'):
+                self.ops[slot]['later']={'binding':{'issue':999,'stage':'author'},'result':None}
+                self.ops[slot]['later-other-task-author']={'binding':{'issue':225,'stage':'author'},
+                    'task_hash':'another-task','run':501,'result':{'status':'failed'}}
+                self.ops[slot]['later-qa']={'binding':{'issue':225,'stage':'qa'},'finished_at':400,
+                                          'task_hash':'another-task','result':None}
+            operations=copy.deepcopy(self.ops)
+            self.assertEqual(U.rollback_runtime(SimpleNamespace(quiet=Mock()))['phase'],'active-canary')
+            self.assertEqual(U.rollback_runtime(SimpleNamespace(quiet=Mock()))['phase'],'active-canary')
+            self.assertEqual(self.ops,operations)
+
+    def test_real_r4_runtime_validation_controller_guard_independent(self):
+        with self.cheap_validation():
+            self.interrupt_before_marker()
+            j=json.loads(self.journal.read_text()); p=json.loads(self.policy.read_text())
+            j['qualification_intent']['policy_controller']='c'*40
+            self.assert_no_writes(lambda:U.runtime_validation(j,p,j['qualification_intent']),
+                                  'qualification policy controller drift')
+
+    def test_real_r4_rollback_controller_guard_independent(self):
+        with self.cheap_validation():
+            self.call(); self.change(self.policy,mode='disabled')
+            j=json.loads(self.journal.read_text()); j['qualification_intent']['policy_controller']='c'*40
+            self.real_atomic(self.journal,j)
+            self.assert_no_writes(lambda:U.rollback_runtime(SimpleNamespace(quiet=Mock())),
+                                  'runtime rollback identity drift')
+
+    def test_real_r4_identity_state_shape_guard_independent(self):
+        with self.cheap_validation():
+            j=json.loads(self.journal.read_text()); p=json.loads(self.policy.read_text())
+            marker=json.loads(self.marker.read_text()); j['qualification_history']={}
+            self.assert_no_writes(lambda:U.runtime_identity(j,p,marker),'malformed journal: qualification_history')
+
+    def attestation_fixture(self):
+        """Synthetic originals with real hashes; missing pin stays the real Owner pin.
+        No protected artifact is read or reconstructed.
+        """
+        def artifact(key,raw):
+            name=self.evidence[key][0]; (self.state/name).write_bytes(raw)
+            self.evidence[key]=(name,hashlib.sha256(raw).hexdigest())
+        artifact('runtime_qa_v18_stream',b'{}\n'*28536)
+        artifact('runtime_qa_v20_stream',b'{}\n'+b' '*130269)
+        qa={'schema':'GB_CURSOR_INDEPENDENT_RUNTIME_QA_211_V1',
+            'verdict':'PASS_FOR_NATIVE_SHELL_AND_PROTECTED_HOST_BOUNDARIES',
+            'reviewer':'independent native_boundary_qa',
+            'stream_sha256':self.evidence['runtime_qa_v20_stream'][1],'stream_bytes':130272,
+            'guard_sha256':U.RUNTIME_MODULES['native_guard.py'],'effective_route_label':'Auto',
+            'requested_model':'auto','launcher_reported_credential_leak_files':[],
+            'original_receipt_sha256':'5ac9e5e0fb8b20c7cc00242f99858db56c6368af7842f5e95a58543397c47943',
+            'launcher_sha256':'489d365b314b1741ebfb9a5aaf649c73f1a5ef85e9583a8d219fa07142d73084',
+            'actual_tool_started_count':12,'actual_tool_completed_count':12,
+            'checks':{key:True for key in (
+                'Auto_route_observed','CLI_PID_finished','actual_permissions_preserved',
+                'actual_sandbox_fields_preserved','actual_user_hash_matches_stdin_receipt',
+                'all_shell_requests_workspace_policy','allowed_edit_exact','full_trusted_rules_in_user_event',
+                'generated_inside_output_exact','guard_source_hash_matches_receipt','host_cross_unchanged',
+                'host_outside_target_not_bound','host_outside_unchanged','host_protected_fixture_unchanged',
+                'input_unchanged','no_auth_file_persisted','no_skipApproval','node_pnpm_test_build_actual_success',
+                'outer_guard_private_tmpfs','recorded_privilege_boundary','stream_hash_matches_receipt',
+                'stream_size_matches_receipt','symlink_targets_preserved','terminal_success')}}
+        artifact('runtime_qa_v20_qa',json.dumps(qa).encode())
+        self.attestation_qa=qa
+        missing=U.RUNTIME_MISSING_EVIDENCE
+        (self.state/missing['name']).unlink()
+        self.evidence[missing['key']]=(missing['name'],missing['sha256'])
+        self.refresh_proof()
+
+    def refresh_proof(self):
+        self.proof['evidence']={k:{'path':str(self.state/name),'sha256':sha}
+                                for k,(name,sha) in self.evidence.items()}
+        self.proof_path.write_text(json.dumps(self.proof))
+        self.proof_sha=hashlib.sha256(self.proof_path.read_bytes()).hexdigest()
+
+    def test_real_r4_absent_launcher_attestation_receipt_and_replay(self):
+        self.attestation_fixture()
+        with self.cheap_validation():
+            preview=self.call(dry_run=True); self.assertEqual(self.writes,[])
+            proof=preview['accepted_canary']; att=proof['attestation']
+            self.assertEqual(att['missing_artifact'],U.RUNTIME_MISSING_EVIDENCE)
+            self.assertEqual(att['bound_sha256'],{k:v[1] for k,v in self.evidence.items()
+                             if k!='runtime_qa_v18_launcher'})
+            self.assertEqual(len(att['bound_sha256']),11)
+            self.assertEqual(proof['evidence']['runtime_qa_v18_launcher']['status'],
+                             'ABSENT_REPLACED_BY_ATTESTATION')
+            self.interrupt_before_marker(); self.assertEqual(self.call()['accepted_canary'],proof)
+            self.assertEqual(self.call()['accepted_canary'],proof)
+            j=json.loads(self.journal.read_text()); marker=json.loads(self.marker.read_text())
+            self.assertEqual(j['accepted_canary'],j['qualification_intent']['proof'])
+            self.assertEqual(marker['accepted_canary'],proof)
+            self.change(self.policy,mode='disabled')
+            U.rollback_runtime(SimpleNamespace(quiet=Mock())); U.rollback_runtime(SimpleNamespace(quiet=Mock()))
+            self.assertFalse((self.state/U.RUNTIME_MISSING_EVIDENCE['name']).exists())
+
+    def test_real_r4_present_launcher_no_attestation(self):
+        # Existing 12-file fixture has a pinned launcher with actual matching bytes.
+        with self.cheap_validation():
+            proof=self.call()['accepted_canary']
+            self.assertNotIn('attestation',proof)
+            self.assertNotIn('status',proof['evidence']['runtime_qa_v18_launcher'])
+
+    def test_real_r4_other_eleven_files_remain_mandatory(self):
+        self.attestation_fixture()
+        with self.cheap_validation():
+            for phase,baseline,ops in self.r4_phases():
+                for key,(name,_) in self.evidence.items():
+                    if key=='runtime_qa_v18_launcher': continue
+                    for missing in (False,True):
+                        for dry in (False,True):
+                            with self.subTest(phase=phase,key=key,missing=missing,dry=dry):
+                                self.restore_snapshot(baseline); path=self.state/name
+                                if missing: path.unlink()
+                                else: path.write_bytes(b'changed')
+                                self.assert_no_writes(lambda:self.r4_invoke(phase,dry),'runtime evidence')
+                self.restore_snapshot(baseline)
+
+    def test_real_r4_launcher_wrong_bytes_and_metadata(self):
+        # All phases, including no-write preview, retain the real safe reader.
+        with self.cheap_validation():
+            states=list(self.r4_phases())
+        for phase,baseline,ops in states:
+            for kind in ('wrong','symlink','directory','unreadable','eacces'):
+                for dry in (False,True):
+                    with self.subTest(phase=phase,kind=kind,dry=dry):
+                        self.restore_snapshot(baseline); path=self.state/self.evidence['runtime_qa_v18_launcher'][0]
+                        original=path.read_bytes()
+                        try:
+                            if kind=='wrong': path.write_bytes(b'wrong launcher')
+                            if kind=='symlink': path.unlink(); path.symlink_to(self.state/self.evidence['probe'][0])
+                            if kind=='directory': path.unlink(); path.mkdir()
+                            if kind=='unreadable': path.chmod(0)
+                            if kind=='eacces':
+                                real_open=os.open
+                                def open_denied(name,*a,**kw):
+                                    if name==path.name: raise PermissionError(errno.EACCES,'synthetic EACCES')
+                                    return real_open(name,*a,**kw)
+                                with patch.object(U.os,'open',side_effect=open_denied):
+                                    self.assert_no_writes(lambda:self.r4_invoke(phase,dry),'runtime evidence')
+                            elif kind=='unreadable':
+                                # Snapshot after restoring permission can compare all bytes;
+                                # the refused invocation itself sees the real mode-000 file.
+                                count=len(self.writes); published=R.publish_monitor.call_count
+                                with self.assertRaises(core.Refused): self.r4_invoke(phase,dry)
+                                self.assertEqual(len(self.writes),count)
+                                self.assertEqual(R.publish_monitor.call_count,published)
+                                path.chmod(0o644)
+                                self.assertEqual(self.snapshot(),baseline)
+                            else:
+                                self.assert_no_writes(lambda:self.r4_invoke(phase,dry),'runtime evidence')
+                        finally:
+                            if path.is_symlink(): path.unlink()
+                            elif path.is_dir(): path.rmdir()
+                            if not path.exists(): path.write_bytes(original)
+                            path.chmod(0o644)
+
+    def test_real_r4_attestation_semantic_checks(self):
+        self.attestation_fixture()
+        # Re-pin synthetic mutations so refusal specifically tests derivation, rather
+        # than stopping at a hash mismatch. Production's pins are never changed.
+        cases=[('qa',key,'wrong') for key in self.attestation_qa if key!='checks']
+        cases += [('qa','stream_bytes',True),('qa','actual_tool_started_count',True),
+                  ('qa','actual_tool_completed_count',True)]
+        for key in self.attestation_qa['checks']:
+            cases.extend((('check',key,False),('check',key,MISSING),('check',key,1)))
+        cases += [('check','extra',True),('duplicate','schema',None),
+                  ('v18','size',None),('v18','jsonl',None),('v18','empty',None),('v18','nan',None),('v18','blank',None),('v20','size',None),('v20','size-pair',None)]
+        initial=self.snapshot(); pins=copy.deepcopy(self.evidence); proof_sha=self.proof_sha
+        with self.cheap_validation():
+            for case in cases:
+                with self.subTest(case=case):
+                    self.restore_snapshot(initial); self.evidence.clear(); self.evidence.update(pins)
+                    kind,key,value=case; qa=copy.deepcopy(self.attestation_qa)
+                    target='runtime_qa_v20_qa'
+                    if kind=='qa': qa[key]=value
+                    if kind=='check': self.replace_field(qa['checks'],key,value)
+                    raw=json.dumps(qa).encode()
+                    if kind=='duplicate': raw=raw[:-1]+b',"schema":"GB_CURSOR_INDEPENDENT_RUNTIME_QA_211_V1"}'
+                    if kind=='v18':
+                        target='runtime_qa_v18_stream'
+                        raw={'size':b'{}\n','jsonl':b'x'*85608,'empty':b'',
+                             'nan':b'NaN'+b' '*85604+b'\n','blank':b'\n'+b' '*85607}[key]
+                    if kind=='v20': target='runtime_qa_v20_stream'; raw=b'wrong size'
+                    name=self.evidence[target][0]; (self.state/name).write_bytes(raw)
+                    self.evidence[target]=(name,hashlib.sha256(raw).hexdigest())
+                    # v20 size probe must get past QA's explicit stream SHA check.
+                    if kind=='v20':
+                        qa['stream_sha256']=self.evidence[target][1]
+                        if key=='size-pair': qa['stream_bytes']=len(raw)
+                        qname=self.evidence['runtime_qa_v20_qa'][0]; qraw=json.dumps(qa).encode()
+                        (self.state/qname).write_bytes(qraw)
+                        self.evidence['runtime_qa_v20_qa']=(qname,hashlib.sha256(qraw).hexdigest())
+                    self.refresh_proof()
+                    for dry in (False,True):
+                        self.assert_no_writes(lambda:self.call(dry_run=dry),'attestation|duplicate JSON key|malformed or unreadable')
+            self.restore_snapshot(initial); self.evidence.clear(); self.evidence.update(pins); self.proof_sha=proof_sha
+
+    def test_real_r4_attestation_semantics_checked_during_all_replays(self):
+        self.attestation_fixture()
+        with self.cheap_validation():
+            for phase,baseline,ops in self.r4_phases(('pending','completed','rollback','rollback-replay')):
+                for kind in ('derivation','journal','intent'):
+                    with self.subTest(phase=phase,kind=kind):
+                        self.restore_snapshot(baseline)
+                        if kind=='derivation':
+                            with patch.object(U,'verify_runtime_attestation',return_value={'forged':True}):
+                                self.assert_no_writes(lambda:self.r4_invoke(phase),'operation evidence changed')
+                        else:
+                            j=json.loads(self.journal.read_text())
+                            if phase=='rollback-replay':
+                                if kind=='journal': j['accepted_canary']={'attestation':{'forged':True}}
+                                else: j['qualification_history'][-1]['intent']['proof']['attestation']={'forged':True}
+                            elif kind=='journal': j['accepted_canary']['attestation']={'forged':True}
+                            else: j['qualification_intent']['proof']['attestation']={'forged':True}
+                            self.real_atomic(self.journal,j)
+                            self.assert_no_writes(lambda:self.r4_invoke(phase),'proof drift|operation evidence changed')
+
+    def test_real_r4_launcher_appearing_after_intent_refused(self):
+        self.attestation_fixture()
+        with self.cheap_validation():
+            states=list(self.r4_phases(('pending','completed','rollback','rollback-replay')))
+            for phase,baseline,ops in states:
+                with self.subTest(phase=phase):
+                    self.restore_snapshot(baseline)
+                    # Synthetic matching launcher, with unchanged proof-file SHA:
+                    # isolate the evidence mode transition from the file hash gate.
+                    path=self.state/U.RUNTIME_MISSING_EVIDENCE['name']; path.write_bytes(b'recovered original')
+                    real_hash=U.hashlib.sha256
+                    def recovered_hash(raw):
+                        if raw==b'recovered original':
+                            return SimpleNamespace(hexdigest=lambda:U.RUNTIME_MISSING_EVIDENCE['sha256'])
+                        return real_hash(raw)
+                    with patch.object(U.hashlib,'sha256',side_effect=recovered_hash):
+                        self.assert_no_writes(lambda:self.r4_invoke(phase),'operation evidence changed')
+                    path.unlink()
+            # A new transaction after the completed rollback uses the recovered
+            # matching original normally; prior attestation stays in history.
+            self.change(self.policy,mode='active')
+            path.write_bytes(b'recovered original')
+            with patch.object(U.hashlib,'sha256',side_effect=recovered_hash):
+                result=self.call()
+                self.assertNotIn('attestation',result['accepted_canary'])
+                self.assertNotIn('attestation',self.call()['accepted_canary'])
+            self.assertIn('attestation',json.loads(self.journal.read_text())[
+                'qualification_history'][-1]['intent']['proof'])
+
+    def test_real_r4_missing_declaration_is_closed(self):
+        self.attestation_fixture()
+        declarations=[dict(U.RUNTIME_MISSING_EVIDENCE,**{key:value}) for key,value in (
+            ('key','probe'),('name','cursor-qualification-20261022/other.py'),
+            ('sha256','0'*64),('name','cursor-qualification-20261022/runtime-qa-v18-*'))]
+        with self.cheap_validation():
+            for declaration in declarations:
+                with patch.object(U,'RUNTIME_MISSING_EVIDENCE',declaration):
+                    self.assert_no_writes(U.runtime_missing_declaration,'declaration changed')
+            for phase,baseline,ops in self.r4_phases():
+                for declaration in declarations:
+                    with self.subTest(phase=phase,declaration=declaration):
+                        self.restore_snapshot(baseline)
+                        with patch.object(U,'RUNTIME_MISSING_EVIDENCE',declaration):
+                            self.assert_no_writes(lambda:self.r4_invoke(phase),'declaration changed')
+
+
+
+    def test_real_r4_seeded_state_field_fuzz(self):
+        """Every existing field/container is independently mutated at all four phases.
+        Closed list of deliberately non-admission data allowed to be ignored:
+        historical_fail/preserved;
+        install-time backup metadata and old change hashes; optional empty history;
+        historical QA verdicts; live backup metadata with shape-valid values;
+        timestamps not used by an already-completed rollback. Marker fields are
+        never ignored: its canonical byte hash binds even descriptive metadata.
+        """
+        self.attestation_fixture()
+        verified={key:(self.state/name).read_bytes() for key,(name,sha) in self.evidence.items()
+                  if key!='runtime_qa_v18_launcher'}
+        real_verify=U.verify_runtime_attestation
+        cached_attestation=real_verify(verified)
+        def memoized_verify(artifacts):
+            # Same already-verified immutable bytes => same pure derivation. A
+            # different input still runs the production verifier in full.
+            return copy.deepcopy(cached_attestation) if artifacts==verified else real_verify(artifacts)
+        seed=random.Random(3070405)
+        variants=[MISSING,None,[],{},'wrong',{'nested':[None]},True,10**100,float('nan')]
+        # Explicit path prefixes, never learned from successful fuzz outcomes.
+        ignored={
+            'journal':(('historical_fail',),('preserved',),('record_before','manifest'),
+                ('record_before','before'),('record_before','units'),('record_before','activated'),
+                ('record_before','targets'),('qualification_history',),('runtime_rollback_at',)),
+            'policy':(), 'marker':(),
+            'slot1':(),
+            'slot2':(('operations','qa-fail','result'),('operations','qa-fail','finished_at')),
+            'backup':(('manifest',),('before',),('units',),('activated',),('targets',))}
+        # Inventory ancestry uses keys; live hashes, not historic hash values,
+        # govern installed bytes. changes.before is retained solely as history.
+        optional_live_names={'antigravity_qa_recovery.py','content_identity.py','context_exchange.py',
+                             'failure_diagnosis.py','native_antigravity.py','owner_package_admission.py',
+                             'qa_equivalence.py'}
+        def ignored_path(source,path,phase):
+            if source=='backup' and len(path)==2 and path[0]=='after':
+                return path[1] in {str(self.install/name) for name in optional_live_names}
+            if source=='slot2' and phase.startswith('rollback') and path[:2]==('operations','qa-fail'):
+                return len(path)>=2  # Shape-valid QA history is not a rollback qualification gate.
+            if source=='journal':
+                if len(path)==3 and path[:2]==('record_before','after'): return True
+                if len(path)==2 and path[0]=='changes' and path[1]!=str(self.marker): return True
+                if len(path)==3 and path[0]=='changes':
+                    return path[2]=='before' or (path[2]=='after' and path[1]!=str(self.marker))
+                if path and path[0]=='qualification_history' and phase=='rollback-replay':
+                    return len(path)==3 and path[2]=='rolled_back_at'
+            return any(path[:len(prefix)]==prefix for prefix in ignored[source])
+        def paths(value,prefix=()):
+            if isinstance(value,dict):
+                for key,child in value.items():
+                    yield prefix+(key,)
+                    yield from paths(child,prefix+(key,))
+            elif isinstance(value,list):
+                for index,child in enumerate(value):
+                    yield prefix+(index,)
+                    yield from paths(child,prefix+(index,))
+        tested=0; ignored_count=0
+        with self.cheap_validation():
+            phases=list(self.r4_phases(('pending','completed','rollback','rollback-replay')))
+        for phase,baseline,operations in phases:
+            self.restore_snapshot(baseline); self.ops=copy.deepcopy(operations)
+            records={'journal':json.loads(self.journal.read_text()),'policy':json.loads(self.policy.read_text()),
+                     'marker':json.loads(self.marker.read_text()),'backup':json.loads(self.backup.read_text()),
+                     **{slot:{'operations':copy.deepcopy(operations[slot])} for slot in ('slot1','slot2')}}
+            if phase!='rollback-replay': records['journal'].setdefault('qualification_history',[])
+            raw_files={Path(name):raw for name,raw in baseline.items()}
+            current={}
+            def read(path,*args):
+                key={self.journal:'journal',self.policy:'policy',self.marker:'marker'}[path]
+                return current[key]
+            def raw(path,limit=64 << 20):
+                path=Path(path)
+                if path==self.marker: return json.dumps(current['marker'],sort_keys=True).encode()
+                if path==self.backup: return json.dumps(current['backup']).encode()
+                return raw_files[path]
+            def invoke():
+                action='rollback-runtime' if phase.startswith('rollback') else 'accept-runtime'
+                return U.execute(action,self.bundle,'m','c'*40,'s','d',proof_sha256=
+                                 self.proof_sha if action=='accept-runtime' else None)
+            with patch.object(U,'verify_runtime_attestation',new=memoized_verify), \
+                 patch.object(R,'read',new=read),patch.object(R,'journal',new=
+                    lambda slot:current[slot]),patch.object(U,'runtime_bytes',new=raw), \
+                 patch.object(U.os,'geteuid',new=lambda:0),patch.object(R,'trusted_tree',new=lambda _:None), \
+                 patch.object(U,'helpers',new=lambda _:(SimpleNamespace(quiet=lambda:None),None)), \
+                 patch.object(R,'atomic') as atomic,patch.object(R,'publish_monitor') as publish:
+                current=copy.deepcopy(records); expected=invoke()
+                expected_destinations=[c.args[0] for c in atomic.call_args_list]; expected_publish=publish.call_count
+                cases=[(source,path,value) for source,record in records.items()
+                       for path in [(),*paths(record)] for value in variants]
+                seed.shuffle(cases)
+                for source,path,value in cases:
+                    with self.subTest(seed=3070405,phase=phase,source=source,path=path,value=value):
+                        current=copy.deepcopy(records); atomic.reset_mock(); publish.reset_mock()
+                        if not path:
+                            current[source]=None if value is MISSING else copy.deepcopy(value)
+                        else:
+                            parent=current[source]
+                            for key in path[:-1]: parent=parent[key]
+                            key=path[-1]
+                            if value is MISSING:
+                                if isinstance(parent,list): del parent[key]
+                                else: parent.pop(key)
+                            else: parent[key]=copy.deepcopy(value)
+                        equivalent=core.digest(current)==core.digest(records)
+                        tested+=1
+                        try:
+                            result=invoke()
+                        except core.Refused:
+                            atomic.assert_not_called(); publish.assert_not_called()
+                        else:
+                            self.assertTrue(equivalent or ignored_path(source,path,phase),
+                                            'accepted mutation outside explicit ignored set')
+                            self.assertEqual(result,expected)
+                            # Ignored history may be carried through writes. The
+                            # destinations/count remain exactly the baseline plan.
+                            self.assertEqual([c.args[0] for c in atomic.call_args_list],
+                                             expected_destinations)
+                            self.assertEqual(publish.call_count,expected_publish)
+                            ignored_count+=not equivalent
+        print('R4 seeded fuzz: seed=3070405 cases='+str(tested)+' accepted_ignored='+str(ignored_count))
+        self.assertGreater(tested,5000)
+        self.assertGreater(ignored_count,0)
+        self.assertEqual(self.snapshot(),baseline)
+
+
+
+    def test_real_r4_attestation_artifact_set_independent(self):
+        self.attestation_fixture()
+        artifacts={key:(self.state/name).read_bytes() for key,(name,sha) in self.evidence.items()
+                   if key!='runtime_qa_v18_launcher'}
+        self.assert_no_writes(lambda:U.verify_runtime_attestation(artifacts | {'extra':b''}),
+                              'attestation artifacts changed')
+        with patch.dict(U.RUNTIME_EVIDENCE,{'extra':('extra',hashlib.sha256(b'').hexdigest())}):
+            self.assert_no_writes(lambda:U.verify_runtime_attestation(artifacts | {'extra':b''}),
+                                  'attestation artifacts changed')
+
+    def test_real_r4_absence_probe_only_enoent_and_exact_pin(self):
+        self.attestation_fixture(); missing=U.RUNTIME_MISSING_EVIDENCE
+        path=self.state/missing['name']; original_lstat=Path.lstat
+        with self.cheap_validation():
+            for phase,baseline,ops in self.r4_phases():
+                for error in (errno.EACCES,errno.ELOOP,errno.ENOTDIR,errno.EIO):
+                    self.restore_snapshot(baseline); before=self.snapshot()
+                    count=len(self.writes); pubs=R.publish_monitor.call_count
+                    def probe(p,*args,**kwargs):
+                        if p==path: raise OSError(error,'synthetic absence probe error')
+                        return original_lstat(p,*args,**kwargs)
+                    with self.subTest(phase=phase,error=error),patch.object(Path,'lstat',probe):
+                        with self.assertRaisesRegex(core.Refused,'runtime evidence missing or unsafe'):
+                            self.r4_invoke(phase)
+                    self.assertEqual(self.snapshot(),before); self.assertEqual(len(self.writes),count)
+                    self.assertEqual(R.publish_monitor.call_count,pubs)
+            # The declaration remains exact while the expected proof map is changed
+            # to a different absent key/path/hash. None may inherit its exception.
+            for field,value in (('key','not-the-launcher'),('name','cursor-qualification-20261022/other.py'),
+                                ('sha256','0'*64),('name','cursor-qualification-20261022/runtime-qa-v18-*')):
+                self.restore_snapshot(baseline)
+                pins=copy.deepcopy(self.evidence); name,sha=pins.pop(missing['key'])
+                key=value if field=='key' else missing['key']
+                pins[key]=(value if field=='name' else name,value if field=='sha256' else sha)
+                # Initial state isolates the exact absent item test from replay SHA bindings.
+                j=json.loads(self.journal.read_text()); j.pop('qualification_history',None)
+                self.real_atomic(self.journal,j); self.change(self.policy,mode='active')
+                proof=copy.deepcopy(self.proof)
+                proof['evidence']={k:{'path':str(self.state/n),'sha256':h} for k,(n,h) in pins.items()}
+                self.proof_path.write_text(json.dumps(proof))
+                with patch.object(U,'RUNTIME_EVIDENCE',pins):
+                    self.assert_no_writes(lambda:U.accept_runtime(self.bundle,dry_run=True),'runtime evidence')
+
+    def test_real_r4_empty_operation_pin_refused_during_rollback(self):
+        with self.cheap_validation():
+            for phase,baseline,ops in self.r4_phases(('rollback','rollback-replay')):
+                self.restore_snapshot(baseline)
+                j=json.loads(self.journal.read_text())
+                intent=(j['qualification_history'][-1]['intent'] if phase=='rollback-replay'
+                        else j['qualification_intent'])
+                intent['operations']={}
+                self.real_atomic(self.journal,j)
+                self.assert_no_writes(lambda:self.r4_invoke(phase),'operation evidence changed')
+
+
+
+    def test_real_r4_shared_slot_author_shape_independent(self):
+        for slot in ('slot1','slot2'):
+            before=copy.deepcopy(self.ops)
+            self.ops[slot]['malformed']={'binding':{'issue':225,'stage':'author'},'run':500,'result':None}
+            self.assert_no_writes(lambda:U.runtime_slot_operations(slot),'malformed operation record')
+            self.ops=before
+
+    def test_real_r4_pinned_author_cardinality_independent(self):
+        with self.cheap_validation():
+            self.call(); intent=json.loads(self.journal.read_text())['qualification_intent']
+            # A fabricated map covering every canary author as a deferral must
+            # still retain exactly one qualified author pin.
+            intent['deferred_operations'].setdefault('slot2',{})['author']=core.digest(self.ops['slot2']['author'])
+            intent['operations']={}
+            self.assert_no_writes(lambda:U.runtime_pinned_operations(intent),'operation evidence changed')
+
+
+
+    def test_real_r4_rollback_history_marker_binding(self):
+        with self.cheap_validation():
+            self.call(); self.change(self.policy,mode='disabled')
+            U.rollback_runtime(SimpleNamespace(quiet=Mock()))
+            j=json.loads(self.journal.read_text())
+            j['qualification_history'][-1]['intent']['next_marker']['qualified_at']+=1
+            self.real_atomic(self.journal,j)
+            self.assert_no_writes(lambda:U.rollback_runtime(SimpleNamespace(quiet=Mock())),
+                                  'runtime rollback marker intent changed')
+
+
+
+    def test_real_r4_empty_deferral_pins_refused(self):
+        with self.cheap_validation():
+            for phase,baseline,ops in self.r4_phases(('rollback','rollback-replay')):
+                self.restore_snapshot(baseline)
+                j=json.loads(self.journal.read_text())
+                intent=(j['qualification_history'][-1]['intent'] if phase=='rollback-replay'
+                        else j['qualification_intent'])
+                intent['deferred_operations']={}
+                self.real_atomic(self.journal,j)
+                self.assert_no_writes(lambda:self.r4_invoke(phase),'operation evidence changed')
+
 
 class CommittedProof(unittest.TestCase):
     def test_committed_proof_has_exact_production_pins_and_closed_schema(self):
