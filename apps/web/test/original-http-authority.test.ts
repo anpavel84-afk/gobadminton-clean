@@ -54,6 +54,16 @@ describe("original HTTP authority helper", () => {
       expect(httpsCreditUrl(url)).toBe(href);
       expect(httpUrlAgreesWithOriginalAuthority(url, forbiddenUrlScalars)?.href).toBe(href);
     }
+    const badCreditPorts = [
+      "https://example.org:0443/a", "https://example.org:00443/a", "https://example.org:/a",
+      "https://[::1]:0443/", "https://[::1]:/",
+    ];
+    for (const url of badCreditPorts) {
+      expect(httpsCreditUrl(url)).toBeNull();
+      expect(originalHttpAuthority(url)?.port).toBe("");
+    }
+    expect(httpsCreditUrl("https://example.org:443/a")).toBe("https://example.org/a");
+    expect(httpsCreditUrl("https://[::1]:443/")).toBe("https://[::1]/");
     for (const url of grammar) {
       expect(httpsCreditUrl(url)).toBeNull();
       if (typeof url !== "string") continue;

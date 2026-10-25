@@ -34,19 +34,26 @@ const contactPatterns = [
   ...patterns(contract.components.schemas.AdminVenueFields, "contactWebsite"),
 ].map(item => item.pattern);
 
+const longCredit = "https://example.org/" + "a".repeat(280);
 const preserved = [
   "https://club.example", "https://club.example/logo", "https://example.org/photos",
   "https://example.com", "https://example.com/", "https://example.invalid/",
-  "https://example.org/@user", "https://example.org:443/a",
-  "https://example.org/%D0%BA%D0%BE%D0%BD%D1%82%D0%B0%D0%BA%D1%82%D1%8B",
+  "https://example.org/@user", "https://example.org/path?q=a@b", "https://example.org:443/a",
+  "https://[::1]:443/", "https://example.org/%D0%BA%D0%BE%D0%BD%D1%82%D0%B0%D0%BA%D1%82%D1%8B",
   "https://[::1]/", "https:///example.org/path", "https://example.org/%40",
   "https://example.com/a%20b", "https://example.com/%D1%84%D0%BE%D1%82%D0%BE",
+  longCredit,
+];
+const rejectedPorts = [
+  "https://example.org:0443/a", "https://example.org:00443/a", "https://example.org:/a",
+  "https://[::1]:0443/", "https://[::1]:/",
 ];
 const rejectedByPattern = [
   "https://vk.com@evil.example/", "https://user:pass@evil.example/logo",
   "https://@example.org/", "https:///@example.org/", "https:////@example.org/",
   "https://example.org/\\x", "https://example.org/\n", "https://example.org/\u0085",
   "https://example.org:444/", "https://example.com/a b", "https://example.com/a|b",
+  ...rejectedPorts,
 ];
 
 function identity(avatarUrl: string): VerifiedIdentity {
@@ -87,21 +94,32 @@ describe("external URL storage contract", () => {
     expect(contactPatterns).toHaveLength(3);
     const credit = new RegExp(creditPattern!);
     const contact = new RegExp(contactPatterns[0]!);
+    expect(longCredit).toHaveLength(300);
     for (const url of preserved) {
       expect(credit.test(url), url).toBe(true);
       expect(httpsCreditUrl(url), url).not.toBeNull();
+      expect(httpsCreditUrl(url), url).toBe(new URL(url).href);
     }
-    for (const url of rejectedByPattern) expect(credit.test(url), url).toBe(false);
+    for (const url of rejectedByPattern) {
+      expect(credit.test(url), url).toBe(false);
+      expect(httpsCreditUrl(url), url).toBeNull();
+    }
+    for (const url of rejectedPorts) {
+      expect(credit.test(url), url).toBe(false);
+      expect(httpsCreditUrl(url), url).toBeNull();
+    }
     const bomb = "https://a/?" + "'".repeat(97);
     expect(bomb.length).toBeLessThanOrEqual(300);
     expect(credit.test(bomb)).toBe(true);
     expect(httpsCreditUrl(bomb)).toBeNull();
     expect(credit.test("https://example.org/%00")).toBe(true);
     expect(httpsCreditUrl("https://example.org/%00")).toBeNull();
-    for (const url of ["", "http://venue.example.invalid", "https://example.org:444/", "https://example.org/@user", "https://[::1]/"]) {
+    for (const url of ["", "http://venue.example.invalid", "https://example.org:444/", "http://venue.example.invalid:444/book?x=a@b", "https://пример.рф/path", "https://example.org/@user", "https://[::1]/", longCredit]) {
       expect(contact.test(url), url).toBe(true);
     }
     expect(privateContactWebsite("https://example.org:444/")).toBe("https://example.org:444/");
+    expect(privateContactWebsite("https://example.org:0443/a")).toBe("https://example.org:0443/a");
+    expect(privateContactWebsite("https://пример.рф/path")).toBe("https://пример.рф/path");
     expect(contact.test("https://vk.com@evil.example/")).toBe(false);
     expect(contact.test("https://example.org/\\x")).toBe(false);
     expect(contact.test("https://example.org/\n")).toBe(false);
@@ -109,6 +127,18 @@ describe("external URL storage contract", () => {
     expect(privateContactWebsite("")).toBeNull();
     const loose = JSON.stringify(contract).includes('"^https://"') || JSON.stringify(contract).includes('"^(https?://|$)"');
     expect(loose).toBe(false);
+    const migration = readFileSync(path.resolve(__dirname, "../../migrations/0040_external_http_url_storage.sql"), "utf8");
+    const rollback = readFileSync(path.resolve(__dirname, "../../migrations/rollback/0040_external_http_url_storage.sql"), "utf8");
+    expect(migration).not.toMatch(/\bpublic\./);
+    expect(rollback).not.toMatch(/\bpublic\./);
+    expect(migration).toContain("CREATE OR REPLACE FUNCTION external_http_url_storage_ok");
+    expect(migration).toContain("pg_attribute");
+    expect(migration).toContain("credit_port");
+    expect(rollback).toContain("DROP FUNCTION IF EXISTS external_http_url_storage_ok(text, boolean, integer, boolean)");
+    expect(rollback).toContain("DROP CONSTRAINT IF EXISTS venues_contact_website_check");
+    expect(rollback).toContain("DROP CONSTRAINT IF EXISTS venues_cover_credit_url_check");
+    expect(rollback).toContain("DROP CONSTRAINT IF EXISTS external_identities_avatar_url_check");
+    expect(rollback.toLowerCase()).toContain("irreversible");
   });
 
   it("writes null for a rejected avatar and the href for an allowlisted one", async () => {

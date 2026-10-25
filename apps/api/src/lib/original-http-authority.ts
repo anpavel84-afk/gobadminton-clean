@@ -58,9 +58,27 @@ function creditDnsLabels(hostname: string): boolean {
   return hostname.startsWith("[") || (hostname.length <= 253 && hostname.split(".").every(label => /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(label)));
 }
 
-/** HTTPS credit/source URL. Keeps the printable-ASCII, original-length, port and label policy, requires authority agreement, and returns the serialized href only when that href is at most 300 characters. */
+/** Written credit port: absent, or the exact digits 443. An empty port and leading zeros stay rejected. */
+function creditPortSpelling(value: string): boolean {
+  const prefix = /^https:\/{2,}/i.exec(value);
+  if (!prefix) return false;
+  const remainder = value.slice(prefix[0].length);
+  const boundary = remainder.search(/[/?#]/);
+  const authority = boundary < 0 ? remainder : remainder.slice(0, boundary);
+  if (authority.startsWith("[")) {
+    const end = authority.indexOf("]");
+    if (end < 1) return false;
+    const port = authority.slice(end + 1);
+    return port === "" || port === ":443";
+  }
+  const colon = authority.lastIndexOf(":");
+  if (colon < 0) return true;
+  return authority.slice(colon) === ":443";
+}
+
+/** HTTPS credit/source URL. Port spelling is absent or exactly 443. Keeps the printable-ASCII, original-length and label policy, requires authority agreement, and returns the serialized href only when that href is at most 300 characters. */
 export function httpsCreditUrl(value: unknown): string | null {
-  if (typeof value !== "string" || value.length > 300 || !value.startsWith("https://") || creditCharset.test(value)) return null;
+  if (typeof value !== "string" || value.length > 300 || !value.startsWith("https://") || creditCharset.test(value) || !creditPortSpelling(value)) return null;
   const url = httpUrlAgreesWithOriginalAuthority(value, forbiddenUrlScalars);
   if (!url || url.protocol !== "https:" || url.username || url.password || url.port || url.href.length > 300 || !creditDnsLabels(url.hostname)) return null;
   return url.href;

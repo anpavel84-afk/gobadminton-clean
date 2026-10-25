@@ -24926,7 +24926,7 @@
                       "string",
                       "null"
                     ],
-                    "description": "Original HTTPS credit string. The pattern rejects userinfo, a backslash and controls where a regex can; httpsCreditUrl remains the strict check.",
+                    "description": "Original HTTPS credit string. Port is absent or the exact digits 443 (no empty port, no leading zeros). The pattern also rejects userinfo, a backslash and controls where a regex can; httpsCreditUrl remains the strict check.",
                     "pattern": "^https:///*(?:\\[[0-9A-Fa-f:.]+\\]|(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\.)*[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(?::443)?(?:[/?#](?:%[0-9A-Fa-f]{2}|[!#$&'(-;=?-[\\]_a-z~-])*)?$",
                     "maxLength": 300
                   }
@@ -25249,7 +25249,7 @@
                         "url": {
                           "type": "string",
                           "format": "uri",
-                          "description": "Original HTTPS credit string. format uri is not the authority check. The pattern rejects userinfo, a backslash and controls where a regex can; httpsCreditUrl remains the strict check.",
+                          "description": "Original HTTPS credit string. format uri is not the authority check. Port is absent or the exact digits 443 (no empty port, no leading zeros). The pattern also rejects userinfo, a backslash and controls where a regex can; httpsCreditUrl remains the strict check.",
                           "pattern": "^https:///*(?:\\[[0-9A-Fa-f:.]+\\]|(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\.)*[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(?::443)?(?:[/?#](?:%[0-9A-Fa-f]{2}|[!#$&'(-;=?-[\\]_a-z~-])*)?$",
                           "maxLength": 300
                         }
