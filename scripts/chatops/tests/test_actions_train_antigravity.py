@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import Mock, patch
 
@@ -252,7 +253,7 @@ class GenericVerdictScanner(EvidenceTestCase):
         value.update(changes)
         return json.dumps(value)
 
-    def check_response(self, response, *, accepted=False):
+    def check_response(self, response, *, accepted=False, expected=None, max_seconds=None):
         events = rows()
         events[-1]['result'].update(structured_output=None, response=response)
         raw = wire(events)
@@ -269,13 +270,150 @@ class GenericVerdictScanner(EvidenceTestCase):
             }
             for entry, call in calls.items():
                 with self.subTest(entry=entry):
+                    started = time.monotonic()
                     if accepted:
-                        self.assertEqual(call()[0], dict(verdict='PASS', findings=[], reviewed_sha=SHA))
+                        self.assertEqual(call()[0], expected if expected is not None else
+                                         dict(verdict='PASS', findings=[], reviewed_sha=SHA))
                     else:
                         with self.assertRaises(N.ReviewError) as caught:
                             call()
                         self.assertEqual(caught.exception.code, 'AGY_PARSE_FAILED')
                         self.assertEqual(caught.exception.phase, 'parse')
+                    if max_seconds is not None:
+                        self.assertLess(time.monotonic() - started, max_seconds, entry)
+
+    def test_qa_r4_markdown_reference_repro(self):
+        finding = ('See [file.py:42] for missing handling. ' + 'x'*63)[:100]*40
+        value = dict(verdict='FAIL', findings=[finding]*60, reviewed_sha=SHA)
+        response = json.dumps(value)
+        self.assertEqual(len(finding), 4000)
+        self.assertLess(len(response.encode()), 256 << 10)
+        self.check_response(response, accepted=True, expected=value, max_seconds=2)
+
+    def test_markdown_punctuation_findings_at_schema_and_wire_sizes(self):
+        pattern = 'See [text](http://x) [file.py:42] {missing} "quoted" \\path\\name. '
+        finding = (pattern * 100)[:4000]
+        for count in (60, 100):
+            value = dict(verdict='FAIL', findings=[finding]*count, reviewed_sha=SHA)
+            response = json.dumps(value)
+            with self.subTest(count=count):
+                self.assertEqual(len(finding), 4000)
+                # 100 x 4000 characters alone exceed 256 KiB. Exercise both
+                # the sub-256 KiB response and the actual maximum schema.
+                if count == 60:
+                    self.assertLess(len(response.encode()), 256 << 10)
+                self.check_response(response, accepted=True, expected=value, max_seconds=2)
+
+    def test_punctuation_prose_surrounding_single_block(self):
+        prose = 'See [text](http://x) {missing} "quoted" \\path. ' * 1000
+        value = dict(verdict='FAIL', findings=['missing handling'], reviewed_sha=SHA)
+        body = json.dumps(value)
+        for block in (body, '```json\n' + body + '\n```'):
+            with self.subTest(fenced=block.startswith('```')):
+                response = prose + '\n' + block + '\n' + prose
+                self.assertLess(len(response.encode()), 256 << 10)
+                self.check_response(response, accepted=True, expected=value, max_seconds=2)
+
+    def test_hidden_fail_after_many_markdown_references(self):
+        findings = [('See [file.py:42] for missing handling. ' + 'x'*63)[:100]*40]*60
+        body = self.block(verdict='FAIL', findings=findings)
+        hidden = self.block(verdict='FAIL', findings=['hidden differing result'])
+        for suffix in (hidden, json.dumps({hidden: 0}),
+                       '{"' + ''.join('\\u%04x' % ord(c) for c in hidden) + '":0}'):
+            with self.subTest(suffix=suffix):
+                self.check_response(body + '\n' + suffix)
+
+    def test_structural_depth_63_64_65_fails_closed(self):
+        for depth in (63, 64, 65):
+            with self.subTest(depth=depth):
+                hidden = '['*depth + self.block(verdict='FAIL', findings=['deep']) + ']'*depth
+                self.check_response(self.block() + '\n' + hidden)
+
+    def test_structural_depth_boundary_with_harmless_values(self):
+        for depth in (63, 64, 65):
+            with self.subTest(depth=depth):
+                response = self.block() + '\n' + '['*depth + '0' + ']'*depth
+                self.check_response(response, accepted=(depth == 63))
+
+    def test_lone_surrogate_values_and_findings(self):
+        for suffix in (json.dumps({'note': '\ud800'}),
+                       self.block(verdict='FAIL', findings=['\udfff'])):
+            with self.subTest(suffix=suffix):
+                self.check_response(self.block() + '\n' + suffix)
+
+    def test_pathological_repetitions_have_hard_timeout(self):
+        # A subprocess timeout also catches a regression that never returns to
+        # an elapsed-time assertion. Both public entry points run in the child.
+        script = '''import sys, time
+sys.path.insert(0, sys.argv[1])
+import test_actions_train_antigravity as T
+case = T.GenericVerdictScanner()
+case.setUp()
+try:
+    started = time.monotonic()
+    case.check_response(T.json.loads(sys.stdin.read()))
+    print(time.monotonic() - started)
+finally:
+    case.doCleanups()
+'''
+        for size in (8192, 262144):
+            cases = {
+                'arrays': '['*size + '\n' + self.block(),
+                'objects': '{"a":'*size + '\n' + self.block(),
+                'array values': '[1,'*size + '\n' + self.block(),
+                'unterminated string': '"' + '\\'*size,
+                'key/value alternation': '{"a":['*size + '\n' + self.block(),
+                'escaped quotes': '\\"'*size + '\n' + self.block(),
+            }
+            for name, response in cases.items():
+                with self.subTest(name=name, size=size):
+                    started = time.monotonic()
+                    result = subprocess.run([sys.executable, '-c', script, str(Path(__file__).parent)],
+                        input=json.dumps(response), text=True, capture_output=True, timeout=5,
+                        env=dict(os.environ, PYTHONDONTWRITEBYTECODE='1'))
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertLess(time.monotonic() - started, 5)
+
+    def test_quadratic_decoder_rescans_fail_closed(self):
+        # Below CPython's recursion limit, each candidate reads ~300 chars.
+        # Quadratic work hits the relative step cap or absolute byte budget.
+        self.check_response(('['*300 + 'x')*100 + '\n' + self.block())
+
+    def test_unterminated_escaped_quotes_cannot_undercharge_decoder_work(self):
+        # Every quote starts a string whose remaining quotes are escaped. C and
+        # Python scanners report its opening quote, having scanned to EOF.
+        self.check_response(('\\"'*4000) + '\n' + self.block())
+
+    def test_scan_step_cap_is_separate_from_byte_and_node_budgets(self):
+        # Harmless prose normally fits. Isolate the independent step gate.
+        body = self.block() + '\n' + 'ordinary prose '*20
+        self.check_response(body, accepted=True)
+        with patch.object(N, '_VERDICT_SCAN_STEPS', 100):
+            self.check_response(body)
+
+    def test_cpython_error_positions_and_unterminated_string_exception(self):
+        import json.scanner
+        decoders = [json.JSONDecoder()]
+        pure = json.JSONDecoder()
+        pure.parse_string = json.decoder.py_scanstring
+        pure.scan_once = json.scanner.py_make_scanner(pure)
+        decoders.append(pure)
+        for decoder in decoders:
+            for candidate, position in (('[file.py:42]', 1), ('{missing}', 1),
+                                        ('[1,?', 3), ('{"a":?', 5), ('"abc\\q"', 4)):
+                text = 'prefix ' + candidate
+                with self.subTest(scanner=type(decoder.scan_once), candidate=candidate):
+                    with self.assertRaises(json.JSONDecodeError) as caught:
+                        decoder.raw_decode(text, 7)
+                    # The pure scanner reports an invalid escape one char later.
+                    expected = position + (decoder is pure and candidate == '"abc\\q"')
+                    self.assertEqual(caught.exception.pos, 7 + expected)
+            for candidate in ('"tail', '["tail', '{"a":"tail', '"' + '\\'*100):
+                with self.subTest(scanner=type(decoder.scan_once), candidate=candidate):
+                    with self.assertRaises(json.JSONDecodeError) as caught:
+                        decoder.raw_decode(candidate)
+                    self.assertEqual(caught.exception.msg, 'Unterminated string starting at')
+                    self.assertEqual(caught.exception.pos, candidate.rfind('"'))
 
     def test_plain_key_encoded_fail(self):
         fail = self.block(verdict='FAIL', findings=['hidden'])

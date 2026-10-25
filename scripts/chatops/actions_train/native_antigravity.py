@@ -2016,16 +2016,21 @@ def _verdict_decoder():
 
 
 # Both structural and encoded nesting count. All branches share finite budgets;
-# failed raw_decode attempts also count their possible suffix traversal.
+# failed raw_decode attempts count traversal to the error (or end of a string).
 _VERDICT_DECODE_DEPTH = 64
 _VERDICT_SCAN_NODES = 100000
 _VERDICT_SCAN_BYTES = 4 << 20
+_VERDICT_SCAN_STEPS = 4 << 20
 
 
 class _VerdictScanBudget:
-    def __init__(self):
+    def __init__(self, text_size):
         self.nodes = _VERDICT_SCAN_NODES
         self.bytes = _VERDICT_SCAN_BYTES
+        # Count attempts, skipped characters and decoder traversal across all
+        # decoded strings, with both an input-relative and hard cap. The ratio
+        # also stops small malformed inputs with quadratic repeated rescans.
+        self.steps = min(8 * text_size + 64, _VERDICT_SCAN_STEPS)
 
     def consume(self, size):
         self.bytes -= size
@@ -2035,6 +2040,11 @@ class _VerdictScanBudget:
     def visit(self, depth):
         self.nodes -= 1
         if depth > _VERDICT_DECODE_DEPTH or self.nodes < 0:
+            raise ReviewError('AGY_PARSE_FAILED', 'parse')
+
+    def scan(self, steps):
+        self.steps -= steps
+        if self.steps < 0:
             raise ReviewError('AGY_PARSE_FAILED', 'parse')
 
 
@@ -2078,13 +2088,23 @@ def _collect_verdict_values(text, found, depth, budget):
         start = index
         while start < length and text[start] not in '{["':
             start += 1
+        budget.scan(start - index)
         if start >= length:
             break
+        budget.scan(1)
         try:
             value, end = decoder.raw_decode(text, start)
-        except json.JSONDecodeError:
-            # An invalid prefix may have made the decoder read the full tail.
-            budget.consume(length - start)
+        except json.JSONDecodeError as error:
+            # CPython's object/array errors report the failure offset; ordinary
+            # Markdown '[' usually fails one character in. Charging its entire
+            # tail rejects legitimate findings. String scanning is exceptional:
+            # an unterminated string reports its OPENING quote despite reading
+            # to EOF (also when nested in an object/array). Account for that
+            # traversal; other errors have only bounded token lookahead.
+            consumed = (length - start if error.msg == 'Unterminated string starting at'
+                        else max(1, error.pos - start))
+            budget.consume(consumed)
+            budget.scan(consumed)
             index = start + 1
             continue
         if end <= start:
@@ -2092,6 +2112,7 @@ def _collect_verdict_values(text, found, depth, budget):
             continue
         spans.append((start, end))
         budget.consume(end - start)
+        budget.scan(end - start)
         _absorb_verdict_value(value, found, depth + 1, budget)
         index = end
     cursor = 0
@@ -2111,7 +2132,7 @@ def verdict_documents(text):
     and byte/work budgets. Identical copies stay for the byte identity check.
     """
     found = []
-    _absorb_verdict_value(text, found, 0, _VerdictScanBudget())
+    _absorb_verdict_value(text, found, 0, _VerdictScanBudget(len(text)))
     return found
 
 
@@ -2127,7 +2148,8 @@ def parse_verdict_response(text, head):
         blocks = verdict_documents(text)
     except (ReviewError, ValueError, RecursionError):
         raise ReviewError('AGY_PARSE_FAILED', 'parse') from None
-    need(blocks, 'no QA verdict block')
+    if not blocks:
+        raise ReviewError('AGY_PARSE_FAILED', 'parse')
     rendered = []
     for block in blocks:
         try:
