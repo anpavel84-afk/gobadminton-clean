@@ -98,11 +98,22 @@ class RuntimeAcceptance(unittest.TestCase):
         marker = {'schema':'GB_CURSOR_AUTHOR_211_V1','phase':'canary','slots':['slot1','slot2'],
                   'canary_task_sha256':self.task_hash,'successor':EXPECTED,'modules':dict(U.RUNTIME_MODULES)}
         self.old = copy.deepcopy(marker)
+        self.receiver = self.install/'receiver.py'; self.receiver.write_bytes(b'reviewed receiver')
+        self.stage = self.install/'stage.py'; self.stage.write_bytes(b'reviewed successor stage')
+        after = {str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in self.install.iterdir()}
+        record = dict(schema='GB_ACTIONS_TRAIN_BACKUP_V1',manifest='m',after=after,
+                      before={name:None for name in after},units={},activated=False,targets=list(after))
+        prior = copy.deepcopy(record); prior['manifest']='old-manifest'
+        prior['after'][str(self.stage)]=hashlib.sha256(b'old stage').hexdigest()
+        self.backup = self.state/'backup.json'
         journal = {'phase':'active-canary','controller':'c'*40,'canary_task_sha256':self.task_hash,
                    'successor':EXPECTED,'manifest':'m','stage_sha256':'s','dispatch_sha256':'d',
                    'historical_fail':{'issue':211,'attempt':1,'status':'FAIL'},
-                   'changes':{str(self.marker):{'before':'historic-before','after':U.encoded_hash(marker)}}}
+                   'record_before':prior,'preserved':{str(self.product):hashlib.sha256(self.product_before).hexdigest()},
+                   'changes':{str(self.marker):{'before':'historic-before','after':U.encoded_hash(marker)},
+                              str(self.stage):{'before':prior['after'][str(self.stage)],'after':after[str(self.stage)]}}}
         for path,value in ((self.marker,marker),(self.journal,journal),
+                           (self.backup,record),
                            (self.policy,{'mode':'active','controller_sha':'c'*40})):
             R.atomic(path,value)
         self.real_atomic = R.atomic
@@ -219,6 +230,147 @@ class RuntimeAcceptance(unittest.TestCase):
         j['changes'][str(installed)]={'before':'old','after':'reviewed'}
         self.real_atomic(self.journal,j); self.refused_without_write('installed code drift')
 
+    def test_backup_only_installed_code_drift(self):
+        j=json.loads(self.journal.read_text())
+        self.assertNotIn(str(self.receiver),j['changes'])
+        self.assertNotIn(self.receiver.name,self.old['modules'])
+        self.receiver.write_bytes(b'unreviewed receiver drift')
+        self.refused_without_write('installed code drift')
+
+    def changes_only_file(self):
+        p=self.install/'changes-only.py'; p.write_bytes(b'reviewed changes-only code')
+        j=json.loads(self.journal.read_text())
+        j['changes'][str(p)]={'before':None,'after':hashlib.sha256(p.read_bytes()).hexdigest()}
+        self.real_atomic(self.journal,j)
+        self.assertNotIn(str(p),json.loads(self.backup.read_text())['after'])
+        return p
+
+    def test_changes_only_installed_code_drift_and_safe_reader(self):
+        p=self.changes_only_file(); original=p.read_bytes()
+        p.write_bytes(b'drift'); self.refused_without_write('installed code drift')
+        p.write_bytes(original); p.chmod(0o666)
+        self.refused_without_write('untrusted runtime evidence metadata')
+        p.chmod(0o644); self.assertEqual(self.call()['phase'],'active-ready')
+
+    def test_backup_only_installed_file_missing(self):
+        self.receiver.unlink(); self.refused_without_write('missing or unsafe')
+
+    def test_backup_only_installed_file_symlink(self):
+        target=self.base/'receiver-copy'; target.write_bytes(self.receiver.read_bytes())
+        self.receiver.unlink(); self.receiver.symlink_to(target)
+        self.refused_without_write('missing or unsafe')
+
+    def test_backup_only_installed_file_parent_symlink(self):
+        # An independent nested payload isolates the inventory walker from
+        # the retained marker-module checks.
+        parent=self.install/'nested'; parent.mkdir(); p=parent/'code.py'; p.write_bytes(b'nested')
+        self.record_prior_file(p)
+        moved=self.install/'nested-moved'; parent.rename(moved); parent.symlink_to(moved)
+        self.refused_without_write('missing or unsafe')
+
+    def test_backup_only_installed_file_writable(self):
+        for mode in (0o664,0o666):
+            with self.subTest(mode=oct(mode)):
+                self.receiver.chmod(mode)
+                self.refused_without_write('untrusted runtime evidence metadata')
+        self.receiver.chmod(0o644); self.assertEqual(self.call()['phase'],'active-ready')
+
+    def test_backup_only_installed_file_hardlinked(self):
+        os.link(self.receiver,self.base/'receiver-alias')
+        self.refused_without_write('invalid runtime evidence file')
+
+    def test_backup_only_installed_file_wrong_owner(self):
+        self.metadata.foreign_owners[self.metadata.inode(self.receiver.lstat())]=999
+        self.refused_without_write('untrusted runtime evidence metadata')
+
+    def test_changes_and_backup_conflicting_pins(self):
+        j=json.loads(self.journal.read_text())
+        j['changes'][str(self.receiver)]={'before':None,'after':hashlib.sha256(b'new receiver').hexdigest()}
+        self.real_atomic(self.journal,j); self.receiver.write_bytes(b'new receiver')
+        self.refused_without_write('installed code drift: conflicting inventory pin')
+
+    def test_missing_backup_refused(self):
+        self.backup.unlink(); self.refused_without_write('missing or unsafe')
+
+    def test_malformed_backup_refused(self):
+        original=self.backup.read_bytes()
+        cases=[b'{',b'\xff',b'[]',b'{}',b'{"after":{}}']
+        for key,value in (('schema','foreign'),('after',[]),('after',{}),('before',[]),
+                          ('targets',{}),('units',[]),('activated',1)):
+            record=json.loads(original); record[key]=value; cases.append(json.dumps(record).encode())
+        cases.append(original[:-1]+b',"schema":"duplicate"}')
+        for raw in cases:
+            with self.subTest(raw=raw[:50]):
+                self.backup.write_bytes(raw); self.refused_without_write('invalid backup|duplicate JSON key')
+
+    def test_unsafe_backup_refused(self):
+        self.backup.chmod(0o666); self.refused_without_write('untrusted runtime evidence metadata')
+        self.backup.chmod(0o644)
+        target=self.state/'backup-copy'; target.write_bytes(self.backup.read_bytes())
+        self.backup.unlink(); self.backup.symlink_to(target); self.refused_without_write('missing or unsafe')
+
+    def record_prior_file(self, p):
+        record=json.loads(self.backup.read_text()); j=json.loads(self.journal.read_text())
+        for value in (record,j['record_before']):
+            value['after'][str(p)]=hashlib.sha256(p.read_bytes()).hexdigest()
+        self.real_atomic(self.backup,record); self.real_atomic(self.journal,j)
+
+    def test_recorded_path_outside_installation_refused(self):
+        p=self.base/'outside.py'; p.write_bytes(b'outside'); self.record_prior_file(p)
+        self.refused_without_write('path outside installation')
+
+    def test_recorded_parent_escape_refused(self):
+        p=self.install/'..'/'outside.py'; p.write_bytes(b'outside'); self.record_prior_file(p)
+        self.refused_without_write('path outside installation')
+
+    def test_unrecorded_backup_entry_refused(self):
+        p=self.install/'extra.py'; p.write_bytes(b'extra')
+        record=json.loads(self.backup.read_text()); record['after'][str(p)]=hashlib.sha256(p.read_bytes()).hexdigest()
+        self.real_atomic(self.backup,record); self.refused_without_write('unrecorded or missing inventory')
+
+    def test_missing_prior_inventory_entry_refused(self):
+        record=json.loads(self.backup.read_text()); del record['after'][str(self.receiver)]
+        self.real_atomic(self.backup,record); self.refused_without_write('unrecorded or missing inventory')
+
+    def test_unrecorded_marker_module_refused(self):
+        p=self.install/'extra-module.py'; p.write_bytes(b'extra')
+        marker=copy.deepcopy(self.old); marker['modules'][p.name]=hashlib.sha256(p.read_bytes()).hexdigest()
+        self.real_atomic(self.marker,marker)
+        j=json.loads(self.journal.read_text()); j['changes'][str(self.marker)]['after']=U.encoded_hash(marker)
+        self.real_atomic(self.journal,j); self.refused_without_write('unrecorded marker module')
+
+    def test_backup_identity_and_prior_schema_refused(self):
+        self.change(self.backup,manifest='foreign'); self.refused_without_write('backup identity')
+        self.change(self.backup,manifest='m'); self.change(self.journal,record_before={})
+        self.refused_without_write('invalid backup schema')
+
+    def test_all_recorded_hashes_consistent_positive_control(self):
+        self.changes_only_file()
+        self.assertEqual(self.call()['phase'],'active-ready')
+        self.assertEqual(self.call()['phase'],'active-ready')
+
+    def test_installer_external_destinations_positive_control(self):
+        helper=self.base/'deploy-helper.sh'; helper.write_bytes(b'helper')
+        monitor=self.base/'monitor.js'; monitor.write_bytes(b'monitor')
+        for p in (helper,monitor): self.record_prior_file(p)
+        with patch.object(U.i,'HELPER',helper),patch.object(U.i,'MONITOR_PAYLOADS',{'monitor':monitor}):
+            self.assertEqual(self.call()['phase'],'active-ready')
+
+    def test_pending_intent_replay_refuses_backup_only_drift(self):
+        self.interrupt_before_marker(); self.receiver.write_bytes(b'post-intent drift')
+        self.refused_without_write('installed code drift')
+
+    def test_completed_replay_refuses_backup_only_drift(self):
+        self.call(); self.receiver.write_bytes(b'post-accept drift')
+        self.refused_without_write('installed code drift')
+
+    def test_runtime_rollback_refuses_backup_only_drift_without_write(self):
+        self.call(); self.change(self.policy,mode='disabled'); self.receiver.write_bytes(b'rollback drift')
+        before=self.snapshot(); count=len(self.writes)
+        with self.assertRaisesRegex(core.Refused,'installed code drift'):
+            U.rollback_runtime(SimpleNamespace(quiet=Mock()))
+        self.assertEqual(self.snapshot(),before); self.assertEqual(len(self.writes),count)
+
     def test_missing_module_pin(self):
         self.change(self.marker,modules={}); self.refused_without_write('module pins')
 
@@ -234,6 +386,51 @@ class RuntimeAcceptance(unittest.TestCase):
             with self.subTest(slot=slot):
                 self.ops[slot]['extra']=author; self.refused_without_write('one confirmed')
                 del self.ops[slot]['extra']
+
+    def extra_author(self, slot='slot1', status='unknown', finished=True, calls=1, task='same'):
+        op=copy.deepcopy(self.ops['slot2']['author']); op['run']=102
+        op['result']['status']=status; op['result']['routing']['usage']['charged_calls']=calls
+        if not finished: op.pop('finished_at')
+        if task=='missing': op.pop('task_hash')
+        elif task!='same': op['task_hash']='other-task'
+        self.ops[slot]['second-author']=op
+
+    def test_second_unknown_charged_author_other_slot(self):
+        self.extra_author(); self.refused_without_write('one confirmed runtime canary author required')
+
+    def test_second_unknown_charged_author_same_slot(self):
+        self.extra_author(slot='slot2'); self.refused_without_write('one confirmed runtime canary author required')
+
+    def test_second_failed_rejected_unconfirmed_or_unfinished_author(self):
+        for slot in ('slot1','slot2'):
+            for status,finished in (('failed',True),('rejected',True),('unconfirmed',True),('confirmed',False)):
+                with self.subTest(slot=slot,status=status,finished=finished):
+                    self.extra_author(slot=slot,status=status,finished=finished,calls=0)
+                    self.refused_without_write('one confirmed runtime canary author required')
+                    del self.ops[slot]['second-author']
+
+    def test_second_author_with_missing_or_different_task_hash(self):
+        for task in ('missing','different'):
+            with self.subTest(task=task):
+                self.extra_author(status='confirmed',task=task)
+                self.refused_without_write('one confirmed runtime canary author required')
+                del self.ops['slot1']['second-author']
+
+    def test_pending_intent_replay_refuses_added_unknown_author(self):
+        self.interrupt_before_marker(); self.extra_author()
+        self.refused_without_write('one confirmed runtime canary author required')
+
+    def test_completed_replay_refuses_added_unknown_author(self):
+        self.call(); self.extra_author(slot='slot2')
+        self.refused_without_write('one confirmed runtime canary author required')
+
+    def test_unrelated_issue_author_and_qa_dev_are_not_counted(self):
+        self.extra_author(); self.ops['slot1']['second-author']['binding']['issue']=226
+        for stage in ('qa','dev'):
+            op=copy.deepcopy(self.ops['slot2']['author']); op['binding']['stage']=stage
+            op['finished_at']=201; self.ops['slot2']['extra-'+stage]=op
+        self.assertEqual(self.call()['phase'],'active-ready')
+        self.assertEqual(self.call()['phase'],'active-ready')
 
     def test_author_charged_calls_must_be_exact_integer_one(self):
         for calls in (0,2,None,True):

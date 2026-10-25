@@ -99,6 +99,55 @@ def runtime_evidence(proof_path, task_hash, expected_sha=None):
     return proof_sha, proof['evidence'], artifacts['author_receipt']
 
 
+def runtime_installed_code(j, marker):
+    """Recompute the recorded payload union, without trusting marker.modules as inventory."""
+    try:
+        record = r.loads(runtime_bytes(STATE/'backup.json'))
+    except (ValueError, UnicodeError):
+        r.need(False, 'installed code drift: invalid backup JSON')
+    prior = j.get('record_before')
+    fields = {'schema','manifest','before','after','units','activated','targets'}
+    for value in (prior, record):
+        r.need(isinstance(value,dict) and fields <= set(value)
+               and value.get('schema')=='GB_ACTIONS_TRAIN_BACKUP_V1'
+               and isinstance(value.get('after'),dict) and value['after']
+               and isinstance(value.get('before'),dict) and isinstance(value.get('units'),dict)
+               and type(value.get('activated')) is bool and isinstance(value.get('targets'),list),
+               'installed code drift: invalid backup schema')
+    r.need({k:v for k,v in record.items() if k not in ('after','manifest')}==
+           {k:v for k,v in prior.items() if k not in ('after','manifest')}
+           and record['manifest']==j['manifest'], 'installed code drift: backup identity')
+    changes = j.get('changes')
+    r.need(isinstance(changes,dict), 'installed code drift: invalid changes')
+    pins = {}
+    for name, change in changes.items():
+        if name == str(MARKER): continue
+        r.need(isinstance(change,dict) and isinstance(change.get('after'),str),
+               'installed code drift: invalid change pin')
+        pins[name] = change['after']
+    # Successor nextrecord preserves the prior inventory and updates payload
+    # hashes. Neither a removed prior entry nor a new unrecorded entry is valid.
+    r.need(set(prior['after']) <= set(record['after'])
+           and set(record['after']) | set(pins)==set(prior['after']) | set(pins),
+           'installed code drift: unrecorded or missing inventory entry')
+    for name, sha in record['after'].items():
+        r.need(sha==pins.get(name,prior['after'].get(name)),
+               'installed code drift: conflicting inventory pin')
+        pins[name] = sha
+    r.need({str(INSTALL/name) for name in marker['modules']} <= set(pins),
+           'installed code drift: unrecorded marker module')
+    # The installer also records these exact external payload destinations.
+    # They are not permission for arbitrary paths outside the install tree.
+    external = {i.HELPER, *i.MONITOR_PAYLOADS.values()}
+    for name, sha in pins.items():
+        path = Path(name)
+        r.need(path.is_absolute() and '..' not in path.parts and str(path)==name
+               and ((path.is_relative_to(INSTALL) and path!=INSTALL) or path in external),
+               'installed code drift: path outside installation')
+        r.need(isinstance(sha,str) and re.fullmatch('[a-f0-9]{64}',sha)
+               and hashlib.sha256(runtime_bytes(path)).hexdigest()==sha, 'installed code drift')
+
+
 def runtime_identity(j, p, marker):
     r.need(p['mode']=='active' and p['controller_sha']==j['controller']
            and marker.get('phase')=='canary'
@@ -109,18 +158,24 @@ def runtime_identity(j, p, marker):
     for name, sha in marker['modules'].items():
         r.need(Path(name).name == name and hashlib.sha256(runtime_bytes(INSTALL/name)).hexdigest()==sha,
                'qualified adapter drift')
-    r.need(all(i.sha(Path(k))==v['after'] for k,v in j['changes'].items() if k!=str(MARKER)),
-           'installed code drift')
+    runtime_installed_code(j,marker)
 
 
 def runtime_author(task_hash):
     matches = []
     for slot in ('slot1','slot2'):
         ops = r.journal(slot)['operations']
-        for key, op in acceptance_operations(ops,'author',task_hash,None).items():
-            matches.append((slot, key, op, ops))
+        # Count every issue-225 author, even with a missing/different task hash
+        # or an unfinished/unconfirmed result. Such attempts cannot disappear
+        # from qualification accounting by changing status or task binding.
+        for key, op in ops.items():
+            if op['binding']['issue']==225 and op['binding']['stage']=='author':
+                matches.append((slot, key, op, ops))
     r.need(len(matches)==1, 'one confirmed runtime canary author required')
     slot, key, op, ops = matches[0]
+    r.need(op.get('task_hash')==task_hash and op.get('finished_at')
+           and op.get('result',{}).get('status')=='confirmed',
+           'one confirmed runtime canary author required')
     route = op['result'].get('routing') or {}
     r.need(route.get('provider')=='cursor' and route.get('effective_model')=='Auto'
            and type(route.get('usage',{}).get('charged_calls')) is int
@@ -248,7 +303,10 @@ def complete_qualification(j,p,marker,dry_run=False):
                'accepted_canary':intent['proof'],'qualified_at':intent['qualified_at']},
            'qualification marker intent changed')
     for name,sha in intent['old_marker']['modules'].items():
-        r.need(i.sha(INSTALL/name)==sha,'qualified adapter drift')
+        actual_sha = (hashlib.sha256(runtime_bytes(INSTALL/name)).hexdigest()
+                      if intent['proof'].get('acceptance_basis')=='runtime_qualification'
+                      else i.sha(INSTALL/name))
+        r.need(actual_sha==sha,'qualified adapter drift')
     ops=r.journal(intent['proof']['slot'])['operations']
     r.need(all(k in ops and digest(ops[k])==v for k,v in intent['operations'].items()),
            'qualification operation evidence changed')
