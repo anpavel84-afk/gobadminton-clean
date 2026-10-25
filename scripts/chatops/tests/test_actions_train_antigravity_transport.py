@@ -59,6 +59,19 @@ class Transport(unittest.TestCase):
    for name in draft['allowed_paths'][:2]:
     with (work/name).open('a') as f:f.write('\n// Offline transport fixture comment: 漢字 🎾\n')
    git('add','.');git('commit','-qm','comment-only fixture diff');head=git('rev-parse','HEAD')
+   with self.assertRaises(N.ReviewError) as caught:
+    N.collect(work,base,head,json.dumps(draft,ensure_ascii=False))
+   self.assertEqual(caught.exception.code,'AGY_INPUT_LIMIT')
+   self.assertIn('not truncated',caught.exception.detail)
+   self.assertIn('before model call',caught.exception.detail)
+  # A closure under the final-stdin cap is still delivered whole, rules included.
+  with tempfile.TemporaryDirectory() as temp:
+   work=Path(temp)
+   def git(*args):return subprocess.check_output(['git','-c','user.name=offline','-c','user.email=offline@example.invalid','-c','commit.gpgsign=false',*args],cwd=work).decode().strip()
+   (work/'pkg').mkdir();(work/'pkg'/'a.py').write_text('x = 1\n')
+   git('init','-q');git('add','.');git('commit','-qm','baseline');base=git('rev-parse','HEAD')
+   (work/'pkg'/'a.py').write_text('x = 1\n'+('# Offline transport fixture comment: 漢字 🎾\n'*400))
+   git('add','.');git('commit','-qm','comment-only fixture diff');head=git('rev-parse','HEAD')
    source,_=N.collect(work,base,head,json.dumps(draft,ensure_ascii=False))
    data=json.loads(source.split('DATA_JSON:\n')[1]);self.assertEqual(data['missing_context'],[])
    self.assertIn('Offline transport fixture comment',data['diff'])
@@ -67,9 +80,11 @@ class Transport(unittest.TestCase):
    assembled,context=C.inject(source,True,work,(rules,dict(commit=C.RULES_COMMIT,sha256=C.RULES_SHA256,bytes=C.RULES_SIZE,revision='1.1',delivery='explicit_full_stdin')))
    payload,meta=N.input_payload(assembled)
    self.assertGreater(meta['semantic_input_bytes'],120<<10)
+   self.assertLessEqual(meta['semantic_input_bytes'],N.QA_INPUT_LIMIT)
+   self.assertLessEqual(meta['stdin_bytes'],N.QA_EXTERNAL_CUT)
    self.assertEqual(json.loads(payload)['message']['content'],assembled)
    self.assertIn(rules,assembled);self.assertEqual(context['sha256'],C.RULES_SHA256)
-   print('230 baseline+inert draft+fixture diff bytes:',meta['semantic_input_bytes'],'wire:',meta['stdin_bytes'])
+   print('230 fitting closure bytes:',meta['semantic_input_bytes'],'wire:',meta['stdin_bytes'])
  def test_review_receipt_matches_exact_captured_wire_and_preserves_rules(self):
   import context_policy as C
   rules=__import__('accepted_rules_fixture').accepted_rules_text(ROOT)

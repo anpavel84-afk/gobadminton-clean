@@ -168,6 +168,57 @@ class VerdictBlocks(unittest.TestCase):
         self.assertEqual(self.parsed(fenced)['verdict'], 'PASS')
         self.assertEqual(self.parsed('```\n' + self.block() + '\n```\n')['findings'], [])
 
+    def test_identical_verdict_nested_in_a_string_collapses(self):
+        body = self.block()
+        wrapped = json.dumps({'echo': body})
+        self.assertEqual(self.parsed(body + '\n' + wrapped),
+                         {'verdict': 'PASS', 'findings': [], 'reviewed_sha': SHA})
+
+    def _reject(self, text):
+        with self.assertRaises(N.ReviewError) as caught:
+            self.parsed(text)
+        self.assertEqual(caught.exception.code, 'AGY_PARSE_FAILED')
+
+    def test_neighbor_with_extra_severity_key_fails(self):
+        bad = {'verdict': 'FAIL', 'findings': ['hidden'], 'reviewed_sha': SHA, 'severity': 'high'}
+        self._reject(self.block() + '\n' + json.dumps(bad))
+
+    def test_fail_without_findings_fails(self):
+        self._reject(self.block() + '\n' + json.dumps({'verdict': 'FAIL', 'reviewed_sha': SHA}))
+        self._reject(self.block() + '\n' + json.dumps({'verdict': 'FAIL'}))
+
+    def test_fail_nested_in_an_object_fails(self):
+        inner = {'verdict': 'FAIL', 'findings': ['nested'], 'reviewed_sha': SHA}
+        self._reject(json.dumps({'outer': inner}) + '\n' + self.block())
+
+    def test_fail_nested_in_an_array_fails(self):
+        inner = {'verdict': 'FAIL', 'findings': ['nested'], 'reviewed_sha': SHA}
+        self._reject(json.dumps([{'box': [inner]}]) + '\n' + self.block())
+
+    def test_fail_inside_a_json_string_fails(self):
+        inner = json.dumps({'verdict': 'FAIL', 'findings': ['hidden'], 'reviewed_sha': SHA})
+        self._reject(json.dumps({'note': inner}) + '\n' + self.block())
+
+    def test_fail_at_depth_50_fails(self):
+        node = {'verdict': 'FAIL', 'findings': ['deep'], 'reviewed_sha': SHA}
+        for _ in range(50):
+            node = {'wrap': node}
+        self._reject(json.dumps(node) + '\n' + self.block())
+
+    def test_only_none_structured_output_parses_text(self):
+        events = rows()
+        events[-1]['result']['structured_output'] = None
+        events[-1]['result']['response'] = self.block()
+        self.assertEqual(N.parse_stream(wire(events), SHA)[0]['verdict'], 'PASS')
+        for value in (False, [], '', 0, 'x'):
+            events = rows()
+            events[-1]['result']['structured_output'] = value
+            events[-1]['result']['response'] = self.block()
+            with self.subTest(value=value):
+                with self.assertRaises(N.ReviewError) as caught:
+                    N.parse_stream(wire(events), SHA)
+                self.assertEqual(caught.exception.code, 'AGY_PARSE_FAILED')
+
 
 class Collection(EvidenceTestCase):
     def setUp(self):
@@ -344,10 +395,8 @@ class Collection(EvidenceTestCase):
         diff = ('diff --git a/pkg/a.py b/pkg/a.py\n+aaaa\n'
                 'diff --git a/pkg/b.py b/pkg/b.py\n+bbbb\n')
         files = {'pkg/a.py': 'a' * 100, 'pkg/b.py': 'b' * 100}
-        with patch.object(N, 'QA_INPUT_LIMIT', 150):
-            self.assertEqual(N.qa_limit_boundary(['pkg/a.py', 'pkg/b.py'], files, diff), 'pkg/b.py')
-        with patch.object(N, 'QA_INPUT_LIMIT', 50):
-            self.assertEqual(N.qa_limit_boundary(['pkg/a.py', 'pkg/b.py'], files, diff), 'pkg/a.py')
+        self.assertEqual(N.qa_limit_boundary(['pkg/a.py', 'pkg/b.py'], files, diff, 150), 'pkg/b.py')
+        self.assertEqual(N.qa_limit_boundary(['pkg/a.py', 'pkg/b.py'], files, diff, 50), 'pkg/a.py')
 
     def test_differing_verdict_blocks_are_agy_parse_failed(self):
         self.write('pkg/a.py', 'x = 2\n')
@@ -373,6 +422,52 @@ class Collection(EvidenceTestCase):
                          task_hash='x', charge=Mock())
         self.assertEqual(caught.exception.code, 'AGY_PARSE_FAILED')
         self.assertEqual(caught.exception.phase, 'parse')
+        nested = json.dumps({'outer': {'verdict': 'FAIL', 'severity': 'high'}})
+        events[-1]['result']['response'] = body + '\n' + nested
+        with patch('context_policy.inject', side_effect=lambda text, *a: (text, {'sha256': 'f' * 64})), \
+             patch.object(N, 'invoke', side_effect=invoke):
+            with self.assertRaises(N.ReviewError) as caught:
+                N.review(self.root, self.base, head, 'task', 60, slot='slot2',
+                         task_hash='x', charge=Mock())
+        self.assertEqual(caught.exception.code, 'AGY_PARSE_FAILED')
+        self.assertEqual(caught.exception.phase, 'parse')
+
+    def test_full_inject_stays_under_the_external_truncator(self):
+        import context_policy as C
+        from accepted_rules_fixture import accepted_rules_text
+        rules = accepted_rules_text()
+        meta = {'commit': C.RULES_COMMIT, 'sha256': C.RULES_SHA256, 'bytes': C.RULES_SIZE,
+                'delivery': 'explicit_full_stdin'}
+        overhead = N.qa_rules_overhead()
+        self.assertGreater(N.qa_stage_budget(), 0)
+        self.assertLess(N.QA_INPUT_LIMIT, N.QA_EXTERNAL_CUT)
+        fitting = 'Q' * N.qa_stage_budget()
+        stdin, _ = C.inject(fitting, True, self.root, (rules, meta))
+        self.assertEqual(len(stdin.encode('utf-8')), N.QA_INPUT_LIMIT)
+        self.assertEqual(len(stdin.encode('utf-8')) - len(fitting.encode('utf-8')), overhead)
+        _wire, payload = N.input_payload(stdin)
+        self.assertLessEqual(payload['semantic_input_bytes'], N.QA_INPUT_LIMIT)
+        self.assertLessEqual(payload['stdin_bytes'], N.QA_EXTERNAL_CUT)
+        # The old cap measured the stage alone. That stage plus the rules prefix
+        # is the 377797-byte stdin the external truncator would still cut.
+        oversized = 'Q' * N.QA_INPUT_LIMIT
+        full, _ = C.inject(oversized, True, self.root, (rules, meta))
+        self.assertEqual(len(full.encode('utf-8')), 377797)
+        self.assertGreater(len(full.encode('utf-8')), N.QA_EXTERNAL_CUT)
+        charge = Mock()
+        with patch.object(N, 'collect', return_value=(oversized, 'ab' * 32)), \
+             patch.object(N, 'invoke', side_effect=AssertionError('model called')):
+            with self.assertRaises(N.ReviewError) as caught:
+                N.review(self.root, self.base, self.base, 'task', 60, slot='slot2',
+                         task_hash='x', charge=charge, accepted_rules=(rules, meta))
+        self.assertEqual(caught.exception.code, 'AGY_INPUT_LIMIT')
+        self.assertEqual(caught.exception.phase, 'source')
+        self.assertIn('after rules inject', caught.exception.detail)
+        self.assertIn('not truncated', caught.exception.detail)
+        self.assertIn('no charge', caught.exception.detail)
+        self.assertIn('before model call', caught.exception.detail)
+        self.assertNotIn(oversized[:80], caught.exception.detail)
+        charge.assert_not_called()
 
 class Routing(unittest.TestCase):
     def test_unqualified_agy_falls_back_without_charge_or_call(self):
