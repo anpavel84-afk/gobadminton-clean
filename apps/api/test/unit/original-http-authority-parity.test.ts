@@ -1,6 +1,5 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const START_MARKER = "export function forbiddenUrlScalars";
@@ -12,9 +11,8 @@ const REQUIRED_EXPORTS = [
   "httpsCreditUrl",
 ] as const;
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const apiSourcePath = path.resolve(here, "../../src/lib/original-http-authority.ts");
-const webSourcePath = path.resolve(here, "../../../web/src/lib/original-http-authority.ts");
+const apiSourcePath = path.resolve(__dirname, "../../src/lib/original-http-authority.ts");
+const webSourcePath = path.resolve(__dirname, "../../../web/src/lib/original-http-authority.ts");
 
 function normalizeSource(text: string): string {
   return text
