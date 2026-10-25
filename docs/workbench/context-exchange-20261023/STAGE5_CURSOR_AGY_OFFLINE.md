@@ -98,7 +98,8 @@ CI GitHub Actions: **NOT_MEASURED** до завершения run на candidate
 ## Candidate
 
 - base sha: `2446bcc583ec11975246f63d476ff1492e153cdb`
-- head sha: записывается следующим commit этого отчёта после того, как commit с кодом известен. До этого push head ещё нет
+- code commit, на котором посчитаны байты и локальные 616 тестов: `78b36c5dd5e98b9241bc69ea646658b8e6feb8c2`
+- строка с этим sha добавлена следующим commit и не меняет код, JSON или тесты. Head PR — тот commit. CI ниже относится к head, на котором Actions реально запустились
 - файлы этого шага:
   - `docs/workbench/context-exchange-20261023/offline_replay.py`
   - `docs/workbench/context-exchange-20261023/stage5_offline_compare.py`
