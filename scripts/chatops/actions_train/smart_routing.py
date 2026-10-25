@@ -29,13 +29,50 @@ MODELS = frozenset((
     "gpt-6.1-sol", "gpt-6-astra", "gpt-6-luna",
     "claude-sonnet-5-5-medium", "claude-sonnet-5-5-high", "claude-opus-5-5-high",
 ))
-SENSITIVE = frozenset((
-    "auth", "guard", "permission", "sandbox", "admission", "budget",
-    "secret", "qa_reuse", "apparmor",
+# §5 critical surfaces. Match is normalized; a bare "author" is not "auth".
+_SENSITIVE_TOKENS = frozenset((
+    "auth", "authentication", "authorization", "authorisation", "authenticated",
+    "authority", "authorize", "authorized", "authorised", "unauthorized", "unauthorised",
+    "identity", "pii", "secret", "secrets", "credential", "credentials",
+    "sandbox", "apparmor", "admission", "budget", "guard", "permission", "permissions",
+    "concurrency", "concurrent", "money", "payment", "payments", "billing",
+    "migration", "migrate", "rollback", "irreversible", "privilege", "rbac",
+    "password", "passwd", "rights",
+))
+_SENSITIVE_PHRASES = (("qa", "reuse"), ("data", "loss"), ("roll", "back"))
+_DIAGNOSTIC_WORDS = frozenset((
+    "error", "ts", "assertionerror", "assertion", "failed", "expected", "received",
+    "permission", "denied", "timeout", "fail", "undefined",
+))
+_DIAGNOSTIC_ONLY = re.compile(
+    r"(?i)^(?:error[\s_-]*ts\d+|assertion(?:error|\s+failed)?|expected\s*:.*|"
+    r"received\s*:.*|permission[\s_-]*denied|timeout|fail|\d{3})$")
+_WEAKENING = re.compile(
+    r"(?i)(?:"
+    r"(?:delet|remov|drop)\w*\s+(?:the\s+)?(?:assertions?|tests?|expects?)|"
+    r"(?:rais|increas|extend)\w*\s+(?:the\s+)?(?:timeout|таймаут\w*)|"
+    r"disable\w*\s+(?:the\s+)?(?:timeout|таймаут\w*|auth\w*|security|qa)|"
+    r"weaken\w*\s+(?:the\s+)?(?:auth\w*|qa|security|timeout|таймаут\w*)|"
+    r"(?:updat|adjust|chang|fitt?)\w*\s+(?:the\s+)?expected|"
+    r"loosen\w*|skip\s+qa|"
+    r"удал\w*\s+(?:ассерт\w*|тест\w*|проверк\w*)|"
+    r"ослаб\w*\s+(?:auth\w*|qa|timeout|таймаут\w*|проверк\w*)|"
+    r"повыс\w*\s+(?:timeout|таймаут\w*))")
+# Condition 7 is proven only by these explicit fields, on the evidence and on the plan.
+_UNCHANGED = ("assertions_unchanged", "expected_values_unchanged", "qa_unchanged",
+              "timeout_unchanged", "auth_unchanged")
+_PLAN_WEAKEN = ("delete_assertions", "weaken_auth", "disable_security", "weaken_qa",
+                "weaken_timeout", "adjust_expected")
+SPECIALIST_AGY = "agy:claude-opus-5-5-high"
+SPECIALIST_SOL = "codex:gpt-6.1-sol:high"
+_WRITER_EVENTS = frozenset((
+    "TEMPLATE", "CONTINUATION", "SOURCE_KNOWN_STANDARD", "SOURCE_KNOWN_COMPLEX",
+    "SOURCE_KNOWN_LOCAL",
 ))
 ALLOWED_EFFECTS = frozenset(("read", "source_edit_within_scope", "deterministic_tool", "none"))
 SEARCH_METHODS = frozenset(("grep", "ast", "lint", "test"))
-SCHEMA_REPAIR_BUDGET = 2
+# §12: at most one schema-repair turn. Attempt 0 is that turn; 1 and above hold.
+SCHEMA_REPAIR_BUDGET = 1
 _SHA40 = re.compile(r"[0-9a-f]{40}\Z")
 _SHA64 = re.compile(r"[0-9a-f]{64}\Z")
 _OP = re.compile(r"[A-Za-z0-9._:-]{1,64}\Z")
@@ -48,7 +85,9 @@ _PIN_KEYS = frozenset((
 _PLAN_KEYS = frozenset((
     "schema", "author_route", "qa_route", "planner_calls", "astra_calls", "fast_fix",
     "effects", "model_ids", "rights_delta", "binding", "delete_assertions",
-    "weaken_auth", "disable_security", "executable",
+    "weaken_auth", "disable_security", "weaken_qa", "weaken_timeout", "adjust_expected",
+    "assertions_unchanged", "expected_values_unchanged", "qa_unchanged",
+    "timeout_unchanged", "auth_unchanged", "executable",
 ))
 _EVIDENCE_KEYS = frozenset((
     "template_id", "template_applicable", "template_tool", "risk", "change_surface",
@@ -63,6 +102,8 @@ _EVIDENCE_KEYS = frozenset((
     "dispatch_duplicate", "schema_repair_attempts", "plan_json_valid", "history",
     "acceptance_unchanged", "scope_within_admission", "finite_budget", "regression_known",
     "minimal_action_known", "architecture_research_required", "external_effects_unknown",
+    "assertions_unchanged", "expected_values_unchanged", "qa_unchanged", "timeout_unchanged",
+    "auth_unchanged", "fast_fix_history_checked", "critical_qa_qualified",
     "line_count", "event_text", "whole_class_plan", "author_qa_same_snapshot", "complexity",
     "event_kind", "requirement_conflict", "plan",
 ))
@@ -72,6 +113,32 @@ def _finish(base, **updates):
     payload = dict(base)
     payload.update(updates)
     return _decision(**payload)
+
+
+def _deny_write(updates, reason):
+    updates["writer"] = False
+    updates["executed"] = False
+    updates["fast_fix"] = False
+    updates["plan_honored"] = False
+    updates["continuation_granted"] = False
+    updates["author_route"] = None
+    updates["route"] = "hold"
+    updates["reason"] = reason
+    updates["model_calls"] = 0
+    updates["planner_calls"] = 0
+    updates["astra_calls"] = 0
+    return updates
+
+
+def _emit(base, evidence, plan, **updates):
+    """A source writer needs admitted scope and an executable plan. Absence is denial."""
+    writing = bool(updates.get("writer") or updates.get("fast_fix")
+                   or updates.get("event_class") in _WRITER_EVENTS)
+    if writing and evidence.get("scope_within_admission") is not True:
+        return _finish(base, **_deny_write(updates, "scope is not inside the admission"))
+    if writing and plan is not None and plan.get("executable") is not True:
+        return _finish(base, **_deny_write(updates, "plan is not executable"))
+    return _finish(base, **updates)
 
 
 def _decision(**updates):
@@ -163,11 +230,13 @@ def validate_plan(plan):
         return "new rights refused"
     if _binding_error(plan["binding"]):
         return "incompatible plan binding"
-    for flag in ("delete_assertions", "weaken_auth", "disable_security", "executable"):
+    for flag in _PLAN_WEAKEN + _UNCHANGED + ("executable",):
         if type(plan[flag]) is not bool:
             return "incompatible plan"
-    if plan["delete_assertions"] or plan["weaken_auth"] or plan["disable_security"]:
+    if any(plan[flag] for flag in _PLAN_WEAKEN):
         return "security check would be weakened"
+    if plan["fast_fix"] and (plan["executable"] is not True or any(plan[flag] is not True for flag in _UNCHANGED)):
+        return "fast fix proof missing"
     return None
 
 
@@ -257,113 +326,119 @@ def decide(case):
 
 def _classify(base, evidence, plan):
     risk = _floor(evidence)
-    honored = None if plan is None else True
-    if plan is not None and plan["fast_fix"] and (risk == "critical" or _class_open(evidence)):
-        honored = False
+    honored = None if plan is None else plan.get("executable") is True
     search_error = _search_state(evidence["class_search"])
     if evidence["class_search"] is not None and search_error:
         return _finish(base, rejected=True, reason=search_error, event_class="REJECTED",
-                         route="hold", risk=risk, plan_honored=False)
+                       route="hold", risk=risk, plan_honored=False)
+    class_open = _class_open(evidence)
+    prior_closed = _prior_closed(evidence)
     if _template_ok(evidence, risk):
         tool = evidence["template_tool"] == "deterministic_tool"
         route = "deterministic_tool" if tool else "cursor:auto"
         model, cost = _auto_receipt(route, evidence)
-        return _finish(base, policy_applied=True, executed=True, writer=not tool,
-                         planner_calls=0, astra_calls=0, model_calls=0 if tool else 1,
-                         fast_fix=False, route=route, author_route=route, qa_route=_ordinary_qa(evidence),
-                         effective_model=model, cost=cost, risk=risk, ledger_category="ordinary",
-                         reason="proven template; no planner or Astra",
-                         event_class="TEMPLATE", plan_honored=honored)
+        return _emit(base, evidence, plan, policy_applied=True, executed=True, writer=not tool,
+                     planner_calls=0, astra_calls=0, model_calls=0 if tool else 1,
+                     fast_fix=False, route=route, author_route=route, qa_route=_ordinary_qa(evidence),
+                     effective_model=model, cost=cost, risk=risk, ledger_category="ordinary",
+                     reason="proven template; no planner or Astra",
+                     event_class="TEMPLATE", plan_honored=honored)
     if risk == "critical" or evidence["difficult_or_repeating"]:
-        qa = _critical_qa(evidence)
-        fast_demanded = plan is not None and plan["fast_fix"]
-        if qa is None:
-            return _finish(base, policy_applied=True, executed=False, writer=False, risk="critical",
-                             astra_calls=1, planner_calls=0, model_calls=0, fast_fix=False, qa_verdict=None,
-                             reason="critical path needs an independent qualified QA route",
-                             event_class="SOURCE_CRITICAL", route="hold",
-                             plan_honored=False if fast_demanded else honored)
-        return _finish(base, policy_applied=True, executed=True, writer=False, risk="critical",
-                         astra_calls=1, planner_calls=0, model_calls=1, fast_fix=False,
-                         author_route="codex:gpt-6.1-sol:high", qa_route=qa,
-                         route="codex:gpt-6-astra:high", ledger_category="ordinary",
-                         reason="critical or hard defect uses read-only Astra and independent QA",
-                         event_class="SOURCE_CRITICAL", plan_honored=False if fast_demanded else honored)
-    if _class_open(evidence):
-        return _pm(base, evidence, risk, whole_class=True,
-                   reason="Fast Fix refused; defect class is not proven closed")
-    if evidence["prior_fast_fix"] and evidence["prior_fast_fix"]["fingerprint"] == evidence["defect_fingerprint"]:
-        return _finish(base, policy_applied=True, executed=True, writer=False, risk=risk,
-                         fast_fix=False, fast_fix_closed=True, planner_calls=1, astra_calls=0, model_calls=1,
-                         author_attempts_delta=0, route="codex:gpt-6.1-sol:high", author_route=None,
-                         qa_route=_ordinary_qa(evidence), next_ordinary_attempt=evidence["author_attempts"] + 1,
-                         reason="Fast Fix for this fingerprint is closed",
-                         event_class="SOURCE_UNCERTAIN", plan_honored=False)
+        return _expert(base, evidence, plan, risk, class_open, prior_closed, honored)
+    if class_open or prior_closed:
+        return _pm(base, evidence, risk, whole_class=class_open, fast_fix_closed=prior_closed,
+                   reason="Fast Fix refused; defect class is not closed for a single repair")
     if evidence["author_attempts"] >= 3 and evidence["brief_usable"] and evidence["progress"]:
         if evidence["continuation_used"] >= 2:
             return _finish(base, policy_applied=True, executed=False, writer=False, risk=risk,
-                             reason="continuation budget is exhausted", event_class="LIMIT", route="hold")
-        return _finish(base, policy_applied=True, executed=True, writer=True, risk=risk,
-                         planner_calls=0, astra_calls=0, model_calls=1, continuation_granted=True,
-                         owner_micro_go=False, history_reset=False,
-                         author_route="cursor:auto" if evidence["complexity"] != "complex" else "codex:gpt-6.1-sol:high",
-                         qa_route=_ordinary_qa(evidence), route="continuation", ledger_category="ordinary",
-                         next_ordinary_attempt=evidence["author_attempts"] + evidence["continuation_used"] + 1,
-                         reason="bounded continuation reuses the brief; history is kept",
-                         event_class="CONTINUATION", cost=None, plan_honored=honored)
+                           reason="continuation budget is exhausted", event_class="LIMIT", route="hold")
+        if evidence["architecture_research_required"] or evidence["minimal_action_known"] is not True:
+            return _pm(base, evidence, risk, whole_class=False, fast_fix_closed=False,
+                       reason="architecture is open or the minimal action is not proven")
+        return _emit(base, evidence, plan, policy_applied=True, executed=True, writer=True, risk=risk,
+                     planner_calls=0, astra_calls=0, model_calls=1, continuation_granted=True,
+                     owner_micro_go=False, history_reset=False,
+                     author_route="cursor:auto" if evidence["complexity"] != "complex" else SPECIALIST_SOL,
+                     qa_route=_ordinary_qa(evidence), route="continuation", ledger_category="ordinary",
+                     next_ordinary_attempt=evidence["author_attempts"] + evidence["continuation_used"] + 1,
+                     reason="bounded continuation reuses the brief; history is kept",
+                     event_class="CONTINUATION", cost=None, plan_honored=honored)
     if evidence["brief_usable"] and evidence["cause"] in ("proven", "supported") and evidence["author_attempts"] < 3:
+        if evidence["architecture_research_required"] or evidence["minimal_action_known"] is not True:
+            return _pm(base, evidence, risk, whole_class=False, fast_fix_closed=False,
+                       reason="architecture is open or the minimal action is not proven")
         model, cost = _auto_receipt("cursor:auto", evidence)
-        return _finish(base, policy_applied=True, executed=True, writer=True, risk=risk,
-                         planner_calls=0, astra_calls=0, model_calls=1, fast_fix=False,
-                         author_route="cursor:auto", qa_route=_ordinary_qa(evidence), route="cursor:auto",
-                         effective_model=model, cost=cost, ledger_category="ordinary",
-                         reason="usable brief is reused; no extra planner or diagnosis",
-                         event_class="SOURCE_KNOWN_STANDARD", plan_honored=honored)
+        return _emit(base, evidence, plan, policy_applied=True, executed=True, writer=True, risk=risk,
+                     planner_calls=0, astra_calls=0, model_calls=1, fast_fix=False,
+                     author_route="cursor:auto", qa_route=_ordinary_qa(evidence), route="cursor:auto",
+                     effective_model=model, cost=cost, ledger_category="ordinary",
+                     reason="usable brief is reused; no extra planner or diagnosis",
+                     event_class="SOURCE_KNOWN_STANDARD", plan_honored=honored)
     allowed, fast_reason = _fast_fix_block(evidence, risk)
-    fast_candidate = (evidence["cause"] == "proven" and evidence["minimal_action_known"]
-                      and not evidence["architecture_research_required"])
-    if fast_candidate and allowed:
+    if allowed:
         model, cost = _auto_receipt("cursor:auto", evidence)
-        return _finish(base, policy_applied=True, executed=True, writer=True, risk=risk,
-                         fast_fix=True, planner_calls=0, astra_calls=0, model_calls=1,
-                         author_attempts_delta=0, ledger_category="fast_fix", author_route="cursor:auto",
-                         qa_route=_ordinary_qa(evidence), route="cursor:auto", effective_model=model, cost=cost,
-                         whole_class=False, reason="all eight Fast Fix conditions hold",
-                         event_class="SOURCE_KNOWN_LOCAL", plan_honored=honored)
-    if fast_candidate and not allowed:
-        return _pm(base, evidence, risk, whole_class=_class_open(evidence) or not _search_saved(evidence),
-                   reason="Fast Fix refused; " + fast_reason)
-    if evidence["cause"] == "proven" and evidence["complexity"] == "complex":
-        return _author(base, evidence, risk, "codex:gpt-6.1-sol:high", "SOURCE_KNOWN_COMPLEX",
+        return _emit(base, evidence, plan, policy_applied=True, executed=True, writer=True, risk=risk,
+                     fast_fix=True, planner_calls=0, astra_calls=0, model_calls=1,
+                     author_attempts_delta=0, ledger_category="fast_fix", author_route="cursor:auto",
+                     qa_route=_ordinary_qa(evidence), route="cursor:auto", effective_model=model, cost=cost,
+                     whole_class=False, reason="all eight Fast Fix conditions hold",
+                     event_class="SOURCE_KNOWN_LOCAL", plan_honored=honored)
+    # Not a proven minimal repair: do not fall through to a source writer.
+    if (evidence["cause"] == "proven" and evidence["complexity"] == "complex"
+            and evidence["minimal_action_known"] and not evidence["architecture_research_required"]):
+        return _author(base, evidence, plan, risk, SPECIALIST_SOL, "SOURCE_KNOWN_COMPLEX",
                        "known complex noncritical cause; Astra is not required", honored)
-    if evidence["cause"] == "proven":
-        route = "cursor:auto"
-        return _author(base, evidence, risk, route, "SOURCE_KNOWN_STANDARD",
+    if (evidence["cause"] == "proven" and evidence["minimal_action_known"]
+            and not evidence["architecture_research_required"] and evidence["brief_usable"]):
+        return _author(base, evidence, plan, risk, "cursor:auto", "SOURCE_KNOWN_STANDARD",
                        "known cause uses an evidence-bound repair", honored)
     if evidence["cause"] == "missing_evidence":
         return _finish(base, policy_applied=True, executed=False, writer=False, risk=risk, qa_verdict=None,
-                         missing_inputs=list(evidence["missing_inputs"]) or ["source evidence"],
-                         reason="missing evidence; do not guess with a larger model",
-                         event_class="INPUT_MISSING", route="hold")
-    return _pm(base, evidence, risk, whole_class=False, reason="one read-only Technical PM pass")
+                       missing_inputs=list(evidence["missing_inputs"]) or ["source evidence"],
+                       reason="missing evidence; do not guess with a larger model",
+                       event_class="INPUT_MISSING", route="hold")
+    reason = "Fast Fix refused; " + fast_reason if evidence["cause"] == "proven" else "one read-only Technical PM pass"
+    return _pm(base, evidence, risk, whole_class=class_open or not _search_saved(evidence) and evidence["cause"] == "proven",
+               fast_fix_closed=prior_closed, reason=reason)
 
 
-def _pm(base, evidence, risk, *, whole_class, reason):
-    return _finish(base, policy_applied=True, executed=True, writer=False, risk=risk,
-                     planner_calls=1, astra_calls=0, model_calls=1, fast_fix=False, whole_class=whole_class,
-                     route="codex:gpt-6.1-sol:high",
-                     author_route="cursor:auto" if evidence["complexity"] != "complex" else "codex:gpt-6.1-sol:high",
-                     qa_route=_ordinary_qa(evidence), reason=reason, event_class="SOURCE_UNCERTAIN",
-                     plan_honored=False if whole_class else base.get("plan_honored"))
+def _expert(base, evidence, plan, risk, class_open, prior_closed, honored):
+    qa = _critical_qa(evidence)
+    nxt = evidence["author_attempts"] + 1 if prior_closed else None
+    if qa is None:
+        return _finish(base, policy_applied=True, executed=False, writer=False, risk="critical",
+                       astra_calls=1, planner_calls=0, model_calls=0, fast_fix=False,
+                       fast_fix_closed=prior_closed, whole_class=class_open, qa_verdict=None,
+                       next_ordinary_attempt=nxt,
+                       reason="critical path needs a specialist QA route with separate proof",
+                       event_class="SOURCE_CRITICAL", route="hold", plan_honored=False)
+    return _emit(base, evidence, plan, policy_applied=True, executed=True, writer=False, risk="critical",
+                 astra_calls=1, planner_calls=0, model_calls=1, fast_fix=False,
+                 fast_fix_closed=prior_closed, whole_class=class_open, next_ordinary_attempt=nxt,
+                 author_route=SPECIALIST_SOL, qa_route=qa, route="codex:gpt-6-astra:high",
+                 ledger_category="ordinary", event_class="SOURCE_CRITICAL",
+                 plan_honored=False if class_open else honored,
+                 reason="critical or hard defect uses read-only Astra, whole-class when another instance exists")
 
 
-def _author(base, evidence, risk, route, klass, reason, honored):
+def _pm(base, evidence, risk, *, whole_class, reason, fast_fix_closed=False):
+    nxt = evidence["author_attempts"] + 1 if fast_fix_closed else None
+    return _emit(base, evidence, evidence.get("plan"), policy_applied=True, executed=True, writer=False,
+                 risk=risk, planner_calls=1, astra_calls=0, model_calls=1, fast_fix=False,
+                 fast_fix_closed=fast_fix_closed, whole_class=whole_class, next_ordinary_attempt=nxt,
+                 route="codex:gpt-6.1-sol:high",
+                 author_route="cursor:auto" if evidence["complexity"] != "complex" else SPECIALIST_SOL,
+                 qa_route=_ordinary_qa(evidence), reason=reason, event_class="SOURCE_UNCERTAIN",
+                 plan_honored=False)
+
+
+def _author(base, evidence, plan, risk, route, klass, reason, honored):
     model, cost = _auto_receipt(route, evidence)
-    return _finish(base, policy_applied=True, executed=True, writer=True, risk=risk,
-                     planner_calls=0, astra_calls=0, model_calls=1, fast_fix=False,
-                     author_route=route, qa_route=_ordinary_qa(evidence), route=route,
-                     effective_model=model, cost=cost, ledger_category="ordinary",
-                     reason=reason, event_class=klass, plan_honored=honored)
+    return _emit(base, evidence, plan, policy_applied=True, executed=True, writer=True, risk=risk,
+                 planner_calls=0, astra_calls=0, model_calls=1, fast_fix=False,
+                 author_route=route, qa_route=_ordinary_qa(evidence), route=route,
+                 effective_model=model, cost=cost, ledger_category="ordinary",
+                 reason=reason, event_class=klass, plan_honored=honored)
 
 
 def _quota(base, evidence):
@@ -381,6 +456,7 @@ def _quota(base, evidence):
 
 
 def _schema_repair(base, evidence):
+    # One turn only. Zero means that turn is still available; one or more holds.
     if evidence["schema_repair_attempts"] >= SCHEMA_REPAIR_BUDGET:
         return _finish(base, policy_applied=True, executed=False, writer=False,
                          planner_calls=0, astra_calls=0, model_calls=0,
@@ -388,7 +464,7 @@ def _schema_repair(base, evidence):
                          event_class="SCHEMA_REPAIR", route="hold")
     return _finish(base, policy_applied=True, executed=False, writer=False,
                      planner_calls=0, astra_calls=0, model_calls=0,
-                     reason="finite schema repair; Astra is not escalated",
+                     reason="one schema repair turn; Astra is not escalated",
                      event_class="SCHEMA_REPAIR", route="schema_repair")
 
 
@@ -426,15 +502,17 @@ def _activation(case):
 
 
 def _floor(evidence):
-    if evidence["critical_signs"] or evidence["change_surface"] in SENSITIVE or any(
+    blobs = [evidence["change_surface"], evidence["event_text"]]
+    blobs.extend(item["location"] for item in evidence["findings"])
+    if evidence["critical_signs"] or any(_sensitive(blob) for blob in blobs) or any(
             item["severity"] == "critical" for item in evidence["findings"]):
         return "critical"
     return evidence["risk"]
 
 
 def _template_ok(evidence, risk):
-    return bool(evidence["template_applicable"] and evidence["template_id"]
-                and risk != "critical" and evidence["change_surface"] not in SENSITIVE
+    return bool(evidence["template_applicable"] and _token(evidence["template_id"])
+                and risk != "critical" and not _sensitive(evidence["change_surface"])
                 and not evidence["critical_signs"])
 
 
@@ -446,12 +524,15 @@ def _ordinary_qa(evidence):
 
 
 def _critical_qa(evidence):
+    """Critical boundary QA is a specialist route plus separate proof, not any AGY id."""
     if not evidence["qa_independent"] or evidence["session_shared"] or evidence["author_qa_same_snapshot"]:
         return None
+    if evidence["critical_qa_qualified"] is not True:
+        return None
     proof = evidence["qa_route_proof"]
-    if proof in ("codex:gpt-6.1-sol:high", "codex:gpt-6-astra:high"):
+    if proof == SPECIALIST_SOL:
         return proof
-    if evidence["agy_qa_qualified"] and type(proof) is str and proof.startswith("agy:") and proof in ROUTES:
+    if proof == SPECIALIST_AGY and evidence["agy_qa_qualified"] is True:
         return proof
     return None
 
@@ -467,13 +548,11 @@ def _auto_receipt(route, evidence):
 
 
 def _class_open(evidence):
-    """A saved search that is not exactly one real instance blocks single-site Fast Fix."""
+    """A saved search that is not exactly one real class instance blocks a single-site repair."""
     search = evidence["class_search"]
     if type(search) is not dict:
         return False
-    return not (search.get("saved") is True and search.get("assurance_only") is False
-                and search.get("method") in SEARCH_METHODS and bool(search.get("pattern"))
-                and bool(search.get("scope")) and search.get("instances") == 1)
+    return not _class_closed(search)
 
 
 def _search_saved(evidence):
@@ -500,34 +579,119 @@ def _search_state(search):
     return None
 
 
-def _fast_fix_block(evidence, risk):
-    """Return (allowed, reason). Allowed only when every condition holds."""
-    search = evidence["class_search"]
+def _prior_closed(evidence):
     prior = evidence["prior_fast_fix"]
-    same_prior = type(prior) is dict and prior.get("fingerprint") == evidence["defect_fingerprint"]
+    fingerprint = _token(evidence["defect_fingerprint"])
+    if type(prior) is not dict or not fingerprint:
+        return False
+    return prior.get("result") == "fail" and _token(prior.get("fingerprint")) == fingerprint
+
+
+def _class_closed(search):
+    return (type(search) is dict and search.get("saved") is True and search.get("assurance_only") is False
+            and search.get("method") in SEARCH_METHODS and search.get("instances") == 1
+            and _pattern_proves_class(search.get("pattern"), search.get("scope")))
+
+
+def _fast_fix_block(evidence, risk):
+    """Return (allowed, reason). Every condition is default-deny: missing proof is failure."""
+    plan = evidence["plan"]
     checks = (
-        (evidence["cause"] == "proven" and evidence["acceptance_unchanged"] and bool(evidence["defect_fingerprint"]),
+        (evidence["cause"] == "proven" and evidence["acceptance_unchanged"] is True
+         and bool(_token(evidence["defect_fingerprint"])),
          "condition 1 cause or acceptance"),
-        (evidence["minimal_action_known"] and not evidence["architecture_research_required"],
+        (evidence["minimal_action_known"] is True and evidence["architecture_research_required"] is False,
          "condition 2 architecture still open"),
-        (risk in ("low", "moderate") and not evidence["critical_signs"]
-         and evidence["change_surface"] not in SENSITIVE and not evidence["external_effects_unknown"]
-         and not evidence["unknown_effect"],
+        (risk in ("low", "moderate") and evidence["critical_signs"] is False
+         and not _sensitive(evidence["change_surface"]) and evidence["external_effects_unknown"] is False
+         and evidence["unknown_effect"] is False,
          "condition 3 risk floor or unknown effect"),
-        (evidence["scope_within_admission"] and evidence["finite_budget"],
+        (evidence["scope_within_admission"] is True and evidence["finite_budget"] is True,
          "condition 4 scope or budget"),
-        (evidence["regression_known"], "condition 5 regression check"),
-        (not same_prior, "condition 6 Fast Fix already used"),
-        (True, "condition 7 assertions and auth"),
-        (type(search) is dict and search.get("saved") is True and search.get("assurance_only") is False
-         and search.get("method") in SEARCH_METHODS and bool(search.get("pattern")) and bool(search.get("scope"))
-         and search.get("instances") == 1,
-         "condition 8 defect class is not proven closed"),
+        (evidence["regression_known"] is True, "condition 5 regression check"),
+        (evidence["fast_fix_history_checked"] is True and not _prior_closed(evidence),
+         "condition 6 Fast Fix history"),
+        (_condition_seven(evidence, plan), "condition 7 assertions, expected values, QA or timeout"),
+        (_class_closed(evidence["class_search"]), "condition 8 defect class is not proven closed"),
     )
     for ok, reason in checks:
         if not ok:
             return False, reason
     return True, ""
+
+
+def _condition_seven(evidence, plan):
+    """No plan and no explicit unchanged-fields means the limit was not proven."""
+    if type(plan) is not dict or plan.get("executable") is not True:
+        return False
+    if any(evidence.get(flag) is not True or plan.get(flag) is not True for flag in _UNCHANGED):
+        return False
+    if any(plan.get(flag) is True for flag in _PLAN_WEAKEN):
+        return False
+    if _weakens(evidence.get("event_text")):
+        return False
+    return True
+
+
+def _tokens(value):
+    if type(value) is not str:
+        return []
+    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", value)
+    spaced = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", spaced)
+    return [token for token in re.split(r"[^A-Za-z0-9]+", spaced.casefold()) if token]
+
+
+def _sensitive(value):
+    tokens = _tokens(value)
+    if not tokens:
+        return False
+    for token in tokens:
+        if token in _SENSITIVE_TOKENS:
+            return True
+        # "author" is a person, not an authorization surface.
+        if token.startswith("auth") and not token.startswith("author"):
+            return True
+        if token == "pii" or token.startswith("pii") or token.endswith("pii"):
+            return True
+        if token.startswith("secret") and not token.startswith("secretary"):
+            return True
+        if token.startswith(("payment", "billing")):
+            return True
+    compact = "".join(tokens)
+    if any(stem in compact for stem in ("rollback", "migration", "identity", "dataloss", "qareuse")):
+        return True
+    for phrase in _SENSITIVE_PHRASES:
+        span = len(phrase)
+        if any(tokens[index:index + span] == list(phrase) for index in range(len(tokens) - span + 1)):
+            return True
+    return False
+
+
+def _token(value):
+    if type(value) is not str:
+        return ""
+    text = " ".join(value.split()).casefold()
+    if not text or not re.search(r"[a-z0-9]", text):
+        return ""
+    return text
+
+
+def _pattern_proves_class(pattern, scope):
+    text = _token(pattern)
+    where = _token(scope)
+    if not text or not where:
+        return False
+    if _DIAGNOSTIC_ONLY.match(text):
+        return False
+    idents = re.findall(r"[A-Za-z_][A-Za-z0-9_]{1,}", text)
+    return any(ident.casefold() not in _DIAGNOSTIC_WORDS and not re.fullmatch(r"(?i)ts\d+", ident)
+               for ident in idents)
+
+
+def _weakens(value):
+    if type(value) is not str or not value.strip():
+        return False
+    return _WEAKENING.search(value) is not None
 
 
 def _case_error(case):
@@ -607,9 +771,12 @@ def _defaults():
         "qa_independent": False, "session_shared": False, "effective_model_exposed": False,
         "invented_model_id": None, "invented_cost": False, "class_search": None,
         "dispatch_duplicate": False, "schema_repair_attempts": 0, "plan_json_valid": True,
-        "history": [], "acceptance_unchanged": True, "scope_within_admission": False,
+        "history": [], "acceptance_unchanged": False, "scope_within_admission": False,
         "finite_budget": False, "regression_known": False, "minimal_action_known": False,
         "architecture_research_required": True, "external_effects_unknown": True,
+        "assertions_unchanged": False, "expected_values_unchanged": False, "qa_unchanged": False,
+        "timeout_unchanged": False, "auth_unchanged": False, "fast_fix_history_checked": False,
+        "critical_qa_qualified": False,
         "line_count": None, "event_text": "", "whole_class_plan": False,
         "author_qa_same_snapshot": False, "complexity": "standard", "event_kind": None,
         "requirement_conflict": False, "plan": None,
@@ -634,6 +801,9 @@ def _check_evidence(evidence):
                 "effective_model_exposed", "invented_cost", "dispatch_duplicate", "plan_json_valid",
                 "acceptance_unchanged", "scope_within_admission", "finite_budget", "regression_known",
                 "minimal_action_known", "architecture_research_required", "external_effects_unknown",
+                "assertions_unchanged", "expected_values_unchanged", "qa_unchanged",
+                "timeout_unchanged", "auth_unchanged", "fast_fix_history_checked",
+                "critical_qa_qualified",
                 "whole_class_plan", "author_qa_same_snapshot", "requirement_conflict"):
         if type(evidence[key]) is not bool:
             raise ValueError("invalid evidence flag")

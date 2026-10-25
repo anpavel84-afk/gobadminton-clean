@@ -18,7 +18,7 @@ PINS = {
     "policy_bytes_match": True,
 }
 QA = {"qa_independent": True, "qa_route_proof": "codex:gpt-6.1-sol:high",
-      "session_shared": False, "author_qa_same_snapshot": False}
+      "critical_qa_qualified": True, "session_shared": False, "author_qa_same_snapshot": False}
 
 
 def case(evidence, **updates):
@@ -39,18 +39,10 @@ def ready(**updates):
     return evidence
 
 
-def search(instances=1, saved=True, assurance_only=False):
-    return {"saved": saved, "method": "grep", "pattern": "OldExport", "scope": "apps/web/src",
+def search(instances=1, saved=True, assurance_only=False, pattern="OldExport",
+           method="grep", scope="apps/web/src"):
+    return {"saved": saved, "method": method, "pattern": pattern, "scope": scope,
             "instances": instances, "assurance_only": assurance_only}
-
-
-def fast(**updates):
-    evidence = ready(cause="proven", risk="low", change_surface="rename", complexity="mechanical",
-                     minimal_action_known=True, regression_known=True, defect_fingerprint="fp-export",
-                     class_search=search(), author_attempts=1, continuation_used=0,
-                     effective_model_exposed=False)
-    evidence.update(updates)
-    return evidence
 
 
 def plan(**updates):
@@ -59,10 +51,32 @@ def plan(**updates):
         "qa_route": "codex:gpt-6.1-sol:medium", "planner_calls": 0, "astra_calls": 0,
         "fast_fix": False, "effects": ["source_edit_within_scope"], "model_ids": [],
         "rights_delta": [], "binding": dict(BIND), "delete_assertions": False,
-        "weaken_auth": False, "disable_security": False, "executable": True,
+        "weaken_auth": False, "disable_security": False, "weaken_qa": False,
+        "weaken_timeout": False, "adjust_expected": False,
+        "assertions_unchanged": False, "expected_values_unchanged": False,
+        "qa_unchanged": False, "timeout_unchanged": False, "auth_unchanged": False,
+        "executable": True,
     }
     value.update(updates)
     return value
+
+
+def proof_plan(**updates):
+    value = plan(fast_fix=True, assertions_unchanged=True, expected_values_unchanged=True,
+                 qa_unchanged=True, timeout_unchanged=True, auth_unchanged=True)
+    value.update(updates)
+    return value
+
+
+def fast(**updates):
+    evidence = ready(cause="proven", risk="low", change_surface="rename", complexity="mechanical",
+                     minimal_action_known=True, regression_known=True, defect_fingerprint="fp-export",
+                     class_search=search(), author_attempts=1, continuation_used=0,
+                     effective_model_exposed=False, assertions_unchanged=True,
+                     expected_values_unchanged=True, qa_unchanged=True, timeout_unchanged=True,
+                     auth_unchanged=True, fast_fix_history_checked=True, plan=proof_plan())
+    evidence.update(updates)
+    return evidence
 
 
 def check(decision):
@@ -110,7 +124,8 @@ class SmartRoutingSR1(unittest.TestCase):
 
     def test_sr_t04_usable_brief_is_not_replayed(self):
         decision = check(sr.decide(case(ready(
-            brief_usable=True, cause="proven", risk="moderate", author_attempts=1))))
+            brief_usable=True, cause="proven", risk="moderate", author_attempts=1,
+            minimal_action_known=True))))
         self.assertEqual(decision["planner_calls"], 0)
         self.assertEqual(decision["astra_calls"], 0)
         self.assertEqual(decision["event_class"], "SOURCE_KNOWN_STANDARD")
@@ -118,7 +133,7 @@ class SmartRoutingSR1(unittest.TestCase):
     def test_sr_t05_known_complex_noncritical_skips_astra(self):
         decision = check(sr.decide(case(ready(
             cause="proven", complexity="complex", risk="moderate", change_surface="state",
-            difficult_or_repeating=False, brief_usable=False))))
+            difficult_or_repeating=False, brief_usable=False, minimal_action_known=True))))
         self.assertEqual(decision["event_class"], "SOURCE_KNOWN_COMPLEX")
         self.assertEqual(decision["author_route"], "codex:gpt-6.1-sol:high")
         self.assertEqual(decision["astra_calls"], 0)
@@ -236,7 +251,7 @@ class SmartRoutingSR1(unittest.TestCase):
         history = ["attempt-1", "attempt-2", "attempt-3"]
         decision = check(sr.decide(case(ready(
             author_attempts=3, continuation_used=0, progress=True, brief_usable=True,
-            risk="moderate", history=history))))
+            minimal_action_known=True, risk="moderate", history=history))))
         self.assertTrue(decision["continuation_granted"])
         self.assertEqual(decision["author_attempts"], 3)
         self.assertEqual(decision["history"], history)
@@ -353,6 +368,330 @@ class SmartRoutingSR1(unittest.TestCase):
         self.assertFalse(decision["policy_applied"])
         self.assertEqual(task, json.loads(original))
         self.assertIsNone(decision["rewritten_task"])
+
+
+def _not_writer(test, evidence):
+    decision = check(sr.decide(case(evidence)))
+    test.assertFalse(decision["fast_fix"])
+    test.assertFalse(decision["writer"])
+    test.assertNotEqual(decision["route"], "cursor:auto")
+    test.assertNotEqual(decision["qa_verdict"], "PASS")
+    return decision
+
+
+class SmartRoutingQaClass(unittest.TestCase):
+    """Negative coverage for the QA FAIL class. Missing proof is not proof."""
+
+    def test_positive_fast_fix_still_requires_every_proof(self):
+        decision = check(sr.decide(case(fast())))
+        self.assertTrue(decision["fast_fix"])
+        self.assertTrue(decision["writer"])
+        self.assertTrue(decision["executed"])
+        self.assertEqual(decision["author_attempts_delta"], 0)
+        self.assertEqual(decision["ledger_category"], "fast_fix")
+
+    def test_each_fast_fix_condition_is_default_deny(self):
+        omissions = {
+            "1 acceptance missing": ("acceptance_unchanged",),
+            "1 fingerprint blank": None,
+            "2 minimal missing": ("minimal_action_known",),
+            "2 architecture open": None,
+            "3 effects unknown": ("external_effects_unknown",),
+            "4 scope missing": ("scope_within_admission",),
+            "4 budget missing": ("finite_budget",),
+            "5 regression missing": ("regression_known",),
+            "6 history missing": ("fast_fix_history_checked",),
+            "7 plan missing": None,
+            "7 assertions missing": ("assertions_unchanged",),
+            "7 expected missing": ("expected_values_unchanged",),
+            "7 qa missing": ("qa_unchanged",),
+            "7 timeout missing": ("timeout_unchanged",),
+            "7 auth missing": ("auth_unchanged",),
+            "8 search missing": ("class_search",),
+        }
+        for name, keys in omissions.items():
+            with self.subTest(name=name):
+                evidence = fast()
+                if name == "1 fingerprint blank":
+                    evidence["defect_fingerprint"] = " "
+                elif name == "2 architecture open":
+                    evidence["architecture_research_required"] = True
+                elif name == "7 plan missing":
+                    evidence["plan"] = None
+                else:
+                    for key in keys:
+                        evidence.pop(key)
+                decision = _not_writer(self, evidence)
+                self.assertFalse(decision["rejected"])
+
+    def test_condition_seven_rejects_the_weakening_class(self):
+        phrases = (
+            "delete the assertions and raise timeout",
+            "DELETE THE ASSERTIONS",
+            "remove tests",
+            "drop expects",
+            "increase the timeout",
+            "raise timeout",
+            "extend timeout",
+            "disable security",
+            "disable the timeout",
+            "weaken auth",
+            "weaken QA",
+            "adjust expected",
+            "update the expected snapshot",
+            "change expected",
+            "loosen the matcher",
+            "skip qa",
+            "удалить ассерт",
+            "ослабить timeout",
+            "повысить таймаут",
+        )
+        for phrase in phrases:
+            with self.subTest(phrase=phrase):
+                decision = _not_writer(self, fast(event_text=phrase))
+                if decision["risk"] != "critical":
+                    self.assertIn("condition 7", decision["reason"])
+        kept = check(sr.decide(case(fast(event_text="rename OldExport"))))
+        self.assertTrue(kept["fast_fix"])
+
+    def test_plan_weaken_flags_are_refused(self):
+        for flag in ("delete_assertions", "weaken_auth", "disable_security",
+                     "weaken_qa", "weaken_timeout", "adjust_expected"):
+            with self.subTest(flag=flag):
+                decision = check(sr.decide(case(fast(plan=proof_plan(**{flag: True})))))
+                self.assertTrue(decision["rejected"])
+                self.assertIn("weakened", decision["reason"])
+                self.assertFalse(decision["fast_fix"])
+                self.assertFalse(decision["executed"])
+                self.assertFalse(decision["writer"])
+
+    def test_plan_proof_flags_must_be_true_on_the_plan_too(self):
+        for flag in ("assertions_unchanged", "expected_values_unchanged", "qa_unchanged",
+                     "timeout_unchanged", "auth_unchanged"):
+            with self.subTest(flag=flag):
+                decision = check(sr.decide(case(fast(plan=proof_plan(**{flag: False})))))
+                self.assertTrue(decision["rejected"])
+                self.assertIn("proof", decision["reason"])
+                self.assertFalse(decision["fast_fix"])
+                self.assertFalse(decision["writer"])
+                self.assertFalse(decision["executed"])
+
+    def test_non_bool_proof_is_not_accepted(self):
+        for key, value in (("acceptance_unchanged", 1), ("acceptance_unchanged", "yes"),
+                           ("scope_within_admission", "yes"), ("regression_known", 1)):
+            with self.subTest(key=key, value=value):
+                decision = check(sr.decide(case(fast(**{key: value}))))
+                self.assertTrue(decision["rejected"])
+                self.assertFalse(decision["executed"])
+                self.assertFalse(decision["fast_fix"])
+                self.assertFalse(decision["writer"])
+
+    def test_sensitive_surfaces_keep_the_risk_floor(self):
+        surfaces = (
+            "Auth", "AUTH", "authorization", "authorisation", "userAuth", "AuthZ",
+            "pii", "PII", "userPII", "identity", "userIdentity", "secrets", "secretKey",
+            "sandbox", "apparmor", "admission", "budget", "qa_reuse", "qa-reuse", "qaReuse",
+            "concurrency", "money", "payment", "billing", "payments",
+            "migration", "DB_migration", "data loss", "data-loss", "dataloss",
+            "rollback", "roll-back", "roll_back", "irreversible", "permission",
+            "credential", "privilege", "rbac", "password",
+        )
+        for surface in surfaces:
+            with self.subTest(surface=surface):
+                decision = _not_writer(self, fast(change_surface=surface, risk="low", line_count=1,
+                                                  suggested_class="SOURCE_KNOWN_LOCAL"))
+                self.assertEqual(decision["risk"], "critical")
+                self.assertFalse(decision["executed"] and decision["writer"])
+        for surface in ("author", "AUTHOR", "authors", "secretary", "rename"):
+            with self.subTest(surface=surface):
+                decision = check(sr.decide(case(fast(change_surface=surface, risk="low", line_count=1,
+                                                     suggested_class="SOURCE_KNOWN_LOCAL"))))
+                self.assertEqual(decision["risk"], "low")
+                self.assertTrue(decision["fast_fix"])
+        located = _not_writer(self, fast(
+            change_surface="rename",
+            findings=[{"id": "f1", "severity": "low", "location": "apps/web/src/userAuth.ts"}]))
+        self.assertEqual(located["risk"], "critical")
+        named = _not_writer(self, fast(change_surface="rename", event_text="nullable authorization"))
+        self.assertEqual(named["risk"], "critical")
+        timeout = check(sr.decide(case(fast(event_text="timeout"))))
+        self.assertEqual(timeout["risk"], "low")
+        self.assertTrue(timeout["fast_fix"])
+
+    def test_critical_qa_is_specialist_only(self):
+        base = dict(risk="critical", critical_signs=True, change_surface="auth", line_count=1,
+                    qa_independent=True, session_shared=False, author_qa_same_snapshot=False)
+        rejected = (
+            "agy:claude-sonnet-5-5-medium",
+            "agy:claude-sonnet-5-5-high",
+            "codex:gpt-6-astra:high",
+            "codex:gpt-6-astra:medium",
+            "codex:gpt-6.1-sol:medium",
+            "cursor:auto",
+        )
+        for proof in rejected:
+            with self.subTest(proof=proof):
+                decision = _not_writer(self, ready(
+                    **base, critical_qa_qualified=True, agy_qa_qualified=True, qa_route_proof=proof))
+                self.assertEqual(decision["route"], "hold")
+                self.assertIsNone(decision["qa_route"])
+                self.assertFalse(decision["executed"])
+                self.assertEqual(decision["event_class"], "SOURCE_CRITICAL")
+        unqualified = _not_writer(self, ready(
+            **base, critical_qa_qualified=False, qa_route_proof="codex:gpt-6.1-sol:high"))
+        self.assertEqual(unqualified["route"], "hold")
+        self.assertFalse(unqualified["executed"])
+        opus = check(sr.decide(case(ready(
+            **base, critical_qa_qualified=True, agy_qa_qualified=True,
+            qa_route_proof="agy:claude-opus-5-5-high"))))
+        self.assertEqual(opus["qa_route"], "agy:claude-opus-5-5-high")
+        self.assertEqual(opus["route"], "codex:gpt-6-astra:high")
+        self.assertFalse(opus["writer"])
+        self.assertTrue(opus["executed"])
+        opus_unqualified = _not_writer(self, ready(
+            **base, critical_qa_qualified=True, agy_qa_qualified=False,
+            qa_route_proof="agy:claude-opus-5-5-high"))
+        self.assertEqual(opus_unqualified["route"], "hold")
+
+    def test_open_architecture_or_unknown_minimal_action_is_not_a_writer(self):
+        samples = (
+            ready(cause="proven", risk="low", complexity="standard", brief_usable=False,
+                  architecture_research_required=True, minimal_action_known=True),
+            ready(cause="proven", risk="low", complexity="mechanical", brief_usable=False,
+                  architecture_research_required=False, minimal_action_known=False),
+            ready(cause="proven", risk="moderate", complexity="complex", brief_usable=True,
+                  architecture_research_required=True, minimal_action_known=True, author_attempts=1),
+            ready(cause="proven", risk="moderate", complexity="standard", brief_usable=True,
+                  architecture_research_required=False, minimal_action_known=False, author_attempts=1),
+            ready(cause="proven", risk="moderate", complexity="standard", brief_usable=True,
+                  architecture_research_required=True, minimal_action_known=False,
+                  author_attempts=3, progress=True, continuation_used=0),
+        )
+        for evidence in samples:
+            with self.subTest(complexity=evidence["complexity"], brief=evidence["brief_usable"],
+                              attempts=evidence.get("author_attempts", 0)):
+                decision = _not_writer(self, evidence)
+                self.assertEqual(decision["route"], "codex:gpt-6.1-sol:high")
+                self.assertEqual(decision["event_class"], "SOURCE_UNCERTAIN")
+                self.assertEqual(decision["author_route"] == "cursor:auto", evidence["complexity"] != "complex")
+
+    def test_schema_repair_allows_one_turn_then_holds(self):
+        first = check(sr.decide(case(ready(plan_json_valid=False, schema_repair_attempts=0))))
+        self.assertEqual(first["route"], "schema_repair")
+        self.assertEqual(first["astra_calls"], 0)
+        self.assertFalse(first["executed"])
+        for attempts in (1, 2, 3):
+            with self.subTest(attempts=attempts):
+                decision = check(sr.decide(case(ready(
+                    plan_json_valid=False, schema_repair_attempts=attempts))))
+                self.assertEqual(decision["route"], "hold")
+                self.assertEqual(decision["astra_calls"], 0)
+                self.assertEqual(decision["model_calls"], 0)
+                self.assertFalse(decision["executed"])
+                self.assertFalse(decision["writer"])
+                self.assertIn("budget", decision["reason"])
+
+    def test_writer_events_outside_scope_do_not_write(self):
+        samples = {
+            "template": ready(template_id="formatter", template_applicable=True,
+                              template_tool="deterministic_tool", change_surface="format",
+                              scope_within_admission=False),
+            "template-model": ready(template_id="formatter", template_applicable=True,
+                                    template_tool=None, change_surface="format",
+                                    scope_within_admission=False),
+            "brief": ready(brief_usable=True, cause="proven", author_attempts=1,
+                           minimal_action_known=True, scope_within_admission=False),
+            "continuation": ready(author_attempts=3, continuation_used=0, progress=True,
+                                  brief_usable=True, minimal_action_known=True, risk="moderate",
+                                  scope_within_admission=False),
+        }
+        for name, evidence in samples.items():
+            with self.subTest(name=name):
+                decision = _not_writer(self, evidence)
+                self.assertFalse(decision["executed"])
+                self.assertFalse(decision["continuation_granted"])
+                self.assertEqual(decision["route"], "hold")
+                self.assertIn("scope", decision["reason"])
+                self.assertEqual(decision["model_calls"], 0)
+
+    def test_non_executable_plan_is_not_executed(self):
+        samples = {
+            "brief": ready(brief_usable=True, cause="proven", author_attempts=1,
+                           minimal_action_known=True, plan=plan(executable=False)),
+            "continuation": ready(author_attempts=3, continuation_used=0, progress=True,
+                                  brief_usable=True, minimal_action_known=True, risk="moderate",
+                                  plan=plan(executable=False)),
+            "complex": ready(cause="proven", complexity="complex", risk="moderate",
+                             minimal_action_known=True, brief_usable=False,
+                             plan=plan(executable=False)),
+            "template": ready(template_id="formatter", template_applicable=True,
+                              change_surface="format", plan=plan(executable=False)),
+            "fast": fast(plan=proof_plan(executable=False)),
+        }
+        for name, evidence in samples.items():
+            with self.subTest(name=name):
+                decision = _not_writer(self, evidence)
+                self.assertFalse(decision["executed"])
+        truthy = check(sr.decide(case(ready(
+            brief_usable=True, cause="proven", author_attempts=1, minimal_action_known=True,
+            plan=plan(executable=1)))))
+        self.assertTrue(truthy["rejected"])
+        self.assertFalse(truthy["executed"])
+        self.assertFalse(truthy["writer"])
+
+    def test_another_instance_and_prior_fail_are_both_kept(self):
+        ordinary = check(sr.decide(case(fast(
+            class_search=search(instances=2),
+            prior_fast_fix={"fingerprint": " fp-export ", "result": "fail"}))))
+        self.assertFalse(ordinary["fast_fix"])
+        self.assertTrue(ordinary["whole_class"])
+        self.assertTrue(ordinary["fast_fix_closed"])
+        self.assertEqual(ordinary["route"], "codex:gpt-6.1-sol:high")
+        self.assertEqual(ordinary["next_ordinary_attempt"], 2)
+        self.assertFalse(ordinary["writer"])
+        difficult = check(sr.decide(case(fast(
+            difficult_or_repeating=True, class_search=search(instances=2),
+            prior_fast_fix={"fingerprint": "FP-EXPORT", "result": "fail"}, **QA))))
+        self.assertTrue(difficult["whole_class"])
+        self.assertTrue(difficult["fast_fix_closed"])
+        self.assertFalse(difficult["fast_fix"])
+        self.assertFalse(difficult["writer"])
+        self.assertEqual(difficult["route"], "codex:gpt-6-astra:high")
+        self.assertEqual(difficult["event_class"], "SOURCE_CRITICAL")
+        critical = check(sr.decide(case(fast(
+            change_surface="authorization", class_search=search(instances=2),
+            prior_fast_fix={"fingerprint": "fp-export", "result": "fail"}, **QA))))
+        self.assertTrue(critical["whole_class"])
+        self.assertTrue(critical["fast_fix_closed"])
+        self.assertEqual(critical["risk"], "critical")
+        self.assertEqual(critical["route"], "codex:gpt-6-astra:high")
+
+    def test_diagnostic_or_blank_pattern_does_not_close_the_class(self):
+        patterns = (
+            " ", "   ", "error TS2322", "Error_TS2322", "AssertionError",
+            "assertion failed", "expected: 1", "received: 2", "permission denied",
+            "timeout", "FAIL", "fail", "401", "TS2322",
+        )
+        for pattern in patterns:
+            for method in ("grep", "ast", "lint", "test"):
+                with self.subTest(pattern=pattern, method=method):
+                    decision = _not_writer(self, fast(class_search=search(
+                        pattern=pattern, method=method, scope="apps/web/src")))
+                    self.assertFalse(decision["rejected"])
+                    self.assertTrue(decision["whole_class"])
+                    self.assertEqual(decision["event_class"], "SOURCE_UNCERTAIN")
+        blank_scope = _not_writer(self, fast(class_search=search(pattern="OldExport", scope=" ")))
+        self.assertTrue(blank_scope["whole_class"])
+        blank_fp = _not_writer(self, fast(defect_fingerprint=" \t "))
+        self.assertFalse(blank_fp["rejected"])
+        self.assertFalse(blank_fp["fast_fix_closed"])
+        other = check(sr.decide(case(fast(
+            prior_fast_fix={"fingerprint": "other-defect", "result": "fail"}))))
+        self.assertTrue(other["fast_fix"])
+        self.assertFalse(other["fast_fix_closed"])
+        passed = check(sr.decide(case(fast(
+            prior_fast_fix={"fingerprint": "fp-export", "result": "pass"}))))
+        self.assertTrue(passed["fast_fix"])
 
 
 if __name__ == "__main__":
