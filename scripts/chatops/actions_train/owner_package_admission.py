@@ -29,6 +29,9 @@ SUP=Q.OWNER_PACKAGE_OLD_SUPPLEMENT_SHA
 BUDGET='8f6752295c2ee65924b5a95ddc42bb9774f8f73ce146481e52aaf200e142ed8d'
 SOURCE_BASE=Q.FRESH_SOURCE_BASE
 SOURCE_HEAD=Q.FRESH_SOURCE_HEAD
+# Checked-in document pin. Installed controller C5 keeps Q.INSTALLED_C5_RULES
+# (comment 6396105635) until a separate reviewed install. Do not point that
+# admission at this value when the document hash moves.
 RULES='8798ea76874ea5e42f708fff6d74f1ccbf526413c701e9f2349045fdc98be9d5'
 EXPECTED_PINS={
  'technical_pm_product_analyst':(SOURCE_HEAD,Q.ANALYSIS_INPUT,Q.ANALYSIS_INPUT_SHA256),
@@ -64,15 +67,35 @@ def owner_comment(comment_id):
          'Owner package JSON not canonical')
     return body,value
 
+def admission_pins(comment_id, controller):
+    """C5's issued comment keeps its installed pins. Other packages use the document pin."""
+    if comment_id == Q.INSTALLED_C5_COMMENT:
+        need(controller == Q.INSTALLED_C5_CONTROLLER,
+             'installed C5 controller pin is unchanged')
+        return Q.INSTALLED_C5_CONTROLLER, Q.INSTALLED_C5_RULES
+    return controller, RULES
+
+
+def installed_rules_ok(controller, installed_sha):
+    """Quiescent rules check. A newer document pin does not replace the C5 file hash."""
+    from context_policy import RULES_SHA256
+    if controller == Q.INSTALLED_C5_CONTROLLER:
+        need(installed_sha == Q.INSTALLED_C5_RULES,
+             'installed C5 rules pin is unchanged')
+        return
+    need(RULES_SHA256 == RULES and installed_sha == RULES, 'installed rules changed')
+
+
 def authorize(comment_id,controller):
     body,v=owner_comment(comment_id)
+    controller_pin, rules_pin = admission_pins(comment_id, controller)
     need(type(v) is dict and set(v)=={
          'schema','issue','repo_id','controller_sha','rules_sha256','source_base',
          'source_head','model','calls','max_calls','owner_comment'},
          'unexpected Owner authorization fields')
     need(v['schema']==Q.OWNER_PACKAGE_SCHEMA and v['issue']==29 and
          v['repo_id']==REPO_ID and v['owner_comment']==comment_id and
-         v['controller_sha']==controller and v['rules_sha256']==RULES and
+         v['controller_sha']==controller_pin and v['rules_sha256']==rules_pin and
          (v['source_base'],v['source_head'])==(SOURCE_BASE,SOURCE_HEAD) and
          v['model']==N.MODEL and v['max_calls']==2,
          'Owner exact controller/source/rules/call budget drift')
@@ -88,8 +111,8 @@ def authorize(comment_id,controller):
         need((row['input_revision'],row['input_path'],row['input_sha256'])==EXPECTED_PINS[role],
              'source/QA immutable fixtures drift')
         grant=dict(schema=Q.ADDRESSED_SCHEMA,lineage=Q.ADDRESSED_LINEAGE,
-          owner_comment=comment_id,role=role,controller_revision=controller,
-          cli_sha256=N.AGY_SHA256,rules_sha256=RULES,
+          owner_comment=comment_id,role=role,controller_revision=controller_pin,
+          cli_sha256=N.AGY_SHA256,rules_sha256=rules_pin,
           base=SOURCE_BASE,head=SOURCE_HEAD,input_revision=row['input_revision'],
           input_path=row['input_path'],input_sha256=row['input_sha256'],
           timeout=1800,max_output_bytes=N.MAX_OUT,
@@ -99,7 +122,7 @@ def authorize(comment_id,controller):
         Q.addressed_input(N.QUALIFICATION_WORK,grant,installer=True)
         grants[digest(grant)]=dict(grant=grant,operation=None)
     ledger=dict(schema=Q.OWNER_PACKAGE_SCHEMA,owner_comment=comment_id,
-         owner_id=OWNER_ID,issue=29,controller_sha=controller,rules_sha256=RULES,
+         owner_id=OWNER_ID,issue=29,controller_sha=controller_pin,rules_sha256=rules_pin,
          source_base=SOURCE_BASE,source_head=SOURCE_HEAD,
          body_sha256=hashlib.sha256(body.encode()).hexdigest(),
          ceiling=2,used_calls=0,grants=grants,
@@ -127,9 +150,7 @@ def quiescent(controller):
          sha(R.STATE/Q.SUPPLEMENT_LEDGER)==SUP and
          sha(R.BUDGET)==BUDGET,'historical paid ledgers/budget drift')
     need(not (R.STATE/'integration.json').exists(),'integration in flight')
-    from context_policy import RULES_SHA256
-    need(RULES_SHA256==RULES and sha('/usr/local/lib/gb-actions-train/accepted-engineering-rules.md')==RULES,
-         'installed rules changed')
+    installed_rules_ok(controller, sha('/usr/local/lib/gb-actions-train/accepted-engineering-rules.md'))
     return s
 
 def exact_qualification(grant, controller):

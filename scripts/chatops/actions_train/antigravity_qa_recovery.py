@@ -342,6 +342,12 @@ OWNER_PACKAGE_OLD_ADDRESS_SHA='6b49d7a03bdb96182eae23ab18b4b8afa645aa35baf84ae90
 OWNER_PACKAGE_OLD_SUPPLEMENT_SHA='f58de4a128825612515ac18ebc94944d70e4b360beadd14afc11addde93412de'
 OWNER_PACKAGE_ORIGINAL_UNKNOWN='3abe09744249e9f71045208474441f1f6bf5fa471c27bdf7ddfd490656eb2fe6'
 OWNER_PACKAGE_ORIGINAL_UNKNOWN_DIGEST='85c5e471ae3b2f8ddb4cf30f163520de1731dce3b75c4b428d69301779f1cc86'
+# Installed controller C5 and Owner comment 6396105635. A later checked-in
+# document pin must not retarget these. Replacing them is a separate reviewed
+# install, not a source edit that rides along with a documentation hash.
+INSTALLED_C5_CONTROLLER='41e12be2d551158e97ea30eaf8e95f992f998615'
+INSTALLED_C5_RULES='017441dec5ba197a1065b6ef90efdddb090b286ba48687241a7fbc09dd002269'
+INSTALLED_C5_COMMENT=6396105635
 
 
 def owner_package(g):
@@ -368,11 +374,17 @@ def owner_package_ledger(value):
     need(value['schema']==OWNER_PACKAGE_SCHEMA and value['owner_id']==318610566
          and value['issue']==29 and type(value['owner_comment']) is int
          and value['owner_comment']>0
-         and value['rules_sha256']==RULES_SHA256
          and value['previous_addressed_sha256']==OWNER_PACKAGE_OLD_ADDRESS_SHA
          and value['previous_supplement_sha256']==OWNER_PACKAGE_OLD_SUPPLEMENT_SHA
          and type(value['body_sha256']) is str and len(value['body_sha256'])==64,
          'Owner package authorization/history drift')
+    if value['owner_comment']==INSTALLED_C5_COMMENT:
+        need(value['controller_sha']==INSTALLED_C5_CONTROLLER
+             and value['rules_sha256']==INSTALLED_C5_RULES,
+             'installed C5 package pin changed')
+    else:
+        need(value['rules_sha256']==RULES_SHA256,
+             'Owner package authorization/history drift')
     rows=value['grants']
     delegated='delegation' in value
     inherited=0
@@ -488,7 +500,12 @@ def validate_addressed_grant(g, *, enrollment=False):
              (g['base'],g['head'])==(FRESH_SOURCE_BASE,FRESH_SOURCE_HEAD),
              'new qualification source/rules identity drift')
     elif dynamic:
-        need(g['rules_sha256']==RULES_SHA256,'new package must bind installed rules')
+        if g['owner_comment']==INSTALLED_C5_COMMENT:
+            need(g['rules_sha256']==INSTALLED_C5_RULES
+                 and g['controller_revision']==INSTALLED_C5_CONTROLLER,
+                 'installed C5 grant pin changed')
+        else:
+            need(g['rules_sha256']==RULES_SHA256,'new package must bind installed rules')
         if not enrollment:
             # Unprivileged UID978 cannot read root-only ledgers. Validate against
             # the exact root-owned 0644 admission marker; root checks its ledger.

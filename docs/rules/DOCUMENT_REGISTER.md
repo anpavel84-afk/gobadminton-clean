@@ -12,7 +12,7 @@
 
 | Область | Источник и предел |
 |---|---|
-| Организация разработки, роли, попытки, trusted context | [ENGINEERING_OPERATING_MODEL.md](ENGINEERING_OPERATING_MODEL.md), единственный полный текст v1.4 (поправка SR0 24.10.2026; v1.3 — предыдущий принятый pin runtime); exact bytes в [CONTEXT_SOURCES.json](CONTEXT_SOURCES.json) |
+| Организация разработки, роли, попытки, trusted context | [ENGINEERING_OPERATING_MODEL.md](ENGINEERING_OPERATING_MODEL.md), единственный полный текст v1.4 (поправка SR0 24.10.2026; v1.3 — предыдущая принятая редакция, не pin установленного контроллера C5); exact bytes в [CONTEXT_SOURCES.json](CONTEXT_SOURCES.json) |
 | Маршрутизация моделей, Technical PM, классы QA/CI FAIL, Fast Fix | [SMART_ROUTING.md](SMART_ROUTING.md) 1.0 — **POLICY_ACCEPTED только SR0** (Owner 24.10.2026 16:11 America/Sao_Paulo); единственная специализированная политика, EOM хранит полномочия/роли/безопасность/continuation; IMPLEMENTED/ROLE_QUALIFIED/RUNTIME_VERIFIED NOT_STARTED/UNKNOWN; до SR1–SR5 контроллер применяет прежний FAIL-маршрут |
 | Ограничения входа и Owner Addendum о tool refusals | [AGENTS.md](../../AGENTS.md), короткий обязательный вход; не альтернативная матрица моделей |
 | Хранение/передача | [PROJECT_RECORD_POLICY.md](PROJECT_RECORD_POLICY.md), scoped политика; не расширяет execution authority |
@@ -23,7 +23,7 @@
 | PMA takeover | [CURRENT.md](../handoffs/CURRENT.md) и подтверждённое Owner-решение, не имя старого чата |
 | Фактическое исполнение/установка | Exact Actions, controller/adapter pin, operation/lease и receipts; документы не заменяют их |
 
-Консолидация 24.10.2026 сохраняла core v1.3 (100818 байт, SHA-256 `38c34012f10974496a7d7cbc74ecacb62bf7847278e295edfeb107d69a5d1c1c`, commit `1169e965976e9498d4e5e1e23aae201e97ec9665`). Действующий EOM v1.4 — 115079 байт, SHA-256 `8798ea76874ea5e42f708fff6d74f1ccbf526413c701e9f2349045fdc98be9d5`, doc commit `13a8b6c54a45aaa57021e092a1bee54926d9eac4` (номер редакции 1.4; §6.3 уточняет потолок `max_calls` конечного пакета допуска Owner). SMART_ROUTING 1.0 — 76720 байт, SHA-256 `1a8c1ed6f6ea11d08ecb1703df1a3bc1540520f7f4d02b7d48bb1f66a8786c63`, commit `bc8bad0c38a861f8e72296d0a323e2941b9322e0`. v1.3 остаётся pin установленного runtime до отдельного reviewed code-pin, молчаливой смены pin нет. Новые Owner-уточнения применяются в своей области и не переписывают прежние admissions.
+Консолидация 24.10.2026 сохраняла core v1.3 (100818 байт, SHA-256 `38c34012f10974496a7d7cbc74ecacb62bf7847278e295edfeb107d69a5d1c1c`, commit `1169e965976e9498d4e5e1e23aae201e97ec9665`). Действующий текст EOM — редакция 1.4, 115079 байт, SHA-256 `8798ea76874ea5e42f708fff6d74f1ccbf526413c701e9f2349045fdc98be9d5`, doc commit `13a8b6c54a45aaa57021e092a1bee54926d9eac4`. Уточнение §6.3 о потолке `max_calls` конечного пакета допуска Owner входит в эти байты; номер редакции не менялся. SMART_ROUTING 1.0 — 76720 байт, SHA-256 `1a8c1ed6f6ea11d08ecb1703df1a3bc1540520f7f4d02b7d48bb1f66a8786c63`, commit `bc8bad0c38a861f8e72296d0a323e2941b9322e0`. Установленный контроллер C5 (`41e12be2d551158e97ea30eaf8e95f992f998615`, rules `017441dec5ba197a1065b6ef90efdddb090b286ba48687241a7fbc09dd002269`, комментарий [6396105635](https://github.com/anpavel84-afk/gobadminton-clean/issues/29#issuecomment-6396105635)) сохраняет этот pin до отдельного reviewed install. Более новый doc-pin репозитория его не подменяет и не переписывает прежние admissions.
 
 ## Покрытие остальных документов
 
