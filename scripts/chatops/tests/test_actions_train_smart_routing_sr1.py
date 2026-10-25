@@ -33,7 +33,7 @@ def ready(**updates):
         "context_complete": True, "context_hash_ok": True, "scope_within_admission": True,
         "finite_budget": True, "acceptance_unchanged": True, "external_effects_unknown": False,
         "architecture_research_required": False, "reconciled": True, "qa_independent": True,
-        "risk": "low", "cause": "proven", "effects_proven_absent": True,
+        "unknown_effect": False, "risk": "low", "cause": "proven", "effects_proven_absent": True,
     }
     evidence.update(updates)
     return evidence
@@ -93,7 +93,7 @@ class SmartRoutingSR1(unittest.TestCase):
     def test_sr_t01_proven_template_skips_planner_and_astra(self):
         decision = check(sr.decide(case(ready(
             template_id="formatter", template_applicable=True, template_tool="deterministic_tool",
-            change_surface="format", risk="low"))))
+            change_surface="format", risk="low", minimal_action_known=True, plan=plan()))))
         self.assertEqual(decision["event_class"], "TEMPLATE")
         self.assertEqual(decision["planner_calls"], 0)
         self.assertEqual(decision["astra_calls"], 0)
@@ -125,7 +125,7 @@ class SmartRoutingSR1(unittest.TestCase):
     def test_sr_t04_usable_brief_is_not_replayed(self):
         decision = check(sr.decide(case(ready(
             brief_usable=True, cause="proven", risk="moderate", author_attempts=1,
-            minimal_action_known=True))))
+            minimal_action_known=True, plan=plan()))))
         self.assertEqual(decision["planner_calls"], 0)
         self.assertEqual(decision["astra_calls"], 0)
         self.assertEqual(decision["event_class"], "SOURCE_KNOWN_STANDARD")
@@ -133,7 +133,8 @@ class SmartRoutingSR1(unittest.TestCase):
     def test_sr_t05_known_complex_noncritical_skips_astra(self):
         decision = check(sr.decide(case(ready(
             cause="proven", complexity="complex", risk="moderate", change_surface="state",
-            difficult_or_repeating=False, brief_usable=False, minimal_action_known=True))))
+            difficult_or_repeating=False, brief_usable=False, minimal_action_known=True,
+            plan=plan()))))
         self.assertEqual(decision["event_class"], "SOURCE_KNOWN_COMPLEX")
         self.assertEqual(decision["author_route"], "codex:gpt-6.1-sol:high")
         self.assertEqual(decision["astra_calls"], 0)
@@ -251,7 +252,7 @@ class SmartRoutingSR1(unittest.TestCase):
         history = ["attempt-1", "attempt-2", "attempt-3"]
         decision = check(sr.decide(case(ready(
             author_attempts=3, continuation_used=0, progress=True, brief_usable=True,
-            minimal_action_known=True, risk="moderate", history=history))))
+            minimal_action_known=True, risk="moderate", history=history, plan=plan()))))
         self.assertTrue(decision["continuation_granted"])
         self.assertEqual(decision["author_attempts"], 3)
         self.assertEqual(decision["history"], history)
@@ -295,7 +296,7 @@ class SmartRoutingSR1(unittest.TestCase):
         decision = check(sr.decide(case(ready(
             template_id="formatter", template_applicable=True, template_tool=None,
             change_surface="format", invented_model_id="gpt-fake-9", invented_cost=True,
-            effective_model_exposed=False))))
+            effective_model_exposed=False, minimal_action_known=True, plan=plan()))))
         self.assertEqual(decision["route"], "cursor:auto")
         self.assertEqual(decision["effective_model"], "not_exposed")
         self.assertIsNone(decision["cost"])
@@ -595,15 +596,16 @@ class SmartRoutingQaClass(unittest.TestCase):
         samples = {
             "template": ready(template_id="formatter", template_applicable=True,
                               template_tool="deterministic_tool", change_surface="format",
-                              scope_within_admission=False),
+                              minimal_action_known=True, plan=plan(), scope_within_admission=False),
             "template-model": ready(template_id="formatter", template_applicable=True,
                                     template_tool=None, change_surface="format",
+                                    minimal_action_known=True, plan=plan(),
                                     scope_within_admission=False),
             "brief": ready(brief_usable=True, cause="proven", author_attempts=1,
-                           minimal_action_known=True, scope_within_admission=False),
+                           minimal_action_known=True, plan=plan(), scope_within_admission=False),
             "continuation": ready(author_attempts=3, continuation_used=0, progress=True,
                                   brief_usable=True, minimal_action_known=True, risk="moderate",
-                                  scope_within_admission=False),
+                                  plan=plan(), scope_within_admission=False),
         }
         for name, evidence in samples.items():
             with self.subTest(name=name):
@@ -625,7 +627,8 @@ class SmartRoutingQaClass(unittest.TestCase):
                              minimal_action_known=True, brief_usable=False,
                              plan=plan(executable=False)),
             "template": ready(template_id="formatter", template_applicable=True,
-                              change_surface="format", plan=plan(executable=False)),
+                              change_surface="format", minimal_action_known=True,
+                              plan=plan(executable=False)),
             "fast": fast(plan=proof_plan(executable=False)),
         }
         for name, evidence in samples.items():
@@ -678,8 +681,12 @@ class SmartRoutingQaClass(unittest.TestCase):
                     decision = _not_writer(self, fast(class_search=search(
                         pattern=pattern, method=method, scope="apps/web/src")))
                     self.assertFalse(decision["rejected"])
-                    self.assertTrue(decision["whole_class"])
-                    self.assertEqual(decision["event_class"], "SOURCE_UNCERTAIN")
+                    if decision["risk"] == "critical":
+                        self.assertEqual(decision["event_class"], "SOURCE_CRITICAL")
+                        self.assertFalse(decision["executed"])
+                    else:
+                        self.assertTrue(decision["whole_class"])
+                        self.assertEqual(decision["event_class"], "SOURCE_UNCERTAIN")
         blank_scope = _not_writer(self, fast(class_search=search(pattern="OldExport", scope=" ")))
         self.assertTrue(blank_scope["whole_class"])
         blank_fp = _not_writer(self, fast(defect_fingerprint=" \t "))
@@ -692,6 +699,204 @@ class SmartRoutingQaClass(unittest.TestCase):
         passed = check(sr.decide(case(fast(
             prior_fast_fix={"fingerprint": "fp-export", "result": "pass"}))))
         self.assertTrue(passed["fast_fix"])
+
+
+_SURFACES = (
+    "src/auth/callback.ts", "checkAuthorization", "authorization-null-check",
+    "p.i.i", "P I I", "src/oauth/callback.ts", "OAUTH", "авторизация",
+    "починить авторизацию", "authori\u200bzation", "\u0430uthorization",
+    "\uff41\uff55\uff54\uff48", "roll-back", "OAuth", "Auth",
+)
+_DESTRUCTIVE = (
+    "delete the assertions", "удалить тест", "remove the timeout",
+    "comment out the test", "skip the test", "disable test", "skip/disable test",
+    "delete\u200b the assertions", "commented out the tests", "disable the timeout",
+)
+
+
+class SmartRoutingQaR2(unittest.TestCase):
+    def test_every_text_field_raises_the_risk_floor(self):
+        carriers = (
+            "change_surface", "event_text", "goal", "diagnostics", "fingerprint",
+            "scope", "pattern", "paths", "finding",
+        )
+        for text in _SURFACES:
+            for carrier in carriers:
+                with self.subTest(text=text, carrier=carrier):
+                    evidence = fast()
+                    if carrier == "change_surface":
+                        evidence["change_surface"] = text
+                    elif carrier == "event_text":
+                        evidence["event_text"] = text
+                    elif carrier == "goal":
+                        evidence["goal"] = text
+                    elif carrier == "diagnostics":
+                        evidence["diagnostics"] = text
+                    elif carrier == "fingerprint":
+                        evidence["defect_fingerprint"] = text
+                    elif carrier == "scope":
+                        evidence["class_search"] = search(scope=text, pattern="OldExport")
+                    elif carrier == "pattern":
+                        evidence["class_search"] = search(pattern=text, scope="apps/web/src")
+                    elif carrier == "paths":
+                        evidence["paths"] = [text]
+                    else:
+                        evidence["findings"] = [{"id": "f1", "severity": "low", "location": text}]
+                    decision = _not_writer(self, evidence)
+                    self.assertEqual(decision["risk"], "critical")
+                    self.assertFalse(decision["executed"])
+                    self.assertEqual(decision["route"], "hold")
+        harmless = check(sr.decide(case(fast(
+            change_surface="author", class_search=search(scope="src/author/notes.ts")))))
+        self.assertEqual(harmless["risk"], "low")
+        self.assertTrue(harmless["fast_fix"])
+        listed = check(sr.decide(case(fast(diagnostics=["таймаут не трогать"]))))
+        self.assertTrue(listed["fast_fix"])
+
+    def test_critical_quota_cannot_fall_back_to_auto(self):
+        blocked = _not_writer(self, ready(
+            quota_exhausted=True, effects_proven_absent=True, fallback_equivalent=True,
+            fallback_route="cursor:auto", change_surface="authorization", unknown_effect=False))
+        self.assertEqual(blocked["risk"], "critical")
+        self.assertFalse(blocked["executed"])
+        self.assertEqual(blocked["route"], "hold")
+        self.assertEqual(blocked["event_class"], "QUOTA")
+        for route in ("codex:gpt-6.1-sol:medium", "codex:gpt-6-luna:medium",
+                      "agy:claude-sonnet-5-5-medium", "agy:claude-sonnet-5-5-high"):
+            with self.subTest(route=route):
+                decision = _not_writer(self, ready(
+                    quota_exhausted=True, effects_proven_absent=True, fallback_equivalent=True,
+                    fallback_route=route, change_surface="oauth", unknown_effect=False,
+                    agy_qa_qualified=True))
+                self.assertEqual(decision["route"], "hold")
+                self.assertFalse(decision["executed"])
+        opus = check(sr.decide(case(ready(
+            quota_exhausted=True, effects_proven_absent=True, fallback_equivalent=True,
+            fallback_route="agy:claude-opus-5-5-high", change_surface="oauth",
+            unknown_effect=False, agy_qa_qualified=True))))
+        self.assertEqual(opus["route"], "agy:claude-opus-5-5-high")
+        self.assertFalse(opus["writer"])
+        specialist = check(sr.decide(case(ready(
+            quota_exhausted=True, effects_proven_absent=True, fallback_equivalent=True,
+            fallback_route="codex:gpt-6.1-sol:high", change_surface="Auth",
+            unknown_effect=False))))
+        self.assertEqual(specialist["route"], "codex:gpt-6.1-sol:high")
+        self.assertFalse(specialist["writer"])
+        self.assertNotEqual(specialist["route"], "cursor:auto")
+        missing = ready(quota_exhausted=True, effects_proven_absent=True, fallback_equivalent=True,
+                        fallback_route="cursor:auto", change_surface="rename", unknown_effect=False)
+        missing.pop("risk")
+        naked = _not_writer(self, missing)
+        self.assertIsNone(naked["risk"])
+        self.assertEqual(naked["route"], "hold")
+
+    def test_writer_paths_require_a_plan_object(self):
+        samples = {
+            "brief": ready(brief_usable=True, cause="proven", author_attempts=1,
+                           minimal_action_known=True),
+            "continuation": ready(author_attempts=3, continuation_used=0, progress=True,
+                                  brief_usable=True, minimal_action_known=True, risk="moderate"),
+            "complex": ready(cause="proven", complexity="complex", risk="moderate",
+                             minimal_action_known=True, brief_usable=False),
+            "template": ready(template_id="formatter", template_applicable=True,
+                              change_surface="format", minimal_action_known=True),
+        }
+        for name, evidence in samples.items():
+            with self.subTest(name=name):
+                decision = _not_writer(self, evidence)
+                self.assertFalse(decision["executed"])
+                self.assertEqual(decision["route"], "hold")
+                self.assertIn("plan", decision["reason"])
+
+    def test_fingerprint_repeats_use_the_same_normalization(self):
+        variants = ("fp-\u200bexport", "\ufefffp-export", "fp-export\ufeff", "fp-\u200cexport")
+        for fingerprint in variants:
+            with self.subTest(fingerprint=fingerprint):
+                decision = _not_writer(self, fast(
+                    defect_fingerprint=fingerprint,
+                    prior_fast_fix={"fingerprint": "fp-export", "result": "fail"}))
+                self.assertTrue(decision["fast_fix_closed"])
+                self.assertFalse(decision["fast_fix"])
+        swapped = _not_writer(self, fast(
+            defect_fingerprint="fp-export",
+            prior_fast_fix={"fingerprint": "\ufefffp-\u200bEXPORT", "result": "fail"}))
+        self.assertTrue(swapped["fast_fix_closed"])
+        self.assertFalse(swapped["fast_fix"])
+
+    def test_generic_patterns_do_not_close_a_class(self):
+        patterns = ("error TS2322 in src", "timeout at", "timeout", "AssertionError",
+                    "401", "error TS2322", "FAIL at line", "assertion failed in file")
+        for pattern in patterns:
+            with self.subTest(pattern=pattern):
+                decision = _not_writer(self, fast(class_search=search(pattern=pattern)))
+                self.assertFalse(decision["fast_fix"])
+                self.assertNotEqual(decision["route"], "cursor:auto")
+        concrete = check(sr.decide(case(fast(class_search=search(pattern="OldExport")))))
+        self.assertTrue(concrete["fast_fix"])
+        snake = check(sr.decide(case(fast(class_search=search(pattern="old_export")))))
+        self.assertTrue(snake["fast_fix"])
+
+    def test_destructive_text_blocks_every_writer_path(self):
+        for phrase in _DESTRUCTIVE:
+            with self.subTest(path="fast", phrase=phrase):
+                decision = _not_writer(self, fast(event_text=phrase))
+                self.assertNotEqual(decision["route"], "cursor:auto")
+                if decision["risk"] != "critical":
+                    self.assertIn("condition 7", decision["reason"])
+            with self.subTest(path="brief", phrase=phrase):
+                decision = _not_writer(self, ready(
+                    brief_usable=True, cause="proven", author_attempts=1,
+                    minimal_action_known=True, plan=plan(), event_text=phrase))
+                self.assertFalse(decision["executed"])
+                self.assertIn("condition 7", decision["reason"])
+            with self.subTest(path="template", phrase=phrase):
+                decision = _not_writer(self, ready(
+                    template_id="formatter", template_applicable=True, change_surface="format",
+                    minimal_action_known=True, plan=plan(), diagnostics=phrase))
+                self.assertFalse(decision["executed"])
+                self.assertIn("condition 7", decision["reason"])
+        buried = _not_writer(self, fast(goal="please delete the assertions"))
+        self.assertFalse(buried["fast_fix"])
+        self.assertIn("condition 7", buried["reason"])
+
+    def test_template_and_missing_risk_never_write(self):
+        open_architecture = _not_writer(self, ready(
+            template_id="formatter", template_applicable=True, change_surface="format",
+            architecture_research_required=True, minimal_action_known=True, plan=plan()))
+        self.assertNotEqual(open_architecture["route"], "cursor:auto")
+        self.assertFalse(open_architecture["writer"])
+        unknown_minimal = _not_writer(self, ready(
+            template_id="formatter", template_applicable=True, change_surface="format",
+            minimal_action_known=False, plan=plan()))
+        self.assertFalse(unknown_minimal["writer"])
+        self.assertNotEqual(unknown_minimal["route"], "cursor:auto")
+        for builder in (
+            lambda: ready(template_id="formatter", template_applicable=True,
+                          change_surface="format", minimal_action_known=True, plan=plan()),
+            lambda: ready(brief_usable=True, cause="proven", author_attempts=1,
+                          minimal_action_known=True, plan=plan()),
+            lambda: ready(cause="proven", complexity="complex", risk="moderate",
+                          minimal_action_known=True, plan=plan()),
+        ):
+            evidence = builder()
+            evidence.pop("risk")
+            with self.subTest(complexity=evidence.get("complexity"), template=evidence.get("template_applicable")):
+                decision = _not_writer(self, evidence)
+                self.assertIsNone(decision["risk"])
+                self.assertFalse(decision["writer"])
+                self.assertNotEqual(decision["route"], "cursor:auto")
+        omitted = ready(brief_usable=True, cause="proven", author_attempts=1,
+                        minimal_action_known=True, plan=plan())
+        omitted.pop("unknown_effect")
+        self.assertFalse(_not_writer(self, omitted)["writer"])
+        omitted_effect = ready(brief_usable=True, cause="proven", author_attempts=1,
+                               minimal_action_known=True, plan=plan())
+        omitted_effect.pop("external_effects_unknown")
+        self.assertFalse(_not_writer(self, omitted_effect)["writer"])
+        omitted_budget = ready(brief_usable=True, cause="proven", author_attempts=1,
+                               minimal_action_known=True, plan=plan())
+        omitted_budget.pop("finite_budget")
+        self.assertFalse(_not_writer(self, omitted_budget)["writer"])
 
 
 if __name__ == "__main__":

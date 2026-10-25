@@ -11,6 +11,7 @@ stored inside GOBADMINTON_AUTONOMY_V1.
 """
 import copy
 import re
+import unicodedata
 
 CASE_SCHEMA = "GB_SMART_ROUTING_CASE_V1"
 PLAN_SCHEMA = "GB_SMART_ROUTING_PLAN_V1"
@@ -37,27 +38,48 @@ _SENSITIVE_TOKENS = frozenset((
     "sandbox", "apparmor", "admission", "budget", "guard", "permission", "permissions",
     "concurrency", "concurrent", "money", "payment", "payments", "billing",
     "migration", "migrate", "rollback", "irreversible", "privilege", "rbac",
-    "password", "passwd", "rights",
+    "password", "passwd", "rights", "oauth", "oauth2",
 ))
 _SENSITIVE_PHRASES = (("qa", "reuse"), ("data", "loss"), ("roll", "back"))
+# Real words, checked before homoglyph folding so Russian stays Russian.
+_CYRILLIC_STEMS = ("авторизац", "аутентиф", "идентичн", "персональн", "секрет", "парол")
+# Look-alike letters folded to Latin. "author" is not in this set.
+_CONFUSABLE = str.maketrans({
+    "а": "a", "А": "a", "е": "e", "Е": "e", "о": "o", "О": "o", "р": "p", "Р": "p",
+    "с": "c", "С": "c", "у": "y", "У": "y", "х": "x", "Х": "x", "і": "i", "І": "i",
+    "ї": "i", "Ї": "i", "ј": "j", "Ј": "j", "ѕ": "s", "Ѕ": "s", "һ": "h", "Һ": "h",
+    "ԁ": "d", "Ԁ": "d", "ԛ": "q", "Ԛ": "q", "ɡ": "g", "ο": "o", "Ο": "o", "ν": "v",
+    "Α": "a", "Β": "b", "Ε": "e", "Ζ": "z", "Η": "h", "Ι": "i", "Κ": "k", "Μ": "m",
+    "Ν": "n", "Ρ": "p", "Τ": "t", "Υ": "y", "Χ": "x", "В": "b", "К": "k", "М": "m",
+    "Н": "h", "Т": "t",
+})
 _DIAGNOSTIC_WORDS = frozenset((
-    "error", "ts", "assertionerror", "assertion", "failed", "expected", "received",
-    "permission", "denied", "timeout", "fail", "undefined",
+    "error", "errors", "ts", "assertionerror", "assertion", "assertions", "failed",
+    "expected", "received", "permission", "denied", "timeout", "timeouts", "fail",
+    "failure", "undefined", "exception", "typeerror",
+))
+_GENERIC_WORDS = _DIAGNOSTIC_WORDS | frozenset((
+    "in", "at", "on", "of", "to", "for", "from", "the", "and", "or", "a", "an",
+    "src", "source", "app", "apps", "web", "lib", "test", "tests", "file", "files",
+    "line", "lines", "code", "path", "dir", "dirs", "pkg", "mod", "module", "fn",
+    "var", "let", "const", "true", "false", "null", "none", "py", "js", "tsx", "jsx",
 ))
 _DIAGNOSTIC_ONLY = re.compile(
     r"(?i)^(?:error[\s_-]*ts\d+|assertion(?:error|\s+failed)?|expected\s*:.*|"
-    r"received\s*:.*|permission[\s_-]*denied|timeout|fail|\d{3})$")
+    r"received\s*:.*|permission[\s_-]*denied|timeouts?|fails?|\d{3})$")
 _WEAKENING = re.compile(
     r"(?i)(?:"
-    r"(?:delet|remov|drop)\w*\s+(?:the\s+)?(?:assertions?|tests?|expects?)|"
-    r"(?:rais|increas|extend)\w*\s+(?:the\s+)?(?:timeout|таймаут\w*)|"
-    r"disable\w*\s+(?:the\s+)?(?:timeout|таймаут\w*|auth\w*|security|qa)|"
-    r"weaken\w*\s+(?:the\s+)?(?:auth\w*|qa|security|timeout|таймаут\w*)|"
-    r"(?:updat|adjust|chang|fitt?)\w*\s+(?:the\s+)?expected|"
-    r"loosen\w*|skip\s+qa|"
-    r"удал\w*\s+(?:ассерт\w*|тест\w*|проверк\w*)|"
-    r"ослаб\w*\s+(?:auth\w*|qa|timeout|таймаут\w*|проверк\w*)|"
-    r"повыс\w*\s+(?:timeout|таймаут\w*))")
+    r"(?:delet|remov|drop|strip)\w*[\s_/-]+(?:the[\s_/-]+)?(?:assertions?|tests?|expects?|timeouts?|таймаут\w*|ассерт\w*|тест\w*|проверк\w*)|"
+    r"comment(?:ed)?[\s_/-]*out[\s_/-]+(?:the[\s_/-]+)?(?:assertions?|tests?|timeouts?)|"
+    r"(?:skip|disable|xit|xfail)\w*[\s_/-]+(?:the[\s_/-]+)?(?:tests?|assertions?|timeouts?|qa|auth\w*|security|таймаут\w*)|"
+    r"(?:rais|increas|extend)\w*[\s_/-]+(?:the[\s_/-]+)?(?:timeouts?|таймаут\w*)|"
+    r"weaken\w*[\s_/-]+(?:the[\s_/-]+)?(?:auth\w*|qa|security|timeouts?|таймаут\w*)|"
+    r"(?:updat|adjust|chang|fitt?)\w*[\s_/-]+(?:the[\s_/-]+)?expected|"
+    r"loosen\w*|"
+    r"удал\w*[\s_/-]+(?:ассерт\w*|тест\w*|проверк\w*)|"
+    r"ослаб\w*[\s_/-]+(?:auth\w*|qa|timeout\w*|таймаут\w*|проверк\w*)|"
+    r"повыс\w*[\s_/-]+(?:timeout\w*|таймаут\w*)|"
+    r"закоммент\w*[\s_/-]+(?:ассерт\w*|тест\w*|проверк\w*))")
 # Condition 7 is proven only by these explicit fields, on the evidence and on the plan.
 _UNCHANGED = ("assertions_unchanged", "expected_values_unchanged", "qa_unchanged",
               "timeout_unchanged", "auth_unchanged")
@@ -104,7 +126,8 @@ _EVIDENCE_KEYS = frozenset((
     "minimal_action_known", "architecture_research_required", "external_effects_unknown",
     "assertions_unchanged", "expected_values_unchanged", "qa_unchanged", "timeout_unchanged",
     "auth_unchanged", "fast_fix_history_checked", "critical_qa_qualified",
-    "line_count", "event_text", "whole_class_plan", "author_qa_same_snapshot", "complexity",
+    "line_count", "event_text", "goal", "paths", "diagnostics", "whole_class_plan",
+    "author_qa_same_snapshot", "complexity",
     "event_kind", "requirement_conflict", "plan",
 ))
 
@@ -131,12 +154,29 @@ def _deny_write(updates, reason):
 
 
 def _emit(base, evidence, plan, **updates):
-    """A source writer needs admitted scope and an executable plan. Absence is denial."""
+    """A source writer needs an admitted, proven, executable plan. Absence is denial."""
     writing = bool(updates.get("writer") or updates.get("fast_fix")
                    or updates.get("event_class") in _WRITER_EVENTS)
-    if writing and evidence.get("scope_within_admission") is not True:
+    if not writing:
+        return _finish(base, **updates)
+    if _floor(evidence) not in ("low", "moderate"):
+        return _finish(base, **_deny_write(updates, "risk is not proven"))
+    if (evidence.get("minimal_action_known") is not True
+            or evidence.get("architecture_research_required") is not False):
+        return _finish(base, **_deny_write(
+            updates, "architecture is open or the minimal action is not proven"))
+    if (evidence.get("external_effects_unknown") is not False
+            or evidence.get("unknown_effect") is not False):
+        return _finish(base, **_deny_write(updates, "external effect is not proven absent"))
+    if (evidence.get("scope_within_admission") is not True
+            or evidence.get("finite_budget") is not True):
         return _finish(base, **_deny_write(updates, "scope is not inside the admission"))
-    if writing and plan is not None and plan.get("executable") is not True:
+    if _weakens_any(evidence):
+        return _finish(base, **_deny_write(
+            updates, "condition 7 assertions, expected values, QA or timeout"))
+    if type(plan) is not dict:
+        return _finish(base, **_deny_write(updates, "plan is missing"))
+    if plan.get("executable") is not True:
         return _finish(base, **_deny_write(updates, "plan is not executable"))
     return _finish(base, **updates)
 
@@ -333,7 +373,12 @@ def _classify(base, evidence, plan):
                        route="hold", risk=risk, plan_honored=False)
     class_open = _class_open(evidence)
     prior_closed = _prior_closed(evidence)
-    if _template_ok(evidence, risk):
+    if risk == "critical" or evidence["difficult_or_repeating"]:
+        return _expert(base, evidence, plan, risk, class_open, prior_closed, honored)
+    if evidence["template_applicable"] and _norm_id(evidence["template_id"]):
+        if not _template_ok(evidence, risk):
+            return _pm(base, evidence, risk, whole_class=False, fast_fix_closed=prior_closed,
+                       reason="template preconditions are not proven")
         tool = evidence["template_tool"] == "deterministic_tool"
         route = "deterministic_tool" if tool else "cursor:auto"
         model, cost = _auto_receipt(route, evidence)
@@ -343,8 +388,6 @@ def _classify(base, evidence, plan):
                      effective_model=model, cost=cost, risk=risk, ledger_category="ordinary",
                      reason="proven template; no planner or Astra",
                      event_class="TEMPLATE", plan_honored=honored)
-    if risk == "critical" or evidence["difficult_or_repeating"]:
-        return _expert(base, evidence, plan, risk, class_open, prior_closed, honored)
     if class_open or prior_closed:
         return _pm(base, evidence, risk, whole_class=class_open, fast_fix_closed=prior_closed,
                    reason="Fast Fix refused; defect class is not closed for a single repair")
@@ -443,16 +486,22 @@ def _author(base, evidence, plan, risk, route, klass, reason, honored):
 
 def _quota(base, evidence):
     route = evidence["fallback_route"]
-    allowed = (evidence["effects_proven_absent"] and evidence["fallback_equivalent"]
-               and route in ROUTES and not route.startswith("agy:"))
-    if not allowed:
-        return _finish(base, policy_applied=True, executed=False, writer=False,
-                         fallback_reason=None, reason="quota exhausted without an admitted equivalent fallback",
-                         event_class="QUOTA", route="hold")
-    return _finish(base, policy_applied=True, executed=True, writer=False, model_calls=1,
-                     route=route, author_route=route, fallback_reason="quota_exhausted_equivalent_fallback",
-                     reason="quota exhausted equivalent fallback",
-                     event_class="QUOTA", qa_route=_ordinary_qa(evidence))
+    risk = _floor(evidence)
+    proofs = evidence["effects_proven_absent"] is True and evidence["fallback_equivalent"] is True
+    ordinary = (risk in ("low", "moderate") and route in ROUTES
+                and not (type(route) is str and route.startswith("agy:")))
+    specialist = risk == "critical" and (
+        route == SPECIALIST_SOL or (route == SPECIALIST_AGY and evidence["agy_qa_qualified"] is True))
+    if proofs and (ordinary or specialist):
+        return _finish(base, policy_applied=True, executed=True, writer=False, model_calls=1,
+                       risk=risk, route=route, author_route=route,
+                       fallback_reason="quota_exhausted_equivalent_fallback",
+                       reason="quota exhausted equivalent fallback",
+                       event_class="QUOTA", qa_route=_ordinary_qa(evidence))
+    reason = ("critical quota fallback is not a specialist route" if risk == "critical"
+              else "quota exhausted without an admitted equivalent fallback")
+    return _finish(base, policy_applied=True, executed=False, writer=False, risk=risk,
+                   fallback_reason=None, reason=reason, event_class="QUOTA", route="hold")
 
 
 def _schema_repair(base, evidence):
@@ -502,18 +551,22 @@ def _activation(case):
 
 
 def _floor(evidence):
-    blobs = [evidence["change_surface"], evidence["event_text"]]
-    blobs.extend(item["location"] for item in evidence["findings"])
-    if evidence["critical_signs"] or any(_sensitive(blob) for blob in blobs) or any(
+    if evidence["critical_signs"] or _sensitive_any(evidence) or any(
             item["severity"] == "critical" for item in evidence["findings"]):
         return "critical"
-    return evidence["risk"]
+    if evidence["risk"] in ("low", "moderate", "critical"):
+        return evidence["risk"]
+    return None
 
 
 def _template_ok(evidence, risk):
-    return bool(evidence["template_applicable"] and _token(evidence["template_id"])
-                and risk != "critical" and not _sensitive(evidence["change_surface"])
-                and not evidence["critical_signs"])
+    return bool(evidence["template_applicable"] and _norm_id(evidence["template_id"])
+                and risk in ("low", "moderate") and not evidence["critical_signs"]
+                and evidence["minimal_action_known"] is True
+                and evidence["architecture_research_required"] is False
+                and evidence["external_effects_unknown"] is False
+                and evidence["unknown_effect"] is False
+                and not _sensitive_any(evidence))
 
 
 def _ordinary_qa(evidence):
@@ -581,10 +634,10 @@ def _search_state(search):
 
 def _prior_closed(evidence):
     prior = evidence["prior_fast_fix"]
-    fingerprint = _token(evidence["defect_fingerprint"])
+    fingerprint = _norm_id(evidence["defect_fingerprint"])
     if type(prior) is not dict or not fingerprint:
         return False
-    return prior.get("result") == "fail" and _token(prior.get("fingerprint")) == fingerprint
+    return prior.get("result") == "fail" and _norm_id(prior.get("fingerprint")) == fingerprint
 
 
 def _class_closed(search):
@@ -598,12 +651,12 @@ def _fast_fix_block(evidence, risk):
     plan = evidence["plan"]
     checks = (
         (evidence["cause"] == "proven" and evidence["acceptance_unchanged"] is True
-         and bool(_token(evidence["defect_fingerprint"])),
+         and bool(_norm_id(evidence["defect_fingerprint"])),
          "condition 1 cause or acceptance"),
         (evidence["minimal_action_known"] is True and evidence["architecture_research_required"] is False,
          "condition 2 architecture still open"),
         (risk in ("low", "moderate") and evidence["critical_signs"] is False
-         and not _sensitive(evidence["change_surface"]) and evidence["external_effects_unknown"] is False
+         and not _sensitive_any(evidence) and evidence["external_effects_unknown"] is False
          and evidence["unknown_effect"] is False,
          "condition 3 risk floor or unknown effect"),
         (evidence["scope_within_admission"] is True and evidence["finite_budget"] is True,
@@ -628,20 +681,72 @@ def _condition_seven(evidence, plan):
         return False
     if any(plan.get(flag) is True for flag in _PLAN_WEAKEN):
         return False
-    if _weakens(evidence.get("event_text")):
+    if _weakens_any(evidence):
         return False
     return True
 
 
-def _tokens(value):
+def _prepared(value):
+    """NFKC, then drop BOM, zero-width and other format/control characters."""
     if type(value) is not str:
+        return ""
+    text = unicodedata.normalize("NFKC", value)
+    kept = []
+    for char in text:
+        category = unicodedata.category(char)
+        if category == "Cf":
+            continue
+        if category == "Cc" and char not in "\t\n\r":
+            continue
+        kept.append(char)
+    return "".join(kept)
+
+
+def _iter_texts(value, key=None):
+    if key in ("binding", "schema"):
+        return
+    if type(value) is str:
+        yield value
+    elif type(value) is dict:
+        for child_key, child in value.items():
+            yield from _iter_texts(child, child_key)
+    elif type(value) is list or type(value) is tuple:
+        for child in value:
+            yield from _iter_texts(child)
+
+
+def _tokens(value):
+    text = _prepared(value).translate(_CONFUSABLE)
+    if not text:
         return []
-    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", value)
+    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", text)
     spaced = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", spaced)
-    return [token for token in re.split(r"[^A-Za-z0-9]+", spaced.casefold()) if token]
+    return [token.casefold() for token in re.split(r"[^0-9A-Za-z]+", spaced) if token]
+
+
+def _letter_runs(tokens):
+    run = []
+    for token in tokens:
+        if len(token) == 1 and token.isalpha():
+            run.append(token)
+            continue
+        if run:
+            yield "".join(run)
+            run = []
+    if run:
+        yield "".join(run)
+
+
+def _cyrillic_sensitive(value):
+    folded = _prepared(value).casefold()
+    return any(stem in folded for stem in _CYRILLIC_STEMS)
 
 
 def _sensitive(value):
+    if type(value) is not str or not value:
+        return False
+    if _cyrillic_sensitive(value):
+        return True
     tokens = _tokens(value)
     if not tokens:
         return False
@@ -653,10 +758,14 @@ def _sensitive(value):
             return True
         if token == "pii" or token.startswith("pii") or token.endswith("pii"):
             return True
+        if token.startswith("oauth"):
+            return True
         if token.startswith("secret") and not token.startswith("secretary"):
             return True
         if token.startswith(("payment", "billing")):
             return True
+    if any(word in _SENSITIVE_TOKENS or word in ("pii", "auth", "oauth") for word in _letter_runs(tokens)):
+        return True
     compact = "".join(tokens)
     if any(stem in compact for stem in ("rollback", "migration", "identity", "dataloss", "qareuse")):
         return True
@@ -667,31 +776,57 @@ def _sensitive(value):
     return False
 
 
-def _token(value):
+def _sensitive_any(evidence):
+    return any(_sensitive(text) for text in _iter_texts(evidence))
+
+
+def _norm_id(value):
     if type(value) is not str:
         return ""
-    text = " ".join(value.split()).casefold()
+    text = " ".join(_prepared(value).casefold().translate(_CONFUSABLE).split())
     if not text or not re.search(r"[a-z0-9]", text):
         return ""
     return text
 
 
+def _token(value):
+    return _norm_id(value)
+
+
+def _structural(ident):
+    folded = ident.casefold()
+    if folded in _GENERIC_WORDS or re.fullmatch(r"ts\d+", folded):
+        return False
+    if "_" in ident and len(folded) >= 3:
+        return True
+    if re.search(r"[A-Z]", ident[1:]):
+        return True
+    return False
+
+
 def _pattern_proves_class(pattern, scope):
-    text = _token(pattern)
-    where = _token(scope)
+    text = _norm_id(pattern)
+    where = _norm_id(scope)
     if not text or not where:
         return False
     if _DIAGNOSTIC_ONLY.match(text):
         return False
-    idents = re.findall(r"[A-Za-z_][A-Za-z0-9_]{1,}", text)
-    return any(ident.casefold() not in _DIAGNOSTIC_WORDS and not re.fullmatch(r"(?i)ts\d+", ident)
-               for ident in idents)
+    raw = _prepared(pattern).translate(_CONFUSABLE) if type(pattern) is str else ""
+    idents = re.findall(r"[A-Za-z_][A-Za-z0-9_]*", raw)
+    return any(_structural(ident) for ident in idents)
 
 
 def _weakens(value):
-    if type(value) is not str or not value.strip():
+    if type(value) is not str:
         return False
-    return _WEAKENING.search(value) is not None
+    text = _prepared(value)
+    if not text.strip():
+        return False
+    return _WEAKENING.search(text) is not None
+
+
+def _weakens_any(evidence):
+    return any(_weakens(text) for text in _iter_texts(evidence))
 
 
 def _case_error(case):
@@ -747,6 +882,9 @@ def _evidence(raw):
     evidence["findings"] = copy.deepcopy(evidence["findings"])
     evidence["history"] = copy.deepcopy(evidence["history"])
     evidence["missing_inputs"] = list(evidence["missing_inputs"])
+    evidence["paths"] = list(evidence["paths"])
+    if type(evidence["diagnostics"]) is list:
+        evidence["diagnostics"] = list(evidence["diagnostics"])
     if evidence["class_search"] is not None:
         evidence["class_search"] = copy.deepcopy(evidence["class_search"])
     if evidence["prior_fast_fix"] is not None:
@@ -763,7 +901,7 @@ def _defaults():
         "critical_signs": False, "difficult_or_repeating": False, "findings": [],
         "brief_usable": False, "prior_fast_fix": None, "defect_fingerprint": "",
         "author_attempts": 0, "continuation_used": 0, "progress": False, "no_progress_streak": 0,
-        "unknown_effect": False, "reconciled": False, "platform_refusal": False,
+        "unknown_effect": True, "reconciled": False, "platform_refusal": False,
         "refusal_operation": "", "proposed_retry_operation": "", "proposed_provider": "",
         "quota_exhausted": False, "effects_proven_absent": False, "fallback_route": None,
         "fallback_equivalent": False, "context_complete": False, "context_hash_ok": False,
@@ -777,7 +915,8 @@ def _defaults():
         "assertions_unchanged": False, "expected_values_unchanged": False, "qa_unchanged": False,
         "timeout_unchanged": False, "auth_unchanged": False, "fast_fix_history_checked": False,
         "critical_qa_qualified": False,
-        "line_count": None, "event_text": "", "whole_class_plan": False,
+        "line_count": None, "event_text": "", "goal": "", "paths": [], "diagnostics": "",
+        "whole_class_plan": False,
         "author_qa_same_snapshot": False, "complexity": "standard", "event_kind": None,
         "requirement_conflict": False, "plan": None,
     }
@@ -816,9 +955,21 @@ def _check_evidence(evidence):
         raise ValueError("invalid fallback")
     for key in ("template_id", "change_surface", "suggested_class", "defect_fingerprint",
                 "refusal_operation", "proposed_retry_operation", "proposed_provider",
-                "invented_model_id", "event_text", "qa_route_proof"):
+                "invented_model_id", "event_text", "goal", "qa_route_proof"):
         if evidence[key] is not None and (type(evidence[key]) is not str or len(evidence[key]) > 500):
             raise ValueError("invalid evidence string")
+    if type(evidence["paths"]) is not list or len(evidence["paths"]) > 32 or any(
+            type(item) is not str or len(item) > 240 for item in evidence["paths"]):
+        raise ValueError("invalid paths")
+    diagnostics = evidence["diagnostics"]
+    if type(diagnostics) is str:
+        if len(diagnostics) > 500:
+            raise ValueError("invalid diagnostics")
+    elif type(diagnostics) is list:
+        if len(diagnostics) > 32 or any(type(item) is not str or len(item) > 500 for item in diagnostics):
+            raise ValueError("invalid diagnostics")
+    else:
+        raise ValueError("invalid diagnostics")
     if type(evidence["findings"]) is not list or len(evidence["findings"]) > 32:
         raise ValueError("invalid findings")
     seen = set()
