@@ -244,6 +244,101 @@ class VerdictBlocks(unittest.TestCase):
                 self.assertEqual(caught.exception.code, 'AGY_PARSE_FAILED')
 
 
+class GenericVerdictScanner(EvidenceTestCase):
+    """The same synthetic response must fail closed at both public entry points."""
+
+    def block(self, **changes):
+        value = dict(verdict='PASS', findings=[], reviewed_sha=SHA)
+        value.update(changes)
+        return json.dumps(value)
+
+    def check_response(self, response, *, accepted=False):
+        events = rows()
+        events[-1]['result'].update(structured_output=None, response=response)
+        raw = wire(events)
+        with patch.object(N, '_guard_accidental_writes', return_value=None), \
+             patch.object(N, '_restore_write_guard'), \
+             patch.object(N, '_candidate_state', return_value=(SHA, '')), \
+             patch.object(N, 'collect', return_value=('synthetic source', None)), \
+             patch('context_policy.inject', side_effect=lambda text, *a: (text, {'sha256': 'f'*64})), \
+             patch.object(N, 'invoke', return_value=(raw, {'input_delivery': 'written'})):
+            calls = {
+                'parse_stream': lambda: N.parse_stream(raw, SHA),
+                'review': lambda: N.review(self.evidence.parent/'candidate', 'b'*40, SHA,
+                    'task', 30, slot='slot2', task_hash='f'*64, charge=Mock()),
+            }
+            for entry, call in calls.items():
+                with self.subTest(entry=entry):
+                    if accepted:
+                        self.assertEqual(call()[0], dict(verdict='PASS', findings=[], reviewed_sha=SHA))
+                    else:
+                        with self.assertRaises(N.ReviewError) as caught:
+                            call()
+                        self.assertEqual(caught.exception.code, 'AGY_PARSE_FAILED')
+                        self.assertEqual(caught.exception.phase, 'parse')
+
+    def test_plain_key_encoded_fail(self):
+        fail = self.block(verdict='FAIL', findings=['hidden'])
+        self.check_response(self.block() + '\n' + json.dumps({fail: 0}))
+
+    def test_unicode_escaped_key_encoded_fail(self):
+        fail = self.block(verdict='FAIL', findings=['hidden'])
+        escaped = fail.replace('verdict', '\\u0076erdict')
+        for suffix in (json.dumps({escaped: 0}),
+                       '{"' + ''.join('\\u%04x' % ord(c) for c in fail) + '":0}'):
+            with self.subTest(suffix=suffix):
+                self.check_response(self.block() + '\n' + suffix)
+
+    def test_nested_key_encoded_fail(self):
+        fail = self.block(verdict='FAIL', findings=['hidden'])
+        for node in ({'outer': {fail: 0}}, [{fail: 0}],
+                     {json.dumps({fail: 0}): 0}):
+            with self.subTest(node=node):
+                self.check_response(self.block() + '\n' + json.dumps(node))
+
+    def test_values_inside_keys_inside_arrays(self):
+        fail = self.block(verdict='FAIL', findings=['hidden'])
+        node = [{json.dumps({'inside': [json.dumps({'value': fail})]}): 0}]
+        self.check_response(self.block() + '\n' + json.dumps(node))
+
+    def test_lone_surrogate_fail_block(self):
+        self.check_response(self.block() + '\n' + self.block(verdict='FAIL', findings=['\ud800']))
+
+    def test_lone_surrogate_keys(self):
+        fail = self.block(verdict='FAIL', findings=['\ud800'])
+        for node in ({'\ud800': 0}, {fail: 0}, {json.dumps({'\ud800': 0}): 0}):
+            with self.subTest(node=node):
+                self.check_response(self.block() + '\n' + json.dumps(node))
+
+    def test_key_decode_depth_cap(self):
+        # Harmless content still must not evade the depth cap through a key.
+        deep = '[' * 65 + '0' + ']' * 65
+        self.check_response(self.block() + '\n' + json.dumps({deep: 0}))
+
+    def test_key_decode_byte_budget(self):
+        self.check_response(self.block() + '\n' + json.dumps({'x' * 1500000: 0}))
+
+    def test_key_decode_node_budget(self):
+        self.check_response(self.block() + '\n' + json.dumps({json.dumps([0] * 100001): 0}))
+
+    def test_malformed_key_decode_work_budget(self):
+        # Each failed '[' prefix can make raw_decode rescan a long suffix.
+        self.check_response(self.block() + '\n' + json.dumps({('[' * 300 + 'x') * 16: 0}))
+
+    def test_key_decoder_rejects_duplicates_constants_and_leftovers(self):
+        for key in ('{"x":0,"x":1}', '[NaN]', '[Infinity]', 'prefix verdict suffix'):
+            with self.subTest(key=key):
+                self.check_response(self.block() + '\n' + json.dumps({key: 0}))
+
+    def test_generic_scanner_positive_controls(self):
+        body = self.block()
+        for response in (body, '\n'.join([body] * 3), '```json\n' + body + '\n```',
+                         body + '\n' + json.dumps({body: 0}),
+                         body + '\n' + json.dumps([{json.dumps({'echo': body}): 0}])):
+            with self.subTest(response=response):
+                self.check_response(response, accepted=True)
+
+
 class Collection(EvidenceTestCase):
     def setUp(self):
         super().setUp()

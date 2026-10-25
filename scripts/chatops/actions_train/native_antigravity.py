@@ -2003,8 +2003,11 @@ def canonical(value, head):
 
 def canonical_verdict_bytes(value, head):
     """Byte identity after canonicalization, not the model's original spelling."""
-    return json.dumps(canonical(value, head), sort_keys=True, separators=(',', ':'),
-                      ensure_ascii=False).encode('utf-8')
+    try:
+        return json.dumps(canonical(value, head), sort_keys=True, separators=(',', ':'),
+                          ensure_ascii=False).encode('utf-8')
+    except ValueError:  # Includes UnicodeEncodeError for lone surrogates.
+        raise ReviewError('AGY_PARSE_FAILED', 'parse') from None
 
 
 def _verdict_decoder():
@@ -2012,28 +2015,54 @@ def _verdict_decoder():
                             parse_constant=lambda _value: need(False, 'non-JSON constant'))
 
 
-# Encoded JSON strings are decoded again up to this many times. One more
-# encoded layer fails closed instead of being ignored beside a PASS.
+# Both structural and encoded nesting count. All branches share finite budgets;
+# failed raw_decode attempts also count their possible suffix traversal.
 _VERDICT_DECODE_DEPTH = 64
+_VERDICT_SCAN_NODES = 100000
+_VERDICT_SCAN_BYTES = 4 << 20
 
 
-def _absorb_verdict_value(value, found, depth):
-    """Walk a decoded JSON value. JSON strings are decoded again."""
+class _VerdictScanBudget:
+    def __init__(self):
+        self.nodes = _VERDICT_SCAN_NODES
+        self.bytes = _VERDICT_SCAN_BYTES
+
+    def consume(self, size):
+        self.bytes -= size
+        if self.bytes < 0:
+            raise ReviewError('AGY_PARSE_FAILED', 'parse')
+
+    def visit(self, depth):
+        self.nodes -= 1
+        if depth > _VERDICT_DECODE_DEPTH or self.nodes < 0:
+            raise ReviewError('AGY_PARSE_FAILED', 'parse')
+
+
+def _absorb_verdict_value(value, found, depth, budget, *, verdict_key=False):
+    """One recursive walk for keys, values, list items and decoded strings."""
+    budget.visit(depth)
     if type(value) is dict:
         if 'verdict' in value:
             found.append(value)
-        for item in value.values():
-            _absorb_verdict_value(item, found, depth)
+        for key, item in value.items():
+            _absorb_verdict_value(key, found, depth + 1, budget, verdict_key=(key == 'verdict'))
+            _absorb_verdict_value(item, found, depth + 1, budget)
     elif type(value) is list:
         for item in value:
-            _absorb_verdict_value(item, found, depth)
-    elif type(value) is str and ('{' in value or '[' in value or '"' in value or 'verdict' in value):
-        if depth >= _VERDICT_DECODE_DEPTH:
+            _absorb_verdict_value(item, found, depth + 1, budget)
+    elif type(value) is str:
+        # Check length before allocating UTF-8. Encoding also rejects lone
+        # surrogates everywhere, including otherwise uninteresting keys.
+        if len(value) > budget.bytes:
             raise ReviewError('AGY_PARSE_FAILED', 'parse')
-        _collect_verdict_values(value, found, depth + 1)
+        budget.consume(len(value.encode('utf-8')))
+        # The literal schema key is already consumed by the candidate above.
+        # Every other key uses exactly the same string scan as a value.
+        if not verdict_key:
+            _collect_verdict_values(value, found, depth, budget)
 
 
-def _collect_verdict_values(text, found, depth):
+def _collect_verdict_values(text, found, depth, budget):
     """Every JSON object, array, or string at any position in text.
 
     A `{` `[` or `"` that is not a complete value is skipped one character
@@ -2041,8 +2070,6 @@ def _collect_verdict_values(text, found, depth):
     contains the substring verdict fails closed. Duplicate keys and
     non-JSON constants fail closed via the shared decoder.
     """
-    if depth > _VERDICT_DECODE_DEPTH:
-        raise ReviewError('AGY_PARSE_FAILED', 'parse')
     decoder = _verdict_decoder()
     spans = []
     index = 0
@@ -2056,13 +2083,16 @@ def _collect_verdict_values(text, found, depth):
         try:
             value, end = decoder.raw_decode(text, start)
         except json.JSONDecodeError:
+            # An invalid prefix may have made the decoder read the full tail.
+            budget.consume(length - start)
             index = start + 1
             continue
         if end <= start:
             index = start + 1
             continue
         spans.append((start, end))
-        _absorb_verdict_value(value, found, depth)
+        budget.consume(end - start)
+        _absorb_verdict_value(value, found, depth + 1, budget)
         index = end
     cursor = 0
     leftover = []
@@ -2077,12 +2107,11 @@ def _collect_verdict_values(text, found, depth):
 def verdict_documents(text):
     """Every object with a verdict key, including ones encoded inside strings.
 
-    Objects, arrays, and strings count at any top-level position. JSON strings
-    are decoded recursively up to _VERDICT_DECODE_DEPTH. Identical copies of
-    one verdict stay in the list so the caller can require byte identity.
+    Keys and values have identical recursive decoding, bounded by depth, node
+    and byte/work budgets. Identical copies stay for the byte identity check.
     """
     found = []
-    _collect_verdict_values(text, found, 0)
+    _absorb_verdict_value(text, found, 0, _VerdictScanBudget())
     return found
 
 
@@ -2096,10 +2125,8 @@ def parse_verdict_response(text, head):
     need(type(text) is str and text.strip(), 'empty QA verdict response')
     try:
         blocks = verdict_documents(text)
-    except ReviewError as error:
-        if error.code != 'AGY_PARSE_FAILED':
-            raise ReviewError('AGY_PARSE_FAILED', 'parse') from None
-        raise
+    except (ReviewError, ValueError, RecursionError):
+        raise ReviewError('AGY_PARSE_FAILED', 'parse') from None
     need(blocks, 'no QA verdict block')
     rendered = []
     for block in blocks:
