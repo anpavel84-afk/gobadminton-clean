@@ -9,12 +9,17 @@ classifier, semantics are new, and the code, capsule, and policy pins agree.
 Legacy tasks never receive Fast Fix or a rewritten route. The new policy is not
 stored inside GOBADMINTON_AUTONOMY_V1.
 
-Fast Fix and every source writer need positive structured proof: a closed safe
-surface, a diff tool result for unchanged limits, and a class search that names
-one identifier from the diff. Free text can raise the risk floor or block. It
-is never required to be clean, and a quiet sentence is not proof.
+Fast Fix (§9) needs every condition, including an allowlisted surface, a diff
+tool result for unchanged limits, and a class search that names one identifier
+from the diff. A source writer (brief, complex cause, continuation, or a model
+template) needs that same diff result and a closed class. A non-complex writer
+also needs the allowlisted surface; a complex writer may name another non-empty
+surface. Free text can only raise the risk floor or block. An undecoded residue
+and any letter outside Latin or Cyrillic raise the floor. A quiet sentence is
+not proof.
 """
 import copy
+import html
 import re
 import unicodedata
 import urllib.parse
@@ -37,7 +42,8 @@ MODELS = frozenset((
     "claude-sonnet-5-5-medium", "claude-sonnet-5-5-high", "claude-opus-5-5-high",
 ))
 # Free text never proves a surface is clean. It can only raise the floor or block.
-# Stems are substrings of the collapsed skeleton. "author" is not "auth".
+# Stems match inside one word, never across a path segment or a space.
+# "author" / "authors" are not "auth". "secretary" is not "secret".
 _EN_STEMS = (
     "authoriz", "authoris", "authorit", "authent", "oauth", "identit", "password",
     "passwd", "credential", "sandbox", "apparmor", "admission", "budget", "permiss",
@@ -45,21 +51,30 @@ _EN_STEMS = (
     "rbac", "money", "pii", "qareuse", "dataloss", "guard", "rights",
 )
 _SENSITIVE_PHRASES = (("qa", "reuse"), ("data", "loss"), ("roll", "back"))
-# Checked on Cyrillic letters before any Latin confusable fold.
-_RU_STEMS = (
-    "авториз", "аутентиф", "идентиф", "идентичн", "миграц", "откат", "деньг", "плат",
-    "персональн", "парол", "токен", "сесси", "секрет",
+# Word prefixes on Cyrillic, before any Latin confusable fold.
+# "платформу" is not a payment. "правильно" is not "права". "секретарь" is not "секрет".
+_RU_PREFIXES = (
+    "авториз", "аутентиф", "идентиф", "идентичн", "миграц", "мигрир", "откат", "деньг",
+    "платеж", "оплат", "персональн", "парол", "токен", "сесси", "доступ",
 )
-_RU_DESTRUCTIVE = ("удал", "отключ", "пропуст", "закомментир", "тест", "ослаб", "повыс")
-# Lowercase look-alikes. Casefold runs first; mixed-script tokens are already critical.
+_RU_RIGHTS = frozenset(("прав", "права", "право", "правом", "правами", "правах", "правам"))
+# Destructive verbs are word prefixes. "тестовый" and "протест" are not deletions.
+_RU_DESTRUCTIVE = ("удал", "отключ", "пропуст", "закомментир", "ослаб", "повыс")
+# Lowercase look-alikes, including Latin dotless i. Mixed-script tokens are already critical.
 _CONFUSABLE = str.maketrans({
     "а": "a", "б": "b", "в": "b", "е": "e", "ё": "e", "к": "k", "м": "m", "н": "h",
     "о": "o", "р": "p", "с": "c", "т": "t", "у": "y", "х": "x", "і": "i", "ї": "i",
     "ј": "j", "ѕ": "s", "һ": "h", "ԁ": "d", "ԛ": "q", "ү": "y", "ғ": "f", "ь": "",
     "ъ": "", "ɡ": "g", "α": "a", "β": "b", "γ": "y", "ε": "e", "ζ": "z", "η": "n",
     "ι": "i", "κ": "k", "μ": "u", "ν": "v", "ο": "o", "ρ": "p", "τ": "t", "υ": "u",
-    "χ": "x", "ω": "w",
+    "χ": "x", "ω": "w", "ı": "i",
 })
+# Undecoded residue raises risk. The limit stops a nested encoding from looping.
+_DECODE_LIMIT = 8
+_RESIDUE = re.compile(
+    r"%[0-9A-Fa-f]{2}|&#x?[0-9A-Fa-f]+;?|&[A-Za-z][A-Za-z0-9]+;|"
+    r"\\u[0-9A-Fa-f]{4}|\\U[0-9A-Fa-f]{8}|\\x[0-9A-Fa-f]{2}")
+_ESCAPE = re.compile(r"\\(?:u([0-9A-Fa-f]{4})|U([0-9A-Fa-f]{8})|x([0-9A-Fa-f]{2}))")
 _DIAGNOSTIC_WORDS = frozenset((
     "error", "errors", "ts", "assertionerror", "assertion", "assertions", "failed",
     "expected", "received", "permission", "denied", "timeout", "timeouts", "fail",
@@ -176,7 +191,24 @@ def _emit(base, evidence, plan, **updates):
         return _finish(base, **_deny_write(updates, "plan is missing"))
     if plan.get("executable") is not True:
         return _finish(base, **_deny_write(updates, "plan is not executable"))
+    if (updates.get("writer") or updates.get("fast_fix")) and not _writer_proof(evidence):
+        return _finish(base, **_deny_write(updates, "writer proof is incomplete"))
     return _finish(base, **updates)
+
+
+def _writer_proof(evidence):
+    """A writer needs a diff result and one closed class. Fast Fix surfaces are allowlisted.
+
+    A complex cause may name another non-empty surface (§8). Missing proof is denial.
+    """
+    if not _diff_proven(evidence.get("diff_check")):
+        return False
+    if not _class_closed(evidence.get("class_search")):
+        return False
+    if _safe_surface(evidence):
+        return True
+    surface = evidence.get("change_surface")
+    return evidence.get("complexity") == "complex" and type(surface) is str and bool(surface.strip())
 
 
 def _decision(**updates):
@@ -232,7 +264,7 @@ def refuse_unsupported_task(task):
     """Refuse to store this policy inside an unsupported admission schema."""
     try:
         return _refuse_unsupported_task(task)
-    except (TypeError, RecursionError, ValueError):
+    except (TypeError, RecursionError, ValueError, RuntimeError):
         return _decision(rejected=True, executed=False, writer=False, reason="invalid case",
                          event_class="REJECTED", route="hold")
 
@@ -257,7 +289,7 @@ def validate_plan(plan):
     """Return an error string, or None when the plan schema is closed and safe."""
     try:
         return _validate_plan(plan)
-    except (TypeError, RecursionError, ValueError):
+    except (TypeError, RecursionError, ValueError, RuntimeError):
         return "incompatible plan"
 
 
@@ -297,7 +329,7 @@ def decide(case):
     """One deterministic classification. Does not call a provider or write source."""
     try:
         return _decide(case)
-    except (TypeError, RecursionError, ValueError):
+    except (TypeError, RecursionError, ValueError, RuntimeError):
         return _decision(rejected=True, executed=False, writer=False, fast_fix=False,
                          reason="invalid case", event_class="REJECTED", route="hold")
 
@@ -420,6 +452,16 @@ def _classify(base, evidence, plan):
     if class_open or prior_closed:
         return _pm(base, evidence, risk, whole_class=class_open, fast_fix_closed=prior_closed,
                    reason="Fast Fix refused; defect class is not closed for a single repair")
+    # All eight Fast Fix conditions outrank a usable brief (§8 LOCAL, §9).
+    allowed, fast_reason = _fast_fix_block(evidence, risk)
+    if allowed:
+        model, cost = _auto_receipt("cursor:auto", evidence)
+        return _emit(base, evidence, plan, policy_applied=True, executed=True, writer=True, risk=risk,
+                     fast_fix=True, planner_calls=0, astra_calls=0, model_calls=1,
+                     author_attempts_delta=0, ledger_category="fast_fix", author_route="cursor:auto",
+                     qa_route=_ordinary_qa(evidence), route="cursor:auto", effective_model=model, cost=cost,
+                     whole_class=False, reason="all eight Fast Fix conditions hold",
+                     event_class="SOURCE_KNOWN_LOCAL", plan_honored=honored)
     if evidence["author_attempts"] == 3 and evidence["brief_usable"] and evidence["progress"]:
         if evidence["continuation_used"] not in (0, 1):
             return _finish(base, policy_applied=True, executed=False, writer=False, risk=risk,
@@ -447,15 +489,6 @@ def _classify(base, evidence, plan):
                      effective_model=model, cost=cost, ledger_category="ordinary",
                      reason="usable brief is reused; no extra planner or diagnosis",
                      event_class="SOURCE_KNOWN_STANDARD", plan_honored=honored)
-    allowed, fast_reason = _fast_fix_block(evidence, risk)
-    if allowed:
-        model, cost = _auto_receipt("cursor:auto", evidence)
-        return _emit(base, evidence, plan, policy_applied=True, executed=True, writer=True, risk=risk,
-                     fast_fix=True, planner_calls=0, astra_calls=0, model_calls=1,
-                     author_attempts_delta=0, ledger_category="fast_fix", author_route="cursor:auto",
-                     qa_route=_ordinary_qa(evidence), route="cursor:auto", effective_model=model, cost=cost,
-                     whole_class=False, reason="all eight Fast Fix conditions hold",
-                     event_class="SOURCE_KNOWN_LOCAL", plan_honored=honored)
     # Not a proven minimal repair: do not fall through to a source writer.
     if (evidence["cause"] == "proven" and evidence["complexity"] == "complex"
             and evidence["minimal_action_known"] and not evidence["architecture_research_required"]):
@@ -746,14 +779,27 @@ def _condition_seven(evidence, plan):
     return True
 
 
-def _percent(value):
-    text = value
-    for _ in range(2):
-        decoded = urllib.parse.unquote(text)
+def _escape_char(match):
+    hexes = match.group(1) or match.group(2) or match.group(3)
+    code = int(hexes, 16)
+    if code > 0x10FFFF or 0xD800 <= code <= 0xDFFF:
+        return match.group(0)
+    return chr(code)
+
+
+def _decode_layer(text):
+    """One pass of percent-decoding, HTML entities, and literal hex escapes."""
+    return _ESCAPE.sub(_escape_char, html.unescape(urllib.parse.unquote(text)))
+
+
+def _decode(text):
+    """Decode until a fixed point. Anything that still looks encoded raises risk."""
+    for _ in range(_DECODE_LIMIT):
+        decoded = _decode_layer(text)
         if decoded == text:
             break
         text = decoded
-    return text
+    return text, _RESIDUE.search(text) is not None
 
 
 def _strip_marks(text):
@@ -798,15 +844,99 @@ def _mixed_script(text):
     return False
 
 
-def _cyr_letters(text):
-    return "".join(char for char in text if ("а" <= char <= "я") or char == "ё")
+def _ru_sensitive_word(word):
+    if any(word.startswith(stem) for stem in _RU_PREFIXES):
+        return True
+    if word.startswith("секрет") and not word.startswith("секретар"):
+        return True
+    return word in _RU_RIGHTS
 
 
-def _latin_view(text):
-    """Camel-split, casefold, fold confusables. Hyphens and other separators drop out."""
-    translated = _camel_split(text).casefold().translate(_CONFUSABLE)
-    tokens = [token for token in re.split(r"[^0-9a-z]+", translated) if token]
-    return tokens, "".join(tokens)
+def _word_pieces(word):
+    """Collapse separators inside one word. Digits drop. Separate words stay apart."""
+    translated = _camel_split(word).casefold().translate(_CONFUSABLE)
+    pieces = []
+    for token in re.split(r"[^0-9a-z]+", translated):
+        token = re.sub(r"\d", "", token)
+        if token:
+            pieces.append(token)
+    return pieces, "".join(pieces)
+
+
+def _token_risky(token):
+    if token.startswith("secretary"):
+        token = token[len("secretary"):]
+    if not token:
+        return False
+    if "secret" in token:
+        return True
+    if any(stem in token for stem in _EN_STEMS):
+        return True
+    # "auth" anywhere in the word, except the author/authors family.
+    if "auth" in token and not token.startswith("author"):
+        return True
+    return False
+
+
+def _pieces_risky(pieces, joined):
+    if joined and _token_risky(joined):
+        return True
+    return any(_token_risky(piece) for piece in pieces)
+
+
+def _phrase_hit(tokens):
+    for phrase in _SENSITIVE_PHRASES:
+        span = len(phrase)
+        if any(tokens[index:index + span] == list(phrase) for index in range(len(tokens) - span + 1)):
+            return True
+    return False
+
+
+def _latin_sensitive(text):
+    """Stems stay inside a word. Path separators and spaces are not glue."""
+    phrase_tokens = []
+    for segment in re.split(r"[/\\]+", text):
+        letter_run = []
+        for word in re.split(r"\s+", segment):
+            if not word:
+                continue
+            scripts = {script for script in (_script(char) for char in word) if script}
+            if "lat" not in scripts:
+                if len(letter_run) >= 2 and _token_risky("".join(letter_run)):
+                    return True
+                letter_run = []
+                continue
+            pieces, joined = _word_pieces(word)
+            if not pieces:
+                continue
+            if _pieces_risky(pieces, joined):
+                return True
+            if len(joined) == 1:
+                letter_run.append(joined)
+            else:
+                if len(letter_run) >= 2 and _token_risky("".join(letter_run)):
+                    return True
+                letter_run = []
+            phrase_tokens.extend(pieces)
+        if len(letter_run) >= 2 and _token_risky("".join(letter_run)):
+            return True
+        if len(letter_run) >= 2:
+            phrase_tokens.append("".join(letter_run))
+    return _phrase_hit(phrase_tokens)
+
+
+def _flat_pieces(text):
+    pieces = []
+    for segment in re.split(r"[/\\]+", text):
+        for word in re.split(r"\s+", segment):
+            if word:
+                word_pieces, _joined = _word_pieces(word)
+                pieces.extend(word_pieces)
+    return pieces
+
+
+def _has_prefix(tokens, prefixes):
+    return any(token.startswith(prefix) for token in tokens for prefix in prefixes)
 
 
 def _iter_texts(value, key=None, seen=None, depth=0):
@@ -832,38 +962,31 @@ def _iter_texts(value, key=None, seen=None, depth=0):
     seen.discard(marker)
 
 
+def _foreign_script(text):
+    """A letter outside Latin and Cyrillic is unrecognized. It raises the floor."""
+    for char in text:
+        script = _script(char)
+        if script is not None and script not in ("lat", "cyr"):
+            return True
+    return False
+
+
 def _sensitive(value):
     if type(value) is not str or not value:
         return False
-    stripped = _strip_marks(_percent(value))
+    decoded, residue = _decode(value)
+    # An undecoded residue is the same class as a decoded sensitive word.
+    if residue:
+        return True
+    stripped = _strip_marks(decoded)
     if not stripped:
         return False
-    if _mixed_script(stripped):
+    if _foreign_script(stripped) or _mixed_script(stripped):
         return True
     folded = stripped.casefold()
-    cyr = _cyr_letters(folded)
-    if cyr and any(stem in cyr for stem in _RU_STEMS):
+    if any(_ru_sensitive_word(word) for word in re.findall(r"[а-яё]+", folded)):
         return True
-    tokens, compact = _latin_view(stripped)
-    if not compact:
-        return False
-    scrubbed = compact
-    for token in tokens:
-        if token.startswith("secretary"):
-            scrubbed = scrubbed.replace("secretary", "")
-    if "secret" in scrubbed:
-        return True
-    if any(stem in compact for stem in _EN_STEMS):
-        return True
-    for token in tokens:
-        # Exact auth, not the prefix of "author" / "authors" / "secretary".
-        if token.startswith("auth") and not token.startswith("author"):
-            return True
-    for phrase in _SENSITIVE_PHRASES:
-        span = len(phrase)
-        if any(tokens[index:index + span] == list(phrase) for index in range(len(tokens) - span + 1)):
-            return True
-    return False
+    return _latin_sensitive(stripped)
 
 
 def _sensitive_any(evidence):
@@ -874,7 +997,8 @@ def _fingerprint_key(value):
     """Identity keeps hyphens. Marks, spaces, and newlines do not make a new defect."""
     if type(value) is not str:
         return ""
-    text = _strip_marks(_percent(value)).casefold().translate(_CONFUSABLE)
+    decoded, _residue = _decode(value)
+    text = _strip_marks(decoded).casefold().translate(_CONFUSABLE)
     text = "".join(char for char in text if unicodedata.category(char) != "Zs" and char not in "\t\n\r")
     if not text or not re.search(r"[a-z0-9]", text):
         return ""
@@ -905,12 +1029,19 @@ def _has_cycle(value, seen=None, depth=0):
 
 
 def _concrete_path(value):
+    """A concrete path names a file or directory. Dots, globs, and blanks do not."""
     if type(value) is not str:
         return False
     text = value.strip()
     if not text or text.casefold() in _GENERIC_WORDS:
         return False
-    return "/" in text or "." in text
+    if "/" not in text and "." not in text:
+        return False
+    if re.fullmatch(r"[\*/\\\.\s]+", text):
+        return False
+    if not re.search(r"[0-9A-Za-z]{2,}", text):
+        return False
+    return True
 
 
 def _generic_part(part):
@@ -965,32 +1096,39 @@ def _safe_surface(evidence):
 
 
 def _weakens(value):
-    """Destructive intent blocks. Quiet text does not grant a route."""
+    """Destructive intent blocks. Quiet text does not grant a route.
+
+    Verbs and nouns match as token prefixes across words, not as a substring of a
+    glued sentence, so "latest" is not "test" and "export" is not "expect".
+    """
     if type(value) is not str or not value:
         return False
-    stripped = _strip_marks(_percent(value))
+    decoded, _residue = _decode(value)
+    stripped = _strip_marks(decoded)
     if not stripped:
         return False
-    folded = _camel_split(stripped).casefold()
-    cyr = _cyr_letters(folded)
-    if cyr and any(stem in cyr for stem in _RU_DESTRUCTIVE):
+    folded = stripped.casefold()
+    if any(any(word.startswith(stem) for stem in _RU_DESTRUCTIVE)
+           for word in re.findall(r"[а-яё]+", folded)):
         return True
-    tokens, compact = _latin_view(stripped)
-    if not compact:
+    tokens = _flat_pieces(stripped)
+    if not tokens:
         return False
-    if any(verb in compact for verb in ("delet", "remov", "drop", "strip")) and any(
-            noun in compact for noun in ("assert", "test", "timeout", "expect")):
+    if _has_prefix(tokens, ("delet", "remov", "drop", "strip")) and _has_prefix(
+            tokens, ("assert", "test", "timeout", "expect")):
         return True
-    if "commentout" in compact or "commentedout" in compact:
+    if any(token.startswith("comment") for token in tokens) and (
+            any(token == "out" for token in tokens)
+            or any(token.startswith("comment") and "out" in token for token in tokens)):
         return True
-    gated = any(verb in compact for verb in ("skip", "disable", "xfail")) or "xit" in tokens
-    if gated and any(noun in compact for noun in ("test", "assert", "timeout", "qa", "security", "auth")):
+    gated = _has_prefix(tokens, ("skip", "disable", "xfail")) or "xit" in tokens
+    if gated and _has_prefix(tokens, ("test", "assert", "timeout", "qa", "security", "auth")):
         return True
-    if "weaken" in compact or "loosen" in compact:
+    if _has_prefix(tokens, ("weaken", "loosen")):
         return True
-    if any(verb in compact for verb in ("rais", "increas", "extend")) and "timeout" in compact:
+    if _has_prefix(tokens, ("rais", "increas", "extend")) and _has_prefix(tokens, ("timeout",)):
         return True
-    if any(verb in compact for verb in ("adjust", "updat", "chang")) and "expected" in compact:
+    if _has_prefix(tokens, ("adjust", "updat", "chang")) and _has_prefix(tokens, ("expected",)):
         return True
     return False
 
@@ -1055,22 +1193,24 @@ def _evidence(raw):
         for key, value in raw.items():
             evidence[key] = value
         _check_evidence(evidence)
+        evidence["findings"] = copy.deepcopy(evidence["findings"])
+        evidence["history"] = copy.deepcopy(evidence["history"])
+        evidence["missing_inputs"] = list(evidence["missing_inputs"])
+        evidence["paths"] = list(evidence["paths"])
+        if type(evidence["diagnostics"]) is list:
+            evidence["diagnostics"] = list(evidence["diagnostics"])
+        if evidence["class_search"] is not None:
+            evidence["class_search"] = copy.deepcopy(evidence["class_search"])
+        if evidence["prior_fast_fix"] is not None:
+            evidence["prior_fast_fix"] = copy.deepcopy(evidence["prior_fast_fix"])
+        if evidence["plan"] is not None:
+            evidence["plan"] = copy.deepcopy(evidence["plan"])
+        if evidence["diff_check"] is not None:
+            evidence["diff_check"] = copy.deepcopy(evidence["diff_check"])
     except ValueError as error:
         return str(error)
-    evidence["findings"] = copy.deepcopy(evidence["findings"])
-    evidence["history"] = copy.deepcopy(evidence["history"])
-    evidence["missing_inputs"] = list(evidence["missing_inputs"])
-    evidence["paths"] = list(evidence["paths"])
-    if type(evidence["diagnostics"]) is list:
-        evidence["diagnostics"] = list(evidence["diagnostics"])
-    if evidence["class_search"] is not None:
-        evidence["class_search"] = copy.deepcopy(evidence["class_search"])
-    if evidence["prior_fast_fix"] is not None:
-        evidence["prior_fast_fix"] = copy.deepcopy(evidence["prior_fast_fix"])
-    if evidence["plan"] is not None:
-        evidence["plan"] = copy.deepcopy(evidence["plan"])
-    if evidence["diff_check"] is not None:
-        evidence["diff_check"] = copy.deepcopy(evidence["diff_check"])
+    except RuntimeError:
+        return "invalid evidence"
     return evidence
 
 

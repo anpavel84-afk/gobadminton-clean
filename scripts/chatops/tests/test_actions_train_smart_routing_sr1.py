@@ -143,22 +143,29 @@ class SmartRoutingSR1(unittest.TestCase):
         self.assertFalse(decision["writer"])
 
     def test_sr_t04_usable_brief_is_not_replayed(self):
+        # §8 STANDARD is a brief writer, not Fast Fix: no fingerprint, regression, or history.
         decision = check(sr.decide(case(ready(
             brief_usable=True, cause="proven", risk="moderate", author_attempts=1,
-            minimal_action_known=True, plan=plan()))))
+            minimal_action_known=True, change_surface="rename", plan=plan(),
+            diff_check=diff_check(), class_search=search()))))
         self.assertEqual(decision["planner_calls"], 0)
         self.assertEqual(decision["astra_calls"], 0)
         self.assertEqual(decision["event_class"], "SOURCE_KNOWN_STANDARD")
+        self.assertTrue(decision["writer"])
+        self.assertFalse(decision["fast_fix"])
 
     def test_sr_t05_known_complex_noncritical_skips_astra(self):
+        # §8 COMPLEX may name a non-allowlisted surface. It still needs diff and a closed class.
         decision = check(sr.decide(case(ready(
             cause="proven", complexity="complex", risk="moderate", change_surface="state",
             difficult_or_repeating=False, brief_usable=False, minimal_action_known=True,
-            plan=plan()))))
+            plan=plan(), diff_check=diff_check(), class_search=search()))))
         self.assertEqual(decision["event_class"], "SOURCE_KNOWN_COMPLEX")
         self.assertEqual(decision["author_route"], "codex:gpt-6.1-sol:high")
         self.assertEqual(decision["astra_calls"], 0)
         self.assertEqual(decision["planner_calls"], 0)
+        self.assertTrue(decision["writer"])
+        self.assertFalse(decision["fast_fix"])
 
     def test_sr_t06_one_line_critical_uses_expert_and_qualified_qa(self):
         decision = check(sr.decide(case(ready(
@@ -272,7 +279,8 @@ class SmartRoutingSR1(unittest.TestCase):
         history = ["attempt-1", "attempt-2", "attempt-3"]
         decision = check(sr.decide(case(ready(
             author_attempts=3, continuation_used=0, progress=True, brief_usable=True,
-            minimal_action_known=True, risk="moderate", history=history, plan=plan()))))
+            minimal_action_known=True, risk="moderate", history=history, plan=plan(),
+            change_surface="rename", diff_check=diff_check(), class_search=search()))))
         self.assertTrue(decision["continuation_granted"])
         self.assertEqual(decision["author_attempts"], 3)
         self.assertEqual(decision["history"], history)
@@ -317,7 +325,7 @@ class SmartRoutingSR1(unittest.TestCase):
             template_id="formatter", template_applicable=True, template_tool=None,
             change_surface="format", invented_model_id="gpt-fake-9", invented_cost=True,
             effective_model_exposed=False, minimal_action_known=True, plan=plan(),
-            class_search=search()))))
+            class_search=search(), diff_check=diff_check()))))
         self.assertEqual(decision["route"], "cursor:auto")
         self.assertEqual(decision["effective_model"], "not_exposed")
         self.assertIsNone(decision["cost"])
@@ -1184,7 +1192,8 @@ class SmartRoutingQaR3(unittest.TestCase):
                 self.assertEqual(decision["route"], "hold")
         granted = check(sr.decide(case(ready(
             author_attempts=3, continuation_used=1, progress=True, brief_usable=True,
-            minimal_action_known=True, risk="moderate", plan=plan()))))
+            minimal_action_known=True, risk="moderate", plan=plan(),
+            change_surface="rename", diff_check=diff_check(), class_search=search()))))
         self.assertTrue(granted["continuation_granted"])
         self.assertTrue(granted["writer"])
 
@@ -1225,6 +1234,178 @@ class SmartRoutingQaR3(unittest.TestCase):
             self.assertFalse(decision["writer"])
             self.assertFalse(decision["fast_fix"])
             self.assertTrue(decision["rejected"])
+
+
+def _proven_brief(**updates):
+    """§8 STANDARD writer: diff and a closed class, without the Fast Fix-only proofs."""
+    evidence = ready(
+        brief_usable=True, cause="proven", risk="moderate", author_attempts=1,
+        minimal_action_known=True, change_surface="rename", plan=plan(),
+        diff_check=diff_check(), class_search=search())
+    evidence.update(updates)
+    return evidence
+
+
+class SmartRoutingQaR4(unittest.TestCase):
+    """Encoding, other scripts, and missing proof fail closed. Legitimate renames stay."""
+
+    def test_undecoded_residue_and_nested_encodings_raise_the_floor(self):
+        nested = (
+            "authori%25257Aation",
+            "authori&#122;ation",
+            "authori&#x7a;ation",
+            "authori\\u007aation",
+            "authori\\x7aation",
+            "authori%26%23122%3Bation",
+            "author\u0131zation",
+            "authori1zation",
+            # Nine percent layers: the decode limit stops on a leftover %XX.
+            "authori%25252525252525257Aation",
+            "rename &zzzunknown; helper",
+        )
+        for text in nested:
+            for builder in (fast, _proven_brief):
+                with self.subTest(text=text, brief=builder is _proven_brief):
+                    decision = _not_writer(self, builder(event_text=text))
+                    self.assertEqual(decision["risk"], "critical")
+                    self.assertFalse(decision["executed"])
+                    self.assertFalse(decision["writer"])
+        destructive = (
+            "delete%252520the%252520assertions",
+            "delete the asser&#116;ions",
+            "\\u0064elete the assertions",
+        )
+        for text in destructive:
+            with self.subTest(text=text, path="fast"):
+                decision = _not_writer(self, fast(event_text=text))
+                self.assertFalse(decision["fast_fix"])
+                if decision["risk"] != "critical":
+                    self.assertIn("condition 7", decision["reason"])
+            with self.subTest(text=text, path="brief"):
+                decision = _not_writer(self, _proven_brief(event_text=text))
+                self.assertFalse(decision["writer"])
+                self.assertFalse(decision["executed"])
+                if decision["risk"] != "critical":
+                    self.assertIn("condition 7", decision["reason"])
+
+    def test_other_scripts_and_embedded_auth_do_not_write(self):
+        texts = (
+            "αυθοριζατιον",
+            "\u2c81\u2c89\u2c9f",
+            "\u10d0\u10d1\u10d2",
+            "preauth redirect",
+            "xauth middleware",
+            "unauth token",
+        )
+        for text in texts:
+            with self.subTest(text=text):
+                decision = _not_writer(self, fast(event_text=text))
+                self.assertEqual(decision["risk"], "critical")
+                self.assertFalse(decision["fast_fix"])
+                self.assertFalse(decision["writer"])
+                brief = _not_writer(self, _proven_brief(event_text=text))
+                self.assertEqual(brief["risk"], "critical")
+                self.assertFalse(brief["writer"])
+
+    def test_path_glue_and_legitimate_words_stay_low(self):
+        harmless = (
+            "author", "authors", "AUTHOR", "secretary", "секретарь",
+            "переименовать тестовый хелпер",
+            "протест против опечатки",
+            "remove the latest typo in the name",
+            "переименовать платформу",
+            "переименовать правильно",
+            "таймаут не трогать",
+        )
+        for text in harmless:
+            with self.subTest(text=text):
+                decision = check(sr.decide(case(fast(event_text=text))))
+                self.assertEqual(decision["risk"], "low")
+                self.assertTrue(decision["fast_fix"])
+                self.assertTrue(decision["writer"])
+        paths = check(sr.decide(case(fast(
+            paths=["apps/api/index.ts", "apps/api/internal/export.ts"],
+            goal="rename export to author"))))
+        self.assertEqual(paths["risk"], "low")
+        self.assertTrue(paths["fast_fix"])
+        self.assertTrue(paths["writer"])
+
+    def test_payment_migration_and_access_rights_raise_the_floor(self):
+        for text in ("мигрируйте схему", "изменить права доступа", "платёж", "оплатить счёт"):
+            with self.subTest(text=text):
+                decision = _not_writer(self, fast(event_text=text))
+                self.assertEqual(decision["risk"], "critical")
+                self.assertFalse(decision["fast_fix"])
+
+    def test_dot_and_glob_are_not_a_concrete_path(self):
+        for scope in (".", "..", "**/*", "*"):
+            with self.subTest(scope=scope):
+                decision = _not_writer(self, fast(class_search=search(scope=scope)))
+                self.assertFalse(decision["rejected"])
+                self.assertTrue(decision["whole_class"])
+                self.assertFalse(decision["fast_fix"])
+        for listing in (["."], ["**/*"], ["*"]):
+            with self.subTest(listing=listing):
+                decision = _not_writer(self, fast(class_search=search(scope_listing=listing)))
+                self.assertFalse(decision["fast_fix"])
+                self.assertTrue(decision["whole_class"])
+        named = check(sr.decide(case(fast(class_search=search(
+            scope="apps/web/src", scope_listing=["a.ts"])))))
+        self.assertTrue(named["fast_fix"])
+
+    def test_fast_fix_proof_outranks_a_usable_brief(self):
+        decision = check(sr.decide(case(fast(brief_usable=True))))
+        self.assertTrue(decision["fast_fix"])
+        self.assertTrue(decision["writer"])
+        self.assertEqual(decision["event_class"], "SOURCE_KNOWN_LOCAL")
+        self.assertEqual(decision["ledger_category"], "fast_fix")
+        self.assertEqual(decision["author_attempts_delta"], 0)
+
+    def test_writer_routes_without_diff_and_class_do_not_write(self):
+        samples = {
+            "brief": ready(brief_usable=True, cause="proven", author_attempts=1,
+                           minimal_action_known=True, plan=plan()),
+            "complex-state": ready(cause="proven", complexity="complex", risk="moderate",
+                                   change_surface="state", brief_usable=False,
+                                   minimal_action_known=True, plan=plan()),
+            "continuation": ready(author_attempts=3, continuation_used=0, progress=True,
+                                  brief_usable=True, minimal_action_known=True,
+                                  risk="moderate", plan=plan()),
+            "template-state": ready(template_id="formatter", template_applicable=True,
+                                    template_tool=None, change_surface="state",
+                                    minimal_action_known=True, plan=plan(),
+                                    class_search=search()),
+            "brief-state": ready(brief_usable=True, cause="proven", author_attempts=1,
+                                 minimal_action_known=True, change_surface="state",
+                                 plan=plan(), diff_check=diff_check(), class_search=search()),
+            "continuation-state": ready(author_attempts=3, continuation_used=0, progress=True,
+                                        brief_usable=True, minimal_action_known=True,
+                                        risk="moderate", change_surface="state", plan=plan(),
+                                        diff_check=diff_check(), class_search=search()),
+        }
+        for name, evidence in samples.items():
+            with self.subTest(name=name):
+                decision = _not_writer(self, evidence)
+                self.assertFalse(decision["executed"])
+                self.assertFalse(decision["continuation_granted"])
+                self.assertEqual(decision["route"], "hold")
+                self.assertIn("writer proof", decision["reason"])
+
+    def test_deepcopy_runtime_error_is_rejected(self):
+        class Boom:
+            def __deepcopy__(self, memo):
+                raise RuntimeError("boom")
+
+        evidence = fast()
+        evidence["class_search"] = search()
+        evidence["class_search"]["payload"] = Boom()
+        decision = sr.decide(case(evidence))
+        self.assertTrue(decision["rejected"])
+        self.assertEqual(decision["event_class"], "REJECTED")
+        self.assertFalse(decision["writer"])
+        self.assertFalse(decision["fast_fix"])
+        self.assertFalse(decision["executed"])
+        self.assertIn("invalid", decision["reason"])
 
 
 if __name__ == "__main__":
