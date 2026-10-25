@@ -14,8 +14,8 @@ secrets, budgets, or historical state were changed. No installation or commit wa
 performed.
 
 Preflight source: `anpavel84-afk/gobadminton-clean`, supplied dev checkout at
-`0ebd58e57d31e4f273708dc98aab59f1572eedcf` (detached HEAD; no local dev ref).
-Role: AUTHOR under the direct Owner assignment in this task; Grok retains runtime
+`c985b8e4271d123e9e7d0f120d616f2db83597d5` (draft PR #306, round-2 revision).
+Role: AUTHOR under the direct Owner assignment in this task; sole writer for the allowed-file revision, Grok retains runtime
 ownership. Base/source is that SHA; candidate is the uncommitted allowed-file diff.
 Accepted EOM 1.4: commit `13a8b6c54a45aaa57021e092a1bee54926d9eac4`, SHA-256
 `8798ea76874ea5e42f708fff6d74f1ccbf526413c701e9f2349045fdc98be9d5`, full text
@@ -34,7 +34,7 @@ Existing authorized trusted root OPS invokes the installed script:
 ```sh
 python3 /usr/local/lib/gb-actions-train/admission_pm.py --dry-run \
   --issue 29 --role technical_pm_product_analyst \
-  --delegation-comment-id 6390011223 \
+  --delegation-comment 6390011223 \
   --request-json '{"source_base":"b0e4d233bc150f42ada86c4c0f56897c57e0d0fe","source_head":"0ebd58e57d31e4f273708dc98aab59f1572eedcf","input_revision":"0ebd58e57d31e4f273708dc98aab59f1572eedcf","input_path":"scripts/chatops/tests/fixtures/agy-230-inert-task-draft.json","input_sha256":"40c79986904243c77d0e06231f1a82802018b17137242212aec2513e0258bd55"}'
 ```
 
@@ -56,16 +56,27 @@ One request registers one finite one-use role grant in the existing
 `GB_AGY_29_OWNER_PACKAGE_V1` ledger schema, with validated `delegation` provenance
 in both ledger and grant. Package/receipt names use a deterministic SHA-256 of
 issue, role, delegation ID and request. Repeating the same request returns
-`ALREADY_GRANTED` with the same ID; it never rewrites or recharges the package.
-`--dry-run` returns `GRANTED` with `dry_run=true`, without writing a receipt or
-exposing a grant. Otherwise results are `GRANTED`, `BLOCKED`, `NEEDS_OWNER`, with
-paths, reason, remaining budget and `model_calls=0`. Nonstandard or refused cases
-set `needs_review=true`; they do not invoke Technical PM or another model.
+`GRANTED` with the same ID and `replayed=true`; it never rewrites or recharges
+the package. First enrollment has `replayed=false`. `--dry-run` returns `GRANTED`
+with `dry_run=true`, without writing a receipt or exposing a grant. The status
+field has only `GRANTED`, `BLOCKED`, `NEEDS_OWNER`. Every result, including a
+refusal, has the deterministic admission ID, paths, a short reason, remaining
+budget (null when verification stopped before accounting), and `model_calls=0`.
+Replay reports the recorded enrollment budget snapshot. Nonstandard or refused
+cases set `needs_review=true`; they do not invoke Technical PM or another model.
 
-Authentication performs the same public read-only GitHub comment fetch as the
-personal Owner path. No GitHub write or credential is needed. All author tests
-mock HTTP transport; no network, provider CLI or installed protected state is
-accessed during source verification.
+A new dry-run or apply performs exactly one public GET of
+`https://api.github.com/repos/anpavel84-afk/gobadminton-clean/issues/comments/<id>`
+with timeout 10 seconds and response limit 32768 bytes. The HTTPS endpoint is
+fixed; redirects (including same-host redirects), proxies, retries and pagination
+are disabled. No other network access or model invocation is part of this helper.
+No GitHub write or credential is needed. `--status` and a completed identical
+replay consult local receipts first and work fully offline, without fetching or
+renewing authority, even after delegation expiry. Exact intent recovery uses its
+stored verified comment, requires unexpired authority and acquires no new grant.
+All author tests stub only the last HTTPS transport, run the production fetcher,
+and block/count socket connect, create_connection and getaddrinfo. No network,
+provider CLI or installed protected state is accessed during source verification.
 
 ## Immutable Owner delegation comment
 
@@ -77,20 +88,28 @@ in CLEAN. The response is limited to 32768 bytes. The comment must have valid UT
 Python `json.dumps(value,sort_keys=True,separators=(',',':'))`: no extra whitespace,
 trailing newline, duplicate keys, extra fields or nonfinite numbers.
 
-Concrete canonical example (one prefix line, one JSON line; example ID only):
+Concrete canonical example (one prefix line and one JSON line; no self-ID):
 
 ```text
 GOBADMINTON_ADMISSION_DELEGATION_V1
-{"allowed_input_paths":[{"path":"scripts/chatops/tests/fixtures/agy-230-inert-task-draft.json","revision":"0ebd58e57d31e4f273708dc98aab59f1572eedcf","sha256":"40c79986904243c77d0e06231f1a82802018b17137242212aec2513e0258bd55"}],"controller_sha":"INSTALLED_ACTIVE","delegation_comment":6390011223,"expires_at":"2026-11-25T00:00:00Z","issue":29,"max_calls_per_package":5,"max_packages":3,"max_total_calls":5,"model":"claude-sonnet-5-5-medium","repo_id":1416250340,"roles":["technical_pm_product_analyst"],"rules_sha256":"8798ea76874ea5e42f708fff6d74f1ccbf526413c701e9f2349045fdc98be9d5","schema":"GB_ADMISSION_DELEGATION_V1","scope":"DEV_OPS_ONLY"}
+{"allowed_input_paths":[{"path":"scripts/chatops/tests/fixtures/agy-230-inert-task-draft.json","revision":"0ebd58e57d31e4f273708dc98aab59f1572eedcf","sha256":"40c79986904243c77d0e06231f1a82802018b17137242212aec2513e0258bd55"}],"controller_sha":"INSTALLED_ACTIVE","expires_at":"2026-11-25T00:00:00Z","issue":29,"max_calls_per_package":5,"max_packages":3,"max_total_calls":5,"model":"claude-sonnet-5-5-medium","repo_id":1416250340,"roles":["technical_pm_product_analyst"],"rules_sha256":"8798ea76874ea5e42f708fff6d74f1ccbf526413c701e9f2349045fdc98be9d5","schema":"GB_ADMISSION_DELEGATION_V1","scope":"DEV_OPS_ONLY"}
 ```
 
-**Publication prerequisite remains unresolved:** `delegation_comment` must equal
-the comment's actual self-ID at creation. GitHub assigns that ID after posting;
-this change supplies no ID-preallocation mechanism. The example cannot simply
-be posted unchanged, and posting then editing the ID is rejected. Before real
-use, Owner/PMA must resolve this constraint in the specified protocol; an amended
-protocol would need its own reviewed change. Never fabricate an Owner response,
-accept an edited bootstrap, guess a comment ID, or impersonate Owner to install it.
+Publication and verification:
+
+1. Owner posts the prefix and canonical JSON as a new Issue #29 comment. Set the
+   exact reviewed input revisions/hashes, expiry and finite limits before posting.
+   Do not include `delegation_comment` or any other self-ID field; it is rejected.
+2. Read the GitHub-assigned comment ID from its URL, for example
+   `https://github.com/anpavel84-afk/gobadminton-clean/issues/29#issuecomment-6390011223`.
+3. Trusted OPS runs `--dry-run --delegation-comment 6390011223` with the exact
+   request, then `--apply --delegation-comment 6390011223` with the same request.
+   The CLI verifies that exact API response ID and binds it into the receipt and
+   deterministic admission digest. The old `--delegation-comment-id` spelling
+   remains an alias. A different posted ID produces a different digest, without
+   bypassing unchanged-input duplicate protection across comments.
+4. Never edit the comment: `created_at != updated_at` invalidates it. If authority
+   must change, Owner posts a new canonical comment; historical charges remain.
 
 Fields are a closed set. Roles may only narrow the two existing addressed roles;
 model, rules, CLI, permission mode, transport, timeout, output cap, slot and canary
@@ -105,22 +124,31 @@ Money, PROD, access expansion, product authority or QA waivers have no fields.
 
 ## Accounting, history and refusal
 
-The package lineage is **all dynamic personal Owner packages plus all delegated
-packages for #29**, regardless of the new delegation comment ID. All their
-receipts must be complete and match their original enrollment checksum. Used
-calls count unique consumed grant operations, including FAIL/UNKNOWN charges;
-cumulative counters in successors are never summed again. A new package starts
-at that already-spent count. Both the delegated ceiling (at most 5 under EOM
-§6.3) and finite total-call/package limits apply to the whole package lineage.
+The call lineage includes **historical qualification, one-shot, addressed and
+supplemental charges, all dynamic personal Owner packages and all delegated
+packages for #29**, regardless of delegation comment ID. Dynamic receipts must
+be complete and match their original enrollment checksum. Usage is the union
+of consumed operation IDs, including FAIL/UNKNOWN charges. The original fixed
+reservation is already part of the qualification lineage and is counted once;
+cumulative successor counters and supplemental `legacy_used_calls` are not
+summed again. BUDGET is a pinned limits configuration, not another usage ledger.
 
-Older fixed qualification, addressed and supplemental allowances remain separate
-historical budgets, as defined by their existing schemas. They are not recast
-into dynamic packages or added again as inherited dynamic-package calls. The
-existing HIST/SUP/BUDGET SHA pins and original UNKNOWN pin remain checked, and
-are never rewritten. Every dynamic predecessor is additionally referenced by
-filename and exact SHA-256; runtime reservation validates those pins, its
-inherited counter and the predecessor analysis row. No predecessor is modified
-by admission. Old unused grants are not dispatched through the new marker.
+A new package starts at that already-spent count. For example, safely released
+UNKNOWN history at 2/2 plus a ceiling-5 delegation starts at `used_calls=2`, with
+3 calls left. Histories of 1/1 and 3/3 leave 4 and 2 calls respectively. History
+at or over the applicable ceiling refuses continuation. The package ceiling
+is at most 5 under EOM §6.3, and the delegation's total-call limit also applies
+across the entire call lineage. `max_packages` limits the number of dynamic
+personal Owner and delegated package enrollments; historical ledgers retain
+their existing identities and are not converted into dynamic packages.
+
+The existing HIST/SUP/BUDGET pins, qualification-lineage pin, original reservation
+and UNKNOWN pins remain verified and are never rewritten. Historical counters
+must match their consumed rows and every charge must retain its journal entry.
+Every dynamic predecessor is additionally referenced by filename and SHA-256;
+runtime reservation uses the same historical accounting helper and validates
+the inherited counter and predecessor analysis. No predecessor is modified by
+admission. Old unused grants are not dispatched through the new marker.
 
 An unresolved UNKNOWN, unfinished operation, safety-refusal evidence, unfinished
 other enrollment, missing receipt, changed source/input/hash, busy slot or
@@ -146,9 +174,9 @@ comment enrollment/QA CLI, fields, two-call limit and authentication are preserv
 ## Install and rollback (instructions only)
 
 1. PMA publishes the exact candidate SHA and runs independent exact-candidate QA,
-   mandatory CI and applicable controller review. Resolve the immutable comment
-   publication prerequisite above. The canonical example and green author tests
-   provide no installation authority.
+   mandatory CI and applicable controller review. The canonical example and
+   author tests provide no installation authority. Until reviewed installation,
+   existing checks remain authoritative.
 2. Use the existing reviewed root OPS upgrade procedure against the actual
    installed baseline, with backup/readback, quiescent slots and receiver lock.
    The initial `installer.prepare` refuses an existing installation; do not use it
@@ -184,59 +212,40 @@ subprocesses during admission are restricted by the tests to Git reads. Failure
 injection covers every durable write. These checks are AUTHOR self-verification,
 not independent QA, CI, installation evidence, or DEV acceptance.
 
-Author verification on this uncommitted candidate (all temporary fixtures under
-`/home/agentagency-dev/author-evidence-apm2-20261025` via `TMPDIR`):
+Round-2 author verification uses the non-root process and default sandbox
+temporary directory (`TMPDIR` unset); no installation or commit. The test groups
+overlap and are not a distinct-test total. Round-1 evidence remains in the
+[immutable PR #306 source record](https://github.com/anpavel84-afk/gobadminton-clean/blob/c985b8e4271d123e9e7d0f120d616f2db83597d5/docs/ops/ADMISSION_PM.md).
 
-| Check | Exact outcome |
+| Check | Exact round-2 outcome |
 | --- | --- |
-| `python3 -m unittest discover -s scripts/chatops/tests -p 'test_admission_pm.py'` | 30 tests, PASS; includes both roles at all 7 durable crash points |
-| `python3 -m unittest discover -s scripts/chatops/tests -p 'test_actions_train_owner_package.py'` | 9 tests, PASS; existing tests unchanged |
-| `python3 -m unittest discover -s scripts/chatops/tests -p 'test_actions_train*recovery*.py'` | 76 tests, PASS |
-| Direct `test_actions_train_antigravity*.py` discovery | 96 tests run, FAILED with 23 subtest errors; legacy entrypoint fixture crossed its synthetic boundary |
-| Same Antigravity discovery, synthetic cursor-marker SHA fixture supplied in memory | 96 tests, PASS; existing assertions unchanged; no protected read |
-| `python3 scripts/check_foundation.py` | PASS: 287 tracked Markdown files, 168 draft API operations |
+| `python3 -m unittest discover -s scripts/chatops/tests -p 'test_admission_pm.py'` | 47 run, 47 PASS; both-role crash recovery and historical-spend recovery at all 7 durable writes |
+| `python3 -m unittest discover -s scripts/chatops/tests -p 'test_actions_train_owner_package.py'` | 9 run, 9 PASS; existing tests and Owner-only helper unchanged in round 2 |
+| `python3 -m unittest discover -s scripts/chatops/tests -p 'test_actions_train*recovery*.py'` | 76 run, 76 PASS |
+| `python3 -m unittest discover -s scripts/chatops/tests -p 'test_actions_train_addressed*.py'` | 51 run: 49 PASS, 1 FAIL, 1 skipped |
+| `python3 scripts/check_foundation.py` | PASS: 289 Markdown files, 168 draft API operations |
+| Five targeted in-memory regression mutations | All 5 detected by assertion failures; no mutated files written |
 
-The direct legacy run's first available refusal was:
-`PermissionError: [Errno 13] Permission denied: '/etc/gobadminton-slots/cursor-author.json'`.
-The call chain was legacy `execute_checked` → `preserved` → `installer.sha` →
-`Path.exists/stat`. Its later missing synthetic `state/patch.json` errors followed
-failure before the installation-intent write. This is a filesystem EACCES, not an
-OpenAI safety refusal, GitHub denial, model refusal, or Admission PM test failure.
-The protected read was not retried. The corrected test operation supplies a
-synthetic SHA before filesystem access; it neither reads the marker nor changes
-production verification. Reproduce that synthetic boundary with:
+The addressed failure is
+`test_actions_train_addressed_218.ActualTaskReviewWrapper.test_codex_only_wrapper_returns_review_contract_without_source_qa_parser`.
+It expects the literal `Role: qa.` in the prompt, while the existing context
+wrapper emits `ROLE qa; CONTEXT_PROFILE scoped_v1`. This failure also reproduces
+on source HEAD `c985b8e4271d123e9e7d0f120d616f2db83597d5`: the three admission Python
+modules were restored from `git show HEAD:<path>` into memory in an isolated
+non-root process, then the exact original test was run (1 run, 1 failure,
+0 errors, 0 skipped). No source checkout, assertions or context rules were
+changed. Fixing that baseline regression requires files outside this assignment;
+the mandatory addressed group is therefore **not PASS**. The existing skip is
+`NOT_TESTED: requires protected root/UID978 fixture`; this verification is non-root.
 
-```sh
-TMPDIR=/home/agentagency-dev/author-evidence-apm2-20261025 python3 - <<'PY'
-import hashlib, sys, unittest
-from pathlib import Path
-from unittest.mock import patch
-sys.path.insert(0, str(Path('scripts/chatops/tests').resolve()))
-sys.path.insert(0, str(Path('scripts/chatops/actions_train').resolve()))
-import test_actions_train_antigravity_entrypoint_patch as E
-real_sha = E.U.i.sha
-synthetic_pin = hashlib.sha256(b'synthetic immutable cursor marker, not installed data').hexdigest()
-def synthetic_sha(path):
-    if str(path) == '/etc/gobadminton-slots/cursor-author.json':
-        return synthetic_pin
-    return real_sha(path)
-with patch.object(E.U.i, 'sha', side_effect=synthetic_sha):
-    suite = unittest.defaultTestLoader.discover(
-        'scripts/chatops/tests', pattern='test_actions_train_antigravity*.py')
-    result = unittest.TextTestRunner().run(suite)
-    sys.exit(not result.wasSuccessful())
-PY
-```
-
-The test groups overlap; their counts are not a distinct-test total. New tests
-also cover immutable Owner authentication, all closed fields and ceilings,
-whole-lineage inheritance from a personal Owner package, missing/orphan model
-reservation receipts, expiry, SHA/hash/QA-contract mismatch, both-role intent
-recovery, runtime one-use reservation, predecessor tampering and repeat protection
-across delegation IDs. A changed comment ID cannot reissue the same role/candidate
-and byte-identical input; different path/revision aliases do not constitute new
-facts. HTTP response metadata such as reactions/avatars is excluded from stored
-authority so those changes cannot break idempotence.
+The mutation probes separately removed historical accounting, fetched before
+status receipt lookup, accepted a self-ID field, returned the old replay status,
+and removed refusal IDs. Each corresponding new regression test failed on its
+intended assertion. Production HTTPS fetching is exercised through a synthetic
+`HTTPSHandler.https_open`; socket connect/create_connection/getaddrinfo and model
+invocations remain blocked and their call counts are zero. Completed replay and
+status have zero transport calls as well. Manifest pins match the on-disk bytes
+of admission_pm.py, antigravity_qa_recovery.py and owner_package_admission.py.
 
 Independent exact-candidate QA, hosted CI, installed-state readback, real #29
 admission, provider calls and DEV verification: **NOT_TESTED**. Next permitted step

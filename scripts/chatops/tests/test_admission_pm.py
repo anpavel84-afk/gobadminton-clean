@@ -12,6 +12,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import urllib.request
+import urllib.response
+from email.message import Message
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'actions_train'))
@@ -67,7 +70,7 @@ class AdmissionPM(unittest.TestCase):
                             input_path=Q.ANALYSIS_INPUT, input_sha256=Q.ANALYSIS_INPUT_SHA256)
         self.qa_request = dict(source_base=self.base, source_head=self.head, input_revision=self.qa_revision,
                                input_path=self.qa_path, input_sha256=self.qa_sha)
-        self.delegation = dict(schema=P.SCHEMA, issue=29, repo_id=A.REPO_ID, delegation_comment=COMMENT,
+        self.delegation = dict(schema=P.SCHEMA, issue=29, repo_id=A.REPO_ID,
                                scope='DEV_OPS_ONLY', roles=list(P.ROLES), model=N.MODEL,
                                max_calls_per_package=5, max_total_calls=5, max_packages=5,
                                controller_sha=CONTROLLER, rules_sha256=A.RULES, expires_at='2099-01-01T00:00:00Z',
@@ -90,7 +93,7 @@ class AdmissionPM(unittest.TestCase):
         self.atomic(self.marker, dict(phase='canary', executor_uid=978))
         self.atomic(self.state / 'slot2.json', dict(generation=96, pending=None, operations={}))
         (self.state / 'controller.lock').touch()
-        self.budget.write_text('synthetic budget pin')
+        self.atomic(self.budget, dict(providers=dict(agy=dict(qa=2))))
         for name, value in (('STATE', self.state), ('POLICY', self.policy), ('BUDGET', self.budget)):
             self.stack.enter_context(patch.object(R, name, value))
         self.stack.enter_context(patch.object(N, 'MARKER', self.marker))
@@ -102,16 +105,16 @@ class AdmissionPM(unittest.TestCase):
         self.stack.enter_context(patch.object(R, 'trusted_tree'))
         self.stack.enter_context(patch.object(P.os, 'geteuid', return_value=0))
         self.stack.enter_context(patch.object(A, 'quiescent', side_effect=lambda _: R.read(self.state / 'slot2.json', 0)))
-        self.stack.enter_context(patch.object(P, 'fetch_delegation', side_effect=lambda _: copy.deepcopy(self.comment)))
-        for name, pin in ((Q.ADDRESSED_LEDGER, 'HIST'), (Q.SUPPLEMENT_LEDGER, 'SUP')):
-            path = self.state / name
-            path.write_text('synthetic immutable ' + name)
-            self.stack.enter_context(patch.object(A, pin, A.sha(path)))
-            self.stack.enter_context(patch.object(Q, 'OWNER_PACKAGE_OLD_ADDRESS_SHA' if pin == 'HIST'
-                                                  else 'OWNER_PACKAGE_OLD_SUPPLEMENT_SHA', A.sha(path)))
-        self.stack.enter_context(patch.object(A, 'BUDGET', A.sha(self.budget)))
-        # Deny actual network and any model launch, including on error paths.
-        self.net = self.stack.enter_context(patch.object(socket, 'socket', side_effect=AssertionError('network forbidden')))
+        self.history_operations = set()
+        self.set_history()
+        # Exercise production fetch/redirect/authentication code. Only the last
+        # HTTPS transport is synthetic; no fetch_delegation mock hides sockets.
+        self.http = self.stack.enter_context(patch.object(urllib.request.HTTPSHandler, 'https_open',
+                                                         side_effect=self.http_response))
+        self.sockets = [self.stack.enter_context(patch.object(target, name,
+                         side_effect=AssertionError('network forbidden')))
+                        for target, name in ((socket.socket, 'connect'),
+                                             (socket, 'create_connection'), (socket, 'getaddrinfo'))]
         real_run = subprocess.run
         def git_only(argv, *args, **kwargs):
             self.assertEqual(Path(argv[0]).name, 'git', argv)
@@ -126,16 +129,93 @@ class AdmissionPM(unittest.TestCase):
     def sync_comment(self):
         self.comment['body'] = P.PREFIX + canonical(self.delegation)
 
-    def run_pm(self, mode='--apply', role=None, request=None):
+    def http_response(self, req, *, data=None, code=200, location=None):
+        self.assertRegex(req.full_url, r'^https://api\.github\.com/repos/anpavel84-afk/'
+                                      r'gobadminton-clean/issues/comments/[1-9][0-9]*$')
+        self.assertEqual(req.get_method(), 'GET')
+        self.assertEqual(req.timeout, 10)
+        self.assertIsNone(req.data)
+        headers = Message()
+        if location:
+            headers['Location'] = location
+        raw = canonical(self.comment if data is None else data).encode()
+        response = urllib.response.addinfourl(io.BytesIO(raw), headers, req.full_url, code=code)
+        response.msg = 'synthetic response'
+        return response
+
+    def set_history(self, count=0, *, supplemental=0, qualification=0, oneshot=False, original=False):
+        """Real historical ledger schemas, synthetic charge identities and pins."""
+        slot = R.read(self.state / 'slot2.json', 0)
+        for operation in self.history_operations:
+            slot['operations'].pop(operation, None)
+        self.history_operations = set()
+        def charge(operation):
+            self.history_operations.add(operation)
+            slot['operations'][operation] = dict(finished_at=1, result=dict(status='unknown', safe_release=True))
+            return operation
+        def historical_grant(index, comment=6362661117):
+            head = hashlib.sha1(('synthetic history ' + str(index)).encode()).hexdigest()
+            base = self.base
+            if comment == Q.SUPPLEMENT_OWNER_COMMENT:
+                base, head = Q.FRESH_SOURCE_BASE, Q.FRESH_SOURCE_HEAD
+            return dict(schema=Q.ADDRESSED_SCHEMA, lineage=Q.ADDRESSED_LINEAGE, owner_comment=comment,
+                        role=P.ROLES[0], controller_revision=CONTROLLER, cli_sha256=N.AGY_SHA256,
+                        rules_sha256=A.RULES, base=base, head=head, input_revision=head,
+                        input_path=Q.ANALYSIS_INPUT, input_sha256=Q.ANALYSIS_INPUT_SHA256,
+                        timeout=1800, max_output_bytes=N.MAX_OUT, permission_mode=N.PERMISSION_MODE,
+                        input_transport='stream-json', ceiling=1)
+        rows = {}
+        for index in range(max(1, count)):
+            g = historical_grant(index)
+            op = charge(hashlib.sha256(('history ' + str(index)).encode()).hexdigest()) if index < count else None
+            rows[digest(g)] = dict(grant=g, operation=op)
+        self.atomic(self.state / Q.ADDRESSED_LEDGER, dict(schema=Q.ADDRESSED_SCHEMA,
+                    lineage=Q.ADDRESSED_LINEAGE, ceiling=4, used_calls=count, grants=rows))
+        g = historical_grant(0, Q.SUPPLEMENT_OWNER_COMMENT)
+        self.atomic(self.state / Q.SUPPLEMENT_LEDGER, dict(schema=Q.SUPPLEMENT_SCHEMA,
+                    owner_comment=Q.SUPPLEMENT_OWNER_COMMENT, ceiling=2, used_calls=supplemental,
+                    legacy_used_calls=3, grants={digest(g): dict(grant=g,
+                        operation=charge('9'*64) if supplemental else None)}))
+        for name, pin in ((Q.ADDRESSED_LEDGER, 'HIST'), (Q.SUPPLEMENT_LEDGER, 'SUP')):
+            checksum = A.sha(self.state / name)
+            self.stack.enter_context(patch.object(A, pin, checksum))
+            self.stack.enter_context(patch.object(Q, 'OWNER_PACKAGE_OLD_ADDRESS_SHA' if pin == 'HIST'
+                                                  else 'OWNER_PACKAGE_OLD_SUPPLEMENT_SHA', checksum))
+        self.stack.enter_context(patch.object(A, 'BUDGET', A.sha(self.budget)))
+        for name in (Q.LINEAGE, Q.GRANT_LEDGER, Q.FIXED):
+            (self.state / name).unlink(missing_ok=True)
+        if qualification:
+            value = dict(schema='GB_AGY_29_LINEAGE_V1', ceiling=2, used_calls=qualification,
+                         parent_task=Q.PARENT_TASK, allowed_successor=Q.SECOND_TASK)
+            charge(Q.PARENT_OPERATION)
+            if qualification == 2:
+                value['reserved_operation'] = charge(Q.SECOND_OPERATION)
+            self.atomic(self.state / Q.LINEAGE, value)
+            self.stack.enter_context(patch.object(Q, 'LINEAGE_RAW', A.sha(self.state / Q.LINEAGE)))
+        if original:
+            value = dict(operation=charge(Q.PARENT_OPERATION), result=dict(status='unknown'))
+            self.atomic(self.state / Q.FIXED, value)
+            self.stack.enter_context(patch.object(Q, 'PARENT_RESERVATION_DIGEST', digest(value)))
+        if oneshot:
+            self.atomic(self.state / Q.GRANT_LEDGER, dict(schema=Q.GRANT_SCHEMA, ceiling=1,
+                        used_calls=1, reserved_operation=charge(Q.THIRD_OPERATION), task_sha256=Q.THIRD_TASK))
+        self.atomic(self.state / 'slot2.json', slot)
+
+    def run_pm(self, mode='--apply', role=None, request=None, comment_id=COMMENT):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             P.main([mode, '--issue', '29', '--role', role or P.ROLES[0],
-                    '--delegation-comment-id', str(COMMENT), '--request-json', canonical(request or self.request)])
+                    '--delegation-comment', str(comment_id), '--request-json', canonical(request or self.request)])
         lines = out.getvalue().splitlines()
         self.assertEqual(len(lines), 1)
         value = json.loads(lines[0])
         self.assertEqual(value['model_calls'], 0)
-        self.net.assert_not_called()
+        for blocked in self.sockets:
+            blocked.assert_not_called()
+        self.assertIn(value['status'], ('GRANTED', 'BLOCKED', 'NEEDS_OWNER'))
+        self.assertEqual(value['admission_id'], P.identity(29, role or P.ROLES[0], comment_id, request or self.request))
+        self.assertTrue(value['reason'])
+        self.assertIs(type(value['replayed']), bool)
         self.model.assert_not_called()
         return value
 
@@ -181,13 +261,19 @@ class AdmissionPM(unittest.TestCase):
 
     def test_same_request_idempotent_even_after_spending(self):
         first = self.run_pm()
+        self.assertFalse(first['replayed'])
         self.consume_analysis(first)
         files = {p.name: p.read_bytes() for p in self.state.iterdir()}
+        # No transport call is permitted for either replay or status.
+        self.http.reset_mock()
+        self.http.side_effect = AssertionError('offline replay fetched')
         again = self.run_pm()
-        self.assertEqual(again['status'], 'ALREADY_GRANTED', again)
+        self.assertEqual(again['status'], 'GRANTED', again)
+        self.assertTrue(again['replayed'])
         self.assertEqual(first['admission_id'], again['admission_id'])
         self.assertEqual(files, {p.name: p.read_bytes() for p in self.state.iterdir()})
-        self.assertEqual(self.run_pm('--status')['status'], 'ALREADY_GRANTED')
+        self.assertEqual(self.run_pm('--status')['status'], 'GRANTED')
+        self.http.assert_not_called()
 
     def test_dry_run_no_writes_and_apply_same_digest(self):
         before = {p.name: p.read_bytes() for p in self.state.iterdir()}
@@ -197,6 +283,161 @@ class AdmissionPM(unittest.TestCase):
         self.assertEqual(before, {p.name: p.read_bytes() for p in self.state.iterdir()})
         applied = self.run_pm()
         self.assertEqual(applied['admission_id'], dry['admission_id'])
+
+    def assert_historical_admission(self, used):
+        before = {name: (self.state / name).read_bytes() for name in
+                  (Q.ADDRESSED_LEDGER, Q.SUPPLEMENT_LEDGER, Q.LINEAGE, Q.GRANT_LEDGER, Q.FIXED)
+                  if (self.state / name).exists()}
+        admitted = self.run_pm()
+        self.assertEqual(admitted['status'], 'GRANTED', admitted)
+        self.assertEqual(admitted['remaining_budget']['used_calls'], used)
+        self.assertEqual(admitted['remaining_budget']['package_calls'], 5-used)
+        self.assertEqual(admitted['remaining_budget']['total_calls'], 5-used)
+        package = R.read(Path(admitted['package_path']), 0)
+        self.assertEqual(package['used_calls'], used)
+        self.assertEqual(package['delegation']['inherited_calls'], used)
+        grant = next(iter(package['grants'].values()))['grant']
+        self.assertEqual(Q.owner_package_read(R, grant), package)
+        self.assertEqual(before, {name: (self.state/name).read_bytes() for name in before})
+        return admitted
+
+    def test_historical_one_of_one_starts_at_one(self):
+        self.set_history(oneshot=True)
+        self.assert_historical_admission(1)
+
+    def test_historical_two_of_two_unknown_charges_stay_spent(self):
+        # The original reservation duplicates the first lineage charge. Count
+        # it once, including when both UNKNOWNs have been safely released.
+        self.set_history(qualification=2, original=True)
+        self.assert_historical_admission(2)
+
+    def test_historical_spend_survives_all_seven_intent_crash_points(self):
+        self.set_history(qualification=2, original=True)
+        self.test_crash_after_every_durable_write_is_idempotent(historical=2)
+
+    def test_runtime_spend_uses_the_same_historical_accounting(self):
+        self.set_history(qualification=2, original=True)
+        self.test_runtime_reservation_retains_inherited_calls_and_prevents_second_spend(historical=2)
+
+    def test_historical_three_of_three_starts_at_three(self):
+        self.set_history(qualification=2, oneshot=True, original=True)
+        self.assert_historical_admission(3)
+
+    def test_historical_addressed_and_supplement_charges_are_inherited(self):
+        self.set_history(count=3, supplemental=1)
+        self.assert_historical_admission(4)
+
+    def test_historical_and_dynamic_and_delegated_spend_is_counted_once(self):
+        self.set_history(qualification=2, original=True)
+        # This existing test exercises a personal Owner package followed by
+        # delegated analysis and QA. Only expected cumulative totals differ.
+        self.test_previous_personal_owner_package_calls_are_inherited(historical=2)
+
+    def test_history_at_or_over_per_package_and_total_ceiling_needs_owner(self):
+        self.set_history(qualification=2, oneshot=True)
+        for per_package, total in ((3, 5), (2, 5), (5, 3), (5, 2)):
+            with self.subTest(per_package=per_package, total=total):
+                self.delegation.update(max_calls_per_package=per_package, max_total_calls=total)
+                self.sync_comment()
+                value = self.run_pm()
+                self.assertEqual(value['status'], 'NEEDS_OWNER', value)
+                self.assertEqual(value['remaining_budget']['used_calls'], 3)
+                self.assertFalse(list(self.state.glob(P.RECEIPT_PREFIX+'*.json')))
+
+    def test_history_at_five_cannot_be_reset_by_new_comment_or_larger_total(self):
+        self.set_history(count=4, supplemental=1)
+        self.comment['id'] = COMMENT+1
+        self.delegation['max_total_calls'] = 100
+        self.sync_comment()
+        value = self.run_pm(comment_id=COMMENT+1)
+        self.assertEqual(value['status'], 'NEEDS_OWNER', value)
+        self.assertEqual(value['remaining_budget']['used_calls'], 5)
+
+    def test_historical_pin_and_counter_tampering_refused(self):
+        self.set_history(count=2)
+        path = self.state / Q.ADDRESSED_LEDGER
+        raw = path.read_bytes()
+        path.write_bytes(raw+b' ')
+        self.assertEqual(self.run_pm()['status'], 'BLOCKED')
+        path.write_bytes(raw)
+        value = R.read(path, 0)
+        value['used_calls'] = 0
+        self.atomic(path, value)
+        # Even a synthetic new pin cannot make a counter disagree with its rows.
+        with patch.object(A, 'HIST', A.sha(path)):
+            self.assertEqual(self.run_pm()['status'], 'BLOCKED')
+
+    def test_unresolved_historical_unknown_blocks_without_refunding(self):
+        self.set_history(qualification=2)
+        slot = R.read(self.state / 'slot2.json', 0)
+        slot['operations'][Q.SECOND_OPERATION]['result']['safe_release'] = False
+        self.atomic(self.state / 'slot2.json', slot)
+        value = self.run_pm()
+        self.assertEqual(value['status'], 'BLOCKED', value)
+        self.assertIn('unresolved UNKNOWN', value['reason'])
+        self.assertEqual(P.historical_operations(R, slot), {Q.PARENT_OPERATION, Q.SECOND_OPERATION})
+
+    def test_offline_status_before_any_receipt_never_fetches(self):
+        self.http.side_effect = AssertionError('status fetched')
+        value = self.run_pm('--status')
+        self.assertEqual(value['status'], 'BLOCKED')
+        self.assertFalse(value['replayed'])
+        self.http.assert_not_called()
+
+    def test_production_fetch_once_per_new_dry_run_and_apply_exact_id_timeout(self):
+        for mode in ('--dry-run', '--apply'):
+            self.http.reset_mock()
+            value = self.run_pm(mode)
+            self.assertEqual(value['status'], 'GRANTED', value)
+            self.http.assert_called_once()
+            req = self.http.call_args.args[0]
+            self.assertEqual(req.full_url, 'https://api.github.com/repos/anpavel84-afk/'
+                             'gobadminton-clean/issues/comments/' + str(COMMENT))
+            self.assertEqual(req.timeout, 10)
+
+    def test_fetch_rejects_redirect_without_following_any_host_or_retrying(self):
+        for location in ('https://example.invalid/stolen', 'http://api.github.com/elsewhere',
+                         A.ISSUE_URL, 'https://api.github.com/repos/another/issues/comments/1'):
+            with self.subTest(location=location):
+                with patch.object(urllib.request.HTTPSHandler, 'https_open',
+                     side_effect=lambda req: self.http_response(req, code=302, location=location)) as transport:
+                    value = self.run_pm()
+                    self.assertEqual(value['status'], 'BLOCKED', value)
+                    self.assertIn('redirect', value['reason'])
+                    transport.assert_called_once()
+
+    def test_fetch_failure_and_oversized_http_response_have_no_retry(self):
+        with patch.object(urllib.request.HTTPSHandler, 'https_open', side_effect=OSError('offline')) as transport:
+            self.assertEqual(self.run_pm()['status'], 'NEEDS_OWNER')
+            transport.assert_called_once()
+        self.comment['padding'] = 'x'*32769
+        self.http.reset_mock()
+        self.assertEqual(self.run_pm()['status'], 'BLOCKED')
+        self.http.assert_called_once()
+
+    def test_self_id_is_rejected_and_posted_id_is_bound_in_receipt_and_digest(self):
+        self.delegation['delegation_comment'] = COMMENT
+        self.sync_comment()
+        refused = self.run_pm()
+        self.assertEqual(refused['status'], 'BLOCKED', refused)
+        del self.delegation['delegation_comment']
+        self.sync_comment()
+        first = self.run_pm('--dry-run')
+        self.comment['id'] = COMMENT+1  # Same body, a different posted comment.
+        second = self.run_pm(comment_id=COMMENT+1)
+        self.assertEqual(second['status'], 'GRANTED', second)
+        self.assertNotEqual(first['admission_id'], second['admission_id'])
+        receipt = R.read(Path(second['receipt_path']), 0)
+        self.assertEqual(receipt['owner_comment'], COMMENT+1)
+        self.assertEqual(receipt['comment']['id'], COMMENT+1)
+        self.assertNotIn('delegation_comment', P.loads(receipt['comment']['body'][len(P.PREFIX):]))
+
+    def test_refusal_digest_is_present_before_root_and_request_validation(self):
+        with patch.object(P.os, 'geteuid', return_value=1000):
+            self.assertEqual(self.run_pm()['status'], 'BLOCKED')
+        value = self.run_pm(request=dict(self.request, scope='PROD'))
+        self.assertEqual(value['status'], 'BLOCKED')
+        self.assertTrue(value['needs_review'])
 
     def test_exhausted_lineage_budget_not_reset(self):
         first = self.run_pm()
@@ -336,7 +577,7 @@ class AdmissionPM(unittest.TestCase):
         self.atomic(P.package_path(P.identity(29, P.ROLES[0], COMMENT, self.request)), dict(schema='fake'))
         self.assertEqual(self.run_pm()['status'], 'BLOCKED')
 
-    def test_crash_after_every_durable_write_is_idempotent(self):
+    def test_crash_after_every_durable_write_is_idempotent(self, historical=0):
         original = {p.name: p.read_bytes() for p in self.state.iterdir()}
         policy_raw, marker_raw = self.policy.read_bytes(), self.marker.read_bytes()
         for crash_at in range(1, 8):
@@ -357,13 +598,18 @@ class AdmissionPM(unittest.TestCase):
                 with patch.object(R, 'atomic', side_effect=interrupted):
                     with self.assertRaises(RuntimeError):
                         self.run_pm()
+                fetches = self.http.call_count
+                status = self.run_pm('--status')
+                self.assertEqual(status['status'], 'GRANTED' if crash_at == 7 else 'BLOCKED', status)
                 recovered = self.run_pm()
-                self.assertEqual(recovered['status'], 'ALREADY_GRANTED', recovered)
+                self.assertEqual(recovered['status'], 'GRANTED', recovered)
+                self.assertTrue(recovered['replayed'])
+                self.assertEqual(self.http.call_count, fetches)
                 self.assertEqual(R.read(self.policy, 0)['mode'], 'active')
                 self.assertEqual(R.read(self.state / 'slot2.json', 0)['generation'], 97)
                 self.assertEqual(R.read(Path(recovered['receipt_path']), 0)['phase'], 'complete')
                 self.assertEqual(len(list(self.state.glob(Q.OWNER_PACKAGE_LEDGER_PREFIX+'delegated-*.json'))), 1)
-                self.assertEqual(R.read(Path(recovered['package_path']), 0)['used_calls'], 0)
+                self.assertEqual(R.read(Path(recovered['package_path']), 0)['used_calls'], historical)
 
     def test_qa_intent_recovery_never_recounts_prior_analysis(self):
         first = self.run_pm()
@@ -389,7 +635,7 @@ class AdmissionPM(unittest.TestCase):
                     with self.assertRaises(RuntimeError):
                         self.run_pm(role=P.ROLES[1], request=self.qa_request)
                 recovered = self.run_pm(role=P.ROLES[1], request=self.qa_request)
-                self.assertEqual(recovered['status'], 'ALREADY_GRANTED', recovered)
+                self.assertEqual(recovered['status'], 'GRANTED', recovered)
                 self.assertEqual(R.read(Path(recovered['package_path']), 0)['used_calls'], 1)
                 self.assertEqual(R.read(self.state/'slot2.json', 0)['generation'], 98)
                 self.assertEqual(Path(first['package_path']).read_bytes(), original[Path(first['package_path']).name])
@@ -418,7 +664,7 @@ class AdmissionPM(unittest.TestCase):
         with self.assertRaises(Refused):
             Q.owner_package_ledger(changed)
 
-    def test_previous_personal_owner_package_calls_are_inherited(self):
+    def test_previous_personal_owner_package_calls_are_inherited(self, historical=0):
         # Synthetic pre-delegation enrollment, using the unchanged two-role schema.
         grants = []
         for role in P.ROLES:
@@ -453,12 +699,12 @@ class AdmissionPM(unittest.TestCase):
         prior_bytes = path.read_bytes()
         admitted = self.run_pm()
         self.assertEqual(admitted['status'], 'GRANTED', admitted)
-        self.assertEqual(R.read(Path(admitted['package_path']), 0)['used_calls'], 1)
+        self.assertEqual(R.read(Path(admitted['package_path']), 0)['used_calls'], historical+1)
         self.consume_analysis(admitted)
         qa = self.run_pm(role=P.ROLES[1], request=self.qa_request)
         self.assertEqual(qa['status'], 'GRANTED', qa)
         value = R.read(Path(qa['package_path']), 0)
-        self.assertEqual(value['used_calls'], 2)  # not 3: inherited counters are not re-summed
+        self.assertEqual(value['used_calls'], historical+2)  # inherited counters are not re-summed
         self.assertEqual(len(value['delegation']['prior_packages']), 2)
         self.assertEqual(path.read_bytes(), prior_bytes)
 
@@ -467,7 +713,6 @@ class AdmissionPM(unittest.TestCase):
         self.assertEqual(first['status'], 'GRANTED', first)
         comment_id = COMMENT+1
         self.comment['id'] = comment_id
-        self.delegation['delegation_comment'] = comment_id
         self.sync_comment()
         with self.assertRaisesRegex(Refused, 'unchanged candidate/role/input'):
             P.run('--apply', 29, P.ROLES[0], comment_id, self.request)
@@ -490,23 +735,23 @@ class AdmissionPM(unittest.TestCase):
         self.assertEqual(value['status'], 'BLOCKED', value)
         self.assertIn('orphan model reservation', value['reason'])
 
-    def test_runtime_reservation_retains_inherited_calls_and_prevents_second_spend(self):
+    def test_runtime_reservation_retains_inherited_calls_and_prevents_second_spend(self, historical=0):
         first = self.run_pm()
         self.consume_analysis(first)
         qa = self.run_pm(role=P.ROLES[1], request=self.qa_request)
         self.assertEqual(qa['status'], 'GRANTED', qa)
         q = N.qualification_descriptor(R.read(self.marker, 0))
         slot = R.read(self.state/'slot2.json', 0)
-        historical = dict(finished_at=1, result=dict(status='unknown', safe_release=True))
-        slot['operations'][Q.OWNER_PACKAGE_ORIGINAL_UNKNOWN] = historical
+        historical_operation = dict(finished_at=1, result=dict(status='unknown', safe_release=True))
+        slot['operations'][Q.OWNER_PACKAGE_ORIGINAL_UNKNOWN] = historical_operation
         self.atomic(self.state/'slot2.json', slot)
         self.atomic(self.state/Q.ADDRESSED_RECONCILIATION,
                     dict(phase='complete', third_operation_sha256=Q.THIRD_DIGEST))
         prior_bytes = Path(first['package_path']).read_bytes()
-        with patch.object(Q, 'addressed_history'), patch.object(Q, 'OWNER_PACKAGE_ORIGINAL_UNKNOWN_DIGEST', digest(historical)):
+        with patch.object(Q, 'addressed_history'), patch.object(Q, 'OWNER_PACKAGE_ORIGINAL_UNKNOWN_DIGEST', digest(historical_operation)):
             Q.reserve_addressed(R, q, 'c'*64)
             value = R.read(Path(qa['package_path']), 0)
-            self.assertEqual(value['used_calls'], 2)
+            self.assertEqual(value['used_calls'], historical+2)
             self.assertEqual(next(iter(value['grants'].values()))['operation'], 'c'*64)
             with self.assertRaises(Refused):
                 Q.reserve_addressed(R, q, 'd'*64)
@@ -542,7 +787,7 @@ class AdmissionPM(unittest.TestCase):
         self.assertIn('QA source/test contract', value['reason'])
 
     def test_no_delegation_and_nonroot_and_lock_contention(self):
-        with patch.object(P, 'fetch_delegation', side_effect=P.NeedsOwner('no delegation')):
+        with patch.object(urllib.request.HTTPSHandler, 'https_open', side_effect=OSError('synthetic offline')):
             self.assertEqual(self.run_pm()['status'], 'NEEDS_OWNER')
         with patch.object(P.os, 'geteuid', return_value=1000):
             value = self.run_pm()
@@ -576,14 +821,8 @@ class AdmissionPM(unittest.TestCase):
         response = copy.deepcopy(self.comment)
         response['reactions'] = {'total_count': 12}
         response['user']['avatar_url'] = 'https://example.invalid/mutable-avatar'
-        class Response:
-            status = 200
-            def __enter__(self): return self
-            def __exit__(self, *_): pass
-            def read(self, size): return canonical(response).encode()[:size]
-        # Explicitly exercise the production fetcher, mocking only HTTP transport.
-        import urllib.request
-        with patch.object(urllib.request, 'urlopen', return_value=Response()) as transport:
+        with patch.object(urllib.request.HTTPSHandler, 'https_open',
+                          side_effect=lambda req: self.http_response(req, data=response)) as transport:
             comment = self.real_fetch(COMMENT)
             self.assertEqual(comment, self.comment)
             self.assertEqual(P.validate_delegation(comment, COMMENT, controller=CONTROLLER, now=NOW), self.delegation)

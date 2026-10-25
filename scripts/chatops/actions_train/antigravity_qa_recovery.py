@@ -423,12 +423,15 @@ def owner_package_read(r,g):
          and hashlib.sha256((r.STATE/SUPPLEMENT_LEDGER).read_bytes()).hexdigest()==OWNER_PACKAGE_OLD_SUPPLEMENT_SHA,
          'old ledgers or package registration changed')
     if 'delegation' in value:
+        from admission_pm import historical_operations
         prior_rows=[]
         for pin in value['delegation']['prior_packages']:
             raw_pin(r,r.STATE/pin['path'],pin['sha256'])
             prior_rows.extend(owner_package_ledger(r.read(r.STATE/pin['path'],0))['grants'].values())
         spent=[row['operation'] for row in prior_rows if row['operation'] is not None]
-        need(len(spent)==len(set(spent))==value['delegation']['inherited_calls'],
+        historical=historical_operations(r,r.read(r.STATE/'slot2.json',0))
+        need(len(spent)==len(set(spent)) and not historical.intersection(spent)
+             and len(historical)+len(spent)==value['delegation']['inherited_calls'],
              'delegated lineage accounting drift')
         analysis=value['delegation']['analysis']
         need(analysis is None or analysis in prior_rows,'delegated analysis not in pinned lineage')

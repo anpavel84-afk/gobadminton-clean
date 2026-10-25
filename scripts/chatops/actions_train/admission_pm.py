@@ -16,7 +16,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import owner_package_admission as A
-from core import Refused, digest, loads, need
+from core import Refused, _NoRedirect, digest, loads, need
 
 R, Q, N = A.R, A.Q, A.N
 PREFIX = 'GOBADMINTON_ADMISSION_DELEGATION_V1\n'
@@ -24,7 +24,7 @@ SCHEMA = 'GB_ADMISSION_DELEGATION_V1'
 PROVENANCE = 'GB_ADMISSION_PM_PROVENANCE_V1'
 TRANSACTION = 'GB_AGY_29_ADMISSION_PM_TRANSACTION_V1'
 ROLES = ('technical_pm_product_analyst', 'independent_qa')
-FIELDS = {'schema', 'issue', 'repo_id', 'delegation_comment', 'scope', 'roles',
+FIELDS = {'schema', 'issue', 'repo_id', 'scope', 'roles',
           'model', 'max_calls_per_package', 'max_total_calls', 'max_packages',
           'controller_sha', 'rules_sha256', 'expires_at', 'allowed_input_paths'}
 REQUEST_FIELDS = {'source_base', 'source_head', 'input_revision', 'input_path', 'input_sha256'}
@@ -71,8 +71,7 @@ def validate_delegation(comment, comment_id, *, controller=None, now=None):
          'delegation JSON not canonical')
     need(type(v) is dict and set(v) == FIELDS, 'unexpected delegation fields')
     need(v['schema'] == SCHEMA and type(v['issue']) is int and v['issue'] == 29
-         and type(v['repo_id']) is int and v['repo_id'] == A.REPO_ID
-         and type(v['delegation_comment']) is int and v['delegation_comment'] == comment_id,
+         and type(v['repo_id']) is int and v['repo_id'] == A.REPO_ID,
          'delegation identity drift')
     authority(v['scope'] == 'DEV_OPS_ONLY', 'scope outside DEV_OPS_ONLY')
     authority(type(v['roles']) is list and 1 <= len(v['roles']) <= 2
@@ -110,14 +109,16 @@ def validate_delegation(comment, comment_id, *, controller=None, now=None):
 
 
 def fetch_delegation(comment_id):
-    """Same public read-only GitHub authentication as personal Owner comments."""
+    """One bounded public GET of this comment only; no proxies, redirects or retries."""
     import urllib.request
+    need(type(comment_id) is int and comment_id > 0, 'invalid delegation comment id')
     url = 'https://api.github.com/repos/anpavel84-afk/gobadminton-clean/issues/comments/' + str(comment_id)
     req = urllib.request.Request(url, headers={'Accept': 'application/vnd.github+json',
                                              'User-Agent': 'GoBadminton-admission-pm-v1'})
     try:
-        with urllib.request.urlopen(req, timeout=15) as response:
-            need(response.status == 200, 'delegation HTTP validation failed')
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
+        with opener.open(req, timeout=10) as response:
+            need(response.status == 200 and response.geturl() == url, 'delegation HTTP validation failed')
             raw = response.read(32769)
         need(len(raw) <= 32768, 'delegation too large')
         data = loads(raw)
@@ -204,13 +205,64 @@ def receipt_path(admission_id):
     return R.STATE / (RECEIPT_PREFIX + admission_id + '.json')
 
 
-def lineage(slot, *, exclude=None):
-    """Read every dynamic Owner package; count unique reservations, not cumulative counters.
+def historical_operations(r, slot):
+    """Union of charges in existing historical journals, never their cumulative totals.
 
-    Pre-package addressed/supplement budgets are separately pinned historical
-    allowances, never reinterpreted or rewritten as new package spending.
+    HIST/SUP are distinct per-grant charges. The qualification lineage includes
+    its original reservation; the one-shot is separate. BUDGET is a pinned limit
+    configuration, not another usage journal. No historical record is written.
+    Also used by the existing delegated ledger reader before runtime reservation.
     """
-    pins, packages, spent = [], [], set()
+    spent = set()
+    for filename, checksum, validator in (
+        (Q.ADDRESSED_LEDGER, A.HIST, Q.addressed_ledger),
+        (Q.SUPPLEMENT_LEDGER, A.SUP, Q.supplemental_ledger),
+    ):
+        path = r.STATE / filename
+        Q.raw_pin(r, path, checksum)
+        value = validator(r.read(path, 0))
+        operations = [row['operation'] for row in value['grants'].values() if row['operation'] is not None]
+        need(len(operations) == len(set(operations)) == value['used_calls'], 'historical charge/count drift')
+        need(not spent.intersection(operations), 'duplicate historical grant charge')
+        spent.update(operations)
+    Q.raw_pin(r, getattr(r, 'BUDGET', R.BUDGET), A.BUDGET)
+    path = r.STATE / Q.LINEAGE
+    if path.exists():
+        Q.raw_pin(r, path, Q.LINEAGE_RAW)
+        value = r.read(path, 0)
+        need(value.get('schema') == 'GB_AGY_29_LINEAGE_V1' and value.get('ceiling') == 2
+             and type(value.get('used_calls')) is int and value['used_calls'] in (1, 2)
+             and value.get('parent_task') == Q.PARENT_TASK, 'historical qualification lineage drift')
+        spent.add(Q.PARENT_OPERATION)
+        if value['used_calls'] == 2:
+            need(value.get('reserved_operation') == Q.SECOND_OPERATION, 'missing qualification charge')
+            spent.add(value['reserved_operation'])
+    else:
+        need(not {Q.PARENT_OPERATION, Q.SECOND_OPERATION}.intersection(slot['operations']),
+             'missing historical qualification lineage')
+    path = r.STATE / Q.FIXED
+    if path.exists():
+        value = r.read(path, 0)
+        need(digest(value) == Q.PARENT_RESERVATION_DIGEST and value.get('operation') == Q.PARENT_OPERATION,
+             'historical original reservation drift')
+        spent.add(value['operation'])  # Already included when the lineage exists.
+    path = r.STATE / Q.GRANT_LEDGER
+    if path.exists():
+        value = r.read(path, 0)
+        need(value.get('schema') == Q.GRANT_SCHEMA and value.get('ceiling') == 1
+             and type(value.get('used_calls')) is int and value['used_calls'] == 1
+             and value.get('task_sha256') == Q.THIRD_TASK
+             and value.get('reserved_operation') == Q.THIRD_OPERATION, 'historical one-shot charge drift')
+        spent.add(value['reserved_operation'])
+    else:
+        need(Q.THIRD_OPERATION not in slot['operations'], 'missing historical one-shot ledger')
+    need(all(operation in slot['operations'] for operation in spent), 'historical charged operation missing')
+    return spent
+
+
+def lineage(slot, *, exclude=None):
+    """Read the whole lineage; count unique charges, not cumulative counters."""
+    pins, packages, spent = [], [], historical_operations(R, slot)
     for path in sorted(R.STATE.glob(Q.OWNER_PACKAGE_LEDGER_PREFIX + '*.json')):
         if path == exclude or path.name.startswith(A.RECEIPT_PREFIX):
             continue
@@ -349,30 +401,35 @@ def verify_materialization(grant):
         raise Refused('source HEAD or immutable input unavailable; native Git precheck failed') from None
 
 
-def result(status, *, admission_id=None, reason=None, remaining=None, dry_run=False):
+def result(status, *, admission_id, reason, remaining=None, dry_run=False, replayed=False):
     return dict(status=status, admission_id=admission_id,
                 package_path=str(package_path(admission_id)) if admission_id else None,
                 receipt_path=str(receipt_path(admission_id)) if admission_id else None,
                 reason=reason, remaining_budget=remaining, model_calls=0,
-                needs_review=status in ('BLOCKED', 'NEEDS_OWNER'), dry_run=dry_run)
+                needs_review=status in ('BLOCKED', 'NEEDS_OWNER'), dry_run=dry_run, replayed=replayed)
 
 
 def run(mode, issue, role, comment_id, request):
     """Caller holds the receiver lock; all state access uses trusted receiver helpers."""
-    authority(type(comment_id) is int and comment_id > 0, 'no valid delegation comment')
     admission_id = identity(issue, role, comment_id, request)
     path, receipt = package_path(admission_id), receipt_path(admission_id)
+    # Local idempotence comes before any remote verification, even after expiry
+    # or when GitHub is unavailable. Receipts bind the actual posted comment ID.
+    existing = R.read(receipt, 0) if receipt.exists() else None
+    if mode == '--status' and existing is None:
+        return result('BLOCKED', admission_id=admission_id, reason='request not registered')
+    authority(type(comment_id) is int and comment_id > 0, 'no valid delegation comment')
     policy = R.read(R.POLICY, 0)
     controller = policy['controller_sha']
     authority(hexstr(controller, 40), 'wrong installed controller')
-    comment = fetch_delegation(comment_id)
-    v = validate_delegation(comment, comment_id, controller=controller, now=dt.datetime.now(dt.timezone.utc))
-    validate_request(issue, role, request, v)
-    existing = R.read(receipt, 0) if receipt.exists() else None
     if existing is not None:
+        comment = existing.get('comment')
+        v = validate_delegation(comment, comment_id, controller=controller)
+        validate_request(issue, role, request, v)
         need(existing.get('schema') == TRANSACTION and existing.get('admission_id') == admission_id
              and existing.get('controller_sha') == controller and existing.get('request') == request
-             and existing.get('comment') == comment and existing.get('phase') in ('intent', 'complete'),
+             and existing.get('owner_comment') == comment_id and existing.get('role') == role
+             and existing.get('phase') in ('intent', 'complete'),
              'foreign or changed admission intent')
         need(policy in (existing['policy_before'], dict(existing['policy_before'], mode='disabled')),
              'policy changed since admission intent')
@@ -380,13 +437,20 @@ def run(mode, issue, role, comment_id, request):
             package = Q.owner_package_ledger(R.read(path, 0))
             need(package['delegation']['admission_id'] == admission_id
                  and package['delegation']['comment'] == comment, 'completed package drift')
-            return result('ALREADY_GRANTED', admission_id=admission_id, reason='same request already registered',
-                          remaining=existing['remaining_budget'])
+            return result('GRANTED', admission_id=admission_id, reason='same request already registered',
+                          remaining=existing['remaining_budget'], replayed=True)
     if mode == '--status':
         return result('BLOCKED', admission_id=admission_id,
                       reason='intent needs --apply recovery' if existing else 'request not registered')
     if existing:
         need(mode == '--apply', 'dry-run cannot resume intent')
+        # Recovery may complete only authority that is still valid. Inspection
+        # and completed replay above never acquire or renew any authority.
+        validate_delegation(comment, comment_id, controller=controller, now=dt.datetime.now(dt.timezone.utc))
+    else:
+        comment = fetch_delegation(comment_id)
+        v = validate_delegation(comment, comment_id, controller=controller, now=dt.datetime.now(dt.timezone.utc))
+        validate_request(issue, role, request, v)
     slot = A.quiescent(controller)
     marker = R.read(N.MARKER, 0)
     need(marker.get('phase') == 'canary' and marker.get('executor_uid') == 978,
@@ -441,7 +505,7 @@ def run(mode, issue, role, comment_id, request):
     A.commit_transaction(existing=existing, receipt=receipt, transaction=transaction, policy=policy, action=action,
                          path=path, package=package, newmarker=newmarker, newslot=newslot, q=q,
                          now_slot=now_slot, now_marker=now_marker, controller=controller)
-    return result('ALREADY_GRANTED' if existing else 'GRANTED', admission_id=admission_id,
+    return result('GRANTED', admission_id=admission_id, replayed=existing is not None,
                   reason='recovered exact intent' if existing else 'finite package registered', remaining=remaining)
 
 
@@ -452,21 +516,27 @@ def main(argv=None):
         modes.add_argument(mode, dest='mode', action='store_const', const=mode)
     parser.add_argument('--issue', type=int, required=True)
     parser.add_argument('--role', required=True)
-    parser.add_argument('--delegation-comment-id', type=int, required=True)
+    parser.add_argument('--delegation-comment', '--delegation-comment-id', dest='delegation_comment_id',
+                        type=int, required=True)
     parser.add_argument('--request-json', required=True, help='JSON object, not a filename')
     args = parser.parse_args(argv)
     lock = None
+    # A malformed JSON request still has a stable refusal identity. Valid JSON
+    # uses the same canonical request digest as enrollment and replay.
+    admission_id = identity(args.issue, args.role, args.delegation_comment_id, args.request_json)
     try:
+        request = loads(args.request_json)
+        admission_id = identity(args.issue, args.role, args.delegation_comment_id, request)
         need(os.geteuid() == 0, 'trusted root required')
         R.trusted_tree(Path(__file__).resolve())
         # Same mutex used by owner_package_admission and receiver. No new lock domain.
         lock = os.open(R.STATE / 'controller.lock', os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC)
         import fcntl
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        value = run(args.mode, args.issue, args.role, args.delegation_comment_id, loads(args.request_json))
+        value = run(args.mode, args.issue, args.role, args.delegation_comment_id, request)
     except (Refused, N.ReviewError, ValueError, TypeError, KeyError, OSError) as error:
         value = result('NEEDS_OWNER' if isinstance(error, NeedsOwner) else 'BLOCKED',
-                       reason=str(error), remaining=getattr(error, 'remaining', None))
+                       admission_id=admission_id, reason=str(error), remaining=getattr(error, 'remaining', None))
     finally:
         if lock is not None:
             os.close(lock)
