@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import type { UnifiedSnapshot, UnifiedRow, UnifiedDistance } from "@gobadminton/contracts";
-import { UnifiedDirectoryController, distanceText, scopedCatalogCursor } from "../src/lib/unified-directory";
+import type { UnifiedSnapshot, UnifiedRow, UnifiedDistance, UnifiedPreview } from "@gobadminton/contracts";
+import { UnifiedDirectoryController, distanceText, scopedCatalogCursor, liveUnifiedPreview } from "../src/lib/unified-directory";
 import { candidateMapAllowed, candidateMapConfigAllowed, MOSCOW_BUNDLE, allowedMapResource } from "../src/lib/radar-map-assets";
 import type { RadarConfig } from "../src/lib/unified-directory";
 import type { Me } from "../src/lib/consumer-types";
@@ -9,7 +9,7 @@ const now = Date.parse("2030-01-01T00:00:00Z");
 const ok = (data: unknown) => ({ ok: true as const, status: 200, data });
 const row = (id: string) => ({ publicPlayerId: id, projection: "directory", player: { publicPlayerId: id, displayName: id }, radar: null }) as UnifiedRow;
 function snapshot(items: UnifiedRow[] = [row("first")]): UnifiedSnapshot {
-  return { contractVersion: "players-unified-radar-v1", cityId: MOSCOW_BUNDLE.cityId, exposureMode: "synthetic_demo", generatedAt: new Date(now).toISOString(), validUntil: new Date(now + 45000).toISOString(), query: { queryRef: "context", originState: "none", originRef: null, ordering: "radar_city_then_directory", asOf: new Date(now).toISOString() }, items, map: { availability: "missing", mapId: null, version: null }, page: { returnedCount: items.length, rankStart: 1, rankEnd: items.length, hasMore: true, nextCursor: "page2" } } as UnifiedSnapshot;
+  return { policyVersion: "radar-geographic-sharing-v2", regionId: "moscow", refreshAfterSeconds: 30, totals: { matchingTotal: items.length, radarTotal: items.filter(row => row.radar).length, ordinaryOnlyTotal: items.filter(row => !row.radar).length, completeness: "exact_at_asOf" }, contractVersion: "players-unified-radar-v1", cityId: MOSCOW_BUNDLE.cityId, exposureMode: "synthetic_demo", generatedAt: new Date(now).toISOString(), validUntil: new Date(now + 45000).toISOString(), query: { queryRef: "context", originState: "none", originRef: null, ordering: "radar_city_then_directory", asOf: new Date(now).toISOString() }, items, map: { availability: "missing", mapId: null, version: null }, page: { returnedCount: items.length, rankStart: 1, rankEnd: items.length, hasMore: true, nextCursor: "page2" } };
 }
 const me = { id: "viewer", csrfToken: "csrf" } as Me;
 const filters = { cityId: MOSCOW_BUNDLE.cityId };
@@ -112,7 +112,7 @@ describe("distance and map authority", () => {
     expect(distanceText({ kind: "range", upperMeters: 4000, roundingStepMeters: 1000 } as UnifiedDistance)).toBe("Рядом · до 4 км (примерно)"); expect(distanceText(null)).toBeNull();
   });
   it("never interprets missing registration as public map approval", () => {
-    const preview = { ...snapshot(), map: { availability: "dev_preview", mapId: "moscow", version: MOSCOW_BUNDLE.version } } as UnifiedSnapshot;
+    const preview = { ...snapshot(), map: { availability: "dev_preview", mapId: "moscow", version: MOSCOW_BUNDLE.version } };
     expect(candidateMapAllowed(preview, "https://gobadminton.ru")).toBe(false);
     expect(candidateMapAllowed(preview, "http://localhost:3001")).toBe(false);
     expect(candidateMapAllowed(snapshot(), "https://dev.gobadminton.ru")).toBe(false);
@@ -127,5 +127,56 @@ describe("distance and map authority", () => {
     expect(candidateMapConfigAllowed({ ...config, cities:[{ ...config.cities[0]!, map:{ availability:"missing" } }] },MOSCOW_BUNDLE.cityId,"https://dev.gobadminton.ru")).toBe(false);
     expect(candidateMapConfigAllowed(null,MOSCOW_BUNDLE.cityId,"https://dev.gobadminton.ru")).toBe(false);
     expect(allowedMapResource(MOSCOW_BUNDLE.prefix + "style.json")).toBe(true); expect(allowedMapResource("https://evil.example/tiles")).toBe(false); expect(allowedMapResource(MOSCOW_BUNDLE.prefix + "../other/style.json")).toBe(false);
+  });
+});
+
+const privateRow: UnifiedRow = { publicPlayerId: "peer", projection: "radar_public",
+  player: { publicPlayerId: "peer", displayName: "Peer", cityId: null, areaKey: null, level: null, trainer: false, lookingForGame: null, avatar: { uploadedUrl: null, providerUrl: null }, canRequestContact: false },
+  radar: { resultId: "result", resultRef: "private-proof", consentPolicyVersion: "radar-geographic-sharing-v2", validUntil: new Date(now+40000).toISOString(), distance: null,
+    geo: { latitude: 55.75, longitude: 37.6, crs: "EPSG:4326", model: "regional_grid_100m_v1", gridSizeMeters: 100, uncertaintyMeters: 100, quality: "approximate", sourceTimestampBucket: new Date(now).toISOString(), sourceAgeSeconds: 0 } } };
+const privatePreview: UnifiedPreview = { player: { publicPlayerId: "peer", displayName: "Peer", level: null, trainer: false, avatar: { uploadedUrl: null, providerUrl: null }, canRequestContact: false }, proximityBand: null,
+  radar: { consentPolicyVersion: privateRow.radar!.consentPolicyVersion, geo: privateRow.radar!.geo, validUntil: privateRow.radar!.validUntil, distance: null },
+  upcomingGames: [{ id: "game", title: "Permitted game", activityKind: "regular", startsAt: new Date(now+86400000).toISOString(), endsAt: new Date(now+90000000).toISOString(), timezone: "Europe/Moscow", cover: { uploadedUrl: null }, venue: { name: "Court", cover: { uploadedUrl: null } } }] };
+describe("whole-schedule admission and cancellation fences", () => {
+  const invalid: unknown[] = [null, {}, { ...privatePreview, upcomingGames: undefined }, { ...privatePreview, proximityBand: "near" },
+    { ...privatePreview, contact: "secret" }, { ...privatePreview, player: { ...privatePreview.player, userId: "secret" } },
+    { ...privatePreview, radar: { ...privatePreview.radar, validUntil: "invalid" } }, { ...privatePreview, radar: { ...privatePreview.radar, validUntil: new Date(now).toISOString() } },
+    { ...privatePreview, radar: { ...privatePreview.radar, geo: { ...privatePreview.radar.geo, latitude: NaN } } },
+    { ...privatePreview, player: { ...privatePreview.player, publicPlayerId: "other" } },
+    { ...privatePreview, upcomingGames: Array(4).fill(privatePreview.upcomingGames[0]) },
+    { ...privatePreview, upcomingGames: [privatePreview.upcomingGames[0],privatePreview.upcomingGames[0]] },
+    ...["userId", "participation", "contact"].map(key => ({ ...privatePreview, upcomingGames: [{ ...privatePreview.upcomingGames[0], [key]: "secret" }] })),
+    { ...privatePreview, upcomingGames: [{ ...privatePreview.upcomingGames[0], venue: { ...privatePreview.upcomingGames[0]!.venue, bookingNote: "secret" } }] },
+    { ...privatePreview, upcomingGames: [{ ...privatePreview.upcomingGames[0], startsAt: new Date(now-1).toISOString() }] },
+    { ...privatePreview, upcomingGames: [{ ...privatePreview.upcomingGames[0], timezone: "Invalid/Zone" }] }];
+  it.each(invalid.map((value,index)=>({value,index})))("rejects malformed or private preview $index without relaxing the guard",async({value})=>{
+    const request=(async(path:string)=>ok(path.endsWith("/preview")?value:snapshot([privateRow]))) as typeof apiFetch;
+    const c=new UnifiedDirectoryController(request,()=>now);c.bind(me);await c.query(filters);await c.select(c.view.rows[0]!);
+    expect(c.view.preview).toBeNull();expect(c.view.selected).toBeNull();expect(liveUnifiedPreview(value,"peer",now)).toBe(false);
+  });
+  it("accepts complete strict preview and retires the whole schedule at its exact TTL",async()=>{
+    let time=now;
+    const c=new UnifiedDirectoryController((async(path:string)=>ok(path.endsWith("/preview")?privatePreview:snapshot([privateRow]))) as typeof apiFetch,()=>time);
+    c.bind(me);await c.query(filters);await c.select(c.view.rows[0]!);expect(c.view.preview).toEqual(privatePreview);
+    time+=40000;c.tick();expect(c.view.preview).toBeNull();expect(c.view.selected).toBeNull();
+  });
+  for(const action of ["close","stop","hide","account","session","dispose","filter","activation","map","expiry"] as const) it(`cannot repaint late schedule after ${action}`,async()=>{
+    let time=now,resolve!:(value:ReturnType<typeof ok>)=>void;
+    const pending=new Promise<ReturnType<typeof ok>>(r=>{resolve=r;});
+    const c=new UnifiedDirectoryController((async(path:string)=>path.endsWith("/preview")?pending:ok(path.endsWith("/map")?{...snapshot([privateRow]),mapPage:{returnedCount:1,rankStart:1,rankEnd:1,hasMore:false,nextMapCursor:null}}:snapshot([privateRow]))) as typeof apiFetch,()=>time);
+    c.bind(me);await c.query(filters);const selection=c.select(c.view.rows[0]!);
+    if(action==="close")c.close();if(action==="stop")c.ordinary();if(action==="hide")c.visibility(false);
+    if(action==="account")c.bind({...me,id:"other"});if(action==="session")c.bind({...me,csrfToken:"new"});if(action==="dispose")c.dispose();
+    if(action==="filter")await c.query({...filters,trainer:true});if(action==="activation")await c.query(filters,{kind:"current_activation",activationId:"new"},"new:2");
+    if(action==="map")await c.map();if(action==="expiry"){time+=45000;c.tick();}
+    resolve(ok(privatePreview));await selection;expect(c.view.preview).toBeNull();expect(c.view.selected).toBeNull();
+  });
+  it("A -> B ignores A arriving last, and reopening always redeems a fresh preview",async()=>{
+    const other:UnifiedRow={...privateRow,publicPlayerId:"other",player:{...privateRow.player,publicPlayerId:"other"},radar:{...privateRow.radar!,resultRef:"other-proof"}};
+    let resolve!:(value:ReturnType<typeof ok>)=>void;
+    const pending=new Promise<ReturnType<typeof ok>>(r=>{resolve=r;});let reads=0;
+    const request=vi.fn(async(path:string)=>path.endsWith("/preview")?++reads===1?pending:ok({...privatePreview,player:{...privatePreview.player,publicPlayerId:"other"}}):ok(snapshot([privateRow,other]))) as typeof apiFetch;
+    const c=new UnifiedDirectoryController(request,()=>now);c.bind(me);await c.query(filters);const a=c.select(c.view.rows[0]!);await c.select(c.view.rows[1]!);
+    resolve(ok(privatePreview));await a;expect(c.view.preview?.player.publicPlayerId).toBe("other");c.close();await c.select(c.view.rows[1]!);expect(reads).toBe(3);
   });
 });

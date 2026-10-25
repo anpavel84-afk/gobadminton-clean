@@ -1,4 +1,6 @@
 import { UNIFIED_POLICY } from "./unified-contract";
+import { readRadarPlayerGames } from "../games/games.service";
+import type { UnifiedUpcomingGame } from "@gobadminton/contracts";
 import { isDemoUuid } from "../database/demo-ids";
 import { ensureGeographicConsent } from "./geographic-consent";
 import { GEO_POLICY, geographicStartSchema, geographicTakeoverSchema, GEO_CONTRACT } from "./geographic-contract";
@@ -146,6 +148,7 @@ export type PreviewDto = {
   proximityBand: "near" | "middle" | "outer" | null;
   displayLocation?: ReturnType<typeof import("./geographic-contract").displayLocation>;
   radar?: import("./radar-proof.service").RedeemedRadarProof["radar"];
+  upcomingGames?: UnifiedUpcomingGame[];
 };
 
 type PresenceRow = {
@@ -980,6 +983,10 @@ export class RadarService {
       });
       await this.budgets.consumePreview(client, userId, now);
       if (!this.env.SOCIAL_RADAR_GEOGRAPHIC_ENABLED && !input.resultRef.startsWith("u1.")) await this.assertRadarEligible(client, userId);
+      const unified = input.resultRef.startsWith("u1.");
+      const revision = unified ? (await client.query<{ revision: string }>(
+        "SELECT revision FROM players_query_revision WHERE singleton",
+      )).rows[0]?.revision : null;
       const redeemed = await this.proofs.redeem(client, {
         actorId: userId,
         sessionId,
@@ -1009,8 +1016,19 @@ export class RadarService {
         proximityBand: redeemed.proximityBand,
         ...(redeemed.displayLocation ? { displayLocation: redeemed.displayLocation } : {}),
         ...(redeemed.radar ? { radar: redeemed.radar } : {}),
+        ...(unified ? { upcomingGames: await readRadarPlayerGames(client, userId, redeemed.targetUserId, this.env) } : {}),
       };
+      if (unified) {
+        // Final non-geographic visibility fence, after every Game-lock wait.
+        const final = await client.query<{ revision: string }>(
+          "SELECT revision FROM players_query_revision WHERE singleton FOR SHARE",
+        );
+        if (!revision || final.rows[0]?.revision !== revision)
+          throw conflict("PLAYERS_QUERY_STALE", "Каталог изменился, обновите запрос");
+        await this.actorFence.assertActiveConsumerInTransaction(client, { actorId: userId, sessionId });
+      }
       if(redeemed.radar) await this.proofs.assertFinalGeographicProof(client,{actorId:userId,sessionId,targetUserId:redeemed.targetUserId,discoveryProof:input.resultRef});
+      if (response.upcomingGames) response.upcomingGames = response.upcomingGames.filter(game => Date.parse(game.startsAt) > Date.now());
       await client.query("COMMIT");
       return response;
     } catch (error) {
