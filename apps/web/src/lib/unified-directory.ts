@@ -78,6 +78,51 @@ export function mergeRadarCatalog(players: PublicPlayer[], view: DirectoryView, 
   return { radar, ordinary, moreRadar };
 }
 const initial = (): DirectoryView => ({ mode: "ordinary", snapshot: null, rows: [], pins: [], mapPage: null, selected: null, preview: null, busy: false, previewBusy: false, notice: "", stale: false, capabilityUnavailable: false, authenticationRequired: false });
+const object = (v: unknown): v is Record<string, unknown> => Boolean(v && typeof v === "object" && !Array.isArray(v));
+const keys = (v: Record<string, unknown>, allowed: string[], required = allowed) =>
+  Object.keys(v).every(k => allowed.includes(k)) && required.every(k => Object.hasOwn(v, k));
+const text = (v: unknown): v is string => typeof v === "string" && v.length > 0;
+const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+const instant = (v: unknown): v is string => text(v) && Number.isFinite(Date.parse(v));
+const cover = (v: unknown) => object(v) && keys(v, ["uploadedUrl"]) && (v.uploadedUrl === null || text(v.uploadedUrl));
+/** Admit the entire strict wire shape, never a partial player/TTL or a legacy
+ * preview. Used again at render time so retained schedules cannot outlive TTL.
+ */
+export function liveUnifiedPreview(value: unknown, publicId: string, now: number): value is UnifiedPreview {
+  if (!object(value) || !keys(value, ["player", "proximityBand", "radar", "upcomingGames"]) || value.proximityBand !== null) return false;
+  const p = value.player, r = value.radar;
+  if (!object(p) || !keys(p, ["publicPlayerId", "displayName", "level", "trainer", "avatar", "canRequestContact"], ["publicPlayerId", "displayName", "level", "trainer"]) ||
+      p.publicPlayerId !== publicId || !text(p.displayName) || typeof p.trainer !== "boolean" ||
+      (p.canRequestContact !== undefined && typeof p.canRequestContact !== "boolean")) return false;
+  if (p.avatar !== undefined && (!object(p.avatar) || !keys(p.avatar, ["uploadedUrl", "providerUrl"]) ||
+      ![p.avatar.uploadedUrl, p.avatar.providerUrl].every(v => v === null || text(v)))) return false;
+  if (p.level !== null && (!object(p.level) || !keys(p.level, ["scaleId", "scaleVersion", "levelId", "provenance"]) ||
+      !text(p.level.scaleId) || !Number.isInteger(p.level.scaleVersion) || Number(p.level.scaleVersion) < 1 || !text(p.level.levelId) || p.level.provenance !== "self_declared")) return false;
+  if (!object(r) || !keys(r, ["consentPolicyVersion", "geo", "validUntil", "distance"]) || r.consentPolicyVersion !== "radar-geographic-sharing-v2" || !instant(r.validUntil) || Date.parse(r.validUntil) <= now) return false;
+  const g = r.geo;
+  if (!object(g) || !keys(g, ["latitude", "longitude", "crs", "model", "gridSizeMeters", "uncertaintyMeters", "quality", "sourceTimestampBucket", "sourceAgeSeconds"]) ||
+      !finite(g.latitude) || Math.abs(g.latitude) > 90 || !finite(g.longitude) || Math.abs(g.longitude) > 180 || g.crs !== "EPSG:4326" ||
+      !((g.model === "regional_grid_100m_v1" && g.gridSizeMeters === 100) || (g.model === "regional_grid_1000m_v1" && g.gridSizeMeters === 1000)) ||
+      !finite(g.uncertaintyMeters) || g.uncertaintyMeters < 0 || !["approximate", "degraded"].includes(String(g.quality)) || !instant(g.sourceTimestampBucket) || !finite(g.sourceAgeSeconds) || g.sourceAgeSeconds < 0) return false;
+  const d = r.distance;
+  if (d !== null && (!object(d) || !keys(d, ["kind", "roundedMeters", "roundingStepMeters", "uncertaintyMeters", "lowerMeters", "upperMeters", "basis", "approximate"]) ||
+      d.basis !== "published_centers_geodesic" || d.approximate !== true || !finite(d.roundingStepMeters) || ![100, 500, 1000].includes(d.roundingStepMeters) || !finite(d.uncertaintyMeters) || d.uncertaintyMeters < 0 ||
+      !(d.kind === "estimate" ? finite(d.roundedMeters) && d.roundedMeters >= 0 && d.lowerMeters === null && d.upperMeters === null :
+        d.kind === "range" && d.roundedMeters === null && d.lowerMeters === 0 && finite(d.upperMeters) && d.upperMeters >= 0))) return false;
+  if (!Array.isArray(value.upcomingGames) || value.upcomingGames.length > 3) return false;
+  const seen = new Set<string>(); let previous: { start: number; id: string } | null = null;
+  for (const game of value.upcomingGames) {
+    if (!object(game) || !keys(game, ["id", "title", "activityKind", "startsAt", "endsAt", "timezone", "cover", "venue"]) ||
+        !text(game.id) || seen.has(game.id) || !text(game.title) || !["regular", "trainer_led"].includes(String(game.activityKind)) ||
+        !instant(game.startsAt) || !instant(game.endsAt) || Date.parse(game.startsAt) <= now || Date.parse(game.endsAt) <= Date.parse(game.startsAt) ||
+        !text(game.timezone) || !cover(game.cover) || !object(game.venue) || !keys(game.venue, ["name", "cover"]) || !text(game.venue.name) || !cover(game.venue.cover)) return false;
+    try { new Intl.DateTimeFormat("ru-RU", { timeZone: game.timezone }); } catch { return false; }
+    const start = Date.parse(game.startsAt);
+    if (previous && (start < previous.start || start === previous.start && game.id <= previous.id)) return false;
+    seen.add(game.id); previous = { start, id: game.id };
+  }
+  return true;
+}
 /** Private contexts/proofs/origins live only in this root-client session, never URLs/storage. */
 export class UnifiedDirectoryController {
   view = initial();
@@ -130,13 +175,12 @@ export class UnifiedDirectoryController {
   }
   tick() {
     const now = this.clock();
-    const snapshotExpired = this.view.snapshot && now >= Date.parse(this.view.snapshot.validUntil);
+    const snapshotExpired = this.view.snapshot && (!Number.isFinite(Date.parse(this.view.snapshot.validUntil)) || now >= Date.parse(this.view.snapshot.validUntil));
     // Target proof/lease may expire sooner than the enclosing 45-second
     // private query. Never retain its selection, preview or map pins after TTL.
     const rowExpired = [...this.view.rows, ...this.view.pins].some(row =>
       row.radar && (!Number.isFinite(Date.parse(row.radar.validUntil)) || Date.parse(row.radar.validUntil) <= now));
-    const previewExpired = this.view.preview && (!Number.isFinite(Date.parse(this.view.preview.radar.validUntil))
-      || Date.parse(this.view.preview.radar.validUntil) <= now);
+    const previewExpired = this.view.preview && !liveUnifiedPreview(this.view.preview, this.view.selected ?? "", now);
     if (snapshotExpired || rowExpired || previewExpired) {
       this.origin = { kind: "none" };
       this.invalidate("Список участников Radar устарел. Обновляем данные.", true);
@@ -214,12 +258,20 @@ export class UnifiedDirectoryController {
     if (!row.radar || !this.me || this.pending || this.clock() < this.retryAt) return;
     this.tick(); if (!this.view.snapshot || ![...this.view.pins, ...this.view.rows].includes(row)) return;
     const epoch = this.epoch, selection = ++this.selectionEpoch;
-    this.set({ selected: row.publicPlayerId, preview: null, previewBusy: true });
-    const r = await this.request<UnifiedPreview>("/v1/radar/results/preview", { method: "POST", csrfToken: this.me.csrfToken, signal: this.abort.signal, body: JSON.stringify({ resultRef: row.radar.resultRef }) });
+    this.set({ selected: row.publicPlayerId, preview: null, previewBusy: true, notice: "" });
+    let r: ApiResult<UnifiedPreview>;
+    try {
+      r = await this.request<UnifiedPreview>("/v1/radar/results/preview", { method: "POST", csrfToken: this.me.csrfToken, signal: this.abort.signal, body: JSON.stringify({ resultRef: row.radar.resultRef }) });
+    } catch {
+      r = { ok: false, status: 0, error: "Не удалось загрузить карточку игрока." };
+    }
     if (!this.valid(epoch) || selection !== this.selectionEpoch) return;
     this.tick(); if (!this.view.snapshot) return;
-    if (!r.ok) { this.fail(r); return; }
-    if (r.data.player.publicPlayerId !== row.publicPlayerId || Date.parse(r.data.radar.validUntil) <= this.clock()) {
+    if (!r.ok) {
+      if (r.status === 0 || r.status >= 500) { this.set({ preview: null, previewBusy: false, notice: "Не удалось загрузить карточку игрока. Попробуйте снова." }); return; }
+      this.fail(r); return;
+    }
+    if (!liveUnifiedPreview(r.data, row.publicPlayerId, this.clock())) {
       this.close(); this.set({ notice: "Игрок сейчас недоступен. Обновите список." }); return;
     }
     this.set({ preview: r.data, previewBusy: false });

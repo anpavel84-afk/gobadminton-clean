@@ -357,12 +357,16 @@ def owner_package(g):
 
 def owner_package_path(r,g):
     need(owner_package(g),'not dynamic Owner package')
+    if 'delegation' in g:
+        from admission_pm import validate_provenance
+        validate_provenance(g['delegation'],grant=g)
+        return r.STATE/(OWNER_PACKAGE_LEDGER_PREFIX+'delegated-'+g['delegation']['admission_id']+'.json')
     return r.STATE/(OWNER_PACKAGE_LEDGER_PREFIX+str(g['owner_comment'])+'.json')
 
 
 def owner_package_ledger(value):
     from context_policy import RULES_SHA256
-    need(type(value) is dict and set(value)==
+    need(type(value) is dict and set(value)-{'delegation'}==
          {'schema','owner_comment','owner_id','issue','controller_sha','rules_sha256',
           'source_base','source_head','body_sha256','ceiling','used_calls','grants',
           'previous_addressed_sha256','previous_supplement_sha256'},
@@ -382,8 +386,22 @@ def owner_package_ledger(value):
         need(value['rules_sha256']==RULES_SHA256,
              'Owner package authorization/history drift')
     rows=value['grants']
-    need(type(rows) is dict and len(rows)==2 and value['ceiling']==2
-         and type(value['used_calls']) is int,'only closed two-call packages supported')
+    delegated='delegation' in value
+    inherited=0
+    if delegated:
+        from admission_pm import validate_provenance
+        v=validate_provenance(value['delegation'])
+        inherited=value['delegation']['inherited_calls']
+        need(type(rows) is dict and len(rows)==1
+             and type(value['ceiling']) is int
+             and value['ceiling']==min(v['max_calls_per_package'],v['max_total_calls'])
+             and value['body_sha256']==__import__('hashlib').sha256(
+                 value['delegation']['comment']['body'].encode()).hexdigest(),
+             'delegated finite ledger ceiling/origin drift')
+    else:
+        need(type(rows) is dict and len(rows)==2 and value['ceiling']==2,
+             'only closed two-call packages supported')
+    need(type(value['used_calls']) is int,'integer package accounting required')
     roles=[];consumed=0
     for key,row in rows.items():
         need(type(row) is dict and set(row)=={'grant','operation'},'package grant row format')
@@ -393,13 +411,16 @@ def owner_package_ledger(value):
              and g['controller_revision']==value['controller_sha']
              and (g['base'],g['head'])==(value['source_base'],value['source_head'])
              and digest(g)==key,'package grant/source/controller mismatch')
+        need(('delegation' in g)==delegated and (not delegated or g['delegation']==value['delegation']),
+             'ledger/grant delegation mismatch')
         roles.append(g['role'])
         need(row['operation'] is None or type(row['operation']) is str and
              len(row['operation'])==64 and all(c in '0123456789abcdef' for c in row['operation']),
              'operation identifier malformed')
         consumed+=row['operation'] is not None
-    need(set(roles)=={'technical_pm_product_analyst','independent_qa'} and
-         len(roles)==2 and consumed==value['used_calls'],
+    need((delegated and roles==[value['delegation']['role']] or
+          not delegated and set(roles)=={'technical_pm_product_analyst','independent_qa'} and len(roles)==2)
+         and inherited+consumed==value['used_calls']<=value['ceiling'],
          'package roles/spend mismatch')
     return value
 
@@ -413,6 +434,19 @@ def owner_package_read(r,g):
          and hashlib.sha256((r.STATE/ADDRESSED_LEDGER).read_bytes()).hexdigest()==OWNER_PACKAGE_OLD_ADDRESS_SHA
          and hashlib.sha256((r.STATE/SUPPLEMENT_LEDGER).read_bytes()).hexdigest()==OWNER_PACKAGE_OLD_SUPPLEMENT_SHA,
          'old ledgers or package registration changed')
+    if 'delegation' in value:
+        from admission_pm import historical_operations
+        prior_rows=[]
+        for pin in value['delegation']['prior_packages']:
+            raw_pin(r,r.STATE/pin['path'],pin['sha256'])
+            prior_rows.extend(owner_package_ledger(r.read(r.STATE/pin['path'],0))['grants'].values())
+        spent=[row['operation'] for row in prior_rows if row['operation'] is not None]
+        historical=historical_operations(r,r.read(r.STATE/'slot2.json',0))
+        need(len(spent)==len(set(spent)) and not historical.intersection(spent)
+             and len(historical)+len(spent)==value['delegation']['inherited_calls'],
+             'delegated lineage accounting drift')
+        analysis=value['delegation']['analysis']
+        need(analysis is None or analysis in prior_rows,'delegated analysis not in pinned lineage')
     return value
 
 LEGACY_RULES_SHA256='0755f8b5eb2cce575e58137a0f0462448109d8af0173e36d67f6551342b35ba6'
@@ -440,9 +474,16 @@ def validate_addressed_grant(g, *, enrollment=False):
     fields={'schema','lineage','owner_comment','role','controller_revision','cli_sha256',
             'rules_sha256','base','head','input_revision','input_path','input_sha256','timeout','max_output_bytes',
             'permission_mode','input_transport','ceiling'}
-    need(type(g) is dict and set(g)==fields and g['schema']==ADDRESSED_SCHEMA
+    need(type(g) is dict and set(g)-{'delegation'}==fields and g['schema']==ADDRESSED_SCHEMA
          and g['lineage']==ADDRESSED_LINEAGE and type(g['owner_comment']) is int,
          'invalid addressed Issue29 grant')
+    delegated='delegation' in g
+    if delegated:
+        from admission_pm import validate_provenance
+        import datetime as dt
+        validate_provenance(g['delegation'],grant=g,
+             now=None if enrollment else dt.datetime.now(dt.timezone.utc))
+        need(owner_package(g),'delegation cannot replace historical Owner grants')
     historical=(g['owner_comment']==6362661117 and digest(g) in LEGACY_GRANT_DIGESTS)
     original_owner=(g['owner_comment']==6362661117)
     fresh=(g['owner_comment']==FRESH_OWNER_COMMENT)
@@ -499,7 +540,7 @@ def validate_addressed_grant(g, *, enrollment=False):
         need(type(g['input_path']) is str and re.fullmatch(
             r'scripts/chatops/tests/fixtures/agy-[a-z0-9-]+\.json',g['input_path']),
             'exact QA source/test-receipt contract required')
-        if fresh or supplemental or dynamic:
+        if fresh or supplemental or (dynamic and not delegated):
             need((g['input_revision'],g['input_path'],g['input_sha256'])==
                  (FRESH_QA_INPUT_REVISION,FRESH_QA_INPUT_PATH,FRESH_QA_INPUT_SHA256),
                  'reviewed independent QA fixture changed')
@@ -673,8 +714,9 @@ def addressed_ready(r,q):
              'predecessor UNKNOWN mutated')
         value=owner_package_read(r,g)
         if g['role']=='independent_qa':
-            analyses=[row['operation'] for row in value['grants'].values()
-                      if row['grant']['role']=='technical_pm_product_analyst']
+            analyses=([value['delegation']['analysis']['operation']] if 'delegation' in value else
+                      [row['operation'] for row in value['grants'].values()
+                       if row['grant']['role']=='technical_pm_product_analyst'])
             need(len(analyses)==1 and analyses[0],'package analysis not yet consumed')
             op=j['operations'].get(analyses[0],{})
             result=op.get('result',{})
@@ -686,7 +728,7 @@ def addressed_ready(r,q):
                  and len(result.get('analysis',{}).get('source_reads') or [])==2,
                  'native COMPLETE with tool evidence required before separate QA')
         row=value['grants'].get(_digest(g))
-        need(row and row['grant']==g and row['operation'] is None and value['used_calls']<2,
+        need(row and row['grant']==g and row['operation'] is None and value['used_calls']<value['ceiling'],
              'Owner package grant missing/spent')
         return value
     if g['owner_comment']==SUPPLEMENT_OWNER_COMMENT:
