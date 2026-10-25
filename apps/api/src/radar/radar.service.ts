@@ -1,6 +1,6 @@
 import { UNIFIED_POLICY } from "./unified-contract";
 import { readRadarPlayerGames } from "../games/games.service";
-import type { UnifiedUpcomingGame } from "@gobadminton/contracts";
+import type { UnifiedUpcomingGame } from "@gobadminton/contracts/src/unified.generated";
 import { isDemoUuid } from "../database/demo-ids";
 import { ensureGeographicConsent } from "./geographic-consent";
 import { GEO_POLICY, geographicStartSchema, geographicTakeoverSchema, GEO_CONTRACT } from "./geographic-contract";

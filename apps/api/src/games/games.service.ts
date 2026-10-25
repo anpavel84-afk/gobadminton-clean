@@ -29,7 +29,7 @@ import { readGamesMap } from "./games-map.read";
 import type { DiscoveryFilter } from "./games-discovery.query";
 import { GameAuthorityService } from "./game-authority.service";
 import { unrestrictedSql } from "../restrictions/policy";
-import type { UnifiedUpcomingGame } from "@gobadminton/contracts";
+import type { UnifiedUpcomingGame } from "@gobadminton/contracts/src/unified.generated";
 
 /** Read only, inside the caller's redeemed Radar transaction. A public Game
  * does not make participation public. Every candidate is authorized before

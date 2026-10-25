@@ -112,7 +112,7 @@ describe("distance and map authority", () => {
     expect(distanceText({ kind: "range", upperMeters: 4000, roundingStepMeters: 1000 } as UnifiedDistance)).toBe("Рядом · до 4 км (примерно)"); expect(distanceText(null)).toBeNull();
   });
   it("never interprets missing registration as public map approval", () => {
-    const preview = { ...snapshot(), map: { availability: "dev_preview", mapId: "moscow", version: MOSCOW_BUNDLE.version } };
+    const preview: UnifiedSnapshot = { ...snapshot(), map: { availability: "dev_preview", mapId: "moscow", version: "moscow-20261007-p4-098a869f-v001" } };
     expect(candidateMapAllowed(preview, "https://gobadminton.ru")).toBe(false);
     expect(candidateMapAllowed(preview, "http://localhost:3001")).toBe(false);
     expect(candidateMapAllowed(snapshot(), "https://dev.gobadminton.ru")).toBe(false);
