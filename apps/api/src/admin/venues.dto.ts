@@ -1,3 +1,4 @@
+import { privateContactWebsite } from "../lib/original-http-authority";
 import { venueProfileEditSchema } from "../venues/venue-profile";
 import { publicVenueContactsSchema } from "../venues/public-venue-contacts";
 import { z } from "zod";
@@ -11,7 +12,7 @@ export const venueFields = z.object({
 const venueCreateFields = venueFields;
 const contactFields = {
   contactPhone: z.string().trim().max(40).optional(),
-  contactWebsite: z.string().trim().max(300).refine(v => v === "" || /^https?:\/\//.test(v), "Нужен адрес http:// или https://").optional(),
+  contactWebsite: z.string().trim().max(300).refine(v => v === "" || /^https?:\/\//.test(v), "Нужен адрес http:// или https://").refine(v => v === "" || privateContactWebsite(v) !== null, "Некорректный URL площадки").optional(),
   bookingNote: z.string().trim().max(500).optional(),
 };
 const venueEditFields = venueFields.extend({...contactFields, publicContacts: publicVenueContactsSchema.optional(), profile: venueProfileEditSchema.optional()}).strict();

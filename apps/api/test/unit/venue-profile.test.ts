@@ -110,9 +110,12 @@ describe("venue profile production validation and safe mapping", () => {
 describe("production service bindings and runtime responses against actual OpenAPI", () => {
   it("validates unchanged gallery attribution, failing closed when only its normalized URL is a URI", async () => {
     const validProfile = validator("VenueProfile");
-    for (const attribution of ["https://example.com/a b", "https://example.com/фото", "https://example.com/a|b", "https://example.com/%zz"]) {
-      // Existing cover storage can contain these WHATWG-parseable values.
+    for (const attribution of ["https://example.com/a b", "https://example.com/фото", "https://example.com/a|b"]) {
       expect(publicContactUrl(attribution)).not.toBeNull();
+    }
+    expect(publicContactUrl("https://example.com/%zz")).toBeNull();
+    for (const attribution of ["https://example.com/a b", "https://example.com/фото", "https://example.com/a|b", "https://example.com/%zz"]) {
+      // Existing cover storage can contain these WHATWG-parseable values. Malformed percent-encoding is refused before normalization.
       const invalid = readVenueProfile(base);
       invalid.gallery.items[0]!.credit.url = attribution;
       expect(validProfile(invalid)).toBe(false);

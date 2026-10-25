@@ -1,4 +1,5 @@
 import type { Pool, PoolClient } from "pg";
+import { forbiddenUrlScalars, httpUrlAgreesWithOriginalAuthority } from "../lib/original-http-authority";
 import { unrestrictedSql } from "../restrictions/policy";
 export type PlayerAvatar = { uploadedUrl: string | null; providerUrl: string | null };
 export const emptyAvatar = (): PlayerAvatar => ({ uploadedUrl: null, providerUrl: null });
@@ -14,7 +15,7 @@ export async function avatarForUser(db: Pool | PoolClient, userId: string): Prom
   return { uploadedUrl: safeUploadedAvatar(row?.avatar_key), providerUrl: safeProviderAvatar(row?.provider_url) };
 }
 export function safeProviderAvatar(raw: string | null | undefined): string | null {
-  if (!raw || raw.length > 2048) return null;
+  if (!raw || raw.length > 2048 || !httpUrlAgreesWithOriginalAuthority(raw, forbiddenUrlScalars)) return null;
   try { const url = new URL(raw); return url.protocol === "https:" && !url.username && !url.password && !url.port && (url.hostname === "avatars.yandex.net" || url.hostname.endsWith(".userapi.com")) ? url.href : null; } catch { return null; }
 }
 export async function avatarForPlayer(db: Pool | PoolClient, publicPlayerId: string): Promise<PlayerAvatar> {
