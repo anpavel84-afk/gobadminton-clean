@@ -89,17 +89,18 @@ Latency, cost, cache hit, missed findings, provider usage, фактическо�
 
 `python3 -B -m unittest discover -s scripts/chatops/tests -p 'test_actions_train*.py'`
 
-Локальный результат на этом дереве, до commit: **616 tests, OK, skipped=1**, 13.404s. Пропущенный тест не объявлен выполненным. Это авторская проверка, не independent QA. **VERIFIED** как локальный прогон этой команды. Повторный CI-прогон той же команды — отдельно ниже.
+Локальный результат на дереве `78b36c5dd5e98b9241bc69ea646658b8e6feb8c2`: **616 tests, OK, skipped=1**, 13.404s. Пропущенный тест не объявлен выполненным. Это авторская проверка, не independent QA. **VERIFIED** как локальный прогон этой команды.
 
 Адресные новые тесты в `test_actions_train_context_cursor_agy.py`: 12 tests, OK.
 
-CI GitHub Actions: **NOT_MEASURED** до завершения run на candidate head. Draft PR не мержится. PROD и VPS не запускались.
+CI Product CI на head `5accd87d05e3074ebb83fe97dcd6466cd4c5e283`: **VERIFIED** success. Run [40149669426](https://github.com/anpavel84-afk/gobadminton-clean/actions/runs/40149669426), event `pull_request`, 7/7 pass: foundation 8s, source (contracts) 20s, source (web) 44s, source (api) 46s, source (admin) 55s, receiver 55s, database 4m9s. В логе job `receiver` та же команда: **616 tests, OK, skipped=1**, 17.945s. Draft PR не смержен. PROD и VPS не запускались.
 
 ## Candidate
 
 - base sha: `2446bcc583ec11975246f63d476ff1492e153cdb`
 - code commit, на котором посчитаны байты и локальные 616 тестов: `78b36c5dd5e98b9241bc69ea646658b8e6feb8c2`
-- строка с этим sha добавлена следующим commit и не меняет код, JSON или тесты. Head PR — тот commit. CI ниже относится к head, на котором Actions реально запустились
+- CI-observed head: `5accd87d05e3074ebb83fe97dcd6466cd4c5e283` (отчётный commit поверх кода; Product CI 7/7 выше снят с него)
+- этот абзац записан следующим commit и меняет только текст отчёта. Его собственный Actions run — не run 40149669426
 - файлы этого шага:
   - `docs/workbench/context-exchange-20261023/offline_replay.py`
   - `docs/workbench/context-exchange-20261023/stage5_offline_compare.py`
