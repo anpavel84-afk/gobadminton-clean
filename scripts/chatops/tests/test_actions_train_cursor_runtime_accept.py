@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import stat
+import subprocess
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -59,6 +60,16 @@ class TrustedRuntimeTree:
 
 
 class RuntimeAcceptance(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        # Public immutable Git blobs, loaded offline before the no-command fixture
+        # patches. Rules hashes below are real SHA-256, never hash mocks.
+        cls.rules_bytes = {}
+        for label, commit in (('old','1169e965976e9498d4e5e1e23aae201e97ec9665'),
+                              ('new','41e12be2d551158e97ea30eaf8e95f992f998615')):
+            cls.rules_bytes[label] = subprocess.check_output(
+                ['git','show',commit+':docs/rules/ENGINEERING_OPERATING_MODEL.md'],cwd=ROOT)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -119,6 +130,8 @@ class RuntimeAcceptance(unittest.TestCase):
                            (self.backup,record),
                            (self.policy,{'mode':'active','controller_sha':'c'*40})):
             R.atomic(path,value)
+        if self._testMethodName.startswith('test_real_'):
+            self.make_real_state()
         self.real_atomic = R.atomic
         self.writes = []
         self.fail_at = None; self.fail_before = False
@@ -147,8 +160,59 @@ class RuntimeAcceptance(unittest.TestCase):
                    patch.object(U.time,'time',return_value=300),
                    patch('subprocess.run',side_effect=AssertionError('no commands/network/models')),
                    patch('subprocess.Popen',side_effect=AssertionError('no model process'))]
+        if self._testMethodName.startswith('test_real_'):
+            patches.append(patch.object(U.i,'MONITOR_PAYLOADS',self.monitor_payloads))
         for p in patches:
             p.start(); self.addCleanup(p.stop)
+
+    def make_real_state(self):
+        """Install-time journal; descendant live inventory, C5 and precall deferral."""
+        j=json.loads(self.journal.read_text()); record=json.loads(self.backup.read_text())
+        prior=j['record_before']
+        self.rules=self.install/'accepted-engineering-rules.md'
+        self.rules.write_bytes(self.rules_bytes['new'])
+        self.rules_old=hashlib.sha256(self.rules_bytes['old']).hexdigest()
+        self.rules_new=hashlib.sha256(self.rules_bytes['new']).hexdigest()
+        self.assertEqual(self.rules_old,'38c34012f10974496a7d7cbc74ecacb62bf7847278e295edfeb107d69a5d1c1c')
+        self.assertEqual(self.rules_new,'017441dec5ba197a1065b6ef90efdddb090b286ba48687241a7fbc09dd002269')
+        prior['after'][str(self.rules)]=self.rules_old
+        record['after'][str(self.rules)]=self.rules_old
+        names=('client.py','core.py','recovery.py','monitor.py','installer.py','cost_policy.py',
+               'context_policy.py','slots.py','publish.py','native_codex.py','budgets.py','payload.py',
+               'registry.py','receiver_contract.py','resources.py','locks.py','intent.py','auth.py')
+        monitor=self.base/'gb-ops-monitor'
+        self.monitor_payloads={name:monitor/name for name in ('opsmon/writer.py','web/app.js')}
+        old_paths=[self.install/name for name in names]+list(self.monitor_payloads.values())
+        for path in old_paths:
+            path.parent.mkdir(parents=True,exist_ok=True); path.write_bytes(('old '+path.name).encode())
+            sha=hashlib.sha256(path.read_bytes()).hexdigest()
+            prior['after'][str(path)]=sha; record['after'][str(path)]=sha
+        # 15 advanced hashes including journal-changed stage and external monitor files.
+        advanced=[self.stage,self.receiver,*old_paths[:11],*self.monitor_payloads.values()]
+        for path in advanced:
+            path.write_bytes(('C5 reviewed '+path.name).encode())
+            record['after'][str(path)]=hashlib.sha256(path.read_bytes()).hexdigest()
+        added=('antigravity_qa_recovery.py','content_identity.py','context_exchange.py',
+               'failure_diagnosis.py','native_antigravity.py','owner_package_admission.py','qa_equivalence.py')
+        for name in added:
+            path=self.install/name; path.write_bytes(('later reviewed '+name).encode())
+            record['after'][str(path)]=hashlib.sha256(path.read_bytes()).hexdigest()
+        prior['before']={name:None for name in list(prior['after'])[:20]}
+        prior['manifest']='c5c8c418-install-time'
+        prior['units']={'old.service':{'ActiveState':'inactive'}}
+        record.update(manifest='0f16f0d6-live',before={name:None for name in list(record['after'])[:29]},
+                      targets=list(record['after']),units={'later.service':{'ActiveState':'active'}},activated=True)
+        self.assertEqual(len(record['after']),32)
+        self.assertEqual(len(set(record['after'])-set(prior['after'])),7)
+        self.assertEqual(sum(record['after'][name]!=sha for name,sha in prior['after'].items()),15)
+        self.assertNotEqual(record['after'][str(self.stage)],j['changes'][str(self.stage)]['after'])
+        self.deferred={'binding':{'issue':225,'stage':'author'},'task_hash':self.task_hash,
+                       'run':102,'started_at':210,'finished_at':211,
+                       'result':{'checkpoint':None,'reason':'attempts exhausted',
+                                 'safe_release':True,'status':'deferred'}}
+        self.ops['slot2']['deferred-author']=copy.deepcopy(self.deferred)
+        R.atomic(self.journal,j); R.atomic(self.backup,record)
+        R.atomic(self.policy,{'mode':'active','controller_sha':'41e12be2d551158e97ea30eaf8e95f992f998615'})
 
     def call(self,**kwargs):
         return U.accept_runtime(self.bundle,proof_sha256=self.proof_sha,**kwargs)
@@ -250,10 +314,14 @@ class RuntimeAcceptance(unittest.TestCase):
 
     def test_changes_only_installed_code_drift_and_safe_reader(self):
         p=self.changes_only_file(); original=p.read_bytes()
+        record=json.loads(self.backup.read_text()); record['after'][str(p)]=hashlib.sha256(original).hexdigest()
+        self.real_atomic(self.backup,record)
         p.write_bytes(b'drift'); self.refused_without_write('installed code drift')
         p.write_bytes(original); p.chmod(0o666)
         self.refused_without_write('untrusted runtime evidence metadata')
-        p.chmod(0o644); self.assertEqual(self.call()['phase'],'active-ready')
+        p.chmod(0o644)
+        record=json.loads(self.backup.read_text()); record['after'][str(p)]=hashlib.sha256(original).hexdigest()
+        self.real_atomic(self.backup,record); self.assertEqual(self.call()['phase'],'active-ready')
 
     def test_backup_only_installed_file_missing(self):
         self.receiver.unlink(); self.refused_without_write('missing or unsafe')
@@ -290,7 +358,7 @@ class RuntimeAcceptance(unittest.TestCase):
         j=json.loads(self.journal.read_text())
         j['changes'][str(self.receiver)]={'before':None,'after':hashlib.sha256(b'new receiver').hexdigest()}
         self.real_atomic(self.journal,j); self.receiver.write_bytes(b'new receiver')
-        self.refused_without_write('installed code drift: conflicting inventory pin')
+        self.refused_without_write('installed code drift')
 
     def test_missing_backup_refused(self):
         self.backup.unlink(); self.refused_without_write('missing or unsafe')
@@ -327,9 +395,10 @@ class RuntimeAcceptance(unittest.TestCase):
         self.refused_without_write('path outside installation')
 
     def test_unrecorded_backup_entry_refused(self):
+        # Descendant additions are permitted only when their live bytes match.
         p=self.install/'extra.py'; p.write_bytes(b'extra')
-        record=json.loads(self.backup.read_text()); record['after'][str(p)]=hashlib.sha256(p.read_bytes()).hexdigest()
-        self.real_atomic(self.backup,record); self.refused_without_write('unrecorded or missing inventory')
+        record=json.loads(self.backup.read_text()); record['after'][str(p)]=hashlib.sha256(b'other extra').hexdigest()
+        self.real_atomic(self.backup,record); self.refused_without_write('installed code drift')
 
     def test_missing_prior_inventory_entry_refused(self):
         record=json.loads(self.backup.read_text()); del record['after'][str(self.receiver)]
@@ -343,12 +412,15 @@ class RuntimeAcceptance(unittest.TestCase):
         self.real_atomic(self.journal,j); self.refused_without_write('unrecorded marker module')
 
     def test_backup_identity_and_prior_schema_refused(self):
-        self.change(self.backup,manifest='foreign'); self.refused_without_write('backup identity')
+        # Manifest can advance, but both records still require a string manifest.
+        self.change(self.backup,manifest=[]); self.refused_without_write('malformed backup record')
         self.change(self.backup,manifest='m'); self.change(self.journal,record_before={})
         self.refused_without_write('invalid backup schema')
 
     def test_all_recorded_hashes_consistent_positive_control(self):
-        self.changes_only_file()
+        p=self.changes_only_file()
+        record=json.loads(self.backup.read_text()); record['after'][str(p)]=hashlib.sha256(p.read_bytes()).hexdigest()
+        self.real_atomic(self.backup,record)
         self.assertEqual(self.call()['phase'],'active-ready')
         self.assertEqual(self.call()['phase'],'active-ready')
 
@@ -1081,6 +1153,220 @@ class RuntimeAcceptance(unittest.TestCase):
         self.assertEqual(self.call()['phase'],'active-ready')
         self.assertEqual(self.call()['phase'],'active-ready')
 
+    def test_real_dry_run_no_writes(self):
+        before=self.snapshot()
+        result=U.accept_runtime(self.bundle,dry_run=True)
+        self.assertTrue(result['dry_run'])
+        self.assertEqual(result['would_change']['journal_phase'],'active-ready')
+        self.assertEqual(self.snapshot(),before); self.assertEqual(self.writes,[])
+        R.publish_monitor.assert_not_called()
+
+    def test_real_apply_pins_policy_and_deferral(self):
+        before_ops=copy.deepcopy(self.ops); before_backup=self.backup.read_bytes()
+        self.assertEqual(self.call()['phase'],'active-ready')
+        j=json.loads(self.journal.read_text()); intent=j['qualification_intent']
+        self.assertEqual(j['controller'],'c'*40)
+        self.assertEqual(intent['controller'],j['controller'])
+        self.assertEqual(intent['policy_controller'],'41e12be2d551158e97ea30eaf8e95f992f998615')
+        self.assertEqual(intent['operations'],{'author':core.digest(before_ops['slot2']['author'])})
+        self.assertEqual(intent['deferred_operations'],
+                         {'slot2':{'deferred-author':core.digest(self.deferred)}})
+        self.assertEqual(json.loads(self.marker.read_text())['phase'],'ready')
+        self.assertEqual(self.writes,[self.journal,self.marker,self.journal])
+        self.assertEqual(self.ops,before_ops); self.assertEqual(self.backup.read_bytes(),before_backup)
+        self.assertEqual(self.product.read_bytes(),self.product_before)
+
+    def test_real_interrupted_replayed(self):
+        self.test_crash_replay_before_and_after_each_write()
+
+    def test_real_rollback_restores_history(self):
+        self.test_rollback_replays_and_preserves_qualification_intent_and_history()
+
+    def test_real_direct_completion_accepts_c5(self):
+        self.interrupt_before_marker()
+        result=U.complete_qualification(json.loads(self.journal.read_text()),
+            json.loads(self.policy.read_text()),json.loads(self.marker.read_text()))
+        self.assertEqual(result['phase'],'active-ready')
+
+    def test_real_equal_rules_pins(self):
+        initial=self.snapshot()
+        for label in ('old','new'):
+            with self.subTest(label=label):
+                for name,raw in initial.items(): Path(name).write_bytes(raw)
+                self.rules.write_bytes(self.rules_bytes[label])
+                record=json.loads(self.backup.read_text())
+                record['after'][str(self.rules)]=hashlib.sha256(self.rules_bytes[label]).hexdigest()
+                self.real_atomic(self.backup,record)
+                self.assertTrue(self.call(dry_run=True)['dry_run'])
+                self.assertEqual(self.call()['phase'],'active-ready')
+
+    def test_real_deferral_in_other_slot_is_pinned(self):
+        self.ops['slot1']['other-deferred']=self.ops['slot2'].pop('deferred-author')
+        self.call(); intent=json.loads(self.journal.read_text())['qualification_intent']
+        self.assertEqual(intent['deferred_operations'],{'slot1':{'other-deferred':core.digest(self.deferred)}})
+        self.assertEqual(self.call()['phase'],'active-ready')
+
+    def test_real_third_rules_sha(self):
+        def mutate(kind):
+            if kind!='record': self.rules.write_bytes(b'third rules')
+            if kind!='disk':
+                record=json.loads(self.backup.read_text())
+                record['after'][str(self.rules)]=hashlib.sha256(b'third rules').hexdigest()
+                self.real_atomic(self.backup,record)
+        self.shape_cases(('record','disk','both'),mutate,'installed code drift')
+
+    def test_real_reverse_rules_pair(self):
+        def mutate(_):
+            self.rules.write_bytes(self.rules_bytes['old'])
+            record=json.loads(self.backup.read_text()); record['after'][str(self.rules)]=self.rules_new
+            self.real_atomic(self.backup,record)
+        self.shape_cases((None,),mutate,'installed code drift')
+
+    def test_real_other_file_drift(self):
+        self.shape_cases((None,),lambda _:self.receiver.write_bytes(b'drift'),'installed code drift')
+
+    def test_real_prior_entry_removed(self):
+        def mutate(_):
+            record=json.loads(self.backup.read_text()); record['after'].pop(str(self.receiver))
+            self.real_atomic(self.backup,record)
+        self.shape_cases((None,),mutate,'unrecorded or missing inventory')
+
+    def test_real_change_entry_missing(self):
+        # A changes-only path absent from record_before isolates this conjunct.
+        path=self.changes_only_file()
+        record=json.loads(self.backup.read_text()); record['after'][str(path)]=hashlib.sha256(path.read_bytes()).hexdigest()
+        self.real_atomic(self.backup,record)
+        def mutate(_):
+            record=json.loads(self.backup.read_text()); record['after'].pop(str(path))
+            self.real_atomic(self.backup,record)
+        self.shape_cases((None,),mutate,'unrecorded or missing inventory')
+
+    def test_real_backup_shape_errors(self):
+        cases=(('schema','foreign'),('after',[]),('after',{}),('before',None),('units',[]),
+               ('targets',{}),('activated',1),('extra',True),('manifest',None))
+        self.shape_cases(cases,lambda case:self.mutate_file(self.backup,*case),
+                         'invalid backup schema|malformed backup record')
+
+    def test_real_inventory_path_and_pin_errors(self):
+        outside=self.base/'outside.py'; outside.write_bytes(b'outside')
+        outside_sha=hashlib.sha256(outside.read_bytes()).hexdigest()
+        def mutate(case):
+            name,sha=case; record=json.loads(self.backup.read_text()); record['after'][name]=sha
+            self.real_atomic(self.backup,record)
+        self.shape_cases(((str(outside),outside_sha),('relative.py','a'*64),
+                          (str(self.install/'..'/'outside.py'),'a'*64),
+                          (str(self.receiver),'third'),(str(self.receiver),'A'*64)),
+                         mutate,'installed code drift')
+
+    def test_real_controller_third_sha(self):
+        self.shape_cases((None,),lambda _:self.change(self.policy,controller_sha='e'*40),
+                         'identity|qualification intent drift')
+
+    def test_real_c5_disabled(self):
+        self.shape_cases((None,),lambda _:self.change(self.policy,mode='disabled'),
+                         'identity|qualification intent drift')
+
+    def test_real_controller_drift_after_intent(self):
+        # Both controllers are individually authorized, but cannot change mid-intent.
+        self.shape_cases((None,),lambda _:self.change(self.policy,controller_sha='c'*40),
+                         'qualification intent drift',phases=('pending','completed'))
+
+    def test_real_policy_controller_pin_is_independent(self):
+        def mutate(_):
+            self.change(self.policy,controller_sha='c'*40)
+            j=json.loads(self.journal.read_text())
+            j['qualification_intent']['policy']['controller_sha']='c'*40
+            self.real_atomic(self.journal,j)
+        self.shape_cases((None,),mutate,'qualification intent drift',phases=('pending','completed'))
+
+    def real_deferred_cases(self, cases, mutate):
+        self.shape_cases(cases,lambda case:mutate(self.ops['slot2']['deferred-author'],case),
+                         'one confirmed runtime canary author required|malformed operation record')
+
+    def test_real_deferred_execution_content(self):
+        def mutate(op,case):
+            location,key=case
+            if location=='top': op[key]={}
+            elif location=='result': op['result'][key]={}
+            else: op['history']=[{'nested':{key:0}}]
+        self.real_deferred_cases([(location,key) for location in ('top','result','nested')
+            for key in ('routing','usage','charged_calls','native_receipt')],mutate)
+
+    def test_real_deferred_status(self):
+        self.real_deferred_cases(('unknown','failed','running','confirmed'),
+                                 lambda op,value:op['result'].update(status=value))
+
+    def test_real_deferred_top_status(self):
+        self.real_deferred_cases(('unknown','failed','running','confirmed'),
+                                 lambda op,value:op.update(status=value))
+
+    def test_real_deferred_safe_release(self):
+        self.real_deferred_cases((False,MISSING,1,None),
+            lambda op,value:self.replace_field(op['result'],'safe_release',value))
+
+    def test_real_deferred_checkpoint(self):
+        self.real_deferred_cases(({},False,'checkpoint',MISSING),
+            lambda op,value:self.replace_field(op['result'],'checkpoint',value))
+
+    def test_real_deferred_extra_result_key(self):
+        self.real_deferred_cases((None,),lambda op,_:op['result'].update(extra=True))
+
+    def test_real_deferred_reason(self):
+        self.real_deferred_cases((None,[],MISSING),
+            lambda op,value:self.replace_field(op['result'],'reason',value))
+
+    def test_real_deferred_finished_at(self):
+        self.real_deferred_cases((99,100,0,MISSING,None,'211',True,float('inf')),
+            lambda op,value:self.replace_field(op,'finished_at',value))
+
+    def test_real_deferred_started_at(self):
+        self.real_deferred_cases((99,100,None,'210',True,float('inf')),
+            lambda op,value:self.replace_field(op,'started_at',value))
+
+    def test_real_deferred_task_hash(self):
+        self.real_deferred_cases(('other',MISSING,None),
+            lambda op,value:self.replace_field(op,'task_hash',value))
+
+    def test_real_deferred_malformed_result(self):
+        self.real_deferred_cases((None,[],MISSING),lambda op,value:self.replace_field(op,'result',value))
+
+    def test_real_second_charged_unknown_other_slot(self):
+        self.shape_cases((None,),lambda _:self.extra_author(),'one confirmed runtime canary author required')
+
+    def test_real_deferred_tampering_after_intent(self):
+        # Still non-executing and otherwise valid: only the intent digest detects it.
+        def mutate(kind):
+            op=self.ops['slot2']['deferred-author']
+            if kind=='reason': op['result']['reason']='other precall reason'
+            if kind=='run': op['run']+=1
+            if kind=='removed': del self.ops['slot2']['deferred-author']
+            if kind=='moved': self.ops['slot1']['deferred-author']=self.ops['slot2'].pop('deferred-author')
+        self.shape_cases(('reason','run','removed','moved'),mutate,'operation evidence changed',
+                         phases=('pending','completed'))
+
+    def test_real_new_valid_deferral_after_intent(self):
+        self.shape_cases((None,),lambda _:self.ops['slot1'].update(extra=copy.deepcopy(self.deferred)),
+                         'operation evidence changed',phases=('pending','completed'))
+
+    def test_real_new_intent_fields_shape(self):
+        def mutate(j,case): self.replace_field(j['qualification_intent'],*case)
+        self.intent_cases((('policy_controller',MISSING),('policy_controller',[]),
+                           ('deferred_operations',MISSING),('deferred_operations',[]),
+                           ('deferred_operations',{'slot3':{}}),
+                           ('deferred_operations',{'slot2':{'deferred-author':5}})),mutate)
+
+    def test_real_rollback_controller_drift(self):
+        self.call(); self.change(self.policy,mode='disabled',controller_sha='c'*40)
+        self.assert_no_writes(lambda:U.rollback_runtime(SimpleNamespace(quiet=Mock())),
+                             'runtime rollback identity drift')
+
+    def test_real_rollback_history_controller_pin(self):
+        self.call(); self.change(self.policy,mode='disabled')
+        C=SimpleNamespace(quiet=Mock()); U.rollback_runtime(C)
+        j=json.loads(self.journal.read_text())
+        j['qualification_history'][-1]['intent']['policy_controller']='c'*40
+        self.real_atomic(self.journal,j)
+        self.assert_no_writes(lambda:U.rollback_runtime(C),'runtime rollback replay drift')
 
 class CommittedProof(unittest.TestCase):
     def test_committed_proof_has_exact_production_pins_and_closed_schema(self):
@@ -1091,6 +1377,8 @@ class CommittedProof(unittest.TestCase):
         self.assertEqual(len(proof['evidence']),12)
         for name,sha in U.RUNTIME_MODULES.items():
             self.assertEqual(hashlib.sha256((ROOT/'scripts/chatops/actions_train'/name).read_bytes()).hexdigest(),sha)
+
+
 
 
 if __name__=='__main__': unittest.main()
