@@ -122,6 +122,53 @@ class Protocol(EvidenceTestCase):
             self.assertEqual(N.available('slot2', 'x'), (False, 'Antigravity QA unavailable: AGY_PRECHECK_FAILED:preflight'))
 
 
+class VerdictBlocks(unittest.TestCase):
+    """QA canary 2026-10-25 repeated one verdict object and the adapter parse failed."""
+
+    def parsed(self, response):
+        events = rows()
+        events[-1]['result']['structured_output'] = None
+        events[-1]['result']['response'] = response
+        return N.parse_stream(wire(events), SHA)[0]
+
+    def block(self, **changes):
+        value = {'verdict': 'PASS', 'findings': [], 'reviewed_sha': SHA}
+        value.update(changes)
+        return json.dumps(value, sort_keys=True, separators=(',', ':'))
+
+    def test_one_verdict_block(self):
+        self.assertEqual(self.parsed(self.block()),
+                         {'verdict': 'PASS', 'findings': [], 'reviewed_sha': SHA})
+
+    def test_three_identical_blocks_collapse_to_one(self):
+        body = self.block()
+        self.assertEqual(self.parsed('\n'.join((body, body, body)))['verdict'], 'PASS')
+        reordered = json.dumps({'findings': [], 'reviewed_sha': SHA, 'verdict': 'PASS'})
+        spaced = json.dumps({'verdict': 'PASS', 'findings': [], 'reviewed_sha': SHA}, indent=2)
+        self.assertEqual(self.parsed('\n'.join((body, reordered, spaced))),
+                         {'verdict': 'PASS', 'findings': [], 'reviewed_sha': SHA})
+
+    def test_two_different_blocks_fail_closed(self):
+        other = json.dumps({'verdict': 'FAIL', 'findings': ['incomplete review'],
+                            'reviewed_sha': SHA}, sort_keys=True)
+        with self.assertRaises(N.ReviewError):
+            self.parsed(self.block() + '\n' + other)
+
+    def test_garbage_fails(self):
+        with self.assertRaises(N.ReviewError):
+            self.parsed('not a verdict, just prose')
+
+    def test_empty_response_fails(self):
+        for text in ('', ' \n\t'):
+            with self.subTest(text=repr(text)), self.assertRaises(N.ReviewError):
+                self.parsed(text)
+
+    def test_verdict_block_inside_code_fence_is_accepted(self):
+        fenced = '```json\n' + self.block() + '\n```'
+        self.assertEqual(self.parsed(fenced)['verdict'], 'PASS')
+        self.assertEqual(self.parsed('```\n' + self.block() + '\n```\n')['findings'], [])
+
+
 class Collection(EvidenceTestCase):
     def setUp(self):
         super().setUp()
@@ -270,6 +317,62 @@ class Collection(EvidenceTestCase):
         head = self.commit()
         with self.assertRaises(N.ReviewError):
             N.collect(self.root, self.base, head, 'task')
+
+    def test_over_limit_refuses_on_a_file_boundary_before_charge(self):
+        self.write('pkg/a.py', 'A' * 300)
+        self.write('pkg/b.py', 'B' * 300)
+        head = self.commit()
+        with patch.object(N, 'QA_INPUT_LIMIT', 10 ** 9):
+            full, _ = N.collect(self.root, self.base, head, 'task')
+        self.assertIn('pkg/a.py', full)
+        self.assertIn('pkg/b.py', full)
+        self.assertGreater(len(full.encode()), 400)
+        charge = Mock()
+        with patch.object(N, 'QA_INPUT_LIMIT', 400), \
+             patch.object(N, 'invoke', side_effect=AssertionError('model called')):
+            with self.assertRaises(N.ReviewError) as caught:
+                N.review(self.root, self.base, head, 'task', 60, slot='slot2',
+                         task_hash='x', charge=charge)
+        self.assertEqual(caught.exception.code, 'AGY_INPUT_LIMIT')
+        self.assertEqual(caught.exception.phase, 'source')
+        self.assertIn('not truncated', caught.exception.detail)
+        self.assertIn('no charge', caught.exception.detail)
+        self.assertIn('before model call', caught.exception.detail)
+        self.assertIn('pkg/a.py', caught.exception.detail)
+        self.assertLess(len(caught.exception.detail), len(full))
+        charge.assert_not_called()
+        diff = ('diff --git a/pkg/a.py b/pkg/a.py\n+aaaa\n'
+                'diff --git a/pkg/b.py b/pkg/b.py\n+bbbb\n')
+        files = {'pkg/a.py': 'a' * 100, 'pkg/b.py': 'b' * 100}
+        with patch.object(N, 'QA_INPUT_LIMIT', 150):
+            self.assertEqual(N.qa_limit_boundary(['pkg/a.py', 'pkg/b.py'], files, diff), 'pkg/b.py')
+        with patch.object(N, 'QA_INPUT_LIMIT', 50):
+            self.assertEqual(N.qa_limit_boundary(['pkg/a.py', 'pkg/b.py'], files, diff), 'pkg/a.py')
+
+    def test_differing_verdict_blocks_are_agy_parse_failed(self):
+        self.write('pkg/a.py', 'x = 2\n')
+        head = self.commit()
+        body = json.dumps({'verdict': 'PASS', 'findings': [], 'reviewed_sha': head})
+        other = json.dumps({'verdict': 'FAIL', 'findings': ['incomplete review'],
+                            'reviewed_sha': head})
+        events = rows()
+        events[-1]['result']['structured_output'] = None
+        events[-1]['result']['response'] = body + '\n' + body + '\n' + body
+        def invoke(_text, *_args, **_kwargs):
+            return wire(events), {'input_delivery': 'written'}
+        with patch('context_policy.inject', side_effect=lambda text, *a: (text, {'sha256': 'f' * 64})), \
+             patch.object(N, 'invoke', side_effect=invoke):
+            result, _receipt = N.review(self.root, self.base, head, 'task', 60, slot='slot2',
+                                        task_hash='x', charge=Mock())
+        self.assertEqual(result, {'verdict': 'PASS', 'findings': [], 'reviewed_sha': head})
+        events[-1]['result']['response'] = body + '\n' + other
+        with patch('context_policy.inject', side_effect=lambda text, *a: (text, {'sha256': 'f' * 64})), \
+             patch.object(N, 'invoke', side_effect=invoke):
+            with self.assertRaises(N.ReviewError) as caught:
+                N.review(self.root, self.base, head, 'task', 60, slot='slot2',
+                         task_hash='x', charge=Mock())
+        self.assertEqual(caught.exception.code, 'AGY_PARSE_FAILED')
+        self.assertEqual(caught.exception.phase, 'parse')
 
 class Routing(unittest.TestCase):
     def test_unqualified_agy_falls_back_without_charge_or_call(self):

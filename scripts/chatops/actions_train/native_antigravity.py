@@ -63,6 +63,11 @@ MODELS = frozenset((MODEL, 'claude-sonnet-5-5-high', 'claude-opus-5-5-high'))
 AGENT = 'gobadminton-text-review'
 MAX_INPUT = 1 << 20
 MAX_WIRE = 2 << 20
+# 2026-10-25 QA canary: the diff given to the QA role was cut at about 274 KiB
+# (37 files). The model then returned FAIL "incomplete review". 256 KiB stays
+# strictly under that cut. Over-limit input is refused before invoke/charge.
+# File bodies and per-file diffs are kept whole or not sent; never sliced.
+QA_INPUT_LIMIT = 256 * 1024
 PERMISSION_MODE = 'always-proceed'
 MAX_OUT = 4 << 20
 MIN_TIMEOUT = 30
@@ -132,7 +137,7 @@ Your final message must be the raw JSON object only: first character `{`, last c
 
 
 ERROR_CODES = {'AGY_PRECHECK_FAILED','AGY_LAUNCH_FAILED','AGY_TIMEOUT','AGY_EXIT_NONZERO',
-               'AGY_OUTPUT_LIMIT','AGY_PARSE_FAILED','AGY_EVIDENCE_WRITE_FAILED',
+               'AGY_OUTPUT_LIMIT','AGY_INPUT_LIMIT','AGY_PARSE_FAILED','AGY_EVIDENCE_WRITE_FAILED',
                'AGY_CANDIDATE_CHANGED','AGY_ADAPTER_ERROR','AGY_CHARGE_FAILED', 'AGY_STDIN_FAILED'}
 ERROR_PHASES = {'preflight','source','context','launch','running','output','parse','complete','evidence'}
 EVIDENCE = Path('/var/lib/gobadminton-autonomy/slots/slot2/antigravity-evidence')
@@ -140,14 +145,21 @@ EVIDENCE = Path('/var/lib/gobadminton-autonomy/slots/slot2/antigravity-evidence'
 
 class ReviewError(RuntimeError):
     """Public output contains only closed code/phase and an opaque evidence ID."""
-    def __init__(self, code='AGY_PRECHECK_FAILED', phase='preflight', evidence_id=None):
+    def __init__(self, code='AGY_PRECHECK_FAILED', phase='preflight', evidence_id=None, detail=None):
         self.code = code if code in ERROR_CODES else 'AGY_PRECHECK_FAILED'
         self.phase = phase if phase in ERROR_PHASES else 'preflight'
         self.evidence_id = evidence_id if isinstance(evidence_id,str) and re.fullmatch('[0-9a-f]{32}',evidence_id) else None
-        super().__init__(self.code + ':' + self.phase + (':' + self.evidence_id if self.evidence_id else ''))
+        self.detail = detail if type(detail) is str and detail and len(detail) <= 500 else None
+        text = self.code + ':' + self.phase + (':' + self.evidence_id if self.evidence_id else '')
+        if self.detail:
+            text += ': ' + self.detail
+        super().__init__(text)
 
     def public(self):
-        return dict(code=self.code, phase=self.phase, evidence_id=self.evidence_id)
+        value = dict(code=self.code, phase=self.phase, evidence_id=self.evidence_id)
+        if self.detail:
+            value['detail'] = self.detail
+        return value
 
 
 def private_directory(path, create=False):
@@ -455,7 +467,57 @@ def collect(work, base, head, prompt, *, compact_files=False):
             + '\nDATA_JSON:\n' + payload)
     need(len(text.encode()) <= MAX_INPUT, 'input exceeds 1 MiB; refusing to truncate')
     need(not missing, 'incomplete review context; refusing provider call')
+    enforce_qa_input_limit(text, changed, files, diff)
     return text, hashlib.sha256(text.encode()).hexdigest()
+
+
+def per_file_diff_bytes(diff):
+    """Whole git diff sections keyed by the destination path. No byte slicing."""
+    sizes = {}
+    for chunk in re.split(r'(?=^diff --git )', diff, flags=re.M):
+        if not chunk.startswith('diff --git '):
+            continue
+        header = chunk.split('\n', 1)[0]
+        match = re.match(r'diff --git a/.+ b/(.+)$', header)
+        if not match:
+            continue
+        path = match.group(1)
+        if len(path) >= 2 and path[0] == '"' and path[-1] == '"':
+            path = path[1:-1]
+        sizes[path] = sizes.get(path, 0) + len(chunk.encode('utf-8'))
+    return sizes
+
+
+def qa_limit_boundary(changed, files, diff):
+    """First whole file whose body plus diff section crosses QA_INPUT_LIMIT."""
+    diff_sizes = per_file_diff_bytes(diff)
+    running = 0
+    boundary = None
+    for path in changed:
+        body = files.get(path)
+        if type(body) is str:
+            running += len(body.encode('utf-8'))
+        elif type(body) is dict:
+            running += len(json.dumps(body, sort_keys=True, separators=(',', ':'),
+                                      ensure_ascii=False).encode('utf-8'))
+        running += diff_sizes.get(path, 0)
+        if boundary is None and running > QA_INPUT_LIMIT:
+            boundary = path
+    if boundary is None and changed:
+        boundary = changed[-1]
+    return boundary or 'unknown'
+
+
+def enforce_qa_input_limit(text, changed, files, diff):
+    """Refuse an over-limit QA input before any model call. Never return a short diff."""
+    raw = text.encode('utf-8')
+    if len(raw) <= QA_INPUT_LIMIT:
+        return
+    boundary = qa_limit_boundary(changed, files, diff)
+    detail = ('QA input %d bytes exceeds %d byte limit; refusing before model call; '
+              'no charge; not truncated; whole-file boundary %s; files=%d; diff_bytes=%d'
+              % (len(raw), QA_INPUT_LIMIT, boundary, len(changed), len(diff.encode('utf-8'))))
+    raise ReviewError('AGY_INPUT_LIMIT', 'source', detail=detail)
 
 
 AGY_SHA256 = '8af8e7a2a68f72fa7164e00bb59b8902c018fa43e528fc401ad7db8c2972583c'
@@ -1720,8 +1782,10 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=
     except BaseException as error:
         code=error.code if isinstance(error,ReviewError) else 'AGY_ADAPTER_ERROR'
         phase=error.phase if isinstance(error,ReviewError) else ev.meta['phase']
-        if code != 'AGY_EVIDENCE_WRITE_FAILED':ev.record(terminal=True,status='unknown',error_code=code,phase=phase)
-        raise ReviewError(code,phase,ev.id) from None
+        detail=error.detail if isinstance(error,ReviewError) else None
+        if code != 'AGY_EVIDENCE_WRITE_FAILED':ev.record(terminal=True,status='unknown',error_code=code,phase=phase,
+                                                        **({'refusal':detail} if detail else {}))
+        raise ReviewError(code,phase,ev.id,detail=detail) from None
     finally:
         _restore_write_guard(guard_saved)
         _remove_cgroup(invocation_cgroup)
@@ -1808,7 +1872,12 @@ def parse_stream(raw, head, model=MODEL, *, analysis_binding=None, strict_source
          and out.get('conversation_id') == conversation and (analysis_binding is not None or finish) and inference, 'terminal completion missing')
     audit(out)
     if analysis_binding is None:
-        result = canonical(out.get('structured_output'), head)
+        structured = out.get('structured_output')
+        if type(structured) is dict:
+            result = canonical(structured, head)
+        else:
+            # Schema output missing: the model text may repeat one verdict object.
+            result = parse_verdict_response(out.get('response'), head)
     else:
         need(events[-1].get('conversation_id',conversation)==conversation
              and out.get('model',model)==model, 'terminal identity drift')
@@ -1891,6 +1960,48 @@ def canonical(value, head):
          and all(isinstance(x, str) and len(x) <= 4000 for x in findings), 'schema mismatch')
     need(value['verdict'] == 'FAIL' or not findings, 'PASS with findings')
     return {'verdict': value['verdict'], 'findings': list(findings), 'reviewed_sha': head}
+
+
+def canonical_verdict_bytes(value, head):
+    """Byte identity after canonicalization, not the model's original spelling."""
+    return json.dumps(canonical(value, head), sort_keys=True, separators=(',', ':'),
+                      ensure_ascii=False).encode('utf-8')
+
+
+def verdict_documents(text):
+    """Top-level verdict objects, including one object inside a Markdown fence.
+
+    Non-verdict JSON is ignored. Duplicate keys and non-JSON constants fail closed.
+    A `{` that is not a complete value is skipped; a well-formed object is consumed whole.
+    """
+    decoder = json.JSONDecoder(object_pairs_hook=uniq,
+                               parse_constant=lambda _value: need(False, 'non-JSON constant'))
+    found = []
+    index = 0
+    length = len(text)
+    while index < length:
+        start = text.find('{', index)
+        if start < 0:
+            break
+        try:
+            value, end = decoder.raw_decode(text, start)
+        except json.JSONDecodeError:
+            index = start + 1
+            continue
+        if type(value) is dict and set(value) == {'verdict', 'findings', 'reviewed_sha'}:
+            found.append(value)
+        index = end
+    return found
+
+
+def parse_verdict_response(text, head):
+    """Accept one verdict. Identical repeats collapse; any difference fails closed."""
+    need(type(text) is str and text.strip(), 'empty QA verdict response')
+    blocks = verdict_documents(text)
+    need(blocks, 'no QA verdict block')
+    rendered = [canonical_verdict_bytes(block, head) for block in blocks]
+    need(len(set(rendered)) == 1, 'QA verdict blocks differ')
+    return canonical(blocks[0], head)
 
 
 def review(work, base, head, prompt, timeout, *, slot, task_hash, charge, model=MODEL, popen=subprocess.Popen,
@@ -1998,8 +2109,10 @@ def review(work, base, head, prompt, timeout, *, slot, task_hash, charge, model=
     except BaseException as error:
         code=error.code if isinstance(error,ReviewError) else 'AGY_ADAPTER_ERROR'
         phase=error.phase if isinstance(error,ReviewError) else ev.meta['phase']
-        if code != 'AGY_EVIDENCE_WRITE_FAILED':ev.record(terminal=True,status='unknown',error_code=code,phase=phase)
-        raise ReviewError(code,phase,ev.id) from None
+        detail=error.detail if isinstance(error,ReviewError) else None
+        if code != 'AGY_EVIDENCE_WRITE_FAILED':ev.record(terminal=True,status='unknown',error_code=code,phase=phase,
+                                                        **({'refusal':detail} if detail else {}))
+        raise ReviewError(code,phase,ev.id,detail=detail) from None
     finally:
         _restore_write_guard(guard_saved)
         ev.close()

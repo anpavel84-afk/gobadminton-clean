@@ -112,6 +112,49 @@ class OwnerPackageTests(unittest.TestCase):
             with patch.object(A,'owner_comment',return_value=('trusted',u)):
                 with self.assertRaises(Exception):A.authorize(COMMENT,CONTROLLER)
 
+    def test_installed_c5_comment_is_not_retargeted_by_document_pin(self):
+        """Comment 6396105635 stays on installed C5 pins. A later EOM hash must not replace them."""
+        comment = Q.INSTALLED_C5_COMMENT
+        controller = Q.INSTALLED_C5_CONTROLLER
+        self.assertEqual(comment, 6396105635)
+        self.assertEqual(controller, '41e12be2d551158e97ea30eaf8e95f992f998615')
+        self.assertEqual(Q.INSTALLED_C5_RULES, '017441dec5ba197a1065b6ef90efdddb090b286ba48687241a7fbc09dd002269')
+        self.assertNotEqual(Q.INSTALLED_C5_RULES, A.RULES)
+        calls = [dict(role=role, input_revision=pin[0], input_path=pin[1], input_sha256=pin[2])
+                 for role, pin in A.EXPECTED_PINS.items()]
+        value = dict(schema=Q.OWNER_PACKAGE_SCHEMA, issue=29, repo_id=A.REPO_ID,
+                     controller_sha=controller, rules_sha256=Q.INSTALLED_C5_RULES,
+                     source_base=A.SOURCE_BASE, source_head=A.SOURCE_HEAD, model=N.MODEL,
+                     max_calls=2, owner_comment=comment, calls=calls)
+        body = A.PREFIX + json.dumps(value, sort_keys=True, separators=(',', ':'))
+        data = dict(id=comment, issue_url=A.ISSUE_URL,
+                    user=dict(id=318610566, login='anpavel84-afk'),
+                    author_association='OWNER', body=body)
+        with patch.object(A.urllib.request, 'urlopen', return_value=Response(data)), \
+             patch.object(Q, 'addressed_input', return_value='inert'):
+            ledger = A.authorize(comment, controller)
+        self.assertEqual(ledger['controller_sha'], controller)
+        self.assertEqual(ledger['rules_sha256'], Q.INSTALLED_C5_RULES)
+        for row in ledger['grants'].values():
+            self.assertEqual(row['grant']['rules_sha256'], Q.INSTALLED_C5_RULES)
+            self.assertEqual(row['grant']['controller_revision'], controller)
+        drifted = dict(value, rules_sha256=A.RULES)
+        drifted_data = dict(data, body=A.PREFIX + json.dumps(drifted, sort_keys=True, separators=(',', ':')))
+        with patch.object(A.urllib.request, 'urlopen', return_value=Response(drifted_data)), \
+             patch.object(Q, 'addressed_input', return_value='inert'):
+            with self.assertRaises(Exception):
+                A.authorize(comment, controller)
+        with patch.object(A.urllib.request, 'urlopen', return_value=Response(data)), \
+             patch.object(Q, 'addressed_input', return_value='inert'):
+            with self.assertRaises(Exception):
+                A.authorize(comment, '0' * 40)
+        A.installed_rules_ok(controller, Q.INSTALLED_C5_RULES)
+        with self.assertRaises(Exception):
+            A.installed_rules_ok(controller, A.RULES)
+        A.installed_rules_ok(CONTROLLER, A.RULES)
+        with self.assertRaises(Exception):
+            A.installed_rules_ok(CONTROLLER, Q.INSTALLED_C5_RULES)
+
 if __name__=='__main__':unittest.main()
 
 class AdmissionRepairTests(unittest.TestCase):
