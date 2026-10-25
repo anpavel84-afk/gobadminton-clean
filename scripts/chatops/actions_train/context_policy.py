@@ -11,9 +11,9 @@ import subprocess
 import tomllib
 from core import need
 
-RULES_COMMIT = 'bc8bad0c38a861f8e72296d0a323e2941b9322e0'
-RULES_SHA256 = '017441dec5ba197a1065b6ef90efdddb090b286ba48687241a7fbc09dd002269'
-RULES_SIZE = 113203
+RULES_COMMIT = '13a8b6c54a45aaa57021e092a1bee54926d9eac4'
+RULES_SHA256 = '8798ea76874ea5e42f708fff6d74f1ccbf526413c701e9f2349045fdc98be9d5'
+RULES_SIZE = 115079
 RULES_REVISION = '1.4'
 RULES_PATH = Path('/usr/local/lib/gb-actions-train/accepted-engineering-rules.md')
 

@@ -7,11 +7,11 @@
   "accepted_operating_model": {
     "path": "docs/rules/ENGINEERING_OPERATING_MODEL.md",
     "revision": "1.4",
-    "commit": "bc8bad0c38a861f8e72296d0a323e2941b9322e0",
-    "sha256": "017441dec5ba197a1065b6ef90efdddb090b286ba48687241a7fbc09dd002269",
-    "bytes": 113203,
+    "commit": "13a8b6c54a45aaa57021e092a1bee54926d9eac4",
+    "sha256": "8798ea76874ea5e42f708fff6d74f1ccbf526413c701e9f2349045fdc98be9d5",
+    "bytes": 115079,
     "encoding": "utf-8",
-    "change": "SR0_amendment_sections_0_3_4.2_5_6.2_6.3_8.1_10.5_10.8_12_and_header",
+    "change": "SR0_1_4_plus_section_6_3_owner_package_max_calls_ceiling_5",
     "accepted_by": "owner_direct_voice_2026-10-24T16:11-03:00_America/Sao_Paulo"
   },
   "accepted_routing_policy": {
