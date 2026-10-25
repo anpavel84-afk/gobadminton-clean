@@ -83,7 +83,10 @@ class NativeAgentExposure(unittest.TestCase):
         self.assertIn('no_new_privileges()',source)
         self.assertNotIn('_landlock(readonly,writable,executables)',source)
         self.assertIn('ANALYSIS_AGENT_DEF if analysis else AGENT_DEF',source)
-        self.assertIn("writable_roots=['invocation_private_root','/dev/null']",source)
+        self.assertNotIn('writable_roots',source)
+        self.assertNotIn('readonly_roots',source)
+        self.assertIn('owner_waiver=OWNER_WAIVER',source)
+        self.assertIn('not verified safety',N.OWNER_WAIVER)
 
     def test_exact_agent_definition_is_written_before_native_exec(self):
         """Fake Popen: inspect the actual private .agents/agents path; 0 provider calls."""

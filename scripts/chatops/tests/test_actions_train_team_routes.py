@@ -44,6 +44,7 @@ class ModelProtocol(unittest.TestCase):
             return A.wire(events),{'qualification_phase':'ready','input_delivery':'written'}
         with tempfile.TemporaryDirectory(prefix='gb-team-qa-evidence-') as temp, \
              patch.object(N,'git',side_effect=git),patch.object(N,'collect',return_value=('SOURCE_SENTINEL',{})), \
+             patch.object(N,'_candidate_state',return_value=(A.SHA,'')), \
              patch('context_policy.inject',return_value=('TRUSTED_FINAL_STDIN_SOURCE_SENTINEL',{'stdin_sha256':'legacy'})), \
              patch.object(N,'invoke',side_effect=invoke):
             result,r=N.review(Path('/candidate'),'b'*40,A.SHA,'task',60,

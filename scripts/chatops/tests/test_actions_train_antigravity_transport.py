@@ -92,7 +92,7 @@ class Transport(unittest.TestCase):
     if args==('rev-parse','HEAD'):return SHA.encode()
     if args[:1]==('rev-parse',):return b'/tmp/candidate/.git'
     return b''
-   with patch.object(N,'qualification',return_value={'phase':'canary'}),patch.object(N.os,'geteuid',return_value=978),patch.object(N,'trusted',return_value=b'PRIVATE_AUTH'),patch.object(N,'git',git),patch.object(N,'collect',return_value=('SOURCE_CONTEXT_漢字',None)),patch.object(N,'filesystem_roots',return_value=([],[],[])),patch.object(N.os,'killpg'),patch.object(N,'_verify_executor_boundary',return_value=None),patch.object(N,'_candidate_state',return_value=('H','')) :
+   with patch.object(N,'qualification',return_value={'phase':'canary'}),patch.object(N.os,'geteuid',return_value=978),patch.object(N,'trusted',return_value=b'PRIVATE_AUTH'),patch.object(N,'git',git),patch.object(N,'collect',return_value=('SOURCE_CONTEXT_漢字',None)),patch.object(N,'filesystem_roots',return_value=([],[],[])),patch.object(N.os,'killpg'),patch.object(N,'_verify_executor_boundary',return_value=None),patch.object(N,'_candidate_state',return_value=(SHA,'')) :
     result,receipt=N.review(Path('/tmp/candidate'),'b'*40,SHA,'task',30,slot='slot2',task_hash='f'*64,charge=charge,popen=popen,accepted_rules=accepted,evidence_dir=directory)
    semantic=json.loads(captured['wire'])['message']['content'].encode()
    self.assertEqual(receipt['semantic_input_sha256'],hashlib.sha256(semantic).hexdigest())

@@ -131,6 +131,7 @@ class AnalysisProtocol(unittest.TestCase):
             return wire(stream()),{'input_delivery':'written'}
         with tempfile.TemporaryDirectory() as d:
             with patch.object(N,'git',side_effect=lambda work,*args,**kw: HEAD.encode() if args[0]=='rev-parse' else b''), \
+                 patch.object(N,'_candidate_state',return_value=(HEAD,'')), \
                  patch.object(Q,'addressed_input',return_value='EXACT_INERT_INPUT'), \
                  patch('context_policy.inject',side_effect=inject), \
                  patch.object(N,'invoke',side_effect=invoke):
@@ -158,6 +159,7 @@ class AnalysisProtocol(unittest.TestCase):
             return wire(events),{'input_delivery':'written'}
         with tempfile.TemporaryDirectory() as d:
             with patch.object(N,'git',side_effect=lambda work,*args,**kw: HEAD.encode() if args[0]=='rev-parse' else b''), \
+                 patch.object(N,'_candidate_state',return_value=(HEAD,'')), \
                  patch.object(Q,'addressed_input',return_value='EXACT_INERT_INPUT'), \
                  patch('context_policy.inject',side_effect=lambda text,*a:('TRUSTED_RULES\nEND TRUSTED OPERATING RULES.\nRole: qa.\n'+text,{'sha256':'f'*64})), \
                  patch.object(N,'invoke',side_effect=invoke):
@@ -197,7 +199,8 @@ class AnalysisStage(unittest.TestCase):
             def invoke(text,*args,**kw):
                 captured.update(text=text,kwargs=kw)
                 return wire(stream()),{'input_delivery':'written'}
-            with patch.object(N,'git',side_effect=git),patch.object(Q,'addressed_input',return_value='EXACT_INERT_INPUT'), \
+            with patch.object(N,'git',side_effect=git),patch.object(N,'_candidate_state',return_value=(HEAD,'')), \
+                 patch.object(Q,'addressed_input',return_value='EXACT_INERT_INPUT'), \
                  patch('context_policy.inject',side_effect=lambda text,*a:('TRUSTED_RULES\nEND TRUSTED OPERATING RULES.\nRole: qa.\n'+text,{'sha256':'f'*64})), \
                  patch.object(N,'invoke',side_effect=invoke):
                 value,receipt=N.review(Path('/candidate'),BASE,HEAD,'ignored QA text',1800,

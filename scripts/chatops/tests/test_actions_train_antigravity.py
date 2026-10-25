@@ -474,7 +474,10 @@ print(json.dumps({'cwd':os.getcwd(),'head':git.stdout.strip(),
             self.assertEqual(len(seen),1)
             self.assertEqual(receipt['filesystem_boundary'],'uid978_unix_permissions_nnp')
             self.assertIs(receipt['requested_native_sandbox'], False)
-            self.assertEqual(receipt['writable_roots'],['invocation_private_root','/dev/null'])
+            self.assertNotIn('writable_roots',receipt)
+            self.assertNotIn('readonly_roots',receipt)
+            self.assertIs(receipt['filesystem_roots_enforced'],False)
+            self.assertIn('not verified safety',receipt['owner_waiver'])
             rows=stream()
             rows[0]['init']['tools']=['view_file','run_command']
             answer_data=answer()|dict(completion='COMPLETE',source_reads=[

@@ -23,6 +23,13 @@ AGY = '/opt/gb-slots/runtime/antigravity/agy'
 # UID978/GID968 account (no supplementary groups, no capabilities,
 # no_new_privs). No AppArmor or other MAC profile is required or consulted.
 FILESYSTEM_BOUNDARY = 'uid978_unix_permissions_nnp'
+# Receipt fact: the Owner accepted cross-project read exposure. It is not a
+# verified confinement, and this adapter does not enforce writable/readonly roots.
+OWNER_WAIVER = (
+    'Owner waiver (not verified safety): UID978 may read other projects\' '
+    'files, secrets and PROD data on this server. No writable or readonly '
+    'root confinement is enforced.'
+)
 EXECUTOR_GID = 968
 MARKER = Path('/etc/gobadminton-slots/antigravity-qa.json')
 EXECUTOR_UID = 978
@@ -651,10 +658,201 @@ def _verify_executor_boundary():
         raise PermissionError('executor identity or no_new_privs could not be verified')
 
 
+# Git metadata that `status` does not treat as a dirty checkout. Hashes cover
+# the checkout gitdir and the common dir (linked worktrees keep config, hooks,
+# info and alternates in the common dir; config.worktree stays per worktree).
+_GIT_DIR_META = ('HEAD', 'ORIG_HEAD', 'index', 'config', 'config.worktree',
+                 'commondir', 'gitdir')
+_COMMON_META = ('config', 'config.worktree', 'hooks', 'info',
+                'objects/info/alternates', 'objects/info/http-alternates',
+                'refs/replace')
+
+
+def _blob_oid(data, oid_len):
+    algo = {40: 'sha1', 64: 'sha256'}.get(oid_len)
+    if algo is None:
+        raise ValueError('unsupported git object hash length')
+    digest = hashlib.new(algo)
+    digest.update(f'blob {len(data)}\0'.encode())
+    digest.update(data)
+    return digest.hexdigest()
+
+
+def _fingerprint(path):
+    """Content identity of one metadata path. Symlink targets are not a hideout."""
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return b'absent'
+    if stat.S_ISLNK(info.st_mode):
+        target = os.fsencode(os.readlink(path))
+        try:
+            body = path.read_bytes() if path.is_file() else b''
+        except OSError:
+            body = b'unreadable'
+        return b'link:' + target + b'\0' + hashlib.sha256(body).digest()
+    if stat.S_ISREG(info.st_mode):
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+            with os.fdopen(fd, 'rb') as handle:
+                body = handle.read()
+        except OSError:
+            body = b'unreadable'
+        return b'file:' + hashlib.sha256(body).digest()
+    if stat.S_ISDIR(info.st_mode):
+        try:
+            children = sorted(path.iterdir(), key=lambda child: child.name)
+        except OSError:
+            return b'dir-unreadable'
+        parts = [os.fsencode(child.name) + b'\0' + _fingerprint(child) for child in children]
+        return b'dir:' + hashlib.sha256(b''.join(parts)).digest()
+    return b'other:' + str(info.st_mode).encode()
+
+
+def _git_metadata(work):
+    """(records, redirected). records are stable (name, fingerprint) pairs."""
+    entry = Path(work) / '.git'
+    info = entry.lstat()
+    redirected = stat.S_ISLNK(info.st_mode)
+    records = [('checkout/.git', b'directory' if stat.S_ISDIR(info.st_mode) and not redirected
+                else _fingerprint(entry))]
+    if redirected or not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
+        return records, True
+    if stat.S_ISREG(info.st_mode):
+        text = entry.read_text(encoding='utf-8')
+        if not text.startswith('gitdir:'):
+            return records, True
+        raw = text.split(':', 1)[1].strip()
+        git_dir = Path(raw)
+        if not git_dir.is_absolute():
+            git_dir = (Path(work) / git_dir).resolve()
+    else:
+        git_dir = entry
+    common = git_dir
+    commondir = git_dir / 'commondir'
+    try:
+        common_info = commondir.lstat()
+    except FileNotFoundError:
+        common_info = None
+    if common_info is not None and stat.S_ISREG(common_info.st_mode) and not stat.S_ISLNK(common_info.st_mode):
+        raw = commondir.read_text(encoding='utf-8').strip()
+        common = Path(raw)
+        if not common.is_absolute():
+            common = (git_dir / raw).resolve()
+    for rel in _GIT_DIR_META:
+        records.append(('gitdir/' + rel, _fingerprint(git_dir / rel)))
+    for rel in _COMMON_META:
+        records.append(('commondir/' + rel, _fingerprint(common / rel)))
+    return records, redirected
+
+
+def _worktree_entries(work, oid_len):
+    """Independent blob identities, including ignored and untracked paths.
+
+    Does not ask git to hash the files, so clean/smudge filters, exclude,
+    skip-worktree, assume-unchanged and fsmonitor cannot hide a byte change.
+    """
+    entries = {}
+    root = Path(work)
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        base = Path(dirpath)
+        relative_dir = base.relative_to(root)
+        next_dirs = []
+        linked_dirs = []
+        for name in dirnames:
+            if relative_dir == Path('.') and name == '.git':
+                continue
+            path = base / name
+            if path.is_symlink():
+                linked_dirs.append(name)
+            else:
+                next_dirs.append(name)
+        dirnames[:] = next_dirs
+        for name in list(filenames) + linked_dirs:
+            if relative_dir == Path('.') and name == '.git':
+                continue
+            path = base / name
+            rel = path.relative_to(root).as_posix()
+            info = path.lstat()
+            if stat.S_ISLNK(info.st_mode):
+                data = os.fsencode(os.readlink(path))
+                entries[rel] = ('120000', _blob_oid(data, oid_len))
+            elif stat.S_ISREG(info.st_mode):
+                try:
+                    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+                    with os.fdopen(fd, 'rb') as handle:
+                        data = handle.read()
+                except OSError:
+                    entries[rel] = ('unreadable', '')
+                    continue
+                mode = '100755' if info.st_mode & 0o111 else '100644'
+                entries[rel] = (mode, _blob_oid(data, oid_len))
+            else:
+                entries[rel] = ('special', '')
+    return entries
+
+
+def _read_only_git(work, *args):
+    return git(work, '--no-replace-objects', *args, limit=8 << 20)
+
+
 def _candidate_state(work):
-    """HEAD plus porcelain status of the candidate checkout (no index refresh)."""
-    return (dec(git(work, 'rev-parse', 'HEAD')).strip(),
-            dec(git(work, '--no-optional-locks', 'status', '--porcelain')))
+    """Unspoofable checkout snapshot.
+
+    Returns (head, divergence, binding). divergence is '' only when every
+    worktree path, including ignored and untracked files, matches
+    `git ls-tree -r HEAD` and `git ls-files -v` shows only ordinary cached
+    entries (tag H: no skip-worktree, no assume-unchanged). binding also
+    covers `.git` config, hooks, info (exclude), alternates and worktree
+    config, so a metadata-only edit changes the snapshot. Any discrepancy
+    is AGY_CANDIDATE_CHANGED at the caller. Callers compare snapshots with
+    equality; a test seam may return a shorter tuple whose second item is ''.
+    """
+    try:
+        fmt = dec(_read_only_git(work, 'rev-parse', '--show-object-format')).strip()
+        oid_len = 64 if fmt == 'sha256' else 40
+        head = dec(_read_only_git(work, 'rev-parse', 'HEAD')).strip()
+        raw_tree = _read_only_git(work, 'ls-tree', '-r', '-z', 'HEAD')
+        tree = {}
+        for row in raw_tree.split(b'\0'):
+            if not row:
+                continue
+            meta, _, name = row.partition(b'\t')
+            mode, kind, oid = meta.split()
+            tree[os.fsdecode(name)] = (mode.decode('ascii'), kind.decode('ascii'), oid.decode('ascii'))
+        blobs = {path: (mode, oid) for path, (mode, kind, oid) in tree.items() if kind == 'blob'}
+        files = _worktree_entries(work, oid_len)
+        raw_flags = _read_only_git(work, 'ls-files', '-v', '-z')
+        flags = []
+        flags_ok = True
+        for row in raw_flags.split(b'\0'):
+            if not row:
+                continue
+            if len(row) < 3 or row[1:2] != b' ':
+                flags_ok = False
+                break
+            flags.append((row[:1].decode('ascii'), os.fsdecode(row[2:])))
+        flags.sort()
+        records, redirected = _git_metadata(work)
+        reasons = []
+        if redirected or any(kind != 'blob' for _mode, kind, _oid in tree.values()):
+            reasons.append('git-metadata')
+        if files != blobs:
+            reasons.append('worktree')
+        if (not flags_ok or any(tag != 'H' for tag, _path in flags)
+                or [path for _tag, path in flags] != sorted(blobs)):
+            reasons.append('index-flags')
+        divergence = ','.join(reasons)
+        payload = json.dumps({
+            'head': head,
+            'divergence': divergence,
+            'files': sorted(files.items()),
+            'flags': flags,
+            'meta': [(name, hashlib.sha256(digest).hexdigest()) for name, digest in records],
+        }, sort_keys=True, separators=(',', ':')).encode()
+        return (head, divergence, hashlib.sha256(payload).hexdigest())
+    except (OSError, ReviewError, ValueError, UnicodeError):
+        return ('', 'unverified', 'unverified')
 
 
 def catalog_precharge(cwd, env, child, model):
@@ -850,12 +1048,17 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=
                         raise ReviewError('AGY_STDIN_FAILED','running',ev.id)
                     ev.record(input_delivery='written')
                 ev.record(phase='output')
+                # Checkout integrity is decided before AGY_EXIT_NONZERO / output
+                # limit. A tampered tree must not collapse into the exit code.
+                # The nonzero status stays on the evidence either way.
+                after=_candidate_state(work)
+                if after!=candidate_before or after[1]!='':
+                    ev.record(candidate_state='changed',concurrent_exit_code=process.returncode)
+                    raise ReviewError('AGY_CANDIDATE_CHANGED','output',ev.id)
                 if any((out/name).stat().st_size>MAX_OUT for name in ('stdout','stderr')):
                     raise ReviewError('AGY_OUTPUT_LIMIT','output',ev.id)
                 if process.returncode != 0:raise ReviewError('AGY_EXIT_NONZERO','output',ev.id)
                 raw=(out/'stdout').read_bytes()
-                if _candidate_state(work)!=candidate_before:
-                    raise ReviewError('AGY_CANDIDATE_CHANGED','output',ev.id)
                 ev.record(candidate_state='unchanged')
             except BaseException as error:
                 primary_failure = error
@@ -890,7 +1093,7 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=
         return raw,dict(executor_uid=EXECUTOR_UID,slot=slot,qualification_phase=marker['phase'],
             requested_native_sandbox=False,filesystem_boundary=FILESYSTEM_BOUNDARY,
             candidate_access='uid_owned_checkout_state_verified_unchanged',credential_source='provisioned_native_auth_file',
-            readonly_roots=[str(source_root or work)],writable_roots=['invocation_private_root','/dev/null'],
+            owner_waiver=OWNER_WAIVER,filesystem_roots_enforced=False,
             evidence_id=ev.id,requested_permission_mode=PERMISSION_MODE,input_delivery='written',**transport)
     except BaseException as error:
         code=error.code if isinstance(error,ReviewError) else 'AGY_ADAPTER_ERROR'
@@ -1073,7 +1276,11 @@ def review(work, base, head, prompt, timeout, *, slot, task_hash, charge, model=
     try:
         ev.record(requested_model=model)
         need(model in MODELS, 'unsupported native QA model')
-        need(not git(work, 'status', '--porcelain'), 'candidate must be clean before QA')
+        # Same AGY_CANDIDATE_CHANGED code as invoke(), before charge. Porcelain
+        # alone is not the gate: skip-worktree, exclude and git metadata bypass it.
+        candidate_before=_candidate_state(work)
+        if candidate_before[1] != '' or candidate_before[0] != head:
+            raise ReviewError('AGY_CANDIDATE_CHANGED','preflight',ev.id)
         binding=None
         if analysis_grant is None:
             source, _ = collect(work, base, head, prompt + '\nRead-only candidate root: ' + str(Path(work).resolve()),
@@ -1136,7 +1343,8 @@ def review(work, base, head, prompt, timeout, *, slot, task_hash, charge, model=
                                 **({'analysis':True} if binding else {}))
         need(execution.get('input_delivery')=='written','stdin delivery unconfirmed')
         rules_context['delivery']='explicit_full_stream_json_stdin'
-        if git(work,'status','--porcelain') or dec(git(work,'rev-parse','HEAD')).strip()!=head:
+        after=_candidate_state(work)
+        if after != candidate_before or after[1] != '' or after[0] != head:
             raise ReviewError('AGY_CANDIDATE_CHANGED','parse',ev.id)
         ev.record(phase='parse')
         try:

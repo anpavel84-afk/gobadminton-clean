@@ -82,7 +82,7 @@ class Evidence(unittest.TestCase):
             out=self.root/'outputs';out.mkdir();(out/'stdout').write_bytes(b'{malformed');(out/'stderr').write_bytes(b'private')
             kw['evidence'].streams(out)
             return b'{malformed',{'input_delivery':'written'}
-        with patch.object(N,'git',side_effect=lambda work,*args:b'b'*40 if args==('rev-parse','HEAD') else b''),patch.object(N,'collect',return_value=('source',{})),patch('context_policy.inject',return_value=('final prompt',rules[1])),patch.object(N,'invoke',invoke):
+        with patch.object(N,'git',side_effect=lambda work,*args:b'b'*40 if args==('rev-parse','HEAD') else b''),patch.object(N,'_candidate_state',return_value=('b'*40,'')),patch.object(N,'collect',return_value=('source',{})),patch('context_policy.inject',return_value=('final prompt',rules[1])),patch.object(N,'invoke',invoke):
             with self.assertRaisesRegex(N.ReviewError,'AGY_PARSE_FAILED'):
                 N.review(Path('/tmp'),'a'*40,'b'*40,'task',30,slot='slot2',task_hash='f'*64,charge=Mock(),evidence_dir=self.directory)
         p,m=self.records();self.assertEqual((p/'stdout').read_bytes(),b'{malformed')
