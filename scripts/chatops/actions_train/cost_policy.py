@@ -41,6 +41,10 @@ def validate_policy(task):
         if level == "expert":
             require(reason in CRITICAL | {"expert_risk"} and len(evidence.strip()) >= 20,
                     "Astra Medium requires expert-risk evidence")
+    if any(route.split(':')[0] == 'agy' for route in task['author_routes']):
+        from core import executable_independent_qa
+        require(executable_independent_qa(task, policy=policy),
+                'AGY author requires an executable independent non-agy QA route')
     return policy
 
 def preferred_route(policy, task, role, level):
@@ -60,7 +64,11 @@ def preferred_route(policy, task, role, level):
 
 def selection(task, role):
     """Never add a route; pick the approved minimum for the classified STAGE."""
-    p = validate_policy(task)
+    return _selection(validate_policy(task), task, role)
+
+
+def _selection(p, task, role):
+    """Already validated policy; shared with static independent-QA admission."""
     row = p[role]
     minimum = MATRIX[row["complexity"]]
     preferred = preferred_route(p, task, role, row['complexity'])

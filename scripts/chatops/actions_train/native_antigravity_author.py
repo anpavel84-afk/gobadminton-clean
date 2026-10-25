@@ -221,7 +221,7 @@ _FAILURE_FIELDS = (
     'executor_gid', 'evidence_id', 'executor_reap', 'source_export_sha256',
     'charge_state', 'error_code', 'oauth_refresh', 'cleanup',
     'cleanup_restore_guard', 'cleanup_private_tree', 'cleanup_oauth_copy',
-    'cleanup_cgroup', 'cleanup_evidence', 'cleanup_reap',
+    'cleanup_cgroup', 'cleanup_evidence', 'cleanup_reap', 'receipt_persist',
 )
 
 
@@ -314,6 +314,47 @@ def _import(bridge, changed, payloads):
             if os.path.exists(temp): os.unlink(temp)
 
 
+def _guard_parent(path, root):
+    """Open a recorded path's parent without following any symlink component."""
+    path, root = Path(path), Path(root)
+    need(path.is_absolute() and root.is_absolute() and '..' not in path.parts
+         and (path == root or root in path.parents), 'invalid guard record path')
+    fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for part in path.parent.parts[1:]:
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd); fd = child
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _restore_author_guard(saved, root):
+    if not saved: return
+    # Reject unsafe records before handing paths to the pinned shared helper.
+    # The adapter's verification/repair uses anchored directory fds throughout.
+    for path, _ in saved:
+        fd = _guard_parent(path, root)
+        try:
+            mode = os.stat(Path(path).name, dir_fd=fd, follow_symlinks=False).st_mode
+            need(stat.S_ISREG(mode) or stat.S_ISDIR(mode), 'unsafe guarded file type')
+        finally: os.close(fd)
+    _restore_write_guard(saved)
+    for path, original_mode in saved:
+        fd = _guard_parent(path, root)
+        try:
+            name = Path(path).name
+            mode = os.stat(name, dir_fd=fd, follow_symlinks=False).st_mode
+            need(stat.S_ISREG(mode) or stat.S_ISDIR(mode), 'unsafe guarded file type')
+            if stat.S_IMODE(mode) != original_mode:
+                os.chmod(name, original_mode, dir_fd=fd, follow_symlinks=False)
+            mode = os.stat(name, dir_fd=fd, follow_symlinks=False).st_mode
+            need((stat.S_ISREG(mode) or stat.S_ISDIR(mode))
+                 and stat.S_IMODE(mode) == original_mode, 'guard restoration incomplete')
+        finally: os.close(fd)
+
+
 def invoke(bridge, rt, prompt, choice, *, popen, atomic, permitted, evidence_dir=None):
     active = bridge.store.data['active']; task = active['task']; model = choice['effective_model']
     need(os.geteuid() == EXECUTOR_UID, 'wrong AGY author UID')
@@ -345,10 +386,30 @@ def invoke(bridge, rt, prompt, choice, *, popen, atomic, permitted, evidence_dir
         choice['native_receipt'] = copy.deepcopy(proposed)
         ev.record(phase='complete' if phase == 'imported' else 'running', receipt_phase=phase,
                   charge_state=receipt['charge_state'], terminal=phase in ('imported', 'failed_no_automatic_replay'))
-    def fail():
-        nonlocal receipt
+    terminal_persisted = False
+    def fail(*, record_evidence=True):
+        nonlocal receipt, terminal_persisted
+        terminal_persisted = False
         receipt = _failed_receipt(receipt, tokens)
-        save('failed_no_automatic_replay')
+        # Stage finalizers must see the terminal, detached safe state even when
+        # every subsequent disk/evidence operation fails.
+        choice['native_receipt'] = copy.deepcopy(receipt)
+        try:
+            if record_evidence:
+                ev.record(phase='running', receipt_phase=receipt['phase'],
+                          charge_state=receipt.get('charge_state'), terminal=True)
+        except BaseException:
+            receipt.update(cleanup='failed', cleanup_evidence='failed')
+            choice['native_receipt'] = copy.deepcopy(receipt)
+        for _ in range(3):
+            try:
+                atomic(path, receipt)
+                terminal_persisted = True
+                return
+            except BaseException:
+                pass  # Never replace the closed ReviewError with I/O details.
+        receipt['receipt_persist'] = 'failed'
+        choice['native_receipt'] = copy.deepcopy(receipt)
 
     base = None; process = None; cgroup = None; guard = None; membership = False
     auth = None; original = None; tokens = []
@@ -433,7 +494,12 @@ def invoke(bridge, rt, prompt, choice, *, popen, atomic, permitted, evidence_dir
         for name, raw in streams.items(): ev.write(name, raw)
         receipt = proposed
         save('validated')
-        _restore_write_guard(guard); guard = None  # BEFORE the trusted writer imports.
+        try:
+            _restore_author_guard(guard, bridge.work)
+        except BaseException:
+            receipt.update(cleanup='failed', cleanup_restore_guard='failed')
+            raise
+        guard = None  # Only a verified restoration permits the trusted import.
         _import(bridge, changed, payloads)
         receipt['finished_at'] = int(time.time()); save('imported')
         return result
@@ -465,7 +531,9 @@ def invoke(bridge, rt, prompt, choice, *, popen, atomic, permitted, evidence_dir
                     receipt['oauth_refresh'] = 'failed'; cleanup_failed = True
             # Every step is independent. Remove credentials/tree BEFORE cgroup
             # cleanup, even when guard restoration or refresh has failed.
-            try: _restore_write_guard(guard)
+            try:
+                _restore_author_guard(guard, bridge.work)
+                guard = None
             except BaseException: failed('restore_guard')
             if auth is not None:
                 try: auth.unlink(missing_ok=True)
@@ -500,17 +568,16 @@ def invoke(bridge, rt, prompt, choice, *, popen, atomic, permitted, evidence_dir
                 need(cgroup is None or not cgroup.exists(), 'cgroup cleanup incomplete')
             except BaseException: failed('cgroup')
         finally:
-            try:
-                if cleanup_failed:
-                    receipt['error_code'] = 'AGY_ADAPTER_ERROR'
-                    fail()
-            finally:
-                try: ev.close()
-                except BaseException:
-                    failed('evidence')
-                    receipt['error_code'] = 'AGY_ADAPTER_ERROR'
-                    # The receipt write is independent of private evidence close.
-                    receipt = _failed_receipt(receipt, tokens)
-                    atomic(path, receipt); choice['native_receipt'] = copy.deepcopy(receipt)
             if cleanup_failed:
-                raise ReviewError('AGY_ADAPTER_ERROR', 'output', ev.id) from None
+                receipt['error_code'] = 'AGY_ADAPTER_ERROR'
+                fail()
+            elif receipt['phase'] == 'failed_no_automatic_replay' and not terminal_persisted:
+                # Independent bounded retry even if ordinary cleanup succeeded.
+                fail()
+            try: ev.close()
+            except BaseException:
+                failed('evidence')
+                receipt['error_code'] = 'AGY_ADAPTER_ERROR'
+                fail(record_evidence=False)
+            if cleanup_failed or receipt['phase'] == 'failed_no_automatic_replay':
+                raise ReviewError(receipt.get('error_code', 'AGY_ADAPTER_ERROR'), 'output', ev.id) from None

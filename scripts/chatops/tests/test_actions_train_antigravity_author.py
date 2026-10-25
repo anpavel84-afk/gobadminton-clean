@@ -619,5 +619,144 @@ class Invocation(unittest.TestCase):
         with patch.object(N.shutil, 'rmtree', side_effect=partial), self.assertRaises(N.ReviewError): self.invoke('exit')
         self.assertGreaterEqual(len(calls), 2); self.assert_cleanup_failure('private_tree')
 
+    def receipt_fault(self, failures, *, ordering=False):
+        invoke = N.invoke; attempts = []
+        def inject(*args, **kwargs):
+            atomic = kwargs['atomic']
+            def write(path, value):
+                if value['phase'] == 'failed_no_automatic_replay':
+                    attempts.append(copy.deepcopy(value))
+                    if ordering:
+                        self.assertEqual(self.choice['native_receipt']['phase'], 'failed_no_automatic_replay')
+                        self.assertIsNot(self.choice['native_receipt'], value)
+                    if len(attempts) <= failures:
+                        raise OSError(TOKEN)  # Never export exception text.
+                return atomic(path, value)
+            kwargs['atomic'] = write
+            return invoke(*args, **kwargs)
+        with patch.object(N, 'invoke', side_effect=inject), self.assertRaises(N.ReviewError) as raised:
+            self.invoke('exit')
+        self.assertEqual(type(raised.exception), N.ReviewError)
+        self.assertIn('AGY_ADAPTER_ERROR', str(raised.exception))
+        self.assertNotIn(TOKEN, str(raised.exception))
+        self.assertEqual(self.choice['native_receipt']['phase'], 'failed_no_automatic_replay')
+        self.assertNotIn(TOKEN, json.dumps(self.choice))
+        self.rt.budget.charge.assert_called_once_with('slot2', 'agy', 'author')
+        self.assertEqual(self.called, 1)
+        self.assertTrue(all(not p.exists() for p in self.jobs))
+        self.assertEqual((self.source/'allowed.txt').read_text(), 'before\n')
+        for path in self.outbox.rglob('*'):
+            if path.is_file(): self.assertNotIn(TOKEN.encode(), path.read_bytes())
+        return attempts
+
+    def test_terminal_receipt_transient_io_is_retried(self):
+        attempts = self.receipt_fault(1)
+        self.assertEqual(len(attempts), 2)
+        self.assert_failed()
+
+    def test_terminal_receipt_persistent_io_stays_closed_in_memory(self):
+        attempts = self.receipt_fault(100)
+        self.assertEqual(len(attempts), 6)  # Three attempts plus independent finally retry.
+        self.assertEqual(self.choice['native_receipt']['receipt_persist'], 'failed')
+        self.assertEqual(json.loads((self.outbox/'agy-author-receipt.json').read_text())['phase'], 'running')
+
+    def test_terminal_receipt_finally_retry_fault_is_contained(self):
+        attempts = self.receipt_fault(4)
+        self.assertEqual(len(attempts), 5)
+        self.assertEqual(self.choice['native_receipt']['receipt_persist'], 'failed')
+        self.assert_failed()
+
+    def test_terminal_choice_precedes_every_failed_disk_write(self):
+        self.receipt_fault(1, ordering=True)
+        self.assert_failed()
+
+    def test_terminal_evidence_record_exception_stays_closed(self):
+        record = N.ReviewEvidence.record
+        def write(ev, **fields):
+            if fields.get('receipt_phase') == 'failed_no_automatic_replay': raise OSError(TOKEN)
+            return record(ev, **fields)
+        with patch.object(N.ReviewEvidence, 'record', write), self.assertRaises(N.ReviewError) as raised:
+            self.invoke('exit')
+        self.assertEqual(type(raised.exception), N.ReviewError)
+        self.assertNotIn(TOKEN, str(raised.exception))
+        self.assert_cleanup_failure('evidence')
+
+    def guard_chmod_fault(self, persistent):
+        chmod = os.chmod; target = self.source/'allowed.txt'; faults = []
+        original_mode = target.stat().st_mode & 0o7777
+        self.addCleanup(chmod, target, original_mode)
+        def controlled(path, mode, *args, **kwargs):
+            # Shared helper uses absolute paths; adapter's safe retry may use
+            # a basename relative to an already opened, no-follow parent fd.
+            is_target = Path(path) == target or (Path(path) == Path(target.name) and 'dir_fd' in kwargs)
+            if is_target and mode & 0o200 and (persistent or not faults):
+                faults.append(True); raise PermissionError(TOKEN)
+            return chmod(path, mode, *args, **kwargs)
+        importer = N._import
+        def checked_import(*args):
+            self.assertEqual(target.stat().st_mode & 0o7777, original_mode)
+            return importer(*args)
+        with patch.object(os, 'chmod', side_effect=controlled), patch.object(N, '_import', side_effect=checked_import) as imported:
+            if persistent:
+                with self.assertRaises(N.ReviewError) as raised: self.invoke()
+                self.assertNotIn(TOKEN, str(raised.exception))
+                imported.assert_not_called()
+            else: self.invoke()
+        self.assertTrue(faults)
+        if persistent: self.assert_cleanup_failure('restore_guard')
+        else:
+            self.assertEqual(target.stat().st_mode & 0o7777, original_mode)
+            self.assertEqual(self.choice['native_receipt']['phase'], 'imported')
+            self.assertEqual(target.read_text(), 'after\n')
+            self.rt.budget.charge.assert_called_once_with('slot2', 'agy', 'author')
+            self.assertTrue(all(not p.exists() for p in self.jobs))
+
+    def test_real_guard_silent_transient_chmod_failure_verified_before_import(self):
+        self.guard_chmod_fault(False)
+
+    def test_real_guard_persistent_chmod_failure_never_imports(self):
+        self.guard_chmod_fault(True)
+
+    def test_silent_guard_noop_repairs_all_recorded_modes(self):
+        target = self.source/'other.txt'; original_mode = target.stat().st_mode & 0o7777
+        with patch.object(N, '_restore_write_guard'):
+            self.invoke()
+        self.assertEqual(target.stat().st_mode & 0o7777, original_mode)
+        self.assertEqual(self.choice['native_receipt']['phase'], 'imported')
+
+    def test_evidence_close_and_receipt_io_faults_stay_closed(self):
+        close = N.ReviewEvidence.close
+        def broken_close(ev):
+            close(ev)
+            raise RuntimeError(TOKEN)
+        with patch.object(N.ReviewEvidence, 'close', broken_close):
+            self.receipt_fault(100)
+        self.assertEqual(self.choice['native_receipt']['cleanup_evidence'], 'failed')
+        self.assertEqual(self.choice['native_receipt']['receipt_persist'], 'failed')
+
+    def test_guard_retry_refuses_symlink_ancestor_before_import(self):
+        nested = self.source/'nested'; nested.mkdir()
+        (nested/'tracked.txt').write_text('tracked')
+        self.bridge.git('add', 'nested')
+        self.bridge.git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                        'commit', '-qm', 'nested fixture')
+        external = self.root/'outside'; external.mkdir()
+        outside_file = external/'tracked.txt'; outside_file.write_text('outside')
+        outside_file.chmod(0o600)
+        restore = N._restore_write_guard; swapped = []
+        def swap_after_restore(saved):
+            if not swapped:
+                restore(saved)
+                nested.rename(self.source/'original-nested')
+                nested.symlink_to(external, target_is_directory=True)
+                swapped.append(True)
+        with patch.object(N, '_restore_write_guard', side_effect=swap_after_restore), \
+             patch.object(N, '_import') as imported, self.assertRaises(N.ReviewError):
+            self.invoke()
+        imported.assert_not_called()
+        self.assertEqual(outside_file.stat().st_mode & 0o7777, 0o600)
+        self.assertEqual(outside_file.read_text(), 'outside')
+        self.assert_cleanup_failure('restore_guard')
+
 
 if __name__ == '__main__': unittest.main()

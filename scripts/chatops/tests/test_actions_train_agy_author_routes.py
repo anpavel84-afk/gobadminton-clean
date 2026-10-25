@@ -149,6 +149,49 @@ class Routing(unittest.TestCase):
             task['author_routes'] = ['agy:'+QA.MODEL]; task['qa_routes'] = ['codex:gpt-6.1-sol:medium']
             self.assertEqual(core.route(S,task,'author','auto',self.budget,'slot2')['provider'],'agy')
 
+    def critical_qa_task(self, author_level='standard'):
+        task = author_task(author_level)
+        task['qa_routes'] = ['agy:claude-opus-5-5-high', 'codex:gpt-6-astra:high']
+        task['routing_policy']['qa'] = dict(complexity='critical', reason='security',
+            evidence='Critical security review of credential boundary')
+        return task
+
+    def test_policy_excluded_independent_qa_rejected_at_issue_admission(self):
+        from test_actions_train import A, issue, NOW
+        task = self.critical_qa_task()
+        with self.assertRaisesRegex(A.Hold, 'AGY author requires an executable independent non-agy QA route'):
+            A.validate_issue(issue(999, task), NOW)
+        # Codex preferred by this same critical policy is still executable.
+        task['qa_routes'].reverse()
+        A.validate_issue(issue(999, task), NOW)
+        self.assertEqual(core.route(S, task, 'qa', 'auto', self.budget, 'slot2')['provider'], 'codex')
+
+    def test_policy_excluded_critical_qa_variants_rejected(self):
+        for level in ('simple', 'standard', 'complex', 'critical'):
+            for fallback in ('codex:gpt-6-astra:high', 'codex:gpt-6.1-sol:high'):
+                task = self.critical_qa_task(level); task['qa_routes'][1] = fallback
+                with self.subTest(level=level, fallback=fallback), self.assertRaisesRegex(
+                        ValueError, 'AGY author requires an executable independent non-agy QA route'):
+                    cost_policy.validate_policy(task)
+        # QA-only AGY tasks retain the pre-existing critical policy.
+        task['author_routes'] = ['codex:gpt-6-astra:high']
+        cost_policy.validate_policy(task)
+        self.assertEqual(cost_policy.selection(task, 'qa')[1]['approved_fallback_routes'], [])
+
+    def test_author_selection_rejects_unreachable_qa_before_qualification(self):
+        import native_antigravity_author as N
+        task = self.critical_qa_task()
+        with patch.object(N, 'available', return_value=(True, 'qualified')) as available, \
+             self.assertRaisesRegex(core.Refused, 'AGY author requires an executable independent non-agy QA route'):
+            core.route(S, task, 'author', 'agy', self.budget, 'slot2')
+        available.assert_not_called()
+        # Standard policy allows the independent Codex fallback; no runtime QA
+        # budget/availability probe may be consumed by static author admission.
+        task = author_task(); task['qa_routes'].insert(0, 'agy:'+QA.MODEL)
+        with patch.object(N, 'available', return_value=(True, 'qualified')), \
+             patch.object(QA, 'available', side_effect=AssertionError('no runtime QA probe')):
+            self.assertEqual(core.route(S, task, 'author', 'agy', self.budget, 'slot2')['provider'], 'agy')
+
 
 class Dispatch(unittest.TestCase):
     def exercise(self,provider,qa=False,fail=False):

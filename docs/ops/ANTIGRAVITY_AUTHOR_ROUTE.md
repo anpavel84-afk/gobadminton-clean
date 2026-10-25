@@ -38,8 +38,10 @@ requires the existing minimum Codex route as a listed fallback, and never adds a
 route. QA's existing critical fallback restriction is preserved. If any listed
 author route is AGY, every AGY QA entry is refused with “independent QA must be a
 different provider”, including QA fallback and cost-policy selection. AGY author
-selection requires a listed, supported non-AGY QA route. Codex QA remains
-subject to its existing admission and isolation. V1 FORBIDDEN/ADAPTERS are intact.
+selection requires an executable independent non-AGY QA candidate after the
+same cost-policy filtering and model/effort admission as the QA resolver.
+Runtime QA availability and budget are checked separately at QA execution.
+Codex QA remains subject to its existing admission and isolation. V1 FORBIDDEN/ADAPTERS are intact.
 
 Trusted rules are injected in full for the author, through the ordinary stage
 branch used by Cursor. No root-loaded native_auth token is passed to AGY. The
@@ -329,3 +331,110 @@ commit, push, installation, hosted CI or DEV deployment is part of this repair.
 Next authorized step is fresh independent QA of this uncommitted candidate,
 followed by the existing required CI/installation/DEV gates under their separate
 authority. AUTHOR self-checks are not independent QA or runtime qualification.
+
+
+## PR #312 — independent-QA repair round 3 (26 October 2026)
+
+AUTHOR/fix-author self-check only, under the direct final-round bounded assignment.
+Exact input/source/PR HEAD: `7c48c44e948b8f2281d5f12dee63081b4c22b62a`;
+round-2 fixes remain present. Candidate is the uncommitted working-tree diff.
+Repository, accepted EOM 1.4 / SMART_ROUTING 1.0 commits and SHA-256 above are
+unchanged and verified. This session is the sole local writer for the assigned
+adapter/core/cost/manifest, AGY author tests and runbook paths. Effects are local
+source edits and synthetic checks; effective live provider route is NOT RUN.
+Grok remains runtime PMA. The supplied findings and exact reproductions are the
+repair inputs; this assignment does not change the installed FAIL/Astra policy.
+
+A. The raw QA route list could contain a valid Codex route excluded by critical
+cost policy. Policy admission now shares the QA candidate selection logic and
+closed Codex model/effort gate with the actual resolver. An AGY author entry
+requires at least one executable independent non-AGY QA candidate after policy
+filtering. The immutable author path additionally checks the installed model
+map before qualification. Missing candidates reject validate_policy,
+validate_issue and author selection with a specific reason. This preserves the
+critical QA fallback restriction, policy-free tasks, non-AGY tasks, QA-only AGY,
+and the existing rule excluding AGY QA for any listed AGY author. Availability
+and budget are ignored only for this static existence check.
+
+B. Failure finalisation previously wrote the receipt before publishing terminal
+state, allowing receipt I/O to replace the closed error. It now reconstructs a
+sanitised terminal receipt and deep-copies it into choice before evidence or
+receipt I/O. Disk writes have three bounded attempts; exhaustion records the
+fixed receipt_persist='failed' flag in memory. Finally independently retries
+an unpersisted terminal receipt, and evidence recording/close failures remain
+closed ReviewError paths. A permanently unwritable receipt can remain running
+on disk; the stage finalizer still receives the in-memory terminal phase and
+persistence flag. The charged launch is never replayed.
+
+C. The pinned shared restoration helper swallows per-file chmod errors. The
+author boundary now verifies every recorded mode, retries mismatches once using
+its own chmod and verifies again before import. Guard records remain available
+until verified, including in finally. Persistent restoration failure prevents
+import and records cleanup_restore_guard='failed'. New verification/repair opens
+parent components using O_NOFOLLOW and anchored directory descriptors; chmod
+uses follow_symlinks=False and touches only recorded paths. The shared helper
+is unchanged; the documented same-UID residual risk is unchanged.
+
+Additional checks cover simultaneous evidence-close/receipt-I/O failure and a
+symlink ancestor substituted before the adapter's guard verification. The
+upgrade script derives its module hashes from the reviewed manifest and needs
+no edit. Only the three changed runtime file entries are recomputed in manifest.
+No pinned adapter, receiver, stage, slots, authority or protected-state file is
+changed. No commit, push, model CLI, network, real credentials, root operation,
+installation, hosted CI or DEV run is performed. Next step is fresh independent
+QA of this candidate, followed by the existing separately authorised gates.
+
+Regression names, pristine non-vacuity results, complete baseline/candidate logs
+and exact error-label comparison are retained under
+`/home/agentagency-dev/author-evidence-agyfix3-20261025`.
+
+Round-3 regression method names (all 13 execute and fail on pristine 7c48c44e,
+then pass after the fix):
+
+- `test_terminal_receipt_transient_io_is_retried`
+- `test_terminal_receipt_persistent_io_stays_closed_in_memory`
+- `test_terminal_receipt_finally_retry_fault_is_contained`
+- `test_terminal_choice_precedes_every_failed_disk_write`
+- `test_terminal_evidence_record_exception_stays_closed`
+- `test_real_guard_silent_transient_chmod_failure_verified_before_import`
+- `test_real_guard_persistent_chmod_failure_never_imports`
+- `test_silent_guard_noop_repairs_all_recorded_modes`
+- `test_evidence_close_and_receipt_io_faults_stay_closed`
+- `test_guard_retry_refuses_symlink_ancestor_before_import`
+- `test_policy_excluded_independent_qa_rejected_at_issue_admission`
+- `test_policy_excluded_critical_qa_variants_rejected`
+- `test_author_selection_rejects_unreachable_qa_before_qualification`
+
+The pristine run reports 13 assertion/subtest failures and 7 errors across all
+13 distinct new methods; none pass unexpectedly and no module imports fail.
+Errors are the old implementation's unclosed exception types or refusal after
+the import-time mode assertion. These are AUTHOR regressions, not independent QA.
+
+Final round-3 AUTHOR self-check totals, using synthetic fixtures under writable
+TMPDIR and the mandated discovery commands from scripts/chatops/tests:
+
+- Full Actions: pristine HEAD 1,019 tests; candidate 1,032 tests. Both have zero
+  assertion failures, 30 errors with byte-identical ordered error labels
+  (including subtest parameters), and one skip. The unchanged labels include
+  addressed_grants immutable_input_hash, 23 OPS-fixture errors, five Cursor
+  forbidden-/tmp fixture errors and one denied local socket. They remain
+  errors/NOT_TESTED; no fixture, assertion or environment permission was weakened.
+- Three AGY author modules alone: baseline 90/90; candidate 103/103, all passing.
+- Phase discovery: baseline and candidate both pass 51/51.
+- Foundation: both pass (292 tracked Markdown files, 168 draft API operations).
+  git diff --check passes. All manifest entries match file bytes; only core.py,
+  cost_policy.py and native_antigravity_author.py hash entries changed.
+- The complete diff was reviewed for admission compatibility, credential-safe
+  terminal receipts, finite retry counts, no replay, mode verification before
+  import, recorded-path-only/no-follow guard repairs, cleanup and unchanged pins.
+
+Local evidence: preflight.json, new-tests.json, new-tests-old.log,
+new-tests-after.log, before/after-actions.log, before/after-phase.log,
+before/after-foundation.log, before/after-agy.log, full-comparison.json,
+verification.json and candidate.patch in the evidence directory above. The
+pristine source and isolated added-test copy are tmp/pristine and
+tmp/pristine-new-tests. Two incorrectly addressed module commands are retained
+as invalid-cwd-agy.log / invalid-module-before-agy.log and excluded from totals;
+the correctly addressed runs above are complete. An intermediate successful
+101-test focused run preceded the final 103-test run. No independent QA, hosted
+CI, installation, canary or DEV acceptance was performed.

@@ -204,6 +204,36 @@ def request(value):
 def binding(req):
     return {k: v for k, v in req.items() if k not in ('gh_token', 'run', 'run_attempt')}
 
+_CODEX_MODELS = ('gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-luna')
+
+
+def _codex_model_effort_admitted(model, effort):
+    return (model in _CODEX_MODELS and effort in ('medium', 'high')
+            and (model != 'gpt-6-luna' or effort == 'medium'))
+
+
+def executable_independent_qa(task, model_adapter=None, *, policy=None):
+    """Static QA resolver admission, ignoring only runtime quota/availability.
+
+    Use the same cost-filtered candidates and Codex model/effort gate as QA.
+    Cursor QA is unqualified; AGY cannot review any listed AGY author.
+    Passing a validated policy avoids recursion from validate_policy.
+    """
+    routes = task.get('qa_routes', [])
+    if 'routing_policy' in task:
+        from cost_policy import _selection, validate_policy
+        p = policy if policy is not None else validate_policy(task)
+        preferred, rationale = _selection(p, task, 'qa')
+        routes = [preferred, *rationale['approved_fallback_routes']]
+    for route in routes:
+        parts = route.split(':')
+        if (len(parts) == 3 and parts[0] == 'codex'
+                and _codex_model_effort_admitted(parts[1], parts[2])
+                and (model_adapter is None or model_adapter.get(parts[1]) == 'codex')):
+            return True
+    return False
+
+
 def _route_immutable(slots, task, role, profile, budget, slot, task_hash=None):
     """Choose a model by immutable stage preferences, not by relative token usage.
 
@@ -250,18 +280,8 @@ def _route_immutable(slots, task, role, profile, budget, slot, task_hash=None):
                 if model not in AUTHOR_MODELS or effort is not None:
                     refusal[entry] = 'Antigravity author role/model/effort unsupported'
                     continue
-                # Only a supported, explicitly listed non-AGY QA route satisfies
-                # independence. Cursor QA is not admitted by this immutable path.
-                qa_routes = task.get('qa_routes', [])
-                independent = any(
-                    len(parts := route.split(':')) == 3 and parts[0] == 'codex'
-                    and slots.MODEL_ADAPTER.get(parts[1]) == 'codex'
-                    and parts[1] in ('gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-luna')
-                    and parts[2] in ('medium', 'high')
-                    and (parts[1] != 'gpt-6-luna' or parts[2] == 'medium')
-                    for route in qa_routes)
-                if not independent:
-                    refusal[entry] = 'AGY author requires an admitted independent non-agy QA route'
+                if not executable_independent_qa(task, slots.MODEL_ADAPTER):
+                    refusal[entry] = 'AGY author requires an executable independent non-agy QA route'
                     continue
                 ok, why = available(slot, task_hash or digest(task), model=model)
                 if not ok:
@@ -306,10 +326,9 @@ def _route_immutable(slots, task, role, profile, budget, slot, task_hash=None):
             if model not in slots.MODEL_ADAPTER or slots.MODEL_ADAPTER[model] != provider:
                 refusal[entry] = 'exact Codex model not supported by installed bridge'
                 continue
-            need(model in ('gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-luna')
-                 and effort in ('medium', 'high'), 'model/effort out of closed route registry')
-            if model == 'gpt-6-luna':
-                need(effort == 'medium', 'Luna effort not admitted')
+            need(model in _CODEX_MODELS and effort in ('medium', 'high'),
+                 'model/effort out of closed route registry')
+            need(_codex_model_effort_admitted(model, effort), 'Luna effort not admitted')
             ok, why = slots.adapter_status(provider, role, budget, slot)
             if not ok:
                 refusal[entry] = why
