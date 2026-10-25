@@ -13,10 +13,11 @@
 | Merge-base | `30f24bae57123c3fdb53ceef94ec6bae71e4fcd0` |
 | Расхождение на старте | `dev` 700 впереди, 23 позади |
 | Merge commit | `23880c461681839b3309059ec0ecb551b5b94300` (родители: `dev`, затем `main`) |
-| Code head до этой заметки | `e06a2364bb3b168868aa3bb7e8310c3cb964350f` |
-| Release head | tip этой ветки: commit, который добавляет этот файл, родитель `e06a2364bb3b168868aa3bb7e8310c3cb964350f` |
+| Code head до заметки | `e06a2364bb3b168868aa3bb7e8310c3cb964350f` |
+| Commit тела заметки | `90681ffb06605fe38cee9049bfb02f1e95deea74` |
+| Release head | tip `release/dev-to-main-20261025`. Этот pin-commit — прямой потомок `90681ffb06605fe38cee9049bfb02f1e95deea74` и меняет только эту таблицу. Candidate для QA и CI — tip, не `90681ff` и не `dev`. |
 
-Контроллер берёт SHA только так: `git rev-parse origin/release/dev-to-main-20261025`. Не проверять `dev` `0652efc` и не проверять `main` `fafd45c`. CI этого SHA на момент записи: **NOT_RUN**. Push ветки `release/*` не входит в триггеры Product CI. PR не открывался: его открывает контроллер.
+Контроллер сверяет: `git rev-parse origin/release/dev-to-main-20261025^` = `90681ffb06605fe38cee9049bfb02f1e95deea74`, а `git rev-parse origin/release/dev-to-main-20261025` — exact head. Не проверять `dev` `0652efc` и не проверять `main` `fafd45c`. CI tip на момент записи: **NOT_RUN**. Push ветки `release/*` не входит в триггеры Product CI. PR не открывался: его открывает контроллер.
 
 ## Правила, которые реально прочитаны
 
