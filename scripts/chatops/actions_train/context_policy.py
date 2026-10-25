@@ -11,9 +11,10 @@ import subprocess
 import tomllib
 from core import need
 
-RULES_COMMIT = '1169e965976e9498d4e5e1e23aae201e97ec9665'
-RULES_SHA256 = '38c34012f10974496a7d7cbc74ecacb62bf7847278e295edfeb107d69a5d1c1c'
-RULES_SIZE = 100818
+RULES_COMMIT = 'bc8bad0c38a861f8e72296d0a323e2941b9322e0'
+RULES_SHA256 = '017441dec5ba197a1065b6ef90efdddb090b286ba48687241a7fbc09dd002269'
+RULES_SIZE = 113203
+RULES_REVISION = '1.4'
 RULES_PATH = Path('/usr/local/lib/gb-actions-train/accepted-engineering-rules.md')
 
 
@@ -36,7 +37,7 @@ def load(path=RULES_PATH, *, trusted_uids=(0,)):
         need(len(raw) == RULES_SIZE and hashlib.sha256(raw).hexdigest() == RULES_SHA256,
              'accepted rules drift')
         text = raw.decode('utf-8', errors='strict')
-        return text, dict(schema='GB_RULES_CONTEXT_V1', revision='1.3', commit=RULES_COMMIT,
+        return text, dict(schema='GB_RULES_CONTEXT_V1', revision=RULES_REVISION, commit=RULES_COMMIT,
                           sha256=RULES_SHA256, bytes=len(raw), source=str(path),
                           delivery='explicit_full_stdin', automatic_rules='disabled',
                           user_config='ignored', candidate_instructions='untrusted_data')

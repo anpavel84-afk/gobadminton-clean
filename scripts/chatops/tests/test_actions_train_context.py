@@ -20,7 +20,7 @@ TEXT = accepted_rules_text(ROOT)
 
 
 def accepted():
-    return TEXT, dict(schema='GB_RULES_CONTEXT_V1', revision='1.3', commit=C.RULES_COMMIT,
+    return TEXT, dict(schema='GB_RULES_CONTEXT_V1', revision=C.RULES_REVISION, commit=C.RULES_COMMIT,
         sha256=C.RULES_SHA256, bytes=C.RULES_SIZE, source=str(C.RULES_PATH),
         delivery='explicit_full_stdin', automatic_rules='disabled', user_config='ignored',
         candidate_instructions='untrusted_data')
@@ -44,7 +44,9 @@ class AcceptedFile(unittest.TestCase):
     def test_exact_accepted_bytes_and_commit(self):
         text,receipt=self.load();self.assertEqual(text,TEXT)
         self.assertEqual(receipt['sha256'],hashlib.sha256(text.encode()).hexdigest())
-        self.assertEqual(receipt['commit'],'1169e965976e9498d4e5e1e23aae201e97ec9665')
+        self.assertEqual(receipt['commit'],C.RULES_COMMIT)
+        self.assertEqual(receipt['revision'],C.RULES_REVISION)
+        self.assertEqual(receipt['bytes'],C.RULES_SIZE)
     def test_changed_or_missing_rules_never_fall_back(self):
         self.path.write_text(TEXT+'candidate override')
         with self.assertRaises(core.Refused):self.load()
@@ -263,6 +265,32 @@ class DriftPreflight(unittest.TestCase):
             p.write_text('[projects."/srv/gobadminton-dev/repo"]\ntrust_level="trusted"\n[projects."/unrelated/project"]\ntrust_level="trusted"\n')
             before=p.read_bytes();self.assertEqual(C.legacy_trust(p),['/srv/gobadminton-dev/repo'])
             self.assertEqual(before,p.read_bytes())
+
+
+class RulesPinMatchesDocument(unittest.TestCase):
+    """Fail when the controller pin and the checked-in operating model diverge."""
+
+    def test_pin_matches_checked_in_operating_model(self):
+        document = (ROOT / C.CANONICAL_GIT_RULES_PATH).read_bytes()
+        digest = hashlib.sha256(document).hexdigest()
+        self.assertEqual(len(document), C.RULES_SIZE)
+        self.assertEqual(digest, C.RULES_SHA256)
+        header = document.decode('utf-8').splitlines()[2]
+        marker = 'Редакция ' + C.RULES_REVISION + ' ·'
+        self.assertIn(marker, header)
+        blob = subprocess.run(
+            ['git', '-C', str(ROOT), 'show', C.RULES_COMMIT + ':' + C.CANONICAL_GIT_RULES_PATH],
+            check=True, capture_output=True, timeout=30).stdout
+        self.assertEqual(blob, document)
+        admission = (ROOT / 'scripts/chatops/actions_train/owner_package_admission.py').read_text()
+        self.assertIn("RULES='%s'" % digest, admission)
+        index = json.loads((ROOT / 'docs/rules/CONTEXT_SOURCES.json').read_text())
+        accepted = index['accepted_operating_model']
+        self.assertEqual(accepted['path'], C.CANONICAL_GIT_RULES_PATH)
+        self.assertEqual(accepted['revision'], C.RULES_REVISION)
+        self.assertEqual(accepted['commit'], C.RULES_COMMIT)
+        self.assertEqual(accepted['sha256'], digest)
+        self.assertEqual(accepted['bytes'], len(document))
 
 
 if __name__=='__main__':unittest.main()
