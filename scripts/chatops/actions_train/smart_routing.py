@@ -9,16 +9,16 @@ classifier, semantics are new, and the code, capsule, and policy pins agree.
 Legacy tasks never receive Fast Fix or a rewritten route. The new policy is not
 stored inside GOBADMINTON_AUTONOMY_V1.
 
-Fast Fix (§9) needs every condition, including an allowlisted surface, a diff
-tool result for unchanged limits, and a class search that names one identifier
-from the diff. Fast Fix text is fail-closed: after normalization, event text,
-scope, and listings must be only the allowed alphabet (ASCII letters and digits,
-a normal space, limited punctuation, Cyrillic). An encoding residue, a slash or
-other separator that splits a word, a digit inside a Cyrillic word, a soft sign
-that hides a sensitive stem, or any other ambiguity raises the risk floor and
-refuses Fast Fix. A source
-writer also needs the diff result and a closed class. After three ordinary
-attempts the only writer is a continuation that still has progress.
+Fast Fix (§9) is granted only by structured facts: a closed surface enum, one
+concrete path whose segments are on the closed path vocabulary, a diff of at
+most _MAX_DIFF_HUNKS hunks, and the other §9 proofs. Free text (event text, goal,
+diagnostics, scope, pattern, listing) can only downgrade that eligibility. It
+never creates a writer. Downgrade collapses every separator and repeated letter,
+then matches stems in the original script and in Latin transliteration. Text
+outside the closed vocabulary goes to Technical PM with no writer. The same
+downgrade applies to a standard brief, a template, a complex cause, and a
+continuation. After three ordinary attempts the only writer is a continuation
+that still has progress.
 """
 import copy
 import html
@@ -43,8 +43,8 @@ MODELS = frozenset((
     "gpt-6.1-sol", "gpt-6-astra", "gpt-6-luna",
     "claude-sonnet-5-5-medium", "claude-sonnet-5-5-high", "claude-opus-5-5-high",
 ))
-# Free text never proves a surface is clean. It can only raise the floor or block.
-# Stems match inside one word, never across a path segment or a space.
+# Free text never grants a writer. It can raise the floor or downgrade eligibility.
+# Separators are deleted and repeated letters collapse before a stem comparison.
 # "author" / "authors" are not "auth". "secretary" is not "secret".
 _EN_STEMS = (
     "authoriz", "authoris", "authorit", "authent", "oauth", "identit", "password",
@@ -52,7 +52,6 @@ _EN_STEMS = (
     "concurren", "payment", "billing", "migrat", "rollback", "irreversib", "privilege",
     "rbac", "money", "pii", "qareuse", "dataloss", "guard", "rights",
 )
-_SENSITIVE_PHRASES = (("qa", "reuse"), ("data", "loss"), ("roll", "back"))
 # Word prefixes on Cyrillic, before any Latin confusable fold.
 # "платформу" is not a payment. "правильно" is not "права". "секретарь" is not "секрет".
 _RU_PREFIXES = (
@@ -93,10 +92,6 @@ _TRANSLIT = str.maketrans({
     "ч": "ch", "ш": "sh", "щ": "sch", "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "yu",
     "я": "ya",
 })
-_CANONICAL = (
-    "authorization", "password", "credential", "sandbox", "identity", "migration",
-    "payment", "rollback", "oauth", "permission", "privilege",
-)
 _DIAGNOSTIC_WORDS = frozenset((
     "error", "errors", "ts", "assertionerror", "assertion", "assertions", "failed",
     "expected", "received", "permission", "denied", "timeout", "timeouts", "fail",
@@ -165,6 +160,17 @@ _SEARCH_BASE = frozenset(("saved", "method", "pattern", "scope", "instances", "a
 _SEARCH_OPTIONAL = frozenset(("matched_count", "scope_listing", "diff_identifiers"))
 _DIFF_KEYS = frozenset(("tool", "hunks") + _UNCHANGED)
 _DIFF_TOOLS = frozenset(("diff", "git", "ast"))
+# Structured Fast Fix bound. A larger diff is not a minimal repair.
+_MAX_DIFF_HUNKS = 32
+# Positive vocabulary for free text that may accompany Fast Fix or a brief writer.
+# A token outside this set downgrades eligibility. It does not list attacks.
+_CLOSED_VOCAB = frozenset((
+    "a", "api", "apps", "author", "authors", "export", "in", "index",
+    "internal", "latest", "name", "notes", "old", "remove", "rename", "secretary",
+    "src", "the", "timeout", "to", "ts", "typo", "web",
+    "автор", "хелпер", "не", "опечатки", "переименовать", "платформу",
+    "правильно", "против", "протест", "секретарь", "таймаут", "тестовый", "трогать",
+))
 
 
 def _finish(base, **updates):
@@ -479,6 +485,9 @@ def _classify(base, evidence, plan):
             if evidence["architecture_research_required"] or evidence["minimal_action_known"] is not True:
                 return _pm(base, evidence, risk, whole_class=False, fast_fix_closed=False,
                            reason="architecture is open or the minimal action is not proven")
+            if _untrusted_blocks(evidence):
+                return _pm(base, evidence, risk, whole_class=False, fast_fix_closed=False,
+                           reason="free text is outside the closed vocabulary")
             return _emit(base, evidence, plan, policy_applied=True, executed=True, writer=True, risk=risk,
                          planner_calls=0, astra_calls=0, model_calls=1, continuation_granted=True,
                          owner_micro_go=False, history_reset=False,
@@ -497,6 +506,9 @@ def _classify(base, evidence, plan):
                 and not prior_closed):
             return _pm(base, evidence, risk, whole_class=class_open, fast_fix_closed=prior_closed,
                        reason="template preconditions are not proven")
+        if _untrusted_blocks(evidence):
+            return _pm(base, evidence, risk, whole_class=class_open, fast_fix_closed=prior_closed,
+                       reason="free text is outside the closed vocabulary")
         tool = evidence["template_tool"] == "deterministic_tool"
         route = "deterministic_tool" if tool else "cursor:auto"
         model, cost = _auto_receipt(route, evidence)
@@ -512,11 +524,17 @@ def _classify(base, evidence, plan):
     # All eight Fast Fix conditions outrank a usable brief (§8 LOCAL, §9).
     allowed, fast_reason = _fast_fix_block(evidence, risk)
     if allowed:
+        if _untrusted_blocks(evidence):
+            return _pm(base, evidence, risk, whole_class=False, fast_fix_closed=prior_closed,
+                       reason="free text is outside the closed vocabulary")
         return _known_local(base, evidence, plan, risk, honored)
     if evidence["brief_usable"] and evidence["cause"] in ("proven", "supported") and evidence["author_attempts"] < 3:
         if evidence["architecture_research_required"] or evidence["minimal_action_known"] is not True:
             return _pm(base, evidence, risk, whole_class=False, fast_fix_closed=False,
                        reason="architecture is open or the minimal action is not proven")
+        if _untrusted_blocks(evidence):
+            return _pm(base, evidence, risk, whole_class=False, fast_fix_closed=False,
+                       reason="free text is outside the closed vocabulary")
         model, cost = _auto_receipt("cursor:auto", evidence)
         return _emit(base, evidence, plan, policy_applied=True, executed=True, writer=True, risk=risk,
                      planner_calls=0, astra_calls=0, model_calls=1, fast_fix=False,
@@ -527,11 +545,17 @@ def _classify(base, evidence, plan):
     # Not a proven minimal repair: do not fall through to a source writer.
     if (evidence["cause"] == "proven" and evidence["complexity"] == "complex"
             and evidence["minimal_action_known"] and not evidence["architecture_research_required"]):
+        if _untrusted_blocks(evidence):
+            return _pm(base, evidence, risk, whole_class=False, fast_fix_closed=prior_closed,
+                       reason="free text is outside the closed vocabulary")
         return _author(base, evidence, plan, risk, SPECIALIST_SOL, "SOURCE_KNOWN_COMPLEX",
                        "known complex noncritical cause; Astra is not required", honored)
     if (evidence["author_attempts"] < 3 and evidence["cause"] == "proven"
             and evidence["minimal_action_known"] and not evidence["architecture_research_required"]
             and evidence["brief_usable"]):
+        if _untrusted_blocks(evidence):
+            return _pm(base, evidence, risk, whole_class=False, fast_fix_closed=prior_closed,
+                       reason="free text is outside the closed vocabulary")
         return _author(base, evidence, plan, risk, "cursor:auto", "SOURCE_KNOWN_STANDARD",
                        "known cause uses an evidence-bound repair", honored)
     if evidence["cause"] == "missing_evidence":
@@ -897,139 +921,6 @@ def _ru_sensitive_word(word):
     return word in _RU_RIGHTS
 
 
-def _word_pieces(word):
-    """Collapse separators inside one word. Digits drop. Separate words stay apart."""
-    translated = _camel_split(word).casefold().translate(_CONFUSABLE)
-    pieces = []
-    for token in re.split(r"[^0-9a-z]+", translated):
-        token = re.sub(r"\d", "", token)
-        if token:
-            pieces.append(token)
-    return pieces, "".join(pieces)
-
-
-def _stem_with_repeats(stem, token):
-    """A stem matches when the token only adds repeated letters, including a prefix."""
-    index = 0
-    cursor = 0
-    while index < len(stem) and cursor < len(token):
-        if stem[index] != token[cursor]:
-            return False
-        char = stem[index]
-        stem_run = token_run = 0
-        while index < len(stem) and stem[index] == char:
-            index += 1
-            stem_run += 1
-        while cursor < len(token) and token[cursor] == char:
-            cursor += 1
-            token_run += 1
-        if token_run < stem_run:
-            return False
-    return index == len(stem)
-
-
-def _token_risky(token):
-    if token.startswith("secretary"):
-        token = token[len("secretary"):]
-    if not token:
-        return False
-    if "secret" in token or _stem_with_repeats("secret", token):
-        return True
-    for stem in _EN_STEMS:
-        # Short stems such as "pii" match a whole token, not the seam of api+index.
-        if len(stem) >= 4 and stem in token:
-            return True
-        if token.startswith(stem) or _stem_with_repeats(stem, token):
-            return True
-    # "auth" anywhere in the word, except the author/authors family.
-    if "auth" in token and not token.startswith("author"):
-        return True
-    return False
-
-
-def _cross_hit(left, right):
-    """A separator splits a word when the join, not either side, is the stem."""
-    if not left or not right:
-        return False
-    joined = left + right
-    if joined.startswith("secretary") or joined.startswith("author"):
-        # "author" is safe, but "author/ization" still extends past "author".
-        pass
-    for stem in _EN_STEMS:
-        if len(stem) <= len(left):
-            continue
-        if joined.startswith(stem) or _stem_with_repeats(stem, joined):
-            return True
-    if len("secret") > len(left) and (
-            joined.startswith("secret") or _stem_with_repeats("secret", joined)):
-        if not joined.startswith("secretary"):
-            return True
-    return False
-
-
-def _pieces_risky(pieces, joined):
-    if joined and _token_risky(joined):
-        return True
-    return any(_token_risky(piece) for piece in pieces)
-
-
-def _phrase_hit(tokens):
-    for phrase in _SENSITIVE_PHRASES:
-        span = len(phrase)
-        if any(tokens[index:index + span] == list(phrase) for index in range(len(tokens) - span + 1)):
-            return True
-    return False
-
-
-def _latin_sensitive(text):
-    """Stems stay inside a word. Path separators and spaces are not glue."""
-    phrase_tokens = []
-    for segment in re.split(r"[/\\]+", text):
-        letter_run = []
-        for word in re.split(r"\s+", segment):
-            if not word:
-                continue
-            scripts = {script for script in (_script(char) for char in word) if script}
-            if "lat" not in scripts:
-                if len(letter_run) >= 2 and _token_risky("".join(letter_run)):
-                    return True
-                letter_run = []
-                continue
-            pieces, joined = _word_pieces(word)
-            if not pieces:
-                continue
-            if _pieces_risky(pieces, joined):
-                return True
-            if len(joined) == 1:
-                letter_run.append(joined)
-            else:
-                if len(letter_run) >= 2 and _token_risky("".join(letter_run)):
-                    return True
-                letter_run = []
-            phrase_tokens.extend(pieces)
-        if len(letter_run) >= 2 and _token_risky("".join(letter_run)):
-            return True
-        if len(letter_run) >= 2:
-            phrase_tokens.append("".join(letter_run))
-    if _phrase_hit(phrase_tokens):
-        return True
-    return any(_cross_hit(left, right) for left, right in zip(phrase_tokens, phrase_tokens[1:]))
-
-
-def _flat_pieces(text):
-    pieces = []
-    for segment in re.split(r"[/\\]+", text):
-        for word in re.split(r"\s+", segment):
-            if word:
-                word_pieces, _joined = _word_pieces(word)
-                pieces.extend(word_pieces)
-    return pieces
-
-
-def _has_prefix(tokens, prefixes):
-    return any(token.startswith(prefix) for token in tokens for prefix in prefixes)
-
-
 def _iter_texts(value, key=None, seen=None, depth=0):
     if depth > 32 or key in ("binding", "schema"):
         return
@@ -1104,16 +995,6 @@ def _ambiguous(text):
     return _outside_allowlist(text) or _cyr_noise(text) or _long_hex(text)
 
 
-def _cyr_sensitive(text):
-    words = [_cyr_plain(word) for word in re.findall(r"[а-яё]+", text.casefold())]
-    if any(_ru_sensitive_word(word) for word in words):
-        return True
-    for left, right in zip(words, words[1:]):
-        if _ru_sensitive_word(left + right):
-            return True
-    return False
-
-
 def _common_prefix(left, right):
     count = 0
     for left_char, right_char in zip(left, right):
@@ -1136,28 +1017,210 @@ def _edit_distance(left, right):
     return previous[-1]
 
 
-def _translit_sensitive(text):
-    """Cyrillic transliteration of a sensitive word raises the floor."""
-    for word in re.findall(r"[а-яё]+", text.casefold()):
-        if word.startswith("секретар") or word == "автор":
+def _prepare(value):
+    """NFKD, fold slash lookalikes, decode, and drop marks. Residue stays visible."""
+    if type(value) is not str or not value:
+        return "", False
+    folded = unicodedata.normalize("NFKD", value).translate(_SLASH_FOLD)
+    decoded, residue = _decode(folded)
+    return _strip_marks(decoded), residue
+
+
+def _collapse_runs(text):
+    return re.sub(r"(.)\1+", r"\1", text)
+
+
+def _latinize(text):
+    """Latin skeleton of one token. Repeats collapse inside the token only."""
+    text = re.sub(r"[0-9ьъ]", "", text.casefold()).translate(_TRANSLIT)
+    text = _collapse_runs(text)
+    text = text.replace("ks", "x").replace("w", "v").replace("k", "c")
+    return _collapse_runs(text)
+
+
+def _norm_token(word):
+    """Same skeleton as a scanned token: marks drop, signs and digits drop, repeats collapse.
+
+    NFKD turns й into и plus a breve. The breve is a mark, so the vocabulary
+    and the scanned text must both lose it or a quiet word falls outside.
+    """
+    text = unicodedata.normalize("NFKD", word.casefold())
+    text = "".join(char for char in text if unicodedata.category(char) not in _MARK_CATEGORIES)
+    text = re.sub(r"[0-9ьъ]", "", text)
+    text = re.sub(r"[^0-9a-zа-яё]", "", text)
+    return _collapse_runs(text)
+
+
+_NORM_VOCAB = frozenset(_norm_token(word) for word in _CLOSED_VOCAB if _norm_token(word))
+
+
+def _letter_tokens(text):
+    """Separators and digits are deleted. Repeated letters collapse inside a word."""
+    spaced = _camel_split(text)
+    tokens = []
+    for piece in re.findall(r"[0-9A-Za-zА-Яа-яЁё]+", spaced):
+        word = _norm_token(piece)
+        if word:
+            tokens.append(word)
+    return tokens
+
+
+def _mask_safe(text):
+    """Drop the legitimate author/secretary families before a short-stem search."""
+    for prefix in ("secretary", "secretar", "sekretar", "author"):
+        text = text.replace(prefix, "")
+    return text
+
+
+def _latin_stems():
+    stems = set()
+    for stem in _EN_STEMS + _RU_PREFIXES + ("секрет",):
+        if len(stem) < 4:
             continue
-        latin = word.translate(_TRANSLIT)
-        forms = {latin, latin.replace("v", "w"), latin.replace("k", "c"), latin.replace("ks", "x")}
-        for form in forms:
-            if _token_risky(form):
-                return True
-            for canonical in _CANONICAL:
-                if _common_prefix(form, canonical) >= 6 or _edit_distance(form, canonical) <= 1:
-                    return True
+        stems.add(_latinize(stem))
+    stems.discard("")
+    return stems
+
+
+def _cyr_stems():
+    stems = set()
+    for stem in _RU_PREFIXES + ("секрет",):
+        collapsed = _collapse_runs(re.sub(r"[0-9ьъ]", "", stem))
+        if len(collapsed) >= 4:
+            stems.add(collapsed)
+    return stems
+
+
+_LATIN_STEMS = _latin_stems()
+_CYR_STEMS = _cyr_stems()
+
+
+def _fuzzy_token(token):
+    """A non-vocabulary token close to a stem is the transliteration class."""
+    if token in _NORM_VOCAB or len(token) < 5:
+        return False
+    latin = _latinize(token)
+    if latin in _NORM_VOCAB or len(latin) < 5:
+        return False
+    for stem in _LATIN_STEMS:
+        if len(stem) < 5 or abs(len(latin) - len(stem)) > 2:
+            continue
+        if _common_prefix(latin, stem) >= 6 or _edit_distance(latin, stem) <= 1:
+            return True
     return False
+
+
+def _blob_has_stem(blob, fuzzy):
+    """Stem search on one skeleton. Repeats were already collapsed inside tokens."""
+    if not blob:
+        return False
+    if blob in _RU_RIGHTS or blob == "pii":
+        return True
+    cyr = "".join(char for char in blob if "а" <= char <= "я" or char == "ё")
+    if any(stem in cyr.replace("секретар", "") for stem in _CYR_STEMS):
+        return True
+    # Do not collapse again: that would glue the last letter of one token to the next.
+    latin = blob.translate(_TRANSLIT)
+    latin = latin.replace("ks", "x").replace("w", "v").replace("k", "c")
+    for stem in _LATIN_STEMS:
+        haystack = _mask_safe(latin) if stem == "secret" else latin
+        if stem and stem in haystack:
+            return True
+    if "auth" in _mask_safe(latin):
+        return True
+    if fuzzy:
+        return _fuzzy_token(blob)
+    return False
+
+
+def _raw_words(text):
+    words = []
+    for piece in re.findall(r"[0-9A-Za-zА-Яа-яЁё]+", _camel_split(text)):
+        word = re.sub(r"[0-9ьъ]", "", piece.casefold())
+        if word:
+            words.append(word)
+    return words
+
+
+def _collapsed_sensitive(text):
+    """Unknown fragments are joined. A closed-vocabulary phrase is not re-glued.
+
+    Gluing every vocabulary word would turn "to author" into "oauth". Fragments
+    outside the vocabulary are the split-stem class and are joined.
+    """
+    raw = _raw_words(text)
+    tokens = [_collapse_runs(word) for word in raw]
+    if not tokens:
+        return False
+    if any(word == "pii" or _collapse_runs(word) in _RU_RIGHTS for word in raw):
+        return True
+    known = all(token in _NORM_VOCAB for token in tokens)
+    if not known and "pii" in "".join(raw):
+        return True
+    for token in tokens:
+        if token in _NORM_VOCAB:
+            continue
+        if _blob_has_stem(token, fuzzy=True):
+            return True
+    if known:
+        return False
+    return _blob_has_stem("".join(tokens), fuzzy=False)
+
+
+def _vocab_tokens(text):
+    return _letter_tokens(_camel_split(text))
+
+
+def _vocab_sources(evidence):
+    for key in ("event_text", "goal"):
+        value = evidence.get(key)
+        if type(value) is str and value.strip():
+            yield value
+    diagnostics = evidence.get("diagnostics")
+    if type(diagnostics) is str and diagnostics.strip():
+        yield diagnostics
+    elif type(diagnostics) is list:
+        for item in diagnostics:
+            if type(item) is str and item.strip():
+                yield item
+    for item in evidence.get("paths") or []:
+        if type(item) is str and item.strip():
+            yield item
+    search = evidence.get("class_search")
+    if type(search) is not dict:
+        return
+    for key in ("pattern", "scope"):
+        value = search.get(key)
+        if type(value) is str and value.strip():
+            yield value
+    for key in ("scope_listing", "diff_identifiers"):
+        listing = search.get(key)
+        if type(listing) is not list:
+            continue
+        for item in listing:
+            if type(item) is str and item.strip():
+                yield item
+
+
+def _outside_vocab(evidence):
+    """Free text outside the closed vocabulary downgrades. Empty text does not."""
+    for text in _vocab_sources(evidence):
+        prepared, _residue = _prepare(text)
+        for token in _vocab_tokens(prepared):
+            if token not in _NORM_VOCAB:
+                return True
+    return False
+
+
+def _untrusted_blocks(evidence):
+    """Weakening keeps the condition-7 reason. Any other unknown text goes to PM."""
+    return _outside_vocab(evidence) and not _weakens_any(evidence)
 
 
 def _sensitive(value):
     if type(value) is not str or not value:
         return False
-    folded = unicodedata.normalize("NFKD", value).translate(_SLASH_FOLD)
-    decoded, residue = _decode(folded)
-    stripped = _strip_marks(decoded)
+    stripped, residue = _prepare(value)
     # Residue and anything outside the allowlist are the same class: fail closed.
     if residue or (stripped and _ambiguous(stripped)):
         return True
@@ -1165,11 +1228,7 @@ def _sensitive(value):
         return False
     if _foreign_script(stripped) or _mixed_script(stripped):
         return True
-    if _cyr_sensitive(stripped):
-        return True
-    if _latin_sensitive(stripped):
-        return True
-    return _translit_sensitive(stripped)
+    return _collapsed_sensitive(stripped)
 
 
 def _sensitive_any(evidence):
@@ -1269,7 +1328,7 @@ def _diff_proven(diff):
     if diff.get("tool") not in _DIFF_TOOLS:
         return False
     hunks = diff.get("hunks")
-    if type(hunks) is not int or hunks < 1:
+    if type(hunks) is not int or hunks < 1 or hunks > _MAX_DIFF_HUNKS:
         return False
     return all(diff.get(flag) is True for flag in _UNCHANGED)
 
@@ -1281,45 +1340,79 @@ def _safe_surface(evidence):
     return surface.strip().casefold() in _SAFE_SURFACES
 
 
+def _stem_occurs(stem, tokens):
+    blob = "".join(tokens)
+    if stem not in blob:
+        return False
+    cursor = 0
+    spans = []
+    for token in tokens:
+        spans.append((cursor, cursor + len(token), token))
+        cursor += len(token)
+    start = 0
+    while True:
+        at = blob.find(stem, start)
+        if at < 0:
+            return False
+        end = at + len(stem)
+        inside = None
+        for left, right, token in spans:
+            if left <= at and end <= right:
+                inside = token
+                break
+        if inside is None or inside.startswith(stem) or inside not in _NORM_VOCAB:
+            return True
+        start = at + 1
+    return False
+
+
+def _stem_active(stem, tokens):
+    """A stem counts when it crosses fragments, or a token actually starts with it.
+
+    A vocabulary word may contain the letters by accident ("latest" has "test").
+    That occurrence does not count. Fragments joined by deleted separators do.
+    Repeated letters match either the spelled stem or the collapsed stem, so a
+    double letter split across fragments still counts.
+    """
+    collapsed = _collapse_runs(stem)
+    if _stem_occurs(stem, tokens):
+        return True
+    return collapsed != stem and _stem_occurs(collapsed, tokens)
+
+
 def _weakens(value):
     """Destructive intent blocks. Quiet text does not grant a route.
 
-    Verbs and nouns match as token prefixes across words, not as a substring of a
-    glued sentence, so "latest" is not "test" and "export" is not "expect".
+    Every separator is deleted and repeated letters collapse, so a split verb
+    still matches. A hit inside one closed-vocabulary word does not.
     """
     if type(value) is not str or not value:
         return False
-    folded = unicodedata.normalize("NFKD", value).translate(_SLASH_FOLD)
-    decoded, _residue = _decode(folded)
-    stripped = _strip_marks(decoded)
+    stripped, _residue = _prepare(value)
     if not stripped:
         return False
-    cyr_words = re.findall(r"[а-яё]+", stripped.casefold())
-    cyr_forms = list(cyr_words)
-    cyr_forms.extend(left + right for left, right in zip(cyr_words, cyr_words[1:]))
-    if any(any(word.startswith(stem) for stem in _RU_DESTRUCTIVE) for word in cyr_forms):
-        return True
-    tokens = _flat_pieces(stripped)
+    tokens = _letter_tokens(stripped)
     if not tokens:
         return False
-    # A separator may split "assertions" or "удалить". Joins are extra tokens, not a glue of the sentence.
-    spanned = list(tokens)
-    spanned.extend(left + right for left, right in zip(tokens, tokens[1:]))
-    if _has_prefix(spanned, ("delet", "remov", "drop", "strip")) and _has_prefix(
-            spanned, ("assert", "test", "timeout", "expect")):
+    if any(_stem_active(stem, tokens) for stem in _RU_DESTRUCTIVE):
         return True
-    if any(token.startswith("comment") for token in tokens) and (
-            any(token == "out" for token in tokens)
-            or any(token.startswith("comment") and "out" in token for token in tokens)):
+    if _stem_active("comment", tokens) and (
+            any(token == "out" for token in tokens) or _stem_active("out", tokens)):
         return True
-    gated = _has_prefix(tokens, ("skip", "disable", "xfail")) or "xit" in tokens
-    if gated and _has_prefix(tokens, ("test", "assert", "timeout", "qa", "security", "auth")):
+    cuts = any(_stem_active(stem, tokens) for stem in ("delet", "remov", "drop", "strip"))
+    nouns = any(_stem_active(stem, tokens) for stem in ("assert", "test", "timeout", "expect"))
+    if cuts and nouns:
         return True
-    if _has_prefix(tokens, ("weaken", "loosen")):
+    gated = any(_stem_active(stem, tokens) for stem in ("skip", "disable", "xfail")) or "xit" in tokens
+    gated_nouns = any(_stem_active(stem, tokens) for stem in (
+        "test", "assert", "timeout", "qa", "security", "auth"))
+    if gated and gated_nouns:
         return True
-    if _has_prefix(tokens, ("rais", "increas", "extend")) and _has_prefix(tokens, ("timeout",)):
+    if any(_stem_active(stem, tokens) for stem in ("weaken", "loosen")):
         return True
-    if _has_prefix(tokens, ("adjust", "updat", "chang")) and _has_prefix(tokens, ("expected",)):
+    if any(_stem_active(stem, tokens) for stem in ("rais", "increas", "extend")) and _stem_active("timeout", tokens):
+        return True
+    if any(_stem_active(stem, tokens) for stem in ("adjust", "updat", "chang")) and _stem_active("expected", tokens):
         return True
     return False
 

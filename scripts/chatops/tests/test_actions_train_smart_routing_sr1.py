@@ -1655,5 +1655,83 @@ class SmartRoutingQaR5(unittest.TestCase):
                 self.assertEqual(decision["event_class"], "SOURCE_KNOWN_LOCAL")
 
 
+class SmartRoutingQaR6(unittest.TestCase):
+    """Free text only downgrades. A split, a repeat, or a transliteration cannot write.
+
+    These are the eighteen R6 probes: fourteen event texts, plus scope and
+    scope listing for the two path-shaped fragments. On head 9ebe516e each of
+    them was risk low with Fast Fix and a writer.
+    """
+
+    _SPLIT_SENSITIVE = (
+        "aut hor iz ation",
+        "aut/hor/iz/ation",
+        "а в т о р и з а ц и я",
+        "ав/то/ри/за/ция",
+        "аввторизация",
+        "паароль",
+        "avtorizatsiya",
+        "parol",
+    )
+    _SPLIT_WEAKEN = (
+        "dis able test",
+        "skip ti meout",
+        "up date ex pected",
+        "in crease time out",
+        "de le te as ser tions",
+        "у да лить ассерты",
+    )
+
+    def test_fragmented_sensitive_words_stay_critical(self):
+        for text in self._SPLIT_SENSITIVE:
+            for builder in (fast, _proven_brief):
+                with self.subTest(text=text, brief=builder is _proven_brief):
+                    decision = _not_writer(self, builder(event_text=text))
+                    self.assertEqual(decision["risk"], "critical")
+                    self.assertFalse(decision["fast_fix"])
+                    self.assertFalse(decision["writer"])
+                    self.assertFalse(decision["executed"])
+
+    def test_fragmented_weaken_phrases_do_not_write(self):
+        for text in self._SPLIT_WEAKEN:
+            with self.subTest(text=text, path="fast"):
+                decision = _not_writer(self, fast(event_text=text))
+                self.assertFalse(decision["fast_fix"])
+                self.assertFalse(decision["writer"])
+                self.assertIn("condition 7", decision["reason"])
+            with self.subTest(text=text, path="brief"):
+                decision = _not_writer(self, _proven_brief(event_text=text))
+                self.assertFalse(decision["writer"])
+                self.assertFalse(decision["executed"])
+                self.assertFalse(decision["fast_fix"])
+                self.assertIn("condition 7", decision["reason"])
+
+    def test_fragmented_stem_in_scope_and_listing(self):
+        for text in ("aut/hor/iz/ation", "ав/то/ри/за/ция"):
+            for field, value in (("scope", text), ("scope_listing", [text + ".ts"])):
+                with self.subTest(field=field, text=text):
+                    decision = _not_writer(self, fast(class_search=search(**{field: value})))
+                    self.assertEqual(decision["risk"], "critical")
+                    self.assertFalse(decision["fast_fix"])
+                    self.assertFalse(decision["writer"])
+                    self.assertFalse(decision["executed"])
+
+    def test_text_outside_the_closed_vocabulary_has_no_writer(self):
+        for builder in (fast, _proven_brief):
+            with self.subTest(brief=builder is _proven_brief):
+                decision = _not_writer(self, builder(event_text="rename the widget"))
+                self.assertIn(decision["risk"], ("low", "moderate"))
+                self.assertFalse(decision["fast_fix"])
+                self.assertFalse(decision["writer"])
+                self.assertEqual(decision["event_class"], "SOURCE_UNCERTAIN")
+                self.assertIn("closed vocabulary", decision["reason"])
+        pathed = _not_writer(self, fast(paths=["apps/web/src/widget.ts"]))
+        self.assertEqual(pathed["risk"], "low")
+        self.assertFalse(pathed["fast_fix"])
+        self.assertFalse(pathed["writer"])
+        self.assertEqual(pathed["event_class"], "SOURCE_UNCERTAIN")
+        self.assertIn("closed vocabulary", pathed["reason"])
+
+
 if __name__ == "__main__":
     unittest.main()
