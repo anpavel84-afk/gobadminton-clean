@@ -228,16 +228,21 @@ class AdmissionPM(unittest.TestCase):
         path = Path(admission['package_path'])
         package = R.read(path, 0)
         row = next(iter(package['grants'].values()))
-        operation = 'a' * 64
+        slot = R.read(self.state / 'slot2.json', 0)
+        q = A.exact_qualification(row['grant'], CONTROLLER)
+        binding = dict(action='train', stage='qa_qualification', slot='slot2', issue=29,
+                       profile='agy', phase='idle', attempt=0, generation=slot['generation'], head=q['head'])
+        operation = digest(binding)
+        self.analysis_operation = operation
         row['operation'] = operation
         package['used_calls'] += 1
         self.atomic(path, package)
-        slot = R.read(self.state / 'slot2.json', 0)
-        slot['operations'][operation] = dict(finished_at=1,
-            task_hash=A.exact_qualification(row['grant'], CONTROLLER)['task_sha256'],
+        slot['operations'][operation] = dict(finished_at=1, binding=binding, run=123, run_attempt=1,
+            task_hash=q['task_sha256'], qa_qualification=q, before=Q.CHECKPOINT, after=Q.CHECKPOINT,
             result=dict(status='confirmed', analysis_complete=True,
                         analysis=dict(completion='COMPLETE', source_reads=[dict(path='a'), dict(path='b')]),
-                        native_receipt=dict(tool_names=['view_file', 'run_command'])))
+                        native_receipt=dict(tool_names=['view_file', 'run_command'], qualification_grant=row['grant'],
+                                            qualification_task_sha256=q['task_sha256'])))
         self.atomic(self.state / 'slot2.json', slot)
         self.reservation(row['grant'], operation, slot['operations'][operation]['result'])
         return package
@@ -496,7 +501,7 @@ class AdmissionPM(unittest.TestCase):
         first = self.run_pm()
         self.consume_analysis(first)
         slot = R.read(self.state / 'slot2.json', 0)
-        slot['operations']['a'*64]['result']['native_receipt']['tool_names'] = ['view_file']
+        slot['operations'][self.analysis_operation]['result']['native_receipt']['tool_names'] = ['view_file']
         self.atomic(self.state / 'slot2.json', slot)
         value = self.run_pm(role=P.ROLES[1], request=self.qa_request)
         self.assertEqual(value['status'], 'BLOCKED', value)

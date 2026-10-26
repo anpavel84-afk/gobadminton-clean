@@ -33,12 +33,18 @@ def validate_policy(task):
                 and all(c.isprintable() for c in evidence), "stage evidence required")
         preferred = preferred_route(policy, task, role, level)
         require(preferred in task[role + "_routes"], "minimum stage route not explicitly admitted")
+        if role == 'author' and preferred.startswith('agy:'):
+            require(MATRIX[level] in task['author_routes'], 'AGY author requires explicit minimum Codex fallback')
         if level == "critical":
             require(reason in CRITICAL and len(evidence.strip()) >= 20,
                     "Astra High requires specific critical escalation evidence")
         if level == "expert":
             require(reason in CRITICAL | {"expert_risk"} and len(evidence.strip()) >= 20,
                     "Astra Medium requires expert-risk evidence")
+    if any(route.split(':')[0] == 'agy' for route in task['author_routes']):
+        from core import executable_independent_qa
+        require(executable_independent_qa(task, policy=policy),
+                'AGY author requires an executable independent non-agy QA route')
     return policy
 
 def preferred_route(policy, task, role, level):
@@ -46,7 +52,7 @@ def preferred_route(policy, task, role, level):
     if policy['schema'] == 'GB_STAGE_COST_V2':
         if role == 'author' and level in ('simple', 'standard', 'complex') and first == 'cursor:auto':
             return first
-        if role == 'qa':
+        if role in ('author', 'qa'):
             preferred = {'simple': 'agy:claude-sonnet-5-5-medium',
                          'standard': 'agy:claude-sonnet-5-5-medium',
                          'complex': 'agy:claude-sonnet-5-5-high',
@@ -58,7 +64,11 @@ def preferred_route(policy, task, role, level):
 
 def selection(task, role):
     """Never add a route; pick the approved minimum for the classified STAGE."""
-    p = validate_policy(task)
+    return _selection(validate_policy(task), task, role)
+
+
+def _selection(p, task, role):
+    """Already validated policy; shared with static independent-QA admission."""
     row = p[role]
     minimum = MATRIX[row["complexity"]]
     preferred = preferred_route(p, task, role, row['complexity'])
@@ -67,7 +77,7 @@ def selection(task, role):
         # UI-S's explicitly admitted Sol Medium is sufficient above Luna's minimum.
         allowed = {minimum, 'codex:gpt-6.1-sol:medium'}
         fallback = [r for r in task['author_routes'] if r in allowed]
-    if preferred == 'agy:claude-opus-5-5-high' and row['complexity'] == 'critical':
+    if role == 'qa' and preferred == 'agy:claude-opus-5-5-high' and row['complexity'] == 'critical':
         # No separate exact-risk Codex QA qualification mechanism is installed.
         # A listed Sol route alone is insufficient; Astra is not ordinary QA fallback.
         fallback = []

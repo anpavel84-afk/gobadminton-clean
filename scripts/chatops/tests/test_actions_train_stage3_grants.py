@@ -123,9 +123,12 @@ class FreshContract(unittest.TestCase):
                               analysis=dict(completion='COMPLETE')))}}
         rec=dict(phase='complete',third_operation_sha256=Q.THIRD_DIGEST)
         vals={Q.ADDRESSED_LEDGER:base,Q.ADDRESSED_RECONCILIATION:rec}
-        api=SimpleNamespace(POLICY='policy',STATE=None,
-              read=lambda path,*a:dict(controller_sha=g['controller_revision']) if path=='policy'
-                    else copy.deepcopy(vals[path]),journal=lambda slot:copy.deepcopy(state))
+        def read(path,*args):
+            if path=='policy':return dict(controller_sha=g['controller_revision'])
+            if path not in vals:raise FileNotFoundError(path)
+            return copy.deepcopy(vals[path])
+        api=SimpleNamespace(POLICY='policy',STATE=None,read=read,
+                            journal=lambda slot:copy.deepcopy(state))
         from pathlib import Path
         api.STATE=Path('/state')
         vals={Path('/state')/k:v for k,v in vals.items()}
