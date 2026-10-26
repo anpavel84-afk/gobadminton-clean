@@ -336,3 +336,10 @@
 - P1b frozen: branch `ops/proportionate-testing-p1b-20261026` @ `cf747527f17f5d465e867c19463b25539ac002f5`; 61 failures reported by handoff, no PR/QA/CI; no rerun without recovery decision. Source P1 merged P1b not installed. Product Train paused; PROD untouched.
 - Один read-only VPS CLI status query returned `antigravity-qa.json` phase=canary; другая комбинированная QA-status CLI operation получила отказ платформы — не повторялась. Никаких root apply, start авторов/QA, merge/issue admission не делалось.
 - Следующее: адресно подтвердить итог QA C3 и real slot2/receipt через допустимое минимальное чтение; после QA PASS решать PR #330, подготовить PR D checkout mover и точный immutable root bundle. P1b — продолжить после исчерпания recovery evidence, не ослабляя TEST PLAN gate.
+
+
+### 26.10.2026 — PR #330 QA C3 FAIL → documentation correction → QA C4
+- Read-only evidence C3 на VPS: `reviewed_sha=71d2d93f`, `verdict=FAIL`, один P2 `docs/ops/AGY29_SMALL_RANGE_UPGRADE.md:172-175`: EIO на directory-fsync после rename final receipt может оставлять phase `rolled_back` при exception. C3 136 адресных тестов/мутации PASS, но QA overall FAIL.
+- PMA исправил **только документацию** на существующей ветке PR #330, commit `83054653be0ec59e175d37dc6640e25e2effabe2`, без изменения installer/test/manifest. Исправлено readback/reconcile вместо ложной безусловной гарантии. GitHub-квитанция: https://github.com/anpavel84-afk/gobadminton-clean/pull/330#issuecomment-6418248073.
+- На новой exact SHA начаты Product CI `40337424755` / `40337417227` и новая независимая QA C4 из изолированного `uid1002` source-read-only, network disabled, `gb-task`, модель `gpt-6.1-sol:high`; checkout источника проверен exact SHA, дельта от C3 только этот `.md`. Запуск QA C4 PID 1222984 через unprivileged Remote Desktop Commander, evidence внутри `/home/agentagency-dev/qa-evidence-agy29c4-20261026`. На момент записи QA C4/CI ещё не завершились; никакого PASS не объявлено.
+- #330 остаётся draft, merge/install/protected state не изменены. #329 root apply и checkout mover D не запускались; P1b автор и WIP неизменны.
