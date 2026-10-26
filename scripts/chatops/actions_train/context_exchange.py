@@ -94,10 +94,41 @@ class Artifact:
                     bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest(), essential=self.essential)
 
 
+@dataclass(frozen=True)
+class BinaryReference:
+    """Role-independent metadata only; bytes never enter the context packet."""
+    id: str
+    version: str
+    sha256: str
+    bytes: int
+    media_type: str
+    closure_sha256: str
+    relative_path: str
+
+    def reference(self) -> dict:
+        for value in (self.id, self.version):
+            _check(isinstance(value, str) and bool(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,99}', value)),
+                   'invalid binary id/version')
+        _check(isinstance(self.sha256, str) and bool(HASH.fullmatch(self.sha256))
+               and isinstance(self.closure_sha256, str) and bool(HASH.fullmatch(self.closure_sha256)),
+               'invalid binary hash/closure id')
+        _check(type(self.bytes) is int and 0 < self.bytes <= 16 * 1024 * 1024, 'invalid binary size')
+        _path(self.relative_path)
+        _check(bool(re.fullmatch(r'[A-Za-z0-9_./-]+', self.relative_path))
+               and len(self.relative_path) <= 512, 'invalid binary path')
+        _check(isinstance(self.media_type, str) and bool(re.fullmatch(
+            r'[a-z0-9][a-z0-9.+-]*/[a-z0-9][a-z0-9.+-]*', self.media_type)), 'invalid binary media type')
+        return dict(id=self.id, version=self.version, sha256=self.sha256, bytes=self.bytes,
+                    media_type=self.media_type, closure_sha256=self.closure_sha256,
+                    relative_path=self.relative_path, delivery='verified_local_reference')
+
+
 def build_packet(*, role: str, task: Mapping, binding: Mapping,
                  artifacts: Iterable[Artifact] = (), essential: Mapping | None = None,
                  verified_access: Callable[[dict], bool] | None = None,
-                 inline_threshold: int = 4096) -> tuple[dict, dict]:
+                 inline_threshold: int = 4096,
+                 binary_refs: Iterable[BinaryReference] | None = (),
+                 binary_access: Callable[[dict], bool] | None = None) -> tuple[dict, dict]:
     """Hybrid inlining/reference view; unavailable retrieval falls back to full text.
 
     verified_access MUST check the actual recipient's readable exact materialization,
@@ -135,6 +166,21 @@ def build_packet(*, role: str, task: Mapping, binding: Mapping,
             if not artifact.essential and ref['bytes'] > inline_threshold:
                 warnings.append(dict(code='REFERENCE_UNAVAILABLE_INLINE_FALLBACK', artifact=ref['id']))
         packet['artifacts'].append(ref)
+    binaries, binary_ids, binary_bytes = [], set(), 0
+    for binary in binary_refs or ():
+        _check(isinstance(binary, BinaryReference), 'typed binary reference required')
+        ref = binary.reference()
+        _check(ref['id'] not in binary_ids, 'duplicate binary id')
+        binary_ids.add(ref['id']); binary_bytes += ref['bytes']
+        _check(binary_bytes <= 64 * 1024 * 1024, 'binary closure too large')
+        try:
+            readable = bool(binary_access(copy.deepcopy(ref))) if binary_access else False
+        except Exception:
+            readable = False
+        _check(readable, 'DESIGN_INPUT_UNREADABLE: ' + ref['id'])
+        binaries.append(ref)
+    if binaries:
+        packet['design_binding'] = dict(binary_refs=binaries)
     raw = encoded(packet)
     if len(raw) > SOFT_BYTES[role]:
         warnings.append(dict(code='SOFT_CONTEXT_TARGET_EXCEEDED', bytes=len(raw), target=SOFT_BYTES[role]))

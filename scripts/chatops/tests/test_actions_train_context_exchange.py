@@ -290,4 +290,68 @@ class ContextExchange(unittest.TestCase):
         self.assertFalse(E.exact_json_equal([0],[False]))
 
 
+
+class BinaryContextExchange(unittest.TestCase):
+    def reference(self, **changes):
+        values = dict(id='m2r-mockup', version='v1', sha256='c'*64, bytes=20,
+                      media_type='image/png', closure_sha256='d'*64,
+                      relative_path='design/'+'d'*64+'/m2r-mockup--v1.png')
+        values.update(changes)
+        return E.BinaryReference(**values)
+
+    def test_non_ui_golden_packet_bytes_digest_and_zero_added_cost(self):
+        # Captured from git show bdd912a:context_exchange.py before this delta.
+        expected = dict(schema='GB_CONTEXT_PACKET_V1', role='qa', binding=BIND,
+                        task=TASK, task_sha256='6159cb46a2b2a8a35010cd1277263babf55b5acf4dc6887177f2e11ab2ef9f30',
+                        essential={}, artifacts=[], content={})
+        golden_digest = 'c3b42447b94d491e5e07ed9632693254be77659a3bb27d91a5d6d6f483d4600b'
+        self.assertEqual(E.digest(expected), golden_digest)
+        for options in ({}, {'binary_refs': ()}, {'binary_refs': []}, {'binary_refs': None}):
+            packet, metrics = E.build_packet(role='qa', task=TASK, binding=BIND, **options)
+            self.assertEqual(E.encoded(packet), E.encoded(expected))
+            self.assertEqual(E.digest(packet), golden_digest)
+            self.assertEqual(metrics['packet_bytes'], 496)
+            self.assertEqual(metrics['reference_bytes'], 0)
+            self.assertNotIn('design_binding', packet)
+        def forbidden(_):
+            self.fail('non-UI packet must never invoke binary access')
+        p, _ = E.build_packet(role='qa', task=TASK, binding=BIND, binary_access=forbidden)
+        self.assertEqual(E.encoded(p), E.encoded(expected))
+
+    def test_binary_refs_verified_local_only_role_agnostic(self):
+        ref = self.reference()
+        for role in ('author', 'qa'):
+            seen = []
+            packet, _ = E.build_packet(role=role, task=TASK, binding=BIND, binary_refs=[ref],
+                                      binary_access=lambda r: seen.append(r) or True)
+            self.assertEqual(seen, [ref.reference()])
+            self.assertEqual(packet['design_binding']['binary_refs'], [ref.reference()])
+            self.assertEqual(packet['content'], {})
+            self.assertNotIn('base64', E.encoded(packet).decode())
+            self.assertNotIn('inline', E.encoded(packet).decode())
+        with self.assertRaises(__import__('dataclasses').FrozenInstanceError):
+            ref.id = 'changed'
+
+    def test_unreadable_binary_fails_without_inline_fallback(self):
+        def error(_):
+            raise PermissionError('synthetic denied')
+        for access in (None, lambda _: False, error):
+            with self.subTest(access=access), self.assertRaisesRegex(ValueError, '^DESIGN_INPUT_UNREADABLE'):
+                E.build_packet(role='qa', task=TASK, binding=BIND, binary_refs=[self.reference()], binary_access=access)
+
+    def test_invalid_hash_path_size_closure_media_and_duplicates_rejected(self):
+        for change in ({'sha256': 'x'*64}, {'sha256': 'a'*63}, {'closure_sha256': 'map-v1'},
+                       {'bytes': True}, {'bytes': 0}, {'bytes': 16*1024*1024+1},
+                       {'relative_path': '/absolute'}, {'relative_path': '../parent'},
+                       {'relative_path': 'a/../b'}, {'relative_path': 'a//b'},
+                       {'relative_path': 'a\\b'}, {'relative_path': 'a\nb'},
+                       {'media_type': 'image/png;base64'}, {'id': 'bad id'}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                E.build_packet(role='qa', task=TASK, binding=BIND, binary_refs=[self.reference(**change)], binary_access=lambda _: True)
+        with self.assertRaises(ValueError):
+            E.build_packet(role='qa', task=TASK, binding=BIND, binary_refs=[self.reference()]*2, binary_access=lambda _: True)
+        refs = [self.reference(id='ref'+str(i), bytes=16*1024*1024) for i in range(5)]
+        with self.assertRaises(ValueError):
+            E.build_packet(role='qa', task=TASK, binding=BIND, binary_refs=refs, binary_access=lambda _: True)
+
 if __name__=='__main__':unittest.main()
