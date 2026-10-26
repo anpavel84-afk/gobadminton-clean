@@ -516,13 +516,18 @@ def apply(script_sha,commit,expected_observation):
     observed=observation()
     need(digest(observed)==expected_observation,'dry observation changed; rerun dry')
     BK.mkdir(mode=0o700)
-    raw=regular_bytes(INVENTORY);saved=inventory_meta()
-    atomic_bytes(BK/'inventory',raw,0o600)
-    need(observation()==observed,'backup-phase drift; no inventory write occurred')
-    receipt=dict(schema=SCHEMA,phase='backed_up',commit=commit,script_sha256=script_sha,
-        observation=observed,observation_sha256=expected_observation,backups=dict(inventory=saved),
-        new_sha256=bytes_sha(rerecorded_bytes(raw)))
-    write_json(J,receipt)
+    try:
+        raw=regular_bytes(INVENTORY);saved=inventory_meta()
+        atomic_bytes(BK/'inventory',raw,0o600)
+        need(observation()==observed,'backup-phase drift; no inventory write occurred')
+        receipt=dict(schema=SCHEMA,phase='backed_up',commit=commit,script_sha256=script_sha,
+            observation=observed,observation_sha256=expected_observation,backups=dict(inventory=saved),
+            new_sha256=bytes_sha(rerecorded_bytes(raw)))
+        write_json(J,receipt)
+    except BaseException:
+        # Nothing but our own fresh backup directory exists yet; the inventory was never written.
+        if not os.path.lexists(J):shutil.rmtree(BK,ignore_errors=True)
+        raise
     try:
         assert_unchanged(receipt)
         need(regular_bytes(INVENTORY)==raw,'pre-write inventory drift')

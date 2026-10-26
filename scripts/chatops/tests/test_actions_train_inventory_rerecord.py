@@ -220,6 +220,13 @@ class RerecordTests(unittest.TestCase):
             I.apply(SS,'a'*40,I.digest(observed))
         for path,data in before.items():self.assertEqual(path.read_bytes(),data)
 
+    def test_failure_before_the_receipt_leaves_no_transaction_files(self):
+        f=self.fixture();before=f.tree();observed=I.observation()
+        with patch.object(I,'write_json',side_effect=OSError('synthetic')),self.assertRaises(OSError):
+            I.apply(SS,'a'*40,I.digest(observed))
+        self.assertEqual(f.tree(),before);self.assertFalse(f.paths['BK'].exists())
+        with contextlib.redirect_stdout(io.StringIO()):I.apply(SS,'a'*40,I.digest(observed))   # retry is possible
+
     def test_rollback_refuses_foreign_inventory_bytes(self):
         f=self.fixture();observed=I.observation()
         with contextlib.redirect_stdout(io.StringIO()):I.apply(SS,'a'*40,I.digest(observed))
