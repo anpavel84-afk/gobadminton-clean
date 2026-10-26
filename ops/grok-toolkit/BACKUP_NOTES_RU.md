@@ -354,3 +354,9 @@
 ### 26.10.2026 — AGY QA C5 PASS (до CI/merge)
 - QA C5 PASS на exact `dd129bc7a1bcb0a7f4493b1dbfba61efcf1f39ac`, findings `[]`, independent Codex Sol High, full EOM 1.4; receipt SHA256 `3293636c6c9ac46f93a3078abf81b39e0b4e38cbc29ab532cb94ce4e69d303c6` (VPS uid1002). QA C3/C4 P2 documentation findings закрыты; 136 тестов C3 + 4 синтетических теста C4 — исторические для unchanged code, C5 новые не запускала. Доказательство в https://github.com/anpavel84-afk/gobadminton-clean/pull/330#issuecomment-6418461593 .
 - Product CI exact sha #40338786602 пока в прогрессе (5/7 зелёных, database/receiver выполняются); не считать принятым до всех 7/7. PR #330 ещё draft и не merged; никакого root apply.
+
+
+### 26.10.2026 — PR #330 7/7 CI PASS; tool refusal READY
+- Exact head `dd129bc7a1bcb0a7f4493b1dbfba61efcf1f39ac` independent QA C5 PASS (no findings; evidence SHA256 `3293636c6c9ac46f93a3078abf81b39e0b4e38cbc29ab532cb94ce4e69d303c6`), CI PR run `40338786602` 7/7 SUCCESS, push CI `40338778929` SUCCESS. Final preflight: GH operator Owner `anpavel84-afk`, LIVE_STATE ChatGPT active, PR exactly 3 approved paths, mergeable clean, dev `c71346dc`.
+- Attempted `GitHub.mark_pull_request_ready_for_review` once on PR #330. Tool response exact: `This tool call was blocked by OpenAI's safety checks. Please double check what you are sending.` Unknown underlying reason, no code/report/rule failure. No alternate tool/identity/wrapper retry. Read-only GitHub verification: PR #330 still draft/open/unmerged, head unchanged; dev HEAD unchanged. This is a local publication-stage blocker only, not source QA/CI FAIL or authorization for bypass. No root/install/admission/slot activity.
+- Owner next action if desired: standard GitHub PR #330 review/merge from their own UI; source gates met, but neither READY nor MERGE was performed by ChatGPT. Keep separate later protected root-install approvals exact SHA.
