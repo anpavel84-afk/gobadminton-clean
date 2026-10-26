@@ -1,0 +1,29 @@
+#!/bin/bash
+# Stub of /opt/gobadminton-clean-qa/bin/codex for the offline e2e test. Never contacts any model.
+LOG=/opt/gobadminton-clean-qa/fake-calls.log
+echo "uid=$(id -un) args: $*" >>"$LOG" 2>/dev/null
+case "${1:-}" in
+  --version) echo "codex-cli 0.160.1 (fake)"; exit 0 ;;
+  sandbox)
+    shift; while [ "$1" != -- ]; do shift; done; shift
+    exec bwrap --ro-bind / / --dev /dev --tmpfs /home --tmpfs /root --tmpfs /var/lib/gb-ops-stage \
+      --tmpfs "$CODEX_HOME" --bind "$TMPDIR" "$TMPDIR" --unshare-net --chdir "$PWD" -- "$@" ;;
+esac
+out=""; model=""; prev=""
+cdir=""
+for a in "$@"; do [ "$prev" = -o ] && out=$a; [ "$prev" = --model ] && model=$a; [ "$prev" = -C ] && cdir=$a; prev=$a; done
+cd "$cdir" || exit 5
+for need in --no-daemon exec --ignore-user-config --ignore-rules --ephemeral --skip-git-repo-check 'approval_policy="never"' 'mcp_servers={}' 'web_search="disabled"' 'features.hooks=false' 'model_reasoning_effort="high"'; do
+  printf '%s\n' "$@" | grep -qxF -- "$need" || { echo "fake: missing flag $need" >&2; exit 2; }
+done
+printf '%s\n' "$@" | grep -q '"network"={"enabled"=false}' || { echo "fake: network not disabled" >&2; exit 2; }
+[ -r "$CODEX_HOME/auth.json" ] || { echo "fake: no auth" >&2; exit 3; }
+grep -q FAKE-AUTH "$CODEX_HOME/auth.json" || { echo "fake: auth mismatch" >&2; exit 3; }
+[ -f AGENTS.md ] || [ -d apps ] || { echo "fake: cwd is not the checkout" >&2; exit 4; }
+if [ -n "$model" ] && [ -e /opt/gobadminton-clean-qa/REJECT_MODEL ]; then
+  echo "Error: unsupported model: $model; token eyJhbGciOiJIUzI1NiJ9.secretpayload.sig" >&2; exit 1; fi
+if [ -e /opt/gobadminton-clean-qa/FAIL ]; then echo "fatal: refresh_token: rt_SECRETSECRETSECRETSECRETSECRET123 expired" >&2; exit 1; fi
+prompt=$(cat)
+{ echo "ВЕРДИКТ: NELZYA"; echo "prompt_bytes: ${#prompt}"; echo "model_seen: ${model:-default}";
+  printf '%s\n' "$prompt" | grep -m1 'repo_sha'; printf '%s\n' "$prompt" | grep -m1 'dev HEAD at review time: ';
+  printf '%s\n' "$prompt" | grep -c 'UNTRUSTED DATA'; echo "REVISED_BODY_BEGIN"; echo "GOBADMINTON_AUTONOMY_V1"; echo "{}"; echo "REVISED_BODY_END"; } >"$out"

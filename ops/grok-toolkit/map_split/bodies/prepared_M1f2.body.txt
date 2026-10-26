@@ -1,0 +1,17 @@
+GOBADMINTON_AUTONOMY_V1
+{
+  "schema": "GOBADMINTON_AUTONOMY_V1",
+  "target": "dev",
+  "kind": "source_only",
+  "goal": "BASE RULE: work on the CURRENT checked-out HEAD of your branch. It is already the accepted dev base (0c619608, M1c/M1e merged). Do NOT compare with origin/dev, do NOT run any ancestor check, do NOT stop because a remote ref, M1c merge or DEV acceptance looks unverified: local remote refs are stale and that is NOT a blocker. NEVER run git fetch/pull/checkout/switch/reset/stash (no network, no git metadata writes). THIS TASK MUST PRODUCE REAL CODE AND TESTS IN THE DIFF; a handoff-only diff is a FAIL. If tests cannot be executed in the sandbox, say NOT_TESTED with the exact reason, keep code and tests in the diff, never weaken assertions. Optional reference (read-only): 'git show 0ce158e062d4509e8528abbbf33b520a21210ecf:<path>' if the commit exists locally; its helper moved distinct points and used a distance argument, so ADAPT it to the spec below or write from scratch. Do NOT touch GamesMapBackButton, GamesMapView, GamesDiscoveryPage or back-button/shell/layout tests. Additive web-only; no API, DB, contracts, dependencies or PROD. Edit only allowed_paths. SLICE 2 of 3 (marker visual states only; needs no separation). Make markers on the venue map visually distinct via existing marker rendering: white 44px marker with no games; lime 48px marker showing the games count number; unavailable venues show a count mark without a number; add a CSS class for selected state with a violet+lime ring (class and style only; do not change selection logic). Put a small pure helper (e.g. getMarkerVisualState(venue) returning 'empty'|'games'|'unavailable' plus label) in games-venue-map.ts and use it in GamesVenueMap.tsx marker creation; CSS in radar-geographic.css / venue-schedule-card.css. No per-second marker re-render, no map remount. Safe at 390/430 widths. Add apps/web/test/marker-states.test.ts for the helper and class names.",
+  "acceptance": "D1. Tests: helper returns empty/games/unavailable correctly incl. count 0, count>0, unavailable; marker html contains the number only for games state; sizes 44px/48px present in CSS (string check ok) and selected ring class exists. D2. Existing web tests still pass, back-button/layout tests unchanged. D3. Tests, lint, typecheck, build output quoted or NOT_TESTED with reason; NOT_TESTED for browser and physical iOS. D4. Diff has real changes in games-venue-map.ts, GamesVenueMap.tsx, css and the new test; handoff docs/handoffs/ISSUE_<this number>_M1F2.md.",
+  "allowed_paths": [
+    "apps/web/src/components/consumer/games/GamesVenueMap.tsx",
+    "apps/web/src/lib/games-venue-map.ts",
+    "apps/web/src/styles/radar-geographic.css",
+    "apps/web/src/styles/venue-schedule-card.css",
+    "apps/web/test/marker-states.test.ts",
+    "docs/handoffs/**"
+  ],
+  "max_attempts": 3
+}

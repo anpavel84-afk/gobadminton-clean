@@ -1,0 +1,2 @@
+GOBADMINTON_PARK_V1
+{"schema": "GOBADMINTON_PARK_V1", "issue": 88, "head": "0ce158e062d4509e8528abbbf33b520a21210ecf", "attempt": 3, "reason": "M1b QA FAIL on 0ce158e0; attempts 3 of 3 exhausted (attempt 1 B3 layout script, attempt 2 D2/B2 return visibility, attempt 3 FAIL). Parked to free the slot; work continues in narrower successor M1c built from PR 89 branch.", "allow_successors": []}

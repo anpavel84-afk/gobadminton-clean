@@ -1,0 +1,2 @@
+GOBADMINTON_PARK_V1
+{"schema": "GOBADMINTON_PARK_V1", "issue": 94, "head": "5cb76118bce6d6c11d324ee301baac3286aaab4e", "attempt": 3, "reason": "M1d QA FAIL on 5cb76118 (PR 95); attempts 3 of 3 exhausted. Parked; Owner prioritizes M0b map lifecycle fix (map flickers and disappears on iPhone).", "allow_successors": []}
