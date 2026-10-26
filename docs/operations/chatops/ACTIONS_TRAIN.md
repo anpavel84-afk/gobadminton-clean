@@ -2,6 +2,10 @@
 
 Вход — [START_HERE.md](../../../START_HERE.md); нормативный источник — [единый регламент](../../rules/ENGINEERING_OPERATING_MODEL.md). Основания: [#158](https://github.com/anpavel84-afk/gobadminton-clean/issues/158), [#199](https://github.com/anpavel84-afk/gobadminton-clean/issues/199), [#211](https://github.com/anpavel84-afk/gobadminton-clean/issues/211). Эта страница не утверждает текущий installed pin или состояние процессов.
 
+## Release version lineage · OD-013
+
+Действует [один Owner-contract](../../decisions/OWNER_DECISION_DEV_OPS_VERSION_COMPATIBILITY_V001.md) для GitHub Actions, bridge, author/QA и root OPS. `dev`/bundle/installed имеют разные provenance; проверять expected OLD→NEW и frozen dependencies, а не требовать глобальной одинаковости SHA. Не менять pins или policy автоматически без source/QA/CI/release подтверждения. Версионирование в живом коде — отдельный проверяемый rollout.
+
 ## Источники реализации
 
 Ниже **публичные immutable ссылки на исходный snapshot `3537b19e…`**, доступные одинаково из main/dev. Они заменяют относительные ссылки на код, отсутствующий в default branch. Для исполнения требуется фактическая принятая controller/source revision текущего assignment; эта карта не выбирает её.

@@ -6,6 +6,10 @@
 
 PMA может работать из ChatGPT Work или Grok-бота. Прочитать принятую архитектуру и durable состояние GitHub/Actions/server. Установить свою роль/доступ, актуальные assignments и процессы. Смена чата не является повторным запуском; изменяющие команды сериализуются, а при неподтверждённой общей защите активен один mutating-канал.
 
+## Версии при ChatGPT ↔ Grok и OPS-release
+
+Применять [Owner OD-013](../../decisions/OWNER_DECISION_DEV_OPS_VERSION_COMPATIBILITY_V001.md). При передаче PMA и ДО постановки автору/QA сверять installed_before с target source/approved bundle, frozen dependencies, controller/workflow refs; классифицировать mismatch до root dry-run. Не копировать исторические frozen SHA, не создавать новый PR/QA для доказанно постороннего commit. Security/UNKNOWN drift — HOLD и точная причина.
+
 ## Подготовить задачу
 
 Найти/создать постоянное требование без дубля, сохранить цель/приоритет/связи в существующем Project. Технический PM читает код, отдельно оценивает автора и QA, предлагает этапы, проверенные model IDs/effort и fallback. PMA проверяет по эталону и делегации, не просит micro-GO внутри разрешённого scope.

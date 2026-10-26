@@ -13,6 +13,7 @@
 | Область | Источник и предел |
 |---|---|
 | Организация разработки, роли, попытки, trusted context | [ENGINEERING_OPERATING_MODEL.md](ENGINEERING_OPERATING_MODEL.md), единственный полный текст v1.4 (поправка SR0 24.10.2026; v1.3 — предыдущая принятая редакция, не pin установленного контроллера C5); exact bytes в [CONTEXT_SOURCES.json](CONTEXT_SOURCES.json) |
+| Плановые различия `dev`/VPS, release version lineage (OD-013) | [Прямое Owner-решение](../decisions/OWNER_DECISION_DEV_OPS_VERSION_COMPATIBILITY_V001.md), scoped override по EOM §1; применяется ко всем ролям и PMA handoff; **не второй полный канон и не installed code-pin** |
 | Маршрутизация моделей, Technical PM, классы QA/CI FAIL, Fast Fix | [SMART_ROUTING.md](SMART_ROUTING.md) 1.0 — **POLICY_ACCEPTED только SR0** (Owner 24.10.2026 16:11 America/Sao_Paulo); единственная специализированная политика, EOM хранит полномочия/роли/безопасность/continuation; IMPLEMENTED/ROLE_QUALIFIED/RUNTIME_VERIFIED NOT_STARTED/UNKNOWN; до SR1–SR5 контроллер применяет прежний FAIL-маршрут |
 | Ограничения входа и Owner Addendum о tool refusals | [AGENTS.md](../../AGENTS.md), короткий обязательный вход; не альтернативная матрица моделей |
 | Design inputs Stage A | [DESIGN_MATERIALS.json](../manifest/DESIGN_MATERIALS.json), [M2R spec](../product/M2R_DESIGN_SPEC.md), [Stage A runbook](../operations/chatops/DESIGN_EXCHANGE_STAGE_A.md): scoped registry/spec/OPS, не канон и не admission |

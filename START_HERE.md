@@ -2,6 +2,8 @@
 
 **Публичная проектная память. Не admission, не команда запуска и не доказательство готовности runtime.** Репозиторий: `anpavel84-afk/gobadminton-clean`. Эта страница одинакова в `main` и `dev`. Она направляет к источникам, а не создаёт вторую версию правил.
 
+**Сквозное Owner OD-013:** [версионность DEV/OPS](docs/decisions/OWNER_DECISION_DEV_OPS_VERSION_COMPATIBILITY_V001.md) — обязательный scoped Owner-contract для ChatGPT/Grok, authors, reviewers, release и handoff. Не трактовать плановое различие GitHub/installed как ошибку; не отключать реальную SHA/security-проверку. Новые trusted capsules/installed behavior требуют отдельного checked rollout.
+
 ## Читать при входе или возобновлении
 
 1. [AGENTS.md](AGENTS.md) — границы действий и обязательная постановка инструментальных операций.

@@ -2,6 +2,10 @@
 
 Полномочия и критерии: [единый регламент](../rules/ENGINEERING_OPERATING_MODEL.md), технический маршрут — [Actions train](chatops/ACTIONS_TRAIN.md). Здесь нет разрешения новой установки или PROD.
 
+## Version preflight · Owner OD-013
+
+[Сквозное решение OD-013](../decisions/OWNER_DECISION_DEV_OPS_VERSION_COMPATIBILITY_V001.md): перед затратным QA/CI и особенно перед OPS install read-only сверить installed_before / reviewed desired_after / unchanged_dependencies. Различные OLD и NEW для планового обновления штатны; иной `dev` SHA вне closure не blocker. Controller/workflow/native_guard/permissions drift требует адресного пересмотра и согласованного release, а не игнорирования защитного gate. Сверить полный contract снова перед protected write. Руководство само не устанавливает automated resolver.
+
 ## Выпуск
 
 Точный source candidate → независимая QA → обязательный Product CI → контролируемая интеграция → immutable paired artifacts → существующий DEV receiver → smoke/ACCEPTED и live проверка. Если конкретный pipeline ставит часть детерминированных checks раньше QA, это не отменяет ни один обязательный gate.

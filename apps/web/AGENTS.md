@@ -2,6 +2,8 @@
 
 Сначала [START_HERE.md](../../START_HERE.md) и [корневой AGENTS.md](../../AGENTS.md); принятая редакция полного регламента и правила full/scoped delivery указаны там. Этот вложенный файл уточняет framework context, не расширяет права и не задаёт маршруты моделей. Для визуальных изменений действует [Style Guide first](../../docs/decisions/OWNER_DECISION_FRONTEND_STYLE_GUIDE_FIRST_V001.md).
 
+GitHub source and installed VPS can legitimately differ: apply [Owner OD-013](../../docs/decisions/OWNER_DECISION_DEV_OPS_VERSION_COMPATIBILITY_V001.md) for exact OLD→NEW, unchanged-closure QA reuse, and unsafe drift refusal. This does not modify the Next.js generated block or give app authors OPS rights.
+
 <!-- BEGIN:nextjs-agent-rules -->
 
 # This is NOT the Next.js you know

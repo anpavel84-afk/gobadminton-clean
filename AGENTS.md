@@ -6,6 +6,10 @@ PMA/Advisor при takeover и reviewers правил читают полный 
 
 В preflight фиксировать repo, rules commit/hash, роль, source/base/candidate SHA, assignment/admission, allowed paths/effects, writer ownership и requested/effective route. Семейства моделей — §5 канона, детальная role × risk матрица и классы FAIL — SMART_ROUTING.md, полномочия в §3, попытки и продолжение в §6, FAIL-цикл в §8.1. Здесь нет второй таблицы моделей. Astra — read-only эксперт по классу (не автор и не обычная QA); пока классификатор не установлен, контроллер применяет прежний маршрут Astra перед ремонтом, и обходить его по собственной оценке «простоты» нельзя.
 
+## Версии source / bundle / VPS · Owner OD-013
+
+[Обязательное для всех ролей решение OD-013](docs/decisions/OWNER_DECISION_DEV_OPS_VERSION_COMPATIBILITY_V001.md): отличия `dev` и установленного контурa нормально классифицировать как CONTENT_EQUIVALENT, PLANNED_UPGRADE, UNRELATED_DRIFT, DEPENDENCY_UPDATE, UNSAFE_DRIFT либо ACTIVE_OR_UNKNOWN. Плановый OLD→NEW не требует OLD==NEW; нерелевантный commit не повторяет QA. Не игнорировать реальные security, controller, workflow и UNKNOWN расхождения. PMA/автор/QA/OPS читают один источник при выдаче/приёмке задачи и ChatGPT↔Grok handoff. Сама ссылка не меняет pinned EOM capsules и runtime.
+
 ## Непересекаемые границы
 
 Один mutating PMA, один writer на пересекающийся scope. Текущее назначение PMA — в [CURRENT.md](docs/handoffs/CURRENT.md) и подтверждённом решении Owner. Прямое ограниченное поручение специалисту не создаёт второго управляющего runtime. Не стирать чужую работу, не force-push, не запускать повтор после неизвестного исхода. История FAIL/UNKNOWN, grants, бюджеты и receipts сохраняются.

@@ -10,6 +10,10 @@
 
 Прямое решение Owner [OD-012](../manifest/OWNER_DECISIONS.md) разрешает текущему PMA полный **штатный, независимо проверенный DEV/OPS root-цикл на Germany** через прежний доверенный root OPS-интегратор **без поштучных micro-GO** на команды/SHA: exact script SHA + independent QA PASS + применимые CI PASS + утверждённый scope, live preflight/locks/writer/UNKNOWN/budgets/history, backup, guarded transaction, `dry`→`apply`→`verify` и reviewed `rollback`. Включает #329 только в прежнем source scope. Не означает права свободного root/sudo для моделей, PROD, чужих проектов, постоянного security waiver, нового платного provider или повторения после отказа. При drift/FAIL остановить затронутую операцию, сохранить evidence. Явное более раннее правило «Owner GO на каждый root-SHA» в частном handoff уступает OD-012 только в этой области. EOM 1.4 §§1/2.1/6.4/7–8 и pins **не изменены**; на изменение канона всё ещё нужен reviewed PR (§11).
 
+## Обязательное правило при передаче PMA · Owner OD-013
+
+И ChatGPT, и Grok при каждом takeover читают [одно правило версий](../decisions/OWNER_DECISION_DEV_OPS_VERSION_COMPATIBILITY_V001.md), фиксируют actual installed_before, desired_after, frozen dependencies, релевантные SHA и классификацию drift. GitHub `dev` не равен установленному bundle по определению. Не повторять QA/installer только из-за нерелевантного commit, не подменять security/controller pins и не считать документационную ссылку доказательством доставки модели. Хранить статусы DOCUMENT_PUBLISHED / CONTEXT_DELIVERED / RUNTIME_VERIFIED отдельно.
+
 ## Последняя контрольная точка · 26.10.2026 ~12:12 BRT
 
 - [PR #330](https://github.com/anpavel84-afk/gobadminton-clean/pull/330) merged в `dev` на commit `4a01df37ccd5eedf912d52563f9828f90d562f46`, independent QA C5 PASS на `dd129bc7`, Product CI 7/7; [DEV deploy #40344059630](https://github.com/anpavel84-afk/gobadminton-clean/actions/runs/40344059630) SUCCESS, отдельный live API SHA ранее совпадал. Это не факт установки OPS-модулей #330.
