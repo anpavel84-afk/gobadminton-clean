@@ -20,6 +20,10 @@
 
 Нет обязательного внешнего Hub binding для проектного обмена. Внешние role templates могут быть справочными; входы и границы существенного назначения должны быть восстанавливаемы из CLEAN. Owner не используется как постоянный курьер.
 
+## Сохранность версии при смене модели / PMA
+
+По [OD-013](../decisions/OWNER_DECISION_DEV_OPS_VERSION_COMPATIBILITY_V001.md) DEV/OPS task/handoff указывает действительный installed_before, reviewed desired_after, frozen dependencies, классификацию различия и exact evidence. Перемещаемый GitHub ref не заменяет installed receipt, другой commit не является автоматическим FAIL. Trusted author/QA/release получает только применимое решение через проверенную доставку, а не через историческую копию в чате.
+
 ## Обязательный prompt / assignment
 
 Указать: получателя/роль; продуктовый результат; exact canonical inputs/base; допустимые файлы и эффекты; non-goals; зависимости; acceptance; проверки и допустимую среду; результат/handoff; rollback, когда применимо. Маршруты моделей и бюджеты оформляются по действующей поддерживаемой схеме, а не произвольным полям.

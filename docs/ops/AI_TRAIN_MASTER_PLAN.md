@@ -2,6 +2,8 @@
 
 **Текущая навигация приёмки · 24.10.2026. Не admission и не второй backlog.** Вход — [START_HERE.md](../../START_HERE.md); организация, роли, попытки и безопасность — [единственный полный регламент](../rules/ENGINEERING_OPERATING_MODEL.md). Перед действием сверять live PR HEAD, CI, active operations и receipts. Изменение статуса в Markdown не означает установки.
 
+**Сквозное правило исполнения этапов 3–8 — [Owner OD-013](../decisions/OWNER_DECISION_DEV_OPS_VERSION_COMPATIBILITY_V001.md).** Отличие GitHub `dev` от runtime не меняет приоритетов: заранее проверять плановую OLD→NEW совместимость, не переоткрывать неизменённые QA. Правило не является новой стадией Master Plan или правом игнорировать unknown/security drift.
+
 ## Цель и действующее поручение
 
 Завершить существующие этапы 3–8 без новой архитектуры, затем постоянно выполнять разрешённую продуктовую очередь. Context Exchange и Context Runtime уже приняты. Исторические cron/Runner-расследования не отдельный приоритет, если не блокируют конкретный этап. Grok — runtime PMA; [CURRENT handoff](../handoffs/CURRENT.md) содержит подтверждение роли и актуальные источники.
