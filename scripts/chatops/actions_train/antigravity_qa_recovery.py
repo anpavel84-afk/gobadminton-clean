@@ -121,12 +121,67 @@ def reconcile_parent(r,q):
     finally:os.close(lock)
 
 
-def acceptance_match(op,q):
+def qualification_operation(r, journal, key, slot='slot2'):
+    """One trusted key, with identical JSON required in hot and archived indexes.
+
+    Never use exists(): dangling links, unsafe parents and unreadable archives
+    must refuse even when a live entry exists. Receiver.read walks NOFOLLOW,
+    requires a root-owned regular single-link file and bounds bytes to 2 MiB.
+    This is lookup only; callers retain their ordinary semantic validators.
+    """
+    import re
+    need(type(key) is str and re.fullmatch('[a-f0-9]{64}', key)
+         and slot in ('slot1', 'slot2'), 'invalid qualification operation key/slot')
+    live = journal.get('operations', {}).get(key)
+    try:
+        archived = r.read(r.STATE/'history'/slot/(key+'.json'), 0)
+        need(type(archived) is dict, 'invalid archived operation')
+    except FileNotFoundError:
+        archived = None
+    need(live is None or archived is None or digest(live) == digest(archived),
+         'live/history qualification operation mismatch')
+    op = live if live is not None else archived
+    need(type(op) is dict, 'qualification operation missing from live and history')
+    return op
+
+
+def analysis_operation(r, journal, row):
+    """Same completed-analysis gate for live and archived package evidence."""
+    g = validate_addressed_grant(row['grant'], enrollment=True)
+    op = qualification_operation(r, journal, row['operation'])
+    from owner_package_admission import exact_qualification
+    q = exact_qualification(g, g['controller_revision'])
+    b = op.get('binding') or {}; result = op.get('result') or {}
+    from core import request
+    need(set(b)=={'action','stage','slot','issue','phase','head','attempt','generation','profile'},
+         'qualification operation binding fields drift')
+    request(dict(b,run=op.get('run'),run_attempt=op.get('run_attempt'),gh_token='synthetic-inert-binding'))
+    native = result.get('native_receipt') or {}
+    need(b.get('stage') == 'qa_qualification' and b.get('profile') == 'agy'
+         and b.get('slot') == 'slot2' and b.get('issue') == 29
+         and b.get('head') == g['head']
+         and digest(b) == row['operation'] and op.get('task_hash') == q['task_sha256']
+         and digest(op.get('qa_qualification')) == digest(q) and op.get('finished_at')
+         and op.get('before') == op.get('after') == CHECKPOINT
+         and digest(native.get('qualification_grant')) == digest(g)
+         and native.get('qualification_task_sha256') == q['task_sha256']
+         and result.get('status') == 'confirmed' and result.get('analysis_complete') is True
+         and result.get('analysis', {}).get('completion') == 'COMPLETE'
+         and {'view_file', 'run_command'} <= set(native.get('tool_names') or [])
+         and len(result.get('analysis', {}).get('source_reads') or []) == 2,
+         'real native analysis COMPLETE with exact binding and tool evidence required before QA')
+    return op
+
+
+def acceptance_match(op,q, *, enrollment=False):
     """Historical UNKNOWNs with the same Issue are history, not the new candidate."""
     if op.get('task_hash')!=q['task_sha256']:return False
     if addressed(q) and q['qualification_grant']['role']=='technical_pm_product_analyst':return False
     if grant(q):
-        (validate_addressed_grant if addressed(q) else validate_grant)(q['qualification_grant'])
+        if addressed(q):
+            need(not enrollment or os.geteuid()==0,'root acceptance validation only')
+            validate_addressed_grant(q['qualification_grant'],enrollment=enrollment)
+        else:validate_grant(q['qualification_grant'])
         need(op.get('before')==op.get('after')==CHECKPOINT,'one-shot acceptance checkpoint drift')
         import re
         receipt=op.get('result',{}).get('native_receipt',{})
@@ -441,7 +496,16 @@ def owner_package_read(r,g):
             raw_pin(r,r.STATE/pin['path'],pin['sha256'])
             prior_rows.extend(owner_package_ledger(r.read(r.STATE/pin['path'],0))['grants'].values())
         spent=[row['operation'] for row in prior_rows if row['operation'] is not None]
-        historical=historical_operations(r,r.read(r.STATE/'slot2.json',0))
+        history_slot=copy.deepcopy(r.read(r.STATE/'slot2.json',0))
+        # admission_pm is deliberately not installed/modified by this package.
+        # Supply its existing accounting validator a complete referenced index.
+        for filename in (ADDRESSED_LEDGER,SUPPLEMENT_LEDGER):
+            for row in r.read(r.STATE/filename,0)['grants'].values():
+                if row['operation'] is not None:
+                    history_slot['operations'][row['operation']]=qualification_operation(
+                        r,history_slot,row['operation'])
+        historical=historical_operations(r,history_slot)
+        for key in spent:qualification_operation(r,history_slot,key)
         need(len(spent)==len(set(spent)) and not historical.intersection(spent)
              and len(historical)+len(spent)==value['delegation']['inherited_calls'],
              'delegated lineage accounting drift')
@@ -672,7 +736,7 @@ def supplemental_baseline(r):
     need(row is not None and row['grant']['owner_comment']==FRESH_OWNER_COMMENT
          and row['grant']['role']=='technical_pm_product_analyst',
          'original INCOMPLETE analysis grant altered')
-    op=r.read(r.STATE/'slot2.json',0)['operations'].get(SUPPLEMENT_ORIGINAL_ANALYSIS_OP,{})
+    op=qualification_operation(r,r.read(r.STATE/'slot2.json',0),SUPPLEMENT_ORIGINAL_ANALYSIS_OP)
     res=op.get('result',{})
     need(res.get('status')=='confirmed' and res.get('analysis_complete') is False
          and res.get('analysis',{}).get('completion')=='INCOMPLETE',
@@ -695,7 +759,7 @@ def addressed_ready(r,q):
                  if row.get('grant',{}).get('owner_comment')==FRESH_OWNER_COMMENT
                  and row.get('grant',{}).get('role')=='technical_pm_product_analyst']
             need(len(analyses)==1 and analyses[0],'fresh analysis reservation missing')
-            op=r.journal('slot2')['operations'].get(analyses[0],{})
+            op=qualification_operation(r,r.read(r.STATE/'slot2.json',0),analyses[0])
             need(op.get('result',{}).get('status')=='confirmed'
                  and op.get('result',{}).get('analysis_complete') is True
                  and op.get('result',{}).get('analysis',{}).get('completion')=='COMPLETE',
@@ -718,15 +782,10 @@ def addressed_ready(r,q):
                       [row['operation'] for row in value['grants'].values()
                        if row['grant']['role']=='technical_pm_product_analyst'])
             need(len(analyses)==1 and analyses[0],'package analysis not yet consumed')
-            op=j['operations'].get(analyses[0],{})
-            result=op.get('result',{})
-            native=result.get('native_receipt') or {}
-            need(result.get('status')=='confirmed'
-                 and result.get('analysis_complete') is True
-                 and result.get('analysis',{}).get('completion')=='COMPLETE'
-                 and {'view_file','run_command'}<=set(native.get('tool_names') or [])
-                 and len(result.get('analysis',{}).get('source_reads') or [])==2,
-                 'native COMPLETE with tool evidence required before separate QA')
+            analysis = (value['delegation']['analysis'] if 'delegation' in value else
+                        next(row for row in value['grants'].values()
+                             if row['grant']['role']=='technical_pm_product_analyst'))
+            analysis_operation(r,j,analysis)
         row=value['grants'].get(_digest(g))
         need(row and row['grant']==g and row['operation'] is None and value['used_calls']<value['ceiling'],
              'Owner package grant missing/spent')
@@ -739,7 +798,7 @@ def addressed_ready(r,q):
                      if row['grant']['role']=='technical_pm_product_analyst']
             need(len(analyses)==1 and analyses[0],
                  'supplemental analysis must be charged first')
-            op=r.read(r.STATE/'slot2.json',0)['operations'].get(analyses[0],{})
+            op=qualification_operation(r,r.read(r.STATE/'slot2.json',0),analyses[0])
             result=op.get('result',{})
             native=result.get('native_receipt') or {}
             need(result.get('status')=='confirmed'

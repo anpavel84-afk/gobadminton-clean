@@ -24,7 +24,7 @@
 | Архитектура | [Overview](architecture/OVERVIEW.md), [stack](architecture/STACK.md), [границы модулей](architecture/MODULE_BOUNDARIES.md), [все ADR/Owner decisions](decisions/README.md) |
 | Домен и данные | [Модель](domain/MODEL.md), [инварианты](domain/STATES_AND_INVARIANTS.md), [права](domain/PERMISSIONS.md), [данные](data/DATA_MODEL.md), [миграции](data/MIGRATIONS_AND_RETENTION.md) |
 | API/auth/privacy | [API policy](api/API_POLICY.md), [OpenAPI](../packages/contracts/openapi.json), [auth](integrations/AUTH.md), [security/privacy](security/SECURITY_AND_PRIVACY.md) |
-| UI | [Style Guide first](decisions/OWNER_DECISION_FRONTEND_STYLE_GUIDE_FIRST_V001.md), применимый later Owner override и exact макет; [локальные web instructions](../apps/web/AGENTS.md) |
+| UI | [Design materials registry](manifest/DESIGN_MATERIALS.json), [M2R working spec](product/M2R_DESIGN_SPEC.md); [Style Guide first](decisions/OWNER_DECISION_FRONTEND_STYLE_GUIDE_FIRST_V001.md), применимый later Owner override и exact макет; [локальные web instructions](../apps/web/AGENTS.md) |
 | Проверки | [Test strategy](quality/TEST_STRATEGY.md), [acceptance matrix](quality/ACCEPTANCE_MATRIX.md), exact критерии текущего задания |
 | Окружения и выпуск | [Environments](operations/ENVIRONMENTS.md), [deployment/recovery](operations/DEPLOYMENT_AND_RECOVERY.md) |
 

@@ -15,10 +15,12 @@
 | Организация разработки, роли, попытки, trusted context | [ENGINEERING_OPERATING_MODEL.md](ENGINEERING_OPERATING_MODEL.md), единственный полный текст v1.4 (поправка SR0 24.10.2026; v1.3 — предыдущая принятая редакция, не pin установленного контроллера C5); exact bytes в [CONTEXT_SOURCES.json](CONTEXT_SOURCES.json) |
 | Маршрутизация моделей, Technical PM, классы QA/CI FAIL, Fast Fix | [SMART_ROUTING.md](SMART_ROUTING.md) 1.0 — **POLICY_ACCEPTED только SR0** (Owner 24.10.2026 16:11 America/Sao_Paulo); единственная специализированная политика, EOM хранит полномочия/роли/безопасность/continuation; IMPLEMENTED/ROLE_QUALIFIED/RUNTIME_VERIFIED NOT_STARTED/UNKNOWN; до SR1–SR5 контроллер применяет прежний FAIL-маршрут |
 | Ограничения входа и Owner Addendum о tool refusals | [AGENTS.md](../../AGENTS.md), короткий обязательный вход; не альтернативная матрица моделей |
+| Design inputs Stage A | [DESIGN_MATERIALS.json](../manifest/DESIGN_MATERIALS.json), [M2R spec](../product/M2R_DESIGN_SPEC.md), [Stage A runbook](../operations/chatops/DESIGN_EXCHANGE_STAGE_A.md): scoped registry/spec/OPS, не канон и не admission |
 | Хранение/передача | [PROJECT_RECORD_POLICY.md](PROJECT_RECORD_POLICY.md), scoped политика; не расширяет execution authority |
 | Исходные продуктовые решения | [Owner decisions](../manifest/OWNER_DECISIONS.md), exact Owner Issues и [все ADR/Owner records](../decisions/README.md); статус/область каждого решения сохраняются |
 | Domain/API/privacy/data | [Предметный индекс](../README.md); читать exact source/design revision своего assignment, не произвольный latest branch |
 | Приоритеты/очередь | GitHub Issues/Projects через [ACTIVE_BACKLOG](../ACTIVE_BACKLOG.md); никакого второго Markdown backlog |
+| Ограниченный AGY AUTHOR (t421u) | [ANTIGRAVITY_AUTHOR_ROUTE.md](../ops/ANTIGRAVITY_AUTHOR_ROUTE.md) — source/runbook, NOT_INSTALLED; offline self-checks, install/verify/rollback subset; activation/READY остаются отдельной reviewed OPS работой |
 | Последовательность приёмки | [AI_TRAIN_MASTER_PLAN.md](../ops/AI_TRAIN_MASTER_PLAN.md), текущая навигация, не machine admission |
 | PMA takeover | [CURRENT.md](../handoffs/CURRENT.md) и подтверждённое Owner-решение, не имя старого чата |
 | Фактическое исполнение/установка | Exact Actions, controller/adapter pin, operation/lease и receipts; документы не заменяют их |
@@ -37,6 +39,7 @@
 | `docs/decisions/*` | Scoped Owner/ADR records: принятый контекст, явно обозначенный candidate либо история; использовать точную область и более поздние explicit supersession, не только номер версии |
 | `docs/operations/ENVIRONMENTS.md`, `DEPLOYMENT_AND_RECOVERY.md`, `chatops/ACTIONS_TRAIN.md`, `chatops/PM-CHEATSHEET.md`, `chatops/README.md` | Прикладные runbooks/навигация действующего процесса; текущий installed pin проверять, не брать из примера |
 | `docs/operations/chatops/AUTONOMY_PARK.md`, `AUTONOMY_RESUME.md`, `BUDGET_PREFLIGHT_RECOVERY_V001.md` | Описание конкретной поддерживаемой версии протокола. Это не универсальное изменение Owner-делегации §6; текущая техническая несовместимость — implementation gap |
+| `docs/ops/AGY29_PACKAGE_FINISH.md` | Scoped AGY #29 package finish runbook: lib-only install, archive-aware evidence, marker-only accept; no new runtime authority |
 | `docs/operations/RUNNER_*`, `chatops/AUTONOMY_COMMISSIONING.md`, `chatops/PROVIDER_QUALIFICATION_20261022.md`, `chatops/AUTONOMY_CANARY_*.md`, `docs/ops/ANTIGRAVITY_*` | Исторические execution/qualification records. Их NEXT/HOLD/READY относится к дате/версии, не сегодняшнему состоянию |
 | `docs/operations/actions-train-failure-diagnosis-218.md` | Source/protocol record #218, не доказательство установленного полного FAIL-цикла |
 | `docs/handoffs/*` кроме CURRENT и индексных указателей | Dated source/QA/OPS evidence и task-scoped handoffs. Сохраняются FAIL, UNKNOWN, hashes и ограничения. Ни старый launcher, ни release-note не назначают нового PMA |
