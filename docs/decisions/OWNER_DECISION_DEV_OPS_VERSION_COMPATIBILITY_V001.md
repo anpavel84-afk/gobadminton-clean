@@ -38,7 +38,7 @@
 - **Failure diagnosis:** различать `stale_fixture`, `source_version`, `installed_version`, `dependency_change`, `unsafe_drift`, environment и platform denial; выдавать минимальный repair brief.
 - **Trusted GitHub Actions/bridge/OPS integrator:** автоматически, где это уже поддерживается, сравнивать installed before с reviewed after и dependency pins, сверять exact package provenance; при новой/несовместимой зависимости выполнять только reviewed release/ref-only transition, с backup/rollback.
 - **Вспомогательные агенты:** не выводить installed SHA из moving `dev`; передавать доказательные источники/дату.
-  
+
 ## Примеры и минимальная приёмка
 
 1. Новый `dev` после чужого docs merge, но тот же runtime closure → `CONTENT_EQUIVALENT` / `UNRELATED_DRIFT`, не новая модельная QA.
