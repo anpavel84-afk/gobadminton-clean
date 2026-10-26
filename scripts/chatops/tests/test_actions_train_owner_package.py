@@ -133,6 +133,7 @@ class OwnerPackageTests(unittest.TestCase):
         with patch.object(A.urllib.request, 'urlopen', return_value=Response(data)), \
              patch.object(Q, 'addressed_input', return_value='inert'):
             ledger = A.authorize(comment, controller)
+            self.assertEqual(A.authorize(comment, controller, existing=ledger), ledger)
         self.assertEqual(ledger['controller_sha'], controller)
         self.assertEqual(ledger['rules_sha256'], Q.INSTALLED_C5_RULES)
         for row in ledger['grants'].values():
@@ -170,14 +171,25 @@ class AdmissionRepairTests(unittest.TestCase):
         self.assertEqual(q['qualification_grant'],g)
 
     def test_separate_QA_marker_eligible_only_after_real_complete(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as root, patch.object(A.R,'STATE',Path(root)):
+            self._separate_QA_marker()
+
+    def _separate_QA_marker(self):
         l=ledger()
         roles={row['grant']['role']:row for row in l['grants'].values()}
-        roles['technical_pm_product_analyst']['operation']='a'*64
+        g=roles['technical_pm_product_analyst']['grant']
+        q=A.exact_qualification(g,CONTROLLER)
+        binding=dict(action='train',stage='qa_qualification',profile='agy',slot='slot2',issue=29,
+                     phase='idle',attempt=0,generation=98,head=g['head'])
+        key=digest(binding)
+        roles['technical_pm_product_analyst']['operation']=key
         l['used_calls']=1
         slot={'generation':98,'pending':None,'operations':{
-            'a'*64:{'result':{'status':'confirmed','analysis_complete':True,
+            key:{'run':122,'run_attempt':1,'binding':binding,'task_hash':q['task_sha256'],'qa_qualification':q,
+                'finished_at':1,'before':Q.CHECKPOINT,'after':Q.CHECKPOINT,'result':{'status':'confirmed','analysis_complete':True,
                 'analysis':{'completion':'COMPLETE','source_reads':[{'path':'a'},{'path':'b'}]},
-                'native_receipt':{'tool_names':['view_file','run_command']}}}}}
+                'native_receipt':{'tool_names':['view_file','run_command'],'qualification_grant':g,'qualification_task_sha256':q['task_sha256']}}}}}
         marker={'phase':'canary','executor_uid':978,
                 'qualification':{'qualification_grant':grant('technical_pm_product_analyst')}}
         q,nextmarker,nextslot=A.transition_plan('qa',COMMENT,CONTROLLER,slot,marker,l)
@@ -188,7 +200,7 @@ class AdmissionRepairTests(unittest.TestCase):
                 {'analysis':{'completion':'INCOMPLETE','source_reads':[{'path':'a'},{'path':'b'}]}},
                 {'native_receipt':{'tool_names':['view_file']}}):
             wrong=json.loads(json.dumps(slot))
-            wrong['operations']['a'*64]['result'].update(result_update)
+            wrong['operations'][key]['result'].update(result_update)
             with self.assertRaises(Exception):A.transition_plan(
                 'qa',COMMENT,CONTROLLER,wrong,marker,l)
         l['grants'][digest(grant('independent_qa'))]['operation']='b'*64
