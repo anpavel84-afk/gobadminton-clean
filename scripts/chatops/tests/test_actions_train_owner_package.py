@@ -11,7 +11,7 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'actions_train'))
 import antigravity_qa_recovery as Q
 import native_antigravity as N
 import owner_package_admission as A
-from core import digest
+from core import digest, Refused
 
 COMMENT=6381122334
 CONTROLLER='e02436862e606b61e4d2e2187bf25a205586426f'
@@ -42,6 +42,71 @@ class Response:
     def __enter__(self):return self
     def __exit__(self,*_):return False
     def read(self,_):return self.data
+
+class QuiescentTests(unittest.TestCase):
+    def setUp(self):
+        stack=contextlib.ExitStack();self.addCleanup(stack.close)
+        self.journals={slot:dict(pending=None,generation=96,operations={
+            Q.OWNER_PACKAGE_ORIGINAL_UNKNOWN:dict(status='unknown')})
+            for slot in ('slot1','slot2')}
+        self.states={slot:dict(active=None,done=[]) for slot in self.journals}
+        for name,value in (('STATE',Path('/synthetic/state')),
+                           ('AUTONOMY',Path('/synthetic/autonomy')),
+                           ('POLICY',Path('/synthetic/policy.json')),
+                           ('BUDGET',Path('/synthetic/budget.json'))):
+            stack.enter_context(patch.object(A.R,name,value))
+        stack.enter_context(patch.object(A.R,'read',return_value=dict(
+            mode='active',controller_sha=CONTROLLER)))
+        stack.enter_context(patch.object(A.R,'journal',side_effect=self.journals.__getitem__))
+        stack.enter_context(patch.object(A.R,'checkpoint',side_effect=lambda slot:(self.states[slot],[])))
+        self.no_models=stack.enter_context(patch.object(A.R,'no_models'))
+        stack.enter_context(patch.object(A.R,'units_quiet'))
+        self.free_lock=stack.enter_context(patch.object(A.R,'free_lock'))
+        stack.enter_context(patch.object(Path,'exists',return_value=False))
+        stack.enter_context(patch.object(A,'sha',side_effect={
+            A.R.STATE/Q.ADDRESSED_LEDGER:A.HIST,
+            A.R.STATE/Q.SUPPLEMENT_LEDGER:A.SUP,
+            A.R.BUDGET:A.BUDGET,
+            '/usr/local/lib/gb-actions-train/accepted-engineering-rules.md':A.RULES,
+        }.__getitem__))
+        stack.enter_context(patch.object(Q,'OWNER_PACKAGE_ORIGINAL_UNKNOWN_DIGEST',
+            digest(dict(status='unknown'))))
+
+    def test_idle_none_and_done_in_both_slots(self):
+        for first in (None,dict(phase='done',issue=313)):
+            for second in (None,dict(phase='done',issue=29)):
+                with self.subTest(slot1=first,slot2=second):
+                    self.states['slot1']['active']=first
+                    self.states['slot2']['active']=second
+                    self.assertIs(A.quiescent(CONTROLLER),self.journals['slot2'])
+        self.assertEqual(self.no_models.call_count,8)
+        self.assertEqual(self.free_lock.call_count,16)
+
+    def test_other_active_phases_refuse(self):
+        for slot in self.states:
+            for phase in ('claimed','developing','qa','ci','unknown','DONE'):
+                with self.subTest(slot=slot,phase=phase):
+                    self.states[slot]['active']=dict(phase=phase)
+                    with self.assertRaisesRegex(Refused,'^slot occupied$'):A.quiescent(CONTROLLER)
+            self.states[slot]['active']=None
+
+    def test_non_dict_or_missing_phase_refuses(self):
+        for slot in self.states:
+            for active in (False,0,'','done',[],['done'],{},dict(issue=313),dict(phase=None)):
+                with self.subTest(slot=slot,active=active):
+                    self.states[slot]['active']=active
+                    with self.assertRaisesRegex(Refused,'^slot occupied$'):A.quiescent(CONTROLLER)
+            self.states[slot]['active']=None
+
+    def test_pending_always_refuses(self):
+        for slot in self.states:
+            for active in (None,dict(phase='done',issue=313)):
+                for pending in ('operation',{},False,0,''):
+                    with self.subTest(slot=slot,active=active,pending=pending):
+                        self.states[slot]['active']=active
+                        self.journals[slot]['pending']=pending
+                        with self.assertRaisesRegex(Refused,'^slot occupied$'):A.quiescent(CONTROLLER)
+            self.states[slot]['active']=None;self.journals[slot]['pending']=None
 
 class OwnerPackageTests(unittest.TestCase):
     def test_dynamic_package_enrollment_pins(self):
