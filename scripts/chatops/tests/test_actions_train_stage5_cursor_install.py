@@ -33,7 +33,7 @@ class Stage5Install(unittest.TestCase):
             capture_output=True,check=True).stdout.decode().strip()
 
     def setUp(self):
-        self.tmp=tempfile.TemporaryDirectory();self.p=Path(self.tmp.name)
+        self.tmp=tempfile.TemporaryDirectory(prefix='.gb-stage5-fixture-', dir=Path(os.environ.get('GB_QA_SCRATCH_DIR', ROOT.parent)));self.p=Path(self.tmp.name)
         self.install=self.p/'install';self.state=self.p/'state';self.bundle=self.p/'bundle';self.autonomy=self.p/'autonomy'
         for path in (self.install,self.state,self.bundle,self.autonomy): path.mkdir()
         self.policy=self.p/'policy.json';self.journal=self.state/'stage5-cursor-context.json'
