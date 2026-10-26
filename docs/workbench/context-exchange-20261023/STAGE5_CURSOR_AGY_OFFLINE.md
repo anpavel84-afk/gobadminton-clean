@@ -124,3 +124,46 @@ argv += ['--ro-bind', str(canon), str(canon)]
 ```
 
 No later overlapping rw mount may override it. The whole-client namespace must retain this mount for all descendants; real recipient tools must be unable to overwrite, unlink/replace, or modify/read/restore the canon. This makes recipient_rules_readonly() True, but does not alone enable installation: review/CI, exact module hash marker rebind through the existing authorized process, matching accepted rules pin/artifact, and a separately admitted real role canary proving recipient read access and denied writes are required. Keep full fallback until those gates pass. This PR deliberately leaves native_guard/native_cursor and their pins byte-identical. No active grant, FAIL/UNKNOWN history or budget is rewritten.
+
+## Native guard: read-only канон, 26.10.2026
+
+**IMPLEMENTED + OFFLINE_VERIFIED (авторская самопроверка), NOT_INSTALLED, NOT RUNTIME_VERIFIED.**
+Это отдельный source candidate на базе `e8b4e4f7bcc1d6a31bf9bee3d2a8db956a98af14`;
+предыдущие разделы сохраняют историю Stage 5. Уточнение к прежнему примеру выше:
+одного ro-bind файла недостаточно для защиты его постоянного пути.
+
+После существующего rw self-bind `work`, до `--chdir`, guard добавляет только
+три self-mount: `--bind work/docs work/docs`, затем
+`--bind work/docs/rules work/docs/rules`, затем `--ro-bind` файла
+`docs/rules/ENGINEERING_OPERATING_MODEL.md`. Предки становятся mountpoints,
+поэтому их нельзя переименовать/удалить вместе с каноном. Новые host paths не
+открываются; прежние argv/checks, сеть, capabilities и native sandbox сохранены.
+Режим всегда включён при наличии канона: Cursor-автор при попытке править правила
+получит EROFS; bumps правил относятся к Owner/Codex path, escape hatch нет.
+При отсутствии файла fragment пуст, а доставка остаётся full; небезопасные
+file/ancestor metadata отвергаются через `need`.
+
+Переданное Owner evidence с реального VPS (uid 1002, bwrap 0.9.0; здесь не
+воспроизводилось) используется как design input:
+
+| Попытка / контроль | Измеренный результат на VPS |
+|---|---|
+| write/append/r+/truncate/chmod/utimes канона | EROFS |
+| unlink/rename-away/rename-over/unlink+symlink | EBUSY |
+| hardlink канона | EXDEV |
+| rename/rmtree docs/rules и docs с ancestor self-binds | EBUSY |
+| remount/umount, nested unshare + remount/umount/bind-over | Отказ; file mount `ro` |
+| Изменение/создание/unlink/rename/chmod/mkdir соседних файлов | Разрешено |
+| Fragment перед rw work bind | Канон writable: неверный порядок |
+| Только ro-bind файла без ancestor self-binds | rename каталога переносит канон: недостаточно |
+
+Probe исполняет реальные builder/helper bytecode на synthetic metadata; True
+требует rw work → все ancestor self-binds в порядке → self ro-bind канона.
+Неверный source/order, отсутствующий mount, позднее перекрытие, неизвестная опция
+или неоднозначный chdir дают exact legacy FULL с
+`RECIPIENT_RULES_NOT_READONLY`; scoped pre-spawn wrapper отказывает до spawn.
+Repo manifest следует новым байтам; installed-state pins и READY marker не
+менялись. Для установки потребуется отдельное Owner действие с marker rebind,
+обычные review/CI и проверка на VPS. Локальные kernel-тесты имеют честный
+NOT_TESTED skip при недоступном bwrap/userns или отсутствующем pinned VPS helper;
+exact результаты и ограничения — в `docs/handoffs/cursor-author-211/NATIVE_GUARD_RO_RULES_20261026.md`.
