@@ -131,9 +131,9 @@ def sha(path):
     return bytes_sha(regular_bytes(path))
 
 
-def run(argv, timeout=20):
+def run(argv, timeout=20, env=None):
     # No inherited credentials/config, shell, hooks, output/argv in errors, or prompts.
-    env = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'HOME': '/root',
+    if env is None: env = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'HOME': '/root',
            'LANG': 'C.UTF-8', 'GIT_CONFIG_NOSYSTEM': '1',
            'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_TERMINAL_PROMPT': '0',
            'GIT_OPTIONAL_LOCKS': '0', 'GIT_NO_REPLACE_OBJECTS': '1', 'PYTHONDONTWRITEBYTECODE': '1'}
@@ -141,6 +141,53 @@ def run(argv, timeout=20):
                        timeout=timeout, check=False, env=env, stdin=subprocess.DEVNULL)
     need(p.returncode == 0, 'bounded OPS command failed')
     return p.stdout
+
+
+def git(bundle, *args):
+    """Only source()'s verified plain checkout; no discovery or inherited Git state."""
+    env = {'PATH': '/usr/bin:/bin', 'LC_ALL': 'C', 'HOME': '/nonexistent',
+           'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null',
+           'GIT_CONFIG_SYSTEM': '/dev/null', 'GIT_TERMINAL_PROMPT': '0',
+           'GIT_OPTIONAL_LOCKS': '0', 'GIT_ATTR_NOSYSTEM': '1'}
+    argv = ['/usr/bin/git', '--no-optional-locks', '--no-replace-objects',
+            '--git-dir='+str(bundle/'.git'), '--work-tree='+str(bundle)]
+    for option in ('core.fsmonitor=false', 'core.hooksPath=/dev/null',
+                   'core.attributesFile=/dev/null', 'core.untrackedCache=false',
+                   'protocol.allow=never', 'safe.directory='+str(bundle)):
+        argv += ['-c', option]
+    return run([*argv, *args], env=env)
+
+
+def bundle_config(raw):
+    """Fail closed on unsupported syntax before Git parses any local config.
+
+    Plain checkout configs need sections and single-line variables only. Reject
+    continuations rather than risk disagreeing with Git about a hidden key.
+    Both modern quoted subsections and legacy section.subsection are checked.
+    """
+    need(b'\x00' not in raw, 'unsafe bundle git config syntax')
+    section = None
+    for line in raw.split(b'\n'):
+        line = line.strip(b' \t\r')
+        if not line or line[:1] in (b'#', b';'): continue
+        need(not line.endswith(b'\\'), 'unsafe bundle git config continuation')
+        if line.startswith(b'['):
+            match = re.fullmatch(rb'\[([a-zA-Z0-9][a-zA-Z0-9.-]*)(?:[ \t]+"(?:[^"\\\r\n]|\\["\\])*")?\][ \t]*(?:[#;].*)?', line)
+            need(match is not None, 'unsafe bundle git config section')
+            section = match[1].lower().split(b'.', 1)[0]
+            need(section not in (b'filter', b'alias', b'include', b'includeif', b'credential', b'protocol'),
+                 'forbidden bundle git config section')
+            continue
+        match = re.fullmatch(rb'([a-zA-Z][a-zA-Z0-9-]*)[ \t]*(?:=[ \t]*(.*))?', line)
+        need(section is not None and match is not None, 'unsafe bundle git config variable')
+        key = match[1].lower()
+        forbidden = (section == b'diff' and key in (b'textconv', b'command') or
+                     section == b'url' and key == b'insteadof' or
+                     section == b'core' and key in (b'fsmonitor', b'sshcommand', b'pager', b'editor'))
+        if section == b'core' and key == b'hookspath':
+            # Only explicit inert values; the command line also forces /dev/null.
+            forbidden = match[2] not in (b'none', b'"none"', b'/dev/null', b'"/dev/null"')
+        need(not forbidden, 'forbidden bundle git config key')
 
 
 def lock_unheld(path):
@@ -208,27 +255,36 @@ def write_json(path,value):
 
 def source(bundle,commit):
     need(re.fullmatch('[a-f0-9]{40}',commit),'exact 40hex bundle commit required')
+    need(bundle.is_absolute() and '..' not in bundle.parts, 'noncanonical bundle path')
+    need(stat.S_ISDIR((bundle/'.git').lstat().st_mode),
+         'bundle .git must be a real directory; gitfiles and symlinks refused')
     R.trusted_tree(bundle);R.trusted_tree(bundle/'.git')
     # Git can consume local config/hooks/objects before inspecting tracked bytes.
     # Match the reference's root-owned, no-link tree gate before any Git command.
     for path in bundle.rglob('*'):R.trusted_tree(path)
-    def git(*args):
-        return run(['/usr/bin/git','-C',str(bundle),'-c','core.hooksPath=/dev/null',
-                    '-c','core.fsmonitor=false',*args])
-    need(git('rev-parse','HEAD').decode().strip()==commit,'bundle HEAD differs from commit')
-    need(git('remote','get-url','origin').decode().strip() in
+    for name in ('commondir', 'gitdir', 'objects/info/alternates', 'modules', 'info/attributes'):
+        need(not os.path.lexists(bundle/'.git'/name), 'forbidden bundle .git/'+name)
+    bundle_config(regular_bytes(bundle/'.git'/'config'))
+    if os.path.lexists(bundle/'.git'/'config.worktree'):
+        bundle_config(regular_bytes(bundle/'.git'/'config.worktree'))
+    for path in bundle.rglob('*'):
+        if path.name in ('.gitattributes', '.gitmodules'):
+            need(not re.search(rb'(?i)(?:^|\s)filter\s*=', regular_bytes(path)),
+                 'forbidden bundle filter attribute')
+    need(git(bundle,'rev-parse','HEAD').decode().strip()==commit,'bundle HEAD differs from commit')
+    need(git(bundle,'remote','get-url','origin').decode().strip() in
          ('https://github.com/anpavel84-afk/gobadminton-clean.git',
           'git@github.com:anpavel84-afk/gobadminton-clean.git'),'wrong bundle repository')
-    need(not git('status','--porcelain=v1','--untracked-files=all'),'dirty bundle')
-    need(len(git('show','-s','--format=%P',commit).split())==2,'bundle commit must be a dev merge')
-    git('merge-base','--is-ancestor','bdd912a82a2f0087f4cfc9c6820edc8c49ee6527',commit)
+    need(not git(bundle,'status','--porcelain=v1','--untracked-files=all','--ignore-submodules=all'),'dirty bundle')
+    need(len(git(bundle,'show','-s','--format=%P',commit).split())==2,'bundle commit must be a dev merge')
+    git(bundle,'merge-base','--is-ancestor','bdd912a82a2f0087f4cfc9c6820edc8c49ee6527',commit)
     paths=['scripts/chatops/actions_train/'+name for name in TARGETS]
     paths+=['scripts/chatops/actions_train/manifest.json','.github/workflows/train-stage.yml']
     material={}
     for path in paths:
         R.trusted_tree(bundle/path)
         raw=regular_bytes(bundle/path)
-        need(raw==git('show',commit+':'+path),'bundle worktree/git bytes differ')
+        need(raw==git(bundle,'show',commit+':'+path),'bundle worktree/git bytes differ')
         material[path]=raw
     need(bytes_sha(material[paths[-2]])==MANIFEST,'bundle manifest drift')
     manifest=json.loads(material[paths[-2]])
@@ -280,7 +336,9 @@ def idle():
          and policy.get('stage_workflow_sha256')==STAGE_SHA,'installed controller/workflow drift')
     for slot,uid in (('slot1',1002),('slot2',978)):
         journal=R.journal(slot);checkpoint,_=R.checkpoint(slot)
-        need(journal['pending'] is None and checkpoint['active'] is None,'slot occupied')
+        active=checkpoint['active']
+        need(journal['pending'] is None and (active is None or
+             isinstance(active,dict) and active.get('phase')=='done'),'slot occupied')
         R.no_models(uid,slot)
         lock_unheld(AUTONOMY/'slots'/slot/'worker.lock')
         lock_unheld(AUTONOMY/'locks'/(slot+'.lease'))

@@ -324,6 +324,205 @@ if spec and Path(spec.origin).exists():
     I=importlib.util.module_from_spec(spec);spec.loader.exec_module(I)
 
 class ScopedInstallTests(unittest.TestCase):
+    def bundle_fixture(self, root):
+        bundle=root/'bundle';bundle.mkdir();(bundle/'.git').mkdir()
+        (bundle/'.git'/'config').write_bytes(b'[core]\n\trepositoryformatversion = 0\n\tbare = false\n')
+        return bundle
+
+    def bundle_trusted(self, path):
+        # Keep the production no-link/no-write checks, adapting root ownership
+        # only for synthetic fixtures and their test-identity-owned ancestors.
+        for parent in (path,*path.parents):
+            info=parent.lstat()
+            I.need(not stat.S_ISLNK(info.st_mode) and info.st_uid in (0,os.getuid())
+                   and not info.st_mode & 0o022,'untrusted synthetic bundle path')
+
+    def bundle_refuses_before_git(self, bundle, message):
+        with patch.object(I,'R',SimpleNamespace(trusted_tree=self.bundle_trusted)), \
+             patch.object(I.subprocess,'run',side_effect=AssertionError('Git ran before refusal')) as spy:
+            with self.assertRaisesRegex(I.Refused,message):I.source(bundle,'a'*40)
+            spy.assert_not_called()
+
+    def test_bundle_gitfile_external_filter_refused_before_subprocess(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);bundle=self.bundle_fixture(root);external=root/'external'
+            (bundle/'.git').rename(external);external.chmod(0o777)
+            marker=root/'filter-marker'
+            # Inert until Git invokes it; the subprocess spy must never be hit.
+            (external/'config').write_text('[filter "probe"]\n\tclean = touch '+str(marker)+'\n')
+            (bundle/'.gitattributes').write_text('payload filter=probe\n')
+            (bundle/'payload').write_text('synthetic\n')
+            (bundle/'.git').write_text('gitdir: '+str(external)+'\n')
+            self.assertEqual(stat.S_IMODE(external.stat().st_mode),0o777)
+            self.bundle_refuses_before_git(bundle,r'\.git must be a real directory')
+            self.assertFalse(marker.exists())
+
+    def test_bundle_git_symlink_refused_before_subprocess(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);bundle=self.bundle_fixture(root);external=root/'external'
+            (bundle/'.git').rename(external);(bundle/'.git').symlink_to(external,target_is_directory=True)
+            self.bundle_refuses_before_git(bundle,r'\.git must be a real directory')
+
+    def test_bundle_git_indirection_and_info_attributes_refused(self):
+        for name in ('commondir','gitdir','objects/info/alternates','modules','info/attributes'):
+            with self.subTest(name=name),tempfile.TemporaryDirectory() as directory:
+                bundle=self.bundle_fixture(Path(directory));path=bundle/'.git'/name
+                path.parent.mkdir(parents=True,exist_ok=True)
+                if name=='modules':path.mkdir()
+                else:path.write_text('synthetic\n')
+                self.bundle_refuses_before_git(bundle,'forbidden bundle .git/')
+
+    def test_bundle_forbidden_config_families(self):
+        cases=[('[filter "probe"]','clean'),('[diff "probe"]','textconv'),
+               ('[diff "probe"]','command'),('[core]','fsmonitor'),('[core]','sshCommand'),
+               ('[core]','hooksPath'),('[core]','pager'),('[core]','editor'),('[alias]','probe'),
+               ('[include]','path'),('[includeIf "gitdir:*"]','path'),('[credential "probe"]','helper'),
+               ('[url "probe"]','insteadOf'),('[protocol "file"]','allow'),
+               ('[FiLtEr.probe]','clean'),('[DiFf.probe]','TeXtCoNv'),('[URL.probe]','INSTEADOF'),
+               ('[CORE]','FSMONITOR'),('[INCLUDEIF.probe]','path')]
+        for config in ('config','config.worktree'):
+            for header,key in cases:
+                with self.subTest(config=config,header=header,key=key),tempfile.TemporaryDirectory() as directory:
+                    bundle=self.bundle_fixture(Path(directory))
+                    if config=='config.worktree':
+                        (bundle/'.git'/'config').write_text('[extensions]\n\tworktreeConfig = true\n')
+                    (bundle/'.git'/config).write_text(header+'\n\t'+key+' = synthetic\n')
+                    self.bundle_refuses_before_git(bundle,'forbidden bundle git config')
+
+    def test_bundle_ambiguous_config_refused_before_subprocess(self):
+        for raw in (b'[core] fsmonitor = synthetic\n',b'[core]\nfsmoni\\\ntor = synthetic\n',
+                    b'[core]\nfsmonitor\x00 = synthetic\n',b'[core\nfsmonitor = synthetic\n'):
+            with self.subTest(raw=raw),tempfile.TemporaryDirectory() as directory:
+                bundle=self.bundle_fixture(Path(directory));(bundle/'.git'/'config').write_bytes(raw)
+                self.bundle_refuses_before_git(bundle,'unsafe bundle git config')
+
+    def test_bundle_filter_attributes_refused_before_subprocess(self):
+        for name in ('.gitattributes','nested/.gitattributes','.gitmodules'):
+            with self.subTest(name=name),tempfile.TemporaryDirectory() as directory:
+                bundle=self.bundle_fixture(Path(directory));path=bundle/name
+                path.parent.mkdir(parents=True,exist_ok=True);path.write_text('* filter=probe\n')
+                self.bundle_refuses_before_git(bundle,'forbidden bundle filter attribute')
+
+    def test_bundle_git_subprocess_scrubbed_environment_and_options(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bundle=self.bundle_fixture(Path(directory))
+            poison=dict(GIT_DIR='/synthetic/foreign',GIT_WORK_TREE='/synthetic/foreign',
+                GIT_CONFIG_COUNT='1',GIT_CONFIG_KEY_0='core.fsmonitor',GIT_CONFIG_VALUE_0='synthetic',
+                GIT_CONFIG_PARAMETERS='synthetic',GIT_CONFIG_SYSTEM='/synthetic/foreign',
+                GIT_EXEC_PATH='/synthetic/foreign',GIT_EXTERNAL_DIFF='synthetic',
+                HOME='/synthetic/foreign',UNRELATED='synthetic')
+            with patch.dict(os.environ,poison), \
+                 patch.object(I.subprocess,'run',return_value=SimpleNamespace(returncode=0,stdout=b'clean')) as spy:
+                self.assertEqual(I.git(bundle,'status','--porcelain=v1','--ignore-submodules=all'),b'clean')
+            spy.assert_called_once();args,kwargs=spy.call_args;argv=args[0]
+            self.assertEqual(kwargs['env'],dict(PATH='/usr/bin:/bin',LC_ALL='C',HOME='/nonexistent',
+                GIT_CONFIG_NOSYSTEM='1',GIT_CONFIG_GLOBAL='/dev/null',GIT_CONFIG_SYSTEM='/dev/null',
+                GIT_TERMINAL_PROMPT='0',GIT_OPTIONAL_LOCKS='0',GIT_ATTR_NOSYSTEM='1'))
+            self.assertEqual(argv,['/usr/bin/git','--no-optional-locks','--no-replace-objects',
+                '--git-dir='+str(bundle/'.git'),'--work-tree='+str(bundle),
+                '-c','core.fsmonitor=false','-c','core.hooksPath=/dev/null',
+                '-c','core.attributesFile=/dev/null','-c','core.untrackedCache=false',
+                '-c','protocol.allow=never','-c','safe.directory='+str(bundle),
+                'status','--porcelain=v1','--ignore-submodules=all'])
+            self.assertEqual(kwargs['stdin'],subprocess.DEVNULL)
+            self.assertFalse(kwargs['check']);self.assertEqual(kwargs['timeout'],20)
+            self.assertNotIn('shell',kwargs)
+
+    def test_bundle_plain_merge_checkout_and_dirty_detection(self):
+        with tempfile.TemporaryDirectory() as directory,contextlib.ExitStack() as stack:
+            bundle=self.bundle_fixture(Path(directory));repo=Path(__file__).resolve().parents[3]
+            fixture_env=dict(PATH='/usr/bin:/bin',HOME='/nonexistent',LC_ALL='C',
+                GIT_CONFIG_NOSYSTEM='1',GIT_CONFIG_SYSTEM='/dev/null',GIT_CONFIG_GLOBAL='/dev/null',
+                GIT_AUTHOR_NAME='Synthetic',GIT_AUTHOR_EMAIL='synthetic@example.invalid',
+                GIT_COMMITTER_NAME='Synthetic',GIT_COMMITTER_EMAIL='synthetic@example.invalid')
+            def fixture_git(*args,input=None):
+                return subprocess.run(['/usr/bin/git','-C',str(bundle),*args],input=input,env=fixture_env,
+                    stdout=subprocess.PIPE,stderr=subprocess.PIPE,check=True).stdout.strip().decode()
+            fixture_git('init','--template=')
+            fixture_git('remote','add','origin','https://github.com/anpavel84-afk/gobadminton-clean.git')
+            paths=['scripts/chatops/actions_train/'+n for n in I.TARGETS]
+            paths+=['scripts/chatops/actions_train/manifest.json','.github/workflows/train-stage.yml']
+            for name in paths:
+                path=bundle/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes((repo/name).read_bytes())
+            (bundle/'.gitignore').write_text('ignored\n')
+            (bundle/'.gitattributes').write_text('*.txt text\n')
+            fixture_git('add','.')
+            tree=fixture_git('write-tree')
+            base=fixture_git('commit-tree',tree,input=b'base\n')
+            first=fixture_git('commit-tree',tree,'-p',base,input=b'first\n')
+            second=fixture_git('commit-tree',tree,'-p',base,input=b'second\n')
+            merge=fixture_git('commit-tree',tree,'-p',first,'-p',second,input=b'merge\n')
+            fixture_git('update-ref','HEAD',merge)
+            real_git=I.git
+            def checked_git(path,*args):
+                if args[0]=='merge-base':
+                    self.assertEqual(args,('merge-base','--is-ancestor',
+                        'bdd912a82a2f0087f4cfc9c6820edc8c49ee6527',merge))
+                    args=('merge-base','--is-ancestor',base,merge)
+                return real_git(path,*args)
+            # Only substitute the impossible-to-synthesize production ancestor
+            # SHA. Every source check and Git subprocess otherwise runs for real.
+            stack.enter_context(patch.object(I,'git',side_effect=checked_git))
+            stack.enter_context(patch.object(I,'R',SimpleNamespace(trusted_tree=self.bundle_trusted)))
+            before={p:p.read_bytes() for p in bundle.rglob('*') if p.is_file()}
+            expected={name:(repo/'scripts/chatops/actions_train'/name).read_bytes() for name in I.TARGETS}
+            self.assertEqual(I.source(bundle,merge),expected)
+            self.assertEqual({p:p.read_bytes() for p in bundle.rglob('*') if p.is_file()},before)
+            (bundle/'ignored').write_text('ignored synthetic\n')
+            self.assertEqual(I.source(bundle,merge),expected)
+            target=bundle/paths[0];original=target.read_bytes()
+            for dirty in ('untracked','unstaged','staged','deleted'):
+                with self.subTest(dirty=dirty):
+                    if dirty=='untracked':(bundle/'untracked').write_text('synthetic\n')
+                    elif dirty=='deleted':target.unlink()
+                    else:target.write_bytes(original+b'\n')
+                    if dirty=='staged':fixture_git('add',paths[0])
+                    with self.assertRaisesRegex(I.Refused,'dirty bundle'):I.source(bundle,merge)
+                    (bundle/'untracked').unlink(missing_ok=True);target.write_bytes(original)
+                    fixture_git('add',paths[0])
+            for value in ('none','/dev/null'):
+                fixture_git('config','core.hooksPath',value)
+                self.assertEqual(I.source(bundle,merge),expected)
+
+    def idle_fixture(self, active, pending=None, occupied=False):
+        from unittest.mock import Mock
+        receiver=SimpleNamespace(journal=Mock(return_value=dict(pending=pending)),
+            checkpoint=Mock(return_value=(dict(active=active),[])),no_models=Mock(),
+            units_quiet=Mock(),UNITS=('synthetic-unit',))
+        policy=dict(mode='active',controller_sha=I.C,stage_workflow_sha256=I.STAGE_SHA)
+        with patch.object(I,'R',receiver),patch.object(I,'read_json',return_value=policy), \
+             patch.object(I,'lock_unheld') as locks,patch.object(I.os.path,'lexists',return_value=False), \
+             patch.object(I,'run',return_value=b'ActiveState=inactive\nMainPID=0\nUnitFileState=masked\n') as run:
+            if occupied:
+                with self.assertRaisesRegex(I.Refused,'slot occupied'):I.idle()
+                receiver.no_models.assert_not_called();locks.assert_not_called();run.assert_not_called()
+            else:
+                I.idle()
+                self.assertEqual(receiver.journal.call_count,2)
+                self.assertEqual(receiver.checkpoint.call_count,2)
+                self.assertEqual(receiver.no_models.call_args_list,
+                                 [unittest.mock.call(1002,'slot1'),unittest.mock.call(978,'slot2')])
+                self.assertEqual(locks.call_count,4);receiver.units_quiet.assert_called_once()
+                run.assert_called_once()
+
+    def test_idle_active_none_free(self):
+        self.idle_fixture(None)
+
+    def test_idle_active_done_free(self):
+        self.idle_fixture(dict(issue=29,phase='done'))
+
+    def test_idle_non_done_or_malformed_active_occupied(self):
+        for active in (dict(phase='author'),dict(phase='qa'),dict(phase='integrate'),{},
+                       dict(phase=None),dict(phase=123),dict(phase=['done']),dict(phase='DONE'),
+                       False,0,'done',[],['done']):
+            with self.subTest(active=active):self.idle_fixture(active,occupied=True)
+
+    def test_idle_pending_always_occupied(self):
+        for active in (None,dict(phase='done')):
+            for pending in ('operation',{},False,0):
+                with self.subTest(active=active,pending=pending):
+                    self.idle_fixture(active,pending,occupied=True)
+
     def test_target_and_manifest_pins_and_unchanged_coverage(self):
         self.assertIsNotNone(I,'scoped installer missing')
         repo=Path(__file__).resolve().parents[3]
