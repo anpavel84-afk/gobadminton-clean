@@ -20,6 +20,7 @@
 | Исходные продуктовые решения | [Owner decisions](../manifest/OWNER_DECISIONS.md), exact Owner Issues и [все ADR/Owner records](../decisions/README.md); статус/область каждого решения сохраняются |
 | Domain/API/privacy/data | [Предметный индекс](../README.md); читать exact source/design revision своего assignment, не произвольный latest branch |
 | Приоритеты/очередь | GitHub Issues/Projects через [ACTIVE_BACKLOG](../ACTIVE_BACKLOG.md); никакого второго Markdown backlog |
+| Ограниченный AGY AUTHOR (t421u) | [ANTIGRAVITY_AUTHOR_ROUTE.md](../ops/ANTIGRAVITY_AUTHOR_ROUTE.md) — source/runbook, NOT_INSTALLED; offline self-checks, install/verify/rollback subset; activation/READY остаются отдельной reviewed OPS работой |
 | Последовательность приёмки | [AI_TRAIN_MASTER_PLAN.md](../ops/AI_TRAIN_MASTER_PLAN.md), текущая навигация, не machine admission |
 | PMA takeover | [CURRENT.md](../handoffs/CURRENT.md) и подтверждённое Owner-решение, не имя старого чата |
 | Фактическое исполнение/установка | Exact Actions, controller/adapter pin, operation/lease и receipts; документы не заменяют их |
