@@ -73,3 +73,33 @@ Every frontend implementation handoff must include a `STYLE_GUIDE_PARITY` sectio
 - any `OWNER_VISUAL_OVERRIDE`.
 
 Independent frontend QA treats an uncited bypass of an available canonical Style Guide pattern as a blocking visual finding.
+
+## Supersession by Owner direction t420u (scoped, 2026-10-25)
+
+В области GoBadminton UI mockup/Style-Guide handling действует более позднее
+прямое решение Owner t420u: макеты **всегда приблизительные**, Style Guide —
+ориентир. Пиксельное совпадение не требуется. В этой области superseded как
+blocking rules: обязательный decision-order gate, «canonical screen composition
+outranks», требование сохранять banners, блокирующая приёмка STYLE_GUIDE_PARITY
+и «uncited bypass = blocking finding» из текста выше.
+
+`STYLE_GUIDE_GAP` и NEW elements — разрешённый записанный **non-blocking** путь:
+обоснование, рассмотренные альтернативы, reuse компонентов/tokens и reference
+на результат сохраняются в предметном record. Блокируют только существенные
+нарушения: сломанная функция; проигнорированное Owner Decision;
+проигнорированное переиспользование существующего компонента без причины;
+нарушение privacy. Само отклонение от макета или Style Guide не блокирует.
+
+Следствие: формулировки «bound by / STYLE_GUIDE_PARITY» при чтении
+[Visual Review Nonblocking](OWNER_DECISION_VISUAL_REVIEW_NONBLOCKING_V001.md)
+понимаются в той же ограниченной области; этот файл не изменён. В текущей
+repo-копии указанных буквальных фраз нет, это не утверждение об их наличии.
+Заголовок `STYLE_GUIDE_PARITY` сохраняется только как совместимое имя записи
+использования reference, а не parity gate.
+
+Frozen Style Guide source bytes не изменены. Точный реестр входов и границы
+приблизительной ссылки: [DESIGN_MATERIALS](../manifest/DESIGN_MATERIALS.json),
+[M2R working spec](../product/M2R_DESIGN_SPEC.md). Решения t417u/t418u/t420u/t424u
+доставлены PMA в прямом Stage A assignment; merge reviewed record закрепляет
+exact mockup bytes только как approximate reference inputs, не все нарисованные
+действия и данные.
