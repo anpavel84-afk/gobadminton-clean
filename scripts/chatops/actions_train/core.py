@@ -67,7 +67,18 @@ def live():
         modules.append(module)
     need(hashlib.sha256((HERE / 'live/check_foundation.py').read_bytes()).hexdigest()
          == PINS['check_foundation.py'], 'foundation drift')
-    return modules[1], modules[0]
+    # Preserve the pinned parser, adding the bounded AGY-author admission at
+    # its public entry point for legacy V2 tasks as well as cost-policy tasks.
+    issues, slots = modules[1], modules[0]
+    validate_issue = issues.validate_issue
+    def admitted_issue(*args, **kwargs):
+        task = validate_issue(*args, **kwargs)
+        if (any(r.split(':')[0] == 'agy' for r in task.get('author_routes', []))
+                and not executable_independent_qa(task, slots.MODEL_ADAPTER)):
+            raise issues.Hold('AGY author requires an executable independent non-agy QA route')
+        return task
+    issues.validate_issue = admitted_issue
+    return issues, slots
 
 def safe_credential(value):
     # Transport/header safety only. GitHub authenticates the opaque token; clients
@@ -215,26 +226,29 @@ def _codex_model_effort_admitted(model, effort):
 def executable_independent_qa(task, model_adapter=None, *, policy=None):
     """Static QA resolver admission, ignoring only runtime quota/availability.
 
-    Use the same cost-filtered candidates and Codex model/effort gate as QA.
+    Run the actual ordered QA walk with permissive availability and quota.
     Cursor QA is unqualified; AGY cannot review any listed AGY author.
     Passing a validated policy avoids recursion from validate_policy.
     """
-    routes = task.get('qa_routes', [])
-    if 'routing_policy' in task:
-        from cost_policy import _selection, validate_policy
-        p = policy if policy is not None else validate_policy(task)
-        preferred, rationale = _selection(p, task, 'qa')
-        routes = [preferred, *rationale['approved_fallback_routes']]
-    for route in routes:
-        parts = route.split(':')
-        if (len(parts) == 3 and parts[0] == 'codex'
-                and _codex_model_effort_admitted(parts[1], parts[2])
-                and (model_adapter is None or model_adapter.get(parts[1]) == 'codex')):
-            return True
-    return False
+    from types import SimpleNamespace
+    from cost_policy import _selection, validate_policy
+    slots = SimpleNamespace(
+        MODEL_ADAPTER=({_model: 'codex' for _model in _CODEX_MODELS}
+                       if model_adapter is None else model_adapter), UNKNOWN=object())
+    budget = SimpleNamespace(remaining=lambda *args: 1, used=lambda *args: 0)
+    view = task
+    try:
+        if 'routing_policy' in task:
+            p = policy if policy is not None else validate_policy(task)
+            preferred, rationale = _selection(p, task, 'qa')
+            view = dict(task, qa_routes=[preferred, *rationale['approved_fallback_routes']])
+        choice = _route_immutable(slots, view, 'qa', 'auto', budget, 'slot2', admission=True)
+        return choice['provider'] == 'codex'
+    except (Refused, ValueError):
+        return False
 
 
-def _route_immutable(slots, task, role, profile, budget, slot, task_hash=None):
+def _route_immutable(slots, task, role, profile, budget, slot, task_hash=None, *, admission=False):
     """Choose a model by immutable stage preferences, not by relative token usage.
 
     V1 scalar-model Issues retain their previous route. For new V2 stage routes,
@@ -243,6 +257,7 @@ def _route_immutable(slots, task, role, profile, budget, slot, task_hash=None):
     sandboxed adapters are actually qualified, only Codex may execute.
     """
     need(role in ('author', 'qa'), 'invalid route role')
+    need(not admission or role == 'qa', 'static admission is QA-only')
     stage_key = 'author_routes' if role == 'author' else 'qa_routes'
     if stage_key in task:
         need(task.get('work_kind') in ('architecture', 'implementation', 'ux', 'contract', 'test')
@@ -308,7 +323,8 @@ def _route_immutable(slots, task, role, profile, budget, slot, task_hash=None):
                     refusal[entry] = 'Antigravity role/model/effort not supported by native QA adapter'
                     continue
                 from native_antigravity import available
-                ok, why = available(slot, task_hash or digest(task), model=model)
+                ok, why = ((True, 'static admission') if admission else
+                           available(slot, task_hash or digest(task), model=model))
                 # Exact model admission and executor qualification remain mandatory.
                 # A route string alone cannot charge a budget or start a provider.
                 if not ok:
@@ -329,7 +345,8 @@ def _route_immutable(slots, task, role, profile, budget, slot, task_hash=None):
             need(model in _CODEX_MODELS and effort in ('medium', 'high'),
                  'model/effort out of closed route registry')
             need(_codex_model_effort_admitted(model, effort), 'Luna effort not admitted')
-            ok, why = slots.adapter_status(provider, role, budget, slot)
+            ok, why = ((True, 'static admission') if admission else
+                       slots.adapter_status(provider, role, budget, slot))
             if not ok:
                 refusal[entry] = why
                 continue

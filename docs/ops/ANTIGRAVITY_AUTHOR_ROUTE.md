@@ -438,3 +438,113 @@ as invalid-cwd-agy.log / invalid-module-before-agy.log and excluded from totals;
 the correctly addressed runs above are complete. An intermediate successful
 101-test focused run preceded the final 103-test run. No independent QA, hosted
 CI, installation, canary or DEV acceptance was performed.
+
+## PR #312 — independent-QA repair round 4 (26 October 2026)
+
+AUTHOR/fix-author self-check only, under the direct bounded round-4 assignment.
+Exact input/base/source/PR HEAD: `475b5ed0d13cdb5580b708e2a7b49f8286073cae`.
+Candidate is the uncommitted working-tree diff; there is no new candidate SHA.
+Repository and accepted EOM 1.4 / SMART_ROUTING 1.0 commits/hashes above were
+verified unchanged. This author owns the assigned local adapter/core/manifest,
+AGY author tests and runbook edits; stage.py is excluded and remains unchanged.
+Requested route is the limited AGY author source repair; effective live route
+is NOT RUN. Grok remains runtime PMA. The supplied independent-QA findings and
+reproductions are repair inputs, not a change to the installed FAIL/Astra gate.
+
+1. Static independence admission scanned for any supported Codex entry, while
+   the real legacy QA walk could raise on an earlier Cursor entry. The helper
+   now executes `_route_immutable` itself in an explicit QA-only admission mode:
+   quota and runtime availability/qualification are permissive, but ordering,
+   schema/metadata, provider, model/effort and independence rules are unchanged.
+   Cost policy still supplies the same preferred/fallback list. A raising walk
+   or a first selected provider other than Codex returns false. Author selection
+   and validate_policy consume this helper. The additional legacy admission gap
+   is closed by wrapping the loaded pinned parser's validate_issue entry point
+   in core.live; only tasks listing an AGY author gain that check. The pinned
+   parser and the runtime QA walk's ordinary behavior remain unchanged.
+2. The adapter's old verification preceded the pinned path-based restoration,
+   so an ancestor swap during that helper could chmod an unrecorded outside
+   file before the later verification refused. AUTHOR now owns recording and
+   restoration. Both use no-follow directory/file descriptors; the guard records
+   device/inode/type for the root, ancestors, traversed directories and files,
+   including already read-only files. Restoration checks each component from a
+   verified checkout descriptor and fchmods only the verified leaf descriptor.
+   A rename after open cannot redirect the mutation. A second descriptor walk
+   checks modes and identities before import. The same function handles bounded
+   transient retries, partial recording failure and invoke's cleanup finally.
+   Persistent failure retains the round-3 closed receipt/cleanup flags and
+   prevents import. The pinned `_restore_write_guard` is never called by AUTHOR;
+   its imported symbol exists only for compatibility and negative test assertions.
+   The pinned QA/Cursor/guard modules are byte-identical to source HEAD.
+
+Existing restoration fault tests now inject faults into the author-owned helper;
+all original assertions remain. New methods (all execute and fail on pristine
+source HEAD, then pass on the candidate):
+
+- `test_legacy_v2_cursor_before_codex_is_not_executable_independent_qa`
+- `test_independent_qa_differential_closed_registry`
+- `test_guard_race_after_root_restore_never_chmods_outside`
+- `test_guard_leaf_symlink_after_root_restore_never_imports`
+- `test_guard_intermediate_swap_before_open_never_chmods_outside`
+- `test_guard_intermediate_swap_after_leaf_open_never_chmods_outside`
+- `test_guard_leaf_swap_after_open_never_chmods_outside`
+- `test_guard_replaced_directory_inode_never_imports`
+- `test_author_guard_exact_modes_without_pinned_restore`
+- `test_author_guard_transient_own_chmod_without_pinned_restore`
+- `test_author_guard_persistent_own_chmod_without_pinned_restore`
+
+The differential regression covers all permutations of lengths 1..3 over the
+nine closed routes: 585 policy-free lists plus 2,050 schema-valid policy cases
+across both cost schemas and all five complexities. The oracle calls real QA
+routing with runtime availability stubbed and the independence helper replaced
+only in the oracle to avoid circular expectations. Old HEAD has 70 mismatches;
+the candidate has zero. A separate 12,876-case base/candidate comparison covers
+legacy/policy QA, AGY/non-AGY authors, profiles and available/unavailable runtime
+states plus scalar V1 routes: zero changed QA results/refusals. The exact
+synthetic ancestor race changes outside mode 0400 to 0644 on old HEAD, whereas
+the candidate preserves 0400 and content and refuses restoration; invocation
+regressions also assert no import and failed_no_automatic_replay.
+
+Evidence is local under
+`/home/agentagency-dev/author-evidence-agyfix4-20261025`: preflight.json,
+new-tests.json, new-tests-old.log, new-tests-after.log, qa-equivalence.json,
+guard-before.json and guard-after.json. The pristine full-suite baseline uses
+an offline local clone of exact HEAD in tmp/pristine-git. Earlier archive-only
+full-suite logs named before-* are retained as non-authoritative because those
+copies lack repository metadata; they are excluded from baseline comparisons.
+No network, model CLI, real secrets, protected directories, root operation,
+commit, push, installation, hosted CI or DEV deployment is part of this repair.
+Fresh independent QA of this candidate and the existing separately authorised
+CI/runtime/DEV gates remain required; author self-checks do not satisfy them.
+
+Final round-4 AUTHOR verification:
+
+- New regressions: all 11 fail on pristine HEAD (9 assertion failures and 2
+  missing-author-helper errors; no test-module import failures), then all 11
+  pass on the candidate. The complete focused regression run takes 5.687s,
+  including the 2,635-case differential test, below its 60-second bound.
+- Full Actions discovery: baseline 1,032 tests, candidate 1,043 tests. Both have
+  zero assertion failures, the same 30 errors with byte-identical ordered error
+  labels (including subtest parameters), and one skip. full-comparison.json
+  records no added/removed error labels. Existing errors remain NOT_TESTED;
+  assertions and environment permissions were not weakened.
+- Phase discovery passes 51/51 on both versions. Foundation passes on both
+  (292 Markdown files, 168 draft API operations). Only core.py and
+  native_antigravity_author.py manifest entries change; all manifest hashes
+  match file bytes. The upgrade reads reviewed manifest pins and needs no edit.
+- Adversarial self-review checks fd-bound type/inode validation and fchmod,
+  no-follow ancestor traversal and revalidation, finite retries, closed receipts,
+  no import after persistent restoration failure, unchanged payload/credential
+  regressions, and cleanup. AST checks find zero calls to the pinned restoration
+  helper and zero path-based chmod calls in author guard recording/restoration.
+  git diff --check passes. These are author checks, not independent QA.
+
+The baseline-* logs are authoritative; after-* logs record the candidate, with
+candidate.patch, self-review.json and verification.json binding the final diff.
+after-agy-initial.log is an intermediate run before fault fixtures were
+retargeted to the new author helper and is excluded from final totals.
+
+Three AGY author modules alone: pristine baseline passes 103/103; final candidate
+passes 114/114 (37.672s). Full baseline/candidate Actions runtimes are 1,061.652s
+and 1,086.949s respectively; the added differential regression remains bounded.
+No independent QA, hosted CI, installation, canary or DEV acceptance was run.

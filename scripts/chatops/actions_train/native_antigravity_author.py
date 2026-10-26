@@ -26,8 +26,8 @@ from native_antigravity import (
     PERMISSION_MODE, MAX_OUT, MIN_TIMEOUT, SECRET, loads, dec, audit, input_payload,
     _verify_executor_boundary, catalog_precharge, retain_oauth_refresh,
     _prepare_invocation_cgroup, _enter_invocation_cgroup, _observe_cgroup_membership,
-    _executor_reap_state, _remove_cgroup, reap, _guard_accidental_writes,
-    _restore_write_guard, _candidate_state,
+    _executor_reap_state, _remove_cgroup, reap, _candidate_state,
+    _restore_write_guard,  # Compatibility symbol only; AUTHOR must never call it.
 )
 
 MARKER = Path('/etc/gobadminton-slots/antigravity-author.json')
@@ -314,45 +314,141 @@ def _import(bridge, changed, payloads):
             if os.path.exists(temp): os.unlink(temp)
 
 
-def _guard_parent(path, root):
-    """Open a recorded path's parent without following any symlink component."""
-    path, root = Path(path), Path(root)
-    need(path.is_absolute() and root.is_absolute() and '..' not in path.parts
-         and (path == root or root in path.parents), 'invalid guard record path')
-    fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
+def _guard_identity(info):
+    return info.st_dev, info.st_ino, stat.S_IFMT(info.st_mode)
+
+
+class _AuthorGuard(list):
+    """Original modes plus identities, including ancestors and read-only dirs."""
+    def __init__(self, root):
+        super().__init__()
+        self.root = Path(root)
+        self.identities = {}
+
+
+def _guard_check(fd, path, saved, *, record=False):
+    info = os.fstat(fd)
+    need(stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode), 'unsafe guarded file type')
+    identity = _guard_identity(info)
+    if record:
+        saved.identities[path] = identity
+    else:
+        need(saved.identities.get(path) == identity, 'guarded inode changed')
+    return info
+
+
+def _guard_root(saved, *, record=False):
+    """Acquire the checkout anchor without following links, even above root."""
+    root = saved.root
+    need(root.is_absolute() and '..' not in root.parts, 'invalid guard root')
+    fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
-        for part in path.parent.parts[1:]:
+        path = Path('/')
+        _guard_check(fd, path, saved, record=record)
+        for part in root.parts[1:]:
             child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
             os.close(fd); fd = child
+            path /= part
+            _guard_check(fd, path, saved, record=record)
         return fd
     except BaseException:
         os.close(fd)
         raise
 
 
+def _guard_open(saved, root_fd, path):
+    """Open every parent from the trusted checkout fd and check recorded inodes."""
+    relative = Path(path).relative_to(saved.root)
+    need('..' not in relative.parts, 'invalid guard record path')
+    fd = os.dup(root_fd)
+    try:
+        current = saved.root
+        _guard_check(fd, current, saved)
+        for index, part in enumerate(relative.parts):
+            flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+            if index < len(relative.parts)-1: flags |= os.O_DIRECTORY
+            child = os.open(part, flags, dir_fd=fd)
+            os.close(fd); fd = child
+            current /= part
+            _guard_check(fd, current, saved)
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _guard_chmod(fd, mode):
+    # The verified descriptor binds both the type/inode check and the mutation.
+    # A concurrent rename/link substitution cannot redirect fchmod elsewhere.
+    os.fchmod(fd, mode)
+
+
+def _guard_accidental_writes(work):
+    """Author-owned recorder: no shared path-based chmod, including on failure."""
+    saved = _AuthorGuard(work)
+    root_fd = _guard_root(saved, record=True)
+    try:
+        try: os.stat('.git', dir_fd=root_fd, follow_symlinks=False)
+        except FileNotFoundError: return saved
+        def record(fd, path):
+            info = _guard_check(fd, path, saved, record=True)
+            mode = stat.S_IMODE(info.st_mode)
+            # Record unchanged modes too: identity/mode verification must include
+            # read-only files and all directories used as traversal anchors.
+            saved.append((path, mode))
+            if mode & 0o222: _guard_chmod(fd, mode & ~0o222)
+            if stat.S_ISDIR(info.st_mode):
+                for name in sorted(os.listdir(fd)):
+                    if name == '.git': continue
+                    before = os.stat(name, dir_fd=fd, follow_symlinks=False)
+                    if stat.S_ISLNK(before.st_mode): continue
+                    need(stat.S_ISREG(before.st_mode) or stat.S_ISDIR(before.st_mode),
+                         'unsafe guarded file type')
+                    child = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+                                    | (os.O_DIRECTORY if stat.S_ISDIR(before.st_mode) else 0), dir_fd=fd)
+                    try:
+                        need(_guard_identity(os.fstat(child)) == _guard_identity(before),
+                             'guard recording inode changed')
+                        record(child, path/name)
+                    finally: os.close(child)
+        record(root_fd, saved.root)
+        return saved
+    except BaseException:
+        # Assignment in invoke has not completed; restore partial records here.
+        _restore_author_guard(saved, work)
+        raise
+    finally: os.close(root_fd)
+
+
 def _restore_author_guard(saved, root):
     if not saved: return
-    # Reject unsafe records before handing paths to the pinned shared helper.
-    # The adapter's verification/repair uses anchored directory fds throughout.
-    for path, _ in saved:
-        fd = _guard_parent(path, root)
-        try:
-            mode = os.stat(Path(path).name, dir_fd=fd, follow_symlinks=False).st_mode
-            need(stat.S_ISREG(mode) or stat.S_ISDIR(mode), 'unsafe guarded file type')
-        finally: os.close(fd)
-    _restore_write_guard(saved)
-    for path, original_mode in saved:
-        fd = _guard_parent(path, root)
-        try:
-            name = Path(path).name
-            mode = os.stat(name, dir_fd=fd, follow_symlinks=False).st_mode
-            need(stat.S_ISREG(mode) or stat.S_ISDIR(mode), 'unsafe guarded file type')
-            if stat.S_IMODE(mode) != original_mode:
-                os.chmod(name, original_mode, dir_fd=fd, follow_symlinks=False)
-            mode = os.stat(name, dir_fd=fd, follow_symlinks=False).st_mode
-            need((stat.S_ISREG(mode) or stat.S_ISDIR(mode))
-                 and stat.S_IMODE(mode) == original_mode, 'guard restoration incomplete')
-        finally: os.close(fd)
+    need(isinstance(saved, _AuthorGuard) and saved.root == Path(root), 'invalid author guard')
+    root_fd = _guard_root(saved)
+    try:
+        # Bounded retries cover transient syscall failure or a silent no-op.
+        # Never retry an inode/type mismatch as a chmod of a replacement path.
+        for path, original_mode in saved:
+            fd = _guard_open(saved, root_fd, path)
+            try:
+                for attempt in range(2):
+                    if stat.S_IMODE(_guard_check(fd, path, saved).st_mode) == original_mode: break
+                    try: _guard_chmod(fd, original_mode)
+                    except OSError:
+                        if attempt == 1: raise
+                need(stat.S_IMODE(_guard_check(fd, path, saved).st_mode) == original_mode,
+                     'guard restoration incomplete')
+            finally: os.close(fd)
+        # Reopen from the root after mutations: detect swaps made during chmod,
+        # including a renamed ancestor of an already-open, still safe descriptor.
+        for path, original_mode in saved:
+            fd = _guard_open(saved, root_fd, path)
+            try:
+                need(stat.S_IMODE(_guard_check(fd, path, saved).st_mode) == original_mode,
+                     'guard restoration incomplete')
+            finally: os.close(fd)
+        check = _guard_root(saved)
+        os.close(check)
+    finally: os.close(root_fd)
 
 
 def invoke(bridge, rt, prompt, choice, *, popen, atomic, permitted, evidence_dir=None):

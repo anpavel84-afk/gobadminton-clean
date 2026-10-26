@@ -595,16 +595,16 @@ class Invocation(unittest.TestCase):
         self.assert_cleanup_failure('private_tree')
 
     def test_guard_restore_failure_does_not_skip_tree_or_cgroup(self):
-        restore = N._restore_write_guard
+        restore = N._restore_author_guard
         guard = N._guard_accidental_writes
         saved = []
         def remember(work):
             value = guard(work); saved.append(value); return value
         # The fixture alone restores its real permissions after observing refusal.
         with patch.object(N, '_guard_accidental_writes', side_effect=remember), \
-             patch.object(N, '_restore_write_guard', side_effect=OSError('synthetic restore failure')), \
+             patch.object(N, '_restore_author_guard', side_effect=OSError('synthetic restore failure')), \
              patch.object(N, '_remove_cgroup') as remove, self.assertRaises(N.ReviewError): self.invoke('exit')
-        for value in saved: restore(value)
+        for value in saved: restore(value, self.source)
         remove.assert_called_once(); self.assert_cleanup_failure('restore_guard')
 
     def test_partial_rmtree_retries_and_removes_oauth_first(self):
@@ -682,21 +682,19 @@ class Invocation(unittest.TestCase):
         self.assert_cleanup_failure('evidence')
 
     def guard_chmod_fault(self, persistent):
-        chmod = os.chmod; target = self.source/'allowed.txt'; faults = []
+        chmod = os.fchmod; target = self.source/'allowed.txt'; faults = []
         original_mode = target.stat().st_mode & 0o7777
-        self.addCleanup(chmod, target, original_mode)
-        def controlled(path, mode, *args, **kwargs):
-            # Shared helper uses absolute paths; adapter's safe retry may use
-            # a basename relative to an already opened, no-follow parent fd.
-            is_target = Path(path) == target or (Path(path) == Path(target.name) and 'dir_fd' in kwargs)
-            if is_target and mode & 0o200 and (persistent or not faults):
+        self.addCleanup(target.chmod, original_mode)
+        inode = target.stat().st_ino
+        def controlled(fd, mode):
+            if os.fstat(fd).st_ino == inode and mode & 0o200 and (persistent or not faults):
                 faults.append(True); raise PermissionError(TOKEN)
-            return chmod(path, mode, *args, **kwargs)
+            return chmod(fd, mode)
         importer = N._import
         def checked_import(*args):
             self.assertEqual(target.stat().st_mode & 0o7777, original_mode)
             return importer(*args)
-        with patch.object(os, 'chmod', side_effect=controlled), patch.object(N, '_import', side_effect=checked_import) as imported:
+        with patch.object(N, '_guard_chmod', side_effect=controlled), patch.object(N, '_import', side_effect=checked_import) as imported:
             if persistent:
                 with self.assertRaises(N.ReviewError) as raised: self.invoke()
                 self.assertNotIn(TOKEN, str(raised.exception))
@@ -743,20 +741,124 @@ class Invocation(unittest.TestCase):
         external = self.root/'outside'; external.mkdir()
         outside_file = external/'tracked.txt'; outside_file.write_text('outside')
         outside_file.chmod(0o600)
-        restore = N._restore_write_guard; swapped = []
-        def swap_after_restore(saved):
-            if not swapped:
-                restore(saved)
+        chmod = N._guard_chmod; swapped = []
+        inode = self.source.stat().st_ino
+        def swap_after_restore(fd, mode):
+            chmod(fd, mode)
+            if mode & 0o200 and os.fstat(fd).st_ino == inode and not swapped:
                 nested.rename(self.source/'original-nested')
                 nested.symlink_to(external, target_is_directory=True)
                 swapped.append(True)
-        with patch.object(N, '_restore_write_guard', side_effect=swap_after_restore), \
+        with patch.object(N, '_guard_chmod', side_effect=swap_after_restore), \
              patch.object(N, '_import') as imported, self.assertRaises(N.ReviewError):
             self.invoke()
         imported.assert_not_called()
         self.assertEqual(outside_file.stat().st_mode & 0o7777, 0o600)
         self.assertEqual(outside_file.read_text(), 'outside')
         self.assert_cleanup_failure('restore_guard')
+
+    def guard_swap(self, kind, point):
+        nested = self.source/'nested'; nested.mkdir()
+        middle = nested/'middle'; middle.mkdir()
+        leaf = middle/'tracked.txt'; leaf.write_text('tracked'); leaf.chmod(0o644)
+        self.bridge.git('add', 'nested')
+        self.bridge.git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                        'commit', '-qm', 'guard swap fixture')
+        outside = self.root/'outside'; outside.mkdir(); (outside/'middle').mkdir()
+        external = outside/'middle/tracked.txt'; external.write_text('outside'); external.chmod(0o400)
+        other = outside/'tracked.txt'; other.write_text('outside'); other.chmod(0o400)
+        root_inode = self.source.stat().st_ino
+        swapped = []; restoring = []; chmod = os.chmod; fchmod = os.fchmod; opened = os.open
+        restore = N._restore_author_guard
+        def swap():
+            if swapped: return
+            swapped.append(True)
+            if kind in ('leaf', 'replacement'):
+                nested.chmod(0o755); middle.chmod(0o755)
+            if kind == 'leaf':
+                leaf.rename(middle/'original-tracked.txt'); leaf.symlink_to(external)
+            elif kind == 'replacement':
+                middle.rename(nested/'original-middle'); middle.mkdir(); (middle/'tracked.txt').write_text('replacement')
+                (middle/'tracked.txt').chmod(0o400)
+            else:
+                nested.rename(self.source/'original-nested'); nested.symlink_to(outside, target_is_directory=True)
+        def root_restored(path, mode, *args, **kwargs):
+            result = chmod(path, mode, *args, **kwargs)
+            if restoring and point == 'root' and Path(path) == self.source and mode & 0o200: swap()
+            return result
+        def fd_restored(fd, mode):
+            result = fchmod(fd, mode)
+            if restoring and point == 'root' and mode & 0o200 and os.fstat(fd).st_ino == root_inode: swap()
+            return result
+        def scheduled_open(path, flags, *args, **kwargs):
+            # Swap before a parent open or just after the leaf open, so a
+            # descriptor must bind the mutation even after path replacement.
+            if restoring and point == 'before_middle' and str(path) == 'middle': swap()
+            fd = opened(path, flags, *args, **kwargs)
+            if restoring and point == 'after_leaf' and str(path) == 'tracked.txt': swap()
+            return fd
+        def restoring_guard(*args):
+            restoring.append(True)
+            try: return restore(*args)
+            finally: restoring.pop()
+        with patch.object(N, '_restore_write_guard', wraps=N._restore_write_guard) as pinned, \
+             patch.object(N, '_restore_author_guard', side_effect=restoring_guard), \
+             patch.object(os, 'chmod', side_effect=root_restored), \
+             patch.object(os, 'fchmod', side_effect=fd_restored), \
+             patch.object(os, 'open', side_effect=scheduled_open), \
+             patch.object(N, '_import') as imported:
+            with self.assertRaises(N.ReviewError): self.invoke()
+        self.assertTrue(swapped)
+        pinned.assert_not_called()
+        imported.assert_not_called()
+        for file in (external, other):
+            self.assertEqual(file.stat().st_mode & 0o7777, 0o400)
+            self.assertEqual(file.read_text(), 'outside')
+        self.assert_cleanup_failure('restore_guard')
+        # Restore only fixture-owned original directories for temp cleanup.
+        for parent, dirs, files in os.walk(self.source, followlinks=False):
+            Path(parent).chmod(0o755)
+            for name in dirs:
+                path = Path(parent)/name
+                if not path.is_symlink(): path.chmod(0o755)
+
+    def test_guard_race_after_root_restore_never_chmods_outside(self):
+        self.guard_swap('ancestor', 'root')
+
+    def test_guard_leaf_symlink_after_root_restore_never_imports(self):
+        self.guard_swap('leaf', 'root')
+
+    def test_guard_intermediate_swap_before_open_never_chmods_outside(self):
+        self.guard_swap('ancestor', 'before_middle')
+
+    def test_guard_intermediate_swap_after_leaf_open_never_chmods_outside(self):
+        self.guard_swap('ancestor', 'after_leaf')
+
+    def test_guard_leaf_swap_after_open_never_chmods_outside(self):
+        self.guard_swap('leaf', 'after_leaf')
+
+    def test_guard_replaced_directory_inode_never_imports(self):
+        self.guard_swap('replacement', 'root')
+
+    def test_author_guard_exact_modes_without_pinned_restore(self):
+        nested = self.source/'nested'; nested.mkdir(); nested.chmod(0o755)
+        for name, mode in (('ordinary', 0o644), ('readonly', 0o444), ('executable', 0o755)):
+            path = nested/name; path.write_text(name); path.chmod(mode)
+        expected = {p: p.stat().st_mode & 0o7777 for p in (self.source, nested, *nested.iterdir())}
+        with patch.object(N, '_restore_write_guard', side_effect=AssertionError('pinned restore forbidden')) as pinned:
+            saved = N._guard_accidental_writes(self.source)
+            N._restore_author_guard(saved, self.source)
+        pinned.assert_not_called()
+        self.assertEqual({p: p.stat().st_mode & 0o7777 for p in expected}, expected)
+        self.assertEqual((nested/'readonly').read_text(), 'readonly')
+
+    def test_author_guard_transient_own_chmod_without_pinned_restore(self):
+        with patch.object(N, '_restore_write_guard', side_effect=AssertionError('pinned restore forbidden')):
+            self.guard_chmod_fault(False)
+
+    def test_author_guard_persistent_own_chmod_without_pinned_restore(self):
+        with patch.object(N, '_restore_write_guard', side_effect=AssertionError('pinned restore forbidden')):
+            self.guard_chmod_fault(True)
 
 
 if __name__ == '__main__': unittest.main()

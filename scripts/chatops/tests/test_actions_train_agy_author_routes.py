@@ -2,6 +2,8 @@
 import copy
 from contextlib import nullcontext
 import hashlib
+import itertools
+import datetime as dt
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -191,6 +193,54 @@ class Routing(unittest.TestCase):
         with patch.object(N, 'available', return_value=(True, 'qualified')), \
              patch.object(QA, 'available', side_effect=AssertionError('no runtime QA probe')):
             self.assertEqual(core.route(S, task, 'author', 'agy', self.budget, 'slot2')['provider'], 'agy')
+
+    def test_legacy_v2_cursor_before_codex_is_not_executable_independent_qa(self):
+        from test_actions_train import A, issue
+        import native_antigravity_author as N
+        task = author_task(); task.pop('routing_policy')
+        task['qa_routes'] = ['cursor:auto', 'codex:gpt-6.1-sol:medium']
+        self.assertFalse(core.executable_independent_qa(task, S.MODEL_ADAPTER))
+        stamp = dt.datetime(2026, 10, 21, 12, tzinfo=dt.timezone.utc)
+        card = issue(991, task); card['created_at'] = card['updated_at'] = stamp.isoformat()
+        with self.assertRaisesRegex(A.Hold, 'executable independent'):
+            A.validate_issue(card, stamp-dt.timedelta(days=1), now=stamp+dt.timedelta(minutes=1))
+        with patch.object(N, 'available', return_value=(True, 'synthetic qualified')) as available:
+            self.assertEqual(core.route(S, task, 'author', 'auto', self.budget, 'slot2')['provider'], 'codex')
+        available.assert_not_called()
+        with self.assertRaisesRegex(core.Refused, 'unqualified Cursor role/model'):
+            core.route(S, task, 'qa', 'auto', self.budget, 'slot2')
+
+    def test_independent_qa_differential_closed_registry(self):
+        from test_actions_train import A
+        routes = sorted(A.PHASE_ROUTES)
+        counts = {'legacy': 0, 'policy': 0}; mismatches = []
+        # Only runtime availability is stubbed in the oracle. Its real policy
+        # validation and ordered resolver execute; the helper is replaced solely
+        # there to prevent its own answer becoming the expected result.
+        with patch.object(QA, 'available', return_value=(True, 'fixture')), \
+             patch.object(S, 'adapter_status', return_value=(True, 'fixture')):
+            for schema in (None, 'GB_STAGE_COST_V1', 'GB_STAGE_COST_V2'):
+                for level in (cost_policy.MATRIX if schema else ('standard',)):
+                    for length in (1, 2, 3):
+                        for entries in itertools.permutations(routes, length):
+                            task = author_task(); task['qa_routes'] = list(entries)
+                            if schema:
+                                task['routing_policy'] = cost_task('standard', level)['routing_policy']
+                                task['routing_policy']['schema'] = schema
+                                with patch.object(core, 'executable_independent_qa', return_value=True):
+                                    try: cost_policy.validate_policy(task)
+                                    except ValueError: continue
+                            else: task.pop('routing_policy')
+                            helper = core.executable_independent_qa(task, S.MODEL_ADAPTER,
+                                                                  policy=task.get('routing_policy'))
+                            with patch.object(core, 'executable_independent_qa', return_value=True):
+                                try:
+                                    expected = core.route(S, task, 'qa', 'auto', self.budget, 'slot2')['provider'] == 'codex'
+                                except core.Refused: expected = False
+                            counts['policy' if schema else 'legacy'] += 1
+                            if helper != expected: mismatches.append((schema, level, entries, helper, expected))
+        self.assertEqual(counts, {'legacy': 585, 'policy': 2050})
+        self.assertEqual(mismatches, [])
 
 
 class Dispatch(unittest.TestCase):
