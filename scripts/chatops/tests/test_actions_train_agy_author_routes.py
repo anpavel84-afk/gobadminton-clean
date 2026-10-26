@@ -264,7 +264,7 @@ class Dispatch(unittest.TestCase):
                 read_json=lambda *_a,**_k:{'mode':'active','owned':{'slot2':'fixture'}})
             choice = dict(provider=provider,effective_model=QA.MODEL if provider=='agy' else 'Auto',
                           effort=None,role='qa' if qa else 'author')
-            receipt = dict(phase='imported',rules_context={'role':'qa' if qa else 'author'},
+            receipt = dict(phase='imported',rules_context={'role':'qa' if qa else 'author','context_metrics':{'policy_profile':'full'}},
                            provider_reported_usage={'output_tokens':5})
             def author(bridge,rt,prompt,*args,**kwargs):
                 calls.append(prompt); self.assertIn('TRUSTED_FULL_RULES',prompt)
@@ -284,7 +284,7 @@ class Dispatch(unittest.TestCase):
             with patch.object(stage,'live',return_value=(a,s)),patch.object(stage.os,'getuid',return_value=978), \
                  patch.object(stage.os,'getgid',return_value=968),patch.object(stage,'API',return_value=Mock()), \
                  patch.object(stage,'route',return_value=choice),patch.object(context_policy,'load',return_value=('TRUSTED_FULL_RULES',{})), \
-                 patch.object(context_policy,'inject',side_effect=lambda prompt,*a,**k:('TRUSTED_FULL_RULES\n'+prompt,{'role':'author'})) as inject, \
+                 patch.object(context_policy,'inject',side_effect=lambda prompt,*a,**k:('TRUSTED_FULL_RULES\n'+prompt,{'role':'author','context_metrics':{'policy_profile':'full'}})) as inject, \
                  patch.object(receiver,'units_quiet'),patch.object(receiver,'identity',return_value={'pid':424242}), \
                  agy_patch as agy_invoke, \
                  patch('native_cursor.invoke',side_effect=author) as cursor_invoke, \
