@@ -349,3 +349,8 @@
 - Независимая QA C4 по commit `83054653be0ec59e175d37dc6640e25e2effabe2`: **FAIL P2**, `docs/ops/AGY29_SMALL_RANGE_UPGRADE.md:177-178`; readback после directory-fsync EIO доказывает visible content, но НЕ crash durability. Четыре адресных синтетических теста C4 PASS. Evidence stored on VPS under qa-evidence-agy29c4-20261026.
 - Точный doc-only repair от PMA `dd129bc7a1bcb0a7f4493b1dbfba61efcf1f39ac`, executable files unchanged. C5 независимая Codex QA на UID1002 в отдельном source-read-only sandbox запущена; verdict pending. Product CI pull 40338786602 / push 40338778929 on exact new SHA initiated. Published checkpoint: https://github.com/anpavel84-afk/gobadminton-clean/pull/330#issuecomment-6418389281.
 - До QA PASS + CI 7/7 PR #330 остаётся draft. Никакого merge/OPS root install. Slot2 UNKNOWN и P1b frozen без изменений.
+
+
+### 26.10.2026 — AGY QA C5 PASS (до CI/merge)
+- QA C5 PASS на exact `dd129bc7a1bcb0a7f4493b1dbfba61efcf1f39ac`, findings `[]`, independent Codex Sol High, full EOM 1.4; receipt SHA256 `3293636c6c9ac46f93a3078abf81b39e0b4e38cbc29ab532cb94ce4e69d303c6` (VPS uid1002). QA C3/C4 P2 documentation findings закрыты; 136 тестов C3 + 4 синтетических теста C4 — исторические для unchanged code, C5 новые не запускала. Доказательство в https://github.com/anpavel84-afk/gobadminton-clean/pull/330#issuecomment-6418461593 .
+- Product CI exact sha #40338786602 пока в прогрессе (5/7 зелёных, database/receiver выполняются); не считать принятым до всех 7/7. PR #330 ещё draft и не merged; никакого root apply.
