@@ -20,13 +20,14 @@ import time
 import uuid
 
 from catalog import DEFAULT_CATALOG, load_catalog, unique_object
+from run_receipt import SCHEMA as RECEIPT_SCHEMA, valid_receipt
 from safe_io import absolute, check_regular, directory, regular
 
-VERSION = "GB_TEST_RUNNER_V1_REPAIR1"
+VERSION = "GB_TEST_RUNNER_V1_REPAIR2"
 REASONS = {"input_changed", "env_fixed", "flake_probe", "qa_independent_base", "ci_missing"}
 EXITS = {"PASS": 0, "FAIL": 1, "ENV_ERROR": 2, "NOT_TESTED": 2, "TIMEOUT": 4}
 BASE_ENV = {"PATH", "HOME", "TMPDIR", "LANG"}
-ARTIFACT = re.compile(r"[0-9a-f]{64}\.(?:log|lock|json(?:\.new|\.[0-9a-f]{32}\.new)?)")
+ARTIFACT = re.compile(r"[0-9a-f]{64}\.(?:log|lock|json)")
 
 
 def canonical(value):
@@ -46,6 +47,17 @@ def git_paths(repo, *, tracked=False):
 
 
 def validate_runs(repo, runs, fd):
+    if fd is None:
+        return _validate_runs(repo, runs, fd)
+    # Never exclude .new files: serialize scans with the atomic writer instead.
+    fcntl.flock(fd, fcntl.LOCK_SH)
+    try:
+        return _validate_runs(repo, runs, fd)
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+
+
+def _validate_runs(repo, runs, fd):
     if runs.is_relative_to(repo):
         for name in git_paths(repo, tracked=True):
             path = repo / os.fsdecode(name)
@@ -58,13 +70,18 @@ def validate_runs(repo, runs, fd):
         raise ValueError("UNSAFE_RUNS_DIR")
     validated = set()
     for name in os.listdir(fd):
-        if not ARTIFACT.fullmatch(name):
-            raise ValueError("RUNS_DIR_CONTAINS_SOURCE")
         try:
             info = os.stat(name, dir_fd=fd, follow_symlinks=False)
         except FileNotFoundError:
             continue  # A concurrent atomic receipt rename may remove its temporary name.
+        if stat.S_ISDIR(info.st_mode):
+            raise ValueError("RUNS_DIR_CONTAINS_SOURCE")
         check_regular(info, "UNSAFE_ARTIFACT", private=True)
+        if not ARTIFACT.fullmatch(name):
+            raise ValueError("RUNS_DIR_CONTAINS_SOURCE")
+        if name.endswith(".json"):
+            if read_result(Path(name), fd) is None:
+                continue  # Never exclude a receipt that vanished before verification.
         validated.add(name)
     return validated
 
@@ -167,7 +184,17 @@ def scrubbed_env(flags):
     return {name: os.environ[name] for name in BASE_ENV | set(flags) if name in os.environ}
 
 
-def targeted_argv(group, tests, repo):
+def refuse_runs_inputs(runs, cwd, argv):
+    if cwd.resolve().is_relative_to(runs):
+        raise ValueError("RUNS_DIR_READ_BY_COMMAND")
+    for arg in argv:
+        # Include conventional --input=PATH arguments as well as plain paths.
+        for part in (arg, arg.split("=", 1)[-1]):
+            if (cwd / part).resolve().is_relative_to(runs):
+                raise ValueError("RUNS_DIR_READ_BY_COMMAND")
+
+
+def targeted_argv(group, tests, repo, runs):
     argv = list(group["argv"])
     if group["id"] != "targeted_py":
         if tests:
@@ -177,6 +204,8 @@ def targeted_argv(group, tests, repo):
         raise ValueError("TESTS_REQUIRED")
     directory = repo / "scripts/chatops/tests"
     for name in tests:
+        refuse_runs_inputs(runs, repo, [name])
+        refuse_runs_inputs(runs, directory, [name, name + ".py"])
         if not re.fullmatch(r"test_[A-Za-z0-9_]+", name):
             raise ValueError("BAD_TEST_NAME")
         path = directory / (name + ".py")
@@ -189,12 +218,27 @@ def read_result(path, runs_fd):
     try:
         with regular(path.name, dir_fd=runs_fd, code="UNSAFE_ARTIFACT", private=True) as fd:
             with os.fdopen(os.dup(fd), "rb") as stream:
-                return json.load(stream, object_pairs_hook=unique_object)
+                try:
+                    value = json.load(stream, object_pairs_hook=unique_object)
+                    valid = valid_receipt(value, path.stem, VERSION, REASONS)
+                except (ValueError, UnicodeError, TypeError):
+                    valid = False
+                if not valid:
+                    raise ValueError("RUNS_DIR_CONTAINS_SOURCE")
+                return value
     except FileNotFoundError:
         return None
 
 
 def write_result(path, result, runs_fd):
+    fcntl.flock(runs_fd, fcntl.LOCK_EX)
+    try:
+        _write_result(path, result, runs_fd)
+    finally:
+        fcntl.flock(runs_fd, fcntl.LOCK_UN)
+
+
+def _write_result(path, result, runs_fd):
     temporary = path.name + "." + uuid.uuid4().hex + ".new"
     try:
         with regular(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL,
@@ -343,12 +387,14 @@ def run(args):
         raise ValueError("UNKNOWN_GROUP")
     group = groups[args.group]
     tests = sorted(set(args.tests or []))
-    argv = targeted_argv(group, tests, repo)
     cwd = (repo / group["cwd"]).resolve()
+    refuse_runs_inputs(runs, cwd, group["argv"])
+    argv = targeted_argv(group, tests, repo, runs)
     if not cwd.is_relative_to(repo):
         raise ValueError("BAD_CWD")
     if tests:
         cwd = repo / "scripts/chatops/tests"
+    refuse_runs_inputs(runs, cwd, argv)
     with runs_directory(repo, runs, create=True) as runs_fd:
         fp, inputs = fingerprint(repo, runs, args.group, tests, catalog_bytes, group["env_flags"])
         return run_locked(args, repo, runs, runs_fd, group, argv, cwd, fp, inputs)
@@ -374,8 +420,8 @@ def run_locked(args, repo, runs, runs_fd, group, argv, cwd, fp, inputs):
             return 3
         reason = args.repeat_reason or ("inconclusive_retry" if previous else "initial")
         job = dict(argv=argv, cwd=str(cwd), repo=str(repo), timeout_s=group["timeout_s"],
-                   env_flags=group["env_flags"], kind=group["kind"], reason=reason)
-        result = dict(group=args.group, fingerprint=fp, inputs=inputs, status="NOT_TESTED",
+                   env_flags=sorted(group["env_flags"]), kind=group["kind"], reason=reason)
+        result = dict(schema=RECEIPT_SCHEMA, group=args.group, fingerprint=fp, inputs=inputs, status="NOT_TESTED",
                       pending=True, log_path=str(runs / (fp + ".log")),
                       history=previous["history"] if previous else [], _job=job)
         # Reject an unsafe log before recording any pending execution.
@@ -460,6 +506,7 @@ def main(argv=None):
                     raise ValueError("BAD_FINGERPRINT")
                 receipt = read_result(path, args.runs_fd)
                 validate_runs(Path(receipt["_job"]["repo"]), path.parent, args.runs_fd)
+                refuse_runs_inputs(path.parent, Path(receipt["_job"]["cwd"]), receipt["_job"]["argv"])
                 result = execute(receipt["_job"], path, args.runs_fd)
                 os.close(args.runs_fd)
             return EXITS[result["status"]]

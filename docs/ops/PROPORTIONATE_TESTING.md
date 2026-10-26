@@ -7,9 +7,9 @@
 [SMART_ROUTING 1.0](../rules/SMART_ROUTING.md), exact pins —
 [CONTEXT_SOURCES.json](../rules/CONTEXT_SOURCES.json).
 
-AUTHOR repair round 1 preflight, 26.10.2026: repo `anpavel84-afk/gobadminton-clean`,
+AUTHOR repair round 2 preflight, 26.10.2026: repo `anpavel84-afk/gobadminton-clean`,
 branch `ops/proportionate-testing-p1-20261026`, PR #323; exact source/base
-`a77528318fd7e9dcdca28fd744560c85ed839b92`; candidate — этот uncommitted diff.
+`178df0ed2bc5324228b29bd62b8b9810e59c2382`; candidate — этот uncommitted diff.
 Прямое ограниченное задание Owner, один AUTHOR/writer; PMA takeover отсутствует.
 Requested route — bounded Codex AUTHOR; effective identity задаёт launcher,
 этот документ не удостоверяет model ID или квалификацию роли.
@@ -146,6 +146,10 @@ owner или group/other write запрещены (`UNSAFE_RUNS_DIR`). Внут�
 (`UNSAFE_ARTIFACT`); symlink/FIFO не открываются. Любой tracked path (включая
 удалённый и artifact-shaped) или non-artifact entry даёт `RUNS_DIR_CONTAINS_SOURCE`.
 Проверки действуют и для collect/detach. Недоступный runs-dir: `RUNS_DIR_UNAVAILABLE`.
+Catalog commands **никогда не должны читать runs-dir**, включая из кода команды.
+argv paths (также `--key=PATH`), cwd и `--tests` paths/modules, разрешающиеся внутрь
+runs-dir, запрещены: `RUNS_DIR_READ_BY_COMMAND`. Проверяются relative/absolute paths
+и symlink aliases. Это статическая проверка явных путей, не анализ программы или OS sandbox.
 Runner выполняет argv без shell и ограничивает timeout; при timeout убивает
 process group команды. Environment: только PATH, HOME, TMPDIR, LANG и catalog
 env_flags; отсутствие/пустое значение required flag даёт NOT_TESTED.
@@ -164,8 +168,17 @@ SHA-256 canonical JSON связывает worktree digest, group id, sorted uniq
 catalog SHA-256, runner version и presence booleans env_flags (значения не пишутся).
 Worktree digest: sorted unique `git ls-files -z --cached --others --exclude-standard`,
 path + фактический mode + content hash, включая uncommitted/untracked inputs.
-Исключаются только проверенные artifacts внутри runs-dir: `<64hex>.log|.json|.lock`,
-legacy `.json.new` и unique `.json.<32hex>.new`; source directory не исключается.
+Исключаются только проверенные artifacts внутри runs-dir: `<64hex>.log|.lock`
+(regular/private/single-link) и `<64hex>.json` с валидным receipt `GB_TEST_RUN_V1`.
+Receipt имеет закрытые ключи, текущую runner version, fingerprint == filename stem
+и SHA-256 canonical inputs; status и каждый history item (reason/time/status)
+валидируются. Pending receipt проверяет также job. Collect/worker читают тот же schema.
+Чужой/malformed JSON, wrong stem, неизвестное имя, подкаталог, legacy `.json.new`
+или оставшийся `.json.<32hex>.new` дают `RUNS_DIR_CONTAINS_SOURCE`, не исключаются.
+Scan и atomic receipt write сериализованы directory flock: временный файл никогда
+не считается artifact. Default `.gb-test-runs/` и fingerprint между запусками стабильны.
+Старые receipts без marker/current version не принимаются; не переносить их в новый runs-dir.
+Эта проверка происхождения структурная, не подпись; cache по-прежнему не trusted QA evidence.
 Удалённый tracked path имеет MISSING marker. Source читается через `O_NOFOLLOW`
 и regular `fstat`; подмена ссылкой — `UNSAFE_WORKTREE_FILE`. Symlink хешируется
 по тексту ссылки с mode 120000, цель не читается. Unsupported types/symlink parents дают error.
