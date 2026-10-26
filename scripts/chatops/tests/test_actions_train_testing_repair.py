@@ -69,7 +69,7 @@ class RunnerRepairTests(unittest.TestCase):
         outside = self.home / "outside"
         outside.mkdir()
         parent.symlink_to(outside, target_is_directory=True)
-        self.assert_refused(self.run_group("--runs-dir", str(parent / "runs")), "UNSAFE_RUNS_DIR")
+        self.assert_refused(self.run_group("--runs-dir", str(parent / "runs")), "RUNS_DIR_NOT_IN_GIT_DIR")
         self.assertEqual(list(outside.iterdir()), [])
 
     def test_non_directory_runs_is_refused(self):

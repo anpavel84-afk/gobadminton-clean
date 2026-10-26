@@ -1,17 +1,14 @@
 # GoBadminton CLEAN — proportionate testing P1
 
 **Статус: SOURCE / NOT_INSTALLED.** Подчинённый scoped runbook для offline tooling,
-не канон, не новая authority, не machine admission и не установленный enforcement.
-Полномочия, независимость, FAIL routing и приёмку определяют принятые
+не канон, не новая authority, не machine admission и не установленный enforcement. Полномочия, независимость, FAIL routing и приёмку определяют принятые
 [EOM 1.4](../rules/ENGINEERING_OPERATING_MODEL.md) и
 [SMART_ROUTING 1.0](../rules/SMART_ROUTING.md), exact pins —
 [CONTEXT_SOURCES.json](../rules/CONTEXT_SOURCES.json).
 
-AUTHOR repair round 3 preflight, 26.10.2026: repo `anpavel84-afk/gobadminton-clean`,
-branch `ops/proportionate-testing-p1-20261026`, PR #323; exact source/base
-`d315ec8011124655b92f0a1a3704c9360b69b9f9`; candidate — этот uncommitted diff.
-Прямое ограниченное задание Owner, один AUTHOR/writer; PMA takeover отсутствует.
-Requested route — bounded Codex AUTHOR; effective identity задаёт launcher,
+AUTHOR repair round 4 preflight, 26.10.2026: repo `anpavel84-afk/gobadminton-clean`,
+branch `ops/proportionate-testing-p1-20261026`, PR #323; exact source/base `a8f4bcc8a1be5f127e741b95af4478496a157e8c`; candidate — этот uncommitted diff.
+Прямое ограниченное задание Owner, один AUTHOR/writer; PMA takeover отсутствует. Requested route — bounded Codex AUTHOR; effective identity задаёт launcher,
 этот документ не удостоверяет model ID или квалификацию роли.
 EOM commit `13a8b6c54a45aaa57021e092a1bee54926d9eac4`, SHA-256
 `8798ea76874ea5e42f708fff6d74f1ccbf526413c701e9f2349045fdc98be9d5`;
@@ -136,27 +133,37 @@ python3 -B scripts/chatops/testing/run_test_group.py collect --fingerprint FULL_
 `collect` принимает repo/runs-dir и блокируется до завершения worker, без polling.
 Default — `<git-dir>/gb-test-runs/`, git-dir из `git rev-parse --absolute-git-dir`;
 linked worktrees используют собственный git-dir. Git metadata не является worktree input.
-Любой runs-dir в worktree, включая старый `.gb-test-runs/` и explicit `--runs-dir`
-под repo, refused: `RUNS_DIR_IN_WORKTREE`. Исключение — exact default в `.git/gb-test-runs`
-обычного checkout. `.gitignore` не меняется. Runs-dir создаётся с mode 0700;
-symlink (включая parents), non-directory, group/other write — `UNSAFE_RUNS_DIR`.
-Только owned single-link regular artifacts без group/other write (`UNSAFE_ARTIFACT`);
-symlink/FIFO не открываются. Malformed receipt/посторонний entry:
-`RUNS_DIR_CONTAINS_SOURCE`; отсутствующий collect dir: `RUNS_DIR_UNAVAILABLE`.
+Любой runs-dir в worktree вне git-dir, включая старый `.gb-test-runs/`, refused:
+`RUNS_DIR_IN_WORKTREE`. Overrides допустимы только как непосредственные дочерние
+каталоги git-dir; остальные — `RUNS_DIR_NOT_IN_GIT_DIR`. Runs-dir создаётся с 0700.
+Pre-existing dir признаётся только по внешнему runner-written marker
+`<git-dir>/gb-test-runs.<hash(name)>.owner`, связанному с fstat uid/dev/ino открытого
+`O_DIRECTORY|O_NOFOLLOW` fd; иначе `RUNS_DIR_UNRECOGNISED`, без chmod/новых файлов.
+Symlink/parents, non-directory, group/other write — `UNSAFE_RUNS_DIR`.
+Artifacts — owned single-link regular без group/other write (`UNSAFE_ARTIFACT`).
+Malformed receipt/посторонний entry — `RUNS_DIR_CONTAINS_SOURCE`.
 
-Внешний `<runs-dir>.lock` держит blocking exclusive `flock` на весь run/collect;
-конкурирующие runners ждут, включая разные fingerprints. Detached worker наследует lock.
-Только под lock и при current-uid ownership runner восстанавливает 0700 после crash
-с mode 0000; live lock исключает преждевременный self-heal. Пока child исполняется,
-mode runs-dir — 0000, directory fd остаётся у runner. Реальный отказ открытия
-каталога проверяется до cache lookup. `finally` восстанавливает 0700 до receipt/log write;
-timeout и SIGINT/SIGTERM убивают process group и восстанавливают mode.
-Log fd открывается заранее для stdout/stderr; directory/lock fds child не наследует.
+Lock/markers/state находятся только под git-dir: общий `gb-test-runs.lock`
+сериализует run/collect, включая overrides. Detached worker наследует lock.
+Во время команды runs-dir имеет 0000; каждый chmod — fchmod проверенного fd,
+marker dev/ino сверяется повторно; finally возвращает исходный mode того же inode.
+Недоступный 0000 dir после crash **не chmod-ится по pathname**: `RUNS_DIR_UNAVAILABLE`.
+Linux O_PATH открывает такой inode, но не допускает fchmod; автоматического self-heal нет.
+До исполнения команды pipe-gate ждёт atomic+fsync записи `gb-test-runs.state`:
+child PGID, /proc starttime и boot id. После reap и завершения всей группы state очищается.
+Best-effort PR_SET_PDEATHSIG=SIGKILL дополняет journal; его отказ не ломает запуск.
+Boundary держится всю жизнь записанной child process group, включая runner SIGKILL:
+свободный flock не разрешает восстановление; живые члены — `PREVIOUS_EXECUTION_ALIVE`
+для нового fingerprint/collect, без chmod/исполнения. Timeout/SIGINT/SIGTERM убивают группу.
+Любой pending fingerprint или state killed run — `INCOMPLETE_RUN_REQUIRES_RECONCILIATION`;
+неизвестный outcome требует отдельного trusted reconciliation, не автоматического replay.
+Dead/reused nonpending identity очищается только после проверки группы; identity недоступна —
+`CACHE_BOUNDARY_UNAVAILABLE`. Log fd открыт заранее; directory/lock fds child не наследует.
 Явные argv/cwd/module paths внутрь runs-dir — `RUNS_DIR_READ_BY_COMMAND`;
 скрытое обычное чтение из кода получает PermissionError. Environment: только PATH,
 HOME, TMPDIR, LANG и catalog env_flags; даже разрешённые значения, указывающие
 на runs-dir/aliases/children, удаляются. Missing required flag — NOT_TESTED.
-Если chmod/restore невозможен, owner другой, FS игнорирует mode bits или runner root:
+Если identity/chmod/restore недоступны, FS игнорирует mode bits или runner root:
 `CACHE_BOUNDARY_UNAVAILABLE`. Нет boundary => нет cache: command исполняется один раз,
 summary показывает результат, receipt не пишется, duplicate refusal отсутствует.
 Начальная недоступность boundary делает даже `--detach` blocking; uncached log
@@ -209,8 +216,7 @@ Pending receipt без владельца lock — `INCOMPLETE_RUN_REQUIRES_RECO
 автоматического повторного запуска неизвестного результата нет.
 
 Exit runner: PASS 0; FAIL 1; ENV_ERROR/NOT_TESTED 2; refused/usage 3; TIMEOUT 4.
-Missing command, import/permission failure — ENV_ERROR, `Ran 0 tests` — NOT_TESTED.
-Причину import/environment failure нужно исследовать по полному логу; это не source PASS.
+Missing command, import/permission failure — ENV_ERROR, `Ran 0 tests` — NOT_TESTED. Причину import/environment failure нужно исследовать по полному логу; это не source PASS.
 
 ## 6. Evidence и независимость
 
@@ -221,7 +227,7 @@ NOT_TESTED, ENV_ERROR и TIMEOUT не дают PASS. FAIL сохраняется
 FAIL; base FAIL + head PASS — `PASS_WITH_BASE_FAIL_FIXED`. Сравнение применимо
 только к согласованным group/tests/environment; helper не доказывает их equivalence.
 
-QA запускает **доверенную base-копию runner и соседних catalog.py/safe_io.py** с
+QA запускает **доверенную base-копию runner и соседних catalog.py/safe_io.py/execution_state.py** с
 `--catalog /trusted/base/scripts/chatops/testing/test_groups.json --repo CANDIDATE`.
 При explicit catalog candidate catalog не загружается как конфигурация, candidate
 runner не импортируется/исполняется. Все candidate files, включая эти копии,

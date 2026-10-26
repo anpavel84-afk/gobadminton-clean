@@ -29,7 +29,8 @@ class RunnerTests(unittest.TestCase):
                     "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull}
         self.git("init", "-q")
         self.runs = self.repo / ".git" / "gb-test-runs"
-        self.runs.mkdir(mode=0o700)
+        with R.runs_directory(self.repo, self.runs, create=True):
+            pass
         (self.repo / "tracked.txt").write_text("original\n")
         self.git("add", "tracked.txt")
         self.make_catalog()

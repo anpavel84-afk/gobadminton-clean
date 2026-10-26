@@ -20,11 +20,13 @@ import time
 import tempfile
 import uuid
 
+import execution_state as state
+from execution_state import BoundaryUnavailable
 from catalog import DEFAULT_CATALOG, load_catalog, unique_object
 from run_receipt import SCHEMA as RECEIPT_SCHEMA, valid_receipt
 from safe_io import absolute, check_regular, directory, regular
 
-VERSION = "GB_TEST_RUNNER_V1_REPAIR3"
+VERSION = "GB_TEST_RUNNER_V1_REPAIR4"
 REASONS = {"input_changed", "env_fixed", "flake_probe", "qa_independent_base", "ci_missing"}
 EXITS = {"PASS": 0, "FAIL": 1, "ENV_ERROR": 2, "NOT_TESTED": 2, "TIMEOUT": 4}
 BASE_ENV = {"PATH", "HOME", "TMPDIR", "LANG"}
@@ -47,10 +49,6 @@ def git_paths(repo, *, tracked=False):
     ).stdout.split(b"\0")) - {b""}
 
 
-class BoundaryUnavailable(Exception):
-    pass
-
-
 class Interrupted(Exception):
     pass
 
@@ -61,18 +59,56 @@ def git_dir(repo):
 
 
 def check_runs_location(repo, runs):
-    # Git metadata is outside the worktree inputs, even for a normal .git directory.
-    if runs.is_relative_to(repo) and runs != git_dir(repo) / "gb-test-runs":
+    metadata = git_dir(repo)
+    if runs.is_relative_to(repo) and not runs.is_relative_to(metadata):
         raise ValueError("RUNS_DIR_IN_WORKTREE")
-    if repo.is_relative_to(runs):
-        raise ValueError("BAD_RUNS_DIR")
+    # Deliberately restrict overrides to immediate children; no extra parent trees.
+    if runs.parent != metadata:
+        raise ValueError("RUNS_DIR_NOT_IN_GIT_DIR")
+
+
+def marker_path(runs):
+    return runs.parent / ("gb-test-runs." + sha(os.fsencode(runs.name)) + ".owner")
+
+
+def directory_identity(fd):
+    info = os.fstat(fd)
+    if not stat.S_ISDIR(info.st_mode):
+        raise ValueError("UNSAFE_RUNS_DIR")
+    if info.st_uid != os.getuid():
+        raise BoundaryUnavailable()
+    if info.st_mode & 0o022:
+        raise ValueError("UNSAFE_RUNS_DIR")
+    return dict(dev=info.st_dev, ino=info.st_ino, uid=info.st_uid)
+
+
+def recognise(runs, fd):
+    identity = directory_identity(fd)
+    if state.read_record(marker_path(runs)) != identity:
+        raise ValueError("RUNS_DIR_UNRECOGNISED")
+
+
+def check_existing(runs):
+    with directory(runs.parent, code="UNSAFE_RUNS_DIR") as parent:
+        try:
+            fd = os.open(runs.name, getattr(os, "O_PATH", os.O_RDONLY) | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            raise ValueError("UNSAFE_RUNS_DIR") from exc
+        try:
+            recognise(runs, fd)
+        finally:
+            os.close(fd)
 
 
 @contextmanager
-def runs_lock(runs):
-    # Close, never LOCK_UN: a detached worker inherits this open file description.
-    with directory(runs.parent, create=True, code="UNSAFE_RUNS_DIR") as parent:
-        with regular(runs.name + ".lock", os.O_RDWR | os.O_CREAT, dir_fd=parent,
+def runs_lock(repo, runs):
+    check_runs_location(repo, runs)
+    # Refuse unrelated pre-existing directories BEFORE creating even the lock.
+    check_existing(runs)
+    with directory(runs.parent, code="UNSAFE_RUNS_DIR") as parent:
+        with regular("gb-test-runs.lock", os.O_RDWR | os.O_CREAT, dir_fd=parent,
                      code="UNSAFE_ARTIFACT", private=True) as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             yield lock
@@ -101,40 +137,59 @@ def validate_runs(repo, runs, fd):
             read_result(Path(name), fd)
 
 
+def check_execution(runs):
+    record = state.read_record(runs.parent / "gb-test-runs.state")
+    if record is not None:
+        if state.group_alive(record):
+            raise ValueError("PREVIOUS_EXECUTION_ALIVE")
+        # Do not erase a killed run's pending receipt, even for another fingerprint.
+        if record.get("pending"):
+            raise ValueError("INCOMPLETE_RUN_REQUIRES_RECONCILIATION")
+        state.clear_record(runs.parent / "gb-test-runs.state")
+
+
 @contextmanager
 def runs_directory(repo, runs, *, create=False, locked=False):
     check_runs_location(repo, runs)
-    with nullcontext() if locked else runs_lock(runs):
-        # Recover a crashed runner's 0000 directory only under the external lock.
-        with directory(runs.parent, create=create, code="UNSAFE_RUNS_DIR") as parent:
+    with nullcontext() if locked else runs_lock(repo, runs):
+        check_execution(runs)
+        with directory(runs.parent, code="UNSAFE_RUNS_DIR") as parent:
+            created = False
             try:
-                info = os.stat(runs.name, dir_fd=parent, follow_symlinks=False)
+                os.stat(runs.name, dir_fd=parent, follow_symlinks=False)
             except FileNotFoundError:
                 if not create:
                     raise ValueError("RUNS_DIR_UNAVAILABLE") from None
                 os.mkdir(runs.name, 0o700, dir_fd=parent)
-                info = os.stat(runs.name, dir_fd=parent, follow_symlinks=False)
-            if not stat.S_ISDIR(info.st_mode):
-                raise ValueError("UNSAFE_RUNS_DIR")
-            if info.st_uid != os.getuid():
-                raise BoundaryUnavailable()
-            if info.st_mode & 0o022:
-                raise ValueError("UNSAFE_RUNS_DIR")
+                created = os.stat(runs.name, dir_fd=parent, follow_symlinks=False)
+            # No pathname chmod. An inaccessible 0000 directory requires a retained
+            # chmod-capable fd; O_PATH cannot be used with fchmod on Linux.
             try:
-                os.chmod(runs.name, 0o700, dir_fd=parent, follow_symlinks=False)
-            except OSError as exc:
-                raise BoundaryUnavailable() from exc
-        with directory(runs, code="UNSAFE_RUNS_DIR") as fd:
-            validate_runs(repo, runs, fd)
-            yield fd
+                with directory(runs, code="UNSAFE_RUNS_DIR") as fd:
+                    if created:
+                        opened = os.fstat(fd)
+                        if (opened.st_dev, opened.st_ino) != (created.st_dev, created.st_ino):
+                            raise ValueError("RUNS_DIR_UNRECOGNISED")
+                        state.write_record(marker_path(runs), directory_identity(fd))
+                    recognise(runs, fd)
+                    validate_runs(repo, runs, fd)
+                    # Global reconciliation: every pending fingerprint blocks new use.
+                    for name in os.listdir(fd):
+                        if name.endswith(".json") and read_result(Path(name), fd).get("pending"):
+                            raise ValueError("INCOMPLETE_RUN_REQUIRES_RECONCILIATION")
+                    yield fd
+            except PermissionError as exc:
+                raise ValueError("RUNS_DIR_UNAVAILABLE") from exc
 
 
 @contextmanager
 def cache_boundary(runs, fd):
     if os.geteuid() == 0 or os.fstat(fd).st_uid != os.getuid():
         raise BoundaryUnavailable()
+    original_mode = stat.S_IMODE(os.fstat(fd).st_mode)
     try:
         try:
+            recognise(runs, fd)
             os.fchmod(fd, 0o000)
             # Check actual denial, including filesystems that ignore mode bits.
             try:
@@ -148,9 +203,13 @@ def cache_boundary(runs, fd):
             raise BoundaryUnavailable() from exc
         yield
     finally:
+        record = state.read_record(runs.parent / "gb-test-runs.state")
+        if record is not None and state.group_alive(record):
+            raise ValueError("PREVIOUS_EXECUTION_ALIVE")
         try:
-            os.fchmod(fd, 0o700)
-            if stat.S_IMODE(os.fstat(fd).st_mode) != 0o700:
+            recognise(runs, fd)
+            os.fchmod(fd, original_mode)
+            if stat.S_IMODE(os.fstat(fd).st_mode) != original_mode:
                 raise BoundaryUnavailable()
         except OSError as exc:
             raise BoundaryUnavailable() from exc
@@ -382,6 +441,8 @@ def execute(job, result_path, runs_fd, *, result=None, cache=True):
                 status, detail = "NOT_TESTED", "MISSING_ENV_FLAG"
             else:
                 process = None
+                record = None
+                command_started = False
                 def interrupt(signum, frame):
                     raise Interrupted()
                 handlers = {sig: signal.signal(sig, interrupt)
@@ -390,20 +451,51 @@ def execute(job, result_path, runs_fd, *, result=None, cache=True):
                     # Open log first; restore mode before parsing or writing anything else.
                     with cache_boundary(result_path.parent, runs_fd) if cache else nullcontext():
                         try:
-                            process = subprocess.Popen(job["argv"], cwd=job["cwd"],
-                                env=scrubbed_env(job["env_flags"], result_path.parent),
-                                stdout=output, stderr=subprocess.STDOUT,
-                                stdin=subprocess.DEVNULL, start_new_session=True, close_fds=True)
+                            gate_read, gate_write = os.pipe() if cache else (None, None)
+                            record = None
                             try:
-                                rc = process.wait(timeout=job["timeout_s"])
-                                status = "PASS" if rc == 0 else "FAIL"
-                            except subprocess.TimeoutExpired:
-                                status, detail = "TIMEOUT", "TIME_LIMIT"
+                                argv = ([sys.executable, "-B", str(Path(state.__file__).resolve()),
+                                         str(gate_read), *job["argv"]] if cache else job["argv"])
+                                parent_pid = os.getpid()
+                                process = subprocess.Popen(argv, cwd=job["cwd"],
+                                    env=scrubbed_env(job["env_flags"], result_path.parent),
+                                    stdout=output, stderr=subprocess.STDOUT,
+                                    stdin=subprocess.DEVNULL, start_new_session=True,
+                                    preexec_fn=lambda: state.parent_death_signal(parent_pid),
+                                    pass_fds=(gate_read,) if cache else (), close_fds=True)
+                                if cache:
+                                    record = {**state.identity(process.pid), "pending": True}
+                                    state.write_record(result_path.parent.parent / "gb-test-runs.state", record)
+                                    os.write(gate_write, b"1")
+                                command_started = True
+                                try:
+                                    rc = process.wait(timeout=job["timeout_s"])
+                                    status = "PASS" if rc == 0 else "FAIL"
+                                except subprocess.TimeoutExpired:
+                                    status, detail = "TIMEOUT", "TIME_LIMIT"
+                            finally:
+                                for gate in (gate_read, gate_write):
+                                    if gate is not None:
+                                        os.close(gate)
                         finally:
-                            if process is not None and process.poll() is None:
-                                os.killpg(process.pid, signal.SIGKILL)
+                            if process is not None:
+                                # Include descendants whose leader has already exited.
+                                if process.poll() is None or (record is not None and state.group_alive(record)):
+                                    try:
+                                        os.killpg(process.pid, signal.SIGKILL)
+                                    except ProcessLookupError:
+                                        pass
                                 process.wait()
                                 rc = process.returncode
+                                if cache and record is not None:
+                                    deadline = time.monotonic() + 2
+                                    while state.group_alive(record):
+                                        if time.monotonic() >= deadline:
+                                            raise ValueError("PREVIOUS_EXECUTION_ALIVE")
+                                        time.sleep(0.01)
+                                    journal = result_path.parent.parent / "gb-test-runs.state"
+                                    if state.read_record(journal) is not None:
+                                        state.clear_record(journal)
                 except Interrupted:
                     status, detail = "ENV_ERROR", "INTERRUPTED"
                 except BoundaryUnavailable:
@@ -415,8 +507,8 @@ def execute(job, result_path, runs_fd, *, result=None, cache=True):
                         os.unlink(result_path.name, dir_fd=runs_fd)
                     except OSError:
                         pass
-                    if process is None:
-                        # Boundary vanished after preflight: execute once without cache.
+                    if not command_started:
+                        # Gate was never released: execute once without cache.
                         return execute(job, result_path, None, result=result, cache=False)
                 except OSError as exc:
                     detail = type(exc).__name__
@@ -502,9 +594,10 @@ def run(args):
     if tests:
         cwd = repo / "scripts/chatops/tests"
     refuse_runs_inputs(runs, cwd, argv)
-    with runs_lock(runs) as boundary_lock:
+    with runs_lock(repo, runs) as boundary_lock:
         try:
             with runs_directory(repo, runs, create=True, locked=True) as runs_fd:
+                state.identity(os.getpid())
                 with cache_boundary(runs, runs_fd):
                     pass  # Prove denial AND restoration before reading any cached outcome.
                 fp, inputs = fingerprint(repo, runs, args.group, tests, catalog_bytes,
@@ -640,6 +733,9 @@ def main(argv=None):
     except (ValueError, TypeError, KeyError) as exc:
         print("REFUSED: " + str(exc).replace("\n", "\\n")[:200])
         return 3
+    except BoundaryUnavailable:
+        print("ENV_ERROR: CACHE_BOUNDARY_UNAVAILABLE")
+        return 2
     except (OSError, subprocess.SubprocessError) as exc:
         print("ENV_ERROR: " + type(exc).__name__)
         return 2

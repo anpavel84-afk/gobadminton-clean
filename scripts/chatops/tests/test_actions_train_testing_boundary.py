@@ -134,13 +134,16 @@ class BoundaryTests(unittest.TestCase):
                 self.invoke()
         self.assertEqual(self.runs.stat().st_mode & 0o777, 0o700)
 
-    def test_stale_zero_mode_directory_is_self_healed(self):
-        self.runs.chmod(0)
-        result = self.run_group()
-        self.assertEqual(result.returncode, 0, result.stdout)
-        self.assertEqual(self.runs.stat().st_mode & 0o777, 0o700)
-        if os.geteuid() == 0:
-            self.assertIn('CACHE_BOUNDARY_UNAVAILABLE', result.stdout)
+    def test_stale_zero_mode_directory_is_conservatively_refused(self):
+        self.need_boundary()
+        try:
+            self.runs.chmod(0)
+            result = self.run_group()
+            self.assertEqual(result.returncode, 3, result.stdout)
+            self.assertIn('RUNS_DIR_UNAVAILABLE', result.stdout)
+            self.assertEqual(self.runs.stat().st_mode & 0o777, 0)
+        finally:
+            self.runs.chmod(0o700)
 
     def test_chmod_unavailable_executes_each_time_without_receipt(self):
         with patch.object(R.os, 'fchmod', side_effect=PermissionError('synthetic chmod denial')):
@@ -152,7 +155,7 @@ class BoundaryTests(unittest.TestCase):
                 self.assertEqual(list(self.runs.iterdir()), [])
         self.assertEqual(self.counter.read_text(), '2')
 
-    def test_restore_unavailable_disables_cache_and_next_start_self_heals(self):
+    def test_restore_unavailable_disables_cache_and_next_start_refuses(self):
         self.need_boundary()
         chmod = R.os.fchmod
         def no_restore(fd, mode):
@@ -167,10 +170,10 @@ class BoundaryTests(unittest.TestCase):
             self.assertEqual(self.counter.read_text(), '1')
             self.assertEqual(self.runs.stat().st_mode & 0o777, 0)
             second = self.run_group()
-            self.assertEqual(second.returncode, 0, second.stdout)
-            self.assertEqual(self.counter.read_text(), '2')
-            self.assertEqual(self.runs.stat().st_mode & 0o777, 0o700)
-            self.assertEqual(len(list(self.runs.glob('*.json'))), 1)
+            self.assertEqual(second.returncode, 3, second.stdout)
+            self.assertIn("RUNS_DIR_UNAVAILABLE", second.stdout)
+            self.assertEqual(self.counter.read_text(), "1")
+            self.assertEqual(self.runs.stat().st_mode & 0o777, 0)
         finally:
             self.runs.chmod(0o700)
 
@@ -193,20 +196,11 @@ class BoundaryTests(unittest.TestCase):
         self.assertEqual(list(self.runs.glob('*.json')), [])
         self.assertEqual(self.runs.stat().st_mode & 0o777, 0o700)
 
-    def test_foreign_ownership_disables_cache_without_changing_foreign_dir(self):
-        original = R.os.stat
-        def foreign(path, *args, **kwargs):
-            info = original(path, *args, **kwargs)
-            if path == self.runs.name:
-                fields = list(info)
-                fields[4] = os.getuid() + 1
-                return os.stat_result(fields)
-            return info
-        with patch.object(R.os, 'stat', side_effect=foreign), \
-                patch.object(R.os, 'chmod', wraps=os.chmod) as chmod:
-            rc, output = self.invoke()
-        self.assertEqual(rc, 0, output)
-        self.assertIn('CACHE_BOUNDARY_UNAVAILABLE', output)
+    def test_foreign_ownership_does_not_change_directory(self):
+        with patch.object(R.os, 'getuid', return_value=os.getuid() + 1), \
+                patch.object(R.os, 'fchmod', wraps=os.fchmod) as chmod:
+            with self.assertRaises(R.BoundaryUnavailable):
+                R.check_existing(self.runs)
         chmod.assert_not_called()
         self.assertEqual(list(self.runs.iterdir()), [])
 
