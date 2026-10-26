@@ -196,13 +196,20 @@ def main(argv=None):
     receipt = probe(args.closure_dir, args.role, args.adapter_revision, args.permission_profile_digest)
     if args.receipt_out:
         try:
-            fd = os.open(args.receipt_out, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            path = Path(args.receipt_out)
+            parent = open_dir(path.parent)
+            try:
+                fd = os.open(path.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                             0o600, dir_fd=parent)
+            finally:
+                os.close(parent)
             with os.fdopen(fd, 'wb') as stream:
                 stream.write(canonical(receipt) + b'\n')
                 stream.flush()
                 os.fsync(stream.fileno())
-        except OSError as exc:
-            receipt.update(result='FAIL', stop_code='HUB_IMPORT_UNSAFE', receipt_errno=exc.errno)
+        except (OSError, ValueError) as exc:
+            receipt.update(result='FAIL', stop_code='HUB_IMPORT_UNSAFE',
+                           receipt_errno=getattr(exc, 'errno', None))
     print(canonical(receipt).decode())
     return 0 if receipt['result'] == 'PASS' else 1
 

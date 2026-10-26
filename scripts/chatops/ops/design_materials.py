@@ -277,7 +277,7 @@ def _open_dir(path):
         raise
 
 
-def _read_at(root_fd, name):
+def _read_at(root_fd, name, frozen=False):
     locator(name)
     parent = os.dup(root_fd)
     try:
@@ -292,6 +292,10 @@ def _read_at(root_fd, name):
             if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > MAX_FILE:
                 raise DesignError(HUB_IMPORT_UNSAFE, name, 'regular single-link file <=16 MiB',
                                   dict(mode=info.st_mode, links=info.st_nlink, bytes=info.st_size))
+            if frozen and (stat.S_IMODE(info.st_mode) != 0o444
+                    or info.st_uid != os.geteuid()
+                    or (os.geteuid() == 0 and info.st_gid != 0)):
+                raise DesignError(HUB_IMPORT_UNSAFE, name, '0444 expected-owner file')
             chunks, total = [], 0
             while True:
                 chunk = os.read(fd, min(65536, MAX_FILE + 1 - total))
@@ -360,13 +364,18 @@ def _manifest(registry, c, members):
 
 
 def _verify_at(fd, manifest):
+    info = os.fstat(fd)
+    if (not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o555
+            or info.st_uid != os.geteuid()
+            or (os.geteuid() == 0 and info.st_gid != 0)):
+        raise DesignError(HUB_IMPORT_UNSAFE, 'closure tree', '0555 expected-owner directory')
     expected = canonical(manifest)
     if set(os.listdir(fd)) != {'CLOSURE.json', *(m['name'] for m in manifest['materials'])}:
         raise DesignError(HUB_IMPORT_UNSAFE, 'closure tree', 'exact file set')
-    if _read_at(fd, 'CLOSURE.json') != expected:
+    if _read_at(fd, 'CLOSURE.json', frozen=True) != expected:
         raise DesignError(HUB_IMPORT_UNSAFE, 'CLOSURE.json', 'exact canonical manifest')
     for m in manifest['materials']:
-        _check_content(_read_at(fd, m['name']), m)
+        _check_content(_read_at(fd, m['name'], frozen=True), m)
 
 
 def _write_at(fd, name, raw):
@@ -453,10 +462,10 @@ def import_closure(registry, closure_id, source_root, dest_root, apply=False, sl
                 _write_at(staging_fd, row['name'], raw)
             _write_at(staging_fd, 'CLOSURE.json', canonical(manifest))
             os.fsync(staging_fd)
-            _verify_at(staging_fd, manifest)
             if os.geteuid() == 0:
                 os.fchown(staging_fd, 0, 0)
             os.fchmod(staging_fd, 0o555)
+            _verify_at(staging_fd, manifest)
             os.fsync(staging_fd)
         finally:
             os.close(staging_fd)
@@ -529,8 +538,14 @@ def rollback(dest_root, min_age=3600, dry_run=True, now=None):
 
 
 def write_receipt(path, value):
-    # A duplicate receipt is an error, never an overwrite. Parent is OPS-controlled.
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    # Anchor every parent; a duplicate receipt is an error, never an overwrite.
+    path = Path(path)
+    parent = _open_dir(path.parent)
+    try:
+        fd = os.open(path.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                     0o600, dir_fd=parent)
+    finally:
+        os.close(parent)
     try:
         with os.fdopen(fd, 'wb', closefd=False) as stream:
             stream.write(canonical(value) + b'\n')

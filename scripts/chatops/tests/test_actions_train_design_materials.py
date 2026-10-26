@@ -1,5 +1,7 @@
 """Offline Stage A negative controls; only tiny synthetic bytes, no real PNGs."""
 import copy
+from contextlib import redirect_stdout
+import io
 import errno
 import json
 import os
@@ -9,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from test_actions_train import ROOT
@@ -220,6 +223,102 @@ class DesignMaterials(unittest.TestCase):
         manifest.write_bytes(manifest.read_bytes() + b'\n')
         self.assert_stop(D.HUB_IMPORT_UNSAFE, self.imported)
 
+    def verify_changed_member(self, raw, code):
+        receipt = self.imported()
+        path = Path(receipt['path'])
+        material = path / receipt['materials'][0]['name']
+        os.chmod(material, 0o644)
+        material.write_bytes(raw)
+        os.chmod(material, 0o444)
+        self.assert_stop(code, D.verify_closure, self.registry, 'synthetic-v1', path)
+
+    def test_verify_changed_bytes_same_length(self):
+        self.verify_changed_member(b'x' * len(self.raw), D.HUB_SHA_MISMATCH)
+
+    def test_verify_changed_bytes_different_length(self):
+        self.verify_changed_member(b'x', D.HUB_BYTES_MISMATCH)
+
+    def test_verify_missing_member(self):
+        receipt = self.imported()
+        path = Path(receipt['path'])
+        os.chmod(path, 0o755)
+        (path / receipt['materials'][0]['name']).unlink()
+        os.chmod(path, 0o555)
+        self.assert_stop(D.HUB_IMPORT_UNSAFE, D.verify_closure, self.registry, 'synthetic-v1', path)
+
+    def test_verify_extra_member(self):
+        path = Path(self.imported()['path'])
+        os.chmod(path, 0o755)
+        extra = path / 'extra'
+        extra.write_bytes(b'unreviewed')
+        os.chmod(extra, 0o444)
+        os.chmod(path, 0o555)
+        self.assert_stop(D.HUB_IMPORT_UNSAFE, D.verify_closure, self.registry, 'synthetic-v1', path)
+
+    def test_verify_altered_manifest(self):
+        path = Path(self.imported()['path'])
+        manifest = path / 'CLOSURE.json'
+        os.chmod(manifest, 0o644)
+        manifest.write_bytes(manifest.read_bytes() + b'\n')
+        os.chmod(manifest, 0o444)
+        self.assert_stop(D.HUB_IMPORT_UNSAFE, D.verify_closure, self.registry, 'synthetic-v1', path)
+
+    def check_existing_modes(self, reuse):
+        receipt = self.imported()
+        path = Path(receipt['path'])
+        def check():
+            return self.imported() if reuse else D.verify_closure(self.registry, 'synthetic-v1', path)
+        for target, modes, frozen in (
+                (path, (0o777, 0o2555, 0o1555, 0o4555), 0o555),
+                (path / receipt['materials'][0]['name'], (0o666, 0o2444, 0o1444, 0o4444), 0o444),
+                (path / 'CLOSURE.json', (0o666, 0o2444, 0o1444, 0o4444), 0o444)):
+            original = target.read_bytes() if target.is_file() else None
+            for mode in modes:
+                with self.subTest(target=target.name, mode=oct(mode), reuse=reuse):
+                    os.chmod(target, mode)
+                    self.assert_stop(D.HUB_IMPORT_UNSAFE, check)
+                    self.assertEqual(stat.S_IMODE(target.stat().st_mode), mode)  # No silent repair.
+                    if original is not None:
+                        self.assertEqual(target.read_bytes(), original)
+                    os.chmod(target, frozen)
+                    self.assertTrue(check()['reused' if reuse else 'verified'])
+
+    def test_reuse_requires_exact_frozen_modes(self):
+        self.check_existing_modes(reuse=True)
+
+    def test_verify_requires_exact_frozen_modes(self):
+        self.check_existing_modes(reuse=False)
+
+    def test_existing_tree_expected_owner_and_simulated_root(self):
+        receipt = self.imported()
+        path = Path(receipt['path'])
+        original_fstat = os.fstat
+        for euid in (os.geteuid(), 0):
+            for kind, field in (('directory', 'st_uid'), ('file', 'st_uid'), ('directory', 'st_gid'), ('file', 'st_gid')):
+                if field == 'st_gid' and euid != 0:
+                    continue
+                def ownership(fd):
+                    info = original_fstat(fd)
+                    values = {key: getattr(info, key) for key in
+                              ('st_mode', 'st_uid', 'st_gid', 'st_nlink', 'st_size')}
+                    values.update(st_uid=euid, st_gid=0)
+                    if stat.S_ISDIR(info.st_mode) == (kind == 'directory'):
+                        values[field] = euid + 1
+                    return SimpleNamespace(**values)
+                with self.subTest(euid=euid, kind=kind, field=field), \
+                        patch.object(D.os, 'geteuid', return_value=euid), \
+                        patch.object(D.os, 'fstat', side_effect=ownership):
+                    self.assert_stop(D.HUB_IMPORT_UNSAFE, D.verify_closure,
+                                     self.registry, 'synthetic-v1', path)
+        # Simulated root metadata verifies without chown or real root privileges.
+        def root_owned(fd):
+            info = original_fstat(fd)
+            return SimpleNamespace(st_mode=info.st_mode, st_uid=0, st_gid=0,
+                                   st_nlink=info.st_nlink, st_size=info.st_size)
+        with patch.object(D.os, 'geteuid', return_value=0), \
+                patch.object(D.os, 'fstat', side_effect=root_owned):
+            self.assertTrue(D.verify_closure(self.registry, 'synthetic-v1', path)['verified'])
+
     def test_wrong_source_hash_and_length_do_not_retry(self):
         for raw, code in ((b'x' * len(self.raw), D.HUB_SHA_MISMATCH), (b'x', D.HUB_BYTES_MISMATCH)):
             (self.source / 'tiny.png').write_bytes(raw)
@@ -347,6 +446,57 @@ class DesignMaterials(unittest.TestCase):
         with self.assertRaises(FileExistsError):
             D.write_receipt(target, {'second': True})
         self.assertEqual(D.parse(target.read_bytes()), {'first': True})
+
+    def test_import_receipt_parent_symlink_refused_and_normal_path_ok(self):
+        registry_path = self.root / 'registry.json'
+        registry_path.write_bytes(D.canonical(self.registry))
+        output = self.root / 'output'
+        output.mkdir()
+        link = self.root / 'output-link'
+        link.symlink_to(output, target_is_directory=True)
+        common = ['--registry', str(registry_path), '--closure-id', 'synthetic-v1']
+        imported = ['import', *common, '--source-root', str(self.source),
+                    '--dest-root', str(self.dest), '--apply']
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(D.main(imported + ['--receipt-out', str(output / 'normal.json')]), 0)
+        self.assertEqual(stat.S_IMODE((output / 'normal.json').stat().st_mode), 0o600)
+        path = self.dest / self.registry['closures'][0]['closure_sha256']
+        for command in (imported, ['verify', *common, '--closure-dir', str(path)]):
+            with self.subTest(command=command[0]):
+                stdout = io.StringIO()
+                with redirect_stdout(stdout):
+                    self.assertEqual(D.main(command + ['--receipt-out', str(link / (command[0] + '.json'))]), 1)
+                result = D.parse(stdout.getvalue())
+                self.assertEqual(result['code'], D.HUB_IMPORT_UNSAFE)
+                self.assertIs(result['model_called'], False)
+                self.assertIs(result['attempt_consumed'], False)
+                self.assertFalse((output / (command[0] + '.json')).exists())
+
+    def test_probe_receipt_parent_symlink_refused_and_normal_path_ok(self):
+        output = self.root / 'output'
+        output.mkdir()
+        nested = output / 'nested'
+        nested.mkdir()
+        link = self.root / 'output-link'
+        link.symlink_to(output, target_is_directory=True)
+        command = ['--closure-dir', str(self.dest), '--role', 'qa',
+                   '--adapter-revision', 'synthetic', '--permission-profile-digest', 'a' * 64]
+        # Isolate receipt handling from actual-identity probe results, including root controls.
+        for parent, expected in ((nested, 0), (link / 'nested', 1)):
+            with self.subTest(parent=parent):
+                stdout = io.StringIO()
+                with patch.object(P, 'probe', return_value=dict(result='PASS', model_called=False,
+                                                               attempt_consumed=False)), redirect_stdout(stdout):
+                    self.assertEqual(P.main(command + ['--receipt-out', str(parent / 'probe.json')]), expected)
+                result = D.parse(stdout.getvalue())
+                if expected == 0:
+                    self.assertEqual(stat.S_IMODE((nested / 'probe.json').stat().st_mode), 0o600)
+                    (nested / 'probe.json').unlink()
+                else:
+                    self.assertEqual((result['result'], result['stop_code']), ('FAIL', D.HUB_IMPORT_UNSAFE))
+                    self.assertIs(result['model_called'], False)
+                    self.assertIs(result['attempt_consumed'], False)
+                    self.assertFalse((nested / 'probe.json').exists())
 
     def test_probe_missing_dir_and_directory_name_binding(self):
         missing = P.probe(self.root / 'missing', 'author', 'synthetic-revision', 'a' * 64)
