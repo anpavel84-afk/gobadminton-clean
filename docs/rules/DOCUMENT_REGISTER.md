@@ -40,6 +40,7 @@
 | `docs/operations/ENVIRONMENTS.md`, `DEPLOYMENT_AND_RECOVERY.md`, `chatops/ACTIONS_TRAIN.md`, `chatops/PM-CHEATSHEET.md`, `chatops/README.md` | Прикладные runbooks/навигация действующего процесса; текущий installed pin проверять, не брать из примера |
 | `docs/operations/chatops/AUTONOMY_PARK.md`, `AUTONOMY_RESUME.md`, `BUDGET_PREFLIGHT_RECOVERY_V001.md` | Описание конкретной поддерживаемой версии протокола. Это не универсальное изменение Owner-делегации §6; текущая техническая несовместимость — implementation gap |
 | `docs/ops/AGY29_PACKAGE_FINISH.md` | Scoped AGY #29 package finish runbook: lib-only install, archive-aware evidence, marker-only accept; no new runtime authority |
+| `docs/ops/PROPORTIONATE_TESTING.md` | Scoped runbook for proportionate testing tools (offline source, NOT_INSTALLED); no new runtime authority |
 | `docs/operations/RUNNER_*`, `chatops/AUTONOMY_COMMISSIONING.md`, `chatops/PROVIDER_QUALIFICATION_20261022.md`, `chatops/AUTONOMY_CANARY_*.md`, `docs/ops/ANTIGRAVITY_*` | Исторические execution/qualification records. Их NEXT/HOLD/READY относится к дате/версии, не сегодняшнему состоянию |
 | `docs/operations/actions-train-failure-diagnosis-218.md` | Source/protocol record #218, не доказательство установленного полного FAIL-цикла |
 | `docs/handoffs/*` кроме CURRENT и индексных указателей | Dated source/QA/OPS evidence и task-scoped handoffs. Сохраняются FAIL, UNKNOWN, hashes и ограничения. Ни старый launcher, ни release-note не назначают нового PMA |
