@@ -264,17 +264,23 @@ class PackageFinishTests(unittest.TestCase):
         with patch.object(P,'RULES_SHA256',Q.INSTALLED_C5_RULES):
             self.l['owner_comment']=comment;self.l['controller_sha']=controller
             self.l['rules_sha256']=Q.INSTALLED_C5_RULES
+            source=Q.OWNER_PACKAGE_SOURCES[Q.FRESH_SOURCE_HEAD]
+            pins=Q.owner_package_input_pins(source)
+            self.l.update(source_base=source.base,source_head=source.head)
             rows=list(self.l['grants'].values())
             for row in rows:
                 row['grant'].update(owner_comment=comment,controller_revision=controller,rules_sha256=Q.INSTALLED_C5_RULES)
+                pin=pins[row['grant']['role']]
+                row['grant'].update(base=source.base,head=source.head,input_revision=pin[0],
+                                    input_path=pin[1],input_sha256=pin[2])
                 row['operation']=None
             self.l['grants']={digest(row['grant']):row for row in rows}
             self.roles={row['grant']['role']:row for row in rows}
             value=dict(schema=Q.OWNER_PACKAGE_SCHEMA,issue=29,repo_id=A.REPO_ID,owner_comment=comment,
-                controller_sha=controller,rules_sha256=Q.INSTALLED_C5_RULES,source_base=A.SOURCE_BASE,
-                source_head=A.SOURCE_HEAD,model=N.MODEL,max_calls=2,calls=[
+                controller_sha=controller,rules_sha256=Q.INSTALLED_C5_RULES,source_base=source.base,
+                source_head=source.head,model=N.MODEL,max_calls=2,calls=[
                     dict(role=role,input_revision=pin[0],input_path=pin[1],input_sha256=pin[2])
-                    for role,pin in A.EXPECTED_PINS.items()])
+                    for role,pin in pins.items()])
             body=A.PREFIX+json.dumps(value,sort_keys=True,separators=(',',':'))
             self.l['body_sha256']=hashlib.sha256(body.encode()).hexdigest()
             self.analysis_key,self.analysis=operation(self.roles['technical_pm_product_analyst'],98,122)
@@ -308,7 +314,8 @@ class PackageFinishTests(unittest.TestCase):
             self.assertEqual(R.read(self.root/(Q.OWNER_PACKAGE_LEDGER_PREFIX+str(comment)+'.json'),0),self.l)
 
     def test_accept_installed_rules_and_context_bytes_drift(self):
-        package=dict(rules_sha256=Q.INSTALLED_C5_RULES)
+        package=dict(owner_comment=6404499964,controller_sha=Q.INSTALLED_C5_CONTROLLER,
+                     rules_sha256=Q.INSTALLED_C5_RULES)
         expected='d961079b9791f53cf7ce0ac208180b0c9d9100ef46b48c025c2938d2eb69a806'
         with patch.object(P,'RULES_SHA256',Q.INSTALLED_C5_RULES):
             def pin(path):return Q.INSTALLED_C5_RULES if Path(path).name.endswith('.md') else expected

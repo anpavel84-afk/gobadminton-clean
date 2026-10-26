@@ -1,5 +1,6 @@
 """One-file upgrade: synthetic fake-root transactions, strict stack and source gates."""
 import contextlib
+from functools import cache
 import copy
 import hashlib
 import importlib.util
@@ -30,6 +31,13 @@ H=lambda raw:hashlib.sha256(raw).hexdigest()
 SS=H(SCRIPT.read_bytes())
 COMMIT='a'*40
 OLD,NEW=b'old admission module',b'new admission module'
+
+
+@cache
+def installed_source(path):
+    # This installer is immutable; test its already-installed aa9ece4d snapshot.
+    return subprocess.check_output(['git','show',
+        'aa9ece4d74d3e984ce75e59457304117a1438ff6:'+path],cwd=REPO)
 
 
 class Fixture:
@@ -463,7 +471,7 @@ class BundleTests(unittest.TestCase):
         (bundle/'.git'/'config').write_bytes(b'[core]\n bare = false\n')
         paths=[I.SCRIPT_REPO_PATH,'scripts/chatops/actions_train/'+I.NAME,
                'scripts/chatops/actions_train/manifest.json','.github/workflows/train-stage.yml']
-        blobs={p:(REPO/p).read_bytes() for p in paths}
+        blobs={p:installed_source(p) for p in paths}
         for p,raw in blobs.items():
             path=bundle/p;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(raw)
         self.stack=contextlib.ExitStack();self.addCleanup(self.stack.close)
@@ -481,7 +489,7 @@ class BundleTests(unittest.TestCase):
 
     def test_bundle_and_running_script_equal_reviewed_blob(self):
         root,bundle,blobs=self.fixture()
-        self.assertEqual(I.source(bundle,COMMIT),(SS,(REPO/'scripts/chatops/actions_train'/I.NAME).read_bytes()))
+        self.assertEqual(I.source(bundle,COMMIT),(SS,installed_source('scripts/chatops/actions_train/'+I.NAME)))
         other=root/'other.py';other.write_bytes(SCRIPT.read_bytes()+b'\n# foreign\n')
         with patch.object(I,'__file__',str(other)),self.assertRaisesRegex(I.Refused,'running installer differs'):
             I.source(bundle,COMMIT)
@@ -566,8 +574,8 @@ class BundleTests(unittest.TestCase):
         self.assertEqual(I.OLD,P.TARGETS[I.NAME][1])
         self.assertNotIn(I.NEW,P.TARGETS[I.NAME])  # lower rollback cannot accept this active layer
         self.assertEqual(I.PKG_MANIFEST,P.MANIFEST)
-        self.assertEqual(I.NEW,H((REPO/'scripts/chatops/actions_train'/I.NAME).read_bytes()))
-        manifest=(REPO/'scripts/chatops/actions_train/manifest.json').read_bytes()
+        self.assertEqual(I.NEW,H(installed_source('scripts/chatops/actions_train/'+I.NAME)))
+        manifest=installed_source('scripts/chatops/actions_train/manifest.json')
         self.assertEqual(H(manifest),I.MANIFEST)
         self.assertEqual(json.loads(manifest)['files']['scripts/chatops/actions_train/'+I.NAME],I.NEW)
         workflow=(REPO/'.github/workflows/train-stage.yml').read_bytes()
