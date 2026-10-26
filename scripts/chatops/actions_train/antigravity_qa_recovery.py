@@ -2,6 +2,8 @@
 import copy
 import os
 from pathlib import Path
+from types import MappingProxyType
+from typing import NamedTuple
 from core import digest, need, Refused
 
 PARENT_OPERATION='f15cdee06ed9368ada442071a113c29cf1fa1a0428f98e421a224603fcbe3e38'
@@ -405,6 +407,18 @@ INSTALLED_C5_RULES='017441dec5ba197a1065b6ef90efdddb090b286ba48687241a7fbc09dd00
 INSTALLED_C5_COMMENT=6396105635
 
 
+def owner_package_rules_pin(comment_id, controller, current_rules):
+    """Fail-closed generalization of the installed C5 pair, never an any-rules gate.
+
+    New comments may use that exact controller/rules pair. Other controllers
+    retain the caller module's current pin; the historical C5 comment cannot
+    move to another controller. Host file/context checks remain mandatory.
+    """
+    if comment_id == INSTALLED_C5_COMMENT:
+        need(controller == INSTALLED_C5_CONTROLLER, 'installed C5 controller pin is unchanged')
+    return INSTALLED_C5_RULES if controller == INSTALLED_C5_CONTROLLER else current_rules
+
+
 def owner_package(g):
     return type(g) is dict and type(g.get('owner_comment')) is int and g['owner_comment'] > 0 and (
         g['owner_comment'] not in (6362661117,FRESH_OWNER_COMMENT,SUPPLEMENT_OWNER_COMMENT))
@@ -433,13 +447,9 @@ def owner_package_ledger(value):
          and value['previous_supplement_sha256']==OWNER_PACKAGE_OLD_SUPPLEMENT_SHA
          and type(value['body_sha256']) is str and len(value['body_sha256'])==64,
          'Owner package authorization/history drift')
-    if value['owner_comment']==INSTALLED_C5_COMMENT:
-        need(value['controller_sha']==INSTALLED_C5_CONTROLLER
-             and value['rules_sha256']==INSTALLED_C5_RULES,
-             'installed C5 package pin changed')
-    else:
-        need(value['rules_sha256']==RULES_SHA256,
-             'Owner package authorization/history drift')
+    need(value['rules_sha256']==owner_package_rules_pin(
+         value['owner_comment'],value['controller_sha'],RULES_SHA256),
+         'Owner package authorization/history drift')
     rows=value['grants']
     delegated='delegation' in value
     inherited=0
@@ -454,6 +464,7 @@ def owner_package_ledger(value):
                  value['delegation']['comment']['body'].encode()).hexdigest(),
              'delegated finite ledger ceiling/origin drift')
     else:
+        owner_package_source(value['source_base'],value['source_head'])
         need(type(rows) is dict and len(rows)==2 and value['ceiling']==2,
              'only closed two-call packages supported')
     need(type(value['used_calls']) is int,'integer package accounting required')
@@ -464,6 +475,7 @@ def owner_package_ledger(value):
         validate_addressed_grant(g,enrollment=True)
         need(owner_package(g) and g['owner_comment']==value['owner_comment']
              and g['controller_revision']==value['controller_sha']
+             and g['rules_sha256']==value['rules_sha256']
              and (g['base'],g['head'])==(value['source_base'],value['source_head'])
              and digest(g)==key,'package grant/source/controller mismatch')
         need(('delegation' in g)==delegated and (not delegated or g['delegation']==value['delegation']),
@@ -527,6 +539,42 @@ ANALYSIS_INPUT='scripts/chatops/tests/fixtures/agy-230-inert-task-draft.json'
 ANALYSIS_INPUT_SHA256='40c79986904243c77d0e06231f1a82802018b17137242212aec2513e0258bd55'
 
 
+class OwnerPackageSource(NamedTuple):
+    base: str
+    head: str
+    qa_input_revision: str
+    qa_input_path: str
+    qa_input_sha256: str
+
+
+# Closed immutable source/input identities. FRESH_* also authenticate spent
+# historical grants: never retarget those constants to a new admission range.
+SMALL_SOURCE_HEAD='de193c74c11e1fef33d1e3c8405abe5a40081b87'
+OWNER_PACKAGE_SOURCES=MappingProxyType({
+    FRESH_SOURCE_HEAD:OwnerPackageSource(FRESH_SOURCE_BASE,FRESH_SOURCE_HEAD,
+        FRESH_QA_INPUT_REVISION,FRESH_QA_INPUT_PATH,FRESH_QA_INPUT_SHA256),
+    SMALL_SOURCE_HEAD:OwnerPackageSource(
+        'e6af59ea2bc6922ed12585b128d9e14b263e9f20',SMALL_SOURCE_HEAD,
+        '1d6c79990bef8d1e21e55360a8f8ee7e874f1315',
+        'scripts/chatops/tests/fixtures/agy-325-independent-qa-de193c7.json',
+        '6b6d391f35739b5f9dc15fa1a5968bc6be00bfdfcf4b4b5707cc834db693771d'),
+})
+
+
+def owner_package_source(base,head):
+    need(type(base) is str and type(head) is str, 'Owner package source tuple required')
+    source=OWNER_PACKAGE_SOURCES.get(head)
+    need(source is not None and base==source.base, 'Owner package source tuple drift')
+    return source
+
+
+def owner_package_input_pins(source):
+    return {
+        'technical_pm_product_analyst':(source.head,ANALYSIS_INPUT,ANALYSIS_INPUT_SHA256),
+        'independent_qa':(source.qa_input_revision,source.qa_input_path,source.qa_input_sha256),
+    }
+
+
 def addressed(q):
     g=q.get('qualification_grant')
     return type(g) is dict and g.get('schema')==ADDRESSED_SCHEMA
@@ -560,16 +608,16 @@ def validate_addressed_grant(g, *, enrollment=False):
              and g['rules_sha256']==LEGACY_RULES_SHA256,
              'immutable historical grant identity altered')
     elif fresh or supplemental:
-        need(g['rules_sha256']==RULES_SHA256 and
+        need(g['rules_sha256']==owner_package_rules_pin(
+             g['owner_comment'],g['controller_revision'],RULES_SHA256) and
              (g['base'],g['head'])==(FRESH_SOURCE_BASE,FRESH_SOURCE_HEAD),
              'new qualification source/rules identity drift')
     elif dynamic:
-        if g['owner_comment']==INSTALLED_C5_COMMENT:
-            need(g['rules_sha256']==INSTALLED_C5_RULES
-                 and g['controller_revision']==INSTALLED_C5_CONTROLLER,
-                 'installed C5 grant pin changed')
-        else:
-            need(g['rules_sha256']==RULES_SHA256,'new package must bind installed rules')
+        need(g['rules_sha256']==owner_package_rules_pin(
+             g['owner_comment'],g['controller_revision'],RULES_SHA256),
+             'new package must bind installed rules')
+        if not delegated:
+            owner_package_source(g['base'],g['head'])
         if not enrollment:
             # Unprivileged UID978 cannot read root-only ledgers. Validate against
             # the exact root-owned 0644 admission marker; root checks its ledger.
@@ -585,7 +633,8 @@ def validate_addressed_grant(g, *, enrollment=False):
                  'unadmitted package grant or replaced canary')
     else:
         # Preserve existing closed original-owner grant test contract.
-        need(g['rules_sha256']==RULES_SHA256,
+        need(g['rules_sha256']==owner_package_rules_pin(
+             g['owner_comment'],g['controller_revision'],RULES_SHA256),
              'nonhistorical grant must bind current accepted rules')
     need(g['role'] in ('technical_pm_product_analyst','independent_qa')
          and all(type(g[k]) is str and re.fullmatch('[a-f0-9]{40}',g[k])
@@ -605,8 +654,9 @@ def validate_addressed_grant(g, *, enrollment=False):
             r'scripts/chatops/tests/fixtures/agy-[a-z0-9-]+\.json',g['input_path']),
             'exact QA source/test-receipt contract required')
         if fresh or supplemental or (dynamic and not delegated):
+            source=owner_package_source(g['base'],g['head'])
             need((g['input_revision'],g['input_path'],g['input_sha256'])==
-                 (FRESH_QA_INPUT_REVISION,FRESH_QA_INPUT_PATH,FRESH_QA_INPUT_SHA256),
+                 owner_package_input_pins(source)['independent_qa'],
                  'reviewed independent QA fixture changed')
     return g
 

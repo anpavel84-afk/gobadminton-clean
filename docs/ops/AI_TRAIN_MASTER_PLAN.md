@@ -37,6 +37,8 @@ Owner [подтвердил OAuth/catalog](https://github.com/anpavel84-afk/goba
 2. Параллельно довести независимый source/review путь #269 и подготовку rollout #273. При блокировке #269 продолжать доступную подготовку других веток, но не принимать этап 4 без установленного negative test.
 3. После принятого этапа 4 установить #273 и доказать реальное использование контекста ролями. Далее этапы 6, 7 и только затем финальный продуктовый E2E.
 
+**Proportionate testing P1** ([PR #323](https://github.com/anpavel84-afk/gobadminton-clean/pull/323), merge `662f2716519bb30a00eb894f551e74f09bb334d9`): **SOURCE MERGED, NOT INSTALLED**. Офлайн-инструменты `scripts/chatops/testing/` (классификатор T0–T3, TEST PLAN в `acceptance`, runner групп тестов с отказом от повторного идентичного доказательства, проверка заявленного профиля по реальному diff) и политика [PROPORTIONATE_TESTING](PROPORTIONATE_TESTING.md). Независимая QA r7 PASS на `dff84fda18fbeecf7be207adedcc9aec357eeadc` (r1–r6 FAIL, все замечания закрыты), CI 7/7. Не заменяет и не ослабляет 7 Product CI jobs, независимую QA, DEV acceptance и проверки безопасности; селективный CI — P3 и не включён. Установленное enforcement (P1b: stage.py и EOM-капсулы) требует отдельной guarded root-установки после QA PASS + CI PASS + reviewed release + backup/rollback и **не выполнено**. Planner hook требует обновления pin `client.py` отдельным workflow PR и не входит в P1.
+
 **Cross-Model QA 6.1** ([#264](https://github.com/anpavel84-afk/gobadminton-clean/pull/264), [#266](https://github.com/anpavel84-afk/gobadminton-clean/pull/266)) — отдельное непринятое направление; не вводить дополнительные обязательные проверки обычных задач из draft.
 
 ## Сохранённая продуктовая работа, не команда возобновления

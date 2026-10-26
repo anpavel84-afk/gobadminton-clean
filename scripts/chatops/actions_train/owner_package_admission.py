@@ -27,16 +27,12 @@ RECEIPT_PREFIX='antigravity-29-owner-package-admission-'
 HIST=Q.OWNER_PACKAGE_OLD_ADDRESS_SHA
 SUP=Q.OWNER_PACKAGE_OLD_SUPPLEMENT_SHA
 BUDGET='8f6752295c2ee65924b5a95ddc42bb9774f8f73ce146481e52aaf200e142ed8d'
-SOURCE_BASE=Q.FRESH_SOURCE_BASE
-SOURCE_HEAD=Q.FRESH_SOURCE_HEAD
-# Checked-in document pin. Installed controller C5 keeps Q.INSTALLED_C5_RULES
-# (comment 6396105635) until a separate reviewed install. Do not point that
-# admission at this value when the document hash moves.
+SOURCE_HEAD=Q.SMALL_SOURCE_HEAD
+SOURCE_BASE=Q.OWNER_PACKAGE_SOURCES[SOURCE_HEAD].base
+# Checked-in document pin; the installed C5 controller always binds its exact
+# installed rules pair. Source admission changes do not install either artifact.
 RULES='8798ea76874ea5e42f708fff6d74f1ccbf526413c701e9f2349045fdc98be9d5'
-EXPECTED_PINS={
- 'technical_pm_product_analyst':(SOURCE_HEAD,Q.ANALYSIS_INPUT,Q.ANALYSIS_INPUT_SHA256),
- 'independent_qa':(Q.FRESH_QA_INPUT_REVISION,Q.FRESH_QA_INPUT_PATH,Q.FRESH_QA_INPUT_SHA256),
-}
+EXPECTED_PINS=Q.owner_package_input_pins(Q.OWNER_PACKAGE_SOURCES[SOURCE_HEAD])
 
 def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -68,12 +64,8 @@ def owner_comment(comment_id):
     return body,value
 
 def admission_pins(comment_id, controller):
-    """C5's issued comment keeps its installed pins. Other packages use the document pin."""
-    if comment_id == Q.INSTALLED_C5_COMMENT:
-        need(controller == Q.INSTALLED_C5_CONTROLLER,
-             'installed C5 controller pin is unchanged')
-        return Q.INSTALLED_C5_CONTROLLER, Q.INSTALLED_C5_RULES
-    return controller, RULES
+    """Only the exact C5 pair generalizes to new comments; all other pins stay closed."""
+    return controller, Q.owner_package_rules_pin(comment_id,controller,RULES)
 
 
 def installed_rules_ok(controller, installed_sha):
@@ -89,15 +81,19 @@ def installed_rules_ok(controller, installed_sha):
 def authorize(comment_id,controller, *, existing=None):
     body,v=owner_comment(comment_id)
     controller_pin, rules_pin = admission_pins(comment_id, controller)
+    source=Q.owner_package_source(SOURCE_BASE,SOURCE_HEAD)
+    expected_pins=EXPECTED_PINS
     if existing is not None:
         # Re-authenticate the already paid package, not a new document revision.
-        # Fresh enrollment and C5 retain admission_pins()'s document-pin exception.
+        # Use ITS closed source tuple, preserving OLD ledgers after new admission pins move.
         from context_policy import RULES_SHA256
         Q.owner_package_ledger(existing)
         need(existing['owner_comment']==comment_id and existing['controller_sha']==controller
-             and (comment_id==Q.INSTALLED_C5_COMMENT or existing['rules_sha256']==RULES_SHA256),
+             and existing['rules_sha256']==Q.owner_package_rules_pin(comment_id,controller,RULES_SHA256),
              'existing QA package must bind installed controller/context rules')
         controller_pin,rules_pin=existing['controller_sha'],existing['rules_sha256']
+        source=Q.owner_package_source(existing['source_base'],existing['source_head'])
+        expected_pins=Q.owner_package_input_pins(source)
     need(type(v) is dict and set(v)=={
          'schema','issue','repo_id','controller_sha','rules_sha256','source_base',
          'source_head','model','calls','max_calls','owner_comment'},
@@ -105,7 +101,7 @@ def authorize(comment_id,controller, *, existing=None):
     need(v['schema']==Q.OWNER_PACKAGE_SCHEMA and v['issue']==29 and
          v['repo_id']==REPO_ID and v['owner_comment']==comment_id and
          v['controller_sha']==controller_pin and v['rules_sha256']==rules_pin and
-         (v['source_base'],v['source_head'])==(SOURCE_BASE,SOURCE_HEAD) and
+         (v['source_base'],v['source_head'])==(source.base,source.head) and
          v['model']==N.MODEL and v['max_calls']==2,
          'Owner exact controller/source/rules/call budget drift')
     need(type(v['calls']) is list and len(v['calls'])==2,'Owner authorizes exactly two one-use roles')
@@ -117,12 +113,12 @@ def authorize(comment_id,controller, *, existing=None):
         role=row['role']
         need(type(row) is dict and set(row)=={'role','input_revision','input_path','input_sha256'},
              'unexpected role authorization')
-        need((row['input_revision'],row['input_path'],row['input_sha256'])==EXPECTED_PINS[role],
+        need((row['input_revision'],row['input_path'],row['input_sha256'])==expected_pins[role],
              'source/QA immutable fixtures drift')
         grant=dict(schema=Q.ADDRESSED_SCHEMA,lineage=Q.ADDRESSED_LINEAGE,
           owner_comment=comment_id,role=role,controller_revision=controller_pin,
           cli_sha256=N.AGY_SHA256,rules_sha256=rules_pin,
-          base=SOURCE_BASE,head=SOURCE_HEAD,input_revision=row['input_revision'],
+          base=source.base,head=source.head,input_revision=row['input_revision'],
           input_path=row['input_path'],input_sha256=row['input_sha256'],
           timeout=1800,max_output_bytes=N.MAX_OUT,
           permission_mode=N.PERMISSION_MODE,input_transport='stream-json',ceiling=1)
@@ -132,7 +128,7 @@ def authorize(comment_id,controller, *, existing=None):
         grants[digest(grant)]=dict(grant=grant,operation=None)
     ledger=dict(schema=Q.OWNER_PACKAGE_SCHEMA,owner_comment=comment_id,
          owner_id=OWNER_ID,issue=29,controller_sha=controller_pin,rules_sha256=rules_pin,
-         source_base=SOURCE_BASE,source_head=SOURCE_HEAD,
+         source_base=source.base,source_head=source.head,
          body_sha256=hashlib.sha256(body.encode()).hexdigest(),
          ceiling=2,used_calls=0,grants=grants,
          previous_addressed_sha256=HIST,previous_supplement_sha256=SUP)
@@ -146,7 +142,8 @@ def quiescent(controller):
     R.units_quiet(R.UNITS)
     for slot,uid in (('slot1',1002),('slot2',978)):
         j=R.journal(slot);st,_=R.checkpoint(slot)
-        need(j['pending'] is None and st['active'] is None,'slot occupied')
+        need(j['pending'] is None and (st['active'] is None or
+             (isinstance(st['active'],dict) and st['active'].get('phase')=='done')),'slot occupied')
         R.no_models(uid,slot)
         R.free_lock(R.AUTONOMY/'slots'/slot/'worker.lock')
         R.free_lock(R.AUTONOMY/'locks'/(slot+'.lease'))
@@ -283,7 +280,7 @@ def acceptance_plan(comment_id, controller, slot, marker, package, qa_receipt):
     from context_policy import RULES_SHA256
     Q.owner_package_ledger(package)
     need(package['owner_comment']==comment_id and package['controller_sha']==controller
-         and package['rules_sha256']==RULES_SHA256
+         and package['rules_sha256']==Q.owner_package_rules_pin(comment_id,controller,RULES_SHA256)
          and package['used_calls']==package['ceiling']==2
          and 'delegation' not in package, 'accept requires this fully spent Owner two-call package')
     roles={row['grant']['role']:row for row in package['grants'].values()}
@@ -364,7 +361,9 @@ def acceptance_plan(comment_id, controller, slot, marker, package, qa_receipt):
 def package_rules_ok(package):
     """Installed rules bytes and loaded context must agree with the paid grant."""
     import context_policy as context
-    need(context.RULES_SHA256==package['rules_sha256']
+    need(package['rules_sha256']==Q.owner_package_rules_pin(
+         package['owner_comment'],package['controller_sha'],context.RULES_SHA256)
+         and context.RULES_SHA256==package['rules_sha256']
          and sha(Path(context.__file__).with_name('accepted-engineering-rules.md'))==package['rules_sha256'],
          'package installed rules/context pin drift')
     if package['rules_sha256']==Q.INSTALLED_C5_RULES:
