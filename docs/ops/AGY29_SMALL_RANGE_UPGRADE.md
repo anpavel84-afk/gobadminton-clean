@@ -170,13 +170,15 @@ before any restore writes, restores exact backups and metadata, and records
 Failure reporting differs by path. Only `apply`'s automatic recovery records
 phase `rollback_failed` when its own restore fails. An explicit `rollback`
 that fails (for example a write error part-way) or refuses because protected
-state drifted raises the error and does **not** update the receipt: the phase
-stays `active`, and a part-way write failure can leave a mix of each target's
-old and new bytes plus the edited inventory. Drift is refused before any write.
-Retain the evidence and run `verify` and a fresh `dry` to read the exact
-state; because rollback accepts only each target's old/new bytes, it may be
-re-run after the cause is fixed, but do not retry blindly and never hand-edit
-the receipt, targets or inventory.
+state drifted raises the error and does **not** rewrite the receipt: the
+existing phase (`active`, or an earlier incomplete phase such as `backed_up`)
+and the backups are preserved. A part-way write failure can leave a mix of
+each target's old and new bytes plus the edited inventory. Drift is refused
+before any write. `dry` is not a diagnostic here: it refuses while a receipt
+or backup directory is retained. `verify` is read-only and reports
+installed-byte drift. Stop, retain the receipt, backups and the error output,
+and do not retry blindly or hand-edit the receipt, targets or inventory; the
+exact recovery needs a separately reviewed reconciliation step.
 
 ## Earlier installers and unwind limitation
 
