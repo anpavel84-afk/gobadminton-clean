@@ -165,7 +165,7 @@ def measure(root=None):
                 scoped_package_sha256=hashlib.sha256(scoped_package).hexdigest(),
                 scoped_size_probe='synthetic_reference_equality_not_a_recipient',
                 scoped_selected_for_delivery=False,
-                delivery_status=('IMPLEMENTED_OFFLINE_VERIFIED_NOT_INSTALLED' if provider == 'cursor' and operational == 'author'
+                delivery_status=('IMPLEMENTED_OFFLINE_VERIFIED_DORMANT_NOT_RUNTIME_VERIFIED' if provider == 'cursor' and operational == 'author'
                                  else 'NOT_QUALIFIED_UNTIL_312' if provider == 'agy' and operational == 'author'
                                  else 'OFFLINE_VERIFIED_ONLY'),
             ))
@@ -235,7 +235,9 @@ def measure(root=None):
         tokens=tokens,
         not_measured=['latency', 'cost', 'cache_hit', 'missed_findings', 'provider_usage',
                       'actual_recipient_rules_read', 'role_canary'],
-        scoped_delivery='CURSOR_AUTHOR_IMPLEMENTED_OFFLINE_ONLY_AGY_NOT_ENABLED',
+        scoped_delivery='CURSOR_AUTHOR_IMPLEMENTED_DORMANT_AGY_NOT_ENABLED',
+        cursor_author_enabled=False,
+        cursor_author_fallback_reason='RECIPIENT_RULES_NOT_READONLY',
         byte_delta_is_not_cost_or_latency=True,
     )
 

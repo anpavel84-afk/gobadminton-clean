@@ -309,7 +309,9 @@ class OfflineComparison(unittest.TestCase):
         self.assertEqual(fresh['tokens']['input_tokens'], 'not_exposed')
         self.assertEqual(fresh['tokens']['tokenizer'], 'not_exposed')
         self.assertEqual(fresh['tokens']['bytes_div_4'], 'not_used')
-        self.assertEqual(fresh['scoped_delivery'], 'CURSOR_AUTHOR_IMPLEMENTED_OFFLINE_ONLY_AGY_NOT_ENABLED')
+        self.assertEqual(fresh['scoped_delivery'], 'CURSOR_AUTHOR_IMPLEMENTED_DORMANT_AGY_NOT_ENABLED')
+        self.assertFalse(fresh['cursor_author_enabled'])
+        self.assertEqual(fresh['cursor_author_fallback_reason'], 'RECIPIENT_RULES_NOT_READONLY')
         self.assertEqual(fresh['providers_byte_identical'], 'VERIFIED')
         accepted_index = json.loads((ROOT/'docs/rules/CONTEXT_SOURCES.json').read_text())['accepted_operating_model']
         self.assertEqual(fresh['rules']['bytes'], accepted_index['bytes'])

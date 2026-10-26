@@ -33,6 +33,57 @@ def user(text):
     return {'type': 'user', 'message': {'role': 'user', 'content': [{'type': 'text', 'text': text}]}}
 
 
+def readonly_builder(base, command):
+    # Test-only guard variant: same rw work mount, then the future ro canon mount.
+    work = str(base/'work')
+    canon = str(base/'work'/C.CANONICAL_GIT_RULES_PATH)
+    return ['synthetic-bwrap', '--bind', work, work, '--ro-bind', canon, canon,
+            '--chdir', work, '--', *command]
+
+
+def verified_material(exp):
+    return dict(readonly_enforced=True, export_verified_before_stdin=True,
+                rules_sha256=exp['rules_sha256'], rules_size=exp['rules_size'],
+                export_sha256=exp['export_sha256'])
+
+
+class ReadonlyCapability(unittest.TestCase):
+    def test_real_builder_is_writable_and_full_is_exact_legacy(self):
+        argv = D._synthetic_namespace_argv()
+        self.assertIn('--bind', argv)  # real builder completed, no host metadata read
+        self.assertFalse(D.recipient_rules_readonly())
+        with patch.object(D, 'export_view', return_value={C.CANONICAL_GIT_RULES_PATH: C.RULES_SHA256}), \
+             patch.object(D, 'verified_cursor_workspace_rules', return_value=True):
+            work = ROOT
+            payload, receipt, exp = D.cursor_author_context('task', SimpleNamespace(work=work), accepted())
+        self.assertEqual(payload.encode(), C.inject('task', False, work, accepted(), role='author')[0].encode())
+        self.assertEqual(exp['profile'], 'full')
+        self.assertEqual(receipt['context_metrics']['requested_profile'], 'scoped_v1')
+        self.assertEqual(receipt['context_metrics']['effective_profile'], 'full')
+        self.assertEqual(receipt['context_metrics']['fallback_reason'], 'RECIPIENT_RULES_NOT_READONLY')
+        popen = Mock(); self.assertIs(D.recipient_popen(popen, exp), popen)
+
+    def test_simulated_ro_builder_and_all_exceptions(self):
+        with patch.object(N, 'cursor_namespace_argv', readonly_builder):
+            self.assertTrue(D.recipient_rules_readonly())
+        with patch.object(D, '_synthetic_namespace_argv', side_effect=RuntimeError('fixture')):
+            self.assertFalse(D.recipient_rules_readonly())
+
+    def test_mount_order_source_and_later_overrides_fail_closed(self):
+        work = Path('/synthetic/work')
+        argv = readonly_builder(work.parent, ['node'])
+        self.assertTrue(D._readonly_argv(argv, work))
+        head, tail = argv[:-5], argv[-5:]
+        canon = str(work/C.CANONICAL_GIT_RULES_PATH)
+        for extra in (['--bind', str(work), str(work)], ['--bind', canon, canon],
+                      ['--tmpfs', str(work/'docs')], ['--unknown']):
+            try: result = D._readonly_argv(head+extra+tail, work)
+            except core.Refused: result = False
+            self.assertFalse(result)
+        wrong = argv.copy(); wrong[5] = '/different/rules'
+        self.assertFalse(D._readonly_argv(wrong, work))
+
+
 class ExportAccess(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='cursor-context-')
@@ -47,6 +98,8 @@ class ExportAccess(unittest.TestCase):
         process_patch = patch.object(D.subprocess, 'run', side_effect=ls)
         self.proc = process_patch.start()
         self.addCleanup(process_patch.stop)
+        guard = patch.object(N, 'cursor_namespace_argv', readonly_builder)
+        guard.start(); self.addCleanup(guard.stop)
 
     def probe(self, ref=None):
         return D.verified_cursor_workspace_rules(self.root, reference() if ref is None else ref)
@@ -187,9 +240,11 @@ class ContextProof(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='cursor-proof-'); self.addCleanup(self.temp.cleanup)
         self.job = Path(self.temp.name)
-        with patch.object(D, 'export_view', return_value={C.CANONICAL_GIT_RULES_PATH: C.RULES_SHA256}), \
+        with patch.object(N, 'cursor_namespace_argv', readonly_builder), \
+             patch.object(D, 'export_view', return_value={C.CANONICAL_GIT_RULES_PATH: C.RULES_SHA256}), \
              patch.object(D, 'verified_cursor_workspace_rules', return_value=True):
             self.payload, self.receipt, self.exp = D.cursor_author_context('задание', SimpleNamespace(work=self.job), accepted())
+        self.exp['recipient_materialization'].update(verified_material(self.exp))
         self.raw = stream(INIT, user(self.payload), ASSIST, RESULT)
         self.path = self.job/'stream.jsonl'; self.path.write_bytes(self.raw)
         self.native = dict(transcript_sha256=sha(self.raw), source_export_sha256=self.exp['export_sha256'],
@@ -235,6 +290,14 @@ class ContextProof(unittest.TestCase):
         for field in ('stdin_sha256', 'prefix_sha256', 'capsule_sha256'):
             self.assertEqual(D.verify_role_received(self.job, self.exp | {field: '0'*64})['status'], 'MISMATCH')
 
+    def test_verified_requires_both_recipient_materialization_checks(self):
+        for check in ('readonly_enforced', 'export_verified_before_stdin'):
+            self.exp['recipient_materialization'].update(verified_material(self.exp))
+            self.exp['recipient_materialization'][check] = False
+            proof = self.proof()
+            self.assertTrue(proof['checks']['rules_net_unchanged'])
+            self.assertEqual(proof['status'], 'NOT_PROVEN')
+
     def test_gate_checks_before_delegate_only_once_and_rejects_rules_on_any_call(self):
         outbox = self.job/'cursor-author-receipt.json'
         running = dict(phase='running', job=str(self.job), rules_context=self.receipt,
@@ -260,12 +323,15 @@ class ContextProof(unittest.TestCase):
 
 class PreImportProof(unittest.TestCase):
     setUp = cursor_tests.SourceImport.setUp
-    call = cursor_tests.SourceImport.call
+    def call(self, *args, **kwargs):
+        return cursor_tests.SourceImport.call(self, *args, **kwargs,
+            popen_wrapper=D.recipient_popen, namespace=readonly_builder)
 
     def delivery(self):
-        path = self.source/C.CANONICAL_GIT_RULES_PATH; path.parent.mkdir(parents=True); path.write_text(TEXT)
+        path = self.source/C.CANONICAL_GIT_RULES_PATH; path.parent.mkdir(parents=True, exist_ok=True); path.write_text(TEXT)
         subprocess.run(['git', '-C', str(self.source), 'add', '--', C.CANONICAL_GIT_RULES_PATH], env=self.env, check=True)
-        return D.cursor_author_context('точное задание', self.bridge, accepted())
+        with patch.object(N, 'cursor_namespace_argv', readonly_builder):
+            return D.cursor_author_context('точное задание', self.bridge, accepted())
 
     def test_verified_context_imports_and_post_proof_matches_native_transcript(self):
         delivery = self.delivery(); self.call(delivery=delivery)
@@ -273,6 +339,79 @@ class PreImportProof(unittest.TestCase):
         self.assertEqual(receipt['phase'], 'imported')
         self.assertEqual((self.source/'allowed.txt').read_text(), 'after\n')
         self.assertEqual(D.verify_role_received(receipt['job'], delivery[2], receipt)['status'], 'VERIFIED')
+
+    def test_recipient_nonregular_linked_or_oversized_canon_refuses_before_spawn(self):
+        delivery = self.delivery()
+        prompt, receipt, exp = delivery
+        work = self.base/'recipient'/'work'
+        work.mkdir(parents=True)
+        N.export(self.bridge, work)
+        path = work/C.CANONICAL_GIT_RULES_PATH
+        raw = path.read_bytes()
+        for kind in ('symlink', 'hardlink', 'directory', 'oversized'):
+            with self.subTest(kind=kind):
+                path.unlink()
+                target = work/'target'
+                if kind == 'symlink':
+                    target.write_bytes(raw); path.symlink_to(target)
+                if kind == 'hardlink':
+                    target.write_bytes(raw); path.hardlink_to(target)
+                if kind == 'directory': path.mkdir()
+                if kind == 'oversized': path.write_bytes(b'x'*(N.MAX_FILE+1))
+                popen = Mock()
+                with self.assertRaises(core.Refused):
+                    D.recipient_popen(popen, exp)(readonly_builder(work.parent, ['node']), cwd=work)
+                popen.assert_not_called()
+                self.assertFalse(exp['recipient_materialization']['export_verified_before_stdin'])
+                if path.is_dir(): path.rmdir()
+                else: path.unlink()
+                if target.exists(): target.unlink()
+                path.write_bytes(raw)
+
+    def test_probe_to_export_rules_and_other_file_drift_refuse_before_spawn(self):
+        for name in (C.CANONICAL_GIT_RULES_PATH, 'other.txt'):
+            with self.subTest(name=name):
+                delivery = self.delivery()
+                path = self.source/name
+                original = path.read_bytes()
+                path.write_bytes(original+b'changed after probe')
+                with self.assertRaisesRegex(core.Refused, 'before stdin'):
+                    self.call(delivery=delivery)
+                self.assertFalse(self.spawned)
+                self.assertFalse(self.stdin_sent)
+                self.assertEqual((self.source/'allowed.txt').read_text(), 'before\n')
+                self.assertEqual(self.last_choice['native_receipt']['phase'], 'failed_no_automatic_replay')
+                path.write_bytes(original)
+
+    def test_transient_modify_read_restore_net_clean_is_not_immutability(self):
+        delivery = self.delivery()
+        observed = []
+        def transient(work):
+            path = work/C.CANONICAL_GIT_RULES_PATH
+            raw = path.read_bytes()
+            path.write_bytes(b'mutable canon during model call')
+            observed.append(path.read_bytes())
+            path.write_bytes(raw)
+        # Legacy writable guard simulation: no pre-spawn wrapper/import gate.
+        # Provider can modify/read/restore; transcript and net diff alone pass.
+        prompt, receipt, exp = delivery
+        cursor_tests.SourceImport.call(self, during_call=transient)
+        native = self.last_choice['native_receipt']
+        (Path(native['job'])/'stream.jsonl').write_bytes(stream(INIT, user(prompt), ASSIST, RESULT))
+        native['transcript_sha256'] = sha((Path(native['job'])/'stream.jsonl').read_bytes())
+        exp['recipient_materialization'].update(verified_material(exp), readonly_enforced=False)
+        proof = D.verify_role_received(native['job'], exp, native)
+        self.assertEqual(observed, [b'mutable canon during model call'])
+        self.assertTrue(proof['checks']['rules_net_unchanged'])
+        self.assertEqual(proof['status'], 'NOT_PROVEN')
+        # For scoped delivery a writable actual argv is refused before any call,
+        # even if a prior synthetic capability/expectation said read-only.
+        popen = Mock()
+        work = Path(native['job'])/'work'
+        argv = ['bwrap', '--bind', str(work), str(work), '--chdir', str(work), '--', 'node']
+        with self.assertRaises(core.Refused): D.recipient_popen(popen, exp)(argv, cwd=work)
+        popen.assert_not_called()
+        self.assertFalse(exp['recipient_materialization']['readonly_enforced'])
 
     def test_wrong_context_refuses_before_import_and_preserves_source(self):
         delivery = self.delivery()
@@ -290,7 +429,7 @@ class PreImportProof(unittest.TestCase):
 
 class CursorStage(unittest.TestCase):
     def exercise(self, *, probe=True, recover=False, retry=False, qa=False, name='author',
-                 operational_role='author', missing_stream=False):
+                 operational_role='author', missing_stream=False, readonly=True):
         with tempfile.TemporaryDirectory(prefix='cursor-stage-') as temp:
             root = Path(temp); captured = {}
             store = SimpleNamespace(data={'active': {'task': {}, 'head': 'a'*40, 'base': 'b'*40, 'attempt': 1, 'issue': 313}})
@@ -307,7 +446,14 @@ class CursorStage(unittest.TestCase):
                 read_json=lambda *a, **k: {'mode': 'active', 'owned': {'slot1': 'x'}})
             choice = dict(provider='cursor', effective_model='Auto', effort=None, role=operational_role)
             def invoke(bridge, rt, prompt, token, chosen, **kwargs):
-                captured.update(prompt=prompt, gated=kwargs['permitted'] is not real_permitted)
+                captured.update(prompt=prompt, gated=kwargs['permitted'] is not real_permitted,
+                                popen_wrapped=getattr(kwargs['popen'], '__self__', None) is not a.subprocess)
+                if captured['popen_wrapped']:
+                    # Invoke stand-in models the successful pre-spawn verification.
+                    material = chosen['rules_context']['recipient_materialization']
+                    material.update(readonly_enforced=True, export_verified_before_stdin=True,
+                        rules_sha256=C.RULES_SHA256, rules_size=C.RULES_SIZE,
+                        export_sha256=core.digest({C.CANONICAL_GIT_RULES_PATH: C.RULES_SHA256}))
                 raw = stream(INIT, user(prompt), ASSIST, RESULT)
                 if not missing_stream: (root/'stream.jsonl').write_bytes(raw)
                 chosen['native_receipt'] = dict(job=str(root), rules_context=copy.deepcopy(chosen['rules_context']),
@@ -319,6 +465,7 @@ class CursorStage(unittest.TestCase):
                  patch.object(C, 'load', return_value=accepted()), patch.object(stage, 'route', return_value=choice), \
                  patch.object(D, 'export_view', return_value={C.CANONICAL_GIT_RULES_PATH: C.RULES_SHA256}), \
                  patch.object(D, 'verified_cursor_workspace_rules', return_value=probe) as access, \
+                 patch.object(D, 'recipient_rules_readonly', return_value=readonly), \
                  patch.object(C, 'verified_git_rules', side_effect=AssertionError('Cursor has no git')) as git_probe, \
                  patch('native_cursor.invoke', side_effect=invoke), patch('receiver.units_quiet'):
                 request = req(name, 'pr_wait')
@@ -332,6 +479,7 @@ class CursorStage(unittest.TestCase):
             if receipt['context_metrics']['policy_profile'] == 'full':
                 self.assertEqual(captured['prompt'], C.inject('bounded immutable task', False, root, accepted(), role='author')[0])
                 self.assertFalse(captured['gated'])
+                self.assertFalse(captured['popen_wrapped'])
             self.assertEqual(bridge.routing_receipts[0]['usage']['tokens'], {'inputTokens': 42})
             return captured, receipt
 
@@ -341,7 +489,7 @@ class CursorStage(unittest.TestCase):
         self.assertEqual(receipt['context_proof']['status'], 'VERIFIED')
 
     def test_unverified_recovery_retry_non_author_and_unknown_role_deliver_full(self):
-        for kwargs in ({'probe': False}, {'recover': True}, {'retry': True}, {'name': 'qa'}, {'operational_role': 'unknown'}):
+        for kwargs in ({'readonly': False}, {'probe': False}, {'recover': True}, {'retry': True}, {'name': 'qa'}, {'operational_role': 'unknown'}):
             with self.subTest(kwargs=kwargs):
                 _, receipt = self.exercise(**kwargs)
                 self.assertEqual(receipt['context_metrics']['policy_profile'], 'full')

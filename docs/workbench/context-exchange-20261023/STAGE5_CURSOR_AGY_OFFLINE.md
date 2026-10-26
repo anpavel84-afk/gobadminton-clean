@@ -1,50 +1,53 @@
-# Stage 5 — Cursor author scoped_v1 и offline сравнение с Antigravity
+# Stage 5 Cursor / AGY — repair round 1, source + offline evidence
 
-**WORKING DRAFT — NOT APPROVED — NOT CANONICAL.**
+**WORKING DRAFT — NOT APPROVED — NOT CANONICAL.** Cursor scoped delivery: **IMPLEMENTED / OFFLINE_VERIFIED, DORMANT, ENABLED=false in practice, NOT RUNTIME_VERIFIED**. The marker-pinned guard still mounts the entire work tree read-write. Actual Cursor delivery therefore uses the exact legacy full inline fallback with `RECIPIENT_RULES_NOT_READONLY`, even when the workspace canon matches the accepted pin. This is author verification, not independent QA or runtime admission. AGY scoped stays disabled (`SCOPED_QUALIFIED=False`); AGY author remains NOT_QUALIFIED until #312. Codex scoped_v1 and AGY delivery are unchanged.
 
-Cursor author: **IMPLEMENTED + OFFLINE_VERIFIED**, **NOT RUNTIME_VERIFIED**, не установлен. AGY: **OFFLINE_VERIFIED only** для сравнения байтов и full fallback; scoped delivery не включён, `SCOPED_QUALIFIED=False`. AGY author — **NOT_QUALIFIED until #312**; этот отчёт не квалифицирует его scoped delivery. Это авторская самопроверка, не independent QA, не admission и не разрешение установки.
+## Preflight and scope
 
-## Preflight
-
-| Поле | Значение |
+| Field | Exact input / boundary |
 |---|---|
-| Repo / роль | `anpavel84-afk/gobadminton-clean`; independent-session AUTHOR source + offline tests, не mutating PMA |
-| Checkout / source | `cursor/stage5-cursor-scoped-20261025`, `00197e5feb15e048cd55416d57ca69924fab4af2` |
-| Dev base | `bdd912a82a2f0087f4cfc9c6820edc8c49ee6527`; source включает offline-материалы draft PR #298 |
-| Accepted rules | EOM 1.4: commit `13a8b6c54a45aaa57021e092a1bee54926d9eac4`, SHA-256 `8798ea76874ea5e42f708fff6d74f1ccbf526413c701e9f2349045fdc98be9d5`, 115079 байт UTF-8. Сверены файл, CONTEXT_SOURCES и immutable Git blob |
-| Assignment / admission | Прямое ограниченное поручение Stage 5 Cursor Auto author scoped_v1; machine admission/runtime call не создавался |
-| Allowed paths / effects | Только `actions_train/{stage.py,context_cursor_delivery.py,context_native_delivery.py,manifest.json}`, `scripts/chatops/tests/*`, этот workbench. Только рабочие файлы и локальные Python-проверки |
-| Writer ownership | Одна текущая авторская сессия в этом scope; чужую работу не удалять. Git metadata рабочего checkout, commit/push, сеть, secrets и OPS не затрагиваются |
-| Requested / effective route | Source-only AUTHOR + offline tests / эта отдельная авторская сессия; вызовы Cursor/AGY/Codex CLI отсутствуют. Целевой runtime route остаётся Cursor Auto author |
-| Candidate | Незакоммиченный diff поверх source SHA; exact candidate commit создаст другая сессия после передачи |
+| Repository / role | `anpavel84-afk/gobadminton-clean`; AUTHOR repair round 1, sole writer in this assigned scope, not mutating PMA |
+| Source / PR | #316 head `f06999ebd686c50c83f5ae053674e9aea03cd459`; base dev `bdd912a82a2f0087f4cfc9c6820edc8c49ee6527` |
+| Accepted rules | EOM 1.4 commit `13a8b6c54a45aaa57021e092a1bee54926d9eac4`, SHA-256 `8798ea76874ea5e42f708fff6d74f1ccbf526413c701e9f2349045fdc98be9d5`, 115079 UTF-8 bytes; §10.3 requires read-only actual-recipient materialization |
+| Assignment / admission | Direct bounded source/offline repair of the supplied independent QA FAIL; no runtime admission created |
+| Writable scope | Only the 11 paths already changed by this PR (including manifest); no additional files, architecture, permissions, budgets, installation or protected-state effects |
+| Frozen inputs | `native_cursor.py`, `native_guard.py`, native AGY, Codex scoped_v1, context policy/compiler and the two out-of-scope entrypoint/release test fixtures |
+| Requested / effective | Cursor author `scoped_v1` / `full` with the real pinned guard; provider calls = 0 in this author session |
+| Candidate | Uncommitted repair diff on the exact source head; commit/push/network unavailable and not attempted |
 
-`native_cursor.py` и `native_guard.py` сохранены побайтно. Проверка использует pins из поручения, а не чтение protected READY marker. `context_policy.py`, `context_exchange.py`, native AGY, core, budgets и OPS не менялись. Codex scoped-ветвь и AGY-ветвь в stage не редактировались. `context_native_delivery.py` сохранён как прежний always-full offline gate.
+## QA finding and repaired boundary
 
-## Доставка Cursor
+Independent QA of `f06999e` reported FAIL, one P2 and no P1: the mutable bridge probe preceded actual export and stdin; the late gate stopped import but could not prevent an under-contextualized call. Whole-work write permission also allowed modify/read/restore of canon bytes while leaving a clean net diff. This report records the supplied finding; it does not assert new independent QA.
 
-`context_cursor_delivery.export_view()` читает tracked names и использует `native_cursor.source_name`, `_source`, MAX_FILE/MAX_TREE и прежний лимит 10000 файлов. Probe ничего не пишет. Для полного канона необходимы regular single-link readable file, отсутствие symlink в пути, tracked/exported status, exact hash и size. Reference сравнивается с `context_policy.RULES_*` работающего модуля при каждом вызове, без hard-coded pin.
+`recipient_rules_readonly()` runs the **same namespace builder bytecode referenced by native_cursor.invoke**, with private synthetic filesystem/UID/helper metadata in a copied globals dictionary. It does not read `/tmp`, installed binaries, credentials or markers, execute bwrap, patch the real builder globals, or change runtime qualification. It inspects constructed argv, not a source-text guess. The real pinned builder completes construction but lacks a read-only canon mount, so the capability is False. Any exception or unknown mount option fails closed. Synthetic metadata proves argv construction only, not installed identity/helper readiness.
 
-Только обычный author stage с подтверждённым export получает common+author из `compile_capsule` той же принятой редакции. Guidance указывает workspace-файл `docs/rules/ENGINEERING_OPERATING_MODEL.md`, exact commit/hash/bytes и read tool для спорного или недостаточного capsule. Сокращённых пересказов или truncation нет. При ошибке, несовпадении pin, неизвестной роли, recovery или budget retry payload равен прежнему full `inject` побайтно. Cursor QA остаётся запрещён.
+The ordered mount check requires the rw self-bind of `<base>/work`, followed by a self `--ro-bind` / `--ro-bind-try` of `work/docs/rules/ENGINEERING_OPERATING_MODEL.md` or an enclosing path, with no later overlapping writable/replacement mount. A different source path, earlier ro mount hidden by rw work, unknown option or changed chdir is insufficient. The tracked, readable, single-link, regular, size/hash-exact workspace probe remains necessary as well.
 
-Перед первым разрешением changed path wrapper проверяет единственный user-event в stream.jsonl: UTF-8 stdin hash, prefix, verbatim capsule, markers и FULL_RULES_REFERENCE. Export hash сверяется с running outbox receipt; скопированный туда stdin hash проверяется дополнительно и не считается независимым измерением. Несовпадение **или отсутствие доказательства** до импорта вызывает Refused и `failed_no_automatic_replay`; исходники не импортируются. Попытка изменить сам canonical rules path отклоняется при любом callback.
+Only for a scoped expectation does stage wrap the injected Popen callback. After native export, **before delegating to real Popen**, it reads the actual `--chdir` work dir, requires matching cwd and actual read-only mount argv, computes the full exported manifest using native `source_name` exclusions and MAX_FILE/MAX_TREE/10000-file limits, and compares canon size/hash and manifest hash with the trusted expectation. Reads traverse file descriptors with O_NOFOLLOW and bounded regular/single-link/owner checks. Refusal raises core.Refused: no process spawned, no stdin sent, no source imported. Native accounting charges before this callback; a refused charged invocation remains failed_no_automatic_replay and is not silently replayed or refunded.
 
-После invoke proof дополнительно сверяет native transcript SHA-256, source export и changed_paths. Недоступный stream после уже завершённого validated import записывается как NOT_PROVEN, без повторного model call и без падения уже завершённого импорта. Proof содержит hashes/booleans, без prompt и credentials. VERIFIED доказывает доставку текста, не понимание модели и не independent QA.
+The receipt's `recipient_materialization` starts with `readonly_enforced=false`, `export_verified_before_stdin=false` and empty observed hashes. It separately records the synthetic `readonly_capability`. Successful pre-spawn verification updates the shared trusted expectation/receipt with actual enforcement, export verification, rules SHA/size and export SHA. The proof checks both required booleans and the observed hashes. Missing materialization evidence yields NOT_PROVEN even if transcript and net diff match. The post-call check is now named **rules_net_unchanged**: it proves only the final net diff, never temporal immutability. VERIFIED still does not prove comprehension or independent QA.
 
-## Installed pin и dev pin
+The existing stream/prefix/capsule/reference check before import and post-call transcript/export checks remain. Canon changes are refused on every permitted callback. A successful simulated read-only guard path is covered offline; no kernel-level read-only claim is made from fake Popen tests.
 
-По фактам поручения установленный pin: 113203 байта, commit `bc8bad0c38a861f8e72296d0a323e2941b9322e0`, SHA-256 `017441dec5ba197a1065b6ef90efdddb090b286ba48687241a7fbc09dd002269`. Source dev pin: 115079 байт, commit/hash выше. Этот этап не читает protected installation и не меняет pin.
+## Fallback matrix
 
-Даже после установки нового delivery-модуля scoped Cursor останется на **точном full fallback**, пока RULES_* установленного context_policy не совпадут с canonical rules file экспортируемого repo. Pin bump и accepted artifact принадлежат другому executor и проходят отдельную проверку/установку. В JSON `running_module_pin` означает атрибуты импортированного source-модуля, а не наблюдение установленного runtime. Тесты проверяют настоящий dev canon, synthetic variant с другими patched RULES_* и matching accepted tuple, а также wrong-pin export.
+| Condition | Effective profile / stable reason |
+|---|---|
+| Real current guard, readable exact canon | full / `RECIPIENT_RULES_NOT_READONLY` |
+| Read-only capability False, exception or unknown namespace option | full / `RECIPIENT_RULES_NOT_READONLY` |
+| Simulated reviewed ro bind + exact readable tracked canon | scoped_v1, pending actual-export pre-spawn verification |
+| Capability proven, but wrong pin / missing / unreadable / linked / untracked canon | full / `RECIPIENT_RULES_ACCESS_UNVERIFIED` (or preflight error when export itself fails) |
+| Role/preflight/scoped compilation error | full / `CURSOR_SCOPED_PREFLIGHT_ERROR` |
+| Recovery, budget retry or non-author stage | unchanged legacy full path; no scoped Popen wrapper |
+| Actual export drifts or actual argv loses ro enforcement after selection | Refused before Popen/stdin, failed_no_automatic_replay; no import |
 
-## Детерминированное сравнение
+Full fallback stdin is byte-identical to legacy `context_policy.inject`; full canon is never truncated. Installed pin mismatch is an additional fallback condition. Owner-provided installed pin facts (not inspected here): 113203 bytes, commit `bc8bad0c38a861f8e72296d0a323e2941b9322e0`, SHA-256 `017441dec5ba197a1065b6ef90efdddb090b286ba48687241a7fbc09dd002269`. Source pin is the accepted 115079-byte canon above. No pin or marker changed.
 
-Команда: `python3 -B docs/workbench/context-exchange-20261023/stage5_offline_compare.py`.
+## Deterministic offline comparison
 
-Скрипт использует RULES_* и CONTEXT_SOURCES, проверяет immutable accepted Git blob и сохраняет `STAGE5_CURSOR_AGY_COMPARE.json`. Fresh run должен совпадать с committed JSON. Provider calls = 0; installation/live mutations = 0.
+`python3 -B docs/workbench/context-exchange-20261023/stage5_offline_compare.py` regenerates `STAGE5_CURSOR_AGY_COMPARE.json`. A fresh measurement must equal the committed JSON. Status now explicitly says Cursor author is dormant; `cursor_author_enabled=false`, fallback `RECIPIENT_RULES_NOT_READONLY`. Package byte measurements and hashes are unchanged by the repair.
 
-Сохранённые синтетические входы — `offline_replay.saved_stage_inputs()`: task, failure/findings, 24 КБ excerpt и три prior receipts. DATA после diagnosis_view: **26345** байт, SHA-256 `dffbca8a4f86816f101a26e0f3bf3feeac0e8ab01d5febb3a6d017aaf72415d4`; inputs не мутируют, findings/evidence не теряются.
-
-Пакет сравнения: `utf-8 rules_prefix + "\nSAVED_STAGE_DATA\n" + canonical JSON diagnosis_view`. Это единая offline форма для сравнения ролей; фактический legacy Cursor full stdin и его guidance проверяются отдельно unit-тестами. Full wire у runtime остаётся прежним inject. Маркер `Поправка SR0` присутствует только в full canon. Scoped size probe — synthetic reference equality, не actual-recipient proof. `scoped_selected_for_delivery=false` во всех offline строках.
+Inputs: `offline_replay.saved_stage_inputs()` (synthetic task, failure/findings, excerpt, three prior receipts). Encoded diagnosis DATA is **26345** bytes, SHA-256 `dffbca8a4f86816f101a26e0f3bf3feeac0e8ab01d5febb3a6d017aaf72415d4`; findings/evidence remain exact. Package formula: UTF-8 rules_prefix + newline SAVED_STAGE_DATA newline + canonical diagnosis JSON. Scoped sizes use synthetic reference equality, not a recipient capability; `scoped_selected_for_delivery=false` throughout.
 
 | Provider | Роль | Full canon | Full prefix | Scoped capsule | Scoped prefix | DATA | Full package | Scoped package | Δ bytes |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -55,41 +58,69 @@ Cursor author: **IMPLEMENTED + OFFLINE_VERIFIED**, **NOT RUNTIME_VERIFIED**, н�
 | agy | analyst | 115079 | 115307 | 4219 | 4671 | 26345 | 141670 | 31034 | 110636 |
 | agy | independent_qa | 115079 | 115302 | 4238 | 4685 | 26345 | 141665 | 31048 | 110617 |
 
-Для одинаковой роли provider packages byte-identical: **VERIFIED**. `author` → author capsule; `independent_qa` → qa; `analyst` → planner (technical_pm_product_analyst). В каноне нет analyst marker; research не выбран. Cursor analyst/QA строки — только историческое offline сравнение размеров, не разрешённые runtime роли.
 
-### AGY QA stage budget
+Provider packages for the same role remain byte-identical: VERIFIED. author → author capsule, independent_qa → qa, analyst → planner (technical_pm_product_analyst); research is not substituted. Cursor analyst/QA rows measure sizes only, not admitted runtime roles.
 
-Лимит final stdin — **262144** байта. Скрипт самостоятельно считает full по той же формуле prefix + RULES_SIZE + suffix, что `native_antigravity.qa_rules_overhead()`; тест сверяет её с native-функциями, когда модуль importable, и с точным full inject.
+AGY QA limit is 262144 bytes. Full rules overhead / remaining stage budget: **115653 / 146491** bytes. Hypothetical scoped QA: **4713 / 257431** bytes, HYPOTHETICAL_NOT_QUALIFIED. The native AGY path is unchanged.
 
-| Вариант | Rules overhead | Оставшийся stage budget |
-|---|---:|---:|
-| Full, running source pin | 115653 | 146491 |
-| Hypothetical scoped QA | 4713 | 257431 |
+Tokens/tokenizer are **not_exposed**; generic BPE and bytes/4 are not used. New usage, latency, cost, cache hit, missed findings and actual-recipient runtime reads remain NOT_MEASURED. Owner-provided historical #313 full Cursor facts: stdin 122326 bytes; input 74745, output 6140, cacheRead 216576, cacheWrite 0; 7 model call ids, 13 tool events, 82.6 s API duration. Stage size reference 8545 bytes is not an input here. Codex scoped QA #313: 4238 policy bytes, tokens NOT_MEASURED. These facts were not replayed or independently inspected.
 
-Scoped формула: qa rules_prefix + `BOUNDED STAGE INSTRUCTIONS:` и newline, без дополнительного guidance. Это **HYPOTHETICAL_NOT_QUALIFIED**, не изменение native AGY. Legacy AGY gate при probe None/False/exception возвращает exact full; даже probe True оставляет full из-за SCOPED_QUALIFIED=False. Native AGY inject не получает context_profile/verified_access.
+## Verification and handoff
 
-## Токены и реальные reference facts
+Exact repair-round commands/results:
 
-Реальный Cursor Auto full baseline #313, переданный Owner: provider_reported_usage **input 74745, output 6140, cacheRead 216576, cacheWrite 0**; **7 model call ids**, **13 tool events**, **API duration 82.6 s**, stdin **122326 байт**, profile **full**. Reference stage size **8545 байт** — документированный факт, **не input этого сравнения**. Эти receipts не переисполнялись и не читались из protected runtime в этой сессии. Cache fields не прибавляются повторно к input total.
+```text
+python3 -B -m unittest discover -s scripts/chatops/tests -p 'test_actions_train*.py'
+Ran 970 tests in 724.332s
+FAILED (errors=24, skipped=1)
+R4 seeded fuzz: seed=3070405 cases=23868 accepted_ignored=1521
 
-Codex scoped_v1 QA #313: delivered policy **4238 байт**, tokens **NOT_MEASURED**.
+python3 -B -m unittest discover -s scripts/chatops/tests -p 'test_actions_train_context_cursor*.py'
+Ran 41 tests in 1.028s
+OK
 
-Для текущего offline сравнения tokens/tokenizer — **not_exposed**. Generic BPE и bytes/4 не используются. Новые provider usage, latency, cost, cache hit, missed findings, actual-recipient runtime read и role canary — **NOT_MEASURED**. Δ bytes не означает проценты денег или latency.
+python3 -B docs/workbench/context-exchange-20261023/stage5_offline_compare.py
+provider_calls=0, rows=6, tokens=not_exposed; exit 0
+```
 
-## Проверки и передача
+Full suite exit 1 consists exclusively of the two explicitly excluded sandbox fixtures: 23 errors in `test_actions_train_antigravity_entrypoint_patch.py` (17 marker PermissionErrors and 6 secondary missing journals), one socket PermissionError in `test_actions_train_release_equivalence.py`. There are no assertion failures or errors in other modules; the existing skip is not a PASS. The interruption fixture expects OSError and catches the marker PermissionError as that OSError before its journal can be written; its subsequent rollback then reads a missing journal. Source inspection at fixture lines 86–88 and upgrade lines 282 / 557 supports this classification; no protected read was retried or fixture altered.
 
-Финальный локальный прогон source/tests diff: **Ran 963 tests in 761.470s**, **OK (skipped=1)**. Один существующий skip не объявлен выполненным. Команда:
+Exact distinct error text (the six random fixture paths are intentionally preserved):
 
-`python3 -B -m unittest discover -s scripts/chatops/tests -p 'test_actions_train*.py'`
+```text
+PermissionError: [Errno 13] Permission denied: '/etc/gobadminton-slots/cursor-author.json'
+FileNotFoundError: [Errno 2] No such file or directory: '/home/agentagency-dev/author-evidence-stage5-cursor-r1-20261025/tmp5scik0ar/state/patch.json'
+FileNotFoundError: [Errno 2] No such file or directory: '/home/agentagency-dev/author-evidence-stage5-cursor-r1-20261025/tmpcfxf0win/state/patch.json'
+FileNotFoundError: [Errno 2] No such file or directory: '/home/agentagency-dev/author-evidence-stage5-cursor-r1-20261025/tmp3dyh2hb1/state/patch.json'
+FileNotFoundError: [Errno 2] No such file or directory: '/home/agentagency-dev/author-evidence-stage5-cursor-r1-20261025/tmp6fy1b1oe/state/patch.json'
+FileNotFoundError: [Errno 2] No such file or directory: '/home/agentagency-dev/author-evidence-stage5-cursor-r1-20261025/tmp212rzyxa/state/patch.json'
+FileNotFoundError: [Errno 2] No such file or directory: '/home/agentagency-dev/author-evidence-stage5-cursor-r1-20261025/tmpupota6d0/state/patch.json'
+PermissionError: [Errno 1] Operation not permitted
+```
 
-Полный log: `/home/agentagency-dev/author-evidence-stage5-cursor-20261025/stage5-final-unittest.log`. В нём также `R4 seeded fuzz: seed=3070405 cases=23868 accepted_ignored=1521`. Адресный прогон context/Codex/AGY/Cursor + manifest/bootstrap + HTTP wire: **59 tests, OK**; исправленные entrypoint fixtures: **7 tests, OK**. Offline script: **rows=6, provider_calls=0, tokens=not_exposed**, exit 0; fresh measurement соответствует JSON. Manifest: все **34** записи совпали с файлами; относительно HEAD изменены только stage.py и новый context_cursor_delivery.py. `git diff --check` и аудит allowed paths — PASS, 11 изменённых/новых файлов, все в разрешённом scope.
+Full traceback evidence: `/home/agentagency-dev/author-evidence-stage5-cursor-r1-20261025/stage5-repair-r1-unittest.log`. Manifest validation: **34/34 hashes match**; only changed installed module entries (`context_cursor_delivery.py`, `stage.py`) were regenerated. The manifest remains an install manifest: docs/tests are not added to its payload. Allowed-path audit and frozen-fixture audit PASS. `git diff --check`: exit 0. Repair changes 9 of the original 11 PR paths.
 
-Pins без изменения: native_cursor.py `02d26f8be9766bbeb1e92dd8514dfc496c1b3e1b0fc8035c1c65cc9aba6b6089`; native_guard.py `dd2e0a0c6c0dea0d353b7dc5f16c1a5d4c4c21f022947ceaa640470c59fb0762`. context_native_delivery.py остался `af0aa8ecac3190eefee8406200f1b6cbe009917326903b73bc118345d94fb367`.
+Frozen module SHA-256:
 
-История самопроверки сохранена: предварительный прогон той же команды до финализации manifest/отчёта дал **Ran 963 tests in 902.450s; FAILED (failures=3, errors=24, skipped=1)**. Три failures — ожидаемые незавершённые manifest/bootstrap/таблица отчёта. Старый entrypoint fixture выполнял stat реального marker и получил `PermissionError: [Errno 13] Permission denied: '/etc/gobadminton-slots/cursor-author.json'`; реальный marker не прочитан. Другой тест создавал localhost socket и получил `PermissionError: [Errno 1] Operation not permitted`. Повтор реальных обращений не выполнялся: первый fixture теперь хэширует свой synthetic marker и проверяет его сохранность; второй подаёт synthetic HTTP response bytes через стандартный HTTP parser/HTTPErrorProcessor при явно запрещённых sockets. Assertions об отказе первого слота и успешном втором сохранены. Production OPS не менялся. Реальный socket transport остаётся NOT_TESTED по no-network scope; новый тест проверяет HTTP wire parsing и API error handling в памяти.
+```text
+native_cursor.py       02d26f8be9766bbeb1e92dd8514dfc496c1b3e1b0fc8035c1c65cc9aba6b6089
+native_guard.py        dd2e0a0c6c0dea0d353b7dc5f16c1a5d4c4c21f022947ceaa640470c59fb0762
+native_antigravity.py  01d4816e881765da6361af07a15765528aef274dad0eb780b1afab6b0e5e0f72
+```
 
-TMPDIR направлен в разрешённый `author-evidence-stage5-cursor-20261025`; native invoke в unit fixtures получает fake-popen и job dir внутри disposable fixture. Реальные /tmp jobs, secrets, модели и installation не читались/не запускались. Tests используют отдельные synthetic Git fixtures; Git metadata рабочего checkout не изменяется.
+ Logs live in `/home/agentagency-dev/author-evidence-stage5-cursor-r1-20261025/`; TMPDIR is that allowed evidence root. Synthetic native fixtures redirect jobs into their disposable TMPDIR and use fake Popen/stream helpers. No real /tmp job, marker, model, network or installation is used by the new checks.
 
-NOT_TESTED: независимая QA exact diff, CI нового candidate, реальный Cursor scoped invocation, AGY scoped/author runtime, real socket transport, установка, DEV/PROD. Неразрешённых implementation gaps нет; source/tests ограничение соблюдено. Candidate SHA отсутствует: commit/push запрещены этим поручением. Следующий разрешённый шаг — независимая QA точного результирующего diff в другой сессии; pin bump/install и real canary отдельно. Full fallback и старые FAIL/UNKNOWN/grants/receipts не переписываются.
+Historical author evidence for the previous candidate (superseded by the QA FAIL for delivery correctness): 963 tests, OK (skipped=1), source `f06999e`/earlier author source `00197e5feb15e048cd55416d57ca69924fab4af2`. Earlier fixture/environment failures and fixes remain in Git history; those numbers are not repair-round validation. This repair does not alter `test_actions_train_antigravity_entrypoint_patch.py` or `test_actions_train_release_equivalence.py`.
 
-Исторический provenance #298 (не результат текущего candidate): source `78b36c5dd5e98b9241bc69ea646658b8e6feb8c2`, CI-observed head `5accd87d05e3074ebb83fe97dcd6466cd4c5e283`, [run 40149669426](https://github.com/anpavel84-afk/gobadminton-clean/actions/runs/40149669426), сообщённые 616 tests / skipped=1 и Product CI 7/7. Эти числа сохранены как история и не являются CI/QA для нового незакоммиченного diff.
+NOT_TESTED: independent QA of the repaired exact candidate, CI, actual bwrap enforcement and provider invocation, installation/marker rebind, real socket transport, role canary, DEV/PROD. No candidate commit exists because commit/push are unavailable. Next authorized step is independent QA of this exact resulting diff, then ordinary CI.
+
+## Required outside this PR to enable scoped Cursor
+
+A separate marker-reviewed native_guard change must append, **after the rw work bind and before --chdir / command**, the minimal mount:
+
+```python
+canon = base/'work'/'docs/rules/ENGINEERING_OPERATING_MODEL.md'
+argv += ['--ro-bind', str(canon), str(canon)]
+```
+
+No later overlapping rw mount may override it. The whole-client namespace must retain this mount for all descendants; real recipient tools must be unable to overwrite, unlink/replace, or modify/read/restore the canon. This makes recipient_rules_readonly() True, but does not alone enable installation: review/CI, exact module hash marker rebind through the existing authorized process, matching accepted rules pin/artifact, and a separately admitted real role canary proving recipient read access and denied writes are required. Keep full fallback until those gates pass. This PR deliberately leaves native_guard/native_cursor and their pins byte-identical. No active grant, FAIL/UNKNOWN history or budget is rewritten.

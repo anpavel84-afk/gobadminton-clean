@@ -64,7 +64,7 @@
       "scoped_package_sha256": "4845dc55b16e13d6f296101e6d5833d51ffc053fd414e8140e163be67b5539d6",
       "scoped_size_probe": "synthetic_reference_equality_not_a_recipient",
       "scoped_selected_for_delivery": false,
-      "delivery_status": "IMPLEMENTED_OFFLINE_VERIFIED_NOT_INSTALLED"
+      "delivery_status": "IMPLEMENTED_OFFLINE_VERIFIED_DORMANT_NOT_RUNTIME_VERIFIED"
     },
     {
       "provider": "cursor",
@@ -239,6 +239,8 @@
     "actual_recipient_rules_read",
     "role_canary"
   ],
-  "scoped_delivery": "CURSOR_AUTHOR_IMPLEMENTED_OFFLINE_ONLY_AGY_NOT_ENABLED",
+  "scoped_delivery": "CURSOR_AUTHOR_IMPLEMENTED_DORMANT_AGY_NOT_ENABLED",
+  "cursor_author_enabled": false,
+  "cursor_author_fallback_reason": "RECIPIENT_RULES_NOT_READONLY",
   "byte_delta_is_not_cost_or_latency": true
 }

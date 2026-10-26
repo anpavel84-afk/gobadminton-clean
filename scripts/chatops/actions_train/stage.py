@@ -151,11 +151,12 @@ def setup(req, config, native_auth=None):
         try:
             if provider == 'cursor':
                 from native_cursor import invoke
-                permitted = a.permitted
+                permitted, popen = a.permitted, a.subprocess.Popen
                 if expectation and expectation['profile'] == 'scoped_v1':
-                    from context_cursor_delivery import gated_permitted
+                    from context_cursor_delivery import gated_permitted, recipient_popen
                     permitted = gated_permitted(permitted, bridge, rt, expectation)
-                answer = invoke(bridge, rt, wrapped, native_auth, choice, popen=a.subprocess.Popen,
+                    popen = recipient_popen(popen, expectation)
+                answer = invoke(bridge, rt, wrapped, native_auth, choice, popen=popen,
                                 atomic=a.atomic, permitted=permitted)
                 choice['rules_context'] = choice['native_receipt']['rules_context']
                 if expectation and expectation['profile'] == 'scoped_v1':

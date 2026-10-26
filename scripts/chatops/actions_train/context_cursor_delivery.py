@@ -1,6 +1,8 @@
 """Cursor author context: verified export access and proof before source import.
 
-No provider calls or writes here. The installed context_policy remains the sole
+Scoped delivery is IMPLEMENTED/OFFLINE_VERIFIED but DORMANT with the pinned
+guard: ENABLED=false, NOT RUNTIME_VERIFIED. Capability probing writes/executes
+nothing; the native caller owns process creation. The installed context_policy is the sole
 pin authority; a repo/installed-pin mismatch delivers the legacy full payload.
 """
 import hashlib
@@ -8,6 +10,7 @@ import os
 from pathlib import Path
 import stat
 import subprocess
+from types import FunctionType, SimpleNamespace
 
 import context_policy as policy
 import native_cursor as cursor
@@ -70,26 +73,150 @@ def verified_cursor_workspace_rules(bridge_work, reference):
         return False
 
 
+def _synthetic_namespace_argv():
+    """Run invoke's actual builder bytecode against inert synthetic metadata.
+
+    The pinned builder requires /tmp and root-owned installation metadata. Do
+    not inspect those host paths or relax the real invocation's qualification.
+    This private globals copy supplies metadata only, writes/executes nothing,
+    and tests mount construction, NOT installed helper/identity qualification.
+    Unexpected builder dependencies fail closed in recipient_rules_readonly.
+    """
+    base = '/tmp/gb-cursor-211-context-probe'
+    helper = b'synthetic namespace helper; never executed'
+    class SyntheticPath(type(Path())):
+        def lstat(self):
+            private = str(self) == base or base+'/' in str(self)
+            regular = self.name == 'gb-bwrap'
+            return SimpleNamespace(st_mode=(stat.S_IFREG | 0o555) if regular else
+                                   (stat.S_IFDIR | (0o700 if private else 0o755)),
+                                   st_uid=1002 if private else 0, st_nlink=1)
+        def exists(self):
+            return True
+        def read_bytes(self):
+            need(self.name == 'gb-bwrap', 'unexpected synthetic builder read')
+            return helper
+    builder = cursor.cursor_namespace_argv  # exact function invoke uses
+    namespace = dict(builder.__globals__, Path=SyntheticPath,
+        CURSOR_PIN=SyntheticPath(cursor.CURSOR_PIN),
+        os=SimpleNamespace(geteuid=lambda: 1002, getxattr=lambda *a, **k: b''),
+        BWRAP_SHA256=_sha(helper))
+    synthetic = FunctionType(builder.__code__, namespace, builder.__name__,
+                             builder.__defaults__, builder.__closure__)
+    return synthetic(SyntheticPath(base), [str(cursor.CURSOR_PIN/'node')])
+
+
+def _readonly_argv(argv, work):
+    """Conservatively interpret ordered bwrap mounts; unknown options fail closed."""
+    work = Path(work)
+    canon = work/policy.CANONICAL_GIT_RULES_PATH
+    rw_work, readonly = False, False
+    arities = {'--unshare-all': 0, '--share-net': 0, '--die-with-parent': 0,
+        '--new-session': 0, '--cap-drop': 1, '--tmpfs': 1, '--proc': 1,
+        '--dev': 1, '--dir': 1, '--symlink': 2, '--bind': 2, '--bind-try': 2,
+        '--ro-bind': 2, '--ro-bind-try': 2, '--chdir': 1}
+    i, chdirs = 1, []
+    while i < len(argv):
+        option = argv[i]
+        if option == '--':
+            return rw_work and readonly and chdirs == [str(work)]
+        need(option in arities, 'unknown namespace option')
+        count = arities[option]
+        args = argv[i+1:i+1+count]
+        need(len(args) == count, 'incomplete namespace option')
+        if option == '--chdir':
+            chdirs.append(args[0])
+        elif option in ('--bind', '--bind-try', '--ro-bind', '--ro-bind-try',
+                        '--tmpfs', '--proc', '--dev', '--symlink', '--dir'):
+            dest = Path(args[-1])
+            need(dest.is_absolute() and '..' not in dest.parts, 'unsafe mount target')
+            overlaps = dest == canon or dest in canon.parents or canon in dest.parents
+            if option in ('--bind', '--bind-try') and args == [str(work), str(work)]:
+                rw_work, readonly = True, False
+            elif overlaps:
+                # A different source could contain different rules, even if ro.
+                readonly = (rw_work and option in ('--ro-bind', '--ro-bind-try')
+                            and args[0] == str(dest)
+                            and (dest == canon or dest in canon.parents))
+        i += count + 1
+    return False
+
+
+def recipient_rules_readonly():
+    """Capability only; current marker-pinned guard returns False (full fallback)."""
+    try:
+        return _readonly_argv(_synthetic_namespace_argv(),
+                              '/tmp/gb-cursor-211-context-probe/work') is True
+    except Exception:
+        return False
+
+
+def recipient_popen(popen, expectation):
+    """Verify actual export and mount argv before spawning or sending any stdin."""
+    if expectation['profile'] != 'scoped_v1':
+        return popen
+    def checked(argv, **kwargs):
+        material = expectation['recipient_materialization']
+        material.update(readonly_enforced=False, export_verified_before_stdin=False)
+        try:
+            boundary = argv.index('--')
+            options = argv[:boundary]
+            positions = [i for i, value in enumerate(options) if value == '--chdir']
+            need(len(positions) == 1, 'ambiguous Cursor recipient work dir')
+            work = Path(options[positions[0]+1])
+            need(work.is_absolute() and work == Path(kwargs['cwd']) and work.name == 'work',
+                 'Cursor recipient work dir mismatch')
+            need(_readonly_argv(argv, work), 'Cursor recipient rules are not read-only')
+            files, total = {}, 0
+            for parent, dirs, names in os.walk(work, followlinks=False):
+                for name in dirs:
+                    need(not (Path(parent)/name).is_symlink(), 'recipient symlink directory')
+                for name in names:
+                    path = Path(parent)/name
+                    rel = path.relative_to(work).as_posix()
+                    if not cursor.source_name(rel):
+                        continue
+                    raw = _read_owned(path, cursor.MAX_FILE)
+                    total += len(raw)
+                    need(total <= cursor.MAX_TREE and len(files) < 10000, 'recipient export limit')
+                    files[rel] = _sha(raw)
+            reference = expectation['rules_reference']
+            raw = _read_owned(work/reference['path'], cursor.MAX_FILE)
+            rules_sha, export_sha = _sha(raw), digest(files)
+            need(len(raw) == expectation['rules_size'] and rules_sha == expectation['rules_sha256']
+                 and files.get(reference['path']) == rules_sha
+                 and export_sha == expectation['export_sha256'],
+                 'Cursor recipient export drift before stdin')
+            material.update(readonly_enforced=True, export_verified_before_stdin=True,
+                rules_sha256=rules_sha, rules_size=len(raw), export_sha256=export_sha)
+        except Exception:
+            need(False, 'Cursor recipient materialization unavailable or mismatched before stdin')
+        return popen(argv, **kwargs)
+    return checked
+
+
 def cursor_author_context(prompt, bridge, accepted, *, role='author'):
     """Opt in only for an author with a readable, tracked, pin-exact export."""
-    files, confirmed, reason = None, False, None
+    files, confirmed, reason, readonly = None, False, None, False
     try:
         reference = _reference()
         need(role == 'author', 'Cursor scoped context is author-only')
         files = export_view(bridge.work)
+        readonly = recipient_rules_readonly() is True
         def probe(ref):
             nonlocal confirmed
             confirmed = (verified_cursor_workspace_rules(bridge.work, ref) is True
-                         and files.get(reference['path']) == reference['sha256'])
+                         and files.get(reference['path']) == reference['sha256'] and readonly)
             return confirmed
         wrapped, receipt = policy.inject(prompt, False, bridge.work, accepted, role='author',
             context_profile='scoped_v1', full_rules_reference=reference,
             verified_access=probe, scoped_guidance=GUIDANCE.format(**reference))
         profile = receipt['context_metrics']['policy_profile']
         if profile != 'scoped_v1':
-            reason = 'RECIPIENT_RULES_ACCESS_UNVERIFIED'
+            reason = ('RECIPIENT_RULES_NOT_READONLY' if not readonly
+                      else 'RECIPIENT_RULES_ACCESS_UNVERIFIED')
         capsule_sha = _sha(compile_capsule(accepted[0], 'author', policy.RULES_SHA256).encode()) if profile == 'scoped_v1' else None
-        return _delivery_result(wrapped, receipt, files, confirmed, reason, capsule_sha)
+        return _delivery_result(wrapped, receipt, files, confirmed, reason, capsule_sha, readonly)
     except Exception:
         # If even the trusted full inject fails, propagate its refusal. Never
         # manufacture context from unverified accepted bytes or an empty prompt.
@@ -97,7 +224,7 @@ def cursor_author_context(prompt, bridge, accepted, *, role='author'):
         return _delivery_result(wrapped, receipt, None, False, 'CURSOR_SCOPED_PREFLIGHT_ERROR', None)
 
 
-def _delivery_result(wrapped, receipt, files, confirmed, reason, capsule_sha):
+def _delivery_result(wrapped, receipt, files, confirmed, reason, capsule_sha, readonly=False):
     metrics = receipt['context_metrics']
     profile = metrics['policy_profile']
     metrics.update(provider='cursor', operational_role='author', requested_profile='scoped_v1',
@@ -106,7 +233,11 @@ def _delivery_result(wrapped, receipt, files, confirmed, reason, capsule_sha):
         recipient_export_sha256=digest(files) if files else None,
         token_accounting='provider_reported_usage',
         fallback_reason=reason or metrics.get('fallback_reason'))
-    expectation = dict(profile=profile, stdin_sha256=_sha(wrapped.encode('utf-8')),
+    material = dict(readonly_capability=readonly, readonly_enforced=False,
+                    export_verified_before_stdin=False,
+                    rules_sha256=None, rules_size=None, export_sha256=None)
+    receipt['recipient_materialization'] = material
+    expectation = dict(profile=profile, recipient_materialization=material, stdin_sha256=_sha(wrapped.encode('utf-8')),
         prefix_sha256=metrics.get('prefix_sha256'), prefix_bytes=metrics.get('prefix_bytes'),
         capsule_sha256=capsule_sha, export_sha256=metrics['recipient_export_sha256'],
         rules_sha256=policy.RULES_SHA256, rules_size=policy.RULES_SIZE,
@@ -187,9 +318,20 @@ def verify_role_received(job_dir, expectation, native_receipt=None):
             checks['transcript_sha256'] = native_receipt.get('transcript_sha256') == proof['transcript_sha256']
             checks['export_sha256'] = native_receipt.get('source_export_sha256') == expectation['export_sha256']
             paths = native_receipt.get('changed_paths')
-            checks['rules_unchanged'] = (type(paths) is list
+            checks['rules_net_unchanged'] = (type(paths) is list
                 and reference['path'] not in paths)
-        proof['status'] = 'VERIFIED' if all(checks.values()) else 'MISMATCH'
+        material = expectation.get('recipient_materialization', {})
+        proof['recipient_materialization'] = dict(material)
+        checks['readonly_enforced'] = material.get('readonly_enforced') is True
+        checks['export_verified_before_stdin'] = (
+            material.get('export_verified_before_stdin') is True
+            and material.get('export_sha256') == expectation['export_sha256']
+            and material.get('rules_sha256') == expectation['rules_sha256']
+            and material.get('rules_size') == expectation['rules_size'])
+        content_checks = {k: v for k, v in checks.items()
+                          if k not in ('readonly_enforced', 'export_verified_before_stdin')}
+        proof['status'] = ('MISMATCH' if not all(content_checks.values()) else
+                           'VERIFIED' if all(checks.values()) else 'NOT_PROVEN')
     except Exception:
         proof['status'] = 'MISMATCH'
         checks['content_valid'] = False
