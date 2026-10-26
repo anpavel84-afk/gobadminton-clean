@@ -1,0 +1,13 @@
+{
+ "checks": [
+  {
+   "command": "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=scripts/chatops/tests python3 -B -m unittest -v test_actions_train_owner_package.QuiescentTests 2>&1 | sed -n -E 's/^(test_[a-z_]+) .*[.][.][.] ok$/\\1 ok/p'",
+   "exit_code": 0,
+   "output_sha256": "971acf337824e107007af2e526b3e7eaaffc0284c0748fe155b8a624ac5ac914",
+   "source_sha": "de193c74c11e1fef33d1e3c8405abe5a40081b87"
+  }
+ ],
+ "requirements": "Independently review the exact source candidate de193c74c11e1fef33d1e3c8405abe5a40081b87 against base e6af59ea2bc6922ed12585b128d9e14b263e9f20 (a four-file change). Requirements: in scripts/chatops/actions_train/owner_package_admission.py the quiescent() check must treat a slot checkpoint as idle only when active is None or a dict whose phase is exactly 'done'; every other active value (other phases, non-dict values, a dict without a phase, wrong-case phase) and any non-None journal pending must still refuse with 'slot occupied'; the model-process and lock checks must be unchanged; no other behavior may change. The manifest.json entry for that file must equal the sha256 of the candidate file. The new tests in scripts/chatops/tests/test_actions_train_owner_package.py (class QuiescentTests) must really exercise those cases. Inspect the actual source and diff through native tools. Run the supplied small deterministic check using run_command with cwd /srv/gb-slots/slot2/worktrees/antigravity-qa-29-canary and verify with git rev-parse HEAD that the checkout is the exact candidate before and after. The supplied check output hash is a reference receipt for the expected result, not a claim that you executed it; compare your own output with it and record the checks you actually ran honestly. Use only allowed native tools, keep source and Git unchanged, and use TMPDIR for any generated output. If native shell or file tools or needed evidence are unavailable, return FAIL; never claim unexecuted checks. Return exactly the canonical JSON {verdict,findings,reviewed_sha} once, using native finish completion when supported. This is a real independent review, not analyst acceptance.",
+ "schema": "GB_AGY_29_QA_TEST_CONTRACT_V1",
+ "source_sha": "de193c74c11e1fef33d1e3c8405abe5a40081b87"
+}
