@@ -228,8 +228,12 @@ class SourceImport(unittest.TestCase):
         (work/'allowed.txt').symlink_to(self.source/'other.txt')
         with self.assertRaises(core.Refused): N.snapshot(work, self.bridge, before)
 
-    def call(self, output='allowed.txt', mode='success'):
+    def call(self, output='allowed.txt', mode='success', *, delivery=None, user_text=None):
         choice = {'rules_context': {'commit': 'accepted', 'stdin_sha256': 'rules-and-task'}}
+        prompt, expectation = 'trusted rules and task', None
+        if delivery is not None:
+            prompt, choice['rules_context'], expectation = delivery
+        self.last_choice = choice
         calls = []
         def fake_popen(argv, **kw):
             self.assertNotIn('existing-secret-token', ' '.join(argv))
@@ -243,20 +247,36 @@ class SourceImport(unittest.TestCase):
                 if mode == 'timeout': raise subprocess.TimeoutExpired(argv, timeout)
                 (work/output).write_text('existing-secret-token' if mode == 'secret' else 'after\n')
                 (work/'build').mkdir(); (work/'build/test-output').write_text('generated')
-                kw['stdout'].write(stream(INIT, ASSIST, RESULT)); kw['stdout'].flush()
+                events = [INIT, ASSIST, RESULT]
+                if delivery is not None:
+                    text = input.decode('utf-8') if user_text is None else user_text(input.decode('utf-8'))
+                    events.insert(1, {'type': 'user', 'message': {'role': 'user',
+                        'content': [{'type': 'text', 'text': text}]}})
+                kw['stdout'].write(stream(*events)); kw['stdout'].flush()
                 p.returncode = 7 if mode == 'error' else 0
             p.communicate.side_effect = communicate
             p.wait.side_effect = lambda **k: p.returncode
             return p
         def stop(p): p.returncode = p.returncode if p.returncode is not None else -9
         def atomic(p, value): p.write_text(json.dumps(value))
+        permitted = lambda name, allowed: name in allowed
+        if expectation is not None:
+            from context_cursor_delivery import gated_permitted
+            permitted = gated_permitted(permitted, self.bridge, self.rt, expectation)
+        mkdtemp = tempfile.mkdtemp
+        fstat = os.fstat
+        def owned_stat(fd):
+            info = list(fstat(fd)); info[4] = 978
+            return os.stat_result(info)
         with patch.object(N, 'qualification', return_value={}), patch.object(N.os, 'geteuid', return_value=978), \
+             patch.object(N.os, 'fstat', side_effect=owned_stat), \
+             patch.object(N.tempfile, 'mkdtemp', side_effect=lambda **kw: mkdtemp(prefix=kw['prefix'], dir=self.base)), \
              patch.object(N, 'cursor_namespace_argv', side_effect=lambda base, argv: argv), \
              patch.object(N, 'process_boundary', return_value={'effective_capabilities': '0'}), \
              patch.object(N, '_stop', side_effect=stop):
-            return N.invoke(self.bridge, self.rt, 'trusted rules and task', 'existing-secret-token', choice,
+            return N.invoke(self.bridge, self.rt, prompt, 'existing-secret-token', choice,
                             popen=fake_popen, atomic=atomic,
-                            permitted=lambda name, allowed: name in allowed)
+                            permitted=permitted)
 
     def test_one_charged_call_imports_only_authorized_source(self):
         r = self.call()

@@ -108,6 +108,7 @@ def setup(req, config, native_auth=None):
              and (choice['provider'] != 'agy' or qa),
              'unimplemented native model adapter')
         from context_policy import inject
+        expectation = None
         if choice['provider'] == 'agy':
             wrapped, rules_receipt = prompt, None  # Native adapter injects after assembling source DATA.
         elif (choice['provider'] == 'codex' and req['stage'] in
@@ -131,6 +132,12 @@ def setup(req, config, native_auth=None):
                 accepted_rules, role=context_role, context_profile='scoped_v1',
                 full_rules_reference=reference, scoped_guidance=guidance,
                 verified_access=lambda ref: verified_git_rules(bridge.work,ref))
+        elif (choice['provider'] == 'cursor' and req['stage'] == 'author'
+              and not qa
+              and not req.get('_recover') and not req.get('_budget_preflight_retry')):
+            from context_cursor_delivery import cursor_author_context
+            wrapped, rules_receipt, expectation = cursor_author_context(
+                prompt, bridge, accepted_rules, role=choice.get('role', 'author'))
         else:
             wrapped, rules_receipt = inject(prompt, qa, bridge.work, accepted_rules, role=choice.get('role', 'qa' if qa else 'author'))
         choice['rules_context'] = rules_receipt
@@ -144,9 +151,17 @@ def setup(req, config, native_auth=None):
         try:
             if provider == 'cursor':
                 from native_cursor import invoke
+                permitted = a.permitted
+                if expectation and expectation['profile'] == 'scoped_v1':
+                    from context_cursor_delivery import gated_permitted
+                    permitted = gated_permitted(permitted, bridge, rt, expectation)
                 answer = invoke(bridge, rt, wrapped, native_auth, choice, popen=a.subprocess.Popen,
-                                atomic=a.atomic, permitted=a.permitted)
+                                atomic=a.atomic, permitted=permitted)
                 choice['rules_context'] = choice['native_receipt']['rules_context']
+                if expectation and expectation['profile'] == 'scoped_v1':
+                    from context_cursor_delivery import verify_role_received
+                    choice['rules_context']['context_proof'] = verify_role_received(
+                        choice['native_receipt'].get('job'), expectation, choice['native_receipt'])
             elif provider == 'agy':
                 from native_antigravity import review, save_receipt
                 active = store.data['active']

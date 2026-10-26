@@ -1,4 +1,4 @@
-"""Cursor/AGY scoped_v1 stays fail-closed. No provider, network, install or VPS write."""
+"""Legacy native read-only gate stays full; offline matrix has no provider calls."""
 import ast
 import copy
 import hashlib
@@ -23,7 +23,7 @@ GATE = ROOT/'scripts/chatops/actions_train/context_native_delivery.py'
 
 
 def accepted():
-    return TEXT, dict(schema='GB_RULES_CONTEXT_V1', revision='1.3', commit=C.RULES_COMMIT,
+    return TEXT, dict(schema='GB_RULES_CONTEXT_V1', revision=C.RULES_REVISION, commit=C.RULES_COMMIT,
         sha256=C.RULES_SHA256, bytes=C.RULES_SIZE, source=str(C.RULES_PATH),
         delivery='explicit_full_stdin', automatic_rules='disabled', user_config='ignored',
         candidate_instructions='untrusted_data')
@@ -71,9 +71,11 @@ class NativeFailClosed(unittest.TestCase):
         self.assertIsNone(receipt['context_metrics']['input_tokens'])
 
     def test_runtime_pin_unchanged(self):
-        self.assertEqual(C.RULES_COMMIT, '1169e965976e9498d4e5e1e23aae201e97ec9665')
-        self.assertEqual(C.RULES_SHA256, '38c34012f10974496a7d7cbc74ecacb62bf7847278e295edfeb107d69a5d1c1c')
-        self.assertEqual(C.RULES_SIZE, 100818)
+        index = json.loads((ROOT/'docs/rules/CONTEXT_SOURCES.json').read_text())['accepted_operating_model']
+        self.assertEqual(C.RULES_COMMIT, index['commit'])
+        self.assertEqual(C.RULES_SHA256, index['sha256'])
+        self.assertEqual(C.RULES_SIZE, index['bytes'])
+        self.assertEqual(hashlib.sha256(TEXT.encode()).hexdigest(), C.RULES_SHA256)
         self.assertIs(N.SCOPED_QUALIFIED, False)
 
     def test_default_profile_is_full_and_does_not_call_probe(self):
@@ -307,19 +309,22 @@ class OfflineComparison(unittest.TestCase):
         self.assertEqual(fresh['tokens']['input_tokens'], 'not_exposed')
         self.assertEqual(fresh['tokens']['tokenizer'], 'not_exposed')
         self.assertEqual(fresh['tokens']['bytes_div_4'], 'not_used')
-        self.assertEqual(fresh['scoped_delivery'], 'NOT_ENABLED')
+        self.assertEqual(fresh['scoped_delivery'], 'CURSOR_AUTHOR_IMPLEMENTED_OFFLINE_ONLY_AGY_NOT_ENABLED')
         self.assertEqual(fresh['providers_byte_identical'], 'VERIFIED')
-        self.assertEqual(fresh['rules']['bytes'], 113203)
-        self.assertEqual(fresh['rules']['sha256'],
-                         '017441dec5ba197a1065b6ef90efdddb090b286ba48687241a7fbc09dd002269')
-        self.assertEqual(fresh['installed_runtime_pin']['bytes'], 100818)
-        self.assertFalse(fresh['installed_runtime_pin']['changed_by_this_comparison'])
+        accepted_index = json.loads((ROOT/'docs/rules/CONTEXT_SOURCES.json').read_text())['accepted_operating_model']
+        self.assertEqual(fresh['rules']['bytes'], accepted_index['bytes'])
+        self.assertEqual(fresh['rules']['sha256'], accepted_index['sha256'])
+        self.assertEqual(fresh['running_module_pin']['bytes'], C.RULES_SIZE)
+        self.assertEqual(fresh['running_module_pin']['commit'], C.RULES_COMMIT)
+        self.assertEqual(fresh['running_module_pin']['sha256'], C.RULES_SHA256)
+        self.assertFalse(fresh['running_module_pin']['changed_by_this_comparison'])
         roles = {(row['provider'], row['operational_role']) for row in fresh['rows']}
         self.assertEqual(roles, {('cursor', 'analyst'), ('cursor', 'independent_qa'),
-                                 ('agy', 'analyst'), ('agy', 'independent_qa')})
+                                 ('agy', 'analyst'), ('agy', 'independent_qa'),
+                                 ('cursor', 'author'), ('agy', 'author')})
         for row in fresh['rows']:
             self.assertGreater(row['full_package_bytes'], row['scoped_package_bytes'])
-            self.assertEqual(row['full_canon_bytes'], 113203)
+            self.assertEqual(row['full_canon_bytes'], accepted_index['bytes'])
             self.assertFalse(row['scoped_selected_for_delivery'])
             self.assertEqual(row['scoped_size_probe'], 'synthetic_reference_equality_not_a_recipient')
             self.assertGreater(row['package_byte_delta'], 0)
@@ -331,6 +336,27 @@ class OfflineComparison(unittest.TestCase):
         self.assertIn('not_exposed', report)
         self.assertIn('NOT_MEASURED', report)
         self.assertIn('VERIFIED', report)
+
+    def test_agy_qa_budget_formula_matches_native_and_exact_full_inject(self):
+        module = load_compare(); result = module.measure(ROOT)
+        budget = result['agy_qa_stage_budget']
+        full, _ = C.inject('x', True, ROOT, accepted(), role='qa')
+        self.assertEqual(budget['full_rules_overhead_bytes'], len(full.encode())-1)
+        try:
+            import native_antigravity as native
+        except ImportError:
+            native = None
+        if native is not None:
+            self.assertEqual(budget['input_limit_bytes'], native.QA_INPUT_LIMIT)
+            self.assertEqual(budget['full_rules_overhead_bytes'], native.qa_rules_overhead())
+            self.assertEqual(budget['full_stage_budget_bytes'], native.qa_stage_budget())
+        self.assertGreater(budget['scoped_stage_budget_bytes'], budget['full_stage_budget_bytes'])
+        prefix, _ = E.rules_prefix(text=TEXT, metadata=accepted()[1], role='qa', compact=True,
+            full_rules_reference=reference(), verified_access=lambda _ref: True)
+        self.assertEqual(budget['scoped_rules_overhead_bytes'], len((prefix+'BOUNDED STAGE INSTRUCTIONS:\n').encode()))
+        self.assertEqual(budget['scoped_stage_budget_bytes'], budget['input_limit_bytes']-budget['scoped_rules_overhead_bytes'])
+        agy_author = next(row for row in result['rows'] if row['provider']=='agy' and row['operational_role']=='author')
+        self.assertEqual(agy_author['delivery_status'], 'NOT_QUALIFIED_UNTIL_312')
 
 
 if __name__ == '__main__':
