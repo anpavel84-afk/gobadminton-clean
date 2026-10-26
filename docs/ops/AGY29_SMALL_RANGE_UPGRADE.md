@@ -5,6 +5,32 @@ Status: AUTHOR OPS source at base `2d926322c2a7a4d68e09e128c3e1ba2d01a4c6c8`
 DEV acceptance or installation. The installation bundle must be the future
 reviewed dev merge **containing this installer**; the base alone is unusable.
 
+## R2 · preserved first rollback and exact smoke repair
+
+On 26 October the first reviewed C source \`4a01df37...\` passed dry but its
+apply failed the mandatory import-only smoke. It incorrectly asserted
+\`Q.package_rules_ok\` (absent in the reviewed new module). The correct callable
+is \`A.package_rules_ok\`, alongside \`Q.owner_package_input_pins\`.
+An isolated, network-unshared test of exactly the two new reviewed library
+blobs passed for both UIDs 1002 and 978 with those exact assertions.
+
+The first transaction is **terminal \`rolled_back\`**, NOT cleared: its receipt
+SHA256 \`f47ebebabc0448a1d84b96717e0ce05406c04948542bc5e1e5da167dcdf7998d\`,
+three root-only backup files and exact failure history remain byte-identical,
+now included in protected-state observation. The new verified installer has a
+separate \`agy29-small-range-upgrade-r2.json\` and
+\`agy29-small-range-upgrade-r2-backup/\` namespace, with a fail-closed
+preflight verifying the entire previous receipt, schema, commit, phase,
+observation digest, backup membership, each old byte hash, mode and owner.
+No old receipt or backup is moved/deleted/rewritten. An R2 failure also
+retains its own new guarded receipt; no blind retry or reset is allowed.
+
+All lower C5/re-record/pkg/admission identities, controller/workflow,
+old/new module pins, manifest pin, idle/sandbox import checks and
+no-policy/no-model effects remain **unchanged**. The new SOURCE SHA,
+independent QA and CI are separate gates; this document does not mark the
+R2 source or runtime accepted.
+
 ## Purpose and exact effects
 
 This installer installs only the reviewed small-range Owner-package library

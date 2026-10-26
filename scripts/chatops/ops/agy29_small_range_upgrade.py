@@ -32,9 +32,22 @@ POLICY=Path('/etc/gobadminton-actions-train/policy.json')
 MARKER=Path('/etc/gobadminton-slots/antigravity-qa.json')
 BUDGET=Path('/etc/gobadminton-slots/budgets.json')
 INVENTORY=STATE/'backup.json'
-J=STATE/'agy29-small-range-upgrade.json'
-BK=STATE/'agy29-small-range-upgrade-backup'
+# R2 uses a NEW immutable transaction namespace. The failed R1 transaction,
+# its receipt and its exact backups remain protected evidence, never cleared.
+J=STATE/'agy29-small-range-upgrade-r2.json'
+BK=STATE/'agy29-small-range-upgrade-r2-backup'
 SCHEMA='GB_AGY29_SMALL_RANGE_UPGRADE_V1'
+PREVIOUS_J=STATE/'agy29-small-range-upgrade.json'
+PREVIOUS_BK=STATE/'agy29-small-range-upgrade-backup'
+PREVIOUS_COMMIT='4a01df37ccd5eedf912d52563f9828f90d562f46'
+PREVIOUS_SCRIPT_SHA='2f3e4325c8cfb49f3638be9d14233dc70a7b05ae208749d00065f224866c7177'
+PREVIOUS_RECEIPT_SHA='f47ebebabc0448a1d84b96717e0ce05406c04948542bc5e1e5da167dcdf7998d'
+PREVIOUS_OBSERVATION_SHA='eb1bc2fa7d8827de171f962ff9cf44259412d525ff2516ee81adcc8a2c8f85b9'
+PREVIOUS_BACKUP_SHA={
+ 'antigravity_qa_recovery.py':'e0785eeefa1117f0e0d3219637c2f58493412dfa945986e3f63c21a86f20f45a',
+ 'owner_package_admission.py':'4adbed703b420ab435a3d1d545c2c076a7bd5574bdf940143f8cf8447a9c74ae',
+ 'inventory':'c2c571a36cff4781c32eb8a0f2a0d8afb024570a39d006e070c7c303f8b764eb',
+}
 C='41e12be2d551158e97ea30eaf8e95f992f998615'
 STAGE_SHA='b9703ca27b7bb3f494f379f8e259e62a6a48bc8f5ff50c6923e1712d8899d68d'
 OLD_MANIFEST='0f16f0d60e05d13fa1778f5e9220341b4f62149ddc3e99ced10235344cf21944'
@@ -601,7 +614,40 @@ def exact_meta(meta,mode):
          'installed bytes/metadata drift')
 
 
+def previous_rolled_back():
+    """Bind the retained first-failure receipt and its backups without mutation.
+
+    The earlier apply recovered all installed bytes but left durable evidence;
+    it may never be replayed, renamed, removed or reused as this transaction.
+    """
+    R.trusted_tree(PREVIOUS_J)
+    R.trusted_tree(PREVIOUS_BK)
+    need(sha(PREVIOUS_J)==PREVIOUS_RECEIPT_SHA,'previous C receipt drift')
+    record=read_json(PREVIOUS_J)
+    need(record.get('schema')==SCHEMA and record.get('phase')=='rolled_back'
+         and record.get('commit')==PREVIOUS_COMMIT
+         and record.get('script_sha256')==PREVIOUS_SCRIPT_SHA
+         and record.get('manifest')==MANIFEST
+         and record.get('observation_sha256')==PREVIOUS_OBSERVATION_SHA,
+         'previous C transaction identity drift')
+    need(set(record.get('backups',{}))==set(PREVIOUS_BACKUP_SHA)
+         and set(os.listdir(PREVIOUS_BK))==set(PREVIOUS_BACKUP_SHA)
+         and stat.S_IMODE(PREVIOUS_BK.stat().st_mode)==0o700,
+         'previous C backup membership drift')
+    for name, pin in PREVIOUS_BACKUP_SHA.items():
+        path=PREVIOUS_BK/name
+        R.trusted_tree(path)
+        meta=file_meta(path)
+        need(meta==dict(sha256=pin,mode=0o600,uid=OWNER_UID,gid=OWNER_GID),
+             'previous C backup bytes/metadata drift')
+        before=record['backups'][name]
+        need(before==dict(sha256=pin,mode=0o600 if name=='inventory' else 0o644,
+                          uid=OWNER_UID,gid=OWNER_GID),
+             'previous C original metadata drift')
+
+
 def observation():
+    previous_rolled_back()
     idle()
     for path,pin in UNCHANGED.items():
         if path not in {LIB/name for name in TARGETS}:need(sha(path)==pin,'unchanged lib pin drift: '+path.name)
@@ -626,8 +672,9 @@ import sys
 sys.path.insert(0,sys.argv[1])
 import owner_package_admission as A
 import antigravity_qa_recovery as Q
-assert Q.OWNER_PACKAGE_SOURCES and callable(Q.package_rules_ok)
+assert Q.OWNER_PACKAGE_SOURCES and callable(Q.owner_package_input_pins)
 assert A.EXPECTED_PINS and callable(A.accept)
+assert callable(A.package_rules_ok)
 print('AGY29_SMALL_RANGE_SMOKE_PASS')
 """
 
@@ -795,6 +842,7 @@ def main():
         R.trusted_tree(path)
     for name,pins in TARGETS.items():need(sha(LIB/name) in pins,'unrecognized installed target')
     need((R.STATE,R.POLICY,R.AUTONOMY,R.BUDGET)==(STATE,POLICY,AUTONOMY,BUDGET),'receiver path drift')
+    previous_rolled_back()
     need(re.fullmatch('[a-f0-9]{40}',args.commit),'exact 40hex commit required')
     script_sha,material=source(args.bundle.absolute(),args.commit)
     if args.verb=='dry':return dry(script_sha,args.commit)
