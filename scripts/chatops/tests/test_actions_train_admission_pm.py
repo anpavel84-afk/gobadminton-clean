@@ -776,20 +776,21 @@ class AdmissionPM(unittest.TestCase):
             Q.owner_package_ledger(changed)
 
     def test_previous_personal_owner_package_calls_are_inherited(self, historical=0):
-        # Synthetic pre-delegation enrollment, using the unchanged two-role schema.
+        # Historical pre-delegation enrollment keeps its exact OLD source/input tuple.
         grants = []
         for role in P.ROLES:
-            revision, path, checksum = A.EXPECTED_PINS[role]
+            revision, path, checksum = Q.owner_package_input_pins(
+                Q.OWNER_PACKAGE_SOURCES[Q.FRESH_SOURCE_HEAD])[role]
             grants.append(dict(schema=Q.ADDRESSED_SCHEMA, lineage=Q.ADDRESSED_LINEAGE,
                 owner_comment=COMMENT-1, role=role, controller_revision=CONTROLLER,
                 cli_sha256=N.AGY_SHA256, rules_sha256=A.RULES,
-                base='c'*40, head=self.base,
-                input_revision=self.base if role == P.ROLES[0] else revision,
+                base=Q.FRESH_SOURCE_BASE, head=Q.FRESH_SOURCE_HEAD,
+                input_revision=revision,
                 input_path=path, input_sha256=checksum, timeout=1800, max_output_bytes=N.MAX_OUT,
                 permission_mode=N.PERMISSION_MODE, input_transport='stream-json', ceiling=1))
         package = dict(schema=Q.OWNER_PACKAGE_SCHEMA, owner_comment=COMMENT-1, owner_id=A.OWNER_ID,
-            issue=29, controller_sha=CONTROLLER, rules_sha256=A.RULES, source_base='c'*40,
-            source_head=self.base, body_sha256='f'*64, ceiling=2, used_calls=0,
+            issue=29, controller_sha=CONTROLLER, rules_sha256=A.RULES, source_base=Q.FRESH_SOURCE_BASE,
+            source_head=Q.FRESH_SOURCE_HEAD, body_sha256='f'*64, ceiling=2, used_calls=0,
             grants={digest(g): dict(grant=g, operation=None) for g in grants},
             previous_addressed_sha256=A.HIST, previous_supplement_sha256=A.SUP)
         Q.owner_package_ledger(package)
