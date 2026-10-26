@@ -377,11 +377,21 @@ class ReconcileTests(unittest.TestCase):
             return fn()
 
     def terminal_slot1(self, f):
-        checkpoint = {'active': {'issue': 313, 'phase': 'done',
-                                'head': 'bdd912a82a2f0087f4cfc9c6820edc8c49ee6527', 'attempt': 1},
+        # Inert synthetic metadata with the observed twenty-key shape; never copied from live state.
+        checkpoint = {'active': {'approved_since': 1700000000, 'attempt': 1, 'base': 'a' * 40,
+                                'ci': 'pass', 'ci_failure': None, 'deterministic_failure': None,
+                                'fingerprint': 'b' * 64,
+                                'head': 'bdd912a82a2f0087f4cfc9c6820edc8c49ee6527',
+                                'independent_qa_pending': False, 'issue': 313, 'live': True,
+                                'phase': 'done', 'pr': 999, 'qa': 'pass', 'qa_equivalence': None,
+                                'qa_origin': 'synthetic', 'release_id': 'synthetic-release',
+                                'run': 123, 'server': 'synthetic.invalid',
+                                'task': {'issue': 313, 'sample': 'inert fixture'}},
                       'done': [152, 205, 216, 313]}
         path = f.autonomy / 'slots/slot1/state.json'
         path.write_bytes(canonical(checkpoint))
+        # Replace only this module's checkpoint pin for this fixture; core.digest stays real.
+        f.p('SLOT1_CHECKPOINT_DIGEST', digest(checkpoint))
         return path, checkpoint
 
     def test_observed_constants_and_all_immutable_pins(self):
@@ -401,6 +411,8 @@ class ReconcileTests(unittest.TestCase):
         self.assertEqual(digest(I.CHECKPOINT), I.CHECKD)
         self.assertEqual(I.GENERATION, {'slot2': FACTS['generation']})
         self.assertEqual(I.AFTER_GENERATION, {'slot2': 116})
+        self.assertEqual(I.SLOT1_CHECKPOINT_DIGEST,
+                         'ad2692b063af9d8f26c1c9c800bd6be01eb0b790e8f974f1d9b4855cec59bd4a')
         self.assertEqual(I.FILES['journal'][1:], (0, 0, 0o600, FACTS['journal_sha']))
         self.assertEqual(I.FILES['policy'][1:], (0, 0, 0o644, FACTS['policy']['sha']))
         expected = {}
@@ -933,6 +945,11 @@ class ReconcileTests(unittest.TestCase):
     def test_exact_terminal_slot1_dry_apply_verify_and_rollback_preserve_bytes(self):
         f = self.fixture()
         path, checkpoint = self.terminal_slot1(f)
+        self.assertEqual(set(checkpoint['active']), set(
+            'approved_since attempt base ci ci_failure deterministic_failure fingerprint head '
+            'independent_qa_pending issue live phase pr qa qa_equivalence qa_origin release_id run server task'.split()))
+        self.assertNotEqual(digest(checkpoint),
+                            'ad2692b063af9d8f26c1c9c800bd6be01eb0b790e8f974f1d9b4855cec59bd4a')
         before = f.tree()
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
@@ -958,7 +975,7 @@ class ReconcileTests(unittest.TestCase):
                  ('numeric_done_alias', dict(checkpoint, done=[313.0]))]
         for field, value in [('issue', 314), ('head', 'f' * 40), ('phase', 'blocked'),
                              ('phase', 'running'), ('attempt', 2), ('attempt', True),
-                             ('issue', 313.0), ('extra', True)]:
+                             ('attempt', 1.0), ('attempt', '1'), ('issue', 313.0), ('issue', '313')]:
             cases.append((str((field, value)), dict(checkpoint,
                          active=dict(checkpoint['active'], **{field: value}), done=[313, 314])))
         cases.extend((str(active), dict(checkpoint, active=active)) for active in ({}, 'done'))
@@ -967,7 +984,9 @@ class ReconcileTests(unittest.TestCase):
                 path.write_bytes(canonical(value))
                 before = f.tree()
                 out = io.StringIO()
-                with patch.object(I, 'put_raw', side_effect=AssertionError('must refuse before writes')):
+                # Match the synthetic digest to prove semantic guards independently of the pin.
+                with patch.object(I, 'SLOT1_CHECKPOINT_DIGEST', digest(value)), \
+                        patch.object(I, 'put_raw', side_effect=AssertionError('must refuse before writes')):
                     with contextlib.redirect_stdout(out), self.assertRaises(SystemExit) as refused:
                         I.dry()
                     self.assertEqual(refused.exception.code, 1)
@@ -978,6 +997,51 @@ class ReconcileTests(unittest.TestCase):
                     with self.assertRaisesRegex(I.Refused, 'slot checkpoint occupied'):
                         I.apply()
                 self.assertEqual(f.tree(), before)
+
+    def test_terminal_slot1_entire_checkpoint_digest_refuses_metadata_changes(self):
+        f = self.fixture()
+        path, checkpoint = self.terminal_slot1(f)
+        cases = []
+        for field in set(checkpoint['active']) - {'issue', 'phase', 'head', 'attempt'}:
+            changed = copy.deepcopy(checkpoint)
+            changed['active'][field] = 'changed synthetic metadata'
+            cases.append((field, changed))
+        cases.extend([
+            ('extra_active_field', dict(checkpoint, active=dict(checkpoint['active'], extra=True))),
+            ('missing_metadata', dict(checkpoint, active={k: v for k, v in checkpoint['active'].items() if k != 'ci'})),
+            ('extra_checkpoint_field', dict(checkpoint, extra=True)),
+            ('different_done', dict(checkpoint, done=checkpoint['done'] + [314])),
+            ('only_four_fields', dict(checkpoint, active={k: checkpoint['active'][k]
+                                                        for k in ('issue', 'phase', 'head', 'attempt')})),
+            ('nested_task', dict(checkpoint, active=dict(checkpoint['active'],
+                                                        task={'issue': 313, 'sample': 'changed'}))),
+        ])
+        for name, changed in cases:
+            with self.subTest(field=name):
+                path.write_bytes(canonical(changed))
+                before = f.tree()
+                out = io.StringIO()
+                with patch.object(I, 'put_raw', side_effect=AssertionError('must refuse before writes')):
+                    with contextlib.redirect_stdout(out), self.assertRaises(SystemExit) as refused:
+                        I.dry()
+                    self.assertEqual(refused.exception.code, 1)
+                    result = json.loads(out.getvalue())
+                    self.assertEqual(result['status'], 'DRY_RUN_REFUSED')
+                    self.assertIn('slot1 checkpoint digest drift',
+                                  result['refused']['slots_idle_units_masked_no_model_procs_locks_free'])
+                    with self.assertRaisesRegex(I.Refused, 'slot1 checkpoint digest drift'):
+                        I.apply()
+                self.assertEqual(f.tree(), before)
+
+    def test_terminal_slot1_synthetic_fixture_cannot_use_live_digest(self):
+        f = self.fixture()
+        self.terminal_slot1(f)
+        before = f.tree()
+        with patch.object(I, 'SLOT1_CHECKPOINT_DIGEST',
+                          'ad2692b063af9d8f26c1c9c800bd6be01eb0b790e8f974f1d9b4855cec59bd4a'), \
+                self.assertRaisesRegex(I.Refused, 'slot1 checkpoint digest drift'):
+            I.preflight_slots()
+        self.assertEqual(f.tree(), before)
 
     def test_terminal_slot1_still_refuses_pending_and_model_process_before_write(self):
         f = self.fixture()
@@ -1009,12 +1073,51 @@ class ReconcileTests(unittest.TestCase):
         calls = []
         def drift():
             if calls:
-                path.write_bytes(canonical(dict(checkpoint, done=checkpoint['done'] + [314])))
+                (f.state / 'slot1.json').write_bytes(canonical(dict(generation=82, pending=None)))
             calls.append(True)
             return preflight()
         with patch.object(I, 'preflight', side_effect=drift), \
                 patch.object(I, 'put_raw', side_effect=AssertionError('must refuse before writes')), \
                 self.assertRaisesRegex(I.Refused, 'pre-write live drift'):
+            I.apply()
+        self.assertEqual(I.F_JOURNAL.read_bytes(), canonical(f.journal))
+        self.assertEqual(f.policy.read_bytes(), canonical(FACTS['policy']['value']))
+        self.assertFalse(I.J.exists())
+        self.assertFalse(I.BK.exists())
+
+    def test_terminal_slot1_still_refuses_worker_lock_and_unmasked_units(self):
+        f = self.fixture()
+        self.terminal_slot1(f)
+        before = f.tree()
+        with patch.object(I, 'run', return_value=b'ActiveState=inactive\nMainPID=0\nUnitFileState=enabled\n'), \
+                patch.object(I, 'put_raw', side_effect=AssertionError('must refuse before writes')), \
+                self.assertRaisesRegex(I.Refused, 'masked'):
+            I.apply()
+        self.assertEqual(f.tree(), before)
+        lock = f.autonomy / 'slots/slot1/worker.lock'
+        lock.write_bytes(b'')
+        info = lock.stat()
+        (f.proc / 'locks').write_text('1: FLOCK ADVISORY WRITE 1 %x:%x:%d 0 EOF\n' %
+                                    (os.major(info.st_dev), os.minor(info.st_dev), info.st_ino))
+        before = f.tree()
+        with patch.object(I, 'put_raw', side_effect=AssertionError('must refuse before writes')), \
+                self.assertRaisesRegex(I.Refused, 'slot lock inode held'):
+            I.apply()
+        self.assertEqual(f.tree(), before)
+
+    def test_terminal_slot1_prewrite_metadata_drift_refuses_digest_before_write(self):
+        f = self.fixture()
+        path, checkpoint = self.terminal_slot1(f)
+        preflight = I.preflight
+        calls = []
+        def drift():
+            if calls:
+                path.write_bytes(canonical(dict(checkpoint, active=dict(checkpoint['active'], run=124))))
+            calls.append(True)
+            return preflight()
+        with patch.object(I, 'preflight', side_effect=drift), \
+                patch.object(I, 'put_raw', side_effect=AssertionError('must refuse before writes')), \
+                self.assertRaisesRegex(I.Refused, 'slot1 checkpoint digest drift'):
             I.apply()
         self.assertEqual(I.F_JOURNAL.read_bytes(), canonical(f.journal))
         self.assertEqual(f.policy.read_bytes(), canonical(FACTS['policy']['value']))

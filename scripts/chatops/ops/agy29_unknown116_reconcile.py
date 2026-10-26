@@ -42,6 +42,7 @@ FINGERPRINT = 'ae8d648efeee945f60cb25e0ea2bc646ca0cfdf4405379f8af3032f79d9e8ac6'
 EVIDENCE_ID = '103b4acb54f64becb4c1e12c02f8aa38'
 CHECKPOINT = {'active': None, 'done': [152, 205, 216]}
 CHECKD = '6b5c9fab7fe8c73a9164d2fe7a1731232bfeb80cbf78746ab09a9b5e57e6b4eb'
+SLOT1_CHECKPOINT_DIGEST = 'ad2692b063af9d8f26c1c9c800bd6be01eb0b790e8f974f1d9b4855cec59bd4a'
 BINDING = {'action': 'train', 'attempt': 0, 'generation': 115, 'head': '12f35ac4430348ae811cf712d9bb24d2a19b62e6', 'issue': 29, 'phase': 'idle', 'profile': 'agy', 'slot': 'slot2', 'stage': 'qa_qualification'}
 RESULT = {'adapter_error': {'code': 'AGY_INPUT_LIMIT', 'detail': 'QA input 466131 bytes exceeds 262144 byte limit after rules inject; refusing before model call; no charge; not truncated; whole-file boundary scripts/chatops/ops/antigravity_addressed_upgrade.py; files=37; diff_bytes=314931', 'evidence_id': '103b4acb54f64becb4c1e12c02f8aa38', 'phase': 'source'}, 'checkpoint': None, 'reason': 'AGY_INPUT_LIMIT', 'safe_release': False, 'status': 'unknown'}
 GENERATION = {'slot2': 115}  # slot1 is deliberately NOT pinned (it is live); it must be idle and byte-stable across the transaction
@@ -747,10 +748,15 @@ def preflight_slots():
     active = slot1['active']
     # Only this observed terminal state is idle; it stays immutable, never a new claim/admission.
     slot1_idle = active is None or (
-        active == {'issue': 313, 'phase': 'done', 'head': 'bdd912a82a2f0087f4cfc9c6820edc8c49ee6527', 'attempt': 1}
-        and type(active['issue']) is int and type(active['attempt']) is int
+        isinstance(active, dict)
+        and type(active.get('issue')) is int and active['issue'] == 313
+        and active.get('phase') == 'done' and active.get('head') == 'bdd912a82a2f0087f4cfc9c6820edc8c49ee6527'
+        and type(active.get('attempt')) is int and active['attempt'] == 1
         and any(type(issue) is int and issue == 313 for issue in slot1['done']))
     need(slot1_idle and slots['slot2']['checkpoint'][0] == CHECKPOINT, 'slot checkpoint occupied')
+    if active is not None:
+        # Bind every checkpoint field, including all terminal-active metadata, to the trusted observation.
+        need(digest(slot1) == SLOT1_CHECKPOINT_DIGEST, 'slot1 checkpoint digest drift')
     return slots
 
 
