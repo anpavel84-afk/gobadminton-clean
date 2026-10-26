@@ -1,5 +1,5 @@
 """Hermetic UNKNOWN116 author checks. Facts are a checked-in observation subset, never live/evidence-dir reads.
-Fake-root pattern follows test_actions_train_inventory_rerecord.py; all scratch files require TMPDIR.
+Fake-root pattern follows test_actions_train_inventory_rerecord.py; scratch uses TMPDIR or tempfile's fallback.
 """
 import contextlib
 import copy
@@ -16,7 +16,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 BASE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE / 'actions_train'))
@@ -29,6 +29,7 @@ spec = importlib.util.spec_from_file_location('unknown116_under_test', SCRIPT)
 I = importlib.util.module_from_spec(spec)
 with patch.dict(sys.modules, receiver=bootstrap):
     spec.loader.exec_module(I)
+REAL_RUN, REAL_POPEN, REAL_GIT, REAL_EXECUTE = subprocess.run, subprocess.Popen, I.git, I.execute
 
 FACTS = json.loads(r'''
 {
@@ -329,8 +330,9 @@ class Fixture:
         self.p('meta', lambda path: dict(actual_meta(path), uid=0, gid=0))
         self.stack.enter_context(patch.object(I.os, 'fchown'))
         self.p('run', lambda argv, **kw: b'ActiveState=inactive\nMainPID=0\nUnitFileState=masked\n')
-        self.p('git', lambda *args: I.HEAD + '\n' if args == ('rev-parse', 'HEAD') else '')
+        self.p('git', lambda *args: I.HEAD + '\n' if args == ('rev-parse', '--verify', 'HEAD^{commit}') else '')
         self.stack.enter_context(patch.object(subprocess, 'run', side_effect=AssertionError('no subprocess in hermetic fixture')))
+        self.stack.enter_context(patch.object(subprocess, 'Popen', side_effect=AssertionError('inject executor, never real runuser')))
         self.stack.enter_context(patch.object(socket, 'socket', side_effect=AssertionError('no network')))
         # Exercise the unmodified admission-wrapper path with a fake installed admission module.
         def admission(controller):
@@ -524,21 +526,359 @@ class ReconcileTests(unittest.TestCase):
             I.proof()
         with patch.object(I, 'git', return_value='other-head'), self.assertRaisesRegex(I.Refused, 'later separately reviewed'):
             I.proof()
-        with patch.object(I, 'git', side_effect=[I.HEAD, ' M tracked-file']), self.assertRaisesRegex(I.Refused, 'dirty'):
+        with patch.object(I, 'git', side_effect=lambda *args: I.HEAD if args[0] == 'rev-parse' else
+                          (' M tracked-file' if args[0] == 'status' else '')), self.assertRaisesRegex(I.Refused, 'dirty'):
             I.proof()
 
+    def scratch_git(self):
+        f = self.fixture()
+        repo = Path(tempfile.mkdtemp(dir=os.environ.get('TMPDIR') or None))
+        self.addCleanup(lambda: shutil.rmtree(repo))
+        env = {'PATH': '/usr/bin:/bin', 'HOME': '/nonexistent', 'LANG': 'C.UTF-8',
+               'GIT_CONFIG_SYSTEM': '/dev/null', 'GIT_CONFIG_GLOBAL': '/dev/null',
+               'GIT_OPTIONAL_LOCKS': '0'}
+        def local(*args):
+            # Only scratch Git runs under this identity; no runuser/systemctl is executed.
+            with patch.object(subprocess, 'Popen', REAL_POPEN):
+                return REAL_RUN(['/usr/bin/git', '-C', str(repo), *args], env=env,
+                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                timeout=20, check=True).stdout.decode()
+        local('init', '-q')
+        (repo / 'tracked.txt').write_bytes(b'original\n')
+        local('add', 'tracked.txt')
+        local('-c', 'user.name=Synthetic', '-c', 'user.email=test@example.invalid',
+              'commit', '-qm', 'synthetic')
+        head = local('rev-parse', 'HEAD').strip()
+        f.p('WORK', str(repo))
+        f.p('HEAD', head)
+        for path in I.EXPECTED:
+            value = json.loads(path.read_bytes())
+            path.write_bytes(canonical(dict(value, source_sha=head)))
+            I.EXPECTED[path] = I.sha(path)
+        calls = []
+        def executor(argv, env, timeout=20):
+            self.assertEqual(argv[:6], ['/usr/sbin/runuser', '-u', 'gb-slot2', '--', '/usr/bin/git',
+                                        '--no-optional-locks'])
+            self.assertIn(str(repo), argv)
+            calls.append(argv)
+            with patch.object(subprocess, 'Popen', REAL_POPEN):
+                return REAL_EXECUTE(argv[4:], env, timeout)
+        f.p('execute', executor)
+        f.p('git', REAL_GIT)
+        return f, repo, local, calls
+
     def test_git_helper_is_scrubbed_read_only_runuser(self):
-        # Inspect the actual helper, not the fixture replacement; no command executes.
-        with patch.object(I.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stdout=b'clean\n')) as run:
-            self.assertEqual(I.git('status', '--porcelain=v1'), 'clean\n')
-        args, kw = run.call_args
-        self.assertEqual(args[0], ['/usr/sbin/runuser', '-u', 'gb-slot2', '--', '/usr/bin/git', '-C', I.WORK,
-                                   'status', '--porcelain=v1'])
-        self.assertEqual(kw['env']['GIT_OPTIONAL_LOCKS'], '0')
-        self.assertEqual(kw['env']['HOME'], '/nonexistent')
-        self.assertEqual(kw['env']['GIT_CONFIG_SYSTEM'], '/dev/null')
-        self.assertEqual(kw['env']['GIT_CONFIG_GLOBAL'], '/dev/null')
-        self.assertEqual(kw['stdin'], subprocess.DEVNULL)
+        f, repo, local, calls = self.scratch_git()
+        with patch.object(I, 'execute', return_value=b'clean\n') as execute:
+            self.assertEqual(I.git('status', '--porcelain=v1', '-z', '--untracked-files=all',
+                                   '--ignored=matching', '--ignore-submodules=all'), 'clean\n')
+        args, kw = execute.call_args
+        self.assertEqual(args[0], ['/usr/sbin/runuser', '-u', 'gb-slot2', '--', '/usr/bin/git',
+            '--no-optional-locks', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null',
+            '-c', 'core.untrackedCache=false', '-c', 'protocol.allow=never', '-c', 'core.pager=cat',
+            '-C', I.WORK, 'status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignored=matching', '--ignore-submodules=all'])
+        self.assertEqual(args[1], {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'HOME': '/nonexistent',
+            'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_CONFIG_SYSTEM': '/dev/null', 'GIT_OPTIONAL_LOCKS': '0',
+            'LANG': 'C.UTF-8', 'GIT_NO_REPLACE_OBJECTS': '1', 'GIT_NO_LAZY_FETCH': '1', 'GIT_TERMINAL_PROMPT': '0'})
+
+    def test_subprocess_helpers_pin_argv_allow_list(self):
+        self.fixture()
+        allowed = [('rev-parse', '--verify', 'HEAD^{commit}'),
+            ('status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignored=matching', '--ignore-submodules=all'),
+            ('ls-files', '-v', '-z'), ('ls-files', '-s', '-z'), ('ls-tree', '-r', '-z', 'HEAD'),
+            ('diff-index', '--raw', '--no-renames', '--no-ext-diff', '--no-textconv', '--ignore-submodules=all', 'HEAD', '--')]
+        with patch.object(I, 'git_config_safe'), patch.object(I, 'execute', return_value=b'') as execute:
+            for argv in allowed:
+                REAL_GIT(*argv)
+                self.assertEqual(execute.call_args.args[0][-len(argv):], list(argv))
+            for argv in [('checkout', 'HEAD'), ('config', '--list'), ('status',),
+                         ('-c', 'core.fsmonitor=evil', 'status'), ('hash-object', '-w', 'x')]:
+                with self.subTest(argv=argv), self.assertRaisesRegex(I.Refused, 'allow-list'):
+                    REAL_GIT(*argv)
+            # The actual run helper, restored from its definition, is tested separately below.
+        run_spec = importlib.util.spec_from_file_location('unknown116_argv_test', SCRIPT)
+        module = importlib.util.module_from_spec(run_spec)
+        with patch.dict(sys.modules, receiver=I.R):
+            run_spec.loader.exec_module(module)
+        with patch.object(module, 'execute', return_value=b'') as execute:
+            module.run(['/usr/bin/systemctl', 'show', 'synthetic-worker',
+                        '--property=ActiveState,MainPID,UnitFileState'])
+            self.assertEqual(execute.call_count, 1)
+            for argv in [['/usr/bin/systemctl', 'start', 'synthetic-worker'],
+                         ['/usr/bin/systemctl', 'show', 'foreign'], ['/bin/sh', '-c', 'true']]:
+                with self.subTest(argv=argv), self.assertRaisesRegex(I.Refused, 'allow-list'):
+                    module.run(argv)
+            self.assertEqual(execute.call_count, 1)
+
+    def test_fsmonitor_and_nonwhitelisted_config_refused_before_git(self):
+        f, repo, local, calls = self.scratch_git()
+        config = repo / '.git/config'
+        original = config.read_bytes()
+        sentinel = repo / '.git/helper-ran'
+        helper = repo / '.git/monitor'
+        helper.write_text('#!/bin/sh\nprintf invoked > "' + str(sentinel) + '"\n')
+        helper.chmod(0o700)
+        additions = ['[core]\nfsmonitor = ' + str(helper), '[core]\nhooksPath = /bad',
+            '[core]\npager = evil', '[filter "x"]\nclean = evil', '[include]\npath = /bad',
+            '[credential]\nhelper = evil', '[diff "x"]\ncommand = evil', '[alias]\nx = !evil',
+            '[extensions]\nobjectFormat = sha256', '[core]\nworktree = /bad']
+        for addition in additions:
+            with self.subTest(config=addition):
+                config.write_bytes(original + ('\n' + addition + '\n').encode())
+                calls.clear()
+                with self.assertRaisesRegex(I.Refused, 'non-whitelisted git config'):
+                    I.proof()
+                self.assertEqual(calls, [])
+                self.assertFalse(sentinel.exists())
+        config.write_bytes(original)
+        # Also inspect config.worktree even when its extension is not enabled.
+        extra = repo / '.git/config.worktree'
+        extra.write_text('[core]\nfsmonitor = ' + str(helper) + '\n')
+        with self.assertRaisesRegex(I.Refused, 'config key'):
+            I.proof()
+        extra.unlink()
+        for path in (repo / '.git/info/attributes', repo / '.git/hooks/post-checkout'):
+            path.write_bytes(b'foreign')
+            with self.assertRaisesRegex(I.Refused, 'info/hooks'):
+                I.proof()
+            path.unlink()
+
+    def test_normal_clone_and_linked_worktree_config(self):
+        f, repo, local, calls = self.scratch_git()
+        before = {str(p): p.read_bytes() for p in repo.rglob('*') if p.is_file()}
+        self.assertEqual(I.proof()['worktree_head'], I.HEAD)
+        self.assertEqual(before, {str(p): p.read_bytes() for p in repo.rglob('*') if p.is_file()})
+        linked = repo.parent / (repo.name + '-linked')
+        self.addCleanup(lambda: shutil.rmtree(linked, ignore_errors=True))
+        local('worktree', 'add', '--detach', str(linked), 'HEAD')
+        f.p('WORK', str(linked))
+        # Config validation itself must never invoke Git.
+        I.git_config_safe()
+        gd = Path((linked / '.git').read_text().strip().removeprefix('gitdir: '))
+        backlink = gd / 'gitdir'
+        saved = backlink.read_bytes()
+        backlink.write_text('/foreign/.git\n')
+        with self.assertRaisesRegex(I.Refused, 'backlink drift'):
+            I.git_config_safe()
+        backlink.write_bytes(saved)
+        (gd / 'config.worktree').write_text('[core]\nfsmonitor = evil\n')
+        with self.assertRaisesRegex(I.Refused, 'config key'):
+            I.git_config_safe()
+
+    def test_assume_unchanged_and_skip_worktree_refused(self):
+        f, repo, local, calls = self.scratch_git()
+        for flag in ('assume-unchanged', 'skip-worktree'):
+            local('update-index', '--' + flag, 'tracked.txt')
+            (repo / 'tracked.txt').write_bytes(b'tampered\n')
+            self.assertEqual(local('status', '--porcelain=v1'), '')
+            with self.subTest(flag=flag), self.assertRaisesRegex(I.Refused, 'hidden index flags'):
+                I.proof()
+            (repo / 'tracked.txt').write_bytes(b'original\n')
+            local('update-index', '--no-' + flag, 'tracked.txt')
+        # Even clean bytes with the flags set are forbidden.
+        local('update-index', '--assume-unchanged', 'tracked.txt')
+        with self.assertRaisesRegex(I.Refused, 'hidden index flags'):
+            I.proof()
+
+    def test_show_untracked_no_and_ignored_files_cannot_hide_foreign_bytes(self):
+        f, repo, local, calls = self.scratch_git()
+        local('config', 'status.showUntrackedFiles', 'no')
+        (repo / 'foreign.txt').write_bytes(b'foreign')
+        self.assertEqual(local('status', '--porcelain=v1'), '')
+        with self.assertRaisesRegex(I.Refused, 'dirty'):
+            I.proof()
+        (repo / '.git/info/exclude').write_text('foreign.txt\n')
+        self.assertEqual(local('status', '--porcelain=v1', '--untracked-files=all'), '')
+        with self.assertRaisesRegex(I.Refused, 'dirty'):
+            I.proof()
+
+    def test_independent_tree_index_diff_and_raw_content_gates(self):
+        f, repo, local, calls = self.scratch_git()
+        # Isolate each layer: status and diff/stat caches may lie; raw byte hashing must still refuse.
+        def mask(hidden, index=None, diff=None):
+            def checked(*argv):
+                if argv[0] in hidden:
+                    return ''
+                if argv[:2] == ('ls-files', '-s') and index is not None:
+                    return index
+                if argv[0] == 'diff-index' and diff is not None:
+                    return diff
+                return REAL_GIT(*argv)
+            return checked
+        (repo / 'tracked.txt').write_bytes(b'tampered\n')
+        with patch.object(I, 'git', side_effect=mask({'status', 'diff-index'})), \
+                self.assertRaisesRegex(I.Refused, 'tracked content differs'):
+            I.proof()
+        with patch.object(I, 'git', side_effect=mask({'status'}, diff=':foreign diff')), \
+                self.assertRaisesRegex(I.Refused, 'tracked diff'):
+            I.proof()
+        (repo / 'tracked.txt').write_bytes(b'original\n')
+        with patch.object(I, 'git', side_effect=mask(set(), index='')), \
+                self.assertRaisesRegex(I.Refused, 'index differs'):
+            I.proof()
+        (repo / 'tracked.txt').chmod(0o755)
+        local('config', 'core.fileMode', 'false')
+        with patch.object(I, 'git', side_effect=mask({'status', 'diff-index'})), \
+                self.assertRaisesRegex(I.Refused, 'executable mode drift'):
+            I.proof()
+
+    def test_git_layout_and_config_value_refusals(self):
+        f, repo, local, calls = self.scratch_git()
+        config = repo / '.git/config'
+        original = config.read_bytes()
+        for text in ('[core]\nbare = true\n', '[core]\nrepositoryformatversion = 1\n',
+                     '[status]\nshowUntrackedFiles = maybe\n'):
+            config.write_bytes(original + text.encode())
+            with self.subTest(text=text), self.assertRaisesRegex(I.Refused, 'config value'):
+                I.proof()
+        config.write_bytes(original)
+        for name in ('objects/info/alternates', 'objects/info/http-alternates', 'shallow'):
+            path = repo / '.git' / name
+            path.write_text('/foreign\n')
+            with self.subTest(name=name), self.assertRaisesRegex(I.Refused, 'object layout'):
+                I.proof()
+            path.unlink()
+        config.rename(config.with_name('saved-config'))
+        with self.assertRaisesRegex(I.Refused, 'missing git config'):
+            I.proof()
+        config.with_name('saved-config').rename(config)
+        gitdir = repo / 'metadata'
+        (repo / '.git').rename(gitdir)
+        (repo / '.git').write_text('not a gitdir pointer\n')
+        with self.assertRaisesRegex(I.Refused, 'gitdir pointer'):
+            I.proof()
+        (repo / '.git').write_text('gitdir: metadata\n')
+        I.git_config_safe()
+        (gitdir / 'commondir').write_text('\n')
+        with self.assertRaisesRegex(I.Refused, 'commondir'):
+            I.git_config_safe()
+        (gitdir / 'commondir').write_text('.\n')
+        with self.assertRaisesRegex(I.Refused, 'nonstandard linked'):
+            I.git_config_safe()
+
+    def test_git_auxiliary_and_regular_file_caps(self):
+        f, repo, local, calls = self.scratch_git()
+        hooks = repo / '.git/hooks'
+        for n in range(129):
+            (hooks / ('zz-' + chr(97 + n // 26) + chr(97 + n % 26) + '.sample')).write_bytes(b'')
+        with self.assertRaisesRegex(I.Refused, 'directory size cap'):
+            I.proof()
+        for path in hooks.glob('zz-*.sample'):
+            path.unlink()
+        config = repo / '.git/config'
+        original = config.read_bytes()
+        config.write_bytes(original + b'#' * 65537)
+        with self.assertRaisesRegex(I.Refused, 'file size cap'):
+            I.proof()
+        config.write_bytes(original)
+        tracked = repo / 'tracked.txt'
+        with tracked.open('wb') as stream:
+            stream.truncate(16 * 1024 * 1024 + 1)
+        with patch.object(I.os, 'fdopen') as read_stream:
+            with self.assertRaisesRegex(I.Refused, 'file size cap'):
+                I.regular_bytes(tracked, 16 * 1024 * 1024)
+            read_stream.assert_not_called()
+        with patch.object(I, 'git', side_effect=lambda *args: '' if args[0] in ('status', 'diff-index') else REAL_GIT(*args)), \
+                self.assertRaisesRegex(I.Refused, 'file size cap'):
+            I.proof()
+        tracked.write_bytes(b'ok')
+        with patch.object(I.os, 'fdopen', return_value=io.BytesIO(b'grew')):
+            with self.assertRaisesRegex(I.Refused, 'file size cap'):
+                I.regular_bytes(tracked, 3)
+
+    def test_tracked_entry_and_content_budget_refusals(self):
+        f, repo, local, calls = self.scratch_git()
+        def changed(tree=None, index=None):
+            def git(*args):
+                if args[0] == 'ls-tree' and tree is not None:
+                    return tree
+                if args[:2] == ('ls-files', '-s') and index is not None:
+                    return index
+                return REAL_GIT(*args)
+            return git
+        oid = local('rev-parse', 'HEAD:tracked.txt').strip()
+        for mode, kind in [('160000', 'commit'), ('120000', 'blob')]:
+            with patch.object(I, 'git', side_effect=changed(tree=mode + ' ' + kind + ' ' + oid + '\ttracked.txt\0')), \
+                    self.assertRaisesRegex(I.Refused, 'unsupported HEAD'):
+                I.proof()
+        with patch.object(I, 'git', side_effect=changed(tree='100644 blob ' + oid + '\t../foreign\0')), \
+                self.assertRaisesRegex(I.Refused, 'unsafe tracked path'):
+            I.proof()
+        with patch.object(I, 'git', side_effect=changed(index='100644 ' + oid + ' 1\ttracked.txt\0')), \
+                self.assertRaisesRegex(I.Refused, 'unmerged/duplicate'):
+            I.proof()
+        # Synthetic matching tree/index to reach the count cap without 10,001 disk files.
+        tree = ''.join('100644 blob ' + oid + '\tf' + str(n) + '\0' for n in range(10001))
+        index = ''.join('100644 ' + oid + ' 0\tf' + str(n) + '\0' for n in range(10001))
+        def many(*args):
+            if args[0] == 'ls-tree':
+                return tree
+            if args[:2] == ('ls-files', '-s'):
+                return index
+            if args[0] == 'diff-index':
+                return ''
+            return REAL_GIT(*args)
+        with patch.object(I, 'git', side_effect=many), self.assertRaisesRegex(I.Refused, 'file count cap'):
+            I.proof()
+        # Deadline is checked independently from Git output and file content.
+        responses = {argv: REAL_GIT(*argv) for argv in [
+            ('rev-parse', '--verify', 'HEAD^{commit}'), ('ls-tree', '-r', '-z', 'HEAD'),
+            ('status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignored=matching', '--ignore-submodules=all'),
+            ('ls-files', '-v', '-z'), ('ls-files', '-s', '-z'),
+            ('diff-index', '--raw', '--no-renames', '--no-ext-diff', '--no-textconv', '--ignore-submodules=all', 'HEAD', '--')]}
+        with patch.object(I, 'git', side_effect=lambda *args: responses[args]), \
+                patch.object(I.time, 'monotonic', side_effect=[0, 21]), \
+                self.assertRaisesRegex(I.Refused, 'content proof cap'):
+            I.proof()
+
+    def test_executor_pipe_timeout_output_caps_and_stdin(self):
+        self.fixture()
+        for case in ('success', 'timeout', 'output', 'exit'):
+            with self.subTest(case=case):
+                process = MagicMock()
+                process.__enter__.return_value = process
+                process.stdout = MagicMock()
+                process.stderr = MagicMock()
+                process.wait.return_value = 1 if case == 'exit' else 0
+                process.poll.return_value = None if case in ('timeout', 'output') else 0
+                selector = MagicMock()
+                selector.__enter__.return_value = selector
+                selector.get_map.side_effect = [True, False]
+                selector.select.return_value = [(SimpleNamespace(fileobj=process.stdout), 1)]
+                raw = b'x' * (16 * 1024 * 1024 + 1) if case == 'output' else b'ok'
+                ticks = [0, 21] if case == 'timeout' else [0, 0, 0]
+                with patch.object(I.subprocess, 'Popen', return_value=process) as popen, \
+                        patch.object(I.selectors, 'DefaultSelector', return_value=selector), \
+                        patch.object(I.os, 'read', return_value=raw), \
+                        patch.object(I.time, 'monotonic', side_effect=ticks):
+                    if case == 'success':
+                        self.assertEqual(I.execute(['synthetic'], {}), b'ok')
+                    else:
+                        with self.assertRaisesRegex(I.Refused, {'timeout': 'timeout', 'output': 'output cap',
+                                                               'exit': 'command failed'}[case]):
+                            I.execute(['synthetic'], {})
+                    self.assertIs(popen.call_args.kwargs['stdin'], subprocess.DEVNULL)
+                    if case in ('timeout', 'output'):
+                        process.kill.assert_called_once()
+        with self.assertRaisesRegex(I.Refused, 'timeout outside bound'):
+            I.execute(['synthetic'], {}, 21)
+
+    def test_early_restore_manifest_gate_prevents_policy_reactivation(self):
+        f = self.fixture()
+        self.quiet_call(I.apply)
+        receipt = json.loads(I.J.read_bytes())
+        manifest = json.loads(I.MANIFEST_FILE.read_bytes())
+        (f.state / 'attempts.json').write_bytes(b'foreign drift before restoration')
+        put, active_writes = I.put_raw, []
+        def watch(path, raw, *args):
+            if path == f.policy and json.loads(raw)['mode'] == 'active':
+                active_writes.append(raw)
+            return put(path, raw, *args)
+        with patch.object(I, 'put_raw', side_effect=watch), self.assertRaisesRegex(I.Refused, 'manifest'):
+            I.restore(receipt, manifest)
+        self.assertEqual(active_writes, [], 'early manifest refusal must precede ANY policy reactivation')
+        self.assertEqual(json.loads(f.policy.read_bytes())['mode'], 'disabled')
+        self.assertEqual(json.loads(I.J.read_bytes())['phase'], 'restore_failed')
 
     def test_dry_and_verify_write_nothing_cycle_and_idempotent_rollback(self):
         f = self.fixture()

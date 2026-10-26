@@ -8,6 +8,9 @@ Exactly ONE protected file changes: /var/lib/gobadminton-actions-train/slot2.jso
 Policy is disabled only for the write window and restored to its exact original bytes/mode/owner.
 Root usage: /usr/bin/python3 -B /root/gb-agy29-unknown116-scheduling-reconcile-20261026.py <dry|apply|verify|rollback>
 dry and verify write nothing. apply/rollback hold controller.lock.
+Subprocess scope: bounded read-only git plumbing/status against WORK via runuser gb-slot2;
+bounded read-only systemctl show/is-* in this script and inherited receiver/admission checks.
+No repository executable helpers are permitted. Cleanliness is a bounded observation, not a filesystem lock.
 """
 import contextlib
 import copy
@@ -17,9 +20,11 @@ import json
 import os
 import pathlib
 import re
+import selectors
 import stat
 import subprocess
 import sys
+import time
 sys.dont_write_bytecode = True
 sys.path.insert(0, '/usr/local/lib/gb-actions-train')
 import receiver as R
@@ -109,7 +114,7 @@ def directory_fd(path):
         raise
 
 
-def regular_bytes(path):
+def regular_bytes(path, limit=None):
     """Walk every component without following links; reject racing/hardlinked files."""
     path = pathlib.Path(path)
     need(path.is_absolute() and '..' not in path.parts, 'noncanonical file path')
@@ -124,8 +129,10 @@ def regular_bytes(path):
         fd = child
         before = os.fstat(fd)
         need(stat.S_ISREG(before.st_mode) and before.st_nlink == 1, 'unsafe regular file')
+        need(limit is None or before.st_size <= limit, 'regular file size cap')
         with os.fdopen(os.dup(fd), 'rb') as stream:
-            raw = stream.read()
+            raw = stream.read() if limit is None else stream.read(limit + 1)
+        need(limit is None or len(raw) <= limit, 'regular file size cap')
         need(stable(os.fstat(fd)) == stable(before), 'file changed during hash')
         current = path.lstat()
         need((current.st_dev, current.st_ino) == (before.st_dev, before.st_ino), 'file replaced during hash')
@@ -169,11 +176,41 @@ def encode(value, flag):
 
 
 def run(argv, timeout=20):
+    need(argv in [[ '/usr/bin/systemctl', 'show', unit,
+                   '--property=ActiveState,MainPID,UnitFileState'] for unit in R.UNITS],
+         'OPS argv outside read-only allow-list')
     env = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'HOME': '/root', 'LANG': 'C.UTF-8', 'PYTHONDONTWRITEBYTECODE': '1'}
-    p = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout, check=False,
-                       env=env, stdin=subprocess.DEVNULL)
-    need(p.returncode == 0, 'bounded OPS command failed')
-    return p.stdout
+    return execute(argv, env, timeout)
+
+
+def execute(argv, env, timeout=20):
+    """Shared executor: drain both pipes with a combined 16 MiB cap and a wall-clock deadline."""
+    need(0 < timeout <= 20, 'subprocess timeout outside bound')
+    output, total, deadline = [], 0, time.monotonic() + timeout
+    with subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          env=env, stdin=subprocess.DEVNULL) as process:
+        try:
+            with selectors.DefaultSelector() as selector:
+                for stream in (process.stdout, process.stderr):
+                    selector.register(stream, selectors.EVENT_READ)
+                while selector.get_map():
+                    left = deadline - time.monotonic()
+                    need(left > 0, 'bounded command timeout')
+                    for key, _ in selector.select(left):
+                        raw = os.read(key.fileobj.fileno(), 65536)
+                        if not raw:
+                            selector.unregister(key.fileobj)
+                            continue
+                        total += len(raw)
+                        need(total <= 16 * 1024 * 1024, 'bounded command output cap')
+                        if key.fileobj is process.stdout:
+                            output.append(raw)
+            need(process.wait(timeout=max(0.001, deadline - time.monotonic())) == 0, 'bounded read command failed')
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+    return b''.join(output)
 
 
 def lock_unheld(path):
@@ -226,13 +263,134 @@ def model_procs():
     return others
 
 
+def git_config_safe():
+    """Fail closed on nonstandard config/layout, using bytes only, before EVERY git invocation.
+
+    Deliberately accept a small Git-config grammar, not includes, continuations or escape syntax.
+    Linked worktrees must use the normal common.git/worktrees/<name> + commondir/backlink layout.
+    """
+    work = pathlib.Path(WORK)
+    dot = work / '.git'
+    if stat.S_ISDIR(dot.lstat().st_mode):
+        gd = dot
+    else:
+        raw = regular_bytes(dot, 4096).decode('utf-8')
+        need(re.fullmatch(r'gitdir: [^\n\r\0]+\n?', raw) is not None, 'unsafe gitdir pointer')
+        gd = pathlib.Path(os.path.abspath(work / raw.removeprefix('gitdir: ').strip()))
+    # directory_fd walks without symlinks (including every pointer component).
+    os.close(directory_fd(gd))
+    common = gd
+    if os.path.lexists(gd / 'commondir'):
+        raw = regular_bytes(gd / 'commondir', 4096).decode('utf-8').strip()
+        need(raw and '\n' not in raw and '\0' not in raw, 'unsafe commondir')
+        common = pathlib.Path(os.path.abspath(gd / raw))
+        os.close(directory_fd(common))
+        need(gd.parent.name == 'worktrees' and gd.parent.parent == common, 'nonstandard linked worktree')
+        need(regular_bytes(gd / 'gitdir', 4096).decode().strip() == str(dot), 'worktree backlink drift')
+
+    def config(path):
+        section = None
+        for line in regular_bytes(path, 65536).decode('utf-8').splitlines():
+            line = line.strip()
+            if not line or line.startswith(('#', ';')):
+                continue
+            header = re.fullmatch(r'\[(core|extensions|status|user)\]', line, re.I)
+            named = re.fullmatch(r'\[(remote|branch) "([A-Za-z0-9_./-]+)"\]', line, re.I)
+            if header or named:
+                section = (header or named)[1].lower()
+                continue
+            pair = re.fullmatch(r'([A-Za-z][A-Za-z0-9]*)\s*=\s*([^\\\x00-\x1f]*)', line)
+            need(pair is not None and section is not None, 'non-whitelisted git config syntax/section')
+            key, value = pair[1].lower(), pair[2].strip()
+            allowed = {'core': {'repositoryformatversion': ('0',), 'bare': ('false',),
+                                'filemode': ('true', 'false'), 'logallrefupdates': ('true',),
+                                'ignorecase': ('true', 'false'), 'precomposeunicode': ('true', 'false'),
+                                'symlinks': ('true',)},
+                       'extensions': {'worktreeconfig': ('true',)},
+                       'status': {'showuntrackedfiles': ('no', 'normal', 'all')},
+                       'user': {'name': None, 'email': None},
+                       'remote': {'url': None, 'fetch': None}, 'branch': {'remote': None, 'merge': None}}
+            need(key in allowed[section], 'non-whitelisted git config key: ' + section + '.' + key)
+            values = allowed[section][key]
+            need(values is None or value.lower() in values, 'non-whitelisted git config value')
+
+    need(os.path.lexists(common / 'config'), 'missing git config')
+    for root in {common, gd}:
+        for name in ('config', 'config.worktree'):
+            if os.path.lexists(root / name):
+                config(root / name)
+        for name in ('info', 'hooks'):
+            directory = root / name
+            if not os.path.lexists(directory):
+                continue
+            fd = directory_fd(directory)
+            try:
+                entries = os.listdir(fd)
+                need(len(entries) <= 128, 'git auxiliary directory size cap')
+                for entry in entries:
+                    need((name == 'info' and entry == 'exclude') or
+                         (name == 'hooks' and re.fullmatch(r'[a-z-]+\.sample', entry)),
+                         'non-whitelisted git info/hooks entry')
+                    regular_bytes(directory / entry, 65536)
+            finally:
+                os.close(fd)
+        for name in ('objects/info/alternates', 'objects/info/http-alternates', 'shallow'):
+            need(not os.path.lexists(root / name), 'nonstandard git object layout')
+
+
 def git(*args):
+    allowed = (('rev-parse', '--verify', 'HEAD^{commit}'),
+               ('status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignored=matching', '--ignore-submodules=all'),
+               ('ls-files', '-v', '-z'), ('ls-files', '-s', '-z'), ('ls-tree', '-r', '-z', 'HEAD'),
+               ('diff-index', '--raw', '--no-renames', '--no-ext-diff', '--no-textconv', '--ignore-submodules=all', 'HEAD', '--'))
+    need(args in allowed, 'git argv outside read-only allow-list')
+    git_config_safe()
     env = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'HOME': '/nonexistent', 'GIT_CONFIG_GLOBAL': '/dev/null',
-           'GIT_CONFIG_SYSTEM': '/dev/null', 'GIT_OPTIONAL_LOCKS': '0', 'LANG': 'C.UTF-8'}
-    p = subprocess.run(['/usr/sbin/runuser', '-u', 'gb-slot2', '--', '/usr/bin/git', '-C', WORK] + list(args),
-                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=20, check=False, env=env, stdin=subprocess.DEVNULL)
-    need(p.returncode == 0, 'bounded git read failed')
-    return p.stdout.decode()
+           'GIT_CONFIG_SYSTEM': '/dev/null', 'GIT_OPTIONAL_LOCKS': '0', 'LANG': 'C.UTF-8',
+           'GIT_NO_REPLACE_OBJECTS': '1', 'GIT_NO_LAZY_FETCH': '1', 'GIT_TERMINAL_PROMPT': '0'}
+    options = ['--no-optional-locks', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null',
+               '-c', 'core.untrackedCache=false', '-c', 'protocol.allow=never', '-c', 'core.pager=cat']
+    return execute(['/usr/sbin/runuser', '-u', 'gb-slot2', '--', '/usr/bin/git', *options, '-C', WORK,
+                    *args], env).decode('utf-8')
+
+
+def clean_worktree():
+    need(git('rev-parse', '--verify', 'HEAD^{commit}').strip() == HEAD,
+         'candidate HEAD changed; a later separately reviewed step may have moved this checkout; refuse without touching it')
+    tree = {}
+    for entry in git('ls-tree', '-r', '-z', 'HEAD').split('\0'):
+        if not entry:
+            continue
+        header, path = entry.split('\t', 1)
+        mode, kind, oid = header.split(' ')
+        need(mode in ('100644', '100755') and kind == 'blob' and re.fullmatch(r'[0-9a-f]{40}', oid),
+             'unsupported HEAD tree entry')
+        need(path not in tree and not path.startswith('/') and
+             all(part not in ('', '.', '..', '.git') for part in path.split('/')), 'unsafe tracked path')
+        tree[path] = (mode, oid)
+    need(not git('status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignored=matching', '--ignore-submodules=all'), 'source work tree dirty')
+    flags = git('ls-files', '-v', '-z').split('\0')
+    need(all(entry.startswith('H ') for entry in flags if entry), 'hidden index flags')
+    index = {}
+    for entry in git('ls-files', '-s', '-z').split('\0'):
+        if entry:
+            header, path = entry.split('\t', 1)
+            mode, oid, stage = header.split(' ')
+            need(stage == '0' and path not in index, 'unmerged/duplicate index entry')
+            index[path] = (mode, oid)
+    need(index == tree, 'index differs from HEAD tree')
+    need(not git('diff-index', '--raw', '--no-renames', '--no-ext-diff', '--no-textconv', '--ignore-submodules=all', 'HEAD', '--'),
+         'tracked diff against HEAD')
+    need(len(tree) <= 10000, 'tracked file count cap')
+    total, deadline = 0, time.monotonic() + 20
+    for path, (mode, oid) in tree.items():
+        raw = regular_bytes(pathlib.Path(WORK) / path, 16 * 1024 * 1024)
+        total += len(raw)
+        need(total <= 256 * 1024 * 1024 and time.monotonic() <= deadline, 'tracked content proof cap')
+        # Raw Git blob hash: no attributes, filters, index stat-cache or executable subprocess.
+        actual = hashlib.sha1(b'blob ' + str(len(raw)).encode('ascii') + b'\0' + raw).hexdigest()
+        need(actual == oid, 'tracked content differs from HEAD')
+        need(bool(meta(pathlib.Path(WORK) / path)['mode'] & 0o111) == (mode == '100755'), 'tracked executable mode drift')
 
 
 def proof():
@@ -255,9 +413,7 @@ def proof():
         phase = json.loads(regular_bytes(EVID / ('phase-%02d.json' % number)), object_pairs_hook=unique)
         need(phase == expected, 'pre-model phase content drift: phase-%02d' % number)
     need(not R.alive(PROCESS), 'original operation process is still alive')
-    need(git('rev-parse', 'HEAD').strip() == HEAD,
-         'candidate HEAD changed; a later separately reviewed step may have moved this checkout; refuse without touching it')
-    need(not git('status', '--porcelain=v1').strip(), 'source work tree dirty')
+    clean_worktree()
     return dict(evidence_files=len(EXPECTED), model_calls=0, charge_state='not_charged',
                 terminal='AGY_INPUT_LIMIT', worktree_head=HEAD)
 
