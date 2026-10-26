@@ -327,3 +327,12 @@
 - Budget в slots.py — локальные daily call caps, не измеренная недельная квота. Не утверждать, что weeklyUNKNOWN требует блокировать утверждённые daily limits; автоматическая межпровайдерная балансировка остаётся выключена.
 - PR100 audit: https://github.com/anpavel84-afk/gobadminton-clean/pull/100#issuecomment-6315393091 . Все прежние findings переданы в r10; свежие monitor/admission findings проверить после результата.
 - #147 RESUME обработан: attempt3/head9d3e092cc30796ffc0096c50584a771e60c18ef3, последняяphasepr_wait, QA ещёnull. Не прерывать ради install. M2R149 planning2685420 ещёработает, admissionнет.
+
+
+## 26.10.2026 11:08 BRT — подхват PMA от Grok (Owner «продолжи работы Грока»)
+- Управление передано по HANDOFF_PMA_TO_CHATGPT_20261026.md, отметка владельца изменена только в `ops/grok-toolkit/LIVE_STATE_RU.md`: commit `7975a83eb01838eab998856daf1ddf60fedc24ce`, ветка `ops/takeover-runbook-v1`, без merge в dev.
+- Живая GitHub-сверка на входе: `dev=c71346dc18ea6288e873b68e70ed94f084e4c353`; PR #329 merged, но guarded root reconcile неизвестен/не применён по handoff; PR #330 draft, head `71d2d93f0e0276d563f21d31f8747a3bbd5f86ed`, Product CI success; отдельная VPS QA C3 заявлена running на время handoff, исход не подтверждён.
+- AGY #29 slot2 UNKNOWN operation `36aec348...` generation 115 — не replay/zero/refund. Qualification checkout и installer под отдельные gates и точный Owner root-go; никаких новых модельных вызовов/адмиссий от нового PMA пока нет.
+- P1b frozen: branch `ops/proportionate-testing-p1b-20261026` @ `cf747527f17f5d465e867c19463b25539ac002f5`; 61 failures reported by handoff, no PR/QA/CI; no rerun without recovery decision. Source P1 merged P1b not installed. Product Train paused; PROD untouched.
+- Один read-only VPS CLI status query returned `antigravity-qa.json` phase=canary; другая комбинированная QA-status CLI operation получила отказ платформы — не повторялась. Никаких root apply, start авторов/QA, merge/issue admission не делалось.
+- Следующее: адресно подтвердить итог QA C3 и real slot2/receipt через допустимое минимальное чтение; после QA PASS решать PR #330, подготовить PR D checkout mover и точный immutable root bundle. P1b — продолжить после исчерпания recovery evidence, не ослабляя TEST PLAN gate.
