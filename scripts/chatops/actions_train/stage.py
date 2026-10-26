@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import urllib.parse
 from core import API, Refused, Retry, SINCE, live, need, route
+from test_plan_gate import OK, guidance as test_guidance, stage_check as test_plan_check
 
 
 def setup(req, config, native_auth=None):
@@ -81,6 +82,11 @@ def setup(req, config, native_auth=None):
     original_model = bridge.model
     def measured_model(prompt, qa=False):
         effect_gate()
+        if req['stage'] in ('author', 'qa'):
+            test_receipt = test_plan_check(req, store.data['active'], bridge)
+            need(test_receipt['status'] in OK, test_receipt['status'])
+            addition = test_guidance(test_receipt)
+            if addition: prompt += '\n' + addition
         from failure_diagnosis import enabled
         if req['stage'] == 'failure_diagnosis' or (req['stage'] == 'diagnose'
                 and enabled(store.data['active'])):
@@ -289,6 +295,8 @@ def perform(req, config, context):
         rt.lease(active)
         b.work = b.c.worktrees_root / f'issue-{active["issue"]}'
         b.unchanged_issue(active)
+        metadata['test_plan'] = test_plan_check(req, active, b)
+        if metadata['test_plan']: need(metadata['test_plan']['status'] in OK, metadata['test_plan']['status'])
         if stage == 'qa':
             from qa_recovery import reconcile
             return reconcile(a,b,rt,store,req)
@@ -338,6 +346,8 @@ def perform(req, config, context):
         need(not req.get('_task_hash') or __import__('core').digest(active['task']) == req['_task_hash'],
              'task changed between admission and claim')
         b.unchanged_issue(active)
+        metadata['test_plan'] = test_plan_check(req, active, b)
+        need(metadata['test_plan']['status'] in OK, metadata['test_plan']['status'])
         rt.lease(active)
         b.work = b.c.worktrees_root / f'issue-{active["issue"]}'
         need(not b.work.exists() and not b.git('branch', '--list', f'automation/issue-{active["issue"]}'),
@@ -372,6 +382,10 @@ def perform(req, config, context):
         rt.lease(active)
         b.work = b.c.worktrees_root / f'issue-{active["issue"]}'
         b.unchanged_issue(active)
+        test_receipt = test_plan_check(req, active, b)
+        if test_receipt:
+            metadata['test_plan'] = test_receipt
+            need(test_receipt['status'] in OK, test_receipt['status'])
         if stage == 'failure_diagnosis':
             from failure_diagnosis import perform as diagnose
             return diagnose(context)
@@ -601,7 +615,7 @@ def entry(req, config, native_auth=None):
             return recover(req, config, context)
         return model_receipt(perform(req, config, context), context)
     except Retry as error:
-        return dict(status='waiting', reason=str(error), retry_after=error.after)
+        return model_receipt(dict(status='waiting', reason=str(error), retry_after=error.after), context)
     except Exception as error:
         from native_antigravity import ReviewError
         if isinstance(error, ReviewError):
@@ -645,6 +659,8 @@ def entry(req, config, native_auth=None):
 
 
 def model_receipt(result, context):
+    if context and getattr(context[-1], 'test_plan', None):
+        result['test_plan'] = context[-1].test_plan
     calls = getattr(context[-1], 'routing_receipts', []) if context else []
     if calls:
         result['routing'] = calls[-1] | {'stage_result': result.get('status')}
