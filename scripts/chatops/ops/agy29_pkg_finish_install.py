@@ -72,6 +72,17 @@ REQUIRED_STATE=(STATE/'slot1.json',STATE/'slot2.json',
  STATE/'antigravity-29-owner-package-6404499964.json',
  STATE/'antigravity-29-addressed-ledger.json',STATE/'antigravity-29-stage3-supplement.json')
 SCHEMA='GB_AGY29_PKG_FINISH_INSTALL_V1'
+# Post-C5 inventory exception: the C5 installer (#294) wrote the EOM 1.4 rules but
+# left that one inventory `after` entry at EOM 1.3. It is accepted ONLY as this
+# exact pinned pair AND only while the immutable, hash-pinned C5 receipt chain
+# proves the transition. Any other path, any third hash and the reverse mismatch refuse.
+RULES_NAME='accepted-engineering-rules.md'
+RULES_INVENTORY_SHA='38c34012f10974496a7d7cbc74ecacb62bf7847278e295edfeb107d69a5d1c1c'  # EOM 1.3 (100818 bytes)
+RULES_LIVE_SHA='017441dec5ba197a1065b6ef90efdddb090b286ba48687241a7fbc09dd002269'  # EOM 1.4 (113203 bytes)
+C5_RECEIPT_NAME='agy29-nopolicy294-scoped-install.json'
+C5_BACKUP_NAME='agy29-nopolicy294-scoped-backup'
+C5_RECEIPT_SHA='04106cc1a6a2afa0bd840244b270947b129b661cca77834eed7f1fe1e008a704'
+C5_SCHEMA='GB_AGY29_NOPOLICY294_INSTALL_V1'
 PROC_LOCKS=Path('/proc/locks')
 R=None
 
@@ -364,15 +375,52 @@ def inventory_after(before):
     return after
 
 
+def rules_provenance():
+    """Hash-bound proof that EOM 1.3 -> EOM 1.4 was installed by the active C5 receipt.
+
+    Read-only. Returns a small dict that is part of the observation digest, so apply
+    refuses if any of it changes between dry and apply.
+    """
+    try:raw=regular_bytes(STATE/C5_RECEIPT_NAME)
+    except OSError:raise Refused('C5 receipt unreadable')
+    need(bytes_sha(raw)==C5_RECEIPT_SHA,'C5 receipt bytes drift')
+    from core import loads
+    receipt=loads(raw)
+    need(receipt.get('schema')==C5_SCHEMA and receipt.get('phase')=='active'
+         and receipt.get('controller_sha')==C and receipt.get('manifest_sha256')==OLD_MANIFEST
+         and receipt.get('rules_sha256')==RULES_LIVE_SHA
+         and isinstance(receipt.get('backups'),dict)
+         and isinstance(receipt['backups'].get('rules'),dict)
+         and receipt['backups']['rules'].get('sha256')==RULES_INVENTORY_SHA,'C5 receipt chain mismatch')
+    try:backup=regular_bytes(STATE/C5_BACKUP_NAME/'rules')
+    except OSError:raise Refused('C5 rules backup unreadable')
+    need(bytes_sha(backup)==RULES_INVENTORY_SHA,'C5 rules backup drift')
+    need(sha(LIB/RULES_NAME)==RULES_LIVE_SHA and UNCHANGED.get(LIB/RULES_NAME,RULES_LIVE_SHA)==RULES_LIVE_SHA,
+         'live rules are not the C5-installed EOM 1.4')
+    return dict(c5_receipt_sha256=C5_RECEIPT_SHA,rules_backup_sha256=RULES_INVENTORY_SHA,
+                rules_live_sha256=RULES_LIVE_SHA)
+
+
+def inventory_live_matches(path,pin,live):
+    """Strict equality, except the single pinned post-C5 rules pair (callers prove provenance)."""
+    if live==pin:return 'exact'
+    if str(path)==str(LIB/RULES_NAME) and pin==RULES_INVENTORY_SHA and live==RULES_LIVE_SHA:
+        return 'c5_rules'
+    return None
+
+
 def observation():
     idle()
     for path,pin in UNCHANGED.items():need(sha(path)==pin,'unchanged lib pin drift: '+path.name)
     for name,(old,_) in TARGETS.items():need(sha(LIB/name)==old,'target baseline drift: '+name)
     inventory=read_json(INVENTORY);inventory_after(inventory)
+    provenance=None
     for path,pin in inventory['after'].items():
-        need(sha(Path(path))==pin,'live inventory byte drift')
+        how=inventory_live_matches(path,pin,sha(Path(path)))
+        need(how is not None,'live inventory byte drift')
+        if how=='c5_rules':provenance=rules_provenance()
     need(read_json(MARKER).get('phase')=='canary','installed marker must be canary')
-    return dict(protected=protected_state(),inventory_sha256=sha(INVENTORY),
+    return dict(protected=protected_state(),inventory_sha256=sha(INVENTORY),inventory_rules_provenance=provenance,
         targets={name:dict(sha256=sha(LIB/name),mode=stat.S_IMODE((LIB/name).stat().st_mode),
                           uid=(LIB/name).stat().st_uid,gid=(LIB/name).stat().st_gid) for name in TARGETS})
 

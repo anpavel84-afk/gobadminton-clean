@@ -565,7 +565,124 @@ class ScopedInstallTests(unittest.TestCase):
             with self.assertRaisesRegex(I.Refused,'observation changed'):I.apply({},'1'*40,'0'*64)
 
 
+    def c5_rules_fixture(self, stack, lib, state, inventory, receipt_edit=None):
+        # Synthetic EOM 1.3 -> 1.4 transition with a hash-bound C5 receipt chain.
+        old,new=b'eom 1.3 rules',b'eom 1.4 rules'
+        (lib/I.RULES_NAME).write_bytes(new)
+        inventory['after'][str(lib/I.RULES_NAME)]=hashlib.sha256(old).hexdigest()
+        (state/I.C5_BACKUP_NAME).mkdir()
+        (state/I.C5_BACKUP_NAME/'rules').write_bytes(old)
+        receipt=dict(schema=I.C5_SCHEMA,phase='active',controller_sha=I.C,manifest_sha256=I.OLD_MANIFEST,
+                     rules_sha256=hashlib.sha256(new).hexdigest(),
+                     backups=dict(rules=dict(mode=420,sha256=hashlib.sha256(old).hexdigest())))
+        if receipt_edit:receipt_edit(receipt)
+        raw=json.dumps(receipt,sort_keys=True).encode()
+        (state/I.C5_RECEIPT_NAME).write_bytes(raw)
+        for key,value in (('RULES_INVENTORY_SHA',hashlib.sha256(old).hexdigest()),
+                          ('RULES_LIVE_SHA',hashlib.sha256(new).hexdigest()),
+                          ('C5_RECEIPT_SHA',hashlib.sha256(raw).hexdigest())):
+            stack.enter_context(patch.object(I,key,value))
+
+    def test_inventory_live_match_is_exact_except_one_pinned_pair(self):
+        self.assertIsNotNone(I,'scoped installer missing')
+        rules=I.LIB/I.RULES_NAME
+        a,b,c='a'*64,'b'*64,'c'*64
+        self.assertEqual(I.inventory_live_matches(Path('/x'),a,a),'exact')
+        self.assertEqual(I.inventory_live_matches(rules,a,a),'exact')
+        self.assertEqual(I.inventory_live_matches(rules,I.RULES_INVENTORY_SHA,I.RULES_LIVE_SHA),'c5_rules')
+        self.assertEqual(I.RULES_LIVE_SHA,I.UNCHANGED[rules])
+        for path,pin,live in ((rules,I.RULES_LIVE_SHA,I.RULES_INVENTORY_SHA),   # reverse
+                              (rules,I.RULES_INVENTORY_SHA,c),                   # third live hash
+                              (rules,c,I.RULES_LIVE_SHA),                        # third inventory hash
+                              (rules,a,b),
+                              (I.LIB/'context_policy.py',I.RULES_INVENTORY_SHA,I.RULES_LIVE_SHA),  # right pair, wrong path
+                              (I.LIB/'native_antigravity.py',I.RULES_INVENTORY_SHA,I.RULES_LIVE_SHA),
+                              (Path('/other')/I.RULES_NAME,I.RULES_INVENTORY_SHA,I.RULES_LIVE_SHA)):
+            with self.subTest(path=str(path),pin=pin[:8],live=live[:8]):
+                self.assertIsNone(I.inventory_live_matches(path,pin,live))
+
+    def observation_fixture(self, stack, root, receipt_edit=None):
+        lib=root/'lib';lib.mkdir();state=root/'state';state.mkdir()
+        marker=root/'marker';marker.write_text('{"phase":"canary"}')
+        autonomy=root/'autonomy'
+        for slot in ('slot1','slot2'):(autonomy/'slots'/slot).mkdir(parents=True)
+        (autonomy/'locks').mkdir()
+        (root/'policy').write_text('{}');(root/'budget').write_text('{}')
+        for key,value in dict(LIB=lib,STATE=state,AUTONOMY=autonomy,MARKER=marker,POLICY=root/'policy',BUDGET=root/'budget',
+                              INVENTORY=state/'backup.json').items():
+            stack.enter_context(patch.object(I,key,value))
+        stack.enter_context(patch.object(I,'REQUIRED_STATE',[]))
+        stack.enter_context(patch.object(I,'UNCHANGED',{}));stack.enter_context(patch.object(I,'STATE_OBSERVED',{}))
+        stack.enter_context(patch.object(I,'idle'))
+        pins={name:(hashlib.sha256(('old '+name).encode()).hexdigest(),'f'*64) for name in I.TARGETS}
+        stack.enter_context(patch.object(I,'TARGETS',pins))
+        for name in pins:(lib/name).write_bytes(('old '+name).encode())
+        inventory=dict(manifest=I.OLD_MANIFEST,after={str(lib/n):v[0] for n,v in pins.items()})
+        for n in range(28):
+            path=lib/('untouched'+str(n));path.write_bytes(b'unchanged')
+            inventory['after'][str(path)]=hashlib.sha256(b'unchanged').hexdigest()
+        self.c5_rules_fixture(stack,lib,state,inventory,receipt_edit)
+        (state/'backup.json').write_text(json.dumps(inventory))
+        return lib,state,inventory
+
+    def test_observation_accepts_only_provenanced_c5_rules_drift(self):
+        self.assertIsNotNone(I,'scoped installer missing')
+        with tempfile.TemporaryDirectory() as directory,contextlib.ExitStack() as stack:
+            lib,state,inventory=self.observation_fixture(stack,Path(directory))
+            observed=I.observation()
+            self.assertEqual(observed['inventory_rules_provenance']['c5_receipt_sha256'],I.C5_RECEIPT_SHA)
+            def refuses(message,mutate,restore):
+                mutate()
+                try:
+                    with self.assertRaisesRegex(I.Refused,message):I.observation()
+                finally:restore()
+            # Another file drifting still refuses, even with the rules exception active.
+            other=lib/'untouched3';raw=other.read_bytes()
+            refuses('live inventory byte drift',lambda:other.write_bytes(b'tampered'),lambda:other.write_bytes(raw))
+            # Rules at a third hash (unprovenanced) refuses.
+            rules=lib/I.RULES_NAME;live=rules.read_bytes()
+            refuses('live inventory byte drift',lambda:rules.write_bytes(b'third rules'),lambda:rules.write_bytes(live))
+            # Receipt bytes changed (hash-bound) refuses.
+            receipt=state/I.C5_RECEIPT_NAME;raw=receipt.read_bytes()
+            refuses('C5 receipt bytes drift',lambda:receipt.write_bytes(raw+b' '),lambda:receipt.write_bytes(raw))
+            # Receipt removed refuses.
+            refuses('C5 receipt unreadable',receipt.unlink,lambda:receipt.write_bytes(raw))
+            # Backup of the EOM 1.3 bytes tampered refuses.
+            backup=state/I.C5_BACKUP_NAME/'rules';braw=backup.read_bytes()
+            refuses('C5 rules backup drift',lambda:backup.write_bytes(b'other'),lambda:backup.write_bytes(braw))
+            refuses('C5 rules backup unreadable',backup.unlink,lambda:backup.write_bytes(braw))
+            I.observation()
+
+    def test_observation_refuses_receipt_chain_mismatch_even_when_hash_pinned(self):
+        self.assertIsNotNone(I,'scoped installer missing')
+        edits={'phase':lambda r:r.update(phase='rolled_back'),
+               'schema':lambda r:r.update(schema='OTHER'),
+               'controller':lambda r:r.update(controller_sha='0'*40),
+               'manifest':lambda r:r.update(manifest_sha256='0'*64),
+               'rules':lambda r:r.update(rules_sha256='0'*64),
+               'backup':lambda r:r['backups']['rules'].update(sha256='0'*64),
+               'nobackups':lambda r:r.pop('backups')}
+        for label,edit in edits.items():
+            with self.subTest(label),tempfile.TemporaryDirectory() as directory,contextlib.ExitStack() as stack:
+                self.observation_fixture(stack,Path(directory),edit)
+                with self.assertRaisesRegex(I.Refused,'C5 receipt chain mismatch'):I.observation()
+
+    def test_observation_without_rules_drift_needs_no_receipt(self):
+        self.assertIsNotNone(I,'scoped installer missing')
+        with tempfile.TemporaryDirectory() as directory,contextlib.ExitStack() as stack:
+            lib,state,inventory=self.observation_fixture(stack,Path(directory))
+            inventory['after'][str(lib/I.RULES_NAME)]=hashlib.sha256((lib/I.RULES_NAME).read_bytes()).hexdigest()
+            (state/'backup.json').write_text(json.dumps(inventory))
+            (state/I.C5_RECEIPT_NAME).unlink()
+            self.assertIsNone(I.observation()['inventory_rules_provenance'])
+
     def test_fake_root_apply_verify_rollback_byte_exact(self):
+        self.fake_root_cycle(False)
+
+    def test_fake_root_c5_rules_exception_apply_verify_rollback_byte_exact(self):
+        self.fake_root_cycle(True)
+
+    def fake_root_cycle(self, rules):
         self.assertIsNotNone(I,'scoped installer missing')
         with tempfile.TemporaryDirectory() as directory,contextlib.ExitStack() as stack:
             root=Path(directory);lib=root/'lib';lib.mkdir();state=root/'state';state.mkdir()
@@ -593,12 +710,15 @@ class ScopedInstallTests(unittest.TestCase):
             for key in ('POLICY','MARKER','BUDGET'):
                 paths[key].write_text(json.dumps({'phase':'canary'}))
             inventory=dict(manifest=I.OLD_MANIFEST,after={str(lib/n):v[0] for n,v in pins.items()})
-            for n in range(29):
+            for n in range(28 if rules else 29):
                 path=lib/('untouched'+str(n));path.write_bytes(b'unchanged')
                 inventory['after'][str(path)]=hashlib.sha256(b'unchanged').hexdigest()
+            if rules:
+                self.c5_rules_fixture(stack,lib,state,inventory)
             paths['INVENTORY'].write_text(json.dumps(inventory,indent=2))
             before={p:p.read_bytes() for p in root.rglob('*') if p.is_file()}
             observed=I.observation()
+            self.assertEqual(observed['inventory_rules_provenance'] is not None,rules)
             with contextlib.redirect_stdout(io.StringIO()):I.dry(material,'a'*40)
             self.assertEqual({p:p.read_bytes() for p in root.rglob('*') if p.is_file()},before)
             with contextlib.redirect_stdout(io.StringIO()):I.apply(material,'a'*40,I.digest(observed))
