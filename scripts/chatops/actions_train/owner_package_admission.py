@@ -146,7 +146,8 @@ def quiescent(controller):
     R.units_quiet(R.UNITS)
     for slot,uid in (('slot1',1002),('slot2',978)):
         j=R.journal(slot);st,_=R.checkpoint(slot)
-        need(j['pending'] is None and st['active'] is None,'slot occupied')
+        need(j['pending'] is None and (st['active'] is None or
+             (isinstance(st['active'],dict) and st['active'].get('phase')=='done')),'slot occupied')
         R.no_models(uid,slot)
         R.free_lock(R.AUTONOMY/'slots'/slot/'worker.lock')
         R.free_lock(R.AUTONOMY/'locks'/(slot+'.lease'))

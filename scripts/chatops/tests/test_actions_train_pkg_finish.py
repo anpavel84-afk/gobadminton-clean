@@ -334,6 +334,14 @@ class ScopedInstallTests(unittest.TestCase):
         return subprocess.check_output(['git','show',
             'e8b4e4f7bcc1d6a31bf9bee3d2a8db956a98af14:scripts/chatops/actions_train/manifest.json'],cwd=repo)
 
+    @staticmethod
+    @cache
+    def installed_target_source(name):
+        # Preserve the already applied install's targets as repository source evolves.
+        repo=Path(__file__).resolve().parents[3]
+        return subprocess.check_output(['git','show',
+            'f948d367292e85fc422dba2f8a3f6efd44400777:scripts/chatops/actions_train/'+name],cwd=repo)
+
     def bundle_fixture(self, root):
         bundle=root/'bundle';bundle.mkdir();(bundle/'.git').mkdir()
         (bundle/'.git'/'config').write_bytes(b'[core]\n\trepositoryformatversion = 0\n\tbare = false\n')
@@ -457,7 +465,9 @@ class ScopedInstallTests(unittest.TestCase):
             paths=['scripts/chatops/actions_train/'+n for n in I.TARGETS]
             paths+=['scripts/chatops/actions_train/manifest.json','.github/workflows/train-stage.yml']
             for name in paths:
-                raw=(self.installed_source_manifest() if name.endswith('/manifest.json') else (repo/name).read_bytes())
+                raw=(self.installed_source_manifest() if name.endswith('/manifest.json') else
+                     self.installed_target_source(Path(name).name) if Path(name).name in I.TARGETS else
+                     (repo/name).read_bytes())
                 path=bundle/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(raw)
             (bundle/'.gitignore').write_text('ignored\n')
             (bundle/'.gitattributes').write_text('*.txt text\n')
@@ -480,7 +490,7 @@ class ScopedInstallTests(unittest.TestCase):
             stack.enter_context(patch.object(I,'git',side_effect=checked_git))
             stack.enter_context(patch.object(I,'R',SimpleNamespace(trusted_tree=self.bundle_trusted)))
             before={p:p.read_bytes() for p in bundle.rglob('*') if p.is_file()}
-            expected={name:(repo/'scripts/chatops/actions_train'/name).read_bytes() for name in I.TARGETS}
+            expected={name:self.installed_target_source(name) for name in I.TARGETS}
             self.assertEqual(I.source(bundle,merge),expected)
             self.assertEqual({p:p.read_bytes() for p in bundle.rglob('*') if p.is_file()},before)
             (bundle/'ignored').write_text('ignored synthetic\n')
@@ -542,7 +552,7 @@ class ScopedInstallTests(unittest.TestCase):
         self.assertIsNotNone(I,'scoped installer missing')
         repo=Path(__file__).resolve().parents[3]
         for name,(_,pin) in I.TARGETS.items():
-            self.assertEqual(hashlib.sha256((repo/'scripts/chatops/actions_train'/name).read_bytes()).hexdigest(),pin)
+            self.assertEqual(hashlib.sha256(self.installed_target_source(name)).hexdigest(),pin)
         self.assertEqual(hashlib.sha256(self.installed_source_manifest()).hexdigest(),I.MANIFEST)
         self.assertEqual(set(I.TARGETS),{'native_antigravity.py','antigravity_qa_recovery.py','owner_package_admission.py'})
         required={'context_policy.py','accepted-engineering-rules.md','stage.py','receiver.py','native_guard.py',
