@@ -142,6 +142,40 @@ def sha(path):
     return bytes_sha(regular_bytes(path))
 
 
+STATE_FILE_LIMIT=1073741824  # protected-state evidence may hold large paid artifacts; bundle/lib/pinned reads keep 64 MiB
+
+
+def state_sha(path, limit=STATE_FILE_LIMIT):
+    """Streamed digest of a protected-state regular file with the same no-link/no-race checks as regular_bytes."""
+    path = pathlib.Path(path)
+    need(path.is_absolute() and '..' not in path.parts, 'noncanonical file path')
+    fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        for part in path.parts[1:-1]:
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=fd)
+            os.close(fd)
+            fd = child
+        child = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=fd)
+        os.close(fd)
+        fd = child
+        before = os.fstat(fd)
+        need(stat.S_ISREG(before.st_mode) and before.st_nlink == 1 and not before.st_mode & 0o022
+             and before.st_size<=limit, 'unsafe regular file')
+        digest_=hashlib.sha256();seen=0
+        with os.fdopen(os.dup(fd), 'rb') as stream:
+            while True:
+                chunk=stream.read(1048576)
+                if not chunk:break
+                seen+=len(chunk);need(seen<=limit,'file too large')
+                digest_.update(chunk)
+        need(stable(os.fstat(fd)) == stable(before) and seen==before.st_size, 'file changed during hash')
+        current = path.lstat()
+        need((current.st_dev, current.st_ino) == (before.st_dev, before.st_ino), 'file replaced during hash')
+        return digest_.hexdigest()
+    finally:
+        os.close(fd)
+
+
 def run(argv, timeout=20, env=None):
     # No inherited credentials/config, shell, hooks, output/argv in errors, or prompts.
     if env is None: env = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'HOME': '/root',
@@ -326,7 +360,7 @@ def protected_state():
             finally:os.close(fd)
         elif stat.S_ISREG(info.st_mode):
             # Slot lock metadata is checked separately; lock bytes are preserved.
-            result[str(path)]=dict(sha256=sha(path),mode=stat.S_IMODE(info.st_mode),uid=info.st_uid,gid=info.st_gid)
+            result[str(path)]=dict(sha256=state_sha(path),mode=stat.S_IMODE(info.st_mode),uid=info.st_uid,gid=info.st_gid)
         else:need(False,'nonregular protected state entry')
     for root in (STATE,AUTONOMY/'slots'/'slot1',AUTONOMY/'slots'/'slot2'):
         walk(root)
