@@ -2,6 +2,7 @@
 import json
 import re
 from pathlib import Path, PurePosixPath
+from safe_io import read_bytes
 
 DEFAULT_CATALOG = Path(__file__).with_name("test_groups.json")
 FIELDS = {"id", "description", "argv", "cwd", "timeout_s", "tiers", "env_flags", "kind"}
@@ -17,7 +18,7 @@ def unique_object(pairs):
 
 
 def load_catalog(path=DEFAULT_CATALOG):
-    raw = Path(path).read_bytes()
+    raw = read_bytes(path, code="UNSAFE_CATALOG")
     doc = json.loads(raw, object_pairs_hook=unique_object)
     if (not isinstance(doc, dict) or set(doc) != {"schema", "groups"}
             or doc["schema"] != "GB_TEST_GROUPS_V1" or not isinstance(doc["groups"], list)):

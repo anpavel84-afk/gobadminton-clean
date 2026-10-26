@@ -1,4 +1,11 @@
-"""Conservative path/mode risk floors. No diff-size or runtime authority."""
+"""Conservative path/mode risk floors. No diff-size or runtime authority.
+
+Changes are dicts with repo-relative path, status (A/M/D/R/T), and optional
+mode/old_mode. R requires a validated old_path: both endpoints are classified.
+An R without old_path fails closed to T3 (RENAME_UNPAIRED). Separate path-only
+R entries do not establish pairing. Git adapters retain both endpoints and put
+the original old_path on each R entry. Modes apply to the complete pair.
+"""
 import re
 from pathlib import PurePosixPath
 
@@ -68,19 +75,33 @@ def _file_tier(path):
     return 2, "UNKNOWN_PATH_RAISED"
 
 
+def _valid_path(path):
+    return (isinstance(path, str) and bool(path) and "\x00" not in path and "\\" not in path
+            and not path.startswith("/") and all(p not in {"", ".", ".."} for p in path.split("/")))
+
+
 def classify(changes):
     if not isinstance(changes, list) or not changes:
         raise ValueError("EMPTY_CHANGES")
     level, visual = 0, False
     reasons, packages, modules, paths = set(), set(), set(), set()
+    expanded = []
     for change in changes:
         if not isinstance(change, dict):
             raise ValueError("BAD_CHANGE")
         path, status = change.get("path"), change.get("status")
-        if (not isinstance(path, str) or not path or "\x00" in path or "\\" in path
-                or path.startswith("/") or any(p in {"", ".", ".."} for p in path.split("/"))
-                or status not in {"A", "M", "D", "R", "T"}):
+        if not _valid_path(path) or status not in {"A", "M", "D", "R", "T"}:
             raise ValueError("BAD_CHANGE")
+        if "old_path" in change:
+            if status != "R" or not _valid_path(change["old_path"]):
+                raise ValueError("BAD_CHANGE")
+            expanded.append({**change, "path": change["old_path"]})
+        elif status == "R":
+            level = 3
+            reasons.add("RENAME_UNPAIRED:" + path)
+        expanded.append(change)
+    for change in expanded:
+        path, status = change["path"], change["status"]
         mode, old_mode = change.get("mode", "100644"), change.get("old_mode", "100644")
         if not all(isinstance(m, str) and re.fullmatch(r"[0-7]{6}", m)
                    for m in (mode, old_mode)):

@@ -23,7 +23,8 @@ class RunnerTests(unittest.TestCase):
         self.repo.mkdir()
         self.runs = self.repo / ".gb-test-runs"
         self.runs.mkdir()
-        self.counter = self.runs / "counter"
+        # Command side effects are not runner artifacts or fingerprint inputs.
+        self.counter = self.home / "counter"
         self.catalog = self.home / "catalog.json"
         self.env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "GIT_CONFIG_NOSYSTEM": "1",
                     "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull}

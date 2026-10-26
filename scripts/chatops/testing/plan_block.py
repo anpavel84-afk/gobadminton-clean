@@ -72,8 +72,12 @@ def parse(text):
 
 
 def attach(acceptance, plan):
+    if len(acceptance) > 6000:
+        raise PlanError("ACCEPTANCE_TOO_LONG")
     block = render(plan)
     if BEGIN in acceptance or END in acceptance:
+        # Only validated TEST PLAN data may be replaced, never arbitrary criteria.
+        parse(acceptance)
         start, end = _span(acceptance)
         result = acceptance[:start] + block + acceptance[end:]
     else:

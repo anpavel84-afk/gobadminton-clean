@@ -4,6 +4,7 @@ QA must invoke the trusted BASE runner and pass its BASE catalog explicitly.
 Candidate test code still executes; this script is not a sandbox or admission.
 """
 import argparse
+from contextlib import contextmanager, nullcontext
 import datetime
 import fcntl
 import hashlib
@@ -16,13 +17,16 @@ import stat
 import subprocess
 import sys
 import time
+import uuid
 
-from catalog import DEFAULT_CATALOG, load_catalog
+from catalog import DEFAULT_CATALOG, load_catalog, unique_object
+from safe_io import absolute, check_regular, directory, regular
 
-VERSION = "GB_TEST_RUNNER_V1"
+VERSION = "GB_TEST_RUNNER_V1_REPAIR1"
 REASONS = {"input_changed", "env_fixed", "flake_probe", "qa_independent_base", "ci_missing"}
 EXITS = {"PASS": 0, "FAIL": 1, "ENV_ERROR": 2, "NOT_TESTED": 2, "TIMEOUT": 4}
 BASE_ENV = {"PATH", "HOME", "TMPDIR", "LANG"}
+ARTIFACT = re.compile(r"[0-9a-f]{64}\.(?:log|lock|json(?:\.new|\.[0-9a-f]{32}\.new)?)")
 
 
 def canonical(value):
@@ -33,37 +37,90 @@ def sha(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def worktree_digest(repo, runs_dir):
-    repo, runs_dir = Path(repo).resolve(), Path(runs_dir).resolve()
-    paths = subprocess.run(
-        ["git", "-c", "core.fsmonitor=false", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+def git_paths(repo, *, tracked=False):
+    return set(subprocess.run(
+        ["git", "-c", "core.fsmonitor=false", "ls-files", "-z", "--cached",
+         *([] if tracked else ["--others", "--exclude-standard"])],
         cwd=repo, check=True, capture_output=True, timeout=30,
-    ).stdout.split(b"\0")
+    ).stdout.split(b"\0")) - {b""}
+
+
+def validate_runs(repo, runs, fd):
+    if runs.is_relative_to(repo):
+        for name in git_paths(repo, tracked=True):
+            path = repo / os.fsdecode(name)
+            if path == runs or runs in path.parents:
+                raise ValueError("RUNS_DIR_CONTAINS_SOURCE")
+    if fd is None:
+        return set()
+    info = os.fstat(fd)
+    if info.st_uid != os.getuid() or info.st_mode & 0o022:
+        raise ValueError("UNSAFE_RUNS_DIR")
+    validated = set()
+    for name in os.listdir(fd):
+        if not ARTIFACT.fullmatch(name):
+            raise ValueError("RUNS_DIR_CONTAINS_SOURCE")
+        try:
+            info = os.stat(name, dir_fd=fd, follow_symlinks=False)
+        except FileNotFoundError:
+            continue  # A concurrent atomic receipt rename may remove its temporary name.
+        check_regular(info, "UNSAFE_ARTIFACT", private=True)
+        validated.add(name)
+    return validated
+
+
+@contextmanager
+def runs_directory(repo, runs, *, create=False):
+    validate_runs(repo, runs, None)
+    try:
+        with directory(runs, create=create, code="UNSAFE_RUNS_DIR") as fd:
+            validate_runs(repo, runs, fd)
+            yield fd
+    except FileNotFoundError:
+        # Only an absent directory before entry is acceptable to digest callers.
+        raise ValueError("RUNS_DIR_UNAVAILABLE") from None
+
+
+def source_entry(path):
+    with directory(path.parent, code="SYMLINK_PARENT") as parent:
+        try:
+            info = os.stat(path.name, dir_fd=parent, follow_symlinks=False)
+        except FileNotFoundError:
+            return "000000", "MISSING"
+        if stat.S_ISLNK(info.st_mode):
+            return "120000", sha(os.fsencode(os.readlink(path.name, dir_fd=parent)))
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError("UNSUPPORTED_WORKTREE_TYPE")
+        # fstat provides the mode of the same no-follow descriptor that is read.
+        with regular(path.name, dir_fd=parent, code="UNSAFE_WORKTREE_FILE") as fd:
+            info = os.fstat(fd)
+            file_hash = hashlib.sha256()
+            with os.fdopen(os.dup(fd), "rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    file_hash.update(chunk)
+        return ("100755" if info.st_mode & 0o111 else "100644"), file_hash.hexdigest()
+
+
+def worktree_digest(repo, runs_dir):
+    repo, runs_dir = Path(repo).resolve(), absolute(runs_dir)
+    # A nonexistent scratch directory excludes nothing; dangling links are rejected.
+    exists = os.path.lexists(runs_dir)
+    with runs_directory(repo, runs_dir) if exists else nullcontext(None) as fd:
+        excluded = validate_runs(repo, runs_dir, fd)
+    paths = git_paths(repo)
     digest = hashlib.sha256()
-    for raw_path in sorted(set(paths) - {b""}):
+    for raw_path in sorted(paths):
         relative = os.fsdecode(raw_path)
         path = repo / relative
         if path == runs_dir or runs_dir in path.parents:
+            if path.parent != runs_dir or path.name not in excluded:
+                raise ValueError("RUNS_DIR_CONTAINS_SOURCE")
             continue
-        # Never follow a symlink to read its target, including a parent directory.
-        if any(parent.is_symlink() for parent in path.parents if parent != repo and repo in parent.parents):
-            raise ValueError("SYMLINK_PARENT")
         try:
-            info = path.lstat()
+            mode, content = source_entry(path)
         except FileNotFoundError:
+            # Missing parent of a deleted tracked path.
             mode, content = "000000", "MISSING"
-        else:
-            if stat.S_ISLNK(info.st_mode):
-                mode, content = "120000", sha(os.fsencode(os.readlink(path)))
-            elif stat.S_ISREG(info.st_mode):
-                mode = "100755" if info.st_mode & 0o111 else "100644"
-                file_hash = hashlib.sha256()
-                with path.open("rb") as stream:
-                    for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                        file_hash.update(chunk)
-                content = file_hash.hexdigest()
-            else:
-                raise ValueError("UNSUPPORTED_WORKTREE_TYPE")
         digest.update(canonical([relative, mode, content]) + b"\n")
     return digest.hexdigest()
 
@@ -128,24 +185,49 @@ def targeted_argv(group, tests, repo):
     return argv + tests
 
 
-def read_result(path):
-    return json.loads(path.read_text()) if path.exists() else None
+def read_result(path, runs_fd):
+    try:
+        with regular(path.name, dir_fd=runs_fd, code="UNSAFE_ARTIFACT", private=True) as fd:
+            with os.fdopen(os.dup(fd), "rb") as stream:
+                return json.load(stream, object_pairs_hook=unique_object)
+    except FileNotFoundError:
+        return None
 
 
-def write_result(path, result):
-    temporary = path.with_suffix(".json.new")
-    temporary.write_bytes(canonical(result) + b"\n")
-    temporary.replace(path)
+def write_result(path, result, runs_fd):
+    temporary = path.name + "." + uuid.uuid4().hex + ".new"
+    try:
+        with regular(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                     dir_fd=runs_fd, code="UNSAFE_ARTIFACT", private=True) as fd:
+            with os.fdopen(os.dup(fd), "wb") as stream:
+                stream.write(canonical(result) + b"\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+    except FileExistsError as exc:
+        raise ValueError("UNSAFE_ARTIFACT") from exc
+    try:
+        try:
+            check_regular(os.stat(path.name, dir_fd=runs_fd, follow_symlinks=False),
+                          "UNSAFE_ARTIFACT", private=True)
+        except FileNotFoundError:
+            pass
+        os.replace(temporary, path.name, src_dir_fd=runs_fd, dst_dir_fd=runs_fd)
+    finally:
+        try:
+            os.unlink(temporary, dir_fd=runs_fd)
+        except FileNotFoundError:
+            pass
 
 
 def now():
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
 
-def parse_log(path, offset=0):
+def parse_log(path, offset=0, *, runs_fd):
     counts = dict(tests=None, failures=0, errors=0)
     failing, infra, verdict = set(), False, None
-    with path.open("r", encoding="utf-8", errors="replace") as stream:
+    with regular(path.name, dir_fd=runs_fd, code="UNSAFE_ARTIFACT", private=True) as fd, \
+            os.fdopen(os.dup(fd), "r", encoding="utf-8", errors="replace") as stream:
         stream.seek(offset)
         for line in stream:
             match = re.match(r"Ran (\d+) tests?\b", line)
@@ -167,12 +249,13 @@ def parse_log(path, offset=0):
     return counts, sorted(failing), infra, verdict
 
 
-def execute(job, result_path):
-    result = read_result(result_path)
+def execute(job, result_path, runs_fd):
+    result = read_result(result_path, runs_fd)
     started = time.monotonic()
     status, rc, detail = "ENV_ERROR", None, ""
-    log = Path(result["log_path"])
-    with log.open("ab") as output:
+    log = result_path.with_suffix(".log")
+    with regular(log.name, os.O_WRONLY | os.O_APPEND | os.O_CREAT, dir_fd=runs_fd,
+                 code="UNSAFE_ARTIFACT", private=True) as fd, os.fdopen(os.dup(fd), "ab") as output:
         output.write(("\n=== " + now() + " reason=" + job["reason"] + " ===\n").encode())
         output.flush()
         offset = output.tell()
@@ -197,7 +280,7 @@ def execute(job, result_path):
                 output.write((detail + ": " + str(exc) + "\n").encode())
         if detail:
             output.write((detail + "\n").encode())
-    counts, failing, infra, verdict = parse_log(log, offset)
+    counts, failing, infra, verdict = parse_log(log, offset, runs_fd=runs_fd)
     if status in {"PASS", "FAIL"}:
         if infra and status == "FAIL":
             status, detail = "ENV_ERROR", "IMPORT_OR_INFRA_FAILURE"
@@ -214,7 +297,7 @@ def execute(job, result_path):
                   counts=counts, unittest_verdict=verdict, failing_test_ids=failing, pending=False)
     result["history"].append(dict(reason=job["reason"], time=now(), status=status))
     result.pop("_job", None)
-    write_result(result_path, result)
+    write_result(result_path, result, runs_fd)
     return result
 
 
@@ -242,13 +325,12 @@ def summary(result, refused=None):
 
 def locations(args):
     repo = Path(args.repo).resolve()
-    runs = Path(args.runs_dir).resolve() if args.runs_dir else repo / ".gb-test-runs"
+    runs = absolute(args.runs_dir) if args.runs_dir else repo / ".gb-test-runs"
     # Excluding the whole repository or source tree would make the fingerprint meaningless.
     if repo == runs or repo.is_relative_to(runs):
         raise ValueError("BAD_RUNS_DIR")
-    if runs.is_relative_to(repo) and runs != repo / ".gb-test-runs":
-        if runs.parts[len(repo.parts)] in {"scripts", "apps", "packages", "docs", ".git", ".github", ".cursor"}:
-            raise ValueError("BAD_RUNS_DIR")
+    if runs == repo / ".git" or repo / ".git" in runs.parents:
+        raise ValueError("BAD_RUNS_DIR")
     return repo, runs
 
 
@@ -267,12 +349,18 @@ def run(args):
         raise ValueError("BAD_CWD")
     if tests:
         cwd = repo / "scripts/chatops/tests"
-    fp, inputs = fingerprint(repo, runs, args.group, tests, catalog_bytes, group["env_flags"])
-    runs.mkdir(parents=True, exist_ok=True)
+    with runs_directory(repo, runs, create=True) as runs_fd:
+        fp, inputs = fingerprint(repo, runs, args.group, tests, catalog_bytes, group["env_flags"])
+        return run_locked(args, repo, runs, runs_fd, group, argv, cwd, fp, inputs)
+
+
+def run_locked(args, repo, runs, runs_fd, group, argv, cwd, fp, inputs):
     result_path = runs / (fp + ".json")
-    with (runs / (fp + ".lock")).open("a+b") as lock:
+    with regular(fp + ".lock", os.O_RDWR | os.O_CREAT, dir_fd=runs_fd,
+                 code="UNSAFE_ARTIFACT", private=True) as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        previous = read_result(result_path)
+        validate_runs(repo, runs, runs_fd)
+        previous = read_result(result_path, runs_fd)
         if previous and args.repeat_reason == "input_changed":
             summary(previous, "INPUT_UNCHANGED")
             return 3
@@ -290,25 +378,29 @@ def run(args):
         result = dict(group=args.group, fingerprint=fp, inputs=inputs, status="NOT_TESTED",
                       pending=True, log_path=str(runs / (fp + ".log")),
                       history=previous["history"] if previous else [], _job=job)
-        write_result(result_path, result)
+        # Reject an unsafe log before recording any pending execution.
+        with regular(fp + ".log", os.O_WRONLY | os.O_APPEND | os.O_CREAT,
+                     dir_fd=runs_fd, code="UNSAFE_ARTIFACT", private=True):
+            pass
+        write_result(result_path, result, runs_fd)
         if args.detach:
             # flock is inherited via the same open file description. Parent CLOSES, never unlocks.
             try:
                 subprocess.Popen([sys.executable, "-B", str(Path(__file__).resolve()), "_worker",
-                                  str(result_path), str(lock.fileno())],
-                                 pass_fds=(lock.fileno(),), start_new_session=True,
+                                  str(result_path), str(lock), str(runs_fd)],
+                                 pass_fds=(lock, runs_fd), start_new_session=True,
                                  env=scrubbed_env(group["env_flags"]), stdin=subprocess.DEVNULL,
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             except OSError:
                 result.update(pending=False, status="ENV_ERROR", detail="WORKER_START_FAILED")
                 result.pop("_job", None)
-                write_result(result_path, result)
+                write_result(result_path, result, runs_fd)
                 summary(result)
                 return 2
             print("fingerprint: " + fp)
             print("status: DETACHED; collect blocks until completion")
             return 0
-        result = execute(job, result_path)
+        result = execute(job, result_path, runs_fd)
         summary(result)
         return EXITS[result["status"]]
 
@@ -316,19 +408,26 @@ def run(args):
 def collect(args):
     if not re.fullmatch(r"[0-9a-f]{64}", args.fingerprint):
         raise ValueError("BAD_FINGERPRINT")
-    _, runs = locations(args)
-    lock_path = runs / (args.fingerprint + ".lock")
-    if not lock_path.exists():
-        raise ValueError("UNKNOWN_FINGERPRINT")
-    with lock_path.open("r+b") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        result = read_result(runs / (args.fingerprint + ".json"))
-        if not result:
-            raise ValueError("MISSING_RESULT")
-        if result.get("pending"):
-            result = {**result, "status": "ENV_ERROR", "detail": "INCOMPLETE_RUN_REQUIRES_RECONCILIATION"}
-        summary(result)
-        return EXITS[result["status"]]
+    repo, runs = locations(args)
+    with runs_directory(repo, runs) as runs_fd:
+        return collect_locked(args, repo, runs, runs_fd)
+
+
+def collect_locked(args, repo, runs, runs_fd):
+    try:
+        with regular(args.fingerprint + ".lock", os.O_RDWR,
+                     dir_fd=runs_fd, code="UNSAFE_ARTIFACT", private=True) as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            validate_runs(repo, runs, runs_fd)
+            result = read_result(runs / (args.fingerprint + ".json"), runs_fd)
+    except FileNotFoundError as exc:
+        raise ValueError("UNKNOWN_FINGERPRINT") from exc
+    if not result:
+        raise ValueError("MISSING_RESULT")
+    if result.get("pending"):
+        result = {**result, "status": "ENV_ERROR", "detail": "INCOMPLETE_RUN_REQUIRES_RECONCILIATION"}
+    summary(result)
+    return EXITS[result["status"]]
 
 
 def main(argv=None):
@@ -348,12 +447,21 @@ def main(argv=None):
     worker = commands.add_parser("_worker", help=argparse.SUPPRESS)
     worker.add_argument("result_path")
     worker.add_argument("lock_fd", type=int)
+    worker.add_argument("runs_fd", type=int)
     try:
         args = parser.parse_args(argv)
         if args.command == "_worker":
             with os.fdopen(args.lock_fd, "a+b"):
+                check_regular(os.fstat(args.lock_fd), "UNSAFE_ARTIFACT", private=True)
+                if not stat.S_ISDIR(os.fstat(args.runs_fd).st_mode):
+                    raise ValueError("UNSAFE_RUNS_DIR")
                 path = Path(args.result_path)
-                result = execute(read_result(path)["_job"], path)
+                if not re.fullmatch(r"[0-9a-f]{64}\.json", path.name):
+                    raise ValueError("BAD_FINGERPRINT")
+                receipt = read_result(path, args.runs_fd)
+                validate_runs(Path(receipt["_job"]["repo"]), path.parent, args.runs_fd)
+                result = execute(receipt["_job"], path, args.runs_fd)
+                os.close(args.runs_fd)
             return EXITS[result["status"]]
         return run(args) if args.command == "run" else collect(args)
     except SystemExit as exc:

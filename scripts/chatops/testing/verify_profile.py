@@ -43,7 +43,10 @@ def parse_raw_diff(raw):
             raise ValueError("BAD_RAW_DIFF") from exc
         # Both ends of a rename matter: moving out of a protected path cannot lower risk.
         for name in names:
-            changes.append(dict(path=name.decode("utf-8"), status=status, old_mode=old, mode=mode))
+            change = dict(path=name.decode("utf-8"), status=status, old_mode=old, mode=mode)
+            if status == "R":
+                change["old_path"] = names[0].decode("utf-8")
+            changes.append(change)
     return changes
 
 

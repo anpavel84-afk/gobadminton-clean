@@ -7,10 +7,9 @@
 [SMART_ROUTING 1.0](../rules/SMART_ROUTING.md), exact pins —
 [CONTEXT_SOURCES.json](../rules/CONTEXT_SOURCES.json).
 
-AUTHOR preflight, 26.10.2026: repo `anpavel84-afk/gobadminton-clean`, branch
-`ops/proportionate-testing-p1-20261026`; base dev
-`e8b4e4f7bcc1d6a31bf9bee3d2a8db956a98af14`, source после сохранённых fixture inputs
-`2cd19d06053a6d0f44eb8f62c25b8118ddefbe84`; candidate — этот uncommitted diff.
+AUTHOR repair round 1 preflight, 26.10.2026: repo `anpavel84-afk/gobadminton-clean`,
+branch `ops/proportionate-testing-p1-20261026`, PR #323; exact source/base
+`a77528318fd7e9dcdca28fd744560c85ed839b92`; candidate — этот uncommitted diff.
 Прямое ограниченное задание Owner, один AUTHOR/writer; PMA takeover отсутствует.
 Requested route — bounded Codex AUTHOR; effective identity задаёт launcher,
 этот документ не удостоверяет model ID или квалификацию роли.
@@ -18,11 +17,12 @@ EOM commit `13a8b6c54a45aaa57021e092a1bee54926d9eac4`, SHA-256
 `8798ea76874ea5e42f708fff6d74f1ccbf526413c701e9f2349045fdc98be9d5`;
 SMART_ROUTING commit `bc8bad0c38a861f8e72296d0a323e2941b9322e0`, SHA-256
 `1a8c1ed6f6ea11d08ecb1703df1a3bc1540520f7f4d02b7d48bb1f66a8786c63`.
-Оба полных текста доступны AUTHOR и сверены по hash. Scope: новые
-`scripts/chatops/testing/*`, новые `test_actions_train_testing_*.py`, fixtures
-`proportionate_testing/*`, этот runbook и одна строка DOCUMENT_REGISTER.
+Оба полных текста доступны AUTHOR и сверены по hash. Scope:
+`scripts/chatops/testing/*`, `scripts/chatops/tests/test_actions_train_testing_*.py`,
+fixtures `proportionate_testing/*` и этот runbook.
 Сохранённые replay cases неизменны. Без commit/push/network/root/model calls/install.
-Exact candidate SHA/PR и независимые QA/CI receipts запишет интегратор после публикации.
+Evidence (exact SHA/PR, QA/CI receipts и ограничения) фиксируется в PR и в docs update PR;
+статус SOURCE / NOT_INSTALLED. Авторская проверка не является независимой QA.
 
 ## 1. Цель и граница
 
@@ -66,7 +66,10 @@ Critical paths, даже для одной строки:
 Неизвестный путь получает T2: лучший предположительный T1 повышается на уровень.
 Классификация всего change set не ниже максимума отдельных файлов; empty list — error.
 Пути должны быть repo-relative, без `..`, пустых сегментов и backslash.
-Raw-diff verifier проверяет оба конца rename, включая перенос из critical directory.
+Rename `R` требует валидного `old_path`: классифицируются оба конца. Без него —
+T3 с `RENAME_UNPAIRED:<path>`, даже если new path выглядит как docs. Отдельные
+path-only R entries не доказывают пару. Raw-diff verifier сохраняет оба конца
+и явный `old_path`, включая перенос из critical directory.
 `routine -> T1`, `complex -> T2`, `critical -> T3`; T0 отображается в `routine`
 существующего risk field. Higher declaration разрешён с `OVER_DECLARED`, lower —
 `UNDER_DECLARED`. Risk override в plan builder может только повысить tier.
@@ -83,7 +86,10 @@ Raw-diff verifier проверяет оба конца rename, включая п
 ```
 
 `render` детерминирован; `parse(render(plan)) == plan`. `attach` сохраняет исходный
-acceptance text и заменяет ровно один существующий блок. Overflow не обрезается:
+acceptance text и заменяет ровно один существующий **валидный** блок; существующий
+span проходит тот же strict `parse`, иначе `PlanError` (например, `BAD_FIELD`),
+текст не удаляется. Длина исходного acceptance и результата проверяется <=6000.
+Overflow не обрезается:
 `ACCEPTANCE_TOO_LONG`. Missing block: `MISSING_TEST_PLAN`; multiple blocks:
 `DUPLICATE_BLOCK`; invalid/duplicate keys/groups: `BAD_FIELD`; unknown group:
 `UNKNOWN_GROUP`; unknown tier: `BAD_TIER`. Нельзя снять independent QA/evidence rule.
@@ -95,7 +101,8 @@ python3 -B scripts/chatops/testing/plan_block.py check --acceptance-file accepta
 python3 -B scripts/chatops/testing/verify_profile.py --base BASE_SHA --head HEAD_SHA --declared T2 --acceptance-file acceptance.txt --json
 ```
 
-`changes.json` — список `{path,status,mode?,old_mode?}`. Verifier использует реальный
+`changes.json` — список `{path,status,mode?,old_mode?,old_path?}`; для `R` old_path
+обязателен, иначе T3. Verifier использует реальный
 `git diff --raw -z -M --no-abbrev`, требует block tier == declared и все derived
 required groups, сохраняет обязательный `visual_qa`. Без acceptance block — violation.
 Exit verifier: 0 ok, 1 violation, 2 usage/input error. Это CI-callable script;
@@ -133,6 +140,12 @@ python3 -B scripts/chatops/testing/run_test_group.py collect --fingerprint FULL_
 Default `.gb-test-runs/` под repo — **untracked scratch**, не добавлять в Git;
 P1 не меняет `.gitignore`. В ограниченной AUTHOR среде использовать `--runs-dir`
 под разрешённым `$TMPDIR`; сам TMPDIR должен указывать на разрешённый scratch.
+Runs-dir создаётся с mode 0700; symlink (включая parents), non-directory, чужой
+owner или group/other write запрещены (`UNSAFE_RUNS_DIR`). Внутри допускаются
+только regular, owned, single-link artifacts без group/other write
+(`UNSAFE_ARTIFACT`); symlink/FIFO не открываются. Любой tracked path (включая
+удалённый и artifact-shaped) или non-artifact entry даёт `RUNS_DIR_CONTAINS_SOURCE`.
+Проверки действуют и для collect/detach. Недоступный runs-dir: `RUNS_DIR_UNAVAILABLE`.
 Runner выполняет argv без shell и ограничивает timeout; при timeout убивает
 process group команды. Environment: только PATH, HOME, TMPDIR, LANG и catalog
 env_flags; отсутствие/пустое значение required flag даёт NOT_TESTED.
@@ -150,9 +163,12 @@ Python argv используют `-B`; для этой AUTHOR работы та�
 SHA-256 canonical JSON связывает worktree digest, group id, sorted unique tests,
 catalog SHA-256, runner version и presence booleans env_flags (значения не пишутся).
 Worktree digest: sorted unique `git ls-files -z --cached --others --exclude-standard`,
-path + фактический mode + content hash, включая uncommitted/untracked inputs;
-runs-dir исключён. Удалённый tracked path имеет MISSING marker. Symlink хешируется
-по тексту ссылки, цель не читается. Unsupported types/symlink parents дают error.
+path + фактический mode + content hash, включая uncommitted/untracked inputs.
+Исключаются только проверенные artifacts внутри runs-dir: `<64hex>.log|.json|.lock`,
+legacy `.json.new` и unique `.json.<32hex>.new`; source directory не исключается.
+Удалённый tracked path имеет MISSING marker. Source читается через `O_NOFOLLOW`
+и regular `fstat`; подмена ссылкой — `UNSAFE_WORKTREE_FILE`. Symlink хешируется
+по тексту ссылки с mode 120000, цель не читается. Unsupported types/symlink parents дают error.
 Игнорируемые Git файлы не входят; submodules не аттестуются этим runner.
 Изменение worktree во время команды даёт ENV_ERROR, не PASS.
 
@@ -185,13 +201,17 @@ NOT_TESTED, ENV_ERROR и TIMEOUT не дают PASS. FAIL сохраняется
 FAIL; base FAIL + head PASS — `PASS_WITH_BASE_FAIL_FIXED`. Сравнение применимо
 только к согласованным group/tests/environment; helper не доказывает их equivalence.
 
-QA запускает **доверенную base-копию runner и соседнего catalog.py** с
+QA запускает **доверенную base-копию runner и соседних catalog.py/safe_io.py** с
 `--catalog /trusted/base/scripts/chatops/testing/test_groups.json --repo CANDIDATE`.
 При explicit catalog candidate catalog не загружается как конфигурация, candidate
 runner не импортируется/исполняется. Все candidate files, включая эти копии,
 хешируются только как DATA для worktree digest. Candidate не выбирает свою QA.
 Сам cache не подписан, не admission и не trusted CI receipt: QA использует собственный
 защищённый runs-dir на exact неизменяемом candidate, не авторские редактируемые JSON.
+Catalog читается без follow (включая parents), non-regular/symlink — `UNSAFE_CATALOG`.
+Artifacts открываются относительно directory fd (`O_NOFOLLOW|O_DIRECTORY` для dir,
+`O_NOFOLLOW` + regular `fstat` для files); temp receipt — unique `O_CREAT|O_EXCL`,
+rename относительно того же fd. Detached worker наследует lock и directory fd.
 
 ## 7. Следующие этапы
 
