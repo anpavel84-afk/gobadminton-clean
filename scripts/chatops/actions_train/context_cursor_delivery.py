@@ -87,6 +87,8 @@ def _synthetic_namespace_argv():
     class SyntheticPath(type(Path())):
         def lstat(self):
             private = str(self) == base or base+'/' in str(self)
+            if private and self.name == Path(policy.CANONICAL_GIT_RULES_PATH).name:
+                return SimpleNamespace(st_mode=stat.S_IFREG | 0o644, st_uid=1002, st_nlink=1)
             regular = self.name == 'gb-bwrap'
             return SimpleNamespace(st_mode=(stat.S_IFREG | 0o555) if regular else
                                    (stat.S_IFDIR | (0o700 if private else 0o755)),
@@ -101,6 +103,10 @@ def _synthetic_namespace_argv():
         CURSOR_PIN=SyntheticPath(cursor.CURSOR_PIN),
         os=SimpleNamespace(geteuid=lambda: 1002, getxattr=lambda *a, **k: b''),
         BWRAP_SHA256=_sha(helper))
+    mounts = namespace.get('cursor_rules_readonly_mounts')
+    if mounts is not None:
+        namespace['cursor_rules_readonly_mounts'] = FunctionType(
+            mounts.__code__, namespace, mounts.__name__, mounts.__defaults__, mounts.__closure__)
     synthetic = FunctionType(builder.__code__, namespace, builder.__name__,
                              builder.__defaults__, builder.__closure__)
     return synthetic(SyntheticPath(base), [str(cursor.CURSOR_PIN/'node')])
@@ -110,6 +116,8 @@ def _readonly_argv(argv, work):
     """Conservatively interpret ordered bwrap mounts; unknown options fail closed."""
     work = Path(work)
     canon = work/policy.CANONICAL_GIT_RULES_PATH
+    ancestors = [p for p in reversed(canon.parents) if work in p.parents]
+    bound = 0
     rw_work, readonly = False, False
     arities = {'--unshare-all': 0, '--share-net': 0, '--die-with-parent': 0,
         '--new-session': 0, '--cap-drop': 1, '--tmpfs': 1, '--proc': 1,
@@ -133,17 +141,24 @@ def _readonly_argv(argv, work):
             overlaps = dest == canon or dest in canon.parents or canon in dest.parents
             if option in ('--bind', '--bind-try') and args == [str(work), str(work)]:
                 rw_work, readonly = True, False
+                bound = 0
             elif overlaps:
-                # A different source could contain different rules, even if ro.
-                readonly = (rw_work and option in ('--ro-bind', '--ro-bind-try')
-                            and args[0] == str(dest)
-                            and (dest == canon or dest in canon.parents))
+                # Ancestor mountpoints prevent moving/removing the canon's path.
+                if (rw_work and not readonly and option == '--bind'
+                        and args[0] == str(dest) and bound < len(ancestors)
+                        and dest == ancestors[bound]):
+                    bound += 1
+                elif (rw_work and not readonly and option == '--ro-bind' and args[0] == str(canon)
+                        and dest == canon and bound == len(ancestors)):
+                    readonly = True
+                else:
+                    bound, readonly = 0, False
         i += count + 1
     return False
 
 
 def recipient_rules_readonly():
-    """Capability only; current marker-pinned guard returns False (full fallback)."""
+    """True only with the rules ro mount; current marker-pinned guard is False."""
     try:
         return _readonly_argv(_synthetic_namespace_argv(),
                               '/tmp/gb-cursor-211-context-probe/work') is True
