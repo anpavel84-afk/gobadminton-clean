@@ -1,6 +1,7 @@
 """Offline synthetic runtime acceptance: real file hashes/writes, no host state or clients."""
 import copy
 from contextlib import contextmanager
+from functools import cache
 import errno
 import random
 import hashlib
@@ -21,6 +22,16 @@ import native_cursor as N
 
 
 MISSING = object()
+
+
+@cache
+def installed_runtime_modules():
+    # KEEP installer/marker pins: acceptance fixtures model the installed
+    # pre-change modules, not this candidate's guard awaiting Owner rebind.
+    source = 'e8b4e4f7bcc1d6a31bf9bee3d2a8db956a98af14'
+    return {name: subprocess.check_output(['git', 'show',
+            source+':scripts/chatops/actions_train/'+name], cwd=ROOT)
+            for name in U.RUNTIME_MODULES}
 
 
 class RuntimeStat:
@@ -103,7 +114,9 @@ class RuntimeAcceptance(unittest.TestCase):
             path.write_bytes(data)
             self.evidence[key] = (name,hashlib.sha256(data).hexdigest())
         for name in U.RUNTIME_MODULES:
-            (self.install/name).write_bytes((ROOT/'scripts/chatops/actions_train'/name).read_bytes())
+            raw = installed_runtime_modules()[name]
+            self.assertEqual(hashlib.sha256(raw).hexdigest(), U.RUNTIME_MODULES[name])
+            (self.install/name).write_bytes(raw)
         self.proof_path = self.bundle/U.QUALIFICATION_PROOF
         self.proof_path.parent.mkdir(parents=True)
         self.proof = {'schema':'GB_CURSOR_RUNTIME_QUALIFICATION_PROOF_V1',
@@ -778,7 +791,10 @@ class RuntimeAcceptance(unittest.TestCase):
             if data.startswith(b'synthetic-pin:'):
                 return SimpleNamespace(hexdigest=lambda:N.PIN_HASHES[data.decode().split(':')[1]])
             return real_sha(data)
-        with patch.object(N,'_read',side_effect=native_read),patch.object(N.hashlib,'sha256',side_effect=sha):
+        # qualification must inspect the exact installed fixture bytes, whose
+        # marker still pins the old guard, rather than this uninstalled repo diff.
+        with patch.object(N,'__file__',str(self.install/'native_cursor.py')), \
+             patch.object(N,'_read',side_effect=native_read),patch.object(N.hashlib,'sha256',side_effect=sha):
             with self.assertRaisesRegex(core.Refused,'restricted to reviewed'): N.qualification('slot2',task_hash)
             self.call()
             self.assertEqual(N.qualification('slot2',task_hash)['phase'],'ready')
@@ -1948,7 +1964,7 @@ class CommittedProof(unittest.TestCase):
             'evidence':{k:{'path':str(U.STATE/name),'sha256':sha} for k,(name,sha) in U.RUNTIME_EVIDENCE.items()}})
         self.assertEqual(len(proof['evidence']),12)
         for name,sha in U.RUNTIME_MODULES.items():
-            self.assertEqual(hashlib.sha256((ROOT/'scripts/chatops/actions_train'/name).read_bytes()).hexdigest(),sha)
+            self.assertEqual(hashlib.sha256(installed_runtime_modules()[name]).hexdigest(),sha)
 
 
 

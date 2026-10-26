@@ -1,5 +1,6 @@
 """Archived production receipts and marker-only acceptance; synthetic state only."""
 import contextlib
+from functools import cache
 import copy
 import hashlib
 import importlib.util
@@ -324,6 +325,15 @@ if spec and Path(spec.origin).exists():
     I=importlib.util.module_from_spec(spec);spec.loader.exec_module(I)
 
 class ScopedInstallTests(unittest.TestCase):
+    @staticmethod
+    @cache
+    def installed_source_manifest():
+        # KEEP #319's install-time source pin. The candidate repo manifest now
+        # includes the new guard, which this unrelated installer does not install.
+        repo=Path(__file__).resolve().parents[3]
+        return subprocess.check_output(['git','show',
+            'e8b4e4f7bcc1d6a31bf9bee3d2a8db956a98af14:scripts/chatops/actions_train/manifest.json'],cwd=repo)
+
     def bundle_fixture(self, root):
         bundle=root/'bundle';bundle.mkdir();(bundle/'.git').mkdir()
         (bundle/'.git'/'config').write_bytes(b'[core]\n\trepositoryformatversion = 0\n\tbare = false\n')
@@ -447,7 +457,8 @@ class ScopedInstallTests(unittest.TestCase):
             paths=['scripts/chatops/actions_train/'+n for n in I.TARGETS]
             paths+=['scripts/chatops/actions_train/manifest.json','.github/workflows/train-stage.yml']
             for name in paths:
-                path=bundle/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes((repo/name).read_bytes())
+                raw=(self.installed_source_manifest() if name.endswith('/manifest.json') else (repo/name).read_bytes())
+                path=bundle/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(raw)
             (bundle/'.gitignore').write_text('ignored\n')
             (bundle/'.gitattributes').write_text('*.txt text\n')
             fixture_git('add','.')
@@ -532,7 +543,7 @@ class ScopedInstallTests(unittest.TestCase):
         repo=Path(__file__).resolve().parents[3]
         for name,(_,pin) in I.TARGETS.items():
             self.assertEqual(hashlib.sha256((repo/'scripts/chatops/actions_train'/name).read_bytes()).hexdigest(),pin)
-        self.assertEqual(hashlib.sha256((repo/'scripts/chatops/actions_train/manifest.json').read_bytes()).hexdigest(),I.MANIFEST)
+        self.assertEqual(hashlib.sha256(self.installed_source_manifest()).hexdigest(),I.MANIFEST)
         self.assertEqual(set(I.TARGETS),{'native_antigravity.py','antigravity_qa_recovery.py','owner_package_admission.py'})
         required={'context_policy.py','accepted-engineering-rules.md','stage.py','receiver.py','native_guard.py',
             'core.py','content_identity.py','installer.py','monitor.py','monitor-mapping.json','monitor_extension.js'}

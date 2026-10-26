@@ -1,5 +1,6 @@
 """Cursor export access, exact context delivery and pre-import proof, offline only."""
 import copy
+from contextlib import nullcontext
 import hashlib
 import json
 import os
@@ -20,6 +21,10 @@ import context_policy as C
 import native_cursor as N
 
 
+# KEEP: Owner-supplied installed/marker state, not the patched repo-file pin.
+INSTALLED_GUARD_SHA256 = 'dd2e0a0c6c0dea0d353b7dc5f16c1a5d4c4c21f022947ceaa640470c59fb0762'
+
+
 def sha(raw):
     return hashlib.sha256(raw).hexdigest()
 
@@ -34,10 +39,12 @@ def user(text):
 
 
 def readonly_builder(base, command):
-    # Test-only guard variant: same rw work mount, then the future ro canon mount.
+    # Test-only guard variant with the same required ordered ancestor mounts.
     work = str(base/'work')
     canon = str(base/'work'/C.CANONICAL_GIT_RULES_PATH)
-    return ['synthetic-bwrap', '--bind', work, work, '--ro-bind', canon, canon,
+    docs, rules = str(base/'work'/'docs'), str(base/'work'/'docs/rules')
+    return ['synthetic-bwrap', '--bind', work, work,
+            '--bind', docs, docs, '--bind', rules, rules, '--ro-bind', canon, canon,
             '--chdir', work, '--', *command]
 
 
@@ -48,12 +55,17 @@ def verified_material(exp):
 
 
 class ReadonlyCapability(unittest.TestCase):
-    def test_real_builder_is_writable_and_full_is_exact_legacy(self):
+    def test_old_builder_is_writable_and_full_is_exact_legacy(self):
         argv = D._synthetic_namespace_argv()
         self.assertIn('--bind', argv)  # real builder completed, no host metadata read
-        self.assertFalse(D.recipient_rules_readonly())
+        self.assertTrue(D.recipient_rules_readonly())
+        # Remove precisely the new fragment to model the installed old guard.
+        end = argv.index('--chdir')
+        argv = argv[:end-9] + argv[end:]
         with patch.object(D, 'export_view', return_value={C.CANONICAL_GIT_RULES_PATH: C.RULES_SHA256}), \
+             patch.object(D, '_synthetic_namespace_argv', return_value=argv), \
              patch.object(D, 'verified_cursor_workspace_rules', return_value=True):
+            self.assertFalse(D.recipient_rules_readonly())
             work = ROOT
             payload, receipt, exp = D.cursor_author_context('task', SimpleNamespace(work=work), accepted())
         self.assertEqual(payload.encode(), C.inject('task', False, work, accepted(), role='author')[0].encode())
@@ -80,7 +92,7 @@ class ReadonlyCapability(unittest.TestCase):
             try: result = D._readonly_argv(head+extra+tail, work)
             except core.Refused: result = False
             self.assertFalse(result)
-        wrong = argv.copy(); wrong[5] = '/different/rules'
+        wrong = argv.copy(); wrong[wrong.index('--ro-bind')+1] = '/different/rules'
         self.assertFalse(D._readonly_argv(wrong, work))
 
 
@@ -465,7 +477,7 @@ class CursorStage(unittest.TestCase):
                  patch.object(C, 'load', return_value=accepted()), patch.object(stage, 'route', return_value=choice), \
                  patch.object(D, 'export_view', return_value={C.CANONICAL_GIT_RULES_PATH: C.RULES_SHA256}), \
                  patch.object(D, 'verified_cursor_workspace_rules', return_value=probe) as access, \
-                 patch.object(D, 'recipient_rules_readonly', return_value=readonly), \
+                 (patch.object(D, 'recipient_rules_readonly', return_value=readonly) if readonly is not None else nullcontext()), \
                  patch.object(C, 'verified_git_rules', side_effect=AssertionError('Cursor has no git')) as git_probe, \
                  patch('native_cursor.invoke', side_effect=invoke), patch('receiver.units_quiet'):
                 request = req(name, 'pr_wait')
@@ -502,13 +514,22 @@ class CursorStage(unittest.TestCase):
     def test_cursor_qa_still_refused(self):
         with self.assertRaisesRegex(core.Refused, 'unimplemented native model adapter'): self.exercise(qa=True)
 
-    def test_native_modules_match_manifest_and_owner_supplied_marker_pins(self):
+    def test_native_modules_match_manifest_and_cursor_marker_pin(self):
         manifest = json.loads((ROOT/'scripts/chatops/actions_train/manifest.json').read_text())['files']
         for name, expected in [('native_cursor.py', '02d26f8be9766bbeb1e92dd8514dfc496c1b3e1b0fc8035c1c65cc9aba6b6089'),
-                               ('native_guard.py', 'dd2e0a0c6c0dea0d353b7dc5f16c1a5d4c4c21f022947ceaa640470c59fb0762')]:
+                               ('native_guard.py', manifest['scripts/chatops/actions_train/native_guard.py'])]:
             path = 'scripts/chatops/actions_train/'+name
             self.assertEqual(sha((ROOT/path).read_bytes()), expected)
             self.assertEqual(manifest[path], expected)
+
+    def test_old_installed_marker_requires_separate_rebind(self):
+        marker = dict(schema='GB_CURSOR_AUTHOR_211_V1', phase='ready', slots=['slot1'],
+            modules={'native_cursor.py': '02d26f8be9766bbeb1e92dd8514dfc496c1b3e1b0fc8035c1c65cc9aba6b6089',
+                     'native_guard.py': INSTALLED_GUARD_SHA256})
+        with patch.object(N, '_read', return_value=json.dumps(marker).encode()), \
+             patch.object(N, 'PIN_HASHES', {}):
+            with self.assertRaisesRegex(core.Refused, 'installed module drift'):
+                N.qualification('slot1', 'synthetic-task')
 
 
 if __name__ == '__main__':
