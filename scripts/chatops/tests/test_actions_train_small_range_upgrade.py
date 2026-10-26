@@ -56,7 +56,9 @@ class Fixture:
         (autonomy/'locks').mkdir()
         self.paths=dict(LIB=self.lib,STATE=self.state,AUTONOMY=autonomy,POLICY=self.root/'policy',
             MARKER=self.root/'marker',BUDGET=self.root/'budget',INVENTORY=self.state/'backup.json',
-            J=self.state/'agy29-small-range-upgrade.json',BK=self.state/'agy29-small-range-upgrade-backup')
+            J=self.state/'agy29-small-range-upgrade-r2.json',BK=self.state/'agy29-small-range-upgrade-r2-backup',
+            PREVIOUS_J=self.state/'agy29-small-range-upgrade.json',
+            PREVIOUS_BK=self.state/'agy29-small-range-upgrade-backup')
         for key,value in self.paths.items():self.patch(key,value)
         self.patch('OWNER_UID',os.getuid());self.patch('OWNER_GID',os.getgid())
         self.stack.enter_context(patch.object(I.os,'fchown'))
@@ -135,6 +137,23 @@ class Fixture:
             observation=observed,observation_sha256=I.digest(observed),
             backups={NAME:target_meta,'inventory':inventory_meta})
         for layer in self.receipts:self.write_receipt(layer)
+        # Synthetic immutable first-attempt ROLLED_BACK receipt: isolated from
+        # the NEW R2 journal, with exact old byte and metadata binding.
+        old_items={**BASELINE,'inventory':self.paths['INVENTORY'].read_bytes()}
+        self.paths['PREVIOUS_BK'].mkdir(mode=0o700)
+        for name,raw in old_items.items():
+            f=self.paths['PREVIOUS_BK']/name
+            f.write_bytes(raw);f.chmod(0o600)
+        earlier=dict(schema=I.SCHEMA,phase='rolled_back',commit=I.PREVIOUS_COMMIT,
+            script_sha256=I.PREVIOUS_SCRIPT_SHA,manifest=I.MANIFEST,
+            observation_sha256=I.PREVIOUS_OBSERVATION_SHA,
+            backups={name:dict(sha256=H(raw),mode=0o600 if name=='inventory' else 0o644,
+                               uid=os.getuid(),gid=os.getgid()) for name,raw in old_items.items()})
+        receipt_raw=json.dumps(earlier,sort_keys=True).encode()
+        self.paths['PREVIOUS_J'].write_bytes(receipt_raw)
+        self.paths['PREVIOUS_J'].chmod(0o600)
+        self.patch('PREVIOUS_RECEIPT_SHA',H(receipt_raw))
+        self.patch('PREVIOUS_BACKUP_SHA',{name:H(raw) for name,raw in old_items.items()})
 
     def patch(self,key,value):self.stack.enter_context(patch.object(I,key,value))
 
@@ -218,6 +237,29 @@ class UpgradeTests(unittest.TestCase):
         with self.assertRaisesRegex(I.Refused,'already rolled back'):I.restore(I.receipt_read(COMMIT))
         with self.assertRaisesRegex(I.Refused,'existing guarded'):I.apply(MATERIAL,SS,COMMIT,'0'*64)
         self.assertEqual(f.tree(),snapshot)
+
+    def test_retained_first_failure_is_immutable_and_refuses_foreign_bytes(self):
+        f=self.fixture()
+        for path in (I.PREVIOUS_J,I.PREVIOUS_BK/'inventory',I.PREVIOUS_BK/NAME):
+            with self.subTest(path=str(path)):
+                raw=path.read_bytes()
+                path.write_bytes(raw+b' ')
+                before=f.tree()
+                with self.assertRaisesRegex(I.Refused,'previous C'):I.dry(SS,COMMIT)
+                self.assertEqual(f.tree(),before)
+                with self.assertRaisesRegex(I.Refused,'previous C'):
+                    I.apply(MATERIAL,SS,COMMIT,'0'*64)
+                self.assertEqual(f.tree(),before)
+                path.write_bytes(raw)
+        self.assertFalse(I.J.exists())
+        self.assertFalse(I.BK.exists())
+
+    def test_previous_terminal_receipt_included_in_protected_observation(self):
+        f=self.fixture()
+        state=I.observation()['protected']
+        for p in (I.PREVIOUS_J,I.PREVIOUS_BK/'inventory',I.PREVIOUS_BK/NAME):
+            self.assertIn(str(p),state)
+        self.assertEqual(I.PREVIOUS_J.read_bytes(),f.paths['PREVIOUS_J'].read_bytes())
 
     def test_dry_apply_verify_rollback_compact(self):self.cycle(False)
     def test_dry_apply_verify_rollback_pretty(self):self.cycle(True)
@@ -450,7 +492,7 @@ class UpgradeTests(unittest.TestCase):
         P=module('small_range_lower_unwind',SCRIPT.parent/'agy29_admission_upgrade.py')
         with contextlib.ExitStack() as stack:
             for key,value in f.paths.items():
-                if key not in ('J','BK'):stack.enter_context(patch.object(P,key,value))
+                if key not in ('J','BK','PREVIOUS_J','PREVIOUS_BK'):stack.enter_context(patch.object(P,key,value))
             stack.enter_context(patch.object(P,'J',f.state/I.ADMISSION_NAME))
             stack.enter_context(patch.object(P,'BK',f.state/I.ADMISSION_BACKUP))
             stack.enter_context(patch.object(P,'UNCHANGED',I.UNCHANGED))
@@ -611,7 +653,16 @@ class UpgradeTests(unittest.TestCase):
         self.assertNotIn('STATE',I.SMOKE_CODE)
         self.assertNotIn('open(',I.SMOKE_CODE)
         self.assertIn('A.EXPECTED_PINS and callable(A.accept)',I.SMOKE_CODE)
-        self.assertIn('Q.OWNER_PACKAGE_SOURCES and callable(Q.package_rules_ok)',I.SMOKE_CODE)
+        self.assertIn('Q.OWNER_PACKAGE_SOURCES and callable(Q.owner_package_input_pins)',I.SMOKE_CODE)
+        self.assertIn('A.EXPECTED_PINS and callable(A.accept)',I.SMOKE_CODE)
+        self.assertIn('callable(A.package_rules_ok)',I.SMOKE_CODE)
+        self.assertNotIn('callable(Q.package_rules_ok)',I.SMOKE_CODE)
+        # The previous smoke asserted a nonexistent Q symbol and forced rollback
+        # on the real host. Both new exported APIs exist in the reviewed source.
+        recovered=installed_source('scripts/chatops/actions_train/antigravity_qa_recovery.py')
+        admission=installed_source('scripts/chatops/actions_train/owner_package_admission.py')
+        self.assertIn('owner_package_input_pins',recovered.decode())
+        self.assertIn('def package_rules_ok(',admission.decode())
         with patch.object(I,'run',return_value=b'wrong'),self.assertRaises(I.Refused):I.smoke()
 
 
