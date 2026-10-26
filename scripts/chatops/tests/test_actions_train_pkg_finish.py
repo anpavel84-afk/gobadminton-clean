@@ -332,7 +332,11 @@ class ScopedInstallTests(unittest.TestCase):
     def bundle_trusted(self, path):
         # Keep the production no-link/no-write checks, adapting root ownership
         # only for synthetic fixtures and their test-identity-owned ancestors.
+        # Ancestors at or above the platform temp directory (for example the
+        # sticky, world-writable /tmp on CI) are outside the synthetic fixture.
+        temp=Path(tempfile.gettempdir()).resolve()
         for parent in (path,*path.parents):
+            if parent.resolve()==temp:break
             info=parent.lstat()
             I.need(not stat.S_ISLNK(info.st_mode) and info.st_uid in (0,os.getuid())
                    and not info.st_mode & 0o022,'untrusted synthetic bundle path')
