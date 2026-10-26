@@ -676,6 +676,47 @@ class ScopedInstallTests(unittest.TestCase):
             (state/I.C5_RECEIPT_NAME).unlink()
             self.assertIsNone(I.observation()['inventory_rules_provenance'])
 
+    def test_state_sha_streams_large_files_and_keeps_every_safety_refusal(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root=Path(raw);big=root/'big';small=root/'small'
+            with open(big,'wb') as handle:handle.truncate(67108864+4096);handle.seek(67108864);handle.write(b'tail')
+            os.chmod(big,0o600)
+            small.write_bytes(b'abc');os.chmod(small,0o600)
+            self.assertEqual(I.state_sha(big),hashlib.sha256(big.read_bytes()).hexdigest())
+            self.assertEqual(I.state_sha(small),hashlib.sha256(b'abc').hexdigest())
+            # The pinned/bundle/lib reader keeps its 64 MiB bound; the state reader has its own hard bound.
+            with self.assertRaises(I.Refused):I.regular_bytes(big)
+            with self.assertRaises(I.Refused):I.state_sha(big,limit=67108864)
+            wide=root/'wide';wide.write_bytes(b'x');os.chmod(wide,0o664)
+            with self.assertRaises(I.Refused):I.state_sha(wide)
+            link=root/'link';os.symlink(small,link)
+            with self.assertRaises(OSError):I.state_sha(link)
+            hard=root/'hard';os.link(small,hard)
+            with self.assertRaises(I.Refused):I.state_sha(small)
+            with self.assertRaises(I.Refused):I.state_sha(root)
+            with self.assertRaises(I.Refused):I.state_sha(Path('relative'))
+            hard.unlink()
+            grow=root/'grow';grow.write_bytes(b'12345');os.chmod(grow,0o600)
+            real=os.fstat;seen=[]
+            def racing(fd):
+                info=real(fd);seen.append(1)
+                return os.stat_result(tuple(info)[:6]+(info.st_size+1,)+tuple(info)[7:]) if len(seen)>=2 else info
+            with patch.object(I.os,'fstat',racing):
+                with self.assertRaises(I.Refused):I.state_sha(grow)
+
+    def test_observation_walks_a_state_file_larger_than_the_pinned_read_bound(self):
+        with tempfile.TemporaryDirectory() as directory,contextlib.ExitStack() as stack:
+            lib,state,inventory=self.observation_fixture(stack,Path(directory))
+            evidence=state/'completed-orphan';evidence.mkdir(mode=0o700)
+            artifact=evidence/'deleted-executable'
+            with open(artifact,'wb') as handle:handle.truncate(67108864+1)
+            os.chmod(artifact,0o600)
+            observed=I.observation()
+            self.assertEqual(observed['protected'][str(artifact)]['sha256'],hashlib.sha256(artifact.read_bytes()).hexdigest())
+            with open(artifact,'ab') as handle:handle.write(b'x')
+            self.assertNotEqual(I.observation()['protected'][str(artifact)]['sha256'],
+                                hashlib.sha256(b'\0'*(67108864+1)).hexdigest())
+
     def test_fake_root_apply_verify_rollback_byte_exact(self):
         self.fake_root_cycle(False)
 
