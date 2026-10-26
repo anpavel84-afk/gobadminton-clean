@@ -169,16 +169,20 @@ before any restore writes, restores exact backups and metadata, and records
 `rolled_back`; another rollback refuses. Foreign bytes are never overwritten.
 Failure reporting differs by path. Only `apply`'s automatic recovery records
 phase `rollback_failed` when its own restore fails. An explicit `rollback`
-that fails (for example a write error part-way) or refuses because protected
-state drifted raises the error and does **not** rewrite the receipt: the
-existing phase (`active`, or an earlier incomplete phase such as `backed_up`)
-and the backups are preserved. A part-way write failure can leave a mix of
-each target's old and new bytes plus the edited inventory. Drift is refused
-before any write. `dry` is not a diagnostic here: it refuses while a receipt
-or backup directory is retained. `verify` is read-only and reports
-installed-byte drift. Stop, retain the receipt, backups and the error output,
-and do not retry blindly or hand-edit the receipt, targets or inventory; the
-exact recovery needs a separately reviewed reconciliation step.
+that fails before the final receipt update (for example a restore write error)
+or refuses because protected state drifted raises the error without rewriting
+the receipt; the existing phase (`active`, or an earlier incomplete phase such
+as `backed_up`) remains. However, an error DURING the atomic final receipt
+update (for example directory `fsync` after the rename) can be reported even
+when the receipt has already changed to `rolled_back`; its durability is
+uncertain until readback. Restored targets and inventory may likewise be in
+an intermediate or fully restored state. Backups are retained. Drift is
+refused before restore writes. `dry` is not a diagnostic here: it refuses
+while a receipt or backup directory is retained. `verify` is read-only and
+reports installed-byte drift. Stop and preserve the error evidence; perform
+trusted readback and exact hash/phase reconciliation of the receipt, backups,
+targets and inventory. Do not retry blindly or hand-edit any of them; recovery
+requires a separately reviewed reconciliation step.
 
 ## Earlier installers and unwind limitation
 
