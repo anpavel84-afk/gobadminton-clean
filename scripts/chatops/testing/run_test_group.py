@@ -26,7 +26,7 @@ from catalog import DEFAULT_CATALOG, load_catalog, unique_object
 from run_receipt import SCHEMA as RECEIPT_SCHEMA, valid_receipt
 from safe_io import absolute, check_regular, directory, regular
 
-VERSION = "GB_TEST_RUNNER_V1_REPAIR5"
+VERSION = "GB_TEST_RUNNER_V1_REPAIR6"
 REASONS = {"input_changed", "env_fixed", "flake_probe", "qa_independent_base", "ci_missing"}
 EXITS = {"PASS": 0, "FAIL": 1, "ENV_ERROR": 2, "NOT_TESTED": 2, "TIMEOUT": 4}
 BASE_ENV = {"PATH", "HOME", "TMPDIR", "LANG"}
@@ -96,7 +96,7 @@ def directory_identity(fd):
 
 def recognise(runs, fd):
     identity = directory_identity(fd)
-    if state.read_record(marker_path(runs)) != identity:
+    if state.read_record(marker_path(runs), marker=True) != identity:
         raise ValueError("RUNS_DIR_UNRECOGNISED")
 
 
@@ -151,7 +151,7 @@ def validate_runs(repo, runs, fd):
 
 def check_execution(runs):
     record = state.read_record(runs.parent / "gb-test-runs.state")
-    if record is not None:
+    if record is not state.MISSING:
         if execution_alive(record):
             raise ValueError("PREVIOUS_EXECUTION_ALIVE")
         # Do not erase a killed run's pending receipt, even for another fingerprint.
@@ -182,7 +182,7 @@ def runs_directory(repo, runs, *, create=False, locked=False):
                         opened = os.fstat(fd)
                         if (opened.st_dev, opened.st_ino) != (created.st_dev, created.st_ino):
                             raise ValueError("RUNS_DIR_UNRECOGNISED")
-                        state.write_record(marker_path(runs), directory_identity(fd))
+                        state.write_record(marker_path(runs), directory_identity(fd), marker=True)
                     recognise(runs, fd)
                     validate_runs(repo, runs, fd)
                     # Global reconciliation: every pending fingerprint blocks new use.
@@ -199,6 +199,7 @@ def cache_boundary(runs, fd):
     if os.geteuid() == 0 or os.fstat(fd).st_uid != os.getuid():
         raise BoundaryUnavailable()
     original_mode = stat.S_IMODE(os.fstat(fd).st_mode)
+    restore_allowed = True
     try:
         try:
             recognise(runs, fd)
@@ -214,17 +215,22 @@ def cache_boundary(runs, fd):
         except OSError as exc:
             raise BoundaryUnavailable() from exc
         yield
+    except (ExecutionStateUnverifiable, state.RecordCorrupt):
+        # A later successful inspection cannot undo an unknown execution outcome.
+        restore_allowed = False
+        raise
     finally:
-        record = state.read_record(runs.parent / "gb-test-runs.state")
-        if record is not None and execution_alive(record):
-            raise ValueError("PREVIOUS_EXECUTION_ALIVE")
-        try:
-            recognise(runs, fd)
-            os.fchmod(fd, original_mode)
-            if stat.S_IMODE(os.fstat(fd).st_mode) != original_mode:
-                raise BoundaryUnavailable()
-        except OSError as exc:
-            raise BoundaryUnavailable() from exc
+        if restore_allowed:
+            record = state.read_record(runs.parent / "gb-test-runs.state")
+            if record is not state.MISSING and execution_alive(record):
+                raise ValueError("PREVIOUS_EXECUTION_ALIVE")
+            try:
+                recognise(runs, fd)
+                os.fchmod(fd, original_mode)
+                if stat.S_IMODE(os.fstat(fd).st_mode) != original_mode:
+                    raise BoundaryUnavailable()
+            except OSError as exc:
+                raise BoundaryUnavailable() from exc
 
 
 def source_entry(path):
@@ -489,6 +495,8 @@ def execute(job, result_path, runs_fd, *, result=None, cache=True):
                                 for gate in (gate_read, gate_write):
                                     if gate is not None:
                                         os.close(gate)
+                        except Interrupted:
+                            status, detail = "ENV_ERROR", "INTERRUPTED"
                         finally:
                             if process is not None:
                                 # Include descendants whose leader has already exited.
@@ -505,11 +513,11 @@ def execute(job, result_path, runs_fd, *, result=None, cache=True):
                                         if time.monotonic() >= deadline:
                                             raise ValueError("PREVIOUS_EXECUTION_ALIVE")
                                         time.sleep(0.01)
-                                    journal = result_path.parent.parent / "gb-test-runs.state"
-                                    if state.read_record(journal) is not None:
-                                        state.clear_record(journal)
-                except Interrupted:
-                    status, detail = "ENV_ERROR", "INTERRUPTED"
+                                    # Validate before restoration; retain the journal until
+                                    # that final identity check and chmod both succeed.
+                                    state.read_record(result_path.parent.parent / "gb-test-runs.state")
+                    if cache and record is not None:
+                        state.clear_record(result_path.parent.parent / "gb-test-runs.state")
                 except BoundaryUnavailable:
                     cache = False
                     boundary_lost = True
@@ -746,6 +754,9 @@ def main(argv=None):
         return 0 if exc.code == 0 else 3
     except ExecutionStateUnverifiable:
         print("ENV_ERROR: EXECUTION_STATE_UNVERIFIABLE")
+        return 2
+    except state.RecordCorrupt:
+        print("ENV_ERROR: EXECUTION_STATE_CORRUPT")
         return 2
     except (ValueError, TypeError, KeyError) as exc:
         print("REFUSED: " + str(exc).replace("\n", "\\n")[:200])

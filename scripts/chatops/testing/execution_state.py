@@ -7,25 +7,72 @@ import signal
 import sys
 import uuid
 
-from safe_io import directory, regular
+from safe_io import check_regular, directory, regular
+
+MISSING = object()
+MAX_RECORD_BYTES = 4096
 
 
 class BoundaryUnavailable(Exception):
     pass
 
 
-def read_record(path):
-    with directory(path.parent) as parent:
-        try:
-            with regular(path.name, dir_fd=parent, private=True) as fd:
-                with os.fdopen(os.dup(fd), "r") as stream:
-                    return json.load(stream)
-        except FileNotFoundError:
-            return None
+class RecordCorrupt(Exception):
+    pass
 
 
-def write_record(path, value):
+def validate_record(value, *, marker=False):
+    fields = {"dev", "ino", "uid"} if marker else {"pgid", "start", "boot", "pending"}
+    valid = type(value) is dict and value.keys() == fields
+    if valid and marker:
+        valid = all(type(value[key]) is int and value[key] >= 0 for key in fields)
+    elif valid:
+        valid = (all(type(value[key]) is int and value[key] > 0 for key in ("pgid", "start"))
+                 and type(value["boot"]) is str and bool(value["boot"])
+                 and type(value["pending"]) is bool)
+    if not valid:
+        raise RecordCorrupt()
+
+
+def unique_object(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise RecordCorrupt()
+        value[key] = item
+    return value
+
+
+def read_record(path, *, marker=False):
+    try:
+        with directory(path.parent) as parent:
+            try:
+                fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                             dir_fd=parent)
+            except FileNotFoundError:
+                return MISSING  # Only absence of this exact no-follow name is absence.
+            try:
+                check_regular(os.fstat(fd), "UNSAFE_FILE", private=True)
+                if os.fstat(fd).st_size > MAX_RECORD_BYTES:
+                    raise RecordCorrupt()
+                with os.fdopen(os.dup(fd), "rb") as stream:
+                    data = stream.read(MAX_RECORD_BYTES + 1)
+                if len(data) > MAX_RECORD_BYTES:
+                    raise RecordCorrupt()
+                value = json.loads(data, object_pairs_hook=unique_object)
+                validate_record(value, marker=marker)
+                return value
+            finally:
+                os.close(fd)
+    except (OSError, ValueError, UnicodeError, RecursionError) as exc:
+        raise RecordCorrupt() from exc
+
+
+def write_record(path, value, *, marker=False):
+    validate_record(value, marker=marker)
     with directory(path.parent) as parent:
+        # An existing corrupt destination must survive even a replacement attempt.
+        read_record(path, marker=marker)
         name = path.name + "." + uuid.uuid4().hex + ".new"
         try:
             with regular(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL,
@@ -35,7 +82,7 @@ def write_record(path, value):
                     stream.flush()
                     os.fsync(stream.fileno())
             # Refuse symlinks and unrelated non-regular destinations too.
-            read_record(path)
+            read_record(path, marker=marker)
             os.replace(name, path.name, src_dir_fd=parent, dst_dir_fd=parent)
             os.fsync(parent)
         finally:
@@ -47,6 +94,8 @@ def write_record(path, value):
 
 def clear_record(path):
     with directory(path.parent) as parent:
+        if read_record(path) is MISSING:
+            return
         os.unlink(path.name, dir_fd=parent)
         os.fsync(parent)
 

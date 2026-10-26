@@ -1,4 +1,4 @@
-"""Round 5: unavailable identity must never bypass outstanding execution state."""
+"""Unavailable identity must never bypass outstanding execution state."""
 import contextlib
 import io
 import os
@@ -136,27 +136,73 @@ class ReconciliationTests(unittest.TestCase):
                 self.assertEqual(list(self.runs.iterdir()), [])
                 self.assertFalse((self.runs.parent / 'gb-test-runs.state').exists())
 
-    def test_identity_lost_after_execution_preserves_unknown_without_retry_or_restore(self):
+    def check_one_shot_identity_failure(self, target):
         boundary.BoundaryTests.need_boundary(self)
-        # Establish Linux identity support before injecting the later scan failure.
         try:
             R.state.group_alive(R.state.identity(os.getpid()))
         except R.BoundaryUnavailable:
             self.skipTest('Linux /proc identity or group scan unavailable')
         journal = self.runs.parent / 'gb-test-runs.state'
+        inspect_group, write_result = R.state.group_alive, R.write_result
+        calls, saved = 0, {}
+
+        def pending(path, result, fd):
+            write_result(path, result, fd)
+            if result['pending']:
+                saved['receipt'] = path
+                saved['bytes'] = path.read_bytes()
+
+        def one_shot(record):
+            nonlocal calls
+            calls += 1
+            if calls == target:
+                saved['journal'] = journal.read_bytes()
+                raise R.BoundaryUnavailable()
+            return inspect_group(record)
+
         try:
-            with patch.object(R.state, 'group_alive', side_effect=R.BoundaryUnavailable):
+            with patch.object(R.state, 'group_alive', side_effect=one_shot), \
+                    patch.object(R, 'write_result', side_effect=pending), \
+                    patch.object(R.os, 'fchmod', wraps=os.fchmod) as fchmod, \
+                    patch.object(R.os, 'chmod', wraps=os.chmod) as chmod:
                 rc, output = self.invoke()
-            self.assertEqual(rc, 2, output)
-            self.assertIn('EXECUTION_STATE_UNVERIFIABLE', output)
+                self.assertEqual(rc, 2, output)
+                self.assertIn('ENV_ERROR: EXECUTION_STATE_UNVERIFIABLE', output)
+                self.assertNotIn('CACHE_BOUNDARY_UNAVAILABLE', output)
+                self.assertEqual(calls, target)  # No later guard masks this failure.
+                self.assertEqual([call.args[1] for call in fchmod.call_args_list],
+                                 [0, 0o700, 0])  # preflight probe + execution denial only
+                chmod.assert_not_called()
+                self.assertEqual(journal.read_bytes(), saved['journal'])
+                self.assertEqual(self.runs.stat().st_mode & 0o777, 0)
+                # The failure is one-shot: a later successful inspection still cannot
+                # turn UNKNOWN into permission to restore, clear, cache or execute.
+                self.assertFalse(R.execution_alive(R.state.read_record(journal)))
+                self.assertEqual(calls, target + 1)
+                rc, output = self.invoke()
+                self.assertEqual(rc, 3, output)
+                self.assertIn('INCOMPLETE_RUN_REQUIRES_RECONCILIATION', output)
+                self.assertEqual([call.args[1] for call in fchmod.call_args_list],
+                                 [0, 0o700, 0])
+                self.assertEqual(journal.read_bytes(), saved['journal'])
             self.assertEqual(self.counter.read_text(), '1')
-            self.assertEqual(self.runs.stat().st_mode & 0o777, 0)
-            self.assertTrue(R.state.read_record(journal)['pending'])
         finally:
-            self.runs.chmod(0o700)
-        receipt = next(self.runs.glob('*.json'))
+            self.runs.chmod(0o700)  # Test-only teardown after no-chmod assertions.
+        receipt = saved['receipt']
+        self.assertEqual(receipt.read_bytes(), saved['bytes'])
+        self.assertTrue(receipt.with_suffix('.log').is_file())
+        self.assertIn('done', receipt.with_suffix('.log').read_text())
         with R.directory(self.runs) as fd:
             self.assertTrue(R.read_result(Path(receipt.name), fd)['pending'])
+
+    def test_one_shot_poll_identity_failure_preserves_unknown(self):
+        self.check_one_shot_identity_failure(1)
+
+    def test_one_shot_cleanup_identity_failure_preserves_unknown(self):
+        self.check_one_shot_identity_failure(2)
+
+    def test_one_shot_restoration_identity_failure_preserves_unknown(self):
+        self.check_one_shot_identity_failure(3)
 
 
 if __name__ == '__main__':

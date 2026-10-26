@@ -49,7 +49,7 @@ class Round4Tests(unittest.TestCase):
             if value is None:
                 marker.unlink()
             else:
-                R.state.write_record(marker, value)
+                R.state.write_record(marker, value, marker=True)
             self.runs.chmod(0o755)
             (self.runs.parent / 'gb-test-runs.lock').unlink(missing_ok=True)
             before = set(self.runs.parent.iterdir())
@@ -98,7 +98,7 @@ class Round4Tests(unittest.TestCase):
         self.need_boundary()
         with R.runs_directory(self.repo, self.runs) as fd:
             record = R.directory_identity(fd)
-            R.state.write_record(R.marker_path(self.runs), {**record, 'ino': record['ino'] + 1})
+            R.state.write_record(R.marker_path(self.runs), {**record, 'ino': record['ino'] + 1}, marker=True)
             with patch.object(R.os, 'fchmod', wraps=os.fchmod) as chmod:
                 with self.assertRaisesRegex(ValueError, 'RUNS_DIR_UNRECOGNISED'):
                     with R.cache_boundary(self.runs, fd):
@@ -121,7 +121,7 @@ class Round4Tests(unittest.TestCase):
         result = self.run_group('--runs-dir', str(runs))
         self.assertEqual(result.returncode, 0, result.stdout)
         with R.directory(runs) as fd:
-            self.assertEqual(R.state.read_record(R.marker_path(runs)), R.directory_identity(fd))
+            self.assertEqual(R.state.read_record(R.marker_path(runs), marker=True), R.directory_identity(fd))
         self.assertEqual(runs.stat().st_mode & 0o777, 0o700)
         self.assertFalse(runs.with_name('qa-runs.lock').exists())
 
@@ -171,7 +171,7 @@ class Round4Tests(unittest.TestCase):
 
     def test_journal_write_is_atomic_and_fsyncs_file_and_parent(self):
         journal = self.runs.parent / 'gb-test-runs.state'
-        record = dict(pgid=2**30, start=1, boot=R.state.boot_id())
+        record = dict(pgid=2**30, start=1, boot=R.state.boot_id(), pending=False)
         with patch.object(R.state.os, 'fsync', wraps=os.fsync) as synced, \
                 patch.object(R.state.os, 'replace', wraps=os.replace) as renamed:
             R.state.write_record(journal, record)
@@ -190,8 +190,8 @@ class Round4Tests(unittest.TestCase):
     def test_dead_or_reused_identity_clears_stale_nonpending_state(self):
         self.need_boundary()
         journal = self.runs.parent / 'gb-test-runs.state'
-        for record in [dict(pgid=2**30, start=1, boot=R.state.boot_id()),
-                       {**R.state.identity(os.getpid()), 'start': 1}]:
+        for record in [dict(pgid=2**30, start=1, boot=R.state.boot_id(), pending=False),
+                       {**R.state.identity(os.getpid()), 'start': 1, 'pending': False}]:
             R.state.write_record(journal, record)
             rc, output = self.invoke('--repeat-reason', 'flake_probe')
             self.assertEqual(rc, 0, output)

@@ -6,8 +6,8 @@
 [SMART_ROUTING 1.0](../rules/SMART_ROUTING.md), exact pins —
 [CONTEXT_SOURCES.json](../rules/CONTEXT_SOURCES.json).
 
-AUTHOR repair round 5 preflight, 26.10.2026: repo `anpavel84-afk/gobadminton-clean`,
-branch `ops/proportionate-testing-p1-20261026`, PR #323; exact source/base `025993a95e87ea4f1d142aeeb47bda1909b0b1b9`; candidate — этот uncommitted diff.
+AUTHOR repair round 6 preflight, 26.10.2026: repo `anpavel84-afk/gobadminton-clean`,
+branch `ops/proportionate-testing-p1-20261026`, PR #323; exact source/base `cd8082973f4b77af3a999ddaf3947e20c72109ba`; candidate — этот uncommitted diff.
 Прямое ограниченное задание Owner, один AUTHOR/writer; PMA takeover отсутствует. Requested route — bounded Codex AUTHOR; effective identity задаёт launcher,
 этот документ не удостоверяет model ID или квалификацию роли.
 EOM commit `13a8b6c54a45aaa57021e092a1bee54926d9eac4`, SHA-256
@@ -150,7 +150,7 @@ marker dev/ino сверяется повторно; finally возвращает
 Недоступный 0000 dir после crash **не chmod-ится по pathname**: `RUNS_DIR_UNAVAILABLE`.
 Linux O_PATH открывает такой inode, но не допускает fchmod; автоматического self-heal нет.
 До исполнения команды pipe-gate ждёт atomic+fsync записи `gb-test-runs.state`:
-child PGID, /proc starttime и boot id. После reap и завершения всей группы state очищается.
+child PGID, /proc starttime и boot id. State очищается после reap, завершения группы и restoration.
 Best-effort PR_SET_PDEATHSIG=SIGKILL дополняет journal; его отказ не ломает запуск.
 Boundary держится всю жизнь записанной child process group, включая runner SIGKILL:
 свободный flock не разрешает восстановление; живые члены — `PREVIOUS_EXECUTION_ALIVE`
@@ -160,6 +160,18 @@ Boundary держится всю жизнь записанной child process g
 Dead/reused nonpending identity очищается только после проверки группы; identity недоступна —
 `ENV_ERROR: EXECUTION_STATE_UNVERIFIABLE`, exit 2: journal, receipts и mode сохраняются,
 без исполнения/chmod/fallback. Это относится также к `collect` и digest через runs-directory.
+Только ENOENT при no-follow open exact journal name означает отсутствие (`MISSING`).
+Журнал <=4096 bytes: exact object `{pgid,start,boot,pending}`, positive int pgid/start
+(bool/string запрещены), nonempty str boot, bool pending; extra/duplicate keys запрещены.
+Owner marker отдельно проверяется как exact `{dev,ino,uid}` с nonnegative int fields.
+
+| Execution state code (exit 2) | Сохранение evidence |
+|---|---|
+| `EXECUTION_STATE_CORRUPT` | Invalid JSON/shape/type/size либо unsafe/unreadable journal: без исполнения, chmod, clear/replace/cache |
+| `EXECUTION_STATE_UNVERIFIABLE` | Existing identity/boot недоступны: без исполнения, chmod, clear/cache/fallback |
+
+Отказ во время poll/cleanup/restoration сохраняет journal, pending receipt/log и mode;
+поздняя успешная проверка не отменяет UNKNOWN. Повреждённый журнал не удаляется cleanup.
 Log fd открыт заранее; directory/lock fds child не наследует.
 Явные argv/cwd/module paths внутрь runs-dir — `RUNS_DIR_READ_BY_COMMAND`;
 скрытое обычное чтение из кода получает PermissionError. Environment: только PATH,
