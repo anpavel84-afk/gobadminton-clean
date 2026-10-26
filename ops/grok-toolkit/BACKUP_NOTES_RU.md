@@ -343,3 +343,9 @@
 - PMA исправил **только документацию** на существующей ветке PR #330, commit `83054653be0ec59e175d37dc6640e25e2effabe2`, без изменения installer/test/manifest. Исправлено readback/reconcile вместо ложной безусловной гарантии. GitHub-квитанция: https://github.com/anpavel84-afk/gobadminton-clean/pull/330#issuecomment-6418248073.
 - На новой exact SHA начаты Product CI `40337424755` / `40337417227` и новая независимая QA C4 из изолированного `uid1002` source-read-only, network disabled, `gb-task`, модель `gpt-6.1-sol:high`; checkout источника проверен exact SHA, дельта от C3 только этот `.md`. Запуск QA C4 PID 1222984 через unprivileged Remote Desktop Commander, evidence внутри `/home/agentagency-dev/qa-evidence-agy29c4-20261026`. На момент записи QA C4/CI ещё не завершились; никакого PASS не объявлено.
 - #330 остаётся draft, merge/install/protected state не изменены. #329 root apply и checkout mover D не запускались; P1b автор и WIP неизменны.
+
+
+### 26.10.2026 — QA C4 и C5 #330
+- Независимая QA C4 по commit `83054653be0ec59e175d37dc6640e25e2effabe2`: **FAIL P2**, `docs/ops/AGY29_SMALL_RANGE_UPGRADE.md:177-178`; readback после directory-fsync EIO доказывает visible content, но НЕ crash durability. Четыре адресных синтетических теста C4 PASS. Evidence stored on VPS under qa-evidence-agy29c4-20261026.
+- Точный doc-only repair от PMA `dd129bc7a1bcb0a7f4493b1dbfba61efcf1f39ac`, executable files unchanged. C5 независимая Codex QA на UID1002 в отдельном source-read-only sandbox запущена; verdict pending. Product CI pull 40338786602 / push 40338778929 on exact new SHA initiated. Published checkpoint: https://github.com/anpavel84-afk/gobadminton-clean/pull/330#issuecomment-6418389281.
+- До QA PASS + CI 7/7 PR #330 остаётся draft. Никакого merge/OPS root install. Slot2 UNKNOWN и P1b frozen без изменений.
