@@ -26,7 +26,7 @@ from catalog import DEFAULT_CATALOG, load_catalog, unique_object
 from run_receipt import SCHEMA as RECEIPT_SCHEMA, valid_receipt
 from safe_io import absolute, check_regular, directory, regular
 
-VERSION = "GB_TEST_RUNNER_V1_REPAIR4"
+VERSION = "GB_TEST_RUNNER_V1_REPAIR5"
 REASONS = {"input_changed", "env_fixed", "flake_probe", "qa_independent_base", "ci_missing"}
 EXITS = {"PASS": 0, "FAIL": 1, "ENV_ERROR": 2, "NOT_TESTED": 2, "TIMEOUT": 4}
 BASE_ENV = {"PATH", "HOME", "TMPDIR", "LANG"}
@@ -51,6 +51,18 @@ def git_paths(repo, *, tracked=False):
 
 class Interrupted(Exception):
     pass
+
+
+class ExecutionStateUnverifiable(Exception):
+    pass
+
+
+def execution_alive(record):
+    try:
+        return state.group_alive(record)
+    except BoundaryUnavailable as exc:
+        # Identity failure never proves that a journalled execution ended.
+        raise ExecutionStateUnverifiable() from exc
 
 
 def git_dir(repo):
@@ -140,7 +152,7 @@ def validate_runs(repo, runs, fd):
 def check_execution(runs):
     record = state.read_record(runs.parent / "gb-test-runs.state")
     if record is not None:
-        if state.group_alive(record):
+        if execution_alive(record):
             raise ValueError("PREVIOUS_EXECUTION_ALIVE")
         # Do not erase a killed run's pending receipt, even for another fingerprint.
         if record.get("pending"):
@@ -204,7 +216,7 @@ def cache_boundary(runs, fd):
         yield
     finally:
         record = state.read_record(runs.parent / "gb-test-runs.state")
-        if record is not None and state.group_alive(record):
+        if record is not None and execution_alive(record):
             raise ValueError("PREVIOUS_EXECUTION_ALIVE")
         try:
             recognise(runs, fd)
@@ -480,7 +492,7 @@ def execute(job, result_path, runs_fd, *, result=None, cache=True):
                         finally:
                             if process is not None:
                                 # Include descendants whose leader has already exited.
-                                if process.poll() is None or (record is not None and state.group_alive(record)):
+                                if process.poll() is None or (record is not None and execution_alive(record)):
                                     try:
                                         os.killpg(process.pid, signal.SIGKILL)
                                     except ProcessLookupError:
@@ -489,7 +501,7 @@ def execute(job, result_path, runs_fd, *, result=None, cache=True):
                                 rc = process.returncode
                                 if cache and record is not None:
                                     deadline = time.monotonic() + 2
-                                    while state.group_alive(record):
+                                    while execution_alive(record):
                                         if time.monotonic() >= deadline:
                                             raise ValueError("PREVIOUS_EXECUTION_ALIVE")
                                         time.sleep(0.01)
@@ -595,25 +607,27 @@ def run(args):
         cwd = repo / "scripts/chatops/tests"
     refuse_runs_inputs(runs, cwd, argv)
     with runs_lock(repo, runs) as boundary_lock:
-        try:
-            with runs_directory(repo, runs, create=True, locked=True) as runs_fd:
+        with runs_directory(repo, runs, create=True, locked=True) as runs_fd:
+            # Reconciliation and pending-receipt checks must finish before fallback
+            # is possible. Only failure to establish a NEW boundary permits it.
+            try:
                 state.identity(os.getpid())
                 with cache_boundary(runs, runs_fd):
                     pass  # Prove denial AND restoration before reading any cached outcome.
+            except BoundaryUnavailable:
+                # No outstanding execution; no cache or persistent artifact writes.
                 fp, inputs = fingerprint(repo, runs, args.group, tests, catalog_bytes,
-                                         group["env_flags"], runs_fd=runs_fd)
-                return run_locked(args, repo, runs, runs_fd, group, argv, cwd, fp, inputs, boundary_lock)
-        except BoundaryUnavailable:
-            # No boundary => no cache, no duplicate refusal, no persistent artifact writes.
+                                         group["env_flags"], runs_fd=-1)
+                job = dict(argv=argv, cwd=str(cwd), repo=str(repo), timeout_s=group["timeout_s"],
+                           env_flags=sorted(group["env_flags"]), kind=group["kind"],
+                           reason=args.repeat_reason or "initial")
+                result = dict(group=args.group, fingerprint=fp, inputs=inputs, history=[], log_path="")
+                result = execute(job, runs / (fp + ".json"), None, result=result, cache=False)
+                summary(result)
+                return EXITS[result["status"]]
             fp, inputs = fingerprint(repo, runs, args.group, tests, catalog_bytes,
-                                     group["env_flags"], runs_fd=-1)
-            job = dict(argv=argv, cwd=str(cwd), repo=str(repo), timeout_s=group["timeout_s"],
-                       env_flags=sorted(group["env_flags"]), kind=group["kind"],
-                       reason=args.repeat_reason or "initial")
-            result = dict(group=args.group, fingerprint=fp, inputs=inputs, history=[], log_path="")
-            result = execute(job, runs / (fp + ".json"), None, result=result, cache=False)
-            summary(result)
-            return EXITS[result["status"]]
+                                     group["env_flags"], runs_fd=runs_fd)
+            return run_locked(args, repo, runs, runs_fd, group, argv, cwd, fp, inputs, boundary_lock)
 
 
 def run_locked(args, repo, runs, runs_fd, group, argv, cwd, fp, inputs, boundary_lock):
@@ -730,6 +744,9 @@ def main(argv=None):
         return run(args) if args.command == "run" else collect(args)
     except SystemExit as exc:
         return 0 if exc.code == 0 else 3
+    except ExecutionStateUnverifiable:
+        print("ENV_ERROR: EXECUTION_STATE_UNVERIFIABLE")
+        return 2
     except (ValueError, TypeError, KeyError) as exc:
         print("REFUSED: " + str(exc).replace("\n", "\\n")[:200])
         return 3

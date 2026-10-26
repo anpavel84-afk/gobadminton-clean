@@ -6,8 +6,8 @@
 [SMART_ROUTING 1.0](../rules/SMART_ROUTING.md), exact pins —
 [CONTEXT_SOURCES.json](../rules/CONTEXT_SOURCES.json).
 
-AUTHOR repair round 4 preflight, 26.10.2026: repo `anpavel84-afk/gobadminton-clean`,
-branch `ops/proportionate-testing-p1-20261026`, PR #323; exact source/base `a8f4bcc8a1be5f127e741b95af4478496a157e8c`; candidate — этот uncommitted diff.
+AUTHOR repair round 5 preflight, 26.10.2026: repo `anpavel84-afk/gobadminton-clean`,
+branch `ops/proportionate-testing-p1-20261026`, PR #323; exact source/base `025993a95e87ea4f1d142aeeb47bda1909b0b1b9`; candidate — этот uncommitted diff.
 Прямое ограниченное задание Owner, один AUTHOR/writer; PMA takeover отсутствует. Requested route — bounded Codex AUTHOR; effective identity задаёт launcher,
 этот документ не удостоверяет model ID или квалификацию роли.
 EOM commit `13a8b6c54a45aaa57021e092a1bee54926d9eac4`, SHA-256
@@ -158,14 +158,18 @@ Boundary держится всю жизнь записанной child process g
 Любой pending fingerprint или state killed run — `INCOMPLETE_RUN_REQUIRES_RECONCILIATION`;
 неизвестный outcome требует отдельного trusted reconciliation, не автоматического replay.
 Dead/reused nonpending identity очищается только после проверки группы; identity недоступна —
-`CACHE_BOUNDARY_UNAVAILABLE`. Log fd открыт заранее; directory/lock fds child не наследует.
+`ENV_ERROR: EXECUTION_STATE_UNVERIFIABLE`, exit 2: journal, receipts и mode сохраняются,
+без исполнения/chmod/fallback. Это относится также к `collect` и digest через runs-directory.
+Log fd открыт заранее; directory/lock fds child не наследует.
 Явные argv/cwd/module paths внутрь runs-dir — `RUNS_DIR_READ_BY_COMMAND`;
 скрытое обычное чтение из кода получает PermissionError. Environment: только PATH,
 HOME, TMPDIR, LANG и catalog env_flags; даже разрешённые значения, указывающие
 на runs-dir/aliases/children, удаляются. Missing required flag — NOT_TESTED.
-Если identity/chmod/restore недоступны, FS игнорирует mode bits или runner root:
+Если новая identity/chmod/restore недоступны, FS игнорирует mode bits или runner root:
 `CACHE_BOUNDARY_UNAVAILABLE`. Нет boundary => нет cache: command исполняется один раз,
 summary показывает результат, receipt не пишется, duplicate refusal отсутствует.
+Этот fallback разрешён только после проверки отсутствия outstanding journal/live/unknown
+execution и pending receipts; недоступная identity старой группы не доказывает её завершение.
 Начальная недоступность boundary делает даже `--detach` blocking; uncached log
 обрабатывается через anonymous temporary file, не сохраняется. Потеря boundary
 во время execution не создаёт нового receipt и не превращает unknown в PASS.
@@ -217,6 +221,27 @@ Pending receipt без владельца lock — `INCOMPLETE_RUN_REQUIRES_RECO
 
 Exit runner: PASS 0; FAIL 1; ENV_ERROR/NOT_TESTED 2; refused/usage 3; TIMEOUT 4.
 Missing command, import/permission failure — ENV_ERROR, `Ran 0 tests` — NOT_TESTED. Причину import/environment failure нужно исследовать по полному логу; это не source PASS.
+
+### Trusted ручной reset после crash
+
+1. В нужном checkout выполнить `git rev-parse --git-dir` (relative path — от checkout;
+   linked worktree имеет свой git-dir). Найти `<git-dir>/gb-test-runs` и только его
+   `<git-dir>/gb-test-runs.*` metadata: `.state`, `.lock`, `.<hash(name)>.owner`.
+2. Проверить процессы и lock: нет активного runner/worker **и ожидающих lock**;
+   свободного flock недостаточно. По `gb-test-runs.state` reconcile группу через
+   `pgid`, `/proc` start time и boot id. Она должна быть verifiably gone;
+   если это оставшаяся test group — завершить именно её и проверить исчезновение.
+   При непроверенной identity/неизвестной liveness reset запрещён.
+3. Сначала **сохранить evidence вне удаляемых путей**: скопировать state, любые
+   UNKNOWN/pending receipts и logs (для 0000 сначала выполнить шаг 4).
+   Reset не является reconciliation evidence или PASS.
+4. Для mode 0000 trusted human проверяет, что это recognised runs-dir (owner marker,
+   uid/dev/ino), принадлежащий ему, без symlink; затем выполняет `chmod u+rwx`
+   **на этом exact directory path** для копирования evidence и последующего удаления.
+5. После reconciliation и сохранения удалить только `<git-dir>/gb-test-runs` и
+   `<git-dir>/gb-test-runs.*` metadata, не весь git-dir; новый запуск создаст их заново.
+   Для explicit runs-dir сначала установить его exact path/marker; не удалять соседние каталоги.
+6. Не добавлять automatic self-heal: same-uid/root residuals сохраняются.
 
 ## 6. Evidence и независимость
 
