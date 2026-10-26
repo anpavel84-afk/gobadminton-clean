@@ -38,6 +38,8 @@ BUDGET=Path('/etc/gobadminton-slots/budgets.json')
 INVENTORY=STATE/'backup.json'
 J=STATE/'agy29-inventory-rerecord.json'
 BK=STATE/'agy29-inventory-rerecord-backup'
+PKG_J=STATE/'agy29-pkg-finish-install.json'          # the package-finish installer's transaction files:
+PKG_BK=STATE/'agy29-pkg-finish-backup'               # a later, separately guarded layer (see the runbook)
 SCHEMA='GB_AGY29_INVENTORY_RERECORD_V1'
 C='41e12be2d551158e97ea30eaf8e95f992f998615'
 STAGE_SHA='b9703ca27b7bb3f494f379f8e259e62a6a48bc8f5ff50c6923e1712d8899d68d'
@@ -387,7 +389,7 @@ def protected_state():
     """Full journals/ledgers/history and slot state; no symlinks or exclusions for paid evidence."""
     result={}
     for path in REQUIRED_STATE:sha(path)
-    excluded={J,BK,INVENTORY,STATE/'controller.lock'}
+    excluded={J,BK,PKG_J,PKG_BK,INVENTORY,STATE/'controller.lock'}
     def walk(path):
         if path in excluded:return
         info=path.lstat()
@@ -448,6 +450,8 @@ def rerecorded_bytes(raw):
 
 def observation():
     idle()
+    need(not os.path.lexists(PKG_J) and not os.path.lexists(PKG_BK),
+         'package-finish transaction files exist; the re-record must be applied before the package-finish install')
     for path,pin in UNCHANGED.items():need(sha(path)==pin,'unchanged lib pin drift: '+path.name)
     raw=regular_bytes(INVENTORY)
     inventory=recorded_inventory(raw);rerecorded_bytes(raw)

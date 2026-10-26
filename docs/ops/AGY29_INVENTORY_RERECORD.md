@@ -33,6 +33,12 @@ The observation (full protected state with streamed hashes, receipt provenance, 
 
 `dry` and `verify` are read-only. `apply` holds the controller lock, backs up the inventory, writes atomically (O_EXCL/NOFOLLOW temp, fchown/fchmod, fsync, rename, readback), switches the receipt to `active` and runs `verify`; any failure restores the original bytes automatically. `apply` on an already active, verified transaction is a no-op. `rollback` restores the exact original bytes and mode and refuses if `backup.json` holds neither the original nor the re-recorded bytes.
 
-## Interaction with the package-finish installer
+## Interaction with the package-finish installer (a strict stack)
 
-The package-finish installer accepts both forms of the rules entry. Either order works, but its own `dry` must be re-run after a re-record, because the re-record adds files under `STATE` that are part of its protected observation. Do not roll back the package-finish install while the re-record is active: roll the re-record back first (the package-finish rollback expects the inventory bytes it recorded).
+The two installers form a last-in/first-out stack; the re-record is the lower layer.
+
+1. Apply the re-record (this document). It refuses to run if any package-finish transaction file already exists (`agy29-pkg-finish-install.json`, `agy29-pkg-finish-backup`), so the wrong order is rejected before any write.
+2. Re-run the package-finish `dry` and use its new `observation_sha256`: the re-record's receipt and backup are then part of that installer's protected observation, and any earlier package-finish observation is void. Then apply package-finish.
+3. To unwind: roll back package-finish first (it restores the inventory bytes it recorded, which are the re-recorded bytes), then roll back the re-record. Both succeed in that order; the re-record deliberately ignores the package-finish receipt and backup files, which survive its rollback.
+
+While package-finish is active, the re-record's own `verify`/`rollback` refuse (library files and the inventory changed under it). That is expected; unwind in the order above. Neither installer rewrites the other's evidence.

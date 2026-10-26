@@ -35,7 +35,8 @@ class Fixture:
         for slot in ('slot1','slot2'):(autonomy/'slots'/slot).mkdir(parents=True)
         (autonomy/'locks').mkdir()
         self.paths=dict(LIB=self.lib,STATE=self.state,AUTONOMY=autonomy,POLICY=root/'policy',MARKER=root/'marker',
-            BUDGET=root/'budget',INVENTORY=self.state/'backup.json',BK=self.state/'rerecord-backup',J=self.state/'rerecord.json')
+            BUDGET=root/'budget',INVENTORY=self.state/'backup.json',BK=self.state/'rerecord-backup',J=self.state/'rerecord.json',
+            PKG_J=self.state/'pkgfinish.json',PKG_BK=self.state/'pkgfinish-backup')
         for key,value in self.paths.items():self.stack.enter_context(patch.object(I,key,value))
         for key in ('POLICY','MARKER','BUDGET'):self.paths[key].write_text('{}')
         required=[self.state/'slot1.json',self.state/'slot2.json']
@@ -226,6 +227,21 @@ class RerecordTests(unittest.TestCase):
             I.apply(SS,'a'*40,I.digest(observed))
         self.assertEqual(f.tree(),before);self.assertFalse(f.paths['BK'].exists())
         with contextlib.redirect_stdout(io.StringIO()):I.apply(SS,'a'*40,I.digest(observed))   # retry is possible
+
+    def test_package_finish_layer_stacks_on_top_and_unwinds_first(self):
+        f=self.fixture();observed=I.observation()
+        with contextlib.redirect_stdout(io.StringIO()):I.apply(SS,'a'*40,I.digest(observed))
+        # What a later package-finish install leaves behind (its own receipt/backup) is not this layer's state:
+        f.paths['PKG_J'].write_text('{}');f.paths['PKG_BK'].mkdir();(f.paths['PKG_BK']/'x').write_text('y')
+        I.verify(I.receipt_read('a'*40))
+        with contextlib.redirect_stdout(io.StringIO()):I.restore(I.receipt_read('a'*40))
+        self.assertEqual(f.paths['INVENTORY'].read_bytes(),json.dumps(f.inventory,sort_keys=True).encode())
+
+    def test_installing_in_the_wrong_order_is_refused_before_any_write(self):
+        f=self.fixture();f.paths['PKG_J'].write_text('{}');before=f.tree()
+        with self.assertRaisesRegex(I.Refused,'applied before the package-finish'):I.observation()
+        with self.assertRaisesRegex(I.Refused,'applied before the package-finish'):I.apply(SS,'a'*40,'0'*64)
+        self.assertEqual(f.tree(),before)
 
     def test_rollback_refuses_foreign_inventory_bytes(self):
         f=self.fixture();observed=I.observation()
