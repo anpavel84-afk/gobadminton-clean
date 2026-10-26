@@ -7,9 +7,9 @@
 [SMART_ROUTING 1.0](../rules/SMART_ROUTING.md), exact pins —
 [CONTEXT_SOURCES.json](../rules/CONTEXT_SOURCES.json).
 
-AUTHOR repair round 2 preflight, 26.10.2026: repo `anpavel84-afk/gobadminton-clean`,
+AUTHOR repair round 3 preflight, 26.10.2026: repo `anpavel84-afk/gobadminton-clean`,
 branch `ops/proportionate-testing-p1-20261026`, PR #323; exact source/base
-`178df0ed2bc5324228b29bd62b8b9810e59c2382`; candidate — этот uncommitted diff.
+`d315ec8011124655b92f0a1a3704c9360b69b9f9`; candidate — этот uncommitted diff.
 Прямое ограниченное задание Owner, один AUTHOR/writer; PMA takeover отсутствует.
 Requested route — bounded Codex AUTHOR; effective identity задаёт launcher,
 этот документ не удостоверяет model ID или квалификацию роли.
@@ -23,10 +23,9 @@ fixtures `proportionate_testing/*` и этот runbook.
 Сохранённые replay cases неизменны. Без commit/push/network/root/model calls/install.
 Evidence (exact SHA/PR, QA/CI receipts и ограничения) фиксируется в PR и в docs update PR;
 статус SOURCE / NOT_INSTALLED. Авторская проверка не является независимой QA.
-
 ## 1. Цель и граница
 
-Один и тот же пригодный proof не запускается снова без изменённого fingerprint
+Одинаковая локальная команда не запускается снова без изменённого fingerprint
 или закрытого reason code. Размер diff не является входом классификатора.
 Инструменты stdlib-only, Python 3.11+, offline; новый Supervisor, scheduler,
 queue, service или модельный наблюдатель не создаётся. Detached run — конечный
@@ -39,7 +38,6 @@ queue, service или модельный наблюдатель не созда�
 PROD untouched; Product Train paused — P1 не даёт команды resume/dispatch.
 Авторская самопроверка не independent QA, локальный PASS не CI/DEV ACCEPTED.
 Прежний FAIL-маршрут контроллера до установки SMART_ROUTING сохраняется.
-
 ## 2. Непонижаемые tiers
 
 | Tier | Минимальный scope / признаки | Проверки |
@@ -73,7 +71,6 @@ path-only R entries не доказывают пару. Raw-diff verifier сох
 `routine -> T1`, `complex -> T2`, `critical -> T3`; T0 отображается в `routine`
 существующего risk field. Higher declaration разрешён с `OVER_DECLARED`, lower —
 `UNDER_DECLARED`. Risk override в plan builder может только повысить tier.
-
 ## 3. TEST PLAN внутри acceptance
 
 Новых schema fields нет. Existing `acceptance` остаётся строкой <=6000 chars.
@@ -137,22 +134,34 @@ python3 -B scripts/chatops/testing/run_test_group.py collect --fingerprint FULL_
 
 `--repo DIR`, `--runs-dir DIR`, `--catalog PATH` выбираются явно при необходимости;
 `collect` принимает repo/runs-dir и блокируется до завершения worker, без polling.
-Default `.gb-test-runs/` под repo — **untracked scratch**, не добавлять в Git;
-P1 не меняет `.gitignore`. В ограниченной AUTHOR среде использовать `--runs-dir`
-под разрешённым `$TMPDIR`; сам TMPDIR должен указывать на разрешённый scratch.
-Runs-dir создаётся с mode 0700; symlink (включая parents), non-directory, чужой
-owner или group/other write запрещены (`UNSAFE_RUNS_DIR`). Внутри допускаются
-только regular, owned, single-link artifacts без group/other write
-(`UNSAFE_ARTIFACT`); symlink/FIFO не открываются. Любой tracked path (включая
-удалённый и artifact-shaped) или non-artifact entry даёт `RUNS_DIR_CONTAINS_SOURCE`.
-Проверки действуют и для collect/detach. Недоступный runs-dir: `RUNS_DIR_UNAVAILABLE`.
-Catalog commands **никогда не должны читать runs-dir**, включая из кода команды.
-argv paths (также `--key=PATH`), cwd и `--tests` paths/modules, разрешающиеся внутрь
-runs-dir, запрещены: `RUNS_DIR_READ_BY_COMMAND`. Проверяются relative/absolute paths
-и symlink aliases. Это статическая проверка явных путей, не анализ программы или OS sandbox.
-Runner выполняет argv без shell и ограничивает timeout; при timeout убивает
-process group команды. Environment: только PATH, HOME, TMPDIR, LANG и catalog
-env_flags; отсутствие/пустое значение required flag даёт NOT_TESTED.
+Default — `<git-dir>/gb-test-runs/`, git-dir из `git rev-parse --absolute-git-dir`;
+linked worktrees используют собственный git-dir. Git metadata не является worktree input.
+Любой runs-dir в worktree, включая старый `.gb-test-runs/` и explicit `--runs-dir`
+под repo, refused: `RUNS_DIR_IN_WORKTREE`. Исключение — exact default в `.git/gb-test-runs`
+обычного checkout. `.gitignore` не меняется. Runs-dir создаётся с mode 0700;
+symlink (включая parents), non-directory, group/other write — `UNSAFE_RUNS_DIR`.
+Только owned single-link regular artifacts без group/other write (`UNSAFE_ARTIFACT`);
+symlink/FIFO не открываются. Malformed receipt/посторонний entry:
+`RUNS_DIR_CONTAINS_SOURCE`; отсутствующий collect dir: `RUNS_DIR_UNAVAILABLE`.
+
+Внешний `<runs-dir>.lock` держит blocking exclusive `flock` на весь run/collect;
+конкурирующие runners ждут, включая разные fingerprints. Detached worker наследует lock.
+Только под lock и при current-uid ownership runner восстанавливает 0700 после crash
+с mode 0000; live lock исключает преждевременный self-heal. Пока child исполняется,
+mode runs-dir — 0000, directory fd остаётся у runner. Реальный отказ открытия
+каталога проверяется до cache lookup. `finally` восстанавливает 0700 до receipt/log write;
+timeout и SIGINT/SIGTERM убивают process group и восстанавливают mode.
+Log fd открывается заранее для stdout/stderr; directory/lock fds child не наследует.
+Явные argv/cwd/module paths внутрь runs-dir — `RUNS_DIR_READ_BY_COMMAND`;
+скрытое обычное чтение из кода получает PermissionError. Environment: только PATH,
+HOME, TMPDIR, LANG и catalog env_flags; даже разрешённые значения, указывающие
+на runs-dir/aliases/children, удаляются. Missing required flag — NOT_TESTED.
+Если chmod/restore невозможен, owner другой, FS игнорирует mode bits или runner root:
+`CACHE_BOUNDARY_UNAVAILABLE`. Нет boundary => нет cache: command исполняется один раз,
+summary показывает результат, receipt не пишется, duplicate refusal отсутствует.
+Начальная недоступность boundary делает даже `--detach` blocking; uncached log
+обрабатывается через anonymous temporary file, не сохраняется. Потеря boundary
+во время execution не создаёт нового receipt и не превращает unknown в PASS.
 Python argv используют `-B`; для этой AUTHOR работы также задан
 `PYTHONDONTWRITEBYTECODE=1`. Environment — ограничение передачи, не OS sandbox.
 
@@ -168,25 +177,23 @@ SHA-256 canonical JSON связывает worktree digest, group id, sorted uniq
 catalog SHA-256, runner version и presence booleans env_flags (значения не пишутся).
 Worktree digest: sorted unique `git ls-files -z --cached --others --exclude-standard`,
 path + фактический mode + content hash, включая uncommitted/untracked inputs.
-Исключаются только проверенные artifacts внутри runs-dir: `<64hex>.log|.lock`
-(regular/private/single-link) и `<64hex>.json` с валидным receipt `GB_TEST_RUN_V1`.
-Receipt имеет закрытые ключи, текущую runner version, fingerprint == filename stem
-и SHA-256 canonical inputs; status и каждый history item (reason/time/status)
-валидируются. Pending receipt проверяет также job. Collect/worker читают тот же schema.
-Чужой/malformed JSON, wrong stem, неизвестное имя, подкаталог, legacy `.json.new`
-или оставшийся `.json.<32hex>.new` дают `RUNS_DIR_CONTAINS_SOURCE`, не исключаются.
-Scan и atomic receipt write сериализованы directory flock: временный файл никогда
-не считается artifact. Default `.gb-test-runs/` и fingerprint между запусками стабильны.
-Старые receipts без marker/current version не принимаются; не переносить их в новый runs-dir.
-Эта проверка происхождения структурная, не подпись; cache по-прежнему не trusted QA evidence.
+In-repo artifact exclusions удалены: receipts расположены вне worktree inputs.
+Сохранена provenance validation: receipt `GB_TEST_RUN_V1` имеет закрытые ключи,
+current runner version, fingerprint == filename stem и SHA-256 canonical inputs;
+status/history/job валидируются. Collect/worker используют тот же schema.
+Чужой/malformed JSON, wrong stem, неизвестное имя, подкаталог и legacy `.new`
+дают `RUNS_DIR_CONTAINS_SOURCE`. Scan/write сериализованы внешним lock.
+Старые receipts не переносить в новый runs-dir. Это структурная проверка, не подпись.
 Удалённый tracked path имеет MISSING marker. Source читается через `O_NOFOLLOW`
 и regular `fstat`; подмена ссылкой — `UNSAFE_WORKTREE_FILE`. Symlink хешируется
 по тексту ссылки с mode 120000, цель не читается. Unsupported types/symlink parents дают error.
 Игнорируемые Git файлы не входят; submodules не аттестуются этим runner.
 Изменение worktree во время команды даёт ENV_ERROR, не PASS.
 
-Conclusive prior PASS/FAIL с тем же fingerprint возвращается как cached summary,
-команда не запускается (exit 3) без reason:
+Conclusive prior PASS/FAIL с тем же fingerprint: команда не запускается, exit 3,
+reason `SAME_FINGERPRINT`, status `SAME_FINGERPRINT previous=PASS|FAIL
+(not re-verified; not evidence)` на одной строке. Это отказ, не свежий PASS.
+`--repeat-reason` разрешает реальное исполнение согласно таблице:
 
 | Reason code | Условие |
 |---|---|
@@ -219,8 +226,11 @@ QA запускает **доверенную base-копию runner и сосе�
 При explicit catalog candidate catalog не загружается как конфигурация, candidate
 runner не импортируется/исполняется. Все candidate files, включая эти копии,
 хешируются только как DATA для worktree digest. Candidate не выбирает свою QA.
-Сам cache не подписан, не admission и не trusted CI receipt: QA использует собственный
-защищённый runs-dir на exact неизменяемом candidate, не авторские редактируемые JSON.
+Cache — только duplicate-run guard, **никогда evidence**. QA/CI не используют cache:
+каждый требуемый запуск реален; для QA runner нужен `--repeat-reason qa_independent_base`.
+QA использует собственный runs-dir на exact candidate. Residual: процесс того же uid
+может chmod каталога обратно, root обходит mode bits. Это не sandbox против враждебного
+same-uid кода, не подпись и не admission. Ignore/submodule/external inputs этим cache не аттестуются.
 Catalog читается без follow (включая parents), non-regular/symlink — `UNSAFE_CATALOG`.
 Artifacts открываются относительно directory fd (`O_NOFOLLOW|O_DIRECTORY` для dir,
 `O_NOFOLLOW` + regular `fstat` для files); temp receipt — unique `O_CREAT|O_EXCL`,

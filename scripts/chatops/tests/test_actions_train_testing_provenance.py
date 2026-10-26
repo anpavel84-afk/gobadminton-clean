@@ -12,6 +12,7 @@ import plan_block as P
 import run_test_group as R
 
 
+@unittest.skipIf(os.geteuid() == 0, "mode boundary unavailable as root")
 class ProvenanceTests(unittest.TestCase):
     setUp = fixture.RunnerTests.setUp
     git = fixture.RunnerTests.git
@@ -105,10 +106,10 @@ class ProvenanceTests(unittest.TestCase):
     def test_argv_paths_cwd_and_symlink_alias_inside_runs_are_refused(self):
         alias = self.repo / "alias"
         alias.symlink_to(self.runs, target_is_directory=True)
-        for cwd, arg in ((".gb-test-runs", "unused"), ("alias", "unused"),
-                         (".", ".gb-test-runs/input.json"), (".", str(self.runs)),
+        for cwd, arg in ((".git/gb-test-runs", "unused"), ("alias", "unused"),
+                         (".", ".git/gb-test-runs/input.json"), (".", str(self.runs)),
                          (".", str(self.runs / "input.json")), (".", "alias/input.json"),
-                         (".", "--input=.gb-test-runs/input.json")):
+                         (".", "--input=.git/gb-test-runs/input.json")):
             with self.subTest(cwd=cwd, arg=arg):
                 doc = json.loads(self.catalog.read_text())
                 doc["groups"][0].update(cwd=cwd, argv=[sys.executable, "-B", "-c", "pass", arg])
@@ -122,8 +123,8 @@ class ProvenanceTests(unittest.TestCase):
         directory = self.repo / "scripts/chatops/tests"
         directory.mkdir(parents=True)
         (directory / "test_alias.py").symlink_to(self.runs / "input.py")
-        for name in (str(self.runs / "test_x.py"), ".gb-test-runs/test_x.py",
-                     "../../../.gb-test-runs/test_x.py", "test_alias"):
+        for name in (str(self.runs / "test_x.py"), ".git/gb-test-runs/test_x.py",
+                     "../../../.git/gb-test-runs/test_x.py", "test_alias"):
             with self.subTest(name=name):
                 self.refused(self.run_group("--tests", name, group="targeted_py"), "RUNS_DIR_READ_BY_COMMAND")
         self.assertFalse(self.counter.exists())

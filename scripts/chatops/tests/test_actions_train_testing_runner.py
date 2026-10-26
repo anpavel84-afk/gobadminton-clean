@@ -14,6 +14,7 @@ sys.path.insert(0, str(TOOLS))
 import run_test_group as R
 
 
+@unittest.skipIf(os.geteuid() == 0, "mode boundary unavailable as root")
 class RunnerTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -21,14 +22,14 @@ class RunnerTests(unittest.TestCase):
         self.home = Path(self.temp.name)
         self.repo = self.home / "repo"
         self.repo.mkdir()
-        self.runs = self.repo / ".gb-test-runs"
-        self.runs.mkdir()
         # Command side effects are not runner artifacts or fingerprint inputs.
         self.counter = self.home / "counter"
         self.catalog = self.home / "catalog.json"
         self.env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "GIT_CONFIG_NOSYSTEM": "1",
                     "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull}
         self.git("init", "-q")
+        self.runs = self.repo / ".git" / "gb-test-runs"
+        self.runs.mkdir(mode=0o700)
         (self.repo / "tracked.txt").write_text("original\n")
         self.git("add", "tracked.txt")
         self.make_catalog()
@@ -59,7 +60,7 @@ class RunnerTests(unittest.TestCase):
         first, second = self.run_group(), self.run_group()
         self.assertEqual(first.returncode, 0, first.stdout)
         self.assertEqual(second.returncode, 3, second.stdout)
-        self.assertIn("cached; refused", second.stdout)
+        self.assertIn("SAME_FINGERPRINT previous=PASS (not re-verified; not evidence)", second.stdout)
         self.assertEqual(self.counter.read_text(), "1")
 
     def test_valid_repeat_reason_executes_and_records_history(self):

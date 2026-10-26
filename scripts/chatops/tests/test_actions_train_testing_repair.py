@@ -20,6 +20,7 @@ import tier_classifier as T
 import verify_profile as V
 
 
+@unittest.skipIf(os.geteuid() == 0, "mode boundary unavailable as root")
 class RunnerRepairTests(unittest.TestCase):
     setUp = fixture.RunnerTests.setUp
     git = fixture.RunnerTests.git
@@ -84,8 +85,9 @@ class RunnerRepairTests(unittest.TestCase):
 
     def test_foreign_owner_and_writable_runs_are_refused(self):
         with patch.object(R.os, "getuid", return_value=os.getuid() + 1):
-            with self.assertRaisesRegex(ValueError, "UNSAFE_RUNS_DIR"):
-                R.worktree_digest(self.repo, self.runs)
+            with self.assertRaises(R.BoundaryUnavailable):
+                with R.runs_directory(self.repo, self.runs, locked=True):
+                    pass
         self.runs.chmod(0o777)
         self.assert_refused(self.run_group(), "UNSAFE_RUNS_DIR")
 
@@ -165,26 +167,29 @@ class RunnerRepairTests(unittest.TestCase):
         self.make_catalog("from pathlib import Path; assert Path('data/input.txt').read_text() == 'good'")
         for value in ("good", "bad"):
             source.write_text(value)
-            self.assert_refused(self.run_group("--runs-dir", str(data)), "RUNS_DIR_CONTAINS_SOURCE")
+            self.assert_refused(self.run_group("--runs-dir", str(data)), "RUNS_DIR_IN_WORKTREE")
             self.assertEqual(list(data.iterdir()), [source])
         executed = subprocess.run(json.loads(self.catalog.read_text())["groups"][0]["argv"],
                                   cwd=self.repo, env=self.env, capture_output=True)
         self.assertEqual(executed.returncode, 1)
 
     def test_tracked_artifact_shaped_file_is_source_even_when_deleted(self):
-        source = self.runs / ("a" * 64 + ".log")
+        # Even an artifact-shaped tracked/deleted path in the OLD location is refused.
+        source = self.repo / ".gb-test-runs" / ("a" * 64 + ".log")
+        source.parent.mkdir()
         source.write_text("source")
         self.git("add", str(source))
-        self.assert_refused(self.run_group(), "RUNS_DIR_CONTAINS_SOURCE")
-        source.unlink()
-        self.assert_refused(self.run_group(), "RUNS_DIR_CONTAINS_SOURCE")
+        for deleted in (False, True):
+            if deleted:
+                source.unlink()
+            self.assert_refused(self.run_group("--runs-dir", str(source.parent)), "RUNS_DIR_IN_WORKTREE")
 
     def test_source_directory_uses_source_refusal_code(self):
         source = self.repo / "docs" / "note.md"
         source.parent.mkdir()
         source.write_text("source")
         self.git("add", "docs/note.md")
-        self.assert_refused(self.run_group("--runs-dir", str(source.parent)), "RUNS_DIR_CONTAINS_SOURCE")
+        self.assert_refused(self.run_group("--runs-dir", str(source.parent)), "RUNS_DIR_IN_WORKTREE")
         self.assertEqual(list(source.parent.iterdir()), [source])
 
     def test_untracked_non_artifact_and_nested_source_are_refused(self):
@@ -216,7 +221,7 @@ class RunnerRepairTests(unittest.TestCase):
                 (self.runs / ("a" * 64 + ".log")).symlink_to(outside)
             return original(repo, tracked=tracked)
         with patch.object(R, "git_paths", side_effect=after_validation):
-            with self.assertRaisesRegex(ValueError, "RUNS_DIR_CONTAINS_SOURCE"):
+            with self.assertRaisesRegex(ValueError, "UNSAFE_ARTIFACT"):
                 R.worktree_digest(self.repo, self.runs)
         self.assertEqual(outside.read_text(), "KEEP")
 
