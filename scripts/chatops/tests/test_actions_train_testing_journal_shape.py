@@ -86,7 +86,9 @@ class JournalShapeTests(unittest.TestCase):
         if not sys.platform.startswith('linux') or not hasattr(os, 'mkfifo'):
             self.skipTest('Linux no-follow/nonblocking file operations required')
         target = self.home / 'target'
-        target.write_bytes(b'null\n')
+        target_data = json.dumps(dict(pgid=2**30, start=1, boot='synthetic', pending=False)).encode()
+        target.write_bytes(target_data)
+        target.chmod(0o600)
         for kind in ('symlink', 'directory', 'fifo'):
             with self.subTest(kind=kind):
                 if kind == 'symlink':
@@ -101,7 +103,7 @@ class JournalShapeTests(unittest.TestCase):
                     self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
                     self.assertIn('EXECUTION_STATE_CORRUPT', result.stdout)
                     self.assert_refused(None)
-                    self.assertEqual(target.read_bytes(), b'null\n')
+                    self.assertEqual(target.read_bytes(), target_data)
                 finally:
                     self.journal.rmdir() if kind == 'directory' else self.journal.unlink()
 

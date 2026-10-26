@@ -279,12 +279,67 @@ Artifacts открываются относительно directory fd (`O_NOFOL
 `O_NOFOLLOW` + regular `fstat` для files); temp receipt — unique `O_CREAT|O_EXCL`,
 rename относительно того же fd. Detached worker наследует lock и directory fd.
 
-## 7. Следующие этапы
+## 7. P1b — enforcement source, NOT_INSTALLED
 
-**P1b (needs a reviewed root install, NOT part of this change):** enforcement
-profile/TEST PLAN в `stage.py`, текст EOM capsules, согласованные reviewed pins,
-существующий разрешённый install с backup/rollback. SOURCE scripts и этот документ
-не устанавливают gates, не меняют active assignments или runtime authority.
+P1b AUTHOR preflight, 26.10.2026: repo `anpavel84-afk/gobadminton-clean`, branch
+`ops/proportionate-testing-p1b-20261026`, source/base dev
+`2d926322c2a7a4d68e09e128c3e1ba2d01a4c6c8`; candidate — uncommitted diff,
+без candidate SHA/PR, commit/push/network/install. Один AUTHOR/writer по прямому
+bounded assignment Owner; PMA takeover отсутствует. Requested/effective route:
+bounded Codex AUTHOR, identity этого запуска; model ID не аттестован этим текстом.
+Принятые EOM/SMART_ROUTING commits/hashes выше не изменены. Риск изменения
+контроллера — T3, independent QA/CI/DEV здесь NOT_TESTED. Allowed effects:
+source gate, минимальные hooks/два manifest entries, новые offline tests,
+исправление synthetic journal fixture и этот раздел; protected runtime не меняется.
+
+Реализован тонкий stdlib-only `actions_train/test_plan_gate.py` в существующем
+`stage.py`, без нового admission loop, state/store fields или файлов runtime.
+`claim` и `author` требуют валидный блок только из immutable admitted
+`active.task.acceptance`; task/candidate text не является trusted request.
+`publish`, `qa`, `promote` заново проверяют реальный raw Git diff exact base..head
+через trusted `verify_profile.diff_changes` и `tier_classifier.verify_declared`.
+Statuses/modes, оба конца rename, symlinks и deletes сохраняются; empty diff —
+ошибка, UNDER_DECLARED — отказ, OVER_DECLARED допустим и записывается.
+Для declared T3 обязательны все strict groups, включая до появления candidate.
+T2 visual QA сохраняется. Gate не запускает candidate tests/code и не выдаёт test PASS.
+
+Trusted testing directory: соседний `testing/` в installed layout, иначе
+`../testing/` в repo layout. Hard-coded SHA-256 pins проверяют каждый используемый
+module и catalog до import при каждом вызове. Загружаются exact проверенные
+bytes, с no-follow parents/files, без candidate sys.path и bytecode; catalog
+parse использует те же проверенные bytes. Testing source/catalog не берутся из
+candidate. Любое изменение testing dependency требует сознательного обновления
+pins gate; repo test сверяет hashes. Установка также должна доставить reviewed
+pinned testing directory; этот source change установку не выполняет.
+
+Binding использует существующие trusted receiver `_task_hash`, active base/head,
+существующие `unchanged_issue` / recovery certificate checks и ephemeral receipt
+при повторном вызове внутри стадии. `_task_hash` связывает весь task (включая
+acceptance), без нового durable plan digest. Changed plan/head/base/pins отказывают
+с PLAN_SWAPPED / HEAD_MISMATCH / TESTING_PIN_MISMATCH. Receipt возвращается через
+существующий result metadata channel: tier, derived tier, plan SHA-256, base/head,
+visual/independent QA flags, required groups, testing-pins digest, profile status.
+Это не execution evidence; старый PASS, cache или inconclusive outcome не
+переносятся в новый PASS. Evidence helper допускает только conclusive noncached
+PASS с тем же exact head/fingerprint; UNKNOWN требует reconciliation, не replay.
+
+Legacy exemption только для **отсутствующего** блока при trusted controller
+`_recover`, `_recovery_admission` либо existing certified `active.recovery_receipt`.
+Он записывает `test_plan.status=LEGACY_RECOVERY`, не создаёт план и оставляет все
+прежние checks/QA/CI/recovery gates. Такой ключ в task/acceptance не даёт exemption;
+public wire закрыт для внутренних ключей. Invalid present block всё равно refused.
+
+Перед author/independent-QA model calls добавляется bounded English guidance
+<=900 UTF-8 bytes; другие stage prompts не изменены. Оно требует detach/collect
+через non-model runner, targeted groups при ремонте, reason code для rerun,
+неповторение одинакового fingerprint, честные statuses, reconciliation UNKNOWN,
+полную independent QA/release gates и все 7 Product CI jobs для T3/critical,
+visual QA для T2. Guidance никогда не уменьшает QA/CI. EOM/capsules не изменены.
+Ни одна существующая protective check не отключена и не переставлена.
+
+SOURCE / NOT_INSTALLED: разрешённый следующий шаг — независимая QA exact candidate,
+CI, затем отдельный reviewed install с backup/rollback через существующий механизм.
+P1b source и этот документ не меняют active assignments или runtime authority.
 
 **P2/P3 later:** planner hook через immutable `client.py` pin bump;
 `phase_task_plan_v2` **не изменён здесь**. Selective CI — отдельное reviewed решение
