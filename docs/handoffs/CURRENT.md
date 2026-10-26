@@ -4,7 +4,7 @@
 
 ## Управляющая роль
 
-**Текущий mutating/runtime PMA — ChatGPT PM**, по прямой передаче Owner «продолжи работы Грока» 26.10.2026, 11:08 BRT. Формальная отметка в [LIVE_STATE_RU.md](../../ops/grok-toolkit/LIVE_STATE_RU.md) на ветке `ops/takeover-runbook-v1`, [immutable commit `7975a83e`](https://github.com/anpavel84-afk/gobadminton-clean/commit/7975a83eb01838eab998856daf1ddf60fedc24ce); Grok оставлен для аварийного read-only/handoff по прямому слову Owner, не второй writer. Историческое назначение Grok [comment 6386401132](https://github.com/anpavel84-afk/gobadminton-clean/issues/29#issuecomment-6386401132) заменено только в части активного PMA; следующий переключатель должен снова сверять живую строку, leases и операции.
+**Текущий mutating/runtime PMA — ChatGPT PM**, по прямой передаче Owner «продолжи работы Грока» 26.10.2026, 11:08 BRT. Формальная отметка в [LIVE_STATE_RU.md](https://github.com/anpavel84-afk/gobadminton-clean/blob/ops/takeover-runbook-v1/ops/grok-toolkit/LIVE_STATE_RU.md) на ветке `ops/takeover-runbook-v1`, [immutable commit `7975a83e`](https://github.com/anpavel84-afk/gobadminton-clean/commit/7975a83eb01838eab998856daf1ddf60fedc24ce); Grok оставлен для аварийного read-only/handoff по прямому слову Owner, не второй writer. Историческое назначение Grok [comment 6386401132](https://github.com/anpavel84-afk/gobadminton-clean/issues/29#issuecomment-6386401132) заменено только в части активного PMA; следующий переключатель должен снова сверять живую строку, leases и операции.
 
 ## Owner Standing OPS Delegation · 26.10.2026
 
