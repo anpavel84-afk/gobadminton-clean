@@ -167,8 +167,16 @@ Rollback requires idle/unchanged protected state and accepts only each target's
 old/new bytes and the original/edited inventory bytes. It checks **all** files
 before any restore writes, restores exact backups and metadata, and records
 `rolled_back`; another rollback refuses. Foreign bytes are never overwritten.
-If restore fails or protected state drifts, phase becomes `rollback_failed`;
-retain evidence and reconcile the exact outcome rather than retry blindly.
+Failure reporting differs by path. Only `apply`'s automatic recovery records
+phase `rollback_failed` when its own restore fails. An explicit `rollback`
+that fails (for example a write error part-way) or refuses because protected
+state drifted raises the error and does **not** update the receipt: the phase
+stays `active`, and a part-way write failure can leave a mix of each target's
+old and new bytes plus the edited inventory. Drift is refused before any write.
+Retain the evidence and run `verify` and a fresh `dry` to read the exact
+state; because rollback accepts only each target's old/new bytes, it may be
+re-run after the cause is fixed, but do not retry blindly and never hand-edit
+the receipt, targets or inventory.
 
 ## Earlier installers and unwind limitation
 
