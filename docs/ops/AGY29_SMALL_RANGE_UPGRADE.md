@@ -174,8 +174,10 @@ or refuses because protected state drifted raises the error without rewriting
 the receipt; the existing phase (`active`, or an earlier incomplete phase such
 as `backed_up`) remains. However, an error DURING the atomic final receipt
 update (for example directory `fsync` after the rename) can be reported even
-when the receipt has already changed to `rolled_back`; its durability is
-uncertain until readback. Restored targets and inventory may likewise be in
+when the receipt is already visibly `rolled_back`. Readback establishes
+the currently visible bytes and phase, but NOT persistence across a crash:
+a directory-`fsync` error leaves that durability unproven even after successful
+readback. Restored targets and inventory may likewise be in
 an intermediate or fully restored state. Backups are retained. Drift is
 refused before restore writes. `dry` is not a diagnostic here: it refuses
 while a receipt or backup directory is retained. `verify` is read-only and
