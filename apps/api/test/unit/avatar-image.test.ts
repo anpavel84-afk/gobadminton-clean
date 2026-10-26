@@ -39,7 +39,7 @@ describe("avatar sanitizer", () => {
     await expect(sanitizeAvatar(input,"image/webp")).rejects.toMatchObject({status:422});
   });
   it("provider fallback never accepts scriptable/insecure URLs", () => {
-    for (const u of ["javascript:alert(1)","data:image/svg+xml,x","http://example.org/a","https://u:p@example.org/a","/a","https://evil.invalid/a","https://avatars.yandex.net.evil.invalid/a"]) expect(safeProviderAvatar(u)).toBeNull();
+    for (const u of ["javascript:alert(1)","data:image/svg+xml,x","http://example.org/a","https://u:p@example.org/a","/a","https://evil.invalid/a","https://avatars.yandex.net.evil.invalid/a","https:///@avatars.yandex.net/a","https:///:@avatars.yandex.net/","https:////@sun9.userapi.com/a","https://avatars.yandex.net@evil.example/phish"]) expect(safeProviderAvatar(u)).toBeNull();
     expect(safeProviderAvatar("https://avatars.yandex.net/test")).toBe("https://avatars.yandex.net/test");
   });
 });

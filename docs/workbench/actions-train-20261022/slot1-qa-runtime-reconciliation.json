@@ -1,0 +1,15 @@
+{
+  "failure_run": 39698316961,
+  "failure": "bwrap: execvp /opt/gobadminton-clean-qa/bin/codex: Permission denied",
+  "cause": "activation selected byte-identical executable outside existing slot1 sandbox runtime allowlist",
+  "zero_inference_probes": {
+    "policy_executable_rc": 1,
+    "original_executable_rc": 0
+  },
+  "binary_sha256": "f34a4d2301892ae96c90097786bfe5dc269f187b6f69faf42a7b357b8c081e35",
+  "repaired_without_permission_expansion": true,
+  "old_unknown_result_and_failed_charge_retained": true,
+  "candidate": "422c109893bd6092fd177ccd3ef2162ccc897e0d",
+  "new_independent_qa_run": 39699003221,
+  "new_source_qa_verdict": "PASS"
+}

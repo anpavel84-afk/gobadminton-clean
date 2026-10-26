@@ -53,7 +53,7 @@ class Grants(unittest.TestCase):
             ledger['grants'][core.digest(extra)]=dict(grant=extra,operation=None)
             with self.assertRaises(core.Refused):Q.addressed_ledger(ledger)
     def test_immutable_input_hash_and_qa_receipt_source_binding(self):
-        raw=Path(Q.ANALYSIS_INPUT).read_bytes();g=grant()
+        raw=(Path(__file__).resolve().parents[3]/Q.ANALYSIS_INPUT).read_bytes();g=grant()
         with patch.object(N,'git',side_effect=[g['head'].encode(),raw]):
             self.assertEqual(Q.addressed_input('/candidate',g),raw.decode())
         with patch.object(N,'git',side_effect=[g['head'].encode(),raw+b' ']):

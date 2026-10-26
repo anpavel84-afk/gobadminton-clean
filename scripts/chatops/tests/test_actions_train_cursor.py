@@ -116,6 +116,71 @@ class ProspectiveRouting(unittest.TestCase):
             marker['modules']['native_cursor.py'] = 'bad'
             with self.assertRaises(core.Refused): N.qualification('slot2', 'approved')
 
+    def _modules(self):
+        return {n: hashlib.sha256(Path(N.__file__).with_name(n).read_bytes()).hexdigest()
+                for n in ('native_cursor.py', 'native_guard.py')}
+
+    def _bind(self, marker):
+        return patch.object(N, 'PIN_HASHES', {}), patch.object(
+            N, '_read', side_effect=lambda *a: json.dumps(marker).encode()), patch.object(
+            N, 'invoke', side_effect=AssertionError('cursor launch is not part of route selection'))
+
+    def test_ready_phase_uses_the_same_route_for_a_non_canary_task(self):
+        marker = {'schema': 'GB_CURSOR_AUTHOR_211_V1', 'phase': 'ready',
+                  'slots': ['slot1', 'slot2'], 'canary_task_sha256': '4570522a',
+                  'modules': self._modules()}
+        task = self.cursor_task()
+        task['goal'] = 'ordinary admitted author task after role qualification'
+        self.assertNotEqual(core.digest(task), marker['canary_task_sha256'])
+        pins, reader, launch = self._bind(marker)
+        with pins, reader, launch:
+            self.assertEqual(N.qualification('slot1', core.digest(task))['phase'], 'ready')
+            chosen = core.route(S, task, 'author', 'auto', self.budget, 'slot1')
+            qa = self.cursor_task()
+            self.assertEqual(core.route(S, qa, 'qa', 'auto', self.budget, 'slot1')['provider'], 'codex')
+        self.assertEqual(chosen['provider'], 'cursor')
+        self.assertEqual(chosen['requested_route'], 'cursor:auto')
+        self.assertEqual(chosen['effective_model'], 'Auto')
+        self.assertIsNone(chosen['effort'])
+        self.assertEqual(marker['phase'], 'ready')
+
+    def test_canary_phase_still_refuses_every_other_task_on_that_route(self):
+        marker = {'schema': 'GB_CURSOR_AUTHOR_211_V1', 'phase': 'canary',
+                  'slots': ['slot1', 'slot2'], 'canary_task_sha256': '4570522a',
+                  'modules': self._modules()}
+        task = self.cursor_task()
+        task['goal'] = 'not the reviewed canary'
+        pins, reader, launch = self._bind(marker)
+        with pins, reader, launch:
+            with self.assertRaises(core.Refused):
+                N.qualification('slot2', core.digest(task))
+            chosen = core.route(S, task, 'author', 'auto', self.budget, 'slot2')
+            task['author_routes'] = ['cursor:auto']
+            with self.assertRaises(core.Refused):
+                core.route(S, task, 'author', 'auto', self.budget, 'slot2')
+        self.assertEqual(chosen['provider'], 'codex')
+        self.assertIn('cursor:auto', chosen['unavailable'])
+        self.assertIn('reviewed train canary', chosen['unavailable']['cursor:auto'])
+        self.assertEqual(marker['phase'], 'canary')
+
+    def test_ready_marker_does_not_invent_a_cursor_route(self):
+        marker = {'schema': 'GB_CURSOR_AUTHOR_211_V1', 'phase': 'ready',
+                  'slots': ['slot1', 'slot2'], 'canary_task_sha256': '4570522a',
+                  'modules': self._modules()}
+        pins, reader, launch = self._bind(marker)
+        with pins, reader, launch:
+            legacy = cost_task()
+            legacy.pop('routing_policy')
+            self.assertEqual(core.route(S, legacy, 'author', 'auto', self.budget, 'slot2')['provider'], 'codex')
+            admitted = cost_task('complex', 'standard')
+            admitted['routing_policy']['schema'] = 'GB_STAGE_COST_V2'
+            admitted['author_routes'] = ['codex:gpt-6.1-sol:high', 'cursor:auto']
+            chosen = core.route(S, admitted, 'author', 'auto', self.budget, 'slot2')
+        self.assertEqual((chosen['provider'], chosen['effective_model'], chosen['effort']),
+                         ('codex', 'gpt-6.1-sol', 'high'))
+        self.assertEqual(chosen['requested_route'], 'codex:gpt-6.1-sol:high')
+        self.assertEqual(marker['phase'], 'ready')
+
 
 class SourceImport(unittest.TestCase):
     def setUp(self):
@@ -163,35 +228,60 @@ class SourceImport(unittest.TestCase):
         (work/'allowed.txt').symlink_to(self.source/'other.txt')
         with self.assertRaises(core.Refused): N.snapshot(work, self.bridge, before)
 
-    def call(self, output='allowed.txt', mode='success'):
+    def call(self, output='allowed.txt', mode='success', *, delivery=None, user_text=None,
+             popen_wrapper=None, namespace=None, during_call=None):
         choice = {'rules_context': {'commit': 'accepted', 'stdin_sha256': 'rules-and-task'}}
+        prompt, expectation = 'trusted rules and task', None
+        if delivery is not None:
+            prompt, choice['rules_context'], expectation = delivery
+        self.last_choice = choice
         calls = []
+        self.spawned = self.stdin_sent = False
         def fake_popen(argv, **kw):
             self.assertNotIn('existing-secret-token', ' '.join(argv))
             self.assertEqual(kw['env']['AGENT_CLI_CREDENTIAL_STORE'], 'memory')
             self.assertTrue(kw['close_fds'])
             calls.append(argv)
+            self.spawned = True
             p = Mock(pid=987654, returncode=None)
             p.poll.side_effect = lambda: p.returncode
             def communicate(input, timeout):
                 work = Path(kw['cwd'])
+                self.stdin_sent = True
+                if during_call: during_call(work)
                 if mode == 'timeout': raise subprocess.TimeoutExpired(argv, timeout)
                 (work/output).write_text('existing-secret-token' if mode == 'secret' else 'after\n')
                 (work/'build').mkdir(); (work/'build/test-output').write_text('generated')
-                kw['stdout'].write(stream(INIT, ASSIST, RESULT)); kw['stdout'].flush()
+                events = [INIT, ASSIST, RESULT]
+                if delivery is not None:
+                    text = input.decode('utf-8') if user_text is None else user_text(input.decode('utf-8'))
+                    events.insert(1, {'type': 'user', 'message': {'role': 'user',
+                        'content': [{'type': 'text', 'text': text}]}})
+                kw['stdout'].write(stream(*events)); kw['stdout'].flush()
                 p.returncode = 7 if mode == 'error' else 0
             p.communicate.side_effect = communicate
             p.wait.side_effect = lambda **k: p.returncode
             return p
         def stop(p): p.returncode = p.returncode if p.returncode is not None else -9
         def atomic(p, value): p.write_text(json.dumps(value))
+        permitted = lambda name, allowed: name in allowed
+        if expectation is not None:
+            from context_cursor_delivery import gated_permitted
+            permitted = gated_permitted(permitted, self.bridge, self.rt, expectation)
+        mkdtemp = tempfile.mkdtemp
+        fstat = os.fstat
+        def owned_stat(fd):
+            info = list(fstat(fd)); info[4] = 978
+            return os.stat_result(info)
         with patch.object(N, 'qualification', return_value={}), patch.object(N.os, 'geteuid', return_value=978), \
-             patch.object(N, 'cursor_namespace_argv', side_effect=lambda base, argv: argv), \
+             patch.object(N.os, 'fstat', side_effect=owned_stat), \
+             patch.object(N.tempfile, 'mkdtemp', side_effect=lambda **kw: mkdtemp(prefix=kw['prefix'], dir=self.base)), \
+             patch.object(N, 'cursor_namespace_argv', side_effect=namespace or (lambda base, argv: argv)), \
              patch.object(N, 'process_boundary', return_value={'effective_capabilities': '0'}), \
              patch.object(N, '_stop', side_effect=stop):
-            return N.invoke(self.bridge, self.rt, 'trusted rules and task', 'existing-secret-token', choice,
-                            popen=fake_popen, atomic=atomic,
-                            permitted=lambda name, allowed: name in allowed)
+            return N.invoke(self.bridge, self.rt, prompt, 'existing-secret-token', choice,
+                            popen=popen_wrapper(fake_popen, expectation) if popen_wrapper else fake_popen, atomic=atomic,
+                            permitted=permitted)
 
     def test_one_charged_call_imports_only_authorized_source(self):
         r = self.call()

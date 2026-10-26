@@ -73,7 +73,7 @@ export function RadarPage({ sharedMap, resumeCamera = false }: { sharedMap?: Lib
   useEffect(() => {
     if (sharedMap && candidate && controller && snapshot && !view.mapPage && !view.busy) void controller.map();
   }, [candidate, controller, snapshot?.query.queryRef, view.mapPage, view.busy]);
-  useEffect(() => { if (!sharedMap) return; if (view.selected) { setExpanded(false); } else { if (trigger.current?.isConnected) trigger.current.focus(); } }, [view.selected]);
+  useEffect(() => { if (!sharedMap) return; if (view.selected) { setExpanded(false); sheet.current?.focus({ preventScroll: true }); } else { if (trigger.current?.isConnected) trigger.current.focus(); } }, [view.selected]);
   useEffect(() => { if (listOpen) sheet.current?.focus(); }, [listOpen]);
   useEffect(() => {
     if (!sharedMap || !view.selected) return;
@@ -112,7 +112,7 @@ export function RadarPage({ sharedMap, resumeCamera = false }: { sharedMap?: Lib
       {!sharedMap && !view.busy && !view.pins.length && <p className="g2-map-empty" role="status">{view.stale || !snapshot ? "Обновляем участников Radar. Карта города доступна." : "Нет участников с геопозицией. Обычные профили доступны в списке."}</p>}
       {(listOpen || view.selected) && <aside id="g2-map-panel" ref={sheet} tabIndex={-1} aria-label="Игроки на карте" className={`g2-map-panel ${expanded || listOpen ? "is-expanded" : ""}`} onKeyDown={e => { if (e.key === "Escape" && !(e.target as Element).closest("dialog")) { e.stopPropagation(); close(); } }}>
         <header onTouchStart={e => { touchY.current = e.touches[0]?.clientY ?? null; }} onTouchEnd={e => { const y = e.changedTouches[0]?.clientY; if (touchY.current !== null && y !== undefined) { if (y - touchY.current > 70) setExpanded(false); if (touchY.current - y > 70) setExpanded(true); } touchY.current = null; }}><button aria-label={expanded ? "Свернуть карточку" : "Развернуть карточку"} aria-expanded={expanded} className="g2-sheet-handle" onClick={() => setExpanded(!expanded)}>—</button><CloseButton aria-label="Закрыть карточку игрока" onClick={close} /></header>
-        {view.selected ? <UnifiedPlayerPreview dialog onClose={close} /> : <><h2>Игроки на карте</h2>{view.pins.map(row => <button className="g2-map-list-row" key={row.publicPlayerId} onClick={() => { trigger.current = document.activeElement as HTMLElement; setListOpen(false); void controller.select(row); }}><strong>{row.player.displayName}</strong><small>{distanceText(row.radar?.distance ?? null) ?? "Расстояние неизвестно"}</small></button>)}</>}
+        {view.selected ? <UnifiedPlayerPreview expanded={expanded} onExpandedChange={setExpanded} onClose={close} /> : <><h2>Игроки на карте</h2>{view.pins.map(row => <button className="g2-map-list-row" key={row.publicPlayerId} onClick={() => { trigger.current = document.activeElement as HTMLElement; setListOpen(false); void controller.select(row); }}><strong>{row.player.displayName}</strong><small>{distanceText(row.radar?.distance ?? null) ?? "Расстояние неизвестно"}</small></button>)}</>}
       </aside>}
     </>}
   </div>;

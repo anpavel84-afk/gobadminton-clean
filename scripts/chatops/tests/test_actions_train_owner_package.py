@@ -11,7 +11,7 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'actions_train'))
 import antigravity_qa_recovery as Q
 import native_antigravity as N
 import owner_package_admission as A
-from core import digest
+from core import digest, Refused
 
 COMMENT=6381122334
 CONTROLLER='e02436862e606b61e4d2e2187bf25a205586426f'
@@ -42,6 +42,71 @@ class Response:
     def __enter__(self):return self
     def __exit__(self,*_):return False
     def read(self,_):return self.data
+
+class QuiescentTests(unittest.TestCase):
+    def setUp(self):
+        stack=contextlib.ExitStack();self.addCleanup(stack.close)
+        self.journals={slot:dict(pending=None,generation=96,operations={
+            Q.OWNER_PACKAGE_ORIGINAL_UNKNOWN:dict(status='unknown')})
+            for slot in ('slot1','slot2')}
+        self.states={slot:dict(active=None,done=[]) for slot in self.journals}
+        for name,value in (('STATE',Path('/synthetic/state')),
+                           ('AUTONOMY',Path('/synthetic/autonomy')),
+                           ('POLICY',Path('/synthetic/policy.json')),
+                           ('BUDGET',Path('/synthetic/budget.json'))):
+            stack.enter_context(patch.object(A.R,name,value))
+        stack.enter_context(patch.object(A.R,'read',return_value=dict(
+            mode='active',controller_sha=CONTROLLER)))
+        stack.enter_context(patch.object(A.R,'journal',side_effect=self.journals.__getitem__))
+        stack.enter_context(patch.object(A.R,'checkpoint',side_effect=lambda slot:(self.states[slot],[])))
+        self.no_models=stack.enter_context(patch.object(A.R,'no_models'))
+        stack.enter_context(patch.object(A.R,'units_quiet'))
+        self.free_lock=stack.enter_context(patch.object(A.R,'free_lock'))
+        stack.enter_context(patch.object(Path,'exists',return_value=False))
+        stack.enter_context(patch.object(A,'sha',side_effect={
+            A.R.STATE/Q.ADDRESSED_LEDGER:A.HIST,
+            A.R.STATE/Q.SUPPLEMENT_LEDGER:A.SUP,
+            A.R.BUDGET:A.BUDGET,
+            '/usr/local/lib/gb-actions-train/accepted-engineering-rules.md':A.RULES,
+        }.__getitem__))
+        stack.enter_context(patch.object(Q,'OWNER_PACKAGE_ORIGINAL_UNKNOWN_DIGEST',
+            digest(dict(status='unknown'))))
+
+    def test_idle_none_and_done_in_both_slots(self):
+        for first in (None,dict(phase='done',issue=313)):
+            for second in (None,dict(phase='done',issue=29)):
+                with self.subTest(slot1=first,slot2=second):
+                    self.states['slot1']['active']=first
+                    self.states['slot2']['active']=second
+                    self.assertIs(A.quiescent(CONTROLLER),self.journals['slot2'])
+        self.assertEqual(self.no_models.call_count,8)
+        self.assertEqual(self.free_lock.call_count,16)
+
+    def test_other_active_phases_refuse(self):
+        for slot in self.states:
+            for phase in ('claimed','developing','qa','ci','unknown','DONE'):
+                with self.subTest(slot=slot,phase=phase):
+                    self.states[slot]['active']=dict(phase=phase)
+                    with self.assertRaisesRegex(Refused,'^slot occupied$'):A.quiescent(CONTROLLER)
+            self.states[slot]['active']=None
+
+    def test_non_dict_or_missing_phase_refuses(self):
+        for slot in self.states:
+            for active in (False,0,'','done',[],['done'],{},dict(issue=313),dict(phase=None)):
+                with self.subTest(slot=slot,active=active):
+                    self.states[slot]['active']=active
+                    with self.assertRaisesRegex(Refused,'^slot occupied$'):A.quiescent(CONTROLLER)
+            self.states[slot]['active']=None
+
+    def test_pending_always_refuses(self):
+        for slot in self.states:
+            for active in (None,dict(phase='done',issue=313)):
+                for pending in ('operation',{},False,0,''):
+                    with self.subTest(slot=slot,active=active,pending=pending):
+                        self.states[slot]['active']=active
+                        self.journals[slot]['pending']=pending
+                        with self.assertRaisesRegex(Refused,'^slot occupied$'):A.quiescent(CONTROLLER)
+            self.states[slot]['active']=None;self.journals[slot]['pending']=None
 
 class OwnerPackageTests(unittest.TestCase):
     def test_dynamic_package_enrollment_pins(self):
@@ -112,6 +177,50 @@ class OwnerPackageTests(unittest.TestCase):
             with patch.object(A,'owner_comment',return_value=('trusted',u)):
                 with self.assertRaises(Exception):A.authorize(COMMENT,CONTROLLER)
 
+    def test_installed_c5_comment_is_not_retargeted_by_document_pin(self):
+        """Comment 6396105635 stays on installed C5 pins. A later EOM hash must not replace them."""
+        comment = Q.INSTALLED_C5_COMMENT
+        controller = Q.INSTALLED_C5_CONTROLLER
+        self.assertEqual(comment, 6396105635)
+        self.assertEqual(controller, '41e12be2d551158e97ea30eaf8e95f992f998615')
+        self.assertEqual(Q.INSTALLED_C5_RULES, '017441dec5ba197a1065b6ef90efdddb090b286ba48687241a7fbc09dd002269')
+        self.assertNotEqual(Q.INSTALLED_C5_RULES, A.RULES)
+        calls = [dict(role=role, input_revision=pin[0], input_path=pin[1], input_sha256=pin[2])
+                 for role, pin in A.EXPECTED_PINS.items()]
+        value = dict(schema=Q.OWNER_PACKAGE_SCHEMA, issue=29, repo_id=A.REPO_ID,
+                     controller_sha=controller, rules_sha256=Q.INSTALLED_C5_RULES,
+                     source_base=A.SOURCE_BASE, source_head=A.SOURCE_HEAD, model=N.MODEL,
+                     max_calls=2, owner_comment=comment, calls=calls)
+        body = A.PREFIX + json.dumps(value, sort_keys=True, separators=(',', ':'))
+        data = dict(id=comment, issue_url=A.ISSUE_URL,
+                    user=dict(id=318610566, login='anpavel84-afk'),
+                    author_association='OWNER', body=body)
+        with patch.object(A.urllib.request, 'urlopen', return_value=Response(data)), \
+             patch.object(Q, 'addressed_input', return_value='inert'):
+            ledger = A.authorize(comment, controller)
+            self.assertEqual(A.authorize(comment, controller, existing=ledger), ledger)
+        self.assertEqual(ledger['controller_sha'], controller)
+        self.assertEqual(ledger['rules_sha256'], Q.INSTALLED_C5_RULES)
+        for row in ledger['grants'].values():
+            self.assertEqual(row['grant']['rules_sha256'], Q.INSTALLED_C5_RULES)
+            self.assertEqual(row['grant']['controller_revision'], controller)
+        drifted = dict(value, rules_sha256=A.RULES)
+        drifted_data = dict(data, body=A.PREFIX + json.dumps(drifted, sort_keys=True, separators=(',', ':')))
+        with patch.object(A.urllib.request, 'urlopen', return_value=Response(drifted_data)), \
+             patch.object(Q, 'addressed_input', return_value='inert'):
+            with self.assertRaises(Exception):
+                A.authorize(comment, controller)
+        with patch.object(A.urllib.request, 'urlopen', return_value=Response(data)), \
+             patch.object(Q, 'addressed_input', return_value='inert'):
+            with self.assertRaises(Exception):
+                A.authorize(comment, '0' * 40)
+        A.installed_rules_ok(controller, Q.INSTALLED_C5_RULES)
+        with self.assertRaises(Exception):
+            A.installed_rules_ok(controller, A.RULES)
+        A.installed_rules_ok(CONTROLLER, A.RULES)
+        with self.assertRaises(Exception):
+            A.installed_rules_ok(CONTROLLER, Q.INSTALLED_C5_RULES)
+
 if __name__=='__main__':unittest.main()
 
 class AdmissionRepairTests(unittest.TestCase):
@@ -127,14 +236,25 @@ class AdmissionRepairTests(unittest.TestCase):
         self.assertEqual(q['qualification_grant'],g)
 
     def test_separate_QA_marker_eligible_only_after_real_complete(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as root, patch.object(A.R,'STATE',Path(root)):
+            self._separate_QA_marker()
+
+    def _separate_QA_marker(self):
         l=ledger()
         roles={row['grant']['role']:row for row in l['grants'].values()}
-        roles['technical_pm_product_analyst']['operation']='a'*64
+        g=roles['technical_pm_product_analyst']['grant']
+        q=A.exact_qualification(g,CONTROLLER)
+        binding=dict(action='train',stage='qa_qualification',profile='agy',slot='slot2',issue=29,
+                     phase='idle',attempt=0,generation=98,head=g['head'])
+        key=digest(binding)
+        roles['technical_pm_product_analyst']['operation']=key
         l['used_calls']=1
         slot={'generation':98,'pending':None,'operations':{
-            'a'*64:{'result':{'status':'confirmed','analysis_complete':True,
+            key:{'run':122,'run_attempt':1,'binding':binding,'task_hash':q['task_sha256'],'qa_qualification':q,
+                'finished_at':1,'before':Q.CHECKPOINT,'after':Q.CHECKPOINT,'result':{'status':'confirmed','analysis_complete':True,
                 'analysis':{'completion':'COMPLETE','source_reads':[{'path':'a'},{'path':'b'}]},
-                'native_receipt':{'tool_names':['view_file','run_command']}}}}}
+                'native_receipt':{'tool_names':['view_file','run_command'],'qualification_grant':g,'qualification_task_sha256':q['task_sha256']}}}}}
         marker={'phase':'canary','executor_uid':978,
                 'qualification':{'qualification_grant':grant('technical_pm_product_analyst')}}
         q,nextmarker,nextslot=A.transition_plan('qa',COMMENT,CONTROLLER,slot,marker,l)
@@ -145,7 +265,7 @@ class AdmissionRepairTests(unittest.TestCase):
                 {'analysis':{'completion':'INCOMPLETE','source_reads':[{'path':'a'},{'path':'b'}]}},
                 {'native_receipt':{'tool_names':['view_file']}}):
             wrong=json.loads(json.dumps(slot))
-            wrong['operations']['a'*64]['result'].update(result_update)
+            wrong['operations'][key]['result'].update(result_update)
             with self.assertRaises(Exception):A.transition_plan(
                 'qa',COMMENT,CONTROLLER,wrong,marker,l)
         l['grants'][digest(grant('independent_qa'))]['operation']='b'*64

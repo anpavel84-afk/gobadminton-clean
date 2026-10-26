@@ -271,9 +271,10 @@ def _text_gate(value):
     nodes = total = 0
     active = set()
     outside = False
+    aggregate_known = True
 
     def walk(item, rule, depth=0, instruction=False):
-        nonlocal nodes, total, outside
+        nonlocal nodes, total, outside, aggregate_known
         nodes += 1
         if nodes > _MAX_NODES or depth > _MAX_DEPTH:
             raise ValueError("evidence bounds exceeded")
@@ -298,13 +299,17 @@ def _text_gate(value):
             active.add(id(item))
             start = len(texts)
             key_rule = _enum(*table)
-            for key, child in item.items():
+            for key in item:
                 # Keys are closed enums too, never unexamined free text.
                 walk(key, key_rule, depth + 1)
+            # Canonical traversal makes field/aggregate views and validation
+            # errors independent of dictionary insertion order, at every depth.
+            for key in sorted(item):
+                child = item[key]
                 try:
                     walk(child, table[key], depth + 1,
                          (schema == "evidence" and key in
-                          ("event_text", "goal", "diagnostics"))
+                          ("event_text", "goal", "diagnostics", "history"))
                          or (schema == "finding" and key == "id"))
                 except ValueError as error:
                     raise ValueError(schema + "." + key + ": " + str(error)) from error
@@ -347,10 +352,12 @@ def _text_gate(value):
             # Operation syntax is closed, but a sensitive operation still raises risk.
             if valid and item:
                 texts.append(item)
+                aggregate_known = aggregate_known and all(
+                    token in _VOCAB_WORDS for token in _vocab_tokens(_prepare(item)[0]))
         elif kind == "history":
             if _matches(re.compile(r"attempt-[1-7]\Z"), item):
                 return
-            return walk(item, _TEXT, depth + 1)
+            return walk(item, _TEXT, depth + 1, instruction)
         elif kind == "finding_id":
             valid = type(item) is str and (re.fullmatch(r"f[1-9][0-9]{0,5}", item) is not None)
             if not valid and type(item) is str:
@@ -365,9 +372,10 @@ def _text_gate(value):
                 instructions.append(item)
             prepared, residue = _prepare(item)
             tokens = _vocab_tokens(prepared)
+            vocabulary = _VOCAB_WORDS | _PATH_WORDS if kind == "path" else _VOCAB_WORDS
+            aggregate_known = aggregate_known and all(token in vocabulary for token in tokens)
             if (residue or _ambiguous(prepared) or not tokens
-                    or any(token not in (_VOCAB_WORDS | _PATH_WORDS if kind == "path"
-                                         else _VOCAB_WORDS) for token in tokens)
+                    or any(token not in vocabulary for token in tokens)
                     or re.search(r"[0-9]", prepared)):
                 outside = True
             if kind == "path" and not _concrete_path(item):
@@ -387,16 +395,19 @@ def _text_gate(value):
         joined.append("".join(order))
     views = list(dict.fromkeys(views))
     joined = list(dict.fromkeys(joined))
-    sensitive = any(_sensitive(text) for text in views)
+    sensitive = any(_sensitive(text) for text in texts)
     # Keep provenance of known word boundaries when removing separators. Otherwise
     # "to author" becomes "oauth", or adjacent Russian/English words look mixed.
     # Unknown fragments still reassemble; known words never license unknown text.
-    known = all(token in _VOCAB_WORDS for text in texts
-                for token in _vocab_tokens(_prepare(text)[0]))
-    joined_stems = any(_collapsed_sensitive(_prepare(text)[0]) for text in joined)
-    sensitive = sensitive or (not known and joined_stems)
+    # Path-only vocabulary is known only at its own leaf. A benign filename
+    # must not cause the surrounding known words to be re-glued into a stem.
+    # Unknown path fragments still take every aggregate scan, as before.
+    if not aggregate_known:
+        sensitive = sensitive or any(_sensitive(text) for text in views)
+        sensitive = sensitive or any(_collapsed_sensitive(_prepare(text)[0]) for text in joined)
     # Preserve split/reordered instruction detection without borrowing a target
-    # such as "test" from a file name, search pattern, or history metadata.
+    # such as "test" from a file name or search pattern. Free-text history is
+    # direct intent too; only closed attempt IDs are history metadata.
     # A complete destructive claim in any free-text leaf still refuses; only
     # instruction/finding text may combine separate words across fields.
     intent_views = list(claims)
@@ -517,6 +528,7 @@ def _writer_proof(evidence, plan, decision):
             or evidence["author_qa_same_snapshot"] is not False):
         return "author and QA are not independent: qa_independent proof required", False, False
     if (evidence["context_complete"] is not True or evidence["context_hash_ok"] is not True
+            or evidence["missing_inputs"]
             or evidence["dispatch_duplicate"] or evidence["platform_refusal"]
             or evidence["reconciled"] is not True or not evidence["plan_json_valid"]):
         return "writer context, operation or reconciliation proof is incomplete", False, False
@@ -731,13 +743,14 @@ def _decide(case):
         return _finish(base, policy_applied=True, executed=False, writer=False,
                          qa_verdict=None, reason="author and QA are not independent",
                          event_class="INDEPENDENT_QA_REJECTED", route="hold")
-    if not evidence["context_complete"] or not evidence["context_hash_ok"]:
+    if (not evidence["context_complete"] or not evidence["context_hash_ok"]
+            or evidence["missing_inputs"]):
         missing = list(evidence["missing_inputs"])
         return _finish(base, policy_applied=True, executed=False, writer=False,
                          qa_verdict=None, missing_inputs=missing,
                          full_trusted_fallback=not missing,
                          reason="incomplete context" if missing else "context hash mismatch; full trusted fallback",
-                         event_class="INPUT_MISSING", route="hold")
+                         event_class="INPUT_MISSING", route="hold", plan_honored=False)
     if evidence["no_progress_streak"] >= 2:
         return _finish(base, policy_applied=True, executed=False, writer=False,
                          circuit_breaker=True, independent_queue_continues=True,

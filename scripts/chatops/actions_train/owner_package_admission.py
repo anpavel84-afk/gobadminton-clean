@@ -13,7 +13,7 @@ from pathlib import Path
 import sys
 import urllib.request
 
-sys.path.insert(0, '/usr/local/lib/gb-actions-train')
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import receiver as R
 import native_antigravity as N
 import antigravity_qa_recovery as Q
@@ -27,13 +27,12 @@ RECEIPT_PREFIX='antigravity-29-owner-package-admission-'
 HIST=Q.OWNER_PACKAGE_OLD_ADDRESS_SHA
 SUP=Q.OWNER_PACKAGE_OLD_SUPPLEMENT_SHA
 BUDGET='8f6752295c2ee65924b5a95ddc42bb9774f8f73ce146481e52aaf200e142ed8d'
-SOURCE_BASE=Q.FRESH_SOURCE_BASE
-SOURCE_HEAD=Q.FRESH_SOURCE_HEAD
-RULES='017441dec5ba197a1065b6ef90efdddb090b286ba48687241a7fbc09dd002269'
-EXPECTED_PINS={
- 'technical_pm_product_analyst':(SOURCE_HEAD,Q.ANALYSIS_INPUT,Q.ANALYSIS_INPUT_SHA256),
- 'independent_qa':(Q.FRESH_QA_INPUT_REVISION,Q.FRESH_QA_INPUT_PATH,Q.FRESH_QA_INPUT_SHA256),
-}
+SOURCE_HEAD=Q.SMALL_SOURCE_HEAD
+SOURCE_BASE=Q.OWNER_PACKAGE_SOURCES[SOURCE_HEAD].base
+# Checked-in document pin; the installed C5 controller always binds its exact
+# installed rules pair. Source admission changes do not install either artifact.
+RULES='8798ea76874ea5e42f708fff6d74f1ccbf526413c701e9f2349045fdc98be9d5'
+EXPECTED_PINS=Q.owner_package_input_pins(Q.OWNER_PACKAGE_SOURCES[SOURCE_HEAD])
 
 def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -64,16 +63,45 @@ def owner_comment(comment_id):
          'Owner package JSON not canonical')
     return body,value
 
-def authorize(comment_id,controller):
+def admission_pins(comment_id, controller):
+    """Only the exact C5 pair generalizes to new comments; all other pins stay closed."""
+    return controller, Q.owner_package_rules_pin(comment_id,controller,RULES)
+
+
+def installed_rules_ok(controller, installed_sha):
+    """Quiescent rules check. A newer document pin does not replace the C5 file hash."""
+    from context_policy import RULES_SHA256
+    if controller == Q.INSTALLED_C5_CONTROLLER:
+        need(installed_sha == Q.INSTALLED_C5_RULES,
+             'installed C5 rules pin is unchanged')
+        return
+    need(RULES_SHA256 == RULES and installed_sha == RULES, 'installed rules changed')
+
+
+def authorize(comment_id,controller, *, existing=None):
     body,v=owner_comment(comment_id)
+    controller_pin, rules_pin = admission_pins(comment_id, controller)
+    source=Q.owner_package_source(SOURCE_BASE,SOURCE_HEAD)
+    expected_pins=EXPECTED_PINS
+    if existing is not None:
+        # Re-authenticate the already paid package, not a new document revision.
+        # Use ITS closed source tuple, preserving OLD ledgers after new admission pins move.
+        from context_policy import RULES_SHA256
+        Q.owner_package_ledger(existing)
+        need(existing['owner_comment']==comment_id and existing['controller_sha']==controller
+             and existing['rules_sha256']==Q.owner_package_rules_pin(comment_id,controller,RULES_SHA256),
+             'existing QA package must bind installed controller/context rules')
+        controller_pin,rules_pin=existing['controller_sha'],existing['rules_sha256']
+        source=Q.owner_package_source(existing['source_base'],existing['source_head'])
+        expected_pins=Q.owner_package_input_pins(source)
     need(type(v) is dict and set(v)=={
          'schema','issue','repo_id','controller_sha','rules_sha256','source_base',
          'source_head','model','calls','max_calls','owner_comment'},
          'unexpected Owner authorization fields')
     need(v['schema']==Q.OWNER_PACKAGE_SCHEMA and v['issue']==29 and
          v['repo_id']==REPO_ID and v['owner_comment']==comment_id and
-         v['controller_sha']==controller and v['rules_sha256']==RULES and
-         (v['source_base'],v['source_head'])==(SOURCE_BASE,SOURCE_HEAD) and
+         v['controller_sha']==controller_pin and v['rules_sha256']==rules_pin and
+         (v['source_base'],v['source_head'])==(source.base,source.head) and
          v['model']==N.MODEL and v['max_calls']==2,
          'Owner exact controller/source/rules/call budget drift')
     need(type(v['calls']) is list and len(v['calls'])==2,'Owner authorizes exactly two one-use roles')
@@ -85,12 +113,12 @@ def authorize(comment_id,controller):
         role=row['role']
         need(type(row) is dict and set(row)=={'role','input_revision','input_path','input_sha256'},
              'unexpected role authorization')
-        need((row['input_revision'],row['input_path'],row['input_sha256'])==EXPECTED_PINS[role],
+        need((row['input_revision'],row['input_path'],row['input_sha256'])==expected_pins[role],
              'source/QA immutable fixtures drift')
         grant=dict(schema=Q.ADDRESSED_SCHEMA,lineage=Q.ADDRESSED_LINEAGE,
-          owner_comment=comment_id,role=role,controller_revision=controller,
-          cli_sha256=N.AGY_SHA256,rules_sha256=RULES,
-          base=SOURCE_BASE,head=SOURCE_HEAD,input_revision=row['input_revision'],
+          owner_comment=comment_id,role=role,controller_revision=controller_pin,
+          cli_sha256=N.AGY_SHA256,rules_sha256=rules_pin,
+          base=source.base,head=source.head,input_revision=row['input_revision'],
           input_path=row['input_path'],input_sha256=row['input_sha256'],
           timeout=1800,max_output_bytes=N.MAX_OUT,
           permission_mode=N.PERMISSION_MODE,input_transport='stream-json',ceiling=1)
@@ -99,8 +127,8 @@ def authorize(comment_id,controller):
         Q.addressed_input(N.QUALIFICATION_WORK,grant,installer=True)
         grants[digest(grant)]=dict(grant=grant,operation=None)
     ledger=dict(schema=Q.OWNER_PACKAGE_SCHEMA,owner_comment=comment_id,
-         owner_id=OWNER_ID,issue=29,controller_sha=controller,rules_sha256=RULES,
-         source_base=SOURCE_BASE,source_head=SOURCE_HEAD,
+         owner_id=OWNER_ID,issue=29,controller_sha=controller_pin,rules_sha256=rules_pin,
+         source_base=source.base,source_head=source.head,
          body_sha256=hashlib.sha256(body.encode()).hexdigest(),
          ceiling=2,used_calls=0,grants=grants,
          previous_addressed_sha256=HIST,previous_supplement_sha256=SUP)
@@ -114,7 +142,8 @@ def quiescent(controller):
     R.units_quiet(R.UNITS)
     for slot,uid in (('slot1',1002),('slot2',978)):
         j=R.journal(slot);st,_=R.checkpoint(slot)
-        need(j['pending'] is None and st['active'] is None,'slot occupied')
+        need(j['pending'] is None and (st['active'] is None or
+             (isinstance(st['active'],dict) and st['active'].get('phase')=='done')),'slot occupied')
         R.no_models(uid,slot)
         R.free_lock(R.AUTONOMY/'slots'/slot/'worker.lock')
         R.free_lock(R.AUTONOMY/'locks'/(slot+'.lease'))
@@ -127,9 +156,7 @@ def quiescent(controller):
          sha(R.STATE/Q.SUPPLEMENT_LEDGER)==SUP and
          sha(R.BUDGET)==BUDGET,'historical paid ledgers/budget drift')
     need(not (R.STATE/'integration.json').exists(),'integration in flight')
-    from context_policy import RULES_SHA256
-    need(RULES_SHA256==RULES and sha('/usr/local/lib/gb-actions-train/accepted-engineering-rules.md')==RULES,
-         'installed rules changed')
+    installed_rules_ok(controller, sha('/usr/local/lib/gb-actions-train/accepted-engineering-rules.md'))
     return s
 
 def exact_qualification(grant, controller):
@@ -140,10 +167,10 @@ def exact_qualification(grant, controller):
     """
     Q.validate_addressed_grant(grant,enrollment=True)
     task=dict(schema='GB_ANTIGRAVITY_29_ADDRESSED_TASK_V1',issue=29,
-        role=grant['role'],slot='slot2',base=SOURCE_BASE,head=SOURCE_HEAD,
+        role=grant['role'],slot='slot2',base=grant['base'],head=grant['head'],
         model=N.MODEL,max_calls=1,adapter_revision=controller,
         qualification_grant=grant)
-    q=dict(issue=29,base=SOURCE_BASE,head=SOURCE_HEAD,
+    q=dict(issue=29,base=grant['base'],head=grant['head'],
         work=str(N.QUALIFICATION_WORK),adapter_revision=controller,
         qualification_grant=grant,task_sha256=digest(task))
     return q
@@ -152,19 +179,13 @@ def exact_qualification(grant, controller):
 def qa_ready(slot, ledger):
     """One confirmed, tool-supported analysis before any QA marker transition."""
     Q.owner_package_ledger(ledger)
-    need(ledger['used_calls']==1,'QA transition requires one spent analysis')
+    need(ledger['used_calls']==1 or 'delegation' in ledger,
+         'QA transition requires one spent analysis')
     roles={row['grant']['role']:row for row in ledger['grants'].values()}
-    analysis=roles['technical_pm_product_analyst']
-    need(analysis['operation'] is not None and roles['independent_qa']['operation'] is None,
+    analysis=roles.get('technical_pm_product_analyst') or ledger.get('delegation',{}).get('analysis')
+    need(analysis is not None and analysis['operation'] is not None and roles['independent_qa']['operation'] is None,
          'QA requires exact unspent QA grant')
-    op=slot['operations'].get(analysis['operation'],{})
-    result=op.get('result') or {}
-    native=result.get('native_receipt') or {}
-    need(result.get('status')=='confirmed' and result.get('analysis_complete') is True
-         and result.get('analysis',{}).get('completion')=='COMPLETE'
-         and {'view_file','run_command'} <= set(native.get('tool_names') or [])
-         and len(result.get('analysis',{}).get('source_reads') or [])==2,
-         'independent QA cannot start before real native analysis COMPLETE')
+    Q.analysis_operation(R,slot,analysis)
 
 
 def transition_plan(action,comment_id,controller,slot,marker,package):
@@ -175,10 +196,10 @@ def transition_plan(action,comment_id,controller,slot,marker,package):
     if action=='qa':
         qa_ready(slot,package)
         need(marker.get('qualification',{}).get('qualification_grant')==
-             roles['technical_pm_product_analyst']['grant'],
+             (roles.get('technical_pm_product_analyst') or package.get('delegation',{}).get('analysis'))['grant'],
              'QA transition must follow this package analysis marker')
     else:
-        need(package['used_calls']==0 and
+        need((package['used_calls']==0 or 'delegation' in package) and
              all(row['operation'] is None for row in package['grants'].values()),
              'analysis package must be unspent')
     q=exact_qualification(grant,controller)
@@ -211,10 +232,222 @@ def safe_put(path, value, before_sha, after_sha, *, mode=0o600):
     need(sha(path)==after_sha,'admission target write readback mismatch')
 
 
+def commit_transaction(*, existing, receipt, transaction, policy, action, path, package,
+                       newmarker, newslot, q, now_slot, now_marker, controller):
+    """Shared trusted write-ahead commit; caller holds controller/receiver lock.
+
+    Exact before/after writes, disabled window, readback and historical pins are
+    identical for personal Owner enrollment and delegated finite packages.
+    """
+    if existing is None:
+        R.atomic(receipt,transaction)
+    if policy['mode']=='active' and existing and existing['phase']=='complete':
+        need(now_slot==transaction['slot_after_sha256'] and
+             now_marker==transaction['marker_after_sha256'],
+             'completed admission runtime mismatch')
+        return False
+    if policy['mode']=='active':
+        R.atomic(R.POLICY,dict(policy,mode='disabled'),mode=0o644)
+    # No dispatch while any of the three protected files is half-written.
+    if action=='analysis' or 'delegation' in package:
+        safe_put(path,package,None,transaction['package_sha256'])
+    safe_put(N.MARKER,newmarker,
+             transaction['marker_before_sha256'],
+             transaction['marker_after_sha256'],mode=0o644)
+    safe_put(R.STATE/'slot2.json',newslot,
+             transaction['slot_before_sha256'],transaction['slot_after_sha256'])
+    need(N.qualification_descriptor(R.read(N.MARKER,0))==q,
+         'post-enrollment native descriptor rejected')
+    check=Q.owner_package_ledger(R.read(path,0))
+    need(check==package,'per-role grants/ledger changed during admission')
+    need(sha(R.STATE/Q.ADDRESSED_LEDGER)==HIST and
+         sha(R.STATE/Q.SUPPLEMENT_LEDGER)==SUP and
+         sha(R.BUDGET)==BUDGET,'historical grants or budget modified')
+    R.atomic(receipt,dict(transaction,phase='complete'))
+    R.atomic(R.POLICY,dict(transaction['policy_before'],mode='active'),mode=0o644)
+    need(R.read(R.POLICY,0)['mode']=='active'
+         and R.read(R.POLICY,0)['controller_sha']==controller,
+         'controller could not reactivate after complete admission')
+    return True
+
+
+ACCEPT_PREFIX='antigravity-29-package-accept-'
+
+
+def acceptance_plan(comment_id, controller, slot, marker, package, qa_receipt):
+    """Read-only finite package acceptance, bound to the actual QA admission."""
+    import re
+    from context_policy import RULES_SHA256
+    Q.owner_package_ledger(package)
+    need(package['owner_comment']==comment_id and package['controller_sha']==controller
+         and package['rules_sha256']==Q.owner_package_rules_pin(comment_id,controller,RULES_SHA256)
+         and package['used_calls']==package['ceiling']==2
+         and 'delegation' not in package, 'accept requires this fully spent Owner two-call package')
+    roles={row['grant']['role']:row for row in package['grants'].values()}
+    qa_package=copy.deepcopy(package)
+    qa_package['grants'][digest(roles['independent_qa']['grant'])]['operation']=None
+    qa_package['used_calls']=1
+    need(qa_receipt.get('package_sha256')==hashlib.sha256(encoded(qa_package)).hexdigest(),
+         'QA admission package snapshot drift')
+    Q.analysis_operation(R,slot,roles['technical_pm_product_analyst'])
+    q=exact_qualification(roles['independent_qa']['grant'],controller)
+    need(qa_receipt.get('schema')=='GB_AGY_29_OWNER_PACKAGE_TRANSACTION_V2'
+         and qa_receipt.get('phase')=='complete' and qa_receipt.get('action')=='qa'
+         and qa_receipt.get('owner_comment')==comment_id
+         and qa_receipt.get('controller_sha')==controller
+         and qa_receipt.get('body_sha256')==package['body_sha256']
+         and qa_receipt.get('task_sha256')==q['task_sha256'], 'complete exact QA admission receipt required')
+    before=json.loads(qa_receipt['slot_before_raw'])
+    after=copy.deepcopy(before);after['generation']+=1
+    expected=copy.deepcopy(qa_receipt['marker_before'])
+    expected.update(phase='canary',adapter_revision=controller,
+        canary_task_sha256=q['task_sha256'],qualification=q,modules={
+            name:sha(Path(N.__file__).with_name(name))
+            for name in ('native_antigravity.py','native_guard.py')})
+    need(qa_receipt['slot_before_sha256']==hashlib.sha256(qa_receipt['slot_before_raw'].encode()).hexdigest()
+         and qa_receipt['slot_after_sha256']==hashlib.sha256(encoded(after)).hexdigest()
+         and qa_receipt['marker_after_sha256']==hashlib.sha256(encoded(expected)).hexdigest()
+         and digest(marker)==digest(expected) and marker.get('executor_uid')==978
+         and slot['pending'] is None and slot['generation']>=after['generation']+1,
+         'QA marker/pins or slot generation drift')
+    # Live candidates plus exactly the archived keys charged by this ledger.
+    candidates=dict(slot['operations'])
+    for row in roles.values():
+        candidates[row['operation']]=Q.qualification_operation(R,slot,row['operation'])
+    matches=[(key,op) for key,op in candidates.items() if op.get('task_hash')==q['task_sha256']]
+    need(len(matches)==1 and matches[0][0]==roles['independent_qa']['operation'],
+         'exactly one ledger-bound QA operation required')
+    key,op=matches[0];b=op.get('binding') or {}
+    from core import request
+    need(set(b)=={'action','stage','slot','issue','phase','head','attempt','generation','profile'},
+         'QA operation binding fields drift')
+    request(dict(b,run=op.get('run'),run_attempt=op.get('run_attempt'),gh_token='synthetic-inert-binding'))
+    need(b.get('profile')=='agy' and digest(b)==key
+         and b.get('generation')==after['generation'] and digest(op.get('qa_qualification'))==digest(q),
+         'QA operation binding/generation drift')
+    result=op.get('result') or {}
+    need(result.get('status')=='confirmed' and result.get('qualification_passed') is True
+         and (result.get('qa') or {}).get('verdict')=='PASS',
+         'QA FAIL/UNKNOWN or incomplete qualification cannot be accepted')
+    need(digest((result.get('native_receipt') or {}).get('qualification_grant'))==
+         digest(q['qualification_grant']),'QA receipt exact grant drift')
+    need(Q.acceptance_match(op,q,enrollment=True),
+         'QA FAIL/UNKNOWN or incomplete qualification cannot be accepted')
+    conversation=(op['result']['native_receipt']).get('conversation_sha256')
+    need(type(conversation) is str and re.fullmatch('[a-f0-9]{64}',conversation)
+         and type(op.get('run')) is int and op['run']>0, 'QA run/conversation identity missing')
+    # Include archived successes in identity reuse detection, not just hot ops.
+    history=R.STATE/'history'/'slot2'
+    if history.exists():
+        for path in history.iterdir():
+            need(re.fullmatch(r'[a-f0-9]{64}\.json',path.name), 'invalid history operation filename')
+            candidates[path.stem]=Q.qualification_operation(R,slot,path.stem)
+    for other_key,other in candidates.items():
+        if other_key==key:continue
+        result=other.get('result') or {}
+        if result.get('status')=='confirmed' and result.get('qualification_passed') is True:
+            need(other.get('run')!=op['run'] and
+                 (result.get('native_receipt') or {}).get('conversation_sha256')!=conversation,
+                 'QA run/conversation identity reused by another successful operation')
+    for path in R.STATE.glob(ACCEPT_PREFIX+'*.json'):
+        accepted=R.read(path,0).get('marker_after',{}).get('accepted_canary',{})
+        if accepted.get('operation')!=key:
+            need(accepted.get('run')!=op['run'] and accepted.get('conversation_sha256')!=conversation,
+                 'QA identity already accepted elsewhere')
+    return dict(marker,phase='ready',accepted_canary=dict(operation=key,run=op['run'],
+        conversation_sha256=conversation,source_sha=q['head'],task_sha256=q['task_sha256']))
+
+
+def package_rules_ok(package):
+    """Installed rules bytes and loaded context must agree with the paid grant."""
+    import context_policy as context
+    need(package['rules_sha256']==Q.owner_package_rules_pin(
+         package['owner_comment'],package['controller_sha'],context.RULES_SHA256)
+         and context.RULES_SHA256==package['rules_sha256']
+         and sha(Path(context.__file__).with_name('accepted-engineering-rules.md'))==package['rules_sha256'],
+         'package installed rules/context pin drift')
+    if package['rules_sha256']==Q.INSTALLED_C5_RULES:
+        need(sha(Path(context.__file__))=='d961079b9791f53cf7ce0ac208180b0c9d9100ef46b48c025c2938d2eb69a806',
+             'package installed C5 context_policy bytes drift')
+
+
+def accept(comment_id, *, dry=False):
+    """Controller exclusion + write-ahead marker-only transaction, safely resumable.
+
+    No disabled window: a single atomic marker replacement is the whole effect.
+    No slot, grant, budget or policy write is needed; all are bound by the receipt.
+    """
+    need(os.geteuid()==0,'root package acceptance only')
+    fd=os.open(R.STATE/'controller.lock',os.O_RDWR|os.O_NOFOLLOW|os.O_CLOEXEC)
+    try:
+        fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        policy=R.read(R.POLICY,0);controller=policy['controller_sha']
+        need(policy['mode']=='active','accept requires active controller')
+        slot=quiescent(controller)
+        package_path=R.STATE/(Q.OWNER_PACKAGE_LEDGER_PREFIX+str(comment_id)+'.json')
+        package=Q.owner_package_ledger(R.read(package_path,0))
+        package_rules_ok(package)
+        enrollment=R.read(R.STATE/(RECEIPT_PREFIX+str(comment_id)+'.json'),0)
+        initial=copy.deepcopy(package)
+        for row in initial['grants'].values():row['operation']=None
+        initial['used_calls']=0
+        need(enrollment.get('schema')=='GB_AGY_29_OWNER_PACKAGE_TRANSACTION_V2'
+             and enrollment.get('action')=='analysis'
+             and enrollment.get('package_sha256')==hashlib.sha256(encoded(initial)).hexdigest()
+             and enrollment.get('phase')=='complete' and enrollment.get('owner_comment')==comment_id
+             and enrollment.get('controller_sha')==controller
+             and enrollment.get('body_sha256')==package['body_sha256'], 'original package receipt drift')
+        qa_path=R.STATE/(RECEIPT_PREFIX+str(comment_id)+'-qa.json')
+        qa_receipt=R.read(qa_path,0)
+        path=R.STATE/(ACCEPT_PREFIX+str(comment_id)+'.json')
+        transaction=R.read(path,0) if path.exists() else None
+        marker=R.read(N.MARKER,0)
+        before=transaction['marker_before'] if transaction else marker
+        after=acceptance_plan(comment_id,controller,slot,before,package,qa_receipt)
+        pins={str(p):sha(p) for p in (R.POLICY,R.BUDGET,package_path,qa_path,
+                                     R.STATE/'slot1.json',R.STATE/'slot2.json')}
+        if transaction:
+            need(transaction.get('schema')=='GB_AGY_29_PACKAGE_ACCEPT_V1'
+                 and transaction.get('phase') in ('intent','complete')
+                 and transaction.get('owner_comment')==comment_id
+                 and transaction.get('controller_sha')==controller
+                 and transaction.get('generation')==slot['generation']
+                 and transaction.get('pins')==pins and transaction['marker_after']==after
+                 and transaction['marker_before_sha256']==hashlib.sha256(encoded(before)).hexdigest()
+                 and transaction['marker_after_sha256']==hashlib.sha256(encoded(after)).hexdigest(),
+                 'accept receipt or protected state drift')
+        else:
+            transaction=dict(schema='GB_AGY_29_PACKAGE_ACCEPT_V1',phase='intent',
+                owner_comment=comment_id,controller_sha=controller,generation=slot['generation'],
+                pins=pins,marker_before=before,marker_after=after,
+                marker_before_sha256=sha(N.MARKER),
+                marker_after_sha256=hashlib.sha256(encoded(after)).hexdigest())
+        need(marker in (before,after) and sha(N.MARKER) in
+             (transaction['marker_before_sha256'],transaction['marker_after_sha256']),
+             'foreign marker change during accept')
+        if transaction['phase']=='complete':
+            need(marker==after,'completed acceptance marker rewound')
+        if dry:
+            print(json.dumps(dict(status='ACCEPT_DRY_PASS',marker_before=before,
+                marker_after=after,model_calls=0,protected_writes=0),sort_keys=True));return
+        if not path.exists():R.atomic(path,transaction)
+        need(all(sha(Path(p))==pin for p,pin in pins.items()),'pre-accept state drift')
+        safe_put(N.MARKER,after,transaction['marker_before_sha256'],
+                 transaction['marker_after_sha256'],mode=0o644)
+        need(R.read(N.MARKER,0)==after and all(sha(Path(p))==pin for p,pin in pins.items()),
+             'accept readback/state mismatch')
+        if transaction['phase']!='complete':R.atomic(path,dict(transaction,phase='complete'))
+        print(json.dumps(dict(status='ACCEPTED',accepted_canary=after['accepted_canary'],model_calls=0)))
+    finally:os.close(fd)
+
+
 def main():
     need(os.geteuid()==0 and len(sys.argv)==3 and
-         sys.argv[1] in ('--dry-run','--apply','--qa'),
+         sys.argv[1] in ('--dry-run','--apply','--qa','--accept','--accept-dry'),
          'one root authenticated package enrollment or post-COMPLETE QA transition')
+    if sys.argv[1] in ('--accept','--accept-dry'):
+        R.trusted_tree(Path(__file__).resolve())
+        return accept(int(sys.argv[2]),dry=sys.argv[1]=='--accept-dry')
     action='qa' if sys.argv[1]=='--qa' else 'analysis'
     comment_id=int(sys.argv[2])
     R.trusted_tree(Path(__file__).resolve())
@@ -227,17 +460,17 @@ def main():
                          ('-qa.json' if action=='qa' else '.json'))
         path=R.STATE/(Q.OWNER_PACKAGE_LEDGER_PREFIX+str(comment_id)+'.json')
         oldreceipt=R.STATE/(RECEIPT_PREFIX+str(comment_id)+'.json')
-        ledger_authorized=authorize(comment_id,controller)
         if action=='qa':
             need(oldreceipt.exists() and R.read(oldreceipt,0)['phase']=='complete',
                  'original package enrollment not complete')
             package=Q.owner_package_ledger(R.read(path,0))
+            ledger_authorized=authorize(comment_id,controller,existing=package)
             need(package['body_sha256']==ledger_authorized['body_sha256'] and
                  package['controller_sha']==controller and
                  set(package['grants'])==set(ledger_authorized['grants']),
                  'QA transition package origin drift')
         else:
-            package=ledger_authorized
+            package=authorize(comment_id,controller)
         existing=R.read(receipt,0) if receipt.exists() else None
         if existing is not None:
             need(existing.get('schema')=='GB_AGY_29_OWNER_PACKAGE_TRANSACTION_V2'
@@ -313,37 +546,13 @@ def main():
                  generation_after=newslot['generation'],task_sha256=q['task_sha256'],
                  grants=2,provider_calls=0,protected_writes=0),sort_keys=True))
             return
-        if existing is None:
-            R.atomic(receipt,transaction)
-        if policy['mode']=='active' and existing and existing['phase']=='complete':
-            need(now_slot==transaction['slot_after_sha256'] and
-                 now_marker==transaction['marker_after_sha256'],
-                 'completed admission runtime mismatch')
+        committed=commit_transaction(existing=existing,receipt=receipt,transaction=transaction,
+             policy=policy,action=action,path=path,package=package,newmarker=newmarker,
+             newslot=newslot,q=q,now_slot=now_slot,now_marker=now_marker,controller=controller)
+        if not committed:
             print(json.dumps(dict(status='ALREADY_COMPLETE',action=action,
                  controller=controller,owner_comment=comment_id,model_calls=0)))
             return
-        if policy['mode']=='active':
-            R.atomic(R.POLICY,dict(policy,mode='disabled'),mode=0o644)
-        # No dispatch while any of the three protected files is half-written.
-        if action=='analysis':
-            safe_put(path,package,None,transaction['package_sha256'])
-        safe_put(N.MARKER,newmarker,
-                 transaction['marker_before_sha256'],
-                 transaction['marker_after_sha256'],mode=0o644)
-        safe_put(R.STATE/'slot2.json',newslot,
-                 transaction['slot_before_sha256'],transaction['slot_after_sha256'])
-        need(N.qualification_descriptor(R.read(N.MARKER,0))==q,
-             'post-enrollment native descriptor rejected')
-        check=Q.owner_package_ledger(R.read(path,0))
-        need(check==package,'per-role grants/ledger changed during admission')
-        need(sha(R.STATE/Q.ADDRESSED_LEDGER)==HIST and
-             sha(R.STATE/Q.SUPPLEMENT_LEDGER)==SUP and
-             sha(R.BUDGET)==BUDGET,'historical grants or budget modified')
-        R.atomic(receipt,dict(transaction,phase='complete'))
-        R.atomic(R.POLICY,dict(transaction['policy_before'],mode='active'),mode=0o644)
-        need(R.read(R.POLICY,0)['mode']=='active'
-             and R.read(R.POLICY,0)['controller_sha']==controller,
-             'controller could not reactivate after complete admission')
         print(json.dumps(dict(status='ADMITTED',action=action,
              owner_comment=comment_id,controller=controller,
              generation=newslot['generation'],

@@ -2358,7 +2358,10 @@ class SmartRoutingQaR8(unittest.TestCase):
                  findings=[{"id": "f1", "severity": "low", "location": "apps/web/src/export.ts"}],
                  prior_fast_fix={"fingerprint": "fp-export", "result": "pass"})
         e["plan"]["model_ids"] = ["gpt-6.1-sol"]
-        self._control(e)
+        # A complete-context writer has no missing inputs (R10 finding B).
+        # Keep the nonempty list below for the original element/type probes.
+        self._control(dict(e, missing_inputs=[]))
+        self.assertEqual(sr.decide(case(e))["event_class"], "INPUT_MISSING")
         original = case(e)
 
         def paths(value, prefix=()):
@@ -2656,6 +2659,111 @@ class SmartRoutingQaR9(unittest.TestCase):
             with self.subTest(sample=index, path=path):
                 self._control("fast", e)
         self.assertLess(time.monotonic() - started, 20)
+
+
+class SmartRoutingQaR11(unittest.TestCase):
+    """Focused R10 A/B/C reproductions; earlier regression assertions stay intact."""
+
+    _writers = staticmethod(SmartRoutingQaR9._writers)
+    _control = SmartRoutingQaR9._control
+    _refuse = SmartRoutingQaR9._refuse
+
+    def test_a_split_direct_intent_blocks_all_five_routes(self):
+        for name, original in self._writers().items():
+            self._control(name, original)
+            for mutation in ({"history": ["remove test"]},
+                             {"history": ["remove", "test"]},
+                             {"event_text": "remove", "history": ["test"]},
+                             {"goal": "remove", "history": ["test"]},
+                             {"history": ["test", "remove"]}):
+                e = copy.deepcopy(original)
+                e.update(mutation)
+                with self.subTest(route=name, mutation=mutation):
+                    d = self._refuse(e, "condition 7")
+                    self.assertEqual(d["history"], e["history"])
+
+    def test_a_metadata_cannot_supply_instruction_target(self):
+        path = "apps/web/src/remove_test_delete_fixture_spec.ts"
+        for name, original in self._writers().items():
+            e = copy.deepcopy(original)
+            e.update(event_text="remove", history=["attempt-1"], paths=[path],
+                     findings=[{"id": "f1", "severity": "low", "location": path}],
+                     class_search=search(scope=path, scope_listing=[path]))
+            with self.subTest(route=name):
+                self._control(name, e)
+
+    def test_b_missing_inputs_hold_even_with_complete_context(self):
+        for name, original in self._writers().items():
+            self._control(name, dict(original, missing_inputs=[]))
+            e = copy.deepcopy(original)
+            e.update(missing_inputs=["export"], history=["attempt-1"])
+            with self.subTest(route=name):
+                d = self._refuse(e)
+                self.assertEqual(d["event_class"], "INPUT_MISSING", d)
+                self.assertEqual(d["route"], "hold", d)
+                self.assertEqual(d["missing_inputs"], ["export"])
+                self.assertFalse(d["executed"], d)
+                self.assertFalse(d["full_trusted_fallback"], d)
+                self.assertEqual(d["model_calls"], 0)
+                self.assertEqual(d["author_attempts"], original["author_attempts"])
+                self.assertEqual(d["history"], e["history"])
+                # Exercise the final predicate separately from the initial gate:
+                # a branch's success flags cannot override missing evidence.
+                validated = sr._evidence(e)
+                validated.binding = dict(BIND)
+                validated.policy_active = True
+                success = sr.decide(case(original))
+                final = sr._emit({}, validated, validated["plan"], **success)
+                for flag in ("writer", "executed", "fast_fix", "plan_honored",
+                             "continuation_granted", "history_reset"):
+                    self.assertFalse(final[flag], final)
+                self.assertEqual(final["route"], "hold", final)
+                self.assertEqual(final["model_calls"], 0)
+
+    @staticmethod
+    def _reorder(value, reverse):
+        if type(value) is dict:
+            return {key: SmartRoutingQaR11._reorder(value[key], reverse)
+                    for key in sorted(value, reverse=reverse)}
+        if type(value) is list:
+            return [SmartRoutingQaR11._reorder(item, reverse) for item in value]
+        return value
+
+    def test_c_legitimate_paths_and_insertion_order_keep_all_routes(self):
+        for name, original in self._writers().items():
+            for text in ("author", "authors"):
+                for filename in ("spec.ts", "fixture.ts"):
+                    path = "apps/web/src/" + filename
+                    e = copy.deepcopy(original)
+                    e.update(event_text=text, paths=[path],
+                             findings=[{"id": "f1", "severity": "low", "location": path}],
+                             class_search=search(scope=path, scope_listing=[path]))
+                    # Exact R10 permutation, plus recursive forward/reverse order.
+                    items = [(key, val) for key, val in e.items() if key != "event_text"]
+                    at = [key for key, val in items].index("minimal_action_known")
+                    items.insert(at + 1, ("event_text", text))
+                    with self.subTest(route=name, text=text, path=path):
+                        expected = self._control(name, e)
+                        self.assertEqual(expected["fast_fix"], name == "fast")
+                        self.assertEqual(expected["risk"], sr.decide(case(original))["risk"])
+                        for reordered in (dict(items), self._reorder(e, False),
+                                          self._reorder(e, True)):
+                            self.assertEqual(e, reordered)
+                            self.assertEqual(sr.decide(case(reordered)), expected)
+
+    def test_c_safety_and_unknown_path_fragments_survive_reordering(self):
+        for name, original in self._writers().items():
+            for mutation in ({"event_text": "%72emove%20test"},
+                             {"event_text": "r e m o v e t e s t"},
+                             {"event_text": "remоve test"},  # Cyrillic о
+                             {"paths": ["apps/web/src/aut_h.ts"]},
+                             {"paths": ["apps/web/src/unknownword.ts"]}):
+                e = copy.deepcopy(original)
+                e.update(mutation)
+                with self.subTest(route=name, mutation=mutation):
+                    expected = self._refuse(e)
+                    for reverse in (False, True):
+                        self.assertEqual(sr.decide(case(self._reorder(e, reverse))), expected)
 
 
 if __name__ == "__main__":

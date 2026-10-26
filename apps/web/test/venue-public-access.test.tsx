@@ -44,6 +44,7 @@ import { getMe } from "../src/lib/api-client";
 import { MOSCOW_BUNDLE } from "../src/lib/radar-map-assets";
 const cover = "/v1/media/venue-covers/" + "a".repeat(64) + ".png";
 const a: Venue = { id: "a", cityId: MOSCOW_BUNDLE.cityId, name: "Зал А", address: "Адрес А", timezone: "Europe/Moscow", latitude: 55.7, longitude: 37.6, dataStatus: "verified", provenance: "PRIVATE_SENTINEL_205", cover: { uploadedUrl: cover, credit: { kind: "illustration", text: "Автор фото", url: null } }, profile: { courtCount: 4, amenities: { parking: false, showers: null }, updatedAt: "2026-10-22T12:00:00.000Z", gallery: { coverage: "cover_only", items: [] } }, publicContacts: { phone: "+79991234567", website: "https://example.org", messengers: [] } };
+let coverCredit: NonNullable<Venue["cover"]>["credit"] = a.cover!.credit;
 const b: Venue = { ...a, id: "b", name: "Зал Б", cover: { uploadedUrl: null }, profile: null, publicContacts: null };
 const game: Game = { id: "game", version: 1, title: "Тестовая игра", venue: a, startsAt: "2027-01-01T10:00:00Z", endsAt: "2027-01-01T11:00:00Z", timezone: a.timezone, status: "published", visibility: "public", activityKind: "regular", trainer: null, trainingDescription: null, organizer: { id: null, displayName: "Организатор", publicContact: "" }, applicationDeadlineAt: "2027-01-01T09:00:00Z", capacity: 4, externalReservedCount: 0, confirmedCount: 0, availablePlaces: 4, formatKey: "doubles", levelRule: { scaleId: "t", scaleVersion: 1, allowedLevelIds: [] }, settlement: { mode: "external", purpose: "no_trainer_fee", priceMinor: null, currency: null, terms: "" } };
 let instances = new Map<string, Instance>();
@@ -93,6 +94,7 @@ function action(predicate: (node: React.ReactElement<Record<string, unknown>>) =
 beforeEach(() => {
   vi.useFakeTimers(); vi.setSystemTime(new Date("2026-11-01T12:00:00Z"));
   instances = new Map(); runtime.pending = []; calls.length = 0; games = [game]; signedIn = false; publicFailure = false; gamesReady = true;
+  coverCredit = { kind: "illustration", text: "Автор фото", url: null };
   vi.stubGlobal("window", Object.assign(new EventTarget(), { location: { search: "", pathname: "/games", assign: vi.fn() } }));
   vi.stubGlobal("document", Object.assign(new EventTarget(), { visibilityState: "visible", querySelector: () => null }));
   vi.stubGlobal("sessionStorage", { setItem: vi.fn() });
@@ -101,7 +103,7 @@ beforeEach(() => {
     const reply = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
     if (path.startsWith("/v1/admin/")) return reply({}, 403);
     if (path === "/v1/me") return reply(signedIn ? { user: { id: "member" }, profile: null } : {}, signedIn ? 200 : 401);
-    if (path === "/v1/venues/a" || path === "/v1/venues/b") return reply(path.endsWith("/a") ? a : b, publicFailure ? 503 : 200);
+    if (path === "/v1/venues/a" || path === "/v1/venues/b") return reply(path.endsWith("/a") ? { ...a, cover: { uploadedUrl: cover, credit: coverCredit } } : b, publicFailure ? 503 : 200);
     if (path.startsWith("/v1/venues?")) return reply({ items: [a, b], nextCursor: null });
     if (path.startsWith("/v1/games?")) return reply({ items: games, nextCursor: null }, gamesReady ? 200 : 503);
     throw new Error(`Unexpected request ${path}`);
@@ -232,6 +234,35 @@ it("preserves map return URL, selected day/activity and schedule props alongside
   const schedule = nodes.find(node => node.type === GamesMapView);
   expect(schedule?.props).toMatchObject({ cityId: a.cityId, day: "2027-01-01", venueId: "a", activity: "trainer_led" });
   expect(text).toContain("Количество кортов4"); assertPublic();
+});
+
+it("does not link a VenuePage cover credit whose authority disagrees", async () => {
+  coverCredit = { kind: "photo", text: "Фото: Клуб", url: "https:///@evil.example/phish" };
+  await settle(<VenuePage venueId="a" />);
+  expect(text).toContain("Фото: Клуб");
+  expect(nodes.some(node => node.type === "a" && String(node.props.href).includes("evil.example"))).toBe(false);
+  expect(nodes.some(node => node.type === "a" && node.props.href === "javascript:alert(1)")).toBe(false);
+  assertPublic();
+});
+
+it("links a safe VenuePage cover credit to its serialized href", async () => {
+  coverCredit = { kind: "photo", text: "Фото: Клуб", url: "https://example.org/photos" };
+  await settle(<VenuePage venueId="a" />);
+  expect(text).toContain("Фото: Клуб");
+  expect(nodes.some(node => node.type === "a" && node.props.href === "https://example.org/photos")).toBe(true);
+  assertPublic();
+});
+
+it("rejects a VenuePage cover credit whose serialized href exceeds 300 characters", async () => {
+  const bomb = "https://a/?" + "'".repeat(97);
+  expect(bomb).toHaveLength(108);
+  expect(new URL(bomb).href).toHaveLength(302);
+  coverCredit = { kind: "photo", text: "Фото: Клуб", url: bomb };
+  await settle(<VenuePage venueId="a" />);
+  expect(text).toContain("Фото: Клуб");
+  expect(nodes.some(node => node.type === "a" && String(node.props.href).includes("%27"))).toBe(false);
+  expect(nodes.some(node => node.type === "a" && node.props.href === new URL(bomb).href)).toBe(false);
+  assertPublic();
 });
 
 it("retains the safe map return fallback for an external destination", async () => {

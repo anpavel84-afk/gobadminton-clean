@@ -97,6 +97,30 @@ def restrict(readonly, writable, executables):
 
 CURSOR_PIN = Path('/opt/gobadminton-cursor-cli/2026.10.01-e373342')
 BWRAP_SHA256 = 'e318903862396f96de3df57264e0158682b952fd3fb53ac23d876413e7b30f71'
+CURSOR_RULES_PATH = 'docs/rules/ENGINEERING_OPERATING_MODEL.md'
+
+
+def cursor_rules_readonly_mounts(work):
+    """Pin canon and its ancestors inside the existing writable work mount.
+
+    Always on when present: Cursor authors editing canon get EROFS; rules
+    bumps belong to the Owner/Codex path. Missing canon keeps full fallback.
+    """
+    work = Path(work)
+    canon = work / CURSOR_RULES_PATH
+    if not canon.exists():
+        return []
+    info = canon.lstat()
+    need(stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid()
+         and info.st_nlink == 1, 'Cursor rules must be an owned single-link regular file')
+    argv = []
+    for rel in ('docs', 'docs/rules'):
+        path = work / rel
+        info = path.lstat()
+        need(stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid(),
+             'Cursor rules ancestor must be an owned real directory')
+        argv += ['--bind', str(path), str(path)]
+    return argv + ['--ro-bind', str(canon), str(canon)]
 
 
 def cursor_namespace_argv(base, command):
@@ -151,6 +175,7 @@ def cursor_namespace_argv(base, command):
     # settings cannot add a host mount, host capabilities or a provider login.
     for name in ('home', 'config', 'data', 'cache', 'tmp', 'work'):
         argv += ['--bind', str(base/name), str(base/name)]
+    argv += cursor_rules_readonly_mounts(base/'work')
     return argv + ['--chdir', str(base/'work'), '--', *command]
 
 
