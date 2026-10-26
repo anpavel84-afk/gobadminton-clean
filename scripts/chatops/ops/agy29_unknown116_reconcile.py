@@ -743,7 +743,14 @@ def preflight_static():
 def preflight_slots():
     slots = live_slots(OP)
     need(slots['slot2']['generation'] == GENERATION['slot2'], 'slot2 generation drift')
-    need(slots['slot1']['checkpoint'][0]['active'] is None and slots['slot2']['checkpoint'][0] == CHECKPOINT, 'slot checkpoint occupied')
+    slot1 = slots['slot1']['checkpoint'][0]
+    active = slot1['active']
+    # Only this observed terminal state is idle; it stays immutable, never a new claim/admission.
+    slot1_idle = active is None or (
+        active == {'issue': 313, 'phase': 'done', 'head': 'bdd912a82a2f0087f4cfc9c6820edc8c49ee6527', 'attempt': 1}
+        and type(active['issue']) is int and type(active['attempt']) is int
+        and any(type(issue) is int and issue == 313 for issue in slot1['done']))
+    need(slot1_idle and slots['slot2']['checkpoint'][0] == CHECKPOINT, 'slot checkpoint occupied')
     return slots
 
 
