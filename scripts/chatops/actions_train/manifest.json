@@ -19,7 +19,7 @@
     "scripts/chatops/actions_train/monitor_payload/app.js": "c2d7a233ab77f10fd5795f1629814b7fee6e579d4da9968a29d982a5faf979ca",
     "scripts/chatops/actions_train/monitor_payload/writer.py": "fc89ff1f9a26b565b2214f887873f4ea661c46bf86dd41daf37fe44680212158",
     "scripts/chatops/actions_train/native_antigravity.py": "01d4816e881765da6361af07a15765528aef274dad0eb780b1afab6b0e5e0f72",
-    "scripts/chatops/actions_train/native_antigravity_author.py": "88a58c6d5c2fdfdde95e67bdbf09c1b0f8a40e14a7b627390bb70c6d45652ea9",
+    "scripts/chatops/actions_train/native_antigravity_author.py": "5264885606c794c98d36698bb6bb651122b9be69a826ef1b17294cf1294f2ce8",
     "scripts/chatops/actions_train/native_cursor.py": "02d26f8be9766bbeb1e92dd8514dfc496c1b3e1b0fc8035c1c65cc9aba6b6089",
     "scripts/chatops/actions_train/native_guard.py": "dd2e0a0c6c0dea0d353b7dc5f16c1a5d4c4c21f022947ceaa640470c59fb0762",
     "scripts/chatops/actions_train/owner_package_admission.py": "c889428dd39e68d72907528e4d717193cb8549b495bb0d5be2085adea86cfa9e",

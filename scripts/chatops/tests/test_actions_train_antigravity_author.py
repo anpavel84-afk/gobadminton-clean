@@ -860,5 +860,131 @@ class Invocation(unittest.TestCase):
         with patch.object(N, '_restore_write_guard', side_effect=AssertionError('pinned restore forbidden')):
             self.guard_chmod_fault(True)
 
+    def cleanup_swap(self, directory):
+        outside = self.root/'outside-cleanup'
+        if directory: outside.mkdir(); outside.chmod(0o550)
+        else: outside.write_text('outside'); outside.chmod(0o400)
+        expected = outside.stat().st_mode & 0o7777
+        self.addCleanup(outside.chmod, 0o700)
+        cleaning = []; raced = []; opened = os.open; rmtree = N.shutil.rmtree
+        def cleanup(path, **kwargs):
+            cleaning.append(True)
+            try:
+                if not raced:
+                    locked = Path(path)/'ws/locked'; locked.mkdir(); locked.chmod(0)
+                return rmtree(path, **kwargs)
+            finally: cleaning.pop()
+        def swap(path, flags, *args, **kwargs):
+            if cleaning and str(path) == 'locked' and not raced:
+                base = self.jobs[0]
+                (base/'ws').rename(base/'original-ws')
+                (base/'ws').symlink_to(outside, target_is_directory=directory)
+                raced.append(True)
+                raise PermissionError('synthetic cleanup race')
+            return opened(path, flags, *args, **kwargs)
+        descriptors = len(os.listdir('/proc/self/fd'))
+        with patch.object(N.shutil, 'rmtree', side_effect=cleanup), \
+             patch.object(os, 'open', side_effect=swap), \
+             patch.object(N, '_restore_write_guard') as pinned, self.assertRaises(N.ReviewError):
+            self.invoke('exit')
+        self.assertTrue(raced)
+        self.assertEqual(outside.stat().st_mode & 0o7777, expected)
+        if not directory: self.assertEqual(outside.read_text(), 'outside')
+        self.assertEqual(len(os.listdir('/proc/self/fd')), descriptors)
+        pinned.assert_not_called()
+        self.assert_cleanup_failure('private_tree')
+
+    def test_cleanup_symlink_swap_file_preserves_outside_mode_and_fds(self):
+        self.cleanup_swap(False)
+
+    def test_cleanup_symlink_swap_directory_preserves_outside_mode_and_fds(self):
+        self.cleanup_swap(True)
+
+    def recording_fault(self, persistent, *, open_fault=False):
+        self.source.chmod(0o755)
+        self.addCleanup(self.source.chmod, 0o755)
+        chmod = N._guard_chmod; opened = os.open; calls = []; root_changed = []
+        root_inode = self.source.stat().st_ino
+        def controlled(fd, mode):
+            calls.append(mode)
+            if len(calls) > 1 and (persistent or len(calls) <= 4):
+                raise PermissionError(TOKEN)
+            result = chmod(fd, mode)
+            if os.fstat(fd).st_ino == root_inode and not mode & 0o200:
+                root_changed.append(True)
+            return result
+        def controlled_open(path, flags, *args, **kwargs):
+            if open_fault and root_changed and str(path) == '.gitignore':
+                raise PermissionError(TOKEN)
+            return opened(path, flags, *args, **kwargs)
+        descriptors = len(os.listdir('/proc/self/fd'))
+        with patch.object(N, '_guard_chmod', side_effect=controlled), \
+             patch.object(os, 'open', side_effect=controlled_open), \
+             patch.object(N, '_restore_write_guard') as pinned, \
+             patch.object(N, '_import') as imported, self.assertRaises(N.ReviewError) as raised:
+            self.invoke()
+        self.assertEqual(type(raised.exception), N.ReviewError)
+        self.assertNotIn(TOKEN, str(raised.exception))
+        self.assertTrue(root_changed)
+        self.assertEqual(len(os.listdir('/proc/self/fd')), descriptors)
+        pinned.assert_not_called(); imported.assert_not_called()
+        self.catalog.assert_not_called(); self.rt.budget.charge.assert_not_called()
+        self.assertEqual(self.called, 0)
+        self.assertEqual((self.source/'allowed.txt').read_text(), 'before\n')
+        self.assertTrue(all(not p.exists() for p in self.jobs))
+        receipt = json.loads((self.outbox/'agy-author-receipt.json').read_text())
+        self.assertEqual(receipt['phase'], 'failed_no_automatic_replay')
+        self.assertEqual(receipt['charge_state'], 'not_charged')
+        self.assertEqual(receipt.get('cleanup'), 'failed')
+        self.assertEqual(receipt.get('cleanup_restore_guard'), 'failed')
+        self.assertEqual(self.choice['native_receipt'], receipt)
+        if not persistent: self.assertEqual(self.source.stat().st_mode & 0o7777, 0o755)
+        for path in self.outbox.rglob('*'):
+            if path.is_file(): self.assertNotIn(TOKEN.encode(), path.read_bytes())
+
+    def test_partial_recording_transient_restore_retries_without_charge_or_fd_leak(self):
+        self.recording_fault(False)
+
+    def test_partial_recording_persistent_restore_reports_failure_without_fd_leak(self):
+        self.recording_fault(True)
+
+    def test_partial_recording_open_fault_reports_failed_restore_without_fd_leak(self):
+        self.recording_fault(True, open_fault=True)
+
+    def test_private_setup_swapped_home_never_chmods_or_writes_outside(self):
+        outside = self.root/'outside-home'; outside.mkdir()
+        gemini = outside/'.gemini'; gemini.mkdir()
+        native = gemini/'antigravity-cli'; native.mkdir()
+        auth = native/'antigravity-oauth-token'; auth.write_text('outside'); auth.chmod(0o400)
+        outside.chmod(0o550); gemini.chmod(0o550)
+        self.addCleanup(outside.chmod, 0o700); self.addCleanup(gemini.chmod, 0o700)
+        mkdir = os.mkdir; swapped = []
+        def swap(path, *args, **kwargs):
+            result = mkdir(path, *args, **kwargs)
+            if self.jobs and str(path).endswith('antigravity-cli') and not swapped:
+                base = self.jobs[0]
+                (base/'home').rename(base/'original-home')
+                (base/'home').symlink_to(outside, target_is_directory=True)
+                swapped.append(True)
+            return result
+        descriptors = len(os.listdir('/proc/self/fd'))
+        with patch.object(os, 'mkdir', side_effect=swap), self.assertRaises(N.ReviewError):
+            self.invoke('exit')
+        self.assertTrue(swapped)
+        self.assertEqual(outside.stat().st_mode & 0o7777, 0o550)
+        self.assertEqual(gemini.stat().st_mode & 0o7777, 0o550)
+        self.assertEqual(auth.stat().st_mode & 0o7777, 0o400)
+        self.assertEqual(auth.read_text(), 'outside')
+        self.assertEqual(len(os.listdir('/proc/self/fd')), descriptors)
+
+    def test_import_fchmod_exception_closes_temporary_descriptor(self):
+        descriptors = len(os.listdir('/proc/self/fd'))
+        with patch.object(N.os, 'fchmod', side_effect=PermissionError('synthetic import mode failure')), \
+             self.assertRaises(PermissionError):
+            N._import(self.bridge, ['allowed.txt'], {'allowed.txt': b'after\n'})
+        self.assertEqual(len(os.listdir('/proc/self/fd')), descriptors)
+        self.assertEqual((self.source/'allowed.txt').read_text(), 'before\n')
+        self.assertFalse(list(self.source.glob('.agy-source-*')))
+
 
 if __name__ == '__main__': unittest.main()

@@ -548,3 +548,94 @@ Three AGY author modules alone: pristine baseline passes 103/103; final candidat
 passes 114/114 (37.672s). Full baseline/candidate Actions runtimes are 1,061.652s
 and 1,086.949s respectively; the added differential regression remains bounded.
 No independent QA, hosted CI, installation, canary or DEV acceptance was run.
+
+## PR #312 — independent-QA repair round 5 (26 October 2026)
+
+AUTHOR/fix-author self-check under the direct bounded round-5 assignment.
+Exact source/base/PR HEAD is `ff95866e03282a142f95c3d4451b6b8fd200de1c`;
+candidate is the uncommitted working-tree diff. Repository identity and the
+accepted EOM 1.4 / SMART_ROUTING 1.0 commits, byte sizes and hashes recorded above
+were verified unchanged. This assignment owns only the author adapter, its
+manifest entry, AGY author tests and this runbook. No core/routing/policy/stage,
+pinned guard/QA/Cursor adapter, receiver, slots or installed-state change is
+included. Requested route: limited AGY author source repair; effective live
+route: NOT RUN. Grok remains runtime PMA; no runtime admission is created.
+The supplied QA findings and synthetic reproductions are the repair brief.
+
+1. Cleanup's permission repair checked paths before chmod, allowing a replaced
+   ancestor to redirect chmod outside the private tree. The normal rmtree flow
+   and its single independent retry remain. Repair now anchors at the recorded
+   base device/inode and verifies its ancestors with no-follow directory opens.
+   Each child opens relative to a verified parent fd, with device/inode/type
+   comparison. Readable directories use fchmod. An unreadable directory uses
+   only kernel no-follow chmod relative to that parent fd, then a verified open;
+   no absolute/path-following chmod remains. Files never need chmod for removal,
+   and symlinks are unlinked. The second repair walk uses the same descriptors.
+   An observed failure remains cleanup='failed'/cleanup_private_tree='failed',
+   even when the bounded retry removes the tree. Unremoved trees retain those
+   flags; no automatic replay or charge refund is introduced.
+2. Recording already tried to restore partial records, but an exception in that
+   restoration discarded them before invoke assigned its guard. A closed
+   exception now carries the partial record to invoke, which preserves the
+   failed restoration flags and retries the same no-follow fd restore in finally.
+   The transient probe (fchmod 1 succeeds, 2–4 fail) restores root 0755 on the
+   later attempt. Persistent chmod and recording-open faults retain
+   cleanup='failed'/cleanup_restore_guard='failed'. All such paths refuse before
+   catalog, charge, launch and import, close their descriptors, and never call
+   the pinned `_restore_write_guard`.
+
+The related chmod audit also replaced base/HOME permission changes and OAuth
+creation with verified no-follow directory fds, exclusive file creation and
+fchmod on the new file descriptor. OAuth unlink now walks from the verified
+private root rather than following a replaced HOME ancestor. An additional
+import defect leaked mkstemp's fd if fchmod failed before fdopen; fchmod now runs
+inside the owning file context, with the original source untouched on failure.
+The upgrade derives pins from the reviewed manifest and needs no edit. Only
+the native_antigravity_author.py manifest hash is recomputed.
+
+Seven new behavioral regressions in test_actions_train_antigravity_author.py:
+
+- `test_cleanup_symlink_swap_file_preserves_outside_mode_and_fds`
+- `test_cleanup_symlink_swap_directory_preserves_outside_mode_and_fds`
+- `test_partial_recording_transient_restore_retries_without_charge_or_fd_leak`
+- `test_partial_recording_persistent_restore_reports_failure_without_fd_leak`
+- `test_partial_recording_open_fault_reports_failed_restore_without_fd_leak`
+- `test_private_setup_swapped_home_never_chmods_or_writes_outside`
+- `test_import_fchmod_exception_closes_temporary_descriptor`
+
+All seven execute and fail by assertion on pristine exact HEAD under writable
+TMPDIR (zero test errors), then pass on the candidate. The cleanup probes keep
+outside file 0400/content and outside directory 0550 unchanged. Descriptor-count
+assertions cover cleanup swaps, recording faults, setup and import exceptions.
+Existing tests/assertions are unchanged. The three AGY author modules pass
+114/114 on the pristine baseline and 121/121 on the candidate. Phase discovery
+passes 51/51 on both. Final foundation checks pass on both (292 Markdown files,
+168 draft API operations). Full Actions discovery runs 1,043 baseline tests
+(955.195s) and 1,050 candidate tests (924.627s): zero assertion failures, the same
+30 ordered error labels including subtest parameters, and one skip on each.
+The errors remain NOT_TESTED: 23 OPS-fixture permission/downstream-journal
+errors, five forbidden-/tmp Cursor fixtures, one missing relative fixture and
+one denied local socket. No test assertion or environment permission is weakened.
+
+Evidence is local in
+`/home/agentagency-dev/author-evidence-agyfix5-20261025/round5`, including
+preflight.json, new-tests.json, new-tests-old.log, new-tests-after.log,
+baseline/after-actions.log, baseline/after-agy.log, baseline/after-phase.log,
+baseline/after-foundation.log, full-comparison.json, self-review.json,
+verification.json and candidate.patch.
+Authoritative baseline suites use an offline local Git clone of exact HEAD in
+tmp/pristine-git. The archive copy in tmp/pristine-new-tests is used for the seven
+new tests; before-actions.log from that archive lacks Git metadata and is excluded
+from full-suite comparisons. No network, model CLI, real credential input,
+protected-state access, root action, commit, push or deployment is performed.
+These are AUTHOR checks, not independent QA, hosted CI, installed qualification
+or DEV acceptance. Next authorized step is independent review of this working
+diff followed by the existing separately admitted gates.
+
+The full diff was adversarially reviewed for symlink-following chmod, traversal
+and mutation races, finite cleanup retries, retained partial guards, receipt
+flags, descriptor ownership and unchanged success/charge/replay behavior. AST
+inspection finds zero pinned restore calls; the only basename chmod specifies
+dir_fd and follow_symlinks=False. Existing test methods are byte-equivalent at
+the AST level, all manifest hashes match, and git diff --check passes. These
+checks supplement the behavioral regressions; they are not independent QA.

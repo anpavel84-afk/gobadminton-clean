@@ -4,6 +4,7 @@ The private export and trusted import limit accepted source effects. They do not
 confine uid978: the chmod guard detects accidental checkout writes only.
 """
 import copy
+from contextlib import contextmanager, ExitStack
 import hashlib
 import json
 import os
@@ -306,8 +307,8 @@ def _import(bridge, changed, payloads):
         target.parent.mkdir(parents=True, exist_ok=True)
         fd, temp = tempfile.mkstemp(prefix='.agy-source-', dir=target.parent)
         try:
-            os.fchmod(fd, mode & 0o777)
             with os.fdopen(fd, 'wb') as out:
+                os.fchmod(out.fileno(), mode & 0o777)
                 out.write(payloads[name]); out.flush(); os.fsync(out.fileno())
             os.replace(temp, target)
         finally:
@@ -383,6 +384,13 @@ def _guard_chmod(fd, mode):
     os.fchmod(fd, mode)
 
 
+class _GuardRecordingError(Exception):
+    """Keep partial state reachable if the recorder's own restore failed."""
+    def __init__(self, saved):
+        super().__init__('author guard recording restoration failed')
+        self.saved = saved
+
+
 def _guard_accidental_writes(work):
     """Author-owned recorder: no shared path-based chmod, including on failure."""
     saved = _AuthorGuard(work)
@@ -415,7 +423,8 @@ def _guard_accidental_writes(work):
         return saved
     except BaseException:
         # Assignment in invoke has not completed; restore partial records here.
-        _restore_author_guard(saved, work)
+        try: _restore_author_guard(saved, work)
+        except BaseException: raise _GuardRecordingError(saved) from None
         raise
     finally: os.close(root_fd)
 
@@ -449,6 +458,75 @@ def _restore_author_guard(saved, root):
         check = _guard_root(saved)
         os.close(check)
     finally: os.close(root_fd)
+
+
+@contextmanager
+def _private_directory(parent_fd, name, *, create=False, repair=False):
+    """One no-follow component, anchored to an already verified directory fd."""
+    if create: os.mkdir(name, mode=0o700, dir_fd=parent_fd)
+    before = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    need(stat.S_ISDIR(before.st_mode), 'private directory changed')
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    try: fd = os.open(name, flags, dir_fd=parent_fd)
+    except PermissionError:
+        if not repair: raise
+        # An unreadable directory cannot be opened for fchmod. The kernel must
+        # refuse a substituted final symlink; ancestors are the verified fd.
+        os.chmod(name, 0o700, dir_fd=parent_fd, follow_symlinks=False)
+        fd = os.open(name, flags, dir_fd=parent_fd)
+    try:
+        need(_guard_identity(os.fstat(fd)) == _guard_identity(before), 'private directory changed')
+        if create or repair: os.fchmod(fd, 0o700)
+        yield fd
+    finally: os.close(fd)
+
+
+@contextmanager
+def _private_root(saved):
+    fd = _guard_root(saved)
+    try: yield fd
+    finally: os.close(fd)
+
+
+def _repair_private_tree(saved):
+    """Repair directories only; files and links never need chmod for removal."""
+    def walk(fd):
+        os.fchmod(fd, 0o700)
+        for name in os.listdir(fd):
+            info = os.stat(name, dir_fd=fd, follow_symlinks=False)
+            if stat.S_ISDIR(info.st_mode):
+                with _private_directory(fd, name, repair=True) as child: walk(child)
+    with _private_root(saved) as fd: walk(fd)
+
+
+def _unlink_private_file(saved, path):
+    relative = path.relative_to(saved.root)
+    need(relative.parts and '..' not in relative.parts, 'invalid private file path')
+    with ExitStack() as stack:
+        fd = stack.enter_context(_private_root(saved))
+        for part in relative.parts[:-1]:
+            fd = stack.enter_context(_private_directory(fd, part))
+        try: os.unlink(relative.parts[-1], dir_fd=fd)
+        except FileNotFoundError: pass
+
+
+def _repair_private_removal(saved, function, name, exc_info):
+    target = Path(name)
+    relative = target.relative_to(saved.root)
+    need('..' not in relative.parts, 'invalid private cleanup path')
+    with ExitStack() as stack:
+        fd = stack.enter_context(_private_root(saved))
+        os.fchmod(fd, 0o700)
+        for part in relative.parts[:-1]:
+            fd = stack.enter_context(_private_directory(fd, part, repair=True))
+        if not relative.parts: raise exc_info[1]  # Retry rmtree after root repair.
+        leaf = relative.parts[-1]
+        info = os.stat(leaf, dir_fd=fd, follow_symlinks=False)
+        if stat.S_ISDIR(info.st_mode):
+            with _private_directory(fd, leaf, repair=True): pass
+        if function in (os.unlink, os.remove): os.unlink(leaf, dir_fd=fd)
+        elif function is os.rmdir: os.rmdir(leaf, dir_fd=fd)
+        else: raise exc_info[1]  # open/scandir require a fresh rmtree traversal.
 
 
 def invoke(bridge, rt, prompt, choice, *, popen, atomic, permitted, evidence_dir=None):
@@ -507,17 +585,28 @@ def invoke(bridge, rt, prompt, choice, *, popen, atomic, permitted, evidence_dir
         receipt['receipt_persist'] = 'failed'
         choice['native_receipt'] = copy.deepcopy(receipt)
 
-    base = None; process = None; cgroup = None; guard = None; membership = False
+    base = None; private_guard = None; process = None; cgroup = None; guard = None; membership = False
     auth = None; original = None; tokens = []
     try:
-        base = Path(tempfile.mkdtemp(prefix='gb-agy-author-', dir='/tmp')); base.chmod(0o700)
+        base = Path(tempfile.mkdtemp(prefix='gb-agy-author-', dir='/tmp'))
+        private_guard = _AuthorGuard(base)
+        base_fd = _guard_root(private_guard, record=True)
+        try: os.fchmod(base_fd, 0o700)
+        finally: os.close(base_fd)
         work = base/'ws'; work.mkdir(mode=0o700)
         before = export(bridge, work)
         original = trusted(AUTH, owner=EXECUTOR_UID); tokens = _credentials(original)
         _no_credentials(wire, tokens); _output_policy(work, tokens)
-        native = base/'home/.gemini/antigravity-cli'; native.mkdir(parents=True, mode=0o700)
-        for p in (base/'home', base/'home/.gemini'): p.chmod(0o700)
-        auth = native/'antigravity-oauth-token'; auth.write_bytes(original); auth.chmod(0o600)
+        auth = base/'home/.gemini/antigravity-cli/antigravity-oauth-token'
+        with ExitStack() as stack:
+            fd = stack.enter_context(_private_root(private_guard))
+            for name in ('home', '.gemini', 'antigravity-cli'):
+                fd = stack.enter_context(_private_directory(fd, name, create=True))
+            auth_fd = os.open(auth.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                              0o600, dir_fd=fd)
+            with os.fdopen(auth_fd, 'wb') as out_auth:
+                os.fchmod(out_auth.fileno(), 0o600)
+                out_auth.write(original)
         agents = work/'.agents/agents'; agents.mkdir(parents=True, mode=0o700)
         (agents/(AGENT+'.md')).write_text(AGENT_DEF)
         out = base/'out'; out.mkdir(mode=0o700)
@@ -600,6 +689,9 @@ def invoke(bridge, rt, prompt, choice, *, popen, atomic, permitted, evidence_dir
         receipt['finished_at'] = int(time.time()); save('imported')
         return result
     except BaseException as error:
+        if isinstance(error, _GuardRecordingError):
+            guard = error.saved
+            receipt.update(cleanup='failed', cleanup_restore_guard='failed')
         if process is not None:
             try:
                 reap(process)
@@ -632,30 +724,19 @@ def invoke(bridge, rt, prompt, choice, *, popen, atomic, permitted, evidence_dir
                 guard = None
             except BaseException: failed('restore_guard')
             if auth is not None:
-                try: auth.unlink(missing_ok=True)
+                try: _unlink_private_file(private_guard, auth)
                 except BaseException: failed('oauth_copy')
             if base is not None:
                 def repair(function, name, exc_info):
                     failed('private_tree')
-                    target = Path(name)
-                    # Never chmod through a link or outside this private tree.
-                    need(target == base or base in target.parents, 'invalid private cleanup path')
-                    if target != base: target.parent.chmod(0o700)
-                    if not target.is_symlink() and target.is_dir(): target.chmod(0o700)
-                    if function in (os.unlink, os.remove, os.rmdir): function(name)
-                    else: raise exc_info[1]  # open/scandir need more than a path
+                    _repair_private_removal(private_guard, function, name, exc_info)
                 try: shutil.rmtree(base, onerror=repair)
                 except BaseException:
                     failed('private_tree')
                     # A partial removal/denied directory still gets an independent
                     # retry with permission repair; the invocation remains failed.
                     try:
-                        if not base.is_symlink():
-                            base.chmod(0o700)
-                            for parent, dirs, _ in os.walk(base, followlinks=False):
-                                for name in dirs:
-                                    directory = Path(parent)/name
-                                    if not directory.is_symlink(): directory.chmod(0o700)
+                        _repair_private_tree(private_guard)
                         shutil.rmtree(base, onerror=repair)
                     except BaseException: pass
             try:
