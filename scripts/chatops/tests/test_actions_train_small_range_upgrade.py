@@ -44,6 +44,20 @@ def installed_source(path):
     return (REPO/path).read_bytes()
 
 
+def reviewed_c_source(path):
+    # The C installer is immutably bound to its earlier accepted merge. A later
+    # SR1 manifest entry is valid source evolution, but it cannot be substituted
+    # as an installer bundle: reproduce the C-reviewed *exact* old manifest.
+    raw = installed_source(path)
+    if path == 'scripts/chatops/actions_train/manifest.json':
+        pin = '36cbcc0e41bc56a27de74151d8e482942ea6313c2cb3686a5977c1bbd445e30e'
+        extra = ('    "scripts/chatops/actions_train/smart_routing.py": "' + pin + '",\n').encode()
+        assert raw.count(extra) == 1, 'unexpected future manifest delta'
+        raw = raw.replace(extra, b'')
+        assert H(raw) == '3b39bb7fb810e97e4d6163dfc93356260d2a966ecbc66b4410c8b06deab0e150', 'reviewed C bundle manifest drift'
+    return raw
+
+
 class Fixture:
     def __init__(self,test,pretty=False):
         self.root=Path(tempfile.mkdtemp(prefix='small-range-upgrade-',dir=os.environ.get('TMPDIR') or None))
@@ -673,7 +687,7 @@ class BundleTests(unittest.TestCase):
         (bundle/'.git'/'config').write_bytes(b'[core]\n bare = false\n')
         paths=[I.SCRIPT_REPO_PATH,*['scripts/chatops/actions_train/'+name for name in I.TARGETS],
                'scripts/chatops/actions_train/manifest.json','.github/workflows/train-stage.yml']
-        blobs={p:installed_source(p) for p in paths}
+        blobs={p:reviewed_c_source(p) for p in paths}
         for p,raw in blobs.items():
             path=bundle/p;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(raw)
         self.stack=contextlib.ExitStack();self.addCleanup(self.stack.close)
@@ -697,6 +711,16 @@ class BundleTests(unittest.TestCase):
             I.source(bundle,COMMIT)
         (bundle/I.SCRIPT_REPO_PATH).write_bytes(b'foreign')
         with self.assertRaisesRegex(I.Refused,'worktree/git bytes differ'):I.source(bundle,COMMIT)
+
+    def test_future_sr1_manifest_cannot_be_used_as_historical_C_installer_bundle(self):
+        root,bundle,blobs=self.fixture()
+        name='scripts/chatops/actions_train/manifest.json'
+        future=installed_source(name)
+        self.assertNotEqual(H(future),I.MANIFEST)
+        blobs[name]=future
+        (bundle/name).write_bytes(future)
+        with self.assertRaisesRegex(I.Refused,'bundle manifest drift'):
+            I.source(bundle,COMMIT)
 
     def test_bundle_manifest_and_target_mismatch_refuse(self):
         for kind in ('manifest bytes','manifest target pin','target bytes','qa manifest pin','qa bytes'):
@@ -861,7 +885,8 @@ class BundleTests(unittest.TestCase):
         self.assertEqual(I.ADMISSION_SCRIPT_SHA,H((SCRIPT.parent/'agy29_admission_upgrade.py').read_bytes()))
         self.assertEqual(I.ADMISSION_SHA,'963575dd50a34137bf52999f73a2aa73c7b85aa36813e582af360ae9d66e54b6')
         self.assertEqual(I.ADMISSION_COMMIT,'aa9ece4d74d3e984ce75e59457304117a1438ff6')
-        manifest=installed_source('scripts/chatops/actions_train/manifest.json')
+        manifest=reviewed_c_source('scripts/chatops/actions_train/manifest.json')
+        self.assertNotEqual(H(installed_source('scripts/chatops/actions_train/manifest.json')),I.MANIFEST)
         self.assertEqual(H(manifest),I.MANIFEST)
         self.assertEqual(I.MANIFEST,'3b39bb7fb810e97e4d6163dfc93356260d2a966ecbc66b4410c8b06deab0e150')
         for name,(_,new) in I.TARGETS.items():
