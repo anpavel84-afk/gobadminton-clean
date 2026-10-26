@@ -20,6 +20,8 @@
 
 ## Более поздние операционные основания
 
+- Owner t417u/t418u/t420u/t424u: [Stage A materials](DESIGN_MATERIALS.json), approximate mockups и [scoped Style Guide supersession](../decisions/OWNER_DECISION_FRONTEND_STYLE_GUIDE_FIRST_V001.md); публикация не включает runtime enforcement.
+
 - [#158](https://github.com/anpavel84-afk/gobadminton-clean/issues/158): Actions-owned bounded train, сохранение изоляции/истории и отсутствие второго dispatcher.
 - [#175](https://github.com/anpavel84-afk/gobadminton-clean/issues/175): GitHub Projects/Issues — единый backlog; сайт — read-only Owner Monitor.
 - [#199](https://github.com/anpavel84-afk/gobadminton-clean/issues/199): этапы и маршрутизация Cursor/Codex/Antigravity; квалификация перед активацией.
