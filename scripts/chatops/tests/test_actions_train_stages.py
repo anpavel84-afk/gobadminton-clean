@@ -55,7 +55,25 @@ class StageBoundaries(unittest.TestCase):
         self.context=(A,S,self.rt,self.api,self.store,self.bridge)
         self.routing=patch.object(stage,'route',return_value={'provider':'codex','effective_model':'gpt-6.1-sol'})
         self.routing.start()
-    def tearDown(self):self.routing.stop();self.temp.cleanup()
+        # Legacy stage fixtures exercise lifecycle semantics without an admitted TEST PLAN.
+        # This recovery-only shim exists ONLY in the historical StageBoundaries tests;
+        # new StageGateTests binds the real fail-closed enforcement without this shim.
+        self._legacy_test_plan = None
+        if type(self) is StageBoundaries:
+            from test_plan_gate import stage_check as real_stage_check
+            def historical_fixture_receipt(request, active, bridge):
+                receipt = real_stage_check(dict(request, _recover=True), active, bridge)
+                if receipt is None:  # unrelated CI/integration/DEV stage: unchanged behavior
+                    return None
+                if receipt['status'] != 'LEGACY_RECOVERY':
+                    raise AssertionError('synthetic legacy fixture must not turn into normal admission')
+                return receipt
+            self._legacy_test_plan = patch.object(stage, 'test_plan_check', side_effect=historical_fixture_receipt)
+            self._legacy_test_plan.start()
+    def tearDown(self):
+        if self._legacy_test_plan is not None:
+            self._legacy_test_plan.stop()
+        self.routing.stop();self.temp.cleanup()
     def run_stage(self,name,phase=None,**extra):
         a=self.store.data['active']
         r=req(name,phase or a['phase'])|{'head':a['head'],'attempt':a['attempt']}|extra

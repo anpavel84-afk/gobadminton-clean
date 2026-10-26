@@ -34,7 +34,8 @@
     "scripts/chatops/actions_train/recovery_publish.py": "51e110d5beaf1a0e46b98eaffb2691d7e4e975c36ab939575e93e87d2850a8c9",
     "scripts/chatops/actions_train/recovery_upgrade.py": "ce8cc88f3cb3230b51f425d9082e826511c35332ca363d2af97bb8b18e4498f6",
     "scripts/chatops/actions_train/smart_routing.py": "36cbcc0e41bc56a27de74151d8e482942ea6313c2cb3686a5977c1bbd445e30e",
-    "scripts/chatops/actions_train/stage.py": "ca5ca68eb8b3f8bafbb8c097790acc91c0323f2081fed977372cf571452b97ed",
+    "scripts/chatops/actions_train/stage.py": "7a38cee9cb8573014faaa8da477e33498a761b65f6aa05223263592d9b743f34",
+    "scripts/chatops/actions_train/test_plan_gate.py": "8d234102f3664564f2a44092f5e21ac77d1abc10a78ddab14b11e74d5e68515d",
     "scripts/chatops/server/gb-deploy-helper.sh": "c023a71bd1362e8a9347bc06c89b69546efd6c3856e1e6dce1c4c57304538f99"
   },
   "schema": "GB_ACTIONS_TRAIN_INSTALL_V1"
