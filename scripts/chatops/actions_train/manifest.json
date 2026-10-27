@@ -33,9 +33,9 @@
     "scripts/chatops/actions_train/recovery_admission.py": "b6eb1b4e73829f612d7603bb335fd1bdbace73235eac3d5c25c84782dc5854c7",
     "scripts/chatops/actions_train/recovery_publish.py": "51e110d5beaf1a0e46b98eaffb2691d7e4e975c36ab939575e93e87d2850a8c9",
     "scripts/chatops/actions_train/recovery_upgrade.py": "ce8cc88f3cb3230b51f425d9082e826511c35332ca363d2af97bb8b18e4498f6",
-    "scripts/chatops/actions_train/smart_routing.py": "36cbcc0e41bc56a27de74151d8e482942ea6313c2cb3686a5977c1bbd445e30e",
-    "scripts/chatops/actions_train/smart_stage.py": "3e8f9468a316ec426abedaec4cdc394046ffb22169cf0aace2eff08583000a1e",
-    "scripts/chatops/actions_train/stage.py": "a021d967b9115da9e1cc3bc194eaac83c97975b103196213c4ce32b43c6054bb",
+    "scripts/chatops/actions_train/smart_routing.py": "0fc0bdb2f124e714a506915a6a62e1ea7ec825fe9a48b50480f120572950168f",
+    "scripts/chatops/actions_train/smart_stage.py": "fdbf93c5bdc19a79e40b5a60a9ca55399deeb5c77a5b52ec655587b6a43a4d33",
+    "scripts/chatops/actions_train/stage.py": "e060f1c1f73d3b45404eed10cde87a920011120c3ec5e0b36b1b98120348c678",
     "scripts/chatops/server/gb-deploy-helper.sh": "c023a71bd1362e8a9347bc06c89b69546efd6c3856e1e6dce1c4c57304538f99"
   },
   "schema": "GB_ACTIONS_TRAIN_INSTALL_V1"

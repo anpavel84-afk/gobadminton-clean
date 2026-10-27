@@ -3,7 +3,9 @@ import copy
 import datetime as dt
 import hashlib
 import json
+import os
 from pathlib import Path
+import subprocess
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -46,11 +48,15 @@ class NewPolicy(unittest.TestCase):
         self.budget = SimpleNamespace(remaining=lambda *_: 10, used=lambda *_: 2)
 
     def pick(self, t, role):
-        return core.route(S, t, role, 'auto', self.budget, 'slot1')
+        # Route-table isolation only. These old rendering claims have no source
+        # proof; admission tests below exercise the real classification gate.
+        with patch.object(smart, 'classification_gate'):
+            return core.route(S, t, role, 'auto', self.budget, 'slot1')
 
-    def test_parser_accepts_closed_extension_and_never_rewrites_admission(self):
+    def test_parser_holds_unproved_extension_and_never_rewrites_admission(self):
         t = task(); before = copy.deepcopy(t)
-        self.assertEqual(A.validate_issue(issue(336, t), NOW-dt.timedelta(days=1)), t)
+        with self.assertRaisesRegex(A.Hold, 'HOLD_CLASSIFICATION_'):
+            A.validate_issue(issue(336, t), NOW-dt.timedelta(days=1))
         self.assertEqual(t, before)
         for extra in ('smart_routing', 'classifier', 'fast_fix', 'root', 'planning'):
             bad = bind(t | {extra: True})
@@ -200,9 +206,12 @@ class Operations(unittest.TestCase):
         t = task(); store = SimpleNamespace(data={'active':None}, claim=Mock())
         api = Mock(return_value=issue(336,t)); api.pages.return_value=[]
         bridge = SimpleNamespace(remote_dev=Mock(return_value=HEAD))
-        with self.assertRaisesRegex(core.Refused, 'BASE_CHANGED'):
-            stage.perform(req('claim','idle') | {'issue':336,'head':None,'attempt':0}, {},
-                          (A,S,Mock(),api,store,bridge))
+        # Isolate the saved/live binding guard from the independent missing
+        # classification proof HOLD. This patch grants no production admission.
+        with patch.object(smart, 'classification_gate'):
+            with self.assertRaisesRegex(core.Refused, 'BASE_CHANGED'):
+                stage.perform(req('claim','idle') | {'issue':336,'head':None,'attempt':0}, {},
+                              (A,S,Mock(),api,store,bridge))
         store.claim.assert_not_called()
 
     def test_new_recovery_is_held_before_mutable_claim(self):
@@ -265,9 +274,16 @@ class Context(unittest.TestCase):
                  patch.object(stage.os,'getuid',return_value=1002),patch.object(stage.os,'getgid',return_value=1002), \
                  patch.object(C,'load',return_value=accepted()),patch.object(C,'load_routing',return_value=routing), \
                  patch.object(C,'verified_git_rules',return_value=True) as scoped, \
+                 patch.object(smart,'classification_gate'), \
                  patch.object(stage,'route',return_value=choice),patch.object(receiver,'units_quiet'):
                 *_, b = stage.setup(req('author'),{'codex':{'slot1':str(cli)}})
                 b.model('bounded source task',False)
+            # Defense in depth: a direct wrapper call also refuses before its
+            # effect_gate can renew a lease or reach any provider/ledger call.
+            rt.lease.reset_mock()
+            with self.assertRaisesRegex(core.Refused,'HOLD_CLASSIFICATION_'):
+                b.model('bounded source task',False)
+            rt.lease.assert_not_called()
             self.assertEqual(len(received),1); scoped.assert_not_called()
             self.assertIn(text,received[0]); self.assertIn(routing[0],received[0])
             proof=b.routing_receipts[0]
@@ -293,6 +309,285 @@ class Context(unittest.TestCase):
             with self.assertRaisesRegex(core.Refused,'UNAVAILABLE'): C.load_routing(ROOT)
         with patch.object(C.subprocess,'run',side_effect=PermissionError):
             with self.assertRaisesRegex(core.Refused,'PERMISSION_DENIED'): C.load_routing(ROOT)
+
+
+class RepairFloors(unittest.TestCase):
+    """R1 real parser/Store/stage effects; no provider or network boundary."""
+    texts = (
+        'Repair authorization identity permissions.',
+        'Publish secret and PII.',
+        'Repair concurrency payment.',
+        'Migration data loss rollback.',
+        'Исправить проверку прав доступа и персональных данных.',
+        'Change canRead to return true.',
+        'Remove tenant filter.',
+        'a u t h o r i z a t i o n',
+        '%61%75%74%68%6f%72%69%7a%61%74%69%6f%6e',
+        'аuthorization',
+        'Implement an opaque frobnicator.',
+    )
+
+    def rejected_store(self, t):
+        original = copy.deepcopy(t)
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); store = A.Store(root)
+            try:
+                before = copy.deepcopy(store.data)
+                files = {p.name:p.read_bytes() for p in root.iterdir() if p.is_file()}
+                with self.assertRaises(A.Hold):
+                    A.validate_issue(issue(336,t), NOW-dt.timedelta(days=1))
+                self.assertIsNone(store.claim([issue(336,t)],NOW-dt.timedelta(days=1),[]))
+                self.assertEqual(store.data,before)
+                self.assertEqual(files,{p.name:p.read_bytes() for p in root.iterdir() if p.is_file()})
+                self.assertFalse((root/'state.json').exists())
+            finally:
+                os.close(store.lock)
+        self.assertEqual(t,original)
+
+    def test_all_original_and_expanded_text_carriers_hold_before_real_store_effects(self):
+        for carrier in ('goal','acceptance','author','qa'):
+            for text in self.texts:
+                t=task()
+                if carrier in ('author','qa'): t['routing_policy'][carrier]['evidence']=text
+                else: t[carrier]=text
+                with self.subTest(carrier=carrier,text=text): self.rejected_store(bind(t))
+
+    def test_missing_malformed_oversize_wildcard_and_untrusted_proofs_hold(self):
+        for change in ({'allowed_paths':['apps/api/**']},{'allowed_paths':['packages/db/**']},
+                       {'allowed_paths':['apps/web/src/opaque.zzz']},
+                       {'goal':'x'*501},{'acceptance':{'claims':'routine'}},
+                       {'goal':None},{'source_proof':{'trusted':True}},
+                       {'dependencies':['packages/db/src/access.ts']},
+                       {'classification_evidence':ready()}):
+            with self.subTest(change=change): self.rejected_store(bind(task()|change))
+        for role in ('author','qa'):
+            for value in ('', 'x'*501, {}, None):
+                t=task(); t['routing_policy'][role]['evidence']=value
+                with self.subTest(role=role,value=value): self.rejected_store(bind(t))
+        for flag in ('auth_unchanged','assertions_unchanged','qa_unchanged'):
+            t=task();t['routing_policy']['plan'][flag]=True
+            self.rejected_store(bind(t))
+        self.rejected_store(task())  # The former ready rendering fixture is unproved.
+
+    def test_shared_floor_is_monotone_and_structured_critical_survives_malformed_sibling(self):
+        import smart_routing as sr
+        for raw in ({'risk':'low','critical_signs':True,'goal':[]},
+                    {'risk':'low','goal':'rename export','findings':[
+                        {'id':'f1','location':'apps/web/src/export.ts','severity':'critical'}]},
+                    {'critical_signs':True,'unknown_field':None}):
+            before=copy.deepcopy(raw); result=sr.classification_floor(raw)
+            self.assertEqual(result['risk'],'critical'); self.assertFalse(result['evidence_complete'])
+            self.assertIn('CRITICAL',result['reason']); self.assertEqual(raw,before)
+        self.assertIsNone(sr.classification_floor({})['risk'])
+        self.assertFalse(sr.classification_floor({'goal':'rename export'})['evidence_complete'])
+        self.assertEqual(sr.classification_floor({'goal':'x'*501})['reason'],
+                         'HOLD_CLASSIFICATION_UNSUPPORTED_UNCERTAINTY')
+        # SR1's complete offline control stays complete; removing facts closes it.
+        proven=fast(brief_usable=True)
+        self.assertTrue(sr.classification_floor(proven)['evidence_complete'])
+        for key in ('risk','cause','class_search','diff_check','minimal_action_known',
+                    'external_effects_unknown','unknown_effect','acceptance_unchanged',
+                    'scope_within_admission','finite_budget','regression_known'):
+            value=copy.deepcopy(proven);value.pop(key)
+            with self.subTest(key=key): self.assertFalse(sr.classification_floor(value)['evidence_complete'])
+
+    def test_later_qa_ci_history_and_source_evidence_never_grant_effects(self):
+        qa_cases=[dict(verdict='FAIL',findings=[text],reviewed_sha=HEAD) for text in self.texts]
+        qa_cases += [dict(verdict='FAIL',findings=order,reviewed_sha=HEAD) for order in (
+            ['rename export','Critical authorization'],['Critical authorization','rename export'])]
+        qa_cases += [dict(verdict='FAIL',findings=[{'id':'f1','location':'apps/web/src/export.ts',
+            'severity':'critical'}],reviewed_sha=HEAD),
+            dict(verdict='FAIL',findings=['rename export'],reviewed_sha=BASE),
+            dict(verdict='FAIL',findings=['x'*501],reviewed_sha=HEAD),
+            dict(verdict='FAIL',findings=[None],reviewed_sha=HEAD),
+            dict(verdict='FAIL',findings=['rename export'],reviewed_sha=HEAD,suggested_class='SOURCE_KNOWN_LOCAL')]
+        extras=[{'qa':q} for q in qa_cases]
+        extras += [{'history':[dict(head=BASE,qa=dict(verdict='FAIL',findings=['Critical authorization'],
+                      reviewed_sha=BASE))]}, {'ci_failure':dict(head=BASE,run=1,run_attempt=1,failed=[])},
+            {'ci_evidence':{'head':HEAD,'log':'Critical authorization'}},
+            {'dependencies':['packages/db/src/access.ts']}, {'observed_paths':['apps/api/**']},
+            {'source_evidence':{'critical_signs':True}},
+            {'failure_diagnosis':{'brief':'routine'}}]
+        for extra in extras:
+            for name,phase in (('author','qa'),('qa','pr_wait'),('publish','candidate'),
+                               ('integrate','ci'),('promote','promoting')):
+                with self.subTest(extra=extra,stage=name), tempfile.TemporaryDirectory() as folder:
+                    root=Path(folder);store=A.Store(root)
+                    try:
+                        # Archived candidate fixture only, NOT a new admission.
+                        store.data['active']=dict(issue=336,task=task(),phase=phase,base=BASE,head=HEAD,
+                            attempt=1,integration=0,qa=None,ci=None,**{})
+                        store.data['active'].update(extra);store.save()
+                        active=store.data['active'];before=copy.deepcopy(store.data)
+                        disk=store.path.read_bytes();files=set(root.iterdir())
+                        bridge=Mock();rt=Mock()
+                        with self.assertRaisesRegex(core.Refused,'HOLD_CLASSIFICATION_|HOLD_CRITICAL_'):
+                            stage.perform(req(name,phase)|dict(issue=336),{},(A,S,rt,Mock(),store,bridge))
+                        self.assertEqual(store.data,before);self.assertEqual(store.path.read_bytes(),disk)
+                        self.assertEqual(set(root.iterdir()),files)
+                        self.assertEqual(bridge.mock_calls,[]);self.assertEqual(rt.mock_calls,[])
+                    finally:os.close(store.lock)
+
+    def test_critical_later_floor_and_unsupported_recovery_remain_precise(self):
+        t=task();a=dict(base=BASE,head=HEAD,phase='qa',qa=dict(verdict='FAIL',
+            reviewed_sha=HEAD,findings=['Critical authorization']))
+        with self.assertRaisesRegex(ValueError,'HOLD_CRITICAL_'):smart.dispatch_gate(t,'author',a)
+        # A cosmetic current PASS does not silently close a historical critical
+        # finding, and unsupported structured source observations keep its floor.
+        history=dict(a,qa=dict(verdict='PASS',reviewed_sha=HEAD,findings=[]),
+            history=[dict(head=BASE,qa=dict(verdict='FAIL',reviewed_sha=BASE,
+                                         findings=['Critical authorization']))])
+        self.assertEqual(smart.classification(t,history)['risk'],'critical')
+        self.assertEqual(smart.classification(t,dict(a,source_evidence={
+            'risk':'low','critical_signs':True,'malformed':None}))['risk'],'critical')
+        a['qa']['findings']=[dict(severity='critical')]
+        with self.assertRaisesRegex(ValueError,'HOLD_CRITICAL_'):smart.dispatch_gate(t,'author',a)
+        a['phase']='integrating'
+        with self.assertRaisesRegex(ValueError,'SMART_RECOVERY'):smart.dispatch_gate(t,'integrate',a)
+        with patch.object(smart,'classification_gate') as gate:
+            for observed in (None, '', 'unknown', [], HEAD):
+                a['phase']='ci'
+                with self.subTest(observed=observed), self.assertRaisesRegex(ValueError,'BASE_CHANGED'):
+                    smart.dispatch_gate(t,'integrate',a,live_dev=observed)
+            gate.assert_not_called()
+        with tempfile.TemporaryDirectory() as folder:
+            store=Store(dict(issue=336,task=t,base=BASE,head=HEAD,phase='integrating',attempt=1))
+            before=copy.deepcopy(store.data); bridge=Mock();rt=Mock()
+            with self.assertRaisesRegex(core.Refused,'SMART_RECOVERY'):
+                stage.perform(req('integrate','integrating')|dict(issue=336,_recover=True),{},
+                              (A,S,rt,Mock(),store,bridge))
+            self.assertEqual(store.data,before);self.assertEqual(bridge.mock_calls,[])
+            self.assertEqual(rt.mock_calls,[])
+
+
+class LiveDevRepair(unittest.TestCase):
+    """R2 actual local Git and durable Store. Remote/QA/CI/mutex are boundary spies.
+
+    No production new-policy positive is claimed: it has no proof producer. A
+    test-only classification seam uses the existing SR1 closed comment-rename
+    proof for exact controlled bytes, so R1's unconditional missing-proof HOLD
+    cannot mask the ordering guard. All plan/binding/operation checks stay real.
+    """
+    def git(self, root, *args):
+        result=subprocess.run(['/usr/bin/git','-c','core.hooksPath=/dev/null',
+            '-c','core.fsmonitor=false','-c','commit.gpgsign=false',
+            '-c','user.name=Synthetic repair','-c','user.email=repair@example.invalid',*args],
+            cwd=root,env=dict(PATH='/usr/bin:/bin',HOME=str(root),GIT_CONFIG_NOSYSTEM='1',
+            GIT_CONFIG_GLOBAL='/dev/null',GIT_TERMINAL_PROMPT='0',LANG='C.UTF-8'),
+            capture_output=True,text=True,timeout=20)
+        self.assertEqual(result.returncode,0,result.stderr)
+        return result.stdout.strip()
+
+    def exercise(self, moved, *, legacy=False, busy=False):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);repo=root/'repo';repo.mkdir();self.git(repo,'init','-q','-b','dev')
+            path=repo/'apps/web/src/export.ts';path.parent.mkdir(parents=True)
+            path.write_text('// OldExport\n');self.git(repo,'add','.');self.git(repo,'commit','-qm','base')
+            base=self.git(repo,'rev-parse','HEAD');self.git(repo,'switch','-qc','automation/issue-336')
+            path.write_text('// LatestExport\n');self.git(repo,'add','.');self.git(repo,'commit','-qm','candidate')
+            head=self.git(repo,'rev-parse','HEAD');self.git(repo,'switch','-q','dev')
+            worktrees=root/'worktrees';worktrees.mkdir();work=worktrees/'issue-336'
+            self.git(repo,'worktree','add','-q',str(work),'automation/issue-336')
+            # Exact synthetic non-executable change: every source/dependency byte
+            # in this tiny repository is known. No model assurance is used.
+            self.assertEqual(self.git(repo,'show',base+':apps/web/src/export.ts'),'// OldExport')
+            self.assertEqual(self.git(work,'show',head+':apps/web/src/export.ts'),'// LatestExport')
+            self.assertEqual(self.git(repo,'diff','--name-only',base,head),'apps/web/src/export.ts')
+            self.assertEqual(self.git(repo,'ls-tree','-r','--name-only',base),'apps/web/src/export.ts')
+            t=task(cursor=False,agy=False);t['allowed_paths']=['apps/web/src/export.ts'];bind(t)
+            t['routing_policy']['plan']['binding']['head']=base
+            if legacy:t=copy.deepcopy(TASK)|{'allowed_paths':['apps/web/src/export.ts']}
+            state=root/'state';state.mkdir(mode=0o700);store=A.Store(state)
+            try:
+                store.data['active']=dict(issue=336,task=t,phase='ci',base=base,head=head,attempt=1,
+                    integration=0,qa=dict(verdict='PASS',findings=[],reviewed_sha=head),ci=dict(sha=head))
+                store.save();active=store.data['active'];events=[]
+                bridge=A.Bridge.__new__(A.Bridge);bridge.store=store;bridge.work=work
+                bridge.c=SimpleNamespace(repo=repo,state_dir=state,worktrees_root=worktrees)
+                bridge.git=lambda *args,**kw:self.git(kw.get('cwd',repo),*args)
+                bridge.unchanged_issue=Mock();bridge.candidate_identity=Mock()
+                bridge.saved_qa=lambda a:core.need(A.qa_result(a['qa'],a['head']),'exact fixture QA')
+                def remote():
+                    events.append('remote')
+                    return self.git(repo,'rev-parse','dev')
+                bridge.remote_dev=remote
+                bridge.integrate=Mock(wraps=bridge.integrate)
+                def mutex():events.append('mutex');return not busy
+                def continuity():events.append('continuity');return True
+                rt=SimpleNamespace(lease=Mock(),publish=Mock(),continuity=continuity,
+                    mutex=SimpleNamespace(try_acquire=mutex))
+                # DEV moves only AFTER earlier pre-stage validation, in the
+                # renewed exact CI check immediately before acquiring mutex.
+                def checks(*_):
+                    events.append('ci')
+                    self.assertEqual(self.git(repo,'rev-parse','dev'),base)
+                    if moved:
+                        (repo/'docs').mkdir();(repo/'docs/notes.md').write_text('unrelated\n')
+                        self.git(repo,'add','.');self.git(repo,'commit','-qm','concurrent dev')
+                    return dict(sha=head,id=1)
+                def proof(*_):
+                    import smart_routing as sr
+                    result=sr.classification_floor(fast(brief_usable=True))
+                    self.assertTrue(result['evidence_complete']);self.assertEqual(result['risk'],'low')
+                    events.append('floor');return result
+                before=copy.deepcopy(store.data);disk=store.path.read_bytes()
+                git_before=[self.git(work,*args) for args in (('rev-parse','HEAD'),
+                    ('show','-s','--format=%P','HEAD'),('write-tree',),('status','--porcelain'))]
+                plan_before=core.digest(t);state_files={p.name:p.read_bytes() for p in state.iterdir() if p.is_file()}
+                with patch.object(smart,'classification_gate',side_effect=proof), \
+                     patch.object(stage,'run_result',side_effect=checks), \
+                     patch.object(A,'continuity',return_value=dict(max_attempts=3,max_integrations=3)):
+                    call=lambda:stage.perform(req('integrate','ci')|dict(issue=336,head=head),{},
+                                              (A,S,rt,Mock(),store,bridge))
+                    if busy:
+                        with self.assertRaisesRegex(core.Retry,'mutex busy'):call()
+                    elif moved and not legacy:
+                        with self.assertRaisesRegex(core.Refused,'HOLD_SOURCE_BASE_CHANGED_REPLAN_REQUIRED'):call()
+                    else:call()
+                self.assertEqual(core.digest(t),plan_before)
+                if busy or moved and not legacy:
+                    self.assertEqual(store.data,before);self.assertEqual(store.path.read_bytes(),disk)
+                    self.assertEqual({p.name:p.read_bytes() for p in state.iterdir() if p.is_file()},state_files)
+                    self.assertEqual([self.git(work,*args) for args in (('rev-parse','HEAD'),
+                        ('show','-s','--format=%P','HEAD'),('write-tree',),('status','--porcelain'))],git_before)
+                    bridge.integrate.assert_not_called();rt.publish.assert_not_called()
+                elif legacy and moved:
+                    self.assertEqual(active['integration'],1);self.assertEqual(active['phase'],'candidate')
+                    self.assertEqual(len(self.git(work,'show','-s','--format=%P','HEAD').split()),2)
+                    bridge.integrate.assert_called_once()
+                else:
+                    self.assertEqual(active['phase'],'promoting');self.assertEqual(active['integration'],0)
+                    self.assertEqual(self.git(work,'rev-parse','HEAD'),head);bridge.integrate.assert_not_called()
+                    self.assertEqual(active['qa'],before['active']['qa']);self.assertEqual(active['ci'],before['active']['ci'])
+                if busy:self.assertNotIn('remote',events)
+                else:
+                    self.assertEqual(events.count('remote'),1)
+                    self.assertLess(events.index('ci'),events.index('mutex'))
+                    self.assertLess(events.index('mutex'),events.index('continuity'))
+                    self.assertLess(events.index('continuity'),events.index('remote'))
+                    if not legacy and not moved:self.assertEqual(events[-1],'floor')
+                return dict(moved=moved,legacy=legacy,busy=busy,events=events,
+                    before=before,after=copy.deepcopy(store.data),git_before=git_before,
+                    git_after=[self.git(work,*args) for args in (('rev-parse','HEAD'),
+                        ('show','-s','--format=%P','HEAD'),('write-tree',),('status','--porcelain'))],
+                    plan_before=plan_before,plan_after=core.digest(t),
+                    disk_before_sha256=hashlib.sha256(disk).hexdigest(),
+                    disk_after_sha256=hashlib.sha256(store.path.read_bytes()).hexdigest(),
+                    state_files_before={k:hashlib.sha256(v).hexdigest() for k,v in state_files.items()},
+                    state_files_after={p.name:hashlib.sha256(p.read_bytes()).hexdigest()
+                                       for p in state.iterdir() if p.is_file()},
+                    integrate_calls=bridge.integrate.call_count,lease_boundary_calls=rt.lease.call_count,
+                    publish_boundary_calls=rt.publish.call_count,real_provider_calls=0,network_calls=0,
+                    classification_seam='test-only SR1 closed comment rename; no production proof producer',
+                    deterministic_source_proof=dict(path='apps/web/src/export.ts',
+                        before='// OldExport',after='// LatestExport',dependency_tree='one exact known file'),
+                    boundaries='real Git/Store; remote observation, mutex, QA/CI, lease/publish spies')
+            finally:os.close(store.lock)
+
+    def test_advanced_live_dev_holds_before_git_checkpoint_or_counter(self):self.exercise(True)
+    def test_bound_live_dev_control_reaches_promoting_without_merge(self):self.exercise(False)
+    def test_existing_busy_mutex_prevents_remote_read(self):self.exercise(True,busy=True)
+    def test_legacy_advanced_dev_still_performs_real_merge(self):self.exercise(True,legacy=True)
 
 
 if __name__ == '__main__': unittest.main()

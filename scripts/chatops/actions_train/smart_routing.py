@@ -1,8 +1,8 @@
 """SR1 classifier and validator. Offline only.
 
-The live controller keeps the #218 Astra-before-repair path. This module is not
-imported by core, failure_diagnosis, cost_policy, stage, or the Antigravity
-adapter, and it does not install, publish, or rewrite an admission.
+The live controller keeps the #218 Astra-before-repair path. The opt-in stage
+adapter uses only classification_floor; decide remains an offline proposal.
+Neither interface installs, publishes, or rewrites an admission.
 
 A new-policy decision is produced only when the case explicitly selects the
 classifier, semantics are new, and the code, capsule, and policy pins agree.
@@ -1695,6 +1695,41 @@ def _evidence(raw):
     evidence.update(copy.deepcopy(raw))
     evidence.text_proof = proof
     return evidence
+
+
+def classification_floor(raw):
+    """Checked, bounded SR1 facts/text projection, with no dispatch authority.
+
+    Consumers must establish provenance separately. In particular completeness
+    here describes the supplied facts, not their truth. Defaults remain unknown.
+    A malformed sibling cannot erase an explicit structured critical floor.
+    No source analyzer, planner, route selection or model call runs here.
+    """
+    critical = False
+    if type(raw) is dict:
+        critical = raw.get('critical_signs') is True or raw.get('risk') == 'critical'
+        findings = raw.get('findings')
+        if type(findings) is list and len(findings) <= 32:
+            critical = critical or any(type(f) is dict and f.get('severity') == 'critical'
+                                       for f in findings)
+    evidence = _evidence(raw)
+    if type(evidence) is str:
+        return dict(risk='critical' if critical else None, evidence_complete=False,
+                    reason=('HOLD_CRITICAL_EXPERT_AND_EXACT_QA_PROOF_REQUIRED' if critical
+                            else 'HOLD_CLASSIFICATION_UNSUPPORTED_UNCERTAINTY'),
+                    input_error=evidence)
+    risk = _floor(evidence)
+    if critical or risk == 'critical':
+        reason = 'HOLD_CRITICAL_EXPERT_AND_EXACT_QA_PROOF_REQUIRED'
+    elif _weakens_any(evidence) or _outside_vocab(evidence) or _untrusted_blocks(evidence):
+        reason = 'HOLD_CLASSIFICATION_UNSUPPORTED_UNCERTAINTY'
+    elif not ((_safe_surface(evidence) and _template_ok(evidence, risk)
+               or evidence['brief_usable'] and _safe_surface(evidence))
+              and all(ok for ok, _ in _writer_conditions(evidence, 'SOURCE_KNOWN_STANDARD'))):
+        reason = 'HOLD_CLASSIFICATION_EVIDENCE_REQUIRED'
+    else:
+        reason = None
+    return dict(risk=risk, evidence_complete=reason is None, reason=reason, input_error=None)
 
 
 def _defaults():

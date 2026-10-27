@@ -17,6 +17,7 @@ AGY_MEDIUM = 'agy:claude-sonnet-5-5-medium'
 AGY_HIGH = 'agy:claude-sonnet-5-5-high'
 LEVELS = frozenset(('simple', 'standard', 'complex'))
 REASONS = frozenset(('bounded_docs', 'standard_ui', 'standard_api', 'complex_logic'))
+_NO_LIVE_DEV = object()
 
 
 def require(ok, reason):
@@ -95,15 +96,107 @@ def operation(task, stage, *, facts=None):
     return result('unknown', 'HOLD_UNSUPPORTED_STAGE')
 
 
+def classification(task, active=None):
+    """Lossless bounded projection of claims, never trusted absence facts.
+
+    There is currently NO controller source/template/dependency proof producer
+    for this arbitrary implementation schema. Owner admission and plan flags
+    bind claims; they do not establish noncritical effects. Keep that class on
+    HOLD rather than synthesizing SR1 ready facts or adding a wire escape hatch.
+    """
+    p = task['routing_policy']
+    raw = dict(goal=task.get('goal'), diagnostics=[task.get('acceptance'),
+        p['author']['evidence'], p['qa']['evidence']], paths=task.get('allowed_paths'),
+        plan=p['plan'], critical_signs=(task.get('risk') == 'critical'
+                                      or task.get('work_kind') == 'architecture'))
+    errors = []
+
+    def unsupported(value, label):
+        # Retain critical structured observations without interpreting their
+        # unsupported schema as positive proof (including a malformed sibling).
+        if type(value) is dict and sr.classification_floor(value)['risk'] == 'critical':
+            raw['critical_signs'] = True
+        errors.append(label)
+
+    def qa(value, head, label):
+        if value is None:
+            return
+        if type(value) is not dict:
+            errors.append(label + '.schema')
+            return
+        findings = value.get('findings')
+        # Retain the structured critical floor even on a malformed QA payload.
+        # This does not admit a new QA schema: the payload still yields HOLD.
+        if value.get('critical_signs') is True:
+            raw['critical_signs'] = True
+        if type(findings) is list and len(findings) <= 32:
+            for finding in findings:
+                if type(finding) is dict and finding.get('severity') == 'critical':
+                    raw['critical_signs'] = True
+        if (set(value) != {'verdict', 'findings', 'reviewed_sha'}
+                or value.get('verdict') not in ('PASS', 'FAIL')
+                or type(head) is not str or re.fullmatch('[0-9a-f]{40}', head) is None
+                or value.get('reviewed_sha') != head
+                or type(findings) is not list or len(findings) > 32
+                or any(type(f) is not str for f in findings)
+                or value.get('verdict') == 'PASS' and findings):
+            errors.append(label + '.schema_or_exact_sha')
+        if type(findings) is list and len(findings) <= 32 and all(type(f) is str for f in findings):
+            raw['diagnostics'].extend(findings)  # No truncation or suggested-class downgrade.
+
+    if active is not None:
+        if type(active) is not dict:
+            errors.append('active.schema')
+        else:
+            for key in ('critical_signs', 'risk', 'findings'):
+                if key in active:
+                    unsupported({key: active[key]}, 'active.' + key + '.unsupported_schema')
+            qa(active.get('qa'), active.get('head'), 'qa')
+            history = active.get('history', [])
+            if type(history) is not list or len(history) > 7:
+                errors.append('history.bounds_or_schema')
+            else:
+                for row in history:
+                    if type(row) is not dict:
+                        errors.append('history.schema')
+                        continue
+                    qa(row.get('qa'), row.get('head'), 'history.qa')
+                    # No equivalence or resolution proof is established here.
+                    if any(row.get(k) is not None for k in ('ci', 'ci_failure', 'qa_equivalence')):
+                        for key in ('ci', 'ci_failure', 'qa_equivalence'):
+                            if row.get(key) is not None:
+                                unsupported(row[key], 'history.' + key + '.immutable_effect_proof_unsupported')
+            # These existing evidence carriers have no supported immutable
+            # source-effect normalization in this slice. Never discard them
+            # and fall back to a routine classification or a ready default.
+            for key in ('ci', 'ci_failure', 'deterministic_failure', 'failure_diagnosis',
+                        'qa_equivalence', 'source_evidence', 'dependencies', 'observed_paths',
+                        'diff', 'classification_evidence', 'ci_evidence'):
+                if active.get(key) is not None:
+                    unsupported(active[key], key + '.immutable_effect_proof_unsupported')
+    result = sr.classification_floor(raw)
+    if result['risk'] != 'critical' and errors:
+        result.update(evidence_complete=False,
+                      reason='HOLD_CLASSIFICATION_UNSUPPORTED_UNCERTAINTY', input_error=errors[0])
+    # Even a complete set of claims cannot manufacture provenance. No supported
+    # deterministic proof source is installed in this schema, at parser or later.
+    result['evidence_complete'] = False
+    if result['reason'] is None:
+        result['reason'] = 'HOLD_CLASSIFICATION_EVIDENCE_REQUIRED'
+    result['missing_proof'] = 'immutable_source_template_and_dependency_effects'
+    result['unrepresented_inputs'] = errors
+    return result
+
+
+def classification_gate(task, active=None):
+    result = classification(task, active)
+    detail = result['input_error'] or result['missing_proof']
+    require(result['reason'] is None, result['reason'] + ': ' + detail)
+    return result
+
+
 def risk_floor(task):
-    """Conservative source-boundary floor; uncertainty never enables a writer."""
-    if task.get('risk') == 'critical' or task.get('work_kind') == 'architecture':
-        return 'critical'
-    sensitive = re.compile(r'auth|identity|permission|credential|secret|sandbox|guard|'
-                           r'budget|admission|concurren|payment|billing|migration|rollback', re.I)
-    if any(sensitive.search(path) for path in task['allowed_paths']):
-        return 'critical'
-    return task.get('risk')
+    return classification(task)['risk']
 
 
 def allowed_routes(role, level):
@@ -113,8 +206,12 @@ def allowed_routes(role, level):
     return {AGY_HIGH, SOL_HIGH} if level == 'complex' else {AGY_MEDIUM, SOL_MEDIUM}
 
 
-def validate_policy(task):
+def validate_policy(task, *, active=None):
     from context_policy import RULES_COMMIT, RULES_SHA256
+    require(type(task) is dict and set(task) <= {
+        'schema', 'target', 'kind', 'goal', 'acceptance', 'allowed_paths', 'max_attempts',
+        'depends_on', 'locks', 'work_kind', 'risk', 'author_routes', 'qa_routes',
+        'routing_policy', 'failure_diagnosis'}, 'HOLD_CLASSIFICATION_UNSUPPORTED_UNCERTAINTY: task.schema')
     p = task.get('routing_policy')
     require(type(p) is dict and set(p) == {'schema', 'author', 'qa', 'plan'}
             and p['schema'] == SCHEMA, 'invalid smart stage policy')
@@ -124,7 +221,6 @@ def validate_policy(task):
     require(not op['operation_reason'].startswith('HOLD_'), op['operation_reason'])
     require(task['work_kind'] in ('architecture', 'implementation', 'ux', 'contract', 'test')
             and task['risk'] in ('routine', 'complex', 'critical'), 'invalid smart stage metadata')
-    require(risk_floor(task) != 'critical', 'HOLD_CRITICAL_EXPERT_AND_EXACT_QA_PROOF_REQUIRED')
     for role in ('author', 'qa'):
         row = p[role]
         require(type(row) is dict and set(row) == {'complexity', 'reason', 'evidence'},
@@ -133,7 +229,8 @@ def validate_policy(task):
         require(type(level) is str and level in LEVELS and type(reason) is str and reason in REASONS,
                 'HOLD_UNSUPPORTED_SMART_ROLE_CLASS')
         require(type(evidence) is str and 1 <= len(evidence.strip()) <= 1200
-                and all(c.isprintable() for c in evidence), 'smart stage evidence required')
+                and all(c.isprintable() for c in evidence),
+                'HOLD_CLASSIFICATION_UNSUPPORTED_UNCERTAINTY: ' + role + '.evidence')
         require(level != 'simple' or reason == 'bounded_docs', 'mechanical class requires bounded evidence')
         require(level != 'complex' or reason == 'complex_logic', 'complex class requires complex route reason')
         routes = task[role + '_routes']
@@ -163,6 +260,7 @@ def validate_policy(task):
         policy(task)  # No new FAIL shortcut; #218 remains mandatory in this slice.
     except Exception as error:
         raise ValueError('smart stage requires existing #218 diagnosis admission') from error
+    classification_gate(task, active)
     return p
 
 
@@ -181,18 +279,26 @@ def selection(task, role):
         **operation(task, 'author' if role == 'author' else 'qa'))
 
 
-def dispatch_gate(task, stage, active=None, *, facts=None):
+def dispatch_gate(task, stage, active=None, *, facts=None, live_dev=_NO_LIVE_DEV):
     if not selected(task):
         return None  # Preserve all immutable legacy semantics.
-    p = validate_policy(task)
     op = operation(task, stage, facts=facts)
     require(not op['operation_reason'].startswith('HOLD_'), op['operation_reason'])
+    p = task['routing_policy']
+    # Check bindings before consulting classification; no plan is ever rebound.
+    error = sr.validate_plan(p.get('plan'))
+    require(error is None, 'invalid SR1 plan: ' + str(error))
     if active is not None:
         require(active.get('base') == p['plan']['binding']['head'],
                 'HOLD_SOURCE_BASE_CHANGED_REPLAN_REQUIRED')
         if stage == 'author' and active.get('phase') == 'claimed':
             require(active.get('head') in (None, p['plan']['binding']['head']),
                     'HOLD_SOURCE_HEAD_CHANGED_REPLAN_REQUIRED')
+        require(active.get('phase') != 'integrating', 'HOLD_SMART_RECOVERY_NOT_IMPLEMENTED')
+    if live_dev is not _NO_LIVE_DEV:
+        require(active is not None and live_dev == active.get('base') == p['plan']['binding']['head'],
+                'HOLD_SOURCE_BASE_CHANGED_REPLAN_REQUIRED')
+    validate_policy(task, active=active)
     return op
 
 

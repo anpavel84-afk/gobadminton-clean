@@ -85,13 +85,13 @@ def setup(req, config, native_auth=None):
     bridge.routing_receipts = []
     original_model = bridge.model
     def measured_model(prompt, qa=False):
-        effect_gate()
         if smart_selected(store.data['active']['task']):
             from smart_stage import dispatch_gate
             try:
                 dispatch_gate(store.data['active']['task'], req['stage'], store.data['active'])
             except ValueError as error:
                 raise Refused(str(error)) from None
+        effect_gate()
         from failure_diagnosis import enabled
         if req['stage'] == 'failure_diagnosis' or (req['stage'] == 'diagnose'
                 and enabled(store.data['active'])):
@@ -306,11 +306,15 @@ def perform(req, config, context):
     stage = req['stage']
     metadata = {}
     from smart_stage import dispatch_gate, selected as smart_selected
+    def smart_check(**observed):
+        if active and smart_selected(active['task']):
+            try:
+                return dispatch_gate(active['task'], stage, active, **observed)
+            except ValueError as error:
+                raise Refused(str(error)) from None
     if stage != 'claim' and active and smart_selected(active['task']):
-        try:
-            metadata['operation'] = dispatch_gate(active['task'], stage, active)
-        except ValueError as error:
-            raise Refused(str(error)) from None
+        need(not req.get('_recover'), 'HOLD_SMART_RECOVERY_NOT_IMPLEMENTED')
+        metadata['operation'] = smart_check()
     if req.get('_recover'):
         need(active and active['issue'] == req['issue'], 'recovery task mismatch')
         rt.lease(active)
@@ -440,6 +444,7 @@ def perform(req, config, context):
                          'DEV history changed; repair refused')
                 if active.get('deterministic_failure'):
                     need(b.failed_ci(active) == diagnostic, 'deterministic CI evidence changed')
+                smart_check()  # Before repair backup/history/attempt effects.
                 before = b.c.state_dir / f'actions-before-repair-{active["issue"]}-a{active["attempt"]}.json'
                 need(not before.is_symlink(), 'repair backup symlink')
                 if before.exists(): need(a.loads(before.read_bytes()) == store.data, 'repair backup drift')
@@ -454,6 +459,7 @@ def perform(req, config, context):
                 exact = ci_evidence(api, {'snapshot': active, 'head': active['head'], 'issue': active['issue']})
                 need(exact, 'exact CI failure evidence missing; do not spend another author attempt blindly')
                 fix_details = {'failure': diagnostic, 'assertion_evidence': exact}
+            smart_check()  # Recheck after collecting current repair inputs.
             b.author(active, fix=fix_details, ci_failure=diagnostic, deterministic_failure=None, **checkpoint)
         elif stage == 'publish':
             need(active['phase'] == 'candidate', 'publish phase gate')
@@ -536,6 +542,7 @@ def perform(req, config, context):
             require_mutex(rt)
             need(rt.continuity(), 'reviewed continuity policy required')
             dev = b.remote_dev()
+            smart_check(live_dev=dev)  # Same mutex, one bounded read, before any merge/checkpoint.
             if dev == active['base']:
                 store.phase('promoting')
             else:
