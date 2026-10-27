@@ -11,7 +11,10 @@ REASON='no safe role-specific provider: '+json.dumps({'codex:gpt-6-astra:high':'
 BUDGET={'schema':1,'providers':{'codex':{'qa':'unlimited'}},'slots':{'slot1':{'codex':{'qa':'unlimited'}}}}
 
 def fixture():
-    state={'active':active('pr_wait'),'done':[]};expected=core.digest(state)
+    from actions_train_plan_fixtures import planned_task
+    state={'active':active('pr_wait'),'done':[]}
+    state['active']['task'] = planned_task(state['active']['task'])
+    expected=core.digest(state)
     r=req('qa','pr_wait');key=core.digest(core.binding(r))
     row={'before':expected,'after':expected,'started_at':1,'finished_at':2,
          'process':{'pid':900000,'start':'0','boot':'old'},'run':98,'run_attempt':1,

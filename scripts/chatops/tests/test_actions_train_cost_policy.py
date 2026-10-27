@@ -104,7 +104,15 @@ class DeterministicFirst(unittest.TestCase):
         self.helper=StageBoundaries();self.helper.setUp()
         for name in ("store","bridge","rt","context","run_stage"):
             setattr(self,name,getattr(self.helper,name))
-        self.store.data["active"]["task"]=cost_task()
+        from actions_train_plan_fixtures import planned_task
+        # Keep the task's source classification in the bounded Git-reader DATA.
+        task = cost_task()
+        changes = [dict(path=p, status='M') for p in task['allowed_paths']]
+        import test_plan_gate as G
+        self.helper.diff.stop()
+        self.helper.diff = patch.object(G.trusted_tools()[2], 'diff_changes', return_value=changes)
+        self.helper.diff.start()
+        self.store.data["active"]["task"]=planned_task(task, changes)
     def tearDown(self):self.helper.tearDown()
     def test_pending_checks_never_spend_model_call_or_mutate_checkpoint(self):
         self.store.data["active"]["phase"]="pr_wait";before=copy.deepcopy(self.store.data)

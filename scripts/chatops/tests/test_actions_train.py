@@ -305,6 +305,9 @@ class Journal(unittest.TestCase):
         self.temp=tempfile.TemporaryDirectory(dir=ROOT,prefix='.train-tests-')
         self.folder=Path(self.temp.name)
         self.state=card(active('claimed'))
+        from actions_train_plan_fixtures import planned_task
+        self.task = planned_task(TASK)
+        self.state['active']['task'] = copy.deepcopy(self.task)
         self.workflow_raw=('ref: '+HEAD+'\n').encode()
         self.policy=dict(mode='active',owned={'slot1': 'before','slot2':'before'},controller_sha=HEAD,
                          stage_workflow_sha256=hashlib.sha256(self.workflow_raw).hexdigest())
@@ -313,7 +316,7 @@ class Journal(unittest.TestCase):
                       patch.object(receiver,'checkpoint',side_effect=lambda slot:(dict(active=self.state['active'] if slot=='slot1' else None,done=[]),[])),
                       patch.object(receiver.os,'fork',return_value=999999),
                       patch.object(receiver,'identity',return_value={'pid':999999,'start':'1','boot':'boot'}),
-                      patch.object(core,'API',self.FakeAPI)]
+                      patch.object(core,'API',lambda *_:self.FakeAPI(self.task))]
         original=receiver.read
         self.patches.append(patch.object(receiver,'read',side_effect=lambda p,owner=None,limit=2097152:original(p,None,limit)))
         for p in self.patches:p.start()
@@ -321,10 +324,10 @@ class Journal(unittest.TestCase):
         for p in reversed(self.patches):p.stop()
         self.temp.cleanup()
     class FakeAPI:
-        def __init__(self,*_):pass
+        def __init__(self,task):self.task=task
         def identity(self):pass
         def __call__(self,path):
-            if path.startswith('issues/'):return issue()
+            if path.startswith('issues/'):return issue(task=self.task)
             if path.startswith('contents/'):
                 import base64
                 raw=('ref: '+HEAD+'\n').encode()
@@ -357,13 +360,13 @@ class Journal(unittest.TestCase):
             self.assertEqual(receiver.handle(req(),self.policy)['status'],'unknown')
         self.assertEqual(receiver.os.fork.call_count,1)
     def test_safe_unknown_publish_only_reconciles(self):
-        self.state['active']=active('candidate')
+        self.state['active']=active('candidate');self.state['active']['task']=copy.deepcopy(self.task)
         receiver.handle(req('publish','candidate'),self.policy)
         with patch.object(receiver,'alive',return_value=False):
             receiver.handle(req('publish','candidate'),self.policy)
         self.assertEqual(receiver.os.fork.call_count,2)
     def test_recovery_attempts_bounded(self):
-        self.state['active']=active('candidate')
+        self.state['active']=active('candidate');self.state['active']['task']=copy.deepcopy(self.task)
         receiver.handle(req('publish','candidate'),self.policy)
         with patch.object(receiver,'alive',return_value=False):
             for _ in range(5):receiver.handle(req('publish','candidate'),self.policy)

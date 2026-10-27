@@ -14,6 +14,8 @@ from test_actions_train_cost_policy import cost_task
 import context_policy
 import cost_policy
 import native_antigravity as QA
+from actions_train_plan_fixtures import candidate
+import test_plan_gate as G
 
 
 def author_task(level='standard'):
@@ -250,7 +252,7 @@ class Dispatch(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='agy-dispatch-') as temp:
             root = Path(temp); cli = root/'vendor'; cli.write_bytes(b'synthetic-pinned-vendor')
             count = [0]; calls = []; traces = []
-            store = SimpleNamespace(data={'active':dict(task=author_task(),base='b'*40,head='a'*40,attempt=1,issue=421)})
+            store = SimpleNamespace(data={'active':candidate(root, author_task()) | dict(attempt=1,issue=421)})
             rt = SimpleNamespace(user='fixture',legacy=True,home=root,key=root/'key',
                 layout=SimpleNamespace(repo=root,state_dir=root,worktrees=root,outbox=root),
                 check_paths=Mock(),continuity=lambda:True,lease=Mock(),budget=SimpleNamespace(used=lambda *_:count[0]))
@@ -274,7 +276,7 @@ class Dispatch(unittest.TestCase):
                 if fail: raise QA.ReviewError()
                 return dict(provider_reported_usage={'output_tokens':5})
             def review(*args,**kwargs):
-                calls.append(args[3]); self.assertEqual(args[3],'task data')
+                calls.append(args[3]); self.assertEqual(args[3], 'task data' + '\n' + G.guidance(bridge.test_plan))
                 kwargs['popen']([QA.AGY],cwd=root/'private-export'); count[0] += 1
                 return {'verdict':'PASS'},receipt
             read_bytes = Path.read_bytes
@@ -290,7 +292,7 @@ class Dispatch(unittest.TestCase):
                  patch('native_cursor.invoke',side_effect=author) as cursor_invoke, \
                  patch.object(QA,'review',side_effect=review) as qa_review,patch.object(QA,'save_receipt'), \
                  patch.object(Path,'read_bytes',pinned_read):
-                request = req('qa' if qa else 'author','candidate'); request['slot'] = 'slot2'
+                request = req('qa' if qa else 'author','candidate'); request['slot'] = 'slot2'; request['head'] = store.data['active']['head']
                 bridge = stage.setup(request,{'codex':{'slot2':str(cli)}},native_auth='fixture-cursor-token' if provider == 'cursor' else None)[-1]
                 if fail:
                     with self.assertRaises(QA.ReviewError): bridge.model('task data',qa=qa)

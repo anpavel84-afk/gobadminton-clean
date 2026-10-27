@@ -43,6 +43,8 @@ class BoundedRepair(GitFixture):
         works = self.root / f'worktrees-{self.serial}'; works.mkdir()
         task = copy.deepcopy(TASK)
         task.update(allowed_paths=[SOURCE, WEBTEST], failure_diagnosis=copy.deepcopy(POLICY))
+        from actions_train_plan_fixtures import planned_task
+        task = planned_task(task, [dict(path=p,status='M') for p in (SOURCE, WEBTEST, TEST)])
         self.active = dict(issue=248, task=task, fingerprint='immutable-admission',
             comment={'id': 1, 'fingerprint': 'unchanged-comment'}, approved_since='fixed',
             head=self.original, base=self.base, phase='qa', attempt=1, qa=None, ci=None)
