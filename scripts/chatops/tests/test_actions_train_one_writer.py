@@ -372,16 +372,19 @@ class RootAuthorBudgetBinding(unittest.TestCase):
 
 
 class ProductQaAdmissionWire(unittest.TestCase):
-    """Fresh product QA-only admission: independent of historical slot pending."""
+    """General reusable product QA admission: independent of historical slot pending."""
 
     HEAD = '8024caa659f4fee911d7e3afcb69ed7ac845ce5c'
+    HEAD337 = '98a31a51d2d067af44cc3816be137fe6faa8bb2a'
     BASE = 'a' * 40
+    BASE337 = 'acf27157cf39199f302929f7796e4e89d50a3381'
 
     @classmethod
     def setUpClass(cls):
         os.umask(0o022)
 
     def _admission(self, **extra):
+        """Immutable V1 Issue346 ledger shape."""
         import owner_package_admission as A
         import native_antigravity as N
         value = dict(schema=A.PRODUCT_SCHEMA, issue=346, repo_id=A.REPO_ID,
@@ -391,6 +394,31 @@ class ProductQaAdmissionWire(unittest.TestCase):
                      work='/srv/gb-slots/slot2/worktrees/issue-346')
         value.update(extra)
         return value
+
+    def _admission_v2(self, issue=337, head=None, base=None, comment=999002, **extra):
+        import owner_package_admission as A
+        import native_antigravity as N
+        head = head or self.HEAD337
+        base = base or self.BASE337
+        value = dict(schema=A.PRODUCT_SCHEMA_V2, issue=issue, repo_id=A.REPO_ID,
+                     owner_comment=comment, controller_sha='c' * 40,
+                     source_base=base, source_sha=head, model=N.MODEL,
+                     attempt=1, max_calls=1,
+                     work=f'/srv/gb-slots/slot2/worktrees/issue-{issue}',
+                     acceptance='Venue picker regression: selected venue persists after reload.',
+                     allowed_paths=['apps/web/src/components/VenuePicker.tsx'])
+        value.update(extra)
+        return value
+
+    def test_validate_two_distinct_issues_and_heads(self):
+        import owner_package_admission as A
+        a346 = A.validate_product_admission(self._admission())
+        a337 = A.validate_product_admission(self._admission_v2())
+        self.assertEqual(a346['issue'], 346)
+        self.assertEqual(a346['source_sha'], self.HEAD)
+        self.assertEqual(a337['issue'], 337)
+        self.assertEqual(a337['source_sha'], self.HEAD337)
+        self.assertNotEqual(a346['source_sha'], a337['source_sha'])
 
     def test_validate_admission_closed_fields_and_foreign_path(self):
         import owner_package_admission as A
@@ -402,6 +430,30 @@ class ProductQaAdmissionWire(unittest.TestCase):
             A.validate_product_admission(dict(good, source_sha='b' * 40))
         with self.assertRaises(Exception):
             A.validate_product_admission(dict(good, extra='nope'))
+        with self.assertRaises(Exception):
+            A.validate_product_admission(dict(self._admission_v2(), acceptance='deleted probe only'))
+
+    def test_owner_comment_wrong_issue_url_rejected(self):
+        import owner_package_admission as A
+        import json
+        body_value = dict(self._admission_v2(issue=337), schema=A.PRODUCT_SCHEMA_V2)
+        # Strip ledger-only keys if any
+        for k in list(body_value):
+            if k in A.PRODUCT_LEDGER_EXTRA:
+                body_value.pop(k)
+        content = json.dumps(body_value, sort_keys=True, separators=(',', ':'))
+        body = A.PRODUCT_PREFIX + content
+        fake = dict(id=42, issue_url=A.product_issue_url(346),  # wrong Issue URL
+                    user=dict(id=A.OWNER_ID, login='anpavel84-afk'),
+                    author_association='OWNER', body=body)
+        class Resp:
+            status = 200
+            def read(self, n): return json.dumps(fake).encode()
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+        with patch.object(A.urllib.request, 'urlopen', return_value=Resp()):
+            with self.assertRaisesRegex(Exception, 'wrong Issue URL'):
+                A.product_owner_comment(42)
 
     def test_find_product_admission_ignores_receipt_only(self):
         """Receipt-only STATE must not look like an admission (run40557833601 class)."""
@@ -414,7 +466,7 @@ class ProductQaAdmissionWire(unittest.TestCase):
                            owner_comment=6449940130)
             R.atomic(folder / (A.PRODUCT_RECEIPT_PREFIX + '6449940130.json'), receipt)
             with patch.object(R, 'STATE', folder):
-                self.assertIsNone(R.find_product_admission())
+                self.assertIsNone(R.find_product_admission(controller='c' * 40))
             self.assertTrue((folder / (A.PRODUCT_RECEIPT_PREFIX + '6449940130.json')).exists())
 
     def test_find_product_admission_one_actual_plus_receipt(self):
@@ -435,13 +487,55 @@ class ProductQaAdmissionWire(unittest.TestCase):
                 self.assertEqual(owner, 0)
                 return original_read(path, os.getuid())
             with patch.object(R, 'STATE', folder), patch.object(R, 'read', side_effect=read_fixture):
-                found = R.find_product_admission()
+                found = R.find_product_admission(controller='c' * 40)
             self.assertEqual(found['owner_comment'], 6449940130)
             self.assertEqual(found['schema'], A.PRODUCT_SCHEMA)
             self.assertTrue((folder / (A.PRODUCT_RECEIPT_PREFIX + '6449940130.json')).exists())
 
+    def test_completed_admission_does_not_block_next(self):
+        """Consumed ledger + fresh eligible → next; history retained."""
+        import owner_package_admission as A
+        import importlib
+        from core import digest
+        A = importlib.reload(A)
+        with tempfile.TemporaryDirectory(prefix='product-qa-discovery-') as tmp:
+            folder = Path(tmp)
+            old = dict(self._admission(owner_comment=1001),
+                       body_sha256='e' * 64, owner_id=A.OWNER_ID)
+            nxt = dict(self._admission_v2(comment=1002),
+                       body_sha256='f' * 64, owner_id=A.OWNER_ID)
+            R.atomic(folder / (A.PRODUCT_LEDGER_PREFIX + '1001.json'), old)
+            R.atomic(folder / (A.PRODUCT_LEDGER_PREFIX + '1002.json'), nxt)
+            ops = dict(schema='GB_PRODUCT_QA_OPS_V1', generation=1, pending=None, last=None,
+                       operations={'done': dict(admission_sha256=digest(old),
+                                                result={'status': 'confirmed'})})
+            original_read = R.read
+            def read_fixture(path, owner, limit=2097152):
+                return original_read(path, None if owner == 0 else owner, limit)
+            with patch.object(R, 'STATE', folder), \
+                 patch.object(R, 'read', side_effect=read_fixture), \
+                 patch.object(R, 'product_qa_ops', return_value=ops):
+                found = R.find_product_admission(controller='c' * 40, ops=ops)
+            self.assertEqual(found['owner_comment'], 1002)
+            self.assertEqual(found['issue'], 337)
+            self.assertTrue((folder / (A.PRODUCT_LEDGER_PREFIX + '1001.json')).exists())
+
+    def test_history_different_controller_not_eligible(self):
+        import owner_package_admission as A
+        import importlib
+        A = importlib.reload(A)
+        with tempfile.TemporaryDirectory(prefix='product-qa-discovery-') as tmp:
+            folder = Path(tmp)
+            old = dict(self._admission(controller_sha='d' * 40, owner_comment=1001),
+                       body_sha256='e' * 64, owner_id=A.OWNER_ID)
+            R.atomic(folder / (A.PRODUCT_LEDGER_PREFIX + '1001.json'), old)
+            original_read = R.read
+            with patch.object(R, 'STATE', folder), \
+                 patch.object(R, 'read', side_effect=lambda p, o, limit=2097152: original_read(p, None, limit)):
+                self.assertIsNone(R.find_product_admission(controller='c' * 40))
+
     def test_find_product_admission_two_actual_plus_receipts_refused(self):
-        """Multiple real numeric ledgers stay fail-closed even if receipts exist."""
+        """Multiple real eligible numeric ledgers stay fail-closed even if receipts exist."""
         import owner_package_admission as A
         import importlib
         A = importlib.reload(A)
@@ -455,8 +549,8 @@ class ProductQaAdmissionWire(unittest.TestCase):
                          dict(schema='GB_PRODUCT_QA_ADMISSION_TX_V1', phase='complete',
                               owner_comment=comment))
             with patch.object(R, 'STATE', folder):
-                with self.assertRaisesRegex(Exception, 'ambiguous product QA admissions'):
-                    R.find_product_admission()
+                with self.assertRaisesRegex(Exception, 'ambiguous|conflicting'):
+                    R.find_product_admission(controller='c' * 40)
 
     def test_find_product_admission_invalid_ledger_still_validated(self):
         """Numeric ledger name still goes through product_qa_ledger validation."""
@@ -475,22 +569,22 @@ class ProductQaAdmissionWire(unittest.TestCase):
                 return original_read(path, os.getuid())
             with patch.object(R, 'STATE', folder), patch.object(R, 'read', side_effect=read_fixture):
                 with self.assertRaisesRegex(Exception, 'invalid product QA ledger'):
-                    R.find_product_admission()
+                    R.find_product_admission(controller='c' * 40)
 
     def test_product_qa_request_fields_fail_closed(self):
-        for fields in ({'issue': 29}, {'slot': 'slot1'}, {'head': 'b' * 40},
+        for fields in ({'slot': 'slot1'}, {'head': 'not-a-sha'},
                        {'phase': 'pr_wait'}, {'attempt': 1}, {'profile': 'auto'}):
             with self.subTest(fields=fields):
-                req = dict(action='train', stage='product_qa', slot='slot2', issue=346,
-                           phase='idle', head=self.HEAD, attempt=0, generation=0,
+                req = dict(action='train', stage='product_qa', slot='slot2', issue=337,
+                           phase='idle', head=self.HEAD337, attempt=0, generation=0,
                            profile='agy', run=1, run_attempt=1, gh_token='synthetic-read-token')
                 with self.assertRaises(core.Refused):
                     core.request(req | fields)
 
     def test_plan_exposes_product_qa_with_legacy_slot2_pending(self):
         # Product ops generation 0 must not be compared to legacy slot2 generation 119.
-        product = dict(slot='slot2', issue=346, stage='product_qa', phase='idle',
-                       head=self.HEAD, attempt=0, generation=0, profile='agy')
+        product = dict(slot='slot2', issue=337, stage='product_qa', phase='idle',
+                       head=self.HEAD337, attempt=0, generation=0, profile='agy')
         slot2 = _card(pending=dict(status='unknown', recoverable=False,
                                    binding=dict(action='train', stage='qa_qualification',
                                                 slot='slot2', issue=29, phase='idle',
@@ -507,8 +601,8 @@ class ProductQaAdmissionWire(unittest.TestCase):
         self.assertEqual([p for p in planned if p.get('stage') == 'product_qa'], [product])
 
     def test_plan_refuses_product_generation_mismatched_to_ops(self):
-        product = dict(slot='slot2', issue=346, stage='product_qa', phase='idle',
-                       head=self.HEAD, attempt=0, generation=0, profile='agy')
+        product = dict(slot='slot2', issue=337, stage='product_qa', phase='idle',
+                       head=self.HEAD337, attempt=0, generation=0, profile='agy')
         slot2 = _card()
         slot2['generation'] = 119
         slot2['product_qa'] = product
@@ -522,7 +616,6 @@ class ProductQaAdmissionWire(unittest.TestCase):
         import native_antigravity as N
         import owner_package_admission as A
         import importlib
-        # Fresh actual modules — avoid combined-suite stub contamination.
         A = importlib.reload(A)
         with tempfile.TemporaryDirectory(prefix='product-qa-') as tmp:
             folder = Path(tmp)
@@ -581,7 +674,6 @@ class ProductQaAdmissionWire(unittest.TestCase):
                              phase='idle', head=self.HEAD, attempt=0, generation=0,
                              profile='agy', run=10, run_attempt=1, gh_token='synthetic-read-token')
             first_key = digest(binding(first_req))
-            # Synthetic finished first FAIL: generation advanced, pending cleared, journal intact.
             finished = dict(
                 schema='GB_PRODUCT_QA_OPS_V1', generation=1, pending=None, last=dict(
                     stage='product_qa', issue=346, status='confirmed', reason='FAIL'),
@@ -624,6 +716,47 @@ class ProductQaAdmissionWire(unittest.TestCase):
                 fork.assert_not_called()
                 self.assertEqual(ops_path.read_bytes(), journal_bytes)
                 self.assertEqual((folder / 'slot2.json').read_bytes(), before)
+
+    def test_stale_head_attempt_binding_rejected(self):
+        """Request head/issue must match reserved admission exactly."""
+        import native_antigravity as N
+        import owner_package_admission as A
+        import importlib
+        A = importlib.reload(A)
+        with tempfile.TemporaryDirectory(prefix='product-qa-stale-') as tmp:
+            folder = Path(tmp)
+            admission = dict(self._admission_v2(), body_sha256='e' * 64, owner_id=A.OWNER_ID)
+            R.atomic(folder / (A.PRODUCT_LEDGER_PREFIX + '999002.json'), admission)
+            req = dict(action='train', stage='product_qa', slot='slot2', issue=337,
+                       phase='idle', head='0' * 40, attempt=0, generation=0,
+                       profile='agy', run=10, run_attempt=1, gh_token='synthetic-read-token')
+            budget = Mock(remaining=lambda *a: 3)
+            original_read = R.read
+            with patch.object(R, 'STATE', folder), \
+                 patch.object(N, 'PRODUCT_OPS', folder / 'product-qa-operations.json'), \
+                 patch.object(R, 'ROOT_LOCK', -1, create=True), \
+                 patch.object(R, 'guard', return_value=SimpleNamespace(
+                     pw_uid=978, pw_gid=968, pw_dir='/tmp', pw_name='gb-slot2')), \
+                 patch.object(R, 'live', return_value=(None, SimpleNamespace(
+                     Budget=lambda *a, **k: budget))), \
+                 patch.object(N, 'product_executor_ready', return_value={'phase': 'canary'}), \
+                 patch.object(R, 'read', side_effect=lambda p, owner=None, limit=2097152:
+                              original_read(p, None, limit)), \
+                 patch.object(R.os, 'fork') as fork, \
+                 patch.object(R, 'free_lock'):
+                with self.assertRaisesRegex(Exception, 'issue/source mismatch'):
+                    R.product_qa_request(req, {'mode': 'active', 'controller_sha': 'c' * 40,
+                                               'owned': {'slot1': 1, 'slot2': 1}})
+                fork.assert_not_called()
+
+    def test_product_stage_setup_skips_author_store(self):
+        import stage as St
+        import inspect
+        src = inspect.getsource(St.setup_product_qa)
+        self.assertNotIn('a.Store(', src)
+        self.assertIn('978', src)
+        entry = inspect.getsource(St.entry)
+        self.assertIn('setup_product_qa', entry)
 
 
 class ProductGitIdentity(unittest.TestCase):

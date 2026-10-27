@@ -679,10 +679,15 @@ def available(slot, task_hash, model=MODEL):
 
 
 QUALIFICATION_WORK = Path('/srv/gb-slots/slot2/worktrees/antigravity-qa-29-canary')
-# Product QA (Issue346 cleanup) is independent of historical #29 canary/slot pending.
-PRODUCT_ISSUE = 346
-PRODUCT_SOURCE_SHA = '8024caa659f4fee911d7e3afcb69ed7ac845ce5c'
-PRODUCT_READY = Path('/var/lib/gobadminton-actions-train/product-qa-role-ready.json')
+# Historical Issue346 one-shot pins: immutable ledger compatibility only.
+# NEW product QA issue/base/head/attempt come from authorized admission — never these constants.
+LEGACY_PRODUCT_ISSUE = 346
+LEGACY_PRODUCT_SOURCE_SHA = '8024caa659f4fee911d7e3afcb69ed7ac845ce5c'
+# Back-compat aliases for historical receipts/tests; not NEW routing gates.
+PRODUCT_ISSUE = LEGACY_PRODUCT_ISSUE
+PRODUCT_SOURCE_SHA = LEGACY_PRODUCT_SOURCE_SHA
+# Root-owned, UID978-readable READY proof (no chmod of protected STATE 0700).
+PRODUCT_READY = Path('/etc/gobadminton-slots/product-qa-role-ready.json')
 PRODUCT_OPS = Path('/var/lib/gobadminton-actions-train/product-qa-operations.json')
 # Existing project repo materialization for UID978; never a new clone and never slot1 checkpoint.
 PRODUCT_WORK_ROOTS = (
@@ -691,8 +696,16 @@ PRODUCT_WORK_ROOTS = (
 )
 
 
+def product_module_pins():
+    """Exact installed adapter/native_guard digests bound into READY proof."""
+    pins = {}
+    for name in ('native_antigravity.py', 'native_guard.py'):
+        pins[name] = hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
+    return pins
+
+
 def product_role_ready():
-    """READY only after a confirmed new product QA PASS receipt (not legacy UNKNOWN)."""
+    """READY after confirmed product QA PASS; bound to modules/model/UID, not a fixed Issue."""
     try:
         raw = trusted(PRODUCT_READY, owner=0)
     except (OSError, ReviewError):
@@ -701,12 +714,26 @@ def product_role_ready():
         value = loads(raw)
     except (ValueError, TypeError, ReviewError):
         return False
-    return (isinstance(value, dict) and value.get('schema') == 'GB_PRODUCT_QA_ROLE_READY_V1'
-            and value.get('phase') == 'ready' and value.get('issue') == PRODUCT_ISSUE
-            and value.get('source_sha') == PRODUCT_SOURCE_SHA
+    if not (isinstance(value, dict) and value.get('schema') == 'GB_PRODUCT_QA_ROLE_READY_V1'
+            and value.get('phase') == 'ready'
             and value.get('model') == MODEL
+            and value.get('executor_uid') == EXECUTOR_UID
             and value.get('verdict') == 'PASS'
-            and type(value.get('operation')) is str and re.fullmatch(r'[a-f0-9]{64}', value['operation']))
+            and type(value.get('operation')) is str and re.fullmatch(r'[a-f0-9]{64}', value['operation'])):
+        return False
+    # Provenance may record issue/source_sha from the qualifying PASS; they are not forever gates.
+    if value.get('issue') is not None:
+        if not (type(value['issue']) is int and 1 <= value['issue'] <= 10**9):
+            return False
+    if value.get('source_sha') is not None:
+        if not (isinstance(value['source_sha'], str) and SHA.fullmatch(value['source_sha'])):
+            return False
+    expected = product_module_pins()
+    modules = value.get('modules')
+    if not (isinstance(modules, dict) and modules.get('native_antigravity.py') == expected['native_antigravity.py']
+            and modules.get('native_guard.py') == expected['native_guard.py']):
+        return False
+    return True
 
 
 def product_executor_ready(model=MODEL):
@@ -718,9 +745,9 @@ def product_executor_ready(model=MODEL):
          and m.get('executor_uid') == EXECUTOR_UID
          and m.get('phase') in ('canary', 'ready'),
          'Antigravity product executor marker not qualified')
+    pins = product_module_pins()
     for name in ('native_antigravity.py', 'native_guard.py'):
-        need(m.get('modules', {}).get(name) == hashlib.sha256(
-            Path(__file__).with_name(name).read_bytes()).hexdigest(),
+        need(m.get('modules', {}).get(name) == pins[name],
              'Antigravity installed module drift')
     need(hashlib.sha256(trusted(AGY, limit=256 << 20)).hexdigest() == AGY_SHA256,
          'Antigravity executable pin drift')
@@ -750,16 +777,20 @@ def refuse_foreign_checkpoint(path):
     text = str(Path(path))
     need('/slots/slot1/' not in text and not text.endswith('/slots/slot1'),
          'foreign slot1 checkpoint forbidden for product QA executor')
+    need('/slots/slot1/' not in text.replace('\\', '/'),
+         'foreign slot1 checkpoint forbidden for product QA executor')
 
 
 def product_work_ok(work, source_sha):
     """Immutable exact HEAD via existing project repo/worktree; no new clone.
 
-    Root handlers must not run candidate Git as UID0: spawn a bounded read-only
-    child as UID978. Ordinary UID978 stage paths keep the normal git() call.
-    Other UIDs are refused. No safe.directory and no checkout chown.
+    source_sha comes from authorized admission (any exact reviewed SHA), not a
+    fixed Issue346 constant. Root handlers must not run candidate Git as UID0:
+    spawn a bounded read-only child as UID978. Ordinary UID978 stage paths keep
+    the normal git() call. Other UIDs are refused. No safe.directory / chown.
     """
-    need(isinstance(work, (str, Path)) and source_sha == PRODUCT_SOURCE_SHA, 'invalid product source')
+    need(isinstance(work, (str, Path)) and isinstance(source_sha, str)
+         and SHA.fullmatch(source_sha), 'invalid product source')
     root = Path(work)
     need(root.is_absolute() and not root.is_symlink() and root.is_dir(), 'product work must be absolute directory')
     need(root.resolve() == root, 'product work must be canonical')
@@ -2381,9 +2412,9 @@ def review(work, base, head, prompt, timeout, *, slot, task_hash, charge, model=
         ev.record(requested_model=model)
         need(model in MODELS, 'unsupported native QA model')
         if product:
-            # Product executor path (UID978 capability). Exact Issue346 SHA is enforced
-            # by product_work_ok / run_product_qa admission only — ordinary eligible QA
-            # after READY must not re-bind canary29 or force PRODUCT_SOURCE_SHA.
+            # Product executor path (UID978 capability). Exact source SHA is enforced
+            # by product_work_ok / run_product_qa from authorized admission — ordinary
+            # eligible QA after READY must not re-bind canary29 or a fixed Issue SHA.
             refuse_foreign_checkpoint(work)
             need(analysis_grant is None, 'product QA is not addressed analysis')
         # Same AGY_CANDIDATE_CHANGED code as invoke(), before charge. Porcelain

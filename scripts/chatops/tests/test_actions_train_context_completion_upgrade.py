@@ -8,6 +8,7 @@ import stat
 import subprocess
 import tempfile
 from types import SimpleNamespace
+import sys
 import unittest
 from unittest.mock import patch
 import test_actions_train_stage5_cursor_upgrade as v3
@@ -595,6 +596,33 @@ class ProductQaV4HybridImport(unittest.TestCase):
                     sys.modules.pop(mod, None)
                 if sys.path and sys.path[0] == str(tree):
                     sys.path.pop(0)
+
+
+
+class GeneralProductQaV5Installer(unittest.TestCase):
+    def test_v5_schema_and_old_closure_from_v4_new(self):
+        sys.path.insert(0, str(ROOT/'scripts/chatops/ops'))
+        import stage5_cursor_context_upgrade as U
+        self.assertEqual(U.V5_SCHEMA, 'GB_STAGE5_GENERAL_PRODUCT_QA_V5')
+        self.assertNotEqual(U.V5_SCHEMA, U.V4_SCHEMA)
+        self.assertEqual(set(U.V5_OLD), set(U.V5_NEW))
+        self.assertTrue(all(U.V5_NEW[n] and U.V5_OLD[n] != U.V5_NEW[n] for n in U.V5_OLD))
+        # OLD pins are exact installed V4_NEW for changed modules.
+        for name in U.V5_OLD:
+            self.assertEqual(U.V5_OLD[name], U.V4_NEW[name])
+        self.assertEqual(U.V5_BASELINE, 'd75887f8d50e05aa5e3032a3302c91f23947be5d')
+        self.assertIn('native_guard.py', U.V5_FROZEN)
+        self.assertNotIn('native_antigravity.py', U.V5_FROZEN)
+        # No circular workflow SHA constants in V5_* maps.
+        self.assertFalse(any('workflow' in k.lower() for k in list(U.V5_OLD)+list(U.V5_NEW)))
+
+    def test_v5_quiet_preserves_v4_and_historical(self):
+        import inspect
+        sys.path.insert(0, str(ROOT/'scripts/chatops/ops'))
+        import stage5_cursor_context_upgrade as U
+        src = inspect.getsource(U.quiet_v5)
+        self.assertIn('quiet_v4', src)
+        self.assertIn('V4_JOURNAL', src)
 
 
 class ProductQaFinishEvidence(unittest.TestCase):
