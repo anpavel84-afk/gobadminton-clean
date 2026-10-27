@@ -782,8 +782,6 @@ def product_qa_request(req, policy):
                         reason='product QA never replays after unknown outcome')
         return dict(status=(op.get('result') or {}).get('status', 'unknown'), key=key,
                     result=op.get('result'), last=ops.get('last'))
-    need(ops.get('pending') is None and req['generation'] == ops.get('generation', 0),
-         'stale/pending product QA generation')
     need(req['issue'] == PRODUCT_ISSUE and req['head'] == PRODUCT_SOURCE_SHA,
          'product QA issue/source mismatch')
     # Preserve historical slot journals byte- identically; only observe.
@@ -794,6 +792,22 @@ def product_qa_request(req, policy):
          and admission['issue'] == PRODUCT_ISSUE
          and admission['controller_sha'] == policy['controller_sha'],
          'missing/edited product QA admission')
+    # Authoritative consume gate under controller.lock: one reservation/result per
+    # admission digest, regardless of generation/run/binding. Planner check alone
+    # is not the gate. Preserve UNKNOWN pending and all prior charges/history.
+    admission_digest = digest(admission)
+    for existing_key, prior in ops.get('operations', {}).items():
+        if prior.get('admission_sha256') != admission_digest:
+            continue
+        if ops.get('pending') == existing_key:
+            return dict(status='running' if alive(prior.get('process')) else 'unknown',
+                        key=existing_key,
+                        reason='product QA admission already reserved; no second consume')
+        return dict(status=(prior.get('result') or {}).get('status', 'unknown'),
+                    key=existing_key, result=prior.get('result'), last=ops.get('last'),
+                    reason='product QA admission already consumed')
+    need(ops.get('pending') is None and req['generation'] == ops.get('generation', 0),
+         'stale/pending product QA generation')
     A.validate_product_admission(admission, controller=policy['controller_sha'])
     refuse_foreign_checkpoint(admission['work'])
     product_work_ok(admission['work'], PRODUCT_SOURCE_SHA)

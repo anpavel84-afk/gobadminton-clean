@@ -310,9 +310,48 @@ def addressed_git_identity(work):
     return dict(user=EXECUTOR_UID,group=account.pw_gid,extra_groups=[])
 
 
-def git(work, *args, limit=MAX_INPUT + 1, _addressed_installer=False, _overrides=True):
-    identity=addressed_git_identity(work) if _addressed_installer else {}
-    if _addressed_installer:
+def product_git_identity(work):
+    """Root-only identity for a bounded product HEAD read as UID978.
+
+    Reuses the canary privilege-drop pattern for product worktrees under
+    PRODUCT_WORK_ROOTS. Never sets safe.directory, chowns the candidate, or
+    borrows UID1002/foreign HOME. Worktrees may use a .git file.
+    """
+    import pwd
+    work = Path(work)
+    need(os.geteuid() == 0 and work.is_absolute() and not work.is_symlink()
+         and work.is_dir() and work.resolve() == work,
+         'exact root product Git precheck required')
+    need(any(work == base or base in work.parents for base in PRODUCT_WORK_ROOTS),
+         'product work outside existing project repo/worktree roots')
+    refuse_foreign_checkpoint(work)
+    account = pwd.getpwuid(EXECUTOR_UID)
+    need(account.pw_uid == EXECUTOR_UID and account.pw_gid == EXECUTOR_GID,
+         'invalid product executor identity')
+    info = work.lstat()
+    need(stat.S_ISDIR(info.st_mode) and info.st_uid == EXECUTOR_UID
+         and not info.st_mode & 0o022, 'unsafe product work ownership')
+    for path in work.parents:
+        parent = path.lstat()
+        need(stat.S_ISDIR(parent.st_mode) and not parent.st_mode & 0o022
+             and parent.st_uid in (0, EXECUTOR_UID), 'unsafe product ancestry')
+        if path in PRODUCT_WORK_ROOTS:
+            break
+    return dict(user=EXECUTOR_UID, group=EXECUTOR_GID, extra_groups=[REGISTRY_GROUP])
+
+
+def git(work, *args, limit=MAX_INPUT + 1, _addressed_installer=False, _overrides=True,
+        _product_preflight=False):
+    need(not (_addressed_installer and _product_preflight), 'conflicting Git identity modes')
+    identity = {}
+    preexec = None
+    if _product_preflight:
+        identity = product_git_identity(work)
+        need(args == ('rev-parse', 'HEAD'), 'unsupported product Git read')
+        from native_guard import no_new_privileges
+        preexec = no_new_privileges
+    elif _addressed_installer:
+        identity = addressed_git_identity(work)
         need(args==('rev-parse','HEAD') or len(args)==2 and args[0]=='show'
              and re.fullmatch(r'[a-f0-9]{40}:scripts/chatops/tests/fixtures/agy-[a-z0-9-]+\.json',args[1]),
              'unsupported addressed Git read')
@@ -322,13 +361,18 @@ def git(work, *args, limit=MAX_INPUT + 1, _addressed_installer=False, _overrides
     # The effective-config snapshot omits these -c overrides so a repository
     # core.hooksPath or core.fsmonitor stays visible. Other reads keep them
     # so hooks and fsmonitor do not run. safe.directory is never set.
-    argv = ['git', '--no-pager', '--literal-pathspecs']
+    # Product root preflight uses the fixed executable path (not PATH lookup).
+    argv = [('/usr/bin/git' if _product_preflight else 'git'),
+            '--no-pager', '--literal-pathspecs']
     if _overrides:
         argv += ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false']
     argv += list(args)
     try:
+        kw = dict(identity)
+        if preexec is not None:
+            kw['preexec_fn'] = preexec
         done = subprocess.run(argv, cwd=work, env=env,
-                              capture_output=True, timeout=60, **identity)
+                              capture_output=True, timeout=60, **kw)
     except (OSError, subprocess.SubprocessError):
         raise ReviewError('git failed') from None
     need(done.returncode == 0 and len(done.stdout) <= limit, 'git failed or output too large')
@@ -709,14 +753,27 @@ def refuse_foreign_checkpoint(path):
 
 
 def product_work_ok(work, source_sha):
-    """Immutable exact HEAD via existing project repo/worktree; no new clone."""
+    """Immutable exact HEAD via existing project repo/worktree; no new clone.
+
+    Root handlers must not run candidate Git as UID0: spawn a bounded read-only
+    child as UID978. Ordinary UID978 stage paths keep the normal git() call.
+    Other UIDs are refused. No safe.directory and no checkout chown.
+    """
     need(isinstance(work, (str, Path)) and source_sha == PRODUCT_SOURCE_SHA, 'invalid product source')
     root = Path(work)
     need(root.is_absolute() and not root.is_symlink() and root.is_dir(), 'product work must be absolute directory')
+    need(root.resolve() == root, 'product work must be canonical')
     need(any(root == base or base in root.parents for base in PRODUCT_WORK_ROOTS),
          'product work outside existing project repo/worktree roots')
     refuse_foreign_checkpoint(root)
-    need(dec(git(root, 'rev-parse', 'HEAD')).strip() == source_sha, 'product worktree is not at reviewed SHA')
+    uid = os.geteuid()
+    if uid == 0:
+        head = dec(git(root, 'rev-parse', 'HEAD', _product_preflight=True)).strip()
+    elif uid == EXECUTOR_UID:
+        head = dec(git(root, 'rev-parse', 'HEAD')).strip()
+    else:
+        need(False, 'product Git must run as root preflight or UID978')
+    need(head == source_sha, 'product worktree is not at reviewed SHA')
     return root
 
 

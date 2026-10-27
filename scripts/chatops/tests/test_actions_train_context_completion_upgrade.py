@@ -288,6 +288,13 @@ class ProductQaV4Contract(unittest.TestCase):
                          U.V3_NEW['native_guard.py'])
         self.assertEqual(U.V4_FROZEN['native_cursor.py'], U.V3_PROTOCOL['native_cursor.py'])
         self.assertEqual(U.V4_FROZEN['context_exchange.py'], U.V3_PROTOCOL['context_exchange.py'])
+        # Declared Q93 dependency (accepted #29 maintenance); not raw C5 e89.
+        self.assertEqual(U.V4_FROZEN['antigravity_qa_recovery.py'],
+                         U.V3_PROTOCOL['antigravity_qa_recovery.py'])
+        self.assertEqual(U.V4_FROZEN['antigravity_qa_recovery.py'],
+                         '93efc05c7aa46fc7ff0d6da70f0db01a9ebda434dbc7d99066590e0459a92a2e')
+        self.assertNotIn('antigravity_qa_recovery.py', U.V4_OLD)
+        self.assertNotIn('antigravity_qa_recovery.py', U.V4_NEW)
 
     def test_quiet_v4_allows_historical_pending_denies_live(self):
         # Historical pending UNKNOWN accepted; live process / unmatched CP denied.
@@ -525,6 +532,68 @@ class ProductQaV4Transaction(unittest.TestCase):
         with patch.object(U,'quiet_v4',side_effect=core.Refused('live checkpoint active HOLD: slot1')):
             with self.assertRaisesRegex(core.Refused,'live checkpoint active HOLD'):
                 self.x.call('dry')
+
+
+class ProductQaV4HybridImport(unittest.TestCase):
+    """C5 baseline + V4_NEW overlay requires frozen Q93 for owner_package_admission."""
+
+    def test_hybrid_c5_plus_v4_new_imports_with_frozen_q93(self):
+        import hashlib
+        import importlib
+        import sys
+        import textwrap
+        lib = Path(ROOT) / 'scripts/chatops/actions_train'
+        q_bytes = (lib / 'antigravity_qa_recovery.py').read_bytes()
+        self.assertEqual(hashlib.sha256(q_bytes).hexdigest(),
+                         U.V4_FROZEN['antigravity_qa_recovery.py'])
+        # Synthetic C5-like Q without OWNER_PACKAGE symbols → AttributeError at import.
+        stub_q = textwrap.dedent('''\
+            # synthetic C5-like recovery without owner-package symbols
+            CHECKPOINT = "c" * 64
+            ''').encode()
+        self.assertNotIn(b'SMALL_SOURCE_HEAD', stub_q)
+        with tempfile.TemporaryDirectory(prefix='v4-hybrid-') as tmp:
+            tree = Path(tmp)
+            # Minimal dependency surface for owner_package_admission import.
+            for name in ('core.py', 'receiver.py', 'native_antigravity.py',
+                         'owner_package_admission.py'):
+                (tree / name).write_bytes((lib / name).read_bytes())
+            (tree / 'antigravity_qa_recovery.py').write_bytes(stub_q)
+            sys.path.insert(0, str(tree))
+            try:
+                for mod in ('antigravity_qa_recovery', 'owner_package_admission', 'receiver'):
+                    sys.modules.pop(mod, None)
+                with self.assertRaises(AttributeError):
+                    importlib.import_module('owner_package_admission')
+            finally:
+                for mod in ('antigravity_qa_recovery', 'owner_package_admission'):
+                    sys.modules.pop(mod, None)
+                if sys.path and sys.path[0] == str(tree):
+                    sys.path.pop(0)
+            # Overlay frozen actual Q93 → import + find_product_admission(empty STATE) works.
+            (tree / 'antigravity_qa_recovery.py').write_bytes(q_bytes)
+            # Fresh empty STATE: no product admission files.
+            state = tree / 'state'; state.mkdir()
+            sys.path.insert(0, str(tree))
+            try:
+                for mod in ('antigravity_qa_recovery', 'owner_package_admission',
+                            'receiver', 'native_antigravity', 'core'):
+                    sys.modules.pop(mod, None)
+                import receiver as R
+                with patch.object(R, 'STATE', state):
+                    self.assertIsNone(R.find_product_admission())
+                import owner_package_admission as A
+                import antigravity_qa_recovery as Q
+                self.assertTrue(hasattr(Q, 'SMALL_SOURCE_HEAD'))
+                self.assertTrue(hasattr(Q, 'OWNER_PACKAGE_SOURCES'))
+                self.assertTrue(callable(Q.owner_package_input_pins))
+                self.assertEqual(A.SOURCE_HEAD, Q.SMALL_SOURCE_HEAD)
+            finally:
+                for mod in ('antigravity_qa_recovery', 'owner_package_admission',
+                            'receiver', 'native_antigravity', 'core'):
+                    sys.modules.pop(mod, None)
+                if sys.path and sys.path[0] == str(tree):
+                    sys.path.pop(0)
 
 
 class ProductQaFinishEvidence(unittest.TestCase):

@@ -5,6 +5,7 @@ Synthetic fixtures only. No network, package install, runtime claim, or READY as
 import copy
 import json
 import os
+import stat
 import sys
 import tempfile
 import unittest
@@ -486,6 +487,166 @@ class ProductQaAdmissionWire(unittest.TestCase):
                 self.assertEqual(again['status'], 'unknown')
                 fork.assert_called_once()
                 self.assertEqual((folder / 'slot2.json').read_bytes(), before)
+
+    def test_spent_admission_rejects_new_generation_binding(self):
+        """Finished first FAIL + generation advance must not re-fork same admission."""
+        import native_antigravity as N
+        import owner_package_admission as A
+        import importlib
+        from core import digest, binding
+        A = importlib.reload(A)
+        with tempfile.TemporaryDirectory(prefix='product-qa-spent-') as tmp:
+            folder = Path(tmp)
+            legacy = dict(generation=119, operations={'old': {'result': {'status': 'unknown'}}},
+                          pending='old', deferred=[], last=None, stage_counts={})
+            R.atomic(folder / 'slot2.json', legacy)
+            before = (folder / 'slot2.json').read_bytes()
+            admission = dict(self._admission(), body_sha256='e' * 64, owner_id=A.OWNER_ID)
+            R.atomic(folder / (A.PRODUCT_LEDGER_PREFIX + '999001.json'), admission)
+            first_req = dict(action='train', stage='product_qa', slot='slot2', issue=346,
+                             phase='idle', head=self.HEAD, attempt=0, generation=0,
+                             profile='agy', run=10, run_attempt=1, gh_token='synthetic-read-token')
+            first_key = digest(binding(first_req))
+            # Synthetic finished first FAIL: generation advanced, pending cleared, journal intact.
+            finished = dict(
+                schema='GB_PRODUCT_QA_OPS_V1', generation=1, pending=None, last=dict(
+                    stage='product_qa', issue=346, status='confirmed', reason='FAIL'),
+                operations={first_key: dict(
+                    task_hash='a' * 64, admission_sha256=digest(admission),
+                    admission=admission, binding=binding(first_req),
+                    run=10, run_attempt=1, started_at=1, process={'pid': 1, 'start': '1', 'boot': 'x'},
+                    result={'status': 'confirmed', 'product_ready': False,
+                            'qualification_passed': False,
+                            'qa': {'verdict': 'FAIL', 'findings': ['x'], 'reviewed_sha': self.HEAD}},
+                    finished_at=2)})
+            ops_path = folder / 'product-qa-operations.json'
+            R.atomic(ops_path, finished)
+            journal_bytes = ops_path.read_bytes()
+            next_req = dict(first_req, generation=1, run=20)
+            budget = Mock(remaining=lambda *a: 3)
+            original_read = R.read
+            with patch.object(R, 'STATE', folder), \
+                 patch.object(N, 'PRODUCT_OPS', ops_path), \
+                 patch.object(R, 'ROOT_LOCK', -1, create=True), \
+                 patch.object(R, 'guard', return_value=SimpleNamespace(
+                     pw_uid=978, pw_gid=968, pw_dir='/tmp', pw_name='gb-slot2')), \
+                 patch.object(R, 'hosted_identity'), \
+                 patch.object(R, 'live', return_value=(None, SimpleNamespace(
+                     Budget=lambda *a, **k: budget))), \
+                 patch.object(N, 'product_executor_ready', return_value={'phase': 'canary'}), \
+                 patch.object(N, 'product_work_ok', return_value=Path(admission['work'])), \
+                 patch.object(N, 'refuse_foreign_checkpoint'), \
+                 patch.object(R, 'read', side_effect=lambda p, owner=None, limit=2097152:
+                              original_read(p, None, limit)), \
+                 patch.object(R.os, 'fork', return_value=4242) as fork, \
+                 patch.object(R, 'identity', return_value={'pid': 4242, 'start': '1', 'boot': 'x'}), \
+                 patch.object(R, 'alive', return_value=False), \
+                 patch.object(R, 'free_lock'):
+                again = R.product_qa_request(next_req, {'mode': 'active',
+                    'controller_sha': 'c' * 40, 'owned': {'slot1': 1, 'slot2': 1}})
+                self.assertEqual(again['status'], 'confirmed')
+                self.assertEqual(again['key'], first_key)
+                self.assertIn('already consumed', again.get('reason', ''))
+                fork.assert_not_called()
+                self.assertEqual(ops_path.read_bytes(), journal_bytes)
+                self.assertEqual((folder / 'slot2.json').read_bytes(), before)
+
+
+class ProductGitIdentity(unittest.TestCase):
+    """Root product Git preflight must drop to UID978; UID978 keeps ordinary git."""
+
+    HEAD = '8024caa659f4fee911d7e3afcb69ed7ac845ce5c'
+
+    def _work(self):
+        root = Path(tempfile.mkdtemp(prefix='product-git-root-'))
+        self.addCleanup(lambda: __import__('shutil').rmtree(root, ignore_errors=True))
+        work = root / 'issue-346'
+        work.mkdir()
+        return root, work
+
+    def test_root_product_work_ok_passes_executor_identity_to_subprocess(self):
+        import native_antigravity as N
+        base, work = self._work()
+        calls = []
+
+        def fake_run(argv, **kw):
+            calls.append((argv, kw))
+            self.assertEqual(argv[0], '/usr/bin/git')
+            self.assertIn('core.hooksPath=/dev/null', argv)
+            self.assertIn('core.fsmonitor=false', argv)
+            self.assertEqual(kw.get('user'), 978)
+            self.assertEqual(kw.get('group'), 968)
+            self.assertEqual(kw.get('extra_groups'), [65042])
+            self.assertTrue(callable(kw.get('preexec_fn')))
+            env = kw['env']
+            self.assertEqual(env['HOME'], '/nonexistent')
+            self.assertEqual(env['GIT_CONFIG_NOSYSTEM'], '1')
+            self.assertEqual(env['GIT_CONFIG_GLOBAL'], '/dev/null')
+            self.assertNotIn('safe.directory', ' '.join(argv))
+            return SimpleNamespace(returncode=0, stdout=(self.HEAD + '\n').encode())
+
+        with patch.object(N.os, 'geteuid', return_value=0), \
+             patch.object(N, 'PRODUCT_WORK_ROOTS', (base,)), \
+             patch.object(N, 'product_git_identity', return_value=dict(
+                 user=978, group=968, extra_groups=[65042])), \
+             patch.object(N.subprocess, 'run', side_effect=fake_run), \
+             patch.object(N, 'refuse_foreign_checkpoint'):
+            self.assertEqual(N.product_work_ok(work, self.HEAD), work)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0][-2:], ['rev-parse', 'HEAD'])
+
+    def test_uid978_product_work_ok_uses_ordinary_git_without_identity(self):
+        import native_antigravity as N
+        base, work = self._work()
+        calls = []
+
+        def fake_run(argv, **kw):
+            calls.append((argv, kw))
+            self.assertEqual(argv[0], 'git')
+            self.assertNotIn('user', kw)
+            self.assertNotIn('preexec_fn', kw)
+            return SimpleNamespace(returncode=0, stdout=(self.HEAD + '\n').encode())
+
+        with patch.object(N.os, 'geteuid', return_value=978), \
+             patch.object(N, 'PRODUCT_WORK_ROOTS', (base,)), \
+             patch.object(N.subprocess, 'run', side_effect=fake_run), \
+             patch.object(N, 'refuse_foreign_checkpoint'):
+            self.assertEqual(N.product_work_ok(work, self.HEAD), work)
+        self.assertEqual(len(calls), 1)
+
+    def test_foreign_uid_product_work_ok_refused(self):
+        import native_antigravity as N
+        base, work = self._work()
+        with patch.object(N.os, 'geteuid', return_value=1002), \
+             patch.object(N, 'PRODUCT_WORK_ROOTS', (base,)), \
+             patch.object(N, 'refuse_foreign_checkpoint'), \
+             patch.object(N.subprocess, 'run') as run:
+            with self.assertRaises(Exception):
+                N.product_work_ok(work, self.HEAD)
+            run.assert_not_called()
+
+    def test_product_git_identity_args_without_privilege(self):
+        """Static identity helper returns UID978/GID968/groups65042; no real setuid."""
+        import native_antigravity as N
+        import pwd
+        base, work = self._work()
+        # Ownership checks use lstat; mark work as uid978 and parents as root.
+        real_lstat = Path.lstat
+
+        def fake_lstat(path):
+            info = real_lstat(path)
+            uid = 978 if Path(path) == work else 0
+            return SimpleNamespace(st_uid=uid, st_mode=info.st_mode | stat.S_IFDIR,
+                                   st_gid=info.st_gid)
+
+        with patch.object(N.os, 'geteuid', return_value=0), \
+             patch.object(N, 'PRODUCT_WORK_ROOTS', (base,)), \
+             patch.object(Path, 'lstat', fake_lstat), \
+             patch.object(pwd, 'getpwuid', return_value=SimpleNamespace(
+                 pw_uid=978, pw_gid=968, pw_name='gb-slot2')), \
+             patch.object(N, 'refuse_foreign_checkpoint'):
+            identity = N.product_git_identity(work)
+        self.assertEqual(identity, dict(user=978, group=968, extra_groups=[65042]))
 
 
 if __name__ == '__main__':

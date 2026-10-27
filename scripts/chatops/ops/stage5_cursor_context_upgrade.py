@@ -1004,8 +1004,13 @@ V4_HISTORICAL_SLOT1_HEAD='8024caa659f4fee911d7e3afcb69ed7ac845ce5c'
 V4_HISTORICAL_SLOT1_ISSUE=346
 V4_HISTORICAL_SLOT2_PENDING='b65d8eb5101c52b26fdcf27b3468365f666836cac0c3f3021e1b76030b3cc5db'
 # Frozen PR341-compatible deps: prove installed, never rewritten by V4.
+# antigravity_qa_recovery.py is the accepted #29-maintenance Q93 pin (already in
+# V3_PROTOCOL); V4_NEW owner_package_admission imports its SMALL_SOURCE_HEAD /
+# OWNER_PACKAGE_SOURCES / owner_package_input_pins. Declaring it frozen closes
+# the hybrid C5+V4_NEW import gap without rewriting Q or installing unrelated modules.
 V4_FROZEN={'native_cursor.py':'02d26f8be9766bbeb1e92dd8514dfc496c1b3e1b0fc8035c1c65cc9aba6b6089',
-           'context_exchange.py':'baa4463cc6919e015ceabb1c05f398e095beb8c22a633191125442435586e132'}
+           'context_exchange.py':'baa4463cc6919e015ceabb1c05f398e095beb8c22a633191125442435586e132',
+           'antigravity_qa_recovery.py':'93efc05c7aa46fc7ff0d6da70f0db01a9ebda434dbc7d99066590e0459a92a2e'}
 V4_OLD={
  'core.py':'3ed9ab5503694f39011102ff34935810ef1dce67cf712c87be89b023689a15a7',
  'receiver.py':'6405168b06f3902e40595528d30856c025a0311abfc31d70b59e969ed384af4e',
@@ -1021,9 +1026,9 @@ V4_OLD={
  'accepted-engineering-rules.md':'017441dec5ba197a1065b6ef90efdddb090b286ba48687241a7fbc09dd002269'}
 V4_NEW={
  'core.py':'f3f06cc1245635b937018c1cbe431645ae4aa9acc45e7249be18e0b87cf2ee19',
- 'receiver.py':'37b4deb4988c28fdb680301a9421492252eea9fb942f2e27356ced10ce7d2f2a',
+ 'receiver.py':'8f7c142e7e370d03cb470150d1e97657ab5554274ec79fc7b62fab8a5fd1f77d',
  'stage.py':'994849f0deb414eff41276affef6a4e208809ab30b8cd835b58b7a7fc6e7c530',
- 'native_antigravity.py':'2683c0f86e7a0ae92687495cd24c4a2c4106ca4783e71cf7b0f0b27922c6ee41',
+ 'native_antigravity.py':'26194449422b158f47a0557d717782e29bad0920c82b41087e1a71105d1599bd',
  'native_guard.py':'334d4c78c57ba9a7f3f5c49e6737ec8e658033e4b4fdc84f92ce168ece9019f9',
  'owner_package_admission.py':'4aeb579312e9ad2979298929f16ea92210b3323fde51dfc26778a6a96c7a4677',
  'client.py':'d02307161913f72d5c9864b5f36d8862b39cc6e564091be51ed7e02bdde2a897',
