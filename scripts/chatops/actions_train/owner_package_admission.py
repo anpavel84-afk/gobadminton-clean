@@ -10,7 +10,9 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import sys
+import time
 import urllib.request
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -443,8 +445,12 @@ def accept(comment_id, *, dry=False):
 
 def main():
     need(os.geteuid()==0 and len(sys.argv)==3 and
-         sys.argv[1] in ('--dry-run','--apply','--qa','--accept','--accept-dry'),
+         sys.argv[1] in ('--dry-run','--apply','--qa','--accept','--accept-dry',
+                         '--product-qa','--product-qa-dry'),
          'one root authenticated package enrollment or post-COMPLETE QA transition')
+    if sys.argv[1] in ('--product-qa','--product-qa-dry'):
+        R.trusted_tree(Path(__file__).resolve())
+        return admit_product_qa(int(sys.argv[2]),dry=sys.argv[1]=='--product-qa-dry')
     if sys.argv[1] in ('--accept','--accept-dry'):
         R.trusted_tree(Path(__file__).resolve())
         return accept(int(sys.argv[2]),dry=sys.argv[1]=='--accept-dry')
@@ -558,6 +564,167 @@ def main():
              generation=newslot['generation'],
              task_sha256=q['task_sha256'],
              receipt=str(receipt),models_started=0),sort_keys=True))
+    finally:
+        os.close(fd)
+
+
+# --- Product QA-only admission (Issue346 cleanup); independent of historical slot2/#29 ---
+PRODUCT_PREFIX='GOBADMINTON_PRODUCT_QA_V1\n'
+PRODUCT_SCHEMA='GB_PRODUCT_QA_ADMISSION_V1'
+PRODUCT_ISSUE=N.PRODUCT_ISSUE
+PRODUCT_SOURCE=N.PRODUCT_SOURCE_SHA
+PRODUCT_LEDGER_PREFIX='product-qa-admission-'
+PRODUCT_RECEIPT_PREFIX='product-qa-admission-receipt-'
+PRODUCT_ISSUE_URL='https://api.github.com/repos/anpavel84-afk/gobadminton-clean/issues/346'
+
+
+def product_owner_comment(comment_id):
+    need(type(comment_id) is int and comment_id>0,'invalid owner comment')
+    url='https://api.github.com/repos/anpavel84-afk/gobadminton-clean/issues/comments/'+str(comment_id)
+    req=urllib.request.Request(url,headers={
+        'Accept':'application/vnd.github+json',
+        'User-Agent':'GoBadminton-product-qa-admission-v1'})
+    with urllib.request.urlopen(req,timeout=15) as response:
+        need(response.status==200,'Owner comment HTTP validation failed')
+        raw=response.read(32769)
+    need(len(raw)<=32768,'Owner comment too large')
+    data=json.loads(raw)
+    need(data.get('id')==comment_id
+         and data.get('issue_url')==PRODUCT_ISSUE_URL
+         and data.get('user',{}).get('id')==OWNER_ID
+         and data.get('user',{}).get('login')=='anpavel84-afk'
+         and data.get('author_association') in ('OWNER','MEMBER','COLLABORATOR'),
+         'authenticated repository Owner Issue #346 comment required')
+    body=data.get('body')
+    need(type(body) is str and body.startswith(PRODUCT_PREFIX),'missing product QA Owner prefix')
+    content=body[len(PRODUCT_PREFIX):]
+    value=json.loads(content)
+    need(json.dumps(value,sort_keys=True,separators=(',',':'))==content,
+         'product QA Owner JSON not canonical')
+    return body,value
+
+
+PRODUCT_ADMISSION_FIELDS=frozenset({
+    'schema','issue','repo_id','owner_comment','controller_sha','source_base','source_sha',
+    'model','attempt','max_calls','work'})
+PRODUCT_LEDGER_EXTRA=frozenset({'owner_id','body_sha256','admitted_at'})
+
+
+def validate_product_admission(value, *, controller=None):
+    """Closed canonical fields only; no arbitrary root paths or commands."""
+    need(type(value) is dict and PRODUCT_ADMISSION_FIELDS <= set(value)
+         and set(value) <= PRODUCT_ADMISSION_FIELDS|PRODUCT_LEDGER_EXTRA,
+         'unexpected product QA authorization fields')
+    need(value['schema']==PRODUCT_SCHEMA and value['issue']==PRODUCT_ISSUE
+         and value['repo_id']==REPO_ID and value['source_sha']==PRODUCT_SOURCE
+         and value['model']==N.MODEL and value['max_calls']==1
+         and type(value['attempt']) is int and value['attempt']==1
+         and type(value['owner_comment']) is int and value['owner_comment']>0,
+         'product QA exact issue/source/model/budget drift')
+    need(type(value['source_base']) is str and re.fullmatch('[a-f0-9]{40}',value['source_base'])
+         and value['source_base']!=value['source_sha'],
+         'product QA source_base must be distinct parent SHA')
+    if controller is not None:
+        need(value['controller_sha']==controller,'product QA controller drift')
+    else:
+        need(type(value['controller_sha']) is str and re.fullmatch('[a-f0-9]{40}',value['controller_sha']),
+             'invalid product QA controller')
+    work=value['work']
+    need(type(work) is str and work.startswith('/') and '..' not in work.split('/')
+         and not work.endswith('/') and ' ' not in work
+         and any(work==str(base) or work.startswith(str(base)+'/') for base in N.PRODUCT_WORK_ROOTS),
+         'product work outside existing project repo/worktree roots')
+    need('/slots/slot1/' not in work,'foreign slot1 checkpoint path forbidden')
+    return value
+
+
+def product_qa_ledger(value):
+    need(type(value) is dict and value.get('schema')==PRODUCT_SCHEMA, 'invalid product QA ledger')
+    validate_product_admission(value)
+    return value
+
+
+def product_resources_quiet(controller):
+    """Prove NEW product-QA resources are free; do not claim/reset historical slot journals.
+
+    Legacy slot1/slot2 pending UNKNOWN may remain. This only checks executor identity
+    stopped, product-qa locks free, and Root-owned target modules unchanged.
+    """
+    policy=R.read(R.POLICY,0)
+    need(policy.get('mode') in ('active','disabled') and policy.get('controller_sha')==controller,
+         'controller must be ACTIVE and exact')
+    # Historical journals stay byte-identical; only observe, never rewrite.
+    slot1=R.journal('slot1');slot2=R.journal('slot2')
+    need(type(slot1) is dict and type(slot2) is dict,'slot journals unreadable')
+    # UID978 must be stopped for a new product launch; do not clear slot2 pending.
+    R.no_models(978,'slot2')
+    R.free_lock(R.AUTONOMY/'locks'/'product-qa.lease')
+    if N.PRODUCT_OPS.exists():
+        ops=R.read(N.PRODUCT_OPS,0)
+        need(ops.get('schema')=='GB_PRODUCT_QA_OPS_V1' and ops.get('pending') is None,
+             'product QA operation still pending/UNKNOWN')
+    return dict(slot1_pending=slot1.get('pending'),slot2_pending=slot2.get('pending'),
+                slot1_generation=slot1.get('generation'),slot2_generation=slot2.get('generation'))
+
+
+def authorize_product_qa(comment_id,controller):
+    body,v=product_owner_comment(comment_id)
+    validate_product_admission(v,controller=controller)
+    need(v['owner_comment']==comment_id,'owner_comment binding drift')
+    ledger=dict(v,owner_id=OWNER_ID,
+                body_sha256=hashlib.sha256(body.encode()).hexdigest(),
+                admitted_at=None)
+    product_qa_ledger(ledger)
+    return ledger
+
+
+def admit_product_qa(comment_id,*,dry=False):
+    """Root OPS enrollment of a fresh product QA-only admission; no model call."""
+    need(os.geteuid()==0,'root product QA admission only')
+    fd=os.open(R.STATE/'controller.lock',os.O_RDWR|os.O_NOFOLLOW|os.O_CLOEXEC)
+    try:
+        fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        policy=R.read(R.POLICY,0);controller=policy['controller_sha']
+        need(policy['mode']=='active','product QA admission requires active controller')
+        observed=product_resources_quiet(controller)
+        path=R.STATE/(PRODUCT_LEDGER_PREFIX+str(comment_id)+'.json')
+        receipt=R.STATE/(PRODUCT_RECEIPT_PREFIX+str(comment_id)+'.json')
+        if path.exists():
+            existing=product_qa_ledger(R.read(path,0))
+            need(existing['owner_comment']==comment_id and existing['controller_sha']==controller,
+                 'existing product QA admission drift')
+            print(json.dumps(dict(status='ALREADY_ADMITTED',owner_comment=comment_id,
+                 source_sha=PRODUCT_SOURCE,issue=PRODUCT_ISSUE,
+                 preserved_slot_pending=observed,models_started=0),sort_keys=True))
+            return existing
+        package=authorize_product_qa(comment_id,controller)
+        # Snapshot historical journals for byte-identity proof; never rewrite them.
+        slot1_before=sha(R.STATE/'slot1.json') if (R.STATE/'slot1.json').exists() else None
+        slot2_before=sha(R.STATE/'slot2.json') if (R.STATE/'slot2.json').exists() else None
+        transaction=dict(schema='GB_PRODUCT_QA_ADMISSION_TX_V1',phase='intent',
+            owner_comment=comment_id,controller_sha=controller,
+            body_sha256=package['body_sha256'],source_sha=PRODUCT_SOURCE,
+            issue=PRODUCT_ISSUE,slot1_before_sha256=slot1_before,slot2_before_sha256=slot2_before,
+            observed=observed)
+        if dry:
+            print(json.dumps(dict(status='DRY_RUN_PASS',owner_comment=comment_id,
+                 source_sha=PRODUCT_SOURCE,issue=PRODUCT_ISSUE,provider_calls=0,
+                 protected_writes=0,preserved_slot_pending=observed),sort_keys=True))
+            return package
+        R.atomic(receipt,transaction)
+        package=dict(package,admitted_at=int(time.time()))
+        R.atomic(path,package)
+        # Historical journals must remain byte-identical after admission.
+        slot1_after=sha(R.STATE/'slot1.json') if (R.STATE/'slot1.json').exists() else None
+        slot2_after=sha(R.STATE/'slot2.json') if (R.STATE/'slot2.json').exists() else None
+        need(slot1_after==slot1_before and slot2_after==slot2_before,
+             'product QA admission must not rewrite historical slot journals')
+        R.atomic(receipt,dict(transaction,phase='complete',
+                              package_sha256=hashlib.sha256(encoded(package)).hexdigest()))
+        print(json.dumps(dict(status='ADMITTED',owner_comment=comment_id,
+             controller=controller,source_sha=PRODUCT_SOURCE,issue=PRODUCT_ISSUE,
+             receipt=str(receipt),models_started=0),sort_keys=True))
+        return package
     finally:
         os.close(fd)
 

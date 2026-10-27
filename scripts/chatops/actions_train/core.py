@@ -21,7 +21,8 @@ PINS = {'autonomous_issues.py': 'f3ca85b4392fa1e2ba76a09ec1140d78ebc6c708ba42397
         'slots.py': '3c6d910ccdaa5d482a1cf05c9330f35ef5c9a5aabd5b14ce88d4033c71e144ce',
         'check_foundation.py': 'c2975b19bd46d00acbdbc08227545b8f9c9501d7b8e8783e9b397751c612bd13'}
 RECOVERY_STAGES = ('diagnose', 'task_review')
-STAGES = ('failure_diagnosis', 'claim', 'author', 'publish', 'qa', 'ci', 'integrate', 'promote', 'dev', 'qa_qualification') + RECOVERY_STAGES
+STAGES = ('failure_diagnosis', 'claim', 'author', 'publish', 'qa', 'ci', 'integrate', 'promote', 'dev',
+          'qa_qualification', 'product_qa') + RECOVERY_STAGES
 PROFILES = ('auto', 'codex', 'cursor', 'agy')
 SHA = re.compile('[0-9a-f]{40}')
 
@@ -210,6 +211,12 @@ def request(value):
         need(value['slot'] == 'slot2' and value['issue'] == 29 and value['phase'] == 'idle'
              and value['attempt'] == 0 and value['profile'] == 'agy' and value['head'] is not None,
              'invalid bounded QA qualification request')
+    if value['stage'] == 'product_qa':
+        # Logical slot carries UID978 executor home only; provider is role/capability, not slot==slot2.
+        need(value['slot'] == 'slot2' and value['issue'] == 346 and value['phase'] == 'idle'
+             and value['attempt'] == 0 and value['profile'] == 'agy'
+             and value['head'] == '8024caa659f4fee911d7e3afcb69ed7ac845ce5c',
+             'invalid bounded product QA request')
     return value
 
 def binding(req):
@@ -496,6 +503,17 @@ def plan(a, s, snapshot, candidates, profile='auto'):
         if not card['owned']:
             continue
         pending = card.get('pending')
+        product = card.get('product_qa')
+        # Product QA uses a separate ops ledger; historical slot2 pending may remain.
+        if snapshot.get('mode') == 'active' and name == 'slot2' and product:
+            need(set(product) == {'slot','issue','stage','phase','head','attempt','generation','profile'}
+                 and product['slot'] == name and product['issue'] == 346
+                 and product['stage'] == 'product_qa' and product['phase'] == 'idle'
+                 and product['attempt'] == 0 and product['profile'] == 'agy'
+                 and product['head'] == '8024caa659f4fee911d7e3afcb69ed7ac845ce5c'
+                 and product['generation'] == card['generation'],
+                 'invalid root product QA proposal')
+            out.append(dict(product))
         if pending:
             if pending['status'] == 'unknown' and pending.get('recoverable', True) and pending['binding']['stage'] in ('publish', 'integrate', 'promote', 'dev', 'qa'):
                 out.append({k: v for k, v in pending['binding'].items() if k != 'action'})

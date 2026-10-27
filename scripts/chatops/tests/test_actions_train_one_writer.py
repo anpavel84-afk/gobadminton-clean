@@ -11,7 +11,7 @@ import unittest
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'actions_train'))
 from live import slots as S
@@ -368,6 +368,100 @@ class RootAuthorBudgetBinding(unittest.TestCase):
         import inspect
         src = inspect.getsource(R.supervisor)
         self.assertIn("issue=active['issue']", src)
+
+
+class ProductQaAdmissionWire(unittest.TestCase):
+    """Fresh product QA-only admission: independent of historical slot pending."""
+
+    HEAD = '8024caa659f4fee911d7e3afcb69ed7ac845ce5c'
+    BASE = 'a' * 40
+
+    def _admission(self, **extra):
+        import owner_package_admission as A
+        import native_antigravity as N
+        value = dict(schema=A.PRODUCT_SCHEMA, issue=346, repo_id=A.REPO_ID,
+                     owner_comment=999001, controller_sha='c' * 40,
+                     source_base=self.BASE, source_sha=self.HEAD, model=N.MODEL,
+                     attempt=1, max_calls=1,
+                     work='/srv/gb-slots/slot2/worktrees/issue-346')
+        value.update(extra)
+        return value
+
+    def test_validate_admission_closed_fields_and_foreign_path(self):
+        import owner_package_admission as A
+        good = self._admission()
+        self.assertEqual(A.validate_product_admission(good)['issue'], 346)
+        with self.assertRaises(Exception):
+            A.validate_product_admission(dict(good, work='/var/lib/gobadminton-autonomy/slots/slot1/state'))
+        with self.assertRaises(Exception):
+            A.validate_product_admission(dict(good, source_sha='b' * 40))
+        with self.assertRaises(Exception):
+            A.validate_product_admission(dict(good, extra='nope'))
+
+    def test_product_qa_request_fields_fail_closed(self):
+        for fields in ({'issue': 29}, {'slot': 'slot1'}, {'head': 'b' * 40},
+                       {'phase': 'pr_wait'}, {'attempt': 1}, {'profile': 'auto'}):
+            with self.subTest(fields=fields):
+                req = dict(action='train', stage='product_qa', slot='slot2', issue=346,
+                           phase='idle', head=self.HEAD, attempt=0, generation=0,
+                           profile='agy', run=1, run_attempt=1, gh_token='synthetic-read-token')
+                with self.assertRaises(core.Refused):
+                    core.request(req | fields)
+
+    def test_plan_exposes_product_qa_with_legacy_slot2_pending(self):
+        product = dict(slot='slot2', issue=346, stage='product_qa', phase='idle',
+                       head=self.HEAD, attempt=0, generation=7, profile='agy')
+        slot2 = _card(pending=dict(status='unknown', recoverable=False,
+                                   binding=dict(action='train', stage='qa_qualification',
+                                                slot='slot2', issue=29, phase='idle',
+                                                head='d' * 40, attempt=0, generation=119,
+                                                profile='agy')))
+        slot2['generation'] = 7
+        slot2['product_qa'] = product
+        snap = dict(mode='active', slots={
+            'slot1': _card(active=_active('pr_wait', 346)),
+            'slot2': slot2})
+        planned = core.plan(None, S, snap, [])
+        self.assertEqual([p for p in planned if p.get('stage') == 'product_qa'], [product])
+
+    def test_product_request_preserves_legacy_pending_and_no_replay(self):
+        import native_antigravity as N
+        import owner_package_admission as A
+        with tempfile.TemporaryDirectory(prefix='product-qa-') as tmp:
+            folder = Path(tmp)
+            legacy = dict(generation=119, operations={'old': {'result': {'status': 'unknown'}}},
+                          pending='old', deferred=[], last=None, stage_counts={})
+            R.atomic(folder / 'slot2.json', legacy)
+            before = (folder / 'slot2.json').read_bytes()
+            admission = dict(self._admission(), body_sha256='e' * 64, owner_id=A.OWNER_ID)
+            R.atomic(folder / (A.PRODUCT_LEDGER_PREFIX + '999001.json'), admission)
+            req = dict(action='train', stage='product_qa', slot='slot2', issue=346,
+                       phase='idle', head=self.HEAD, attempt=0, generation=0,
+                       profile='agy', run=10, run_attempt=1, gh_token='synthetic-read-token')
+            budget = Mock(remaining=lambda *a: 3)
+            with patch.object(R, 'STATE', folder), \
+                 patch.object(N, 'PRODUCT_OPS', folder / 'product-qa-operations.json'), \
+                 patch.object(R, 'ROOT_LOCK', -1, create=True), \
+                 patch.object(R, 'guard', return_value=SimpleNamespace(pw_uid=978, pw_gid=968, pw_dir='/tmp', pw_name='gb-slot2')), \
+                 patch.object(R, 'hosted_identity'), \
+                 patch.object(R, 'live', return_value=(None, SimpleNamespace(Budget=lambda *a, **k: budget))), \
+                 patch.object(N, 'product_executor_ready', return_value={'phase': 'canary'}), \
+                 patch.object(N, 'product_work_ok', return_value=Path(admission['work'])), \
+                 patch.object(N, 'refuse_foreign_checkpoint'), \
+                 patch.object(R.os, 'fork', return_value=4242) as fork, \
+                 patch.object(R, 'identity', return_value={'pid': 4242, 'start': '1', 'boot': 'x'}), \
+                 patch.object(R, 'alive', return_value=False), \
+                 patch.object(R, 'free_lock'):
+                first = R.product_qa_request(req, {'mode': 'active', 'controller_sha': 'c' * 40,
+                                                   'owned': {'slot1': 1, 'slot2': 1}})
+                self.assertEqual(first['status'], 'running')
+                fork.assert_called_once()
+                self.assertEqual((folder / 'slot2.json').read_bytes(), before)
+                again = R.product_qa_request(req | {'run': 11}, {'mode': 'active',
+                    'controller_sha': 'c' * 40, 'owned': {'slot1': 1, 'slot2': 1}})
+                self.assertEqual(again['status'], 'unknown')
+                fork.assert_called_once()
+                self.assertEqual((folder / 'slot2.json').read_bytes(), before)
 
 
 if __name__ == '__main__':

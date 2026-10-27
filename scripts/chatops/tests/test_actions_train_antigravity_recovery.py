@@ -313,4 +313,58 @@ class Successor(unittest.TestCase):
         op['result']['native_receipt']['qualification_lineage']['adapter_revision']='d'*40
         with self.assertRaises(Refused):R.acceptance_match(op,self.q)
 
+
+class ProductQaExecutor(unittest.TestCase):
+    def test_refuse_foreign_checkpoint_and_wrong_uid(self):
+        with self.assertRaises(Exception):
+            N.refuse_foreign_checkpoint('/var/lib/gobadminton-autonomy/slots/slot1/state.json')
+        N.refuse_foreign_checkpoint('/srv/gb-slots/slot2/worktrees/issue-346')
+
+    def test_product_available_requires_ready_receipt(self):
+        with patch.object(N,'product_role_ready',return_value=False):
+            ok,why=N.product_available()
+            self.assertFalse(ok)
+            self.assertIn('not READY',why)
+        with patch.object(N,'product_role_ready',return_value=True), \
+             patch.object(N,'product_executor_ready',return_value={'phase':'ready'}):
+            ok,why=N.product_available()
+            self.assertTrue(ok)
+
+    def test_product_ready_parser_completion_required(self):
+        # READY helper only accepts confirmed PASS shape; catalogue alone is insufficient.
+        with tempfile.TemporaryDirectory() as tmp:
+            ready=Path(tmp)/'ready.json'
+            with patch.object(N,'PRODUCT_READY',ready):
+                self.assertFalse(N.product_role_ready())
+                ready.write_text(json.dumps(dict(schema='GB_PRODUCT_QA_ROLE_READY_V1',phase='ready',
+                    issue=346,source_sha=N.PRODUCT_SOURCE_SHA,model=N.MODEL,verdict='PASS',
+                    operation='a'*64)))
+                with patch.object(N,'trusted',side_effect=lambda p,owner=0,limit=65536:ready.read_bytes()):
+                    self.assertTrue(N.product_role_ready())
+                ready.write_text(json.dumps(dict(schema='GB_PRODUCT_QA_ROLE_READY_V1',phase='ready',
+                    issue=346,source_sha=N.PRODUCT_SOURCE_SHA,model=N.MODEL,verdict='FAIL',
+                    operation='a'*64)))
+                with patch.object(N,'trusted',side_effect=lambda p,owner=0,limit=65536:ready.read_bytes()):
+                    self.assertFalse(N.product_role_ready())
+
+    def test_budget_cap5_legacy_issue29_untouched(self):
+        from test_actions_train import S
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);out=root/'out';locks=root/'locks';locks.mkdir();(locks/'registry.lock').touch()
+            (out/'slot2').mkdir(parents=True)
+            (out/'slot2'/'ledger.json').write_text(json.dumps({'2026-10-27':{'agy':{'qa':2,'issues':{'29':2}}}}))
+            limits=root/'budgets.json'
+            limits.write_text(json.dumps({'providers':{'agy':{'qa':'unlimited','per_issue_daily':5}},
+                'slots':{'slot2':{'agy':{'qa':'unlimited'}}}}))
+            budget=S.Budget(limits,out,locks/'registry.lock',today=lambda:'2026-10-27')
+            budget.seed_issue_attribution('slot2','agy',29,2)
+            self.assertEqual(budget.issue_used('agy',29),2)
+            budget.bind_issue(346)
+            # Per-issue cap5 is independent: #29's historical 2 do not reduce #346's remaining.
+            self.assertEqual(budget.remaining('agy','qa','slot2'),5)
+            budget.charge('slot2','agy','qa')
+            self.assertEqual(budget.issue_used('agy',29),2)
+            self.assertEqual(budget.issue_used('agy',346),1)
+
+
 if __name__=='__main__':unittest.main()

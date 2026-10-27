@@ -515,6 +515,9 @@ def validate_current(j,backups,new,*,installed=False,preparing=False):
 
 def execute(action,bundle,manifest,controller,stage_sha,dispatch_sha,run_id=None,baseline=None,
             bundle_commit=None,bundle_branch='dev',version=2):
+    if version==4:
+        return execute_v4(action,bundle,manifest,controller,stage_sha,dispatch_sha,run_id,baseline,
+                          bundle_commit,bundle_branch)
     if version==3:
         return execute_v3(action,bundle,manifest,controller,stage_sha,dispatch_sha,run_id,baseline,
                           bundle_commit,bundle_branch)
@@ -981,6 +984,121 @@ def execute_v3(action,bundle,manifest,controller,stage_sha,dispatch_sha,run_id,b
     return dict(result,phase='installed-lib-only',state_preserved=True)
 
 
+# V4: product QA admission transport. Distinct from V3; never reinterprets a V3 journal.
+# Allows install while historical slot pending UNKNOWN remains, only when NEW product-QA
+# resources are free and target modules match exact OLD pins. Does not claim all old
+# external helper effects absent. Frozen V3 contract behaviour is unchanged.
+V4_SCHEMA='GB_STAGE5_PRODUCT_QA_ADMISSION_V4'
+V4_JOURNAL=STATE/'stage5-product-qa-admission.json'
+V4_BACKUP=STATE/'stage5-product-qa-admission-backup'
+V4_OLD={
+ 'core.py':'ca51d30d78bfd2ad5d745738cfe4fd2a782fffd22369b313fe862af3dbfe7654',
+ 'receiver.py':'03d3b52eb62b02b3a8e473859a506aaba0d925cdeaee0297c0fc328e2ddcd4ab',
+ 'stage.py':'74291bcd67827d2365f1678e7617cf0f8ec09dc389e1c1bffbac23111faa89ad',
+ 'native_antigravity.py':'9dae383ae315f02f5ed03e6c8e45424b0516e8a653e446e5600440d12b438889',
+ 'owner_package_admission.py':'bb5bf8516d26ae293f16d794c2e46f90b01d0c27b34da15febbd0bff4398c7c5',
+ 'client.py':'1c63f4a53709f749cd6d7e88ee6cf1fd479a76762b385dc3a94764f4d42bce65'}
+V4_NEW={
+ 'core.py':'bbf1811191ba488d9e7d99d4e70ae0756ad6579c607b0830e856e62050ae41e0',
+ 'receiver.py':'6a64c9bc2d5b3d9c71fea433b16078acb70d36b631755a90c36016f885e2a950',
+ 'stage.py':'2577cf387a8ea0c72a713e21eea499f4a3fec23a2253157221f796b65b18eb41',
+ 'native_antigravity.py':'e6b1904d6e2a7adb67faf1a5d0818b8cc0f4e1babe081667f3eafac6d69f23e1',
+ 'owner_package_admission.py':'4aeb579312e9ad2979298929f16ea92210b3323fde51dfc26778a6a96c7a4677',
+ 'client.py':'d02307161913f72d5c9864b5f36d8862b39cc6e564091be51ed7e02bdde2a897'}
+
+
+def quiet_v4():
+    """Historical pending UNKNOWN may remain; NEW product-QA resources must be free.
+
+    Proves stopped UID978 identity for a new launch and free product-qa lease.
+    Does not clear/reset slot1/slot2 journals and does not claim all old helper
+    provenance absent. Conflicting live process or held product-qa lock → HOLD.
+    """
+    quiet()  # units/cgroups/legacy locks
+    for slot in ('slot1','slot2'):
+        j=receiver.journal(slot)
+        # Observe only: preserve pending bytes. Alive process on ANY op → HOLD.
+        for op in j.get('operations',{}).values():
+            process=op.get('process')
+            if process:
+                need(type(process) is dict and set(process)=={'pid','start','boot'}
+                     and type(process['pid']) is int and process['pid']>0,'invalid recorded process identity')
+                need(receiver.identity(process['pid'])!=process,'recorded operation process still alive')
+        safe_checkpoint(receiver.checkpoint(slot)[0])
+    receiver.no_models(978,'slot2')
+    receiver.free_lock(receiver.AUTONOMY/'locks'/'product-qa.lease')
+    from native_antigravity import PRODUCT_OPS
+    if PRODUCT_OPS.exists():
+        ops=receiver.read(PRODUCT_OPS,0)
+        need(ops.get('pending') is None,'product QA operation still pending/UNKNOWN HOLD')
+
+
+def _v4_save(j):
+    raw=json.dumps(j,sort_keys=True).encode()
+    if V4_JOURNAL.exists():
+        pathlib.Path(V4_JOURNAL).unlink()
+    atomic_bytes(V4_JOURNAL,raw,dict(mode=0o600,uid=OWNER_UID,gid=OWNER_GID),expected=None)
+
+
+def execute_v4(action,bundle,manifest,controller,stage_sha,dispatch_sha,run_id,baseline,commit,branch):
+    need(os.geteuid()==OWNER_UID,'root integrator only')
+    need(action in ('dry','apply','verify','activate','rollback'),'invalid V4 action')
+    need(re.fullmatch('[a-f0-9]{40}',baseline or '') and re.fullmatch('[a-f0-9]{40}',controller or ''),
+         'immutable controller required')
+    need(re.fullmatch('[a-f0-9]{64}',stage_sha or '') and re.fullmatch('[a-f0-9]{64}',dispatch_sha or ''),
+         'exact workflow digests required')
+    quiet_v4()
+    need(re.fullmatch('[a-f0-9]{40}',commit or ''),'V4 exact reviewed candidate required')
+    slot1=STATE/'slot1.json';slot2=STATE/'slot2.json'
+    slot1_before=slot1.read_bytes() if slot1.exists() else None
+    slot2_before=slot2.read_bytes() if slot2.exists() else None
+    identity=dict(version=4,baseline=baseline,controller=controller,manifest=manifest,
+                  bundle_commit=commit,bundle_branch=branch,stage_sha256=stage_sha,
+                  dispatch_sha256=dispatch_sha,schema=V4_SCHEMA,
+                  slot1_before_sha256=bytes_sha(slot1_before) if slot1_before else None,
+                  slot2_before_sha256=bytes_sha(slot2_before) if slot2_before else None)
+    target={}
+    for name,pin in V4_NEW.items():
+        raw=git(bundle,'show',commit+':'+PREFIX+name)
+        need(bytes_sha(raw)==pin,'V4 bundle target drift: '+name)
+        target[name]=raw
+    for name,pin in V4_OLD.items():
+        need(sha(INSTALL/name)==pin,
+             'V4 installed OLD pin mismatch HOLD: '+name+'; blocker=installed module drift')
+    need(sha(INSTALL/'native_guard.py')==V3_NEW['native_guard.py'],
+         'native_guard must remain accepted PR341 pin')
+    changes={n:dict(before=canonical_meta(V4_OLD[n]),after=canonical_meta(V4_NEW[n])) for n in V4_OLD}
+    if action=='dry':
+        return dict(dry=True,status='PLANNED_PRODUCT_QA_UPGRADE',version=4,changes=changes,
+                    preserved_slot_pending=True,role_qualified=False,ready=False,policy_writes=0)
+    need(not os.path.lexists(V4_JOURNAL) and not os.path.lexists(V4_BACKUP),
+         'prior V4 transaction exists; inspect/rollback')
+    j=dict(schema=V4_SCHEMA,identity=identity,identity_sha256=digest(identity),
+           phase='preparing',installed_at=int(time.time()),changes=changes,
+           preserved_slot1=identity['slot1_before_sha256'],
+           preserved_slot2=identity['slot2_before_sha256'],
+           applied=[],restored=[],write_intent=None)
+    _v4_save(j)
+    V4_BACKUP.mkdir(mode=0o700)
+    for name in sorted(V4_OLD):
+        raw,_=read_file(INSTALL/name)
+        need(bytes_sha(raw)==V4_OLD[name],'pre-backup OLD drift: '+name)
+        atomic_bytes(V4_BACKUP/name,raw,canonical_meta(V4_OLD[name],0o600),expected=None)
+    quiet_v4()
+    j['phase']='applying';_v4_save(j)
+    for name in sorted(V4_OLD):
+        quiet_v4()
+        atomic_bytes(INSTALL/name,target[name],changes[name]['after'],expected=changes[name]['before'])
+        j['applied'].append(name);_v4_save(j)
+    need((slot1.read_bytes() if slot1.exists() else None)==slot1_before
+         and (slot2.read_bytes() if slot2.exists() else None)==slot2_before,
+         'V4 install must not rewrite historical slot journals')
+    j['phase']='installed-lib-only';_v4_save(j)
+    return dict(phase='installed-lib-only',version=4,state_preserved=True,
+                preserved_slot_pending=True,role_qualified=False,ready=False,
+                applied=list(j['applied']))
+
+
 def unlink_cas(path,expected):
     parent=directory_fd(path.parent)
     try:
@@ -1003,7 +1121,7 @@ def main():
     parser.add_argument('--controller',required=True)
     parser.add_argument('--stage-hash',required=True);parser.add_argument('--dispatch-hash',required=True)
     parser.add_argument('--bundle-commit');parser.add_argument('--bundle-branch',default='dev')
-    parser.add_argument('--version',type=int,choices=(2,3),default=2)
+    parser.add_argument('--version',type=int,choices=(2,3,4),default=2)
     parser.add_argument('--run',type=int);a=parser.parse_args()
     path=STATE/'controller.lock'
     # Existing lock only, including dry: no O_CREAT, mkdir or managed byte writes.

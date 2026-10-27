@@ -195,4 +195,25 @@ class CompletionSafety(unittest.TestCase):
             self.assertEqual(stat.S_IMODE(p.stat().st_mode),0o644)
 
 
+class ProductQaV4Contract(unittest.TestCase):
+    def test_v4_distinct_from_v3_and_preserves_pending_contract(self):
+        self.assertEqual(U.V4_SCHEMA,'GB_STAGE5_PRODUCT_QA_ADMISSION_V4')
+        self.assertNotEqual(U.V4_SCHEMA,U.V3_SCHEMA)
+        self.assertEqual(set(U.V4_OLD),set(U.V4_NEW))
+        self.assertTrue(all(U.V4_OLD[n]!=U.V4_NEW[n] for n in U.V4_OLD))
+        # Frozen V3 still refuses pending; V4 quiet documents preserved UNKNOWN.
+        import inspect
+        self.assertIn("j['pending'] is None", inspect.getsource(U.quiet_v3))
+        self.assertIn('pending UNKNOWN may remain', U.quiet_v4.__doc__)
+        # native_guard is intentionally not in V4 delta (keep accepted PR341 pin).
+        self.assertNotIn('native_guard.py', U.V4_OLD)
+
+    def test_v4_old_pins_match_pr354_base_before_product_qa(self):
+        # Regression guard: V4 OLD must stay the accepted PR354 transport pins.
+        self.assertEqual(U.V4_OLD['native_antigravity.py'],
+                         '9dae383ae315f02f5ed03e6c8e45424b0516e8a653e446e5600440d12b438889')
+        self.assertEqual(U.V3_NEW['native_guard.py'],
+                         '334d4c78c57ba9a7f3f5c49e6737ec8e658033e4b4fdc84f92ce168ece9019f9')
+
+
 if __name__=='__main__': unittest.main()
