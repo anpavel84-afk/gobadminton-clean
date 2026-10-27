@@ -12,6 +12,10 @@ from test_actions_train import ROOT, core, stage, req
 from test_actions_train_context import accepted
 import context_policy as C
 import test_plan_gate as G
+from actions_train_plan_fixtures import candidate
+from test_actions_train_cost_policy import cost_task
+from test_actions_train import issue
+import os
 
 
 class StageGateTests(unittest.TestCase):
@@ -79,14 +83,22 @@ class StageGateTests(unittest.TestCase):
     def test_promote_refuses_before_push_or_ci_call(self): self.refusal('promote', 'promoting')
 
     def test_claim_checks_plan_before_worktree_creation(self):
-        self.store.data['active'] = None
-        admitted = F.active('claimed')
-        self.store.claim = lambda *args: admitted
-        self.api = Mock(return_value={}); self.api.pages.return_value = []
+        state_dir = self.folder/'claim-state'; state_dir.mkdir(mode=0o700)
+        self.store = F.A.Store(state_dir)
+        self.addCleanup(os.close, self.store.lock)
+        claim = Mock(wraps=self.store.claim); self.store.claim = claim
+        self.bridge.store = self.store
+        parent = issue(task=cost_task())  # unique immutable Owner body; intentionally no plan
+        self.api = Mock(side_effect=lambda _: copy.deepcopy(parent))
+        self.api.pages.return_value = []
         self.context = (F.A, F.S, self.rt, self.api, self.store, self.bridge)
+        before = {p.name:p.read_bytes() for p in state_dir.iterdir()}
         with self.assertRaisesRegex(core.Refused, 'MISSING_TEST_PLAN'):
-            stage.perform(req('claim', 'empty'), {}, self.context)
-        self.assertEqual(self.bridge.calls, ['immutable'])
+            stage.perform(req('claim', 'idle') | dict(head=None, attempt=0), {}, self.context)
+        self.assertEqual(self.bridge.calls, [])  # refusal now precedes claim/unchanged_issue
+        claim.assert_not_called()
+        self.assertEqual(self.store.data, dict(active=None, done=[]))
+        self.assertEqual({p.name:p.read_bytes() for p in state_dir.iterdir()}, before)
         self.rt.lease.assert_not_called()
 
     def test_entry_refusal_receipt_uses_existing_result_metadata_no_store_fields(self):
@@ -119,11 +131,15 @@ class StageGateTests(unittest.TestCase):
         self.assertEqual(self.store.data['active']['phase'], 'ci')
 
     def test_recovery_retains_all_existing_checks_and_never_pushes(self):
-        self.store.data['active']['phase'] = 'promoting'; self.exact_qa(); self.bridge.remote = F.HEAD
-        with patch.object(stage, 'run_result', return_value={'sha': F.HEAD}) as ci:
+        active = self.store.data['active']
+        work = self.folder/f'issue-{active["issue"]}'; work.mkdir()
+        active.update(candidate(work, active['task']))
+        active['phase'] = 'promoting'; self.exact_qa()
+        active['qa']['reviewed_sha'] = active['head']; self.bridge.remote = active['head']
+        with patch.object(stage, 'run_result', return_value={'sha': active['head']}) as ci:
             result = self.run_stage('promote', _recover=True)
         self.assertTrue(result['recovered'])
-        self.assertEqual(self.bridge.test_plan['status'], 'LEGACY_RECOVERY')
+        self.assertEqual(self.bridge.test_plan['status'], 'OK')
         ci.assert_called_once()
         self.assertIn('saved_qa', self.bridge.calls)
         self.assertFalse(any(isinstance(x, tuple) and x[0] == 'push' for x in self.bridge.calls))

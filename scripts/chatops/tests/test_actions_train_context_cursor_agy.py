@@ -41,6 +41,9 @@ def load_compare():
     return module
 
 
+from actions_train_plan_fixtures import candidate
+import test_plan_gate as G
+
 class NativeFailClosed(unittest.TestCase):
     def full(self, prompt='exact task'):
         return C.inject(prompt, True, ROOT, accepted(), role='qa', context_profile='full')
@@ -211,7 +214,7 @@ class StageDoesNotSelectScoped(unittest.TestCase):
             cli.write_text('trusted test fixture, never executed')
             captured = {}
             store = SimpleNamespace(data={'active': {
-                'task': {}, 'head': 'a'*40, 'base': 'b'*40, 'attempt': 1, 'issue': 200}})
+                **candidate(root), 'attempt': 1, 'issue': 200}})
             layout = SimpleNamespace(repo=root, state_dir=root, worktrees=root, outbox=root)
             rt = SimpleNamespace(user='test', legacy=True, home=root, key=root/'key', layout=layout,
                 slot='slot1', check_paths=Mock(), continuity=lambda: True, lease=Mock(),
@@ -258,11 +261,12 @@ class StageDoesNotSelectScoped(unittest.TestCase):
                  patch('native_antigravity.save_receipt', return_value='receipt.json'), \
                  patch('receiver.units_quiet'), \
                  patch('receiver.identity', return_value={'pid': 1, 'start': '1', 'boot': 'test'}):
-                request = req('author' if provider == 'cursor' else 'qa', 'pr_wait')
+                request = req('author' if provider == 'cursor' else 'qa', 'pr_wait') | {'head':store.data['active']['head']}
                 auth = 'cursor-test-token-not-a-credential' if provider == 'cursor' else None
                 _a, _s, _rt, _api, _store, bridge = stage.setup(
                     request, {'codex': {'slot1': str(cli)}}, native_auth=auth)
                 bridge.model('bounded immutable task', qa=qa)
+                captured['instruction'] = 'bounded immutable task' + '\n' + G.guidance(bridge.test_plan)
             git_probe.assert_not_called()
             receipt = bridge.routing_receipts[0]['rules_context']
             return captured, receipt
@@ -276,7 +280,7 @@ class StageDoesNotSelectScoped(unittest.TestCase):
 
     def test_agy_stage_does_not_pretrim_rules_before_native_inject(self):
         captured, receipt = self.exercise('agy', True)
-        self.assertEqual(captured['agy_prompt'], 'bounded immutable task')
+        self.assertEqual(captured['agy_prompt'], captured['instruction'])
         self.assertNotIn('context_profile', captured['agy_kwargs'])
         self.assertNotIn('verified_access', captured['agy_kwargs'])
         self.assertIn(TEXT, captured['agy_kwargs']['accepted_rules'][0])

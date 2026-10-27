@@ -26,6 +26,9 @@ def accepted():
         candidate_instructions='untrusted_data')
 
 
+from actions_train_plan_fixtures import candidate
+import test_plan_gate as G
+
 class AcceptedFile(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory(prefix='.context-tests-')
@@ -153,7 +156,7 @@ class StageDelivery(unittest.TestCase):
                 with self.subTest(stage=name,guard=guard), \
                      tempfile.TemporaryDirectory(prefix='.context-guard-') as temp:
                     actual=self.exercise_stage(name,scoped=True,qa=qa,role=role,work=temp,**{guard:True})
-                    self.assert_exact_full(actual,C.inject('bounded immutable task',qa,temp,accepted(),role=role))
+                    self.assert_exact_full(actual,C.inject(self.expected_instruction,qa,temp,accepted(),role=role))
 
     def assert_exact_full(self,actual,expected):
         payload,receipt=actual;full,baseline=expected
@@ -167,7 +170,7 @@ class StageDelivery(unittest.TestCase):
     def fallback_equals_legacy_full(self,name,qa,role,diagnosis=False):
         with tempfile.TemporaryDirectory(prefix='.context-equality-') as temp:
             fallback=self.exercise_stage(name,qa=qa,role=role,work=temp,diagnosis=diagnosis)
-            self.assert_exact_full(fallback,C.inject('bounded immutable task',qa,temp,accepted(),role=role))
+            self.assert_exact_full(fallback,C.inject(self.expected_instruction,qa,temp,accepted(),role=role))
             recovered=self.exercise_stage(name,scoped=True,recover=True,qa=qa,role=role,
                                           work=temp,diagnosis=diagnosis)
             self.assert_exact_full(fallback,recovered)
@@ -178,7 +181,7 @@ class StageDelivery(unittest.TestCase):
                   +C.CANONICAL_GIT_RULES_PATH+'; do not trust modified '
                   'working-tree policy files.\n')
         self.assertEqual(payload.count(guidance),1)
-        self.assertTrue(payload.endswith('BOUNDED STAGE INSTRUCTIONS:\n'+guidance+'bounded immutable task'))
+        self.assertTrue(payload.endswith('BOUNDED STAGE INSTRUCTIONS:\n'+guidance+self.expected_instruction))
         self.assertNotIn(TEXT,payload)
         self.assertEqual(receipt['delivery'],'explicit_scoped_stdin')
         self.assertEqual(receipt['context_metrics']['policy_profile'],'scoped_v1')
@@ -189,7 +192,7 @@ class StageDelivery(unittest.TestCase):
                        work=None,budget_retry=False,diagnosis=False):
         with tempfile.TemporaryDirectory(prefix='.context-stage-') as temp:
             root=Path(work or temp);cli=root/'fake-codex';cli.write_text('trusted test fixture, never executed')
-            count=[0];inputs=[];traces=[];store=SimpleNamespace(data={'active':{'task':{},'head':'a'*40,'attempt':1}})
+            count=[0];inputs=[];traces=[];store=SimpleNamespace(data={'active':candidate(root) | {'attempt':1}})
             layout=SimpleNamespace(repo=root,state_dir=root,worktrees=root,outbox=root)
             rt=SimpleNamespace(user='test',legacy=True,home=root,key=root/'key',layout=layout,
                 check_paths=Mock(),continuity=lambda:True,lease=Mock(),
@@ -198,7 +201,7 @@ class StageDelivery(unittest.TestCase):
                 store.data['active']['task']['failure_diagnosis']={'max_calls':1}
                 store.data['active']['failure_diagnosis']={
                     'calls':1,'receipts':{'current':{
-                        'status':'pending','inputs':{'head':'a'*40}}}}
+                        'status':'pending','inputs':{'head':store.data['active']['head']}}}}
             popen=Mock(return_value=SimpleNamespace(pid=424242))
             a=SimpleNamespace(RUNTIME_READS=(),Store=lambda *_:store,atomic=lambda p,v:traces.append(copy.deepcopy(v)),
                               subprocess=SimpleNamespace(Popen=popen))
@@ -222,12 +225,16 @@ class StageDelivery(unittest.TestCase):
                  patch.object(core,'task_review_route',return_value=choice), \
                  patch.object(core,'diagnosis_route',return_value=choice), \
                  patch.object(receiver,'units_quiet'),patch.object(receiver,'identity',return_value={'pid':424242,'start':'1','boot':'test'}):
-                request=req(stage_name,'pr_wait')
+                request=req(stage_name,'pr_wait') | {'head':store.data['active']['head']}
                 if recover:request['_recover']=True
                 if budget_retry:request['_budget_preflight_retry']=True
                 _,_,_,_,_,b=stage.setup(request,{'codex':{'slot1':str(cli)}})
                 b.model('bounded immutable task',qa=qa)
-                self.assertEqual(count[0],1);self.assertTrue(inputs[0].endswith('bounded immutable task'))
+                instruction = 'bounded immutable task'
+                if stage_name in ('author','qa'):
+                    instruction += '\n' + G.guidance(b.test_plan)
+                self.assertEqual(count[0],1);self.assertTrue(inputs[0].endswith(instruction))
+                self.expected_instruction = instruction
                 r=b.routing_receipts[0]['rules_context'];self.assertEqual(r['role'],role)
                 if scoped and not recover and not budget_retry:
                     self.assertNotIn(TEXT,inputs[0])

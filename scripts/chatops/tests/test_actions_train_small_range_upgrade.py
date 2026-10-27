@@ -45,23 +45,13 @@ def installed_source(path):
 
 
 def reviewed_c_source(path):
-    # The C installer is immutably bound to its earlier accepted merge. A later
-    # SR1 manifest entry is valid source evolution, but it cannot be substituted
-    # as an installer bundle: reproduce the C-reviewed *exact* old manifest.
-    raw = installed_source(path)
+    # Exact Git blob from accepted C832a677, not a reconstruction of mutable
+    # current source. The pinned historical hash remains the installer boundary.
     if path == 'scripts/chatops/actions_train/manifest.json':
-        pin = '36cbcc0e41bc56a27de74151d8e482942ea6313c2cb3686a5977c1bbd445e30e'
-        extra = ('    "scripts/chatops/actions_train/smart_routing.py": "' + pin + '",\n').encode()
-        gate = ('    "scripts/chatops/actions_train/test_plan_gate.py": "'
-                '8d234102f3664564f2a44092f5e21ac77d1abc10a78ddab14b11e74d5e68515d",\n').encode()
-        stage_now = (b'    "scripts/chatops/actions_train/stage.py": '
-                     b'"7a38cee9cb8573014faaa8da477e33498a761b65f6aa05223263592d9b743f34",')
-        stage_reviewed = (b'    "scripts/chatops/actions_train/stage.py": '
-                          b'"ca5ca68eb8b3f8bafbb8c097790acc91c0323f2081fed977372cf571452b97ed",')
-        assert raw.count(extra) == raw.count(gate) == raw.count(stage_now) == 1, 'unexpected future manifest delta'
-        raw = raw.replace(extra, b'').replace(gate, b'').replace(stage_now, stage_reviewed)
+        raw = (REPO/'scripts/chatops/tests/fixtures/agy-333-reviewed-c-manifest.json').read_bytes()
         assert H(raw) == '3b39bb7fb810e97e4d6163dfc93356260d2a966ecbc66b4410c8b06deab0e150', 'reviewed C bundle manifest drift'
-    return raw
+        return raw
+    return installed_source(path)
 
 
 class Fixture:

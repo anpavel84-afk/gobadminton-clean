@@ -47,7 +47,7 @@ class Bridge:
 
 class StageBoundaries(unittest.TestCase):
     def setUp(self):
-        self.temp=tempfile.TemporaryDirectory(dir=ROOT,prefix='.train-tests-');self.folder=Path(self.temp.name)
+        self.temp=tempfile.TemporaryDirectory(prefix='.train-tests-');self.folder=Path(self.temp.name)
         self.store=Store(active('claimed'));self.bridge=Bridge(self.store,self.folder)
         self.rt=SimpleNamespace(lease=Mock(),publish=Mock(),continuity=lambda:{'enabled':True},
                                 mutex=SimpleNamespace(try_acquire=lambda:True),budget=Mock())
@@ -55,24 +55,23 @@ class StageBoundaries(unittest.TestCase):
         self.context=(A,S,self.rt,self.api,self.store,self.bridge)
         self.routing=patch.object(stage,'route',return_value={'provider':'codex','effective_model':'gpt-6.1-sol'})
         self.routing.start()
-        # Legacy stage fixtures exercise lifecycle semantics without an admitted TEST PLAN.
-        # This recovery-only shim exists ONLY in the historical StageBoundaries tests;
-        # new StageGateTests binds the real fail-closed enforcement without this shim.
+        # Modern synthetic lifecycle task: a genuine plan before any stage/receipt.
+        # Missing-plan gate fixtures below retain their intentionally absent plan.
         self._legacy_test_plan = None
         if type(self) is StageBoundaries:
-            from test_plan_gate import stage_check as real_stage_check
-            def historical_fixture_receipt(request, active, bridge):
-                receipt = real_stage_check(dict(request, _recover=True), active, bridge)
-                if receipt is None:  # unrelated CI/integration/DEV stage: unchanged behavior
-                    return None
-                if receipt['status'] != 'LEGACY_RECOVERY':
-                    raise AssertionError('synthetic legacy fixture must not turn into normal admission')
-                return receipt
-            self._legacy_test_plan = patch.object(stage, 'test_plan_check', side_effect=historical_fixture_receipt)
-            self._legacy_test_plan.start()
+            import test_plan_gate as G
+            block, classifier, verifier = G.trusted_tools()
+            changes = [dict(path='scripts/helper.py', status='M')]
+            task = self.store.data['active']['task']
+            task['acceptance'] = block.attach(task['acceptance'], block.plan_for_changes(changes))
+            self.tools = patch.object(G, 'trusted_tools', return_value=(block, classifier, verifier))
+            self.diff = patch.object(verifier, 'diff_changes', return_value=changes)
+            self.tools.start(); self.diff.start()
     def tearDown(self):
         if self._legacy_test_plan is not None:
             self._legacy_test_plan.stop()
+        if type(self) is StageBoundaries:
+            self.diff.stop(); self.tools.stop()
         self.routing.stop();self.temp.cleanup()
     def run_stage(self,name,phase=None,**extra):
         a=self.store.data['active']
@@ -204,7 +203,7 @@ class HostedContinuation(unittest.TestCase):
         import contextlib,io
         descriptor={k:v for k,v in req().items() if k not in ('action','run','run_attempt','gh_token')}
         for previous in (False,True):
-            with tempfile.TemporaryDirectory(dir=ROOT,prefix='.train-tests-') as temp:
+            with tempfile.TemporaryDirectory(prefix='.train-tests-') as temp:
                 folder=Path(temp);old=Path.cwd()
                 try:
                     os.chdir(folder)
@@ -222,7 +221,7 @@ class HostedContinuation(unittest.TestCase):
 
 class ReversibleInstaller(unittest.TestCase):
     def test_isolated_prepare_activation_rollback_restores_code_and_flags_only(self):
-        with tempfile.TemporaryDirectory(dir=ROOT,prefix='.train-tests-') as temp:
+        with tempfile.TemporaryDirectory(prefix='.train-tests-') as temp:
             d=Path(temp);bundle=d/'bundle';source=bundle/'scripts/chatops/actions_train';source.mkdir(parents=True)
             (source/'receiver.py').write_text('reviewed receiver')
             server=bundle/'scripts/chatops/server';server.mkdir();(server/'gb-deploy-helper.sh').write_text('tiny train hook')
