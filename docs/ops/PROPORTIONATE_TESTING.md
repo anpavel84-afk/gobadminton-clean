@@ -323,11 +323,20 @@ visual/independent QA flags, required groups, testing-pins digest, profile statu
 переносятся в новый PASS. Evidence helper допускает только conclusive noncached
 PASS с тем же exact head/fingerprint; UNKNOWN требует reconciliation, не replay.
 
-Legacy exemption только для **отсутствующего** блока при trusted controller
-`_recover`, `_recovery_admission` либо existing certified `active.recovery_receipt`.
-Он записывает `test_plan.status=LEGACY_RECOVERY`, не создаёт план и оставляет все
-прежние checks/QA/CI/recovery gates. Такой ключ в task/acceptance не даёт exemption;
-public wire закрыт для внутренних ключей. Invalid present block всё равно refused.
+Отсутствующий TEST PLAN отказывает с `MISSING_TEST_PLAN`, в том числе при
+`_recover`, `_recovery_admission`, `active.recovery_receipt` и сохранённом QA PASS.
+Эти поля сами по себе не доказывают provenance старого admission и конкретной
+продолжаемой операции. Поддерживаемого доказательства legacy exemption в этом
+source slice нет; `legacy_proof=MISSING_LEGACY_OPERATION_PROOF` сохраняет причину
+отказа и не разрешает model call или другой эффект. Invalid present block также
+refused. Public wire остаётся закрыт для внутренних controller keys.
+
+До `Store.claim` существующий `Store.admitted` выполняет чистый preview
+единственного immutable assignment и проверку плана. Отказ не меняет checkpoint,
+счётчики, reservation или lease; действительный claim выполняется один раз после
+успешного preview. Проверка повторяется перед разрешёнными эффектами recovery,
+включая использование сохранённого QA PASS. Candidate base/head берутся из
+проверенного seed; idle wire identity claim по-прежнему имеет `head=None`.
 
 Перед author/independent-QA model calls добавляется bounded English guidance
 <=900 UTF-8 bytes; другие stage prompts не изменены. Оно требует detach/collect
