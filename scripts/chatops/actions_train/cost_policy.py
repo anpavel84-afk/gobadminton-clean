@@ -18,6 +18,9 @@ def require(ok, reason):
 
 def validate_policy(task):
     policy = task.get("routing_policy")
+    if type(policy) is dict and policy.get('schema') == 'GB_SMART_STAGE_V1':
+        from smart_stage import validate_policy as validate_smart
+        return validate_smart(task)
     require(type(policy) is dict and set(policy) == {"schema", "author", "qa"}
             and policy["schema"] in (SCHEMA, "GB_STAGE_COST_V2"), "invalid stage cost policy")
     require(all(k in task for k in ("author_routes", "qa_routes", "work_kind", "risk")),
@@ -69,6 +72,9 @@ def selection(task, role):
 
 def _selection(p, task, role):
     """Already validated policy; shared with static independent-QA admission."""
+    if p['schema'] == 'GB_SMART_STAGE_V1':
+        from smart_stage import selection as select_smart
+        return select_smart(task, role)
     row = p[role]
     minimum = MATRIX[row["complexity"]]
     preferred = preferred_route(p, task, role, row['complexity'])
