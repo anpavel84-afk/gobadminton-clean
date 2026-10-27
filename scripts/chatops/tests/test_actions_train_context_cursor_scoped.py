@@ -54,6 +54,9 @@ def verified_material(exp):
                 export_sha256=exp['export_sha256'])
 
 
+from actions_train_plan_fixtures import candidate
+import test_plan_gate as G
+
 class ReadonlyCapability(unittest.TestCase):
     def test_old_builder_is_writable_and_full_is_exact_legacy(self):
         argv = D._synthetic_namespace_argv()
@@ -444,7 +447,7 @@ class CursorStage(unittest.TestCase):
                  operational_role='author', missing_stream=False, readonly=True):
         with tempfile.TemporaryDirectory(prefix='cursor-stage-') as temp:
             root = Path(temp); captured = {}
-            store = SimpleNamespace(data={'active': {'task': {}, 'head': 'a'*40, 'base': 'b'*40, 'attempt': 1, 'issue': 313}})
+            store = SimpleNamespace(data={'active': candidate(root) | {'attempt': 1, 'issue': 313}})
             rt = SimpleNamespace(user='test', legacy=True, home=root, key=root/'key', slot='slot1',
                 layout=SimpleNamespace(repo=root, state_dir=root, worktrees=root, outbox=root),
                 check_paths=Mock(), continuity=lambda: True, lease=Mock(), budget=SimpleNamespace(used=lambda *_: 0))
@@ -480,7 +483,7 @@ class CursorStage(unittest.TestCase):
                  (patch.object(D, 'recipient_rules_readonly', return_value=readonly) if readonly is not None else nullcontext()), \
                  patch.object(C, 'verified_git_rules', side_effect=AssertionError('Cursor has no git')) as git_probe, \
                  patch('native_cursor.invoke', side_effect=invoke), patch('receiver.units_quiet'):
-                request = req(name, 'pr_wait')
+                request = req(name, 'pr_wait') | {'head':store.data['active']['head']}
                 if recover: request['_recover'] = True
                 if retry: request['_budget_preflight_retry'] = True
                 bridge = stage.setup(request, {'codex': {'slot1': 'not-executed'}}, native_auth='synthetic')[5]
@@ -489,7 +492,10 @@ class CursorStage(unittest.TestCase):
             if recover or retry or name != 'author': access.assert_not_called()
             receipt = bridge.routing_receipts[0]['rules_context']
             if receipt['context_metrics']['policy_profile'] == 'full':
-                self.assertEqual(captured['prompt'], C.inject('bounded immutable task', False, root, accepted(), role='author')[0])
+                instruction = 'bounded immutable task'
+                if name in ('author', 'qa'):
+                    instruction += '\n' + G.guidance(bridge.test_plan)
+                self.assertEqual(captured['prompt'], C.inject(instruction, False, root, accepted(), role='author')[0])
                 self.assertFalse(captured['gated'])
                 self.assertFalse(captured['popen_wrapped'])
             self.assertEqual(bridge.routing_receipts[0]['usage']['tokens'], {'inputTokens': 42})

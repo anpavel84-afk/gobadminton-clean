@@ -5,6 +5,7 @@ from unittest.mock import Mock
 from test_actions_train import core, A, ROOT, HEAD, BASE, active, req
 from test_actions_train_stages import Store, Bridge
 import qa_recovery as Q
+from actions_train_plan_fixtures import candidate
 
 class Recovery(unittest.TestCase):
     def test_only_stopped_completed_unknown_qa_with_unchanged_checkpoint_is_safe(self):
@@ -21,7 +22,9 @@ class Recovery(unittest.TestCase):
             v=copy.deepcopy(j);mutate(v);self.assertFalse(Q.safe_pending(v,s,lambda _:False))
     def test_exact_saved_verdict_reconciles_without_second_model_or_author(self):
         with tempfile.TemporaryDirectory(dir=ROOT,prefix='.train-tests-') as tmp:
-            p=Path(tmp);a=active('qa');store=Store(a);b=Bridge(store,p);b.model=Mock()
+            p=Path(tmp);a=active('qa');a.update(candidate(p, a['task']))
+            HEAD, BASE = a['head'], a['base']
+            store=Store(a);b=Bridge(store,p);b.model=Mock()
             result={'verdict':'PASS','findings':[],'reviewed_sha':HEAD}
             (p/f'qa-issue-{a["issue"]}-a{a["attempt"]}').mkdir()
             b.git=Mock(side_effect=lambda *args,**kwargs:HEAD if args[0]=='rev-parse' else '')
@@ -32,7 +35,9 @@ class Recovery(unittest.TestCase):
     def test_saved_pass_from_dirty_or_wrong_head_review_is_not_reused(self):
         for bad_head, dirty in ((False,True),(True,False)):
             with self.subTest(bad_head=bad_head,dirty=dirty),tempfile.TemporaryDirectory(dir=ROOT,prefix='.train-tests-') as tmp:
-                p=Path(tmp);a=active('qa');store=Store(a);b=Bridge(store,p)
+                p=Path(tmp);a=active('qa');a.update(candidate(p, a['task']))
+                HEAD, BASE = a['head'], a['base']
+                store=Store(a);b=Bridge(store,p)
                 old={'verdict':'PASS','findings':[],'reviewed_sha':HEAD}
                 main=p/f'qa-{a["issue"]}-a{a["attempt"]}.json';main.write_text(json.dumps(old))
                 original=p/f'qa-issue-{a["issue"]}-a{a["attempt"]}';original.mkdir()
@@ -49,7 +54,9 @@ class Recovery(unittest.TestCase):
                 self.assertEqual(store.data['active']['attempt'],1)
     def test_old_sha_verdict_never_promoted_and_one_new_read_only_qa_keeps_it_in_history(self):
         with tempfile.TemporaryDirectory(dir=ROOT,prefix='.train-tests-') as tmp:
-            p=Path(tmp);a=active('qa');store=Store(a);b=Bridge(store,p)
+            p=Path(tmp);a=active('qa');a.update(candidate(p, a['task']))
+            HEAD, BASE = a['head'], a['base']
+            store=Store(a);b=Bridge(store,p)
             old={'verdict':'PASS','findings':[],'reviewed_sha':BASE}
             main=p/f'qa-{a["issue"]}-a{a["attempt"]}.json';main.write_text(json.dumps(old))
             result={'verdict':'FAIL','findings':['real source defect'],'reviewed_sha':HEAD}

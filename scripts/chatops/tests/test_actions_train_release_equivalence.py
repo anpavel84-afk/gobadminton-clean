@@ -322,7 +322,10 @@ class ContentReuse(GitFixture):
         self.base = self.commit('base')
         self.write('apps/runtime.py','value = 2\n'); self.original = self.commit('implementation')
         self.state = self.root/'state'; self.state.mkdir()
+        from actions_train_plan_fixtures import planned_task
         task=copy.deepcopy(TASK);task['allowed_paths']=['apps/runtime.py','apps/web/test/example.test.ts']
+        task=planned_task(task, [dict(path=p,status='M') for p in
+            task['allowed_paths']+['scripts/chatops/tests/test_example.py']])
         self.current = dict(issue=248,task=task,fingerprint='immutable admission',
             comment={'id':1,'fingerprint':'comment bytes'},approved_since='fixed',
             head=self.original,base=self.base,phase='qa',attempt=1,qa=None,ci=None)

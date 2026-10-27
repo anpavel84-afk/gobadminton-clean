@@ -32,6 +32,8 @@ class FailureLoop(unittest.TestCase):
         self.bridge.model=Mock(return_value=brief())
         self.rt.slot='slot1'
         a=self.store.data['active']
+        from actions_train_plan_fixtures import planned_task
+        a['task'] = planned_task(a['task'])
         a['task']['failure_diagnosis']=copy.deepcopy(POLICY)
         a.update(phase='qa',qa=dict(verdict='FAIL',findings=['Parser misses digits'],reviewed_sha=HEAD))
         self.selection=patch.object(core,'diagnosis_route',return_value=dict(

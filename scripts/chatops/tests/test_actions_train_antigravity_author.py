@@ -463,6 +463,10 @@ class Invocation(unittest.TestCase):
         from test_actions_train import stage, req, receiver
         import context_policy
         self.bridge.model = Mock(); self.bridge.unchanged_issue = Mock()
+        from actions_train_plan_fixtures import planned_task
+        active = self.bridge.store.data['active']
+        active['head'] = active['base']
+        active['task'] = planned_task(active['task'])
         self.rt.user = 'fixture'; self.rt.legacy = True; self.rt.home = self.root; self.rt.key = self.root/'key'
         self.rt.layout.repo = self.source; self.rt.layout.state_dir = self.outbox; self.rt.layout.worktrees = self.root
         self.rt.check_paths = Mock(); self.rt.continuity = lambda: True; self.rt.lease = Mock()
@@ -486,7 +490,7 @@ class Invocation(unittest.TestCase):
              patch.object(context_policy, 'inject', return_value=('TRUSTED_FULL_RULES',{'role':'author'})), \
              patch.object(receiver, 'units_quiet'), patch.object(N, 'invoke', side_effect=invoke_fixture), \
              patch(__name__+'.wire', return_value=raw):
-            request = req('author','candidate'); request['slot'] = 'slot2'
+            request = req('author','candidate'); request['slot'] = 'slot2'; request['head'] = active['head']
             context = stage.setup(request, {'codex':{'slot2':str(self.root/'vendor')}})
             with self.assertRaises(N.ReviewError) as raised: context[-1].model('task data')
             exported = stage.model_receipt({'status':'unknown'}, context)
