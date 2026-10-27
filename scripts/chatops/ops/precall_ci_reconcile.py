@@ -1,17 +1,17 @@
 #!/usr/bin/python3
-"""Bounded C5 pre-call CI reconciliation, PARTIAL SOURCE / NOT LIVE QUALIFIED.
+"""Bounded C5 no-author CI refresh, for the existing trusted Root OPS path.
 
-The pure classifier, exact-CI projection and metadata transaction below can be
-exercised offline. They do not attest that supplied observations came from the
-host or GitHub. The CLI deliberately returns HOLD for EVERY verb: the protected
-live evidence collector and source/release admission are not implemented. Do
-not wire Transaction directly into a root launcher. A JSON assertion, successful
-unit test or the public runtime snapshot is not execution authority.
-
-No runtime imports, subprocesses, credentials, model, Git or service operations.
-No installed module/policy modification. Old UNKNOWN records remain immutable.
+Source authoring/testing is NOT installation, independent QA or live clearance.
+CLI: dry/apply/verify/rollback --operation HEX --bundle ROOT_OWNED_WORKTREE
+     --source-commit SHA --source-branch BRANCH --source-ci-run INTEGER
+     --qa-receipt ROOT_OWNED_RECEIPT
+All CLI paths are read-only source inputs; runtime paths are fixed. Only apply
+and rollback may write the two metadata targets and private durable receipts.
+No provider, publish, deploy, policy toggle, attempt reset or UNKNOWN rewrite.
 """
 import argparse
+import ast
+import base64
 import contextlib
 import copy
 from dataclasses import dataclass
@@ -21,13 +21,21 @@ import json
 import os
 from pathlib import Path
 import re
+import selectors
 import stat
+import subprocess
 import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
 
 REPO = 'anpavel84-afk/gobadminton-clean'
 REPO_ID = 1416250340
 CONTROLLER = '41e12be2d551158e97ea30eaf8e95f992f998615'
 STAGE_WORKFLOW = 'b9703ca27b7bb3f494f379f8e259e62a6a48bc8f5ff50c6923e1712d8899d68d'
+POLICY_PIN = '52250df8b6391b46fe4b80f6805c27e89d06a1c493ca27002b187b1f1f7567d4'
+INVENTORY_PIN = '4b0eb93039712737a21b59bf9550084da01a963c67472034e25563deedd1f1bc'
 # Exact 27-file public installed closure observed 2026-10-27, per-file identity.
 PROFILE = {'accepted-engineering-rules.md': ('017441dec5ba197a1065b6ef90efdddb090b286ba48687241a7fbc09dd002269',
                                    113203),
@@ -64,6 +72,34 @@ PROFILE = {'accepted-engineering-rules.md': ('017441dec5ba197a1065b6ef90efdddb09
  'recovery_publish.py': ('51e110d5beaf1a0e46b98eaffb2691d7e4e975c36ab939575e93e87d2850a8c9', 2704),
  'recovery_upgrade.py': ('ce8cc88f3cb3230b51f425d9082e826511c35332ca363d2af97bb8b18e4498f6', 10143),
  'stage.py': ('ea79b894076c755f28d62619154b0681ecb636b7b32dd05c18a8c996112a1c2e', 39124)}
+# Exact public installed metadata, distinct from the source/release commit.
+PROFILE_MTIME_NS = {'accepted-engineering-rules.md': 1792920706738859053,
+ 'antigravity_qa_recovery.py': 1793049176412272652,
+ 'client.py': 1792793845817118364,
+ 'content_identity.py': 1792872459232260362,
+ 'context_exchange.py': 1792775310532400261,
+ 'context_policy.py': 1792920706731859080,
+ 'core.py': 1792793845836118350,
+ 'cost_policy.py': 1792756471535459708,
+ 'failure_diagnosis.py': 1792793845841118346,
+ 'installer.py': 1792625085957885271,
+ 'live/autonomous_issues.py': 1792793845853118337,
+ 'live/check_foundation.py': 1792625085964885270,
+ 'live/slots.py': 1792716963715516474,
+ 'monitor.py': 1792756471543459704,
+ 'native_antigravity.py': 1793008118775235597,
+ 'native_cursor.py': 1792716963718516471,
+ 'native_guard.py': 1792716963721516468,
+ 'owner_package_admission.py': 1793049176443272644,
+ 'qa_equivalence.py': 1792793845857118334,
+ 'qa_recovery.py': 1792705392928352952,
+ 'queue_diagnostics.py': 1792641815992911431,
+ 'receiver.py': 1792793845860118331,
+ 'recovery.py': 1792793845863118329,
+ 'recovery_admission.py': 1792793845866118327,
+ 'recovery_publish.py': 1792657620607667113,
+ 'recovery_upgrade.py': 1792657620613667109,
+ 'stage.py': 1792874565967064062}
 SHA = re.compile(r'[0-9a-f]{40}')
 HASH = re.compile(r'[0-9a-f]{64}')
 CI_JOBS = frozenset(('foundation', 'source (api)', 'source (web)',
@@ -77,18 +113,19 @@ REQUIRED_STEPS = {
                                for c in ('typecheck', 'lint', 'test:unit'))
        for p in ('api', 'web', 'admin', 'contracts')},
 }
-SCHEMA = 'GB_PRECALL_CI_RECONCILE_OFFLINE_V1'
-LIVE_GAPS = (
-    'LIVE_PROCESS_GROUP_CGROUP_AND_WRITER_ATTESTATION_NOT_IMPLEMENTED',
-    'LIVE_OPERATION_ACCOUNTING_AND_ADMISSION_ATTESTATION_NOT_IMPLEMENTED',
-    'LIVE_CANDIDATE_RAW_GIT_AND_BOUNDED_GITHUB_COLLECTOR_NOT_IMPLEMENTED',
-    'ROOT_SOURCE_QA_CI_RELEASE_SELF_PROVENANCE_GATE_NOT_IMPLEMENTED',
-    'LIVE_FIXED_PATH_LAYOUT_AND_FULL_PRESERVED_INVENTORY_NOT_IMPLEMENTED',
-)
+SCHEMA = 'GB_PRECALL_CI_RECONCILE_V1'
+SOURCE_PATH = 'scripts/chatops/ops/precall_ci_reconcile.py'
+TEST_PATH = 'scripts/chatops/tests/test_actions_train_precall_ci_reconcile.py'
 
 
 class Hold(Exception):
     """A local refusal; never inference that an UNKNOWN had no effects."""
+
+
+class TransactionHold(Hold):
+    def __init__(self, reason, target_writes):
+        super().__init__(reason)
+        self.target_writes = target_writes
 
 
 def need(ok, code):
@@ -339,7 +376,7 @@ def classify(journal, checkpoint):
                 classification='C5_EXHAUSTED_AUTHOR_PR_WAIT_PRECALL', live_clearance=False)
 
 
-def exact_ci(proof, active, workflow_raw, workflow_sha256):
+def exact_ci(proof, active, workflow_raw, workflow_sha256, *, branch=None):
     """Validate a bounded credential-free GET projection; never fetch or trust URLs.
 
     A future trusted collector must obtain current run, exact attempt, jobs,
@@ -359,7 +396,7 @@ def exact_ci(proof, active, workflow_raw, workflow_sha256):
              and positive(row.get('id')) and positive(row.get('run_attempt'))
              and row.get('run_attempt') == run['run_attempt']
              and row.get('head_sha') == active['head']
-             and row.get('head_branch') == f'automation/issue-{active["issue"]}'
+             and row.get('head_branch') == (branch or f'automation/issue-{active["issue"]}')
              and row.get('repository', {}).get('id') == REPO_ID
              and row.get('head_repository', {}).get('id') == REPO_ID
              and row.get('path') == '.github/workflows/ci.yml'
@@ -460,13 +497,356 @@ def transition(journal_raw, checkpoint_raw, ci_proof, workflow_raw, workflow_sha
                 encode(new_checkpoint, ca), encode(certificate))
 
 
-class OfflineTransaction:
-    """Exercise the proposed two-file protocol on a synthetic nonroot Store.
+def closed_acl(path):
+    """Extended ACLs/capabilities are not covered by Unix mode proofs."""
+    need(not any(n in ('system.posix_acl_access', 'system.posix_acl_default',
+                       'security.capability') for n in os.listxattr(path, follow_symlinks=False)),
+         'EXTENDED_AUTHORITY')
 
-    This is deliberately NOT a live adapter. It cannot run as root and requires
-    a fixture marker and a synthetic directory layout. Root integration needs
-    the missing gates listed in LIVE_GAPS; changing this guard is a new reviewed
-    source change, not an installation option.
+
+def trusted(path, uid=0, gid=0, mode=None):
+    info = Path(path).lstat()
+    need(not stat.S_ISLNK(info.st_mode) and info.st_uid == uid and info.st_gid == gid
+         and not info.st_mode & 0o022 and (mode is None or stat.S_IMODE(info.st_mode) == mode),
+         'PROTECTED_LAYOUT:' + str(path))
+    closed_acl(path)
+    return info
+
+
+def bounded_command(argv, env, timeout=20, cap=16 * 1024 * 1024):
+    """No shell; bounded drain of BOTH pipes, no credential/error echo."""
+    output, total, deadline = [], 0, time.monotonic() + timeout
+    with subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                          stderr=subprocess.PIPE, env=env, start_new_session=True) as process:
+        try:
+            with selectors.DefaultSelector() as selector:
+                for stream in (process.stdout, process.stderr):
+                    selector.register(stream, selectors.EVENT_READ)
+                while selector.get_map():
+                    left = deadline - time.monotonic()
+                    need(left > 0, 'READ_COMMAND_TIMEOUT')
+                    for key, _ in selector.select(left):
+                        raw = os.read(key.fileobj.fileno(), 65536)
+                        if not raw:
+                            selector.unregister(key.fileobj)
+                            continue
+                        total += len(raw)
+                        need(total <= cap, 'READ_COMMAND_OVERSIZE')
+                        if key.fileobj is process.stdout:
+                            output.append(raw)
+            need(process.wait(timeout=max(.001, deadline - time.monotonic())) == 0,
+                 'READ_COMMAND_FAILED')
+        finally:
+            if process.poll() is None:
+                # Only our bounded read-only helper's process group.
+                import signal
+                os.killpg(process.pid, signal.SIGKILL)
+                process.wait()
+    return b''.join(output)
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        raise Hold('GITHUB_REDIRECT')
+
+
+class GitHubReads:
+    """Fixed public repo, GET-only, no auth-file/env/token access or URL input.
+
+    Uses the existing public unauthenticated OPS API pattern. Rate, permission,
+    transport, redirect and oversize responses HOLD; no automatic rerun/mutation.
+    Callers pass typed components to methods, never endpoint URLs from responses.
+    """
+    def __init__(self):
+        self.open = urllib.request.build_opener(NoRedirect()).open
+        self.calls = 0
+        self.deadline = time.monotonic() + 120
+
+    def get(self, endpoint):
+        patterns = (
+            r'', r'issues/[1-9][0-9]*', r'issues/[1-9][0-9]*/comments\?per_page=100&page=1',
+            r'pulls/[1-9][0-9]*', r'pulls/[1-9][0-9]*/files\?per_page=100&page=1',
+            r'actions/runs/[1-9][0-9]*(?:/attempts/[1-9][0-9]*(?:/jobs\?per_page=100&page=1)?)?',
+            r'actions/workflows/ci.yml/runs\?head_sha=[0-9a-f]{40}&per_page=20&page=1',
+            r'check-runs/[1-9][0-9]*',
+            r'contents/\.github/workflows/ci.yml\?ref=[0-9a-f]{40}',
+            r'git/commits/[0-9a-f]{40}',
+        )
+        need(type(endpoint) is str and any(re.fullmatch(p, endpoint) for p in patterns),
+             'GITHUB_ENDPOINT_REFUSED')
+        self.calls += 1
+        need(self.calls <= 128 and time.monotonic() < self.deadline, 'GITHUB_BOUNDED_CALLS')
+        request = urllib.request.Request('https://api.github.com/repos/' + REPO + '/' + endpoint,
+            headers={'Accept': 'application/vnd.github+json', 'User-Agent': 'gb-precall-ci-readonly',
+                     'X-GitHub-Api-Version': '2022-11-28'}, method='GET')
+        try:
+            with self.open(request, timeout=min(15, max(.001, self.deadline - time.monotonic()))) as response:
+                raw = response.read(2 * 1024 * 1024 + 1)
+            need(len(raw) <= 2 * 1024 * 1024, 'GITHUB_OVERSIZE')
+            return loads(raw)
+        except urllib.error.HTTPError as error:
+            raise Hold('GITHUB_HTTP_' + str(error.code)) from None
+        except (urllib.error.URLError, TimeoutError, ConnectionError):
+            raise Hold('GITHUB_TRANSPORT') from None
+
+    def ci(self, active, run_id=None, branch=None):
+        repo = self.get('')
+        need(repo.get('id') == REPO_ID and repo.get('full_name') == REPO
+             and repo.get('default_branch') == 'main', 'GITHUB_REPOSITORY')
+        listing = self.get('actions/workflows/ci.yml/runs?head_sha=' + active['head'] + '&per_page=20&page=1')
+        rows = listing.get('workflow_runs')
+        need(type(rows) is list and 0 < len(rows) <= 20
+             and listing.get('total_count') == len(rows), 'GITHUB_INCOMPLETE_RUNS')
+        if run_id is None:
+            run_id = max(r['id'] for r in rows)
+        need(positive(run_id), 'GITHUB_RUN_ID')
+        current = self.get(f'actions/runs/{run_id}')
+        attempt = current.get('run_attempt')
+        need(positive(attempt), 'GITHUB_ATTEMPT')
+        run = self.get(f'actions/runs/{run_id}/attempts/{attempt}')
+        data = self.get(f'actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100&page=1')
+        jobs = data.get('jobs')
+        need(type(jobs) is list and len(jobs) == data.get('total_count') == 7, 'GITHUB_INCOMPLETE_JOBS')
+        checks = []
+        jobs = copy.deepcopy(jobs)
+        for job in jobs:
+            # API jobs expose check_run_url, not check_run_id. Never fetch the URL.
+            match = re.fullmatch('https://api.github.com/repos/' + re.escape(REPO)
+                                + r'/check-runs/([1-9][0-9]*)', job.get('check_run_url', ''))
+            need(match is not None, 'GITHUB_JOB_CHECK_ID')
+            job['check_run_id'] = cid = int(match[1])
+            checks.append(self.get(f'check-runs/{cid}'))
+        wf = self.get('contents/.github/workflows/ci.yml?ref=' + active['head'])
+        need(wf.get('encoding') == 'base64' and wf.get('path') == '.github/workflows/ci.yml',
+             'GITHUB_WORKFLOW')
+        try:
+            workflow = base64.b64decode(''.join(wf['content'].split()), validate=True)
+        except (ValueError, KeyError):
+            raise Hold('GITHUB_WORKFLOW_ENCODING') from None
+        need(len(workflow) <= 262144 and blob_oid(workflow) == wf.get('sha'), 'GITHUB_WORKFLOW_BLOB')
+        proof = dict(schema='GB_PRECALL_PRODUCT_CI_READS_V1', current=current, attempt_run=run,
+                     runs=rows, total_count=len(rows), jobs=jobs, checks=checks,
+                     workflow_revision=active['head'])
+        exact_ci(proof, active, workflow, sha(workflow), branch=branch)
+        # Current attempt/list re-read after the seven checks closes rerun race.
+        need(self.get(f'actions/runs/{run_id}') == current
+             and self.get('actions/workflows/ci.yml/runs?head_sha=' + active['head']
+                          + '&per_page=20&page=1') == listing, 'GITHUB_CURRENTNESS_DRIFT')
+        return proof, workflow
+
+
+def blob_oid(raw):
+    return hashlib.sha1(b'blob ' + str(len(raw)).encode() + b'\0' + raw).hexdigest()
+
+
+class SafeGit:
+    """Read-only Git on a verified plain/standard linked worktree.
+
+    Root-owned source runs root; slot-owned candidate runs its EXISTING owner
+    through fixed runuser, never root safe.directory on candidate-controlled Git.
+    Overrides are process-local. Native config is vetted before each invocation.
+    """
+    def __init__(self, work, uid=0, gid=0):
+        self.work, self.uid, self.gid = Path(work), uid, gid
+
+    def layout(self):
+        trusted(self.work, self.uid, self.gid)
+        dot = self.work / '.git'
+        if stat.S_ISDIR(dot.lstat().st_mode):
+            gd = common = dot
+        else:
+            raw = read_image(dot, self.uid, 0o644, 4096).raw.decode()
+            need(re.fullmatch(r'gitdir: /[^\n\r\0]+\n?', raw), 'GIT_POINTER')
+            gd = Path(raw[8:].strip())
+            raw = read_image(gd / 'commondir', self.uid, 0o644, 4096).raw.decode().strip()
+            common = Path(os.path.abspath(gd / raw))
+            need(gd.parent.name == 'worktrees' and gd.parent.parent == common
+                 and read_image(gd / 'gitdir', self.uid, 0o644, 4096).raw.decode().strip() == str(dot),
+                 'GIT_COMMON_BACKLINK')
+        for root in {common, gd}:
+            trusted(root, self.uid, self.gid)
+            if self.uid == 0:
+                for ancestor in root.parents:
+                    trusted(ancestor)
+            for name in ('objects/info/alternates', 'objects/info/http-alternates', 'shallow',
+                         'config.worktree', 'info/attributes', 'modules', 'refs/replace'):
+                need(not os.path.lexists(root / name), 'GIT_INDIRECTION')
+        config = read_image(common / 'config', self.uid, 0o644, 65536).raw
+        section = None
+        for line in config.decode().splitlines():
+            line = line.strip()
+            if not line or line.startswith(('#', ';')):
+                continue
+            header = re.fullmatch(r'\[(core|user)\]|\[(remote|branch) "[A-Za-z0-9_./-]+"\]', line)
+            if header:
+                section = header[1] or header[2]
+                continue
+            pair = re.fullmatch(r'([a-zA-Z]+)\s*=\s*([^\\\x00-\x1f]*)', line)
+            allowed = {'core': {'repositoryformatversion': ('0',), 'bare': ('false',),
+                               'filemode': ('true', 'false'), 'logallrefupdates': ('true',)},
+                       'user': {'name': None, 'email': None},
+                       'remote': {'url': None, 'fetch': None}, 'branch': {'remote': None, 'merge': None}}
+            need(pair is not None and section in allowed, 'GIT_CONFIG_SYNTAX')
+            key, value = pair[1].lower(), pair[2].strip()
+            need(key in allowed[section] and (allowed[section][key] is None
+                 or value.lower() in allowed[section][key]), 'GIT_CONFIG_KEY')
+        count, deadline = 0, time.monotonic() + 20
+        for root in {common, gd}:
+            for base, dirs, files in os.walk(root, followlinks=False):
+                count += len(dirs) + len(files)
+                need(count <= 200000 and time.monotonic() < deadline, 'GIT_METADATA_CAP')
+                trusted(base, self.uid, self.gid)
+                for name in dirs:
+                    trusted(Path(base) / name, self.uid, self.gid)
+                for name in files:
+                    path = Path(base) / name
+                    info = trusted(path, self.uid, self.gid)
+                    need(stat.S_ISREG(info.st_mode) and info.st_nlink == 1, 'GIT_METADATA_TYPE')
+                    if path.parent.name == 'hooks':
+                        need(re.fullmatch(r'[a-z-]+\.sample', name), 'GIT_ACTIVE_HOOK')
+        return gd, common
+
+    def read(self, *args):
+        allowed = (('rev-parse', '--verify', 'HEAD^{commit}'), ('symbolic-ref', '--short', 'HEAD'),
+                   ('remote', 'get-url', 'origin'), ('ls-files', '-v', '-z'), ('ls-files', '-s', '-z'),
+                   ('status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignored=matching', '--ignore-submodules=all'))
+        need(args in allowed or (len(args) == 4 and args[:3] == ('ls-tree', '-r', '-z')
+                                 and SHA.fullmatch(args[3]))
+             or (len(args) == 3 and args[:2] == ('cat-file', 'blob') and SHA.fullmatch(args[2])),
+             'GIT_ARGV_REFUSED')
+        gd, _ = self.layout()
+        trusted('/usr/bin/git', 0, 0)
+        argv = ['/usr/bin/git', '--no-optional-locks', '--no-replace-objects',
+                '--git-dir=' + str(gd), '--work-tree=' + str(self.work)]
+        for setting in ('core.fsmonitor=false', 'core.hooksPath=/dev/null', 'core.untrackedCache=false',
+                        'core.pager=cat', 'protocol.allow=never', 'gc.auto=0', 'maintenance.auto=false'):
+            argv += ['-c', setting]
+        if self.uid != os.geteuid():
+            import pwd
+            user = pwd.getpwuid(self.uid)
+            need(user.pw_gid == self.gid, 'GIT_SLOT_IDENTITY')
+            trusted('/usr/sbin/runuser', 0, 0)
+            argv = ['/usr/sbin/runuser', '-u', user.pw_name, '--'] + argv
+        env = dict(PATH='/usr/bin:/bin', HOME='/nonexistent', LANG='C.UTF-8',
+                   GIT_CONFIG_GLOBAL='/dev/null', GIT_CONFIG_SYSTEM='/dev/null',
+                   GIT_OPTIONAL_LOCKS='0', GIT_NO_REPLACE_OBJECTS='1', GIT_NO_LAZY_FETCH='1',
+                   GIT_TERMINAL_PROMPT='0')
+        return bounded_command(argv + list(args), env)
+
+    def clean(self, head, branch):
+        need(SHA.fullmatch(head) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_./-]*', branch)
+             and '..' not in branch, 'GIT_EXACT_IDENTITY')
+        need(self.read('rev-parse', '--verify', 'HEAD^{commit}').strip().decode() == head
+             and self.read('symbolic-ref', '--short', 'HEAD').strip().decode() == branch,
+             'GIT_HEAD_BRANCH')
+        need(self.read('remote', 'get-url', 'origin').strip().decode() in
+             ('https://github.com/' + REPO, 'https://github.com/' + REPO + '.git',
+              'git@github.com:' + REPO + '.git'), 'GIT_ORIGIN')
+        need(not self.read('status', '--porcelain=v1', '-z', '--untracked-files=all',
+                           '--ignored=matching', '--ignore-submodules=all'), 'GIT_DIRTY')
+        need(all(row.startswith(b'H ') for row in self.read('ls-files', '-v', '-z').split(b'\0') if row),
+             'GIT_INDEX_FLAGS')
+        tree, total, material = {}, 0, {}
+        for row in self.read('ls-tree', '-r', '-z', head).split(b'\0'):
+            if not row:
+                continue
+            header, raw_path = row.split(b'\t', 1)
+            mode, kind, oid = header.split()
+            path = raw_path.decode()
+            need(mode in (b'100644', b'100755') and kind == b'blob' and SHA.fullmatch(oid.decode())
+                 and not path.startswith('/') and all(p not in ('', '.', '..', '.git') for p in path.split('/'))
+                 and path not in tree and len(tree) < 10000, 'GIT_TREE')
+            image = read_image(self.work / path, self.uid, 0o755 if mode == b'100755' else 0o644,
+                               16 * 1024 * 1024)
+            closed_acl(self.work / path)
+            raw = image.raw
+            total += len(raw)
+            need(total <= 256 * 1024 * 1024 and blob_oid(raw) == oid.decode(), 'GIT_RAW_BLOB')
+            tree[path] = (mode, oid)
+            material[path] = raw
+        index = {}
+        for row in self.read('ls-files', '-s', '-z').split(b'\0'):
+            if row:
+                header, path = row.split(b'\t', 1)
+                mode, oid, stage = header.split()
+                need(stage == b'0' and path.decode() not in index, 'GIT_INDEX_STAGE')
+                index[path.decode()] = (mode, oid)
+        need(tree == index, 'GIT_INDEX_TREE')
+        return material
+
+
+def stopped_processes(op, uid, proc=Path('/proc'), cgroups=Path('/sys/fs/cgroup')):
+    """No argv/environ reads. Pinned supervisor setsid() makes pid==pgid==sid.
+
+    Reject target UID writers as well as root children/group/session survivors.
+    Scan stat/status only; read cgroups only for the target scope. Two scans are
+    required under all locks. PID disappearance alone is never this proof.
+    """
+    process = op['process']
+    boot = (proc / 'sys/kernel/random/boot_id').read_text().strip()
+    need(boot == process['boot'], 'PROCESS_BOOT_CHANGED_RECONCILIATION_REQUIRED')
+
+    def scan():
+        found = {}
+        deadline = time.monotonic() + 10
+        entries = list(proc.iterdir())
+        need(len(entries) <= 131072, 'PROCESS_COUNT_CAP')
+        for entry in entries:
+            need(time.monotonic() < deadline, 'PROCESS_SCAN_TIMEOUT')
+            if not entry.name.isdigit():
+                continue
+            try:
+                with (entry / 'stat').open('rb') as stream:
+                    raw = stream.read(8193)
+                need(len(raw) <= 8192, 'PROCESS_STAT_CAP')
+                fields = raw.rsplit(b')', 1)[1].split()
+                with (entry / 'status').open() as stream:
+                    status = stream.read(65537)
+                need(len(status) <= 65536, 'PROCESS_STATUS_CAP')
+                uids = re.search(r'^Uid:\s+([0-9]+)\s+([0-9]+)\s+([0-9]+)\s+([0-9]+)$', status, re.M)
+                need(uids is not None, 'PROCESS_UID_MISSING')
+                found[int(entry.name)] = (int(fields[1]), int(fields[2]), int(fields[3]),
+                                         fields[19].decode(), tuple(map(int, uids.groups())))
+            except FileNotFoundError:
+                continue
+            except (IndexError, ValueError):
+                raise Hold('PROCESS_UNPARSEABLE') from None
+        pid = process['pid']
+        descendants = {pid}
+        while True:
+            more = {p for p, f in found.items() if f[0] in descendants}
+            if more <= descendants:
+                break
+            descendants |= more
+        scoped = {p: f for p, f in found.items()
+                  if p in descendants or f[1] == pid or f[2] == pid or uid in f[4]}
+        need(not scoped, 'TARGET_PROCESS_GROUP_SESSION_UID_OR_DESCENDANT_ALIVE')
+        # The legacy unit cgroup alone is insufficient; inspect EVERY actual
+        # cgroup.procs for target survivors (including inherited service scope).
+        count = 0
+        for base, dirs, files in os.walk(cgroups, followlinks=False):
+            count += 1
+            need(count <= 20000 and time.monotonic() < deadline, 'CGROUP_COUNT_CAP')
+            need(all(not (Path(base) / d).is_symlink() for d in dirs), 'CGROUP_DIRECTORY_LINK')
+            if 'cgroup.procs' in files:
+                raw = (Path(base) / 'cgroup.procs').read_text()
+                need(len(raw) <= 1024 * 1024, 'CGROUP_PROCS_CAP')
+                members = {int(p) for p in raw.split()}
+                need(not (members & descendants) and all(p not in scoped for p in members),
+                     'TARGET_CGROUP_LIVE')
+        return digest(dict(boot=boot, target=process, target_uid=uid, survivors=[]))
+
+    first = scan()
+    need(scan() == first, 'PROCESS_OBSERVATION_DRIFT')
+    return first
+
+
+class OfflineTransaction:
+    """Shared two-file protocol with a deliberately nonroot synthetic harness.
+
+    This constructor requires a fixture marker and cannot run as root. The
+    protected adapter below supplies fixed paths, metadata policy and collectors;
+    no CLI flag can substitute this constructor for those production gates.
 
     Fixed noncreating lock order: controller -> worker -> target lease ->
     registry. All are held nonblocking across manifest CAS and writes. External
@@ -476,6 +856,7 @@ class OfflineTransaction:
     are backed up before the first target write. Progress is inferred from
     predeclared staged inodes, never from a caller's claimed phase.
     """
+    PREFIX = 'OFFLINE'
     def __init__(self, root, plan, boundary=None):
         self.root = Path(root)
         self.plan = plan
@@ -502,6 +883,20 @@ class OfflineTransaction:
         self.before = dict(checkpoint=plan.checkpoint_before, journal=plan.journal_before)
         self.after = dict(checkpoint=plan.checkpoint_after, journal=plan.journal_after)
         self.plan_hash = digest({k: sha(getattr(plan, k)) for k in plan.__dataclass_fields__})
+        self.target_write_started = False
+        self.target_writes = 0
+
+    def file_owner(self, path):
+        return self.uid, self.gid
+
+    def file_metadata(self, path, fd, mode):
+        os.fchmod(fd, mode)
+
+    def image(self, path, mode=0o600):
+        owner, group = self.file_owner(path)
+        image = read_image(path, owner, mode)
+        need(image.identity[3] == group, 'FILE_GROUP_DRIFT')
+        return image
 
     def effect(self, name, fn):
         self.boundary('before:' + name)
@@ -514,7 +909,7 @@ class OfflineTransaction:
         held = []
         try:
             for path, mode in self.lock_paths:
-                image = read_image(path, self.uid, mode)
+                image = self.image(path, mode)
                 parent = directory(path.parent)
                 try:
                     fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
@@ -527,11 +922,11 @@ class OfflineTransaction:
                     fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 except BlockingIOError:
                     raise Hold('LOCK_HELD:' + path.name) from None
-                need(read_image(path, self.uid, mode) == image, 'LOCK_PATH_CAS')
+                need(self.image(path, mode) == image, 'LOCK_PATH_CAS')
             yield
             for path, mode, fd, image in held:
                 need(tuple(token(os.fstat(fd))) == image.identity
-                     and read_image(path, self.uid, mode) == image, 'LOCK_CHANGED')
+                     and self.image(path, mode) == image, 'LOCK_CHANGED')
         finally:
             for _, _, fd, _ in reversed(held):
                 os.close(fd)
@@ -594,7 +989,8 @@ class OfflineTransaction:
         """
         path = self.tx / name
         if os.path.lexists(path):
-            image = read_image(path, self.uid, mode)
+            self.prepare_artifact(path, raw, mode)
+            image = self.image(path, mode)
             need(raw.startswith(image.raw), 'PARTIAL_OR_FOREIGN_ARTIFACT:' + name)
             # A previous process may have died after data but before fsync.
             # Exact bytes in page cache are not yet a durable backup/intent.
@@ -615,7 +1011,7 @@ class OfflineTransaction:
             finally:
                 os.close(parent)
             self.fsync(self.tx, name + ':reentry_directory_fsync')
-            image = read_image(path, self.uid, mode)
+            image = self.image(path, mode)
             need(image.raw == raw, 'ARTIFACT_REENTRY_BYTES')
             return image
         parent = directory(self.tx)
@@ -625,9 +1021,9 @@ class OfflineTransaction:
             fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
                          mode, dir_fd=parent)
             self.boundary('after:' + name + ':create')
-            self.effect(name + ':metadata', lambda: os.fchmod(fd, mode))
+            self.effect(name + ':metadata', lambda: self.file_metadata(path, fd, mode))
             # Preserve exact fixture uid/gid. No privilege substitution.
-            need(os.fstat(fd).st_uid == self.uid and os.fstat(fd).st_gid == self.gid,
+            need((os.fstat(fd).st_uid, os.fstat(fd).st_gid) == self.file_owner(path),
                  'ARTIFACT_OWNER_GROUP')
             view = memoryview(raw)
             while view:
@@ -640,15 +1036,18 @@ class OfflineTransaction:
                 os.close(fd)
             os.close(parent)
         self.fsync(self.tx, name + ':directory_fsync')
-        return read_image(path, self.uid, mode)
+        return self.image(path, mode)
+
+    def prepare_artifact(self, path, raw, mode):
+        pass
 
     def existing(self, name):
-        return loads(read_image(self.tx / name, self.uid, 0o600).raw)
+        return loads(self.image(self.tx / name).raw)
 
     def make_intent(self):
         if os.path.lexists(self.tx / 'intent.json'):
             try:
-                loads(read_image(self.tx / 'intent.json', self.uid, 0o600).raw)
+                loads(self.image(self.tx / 'intent.json').raw)
             except Hold as error:
                 need(str(error) == 'INVALID_JSON', 'INTENT_NOT_PARTIAL_JSON')
                 # No target write can start before a complete durable intent.
@@ -660,7 +1059,7 @@ class OfflineTransaction:
                 self.artifact('backup.json', encode(backup))
                 self.artifact('intent.json', encode(intent))
                 return intent, backup
-        originals = {n: read_image(p, self.uid, 0o600) for n, p in self.targets.items()}
+        originals = {n: self.image(p) for n, p in self.targets.items()}
         need(all(originals[n].raw == self.before[n] for n in originals), 'PREIMAGE_DRIFT')
         preserved = self.preserved()
         if not os.path.lexists(self.tx):
@@ -685,7 +1084,7 @@ class OfflineTransaction:
         for direction, images in (('forward', self.after), ('inverse', self.before)):
             staged[direction] = {n: list(self.artifact(direction + '-' + n, raw).identity)
                                  for n, raw in images.items()}
-        need(self.preserved() == preserved and all(read_image(self.targets[n], self.uid, 0o600)
+        need(self.preserved() == preserved and all(self.image(self.targets[n])
              == originals[n] for n in originals), 'PRE_INTENT_CAS_DRIFT')
         intent = dict(schema=SCHEMA, plan_sha256=self.plan_hash,
                       backup_sha256=digest(backup), staged=staged)
@@ -711,7 +1110,7 @@ class OfflineTransaction:
         return intent, backup
 
     def position(self, name, intent, backup):
-        image = read_image(self.targets[name], self.uid, 0o600)
+        image = self.image(self.targets[name])
         if list(image.identity) == backup['originals'][name] and image.raw == self.before[name]:
             return 'original'
         # Rename updates ctime. The inode/mode/uid/gid/size/mtime was committed
@@ -725,7 +1124,7 @@ class OfflineTransaction:
     def move(self, name, direction, intent, backup):
         expected = self.after if direction == 'forward' else self.before
         source = self.tx / (direction + '-' + name)
-        image = read_image(source, self.uid, 0o600)
+        image = self.image(source)
         need(list(image.identity) == intent['staged'][direction][name]
              and image.raw == expected[name], 'STAGED_INODE_CAS')
         need(self.preserved() == backup['preserved'], 'PRE_RENAME_PRESERVED_DRIFT')
@@ -749,10 +1148,10 @@ class OfflineTransaction:
             if action == 'dry':
                 need(not os.path.lexists(self.tx), 'EXISTING_TRANSACTION_USE_VERIFY')
                 for name, path in self.targets.items():
-                    need(read_image(path, self.uid, 0o600).raw == self.before[name], 'PREIMAGE_DRIFT')
+                    need(self.image(path).raw == self.before[name], 'PREIMAGE_DRIFT')
                 first = self.manifest()
                 need(self.manifest() == first, 'UNSTABLE_MANIFEST')
-                return dict(status='OFFLINE_DRY', protected_writes=0, live_clearance=False)
+                return dict(status=self.PREFIX + '_DRY', protected_writes=0, live_clearance=False)
             if action == 'apply':
                 need(not os.path.lexists(self.tx / 'rollback-intent.json'), 'ROLLBACK_ALREADY_REQUESTED')
                 intent, backup = self.make_intent()
@@ -766,7 +1165,7 @@ class OfflineTransaction:
                 for name in ('checkpoint', 'journal'):
                     self.fsync(self.targets[name].parent, 'forward:' + name + ':commit_fsync')
                 self.artifact('complete.json', encode(dict(plan_sha256=self.plan_hash,
-                                                          operation=self.op, status='OFFLINE_COMPLETE')))
+                                                          operation=self.op, status=self.PREFIX + '_COMPLETE')))
             elif action == 'rollback':
                 intent, backup = self.checked_intent()
                 positions = {n: self.position(n, intent, backup) for n in self.targets}
@@ -778,18 +1177,510 @@ class OfflineTransaction:
                 for name in ('journal', 'checkpoint'):
                     self.fsync(self.targets[name].parent, 'inverse:' + name + ':commit_fsync')
                 self.artifact('rolled-back.json', encode(dict(plan_sha256=self.plan_hash,
-                                                             operation=self.op, status='OFFLINE_ROLLED_BACK')))
+                                                             operation=self.op, status=self.PREFIX + '_ROLLED_BACK')))
             else:
                 intent, backup = self.checked_intent()
                 need(not os.path.lexists(self.tx / 'rollback-intent.json'), 'ROLLBACK_ALREADY_REQUESTED')
                 need(self.existing('complete.json') == dict(plan_sha256=self.plan_hash,
-                     operation=self.op, status='OFFLINE_COMPLETE'), 'INCOMPLETE_TRANSACTION')
+                     operation=self.op, status=self.PREFIX + '_COMPLETE'), 'INCOMPLETE_TRANSACTION')
             intent, backup = self.checked_intent()
             positions = {n: self.position(n, intent, backup) for n in self.targets}
             need(set(positions.values()) <= ({'original', 'inverse'} if action == 'rollback' else {'forward'}),
                  'POST_TRANSACTION_POSITION')
-            return dict(status='OFFLINE_ROLLED_BACK' if action == 'rollback' else 'OFFLINE_COMPLETE',
+            return dict(status=self.PREFIX + '_ROLLED_BACK' if action == 'rollback' else self.PREFIX + '_COMPLETE',
                         live_clearance=False, model_calls=0)
+
+
+@dataclass(frozen=True)
+class Layout:
+    controller: Path = Path('/var/lib/gobadminton-actions-train')
+    autonomy: Path = Path('/var/lib/gobadminton-autonomy')
+    runtime: Path = Path('/usr/local/lib/gb-actions-train')
+    policy: Path = Path('/etc/gobadminton-actions-train/policy.json')
+    proc: Path = Path('/proc')
+    cgroups: Path = Path('/sys/fs/cgroup')
+    worktrees: Path = Path('/srv/gb-slots/slot1/worktrees')
+    system: Path = Path('/')
+
+
+def pinned_next_qa(core_raw, active):
+    """Execute only the exact pinned planner function, never candidate modules."""
+    need(sha(core_raw) == PROFILE['core.py'][0], 'PLANNER_SOURCE_PIN')
+    tree = ast.parse(core_raw)
+    functions = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'next_stage']
+    need(len(functions) == 1 and active.get('deterministic_failure') is None
+         and active.get('phase') == 'pr_wait', 'PLANNER_INPUT')
+    # next_stage imports failure_diagnosis before its pr_wait branch. Supply only
+    # a sealed module whose callable MUST remain unreachable for this input.
+    import types
+    def forbidden(*args, **kwargs):
+        raise Hold('PLANNER_REPAIR_ROUTE_REACHABLE')
+    module = types.ModuleType('failure_diagnosis')
+    module.next_stage = forbidden
+    def importer(name, *args, **kwargs):
+        need(name == 'failure_diagnosis', 'PLANNER_IMPORT')
+        return module
+    namespace = {'__builtins__': {'__import__': importer}}
+    exec(compile(ast.Module(body=functions, type_ignores=[]), '<pinned-c5-next-stage>', 'exec'), namespace)
+    need(namespace['next_stage'](copy.deepcopy(active)) == 'qa', 'ACTUAL_C5_NEXT_STAGE_NOT_QA')
+
+
+def owner_task(api, active):
+    issue = api.get(f'issues/{active["issue"]}')
+    need(issue.get('number') == active['issue'] and issue.get('state') == 'open'
+         and 'pull_request' not in issue and issue.get('user', {}).get('id') == 318610566,
+         'IMMUTABLE_OWNER_ISSUE')
+    immutable = {k: issue[k] for k in ('number', 'body', 'user', 'created_at')}
+    # Native fingerprint uses normal sorted JSON (not core.digest's compact JSON).
+    need(sha(encode(immutable)) == active['fingerprint'], 'OWNER_ISSUE_FINGERPRINT')
+    marker, separator, raw = issue.get('body', '').partition('\n')
+    need(marker == 'GOBADMINTON_AUTONOMY_V1' and separator
+         and loads(raw) == active['task'], 'RAW_OWNER_TASK_DRIFT')
+    comments = api.get(f'issues/{active["issue"]}/comments?per_page=100&page=1')
+    need(type(comments) is list and len(comments) < 100, 'OWNER_COMMENTS_INCOMPLETE')
+    # This closed class is a body-admission task. A later Owner authorization
+    # marker is a conflict, not permission to silently replace the old task.
+    for comment in comments:
+        need(not (comment.get('user', {}).get('id') == 318610566
+                  and any(comment.get('body', '').startswith(marker) for marker in
+                          ('GOBADMINTON_AUTONOMY_V1', 'GOBADMINTON_RESUME_V1', 'GOBADMINTON_PARK_V1'))),
+             'COMPETING_OWNER_ADMISSION')
+    pr = api.get(f'pulls/{active["pr"]}')
+    need(pr.get('number') == active['pr'] and pr.get('state') == 'open' and not pr.get('merged')
+         and pr.get('head', {}).get('sha') == active['head']
+         and pr.get('head', {}).get('ref') == f'automation/issue-{active["issue"]}'
+         and pr.get('head', {}).get('repo', {}).get('id') == REPO_ID
+         and pr.get('base', {}).get('repo', {}).get('id') == REPO_ID
+         and pr.get('base', {}).get('ref') == 'dev', 'CURRENT_PR_IDENTITY')
+    commit = api.get('git/commits/' + active['head'])
+    need(commit.get('sha') == active['head']
+         and [p.get('sha') for p in commit.get('parents', [])] == [active['base']], 'CANDIDATE_PARENT')
+    files = api.get(f'pulls/{active["pr"]}/files?per_page=100&page=1')
+    need(type(files) is list and len(files) == pr.get('changed_files') and 0 < len(files) < 100,
+         'PR_FILES_INCOMPLETE')
+    allowed = active['task']['allowed_paths']
+    # Exact paths only for this closed ordinary no-author class. No glob expansion.
+    need(all(type(p) is str and not re.search(r'[*?\[\]]', p) for p in allowed)
+         and set(f.get('filename') for f in files) <= set(allowed)
+         and all(f.get('status') in ('added', 'modified', 'removed') for f in files), 'CANDIDATE_SCOPE')
+    return digest(dict(issue=issue, comments=comments, pr=pr, commit=commit, files=files))
+
+
+def source_release(bundle, commit, branch, qa_path, ci_run, api):
+    """Existing OPS packaging boundary: root ownership is required, insufficient.
+
+    Raw tree/index/self bytes, exact independent QA receipt and fresh mandatory
+    Product CI are all checked. This does not create/approve the receipt or GO.
+    The integrator supplies the reviewed receipt via its existing trusted path.
+    """
+    for path in (Path(bundle), *Path(bundle).parents, Path(qa_path), *Path(qa_path).parents):
+        trusted(path)
+    git = SafeGit(bundle)
+    material = git.clean(commit, branch)
+    need(SOURCE_PATH in material and TEST_PATH in material, 'SOURCE_BUNDLE_INCOMPLETE')
+    self_image = read_image(Path(__file__).absolute(), 0, 0o644)
+    need(material[SOURCE_PATH] == self_image.raw, 'EXECUTING_SELF_NOT_REVIEWED_BLOB')
+    qa = loads(read_image(qa_path, 0, 0o600).raw)
+    keys(qa, 'schema repo reviewed_sha verdict role risk author_session reviewer_session files',
+         'SOURCE_QA_RECEIPT_SCHEMA')
+    need(qa['schema'] == 'GB_PRECALL_SOURCE_QA_V1' and qa['repo'] == REPO
+         and qa['reviewed_sha'] == commit and qa['verdict'] == 'PASS'
+         and qa['role'] == 'independent_source_qa' and qa['risk'] == 'critical'
+         and type(qa['author_session']) is str and qa['author_session']
+         and type(qa['reviewer_session']) is str and qa['reviewer_session']
+         and qa['reviewer_session'] != qa['author_session']
+         and qa['files'] == {p: sha(material[p]) for p in (SOURCE_PATH, TEST_PATH)},
+         'SOURCE_QA_EXACT_INDEPENDENT_RECEIPT')
+    active = dict(head=commit, issue=1, deterministic_failure=dict(run=0, run_attempt=0))
+    proof, workflow = api.ci(active, ci_run, branch)
+    need(material.get('.github/workflows/ci.yml') == workflow, 'SOURCE_CI_WORKFLOW_BLOB')
+    return digest(dict(commit=commit, branch=branch, qa=qa,
+                       files={p: sha(raw) for p, raw in material.items()}, ci=proof))
+
+
+class ProtectedTransaction(OfflineTransaction):
+    """Actual fixed-layout adapter over the same crash-safe two-file protocol.
+
+    Construction/CLI offers no substituted uid, layout, pin, proof or force flag.
+    Tests instantiate internal objects with synthetic paths and identities only.
+    All four noncreating locks are retained through currentness/CAS and writes.
+    """
+    PREFIX = 'PROTECTED'
+    def __init__(self, layout, plan, collector, boundary=None):
+        need(os.getuid() == os.geteuid() == 0, 'ROOT_OPS_IDENTITY_REQUIRED')
+        self.root, self.layout, self.plan = layout.controller, layout, plan
+        self.collector = collector
+        self.boundary = boundary or (lambda _: None)
+        self.uid = self.gid = 0
+        self.cert = loads(plan.certificate)
+        self.slot, self.op = self.cert['binding']['slot'], self.cert['operation']
+        # Fixed class currently proved only for installed Slot1 UID1002 layout.
+        need(self.slot == 'slot1', 'UNQUALIFIED_SLOT_LAYOUT')
+        self.targets = dict(checkpoint=layout.autonomy / 'slots/slot1/state.json',
+                            journal=layout.controller / 'slot1.json')
+        self.lock_paths = ((layout.controller / 'controller.lock', 0o600),
+                           (layout.autonomy / 'slots/slot1/worker.lock', 0o600),
+                           (layout.autonomy / 'locks/slot1.lease', 0o644),
+                           (layout.autonomy / 'locks/registry.lock', 0o640))
+        self.tx = layout.controller / ('precall-ci-' + self.op)
+        self.before = dict(checkpoint=plan.checkpoint_before, journal=plan.journal_before)
+        self.after = dict(checkpoint=plan.checkpoint_after, journal=plan.journal_after)
+        self.plan_hash = digest({k: sha(getattr(plan, k)) for k in plan.__dataclass_fields__})
+
+    def file_owner(self, path):
+        path = Path(path)
+        if path in (self.targets['checkpoint'], self.lock_paths[1][0]):
+            return 1002, 1002
+        if path == self.lock_paths[2][0]:
+            return 1002, 65042
+        if path == self.lock_paths[3][0]:
+            return 0, 65042
+        if path.parent == self.tx and path.name in ('forward-checkpoint', 'inverse-checkpoint'):
+            return 1002, 1002
+        return 0, 0
+
+    def file_metadata(self, path, fd, mode):
+        os.fchown(fd, *self.file_owner(path))
+        os.fchmod(fd, mode)
+
+    def prepare_artifact(self, path, raw, mode):
+        if path.name not in ('forward-checkpoint', 'inverse-checkpoint'):
+            return
+        meta = path.lstat()
+        if (meta.st_uid, meta.st_gid) == self.file_owner(path):
+            return
+        need(not os.path.lexists(self.tx / 'intent.json'), 'STAGED_METADATA_AFTER_INTENT')
+        # Crash between exclusive create and fchown: only an exact prefix in the
+        # private root directory, before durable intent, can have metadata fixed.
+        image = read_image(path, 0, mode)
+        need(image.identity[3] == 0 and raw.startswith(image.raw), 'STAGED_PARTIAL_METADATA')
+        fd = os.open(path, os.O_WRONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            need(tuple(token(os.fstat(fd))) == image.identity, 'STAGED_PARTIAL_CAS')
+            self.file_metadata(path, fd, mode)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+    def make_intent(self):
+        result = super().make_intent()
+        self.artifact('live-attestation.json', encode(dict(
+            schema='GB_PRECALL_CI_LIVE_OBSERVATIONS_V1',
+            source_release=self.collector.release_hash,
+            local=self.collector.local_evidence, remote_sha256=self.collector.remote_digest)))
+        return result
+
+    def image(self, path, mode=0o600):
+        if Path(path).parent == self.tx:
+            trusted(self.tx, 0, 0, 0o700)
+        closed_acl(path)
+        return super().image(path, mode)
+
+    def manifest(self):
+        result, count, total = {}, 0, 0
+        # Only state trees, NEVER /etc credentials, slot home, argv or env.
+        for label, root in (('controller', self.layout.controller), ('autonomy', self.layout.autonomy)):
+            for base, dirs, files in os.walk(root, followlinks=False):
+                path = Path(base)
+                dirs[:] = sorted(d for d in dirs if path / d != self.tx)
+                need(all(not (path / d).is_symlink() for d in dirs), 'STATE_DIRECTORY_LINK')
+                info = path.lstat()
+                need(stat.S_ISDIR(info.st_mode) and info.st_uid in (0, 1002, 978)
+                     and (not info.st_mode & 0o022 or path == self.layout.autonomy / 'locks'
+                          and stat.S_IMODE(info.st_mode) == 0o1770), 'STATE_DIRECTORY_TRUST')
+                closed_acl(path)
+                key = label + '/' + str(path.relative_to(root))
+                result[key + '/'] = token(info)[:5]
+                for name in sorted(files):
+                    item = path / name
+                    meta = item.lstat()
+                    need(meta.st_uid in (0, 1002, 978) and not meta.st_mode & 0o022,
+                         'STATE_FILE_TRUST')
+                    image = read_image(item, meta.st_uid, stat.S_IMODE(meta.st_mode), 32 * 1024 * 1024)
+                    closed_acl(item)
+                    count += 1
+                    total += len(image.raw)
+                    need(count <= 50000 and total <= 256 * 1024 * 1024, 'PROTECTED_MANIFEST_CAP')
+                    result[label + '/' + str(item.relative_to(root))] = [image.checksum, list(image.identity)]
+                need(token(info) == token(path.lstat()), 'STATE_DIRECTORY_RACE')
+        return result
+
+    def preserved(self):
+        result = self.manifest()
+        result.pop('controller/slot1.json')
+        result.pop('autonomy/slots/slot1/state.json')
+        return result
+
+    def effect(self, name, fn):
+        # Locks already held. The collector proves local layout/process/accounting
+        # unchanged immediately before either target rename, including rollback.
+        if name.endswith(':rename'):
+            self.collector.local()
+            if self.action != 'rollback':
+                self.collector.current()
+            active = loads(self.after['checkpoint'])['active']
+            pinned_next_qa(self.collector.core_raw, active)
+            self.target_write_started = True
+        result = super().effect(name, fn)
+        if name.endswith(':rename'):
+            self.target_writes += 1
+        return result
+
+    def execute(self, action):
+        self.target_write_started = False
+        self.target_writes = 0
+        try:
+            return self.guarded_execute(action)
+        except (Hold, OSError) as error:
+            reason = str(error) if isinstance(error, Hold) else type(error).__name__
+            raise TransactionHold(reason, 'UNKNOWN_CHECK_DURABLE_INTENT'
+                                  if self.target_write_started else 0) from None
+
+    def guarded_execute(self, action):
+        # Acquire once here. super().execute uses locks() reentrantly via the
+        # context marker, never a second independent descriptor/flock.
+        with super().locks():
+            self.action = action
+            self.collector.local()
+            if action != 'rollback':
+                self.collector.current()
+            self._held = True
+            try:
+                result = super().execute(action)
+                self.collector.local()
+            finally:
+                self._held = False
+        result['status'] = result['status'].replace('OFFLINE_', 'PROTECTED_')
+        result['live_clearance'] = action in ('apply', 'verify')
+        result['target_metadata_writes'] = self.target_writes
+        return result
+
+    @contextlib.contextmanager
+    def locks(self):
+        need(getattr(self, '_held', False), 'ALL_LOCKS_REQUIRED')
+        yield
+
+
+class LiveCollector:
+    def __init__(self, layout, plan, api, release_hash=None, release_guard=None):
+        self.layout, self.plan, self.api = layout, plan, api
+        self.original = loads(plan.journal_before)
+        self.checkpoint = loads(plan.checkpoint_before)
+        self.cert = classify(self.original, self.checkpoint)
+        self.op = self.original['operations'][self.cert['operation']]
+        self.core_raw = b''
+        self.local_digest = None
+        self.remote_digest = None
+        self.release_hash, self.release_guard = release_hash, release_guard
+
+    def public_configuration(self):
+        result = {}
+        base = self.layout.system / 'etc/gobadminton-slots'
+        for name in ('budgets.json', 'continuity.json', 'cursor-author.json'):
+            path = base / name
+            trusted(path.parent)
+            info = trusted(path)
+            need(stat.S_IMODE(info.st_mode) in (0o600, 0o644), 'PUBLIC_CONFIG_MODE')
+            image = read_image(path, 0, stat.S_IMODE(info.st_mode), 65536)
+            data = loads(image.raw)
+            need(type(data) is dict, 'PUBLIC_CONFIG_SCHEMA')
+            if name == 'cursor-author.json':
+                need(data.get('schema') == 'GB_CURSOR_AUTHOR_211_V1'
+                     and data.get('phase') in ('canary', 'ready') and 'slot1' in data.get('slots', [])
+                     and (data['phase'] == 'ready' or data.get('canary_task_sha256') == self.op['task_hash'])
+                     and all(data.get('modules', {}).get(p) == PROFILE[p][0]
+                             for p in ('native_cursor.py', 'native_guard.py')), 'CURSOR_QUALIFICATION')
+            elif name == 'continuity.json':
+                need(data.get('schema') == 'GB_SLOT_CONTINUITY_V1' and data.get('enabled') is True,
+                     'CONTINUITY_DISABLED')
+            else:
+                need(set(data) <= {'schema', 'providers', 'slots'}
+                     and all(type(data.get(n, {})) is dict for n in ('providers', 'slots')), 'BUDGET_SCHEMA')
+            result[name] = [image.checksum, list(image.identity)]
+        need(not os.path.lexists(base / 'continuity.pending'), 'INSTALL_ACTIVATION_PENDING')
+        return result
+
+    def legacy_quiet(self):
+        # Only the target legacy scope; the unrelated paid Slot2 UNKNOWN is not
+        # an installer-wide idle requirement and is never cleared here.
+        trusted('/usr/bin/systemctl')
+        observations = {}
+        for unit in ('gobadminton-supervisor.service', 'gobadminton-slot@slot1.service'):
+            raw = bounded_command(['/usr/bin/systemctl', 'show', unit,
+                '--property=ActiveState,MainPID,ControlGroup'], dict(PATH='/usr/bin:/bin', LANG='C.UTF-8'))
+            values = dict(line.split('=', 1) for line in raw.decode().splitlines() if '=' in line)
+            need(values.get('ActiveState') == 'inactive' and values.get('MainPID') == '0', 'LEGACY_WRITER_ACTIVE')
+            group = values.get('ControlGroup')
+            need(type(group) is str and (not group or group.startswith('/') and '..' not in group.split('/')),
+                 'LEGACY_CGROUP_PATH')
+            if group:
+                path = self.layout.cgroups / group.lstrip('/')
+                if path.exists():
+                    for item in path.rglob('cgroup.procs'):
+                        need(not item.read_text().split(), 'LEGACY_CGROUP_LIVE')
+            observations[unit] = values
+        return observations
+
+    def local(self):
+        layout, active = self.layout, self.checkpoint['active']
+        for path in (layout.controller, layout.runtime, layout.policy.parent):
+            for ancestor in (path, *path.parents):
+                trusted(ancestor)
+        policy = read_image(layout.policy, 0, 0o644)
+        need(policy.checksum == POLICY_PIN,
+             'ACTUAL_POLICY_PIN')
+        data = loads(policy.raw)
+        need(data.get('mode') == 'active' and data.get('controller_sha') == CONTROLLER
+             and data.get('stage_workflow_sha256') == STAGE_WORKFLOW, 'POLICY_CONTROLLER_WORKFLOW')
+        inventory = read_image(layout.controller / 'backup.json', 0, 0o600, 32 * 1024 * 1024)
+        need(inventory.checksum == INVENTORY_PIN,
+             'ACTUAL_INVENTORY_PIN')
+        inventory_data = loads(inventory.raw)
+        need(inventory_data.get('schema') == 'GB_ACTIONS_TRAIN_BACKUP_V1', 'INVENTORY_SCHEMA')
+        after = inventory_data.get('after')
+        need(type(after) is dict and len(after) <= 64, 'INVENTORY_AFTER')
+        pins = {}
+        for path, checksum in after.items():
+            need(path.startswith('/usr/local/lib/gb-actions-train/') or path in
+                 ('/usr/local/lib/gb-ops-monitor/opsmon/writer.py',
+                  '/usr/local/lib/gb-ops-monitor/web/app.js', '/usr/local/sbin/gb-deploy-helper.sh'),
+                 'INVENTORY_PATH')
+            p = layout.system / path.removeprefix('/')
+            trusted(p)
+            info = p.lstat()
+            image = read_image(p, 0, stat.S_IMODE(info.st_mode))
+            need(image.checksum == checksum, 'INVENTORY_CONTENT_DRIFT')
+            pins[path] = [checksum, list(image.identity)]
+        for rel, (checksum, size) in PROFILE.items():
+            path = layout.runtime / rel
+            image = read_image(path, 0, 0o644)
+            closed_acl(path)
+            need(image.checksum == checksum and len(image.raw) == size
+                 and image.identity[3] == 0
+                 and (rel not in PROFILE_MTIME_NS or image.identity[7] == PROFILE_MTIME_NS[rel])
+                 and after.get('/usr/local/lib/gb-actions-train/' + rel) == checksum,
+                 'ACTUAL_RUNTIME_CLOSURE:' + rel)
+            if rel == 'core.py':
+                self.core_raw = image.raw
+        for base, dirs, files in os.walk(layout.runtime, followlinks=False):
+            need(all(d == 'live' for d in dirs), 'UNPINNED_RUNTIME_DIRECTORY_OR_BYTECODE')
+            trusted(base)
+            for name in files:
+                need('/usr/local/lib/gb-actions-train/'
+                     + str((Path(base) / name).relative_to(layout.runtime)) in after, 'UNPINNED_RUNTIME_FILE')
+        processes = stopped_processes(self.op, 1002, layout.proc, layout.cgroups)
+        configuration = self.public_configuration()
+        legacy = self.legacy_quiet()
+        lease = read_image(layout.autonomy / 'locks/slot1.lease', 1002, 0o644)
+        need(lease.identity[3] == 65042 and loads(lease.raw) == self.op['record'], 'EXACT_TARGET_LEASE')
+        # The pinned C5 guard proves no invoke/charge/publish path is reachable.
+        # Corroborate actual invocation trace if one exists, never equate a missing
+        # field with proof and never generalize this to a paid provider UNKNOWN.
+        trace_path = layout.autonomy / 'outbox/slot1/actions-process.json'
+        trace = None
+        trace_image = None
+        if os.path.lexists(trace_path):
+            trace_image = read_image(trace_path, 1002, 0o600)
+            trace = loads(trace_image.raw)
+            need(not (trace.get('workflow_run') == self.op['run']
+                      and (trace.get('process') is not None or trace.get('model') is not None)),
+                 'OPERATION_MODEL_PROCESS_EVIDENCE')
+        cursor_receipt = layout.autonomy / 'outbox/slot1/cursor-author-receipt.json'
+        receipt_image = None
+        if os.path.lexists(cursor_receipt):
+            receipt_image = read_image(cursor_receipt, 1002, 0o600)
+            receipt = loads(receipt_image.raw)
+            need(not (receipt.get('task_sha256') == self.op['task_hash']
+                      and receipt.get('issue') == active['issue']
+                      and type(receipt.get('started_at')) is int
+                      and receipt['started_at'] >= self.op['started_at']), 'OPERATION_CURSOR_INVOCATION_EVIDENCE')
+        candidate = SafeGit(layout.worktrees / f'issue-{active["issue"]}', 1002, 1002).clean(
+            active['head'], f'automation/issue-{active["issue"]}')
+        # Accounting/grants/other-slot closure is a complete state manifest in
+        # the transaction, retained byte-for-byte. No reset/refund or zero usage.
+        self.local_evidence = dict(policy=[policy.checksum, list(policy.identity)],
+                              inventory=[inventory.checksum, list(inventory.identity)],
+                              pins=pins, processes=processes, lease=[lease.checksum, list(lease.identity)],
+                              trace=None if trace_image is None else [trace_image.checksum, list(trace_image.identity)],
+                              cursor_receipt=None if receipt_image is None else
+                                  [receipt_image.checksum, list(receipt_image.identity)],
+                              configuration=configuration, legacy=legacy,
+                              candidate={p: sha(raw) for p, raw in candidate.items()})
+        current = digest(self.local_evidence)
+        if self.local_digest is None:
+            self.local_digest = current
+        need(self.local_digest == current, 'LIVE_LOCAL_ATTESTATION_DRIFT')
+        if self.release_guard:
+            self.release_guard()
+        return current
+
+    def current(self):
+        active = self.checkpoint['active']
+        remote = owner_task(self.api, active)
+        proof, workflow = self.api.ci(active)
+        need(transition(self.plan.journal_before, self.plan.checkpoint_before, proof, workflow,
+                        sha(workflow)) == self.plan, 'CURRENT_CI_PLAN_DRIFT')
+        current = digest(dict(owner=remote, ci=proof, workflow=sha(workflow)))
+        if self.remote_digest is None:
+            self.remote_digest = current
+        need(current == self.remote_digest, 'REMOTE_CURRENTNESS_DRIFT')
+
+
+def live_execute(args):
+    need(os.getuid() == os.geteuid() == 0, 'ROOT_OPS_IDENTITY_REQUIRED')
+    api = GitHubReads()
+    release_hash = source_release(Path(args.bundle), args.source_commit, args.source_branch,
+                                  Path(args.qa_receipt), args.source_ci_run, api)
+    source = SafeGit(Path(args.bundle))
+    source_material = source.clean(args.source_commit, args.source_branch)
+    qa_image = read_image(Path(args.qa_receipt), 0, 0o600)
+    source_current = api.get(f'actions/runs/{args.source_ci_run}')
+    source_listing_path = ('actions/workflows/ci.yml/runs?head_sha=' + args.source_commit
+                           + '&per_page=20&page=1')
+    source_listing = api.get(source_listing_path)
+    def release_guard():
+        need(source.clean(args.source_commit, args.source_branch) == source_material
+             and read_image(Path(args.qa_receipt), 0, 0o600) == qa_image, 'SOURCE_RELEASE_CAS_DRIFT')
+        need(api.get(f'actions/runs/{args.source_ci_run}') == source_current
+             and api.get(source_listing_path) == source_listing, 'SOURCE_CI_CURRENTNESS_DRIFT')
+    layout = Layout()
+    journal_path = layout.controller / 'slot1.json'
+    checkpoint_path = layout.autonomy / 'slots/slot1/state.json'
+    tx_path = layout.controller / ('precall-ci-' + args.operation)
+    backup = None
+    # Reentry reads ORIGINAL bytes from the immutable private backup; transaction
+    # validates its plan/hash/inodes/preserved inventory under all locks.
+    if os.path.lexists(tx_path / 'backup.json'):
+        try:
+            backup = loads(read_image(tx_path / 'backup.json', 0, 0o600).raw)
+        except Hold as error:
+            need(str(error) == 'INVALID_JSON' and args.action == 'apply', 'PARTIAL_BACKUP_HOLD')
+            # No intent/target mutation is reachable before complete backup.
+            need(not os.path.lexists(tx_path / 'intent.json'), 'PARTIAL_BACKUP_WITH_INTENT')
+            journal_raw = read_image(journal_path, 0, 0o600).raw
+            checkpoint_raw = read_image(checkpoint_path, 1002, 0o600).raw
+        else:
+            journal_raw = backup['before']['journal'].encode()
+            checkpoint_raw = backup['before']['checkpoint'].encode()
+    else:
+        journal_raw = read_image(journal_path, 0, 0o600).raw
+        checkpoint_raw = read_image(checkpoint_path, 1002, 0o600).raw
+    journal, checkpoint = loads(journal_raw), loads(checkpoint_raw)
+    need(classify(journal, checkpoint)['operation'] == args.operation, 'REQUEST_OPERATION_BINDING')
+    if args.action == 'rollback':
+        need(type(backup) is dict, 'ROLLBACK_REQUIRES_DURABLE_BACKUP')
+        # Inverse occupancy restoration does not assert that old failed CI now
+        # passes. It must work when candidate CI is unavailable/has rerun.
+        # checked_intent validates private backups, plan hash, exact target
+        # inodes and every preserved byte under all locks before any inverse.
+        plan = Plan(journal_raw, checkpoint_raw, backup['after']['journal'].encode(),
+                    backup['after']['checkpoint'].encode(), backup['certificate'].encode())
+    else:
+        proof, workflow = api.ci(checkpoint['active'])
+        plan = transition(journal_raw, checkpoint_raw, proof, workflow, sha(workflow))
+    collector = LiveCollector(layout, plan, api, release_hash, release_guard)
+    transaction = ProtectedTransaction(layout, plan, collector)
+    return transaction.execute(args.action)
 
 
 def main(argv=None):
@@ -797,13 +1688,24 @@ def main(argv=None):
     parser.add_argument('action', choices=('dry', 'apply', 'verify', 'rollback'))
     parser.add_argument('--operation', required=True, type=lambda v: v if HASH.fullmatch(v)
                         else parser.error('operation must be 64 lowercase hex characters'))
+    parser.add_argument('--bundle', required=True)
+    parser.add_argument('--source-commit', required=True, type=lambda v: v if SHA.fullmatch(v)
+                        else parser.error('source commit must be exact SHA'))
+    parser.add_argument('--source-branch', required=True)
+    parser.add_argument('--source-ci-run', required=True, type=int)
+    parser.add_argument('--qa-receipt', required=True)
     args = parser.parse_args(argv)
-    # This source revision cannot be installed as a working reconciler. No
-    # caller flag, root identity, file pin or JSON can turn these gaps into PASS.
-    print(json.dumps(dict(status='HOLD', action=args.action, operation=args.operation,
-                          source_status='PARTIAL_NOT_LIVE_QUALIFIED', missing=list(LIVE_GAPS),
-                          protected_writes=0, model_calls=0, network_calls=0), sort_keys=True))
-    return 1
+    try:
+        result = live_execute(args)
+    except (Hold, OSError, ValueError, KeyError, TypeError) as error:
+        # Never print subprocess stderr, HTTP bodies, environments or arbitrary
+        # exception text. A failure after intent may have partial metadata writes.
+        code = str(error) if isinstance(error, Hold) else type(error).__name__
+        result = dict(status='HOLD', reason=code, operation=args.operation,
+                      target_metadata_writes=error.target_writes if isinstance(error, TransactionHold) else 0,
+                      model_calls=0)
+    print(json.dumps(result, sort_keys=True))
+    return 1 if result['status'] == 'HOLD' else 0
 
 
 if __name__ == '__main__':
