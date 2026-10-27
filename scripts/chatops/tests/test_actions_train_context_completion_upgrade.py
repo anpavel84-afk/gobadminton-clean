@@ -1,83 +1,88 @@
 """V3 safety/protocol evidence on synthetic dirs and immutable Git objects only."""
-import ast
-import copy
 import json
 import os
 from pathlib import Path
 import stat
 import subprocess
-from types import SimpleNamespace
+import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 import test_actions_train_stage5_cursor_upgrade as v3
+import stage5_frozen_profile_fixture as frozen
 
 U, core, H = v3.U, v3.core, v3.H
-ROOT=v3.legacy.ROOT
-
-
-def blob(path):
-    env={'PATH':'/usr/bin:/bin','HOME':'/nonexistent','GIT_CONFIG_NOSYSTEM':'1',
-         'GIT_CONFIG_GLOBAL':'/dev/null','GIT_OPTIONAL_LOCKS':'0','GIT_NO_REPLACE_OBJECTS':'1'}
-    return subprocess.run(['/usr/bin/git','--no-optional-locks','-C',str(ROOT),
-        'show',U.C5+':'+U.PREFIX+path],capture_output=True,check=True,env=env).stdout
-
-
-def function(raw,name):
-    return next(n for n in ast.parse(raw).body if isinstance(n,ast.FunctionDef) and n.name==name)
+ROOT = v3.legacy.ROOT
 
 
 class ProtocolEvidence(unittest.TestCase):
-    def test_exact_frozen_router_refuses_all_agy_author_routes(self):
-        # Execute only the pure immutable router function against inert fake
-        # availability/budget. No module import, client invocation or live().
-        raw=blob('core.py');self.assertEqual(H(raw),U.V3_PROTOCOL['core.py'])
-        tree=ast.Module(body=[function(raw,'_route_immutable')],type_ignores=[])
-        def need(ok,why):
-            if not ok: raise core.Refused(why)
-        fake=SimpleNamespace(UNKNOWN=object(),adapter_status=lambda *a:(True,'fake'),MODEL_ADAPTER={})
-        budget=SimpleNamespace(remaining=lambda *a:3,used=lambda *a:0)
-        namespace=dict(need=need,json=json,digest=lambda x:'f'*64)
-        exec(compile(tree,'immutable pure router','exec'),namespace)
-        import native_antigravity
-        with patch.dict('sys.modules',native_antigravity=native_antigravity):
-            for model in native_antigravity.MODELS:
-                task=dict(author_routes=['agy:'+model],work_kind='implementation',risk='complex')
-                with self.subTest(model=model),self.assertRaisesRegex(core.Refused,'role/model/effort not supported'):
-                    namespace['_route_immutable'](fake,task,'author','auto',budget,'slot1')
-        slots=blob('live/slots.py');self.assertEqual(H(slots),U.V3_PROTOCOL['live/slots.py'])
-        assignment=next(n for n in ast.parse(slots).body if isinstance(n,ast.Assign)
-                        and any(isinstance(t,ast.Name) and t.id=='FORBIDDEN' for t in n.targets))
-        self.assertIn('author',ast.literal_eval(assignment.value)['agy'])
-
     def test_frozen_context_api_and_exact_reviewed_stage_guard_delta(self):
-        raw=blob('context_exchange.py');self.assertEqual(H(raw),U.V3_PROTOCOL['context_exchange.py'])
-        funcs={n.name:n for n in ast.parse(raw).body if isinstance(n,ast.FunctionDef)}
-        self.assertEqual([a.arg for a in funcs['compile_capsule'].args.args],['full_rules','role','expected_sha256'])
-        self.assertEqual([a.arg for a in funcs['encoded'].args.args],['value'])
-        self.assertTrue({'text','metadata','role','compact','full_rules_reference','verified_access'}<=
-                        {a.arg for a in funcs['rules_prefix'].args.kwonlyargs})
-        for n in U.V3_NEW:
-            if n=='accepted-engineering-rules.md': continue
-            self.assertEqual(H((ROOT/U.PREFIX/n).read_bytes()),U.V3_NEW[n])
-        stage=(ROOT/U.PREFIX/'stage.py').read_bytes()
-        tree=ast.parse(stage)
-        imports=[n for n in ast.walk(tree) if isinstance(n,ast.ImportFrom) and n.module=='native_antigravity_author']
-        self.assertEqual(len(imports),1)
-        parents={child:node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
-        parent=parents[imports[0]]
-        self.assertIsInstance(parent,ast.If)
-        self.assertEqual(ast.unparse(parent.test),"provider == 'agy' and (not qa)")
-        # Only the RO canon addition is accepted for the shared guard. All AGY
-        # restriction functions and namespace construction before the new mount
-        # must remain exact AST equivalents of the old guard.
-        old=ast.parse(blob('native_guard.py'));new=ast.parse((ROOT/U.PREFIX/'native_guard.py').read_bytes())
-        for name in ('_landlock','_seccomp','restrict','no_new_privileges'):
-            self.assertEqual(ast.dump(function(ast.unparse(old),name)),ast.dump(function(ast.unparse(new),name)))
-        oldfn=function(ast.unparse(old),'cursor_namespace_argv')
-        newfn=copy.deepcopy(function(ast.unparse(new),'cursor_namespace_argv'))
-        added=[n for n in newfn.body if isinstance(n,ast.AugAssign) and isinstance(n.value,ast.Call)
-               and isinstance(n.value.func,ast.Name) and n.value.func.id=='cursor_rules_readonly_mounts']
-        self.assertEqual(len(added),1);newfn.body.remove(added[0]);self.assertEqual(ast.dump(oldfn),ast.dump(newfn))
+        # The installer contract is unchanged; current routing is deliberately
+        # NOT a V3 target. Never repin V3 to the current source to satisfy CI.
+        self.assertEqual(H(Path(U.__file__).read_bytes()), frozen.BLOBS['v3-installer.py'][2])
+        self.assertEqual(U.C5, frozen.C5)
+        for mapping in (U.V3_NEW, U.V3_PROTOCOL):
+            for name, pin in mapping.items():
+                self.assertEqual(frozen.BLOBS[name][2], pin, name)
+        with tempfile.TemporaryDirectory(prefix='gb-frozen-v3-') as tmp:
+            scratch = Path(tmp)
+            profile = scratch / 'profile'
+            frozen.materialize(ROOT, profile)
+            targets = scratch / 'current-targets'
+            targets.mkdir()
+            # Current bytes are data for negative controls, never imports in the
+            # historical interpreter. Production source is not modified.
+            for name in ('stage.py', 'context_policy.py'):
+                (targets / name).write_bytes((ROOT / U.PREFIX / name).read_bytes())
+            poison = scratch / 'poison'
+            poison.mkdir()
+            for name in ('core', 'native_antigravity', 'context_policy'):
+                (poison / (name + '.py')).write_text("raise AssertionError('PYTHONPATH contamination')\n")
+            result = subprocess.run(
+                [sys.executable, '-I', '-B', str(Path(frozen.__file__).resolve()),
+                 str(profile), str(targets)], cwd=scratch,
+                env=dict(os.environ, PYTHONPATH=str(poison), PYTHONDONTWRITEBYTECODE='1'),
+                capture_output=True, text=True, timeout=120)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            receipt = json.loads(result.stdout)
+            self.assertTrue(receipt['success'])
+            self.assertEqual(receipt['tests'], 6)
+            self.assertIn('test_pinned_router_author_refusal_and_qa_positive_control', result.stderr)
+            self.assertEqual(receipt['module_origins']['core']['commit'], U.C5)
+            for row in receipt['module_origins'].values():
+                self.assertTrue(Path(row['path']).is_relative_to(profile))
+            frozen.verify_files(profile)
+
+    def test_closed_provenance_rejects_wrong_commit_path_hash_and_length(self):
+        name = 'core.py'
+        commit, path, digest, size = frozen.BLOBS[name]
+        raw = frozen.read_blob(ROOT, name)
+        self.assertEqual(len(raw), size)
+        for record in (('0' * 40, path, digest, size),
+                       (commit, path + '.foreign', digest, size),
+                       (frozen.RELEASE, path, digest, size),
+                       (commit, path, '0' * 64, size),
+                       (commit, path, digest, size + 1)):
+            with self.subTest(record=record), self.assertRaisesRegex(ValueError, 'unsupported immutable provenance'):
+                frozen.read_blob(ROOT, name, record)
+        for changed in (raw + b'x', raw[:-1], bytes([raw[0] ^ 1]) + raw[1:]):
+            with self.assertRaisesRegex(ValueError, 'digest/size mismatch'):
+                frozen.checked_bytes(name, changed)
+
+    def test_missing_immutable_object_fails_without_current_file_fallback(self):
+        with tempfile.TemporaryDirectory(prefix='gb-missing-v3-') as tmp:
+            repo = Path(tmp)
+            result = subprocess.run(['/usr/bin/git', 'init', '--bare', str(repo)],
+                                    capture_output=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            # Even with current bytes available at the requested working path,
+            # an absent exact object must fail, not fetch, skip or read HEAD.
+            current = repo / U.PREFIX / 'core.py'
+            current.parent.mkdir(parents=True)
+            current.write_bytes((ROOT / U.PREFIX / 'core.py').read_bytes())
+            with self.assertRaisesRegex(ValueError, 'required local immutable Git blob unavailable'):
+                frozen.read_blob(repo, 'core.py')
+            self.assertFalse((repo / 'FETCH_HEAD').exists())
 
 
 class CompletionSafety(unittest.TestCase):
