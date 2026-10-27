@@ -403,6 +403,80 @@ class ProductQaAdmissionWire(unittest.TestCase):
         with self.assertRaises(Exception):
             A.validate_product_admission(dict(good, extra='nope'))
 
+    def test_find_product_admission_ignores_receipt_only(self):
+        """Receipt-only STATE must not look like an admission (run40557833601 class)."""
+        import owner_package_admission as A
+        import importlib
+        A = importlib.reload(A)
+        with tempfile.TemporaryDirectory(prefix='product-qa-discovery-') as tmp:
+            folder = Path(tmp)
+            receipt = dict(schema='GB_PRODUCT_QA_ADMISSION_TX_V1', phase='complete',
+                           owner_comment=6449940130)
+            R.atomic(folder / (A.PRODUCT_RECEIPT_PREFIX + '6449940130.json'), receipt)
+            with patch.object(R, 'STATE', folder):
+                self.assertIsNone(R.find_product_admission())
+            self.assertTrue((folder / (A.PRODUCT_RECEIPT_PREFIX + '6449940130.json')).exists())
+
+    def test_find_product_admission_one_actual_plus_receipt(self):
+        """Exactly one numeric ledger + matching receipt is eligible, not ambiguous."""
+        import owner_package_admission as A
+        import importlib
+        A = importlib.reload(A)
+        with tempfile.TemporaryDirectory(prefix='product-qa-discovery-') as tmp:
+            folder = Path(tmp)
+            admission = dict(self._admission(owner_comment=6449940130),
+                             body_sha256='e' * 64, owner_id=A.OWNER_ID)
+            R.atomic(folder / (A.PRODUCT_LEDGER_PREFIX + '6449940130.json'), admission)
+            R.atomic(folder / (A.PRODUCT_RECEIPT_PREFIX + '6449940130.json'),
+                     dict(schema='GB_PRODUCT_QA_ADMISSION_TX_V1', phase='complete',
+                          owner_comment=6449940130))
+            original_read = R.read
+            def read_fixture(path, owner):
+                self.assertEqual(owner, 0)
+                return original_read(path, os.getuid())
+            with patch.object(R, 'STATE', folder), patch.object(R, 'read', side_effect=read_fixture):
+                found = R.find_product_admission()
+            self.assertEqual(found['owner_comment'], 6449940130)
+            self.assertEqual(found['schema'], A.PRODUCT_SCHEMA)
+            self.assertTrue((folder / (A.PRODUCT_RECEIPT_PREFIX + '6449940130.json')).exists())
+
+    def test_find_product_admission_two_actual_plus_receipts_refused(self):
+        """Multiple real numeric ledgers stay fail-closed even if receipts exist."""
+        import owner_package_admission as A
+        import importlib
+        A = importlib.reload(A)
+        with tempfile.TemporaryDirectory(prefix='product-qa-discovery-') as tmp:
+            folder = Path(tmp)
+            for comment in (6449940130, 6449940131):
+                admission = dict(self._admission(owner_comment=comment),
+                                 body_sha256='e' * 64, owner_id=A.OWNER_ID)
+                R.atomic(folder / (A.PRODUCT_LEDGER_PREFIX + f'{comment}.json'), admission)
+                R.atomic(folder / (A.PRODUCT_RECEIPT_PREFIX + f'{comment}.json'),
+                         dict(schema='GB_PRODUCT_QA_ADMISSION_TX_V1', phase='complete',
+                              owner_comment=comment))
+            with patch.object(R, 'STATE', folder):
+                with self.assertRaisesRegex(Exception, 'ambiguous product QA admissions'):
+                    R.find_product_admission()
+
+    def test_find_product_admission_invalid_ledger_still_validated(self):
+        """Numeric ledger name still goes through product_qa_ledger validation."""
+        import owner_package_admission as A
+        import importlib
+        A = importlib.reload(A)
+        with tempfile.TemporaryDirectory(prefix='product-qa-discovery-') as tmp:
+            folder = Path(tmp)
+            R.atomic(folder / (A.PRODUCT_LEDGER_PREFIX + '999001.json'),
+                     dict(schema='not-a-product-admission', owner_comment=999001))
+            R.atomic(folder / (A.PRODUCT_RECEIPT_PREFIX + '999001.json'),
+                     dict(schema='GB_PRODUCT_QA_ADMISSION_TX_V1', phase='complete'))
+            original_read = R.read
+            def read_fixture(path, owner):
+                self.assertEqual(owner, 0)
+                return original_read(path, os.getuid())
+            with patch.object(R, 'STATE', folder), patch.object(R, 'read', side_effect=read_fixture):
+                with self.assertRaisesRegex(Exception, 'invalid product QA ledger'):
+                    R.find_product_admission()
+
     def test_product_qa_request_fields_fail_closed(self):
         for fields in ({'issue': 29}, {'slot': 'slot1'}, {'head': 'b' * 40},
                        {'phase': 'pr_wait'}, {'attempt': 1}, {'profile': 'auto'}):
