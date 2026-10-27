@@ -48,6 +48,12 @@ vi.mock("react", async original => {
       if (previous && equalDeps(previous.deps, deps)) return previous.value;
       const slot = { deps, value: factory() }; store.slots[index] = slot; return slot.value;
     },
+    useCallback(fn: unknown, deps?: readonly unknown[]) {
+      const store = active(); const index = store.cursor++;
+      const previous = store.slots[index] as { deps?: readonly unknown[]; value: unknown } | undefined;
+      if (previous && equalDeps(previous.deps, deps)) return previous.value;
+      const slot = { deps, value: fn }; store.slots[index] = slot; return slot.value;
+    },
     useEffect: effect, useLayoutEffect: effect,
     useId() { const store = active(); return `id-${store.cursor++}`; },
     useContext(context: { _currentValue: unknown }) { return context._currentValue; },
@@ -162,6 +168,15 @@ class Renderer {
           const output = (value.type as (props: Record<string, unknown>) => ReactNode)(value.props);
           runtime.current = null;
           return walk(output, `${key}.output`, depth + 1);
+        }
+        // Transparent default for Context.Provider (MapLayerFilters and similar).
+        if (value.type && typeof value.type === "object" && value.type !== null && ("_context" in value.type || ("Provider" in value.type && "_currentValue" in value.type))) {
+          const provider = value.type as { _context?: { _currentValue: unknown }; _currentValue?: unknown };
+          const context = provider._context ?? provider;
+          const previous = context._currentValue;
+          context._currentValue = value.props.value;
+          try { return walk(value.props.children as ReactNode, `${key}.provider`, depth + 1); }
+          finally { context._currentValue = previous; }
         }
         if (typeof value.type !== "string") throw new Error(`Unsupported element ${String(value.type)}`);
         const node = this.hosts.get(key)?.node ?? new Node(value.type);

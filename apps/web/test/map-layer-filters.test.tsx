@@ -1,4 +1,4 @@
-import { Children, isValidElement, type ReactElement, type ReactNode } from "react";
+import { Children, Fragment, cloneElement, isValidElement, type ReactElement, type ReactNode } from "react";
 import type * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -31,7 +31,13 @@ vi.mock("react", async importOriginal => ({
     if (!prev || deps.some((v, n) => v !== prev.deps[n])) hooks.slots[i] = { deps, value: fn() };
     return (hooks.slots[i] as { value: unknown }).value;
   },
-  useCallback(fn: unknown) { return fn; },
+  useCallback(fn: unknown, deps: unknown[]) {
+    const i = hooks.cursor++;
+    const prev = hooks.slots[i] as { deps: unknown[]; fn: unknown } | undefined;
+    if (!prev || deps.some((v, n) => v !== prev.deps[n])) hooks.slots[i] = { deps, fn };
+    return (hooks.slots[i] as { fn: unknown }).fn;
+  },
+  useContext(context: { _currentValue: unknown }) { return context._currentValue; },
   useEffect(effect: () => void | (() => void), deps: unknown[]) {
     const index = hooks.cursor++;
     const previous = hooks.slots[index] as unknown[] | undefined;
@@ -54,35 +60,74 @@ import { DEFAULT_MAP_LAYER_FILTERS } from "../src/lib/map-layer-filters";
 import { filterVenuesForMapLayer } from "../src/lib/map-layer-filters";
 import type { VenueSummary } from "../src/lib/consumer-types";
 
+type FiberStore = { slots: unknown[]; cleanups: (() => void)[] };
+const fibers = new Map<string, FiberStore>();
+
+function fiberFor(key: string): FiberStore {
+  let store = fibers.get(key);
+  if (!store) { store = { slots: [], cleanups: [] }; fibers.set(key, store); }
+  return store;
+}
+
+function expandChildren(children: ReactNode, path: string): ReactNode {
+  return Children.map(children, (child, index) => expand(child, `${path}/${index}`));
+}
+
+/** Expand function components and Context.Provider so clicks hit real host controls. */
+function expand(node: ReactNode, path = "root"): ReactNode {
+  if (Array.isArray(node)) return node.map((child, index) => expand(child, `${path}.${index}`));
+  if (!isValidElement<Record<string, unknown>>(node)) return node;
+  if (node.type === Fragment) {
+    return <Fragment>{expandChildren(node.props.children as ReactNode, `${path}/fragment`)}</Fragment>;
+  }
+  if (typeof node.type === "function") {
+    const key = `${path}:${node.type.name || "fn"}:${String(node.key ?? "")}`;
+    const store = fiberFor(key);
+    const saved = { slots: hooks.slots, cleanups: hooks.cleanups, cursor: hooks.cursor, effects: hooks.effects };
+    hooks.slots = store.slots; hooks.cleanups = store.cleanups; hooks.cursor = 0; hooks.effects = [];
+    const output = (node.type as (props: Record<string, unknown>) => ReactNode)(node.props);
+    hooks.effects.splice(0).forEach(effect => effect());
+    store.slots = hooks.slots; store.cleanups = hooks.cleanups;
+    hooks.slots = saved.slots; hooks.cleanups = saved.cleanups; hooks.cursor = saved.cursor; hooks.effects = saved.effects;
+    return expand(output, `${key}.out`);
+  }
+  if (node.type && typeof node.type === "object" && ("_context" in node.type || ("Provider" in node.type && "_currentValue" in node.type))) {
+    const provider = node.type as { _context?: { _currentValue: unknown }; _currentValue?: unknown };
+    const context = provider._context ?? provider;
+    const previous = context._currentValue;
+    context._currentValue = node.props.value;
+    try {
+      return expandChildren(node.props.children as ReactNode, `${path}/provider`);
+    } finally {
+      context._currentValue = previous;
+    }
+  }
+  return cloneElement(node, undefined, expandChildren(node.props.children as ReactNode, path));
+}
+
 function elements(node: ReactNode): ReactElement<Record<string, unknown>>[] {
+  if (Array.isArray(node)) return node.flatMap(elements);
   if (!isValidElement<Record<string, unknown>>(node)) return [];
   return [node, ...Children.toArray(node.props.children as ReactNode).flatMap(elements)];
 }
 
-function flush(tree: ReactNode) {
-  hooks.effects.splice(0).forEach(effect => effect());
-  return tree;
-}
-
 function clickLabel(tree: ReactNode, label: string) {
   for (const node of elements(tree)) {
-    const html = renderToStaticMarkup(node);
-    if (!html.includes(label)) continue;
-    const onClick = node.props.onClick as (() => void) | undefined;
-    if (typeof onClick === "function" && (node.type === "button" || typeof node.type !== "string")) {
-      onClick();
+    if (node.props["aria-label"] === label && typeof node.props.onClick === "function") {
+      (node.props.onClick as () => void)();
       return true;
     }
   }
-  // Prefer exact button text match via children walk.
   for (const node of elements(tree)) {
-    if (node.type !== "button") continue;
-    const text = typeof node.props.children === "string"
-      ? node.props.children
-      : renderToStaticMarkup(<>{node.props.children as ReactNode}</>);
-    if (text.includes(label) && typeof node.props.onClick === "function") {
-      (node.props.onClick as () => void)();
-      return true;
+    if (typeof node.props.onClick !== "function") continue;
+    try {
+      const html = renderToStaticMarkup(node);
+      if (html.includes(label)) {
+        (node.props.onClick as () => void)();
+        return true;
+      }
+    } catch {
+      // Non-serializable nodes are skipped; host buttons are preferred above.
     }
   }
   return false;
@@ -99,40 +144,39 @@ describe("MapLayerFiltersControls draft/apply/reset", () => {
     hooks.effects = [];
     hooks.cleanups = [];
     hooks.cursor = 0;
+    fibers.clear();
     document.body.style.overflow = "";
     Object.assign(document, { activeElement: document.body });
   });
   afterEach(() => {
+    for (const store of fibers.values()) store.cleanups.forEach(cleanup => cleanup?.());
     hooks.cleanups.splice(0).forEach(cleanup => cleanup?.());
   });
 
   it("keeps draft changes until Apply; reset draft does not change applied", () => {
     let applied = DEFAULT_MAP_LAYER_FILTERS;
     const read = (value: ReturnType<typeof useMapLayerFilters>) => { applied = value.applied; };
-    const render = () => {
-      hooks.cursor = 0;
-      return flush(
-        <MapLayerFiltersProvider>
-          <Probe onRead={read} />
-          <MapLayerFiltersControls />
-        </MapLayerFiltersProvider>,
-      );
-    };
+    const render = () => expand(
+      <MapLayerFiltersProvider>
+        <Probe onRead={read} />
+        <MapLayerFiltersControls />
+      </MapLayerFiltersProvider>,
+    );
 
     let tree = render();
     expect(applied).toEqual(DEFAULT_MAP_LAYER_FILTERS);
-    expect(renderToStaticMarkup(tree)).toContain("Фильтры");
-    expect(renderToStaticMarkup(tree)).not.toContain("Фильтры карты");
+    expect(renderToStaticMarkup(<>{tree}</>)).toContain("Фильтры");
+    expect(renderToStaticMarkup(<>{tree}</>)).not.toContain("Фильтры карты");
 
     expect(clickLabel(tree, "Фильтры")).toBe(true);
     tree = render();
-    expect(renderToStaticMarkup(tree)).toContain("Фильтры карты");
-    expect(renderToStaticMarkup(tree)).toContain("Площадки");
-    expect(renderToStaticMarkup(tree)).toContain("Радар игроков");
-    expect(renderToStaticMarkup(tree)).toContain("Показывать игроков рядом");
-    expect(renderToStaticMarkup(tree)).toContain("Показать все доступные площадки");
-    expect(renderToStaticMarkup(tree)).toContain("Показать только площадки, где есть игры");
-    expect(renderToStaticMarkup(tree)).toContain("На карте будут показаны игроки поблизости");
+    expect(renderToStaticMarkup(<>{tree}</>)).toContain("Фильтры карты");
+    expect(renderToStaticMarkup(<>{tree}</>)).toContain("Площадки");
+    expect(renderToStaticMarkup(<>{tree}</>)).toContain("Радар игроков");
+    expect(renderToStaticMarkup(<>{tree}</>)).toContain("Показывать игроков рядом");
+    expect(renderToStaticMarkup(<>{tree}</>)).toContain("Показать все доступные площадки");
+    expect(renderToStaticMarkup(<>{tree}</>)).toContain("Показать только площадки, где есть игры");
+    expect(renderToStaticMarkup(<>{tree}</>)).toContain("На карте будут показаны игроки поблизости");
 
     expect(clickLabel(tree, "Только с играми")).toBe(true);
     tree = render();
@@ -148,9 +192,9 @@ describe("MapLayerFiltersControls draft/apply/reset", () => {
     expect(clickLabel(render(), "Применить")).toBe(true);
     tree = render();
     expect(applied).toEqual({ venueMode: "with_games", showPlayersNearby: false });
-    expect(renderToStaticMarkup(tree)).toContain("Сбросить фильтры");
-    expect(renderToStaticMarkup(tree)).toContain("Только с играми");
-    expect(renderToStaticMarkup(tree)).toContain("Радар выключен");
+    expect(renderToStaticMarkup(<>{tree}</>)).toContain("Сбросить фильтры");
+    expect(renderToStaticMarkup(<>{tree}</>)).toContain("Только с играми");
+    expect(renderToStaticMarkup(<>{tree}</>)).toContain("Радар выключен");
 
     expect(clickLabel(tree, "Сбросить фильтры")).toBe(true);
     tree = render();

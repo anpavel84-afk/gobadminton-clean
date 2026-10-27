@@ -17,6 +17,12 @@ vi.mock("react", async original => ({
     if (!prev || deps.some((v, n) => v !== prev.deps[n])) h.slots[i] = { deps, value: fn() };
     return (h.slots[i] as { value: unknown }).value;
   },
+  useCallback(fn: unknown, deps: unknown[]) {
+    const i = h.cursor++; const prev = h.slots[i] as { deps: unknown[]; fn: unknown } | undefined;
+    if (!prev || deps.some((v, n) => v !== prev.deps[n])) h.slots[i] = { deps, fn };
+    return (h.slots[i] as { fn: unknown }).fn;
+  },
+  useContext(context: { _currentValue: unknown }) { return context._currentValue; },
   useEffect(effect: () => void | (() => void), deps: unknown[]) {
     const i = h.cursor++; const prev = h.slots[i] as unknown[] | undefined;
     if (!prev || deps.some((v, n) => v !== prev[n])) { h.slots[i] = deps; h.effects.push(() => { h.cleanups[i]?.(); h.cleanups[i] = effect() || (() => {}); }); }
