@@ -28,9 +28,14 @@ def setup(req, config, native_auth=None):
     store = a.Store(c.state_dir)  # exact worker.lock rejects a second author/legacy worker
     need(rt.continuity(), 'reviewed V6 continuity policy must be enabled')
     bridge = a.Bridge(c, store)
+    from smart_stage import selected as smart_selected
     # Resolve trusted context before a stage can consume an author attempt.
     from context_policy import load as load_rules
     accepted_rules = load_rules() if req['stage'] in ('author', 'qa', 'diagnose', 'task_review', 'qa_qualification', 'failure_diagnosis') else None
+    smart_context = None
+    if store.data['active'] and smart_selected(store.data['active']['task']) and accepted_rules:
+        from context_policy import load_routing
+        smart_context = load_routing(c.repo)  # Before an author attempt or model charge.
     def effect_gate():
         from receiver import POLICY, units_quiet
         policy = s.read_json(POLICY, trusted_uids={0}, limit=16384)
@@ -81,6 +86,12 @@ def setup(req, config, native_auth=None):
     original_model = bridge.model
     def measured_model(prompt, qa=False):
         effect_gate()
+        if smart_selected(store.data['active']['task']):
+            from smart_stage import dispatch_gate
+            try:
+                dispatch_gate(store.data['active']['task'], req['stage'], store.data['active'])
+            except ValueError as error:
+                raise Refused(str(error)) from None
         from failure_diagnosis import enabled
         if req['stage'] == 'failure_diagnosis' or (req['stage'] == 'diagnose'
                 and enabled(store.data['active'])):
@@ -109,7 +120,17 @@ def setup(req, config, native_auth=None):
              'unimplemented native model adapter')
         from context_policy import inject
         expectation = None
-        if choice['provider'] == 'agy' and qa:
+        if smart_selected(store.data['active']['task']):
+            need(smart_context is not None, 'HOLD_ACCEPTED_ROUTING_CONTEXT_UNAVAILABLE')
+            prefix, routing_context = smart_context
+            prompt = prefix + prompt
+            choice['routing_context'] = dict(routing_context)
+            if choice['provider'] == 'agy' and qa:
+                wrapped, rules_receipt = prompt, None  # Native QA injects the full EOM once.
+            else:
+                wrapped, rules_receipt = inject(prompt, qa, bridge.work, accepted_rules,
+                    role=choice.get('role', 'qa' if qa else 'author'), context_profile='full')
+        elif choice['provider'] == 'agy' and qa:
             wrapped, rules_receipt = prompt, None  # Native adapter injects after assembling source DATA.
         elif (choice['provider'] == 'codex' and req['stage'] in
               ('author', 'qa', 'task_review', 'diagnose', 'failure_diagnosis')
@@ -284,6 +305,12 @@ def perform(req, config, context):
     active = store.data['active']
     stage = req['stage']
     metadata = {}
+    from smart_stage import dispatch_gate, selected as smart_selected
+    if stage != 'claim' and active and smart_selected(active['task']):
+        try:
+            metadata['operation'] = dispatch_gate(active['task'], stage, active)
+        except ValueError as error:
+            raise Refused(str(error)) from None
     if req.get('_recover'):
         need(active and active['issue'] == req['issue'], 'recovery task mismatch')
         rt.lease(active)
@@ -325,6 +352,20 @@ def perform(req, config, context):
         need(not active or active['phase'] == 'done', 'slot occupied')
         issue = api(f'issues/{req["issue"]}')
         comments = api.pages(f'issues/{req["issue"]}/comments')
+        if req.get('_recovery_admission') and smart_selected(req['_recovery_admission']['task']):
+            raise Refused('HOLD_SMART_RECOVERY_NOT_IMPLEMENTED')
+        # The pinned parser already calls the versioned policy validator. Read
+        # exact source binding before store.claim can mutate the checkpoint.
+        if not req.get('_recovery_admission'):
+            candidates = s.admitted(a, [issue], comments, dt.datetime.fromisoformat(SINCE))
+            if len(candidates) == 1 and smart_selected(candidates[0][1]):
+                task = candidates[0][1]
+                try:
+                    metadata['operation'] = dispatch_gate(task, 'claim')
+                except ValueError as error:
+                    raise Refused(str(error)) from None
+                need(b.remote_dev() == task['routing_policy']['plan']['binding']['head'],
+                     'HOLD_SOURCE_BASE_CHANGED_REPLAN_REQUIRED')
         if req.get('_recovery_admission'):
             from recovery_admission import claim
             active = claim(a, api, store, req['_recovery_admission'], config)
@@ -364,6 +405,9 @@ def perform(req, config, context):
                 b.clean(seed['head'])
             else:
                 base = b.remote_dev()
+                if smart_selected(active['task']):
+                    need(base == active['task']['routing_policy']['plan']['binding']['head'],
+                         'HOLD_SOURCE_BASE_CHANGED_REPLAN_REQUIRED')
                 store.phase('claimed', base=base)
                 b.git('worktree', 'add', '-b', f'automation/issue-{active["issue"]}', str(b.work), base)
     else:

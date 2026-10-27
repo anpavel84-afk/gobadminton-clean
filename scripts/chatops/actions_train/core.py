@@ -412,6 +412,9 @@ def route(slots, task, role, profile, budget, slot):
         choice["budget_policy"] = "finite_daily"
     choice["requested_effort"] = choice["effort"]
     choice["effective_effort"] = choice["effort"]
+    if choice.get('policy') == 'GB_SMART_STAGE_V1' and choice['provider'] == 'cursor':
+        choice['effective_model'] = None
+        choice['effective_model_status'] = 'not_exposed'
     return choice
 
 def task_review_route(slots, task, budget, slot):

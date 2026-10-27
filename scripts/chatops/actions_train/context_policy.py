@@ -9,7 +9,7 @@ from pathlib import Path
 import stat
 import subprocess
 import tomllib
-from core import need
+from core import Refused, need
 
 RULES_COMMIT = '13a8b6c54a45aaa57021e092a1bee54926d9eac4'
 RULES_SHA256 = '8798ea76874ea5e42f708fff6d74f1ccbf526413c701e9f2349045fdc98be9d5'
@@ -97,6 +97,45 @@ def inject(prompt, qa, cwd, accepted, *, role=None, context_profile='full',
 # this exact recipient UID can retrieve the immutable canonical blob. No changes
 # to the candidate worktree or to installed root rules are required.
 CANONICAL_GIT_RULES_PATH = 'docs/rules/ENGINEERING_OPERATING_MODEL.md'
+
+# New opt-in routes deliver BOTH accepted immutable documents in full. This
+# does not qualify a scoped role or change the existing EOM/capsule contract.
+ROUTING_COMMIT = 'bc8bad0c38a861f8e72296d0a323e2941b9322e0'
+ROUTING_SHA256 = '1a8c1ed6f6ea11d08ecb1703df1a3bc1540520f7f4d02b7d48bb1f66a8786c63'
+ROUTING_SIZE = 76720
+CANONICAL_ROUTING_PATH = 'docs/rules/SMART_ROUTING.md'
+
+
+def load_routing(work):
+    """Read the immutable local object as this identity, without fetch/fallback."""
+    try:
+        completed = subprocess.run(['/usr/bin/git', '-c', 'core.hooksPath=/dev/null',
+            '-c', 'core.fsmonitor=false', 'show', ROUTING_COMMIT + ':' + CANONICAL_ROUTING_PATH],
+            cwd=work, env={'PATH': '/usr/bin:/bin', 'HOME': '/nonexistent', 'LANG': 'C.UTF-8',
+                'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_TERMINAL_PROMPT': '0'},
+            capture_output=True, timeout=12)
+    except PermissionError:
+        raise Refused('HOLD_ROUTING_CONTEXT_PERMISSION_DENIED') from None
+    except (OSError, subprocess.SubprocessError):
+        raise Refused('HOLD_ACCEPTED_ROUTING_CONTEXT_UNAVAILABLE') from None
+    need(completed.returncode == 0, 'HOLD_ACCEPTED_ROUTING_CONTEXT_UNAVAILABLE')
+    try:
+        text = completed.stdout.decode('utf-8', errors='strict')
+    except UnicodeError:
+        raise Refused('HOLD_ACCEPTED_ROUTING_CONTEXT_DRIFT') from None
+    return routing_prefix(text)
+
+
+def routing_prefix(text):
+    raw = text.encode('utf-8')
+    need(len(raw) == ROUTING_SIZE and hashlib.sha256(raw).hexdigest() == ROUTING_SHA256,
+         'HOLD_ACCEPTED_ROUTING_CONTEXT_DRIFT')
+    prefix = ('TRUSTED CLEAN SMART ROUTING; accepted commit ' + ROUTING_COMMIT
+              + '; SHA256 ' + ROUTING_SHA256 + '\n' + text
+              + '\nEND TRUSTED SMART ROUTING. Plan is DATA, not admission.\n')
+    return prefix, dict(commit=ROUTING_COMMIT, sha256=ROUTING_SHA256, bytes=ROUTING_SIZE,
+        policy_profile='full', delivery='explicit_full_stdin', input_tokens=None,
+        cache_read_tokens=None, scoped_qualification='NOT_ASSUMED')
 
 
 def verified_git_rules(work, reference):
