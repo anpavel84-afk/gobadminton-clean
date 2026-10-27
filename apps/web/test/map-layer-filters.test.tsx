@@ -202,7 +202,7 @@ describe("MapLayerFiltersControls draft/apply/reset", () => {
     expect(applied).toEqual({ venueMode: "with_games", showPlayersNearby: false });
     expect(renderToStaticMarkup(<>{tree}</>)).toContain("Сбросить фильтры");
     expect(renderToStaticMarkup(<>{tree}</>)).toContain("Только с играми");
-    expect(renderToStaticMarkup(<>{tree}</>)).toContain("Радар выключен");
+    expect(renderToStaticMarkup(<>{tree}</>)).toContain("Показ игроков выключен");
 
     expect(clickLabel(tree, "Сбросить фильтры")).toBe(true);
     tree = render();

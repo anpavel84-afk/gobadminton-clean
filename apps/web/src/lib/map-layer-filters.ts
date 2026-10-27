@@ -45,9 +45,9 @@ export function mapLayerFiltersChipLabel(applied: MapLayerFiltersState): string 
   const parts: string[] = [];
   if (applied.venueMode === "with_games") parts.push("Только с играми");
   if (applied.showPlayersNearby) {
-    if (applied.venueMode === "with_games") parts.push("Радар включён");
+    if (applied.venueMode === "with_games") parts.push("Показ игроков включён");
   } else {
-    parts.push("Радар выключен");
+    parts.push("Показ игроков выключен");
   }
   return parts.length ? parts.join(" · ") : "Фильтры";
 }
