@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from test_actions_train import ROOT, core, stage, req
+from test_actions_train import ROOT, core, stage, req, S
 from test_actions_train_context import accepted, TEXT
 import test_actions_train_cursor as cursor_tests
 from test_actions_train_cursor import stream, INIT, ASSIST, RESULT
@@ -445,9 +445,11 @@ class CursorStage(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='cursor-stage-') as temp:
             root = Path(temp); captured = {}
             store = SimpleNamespace(data={'active': {'task': {}, 'head': 'a'*40, 'base': 'b'*40, 'attempt': 1, 'issue': 313}})
+            budget = SimpleNamespace(used=lambda *_: 0, issue=None)
+            budget.bind_issue = lambda issue: setattr(budget, 'issue', issue) or budget
             rt = SimpleNamespace(user='test', legacy=True, home=root, key=root/'key', slot='slot1',
                 layout=SimpleNamespace(repo=root, state_dir=root, worktrees=root, outbox=root),
-                check_paths=Mock(), continuity=lambda: True, lease=Mock(), budget=SimpleNamespace(used=lambda *_: 0))
+                check_paths=Mock(), continuity=lambda: True, lease=Mock(), budget=budget)
             real_permitted = Mock(return_value=True)
             a = SimpleNamespace(RUNTIME_READS=(), Store=lambda *_: store, atomic=Mock(),
                 permitted=real_permitted, subprocess=SimpleNamespace(Popen=Mock()))
@@ -455,7 +457,8 @@ class CursorStage(unittest.TestCase):
                 return SimpleNamespace(c=c, store=s, work=root, git=Mock(), unchanged_issue=Mock(), model=Mock())
             a.Bridge = factory
             s = SimpleNamespace(Runtime=lambda *a, **k: rt, uid_of=lambda _: 1002, Hold=RuntimeError,
-                read_json=lambda *a, **k: {'mode': 'active', 'owned': {'slot1': 'x'}})
+                read_json=lambda *a, **k: {'mode': 'active', 'owned': {'slot1': 'x'}},
+                is_source_writer_stage=S.is_source_writer_stage)
             choice = dict(provider='cursor', effective_model='Auto', effort=None, role=operational_role)
             def invoke(bridge, rt, prompt, token, chosen, **kwargs):
                 captured.update(prompt=prompt, gated=kwargs['permitted'] is not real_permitted,

@@ -251,9 +251,11 @@ class Dispatch(unittest.TestCase):
             root = Path(temp); cli = root/'vendor'; cli.write_bytes(b'synthetic-pinned-vendor')
             count = [0]; calls = []; traces = []
             store = SimpleNamespace(data={'active':dict(task=author_task(),base='b'*40,head='a'*40,attempt=1,issue=421)})
+            budget = SimpleNamespace(used=lambda *_:count[0],issue=None)
+            budget.bind_issue = lambda issue: setattr(budget,'issue',issue) or budget
             rt = SimpleNamespace(user='fixture',legacy=True,home=root,key=root/'key',
                 layout=SimpleNamespace(repo=root,state_dir=root,worktrees=root,outbox=root),
-                check_paths=Mock(),continuity=lambda:True,lease=Mock(),budget=SimpleNamespace(used=lambda *_:count[0]))
+                check_paths=Mock(),continuity=lambda:True,lease=Mock(),budget=budget)
             process = SimpleNamespace(pid=424242)
             a = SimpleNamespace(RUNTIME_READS=(),Store=lambda *_:store,permitted=lambda *_:True,
                 atomic=lambda p,v:traces.append(copy.deepcopy(v)),subprocess=SimpleNamespace(Popen=Mock(return_value=process)))
@@ -261,7 +263,8 @@ class Dispatch(unittest.TestCase):
             def factory(c,s): return SimpleNamespace(c=c,store=s,work=root,git=Mock(),unchanged_issue=Mock(),model=original)
             a.Bridge = factory
             s = SimpleNamespace(Runtime=lambda *_args,**_kw:rt,uid_of=lambda _:978,Hold=RuntimeError,
-                read_json=lambda *_a,**_k:{'mode':'active','owned':{'slot2':'fixture'}})
+                read_json=lambda *_a,**_k:{'mode':'active','owned':{'slot2':'fixture'}},
+                is_source_writer_stage=S.is_source_writer_stage)
             choice = dict(provider=provider,effective_model=QA.MODEL if provider=='agy' else 'Auto',
                           effort=None,role='qa' if qa else 'author')
             receipt = dict(phase='imported',rules_context={'role':'qa' if qa else 'author','context_metrics':{'policy_profile':'full'}},

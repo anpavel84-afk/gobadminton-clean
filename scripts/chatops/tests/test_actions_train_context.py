@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from test_actions_train import ROOT, core, stage, receiver, req
+from test_actions_train import ROOT, core, stage, receiver, req, S
 import context_policy as C
 
 # Accepted rules = the immutable pinned Git object (not the moving docs working tree).
@@ -191,9 +191,10 @@ class StageDelivery(unittest.TestCase):
             root=Path(work or temp);cli=root/'fake-codex';cli.write_text('trusted test fixture, never executed')
             count=[0];inputs=[];traces=[];store=SimpleNamespace(data={'active':{'task':{},'head':'a'*40,'attempt':1}})
             layout=SimpleNamespace(repo=root,state_dir=root,worktrees=root,outbox=root)
+            budget=SimpleNamespace(used=lambda *_:count[0],issue=None)
+            budget.bind_issue=lambda issue: setattr(budget,'issue',issue) or budget
             rt=SimpleNamespace(user='test',legacy=True,home=root,key=root/'key',layout=layout,
-                check_paths=Mock(),continuity=lambda:True,lease=Mock(),
-                budget=SimpleNamespace(used=lambda *_:count[0]))
+                check_paths=Mock(),continuity=lambda:True,lease=Mock(),budget=budget)
             if stage_name == 'failure_diagnosis' or (stage_name == 'diagnose' and diagnosis):
                 store.data['active']['task']['failure_diagnosis']={'max_calls':1}
                 store.data['active']['failure_diagnosis']={
@@ -212,7 +213,8 @@ class StageDelivery(unittest.TestCase):
                 b.model=model;return b
             a.Bridge=factory
             s=SimpleNamespace(Runtime=lambda *_args,**_kw:rt,uid_of=lambda _:1002,Hold=RuntimeError,
-                              read_json=lambda *_args,**_kw:{'mode':'active','owned':{'slot1':'x'}})
+                              read_json=lambda *_args,**_kw:{'mode':'active','owned':{'slot1':'x'}},
+                              is_source_writer_stage=S.is_source_writer_stage)
             api=Mock();choice={'provider':'codex','effective_model':'gpt-6.1-sol',
                                 'effort':'medium','role':role}
             with patch.object(stage,'live',return_value=(a,s)),patch.object(stage.os,'getuid',return_value=1002), \

@@ -225,7 +225,7 @@ class Successor(unittest.TestCase):
         budget=S.Budget(limits,outbox,locks/'registry.lock',today=lambda:clock[0])
         req=dict(action='train',stage='qa_qualification',slot='slot2',issue=29,phase='idle',head=self.q['head'],attempt=0,generation=86,profile='agy',run=123,run_attempt=1,gh_token='synthetic-read-token')
         with ExitStack() as stack:
-            for name,value in [('STATE',self.root),('read',self.r.read),('atomic',self.r.atomic),('journal',self.r.journal),('checkpoint',self.r.checkpoint),('guard',Mock()),('live',lambda:(None,SimpleNamespace(Budget=lambda *a:budget))),('identity',lambda pid:{'pid':pid}),('alive',lambda proc:False)]:
+            for name,value in [('STATE',self.root),('read',self.r.read),('atomic',self.r.atomic),('journal',self.r.journal),('checkpoint',self.r.checkpoint),('guard',Mock()),('live',lambda:(None,SimpleNamespace(Budget=lambda *a, **k: budget))),('identity',lambda pid:{'pid':pid}),('alive',lambda proc:False)]:
                 stack.enter_context(patch.object(receiver,name,value))
             stack.enter_context(patch.object(N,'qualification',return_value=self.marker))
             stack.enter_context(patch.object(N,'trusted',side_effect=lambda *a,**k:json.dumps(self.marker).encode()))

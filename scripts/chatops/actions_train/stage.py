@@ -9,11 +9,26 @@ import urllib.parse
 from core import API, Refused, Retry, SINCE, live, need, route
 
 
+def _writer_lease(s, stage, active):
+    """Source writers take writer leases; immutable QA/CI do not (Owner one-writer).
+
+    Follow the admitted stage only. A QA stage while phase is still pr_wait must
+    not inherit a writer lease from the pre-transition phase.
+    """
+    return s.is_source_writer_stage(stage)
+
+
 def setup(req, config, native_auth=None):
     a, s = live()
     rt = s.Runtime(req['slot'], legacy_reads=a.RUNTIME_READS)
     need(os.getuid() != 0 and os.getuid() == s.uid_of(rt.user) and os.getgid() != 0,
          'wrong execution UID/GID')
+    # The trusted stage owns lease role; preserve the existing one-argument lease API.
+    rt.source_writer = _writer_lease(s, req['stage'], None)
+    # Bind authenticated request issue before AGY route selection/charge (per-issue daily).
+    issue = req.get('issue')
+    if type(issue) is int and issue > 0:
+        rt.budget.bind_issue(issue)
     a.SLOT, a._SLOTS, a._SLOTS_HOLD, a.KEY = req['slot'], rt, s.Hold, rt.key
     if not rt.legacy:
         a.RUNTIME_READS = rt.runtime_reads
@@ -37,7 +52,8 @@ def setup(req, config, native_auth=None):
         need(policy.get('mode') == 'active' and req['slot'] in policy.get('owned', {}),
              'root migration ownership revoked')
         units_quiet(('gobadminton-supervisor.service', f'gobadminton-slot@{req["slot"]}.service'))
-        if store.data['active']: rt.lease(store.data['active'])
+        if store.data['active']:
+            rt.lease(store.data['active'])
     original_git = bridge.git
     def checked_git(*args, **kwargs):
         # Read-only Git operations keep their original sandbox/transport. Every mutation rechecks

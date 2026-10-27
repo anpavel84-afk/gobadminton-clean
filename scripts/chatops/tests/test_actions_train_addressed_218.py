@@ -110,7 +110,8 @@ class ActualTaskReviewWrapper(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             folder=Path(d);calls=[0];store=SimpleNamespace(data={'active':dict(task=task,head=HEAD,attempt=3)})
             layout=SimpleNamespace(repo=folder,state_dir=folder,worktrees=folder,outbox=folder)
-            budget=SimpleNamespace(used=lambda *a:calls[0],remaining=lambda *a:10)
+            budget=SimpleNamespace(used=lambda *a:calls[0],remaining=lambda *a:10,issue=None)
+            budget.bind_issue=lambda issue: setattr(budget,'issue',issue) or budget
             rt=SimpleNamespace(user='test',legacy=True,home=folder,key=folder/'key',layout=layout,
                 check_paths=Mock(),continuity=lambda:True,lease=Mock(),budget=budget)
             a=SimpleNamespace(RUNTIME_READS=(),Store=lambda *a:store,atomic=Mock(),subprocess=SimpleNamespace(Popen=Mock()))
@@ -124,7 +125,8 @@ class ActualTaskReviewWrapper(unittest.TestCase):
             a.Bridge=bridge
             s=SimpleNamespace(Runtime=lambda *a,**kw:rt,uid_of=lambda u:1002,Hold=RuntimeError,
                 read_json=lambda *a,**kw:dict(mode='active',owned={'slot1':'existing'}),
-                MODEL_ADAPTER=S.MODEL_ADAPTER,adapter_status=lambda *a:(True,'qualified'))
+                MODEL_ADAPTER=S.MODEL_ADAPTER,adapter_status=lambda *a:(True,'qualified'),
+                is_source_writer_stage=S.is_source_writer_stage)
             with patch.object(stage,'live',return_value=(a,s)),patch.object(stage.os,'getuid',return_value=1002), \
                  patch.object(stage.os,'getgid',return_value=1002),patch.object(stage,'API',return_value=Mock()), \
                  patch.object(Context,'load',return_value=CF.accepted()),patch('receiver.units_quiet'), \

@@ -73,8 +73,9 @@ class IdleReady(unittest.TestCase):
         candidates=[(205,TASK|{"allowed_paths":["apps/web/src/venue.ts"],"locks":["web:venues"]}),
                     (207,TASK|{"allowed_paths":["apps/admin/src/venue.ts"],"locks":["admin:venues"]})]
         before=copy.deepcopy(snap);first=core.plan(A,S,snap,candidates)
-        self.assertEqual({x["slot"] for x in first},{"slot1","slot2"})
-        self.assertEqual({x["issue"] for x in first},{205,207});self.assertEqual(snap,before)
+        self.assertEqual(len(first),1)
+        self.assertIn(first[0]["slot"],{"slot1","slot2"})
+        self.assertEqual({x["issue"] for x in first},{205});self.assertEqual(snap,before)
         self.assertEqual(first,core.plan(A,S,snap,candidates))
         for intent in first:
             c=snap["slots"][intent["slot"]];c["pending"]={"status":"running"}
