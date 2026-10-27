@@ -23,10 +23,12 @@ def setup(req, config, native_auth=None):
     rt = s.Runtime(req['slot'], legacy_reads=a.RUNTIME_READS)
     need(os.getuid() != 0 and os.getuid() == s.uid_of(rt.user) and os.getgid() != 0,
          'wrong execution UID/GID')
+    # The trusted stage owns lease role; preserve the existing one-argument lease API.
+    rt.source_writer = _writer_lease(s, req['stage'], None)
     # Bind authenticated request issue before AGY route selection/charge (per-issue daily).
     issue = req.get('issue')
     if type(issue) is int and issue > 0:
-        rt.budget.bind_issue(issue)
+        rt.budget.issue = issue
     a.SLOT, a._SLOTS, a._SLOTS_HOLD, a.KEY = req['slot'], rt, s.Hold, rt.key
     if not rt.legacy:
         a.RUNTIME_READS = rt.runtime_reads
@@ -51,7 +53,7 @@ def setup(req, config, native_auth=None):
              'root migration ownership revoked')
         units_quiet(('gobadminton-supervisor.service', f'gobadminton-slot@{req["slot"]}.service'))
         if store.data['active']:
-            rt.lease(store.data['active'], writer=_writer_lease(s, req['stage'], store.data['active']))
+            rt.lease(store.data['active'])
     original_git = bridge.git
     def checked_git(*args, **kwargs):
         # Read-only Git operations keep their original sandbox/transport. Every mutation rechecks
@@ -300,7 +302,7 @@ def perform(req, config, context):
     metadata = {}
     if req.get('_recover'):
         need(active and active['issue'] == req['issue'], 'recovery task mismatch')
-        rt.lease(active, writer=_writer_lease(s, stage, active))
+        rt.lease(active)
         b.work = b.c.worktrees_root / f'issue-{active["issue"]}'
         b.unchanged_issue(active)
         if stage == 'qa':
@@ -352,7 +354,7 @@ def perform(req, config, context):
         need(not req.get('_task_hash') or __import__('core').digest(active['task']) == req['_task_hash'],
              'task changed between admission and claim')
         b.unchanged_issue(active)
-        rt.lease(active, writer=True)
+        rt.lease(active)
         b.work = b.c.worktrees_root / f'issue-{active["issue"]}'
         need(not b.work.exists() and not b.git('branch', '--list', f'automation/issue-{active["issue"]}'),
              'existing source worktree/branch; reconcile')
@@ -383,7 +385,7 @@ def perform(req, config, context):
     else:
         need(active and active['issue'] == req['issue'] and active['phase'] == req['phase']
              and active.get('head') == req['head'] and active['attempt'] == req['attempt'], 'stale checkpoint')
-        rt.lease(active, writer=_writer_lease(s, stage, active))
+        rt.lease(active)
         b.work = b.c.worktrees_root / f'issue-{active["issue"]}'
         b.unchanged_issue(active)
         if stage == 'failure_diagnosis':

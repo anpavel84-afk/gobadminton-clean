@@ -18,7 +18,7 @@ REPO_ID = 1416250340
 OWNER = 318610566
 SINCE = '2026-10-15T02:27:00+00:00'
 PINS = {'autonomous_issues.py': 'f3ca85b4392fa1e2ba76a09ec1140d78ebc6c708ba42397bee047184fec3ebe0',
-        'slots.py': '2f2cea6af2aa4c6cb493d3badbedd15658ced32f335248af53dadc6fb05789a1',
+        'slots.py': '3c6d910ccdaa5d482a1cf05c9330f35ef5c9a5aabd5b14ce88d4033c71e144ce',
         'check_foundation.py': 'c2975b19bd46d00acbdbc08227545b8f9c9501d7b8e8783e9b397751c612bd13'}
 RECOVERY_STAGES = ('diagnose', 'task_review')
 STAGES = ('failure_diagnosis', 'claim', 'author', 'publish', 'qa', 'ci', 'integrate', 'promote', 'dev', 'qa_qualification') + RECOVERY_STAGES

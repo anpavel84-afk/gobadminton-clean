@@ -817,7 +817,10 @@ class Runtime:
                 and type(value['issue']) is int and value['issue'] > 0, 'invalid assignment')
         return value['issue']
 
-    def lease(self, active, *, writer=True):
+    def lease(self, active, *, writer=None):
+        if writer is None:
+            writer = getattr(self, 'source_writer', True)
+        require(type(writer) is bool, 'invalid source writer role')
         record = task_record(active['issue'], active['task'], writer=writer)
         require(self.registry.acquire(self.slot, record), 'lock conflict with another live slot')
 

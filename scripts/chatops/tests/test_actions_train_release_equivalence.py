@@ -638,7 +638,8 @@ class DispatchIsolation(unittest.TestCase):
             reservation=S.task_record(248,old))
         other=copy.deepcopy(TASK);other.update(allowed_paths=['apps/b.py'],locks=['api:b'])
         out=core.plan(A,S,snap,[(249,old),(250,other)])
-        self.assertEqual([(r['slot'],r['issue']) for r in out],[('slot2',250)])
+        # Owner ONE WRITER: unresolved author occupancy also serializes disjoint authors.
+        self.assertEqual(out,[])
         self.assertEqual(snap['slots']['slot1']['pending']['status'],'unknown')
     def test_completed_task_is_never_planned_again(self):
         snap=dict(slots={'slot1':card(),'slot2':card()});snap['slots']['slot1']['done']=[248]

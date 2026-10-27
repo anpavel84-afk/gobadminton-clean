@@ -11,7 +11,7 @@ import subprocess
 import sys
 import time
 from types import SimpleNamespace
-from core import HERE, Refused, binding, digest, live, loads, need, request
+from core import HERE, STAGES, Refused, binding, digest, live, loads, need, request
 import qa_recovery
 
 POLICY = Path('/etc/gobadminton-actions-train/policy.json')
@@ -193,7 +193,7 @@ def qualification_plan(policy, card, budget):
         if recovery.reservation_path(STATE,q).exists():return None
         if recovery.grant(q):recovery.grant_ready(qualification_api(),q)
         elif recovery.successor(q):recovery.lineage_ready(qualification_api(),q)
-        budget.bind_issue(29)
+        budget.issue = 29
         left=budget.remaining('agy','qa','slot2')
         if not recovery.grant(q) and not (type(left) is int and (left>=1 if recovery.successor(q) else left==1)):return None
         return dict(slot='slot2',issue=29,stage='qa_qualification',phase='idle',head=q['head'],
@@ -333,8 +333,10 @@ def supervisor(req, policy, key, root_lock):
                 active = state.get('active')
                 if active:
                     a, s = live()
+                    # Bind active Issue before route, same as stage.setup (per_issue_daily).
                     budget = s.Budget(Path('/etc/gobadminton-slots/budgets.json'),
-                                      AUTONOMY/'outbox', AUTONOMY/'locks/registry.lock')
+                                      AUTONOMY/'outbox', AUTONOMY/'locks/registry.lock',
+                                      issue=active['issue'])
                     from core import route
                     selected = route(s,active['task'],'author',req['profile'],budget,slot)
                     if selected['provider'] == 'cursor':
@@ -691,7 +693,8 @@ def qualification_request(req, policy):
         recovery.lineage_ready(qualification_api(),q)
     need(not path.exists(), 'QA qualification already reserved; reconcile without another call')
     _, s = live()
-    budget = s.Budget(BUDGET, AUTONOMY/'outbox', AUTONOMY/'locks/registry.lock', issue=req['issue'])
+    budget = s.Budget(BUDGET, AUTONOMY/'outbox', AUTONOMY/'locks/registry.lock')
+    budget.issue = 29  # This legacy qualification admission is closed to Issue29.
     left = budget.remaining('agy', 'qa', slot)
     need(recovery.grant(q) or type(left) is int and (left>=1 if recovery.successor(q) else left==1),
          'QA qualification requires finite eligible daily budget')
@@ -802,11 +805,18 @@ def handle(req, policy):
     other_journal = journal(other)
     other_pending_key = other_journal['pending']
     other_op = other_journal['operations'].get(other_pending_key) if other_pending_key else None
-    other_reservation = (other_op or {}).get('record')
-    other_pending_stage = ((other_op or {}).get('binding') or {}).get('stage')
+    other_reservation = (other_op or {}).get('record') if other_op else None
+    other_pending_stage = ((other_op or {}).get('binding') or {}).get('stage') if other_op else None
     # Lease/reservation writer bit follows the admitted STAGE, not the pre-transition
     # phase (e.g. QA while phase is still pr_wait must not look like a second author).
     admitting_writer = s.is_source_writer_stage(req['stage'])
+    # Opaque other pending: dangling key, missing record+stage, or forged/unknown stage.
+    # Planner already fail-closes; root must not fork/spend a writer claim. History unchanged.
+    # Legacy qa_qualification may bind stage without record — classifiable, not auto-cleared.
+    opaque_other_pending = bool(other_pending_key) and (
+        other_op is None
+        or (other_reservation is None and other_pending_stage is None)
+        or (other_pending_stage is not None and other_pending_stage not in STAGES))
     recovery_admission = None
     if req['stage'] == 'claim':
         from core import API, SINCE
@@ -841,15 +851,31 @@ def handle(req, policy):
             recovery_admission = root_admission(a, api, cache, api(f'issues/{active["issue"]}'), policy, verification=verified_slot_qa)
             need(recovery_admission['key'] == active['recovery_receipt'], 'wrong active recovery receipt')
     if admitting_writer:
-        other_writer = (
-            (other_active and other_active['phase'] != 'done'
-             and s.is_source_writer_phase(other_active.get('phase')))
-            or s.is_source_writer_stage(other_pending_stage)
-            or (other_reservation is not None and s.record_is_writer(other_reservation)))
+        need(not opaque_other_pending, 'global source writer sequential')
+        other_writer = False
+        if other_reservation is not None:
+            other_writer = s.record_is_writer(other_reservation)
+        if other_pending_stage is not None:
+            other_writer = other_writer or s.is_source_writer_stage(other_pending_stage)
+        if other_active and other_active['phase'] != 'done':
+            # Valid immutable QA/diagnosis reservation or admitted stage overrides pr_wait phase.
+            if other_reservation is not None:
+                phase_writer = s.record_is_writer(other_reservation)
+            elif other_pending_stage is not None:
+                phase_writer = s.is_source_writer_stage(other_pending_stage)
+            else:
+                phase_writer = s.is_source_writer_phase(other_active.get('phase'))
+            other_writer = other_writer or phase_writer
         need(not other_writer, 'global source writer sequential')
     if other_active and other_active['phase'] != 'done':
+        if other_reservation is not None:
+            other_phase_writer = s.record_is_writer(other_reservation)
+        elif other_pending_stage is not None and other_pending_stage in STAGES:
+            other_phase_writer = s.is_source_writer_stage(other_pending_stage)
+        else:
+            other_phase_writer = s.is_source_writer_phase(other_active.get('phase'))
         other_rec = s.task_record(other_active['issue'], other_active['task'],
-                                  writer=s.is_source_writer_phase(other_active.get('phase')))
+                                  writer=other_phase_writer)
         need(not s.conflicts(record, other_rec), 'overlapping source slots')
     if other_reservation:
         need(not s.conflicts(record, other_reservation), 'overlapping pending claim')
