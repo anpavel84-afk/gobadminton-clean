@@ -73,8 +73,8 @@ def atomic(path, value, mode=0o600):
         tmp.unlink(missing_ok=True)
 
 
-def locked(path):
-    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+def locked(path, *, create=True):
+    fd = os.open(path, os.O_RDWR | (os.O_CREAT if create else 0) | os.O_NOFOLLOW, 0o600)
     fcntl.flock(fd, fcntl.LOCK_EX)
     return fd
 
@@ -209,7 +209,9 @@ def qualification_plan(policy, card, budget):
 
 
 def snapshot(policy):
-    result = dict(schema='GB_ACTIONS_TRAIN_V1', mode=policy['mode'], slots={})
+    from core import CONTROL_CAPABILITY
+    result = dict(schema='GB_ACTIONS_TRAIN_V1', mode=policy['mode'], slots={},
+                  capabilities=[CONTROL_CAPABILITY], controller_sha=policy['controller_sha'])
     try: planning = read(STATE / 'planning.json', 0, 65536)
     except FileNotFoundError: planning = None
     a, s = live()
@@ -759,9 +761,52 @@ def qualification_request(req, policy):
     return dict(status='running', key=key, process=identity(pid))
 
 
+def operation_outcome(slot, key):
+    """Read-only exact lookup, including cold history. No recovery/guard/fork/write.
+
+    Expose a closed receipt projection, never private intents, checkpoints, task
+    inputs, process details or credentials. SSH authenticates the existing caller.
+    """
+    from core import CONTROL_CAPABILITY, CONTROL_STAGES, STAGES
+    request(dict(action='train',stage='status',slot=slot,operation=key))
+    j = journal(slot)
+    op = j['operations'].get(key)
+    path = STATE/'history'/slot/(key+'.json')
+    if op is None and os.path.lexists(path): op = read(path,0,33554432)
+    result = dict(schema=CONTROL_CAPABILITY, slot=slot, key=key, generation=j['generation'],
+                  status='not_found', binding=None, admission=None, result=None)
+    if op is None: return result
+    bound = op['binding']
+    need(digest(bound) == key and bound.get('slot') == slot and
+         not any(k.startswith('_') or k == 'gh_token' for k in bound), 'outcome binding integrity')
+    # Stored bindings are public wire data, but still validate the closed shape
+    # before returning anything from a protected journal.
+    request(dict(bound,run=1,run_attempt=1,gh_token='status-schema-only'))
+    result['binding'] = bound
+    saved = op.get('result') or {}
+    result['status'] = ('running' if alive(op.get('process')) else 'unknown') if j['pending'] == key else saved.get('status','unknown')
+    if bound['stage'] in CONTROL_STAGES:
+        admission_hash = op.get('scheduling',{}).get('admission')
+        need(isinstance(admission_hash,str) and __import__('re').fullmatch('[a-f0-9]{64}',admission_hash),
+             'missing authenticated control admission')
+        result['admission'] = admission_hash
+        if result['status'] == 'confirmed':
+            need(saved.get('status') == 'confirmed' and saved.get('scheduling_only') is True
+                 and saved.get('archive') == (key if bound['stage']=='park' else bound['control']['archive'])
+                 and isinstance(saved.get('archive_sha256'),str)
+                 and __import__('re').fullmatch('[a-f0-9]{64}',saved['archive_sha256'])
+                 and (saved.get('next_stage') in STAGES if bound['stage']=='resume'
+                      else saved.get('next_stage') is None),
+                 'unconfirmed scheduling outcome')
+            result['result'] = {k:saved.get(k) for k in
+                ('status','scheduling_only','archive','archive_sha256','next_stage')}
+    return result
+
+
 def handle(req, policy):
     request(req)
-    if req['stage'] == 'status': return snapshot(policy)
+    if req['stage'] == 'status':
+        return operation_outcome(req['slot'],req['operation']) if 'operation' in req else snapshot(policy)
     if req['stage'] == 'planning':
         # Informational report through the existing forced-command DEV SSH identity.
         # No API credential, code/path/shell input, journal mutation or execution authority.
@@ -989,7 +1034,7 @@ def main():
     raw = sys.stdin.buffer.read(8193)
     need(len(raw) <= 8192, 'request too large')
     req = loads(raw)
-    ROOT_LOCK = locked(STATE / 'controller.lock')
+    ROOT_LOCK = locked(STATE / 'controller.lock', create=req.get('stage') != 'status')
     try:
         # Revalidate under the controller lock. A request waiting during an
         # authorized runtime upgrade must never use a cached ACTIVE policy.
@@ -997,7 +1042,7 @@ def main():
         need(policy['schema'] == 'GB_ACTIONS_TRAIN_POLICY_V1' and policy['mode'] in ('disabled', 'shadow', 'active'), 'invalid root policy')
         need(set(policy['owned']) <= {'slot1', 'slot2'}, 'invalid ownership')
         result = handle(req, policy)
-        publish_monitor(policy)
+        if req['stage'] != 'status': publish_monitor(policy)
     finally: os.close(ROOT_LOCK)
     print(json.dumps(result, sort_keys=True))
 

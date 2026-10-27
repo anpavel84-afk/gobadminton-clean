@@ -55,7 +55,7 @@ class Controls(unittest.TestCase):
         self.bridge = SimpleNamespace(c=SimpleNamespace(worktrees_root=self.root/'worktrees'),
             unchanged_issue=Mock(), stopped_writer=Mock(), candidate_identity=Mock(), saved_qa=Mock(),
             remote_dev=Mock(return_value=BASE), git=Mock(side_effect=self.git))
-        self.rt = SimpleNamespace(lease=Mock())
+        self.rt = SimpleNamespace(lease=Mock(),budget=Mock())
         self.patches = [patch.object(R,'STATE',self.state),patch.object(R,'AUTONOMY',self.root/'autonomy'),
             patch.object(R,'checkpoint',side_effect=self.checkpoint),patch.object(R,'guard',return_value=SimpleNamespace(pw_uid=os.getuid())),
             patch.object(R,'hosted_identity'), patch.object(R,'API',return_value=self.api,create=True),
@@ -108,7 +108,7 @@ class Controls(unittest.TestCase):
         self.auth[req['control']['comment']] = dict(id=req['control']['comment'],user={'id':core.OWNER},
             issue_url=f'https://api.github.com/repos/{core.REPO}/issues/{req["issue"]}',
             created_at=stamp,updated_at=stamp,
-            body=C.MARKER+'\n'+json.dumps(dict(schema=C.MARKER,request=core.binding(req))))
+            body=C.MARKER+'\n'+json.dumps(C.admission_body(req)))
 
     def prepare(self,req):
         # Real receiver dispatch and journal code, with fork represented by a fixed PID.
@@ -219,14 +219,17 @@ class Controls(unittest.TestCase):
 
     def test_resume_changed_source_receipts_candidate_or_dependency_conflict_holds(self):
         park=self.request();self.complete(park);archive=core.digest(core.binding(park))
-        for case in ('source','base','dependency','conflict'):
+        for case in ('source','dependency','conflict','base'):
             with self.subTest(case=case):
                 req=self.request('resume',archive=archive)
                 if case=='source':
                     with patch.object(C,'root_metadata',return_value={'source':'foreign'}),self.assertRaisesRegex(core.Refused,'drift'):self.prepare(req)
                 elif case=='base':
                     self.bridge.remote_dev.return_value='d'*40
-                    with self.assertRaisesRegex(core.Refused,'DEV base'):self.prepare(req)
+                    self.prepare(req)
+                    with patch.object(self.bridge,'git',return_value='e'*40):
+                        with self.assertRaisesRegex(core.Refused,'ancestry'):self.worker(req)
+                    self.assertEqual(R.journal('slot1')['pending'],core.digest(core.binding(req)))
                     self.bridge.remote_dev.return_value=BASE
                 elif case=='conflict':
                     self.other['active']=dict(self.active,issue=999)
@@ -349,6 +352,12 @@ class Controls(unittest.TestCase):
         A.atomic(path,value)
         with self.assertRaisesRegex(core.Refused,'proof changed'):self.worker(req)
 
+    def test_archive_whitespace_edit_is_detected_by_recorded_bytes(self):
+        park=self.request();self.complete(park);key=core.digest(core.binding(park))
+        path=self.folder/('scheduling-'+key+'.json');path.write_bytes(path.read_bytes()+b'\n')
+        resume=self.request('resume',archive=key);self.prepare(resume)
+        with self.assertRaisesRegex(core.Refused,'archive seal'):self.worker(resume)
+
     def test_other_slot_dispatches_when_unknown_has_no_proof(self):
         req,old=self.unknown(closed=False)
         with self.assertRaisesRegex(core.Refused,'external-effect'):self.prepare(req)
@@ -375,7 +384,8 @@ class Controls(unittest.TestCase):
         A.atomic(self.folder/'state.json',{'active':self.active,'done':[400]})
         park=self.request();self.complete(park)
         resume=self.request('resume',archive=core.digest(core.binding(park)))
-        result=self.complete(resume)
+        with patch.object(core,'route',return_value={'provider':'codex'}):
+            result=self.complete(resume)
         self.assertEqual(result['next_stage'],'qa')
         self.assertEqual(self.checkpoint('slot1')[0]['active'],self.active)
 
@@ -396,6 +406,393 @@ class Controls(unittest.TestCase):
             self.assertEqual(result['status'],'unknown');self.assertFalse(result['safe_release'])
         finally:os.close(store.lock)
 
+    def test_creation_order_id_allocated_after_final_body_no_patch(self):
+        req=self.request();req['control'].pop('comment')
+        body=C.MARKER+'\n'+json.dumps(C.admission_body(req))
+        received=[]
+        def create(body_received):
+            received.append(body_received)
+            # ID is chosen by the service only after the immutable body arrived.
+            assigned=918374
+            stamp=dt.datetime.now(dt.timezone.utc).isoformat()
+            self.auth[assigned]=dict(id=assigned,user={'id':core.OWNER},
+                issue_url=f'https://api.github.com/repos/{core.REPO}/issues/450',
+                body=body_received,created_at=stamp,updated_at=stamp)
+            return assigned
+        req['control']['comment']=create(body)
+        self.complete(req)
+        self.assertEqual(received,[self.auth[req['control']['comment']]['body']])
+        key=core.digest(core.binding(req));op=R.journal('slot1')['operations'][key]
+        self.assertEqual(op['scheduling']['admission'],core.digest(self.auth[918374]))
+        self.assertEqual(op['binding']['control']['comment'],918374)
+        other=copy.deepcopy(req);other['control']['comment']=918375;self.authorize(other)
+        self.assertNotEqual(core.digest(core.binding(other)),key)
+        with self.assertRaisesRegex(core.Refused,'stale'):self.prepare(other)
+
+    def test_comment_owner_issue_id_and_semantic_tamper_refuse(self):
+        req=self.request();cid=req['control']['comment'];original=copy.deepcopy(self.auth[cid])
+        for field,value in (('id',cid+1),('user',{'id':1}),('issue_url','https://example.invalid/450'),
+                            ('updated_at','edited')):
+            self.auth[cid]=dict(original,**{field:value})
+            with self.subTest(field=field),self.assertRaises(core.Refused):self.prepare(req)
+        self.auth[cid]=original
+        body=C.admission_body(req);body['request']['extra']=True
+        self.auth[cid]['body']=C.MARKER+'\n'+json.dumps(body)
+        with self.assertRaisesRegex(core.Refused,'mismatch'):self.prepare(req)
+        self.assertIsNone(R.journal('slot1')['pending'])
+
+    def test_status_exact_key_cold_history_private_projection_and_no_recovery(self):
+        req=self.request();self.complete(req);key=core.digest(core.binding(req))
+        before=(self.state/'slot1.json').read_bytes()
+        with (patch.object(R,'scheduling_request',side_effect=AssertionError('mutation')),
+              patch.object(R,'guard',side_effect=AssertionError('guard'))):
+            found=R.handle(dict(action='train',stage='status',slot='slot1',operation=key),self.policy)
+        self.assertEqual(found['status'],'confirmed');self.assertEqual(found['binding'],core.binding(req))
+        self.assertEqual((self.state/'slot1.json').read_bytes(),before)
+        self.assertNotIn('scheduling',found);self.assertNotIn('checkpoint_before',json.dumps(found))
+        self.assertNotIn(TOKEN,json.dumps(found))
+        j=R.journal('slot1');op=j['operations'].pop(key)
+        R.atomic(self.state/'history/slot1'/(key+'.json'),op);R.atomic(self.state/'slot1.json',j)
+        self.assertEqual(R.operation_outcome('slot1',key),found)
+        self.assertEqual(R.operation_outcome('slot1','f'*64)['status'],'not_found')
+        j=R.journal('slot1');j['operations']['f'*64]=op;R.atomic(self.state/'slot1.json',j)
+        with self.assertRaisesRegex(core.Refused,'binding integrity'):R.operation_outcome('slot1','f'*64)
+
+    def test_actual_unrelated_completed_dev_and_usage_progress_restore_exact_task(self):
+        import subprocess
+        repo=self.root/'source';repo.mkdir()
+        def git(*args):
+            return subprocess.check_output(['/usr/bin/git','-c','core.hooksPath=/dev/null',
+                '-c','user.name=Synthetic','-c','user.email=synthetic@example.invalid',*args],
+                cwd=repo,text=True).strip()
+        git('init','-q');(repo/'task.py').write_text('value = 1\n');git('add','.');git('commit','-qm','base')
+        base=git('rev-parse','HEAD');self.active['base']=base
+        (repo/'task.py').write_text('value = 2\n');git('add','.');git('commit','-qm','task')
+        head=git('rev-parse','HEAD');self.active['head']=head
+        self.active['qa']['reviewed_sha']=head;self.active['ci']['sha']=head
+        A.atomic(self.folder/'state.json',{'active':self.active,'done':[400]})
+        A.atomic(self.folder/'qa-450-a2.json',self.active['qa'])
+        def ledger(n):
+            return dict(value={'2026-10-27':{'codex':{'author':n,'qa':2}}},uid=1002,gid=1002,mode=420,
+                        sha256=core.digest(n),size=100)
+        live=str(R.AUTONOMY/'outbox/slot1/ledger.json');bak=live+'.bak'
+        self.metadata[live]=ledger(2);self.metadata[bak]=ledger(1)
+        self.bridge.remote_dev.return_value=base
+        park=self.request();self.complete(park);key=core.digest(core.binding(park))
+        archive=(self.folder/('scheduling-'+key+'.json')).read_bytes()
+        # A different task actually completes, advancing DEV from the old base.
+        git('checkout','--detach','-q',base);handoff=repo/'docs/handoffs/unrelated.md'
+        handoff.parent.mkdir(parents=True);handoff.write_text('other task completed\n')
+        git('add','.');git('commit','-qm','unrelated completed work');dev=git('rev-parse','HEAD')
+        other=dict(self.active,issue=451,phase='done',head=dev,base=base)
+        A.atomic(self.folder/'state.json',{'active':other,'done':[400,451]})
+        A.atomic(self.folder/'qa-451-a1.json',{'verdict':'PASS','reviewed_sha':dev,'findings':[]})
+        self.metadata[live]=ledger(4);self.metadata[bak]=ledger(3)
+        self.bridge.remote_dev.return_value=dev
+        j=R.journal('slot1');unrelated_key='e'*64
+        unrelated=dict(binding=dict(issue=451,stage='dev'),finished_at=200,result={'status':'confirmed'})
+        j['operations'][unrelated_key]=copy.deepcopy(unrelated)
+        j['stage_counts']['451']=7;j['generation']+=7
+        j['last']={'issue':451,'status':'confirmed','stage':'dev'}
+        A.atomic(self.state/'slot1.json',j)
+        original_git=self.bridge.git
+        self.bridge.git=lambda *args,**kw:git(*args)
+        self.bridge.c.worktrees_root=self.root/'worktrees'
+        # Object/ancestry proof reads the real synthetic Git repository.
+        (self.root/'worktrees').mkdir();(self.root/'worktrees/issue-450').symlink_to(repo,target_is_directory=True)
+        resume=self.request('resume',archive=key);outcome=self.complete(resume)
+        self.assertEqual(outcome['next_stage'],'ci')
+        state=self.checkpoint('slot1')[0]
+        self.assertEqual(state,{'active':self.active,'done':[400,451]})
+        self.assertEqual(self.metadata[live],ledger(4))
+        self.assertEqual((self.folder/('scheduling-'+key+'.json')).read_bytes(),archive)
+        self.assertEqual(self.rt.lease.call_count,2)
+        self.assertEqual(R.journal('slot1')['operations'][unrelated_key],unrelated)
+        self.assertEqual(R.journal('slot1')['stage_counts']['451'],7)
+        self.assertEqual(R.journal('slot1')['last'],j['last'])
+        self.assertNotIn('merge',[args[0][0] for args in original_git.call_args_list])
+
+    def test_current_qualification_and_budget_rechecked_before_resume(self):
+        self.active.update(phase='pr_wait',qa=None,ci=None)
+        A.atomic(self.folder/'state.json',{'active':self.active,'done':[400]})
+        park=self.request();self.complete(park)
+        resume=self.request('resume',archive=core.digest(core.binding(park)));self.prepare(resume)
+        with patch.object(core,'route',side_effect=core.Refused('current quota UNKNOWN')) as route:
+            self.rt.budget=object()
+            with self.assertRaisesRegex(core.Refused,'quota UNKNOWN'):self.worker(resume)
+            route.assert_called_once()
+        self.assertIsNone(self.checkpoint('slot1')[0]['active'])
+
+    def test_real_current_budget_primitives_not_frozen_quota_before_resume(self):
+        self.active.update(phase='pr_wait',qa=None,ci=None)
+        A.atomic(self.folder/'state.json',{'active':self.active,'done':[400]})
+        limits=self.root/'budgets.json'
+        A.atomic(limits,{'providers':{'codex':{'qa':1}},'slots':{'slot1':{'codex':{'qa':1}}}})
+        self.rt.budget=S.Budget(limits,self.root/'outbox',self.root/'registry.lock',today=lambda:'2026-10-27')
+        park=self.request();self.complete(park)
+        # An unrelated QA consumes the current quota after PARK. No refund or
+        # change to parked authority, and actual route/adapter/Budget predicates run.
+        outbox=self.root/'outbox/slot1';outbox.mkdir(parents=True)
+        A.atomic(outbox/'ledger.json',{'2026-10-27':{'codex':{'qa':1}}})
+        resume=self.request('resume',archive=core.digest(core.binding(park)));self.prepare(resume)
+        with self.assertRaisesRegex(core.Refused,'budget exhausted'):self.worker(resume)
+        self.assertEqual(self.rt.budget.used('codex','qa','slot1'),1)
+        self.assertIsNone(self.checkpoint('slot1')[0]['active'])
+
+    def test_paused_task_journal_edits_refuse_but_unrelated_completed_receipt_can_advance(self):
+        j=R.journal('slot1')
+        oldkey='d'*64
+        old=dict(binding=dict(issue=450,stage='qa'),finished_at=10,result={'status':'confirmed'},process=None)
+        j['operations'][oldkey]=old;A.atomic(self.state/'slot1.json',j)
+        park=self.request();self.complete(park);key=core.digest(core.binding(park))
+        j=R.journal('slot1');j['operations'][oldkey]['result']['status']='deferred'
+        A.atomic(self.state/'slot1.json',j)
+        resume=self.request('resume',archive=key)
+        with self.assertRaisesRegex(core.Refused,'receipt changed'):self.prepare(resume)
+        self.assertIsNone(R.journal('slot1')['pending'])
+
+    def test_paid_legacy_unknown_without_root_absence_stays_hold(self):
+        req,old=self.unknown(closed=False)
+        j=R.journal('slot1');op=j['operations'][req['control']['operation']]
+        op.update(charged_calls=1,tool_events=['run_command DONE','run_command DONE'])
+        op['result'].update(reason='AGY_PARSE_FAILED',safe_release=False)
+        A.atomic(self.state/'slot1.json',j);before=(self.state/'slot1.json').read_bytes()
+        with self.assertRaisesRegex(core.Refused,'external-effect absence'):self.prepare(req)
+        self.assertEqual((self.state/'slot1.json').read_bytes(),before)
+        self.assertFalse(R.journal('slot1')['operations'][req['control']['operation']]['result']['safe_release'])
+
+
+class Inventory(unittest.TestCase):
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory(prefix='inventory-');self.addCleanup(self.temp.cleanup)
+        self.root=Path(self.temp.name);self.here=self.root/'lib';self.here.mkdir()
+        self.state=self.root/'state';self.state.mkdir()
+        self.policy=self.root/'policy.json';A.atomic(self.policy,{'controller_sha':'c'*40})
+        self.real_read=R.read;self.reads=[]
+        self.external={str(Path('/usr/local/sbin/gb-deploy-helper.sh')):self.root/'helper',
+            '/usr/local/lib/gb-ops-monitor/opsmon/writer.py':self.root/'writer',
+            '/usr/local/lib/gb-ops-monitor/web/app.js':self.root/'app'}
+        def read(path,owner=None,*args,**kwargs):
+            # Synthetic root ownership is substituted only here. The actual
+            # nofollow/mode/nlink/bounds reader still reads every retained byte.
+            self.assertEqual(owner,0);self.reads.append(str(path))
+            path=Path(self.external.get(str(path),path))
+            value=self.real_read(path,os.getuid(),*args,**kwargs)
+            if kwargs.get('snapshot'):value.update(uid=0,gid=0)
+            return value
+        self.reader=SimpleNamespace(HERE=self.here,STATE=self.state,POLICY=self.policy,read=read)
+        manifest=core.loads((core.HERE/'manifest.json').read_bytes())
+        pins={}
+        for source in manifest['files']:
+            prefix='scripts/chatops/actions_train/'
+            if 'monitor_payload' in source:continue
+            dest=self.here/source[len(prefix):] if source.startswith(prefix) else Path('/usr/local/sbin/gb-deploy-helper.sh')
+            actual=Path(self.external.get(str(dest),dest));actual.parent.mkdir(parents=True,exist_ok=True)
+            actual.write_bytes(('synthetic '+source).encode());actual.chmod(0o755 if actual==self.root/'helper' else 0o644)
+            pins[str(dest)]=hashlib.sha256(actual.read_bytes()).hexdigest()
+        rules=self.here/'accepted-engineering-rules.md';rules.write_text('synthetic accepted rules')
+        rules.chmod(0o644);pins[str(rules)]=hashlib.sha256(rules.read_bytes()).hexdigest()
+        for dest,actual in self.external.items():
+            if actual.exists():continue
+            actual.write_text('external synthetic');actual.chmod(0o644)
+            pins[dest]=hashlib.sha256(actual.read_bytes()).hexdigest()
+        self.record=dict(schema='GB_ACTIONS_TRAIN_BACKUP_V1',manifest='f'*64,before={p:None for p in pins},
+                         after=pins,targets=list(pins),units={},activated=False)
+        A.atomic(self.state/'backup.json',self.record)
+        self.p={'controller_sha':'c'*40}
+
+    def inventory(self):return C.installed_inventory(self.reader,self.p)
+
+    def partial(self):
+        # Model the existing Stage5 transaction, including retained OLD inventory
+        # and actual preimages, rather than inventing a live attestation.
+        backup=self.state/'stage5-cursor-context-backup';backup.mkdir()
+        A.atomic(backup/'inventory',self.record)
+        before=self.reader.read(backup/'inventory',0,snapshot=True)
+        changes={}
+        for name in ('stage.py','context_cursor_delivery.py'):
+            path=self.here/name;old=self.reader.read(path,0,snapshot=True,json_data=False)
+            raw=path.read_bytes();(backup/name).write_bytes(raw);(backup/name).chmod(0o600)
+            path.write_bytes(raw+b' reviewed NEW')
+            new=self.reader.read(path,0,snapshot=True,json_data=False)
+            meta=lambda v:{k:v[k] for k in ('sha256','uid','gid','mode')}
+            changes[name]=dict(before=meta(old),after=meta(new))
+            self.record['after'][str(path)]=new['sha256']
+        A.atomic(self.state/'backup.json',self.record)
+        imeta=self.reader.read(self.state/'backup.json',0,snapshot=True)
+        identity=dict(baseline='c'*40,controller='d'*40,stage_sha256='a'*64,dispatch_sha256='b'*64,
+                      manifest='c'*64,bundle_commit='e'*40,bundle_branch='dev',script_sha256='d'*64)
+        j=dict(schema='GB_STAGE5_CURSOR_LIB_ONLY_V2',identity=identity,identity_sha256=core.digest(identity),
+            phase='installed-lib-only',installed_at=100,changes=changes,inventory_before=meta(before),
+            inventory_after=meta(imeta),policy=meta(self.reader.read(self.policy,0,snapshot=True)),
+            preserved={'historical':'untouched'},shadow=None)
+        A.atomic(self.state/'stage5-cursor-context.json',j)
+        return j
+
+    def test_no_library_manifest_real_after_inventory_and_partial_update(self):
+        result=self.inventory()
+        self.assertFalse((self.here/'manifest.json').exists())
+        self.assertEqual(result['inventory']['value'],self.record)
+        j=self.partial();result=self.inventory()
+        self.assertEqual(result['transition']['value'],j)
+        self.assertNotEqual(j['changes']['stage.py']['before']['sha256'],j['changes']['stage.py']['after']['sha256'])
+        self.assertNotIn(str(self.here/'manifest.json'),self.reads)
+
+    def test_real_32_path_baseline_and_new_partial_library_inventory(self):
+        for name in ('admission_pm.py','context_cursor_delivery.py','context_native_delivery.py',
+                     'native_antigravity_author.py','scheduling_control.py','smart_routing.py','test_plan_gate.py'):
+            path=self.here/name;path.unlink()
+            for field in ('after','before'):self.record[field].pop(str(path))
+            self.record['targets'].remove(str(path))
+        self.assertEqual(len(self.record['after']),32)
+        A.atomic(self.state/'backup.json',self.record);self.inventory()
+        # A missing library really is added: before=None, without OLD==NEW.
+        backup=self.state/'stage5-cursor-context-backup';backup.mkdir()
+        A.atomic(backup/'inventory',self.record)
+        oldmeta=self.reader.read(backup/'inventory',0,snapshot=True)
+        meta=lambda v:{k:v[k] for k in ('sha256','uid','gid','mode')}
+        stage=self.here/'stage.py';before=meta(self.reader.read(stage,0,snapshot=True,json_data=False))
+        (backup/'stage.py').write_bytes(stage.read_bytes());(backup/'stage.py').chmod(0o600)
+        stage.write_bytes(stage.read_bytes()+b' NEW')
+        new=self.here/'context_cursor_delivery.py';new.write_bytes(b'new reviewed library');new.chmod(0o644)
+        changes={}
+        for name,prior in (('stage.py',before),('context_cursor_delivery.py',None)):
+            path=self.here/name;after=meta(self.reader.read(path,0,snapshot=True,json_data=False))
+            changes[name]=dict(before=prior,after=after);self.record['after'][str(path)]=after['sha256']
+        A.atomic(self.state/'backup.json',self.record)
+        ident=dict(baseline='c'*40,controller='d'*40,stage_sha256='a'*64,dispatch_sha256='b'*64,
+                   manifest='c'*64,bundle_commit='e'*40,bundle_branch='dev',script_sha256='d'*64)
+        A.atomic(self.state/'stage5-cursor-context.json',dict(schema='GB_STAGE5_CURSOR_LIB_ONLY_V2',
+            identity=ident,identity_sha256=core.digest(ident),phase='installed-lib-only',installed_at=100,
+            changes=changes,inventory_before=meta(oldmeta),inventory_after=meta(self.reader.read(self.state/'backup.json',0,snapshot=True)),
+            policy=meta(self.reader.read(self.policy,0,snapshot=True)),preserved={},shadow=None))
+        self.assertEqual(len(self.inventory()['inventory']['value']['after']),33)
+
+    def test_inventory_byte_mode_missing_foreign_and_symlink_negatives(self):
+        path=self.here/'stage.py';raw=path.read_bytes()
+        path.write_bytes(b'drift')
+        with self.assertRaisesRegex(core.Refused,'byte/mode'):self.inventory()
+        path.write_bytes(raw);path.chmod(0o600)
+        with self.assertRaisesRegex(core.Refused,'byte/mode'):self.inventory()
+        path.chmod(0o644);path.unlink()
+        with self.assertRaises(FileNotFoundError):self.inventory()
+        path.symlink_to(self.here/'core.py')
+        with self.assertRaisesRegex(core.Refused,'indirect'):self.inventory()
+        path.unlink();path.write_bytes(raw);path.chmod(0o644)
+        self.record['after']['/foreign/file']='0'*64;A.atomic(self.state/'backup.json',self.record)
+        with self.assertRaisesRegex(core.Refused,'membership'):self.inventory()
+
+    def test_partial_upgrade_crash_old_bytes_inventory_and_dependency_tamper(self):
+        j=self.partial();path=self.state/'stage5-cursor-context.json'
+        for phase in ('applying','preparing','rolling-back','rolled-back'):
+            A.atomic(path,dict(j,phase=phase))
+            with self.subTest(phase=phase),self.assertRaisesRegex(core.Refused,'ACTIVE_OR_UNKNOWN'):self.inventory()
+        A.atomic(path,j)
+        backup=self.state/'stage5-cursor-context-backup/stage.py';backup.write_bytes(b'bad OLD')
+        with self.assertRaisesRegex(core.Refused,'OLD bytes'):self.inventory()
+        backup.write_bytes(('synthetic scripts/chatops/actions_train/stage.py').encode())
+        dep=self.here/'native_guard.py';dep.write_bytes(b'unreviewed dependency')
+        self.record['after'][str(dep)]=hashlib.sha256(dep.read_bytes()).hexdigest()
+        A.atomic(self.state/'backup.json',self.record)
+        with self.assertRaisesRegex(core.Refused,'inventory/policy drift'):self.inventory()
+
+    def test_unrecognized_relevant_transaction_holds_instead_of_ignoring_hashes(self):
+        A.atomic(self.state/'other-upgrade.json',dict(schema='unknown',phase='applying',
+            changes={str(self.here/'native_guard.py'):{'before':'a'*64,'after':'b'*64}}))
+        with self.assertRaisesRegex(core.Refused,'unsupported installed transaction closure HOLD'):self.inventory()
+
+
+class HostedControl(unittest.TestCase):
+    def setUp(self):
+        import client
+        self.client=client
+        self.temp=tempfile.TemporaryDirectory(prefix='hosted-control-');self.addCleanup(self.temp.cleanup)
+        self.root=Path(self.temp.name);self.cwd=Path.cwd();os.chdir(self.root);self.addCleanup(os.chdir,self.cwd)
+        self.env=patch.dict(os.environ,dict(GITHUB_REF='refs/heads/dev',GITHUB_RUN_ID='100',
+            GITHUB_RUN_ATTEMPT='1',GH_TOKEN=TOKEN,GITHUB_OUTPUT=str(self.root/'output')))
+        self.env.start();self.addCleanup(self.env.stop)
+        self.descriptor=dict(stage='resume',slot='slot1',issue=450,head=HEAD,phase='qa',attempt=2,
+            generation=18,profile='auto',control=dict(comment=1000,snapshot='a'*64,archive='b'*64,
+            operation=None,proof=None,base=BASE,pr=900))
+        self.req=dict(client.dispatch_request(self.descriptor),gh_token=TOKEN)
+        stamp=dt.datetime.now(dt.timezone.utc).isoformat()
+        self.comment=dict(id=1000,user={'id':core.OWNER},
+            issue_url=f'https://api.github.com/repos/{core.REPO}/issues/450',created_at=stamp,updated_at=stamp,
+            body=C.MARKER+'\n'+json.dumps(C.admission_body(self.req)))
+        self.api=Mock(return_value=self.comment);self.api.identity=Mock()
+        self.key=core.digest(core.binding(self.req))
+        self.receipt=dict(status='confirmed',scheduling_only=True,archive='b'*64,archive_sha256='c'*64,next_stage='ci')
+        self.found=dict(schema=core.CONTROL_CAPABILITY,key=self.key,slot='slot1',generation=19,
+            status='confirmed',binding=core.binding(self.req),admission=core.digest(self.comment),result=self.receipt)
+        self.cap=dict(capabilities=[core.CONTROL_CAPABILITY],mode='active',controller_sha='c'*40)
+
+    def test_both_closed_validators_legacy_and_whole_batch_before_dispatch(self):
+        ordinary={k:v for k,v in self.descriptor.items() if k!='control'};ordinary['stage']='ci'
+        api=Mock();ssh=Mock(return_value=self.cap)
+        self.client.dispatch_descriptors(api,[ordinary,self.descriptor],ssh=ssh)
+        self.assertEqual(api.call_count,2)
+        for bad in (dict(ordinary,control=self.descriptor['control']),dict(self.descriptor,_control={}),
+                    dict(self.descriptor,control=dict(self.descriptor['control'],private_intent=True))):
+            api.reset_mock();ssh.reset_mock()
+            with self.subTest(bad=bad),self.assertRaises(core.Refused):
+                self.client.dispatch_descriptors(api,[ordinary,bad],ssh=ssh)
+            api.assert_not_called();ssh.assert_not_called()
+            with self.assertRaises(core.Refused):self.client.execute(self.api,ssh,bad)
+            ssh.assert_not_called()
+
+    def test_old_server_refuses_before_dispatch_or_mutating_submission(self):
+        ssh=Mock(return_value={'mode':'active','slots':{}});api=Mock()
+        with self.assertRaisesRegex(core.Refused,'capability'):
+            self.client.dispatch_descriptors(api,[self.descriptor],ssh=ssh)
+        api.assert_not_called()
+        with self.assertRaisesRegex(core.Refused,'capability'):self.client.execute(self.api,ssh,self.descriptor)
+        self.assertTrue(all(call.args[0]['stage']=='status' for call in ssh.call_args_list))
+
+    def test_lost_reply_queries_exact_authenticated_receipt_once_and_continues(self):
+        ssh=Mock(side_effect=[self.cap,TimeoutError('lost reply'),self.found])
+        self.client.execute(self.api,ssh,self.descriptor)
+        calls=[c.args[0] for c in ssh.call_args_list]
+        self.assertEqual([r['stage'] for r in calls],['status','resume','status'])
+        self.assertEqual(calls[-1],dict(action='train',stage='status',slot='slot1',operation=self.key))
+        self.assertIn('changed=true',(self.root/'output').read_text())
+        self.assertNotIn(TOKEN,(self.root/'evidence/stage.json').read_text())
+
+    def test_delayed_missing_then_running_queries_do_not_repeat_effect(self):
+        missing=dict(self.found,status='not_found',binding=None,admission=None,result=None)
+        running=dict(self.found,status='running',result=None)
+        ssh=Mock(side_effect=[self.cap,dict(status='running',key=self.key),missing,running,self.found])
+        with patch.object(self.client.time,'sleep'):
+            self.client.execute(self.api,ssh,self.descriptor)
+        self.assertEqual(sum(c.args[0]['stage']=='resume' for c in ssh.call_args_list),1)
+        self.assertTrue(all(c.args[0].get('operation')==self.key for c in ssh.call_args_list[2:]))
+
+    def test_timeout_missing_or_unrelated_outcome_never_succeeds_or_replays(self):
+        missing=dict(self.found,status='not_found',binding=None,admission=None,result=None)
+        ssh=Mock(side_effect=[self.cap,dict(status='running',key=self.key),missing])
+        with patch.object(self.client.time,'monotonic',side_effect=[0,2301]):
+            with self.assertRaisesRegex(core.Refused,'unresolved'):self.client.execute(self.api,ssh,self.descriptor)
+        self.assertIn('changed=false',(self.root/'output').read_text())
+        for changed in (dict(self.found,key='f'*64),dict(self.found,binding=dict(core.binding(self.req),issue=999)),
+                        dict(self.found,admission='f'*64),dict(self.found,result=dict(self.receipt,next_stage='shell'))):
+            ssh=Mock(side_effect=[self.cap,dict(status='running',key=self.key),changed])
+            with self.subTest(changed=changed),self.assertRaises(core.Refused):
+                self.client.execute(self.api,ssh,self.descriptor)
+            self.assertEqual(sum(c.args[0]['stage']=='resume' for c in ssh.call_args_list),1)
+
+
+class SharedUsage(unittest.TestCase):
+    def test_monotonic_progress_backups_and_accounting_tamper(self):
+        reader=SimpleNamespace(AUTONOMY=Path('/synthetic'))
+        path='/synthetic/outbox/slot1/ledger.json'
+        def entry(n):return dict(value={'2026-10-27':{'codex':{'qa':n}}},uid=1,gid=1,mode=420,sha256=core.digest(n))
+        frozen={'installed':{'exact':'pin'},'grant':{'used_calls':2},path:entry(2),path+'.bak':entry(1)}
+        current=dict(frozen,**{path:entry(5),path+'.bak':entry(4)})
+        C.preserved_since_park(reader,frozen,current)
+        for bad in (dict(current,**{path:entry(1)}),dict(current,**{path+'.bak':entry(0)}),
+                    dict(current,grant={'used_calls':1}),dict(current,grant={'used_calls':3})):
+            with self.subTest(bad=bad),self.assertRaises(core.Refused):C.preserved_since_park(reader,frozen,bad)
+        self.assertEqual(frozen[path],entry(2))
+
 
 class ProcessIdentity(unittest.TestCase):
     def test_missing_identity_pid_reuse_live_or_unknown_refuse(self):
@@ -415,6 +812,30 @@ class ProcessIdentity(unittest.TestCase):
 
 
 class MetadataAndBridge(unittest.TestCase):
+    def test_real_controller_sources_unrelated_dev_advance_requires_provable_closure(self):
+        import subprocess
+        with tempfile.TemporaryDirectory(prefix='actual-controller-closure-') as temp:
+            repo=Path(temp)
+            def git(*args,**kw):
+                return subprocess.check_output(['/usr/bin/git','-c','core.hooksPath=/dev/null',
+                    '-c','user.name=Synthetic','-c','user.email=synthetic@example.invalid',*args],
+                    cwd=repo,text=True).strip()
+            git('init','-q')
+            # Actual production dependency bytes, never executed in this test.
+            for source in core.HERE.rglob('*.py'):
+                target=repo/'scripts/chatops/actions_train'/source.relative_to(core.HERE)
+                target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(source.read_bytes())
+            git('add','.');git('commit','-qm','actual controller source closure');base=git('rev-parse','HEAD')
+            handoff=repo/'docs/handoffs/other-task.md';handoff.parent.mkdir(parents=True)
+            handoff.write_text('unrelated completed work');git('add','.');git('commit','-qm','unrelated completion')
+            dev=git('rev-parse','HEAD');self.assertEqual(git('merge-base',base,dev),base)
+            snapshot=dict(base=base,head=base,phase='ci')
+            bridge=SimpleNamespace(work=repo,git=git)
+            before=git('status','--porcelain');original=copy.deepcopy(snapshot)
+            with self.assertRaisesRegex(core.Refused,'dependency compatibility HOLD'):
+                C.compatible_dev(bridge,snapshot,dev)
+            self.assertEqual(snapshot,original);self.assertEqual(git('status','--porcelain'),before)
+
     def test_secure_metadata_preserves_raw_hash_and_refuses_symlink(self):
         with tempfile.TemporaryDirectory(prefix='scheduling-metadata-') as temp:
             path=Path(temp)/'receipt.json';path.write_bytes(b'{"calls": 2}\n');path.chmod(0o600)
@@ -422,6 +843,7 @@ class MetadataAndBridge(unittest.TestCase):
             self.assertEqual(info['sha256'],hashlib.sha256(path.read_bytes()).hexdigest())
             self.assertEqual(info['value'],{'calls':2})
             self.assertEqual(R.read(path,os.getuid(),json_data=False),path.read_bytes())
+            with self.assertRaisesRegex(core.Refused,'owner mismatch'):R.read(path,os.getuid()+1)
             link=Path(temp)/'link';link.symlink_to(path)
             with self.assertRaises(OSError):R.read(link,os.getuid(),snapshot=True)
 

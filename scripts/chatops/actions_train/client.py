@@ -143,10 +143,29 @@ def reconcile(api, ssh, event, name):
     ssh({'action':'train','stage':'planning','controller_sha':controller,
          'run':int(os.environ['GITHUB_RUN_ID']),'run_attempt':int(os.environ['GITHUB_RUN_ATTEMPT']),
          'report':report})
-    dispatch_descriptors(api, intents + recovery_intents)
+    dispatch_descriptors(api, intents + recovery_intents, ssh=ssh)
 
 
-def dispatch_descriptors(api, descriptors):
+def dispatch_request(descriptor):
+    from core import CONTROL_STAGES
+    fields = {'slot','issue','stage','phase','head','attempt','generation','profile'}
+    need(type(descriptor) is dict and set(descriptor) ==
+         (fields | {'control'} if descriptor.get('stage') in CONTROL_STAGES else fields),
+         'unknown dispatch descriptor fields')
+    return request(dict(descriptor, action='train', run=int(os.environ['GITHUB_RUN_ID']),
+        run_attempt=int(os.environ['GITHUB_RUN_ATTEMPT']), gh_token='schema-validation-only'))
+
+
+def control_capability(ssh):
+    from core import CONTROL_CAPABILITY
+    need(ssh is not None, 'scheduling server capability required')
+    snap = ssh(dict(action='train',stage='status'))
+    need(CONTROL_CAPABILITY in snap.get('capabilities',[]) and snap.get('mode') == 'active',
+         'server lacks supported scheduling capability')
+    return snap
+
+
+def dispatch_descriptors(api, descriptors, *, ssh=None):
     """One finite dispatch pass; isolation without a second reservation journal.
 
     Receiver generation + immutable operation binding remains the sole execution
@@ -156,13 +175,11 @@ def dispatch_descriptors(api, descriptors):
     from core import SubmissionFailed, SubmissionUnknown, binding
     unique = {}
     for descriptor in descriptors:
-        need(isinstance(descriptor, dict) and set(descriptor) ==
-             {'slot','issue','stage','phase','head','attempt','generation','profile'},
-             'unknown dispatch descriptor fields')
-        full = dict(descriptor, action='train', run=int(os.environ['GITHUB_RUN_ID']),
-                    run_attempt=int(os.environ['GITHUB_RUN_ATTEMPT']), gh_token='schema-validation-only')
-        request(full)  # Validate the whole batch before any HTTP side effect.
+        full = dispatch_request(descriptor)  # Entire batch before any dispatch.
         unique.setdefault(digest(binding(full)), descriptor)
+    from core import CONTROL_STAGES
+    if any(d['stage'] in CONTROL_STAGES for d in unique.values()):
+        control_capability(ssh)  # Old server refuses before any HTTP dispatch.
     outcomes = []
     directory = Path('evidence'); directory.mkdir(exist_ok=True)
     def save():
@@ -191,10 +208,11 @@ def dispatch_descriptors(api, descriptors):
 
 def execute(api, ssh, descriptor):
     need(os.environ['GITHUB_REF'] == 'refs/heads/dev', 'stage must run from permitted dev')
-    need(set(descriptor) == {'slot', 'issue', 'stage', 'phase', 'head', 'attempt', 'generation', 'profile'}, 'unknown dispatch fields')
-    req = dict(descriptor, action='train', run=int(os.environ['GITHUB_RUN_ID']),
-               run_attempt=int(os.environ['GITHUB_RUN_ATTEMPT']), gh_token=os.environ['GH_TOKEN'])
+    req = dict(dispatch_request(descriptor),gh_token=os.environ['GH_TOKEN'])
     request(req)
+    from core import CONTROL_STAGES
+    if req['stage'] in CONTROL_STAGES:
+        return execute_control(api,ssh,req)
     value = ssh(req)
     deadline = time.monotonic() + 2300
     while value['status'] == 'running' and time.monotonic() < deadline:
@@ -227,6 +245,56 @@ def execute(api, ssh, descriptor):
         out.write('recovery_ready=' + ('true' if ready else 'false') + '\n')
     print('Stage result: ' + value['status'])
     if value['status'] in ('unknown', 'refused'): raise Refused('stage requires reconciliation')
+
+
+def execute_control(api, ssh, req):
+    """Submit once, then status only, even after a lost reply or a timeout."""
+    from core import CONTROL_CAPABILITY, STAGES, binding
+    from scheduling_control import admission
+    control_capability(ssh)
+    auth = admission(req,api)
+    key = digest(binding(req))
+    try:
+        submitted = ssh(req)
+        need(submitted.get('key') == key, 'control submission identity mismatch')
+    except (Retry, TimeoutError, subprocess.TimeoutExpired, ConnectionError):
+        pass  # The operation may already exist. No mutating resubmission.
+    value = dict(status='unknown',key=key)
+    deadline = time.monotonic() + 2300
+    while True:
+        try:
+            found = ssh(dict(action='train',stage='status',slot=req['slot'],operation=key))
+            need(found.get('schema') == CONTROL_CAPABILITY and found.get('slot') == req['slot']
+                 and found.get('key') == key and type(found.get('generation')) is int,
+                 'control outcome identity mismatch')
+            status = found.get('status')
+            need(status in ('confirmed','running','unknown','not_found'), 'invalid control outcome')
+            if status != 'not_found':
+                need(found.get('binding') == binding(req) and found.get('admission') == auth,
+                     'control outcome admission/binding mismatch')
+            value = found
+            if status == 'confirmed':
+                receipt = found.get('result') or {}
+                need(set(receipt) == {'status','scheduling_only','archive','archive_sha256','next_stage'}
+                     and receipt['status'] == 'confirmed' and receipt['scheduling_only'] is True
+                     and isinstance(receipt['archive_sha256'],str)
+                     and __import__('re').fullmatch('[a-f0-9]{64}',receipt['archive_sha256'])
+                     and receipt['archive'] == (key if req['stage'] == 'park' else req['control']['archive'])
+                     and (receipt['next_stage'] in STAGES if req['stage'] == 'resume'
+                          else receipt['next_stage'] is None), 'invalid scheduling receipt')
+                break
+            if status == 'unknown': break
+        except (Retry, TimeoutError, subprocess.TimeoutExpired, ConnectionError):
+            pass
+        if time.monotonic() >= deadline: break
+        time.sleep(20)
+    Path('evidence').mkdir(exist_ok=True)
+    Path('evidence/stage.json').write_text(json.dumps(value,sort_keys=True))
+    changed = value['status'] == 'confirmed' and req['stage'] == 'resume'
+    with open(os.environ['GITHUB_OUTPUT'],'a') as out:
+        out.write('changed='+('true' if changed else 'false')+'\nrecovery_ready=false\n')
+    print('Stage result: '+value['status'])
+    need(value['status'] == 'confirmed', 'control outcome unresolved; status query only, no replay')
 
 
 def main():

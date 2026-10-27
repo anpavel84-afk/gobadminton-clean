@@ -20,6 +20,13 @@ MARKER = 'GOBADMINTON_SCHEDULING_CONTROL_V1'
 HEX = re.compile('[0-9a-f]{64}')
 
 
+def admission_body(req):
+    """Creation precedes ID allocation. Only the self reference is delivery data."""
+    projected = copy.deepcopy(binding(req))
+    projected['control'].pop('comment', None)
+    return dict(schema=MARKER, request=projected)
+
+
 def validate_request(req):
     from core import request
     need(set(req) == {'action', 'stage', 'slot', 'issue', 'phase', 'head', 'attempt',
@@ -57,7 +64,7 @@ def admission(req, api):
     body = c.get('body')
     need(isinstance(body, str) and len(body.encode()) <= 8192, 'control admission size')
     marker, sep, raw = body.partition('\n')
-    need(marker == MARKER and sep and loads(raw) == dict(schema=MARKER, request=binding(req)),
+    need(marker == MARKER and sep and loads(raw) == admission_body(req),
          'control admission/request mismatch')
     return digest(c)
 
@@ -75,11 +82,119 @@ def plan_gate(active, req):
     return checked
 
 
+def installed_inventory(R, policy):
+    """The root install record is authority; the packaging manifest is not installed.
+
+    Closed destination set from installer.payload. Never follow receipt-selected
+    paths. Unknown upgrade formats/unfinished edges HOLD for trusted OPS review.
+    """
+    modules = set(('admission_pm antigravity_qa_recovery client content_identity '
+        'context_cursor_delivery context_exchange context_native_delivery context_policy '
+        'core cost_policy failure_diagnosis installer monitor native_antigravity '
+        'native_antigravity_author native_cursor native_guard owner_package_admission '
+        'qa_equivalence qa_recovery queue_diagnostics receiver recovery recovery_admission '
+        'recovery_publish recovery_upgrade scheduling_control smart_routing stage test_plan_gate').split())
+    names = {n+'.py' for n in modules} | {'live/autonomous_issues.py', 'live/slots.py',
+        'live/check_foundation.py', 'monitor-mapping.json', 'monitor_extension.js',
+        'accepted-engineering-rules.md'}
+    external = {Path('/usr/local/sbin/gb-deploy-helper.sh'): 0o755,
+        Path('/usr/local/lib/gb-ops-monitor/opsmon/writer.py'): 0o644,
+        Path('/usr/local/lib/gb-ops-monitor/web/app.js'): 0o644}
+    allowed = {str(R.HERE/n): 0o644 for n in names} | {str(p): m for p,m in external.items()}
+    info = R.read(R.STATE/'backup.json', 0, snapshot=True)
+    need(info['mode'] == 0o600 and info['gid'] == 0, 'installed inventory metadata drift')
+    record = info['value']
+    need(type(record) is dict and set(record) ==
+         {'schema','manifest','before','after','units','activated','targets'}
+         and record['schema'] == 'GB_ACTIONS_TRAIN_BACKUP_V1'
+         and type(record['activated']) is bool
+         and isinstance(record['manifest'], str) and HEX.fullmatch(record['manifest'])
+         and type(record['after']) is dict and type(record['before']) is dict
+         and type(record['units']) is dict and type(record['targets']) is list,
+         'invalid installed inventory')
+    pins = record['after']
+    # The supplied real baseline has 32 destinations. Later reviewed libraries
+    # may extend it without turning the source packaging manifest into inventory.
+    optional = {'admission_pm.py','context_cursor_delivery.py','context_native_delivery.py',
+                'native_antigravity_author.py','scheduling_control.py','smart_routing.py','test_plan_gate.py'}
+    required = set(allowed) - {str(R.HERE/n) for n in optional}
+    need(required <= set(pins) <= set(allowed)
+         and set(record['before']) == set(record['targets'])
+         and len(record['targets']) == len(set(record['targets']))
+         and set(record['targets']) <= set(pins), 'installed inventory membership')
+    need(all(v is None or isinstance(v,str) and HEX.fullmatch(v) for v in record['before'].values()),
+         'invalid inventory preimages')
+    for path in R.HERE.rglob('*'):
+        metadata = path.lstat()
+        need(not stat.S_ISLNK(metadata.st_mode), 'indirect installed inventory path')
+        if not stat.S_ISDIR(metadata.st_mode):
+            need(str(path) in pins, 'unrecorded installed dependency')
+    result = dict(inventory=info, files={})
+    for path, pin in pins.items():
+        need(isinstance(pin,str) and HEX.fullmatch(pin), 'invalid inventory digest')
+        current = R.read(Path(path), 0, snapshot=True, json_data=False)
+        need(current['sha256'] == pin and current['mode'] == allowed[path] and current['gid'] == 0,
+             'installed inventory byte/mode drift')
+        result['files'][path] = current
+    receipts = list(R.STATE.glob('*.json'))
+    need(len(receipts) <= 512, 'installed transaction scan bound HOLD')
+    for path in receipts:
+        if path.name == 'stage5-cursor-context.json': continue
+        receipt = R.read(path,0)
+        if not isinstance(receipt,dict) or not isinstance(receipt.get('changes'),dict): continue
+        relevant = set(allowed) | {str(R.POLICY)} | names
+        need(not (set(receipt['changes']) & relevant),
+             'unsupported installed transaction closure HOLD: '+path.name)
+    # Existing Stage5 receipt: retain actual OLD bytes, exact inventory edge,
+    # reviewed NEW metadata and the entire frozen relevant dependency closure.
+    journal = R.STATE/'stage5-cursor-context.json'
+    if os.path.lexists(journal):
+        receipt = R.read(journal, 0, snapshot=True); j = receipt['value']
+        need(set(j) == {'schema','identity','identity_sha256','phase','installed_at','changes',
+             'inventory_before','inventory_after','policy','preserved','shadow'}
+             and j['schema'] == 'GB_STAGE5_CURSOR_LIB_ONLY_V2'
+             and j['phase'] in ('installed-lib-only','proof-recorded')
+             and j['identity_sha256'] == digest(j['identity'])
+             and set(j['changes']) == {'stage.py','context_cursor_delivery.py'},
+             'partial upgrade ACTIVE_OR_UNKNOWN/unsupported receipt')
+        ident = j['identity']
+        need(set(ident) == {'baseline','controller','stage_sha256','dispatch_sha256','manifest',
+             'bundle_commit','bundle_branch','script_sha256'}
+             and all(isinstance(ident[n],str) and SHA.fullmatch(ident[n])
+                     for n in ('baseline','controller','bundle_commit'))
+             and all(isinstance(ident[n],str) and HEX.fullmatch(ident[n])
+                     for n in ('stage_sha256','dispatch_sha256','manifest','script_sha256'))
+             and policy['controller_sha'] in (ident['baseline'],ident['controller']),
+             'partial upgrade release identity drift')
+        def meta(value):
+            return {k:value[k] for k in ('sha256','mode','uid','gid')}
+        need(meta(info) == j['inventory_after'] and
+             meta(R.read(R.POLICY,0,snapshot=True)) == j['policy'], 'partial upgrade inventory/policy drift')
+        backup = R.STATE/'stage5-cursor-context-backup'
+        old = R.read(backup/'inventory',0,snapshot=True)
+        need(meta(old) == dict(j['inventory_before'],mode=0o600), 'partial inventory OLD drift')
+        before = old['value']; after = copy.deepcopy(before)
+        for name,row in j['changes'].items():
+            need(set(row) == {'before','after'}, 'partial upgrade change schema')
+            path = str(R.HERE/name); prior = row['before']; new = row['after']
+            need(before['after'].get(path) == (prior and prior['sha256'])
+                 and meta(result['files'][path]) == new
+                 and new == dict(prior or dict(mode=0o644,uid=0,gid=0),sha256=new['sha256']),
+                 'partial upgrade OLD/NEW mismatch')
+            if prior:
+                retained = R.read(backup/name,0,snapshot=True,json_data=False)
+                need(meta(retained) == dict(prior,mode=0o600), 'partial upgrade OLD bytes changed')
+            after['after'][path] = new['sha256']
+        need(record == after, 'partial upgrade frozen dependencies drift')
+        result['transition'] = receipt
+    return result
+
+
 def root_metadata(R, slot, policy, *, qualification=False):
     """Fixed config/state metadata only. No caller paths or candidate Git/code as root.
 
-    Keep exact JSON plus file metadata. A changed shared ledger conservatively holds
-    a continuation; this operation never rewrites a grant, charge or receipt.
+    Exact JSON/metadata provide transaction CAS. Across PARK/RESUME only the
+    known Budget usage format may advance; no grant/charge/receipt is rewritten.
     """
     paths = {R.POLICY, R.BUDGET}
     paths.update(p for p in R.STATE.glob('*.json')
@@ -92,24 +207,115 @@ def root_metadata(R, slot, policy, *, qualification=False):
     out = {}
     import pwd
     slot_owner = pwd.getpwnam('agentagency-dev' if slot == 'slot1' else 'gb-slot2').pw_uid
-    for name in ('ledger.json', 'ledger.json.bak'):
-        ledger = R.AUTONOMY/'outbox'/slot/name
-        out[str(ledger)] = R.read(ledger, slot_owner, snapshot=True) if ledger.exists() else None
+    for ledger_slot in ('slot1','slot2'):
+        owner = pwd.getpwnam('agentagency-dev' if ledger_slot == 'slot1' else 'gb-slot2').pw_uid
+        for name in ('ledger.json', 'ledger.json.bak'):
+            ledger = R.AUTONOMY/'outbox'/ledger_slot/name
+            out[str(ledger)] = R.read(ledger, owner, snapshot=True) if os.path.lexists(ledger) else None
     for path in sorted(paths):
         owner = (slot_owner if path.is_relative_to(R.AUTONOMY/'slots'/slot) else 0)
         out[str(path)] = R.read(path, owner, snapshot=True)
-    out['installed'] = dict(controller=policy['controller_sha'],
-        manifest=R.read(R.HERE/'manifest.json', 0, snapshot=True)['sha256'])
-    manifest = R.read(R.HERE/'manifest.json', 0)
-    for name, expected in manifest['files'].items():
-        prefix = 'scripts/chatops/actions_train/'
-        if name.startswith(prefix):
-            path = R.HERE/name[len(prefix):]
-            need(R.read(path, 0, snapshot=True, json_data=False)['sha256'] == expected,
-                 'installed control source drift')
+    out['installed'] = dict(controller=policy['controller_sha'], inventory=installed_inventory(R, policy))
     if qualification:
         out['qualification_evidence'] = state_evidence(R, slot)
     return out
+
+
+def daily_usage(value):
+    """Closed Budget ledger shape. Preserve every historical day/cell."""
+    need(type(value) is dict, 'invalid shared usage')
+    for day, providers in value.items():
+        need(isinstance(day,str) and re.fullmatch(r'\d{4}-\d{2}-\d{2}',day)
+             and type(providers) is dict and set(providers) <= {'codex','cursor','agy'}, 'invalid shared usage')
+        for roles in providers.values():
+            need(type(roles) is dict and set(roles) <= {'author','qa'} and
+                 all(type(n) is int and n >= 0 for n in roles.values()), 'invalid shared usage')
+    return value
+
+
+def usage_extends(old, new):
+    daily_usage(old); daily_usage(new)
+    return all(day in new and provider in new[day] and role in new[day][provider]
+               and new[day][provider][role] >= count
+               for day,providers in old.items() for provider,roles in providers.items()
+               for role,count in roles.items())
+
+
+def preserved_since_park(R, frozen, current):
+    """Cross-task comparison only; every individual control still uses exact CAS.
+
+    Grants/reservations/install/policy remain immutable. Only Budget's known
+    append/monotonic daily usage and rotating preimage backups may advance.
+    Unknown accounting schemas HOLD, never a recursive numeric relaxation.
+    """
+    old = copy.deepcopy(frozen); new = copy.deepcopy(current)
+    for slot in ('slot1','slot2'):
+        path = str(R.AUTONOMY/'outbox'/slot/'ledger.json')
+        backup = path+'.bak'
+        for name in (path,backup):
+            before = old.pop(name,None); after = new.pop(name,None)
+            if before == after: continue
+            need(after is not None, 'shared usage removed')
+            if before:
+                need(all(before[k] == after[k] for k in ('uid','gid','mode')),
+                     'shared usage metadata drift')
+            need(usage_extends(before['value'] if before else {},after['value']), 'shared usage decreased')
+        live = current.get(path); prior = current.get(backup)
+        if prior:
+            need(live and usage_extends(prior['value'],live['value']), 'usage backup ahead of ledger')
+        if frozen.get(path) and live and frozen[path]['value'] != live['value']:
+            need(prior and usage_extends(frozen[path]['value'],prior['value']), 'missing usage preimage')
+    need(old == new, 'parked source/grants drift')
+
+
+def compatible_dev(b, snapshot, current):
+    if current == snapshot['base']: return
+    need(snapshot['phase'] in ('candidate','pr_wait','qa','ci'), 'changed DEV continuation phase HOLD')
+    need(b.git('merge-base',snapshot['base'],current,cwd=b.work) == snapshot['base'],
+         'incompatible current DEV base ancestry HOLD')
+    from content_identity import equivalence
+    proof = equivalence(b.work,snapshot['base'],current)
+    need(proof['reusable'] and not proof['tests'], 'current DEV dependency compatibility HOLD')
+    # No merge/rebase or checkpoint rewrite. Ordinary Bridge.integrate creates
+    # the new candidate/history, then existing qa_equivalence/CI gates decide reuse.
+
+
+def parked_lineage(R, slot, key, frozen, current, operation):
+    """Unrelated journal progress is allowed; this task's original facts are exact."""
+    prior = R.read(R.STATE/'history'/slot/(key+'-before.json'),0,33554432)
+    issue = frozen['snapshot']['issue']; task_key = str(issue)
+    need(type(frozen.get('task_receipts')) is dict, 'legacy archive lacks task receipt seal HOLD')
+    need(digest(prior) == frozen['journal_before'], 'parked journal backup changed')
+    need(current['generation'] >= prior['generation'] + 1 and
+         current.get('stage_counts',{}).get(task_key,0) == prior.get('stage_counts',{}).get(task_key,0)+1
+         and current.get('profiles',{}).get(task_key) == prior.get('profiles',{}).get(task_key),
+         'paused task counters/profile changed')
+    for op_key, old in prior['operations'].items():
+        if old.get('binding',{}).get('issue') == issue:
+            need(operation(op_key) == old, 'paused task operation receipt changed')
+    need(task_receipts(R,slot,current,issue) ==
+         dict(frozen['task_receipts'], **{key:digest(operation(key))}),
+         'paused task hot/cold receipts changed')
+    allowed = {op_key for op_key,old in prior['operations'].items()
+               if old.get('binding',{}).get('issue') == issue} | {key}
+    need(all(op_key in allowed for op_key,op in current['operations'].items()
+             if op.get('binding',{}).get('issue') == issue), 'paused task advanced while parked')
+
+
+def task_receipts(R, slot, j, issue):
+    result = {key:digest(op) for key,op in j['operations'].items()
+              if op.get('binding',{}).get('issue') == issue}
+    folder = R.STATE/'history'/slot
+    paths = list(folder.glob('*.json'))
+    need(len(paths) <= 4096, 'history scan bound HOLD')
+    for path in paths:
+        key = path.stem
+        if not HEX.fullmatch(key): continue  # journal backups are not operations
+        op = R.read(path,0,33554432)
+        if op.get('binding',{}).get('issue') == issue:
+            need(key not in result or result[key] == digest(op), 'hot/cold receipt divergence')
+            result[key] = digest(op)
+    return result
 
 
 def evidence_paths(directory):
@@ -224,7 +430,9 @@ def prepare(R, req, policy, api):
         snapshot = frozen['snapshot']
         need(not state['active'] or state['active']['phase'] == 'done', 'resume slot occupied')
         need(control['archive'] not in j.get('scheduling_resumes', {}), 'archive already resumed/reserved')
-        need(root_metadata(R, slot, policy) == frozen['preserved'], 'parked source/grants drift')
+        parked_lineage(R,slot,control['archive'],frozen,j,operation)
+        need(set(frozen['checkpoint_before']['done']) <= set(state['done']), 'completed history decreased')
+        preserved_since_park(R, frozen['preserved'], root_metadata(R, slot, policy))
         need(evidence_matches(state_evidence(R,slot), frozen['evidence_digests'], req['issue'], additions=True),
              'parked candidate/QA/CI evidence changed')
     elif action == 'reconcile':
@@ -248,9 +456,10 @@ def prepare(R, req, policy, api):
     checked = plan_gate(snapshot, req)
     if action != 'reconcile':
         need(req['issue'] not in state['done'], 'accepted task cannot resume/park')
-    # Do not infer compatibility of a changed DEV. Strict exact base is supported.
+    current_dev = None
     if action == 'resume':
-        need(api('git/ref/heads/dev')['object']['sha'] == snapshot['base'], 'incompatible current DEV base HOLD')
+        current_dev = api('git/ref/heads/dev')['object']['sha']
+        need(isinstance(current_dev,str) and SHA.fullmatch(current_dev), 'invalid current DEV')
     a, s = R.live()
     other = 'slot2' if slot == 'slot1' else 'slot1'
     other_state, _ = R.checkpoint(other); other_j = R.journal(other)
@@ -277,7 +486,8 @@ def prepare(R, req, policy, api):
     backup.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     if backup.exists(): need(R.read(backup, 0) == j, 'scheduling backup CAS drift')
     else: R.atomic(backup, j)
-    intent = dict(admission=auth, snapshot=copy.deepcopy(snapshot), preserved=preserved,
+    intent = dict(admission=auth, snapshot=copy.deepcopy(snapshot), preserved=preserved, current_dev=current_dev,
+                  task_receipts=task_receipts(R,slot,j,req['issue']),
                   archive=control['archive'], frozen=frozen, test_plan=checked,
                   archive_sha256=parked_op['result']['archive_sha256'] if action == 'resume' else None,
                   evidence_digests=state_evidence(R,slot),
@@ -361,8 +571,19 @@ def perform(req, context):
                 need(result == snapshot['qa'], 'saved QA FAIL receipt changed')
                 a.qa_result(result, snapshot['head'])
         if action == 'resume':
-            need(b.remote_dev() == snapshot['base'], 'incompatible current DEV base HOLD')
+            dev = b.remote_dev()
+            need(dev == intent['current_dev'], 'current DEV changed during control HOLD')
+            compatible_dev(b,snapshot,dev)
             need(next_stage(snapshot) is not None, 'unsupported continuation phase HOLD')
+            # Use today's actual limits and qualified route, with no reservation
+            # or charge. Every later ordinary stage revalidates again before effects.
+            from core import route, diagnosis_route
+            upcoming = next_stage(snapshot)
+            if upcoming in ('author','qa','failure_diagnosis'):
+                if upcoming == 'failure_diagnosis': diagnosis_route(s,snapshot['task'],rt.budget,req['slot'])
+                else: route(s,snapshot['task'],upcoming,
+                            req['profile'] if upcoming == 'author' else
+                            'auto' if 'qa_routes' in snapshot['task'] else 'codex',rt.budget,req['slot'])
     if snapshot.get('head'):
         full_plan = check(snapshot, dict(req, stage='publish', _task_hash=digest(snapshot['task'])), b.work)
         need(full_plan['status'] in OK, full_plan['status'])
@@ -373,8 +594,9 @@ def perform(req, context):
          'control source/evidence changed since admission')
     if action == 'resume':
         park_key = req['control']['archive']
-        archive = read(store.directory/('scheduling-'+park_key+'.json'), os.getuid(), 33554432)
-        need(digest(archive) == intent['archive_sha256'], 'parked archive seal changed')
+        archive_raw = read(store.directory/('scheduling-'+park_key+'.json'), os.getuid(), 33554432,json_data=False)
+        need(hashlib.sha256(archive_raw).hexdigest() == intent['archive_sha256'], 'parked archive seal changed')
+        archive = loads(archive_raw)
         original = archive['evidence']
         related = re.compile(r'(^|[-_])' + str(snapshot['issue']) + r'([-_.]|$)')
         need(archive['intent'] == intent['frozen'] and
@@ -400,6 +622,6 @@ def perform(req, context):
         # reconcile changes only the ROOT scheduling journal; Store remains byte intact.
     need(store.data == saved['after'], 'control postimage mismatch')
     return dict(status='confirmed', scheduling_only=True, archive=key if action == 'park' else req['control']['archive'],
-                archive_sha256=digest(saved),
+                archive_sha256=hashlib.sha256(read(transaction,os.getuid(),33554432,json_data=False)).hexdigest(),
                 next_stage=next_stage(snapshot) if action == 'resume' else None,
                 test_plan=intent['test_plan'])

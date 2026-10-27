@@ -22,6 +22,7 @@ PINS = {'autonomous_issues.py': '7f266bca6c6fa2f9b023b9c76c238bb1c12d27f4ddb4d0b
         'check_foundation.py': 'c2975b19bd46d00acbdbc08227545b8f9c9501d7b8e8783e9b397751c612bd13'}
 RECOVERY_STAGES = ('diagnose', 'task_review')
 CONTROL_STAGES = ('park', 'resume', 'reconcile')
+CONTROL_CAPABILITY = 'scheduling-exact-outcome-v1'
 STAGES = ('failure_diagnosis', 'claim', 'author', 'publish', 'qa', 'ci', 'integrate', 'promote', 'dev', 'qa_qualification') + RECOVERY_STAGES
 PROFILES = ('auto', 'codex', 'cursor', 'agy')
 SHA = re.compile('[0-9a-f]{40}')
@@ -186,7 +187,10 @@ class API:
 def request(value):
     need(isinstance(value, dict) and value.get('action') == 'train', 'invalid train envelope')
     if value.get('stage') == 'status':
-        need(set(value) == {'action', 'stage'}, 'unknown status fields')
+        need(set(value) in ({'action', 'stage'}, {'action', 'stage', 'slot', 'operation'}), 'unknown status fields')
+        if 'operation' in value:
+            need(value['slot'] in ('slot1', 'slot2') and isinstance(value['operation'], str)
+                 and re.fullmatch('[a-f0-9]{64}', value['operation']), 'invalid outcome query')
         return value
     if value.get('stage') == 'planning':
         from queue_diagnostics import valid_report
