@@ -23,6 +23,12 @@ vi.mock("react", async original => ({ ...await original<typeof React>(),
   },
   useRef(initial: unknown) { const i=hooks.cursor++; return hooks.slots[i] ??= { current: initial }; },
   useMemo(fn:()=>unknown,deps:unknown[]) { const i=hooks.cursor++,old=hooks.slots[i] as {deps:unknown[];value:unknown}|undefined; if(!old||deps.some((v,n)=>v!==old.deps[n]))hooks.slots[i]={deps,value:fn()};return (hooks.slots[i] as {value:unknown}).value; },
+  useCallback(fn: unknown, deps: unknown[]) {
+    const i = hooks.cursor++; const old = hooks.slots[i] as { deps: unknown[]; fn: unknown } | undefined;
+    if (!old || deps.some((v, n) => v !== old.deps[n])) hooks.slots[i] = { deps, fn };
+    return (hooks.slots[i] as { fn: unknown }).fn;
+  },
+  useContext(context: { _currentValue: unknown }) { return context._currentValue; },
   useEffect(effect:()=>void|(()=>void),deps:unknown[]) {
     const i=hooks.cursor++,old=hooks.slots[i] as unknown[]|undefined;
     if(!old||deps.some((v,n)=>v!==old[n])){hooks.slots[i]=deps;hooks.effects.push(()=>{hooks.cleanups[i]?.();hooks.cleanups[i]=effect()||(()=>{});});}

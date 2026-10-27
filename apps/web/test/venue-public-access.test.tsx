@@ -26,6 +26,14 @@ vi.mock("react", async original => {
       if (!previous || deps.some((value, n) => value !== previous.deps[n])) state.slots[index] = { deps, value: fn() };
       return (state.slots[index] as { value: unknown }).value;
     },
+    useCallback(fn: unknown, deps: unknown[]) {
+      const state = instance(), index = state.cursor++;
+      const previous = state.slots[index] as { deps: unknown[]; fn: unknown } | undefined;
+      if (!previous || deps.some((value, n) => value !== previous.deps[n])) state.slots[index] = { deps, fn };
+      return (state.slots[index] as { fn: unknown }).fn;
+    },
+    useContext(context: { _currentValue: unknown }) { return context._currentValue; },
+    useId() { const state = instance(); return `map-filter-${state.cursor++}`; },
     useEffect(effect: () => void | (() => void), deps?: unknown[]) {
       const state = instance(), index = state.cursor++, previous = state.slots[index] as unknown[] | undefined;
       if (!deps || !previous || deps.some((value, n) => value !== previous[n])) {
@@ -68,6 +76,15 @@ function render(root: React.ReactNode) {
       runtime.current = state; current().cursor = 0;
       const output = (node.type as (props: Record<string, unknown>) => React.ReactNode)(node.props);
       runtime.current = null; walk(output, key); return;
+    }
+    if (node.type && typeof node.type === "object" && ("_context" in node.type || ("Provider" in node.type && "_currentValue" in node.type))) {
+      const provider = node.type as { _context?: { _currentValue: unknown }; _currentValue?: unknown };
+    const context = provider._context ?? provider;
+      const previous = context._currentValue;
+      context._currentValue = node.props.value;
+      try { Children.toArray(node.props.children as React.ReactNode).forEach((child, index) => walk(child, `${path}/provider/${index}`)); }
+      finally { context._currentValue = previous; }
+      return;
     }
     Children.toArray(node.props.children as React.ReactNode).forEach((child, index) => walk(child, `${path}/${index}`));
   }
