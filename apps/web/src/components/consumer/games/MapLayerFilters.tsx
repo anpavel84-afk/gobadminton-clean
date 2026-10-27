@@ -126,6 +126,13 @@ export function MapLayerFiltersControls() {
     return () => window.removeEventListener("keydown", onKey, true);
   }, [open]);
 
+  function openSheet() {
+    // Sync draft from applied in the same event before paint so the first
+    // visible frame cannot show a stale draft after chip reset / Cancel.
+    setDraft(applied);
+    setOpen(true);
+  }
+
   function closeSheet() {
     setOpen(false);
     requestAnimationFrame(() => {
@@ -180,7 +187,7 @@ export function MapLayerFiltersControls() {
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-controls={open ? "gb-map-filters-sheet" : undefined}
-        onClick={() => setOpen(true)}
+        onClick={openSheet}
       >
         <SlidersGlyph />
         <span className="gb-map-filters-action__label">Фильтры</span>
