@@ -193,6 +193,7 @@ def qualification_plan(policy, card, budget):
         if recovery.reservation_path(STATE,q).exists():return None
         if recovery.grant(q):recovery.grant_ready(qualification_api(),q)
         elif recovery.successor(q):recovery.lineage_ready(qualification_api(),q)
+        budget.bind_issue(29)
         left=budget.remaining('agy','qa','slot2')
         if not recovery.grant(q) and not (type(left) is int and (left>=1 if recovery.successor(q) else left==1)):return None
         return dict(slot='slot2',issue=29,stage='qa_qualification',phase='idle',head=q['head'],
@@ -687,7 +688,7 @@ def qualification_request(req, policy):
         recovery.lineage_ready(qualification_api(),q)
     need(not path.exists(), 'QA qualification already reserved; reconcile without another call')
     _, s = live()
-    budget = s.Budget(BUDGET, AUTONOMY/'outbox', AUTONOMY/'locks/registry.lock')
+    budget = s.Budget(BUDGET, AUTONOMY/'outbox', AUTONOMY/'locks/registry.lock', issue=req['issue'])
     left = budget.remaining('agy', 'qa', slot)
     need(recovery.grant(q) or type(left) is int and (left>=1 if recovery.successor(q) else left==1),
          'QA qualification requires finite eligible daily budget')

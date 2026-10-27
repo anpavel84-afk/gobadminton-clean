@@ -471,12 +471,34 @@ def adapter_status(name, role, budget=None, slot=None, adapters=None):
 # ---------------------------------------------------------------- budgets
 class Budget:
     """Daily call budgets per provider/role (host total) AND per slot. Missing limit = UNKNOWN.
-    Each slot writes only its own ledger (outbox/<slot>/ledger.json); totals sum every ledger."""
+    Each slot writes only its own ledger (outbox/<slot>/ledger.json); totals sum every ledger.
 
-    def __init__(self, limits_path, outbox_root, registry_lock, today=None):
+    Optional AGY policy: providers.agy.per_issue_daily (positive int) caps the sum of all AGY
+    role charges for one GitHub Issue across slots in the UTC day. Requires a trusted positive
+    issue binding before remaining/charge can authorize an AGY call. Issue counters live under
+    ledger[day][agy]['issues'] and are updated atomically with the role aggregate.
+    """
+
+    _ISSUE_META = 'issues'
+    _PER_ISSUE = 'per_issue_daily'
+
+    def __init__(self, limits_path, outbox_root, registry_lock, today=None, issue=None):
         self.limits_path, self.outbox_root = Path(limits_path), Path(outbox_root)
         self.registry_lock = Path(registry_lock)
         self.today = today or (lambda: dt.datetime.now(dt.timezone.utc).date().isoformat())
+        self.issue = None
+        if issue is not None:
+            self.bind_issue(issue)
+
+    @staticmethod
+    def _require_issue(issue):
+        # bool is a subclass of int; reject it explicitly.
+        require(type(issue) is int and issue > 0, 'invalid issue id')
+        return issue
+
+    def bind_issue(self, issue):
+        self.issue = self._require_issue(issue)
+        return self
 
     def limits(self):
         try:
@@ -488,22 +510,38 @@ class Budget:
             require(isinstance(value.get(section, {}), dict), 'invalid budgets')
         return value
 
+    def per_issue_daily(self, provider):
+        """Return AGY per-issue UTC daily cap when configured; None keeps legacy provider behavior."""
+        if provider != 'agy':
+            return None
+        cell = self.limits().get('providers', {}).get('agy')
+        if not isinstance(cell, dict) or self._PER_ISSUE not in cell:
+            return None
+        value = cell[self._PER_ISSUE]
+        require(type(value) is int and value > 0 and value <= 10000, 'invalid per_issue_daily')
+        return value
+
     @staticmethod
     def _limit(table, provider, role):
-        value = (table or {}).get(provider, {}).get(role, UNKNOWN)
+        cell = (table or {}).get(provider, {}) or {}
+        if role in (Budget._PER_ISSUE, Budget._ISSUE_META):
+            return UNKNOWN
+        value = cell.get(role, UNKNOWN)
         if value is UNKNOWN:
             return UNKNOWN
         if value == 'unlimited': return float('inf')
         require(type(value) is int and 0 <= value <= 10000, 'invalid budget value')
         return value
 
+    def _slot_names(self, slot=None):
+        if not self.outbox_root.exists():
+            return []
+        return [name for name in sorted(os.listdir(self.outbox_root))
+                if SLOT_RE.fullmatch(name) and (not slot or name == slot)]
+
     def used(self, provider, role, slot=None):
         total, day = 0, self.today()
-        if not self.outbox_root.exists():
-            return 0
-        for name in sorted(os.listdir(self.outbox_root)):
-            if not SLOT_RE.fullmatch(name) or (slot and name != slot):
-                continue
+        for name in self._slot_names(slot):
             path = self.outbox_root / name / 'ledger.json'
             if not path.exists():
                 continue
@@ -512,6 +550,46 @@ class Budget:
             require(type(count) is int and count >= 0, 'invalid ledger')
             total += count
         return total
+
+    def issue_used(self, provider, issue, slot=None):
+        issue = self._require_issue(issue)
+        total, day, key = 0, self.today(), str(issue)
+        for name in self._slot_names(slot):
+            path = self.outbox_root / name / 'ledger.json'
+            if not path.exists():
+                continue
+            ledger = read_json(path)
+            issues = ledger.get(day, {}).get(provider, {}).get(self._ISSUE_META, {})
+            require(isinstance(issues, dict), 'invalid issue ledger')
+            count = issues.get(key, 0)
+            require(type(count) is int and count >= 0, 'invalid issue ledger')
+            total += count
+        return total
+
+    def _provider_role_total(self, provider, slot=None):
+        return sum(self.used(provider, role, slot) for role in ROLES)
+
+    def _provider_issue_total(self, provider, slot=None):
+        total, day = 0, self.today()
+        for name in self._slot_names(slot):
+            path = self.outbox_root / name / 'ledger.json'
+            if not path.exists():
+                continue
+            ledger = read_json(path)
+            issues = ledger.get(day, {}).get(provider, {}).get(self._ISSUE_META, {})
+            require(isinstance(issues, dict), 'invalid issue ledger')
+            for key, count in issues.items():
+                require(type(key) is str and key.isdigit() and int(key) > 0, 'invalid issue ledger key')
+                require(type(count) is int and count >= 0, 'invalid issue ledger')
+                total += count
+        return total
+
+    def unattributed(self, provider, slot=None):
+        """Same-day role aggregate minus attributed issue counters (host-wide unless slot set)."""
+        roles = self._provider_role_total(provider, slot)
+        attributed = self._provider_issue_total(provider, slot)
+        require(attributed <= roles, 'issue attribution exceeds role aggregate')
+        return roles - attributed
 
     def remaining(self, provider, role, slot=None):
         limits = self.limits()
@@ -524,11 +602,26 @@ class Budget:
             if own is UNKNOWN:
                 return UNKNOWN
             left = min(left, own - self.used(provider, role, slot))
+        cap = self.per_issue_daily(provider)
+        if cap is not None:
+            # Policy active: never authorize AGY without a trusted issue binding.
+            if self.issue is None:
+                return UNKNOWN
+            if self.unattributed(provider) != 0:
+                return UNKNOWN
+            left = min(left, cap - self.issue_used(provider, self.issue))
         return left
 
-    def charge(self, slot, provider, role):
+    def charge(self, slot, provider, role, issue=None):
         with _Flock(self.registry_lock):
-            left = self.remaining(provider, role, slot)
+            cap = self.per_issue_daily(provider)
+            bound = self.issue if issue is None else self._require_issue(issue)
+            if cap is not None:
+                require(bound is not None, f'{provider} {role} charge requires trusted issue')
+                require(self.unattributed(provider) == 0,
+                        f'{provider} unattributed same-day usage; seed issue attribution under registry lock')
+            left = self.remaining(provider, role, slot) if issue is None else self._remaining_with_issue(
+                provider, role, slot, bound)
             require(left is not UNKNOWN, f'{provider} {role} quota UNKNOWN; refusing model call')
             require(left > 0, f'{provider} {role} daily budget exhausted')
             path = self.outbox_root / slot / 'ledger.json'
@@ -554,6 +647,10 @@ class Budget:
                     Path(tmp).unlink(missing_ok=True)
             cell = ledger.setdefault(day, {}).setdefault(provider, {})
             cell[role] = cell.get(role, 0) + 1
+            if cap is not None:
+                issues = cell.setdefault(self._ISSUE_META, {})
+                key = str(bound)
+                issues[key] = issues.get(key, 0) + 1
             try:
                 atomic(path, ledger, 0o644)
             except Exception:
@@ -563,6 +660,64 @@ class Budget:
                     path.unlink(missing_ok=True)
                 raise
             return left - 1
+
+    def _remaining_with_issue(self, provider, role, slot, issue):
+        """remaining() using an explicit issue without mutating self.issue (charge kwarg path)."""
+        previous, self.issue = self.issue, issue
+        try:
+            return self.remaining(provider, role, slot)
+        finally:
+            self.issue = previous
+
+    def seed_issue_attribution(self, slot, provider, issue, count):
+        """OPS additive seed under registry lock: set issue counter without changing role aggregates.
+
+        Fails closed unless count equals current unattributed host-wide total for provider today
+        (or is a no-op equal to the existing counter). Does not refund or rewrite role history.
+        """
+        issue = self._require_issue(issue)
+        require(type(count) is int and count >= 0, 'invalid seed count')
+        require(SLOT_RE.fullmatch(slot or ''), 'invalid slot name')
+        require(provider == 'agy', 'issue attribution seed is AGY-only')
+        with _Flock(self.registry_lock):
+            current = self.issue_used(provider, issue)
+            if current == count:
+                return count
+            gap = self.unattributed(provider)
+            require(current == 0 and count == gap and gap > 0,
+                    'seed must attribute exact unattributed same-day total once')
+            path = self.outbox_root / slot / 'ledger.json'
+            existed = path.exists()
+            ledger = read_json(path) if existed else {}
+            day = self.today()
+            backup = path.with_name('ledger.json.bak')
+            if existed:
+                fd, tmp = tempfile.mkstemp(prefix='.ledger-', dir=path.parent)
+                os.close(fd)
+                try:
+                    os.unlink(tmp)
+                    os.link(path, tmp, follow_symlinks=False)
+                    os.replace(tmp, backup)
+                    directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+                    try:
+                        os.fsync(directory)
+                    finally:
+                        os.close(directory)
+                finally:
+                    Path(tmp).unlink(missing_ok=True)
+            cell = ledger.setdefault(day, {}).setdefault(provider, {})
+            issues = cell.setdefault(self._ISSUE_META, {})
+            issues[str(issue)] = count
+            try:
+                atomic(path, ledger, 0o644)
+            except Exception:
+                if existed:
+                    os.replace(backup, path)
+                else:
+                    path.unlink(missing_ok=True)
+                raise
+            require(self.unattributed(provider) == 0, 'seed left unattributed usage')
+            return count
 
 
 # ---------------------------------------------------------------- runtime (executor side)

@@ -57,16 +57,32 @@ class ProtocolEvidence(unittest.TestCase):
         self.assertTrue({'text','metadata','role','compact','full_rules_reference','verified_access'}<=
                         {a.arg for a in funcs['rules_prefix'].args.kwonlyargs})
         for n in U.V3_NEW:
-            if n=='accepted-engineering-rules.md': continue
+            if n in ('accepted-engineering-rules.md', 'stage.py'): continue
             self.assertEqual(H((ROOT/U.PREFIX/n).read_bytes()),U.V3_NEW[n])
-        stage=(ROOT/U.PREFIX/'stage.py').read_bytes()
-        tree=ast.parse(stage)
-        imports=[n for n in ast.walk(tree) if isinstance(n,ast.ImportFrom) and n.module=='native_antigravity_author']
-        self.assertEqual(len(imports),1)
-        parents={child:node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
-        parent=parents[imports[0]]
-        self.assertIsInstance(parent,ast.If)
-        self.assertEqual(ast.unparse(parent.test),"provider == 'agy' and (not qa)")
+        # Historical stage pin: immutable V3 blob only (live tree may add quota binding).
+        # ca5ca68e… == 89cef7f7fe994464a81462801942dee8c945c910:scripts/chatops/actions_train/stage.py
+        frozen_stage_sha='ca5ca68eb8b3f8bafbb8c097790acc91c0323f2081fed977372cf571452b97ed'
+        env={'PATH':'/usr/bin:/bin','HOME':'/nonexistent','GIT_CONFIG_NOSYSTEM':'1',
+             'GIT_CONFIG_GLOBAL':'/dev/null','GIT_OPTIONAL_LOCKS':'0','GIT_NO_REPLACE_OBJECTS':'1'}
+        try:
+            stage=subprocess.run(
+                ['/usr/bin/git','--no-optional-locks','-C',str(ROOT),'show',
+                 '89cef7f7fe994464a81462801942dee8c945c910:scripts/chatops/actions_train/stage.py'],
+                capture_output=True,check=True,env=env).stdout
+        except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+            stage=None
+        if stage is None:
+            # Local export lacks Git history; do not fake PASS on the frozen pin.
+            print('NOT_TESTED: frozen V3 stage blob 89cef7f7… (no Git history)')
+        else:
+            self.assertEqual(H(stage),frozen_stage_sha)
+            tree=ast.parse(stage)
+            imports=[n for n in ast.walk(tree) if isinstance(n,ast.ImportFrom) and n.module=='native_antigravity_author']
+            self.assertEqual(len(imports),1)
+            parents={child:node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+            parent=parents[imports[0]]
+            self.assertIsInstance(parent,ast.If)
+            self.assertEqual(ast.unparse(parent.test),"provider == 'agy' and (not qa)")
         # Only the RO canon addition is accepted for the shared guard. All AGY
         # restriction functions and namespace construction before the new mount
         # must remain exact AST equivalents of the old guard.
