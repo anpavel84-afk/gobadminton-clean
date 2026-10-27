@@ -29,7 +29,8 @@ class Stage5Install(unittest.TestCase):
         env={'PATH':'/usr/bin:/bin','HOME':str(self.p),'GIT_CONFIG_NOSYSTEM':'1',
              'GIT_CONFIG_GLOBAL':'/dev/null','GIT_CONFIG_SYSTEM':'/dev/null','LC_ALL':'C'}
         return subprocess.run(['/usr/bin/git','-C',str(self.bundle),'-c','user.name=Fixture',
-            '-c','user.email=fixture@example.invalid',*args],env=env,stdin=subprocess.DEVNULL,
+            '-c','user.email=fixture@example.invalid','-c','gc.auto=0',
+            '-c','maintenance.auto=false',*args],env=env,stdin=subprocess.DEVNULL,
             capture_output=True,check=True).stdout.decode().strip()
 
     def setUp(self):
@@ -135,6 +136,52 @@ class Stage5Install(unittest.TestCase):
         self.assertFalse((self.install/'context_cursor_delivery.py').exists());self.assertEqual(snapshot,U.preserved())
         self.assertEqual(self.policy.read_bytes(),oldpolicy)
         with self.assertRaises(core.Refused): self.call('apply')
+
+    def test_full_snapshot_survives_git_auto_gc_threshold(self):
+        # Git samples objects/17 for automatic GC. Reach its default threshold
+        # with real tracked blobs, then commit during a full filesystem snapshot.
+        # Automatic maintenance must not race the fixture's snapshot/cleanup.
+        picked=[]
+        for number in range(20000):
+            raw=('snapshot regression blob %d\n'%number).encode()
+            oid=hashlib.sha1(b'blob '+str(len(raw)).encode()+b'\0'+raw).hexdigest()
+            if oid.startswith('17'):
+                (self.bundle/('gc-probe-'+str(number))).write_bytes(raw)
+                picked.append(oid)
+                if len(picked)==28: break
+        self.assertEqual(len(picked),28)
+        self.git('add','.')
+        target=self.bundle/'.git/objects'/picked[0][:2]/picked[0][2:]
+        self.assertTrue(target.is_file())
+        original_read=Path.read_bytes;committed=False
+        def interleave(path):
+            nonlocal committed
+            if path==target and not committed:
+                committed=True
+                # Make an accidental GC synchronous, so the unprotected helper
+                # deterministically loses the loose object before this read.
+                self.git('-c','gc.autoDetach=false','-c','maintenance.autoDetach=false',
+                         'commit','-m','Snapshot regression GC threshold')
+            return original_read(path)
+        with patch.object(Path,'read_bytes',interleave): self.files()
+        self.assertTrue(committed)
+        # Confirm every seeded object is still loose and captured. Skipping .git
+        # or swallowing vanished-file errors cannot satisfy this regression.
+        snapshot=self.files()
+        self.assertEqual(snapshot,self.files())
+        for oid in picked:
+            object_path=self.bundle/'.git/objects'/oid[:2]/oid[2:]
+            self.assertIn(str(object_path.relative_to(self.p)),snapshot)
+        self.assertFalse(list((self.bundle/'.git/objects/pack').glob('*.pack')))
+        for path in (self.bundle/'.git/config',self.policy,self.inventory,
+                     self.install/'stage.py',self.state/'slot1.json'):
+            with self.subTest(path=str(path.relative_to(self.p))):
+                raw=path.read_bytes()
+                try:
+                    path.write_bytes(raw+b'\nregression drift')
+                    self.assertNotEqual(snapshot,self.files())
+                finally: path.write_bytes(raw)
+                self.assertEqual(snapshot,self.files())
 
     def test_stale_installed_rules_pin_refused_before_effects(self):
         self.rules.write_bytes(b'old rules')
