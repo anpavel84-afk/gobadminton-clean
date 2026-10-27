@@ -1903,9 +1903,8 @@ def parse_stream(raw, head, model=MODEL, *, analysis_binding=None, strict_source
             name, index = step.get('tool_name'), step.get('step_index')
             need(isinstance(name, str) and name in tools and type(index) is int and index >= 0,
                  'unadvertised or unidentified tool')
-            if analysis_binding is not None:
-                need(all(i != index or n == name for i,n in tool_steps), 'tool identity changed')
-                need(tool_steps.get((index,name)) != 'DONE' or step['state']=='DONE', 'tool reopened')
+            need(all(i != index or n == name for i,n in tool_steps), 'tool identity changed')
+            need(tool_steps.get((index,name)) != 'DONE' or step['state']=='DONE', 'tool reopened')
             tool_steps[(index, name)] = step['state']; tool_names.add(name)
         inference |= step.get('step_type') == 'agent_response' and step.get('state') == 'DONE'
         finish |= step.get('step_type') == 'finish' and step.get('state') == 'DONE'
