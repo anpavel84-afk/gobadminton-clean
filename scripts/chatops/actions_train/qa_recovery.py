@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 from core import digest, need, loads, Refused
+from test_plan_gate import OK, stage_check
 
 
 def safe_pending(j, state, alive):
@@ -12,6 +13,9 @@ def safe_pending(j, state, alive):
     op = j.get('operations', {}).get(key, {})
     b = op.get('binding', {})
     a = state.get('active') or {}
+    plan = op.get('result', {}).get('test_plan')
+    if isinstance(plan, dict) and plan.get('status') not in OK:
+        return False  # deterministic gate refusal is not a stopped model failure
     return bool(key and b.get('stage') == 'qa' and op.get('result', {}).get('status') == 'unknown'
         and op.get('finished_at') and not alive(op.get('process'))
         and op.get('after') == digest(state) and a.get('phase') in ('pr_wait','qa')
@@ -83,6 +87,8 @@ def reconcile(a, b, rt, store, req):
          and active['attempt'] == req['attempt'] and active['phase'] in ('pr_wait','qa'),
          'read-only QA recovery checkpoint mismatch')
     b.unchanged_issue(active)
+    plan = stage_check(req, active, b)
+    need(plan and plan['status'] in OK, plan['status'] if plan else 'MISSING_TEST_PLAN')
     b.candidate_identity(active)
     primary = b.c.state_dir / f'qa-{active["issue"]}-a{active["attempt"]}{a.integ(active)}.json'
     if primary.exists():

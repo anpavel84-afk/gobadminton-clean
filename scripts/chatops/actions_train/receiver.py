@@ -13,6 +13,7 @@ import time
 from types import SimpleNamespace
 from core import HERE, Refused, binding, digest, live, loads, need, request
 import qa_recovery
+from test_plan_gate import OK as PLAN_OK, STAGES as PLAN_STAGES, check as plan_check, claim_check
 
 POLICY = Path('/etc/gobadminton-actions-train/policy.json')
 STATE = Path('/var/lib/gobadminton-actions-train')
@@ -755,6 +756,11 @@ def handle(req, policy):
             if req['stage']=='qa':
                 from qa_recovery import safe_pending
                 need(safe_pending(j,checkpoint(slot)[0],alive),'unknown QA state changed; no model replay')
+            if req['stage'] in PLAN_STAGES:
+                current = checkpoint(slot)[0]['active']
+                checked = plan_check(current, dict(req, _task_hash=op.get('task_hash')),
+                                     structural_only=True)
+                need(checked['status'] in PLAN_OK, checked['status'])
             guard(slot, policy)
             # Only read/reconcile remote identity. Never replay an uncertain side effect.
             req['_recover'] = True
@@ -778,7 +784,7 @@ def handle(req, policy):
     need(not j['pending'], 'slot operation already pending')
     need(req['generation'] == j['generation'], 'stale generation')
     user = guard(slot, policy)
-    profiles = j.setdefault('profiles', {})
+    profiles = j.get('profiles', {})
     chosen = profiles.get(str(req['issue']))
     need(chosen is None or chosen == req['profile'], 'claimed routing profile changed')
     state, _ = checkpoint(slot)
@@ -797,6 +803,7 @@ def handle(req, policy):
     other_reservation = (other_journal['operations'][other_journal['pending']].get('record')
                          if other_journal['pending'] else None)
     recovery_admission = None
+    recovery_cache = None
     if req['stage'] == 'claim':
         from core import API, SINCE
         import datetime as dt
@@ -810,8 +817,11 @@ def handle(req, policy):
             cache = recovery_journal()
             recovery_admission = root_admission(a, api, cache, issue, policy, verification=verified_slot_qa)
             candidates = [(issue['number'], recovery_admission['task'])]
-            atomic(STATE / 'recovery.json', cache)
-        need(len(candidates) == 1, 'no exact unique Owner or reviewed delegated task')
+            recovery_cache = cache
+        need(len(candidates) == 1 and candidates[0][0] == req['issue'], 'no exact unique Owner or reviewed delegated task')
+        checked = claim_check(candidates[0][1], req,
+                              seed=recovery_admission['frozen'] if recovery_admission else None)
+        need(checked['status'] in PLAN_OK, checked['status'])
         record = s.task_record(*candidates[0])
         task_hash = digest(candidates[0][1])
         completed = set(state['done']) | set(other_state['done'])
@@ -829,10 +839,16 @@ def handle(req, policy):
             cache = recovery_journal()
             recovery_admission = root_admission(a, api, cache, api(f'issues/{active["issue"]}'), policy, verification=verified_slot_qa)
             need(recovery_admission['key'] == active['recovery_receipt'], 'wrong active recovery receipt')
+        if req['stage'] in PLAN_STAGES:
+            checked = plan_check(active, dict(req, _task_hash=task_hash), structural_only=True)
+            need(checked['status'] in PLAN_OK, checked['status'])
     if other_active and other_active['phase'] != 'done':
         need(not s.conflicts(record, s.task_record(other_active['issue'], other_active['task'])), 'overlapping source slots')
     if other_reservation:
         need(not s.conflicts(record, other_reservation), 'overlapping pending claim')
+    # No cache/profile/counter/reservation persistence before the pure plan check.
+    if recovery_cache is not None:
+        atomic(STATE / 'recovery.json', recovery_cache)
     counts = j.setdefault('stage_counts', {})
     if key not in j['operations']:
         need(counts.get(str(req['issue']), 0) < 128, 'stage generation bound exhausted')
@@ -853,6 +869,7 @@ def handle(req, policy):
               started_at=int(time.time()), process=None, read_attempts=j['operations'].get(key, {}).get('read_attempts', 0) + 1)
     if recovery_admission: op['recovery_admission'] = recovery_admission
     profiles[str(req['issue'])] = req['profile']
+    j['profiles'] = profiles
     j['operations'][key] = op
     j['pending'] = key
     atomic(STATE / (slot + '.json'), j)  # pending BEFORE any process or effect

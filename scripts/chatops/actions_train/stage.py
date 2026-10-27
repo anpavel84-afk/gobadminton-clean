@@ -7,7 +7,8 @@ from pathlib import Path
 from types import SimpleNamespace
 import urllib.parse
 from core import API, Refused, Retry, SINCE, live, need, route
-from test_plan_gate import OK, guidance as test_guidance, stage_check as test_plan_check
+from test_plan_gate import (OK, claim_check, guidance as test_guidance,
+                            stage_check as test_plan_check)
 
 
 def setup(req, config, native_auth=None):
@@ -81,12 +82,12 @@ def setup(req, config, native_auth=None):
     bridge.routing_receipts = []
     original_model = bridge.model
     def measured_model(prompt, qa=False):
-        effect_gate()
         if req['stage'] in ('author', 'qa'):
             test_receipt = test_plan_check(req, store.data['active'], bridge)
             need(test_receipt['status'] in OK, test_receipt['status'])
             addition = test_guidance(test_receipt)
             if addition: prompt += '\n' + addition
+        effect_gate()
         from failure_diagnosis import enabled
         if req['stage'] == 'failure_diagnosis' or (req['stage'] == 'diagnose'
                 and enabled(store.data['active'])):
@@ -292,11 +293,11 @@ def perform(req, config, context):
     metadata = {}
     if req.get('_recover'):
         need(active and active['issue'] == req['issue'], 'recovery task mismatch')
-        rt.lease(active)
         b.work = b.c.worktrees_root / f'issue-{active["issue"]}'
         b.unchanged_issue(active)
         metadata['test_plan'] = test_plan_check(req, active, b)
         if metadata['test_plan']: need(metadata['test_plan']['status'] in OK, metadata['test_plan']['status'])
+        rt.lease(active)
         if stage == 'qa':
             from qa_recovery import reconcile
             return reconcile(a,b,rt,store,req)
@@ -333,6 +334,24 @@ def perform(req, config, context):
         need(not active or active['phase'] == 'done', 'slot occupied')
         issue = api(f'issues/{req["issue"]}')
         comments = api.pages(f'issues/{req["issue"]}/comments')
+        since = dt.datetime.fromisoformat(SINCE)
+        candidates = s.admitted(a, [issue], comments, since)
+        need(issue['number'] == req['issue'], 'claim issue mismatch')
+        if req.get('_recovery_admission'):
+            cert = req['_recovery_admission']
+            need(not candidates and cert['issue'] == req['issue'], 'ambiguous delegated claim')
+            need(__import__('core').digest(cert['frozen']) == cert['key'],
+                 'recovery certificate frozen digest mismatch')
+            task, seed = cert['task'], cert['frozen']
+        else:
+            need(len(candidates) == 1 and candidates[0][0] == req['issue'],
+                 'no unique immutable task admission')
+            task, seed = candidates[0][1], None
+        # Same authenticated immutable batch as the real Store below, under its
+        # worker lock. No temporary Store/save override or compensating delete.
+        b.test_plan = claim_check(task, req, seed=seed)
+        metadata['test_plan'] = b.test_plan
+        need(b.test_plan['status'] in OK, b.test_plan['status'])
         if req.get('_recovery_admission'):
             from recovery_admission import claim
             active = claim(a, api, store, req['_recovery_admission'], config)
@@ -341,7 +360,7 @@ def perform(req, config, context):
             if inherited:
                 store.phase(active['phase'], failure_diagnosis=json.loads(json.dumps(inherited)))
         else:
-            active = store.claim([issue], dt.datetime.fromisoformat(SINCE), comments)
+            active = store.claim([issue], since, comments)
         need(active and active['issue'] == req['issue'], 'no unique immutable task admission')
         need(not req.get('_task_hash') or __import__('core').digest(active['task']) == req['_task_hash'],
              'task changed between admission and claim')
@@ -379,13 +398,13 @@ def perform(req, config, context):
     else:
         need(active and active['issue'] == req['issue'] and active['phase'] == req['phase']
              and active.get('head') == req['head'] and active['attempt'] == req['attempt'], 'stale checkpoint')
-        rt.lease(active)
         b.work = b.c.worktrees_root / f'issue-{active["issue"]}'
         b.unchanged_issue(active)
         test_receipt = test_plan_check(req, active, b)
         if test_receipt:
             metadata['test_plan'] = test_receipt
             need(test_receipt['status'] in OK, test_receipt['status'])
+        rt.lease(active)
         if stage == 'failure_diagnosis':
             from failure_diagnosis import perform as diagnose
             return diagnose(context)

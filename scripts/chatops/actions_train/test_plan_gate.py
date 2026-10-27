@@ -20,7 +20,7 @@ PINS = {
 # Single status policy for guidance and evidence consumers. No cache is evidence.
 STATUSES = {s: (s == 'PASS') for s in
             ('PASS', 'FAIL', 'NOT_TESTED', 'ENV_ERROR', 'TIMEOUT', 'UNKNOWN')}
-OK = {'OK', 'OVER_DECLARED', 'LEGACY_RECOVERY'}
+OK = {'OK', 'OVER_DECLARED'}
 STAGES = {'claim', 'author', 'publish', 'qa', 'promote'}
 
 
@@ -97,7 +97,17 @@ def evidence_passes(evidence, *, head, fingerprint):
             and evidence.get('pending') is False and evidence.get('cached') is False)
 
 
-def check(active, request, repo=None, previous=None):
+def claim_check(task, request, *, seed=None, previous=None):
+    """Pure preview, not a claim/checkpoint. A wire claim describes an idle slot.
+
+    The existing delegated certificate supplies the candidate base/head separately;
+    it does not supply TEST PLAN policy provenance or a legacy exemption.
+    """
+    return check(dict(task=task, base=(seed or {}).get('base'),
+                      head=(seed or {}).get('head')), request, previous=previous)
+
+
+def check(active, request, repo=None, previous=None, *, structural_only=False):
     """Re-derive from admitted acceptance and immutable base..head, never a cache.
 
     _task_hash / recovery keys are receiver-owned internal fields, not wire or
@@ -112,34 +122,46 @@ def check(active, request, repo=None, previous=None):
     try:
         block, classifier, verifier = trusted_tools()
         task = active['task']
+        receipt['task_sha256'] = digest(task)
         if request.get('_task_hash') and request['_task_hash'] != digest(task):
             raise GateError('PLAN_SWAPPED')
-        if (request.get('head', active.get('head')) != active.get('head')
+        if request['stage'] == 'claim':
+            # None is the idle wire identity, never the delegated candidate head.
+            if request.get('head') is not None or request.get('attempt', 0) != 0:
+                raise GateError('HEAD_MISMATCH')
+        elif (request.get('head', active.get('head')) != active.get('head')
                 or request.get('base', active.get('base')) != active.get('base')):
             raise GateError('HEAD_MISMATCH')
+        if previous:
+            if previous.get('testing_pins_digest') != receipt['testing_pins_digest']:
+                raise GateError('TESTING_PIN_MISMATCH')
+            if (previous.get('base'), previous.get('head')) != (receipt['base'], receipt['head']):
+                raise GateError('HEAD_MISMATCH')
+            if previous.get('task_sha256') != receipt['task_sha256']:
+                raise GateError('PLAN_SWAPPED')
         acceptance = task.get('acceptance', '')
         if not isinstance(acceptance, str):
             raise GateError('BAD_FIELD')
         try:
             plan = block.parse(acceptance)
         except block.PlanError as exc:
-            if exc.code == 'MISSING_TEST_PLAN' and (
-                    request.get('_recover') or request.get('_recovery_admission')
-                    or active.get('recovery_receipt')):
-                receipt['status'] = 'LEGACY_RECOVERY'
-                return receipt
+            if exc.code == 'MISSING_TEST_PLAN':
+                # No supported input here proves the admission's legacy plan-policy
+                # provenance and exact continued operation. Never invent a cutover
+                # from cost EPOCH, schema, dates, recovery flags or receipt IDs.
+                receipt['legacy_proof'] = 'MISSING_LEGACY_OPERATION_PROOF'
+                if previous and previous.get('plan_sha256'):
+                    raise GateError('PLAN_SWAPPED') from exc
             raise GateError(exc.code) from exc
         receipt.update(tier=plan['tier'], plan_sha256=digest(plan),
                        visual_qa_required=plan['visual_qa'], required_groups=plan['groups'])
         if previous:
             if previous['plan_sha256'] != receipt['plan_sha256']:
                 raise GateError('PLAN_SWAPPED')
-            if previous['testing_pins_digest'] != receipt['testing_pins_digest']:
-                raise GateError('TESTING_PIN_MISMATCH')
-            if (previous['base'], previous['head']) != (receipt['base'], receipt['head']):
-                raise GateError('HEAD_MISMATCH')
         required = set(classifier.STRICT_GROUPS) if plan['tier'] == 'T3' else set()
-        if request['stage'] in {'publish', 'qa', 'promote'}:
+        # Root preflight reads only task DATA; the slot worker derives the full
+        # immutable diff before lease/model/effects. Never run candidate Git as root.
+        if not structural_only and request['stage'] in {'publish', 'qa', 'promote'}:
             if not all(re.fullmatch(r'[0-9a-f]{40}', receipt[k] or '') for k in ('base', 'head')):
                 raise GateError('HEAD_MISMATCH')
             changes = verifier.diff_changes(receipt['base'], receipt['head'], repo)
