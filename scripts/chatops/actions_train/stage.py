@@ -627,6 +627,9 @@ def entry(req, config, native_auth=None):
     context = None
     try:
         context = setup(req, config, native_auth=native_auth)
+        if req['stage'] in ('park', 'resume', 'reconcile'):
+            from scheduling_control import perform as scheduling_perform
+            return scheduling_perform(req, context)
         if req['stage'] == 'qa_qualification':
             return qualify_qa(req, config, context)
         if req['stage'] in ('diagnose', 'task_review'):
@@ -673,7 +676,7 @@ def entry(req, config, native_auth=None):
                     safe = True
                 except Exception:
                     pass
-        uncertain = context and not safe and (req['stage'] in ('author', 'qa', 'qa_qualification', 'publish', 'integrate', 'promote', 'failure_diagnosis'))
+        uncertain = context and not safe and (req['stage'] in ('author', 'qa', 'qa_qualification', 'publish', 'integrate', 'promote', 'failure_diagnosis', 'park', 'resume', 'reconcile'))
         return model_receipt(dict(status='unknown' if uncertain else 'deferred', reason=reason, safe_release=safe), context)
 
 

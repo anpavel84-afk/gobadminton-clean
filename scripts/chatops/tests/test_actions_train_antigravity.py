@@ -71,7 +71,7 @@ class EvidenceTestCase(unittest.TestCase):
 class Protocol(EvidenceTestCase):
     def test_real_envelope_uses_structured_output_and_effective_receipts(self):
         events = rows()
-        events[-1]['result']['response'] = 'noncanonical prose is never a verdict'
+        events[-1]['result']['response'] = 'Review complete; no additional issues.'
         result, receipt = N.parse_stream(wire(events), SHA)
         self.assertEqual(result, {'verdict': 'PASS', 'findings': [], 'reviewed_sha': SHA})
         self.assertEqual(receipt['effective_model'], 'claude-sonnet-5-5-medium')
@@ -79,6 +79,15 @@ class Protocol(EvidenceTestCase):
         self.assertEqual(receipt['effective_permission_mode'], 'always-proceed')
         self.assertEqual(receipt['transcript_sha256'], hashlib.sha256(wire(events)).hexdigest())
         self.assertEqual(receipt['tool_events'], 0)
+
+    def test_structured_output_does_not_bypass_reserved_verdict_fragment(self):
+        events = rows()
+        # The whole-response contract rejects unparsed "verdict" fragments,
+        # even in prose. The receipt test above uses ordinary unmarked prose.
+        events[-1]['result']['response'] = 'noncanonical prose is never a verdict'
+        with self.assertRaises(N.ReviewError) as caught:
+            N.parse_stream(wire(events), SHA)
+        self.assertEqual(caught.exception.code, 'AGY_PARSE_FAILED')
 
     def test_denied_or_successful_tool_is_rejected_despite_terminal_success(self):
         for state in ('ACTIVE', 'ERROR'):

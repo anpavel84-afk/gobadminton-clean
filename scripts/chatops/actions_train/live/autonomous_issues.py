@@ -560,9 +560,14 @@ class Store:
     def park(self, entry):
         """Checkpoint order: Owner/policy archive first, then state. Idempotent across a crash."""
         active = self.data['active']
-        require(active and active['phase'] == 'blocked' and active['issue'] == entry['issue'],
+        scheduling = entry.get('kind') == 'scheduling'
+        require(active and (active['phase'] == 'blocked' or (
+                    scheduling and active['phase'] != 'done' and entry.get('snapshot') == active
+                    and re.fullmatch(r'[0-9a-f]{64}', entry.get('scheduling_key', ''))))
+                and active['issue'] == entry['issue'],
                 'nothing to park')
-        same = [e for e in self.parked if e['issue'] == entry['issue']]
+        same = [e for e in self.parked if e['issue'] == entry['issue'] and (
+            not scheduling or e.get('scheduling_key') == entry.get('scheduling_key'))]
         if same:
             require(same == [entry], 'different parked entry exists; reconcile')
         else:
@@ -581,6 +586,20 @@ class Store:
         if entry.get('kind') == 'policy':
             event.update(phase='deferred', reason=entry['reason'], policy=entry['policy']['sha256'])
         print(json.dumps(event), flush=True)
+
+    def restore_scheduling(self, snapshot, archive):
+        """Restore an exact parked phase. No author call, budget or history mutation.
+
+        The trusted receiver and stage validate fresh authority/source under their
+        locks first. Keep the archive immutable and discoverable after restoration.
+        """
+        require(not self.data['active'] or self.data['active']['phase'] == 'done', 'slot occupied')
+        require(snapshot['issue'] not in self.data['done'], 'accepted task cannot be restored')
+        entries = [e for e in self.parked if e.get('kind') == 'scheduling'
+                   and e.get('scheduling_key') == archive and e.get('snapshot') == snapshot]
+        require(len(entries) == 1, 'no exact scheduling archive')
+        self.data['active'] = json.loads(json.dumps(snapshot))
+        self.save()
 
     def phase(self, phase, **fields):
         require(phase in PHASES, 'unknown phase')
@@ -923,17 +942,21 @@ class Bridge:
             allowed = (READ_REMOTE, WRITE_REMOTE) + (('/srv/gb-slots/base.git',) if _SLOTS is not None else ())
             require(len(urls) == 1 and urls[0] in allowed, 'Git remote changed')
 
-    def candidate_identity(self, active):
+    def candidate_identity(self, active, *, detached_store=False):
         """Policy gates use the pinned repository, exact branch and a clean stopped writer."""
-        self.stopped_writer(active['head'])
+        if detached_store:
+            self.stopped_writer(active['head'], issue=active['issue'])
+        else:
+            self.stopped_writer(active['head'])
         ref = f'refs/heads/automation/issue-{active["issue"]}'
         require(self.git('ls-remote', '--heads', READ_REMOTE, ref) == active['head'] + '\t' + ref,
                 'remote candidate branch differs from checkpoint')
         require(self.git('merge-base', active['base'], active['head'], cwd=self.work) == active['base'],
                 'candidate history changed')
 
-    def stopped_writer(self, head):
-        self.clean(head)
+    def stopped_writer(self, head, *, issue=None):
+        if issue is None: self.clean(head)
+        else: self.clean(head, issue=issue)
         for marker in ('MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'rebase-merge', 'rebase-apply', 'sequencer'):
             path = self.git('rev-parse', '--path-format=absolute', '--git-path', marker, cwd=self.work)
             require(not os.path.lexists(path), 'unfinished Git mutation; refusing continuity')
@@ -976,10 +999,11 @@ class Bridge:
                     'competing authorization after claim')
 
 
-    def clean(self, sha):
+    def clean(self, sha, *, issue=None):
+        number = self.store.data['active']['issue'] if issue is None else issue
         require(self.git('rev-parse', 'HEAD', cwd=self.work) == sha
                 and self.git('symbolic-ref', '--short', 'HEAD', cwd=self.work)
-                == f'automation/issue-{self.store.data["active"]["issue"]}'
+                == f'automation/issue-{number}'
                 and not self.git('status', '--porcelain=v1', '--untracked-files=all', cwd=self.work),
                 'dirty worktree, branch or HEAD mismatch')
 

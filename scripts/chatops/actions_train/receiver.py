@@ -23,7 +23,7 @@ GROUP = 65042
 UNITS = ('gobadminton-supervisor.service', 'gobadminton-slot@slot1.service', 'gobadminton-slot@slot2.service')
 
 
-def read(path, owner=None, limit=2097152):
+def read(path, owner=None, limit=2097152, *, snapshot=False, json_data=True):
     """No symlink components, bounded regular file; do not trust slot-owned metadata as code."""
     path = Path(path)
     fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
@@ -38,7 +38,13 @@ def read(path, owner=None, limit=2097152):
         need(owner is None or info.st_uid == owner, 'metadata owner mismatch')
         raw = os.read(fd, limit + 1)
         need(len(raw) <= limit, 'metadata too large')
-        return loads(raw)
+        value = loads(raw) if json_data else None
+        if snapshot:
+            import hashlib
+            return dict(value=value, uid=info.st_uid, gid=info.st_gid,
+                        mode=stat.S_IMODE(info.st_mode), size=info.st_size,
+                        sha256=hashlib.sha256(raw).hexdigest())
+        return value if json_data else raw
     finally:
         os.close(fd)
 
@@ -67,8 +73,8 @@ def atomic(path, value, mode=0o600):
         tmp.unlink(missing_ok=True)
 
 
-def locked(path):
-    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+def locked(path, *, create=True):
+    fd = os.open(path, os.O_RDWR | (os.O_CREAT if create else 0) | os.O_NOFOLLOW, 0o600)
     fcntl.flock(fd, fcntl.LOCK_EX)
     return fd
 
@@ -203,7 +209,9 @@ def qualification_plan(policy, card, budget):
 
 
 def snapshot(policy):
-    result = dict(schema='GB_ACTIONS_TRAIN_V1', mode=policy['mode'], slots={})
+    from core import CONTROL_CAPABILITY
+    result = dict(schema='GB_ACTIONS_TRAIN_V1', mode=policy['mode'], slots={},
+                  capabilities=[CONTROL_CAPABILITY], controller_sha=policy['controller_sha'])
     try: planning = read(STATE / 'planning.json', 0, 65536)
     except FileNotFoundError: planning = None
     a, s = live()
@@ -321,9 +329,13 @@ def supervisor(req, policy, key, root_lock):
     atomic(STATE / (slot + '.json'), j)
     os.close(lock)
     r, w = os.pipe()
+    # Separate root-only observation channel. Closed BEFORE the UID drop;
+    # candidate/worker output cannot manufacture external-effect absence.
+    proof_r, proof_w = os.pipe()
     pid = os.fork()
     if pid == 0:
         os.close(r)
+        os.close(proof_r)
         try:
             # Recheck immediately before dropping privilege. Root never imports candidate code.
             user = guard(slot, policy)
@@ -340,6 +352,8 @@ def supervisor(req, policy, key, root_lock):
                     if selected['provider'] == 'cursor':
                         from native_cursor import existing_auth_for_stage
                         native_auth = existing_auth_for_stage(slot,digest(active['task']))
+            os.close(proof_w)
+            proof_w = None
             os.setgroups([GROUP])
             os.setgid(user.pw_gid)
             os.setuid(user.pw_uid)
@@ -350,6 +364,8 @@ def supervisor(req, policy, key, root_lock):
             os.environ.clear()
             os.environ.update(PATH='/usr/bin:/bin', LANG='C.UTF-8', HOME=user.pw_dir, USER=user.pw_name)
             req['_task_hash'] = j['operations'][key].get('task_hash')
+            if j['operations'][key].get('scheduling'):
+                req['_control'] = j['operations'][key]['scheduling']
             if j['operations'][key].get('qa_qualification'):
                 req['_qa_qualification'] = j['operations'][key]['qa_qualification']
                 if 'qualification_grant' in req['_qa_qualification']:
@@ -367,11 +383,17 @@ def supervisor(req, policy, key, root_lock):
             # Keep detailed gates private in checkpoints, pipe result only carries bounded facts.
             os.write(w, raw[:2097152])
         except BaseException:
+            if proof_w is not None:
+                # No stage, provider, candidate executable or Git has run.
+                os.write(proof_w, json.dumps(dict(child=identity(os.getpid()),
+                    worker_entered=False)).encode())
             os.write(w, b'{"status":"unknown","reason":"stage process failed; reconcile checkpoint"}')
         finally:
+            if proof_w is not None: os.close(proof_w)
             os.close(w)
             os._exit(0)
     os.close(w)
+    os.close(proof_w)
     # select drains the pipe while waiting; no communicate deadlock on detailed job evidence.
     import select
     chunks, deadline, timed_out = [], time.monotonic() + 2200, False
@@ -393,7 +415,9 @@ def supervisor(req, policy, key, root_lock):
                 timed_out = True
                 break
     os.close(r)
-    os.waitpid(pid, 0)
+    _, worker_status = os.waitpid(pid, 0)
+    proof_raw = os.read(proof_r, 4096)
+    os.close(proof_r)
     # V6 run kills CLI children on ordinary timeout. If killed externally, leave UNKNOWN and
     # no_models/worker.lock prevent takeover until PMA proves no surviving writer.
     try: value = loads(b''.join(chunks)) if not timed_out else {'status': 'unknown', 'reason': 'stage deadline'}
@@ -402,7 +426,21 @@ def supervisor(req, policy, key, root_lock):
     try:
         j = journal(slot)
         op = j['operations'][key]
+        if proof_raw and not timed_out and worker_status == 0 and op.get('qa_qualification') and op.get('scheduling_preserved'):
+            # Only the root preflight-only qualification branch has a closed
+            # proof of no external effects. Legacy/tool-command UNKNOWN stays HOLD.
+            observation = loads(proof_raw)
+            if observation.get('worker_entered') is False and observation.get('child'):
+                op['worker_process'] = observation['child']
+                op['root_preflight_absence'] = dict(schema='GB_ROOT_PRECALL_ABSENCE_V1',
+                    child=observation['child'], worker_entered=False, wait_status=0,
+                    operation=digest(op['binding']))
+                value['safe_release'] = False
         state, _ = checkpoint(slot)
+        if op.get('scheduling'):
+            finish_scheduling(req, policy, j, state, value)
+            publish_monitor(policy)
+            os._exit(0)
         changed = digest(state) != op['before']
         recovery_record = None
         if op.get('recovery_key'):
@@ -422,6 +460,10 @@ def supervisor(req, policy, key, root_lock):
             reservation = read(qualification_path, 0)
             need(reservation.get('operation') == key and reservation.get('task_hash') == op['task_hash'],
                  'QA qualification reservation drift')
+            if op.get('root_preflight_absence'):
+                from scheduling_control import root_metadata
+                need(op.get('scheduling_preserved') == root_metadata(sys.modules[__name__], slot, policy,
+                     qualification=True), 'precall qualification metadata drift')
             reservation.update(result=value, finished_at=int(time.time()))
             atomic(qualification_path, reservation)
         active = state['active']
@@ -432,6 +474,9 @@ def supervisor(req, policy, key, root_lock):
             value['checkpoint']['ci'] = {k: (active.get('ci') or {}).get(k) for k in ('id', 'sha')}
             value['checkpoint']['ci_failure'] = active.get('ci_failure')
         op.update(result=value, after=digest(state), finished_at=int(time.time()))
+        if op.get('root_preflight_absence'):
+            from scheduling_control import root_metadata
+            op['scheduling_preserved'] = root_metadata(sys.modules[__name__], slot, policy, qualification=True)
         # Only a waiting READ without a changed checkpoint is safe to retry automatically.
         if value['status'] == 'waiting' and not changed:
             op['retry_at'] = int(time.time()) + value.get('retry_after', 60)
@@ -701,6 +746,12 @@ def qualification_request(req, policy):
     j['operations'][key] = dict(task_hash=q['task_sha256'], qa_qualification=q, binding=binding(req),
         run=req['run'], run_attempt=req['run_attempt'], before=digest(state), checkpoint_before=state,
         started_at=int(time.time()), process=None)
+    if isinstance(q.get('task'), dict):
+        # Unsupported legacy qualification descriptors are never silently exempted
+        # from TEST PLAN. A reviewed descriptor extension must supply exact task DATA.
+        from scheduling_control import root_metadata
+        j['operations'][key]['scheduling_preserved'] = root_metadata(sys.modules[__name__], slot, policy,
+                                                                   qualification=True)
     j['pending'] = key
     atomic(STATE / (slot+'.json'), j)
     pid = os.fork()
@@ -710,9 +761,52 @@ def qualification_request(req, policy):
     return dict(status='running', key=key, process=identity(pid))
 
 
+def operation_outcome(slot, key):
+    """Read-only exact lookup, including cold history. No recovery/guard/fork/write.
+
+    Expose a closed receipt projection, never private intents, checkpoints, task
+    inputs, process details or credentials. SSH authenticates the existing caller.
+    """
+    from core import CONTROL_CAPABILITY, CONTROL_STAGES, STAGES
+    request(dict(action='train',stage='status',slot=slot,operation=key))
+    j = journal(slot)
+    op = j['operations'].get(key)
+    path = STATE/'history'/slot/(key+'.json')
+    if op is None and os.path.lexists(path): op = read(path,0,33554432)
+    result = dict(schema=CONTROL_CAPABILITY, slot=slot, key=key, generation=j['generation'],
+                  status='not_found', binding=None, admission=None, result=None)
+    if op is None: return result
+    bound = op['binding']
+    need(digest(bound) == key and bound.get('slot') == slot and
+         not any(k.startswith('_') or k == 'gh_token' for k in bound), 'outcome binding integrity')
+    # Stored bindings are public wire data, but still validate the closed shape
+    # before returning anything from a protected journal.
+    request(dict(bound,run=1,run_attempt=1,gh_token='status-schema-only'))
+    result['binding'] = bound
+    saved = op.get('result') or {}
+    result['status'] = ('running' if alive(op.get('process')) else 'unknown') if j['pending'] == key else saved.get('status','unknown')
+    if bound['stage'] in CONTROL_STAGES:
+        admission_hash = op.get('scheduling',{}).get('admission')
+        need(isinstance(admission_hash,str) and __import__('re').fullmatch('[a-f0-9]{64}',admission_hash),
+             'missing authenticated control admission')
+        result['admission'] = admission_hash
+        if result['status'] == 'confirmed':
+            need(saved.get('status') == 'confirmed' and saved.get('scheduling_only') is True
+                 and saved.get('archive') == (key if bound['stage']=='park' else bound['control']['archive'])
+                 and isinstance(saved.get('archive_sha256'),str)
+                 and __import__('re').fullmatch('[a-f0-9]{64}',saved['archive_sha256'])
+                 and (saved.get('next_stage') in STAGES if bound['stage']=='resume'
+                      else saved.get('next_stage') is None),
+                 'unconfirmed scheduling outcome')
+            result['result'] = {k:saved.get(k) for k in
+                ('status','scheduling_only','archive','archive_sha256','next_stage')}
+    return result
+
+
 def handle(req, policy):
     request(req)
-    if req['stage'] == 'status': return snapshot(policy)
+    if req['stage'] == 'status':
+        return operation_outcome(req['slot'],req['operation']) if 'operation' in req else snapshot(policy)
     if req['stage'] == 'planning':
         # Informational report through the existing forced-command DEV SSH identity.
         # No API credential, code/path/shell input, journal mutation or execution authority.
@@ -735,6 +829,8 @@ def handle(req, policy):
         need(not (marker.get('phase')=='canary' and addressed(marker.get('qualification') or {})),
              'addressed qualification bootstrap cannot activate product stages')
     hosted_identity(req, policy)
+    if req['stage'] in ('park', 'resume', 'reconcile'):
+        return scheduling_request(req, policy)
     if req['stage'] == 'qa_qualification':
         return qualification_request(req, policy)
     if req['stage'] in ('diagnose', 'task_review'):
@@ -881,6 +977,52 @@ def handle(req, policy):
     return dict(status='running', key=key, process=identity(pid))
 
 
+def finish_scheduling(req, policy, j, state, value):
+    """Commit only this control receipt + pending/generation; historical facts stay exact."""
+    from scheduling_control import root_metadata, preserved_control
+    key = digest(binding(req)); slot = req['slot']
+    need(j['pending'] == key and key in j['operations'], 'control commit CAS mismatch')
+    op = j['operations'][key]; intent = op['scheduling']
+    need(op['binding'] == binding(req) and req['generation'] == j['generation'],
+         'control commit binding/generation CAS mismatch')
+    confirmed = value.get('status') == 'confirmed'
+    if confirmed:
+        preserved_control(sys.modules[__name__], req, intent['preserved'],
+                          root_metadata(sys.modules[__name__], slot, policy))
+        expected = dict(intent['checkpoint_before'])
+        if req['stage'] == 'park': expected['active'] = None
+        if req['stage'] == 'resume': expected['active'] = intent['snapshot']
+        need(state == expected, 'scheduling commit checkpoint CAS mismatch')
+    op.update(result=value if confirmed else dict(value, status='unknown', safe_release=False),
+              after=digest(state), finished_at=int(time.time()))
+    if confirmed:
+        j['pending'] = None
+        j['generation'] += 1
+    atomic(STATE/(slot+'.json'), j)
+
+
+def scheduling_request(req, policy):
+    """Finite controls share controller.lock, pending CAS and the normal UID drop."""
+    from core import API
+    from scheduling_control import prepare
+    result = prepare(sys.modules[__name__], req, policy, API(req['gh_token']))
+    if result is not None:
+        return result
+    slot = req['slot']; key = digest(binding(req)); j = journal(slot)
+    op = j['operations'][key]
+    if op.get('finished_at'):
+        op.setdefault('control_history', []).append({k:op.get(k) for k in
+            ('result','process','started_at','finished_at','after','run','run_attempt')})
+        op.update(started_at=int(time.time()), run=req['run'], run_attempt=req['run_attempt'])
+        atomic(STATE/(slot+'.json'), j)
+    pid = os.fork()
+    if pid == 0:
+        supervisor(req, policy, key, ROOT_LOCK)
+    j['operations'][key]['process'] = identity(pid)
+    atomic(STATE / (slot+'.json'), j)
+    return dict(status='running', key=key, process=identity(pid))
+
+
 def main():
     global ROOT_LOCK
     need(os.geteuid() == 0 and len(sys.argv) == 1, 'installed root receiver only')
@@ -894,7 +1036,7 @@ def main():
     raw = sys.stdin.buffer.read(8193)
     need(len(raw) <= 8192, 'request too large')
     req = loads(raw)
-    ROOT_LOCK = locked(STATE / 'controller.lock')
+    ROOT_LOCK = locked(STATE / 'controller.lock', create=req.get('stage') != 'status')
     try:
         # Revalidate under the controller lock. A request waiting during an
         # authorized runtime upgrade must never use a cached ACTIVE policy.
@@ -902,7 +1044,7 @@ def main():
         need(policy['schema'] == 'GB_ACTIONS_TRAIN_POLICY_V1' and policy['mode'] in ('disabled', 'shadow', 'active'), 'invalid root policy')
         need(set(policy['owned']) <= {'slot1', 'slot2'}, 'invalid ownership')
         result = handle(req, policy)
-        publish_monitor(policy)
+        if req['stage'] != 'status': publish_monitor(policy)
     finally: os.close(ROOT_LOCK)
     print(json.dumps(result, sort_keys=True))
 
