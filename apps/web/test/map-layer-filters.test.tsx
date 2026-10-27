@@ -173,11 +173,12 @@ describe("MapLayerFiltersControls draft/apply/reset", () => {
     let tree = render();
     expect(applied).toEqual(DEFAULT_MAP_LAYER_FILTERS);
     expect(renderToStaticMarkup(<>{tree}</>)).toContain("Фильтры");
-    expect(renderToStaticMarkup(<>{tree}</>)).not.toContain("Фильтры карты");
+    expect(renderToStaticMarkup(<>{tree}</>)).not.toContain('role="dialog"');
 
     expect(clickLabel(tree, "Фильтры")).toBe(true);
     tree = render();
     expect(renderToStaticMarkup(<>{tree}</>)).toContain("Фильтры карты");
+    expect(renderToStaticMarkup(<>{tree}</>)).toContain('role="dialog"');
     expect(renderToStaticMarkup(<>{tree}</>)).toContain("Площадки");
     expect(renderToStaticMarkup(<>{tree}</>)).toContain("Радар игроков");
     expect(renderToStaticMarkup(<>{tree}</>)).toContain("Показывать игроков рядом");
