@@ -45,17 +45,13 @@ def installed_source(path):
 
 
 def reviewed_c_source(path):
-    # The C installer is immutably bound to its earlier accepted merge. A later
-    # SR1 manifest entry is valid source evolution, but it cannot be substituted
-    # as an installer bundle: reproduce the C-reviewed *exact* old manifest.
-    raw = installed_source(path)
+    # Exact Git blob from accepted C832a677, not a reconstruction of mutable
+    # current source. The pinned historical hash remains the installer boundary.
     if path == 'scripts/chatops/actions_train/manifest.json':
-        pin = '36cbcc0e41bc56a27de74151d8e482942ea6313c2cb3686a5977c1bbd445e30e'
-        extra = ('    "scripts/chatops/actions_train/smart_routing.py": "' + pin + '",\n').encode()
-        assert raw.count(extra) == 1, 'unexpected future manifest delta'
-        raw = raw.replace(extra, b'')
+        raw = (REPO/'scripts/chatops/tests/fixtures/agy-333-reviewed-c-manifest.json').read_bytes()
         assert H(raw) == '3b39bb7fb810e97e4d6163dfc93356260d2a966ecbc66b4410c8b06deab0e150', 'reviewed C bundle manifest drift'
-    return raw
+        return raw
+    return installed_source(path)
 
 
 class Fixture:
