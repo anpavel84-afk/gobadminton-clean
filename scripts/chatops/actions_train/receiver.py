@@ -215,9 +215,19 @@ def product_qa_ops():
 
 
 def find_product_admission():
-    """Load the single eligible Root product QA admission, if any."""
+    """Load the single eligible Root product QA admission, if any.
+
+    Canonical ledger names are product-qa-admission-<Owner-comment-id>.json.
+    Receipts (product-qa-admission-receipt-*.json) share the same prefix glob and
+    must be ignored — never deleted or renamed.
+    """
+    import re
     import owner_package_admission as A
-    matches = sorted(STATE.glob(A.PRODUCT_LEDGER_PREFIX + '*.json'))
+    ledger_name = re.compile(
+        r'^' + re.escape(A.PRODUCT_LEDGER_PREFIX) + r'[0-9]+\.json$')
+    matches = sorted(
+        path for path in STATE.glob(A.PRODUCT_LEDGER_PREFIX + '*.json')
+        if ledger_name.fullmatch(path.name))
     if not matches:
         return None
     need(len(matches) == 1, 'ambiguous product QA admissions')
