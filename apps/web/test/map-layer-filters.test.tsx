@@ -209,6 +209,49 @@ describe("MapLayerFiltersControls draft/apply/reset", () => {
     expect(applied).toEqual(DEFAULT_MAP_LAYER_FILTERS);
   });
 
+  it("first open frame after chip reset shows applied defaults, not stale draft", () => {
+    let applied = DEFAULT_MAP_LAYER_FILTERS;
+    const read = (value: ReturnType<typeof useMapLayerFilters>) => { applied = value.applied; };
+    const render = () => expand(
+      <MapLayerFiltersProvider>
+        <Probe onRead={read} />
+        <MapLayerFiltersControls />
+      </MapLayerFiltersProvider>,
+    );
+
+    let tree = render();
+    expect(clickLabel(tree, "Фильтры")).toBe(true);
+    tree = render();
+    expect(clickLabel(tree, "Только с играми")).toBe(true);
+    expect(clickLabel(render(), "Показывать игроков рядом")).toBe(true);
+    expect(clickLabel(render(), "Применить")).toBe(true);
+    tree = render();
+    expect(applied).toEqual({ venueMode: "with_games", showPlayersNearby: false });
+
+    expect(clickLabel(tree, "Сбросить фильтры")).toBe(true);
+    tree = render();
+    expect(applied).toEqual(DEFAULT_MAP_LAYER_FILTERS);
+
+    expect(clickLabel(tree, "Фильтры")).toBe(true);
+    // First paint after open — must not wait for a second render/useEffect pass.
+    tree = render();
+    expect(renderToStaticMarkup(<>{tree}</>)).toContain('role="dialog"');
+    const radioChecked = (title: string) => {
+      for (const node of elements(tree)) {
+        if (node.props.role !== "radio") continue;
+        try {
+          if (renderToStaticMarkup(node).includes(title)) return node.props["aria-checked"];
+        } catch { /* skip non-serializable */ }
+      }
+      return undefined;
+    };
+    expect(radioChecked("Все площадки")).toBe(true);
+    expect(radioChecked("Только с играми")).toBe(false);
+    const playersSwitch = elements(tree).find(node =>
+      node.props.role === "switch" && node.props["aria-label"] === "Показывать игроков рядом");
+    expect(playersSwitch?.props["aria-checked"]).toBe(true);
+  });
+
   it("player-layer toggle is display-only state and never implies Radar activation APIs", async () => {
     const source = await import("node:fs/promises").then(fs =>
       fs.readFile(new URL("../src/components/consumer/games/MapLayerFilters.tsx", import.meta.url), "utf8"));

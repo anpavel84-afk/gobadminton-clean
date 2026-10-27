@@ -162,6 +162,9 @@ try {
       await page.getByRole('button',{name:'Фильтры',exact:true}).click();
       const again = page.getByRole('dialog',{name:'Фильтры карты'});
       await again.waitFor({state:'visible'});
+      // Await settled checked state (React commit); same expected defaults as before.
+      await again.getByRole('radio',{name:/Все площадки/,checked:true}).waitFor({state:'visible',timeout:5000});
+      await again.getByRole('switch',{name:'Показывать игроков рядом',exact:true,checked:true}).waitFor({state:'visible',timeout:5000});
       assert.equal(await again.getByRole('radio',{name:/Все площадки/}).getAttribute('aria-checked'), 'true');
       assert.equal(await again.getByRole('switch',{name:'Показывать игроков рядом',exact:true}).getAttribute('aria-checked'), 'true');
       await again.getByRole('button',{name:'Закрыть фильтры карты',exact:true}).click();
