@@ -4,15 +4,17 @@ import { SurfacePanel } from "../Surfaces";
 import { classifyMapError, mapErrorReason, type MapDiagnostic } from "../../../lib/games-map-diagnostics";
 import { RadarPage } from "../radar/RadarPage";
 import { shuttlecockElement } from "../NavIcon";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as maplibregl from "maplibre-gl";
 import type { Map as LibreMap, StyleSpecification } from "maplibre-gl";
 import { Protocol } from "pmtiles";
 import "maplibre-gl/dist/maplibre-gl.css";
 import "../../../styles/radar-geographic.css";
 import { venueMarkerPresentation, reconcileVenueMarkers, markerActivation } from "../../../lib/games-venue-map";
+import { filterVenuesForMapLayer } from "../../../lib/map-layer-filters";
 import { MOSCOW_BUNDLE, allowedMapResource } from "../../../lib/radar-map-assets";
 import type { VenueSummary } from "../../../lib/consumer-types";
+import { useMapLayerFilters } from "./MapLayerFilters";
 function sessionStorageVenue() {
   try { return sessionStorage.getItem("gb-games-map-selected"); } catch { return null; }
 }
@@ -35,6 +37,12 @@ export function GamesVenueMap({ venues, counts, selectedVenueId, onDeselect, onS
   const venuesRef = useRef(venues); venuesRef.current = venues;
   const callbacks = useRef({ onSelect, onAvailability }); callbacks.current = { onSelect, onAvailability };
   const markers = useRef(new Map<string, VenueMarkerEntry>());
+  const { applied } = useMapLayerFilters();
+  // Marker filter only: selection still resolves against the canonical venue list above.
+  const markerVenues = useMemo(
+    () => filterVenuesForMapLayer(venues, counts, applied.venueMode),
+    [venues, counts, applied.venueMode],
+  );
   const [resumeCamera, setResumeCamera] = useState(false);
   const [sharedMap, setSharedMap] = useState<LibreMap>();
   const [ready, setReady] = useState(false);
@@ -172,7 +180,7 @@ export function GamesVenueMap({ venues, counts, selectedVenueId, onDeselect, onS
   }, [attempt]);
   useEffect(() => {
     if (!ready || !map.current) return;
-    reconcileVenueMarkers<VenueMarkerEntry>(markers.current, venues, {
+    reconcileVenueMarkers<VenueMarkerEntry>(markers.current, markerVenues, {
       create: venue => {
         const button = document.createElement("button"); button.type = "button";
         const activation = markerActivation();
@@ -211,7 +219,7 @@ export function GamesVenueMap({ venues, counts, selectedVenueId, onDeselect, onS
       },
       remove: entry => entry.marker.remove(),
     });
-  }, [ready, venues, counts, selectedVenueId]);
+  }, [ready, markerVenues, counts, selectedVenueId]);
   useEffect(() => {
     if (!ready || !map.current) return;
     const canvas = map.current.getCanvas();
@@ -237,7 +245,7 @@ export function GamesVenueMap({ venues, counts, selectedVenueId, onDeselect, onS
     };
     separate(); instance.on("moveend", separate); window.addEventListener("gb-map-own-marker", separate);
     return () => { instance.off("moveend", separate); window.removeEventListener("gb-map-own-marker", separate); };
-  }, [ready, venues]);
+  }, [ready, markerVenues]);
   const retry = () => {
     setReady(false); setSettled(false); setSharedMap(undefined); setFailure(undefined);
     setLastError(undefined); setWarnings(0); setStatus("Загружаем карту города…");
