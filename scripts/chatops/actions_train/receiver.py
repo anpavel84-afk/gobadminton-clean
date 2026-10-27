@@ -215,17 +215,33 @@ def product_qa_ops():
 
 
 def _product_assignment_id(admission):
-    """Stable assignment identity: controller/issue/base/head/attempt (not comment digest)."""
+    """Semantic review-contract identity for product QA consume/idempotency.
+
+    Includes schema/model/repo/source/policy attempt plus acceptance/allowed_paths
+    when present. Excludes transport-only metadata: owner_comment, admitted_at,
+    body_sha256, owner_id, and physical work/snapshot path. Distinct review
+    criteria with the same controller/issue/base/head/attempt are distinct
+    assignments (must not reuse a prior PASS/FAIL).
+    """
     if not isinstance(admission, dict):
         return None
     issue, attempt = admission.get('issue'), admission.get('attempt')
     base, head = admission.get('source_base'), admission.get('source_sha')
     controller = admission.get('controller_sha')
+    schema, model, repo = admission.get('schema'), admission.get('model'), admission.get('repo_id')
+    max_calls = admission.get('max_calls')
     if not (type(issue) is int and type(attempt) is int
             and isinstance(base, str) and isinstance(head, str)
-            and isinstance(controller, str)):
+            and isinstance(controller, str) and isinstance(schema, str)
+            and isinstance(model, str) and type(repo) is int
+            and type(max_calls) is int):
         return None
-    return (controller, issue, base, head, attempt)
+    acceptance = admission.get('acceptance')
+    allowed = admission.get('allowed_paths')
+    if allowed is not None and type(allowed) is not list:
+        return None
+    return (schema, controller, issue, repo, base, head, attempt, model, max_calls,
+            acceptance, tuple(allowed) if isinstance(allowed, list) else None)
 
 
 def _product_ops_match(prior, admission, admission_digest):
@@ -301,14 +317,16 @@ def find_product_admission(*, controller=None, ops=None):
             eligible.append(A.product_qa_ledger(admission))
     if not eligible:
         return None
-    # Same Issue/attempt with distinct heads/bases is a real conflict, not a queue.
+    # Same Issue/attempt with distinct semantic assignments (head/base OR review
+    # contract/model/policy) is a real conflict, not a queue — fail closed.
     by_issue_attempt = {}
     for admission in eligible:
         key = (admission['issue'], admission['attempt'])
         by_issue_attempt.setdefault(key, []).append(admission)
     for group in by_issue_attempt.values():
-        surfaces = {(item['source_base'], item['source_sha']) for item in group}
-        need(len(surfaces) == 1, 'ambiguous/conflicting product QA admissions')
+        ids = {_product_assignment_id(item) for item in group}
+        need(None not in ids and len(ids) == 1,
+             'ambiguous/conflicting product QA admissions')
     # One-writer sequential queue: oldest admitted_at, then numeric owner_comment.
     eligible.sort(key=lambda item: (
         item['admitted_at'] if type(item.get('admitted_at')) is int else 0,
@@ -599,6 +617,22 @@ def supervisor(req, policy, key, root_lock):
                                workflow_run=req['run'], workflow_attempt=req['run_attempt'],
                                product_ready=bool(value.get('product_ready')),
                                receipt_file=value.get('receipt_file'))
+            # Factual product transition for hosted continue: confirmed validated
+            # PASS/FAIL only. Not author checkpoint `changed`; duplicates/UNKNOWN
+            # never set this envelope (already-consumed path does not rewrite last).
+            if (value['status'] == 'confirmed'
+                    and qa.get('verdict') in ('PASS', 'FAIL')
+                    and isinstance(reviewed, str) and SHA.fullmatch(reviewed)
+                    and reviewed == admission.get('source_sha')):
+                ops['last'].update(
+                    product_operation_changed=True,
+                    product_operation_transition=True,
+                    operation=key,
+                    head=admission.get('source_sha'),
+                    attempt=admission.get('attempt'),
+                    admission_sha256=op.get('admission_sha256'),
+                    task_digest=op.get('task_hash'),
+                    qa_verdict=qa.get('verdict'))
             if value['status'] != 'unknown':
                 ops['pending'] = None
             atomic(PRODUCT_OPS, ops)
@@ -940,9 +974,10 @@ def product_qa_request(req, policy):
          and req['attempt'] == admission['attempt'],
          'product QA issue/source/attempt mismatch vs authorized admission')
     # Authoritative consume gate under controller.lock: one reservation/result per
-    # admission digest OR stable assignment identity (controller/issue/base/head/attempt),
-    # regardless of generation/run/binding or duplicate Owner comment. Planner check
-    # alone is not the gate. Preserve UNKNOWN pending and all prior charges/history.
+    # admission digest OR semantic assignment identity (review contract/model/source/
+    # policy; not comment/body/owner/path), regardless of generation/run/binding or
+    # duplicate Owner comment. Planner check alone is not the gate. Preserve
+    # UNKNOWN pending and all prior charges/history.
     admission_digest = digest(admission)
     for existing_key, prior in ops.get('operations', {}).items():
         if not _product_ops_match(prior, admission, admission_digest):

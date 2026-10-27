@@ -660,13 +660,15 @@ class V5Fixture:
         policy=dict(mode='active',controller_sha=self.baseline,stage_workflow_sha256=f.sh,
                     recovery={'source_sha':self.baseline})
         f.policy.write_text(json.dumps(policy,indent=2));self.policy=f.policy.read_bytes()
-        # AGY marker must satisfy module_pins_only (C5 + V3_OLD contract).
+        # Post-V4 AGY marker: production C5 adapter_revision + V4_NEW(=V5_OLD/FROZEN) pins.
+        # Do NOT patch V3_OLD/C5 — that masked QA-01 production contract drift.
         p=f.p/'agy_marker.json'
         marker=dict(schema='GB_ANTIGRAVITY_QA_29_V1',phase='canary',
-                    adapter_revision=self.baseline,
+                    adapter_revision=U.C5,
                     modules={'native_guard.py':frozen['native_guard.py'],
-                             'native_antigravity.py':old['native_antigravity.py']})
-        raw=json.dumps(marker,indent=2).encode()+b'\n';p.write_bytes(raw)
+                             'native_antigravity.py':old['native_antigravity.py']},
+                    legacy_grants={'slot2':'preserved'},provenance='post-v4-fixture')
+        raw=json.dumps(marker,indent=2,sort_keys=True).encode()+b'\n';p.write_bytes(raw)
         self.agy_marker=p;self.agy_marker_raw=raw
         markers={'agy_marker':p,'cursor_marker':f.p/'cursor_marker.json'}
         markers['cursor_marker'].write_bytes(b'{"phase":"ready"}\n')
@@ -678,10 +680,8 @@ class V5Fixture:
         f.inventory.write_text(json.dumps(record,indent=2));f.inventory.chmod(0o600)
         self.inventory=f.inventory.read_bytes()
         self.oldfiles=dict(present)
-        v3_old={**U.V3_OLD,'native_guard.py':frozen['native_guard.py'],
-                'native_antigravity.py':old['native_antigravity.py']}
         for key,val in dict(V5_OLD=old,V5_NEW=new,V5_FROZEN=frozen,
-                            V3_MARKERS=markers,V3_OLD=v3_old,C5=self.baseline).items():
+                            V3_MARKERS=markers).items():
             f.stack.enter_context(patch.object(U,key,val))
 
     def call(self,action):
@@ -716,6 +716,9 @@ class GeneralProductQaV5Installer(unittest.TestCase):
         self.assertEqual(U.V5_BASELINE, 'd75887f8d50e05aa5e3032a3302c91f23947be5d')
         self.assertIn('native_guard.py', U.V5_FROZEN)
         self.assertNotIn('native_antigravity.py', U.V5_FROZEN)
+        self.assertNotIn('client.py', U.V5_FROZEN)
+        self.assertIn('client.py', U.V5_OLD)
+        self.assertEqual(U.V5_OLD['client.py'], U.V4_NEW['client.py'])
         # No circular workflow SHA constants in V5_* maps.
         self.assertFalse(any('workflow' in k.lower() for k in list(U.V5_OLD)+list(U.V5_NEW)))
 
@@ -793,6 +796,111 @@ class GeneralProductQaV5Installer(unittest.TestCase):
                 'product QA operation still pending/UNKNOWN HOLD')):
             with self.assertRaisesRegex(core.Refused,'pending/UNKNOWN HOLD'):
                 x.call('dry')
+
+    def test_v5_post_v4_marker_production_constants_no_v3_old_patch(self):
+        """QA-01: production C5 + V4_NEW pins transition without mutating V3_OLD/C5."""
+        sys.path.insert(0, str(ROOT/'scripts/chatops/ops'))
+        import stage5_cursor_context_upgrade as Uv
+        # Exact production OLD marker (adapter_revision=C5, modules=V4_NEW).
+        modules={'native_guard.py':Uv.V4_NEW['native_guard.py'],
+                 'native_antigravity.py':Uv.V4_NEW['native_antigravity.py']}
+        marker=dict(schema='GB_ANTIGRAVITY_QA_29_V1',phase='canary',
+                    adapter_revision=Uv.C5,modules=modules,
+                    legacy_grants={'keep':'yes'},provenance='installed358')
+        raw=json.dumps(marker,indent=2,sort_keys=True).encode()+b'\n'
+        pins={'native_guard.py':Uv.V5_FROZEN['native_guard.py'],
+              'native_antigravity.py':Uv.V5_NEW['native_antigravity.py']}
+        after=Uv._v5_agy_marker_pins_only(raw,pins)
+        parsed=json.loads(after)
+        self.assertEqual(parsed['adapter_revision'], Uv.C5)
+        self.assertEqual(parsed['legacy_grants'], {'keep':'yes'})
+        self.assertEqual(parsed['provenance'], 'installed358')
+        self.assertEqual(parsed['modules']['native_guard.py'], Uv.V5_FROZEN['native_guard.py'])
+        self.assertEqual(parsed['modules']['native_antigravity.py'], Uv.V5_NEW['native_antigravity.py'])
+        # V3_OLD contract must refuse this post-V4 marker (no silent retarget).
+        with self.assertRaisesRegex(core.Refused,'AGY canary module contract drift'):
+            Uv.module_pins_only(raw,'agy_marker',pins)
+        # Fixture dry/apply must not patch V3_OLD/C5.
+        x=V5Fixture();self.addCleanup(x.close)
+        self.assertEqual(Uv.C5, '41e12be2d551158e97ea30eaf8e95f992f998615')
+        r=x.call('dry')
+        self.assertTrue(r['dry'])
+        self.assertIn('agy_marker', r['changes'])
+
+    def test_v5_frozen_content_and_mode_drift_holds_verify_activate(self):
+        """QA-02: installed frozen drift after apply must HOLD verify/activate."""
+        x=V5Fixture();self.addCleanup(x.close)
+        x.call('apply')
+        frozen_name='native_guard.py'
+        self.assertIn(frozen_name, U.V5_FROZEN)
+        path=x.f.install/frozen_name
+        original=path.read_bytes()
+        path.write_bytes(original+b'\n# drift\n')
+        with self.assertRaisesRegex(core.Refused,'frozen compatible dependency'):
+            x.call('verify')
+        with self.assertRaisesRegex(core.Refused,'frozen compatible dependency'):
+            x.call('activate')
+        self.assertEqual(json.loads(x.f.policy.read_bytes())['mode'],'disabled')
+        # Mode/owner drift (content restored) also HOLDs without enabling policy.
+        x2=V5Fixture();self.addCleanup(x2.close)
+        x2.call('apply')
+        path2=x2.f.install/frozen_name
+        os.chmod(path2, 0o600)
+        with self.assertRaisesRegex(core.Refused,'frozen compatible dependency'):
+            x2.call('verify')
+        with self.assertRaisesRegex(core.Refused,'frozen compatible dependency'):
+            x2.call('activate')
+        self.assertEqual(json.loads(x2.f.policy.read_bytes())['mode'],'disabled')
+
+    def test_v5_prebackup_and_prepolicy_interruption_noop_rollback(self):
+        """QA-03: pre-write interruption rolls back as no-op while OLD policy active."""
+        x=V5Fixture();self.addCleanup(x.close)
+        atomic=U.atomic_bytes
+        # Interrupt at first V5 backup write (journal preparing, applied=[], policy active).
+        def crash_backup(p,raw,meta,**kw):
+            if str(p).startswith(str(x.v5_backup)):
+                raise InterruptedError('pre-backup')
+            return atomic(p,raw,meta,**kw)
+        with patch.object(U,'atomic_bytes',side_effect=crash_backup), \
+             self.assertRaises(InterruptedError):
+            x.call('apply')
+        j=json.loads(x.v5_journal.read_bytes())
+        self.assertEqual(j['phase'],'preparing')
+        self.assertEqual(j['applied'],[])
+        self.assertEqual(json.loads(x.f.policy.read_bytes())['mode'],'active')
+        r=x.call('rollback')
+        self.assertTrue(r.get('noop'))
+        self.assertEqual(r['phase'],'rolled-back')
+        x.restored(self)
+        # Pre-policy-write: phase applying, applied=[], OLD policy still active.
+        x3=V5Fixture();self.addCleanup(x3.close)
+        fired=False
+        def crash_policy(p,raw,meta,**kw):
+            nonlocal fired
+            if (not fired and p==x3.f.policy):
+                fired=True
+                raise InterruptedError('pre-policy')
+            return atomic(p,raw,meta,**kw)
+        with patch.object(U,'atomic_bytes',side_effect=crash_policy), \
+             self.assertRaises(InterruptedError):
+            x3.call('apply')
+        j3=json.loads(x3.v5_journal.read_bytes())
+        self.assertEqual(j3['phase'],'applying')
+        self.assertEqual(j3['applied'],[])
+        self.assertEqual(json.loads(x3.f.policy.read_bytes())['mode'],'active')
+        r3=x3.call('rollback')
+        self.assertTrue(r3.get('noop'))
+        x3.restored(self)
+        # After real activation, rollback still refuses active policy.
+        x4=V5Fixture();self.addCleanup(x4.close)
+        x4.call('apply')
+        with patch.object(U,'probe',return_value={'run':123,'ok':True}):
+            x4.call('activate')
+        self.assertEqual(json.loads(x4.f.policy.read_bytes())['mode'],'active')
+        self.assertEqual(json.loads(x4.v5_journal.read_bytes())['phase'],'proof-recorded')
+        with self.assertRaisesRegex(core.Refused,
+                r'refuses after active policy|rollback phase unsupported'):
+            x4.call('rollback')
 
 
 class ProductQaFinishEvidence(unittest.TestCase):

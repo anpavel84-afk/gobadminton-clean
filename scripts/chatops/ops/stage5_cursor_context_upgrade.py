@@ -1468,10 +1468,10 @@ V5_BASELINE='d75887f8d50e05aa5e3032a3302c91f23947be5d'
 V5_HISTORICAL_SLOT1_PENDING=V4_HISTORICAL_SLOT1_PENDING
 V5_HISTORICAL_SLOT2_PENDING=V4_HISTORICAL_SLOT2_PENDING
 # Unchanged compatible deps (V4_FROZEN + V4_NEW modules this release does not rewrite).
+# client.py moved to V5_OLD/NEW — product continuation envelope changes this delivery.
 V5_FROZEN={
  **V4_FROZEN,
  'native_guard.py':V4_NEW['native_guard.py'],
- 'client.py':V4_NEW['client.py'],
  'live/slots.py':V4_NEW['live/slots.py'],
  'context_policy.py':V4_NEW['context_policy.py'],
  'context_cursor_delivery.py':V4_NEW['context_cursor_delivery.py'],
@@ -1485,14 +1485,16 @@ V5_OLD={
  'stage.py':V4_NEW['stage.py'],
  'native_antigravity.py':V4_NEW['native_antigravity.py'],
  'owner_package_admission.py':V4_NEW['owner_package_admission.py'],
+ 'client.py':V4_NEW['client.py'],
 }
 # Placeholder NEW pins — filled after source edit; installer verifies bundle bytes.
 V5_NEW={
  'core.py':'678246a2c29f2788e4ae7f4f48722140c81dc068a8226da09ec2bd17bda42a67',
- 'receiver.py':'aa462dafb50438c45831d71e258719f760674d062068d3f363bcc4306dc7f605',
+ 'receiver.py':'68977f101f7e7b6fdcf372b53189bca5fac144c15a3b2857eebc45d9505b667b',
  'stage.py':'abbb0f5be285b3c2770119770d4ad30e224b28535b2279f56a46bb377a131e0a',
  'native_antigravity.py':'14b089d2cf8bc295f357454d7d356f57b8480a996a0ec00e331d97f15280d536',
  'owner_package_admission.py':'39b681f8408989dfbfd9202f60e4b31c7bffbe96f350d53e572c97f87e802aa3',
+ 'client.py':'248a8745ada3611d773608874e49560cd46cc502140c12ccdcd56ea3bf12dd57',
 }
 
 
@@ -1588,6 +1590,41 @@ def _v5_workflow_gates(bundle,controller,stage_sha,dispatch_sha):
              'unreviewed V5 workflow keep/release pin HOLD: '+name)
 
 
+def _v5_frozen_closure():
+    """Exact V5_FROZEN bytes + canonical metadata (mode/owner); fail closed on drift."""
+    for name,pin in V5_FROZEN.items():
+        need(current(INSTALL/name)==canonical_meta(pin),
+             'V5 frozen compatible dependency HOLD: '+name)
+
+
+def _v5_agy_marker_pins_only(raw,newpins):
+    """Post-V4 AGY marker → V5 NEW module pins; adapter_revision stays C5.
+
+    Does not retarget V3_OLD/C5 or call module_pins_only (V3_OLD contract).
+    OLD modules must equal V5_FROZEN[guard] + V5_OLD[native_antigravity] (= V4_NEW).
+    """
+    old=loads(raw);updated=copy.deepcopy(old)
+    need(type(old) is dict and type(old.get('modules')) is dict,'invalid native marker')
+    expected={'native_guard.py':V5_FROZEN['native_guard.py'],
+              'native_antigravity.py':V5_OLD['native_antigravity.py']}
+    need(old.get('schema')=='GB_ANTIGRAVITY_QA_29_V1' and old.get('phase')=='canary'
+         and old.get('adapter_revision')==C5 and old['modules']==expected,
+         'AGY canary post-V4 module contract drift')
+    matches=list(re.finditer(rb'"modules"\s*:\s*\{[^{}]*\}',raw))
+    need(len(matches)==1,'ambiguous marker modules object')
+    m=matches[0];piece=m[0]
+    for name,pin in newpins.items():
+        need(name in old['modules'],'missing marker module field')
+        pattern=re.escape(encoded(name))+rb'\s*:\s*"'+old['modules'][name].encode()+b'"'
+        hits=list(re.finditer(pattern,piece));need(len(hits)==1,'ambiguous module pin')
+        hit=hits[0]
+        piece=piece[:hit.start()]+hit[0].replace(old['modules'][name].encode(),pin.encode())+piece[hit.end():]
+        updated['modules'][name]=pin
+    result=raw[:m.start()]+piece+raw[m.end():]
+    need(loads(result)==updated and len(result)==len(raw),'marker fields changed outside module pins')
+    return result
+
+
 def _v5_current(j):
     paths=_v5_paths()
     applied=j.get('applied') or []
@@ -1599,6 +1636,7 @@ def _v5_current(j):
         if intent and intent.get('target')==n:
             allowed=[row['before'],row['after']]
         need(current(paths[n]) in allowed,'foreign CAS drift: '+n)
+    _v5_frozen_closure()
 
 
 def _v5_plan(target,baseline,controller,stage_sha):
@@ -1606,9 +1644,7 @@ def _v5_plan(target,baseline,controller,stage_sha):
         need(current(INSTALL/name)==canonical_meta(pin),
              'V5 installed OLD pin mismatch HOLD: '+name+'; blocker=installed module drift')
         need(bytes_sha(target[name])==V5_NEW[name],'V5 target/NEW pin mismatch: '+name)
-    for name,pin in V5_FROZEN.items():
-        need(current(INSTALL/name)==canonical_meta(pin),
-             'V5 frozen compatible dependency HOLD: '+name)
+    _v5_frozen_closure()
     changes={n:dict(before=canonical_meta(V5_OLD[n]),after=canonical_meta(V5_NEW[n])) for n in V5_OLD}
     policy_raw=regular_bytes(receiver.POLICY)
     policy=loads(policy_raw)
@@ -1625,11 +1661,11 @@ def _v5_plan(target,baseline,controller,stage_sha):
     changes['policy']=dict(before=canonical_meta(bytes_sha(policy_raw)),
                            after=canonical_meta(bytes_sha(policy_after)))
     target=dict(target,policy=policy_after)
-    # AGY marker module pins track native_antigravity (guard frozen unchanged).
+    # Post-V4 AGY marker: C5 adapter_revision + V4_NEW module pins → V5 NEW antigravity pin.
     marker_raw=regular_bytes(V3_MARKERS['agy_marker'])
     pins={'native_guard.py':V5_FROZEN['native_guard.py'],
           'native_antigravity.py':V5_NEW['native_antigravity.py']}
-    marker_after=module_pins_only(marker_raw,'agy_marker',pins)
+    marker_after=_v5_agy_marker_pins_only(marker_raw,pins)
     changes['agy_marker']=dict(before=canonical_meta(bytes_sha(marker_raw)),
                                after=canonical_meta(bytes_sha(marker_after)))
     target=dict(target,agy_marker=marker_after)
@@ -1742,11 +1778,23 @@ def execute_v5(action,bundle,manifest,controller,stage_sha,dispatch_sha,run_id,b
             need(j['phase'] in ('preparing','applying','installed-disabled','activating-proof',
                                 'rolling-back'),
                  'V5 rollback phase unsupported')
+            # Pre-write preparing/applying: OLD policy may still be active. Validate exact
+            # BEFORE CAS for all managed targets before the post-write disabled-policy gate.
+            if j['phase'] in ('preparing','applying') and not j.get('applied'):
+                intent=j.get('write_intent')
+                if intent and intent.get('action')=='apply':
+                    n=intent['target']
+                    if current(paths[n])==j['changes'][n]['after']:
+                        j['applied']=list(j.get('applied') or [])+[n]
+                    j['write_intent']=None
+                if not j.get('applied'):
+                    for n,row in j['changes'].items():
+                        need(current(paths[n])==row['before'],
+                             'V5 pre-write rollback BEFORE CAS drift: '+n)
+                    j['phase']='rolled-back';_v5_save(j)
+                    return dict(phase='rolled-back',state_preserved=True,noop=True)
             need(loads(regular_bytes(receiver.POLICY)).get('mode')=='disabled',
                  'V5 rollback refuses after active policy; separate reconciliation')
-            if j['phase']=='preparing' and not j.get('applied'):
-                j['phase']='rolled-back';_v5_save(j)
-                return dict(phase='rolled-back',state_preserved=True,noop=True)
             if j.get('write_intent') and j['write_intent'].get('action')=='apply':
                 n=j['write_intent']['target']
                 if current(paths[n])==j['changes'][n]['after'] and n not in j['applied']:

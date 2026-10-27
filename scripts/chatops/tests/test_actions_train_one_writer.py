@@ -854,6 +854,90 @@ class ProductQaAdmissionWire(unittest.TestCase):
                 fork.assert_not_called()
                 self.assertEqual(ops_path.read_bytes(), journal_bytes)
 
+    def test_changed_review_criteria_is_distinct_assignment(self):
+        """Same controller/issue/base/head/attempt + different acceptance ≠ same identity."""
+        import owner_package_admission as A
+        from core import digest
+        a = self._admission_v2(comment=4001,
+                              acceptance='Criterion A: venue list filters by city.')
+        b = dict(a, owner_comment=4002,
+                 acceptance='Criterion B: venue list sorts by distance.')
+        self.assertNotEqual(R._product_assignment_id(a), R._product_assignment_id(b))
+        # Unchanged duplicate comment (transport-only fields differ) stays identical.
+        dup = dict(a, owner_comment=4003, body_sha256='a' * 64, admitted_at=99,
+                   owner_id=1, work='/srv/gb-slots/slot2/worktrees/issue-337-copy')
+        self.assertEqual(R._product_assignment_id(a), R._product_assignment_id(dup))
+        # Prior PASS under criteria A must not consume criteria B.
+        prior = dict(admission_sha256=digest(a), admission=a,
+                     result={'status': 'confirmed', 'qa': {'verdict': 'PASS'}})
+        self.assertTrue(R._product_ops_match(prior, a, digest(a)))
+        self.assertFalse(R._product_ops_match(prior, b, digest(b)))
+        # Two eligible ledgers with distinct contracts for same Issue/attempt → fail closed.
+        with tempfile.TemporaryDirectory(prefix='product-qa-criteria-') as tmp:
+            folder = Path(tmp)
+            first = dict(a, body_sha256='e' * 64, owner_id=A.OWNER_ID, admitted_at=1)
+            other = dict(b, body_sha256='f' * 64, owner_id=A.OWNER_ID, admitted_at=2)
+            R.atomic(folder / (A.PRODUCT_LEDGER_PREFIX + '4001.json'), first)
+            R.atomic(folder / (A.PRODUCT_LEDGER_PREFIX + '4002.json'), other)
+            empty = dict(schema='GB_PRODUCT_QA_OPS_V1', generation=0,
+                         operations={}, pending=None, last=None)
+            original_read = R.read
+            def read_fixture(path, owner):
+                self.assertEqual(owner, 0)
+                return original_read(path, os.getuid())
+            with patch.object(R, 'STATE', folder), patch.object(R, 'read', side_effect=read_fixture):
+                with self.assertRaisesRegex(Exception, 'ambiguous/conflicting'):
+                    R.find_product_admission(controller='c' * 40, ops=empty)
+
+    def test_product_qa_last_records_factual_continuation_envelope(self):
+        """Root last sets product_operation_changed for confirmed PASS/FAIL only."""
+        import inspect
+        src = inspect.getsource(R.supervisor)
+        self.assertIn('product_operation_changed', src)
+        self.assertIn('product_operation_transition', src)
+        self.assertIn('task_digest', src)
+        self.assertIn('qa_verdict', src)
+        self.assertIn("qa.get('verdict') in ('PASS', 'FAIL')", src)
+
+    def test_client_product_transition_signals_changed_without_author_checkpoint(self):
+        """Hosted continue: factual product transition → changed=true; UNKNOWN does not."""
+        import client as C
+        descriptor = dict(slot='slot2', issue=337, stage='product_qa', phase='idle',
+                          head=self.HEAD337, attempt=1, generation=0, profile='agy')
+        last_ok = dict(stage='product_qa', issue=337, status='confirmed',
+                       workflow_run=55, workflow_attempt=1,
+                       product_operation_changed=True, qa_verdict='FAIL',
+                       head=self.HEAD337, attempt=1, task_digest='a' * 64,
+                       admission_sha256='b' * 64, operation='k' * 64)
+        last_unknown = dict(stage='product_qa', issue=337, status='unknown',
+                            workflow_run=55, workflow_attempt=1)
+        with tempfile.TemporaryDirectory(prefix='client-product-') as tmp:
+            cwd = Path(tmp)
+            out = cwd / 'github_output'
+            out.write_text('')
+            env = {'GITHUB_REF': 'refs/heads/dev', 'GITHUB_RUN_ID': '55',
+                   'GITHUB_RUN_ATTEMPT': '1', 'GH_TOKEN': 'synthetic',
+                   'GITHUB_OUTPUT': str(out), 'GITHUB_REPOSITORY': C.REPO}
+            def ssh_ok(req):
+                return {'status': 'confirmed', 'last': last_ok}
+            prev = os.getcwd()
+            try:
+                os.chdir(cwd)
+                with patch.dict(os.environ, env, clear=False), patch.object(C, 'request'):
+                    C.execute(Mock(), ssh_ok, descriptor)
+                self.assertIn('changed=true', out.read_text())
+                out.write_text('')
+                def ssh_unknown(req):
+                    return {'status': 'unknown', 'last': last_unknown,
+                            'reason': 'lost process identity; reconcile exact effects'}
+                with patch.dict(os.environ, env, clear=False), patch.object(C, 'request'), \
+                     self.assertRaises(C.Refused):
+                    C.execute(Mock(), ssh_unknown, descriptor)
+                self.assertIn('changed=false', out.read_text())
+                self.assertNotIn('changed=true', out.read_text())
+            finally:
+                os.chdir(prev)
+
     def test_product_stage_setup_skips_author_store(self):
         import stage as St
         import inspect
