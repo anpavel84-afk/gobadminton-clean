@@ -52,8 +52,22 @@ def validate_request(req):
     return req
 
 
+def _same_admission_value(actual, expected):
+    """Closed projection comparison: JSON booleans/floats are never integers."""
+    if type(actual) is not type(expected):
+        return False
+    if type(expected) is dict:
+        return (all(type(k) is str for k in actual)
+                and all(type(k) is str for k in expected)
+                and actual.keys() == expected.keys()
+                and all(_same_admission_value(actual[k], v) for k, v in expected.items()))
+    return type(expected) in (str, int, type(None)) and actual == expected
+
+
 def admission(req, api):
     """Existing authenticated API and numeric Owner, immutable exact comment admission."""
+    need(type(req) is dict, 'invalid scheduling request shape')
+    validate_request(req)
     api.identity()
     c = api(f'issues/comments/{req["control"]["comment"]}')
     need(type(c) is dict and type(c.get('user')) is dict, 'control admission identity shape')
@@ -71,9 +85,19 @@ def admission(req, api):
     need(dt.datetime.fromisoformat(SINCE) <= created <= dt.datetime.now(dt.timezone.utc),
          'control admission outside enrollment')
     body = c.get('body')
-    need(isinstance(body, str) and len(body.encode()) <= 8192, 'control admission size')
+    need(isinstance(body, str), 'control admission size')
+    try:
+        size = len(body.encode('utf-8'))
+    except UnicodeError:
+        need(False, 'invalid control admission UTF-8')
+    need(size <= 8192, 'control admission size')
     marker, sep, raw = body.partition('\n')
-    need(marker == MARKER and sep and loads(raw) == admission_body(req),
+    need(marker == MARKER and sep, 'control admission/request mismatch')
+    try:
+        decoded = loads(raw)
+    except (ValueError, RecursionError, UnicodeError):
+        need(False, 'malformed control admission JSON')
+    need(_same_admission_value(decoded, admission_body(req)),
          'control admission/request mismatch')
     # Only authenticated authority is immutable. Reactions and user presentation
     # fields can change between independent client/server reads without an edit.

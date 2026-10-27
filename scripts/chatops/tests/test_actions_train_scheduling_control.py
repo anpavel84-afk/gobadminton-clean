@@ -1338,4 +1338,267 @@ class MetadataAndBridge(unittest.TestCase):
                 b.stopped_writer(HEAD)
 
 
+
+class AdmissionTypes(unittest.TestCase):
+    """Q3: typed authority before API/intent; real Store positives in local Git."""
+    def fixture(self, real=False):
+        f=Controls();f.setUp();self.addCleanup(f.doCleanups)
+        f.active['attempt']=1
+        A.atomic(f.folder/'state.json',dict(active=f.active,done=[400]))
+        A.atomic(f.folder/'qa-450-a1.json',f.active['qa'])
+        if real:
+            import subprocess
+            work=f.root/'worktrees/issue-450';work.mkdir(parents=True)
+            env=dict(PATH='/usr/bin:/bin',HOME='/nonexistent',LANG='C.UTF-8',
+                GIT_CONFIG_NOSYSTEM='1',GIT_CONFIG_GLOBAL='/dev/null',GIT_TERMINAL_PROMPT='0',
+                GIT_AUTHOR_NAME='Synthetic',GIT_AUTHOR_EMAIL='test@example.invalid',
+                GIT_COMMITTER_NAME='Synthetic',GIT_COMMITTER_EMAIL='test@example.invalid')
+            def git(*args,cwd=None,**kw):
+                return subprocess.check_output(['/usr/bin/git','-c','core.hooksPath=/dev/null',
+                    '-c','core.fsmonitor=false',*args],cwd=cwd or work,env=env,text=True).strip()
+            git('init','-q');git('checkout','-qb','automation/issue-450')
+            (work/'docs').mkdir();(work/'docs/sample.md').write_text('base\n')
+            git('add','.');git('commit','-qm','synthetic base');base=git('rev-parse','HEAD')
+            (work/'docs/sample.md').write_text('candidate\n')
+            git('add','.');git('commit','-qm','synthetic candidate');head=git('rev-parse','HEAD')
+            remote=f.root/'remote.git';git('init','--bare','-q',str(remote))
+            git('push','-q',str(remote),head+':refs/heads/automation/issue-450',base+':refs/heads/dev')
+            issue=dict(number=450,body=A.MARKER+'\n'+json.dumps(f.task),user={'id':core.OWNER},
+                       created_at='2026-10-26T10:00:00Z',state='open')
+            f.active.update(head=head,base=base,fingerprint=A.fingerprint(issue),
+                            qa=dict(verdict='PASS',reviewed_sha=head,findings=[]),ci=None)
+            A.atomic(f.folder/'state.json',dict(active=f.active,done=[400]))
+            A.atomic(f.folder/'qa-450-a1.json',f.active['qa'])
+            f.bridge=A.Bridge(SimpleNamespace(worktrees_root=f.root/'worktrees',
+                state_dir=f.folder,repo=work),None)
+            f.bridge.git=lambda *args,**kw:git(*(str(remote) if a==A.READ_REMOTE else a for a in args),**kw)
+            f.bridge.remote_dev=lambda:base
+            for patched in (patch.object(A,'api',side_effect=lambda path,*a,**kw:
+                    copy.deepcopy(issue) if path=='issues/450' else f.api_call(path,*a,**kw)),
+                    patch.object(A,'pages',return_value=[])):
+                patched.start();self.addCleanup(patched.stop)
+            accounting=Accounting(f.root,f.state)
+            accounting.charge('slot1');accounting.charge('slot2');accounting.charge('slot2')
+            C.root_metadata.side_effect=lambda reader,slot,policy,**kw:accounting.snapshot(slot,policy)
+            f.rt.budget=accounting.budget
+            f.accounting=accounting
+            # Synthetic immutable grant, with full-tree no-effects assertions below.
+            A.atomic(f.state/'grant.json',dict(used_calls=2,ceiling=2,status='consumed'))
+        return f
+
+    @staticmethod
+    def field(obj,name,value):
+        target=obj['control'] if name.startswith('control.') else obj
+        target[name.split('.')[-1]]=value
+
+    @staticmethod
+    def body(f,req,value):
+        f.auth[req['control']['comment']]['body']=C.MARKER+'\n'+json.dumps(value)
+
+    @staticmethod
+    def tree(root):
+        return {str(p.relative_to(root)):p.read_bytes() if p.is_file() else None
+                for p in root.rglob('*')}
+
+    def no_effect(self,f,req):
+        # Create the existing controller lock before taking the immutable snapshot.
+        fd=R.locked(f.state/'controller.lock');os.close(fd)
+        before=self.tree(f.root);f.api.reset_mock();f.rt.lease.reset_mock()
+        with patch.object(C,'perform') as worker,patch.object(A,'Store') as store, \
+             patch.object(R.os,'fork') as fork,patch.object(S.Budget,'charge') as charge:
+            with self.assertRaises(core.Refused):f.prepare(req)
+        self.assertEqual(self.tree(f.root),before)
+        worker.assert_not_called();store.assert_not_called();fork.assert_not_called()
+        charge.assert_not_called();f.rt.lease.assert_not_called()
+
+    def test_Q3_R1_integer_wire_types_ranges_and_matching_bad_body_before_API(self):
+        f=self.fixture();req=f.request()
+        bounds={'issue':(1,10**9),'attempt':(0,3),'generation':(0,10**9),
+                'run':(1,10**18),'run_attempt':(1,10000),
+                'control.comment':(1,None),'control.pr':(1,None)}
+        for name,(lo,hi) in bounds.items():
+            bad=[True,False,float(lo),lo+.5,str(lo),lo-1]
+            if name!='control.pr':bad.append(None)
+            if hi is not None:bad.append(hi+1)
+            for value in bad:
+                for matching in (False,True):
+                    wire=copy.deepcopy(req);self.field(wire,name,value)
+                    if matching:
+                        # A malformed pair must not make equality a validation bypass.
+                        self.body(f,req,C.admission_body(wire))
+                    else:self.body(f,req,C.admission_body(req))
+                    f.api.reset_mock();f.api.identity.reset_mock()
+                    with self.subTest(field=name,value=value,matching=matching):
+                        with self.assertRaises(core.Refused):core.request(wire)
+                        with self.assertRaises(core.Refused):C.admission(wire,f.api)
+                        f.api.assert_not_called();f.api.identity.assert_not_called()
+            for value in (lo,hi) if hi is not None else (lo,10**20):
+                wire=copy.deepcopy(req);self.field(wire,name,value);f.authorize(wire)
+                core.request(wire);self.assertRegex(C.admission(wire,f.api),'^[0-9a-f]{64}$')
+        wire=copy.deepcopy(req);wire['control']['pr']=None;f.authorize(wire)
+        self.assertEqual(core.request(wire),wire);C.admission(wire,f.api)
+        class DictSubclass(dict):pass
+        for wire in (None,[],42,DictSubclass(req)):
+            f.api.reset_mock();f.api.identity.reset_mock()
+            with self.subTest(shape=type(wire).__name__),self.assertRaisesRegex(core.Refused,'shape'):
+                C.admission(wire,f.api)
+            f.api.assert_not_called();f.api.identity.assert_not_called()
+
+    def test_Q3_R2_body_wire_both_numeric_types_across_all_controls(self):
+        f=self.fixture()
+        for action in ('park','resume','reconcile'):
+            refs=({'archive':'a'*64} if action=='resume' else
+                  {'operation':'a'*64,'proof':'b'*64} if action=='reconcile' else {})
+            req=f.request(action,**refs)
+            C.admission(req,f.api)
+            for name in ('issue','attempt','generation','control.pr'):
+                original=req['control']['pr'] if name=='control.pr' else req[name]
+                for value in (True,False,float(original),original+.5,str(original),None,[],{}):
+                    bad=copy.deepcopy(req);self.field(bad,name,value)
+                    for mode in ('body','wire','both'):
+                        wire=bad if mode in ('wire','both') else req
+                        self.body(f,req,C.admission_body(bad if mode in ('body','both') else req))
+                        with self.subTest(action=action,field=name,value=value,mode=mode):
+                            if name=='control.pr' and value is None and mode=='both':
+                                # Null PR is explicitly valid when both sides agree.
+                                C.admission(wire,f.api)
+                            else:
+                                with self.assertRaises(core.Refused):C.admission(wire,f.api)
+            # Both zero fields really permit integer zero, never JSON false.
+            wire=copy.deepcopy(req);wire.update(attempt=0,generation=0);f.authorize(wire)
+            C.admission(wire,f.api)
+            for name in ('attempt','generation'):
+                bad=C.admission_body(wire);bad['request'][name]=False;self.body(f,wire,bad)
+                with self.assertRaises(core.Refused):C.admission(wire,f.api)
+
+    def malformed(self,req):
+        good=C.admission_body(req)
+        yield 'duplicate-root','{"schema":"wrong",'+json.dumps(good)[1:]
+        raw=json.dumps(good)
+        yield 'duplicate-request',raw.replace('"request": {','"request": {"attempt": 1,',1)
+        yield 'duplicate-control',raw.replace('"control": {','"control": {"pr": 900,',1)
+        for level in ('root','request','control'):
+            container=lambda b:b if level=='root' else b['request'] if level=='request' else b['request']['control']
+            bad=copy.deepcopy(good);container(bad)['unknown']=1
+            yield 'unknown-'+level,json.dumps(bad)
+            for key in container(good):
+                bad=copy.deepcopy(good);del container(bad)[key]
+                yield 'missing-'+level+'-'+key,json.dumps(bad)
+        for key in ('run','run_attempt','gh_token'):
+            bad=copy.deepcopy(good);bad['request'][key]=req[key]
+            yield 'delivery-'+key,json.dumps(bad)
+        bad=copy.deepcopy(good);bad['request']['control']['comment']=req['control']['comment']
+        yield 'self-reference',json.dumps(bad)
+        for token in ('NaN','Infinity','-Infinity','1e400','1e0','1.0','true','null','"1"'):
+            yield 'numeric-'+token,raw.replace('"attempt": 1','"attempt": '+token)
+        for name,value in (('array','[]'),('scalar','1'),('string','"body"'),
+                ('null','null'),('truncated',raw[:-1]),('trailing',raw+'!'),
+                ('deep','['*2000+'0'+']'*2000),('integer-overflow','9'*5000)):
+            yield name,value
+
+    def test_Q3_R3_closed_JSON_parse_encoding_byte_bound_and_precise_refusals(self):
+        f=self.fixture();req=f.request()
+        for name,raw in self.malformed(req):
+            f.auth[req['control']['comment']]['body']=C.MARKER+'\n'+raw
+            with self.subTest(case=name):self.no_effect(f,req)
+        comment=f.auth[req['control']['comment']];good=C.MARKER+'\n'+json.dumps(C.admission_body(req))
+        for body,reason in ((good+' '*(8193-len(good.encode())),'size'),
+                (good+'я'*4096,'size'),(good+'\ud800','UTF-8')):
+            comment['body']=body
+            with self.assertRaisesRegex(core.Refused,reason):C.admission(req,f.api)
+            self.no_effect(f,req)
+        comment['body']=good+' '*(8192-len(good.encode()))
+        C.admission(req,f.api)  # the exact existing byte boundary remains valid
+        comment['body']=C.MARKER+'\n'+'['*2000+'0'+']'*2000
+        with self.assertRaises(core.Refused):C.admission(req,f.api)
+        # The live library may raise the process recursion limit. Exercise the
+        # parser-error translation independently of that process-wide setting.
+        with patch.object(C,'loads',side_effect=RecursionError):
+            with self.assertRaisesRegex(core.Refused,'malformed control admission JSON'):
+                C.admission(req,f.api)
+
+    def test_Q3_R3_wire_unknown_missing_and_control_shapes_refuse_before_API(self):
+        f=self.fixture();req=f.request();variants=[]
+        for key in req:
+            bad=copy.deepcopy(req);del bad[key];variants.append(bad)
+        variants.append(dict(req,unknown=1))
+        for key in req['control']:
+            bad=copy.deepcopy(req);del bad['control'][key];variants.append(bad)
+        for control in (None,[],42,dict(req['control'],unknown=1)):
+            variants.append(dict(req,control=control))
+        for wire in variants:
+            f.api.reset_mock();f.api.identity.reset_mock()
+            with self.subTest(wire=wire):
+                with self.assertRaises(core.Refused):core.request(wire)
+                with self.assertRaises(core.Refused):C.admission(wire,f.api)
+                f.api.assert_not_called();f.api.identity.assert_not_called()
+
+    def test_Q3_R4_real_receiver_Store_Git_Budget_negatives_leave_all_bytes_unchanged(self):
+        f=self.fixture(real=True);req=f.request()
+        for name in ('issue','attempt','generation','run','run_attempt','control.comment','control.pr'):
+            value=req['control'][name.split('.')[-1]] if name.startswith('control.') else req[name]
+            for wrong in (True,float(value),str(value),-1,None):
+                if name=='control.pr' and wrong is None:continue  # valid nullable PR
+                bad=copy.deepcopy(req);self.field(bad,name,wrong)
+                for matching in (False,True):
+                    self.body(f,req,C.admission_body(bad if matching else req))
+                    with self.subTest(wire_field=name,value=wrong,matching=matching):
+                        self.no_effect(f,bad)
+                        f.api.assert_not_called();f.api.identity.assert_not_called()
+        for name,value in (('attempt',True),('attempt',1.0),('generation',17.0),
+                           ('issue',450.0),('control.pr',900.0)):
+            bad=copy.deepcopy(req);self.field(bad,name,value);self.body(f,req,C.admission_body(bad))
+            core.request(req)
+            with self.subTest(field=name,value=value):self.no_effect(f,req)
+        for name,raw in self.malformed(req):
+            f.auth[req['control']['comment']]['body']=C.MARKER+'\n'+raw
+            with self.subTest(case=name):self.no_effect(f,req)
+        # Real RESUME state and archive exist, yet a malformed new admission changes nothing.
+        f.authorize(req);parked=f.complete(req)
+        resume=f.request('resume',archive=parked['archive'])
+        for name,value in (('attempt',True),('generation',18.0),('control.pr',900.0)):
+            bad=copy.deepcopy(resume);self.field(bad,name,value)
+            self.body(f,resume,C.admission_body(bad))
+            with self.subTest(stage='resume',field=name):self.no_effect(f,resume)
+
+    def test_Q3_R5_real_integer_park_resume_idempotence_delivery_and_raw_digest(self):
+        f=self.fixture(real=True);req=f.request();before=f.accounting.snapshot()
+        comment=f.auth[req['control']['comment']]
+        def old_formula():
+            return core.digest(dict(schema='GB_SCHEDULING_ADMISSION_IDENTITY_V1',repository=core.REPO,
+                issue=req['issue'],issue_url=comment['issue_url'],comment_id=comment['id'],
+                actor_id=comment['user']['id'],body=comment['body'],created_at=comment['created_at'],
+                updated_at=comment['updated_at']))
+        first=C.admission(req,f.api);self.assertEqual(first,old_formula())
+        reordered=dict(reversed(list(C.admission_body(req).items())))
+        comment['body']=C.MARKER+'\n'+json.dumps(reordered,indent=2)
+        fresh=C.admission(req,f.api);self.assertNotEqual(first,fresh);self.assertEqual(fresh,old_formula())
+        self.assertEqual(C.admission(dict(req,run=999,run_attempt=2),f.api),fresh)
+        start=R.journal('slot1')['generation'];parked=f.complete(req)
+        self.assertEqual(R.journal('slot1')['generation'],start+1)
+        raw=self.tree(f.root);self.assertEqual(f.prepare(dict(req,run=999))['status'],'confirmed')
+        self.assertEqual(self.tree(f.root),raw)
+        comment['body']+=' '
+        with self.assertRaisesRegex(core.Refused,'admission changed'):f.prepare(req)
+        self.assertEqual(self.tree(f.root),raw)
+        comment['body']=comment['body'][:-1]
+        resume=f.request('resume',archive=parked['archive']);f.complete(resume)
+        self.assertEqual(R.journal('slot1')['generation'],start+2)
+        self.assertEqual(f.checkpoint('slot1')[0]['active'],f.active)
+        raw=self.tree(f.root);self.assertEqual(f.prepare(dict(resume,run=999))['status'],'confirmed')
+        self.assertEqual(self.tree(f.root),raw);self.assertEqual(f.accounting.snapshot(),before)
+
+    def test_Q3_R6_exact_wire_request_and_projection_inputs_not_mutated(self):
+        f=self.fixture();req=f.request();original=copy.deepcopy(req)
+        body=C.admission_body(req);bodycopy=copy.deepcopy(body)
+        comment=copy.deepcopy(f.auth[req['control']['comment']])
+        C.admission(req,f.api)
+        self.assertEqual(req,original);self.assertEqual(body,bodycopy)
+        self.assertEqual(f.auth[req['control']['comment']],comment)
+        for name,value in (('attempt',True),('attempt',1.0),('control.pr',900.0)):
+            bad=copy.deepcopy(req);self.field(bad,name,value);saved=copy.deepcopy(bad)
+            with self.assertRaises(core.Refused):C.admission(bad,f.api)
+            self.assertEqual(bad,saved)
+
+
 if __name__ == '__main__':unittest.main()
