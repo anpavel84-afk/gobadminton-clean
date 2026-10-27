@@ -472,8 +472,10 @@ class Invocation(unittest.TestCase):
             atomic=lambda p,v: traces.append(copy.deepcopy(v)), subprocess=SimpleNamespace(Popen=Mock()))
         def factory(c, store): self.bridge.c = c; return self.bridge
         a.Bridge = factory
+        self.rt.budget.bind_issue = lambda issue: setattr(self.rt.budget, 'issue', issue) or self.rt.budget
         runtime = SimpleNamespace(Runtime=lambda *_a,**_k: self.rt, uid_of=lambda _: os.getuid(),
-            Hold=RuntimeError, read_json=lambda *_a,**_k: {'mode':'active','owned':{'slot2':'fixture'}})
+            Hold=RuntimeError, read_json=lambda *_a,**_k: {'mode':'active','owned':{'slot2':'fixture'}},
+            is_source_writer_stage=S.is_source_writer_stage)
         original_invoke = N.invoke
         # One charged invocation per isolated stage instance, including its finally/export.
         events = self.credential_events(variant); raw = self.escaped_wire(events)
@@ -481,13 +483,19 @@ class Invocation(unittest.TestCase):
             self.choice = routing
             with patch.object(N, 'invoke', original_invoke): return self.invoke(events=events)
         choice = dict(provider='agy', effective_model=N.MODEL, effort=None, role='author')
+        # stage.setup refuses root; evidence ownership uses real os.getuid. Patch UID only
+        # around setup so private evidence still matches the process identity.
+        setup_uid, setup_gid = (os.getuid() or 978), (os.getgid() or 968)
+        runtime.uid_of = lambda _: setup_uid
         with patch.object(stage, 'live', return_value=(a,runtime)), patch.object(stage, 'API', return_value=Mock()), \
              patch.object(stage, 'route', return_value=choice), patch.object(context_policy, 'load', return_value=('TRUSTED_FULL_RULES',{})), \
              patch.object(context_policy, 'inject', return_value=('TRUSTED_FULL_RULES',{'role':'author'})), \
              patch.object(receiver, 'units_quiet'), patch.object(N, 'invoke', side_effect=invoke_fixture), \
              patch(__name__+'.wire', return_value=raw):
             request = req('author','candidate'); request['slot'] = 'slot2'
-            context = stage.setup(request, {'codex':{'slot2':str(self.root/'vendor')}})
+            with patch.object(stage.os, 'getuid', return_value=setup_uid), \
+                 patch.object(stage.os, 'getgid', return_value=setup_gid):
+                context = stage.setup(request, {'codex':{'slot2':str(self.root/'vendor')}})
             with self.assertRaises(N.ReviewError) as raised: context[-1].model('task data')
             exported = stage.model_receipt({'status':'unknown'}, context)
         self.assertEqual(type(raised.exception), N.ReviewError)

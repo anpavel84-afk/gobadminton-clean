@@ -75,7 +75,12 @@ class OneShot(unittest.TestCase):
         req=dict(action='train',stage='qa_qualification',slot='slot2',issue=29,phase='idle',head=self.q['head'],attempt=0,generation=87,profile='agy',run=123,run_attempt=1,gh_token='synthetic')
         from contextlib import ExitStack
         with ExitStack() as stack:
-            for name,value in [('STATE',self.f.root),('read',self.f.r.read),('atomic',self.f.r.atomic),('journal',self.f.r.journal),('checkpoint',self.f.r.checkpoint),('guard',Mock()),('identity',Mock(return_value={})),('alive',Mock(return_value=False)),('live',lambda:(None,SimpleNamespace(Budget=lambda *a:SimpleNamespace(remaining=lambda *a:0))))]:stack.enter_context(patch.object(receiver,name,value))
+            def fake_budget(*a, **k):
+                b=SimpleNamespace(remaining=lambda *a:0, issue=None)
+                b.bind_issue=lambda issue: setattr(b,'issue',issue) or b
+                if k.get('issue') is not None: b.bind_issue(k['issue'])
+                return b
+            for name,value in [('STATE',self.f.root),('read',self.f.r.read),('atomic',self.f.r.atomic),('journal',self.f.r.journal),('checkpoint',self.f.r.checkpoint),('guard',Mock()),('identity',Mock(return_value={})),('alive',Mock(return_value=False)),('live',lambda:(None,SimpleNamespace(Budget=fake_budget)))]:stack.enter_context(patch.object(receiver,name,value))
             stack.enter_context(patch.object(N,'qualification',return_value=self.f.marker));stack.enter_context(patch.object(N,'trusted',return_value=json.dumps(self.f.marker).encode()))
             def fork():
                 self.assertEqual(self.f.data[R.GRANT_LEDGER]['used_calls'],1)

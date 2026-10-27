@@ -10,7 +10,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from test_actions_train import ROOT, core, req, stage
+from test_actions_train import ROOT, core, req, stage, S
 import context_exchange as E
 import context_native_delivery as N
 import context_policy as C
@@ -213,9 +213,10 @@ class StageDoesNotSelectScoped(unittest.TestCase):
             store = SimpleNamespace(data={'active': {
                 'task': {}, 'head': 'a'*40, 'base': 'b'*40, 'attempt': 1, 'issue': 200}})
             layout = SimpleNamespace(repo=root, state_dir=root, worktrees=root, outbox=root)
+            budget = SimpleNamespace(used=lambda *_a: 0, charge=Mock(), issue=None)
+            budget.bind_issue = lambda issue: setattr(budget, 'issue', issue) or budget
             rt = SimpleNamespace(user='test', legacy=True, home=root, key=root/'key', layout=layout,
-                slot='slot1', check_paths=Mock(), continuity=lambda: True, lease=Mock(),
-                budget=SimpleNamespace(used=lambda *_a: 0, charge=Mock()))
+                slot='slot1', check_paths=Mock(), continuity=lambda: True, lease=Mock(), budget=budget)
             a = SimpleNamespace(RUNTIME_READS=(), Store=lambda *_a: store,
                 atomic=lambda _p, _v: None, permitted=lambda *_a: True,
                 subprocess=SimpleNamespace(Popen=Mock()))
@@ -228,7 +229,8 @@ class StageDoesNotSelectScoped(unittest.TestCase):
                 return b
             a.Bridge = factory
             s = SimpleNamespace(Runtime=lambda *_a, **_k: rt, uid_of=lambda _u: 1002, Hold=RuntimeError,
-                                read_json=lambda *_a, **_k: {'mode': 'active', 'owned': {'slot1': 'x'}})
+                                read_json=lambda *_a, **_k: {'mode': 'active', 'owned': {'slot1': 'x'}},
+                                is_source_writer_stage=S.is_source_writer_stage)
             choice = {'provider': provider, 'effective_model': 'Auto' if provider == 'cursor' else 'claude-sonnet-5-5-medium',
                       'effort': 'medium', 'role': 'author' if provider == 'cursor' else 'qa'}
             def cursor_invoke(_bridge, _rt, prompt, _token, chosen, **_kwargs):

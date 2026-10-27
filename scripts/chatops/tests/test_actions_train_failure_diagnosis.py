@@ -198,9 +198,10 @@ class ProspectiveAndRoute(unittest.TestCase):
                         failure_diagnosis=dict(calls=1,receipts={'f'*64:dict(status='pending',inputs={'head':HEAD})}))
             store=SimpleNamespace(data={'active':active})
             layout=SimpleNamespace(repo=folder,state_dir=folder,worktrees=folder,outbox=folder)
+            budget=SimpleNamespace(used=lambda *_:calls[0],issue=None)
+            budget.bind_issue=lambda issue: setattr(budget,'issue',issue) or budget
             rt=SimpleNamespace(user='test',legacy=True,home=folder,key=folder/'key',layout=layout,
-                check_paths=Mock(),continuity=lambda:True,lease=Mock(),
-                budget=SimpleNamespace(used=lambda *_:calls[0]))
+                check_paths=Mock(),continuity=lambda:True,lease=Mock(),budget=budget)
             a=SimpleNamespace(RUNTIME_READS=(),Store=lambda *_:store,atomic=Mock(),
                               subprocess=SimpleNamespace(Popen=Mock()))
             def factory(c,st):
@@ -214,7 +215,8 @@ class ProspectiveAndRoute(unittest.TestCase):
                 return SimpleNamespace(c=c,store=st,work=folder,git=Mock(),unchanged_issue=Mock(),model=model)
             a.Bridge=factory
             s=SimpleNamespace(Runtime=lambda *_args,**_kw:rt,uid_of=lambda _:1002,Hold=RuntimeError,
-                              read_json=lambda *_args,**_kw:dict(mode='active',owned={'slot1':'x'}))
+                              read_json=lambda *_args,**_kw:dict(mode='active',owned={'slot1':'x'}),
+                              is_source_writer_stage=S.is_source_writer_stage)
             choice=dict(provider='codex',role='failure_diagnosis',effective_model='gpt-6-astra',
                         requested_model='gpt-6-astra',effort='high')
             with patch.object(stage,'live',return_value=(a,s)),patch.object(stage.os,'getuid',return_value=1002), \

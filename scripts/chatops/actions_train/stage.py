@@ -28,7 +28,7 @@ def setup(req, config, native_auth=None):
     # Bind authenticated request issue before AGY route selection/charge (per-issue daily).
     issue = req.get('issue')
     if type(issue) is int and issue > 0:
-        rt.budget.issue = issue
+        rt.budget.bind_issue(issue)
     a.SLOT, a._SLOTS, a._SLOTS_HOLD, a.KEY = req['slot'], rt, s.Hold, rt.key
     if not rt.legacy:
         a.RUNTIME_READS = rt.runtime_reads

@@ -1250,7 +1250,7 @@ class QualificationSeam(unittest.TestCase):
             with patch.object(receiver,'STATE',Path(temp)), \
                  patch.object(receiver,'checkpoint',return_value=(state,[])), \
                  patch.object(receiver,'guard',return_value=None), \
-                 patch.object(receiver,'live',return_value=(None,SimpleNamespace(Budget=lambda *a:budget))), \
+                 patch.object(receiver,'live',return_value=(None,SimpleNamespace(Budget=lambda *a, **k: budget))), \
                  patch.object(receiver,'read',side_effect=lambda p,owner=None,limit=2097152:original(p,None,limit)), \
                  patch.object(N,'qualification',return_value=m), \
                  patch.object(N,'trusted',return_value=json.dumps(m).encode()), \
