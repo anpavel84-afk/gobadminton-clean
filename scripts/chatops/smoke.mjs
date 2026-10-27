@@ -28,9 +28,9 @@ try {
       assert(moscow, 'Moscow option missing');
       await city.selectOption(moscow.value);
     }
-    const entry = page.getByRole('link',{name:/^(Карта|Показать на карте)$/}).first();
-    await entry.waitFor({state:'visible',timeout:30000});
-    await entry.click();
+    // Anonymous /players has no activationId-gated map link; public map is /players/radar.
+    const radar = await page.goto(new URL('/players/radar',url).href,{waitUntil:'domcontentloaded',timeout:45000});
+    assert(radar && radar.ok(), 'radar HTTP '+(radar ? radar.status() : 'NO_RESPONSE'));
     await page.locator('[data-map-ready="true"] canvas').first().waitFor({state:'visible',timeout:45000});
     await page.locator('.g2-map-venue-marker').first().waitFor({state:'visible',timeout:20000});
     assert.equal(await page.locator('.g2-map-fallback').count(),0,'Fallback is not acceptance');
