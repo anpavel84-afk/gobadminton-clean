@@ -598,9 +598,11 @@ def run_product_qa(req, config, context):
     receipt['charged_calls'] = rt.budget.used('agy', 'qa', req['slot']) - before_calls
     need(receipt['charged_calls'] == 1, 'product QA ledger mismatch')
     tools = set(receipt.get('tool_names') or [])
+    # Native finish is STEP_TYPE finish DONE (finish_done), not a TOOL name in tool_names.
     passed = (result.get('verdict') == 'PASS'
               and result.get('reviewed_sha') == PRODUCT_SOURCE_SHA
-              and 'run_command' in tools and 'view_file' in tools and 'finish' in tools)
+              and 'run_command' in tools and 'view_file' in tools
+              and receipt.get('finish_done') is True)
     receipt['product_qa_passed'] = passed
     name = save_receipt(b.c.state_dir, PRODUCT_ISSUE, admission.get('attempt', 1), receipt)
     # READY file is root-owned; supervisor materializes it only after confirmed PASS.

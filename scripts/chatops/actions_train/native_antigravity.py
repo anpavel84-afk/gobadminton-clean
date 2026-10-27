@@ -2035,7 +2035,10 @@ def parse_stream(raw, head, model=MODEL, *, analysis_binding=None, strict_source
                     requested_agent=AGENT, effective_agent=init['agent'],
                     requested_tools='native_qa_tools', effective_tools=init['tools'],
                     requested_permission_mode=PERMISSION_MODE,effective_permission_mode=init['permission_mode'],
-                    tool_events=len(tool_steps), tool_names=sorted(tool_names), event_count=len(events), provider_reported_usage=usage,
+                    tool_events=len(tool_steps), tool_names=sorted(tool_names),
+                    # finish is STEP_TYPE finish (not TOOL); expose DONE evidence additively.
+                    finish_done=bool(finish) if analysis_binding is None else None,
+                    event_count=len(events), provider_reported_usage=usage,
                     transcript_sha256=hashlib.sha256(raw).hexdigest(),
                     initialization_sha256=hashlib.sha256(json.dumps(init, sort_keys=True).encode()).hexdigest())
     return result, evidence

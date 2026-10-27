@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import stat
 import subprocess
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -237,10 +238,22 @@ class ProductQaV4Contract(unittest.TestCase):
         self.assertNotIn('quiet', called)
         self.assertNotIn('safe_checkpoint', called)
         self.assertIn("live checkpoint active HOLD", quiet_src)
-        self.assertIn('installed OLD pin/metadata HOLD', quiet_src)
-        # Closure includes native_guard + live/slots from actual installed baseline.
+        # Resource quiescence must NOT re-check all OLD pins each apply loop.
+        self.assertNotIn('installed OLD pin/metadata HOLD', quiet_src)
+        self.assertIn('_v4_historical_checkpoint_ok', quiet_src)
+        plan_src=inspect.getsource(U._v4_plan)
+        self.assertIn('installed OLD pin mismatch HOLD', plan_src)
+        self.assertIn('_v4_current', inspect.getsource(U.execute_v4))
+        # Closure includes native_guard + live/slots + PR341 context/admission/rules.
         self.assertIn('native_guard.py', U.V4_OLD)
         self.assertIn('live/slots.py', U.V4_OLD)
+        self.assertIn('context_policy.py', U.V4_OLD)
+        self.assertIn('context_cursor_delivery.py', U.V4_OLD)
+        self.assertIsNone(U.V4_OLD['context_cursor_delivery.py'])
+        self.assertIsNone(U.V4_OLD['admission_pm.py'])
+        self.assertEqual(U.V4_OLD['accepted-engineering-rules.md'],
+                         '017441dec5ba197a1065b6ef90efdddb090b286ba48687241a7fbc09dd002269')
+        self.assertEqual(U.V4_NEW['accepted-engineering-rules.md'], U.RULES_SHA256)
         # Controller protocol: policy/cursor_marker/budget + disabled→shadow→activation.
         src=inspect.getsource(U.execute_v4)
         self.assertIn("action=='verify'", src)
@@ -248,13 +261,15 @@ class ProductQaV4Contract(unittest.TestCase):
         self.assertIn("proof-recorded", src)
         self.assertIn("action=='apply'", src)
         self.assertIn('require existing journal', src)
-        plan_src=inspect.getsource(U._v4_plan)
         self.assertIn('v4_reviewed_budget_config5', plan_src)
         self.assertIn("'policy'", plan_src)
         self.assertIn('cursor_marker', plan_src)
         self.assertIn("'budget'", plan_src)
         self.assertIn('_v4_workflow_gates', src)
         self.assertIn('version=4', src)
+        save_src=inspect.getsource(U._v4_save)
+        self.assertIn('expected=current(V4_JOURNAL)', save_src)
+        self.assertNotIn('expected=None)', save_src)
 
     def test_v4_old_pins_match_installed_v3_baseline(self):
         # Regression: V4 OLD = actual installed V3_OLD/V3_PROTOCOL, not assumed PR340/PR341.
@@ -264,43 +279,66 @@ class ProductQaV4Contract(unittest.TestCase):
                          U.V3_OLD['native_guard.py'])
         self.assertEqual(U.V4_OLD['core.py'], U.V3_PROTOCOL['core.py'])
         self.assertEqual(U.V4_OLD['receiver.py'], U.V3_PROTOCOL['receiver.py'])
+        self.assertEqual(U.V4_OLD['context_policy.py'], U.V3_OLD['context_policy.py'])
+        self.assertEqual(U.V4_NEW['context_policy.py'], U.V3_NEW['context_policy.py'])
+        self.assertEqual(U.V4_NEW['context_cursor_delivery.py'],
+                         U.V3_NEW['context_cursor_delivery.py'])
+        self.assertEqual(U.V4_NEW['admission_pm.py'], U.V3_NEW['admission_pm.py'])
         self.assertEqual(U.V4_NEW['native_guard.py'],
                          U.V3_NEW['native_guard.py'])
+        self.assertEqual(U.V4_FROZEN['native_cursor.py'], U.V3_PROTOCOL['native_cursor.py'])
+        self.assertEqual(U.V4_FROZEN['context_exchange.py'], U.V3_PROTOCOL['context_exchange.py'])
 
     def test_quiet_v4_allows_historical_pending_denies_live(self):
-        # Historical pending UNKNOWN accepted; live process / non-done checkpoint denied.
+        # Historical pending UNKNOWN accepted; live process / unmatched CP denied.
         import native_antigravity as N
         import pwd
-        j={'pending':{'unknown':True},'operations':{
-            'history':{'status':'unknown','process':{'pid':123,'start':'old','boot':'old'}}}}
-        def fake_read(path,**kw):
-            for key,pin in U.V4_OLD.items():
-                if str(path).endswith('/'+key) or str(path).endswith(key):
-                    return b'pin',U.canonical_meta(pin)
-            raise AssertionError('unexpected read '+str(path))
+        hist_key=U.V4_HISTORICAL_SLOT1_PENDING
+        hist_op={'status':'unknown','result':{'status':'unknown','safe_release':False},
+                 'binding':{'slot':'slot1','issue':U.V4_HISTORICAL_SLOT1_ISSUE,
+                            'head':U.V4_HISTORICAL_SLOT1_HEAD},
+                 'process':{'pid':123,'start':'old','boot':'old'}}
+        j={'generation':113,'pending':hist_key,'operations':{
+            hist_key:hist_op,
+            'history':{'status':'unknown','process':{'pid':456,'start':'old','boot':'old'}}}}
         accounts={'agentagency-dev':SimpleNamespace(pw_uid=1002),
                   'gb-slot2':SimpleNamespace(pw_uid=978)}
-        dead={'pid':123,'start':'reused','boot':'old'}
+        dead={'pid':999,'start':'reused','boot':'old'}
         ops=type('P',(),{'exists':staticmethod(lambda:False)})()
+        hist_cp={'active':{'phase':'pr_wait','issue':U.V4_HISTORICAL_SLOT1_ISSUE,
+                           'head':U.V4_HISTORICAL_SLOT1_HEAD},'done':[]}
+        idle_cp={'active':None,'done':[]}
+        def checkpoint(slot):
+            return (hist_cp if slot=='slot1' else idle_cp),[]
+        slot2_j={'pending':U.V4_HISTORICAL_SLOT2_PENDING,'operations':{
+            U.V4_HISTORICAL_SLOT2_PENDING:{'status':'unknown',
+                'result':{'status':'unknown','safe_release':False},
+                'process':{'pid':789,'start':'old','boot':'old'}}}}
+        def journal(slot):
+            return j if slot=='slot1' else slot2_j
         with patch.object(pwd,'getpwnam',side_effect=lambda n:accounts[n]), \
              patch.object(U,'run',return_value=b'ActiveState=inactive\nMainPID=0\nUnitFileState=masked\n'), \
              patch.object(U.receiver,'units_quiet'), \
-             patch.object(U.receiver,'journal',return_value=j), \
-             patch.object(U.receiver,'checkpoint',return_value=({'active':None,'done':[]},[])), \
+             patch.object(U.receiver,'journal',side_effect=journal), \
+             patch.object(U.receiver,'checkpoint',side_effect=checkpoint), \
              patch.object(U.receiver,'identity',return_value=dead), \
              patch.object(U.receiver,'no_models'), \
              patch.object(U,'lock_unheld'), \
              patch.object(U.receiver,'free_lock'), \
              patch.object(U.receiver,'recovery_journal',return_value={'receipts':{}}), \
-             patch.object(U,'read_file',side_effect=fake_read), \
              patch.object(U.os.path,'lexists',return_value=False), \
-             patch.object(N,'PRODUCT_OPS',ops):
+             patch.object(U,'V4_PRODUCT_OPS',ops):
             U.quiet_v4()
-            with patch.object(U.receiver,'identity',return_value=j['operations']['history']['process']):
+            with patch.object(U.receiver,'identity',return_value=hist_op['process']):
                 with self.assertRaisesRegex(core.Refused,'still alive HOLD'):
                     U.quiet_v4()
             with patch.object(U.receiver,'checkpoint',
                               return_value=({'active':{'phase':'author','issue':1},'done':[]},[])):
+                with self.assertRaisesRegex(core.Refused,'live checkpoint active HOLD'):
+                    U.quiet_v4()
+            with patch.object(U.receiver,'checkpoint',side_effect=lambda slot: (
+                    ({'active':{'phase':'pr_wait','issue':99,'head':'b'*40},'done':[]},[])
+                    if slot=='slot1' else (idle_cp,[]))):
                 with self.assertRaisesRegex(core.Refused,'live checkpoint active HOLD'):
                     U.quiet_v4()
 
@@ -317,6 +355,213 @@ class ProductQaV4Contract(unittest.TestCase):
         self.assertEqual(before['providers']['agy']['qa'],2)
         with self.assertRaises(core.Refused):
             U.v4_reviewed_budget_config5({'schema':1,'global_cap':9,'providers':{},'slots':{}})
+
+    def test_v4_save_second_write_uses_expected_metadata(self):
+        # expected=None on every save makes the second CAS fail once the journal exists.
+        with tempfile.TemporaryDirectory(prefix='.gb-v4-save-') as tmp:
+            root=Path(tmp);journal=root/'journal.json'
+            meta=dict(mode=0o600,uid=os.getuid(),gid=os.getgid())
+            with patch.object(U,'V4_JOURNAL',journal), \
+                 patch.object(U,'OWNER_UID',os.getuid()), \
+                 patch.object(U,'OWNER_GID',os.getgid()), \
+                 patch.object(U.receiver,'trusted_tree'):
+                U._v4_save({'phase':'preparing','n':1})
+                U._v4_save({'phase':'applying','n':2})
+                self.assertEqual(json.loads(journal.read_bytes())['phase'],'applying')
+
+
+class V4Fixture:
+    """Synthetic OPS V4 fixture reused from Stage5Install; Root UID → test UID."""
+
+    def __init__(self):
+        self.f=f=v3.legacy.Stage5Install();f.setUp()
+        try: self.build()
+        except BaseException:
+            f.tearDown();raise
+
+    def build(self):
+        f=self.f
+        f.stack.enter_context(patch.object(U.os,'geteuid',return_value=os.getuid()))
+        self.v4_journal=f.state/'stage5-product-qa-admission.json'
+        self.v4_backup=f.state/'stage5-product-qa-admission-backup'
+        f.stack.enter_context(patch.object(U,'V4_JOURNAL',self.v4_journal))
+        f.stack.enter_context(patch.object(U,'V4_BACKUP',self.v4_backup))
+        f.stack.enter_context(patch.object(U,'quiet_v4'))
+        self.baseline=U.C5
+        self.controller='c'*40
+        rules=v3.legacy.RULES
+        # OLD present pins / NEW bytes; None-preimage modules start absent.
+        self.before={n:(('old '+n).encode() if pin else None) for n,pin in U.V4_OLD.items()}
+        self.before['accepted-engineering-rules.md']=b'old accepted rules artifact\n'
+        self.after={n:('new '+n).encode() for n in U.V4_NEW}
+        self.after['accepted-engineering-rules.md']=rules
+        self.after['context_policy.py']=(
+            ("RULES_SHA256 = '%s'\nRULES_SIZE = %d\nRULES_COMMIT = '%s'\n"
+             %(H(rules),len(rules),f.rules_commit)).encode())
+        frozen_raw={n:('frozen '+n).encode() for n in U.V4_FROZEN}
+        frozen={n:H(raw) for n,raw in frozen_raw.items()}
+        for n,raw in frozen_raw.items():
+            p=f.install/n;p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(raw)
+            src=f.bundle/U.PREFIX/n;src.parent.mkdir(parents=True,exist_ok=True);src.write_bytes(raw)
+            f.items[p]=src
+        # Clear leftover Stage5Install targets that are not part of V4 OLD presence.
+        for n,raw in self.before.items():
+            p=f.install/n;p.parent.mkdir(parents=True,exist_ok=True)
+            if raw is None: p.unlink(missing_ok=True)
+            else: p.write_bytes(raw)
+            if n=='accepted-engineering-rules.md': continue
+            src=f.bundle/U.PREFIX/n;src.parent.mkdir(parents=True,exist_ok=True)
+            # Candidate (NEW) bytes in bundle; installed stays OLD/absent.
+            src.write_bytes(self.after[n]);f.items[f.install/n]=src
+        # Workflows must bind the new controller for V4 gates.
+        wf=f.bundle/'.github/workflows'
+        for name in ('train-stage.yml','train-dispatch.yml'):
+            (wf/name).write_text(('ref: '+self.controller+'\n')*2)
+        f.sh=H((wf/'train-stage.yml').read_bytes());f.dh=H((wf/'train-dispatch.yml').read_bytes())
+        # Canon blob already committed in Stage5Install; keep RULES_* patches below.
+        f.refresh()
+        policy=dict(mode='active',controller_sha=self.baseline,stage_workflow_sha256=f.sh,
+                    recovery={'source_sha':self.baseline})
+        f.policy.write_text(json.dumps(policy,indent=2));self.policy=f.policy.read_bytes()
+        f.budget.write_text(json.dumps({'schema':1,'providers':{'agy':{'qa':2}},
+                                        'slots':{'slot2':{'agy':{'qa':2}}}}))
+        f.rules.write_bytes(self.before['accepted-engineering-rules.md'])
+        old={n:H(raw) if raw is not None else None for n,raw in self.before.items()}
+        new={n:H(raw) for n,raw in self.after.items()}
+        self.markers={};self.marker_raw={}
+        for key in ('cursor_marker','agy_marker'):
+            p=f.p/(key+'.json')
+            marker=dict(schema='GB_CURSOR_AUTHOR_211_V1' if key=='cursor_marker' else 'GB_ANTIGRAVITY_QA_29_V1',
+                        phase='ready' if key=='cursor_marker' else 'canary',
+                        adapter_revision=self.baseline,
+                        accepted_canary=dict(acceptance_basis='runtime_qualification',
+                                             attestation={'guard':'old evidence'}),
+                        qualification={'grant':{'ceiling':1,'used':1,'rules':'old evidence'}},
+                        canary_task_sha256='f'*64,qualified_at=123,
+                        modules={'native_guard.py':old['native_guard.py']})
+            if key=='cursor_marker': marker['modules']['native_cursor.py']=frozen['native_cursor.py']
+            else: marker['modules']['native_antigravity.py']=old['native_antigravity.py']
+            raw=json.dumps(marker,indent=2).encode()+b'\n';p.write_bytes(raw)
+            self.markers[key]=p;self.marker_raw[key]=raw
+        # Inventory lists only currently installed paths (None-preimage absent).
+        present={}
+        for n,raw in self.before.items():
+            if raw is not None: present[str(f.install/n)]=raw
+        for n,raw in frozen_raw.items(): present[str(f.install/n)]=raw
+        # Retain other Stage5Install helper payload if still present.
+        helper=f.p/'helper'
+        if helper.exists(): present[str(helper)]=helper.read_bytes()
+        record=dict(manifest='original full install manifest',
+                    after={p:H(raw) for p,raw in present.items()},
+                    before={'old':'history'},targets=['old install'])
+        f.inventory.write_text(json.dumps(record,indent=2));f.inventory.chmod(0o600)
+        self.inventory=f.inventory.read_bytes()
+        self.oldfiles=dict(present)
+        v3_old={**U.V3_OLD,'native_guard.py':old['native_guard.py'],
+                'native_antigravity.py':old['native_antigravity.py']}
+        v3_protocol={**U.V3_PROTOCOL,'native_cursor.py':frozen['native_cursor.py'],
+                     'context_exchange.py':frozen['context_exchange.py']}
+        for key,val in dict(C5=self.baseline,V4_OLD=old,V4_NEW=new,V4_FROZEN=frozen,
+                            V3_OLD=v3_old,V3_PROTOCOL=v3_protocol,V3_MARKERS=self.markers,
+                            RULES_SHA256=H(rules),RULES_SIZE=len(rules),
+                            RULES_COMMIT=f.rules_commit).items():
+            f.stack.enter_context(patch.object(U,key,val))
+
+    def call(self,action):
+        f=self.f
+        return U.execute(action,f.bundle,f.manifest,self.controller,f.sh,f.dh,123,
+                         self.baseline,f.commit,'dev',4)
+
+    def close(self): self.f.tearDown()
+
+    def restored(self,case):
+        for p,raw in self.oldfiles.items(): case.assertEqual(Path(p).read_bytes(),raw,p)
+        for n,raw in self.before.items():
+            if raw is None: case.assertFalse((self.f.install/n).exists(),n)
+            else: case.assertEqual((self.f.install/n).read_bytes(),raw,n)
+        for key,p in self.markers.items(): case.assertEqual(p.read_bytes(),self.marker_raw[key])
+        case.assertEqual(self.f.inventory.read_bytes(),self.inventory)
+        case.assertEqual(self.f.policy.read_bytes(),self.policy)
+
+
+class ProductQaV4Transaction(unittest.TestCase):
+    def setUp(self):
+        self.x=V4Fixture();self.addCleanup(self.x.close)
+
+    def test_dry_apply_verify_rollback_roundtrip(self):
+        x=self.x;before={str(p):p.read_bytes() for p in x.f.p.rglob('*') if p.is_file()}
+        r=x.call('dry')
+        self.assertTrue(r['dry']);self.assertEqual(r['status'],'PLANNED_PRODUCT_QA_UPGRADE')
+        self.assertEqual(before,{str(p):p.read_bytes() for p in x.f.p.rglob('*') if p.is_file()})
+        self.assertIn('admission_pm.py',r['changes'])
+        self.assertIsNone(r['changes']['admission_pm.py']['before'])
+        r=x.call('apply')
+        self.assertEqual(r['phase'],'installed-disabled')
+        for n,raw in x.after.items():
+            self.assertEqual((x.f.install/n).read_bytes(),raw,n)
+        self.assertEqual(json.loads(x.f.policy.read_bytes())['mode'],'disabled')
+        self.assertEqual(x.call('verify')['verified'],True)
+        x.call('rollback');x.restored(self)
+
+    def test_midwrite_interruption_rollback_restores_intent(self):
+        x=self.x;atomic=U.atomic_bytes;fired=False
+        def crash(p,raw,meta,**kw):
+            nonlocal fired
+            # Interrupt after first lib write lands, before durable applied append.
+            if (not fired and p==x.f.install/'admission_pm.py'):
+                fired=True;atomic(p,raw,meta,**kw);raise InterruptedError('midwrite')
+            return atomic(p,raw,meta,**kw)
+        with patch.object(U,'atomic_bytes',side_effect=crash),self.assertRaises(InterruptedError):
+            x.call('apply')
+        j=json.loads(x.v4_journal.read_bytes())
+        self.assertEqual(j['phase'],'applying')
+        self.assertEqual(j['write_intent'],{'action':'apply','target':'admission_pm.py'})
+        self.assertTrue((x.f.install/'admission_pm.py').exists())
+        x.call('rollback');x.restored(self)
+        self.assertFalse((x.f.install/'admission_pm.py').exists())
+
+    def test_stale_live_unknown_checkpoint_refused(self):
+        # quiet_v4 resource gate: unmatched live/nonterminal CP fails closed.
+        with patch.object(U,'quiet_v4',side_effect=core.Refused('live checkpoint active HOLD: slot1')):
+            with self.assertRaisesRegex(core.Refused,'live checkpoint active HOLD'):
+                self.x.call('dry')
+
+
+class ProductQaFinishEvidence(unittest.TestCase):
+    def test_parse_stream_exposes_finish_done_not_tool_name(self):
+        import sys
+        sys.path.insert(0,str(ROOT/'scripts/chatops/actions_train'))
+        import native_antigravity as N
+        import copy,json,hashlib
+        sha='a'*40;cid='synthetic-finish'
+        events=[
+            {'event':'init','conversation_id':cid,'init':{
+                'model':N.MODEL,'agent':N.AGENT,
+                'tools':['finish','view_file','run_command'],
+                'permission_mode':N.PERMISSION_MODE,'json_schema':copy.deepcopy(N.SCHEMA)}},
+            {'event':'step_update','step_update':{'conversation_id':cid,'step_index':0,
+                'step_type':'user_input','state':'DONE'}},
+            {'event':'step_update','step_update':{'conversation_id':cid,'step_index':1,
+                'tool_name':'view_file','step_type':'tool','state':'DONE'}},
+            {'event':'step_update','step_update':{'conversation_id':cid,'step_index':2,
+                'tool_name':'run_command','step_type':'tool','state':'DONE'}},
+            {'event':'step_update','step_update':{'conversation_id':cid,'step_index':3,
+                'step_type':'agent_response','state':'DONE'}},
+            {'event':'step_update','step_update':{'conversation_id':cid,'step_index':4,
+                'step_type':'finish','state':'DONE'}},
+            {'event':'result','result':{'conversation_id':cid,'status':'SUCCESS',
+                'structured_output':{'verdict':'PASS','findings':[],'reviewed_sha':sha}}}]
+        raw=b'\n'.join(json.dumps(e).encode() for e in events)+b'\n'
+        result,receipt=N.parse_stream(raw,sha)
+        self.assertEqual(result['verdict'],'PASS')
+        self.assertEqual(set(receipt['tool_names']),{'view_file','run_command'})
+        self.assertNotIn('finish',receipt['tool_names'])
+        self.assertTrue(receipt['finish_done'])
+        # stage.run_product_qa predicate: tools + finish_done, not finish tool name.
+        import inspect
+        src=inspect.getsource(__import__('stage',fromlist=['*']).run_product_qa)
+        self.assertIn("receipt.get('finish_done') is True",src)
+        self.assertNotIn("'finish' in tools",src)
 
 
 if __name__=='__main__': unittest.main()

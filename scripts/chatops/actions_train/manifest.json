@@ -20,7 +20,7 @@
     "scripts/chatops/actions_train/monitor_extension.js": "35bc34203b95f48b3988f36ac1b78476c58639422abea1bb8c1168e3adc1ef20",
     "scripts/chatops/actions_train/monitor_payload/app.js": "c2d7a233ab77f10fd5795f1629814b7fee6e579d4da9968a29d982a5faf979ca",
     "scripts/chatops/actions_train/monitor_payload/writer.py": "fc89ff1f9a26b565b2214f887873f4ea661c46bf86dd41daf37fe44680212158",
-    "scripts/chatops/actions_train/native_antigravity.py": "67ec9a9b93b347b30856eca958b7549ac33f49a16a23ed2c2dadb9b9e7330090",
+    "scripts/chatops/actions_train/native_antigravity.py": "2683c0f86e7a0ae92687495cd24c4a2c4106ca4783e71cf7b0f0b27922c6ee41",
     "scripts/chatops/actions_train/native_antigravity_author.py": "5264885606c794c98d36698bb6bb651122b9be69a826ef1b17294cf1294f2ce8",
     "scripts/chatops/actions_train/native_cursor.py": "02d26f8be9766bbeb1e92dd8514dfc496c1b3e1b0fc8035c1c65cc9aba6b6089",
     "scripts/chatops/actions_train/native_guard.py": "334d4c78c57ba9a7f3f5c49e6737ec8e658033e4b4fdc84f92ce168ece9019f9",
@@ -34,7 +34,7 @@
     "scripts/chatops/actions_train/recovery_publish.py": "51e110d5beaf1a0e46b98eaffb2691d7e4e975c36ab939575e93e87d2850a8c9",
     "scripts/chatops/actions_train/recovery_upgrade.py": "ce8cc88f3cb3230b51f425d9082e826511c35332ca363d2af97bb8b18e4498f6",
     "scripts/chatops/actions_train/smart_routing.py": "36cbcc0e41bc56a27de74151d8e482942ea6313c2cb3686a5977c1bbd445e30e",
-    "scripts/chatops/actions_train/stage.py": "7517cba31ab0ccc09481d37809b2e7336c7895d10b2bed324cefdb0b733524f5",
+    "scripts/chatops/actions_train/stage.py": "994849f0deb414eff41276affef6a4e208809ab30b8cd835b58b7a7fc6e7c530",
     "scripts/chatops/server/gb-deploy-helper.sh": "c023a71bd1362e8a9347bc06c89b69546efd6c3856e1e6dce1c4c57304538f99"
   },
   "schema": "GB_ACTIONS_TRAIN_INSTALL_V1"
