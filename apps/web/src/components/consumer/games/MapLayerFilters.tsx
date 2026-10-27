@@ -61,6 +61,35 @@ function SlidersGlyph() {
   </svg>;
 }
 
+function VenueGlyph() {
+  return <svg aria-hidden="true" className="gb-map-filters-section__icon" width="18" height="18" viewBox="0 0 24 24" fill="none">
+    <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.6" />
+    <path d="M8.5 13.5c1.2-2.8 2.2-4.2 3.5-6.5 1.3 2.3 2.3 3.7 3.5 6.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    <path d="M9 15.5h6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+  </svg>;
+}
+
+function PlayersGlyph() {
+  return <svg aria-hidden="true" className="gb-map-filters-section__icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+    <circle cx="9" cy="8" r="2.5" />
+    <circle cx="16" cy="9" r="2" />
+    <path d="M4.5 18c.6-2.4 2.4-3.5 4.5-3.5s3.9 1.1 4.5 3.5" />
+    <path d="M13.5 18c.3-1.4 1.2-2.2 2.5-2.2 1.5 0 2.5.9 2.8 2.2" />
+  </svg>;
+}
+
+function RefreshGlyph() {
+  return <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M21 12a9 9 0 1 1-2.4-6.1" />
+    <path d="M21 4v6h-6" />
+  </svg>;
+}
+
+const VENUE_OPTIONS: Array<{ mode: VenueLayerMode; title: string; hint: string }> = [
+  { mode: "all", title: "Все площадки", hint: "Показать все доступные площадки" },
+  { mode: "with_games", title: "Только с играми", hint: "Показать только площадки, где есть игры" },
+];
+
 /** Filter action, lavender chip and BottomSheet near map return controls. */
 export function MapLayerFiltersControls() {
   const { applied, setApplied, resetApplied } = useMapLayerFilters();
@@ -147,27 +176,31 @@ export function MapLayerFiltersControls() {
         ref={trigger}
         type="button"
         className="gb-map-filters-action"
+        aria-label="Фильтры"
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-controls={open ? "gb-map-filters-sheet" : undefined}
         onClick={() => setOpen(true)}
       >
         <SlidersGlyph />
-        <span>Фильтры</span>
+        <span className="gb-map-filters-action__label">Фильтры</span>
       </button>
       {active && <div className="gb-map-filters-chip" role="status">
         <span className="gb-map-filters-chip__label">{mapLayerFiltersChipLabel(applied)}</span>
-        <button
-          type="button"
-          className="gb-map-filters-chip__clear"
-          aria-label="Сбросить фильтры"
-          onClick={resetApplied}
-        >
-          <span aria-hidden="true">×</span>
-        </button>
-        <button type="button" className="gb-map-filters-chip__reset" onClick={resetApplied}>
-          ↻ Сбросить фильтры
-        </button>
+        <div className="gb-map-filters-chip__actions">
+          <button type="button" className="gb-map-filters-chip__reset" onClick={resetApplied}>
+            <RefreshGlyph />
+            <span>Сбросить фильтры</span>
+          </button>
+          <button
+            type="button"
+            className="gb-map-filters-chip__clear"
+            aria-label="Сбросить фильтры"
+            onClick={resetApplied}
+          >
+            <span aria-hidden="true">×</span>
+          </button>
+        </div>
       </div>}
     </div>
     {open && <div
@@ -190,43 +223,43 @@ export function MapLayerFiltersControls() {
         </header>
         <div className="gb-map-filters-sheet__body">
           <fieldset className="gb-map-filters-section">
-            <legend>Площадки</legend>
+            <legend><VenueGlyph />Площадки</legend>
             <div className="gb-map-filters-options" role="radiogroup" aria-label="Площадки">
-              <button
-                type="button"
-                className="gb-discovery-chip"
-                role="radio"
-                aria-checked={draft.venueMode === "all"}
-                aria-pressed={draft.venueMode === "all"}
-                onClick={() => setVenueMode("all")}
-              >
-                Все площадки
-              </button>
-              <button
-                type="button"
-                className="gb-discovery-chip"
-                role="radio"
-                aria-checked={draft.venueMode === "with_games"}
-                aria-pressed={draft.venueMode === "with_games"}
-                onClick={() => setVenueMode("with_games")}
-              >
-                Только с играми
-              </button>
+              {VENUE_OPTIONS.map(option => {
+                const checked = draft.venueMode === option.mode;
+                return <button
+                  key={option.mode}
+                  type="button"
+                  className="gb-map-filters-option"
+                  role="radio"
+                  aria-checked={checked}
+                  onClick={() => setVenueMode(option.mode)}
+                >
+                  <i className="gb-map-filters-option__radio" aria-hidden="true" data-checked={checked || undefined} />
+                  <span>
+                    <strong>{option.title}</strong>
+                    <small>{option.hint}</small>
+                  </span>
+                </button>;
+              })}
             </div>
           </fieldset>
           <fieldset className="gb-map-filters-section">
-            <legend>Радар игроков</legend>
+            <legend><PlayersGlyph />Радар игроков</legend>
             <Toggle
               label="Показывать игроков рядом"
-              helper="Только отображение. Не включает Radar и не меняет согласие на геопозицию."
+              helper="На карте будут показаны игроки поблизости. Только отображение слоя — не включает Radar и не меняет согласие на геопозицию."
               on={draft.showPlayersNearby}
               onClick={() => setDraft(previous => ({ ...previous, showPlayersNearby: !previous.showPlayersNearby }))}
             />
           </fieldset>
         </div>
         <footer className="gb-map-filters-sheet__footer">
-          <Button variant="outline" onClick={resetDraft}>Сбросить всё</Button>
-          <Button onClick={applyDraft}>Применить</Button>
+          <Button variant="ghost" className="gb-map-filters-reset-all" onClick={resetDraft}>
+            <RefreshGlyph />
+            Сбросить всё
+          </Button>
+          <Button className="gb-map-filters-apply" onClick={applyDraft}>Применить</Button>
         </footer>
       </section>
     </div>}

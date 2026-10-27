@@ -35,8 +35,10 @@ describe("map layer filter helpers", () => {
   it("reports active chip state for non-default applied filters", () => {
     expect(mapLayerFiltersActive({ venueMode: "with_games", showPlayersNearby: true })).toBe(true);
     expect(mapLayerFiltersActive({ venueMode: "all", showPlayersNearby: false })).toBe(true);
-    expect(mapLayerFiltersChipLabel({ venueMode: "with_games", showPlayersNearby: false })).toContain("С играми");
-    expect(mapLayerFiltersChipLabel({ venueMode: "with_games", showPlayersNearby: false })).toContain("Без игроков");
+    expect(mapLayerFiltersChipLabel({ venueMode: "with_games", showPlayersNearby: true })).toContain("Только с играми");
+    expect(mapLayerFiltersChipLabel({ venueMode: "with_games", showPlayersNearby: true })).toContain("Радар включён");
+    expect(mapLayerFiltersChipLabel({ venueMode: "with_games", showPlayersNearby: false })).toContain("Только с играми");
+    expect(mapLayerFiltersChipLabel({ venueMode: "with_games", showPlayersNearby: false })).toContain("Радар выключен");
     expect(sameMapLayerFilters(DEFAULT_MAP_LAYER_FILTERS, { ...DEFAULT_MAP_LAYER_FILTERS })).toBe(true);
   });
 });

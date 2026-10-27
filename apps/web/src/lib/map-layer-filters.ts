@@ -43,7 +43,11 @@ export function filterVenuesForMapLayer(
 
 export function mapLayerFiltersChipLabel(applied: MapLayerFiltersState): string {
   const parts: string[] = [];
-  if (applied.venueMode === "with_games") parts.push("С играми");
-  if (!applied.showPlayersNearby) parts.push("Без игроков");
+  if (applied.venueMode === "with_games") parts.push("Только с играми");
+  if (applied.showPlayersNearby) {
+    if (applied.venueMode === "with_games") parts.push("Радар включён");
+  } else {
+    parts.push("Радар выключен");
+  }
   return parts.length ? parts.join(" · ") : "Фильтры";
 }

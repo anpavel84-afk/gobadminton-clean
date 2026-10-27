@@ -130,6 +130,9 @@ describe("MapLayerFiltersControls draft/apply/reset", () => {
     expect(renderToStaticMarkup(tree)).toContain("Площадки");
     expect(renderToStaticMarkup(tree)).toContain("Радар игроков");
     expect(renderToStaticMarkup(tree)).toContain("Показывать игроков рядом");
+    expect(renderToStaticMarkup(tree)).toContain("Показать все доступные площадки");
+    expect(renderToStaticMarkup(tree)).toContain("Показать только площадки, где есть игры");
+    expect(renderToStaticMarkup(tree)).toContain("На карте будут показаны игроки поблизости");
 
     expect(clickLabel(tree, "Только с играми")).toBe(true);
     tree = render();
@@ -146,8 +149,8 @@ describe("MapLayerFiltersControls draft/apply/reset", () => {
     tree = render();
     expect(applied).toEqual({ venueMode: "with_games", showPlayersNearby: false });
     expect(renderToStaticMarkup(tree)).toContain("Сбросить фильтры");
-    expect(renderToStaticMarkup(tree)).toContain("С играми");
-    expect(renderToStaticMarkup(tree)).toContain("Без игроков");
+    expect(renderToStaticMarkup(tree)).toContain("Только с играми");
+    expect(renderToStaticMarkup(tree)).toContain("Радар выключен");
 
     expect(clickLabel(tree, "Сбросить фильтры")).toBe(true);
     tree = render();
