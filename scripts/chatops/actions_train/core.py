@@ -505,13 +505,17 @@ def plan(a, s, snapshot, candidates, profile='auto'):
         pending = card.get('pending')
         product = card.get('product_qa')
         # Product QA uses a separate ops ledger; historical slot2 pending may remain.
+        # Generation binds to product_qa_ops (trusted proposal source), never legacy slot journal.
         if snapshot.get('mode') == 'active' and name == 'slot2' and product:
+            ops = snapshot.get('product_qa_ops')
+            ops_gen = ops.get('generation', 0) if isinstance(ops, dict) else None
             need(set(product) == {'slot','issue','stage','phase','head','attempt','generation','profile'}
                  and product['slot'] == name and product['issue'] == 346
                  and product['stage'] == 'product_qa' and product['phase'] == 'idle'
                  and product['attempt'] == 0 and product['profile'] == 'agy'
                  and product['head'] == '8024caa659f4fee911d7e3afcb69ed7ac845ce5c'
-                 and product['generation'] == card['generation'],
+                 and type(product['generation']) is int and 0 <= product['generation'] <= 10**9
+                 and (ops_gen is None or product['generation'] == ops_gen),
                  'invalid root product QA proposal')
             out.append(dict(product))
         if pending:

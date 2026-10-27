@@ -315,10 +315,31 @@ class Successor(unittest.TestCase):
 
 
 class ProductQaExecutor(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        os.umask(0o022)
+
     def test_refuse_foreign_checkpoint_and_wrong_uid(self):
         with self.assertRaises(Exception):
             N.refuse_foreign_checkpoint('/var/lib/gobadminton-autonomy/slots/slot1/state.json')
         N.refuse_foreign_checkpoint('/srv/gb-slots/slot2/worktrees/issue-346')
+
+    def test_no_artificial_slot1_probe_in_product_entry(self):
+        # Entry/plan must not call refuse_foreign_checkpoint on a hardcoded slot1 path
+        # (that always HOLDs). Only actual admission work paths are checked.
+        import receiver as Rec
+        import stage as St
+        for src in (Rec.supervisor, St.run_product_qa):
+            text=__import__('inspect').getsource(src)
+            self.assertNotIn("refuse_foreign_checkpoint(AUTONOMY", text)
+            self.assertNotIn("refuse_foreign_checkpoint(Path('/var/lib/gobadminton-autonomy/slots/slot1'))", text)
+
+    def test_ordinary_qa_uses_product_flag_when_ready(self):
+        import stage as St
+        import inspect
+        text=inspect.getsource(St)
+        self.assertIn('product_role_ready', text)
+        self.assertIn('product=use_product', text)
 
     def test_product_available_requires_ready_receipt(self):
         with patch.object(N,'product_role_ready',return_value=False):

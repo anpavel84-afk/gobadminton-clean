@@ -2321,9 +2321,11 @@ def review(work, base, head, prompt, timeout, *, slot, task_hash, charge, model=
         ev.record(requested_model=model)
         need(model in MODELS, 'unsupported native QA model')
         if product:
+            # Product executor path (UID978 capability). Exact Issue346 SHA is enforced
+            # by product_work_ok / run_product_qa admission only — ordinary eligible QA
+            # after READY must not re-bind canary29 or force PRODUCT_SOURCE_SHA.
             refuse_foreign_checkpoint(work)
             need(analysis_grant is None, 'product QA is not addressed analysis')
-            need(head == PRODUCT_SOURCE_SHA, 'product QA source SHA drift')
         # Same AGY_CANDIDATE_CHANGED code as invoke(), before charge. Porcelain
         # alone is not the gate: skip-worktree, exclude and git metadata bypass it.
         # The chmod guard is applied first so the before/after modes match.

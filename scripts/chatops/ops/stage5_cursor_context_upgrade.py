@@ -985,26 +985,31 @@ def execute_v3(action,bundle,manifest,controller,stage_sha,dispatch_sha,run_id,b
 
 
 # V4: product QA admission transport. Distinct from V3; never reinterprets a V3 journal.
+# OLD pins = actual installed V3_OLD/V3_PROTOCOL baseline (27Oct), not assumed PR340/PR341.
+# Closure includes native_guard + live/slots one-writer, not merely the six transport files.
 # Allows install while historical slot pending UNKNOWN remains, only when NEW product-QA
-# resources are free and target modules match exact OLD pins. Does not claim all old
-# external helper effects absent. Frozen V3 contract behaviour is unchanged.
+# resources are free. Frozen V3 contract behaviour is unchanged.
 V4_SCHEMA='GB_STAGE5_PRODUCT_QA_ADMISSION_V4'
 V4_JOURNAL=STATE/'stage5-product-qa-admission.json'
 V4_BACKUP=STATE/'stage5-product-qa-admission-backup'
 V4_OLD={
- 'core.py':'ca51d30d78bfd2ad5d745738cfe4fd2a782fffd22369b313fe862af3dbfe7654',
- 'receiver.py':'03d3b52eb62b02b3a8e473859a506aaba0d925cdeaee0297c0fc328e2ddcd4ab',
- 'stage.py':'74291bcd67827d2365f1678e7617cf0f8ec09dc389e1c1bffbac23111faa89ad',
- 'native_antigravity.py':'9dae383ae315f02f5ed03e6c8e45424b0516e8a653e446e5600440d12b438889',
+ 'core.py':'3ed9ab5503694f39011102ff34935810ef1dce67cf712c87be89b023689a15a7',
+ 'receiver.py':'6405168b06f3902e40595528d30856c025a0311abfc31d70b59e969ed384af4e',
+ 'stage.py':'ea79b894076c755f28d62619154b0681ecb636b7b32dd05c18a8c996112a1c2e',
+ 'native_antigravity.py':'01d4816e881765da6361af07a15765528aef274dad0eb780b1afab6b0e5e0f72',
+ 'native_guard.py':'dd2e0a0c6c0dea0d353b7dc5f16c1a5d4c4c21f022947ceaa640470c59fb0762',
  'owner_package_admission.py':'bb5bf8516d26ae293f16d794c2e46f90b01d0c27b34da15febbd0bff4398c7c5',
- 'client.py':'1c63f4a53709f749cd6d7e88ee6cf1fd479a76762b385dc3a94764f4d42bce65'}
+ 'client.py':'1c63f4a53709f749cd6d7e88ee6cf1fd479a76762b385dc3a94764f4d42bce65',
+ 'live/slots.py':'3c7b4ab36dd3cd8b41c3309a4d58c54ffc99027b1d7c1e5ad2235b5cd1f72a76'}
 V4_NEW={
- 'core.py':'bbf1811191ba488d9e7d99d4e70ae0756ad6579c607b0830e856e62050ae41e0',
- 'receiver.py':'6a64c9bc2d5b3d9c71fea433b16078acb70d36b631755a90c36016f885e2a950',
- 'stage.py':'2577cf387a8ea0c72a713e21eea499f4a3fec23a2253157221f796b65b18eb41',
- 'native_antigravity.py':'e6b1904d6e2a7adb67faf1a5d0818b8cc0f4e1babe081667f3eafac6d69f23e1',
+ 'core.py':'f3f06cc1245635b937018c1cbe431645ae4aa9acc45e7249be18e0b87cf2ee19',
+ 'receiver.py':'37b4deb4988c28fdb680301a9421492252eea9fb942f2e27356ced10ce7d2f2a',
+ 'stage.py':'7517cba31ab0ccc09481d37809b2e7336c7895d10b2bed324cefdb0b733524f5',
+ 'native_antigravity.py':'67ec9a9b93b347b30856eca958b7549ac33f49a16a23ed2c2dadb9b9e7330090',
+ 'native_guard.py':'334d4c78c57ba9a7f3f5c49e6737ec8e658033e4b4fdc84f92ce168ece9019f9',
  'owner_package_admission.py':'4aeb579312e9ad2979298929f16ea92210b3323fde51dfc26778a6a96c7a4677',
- 'client.py':'d02307161913f72d5c9864b5f36d8862b39cc6e564091be51ed7e02bdde2a897'}
+ 'client.py':'d02307161913f72d5c9864b5f36d8862b39cc6e564091be51ed7e02bdde2a897',
+ 'live/slots.py':'3c6d910ccdaa5d482a1cf05c9330f35ef5c9a5aabd5b14ce88d4033c71e144ce'}
 
 
 def quiet_v4():
@@ -1013,6 +1018,7 @@ def quiet_v4():
     Proves stopped UID978 identity for a new launch and free product-qa lease.
     Does not clear/reset slot1/slot2 journals and does not claim all old helper
     provenance absent. Conflicting live process or held product-qa lock → HOLD.
+    Terminal active evidence required via safe_checkpoint (real HOLD, not fake allow).
     """
     quiet()  # units/cgroups/legacy locks
     for slot in ('slot1','slot2'):
@@ -1033,11 +1039,56 @@ def quiet_v4():
         need(ops.get('pending') is None,'product QA operation still pending/UNKNOWN HOLD')
 
 
+def _v4_backup_name(name):
+    """Flat backup filename; live/slots.py → live__slots.py."""
+    return name.replace('/', '__')
+
+
 def _v4_save(j):
-    raw=json.dumps(j,sort_keys=True).encode()
-    if V4_JOURNAL.exists():
-        pathlib.Path(V4_JOURNAL).unlink()
-    atomic_bytes(V4_JOURNAL,raw,dict(mode=0o600,uid=OWNER_UID,gid=OWNER_GID),expected=None)
+    """Crash-safe journal write; never unlink-then-create."""
+    atomic_bytes(V4_JOURNAL,encoded(j),dict(mode=0o600,uid=OWNER_UID,gid=OWNER_GID),expected=None)
+
+
+def _v4_material(bundle,commit):
+    target={}
+    for name,pin in V4_NEW.items():
+        raw=git(bundle,'show',commit+':'+PREFIX+name)
+        need(bytes_sha(raw)==pin,'V4 bundle target drift: '+name)
+        target[name]=raw
+    return target
+
+
+def _v4_plan(target):
+    for name,pin in V4_OLD.items():
+        need(sha(INSTALL/name)==pin,
+             'V4 installed OLD pin mismatch HOLD: '+name+'; blocker=installed module drift')
+        need(bytes_sha(target[name])==V4_NEW[name],'V4 target/NEW pin mismatch: '+name)
+    changes={n:dict(before=canonical_meta(V4_OLD[n]),after=canonical_meta(V4_NEW[n])) for n in V4_OLD}
+    # AGY marker module pins must track native_antigravity/native_guard or READY drifts.
+    marker_path=V3_MARKERS['agy_marker']
+    marker_raw=regular_bytes(marker_path)
+    pins={'native_guard.py':V4_NEW['native_guard.py'],
+          'native_antigravity.py':V4_NEW['native_antigravity.py']}
+    marker_after=module_pins_only(marker_raw,'agy_marker',pins)
+    changes['agy_marker']=dict(before=canonical_meta(bytes_sha(marker_raw)),
+                               after=canonical_meta(bytes_sha(marker_after)))
+    target=dict(target,agy_marker=marker_after)
+    # Inventory must list every lib target; missing keys → explicit HOLD (no invented inventory).
+    inv_path=STATE/'backup.json'
+    need(os.path.lexists(inv_path),'V4 inventory missing HOLD; cannot prove OLD→NEW without backup.json')
+    inv_raw=regular_bytes(inv_path)
+    record=loads(inv_raw)
+    need(type(record) is dict and type(record.get('after')) is dict,'invalid V4 inventory')
+    for name,pin in V4_OLD.items():
+        key=str(INSTALL/name)
+        need(record['after'].get(key)==pin,
+             'V4 inventory OLD pin missing/drift HOLD: '+name)
+    inv_changes={n:changes[n] for n in V4_OLD}
+    inv_after=inventory_bytes(inv_raw,inv_changes)
+    changes['inventory']=dict(before=canonical_meta(bytes_sha(inv_raw),0o600),
+                              after=canonical_meta(bytes_sha(inv_after),0o600))
+    target=dict(target,inventory=inv_after)
+    return changes,target,marker_raw,inv_raw
 
 
 def execute_v4(action,bundle,manifest,controller,stage_sha,dispatch_sha,run_id,baseline,commit,branch):
@@ -1057,22 +1108,66 @@ def execute_v4(action,bundle,manifest,controller,stage_sha,dispatch_sha,run_id,b
                   dispatch_sha256=dispatch_sha,schema=V4_SCHEMA,
                   slot1_before_sha256=bytes_sha(slot1_before) if slot1_before else None,
                   slot2_before_sha256=bytes_sha(slot2_before) if slot2_before else None)
-    target={}
-    for name,pin in V4_NEW.items():
-        raw=git(bundle,'show',commit+':'+PREFIX+name)
-        need(bytes_sha(raw)==pin,'V4 bundle target drift: '+name)
-        target[name]=raw
-    for name,pin in V4_OLD.items():
-        need(sha(INSTALL/name)==pin,
-             'V4 installed OLD pin mismatch HOLD: '+name+'; blocker=installed module drift')
-    need(sha(INSTALL/'native_guard.py')==V3_NEW['native_guard.py'],
-         'native_guard must remain accepted PR341 pin')
-    changes={n:dict(before=canonical_meta(V4_OLD[n]),after=canonical_meta(V4_NEW[n])) for n in V4_OLD}
+    lib_target=_v4_material(bundle,commit)
+    paths={**{n:INSTALL/n for n in V4_OLD},
+           'agy_marker':V3_MARKERS['agy_marker'],
+           'inventory':STATE/'backup.json'}
+    if os.path.lexists(V4_JOURNAL):
+        # Use durable journal changes; do not re-plan against already-updated marker/inventory.
+        j=loads(regular_bytes(V4_JOURNAL))
+        need(isinstance(j,dict) and j.get('schema')==V4_SCHEMA and j.get('identity')==identity,
+             'V4 journal identity/schema differs; separate reconciliation required')
+        changes=j['changes']
+        if action=='verify':
+            need(j['phase']=='installed-lib-only','V4 verify requires installed-lib-only phase')
+            for n in V4_OLD:
+                need(sha(INSTALL/n)==V4_NEW[n]==changes[n]['after']['sha256'],
+                     'V4 verify NEW pin drift: '+n)
+            need(sha(V3_MARKERS['agy_marker'])==changes['agy_marker']['after']['sha256'],
+                 'V4 verify AGY marker pin drift')
+            need(sha(STATE/'backup.json')==changes['inventory']['after']['sha256'],
+                 'V4 verify inventory pin drift')
+            need((slot1.read_bytes() if slot1.exists() else None)==slot1_before
+                 and (slot2.read_bytes() if slot2.exists() else None)==slot2_before,
+                 'V4 verify must not rewrite historical slot journals')
+            return dict(phase='installed-lib-only',version=4,verified=True,ready=False,
+                        role_qualified=False,preserved_slot_pending=True)
+        if action=='activate':
+            # READY is receipt-gated (PRODUCT_READY after confirmed QA PASS), not installer activate.
+            need(False,'V4 activate HOLD: product QA READY requires confirmed PASS receipt; '
+                 'installer activate must not assert role_qualified/ready')
+        if action=='rollback':
+            need(j['phase'] in ('preparing','applying','installed-lib-only','rolling-back'),
+                 'V4 rollback phase unsupported')
+            if j['phase']=='preparing' and not j.get('applied'):
+                j['phase']='rolled-back';_v4_save(j)
+                return dict(phase='rolled-back',state_preserved=True,noop=True)
+            j['phase']='rolling-back';_v4_save(j)
+            for name in reversed(list(j.get('applied') or [])):
+                quiet_v4()
+                before=j['changes'][name]['before']
+                after=j['changes'][name]['after']
+                path=paths[name]
+                now=current(path)
+                if now!=before:
+                    raw,_=read_file(V4_BACKUP/_v4_backup_name(name),trusted=False)
+                    need(bytes_sha(raw)==before['sha256'],'V4 backup bytes drift: '+name)
+                    atomic_bytes(path,raw,before,expected=after)
+                j.setdefault('restored',[]).append(name);_v4_save(j)
+            need((slot1.read_bytes() if slot1.exists() else None)==slot1_before
+                 and (slot2.read_bytes() if slot2.exists() else None)==slot2_before,
+                 'V4 rollback must not rewrite historical slot journals')
+            j['phase']='rolled-back';_v4_save(j)
+            return dict(phase='rolled-back',state_preserved=True,ready=False)
+        need(False,'V4 prior journal exists; use verify/rollback (apply refused)')
+    # Fresh plan only when no journal (dry/apply). Re-planning after apply would
+    # fail module_pins_only against already-updated marker pins.
+    changes,target,_,_=_v4_plan(lib_target)
     if action=='dry':
         return dict(dry=True,status='PLANNED_PRODUCT_QA_UPGRADE',version=4,changes=changes,
                     preserved_slot_pending=True,role_qualified=False,ready=False,policy_writes=0)
-    need(not os.path.lexists(V4_JOURNAL) and not os.path.lexists(V4_BACKUP),
-         'prior V4 transaction exists; inspect/rollback')
+    need(action=='apply','V4 verify/activate/rollback require existing journal; apply first')
+    need(not os.path.lexists(V4_BACKUP),'prior V4 backup exists; inspect/rollback')
     j=dict(schema=V4_SCHEMA,identity=identity,identity_sha256=digest(identity),
            phase='preparing',installed_at=int(time.time()),changes=changes,
            preserved_slot1=identity['slot1_before_sha256'],
@@ -1080,16 +1175,20 @@ def execute_v4(action,bundle,manifest,controller,stage_sha,dispatch_sha,run_id,b
            applied=[],restored=[],write_intent=None)
     _v4_save(j)
     V4_BACKUP.mkdir(mode=0o700)
-    for name in sorted(V4_OLD):
-        raw,_=read_file(INSTALL/name)
-        need(bytes_sha(raw)==V4_OLD[name],'pre-backup OLD drift: '+name)
-        atomic_bytes(V4_BACKUP/name,raw,canonical_meta(V4_OLD[name],0o600),expected=None)
+    order=sorted(V4_OLD)+['agy_marker','inventory']
+    for name in order:
+        path=paths[name]
+        raw,_=read_file(path)
+        need(bytes_sha(raw)==changes[name]['before']['sha256'],'pre-backup OLD drift: '+name)
+        atomic_bytes(V4_BACKUP/_v4_backup_name(name),raw,
+                     canonical_meta(changes[name]['before']['sha256'],0o600),expected=None)
     quiet_v4()
     j['phase']='applying';_v4_save(j)
-    for name in sorted(V4_OLD):
+    for name in order:
         quiet_v4()
-        atomic_bytes(INSTALL/name,target[name],changes[name]['after'],expected=changes[name]['before'])
-        j['applied'].append(name);_v4_save(j)
+        j['write_intent']=dict(action='apply',target=name);_v4_save(j)
+        atomic_bytes(paths[name],target[name],changes[name]['after'],expected=changes[name]['before'])
+        j['applied'].append(name);j['write_intent']=None;_v4_save(j)
     need((slot1.read_bytes() if slot1.exists() else None)==slot1_before
          and (slot2.read_bytes() if slot2.exists() else None)==slot2_before,
          'V4 install must not rewrite historical slot journals')

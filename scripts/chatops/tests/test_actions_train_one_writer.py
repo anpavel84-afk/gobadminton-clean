@@ -376,6 +376,10 @@ class ProductQaAdmissionWire(unittest.TestCase):
     HEAD = '8024caa659f4fee911d7e3afcb69ed7ac845ce5c'
     BASE = 'a' * 40
 
+    @classmethod
+    def setUpClass(cls):
+        os.umask(0o022)
+
     def _admission(self, **extra):
         import owner_package_admission as A
         import native_antigravity as N
@@ -409,24 +413,42 @@ class ProductQaAdmissionWire(unittest.TestCase):
                     core.request(req | fields)
 
     def test_plan_exposes_product_qa_with_legacy_slot2_pending(self):
+        # Product ops generation 0 must not be compared to legacy slot2 generation 119.
         product = dict(slot='slot2', issue=346, stage='product_qa', phase='idle',
-                       head=self.HEAD, attempt=0, generation=7, profile='agy')
+                       head=self.HEAD, attempt=0, generation=0, profile='agy')
         slot2 = _card(pending=dict(status='unknown', recoverable=False,
                                    binding=dict(action='train', stage='qa_qualification',
                                                 slot='slot2', issue=29, phase='idle',
                                                 head='d' * 40, attempt=0, generation=119,
                                                 profile='agy')))
-        slot2['generation'] = 7
+        slot2['generation'] = 119
         slot2['product_qa'] = product
         snap = dict(mode='active', slots={
             'slot1': _card(active=_active('pr_wait', 346)),
-            'slot2': slot2})
+            'slot2': slot2},
+            product_qa_ops=dict(schema='GB_PRODUCT_QA_OPS_V1', generation=0,
+                                operations={}, pending=None, last=None))
         planned = core.plan(None, S, snap, [])
         self.assertEqual([p for p in planned if p.get('stage') == 'product_qa'], [product])
+
+    def test_plan_refuses_product_generation_mismatched_to_ops(self):
+        product = dict(slot='slot2', issue=346, stage='product_qa', phase='idle',
+                       head=self.HEAD, attempt=0, generation=0, profile='agy')
+        slot2 = _card()
+        slot2['generation'] = 119
+        slot2['product_qa'] = product
+        snap = dict(mode='active', slots={'slot1': _card(), 'slot2': slot2},
+                    product_qa_ops=dict(schema='GB_PRODUCT_QA_OPS_V1', generation=3,
+                                        operations={}, pending=None, last=None))
+        with self.assertRaises(core.Refused):
+            core.plan(None, S, snap, [])
 
     def test_product_request_preserves_legacy_pending_and_no_replay(self):
         import native_antigravity as N
         import owner_package_admission as A
+        import importlib
+        # Fresh actual modules — avoid combined-suite stub contamination.
+        A = importlib.reload(A)
         with tempfile.TemporaryDirectory(prefix='product-qa-') as tmp:
             folder = Path(tmp)
             legacy = dict(generation=119, operations={'old': {'result': {'status': 'unknown'}}},
@@ -439,6 +461,7 @@ class ProductQaAdmissionWire(unittest.TestCase):
                        phase='idle', head=self.HEAD, attempt=0, generation=0,
                        profile='agy', run=10, run_attempt=1, gh_token='synthetic-read-token')
             budget = Mock(remaining=lambda *a: 3)
+            original_read = R.read
             with patch.object(R, 'STATE', folder), \
                  patch.object(N, 'PRODUCT_OPS', folder / 'product-qa-operations.json'), \
                  patch.object(R, 'ROOT_LOCK', -1, create=True), \
@@ -448,6 +471,7 @@ class ProductQaAdmissionWire(unittest.TestCase):
                  patch.object(N, 'product_executor_ready', return_value={'phase': 'canary'}), \
                  patch.object(N, 'product_work_ok', return_value=Path(admission['work'])), \
                  patch.object(N, 'refuse_foreign_checkpoint'), \
+                 patch.object(R, 'read', side_effect=lambda p, owner=None, limit=2097152: original_read(p, None, limit)), \
                  patch.object(R.os, 'fork', return_value=4242) as fork, \
                  patch.object(R, 'identity', return_value={'pid': 4242, 'start': '1', 'boot': 'x'}), \
                  patch.object(R, 'alive', return_value=False), \

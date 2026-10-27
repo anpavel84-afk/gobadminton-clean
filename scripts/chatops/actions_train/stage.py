@@ -186,13 +186,17 @@ def setup(req, config, native_auth=None):
                                 atomic=a.atomic, permitted=a.permitted)
                 choice['rules_context'] = choice['native_receipt']['rules_context']
             elif provider == 'agy':
-                from native_antigravity import review, save_receipt
+                from native_antigravity import review, save_receipt, product_role_ready
                 active = store.data['active']
                 from core import digest
+                # After product READY, ordinary eligible QA uses UID978 product executor
+                # (not legacy canary29 qualification). Until READY, product=False → Medium fallback.
+                use_product = bool(product_role_ready())
                 answer, receipt = review(bridge.work, active['base'], active['head'], wrapped, c.model_timeout,
                     slot=req['slot'], task_hash=digest(active['task']), model=choice['effective_model'],
                     charge=lambda: rt.budget.charge(req['slot'], 'agy', 'qa'), popen=a.subprocess.Popen,
-                    accepted_rules=accepted_rules, evidence_dir=c.state_dir/'antigravity-evidence')
+                    accepted_rules=accepted_rules, evidence_dir=c.state_dir/'antigravity-evidence',
+                    product=use_product)
                 save_receipt(c.state_dir, active['issue'], active['attempt'], receipt)
                 choice['native_receipt'] = receipt
                 choice['rules_context'] = receipt['rules_context']
@@ -553,7 +557,7 @@ def perform(req, config, context):
 def run_product_qa(req, config, context):
     """Fresh product QA-only review for Issue346; never touches foreign slot1 checkpoint."""
     from native_antigravity import (PRODUCT_ISSUE, PRODUCT_SOURCE_SHA,
-                                    product_executor_ready, product_work_ok, refuse_foreign_checkpoint,
+                                    product_executor_ready, product_work_ok,
                                     review, save_receipt, MODEL)
     from context_policy import load
     from core import digest
@@ -561,8 +565,8 @@ def run_product_qa(req, config, context):
     a, s, rt, api, store, b = context
     need(req['stage'] == 'product_qa', 'not a product QA stage')
     need(os.getuid() == 978 and os.geteuid() == 978, 'product QA wrong UID; Root/1002 forbidden')
-    refuse_foreign_checkpoint(rt.layout.state_dir)  # must not be slot1
-    refuse_foreign_checkpoint(Path('/var/lib/gobadminton-autonomy/slots/slot1'))
+    # Actual admission work is the only path checked (product_work_ok → refuse_foreign).
+    # Do not probe hardcoded slot1 paths (always-HOLD helper forbidden).
     admission = req.get('_product_admission')
     need(type(admission) is dict and admission.get('issue') == PRODUCT_ISSUE
          and admission.get('source_sha') == PRODUCT_SOURCE_SHA

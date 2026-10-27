@@ -421,9 +421,8 @@ def supervisor(req, policy, key, root_lock):
             os.environ.update(PATH='/usr/bin:/bin', LANG='C.UTF-8', HOME=user.pw_dir, USER=user.pw_name)
             if product:
                 need(os.getuid() == 978, 'product QA must run as UID978')
-                # Never open foreign slot1 checkpoint from the product QA executor.
-                from native_antigravity import refuse_foreign_checkpoint
-                refuse_foreign_checkpoint(AUTONOMY / 'slots' / 'slot1')
+                # Do not open foreign slot1 checkpoint. Admission work was already
+                # refuse_foreign_checkpoint'd in product_qa_request; never probe slot1 path.
             else:
                 req['_task_hash'] = j['operations'][key].get('task_hash')
                 if j['operations'][key].get('qa_qualification'):
