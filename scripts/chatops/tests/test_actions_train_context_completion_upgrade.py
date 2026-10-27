@@ -552,7 +552,8 @@ class ProductQaV4HybridImport(unittest.TestCase):
             CHECKPOINT = "c" * 64
             ''').encode()
         self.assertNotIn(b'SMALL_SOURCE_HEAD', stub_q)
-        with tempfile.TemporaryDirectory(prefix='v4-hybrid-') as tmp:
+        with tempfile.TemporaryDirectory(prefix='v4-hybrid-') as tmp, \
+             patch.dict(sys.modules), patch.object(sys, 'path', list(sys.path)):
             tree = Path(tmp)
             # Minimal dependency surface for owner_package_admission import.
             for name in ('core.py', 'receiver.py', 'native_antigravity.py',

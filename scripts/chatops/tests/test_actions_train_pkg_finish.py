@@ -474,7 +474,8 @@ class ScopedInstallTests(unittest.TestCase):
             for name in paths:
                 raw=(self.installed_source_manifest() if name.endswith('/manifest.json') else
                      self.installed_target_source(Path(name).name) if Path(name).name in I.TARGETS else
-                     (repo/name).read_bytes())
+                     subprocess.check_output(['git','show',
+                         'f948d367292e85fc422dba2f8a3f6efd44400777:'+name],cwd=repo))
                 path=bundle/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(raw)
             (bundle/'.gitignore').write_text('ignored\n')
             (bundle/'.gitattributes').write_text('*.txt text\n')

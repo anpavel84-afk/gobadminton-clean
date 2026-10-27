@@ -33,6 +33,8 @@ def setup_qualification_sentinels(stack, credential_reads, preflight_calls):
         },
     }
     def synthetic_trusted(path, *args, **kwargs):
+        if pathlib.Path(path) == N.PRODUCT_READY:
+            raise FileNotFoundError("No product qualification in this legacy canary fixture")
         if pathlib.Path(path) == N.MARKER:
             return json.dumps(marker).encode()
         if str(path) == N.AGY:
