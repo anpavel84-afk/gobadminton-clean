@@ -18,7 +18,7 @@ REPO_ID = 1416250340
 OWNER = 318610566
 SINCE = '2026-10-15T02:27:00+00:00'
 PINS = {'autonomous_issues.py': 'f3ca85b4392fa1e2ba76a09ec1140d78ebc6c708ba42397bee047184fec3ebe0',
-        'slots.py': 'e26a64f392a3fc2b32b708c598f6992da219d2224411088745baae118952a5d8',
+        'slots.py': '2f2cea6af2aa4c6cb493d3badbedd15658ced32f335248af53dadc6fb05789a1',
         'check_foundation.py': 'c2975b19bd46d00acbdbc08227545b8f9c9501d7b8e8783e9b397751c612bd13'}
 RECOVERY_STAGES = ('diagnose', 'task_review')
 STAGES = ('failure_diagnosis', 'claim', 'author', 'publish', 'qa', 'ci', 'integrate', 'promote', 'dev', 'qa_qualification') + RECOVERY_STAGES
@@ -464,16 +464,29 @@ def plan(a, s, snapshot, candidates, profile='auto'):
         blocked.update(card['parked'])
         active = card.get('active')
         pending = card.get('pending')
-        if card.get('reservation'):
-            occupied.append(card['reservation'])
-            writer_occupied = writer_occupied or s.record_is_writer(card['reservation'])
+        reservation = card.get('reservation')
+        if reservation:
+            occupied.append(reservation)
+            writer_occupied = writer_occupied or s.record_is_writer(reservation)
         if active and active['phase'] != 'done':
-            writer = s.is_source_writer_phase(active.get('phase'))
+            # Admitted stage lease/reservation is authoritative: QA while phase is still
+            # pr_wait must not look like a live source writer.
+            if reservation is not None:
+                writer = s.record_is_writer(reservation)
+            else:
+                writer = s.is_source_writer_phase(active.get('phase'))
             occupied.append(s.task_record(active['issue'], active['task'], writer=writer))
             writer_occupied = writer_occupied or writer
-        if isinstance(pending, dict) and s.is_source_writer_stage(
-                (pending.get('binding') or {}).get('stage')):
-            writer_occupied = True
+        if isinstance(pending, dict):
+            # Receiver snapshot includes binding; synthetic/partial cards may only have
+            # top-level stage or reservation. Missing stage evidence fails closed.
+            binding = pending.get('binding')
+            stage = binding.get('stage') if isinstance(binding, dict) else pending.get('stage')
+            if stage is not None:
+                if s.is_source_writer_stage(stage):
+                    writer_occupied = True
+            elif reservation is None:
+                writer_occupied = True
     out = []
     # Prefer the longest-idle slot, not slot1 on every empty-queue wake.
     def last_confirmed(item):
@@ -489,9 +502,8 @@ def plan(a, s, snapshot, candidates, profile='auto'):
             continue
         active = card.get('active')
         qualification = card.get('qa_qualification')
-        # Qualification stays on the AGY executor home slot; logical product claims do not
-        # permanently own that slot affinity for ordinary author/QA routing.
-        if snapshot.get('mode') == 'active' and s.slot_maps_to_agy_executor(name) and active is None and qualification:
+        # Legacy canary qualification remains bound to slot2 executor home (unchanged).
+        if snapshot.get('mode') == 'active' and name == 'slot2' and active is None and qualification:
             need(set(qualification) == {'slot','issue','stage','phase','head','attempt','generation','profile'}
                  and qualification['slot'] == name and qualification['issue'] == 29
                  and qualification['stage'] == 'qa_qualification' and qualification['phase'] == 'idle'

@@ -111,14 +111,26 @@ class Admission(unittest.TestCase):
 
 class Planning(unittest.TestCase):
     def test_two_disjoint_slots_but_not_overlapping(self):
+        # Owner DIRECT 2026-10-27: idle plan returns exactly one claim; an active/pending
+        # writer blocks a second claim even for disjoint paths. Overlap still serializes.
         snap = dict(slots={'slot1': card(), 'slot2': card()})
         independent = TASK | {'allowed_paths': ['apps/api/src/sample.ts'], 'locks': ['api:sample']}
         choices = [(200, TASK), (201, independent)]
-        self.assertEqual([x['issue'] for x in core.plan(A,S,snap,choices)], [200,201])
+        planned = core.plan(A,S,snap,choices)
+        self.assertEqual([x['issue'] for x in planned if x['stage'] == 'claim'], [200])
+        self.assertEqual(len([x for x in planned if x['stage'] == 'claim']), 1)
         self.assertEqual(len(core.plan(A,S,snap,[(200,TASK),(201,TASK)])), 1)
         snap['slots']['slot1']['reservation'] = S.task_record(200, TASK)
         snap['slots']['slot1']['pending'] = {'status': 'running'}
-        self.assertEqual([x['issue'] for x in core.plan(A,S,snap,choices)], [201])
+        self.assertEqual([x['issue'] for x in core.plan(A,S,snap,choices)], [])
+        # Immutable QA occupancy does not alone consume author capacity for disjoint work.
+        snap['slots']['slot1']['reservation'] = S.task_record(200, TASK, writer=False)
+        snap['slots']['slot1']['pending'] = {
+            'status': 'running', 'stage': 'qa',
+            'binding': dict(action='train', stage='qa', slot='slot1', issue=200,
+                            phase='qa', head='a' * 40, attempt=1, generation=1, profile='auto')}
+        self.assertEqual([x['issue'] for x in core.plan(A,S,snap,choices) if x.get('stage') == 'claim'],
+                         [201])
 
     @patch("cost_policy.EPOCH", "2100-01-01T00:00:00+00:00")
     def test_dropped_overflow_cancelled_intent_rescued_from_issue(self):

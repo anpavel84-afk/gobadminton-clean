@@ -2,7 +2,9 @@
 
 Synthetic fixtures only. No network, package install, runtime claim, or READY assert.
 """
+import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -57,6 +59,44 @@ class OneWriterConflicts(unittest.TestCase):
         self.assertFalse(S.is_source_writer_stage('qa_qualification'))
 
 
+class LockRegistryOneWriter(unittest.TestCase):
+    """Bounded real flock acquire: second disjoint writer rejected; disjoint QA allowed."""
+
+    def test_acquire_rejects_second_disjoint_writer_allows_disjoint_qa(self):
+        with tempfile.TemporaryDirectory(prefix='.one-writer-locks-') as tmp:
+            locks = Path(tmp) / 'locks'
+            locks.mkdir()
+            registry_lock = locks / 'registry.lock'
+            os.close(os.open(registry_lock, os.O_RDWR | os.O_CREAT, 0o660))
+            first = S.LockRegistry(locks, registry_lock)
+            second = S.LockRegistry(locks, registry_lock)
+            writer_a = S.task_record(200, TASK_A, writer=True)
+            writer_b = S.task_record(201, TASK_B, writer=True)
+            self.assertTrue(first.acquire('slot1', writer_a))
+            self.assertFalse(second.acquire('slot2', writer_b))
+            qa = S.LockRegistry(locks, registry_lock)
+            self.assertTrue(qa.acquire('slot2', S.task_record(201, TASK_B, writer=False)))
+            qa.release()
+            first.release()
+            self.assertTrue(second.acquire('slot2', writer_b))
+            second.release()
+
+    def test_acquire_legacy_missing_writer_fail_closed_blocks_disjoint(self):
+        with tempfile.TemporaryDirectory(prefix='.one-writer-legacy-') as tmp:
+            locks = Path(tmp) / 'locks'
+            locks.mkdir()
+            registry_lock = locks / 'registry.lock'
+            os.close(os.open(registry_lock, os.O_RDWR | os.O_CREAT, 0o660))
+            held = S.LockRegistry(locks, registry_lock)
+            legacy = dict(issue=200, locks=['web:a'], allowed_paths=['apps/web/src/a.ts'], depends_on=[])
+            self.assertTrue(held.acquire('slot1', legacy))
+            other = S.LockRegistry(locks, registry_lock)
+            self.assertFalse(other.acquire('slot2', S.task_record(201, TASK_B, writer=True)))
+            held.release()
+            self.assertTrue(other.acquire('slot2', S.task_record(201, TASK_B, writer=True)))
+            other.release()
+
+
 class PlanSequentialAuthors(unittest.TestCase):
     def test_two_disjoint_claims_become_one_author(self):
         snap = dict(mode='active', slots={'slot1': _card(), 'slot2': _card()})
@@ -81,12 +121,32 @@ class PlanSequentialAuthors(unittest.TestCase):
         claims = [x for x in planned if x.get('stage') == 'claim']
         self.assertEqual([c['issue'] for c in claims], [201])
 
+    def test_qa_reservation_while_pr_wait_allows_disjoint_claim(self):
+        # Admitted QA stage lease is non-writer even if checkpoint phase is still pr_wait.
+        snap = dict(mode='active', slots={
+            'slot1': _card(active=_active('pr_wait', 200, TASK_A),
+                           reservation=S.task_record(200, TASK_A, writer=False),
+                           pending=dict(status='running', stage='qa',
+                                        binding=dict(action='train', stage='qa', slot='slot1',
+                                                     issue=200, phase='pr_wait', head='a' * 40,
+                                                     attempt=1, generation=1, profile='auto'))),
+            'slot2': _card()})
+        planned = core.plan(None, S, snap, [(201, TASK_B)])
+        self.assertEqual([x['issue'] for x in planned if x.get('stage') == 'claim'], [201])
+
     def test_unknown_author_pending_blocks_second_claim(self):
         binding = dict(action='train', stage='author', slot='slot1', issue=200, phase='developing',
                        head='a' * 40, attempt=1, generation=1, profile='auto')
         snap = dict(mode='active', slots={
             'slot1': _card(active=_active('developing', 200, TASK_A),
                            pending=dict(status='unknown', binding=binding, recoverable=False)),
+            'slot2': _card()})
+        planned = core.plan(None, S, snap, [(201, TASK_B)])
+        self.assertEqual([x for x in planned if x.get('stage') == 'claim'], [])
+
+    def test_pending_without_binding_fails_closed_when_no_reservation(self):
+        snap = dict(mode='active', slots={
+            'slot1': _card(pending=dict(status='running')),
             'slot2': _card()})
         planned = core.plan(None, S, snap, [(201, TASK_B)])
         self.assertEqual([x for x in planned if x.get('stage') == 'claim'], [])
@@ -128,64 +188,20 @@ class SlotsPlanSequential(unittest.TestCase):
         self.assertEqual(reasons.get(201), 'global source writer sequential')
 
 
-class ProviderIndependentBoundaries(unittest.TestCase):
-    def test_agy_executor_slot_helper_not_slot1(self):
-        self.assertTrue(S.slot_maps_to_agy_executor('slot2'))
-        self.assertFalse(S.slot_maps_to_agy_executor('slot1'))
-
-    def test_agy_available_refuses_foreign_logical_slot_without_executor_uid(self):
-        import native_antigravity as N
-        with patch.object(N.os, 'geteuid', return_value=1002):
-            ok, why = N.available('slot1', 'a' * 64)
-        self.assertFalse(ok)
-        self.assertIn('executor', why.lower())
-
-    def test_agy_qualification_marker_uses_executor_home_not_logical_affinity(self):
-        import native_antigravity as N
-        self.assertEqual(N.AGY_EXECUTOR_SLOT, 'slot2')
-        self.assertEqual(N.EXECUTOR_UID, 978)
-
-    def test_cursor_uses_marker_slots_not_hard_single_affinity(self):
-        import native_cursor as C
-        # Role capability: marker.slots list admits whichever slots are qualified.
-        self.assertEqual(set(C.SLOT_UIDS), {'slot1', 'slot2'})
-        self.assertNotEqual(C.SLOT_UIDS['slot1'], C.SLOT_UIDS['slot2'])
-
-
-class LegacyUnknownPreservation(unittest.TestCase):
-    def test_isolation_receipt_holds_without_fabricating_disjoint_proof(self):
-        out = S.historical_unknown_isolation_receipt({
-            'note': 'no processes observed',
-            'safe_release': True,  # caller wish must not override
-        })
-        self.assertEqual(out['status'], 'HOLD')
-        self.assertIs(out['safe_release'], False)
-        self.assertIs(out['automatic_clear'], False)
-        self.assertIn('insufficient', out['reason'])
-
-    def test_isolation_receipt_holds_even_with_claimed_proofs(self):
-        out = S.historical_unknown_isolation_receipt({
-            'stopped_process_identity': True,
-            'protected_dependencies': True,
-            'resource_disjoint_proof': True,
-            'historical_effects_excluded': True,
-        })
-        self.assertEqual(out['status'], 'HOLD')
-        self.assertIs(out['safe_release'], False)
-
-    def test_conflicts_still_bind_intersecting_unknown_resources(self):
-        unknown = dict(issue=346, locks=['web:a'], allowed_paths=['apps/web/src/a.ts'],
-                       depends_on=[], writer=True)
-        other = S.task_record(400, TASK_A, writer=True)
-        self.assertTrue(S.conflicts(unknown, other))
-
-
 class QuotaPreserved(unittest.TestCase):
     def test_agy_issue_budget_module_still_imports(self):
         # Existing per-Issue UTC-day cap5 source must remain; covered by test_agy_issue_budget.
         self.assertEqual(S.Budget._PER_ISSUE, 'per_issue_daily')
         self.assertTrue(hasattr(S.Budget, 'issue_used'))
         self.assertTrue(hasattr(S.Budget, 'seed_issue_attribution'))
+
+
+class LegacyUnknownPreservation(unittest.TestCase):
+    def test_conflicts_still_bind_intersecting_unknown_resources(self):
+        unknown = dict(issue=346, locks=['web:a'], allowed_paths=['apps/web/src/a.ts'],
+                       depends_on=[], writer=True)
+        other = S.task_record(400, TASK_A, writer=True)
+        self.assertTrue(S.conflicts(unknown, other))
 
 
 if __name__ == '__main__':

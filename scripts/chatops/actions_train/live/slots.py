@@ -40,11 +40,6 @@ ROLES = ('author', 'qa', 'review')
 # paths. Immutable QA is read-only and must not be confused with a writer lease.
 SOURCE_WRITER_PHASES = frozenset({'claimed', 'developing', 'candidate', 'pr_wait'})
 SOURCE_WRITER_STAGES = frozenset({'claim', 'author', 'publish'})
-# AGY executor home (UID978/GID968 sandbox). Logical Issue assignment is separate;
-# cross-slot AGY checkpoint writes remain HOLD (see native_antigravity.qualification).
-AGY_EXECUTOR_SLOT = 'slot2'
-AGY_EXECUTOR_UID = 978
-AGY_EXECUTOR_GID = 968
 ASSIGN_SCHEMA = 'GB_SLOT_ASSIGN_V1'
 STATUS_SCHEMA = 'GB_SLOT_STATUS_V1'
 RETIRED = 'RETIRED_TO_SLOT.json'
@@ -298,76 +293,6 @@ def conflicts(r1, r2):
         return True
     return (any(lock_conflict(a, b) for a in r1['locks'] for b in r2['locks'])
             or any(path_overlap(p, q) for p in r1['allowed_paths'] for q in r2['allowed_paths']))
-
-
-def slot_maps_to_agy_executor(slot):
-    """True when this logical slot's installed OS identity is the AGY executor sandbox.
-
-    Today only slot2 maps to gb-slot2/UID978. Product routing may name any slot;
-    live AGY invoke still requires that executor identity (see native_antigravity).
-    """
-    return slot == AGY_EXECUTOR_SLOT and slot_user(slot) == f'gb-{AGY_EXECUTOR_SLOT}'
-
-
-def source_writer_occupied(statuses=None, journals=None):
-    """Whether any slot currently holds a source-writer active/pending occupancy."""
-    statuses = statuses or {}
-    journals = journals or {}
-    for slot, card in statuses.items():
-        active = (card or {}).get('active')
-        if active and is_source_writer_phase(active.get('phase')):
-            return True
-        pending = (card or {}).get('pending')
-        if isinstance(pending, dict):
-            binding = pending.get('binding') or {}
-            if is_source_writer_stage(binding.get('stage')):
-                return True
-    for slot, journal in journals.items():
-        pending = (journal or {}).get('pending')
-        if not pending:
-            continue
-        op = (journal.get('operations') or {}).get(pending) or {}
-        binding = op.get('binding') or {}
-        if is_source_writer_stage(binding.get('stage')):
-            return True
-        # Active writer checkpoint without a stage binding still blocks new authors.
-        # Do not treat QA/qualification UNKNOWN as a writer lease.
-    return False
-
-
-def historical_unknown_isolation_receipt(evidence):
-    """Narrow #341 resource-disjoint isolation receipt evaluator (source-only).
-
-    Owner DIRECT 2026-10-27: the guarded installer may accept a NEW exact
-    resource-disjoint isolation receipt only when facts, stopped process identity
-    and protected dependencies are verified. Absence of processes is not proof.
-    No automatic clearing, safe_release override, grants reset or assume-safe.
-
-    Current runtime uncertainty about historical Git/Python/shell/config helper
-    effects means a broad disjoint claim cannot be safely minted here → HOLD.
-    """
-    evidence = evidence or {}
-    require(isinstance(evidence, dict), 'isolation evidence must be an object')
-    # Never invent provenance. Require explicit positive proofs; otherwise HOLD.
-    required = ('stopped_process_identity', 'protected_dependencies',
-                'resource_disjoint_proof', 'historical_effects_excluded')
-    missing = [k for k in required if not evidence.get(k)]
-    if missing:
-        return dict(status='HOLD', schema='GB_UNKNOWN_ISOLATION_RECEIPT_V1',
-                    reason='insufficient verified isolation facts', missing=missing,
-                    safe_release=False, automatic_clear=False)
-    if evidence.get('historical_effects_excluded') is not True:
-        return dict(status='HOLD', schema='GB_UNKNOWN_ISOLATION_RECEIPT_V1',
-                    reason='historical effects not proven absent; process absence is not proof',
-                    safe_release=False, automatic_clear=False)
-    if evidence.get('resource_disjoint_proof') is not True:
-        return dict(status='HOLD', schema='GB_UNKNOWN_ISOLATION_RECEIPT_V1',
-                    reason='resource-disjoint proof missing or unverified',
-                    safe_release=False, automatic_clear=False)
-    # Even with claimed proofs, this bounded source patch does not activate install.
-    return dict(status='HOLD', schema='GB_UNKNOWN_ISOLATION_RECEIPT_V1',
-                reason='verified receipt shape only; install activation out of this source patch',
-                safe_release=False, automatic_clear=False)
 
 
 class _Flock:
