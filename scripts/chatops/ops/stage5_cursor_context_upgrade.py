@@ -1,11 +1,17 @@
 #!/usr/bin/python3
 """Stage 5 lib-only transaction, never an installer deployment authorization.
 
-Only stage.py, context_cursor_delivery.py, their inventory entries and private
-transaction artifacts may change. Policy/controller/workflows/monitor/markers,
-rules, budgets and task evidence remain byte-identical. Units must already be
+V2 changes only stage.py, context_cursor_delivery.py, inventory and private
+transaction artifacts. Explicit --version 3 permits only the six reviewed
+libraries, accepted rules artifact, both markers' module pins and inventory
+entries under exact OLD->NEW and frozen C5 protocol gates. This is source only;
+independent QA/CI and release acceptance remain external install prerequisites.
+V3 never grants a role: existing Cursor author history is retained for the exact
+stronger RO guard delta; AGY remains canary; context qualification is unaccepted.
+For V2 policy/controller/workflows/monitor/markers, rules, budgets and task
+evidence remain byte-identical. Units must already be
 masked and idle. activate records hosted proof ONLY: it cannot assert READY or
-enable scoped_v1; the separate reviewed native_guard marker bind is still needed.
+qualify scoped_v1. V2 still requires a separate reviewed guard/marker transition.
 A preparing journal precedes backups; applying/rolling-back intents precede lib
 writes. An interrupted operation requires explicit validated rollback (or proof
 reconciliation), never blind apply/replay. Backups and terminal receipts remain.
@@ -241,10 +247,10 @@ def quiet():
          'recovery stage in flight')
 
 
-def preserved():
+def preserved(exclude=()):
     """Full state/history/ledger evidence, plus immutable inventory payloads."""
     result={};inventory=STATE/'backup.json'
-    excluded={JOURNAL,BACKUP,inventory,STATE/'controller.lock',
+    excluded=set(exclude)|{JOURNAL,BACKUP,inventory,STATE/'controller.lock',
               JOURNAL.with_name(temp_name(JOURNAL)),inventory.with_name(temp_name(inventory))}
     def walk(path):
         if path in excluded: return
@@ -302,7 +308,7 @@ def payload_target(path):
     return INSTALL/path[len(PREFIX):]
 
 
-def source(bundle,commit,branch,manifest,controller,stage_sha,dispatch_sha):
+def source(bundle,commit,branch,manifest,controller,stage_sha,dispatch_sha,*,version=2):
     """Reviewed AGY29 plain-checkout/config gate, extended to ALL tracked blobs."""
     need(bundle.is_absolute() and '..' not in bundle.parts,'noncanonical bundle path')
     need(re.fullmatch('[a-f0-9]{40}',commit or '') and
@@ -317,7 +323,7 @@ def source(bundle,commit,branch,manifest,controller,stage_sha,dispatch_sha):
     for name in ('commondir','gitdir','objects/info/alternates','objects/info/http-alternates','modules','info/attributes','shallow'):
         need(not os.path.lexists(bundle/'.git'/name),'forbidden bundle Git indirection')
     bundle_config(regular_bytes(bundle/'.git'/'config'))
-    if os.path.lexists(bundle/'.git'/'config.worktree'): bundle_config(regular_bytes(bundle/'.git'/'config.worktree'))
+    need(not os.path.lexists(bundle/'.git'/'config.worktree'),'forbidden bundle worktree configuration')
     for path in bundle.rglob('*'):
         if path.name in ('.gitattributes','.gitmodules'):
             need(not re.search(rb'(?i)(?:^|\s)filter\s*=',regular_bytes(path)),'forbidden bundle filter attribute')
@@ -356,8 +362,9 @@ def source(bundle,commit,branch,manifest,controller,stage_sha,dispatch_sha):
          'rules commit identity differs')
     need(canon==git(bundle,'show',RULES_COMMIT+':'+BUNDLE_RULES),'rules commit/object differs')
     for name,pin in (('train-stage.yml',stage_sha),('train-dispatch.yml',dispatch_sha)):
-        raw=material['.github/workflows/'+name]
-        need(bytes_sha(raw)==pin and raw.count(('ref: '+controller).encode())==2,'unreviewed workflow/pin')
+        raw=(git(bundle,'show',controller+':.github/workflows/'+name) if version==3
+             else material['.github/workflows/'+name])
+        need(bytes_sha(raw)==pin and (version==3 or raw.count(('ref: '+controller).encode())==2),'unreviewed workflow/pin')
     # Refuse mutations during source validation as well; installed bytes are retained above.
     need(git(bundle,'rev-parse','HEAD').decode().strip()==commit and
          not git(bundle,'status','--porcelain=v1','--untracked-files=all','--ignore-submodules=all'),'bundle changed')
@@ -374,7 +381,10 @@ def unlink_durable(path):
     finally: os.close(parent)
 
 
-def atomic_bytes(path,raw,meta):
+_UNSPECIFIED=object()
+
+
+def atomic_bytes(path,raw,meta,*,expected=_UNSPECIFIED):
     """Known fixed target, retained bytes, durable atomic replacement and readback."""
     parent=directory_fd(path.parent);tmp=path.with_name(temp_name(path));fd=None
     try:
@@ -386,6 +396,13 @@ def atomic_bytes(path,raw,meta):
         os.fchown(fd,meta['uid'],meta['gid']);os.fchmod(fd,meta['mode'])
         with os.fdopen(fd,'wb') as out:
             fd=None;out.write(raw);out.flush();os.fsync(out.fileno())
+        check=directory_fd(path.parent)
+        try:
+            need((os.fstat(check).st_dev,os.fstat(check).st_ino)==
+                 (os.fstat(parent).st_dev,os.fstat(parent).st_ino),'parent replaced before write')
+        finally: os.close(check)
+        if expected is not _UNSPECIFIED:
+            need(current(path)==expected,'compare-and-swap drift before rename')
         os.replace(tmp.name,path.name,src_dir_fd=parent,dst_dir_fd=parent);os.fsync(parent)
     finally:
         if fd is not None: os.close(fd)
@@ -497,7 +514,11 @@ def validate_current(j,backups,new,*,installed=False,preparing=False):
 
 
 def execute(action,bundle,manifest,controller,stage_sha,dispatch_sha,run_id=None,baseline=None,
-            bundle_commit=None,bundle_branch='dev'):
+            bundle_commit=None,bundle_branch='dev',version=2):
+    if version==3:
+        return execute_v3(action,bundle,manifest,controller,stage_sha,dispatch_sha,run_id,baseline,
+                          bundle_commit,bundle_branch)
+    need(version==2,'unsupported installer version')
     need(os.geteuid()==0,'root integrator only')
     need(action in ('dry','apply','activate','rollback'),'invalid action')
     for value in (baseline,controller): need(re.fullmatch('[a-f0-9]{40}',value or ''),'immutable controller required')
@@ -602,15 +623,387 @@ def execute(action,bundle,manifest,controller,stage_sha,dispatch_sha,run_id=None
                 policy_writes=0,cursor_scoped_v1=False,ready=False)
 
 
+# V3 is an explicitly selected extension of this transaction, sharing its fd,
+# Git, journal, backup, CAS and inventory primitives. Never reinterpret a V2
+# journal as V3: the same namespace forces separate legacy reconciliation.
+V3_SCHEMA='GB_STAGE5_CONTEXT_COMPLETION_V3'
+C5='41e12be2d551158e97ea30eaf8e95f992f998615'
+C5_MANIFEST='0f16f0d60e05d13fa1778f5e9220341b4f62149ddc3e99ced10235344cf21944'
+C5_WORKFLOWS=('b9703ca27b7bb3f494f379f8e259e62a6a48bc8f5ff50c6923e1712d8899d68d',
+              '34bd4392edf64ba8c0d5fa998991edc0dd9dd4139087d7b1290aa5c19f930c20')
+V3_OLD={
+ 'native_antigravity.py':'01d4816e881765da6361af07a15765528aef274dad0eb780b1afab6b0e5e0f72',
+ 'native_guard.py':'dd2e0a0c6c0dea0d353b7dc5f16c1a5d4c4c21f022947ceaa640470c59fb0762',
+ 'stage.py':'ea79b894076c755f28d62619154b0681ecb636b7b32dd05c18a8c996112a1c2e',
+ 'context_cursor_delivery.py':None,
+ 'context_policy.py':'d961079b9791f53cf7ce0ac208180b0c9d9100ef46b48c025c2938d2eb69a806',
+ 'admission_pm.py':None,
+ 'accepted-engineering-rules.md':'017441dec5ba197a1065b6ef90efdddb090b286ba48687241a7fbc09dd002269'}
+V3_NEW={
+ 'native_antigravity.py':'9dae383ae315f02f5ed03e6c8e45424b0516e8a653e446e5600440d12b438889',
+ 'native_guard.py':'334d4c78c57ba9a7f3f5c49e6737ec8e658033e4b4fdc84f92ce168ece9019f9',
+ 'stage.py':'ca5ca68eb8b3f8bafbb8c097790acc91c0323f2081fed977372cf571452b97ed',
+ 'context_cursor_delivery.py':'6352f6bd6175f447bc124a28d6a1dc67837da6514f1ede3a81c128b4623bff11',
+ 'context_policy.py':'b55398b64b68c83b88e2f45b53e690f4fbdab9d7e0f0333dd5a354db0c3826df',
+ 'admission_pm.py':'a17576fad805a736b926768d3aae7d5ed4bb6336f3c248805f8de3fac699784a',
+ 'accepted-engineering-rules.md':RULES_SHA256}
+# These hashes bind the reviewed proof, not merely a matching import name:
+# C5 _route_immutable rejects AGY role != qa; stage's only AGY author import is
+# below that route and provider == agy and not qa. Diagnosis/task_review produce
+# read-only QA choices. Legacy AGY adapters remain disabled by live/slots.py.
+# The C5 context_exchange API already supports the Cursor calls; no binary
+# feature or unqualified native_antigravity_author is installed by this delta.
+V3_PROTOCOL={
+ 'core.py':'3ed9ab5503694f39011102ff34935810ef1dce67cf712c87be89b023689a15a7',
+ 'client.py':'1c63f4a53709f749cd6d7e88ee6cf1fd479a76762b385dc3a94764f4d42bce65',
+ 'receiver.py':'6405168b06f3902e40595528d30856c025a0311abfc31d70b59e969ed384af4e',
+ 'context_exchange.py':'baa4463cc6919e015ceabb1c05f398e095beb8c22a633191125442435586e132',
+ 'native_cursor.py':'02d26f8be9766bbeb1e92dd8514dfc496c1b3e1b0fc8035c1c65cc9aba6b6089',
+ 'cost_policy.py':'18f303fae73b3edf9b73249ae9d904050f65ed4089712dac3bbb98c1c9f58fad',
+ 'live/slots.py':'3c7b4ab36dd3cd8b41c3309a4d58c54ffc99027b1d7c1e5ad2235b5cd1f72a76',
+ 'live/autonomous_issues.py':'f3ca85b4392fa1e2ba76a09ec1140d78ebc6c708ba42397bee047184fec3ebe0',
+ 'owner_package_admission.py':'bb5bf8516d26ae293f16d794c2e46f90b01d0c27b34da15febbd0bff4398c7c5',
+ 'antigravity_qa_recovery.py':'93efc05c7aa46fc7ff0d6da70f0db01a9ebda434dbc7d99066590e0459a92a2e'}
+V3_MARKERS={
+ 'cursor_marker':pathlib.Path('/etc/gobadminton-slots/cursor-author.json'),
+ 'agy_marker':pathlib.Path('/etc/gobadminton-slots/antigravity-qa.json')}
+V3_OBSERVED={
+ 'policy':'52250df8b6391b46fe4b80f6805c27e89d06a1c493ca27002b187b1f1f7567d4',
+ 'cursor_marker':'022032d8aa92ee9944578366264814a7e68310329214d61e9ac0a090e1b43fef',
+ 'agy_marker':'529f5702f66e3e9bc00ccdefefb76eb4ee91648073c402b77f4352d9b2750afe',
+ 'inventory':'4b0eb93039712737a21b59bf9550084da01a963c67472034e25563deedd1f1bc'}
+
+
+def canonical_meta(pin,mode=0o644):
+    return dict(sha256=pin,mode=mode,uid=OWNER_UID,gid=OWNER_GID) if pin is not None else None
+
+
+def v3_paths():
+    return {**{name:INSTALL/name for name in V3_OLD},**V3_MARKERS,
+            'inventory':STATE/'backup.json'}
+
+
+def safe_checkpoint(state):
+    """Offline terminal evidence only. Never clear active or reconcile UNKNOWN.
+
+    Historical ACCEPTED need not be fresh; the exact run/release/head/QA/CI/live
+    binding must still be complete. No remote read is an installer precondition.
+    """
+    need(type(state) is dict and set(state)=={'active','done'} and type(state['done']) is list
+         and all(type(i) is int and i>0 for i in state['done'])
+         and len(state['done'])==len(set(state['done'])),'invalid checkpoint/done array')
+    a=state['active']
+    if a is None: return
+    need(type(a) is dict and a.get('phase')=='done' and type(a.get('issue')) is int
+         and a['issue'] in state['done'] and type(a.get('attempt')) is int and a['attempt']>0
+         and re.fullmatch('[0-9a-f]{40}',a.get('head','')),'active/UNKNOWN checkpoint HOLD')
+    head=a['head'];run=a.get('run') or {};server=a.get('server') or {};accepted=server.get('accepted') or {}
+    need(type(run.get('id')) is int and run['id']>0 and type(run.get('attempt')) is int
+         and run['attempt']>0 and run.get('sha')==head
+         and a.get('release_id')==f"r{run['id']}-a{run['attempt']}"
+         and (a.get('ci') or {}).get('sha')==head
+         and (a.get('qa') or {}).get('verdict')=='PASS'
+         and (a.get('qa') or {}).get('reviewed_sha')==head
+         and (a.get('live') or {}).get('gitSha')==head
+         and server.get('schema')==1 and server.get('environment')=='dev' and server.get('pending') is False
+         and accepted.get('status')=='ACCEPTED' and accepted.get('release_id')==a['release_id']
+         and accepted.get('source_sha')==head,'terminal done lacks exact accepted release evidence')
+    need(all(re.fullmatch('sha256:[a-f0-9]{64}',accepted.get(k,'')) for k in ('api_digest','web_digest'))
+         and type(accepted.get('finished_at')) is int and type(server.get('observed_at')) is int
+         and 0<accepted['finished_at']<=server['observed_at']<=int(time.time()),
+         'terminal acceptance digests/time invalid')
+
+
+def quiet_v3():
+    quiet()  # retains units/cgroups, all kernel lock types and leases
+    for slot in ('slot1','slot2'):
+        j=receiver.journal(slot)
+        need(j['pending'] is None,'current pending/UNKNOWN HOLD')
+        safe_checkpoint(receiver.checkpoint(slot)[0])
+        # A recorded live PID/start/boot tuple holds even if pending is absent.
+        # PID reuse alone is not a match. UNKNOWN records remain untouched.
+        for op in j.get('operations',{}).values():
+            process=op.get('process')
+            if process:
+                need(type(process) is dict and set(process)=={'pid','start','boot'}
+                     and type(process['pid']) is int and process['pid']>0,'invalid recorded process identity')
+                need(receiver.identity(process['pid'])!=process,'recorded operation process still alive')
+
+
+def module_pins_only(raw,key,newpins):
+    """Edit hashes inside the unique modules object; keep all other bytes exact."""
+    old=loads(raw);updated=copy.deepcopy(old)
+    need(type(old) is dict and type(old.get('modules')) is dict,'invalid native marker')
+    if key=='cursor_marker':
+        need(old.get('schema')=='GB_CURSOR_AUTHOR_211_V1' and old.get('phase')=='ready'
+             and old.get('accepted_canary',{}).get('acceptance_basis')=='runtime_qualification'
+             and old['modules']=={n:(V3_OLD if n=='native_guard.py' else V3_PROTOCOL)[n]
+                                  for n in ('native_cursor.py','native_guard.py')},
+             'Cursor READY preservation not proven; require separately reviewed bound pilot marker')
+    else:
+        need(old.get('schema')=='GB_ANTIGRAVITY_QA_29_V1' and old.get('phase')=='canary'
+             and old.get('adapter_revision')==C5 and old['modules']==
+             {n:V3_OLD[n] for n in ('native_guard.py','native_antigravity.py')},'AGY canary module contract drift')
+    matches=list(re.finditer(rb'"modules"\s*:\s*\{[^{}]*\}',raw))
+    need(len(matches)==1,'ambiguous marker modules object')
+    m=matches[0];piece=m[0]
+    for name,pin in newpins.items():
+        need(name in old['modules'],'missing marker module field')
+        pattern=re.escape(encoded(name))+rb'\s*:\s*"'+old['modules'][name].encode()+b'"'
+        hits=list(re.finditer(pattern,piece));need(len(hits)==1,'ambiguous module pin')
+        hit=hits[0];piece=piece[:hit.start()]+hit[0].replace(old['modules'][name].encode(),pin.encode())+piece[hit.end():]
+        updated['modules'][name]=pin
+    result=raw[:m.start()]+piece+raw[m.end():]
+    need(loads(result)==updated and len(result)==len(raw),'marker fields changed outside module pins')
+    return result
+
+
+def v3_scope(bundle):
+    raw=git(bundle,'show',C5+':'+MANIFEST_PATH)
+    need(bytes_sha(raw)==C5_MANIFEST,'C5 manifest identity drift')
+    m=loads(raw)
+    need(m.get('schema')=='GB_ACTIONS_TRAIN_INSTALL_V1' and type(m.get('files')) is dict,'invalid C5 manifest')
+    paths={payload_target(p) for p in m['files']}|{INSTALLED_RULES}
+    need(len(paths)==len(m['files'])+1,'C5 target mapping collision')
+    return paths
+
+
+def v3_inventory(raw,scope):
+    need(bytes_sha(raw)==V3_OBSERVED['inventory'],'installed-before inventory differs')
+    record=loads(raw)
+    need(type(record) is dict and type(record.get('after')) is dict
+         and set(record['after'])=={str(p) for p in scope},'C5 installed inventory membership differs')
+    need(all(re.fullmatch('[a-f0-9]{64}',v or '') for v in record['after'].values()),'invalid inventory pin')
+    return record
+
+
+def v3_inventory_after(raw,changes):
+    # Membership was proven against the exact C5 manifest. Change only our
+    # seven entries; full install manifest/history are deliberately not reset.
+    return inventory_bytes(raw,{n:changes[n] for n in V3_OLD})
+
+
+def v3_material(items,bundle):
+    target={n:items[INSTALL/n] for n in V3_OLD if n!='accepted-engineering-rules.md'}
+    target['accepted-engineering-rules.md']=git(bundle,'show',RULES_COMMIT+':'+BUNDLE_RULES)
+    need(set(target)==set(V3_NEW)==set(V3_OLD),'V3 target contract differs')
+    for n,raw in target.items():
+        need(bytes_sha(raw)==V3_NEW[n],'dependency closure not proven for target '+n)
+    need(len(target['accepted-engineering-rules.md'])==RULES_SIZE,'accepted canon size differs')
+    # Exact frozen imports, including old context_exchange, are the compatibility
+    # proof boundary. Bundle versions of unrelated modules are never installed.
+    for n,pin in V3_PROTOCOL.items():
+        need(read_file(INSTALL/n)[1]==canonical_meta(pin),'frozen protocol dependency HOLD: '+n)
+    need(not os.path.lexists(INSTALL/'native_antigravity_author.py'),
+         'unqualified AGY author module present; unreachable closure not proven')
+    return target
+
+
+def v3_preserved():
+    paths=v3_paths();exclude=set(paths.values())
+    exclude|={p.with_name(temp_name(p)) for p in paths.values()}
+    return preserved(exclude)
+
+
+def v3_plan(target,marker_raw,inventory,scope):
+    v3_inventory(inventory,scope)
+    changes={n:dict(before=canonical_meta(pin),after=canonical_meta(bytes_sha(target[n])))
+             for n,pin in V3_OLD.items()}
+    for key,raw in marker_raw.items():
+        need(bytes_sha(raw)==V3_OBSERVED[key],'installed-before marker drift: '+key)
+        pins={'native_guard.py':V3_NEW['native_guard.py']}
+        if key=='agy_marker': pins['native_antigravity.py']=V3_NEW['native_antigravity.py']
+        target[key]=module_pins_only(raw,key,pins)
+        changes[key]=dict(before=canonical_meta(V3_OBSERVED[key]),after=canonical_meta(bytes_sha(target[key])))
+    # The exact post-small-range inventory is expected to match the actual rules
+    # too. No generalized stale inventory waiver: mismatch remains a named gate.
+    record=loads(inventory)
+    for n,pin in V3_OLD.items():
+        need(record['after'].get(str(INSTALL/n))==pin,'installed-before inventory target mismatch: '+n)
+    target['inventory']=v3_inventory_after(inventory,changes)
+    changes['inventory']=dict(before=canonical_meta(V3_OBSERVED['inventory'],0o600),
+                              after=canonical_meta(bytes_sha(target['inventory']),0o600))
+    return changes
+
+
+def v3_current(j):
+    paths=v3_paths();applied=j['applied'];restored=j['restored'];intent=j['write_intent']
+    for n,row in j['changes'].items():
+        state=row['after'] if n in applied and n not in restored else row['before']
+        allowed=[state]
+        if intent and intent['target']==n: allowed=[row['before'],row['after']]
+        need(current(paths[n]) in allowed,'foreign CAS drift: '+n)
+
+
+def checked_v3(identity,target,scope):
+    j=loads(regular_bytes(JOURNAL))
+    need(type(j) is dict and j.get('schema')==V3_SCHEMA,
+         'legacy/foreign journal: separate reconciliation required; never overwrite')
+    need(set(j)=={'schema','identity','identity_sha256','phase','installed_at','changes','marker_before',
+         'inventory_raw','preserved','applied','restored','write_intent','shadow'}
+         and j['identity']==identity and j['identity_sha256']==digest(identity),'V3 transaction identity/schema differs')
+    phases=('preparing','applying','installed-lib-only','activating-proof','proof-recorded','rolling-back','rolled-back')
+    need(j['phase'] in phases and type(j['installed_at']) is int and j['installed_at']>0,'V3 invalid phase/time')
+    need(type(j['marker_before']) is dict and set(j['marker_before'])==set(V3_MARKERS)
+         and all(type(v) is str for v in j['marker_before'].values()) and type(j['inventory_raw']) is str,'V3 preimages invalid')
+    markers={n:v.encode() for n,v in j['marker_before'].items()};inventory=j['inventory_raw'].encode()
+    expected=v3_plan(target,markers,inventory,scope)
+    need(j['changes']==expected,'V3 exact target OLD/NEW schema differs')
+    order=sorted(expected)
+    for field in ('applied','restored'):
+        value=j[field]
+        need(type(value) is list and value==order[:len(value)] and len(value)<=len(order),'invalid V3 write progress')
+    need(set(j['restored'])<=set(j['applied']),'restoration outside own applied phase')
+    intent=j['write_intent']
+    if intent is not None:
+        need(type(intent) is dict and set(intent)=={'action','target'}
+             and intent['action'] in ('apply','rollback'),'invalid write intent')
+        prefix=j['applied'] if intent['action']=='apply' else j['restored']
+        need(len(prefix)<len(order) and intent['target']==order[len(prefix)]
+             and j['phase']==('applying' if intent['action']=='apply' else 'rolling-back'),
+             'write intent outside own phase')
+    if j['phase']=='preparing': need(not j['applied'] and not j['restored'] and intent is None,'preparing progress differs')
+    if j['phase'] in ('installed-lib-only','activating-proof','proof-recorded'):
+        need(j['applied']==order and not j['restored'] and intent is None,'incomplete install progress')
+    if j['phase']=='rolled-back': need(j['restored']==j['applied'] and intent is None,'incomplete rollback')
+    need(j['preserved']==v3_preserved(),'authoritative state/history/closure drift')
+    backups={};expected_backups={n for n,row in expected.items() if row['before'] is not None}
+    complete=j['phase'] not in ('preparing','rolled-back') or bool(j['applied'])
+    if os.path.lexists(BACKUP):
+        receiver.trusted_tree(BACKUP);info=BACKUP.lstat()
+        need(stat.S_ISDIR(info.st_mode) and info.st_uid==OWNER_UID and info.st_gid==OWNER_GID
+             and stat.S_IMODE(info.st_mode)==0o700,'unsafe V3 backup directory')
+        names=set(os.listdir(BACKUP));temps={temp_name(pathlib.Path(n)) for n in expected_backups}
+        need(names<=expected_backups|temps and (not complete or expected_backups<=names),'V3 backup membership differs')
+        for n in names&expected_backups:
+            raw,meta=read_file(BACKUP/n)
+            need(meta==dict(expected[n]['before'],mode=0o600),'V3 backup preimage drift: '+n)
+            backups[n]=raw
+        for n in names&temps: read_file(BACKUP/n)
+    else: need(not complete,'V3 complete backups missing')
+    v3_current(j)
+    return j,backups
+
+
+def execute_v3(action,bundle,manifest,controller,stage_sha,dispatch_sha,run_id,baseline,commit,branch):
+    need(os.geteuid()==OWNER_UID,'root integrator only')
+    need(action in ('dry','apply','verify','activate','rollback'),'invalid V3 action')
+    need(baseline==controller==C5,'protocol/controller transition requires separate reviewed distinct-controller contract')
+    need((stage_sha,dispatch_sha)==C5_WORKFLOWS,'C5 workflow closure differs')
+    need(read_file(receiver.POLICY)[1]==canonical_meta(V3_OBSERVED['policy']),'installed-before policy drift')
+    policy=loads(regular_bytes(receiver.POLICY))
+    need(policy.get('controller_sha')==C5 and policy.get('stage_workflow_sha256')==stage_sha
+         and policy.get('mode') in ('active','disabled'),'C5 policy binding differs')
+    quiet_v3()
+    need(re.fullmatch('[a-f0-9]{40}',commit or ''),'V3 exact reviewed candidate required')
+    identity=dict(version=3,baseline=baseline,controller=controller,manifest=manifest,bundle_commit=commit,
+                  bundle_branch=branch,stage_sha256=stage_sha,dispatch_sha256=dispatch_sha,
+                  script_sha256=sha(pathlib.Path(__file__).absolute()))
+    items=source(bundle,commit,branch,manifest,controller,stage_sha,dispatch_sha,version=3)
+    target=v3_material(items,bundle);scope=v3_scope(bundle);paths=v3_paths()
+    result=dict(status='RUNTIME_INSTALLED',role_qualified=False,e2e_accepted=False,
+                context_qualified=False,ready=False,cursor_scoped_v1=False,policy_writes=0,ledger_reset=False)
+    if os.path.lexists(JOURNAL):
+        j,backups=checked_v3(identity,target,scope)
+        if action in ('dry','apply','verify'):
+            need(j['phase'] in ('installed-lib-only','proof-recorded'),'interrupted/old transaction; explicit rollback/reconciliation required')
+            return dict(result,phase=j['phase'],noop=True,dry=action=='dry')
+        if action=='activate':
+            need(j['phase'] in ('installed-lib-only','activating-proof'),'not installed/proof already recorded')
+            j['phase']='activating-proof';save(j)
+            need(type(run_id) is int and run_id>0,'exact hosted run required')
+            proof=probe(run_id,dict(j,dispatch_sha256=dispatch_sha))
+            quiet_v3();checked_v3(identity,target,scope)
+            j.update(phase='proof-recorded',shadow=proof);save(j)
+            return dict(result,phase='proof-recorded',shadow=proof)
+        need(j['phase']!='proof-recorded','post-proof rollback requires separate reconciliation')
+        if j['phase']=='rolled-back': return dict(phase='rolled-back',noop=True)
+        if j['phase']=='preparing':
+            j.update(phase='rolled-back',write_intent=None);save(j)
+            return dict(phase='rolled-back',state_preserved=True)
+        # Classify the last owned apply intent by exact bytes before switching
+        # phase. An interrupted apply is never replayed.
+        if j['write_intent'] and j['write_intent']['action']=='apply':
+            n=j['write_intent']['target']
+            if current(paths[n])==j['changes'][n]['after']: j['applied'].append(n)
+            j['write_intent']=None
+        j['phase']='rolling-back';save(j)
+        for n in j['applied'][len(j['restored']):]:
+            quiet_v3();checked_v3(identity,target,scope)
+            j['write_intent']=dict(action='rollback',target=n);save(j)
+            before=j['changes'][n]['before'];now=current(paths[n])
+            if now!=before:
+                if before is None: unlink_cas(paths[n],j['changes'][n]['after'])
+                else: atomic_bytes(paths[n],backups[n],before,expected=j['changes'][n]['after'])
+            j['restored'].append(n);j['write_intent']=None;save(j)
+        # Remove only our bounded temporary files, including a crash before rename.
+        for p in paths.values():
+            tmp=p.with_name(temp_name(p))
+            if os.path.lexists(tmp): read_file(tmp);unlink_durable(tmp)
+        quiet_v3();checked_v3(identity,target,scope)
+        j['phase']='rolled-back';save(j)
+        return dict(phase='rolled-back',state_preserved=True)
+    need(action in ('dry','apply') and not os.path.lexists(BACKUP),'missing own journal or foreign backup; reconciliation required')
+    inventory=regular_bytes(paths['inventory'])
+    markers={n:regular_bytes(p) for n,p in V3_MARKERS.items()}
+    changes=v3_plan(target,markers,inventory,scope)
+    originals={}
+    for n,row in changes.items():
+        need(current(paths[n])==row['before'],'installed-before bytes/metadata drift: '+n)
+        if row['before'] is not None: originals[n]=regular_bytes(paths[n])
+    record=v3_inventory(inventory,scope)
+    for path,pin in record['after'].items(): need(sha(pathlib.Path(path))==pin,'inventory integrity drift: '+path)
+    snapshot=v3_preserved()
+    if action=='dry': return dict(dry=True,status='PLANNED_UPGRADE',changes=changes,protected_writes=0,
+                                 role_qualified=False,ready=False)
+    j=dict(schema=V3_SCHEMA,identity=identity,identity_sha256=digest(identity),phase='preparing',
+           installed_at=int(time.time()),changes=changes,marker_before={n:r.decode() for n,r in markers.items()},
+           inventory_raw=inventory.decode(),preserved=snapshot,applied=[],restored=[],write_intent=None,shadow=None)
+    save(j)  # first protected effect, BEFORE backup directory or any backup
+    BACKUP.mkdir(mode=0o700)
+    fd=directory_fd(BACKUP.parent)
+    try: os.fsync(fd)
+    finally: os.close(fd)
+    for n,raw in sorted(originals.items()):
+        atomic_bytes(BACKUP/n,raw,canonical_meta(bytes_sha(raw),0o600),expected=None)
+    quiet_v3();checked_v3(identity,target,scope)
+    # preparing permits partial backups; applying requires the complete set.
+    need(set(os.listdir(BACKUP))==set(originals),'incomplete backups before applying')
+    j['phase']='applying';save(j)
+    for n in sorted(changes):
+        quiet_v3();checked_v3(identity,target,scope)
+        j['write_intent']=dict(action='apply',target=n);save(j)
+        atomic_bytes(paths[n],target[n],changes[n]['after'],expected=changes[n]['before'])
+        j['applied'].append(n);j['write_intent']=None;save(j)
+    quiet_v3();checked_v3(identity,target,scope)
+    j['phase']='installed-lib-only';save(j)
+    checked_v3(identity,target,scope)
+    return dict(result,phase='installed-lib-only',state_preserved=True)
+
+
+def unlink_cas(path,expected):
+    parent=directory_fd(path.parent)
+    try:
+        need(current(path)==expected,'compare-and-swap drift before inverse unlink')
+        check=directory_fd(path.parent)
+        try:
+            need((os.fstat(parent).st_dev,os.fstat(parent).st_ino)==
+                 (os.fstat(check).st_dev,os.fstat(check).st_ino),'parent replaced before inverse unlink')
+        finally: os.close(check)
+        os.unlink(path.name,dir_fd=parent);os.fsync(parent)
+    finally: os.close(parent)
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action',choices=('dry','apply','activate','rollback'))
+    parser.add_argument('action',choices=('dry','apply','verify','activate','rollback'))
     parser.add_argument('--bundle',required=True,type=pathlib.Path)
     parser.add_argument('--manifest',required=True)
     parser.add_argument('--baseline-controller',required=True)
     parser.add_argument('--controller',required=True)
     parser.add_argument('--stage-hash',required=True);parser.add_argument('--dispatch-hash',required=True)
     parser.add_argument('--bundle-commit');parser.add_argument('--bundle-branch',default='dev')
+    parser.add_argument('--version',type=int,choices=(2,3),default=2)
     parser.add_argument('--run',type=int);a=parser.parse_args()
     path=STATE/'controller.lock'
     # Existing lock only, including dry: no O_CREAT, mkdir or managed byte writes.
@@ -624,7 +1017,7 @@ def main():
         fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
         need(stable(os.stat(path.name,dir_fd=parent,follow_symlinks=False))==stable(info),'controller lock replaced')
         print(json.dumps(execute(a.action,a.bundle,a.manifest,a.controller,a.stage_hash,a.dispatch_hash,
-                                a.run,a.baseline_controller,a.bundle_commit,a.bundle_branch),sort_keys=True))
+                                a.run,a.baseline_controller,a.bundle_commit,a.bundle_branch,a.version),sort_keys=True))
     finally:
         if fd is not None: os.close(fd)
         os.close(parent)
