@@ -17,10 +17,11 @@ REPO = 'anpavel84-afk/gobadminton-clean'
 REPO_ID = 1416250340
 OWNER = 318610566
 SINCE = '2026-10-15T02:27:00+00:00'
-PINS = {'autonomous_issues.py': 'f3ca85b4392fa1e2ba76a09ec1140d78ebc6c708ba42397bee047184fec3ebe0',
+PINS = {'autonomous_issues.py': '7f266bca6c6fa2f9b023b9c76c238bb1c12d27f4ddb4d0b59937954915e6c7f9',
         'slots.py': '3c7b4ab36dd3cd8b41c3309a4d58c54ffc99027b1d7c1e5ad2235b5cd1f72a76',
         'check_foundation.py': 'c2975b19bd46d00acbdbc08227545b8f9c9501d7b8e8783e9b397751c612bd13'}
 RECOVERY_STAGES = ('diagnose', 'task_review')
+CONTROL_STAGES = ('park', 'resume', 'reconcile')
 STAGES = ('failure_diagnosis', 'claim', 'author', 'publish', 'qa', 'ci', 'integrate', 'promote', 'dev', 'qa_qualification') + RECOVERY_STAGES
 PROFILES = ('auto', 'codex', 'cursor', 'agy')
 SHA = re.compile('[0-9a-f]{40}')
@@ -195,6 +196,9 @@ def request(value):
              type(value['run_attempt']) is int and 0 < value['run_attempt'] < 10000, 'invalid planning run')
         need(valid_report(value['report']), 'invalid planning report')
         return value
+    if value.get('stage') in CONTROL_STAGES:
+        from scheduling_control import validate_request
+        return validate_request(value)
     need(set(value) == {'action', 'stage', 'slot', 'issue', 'phase', 'head', 'attempt',
                         'generation', 'run', 'run_attempt', 'profile', 'gh_token'}, 'unknown stage fields')
     need(value['stage'] in STAGES and value['slot'] in ('slot1', 'slot2'), 'unknown stage/slot')
