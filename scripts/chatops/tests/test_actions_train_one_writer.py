@@ -889,6 +889,130 @@ class ProductQaAdmissionWire(unittest.TestCase):
                 with self.assertRaisesRegex(Exception, 'ambiguous/conflicting'):
                     R.find_product_admission(controller='c' * 40, ops=empty)
 
+    def test_list_acceptance_selected_without_typeerror(self):
+        """QA-04: single valid V2 list acceptance is selected; no unhashable TypeError."""
+        import owner_package_admission as A
+        criteria = ['City filter respects the selected city.',
+                    'No private fields are exposed.']
+        ledger = dict(self._admission_v2(comment=4004, acceptance=criteria),
+                      body_sha256='e' * 64, owner_id=A.OWNER_ID, admitted_at=1)
+        A.product_qa_ledger(ledger)
+        self.assertIsInstance(R._product_assignment_id(ledger), tuple)
+        with tempfile.TemporaryDirectory(prefix='product-qa-list-one-') as tmp:
+            folder = Path(tmp)
+            R.atomic(folder / (A.PRODUCT_LEDGER_PREFIX + '4004.json'), ledger)
+            empty = dict(schema='GB_PRODUCT_QA_OPS_V1', generation=0,
+                         operations={}, pending=None, last=None)
+            original_read = R.read
+            fixture_uid = os.getuid()
+            def read_fixture(path, owner, limit=2097152):
+                self.assertEqual(owner, 0)
+                return original_read(path, fixture_uid, limit)
+            with patch.object(R, 'STATE', folder), patch.object(R, 'read', side_effect=read_fixture):
+                found = R.find_product_admission(controller='c' * 40, ops=empty)
+            self.assertEqual(found['owner_comment'], 4004)
+            self.assertEqual(found['acceptance'], criteria)
+
+    def test_equivalent_list_acceptance_different_comments_dedup(self):
+        """QA-04: equivalent list contracts on different Owner comments share identity."""
+        import owner_package_admission as A
+        criteria = ['City filter respects the selected city.',
+                    'No private fields are exposed.']
+        a = self._admission_v2(comment=4005, acceptance=criteria)
+        b = dict(a, owner_comment=4006, body_sha256='a' * 64, admitted_at=99,
+                 owner_id=A.OWNER_ID,
+                 work='/srv/gb-slots/slot2/worktrees/issue-337-copy')
+        self.assertEqual(R._product_assignment_id(a), R._product_assignment_id(b))
+        with tempfile.TemporaryDirectory(prefix='product-qa-list-dedup-') as tmp:
+            folder = Path(tmp)
+            first = dict(a, body_sha256='e' * 64, owner_id=A.OWNER_ID, admitted_at=10)
+            other = dict(b, body_sha256='f' * 64, owner_id=A.OWNER_ID, admitted_at=20)
+            R.atomic(folder / (A.PRODUCT_LEDGER_PREFIX + '4005.json'), first)
+            R.atomic(folder / (A.PRODUCT_LEDGER_PREFIX + '4006.json'), other)
+            empty = dict(schema='GB_PRODUCT_QA_OPS_V1', generation=0,
+                         operations={}, pending=None, last=None)
+            original_read = R.read
+            fixture_uid = os.getuid()
+            def read_fixture(path, owner, limit=2097152):
+                self.assertEqual(owner, 0)
+                return original_read(path, fixture_uid, limit)
+            with patch.object(R, 'STATE', folder), patch.object(R, 'read', side_effect=read_fixture):
+                found = R.find_product_admission(controller='c' * 40, ops=empty)
+            self.assertEqual(found['owner_comment'], 4005)
+
+    def test_changed_list_criteria_no_pass_reuse_and_conflict(self):
+        """QA-04: changed list criteria ≠ prior PASS; conflicting eligible fail closed."""
+        import owner_package_admission as A
+        from core import digest
+        a = self._admission_v2(comment=4007, acceptance=[
+            'City filter respects the selected city.',
+            'No private fields are exposed.'])
+        b = dict(a, owner_comment=4008, acceptance=[
+            'City filter respects the selected city.',
+            'Distance sort is stable across reloads.'])
+        self.assertNotEqual(R._product_assignment_id(a), R._product_assignment_id(b))
+        prior = dict(admission_sha256=digest(a), admission=a,
+                     result={'status': 'confirmed', 'qa': {'verdict': 'PASS'}})
+        self.assertTrue(R._product_ops_match(prior, a, digest(a)))
+        self.assertFalse(R._product_ops_match(prior, b, digest(b)))
+        with tempfile.TemporaryDirectory(prefix='product-qa-list-conflict-') as tmp:
+            folder = Path(tmp)
+            first = dict(a, body_sha256='e' * 64, owner_id=A.OWNER_ID, admitted_at=1)
+            other = dict(b, body_sha256='f' * 64, owner_id=A.OWNER_ID, admitted_at=2)
+            R.atomic(folder / (A.PRODUCT_LEDGER_PREFIX + '4007.json'), first)
+            R.atomic(folder / (A.PRODUCT_LEDGER_PREFIX + '4008.json'), other)
+            empty = dict(schema='GB_PRODUCT_QA_OPS_V1', generation=0,
+                         operations={}, pending=None, last=None)
+            original_read = R.read
+            fixture_uid = os.getuid()
+            def read_fixture(path, owner, limit=2097152):
+                self.assertEqual(owner, 0)
+                return original_read(path, fixture_uid, limit)
+            with patch.object(R, 'STATE', folder), patch.object(R, 'read', side_effect=read_fixture):
+                with self.assertRaisesRegex(Exception, 'ambiguous/conflicting'):
+                    R.find_product_admission(controller='c' * 40, ops=empty)
+
+    def test_list_acceptance_does_not_suppress_other_eligible_issue(self):
+        """QA-04: supported list contract must not TypeError-suppress another Issue."""
+        import owner_package_admission as A
+        import native_antigravity as N
+        list_337 = dict(
+            self._admission_v2(comment=4009, issue=337, acceptance=[
+                'City filter respects the selected city.',
+                'No private fields are exposed.']),
+            body_sha256='e' * 64, owner_id=A.OWNER_ID, admitted_at=200)
+        other_346 = dict(
+            self._admission(owner_comment=4010),
+            body_sha256='f' * 64, owner_id=A.OWNER_ID, admitted_at=100)
+        A.product_qa_ledger(list_337)
+        A.product_qa_ledger(other_346)
+        with tempfile.TemporaryDirectory(prefix='product-qa-list-queue-') as tmp:
+            folder = Path(tmp)
+            R.atomic(folder / (A.PRODUCT_LEDGER_PREFIX + '4009.json'), list_337)
+            R.atomic(folder / (A.PRODUCT_LEDGER_PREFIX + '4010.json'), other_346)
+            empty = dict(schema='GB_PRODUCT_QA_OPS_V1', generation=0,
+                         operations={}, pending=None, last=None)
+            original_read = R.read
+            fixture_uid = os.getuid()
+            def read_fixture(path, owner, limit=2097152):
+                self.assertEqual(owner, 0)
+                return original_read(path, fixture_uid, limit)
+            budget = Mock(bind_issue=lambda *_: None, remaining=lambda *_: 3)
+            with patch.object(R, 'STATE', folder), \
+                 patch.object(R, 'read', side_effect=read_fixture), \
+                 patch.object(R, 'product_qa_ops', return_value=empty), \
+                 patch.object(N, 'product_executor_ready', return_value={'phase': 'canary'}):
+                found = R.find_product_admission(controller='c' * 40, ops=empty)
+                plan = R.product_qa_plan(
+                    {'mode': 'active', 'controller_sha': 'c' * 40},
+                    {'owned': True}, budget)
+            self.assertEqual(found['issue'], 346)
+            self.assertEqual(found['owner_comment'], 4010)
+            self.assertIsNotNone(plan)
+            self.assertEqual(plan['issue'], 346)
+            self.assertEqual(plan['head'], other_346['source_sha'])
+            self.assertEqual(plan['profile'], 'agy')
+
     def test_product_qa_last_records_factual_continuation_envelope(self):
         """Root last sets product_operation_changed for confirmed PASS/FAIL only."""
         import inspect

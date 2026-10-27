@@ -1490,7 +1490,7 @@ V5_OLD={
 # Placeholder NEW pins — filled after source edit; installer verifies bundle bytes.
 V5_NEW={
  'core.py':'678246a2c29f2788e4ae7f4f48722140c81dc068a8226da09ec2bd17bda42a67',
- 'receiver.py':'68977f101f7e7b6fdcf372b53189bca5fac144c15a3b2857eebc45d9505b667b',
+ 'receiver.py':'c9c23330541d44c270a05ae4584add04d9e77481f8841954ffda659198e10062',
  'stage.py':'abbb0f5be285b3c2770119770d4ad30e224b28535b2279f56a46bb377a131e0a',
  'native_antigravity.py':'14b089d2cf8bc295f357454d7d356f57b8480a996a0ec00e331d97f15280d536',
  'owner_package_admission.py':'39b681f8408989dfbfd9202f60e4b31c7bffbe96f350d53e572c97f87e802aa3',

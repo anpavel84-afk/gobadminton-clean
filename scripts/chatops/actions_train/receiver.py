@@ -240,8 +240,17 @@ def _product_assignment_id(admission):
     allowed = admission.get('allowed_paths')
     if allowed is not None and type(allowed) is not list:
         return None
+    # V2 accepts string OR list; nested lists are not hashable, so encode every
+    # supported form as a deterministic digest (canonical JSON preserves type).
+    if acceptance is None:
+        acceptance_key = None
+    elif type(acceptance) is str or (
+            type(acceptance) is list and all(type(item) is str for item in acceptance)):
+        acceptance_key = digest(acceptance)
+    else:
+        return None
     return (schema, controller, issue, repo, base, head, attempt, model, max_calls,
-            acceptance, tuple(allowed) if isinstance(allowed, list) else None)
+            acceptance_key, tuple(allowed) if isinstance(allowed, list) else None)
 
 
 def _product_ops_match(prior, admission, admission_digest):
