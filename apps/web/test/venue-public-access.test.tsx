@@ -33,6 +33,7 @@ vi.mock("react", async original => {
       return (state.slots[index] as { fn: unknown }).fn;
     },
     useContext(context: { _currentValue: unknown }) { return context._currentValue; },
+    useId() { const state = instance(); return `map-filter-${state.cursor++}`; },
     useEffect(effect: () => void | (() => void), deps?: unknown[]) {
       const state = instance(), index = state.cursor++, previous = state.slots[index] as unknown[] | undefined;
       if (!deps || !previous || deps.some((value, n) => value !== previous[n])) {

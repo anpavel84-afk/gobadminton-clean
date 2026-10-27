@@ -145,12 +145,19 @@ describe("MapLayerFiltersControls draft/apply/reset", () => {
     hooks.cleanups = [];
     hooks.cursor = 0;
     fibers.clear();
-    document.body.style.overflow = "";
-    Object.assign(document, { activeElement: document.body });
+    const body = { style: { overflow: "" } };
+    vi.stubGlobal("document", { body, activeElement: body });
+    const raf = (callback: () => void) => { callback(); return 1; };
+    vi.stubGlobal("window", Object.assign(new EventTarget(), {
+      requestAnimationFrame: raf, cancelAnimationFrame: () => {},
+    }));
+    vi.stubGlobal("requestAnimationFrame", raf);
+    vi.stubGlobal("cancelAnimationFrame", () => {});
   });
   afterEach(() => {
     for (const store of fibers.values()) store.cleanups.forEach(cleanup => cleanup?.());
     hooks.cleanups.splice(0).forEach(cleanup => cleanup?.());
+    vi.unstubAllGlobals();
   });
 
   it("keeps draft changes until Apply; reset draft does not change applied", () => {

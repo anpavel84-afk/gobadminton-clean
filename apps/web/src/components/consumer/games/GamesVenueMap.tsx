@@ -40,7 +40,7 @@ export function GamesVenueMap({ venues, counts, selectedVenueId, onDeselect, onS
   const { applied } = useMapLayerFilters();
   // Marker filter only: selection still resolves against the canonical venue list above.
   const markerVenues = useMemo(
-    () => filterVenuesForMapLayer(venues, counts, applied.venueMode),
+    () => applied.venueMode === "all" ? venues : filterVenuesForMapLayer(venues, counts, applied.venueMode),
     [venues, counts, applied.venueMode],
   );
   const [resumeCamera, setResumeCamera] = useState(false);
