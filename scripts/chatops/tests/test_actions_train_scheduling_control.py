@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import threading
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
@@ -19,6 +20,7 @@ import scheduling_control as C
 import stage
 import test_plan_gate as G
 A, S = core.live()
+SECURE_READ, ROOT_METADATA = R.read, C.root_metadata
 HEAD, BASE = 'a'*40, 'b'*40
 TOKEN = 'github_pat_SYNTHETIC_ONLY'
 
@@ -27,6 +29,7 @@ class Controls(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='scheduling-')
         self.root = Path(self.temp.name)
+        self.slot = 'slot1'
         self.folder = self.root/'autonomy/slots/slot1'
         self.folder.mkdir(parents=True, mode=0o700)
         self.folder.chmod(0o700)
@@ -86,7 +89,7 @@ class Controls(unittest.TestCase):
         raise AssertionError('unexpected API '+path)
 
     def checkpoint(self,slot):
-        if slot == 'slot2': return copy.deepcopy(self.other), []
+        if slot != self.slot: return copy.deepcopy(self.other), []
         state = core.loads((self.folder/'state.json').read_bytes())
         path = self.folder/'parked.json'
         parked = core.loads(path.read_bytes())['parked'] if path.exists() else []
@@ -95,9 +98,9 @@ class Controls(unittest.TestCase):
     def request(self,action='park',snapshot=None,archive=None,operation=None,proof=None):
         snapshot = snapshot or self.active
         self.counter += 1
-        req = dict(action='train',stage=action,slot='slot1',issue=snapshot['issue'],
+        req = dict(action='train',stage=action,slot=self.slot,issue=snapshot['issue'],
             head=snapshot['head'],attempt=snapshot['attempt'],phase=snapshot['phase'],
-            generation=R.journal('slot1')['generation'],profile='auto',run=100,run_attempt=1,gh_token=TOKEN,
+            generation=R.journal(self.slot)['generation'],profile='auto',run=100,run_attempt=1,gh_token=TOKEN,
             control=dict(comment=self.counter,snapshot=core.digest(snapshot),archive=archive,
                          operation=operation,proof=proof,base=snapshot['base'],pr=snapshot['pr']))
         self.authorize(req)
@@ -119,7 +122,7 @@ class Controls(unittest.TestCase):
         finally: os.close(lock)
 
     def worker(self,req,finish=True):
-        key = core.digest(core.binding(req)); j = R.journal('slot1')
+        key = core.digest(core.binding(req)); j = R.journal(self.slot)
         store = A.Store(self.folder)
         try:
             intent = j['operations'][key]['scheduling']
@@ -128,7 +131,7 @@ class Controls(unittest.TestCase):
                 result = C.perform(local,(A,S,self.rt,self.api,store,self.bridge))
         finally: os.close(store.lock)
         if finish:
-            R.finish_scheduling(req,self.policy,R.journal('slot1'),self.checkpoint('slot1')[0],result)
+            R.finish_scheduling(req,self.policy,R.journal(self.slot),self.checkpoint(self.slot)[0],result)
         return result
 
     def complete(self,req):
@@ -423,7 +426,7 @@ class Controls(unittest.TestCase):
         self.complete(req)
         self.assertEqual(received,[self.auth[req['control']['comment']]['body']])
         key=core.digest(core.binding(req));op=R.journal('slot1')['operations'][key]
-        self.assertEqual(op['scheduling']['admission'],core.digest(self.auth[918374]))
+        self.assertEqual(op['scheduling']['admission'],C.admission(req,self.api))
         self.assertEqual(op['binding']['control']['comment'],918374)
         other=copy.deepcopy(req);other['control']['comment']=918375;self.authorize(other)
         self.assertNotEqual(core.digest(core.binding(other)),key)
@@ -440,6 +443,95 @@ class Controls(unittest.TestCase):
         self.auth[cid]['body']=C.MARKER+'\n'+json.dumps(body)
         with self.assertRaisesRegex(core.Refused,'mismatch'):self.prepare(req)
         self.assertIsNone(R.journal('slot1')['pending'])
+
+    def test_Q2_R1_hot_cold_reactions_and_profile_metadata_do_not_change_authority(self):
+        req=self.request();result=self.complete(req);key=core.digest(core.binding(req))
+        auth=C.admission(req,self.api);cid=req['control']['comment'];original=copy.deepcopy(self.auth[cid])
+        archive=self.folder/('scheduling-'+key+'.json');archive_bytes=archive.read_bytes()
+        variants=[dict(original,reactions={'total_count':1,'+1':1}),
+                  dict(original,reactions={'total_count':9,'heart':9},author_association='OWNER',
+                       user=dict(original['user'],login='renamed',avatar_url='https://example.invalid/new')),
+                  dict(original,user=dict(original['user'],login='another display name'))]
+        for cold in (False,True):
+            if cold:
+                j=R.journal('slot1');R.atomic(self.state/'history/slot1'/(key+'.json'),j['operations'].pop(key))
+                R.atomic(self.state/'slot1.json',j)
+            journal=(self.state/'slot1.json').read_bytes();calls=self.bridge.stopped_writer.call_count
+            for comment in variants:
+                self.auth[cid]=comment
+                self.assertEqual(C.admission(req,self.api),auth)
+                self.assertEqual(self.prepare(dict(req,run=102)),dict(status='confirmed',key=key,result=result))
+                self.assertEqual((self.state/'slot1.json').read_bytes(),journal)
+                self.assertEqual(archive.read_bytes(),archive_bytes)
+                self.assertEqual(self.bridge.stopped_writer.call_count,calls)
+
+    def test_Q2_R3_typed_identity_scope_and_closed_semantics_refuse_before_effects(self):
+        req=self.request();cid=req['control']['comment'];original=copy.deepcopy(self.auth[cid])
+        mutations=[dict(id=value) for value in (cid+1,str(cid),True)]
+        mutations += [dict(user={'id':value}) for value in (core.OWNER+1,str(core.OWNER),True)]
+        mutations += [dict(user='owner'),dict(user=None)]
+        mutations += [dict(issue_url=url) for url in (
+            f'https://api.github.com/repos/foreign/repo/issues/{req["issue"]}',
+            f'https://api.github.com/repos/{core.REPO}/issues/451')]
+        body=C.admission_body(req)
+        for change in (lambda b:b.update(extra=True),lambda b:b['request'].update(issue=451),
+                       lambda b:b['request']['control'].update(extra=True)):
+            altered=copy.deepcopy(body);change(altered)
+            mutations.append(dict(body=C.MARKER+'\n'+json.dumps(altered)))
+        before=(self.state/'slot1.json').read_bytes()
+        for mutation in mutations:
+            self.auth[cid]=dict(original,**mutation)
+            with self.subTest(mutation=mutation),self.assertRaises(core.Refused):self.prepare(req)
+            self.assertEqual((self.state/'slot1.json').read_bytes(),before)
+            self.assertFalse(any(self.folder.glob('scheduling-*.json')))
+
+    def test_Q2_R4_raw_body_exact_timestamps_edit_back_and_stale_new_id(self):
+        req=self.request();self.complete(req);cid=req['control']['comment'];original=copy.deepcopy(self.auth[cid])
+        auth=C.admission(req,self.api);before=(self.state/'slot1.json').read_bytes()
+        # Semantic JSON equivalence must not turn a raw body edit into a duplicate.
+        self.auth[cid]=dict(original,body=C.MARKER+'\n'+json.dumps(C.admission_body(req),indent=2,sort_keys=True))
+        self.assertNotEqual(C.admission(req,self.api),auth)
+        with self.assertRaisesRegex(core.Refused,'admission changed'):self.prepare(req)
+        # Same instant spelled differently remains a different authenticated input.
+        stamp=original['created_at'];different=stamp.replace('+00:00','Z')
+        self.auth[cid]=dict(original,created_at=different,updated_at=different)
+        self.assertNotEqual(C.admission(req,self.api),auth)
+        with self.assertRaisesRegex(core.Refused,'admission changed'):self.prepare(req)
+        for created,updated in ((stamp,'2026-10-27T00:00:00Z'), # edit-back retains updated timestamp
+                                ('bad','bad'),('2026-10-27T00:00:00','2026-10-27T00:00:00'),
+                                (None,None),('2000-01-01T00:00:00Z','2000-01-01T00:00:00Z'),
+                                ('2999-01-01T00:00:00Z','2999-01-01T00:00:00Z')):
+            self.auth[cid]=dict(original,created_at=created,updated_at=updated)
+            with self.subTest(created=created,updated=updated),self.assertRaises(core.Refused):self.prepare(req)
+        new=copy.deepcopy(req);new['control']['comment']=cid+1;self.auth[cid+1]=dict(original,id=cid+1)
+        self.assertNotEqual(core.digest(core.binding(new)),core.digest(core.binding(req)))
+        self.assertNotEqual(C.admission(new,self.api),auth)  # actual ID is also in authenticated identity
+        with self.assertRaisesRegex(core.Refused,'stale'):self.prepare(new)
+        self.assertEqual((self.state/'slot1.json').read_bytes(),before)
+
+    def test_Q2_R4_consumed_archive_fresh_comment_cannot_resume_again(self):
+        park=self.request();parked=self.complete(park)
+        resume=self.request('resume',archive=parked['archive']);self.complete(resume)
+        A.atomic(self.folder/'state.json',{'active':None,'done':[400]})
+        replay=self.request('resume',archive=parked['archive']);before=(self.state/'slot1.json').read_bytes()
+        with self.assertRaisesRegex(core.Refused,'already resumed/reserved'):self.prepare(replay)
+        self.assertEqual((self.state/'slot1.json').read_bytes(),before)
+
+    def test_Q2_R5_old_whole_response_digest_is_not_promoted_hot_or_cold(self):
+        req=self.request();self.complete(req);key=core.digest(core.binding(req))
+        old_digest=core.digest(self.auth[req['control']['comment']]);j=R.journal('slot1')
+        self.assertNotEqual(old_digest,j['operations'][key]['scheduling']['admission'])
+        j['operations'][key]['scheduling']['admission']=old_digest
+        R.atomic(self.state/'slot1.json',j)
+        for cold in (False,True):
+            if cold:
+                j=R.journal('slot1');R.atomic(self.state/'history/slot1'/(key+'.json'),j['operations'].pop(key))
+                R.atomic(self.state/'slot1.json',j)
+            paths=[self.state/'slot1.json',self.folder/('scheduling-'+key+'.json')]
+            if cold:paths.append(self.state/'history/slot1'/(key+'.json'))
+            before={p:p.read_bytes() for p in paths}
+            with self.assertRaisesRegex(core.Refused,'admission changed'):self.prepare(req)
+            self.assertEqual({p:p.read_bytes() for p in paths},before)
 
     def test_status_exact_key_cold_history_private_projection_and_no_recovery(self):
         req=self.request();self.complete(req);key=core.digest(core.binding(req))
@@ -560,6 +652,308 @@ class Controls(unittest.TestCase):
         with self.assertRaisesRegex(core.Refused,'external-effect absence'):self.prepare(req)
         self.assertEqual((self.state/'slot1.json').read_bytes(),before)
         self.assertFalse(R.journal('slot1')['operations'][req['control']['operation']]['result']['safe_release'])
+
+class Accounting:
+    """Actual Budget, fixed lock and secure snapshot; privileged identity is synthetic.
+
+    No installed inventory/root qualification is claimed. Only the lock's fstat
+    uid/gid and the root-reader owner lookup are substituted for nonroot fixtures.
+    """
+    def __init__(self, root, state):
+        self.auto = root/'autonomy'; self.state = state
+        locks = self.auto/'locks'; locks.mkdir(parents=True, exist_ok=True)
+        self.lock = locks/'registry.lock'; self.lock.touch(); self.lock.chmod(0o640)
+        self.limits = root/'limits.json'; self.policy = root/'policy.json'
+        cells = {p:{r:100 for r in ('author','qa')} for p in ('codex','cursor','agy')}
+        A.atomic(self.limits, dict(providers=cells,slots={s:cells for s in ('slot1','slot2')}))
+        A.atomic(self.policy, dict(controller_sha='c'*40))
+        for slot in ('slot1','slot2'):
+            (self.auto/'outbox'/slot).mkdir(parents=True, exist_ok=True)
+        self.day = '2026-10-27'
+        self.budget = S.Budget(self.limits,self.auto/'outbox',self.lock,today=lambda:self.day)
+        self.reader = SimpleNamespace(AUTONOMY=self.auto,STATE=state,POLICY=self.policy,
+            BUDGET=self.limits,GROUP=65042,
+            read=lambda p,owner=None,*a,**kw:SECURE_READ(p,os.getuid(),*a,**kw))
+        self.real_fstat = os.fstat
+        self.lock_inode = self.lock.stat().st_ino
+
+    def identity(self, fd):
+        info = self.real_fstat(fd)
+        if info.st_ino == self.lock_inode and info.st_dev == self.lock.stat().st_dev:
+            fields = list(info); fields[4:6] = [0,65042]
+            return os.stat_result(fields)
+        return info
+
+    def snapshot(self, slot='slot1', policy=None):
+        with patch.object(C.os,'fstat',side_effect=self.identity), \
+             patch('pwd.getpwnam',return_value=SimpleNamespace(pw_uid=os.getuid())), \
+             patch.object(C,'installed_inventory',return_value={'synthetic_installed_pin':'unchanged'}):
+            return ROOT_METADATA(self.reader,slot,policy or {'controller_sha':'c'*40})
+
+    def path(self, slot, backup=False):
+        return self.auto/'outbox'/slot/('ledger.json.bak' if backup else 'ledger.json')
+
+    def charge(self, slot, provider='codex', role='qa'):
+        return self.budget.charge(slot,provider,role)
+
+
+class ConcurrentControls(unittest.TestCase):
+    def fixture(self, slot='slot1'):
+        f = Controls(); f.setUp()
+        self.addCleanup(f.doCleanups)
+        if slot == 'slot2':
+            moved = f.folder.with_name(slot); f.folder.rename(moved); f.folder = moved; f.slot = slot
+        accounting = Accounting(f.root,f.state)
+        C.root_metadata.side_effect = lambda reader, slot, policy, **kw: accounting.snapshot(slot,policy)
+        return f,accounting
+
+    def finish(self, f, req, result):
+        lock = R.locked(f.state/'controller.lock')
+        try:
+            R.finish_scheduling(req,f.policy,R.journal(f.slot),f.checkpoint(f.slot)[0],result)
+        finally:
+            os.close(lock)
+
+    def interleave(self, slot, action, initially_absent):
+        f,b = self.fixture(slot)
+        try:
+            other = 'slot2' if slot == 'slot1' else 'slot1'
+            if not initially_absent:
+                b.day='2026-10-26'; b.charge(other); b.charge(other)
+            parked = f.complete(f.request()) if action == 'resume' else None
+            park_bytes = (f.folder/('scheduling-'+parked['archive']+'.json')).read_bytes() if parked else None
+            req=f.request(action,archive=parked['archive'] if parked else None)
+            f.prepare(req); key=core.digest(core.binding(req)); before=R.journal(slot)
+            result=f.worker(req,finish=False)  # actual Store postimage precedes all new charges
+            archive=f.folder/('scheduling-'+key+'.json'); archive_bytes=archive.read_bytes()
+            qa_bytes=(f.folder/'qa-450-a2.json').read_bytes()
+            store_before=f.checkpoint(slot)[0]
+            b.day='2026-10-27'; b.charge(other)
+            first=b.snapshot(slot); b.charge(other,'cursor','author'); b.charge(other,'agy','qa')
+            b.day='2026-10-28'; b.charge(other,'codex','author')
+            charged=b.snapshot(slot)
+            self.assertTrue(b.path(other,True).exists())
+            self.assertEqual(first[str(b.path(other))]['value']['2026-10-27']['codex']['qa'],1)
+            # Disjoint completed receipts, last and history are not re-created by finalization.
+            j=R.journal(slot); unrelated='e'*64
+            j['operations'][unrelated]={'binding':{'issue':451,'stage':'ci'},'result':{'status':'confirmed'}}
+            R.atomic(f.state/(slot+'.json'),j)
+            self.finish(f,req,result)
+            after=R.journal(slot);op=after['operations'][key]
+            self.assertIsNone(after['pending']);self.assertEqual(after['generation'],before['generation']+1)
+            self.assertEqual(op['result'],result);self.assertIsInstance(op['finished_at'],int)
+            self.assertEqual(op['binding'],core.binding(req))
+            self.assertEqual(op['scheduling'],before['operations'][key]['scheduling'])
+            self.assertEqual(op['task_hash'],core.digest(f.active['task']))
+            self.assertEqual(after['operations'][unrelated],j['operations'][unrelated])
+            for name in ('last','profiles','stage_counts','deferred'):
+                self.assertEqual(name in after,name in before)
+                if name in before:self.assertEqual(after[name],before[name])
+            self.assertEqual(f.checkpoint(slot)[0],store_before)
+            self.assertEqual(store_before,{'active':None if action=='park' else f.active,'done':[400]})
+            self.assertEqual(archive.read_bytes(),archive_bytes)
+            self.assertEqual((f.folder/'qa-450-a2.json').read_bytes(),qa_bytes)
+            if parked:self.assertEqual((f.folder/('scheduling-'+parked['archive']+'.json')).read_bytes(),park_bytes)
+            journal_bytes=(f.state/(slot+'.json')).read_bytes();lease_calls=f.rt.lease.call_count
+            with patch.object(C,'perform',side_effect=AssertionError('duplicate worker')):
+                duplicate=f.prepare(dict(req,run=101))
+            self.assertEqual(duplicate,dict(status='confirmed',key=key,result=result))
+            self.assertEqual((f.state/(slot+'.json')).read_bytes(),journal_bytes)
+            self.assertEqual(b.snapshot(slot),charged);self.assertEqual(f.rt.lease.call_count,lease_calls)
+        finally:
+            f.doCleanups()
+
+    def test_Q1_R1_park_other_slot_charge_after_store_postimage(self):
+        for slot in ('slot1','slot2'):
+            for absent in (True,False):
+                with self.subTest(slot=slot,initially_absent=absent):self.interleave(slot,'park',absent)
+
+    def test_Q1_R2_resume_other_slot_charge_after_store_postimage(self):
+        for slot in ('slot1','slot2'):
+            for absent in (True,False):
+                with self.subTest(slot=slot,initially_absent=absent):self.interleave(slot,'resume',absent)
+
+    def test_Q1_R3_first_second_charge_and_controlled_slot_exact(self):
+        f,b=self.fixture();req=f.request();f.prepare(req);result=f.worker(req,finish=False)
+        frozen=R.journal(f.slot)['operations'][core.digest(core.binding(req))]['scheduling']['preserved']
+        b.charge('slot2');one=b.snapshot();self.assertIsNone(one[str(b.path('slot2',True))])
+        C.preserved_control(b.reader,req,frozen,one)
+        b.charge('slot2');two=b.snapshot();C.preserved_control(b.reader,req,one,two)
+        self.assertEqual(two[str(b.path('slot2',True))],one[str(b.path('slot2'))])
+        b.charge('slot1');before=(f.state/'slot1.json').read_bytes()
+        with self.assertRaises(core.Refused):self.finish(f,req,result)
+        self.assertEqual((f.state/'slot1.json').read_bytes(),before)
+        self.assertEqual(b.budget.used('codex','qa','slot1'),1)
+        # Qualification/RECONCILE still requires exact metadata for both slots.
+        with self.assertRaises(core.Refused):C.preserved_control(b.reader,dict(req,stage='reconcile'),one,two)
+
+    def test_Q1_R6_eligible_same_transaction_retry_with_other_charge_and_unknown_hold(self):
+        f,b=self.fixture();req=f.request();f.prepare(req);result=f.worker(req,finish=False)
+        b.charge('slot2');key=core.digest(core.binding(req));archive=f.folder/('scheduling-'+key+'.json')
+        raw=archive.read_bytes();before=(f.state/'slot1.json').read_bytes()
+        with self.assertRaisesRegex(core.Refused,'executor outcome unknown'):f.prepare(req)
+        self.assertEqual((f.state/'slot1.json').read_bytes(),before)
+        # A recorded bounded UNKNOWN from this synthetic executor enables only
+        # the pre-existing Store transaction retry, never a historical certificate.
+        self.finish(f,req,{'status':'unknown','reason':'synthetic stopped executor'})
+        self.assertFalse(R.journal('slot1')['operations'][key]['result']['safe_release'])
+        b.charge('slot2');self.assertEqual(f.prepare(req)['status'],'running')
+        calls=f.rt.lease.call_count;f.worker(req)
+        self.assertEqual(f.rt.lease.call_count,calls);self.assertEqual(archive.read_bytes(),raw)
+        self.assertEqual(b.budget.used('codex','qa','slot2'),2)
+        self.assertEqual(R.journal('slot1')['generation'],18)
+
+    def test_Q1_R6_pending_binding_generation_checkpoint_and_task_seals(self):
+        f,b=self.fixture();req=f.request();f.prepare(req);result=f.worker(req,finish=False)
+        b.charge('slot2');key=core.digest(core.binding(req));saved=R.journal('slot1')
+        for mutate in (lambda j:j.update(pending='f'*64),lambda j:j.update(generation=999),
+                       lambda j:j['operations'][key]['binding'].update(issue=999)):
+            bad=copy.deepcopy(saved);mutate(bad);R.atomic(f.state/'slot1.json',bad)
+            before=(f.state/'slot1.json').read_bytes()
+            with self.subTest(mutation=mutate),self.assertRaisesRegex(core.Refused,'CAS'):
+                self.finish(f,req,result)
+            self.assertEqual((f.state/'slot1.json').read_bytes(),before)
+        R.atomic(f.state/'slot1.json',saved)
+        with self.assertRaisesRegex(core.Refused,'checkpoint CAS'):
+            R.finish_scheduling(req,f.policy,saved,{'active':f.active,'done':[400]},result)
+        archive=f.folder/('scheduling-'+key+'.json');raw=archive.read_bytes()
+        for field in ('intent','before','after','evidence'):
+            bad=core.loads(raw)
+            if field=='intent':bad[field]['snapshot']['task']['goal']='tampered'
+            elif field=='evidence':bad[field]={}
+            else:bad[field]['done'].append(999)
+            A.atomic(archive,bad)
+            with self.subTest(field=field),self.assertRaises(core.Refused):f.worker(req)
+            archive.write_bytes(raw)
+        self.assertEqual(R.journal('slot1'),saved)
+
+
+class RegistrySnapshots(unittest.TestCase):
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory(prefix='registry-snapshot-');self.addCleanup(self.temp.cleanup)
+        self.root=Path(self.temp.name);state=self.root/'state';state.mkdir()
+        self.b=Accounting(self.root,state)
+
+    def threads(self, *calls):
+        errors=[];threads=[]
+        for call in calls:
+            def run(call=call):
+                try:call()
+                except BaseException as exc:errors.append(exc)
+            thread=threading.Thread(target=run,daemon=True,name=call.__name__);thread.start();threads.append(thread)
+        return threads,errors
+
+    def joined(self, threads, errors):
+        for thread in threads:thread.join(5);self.assertFalse(thread.is_alive(),'registry lock deadlock')
+        if errors:raise errors[0]
+
+    def test_Q1_R4_snapshot_waits_for_real_backup_hardlink_window(self):
+        b=self.b;b.charge('slot2');entered=threading.Event();release=threading.Event();reader_blocked=threading.Event()
+        observed=[];original=S.atomic;real_flock=fcntl.flock
+        def rotate(path,*args,**kwargs):
+            if Path(path)==b.path('slot2'):
+                self.assertEqual(path.stat().st_nlink,2)
+                with self.assertRaisesRegex(core.Refused,'unsafe metadata'):SECURE_READ(path,os.getuid())
+                entered.set();self.assertTrue(release.wait(5))
+            return original(path,*args,**kwargs)
+        def snapshot():observed.append(b.snapshot())
+        def flock(fd,operation):
+            if threading.current_thread().name == 'snapshot':
+                with self.assertRaises(BlockingIOError):real_flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                reader_blocked.set()
+            return real_flock(fd,operation)
+        with patch.object(S,'atomic',side_effect=rotate),patch.object(C.fcntl,'flock',side_effect=flock):
+            writers,errors=self.threads(lambda:b.charge('slot2'))
+            try:
+                self.assertTrue(entered.wait(5));readers,read_errors=self.threads(snapshot)
+                self.assertTrue(reader_blocked.wait(5));self.assertFalse(observed)
+            finally:release.set()
+            self.joined(writers,errors);self.joined(readers,read_errors)
+        snap=observed[0];live=snap[str(b.path('slot2'))];prior=snap[str(b.path('slot2',True))]
+        self.assertEqual(live['value']['2026-10-27']['codex']['qa'],2)
+        self.assertEqual(prior['value']['2026-10-27']['codex']['qa'],1)
+        self.assertEqual(b.path('slot2').stat().st_nlink,1)
+
+    def test_Q1_R4_writer_waits_until_both_snapshot_reads_complete(self):
+        b=self.b;b.charge('slot2');b.charge('slot2');entered=threading.Event();release=threading.Event()
+        charged=threading.Event();writer_blocked=threading.Event();snapshots=[];original=b.reader.read
+        real_flock=fcntl.flock
+        def read(path,*args,**kwargs):
+            value=original(path,*args,**kwargs)
+            if Path(path)==b.path('slot2'):
+                entered.set();self.assertTrue(release.wait(5))
+            return value
+        b.reader.read=read
+        def writer():b.charge('slot2');charged.set()
+        def flock(fd,operation):
+            if threading.current_thread().name == 'writer':
+                with self.assertRaises(BlockingIOError):real_flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                writer_blocked.set()
+            return real_flock(fd,operation)
+        with patch.object(C.fcntl,'flock',side_effect=flock):
+            readers,errors=self.threads(lambda:snapshots.append(b.snapshot()))
+            try:
+                self.assertTrue(entered.wait(5))
+                writers,write_errors=self.threads(writer)
+                self.assertTrue(writer_blocked.wait(5));self.assertFalse(charged.is_set())
+            finally:release.set()
+            self.joined(readers,errors);self.joined(writers,write_errors)
+        snapshot=snapshots[0]
+        self.assertEqual(snapshot[str(b.path('slot2'))]['value']['2026-10-27']['codex']['qa'],2)
+        self.assertEqual(snapshot[str(b.path('slot2',True))]['value']['2026-10-27']['codex']['qa'],1)
+        self.assertEqual(b.budget.used('codex','qa','slot2'),3)
+        # Repeated snapshots complete without nested non-reentrant acquisition.
+        self.assertEqual(b.snapshot()[str(b.path('slot2'))]['value']['2026-10-27']['codex']['qa'],3)
+
+    def test_Q1_R4_fixed_lock_missing_symlink_mode_owner_group_links_refuse_without_repair(self):
+        b=self.b;original=b.lock.read_bytes();b.lock.unlink()
+        with self.assertRaisesRegex(core.Refused,'registry lock missing HOLD'):b.snapshot()
+        self.assertFalse(b.lock.exists())
+        target=self.root/'other';target.write_bytes(original);target.chmod(0o640);b.lock.symlink_to(target)
+        with self.assertRaisesRegex(core.Refused,'unsafe path'):b.snapshot()
+        self.assertTrue(b.lock.is_symlink());b.lock.unlink();b.lock.touch();b.lock.chmod(0o600)
+        with self.assertRaisesRegex(core.Refused,'unsafe identity'):b.snapshot()
+        self.assertEqual(b.lock.stat().st_mode & 0o777,0o600);b.lock.chmod(0o640)
+        # Real nonroot uid/gid must refuse: the production reader expects 0:65042.
+        with patch.object(b,'identity',side_effect=b.real_fstat),self.assertRaisesRegex(core.Refused,'unsafe identity'):b.snapshot()
+        synthetic_identity=b.identity
+        def wrong_group(fd):
+            info=synthetic_identity(fd);fields=list(info)
+            if info.st_ino == b.lock_inode:fields[5]=0
+            return os.stat_result(fields)
+        with patch.object(b,'identity',side_effect=wrong_group),self.assertRaisesRegex(core.Refused,'unsafe identity'):b.snapshot()
+        alias=self.root/'hardlink';os.link(b.lock,alias)
+        with self.assertRaisesRegex(core.Refused,'unsafe identity'):b.snapshot()
+        self.assertEqual(b.lock.stat().st_nlink,2);alias.unlink()
+        b.lock.unlink();b.lock.mkdir()
+        with self.assertRaisesRegex(core.Refused,'unsafe identity'):b.snapshot()
+
+    def test_Q1_R4_fixed_inode_replacement_during_acquisition_holds(self):
+        b=self.b;real_flock=fcntl.flock;retained=self.root/'old-lock'
+        def replace(fd,operation):
+            real_flock(fd,operation)
+            b.lock.rename(retained);b.lock.write_text('replacement');b.lock.chmod(0o640)
+        with patch.object(C.fcntl,'flock',side_effect=replace),self.assertRaisesRegex(core.Refused,'inode changed HOLD'):
+            b.snapshot()
+        self.assertEqual(b.lock.read_text(),'replacement');self.assertEqual(retained.read_bytes(),b'')
+
+    def test_Q1_R4_snapshot_lock_released_before_worker_lease_and_git(self):
+        f=Controls();f.setUp();self.addCleanup(f.doCleanups);b=Accounting(f.root,f.state)
+        C.root_metadata.side_effect=lambda reader,slot,policy,**kw:b.snapshot(slot,policy)
+        def free():
+            fd=os.open(b.lock,os.O_RDONLY)
+            try:fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            finally:os.close(fd)
+        f.bridge.stopped_writer.side_effect=lambda *a,**kw:free()
+        f.bridge.git.side_effect=lambda *a,**kw:(free(),f.git(*a,**kw))[1]
+        f.api.side_effect=lambda *a,**kw:(free(),f.api_call(*a,**kw))[1]
+        f.rt.lease.side_effect=lambda *a,**kw:free()
+        # These assertions run at the fork boundary and in actual Store perform.
+        req=f.request()
+        with patch.object(R.os,'fork',side_effect=lambda:(free(),880000)[1]), \
+             patch.object(R,'identity',return_value={'pid':880000,'start':'5','boot':'test'}):
+            R.handle(req,f.policy)
+        f.worker(req);free()
 
 
 class Inventory(unittest.TestCase):
@@ -723,7 +1117,7 @@ class HostedControl(unittest.TestCase):
         self.key=core.digest(core.binding(self.req))
         self.receipt=dict(status='confirmed',scheduling_only=True,archive='b'*64,archive_sha256='c'*64,next_stage='ci')
         self.found=dict(schema=core.CONTROL_CAPABILITY,key=self.key,slot='slot1',generation=19,
-            status='confirmed',binding=core.binding(self.req),admission=core.digest(self.comment),result=self.receipt)
+            status='confirmed',binding=core.binding(self.req),admission=C.admission(self.req,self.api),result=self.receipt)
         self.cap=dict(capabilities=[core.CONTROL_CAPABILITY],mode='active',controller_sha='c'*40)
 
     def test_both_closed_validators_legacy_and_whole_batch_before_dispatch(self):
@@ -766,6 +1160,39 @@ class HostedControl(unittest.TestCase):
         self.assertEqual(sum(c.args[0]['stage']=='resume' for c in ssh.call_args_list),1)
         self.assertTrue(all(c.args[0].get('operation')==self.key for c in ssh.call_args_list[2:]))
 
+    def test_Q2_R2_independent_client_server_reads_lost_reply_status_only(self):
+        client_comment=copy.deepcopy(self.comment);server_comment=copy.deepcopy(self.comment)
+        server_comment.update(reactions={'total_count':7,'heart':7},author_association='OWNER')
+        server_comment['user'].update(login='changed',avatar_url='https://example.invalid/new')
+        server_api=Mock(return_value=server_comment);server_api.identity=Mock()
+        # Both independently authenticated reads use the same production helper.
+        self.api.side_effect=lambda *a:copy.deepcopy(client_comment)
+        self.api.reset_mock()  # setUp computed the synthetic receipt using admission().
+        self.found['admission']=C.admission(self.req,server_api)
+        missing=dict(self.found,status='not_found',binding=None,admission=None,result=None)
+        running=dict(self.found,status='running',result=None)
+        ssh=Mock(side_effect=[self.cap,TimeoutError('lost reply'),missing,running,self.found])
+        with patch.object(self.client.time,'sleep'):self.client.execute(self.api,ssh,self.descriptor)
+        calls=[call.args[0] for call in ssh.call_args_list]
+        self.assertEqual(sum(req['stage']=='resume' for req in calls),1)
+        self.assertTrue(all(req==dict(action='train',stage='status',slot='slot1',operation=self.key)
+                            for req in calls[2:]))
+        server_api.identity.assert_called_once();self.api.identity.assert_called_once()
+
+    def test_Q2_R5_legacy_digest_mixed_versions_and_malformed_capabilities_fail_closed(self):
+        old=dict(self.found,admission=core.digest(self.comment))
+        ssh=Mock(side_effect=[self.cap,dict(status='running',key=self.key),old])
+        with self.assertRaisesRegex(core.Refused,'admission/binding mismatch'):
+            self.client.execute(self.api,ssh,self.descriptor)
+        self.assertEqual(sum(c.args[0]['stage']=='resume' for c in ssh.call_args_list),1)
+        self.assertEqual(old['admission'],core.digest(self.comment))
+        for cap in ({},dict(self.cap,capabilities=[]),dict(self.cap,capabilities=['unknown']),
+                    dict(self.cap,capabilities=core.CONTROL_CAPABILITY)):
+            ssh=Mock(return_value=cap)
+            with self.subTest(cap=cap),self.assertRaises(core.Refused):
+                self.client.execute(self.api,ssh,self.descriptor)
+            self.assertTrue(all(c.args[0]['stage']=='status' for c in ssh.call_args_list))
+
     def test_timeout_missing_or_unrelated_outcome_never_succeeds_or_replays(self):
         missing=dict(self.found,status='not_found',binding=None,admission=None,result=None)
         ssh=Mock(side_effect=[self.cap,dict(status='running',key=self.key),missing])
@@ -781,6 +1208,50 @@ class HostedControl(unittest.TestCase):
 
 
 class SharedUsage(unittest.TestCase):
+    def test_Q1_R5_closed_usage_history_rotating_chain_and_protected_metadata(self):
+        reader=SimpleNamespace(AUTONOMY=Path('/synthetic'))
+        path='/synthetic/outbox/slot2/ledger.json';backup=path+'.bak'
+        def usage(n):return {'2026-10-25':{},'2026-10-26':{'cursor':{}},'2026-10-27':{'codex':{'qa':n,'author':0}}}
+        def entry(value):
+            raw=json.dumps(value,sort_keys=True).encode()
+            return dict(value=value,uid=1,gid=1,mode=0o644,size=len(raw),sha256=hashlib.sha256(raw).hexdigest())
+        frozen={path:entry(usage(2)),backup:entry(usage(1)),
+            'policy':{'pin':'old'},'config':{'limit':100},'grant':{'used':1},
+            'reservation':{'operation':'old'},'installed':{'pin':'old'},'unknown-accounting':{'n':1},
+            '/synthetic/outbox/slot1/ledger.json':entry(usage(2))}
+        current=copy.deepcopy(frozen);current[path]=entry(usage(5));current[backup]=entry(usage(4))
+        req=dict(slot='slot1',stage='park');C.preserved_control(reader,req,frozen,current)
+        bad_values=[{}, {'2026-10-27':{'codex':{'qa':5,'author':0}}},
+            dict(usage(5),**{'2026-10-26':{}}), usage(1),
+            dict(usage(5),**{'2026-10-27':{'codex':{'qa':5}}}),
+            dict(usage(5),**{'2026-10-27':{'codex':{'qa':True}}}),
+            dict(usage(5),**{'2026-10-27':{'codex':{'qa':-1}}}),
+            dict(usage(5),**{'2026-10-27':{'codex':{'qa':5.0}}}),
+            dict(usage(5),**{'2026-10-27':{'alien':{'qa':5}}}),
+            dict(usage(5),**{'2026-10-27':{'codex':{'ops':5}}}),
+            {'schema':'unsupported'},[],dict(usage(5),**{'tomorrow':{}})]
+        negatives=[dict(current,**{path:entry(value)}) for value in bad_values]
+        negatives += [dict(current,**{backup:None}),dict(current,**{backup:entry(usage(0))}),
+                      dict(current,**{backup:entry(usage(6))}),dict(current,**{backup:entry(usage(1))})]
+        for field in ('uid','gid','mode'):
+            for target in (path,backup):
+                bad=copy.deepcopy(current);bad[target][field]+=1;negatives.append(bad)
+        for field in ('policy','config','grant','reservation','installed','unknown-accounting',
+                      '/synthetic/outbox/slot1/ledger.json'):
+            bad=copy.deepcopy(current);bad[field]={'changed':True};negatives.append(bad)
+        bad=copy.deepcopy(current);del bad['reservation'];negatives.append(bad)
+        bad=copy.deepcopy(current);bad['extra']={};negatives.append(bad)
+        raw_change=copy.deepcopy(frozen);raw_change[path]['sha256']='f'*64;negatives.append(raw_change)
+        no_charge=copy.deepcopy(frozen);no_charge[backup]=entry(usage(2));negatives.append(no_charge)
+        for bad in negatives:
+            before=copy.deepcopy(bad)
+            with self.subTest(bad=bad),self.assertRaises(core.Refused):C.preserved_control(reader,req,frozen,bad)
+            self.assertEqual(bad,before)
+        self.assertEqual(frozen[path],entry(usage(2)))
+        absent={path:None,backup:None}
+        with self.assertRaisesRegex(core.Refused,'missing usage preimage'):
+            C.preserved_control(reader,req,absent,{path:entry(usage(2)),backup:None})
+
     def test_monotonic_progress_backups_and_accounting_tamper(self):
         reader=SimpleNamespace(AUTONOMY=Path('/synthetic'))
         path='/synthetic/outbox/slot1/ledger.json'

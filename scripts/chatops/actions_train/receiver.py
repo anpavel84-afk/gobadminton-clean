@@ -979,14 +979,16 @@ def handle(req, policy):
 
 def finish_scheduling(req, policy, j, state, value):
     """Commit only this control receipt + pending/generation; historical facts stay exact."""
-    from scheduling_control import root_metadata
+    from scheduling_control import root_metadata, preserved_control
     key = digest(binding(req)); slot = req['slot']
     need(j['pending'] == key and key in j['operations'], 'control commit CAS mismatch')
     op = j['operations'][key]; intent = op['scheduling']
+    need(op['binding'] == binding(req) and req['generation'] == j['generation'],
+         'control commit binding/generation CAS mismatch')
     confirmed = value.get('status') == 'confirmed'
     if confirmed:
-        need(intent['preserved'] == root_metadata(sys.modules[__name__], slot, policy),
-             'scheduling config/source/grants changed before commit')
+        preserved_control(sys.modules[__name__], req, intent['preserved'],
+                          root_metadata(sys.modules[__name__], slot, policy))
         expected = dict(intent['checkpoint_before'])
         if req['stage'] == 'park': expected['active'] = None
         if req['stage'] == 'resume': expected['active'] = intent['snapshot']

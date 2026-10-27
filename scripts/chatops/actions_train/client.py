@@ -160,7 +160,8 @@ def control_capability(ssh):
     from core import CONTROL_CAPABILITY
     need(ssh is not None, 'scheduling server capability required')
     snap = ssh(dict(action='train',stage='status'))
-    need(CONTROL_CAPABILITY in snap.get('capabilities',[]) and snap.get('mode') == 'active',
+    need(type(snap) is dict and type(snap.get('capabilities')) is list
+         and CONTROL_CAPABILITY in snap['capabilities'] and snap.get('mode') == 'active',
          'server lacks supported scheduling capability')
     return snap
 

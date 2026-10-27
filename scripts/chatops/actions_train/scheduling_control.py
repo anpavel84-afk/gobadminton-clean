@@ -4,8 +4,10 @@ No registry, queue, model, publication or legacy Bridge.resume call. Root consum
 only config/state metadata; Store/Bridge verification runs after the UID drop.
 """
 import base64
+from contextlib import contextmanager
 import copy
 import datetime as dt
+import fcntl
 import hashlib
 import os
 from pathlib import Path
@@ -54,11 +56,18 @@ def admission(req, api):
     """Existing authenticated API and numeric Owner, immutable exact comment admission."""
     api.identity()
     c = api(f'issues/comments/{req["control"]["comment"]}')
+    need(type(c) is dict and type(c.get('user')) is dict, 'control admission identity shape')
     need(type(c.get('id')) is int and c['id'] == req['control']['comment']
          and type(c.get('user', {}).get('id')) is int and c['user']['id'] == OWNER
          and c.get('issue_url') == f'https://api.github.com/repos/{REPO}/issues/{req["issue"]}'
          and c.get('created_at') == c.get('updated_at'), 'control admission identity/edited comment')
-    created = dt.datetime.fromisoformat(c['created_at'].replace('Z', '+00:00'))
+    need(isinstance(c.get('created_at'), str) and isinstance(c.get('updated_at'), str),
+         'invalid control admission timestamps')
+    try:
+        created = dt.datetime.fromisoformat(c['created_at'].replace('Z', '+00:00'))
+    except ValueError:
+        need(False, 'invalid control admission timestamps')
+    need(created.tzinfo is not None, 'invalid control admission timezone')
     need(dt.datetime.fromisoformat(SINCE) <= created <= dt.datetime.now(dt.timezone.utc),
          'control admission outside enrollment')
     body = c.get('body')
@@ -66,7 +75,12 @@ def admission(req, api):
     marker, sep, raw = body.partition('\n')
     need(marker == MARKER and sep and loads(raw) == admission_body(req),
          'control admission/request mismatch')
-    return digest(c)
+    # Only authenticated authority is immutable. Reactions and user presentation
+    # fields can change between independent client/server reads without an edit.
+    # Old whole-response receipts are neither rewritten nor dual-hash accepted.
+    return digest(dict(schema='GB_SCHEDULING_ADMISSION_IDENTITY_V1', repository=REPO,
+        issue=req['issue'], issue_url=c['issue_url'], comment_id=c['id'],
+        actor_id=c['user']['id'], body=body, created_at=c['created_at'], updated_at=c['updated_at']))
 
 
 def exact_active(active, req):
@@ -190,7 +204,52 @@ def installed_inventory(R, policy):
     return result
 
 
+@contextmanager
+def registry_snapshot_lock(R):
+    """Existing fixed accounting inode, never created/replaced or chmodded here.
+
+    Root callers already own controller.lock: controller -> registry, matching
+    the existing receiver/lease writers. Only snapshot reads occur inside this
+    section; no fork, Git, lease, provider or network work, or recursive flock.
+    """
+    path = R.AUTONOMY/'locks/registry.lock'
+    fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        try:
+            for component in path.parts[1:]:
+                child = os.open(component, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+                os.close(fd)
+                fd = child
+        except FileNotFoundError:
+            need(False, 'registry lock missing HOLD')
+        except OSError:
+            need(False, 'registry lock unsafe path/unavailable HOLD')
+        def validate():
+            info = os.fstat(fd)
+            need(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and
+                 info.st_uid == 0 and info.st_gid == R.GROUP and
+                 stat.S_IMODE(info.st_mode) == 0o640, 'registry lock unsafe identity HOLD')
+        validate()
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        validate()
+        current = path.lstat()
+        held = os.fstat(fd)
+        need(not stat.S_ISLNK(current.st_mode) and
+             (current.st_dev, current.st_ino) == (held.st_dev, held.st_ino),
+             'registry lock inode changed HOLD')
+        yield
+    finally:
+        os.close(fd)
+
+
 def root_metadata(R, slot, policy, *, qualification=False):
+    # Budget rotates a hardlinked backup before replacing live. A secure reader
+    # must wait for that writer, never relax nlink checks or read a torn pair.
+    with registry_snapshot_lock(R):
+        return _root_metadata(R, slot, policy, qualification=qualification)
+
+
+def _root_metadata(R, slot, policy, *, qualification=False):
     """Fixed config/state metadata only. No caller paths or candidate Git/code as root.
 
     Exact JSON/metadata provide transaction CAS. Across PARK/RESUME only the
@@ -235,37 +294,67 @@ def daily_usage(value):
 
 def usage_extends(old, new):
     daily_usage(old); daily_usage(new)
-    return all(day in new and provider in new[day] and role in new[day][provider]
-               and new[day][provider][role] >= count
-               for day,providers in old.items() for provider,roles in providers.items()
-               for role,count in roles.items())
+    return all(day in new and all(provider in new[day] and
+               all(role in new[day][provider] and new[day][provider][role] >= count
+                   for role,count in roles.items())
+               for provider,roles in providers.items()) for day,providers in old.items())
 
 
-def preserved_since_park(R, frozen, current):
-    """Cross-task comparison only; every individual control still uses exact CAS.
+def preserved_metadata(R, frozen, current, usage_slots):
+    """Exact protected state plus explicitly selected known Budget transitions.
 
     Grants/reservations/install/policy remain immutable. Only Budget's known
     append/monotonic daily usage and rotating preimage backups may advance.
     Unknown accounting schemas HOLD, never a recursive numeric relaxation.
     """
+    need(set(frozen) == set(current), 'scheduling source/grants membership drift')
+    need(set(usage_slots) <= {'slot1','slot2'}, 'invalid usage comparison scope')
     old = copy.deepcopy(frozen); new = copy.deepcopy(current)
-    for slot in ('slot1','slot2'):
+    for slot in usage_slots:
         path = str(R.AUTONOMY/'outbox'/slot/'ledger.json')
         backup = path+'.bak'
+        live = current.get(path); prior = current.get(backup)
+        frozen_live = frozen.get(path)
         for name in (path,backup):
             before = old.pop(name,None); after = new.pop(name,None)
+            if before: daily_usage(before['value'])
+            if after: daily_usage(after['value'])
             if before == after: continue
             need(after is not None, 'shared usage removed')
-            if before:
-                need(all(before[k] == after[k] for k in ('uid','gid','mode')),
+            reference = before or frozen_live or live
+            if reference:
+                need(all(reference[k] == after[k] for k in ('uid','gid','mode')),
                      'shared usage metadata drift')
             need(usage_extends(before['value'] if before else {},after['value']), 'shared usage decreased')
-        live = current.get(path); prior = current.get(backup)
+            need(before is None or before['value'] != after['value'], 'shared usage bytes changed without charge')
         if prior:
             need(live and usage_extends(prior['value'],live['value']), 'usage backup ahead of ledger')
-        if frozen.get(path) and live and frozen[path]['value'] != live['value']:
-            need(prior and usage_extends(frozen[path]['value'],prior['value']), 'missing usage preimage')
+        if frozen.get(backup):
+            need(frozen_live and usage_extends(frozen[backup]['value'],frozen_live['value']),
+                 'frozen usage backup ahead of ledger')
+        if (frozen_live, frozen.get(backup)) != (live, prior):
+            def total(info):
+                return sum(n for providers in (info['value'] if info else {}).values()
+                           for roles in providers.values() for n in roles.values())
+            need(live and total(live) > total(frozen_live), 'shared usage changed without charge')
+            if frozen_live:
+                need(prior and usage_extends(frozen_live['value'],prior['value']), 'missing usage preimage')
+            elif not prior:
+                need(total(live) == 1, 'missing usage preimage after first charge')
     need(old == new, 'parked source/grants drift')
+
+
+def preserved_since_park(R, frozen, current):
+    # Either slot may have completed unrelated work during the parked interval.
+    preserved_metadata(R, frozen, current, ('slot1','slot2'))
+
+
+def preserved_control(R, req, frozen, current):
+    # This control owns its slot and never charges. Qualification proof remains
+    # byte exact; only the disjoint slot can advance during PARK/RESUME/retry.
+    need(req['slot'] in ('slot1','slot2'), 'invalid controlled slot')
+    slots = (('slot2' if req['slot'] == 'slot1' else 'slot1'),) if req['stage'] in ('park','resume') else ()
+    preserved_metadata(R, frozen, current, slots)
 
 
 def compatible_dev(b, snapshot, current):
@@ -413,7 +502,9 @@ def prepare(R, req, policy, api):
         no_live(R, old.get('process'))
         need(old.get('finished_at'), 'control executor outcome unknown')
         R.guard(slot, policy)
-        need(root_metadata(R, slot, policy) == old['scheduling']['preserved'], 'control source/grants drift')
+        need(old.get('binding') == binding(req) and req['generation'] == j['generation'],
+             'control retry binding/generation CAS mismatch')
+        preserved_control(R, req, old['scheduling']['preserved'], root_metadata(R, slot, policy))
         return None
     need(req['generation'] == j['generation'], 'stale control generation')
     R.guard(slot, policy)
