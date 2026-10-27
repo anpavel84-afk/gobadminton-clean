@@ -331,8 +331,9 @@ source slice нет; `legacy_proof=MISSING_LEGACY_OPERATION_PROOF` сохран�
 отказа и не разрешает model call или другой эффект. Invalid present block также
 refused. Public wire остаётся закрыт для внутренних controller keys.
 
-До `Store.claim` существующий `Store.admitted` выполняет чистый preview
-единственного immutable assignment и проверку плана. Отказ не меняет checkpoint,
+До `Store.claim` receiver получает единственный immutable assignment через
+`slots.admitted` (для delegated recovery — `root_admission`) и отдельно выполняет
+`claim_check`. Отказ не меняет checkpoint,
 счётчики, reservation или lease; действительный claim выполняется один раз после
 успешного preview. Проверка повторяется перед разрешёнными эффектами recovery,
 включая использование сохранённого QA PASS. Candidate base/head берутся из
