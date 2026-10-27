@@ -310,9 +310,48 @@ def addressed_git_identity(work):
     return dict(user=EXECUTOR_UID,group=account.pw_gid,extra_groups=[])
 
 
-def git(work, *args, limit=MAX_INPUT + 1, _addressed_installer=False, _overrides=True):
-    identity=addressed_git_identity(work) if _addressed_installer else {}
-    if _addressed_installer:
+def product_git_identity(work):
+    """Root-only identity for a bounded product HEAD read as UID978.
+
+    Reuses the canary privilege-drop pattern for product worktrees under
+    PRODUCT_WORK_ROOTS. Never sets safe.directory, chowns the candidate, or
+    borrows UID1002/foreign HOME. Worktrees may use a .git file.
+    """
+    import pwd
+    work = Path(work)
+    need(os.geteuid() == 0 and work.is_absolute() and not work.is_symlink()
+         and work.is_dir() and work.resolve() == work,
+         'exact root product Git precheck required')
+    need(any(work == base or base in work.parents for base in PRODUCT_WORK_ROOTS),
+         'product work outside existing project repo/worktree roots')
+    refuse_foreign_checkpoint(work)
+    account = pwd.getpwuid(EXECUTOR_UID)
+    need(account.pw_uid == EXECUTOR_UID and account.pw_gid == EXECUTOR_GID,
+         'invalid product executor identity')
+    info = work.lstat()
+    need(stat.S_ISDIR(info.st_mode) and info.st_uid == EXECUTOR_UID
+         and not info.st_mode & 0o022, 'unsafe product work ownership')
+    for path in work.parents:
+        parent = path.lstat()
+        need(stat.S_ISDIR(parent.st_mode) and not parent.st_mode & 0o022
+             and parent.st_uid in (0, EXECUTOR_UID), 'unsafe product ancestry')
+        if path in PRODUCT_WORK_ROOTS:
+            break
+    return dict(user=EXECUTOR_UID, group=EXECUTOR_GID, extra_groups=[REGISTRY_GROUP])
+
+
+def git(work, *args, limit=MAX_INPUT + 1, _addressed_installer=False, _overrides=True,
+        _product_preflight=False):
+    need(not (_addressed_installer and _product_preflight), 'conflicting Git identity modes')
+    identity = {}
+    preexec = None
+    if _product_preflight:
+        identity = product_git_identity(work)
+        need(args == ('rev-parse', 'HEAD'), 'unsupported product Git read')
+        from native_guard import no_new_privileges
+        preexec = no_new_privileges
+    elif _addressed_installer:
+        identity = addressed_git_identity(work)
         need(args==('rev-parse','HEAD') or len(args)==2 and args[0]=='show'
              and re.fullmatch(r'[a-f0-9]{40}:scripts/chatops/tests/fixtures/agy-[a-z0-9-]+\.json',args[1]),
              'unsupported addressed Git read')
@@ -322,13 +361,18 @@ def git(work, *args, limit=MAX_INPUT + 1, _addressed_installer=False, _overrides
     # The effective-config snapshot omits these -c overrides so a repository
     # core.hooksPath or core.fsmonitor stays visible. Other reads keep them
     # so hooks and fsmonitor do not run. safe.directory is never set.
-    argv = ['git', '--no-pager', '--literal-pathspecs']
+    # Product root preflight uses the fixed executable path (not PATH lookup).
+    argv = [('/usr/bin/git' if _product_preflight else 'git'),
+            '--no-pager', '--literal-pathspecs']
     if _overrides:
         argv += ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false']
     argv += list(args)
     try:
+        kw = dict(identity)
+        if preexec is not None:
+            kw['preexec_fn'] = preexec
         done = subprocess.run(argv, cwd=work, env=env,
-                              capture_output=True, timeout=60, **identity)
+                              capture_output=True, timeout=60, **kw)
     except (OSError, subprocess.SubprocessError):
         raise ReviewError('git failed') from None
     need(done.returncode == 0 and len(done.stdout) <= limit, 'git failed or output too large')
@@ -622,6 +666,10 @@ def qualification(slot, task_hash, model=MODEL):
 
 
 def available(slot, task_hash, model=MODEL):
+    # Product READY is executor-capability based; logical slot name does not select the provider.
+    ok, why = product_available(model=model)
+    if ok:
+        return ok, why
     try:
         qualification(slot, task_hash, model=model)
         return True, 'qualified native QA executor'
@@ -631,6 +679,102 @@ def available(slot, task_hash, model=MODEL):
 
 
 QUALIFICATION_WORK = Path('/srv/gb-slots/slot2/worktrees/antigravity-qa-29-canary')
+# Product QA (Issue346 cleanup) is independent of historical #29 canary/slot pending.
+PRODUCT_ISSUE = 346
+PRODUCT_SOURCE_SHA = '8024caa659f4fee911d7e3afcb69ed7ac845ce5c'
+PRODUCT_READY = Path('/var/lib/gobadminton-actions-train/product-qa-role-ready.json')
+PRODUCT_OPS = Path('/var/lib/gobadminton-actions-train/product-qa-operations.json')
+# Existing project repo materialization for UID978; never a new clone and never slot1 checkpoint.
+PRODUCT_WORK_ROOTS = (
+    Path('/srv/gb-slots/slot2/worktrees'),
+    Path('/srv/gb-slots/shared/repos'),
+)
+
+
+def product_role_ready():
+    """READY only after a confirmed new product QA PASS receipt (not legacy UNKNOWN)."""
+    try:
+        raw = trusted(PRODUCT_READY, owner=0)
+    except (OSError, ReviewError):
+        return False
+    try:
+        value = loads(raw)
+    except (ValueError, TypeError, ReviewError):
+        return False
+    return (isinstance(value, dict) and value.get('schema') == 'GB_PRODUCT_QA_ROLE_READY_V1'
+            and value.get('phase') == 'ready' and value.get('issue') == PRODUCT_ISSUE
+            and value.get('source_sha') == PRODUCT_SOURCE_SHA
+            and value.get('model') == MODEL
+            and value.get('verdict') == 'PASS'
+            and type(value.get('operation')) is str and re.fullmatch(r'[a-f0-9]{64}', value['operation']))
+
+
+def product_executor_ready(model=MODEL):
+    """Executor capability for product QA: UID978/auth/modules, not logical slot name."""
+    need(model in MODELS, 'unsupported native QA model')
+    need(model == MODEL, 'product QA admits exact Medium only until separate reviewed expansion')
+    m = loads(trusted(MARKER))
+    need(m.get('schema') == 'GB_ANTIGRAVITY_QA_29_V1'
+         and m.get('executor_uid') == EXECUTOR_UID
+         and m.get('phase') in ('canary', 'ready'),
+         'Antigravity product executor marker not qualified')
+    for name in ('native_antigravity.py', 'native_guard.py'):
+        need(m.get('modules', {}).get(name) == hashlib.sha256(
+            Path(__file__).with_name(name).read_bytes()).hexdigest(),
+             'Antigravity installed module drift')
+    need(hashlib.sha256(trusted(AGY, limit=256 << 20)).hexdigest() == AGY_SHA256,
+         'Antigravity executable pin drift')
+    try:
+        _verify_executor_boundary()
+    except OSError:
+        raise ReviewError('AGY_PRECHECK_FAILED', 'preflight') from None
+    # Physical credential path may stay under slot2 home; product run does not occupy slot2 pending.
+    trusted(AUTH, owner=EXECUTOR_UID)
+    return m
+
+
+def product_available(model=MODEL):
+    try:
+        if not product_role_ready():
+            return False, 'product QA role not READY; Codex Sol Medium fallback remains'
+        product_executor_ready(model=model)
+        return True, 'qualified native product QA executor'
+    except (OSError, ReviewError) as error:
+        return False, 'Antigravity product QA unavailable: ' + (
+            str(error)[:180] if isinstance(error, ReviewError)
+            else 'executor/auth provisioning missing')
+
+
+def refuse_foreign_checkpoint(path):
+    """Product QA as UID978 must never open the historical author (slot1) checkpoint."""
+    text = str(Path(path))
+    need('/slots/slot1/' not in text and not text.endswith('/slots/slot1'),
+         'foreign slot1 checkpoint forbidden for product QA executor')
+
+
+def product_work_ok(work, source_sha):
+    """Immutable exact HEAD via existing project repo/worktree; no new clone.
+
+    Root handlers must not run candidate Git as UID0: spawn a bounded read-only
+    child as UID978. Ordinary UID978 stage paths keep the normal git() call.
+    Other UIDs are refused. No safe.directory and no checkout chown.
+    """
+    need(isinstance(work, (str, Path)) and source_sha == PRODUCT_SOURCE_SHA, 'invalid product source')
+    root = Path(work)
+    need(root.is_absolute() and not root.is_symlink() and root.is_dir(), 'product work must be absolute directory')
+    need(root.resolve() == root, 'product work must be canonical')
+    need(any(root == base or base in root.parents for base in PRODUCT_WORK_ROOTS),
+         'product work outside existing project repo/worktree roots')
+    refuse_foreign_checkpoint(root)
+    uid = os.geteuid()
+    if uid == 0:
+        head = dec(git(root, 'rev-parse', 'HEAD', _product_preflight=True)).strip()
+    elif uid == EXECUTOR_UID:
+        head = dec(git(root, 'rev-parse', 'HEAD')).strip()
+    else:
+        need(False, 'product Git must run as root preflight or UID978')
+    need(head == source_sha, 'product worktree is not at reviewed SHA')
+    return root
 
 
 def qualification_task(base, head, *, parent_task_sha256=None, parent_operation=None, adapter_revision=None, qualification_grant=None):
@@ -1661,7 +1805,7 @@ def retain_oauth_refresh(private_auth, previous):
     return 'persisted'
 
 def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=subprocess.Popen,
-           evidence=None, evidence_dir=None, analysis=False):
+           evidence=None, evidence_dir=None, analysis=False, product=False):
     owned = evidence is None
     ev = evidence or ReviewEvidence(evidence_dir or EVIDENCE,task_hash)
     process=None
@@ -1680,7 +1824,12 @@ def invoke(stdin, timeout, *, work, slot, task_hash, charge, model=MODEL, popen=
             raise ReviewError('AGY_PRECHECK_FAILED', 'preflight', ev.id) from None
         ev.record(filesystem_boundary=FILESYSTEM_BOUNDARY,
                   executor_preflight='identity_groups_caps_nnp')
-        marker=qualification(slot,task_hash,model=model)
+        # Product path: executor capability, not logical slot==slot2 / canary task binding.
+        if product:
+            refuse_foreign_checkpoint(work)
+            marker=product_executor_ready(model=model)
+        else:
+            marker=qualification(slot,task_hash,model=model)
         # Guard, not a boundary: clear worktree write bits, then snapshot.
         # The checkout stays owned by uid978. A same-uid chmod is residual risk.
         guard_saved=_guard_accidental_writes(work)
@@ -1943,7 +2092,10 @@ def parse_stream(raw, head, model=MODEL, *, analysis_binding=None, strict_source
                     requested_agent=AGENT, effective_agent=init['agent'],
                     requested_tools='native_qa_tools', effective_tools=init['tools'],
                     requested_permission_mode=PERMISSION_MODE,effective_permission_mode=init['permission_mode'],
-                    tool_events=len(tool_steps), tool_names=sorted(tool_names), event_count=len(events), provider_reported_usage=usage,
+                    tool_events=len(tool_steps), tool_names=sorted(tool_names),
+                    # finish is STEP_TYPE finish (not TOOL); expose DONE evidence additively.
+                    finish_done=bool(finish) if analysis_binding is None else None,
+                    event_count=len(events), provider_reported_usage=usage,
                     transcript_sha256=hashlib.sha256(raw).hexdigest(),
                     initialization_sha256=hashlib.sha256(json.dumps(init, sort_keys=True).encode()).hexdigest())
     return result, evidence
@@ -2221,13 +2373,19 @@ def parse_verdict_response(text, head):
 
 
 def review(work, base, head, prompt, timeout, *, slot, task_hash, charge, model=MODEL, popen=subprocess.Popen,
-           accepted_rules=None, evidence_dir=None, analysis_grant=None, compact_files=False):
+           accepted_rules=None, evidence_dir=None, analysis_grant=None, compact_files=False, product=False):
     """Canonical result plus receipt; private evidence survives every terminal path."""
     ev=ReviewEvidence(evidence_dir or EVIDENCE,task_hash,base,head)
     guard_saved=None
     try:
         ev.record(requested_model=model)
         need(model in MODELS, 'unsupported native QA model')
+        if product:
+            # Product executor path (UID978 capability). Exact Issue346 SHA is enforced
+            # by product_work_ok / run_product_qa admission only — ordinary eligible QA
+            # after READY must not re-bind canary29 or force PRODUCT_SOURCE_SHA.
+            refuse_foreign_checkpoint(work)
+            need(analysis_grant is None, 'product QA is not addressed analysis')
         # Same AGY_CANDIDATE_CHANGED code as invoke(), before charge. Porcelain
         # alone is not the gate: skip-worktree, exclude and git metadata bypass it.
         # The chmod guard is applied first so the before/after modes match.
@@ -2301,6 +2459,7 @@ def review(work, base, head, prompt, timeout, *, slot, task_hash, charge, model=
                       'adapter_revision':analysis_grant['controller_revision']} if binding else {}))
         raw, execution = invoke(stdin, timeout, work=work, slot=slot, task_hash=task_hash,
                                 charge=charge,model=model,popen=popen,evidence=ev,
+                                product=product,
                                 **({'analysis':True} if binding else {}))
         need(execution.get('input_delivery')=='written','stdin delivery unconfirmed')
         rules_context['delivery']='explicit_full_stream_json_stdin'

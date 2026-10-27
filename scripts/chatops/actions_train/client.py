@@ -201,6 +201,24 @@ def execute(api, ssh, descriptor):
         time.sleep(20)
         snap = ssh({'action': 'train', 'stage': 'status'})
         card = snap['slots'][descriptor['slot']]
+        # Product QA occupies its own ops ledger, not historical slot pending.
+        if descriptor.get('stage') == 'product_qa':
+            product = (snap.get('product_qa_ops') or {})
+            pending = product.get('pending')
+            if pending:
+                op = (product.get('operations') or {}).get(pending) or {}
+                if not op.get('process') and product.get('last'):
+                    pass
+                elif op.get('result') and op['result'].get('status') == 'unknown':
+                    value = dict(status='unknown', reason='lost process identity; reconcile exact effects')
+                    break
+                continue
+            last = product.get('last') or {}
+            if last and last.get('workflow_run') == req['run'] and last.get('workflow_attempt') == req['run_attempt']:
+                value = dict(status=last['status'], last=last)
+                break
+            value = dict(status='unknown', reason='product QA journal result identity mismatch')
+            break
         pending = card['pending']
         if pending:
             if pending['status'] == 'unknown':

@@ -515,6 +515,9 @@ def validate_current(j,backups,new,*,installed=False,preparing=False):
 
 def execute(action,bundle,manifest,controller,stage_sha,dispatch_sha,run_id=None,baseline=None,
             bundle_commit=None,bundle_branch='dev',version=2):
+    if version==4:
+        return execute_v4(action,bundle,manifest,controller,stage_sha,dispatch_sha,run_id,baseline,
+                          bundle_commit,bundle_branch)
     if version==3:
         return execute_v3(action,bundle,manifest,controller,stage_sha,dispatch_sha,run_id,baseline,
                           bundle_commit,bundle_branch)
@@ -981,6 +984,462 @@ def execute_v3(action,bundle,manifest,controller,stage_sha,dispatch_sha,run_id,b
     return dict(result,phase='installed-lib-only',state_preserved=True)
 
 
+# V4: controller protocol upgrade for product QA admission (not lib-only).
+# Distinct from V3; never reinterprets a V3 journal. OLD pins = actual installed
+# V3_OLD/V3_PROTOCOL baseline (27Oct), not assumed PR340/PR341. Closure includes
+# native_guard + live/slots one-writer, PR341 context/admission/rules targets,
+# plus Root policy/markers/budget config5. Allows install while historical slot
+# pending UNKNOWN remains, only when NEW product-QA resources are free. Frozen V3
+# quiet/contract behaviour is unchanged. Apply writes disabled policy+libs;
+# activate records hosted shadow then enables policy without asserting product
+# QA READY/role_qualified. Resource quiescence (quiet_v4) is separate from
+# journal OLD/NEW current-state validation during apply/verify/rollback.
+V4_SCHEMA='GB_STAGE5_PRODUCT_QA_ADMISSION_V4'
+V4_PRODUCT_OPS=STATE/'product-qa-operations.json'
+V4_JOURNAL=STATE/'stage5-product-qa-admission.json'
+V4_BACKUP=STATE/'stage5-product-qa-admission-backup'
+# Owner-approved stopped historical isolation (Issue346 slot1 pr_wait CP).
+V4_HISTORICAL_SLOT1_PENDING='02057f1cd74e35cfaf58d67ac1f3943abfe37995cbce938033bd957d1d05fa48'
+V4_HISTORICAL_SLOT1_HEAD='8024caa659f4fee911d7e3afcb69ed7ac845ce5c'
+V4_HISTORICAL_SLOT1_ISSUE=346
+V4_HISTORICAL_SLOT2_PENDING='b65d8eb5101c52b26fdcf27b3468365f666836cac0c3f3021e1b76030b3cc5db'
+# Frozen PR341-compatible deps: prove installed, never rewritten by V4.
+# antigravity_qa_recovery.py is the accepted #29-maintenance Q93 pin (already in
+# V3_PROTOCOL); V4_NEW owner_package_admission imports its SMALL_SOURCE_HEAD /
+# OWNER_PACKAGE_SOURCES / owner_package_input_pins. Declaring it frozen closes
+# the hybrid C5+V4_NEW import gap without rewriting Q or installing unrelated modules.
+V4_FROZEN={'native_cursor.py':'02d26f8be9766bbeb1e92dd8514dfc496c1b3e1b0fc8035c1c65cc9aba6b6089',
+           'context_exchange.py':'baa4463cc6919e015ceabb1c05f398e095beb8c22a633191125442435586e132',
+           'antigravity_qa_recovery.py':'93efc05c7aa46fc7ff0d6da70f0db01a9ebda434dbc7d99066590e0459a92a2e'}
+V4_OLD={
+ 'core.py':'3ed9ab5503694f39011102ff34935810ef1dce67cf712c87be89b023689a15a7',
+ 'receiver.py':'6405168b06f3902e40595528d30856c025a0311abfc31d70b59e969ed384af4e',
+ 'stage.py':'ea79b894076c755f28d62619154b0681ecb636b7b32dd05c18a8c996112a1c2e',
+ 'native_antigravity.py':'01d4816e881765da6361af07a15765528aef274dad0eb780b1afab6b0e5e0f72',
+ 'native_guard.py':'dd2e0a0c6c0dea0d353b7dc5f16c1a5d4c4c21f022947ceaa640470c59fb0762',
+ 'owner_package_admission.py':'bb5bf8516d26ae293f16d794c2e46f90b01d0c27b34da15febbd0bff4398c7c5',
+ 'client.py':'1c63f4a53709f749cd6d7e88ee6cf1fd479a76762b385dc3a94764f4d42bce65',
+ 'live/slots.py':'3c7b4ab36dd3cd8b41c3309a4d58c54ffc99027b1d7c1e5ad2235b5cd1f72a76',
+ 'context_policy.py':'d961079b9791f53cf7ce0ac208180b0c9d9100ef46b48c025c2938d2eb69a806',
+ 'context_cursor_delivery.py':None,
+ 'admission_pm.py':None,
+ 'accepted-engineering-rules.md':'017441dec5ba197a1065b6ef90efdddb090b286ba48687241a7fbc09dd002269'}
+V4_NEW={
+ 'core.py':'f3f06cc1245635b937018c1cbe431645ae4aa9acc45e7249be18e0b87cf2ee19',
+ 'receiver.py':'8f7c142e7e370d03cb470150d1e97657ab5554274ec79fc7b62fab8a5fd1f77d',
+ 'stage.py':'994849f0deb414eff41276affef6a4e208809ab30b8cd835b58b7a7fc6e7c530',
+ 'native_antigravity.py':'26194449422b158f47a0557d717782e29bad0920c82b41087e1a71105d1599bd',
+ 'native_guard.py':'334d4c78c57ba9a7f3f5c49e6737ec8e658033e4b4fdc84f92ce168ece9019f9',
+ 'owner_package_admission.py':'4aeb579312e9ad2979298929f16ea92210b3323fde51dfc26778a6a96c7a4677',
+ 'client.py':'d02307161913f72d5c9864b5f36d8862b39cc6e564091be51ed7e02bdde2a897',
+ 'live/slots.py':'3c6d910ccdaa5d482a1cf05c9330f35ef5c9a5aabd5b14ce88d4033c71e144ce',
+ 'context_policy.py':'b55398b64b68c83b88e2f45b53e690f4fbdab9d7e0f0333dd5a354db0c3826df',
+ 'context_cursor_delivery.py':'6352f6bd6175f447bc124a28d6a1dc67837da6514f1ede3a81c128b4623bff11',
+ 'admission_pm.py':'a17576fad805a736b926768d3aae7d5ed4bb6336f3c248805f8de3fac699784a',
+ 'accepted-engineering-rules.md':RULES_SHA256}
+
+
+def _v4_historical_checkpoint_ok(slot, state, journal):
+    """Idle/done, or the single Owner-approved stopped Issue346 pr_wait binding."""
+    active=state.get('active')
+    if active is None: return True
+    if isinstance(active,dict) and active.get('phase')=='done': return True
+    if slot!='slot1' or not isinstance(active,dict): return False
+    if not (active.get('phase')=='pr_wait' and active.get('issue')==V4_HISTORICAL_SLOT1_ISSUE
+            and active.get('head')==V4_HISTORICAL_SLOT1_HEAD):
+        return False
+    key=V4_HISTORICAL_SLOT1_PENDING
+    pending=journal.get('pending')
+    need(pending==key and journal.get('generation')==113,
+         'historical slot1 pending binding drift HOLD')
+    op=(journal.get('operations') or {}).get(key)
+    if not isinstance(op,dict): return False
+    result=op.get('result') or {}
+    binding=op.get('binding') or {}
+    process=op.get('process')
+    if not (result.get('status')=='unknown' and result.get('safe_release') is False
+            and binding.get('slot')=='slot1'
+            and binding.get('issue')==V4_HISTORICAL_SLOT1_ISSUE
+            and binding.get('head')==V4_HISTORICAL_SLOT1_HEAD
+            and isinstance(process,dict) and set(process)=={'pid','start','boot'}
+            and type(process['pid']) is int and process['pid']>0):
+        return False
+    # Dead recorded identity only; never invent safe_release or ignore UNKNOWN.
+    return receiver.identity(process['pid'])!=process
+
+
+def quiet_v4():
+    """Historical pending UNKNOWN may remain; NEW product-QA resources must be free.
+
+    Does not call quiet()/safe_checkpoint (those require pending=none / terminal
+    ACCEPTED evidence). Proves units inactive+masked, UID1002/978 model/cgroup
+    absence, recorded PID/start/boot identities dead, kernel worker locks/leases
+    free, no integration/recovery occupancy, free product-qa lease, and
+    product-qa ops pending none. Does NOT assert installed OLD pins (those are
+    transaction current-state checks). Targeted HOLD names the conflicting live
+    resource; never invents assume_safe/ignore_pending bypass. Only the proven
+    historical Issue346 pr_wait CP (dead process) plus idle/done may remain.
+    """
+    import pwd
+    receiver.units_quiet(receiver.UNITS)
+    for unit in receiver.UNITS:
+        props=dict(line.split('=',1) for line in run(['/usr/bin/systemctl','show',unit,
+            '--property=ActiveState,MainPID,UnitFileState']).decode().splitlines() if '=' in line)
+        need(props.get('ActiveState')=='inactive' and props.get('MainPID')=='0'
+             and props.get('UnitFileState')=='masked','units must be inactive and masked')
+    for slot,uname in (('slot1','agentagency-dev'),('slot2','gb-slot2')):
+        uid=pwd.getpwnam(uname).pw_uid
+        j=receiver.journal(slot)
+        # Observe only: historical pending UNKNOWN bytes stay; never require pending none.
+        for op in j.get('operations',{}).values():
+            process=op.get('process')
+            if process:
+                need(type(process) is dict and set(process)=={'pid','start','boot'}
+                     and type(process['pid']) is int and process['pid']>0,
+                     'invalid recorded process identity HOLD: '+slot)
+                need(receiver.identity(process['pid'])!=process,
+                     'recorded operation process still alive HOLD: '+slot)
+        state,_=receiver.checkpoint(slot)
+        # Live unmatched nonterminal CP is a current effect; historical done/None
+        # or the exact Owner-approved stopped Issue346 pr_wait binding is fine.
+        need(_v4_historical_checkpoint_ok(slot,state,j),
+             'live checkpoint active HOLD: '+slot)
+        receiver.no_models(uid,slot)
+        lock_unheld(receiver.AUTONOMY/'slots'/slot/'worker.lock',uid)
+        lock_unheld(receiver.AUTONOMY/'locks'/(slot+'.lease'),uid)
+    need(not os.path.lexists(STATE/'integration.json'),'integration in flight HOLD')
+    need(not any(v['status'].endswith('_pending') for v in receiver.recovery_journal()['receipts'].values()),
+         'recovery stage in flight HOLD')
+    receiver.no_models(978,'slot2')
+    lock_unheld(receiver.AUTONOMY/'locks'/'product-qa.lease',978)
+    receiver.free_lock(receiver.AUTONOMY/'locks'/'product-qa.lease')
+    # The installed C5 adapter has no product constants before this upgrade.
+    if V4_PRODUCT_OPS.exists():
+        ops=receiver.read(V4_PRODUCT_OPS,0)
+        need(ops.get('pending') is None,'product QA operation still pending/UNKNOWN HOLD')
+
+
+def v4_reviewed_budget_config5(budget):
+    """Minimal reviewed AGY product-QA budget (Issue #5 shape), no ledger reset.
+
+    Sets providers.agy.qa and both slots' agy.qa to unlimited, and
+    providers.agy.per_issue_daily=5. Preserves unrelated providers/roles/caps.
+    No global cap field. Trusted integrator applies bytes; counters untouched.
+    """
+    need(isinstance(budget,dict) and set(budget)<= {'schema','providers','slots'},
+         'invalid budgets for config5')
+    need('global_cap' not in budget and 'daily_global' not in budget
+         and 'global' not in budget,'global budget cap forbidden')
+    nxt=copy.deepcopy(budget)
+    if 'schema' in nxt: need(nxt['schema']==1,'unsupported budget schema')
+    providers=nxt.setdefault('providers',{})
+    need(isinstance(providers,dict),'invalid providers')
+    agy=dict(providers.get('agy') or {})
+    agy['qa']='unlimited'
+    agy['per_issue_daily']=5
+    providers['agy']=agy
+    slots=nxt.setdefault('slots',{})
+    need(isinstance(slots,dict),'invalid slots')
+    for slot in ('slot1','slot2'):
+        cell=dict(slots.get(slot) or {})
+        slot_agy=dict(cell.get('agy') or {})
+        slot_agy['qa']='unlimited'
+        cell['agy']=slot_agy
+        slots[slot]=cell
+    return nxt
+
+
+def _v4_backup_name(name):
+    """Flat backup filename; live/slots.py → live__slots.py."""
+    return name.replace('/', '__')
+
+
+def _v4_save(j):
+    """Crash-safe journal write; reuse durable save CAS (never expected=None always)."""
+    # First create: current is None. Later updates: expect exact prior metadata.
+    # Never unlink-then-create the journal.
+    atomic_bytes(V4_JOURNAL,encoded(j),dict(mode=0o600,uid=OWNER_UID,gid=OWNER_GID),
+                 expected=current(V4_JOURNAL))
+
+
+def _v4_material(items,bundle):
+    """Lib targets from manifest items; canon from BUNDLE_RULES (not in manifest)."""
+    target={}
+    for name in V4_OLD:
+        if name=='accepted-engineering-rules.md':
+            raw=git(bundle,'show',RULES_COMMIT+':'+BUNDLE_RULES)
+        else:
+            raw=items[INSTALL/name]
+        need(bytes_sha(raw)==V4_NEW[name],'V4 source/NEW pin mismatch: '+name)
+        target[name]=raw
+    need(len(target['accepted-engineering-rules.md'])==RULES_SIZE,'accepted canon size differs')
+    return target
+
+
+def _v4_workflow_gates(bundle,controller,stage_sha,dispatch_sha):
+    """Exact workflow digests must bind ref:controller (zeros placeholder allowed)."""
+    for name,pin in (('train-stage.yml',stage_sha),('train-dispatch.yml',dispatch_sha)):
+        raw=regular_bytes(bundle/'.github/workflows'/name)
+        need(bytes_sha(raw)==pin and raw.count(('ref: '+controller).encode())==2,
+             'unreviewed V4 workflow/pin HOLD: '+name)
+
+
+def _v4_current(j):
+    """Validate every fixed target against journal OLD/NEW + write_intent (V3 semantics)."""
+    paths=_v4_paths()
+    applied=j.get('applied') or []
+    restored=j.get('restored') or []
+    intent=j.get('write_intent')
+    for n,row in j['changes'].items():
+        state=row['after'] if n in applied and n not in restored else row['before']
+        allowed=[state]
+        if intent and intent.get('target')==n:
+            allowed=[row['before'],row['after']]
+        need(current(paths[n]) in allowed,'foreign CAS drift: '+n)
+
+
+def _v4_plan(target,baseline,controller,stage_sha):
+    # Actual OLD/root metadata BEFORE any writes (supports None preimage).
+    for name,pin in V4_OLD.items():
+        need(current(INSTALL/name)==canonical_meta(pin),
+             'V4 installed OLD pin mismatch HOLD: '+name+'; blocker=installed module drift')
+        need(bytes_sha(target[name])==V4_NEW[name],'V4 target/NEW pin mismatch: '+name)
+    for name,pin in V4_FROZEN.items():
+        need(current(INSTALL/name)==canonical_meta(pin),
+             'V4 frozen compatible dependency HOLD: '+name)
+    changes={n:dict(before=canonical_meta(V4_OLD[n]),after=canonical_meta(V4_NEW[n])) for n in V4_OLD}
+    # Root policy: bind new controller + stage workflow while remaining disabled.
+    policy_raw=regular_bytes(receiver.POLICY)
+    policy=loads(policy_raw)
+    need(policy.get('controller_sha')==baseline==C5
+         and policy.get('mode') in ('active','disabled')
+         and re.fullmatch('[a-f0-9]{64}',policy.get('stage_workflow_sha256','')),
+         'V4 baseline policy/controller HOLD')
+    need(controller!=baseline,'V4 distinct reviewed controller required')
+    nextpolicy=copy.deepcopy(policy)
+    nextpolicy.update(mode='disabled',controller_sha=controller,stage_workflow_sha256=stage_sha)
+    if isinstance(nextpolicy.get('recovery'),dict):
+        nextpolicy['recovery']=dict(nextpolicy['recovery'],source_sha=controller)
+    policy_after=encoded(nextpolicy)
+    changes['policy']=dict(before=canonical_meta(bytes_sha(policy_raw)),
+                           after=canonical_meta(bytes_sha(policy_after)))
+    target=dict(target,policy=policy_after)
+    # Cursor marker native_guard pin must track the accepted PR341 guard delta.
+    cursor_raw=regular_bytes(V3_MARKERS['cursor_marker'])
+    cursor_after=module_pins_only(cursor_raw,'cursor_marker',
+                                  {'native_guard.py':V4_NEW['native_guard.py']})
+    changes['cursor_marker']=dict(before=canonical_meta(bytes_sha(cursor_raw)),
+                                  after=canonical_meta(bytes_sha(cursor_after)))
+    target=dict(target,cursor_marker=cursor_after)
+    # AGY marker module pins must track native_antigravity/native_guard or READY drifts.
+    marker_raw=regular_bytes(V3_MARKERS['agy_marker'])
+    pins={'native_guard.py':V4_NEW['native_guard.py'],
+          'native_antigravity.py':V4_NEW['native_antigravity.py']}
+    marker_after=module_pins_only(marker_raw,'agy_marker',pins)
+    changes['agy_marker']=dict(before=canonical_meta(bytes_sha(marker_raw)),
+                               after=canonical_meta(bytes_sha(marker_after)))
+    target=dict(target,agy_marker=marker_after)
+    # Budget config5: agy qa unlimited both slot/provider + per_issue_daily=5; no ledger reset.
+    need(os.path.lexists(receiver.BUDGET),'V4 budgets.json missing HOLD; config5 cannot apply')
+    budget_raw=regular_bytes(receiver.BUDGET)
+    budget_after=encoded(v4_reviewed_budget_config5(loads(budget_raw)))
+    changes['budget']=dict(before=canonical_meta(bytes_sha(budget_raw)),
+                           after=canonical_meta(bytes_sha(budget_after)))
+    target=dict(target,budget=budget_after)
+    # Inventory must list every present OLD target; None preimage may be absent.
+    inv_path=STATE/'backup.json'
+    need(os.path.lexists(inv_path),'V4 inventory missing HOLD; cannot prove OLD→NEW without backup.json')
+    inv_raw=regular_bytes(inv_path)
+    record=loads(inv_raw)
+    need(type(record) is dict and type(record.get('after')) is dict,'invalid V4 inventory')
+    for name,pin in V4_OLD.items():
+        key=str(INSTALL/name)
+        need(record['after'].get(key)==pin,
+             'V4 inventory OLD pin missing/drift HOLD: '+name)
+    inv_changes={n:changes[n] for n in V4_OLD}
+    inv_after=inventory_bytes(inv_raw,inv_changes)
+    changes['inventory']=dict(before=canonical_meta(bytes_sha(inv_raw),0o600),
+                              after=canonical_meta(bytes_sha(inv_after),0o600))
+    target=dict(target,inventory=inv_after)
+    return changes,target
+
+
+def _v4_paths():
+    return {**{n:INSTALL/n for n in V4_OLD},
+            'policy':receiver.POLICY,
+            'cursor_marker':V3_MARKERS['cursor_marker'],
+            'agy_marker':V3_MARKERS['agy_marker'],
+            'budget':receiver.BUDGET,
+            'inventory':STATE/'backup.json'}
+
+
+def _v4_order():
+    # Policy first (disabled+new controller), then libs, both markers, budget, inventory.
+    # Rollback reverses so exact OLD policy is restored last while mode stays disabled.
+    return ['policy']+sorted(V4_OLD)+['cursor_marker','agy_marker','budget','inventory']
+
+
+def _v4_restore_one(j,name,paths):
+    """Restore one applied target from backup / unlink None-preimage NEW."""
+    before=j['changes'][name]['before']
+    after=j['changes'][name]['after']
+    path=paths[name]
+    now=current(path)
+    if now==before: return
+    if before is None:
+        unlink_cas(path,after)
+        return
+    raw,_=read_file(V4_BACKUP/_v4_backup_name(name),trusted=False)
+    need(bytes_sha(raw)==before['sha256'],'V4 backup bytes drift: '+name)
+    atomic_bytes(path,raw,before,expected=after)
+
+
+def execute_v4(action,bundle,manifest,controller,stage_sha,dispatch_sha,run_id,baseline,commit,branch):
+    need(os.geteuid()==OWNER_UID,'root integrator only')
+    need(action in ('dry','apply','verify','activate','rollback'),'invalid V4 action')
+    need(re.fullmatch('[a-f0-9]{40}',baseline or '') and re.fullmatch('[a-f0-9]{40}',controller or ''),
+         'immutable controller required')
+    need(re.fullmatch('[a-f0-9]{64}',stage_sha or '') and re.fullmatch('[a-f0-9]{64}',dispatch_sha or ''),
+         'exact workflow digests required')
+    need(re.fullmatch('[a-f0-9]{64}',manifest or ''),'exact manifest digest required')
+    quiet_v4()
+    need(re.fullmatch('[a-f0-9]{40}',commit or ''),'V4 exact reviewed candidate required')
+    need(baseline==C5 and controller!=baseline,'V4 C5→new controller protocol gate')
+    _v4_workflow_gates(bundle,controller,stage_sha,dispatch_sha)
+    # Trusted bundle/manifest gates (same primitives as V2/V3 source()).
+    items=source(bundle,commit,branch,manifest,controller,stage_sha,dispatch_sha,version=4)
+    lib_target=_v4_material(items,bundle)
+    slot1=STATE/'slot1.json';slot2=STATE/'slot2.json'
+    slot1_before=slot1.read_bytes() if slot1.exists() else None
+    slot2_before=slot2.read_bytes() if slot2.exists() else None
+    identity=dict(version=4,baseline=baseline,controller=controller,manifest=manifest,
+                  bundle_commit=commit,bundle_branch=branch,stage_sha256=stage_sha,
+                  dispatch_sha256=dispatch_sha,schema=V4_SCHEMA,
+                  slot1_before_sha256=bytes_sha(slot1_before) if slot1_before else None,
+                  slot2_before_sha256=bytes_sha(slot2_before) if slot2_before else None)
+    paths=_v4_paths()
+    if os.path.lexists(V4_JOURNAL):
+        # Use durable journal changes; do not re-plan against already-updated marker/inventory.
+        j=loads(regular_bytes(V4_JOURNAL))
+        need(isinstance(j,dict) and j.get('schema')==V4_SCHEMA and j.get('identity')==identity,
+             'V4 journal identity/schema differs; separate reconciliation required')
+        changes=j['changes']
+        need(type(j.get('applied')) is list and type(j.get('restored')) is list,'invalid V4 progress')
+        if action=='verify':
+            need(j['phase']=='installed-disabled','V4 verify requires installed-disabled phase')
+            quiet_v4();_v4_current(j)
+            for n in V4_OLD:
+                need(sha(INSTALL/n)==V4_NEW[n]==changes[n]['after']['sha256'],
+                     'V4 verify NEW pin drift: '+n)
+            for key in ('policy','cursor_marker','agy_marker','budget','inventory'):
+                need(sha(paths[key])==changes[key]['after']['sha256'],
+                     'V4 verify metadata pin drift: '+key)
+            policy=loads(regular_bytes(receiver.POLICY))
+            need(policy.get('mode')=='disabled' and policy.get('controller_sha')==controller
+                 and policy.get('stage_workflow_sha256')==stage_sha,
+                 'V4 verify disabled policy binding drift')
+            need((slot1.read_bytes() if slot1.exists() else None)==slot1_before
+                 and (slot2.read_bytes() if slot2.exists() else None)==slot2_before,
+                 'V4 verify must not rewrite historical slot journals')
+            return dict(phase='installed-disabled',version=4,verified=True,ready=False,
+                        role_qualified=False,preserved_slot_pending=True,policy_writes=1)
+        if action=='activate':
+            # Hosted shadow proof then enable policy. Never assert product QA READY.
+            need(j['phase'] in ('installed-disabled','activating-proof'),
+                 'V4 activate requires installed-disabled')
+            need(type(run_id) is int and run_id>0,'exact hosted run required')
+            quiet_v4();_v4_current(j)
+            policy=loads(regular_bytes(receiver.POLICY))
+            need(policy.get('mode')=='disabled' and policy.get('controller_sha')==controller
+                 and policy.get('stage_workflow_sha256')==stage_sha,
+                 'V4 activate disabled policy binding required')
+            for n in V4_OLD:
+                need(sha(INSTALL/n)==V4_NEW[n]==changes[n]['after']['sha256'],
+                     'V4 activate NEW pin drift: '+n)
+            j['phase']='activating-proof';_v4_save(j)
+            proof=probe(run_id,dict(j,dispatch_sha256=dispatch_sha))
+            quiet_v4();_v4_current(j)
+            active_policy=dict(policy,mode='active')
+            atomic_bytes(receiver.POLICY,encoded(active_policy),
+                         canonical_meta(bytes_sha(encoded(active_policy))),
+                         expected=changes['policy']['after'])
+            j.update(phase='proof-recorded',shadow=proof);_v4_save(j)
+            return dict(phase='proof-recorded',version=4,shadow=proof,ready=False,
+                        role_qualified=False,preserved_slot_pending=True,policy_writes=1)
+        if action=='rollback':
+            need(j['phase'] in ('preparing','applying','installed-disabled','activating-proof',
+                                'rolling-back'),
+                 'V4 rollback phase unsupported')
+            need(loads(regular_bytes(receiver.POLICY)).get('mode')=='disabled',
+                 'V4 rollback refuses after active policy; separate reconciliation')
+            if j['phase']=='preparing' and not j.get('applied'):
+                j['phase']='rolled-back';_v4_save(j)
+                return dict(phase='rolled-back',state_preserved=True,noop=True)
+            # Classify last owned apply intent by exact bytes before switching phase
+            # (V3 semantics): interrupted write must not be lost from applied.
+            if j.get('write_intent') and j['write_intent'].get('action')=='apply':
+                n=j['write_intent']['target']
+                if current(paths[n])==j['changes'][n]['after'] and n not in j['applied']:
+                    j['applied'].append(n)
+                j['write_intent']=None
+            j['phase']='rolling-back';_v4_save(j)
+            # Reverse apply order so policy (first written, disabled) restores last.
+            order=list(reversed(j['applied']))
+            for name in order[len(j['restored']):]:
+                quiet_v4();_v4_current(j)
+                j['write_intent']=dict(action='rollback',target=name);_v4_save(j)
+                _v4_restore_one(j,name,paths)
+                j['restored'].append(name);j['write_intent']=None;_v4_save(j)
+            need((slot1.read_bytes() if slot1.exists() else None)==slot1_before
+                 and (slot2.read_bytes() if slot2.exists() else None)==slot2_before,
+                 'V4 rollback must not rewrite historical slot journals')
+            j['phase']='rolled-back';_v4_save(j)
+            return dict(phase='rolled-back',state_preserved=True,ready=False)
+        need(False,'V4 prior journal exists; use verify/activate/rollback (apply refused)')
+    # Fresh plan only when no journal (dry/apply). Re-planning after apply would
+    # fail module_pins_only against already-updated marker pins.
+    changes,target=_v4_plan(lib_target,baseline,controller,stage_sha)
+    if action=='dry':
+        return dict(dry=True,status='PLANNED_PRODUCT_QA_UPGRADE',version=4,changes=changes,
+                    preserved_slot_pending=True,role_qualified=False,ready=False,policy_writes=1)
+    need(action=='apply','V4 verify/activate/rollback require existing journal; apply first')
+    need(not os.path.lexists(V4_BACKUP),'prior V4 backup exists; inspect/rollback')
+    j=dict(schema=V4_SCHEMA,identity=identity,identity_sha256=digest(identity),
+           phase='preparing',installed_at=int(time.time()),changes=changes,
+           preserved_slot1=identity['slot1_before_sha256'],
+           preserved_slot2=identity['slot2_before_sha256'],
+           applied=[],restored=[],write_intent=None)
+    _v4_save(j)
+    V4_BACKUP.mkdir(mode=0o700)
+    order=_v4_order()
+    for name in order:
+        path=paths[name]
+        before=changes[name]['before']
+        if before is None:
+            need(not os.path.lexists(path),'pre-backup absent drift: '+name)
+            continue
+        raw,_=read_file(path)
+        need(bytes_sha(raw)==before['sha256'],'pre-backup OLD drift: '+name)
+        atomic_bytes(V4_BACKUP/_v4_backup_name(name),raw,
+                     canonical_meta(before['sha256'],0o600),expected=None)
+    quiet_v4();_v4_current(j)
+    j['phase']='applying';_v4_save(j)
+    for name in order:
+        quiet_v4();_v4_current(j)
+        j['write_intent']=dict(action='apply',target=name);_v4_save(j)
+        atomic_bytes(paths[name],target[name],changes[name]['after'],
+                     expected=changes[name]['before'])
+        j['applied'].append(name);j['write_intent']=None;_v4_save(j)
+    need((slot1.read_bytes() if slot1.exists() else None)==slot1_before
+         and (slot2.read_bytes() if slot2.exists() else None)==slot2_before,
+         'V4 install must not rewrite historical slot journals')
+    quiet_v4();_v4_current(j)
+    j['phase']='installed-disabled';_v4_save(j)
+    return dict(phase='installed-disabled',version=4,state_preserved=True,
+                preserved_slot_pending=True,role_qualified=False,ready=False,
+                policy_writes=1,applied=list(j['applied']))
+
+
 def unlink_cas(path,expected):
     parent=directory_fd(path.parent)
     try:
@@ -1003,7 +1462,7 @@ def main():
     parser.add_argument('--controller',required=True)
     parser.add_argument('--stage-hash',required=True);parser.add_argument('--dispatch-hash',required=True)
     parser.add_argument('--bundle-commit');parser.add_argument('--bundle-branch',default='dev')
-    parser.add_argument('--version',type=int,choices=(2,3),default=2)
+    parser.add_argument('--version',type=int,choices=(2,3,4),default=2)
     parser.add_argument('--run',type=int);a=parser.parse_args()
     path=STATE/'controller.lock'
     # Existing lock only, including dry: no O_CREAT, mkdir or managed byte writes.

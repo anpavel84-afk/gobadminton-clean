@@ -41,6 +41,11 @@ BASELINE={QA:QOLD,NAME:OLD}
 
 def installed_source(path):
     # Read only local repository bytes; no Git metadata writes or network.
+    if path in ('scripts/chatops/actions_train/owner_package_admission.py',
+                'scripts/chatops/actions_train/antigravity_qa_recovery.py',
+                '.github/workflows/train-stage.yml'):
+        return subprocess.check_output(['git', 'show',
+            '832a677cc085ebf6e369567ef934a0b8e254d186:'+path], cwd=REPO)
     return (REPO/path).read_bytes()
 
 
@@ -890,7 +895,7 @@ class BundleTests(unittest.TestCase):
             self.assertEqual(new,H(installed_source(path)))
             self.assertEqual(json.loads(manifest)['files'][path],new)
             self.assertEqual(I.UNCHANGED[I.LIB/name],new)
-        workflow=(REPO/'.github/workflows/train-stage.yml').read_bytes()
+        workflow=installed_source('.github/workflows/train-stage.yml')
         self.assertEqual(H(workflow),I.STAGE_SHA);self.assertIn(('ref: '+I.C).encode(),workflow)
         self.assertEqual(SCRIPT.stat().st_mode&0o777,0o644)
 

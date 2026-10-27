@@ -45,7 +45,8 @@ def setup(req, config, native_auth=None):
     bridge = a.Bridge(c, store)
     # Resolve trusted context before a stage can consume an author attempt.
     from context_policy import load as load_rules
-    accepted_rules = load_rules() if req['stage'] in ('author', 'qa', 'diagnose', 'task_review', 'qa_qualification', 'failure_diagnosis') else None
+    accepted_rules = load_rules() if req['stage'] in ('author', 'qa', 'diagnose', 'task_review', 'qa_qualification',
+                                                     'product_qa', 'failure_diagnosis') else None
     def effect_gate():
         from receiver import POLICY, units_quiet
         policy = s.read_json(POLICY, trusted_uids={0}, limit=16384)
@@ -185,13 +186,17 @@ def setup(req, config, native_auth=None):
                                 atomic=a.atomic, permitted=a.permitted)
                 choice['rules_context'] = choice['native_receipt']['rules_context']
             elif provider == 'agy':
-                from native_antigravity import review, save_receipt
+                from native_antigravity import review, save_receipt, product_role_ready
                 active = store.data['active']
                 from core import digest
+                # After product READY, ordinary eligible QA uses UID978 product executor
+                # (not legacy canary29 qualification). Until READY, product=False → Medium fallback.
+                use_product = bool(product_role_ready())
                 answer, receipt = review(bridge.work, active['base'], active['head'], wrapped, c.model_timeout,
                     slot=req['slot'], task_hash=digest(active['task']), model=choice['effective_model'],
                     charge=lambda: rt.budget.charge(req['slot'], 'agy', 'qa'), popen=a.subprocess.Popen,
-                    accepted_rules=accepted_rules, evidence_dir=c.state_dir/'antigravity-evidence')
+                    accepted_rules=accepted_rules, evidence_dir=c.state_dir/'antigravity-evidence',
+                    product=use_product)
                 save_receipt(c.state_dir, active['issue'], active['attempt'], receipt)
                 choice['native_receipt'] = receipt
                 choice['rules_context'] = receipt['rules_context']
@@ -549,6 +554,64 @@ def perform(req, config, context):
     return dict(status='confirmed', **metadata)
 
 
+def run_product_qa(req, config, context):
+    """Fresh product QA-only review for Issue346; never touches foreign slot1 checkpoint."""
+    from native_antigravity import (PRODUCT_ISSUE, PRODUCT_SOURCE_SHA,
+                                    product_executor_ready, product_work_ok,
+                                    review, save_receipt, MODEL)
+    from context_policy import load
+    from core import digest
+    import os
+    a, s, rt, api, store, b = context
+    need(req['stage'] == 'product_qa', 'not a product QA stage')
+    need(os.getuid() == 978 and os.geteuid() == 978, 'product QA wrong UID; Root/1002 forbidden')
+    # Actual admission work is the only path checked (product_work_ok → refuse_foreign).
+    # Do not probe hardcoded slot1 paths (always-HOLD helper forbidden).
+    admission = req.get('_product_admission')
+    need(type(admission) is dict and admission.get('issue') == PRODUCT_ISSUE
+         and admission.get('source_sha') == PRODUCT_SOURCE_SHA
+         and admission.get('model') == MODEL,
+         'product QA admission missing/edited')
+    work = product_work_ok(admission['work'], PRODUCT_SOURCE_SHA)
+    marker = product_executor_ready(model=MODEL)
+    before_store = digest(store.data)
+    # Do not claim/reset historical author active; product QA is QA-only.
+    text = ('Owner-authorized independent product QA for Issue346 cleanup at exact source '
+            + PRODUCT_SOURCE_SHA + '. Review the exact deleted smoke-probe cleanup only. '
+            'Use native view_file, run_command and finish tools; a successful run_command DONE, '
+            'view_file DONE and finish DONE with exact reviewed SHA are required. '
+            'Candidate is read-only; never modify Git metadata, publish, or open foreign slot1 checkpoints.')
+    accepted_rules = load()
+    before_calls = rt.budget.used('agy', 'qa', req['slot'])
+    task_hash = req.get('_task_hash') or digest(dict(schema='GB_PRODUCT_QA_TASK_V1',
+        issue=PRODUCT_ISSUE, source_sha=PRODUCT_SOURCE_SHA, admission=digest(admission),
+        work=admission['work'], model=MODEL))
+    result, receipt = review(work, admission['source_base'],
+        PRODUCT_SOURCE_SHA, text, 1800,
+        slot=req['slot'], task_hash=task_hash,
+        charge=lambda: rt.budget.charge(req['slot'], 'agy', 'qa'),
+        popen=a.subprocess.Popen, accepted_rules=accepted_rules,
+        evidence_dir=b.c.state_dir / 'antigravity-evidence', product=True)
+    need(digest(store.data) == before_store, 'product QA changed source checkpoint')
+    receipt['product_task_sha256'] = task_hash
+    receipt['product_admission_sha256'] = digest(admission)
+    receipt['charged_calls'] = rt.budget.used('agy', 'qa', req['slot']) - before_calls
+    need(receipt['charged_calls'] == 1, 'product QA ledger mismatch')
+    tools = set(receipt.get('tool_names') or [])
+    # Native finish is STEP_TYPE finish DONE (finish_done), not a TOOL name in tool_names.
+    passed = (result.get('verdict') == 'PASS'
+              and result.get('reviewed_sha') == PRODUCT_SOURCE_SHA
+              and 'run_command' in tools and 'view_file' in tools
+              and receipt.get('finish_done') is True)
+    receipt['product_qa_passed'] = passed
+    name = save_receipt(b.c.state_dir, PRODUCT_ISSUE, admission.get('attempt', 1), receipt)
+    # READY file is root-owned; supervisor materializes it only after confirmed PASS.
+    ready = bool(passed)
+    return dict(status='confirmed', product_ready=ready, qualification_passed=passed,
+                qa=result, native_receipt=receipt, receipt_file=name,
+                checkpoint_changed=False, adapter_revision=marker.get('adapter_revision'))
+
+
 def qualify_qa(req, config, context):
     from native_antigravity import qualification, qualification_descriptor, review, save_receipt
     from context_policy import load
@@ -612,6 +675,8 @@ def entry(req, config, native_auth=None):
         context = setup(req, config, native_auth=native_auth)
         if req['stage'] == 'qa_qualification':
             return qualify_qa(req, config, context)
+        if req['stage'] == 'product_qa':
+            return run_product_qa(req, config, context)
         if req['stage'] in ('diagnose', 'task_review'):
             from recovery import perform as recover
             return recover(req, config, context)
@@ -656,7 +721,8 @@ def entry(req, config, native_auth=None):
                     safe = True
                 except Exception:
                     pass
-        uncertain = context and not safe and (req['stage'] in ('author', 'qa', 'qa_qualification', 'publish', 'integrate', 'promote', 'failure_diagnosis'))
+        uncertain = context and not safe and (req['stage'] in ('author', 'qa', 'qa_qualification', 'product_qa',
+                                                              'publish', 'integrate', 'promote', 'failure_diagnosis'))
         return model_receipt(dict(status='unknown' if uncertain else 'deferred', reason=reason, safe_release=safe), context)
 
 

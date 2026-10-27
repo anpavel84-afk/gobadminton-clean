@@ -202,6 +202,58 @@ def qualification_plan(policy, card, budget):
         return None  # Missing/malformed qualification never authorizes a call.
 
 
+def product_qa_ops():
+    """Separate TaskQA ledger in existing STATE family; never the historical slot2 journal."""
+    from native_antigravity import PRODUCT_OPS
+    if PRODUCT_OPS.exists():
+        value = read(PRODUCT_OPS, 0)
+        need(value.get('schema') == 'GB_PRODUCT_QA_OPS_V1' and type(value.get('operations')) is dict
+             and (value.get('pending') is None or value['pending'] in value['operations']),
+             'invalid product QA operations ledger')
+        return value
+    return dict(schema='GB_PRODUCT_QA_OPS_V1', generation=0, operations={}, pending=None, last=None)
+
+
+def find_product_admission():
+    """Load the single eligible Root product QA admission, if any."""
+    import owner_package_admission as A
+    matches = sorted(STATE.glob(A.PRODUCT_LEDGER_PREFIX + '*.json'))
+    if not matches:
+        return None
+    need(len(matches) == 1, 'ambiguous product QA admissions')
+    return A.product_qa_ledger(read(matches[0], 0))
+
+
+def product_qa_plan(policy, card, budget):
+    """Eligible product QA-only stage; independent of historical slot2 pending/journal."""
+    if policy.get('mode') != 'active' or not card.get('owned'):
+        return None
+    from native_antigravity import PRODUCT_ISSUE, PRODUCT_SOURCE_SHA, PRODUCT_OPS, ReviewError, product_executor_ready
+    try:
+        admission = find_product_admission()
+        if admission is None:
+            return None
+        ops = product_qa_ops()
+        if ops.get('pending'):
+            return None  # UNKNOWN/running never replays
+        # Same operation fingerprint already finished -> no second paid launch.
+        for op in ops.get('operations', {}).values():
+            if (op.get('admission_sha256') == digest(admission)
+                    and op.get('result') is not None):
+                return None
+        product_executor_ready()
+        budget.bind_issue(PRODUCT_ISSUE)
+        left = budget.remaining('agy', 'qa', 'slot2')
+        if not (type(left) is int and left >= 1):
+            return None
+        # Generation tracks the product ops ledger, not historical slot2 pending.
+        return dict(slot='slot2', issue=PRODUCT_ISSUE, stage='product_qa', phase='idle',
+                    head=PRODUCT_SOURCE_SHA, attempt=0,
+                    generation=ops.get('generation', 0), profile='agy')
+    except (OSError, ValueError, ReviewError, Refused, KeyError, TypeError):
+        return None
+
+
 def snapshot(policy):
     result = dict(schema='GB_ACTIONS_TRAIN_V1', mode=policy['mode'], slots={})
     try: planning = read(STATE / 'planning.json', 0, 65536)
@@ -253,6 +305,12 @@ def snapshot(policy):
                 observed_at=planning['observed_at'], workflow_run=planning['run'])
     proposed = qualification_plan(policy, result['slots']['slot2'], budget)
     if proposed: result['slots']['slot2']['qa_qualification'] = proposed
+    product = product_qa_plan(policy, result['slots']['slot2'], budget)
+    if product: result['slots']['slot2']['product_qa'] = product
+    try:
+        result['product_qa_ops'] = product_qa_ops()
+    except (OSError, Refused, ValueError, TypeError, KeyError):
+        result['product_qa_ops'] = None
     if policy.get('recovery', {}).get('enabled'):
         result['recovery'] = recovery_journal()
         # A lost process never resets a model reservation. Expose the honest limitation.
@@ -315,10 +373,19 @@ def supervisor(req, policy, key, root_lock):
     for fd in (0, 1, 2): os.dup2(null, fd)
     if null > 2: os.close(null)
     slot = req['slot']
+    product = req.get('_product_qa') is True
     lock = locked(STATE / 'controller.lock')
-    j = journal(slot)
-    j['operations'][key]['process'] = identity(os.getpid())
-    atomic(STATE / (slot + '.json'), j)
+    if product:
+        from native_antigravity import PRODUCT_OPS
+        ops = product_qa_ops()
+        need(key in ops['operations'] and ops.get('pending') == key, 'product QA operation missing')
+        ops['operations'][key]['process'] = identity(os.getpid())
+        atomic(PRODUCT_OPS, ops)
+        j = None
+    else:
+        j = journal(slot)
+        j['operations'][key]['process'] = identity(os.getpid())
+        atomic(STATE / (slot + '.json'), j)
     os.close(lock)
     r, w = os.pipe()
     pid = os.fork()
@@ -326,7 +393,8 @@ def supervisor(req, policy, key, root_lock):
         os.close(r)
         try:
             # Recheck immediately before dropping privilege. Root never imports candidate code.
-            user = guard(slot, policy)
+            # Product QA always uses UID978 executor home (slot2 identity), never slot1/1002.
+            user = guard('slot2' if product else slot, policy)
             native_auth = None
             if req['stage'] == 'author':
                 state, _ = checkpoint(slot)
@@ -351,18 +419,23 @@ def supervisor(req, policy, key, root_lock):
             os.umask(0o077)
             os.environ.clear()
             os.environ.update(PATH='/usr/bin:/bin', LANG='C.UTF-8', HOME=user.pw_dir, USER=user.pw_name)
-            req['_task_hash'] = j['operations'][key].get('task_hash')
-            if j['operations'][key].get('qa_qualification'):
-                req['_qa_qualification'] = j['operations'][key]['qa_qualification']
-                if 'qualification_grant' in req['_qa_qualification']:
-                    req['_qa_grant_operation']=key
-                    from antigravity_qa_recovery import addressed
-                    if addressed(req['_qa_qualification']):
-                        req['_qa_addressed_grant']=req['_qa_qualification']['qualification_grant']
-            if j['operations'][key].get('recovery_admission'):
-                req['_recovery_admission'] = j['operations'][key]['recovery_admission']
-            if j['operations'][key].get('recovery_data'):
-                req['_recovery_data'] = j['operations'][key]['recovery_data']
+            if product:
+                need(os.getuid() == 978, 'product QA must run as UID978')
+                # Do not open foreign slot1 checkpoint. Admission work was already
+                # refuse_foreign_checkpoint'd in product_qa_request; never probe slot1 path.
+            else:
+                req['_task_hash'] = j['operations'][key].get('task_hash')
+                if j['operations'][key].get('qa_qualification'):
+                    req['_qa_qualification'] = j['operations'][key]['qa_qualification']
+                    if 'qualification_grant' in req['_qa_qualification']:
+                        req['_qa_grant_operation']=key
+                        from antigravity_qa_recovery import addressed
+                        if addressed(req['_qa_qualification']):
+                            req['_qa_addressed_grant']=req['_qa_qualification']['qualification_grant']
+                if j['operations'][key].get('recovery_admission'):
+                    req['_recovery_admission'] = j['operations'][key]['recovery_admission']
+                if j['operations'][key].get('recovery_data'):
+                    req['_recovery_data'] = j['operations'][key]['recovery_data']
             from stage import entry
             value = entry(dict(req), policy, native_auth=native_auth)
             raw = json.dumps(value).encode()
@@ -402,6 +475,42 @@ def supervisor(req, policy, key, root_lock):
     except (ValueError, Refused): value = dict(status='unknown', reason='invalid bounded stage result')
     lock = locked(STATE / 'controller.lock')
     try:
+        if product:
+            from native_antigravity import PRODUCT_OPS, PRODUCT_READY, PRODUCT_ISSUE, PRODUCT_SOURCE_SHA, MODEL
+            # Preserve historical slot journals byte- identically while finishing product ops.
+            slot1_before = (STATE / 'slot1.json').read_bytes() if (STATE / 'slot1.json').exists() else None
+            slot2_before = (STATE / 'slot2.json').read_bytes() if (STATE / 'slot2.json').exists() else None
+            ops = product_qa_ops()
+            op = ops['operations'][key]
+            op.update(result=value, finished_at=int(time.time()))
+            if value['status'] == 'confirmed':
+                ops['generation'] = ops.get('generation', 0) + 1
+            ops['last'] = dict(stage='product_qa', issue=req['issue'], status=value['status'],
+                               reason=value.get('reason'),
+                               confirmed_at=int(time.time()) if value['status'] == 'confirmed' else None,
+                               workflow_run=req['run'], workflow_attempt=req['run_attempt'],
+                               product_ready=bool(value.get('product_ready')),
+                               receipt_file=value.get('receipt_file'))
+            if value['status'] != 'unknown':
+                ops['pending'] = None
+            atomic(PRODUCT_OPS, ops)
+            # READY only after actual confirmed new QA PASS; never retro-accept old UNKNOWN.
+            if (value.get('status') == 'confirmed' and value.get('product_ready')
+                    and value.get('qualification_passed') is True
+                    and (value.get('qa') or {}).get('verdict') == 'PASS'
+                    and (value.get('qa') or {}).get('reviewed_sha') == PRODUCT_SOURCE_SHA):
+                if not PRODUCT_READY.exists():
+                    atomic(PRODUCT_READY, dict(
+                        schema='GB_PRODUCT_QA_ROLE_READY_V1', phase='ready',
+                        issue=PRODUCT_ISSUE, source_sha=PRODUCT_SOURCE_SHA, model=MODEL,
+                        verdict='PASS', operation=key,
+                        receipt_file=value.get('receipt_file'),
+                        confirmed_at=int(time.time())), mode=0o644)
+            need(((STATE / 'slot1.json').read_bytes() if (STATE / 'slot1.json').exists() else None) == slot1_before
+                 and ((STATE / 'slot2.json').read_bytes() if (STATE / 'slot2.json').exists() else None) == slot2_before,
+                 'product QA finish must not rewrite historical slot journals')
+            publish_monitor(policy)
+            return
         j = journal(slot)
         op = j['operations'][key]
         state, _ = checkpoint(slot)
@@ -659,6 +768,86 @@ def recovery_request(req, policy):
     return dict(status='running', key=key, process=identity(pid))
 
 
+def product_qa_request(req, policy):
+    """One product QA-only operation on its own ledger. Never claims/resets slot journals."""
+    from native_antigravity import (PRODUCT_ISSUE, PRODUCT_SOURCE_SHA, PRODUCT_OPS,
+                                    product_executor_ready, product_work_ok, refuse_foreign_checkpoint)
+    import owner_package_admission as A
+    key = digest(binding(req))
+    ops = product_qa_ops()
+    if key in ops['operations']:
+        op = ops['operations'][key]
+        if ops.get('pending') == key:
+            return dict(status='running' if alive(op.get('process')) else 'unknown', key=key,
+                        reason='product QA never replays after unknown outcome')
+        return dict(status=(op.get('result') or {}).get('status', 'unknown'), key=key,
+                    result=op.get('result'), last=ops.get('last'))
+    need(req['issue'] == PRODUCT_ISSUE and req['head'] == PRODUCT_SOURCE_SHA,
+         'product QA issue/source mismatch')
+    # Preserve historical slot journals byte- identically; only observe.
+    slot1_before = (STATE / 'slot1.json').read_bytes() if (STATE / 'slot1.json').exists() else None
+    slot2_before = (STATE / 'slot2.json').read_bytes() if (STATE / 'slot2.json').exists() else None
+    admission = find_product_admission()
+    need(admission is not None and admission['source_sha'] == PRODUCT_SOURCE_SHA
+         and admission['issue'] == PRODUCT_ISSUE
+         and admission['controller_sha'] == policy['controller_sha'],
+         'missing/edited product QA admission')
+    # Authoritative consume gate under controller.lock: one reservation/result per
+    # admission digest, regardless of generation/run/binding. Planner check alone
+    # is not the gate. Preserve UNKNOWN pending and all prior charges/history.
+    admission_digest = digest(admission)
+    for existing_key, prior in ops.get('operations', {}).items():
+        if prior.get('admission_sha256') != admission_digest:
+            continue
+        if ops.get('pending') == existing_key:
+            return dict(status='running' if alive(prior.get('process')) else 'unknown',
+                        key=existing_key,
+                        reason='product QA admission already reserved; no second consume')
+        return dict(status=(prior.get('result') or {}).get('status', 'unknown'),
+                    key=existing_key, result=prior.get('result'), last=ops.get('last'),
+                    reason='product QA admission already consumed')
+    need(ops.get('pending') is None and req['generation'] == ops.get('generation', 0),
+         'stale/pending product QA generation')
+    A.validate_product_admission(admission, controller=policy['controller_sha'])
+    refuse_foreign_checkpoint(admission['work'])
+    product_work_ok(admission['work'], PRODUCT_SOURCE_SHA)
+    # Executor home for UID978 only; do not require slot2 pending None.
+    guard('slot2', policy)
+    product_executor_ready()
+    _, s = live()
+    budget = s.Budget(BUDGET, AUTONOMY/'outbox', AUTONOMY/'locks/registry.lock')
+    budget.bind_issue(PRODUCT_ISSUE)
+    left = budget.remaining('agy', 'qa', 'slot2')
+    need(type(left) is int and left >= 1, 'product QA requires finite eligible daily budget')
+    free_lock(AUTONOMY / 'locks' / 'product-qa.lease')
+    task_hash = digest(dict(schema='GB_PRODUCT_QA_TASK_V1', issue=PRODUCT_ISSUE,
+                            source_sha=PRODUCT_SOURCE_SHA, admission=digest(admission),
+                            work=admission['work'], model=admission['model']))
+    op = dict(task_hash=task_hash, admission_sha256=digest(admission),
+              admission=admission, binding=binding(req),
+              run=req['run'], run_attempt=req['run_attempt'],
+              started_at=int(time.time()), process=None, result=None)
+    # Durable consume/reservation BEFORE paid launch / fork.
+    ops['operations'][key] = op
+    ops['pending'] = key
+    atomic(PRODUCT_OPS, ops)
+    # Historical journals must stay untouched by reservation.
+    slot1_after = (STATE / 'slot1.json').read_bytes() if (STATE / 'slot1.json').exists() else None
+    slot2_after = (STATE / 'slot2.json').read_bytes() if (STATE / 'slot2.json').exists() else None
+    need(slot1_after == slot1_before and slot2_after == slot2_before,
+         'product QA reservation must not rewrite historical slot journals')
+    pid = os.fork()
+    if pid == 0:
+        # Synthetic slot journal key for supervisor compatibility; product ops owns truth.
+        req = dict(req, _product_qa=True, _product_qa_key=key, _product_admission=admission,
+                   _task_hash=task_hash)
+        supervisor(req, policy, key, ROOT_LOCK)
+    ops = product_qa_ops()
+    ops['operations'][key]['process'] = identity(pid)
+    atomic(PRODUCT_OPS, ops)
+    return dict(status='running', key=key, process=identity(pid))
+
+
 def qualification_request(req, policy):
     """One QA-only canary, using existing slot journal/worker lock. Never creates active."""
     from native_antigravity import qualification, qualification_descriptor
@@ -733,7 +922,7 @@ def handle(req, policy):
         publish_monitor(policy)
         return dict(status='recorded')
     slot = req['slot']
-    if slot=='slot2' and req['stage']!='qa_qualification' \
+    if slot=='slot2' and req['stage'] not in ('qa_qualification', 'product_qa') \
             and (STATE/'antigravity-29-addressed-ledger.json').exists():
         from native_antigravity import MARKER, trusted
         from antigravity_qa_recovery import addressed
@@ -743,6 +932,8 @@ def handle(req, policy):
     hosted_identity(req, policy)
     if req['stage'] == 'qa_qualification':
         return qualification_request(req, policy)
+    if req['stage'] == 'product_qa':
+        return product_qa_request(req, policy)
     if req['stage'] in ('diagnose', 'task_review'):
         return recovery_request(req, policy)
     key = digest(binding(req))

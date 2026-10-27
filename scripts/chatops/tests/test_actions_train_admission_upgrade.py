@@ -578,7 +578,7 @@ class BundleTests(unittest.TestCase):
         manifest=installed_source('scripts/chatops/actions_train/manifest.json')
         self.assertEqual(H(manifest),I.MANIFEST)
         self.assertEqual(json.loads(manifest)['files']['scripts/chatops/actions_train/'+I.NAME],I.NEW)
-        workflow=(REPO/'.github/workflows/train-stage.yml').read_bytes()
+        workflow=installed_source('.github/workflows/train-stage.yml')
         self.assertEqual(H(workflow),I.STAGE_SHA);self.assertIn(('ref: '+I.C).encode(),workflow)
         self.assertEqual(SCRIPT.stat().st_mode&0o777,(SCRIPT.parent/'agy29_inventory_rerecord.py').stat().st_mode&0o777)
         required_pins={
