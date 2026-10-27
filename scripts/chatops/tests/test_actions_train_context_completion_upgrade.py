@@ -229,15 +229,32 @@ class ProductQaV4Contract(unittest.TestCase):
         import inspect
         self.assertIn("j['pending'] is None", inspect.getsource(U.quiet_v3))
         self.assertIn('pending UNKNOWN may remain', U.quiet_v4.__doc__)
+        quiet_src=inspect.getsource(U.quiet_v4)
+        # Gap A: body must not invoke quiet()/safe_checkpoint (pending=none / terminal ACCEPTED).
+        import ast
+        body=ast.parse(quiet_src).body[0]
+        called={n.func.id for n in ast.walk(body) if isinstance(n,ast.Call) and isinstance(n.func,ast.Name)}
+        self.assertNotIn('quiet', called)
+        self.assertNotIn('safe_checkpoint', called)
+        self.assertIn("live checkpoint active HOLD", quiet_src)
+        self.assertIn('installed OLD pin/metadata HOLD', quiet_src)
         # Closure includes native_guard + live/slots from actual installed baseline.
         self.assertIn('native_guard.py', U.V4_OLD)
         self.assertIn('live/slots.py', U.V4_OLD)
-        # verify/activate/rollback must not silently fall through to apply.
+        # Controller protocol: policy/cursor_marker/budget + disabled→shadow→activation.
         src=inspect.getsource(U.execute_v4)
         self.assertIn("action=='verify'", src)
-        self.assertIn('V4 activate HOLD', src)
+        self.assertIn("installed-disabled", src)
+        self.assertIn("proof-recorded", src)
         self.assertIn("action=='apply'", src)
         self.assertIn('require existing journal', src)
+        plan_src=inspect.getsource(U._v4_plan)
+        self.assertIn('v4_reviewed_budget_config5', plan_src)
+        self.assertIn("'policy'", plan_src)
+        self.assertIn('cursor_marker', plan_src)
+        self.assertIn("'budget'", plan_src)
+        self.assertIn('_v4_workflow_gates', src)
+        self.assertIn('version=4', src)
 
     def test_v4_old_pins_match_installed_v3_baseline(self):
         # Regression: V4 OLD = actual installed V3_OLD/V3_PROTOCOL, not assumed PR340/PR341.
@@ -249,6 +266,57 @@ class ProductQaV4Contract(unittest.TestCase):
         self.assertEqual(U.V4_OLD['receiver.py'], U.V3_PROTOCOL['receiver.py'])
         self.assertEqual(U.V4_NEW['native_guard.py'],
                          U.V3_NEW['native_guard.py'])
+
+    def test_quiet_v4_allows_historical_pending_denies_live(self):
+        # Historical pending UNKNOWN accepted; live process / non-done checkpoint denied.
+        import native_antigravity as N
+        import pwd
+        j={'pending':{'unknown':True},'operations':{
+            'history':{'status':'unknown','process':{'pid':123,'start':'old','boot':'old'}}}}
+        def fake_read(path,**kw):
+            for key,pin in U.V4_OLD.items():
+                if str(path).endswith('/'+key) or str(path).endswith(key):
+                    return b'pin',U.canonical_meta(pin)
+            raise AssertionError('unexpected read '+str(path))
+        accounts={'agentagency-dev':SimpleNamespace(pw_uid=1002),
+                  'gb-slot2':SimpleNamespace(pw_uid=978)}
+        dead={'pid':123,'start':'reused','boot':'old'}
+        ops=type('P',(),{'exists':staticmethod(lambda:False)})()
+        with patch.object(pwd,'getpwnam',side_effect=lambda n:accounts[n]), \
+             patch.object(U,'run',return_value=b'ActiveState=inactive\nMainPID=0\nUnitFileState=masked\n'), \
+             patch.object(U.receiver,'units_quiet'), \
+             patch.object(U.receiver,'journal',return_value=j), \
+             patch.object(U.receiver,'checkpoint',return_value=({'active':None,'done':[]},[])), \
+             patch.object(U.receiver,'identity',return_value=dead), \
+             patch.object(U.receiver,'no_models'), \
+             patch.object(U,'lock_unheld'), \
+             patch.object(U.receiver,'free_lock'), \
+             patch.object(U.receiver,'recovery_journal',return_value={'receipts':{}}), \
+             patch.object(U,'read_file',side_effect=fake_read), \
+             patch.object(U.os.path,'lexists',return_value=False), \
+             patch.object(N,'PRODUCT_OPS',ops):
+            U.quiet_v4()
+            with patch.object(U.receiver,'identity',return_value=j['operations']['history']['process']):
+                with self.assertRaisesRegex(core.Refused,'still alive HOLD'):
+                    U.quiet_v4()
+            with patch.object(U.receiver,'checkpoint',
+                              return_value=({'active':{'phase':'author','issue':1},'done':[]},[])):
+                with self.assertRaisesRegex(core.Refused,'live checkpoint active HOLD'):
+                    U.quiet_v4()
+
+    def test_budget_config5_unlimited_qa_per_issue_no_global_cap(self):
+        before={'schema':1,'providers':{'codex':{'qa':3},'agy':{'qa':2,'author':'unlimited'}},
+                'slots':{'slot2':{'agy':{'qa':2}}}}
+        after=U.v4_reviewed_budget_config5(before)
+        self.assertEqual(after['providers']['agy']['qa'],'unlimited')
+        self.assertEqual(after['providers']['agy']['per_issue_daily'],5)
+        self.assertEqual(after['providers']['agy']['author'],'unlimited')
+        self.assertEqual(after['providers']['codex'],{'qa':3})
+        self.assertEqual(after['slots']['slot1']['agy']['qa'],'unlimited')
+        self.assertEqual(after['slots']['slot2']['agy']['qa'],'unlimited')
+        self.assertEqual(before['providers']['agy']['qa'],2)
+        with self.assertRaises(core.Refused):
+            U.v4_reviewed_budget_config5({'schema':1,'global_cap':9,'providers':{},'slots':{}})
 
 
 if __name__=='__main__': unittest.main()
