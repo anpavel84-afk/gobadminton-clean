@@ -213,9 +213,9 @@ def request(value):
              'invalid bounded QA qualification request')
     if value['stage'] == 'product_qa':
         # Logical slot carries UID978 executor home only; provider is role/capability, not slot==slot2.
-        # Issue/head come from authorized admission (any positive Issue + exact SHA); not fixed 346.
+        # Issue/head/attempt come from authorized admission (any positive Issue + exact SHA); not fixed 346.
         need(value['slot'] == 'slot2' and type(value['issue']) is int and 1 <= value['issue'] <= 10**9
-             and value['phase'] == 'idle' and value['attempt'] == 0 and value['profile'] == 'agy'
+             and value['phase'] == 'idle' and 1 <= value['attempt'] <= 3 and value['profile'] == 'agy'
              and isinstance(value['head'], str) and SHA.fullmatch(value['head']),
              'invalid bounded product QA request')
     return value
@@ -514,7 +514,8 @@ def plan(a, s, snapshot, candidates, profile='auto'):
                  and product['slot'] == name
                  and type(product['issue']) is int and 1 <= product['issue'] <= 10**9
                  and product['stage'] == 'product_qa' and product['phase'] == 'idle'
-                 and product['attempt'] == 0 and product['profile'] == 'agy'
+                 and type(product['attempt']) is int and 1 <= product['attempt'] <= 3
+                 and product['profile'] == 'agy'
                  and isinstance(product['head'], str) and SHA.fullmatch(product['head'])
                  and type(product['generation']) is int and 0 <= product['generation'] <= 10**9
                  and (ops_gen is None or product['generation'] == ops_gen),

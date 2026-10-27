@@ -431,7 +431,12 @@ class ProductQaAdmissionWire(unittest.TestCase):
         with self.assertRaises(Exception):
             A.validate_product_admission(dict(good, extra='nope'))
         with self.assertRaises(Exception):
-            A.validate_product_admission(dict(self._admission_v2(), acceptance='deleted probe only'))
+            A.validate_product_admission(dict(self._admission_v2(), acceptance='   '))
+        # Specific real cleanup criteria remain valid; no keyword classifier.
+        ok_cleanup = A.validate_product_admission(dict(
+            self._admission_v2(),
+            acceptance='Confirm deleted probe files are absent from venue catalog after cleanup.'))
+        self.assertIn('deleted probe', ok_cleanup['acceptance'])
 
     def test_owner_comment_wrong_issue_url_rejected(self):
         import owner_package_admission as A
@@ -534,21 +539,50 @@ class ProductQaAdmissionWire(unittest.TestCase):
                  patch.object(R, 'read', side_effect=lambda p, o, limit=2097152: original_read(p, None, limit)):
                 self.assertIsNone(R.find_product_admission(controller='c' * 40))
 
-    def test_find_product_admission_two_actual_plus_receipts_refused(self):
-        """Multiple real eligible numeric ledgers stay fail-closed even if receipts exist."""
+    def test_find_product_admission_two_independent_selects_oldest(self):
+        """Queued independent Issues (337+346): one-writer sequential, oldest first."""
         import owner_package_admission as A
         import importlib
         A = importlib.reload(A)
         with tempfile.TemporaryDirectory(prefix='product-qa-discovery-') as tmp:
             folder = Path(tmp)
-            for comment in (6449940130, 6449940131):
-                admission = dict(self._admission(owner_comment=comment),
-                                 body_sha256='e' * 64, owner_id=A.OWNER_ID)
-                R.atomic(folder / (A.PRODUCT_LEDGER_PREFIX + f'{comment}.json'), admission)
+            older = dict(self._admission(owner_comment=1001),
+                         body_sha256='e' * 64, owner_id=A.OWNER_ID, admitted_at=100)
+            newer = dict(self._admission_v2(comment=1002),
+                         body_sha256='f' * 64, owner_id=A.OWNER_ID, admitted_at=200)
+            R.atomic(folder / (A.PRODUCT_LEDGER_PREFIX + '1001.json'), older)
+            R.atomic(folder / (A.PRODUCT_LEDGER_PREFIX + '1002.json'), newer)
+            for comment in (1001, 1002):
                 R.atomic(folder / (A.PRODUCT_RECEIPT_PREFIX + f'{comment}.json'),
                          dict(schema='GB_PRODUCT_QA_ADMISSION_TX_V1', phase='complete',
                               owner_comment=comment))
-            with patch.object(R, 'STATE', folder):
+            original_read = R.read
+            def read_fixture(path, owner, limit=2097152):
+                self.assertEqual(owner, 0)
+                return original_read(path, os.getuid(), limit)
+            with patch.object(R, 'STATE', folder), patch.object(R, 'read', side_effect=read_fixture):
+                found = R.find_product_admission(controller='c' * 40)
+            self.assertEqual(found['owner_comment'], 1001)
+            self.assertEqual(found['issue'], 346)
+
+    def test_find_product_admission_same_issue_distinct_heads_refused(self):
+        """Real conflict: same Issue/attempt with distinct heads fails closed."""
+        import owner_package_admission as A
+        import importlib
+        A = importlib.reload(A)
+        with tempfile.TemporaryDirectory(prefix='product-qa-conflict-') as tmp:
+            folder = Path(tmp)
+            a = dict(self._admission_v2(comment=2001, head=self.HEAD337),
+                     body_sha256='e' * 64, owner_id=A.OWNER_ID, admitted_at=10)
+            b = dict(self._admission_v2(comment=2002, head='1' * 40),
+                     body_sha256='f' * 64, owner_id=A.OWNER_ID, admitted_at=20)
+            R.atomic(folder / (A.PRODUCT_LEDGER_PREFIX + '2001.json'), a)
+            R.atomic(folder / (A.PRODUCT_LEDGER_PREFIX + '2002.json'), b)
+            original_read = R.read
+            def read_fixture(path, owner, limit=2097152):
+                self.assertEqual(owner, 0)
+                return original_read(path, os.getuid(), limit)
+            with patch.object(R, 'STATE', folder), patch.object(R, 'read', side_effect=read_fixture):
                 with self.assertRaisesRegex(Exception, 'ambiguous|conflicting'):
                     R.find_product_admission(controller='c' * 40)
 
@@ -573,10 +607,10 @@ class ProductQaAdmissionWire(unittest.TestCase):
 
     def test_product_qa_request_fields_fail_closed(self):
         for fields in ({'slot': 'slot1'}, {'head': 'not-a-sha'},
-                       {'phase': 'pr_wait'}, {'attempt': 1}, {'profile': 'auto'}):
+                       {'phase': 'pr_wait'}, {'attempt': 0}, {'profile': 'auto'}):
             with self.subTest(fields=fields):
                 req = dict(action='train', stage='product_qa', slot='slot2', issue=337,
-                           phase='idle', head=self.HEAD337, attempt=0, generation=0,
+                           phase='idle', head=self.HEAD337, attempt=1, generation=0,
                            profile='agy', run=1, run_attempt=1, gh_token='synthetic-read-token')
                 with self.assertRaises(core.Refused):
                     core.request(req | fields)
@@ -584,7 +618,7 @@ class ProductQaAdmissionWire(unittest.TestCase):
     def test_plan_exposes_product_qa_with_legacy_slot2_pending(self):
         # Product ops generation 0 must not be compared to legacy slot2 generation 119.
         product = dict(slot='slot2', issue=337, stage='product_qa', phase='idle',
-                       head=self.HEAD337, attempt=0, generation=0, profile='agy')
+                       head=self.HEAD337, attempt=1, generation=0, profile='agy')
         slot2 = _card(pending=dict(status='unknown', recoverable=False,
                                    binding=dict(action='train', stage='qa_qualification',
                                                 slot='slot2', issue=29, phase='idle',
@@ -602,7 +636,7 @@ class ProductQaAdmissionWire(unittest.TestCase):
 
     def test_plan_refuses_product_generation_mismatched_to_ops(self):
         product = dict(slot='slot2', issue=337, stage='product_qa', phase='idle',
-                       head=self.HEAD337, attempt=0, generation=0, profile='agy')
+                       head=self.HEAD337, attempt=1, generation=0, profile='agy')
         slot2 = _card()
         slot2['generation'] = 119
         slot2['product_qa'] = product
@@ -626,7 +660,7 @@ class ProductQaAdmissionWire(unittest.TestCase):
             admission = dict(self._admission(), body_sha256='e' * 64, owner_id=A.OWNER_ID)
             R.atomic(folder / (A.PRODUCT_LEDGER_PREFIX + '999001.json'), admission)
             req = dict(action='train', stage='product_qa', slot='slot2', issue=346,
-                       phase='idle', head=self.HEAD, attempt=0, generation=0,
+                       phase='idle', head=self.HEAD, attempt=1, generation=0,
                        profile='agy', run=10, run_attempt=1, gh_token='synthetic-read-token')
             budget = Mock(remaining=lambda *a: 3)
             original_read = R.read
@@ -671,7 +705,7 @@ class ProductQaAdmissionWire(unittest.TestCase):
             admission = dict(self._admission(), body_sha256='e' * 64, owner_id=A.OWNER_ID)
             R.atomic(folder / (A.PRODUCT_LEDGER_PREFIX + '999001.json'), admission)
             first_req = dict(action='train', stage='product_qa', slot='slot2', issue=346,
-                             phase='idle', head=self.HEAD, attempt=0, generation=0,
+                             phase='idle', head=self.HEAD, attempt=1, generation=0,
                              profile='agy', run=10, run_attempt=1, gh_token='synthetic-read-token')
             first_key = digest(binding(first_req))
             finished = dict(
@@ -728,7 +762,7 @@ class ProductQaAdmissionWire(unittest.TestCase):
             admission = dict(self._admission_v2(), body_sha256='e' * 64, owner_id=A.OWNER_ID)
             R.atomic(folder / (A.PRODUCT_LEDGER_PREFIX + '999002.json'), admission)
             req = dict(action='train', stage='product_qa', slot='slot2', issue=337,
-                       phase='idle', head='0' * 40, attempt=0, generation=0,
+                       phase='idle', head='0' * 40, attempt=1, generation=0,
                        profile='agy', run=10, run_attempt=1, gh_token='synthetic-read-token')
             budget = Mock(remaining=lambda *a: 3)
             original_read = R.read
@@ -744,10 +778,81 @@ class ProductQaAdmissionWire(unittest.TestCase):
                               original_read(p, None, limit)), \
                  patch.object(R.os, 'fork') as fork, \
                  patch.object(R, 'free_lock'):
-                with self.assertRaisesRegex(Exception, 'issue/source mismatch'):
+                with self.assertRaisesRegex(Exception, 'issue/source/attempt mismatch'):
                     R.product_qa_request(req, {'mode': 'active', 'controller_sha': 'c' * 40,
                                                'owned': {'slot1': 1, 'slot2': 1}})
                 fork.assert_not_called()
+
+    def test_confirmed_qa_requires_explicit_verdict_and_reviewed_sha(self):
+        """Missing/None reviewed_sha or non PASS/FAIL → UNKNOWN HOLD (no synthetic PASS)."""
+        import inspect
+        src = inspect.getsource(R.supervisor)
+        self.assertIn("qa.get('verdict') in ('PASS', 'FAIL')", src)
+        self.assertIn('reviewed_sha', src)
+        self.assertIn('HOLD not READY', src)
+        self.assertNotIn('reviewed_sha is None', src)
+        # Stale adapter-pin READY may be replaced after a new exact PASS.
+        self.assertIn('write_ready', src)
+        self.assertIn('product_module_pins()', src)
+
+    def test_duplicate_owner_comment_same_assignment_idempotent(self):
+        """New GH run + distinct comment digest, same assignment identity → no second consume."""
+        import native_antigravity as N
+        import owner_package_admission as A
+        import importlib
+        from core import digest, binding
+        A = importlib.reload(A)
+        with tempfile.TemporaryDirectory(prefix='product-qa-dup-') as tmp:
+            folder = Path(tmp)
+            first = dict(self._admission(owner_comment=3001),
+                         body_sha256='e' * 64, owner_id=A.OWNER_ID)
+            dup = dict(self._admission(owner_comment=3002),
+                       body_sha256='f' * 64, owner_id=A.OWNER_ID)
+            R.atomic(folder / (A.PRODUCT_LEDGER_PREFIX + '3002.json'), dup)
+            first_req = dict(action='train', stage='product_qa', slot='slot2', issue=346,
+                             phase='idle', head=self.HEAD, attempt=1, generation=0,
+                             profile='agy', run=10, run_attempt=1, gh_token='synthetic-read-token')
+            first_key = digest(binding(first_req))
+            finished = dict(
+                schema='GB_PRODUCT_QA_OPS_V1', generation=1, pending=None, last=dict(
+                    stage='product_qa', issue=346, status='confirmed'),
+                operations={first_key: dict(
+                    task_hash='a' * 64, admission_sha256=digest(first),
+                    admission=first, binding=binding(first_req),
+                    run=10, run_attempt=1, started_at=1,
+                    process={'pid': 1, 'start': '1', 'boot': 'x'},
+                    result={'status': 'confirmed', 'product_ready': False,
+                            'qa': {'verdict': 'FAIL', 'findings': ['x'],
+                                   'reviewed_sha': self.HEAD}},
+                    finished_at=2)})
+            ops_path = folder / 'product-qa-operations.json'
+            R.atomic(ops_path, finished)
+            journal_bytes = ops_path.read_bytes()
+            next_req = dict(first_req, generation=1, run=99)
+            budget = Mock(remaining=lambda *a: 3)
+            original_read = R.read
+            with patch.object(R, 'STATE', folder), \
+                 patch.object(N, 'PRODUCT_OPS', ops_path), \
+                 patch.object(R, 'ROOT_LOCK', -1, create=True), \
+                 patch.object(R, 'guard', return_value=SimpleNamespace(
+                     pw_uid=978, pw_gid=968, pw_dir='/tmp', pw_name='gb-slot2')), \
+                 patch.object(R, 'hosted_identity'), \
+                 patch.object(R, 'live', return_value=(None, SimpleNamespace(
+                     Budget=lambda *a, **k: budget))), \
+                 patch.object(N, 'product_executor_ready', return_value={'phase': 'canary'}), \
+                 patch.object(N, 'product_work_ok', return_value=Path(dup['work'])), \
+                 patch.object(N, 'refuse_foreign_checkpoint'), \
+                 patch.object(R, 'read', side_effect=lambda p, owner=None, limit=2097152:
+                              original_read(p, None, limit)), \
+                 patch.object(R.os, 'fork', return_value=4242) as fork, \
+                 patch.object(R, 'free_lock'):
+                again = R.product_qa_request(next_req, {'mode': 'active',
+                    'controller_sha': 'c' * 40, 'owned': {'slot1': 1, 'slot2': 1}})
+                self.assertEqual(again['status'], 'confirmed')
+                self.assertEqual(again['key'], first_key)
+                self.assertIn('already consumed', again.get('reason', ''))
+                fork.assert_not_called()
+                self.assertEqual(ops_path.read_bytes(), journal_bytes)
 
     def test_product_stage_setup_skips_author_store(self):
         import stage as St

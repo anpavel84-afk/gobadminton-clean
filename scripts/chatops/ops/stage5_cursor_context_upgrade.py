@@ -364,7 +364,17 @@ def source(bundle,commit,branch,manifest,controller,stage_sha,dispatch_sha,*,ver
     for name,pin in (('train-stage.yml',stage_sha),('train-dispatch.yml',dispatch_sha)):
         raw=(git(bundle,'show',controller+':.github/workflows/'+name) if version==3
              else material['.github/workflows/'+name])
-        need(bytes_sha(raw)==pin and (version==3 or raw.count(('ref: '+controller).encode())==2),'unreviewed workflow/pin')
+        need(bytes_sha(raw)==pin,'unreviewed workflow/pin')
+        if version==3:
+            continue
+        if version==5:
+            # Exact OLD (baseline keep) or NEW (controller) workflow child release.
+            new_n=raw.count(('ref: '+controller).encode())
+            old_n=raw.count(('ref: '+V5_BASELINE).encode())
+            need((new_n==2 and old_n==0) or (old_n==2 and new_n==0),
+                 'unreviewed V5 workflow keep/release pin')
+        else:
+            need(raw.count(('ref: '+controller).encode())==2,'unreviewed workflow/pin')
     # Refuse mutations during source validation as well; installed bytes are retained above.
     need(git(bundle,'rev-parse','HEAD').decode().strip()==commit and
          not git(bundle,'status','--porcelain=v1','--untracked-files=all','--ignore-submodules=all'),'bundle changed')
@@ -1478,17 +1488,59 @@ V5_OLD={
 }
 # Placeholder NEW pins — filled after source edit; installer verifies bundle bytes.
 V5_NEW={
- 'core.py':'606e58dd2444260e8abe19cd16a5e9897ed47fc59f9926ae246167cf7fb2f4ef',
- 'receiver.py':'7e0596e1f7f5b3478b675b61ed3a405212f97c81463bd70d28a2d34936ddd6f9',
+ 'core.py':'678246a2c29f2788e4ae7f4f48722140c81dc068a8226da09ec2bd17bda42a67',
+ 'receiver.py':'aa462dafb50438c45831d71e258719f760674d062068d3f363bcc4306dc7f605',
  'stage.py':'abbb0f5be285b3c2770119770d4ad30e224b28535b2279f56a46bb377a131e0a',
  'native_antigravity.py':'14b089d2cf8bc295f357454d7d356f57b8480a996a0ec00e331d97f15280d536',
- 'owner_package_admission.py':'36827939143297ab5a7e17f39e4ed86b6764b47fd9b3deb53a9a9ee8ac42a88f',
+ 'owner_package_admission.py':'39b681f8408989dfbfd9202f60e4b31c7bffbe96f350d53e572c97f87e802aa3',
 }
+
+
+def _uid978_provider_procs_absent():
+    """Bounded /proc metadata: refuse live UID978 provider CLIs. No kill/chmod.
+
+    receiver.no_models only observes the legacy slot cgroup; NEW provider processes
+    under UID978 may live outside that cgroup. Status+cmdline only; no forensics.
+    """
+    markers=(b'cursor-agent', b'/agy', b'antigravity', b'gemini', b'codex')
+    try:
+        entries=os.listdir('/proc')
+    except OSError:
+        return
+    for name in entries:
+        if not name.isdigit():
+            continue
+        try:
+            with open('/proc/'+name+'/status','rb') as fh:
+                status=fh.read(4096)
+        except OSError:
+            continue
+        uid=None
+        for line in status.splitlines():
+            if line.startswith(b'Uid:'):
+                parts=line.split()
+                if len(parts)>=2:
+                    try: uid=int(parts[1])
+                    except ValueError: uid=None
+                break
+        if uid!=978:
+            continue
+        try:
+            with open('/proc/'+name+'/cmdline','rb') as fh:
+                cmd=fh.read(4096)
+        except OSError:
+            continue
+        if not cmd:
+            continue
+        lower=cmd.lower()
+        need(not any(marker in lower for marker in markers),
+             'UID978 provider process still alive HOLD')
 
 
 def quiet_v5():
     """Reuse V4 resource quiescence; preserve completed V4 journal/backup/history."""
     quiet_v4()
+    _uid978_provider_procs_absent()
     # Completed V4 transaction must remain; never mutate its journal/backup.
     if V4_JOURNAL.exists():
         j=loads(regular_bytes(V4_JOURNAL))
@@ -1526,11 +1578,14 @@ def _v5_material(items,bundle):
 
 
 def _v5_workflow_gates(bundle,controller,stage_sha,dispatch_sha):
-    """Accept release-child workflow refs from prepare_train_release; no hardcoded pins."""
+    """Accept exact OLD keep or NEW controller workflow child release; no hardcoded pins."""
     for name,pin in (('train-stage.yml',stage_sha),('train-dispatch.yml',dispatch_sha)):
         raw=regular_bytes(bundle/'.github/workflows'/name)
-        need(bytes_sha(raw)==pin and raw.count(('ref: '+controller).encode())==2,
-             'unreviewed V5 workflow/pin HOLD: '+name)
+        need(bytes_sha(raw)==pin, 'unreviewed V5 workflow/pin HOLD: '+name)
+        new_n=raw.count(('ref: '+controller).encode())
+        old_n=raw.count(('ref: '+V5_BASELINE).encode())
+        need((new_n==2 and old_n==0) or (old_n==2 and new_n==0),
+             'unreviewed V5 workflow keep/release pin HOLD: '+name)
 
 
 def _v5_current(j):

@@ -599,6 +599,109 @@ class ProductQaV4HybridImport(unittest.TestCase):
 
 
 
+class V5Fixture:
+    """Synthetic V5 transaction fixture reusing V4Fixture/Stage5Install primitives."""
+
+    def __init__(self, *, keep_old_workflow=False):
+        self.f=f=v3.legacy.Stage5Install();f.setUp()
+        try: self.build(keep_old_workflow=keep_old_workflow)
+        except BaseException:
+            f.tearDown();raise
+
+    def build(self, *, keep_old_workflow=False):
+        f=self.f
+        f.stack.enter_context(patch.object(U.os,'geteuid',return_value=os.getuid()))
+        self.v4_journal=f.state/'stage5-product-qa-admission.json'
+        self.v4_backup=f.state/'stage5-product-qa-admission-backup'
+        self.v5_journal=f.state/'stage5-general-product-qa.json'
+        self.v5_backup=f.state/'stage5-general-product-qa-backup'
+        f.stack.enter_context(patch.object(U,'V4_JOURNAL',self.v4_journal))
+        f.stack.enter_context(patch.object(U,'V4_BACKUP',self.v4_backup))
+        f.stack.enter_context(patch.object(U,'V5_JOURNAL',self.v5_journal))
+        f.stack.enter_context(patch.object(U,'V5_BACKUP',self.v5_backup))
+        f.stack.enter_context(patch.object(U,'quiet_v5'))
+        self.baseline=U.V5_BASELINE
+        self.controller='c'*40
+        # Completed V4 journal/backup must remain byte-identical across V5.
+        self.v4_journal.write_bytes(json.dumps(dict(
+            schema=U.V4_SCHEMA, phase='proof-recorded', identity={'version':4},
+            applied=['core.py'], restored=[], changes={})).encode())
+        self.v4_bytes=self.v4_journal.read_bytes()
+        self.v4_backup.mkdir(mode=0o700)
+        (self.v4_backup/'core.py').write_bytes(b'v4-backup-core')
+        self.v4_backup_listing=sorted(p.name for p in self.v4_backup.iterdir())
+        self.before={n:('v5old '+n).encode() for n in U.V5_OLD}
+        self.after={n:('v5new '+n).encode() for n in U.V5_NEW}
+        # context_policy must remain rules_pin-valid Python (Stage5Install seed).
+        policy_src=(f.install/'context_policy.py').read_bytes()
+        frozen_raw={}
+        for n in U.V5_FROZEN:
+            if n=='context_policy.py':
+                frozen_raw[n]=policy_src
+            else:
+                frozen_raw[n]=('v5frozen '+n).encode()
+        frozen={n:H(raw) for n,raw in frozen_raw.items()}
+        old={n:H(raw) for n,raw in self.before.items()}
+        new={n:H(raw) for n,raw in self.after.items()}
+        for n,raw in frozen_raw.items():
+            p=f.install/n;p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(raw)
+            src=f.bundle/U.PREFIX/n;src.parent.mkdir(parents=True,exist_ok=True);src.write_bytes(raw)
+            f.items[p]=src
+        for n,raw in self.before.items():
+            p=f.install/n;p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(raw)
+            src=f.bundle/U.PREFIX/n;src.parent.mkdir(parents=True,exist_ok=True)
+            src.write_bytes(self.after[n]);f.items[f.install/n]=src
+        wf=f.bundle/'.github/workflows'
+        ref=self.baseline if keep_old_workflow else self.controller
+        for name in ('train-stage.yml','train-dispatch.yml'):
+            (wf/name).write_text(('ref: '+ref+'\n')*2)
+        f.sh=H((wf/'train-stage.yml').read_bytes());f.dh=H((wf/'train-dispatch.yml').read_bytes())
+        f.refresh()
+        policy=dict(mode='active',controller_sha=self.baseline,stage_workflow_sha256=f.sh,
+                    recovery={'source_sha':self.baseline})
+        f.policy.write_text(json.dumps(policy,indent=2));self.policy=f.policy.read_bytes()
+        # AGY marker must satisfy module_pins_only (C5 + V3_OLD contract).
+        p=f.p/'agy_marker.json'
+        marker=dict(schema='GB_ANTIGRAVITY_QA_29_V1',phase='canary',
+                    adapter_revision=self.baseline,
+                    modules={'native_guard.py':frozen['native_guard.py'],
+                             'native_antigravity.py':old['native_antigravity.py']})
+        raw=json.dumps(marker,indent=2).encode()+b'\n';p.write_bytes(raw)
+        self.agy_marker=p;self.agy_marker_raw=raw
+        markers={'agy_marker':p,'cursor_marker':f.p/'cursor_marker.json'}
+        markers['cursor_marker'].write_bytes(b'{"phase":"ready"}\n')
+        present={str(f.install/n):raw for n,raw in self.before.items()}
+        for n,raw in frozen_raw.items(): present[str(f.install/n)]=raw
+        record=dict(manifest='v5 fixture inventory',
+                    after={p:H(raw) for p,raw in present.items()},
+                    before={'old':'history'},targets=['old install'])
+        f.inventory.write_text(json.dumps(record,indent=2));f.inventory.chmod(0o600)
+        self.inventory=f.inventory.read_bytes()
+        self.oldfiles=dict(present)
+        v3_old={**U.V3_OLD,'native_guard.py':frozen['native_guard.py'],
+                'native_antigravity.py':old['native_antigravity.py']}
+        for key,val in dict(V5_OLD=old,V5_NEW=new,V5_FROZEN=frozen,
+                            V3_MARKERS=markers,V3_OLD=v3_old,C5=self.baseline).items():
+            f.stack.enter_context(patch.object(U,key,val))
+
+    def call(self,action):
+        f=self.f
+        return U.execute(action,f.bundle,f.manifest,self.controller,f.sh,f.dh,123,
+                         self.baseline,f.commit,'dev',5)
+
+    def close(self): self.f.tearDown()
+
+    def restored(self,case):
+        for p,raw in self.oldfiles.items(): case.assertEqual(Path(p).read_bytes(),raw,p)
+        for n,raw in self.before.items():
+            case.assertEqual((self.f.install/n).read_bytes(),raw,n)
+        case.assertEqual(self.agy_marker.read_bytes(),self.agy_marker_raw)
+        case.assertEqual(self.f.inventory.read_bytes(),self.inventory)
+        case.assertEqual(self.f.policy.read_bytes(),self.policy)
+        case.assertEqual(self.v4_journal.read_bytes(),self.v4_bytes)
+        case.assertEqual(sorted(p.name for p in self.v4_backup.iterdir()),self.v4_backup_listing)
+
+
 class GeneralProductQaV5Installer(unittest.TestCase):
     def test_v5_schema_and_old_closure_from_v4_new(self):
         sys.path.insert(0, str(ROOT/'scripts/chatops/ops'))
@@ -623,6 +726,73 @@ class GeneralProductQaV5Installer(unittest.TestCase):
         src = inspect.getsource(U.quiet_v5)
         self.assertIn('quiet_v4', src)
         self.assertIn('V4_JOURNAL', src)
+        self.assertIn('_uid978_provider_procs_absent', src)
+
+    def test_v5_dry_apply_verify_rollback_roundtrip(self):
+        x=V5Fixture();self.addCleanup(x.close)
+        before={str(p):p.read_bytes() for p in x.f.p.rglob('*') if p.is_file()}
+        r=x.call('dry')
+        self.assertTrue(r['dry'])
+        self.assertEqual(r['status'],'PLANNED_GENERAL_PRODUCT_QA_UPGRADE')
+        self.assertEqual(before,{str(p):p.read_bytes() for p in x.f.p.rglob('*') if p.is_file()})
+        self.assertEqual(x.v4_journal.read_bytes(),x.v4_bytes)
+        r=x.call('apply')
+        self.assertEqual(r['phase'],'installed-disabled')
+        for n,raw in x.after.items():
+            self.assertEqual((x.f.install/n).read_bytes(),raw,n)
+        self.assertEqual(json.loads(x.f.policy.read_bytes())['mode'],'disabled')
+        self.assertEqual(x.v4_journal.read_bytes(),x.v4_bytes)
+        self.assertEqual(x.call('verify')['verified'],True)
+        x.call('rollback');x.restored(self)
+        self.assertEqual(x.v4_journal.read_bytes(),x.v4_bytes)
+
+    def test_v5_keep_old_workflow_child_release(self):
+        x=V5Fixture(keep_old_workflow=True);self.addCleanup(x.close)
+        r=x.call('dry')
+        self.assertTrue(r['dry'])
+        self.assertEqual(r['version'],5)
+
+    def test_v5_uid978_process_presence_refused(self):
+        import inspect
+        sys.path.insert(0, str(ROOT/'scripts/chatops/ops'))
+        import stage5_cursor_context_upgrade as Uv
+        src=inspect.getsource(Uv._uid978_provider_procs_absent)
+        self.assertIn('/proc/', src)
+        self.assertIn('Uid:', src)
+        self.assertIn('cmdline', src)
+        self.assertNotIn('os.kill', src)
+        self.assertNotIn('chmod(', src)
+        self.assertNotIn('subprocess', src)
+        with tempfile.TemporaryDirectory(prefix='v5-uid978-') as tmp:
+            root=Path(tmp);proc=root/'proc';proc.mkdir()
+            entry=proc/'424242';entry.mkdir()
+            (entry/'status').write_bytes(b'Name:\tagy\nUid:\t978\t978\t978\t978\n')
+            (entry/'cmdline').write_bytes(b'/opt/gb-slots/runtime/antigravity/agy\0--qa\0')
+            real_listdir=os.listdir
+            def listdir(path):
+                if path=='/proc': return ['424242','self']
+                return real_listdir(path)
+            real_open=open
+            def fake_open(path,*a,**kw):
+                text=str(path)
+                if text.startswith('/proc/424242/'):
+                    return real_open(entry/Path(text).name,*a,**kw)
+                return real_open(path,*a,**kw)
+            with patch.object(Uv.os,'listdir',side_effect=listdir), \
+                 patch('builtins.open',side_effect=fake_open):
+                with self.assertRaisesRegex(core.Refused,'UID978 provider process'):
+                    Uv._uid978_provider_procs_absent()
+            (entry/'cmdline').write_bytes(b'/usr/bin/sleep\010\0')
+            with patch.object(Uv.os,'listdir',side_effect=listdir), \
+                 patch('builtins.open',side_effect=fake_open):
+                Uv._uid978_provider_procs_absent()
+
+    def test_v5_pending_resource_conflict_refused(self):
+        x=V5Fixture();self.addCleanup(x.close)
+        with patch.object(U,'quiet_v5',side_effect=core.Refused(
+                'product QA operation still pending/UNKNOWN HOLD')):
+            with self.assertRaisesRegex(core.Refused,'pending/UNKNOWN HOLD'):
+                x.call('dry')
 
 
 class ProductQaFinishEvidence(unittest.TestCase):

@@ -581,14 +581,6 @@ PRODUCT_RECEIPT_PREFIX='product-qa-admission-receipt-'
 PRODUCT_ISSUE_URL_PREFIX='https://api.github.com/repos/anpavel84-afk/gobadminton-clean/issues/'
 # Legacy alias only (Issue346); NEW admissions bind issue_url from Owner JSON issue field.
 PRODUCT_ISSUE_URL=PRODUCT_ISSUE_URL_PREFIX+'346'
-# Forbidden generic acceptance — product tasks need real criteria / allowed diff.
-_FORBIDDEN_ACCEPTANCE=frozenset({
-    'deleted probe only',
-    'deleted smoke-probe cleanup only',
-    'review the exact deleted smoke-probe cleanup only',
-})
-
-
 def product_issue_url(issue):
     need(type(issue) is int and 1 <= issue <= 10**9, 'invalid product QA issue')
     return PRODUCT_ISSUE_URL_PREFIX + str(issue)
@@ -642,21 +634,16 @@ def _validate_product_work(work):
 
 
 def _validate_acceptance(acceptance):
-    """Real per-task acceptance; generic deleted-probe text forbidden."""
+    """Bounded nonempty per-task acceptance; no keyword classifier on Owner criteria."""
     if type(acceptance) is str:
         text=acceptance.strip()
-        need(len(text)>=16 and text.lower() not in _FORBIDDEN_ACCEPTANCE
-             and 'deleted probe' not in text.lower(),
-             'product QA requires real acceptance; generic deleted-probe text forbidden')
+        need(1<=len(text)<=8192, 'product QA acceptance required')
         return text
     need(type(acceptance) is list and 1<=len(acceptance)<=32, 'invalid product QA acceptance list')
     out=[]
     for item in acceptance:
         need(type(item) is str and 1<=len(item.strip())<=4096, 'invalid product QA acceptance item')
-        text=item.strip()
-        need(text.lower() not in _FORBIDDEN_ACCEPTANCE and 'deleted probe' not in text.lower(),
-             'product QA requires real acceptance; generic deleted-probe text forbidden')
-        out.append(text)
+        out.append(item.strip())
     return out
 
 
