@@ -18,7 +18,7 @@ REPO_ID = 1416250340
 OWNER = 318610566
 SINCE = '2026-10-15T02:27:00+00:00'
 PINS = {'autonomous_issues.py': 'f3ca85b4392fa1e2ba76a09ec1140d78ebc6c708ba42397bee047184fec3ebe0',
-        'slots.py': 'fabd52dcc53dcb935c67a1b0e90c41e430eba2ce447a50012e8d553df13942d0',
+        'slots.py': 'e26a64f392a3fc2b32b708c598f6992da219d2224411088745baae118952a5d8',
         'check_foundation.py': 'c2975b19bd46d00acbdbc08227545b8f9c9501d7b8e8783e9b397751c612bd13'}
 RECOVERY_STAGES = ('diagnose', 'task_review')
 STAGES = ('failure_diagnosis', 'claim', 'author', 'publish', 'qa', 'ci', 'integrate', 'promote', 'dev', 'qa_qualification') + RECOVERY_STAGES
@@ -451,16 +451,29 @@ def next_stage(active):
     return None
 
 def plan(a, s, snapshot, candidates, profile='auto'):
-    """One finite pass. Issues are durable intent; no dispatch queue is treated as a task store."""
+    """One finite pass. Issues are durable intent; no dispatch queue is treated as a task store.
+
+    Owner DIRECT 2026-10-27: new author claims are globally sequential. Existing
+    non-writer stages (immutable QA/CI/integrate) continue on their slot. Historical
+    UNKNOWN writer occupancy blocks new authors without clearing or replaying.
+    """
     occupied, completed, blocked = [], set(), set()
+    writer_occupied = False
     for card in snapshot['slots'].values():
         completed.update(card['done'])
         blocked.update(card['parked'])
         active = card.get('active')
+        pending = card.get('pending')
         if card.get('reservation'):
             occupied.append(card['reservation'])
+            writer_occupied = writer_occupied or s.record_is_writer(card['reservation'])
         if active and active['phase'] != 'done':
-            occupied.append(s.task_record(active['issue'], active['task']))
+            writer = s.is_source_writer_phase(active.get('phase'))
+            occupied.append(s.task_record(active['issue'], active['task'], writer=writer))
+            writer_occupied = writer_occupied or writer
+        if isinstance(pending, dict) and s.is_source_writer_stage(
+                (pending.get('binding') or {}).get('stage')):
+            writer_occupied = True
     out = []
     # Prefer the longest-idle slot, not slot1 on every empty-queue wake.
     def last_confirmed(item):
@@ -476,7 +489,9 @@ def plan(a, s, snapshot, candidates, profile='auto'):
             continue
         active = card.get('active')
         qualification = card.get('qa_qualification')
-        if snapshot.get('mode') == 'active' and name == 'slot2' and active is None and qualification:
+        # Qualification stays on the AGY executor home slot; logical product claims do not
+        # permanently own that slot affinity for ordinary author/QA routing.
+        if snapshot.get('mode') == 'active' and s.slot_maps_to_agy_executor(name) and active is None and qualification:
             need(set(qualification) == {'slot','issue','stage','phase','head','attempt','generation','profile'}
                  and qualification['slot'] == name and qualification['issue'] == 29
                  and qualification['stage'] == 'qa_qualification' and qualification['phase'] == 'idle'
@@ -496,8 +511,10 @@ def plan(a, s, snapshot, candidates, profile='auto'):
         from queue_diagnostics import provider_ready
         if not provider_ready(card, profile):
             continue
+        if writer_occupied:
+            continue  # global one source writer; do not claim a second author
         for issue, task in candidates:
-            record = s.task_record(issue, task)
+            record = s.task_record(issue, task, writer=True)
             if issue in completed | blocked or any(s.conflicts(record, r) for r in occupied):
                 continue
             if not set(task.get('depends_on', [])) <= completed:
@@ -505,5 +522,6 @@ def plan(a, s, snapshot, candidates, profile='auto'):
             out.append(dict(slot=name, issue=issue, stage='claim', phase='idle', head=None,
                             attempt=0, generation=card['generation'], profile=profile))
             occupied.append(record)
+            writer_occupied = True
             break
     return out

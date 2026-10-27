@@ -588,13 +588,32 @@ def trusted(path, owner=0, limit=65536):
         os.close(fd)
 
 
+# Logical Train slot that owns the AGY executor OS identity (UID978/GID968 + OAuth).
+# Product Issue/attempt/operation assignment is separate; do not treat marker.slot as a
+# permanent claim that every AGY QA admission must occupy historical slot2 writer state.
+AGY_EXECUTOR_SLOT = 'slot2'
+
+
 def qualification(slot, task_hash, model=MODEL):
+    """Qualify the AGY executor sandbox, not permanent logical-slot ownership.
+
+    Owner DIRECT 2026-10-27: decouple logical task assignment from Antigravity
+    executor identity. Marker.slot remains the executor home (gb-slot2). Live
+    invoke still requires process UID==EXECUTOR_UID (never slot1 UID1002 / never
+    lending HOME/secrets). Cross-slot AGY that would write another slot's 0600
+    state/worker.lock is NOT safely enabled here (HOLD).
+    """
     need(model in MODELS, 'unsupported native QA model')
-    need(slot == 'slot2', 'Antigravity QA currently supports existing isolated slot2 only')
+    need(isinstance(slot, str) and slot in ('slot1', 'slot2'), 'invalid Antigravity QA logical slot')
     m = loads(trusted(MARKER))
     need(m.get('schema') == 'GB_ANTIGRAVITY_QA_29_V1' and m.get('phase') in ('canary', 'ready')
-         and m.get('executor_uid') == EXECUTOR_UID and m.get('slot') == slot,
+         and m.get('executor_uid') == EXECUTOR_UID and m.get('slot') == AGY_EXECUTOR_SLOT,
          'Antigravity QA executor not qualified')
+    # Routing may name any logical slot; execution identity is the executor UID.
+    # available() still refuses slots that cannot run as that executor today.
+    if os.geteuid() not in (0, EXECUTOR_UID):
+        need(slot == AGY_EXECUTOR_SLOT,
+             'Antigravity QA invoke requires AGY executor identity, not foreign slot UID')
     need(m['phase'] == 'ready' or task_hash is not None and m.get('canary_task_sha256') == task_hash,
          'Antigravity restricted to exact reviewed QA canary')
     # Existing ready/canary markers admit Medium only. Higher catalogue IDs
@@ -622,10 +641,20 @@ def qualification(slot, task_hash, model=MODEL):
 
 
 def available(slot, task_hash, model=MODEL):
+    """Role/executor capability probe. Not a READY self-certify and not slot affinity.
+
+    READY remains marker phase after a fresh confirmed QA DONE/verdict/exact SHA
+    (owner_package_admission.accept). Logical slot1 cannot host live AGY until a
+    separate reviewed supervisor path drops to UID978 without lending secrets and
+    without writing foreign 0600 state (explicit HOLD).
+    """
     try:
+        if slot != AGY_EXECUTOR_SLOT and os.geteuid() != EXECUTOR_UID:
+            return False, ('Antigravity executor sandbox is UID978/gb-slot2; '
+                           'logical slot does not map to executor without HOLD cross-slot path')
         qualification(slot, task_hash, model=model)
         return True, 'qualified native QA executor'
-    except (OSError, ReviewError) as error:
+    except (OSError, ReviewError, Exception) as error:
         return False, 'Antigravity QA unavailable: ' + (str(error)[:180] if isinstance(error, ReviewError)
                                                       else 'executor/auth provisioning missing')
 

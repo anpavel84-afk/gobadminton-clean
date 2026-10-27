@@ -36,6 +36,15 @@ SLOT_USERS = {'slot1': LEGACY_USER}
 SOLO_LOCKS = {'global', 'migrations', 'contracts', 'workflows', 'chatops'}
 UNKNOWN = None          # quota unknown != 0: never "free", never "empty"; it blocks scheduling
 ROLES = ('author', 'qa', 'review')
+# Owner DIRECT 2026-10-27: new source authors are globally sequential even for disjoint
+# paths. Immutable QA is read-only and must not be confused with a writer lease.
+SOURCE_WRITER_PHASES = frozenset({'claimed', 'developing', 'candidate', 'pr_wait'})
+SOURCE_WRITER_STAGES = frozenset({'claim', 'author', 'publish'})
+# AGY executor home (UID978/GID968 sandbox). Logical Issue assignment is separate;
+# cross-slot AGY checkpoint writes remain HOLD (see native_antigravity.qualification).
+AGY_EXECUTOR_SLOT = 'slot2'
+AGY_EXECUTOR_UID = 978
+AGY_EXECUTOR_GID = 968
 ASSIGN_SCHEMA = 'GB_SLOT_ASSIGN_V1'
 STATUS_SCHEMA = 'GB_SLOT_STATUS_V1'
 RETIRED = 'RETIRED_TO_SLOT.json'
@@ -235,10 +244,25 @@ def disjoint(paths_a, paths_b):
 
 
 # ---------------------------------------------------------------- locks
-def task_record(issue, task):
+def task_record(issue, task, *, writer=True):
     locks = task.get('locks') or ['global']    # undeclared = solo
     return dict(issue=issue, locks=list(locks), allowed_paths=list(task['allowed_paths']),
-                depends_on=list(task.get('depends_on', [])))
+                depends_on=list(task.get('depends_on', [])), writer=bool(writer))
+
+
+def is_source_writer_phase(phase):
+    return phase in SOURCE_WRITER_PHASES
+
+
+def is_source_writer_stage(stage):
+    return stage in SOURCE_WRITER_STAGES
+
+
+def record_is_writer(record):
+    """Legacy lease bytes without writer default to writer=True (fail closed)."""
+    if not isinstance(record, dict):
+        return True
+    return record.get('writer', True) is not False
 
 
 def lock_conflict(a, b):
@@ -261,11 +285,89 @@ def path_overlap(p, q):
 
 
 def conflicts(r1, r2):
-    """Conservative: any lock conflict OR any allowed_paths overlap serializes the pair."""
+    """Conservative path/lock intersection. Also: two source writers always conflict.
+
+    Owner DIRECT 2026-10-27 supersedes parallel disjoint authors. Immutable QA
+    records set writer=False and still serialize only on real intersection.
+    Historical UNKNOWN occupancy keeps using this predicate; never evade by
+    renaming path/slot/op alone.
+    """
     if r1['issue'] == r2['issue']:
+        return True
+    if record_is_writer(r1) and record_is_writer(r2):
         return True
     return (any(lock_conflict(a, b) for a in r1['locks'] for b in r2['locks'])
             or any(path_overlap(p, q) for p in r1['allowed_paths'] for q in r2['allowed_paths']))
+
+
+def slot_maps_to_agy_executor(slot):
+    """True when this logical slot's installed OS identity is the AGY executor sandbox.
+
+    Today only slot2 maps to gb-slot2/UID978. Product routing may name any slot;
+    live AGY invoke still requires that executor identity (see native_antigravity).
+    """
+    return slot == AGY_EXECUTOR_SLOT and slot_user(slot) == f'gb-{AGY_EXECUTOR_SLOT}'
+
+
+def source_writer_occupied(statuses=None, journals=None):
+    """Whether any slot currently holds a source-writer active/pending occupancy."""
+    statuses = statuses or {}
+    journals = journals or {}
+    for slot, card in statuses.items():
+        active = (card or {}).get('active')
+        if active and is_source_writer_phase(active.get('phase')):
+            return True
+        pending = (card or {}).get('pending')
+        if isinstance(pending, dict):
+            binding = pending.get('binding') or {}
+            if is_source_writer_stage(binding.get('stage')):
+                return True
+    for slot, journal in journals.items():
+        pending = (journal or {}).get('pending')
+        if not pending:
+            continue
+        op = (journal.get('operations') or {}).get(pending) or {}
+        binding = op.get('binding') or {}
+        if is_source_writer_stage(binding.get('stage')):
+            return True
+        # Active writer checkpoint without a stage binding still blocks new authors.
+        # Do not treat QA/qualification UNKNOWN as a writer lease.
+    return False
+
+
+def historical_unknown_isolation_receipt(evidence):
+    """Narrow #341 resource-disjoint isolation receipt evaluator (source-only).
+
+    Owner DIRECT 2026-10-27: the guarded installer may accept a NEW exact
+    resource-disjoint isolation receipt only when facts, stopped process identity
+    and protected dependencies are verified. Absence of processes is not proof.
+    No automatic clearing, safe_release override, grants reset or assume-safe.
+
+    Current runtime uncertainty about historical Git/Python/shell/config helper
+    effects means a broad disjoint claim cannot be safely minted here → HOLD.
+    """
+    evidence = evidence or {}
+    require(isinstance(evidence, dict), 'isolation evidence must be an object')
+    # Never invent provenance. Require explicit positive proofs; otherwise HOLD.
+    required = ('stopped_process_identity', 'protected_dependencies',
+                'resource_disjoint_proof', 'historical_effects_excluded')
+    missing = [k for k in required if not evidence.get(k)]
+    if missing:
+        return dict(status='HOLD', schema='GB_UNKNOWN_ISOLATION_RECEIPT_V1',
+                    reason='insufficient verified isolation facts', missing=missing,
+                    safe_release=False, automatic_clear=False)
+    if evidence.get('historical_effects_excluded') is not True:
+        return dict(status='HOLD', schema='GB_UNKNOWN_ISOLATION_RECEIPT_V1',
+                    reason='historical effects not proven absent; process absence is not proof',
+                    safe_release=False, automatic_clear=False)
+    if evidence.get('resource_disjoint_proof') is not True:
+        return dict(status='HOLD', schema='GB_UNKNOWN_ISOLATION_RECEIPT_V1',
+                    reason='resource-disjoint proof missing or unverified',
+                    safe_release=False, automatic_clear=False)
+    # Even with claimed proofs, this bounded source patch does not activate install.
+    return dict(status='HOLD', schema='GB_UNKNOWN_ISOLATION_RECEIPT_V1',
+                reason='verified receipt shape only; install activation out of this source patch',
+                safe_release=False, automatic_clear=False)
 
 
 class _Flock:
@@ -304,8 +406,8 @@ class LockRegistry:
                 fd = os.open(self.directory / entry, os.O_RDONLY | os.O_NOFOLLOW)
             except FileNotFoundError:
                 continue
-            except PermissionError:                    # unreadable lease: fail closed, treat as global
-                out[name] = dict(issue=0, locks=['global'], allowed_paths=[])
+            except PermissionError:                    # unreadable lease: fail closed, treat as global writer
+                out[name] = dict(issue=0, locks=['global'], allowed_paths=[], writer=True)
                 continue
             try:
                 try:
@@ -313,7 +415,7 @@ class LockRegistry:
                 except BlockingIOError:
                     raw = os.read(fd, MAX_FILE + 1)
                     require(len(raw) <= MAX_FILE, 'lease too large')
-                    out[name] = loads(raw) if raw else dict(issue=0, locks=['global'], allowed_paths=[])
+                    out[name] = loads(raw) if raw else dict(issue=0, locks=['global'], allowed_paths=[], writer=True)
                 else:
                     fcntl.flock(fd, fcntl.LOCK_UN)     # nobody holds it: stale, not live
             finally:
@@ -325,7 +427,11 @@ class LockRegistry:
             return self._live()
 
     def acquire(self, slot, record):
-        """Atomic check-and-take under the registry mutex. Returns False on conflict."""
+        """Atomic check-and-take under the registry mutex. Returns False on conflict.
+
+        Two writer leases always conflict (Owner one-writer). QA leases (writer=False)
+        still conflict on path/lock intersection and never clear UNKNOWN occupancy.
+        """
         require(SLOT_RE.fullmatch(slot), 'invalid slot name')
         if self.fd is not None:
             require(self.slot == slot and self.record == record, 'slot already holds a different lease')
@@ -786,8 +892,8 @@ class Runtime:
                 and type(value['issue']) is int and value['issue'] > 0, 'invalid assignment')
         return value['issue']
 
-    def lease(self, active):
-        record = task_record(active['issue'], active['task'])
+    def lease(self, active, *, writer=True):
+        record = task_record(active['issue'], active['task'], writer=writer)
         require(self.registry.acquire(self.slot, record), 'lock conflict with another live slot')
 
     def release_lease(self):
@@ -833,19 +939,29 @@ def plan(candidates, statuses, assignments, slots, max_parallel, budget=None, ad
 
     * ready  = every depends_on is done; an unresolved parked dependency stays unsatisfied;
     * serial = locks/paths conflict with any busy or newly planned task (conservative);
+    * Owner DIRECT 2026-10-27: new source authors are globally sequential (even disjoint);
+      immutable QA occupancy (non-writer phase) does not alone consume author capacity;
     * at most max_parallel slots busy; author adapter and codex QA must be enabled with known quota."""
     done = set().union(*[set(s.get('done', [])) for s in statuses.values()]) if statuses else set()
     parked = set().union(*[set(s.get('parked', [])) for s in statuses.values()]) if statuses else set()
     busy = {}
+    writer_busy = False
     for slot in slots:
         active = (statuses.get(slot) or {}).get('active')
         if active and active['phase'] != 'done':
-            busy[slot] = dict(issue=active['issue'], locks=active['locks'], allowed_paths=active['allowed_paths'])
+            rec = dict(issue=active['issue'], locks=active['locks'], allowed_paths=active['allowed_paths'],
+                       writer=is_source_writer_phase(active.get('phase')))
+            busy[slot] = rec
+            writer_busy = writer_busy or rec['writer']
         elif slot in assignments and assignments[slot]['issue'] not in done | parked:
-            busy[slot] = assignments[slot]['record']
+            busy[slot] = dict(assignments[slot]['record'])
+            busy[slot].setdefault('writer', True)
+            writer_busy = writer_busy or record_is_writer(busy[slot])
     taken = {r['issue'] for r in busy.values()}
     free = [s for s in slots if s not in busy and s in statuses]
-    capacity = max(0, max_parallel - len(busy))
+    # New author claims always need a free slot; global writer occupancy refuses another author
+    # even when max_parallel would have allowed a disjoint second writer.
+    capacity = 0 if writer_busy else max(0, max_parallel - len(busy))
     result, reasons = {}, {}
     for issue, task in candidates:
         if issue in done or issue in parked or issue in taken:
@@ -863,7 +979,10 @@ def plan(candidates, statuses, assignments, slots, max_parallel, budget=None, ad
         except Hold as error:
             reasons[issue] = str(error)
             continue
-        record = task_record(issue, task)
+        record = task_record(issue, task, writer=True)
+        if writer_busy or any(record_is_writer(r) for r in busy.values()):
+            reasons[issue] = 'global source writer sequential'
+            continue
         if any(conflicts(record, r) for r in busy.values()):
             reasons[issue] = 'lock/path conflict: serialized'
             continue
@@ -883,6 +1002,7 @@ def plan(candidates, statuses, assignments, slots, max_parallel, budget=None, ad
         reasons.pop(issue, None)
         result[slot] = issue
         busy[slot] = record
+        writer_busy = True
         taken.add(issue)
         free.remove(slot)
         capacity -= 1

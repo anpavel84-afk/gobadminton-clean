@@ -9,6 +9,15 @@ import urllib.parse
 from core import API, Refused, Retry, SINCE, live, need, route
 
 
+def _writer_lease(s, stage, active):
+    """Source writers take writer leases; immutable QA/CI do not (Owner one-writer).
+
+    Follow the admitted stage only. A QA stage while phase is still pr_wait must
+    not inherit a writer lease from the pre-transition phase.
+    """
+    return s.is_source_writer_stage(stage)
+
+
 def setup(req, config, native_auth=None):
     a, s = live()
     rt = s.Runtime(req['slot'], legacy_reads=a.RUNTIME_READS)
@@ -41,7 +50,8 @@ def setup(req, config, native_auth=None):
         need(policy.get('mode') == 'active' and req['slot'] in policy.get('owned', {}),
              'root migration ownership revoked')
         units_quiet(('gobadminton-supervisor.service', f'gobadminton-slot@{req["slot"]}.service'))
-        if store.data['active']: rt.lease(store.data['active'])
+        if store.data['active']:
+            rt.lease(store.data['active'], writer=_writer_lease(s, req['stage'], store.data['active']))
     original_git = bridge.git
     def checked_git(*args, **kwargs):
         # Read-only Git operations keep their original sandbox/transport. Every mutation rechecks
@@ -290,7 +300,7 @@ def perform(req, config, context):
     metadata = {}
     if req.get('_recover'):
         need(active and active['issue'] == req['issue'], 'recovery task mismatch')
-        rt.lease(active)
+        rt.lease(active, writer=_writer_lease(s, stage, active))
         b.work = b.c.worktrees_root / f'issue-{active["issue"]}'
         b.unchanged_issue(active)
         if stage == 'qa':
@@ -342,7 +352,7 @@ def perform(req, config, context):
         need(not req.get('_task_hash') or __import__('core').digest(active['task']) == req['_task_hash'],
              'task changed between admission and claim')
         b.unchanged_issue(active)
-        rt.lease(active)
+        rt.lease(active, writer=True)
         b.work = b.c.worktrees_root / f'issue-{active["issue"]}'
         need(not b.work.exists() and not b.git('branch', '--list', f'automation/issue-{active["issue"]}'),
              'existing source worktree/branch; reconcile')
@@ -373,7 +383,7 @@ def perform(req, config, context):
     else:
         need(active and active['issue'] == req['issue'] and active['phase'] == req['phase']
              and active.get('head') == req['head'] and active['attempt'] == req['attempt'], 'stale checkpoint')
-        rt.lease(active)
+        rt.lease(active, writer=_writer_lease(s, stage, active))
         b.work = b.c.worktrees_root / f'issue-{active["issue"]}'
         b.unchanged_issue(active)
         if stage == 'failure_diagnosis':
