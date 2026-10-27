@@ -308,8 +308,14 @@ def payload_target(path):
     return INSTALL/path[len(PREFIX):]
 
 
-def source(bundle,commit,branch,manifest,controller,stage_sha,dispatch_sha,*,version=2):
-    """Reviewed AGY29 plain-checkout/config gate, extended to ALL tracked blobs."""
+def source(bundle,commit,branch,manifest,controller,stage_sha,dispatch_sha,*,version=2,baseline=None):
+    """Reviewed AGY29 plain-checkout/config gate, extended to ALL tracked blobs.
+
+    V5 (OD-014A): desired module bytes come from accepted Git blobs on a validated
+    tracked-path allowlist. Legacy --manifest digest may be recorded but must not
+    authorize or deny V5 code content. Historical manual per-file pin gates are not
+    upgrade gates for the six V5 targets.
+    """
     need(bundle.is_absolute() and '..' not in bundle.parts,'noncanonical bundle path')
     need(re.fullmatch('[a-f0-9]{40}',commit or '') and
          re.fullmatch('[a-zA-Z0-9][a-zA-Z0-9_./-]*',branch or '') and '..' not in branch,'exact bundle identity required')
@@ -345,6 +351,33 @@ def source(bundle,commit,branch,manifest,controller,stage_sha,dispatch_sha,*,ver
         material[path]=raw
     need(material.get(SCRIPT_REPO_PATH)==regular_bytes(pathlib.Path(__file__).absolute()),
          'running installer differs from reviewed bundle script')
+    if version==5:
+        need(re.fullmatch('[a-f0-9]{40}',baseline or ''),'V5 baseline controller identity required')
+        # Legacy manifest digest: accepted for CLI/receipt continuity, never content authority.
+        # Kept only as legacy receipt input. Git objects above, not this digest,
+        # authorize the selected content (OD-014A).
+        items={}
+        for name in V5_TARGETS:
+            path=PREFIX+name
+            need(path in material,'V5 Git allowlist path missing: '+name)
+            target=payload_target(path);need(target not in items,'duplicate target')
+            items[target]=material[path]
+        rules_pin(material[PREFIX+'context_policy.py'])
+        canon=material[BUNDLE_RULES]
+        need(bytes_sha(canon)==RULES_SHA256 and len(canon)==RULES_SIZE,'bundle canon differs from accepted rules')
+        need(git(bundle,'rev-parse','--verify',RULES_COMMIT+'^{commit}').decode().strip()==RULES_COMMIT,
+             'rules commit identity differs')
+        need(canon==git(bundle,'show',RULES_COMMIT+':'+BUNDLE_RULES),'rules commit/object differs')
+        for name,pin in (('train-stage.yml',stage_sha),('train-dispatch.yml',dispatch_sha)):
+            raw=material['.github/workflows/'+name]
+            need(bytes_sha(raw)==pin,'unreviewed workflow/pin')
+            new_n=raw.count(('ref: '+controller).encode())
+            old_n=raw.count(('ref: '+baseline).encode())
+            need((new_n==2 and old_n==0) or (old_n==2 and new_n==0),
+                 'unreviewed V5 workflow keep/release pin')
+        need(git(bundle,'rev-parse','HEAD').decode().strip()==commit and
+             not git(bundle,'status','--porcelain=v1','--untracked-files=all','--ignore-submodules=all'),'bundle changed')
+        return items
     expected={path for path in material if path.startswith(PREFIX) and path!=MANIFEST_PATH}
     expected.add('scripts/chatops/server/gb-deploy-helper.sh')
     mraw=material.get(MANIFEST_PATH,b'');need(bytes_sha(mraw)==manifest,'unreviewed manifest')
@@ -364,7 +397,10 @@ def source(bundle,commit,branch,manifest,controller,stage_sha,dispatch_sha,*,ver
     for name,pin in (('train-stage.yml',stage_sha),('train-dispatch.yml',dispatch_sha)):
         raw=(git(bundle,'show',controller+':.github/workflows/'+name) if version==3
              else material['.github/workflows/'+name])
-        need(bytes_sha(raw)==pin and (version==3 or raw.count(('ref: '+controller).encode())==2),'unreviewed workflow/pin')
+        need(bytes_sha(raw)==pin,'unreviewed workflow/pin')
+        if version==3:
+            continue
+        need(raw.count(('ref: '+controller).encode())==2,'unreviewed workflow/pin')
     # Refuse mutations during source validation as well; installed bytes are retained above.
     need(git(bundle,'rev-parse','HEAD').decode().strip()==commit and
          not git(bundle,'status','--porcelain=v1','--untracked-files=all','--ignore-submodules=all'),'bundle changed')
@@ -515,6 +551,9 @@ def validate_current(j,backups,new,*,installed=False,preparing=False):
 
 def execute(action,bundle,manifest,controller,stage_sha,dispatch_sha,run_id=None,baseline=None,
             bundle_commit=None,bundle_branch='dev',version=2):
+    if version==5:
+        return execute_v5(action,bundle,manifest,controller,stage_sha,dispatch_sha,run_id,baseline,
+                          bundle_commit,bundle_branch)
     if version==4:
         return execute_v4(action,bundle,manifest,controller,stage_sha,dispatch_sha,run_id,baseline,
                           bundle_commit,bundle_branch)
@@ -1440,6 +1479,475 @@ def execute_v4(action,bundle,manifest,controller,stage_sha,dispatch_sha,run_id,b
                 policy_writes=1,applied=list(j['applied']))
 
 
+
+# V5: general reusable Antigravity product QA — Git-authoritative install (OD-014A).
+# Narrow extension of V4 primitives: same trusted bundle/read/CAS/backup/rollback.
+# Desired content = accepted Git blobs for six target modules; ACTUAL before bytes
+# are recorded for backup/rollback. Historical manual OLD/NEW/FROZEN hash maps are
+# not upgrade gates. Workflow SHA args come from Git blobs / prepare_train_release.
+V5_SCHEMA='GB_STAGE5_GENERAL_PRODUCT_QA_V5'
+V5_JOURNAL=STATE/'stage5-general-product-qa.json'
+V5_BACKUP=STATE/'stage5-general-product-qa-backup'
+# Historical installed358 controller identity only — NOT an upgrade success gate (OD-014A).
+V5_BASELINE='d75887f8d50e05aa5e3032a3302c91f23947be5d'
+# Historical pending UNKNOWN safety proof only — never new task routing.
+V5_HISTORICAL_SLOT1_PENDING=V4_HISTORICAL_SLOT1_PENDING
+V5_HISTORICAL_SLOT2_PENDING=V4_HISTORICAL_SLOT2_PENDING
+# Six explicit V5 rewrite targets; desired bytes come from Git, not manual NEW pins.
+V5_TARGETS=('core.py','receiver.py','stage.py','native_antigravity.py',
+            'owner_package_admission.py','client.py')
+# Untarget modules: Linux ownership/type guards only; legitimate version drift OK.
+V5_UNTARGET=(
+ 'native_cursor.py','native_guard.py','live/slots.py','context_policy.py',
+ 'context_cursor_delivery.py','admission_pm.py','accepted-engineering-rules.md',
+ 'context_exchange.py','antigravity_qa_recovery.py',
+)
+# Legacy aliases retained for V4 lineage/tests that still read names; unused by active V5 flow.
+V5_OLD={n:V4_NEW[n] for n in V5_TARGETS}
+V5_NEW={n:None for n in V5_TARGETS}
+V5_FROZEN={**V4_FROZEN,
+ 'native_guard.py':V4_NEW['native_guard.py'],
+ 'live/slots.py':V4_NEW['live/slots.py'],
+ 'context_policy.py':V4_NEW['context_policy.py'],
+ 'context_cursor_delivery.py':V4_NEW['context_cursor_delivery.py'],
+ 'admission_pm.py':V4_NEW['admission_pm.py'],
+ 'accepted-engineering-rules.md':V4_NEW['accepted-engineering-rules.md']}
+
+
+def _uid978_provider_procs_absent():
+    """Bounded /proc metadata: refuse live UID978 provider CLIs. No kill/chmod.
+
+    receiver.no_models only observes the legacy slot cgroup; NEW provider processes
+    under UID978 may live outside that cgroup. Status+cmdline only; no forensics.
+    """
+    markers=(b'cursor-agent', b'/agy', b'antigravity', b'gemini', b'codex')
+    try:
+        entries=os.listdir('/proc')
+    except OSError:
+        return
+    for name in entries:
+        if not name.isdigit():
+            continue
+        try:
+            with open('/proc/'+name+'/status','rb') as fh:
+                status=fh.read(4096)
+        except OSError:
+            continue
+        uid=None
+        for line in status.splitlines():
+            if line.startswith(b'Uid:'):
+                parts=line.split()
+                if len(parts)>=2:
+                    try: uid=int(parts[1])
+                    except ValueError: uid=None
+                break
+        if uid!=978:
+            continue
+        try:
+            with open('/proc/'+name+'/cmdline','rb') as fh:
+                cmd=fh.read(4096)
+        except OSError:
+            continue
+        if not cmd:
+            continue
+        lower=cmd.lower()
+        need(not any(marker in lower for marker in markers),
+             'UID978 provider process still alive HOLD')
+
+
+def quiet_v5():
+    """Reuse V4 resource quiescence; preserve completed V4 journal/backup/history."""
+    quiet_v4()
+    _uid978_provider_procs_absent()
+    # Completed V4 transaction must remain; never mutate its journal/backup.
+    if V4_JOURNAL.exists():
+        j=loads(regular_bytes(V4_JOURNAL))
+        need(isinstance(j,dict) and j.get('schema')==V4_SCHEMA, 'V4 journal must stay intact for V5')
+
+
+def _v5_tx_paths(controller):
+    """Per-controller journal/backup so a prior completed V5 Git commit cannot block the next.
+
+    Filenames stay in the existing STATE family. V5_JOURNAL/V5_BACKUP module
+    constants remain the historical unsuffixed names for docs/legacy references;
+    active V5 transactions always select the controller-suffixed paths below.
+    """
+    need(re.fullmatch('[a-f0-9]{40}',controller or ''),'immutable controller required')
+    return (STATE/('stage5-general-product-qa-%s.json'%controller),
+            STATE/('stage5-general-product-qa-backup-%s'%controller))
+
+
+def _v5_save(j,journal):
+    atomic_bytes(journal,encoded(j),dict(mode=0o600,uid=OWNER_UID,gid=OWNER_GID),
+                 expected=current(journal))
+
+
+def _v5_backup_name(name):
+    return name.replace('/', '__')
+
+
+def _v5_paths():
+    return {**{n:INSTALL/n for n in V5_TARGETS},
+            'policy':receiver.POLICY,
+            'agy_marker':V3_MARKERS['agy_marker'],
+            'inventory':STATE/'backup.json'}
+
+
+def _v5_order():
+    return ['policy']+sorted(V5_TARGETS)+['agy_marker','inventory']
+
+
+def _v5_material(items):
+    """Desired bytes = Git blobs already validated by source(); no manual NEW pin."""
+    target={}
+    for name in V5_TARGETS:
+        raw=items[INSTALL/name]
+        need(isinstance(raw,(bytes,bytearray)) and len(raw)>0,'V5 empty Git target: '+name)
+        target[name]=bytes(raw)
+    return target
+
+
+def _v5_workflow_gates(bundle,controller,baseline,stage_sha,dispatch_sha):
+    """Accept exact OLD keep (actual baseline) or NEW controller workflow child release."""
+    for name,pin in (('train-stage.yml',stage_sha),('train-dispatch.yml',dispatch_sha)):
+        raw=regular_bytes(bundle/'.github/workflows'/name)
+        need(bytes_sha(raw)==pin, 'unreviewed V5 workflow/pin HOLD: '+name)
+        new_n=raw.count(('ref: '+controller).encode())
+        old_n=raw.count(('ref: '+baseline).encode())
+        need((new_n==2 and old_n==0) or (old_n==2 and new_n==0),
+             'unreviewed V5 workflow keep/release pin HOLD: '+name)
+
+
+def _v5_untarget_guards():
+    """Ownership/type/symlink guards for untarget modules; hash pins do not gate upgrades."""
+    for name in V5_UNTARGET:
+        path=INSTALL/name
+        if not os.path.lexists(path):
+            continue
+        info=path.lstat()
+        need(stat.S_ISREG(info.st_mode) and info.st_nlink==1
+             and info.st_uid==OWNER_UID and info.st_gid==OWNER_GID
+             and not info.st_mode & 0o022,'V5 untarget unsafe type/owner/mode: '+name)
+        # Bound read proves regular file / no symlink follow; content version may differ.
+        read_file(path)
+
+
+def _v5_agy_marker_pins_only(raw,newpins,oldpins):
+    """Post-V4 AGY marker → Git-desired module pins; preserve non-module legacy fields.
+
+    Prior module values are history, not an upgrade gate. Preserve every other
+    marker field; new values describe the verified Git installation.
+    """
+    old=loads(raw);updated=copy.deepcopy(old)
+    need(type(old) is dict and type(old.get('modules')) is dict,'invalid native marker')
+    need(old.get('schema')=='GB_ANTIGRAVITY_QA_29_V1'
+         and old.get('phase') in ('canary','ready'), 'invalid AGY marker contract')
+    matches=list(re.finditer(rb'"modules"\s*:\s*\{[^{}]*\}',raw))
+    need(len(matches)==1,'ambiguous marker modules object')
+    m=matches[0];piece=m[0]
+    for name,pin in newpins.items():
+        need(name in old['modules'],'missing marker module field')
+        need(type(old['modules'][name]) is str
+             and re.fullmatch('[a-f0-9]{64}',old['modules'][name]),
+             'invalid historical marker module value')
+        pattern=re.escape(encoded(name))+rb'\s*:\s*"'+old['modules'][name].encode()+b'"'
+        hits=list(re.finditer(pattern,piece));need(len(hits)==1,'ambiguous module pin')
+        hit=hits[0]
+        piece=piece[:hit.start()]+hit[0].replace(old['modules'][name].encode(),pin.encode())+piece[hit.end():]
+        updated['modules'][name]=pin
+    result=raw[:m.start()]+piece+raw[m.end():]
+    need(loads(result)==updated and len(result)==len(raw),'marker fields changed outside module pins')
+    return result
+
+
+def _v5_inventory_after(inv_raw,changes):
+    """Rewrite inventory target hashes from ACTUAL before→Git after; stale recorded hash OK."""
+    record=loads(inv_raw);updated=copy.deepcopy(record)
+    need(type(record) is dict and type(record.get('after')) is dict,'invalid V5 inventory')
+    raw=inv_raw
+    for name,row in sorted(changes.items()):
+        key=str(INSTALL/name);new=row['after']['sha256'];before=row['before']
+        need(before is not None and before['sha256'],'V5 inventory requires present target: '+name)
+        recorded=record['after'].get(key)
+        if recorded is None:
+            match=re.search(rb'"after"\s*:\s*\{',raw)
+            need(match is not None,'missing inventory after object')
+            raw=raw[:match.end()]+encoded(key)+b':'+encoded(new)+b','+raw[match.end():]
+        elif recorded==before['sha256']:
+            pattern=re.escape(encoded(key))+rb'\s*:\s*"'+before['sha256'].encode()+b'"'
+            matches=list(re.finditer(pattern,raw));need(len(matches)==1,'ambiguous inventory target')
+            match=matches[0]
+            piece=raw[match.start():match.end()].replace(before['sha256'].encode(),new.encode())
+            raw=raw[:match.start()]+piece+raw[match.end():]
+        else:
+            # Stale historical inventory hash: replace recorded value, do not block upgrade.
+            pattern=re.escape(encoded(key))+rb'\s*:\s*"'+re.escape(recorded.encode())+b'"'
+            matches=list(re.finditer(pattern,raw));need(len(matches)==1,'ambiguous stale inventory target')
+            match=matches[0]
+            piece=raw[match.start():match.end()].replace(recorded.encode(),new.encode())
+            raw=raw[:match.start()]+piece+raw[match.end():]
+        updated['after'][key]=new
+    need(loads(raw)==updated,'inventory edit differs outside targets')
+    return raw
+
+
+def _v5_current(j):
+    paths=_v5_paths()
+    applied=j.get('applied') or []
+    restored=j.get('restored') or []
+    intent=j.get('write_intent')
+    for n,row in j['changes'].items():
+        state=row['after'] if n in applied and n not in restored else row['before']
+        allowed=[state]
+        if intent and intent.get('target')==n:
+            allowed=[row['before'],row['after']]
+        need(current(paths[n]) in allowed,'foreign CAS drift: '+n)
+    _v5_untarget_guards()
+
+
+def _v5_plan(target,baseline,controller,stage_sha):
+    """Plan from ACTUAL before metadata + Git desired bytes; no manual OLD/NEW pins."""
+    _v5_untarget_guards()
+    changes={}
+    for name in V5_TARGETS:
+        before=current(INSTALL/name)
+        need(before is not None,'V5 installed target missing HOLD: '+name)
+        exact_meta(before)
+        desired=bytes_sha(target[name])
+        after=dict(mode=0o644,uid=OWNER_UID,gid=OWNER_GID,sha256=desired)
+        exact_meta(after)
+        changes[name]=dict(before=before,after=after)
+    policy_before=current(receiver.POLICY)
+    need(policy_before is not None,'V5 policy missing HOLD')
+    policy_raw=regular_bytes(receiver.POLICY)
+    policy=loads(policy_raw)
+    # baseline records ACTUAL current policy identity — not a hardcoded d758 gate.
+    need(policy.get('controller_sha')==baseline
+         and policy.get('mode') in ('active','disabled')
+         and re.fullmatch('[a-f0-9]{64}',policy.get('stage_workflow_sha256','')),
+         'V5 baseline policy/controller HOLD')
+    need(controller!=baseline,'V5 distinct reviewed controller required')
+    nextpolicy=copy.deepcopy(policy)
+    nextpolicy.update(mode='disabled',controller_sha=controller,stage_workflow_sha256=stage_sha)
+    if isinstance(nextpolicy.get('recovery'),dict):
+        nextpolicy['recovery']=dict(nextpolicy['recovery'],source_sha=controller)
+    policy_after=encoded(nextpolicy)
+    changes['policy']=dict(before=policy_before,
+                           after=dict(mode=policy_before['mode'],uid=OWNER_UID,gid=OWNER_GID,
+                                      sha256=bytes_sha(policy_after)))
+    target=dict(target,policy=policy_after)
+    marker_before=current(V3_MARKERS['agy_marker'])
+    need(marker_before is not None,'V5 AGY marker missing HOLD')
+    marker_raw=regular_bytes(V3_MARKERS['agy_marker'])
+    guard=current(INSTALL/'native_guard.py')
+    antigravity=current(INSTALL/'native_antigravity.py')
+    need(guard is not None and antigravity is not None,'V5 AGY marker module sources missing')
+    oldpins={'native_guard.py':guard['sha256'],
+             'native_antigravity.py':antigravity['sha256']}
+    newpins={'native_guard.py':guard['sha256'],
+             'native_antigravity.py':bytes_sha(target['native_antigravity.py'])}
+    marker_after=_v5_agy_marker_pins_only(marker_raw,newpins,oldpins)
+    changes['agy_marker']=dict(before=marker_before,
+                               after=dict(mode=marker_before['mode'],uid=OWNER_UID,gid=OWNER_GID,
+                                          sha256=bytes_sha(marker_after)))
+    target=dict(target,agy_marker=marker_after)
+    inv_path=STATE/'backup.json'
+    inv_before=current(inv_path)
+    need(inv_before is not None,'V5 inventory missing HOLD')
+    need(inv_before['mode']==0o600,'V5 inventory mode HOLD')
+    inv_raw=regular_bytes(inv_path)
+    inv_changes={n:changes[n] for n in V5_TARGETS}
+    inv_after=_v5_inventory_after(inv_raw,inv_changes)
+    changes['inventory']=dict(before=inv_before,
+                              after=dict(mode=0o600,uid=OWNER_UID,gid=OWNER_GID,
+                                         sha256=bytes_sha(inv_after)))
+    target=dict(target,inventory=inv_after)
+    return changes,target
+
+
+def _v5_restore_one(j,name,paths,backup):
+    before=j['changes'][name]['before']
+    after=j['changes'][name]['after']
+    path=paths[name]
+    now=current(path)
+    if now==before: return
+    if before is None:
+        unlink_cas(path,after)
+        return
+    raw,_=read_file(backup/_v5_backup_name(name),trusted=False)
+    need(bytes_sha(raw)==before['sha256'],'V5 backup bytes drift: '+name)
+    atomic_bytes(path,raw,before,expected=after)
+
+
+def execute_v5(action,bundle,manifest,controller,stage_sha,dispatch_sha,run_id,baseline,commit,branch):
+    need(os.geteuid()==OWNER_UID,'root integrator only')
+    need(action in ('dry','apply','verify','activate','rollback'),'invalid V5 action')
+    need(re.fullmatch('[a-f0-9]{40}',baseline or '') and re.fullmatch('[a-f0-9]{40}',controller or ''),
+         'immutable controller required')
+    need(re.fullmatch('[a-f0-9]{64}',stage_sha or '') and re.fullmatch('[a-f0-9]{64}',dispatch_sha or ''),
+         'exact workflow digests required')
+    need(re.fullmatch('[a-f0-9]{64}',manifest or ''),'legacy manifest digest format')
+    quiet_v5()
+    need(re.fullmatch('[a-f0-9]{40}',commit or ''),'V5 exact reviewed candidate required')
+    need(controller!=baseline,'V5 distinct reviewed controller required')
+    journal,backup=_v5_tx_paths(controller)
+    _v5_workflow_gates(bundle,controller,baseline,stage_sha,dispatch_sha)
+    items=source(bundle,commit,branch,manifest,controller,stage_sha,dispatch_sha,
+                 version=5,baseline=baseline)
+    lib_target=_v5_material(items)
+    # Integrity: installed after activate/verify must equal these Git desired digests.
+    git_desired={n:bytes_sha(lib_target[n]) for n in V5_TARGETS}
+    slot1=STATE/'slot1.json';slot2=STATE/'slot2.json'
+    slot1_before=slot1.read_bytes() if slot1.exists() else None
+    slot2_before=slot2.read_bytes() if slot2.exists() else None
+    v4_before=V4_JOURNAL.read_bytes() if V4_JOURNAL.exists() else None
+    identity=dict(version=5,baseline=baseline,controller=controller,manifest=manifest,
+                  bundle_commit=commit,bundle_branch=branch,stage_sha256=stage_sha,
+                  dispatch_sha256=dispatch_sha,schema=V5_SCHEMA,
+                  git_desired=git_desired,
+                  slot1_before_sha256=bytes_sha(slot1_before) if slot1_before else None,
+                  slot2_before_sha256=bytes_sha(slot2_before) if slot2_before else None,
+                  v4_journal_sha256=bytes_sha(v4_before) if v4_before else None)
+    paths=_v5_paths()
+    if os.path.lexists(journal):
+        j=loads(regular_bytes(journal))
+        need(isinstance(j,dict) and j.get('schema')==V5_SCHEMA and j.get('identity')==identity,
+             'V5 journal identity/schema differs; separate reconciliation required')
+        changes=j['changes']
+        need(type(j.get('applied')) is list and type(j.get('restored')) is list,'invalid V5 progress')
+        if action=='verify':
+            need(j['phase']=='installed-disabled','V5 verify requires installed-disabled phase')
+            quiet_v5();_v5_current(j)
+            for n in V5_TARGETS:
+                need(sha(INSTALL/n)==git_desired[n]==changes[n]['after']['sha256'],
+                     'V5 verify Git blob drift: '+n)
+            for key in ('policy','agy_marker','inventory'):
+                need(sha(paths[key])==changes[key]['after']['sha256'],
+                     'V5 verify metadata pin drift: '+key)
+            policy=loads(regular_bytes(receiver.POLICY))
+            need(policy.get('mode')=='disabled' and policy.get('controller_sha')==controller
+                 and policy.get('stage_workflow_sha256')==stage_sha,
+                 'V5 verify disabled policy binding drift')
+            need((slot1.read_bytes() if slot1.exists() else None)==slot1_before
+                 and (slot2.read_bytes() if slot2.exists() else None)==slot2_before,
+                 'V5 verify must not rewrite historical slot journals')
+            need((V4_JOURNAL.read_bytes() if V4_JOURNAL.exists() else None)==v4_before,
+                 'V5 must preserve completed V4 journal')
+            return dict(phase='installed-disabled',version=5,verified=True,ready=False,
+                        role_qualified=False,preserved_slot_pending=True,policy_writes=1)
+        if action=='activate':
+            need(j['phase'] in ('installed-disabled','activating-proof'),
+                 'V5 activate requires installed-disabled')
+            need(type(run_id) is int and run_id>0,'exact hosted run required')
+            quiet_v5();_v5_current(j)
+            policy=loads(regular_bytes(receiver.POLICY))
+            need(policy.get('mode')=='disabled' and policy.get('controller_sha')==controller
+                 and policy.get('stage_workflow_sha256')==stage_sha,
+                 'V5 activate disabled policy binding required')
+            for n in V5_TARGETS:
+                need(sha(INSTALL/n)==git_desired[n]==changes[n]['after']['sha256'],
+                     'V5 activate Git blob drift: '+n)
+            j['phase']='activating-proof';_v5_save(j,journal)
+            proof=probe(run_id,dict(j,dispatch_sha256=dispatch_sha))
+            quiet_v5();_v5_current(j)
+            active_policy=dict(policy,mode='active')
+            atomic_bytes(receiver.POLICY,encoded(active_policy),
+                         canonical_meta(bytes_sha(encoded(active_policy))),
+                         expected=changes['policy']['after'])
+            j.update(phase='proof-recorded',shadow=proof);_v5_save(j,journal)
+            return dict(phase='proof-recorded',version=5,shadow=proof,ready=False,
+                        role_qualified=False,preserved_slot_pending=True,policy_writes=1)
+        if action=='rollback':
+            need(j['phase'] in ('preparing','applying','installed-disabled','activating-proof',
+                                'rolling-back'),
+                 'V5 rollback phase unsupported')
+            # Pre-write preparing/applying: OLD policy may still be active. Validate exact
+            # BEFORE CAS for all managed targets before the post-write disabled-policy gate.
+            if j['phase'] in ('preparing','applying') and not j.get('applied'):
+                intent=j.get('write_intent')
+                if intent and intent.get('action')=='apply':
+                    n=intent['target']
+                    if current(paths[n])==j['changes'][n]['after']:
+                        j['applied']=list(j.get('applied') or [])+[n]
+                    j['write_intent']=None
+                if not j.get('applied'):
+                    for n,row in j['changes'].items():
+                        need(current(paths[n])==row['before'],
+                             'V5 pre-write rollback BEFORE CAS drift: '+n)
+                    j['phase']='rolled-back';_v5_save(j,journal)
+                    return dict(phase='rolled-back',state_preserved=True,noop=True)
+            need(loads(regular_bytes(receiver.POLICY)).get('mode')=='disabled',
+                 'V5 rollback refuses after active policy; separate reconciliation')
+            if j.get('write_intent') and j['write_intent'].get('action')=='apply':
+                n=j['write_intent']['target']
+                if current(paths[n])==j['changes'][n]['after'] and n not in j['applied']:
+                    j['applied'].append(n)
+                j['write_intent']=None
+            j['phase']='rolling-back';_v5_save(j,journal)
+            order=list(reversed(j['applied']))
+            for name in order[len(j['restored']):]:
+                quiet_v5();_v5_current(j)
+                j['write_intent']=dict(action='rollback',target=name);_v5_save(j,journal)
+                _v5_restore_one(j,name,paths,backup)
+                j['restored'].append(name);j['write_intent']=None;_v5_save(j,journal)
+            need((slot1.read_bytes() if slot1.exists() else None)==slot1_before
+                 and (slot2.read_bytes() if slot2.exists() else None)==slot2_before,
+                 'V5 rollback must not rewrite historical slot journals')
+            need((V4_JOURNAL.read_bytes() if V4_JOURNAL.exists() else None)==v4_before,
+                 'V5 rollback must preserve completed V4 journal')
+            j['phase']='rolled-back';_v5_save(j,journal)
+            return dict(phase='rolled-back',state_preserved=True,ready=False)
+        need(False,'V5 prior journal exists; use verify/activate/rollback (apply refused)')
+    changes,target=_v5_plan(lib_target,baseline,controller,stage_sha)
+    for n in V5_TARGETS:
+        need(changes[n]['after']['sha256']==git_desired[n],'V5 plan/Git desired mismatch: '+n)
+    if action=='dry':
+        return dict(dry=True,status='PLANNED_GENERAL_PRODUCT_QA_UPGRADE',version=5,changes=changes,
+                    preserved_slot_pending=True,role_qualified=False,ready=False,policy_writes=1,
+                    git_commit=commit,git_desired=git_desired)
+    need(action=='apply','V5 verify/activate/rollback require existing journal; apply first')
+    need(not os.path.lexists(backup),'prior V5 backup exists; inspect/rollback')
+    j=dict(schema=V5_SCHEMA,identity=identity,identity_sha256=digest(identity),
+           phase='preparing',installed_at=int(time.time()),changes=changes,
+           preserved_slot1=identity['slot1_before_sha256'],
+           preserved_slot2=identity['slot2_before_sha256'],
+           applied=[],restored=[],write_intent=None)
+    _v5_save(j,journal)
+    backup.mkdir(mode=0o700)
+    order=_v5_order()
+    for name in order:
+        path=paths[name]
+        before=changes[name]['before']
+        if before is None:
+            need(not os.path.lexists(path),'pre-backup absent drift: '+name)
+            continue
+        raw,_=read_file(path)
+        need(bytes_sha(raw)==before['sha256'],'pre-backup OLD drift: '+name)
+        atomic_bytes(backup/_v5_backup_name(name),raw,
+                     canonical_meta(before['sha256'],0o600),expected=None)
+    quiet_v5();_v5_current(j)
+    j['phase']='applying';_v5_save(j,journal)
+    for name in order:
+        quiet_v5();_v5_current(j)
+        j['write_intent']=dict(action='apply',target=name);_v5_save(j,journal)
+        atomic_bytes(paths[name],target[name],changes[name]['after'],
+                     expected=changes[name]['before'])
+        j['applied'].append(name);j['write_intent']=None;_v5_save(j,journal)
+    need((slot1.read_bytes() if slot1.exists() else None)==slot1_before
+         and (slot2.read_bytes() if slot2.exists() else None)==slot2_before,
+         'V5 install must not rewrite historical slot journals')
+    need((V4_JOURNAL.read_bytes() if V4_JOURNAL.exists() else None)==v4_before,
+         'V5 install must preserve completed V4 journal')
+    quiet_v5();_v5_current(j)
+    for n in V5_TARGETS:
+        need(sha(INSTALL/n)==git_desired[n],'V5 installed bytes != accepted Git blob: '+n)
+    j['phase']='installed-disabled';_v5_save(j,journal)
+    return dict(phase='installed-disabled',version=5,state_preserved=True,
+                preserved_slot_pending=True,role_qualified=False,ready=False,
+                policy_writes=1,applied=list(j['applied']),git_commit=commit)
+
+
+
 def unlink_cas(path,expected):
     parent=directory_fd(path.parent)
     try:
@@ -1462,7 +1970,7 @@ def main():
     parser.add_argument('--controller',required=True)
     parser.add_argument('--stage-hash',required=True);parser.add_argument('--dispatch-hash',required=True)
     parser.add_argument('--bundle-commit');parser.add_argument('--bundle-branch',default='dev')
-    parser.add_argument('--version',type=int,choices=(2,3,4),default=2)
+    parser.add_argument('--version',type=int,choices=(2,3,4,5),default=2)
     parser.add_argument('--run',type=int);a=parser.parse_args()
     path=STATE/'controller.lock'
     # Existing lock only, including dry: no O_CREAT, mkdir or managed byte writes.

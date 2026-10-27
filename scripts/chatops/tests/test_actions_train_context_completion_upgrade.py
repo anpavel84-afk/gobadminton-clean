@@ -8,6 +8,7 @@ import stat
 import subprocess
 import tempfile
 from types import SimpleNamespace
+import sys
 import unittest
 from unittest.mock import patch
 import test_actions_train_stage5_cursor_upgrade as v3
@@ -595,6 +596,360 @@ class ProductQaV4HybridImport(unittest.TestCase):
                     sys.modules.pop(mod, None)
                 if sys.path and sys.path[0] == str(tree):
                     sys.path.pop(0)
+
+
+
+class V5Fixture:
+    """Synthetic V5 transaction fixture reusing V4Fixture/Stage5Install primitives."""
+
+    def __init__(self, *, keep_old_workflow=False, stale_inventory=False):
+        self.f=f=v3.legacy.Stage5Install();f.setUp()
+        try: self.build(keep_old_workflow=keep_old_workflow,stale_inventory=stale_inventory)
+        except BaseException:
+            f.tearDown();raise
+
+    def build(self, *, keep_old_workflow=False, stale_inventory=False):
+        f=self.f
+        f.stack.enter_context(patch.object(U.os,'geteuid',return_value=os.getuid()))
+        self.v4_journal=f.state/'stage5-product-qa-admission.json'
+        self.v4_backup=f.state/'stage5-product-qa-admission-backup'
+        self.controller='c'*40
+        # OD-014A: per-controller journal/backup under existing STATE family.
+        self.v5_journal=f.state/('stage5-general-product-qa-%s.json'%self.controller)
+        self.v5_backup=f.state/('stage5-general-product-qa-backup-%s'%self.controller)
+        f.stack.enter_context(patch.object(U,'V4_JOURNAL',self.v4_journal))
+        f.stack.enter_context(patch.object(U,'V4_BACKUP',self.v4_backup))
+        f.stack.enter_context(patch.object(U,'quiet_v5'))
+        # Actual current policy identity — not a hardcoded d758 success gate.
+        self.baseline='b'*40
+        # Completed V4 journal/backup must remain byte-identical across V5.
+        self.v4_journal.write_bytes(json.dumps(dict(
+            schema=U.V4_SCHEMA, phase='proof-recorded', identity={'version':4},
+            applied=['core.py'], restored=[], changes={})).encode())
+        self.v4_bytes=self.v4_journal.read_bytes()
+        self.v4_backup.mkdir(mode=0o700)
+        (self.v4_backup/'core.py').write_bytes(b'v4-backup-core')
+        self.v4_backup_listing=sorted(p.name for p in self.v4_backup.iterdir())
+        self.before={n:('v5old '+n).encode() for n in U.V5_TARGETS}
+        self.after={n:('v5new '+n).encode() for n in U.V5_TARGETS}
+        # context_policy must remain rules_pin-valid Python (Stage5Install seed).
+        policy_src=(f.install/'context_policy.py').read_bytes()
+        untarget_raw={}
+        for n in U.V5_UNTARGET:
+            if n=='context_policy.py':
+                untarget_raw[n]=policy_src
+            else:
+                untarget_raw[n]=('v5untarget '+n).encode()
+        for n,raw in untarget_raw.items():
+            p=f.install/n;p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(raw)
+            src=f.bundle/U.PREFIX/n;src.parent.mkdir(parents=True,exist_ok=True);src.write_bytes(raw)
+            f.items[p]=src
+        for n,raw in self.before.items():
+            p=f.install/n;p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(raw)
+            src=f.bundle/U.PREFIX/n;src.parent.mkdir(parents=True,exist_ok=True)
+            src.write_bytes(self.after[n]);f.items[f.install/n]=src
+        wf=f.bundle/'.github/workflows'
+        ref=self.baseline if keep_old_workflow else self.controller
+        for name in ('train-stage.yml','train-dispatch.yml'):
+            (wf/name).write_text(('ref: '+ref+'\n')*2)
+        f.sh=H((wf/'train-stage.yml').read_bytes());f.dh=H((wf/'train-dispatch.yml').read_bytes())
+        f.refresh()
+        policy=dict(mode='active',controller_sha=self.baseline,stage_workflow_sha256=f.sh,
+                    recovery={'source_sha':self.baseline})
+        f.policy.write_text(json.dumps(policy,indent=2));self.policy=f.policy.read_bytes()
+        # Post-V4 AGY marker: C5 adapter_revision + ACTUAL installed module digests.
+        p=f.p/'agy_marker.json'
+        marker=dict(schema='GB_ANTIGRAVITY_QA_29_V1',phase='canary',
+                    adapter_revision=U.C5,
+                    modules={'native_guard.py':H(untarget_raw['native_guard.py']),
+                             'native_antigravity.py':H(self.before['native_antigravity.py'])},
+                    legacy_grants={'slot2':'preserved'},provenance='post-v4-fixture')
+        raw=json.dumps(marker,indent=2,sort_keys=True).encode()+b'\n';p.write_bytes(raw)
+        self.agy_marker=p;self.agy_marker_raw=raw
+        markers={'agy_marker':p,'cursor_marker':f.p/'cursor_marker.json'}
+        markers['cursor_marker'].write_bytes(b'{"phase":"ready"}\n')
+        present={str(f.install/n):raw for n,raw in self.before.items()}
+        for n,raw in untarget_raw.items(): present[str(f.install/n)]=raw
+        after_map={p:H(raw) for p,raw in present.items()}
+        if stale_inventory:
+            # Stale historical inventory hash must not block while type/owner still checked.
+            after_map[str(f.install/'core.py')]='0'*64
+        record=dict(manifest='v5 fixture inventory',
+                    after=after_map,
+                    before={'old':'history'},targets=['old install'])
+        f.inventory.write_text(json.dumps(record,indent=2));f.inventory.chmod(0o600)
+        self.inventory=f.inventory.read_bytes()
+        self.oldfiles=dict(present)
+        self.untarget_raw=untarget_raw
+        f.stack.enter_context(patch.object(U,'V3_MARKERS',markers))
+
+    def call(self,action):
+        f=self.f
+        return U.execute(action,f.bundle,f.manifest,self.controller,f.sh,f.dh,123,
+                         self.baseline,f.commit,'dev',5)
+
+    def close(self): self.f.tearDown()
+
+    def restored(self,case):
+        for p,raw in self.oldfiles.items(): case.assertEqual(Path(p).read_bytes(),raw,p)
+        for n,raw in self.before.items():
+            case.assertEqual((self.f.install/n).read_bytes(),raw,n)
+        case.assertEqual(self.agy_marker.read_bytes(),self.agy_marker_raw)
+        case.assertEqual(self.f.inventory.read_bytes(),self.inventory)
+        case.assertEqual(self.f.policy.read_bytes(),self.policy)
+        case.assertEqual(self.v4_journal.read_bytes(),self.v4_bytes)
+        case.assertEqual(sorted(p.name for p in self.v4_backup.iterdir()),self.v4_backup_listing)
+
+
+class GeneralProductQaV5Installer(unittest.TestCase):
+    def test_v5_schema_git_targets_not_manual_pins(self):
+        sys.path.insert(0, str(ROOT/'scripts/chatops/ops'))
+        import stage5_cursor_context_upgrade as Uv
+        self.assertEqual(Uv.V5_SCHEMA, 'GB_STAGE5_GENERAL_PRODUCT_QA_V5')
+        self.assertNotEqual(Uv.V5_SCHEMA, Uv.V4_SCHEMA)
+        self.assertEqual(set(Uv.V5_TARGETS), {
+            'core.py','receiver.py','stage.py','native_antigravity.py',
+            'owner_package_admission.py','client.py'})
+        self.assertIn('native_guard.py', Uv.V5_UNTARGET)
+        self.assertNotIn('native_antigravity.py', Uv.V5_UNTARGET)
+        self.assertNotIn('client.py', Uv.V5_UNTARGET)
+        # Historical baseline constant retained for docs only — not an execute gate.
+        self.assertEqual(Uv.V5_BASELINE, 'd75887f8d50e05aa5e3032a3302c91f23947be5d')
+        import inspect
+        src=inspect.getsource(Uv.execute_v5)
+        self.assertNotIn('baseline==V5_BASELINE', src)
+        self.assertNotIn('V5_NEW[n]', src)
+        self.assertIn('git_desired', src)
+        self.assertIn('_v5_tx_paths', src)
+
+    def test_v5_quiet_preserves_v4_and_historical(self):
+        import inspect
+        sys.path.insert(0, str(ROOT/'scripts/chatops/ops'))
+        import stage5_cursor_context_upgrade as Uv
+        src = inspect.getsource(Uv.quiet_v5)
+        self.assertIn('quiet_v4', src)
+        self.assertIn('V4_JOURNAL', src)
+        self.assertIn('_uid978_provider_procs_absent', src)
+
+    def test_v5_dry_apply_verify_rollback_roundtrip(self):
+        x=V5Fixture();self.addCleanup(x.close)
+        before={str(p):p.read_bytes() for p in x.f.p.rglob('*') if p.is_file()}
+        r=x.call('dry')
+        self.assertTrue(r['dry'])
+        self.assertEqual(r['status'],'PLANNED_GENERAL_PRODUCT_QA_UPGRADE')
+        self.assertEqual(before,{str(p):p.read_bytes() for p in x.f.p.rglob('*') if p.is_file()})
+        self.assertEqual(x.v4_journal.read_bytes(),x.v4_bytes)
+        self.assertEqual(r['git_desired'],{n:H(raw) for n,raw in x.after.items()})
+        r=x.call('apply')
+        self.assertEqual(r['phase'],'installed-disabled')
+        for n,raw in x.after.items():
+            self.assertEqual((x.f.install/n).read_bytes(),raw,n)
+        self.assertEqual(json.loads(x.f.policy.read_bytes())['mode'],'disabled')
+        self.assertEqual(x.v4_journal.read_bytes(),x.v4_bytes)
+        self.assertEqual(x.call('verify')['verified'],True)
+        x.call('rollback');x.restored(self)
+        self.assertEqual(x.v4_journal.read_bytes(),x.v4_bytes)
+
+    def test_v5_keep_old_workflow_child_release(self):
+        x=V5Fixture(keep_old_workflow=True);self.addCleanup(x.close)
+        r=x.call('dry')
+        self.assertTrue(r['dry'])
+        self.assertEqual(r['version'],5)
+
+    def test_v5_stale_inventory_hash_does_not_block(self):
+        x=V5Fixture(stale_inventory=True);self.addCleanup(x.close)
+        r=x.call('dry')
+        self.assertTrue(r['dry'])
+        r=x.call('apply')
+        self.assertEqual(r['phase'],'installed-disabled')
+        self.assertEqual((x.f.install/'core.py').read_bytes(),x.after['core.py'])
+
+    def test_v5_stale_manifest_argument_does_not_authorize_git_content(self):
+        x=V5Fixture();self.addCleanup(x.close)
+        r=U.execute('dry',x.f.bundle,'0'*64,x.controller,x.f.sh,x.f.dh,123,
+                    x.baseline,x.f.commit,'dev',5)
+        self.assertTrue(r['dry'])
+        source=x.f.bundle/U.PREFIX/'core.py'
+        source.write_bytes(source.read_bytes()+b'\ndirty\n')
+        with self.assertRaisesRegex(core.Refused,r'dirty bundle|Git blob differs'):
+            U.execute('dry',x.f.bundle,'0'*64,x.controller,x.f.sh,x.f.dh,123,
+                      x.baseline,x.f.commit,'dev',5)
+    def test_v5_git_blob_corruption_fails_verify(self):
+        x=V5Fixture();self.addCleanup(x.close)
+        x.call('apply')
+        path=x.f.install/'core.py'
+        path.write_bytes(path.read_bytes()+b'\n# corrupt\n')
+        with self.assertRaisesRegex(core.Refused,r'Git blob drift|foreign CAS drift'):
+            x.call('verify')
+
+    def test_v5_dirty_source_symlink_and_baseline_mismatch_refuse(self):
+        x=V5Fixture();self.addCleanup(x.close)
+        # Dirty bundle worktree vs Git blob.
+        src=x.f.bundle/U.PREFIX/'core.py'
+        original=src.read_bytes();src.write_bytes(original+b'\ndirty\n')
+        with self.assertRaisesRegex(core.Refused,r'dirty bundle|Git blob differs'):
+            x.call('dry')
+        src.write_bytes(original)
+        # Symlink target refused by untarget/type guards after apply path materialization.
+        x2=V5Fixture();self.addCleanup(x2.close)
+        guard=x2.f.install/'native_guard.py'
+        raw=guard.read_bytes();guard.unlink();guard.symlink_to('/tmp/gb-v5-symlink-target')
+        with self.assertRaisesRegex(core.Refused,r'untarget unsafe|symlink|nonregular'):
+            x2.call('dry')
+        guard.unlink();guard.write_bytes(raw)
+        # baseline must match ACTUAL policy controller_sha (not hardcoded d758).
+        x3=V5Fixture();self.addCleanup(x3.close)
+        with self.assertRaisesRegex(core.Refused,'baseline policy/controller'):
+            U.execute('dry',x3.f.bundle,x3.f.manifest,x3.controller,x3.f.sh,x3.f.dh,123,
+                      'e'*40,x3.f.commit,'dev',5)
+
+    def test_v5_untarget_content_drift_does_not_block_symlink_does(self):
+        """OD-014A: untarget legitimate version drift OK; unsafe type/owner HOLDs."""
+        x=V5Fixture();self.addCleanup(x.close)
+        x.call('apply')
+        path=x.f.install/'native_guard.py'
+        path.write_bytes(path.read_bytes()+b'\n# legitimate newer untarget\n')
+        # Content drift alone must not HOLD verify (no manual frozen hash gate).
+        self.assertTrue(x.call('verify')['verified'])
+        x2=V5Fixture();self.addCleanup(x2.close)
+        x2.call('apply')
+        path2=x2.f.install/'native_guard.py'
+        os.chmod(path2, 0o666)
+        with self.assertRaisesRegex(core.Refused,'untarget unsafe'):
+            x2.call('verify')
+
+    def test_v5_future_controller_not_blocked_by_prior_completed_journal(self):
+        x=V5Fixture();self.addCleanup(x.close)
+        x.call('apply')
+        self.assertTrue(x.v5_journal.exists())
+        other='d'*40
+        jpath,bpath=U._v5_tx_paths(other)
+        self.assertIn(other, str(jpath))
+        self.assertIn(other, str(bpath))
+        self.assertNotEqual(jpath, x.v5_journal)
+        # Prior completed journal for controller C must not be the path for D.
+        self.assertFalse(jpath.exists())
+
+    def test_v5_uid978_process_presence_refused(self):
+        import inspect
+        sys.path.insert(0, str(ROOT/'scripts/chatops/ops'))
+        import stage5_cursor_context_upgrade as Uv
+        src=inspect.getsource(Uv._uid978_provider_procs_absent)
+        self.assertIn('/proc/', src)
+        self.assertIn('Uid:', src)
+        self.assertIn('cmdline', src)
+        self.assertNotIn('os.kill', src)
+        self.assertNotIn('chmod(', src)
+        self.assertNotIn('subprocess', src)
+        with tempfile.TemporaryDirectory(prefix='v5-uid978-') as tmp:
+            root=Path(tmp);proc=root/'proc';proc.mkdir()
+            entry=proc/'424242';entry.mkdir()
+            (entry/'status').write_bytes(b'Name:\tagy\nUid:\t978\t978\t978\t978\n')
+            (entry/'cmdline').write_bytes(b'/opt/gb-slots/runtime/antigravity/agy\0--qa\0')
+            real_listdir=os.listdir
+            def listdir(path):
+                if path=='/proc': return ['424242','self']
+                return real_listdir(path)
+            real_open=open
+            def fake_open(path,*a,**kw):
+                text=str(path)
+                if text.startswith('/proc/424242/'):
+                    return real_open(entry/Path(text).name,*a,**kw)
+                return real_open(path,*a,**kw)
+            with patch.object(Uv.os,'listdir',side_effect=listdir), \
+                 patch('builtins.open',side_effect=fake_open):
+                with self.assertRaisesRegex(core.Refused,'UID978 provider process'):
+                    Uv._uid978_provider_procs_absent()
+            (entry/'cmdline').write_bytes(b'/usr/bin/sleep\010\0')
+            with patch.object(Uv.os,'listdir',side_effect=listdir), \
+                 patch('builtins.open',side_effect=fake_open):
+                Uv._uid978_provider_procs_absent()
+
+    def test_v5_pending_resource_conflict_refused(self):
+        x=V5Fixture();self.addCleanup(x.close)
+        with patch.object(U,'quiet_v5',side_effect=core.Refused(
+                'product QA operation still pending/UNKNOWN HOLD')):
+            with self.assertRaisesRegex(core.Refused,'pending/UNKNOWN HOLD'):
+                x.call('dry')
+
+    def test_v5_post_v4_marker_actual_pins_preserve_legacy(self):
+        """QA-01: marker uses ACTUAL module digests; legacy non-module fields preserved."""
+        sys.path.insert(0, str(ROOT/'scripts/chatops/ops'))
+        import stage5_cursor_context_upgrade as Uv
+        oldpins={'native_guard.py':'a'*64,'native_antigravity.py':'b'*64}
+        newpins={'native_guard.py':'a'*64,'native_antigravity.py':'c'*64}
+        marker=dict(schema='GB_ANTIGRAVITY_QA_29_V1',phase='canary',
+                    adapter_revision=Uv.C5,modules=dict(oldpins),
+                    legacy_grants={'keep':'yes'},provenance='installed358')
+        raw=json.dumps(marker,indent=2,sort_keys=True).encode()+b'\n'
+        after=Uv._v5_agy_marker_pins_only(raw,newpins,oldpins)
+        parsed=json.loads(after)
+        self.assertEqual(parsed['adapter_revision'], Uv.C5)
+        self.assertEqual(parsed['legacy_grants'], {'keep':'yes'})
+        self.assertEqual(parsed['provenance'], 'installed358')
+        self.assertEqual(parsed['modules']['native_guard.py'], 'a'*64)
+        self.assertEqual(parsed['modules']['native_antigravity.py'], 'c'*64)
+        stale=dict(marker,adapter_revision='d'*40,modules={
+            'native_guard.py':'e'*64,'native_antigravity.py':'f'*64})
+        updated=json.loads(Uv._v5_agy_marker_pins_only(
+            json.dumps(stale,sort_keys=True).encode(),newpins,oldpins))
+        self.assertEqual(updated['modules'],newpins)
+        self.assertEqual(updated['adapter_revision'],'d'*40)
+        self.assertEqual(updated['legacy_grants'],marker['legacy_grants'])
+        with self.assertRaisesRegex(core.Refused,'AGY canary module contract drift'):
+            Uv.module_pins_only(raw,'agy_marker',newpins)
+        x=V5Fixture();self.addCleanup(x.close)
+        self.assertEqual(Uv.C5, '41e12be2d551158e97ea30eaf8e95f992f998615')
+        r=x.call('dry')
+        self.assertTrue(r['dry'])
+        self.assertIn('agy_marker', r['changes'])
+
+    def test_v5_prebackup_and_prepolicy_interruption_noop_rollback(self):
+        """QA-03: pre-write interruption rolls back as no-op while OLD policy active."""
+        x=V5Fixture();self.addCleanup(x.close)
+        atomic=U.atomic_bytes
+        def crash_backup(p,raw,meta,**kw):
+            if str(p).startswith(str(x.v5_backup)):
+                raise InterruptedError('pre-backup')
+            return atomic(p,raw,meta,**kw)
+        with patch.object(U,'atomic_bytes',side_effect=crash_backup), \
+             self.assertRaises(InterruptedError):
+            x.call('apply')
+        j=json.loads(x.v5_journal.read_bytes())
+        self.assertEqual(j['phase'],'preparing')
+        self.assertEqual(j['applied'],[])
+        self.assertEqual(json.loads(x.f.policy.read_bytes())['mode'],'active')
+        r=x.call('rollback')
+        self.assertTrue(r.get('noop'))
+        self.assertEqual(r['phase'],'rolled-back')
+        x.restored(self)
+        x3=V5Fixture();self.addCleanup(x3.close)
+        fired=False
+        def crash_policy(p,raw,meta,**kw):
+            nonlocal fired
+            if (not fired and p==x3.f.policy):
+                fired=True
+                raise InterruptedError('pre-policy')
+            return atomic(p,raw,meta,**kw)
+        with patch.object(U,'atomic_bytes',side_effect=crash_policy), \
+             self.assertRaises(InterruptedError):
+            x3.call('apply')
+        j3=json.loads(x3.v5_journal.read_bytes())
+        self.assertEqual(j3['phase'],'applying')
+        self.assertEqual(j3['applied'],[])
+        self.assertEqual(json.loads(x3.f.policy.read_bytes())['mode'],'active')
+        r3=x3.call('rollback')
+        self.assertTrue(r3.get('noop'))
+        x3.restored(self)
+        x4=V5Fixture();self.addCleanup(x4.close)
+        x4.call('apply')
+        with patch.object(U,'probe',return_value={'run':123,'ok':True}):
+            x4.call('activate')
+        self.assertEqual(json.loads(x4.f.policy.read_bytes())['mode'],'active')
+        self.assertEqual(json.loads(x4.v5_journal.read_bytes())['phase'],'proof-recorded')
+        with self.assertRaisesRegex(core.Refused,
+                r'refuses after active policy|rollback phase unsupported'):
+            x4.call('rollback')
 
 
 class ProductQaFinishEvidence(unittest.TestCase):

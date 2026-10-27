@@ -11,7 +11,7 @@ import subprocess
 import sys
 import time
 from types import SimpleNamespace
-from core import HERE, STAGES, Refused, binding, digest, live, loads, need, request
+from core import HERE, SHA, STAGES, Refused, binding, digest, live, loads, need, request
 import qa_recovery
 
 POLICY = Path('/etc/gobadminton-actions-train/policy.json')
@@ -214,12 +214,91 @@ def product_qa_ops():
     return dict(schema='GB_PRODUCT_QA_OPS_V1', generation=0, operations={}, pending=None, last=None)
 
 
-def find_product_admission():
-    """Load the single eligible Root product QA admission, if any.
+def _product_assignment_id(admission):
+    """Semantic review-contract identity for product QA consume/idempotency.
+
+    Includes schema/model/repo/source/policy attempt plus acceptance/allowed_paths
+    when present. Excludes transport-only metadata: owner_comment, admitted_at,
+    body_sha256, owner_id, and physical work/snapshot path. Distinct review
+    criteria with the same controller/issue/base/head/attempt are distinct
+    assignments (must not reuse a prior PASS/FAIL).
+    """
+    if not isinstance(admission, dict):
+        return None
+    issue, attempt = admission.get('issue'), admission.get('attempt')
+    base, head = admission.get('source_base'), admission.get('source_sha')
+    controller = admission.get('controller_sha')
+    schema, model, repo = admission.get('schema'), admission.get('model'), admission.get('repo_id')
+    max_calls = admission.get('max_calls')
+    if not (type(issue) is int and type(attempt) is int
+            and isinstance(base, str) and isinstance(head, str)
+            and isinstance(controller, str) and isinstance(schema, str)
+            and isinstance(model, str) and type(repo) is int
+            and type(max_calls) is int):
+        return None
+    acceptance = admission.get('acceptance')
+    allowed = admission.get('allowed_paths')
+    if allowed is not None and type(allowed) is not list:
+        return None
+    # V2 accepts string OR list; nested lists are not hashable, so encode every
+    # supported form as a deterministic digest (canonical JSON preserves type).
+    if acceptance is None:
+        acceptance_key = None
+    elif type(acceptance) is str or (
+            type(acceptance) is list and all(type(item) is str for item in acceptance)):
+        acceptance_key = digest(acceptance)
+    else:
+        return None
+    return (schema, controller, issue, repo, base, head, attempt, model, max_calls,
+            acceptance_key, tuple(allowed) if isinstance(allowed, list) else None)
+
+
+def _product_ops_match(prior, admission, admission_digest):
+    """Same reserved admission digest OR same stable assignment identity."""
+    if prior.get('admission_sha256') == admission_digest:
+        return True
+    assignment = _product_assignment_id(admission)
+    if assignment is None:
+        return False
+    prior_adm = prior.get('admission')
+    return _product_assignment_id(prior_adm) == assignment
+
+
+def _product_admission_class(admission, *, controller, ops):
+    """Classify ledger: eligible / consumed / pending / history / incompatible.
+
+    Retains all bytes; never deletes. Different controller → history (not retarget).
+    Pending UNKNOWN → never eligible for a new paid launch.
+    """
+    import owner_package_admission as A
+    try:
+        A.product_qa_ledger(admission)
+    except (Refused, ValueError, TypeError, KeyError):
+        return 'incompatible'
+    if controller is not None and admission.get('controller_sha') != controller:
+        return 'history'
+    admission_digest = digest(admission)
+    for existing_key, prior in (ops or {}).get('operations', {}).items():
+        if not _product_ops_match(prior, admission, admission_digest):
+            continue
+        if (ops or {}).get('pending') == existing_key:
+            return 'pending'
+        if prior.get('result') is not None:
+            return 'consumed'
+    return 'eligible'
+
+
+def find_product_admission(*, controller=None, ops=None):
+    """Deterministic next eligible Root product QA admission, if any.
 
     Canonical ledger names are product-qa-admission-<Owner-comment-id>.json.
     Receipts (product-qa-admission-receipt-*.json) share the same prefix glob and
-    must be ignored — never deleted or renamed.
+    must be ignored — never deleted or renamed. Numeric-prefix receipts never
+    count as admissions. Completed/consumed/history/different-controller ledgers
+    stay on disk and do not block the next eligible admission. Independent ready
+    Issues form a sequential queue (oldest admitted_at / owner_comment first).
+    Truly conflicting eligible assignments for the same Issue/attempt (distinct
+    heads/bases) fail closed. Pending UNKNOWN never replays.
     """
     import re
     import owner_package_admission as A
@@ -230,35 +309,61 @@ def find_product_admission():
         if ledger_name.fullmatch(path.name))
     if not matches:
         return None
-    need(len(matches) == 1, 'ambiguous product QA admissions')
-    return A.product_qa_ledger(read(matches[0], 0))
+    if ops is None:
+        try:
+            ops = product_qa_ops()
+        except (OSError, Refused, ValueError, TypeError, KeyError):
+            ops = dict(schema='GB_PRODUCT_QA_OPS_V1', generation=0,
+                       operations={}, pending=None, last=None)
+    eligible = []
+    for path in matches:
+        admission = read(path, 0)
+        kind = _product_admission_class(admission, controller=controller, ops=ops)
+        if kind == 'incompatible':
+            # Surface invalid ledger bytes; do not skip silently.
+            A.product_qa_ledger(admission)
+        if kind == 'eligible':
+            eligible.append(A.product_qa_ledger(admission))
+    if not eligible:
+        return None
+    # Same Issue/attempt with distinct semantic assignments (head/base OR review
+    # contract/model/policy) is a real conflict, not a queue — fail closed.
+    by_issue_attempt = {}
+    for admission in eligible:
+        key = (admission['issue'], admission['attempt'])
+        by_issue_attempt.setdefault(key, []).append(admission)
+    for group in by_issue_attempt.values():
+        ids = {_product_assignment_id(item) for item in group}
+        need(None not in ids and len(ids) == 1,
+             'ambiguous/conflicting product QA admissions')
+    # One-writer sequential queue: oldest admitted_at, then numeric owner_comment.
+    eligible.sort(key=lambda item: (
+        item['admitted_at'] if type(item.get('admitted_at')) is int else 0,
+        item['owner_comment'] if type(item.get('owner_comment')) is int else 0))
+    return eligible[0]
 
 
 def product_qa_plan(policy, card, budget):
     """Eligible product QA-only stage; independent of historical slot2 pending/journal."""
     if policy.get('mode') != 'active' or not card.get('owned'):
         return None
-    from native_antigravity import PRODUCT_ISSUE, PRODUCT_SOURCE_SHA, PRODUCT_OPS, ReviewError, product_executor_ready
+    from native_antigravity import ReviewError, product_executor_ready
     try:
-        admission = find_product_admission()
-        if admission is None:
-            return None
         ops = product_qa_ops()
         if ops.get('pending'):
             return None  # UNKNOWN/running never replays
-        # Same operation fingerprint already finished -> no second paid launch.
-        for op in ops.get('operations', {}).values():
-            if (op.get('admission_sha256') == digest(admission)
-                    and op.get('result') is not None):
-                return None
+        admission = find_product_admission(controller=policy.get('controller_sha'), ops=ops)
+        if admission is None:
+            return None
         product_executor_ready()
-        budget.bind_issue(PRODUCT_ISSUE)
+        budget.bind_issue(admission['issue'])
         left = budget.remaining('agy', 'qa', 'slot2')
         if not (type(left) is int and left >= 1):
             return None
         # Generation tracks the product ops ledger, not historical slot2 pending.
-        return dict(slot='slot2', issue=PRODUCT_ISSUE, stage='product_qa', phase='idle',
-                    head=PRODUCT_SOURCE_SHA, attempt=0,
+        # Issue/head/attempt come from authorized admission, never fixed Issue346 constants.
+        return dict(slot='slot2', issue=admission['issue'], stage='product_qa', phase='idle',
+                    head=admission['source_sha'], attempt=admission['attempt'],
                     generation=ops.get('generation', 0), profile='agy')
     except (OSError, ValueError, ReviewError, Refused, KeyError, TypeError):
         return None
@@ -486,12 +591,32 @@ def supervisor(req, policy, key, root_lock):
     lock = locked(STATE / 'controller.lock')
     try:
         if product:
-            from native_antigravity import PRODUCT_OPS, PRODUCT_READY, PRODUCT_ISSUE, PRODUCT_SOURCE_SHA, MODEL
+            from native_antigravity import (PRODUCT_OPS, PRODUCT_READY, MODEL,
+                                           product_module_pins, EXECUTOR_UID)
             # Preserve historical slot journals byte- identically while finishing product ops.
             slot1_before = (STATE / 'slot1.json').read_bytes() if (STATE / 'slot1.json').exists() else None
             slot2_before = (STATE / 'slot2.json').read_bytes() if (STATE / 'slot2.json').exists() else None
             ops = product_qa_ops()
             op = ops['operations'][key]
+            admission = op.get('admission') or req.get('_product_admission') or {}
+            # Root validates returned Issue/head/attempt/taskdigest before acceptance.
+            # Confirmed QA must carry explicit PASS/FAIL and exact reviewed_sha (None → HOLD).
+            qa = value.get('qa') or {}
+            receipt = value.get('native_receipt') or {}
+            reviewed = qa.get('reviewed_sha')
+            if value.get('status') == 'confirmed':
+                bound_ok = (
+                    req.get('issue') == admission.get('issue')
+                    and req.get('head') == admission.get('source_sha')
+                    and req.get('attempt') == admission.get('attempt')
+                    and receipt.get('product_task_sha256') == op.get('task_hash')
+                    and receipt.get('product_admission_sha256') == op.get('admission_sha256')
+                    and qa.get('verdict') in ('PASS', 'FAIL')
+                    and isinstance(reviewed, str) and SHA.fullmatch(reviewed)
+                    and reviewed == admission.get('source_sha'))
+                if not bound_ok:
+                    value = dict(status='unknown',
+                                 reason='product QA result binding mismatch; HOLD not READY')
             op.update(result=value, finished_at=int(time.time()))
             if value['status'] == 'confirmed':
                 ops['generation'] = ops.get('generation', 0) + 1
@@ -501,18 +626,52 @@ def supervisor(req, policy, key, root_lock):
                                workflow_run=req['run'], workflow_attempt=req['run_attempt'],
                                product_ready=bool(value.get('product_ready')),
                                receipt_file=value.get('receipt_file'))
+            # Factual product transition for hosted continue: confirmed validated
+            # PASS/FAIL only. Not author checkpoint `changed`; duplicates/UNKNOWN
+            # never set this envelope (already-consumed path does not rewrite last).
+            if (value['status'] == 'confirmed'
+                    and qa.get('verdict') in ('PASS', 'FAIL')
+                    and isinstance(reviewed, str) and SHA.fullmatch(reviewed)
+                    and reviewed == admission.get('source_sha')):
+                ops['last'].update(
+                    product_operation_changed=True,
+                    product_operation_transition=True,
+                    operation=key,
+                    head=admission.get('source_sha'),
+                    attempt=admission.get('attempt'),
+                    admission_sha256=op.get('admission_sha256'),
+                    task_digest=op.get('task_hash'),
+                    qa_verdict=qa.get('verdict'))
             if value['status'] != 'unknown':
                 ops['pending'] = None
             atomic(PRODUCT_OPS, ops)
-            # READY only after actual confirmed new QA PASS; never retro-accept old UNKNOWN.
+            # READY only after confirmed PASS on reserved exact source; bind module pins.
+            # Wrong/stale results stay HOLD/unknown above — never READY.
+            # Stale proof for other adapter pins may be atomically replaced after a new PASS.
             if (value.get('status') == 'confirmed' and value.get('product_ready')
                     and value.get('qualification_passed') is True
-                    and (value.get('qa') or {}).get('verdict') == 'PASS'
-                    and (value.get('qa') or {}).get('reviewed_sha') == PRODUCT_SOURCE_SHA):
-                if not PRODUCT_READY.exists():
+                    and qa.get('verdict') == 'PASS'
+                    and qa.get('reviewed_sha') == admission.get('source_sha')
+                    and req.get('issue') == admission.get('issue')
+                    and req.get('head') == admission.get('source_sha')
+                    and req.get('attempt') == admission.get('attempt')):
+                pins = product_module_pins()
+                write_ready = not PRODUCT_READY.exists()
+                if not write_ready:
+                    try:
+                        prior_ready = read(PRODUCT_READY, 0)
+                        prior_mods = prior_ready.get('modules') if isinstance(prior_ready, dict) else None
+                        write_ready = not (isinstance(prior_mods, dict)
+                            and prior_mods.get('native_antigravity.py') == pins['native_antigravity.py']
+                            and prior_mods.get('native_guard.py') == pins['native_guard.py'])
+                    except (OSError, Refused, ValueError, TypeError, KeyError):
+                        write_ready = True
+                if write_ready:
                     atomic(PRODUCT_READY, dict(
                         schema='GB_PRODUCT_QA_ROLE_READY_V1', phase='ready',
-                        issue=PRODUCT_ISSUE, source_sha=PRODUCT_SOURCE_SHA, model=MODEL,
+                        issue=admission['issue'], source_sha=admission['source_sha'],
+                        model=MODEL, executor_uid=EXECUTOR_UID,
+                        modules=pins,
                         verdict='PASS', operation=key,
                         receipt_file=value.get('receipt_file'),
                         confirmed_at=int(time.time())), mode=0o644)
@@ -780,8 +939,8 @@ def recovery_request(req, policy):
 
 def product_qa_request(req, policy):
     """One product QA-only operation on its own ledger. Never claims/resets slot journals."""
-    from native_antigravity import (PRODUCT_ISSUE, PRODUCT_SOURCE_SHA, PRODUCT_OPS,
-                                    product_executor_ready, product_work_ok, refuse_foreign_checkpoint)
+    from native_antigravity import (PRODUCT_OPS, product_executor_ready, product_work_ok,
+                                    refuse_foreign_checkpoint)
     import owner_package_admission as A
     key = digest(binding(req))
     ops = product_qa_ops()
@@ -792,22 +951,45 @@ def product_qa_request(req, policy):
                         reason='product QA never replays after unknown outcome')
         return dict(status=(op.get('result') or {}).get('status', 'unknown'), key=key,
                     result=op.get('result'), last=ops.get('last'))
-    need(req['issue'] == PRODUCT_ISSUE and req['head'] == PRODUCT_SOURCE_SHA,
-         'product QA issue/source mismatch')
     # Preserve historical slot journals byte- identically; only observe.
     slot1_before = (STATE / 'slot1.json').read_bytes() if (STATE / 'slot1.json').exists() else None
     slot2_before = (STATE / 'slot2.json').read_bytes() if (STATE / 'slot2.json').exists() else None
-    admission = find_product_admission()
-    need(admission is not None and admission['source_sha'] == PRODUCT_SOURCE_SHA
-         and admission['issue'] == PRODUCT_ISSUE
-         and admission['controller_sha'] == policy['controller_sha'],
+    controller = policy['controller_sha']
+    # Prefer eligible; if none, still resolve exact ledger matching req so the
+    # consume gate can return already-consumed (never silent retarget / double pay).
+    admission = find_product_admission(controller=controller, ops=ops)
+    if admission is None:
+        import re
+        ledger_name = re.compile(
+            r'^' + re.escape(A.PRODUCT_LEDGER_PREFIX) + r'[0-9]+\.json$')
+        matches = sorted(
+            path for path in STATE.glob(A.PRODUCT_LEDGER_PREFIX + '*.json')
+            if ledger_name.fullmatch(path.name))
+        for path in matches:
+            candidate = read(path, 0)
+            try:
+                A.product_qa_ledger(candidate)
+            except (Refused, ValueError, TypeError, KeyError):
+                continue
+            if (candidate.get('controller_sha') == controller
+                    and candidate.get('issue') == req['issue']
+                    and candidate.get('source_sha') == req['head']
+                    and candidate.get('attempt') == req['attempt']):
+                admission = candidate
+                break
+    need(admission is not None and admission['controller_sha'] == controller,
          'missing/edited product QA admission')
+    need(req['issue'] == admission['issue'] and req['head'] == admission['source_sha']
+         and req['attempt'] == admission['attempt'],
+         'product QA issue/source/attempt mismatch vs authorized admission')
     # Authoritative consume gate under controller.lock: one reservation/result per
-    # admission digest, regardless of generation/run/binding. Planner check alone
-    # is not the gate. Preserve UNKNOWN pending and all prior charges/history.
+    # admission digest OR semantic assignment identity (review contract/model/source/
+    # policy; not comment/body/owner/path), regardless of generation/run/binding or
+    # duplicate Owner comment. Planner check alone is not the gate. Preserve
+    # UNKNOWN pending and all prior charges/history.
     admission_digest = digest(admission)
     for existing_key, prior in ops.get('operations', {}).items():
-        if prior.get('admission_sha256') != admission_digest:
+        if not _product_ops_match(prior, admission, admission_digest):
             continue
         if ops.get('pending') == existing_key:
             return dict(status='running' if alive(prior.get('process')) else 'unknown',
@@ -818,21 +1000,22 @@ def product_qa_request(req, policy):
                     reason='product QA admission already consumed')
     need(ops.get('pending') is None and req['generation'] == ops.get('generation', 0),
          'stale/pending product QA generation')
-    A.validate_product_admission(admission, controller=policy['controller_sha'])
+    A.validate_product_admission(admission, controller=controller)
     refuse_foreign_checkpoint(admission['work'])
-    product_work_ok(admission['work'], PRODUCT_SOURCE_SHA)
+    product_work_ok(admission['work'], admission['source_sha'])
     # Executor home for UID978 only; do not require slot2 pending None.
     guard('slot2', policy)
     product_executor_ready()
     _, s = live()
     budget = s.Budget(BUDGET, AUTONOMY/'outbox', AUTONOMY/'locks/registry.lock')
-    budget.bind_issue(PRODUCT_ISSUE)
+    budget.bind_issue(admission['issue'])
     left = budget.remaining('agy', 'qa', 'slot2')
     need(type(left) is int and left >= 1, 'product QA requires finite eligible daily budget')
     free_lock(AUTONOMY / 'locks' / 'product-qa.lease')
-    task_hash = digest(dict(schema='GB_PRODUCT_QA_TASK_V1', issue=PRODUCT_ISSUE,
-                            source_sha=PRODUCT_SOURCE_SHA, admission=digest(admission),
-                            work=admission['work'], model=admission['model']))
+    task_hash = digest(dict(schema='GB_PRODUCT_QA_TASK_V1', issue=admission['issue'],
+                            source_sha=admission['source_sha'], admission=digest(admission),
+                            work=admission['work'], model=admission['model'],
+                            attempt=admission['attempt']))
     op = dict(task_hash=task_hash, admission_sha256=digest(admission),
               admission=admission, binding=binding(req),
               run=req['run'], run_attempt=req['run_attempt'],
@@ -849,6 +1032,7 @@ def product_qa_request(req, policy):
     pid = os.fork()
     if pid == 0:
         # Synthetic slot journal key for supervisor compatibility; product ops owns truth.
+        # Never open author/legacy Store checkpoint on the QA-only path.
         req = dict(req, _product_qa=True, _product_qa_key=key, _product_admission=admission,
                    _task_hash=task_hash)
         supervisor(req, policy, key, ROOT_LOCK)

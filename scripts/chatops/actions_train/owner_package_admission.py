@@ -568,14 +568,22 @@ def main():
         os.close(fd)
 
 
-# --- Product QA-only admission (Issue346 cleanup); independent of historical slot2/#29 ---
+# --- General reusable product QA admission; independent of historical slot2/#29 ---
+# V1 = immutable Issue346 cleanup ledger (exact legacy source). V2 = general product QA.
 PRODUCT_PREFIX='GOBADMINTON_PRODUCT_QA_V1\n'
 PRODUCT_SCHEMA='GB_PRODUCT_QA_ADMISSION_V1'
-PRODUCT_ISSUE=N.PRODUCT_ISSUE
-PRODUCT_SOURCE=N.PRODUCT_SOURCE_SHA
+PRODUCT_SCHEMA_V2='GB_PRODUCT_QA_ADMISSION_V2'
+PRODUCT_SCHEMAS=frozenset({PRODUCT_SCHEMA, PRODUCT_SCHEMA_V2})
+PRODUCT_ISSUE=N.LEGACY_PRODUCT_ISSUE
+PRODUCT_SOURCE=N.LEGACY_PRODUCT_SOURCE_SHA
 PRODUCT_LEDGER_PREFIX='product-qa-admission-'
 PRODUCT_RECEIPT_PREFIX='product-qa-admission-receipt-'
-PRODUCT_ISSUE_URL='https://api.github.com/repos/anpavel84-afk/gobadminton-clean/issues/346'
+PRODUCT_ISSUE_URL_PREFIX='https://api.github.com/repos/anpavel84-afk/gobadminton-clean/issues/'
+# Legacy alias only (Issue346); NEW admissions bind issue_url from Owner JSON issue field.
+PRODUCT_ISSUE_URL=PRODUCT_ISSUE_URL_PREFIX+'346'
+def product_issue_url(issue):
+    need(type(issue) is int and 1 <= issue <= 10**9, 'invalid product QA issue')
+    return PRODUCT_ISSUE_URL_PREFIX + str(issue)
 
 
 def product_owner_comment(comment_id):
@@ -590,37 +598,98 @@ def product_owner_comment(comment_id):
     need(len(raw)<=32768,'Owner comment too large')
     data=json.loads(raw)
     need(data.get('id')==comment_id
-         and data.get('issue_url')==PRODUCT_ISSUE_URL
          and data.get('user',{}).get('id')==OWNER_ID
          and data.get('user',{}).get('login')=='anpavel84-afk'
          and data.get('author_association') in ('OWNER','MEMBER','COLLABORATOR'),
-         'authenticated repository Owner Issue #346 comment required')
+         'authenticated repository Owner product QA comment required')
     body=data.get('body')
     need(type(body) is str and body.startswith(PRODUCT_PREFIX),'missing product QA Owner prefix')
     content=body[len(PRODUCT_PREFIX):]
     value=json.loads(content)
     need(json.dumps(value,sort_keys=True,separators=(',',':'))==content,
          'product QA Owner JSON not canonical')
+    need(type(value.get('issue')) is int and 1 <= value['issue'] <= 10**9,
+         'product QA Owner JSON missing issue')
+    need(data.get('issue_url')==product_issue_url(value['issue']),
+         'Owner comment wrong Issue URL for product QA admission')
     return body,value
 
 
-PRODUCT_ADMISSION_FIELDS=frozenset({
+PRODUCT_ADMISSION_CORE=frozenset({
     'schema','issue','repo_id','owner_comment','controller_sha','source_base','source_sha',
     'model','attempt','max_calls','work'})
+PRODUCT_ADMISSION_V2_EXTRA=frozenset({'acceptance','allowed_paths'})
+PRODUCT_ADMISSION_FIELDS=PRODUCT_ADMISSION_CORE  # V1 closed set
+PRODUCT_ADMISSION_FIELDS_V2=PRODUCT_ADMISSION_CORE|PRODUCT_ADMISSION_V2_EXTRA
 PRODUCT_LEDGER_EXTRA=frozenset({'owner_id','body_sha256','admitted_at'})
 
 
+def _validate_product_work(work):
+    need(type(work) is str and work.startswith('/') and '..' not in work.split('/')
+         and not work.endswith('/') and ' ' not in work
+         and any(work==str(base) or work.startswith(str(base)+'/') for base in N.PRODUCT_WORK_ROOTS),
+         'product work outside existing project repo/worktree roots')
+    need('/slots/slot1/' not in work,'foreign slot1 checkpoint path forbidden')
+    return work
+
+
+def _validate_acceptance(acceptance):
+    """Bounded nonempty per-task acceptance; no keyword classifier on Owner criteria."""
+    if type(acceptance) is str:
+        text=acceptance.strip()
+        need(1<=len(text)<=8192, 'product QA acceptance required')
+        return text
+    need(type(acceptance) is list and 1<=len(acceptance)<=32, 'invalid product QA acceptance list')
+    out=[]
+    for item in acceptance:
+        need(type(item) is str and 1<=len(item.strip())<=4096, 'invalid product QA acceptance item')
+        out.append(item.strip())
+    return out
+
+
+def _validate_allowed_paths(paths):
+    need(type(paths) is list and 1<=len(paths)<=256, 'product QA allowed_paths required')
+    out=[]
+    for item in paths:
+        need(type(item) is str and item and not item.startswith('/')
+             and '..' not in item.split('/') and ' ' not in item and len(item)<=512,
+             'invalid product QA allowed path')
+        out.append(item)
+    need(len(out)==len(set(out)), 'duplicate product QA allowed_paths')
+    return out
+
+
 def validate_product_admission(value, *, controller=None):
-    """Closed canonical fields only; no arbitrary root paths or commands."""
-    need(type(value) is dict and PRODUCT_ADMISSION_FIELDS <= set(value)
-         and set(value) <= PRODUCT_ADMISSION_FIELDS|PRODUCT_LEDGER_EXTRA,
-         'unexpected product QA authorization fields')
-    need(value['schema']==PRODUCT_SCHEMA and value['issue']==PRODUCT_ISSUE
-         and value['repo_id']==REPO_ID and value['source_sha']==PRODUCT_SOURCE
-         and value['model']==N.MODEL and value['max_calls']==1
-         and type(value['attempt']) is int and value['attempt']==1
-         and type(value['owner_comment']) is int and value['owner_comment']>0,
-         'product QA exact issue/source/model/budget drift')
+    """Closed canonical fields; issue/source from admission. No arbitrary root commands."""
+    need(type(value) is dict, 'unexpected product QA authorization fields')
+    schema=value.get('schema')
+    if schema==PRODUCT_SCHEMA:
+        need(PRODUCT_ADMISSION_FIELDS <= set(value)
+             and set(value) <= PRODUCT_ADMISSION_FIELDS|PRODUCT_LEDGER_EXTRA,
+             'unexpected product QA authorization fields')
+        # Immutable V1 Issue346 ledger only — exact legacy source; never silent retarget.
+        need(value['issue']==N.LEGACY_PRODUCT_ISSUE
+             and value['repo_id']==REPO_ID
+             and value['source_sha']==N.LEGACY_PRODUCT_SOURCE_SHA
+             and value['model']==N.MODEL and value['max_calls']==1
+             and type(value['attempt']) is int and 1<=value['attempt']<=3
+             and type(value['owner_comment']) is int and value['owner_comment']>0,
+             'product QA legacy V1 issue/source/model/budget drift')
+    elif schema==PRODUCT_SCHEMA_V2:
+        need(PRODUCT_ADMISSION_FIELDS_V2 <= set(value)
+             and set(value) <= PRODUCT_ADMISSION_FIELDS_V2|PRODUCT_LEDGER_EXTRA,
+             'unexpected product QA authorization fields')
+        need(type(value['issue']) is int and 1<=value['issue']<=10**9
+             and value['repo_id']==REPO_ID
+             and type(value['source_sha']) is str and re.fullmatch('[a-f0-9]{40}',value['source_sha'])
+             and value['model']==N.MODEL and value['max_calls']==1
+             and type(value['attempt']) is int and 1<=value['attempt']<=3
+             and type(value['owner_comment']) is int and value['owner_comment']>0,
+             'product QA V2 issue/source/model/budget drift')
+        _validate_acceptance(value['acceptance'])
+        _validate_allowed_paths(value['allowed_paths'])
+    else:
+        need(False, 'unexpected product QA authorization fields')
     need(type(value['source_base']) is str and re.fullmatch('[a-f0-9]{40}',value['source_base'])
          and value['source_base']!=value['source_sha'],
          'product QA source_base must be distinct parent SHA')
@@ -629,17 +698,12 @@ def validate_product_admission(value, *, controller=None):
     else:
         need(type(value['controller_sha']) is str and re.fullmatch('[a-f0-9]{40}',value['controller_sha']),
              'invalid product QA controller')
-    work=value['work']
-    need(type(work) is str and work.startswith('/') and '..' not in work.split('/')
-         and not work.endswith('/') and ' ' not in work
-         and any(work==str(base) or work.startswith(str(base)+'/') for base in N.PRODUCT_WORK_ROOTS),
-         'product work outside existing project repo/worktree roots')
-    need('/slots/slot1/' not in work,'foreign slot1 checkpoint path forbidden')
+    _validate_product_work(value['work'])
     return value
 
 
 def product_qa_ledger(value):
-    need(type(value) is dict and value.get('schema')==PRODUCT_SCHEMA, 'invalid product QA ledger')
+    need(type(value) is dict and value.get('schema') in PRODUCT_SCHEMAS, 'invalid product QA ledger')
     validate_product_admission(value)
     return value
 
@@ -694,7 +758,7 @@ def admit_product_qa(comment_id,*,dry=False):
             need(existing['owner_comment']==comment_id and existing['controller_sha']==controller,
                  'existing product QA admission drift')
             print(json.dumps(dict(status='ALREADY_ADMITTED',owner_comment=comment_id,
-                 source_sha=PRODUCT_SOURCE,issue=PRODUCT_ISSUE,
+                 source_sha=existing['source_sha'],issue=existing['issue'],
                  preserved_slot_pending=observed,models_started=0),sort_keys=True))
             return existing
         package=authorize_product_qa(comment_id,controller)
@@ -703,12 +767,12 @@ def admit_product_qa(comment_id,*,dry=False):
         slot2_before=sha(R.STATE/'slot2.json') if (R.STATE/'slot2.json').exists() else None
         transaction=dict(schema='GB_PRODUCT_QA_ADMISSION_TX_V1',phase='intent',
             owner_comment=comment_id,controller_sha=controller,
-            body_sha256=package['body_sha256'],source_sha=PRODUCT_SOURCE,
-            issue=PRODUCT_ISSUE,slot1_before_sha256=slot1_before,slot2_before_sha256=slot2_before,
+            body_sha256=package['body_sha256'],source_sha=package['source_sha'],
+            issue=package['issue'],slot1_before_sha256=slot1_before,slot2_before_sha256=slot2_before,
             observed=observed)
         if dry:
             print(json.dumps(dict(status='DRY_RUN_PASS',owner_comment=comment_id,
-                 source_sha=PRODUCT_SOURCE,issue=PRODUCT_ISSUE,provider_calls=0,
+                 source_sha=package['source_sha'],issue=package['issue'],provider_calls=0,
                  protected_writes=0,preserved_slot_pending=observed),sort_keys=True))
             return package
         R.atomic(receipt,transaction)
@@ -722,7 +786,7 @@ def admit_product_qa(comment_id,*,dry=False):
         R.atomic(receipt,dict(transaction,phase='complete',
                               package_sha256=hashlib.sha256(encoded(package)).hexdigest()))
         print(json.dumps(dict(status='ADMITTED',owner_comment=comment_id,
-             controller=controller,source_sha=PRODUCT_SOURCE,issue=PRODUCT_ISSUE,
+             controller=controller,source_sha=package['source_sha'],issue=package['issue'],
              receipt=str(receipt),models_started=0),sort_keys=True))
         return package
     finally:

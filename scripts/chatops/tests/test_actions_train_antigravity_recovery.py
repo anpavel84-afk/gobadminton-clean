@@ -352,19 +352,28 @@ class ProductQaExecutor(unittest.TestCase):
             self.assertTrue(ok)
 
     def test_product_ready_parser_completion_required(self):
-        # READY helper only accepts confirmed PASS shape; catalogue alone is insufficient.
+        # READY helper only accepts confirmed PASS shape bound to module pins/UID/model.
+        import hashlib
+        pins = N.product_module_pins()
         with tempfile.TemporaryDirectory() as tmp:
             ready=Path(tmp)/'ready.json'
             with patch.object(N,'PRODUCT_READY',ready):
                 self.assertFalse(N.product_role_ready())
                 ready.write_text(json.dumps(dict(schema='GB_PRODUCT_QA_ROLE_READY_V1',phase='ready',
-                    issue=346,source_sha=N.PRODUCT_SOURCE_SHA,model=N.MODEL,verdict='PASS',
-                    operation='a'*64)))
+                    issue=337,source_sha='9'*40,model=N.MODEL,executor_uid=N.EXECUTOR_UID,
+                    modules=pins,verdict='PASS',operation='a'*64)))
                 with patch.object(N,'trusted',side_effect=lambda p,owner=0,limit=65536:ready.read_bytes()):
                     self.assertTrue(N.product_role_ready())
                 ready.write_text(json.dumps(dict(schema='GB_PRODUCT_QA_ROLE_READY_V1',phase='ready',
-                    issue=346,source_sha=N.PRODUCT_SOURCE_SHA,model=N.MODEL,verdict='FAIL',
-                    operation='a'*64)))
+                    issue=337,source_sha='9'*40,model=N.MODEL,executor_uid=N.EXECUTOR_UID,
+                    modules=pins,verdict='FAIL',operation='a'*64)))
+                with patch.object(N,'trusted',side_effect=lambda p,owner=0,limit=65536:ready.read_bytes()):
+                    self.assertFalse(N.product_role_ready())
+                # Wrong module pin → not READY
+                bad=dict(pins); bad['native_antigravity.py']='0'*64
+                ready.write_text(json.dumps(dict(schema='GB_PRODUCT_QA_ROLE_READY_V1',phase='ready',
+                    issue=337,source_sha='9'*40,model=N.MODEL,executor_uid=N.EXECUTOR_UID,
+                    modules=bad,verdict='PASS',operation='a'*64)))
                 with patch.object(N,'trusted',side_effect=lambda p,owner=0,limit=65536:ready.read_bytes()):
                     self.assertFalse(N.product_role_ready())
 

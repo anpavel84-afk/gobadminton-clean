@@ -235,9 +235,20 @@ def execute(api, ssh, descriptor):
     Path('evidence/stage.json').write_text(json.dumps(value, sort_keys=True))
     last = value.get('last') or {}
     # Explicit dispatch bypasses GITHUB_TOKEN event suppression, only on a factual transition.
-    changed = (last.get('changed') and last.get('workflow_run') == req['run']
-               and last.get('workflow_attempt') == req['run_attempt']
-               and value['status'] in ('confirmed', 'deferred'))
+    author_changed = (last.get('changed') and last.get('workflow_run') == req['run']
+                      and last.get('workflow_attempt') == req['run_attempt']
+                      and value['status'] in ('confirmed', 'deferred'))
+    # Product QA: factual Root envelope (not author checkpoint `changed`). Same
+    # workflow run/attempt + confirmed validated PASS/FAIL only; duplicates /
+    # already-consumed / UNKNOWN do not signal a new transition.
+    product_changed = (
+        descriptor.get('stage') == 'product_qa'
+        and last.get('product_operation_changed') is True
+        and last.get('workflow_run') == req['run']
+        and last.get('workflow_attempt') == req['run_attempt']
+        and value['status'] == 'confirmed'
+        and last.get('qa_verdict') in ('PASS', 'FAIL'))
+    changed = bool(author_changed or product_changed)
     # The remote token is READ-ONLY. A separate hosted job owns actions:write continuation.
     with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
         out.write('changed=' + ('true' if changed else 'false') + '\n')

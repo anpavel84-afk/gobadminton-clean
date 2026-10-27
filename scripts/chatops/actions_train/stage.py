@@ -18,6 +18,60 @@ def _writer_lease(s, stage, active):
     return s.is_source_writer_stage(stage)
 
 
+def setup_product_qa(req, config, native_auth=None):
+    """Product QA-only: budget/context/receipt utilities; no author Store/worker checkpoint."""
+    a, s = live()
+    rt = s.Runtime(req['slot'], legacy_reads=a.RUNTIME_READS)
+    need(os.getuid() == 978 and os.geteuid() == 978 and os.getgid() != 0,
+         'product QA wrong UID/GID; Root/1002/author checkpoint forbidden')
+    rt.source_writer = False
+    issue = req.get('issue')
+    if type(issue) is int and issue > 0:
+        rt.budget.bind_issue(issue)
+    a.SLOT, a._SLOTS, a._SLOTS_HOLD, a.KEY = req['slot'], rt, s.Hold, rt.key
+    if not rt.legacy:
+        a.RUNTIME_READS = rt.runtime_reads
+    api = API(req.pop('gh_token'))
+    api.identity()
+    a.api, a.pages = api, api.pages
+    c = SimpleNamespace(repo=rt.layout.repo, state_dir=rt.layout.state_dir,
+                        worktrees_root=rt.layout.worktrees,
+                        known_hosts=Path('/etc/gobadminton-slots/slot2-known_hosts'),
+                        codex=config['codex'][req['slot']], model='gpt-6.1-sol', effort='high',
+                        model_timeout=1800, poll=1, wait_timeout=1, stage_route_enforced=True)
+    rt.check_paths(c.repo, c.state_dir, c.worktrees_root)
+    need(rt.continuity(), 'reviewed V6 continuity policy must be enabled')
+    # Immutable empty active snapshot — never open author Store/worker.lock/legacy CP.
+    store = SimpleNamespace(data={'active': None}, parked=[])
+    bridge = SimpleNamespace(c=c, work=None, routing_receipts=[])
+    from context_policy import load as load_rules
+    accepted_rules = load_rules()
+    from receiver import identity
+    original_subprocess = a.subprocess
+    trace = dict(schema='GB_ACTIONS_PROCESS_V1', stage=req['stage'], workflow_run=req['run'],
+                 workflow_attempt=req['run_attempt'], process=None, model=None,
+                 observed_at=int(time.time()))
+    def publish_process():
+        trace['observed_at'] = int(time.time())
+        a.atomic(rt.layout.outbox / 'actions-process.json', trace)
+    class ObservedSubprocess:
+        def __getattr__(self, name): return getattr(original_subprocess, name)
+        def Popen(self, argv, *args, **kwargs):
+            process = original_subprocess.Popen(argv, *args, **kwargs)
+            if argv[0] in ('/opt/gb-slots/runtime/antigravity/agy',):
+                try:
+                    trace['process'] = identity(process.pid)
+                    publish_process()
+                except BaseException:
+                    import signal
+                    os.killpg(process.pid, signal.SIGKILL)
+                    process.wait()
+                    raise
+            return process
+    a.subprocess = ObservedSubprocess()
+    return a, s, rt, api, store, bridge
+
+
 def setup(req, config, native_auth=None):
     a, s = live()
     rt = s.Runtime(req['slot'], legacy_reads=a.RUNTIME_READS)
@@ -555,9 +609,8 @@ def perform(req, config, context):
 
 
 def run_product_qa(req, config, context):
-    """Fresh product QA-only review for Issue346; never touches foreign slot1 checkpoint."""
-    from native_antigravity import (PRODUCT_ISSUE, PRODUCT_SOURCE_SHA,
-                                    product_executor_ready, product_work_ok,
+    """Fresh product QA-only review from authorized admission; never opens author checkpoint."""
+    from native_antigravity import (product_executor_ready, product_work_ok,
                                     review, save_receipt, MODEL)
     from context_policy import load
     from core import digest
@@ -567,27 +620,48 @@ def run_product_qa(req, config, context):
     need(os.getuid() == 978 and os.geteuid() == 978, 'product QA wrong UID; Root/1002 forbidden')
     # Actual admission work is the only path checked (product_work_ok → refuse_foreign).
     # Do not probe hardcoded slot1 paths (always-HOLD helper forbidden).
+    # Do not open author Store/worker checkpoint — QA-only uses admission snapshot.
     admission = req.get('_product_admission')
-    need(type(admission) is dict and admission.get('issue') == PRODUCT_ISSUE
-         and admission.get('source_sha') == PRODUCT_SOURCE_SHA
-         and admission.get('model') == MODEL,
+    need(type(admission) is dict
+         and admission.get('issue') == req.get('issue')
+         and admission.get('source_sha') == req.get('head')
+         and admission.get('model') == MODEL
+         and type(admission.get('source_base')) is str,
          'product QA admission missing/edited')
-    work = product_work_ok(admission['work'], PRODUCT_SOURCE_SHA)
+    source_sha = admission['source_sha']
+    work = product_work_ok(admission['work'], source_sha)
     marker = product_executor_ready(model=MODEL)
     before_store = digest(store.data)
-    # Do not claim/reset historical author active; product QA is QA-only.
-    text = ('Owner-authorized independent product QA for Issue346 cleanup at exact source '
-            + PRODUCT_SOURCE_SHA + '. Review the exact deleted smoke-probe cleanup only. '
+    # Acceptance / allowed_paths from admission (V2) or legacy V1 descriptive scope.
+    acceptance = admission.get('acceptance')
+    allowed = admission.get('allowed_paths')
+    if acceptance is None:
+        # Legacy V1 Issue346 immutable ledger only — keep historical wording for that fingerprint.
+        need(admission.get('schema') == 'GB_PRODUCT_QA_ADMISSION_V1'
+             and admission.get('issue') == 346,
+             'product QA V2 admission requires real acceptance/allowed_paths')
+        scope = ('Review the exact deleted smoke-probe cleanup only for the immutable '
+                 'Issue346 ledger fingerprint; do not invent broader product criteria.')
+    else:
+        if isinstance(acceptance, list):
+            scope = 'Acceptance criteria:\n- ' + '\n- '.join(acceptance)
+        else:
+            scope = 'Acceptance criteria: ' + str(acceptance)
+        if allowed:
+            scope += '\nAllowed paths: ' + ', '.join(allowed)
+    text = ('Owner-authorized independent product QA for Issue'
+            + str(admission['issue']) + ' at exact source ' + source_sha + '. '
+            + scope + ' '
             'Use native view_file, run_command and finish tools; a successful run_command DONE, '
             'view_file DONE and finish DONE with exact reviewed SHA are required. '
             'Candidate is read-only; never modify Git metadata, publish, or open foreign slot1 checkpoints.')
     accepted_rules = load()
     before_calls = rt.budget.used('agy', 'qa', req['slot'])
     task_hash = req.get('_task_hash') or digest(dict(schema='GB_PRODUCT_QA_TASK_V1',
-        issue=PRODUCT_ISSUE, source_sha=PRODUCT_SOURCE_SHA, admission=digest(admission),
-        work=admission['work'], model=MODEL))
+        issue=admission['issue'], source_sha=source_sha, admission=digest(admission),
+        work=admission['work'], model=MODEL, attempt=admission.get('attempt', 1)))
     result, receipt = review(work, admission['source_base'],
-        PRODUCT_SOURCE_SHA, text, 1800,
+        source_sha, text, 1800,
         slot=req['slot'], task_hash=task_hash,
         charge=lambda: rt.budget.charge(req['slot'], 'agy', 'qa'),
         popen=a.subprocess.Popen, accepted_rules=accepted_rules,
@@ -600,12 +674,12 @@ def run_product_qa(req, config, context):
     tools = set(receipt.get('tool_names') or [])
     # Native finish is STEP_TYPE finish DONE (finish_done), not a TOOL name in tool_names.
     passed = (result.get('verdict') == 'PASS'
-              and result.get('reviewed_sha') == PRODUCT_SOURCE_SHA
+              and result.get('reviewed_sha') == source_sha
               and 'run_command' in tools and 'view_file' in tools
               and receipt.get('finish_done') is True)
     receipt['product_qa_passed'] = passed
-    name = save_receipt(b.c.state_dir, PRODUCT_ISSUE, admission.get('attempt', 1), receipt)
-    # READY file is root-owned; supervisor materializes it only after confirmed PASS.
+    name = save_receipt(b.c.state_dir, admission['issue'], admission.get('attempt', 1), receipt)
+    # READY file is root-owned under /etc/gobadminton-slots; supervisor materializes after PASS.
     ready = bool(passed)
     return dict(status='confirmed', product_ready=ready, qualification_passed=passed,
                 qa=result, native_receipt=receipt, receipt_file=name,
@@ -672,11 +746,13 @@ def qualify_qa(req, config, context):
 def entry(req, config, native_auth=None):
     context = None
     try:
+        # Product QA-only path: never open author Store/worker checkpoint.
+        if req['stage'] == 'product_qa':
+            context = setup_product_qa(req, config, native_auth=native_auth)
+            return run_product_qa(req, config, context)
         context = setup(req, config, native_auth=native_auth)
         if req['stage'] == 'qa_qualification':
             return qualify_qa(req, config, context)
-        if req['stage'] == 'product_qa':
-            return run_product_qa(req, config, context)
         if req['stage'] in ('diagnose', 'task_review'):
             from recovery import perform as recover
             return recover(req, config, context)
