@@ -163,23 +163,32 @@ describe("proactive Radar soft refresh (#365)", () => {
   it("soft-refreshes before TTL without blank blink and keeps continuity past the original 45s wall", async () => {
     let time = now;
     let resolveRefresh!: (value: ReturnType<typeof ok>) => void;
+    let resolveFreshMap!: (value: ReturnType<typeof ok>) => void;
     const refreshPending = new Promise<ReturnType<typeof ok>>(resolve => { resolveRefresh = resolve; });
+    const freshMapPending = new Promise<ReturnType<typeof ok>>(resolve => { resolveFreshMap = resolve; });
     let queryCalls = 0;
+    let mapCalls = 0;
     let activeQueryRef = "query-ref-1";
-    const livePin = (): UnifiedRow => ({
+    const livePin = (id = "peer"): UnifiedRow => ({
       ...privateRow,
-      radar: { ...privateRow.radar!, validUntil: new Date(time + 45000).toISOString() },
+      publicPlayerId: id,
+      player: { ...privateRow.player, publicPlayerId: id, displayName: id },
+      radar: { ...privateRow.radar!, resultRef: `${id}-proof`, validUntil: new Date(time + 45000).toISOString() },
     });
     const request = vi.fn(async (path: string) => {
       if (String(path).endsWith("/map")) {
-        return ok({
-          ...snapshot([livePin()]),
-          generatedAt: new Date(time).toISOString(),
-          validUntil: new Date(time + 45000).toISOString(),
-          query: { ...snapshot().query, queryRef: activeQueryRef, originState: "authorized", originRef: "origin" },
-          items: [livePin()],
-          mapPage: { returnedCount: 1, rankStart: 1, rankEnd: 1, hasMore: false, nextMapCursor: null },
-        });
+        mapCalls += 1;
+        if (mapCalls === 1) {
+          return ok({
+            ...snapshot([livePin()]),
+            generatedAt: new Date(time).toISOString(),
+            validUntil: new Date(time + 45000).toISOString(),
+            query: { ...snapshot().query, queryRef: activeQueryRef, originState: "authorized", originRef: "origin" },
+            items: [livePin()],
+            mapPage: { returnedCount: 1, rankStart: 1, rankEnd: 1, hasMore: false, nextMapCursor: null },
+          });
+        }
+        return freshMapPending;
       }
       queryCalls += 1;
       if (queryCalls === 1) {
@@ -208,20 +217,36 @@ describe("proactive Radar soft refresh (#365)", () => {
     expect(c.view.mode).toBe("unified");
     time += 10000;
     resolveRefresh(ok({
-      ...snapshot([livePin()]),
+      ...snapshot([livePin("fresh")]),
       generatedAt: new Date(time).toISOString(),
       validUntil: new Date(time + 45000).toISOString(),
       query: { ...snapshot().query, queryRef: "query-ref-2", originState: "authorized", originRef: "origin" },
     }));
+    // Old pins remain while fresh map is still deferred.
+    await vi.waitFor(() => { expect(mapCalls).toBe(2); });
+    expect(c.view.pins).toHaveLength(1);
+    expect(c.view.pins[0]?.publicPlayerId).toBe("peer");
+    expect(c.view.snapshot?.query.queryRef).toBe("query-ref-1");
+    resolveFreshMap(ok({
+      ...snapshot([livePin("fresh")]),
+      generatedAt: new Date(time).toISOString(),
+      validUntil: new Date(time + 45000).toISOString(),
+      query: { ...snapshot().query, queryRef: "query-ref-2", originState: "authorized", originRef: "origin" },
+      items: [livePin("fresh")],
+      mapPage: { returnedCount: 1, rankStart: 1, rankEnd: 1, hasMore: false, nextMapCursor: null },
+    }));
     await refresh;
     expect(c.view.mode).toBe("unified");
     expect(c.view.snapshot?.query.queryRef).toBe("query-ref-2");
-    expect(c.view.pins).toEqual([]);
+    expect(c.view.pins.length).toBeGreaterThan(0);
+    expect(c.view.pins[0]?.publicPlayerId).toBe("fresh");
     expect(c.matches(filters, "activation:1")).toBe(true);
+    // Original wall was now+45s; fresh snapshot extends past it.
     time = now + 50000;
     c.tick();
     expect(c.view.snapshot).not.toBeNull();
     expect(c.view.mode).toBe("unified");
+    expect(c.view.pins.length).toBeGreaterThan(0);
   });
 });
 

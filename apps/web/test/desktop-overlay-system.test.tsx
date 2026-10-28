@@ -22,14 +22,14 @@ function elements(node: ReactNode): React.ReactElement<Record<string, unknown>>[
 it("DesktopOverlayHeader keeps Back independent of title and reuses CloseButton", () => {
   const onClose = vi.fn();
   const onBack = vi.fn();
-  const tree = (
-    <DesktopOverlayHeader
-      title="Capital Club"
-      back={{ label: "К площадке", onClick: onBack }}
-      onClose={onClose}
-      closeLabel="Закрыть"
-    />
-  );
+  // Invoke the thin presentational function so CloseButton is in the element tree
+  // (JSX <DesktopOverlayHeader> never descends into the function body).
+  const tree = DesktopOverlayHeader({
+    title: "Capital Club",
+    back: { label: "К площадке", onClick: onBack },
+    onClose,
+    closeLabel: "Закрыть",
+  });
   const html = renderToStaticMarkup(tree);
   expect(html).toContain("gb-desktop-overlay-header");
   expect(html).toContain("gb-desktop-overlay-header__back");

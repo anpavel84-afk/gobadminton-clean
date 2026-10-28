@@ -217,10 +217,14 @@ it("VenueSheet uses DesktopInspectorGame on desktop and keeps GameHero on mobile
 
 it("scopes compact desktop game styles without narrowing global GameHero", () => {
   const css = readFileSync(new URL("../src/styles/venue-popup.css", import.meta.url), "utf8");
+  const overlayCss = readFileSync(new URL("../src/styles/desktop-overlays.css", import.meta.url), "utf8");
   expect(css).toContain(".gb-desktop-inspector-game__title");
   expect(css).toContain("font-size:24px");
   expect(css).toContain("top:20px; right:20px; bottom:20px");
-  expect(css).toContain("padding:0 24px 24px");
+  // Owner «Просторный40»: content inset owned by overlay slots; popup content padding is 0.
+  expect(css).toContain("padding:0; box-sizing:border-box");
+  expect(overlayCss).toContain("--gb-overlay-inset: 40px");
+  expect(overlayCss).toContain("padding: 0 var(--gb-overlay-inset)");
   expect(css).toContain("align-content:start");
   expect(css).toContain(".gb-desktop-map-inspector .gb-venue-popup-content:has(.gb-desktop-inspector-game)");
   expect(css).toContain(".gb-desktop-inspector-game__actions .gb-venue-game-actions");

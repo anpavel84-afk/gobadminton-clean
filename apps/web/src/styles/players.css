@@ -222,9 +222,12 @@
 .fr3 .profile-dialog::backdrop { background:rgba(19,34,26,.55); }
 .fr3 .profile-dialog > header { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
 .fr3 .profile-dialog h2 { margin:0; font-size:28px; }
+/* Body wrapper is layout-transparent below desktop so former grid/gap/footer/forms stay intact. */
+.fr3 .profile-dialog__body { display:contents; }
 /* #365 «Просторный40»: desktop ProfileDialog slots (after base; wins cascade vs consumer import order). */
 @media (min-width:1024px) {
-  .fr3 .profile-dialog {
+  /* Only [open] — never force closed native <dialog> to display:flex. */
+  .fr3 .profile-dialog[open] {
     display:flex; flex-direction:column; padding:0; overflow:hidden;
     width:min(560px,calc(100vw - 48px)); border-radius:28px;
   }
@@ -240,10 +243,10 @@
     position:absolute; top:24px; right:24px;
   }
   .fr3 .profile-dialog__body {
-    flex:1 1 auto; min-height:0; overflow-x:clip; overflow-y:auto;
+    display:block; flex:1 1 auto; min-height:0; overflow-x:clip; overflow-y:auto;
     overscroll-behavior:contain; padding:16px 40px; box-sizing:border-box;
   }
-  .fr3 .profile-dialog--small { width:min(400px,calc(100vw - 48px)); }
+  .fr3 .profile-dialog--small[open] { width:min(400px,calc(100vw - 48px)); }
   .fr3 .profile-dialog--small > header,
   .fr3 .profile-dialog--small .profile-dialog__body { padding-left:32px; padding-right:32px; }
   .fr3 .profile-dialog--small > header { padding-right:calc(24px + 44px + 12px); }
