@@ -314,11 +314,17 @@
     display:grid; gap:16px; align-content:start; padding-bottom:16px;
   }
   .gb-desktop-inspector-game__actions {
-    flex:0 0 auto; padding:12px 0 20px; background:var(--gb-white);
+    flex:0 0 auto; padding:8px 0 16px; background:var(--gb-white);
     border-top:1px solid var(--gb-line);
   }
+  /* Nested card chrome is redundant inside the already-white inspector foot. */
   .gb-desktop-inspector-game__actions .gb-venue-game-actions {
-    margin:0; padding:12px; gap:10px;
+    margin:0; padding:0; gap:10px;
+    background:transparent; border:0; border-radius:0;
+  }
+  .gb-desktop-inspector-game__actions .gb-venue-game-actions-primary > .gb-c23-btn,
+  .gb-desktop-inspector-game__actions .gb-venue-game-actions .gb-game-share__button--text {
+    min-height:44px;
   }
   .gb-desktop-inspector-game__snapshot {
     display:grid; grid-template-columns:88px minmax(0,1fr); gap:14px; align-items:start;
@@ -358,6 +364,12 @@
     gap:10px; align-items:start; font-size:14px; line-height:1.4;
   }
   .gb-desktop-inspector-game__fact-label { color:var(--gb-ink-soft); font-size:13px; }
+  .gb-desktop-inspector-game__trainer { display:grid; gap:2px; min-width:0; }
+  .gb-desktop-inspector-game__trainer small { color:var(--gb-ink-soft); font-size:12px; line-height:1.35; }
+  .gb-desktop-inspector-game__terms { display:grid; gap:6px; min-width:0; }
+  .gb-desktop-inspector-game__rental-note {
+    display:block; margin:0; color:var(--gb-ink-soft); font-size:12px; line-height:1.4;
+  }
   .gb-desktop-inspector-game__place { display:grid; gap:2px; min-width:0; }
   .gb-desktop-inspector-game__place button {
     border:0; padding:0; background:transparent; color:var(--gb-ink);
