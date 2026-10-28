@@ -8,6 +8,7 @@ import {
   listGameRecommendations,
   recommendableFriends,
   recommendationsUiEnabled,
+  resetRecommendationPendingForTests,
   sendGameRecommendationPath,
   withdrawGameRecommendationPath,
 } from "../src/lib/game-recommendations";
@@ -33,7 +34,10 @@ const friend: FriendshipView = {
 
 const me = { id: "actor", csrfToken: "csrf-token" } as Me;
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  resetRecommendationPendingForTests();
+});
 
 describe("FR-3B recommendation types and gates", () => {
   it("honours gameRecommendations:false and only accepted friends with ids", () => {
@@ -101,5 +105,16 @@ describe("FR-3B recommendation types and gates", () => {
     expect(html).toContain("не резервирует место");
     expect(html).not.toContain("Место подтверждено");
     expect(html).not.toContain("Приглашение принято");
+    expect(html).not.toContain("Поддельный успех");
+    expect(html).not.toContain("на сервере");
+  });
+
+  it("guest with parent onLogin does not mount a second AuthChooser locally", () => {
+    const html = renderToStaticMarkup(
+      <GameRecommendationButton gameId="g1" me={null} eligible onLogin={() => undefined} />,
+    );
+    expect(html).toContain("Посоветовать другу");
+    expect(html).not.toContain("profile-dialog");
+    expect(html).not.toContain("Войти");
   });
 });

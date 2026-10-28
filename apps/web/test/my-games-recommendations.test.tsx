@@ -1,42 +1,96 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Children, isValidElement, type ReactElement, type ReactNode } from "react";
+import type * as ReactModule from "react";
+import type { ApiResult } from "../src/lib/api-client";
 import type { Me } from "../src/lib/consumer-types";
 import {
   hideGameRecommendationPath,
   listGameRecommendations,
+  readRecommendationPending,
+  recommendationMutationScope,
   recommendationsUiEnabled,
+  resetRecommendationPendingForTests,
+  useGameRecommendationMutation,
   withdrawGameRecommendationPath,
+  writeRecommendationPending,
   type GameRecommendation,
   type GameRecommendationList,
   type GameRecommendationReceipt,
 } from "../src/lib/game-recommendations";
 
-vi.mock("../src/lib/api-client", () => ({ apiFetch: vi.fn() }));
+vi.mock("../src/lib/api-client", () => ({ apiFetch: vi.fn(), startAuth: vi.fn() }));
+vi.mock("../src/lib/friendships", () => ({
+  getSocialCapabilities: vi.fn(),
+  listFriends: vi.fn(),
+}));
+vi.mock("next/link", async () => {
+  const React = await import("react");
+  return {
+    default: (props: { href: string; children?: ReactNode; className?: string }) =>
+      React.createElement("a", { href: props.href, className: props.className }, props.children),
+  };
+});
+vi.mock("../src/components/consumer/players/ProfileComposition", async () => {
+  const React = await import("react");
+  return {
+    AuthChooser: (props: { returnPath: string }) =>
+      React.createElement("div", { "data-auth-chooser": props.returnPath }),
+    ProfileDialog: (props: { title: string; children: ReactNode; onClose: () => void }) =>
+      React.createElement("div", { "data-profile-dialog": props.title }, props.children),
+    ProfileState: (props: { title: string; children?: ReactNode }) =>
+      React.createElement("section", { "data-profile-state": props.title }, props.children),
+  };
+});
 
 import { apiFetch } from "../src/lib/api-client";
-import { useSocialMutation } from "../src/components/consumer/messages/useSocialMutation";
+import { getSocialCapabilities, listFriends } from "../src/lib/friendships";
+import { GameRecommendationButton } from "../src/components/consumer/games/GameRecommendationButton";
+import { GameRecommendationsSection } from "../src/components/consumer/games/GameRecommendationsSection";
 
-const hooks = vi.hoisted(() => ({ slots: [] as unknown[], cursor: 0 }));
-vi.mock("react", () => ({
-  useState<T>(initial: T) {
-    const index = hooks.cursor++;
-    if (!(index in hooks.slots)) hooks.slots[index] = initial;
-    return [hooks.slots[index], (value: T | ((previous: T) => T)) => {
-      hooks.slots[index] = typeof value === "function" ? (value as (previous: T) => T)(hooks.slots[index] as T) : value;
-    }];
-  },
-  useRef<T>(initial: T) {
-    const index = hooks.cursor++;
-    if (!(index in hooks.slots)) hooks.slots[index] = { current: initial };
-    return hooks.slots[index];
-  },
-  useEffect(effect: () => unknown) {
-    const index = hooks.cursor++;
-    if (!(index in hooks.slots)) {
-      hooks.slots[index] = true;
-      effect();
-    }
-  },
+const hooks = vi.hoisted(() => ({
+  slots: [] as unknown[],
+  cursor: 0,
+  effects: [] as Array<{ deps: unknown[] | undefined; run: () => void }>,
+  cleanups: [] as Array<(() => void) | undefined>,
 }));
+
+vi.mock("react", async (original) => {
+  const actual = await original<typeof ReactModule>();
+  return {
+    ...actual,
+    useState<T>(initial: T | (() => T)) {
+      const index = hooks.cursor++;
+      if (!(index in hooks.slots)) {
+        hooks.slots[index] = typeof initial === "function" ? (initial as () => T)() : initial;
+      }
+      return [
+        hooks.slots[index],
+        (value: T | ((previous: T) => T)) => {
+          hooks.slots[index] = typeof value === "function" ? (value as (previous: T) => T)(hooks.slots[index] as T) : value;
+        },
+      ];
+    },
+    useRef<T>(initial: T) {
+      const index = hooks.cursor++;
+      if (!(index in hooks.slots)) hooks.slots[index] = { current: initial };
+      return hooks.slots[index] as { current: T };
+    },
+    useEffect(effect: () => void | (() => void), deps?: unknown[]) {
+      const index = hooks.cursor++;
+      const prev = hooks.slots[index] as unknown[] | undefined;
+      if (!prev || !deps || deps.some((value, offset) => value !== prev[offset])) {
+        hooks.slots[index] = deps;
+        hooks.effects.push({
+          deps,
+          run: () => {
+            hooks.cleanups[index]?.();
+            hooks.cleanups[index] = effect() || undefined;
+          },
+        });
+      }
+    },
+  };
+});
 
 const me = { id: "actor-a", csrfToken: "csrf-a" } as Me;
 const item: GameRecommendation = {
@@ -63,35 +117,97 @@ const list: GameRecommendationList = {
   asOf: "2026-10-28T10:00:00.000Z",
 };
 const storage = new Map<string, string>();
+const sessionSet = vi.fn((key: string, value: string) => storage.set(key, value));
 const settle = async () => {
+  await Promise.resolve();
   await Promise.resolve();
   await Promise.resolve();
 };
 
-function renderMutation(scope = `${me.id}:game-rec:received`) {
-  hooks.cursor = 0;
-  return useSocialMutation<GameRecommendationReceipt>(scope, me.csrfToken, success, refresh);
-}
-
 const success = vi.fn();
 const refresh = vi.fn();
 
-beforeEach(() => {
+function flushEffects() {
+  const queued = hooks.effects.splice(0);
+  queued.forEach((entry) => entry.run());
+}
+
+function resetHooks() {
+  hooks.cleanups.forEach((fn) => fn?.());
   hooks.slots = [];
   hooks.cursor = 0;
+  hooks.effects = [];
+  hooks.cleanups = [];
+}
+
+function renderMutation(actorId = me.id, task = "game-rec:received", csrf = me.csrfToken) {
+  hooks.cursor = 0;
+  const mutation = useGameRecommendationMutation<GameRecommendationReceipt>(
+    recommendationMutationScope(actorId, task),
+    actorId,
+    csrf,
+    success,
+    refresh,
+  );
+  flushEffects();
+  return mutation;
+}
+
+function elements(node: ReactNode): ReactElement<Record<string, unknown>>[] {
+  if (!isValidElement<Record<string, unknown>>(node)) return [];
+  return [node, ...Children.toArray(node.props.children as ReactNode).flatMap(elements)];
+}
+
+function labelOf(node: unknown): string {
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(labelOf).join("");
+  if (isValidElement(node)) return labelOf((node.props as { children?: unknown }).children);
+  return "";
+}
+
+function activate(node: ReactNode, label: string) {
+  const target = elements(node).find((el) => typeof el.props.onClick === "function" && labelOf(el.props.children).includes(label));
+  expect(target, `missing control ${label}`).toBeTruthy();
+  (target!.props.onClick as () => void)();
+}
+
+beforeEach(() => {
+  resetHooks();
+  resetRecommendationPendingForTests();
   storage.clear();
+  sessionSet.mockClear();
   vi.resetAllMocks();
+  success.mockReset();
+  refresh.mockReset();
   vi.stubGlobal("crypto", { randomUUID: () => "same-rec-key" });
   vi.stubGlobal("sessionStorage", {
     getItem: (key: string) => storage.get(key) ?? null,
-    setItem: (key: string, value: string) => storage.set(key, value),
+    setItem: sessionSet,
     removeItem: (key: string) => storage.delete(key),
   });
+  vi.stubGlobal("window", Object.assign(new EventTarget(), { addEventListener: EventTarget.prototype.addEventListener, removeEventListener: EventTarget.prototype.removeEventListener }));
+  vi.stubGlobal("document", Object.assign(new EventTarget(), { visibilityState: "visible" }));
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  resetHooks();
+  resetRecommendationPendingForTests();
+  vi.unstubAllGlobals();
+});
 
-describe("FR-3B My Games recommendation mutations", () => {
-  it("hide uses expectedVersion integer body and csrf/idempotency", async () => {
+describe("FR-3B recommendation helper transport", () => {
+  it("list encoding stays view-bound; empty list must not be treated as capability success when gated off", async () => {
+    expect(recommendationsUiEnabled({
+      friends: true, gameRecommendations: false, gameAttention: false, socialPush: false,
+    })).toBe(false);
+    vi.mocked(apiFetch).mockResolvedValue({ ok: true, status: 200, data: list });
+    await listGameRecommendations("received");
+    expect(apiFetch).toHaveBeenCalledWith("/v1/me/game-recommendations?view=received&limit=20");
+    expect(list.items).toHaveLength(1);
+  });
+});
+
+describe("FR-3B in-memory recommendation mutation ownership", () => {
+  it("hide uses expectedVersion and never writes personal ids to sessionStorage", async () => {
     const receipt: GameRecommendationReceipt = { id: item.id, version: 3, outcome: "hidden" };
     vi.mocked(apiFetch).mockResolvedValue({ ok: true, status: 200, data: receipt });
     renderMutation().run(hideGameRecommendationPath(item.id), { expectedVersion: item.version });
@@ -103,12 +219,14 @@ describe("FR-3B My Games recommendation mutations", () => {
       headers: { "Idempotency-Key": "same-rec-key" },
     }));
     expect(success).toHaveBeenCalledWith(receipt);
+    expect(sessionSet).not.toHaveBeenCalled();
+    expect([...storage.keys()].some((key) => key.includes("pending"))).toBe(false);
   });
 
   it("withdraw uses expectedVersion and records withdrawn outcome", async () => {
     const receipt: GameRecommendationReceipt = { id: item.id, version: 3, outcome: "withdrawn" };
     vi.mocked(apiFetch).mockResolvedValue({ ok: true, status: 200, data: receipt });
-    renderMutation(`${me.id}:game-rec:sent`).run(withdrawGameRecommendationPath(item.id), { expectedVersion: item.version });
+    renderMutation(me.id, "game-rec:sent").run(withdrawGameRecommendationPath(item.id), { expectedVersion: item.version });
     await settle();
     expect(apiFetch).toHaveBeenCalledWith(withdrawGameRecommendationPath(item.id), expect.objectContaining({
       body: JSON.stringify({ expectedVersion: 2 }),
@@ -116,7 +234,7 @@ describe("FR-3B My Games recommendation mutations", () => {
     expect(success).toHaveBeenCalledWith(receipt);
   });
 
-  it("duplicate-safe same-key retry after unknown outcome does not invent a second key", async () => {
+  it("UNKNOWN keeps same key across remount; explicit retry only; no second fresh write", async () => {
     vi.mocked(apiFetch)
       .mockResolvedValueOnce({ ok: false, status: 0, error: "network" })
       .mockResolvedValueOnce({ ok: true, status: 200, data: { id: item.id, version: 3, outcome: "hidden" } });
@@ -125,34 +243,196 @@ describe("FR-3B My Games recommendation mutations", () => {
     first.run(hideGameRecommendationPath(item.id), { expectedVersion: 99 });
     await settle();
     expect(apiFetch).toHaveBeenCalledTimes(1);
-    const pending = renderMutation();
-    expect(pending.pending).toBe(true);
-    pending.retry();
+    const scope = recommendationMutationScope(me.id, "game-rec:received");
+    expect(readRecommendationPending(scope, me.id)?.key).toBe("same-rec-key");
+
+    resetHooks();
+    const remounted = renderMutation();
+    expect(remounted.pending).toBe(true);
+    remounted.run(hideGameRecommendationPath(item.id), { expectedVersion: 99 });
+    expect(apiFetch).toHaveBeenCalledTimes(1);
+    remounted.retry();
     await settle();
     expect(vi.mocked(apiFetch).mock.calls[1]).toEqual(vi.mocked(apiFetch).mock.calls[0]);
     expect(success).toHaveBeenCalledOnce();
+    expect(readRecommendationPending(scope, me.id)).toBeNull();
   });
 
-  it("session/auth failure refreshes without success and without clearing only via absent list", async () => {
+  it("late success after session change does not publish into the new owner", async () => {
+    let resolveFetch!: (value: ApiResult<unknown>) => void;
+    vi.mocked(apiFetch).mockImplementation(() => new Promise((resolve) => { resolveFetch = resolve; }));
+    const first = renderMutation();
+    first.run(hideGameRecommendationPath(item.id), { expectedVersion: item.version });
+    await settle();
+    window.dispatchEvent(new Event("gb-session-changed"));
+    resetHooks();
+    success.mockClear();
+    const nextActor = renderMutation("actor-b", "game-rec:received", "csrf-b");
+    expect(nextActor.pending).toBe(false);
+    resolveFetch({ ok: true, status: 200, data: { id: item.id, version: 3, outcome: "hidden" } });
+    await settle();
+    expect(success).not.toHaveBeenCalled();
+    expect(readRecommendationPending(recommendationMutationScope("actor-a", "game-rec:received"), "actor-a")).toBeNull();
+  });
+
+  it("auth failure refreshes without success and without inventing storage writes", async () => {
     vi.mocked(apiFetch).mockResolvedValue({ ok: false, status: 401, error: "auth" });
     renderMutation().run(hideGameRecommendationPath(item.id), { expectedVersion: item.version });
     await settle();
     expect(refresh).toHaveBeenCalledOnce();
     expect(success).not.toHaveBeenCalled();
     expect(renderMutation().pending).toBe(false);
+    expect(sessionSet).not.toHaveBeenCalled();
+  });
+});
+
+describe("FR-3B recommendation UI lifecycle", () => {
+  it("send selection yields receipt notice without sessionStorage pending", async () => {
+    vi.mocked(getSocialCapabilities).mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: { friends: true, gameRecommendations: true, gameAttention: false, socialPush: false },
+    });
+    vi.mocked(listFriends).mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: {
+        items: [{
+          friendshipId: "11111111-1111-4111-8111-111111111111",
+          relationship: "friends",
+          version: "1",
+          request: null,
+          peer: {
+            publicPlayerId: "22222222-2222-4222-8222-222222222222",
+            displayName: "Анна К.",
+            avatar: { uploadedUrl: null, providerUrl: null },
+          },
+          capabilities: { canRequest: false, canAccept: false, canDecline: false, canCancel: false, canRemove: true },
+        }],
+        nextCursor: null,
+        asOf: "2026-10-28T10:00:00.000Z",
+      },
+    });
+    vi.mocked(apiFetch).mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: { id: "rec-1", version: 1, outcome: "sent" } satisfies GameRecommendationReceipt,
+    });
+
+    hooks.cursor = 0;
+    let tree = GameRecommendationButton({ gameId: "g1", me, eligible: true });
+    flushEffects();
+    activate(tree, "Посоветовать другу");
+    hooks.cursor = 0;
+    tree = GameRecommendationButton({ gameId: "g1", me, eligible: true });
+    flushEffects();
+    await settle();
+    hooks.cursor = 0;
+    tree = GameRecommendationButton({ gameId: "g1", me, eligible: true });
+    flushEffects();
+    const radio = elements(tree).find((el) => el.type === "input" && el.props.type === "radio");
+    expect(radio).toBeTruthy();
+    (radio!.props.onChange as () => void)();
+    hooks.cursor = 0;
+    tree = GameRecommendationButton({ gameId: "g1", me, eligible: true });
+    flushEffects();
+    activate(tree, "Отправить совет");
+    await settle();
+    hooks.cursor = 0;
+    tree = GameRecommendationButton({ gameId: "g1", me, eligible: true });
+    flushEffects();
+    const htmlBits = elements(tree).map((el) => el.props.children).flat().join(" ");
+    expect(htmlBits).toContain("Совет отправлен другу");
+    expect(sessionSet).not.toHaveBeenCalled();
   });
 
-  it("list encoding stays view-bound; empty list must not be treated as capability success when gated off", async () => {
+  it("received hide goes through section action with expectedVersion", async () => {
+    vi.mocked(getSocialCapabilities).mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: { friends: true, gameRecommendations: true, gameAttention: false, socialPush: false },
+    });
+    vi.mocked(apiFetch)
+      .mockResolvedValueOnce({ ok: true, status: 200, data: list })
+      .mockResolvedValueOnce({ ok: true, status: 200, data: { id: item.id, version: 3, outcome: "hidden" } })
+      .mockResolvedValue({ ok: true, status: 200, data: { ...list, items: [] } });
+
+    hooks.cursor = 0;
+    let tree = GameRecommendationsSection({ me });
+    flushEffects();
+    await settle();
+    hooks.cursor = 0;
+    tree = GameRecommendationsSection({ me });
+    flushEffects();
+    activate(tree, "Скрыть");
+    await settle();
+    expect(apiFetch).toHaveBeenCalledWith(hideGameRecommendationPath(item.id), expect.objectContaining({
+      body: JSON.stringify({ expectedVersion: 2 }),
+      headers: { "Idempotency-Key": "same-rec-key" },
+    }));
+    expect(sessionSet).not.toHaveBeenCalled();
+  });
+
+  it("sent withdraw goes through section action with expectedVersion", async () => {
+    vi.mocked(getSocialCapabilities).mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: { friends: true, gameRecommendations: true, gameAttention: false, socialPush: false },
+    });
+    vi.mocked(apiFetch)
+      .mockResolvedValueOnce({ ok: true, status: 200, data: { ...list, items: [] } })
+      .mockResolvedValueOnce({ ok: true, status: 200, data: list })
+      .mockResolvedValueOnce({ ok: true, status: 200, data: { id: item.id, version: 3, outcome: "withdrawn" } })
+      .mockResolvedValue({ ok: true, status: 200, data: { ...list, items: [] } });
+
+    hooks.cursor = 0;
+    let tree = GameRecommendationsSection({ me });
+    flushEffects();
+    await settle();
+    hooks.cursor = 0;
+    tree = GameRecommendationsSection({ me });
+    flushEffects();
+    activate(tree, "Вы советовали");
+    hooks.cursor = 0;
+    tree = GameRecommendationsSection({ me });
+    flushEffects();
+    await settle();
+    hooks.cursor = 0;
+    tree = GameRecommendationsSection({ me });
+    flushEffects();
+    activate(tree, "Отозвать совет");
+    await settle();
+    expect(apiFetch).toHaveBeenCalledWith(withdrawGameRecommendationPath(item.id), expect.objectContaining({
+      body: JSON.stringify({ expectedVersion: 2 }),
+    }));
+  });
+
+  it("guest open uses parent onLogin only — no local AuthChooser twin", () => {
+    const onLogin = vi.fn();
+    hooks.cursor = 0;
+    let tree = GameRecommendationButton({ gameId: "g1", me: null, eligible: true, onLogin });
+    flushEffects();
+    activate(tree, "Посоветовать другу");
+    expect(onLogin).toHaveBeenCalledOnce();
+    hooks.cursor = 0;
+    tree = GameRecommendationButton({ gameId: "g1", me: null, eligible: true, onLogin });
+    flushEffects();
+    expect(elements(tree).some((el) => el.props["data-auth-chooser"])).toBe(false);
+  });
+
+  it("unavailable copy stays plain; module pending survives absent list without erasure", () => {
+    const scope = recommendationMutationScope(me.id, "game-rec:received");
+    writeRecommendationPending(scope, {
+      path: hideGameRecommendationPath(item.id),
+      body: { expectedVersion: 2 },
+      key: "same-rec-key",
+      method: "POST",
+      actorId: me.id,
+    });
+    expect(readRecommendationPending(scope, me.id)?.key).toBe("same-rec-key");
     expect(recommendationsUiEnabled({
       friends: true, gameRecommendations: false, gameAttention: false, socialPush: false,
     })).toBe(false);
-    vi.mocked(apiFetch).mockResolvedValue({ ok: true, status: 200, data: list });
-    await listGameRecommendations("received");
-    expect(apiFetch).toHaveBeenCalledWith("/v1/me/game-recommendations?view=received&limit=20");
-    // Server may return rows while UI capability remains false — UI must still show unavailable.
-    expect(list.items).toHaveLength(1);
-    expect(recommendationsUiEnabled({
-      friends: true, gameRecommendations: false, gameAttention: false, socialPush: false,
-    })).toBe(false);
+    expect(readRecommendationPending(scope, me.id)?.key).toBe("same-rec-key");
   });
 });

@@ -6,8 +6,10 @@ import type { Me } from "../../../lib/consumer-types";
 import { getSocialCapabilities, listFriends } from "../../../lib/friendships";
 import {
   recommendableFriends,
+  recommendationMutationScope,
   recommendationsUiEnabled,
   sendGameRecommendationPath,
+  useGameRecommendationMutation,
   type GameRecommendationReceipt,
   type RecommendableFriend,
 } from "../../../lib/game-recommendations";
@@ -15,7 +17,6 @@ import { privateViews } from "../../../lib/private-view";
 import { Button } from "../Button";
 import { AuthChooser, ProfileDialog, ProfileState } from "../players/ProfileComposition";
 import { MutationNotice } from "../messages/MessageComposition";
-import { useSocialMutation } from "../messages/useSocialMutation";
 
 type PickerState = "closed" | "loading" | "ready" | "unavailable" | "error" | "empty" | "guest";
 
@@ -45,8 +46,10 @@ export function GameRecommendationButton({
   const [sentNotice, setSentNotice] = useState("");
   const [reload, setReload] = useState(0);
 
-  const mutation = useSocialMutation<GameRecommendationReceipt>(
-    `${me?.id ?? "guest"}:recommend:${gameId}`,
+  const mutationScope = recommendationMutationScope(me?.id ?? "guest", `recommend:${gameId}`);
+  const mutation = useGameRecommendationMutation<GameRecommendationReceipt>(
+    mutationScope,
+    me?.id ?? "guest",
     me?.csrfToken ?? "",
     (receipt) => {
       setSentNotice(receipt.outcome === "sent" ? "Совет отправлен другу. Место не резервируется." : "Совет записан.");
@@ -80,8 +83,19 @@ export function GameRecommendationButton({
     const session = () => {
       expire();
     };
+    const onForeground = () => {
+      if (document.visibilityState !== "visible" || !live) return;
+      live = false;
+      setFriends([]);
+      setSelected(null);
+      setCursor(null);
+      setCapabilities(null);
+      setPicker("loading");
+      setReload((n) => n + 1);
+    };
     window.addEventListener("gb-private-expired", expire);
     window.addEventListener("gb-session-changed", session);
+    document.addEventListener("visibilitychange", onForeground);
     void (async () => {
       const caps = await getSocialCapabilities();
       if (!live) return;
@@ -110,6 +124,7 @@ export function GameRecommendationButton({
       release?.();
       window.removeEventListener("gb-private-expired", expire);
       window.removeEventListener("gb-session-changed", session);
+      document.removeEventListener("visibilitychange", onForeground);
     };
   }, [open, me, cursor, reload, gameId]);
 
@@ -119,8 +134,8 @@ export function GameRecommendationButton({
 
   function openPicker() {
     if (!me) {
-      setAuthOpen(true);
-      onLogin?.();
+      if (onLogin) onLogin();
+      else setAuthOpen(true);
       return;
     }
     setCursor(null);
@@ -152,9 +167,7 @@ export function GameRecommendationButton({
             {picker === "loading" && <ProfileState title="Загружаем друзей…" state="loading" />}
             {picker === "guest" && <ProfileState title="Войдите снова">Сессия больше не действует.</ProfileState>}
             {picker === "unavailable" && (
-              <ProfileState title="Совет другу сейчас недоступен">
-                Возможность посоветовать игру пока выключена на сервере. Поддельный успех не показываем.
-              </ProfileState>
+              <ProfileState title="Рекомендации сейчас недоступны">Попробуйте позже.</ProfileState>
             )}
             {picker === "error" && (
               <ProfileState title="Не удалось загрузить друзей" state="error" retry={() => { setCursor(null); setReload((n) => n + 1); }}>
@@ -167,53 +180,55 @@ export function GameRecommendationButton({
               </ProfileState>
             )}
             {picker === "ready" && (
-              <div role="radiogroup" aria-label="Друзья">
-                {friends.map((friend) => (
-                  <label key={friend.friendshipId} className="profile-field">
-                    <input
-                      type="radio"
-                      name="recommend-friend"
-                      value={friend.friendshipId}
-                      checked={selected === friend.friendshipId}
-                      disabled={locked}
-                      onChange={() => setSelected(friend.friendshipId)}
-                    />
-                    {" "}
-                    {friend.displayName}
-                  </label>
-                ))}
-              </div>
-              <div className="profile-form-actions">
-                <Button disabled={!selected || locked} onClick={send}>
-                  {mutation.busy ? "Отправляем…" : "Отправить совет"}
-                </Button>
-                {nextCursor ? (
-                  <Button
-                    variant="outline"
-                    disabled={locked}
-                    onClick={() => {
-                      setPicker("loading");
-                      setCursor(nextCursor);
-                    }}
-                  >
-                    Ещё друзья
+              <>
+                <div role="radiogroup" aria-label="Друзья">
+                  {friends.map((friend) => (
+                    <label key={friend.friendshipId} className="profile-field">
+                      <input
+                        type="radio"
+                        name="recommend-friend"
+                        value={friend.friendshipId}
+                        checked={selected === friend.friendshipId}
+                        disabled={locked}
+                        onChange={() => setSelected(friend.friendshipId)}
+                      />
+                      {" "}
+                      {friend.displayName}
+                    </label>
+                  ))}
+                </div>
+                <div className="profile-form-actions">
+                  <Button disabled={!selected || locked} onClick={send}>
+                    {mutation.busy ? "Отправляем…" : "Отправить совет"}
                   </Button>
-                ) : null}
-                <Button variant="outline" disabled={mutation.busy} onClick={() => setOpen(false)}>
-                  Отмена
-                </Button>
-              </div>
+                  {nextCursor ? (
+                    <Button
+                      variant="outline"
+                      disabled={locked}
+                      onClick={() => {
+                        setPicker("loading");
+                        setCursor(nextCursor);
+                      }}
+                    >
+                      Ещё друзья
+                    </Button>
+                  ) : null}
+                  <Button variant="outline" disabled={mutation.busy} onClick={() => setOpen(false)}>
+                    Отмена
+                  </Button>
+                </div>
+              </>
             )}
             <MutationNotice mutation={mutation} />
           </ProfileDialog>
         </div>
       ) : null}
-      {authOpen && (
+      {authOpen && !onLogin ? (
         <AuthChooser
           returnPath={`/games/${gameId}`}
           onClose={() => setAuthOpen(false)}
         />
-      )}
+      ) : null}
     </div>
   );
 }

@@ -8,7 +8,9 @@ import {
   formatRecommendationWhen,
   hideGameRecommendationPath,
   listGameRecommendations,
+  recommendationMutationScope,
   recommendationsUiEnabled,
+  useGameRecommendationMutation,
   withdrawGameRecommendationPath,
   type GameRecommendation,
   type GameRecommendationReceipt,
@@ -18,7 +20,6 @@ import { privateViews } from "../../../lib/private-view";
 import { Button } from "../Button";
 import { ProfileState } from "../players/ProfileComposition";
 import { MutationNotice } from "../messages/MessageComposition";
-import { useSocialMutation } from "../messages/useSocialMutation";
 
 type LoadState = "loading" | "ready" | "unavailable" | "error" | "guest";
 
@@ -36,8 +37,10 @@ export function GameRecommendationsSection({ me }: { me: Me }) {
   const [reload, setReload] = useState(0);
   const [actingId, setActingId] = useState<string | null>(null);
 
-  const mutation = useSocialMutation<GameRecommendationReceipt>(
-    `${me.id}:game-rec:${view}`,
+  const mutationScope = recommendationMutationScope(me.id, `game-rec:${view}`);
+  const mutation = useGameRecommendationMutation<GameRecommendationReceipt>(
+    mutationScope,
+    me.id,
     me.csrfToken,
     () => {
       setActingId(null);
@@ -100,7 +103,7 @@ export function GameRecommendationsSection({ me }: { me: Me }) {
       const page = await listGameRecommendations(view, cursor);
       if (!live) return;
       if (!page.ok) {
-        // Absent/failed list must not clear an UNKNOWN write pending in useSocialMutation.
+        // Absent/failed list must not clear an UNKNOWN write pending in module Map.
         setState(page.status === 401 ? "guest" : [403, 404, 503].includes(page.status) ? "unavailable" : "error");
         return;
       }
@@ -162,9 +165,7 @@ export function GameRecommendationsSection({ me }: { me: Me }) {
       {state === "loading" && <ProfileState title="Загружаем рекомендации…" state="loading" />}
       {state === "guest" && <ProfileState title="Войдите снова">Личные рекомендации скрыты после выхода или истечения сессии.</ProfileState>}
       {state === "unavailable" && (
-        <ProfileState title="Рекомендации сейчас недоступны">
-          Сервер не включает возможность советов друзьям. Пустой список не означает успешную загрузку.
-        </ProfileState>
+        <ProfileState title="Рекомендации сейчас недоступны">Попробуйте позже.</ProfileState>
       )}
       {state === "error" && (
         <ProfileState
