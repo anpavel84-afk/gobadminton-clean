@@ -89,6 +89,25 @@
 .gb-consumer .gb-games-view-action.is-map > button { min-width:0; }
 .gb-map-radar { position:fixed; z-index:102; right:16px; top:calc(12px + env(safe-area-inset-top,0px)); }
 .gb-map-radar .gb-radar-popover { right:0; max-width:calc(100vw - 32px); }
+/* #365 365-QA-R1-01: outer .gb-map-radar is a sibling of the z:100 viewport, so it
+   paints above the inspector. Desktop-only: park it on the visible map left of the
+   rail (same widths as .gb-desktop-map-inspector). No selection → right:16 restored. */
+@media (min-width:1024px) {
+  :has(.gb-desktop-map-inspector) .gb-map-radar {
+    right:calc(min(450px, 100% - 48px) + 28px);
+  }
+  :has(.gb-desktop-map-inspector .gb-venue-sheet[data-view="create"]) .gb-map-radar {
+    right:calc(min(640px, 100% - 48px) + 28px);
+  }
+}
+@media (min-width:1024px) and (max-width:1279px) {
+  :has(.gb-desktop-map-inspector) .gb-map-radar {
+    right:calc(min(400px, 100% - 40px) + 28px);
+  }
+  :has(.gb-desktop-map-inspector .gb-venue-sheet[data-view="create"]) .gb-map-radar {
+    right:calc(min(520px, 100% - 40px) + 28px);
+  }
+}
 .gb-radar-layer { position:absolute; inset:0; pointer-events:none; }
 .gb-radar-layer .gb-radar-map-module-loading {
   position:absolute; z-index:3; margin:0;
@@ -102,7 +121,7 @@
   width:9px; height:9px; flex:none; border-radius:50%; background:var(--gb-lime);
 }
 .gb-consumer.gb-radar-layer { background: transparent; min-height: 0; }
-.gb-radar-layer .g2-map-panel,.gb-radar-layer .gb-venue-popup,.gb-radar-layer .gb-venue-sheet-backdrop,.gb-radar-layer dialog,.gb-radar-layer .gb-map-layer-summary { pointer-events:auto; }
+.gb-radar-layer .g2-map-panel,.gb-radar-layer .gb-venue-popup,.gb-radar-layer .gb-venue-sheet-backdrop,.gb-radar-layer .gb-desktop-map-inspector,.gb-radar-layer .gb-desktop-map-inspector-dim,.gb-radar-layer dialog,.gb-radar-layer .gb-map-layer-summary { pointer-events:auto; }
 /* Player sheet reuses VenuePopup geometry; keep avatar thumb in the compact cover slot. */
 .gb-venue-popup .unified-preview__compact-cover { display:grid; place-items:center; background:var(--gb-lime-soft); }
 .gb-venue-popup .unified-preview__compact-cover .avatar { width:64px; height:64px; border-width:0; font-size:18px; }

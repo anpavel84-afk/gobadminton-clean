@@ -12,6 +12,7 @@ import "../../../styles/discovery.css";
 import { GamesMapBackButton } from "./GamesMapBackButton";
 import { VenuePreviewCard } from "./VenuePreviewCard";
 import { VenuePopup } from "./VenuePopup";
+import { useDesktopMapInspector } from "./DesktopMapInspector";
 import { SelectedVenueCover, useSelectedVenueCover } from "../venues/SelectedVenueCover";
 import { VenueSheet } from "./VenueSheet";
 import { Button } from "../Button";
@@ -90,13 +91,15 @@ export function GamesMapView({ cityId, day, venueId, activity = "all", onReturnT
     const next = snapshot?.cityId === cityId && snapshot.gamesReady ? new Map([...schedules].map(([id, games]) => [id, games.length])) : null;
     return previousCounts.current = stableVenueCounts(previousCounts.current, next);
   }, [schedules, snapshot, cityId]);
+  const desktop = useDesktopMapInspector();
   const [selectedVenueId, setSelectedVenueId] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
   const clearVenueSelection = () => { setSelectedVenueId(null); setExpanded(false); };
   // Sync handoff via same-turn CustomEvent: player sheet closes before venue state commits.
+  // Desktop opens the right inspector immediately; mobile keeps the compact preview first.
   const selectVenue = (venue: VenueSummary) => {
     window.dispatchEvent(new Event("gb-map-select-venue"));
-    setExpanded(false);
+    setExpanded(desktop);
     setSelectedVenueId(venue.id);
   };
   const selectedVenue = venues.find(item => item.id === selectedVenueId);
@@ -104,6 +107,11 @@ export function GamesMapView({ cityId, day, venueId, activity = "all", onReturnT
   const escapeSelection = useRef<VenueSummary | undefined>(undefined);
   useEffect(() => { escapeSelection.current = selectedVenue; }, [selectedVenue]);
   useEffect(() => { setSelectedVenueId(null); setExpanded(false); }, [cityId]);
+  // Promote parent expanded on desktop while a venue is selected; do not force-collapse
+  // on resize to mobile (keeps VenueSheet/create across the presentation change).
+  useEffect(() => {
+    if (selectedVenueId && desktop) setExpanded(true);
+  }, [selectedVenueId, desktop]);
   useEffect(() => {
     if (selectedVenueId !== null && !selectedVenue) setSelectedVenueId(null);
   }, [selectedVenueId, selectedVenue]);
@@ -138,12 +146,12 @@ export function GamesMapView({ cityId, day, venueId, activity = "all", onReturnT
       {error && <p role="alert">Не удалось загрузить полный каталог или расписание. Проверьте соединение и повторите. Непроверенные количества не показываем.</p>}
       {<>
         {cityId === MOSCOW_BUNDLE.cityId ? <MapView venues={venues} counts={counts} selectedVenueId={selectedVenueId} onSelect={selectVenue} onDeselect={clearVenueSelection} onAvailability={setMapAvailable} onErrorCardChange={setMapErrorCardShown} onReturnToList={onReturnToList} /> : <p role="alert">Карта выбранного города пока недоступна. Все площадки доступны списком.</p>}
-        {selectedVenue && <VenuePopup key={selectedVenue.id} expanded={expanded} onExpandedChange={setExpanded} onDeselect={clearVenueSelection}
+        {selectedVenue && <VenuePopup key={selectedVenue.id} expanded={expanded || desktop} onExpandedChange={setExpanded} onDeselect={clearVenueSelection}
           preview={<VenuePreviewCard embedded coverSlot={<SelectedVenueCover slotRef={selectedCover.compact} className="gb-venue-preview-cover" />} venue={selectedVenue} games={all.get(selectedVenue.id) ?? []}
             gamesReady={snapshot?.cityId === cityId && snapshot.gamesReady} now={now} onOpen={() => setExpanded(true)} />}>
-          <VenueSheet embedded coverSlot={<SelectedVenueCover slotRef={selectedCover.info} className="gb-venue-sheet-cover" />} active={expanded} venue={selectedVenue} games={all.get(selectedVenue.id) ?? []}
+          <VenueSheet embedded coverSlot={<SelectedVenueCover slotRef={selectedCover.info} className="gb-venue-sheet-cover" />} active={expanded || desktop} venue={selectedVenue} games={all.get(selectedVenue.id) ?? []}
             gamesReady={snapshot?.cityId === cityId && snapshot.gamesReady === true} now={now}
-            onCollapse={() => setExpanded(false)} onDeselect={clearVenueSelection} />
+            onCollapse={desktop ? clearVenueSelection : () => setExpanded(false)} onDeselect={clearVenueSelection} />
         </VenuePopup>}
         {!venues.length && <p className="gb-map-sr-only" role="status">В каталоге города пока нет площадок.</p>}
         {(!mapAvailable || cityId !== MOSCOW_BUNDLE.cityId) && <details className="gb-games-map-fallback">

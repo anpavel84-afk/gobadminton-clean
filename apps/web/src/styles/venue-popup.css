@@ -23,12 +23,22 @@
 /* Keep back/close reachable while the long embedded form scrolls beneath them. */
 .gb-consumer .gb-venue-popup .gb-venue-sheet:not([data-view="info"]) .gb-venue-sheet-header { position:sticky; top:0; z-index:8; background:var(--gb-white); min-height:64px; padding:8px 0 12px; margin-bottom:8px; border-bottom:1px solid var(--gb-line); }
 .gb-consumer .gb-venue-popup .gb-venue-sheet:not([data-view="info"]) .gb-venue-sheet-header h2 { min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.gb-consumer .gb-venue-sheet-header { display:flex; align-items:center; gap:8px; }
-.gb-consumer .gb-venue-sheet-header h2 { flex:1; font-size:18px; }
+.gb-consumer .gb-venue-sheet-header { display:flex; align-items:flex-start; gap:8px; }
+.gb-consumer .gb-venue-sheet-heading { flex:1; min-width:0; display:grid; gap:2px; }
+.gb-consumer .gb-venue-sheet-header h2 { flex:1; font-size:18px; margin:0; }
+.gb-consumer .gb-venue-sheet-header-address { margin:0; font-size:13px; color:var(--gb-ink-soft); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.gb-consumer .gb-venue-sheet-back { display:inline-flex; align-items:center; gap:4px; border:0; background:transparent; padding:0 4px; color:var(--gb-ink); font:inherit; white-space:nowrap; }
+.gb-consumer .gb-venue-sheet-kicker { display:block; margin:0 0 8px; color:var(--gb-purple); font-size:12px; font-weight:600; letter-spacing:.07em; text-transform:uppercase; }
 .gb-consumer .gb-venue-sheet-close { position:sticky; top:0; z-index:1; }
 .gb-consumer .gb-venue-sheet:has(.gb-venue-sheet-info) .gb-venue-sheet-header { height:0; position:relative; z-index:1; }
-.gb-consumer .gb-venue-sheet:has(.gb-venue-sheet-info) .gb-venue-sheet-header h2 { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
+.gb-consumer .gb-venue-sheet:has(.gb-venue-sheet-info) .gb-venue-sheet-header h2,
+.gb-consumer .gb-venue-sheet:has(.gb-venue-sheet-info) .gb-venue-sheet-heading { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
 .gb-consumer .gb-venue-sheet:has(.gb-venue-sheet-info) .gb-venue-sheet-close { position:absolute; right:8px; top:8px; }
+.gb-consumer .gb-venue-sheet-empty { display:grid; gap:16px; margin:28px 0 8px; }
+.gb-consumer .gb-venue-sheet-empty > h3 { margin:0; font-size:18px; }
+.gb-consumer .gb-venue-sheet-empty-card { display:grid; gap:8px; justify-items:center; text-align:center; padding:28px 16px; border:1px dashed var(--gb-line-dark); border-radius:var(--gb-radius-md); background:var(--gb-paper); color:var(--gb-ink-soft); }
+.gb-consumer .gb-venue-sheet-empty-card strong { color:var(--gb-ink); font-size:16px; }
+.gb-consumer .gb-venue-sheet-empty-card p { margin:0; font-size:14px; line-height:1.45; }
 .gb-consumer .gb-venue-sheet-cover, .gb-consumer .gb-venue-sheet-cover img { display:block; width:100%; height:auto; aspect-ratio:16/9; object-fit:cover; border-radius:var(--gb-radius-md); overflow:hidden; }
 .gb-consumer .gb-venue-sheet-info h3 { font-size:24px; font-weight:800; }
 .gb-consumer .gb-venue-sheet-info p { font-size:15px; }
@@ -197,3 +207,106 @@
   font-size:14px; line-height:1.35;
 }
 .gb-consumer .gb-venue-game-notice { margin:0; color:var(--gb-ink-soft); font-size:13px; }
+
+/* Transparent host: same React aside path on mobile without affecting sheet geometry. */
+.gb-venue-popup-host { display:contents; }
+
+/* Owner #365 — desktop right inspector (~450px view / ~640px create on 1484 ref). */
+.gb-desktop-map-inspector,
+.gb-desktop-map-inspector-dim { display:none; }
+
+@media (min-width:1024px) {
+  /* Positioning context for the absolute desktop rail (map viewport already fills chrome). */
+  .gb-games-map:has(.gb-desktop-map-inspector),
+  .gb-games-map-area:has(.gb-desktop-map-inspector) { position:relative; }
+  .gb-desktop-map-inspector-dim {
+    display:none;
+    position:absolute; inset:0; z-index:103;
+    background:color-mix(in srgb, var(--gb-ink) 28%, transparent);
+    pointer-events:auto;
+  }
+  .gb-games-map:has(.gb-venue-sheet[data-view="create"]) .gb-desktop-map-inspector-dim,
+  .gb-radar-layer:has(.gb-venue-sheet[data-view="create"]) .gb-desktop-map-inspector-dim,
+  .gb-consumer:has(.gb-venue-sheet[data-view="create"]) > .gb-desktop-map-inspector-dim {
+    display:block;
+  }
+  .gb-desktop-map-inspector {
+    display:flex; flex-direction:column;
+    position:absolute; z-index:104;
+    top:12px; right:12px; bottom:12px;
+    width:min(450px, calc(100% - 48px));
+    max-width:calc(100% - 48px);
+    min-width:0; min-height:0;
+    overflow:hidden;
+    background:var(--gb-white); color:var(--gb-ink);
+    border-radius:var(--gb-radius-lg);
+    box-shadow:var(--gb-shadow-elevated);
+  }
+  .gb-desktop-map-inspector:has(.gb-venue-sheet[data-view="create"]) {
+    width:min(640px, calc(100% - 48px));
+  }
+  .gb-desktop-map-inspector .gb-venue-popup--desktop {
+    position:static; inset:auto; left:auto; right:auto; bottom:auto;
+    width:100%; height:100%; max-height:none;
+    border-radius:0; box-shadow:none;
+    display:flex; flex-direction:column; min-height:0;
+  }
+  .gb-desktop-map-inspector .gb-venue-popup-content {
+    flex:1 1 auto; height:auto; min-height:0;
+    overflow-y:auto; overflow-x:clip;
+    padding:0 16px 16px; box-sizing:border-box;
+  }
+  .gb-desktop-map-inspector .gb-venue-handle,
+  .gb-desktop-map-inspector .gb-venue-popup-preview-surface,
+  .gb-desktop-map-inspector .gb-venue-popup-compact-measure,
+  .gb-desktop-map-inspector .gb-venue-popup-full-measure { display:none !important; }
+  .gb-desktop-map-inspector .gb-venue-sheet {
+    position:static; width:100%; max-width:none; max-height:none;
+    overflow:visible; border-radius:0; padding:0;
+  }
+  .gb-desktop-map-inspector .gb-venue-sheet:has(.gb-venue-sheet-info) .gb-venue-sheet-header {
+    height:auto; min-height:0; margin:0; padding:12px 0 0; border:0;
+  }
+  .gb-desktop-map-inspector .gb-venue-sheet:has(.gb-venue-sheet-info) .gb-venue-sheet-heading,
+  .gb-desktop-map-inspector .gb-venue-sheet:has(.gb-venue-sheet-info) .gb-venue-sheet-header h2 {
+    position:static; width:auto; height:auto; clip-path:none; overflow:visible;
+  }
+  .gb-desktop-map-inspector .gb-venue-sheet:has(.gb-venue-sheet-info) .gb-venue-sheet-close {
+    position:absolute; right:0; top:8px;
+  }
+  .gb-desktop-map-inspector .gb-venue-sheet[data-view="info"] .gb-venue-sheet-info > h3 {
+    position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%);
+  }
+  .gb-desktop-map-inspector .gb-venue-sheet[data-view="create"] .gb-game-create--embedded .gb-game-fields,
+  .gb-desktop-map-inspector .gb-venue-sheet[data-view="create"] .gb-game-create--embedded .gb-game-detail-grid {
+    grid-template-columns:repeat(2, minmax(0, 1fr));
+  }
+  .gb-desktop-map-inspector .gb-venue-sheet[data-view="create"] .gb-game-create--embedded .gb-game-field--wide {
+    grid-column:1 / -1;
+  }
+  /* Keep map attribution/controls clear of the inspector rail. */
+  .gb-games-map:has(.gb-desktop-map-inspector) .maplibregl-ctrl-bottom-right,
+  .gb-games-map:has(.gb-desktop-map-inspector) .maplibregl-ctrl-bottom-left,
+  .gb-fullscreen-map-viewport:has(.gb-desktop-map-inspector) .maplibregl-ctrl-bottom-right,
+  .gb-fullscreen-map-viewport:has(.gb-desktop-map-inspector) .maplibregl-ctrl-bottom-left {
+    bottom:12px;
+    right:calc(min(450px, 100% - 48px) + 28px);
+  }
+  .gb-games-map:has(.gb-desktop-map-inspector .gb-venue-sheet[data-view="create"]) .maplibregl-ctrl-bottom-right,
+  .gb-games-map:has(.gb-desktop-map-inspector .gb-venue-sheet[data-view="create"]) .maplibregl-ctrl-bottom-left,
+  .gb-fullscreen-map-viewport:has(.gb-desktop-map-inspector .gb-venue-sheet[data-view="create"]) .maplibregl-ctrl-bottom-right,
+  .gb-fullscreen-map-viewport:has(.gb-desktop-map-inspector .gb-venue-sheet[data-view="create"]) .maplibregl-ctrl-bottom-left {
+    right:calc(min(640px, 100% - 48px) + 28px);
+  }
+  .gb-games-map:has(.gb-desktop-map-inspector) .maplibregl-ctrl-bottom-left,
+  .gb-fullscreen-map-viewport:has(.gb-desktop-map-inspector) .maplibregl-ctrl-bottom-left {
+    right:auto; left:12px;
+  }
+  /* Ordinary desktop inspector must not steal the whole map like a mobile modal. */
+  .gb-desktop-map-inspector .gb-venue-popup--desktop { pointer-events:auto; }
+}
+
+@media (min-width:1024px) and (max-width:1279px) {
+  .gb-desktop-map-inspector { width:min(400px, calc(100% - 40px)); }
+  .gb-desktop-map-inspector:has(.gb-venue-sheet[data-view="create"]) { width:min(520px, calc(100% - 40px)); }
+}
