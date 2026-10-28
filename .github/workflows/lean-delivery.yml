@@ -1,0 +1,81 @@
+name: Lean Mode B delivery
+# OD-017: wake + bounded recovery for the same finite worker. Workflow must exist
+# on default main for true schedule/comment events; PMA publishes ONLY the reviewed
+# workflow file to main after source CI on dev. Integration remains branch dev.
+# Concurrency distinct from gobadminton-dev so this never blocks DEV deploy.
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  issue_comment:
+    types: [created, edited]
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'status | recover'
+        type: choice
+        options: [status, recover]
+        default: status
+      recover_kind:
+        description: 'push | merge | deploy (recover only)'
+        type: string
+        default: ''
+      remote_head:
+        type: string
+        default: ''
+      merged_sha:
+        type: string
+        default: ''
+      deploy_run:
+        type: string
+        default: ''
+      live_sha:
+        type: string
+        default: ''
+permissions:
+  contents: read
+  issues: read
+  actions: read
+concurrency:
+  group: gobadminton-lean-delivery
+  cancel-in-progress: false
+jobs:
+  lean:
+    if: >-
+      github.repository_id == 1416250340 &&
+      (
+        github.event_name == 'schedule' ||
+        github.event_name == 'workflow_dispatch' &&
+          (github.actor_id == 318610566 || github.actor == 'github-actions[bot]') ||
+        github.event_name == 'issue_comment' &&
+          github.event.sender.id == 318610566 &&
+          contains(github.event.comment.body, 'GOBADMINTON_LEAN_TASK_V1')
+      )
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    # Environment secrets (DEPLOY_*) only with fixed reviewed client; never Issue head.
+    environment: dev
+    steps:
+      - name: Checkout fixed reviewed client (not untrusted Issue head)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # PMA may pin LEAN_CLIENT_SHA / repository variable after review.
+          ref: ${{ vars.LEAN_CLIENT_SHA || github.sha }}
+          persist-credentials: false
+      - name: One bounded Lean reconcile via existing SSH transport
+        run: python3 -I -B tools/train/client.py reconcile
+        env:
+          PYTHONPATH: ${{ github.workspace }}/tools/train
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_ACTOR_ID: ${{ github.actor_id }}
+          LEAN_CLIENT_SHA: ${{ vars.LEAN_CLIENT_SHA || '' }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ vars.DEPLOY_PORT }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: lean-delivery-evidence
+          path: evidence/
+          retention-days: 90
+          if-no-files-found: warn
