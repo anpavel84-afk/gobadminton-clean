@@ -152,17 +152,17 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
         <h3>{venue.name}</h3><p>{venue.address}</p>
         <VenuePublicContacts value={venue.publicContacts} />
         {!gamesReady && <p role="status">Расписание временно недоступно</p>}
-        {gamesReady && games.length === 0 && <>
-          <button type="button" className="gb-venue-sheet-primary" aria-label="Создать игру на этой площадке" onClick={openCreate}>Создать игру на этой площадке<span aria-hidden="true">→</span></button>
-          <section className="gb-venue-sheet-empty" aria-label="Ближайшие игры">
-            <h3>Ближайшие игры</h3>
-            <div className="gb-venue-sheet-empty-card">
-              <p><strong>На этой площадке пока нет игр</strong></p>
-              <p>Будьте первым, кто создаст игру и соберет компанию!</p>
-            </div>
-            <button type="button" className="gb-venue-sheet-primary" onClick={openCreate}>Создать игру на этой площадке<span aria-hidden="true">→</span></button>
-          </section>
-        </>}
+        {gamesReady && games.length === 0 && (desktop
+          ? <section className="gb-venue-sheet-empty" aria-label="Ближайшие игры">
+              <h3>Ближайшие игры</h3>
+              <div className="gb-venue-sheet-empty-card">
+                <p><strong>На этой площадке пока нет игр</strong></p>
+                <p>Будьте первым, кто создаст игру и соберет компанию!</p>
+              </div>
+              <button type="button" className="gb-venue-sheet-primary" aria-label="Создать игру на этой площадке" onClick={openCreate}>Создать игру на этой площадке<span aria-hidden="true">→</span></button>
+            </section>
+          : <button type="button" className="gb-venue-sheet-primary" aria-label="Создать игру на этой площадке" onClick={openCreate}>Создать игру на этой площадке<span aria-hidden="true">→</span></button>
+        )}
         {gamesReady && days.length > 0 && <button type="button" className="gb-venue-sheet-primary" aria-label="Показать игры на этой площадке" onClick={() => setView("schedule")}>Показать игры на этой площадке<span aria-hidden="true">→</span></button>}
       </div> : currentView === "create" ? <CreateGamePage key={`${venue.cityId}:${venue.id}`} embedded initialVenue={venue} onClose={() => setView("info")} /> : currentView === "game" && game ? <div className="gb-venue-sheet-detail"><GameHero game={game} /><VenueGameActions key={game.id} gameId={game.id} /><GameTerms game={game} onVenueClick={() => setView("info")} /></div>
         : <div><h3>Игры на этой площадке</h3>

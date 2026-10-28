@@ -104,7 +104,9 @@ export function RadarPage({ sharedMap, resumeCamera = false }: { sharedMap?: Lib
   }, [candidate, controller, snapshot?.query.queryRef, view.mapPage, view.busy]);
   useEffect(() => {
     if (!sharedMap) return;
-    if (view.selected) setExpanded(desktop);
+    // Promote to inspector on desktop; do not force-collapse on resize to mobile
+    // (keeps detail/profile state across the 1024px presentation change).
+    if (view.selected) { if (desktop) setExpanded(true); }
     else if (!skipFocusRestore.current && trigger.current?.isConnected) trigger.current.focus();
     skipFocusRestore.current = false;
   }, [view.selected, desktop]);

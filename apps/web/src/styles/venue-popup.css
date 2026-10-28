@@ -208,6 +208,9 @@
 }
 .gb-consumer .gb-venue-game-notice { margin:0; color:var(--gb-ink-soft); font-size:13px; }
 
+/* Transparent host: same React aside path on mobile without affecting sheet geometry. */
+.gb-venue-popup-host { display:contents; }
+
 /* Owner #365 — desktop right inspector (~450px view / ~640px create on 1484 ref). */
 .gb-desktop-map-inspector,
 .gb-desktop-map-inspector-dim { display:none; }

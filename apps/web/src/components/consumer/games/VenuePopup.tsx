@@ -30,8 +30,9 @@ export function useVenuePopupModalLifecycle({
     const keydown = (event: KeyboardEvent) => {
       // The portal/native dialog owns its own keyboard and focus lifecycle.
       if (document.querySelector(".gb-venue-picker, dialog[open]")) return;
-      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); escape.current(); }
-      if (event.key !== "Tab") return;
+      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); escape.current(); return; }
+      // Desktop inspector (lockBody=false) must not trap Tab — focus moves between map and panel.
+      if (!lockBody || event.key !== "Tab") return;
       const boundary = embedded
         ? panelRef.current?.closest?.<HTMLElement>(".gb-venue-popup, .gb-desktop-map-inspector") ?? panelRef.current
         : panelRef.current;
@@ -50,7 +51,8 @@ export function useVenuePopupModalLifecycle({
       window.removeEventListener("keydown", keydown, options);
       if (lockBody) document.body.style.overflow = overflow;
       if (skipFocusRestore?.current) return;
-      if (initiator instanceof HTMLElement && initiator.isConnected && !initiator.closest?.("[hidden]")) initiator.focus();
+      // Node/test cleanups may run without a DOM HTMLElement constructor.
+      if (typeof HTMLElement !== "undefined" && initiator instanceof HTMLElement && initiator.isConnected && !initiator.closest?.("[hidden]")) initiator.focus();
       else (document.querySelector<HTMLButtonElement>('.gb-venue-popup .gb-venue-handle') ?? document.querySelector<HTMLButtonElement>('.gb-venue-preview-button'))?.focus();
     };
   }, [active, embedded, panelRef, initialFocusRef, skipFocusRestore, lockBody]);
@@ -209,86 +211,97 @@ export function VenuePopup({ expanded, onExpandedChange, onDeselect, preview, ch
   // The full information block would steal the only photo from the compact
   // preview on the very first pointermove. Mount it only AFTER the morph.
   const visible = (expanded || moving || settling) && !compactMorph;
-  // Owner #365: desktop uses a right inspector — no compact sheet, swipe handle, or map-blocking modal.
-  if (desktop) {
-    return <DesktopMapInspector open label={dialogLabel} onDismiss={onDeselect}>
-      <div className="gb-venue-popup gb-venue-popup--desktop" data-expanded="true" data-desktop="true" role="dialog" aria-label={dialogLabel}>
-        <div className="gb-venue-popup-content">{children}</div>
-      </div>
-    </DesktopMapInspector>;
-  }
+  // One React path for mobile + desktop: retainHost keeps the aside fiber so
+  // VenueSheet/CreateGamePage state survives the 1024px presentation change.
+  // Desktop chrome is CSS-driven; compact gestures stay available below that.
   return <>
-    {expanded && <div className="gb-venue-sheet-backdrop" onClick={onDeselect} />}
-    <div ref={surface} className="gb-venue-popup" role={expanded ? "dialog" : undefined} aria-modal={expanded ? "true" : undefined} aria-label={expanded ? dialogLabel : undefined} data-expanded={expanded} data-moving={moving}
-      style={{ height: position === null ? (expanded ? "88dvh" : "172px") : `calc(172px + ${position}px)`, transition: moving ? "none" : "height 220ms cubic-bezier(.2,.8,.2,1)" }}
-      // A swipe's synthetic click has no new pointerdown. A later real tap does.
-      // Clear only stale suppression at the start of a fresh press so the first
-      // expanded Close/Back tap is never swallowed after an iPhone swipe.
-      onPointerDownCapture={() => {
-        if (!drag.current && !compactDrag.current) suppress.current = false;
-      }}
-      onPointerDown={expanded ? undefined : compactPointerDown}
-      onPointerMove={expanded ? undefined : compactPointerMove}
-      onPointerUp={expanded ? undefined : compactPointerUp}
-      onPointerCancel={expanded ? undefined : compactPointerCancel}
-      onLostPointerCapture={expanded ? undefined : compactPointerCancel}
-      onClickCapture={event => {
-        if (event.detail === 0) return;
-        if (suppress.current) { suppress.current = false; event.preventDefault(); event.stopPropagation(); }
-      }} data-compact-morph={compactMorph} data-settling={settling}>
-      <div ref={compact} className="gb-venue-popup-compact-measure" aria-hidden="true" />
-      <div ref={full} className="gb-venue-popup-full-measure" aria-hidden="true" />
-      <button type="button" className="gb-venue-handle" aria-label={expanded ? collapseHandle : expandHandle}
-        onClick={() => { reset(); onExpandedChange(!expanded); }}
-        onKeyDown={event => { if (event.key === "ArrowUp") { event.preventDefault(); reset(); onExpandedChange(true); } }}
-        onPointerDown={event => {
-          if (drag.current || !event.isPrimary || event.button !== 0) return;
-          suppress.current = false;
-          const travel = (full.current?.getBoundingClientRect().height ?? 0) - (compact.current?.getBoundingClientRect().height ?? 0);
-          if (travel <= 0) return;
-          if (!expanded) rememberCompactGeometry(travel);
-          const start = settling ? Math.max(0, Math.min(travel, (surface.current?.getBoundingClientRect().height ?? 0) - (compact.current?.getBoundingClientRect().height ?? 0))) : expanded ? travel : 0;
-          clearTimer(); setSettling(false);
-          drag.current = { id: event.pointerId, x: event.clientX, y: event.clientY, lastY: event.clientY, time: event.timeStamp, velocity: 0, origin: expanded, start, travel, axis: "pending", target: event.currentTarget };
-          event.currentTarget.setPointerCapture(event.pointerId);
+    {!desktop && expanded && <div className="gb-venue-sheet-backdrop" onClick={onDeselect} />}
+    <DesktopMapInspector open={desktop} retainHost label={dialogLabel} onDismiss={onDeselect}>
+      <div ref={surface}
+        className={desktop ? "gb-venue-popup gb-venue-popup--desktop" : "gb-venue-popup"}
+        role={!desktop && expanded ? "dialog" : undefined}
+        aria-modal={!desktop && expanded ? "true" : undefined}
+        aria-label={!desktop && expanded ? dialogLabel : undefined}
+        data-expanded={desktop || expanded}
+        data-desktop={desktop ? "true" : undefined}
+        data-moving={desktop ? undefined : moving}
+        style={desktop ? undefined : { height: position === null ? (expanded ? "88dvh" : "172px") : `calc(172px + ${position}px)`, transition: moving ? "none" : "height 220ms cubic-bezier(.2,.8,.2,1)" }}
+        // A swipe's synthetic click has no new pointerdown. A later real tap does.
+        // Clear only stale suppression at the start of a fresh press so the first
+        // expanded Close/Back tap is never swallowed after an iPhone swipe.
+        onPointerDownCapture={desktop ? undefined : () => {
+          if (!drag.current && !compactDrag.current) suppress.current = false;
         }}
-        onPointerMove={event => {
-          const current = drag.current; if (!current || current.id !== event.pointerId) return;
-          const dx = event.clientX - current.x; const dy = event.clientY - current.y;
-          if (current.axis === "pending") {
-            if (Math.max(Math.abs(dx), Math.abs(dy)) < 8) return;
-            if (Math.abs(dx) >= Math.abs(dy)) {
-              reset(); suppress.current = true; return;
+        onPointerDown={desktop || expanded ? undefined : compactPointerDown}
+        onPointerMove={desktop || expanded ? undefined : compactPointerMove}
+        onPointerUp={desktop || expanded ? undefined : compactPointerUp}
+        onPointerCancel={desktop || expanded ? undefined : compactPointerCancel}
+        onLostPointerCapture={desktop || expanded ? undefined : compactPointerCancel}
+        onClickCapture={desktop ? undefined : event => {
+          if (event.detail === 0) return;
+          if (suppress.current) { suppress.current = false; event.preventDefault(); event.stopPropagation(); }
+        }}
+        data-compact-morph={desktop ? undefined : compactMorph}
+        data-settling={desktop ? undefined : settling}>
+        {/* Stable slots: CSS hides measure/handle/preview inside the desktop rail. */}
+        <div ref={compact} className="gb-venue-popup-compact-measure" aria-hidden="true" />
+        <div ref={full} className="gb-venue-popup-full-measure" aria-hidden="true" />
+        <button type="button" className="gb-venue-handle" aria-label={(desktop || expanded) ? collapseHandle : expandHandle}
+          tabIndex={desktop ? -1 : undefined}
+          onClick={() => { if (desktop) return; reset(); onExpandedChange(!expanded); }}
+          onKeyDown={event => { if (desktop) return; if (event.key === "ArrowUp") { event.preventDefault(); reset(); onExpandedChange(true); } }}
+          onPointerDown={event => {
+            if (desktop || drag.current || !event.isPrimary || event.button !== 0) return;
+            suppress.current = false;
+            const travel = (full.current?.getBoundingClientRect().height ?? 0) - (compact.current?.getBoundingClientRect().height ?? 0);
+            if (travel <= 0) return;
+            if (!expanded) rememberCompactGeometry(travel);
+            const start = settling ? Math.max(0, Math.min(travel, (surface.current?.getBoundingClientRect().height ?? 0) - (compact.current?.getBoundingClientRect().height ?? 0))) : expanded ? travel : 0;
+            clearTimer(); setSettling(false);
+            drag.current = { id: event.pointerId, x: event.clientX, y: event.clientY, lastY: event.clientY, time: event.timeStamp, velocity: 0, origin: expanded, start, travel, axis: "pending", target: event.currentTarget };
+            event.currentTarget.setPointerCapture(event.pointerId);
+          }}
+          onPointerMove={event => {
+            if (desktop) return;
+            const current = drag.current; if (!current || current.id !== event.pointerId) return;
+            const dx = event.clientX - current.x; const dy = event.clientY - current.y;
+            if (current.axis === "pending") {
+              if (Math.max(Math.abs(dx), Math.abs(dy)) < 8) return;
+              if (Math.abs(dx) >= Math.abs(dy)) {
+                reset(); suppress.current = true; return;
+              }
+              current.axis = "vertical"; suppress.current = true; setMoving(true);
+              if (!current.origin) setCompactMorph(true);
             }
-            current.axis = "vertical"; suppress.current = true; setMoving(true);
-            if (!current.origin) setCompactMorph(true);
-          }
-          event.preventDefault();
-          const elapsed = event.timeStamp - current.time;
-          if (elapsed > 0) current.velocity = (current.lastY - event.clientY) / elapsed;
-          current.lastY = event.clientY; current.time = event.timeStamp;
-          setPosition(Math.max(0, Math.min(current.travel, current.start - dy)));
-        }}
-        onPointerUp={event => {
-          const current = drag.current; if (!current || current.id !== event.pointerId) return;
-          if (current.axis !== "vertical") { reset(); return; }
-          // Existing expanded-handle behavior stays untouched; compact handle can dismiss.
-          if (!current.origin && event.clientY - current.y >= 64) {
-            reset(); onDeselect(); return;
-          }
-          const progress = Math.max(0, Math.min(current.travel, current.start + current.y - event.clientY));
-          const velocity = event.timeStamp - current.time > 100 ? 0 : current.velocity;
-          settle(Math.abs(velocity) >= .5 ? velocity > 0 : progress >= current.travel / 2);
-        }} onPointerCancel={cancel} onLostPointerCapture={cancel}><span /></button>
-      {/* Never display:none the touched preview while the compact card is being dragged.
-          Safari drops the pointer stream when its original hit target disappears.
-          The popup shell captures the pointer, and this stable layer remains mounted. */}
-      <div className="gb-venue-popup-preview-surface"
-        aria-hidden={visible}
-        style={{ opacity: visible ? 0 : 1, pointerEvents: expanded || settling ? "none" : "auto", ...compactMorphStyle }}>
-        {preview}
+            event.preventDefault();
+            const elapsed = event.timeStamp - current.time;
+            if (elapsed > 0) current.velocity = (current.lastY - event.clientY) / elapsed;
+            current.lastY = event.clientY; current.time = event.timeStamp;
+            setPosition(Math.max(0, Math.min(current.travel, current.start - dy)));
+          }}
+          onPointerUp={event => {
+            if (desktop) return;
+            const current = drag.current; if (!current || current.id !== event.pointerId) return;
+            if (current.axis !== "vertical") { reset(); return; }
+            // Existing expanded-handle behavior stays untouched; compact handle can dismiss.
+            if (!current.origin && event.clientY - current.y >= 64) {
+              reset(); onDeselect(); return;
+            }
+            const progress = Math.max(0, Math.min(current.travel, current.start + current.y - event.clientY));
+            const velocity = event.timeStamp - current.time > 100 ? 0 : current.velocity;
+            settle(Math.abs(velocity) >= .5 ? velocity > 0 : progress >= current.travel / 2);
+          }} onPointerCancel={desktop ? undefined : cancel} onLostPointerCapture={desktop ? undefined : cancel}><span /></button>
+        {/* Never display:none the touched preview while the compact card is being dragged.
+            Safari drops the pointer stream when its original hit target disappears.
+            The popup shell captures the pointer, and this stable layer remains mounted. */}
+        <div className="gb-venue-popup-preview-surface"
+          aria-hidden={desktop || visible}
+          style={{ opacity: desktop || visible ? 0 : 1, pointerEvents: desktop || expanded || settling ? "none" : "auto", ...(!desktop ? compactMorphStyle : undefined) }}>
+          {/* Keep the surface slot mounted; omit compact children on desktop (CSS also hides). */}
+          {desktop ? null : preview}
+        </div>
+        {(desktop || visible) && <div className="gb-venue-popup-content">{children}</div>}
       </div>
-      {visible && <div className="gb-venue-popup-content">{children}</div>}
-    </div>
+    </DesktopMapInspector>
   </>;
 }

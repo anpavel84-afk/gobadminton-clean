@@ -248,7 +248,14 @@ function popupHarness(initial: boolean, reduced = false) {
     if (!action) throw new Error("Missing compact-only handler: " + handler);
     action(event); return event;
   };
-  Object.assign(window, { matchMedia: () => ({ matches: reduced }) });
+  Object.assign(window, { matchMedia: (query: string) => ({
+    // Only reduced-motion is harness-controlled; desktop inspector MQ must stay false here.
+    matches: query.includes("prefers-reduced-motion") ? reduced : false,
+    addEventListener() {},
+    removeEventListener() {},
+    addListener() {},
+    removeListener() {},
+  }) });
   return { render: renderPopup, find, pointer, pointerCard, change, deselect: deselectPopup, capture, target,
     click(detail: number) { const event = { detail, preventDefault: vi.fn(), stopPropagation: vi.fn() }; (find("gb-venue-popup").props.onClickCapture as (event: unknown) => void)(event); return event; },
     dispose() { state.cleanups.forEach(fn => fn?.()); },

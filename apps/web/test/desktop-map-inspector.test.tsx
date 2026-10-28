@@ -59,7 +59,8 @@ function stubWindow(desktop: boolean) {
   mediaListeners.clear();
   vi.stubGlobal("window", Object.assign(new EventTarget(), {
     matchMedia: (query: string) => ({
-      matches: query === DESKTOP_MAP_INSPECTOR_MQ ? mediaMatches : false,
+      // Getter so change listeners observe later mediaMatches updates.
+      get matches() { return query === DESKTOP_MAP_INSPECTOR_MQ ? mediaMatches : false; },
       media: query,
       addEventListener: (_: string, fn: () => void) => mediaListeners.add(fn),
       removeEventListener: (_: string, fn: () => void) => mediaListeners.delete(fn),
@@ -86,6 +87,7 @@ it("DesktopMapInspector stays inert when closed and dismisses via dim", () => {
   const html = renderToStaticMarkup(tree!);
   expect(html).toContain('data-desktop-inspector="true"');
   expect(html).toContain("content");
+  expect(html).toContain('aria-modal="false"');
   const dim = elements(tree).find(node => node.props.className === "gb-desktop-map-inspector-dim");
   expect(dim).toBeDefined();
   (dim!.props.onClick as () => void)();
@@ -97,7 +99,7 @@ it("VenuePopup uses the desktop rail without compact handle when the breakpoint 
   const change = vi.fn();
   const deselect = vi.fn();
   hooks.cursor = 0;
-  const tree = VenuePopup({
+  VenuePopup({
     expanded: false, onExpandedChange: change, onDeselect: deselect,
     preview: <div>compact</div>,
     children: <div className="gb-venue-sheet" data-view="info">sheet</div>,
@@ -113,23 +115,33 @@ it("VenuePopup uses the desktop rail without compact handle when the breakpoint 
   expect(html).toContain("gb-desktop-map-inspector");
   expect(html).toContain("gb-venue-popup--desktop");
   expect(html).toContain("sheet");
-  expect(html).not.toContain("compact");
-  expect(html).not.toContain("gb-venue-handle");
+  expect(html).not.toContain("<div>compact</div>");
+  expect(html).toContain('aria-modal="false"');
+  // One nonmodal inspector on the aside — inner popup must not fake a second dialog.
+  expect(html.match(/role="dialog"/g)?.length ?? 0).toBe(1);
+  const handle = elements(desktopTree).find(node => node.props.className === "gb-venue-handle");
+  expect(handle?.props.tabIndex).toBe(-1);
   expect(elements(desktopTree).some(node => node.props.className === "gb-venue-sheet-backdrop")).toBe(false);
 });
 
 it("empty verified schedule shows honest empty copy without invented amenities or ratings", () => {
-  stubWindow(false);
+  stubWindow(true);
+  hooks.cursor = 0;
+  VenueSheet({
+    venue, games: [], gamesReady: true, now: 0, embedded: true, active: true,
+    onCollapse: () => {}, onDeselect: () => {},
+  });
+  hooks.effects.splice(0).forEach(effect => effect());
   hooks.cursor = 0;
   const tree = VenueSheet({
     venue, games: [], gamesReady: true, now: 0, embedded: true, active: true,
     onCollapse: () => {}, onDeselect: () => {},
   });
-  hooks.effects.splice(0).forEach(effect => effect());
   const html = renderToStaticMarkup(tree);
   expect(html).toContain("На этой площадке пока нет игр");
   expect(html).toContain("Ближайшие игры");
   expect(html).toContain("Создать игру на этой площадке");
+  expect(html).toContain("gb-venue-sheet-empty");
   expect(html).not.toContain("4.8");
   expect(html).not.toContain("отзывов");
   expect(html).not.toContain("Популярная площадка");
@@ -184,4 +196,36 @@ it("useDesktopMapInspector follows matchMedia changes", () => {
   hooks.cursor = 0;
   Probe();
   expect(value).toBe(true);
+});
+
+it("retains the same content child across desktop breakpoint changes", () => {
+  const change = vi.fn();
+  const deselect = vi.fn();
+  const child = <div className="gb-venue-sheet" data-view="create" data-draft="kept">draft</div>;
+  stubWindow(false);
+  hooks.cursor = 0;
+  VenuePopup({
+    expanded: true, onExpandedChange: change, onDeselect: deselect,
+    preview: <div>preview</div>, children: child,
+  });
+  hooks.effects.splice(0).forEach(effect => effect());
+  hooks.cursor = 0;
+  const mobile = VenuePopup({
+    expanded: true, onExpandedChange: change, onDeselect: deselect,
+    preview: <div>preview</div>, children: child,
+  });
+  const mobileContent = elements(mobile).find(node => node.props.className === "gb-venue-popup-content");
+  expect(mobileContent?.props.children).toBe(child);
+
+  mediaMatches = true;
+  mediaListeners.forEach(fn => fn());
+  hooks.cursor = 0;
+  const desktop = VenuePopup({
+    expanded: true, onExpandedChange: change, onDeselect: deselect,
+    preview: <div>preview</div>, children: child,
+  });
+  const desktopContent = elements(desktop).find(node => node.props.className === "gb-venue-popup-content");
+  expect(desktopContent?.props.children).toBe(child);
+  expect(renderToStaticMarkup(desktop)).toContain('data-desktop-inspector="true"');
+  expect(renderToStaticMarkup(desktop)).toContain('data-draft="kept"');
 });
