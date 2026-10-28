@@ -4,6 +4,7 @@ import { formatSocialLevel } from "../../../lib/player-presentation";
 import { distanceText, liveUnifiedPreview } from "../../../lib/unified-directory";
 import type { UnifiedUpcomingGame } from "@gobadminton/contracts";
 import { Avatar, Badge, ProfileDialog } from "../players/ProfileComposition";
+import { PublicPlayerProfile, reportUnknownScopeKey } from "../players/PublicPlayerProfile";
 import { Button } from "../Button";
 import { CloseButton } from "../CloseButton";
 import { GameCover } from "../games/GameCover";
@@ -19,7 +20,7 @@ function gameWhen(game: UnifiedUpcomingGame): string {
   return `${day} · ${time.format(start)}–${time.format(end)}`;
 }
 
-export function UnifiedPlayerPreview({ dialog = false, onClose, expanded: controlled, onExpandedChange, surface, onOpen, onCollapse, skipFocusRestore }: {
+export function UnifiedPlayerPreview({ dialog = false, onClose, expanded: controlled, onExpandedChange, surface, onOpen, onCollapse, skipFocusRestore, reportUnknownScopes, onReportUnknownScope }: {
   dialog?: boolean; onClose: () => void; expanded?: boolean; onExpandedChange?: (value: boolean) => void;
   /** compact/detail split the same content into VenuePopup preview + sheet slots. */
   surface?: "compact" | "detail";
@@ -27,12 +28,28 @@ export function UnifiedPlayerPreview({ dialog = false, onClose, expanded: contro
   onCollapse?: () => void;
   /** Shared with RadarPage: venue replacement must not restore the old player trigger. */
   skipFocusRestore?: { current: boolean };
+  /**
+   * RadarPage-held additive set of viewer:peer keys survives VenuePopup detail unmount.
+   * When omitted (dialog / standalone), this preview keeps its own narrow set across games↔profile.
+   */
+  reportUnknownScopes?: ReadonlySet<string>;
+  onReportUnknownScope?: (scopeKey: string) => void;
 }) {
   const [localExpanded, setLocalExpanded] = useState(false);
   const [gamesView, setGamesView] = useState(false);
+  const [localReportUnknownScopes, setLocalReportUnknownScopes] = useState(new Set<string>());
   const expanded = surface === "compact" ? false : surface === "detail" ? true : (controlled ?? localExpanded);
   const expand = (value: boolean) => { setLocalExpanded(value); onExpandedChange?.(value); if (!value) setGamesView(false); };
+  const collapseSheet = () => {
+    setGamesView(false);
+    if (onCollapse) onCollapse();
+    else if (surface !== "detail") expand(false);
+    else onClose();
+  };
   const directory = useUnifiedDirectory(); const { view } = useRadarSession(); const focus = useRef<HTMLDivElement>(null);
+  const latchScopes = reportUnknownScopes ?? localReportUnknownScopes;
+  const latchUnknown = onReportUnknownScope
+    ?? ((scope: string) => setLocalReportUnknownScopes(prev => new Set([...prev, scope])));
   const row = [...directory.view.pins, ...directory.view.rows].find(row => row.publicPlayerId === directory.view.selected);
   const preview = directory.view.preview;
   const now = Date.now();
@@ -54,8 +71,7 @@ export function UnifiedPlayerPreview({ dialog = false, onClose, expanded: contro
   const escapeDetail = useRef(() => {});
   escapeDetail.current = () => {
     if (gamesView) setGamesView(false);
-    else if (onCollapse) onCollapse();
-    else onClose();
+    else collapseSheet();
   };
   // Same VenueSheet shell lifecycle: handle Escape, Tab containment, body overflow, nested dialogs.
   useVenuePopupModalLifecycle({
@@ -81,6 +97,10 @@ export function UnifiedPlayerPreview({ dialog = false, onClose, expanded: contro
   const levelLabel = safePreview?.player.level ? formatSocialLevel(safePreview.player.level) : null;
   const distance = safePreview ? (distanceText(safePreview.radar.distance) ?? "Расстояние неизвестно") : null;
   const games = safePreview ? safePreview.upcomingGames.slice(0, 3) : [];
+  // Ordinary public profile mounts only behind the live Radar fence for this peer/viewer/TTL.
+  const profileMountKey = safePreview && row?.radar
+    ? `${safePreview.player.publicPlayerId}:${view.me?.id ?? "guest"}:${row.radar.resultRef}`
+    : null;
 
   const gamesSection = safePreview && <section id="radar-player-detail" className="unified-preview__games" aria-label="Ближайшие публичные игры игрока">
     <header className="unified-preview__games-head"><small>Публичные будущие события</small><h3>Ближайшие публичные игры</h3></header>
@@ -118,33 +138,33 @@ export function UnifiedPlayerPreview({ dialog = false, onClose, expanded: contro
     </div>;
   }
 
-  const profileArticle = safePreview && <article className="unified-preview__expanded" aria-label={`Карточка: ${safePreview.player.displayName}`}>
-    <div className="unified-preview__sheet-head"><span /><CloseButton aria-label="Закрыть карточку игрока" onClick={onClose} /></div>
-    <div className="unified-preview__hero">
-      <Avatar name={safePreview.player.displayName} avatar={safePreview.player.avatar} tone={safePreview.player.trainer ? "purple" : "yellow"} />
-    </div>
-    <div className="unified-preview__expanded-copy">
-      <h2>{safePreview.player.displayName}</h2>
-      <div className="unified-preview__meta-row">
-        {levelLabel && <Badge>{levelLabel}</Badge>}
-        {safePreview.player.trainer && <Badge trainer>Тренер</Badge>}
-      </div>
-      <p className="unified-distance">{distance}</p>
-      <p>Приблизительное положение · погрешность {safePreview.radar.geo.uncertaintyMeters} м · возраст геопозиции до {safePreview.radar.geo.sourceAgeSeconds} с.</p>
-      {safePreview.radar.geo.quality === "degraded" && <p>Местоположение определяется неточно.</p>}
-      {surface === "detail"
-        ? <Button variant="outline" onClick={() => onCollapse?.()}>Свернуть карточку</Button>
-        : <Button variant="outline" aria-expanded={true} aria-controls="radar-player-detail" onClick={() => expand(false)}>Свернуть карточку</Button>}
-      {view.me && <RadarContact key={row.radar.resultRef} me={view.me} item={{ resultId: row.radar.resultId, resultRef: row.radar.resultRef, player: safePreview.player }} />}
-      <Button variant="outline" aria-controls="radar-player-detail" onClick={() => setGamesView(true)}>Ближайшие публичные игры</Button>
-      <p className="unified-preview__privacy"><small>Только публичная информация</small></p>
-    </div>
+  const collapseLabel = "Свернуть карточку игрока" as const;
+  const reportScope = view.me && safePreview
+    ? reportUnknownScopeKey(view.me.id, safePreview.player.publicPlayerId)
+    : null;
+  const profileArticle = safePreview && profileMountKey && row.radar && <article className="unified-preview__expanded" aria-label={`Карточка: ${safePreview.player.displayName}`}>
+    <div className="unified-preview__sheet-head"><span /><CloseButton aria-label={collapseLabel} onClick={collapseSheet} /></div>
+    <PublicPlayerProfile
+      key={profileMountKey}
+      publicPlayerId={safePreview.player.publicPlayerId}
+      embedded
+      distance={distance}
+      titleAs="h2"
+      contactActions={view.me
+        ? <RadarContact key={row.radar.resultRef} me={view.me} item={{ resultId: row.radar.resultId, resultRef: row.radar.resultRef, player: safePreview.player }} />
+        : undefined}
+      nearbyGamesAction={null}
+      reportUnknown={reportScope !== null && latchScopes.has(reportScope)}
+      onReportUnknown={latchUnknown}
+    />
+    <Button variant="outline" aria-controls="radar-player-detail" onClick={() => setGamesView(true)}>Ближайшие публичные игры</Button>
+    <p className="unified-preview__privacy"><small>Только публичная информация</small></p>
   </article>;
 
   const gamesInternal = safePreview && gamesView && <div className="unified-preview__games-view" data-player-view="games">
     <header className="unified-preview__games-nav">
       <button type="button" className="unified-preview__back" aria-label={`Назад к профилю ${safePreview.player.displayName}`} onClick={() => setGamesView(false)}>← {safePreview.player.displayName}</button>
-      <CloseButton aria-label="Закрыть карточку игрока" onClick={onClose} />
+      <CloseButton aria-label={collapseLabel} onClick={collapseSheet} />
     </header>
     {gamesSection}
   </div>;

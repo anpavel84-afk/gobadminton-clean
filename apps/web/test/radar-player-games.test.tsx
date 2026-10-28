@@ -11,6 +11,7 @@ import type { apiFetch } from "../src/lib/api-client";
 import { MOSCOW_BUNDLE } from "../src/lib/radar-map-assets";
 import { RadarPage } from "../src/components/consumer/radar/RadarPage";
 import { UnifiedPlayerPreview } from "../src/components/consumer/radar/UnifiedPlayerPreview";
+import { PublicPlayerProfile } from "../src/components/consumer/players/PublicPlayerProfile";
 import { VenuePopup } from "../src/components/consumer/games/VenuePopup";
 
 const hooks = vi.hoisted(() => ({ slots: [] as unknown[], cursor: 0, effects: [] as (() => void)[], cleanups: [] as (() => void)[] }));
@@ -42,6 +43,25 @@ vi.mock("../src/components/consumer/radar/RadarSessionProvider",()=>({
   useDirectoryFilters:()=>({filters:{cityId:"a0000000-0000-4000-8000-000000000001",areaKey:"",name:"",lookingOnly:false,trainerOnly:false}}),RadarStatusAffordance:()=>null,
 }));
 vi.mock("../src/components/consumer/radar/RadarContact",()=>({RadarContact:()=>null}));
+vi.mock("../src/lib/api-client", async importOriginal => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    getMe: vi.fn(async () => ({ ok: true, status: 200, data: { id: "viewer", csrfToken: "csrf", displayName: "Viewer", locale: "ru", linkedProviders: [] } })),
+    getPlayer: vi.fn(async () => ({ ok: true, status: 200, data: {
+      publicPlayerId: "peer", displayName: "Игрок", cityId: "a0000000-0000-4000-8000-000000000001", areaKey: null, level: null,
+      bio: null, trainer: false, lookingForGame: false, avatar: { uploadedUrl: null, providerUrl: null }, canRequestContact: false,
+    } })),
+    listCities: vi.fn(async () => ({ ok: true, status: 200, data: { items: [] } })),
+    createAbuseReport: vi.fn(), putMyBlock: vi.fn(), deleteMyBlock: vi.fn(),
+  };
+});
+vi.mock("../src/components/consumer/friends/ProfileFriendship", () => ({ ProfileFriendship: () => null }));
+vi.mock("../src/components/consumer/players/ContactAction", () => ({
+  useContactState: () => null,
+  ContactAction: () => null,
+  ContactNote: () => null,
+}));
 const now=Date.parse("2030-01-01T00:00:00Z"), until=new Date(now+45000).toISOString();
 const row:UnifiedRow={publicPlayerId:"peer",projection:"directory",player:{publicPlayerId:"peer",displayName:"Игрок",cityId:MOSCOW_BUNDLE.cityId,areaKey:null,level:null,trainer:false,lookingForGame:false,avatar:{uploadedUrl:null,providerUrl:null},canRequestContact:false},
   radar:{resultId:"r",resultRef:"private-proof",consentPolicyVersion:"radar-geographic-sharing-v2",validUntil:until,distance:null,geo:{latitude:55.75,longitude:37.6,crs:"EPSG:4326",model:"regional_grid_100m_v1",gridSizeMeters:100,uncertaintyMeters:100,quality:"approximate",sourceTimestampBucket:new Date(now).toISOString(),sourceAgeSeconds:0}}};
@@ -95,10 +115,16 @@ it("renders compact -> expanded profile; games stay an internal sheet view",()=>
   expect(expanded).toContain('data-preview-mode="expanded"');
   expect(expanded).toContain('data-player-view="profile"');
   expect(expanded).toContain("unified-preview__expanded");
-  expect(expanded).toContain("unified-preview__hero");
+  expect(nodes(tree).some(n => n.type === PublicPlayerProfile)).toBe(true);
+  const shared = nodes(tree).find(n => n.type === PublicPlayerProfile)!;
+  expect(shared.props.publicPlayerId).toBe("peer");
+  expect(shared.props.embedded).toBe(true);
+  expect(shared.props.distance).toBeTruthy();
   expect(expanded).toContain("Ближайшие публичные игры");
   expect(expanded).not.toContain("Разрешённая игра");
-  expect(expanded).toContain("Свернуть карточку");
+  expect(expanded).toContain('aria-label="Свернуть карточку игрока"');
+  expect(expanded).not.toContain(">Свернуть карточку<");
+  expect(expanded).not.toContain("Приблизительное положение");
   expect(expanded).not.toContain("Подробнее об игроке");
   expect(expanded).not.toContain("/players/peer");
   activate(tree,"Ближайшие публичные игры");
@@ -171,4 +197,67 @@ for(const action of ["close","Escape","back"] as const) it(`${action} restores f
   if(action==="back")window.history.back();
   else (nodes(tree).find(n=>n.type===VenuePopup)!.props.onDeselect as ()=>void)();
   page();expect(controller.view.selected).toBeNull();expect(controller.view.preview).toBeNull();expect(trigger.focus).toHaveBeenCalled();expect(window.location.href).toContain("/games?view=map");
+});
+it("keeps unknown-report latch across internal games round-trip", () => {
+  let tree = card(true);
+  let shared = nodes(tree).find(n => n.type === PublicPlayerProfile)!;
+  expect(shared.props.reportUnknown).toBe(false);
+  expect(typeof shared.props.onReportUnknown).toBe("function");
+  // Shared body latches via Radar parent callback (POST/unknown covered in public-player-profile tests).
+  (shared.props.onReportUnknown as (scope: string) => void)("viewer:peer");
+  tree = card(true);
+  shared = nodes(tree).find(n => n.type === PublicPlayerProfile)!;
+  expect(shared.props.reportUnknown).toBe(true);
+
+  activate(tree, "Ближайшие публичные игры");
+  tree = card(true);
+  expect(nodes(tree).some(n => n.type === PublicPlayerProfile)).toBe(false);
+  activate(tree, `Назад к профилю ${preview.player.displayName}`);
+  tree = card(true);
+  shared = nodes(tree).find(n => n.type === PublicPlayerProfile)!;
+  expect(shared.props.reportUnknown).toBe(true);
+});
+
+it("RadarPage wires report-unknown latch into both VenuePopup preview surfaces", () => {
+  page();
+  const tree = page();
+  const popup = nodes(tree).find(n => n.type === VenuePopup)!;
+  expect(popup).toBeDefined();
+  const previews = nodes(tree).filter(n => n.type === UnifiedPlayerPreview);
+  expect(previews.some(n => n.props.surface === "compact")).toBe(true);
+  expect(previews.some(n => n.props.surface === "detail")).toBe(true);
+  for (const preview of previews) {
+    expect("reportUnknownScopes" in preview.props).toBe(true);
+    expect(typeof preview.props.onReportUnknownScope).toBe("function");
+  }
+  // Parent-held scope survives detail remount (collapse/reopen replaces children).
+  (previews.find(n => n.props.surface === "detail")!.props.onReportUnknownScope as (scope: string) => void)("viewer:peer");
+  const again = page();
+  const detail = nodes(again).filter(n => n.type === UnifiedPlayerPreview).find(n => n.props.surface === "detail")!;
+  expect((detail.props.reportUnknownScopes as ReadonlySet<string>).has("viewer:peer")).toBe(true);
+});
+
+it("RadarPage retains multiple unknown scopes; late B cannot erase A", () => {
+  page();
+  let tree = page();
+  let detail = nodes(tree).filter(n => n.type === UnifiedPlayerPreview).find(n => n.props.surface === "detail")!;
+  const latch = detail.props.onReportUnknownScope as (scope: string) => void;
+  // A 503 → collapse, then B 503 → collapse: both scopes must remain.
+  latch("viewer:peer-a");
+  tree = page();
+  detail = nodes(tree).filter(n => n.type === UnifiedPlayerPreview).find(n => n.props.surface === "detail")!;
+  (detail.props.onReportUnknownScope as (scope: string) => void)("viewer:peer-b");
+  tree = page();
+  detail = nodes(tree).filter(n => n.type === UnifiedPlayerPreview).find(n => n.props.surface === "detail")!;
+  const scopes = detail.props.reportUnknownScopes as ReadonlySet<string>;
+  expect(scopes.has("viewer:peer-a")).toBe(true);
+  expect(scopes.has("viewer:peer-b")).toBe(true);
+  // Late A callback after B must not wipe B; unrelated pair stays usable.
+  (detail.props.onReportUnknownScope as (scope: string) => void)("viewer:peer-a");
+  tree = page();
+  detail = nodes(tree).filter(n => n.type === UnifiedPlayerPreview).find(n => n.props.surface === "detail")!;
+  const again = detail.props.reportUnknownScopes as ReadonlySet<string>;
+  expect(again.has("viewer:peer-a")).toBe(true);
+  expect(again.has("viewer:peer-b")).toBe(true);
+  expect(again.has("viewer:peer-c")).toBe(false);
 });

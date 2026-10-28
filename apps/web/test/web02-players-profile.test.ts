@@ -97,21 +97,40 @@ describe("WEB-02 Players / Profile", () => {
     const page = await readSource(
       "../src/components/consumer/pages/PublicPlayerProfilePage.tsx",
     );
+    const shared = await readSource(
+      "../src/components/consumer/players/PublicPlayerProfile.tsx",
+    );
+    const content = await readSource(
+      "../src/components/consumer/players/PlayerProfileContent.tsx",
+    );
+    const preview = await readSource(
+      "../src/components/consumer/radar/UnifiedPlayerPreview.tsx",
+    );
     const route = await readSource(
       "../src/app/players/[publicPlayerId]/page.tsx",
     );
     expect(route).toContain("PublicPlayerProfilePage");
-    expect(page).toContain('data-surface="public-player"');
-    expect(page).toContain('data-variant={variant}');
-    expect(page).toContain("<ContactAction");
-    expect(page).toContain("<ContactNote");
-    expect(page).not.toContain('Radar включён');
-    expect(page).toContain("Ближайшие игры этого игрока пока недоступны");
-    expect(page).toContain("Тренер");
-    expect(page).toContain("Ищу игру");
-    expect(page).toContain('data-action={blocked ? "unblock" : "block"}');
-    expect(page).toContain("createAbuseReport");
+    expect(page).toContain("ConsumerShell");
+    expect(page).toContain("<PublicPlayerProfile");
+    expect(page).toContain("publicPlayerId={publicPlayerId}");
+    expect(page).not.toContain("getPlayer");
+    expect(shared).toContain('data-surface="public-player"');
+    expect(shared).toContain("data-variant={variant}");
+    expect(shared).toContain("<PlayerProfileContent");
+    expect(shared).toContain("<ContactAction");
+    expect(shared).toContain("<ContactNote");
+    expect(shared).toContain("<ProfileFriendship");
+    expect(shared).toContain("createAbuseReport");
+    expect(shared).toContain('data-action={blocked ? "unblock" : "block"}');
+    expect(shared).toContain("Ближайшие игры этого игрока пока недоступны");
+    expect(shared).not.toContain("Radar включён");
+    expect(preview).toContain("<PublicPlayerProfile");
+    expect(preview).toContain("embedded");
+    expect(content).toContain("Тренер");
+    expect(content).toContain("Ищу игру");
+    expect(content).toContain("player-profile-hero");
     expect(page).not.toMatch(/proximityBand|displaySlot|Radar включён/);
+    expect(shared).not.toMatch(/proximityBand|displaySlot|Radar включён/);
   });
 
   it("wires Own Profile looking/visibility and DR-09 account stacking", async () => {

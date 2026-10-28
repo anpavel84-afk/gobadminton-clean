@@ -10,6 +10,7 @@ import type { apiFetch } from "../src/lib/api-client";
 import { MOSCOW_BUNDLE } from "../src/lib/radar-map-assets";
 import { RadarPage } from "../src/components/consumer/radar/RadarPage";
 import { UnifiedPlayerPreview } from "../src/components/consumer/radar/UnifiedPlayerPreview";
+import { PublicPlayerProfile } from "../src/components/consumer/players/PublicPlayerProfile";
 import { VenuePopup } from "../src/components/consumer/games/VenuePopup";
 import { GamesMapView } from "../src/components/consumer/games/GamesMapView";
 import { VenuePreviewCard } from "../src/components/consumer/games/VenuePreviewCard";
@@ -78,6 +79,25 @@ vi.mock("../src/components/consumer/radar/RadarSessionProvider", () => ({
   RadarStatusAffordance: () => null,
 }));
 vi.mock("../src/components/consumer/radar/RadarContact", () => ({ RadarContact: () => null }));
+vi.mock("../src/lib/api-client", async importOriginal => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    getMe: vi.fn(async () => ({ ok: true, status: 200, data: { id: "viewer", csrfToken: "csrf", displayName: "Viewer", locale: "ru", linkedProviders: [] } })),
+    getPlayer: vi.fn(async () => ({ ok: true, status: 200, data: {
+      publicPlayerId: "peer", displayName: "Игрок", cityId: "a0000000-0000-4000-8000-000000000001", areaKey: null, level: null,
+      bio: null, trainer: false, lookingForGame: false, avatar: { uploadedUrl: null, providerUrl: null }, canRequestContact: false,
+    } })),
+    listCities: vi.fn(async () => ({ ok: true, status: 200, data: { items: [] } })),
+    createAbuseReport: vi.fn(), putMyBlock: vi.fn(), deleteMyBlock: vi.fn(),
+  };
+});
+vi.mock("../src/components/consumer/friends/ProfileFriendship", () => ({ ProfileFriendship: () => null }));
+vi.mock("../src/components/consumer/players/ContactAction", () => ({
+  useContactState: () => null,
+  ContactAction: () => null,
+  ContactNote: () => null,
+}));
 
 const now = Date.parse("2030-01-01T00:00:00Z");
 const until = new Date(now + 45000).toISOString();
@@ -712,6 +732,52 @@ it("venue→new player before pending retirement popstate keeps the new player",
   expect(window.history.state.gbRadarPreview).toBeUndefined();
   expect(controller.view.selected).toBeNull();
   await selectingB;
+});
+
+it("expanded X collapses to compact without clearing selection, history, or filters", async () => {
+  const baseline = historyStack.length;
+  await controller.select(controller.view.pins[0]!);
+  let tree = renderRadar();
+  (nodes(tree).find(n => n.type === VenuePopup)!.props.onExpandedChange as (value: boolean) => void)(true);
+  tree = renderRadar();
+  expect(nodes(tree).find(n => n.type === VenuePopup)!.props.expanded).toBe(true);
+  expect(historyStack.length).toBe(baseline + 1);
+
+  const collapse = vi.fn();
+  hooks.use("preview"); hooks.resetFiber();
+  const detail = renderPreview({ surface: "detail", onClose: () => controller.close(), onCollapse: collapse });
+  const closeX = nodes(detail).find(n => n.props["aria-label"] === "Свернуть карточку игрока");
+  expect(closeX).toBeDefined();
+  expect(JSON.stringify(detail)).not.toMatch(/>Свернуть карточку</);
+  expect(nodes(detail).some(n => n.type === PublicPlayerProfile)).toBe(true);
+  expect(nodes(detail).find(n => n.type === PublicPlayerProfile)!.props.publicPlayerId).toBe("peer");
+  expect(nodes(detail).find(n => n.type === PublicPlayerProfile)!.props.embedded).toBe(true);
+  expect(JSON.stringify(detail)).not.toContain("Приблизительное положение");
+  (closeX!.props.onClick as () => void)();
+  expect(collapse).toHaveBeenCalledOnce();
+  expect(controller.view.selected).toBe("peer");
+  expect(controller.view.preview).not.toBeNull();
+
+  hooks.use("radar");
+  const detailOnPage = nodes(tree).find(n => n.type === UnifiedPlayerPreview && n.props.surface === "detail")!;
+  (detailOnPage.props.onCollapse as () => void)();
+  tree = renderRadar();
+  expect(nodes(tree).find(n => n.type === VenuePopup)!.props.expanded).toBe(false);
+  expect(controller.view.selected).toBe("peer");
+  expect(historyStack.length).toBe(baseline + 1);
+  expect(window.history.state.gbRadarPreview).toBe(true);
+});
+
+it("ordinary full Close still deselects once via VenuePopup onDeselect", async () => {
+  const baseline = historyStack.length;
+  await controller.select(controller.view.pins[0]!);
+  let tree = renderRadar();
+  expect(historyStack.length).toBe(baseline + 1);
+  (nodes(tree).find(n => n.type === VenuePopup)!.props.onDeselect as () => void)();
+  tree = renderRadar();
+  expect(controller.view.selected).toBeNull();
+  expect(controller.view.preview).toBeNull();
+  expect(historyStack.length).toBe(baseline);
 });
 
 it("compact Escape retires once under async back; browser Back still closes", async () => {
