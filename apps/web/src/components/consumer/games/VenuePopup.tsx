@@ -1,12 +1,13 @@
 "use client";
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent, type ReactNode } from "react";
+import { DesktopMapInspector, useDesktopMapInspector } from "./DesktopMapInspector";
 
 type Drag = { id: number; x: number; y: number; lastY: number; time: number; velocity: number; origin: boolean; start: number; travel: number; axis: "pending" | "vertical"; target: HTMLButtonElement };
 type CompactDrag = { id: number; x: number; y: number; travel: number; axis: "pending" | "vertical"; target: HTMLElement };
 
 /** Shared expanded-shell keyboard/focus/body-overflow lifecycle for VenueSheet and player detail. */
 export function useVenuePopupModalLifecycle({
-  active, embedded = false, panelRef, initialFocusRef, onEscape, skipFocusRestore,
+  active, embedded = false, panelRef, initialFocusRef, onEscape, skipFocusRestore, lockBody = true,
 }: {
   active: boolean;
   embedded?: boolean;
@@ -15,6 +16,8 @@ export function useVenuePopupModalLifecycle({
   onEscape: () => void;
   /** When true at cleanup (player→venue replacement), do not restore the old opener. */
   skipFocusRestore?: { current: boolean };
+  /** Desktop inspector keeps the map usable; do not freeze document scroll. */
+  lockBody?: boolean;
 }) {
   const escape = useRef(onEscape);
   escape.current = onEscape;
@@ -22,14 +25,16 @@ export function useVenuePopupModalLifecycle({
     if (!active) return;
     const initiator = document.activeElement;
     const overflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
+    if (lockBody) document.body.style.overflow = "hidden";
     initialFocusRef?.current?.focus();
     const keydown = (event: KeyboardEvent) => {
       // The portal/native dialog owns its own keyboard and focus lifecycle.
       if (document.querySelector(".gb-venue-picker, dialog[open]")) return;
       if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); escape.current(); }
       if (event.key !== "Tab") return;
-      const boundary = embedded ? panelRef.current?.closest?.<HTMLElement>(".gb-venue-popup") ?? panelRef.current : panelRef.current;
+      const boundary = embedded
+        ? panelRef.current?.closest?.<HTMLElement>(".gb-venue-popup, .gb-desktop-map-inspector") ?? panelRef.current
+        : panelRef.current;
       const targets = [...boundary?.querySelectorAll<HTMLElement>('button, a[href], input, select, textarea, [tabindex]') ?? []].filter(target => {
         if (target.tabIndex < 0 || target.matches(':disabled, [aria-disabled="true"], input[type="hidden"]') || target.closest('[hidden], [inert]')) return false;
         const style = window.getComputedStyle(target);
@@ -42,12 +47,13 @@ export function useVenuePopupModalLifecycle({
     const options = { capture: true };
     window.addEventListener("keydown", keydown, options);
     return () => {
-      window.removeEventListener("keydown", keydown, options); document.body.style.overflow = overflow;
+      window.removeEventListener("keydown", keydown, options);
+      if (lockBody) document.body.style.overflow = overflow;
       if (skipFocusRestore?.current) return;
       if (initiator instanceof HTMLElement && initiator.isConnected && !initiator.closest?.("[hidden]")) initiator.focus();
       else (document.querySelector<HTMLButtonElement>('.gb-venue-popup .gb-venue-handle') ?? document.querySelector<HTMLButtonElement>('.gb-venue-preview-button'))?.focus();
     };
-  }, [active, embedded, panelRef, initialFocusRef, skipFocusRestore]);
+  }, [active, embedded, panelRef, initialFocusRef, skipFocusRestore, lockBody]);
 }
 
 /** The handle retains its old expanded gesture. Only the compact surface gains full-card swipes. */
@@ -57,6 +63,7 @@ export function VenuePopup({ expanded, onExpandedChange, onDeselect, preview, ch
   /** Narrow neutral copy for non-venue sheets; gesture/geometry stay identical. */
   labels?: { dialog?: string; expandHandle?: string; collapseHandle?: string };
 }) {
+  const desktop = useDesktopMapInspector();
   const dialogLabel = labels?.dialog ?? "Выбранная площадка";
   const expandHandle = labels?.expandHandle ?? "Развернуть площадку";
   const collapseHandle = labels?.collapseHandle ?? "Свернуть площадку";
@@ -202,6 +209,14 @@ export function VenuePopup({ expanded, onExpandedChange, onDeselect, preview, ch
   // The full information block would steal the only photo from the compact
   // preview on the very first pointermove. Mount it only AFTER the morph.
   const visible = (expanded || moving || settling) && !compactMorph;
+  // Owner #365: desktop uses a right inspector — no compact sheet, swipe handle, or map-blocking modal.
+  if (desktop) {
+    return <DesktopMapInspector open label={dialogLabel} onDismiss={onDeselect}>
+      <div className="gb-venue-popup gb-venue-popup--desktop" data-expanded="true" data-desktop="true" role="dialog" aria-label={dialogLabel}>
+        <div className="gb-venue-popup-content">{children}</div>
+      </div>
+    </DesktopMapInspector>;
+  }
   return <>
     {expanded && <div className="gb-venue-sheet-backdrop" onClick={onDeselect} />}
     <div ref={surface} className="gb-venue-popup" role={expanded ? "dialog" : undefined} aria-modal={expanded ? "true" : undefined} aria-label={expanded ? dialogLabel : undefined} data-expanded={expanded} data-moving={moving}

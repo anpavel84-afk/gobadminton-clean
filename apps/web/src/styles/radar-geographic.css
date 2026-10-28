@@ -102,7 +102,7 @@
   width:9px; height:9px; flex:none; border-radius:50%; background:var(--gb-lime);
 }
 .gb-consumer.gb-radar-layer { background: transparent; min-height: 0; }
-.gb-radar-layer .g2-map-panel,.gb-radar-layer .gb-venue-popup,.gb-radar-layer .gb-venue-sheet-backdrop,.gb-radar-layer dialog,.gb-radar-layer .gb-map-layer-summary { pointer-events:auto; }
+.gb-radar-layer .g2-map-panel,.gb-radar-layer .gb-venue-popup,.gb-radar-layer .gb-venue-sheet-backdrop,.gb-radar-layer .gb-desktop-map-inspector,.gb-radar-layer .gb-desktop-map-inspector-dim,.gb-radar-layer dialog,.gb-radar-layer .gb-map-layer-summary { pointer-events:auto; }
 /* Player sheet reuses VenuePopup geometry; keep avatar thumb in the compact cover slot. */
 .gb-venue-popup .unified-preview__compact-cover { display:grid; place-items:center; background:var(--gb-lime-soft); }
 .gb-venue-popup .unified-preview__compact-cover .avatar { width:64px; height:64px; border-width:0; font-size:18px; }

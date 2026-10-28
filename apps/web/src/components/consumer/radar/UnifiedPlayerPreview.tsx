@@ -9,6 +9,7 @@ import { Button } from "../Button";
 import { CloseButton } from "../CloseButton";
 import { GameCover } from "../games/GameCover";
 import { useVenuePopupModalLifecycle } from "../games/VenuePopup";
+import { useDesktopMapInspector } from "../games/DesktopMapInspector";
 import { RadarContact } from "./RadarContact";
 import { useRadarSession, useUnifiedDirectory } from "./RadarSessionProvider";
 
@@ -35,6 +36,7 @@ export function UnifiedPlayerPreview({ dialog = false, onClose, expanded: contro
   reportUnknownScopes?: ReadonlySet<string>;
   onReportUnknownScope?: (scopeKey: string) => void;
 }) {
+  const desktop = useDesktopMapInspector();
   const [localExpanded, setLocalExpanded] = useState(false);
   const [gamesView, setGamesView] = useState(false);
   const [localReportUnknownScopes, setLocalReportUnknownScopes] = useState(new Set<string>());
@@ -81,6 +83,7 @@ export function UnifiedPlayerPreview({ dialog = false, onClose, expanded: contro
     initialFocusRef: focus,
     onEscape: () => escapeDetail.current(),
     skipFocusRestore,
+    lockBody: !desktop,
   });
   useEffect(() => {
     if (!directory.controller || !Number.isFinite(deadline)) return;

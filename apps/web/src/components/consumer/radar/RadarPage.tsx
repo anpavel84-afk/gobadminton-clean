@@ -4,6 +4,7 @@ import type { Map as LibreMap } from "maplibre-gl";
 import { GamesMapView } from "../games/GamesMapView";
 import { GamesMapViewport } from "../games/GamesMapViewport";
 import { VenuePopup } from "../games/VenuePopup";
+import { useDesktopMapInspector } from "../games/DesktopMapInspector";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -27,6 +28,7 @@ const GeographicRadarMap = dynamic(() => import("./GeographicRadarMap")
 export function RadarPage({ sharedMap, resumeCamera = false }: { sharedMap?: LibreMap; resumeCamera?: boolean } = {}) {
   const { view: session } = useRadarSession(); const { controller, view } = useUnifiedDirectory();
   const { applied: layerFilters } = useMapLayerFilters();
+  const desktop = useDesktopMapInspector();
   const [failed, setFailed] = useState(false); const [listOpen, setListOpen] = useState(false); const [expanded, setExpanded] = useState(false);
   // Survives VenuePopup detail unmount on collapse; additive so peer B cannot erase peer A.
   const [reportUnknownScopes, setReportUnknownScopes] = useState(new Set<string>());
@@ -102,10 +104,10 @@ export function RadarPage({ sharedMap, resumeCamera = false }: { sharedMap?: Lib
   }, [candidate, controller, snapshot?.query.queryRef, view.mapPage, view.busy]);
   useEffect(() => {
     if (!sharedMap) return;
-    if (view.selected) setExpanded(false);
+    if (view.selected) setExpanded(desktop);
     else if (!skipFocusRestore.current && trigger.current?.isConnected) trigger.current.focus();
     skipFocusRestore.current = false;
-  }, [view.selected]);
+  }, [view.selected, desktop]);
   useEffect(() => { if (listOpen) sheet.current?.focus(); }, [listOpen]);
   // One window listener for preview history; player effects publish/replace the active handler.
   useEffect(() => {
@@ -217,7 +219,7 @@ export function RadarPage({ sharedMap, resumeCamera = false }: { sharedMap?: Lib
   const selectPlayer = (row: UnifiedRow) => {
     trigger.current = document.activeElement as HTMLElement;
     setListOpen(false);
-    setExpanded(false);
+    setExpanded(desktop);
     window.dispatchEvent(new Event("gb-map-select-player"));
     void controller?.select(row);
   };
@@ -230,10 +232,10 @@ export function RadarPage({ sharedMap, resumeCamera = false }: { sharedMap?: Lib
     {failed && <p role="alert" className="gb-map-position-unavailable">Не удалось загрузить участников Radar. Площадки и игры остаются на карте.</p>}
     {session.confirmedOn && session.status?.state === "active" && !session.status.coarseCenter && <p role="status" className="gb-map-position-unavailable">Опубликованная геопозиция недоступна. Площадки города остаются на карте.</p>}
     {mapped && <><div hidden className="g2-map-summary gb-map-layer-summary"><button aria-expanded={listOpen} aria-controls="g2-map-panel" onClick={() => { trigger.current = document.activeElement as HTMLElement; window.dispatchEvent(new Event("gb-map-select-player")); if (!listOpen) controller.close(); setExpanded(false); setListOpen(!listOpen); }}>{view.busy ? "Загружаем игроков…" : `На карте: ${view.pins.length} из ${snapshot?.totals.radarTotal ?? 0}`}</button><small>Приблизительные геопозиции. {view.mapPage?.hasMore ? "Показана часть участников." : ""}</small>{view.mapPage?.nextMapCursor && <Button variant="outline" disabled={view.busy} onClick={() => void controller.map(true)}>Следующие точки</Button>}{view.notice && <small role="status">{view.notice}</small>}</div>
-      {view.selected && <VenuePopup key={view.selected} expanded={expanded} onExpandedChange={setExpanded} onDeselect={close}
+      {view.selected && <VenuePopup key={view.selected} expanded={expanded || desktop} onExpandedChange={setExpanded} onDeselect={close}
         labels={{ dialog: "Выбранный игрок", expandHandle: "Развернуть игрока", collapseHandle: "Свернуть игрока" }}
         preview={<UnifiedPlayerPreview surface="compact" onClose={close} onOpen={() => setExpanded(true)} reportUnknownScopes={reportUnknownScopes} onReportUnknownScope={latchReportUnknown} />}>
-        <UnifiedPlayerPreview surface="detail" onClose={close} onCollapse={() => setExpanded(false)} skipFocusRestore={skipFocusRestore} reportUnknownScopes={reportUnknownScopes} onReportUnknownScope={latchReportUnknown} />
+        <UnifiedPlayerPreview surface="detail" onClose={close} onCollapse={desktop ? close : () => setExpanded(false)} skipFocusRestore={skipFocusRestore} reportUnknownScopes={reportUnknownScopes} onReportUnknownScope={latchReportUnknown} />
       </VenuePopup>}
       {listOpen && !view.selected && <aside id="g2-map-panel" ref={sheet} tabIndex={-1} aria-label="Игроки на карте" className="g2-map-panel is-expanded" onKeyDown={e => { if (e.key === "Escape" && !(e.target as Element).closest("dialog")) { e.stopPropagation(); close(); } }}>
         <header><CloseButton aria-label="Закрыть список игроков" onClick={close} /></header>
