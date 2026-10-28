@@ -31,6 +31,8 @@ export function RadarPage({ sharedMap, resumeCamera = false }: { sharedMap?: Lib
   const [candidate, setCandidate] = useState(false); const sheet = useRef<HTMLElement>(null); const trigger = useRef<HTMLElement | null>(null);
   // Venue marker replacement clears player selection without restoring the old player trigger.
   const skipFocusRestore = useRef(false);
+  // Exactly one owner for the current same-URL preview history entry (Close must not also retire).
+  const previewHistoryOwned = useRef(false);
   const snapshot = view.snapshot;
   // Keep the map marker identity stable between one-second header ticks;
   // the exact-deadline timer below invalidates this array when a lease expires.
@@ -98,13 +100,21 @@ export function RadarPage({ sharedMap, resumeCamera = false }: { sharedMap?: Lib
     if (!sharedMap || !view.selected) return;
     // One owned same-URL preview entry for the current player selection.
     window.history.pushState({ ...window.history.state, gbRadarPreview: true }, "", window.location.href);
-    const back = () => { controller?.close(); setListOpen(false); setExpanded(false); };
+    previewHistoryOwned.current = true;
+    const back = () => {
+      // Browser Back / Escape already retired the entry before popstate.
+      previewHistoryOwned.current = false;
+      controller?.close(); setListOpen(false); setExpanded(false);
+    };
     window.addEventListener("popstate", back);
     return () => {
       window.removeEventListener("popstate", back);
-      // Venue replacement (and any non-Back clear) must retire the owned entry without
-      // leaving a listener that could close the replacement or restore an obsolete trigger.
-      if (window.history.state?.gbRadarPreview) window.history.back();
+      // Sole retirement path for ordinary Close, venue replacement, and other non-Back clears.
+      // Do not also history.back() from close(): native back is async and would double-pop.
+      if (previewHistoryOwned.current && window.history.state?.gbRadarPreview) {
+        previewHistoryOwned.current = false;
+        window.history.back();
+      }
     };
   }, [view.selected, controller]);
   useEffect(() => {
@@ -143,15 +153,22 @@ export function RadarPage({ sharedMap, resumeCamera = false }: { sharedMap?: Lib
     window.addEventListener("gb-map-select-venue", onVenue);
     return () => window.removeEventListener("gb-map-select-venue", onVenue);
   }, [sharedMap, controller]);
-  function close() { if (window.history.state?.gbRadarPreview) window.history.back(); controller?.close(); setListOpen(false); setExpanded(false); requestAnimationFrame(() => { if (trigger.current?.isConnected) trigger.current.focus({ preventScroll: true }); }); }
+  function close() {
+    // Selection clear's effect cleanup owns the single history retirement; do not back here.
+    controller?.close(); setListOpen(false); setExpanded(false);
+    requestAnimationFrame(() => { if (trigger.current?.isConnected) trigger.current.focus({ preventScroll: true }); });
+  }
   // Compact-only window Escape; expanded/games-view Escape stays on UnifiedPlayerPreview.
   useEffect(() => {
     if (!sharedMap || !view.selected || expanded) return;
     const escape = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented || document.querySelector("dialog[open], [role=dialog]")) return;
       event.preventDefault();
-      if (window.history.state?.gbRadarPreview) window.history.back();
-      else { controller?.close(); setListOpen(false); setExpanded(false); }
+      if (window.history.state?.gbRadarPreview) {
+        // Claim retirement before async native back so effect cleanup cannot double-pop.
+        previewHistoryOwned.current = false;
+        window.history.back();
+      } else { controller?.close(); setListOpen(false); setExpanded(false); }
     };
     window.addEventListener("keydown", escape, true);
     return () => window.removeEventListener("keydown", escape, true);

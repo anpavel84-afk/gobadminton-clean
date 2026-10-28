@@ -500,8 +500,17 @@ it("internal games and Back move focus into the new view; Escape backs then coll
 
 it("player→venue retires owned preview history; repeated switches do not accumulate", async () => {
   const baseline = historyStack.length;
-  await controller.select(controller.view.pins[0]!);
   let tree = renderRadar();
+  const selectViaMarker = async () => {
+    Object.assign(document, { activeElement: trigger });
+    const layer = nodes(tree).find(n => n.props.sharedMap === map)!;
+    (layer.props.onSelect as (row: UnifiedRow) => void)(controller.view.pins[0]!);
+    await Promise.resolve();
+    await Promise.resolve();
+    tree = renderRadar();
+  };
+
+  await selectViaMarker();
   expect(historyStack.length).toBe(baseline + 1);
   expect(window.history.state.gbRadarPreview).toBe(true);
 
@@ -512,8 +521,7 @@ it("player→venue retires owned preview history; repeated switches do not accum
   expect(window.history.state.gbRadarPreview).toBeUndefined();
 
   for (let n = 0; n < 3; n++) {
-    await controller.select(controller.view.pins[0]!);
-    tree = renderRadar();
+    await selectViaMarker();
     expect(historyStack.length).toBe(baseline + 1);
     window.dispatchEvent(new Event("gb-map-select-venue"));
     tree = renderRadar();
@@ -521,8 +529,8 @@ it("player→venue retires owned preview history; repeated switches do not accum
     expect(window.history.state.gbRadarPreview).toBeUndefined();
   }
 
-  await controller.select(controller.view.pins[0]!);
-  tree = renderRadar();
+  // Normal Close focus must capture trigger through the real onSelect path.
+  await selectViaMarker();
   expect(historyStack.length).toBe(baseline + 1);
   trigger.focus.mockClear();
   (nodes(tree).find(n => n.type === VenuePopup)!.props.onDeselect as () => void)();
@@ -532,6 +540,37 @@ it("player→venue retires owned preview history; repeated switches do not accum
   expect(window.history.state.gbRadarPreview).toBeUndefined();
   expect(trigger.focus).toHaveBeenCalled();
   void tree;
+});
+
+it("ordinary Close schedules exactly one history retirement under async back", async () => {
+  const baseline = historyStack.length;
+  let tree = renderRadar();
+  Object.assign(document, { activeElement: trigger });
+  (nodes(tree).find(n => n.props.sharedMap === map)!.props.onSelect as (row: UnifiedRow) => void)(controller.view.pins[0]!);
+  await Promise.resolve();
+  await Promise.resolve();
+  tree = renderRadar();
+  expect(historyStack.length).toBe(baseline + 1);
+
+  const pendingBacks: Array<() => void> = [];
+  history.back.mockImplementation(() => {
+    pendingBacks.push(() => {
+      if (historyStack.length > 1) historyStack.pop();
+      else historyStack[0] = {};
+      window.dispatchEvent(new Event("popstate"));
+    });
+  });
+
+  trigger.focus.mockClear();
+  (nodes(tree).find(n => n.type === VenuePopup)!.props.onDeselect as () => void)();
+  tree = renderRadar();
+  expect(pendingBacks.length).toBe(1);
+  pendingBacks.splice(0).forEach(fn => fn());
+  tree = renderRadar();
+  expect(historyStack.length).toBe(baseline);
+  expect(window.history.state.gbRadarPreview).toBeUndefined();
+  expect(controller.view.selected).toBeNull();
+  expect(trigger.focus).toHaveBeenCalled();
 });
 
 it("browser Back closes player once; late popstate after venue replacement does not restore player", async () => {
