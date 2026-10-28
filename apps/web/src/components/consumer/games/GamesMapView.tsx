@@ -107,6 +107,11 @@ export function GamesMapView({ cityId, day, venueId, activity = "all", onReturnT
   const escapeSelection = useRef<VenueSummary | undefined>(undefined);
   useEffect(() => { escapeSelection.current = selectedVenue; }, [selectedVenue]);
   useEffect(() => { setSelectedVenueId(null); setExpanded(false); }, [cityId]);
+  // Promote parent expanded on desktop while a venue is selected; do not force-collapse
+  // on resize to mobile (keeps VenueSheet/create across the presentation change).
+  useEffect(() => {
+    if (selectedVenueId && desktop) setExpanded(true);
+  }, [selectedVenueId, desktop]);
   useEffect(() => {
     if (selectedVenueId !== null && !selectedVenue) setSelectedVenueId(null);
   }, [selectedVenueId, selectedVenue]);
