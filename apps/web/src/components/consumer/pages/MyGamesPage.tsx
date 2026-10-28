@@ -36,6 +36,7 @@ export function MyGamesPage() {
   const relation: Relation =
     search.get("tab") === "created" ? "created" : "participating";
   const view: View = search.get("view") === "history" ? "history" : "upcoming";
+  const recommendationsEntry = search.get("rec") === "sent" ? "sent" : "received";
   const [rows, setRows] = useState<ParticipationRow[]>([]);
   const [created, setCreated] = useState<ManagedGame[]>([]);
   const [me, setMe] = useState<Me | null>(null);
@@ -180,7 +181,9 @@ export function MyGamesPage() {
           </div>
           <Button href="/games/create">+ Создать игру</Button>
         </header>
-        {state === "ready" && me && view === "upcoming" ? <GameRecommendationsSection me={me} /> : null}
+        {state === "ready" && me && view === "upcoming" ? (
+          <GameRecommendationsSection me={me} initialView={recommendationsEntry} />
+        ) : null}
         <section className="gb-relationship-bar">
           <div
             className="gb-game-segmented"

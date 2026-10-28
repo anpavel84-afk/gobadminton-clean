@@ -10,6 +10,7 @@ import {
   recommendationMutationScope,
   recommendationsUiEnabled,
   resetRecommendationPendingForTests,
+  sendGameRecommendationPath,
   useGameRecommendationMutation,
   withdrawGameRecommendationPath,
   writeRecommendationPending,
@@ -461,6 +462,45 @@ describe("FR-3B recommendation UI lifecycle", () => {
       friends: true, gameRecommendations: false, gameAttention: false, socialPush: false,
     })).toBe(false);
     expect(readRecommendationPending(scope, me.id)?.key).toBe("same-rec-key");
+  });
+
+  it("send recovery control GETs actor-owned sent recommendations, not friends", async () => {
+    const scope = recommendationMutationScope(me.id, "recommend:g1");
+    writeRecommendationPending(scope, {
+      path: sendGameRecommendationPath("g1"),
+      body: { friendshipId: "11111111-1111-4111-8111-111111111111" },
+      key: "same-rec-key",
+      method: "POST",
+      actorId: me.id,
+    });
+    vi.mocked(apiFetch).mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: { items: [], nextCursor: null, asOf: "2026-10-28T10:00:00.000Z" },
+    });
+
+    hooks.cursor = 0;
+    let tree = GameRecommendationButton({ gameId: "g1", me, eligible: true });
+    flushEffects();
+    expect(labelOf(tree)).toContain("Обновить свой список");
+    expect(elements(tree).some((el) => el.props.href === "/my-games?rec=sent")).toBe(true);
+    activate(tree, "Обновить свой список");
+    hooks.cursor = 0;
+    tree = GameRecommendationButton({ gameId: "g1", me, eligible: true });
+    flushEffects();
+    await settle();
+    hooks.cursor = 0;
+    tree = GameRecommendationButton({ gameId: "g1", me, eligible: true });
+    flushEffects();
+
+    expect(apiFetch).toHaveBeenCalledWith("/v1/me/game-recommendations?view=sent&limit=20");
+    expect(listFriends).not.toHaveBeenCalled();
+    expect(vi.mocked(apiFetch).mock.calls.some(([path]) => String(path).startsWith("/v1/games/"))).toBe(false);
+    expect(readRecommendationPending(scope, me.id)?.key).toBe("same-rec-key");
+    expect(readRecommendationPending(scope, me.id)?.body).toEqual({
+      friendshipId: "11111111-1111-4111-8111-111111111111",
+    });
+    expect(labelOf(tree)).toContain("не подтверждает и не опровергает отправку");
   });
 
   it("empty first page with nextCursor is not an empty inbox; continuation can yield items", async () => {

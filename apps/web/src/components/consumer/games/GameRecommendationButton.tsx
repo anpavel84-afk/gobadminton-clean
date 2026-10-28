@@ -5,11 +5,14 @@ import type { SocialCapabilities } from "@gobadminton/contracts/friendship-types
 import type { Me } from "../../../lib/consumer-types";
 import { getSocialCapabilities, listFriends } from "../../../lib/friendships";
 import {
+  formatRecommendationWhen,
+  listGameRecommendations,
   recommendableFriends,
   recommendationMutationScope,
   recommendationsUiEnabled,
   sendGameRecommendationPath,
   useGameRecommendationMutation,
+  type GameRecommendation,
   type GameRecommendationReceipt,
   type RecommendableFriend,
 } from "../../../lib/game-recommendations";
@@ -19,6 +22,7 @@ import { AuthChooser, ProfileDialog, ProfileState } from "../players/ProfileComp
 import { MutationNotice } from "../messages/MessageComposition";
 
 type PickerState = "closed" | "loading" | "ready" | "unavailable" | "error" | "empty" | "guest";
+type SentRereadState = "idle" | "loading" | "ready" | "empty" | "error" | "guest" | "unavailable";
 
 /**
  * Detail-only «Посоветовать другу». External GameShare stays separate.
@@ -45,6 +49,10 @@ export function GameRecommendationButton({
   const [picker, setPicker] = useState<PickerState>("closed");
   const [sentNotice, setSentNotice] = useState("");
   const [reload, setReload] = useState(0);
+  const [sentReread, setSentReread] = useState(0);
+  const [sentState, setSentState] = useState<SentRereadState>("idle");
+  const [sentPreview, setSentPreview] = useState<GameRecommendation[]>([]);
+  const [sentHasMore, setSentHasMore] = useState(false);
 
   const mutationScope = recommendationMutationScope(me?.id ?? "guest", `recommend:${gameId}`);
   const mutation = useGameRecommendationMutation<GameRecommendationReceipt>(
@@ -55,12 +63,16 @@ export function GameRecommendationButton({
       setSentNotice(receipt.outcome === "sent" ? "Совет отправлен другу. Место не резервируется." : "Совет записан.");
       setOpen(false);
       setSelected(null);
+      setSentState("idle");
+      setSentPreview([]);
+      setSentHasMore(false);
     },
     () => {
-      setFriends([]);
-      setCursor(null);
-      setPicker("loading");
-      setReload((n) => n + 1);
+      // Actor-owned sent recommendations only — never friends/cursor reload.
+      setSentPreview([]);
+      setSentHasMore(false);
+      setSentState("loading");
+      setSentReread((n) => n + 1);
     },
   );
 
@@ -128,6 +140,50 @@ export function GameRecommendationButton({
     };
   }, [open, me, cursor, reload, gameId]);
 
+  useEffect(() => {
+    if (sentReread === 0) return;
+    let live = true;
+    if (!me) {
+      setSentPreview([]);
+      setSentHasMore(false);
+      setSentState("guest");
+      return;
+    }
+    const actorId = me.id;
+    const release = privateViews.retain(privateViews.currentGeneration);
+    const expire = () => {
+      live = false;
+      setSentPreview([]);
+      setSentHasMore(false);
+      setSentState("guest");
+    };
+    const onSession = () => {
+      expire();
+    };
+    window.addEventListener("gb-private-expired", expire);
+    window.addEventListener("gb-session-changed", onSession);
+    void (async () => {
+      const page = await listGameRecommendations("sent");
+      if (!live || me.id !== actorId) return;
+      if (!page.ok) {
+        // Failed/absent list must not clear UNKNOWN pending or claim noncommit.
+        setSentPreview([]);
+        setSentHasMore(false);
+        setSentState(page.status === 401 ? "guest" : [403, 404, 503].includes(page.status) ? "unavailable" : "error");
+        return;
+      }
+      setSentPreview(page.data.items);
+      setSentHasMore(Boolean(page.data.nextCursor));
+      setSentState(page.data.items.length || page.data.nextCursor ? "ready" : "empty");
+    })();
+    return () => {
+      live = false;
+      release?.();
+      window.removeEventListener("gb-private-expired", expire);
+      window.removeEventListener("gb-session-changed", onSession);
+    };
+  }, [sentReread, me, gameId]);
+
   if (!eligible) return null;
 
   const locked = mutation.busy || mutation.pending || !me;
@@ -155,10 +211,44 @@ export function GameRecommendationButton({
       {sentNotice ? <p className="gb-game-notice" role="status">{sentNotice}</p> : null}
       <MutationNotice mutation={mutation} />
       {mutation.pending ? (
-        <div className="profile-form-actions">
+        <div className="profile-form-actions" data-surface="send-recovery">
           <Button variant="outline" disabled={mutation.busy} onClick={() => mutation.rereadOwnList()}>
             Обновить свой список
           </Button>
+          <Button variant="outline" href="/my-games?rec=sent">
+            Открыть «Вы советовали»
+          </Button>
+          {sentState === "loading" ? (
+            <p className="gb-c23-helper" role="status">Обновляем список ваших советов…</p>
+          ) : null}
+          {sentState === "guest" ? (
+            <p className="gb-c23-helper" role="status">Сессия больше не действует. Список советов скрыт.</p>
+          ) : null}
+          {sentState === "unavailable" ? (
+            <p className="gb-c23-helper" role="status">Список советов сейчас недоступен. Результат отправки по-прежнему неизвестен.</p>
+          ) : null}
+          {sentState === "error" ? (
+            <p className="gb-c23-helper" role="status">Не удалось загрузить список советов. Результат отправки по-прежнему неизвестен.</p>
+          ) : null}
+          {sentState === "empty" ? (
+            <p className="gb-c23-helper" role="status">
+              В списке пока нет видимых советов. Это не подтверждает и не опровергает отправку.
+            </p>
+          ) : null}
+          {sentState === "ready" ? (
+            <div className="gb-c23-helper" role="status" data-surface="sent-reread-preview">
+              <p>
+                {sentPreview.length
+                  ? `В списке видно советов: ${sentPreview.length}${sentHasMore ? " (есть ещё)" : ""}. Отсутствие конкретной записи не опровергает отправку.`
+                  : "На этой странице нет видимых записей, но список ещё не исчерпан. Это не опровергает отправку."}
+              </p>
+              {sentPreview.slice(0, 3).map((row) => (
+                <p key={row.id}>
+                  {row.game.title} · {formatRecommendationWhen(row.game)} · для {row.peer.displayName}
+                </p>
+              ))}
+            </div>
+          ) : null}
         </div>
       ) : null}
       {open && me ? (

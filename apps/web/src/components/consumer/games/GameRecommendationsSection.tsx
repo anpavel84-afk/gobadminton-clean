@@ -27,8 +27,15 @@ type LoadState = "loading" | "ready" | "unavailable" | "error" | "guest";
  * «Мои игры» inbox for received/sent recommendations.
  * Clears private content on logout/expiry/session switch; never invents empty success when gated off.
  */
-export function GameRecommendationsSection({ me }: { me: Me }) {
-  const [view, setView] = useState<GameRecommendationView>("received");
+export function GameRecommendationsSection({
+  me,
+  initialView = "received",
+}: {
+  me: Me;
+  /** Entry from send recovery (`/my-games?rec=sent`) — opens actor-owned sent list. */
+  initialView?: GameRecommendationView;
+}) {
+  const [view, setView] = useState<GameRecommendationView>(initialView);
   const [items, setItems] = useState<GameRecommendation[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
