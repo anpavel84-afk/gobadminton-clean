@@ -595,6 +595,24 @@ export class GamesService {
     }
   }
 
+  /** FR-3A projection: same public discovery eligibility, no participant/contact DTO.
+   * Hold Game SHARE through the local transaction, then re-read after any wait.
+   * Missing IDs are indistinguishable from unpublished/unlisted/moderated games. */
+  async recommendationSummary(client: PoolClient, gameId: string) {
+    await client.query("SELECT id FROM games WHERE id=$1 FOR SHARE", [gameId]);
+    const eligible = eligibleGames(normalizeDiscovery({ temporalScope: "upcoming" }),
+      this.env.GAME_MODERATION_INTERNAL_ENABLED);
+    const result = await client.query<{id:string;title:string;starts_at:Date;ends_at:Date;timezone:string}>(`
+      ${effectiveVenueCtes("SELECT venue_id AS id FROM games WHERE id=$1")}
+      SELECT g.id,g.title,g.starts_at,g.ends_at,g.timezone
+      FROM games g JOIN effective_venues v ON v.source_id=g.venue_id
+      WHERE g.id=$1 AND ${eligible.where}`, [gameId]);
+    const row = result.rows[0];
+    if (row && this.env.GAME_MODERATION_INTERNAL_ENABLED && (await readModeration(client,gameId)).requestsLocked) return null;
+    return row ? { id:row.id, title:row.title, startsAt:row.starts_at.toISOString(),
+      endsAt:row.ends_at.toISOString(), timezone:row.timezone } : null;
+  }
+
   async mapPublished(filter: DiscoveryFilter, signal?: AbortSignal) {
     return readGamesMap(this.pool, filter, signal, this.env.GAME_MODERATION_INTERNAL_ENABLED);
   }
