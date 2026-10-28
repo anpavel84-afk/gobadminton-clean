@@ -14,7 +14,33 @@ import { VenuePopup } from "../src/components/consumer/games/VenuePopup";
 import { GamesMapView } from "../src/components/consumer/games/GamesMapView";
 import { VenuePreviewCard } from "../src/components/consumer/games/VenuePreviewCard";
 
-const hooks = vi.hoisted(() => ({ slots: [] as unknown[], cursor: 0, effects: [] as (() => void)[], cleanups: [] as (() => void)[] }));
+type Fiber = { slots: unknown[]; cursor: number; effects: (() => void)[]; cleanups: (() => void)[] };
+const hooks = vi.hoisted(() => {
+  const radar: Fiber = { slots: [], cursor: 0, effects: [], cleanups: [] };
+  const map: Fiber = { slots: [], cursor: 0, effects: [], cleanups: [] };
+  const preview: Fiber = { slots: [], cursor: 0, effects: [], cleanups: [] };
+  let active: Fiber = radar;
+  return {
+    get slots() { return active.slots; },
+    set slots(value: unknown[]) { active.slots = value; },
+    get cursor() { return active.cursor; },
+    set cursor(value: number) { active.cursor = value; },
+    get effects() { return active.effects; },
+    get cleanups() { return active.cleanups; },
+    use(which: "radar" | "map" | "preview") { active = which === "radar" ? radar : which === "map" ? map : preview; },
+    resetFiber() {
+      active.cleanups.forEach(fn => fn?.());
+      active.slots = []; active.cursor = 0; active.effects = []; active.cleanups = [];
+    },
+    reset() {
+      for (const fiber of [radar, map, preview]) {
+        fiber.cleanups.forEach(fn => fn?.());
+        fiber.slots = []; fiber.cursor = 0; fiber.effects = []; fiber.cleanups = [];
+      }
+      active = radar;
+    },
+  };
+});
 const context = vi.hoisted(() => ({ directory: null as unknown, session: null as unknown, config: null as unknown }));
 vi.mock("react", async original => ({ ...await original<typeof React>(),
   useState<T>(initial: T) {
@@ -93,8 +119,10 @@ function activate(tree: ReactNode, label: string) {
   if (!node) throw Error(`Missing ${label}`);
   (node.props.onClick as () => void)();
 }
+function bindDirectory() {
+  context.directory = { controller, view: controller.view };
+}
 
-const listeners = new Map<string, Set<() => void>>();
 const trigger = { isConnected: true, focus: vi.fn() };
 let controller: UnifiedDirectoryController;
 const request = vi.fn();
@@ -104,22 +132,22 @@ const map = {
 } as unknown as LibreMap;
 
 beforeEach(async () => {
-  hooks.slots = []; hooks.cursor = 0; hooks.effects = []; hooks.cleanups = []; listeners.clear(); trigger.focus.mockClear(); request.mockReset();
+  hooks.reset(); trigger.focus.mockClear(); request.mockReset();
   vi.useFakeTimers(); vi.setSystemTime(now);
   const history = {
     state: {} as Record<string, unknown>,
     pushState: vi.fn((state: Record<string, unknown>) => { history.state = state; }),
-    back: vi.fn(() => { history.state = {}; listeners.get("popstate")?.forEach(fn => fn()); }),
+    back: vi.fn(() => { history.state = {}; window.dispatchEvent(new Event("popstate")); }),
   };
-  vi.stubGlobal("window", {
+  vi.stubGlobal("window", Object.assign(new EventTarget(), {
     location: { origin: "https://dev.gobadminton.ru", href: "https://dev.gobadminton.ru/games?view=map", pathname: "/games", search: "?view=map", assign: vi.fn() },
     history,
-    addEventListener: (name: string, fn: () => void) => { if (!listeners.has(name)) listeners.set(name, new Set()); listeners.get(name)!.add(fn); },
-    removeEventListener: (name: string, fn: () => void) => listeners.get(name)?.delete(fn),
     setTimeout, clearTimeout,
     matchMedia: () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} }),
-  });
-  vi.stubGlobal("document", { activeElement: trigger, querySelector: () => null, body: { style: { overflow: "" } }, visibilityState: "visible" });
+  }));
+  vi.stubGlobal("document", Object.assign(new EventTarget(), {
+    activeElement: trigger, querySelector: () => null, body: { style: { overflow: "" } }, visibilityState: "visible",
+  }));
   vi.stubGlobal("requestAnimationFrame", (fn: () => void) => fn());
   vi.stubGlobal("sessionStorage", { getItem: () => null, setItem: vi.fn(), removeItem: vi.fn() });
   vi.stubGlobal("fetch", vi.fn(async (url: string) => {
@@ -139,24 +167,48 @@ beforeEach(async () => {
   context.session = { view: { me: { id: "viewer", csrfToken: "csrf", displayName: "Viewer" }, phase: "off", confirmedOn: false, pendingStop: false } };
   context.config = { exposureMode: "live", unifiedDirectory: { enabled: true }, cities: [{ cityId: MOSCOW_BUNDLE.cityId, map: { availability: "dev_preview", mapId: "moscow", version: MOSCOW_BUNDLE.version } }] };
 });
-afterEach(() => { hooks.cleanups.forEach(fn => fn?.()); controller.dispose(); vi.unstubAllGlobals(); vi.useRealTimers(); });
+afterEach(() => {
+  hooks.use("radar"); hooks.cleanups.forEach(fn => fn?.());
+  hooks.use("map"); hooks.cleanups.forEach(fn => fn?.());
+  hooks.use("preview"); hooks.cleanups.forEach(fn => fn?.());
+  controller.dispose(); vi.unstubAllGlobals(); vi.useRealTimers();
+});
 
+/** Paint once, run effects (candidate/listeners), paint again so settled state is visible. */
 function renderRadar(extra: Partial<React.ComponentProps<typeof RadarPage>> = {}) {
-  context.directory = { controller, view: controller.view };
-  hooks.cursor = 0;
-  const tree = RadarPage({ sharedMap: map, ...extra });
-  hooks.effects.splice(0).forEach(fn => fn());
-  return tree;
+  hooks.use("radar");
+  const paint = () => {
+    bindDirectory();
+    hooks.cursor = 0;
+    const tree = RadarPage({ sharedMap: map, ...extra });
+    hooks.effects.splice(0).forEach(fn => fn());
+    return tree;
+  };
+  paint();
+  return paint();
 }
 function renderMap(overrides: Partial<React.ComponentProps<typeof GamesMapView>> = {}) {
+  hooks.use("map");
+  const paint = () => {
+    hooks.cursor = 0;
+    const tree = GamesMapView({ cityId: venueA.cityId, day: "2026-11-10", ...overrides });
+    hooks.effects.splice(0).forEach(fn => fn());
+    return tree;
+  };
+  paint();
+  return paint();
+}
+function renderPreview(props: React.ComponentProps<typeof UnifiedPlayerPreview>) {
+  hooks.use("preview");
+  bindDirectory();
   hooks.cursor = 0;
-  const tree = GamesMapView({ cityId: venueA.cityId, day: "2026-11-10", ...overrides });
+  const tree = UnifiedPlayerPreview(props);
   hooks.effects.splice(0).forEach(fn => fn());
   return tree;
 }
 
-it("player selection uses VenuePopup; compact tap/handle expand; games internal with Back; close", () => {
-  void controller.select(controller.view.pins[0]!);
+it("player selection uses VenuePopup; compact tap/handle expand; games internal with Back; close", async () => {
+  await controller.select(controller.view.pins[0]!);
   let tree = renderRadar();
   expect(nodes(tree).some(n => n.type === VenuePopup)).toBe(true);
   expect(nodes(tree).some(n => n.type === "aside")).toBe(false);
@@ -172,20 +224,16 @@ it("player selection uses VenuePopup; compact tap/handle expand; games internal 
   (popup.props.onExpandedChange as (value: boolean) => void)(true);
   tree = renderRadar();
   expect(nodes(tree).find(n => n.type === VenuePopup)!.props.expanded).toBe(true);
-  // Detail surface owns games/back on the same sheet fiber slots
-  hooks.slots = []; hooks.cursor = 0; hooks.effects = []; hooks.cleanups = [];
-  context.directory = { controller, view: controller.view };
-  let detailTree = UnifiedPlayerPreview({ surface: "detail", onClose: () => controller.close(), onCollapse: () => {} });
-  hooks.effects.splice(0).forEach(fn => fn());
+  // Detail surface owns games/back on its own fiber slots
+  hooks.use("preview"); hooks.resetFiber();
+  let detailTree = renderPreview({ surface: "detail", onClose: () => controller.close(), onCollapse: () => {} });
   activate(detailTree, "Ближайшие публичные игры");
-  hooks.cursor = 0;
-  detailTree = UnifiedPlayerPreview({ surface: "detail", onClose: () => controller.close(), onCollapse: () => {} });
+  detailTree = renderPreview({ surface: "detail", onClose: () => controller.close(), onCollapse: () => {} });
   expect((detailTree as Node).props["data-player-view"]).toBe("games");
   activate(detailTree, `Назад к профилю ${preview.player.displayName}`);
-  hooks.cursor = 0;
-  detailTree = UnifiedPlayerPreview({ surface: "detail", onClose: () => controller.close(), onCollapse: () => {} });
+  detailTree = renderPreview({ surface: "detail", onClose: () => controller.close(), onCollapse: () => {} });
   expect((detailTree as Node).props["data-player-view"]).toBe("profile");
-  hooks.slots = []; hooks.cursor = 0; hooks.effects = []; hooks.cleanups = [];
+  hooks.use("radar"); hooks.resetFiber();
   tree = renderRadar();
   (nodes(tree).find(n => n.type === VenuePopup)!.props.onDeselect as () => void)();
   tree = renderRadar();
@@ -193,21 +241,60 @@ it("player selection uses VenuePopup; compact tap/handle expand; games internal 
 });
 
 it("singleton handoff: gb-map-select-venue/player events are mutual exclusive", async () => {
-  void controller.select(controller.view.pins[0]!);
-  expect(nodes(renderRadar()).some(n => n.type === VenuePopup)).toBe(true);
+  await controller.select(controller.view.pins[0]!);
+  let tree = renderRadar();
+  expect(nodes(tree).some(n => n.type === VenuePopup)).toBe(true);
+  const shared = nodes(tree).find(n => n.props.sharedMap === map)!;
+  expect(shared.props.sharedMap).toBe(map);
+
+  (nodes(tree).find(n => n.type === VenuePopup)!.props.onExpandedChange as (value: boolean) => void)(true);
+  tree = renderRadar();
+  expect(nodes(tree).find(n => n.type === VenuePopup)!.props.expanded).toBe(true);
+  hooks.use("preview"); hooks.resetFiber();
+  let detail = renderPreview({ surface: "detail", onClose: () => controller.close(), onCollapse: () => {} });
+  activate(detail, "Ближайшие публичные игры");
+  detail = renderPreview({ surface: "detail", onClose: () => controller.close(), onCollapse: () => {} });
+  expect((detail as Node).props["data-player-view"]).toBe("games");
+
   window.dispatchEvent(new Event("gb-map-select-venue"));
   expect(controller.view.selected).toBeNull();
   expect(controller.view.preview).toBeNull();
-  expect(nodes(renderRadar()).some(n => n.type === VenuePopup)).toBe(false);
+  hooks.use("radar");
+  tree = renderRadar();
+  expect(nodes(tree).some(n => n.type === VenuePopup)).toBe(false);
+  expect(nodes(tree).find(n => n.props.sharedMap === map)!.props.sharedMap).toBe(map);
+
+  // Late preview after venue replacement must not resurrect the player sheet.
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  request.mockImplementationOnce(async (path: string) => {
+    if (path.endsWith("/preview")) {
+      await gate;
+      return { ok: true, status: 200, data: preview };
+    }
+    return { ok: true, status: 200, data: path.endsWith("/map")
+      ? { ...snapshot, mapPage: { returnedCount: 1, rankStart: 1, rankEnd: 1, hasMore: false, nextMapCursor: null } }
+      : snapshot };
+  });
+  const pending = controller.select(controller.view.pins[0]!);
+  expect(controller.view.selected).toBe("peer");
+  window.dispatchEvent(new Event("gb-map-select-venue"));
+  release();
+  await pending;
+  expect(controller.view.selected).toBeNull();
+  expect(controller.view.preview).toBeNull();
+  tree = renderRadar();
+  expect(nodes(tree).some(n => n.type === VenuePopup)).toBe(false);
 
   await controller.select(controller.view.pins[0]!);
   const clearVenue = vi.fn();
   window.addEventListener("gb-map-select-player", clearVenue);
-  const tree = renderRadar();
+  tree = renderRadar();
   const layer = nodes(tree).find(n => n.props.sharedMap === map)!;
   (layer.props.onSelect as (row: UnifiedRow) => void)(controller.view.pins[0]!);
   expect(clearVenue).toHaveBeenCalledOnce();
   window.removeEventListener("gb-map-select-player", clearVenue);
+  expect(layer.props.sharedMap).toBe(map);
 });
 
 it("GamesMapView venue select dispatches venue event and clears on player event", async () => {
@@ -228,32 +315,63 @@ it("GamesMapView venue select dispatches venue event and clears on player event"
   expect(nodes(tree).find(n => typeof n.props.onSelect === "function")!.props.selectedVenueId).toBeNull();
 });
 
-it("stale/privacy stop hides player popup; image fallback and empty games remain honest", () => {
-  void controller.select(controller.view.pins[0]!);
+it("stale/privacy stop hides player popup; image fallback and empty games remain honest", async () => {
+  await controller.select(controller.view.pins[0]!);
   controller.view = { ...controller.view, preview: { ...preview, player: { ...preview.player, publicPlayerId: "other" } } };
-  expect(UnifiedPlayerPreview({ surface: "compact", onClose: () => {}, onOpen: () => {} })).toBeNull();
+  bindDirectory();
+  expect(renderPreview({ surface: "compact", onClose: () => {}, onOpen: () => {} })).toBeNull();
   controller.view = { ...controller.view, preview: { ...preview, upcomingGames: [] } };
-  context.directory = { controller, view: controller.view };
-  hooks.cursor = 0;
-  let tree = UnifiedPlayerPreview({ surface: "detail", onClose: () => controller.close(), onCollapse: () => {} });
-  hooks.effects.splice(0).forEach(fn => fn());
+  bindDirectory();
+  hooks.use("preview"); hooks.resetFiber();
+  let tree = renderPreview({ surface: "detail", onClose: () => controller.close(), onCollapse: () => {} });
   activate(tree, "Ближайшие публичные игры");
-  hooks.cursor = 0;
-  tree = UnifiedPlayerPreview({ surface: "detail", onClose: () => controller.close(), onCollapse: () => {} });
+  tree = renderPreview({ surface: "detail", onClose: () => controller.close(), onCollapse: () => {} });
   expect(JSON.stringify(tree)).toContain("Нет доступных ближайших публичных игр");
   controller.view = { ...controller.view, stale: true };
-  context.directory = { controller, view: controller.view };
-  hooks.cursor = 0;
-  expect(UnifiedPlayerPreview({ surface: "detail", onClose: () => {}, onCollapse: () => {} })).toBeNull();
+  bindDirectory();
+  expect(renderPreview({ surface: "detail", onClose: () => {}, onCollapse: () => {} })).toBeNull();
 });
 
 it("list access keeps aside without stacking a player VenuePopup", () => {
   controller.close();
   let tree = renderRadar();
-  const summary = nodes(tree).find(n => n.props.children === "На карте: 1 из 1");
+  const summary = nodes(tree).find(n => n.props["aria-controls"] === "g2-map-panel" && typeof n.props.onClick === "function");
   expect(summary).toBeDefined();
   (summary!.props.onClick as () => void)();
   tree = renderRadar();
   expect(nodes(tree).some(n => n.type === "aside")).toBe(true);
   expect(nodes(tree).some(n => n.type === VenuePopup)).toBe(false);
+});
+
+it("player→venue replacement does not steal focus; Close still restores trigger", async () => {
+  controller.close();
+  let tree = renderRadar();
+  const layer = nodes(tree).find(n => n.props.sharedMap === map)!;
+  expect(layer.props.sharedMap).toBe(map);
+  (layer.props.onSelect as (row: UnifiedRow) => void)(controller.view.pins[0]!);
+  await Promise.resolve();
+  await Promise.resolve();
+  tree = renderRadar();
+  expect(controller.view.selected).toBe("peer");
+  expect(nodes(tree).some(n => n.type === VenuePopup)).toBe(true);
+  expect(nodes(tree).find(n => n.props.sharedMap === map)!.props.sharedMap).toBe(map);
+
+  trigger.focus.mockClear();
+  window.dispatchEvent(new Event("gb-map-select-venue"));
+  tree = renderRadar();
+  expect(controller.view.selected).toBeNull();
+  expect(nodes(tree).some(n => n.type === VenuePopup)).toBe(false);
+  expect(trigger.focus).not.toHaveBeenCalled();
+  expect(nodes(tree).find(n => n.props.sharedMap === map)!.props.sharedMap).toBe(map);
+
+  (nodes(tree).find(n => n.props.sharedMap === map)!.props.onSelect as (row: UnifiedRow) => void)(controller.view.pins[0]!);
+  await Promise.resolve();
+  await Promise.resolve();
+  tree = renderRadar();
+  expect(nodes(tree).some(n => n.type === VenuePopup)).toBe(true);
+  trigger.focus.mockClear();
+  (nodes(tree).find(n => n.type === VenuePopup)!.props.onDeselect as () => void)();
+  tree = renderRadar();
+  expect(controller.view.selected).toBeNull();
+  expect(trigger.focus).toHaveBeenCalled();
 });

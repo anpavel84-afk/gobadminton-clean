@@ -54,17 +54,16 @@ const preview:UnifiedPreview={player:{publicPlayerId:"peer",displayName:"Игр�
 type Node=React.ReactElement<Record<string,unknown>>;
 function nodes(tree:ReactNode):Node[]{const found:Node[]=[];function walk(node:ReactNode){if(!isValidElement<Record<string,unknown>>(node))return;found.push(node);Children.forEach(node.props.children as ReactNode,walk);if("preview" in node.props)walk(node.props.preview as ReactNode);}walk(tree);return found;}
 function activate(tree:ReactNode,label:string){const node=nodes(tree).find(n=>n.props.children===label||n.props["aria-label"]===label);if(!node)throw Error(`Missing ${label}`);(node.props.onClick as ()=>void)();}
-const listeners=new Map<string,Set<()=>void>>();
 const trigger={isConnected:true,focus:vi.fn()}, sheet={focus:vi.fn()};
 let controller:UnifiedDirectoryController;
 const request=vi.fn();
 beforeEach(async()=>{
-  hooks.slots=[];hooks.cursor=0;hooks.effects=[];hooks.cleanups=[];listeners.clear();trigger.focus.mockClear();sheet.focus.mockClear();request.mockReset();
+  hooks.slots=[];hooks.cursor=0;hooks.effects=[];hooks.cleanups=[];trigger.focus.mockClear();sheet.focus.mockClear();request.mockReset();
   vi.useFakeTimers();vi.setSystemTime(now);
-  const history:{state:Record<string,unknown>;pushState:(state:Record<string,unknown>)=>void;back:()=>void}={state:{},pushState:vi.fn((state:Record<string,unknown>)=>{history.state=state;}),back:vi.fn(()=>{history.state={};listeners.get("popstate")?.forEach(fn=>fn());})};
-  vi.stubGlobal("window",{location:{origin:"https://dev.gobadminton.ru",href:"https://dev.gobadminton.ru/games?view=map"},history,
-    addEventListener:(name:string,fn:()=>void)=>{if(!listeners.has(name))listeners.set(name,new Set());listeners.get(name)!.add(fn);},removeEventListener:(name:string,fn:()=>void)=>listeners.get(name)?.delete(fn),setTimeout,clearTimeout,matchMedia:()=>({matches:false,addEventListener:()=>{},removeEventListener:()=>{}})});
-  vi.stubGlobal("document",{activeElement:trigger,querySelector:()=>null,body:{style:{overflow:""}}});
+  const history:{state:Record<string,unknown>;pushState:(state:Record<string,unknown>)=>void;back:()=>void}={state:{},pushState:vi.fn((state:Record<string,unknown>)=>{history.state=state;}),back:vi.fn(()=>{history.state={};window.dispatchEvent(new Event("popstate"));})};
+  vi.stubGlobal("window",Object.assign(new EventTarget(),{location:{origin:"https://dev.gobadminton.ru",href:"https://dev.gobadminton.ru/games?view=map"},history,
+    setTimeout,clearTimeout,matchMedia:()=>({matches:false,addEventListener:()=>{},removeEventListener:()=>{}})}));
+  vi.stubGlobal("document",Object.assign(new EventTarget(),{activeElement:trigger,querySelector:()=>null,body:{style:{overflow:""}},visibilityState:"visible"}));
   vi.stubGlobal("requestAnimationFrame",(fn:()=>void)=>fn());
   request.mockImplementation(async(path:string)=>({ok:true,status:200,data:path.endsWith("/preview")?preview:path.endsWith("/map")?{...snapshot,mapPage:{returnedCount:1,rankStart:1,rankEnd:1,hasMore:false,nextMapCursor:null}}:snapshot}));
   controller=new UnifiedDirectoryController(request as typeof apiFetch,Date.now);controller.bind({id:"viewer",csrfToken:"csrf"} as Me);await controller.query({cityId:MOSCOW_BUNDLE.cityId});await controller.map();await controller.select(controller.view.pins[0]!);

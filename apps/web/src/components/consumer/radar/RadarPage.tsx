@@ -29,6 +29,8 @@ export function RadarPage({ sharedMap, resumeCamera = false }: { sharedMap?: Lib
   const { applied: layerFilters } = useMapLayerFilters();
   const [failed, setFailed] = useState(false); const [listOpen, setListOpen] = useState(false); const [expanded, setExpanded] = useState(false);
   const [candidate, setCandidate] = useState(false); const sheet = useRef<HTMLElement>(null); const trigger = useRef<HTMLElement | null>(null);
+  // Venue marker replacement clears player selection without restoring the old player trigger.
+  const skipFocusRestore = useRef(false);
   const snapshot = view.snapshot;
   // Keep the map marker identity stable between one-second header ticks;
   // the exact-deadline timer below invalidates this array when a lease expires.
@@ -88,7 +90,8 @@ export function RadarPage({ sharedMap, resumeCamera = false }: { sharedMap?: Lib
   useEffect(() => {
     if (!sharedMap) return;
     if (view.selected) setExpanded(false);
-    else if (trigger.current?.isConnected) trigger.current.focus();
+    else if (!skipFocusRestore.current && trigger.current?.isConnected) trigger.current.focus();
+    skipFocusRestore.current = false;
   }, [view.selected]);
   useEffect(() => { if (listOpen) sheet.current?.focus(); }, [listOpen]);
   useEffect(() => {
@@ -125,7 +128,12 @@ export function RadarPage({ sharedMap, resumeCamera = false }: { sharedMap?: Lib
   // Venue selection dispatches gb-map-select-venue synchronously; close player/list in that same turn.
   useEffect(() => {
     if (!sharedMap) return;
-    const onVenue = () => { controller?.close(); setListOpen(false); setExpanded(false); };
+    const onVenue = () => {
+      skipFocusRestore.current = true;
+      controller?.close();
+      setListOpen(false);
+      setExpanded(false);
+    };
     window.addEventListener("gb-map-select-venue", onVenue);
     return () => window.removeEventListener("gb-map-select-venue", onVenue);
   }, [sharedMap, controller]);
