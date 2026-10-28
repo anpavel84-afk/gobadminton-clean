@@ -11,6 +11,7 @@ import type { apiFetch } from "../src/lib/api-client";
 import { MOSCOW_BUNDLE } from "../src/lib/radar-map-assets";
 import { RadarPage } from "../src/components/consumer/radar/RadarPage";
 import { UnifiedPlayerPreview } from "../src/components/consumer/radar/UnifiedPlayerPreview";
+import { PublicPlayerProfile } from "../src/components/consumer/players/PublicPlayerProfile";
 import { VenuePopup } from "../src/components/consumer/games/VenuePopup";
 
 const hooks = vi.hoisted(() => ({ slots: [] as unknown[], cursor: 0, effects: [] as (() => void)[], cleanups: [] as (() => void)[] }));
@@ -42,6 +43,25 @@ vi.mock("../src/components/consumer/radar/RadarSessionProvider",()=>({
   useDirectoryFilters:()=>({filters:{cityId:"a0000000-0000-4000-8000-000000000001",areaKey:"",name:"",lookingOnly:false,trainerOnly:false}}),RadarStatusAffordance:()=>null,
 }));
 vi.mock("../src/components/consumer/radar/RadarContact",()=>({RadarContact:()=>null}));
+vi.mock("../src/lib/api-client", async importOriginal => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    getMe: vi.fn(async () => ({ ok: true, status: 200, data: { id: "viewer", csrfToken: "csrf", displayName: "Viewer", locale: "ru", linkedProviders: [] } })),
+    getPlayer: vi.fn(async () => ({ ok: true, status: 200, data: {
+      publicPlayerId: "peer", displayName: "Игрок", cityId: "a0000000-0000-4000-8000-000000000001", areaKey: null, level: null,
+      bio: null, trainer: false, lookingForGame: false, avatar: { uploadedUrl: null, providerUrl: null }, canRequestContact: false,
+    } })),
+    listCities: vi.fn(async () => ({ ok: true, status: 200, data: { items: [] } })),
+    createAbuseReport: vi.fn(), putMyBlock: vi.fn(), deleteMyBlock: vi.fn(),
+  };
+});
+vi.mock("../src/components/consumer/friends/ProfileFriendship", () => ({ ProfileFriendship: () => null }));
+vi.mock("../src/components/consumer/players/ContactAction", () => ({
+  useContactState: () => null,
+  ContactAction: () => null,
+  ContactNote: () => null,
+}));
 const now=Date.parse("2030-01-01T00:00:00Z"), until=new Date(now+45000).toISOString();
 const row:UnifiedRow={publicPlayerId:"peer",projection:"directory",player:{publicPlayerId:"peer",displayName:"Игрок",cityId:MOSCOW_BUNDLE.cityId,areaKey:null,level:null,trainer:false,lookingForGame:false,avatar:{uploadedUrl:null,providerUrl:null},canRequestContact:false},
   radar:{resultId:"r",resultRef:"private-proof",consentPolicyVersion:"radar-geographic-sharing-v2",validUntil:until,distance:null,geo:{latitude:55.75,longitude:37.6,crs:"EPSG:4326",model:"regional_grid_100m_v1",gridSizeMeters:100,uncertaintyMeters:100,quality:"approximate",sourceTimestampBucket:new Date(now).toISOString(),sourceAgeSeconds:0}}};
@@ -95,8 +115,11 @@ it("renders compact -> expanded profile; games stay an internal sheet view",()=>
   expect(expanded).toContain('data-preview-mode="expanded"');
   expect(expanded).toContain('data-player-view="profile"');
   expect(expanded).toContain("unified-preview__expanded");
-  expect(expanded).toContain("player-profile-content");
-  expect(expanded).toContain("player-profile-hero");
+  expect(nodes(tree).some(n => n.type === PublicPlayerProfile)).toBe(true);
+  const shared = nodes(tree).find(n => n.type === PublicPlayerProfile)!;
+  expect(shared.props.publicPlayerId).toBe("peer");
+  expect(shared.props.embedded).toBe(true);
+  expect(shared.props.distance).toBeTruthy();
   expect(expanded).toContain("Ближайшие публичные игры");
   expect(expanded).not.toContain("Разрешённая игра");
   expect(expanded).toContain('aria-label="Свернуть карточку игрока"');
