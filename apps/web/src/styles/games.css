@@ -235,6 +235,23 @@
  .gb-venue-picker-count{padding:9px 16px 11px}
  .gb-venue-picker-option{padding:9px 16px}
 }
+@media (min-width:1024px) {
+  /* #365 «Просторный40» — h2+subtitle below control row 44+gap8 (top 76); X at 24. */
+  .gb-venue-picker { border-radius:28px; }
+  .gb-venue-picker-header {
+    position:relative;
+    display:block;
+    padding:76px 40px 16px;
+    border-bottom:1px solid var(--gb-line);
+  }
+  .gb-venue-picker-header h2 { margin:0; font-size:22px; line-height:26px; font-weight:700; }
+  .gb-venue-picker-header .gb-close-button {
+    position:absolute; top:24px; right:24px;
+  }
+  .gb-venue-picker-search { margin:12px 40px 0; }
+  .gb-venue-picker-count { padding:9px 40px 11px; }
+  .gb-venue-picker-option { padding-left:40px; padding-right:40px; }
+}
 
 /* WEB77: canonical circular IconButton and concise Notice, no card navigation. */
 .gb-game-detail-actions, .gb-discovery-card__actions { display: flex; align-items: center; gap: 8px; }
