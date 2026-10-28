@@ -143,10 +143,18 @@ def build_projection(*, claim=None, worker=None, config=None, last_event=None,
         'phase': phase,
         'pr': None if not claim else claim.get('pr'),
         'candidate_sha': None if not claim else claim.get('candidate_sha'),
+        'merged_sha': None if not claim else claim.get('merged_sha'),
         'qa': None if not claim else claim.get('last_qa'),
         'ci': None if not claim else claim.get('ci'),
         'dev': None if not claim else claim.get('dev'),
         'last_event': last_event,
+        # Fresh Project projection fields (filled by live.update_monitor_backlog).
+        'ordered_backlog': [],
+        'holds': [],
+        'source': None,
+        'synced_at': None,
+        'queue_status': None,
+        'queue_code': None,
         'observed_at': int(time.time()),
     }
 

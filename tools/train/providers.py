@@ -3,9 +3,9 @@
 
 Stdlib-only. Reuses installed native transport utilities when present; does not
 enable C5 policy, open historical #29 grants, or claim READY from this module.
-Real paid model calls happen only after reviewed install + PMA commissioning.
-Intents are saved before any side-effecting call. UNKNOWN timeouts are not
-blindly replayed.
+Live launchers live in live.py; this module keeps parse/quota/intent/READY
+predicates and invoke wrappers. Intents are saved before any side-effecting
+call. UNKNOWN timeouts are not blindly replayed.
 """
 from __future__ import annotations
 
@@ -16,6 +16,15 @@ import re
 import tempfile
 import time
 from pathlib import Path
+
+
+def readable_present(path):
+    """Path.exists that treats EACCES as absent — never probe host-protected dirs
+    into unit-test failures."""
+    try:
+        return Path(path).exists()
+    except OSError:
+        return False
 
 OWNER_ID = 318610566
 REPO_ID = 1416250340
@@ -363,8 +372,14 @@ def select_qa_provider(task, *, issue):
     return 'codex_sol_medium', 'default_codex', None
 
 
-def build_agy_landlock_roots(source_ro, private_home, private_scratch, runtime_dirs=None):
-    """Landlock-only confinement. No writable global /tmp — private HOME/scratch only."""
+def build_agy_landlock_roots(source_ro, private_home, private_scratch, runtime_dirs=None,
+                             auth_path=None):
+    """Landlock-only confinement. No writable global /tmp — private HOME/scratch only.
+
+    auth_path: inject test auth parent in unit tests; never probe host-protected
+    /srv paths when an explicit test path is supplied. Runtime uses readable_present
+    so EACCES on AGY_AUTH.parent does not crash unit tests or CI.
+    """
     readonly = []
     for p in (
         '/usr/bin', '/usr/lib', '/usr/lib64', '/lib', '/lib64', '/usr/share',
@@ -372,24 +387,25 @@ def build_agy_landlock_roots(source_ro, private_home, private_scratch, runtime_d
         '/opt/gb-slots/runtime/antigravity', '/opt/gb-slots/runtime/node',
         str(source_ro),
     ):
-        if Path(p).exists():
+        if readable_present(p):
             readonly.append(Path(p))
     for extra in runtime_dirs or ():
         p = Path(extra)
-        if p.exists():
+        if readable_present(p):
             readonly.append(p)
-    # Readonly snapshot of credentials dir metadata only when present as file parent.
-    if AGY_AUTH.parent.exists():
-        readonly.append(AGY_AUTH.parent)
+    # Readonly credentials parent: injectable for tests; host uses AGY_AUTH.
+    auth = Path(auth_path) if auth_path is not None else AGY_AUTH
+    if readable_present(auth.parent):
+        readonly.append(auth.parent)
     writable = [Path(private_home), Path(private_scratch)]
     for p in ('/dev/null', '/dev/urandom', '/dev/random'):
-        if Path(p).exists():
+        if readable_present(p):
             writable.append(Path(p))
     # Explicit: global /tmp is NOT writable.
     executables = [Path(p) for p in (
         '/usr/bin', '/usr/lib', '/usr/lib64', '/lib', '/lib64',
         '/opt/gb-slots/runtime/antigravity', AGY_CLI,
-    ) if Path(p).exists()]
+    ) if readable_present(p)]
     return readonly, writable, executables
 
 
@@ -493,16 +509,36 @@ def progress_halt(previous_fingerprints, findings):
     return len(hits) >= 2, fp
 
 
+def _live_cursor_author():
+    import live as lean_live
+    return lean_live.cursor_author_live
+
+
+def _live_codex_qa():
+    import live as lean_live
+    return lean_live.codex_qa_live
+
+
+def _live_publish(kind):
+    import live as lean_live
+    if kind == 'merge_dev':
+        return lean_live.merge_pr_live
+    return lean_live.publish_push_pr
+
+
 def invoke_cursor_author(*, task, worktree, evidence_dir, launcher=None, parent_lease=True):
-    """Bounded Cursor author call via injected launcher (Mode A pattern).
+    """Bounded Cursor author call. Live default = live.cursor_author_live.
 
     parent_lease=True means the controller already holds the one writer lease —
-    do not nest a second acquisition inside the launcher.
+    do not nest a second acquisition inside the launcher. Tests inject fakes.
     """
     intent, intent_path = prepare_cursor_author_intent(task, worktree, evidence_dir)
     if launcher is None:
-        mark_intent_phase(intent_path, 'HOLD_launcher_absent')
-        raise ProviderError('cursor_launcher_absent', 'PMA supplies existing Mode A launcher')
+        try:
+            launcher = _live_cursor_author()
+        except Exception as err:
+            mark_intent_phase(intent_path, 'HOLD_launcher_absent', error=type(err).__name__)
+            raise ProviderError('cursor_launcher_absent', type(err).__name__) from err
     mark_intent_phase(intent_path, 'launching', parent_lease=bool(parent_lease))
     try:
         result = launcher(task=task, worktree=worktree, evidence_dir=evidence_dir,
@@ -521,11 +557,14 @@ def invoke_cursor_author(*, task, worktree, evidence_dir, launcher=None, parent_
 
 
 def invoke_codex_qa(*, task, candidate_sha, evidence_dir, launcher=None):
-    """Independent Codex Sol Medium QA via injected launcher (Mode A pattern)."""
+    """Independent Codex Sol Medium QA. Live default = live.codex_qa_live."""
     intent, intent_path = prepare_qa_intent(task, candidate_sha, 'codex_sol_medium', evidence_dir)
     if launcher is None:
-        mark_intent_phase(intent_path, 'HOLD_launcher_absent')
-        raise ProviderError('codex_launcher_absent', 'PMA supplies existing Mode A launcher')
+        try:
+            launcher = _live_codex_qa()
+        except Exception as err:
+            mark_intent_phase(intent_path, 'HOLD_launcher_absent', error=type(err).__name__)
+            raise ProviderError('codex_launcher_absent', type(err).__name__) from err
     mark_intent_phase(intent_path, 'launching')
     try:
         raw_or_result = launcher(task=task, candidate_sha=candidate_sha,
@@ -548,12 +587,40 @@ def invoke_codex_qa(*, task, candidate_sha, evidence_dir, launcher=None):
     return parsed
 
 
+def invoke_agy_qa(*, task, candidate_sha, evidence_dir, launcher=None):
+    """AGY live QA transport — actual code path, not quota/parser-only."""
+    intent, intent_path = prepare_qa_intent(task, candidate_sha, 'agy_qa', evidence_dir)
+    if launcher is None:
+        try:
+            import live as lean_live
+            launcher = lean_live.agy_qa_live
+        except Exception as err:
+            mark_intent_phase(intent_path, 'HOLD_launcher_absent', error=type(err).__name__)
+            raise ProviderError('agy_launcher_absent', type(err).__name__) from err
+    mark_intent_phase(intent_path, 'launching')
+    try:
+        result = launcher(task=task, candidate_sha=candidate_sha,
+                          evidence_dir=evidence_dir, intent_path=str(intent_path))
+    except TimeoutError as err:
+        mark_intent_phase(intent_path, 'UNKNOWN', error='timeout')
+        raise ProviderError('qa_timeout_unknown', str(err), charge='unknown') from err
+    mark_intent_phase(intent_path, 'completed',
+                      verdict=(result or {}).get('verdict'))
+    return result
+
+
 def invoke_trusted_publish(*, kind, payload, evidence_dir, publisher=None):
-    """Trusted UID1002 gh publication — never GITHUB_TOKEN push."""
+    """Trusted UID1002 gh publication — never GITHUB_TOKEN push.
+
+    Live default binds publish_push_pr / merge_pr_live — not 'PMA supplies publisher'.
+    """
     intent, intent_path = prepare_operation_intent(kind, payload, evidence_dir)
     if publisher is None:
-        mark_intent_phase(intent_path, 'HOLD_publisher_absent')
-        raise ProviderError('publisher_absent', 'UID1002 gh publisher required')
+        try:
+            publisher = _live_publish(kind)
+        except Exception as err:
+            mark_intent_phase(intent_path, 'HOLD_publisher_absent', error=type(err).__name__)
+            raise ProviderError('publisher_absent', type(err).__name__) from err
     mark_intent_phase(intent_path, 'launching')
     try:
         result = publisher(kind=kind, payload=payload, intent_path=str(intent_path))
@@ -567,12 +634,18 @@ def invoke_trusted_publish(*, kind, payload, evidence_dir, publisher=None):
     return result
 
 
-# Explicit: this author pass does not claim AGY/Cursor/Codex READY and does not
-# invoke paid model CLIs. PMA owns real provider proof after install.
+# This Cursor author source pass is itself 1 model launch (no nested AGY/Codex
+# inference in-process). READY/qualification remain unproven until independent
+# acceptance after real operation — never manually READY / old #29 grant replay.
 AUTHOR_PASS_CLAIMS = {
     'agy_qa_ready': False,
     'agy_author_ready': False,
     'mode_b_active': False,
-    'model_calls': 0,
-    'note': 'source-only OD017 pass2; READY/qualification deferred to PMA commissioning',
+    'cursor_author_launches': 1,
+    'nested_agy_codex_model_calls': 0,
+    'model_calls': 1,
+    'note': (
+        'OD017 repair3: live default bindings in live.py; this Cursor author pass '
+        'is 1 launch; AGY/Codex READY and MODE_B_ACTIVE remain unproven runtime gates'
+    ),
 }

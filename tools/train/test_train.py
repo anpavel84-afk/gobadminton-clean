@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Proportionate deterministic tests for Lean Mode B (OD-017 pass2).
+"""Proportionate deterministic tests for Lean Mode B (OD-017 repair3).
 
 Exercises the real run_once controller with mocked external adapters — not a
-parallel demo. Covers: two-task auto sequence; QA FAIL→repair→new SHA QA;
-duplicate events/restart no second call; concurrent writer rejected; stale
-result rejected; UNKNOWN no replay; Actions validation; parser; quota;
-readiness; private filesystem.
+parallel demo. Covers: two eligible Project-style tasks auto-next; stale/park/OFF
+exclusion; QA FAIL→repair→new SHA; distinct candidate/merge SHA; duplicate events;
+concurrent writer; UNKNOWN no replay; CI repairable FAIL→author findings; wake
+deadline resume; Project queue_unavailable zero calls; live default binding
+presence via mock subprocess boundary (no live calls); parser; quota; landlock
+fixtures with injected temp auth path (never probe host /srv); host request gates.
 """
 from __future__ import annotations
 
@@ -13,6 +15,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -23,6 +26,7 @@ import providers
 import run as lean_run
 import host as lean_host
 import monitor as lean_mon
+import live as lean_live
 
 
 OWNER = 318610566
@@ -60,7 +64,7 @@ def _sha(n):
 
 
 class FakeRegistry:
-    """Minimal one-writer lease for unit tests (no live slots.py required)."""
+    """Minimal one-writer lease for unit tests (no live slots.py / host locks)."""
 
     busy = False
 
@@ -81,16 +85,29 @@ class FakeRegistry:
             self._held = False
 
 
-def make_flow_adapters(td, *, fail_qa_once=False, shas=None):
-    """Mocked adapters exercising the real execute_claim path."""
+def make_flow_adapters(td, *, fail_qa_once=False, distinct_merge=False, shas=None,
+                       ci_fail_once=False, wait_ci_once=False):
+    """Mocked adapters exercising the real execute_claim path.
+
+    Injects temp lock_dir + integration_lock under td — never host-protected paths.
+    """
     shas = list(shas or [_sha(1), _sha(2), _sha(3)])
-    state = {'author_i': 0, 'qa_calls': 0, 'author_calls': 0, 'publish_calls': 0}
+    state = {
+        'author_i': 0, 'qa_calls': 0, 'author_calls': 0, 'publish_calls': 0,
+        'merge_calls': 0, 'ci_calls': 0, 'author_findings': [],
+    }
+    integ = Path(td) / 'integration.lock'
+    integ.write_text('test')
+    locks = Path(td) / 'locks'
+    locks.mkdir(exist_ok=True)
 
     def worktree(task):
         return str(Path(td) / 'wt' / str(task['issue']))
 
     def author(**kwargs):
         state['author_calls'] += 1
+        task = kwargs.get('task') or {}
+        state['author_findings'].append(list(task.get('repair_findings') or []))
         i = min(state['author_i'], len(shas) - 1)
         sha = shas[i]
         state['author_i'] += 1
@@ -106,18 +123,33 @@ def make_flow_adapters(td, *, fail_qa_once=False, shas=None):
 
     def publish(kind=None, payload=None, intent_path=None, **_):
         state['publish_calls'] += 1
-        if kind == 'merge_dev' or (isinstance(kind, str) is False and False):
-            pass
-        # invoke_trusted_publish passes kind= to publisher
-        k = kind
-        if k == 'merge_dev':
-            return {'merged_sha': payload['sha'], 'pr': payload.get('pr')}
+        if kind == 'merge_dev':
+            return merge(kind=kind, payload=payload)
         return {'pr': 1000 + int(payload['issue']), 'head_sha': payload['sha']}
 
     def merge(kind=None, payload=None, intent_path=None, **_):
-        return {'merged_sha': payload['sha'], 'pr': payload.get('pr')}
+        state['merge_calls'] += 1
+        candidate = payload['sha']
+        if distinct_merge:
+            # Normal GitHub merge creates a NEW commit SHA.
+            merged = _sha(int(candidate[-4:], 16) ^ 0xABC)
+            return {
+                'merged_sha': merged, 'merge_sha': merged,
+                'candidate_sha': candidate, 'pr': payload.get('pr'),
+                'parents': [candidate, 'd' * 40],
+            }
+        return {'merged_sha': candidate, 'merge_sha': candidate,
+                'candidate_sha': candidate, 'pr': payload.get('pr')}
 
     def wait_ci(claim):
+        state['ci_calls'] += 1
+        if wait_ci_once and state['ci_calls'] == 1:
+            return {'ok': False, 'waiting': True, 'head_sha': claim['candidate_sha']}
+        if ci_fail_once and state['ci_calls'] == 1:
+            return {
+                'ok': False, 'repairable': True, 'head_sha': claim['candidate_sha'],
+                'findings': ['CI job failed: source (web) (run 1/1)'],
+            }
         return {'ok': True, 'head_sha': claim['candidate_sha'], 'checks': 7}
 
     def deploy(claim):
@@ -139,7 +171,8 @@ def make_flow_adapters(td, *, fail_qa_once=False, shas=None):
         worktree=worktree,
         preqa_diff=preqa,
         lock_registry=FakeRegistry,
-        lock_dir=str(Path(td) / 'locks'),
+        lock_dir=str(locks),
+        integration_lock=str(integ),
         evidence_dir=str(Path(td) / 'evidence'),
     ), state
 
@@ -172,11 +205,16 @@ class AdmissionTests(unittest.TestCase):
 
 
 class FiniteFlowTests(unittest.TestCase):
-    def test_two_tasks_auto_sequence(self):
+    def test_two_eligible_tasks_autonext(self):
+        """Two eligible Project-style tasks auto-next — NOT hardcoded 365→94.
+
+        #94 PARK remains excluded from residual scope; 365 is UAT-delivered.
+        """
         with tempfile.TemporaryDirectory() as td:
             adapters, state = make_flow_adapters(td, shas=[_sha(11), _sha(22)])
             admissions = []
-            for issue, prio in ((365, 20), (94, 10)):
+            # Synthetic eligible residual Issues (not 365/94/182/UAT-delivered).
+            for issue, prio in ((701, 20), (702, 10)):
                 comment, task = owner_task_comment(issue=issue, priority=prio)
                 adm = lean_run.admit_comment(
                     comment, {'number': issue, 'state': 'open'}, {'id': REPO_ID})
@@ -186,13 +224,25 @@ class FiniteFlowTests(unittest.TestCase):
                 {'event_name': 'schedule'}, adapters=adapters, results_root=td, limit=2)
             self.assertEqual(out['status'], 'advanced')
             self.assertEqual(len(out['results']), 2)
-            self.assertEqual(out['results'][0]['claim']['issue'], 365)
-            self.assertEqual(out['results'][1]['claim']['issue'], 94)
+            self.assertEqual(out['results'][0]['claim']['issue'], 701)
+            self.assertEqual(out['results'][1]['claim']['issue'], 702)
             for r in out['results']:
                 self.assertEqual(r['claim']['phase'], 'DEV_ACCEPTED_UAT_PENDING')
                 self.assertEqual(r['claim']['uat'], 'NOT_TESTED')
             self.assertEqual(state['author_calls'], 2)
             self.assertEqual(state['qa_calls'], 2)
+
+    def test_park_and_uat_delivered_excluded(self):
+        self.assertFalse(lean_live.item_eligible(
+            {'issue': 94, 'status': 'Ready', 'state': 'OPEN'})[0])
+        self.assertFalse(lean_live.item_eligible(
+            {'issue': 365, 'status': 'Ready', 'state': 'OPEN'})[0])
+        self.assertFalse(lean_live.item_eligible(
+            {'issue': 182, 'status': 'Ready', 'state': 'OPEN'})[0])
+        self.assertFalse(lean_live.item_eligible(
+            {'issue': 701, 'status': 'Park', 'state': 'OPEN'})[0])
+        self.assertTrue(lean_live.item_eligible(
+            {'issue': 701, 'status': 'Ready', 'state': 'OPEN'})[0])
 
     def test_qa_fail_then_cursor_repair_new_sha(self):
         with tempfile.TemporaryDirectory() as td:
@@ -208,6 +258,55 @@ class FiniteFlowTests(unittest.TestCase):
             self.assertEqual(out['claim']['candidate_sha'], _sha(2))
             self.assertEqual(out['claim']['last_qa']['verdict'], 'PASS')
             self.assertEqual(out['claim']['last_qa']['reviewed_sha'], _sha(2))
+            # Exact findings propagated into repair author prompt.
+            self.assertEqual(state['author_findings'][1], ['missing test for X'])
+
+    def test_distinct_candidate_and_merge_sha(self):
+        with tempfile.TemporaryDirectory() as td:
+            adapters, state = make_flow_adapters(
+                td, distinct_merge=True, shas=[_sha(5)])
+            comment, _ = owner_task_comment(issue=510)
+            adm = lean_run.admit_comment(
+                comment, {'number': 510, 'state': 'open'}, {'id': REPO_ID})
+            out = lean_run.execute_claim(adm, adapters, results_root=td)
+            claim = out['claim']
+            self.assertEqual(claim['phase'], 'DEV_ACCEPTED_UAT_PENDING')
+            self.assertEqual(claim['candidate_sha'], _sha(5))
+            self.assertEqual(claim['reviewed_candidate_sha'], _sha(5))
+            self.assertNotEqual(claim['merged_sha'], claim['candidate_sha'])
+            self.assertEqual(claim['dev']['live_sha'], claim['merged_sha'])
+
+    def test_ci_fail_returns_author_findings_not_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            adapters, state = make_flow_adapters(
+                td, ci_fail_once=True, shas=[_sha(1), _sha(2)])
+            comment, _ = owner_task_comment(issue=511)
+            adm = lean_run.admit_comment(
+                comment, {'number': 511, 'state': 'open'}, {'id': REPO_ID})
+            out = lean_run.execute_claim(adm, adapters, results_root=td)
+            self.assertEqual(out['claim']['phase'], 'DEV_ACCEPTED_UAT_PENDING')
+            self.assertGreaterEqual(state['author_calls'], 2)
+            self.assertTrue(any('CI job failed' in f for fs in state['author_findings'] for f in fs))
+
+    def test_waiting_ci_resumes_without_unknown(self):
+        with tempfile.TemporaryDirectory() as td:
+            adapters, state = make_flow_adapters(
+                td, wait_ci_once=True, shas=[_sha(9)])
+            comment, _ = owner_task_comment(issue=512)
+            adm = lean_run.admit_comment(
+                comment, {'number': 512, 'state': 'open'}, {'id': REPO_ID})
+            out1 = lean_run.execute_claim(adm, adapters, results_root=td)
+            self.assertEqual(out1['status'], 'wake_resume')
+            self.assertEqual(out1['claim']['phase'], 'WAITING_CI')
+            out2 = lean_run.execute_claim(adm, adapters, results_root=td)
+            self.assertEqual(out2['claim']['phase'], 'DEV_ACCEPTED_UAT_PENDING')
+            self.assertEqual(state['author_calls'], 1)
+
+    def test_no_numeric_repair_ceiling_eight(self):
+        """OD-016: live default must not bind an arbitrary productive ceiling."""
+        import inspect
+        sig = inspect.signature(lean_run.execute_claim)
+        self.assertIsNone(sig.parameters['max_repair'].default)
 
     def test_duplicate_event_no_second_call(self):
         with tempfile.TemporaryDirectory() as td:
@@ -232,11 +331,22 @@ class FiniteFlowTests(unittest.TestCase):
             FakeRegistry.busy = True
             lease = lean_run.WriterLease(
                 1, ['apps/web/src/x.ts'], registry=FakeRegistry,
-                lock_dir=str(Path(td) / 'locks'))
+                lock_dir=str(Path(td) / 'locks'),
+                integration_lock=str(Path(td) / 'integration.lock'))
             with self.assertRaises(lean_run.LeanError) as ctx:
                 lease.acquire()
             self.assertEqual(ctx.exception.code, 'source_writer_busy')
             FakeRegistry.busy = False
+
+    def test_writer_lease_does_not_open_host_integration_lock(self):
+        """Fixtures must never probe /var/lib/.../integration.lock."""
+        with tempfile.TemporaryDirectory() as td:
+            FakeRegistry.busy = False
+            lease = lean_run.WriterLease(
+                1, ['apps/web/src/x.ts'], registry=FakeRegistry,
+                lock_dir=str(Path(td) / 'locks'))
+            lease.acquire()
+            lease.release()
 
     def test_stale_qa_result_rejected(self):
         with tempfile.TemporaryDirectory() as td:
@@ -270,6 +380,36 @@ class FiniteFlowTests(unittest.TestCase):
             self.assertTrue(out['holds'])
 
 
+class ProjectQueueTests(unittest.TestCase):
+    def test_project_access_not_verified_zero_calls(self):
+        with mock.patch.object(lean_live, 'gh_graphql',
+                               side_effect=lean_live.LiveError('PROJECT_ACCESS_NOT_VERIFIED', 'auth')):
+            result = lean_live.fetch_project_admissions()
+        self.assertEqual(result['status'], 'queue_unavailable')
+        self.assertEqual(result['code'], 'PROJECT_ACCESS_NOT_VERIFIED')
+        self.assertEqual(result['calls'], 0)
+        self.assertEqual(result['admissions'], [])
+
+    def test_insufficient_scopes_zero_calls(self):
+        with mock.patch.object(lean_live, 'gh_graphql',
+                               side_effect=lean_live.LiveError('INSUFFICIENT_SCOPES', 'scope')):
+            result = lean_live.fetch_project_admissions()
+        self.assertEqual(result['code'], 'INSUFFICIENT_SCOPES')
+        self.assertEqual(result['calls'], 0)
+
+    def test_advance_queue_unavailable_no_open_issues_fallback(self):
+        with tempfile.TemporaryDirectory() as td:
+            adapters, _ = make_flow_adapters(td)
+
+            def boom():
+                raise lean_run.LeanError('queue_unavailable', 'PROJECT_ACCESS_NOT_VERIFIED')
+
+            adapters.fetch_admissions = boom
+            out = lean_run.advance_queue(adapters, results_root=td, limit=2)
+            self.assertEqual(out['status'], 'queue_unavailable')
+            self.assertEqual(out['calls'], 0)
+
+
 class ParserQuotaTests(unittest.TestCase):
     def test_stale_sha_verdict_rejected(self):
         raw = json.dumps({'verdict': 'PASS', 'findings': [], 'reviewed_sha': 'b' * 40})
@@ -286,7 +426,6 @@ class ParserQuotaTests(unittest.TestCase):
 
     def test_agy_native_invalid_no_regex_fallback(self):
         sha = 'a' * 40
-        # Looks like AGY stream but native parse will fail → must NOT regex-fallback.
         raw = b'{"event":"init"}\n{"event":"result"}\n'
         class Boom(Exception):
             pass
@@ -326,15 +465,29 @@ class ParserQuotaTests(unittest.TestCase):
             self.assertFalse(avail)
             self.assertGreaterEqual(rec['unknown_calls'], 1)
 
-    def test_landlock_roots_exclude_global_tmp(self):
+    def test_landlock_roots_inject_temp_auth_never_probe_srv(self):
         with tempfile.TemporaryDirectory() as td:
             home = Path(td) / 'home'
             scratch = Path(td) / 'scratch'
+            auth = Path(td) / 'auth' / 'token'
+            auth.parent.mkdir(parents=True)
+            auth.write_text('x')
             home.mkdir(); scratch.mkdir()
-            ro, wr, ex = providers.build_agy_landlock_roots(td, home, scratch)
+            # Force host AGY_AUTH.parent.exists to PermissionError if probed.
+            real_exists = Path.exists
+
+            def boom(self):
+                if str(self).startswith('/srv'):
+                    raise PermissionError(13, 'Permission denied', str(self))
+                return real_exists(self)
+
+            with mock.patch.object(Path, 'exists', boom):
+                ro, wr, ex = providers.build_agy_landlock_roots(
+                    td, home, scratch, auth_path=auth)
             self.assertTrue(all(Path(p) != Path('/tmp') for p in wr))
             self.assertIn(home, wr)
             self.assertIn(scratch, wr)
+            self.assertIn(auth.parent, ro)
 
     def test_progress_halt_two_same_fingerprints(self):
         findings = ['missing test for X']
@@ -357,6 +510,39 @@ class ParserQuotaTests(unittest.TestCase):
             with mock.patch.object(providers, 'AGY_QA_READY', path):
                 ok, reason = providers.role_ready('agy_qa')
             self.assertFalse(ok)
+
+
+class LiveBindingsTests(unittest.TestCase):
+    def test_live_module_exposes_required_functions(self):
+        for name in (
+            'cursor_author_live', 'codex_qa_live', 'agy_qa_live',
+            'publish_push_pr', 'wait_product_ci', 'merge_pr_live',
+            'wait_dev_deploy', 'fetch_project_admissions', 'create_task_worktree',
+            'build_live_adapters',
+        ):
+            self.assertTrue(callable(getattr(lean_live, name)))
+
+    def test_host_entry_default_uses_live_adapters_mock_boundary(self):
+        """Deterministic mock subprocess boundary — no live model/gh calls."""
+        with tempfile.TemporaryDirectory() as td:
+            adapters, state = make_flow_adapters(td, shas=[_sha(3)])
+            admissions = []
+            comment, _ = owner_task_comment(issue=720, priority=5)
+            adm = lean_run.admit_comment(
+                comment, {'number': 720, 'state': 'open'}, {'id': REPO_ID})
+            admissions.append(adm)
+            adapters.fetch_admissions = lambda: admissions
+            with mock.patch.object(lean_run, 'default_live_adapters', return_value=adapters):
+                out = lean_run.run_once(
+                    {'event_name': 'schedule', 'wake_budget_s': 120},
+                    results_root=td, limit=1, use_live_defaults=True)
+            self.assertEqual(out['status'], 'advanced')
+            self.assertEqual(out['results'][0]['claim']['issue'], 720)
+            self.assertEqual(state['author_calls'], 1)
+
+    def test_main_self_check_reports_live_defaults(self):
+        code = lean_run.main(['--self-check'])
+        self.assertEqual(code, 0)
 
 
 class HostRequestTests(unittest.TestCase):
@@ -429,24 +615,18 @@ class InstallPointerTests(unittest.TestCase):
             host = dest / 'tools/train/host.py'
             host.parent.mkdir(parents=True)
             host.write_text('#!/usr/bin/env python3\n')
-            # Redirect install module paths.
-            with mock.patch.object(lean_run, 'RESULTS', root):  # noqa: F841 — keep import used
-                pass
-            import install as lean_inst
-            with mock.patch.object(lean_inst, 'INSTALL_ROOT', root), \
-                 mock.patch.object(lean_inst, 'RELEASES', releases), \
-                 mock.patch.object(lean_inst, 'CURRENT', root / 'current'):
-                # Parents won't be uid0 in sandbox — bypass trusted parent checks by
-                # only testing pointer write + non-symlink when we mock need for parents.
-                # Exercise pointer semantics with a local copy of the logic.
-                current = root / 'current'
-                current.write_text(sha + '\n')
-                self.assertTrue(current.is_file())
-                self.assertFalse(current.is_symlink())
-                self.assertEqual(current.read_text().strip(), sha)
-                resolved = releases / sha / 'tools/train/host.py'
-                self.assertTrue(resolved.is_file())
-                self.assertFalse(resolved.is_symlink())
+            current = root / 'current'
+            current.write_text(sha + '\n')
+            self.assertTrue(current.is_file())
+            self.assertFalse(current.is_symlink())
+            self.assertEqual(current.read_text().strip(), sha)
+            resolved = releases / sha / 'tools/train/host.py'
+            self.assertTrue(resolved.is_file())
+            self.assertFalse(resolved.is_symlink())
+
+    def test_live_py_in_install_files(self):
+        import install as lean_inst
+        self.assertIn('tools/train/live.py', lean_inst.INSTALL_FILES)
 
 
 class MonitorTests(unittest.TestCase):
@@ -459,6 +639,7 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(proj['phase'], 'WORKER_DEAD_RUNNING')
         self.assertFalse(proj['worker']['alive'])
         self.assertFalse(proj['mode_b_active'])
+        self.assertIn('ordered_backlog', proj)
 
     def test_write_projection_refuses_unrelated_path(self):
         with tempfile.TemporaryDirectory() as td:
@@ -475,11 +656,13 @@ class NextReadyTests(unittest.TestCase):
 
 
 class AuthorClaimsTests(unittest.TestCase):
-    def test_author_pass_does_not_claim_ready(self):
+    def test_author_pass_claims_one_launch_not_ready(self):
         self.assertFalse(providers.AUTHOR_PASS_CLAIMS['agy_qa_ready'])
         self.assertFalse(providers.AUTHOR_PASS_CLAIMS['agy_author_ready'])
         self.assertFalse(providers.AUTHOR_PASS_CLAIMS['mode_b_active'])
-        self.assertEqual(providers.AUTHOR_PASS_CLAIMS['model_calls'], 0)
+        self.assertEqual(providers.AUTHOR_PASS_CLAIMS['cursor_author_launches'], 1)
+        self.assertEqual(providers.AUTHOR_PASS_CLAIMS['nested_agy_codex_model_calls'], 0)
+        self.assertEqual(providers.AUTHOR_PASS_CLAIMS['model_calls'], 1)
 
 
 class DeployAcceptanceTests(unittest.TestCase):

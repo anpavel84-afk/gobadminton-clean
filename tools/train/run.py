@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Lean Mode B finite controller: admit → claim → author → QA → CI → DEV.
 
-One bounded host run. GitHub Issues are the only product queue. Durable receipts
-live under /var/lib/gobadminton-lean/results — not a task DB. C5 stays off.
-Stdlib only. Paid model/GitHub publication side effects require installed host
-privileges and are invoked by PMA/Actions via injectable adapters — the same
-controller path tests exercise with mocks. No parallel demo controller.
+One bounded host run. Canonical product queue = GitHub Project #1 ∩ Owner
+admission comments (Issue #175). Durable receipts live under
+/var/lib/gobadminton-lean/results — not a task DB. C5 stays off. Stdlib only.
+Live host loads trusted default bindings from live.py; unit tests inject fakes.
+No parallel demo controller. No PMA per-Issue Python hook injection required.
 """
 from __future__ import annotations
 
@@ -45,7 +45,12 @@ PROTECTED_SELF_MUTATE = (
 TERMINAL_PHASES = frozenset({
     'DEV_ACCEPTED_UAT_PENDING', 'BLOCKED', 'STRATEGY_HALT', 'DENIED', 'DONE',
 })
+# RUNNING/UNKNOWN block automatic paid replay. WAITING_* are durable external
+# waits resumed on next wake by re-reading GitHub — not UNKNOWN and not RUNNING.
 ACTIVE_HOLD_PHASES = frozenset({'RUNNING', 'UNKNOWN'})
+WAITING_PHASES = frozenset({'WAITING_CI', 'WAITING_DEPLOY', 'WAKE_RESUME'})
+# Default host wake budget fits Actions 45m client; stages resume at safe points.
+DEFAULT_WAKE_BUDGET_S = 2400
 
 
 class LeanError(RuntimeError):
@@ -208,16 +213,25 @@ class WriterLease:
     If parent already owns a validated lease, factored provider entry drops
     privileges without reclaim. Controller atomically rejects busy writers.
     Do not nest two writer lease acquisitions.
+
+    Writer lease ≠ integration lock. Do NOT hold integration.lock across
+    author/CI/DEV waits (DEV may need the same integration lock). Narrow
+    IntegrationLock is used only around merge.
     """
 
-    def __init__(self, issue, allowed_paths, *, parent_owns=False, registry=None, lock_dir=None):
+    def __init__(self, issue, allowed_paths, *, parent_owns=False, registry=None,
+                 lock_dir=None, integration_lock=None):
         self.issue = int(issue)
         self.allowed_paths = list(allowed_paths)
         self.parent_owns = parent_owns
         self.registry = registry
         self.lock_dir = Path(lock_dir) if lock_dir else SOURCE_LOCK_DIR
+        # integration_lock path is recorded for callers; WriterLease itself never
+        # opens host-protected integration.lock (avoids unit-test PermissionError
+        # and long waits holding the merge mutex).
+        self.integration_lock_path = (
+            Path(integration_lock) if integration_lock is not None else None)
         self._owned = False
-        self._integration_fd = None
         self.slots = None
         self.registry_obj = None
 
@@ -242,32 +256,55 @@ class WriterLease:
             raise LeanError('source_writer_busy')
         self.registry_obj = reg
         self._owned = True
-        try:
-            fd = os.open(str(INTEGRATION_LOCK), os.O_RDONLY | os.O_NOFOLLOW)
-            try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                os.close(fd)
-                self.release()
-                raise LeanError('integration_lock_busy') from None
-            self._integration_fd = fd
-        except FileNotFoundError:
-            self._integration_fd = None
         return True
 
     def release(self):
-        if self._integration_fd is not None:
-            try:
-                os.close(self._integration_fd)
-            except OSError:
-                pass
-            self._integration_fd = None
         if self._owned and self.registry_obj is not None:
             try:
                 self.registry_obj.release()
             except Exception:
                 pass
             self._owned = False
+
+
+class IntegrationLock:
+    """Narrow trusted integration mutex for merge only — not for CI/DEV waits."""
+
+    def __init__(self, path=None):
+        self.path = Path(path) if path else INTEGRATION_LOCK
+        self._fd = None
+
+    def acquire(self):
+        try:
+            fd = os.open(str(self.path), os.O_RDONLY | os.O_NOFOLLOW)
+        except FileNotFoundError:
+            self._fd = None
+            return True
+        except PermissionError as err:
+            raise LeanError('integration_lock_unreadable', str(self.path)) from err
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            os.close(fd)
+            raise LeanError('integration_lock_busy') from None
+        self._fd = fd
+        return True
+
+    def release(self):
+        if self._fd is not None:
+            try:
+                os.close(self._fd)
+            except OSError:
+                pass
+            self._fd = None
+
+    def __enter__(self):
+        self.acquire()
+        return self
+
+    def __exit__(self, *exc):
+        self.release()
+        return False
 
 
 def stage_order():
@@ -478,7 +515,7 @@ def mode_b_status_projection(claim=None, last_event=None, *, worker=None, config
 
 
 class Adapters:
-    """Injectable side effects. Tests and live host use the same controller."""
+    """Injectable side effects. Tests inject fakes; live host uses live.py defaults."""
 
     def __init__(self, **hooks):
         self.fetch_admissions = hooks.get('fetch_admissions')
@@ -493,9 +530,30 @@ class Adapters:
         self.project_status = hooks.get('project_status')
         self.lock_registry = hooks.get('lock_registry')
         self.lock_dir = hooks.get('lock_dir')
+        self.integration_lock = hooks.get('integration_lock')
         self.preqa_diff = hooks.get('preqa_diff')
         self.evidence_dir = hooks.get('evidence_dir')
+        self.deadline = hooks.get('deadline')
         self.now = hooks.get('now') or (lambda: int(time.time()))
+
+
+def default_live_adapters(*, deadline=None, results_root=None):
+    """Load trusted LIVE bindings for real host run. Tests must not call this
+    without patching — they construct Adapters with fakes explicitly."""
+    import live as lean_live
+    return lean_live.build_live_adapters(
+        results_root=results_root, deadline=deadline)
+
+
+def _remaining(adapters):
+    if adapters.deadline is None:
+        return None
+    return max(0, float(adapters.deadline) - time.monotonic())
+
+
+def _wake_budget_exhausted(adapters, stage):
+    rem = _remaining(adapters)
+    return rem is not None and rem < 45
 
 
 def _evidence_dir(adapters, claim, results_root):
@@ -508,7 +566,13 @@ def _evidence_dir(adapters, claim, results_root):
 
 
 def fetch_owner_admissions(gh_api, *, config=None):
-    """Fresh numeric-Owner canonical admissions queue via trusted gh API."""
+    """Deprecated open-Issues scan — NOT the canonical Mode B queue.
+
+    Live path must use live.fetch_project_admissions (Project GraphQL). This
+    helper remains only for explicit test injection via adapters.gh_api when
+    adapters.fetch_admissions is absent. It never substitutes for a failed
+    Project read (that must be queue_unavailable + zero calls).
+    """
     _need(callable(gh_api), 'gh_api_required')
     issues = gh_api(f'repos/{REPO}/issues?state=open&per_page=100')
     if not isinstance(issues, list):
@@ -578,8 +642,14 @@ def _collect_done_uat_blocked(results_root):
 
 
 def execute_claim(admission, adapters, *, results_root, config=None, parent_lease=False,
-                  max_repair=8):
-    """Finite resumable flow for one admitted Issue. Same path for live + tests."""
+                  max_repair=None):
+    """Finite resumable flow for one admitted Issue. Same path for live + tests.
+
+    OD-016: no arbitrary productive author-pass ceiling. Bound a finite WAKE by
+    deadline/remaining time; resume at safe completed stage. Preserve attempts /
+    fingerprints; two non-progress halts stop strategy. Controlled FAIL findings
+    propagate into the same worktree/PR/history author prompt.
+    """
     root = Path(results_root)
     claim = claim_admission(admission, results_root=root)
     path = claim_path_for(admission, root)
@@ -598,19 +668,84 @@ def execute_claim(admission, adapters, *, results_root, config=None, parent_leas
         parent_owns=parent_lease,
         registry=adapters.lock_registry,
         lock_dir=adapters.lock_dir,
+        integration_lock=adapters.integration_lock,
     )
     lease.acquire()
     try:
-        # --- author ---
-        if claim.get('phase') in ('CLAIMED', 'QA_FAIL') or claim.get('stage') in ('claim', 'repair', None):
-            if claim.get('phase') == 'QA_FAIL' or claim.get('stage') == 'repair':
-                # Repair pass: new author attempt with findings context.
-                claim['attempts']['author'] = int((claim.get('attempts') or {}).get('author') or 0) + 1
+        # Resume durable external waits without marking RUNNING/UNKNOWN.
+        claim = read_receipt(path)
+        if claim.get('phase') == 'WAITING_CI':
+            if not adapters.wait_ci:
+                raise LeanError('ci_adapter_required')
+            ci = adapters.wait_ci(claim)
+            if ci.get('waiting'):
+                claim = mark_phase(path, 'WAITING_CI', stage='wait_ci', ci=ci)
+                return {'status': 'wake_resume', 'claim': claim, 'claim_path': str(path),
+                        'reason': 'waiting_ci'}
+            if ci.get('ok'):
+                if ci.get('head_sha') and ci['head_sha'] != claim.get('candidate_sha'):
+                    mark_phase(path, 'BLOCKED', stage='wait_ci', ci=ci, error='ci_head_mismatch')
+                    raise LeanError('ci_head_mismatch', ci.get('head_sha'))
+                claim = mark_phase(path, 'CI_PASS', stage='wait_ci', ci=ci)
+            elif ci.get('repairable'):
+                findings = list(ci.get('findings') or ['ci_failed'])
+                claim = mark_phase(
+                    path, 'QA_FAIL', stage='repair', ci=ci,
+                    last_qa={'verdict': 'FAIL', 'findings': findings,
+                             'reviewed_sha': claim.get('candidate_sha'),
+                             'fingerprint': None, 'charge': 'none', 'source': 'product_ci'},
+                    repair_findings=findings)
             else:
-                claim['attempts']['author'] = int((claim.get('attempts') or {}).get('author') or 0) + 1
-            mark_phase(path, 'RUNNING', stage='author', attempts=claim['attempts'])
+                mark_phase(path, 'BLOCKED', stage='wait_ci', ci=ci)
+                return {'status': 'blocked', 'claim': read_receipt(path), 'claim_path': str(path),
+                        'reason': 'ci'}
+
+        claim = read_receipt(path)
+        if claim.get('phase') == 'WAITING_DEPLOY':
+            if not adapters.deploy:
+                raise LeanError('deploy_adapter_required')
+            dep = adapters.deploy(claim)
+            if dep.get('waiting'):
+                claim = mark_phase(path, 'WAITING_DEPLOY', stage='wait_deploy', dev=dep)
+                return {'status': 'wake_resume', 'claim': claim, 'claim_path': str(path),
+                        'reason': 'waiting_deploy'}
+            accepted = bool(dep.get('accepted')) and dep.get('live_sha') == claim.get('merged_sha')
+            if not accepted:
+                mark_phase(path, 'BLOCKED', stage='wait_deploy', dev=dep)
+                return {'status': 'blocked', 'claim': read_receipt(path), 'claim_path': str(path),
+                        'reason': 'deploy'}
+            claim = mark_phase(path, 'DEV_ACCEPTED', stage='wait_deploy', dev=dep)
+
+        # --- author (CLAIMED / QA_FAIL repair / CI repair / wake resume) ---
+        claim = read_receipt(path)
+        if claim.get('phase') == 'WAKE_RESUME' and claim.get('stage') == 'publish_pr':
+            # Resume after deadline mid-publish: redo publish from PREQA_OK.
+            claim = mark_phase(path, 'PREQA_OK', stage='preqa_diff',
+                               candidate_sha=claim.get('candidate_sha'))
+        _resume_author = (
+            claim.get('phase') == 'WAKE_RESUME'
+            and claim.get('stage') in ('claim', 'author', 'repair', None)
+        )
+        if claim.get('phase') in ('CLAIMED', 'QA_FAIL') or _resume_author:
+            if _wake_budget_exhausted(adapters, 'author'):
+                claim = mark_phase(path, 'WAKE_RESUME', stage=claim.get('stage') or 'author',
+                                   wake='deadline')
+                return {'status': 'wake_resume', 'claim': claim, 'claim_path': str(path),
+                        'reason': 'deadline'}
+            claim['attempts'] = dict(claim.get('attempts') or {})
+            claim['attempts']['author'] = int(claim['attempts'].get('author') or 0) + 1
+            # Propagate exact findings into author task (same worktree/PR/history).
+            findings = list(claim.get('repair_findings')
+                            or (claim.get('last_qa') or {}).get('findings')
+                            or [])
+            if findings:
+                task['repair_findings'] = findings
+                task['findings'] = findings
+            mark_phase(path, 'RUNNING', stage='author', attempts=claim['attempts'],
+                       repair_findings=findings or None)
             worktree = adapters.worktree(task) if adapters.worktree else task.get('worktree')
             _need(worktree, 'worktree_required')
+            task['worktree'] = worktree
             try:
                 if adapters.author:
                     author_result = invoke_cursor_author(
@@ -627,14 +762,16 @@ def execute_claim(admission, adapters, *, results_root, config=None, parent_leas
             candidate_sha = author_result['candidate_sha']
             claim = mark_phase(path, 'AUTHOR_DONE', stage='author',
                                candidate_sha=candidate_sha,
+                               reviewed_candidate_sha=candidate_sha,
                                author_changed=author_result.get('changed_paths') or [],
-                               attempts=claim['attempts'])
+                               attempts=claim['attempts'], worktree=str(worktree))
 
         # --- preqa diff ---
         claim = read_receipt(path)
         if claim.get('phase') == 'AUTHOR_DONE':
             base_sha = task.get('base') or claim.get('base_sha') or ('0' * 40)
-            worktree = adapters.worktree(task) if adapters.worktree else task.get('worktree')
+            worktree = adapters.worktree(task) if adapters.worktree else (
+                claim.get('worktree') or task.get('worktree'))
             if adapters.preqa_diff:
                 diff = adapters.preqa_diff(worktree, task['allowed_paths'], base_sha)
             else:
@@ -647,18 +784,24 @@ def execute_claim(admission, adapters, *, results_root, config=None, parent_leas
                 return {'status': 'blocked', 'claim': read_receipt(path), 'claim_path': str(path),
                         'reason': 'preqa_diff'}
             claim = mark_phase(path, 'PREQA_OK', stage='preqa_diff', preqa=diff,
-                               candidate_sha=diff.get('head') or claim.get('candidate_sha'))
+                               candidate_sha=diff.get('head') or claim.get('candidate_sha'),
+                               reviewed_candidate_sha=diff.get('head') or claim.get('candidate_sha'))
 
         # --- publish PR (UID1002 gh, not GITHUB_TOKEN) ---
         claim = read_receipt(path)
         if claim.get('phase') == 'PREQA_OK':
+            if _wake_budget_exhausted(adapters, 'publish_pr'):
+                claim = mark_phase(path, 'WAKE_RESUME', stage='publish_pr', wake='deadline')
+                return {'status': 'wake_resume', 'claim': claim, 'claim_path': str(path),
+                        'reason': 'deadline'}
             mark_phase(path, 'RUNNING', stage='publish_pr')
             try:
                 if adapters.publish:
                     pub = invoke_trusted_publish(
                         kind='push_pr',
                         payload={'issue': claim['issue'], 'sha': claim['candidate_sha'],
-                                 'allowed_paths': task['allowed_paths']},
+                                 'allowed_paths': task['allowed_paths'],
+                                 'worktree': claim.get('worktree') or task.get('worktree')},
                         evidence_dir=evidence, publisher=adapters.publish)
                 else:
                     raise LeanError('publish_adapter_required')
@@ -668,37 +811,65 @@ def execute_claim(admission, adapters, *, results_root, config=None, parent_leas
                     raise LeanError('no_automatic_paid_replay', 'UNKNOWN') from err
                 mark_phase(path, 'BLOCKED', stage='publish_pr', error=err.code)
                 raise
-            # Reconcile known GitHub effects from publisher readback.
             claim = mark_phase(path, 'PR_OPEN', stage='publish_pr',
-                               pr=pub.get('pr'), candidate_sha=pub.get('head_sha') or claim['candidate_sha'],
+                               pr=pub.get('pr'),
+                               candidate_sha=pub.get('head_sha') or claim['candidate_sha'],
+                               reviewed_candidate_sha=pub.get('head_sha') or claim['candidate_sha'],
                                publish=pub)
 
-        # --- Product CI all7 exact head ---
+        # --- Product CI all7 exact head (durable WAITING_CI, not RUNNING) ---
         claim = read_receipt(path)
         if claim.get('phase') == 'PR_OPEN':
-            mark_phase(path, 'RUNNING', stage='wait_ci')
             if not adapters.wait_ci:
                 raise LeanError('ci_adapter_required')
+            claim = mark_phase(path, 'WAITING_CI', stage='wait_ci')
+            # Release writer before long CI wait? Keep lease for same-wake continue;
+            # durable WAITING_CI lets next wake resume without UNKNOWN.
             ci = adapters.wait_ci(claim)
-            if not ci.get('ok'):
+            if ci.get('waiting'):
+                claim = mark_phase(path, 'WAITING_CI', stage='wait_ci', ci=ci)
+                return {'status': 'wake_resume', 'claim': claim, 'claim_path': str(path),
+                        'reason': 'waiting_ci'}
+            if ci.get('ok'):
+                if ci.get('head_sha') and ci['head_sha'] != claim.get('candidate_sha'):
+                    mark_phase(path, 'BLOCKED', stage='wait_ci', ci=ci, error='ci_head_mismatch')
+                    raise LeanError('ci_head_mismatch', ci.get('head_sha'))
+                claim = mark_phase(path, 'CI_PASS', stage='wait_ci', ci=ci)
+            elif ci.get('repairable'):
+                findings = list(ci.get('findings') or ['ci_failed'])
+                claim = mark_phase(
+                    path, 'QA_FAIL', stage='repair', ci=ci,
+                    last_qa={'verdict': 'FAIL', 'findings': findings,
+                             'reviewed_sha': claim.get('candidate_sha'),
+                             'fingerprint': None, 'charge': 'none', 'source': 'product_ci'},
+                    repair_findings=findings)
+                # Same worktree/PR/history; recurse into author repair (no numeric ceiling).
+                if _wake_budget_exhausted(adapters, 'repair'):
+                    claim = mark_phase(path, 'WAKE_RESUME', stage='repair', wake='deadline')
+                    return {'status': 'wake_resume', 'claim': claim, 'claim_path': str(path),
+                            'reason': 'deadline'}
+                return execute_claim(admission, adapters, results_root=root, config=config,
+                                    parent_lease=True)
+            else:
                 mark_phase(path, 'BLOCKED', stage='wait_ci', ci=ci)
                 return {'status': 'blocked', 'claim': read_receipt(path), 'claim_path': str(path),
                         'reason': 'ci'}
-            if ci.get('head_sha') and ci['head_sha'] != claim.get('candidate_sha'):
-                mark_phase(path, 'BLOCKED', stage='wait_ci', ci=ci, error='ci_head_mismatch')
-                raise LeanError('ci_head_mismatch', ci.get('head_sha'))
-            claim = mark_phase(path, 'CI_PASS', stage='wait_ci', ci=ci)
 
         # --- independent QA ---
         claim = read_receipt(path)
         if claim.get('phase') == 'CI_PASS':
+            if _wake_budget_exhausted(adapters, 'qa'):
+                claim = mark_phase(path, 'WAKE_RESUME', stage='qa', wake='deadline')
+                return {'status': 'wake_resume', 'claim': claim, 'claim_path': str(path),
+                        'reason': 'deadline'}
             provider, reason, _meta = select_qa_provider(task, issue=claim['issue'])
             mark_phase(path, 'RUNNING', stage='qa', qa_provider=provider, qa_route_reason=reason)
-            claim['attempts']['qa'] = int((claim.get('attempts') or {}).get('qa') or 0) + 1
+            claim['attempts'] = dict(claim.get('attempts') or {})
+            claim['attempts']['qa'] = int(claim['attempts'].get('qa') or 0) + 1
             try:
                 if adapters.qa:
-                    # Adapter may return structured verdict or raw for parse.
-                    raw = adapters.qa(dict(claim, qa_provider=provider))
+                    raw = adapters.qa(dict(claim, qa_provider=provider,
+                                           task=task, worktree=claim.get('worktree')))
                 else:
                     raw = invoke_codex_qa(
                         task=task, candidate_sha=claim['candidate_sha'],
@@ -717,48 +888,75 @@ def execute_claim(admission, adapters, *, results_root, config=None, parent_leas
                 verdict = parse_qa_verdict(raw, claim['candidate_sha'], provider=provider)
             claim = apply_qa_result(claim, verdict, claim_path=path)
             claim['attempts'] = claim.get('attempts') or {}
+            if claim.get('phase') == 'QA_FAIL':
+                claim['repair_findings'] = list(verdict.get('findings') or [])
             write_receipt(path, claim)
 
             if claim.get('phase') == 'STRATEGY_HALT':
                 return {'status': 'strategy_halt', 'claim': claim, 'claim_path': str(path)}
             if claim.get('phase') == 'QA_FAIL':
-                # Direct repair: loop author→…→qa with new exact SHA, bound attempts.
-                if int(claim['attempts'].get('author') or 0) >= max_repair:
+                # OD-016: no arbitrary productive numeric ceiling. Bound by wake
+                # deadline and two-fingerprint non-progress halt only.
+                if max_repair is not None and int(claim['attempts'].get('author') or 0) >= int(max_repair):
+                    # Optional explicit bound only when caller passes max_repair;
+                    # live default is None (deadline / fingerprint halt).
                     mark_phase(path, 'BLOCKED', stage='repair', error='repair_bound')
                     return {'status': 'blocked', 'claim': read_receipt(path), 'claim_path': str(path),
                             'reason': 'repair_bound'}
-                # Resumable: release will happen; caller/schedule wakes next stage.
+                if _wake_budget_exhausted(adapters, 'repair'):
+                    claim = mark_phase(path, 'WAKE_RESUME', stage='repair', wake='deadline',
+                                       repair_findings=claim.get('repair_findings'))
+                    return {'status': 'wake_resume', 'claim': claim, 'claim_path': str(path),
+                            'reason': 'deadline'}
                 return execute_claim(admission, adapters, results_root=root, config=config,
                                     parent_lease=True, max_repair=max_repair)
 
-        # --- merge dev exact head ---
+        # --- merge dev: retain candidate SHA; capture distinct merge SHA ---
         claim = read_receipt(path)
         if claim.get('phase') == 'QA_PASS':
-            mark_phase(path, 'RUNNING', stage='merge_dev')
             if not adapters.merge:
                 raise LeanError('merge_adapter_required')
+            mark_phase(path, 'RUNNING', stage='merge_dev')
+            integ = IntegrationLock(adapters.integration_lock)
             try:
-                merged = invoke_trusted_publish(
-                    kind='merge_dev',
-                    payload={'pr': claim.get('pr'), 'sha': claim['candidate_sha']},
-                    evidence_dir=evidence, publisher=adapters.merge)
-            except ProviderError as err:
-                if 'unknown' in err.code or err.charge == 'unknown':
-                    mark_phase(path, 'UNKNOWN', stage='merge_dev', error=err.code)
-                    raise LeanError('no_automatic_paid_replay', 'UNKNOWN') from err
-                raise
-            if merged.get('merged_sha') != claim['candidate_sha']:
-                raise LeanError('merge_sha_mismatch', str(merged.get('merged_sha')))
-            claim = mark_phase(path, 'MERGED', stage='merge_dev', merge=merged,
-                               merged_sha=merged['merged_sha'])
+                integ.acquire()
+                try:
+                    merged = invoke_trusted_publish(
+                        kind='merge_dev',
+                        payload={'pr': claim.get('pr'), 'sha': claim['candidate_sha']},
+                        evidence_dir=evidence, publisher=adapters.merge)
+                except ProviderError as err:
+                    if 'unknown' in err.code or err.charge == 'unknown':
+                        mark_phase(path, 'UNKNOWN', stage='merge_dev', error=err.code)
+                        raise LeanError('no_automatic_paid_replay', 'UNKNOWN') from err
+                    raise
+            finally:
+                integ.release()
+            merge_sha = merged.get('merged_sha') or merged.get('merge_sha')
+            _need(isinstance(merge_sha, str) and SHA40.fullmatch(merge_sha),
+                  'merge_sha_missing', str(merge_sha))
+            # Normal GitHub merge creates a NEW commit — candidate may differ.
+            # Retain reviewed candidate; deploy/live must match MERGED SHA.
+            reviewed = claim.get('reviewed_candidate_sha') or claim.get('candidate_sha')
+            if merged.get('candidate_sha') and merged['candidate_sha'] != reviewed:
+                raise LeanError('merge_candidate_drift', str(merged.get('candidate_sha')))
+            claim = mark_phase(
+                path, 'MERGED', stage='merge_dev', merge=merged,
+                merged_sha=merge_sha, merge_sha=merge_sha,
+                reviewed_candidate_sha=reviewed,
+                candidate_sha=reviewed)
 
-        # --- DEV deploy + ACCEPTED/liveSHA ---
+        # --- DEV deploy + ACCEPTED/liveSHA == MERGED SHA ---
         claim = read_receipt(path)
         if claim.get('phase') == 'MERGED':
-            mark_phase(path, 'RUNNING', stage='wait_deploy')
             if not adapters.deploy:
                 raise LeanError('deploy_adapter_required')
+            claim = mark_phase(path, 'WAITING_DEPLOY', stage='wait_deploy')
             dep = adapters.deploy(claim)
+            if dep.get('waiting'):
+                claim = mark_phase(path, 'WAITING_DEPLOY', stage='wait_deploy', dev=dep)
+                return {'status': 'wake_resume', 'claim': claim, 'claim_path': str(path),
+                        'reason': 'waiting_deploy'}
             accepted = bool(dep.get('accepted')) and dep.get('live_sha') == claim.get('merged_sha')
             if not accepted:
                 mark_phase(path, 'BLOCKED', stage='wait_deploy', dev=dep)
@@ -781,24 +979,79 @@ def execute_claim(admission, adapters, *, results_root, config=None, parent_leas
             lease.release()
 
 
+def _scan_resumable(results_root):
+    """Durable WAITING_*/WAKE_RESUME claims — next wake rereads GitHub external state."""
+    root = Path(results_root)
+    found = []
+    if not root.exists():
+        return found
+    for path in root.glob('issue-*/**/claim.json'):
+        rec = read_receipt(path)
+        if rec and rec.get('phase') in WAITING_PHASES:
+            found.append(rec)
+    found.sort(key=lambda r: int(r.get('claimed_at') or 0))
+    return found
+
+
 def advance_queue(adapters, *, results_root, config=None, parent_lease=False, limit=2):
-    """Process next admitted issues automatically after DONE/UAT handoff."""
+    """Process next admitted issues automatically after DONE/UAT handoff.
+
+    Auto-next is real (not mock): after DEV ACCEPTED / UAT pending, continue to
+    the next independently eligible Project admission without PMA GO.
+    """
     holds = _scan_holds(results_root)
     if holds:
         return {'status': 'schedule_reconcile', 'holds': holds,
                 'projection': mode_b_status_projection(last_event='schedule_hold', config=config)}
 
-    if adapters.fetch_admissions:
-        admissions = adapters.fetch_admissions()
-    elif adapters.gh_api:
-        admissions = fetch_owner_admissions(adapters.gh_api, config=config)
-    else:
-        return {'status': 'no_admissions_source',
-                'projection': mode_b_status_projection(last_event='schedule', config=config)}
+    results = []
+    # Resume durable waits first (same Issue/PR/history; no UNKNOWN replay).
+    for rec in _scan_resumable(results_root):
+        adm = {
+            'issue': rec['issue'],
+            'revision': rec['revision'],
+            'comment_id': rec.get('comment_id'),
+            'task': rec.get('task') or {},
+        }
+        out = execute_claim(adm, adapters, results_root=results_root, config=config,
+                            parent_lease=parent_lease)
+        results.append(out)
+        if out.get('status') == 'wake_resume':
+            break
+        if out.get('status') in ('strategy_halt', 'blocked'):
+            break
+
+    try:
+        if adapters.fetch_admissions:
+            admissions = adapters.fetch_admissions()
+        elif adapters.gh_api:
+            # Explicit test-only fallback; live adapters always set fetch_admissions.
+            admissions = fetch_owner_admissions(adapters.gh_api, config=config)
+        else:
+            return {'status': 'no_admissions_source', 'results': results,
+                    'projection': mode_b_status_projection(last_event='schedule', config=config)}
+    except LeanError as err:
+        if err.code == 'queue_unavailable':
+            return {
+                'status': 'queue_unavailable',
+                'code': err.detail or 'PROJECT_ACCESS_NOT_VERIFIED',
+                'calls': 0,
+                'results': results,
+                'projection': mode_b_status_projection(last_event='queue_unavailable',
+                                                       config=config),
+            }
+        raise
 
     done, uat, blocked = _collect_done_uat_blocked(results_root)
-    results = []
-    for _ in range(max(1, int(limit))):
+    # Exclude issues already handled this wake.
+    for r in results:
+        issue = (r.get('claim') or {}).get('issue')
+        if issue is not None:
+            done.add(int(issue))
+    remaining = max(0, int(limit) - len([r for r in results if r.get('status') == 'dev_accepted_uat_pending']))
+    for _ in range(max(0, remaining) if results else max(1, int(limit))):
+        if results and results[-1].get('status') == 'wake_resume':
+            break
         nxt = pick_next_ready(admissions, blocked_issues=blocked, uat_pending=uat, done_issues=done)
         if not nxt:
             break
@@ -814,6 +1067,8 @@ def advance_queue(adapters, *, results_root, config=None, parent_lease=False, li
             blocked.add(issue)
         elif out.get('status') in ('strategy_halt', 'blocked'):
             blocked.add(issue)
+        elif out.get('status') == 'wake_resume':
+            break
         else:
             # UNKNOWN / in-progress stops further auto advance this wake.
             break
@@ -827,14 +1082,28 @@ def advance_queue(adapters, *, results_root, config=None, parent_lease=False, li
 
 
 def run_once(event, *, adapters=None, gh_api=None, results_root=None, config=None,
-             parent_lease=False, limit=2):
-    """Same entrypoint for schedule / comment / dispatch / recovery / API tests."""
+             parent_lease=False, limit=2, use_live_defaults=None):
+    """Same entrypoint for schedule / comment / dispatch / recovery / API tests.
+
+    Host main loads LIVE defaults. Unit tests pass adapters= explicitly
+    (use_live_defaults=False) so no PMA hook injection and no live calls.
+    """
     name = event.get('event_name') or event.get('name') or 'workflow_dispatch'
     root = Path(results_root) if results_root else RESULTS
     root.mkdir(parents=True, exist_ok=True)
-    adapters = adapters or Adapters(gh_api=gh_api)
+    if adapters is None:
+        # Real host path: trusted live bindings. Tests always pass adapters=.
+        if use_live_defaults is False:
+            adapters = Adapters(gh_api=gh_api)
+        else:
+            deadline = time.monotonic() + float(
+                event.get('wake_budget_s') or DEFAULT_WAKE_BUDGET_S)
+            adapters = default_live_adapters(deadline=deadline, results_root=root)
+            adapters.deadline = deadline
     if gh_api and adapters.gh_api is None:
         adapters.gh_api = gh_api
+    if adapters.deadline is None and event.get('wake_budget_s'):
+        adapters.deadline = time.monotonic() + float(event['wake_budget_s'])
 
     if name in ('issue_comment', 'issues'):
         comment = event.get('comment') or {}
@@ -852,11 +1121,20 @@ def run_once(event, *, adapters=None, gh_api=None, results_root=None, config=Non
             if existing.get('phase') in ACTIVE_HOLD_PHASES:
                 return {'status': 'hold', 'code': 'no_automatic_paid_replay',
                         'claim': existing, 'claim_path': str(claim_file)}
+            if existing.get('phase') in WAITING_PHASES:
+                try:
+                    return execute_claim(admission, adapters, results_root=root, config=config,
+                                        parent_lease=parent_lease)
+                except LeanError as err:
+                    if err.code == 'no_automatic_paid_replay':
+                        return {'status': 'hold', 'code': err.code, 'detail': err.detail,
+                                'claim': read_receipt(claim_file), 'claim_path': str(claim_file)}
+                    raise
             if existing.get('phase') not in ('CLAIMED',) and existing.get('claimed_at'):
                 return {'status': 'duplicate_ignored', 'claim': existing,
                         'claim_path': str(claim_file)}
         claim = claim_admission(admission, results_root=root)
-        # Optional immediate execute when adapters provided (API/tests/host wake).
+        # Immediate execute when live/test adapters provide author+qa (or execute flag).
         if event.get('execute') or (adapters.author and adapters.qa):
             try:
                 return execute_claim(admission, adapters, results_root=root, config=config,
@@ -901,6 +1179,12 @@ def main(argv=None):
         print('usage: run.py <event.json>|--self-check', file=sys.stderr)
         return 2
     if argv[0] == '--self-check':
+        live_bindings = None
+        try:
+            import live as lean_live
+            live_bindings = lean_live.live_self_check()
+        except Exception as err:
+            live_bindings = {'status': 'unavailable', 'error': type(err).__name__}
         print(json.dumps({
             'schema': 'GB_LEAN_SELF_CHECK_V1',
             'controller': 'lean_mode_b',
@@ -909,13 +1193,16 @@ def main(argv=None):
             'author_claims': AUTHOR_PASS_CLAIMS,
             'stages': list(stage_order()),
             'effectful': True,
+            'live_defaults': True,
+            'live_bindings': live_bindings,
             'installed': False,
         }, sort_keys=True))
         return 0
     event = loads(Path(argv[0]).read_bytes())
-    result = run_once(event)
+    # Host entry: load trusted LIVE default functions (not None hooks).
+    result = run_once(event, use_live_defaults=True)
     print(json.dumps(result, sort_keys=True))
-    return 0 if result.get('status') not in ('denied',) else 1
+    return 0 if result.get('status') not in ('denied', 'queue_unavailable') else 1
 
 
 if __name__ == '__main__':

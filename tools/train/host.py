@@ -254,9 +254,17 @@ def dispatch_controller(req, meta):
     atomic_write(event_path, event, 0o600)
     env = {'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8', 'HOME': '/nonexistent',
            'PYTHONPATH': str(code_root / 'tools/train')}
+    # Fit Actions 45m client keepalive. Controller resumes durable WAITING_* /
+    # WAKE_RESUME stages on the next wake — not a daemon/new state engine.
+    wake_budget = int((cfg.get('wake_budget_s') or 2400))
+    wake_budget = max(300, min(wake_budget, 2700))
+    # Pass budget into event so run_once bounds the finite worker allowance.
+    event['wake_budget_s'] = wake_budget
+    atomic_write(event_path, event, 0o600)
     proc = subprocess.run(
         ['/usr/bin/python3', '-I', '-B', str(run_py), str(event_path)],
-        cwd=str(code_root), env=env, text=True, capture_output=True, timeout=120,
+        cwd=str(code_root), env=env, text=True, capture_output=True,
+        timeout=wake_budget + 60,
     )
     atomic_write(intent_dir / 'stdout.txt', proc.stdout or '', 0o644)
     atomic_write(intent_dir / 'stderr.txt', proc.stderr or '', 0o644)

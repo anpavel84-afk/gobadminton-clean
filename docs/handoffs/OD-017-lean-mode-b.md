@@ -1,49 +1,54 @@
-# OD-017 — Lean Mode B + AGY adapter · source handoff (pass2)
+# OD-017 — Lean Mode B + AGY adapter · source handoff (repair3)
 
-**Date:** 2026-10-28  
-**Author:** Cursor Auto (source-only OD-017 repair pass2)  
-**Base retained:** first-pass HEAD not accepted/installed/published  
-**Authority:** OD-017 Owner directive + Issue #29; short Mode A rules + OD-017 findings.
+**Date:** 2026-10-28
+**Author:** Cursor Auto (source-only OD-017 repair3 — live default bindings)
+**Base retained:** prior WIP pass2 not accepted/installed
+**Authority:** OD-017 Owner directive + Issue #29 comment + Owner chat EXACT assignment.
 
 ## Truthful status (this author pass)
 
 | Predicate | Value |
 |---|---|
-| Source candidate | IMPLEMENTED under allowed_paths (effectful controller path) |
-| Independent QA | **NOT_TESTED** (PMA/Codex) |
+| Source candidate | IMPLEMENTED under allowed_paths (live default bindings in `live.py`) |
+| Independent QA | **NOT_TESTED** (RootPMA / Codex after CI) |
 | Product CI 7/7 | **NOT_TESTED** |
 | Root install | **NOT installed / NOT proven** (author must not install) |
 | Mode B `enabled` | **false** until PMA commission |
-| `MODE_B_ACTIVE` | **false** (installer refuses claim; needs two real task proofs) |
-| `AGY_QA_READY` / `AGY_AUTHOR_READY` | **false** (no model calls; no manual ready) |
+| `MODE_B_ACTIVE` | **false** (needs two real task proofs) |
+| `AGY_QA_READY` / `AGY_AUTHOR_READY` | **false** (no fabricated READY; Medium fallback while not ready) |
 | C5 | **off** |
 | #182 / gameRecommendations | **OFF** |
-| Model calls this pass | **0** |
+| #94 | **PARK remains** (not auto-cleared; not 365→94 hardcode) |
+| This Cursor author launch | **1** (nested AGY/Codex inference in-process = 0) |
 | UAT | **NOT_TESTED** |
 
-## Implemented (working source, not stubs)
+## Implemented (working source — live defaults, not injected-only helpers)
 
 | Path | Role |
 |---|---|
-| `tools/train/run.py` | Finite resumable `run_once` / `execute_claim` / `advance_queue` with injectable adapters; one-writer lease (no nest); intent-before-call; UNKNOWN hold; next admitted auto |
-| `tools/train/providers.py` | Cursor/Codex invoke wrappers; AGY `(result,evidence)` parse; **no regex fallback after native-invalid**; Codex exact JSON; Landlock private HOME/scratch (no global `/tmp`); quota 5/issue/UTC |
-| `tools/train/host.py` | Fresh `gh api` run verification required (`verified=false` refused); exact workflow path; no commissioning bypass; fixed `client_sha` required |
-| `tools/train/install.py` | Regular-file `current` pointer → `releases/<SHA>` (no symlink); trusted resolved host path; commission enables worker but `commissioning=true`, `mode_b_active=false` |
-| `tools/train/client.py` | Actions SSH client; **LEAN_CLIENT_SHA required** (no `github.sha` fallback) |
-| `tools/train/monitor.py` | Minimal projection helper for existing OPS monitor files |
-| `tools/train/test_train.py` | Real `run_once` with mocked adapters (two-task, QA FAIL→repair, duplicate, writer, stale, UNKNOWN, parser, quota, host, monitor) |
-| `.github/workflows/lean-delivery.yml` | schedule/comment/dispatch; requires `vars.LEAN_CLIENT_SHA` |
-| `scripts/chatops/lean-delivery-receiver.sh` | Resolves pointer → `releases/<SHA>/host.py` |
-| `scripts/chatops/tests/test_actions_train_lean_mode_b.py` | Receiver discovery wrapper → `test_train.py` |
-| `docs/handoffs/OD-017-lean-mode-b.md` | This handoff |
+| `tools/train/live.py` | **NEW** production bindings: Cursor author, Codex/AGY QA, UID1002 push/PR, exact-7 CI poll, merge with distinct merge SHA, DEV ACCEPTED/live SHA, canonical Project GraphQL queue, worktree create |
+| `tools/train/run.py` | `main`/`run_once` load LIVE defaults; WriterLease ≠ IntegrationLock; WAITING_CI/DEPLOY durable resume; OD-016 wake deadline (no max_repair=8); merge retains candidate + separate merge SHA; CI FAIL→author findings; auto-next after UAT |
+| `tools/train/providers.py` | Live launcher defaults; `readable_present` + injectable `auth_path`; `invoke_agy_qa`; honest AUTHOR_PASS_CLAIMS (1 Cursor launch) |
+| `tools/train/host.py` | Wake budget ~2400s (fits Actions 45m); no 120s hard kill of author+CI+QA+DEV |
+| `tools/train/monitor.py` | ordered_backlog / holds / source / synced_at projection fields |
+| `tools/train/install.py` | Includes `live.py` in INSTALL_FILES |
+| `tools/train/test_train.py` | Temp integration + auth fixtures; two eligible tasks 701/702; park/UAT exclusion; distinct merge SHA; CI repair; WAITING resume; Project queue_unavailable zero calls; live binding mock boundary |
+
+## Queue authority (corrected)
+
+- Canonical queue = GitHub user Project #1 (Owner Issue #175) via GraphQL + UID1002 auth
+- Auth/scope failure → `PROJECT_ACCESS_NOT_VERIFIED` / `INSUFFICIENT_SCOPES` → `queue_unavailable` + **ZERO calls** (no empty backlog, no all-open-Issues fallback, no stale `backlog-after.json` / `backlog_ru.json`)
+- Field bindings from actual queried names; absent/ambiguous status fails closed (not guessed READY)
+- Owner admission comments freeze role/scope/acceptance; Project priority/status/deps gate eligibility
+- #94 PARK remains; #182 OFF; delivered 365/308/207/368 = UAT not new product
 
 ## Not installed / not proven (do not present as live)
 
-- Root install, helper patch on VPS, workflow-on-main publication
-- Live Cursor/Codex/AGY calls, UID1002 publish, Product CI, DEV ACCEPTED
-- AGY READY qualification, MODE_B_ACTIVE after two real product Issues
-- OPS monitor live wire-up beyond projection helper + installer write attempt
-- Intents/helpers alone are **not** working integration until PMA install + commission + live proof
+- Root install, helper patch, workflow-on-main publication
+- Live Cursor/Codex/AGY paid calls on host, Product CI, DEV ACCEPTED
+- AGY READY qualification (code path exists; readiness only after verified real operation + independent acceptance)
+- `MODE_B_ACTIVE` after two real product Issues
+- Project GraphQL field names commission (PMA verifies fields after auth refresh)
 
 ## Author self-check (deterministic)
 
@@ -54,23 +59,15 @@ bash -n ../../scripts/chatops/lean-delivery-receiver.sh
 python3 -I -B ../../scripts/chatops/tests/test_actions_train_lean_mode_b.py
 ```
 
-## Remaining limitations (honest)
+## Unproven runtime gates (precise — no PMA manual bindings required in source)
 
-1. Launchers are injected adapters; PMA must bind existing Mode A `run_cursor_author` / `launch_medium_qa` / UID1002 gh publisher at install/host wire-up.
-2. Host `default_gh_api_fetch` needs host `gh` auth; Actions `GITHUB_TOKEN` is stripped for push.
-3. LockRegistry falls back to repo `slots.py` or test FakeRegistry; live path needs `/usr/local/lib/gb-actions-train/live/slots.py`.
-4. Queue Issues (e.g. 365 UAT followup, 94 marker separation) are admitted by PMA materials — not invented here.
-5. No AGENTS.md / instruction-file edits in this pass (export omits instructions; PMA maintains AGENTS).
+1. Host `gh` UID1002 Project scope after Owner auth refresh
+2. Independent Codex Sol Medium QA on exact candidate SHA
+3. Product CI all 7 on exact head (UID1002 push wakes CI, not GITHUB_TOKEN)
+4. Trusted PR merge → distinct merge SHA; DEV ACCEPTED + live `/v1/meta` == merge SHA
+5. Root install from exact SHA; commission enables worker only
+6. Two real sequential product proofs before `MODE_B_ACTIVE`
+7. Separate AGY QA qualification (cap 5/issue/UTC day); Codex Medium fallback meanwhile
 
-## PMA gates (unchanged order)
-
-1. Independent Codex Sol Medium QA on exact candidate SHA  
-2. Product CI all 7 on exact head  
-3. Trusted PR → merge **dev** (UID1002 `gh`; never `GITHUB_TOKEN` push)  
-4. DEV deploy ACCEPTED + live `/v1/meta` SHA  
-5. Root install from exact SHA; commission enables worker only  
-6. Publish reviewed workflow to **main** with `vars.LEAN_CLIENT_SHA` pinned  
-7. Two real product proofs before any `MODE_B_ACTIVE` claim  
-8. Separate AGY QA qualification admission (cap 5/issue/UTC day)
-
-C5 off. #182 off. PROD forbidden. Author does not publish/install/runtime.
+C5 off. #182 off. #94 park. PROD forbidden. Author does not publish/install/runtime.
+No AGENTS/instruction-file edits in this pass.

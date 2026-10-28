@@ -36,6 +36,7 @@ SHA40 = re.compile(r'^[0-9a-f]{40}$')
 INSTALL_FILES = (
     'tools/train/run.py',
     'tools/train/providers.py',
+    'tools/train/live.py',
     'tools/train/host.py',
     'tools/train/install.py',
     'tools/train/client.py',
