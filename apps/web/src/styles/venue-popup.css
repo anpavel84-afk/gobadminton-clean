@@ -292,10 +292,10 @@
     bottom:12px;
     right:calc(min(450px, 100% - 48px) + 28px);
   }
-  .gb-games-map:has(.gb-desktop-map-inspector:has(.gb-venue-sheet[data-view="create"])) .maplibregl-ctrl-bottom-right,
-  .gb-games-map:has(.gb-desktop-map-inspector:has(.gb-venue-sheet[data-view="create"])) .maplibregl-ctrl-bottom-left,
-  .gb-fullscreen-map-viewport:has(.gb-desktop-map-inspector:has(.gb-venue-sheet[data-view="create"])) .maplibregl-ctrl-bottom-right,
-  .gb-fullscreen-map-viewport:has(.gb-desktop-map-inspector:has(.gb-venue-sheet[data-view="create"])) .maplibregl-ctrl-bottom-left {
+  .gb-games-map:has(.gb-desktop-map-inspector .gb-venue-sheet[data-view="create"]) .maplibregl-ctrl-bottom-right,
+  .gb-games-map:has(.gb-desktop-map-inspector .gb-venue-sheet[data-view="create"]) .maplibregl-ctrl-bottom-left,
+  .gb-fullscreen-map-viewport:has(.gb-desktop-map-inspector .gb-venue-sheet[data-view="create"]) .maplibregl-ctrl-bottom-right,
+  .gb-fullscreen-map-viewport:has(.gb-desktop-map-inspector .gb-venue-sheet[data-view="create"]) .maplibregl-ctrl-bottom-left {
     right:calc(min(640px, 100% - 48px) + 28px);
   }
   .gb-games-map:has(.gb-desktop-map-inspector) .maplibregl-ctrl-bottom-left,
