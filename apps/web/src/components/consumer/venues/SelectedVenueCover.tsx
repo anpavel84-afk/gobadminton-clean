@@ -67,8 +67,8 @@ function createCover(url: string | null, initialName: string) {
     const target = slots.info ?? slots.compact;
     if (!target) { release(); return; }
     retain();
-    // Only a committed compact slot starts loading the selected resource.
-    if (!image && slots.compact) {
+    // Desktop opens the info slot without a compact preview; either slot may start loading.
+    if (!image && (slots.compact || slots.info)) {
       image = document.createElement("img");
       image.loading = "eager";
       image.decoding = "async";
