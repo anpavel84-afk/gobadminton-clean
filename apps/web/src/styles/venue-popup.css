@@ -326,6 +326,9 @@
   .gb-desktop-inspector-game__actions .gb-venue-game-actions .gb-game-share__button--text {
     min-height:44px;
   }
+  .gb-desktop-inspector-game__actions .gb-venue-game-actions-primary small {
+    font-size:12px; line-height:1.3;
+  }
   .gb-desktop-inspector-game__snapshot {
     display:grid; grid-template-columns:88px minmax(0,1fr); gap:14px; align-items:start;
     padding:14px; border-radius:var(--gb-radius-md);
@@ -357,7 +360,7 @@
   }
   .gb-desktop-inspector-game__subtitle { margin:0; font-size:13px; color:var(--gb-ink-soft); }
   .gb-desktop-inspector-game__facts {
-    list-style:none; margin:0; padding:0; display:grid; gap:12px;
+    list-style:none; margin:0; padding:0; display:grid; gap:8px;
   }
   .gb-desktop-inspector-game__facts > li {
     display:grid; grid-template-columns:minmax(88px,120px) minmax(0,1fr);
