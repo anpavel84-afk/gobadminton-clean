@@ -81,8 +81,11 @@ A same-key terminal replay acknowledges the earlier safe action, even after a la
 without returning content or granting rights. Hide/withdraw remain available when Friends is OFF or
 the game/peer is unavailable; actor session/account and role still apply. Fully inactive actors cannot
 mutate. Send replay revalidates current relationship, game, row version, hidden/state and expiry;
-it returns generic 404 rather than confirming a now-inapplicable delivery. Receipts never prove
-recipient viewing, game participation or a reserved seat.
+it returns generic 404 rather than confirming a now-inapplicable delivery. After the final
+Recommendation row lock (including waits behind a terminal holder), send and same-key replay
+refresh the DB clock and re-read upcoming game eligibility under the already-held Game and
+relationship fences before any sent receipt. Receipts never prove recipient viewing, game
+participation or a reserved seat.
 
 On network failure or 500/unknown COMMIT, a future UI must retain the exact operation/body/key and
 show an unconfirmed state. An explicit same-key retry recovers the committed receipt if still
@@ -119,8 +122,11 @@ Friendship -> Recommendation -> sorted budgets. User KEY SHARE conflicts with re
 FOR UPDATE without conflicting with the opposite consumer ActorFence's NO KEY UPDATE. Status/
 privacy writers serialize through the existing user/profile and social epoch paths. Game writes and
 moderation share the existing Game fence. Batch reads acquire all fences of a kind before advancing.
-Terminal actions need only actor/session and their own recommendation row. Nothing in this module
-writes Games, Friendships, participants, invitations, consent, permissions or the block graph.
+Terminal actions need only actor/session and their own recommendation row. Existing-direction send
+and same-key replay do not return a sent receipt from pre-wait timestamps: after Recommendation
+FOR UPDATE they re-check `clock_timestamp()` expiry/state/version fences and current upcoming
+eligibility. Nothing in this module writes Games, Friendships, participants, invitations, consent,
+permissions or the block graph.
 
 [0041](../../apps/api/migrations/0041_game_recommendations.sql) is additive. Foreign keys preserve
 safe endpoints and game/friendship references, a membership guard verifies the accepted friendship

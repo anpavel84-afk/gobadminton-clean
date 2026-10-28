@@ -44,6 +44,12 @@ export class GameRecommendationsService {
       && ctx.ctx.profiles.find(p=>p.user_id===row.sender_user_id)?.social_action_epoch===row.sender_epoch
       && ctx.ctx.profiles.find(p=>p.user_id===row.recipient_user_id)?.social_action_epoch===row.recipient_epoch;
   }
+  /** After final Recommendation FOR UPDATE: refresh DB clock and game eligibility under held fences. */
+  private async refreshAfterRecommendationLock(client:PoolClient,gameId:string,ctx:Context) {
+    const game=await this.games.recommendationSummary(client,gameId);
+    const now=(await client.query<{now:Date}>("SELECT clock_timestamp() AS now")).rows[0]!.now;
+    return {game,ctx:{...ctx,ctx:{...ctx.ctx,now}}};
+  }
   private receipt(row:RecommendationRow,outcome:Receipt["outcome"]):Receipt {
     return {id:row.id,version:row.version,outcome};
   }
@@ -52,10 +58,12 @@ export class GameRecommendationsService {
     this.enabled();await this.schema(client);
     const locator=await this.locate(client,actor,receipt.id);
     if (locator.sender_user_id!==actor) unavailable();
-    const game=await this.games.recommendationSummary(client,locator.game_id);
+    // Lock order: Game -> friendship fences -> Recommendation; revalidate time/game after the wait.
+    if (!await this.games.recommendationSummary(client,locator.game_id)) unavailable();
     const ctx=await this.friends.recommendationContext(client,actor,locator.friendship_id);
     const row=await this.locate(client,actor,receipt.id,true);
-    if (!game || !this.current(row,ctx) || row.state!=="active" || row.recipient_hidden
+    const fresh=await this.refreshAfterRecommendationLock(client,locator.game_id,ctx);
+    if (!fresh.game || !this.current(row,fresh.ctx) || row.state!=="active" || row.recipient_hidden
       || row.version!==receipt.version) unavailable();
   }
   async send(actor:string,sessionId:string,key:string,gameRaw:string,input:unknown) {
@@ -74,7 +82,9 @@ export class GameRecommendationsService {
         const existing=(await client.query<RecommendationRow>(`SELECT * FROM game_recommendations
           WHERE friendship_id=$1 AND game_id=$2 AND sender_user_id=$3 FOR UPDATE`,[body.friendshipId,gameId,actor])).rows[0];
         if (existing) {
-          if (!this.current(existing,ctx) || existing.state!=="active" || existing.recipient_hidden) stale();
+          const fresh=await this.refreshAfterRecommendationLock(client,gameId,ctx);
+          if (!fresh.game) unavailable();
+          if (!this.current(existing,fresh.ctx) || existing.state!=="active" || existing.recipient_hidden) stale();
           return {statusCode:200,body:this.receipt(existing,"sent")};
         }
         await this.charge(client,actor,peer,ctx.ctx.now);

@@ -1,70 +1,61 @@
-# Issue #181 / FR-3A source handoff — Mode A reuse (Owner 28.10.2026)
+# Issue #181 / FR-3A source handoff — Mode A repair pass 2/3 (Owner 28.10.2026)
 
-From: Cursor Auto author attempt 1. To: independent QA (Codex Sol Medium), then trusted publish/CI/DEV route.
+From: Cursor Auto author attempt 2 (`OWNER_LEAN_MODE_A_FR3A_QA001_REPAIR`). To: independent QA (Codex Sol Medium), then trusted publish/CI/DEV route.
 Status: SOURCE DRAFT / NOT_TESTED / NOT ACCEPTED.
-Assignment: OWNER_LEAN_MODE_A_FR3A_REUSE_PR189 replacing #284 as third Mode A delivery.
-Product base `777c88f96706c38e6f76d35a55a1a1cb2138a1ec`; merge base `b9c6aa2dd7a7ffd220bbd2d887d9905045b11284`.
+Preserved FAIL: **FR3A-QA-001** (P2/medium, blocking) on exactsource `c339bb6`. No Astra; no new framework.
+Assignment: Mode A #181 repair; #284 third Mode A delivery replacement; preserve old C5 attempt3 / raw history; no budget reset. Author calls this turn: 2 of max 3.
+
+Product base `777c88f96706c38e6f76d35a55a1a1cb2138a1ec`; prior candidate base `c339bb6e72b5ffce32fdee7e4b016b562ed3cac3`.
 Work limited to allowed_paths in the CLEAN tree. No Git writes, network, secrets, package install,
-DB/SQL/runtime, frontend/OPS, UI182, C5, or reimplementation of already-present recommendation code.
+DB/SQL/runtime, frontend/OPS, UI182, old 0040, C5, or unrelated test/architecture churn.
 
-## This author turn (compatibility repair)
+## Exact FAIL addressed
 
-Registry fact: accepted DEV already owns `0040_external_http_url_storage`. The merged candidate still
-had colliding `0040_game_recommendations` (+ rollback). Renamed only that pair to
-`0041_game_recommendations` (+ rollback) after confirming next free id is 0041. External URL
-migration/rollback were not edited. Schema comment, disposable harness (`f<"0041"`, migrate/rollback
-`0041_*`, empty-rollback count 40), migration smoke ordered id + FR-3A table/FK/index/privacy
-assertions, API doc, and this handoff were updated accordingly.
+`FR3A-QA-001`: Send and same-key replay could confirm expired / no-longer-upcoming recommendations
+after waiting on the Recommendation row lock, because `ctx.now` and game eligibility were captured
+before `locate(..., true)` / direction `FOR UPDATE` and not refreshed afterward.
 
-Shared OpenAPI and migration.smoke had been resolved to CURRENT DEV (recommendations additions
-absent). Reapplied ONLY FR-3A contract additions from the supplied exact old patch, adapted to the
-current schema: `GameRecommendations` tag; four cookie-session paths matching the Nest controller
-(`/games/{gameId}/recommendations`, `/me/game-recommendations`, hide/withdraw); request/response
-schemas; Friends description clarifications; `SocialCapabilities.gameRecommendations` remains false
-with migration 0041 noted. OpenAPI write descriptions say migration0041, not 0040.
+## This author turn (temporal revalidation)
 
-Inherited PR189 implementation kept: module/controller/service/policy, Friends/Games seams,
-schema mirror, unit + disposable suites, `gameRecommendations: false` capability. No UI182.
-No new framework. Product invariants (public upcoming eligibility, accepted friendship, bilateral
-block/restriction/epoch fences, session/CSRF, role/expectedVersion/idempotency/unknown-commit,
-read-time revalidation, no seat/invitation/DM) preserved in source review; not re-executed here.
+After the final Recommendation row lock, both `replaySend` and existing-direction `send` now:
+1. Re-read upcoming game eligibility via `GamesService.recommendationSummary` (Game SHARE already held).
+2. Refresh DB clock with `clock_timestamp()`.
+3. Re-run `current()` (expiry + relationship fences held earlier) / active/hidden/version checks before any sent receipt.
+
+Same-key replay still fails closed with generic 404. Expired duplicate direction still uses documented
+stale/conflict 409 when the game remains upcoming. No lock-order inversion; authorization fence fields
+retained. Fresh-insert temporal checks unchanged.
+
+Focused disposable regressions (reuse existing harness): terminal-style uncommitted `FOR UPDATE` holder
+on the recommendation row; observe real PG lock waiter; cross expiry or game start; holder `ROLLBACK`;
+assert no sent receipt (replay 404; expired duplicate 409; start-crossed duplicate 404).
+
+Docs: `GAME_RECOMMENDATIONS_V001.md` notes post-lock clock/game revalidation. This handoff updated.
 
 ## Changed files (this turn)
 
-1. `apps/api/migrations/0041_game_recommendations.sql` (renamed from colliding 0040_*)
-2. `apps/api/migrations/rollback/0041_game_recommendations.sql` (renamed; id/message → 0041)
-3. removed `apps/api/migrations/0040_game_recommendations.sql` and matching rollback
-4. `apps/api/src/database/schema.ts` (Migration0041 comment only)
-5. `apps/api/test/integration/migration.smoke.test.ts`
-6. `apps/api/test/integration/game-recommendations.disposable.test.ts`
-7. `packages/contracts/openapi.json` (recommendations additions only atop current DEV)
-8. `docs/api/GAME_RECOMMENDATIONS_V001.md`
-9. `docs/handoffs/fr3a-recommendation-api.md`
+1. `apps/api/src/game-recommendations/game-recommendations.service.ts`
+2. `apps/api/test/integration/game-recommendations.disposable.test.ts`
+3. `docs/api/GAME_RECOMMENDATIONS_V001.md`
+4. `docs/handoffs/fr3a-recommendation-api.md`
 
 ## Checks
 
-Executed (source-only, no deps): OpenAPI JSON parse; migration registry uniqueness/order;
-rollback id string; smoke/disposable/controller/capability string assertions; route/OpenAPI path
-alignment. `node_modules` absent — typecheck, lint, unit, contracts package check, disposable DB,
-migration smoke SQL, build, CI: **NOT_TESTED**. Do not treat this handoff as PASS.
+Source-only review of the temporal repair and disposable race shape. `node_modules` / disposable DB /
+typecheck / lint / unit / contracts / Product CI: **NOT_TESTED** in this author sandbox. Do not treat
+this handoff as PASS. Prior candidate11 unit/typecheck/lint/contracts PASS and in-flight Product CI
+are not acceptance for this repair SHA.
 
-## Remaining risks
+## Limits / out of scope
 
-- Independent QA must run unit + disposable PostGIS + migration smoke (N incl. 0040_external + 0041)
-  and full Product CI on the published SHA.
-- Confirm OpenAPI status/body parity against live Nest responses once CI executes the suite.
-- Lock ordering and rate-bucket sharing remain review targets; no runtime proof in this turn.
-- Empty-only SQL rollback still refuses populated history; release rollback stays application-path.
+- No Astra diagnostics, no new scheduler/framework/review stream.
+- No migration 0040 / UI182 / OpenAPI / packages / deploy / Git.
+- Mode B / main / cleanup / further migration deferred.
+- C5 remains off; #361 parked.
+- DONE needs independent QA + CI + DEV release/smoke under Mode A — not author self-check.
 
 ## Acceptance transfer
 
-DONE requires criteria + independent QA/CI + DEV release/smoke under Mode A — not author presence.
-PROD only by separate Owner decision. FR-3B UI remains unassigned here. Preserve old C5 attempt3 /
-raw history; no budget reset narrative. Next independent task after DONE/BLOCKED is PMA-assigned.
-
-## Historical handoffs (context only)
-
-Earlier CI fixture repair and 2026-10-22 FR-3A correction handoffs referred to reserved migration
-0040 before accepted DEV claimed `0040_external_http_url_storage`. Those sections are historical
-process context; current registry truth is 0041 for recommendations. Prior NOT_TESTED / FAIL
-statements are not cleared by this source turn.
+Independent Medium QA must verify FR3A-QA-001 is fixed on the exact candidate (criteria + diff +
+related risks), including disposable races. PROD only by separate Owner decision. Next independent
+task after DONE/BLOCKED is PMA-assigned.

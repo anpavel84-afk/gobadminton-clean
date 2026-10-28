@@ -145,6 +145,26 @@ run("FR-3A protected recommendations — disposable synthetic PostGIS",()=>{
       (SELECT count(*)::int FROM game_invitations WHERE game_id=$1) AS invites,
       (SELECT count(*)::int FROM outbox_events WHERE aggregate_id=$1) AS outbox`,[gameId]);return r.rows[0];
   }
+  async function waitBlocked(blockerPid:number){
+    const deadline=Date.now()+2000;
+    while(Date.now()<deadline){
+      const rows=await pool.query(`SELECT pid FROM pg_stat_activity
+        WHERE datname=current_database() AND $1=ANY(pg_blocking_pids(pid))`,[blockerPid]);
+      if(rows.rows.length)return;
+      await new Promise<void>(resolve=>setImmediate(resolve));
+    }
+    throw new Error("Expected Recommendation row lock waiter before crossing expiry/start");
+  }
+  async function holdRecommendation(id:string){
+    const holder=await pool.connect();let done=false;
+    await holder.query("BEGIN");await holder.query("SET LOCAL lock_timeout='3s'");
+    await holder.query("SELECT * FROM game_recommendations WHERE id=$1 FOR UPDATE",[id]);
+    const pid=(await holder.query<{pid:number}>("SELECT pg_backend_pid() AS pid")).rows[0]!.pid;
+    return {pid,async rollback(){
+      if(done)return;done=true;
+      try{await holder.query("ROLLBACK");}finally{holder.release();}
+    }};
+  }
   it("two accepted actors send/replay/list/hide/withdraw; audit only, no seats or delivery effects",async()=>{
     const f=await accepted(),g=await game(),before=await effects(g.id),idem=key();
     // The protected API uses Friends admission; the future UI capability stays OFF.
@@ -316,6 +336,64 @@ run("FR-3A protected recommendations — disposable synthetic PostGIS",()=>{
     const removal=post(b,`/v1/friendships/${f.friendshipId}/remove`,{expectedVersion:f.version});
     gate.release.resolve();expect((await first).statusCode).toBe(201);expect((await removal).statusCode).toBe(200);
     await noContent();expect((await send(a,g.id,f.friendshipId,idem)).statusCode).toBe(404);
+  });
+  it("same-key replay and expired duplicate fail after Recommendation lock wait crosses expiry; terminal holder rolls back",async()=>{
+    // Terminal-style row holder (no Game/Pair fences) rolls back after wall clock passes expires_at.
+    env.FRIENDS_REQUEST_TTL_SECONDS=1;
+    const f=await accepted(),g=await game(),idem=key();
+    const sent=await send(a,g.id,f.friendshipId,idem);expect(sent.statusCode).toBe(201);
+    const r=sent.json() as Receipt,held=await holdRecommendation(r.id);
+    try{
+      const replay=send(a,g.id,f.friendshipId,idem),duplicate=send(a,g.id,f.friendshipId);
+      await waitBlocked(held.pid);
+      const deadline=Date.now()+3000;
+      while(Date.now()<deadline){
+        const expired=await pool.query(`SELECT 1 FROM game_recommendations
+          WHERE id=$1 AND expires_at<clock_timestamp()`,[r.id]);
+        if(expired.rows.length)break;
+        await new Promise(resolve=>setTimeout(resolve,50));
+      }
+      expect((await pool.query(`SELECT 1 FROM game_recommendations WHERE id=$1 AND expires_at<clock_timestamp()`,[r.id])).rows.length).toBe(1);
+      await held.rollback();
+      expect((await replay).statusCode).toBe(404);
+      expect((await duplicate).statusCode).toBe(409);
+    }catch(error){await held.rollback().catch(()=>undefined);throw error;}
+    await noContent();
+    expect(await count(g.id)).toBe(1);
+  });
+  it("send/replay fail after Recommendation lock wait crosses game start; terminal holder rolls back",async()=>{
+    // expires_at is min(starts_at, TTL); near start ages upcoming (+expiry) during the wait; stay under 3s lock_timeout.
+    const f=await accepted(),venue=await post(a,"/v1/venues",{cityId:MOSCOW_CITY_ID,name:`FR3 soon ${randomUUID()}`,
+      address:"Synthetic Moscow",timezone:"Europe/Moscow",latitude:55.75,longitude:37.62});
+    expect([200,201]).toContain(venue.statusCode);
+    const starts=Date.now()+2500;
+    const draft=await post(a,"/v1/games",{hostDisplayName:"Synthetic host",hostPublicContact:"telegram:@synthetic_private",
+      venueId:venue.json().id,title:"FR3 soon game",startsAt:new Date(starts).toISOString(),
+      endsAt:new Date(starts+7200000).toISOString(),timezone:"Europe/Moscow",
+      applicationDeadlineAt:new Date(starts-60000).toISOString(),capacity:2,externalReservedCount:0,visibility:"public",
+      formatKey:"doubles",activityKind:"regular",levelRule:{scaleId:"ntrp",scaleVersion:1,allowedLevelIds:["3.0","3.5"]},
+      settlement:{mode:"external",purpose:"no_trainer_fee",priceMinor:null,currency:null,terms:"PRIVATE TERMS SENTINEL"}});
+    expect(draft.statusCode).toBe(201);
+    const published=await post(a,`/v1/games/${draft.json().id}/publish`,{expectedVersion:draft.json().version});
+    expect(published.statusCode).toBe(200);const g=published.json() as {id:string};
+    const idem=key(),sent=await send(a,g.id,f.friendshipId,idem);expect(sent.statusCode).toBe(201);
+    const r=sent.json() as Receipt,held=await holdRecommendation(r.id);
+    try{
+      const replay=send(a,g.id,f.friendshipId,idem),duplicate=send(a,g.id,f.friendshipId);
+      await waitBlocked(held.pid);
+      const deadline=Date.now()+3500;
+      while(Date.now()<deadline){
+        const past=await pool.query(`SELECT 1 FROM games WHERE id=$1 AND starts_at<=clock_timestamp()`,[g.id]);
+        if(past.rows.length)break;
+        await new Promise(resolve=>setTimeout(resolve,50));
+      }
+      expect((await pool.query(`SELECT 1 FROM games WHERE id=$1 AND starts_at<=clock_timestamp()`,[g.id])).rows.length).toBe(1);
+      await held.rollback();
+      expect((await replay).statusCode).toBe(404);
+      // Game no longer upcoming after wait → unavailable (404), not a stale active-direction receipt.
+      expect((await duplicate).statusCode).toBe(404);
+    }catch(error){await held.rollback().catch(()=>undefined);throw error;}
+    await noContent();
   });
   it("lost COMMIT acknowledgement returns no success; exact-key retry recovers one real row",async()=>{
     const f=await accepted(),g=await game(),idem=key();
