@@ -1,10 +1,13 @@
-# GoBadminton — Clean baseline
+# GoBadminton CLEAN
 
-Current application source as a fresh Git root. This is NOT a production deployment or an independent QA acceptance.
+Рабочий monorepo: `anpavel84-afk/gobadminton-clean`.
 
-Code: apps/web (Next.js), apps/api (NestJS), apps/worker, packages, infra.
-See docs/ACTIVE_BACKLOG.md for the new short priorities and docs/LEGACY_ARCHIVE.md for old SHA/provenance.
-DEV target: Germany web + isolated DEV API/DB. PROD stays Moscow web + Germany PROD API/DB.
-No Runner or production operation may start until explicitly authorized; OPERATOR_PAUSED remains.
+## Один вход для всех моделей
 
-QA screenshots belong in the restricted project archive at files.anpavel.ru, not Git.
+**[START_HERE.md](START_HERE.md)** — начинать здесь в Grok, ChatGPT, Cursor, Codex и других разрешённых клиентах. [AGENTS.md](AGENTS.md) — обязательные границы. [Полный регламент](docs/rules/ENGINEERING_OPERATING_MODEL.md) — единственное место организации разработки, матрицы моделей и FAIL-цикла. [Master Plan](docs/ops/AI_TRAIN_MASTER_PLAN.md) — последовательность приёмки. [Текущая передача](docs/handoffs/CURRENT.md) — продолжение работы без повторного запуска.
+
+[Документация приложения](docs/README.md) · [реестр документов](docs/rules/DOCUMENT_REGISTER.md) · [точная редакция контекста](docs/rules/CONTEXT_SOURCES.json) · [backlog](docs/ACTIVE_BACKLOG.md).
+
+Код: `apps/web`, `apps/api`, `apps/worker`, `apps/admin`, `apps/mobile`, `packages`, `infra`. `dev` — продуктовая интеграция. `main` — default discovery; общие entrypoints и принятый канон синхронизируются только как документация, без переноса продуктового кода.
+
+Наличие правила в репозитории не доказывает его получение моделью или установленную функцию. Для исполнения нужны exact assignment, квалифицированная роль и действующие runtime gates. PROD — отдельный Owner GO. Архивные очереди, snapshots и Draft PR не являются текущим допуском.

@@ -1,0 +1,446 @@
+{
+  "closures": [
+    {
+      "closure_sha256": "66bb61d9642a042608f6933cbd1aaad5c4d93ebcb4ddb1656ce6a10337b8e6b2",
+      "id": "map-mockups-v1",
+      "materials": [
+        "m2r-mockup",
+        "m3-venue-mockup",
+        "map-filter-mockup"
+      ]
+    }
+  ],
+  "conflicts": [
+    {
+      "blocking": false,
+      "id": "C1",
+      "recommended_default": "popup_over_same_map_no_venue_or_player_navigation",
+      "resolution_ref": "docs/decisions/OWNER_DECISION_MAP_POPUPS_V001.md:11-13",
+      "sources": [
+        "m2r-mockup",
+        "map-popups-decision"
+      ],
+      "state": "resolved",
+      "topic": "Mockup right arrow/CTA/profile link vs MAP_POPUPS",
+      "winner": "map-popups-decision"
+    },
+    {
+      "blocking": false,
+      "id": "C2",
+      "recommended_default": "excluded_unless_existing_contract_and_scope_authorize",
+      "resolution_ref": "docs/product/M2R_DESIGN_SPEC.md#exclusions",
+      "sources": [
+        "m2r-mockup",
+        "unified-players-radar-contract",
+        "packages/contracts/openapi.json:25276"
+      ],
+      "state": "resolved",
+      "topic": "Mockup-only data vs DTO allowlist/privacy",
+      "winner": "unified-players-radar-contract"
+    },
+    {
+      "blocking": false,
+      "id": "C3",
+      "recommended_default": "approximate_reference_input_never_parity_assertion",
+      "resolution_ref": "docs/product/M2R_DESIGN_SPEC.md",
+      "sources": [
+        "PMA sanitized #149 admission history",
+        "m2r-mockup",
+        "t417u",
+        "t420u",
+        "t424u"
+      ],
+      "state": "resolved",
+      "topic": "#149 admission: M2R_mockup not mounted / not a required input vs freezing approximate reference input",
+      "winner": "t417u/t420u/t424u approximate input"
+    },
+    {
+      "blocking": false,
+      "id": "C4",
+      "owner_decision": "O1",
+      "recommended_default": "A_map_only",
+      "sources": [
+        "m2r-mockup",
+        "docs/decisions/OWNER_DECISION_GAMES_VENUES_MAP_V001.md:28 (VENUE scope only)"
+      ],
+      "state": "unresolved",
+      "topic": "Player-popup public-game navigation"
+    }
+  ],
+  "hub": {
+    "base_url": "https://files.anpavel.ru/projects/gobadminton/design/map/",
+    "integrity_authority": "reviewed_git_registry_not_hub_sha256sums",
+    "source_root": "/opt/shared-artifact-hub/data/projects/gobadminton/design/map/"
+  },
+  "materials": [
+    {
+      "approval_ref": {
+        "owner_message_ids": [
+          "t417u",
+          "t418u",
+          "t420u",
+          "t424u"
+        ],
+        "path": "docs/decisions/OWNER_DECISION_MAP_POPUPS_V001.md",
+        "sha256": "1aaa0699646991e5899ae267d9fb8ac4fd62c6f36c37decf5bcf0e1cc4e5466a"
+      },
+      "approval_scope": "approximate_compositional_reference_only",
+      "approved_by": "Pavel (Owner); exact Stage A record through reviewed merge t424u",
+      "bytes": 2254493,
+      "dimensions": {
+        "height": 1536,
+        "width": 1024
+      },
+      "hub_locator": "M2R_mockup.png",
+      "id": "m2r-mockup",
+      "kind": "mockup",
+      "media_type": "image/png",
+      "notes": [
+        "No assumption that a mockup approves every depicted action.",
+        "Owner provenance of identity/URL/purpose: 2026-10-19 MAP_POPUPS; primary venue mockup M3; other mockups M2R and MAP-FILTER; approximate target.",
+        "Unsigned colocated SHA256SUMS is NOT approval authority; the reviewed Git registry is."
+      ],
+      "scope": "TR1 map: M3, M2R, MAP-FILTER; approximate target",
+      "sha256": "bf53191f8f917a119105ea058a3becefbbb50ca6fc6bf64d8d07d8f5b5cd2b60",
+      "status": "approved",
+      "storage": "hub",
+      "supersedes": [],
+      "url": "https://files.anpavel.ru/projects/gobadminton/design/map/M2R_mockup.png",
+      "version": "v1"
+    },
+    {
+      "approval_ref": {
+        "owner_message_ids": [
+          "t417u",
+          "t418u",
+          "t420u",
+          "t424u"
+        ],
+        "path": "docs/decisions/OWNER_DECISION_MAP_POPUPS_V001.md",
+        "sha256": "1aaa0699646991e5899ae267d9fb8ac4fd62c6f36c37decf5bcf0e1cc4e5466a"
+      },
+      "approval_scope": "approximate_compositional_reference_only",
+      "approved_by": "Pavel (Owner); exact Stage A record through reviewed merge t424u",
+      "bytes": 2251323,
+      "dimensions": {
+        "height": 1536,
+        "width": 1024
+      },
+      "hub_locator": "M3_venue_mockup.png",
+      "id": "m3-venue-mockup",
+      "kind": "mockup",
+      "media_type": "image/png",
+      "notes": [
+        "No assumption that a mockup approves every depicted action.",
+        "Owner provenance of identity/URL/purpose: 2026-10-19 MAP_POPUPS; primary venue mockup M3; other mockups M2R and MAP-FILTER; approximate target.",
+        "Unsigned colocated SHA256SUMS is NOT approval authority; the reviewed Git registry is."
+      ],
+      "scope": "TR1 map: M3, M2R, MAP-FILTER; approximate target",
+      "sha256": "59684a7b712bae39ec8805e98e939552512e0bb97a2fe07ca4e370d12e848206",
+      "status": "approved",
+      "storage": "hub",
+      "supersedes": [],
+      "url": "https://files.anpavel.ru/projects/gobadminton/design/map/M3_venue_mockup.png",
+      "version": "v1"
+    },
+    {
+      "approval_ref": {
+        "owner_message_ids": [
+          "t417u",
+          "t418u",
+          "t420u",
+          "t424u"
+        ],
+        "path": "docs/decisions/OWNER_DECISION_MAP_POPUPS_V001.md",
+        "sha256": "1aaa0699646991e5899ae267d9fb8ac4fd62c6f36c37decf5bcf0e1cc4e5466a"
+      },
+      "approval_scope": "approximate_compositional_reference_only",
+      "approved_by": "Pavel (Owner); exact Stage A record through reviewed merge t424u",
+      "bytes": 1945553,
+      "dimensions": {
+        "height": 1536,
+        "width": 1024
+      },
+      "hub_locator": "MAP-FILTER_mockup.png",
+      "id": "map-filter-mockup",
+      "kind": "mockup",
+      "media_type": "image/png",
+      "notes": [
+        "No assumption that a mockup approves every depicted action.",
+        "Owner provenance of identity/URL/purpose: 2026-10-19 MAP_POPUPS; primary venue mockup M3; other mockups M2R and MAP-FILTER; approximate target.",
+        "Unsigned colocated SHA256SUMS is NOT approval authority; the reviewed Git registry is."
+      ],
+      "scope": "TR1 map: M3, M2R, MAP-FILTER; approximate target",
+      "sha256": "2497362aaa3747a127eb4931e1ffb3fc7fdf6347d817fb60d75ef759b93807f1",
+      "status": "approved",
+      "storage": "hub",
+      "supersedes": [],
+      "url": "https://files.anpavel.ru/projects/gobadminton/design/map/MAP-FILTER_mockup.png",
+      "version": "v1"
+    },
+    {
+      "approval_ref": {
+        "owner_message_ids": [
+          "t417u",
+          "t418u",
+          "t420u",
+          "t424u"
+        ],
+        "path": "docs/decisions/OWNER_DECISION_MAP_POPUPS_V001.md",
+        "sha256": "1aaa0699646991e5899ae267d9fb8ac4fd62c6f36c37decf5bcf0e1cc4e5466a"
+      },
+      "approval_scope": "orientation_only_not_pixel_parity",
+      "approved_by": "Pavel (Owner); exact Stage A record through reviewed merge t424u",
+      "bytes": 7274,
+      "id": "style-guide-manifest",
+      "kind": "style_guide",
+      "media_type": "application/json",
+      "notes": [
+        "PMA-verified facts; author did not read frozen bytes. Aggregate tree NOT reconstructed; never claim a full-tree PASS.",
+        "Embedded Style Guide decision sha256 594cb4e176477f4d68190589541c66319c4f021306c45e3e7fddea3ab56d7d53 / 3383 bytes DIFFERS from repo copy (3308 bytes before append). Divergence recorded, frozen bytes unchanged."
+      ],
+      "pins": {
+        "embedded_style_guide_decision": {
+          "bytes": 3383,
+          "sha256": "594cb4e176477f4d68190589541c66319c4f021306c45e3e7fddea3ab56d7d53"
+        },
+        "owner_tree_pin_only_not_recomputed": "5a04ac69a259245c72da3ed5618326e8398396b4dd2c861b6eef4aecd726b1d6",
+        "schema": "GBCLEAN_FROZEN_RADAR_REFERENCE_V1",
+        "src/App.tsx": "04187d4d7d70c8c61e9ca2f08b6b6325a98539a3ec90c711c48ab771f675b61c",
+        "src/index.css": "f660e31973a6142784308f22728c751d7bb7432fb2ac0136bac032dbc6b1db2a"
+      },
+      "scope": "Frozen VPS Style Guide orientation; read-only",
+      "sha256": "f55a1fd104cd394359dfac194b95a6f5409b23f58a597e5b83c39e78e5cde595",
+      "source": {
+        "path": "/opt/gobadminton-clean-qa/style-guide/manifest.json"
+      },
+      "status": "approved",
+      "storage": "frozen_vps",
+      "supersedes": [],
+      "version": "v1"
+    },
+    {
+      "approval_ref": {
+        "owner_message_ids": [
+          "t417u",
+          "t418u",
+          "t420u",
+          "t424u"
+        ],
+        "path": "docs/decisions/OWNER_DECISION_MAP_POPUPS_V001.md",
+        "sha256": "1aaa0699646991e5899ae267d9fb8ac4fd62c6f36c37decf5bcf0e1cc4e5466a"
+      },
+      "approval_scope": "reviewed_reference_input_only_not_runtime_acceptance",
+      "approved_by": "Pavel (Owner); exact Stage A record through reviewed merge t424u",
+      "bytes": 1949,
+      "id": "map-popups-decision",
+      "kind": "owner_decision",
+      "media_type": "text/markdown",
+      "scope": "19 Oct: popup over map; drag handle/up-arrow; no venue/player-page navigation",
+      "sha256": "1aaa0699646991e5899ae267d9fb8ac4fd62c6f36c37decf5bcf0e1cc4e5466a",
+      "source": {
+        "path": "docs/decisions/OWNER_DECISION_MAP_POPUPS_V001.md"
+      },
+      "status": "approved",
+      "storage": "git",
+      "supersedes": [],
+      "version": "v1"
+    },
+    {
+      "approval_ref": {
+        "owner_message_ids": [
+          "t417u",
+          "t418u",
+          "t420u",
+          "t424u"
+        ],
+        "path": "docs/decisions/OWNER_DECISION_MAP_POPUPS_V001.md",
+        "sha256": "1aaa0699646991e5899ae267d9fb8ac4fd62c6f36c37decf5bcf0e1cc4e5466a"
+      },
+      "approval_scope": "reviewed_reference_input_only_not_runtime_acceptance",
+      "approved_by": "Pavel (Owner); exact Stage A record through reviewed merge t424u",
+      "bytes": 5924,
+      "id": "style-guide-first-decision",
+      "kind": "owner_decision",
+      "media_type": "text/markdown",
+      "scope": "Original decision plus scoped supersession by t420u",
+      "sha256": "a67abf52b223bf32f405be6e59a837ac5f42e5ba638b7c1c0aec6eb77ea80ad9",
+      "source": {
+        "path": "docs/decisions/OWNER_DECISION_FRONTEND_STYLE_GUIDE_FIRST_V001.md"
+      },
+      "status": "approved",
+      "storage": "git",
+      "supersedes": [],
+      "version": "v1"
+    },
+    {
+      "approval_ref": {
+        "owner_message_ids": [
+          "t417u",
+          "t418u",
+          "t420u",
+          "t424u"
+        ],
+        "path": "docs/decisions/OWNER_DECISION_MAP_POPUPS_V001.md",
+        "sha256": "1aaa0699646991e5899ae267d9fb8ac4fd62c6f36c37decf5bcf0e1cc4e5466a"
+      },
+      "approval_scope": "reviewed_reference_input_only_not_runtime_acceptance",
+      "approved_by": "Pavel (Owner); exact Stage A record through reviewed merge t424u",
+      "bytes": 5338,
+      "id": "radar-toggle-decision",
+      "kind": "owner_decision",
+      "media_type": "text/markdown",
+      "scope": "Radar toggle/directory/map; later t420u for visual handling",
+      "sha256": "44d4601293d36d93e7f029c811925e6f553a03c76138cf4157aafc0de701fc43",
+      "source": {
+        "path": "docs/decisions/OWNER_DECISION_RADAR_TOGGLE_DIRECTORY_MAP_V001.md"
+      },
+      "status": "approved",
+      "storage": "git",
+      "supersedes": [],
+      "version": "v1"
+    },
+    {
+      "approval_ref": {
+        "owner_message_ids": [
+          "t417u",
+          "t418u",
+          "t420u",
+          "t424u"
+        ],
+        "path": "docs/decisions/OWNER_DECISION_MAP_POPUPS_V001.md",
+        "sha256": "1aaa0699646991e5899ae267d9fb8ac4fd62c6f36c37decf5bcf0e1cc4e5466a"
+      },
+      "approval_scope": "reviewed_reference_input_only_not_runtime_acceptance",
+      "approved_by": "Pavel (Owner); exact Stage A record through reviewed merge t424u",
+      "bytes": 1017,
+      "id": "visual-review-nonblocking-decision",
+      "kind": "owner_decision",
+      "media_type": "text/markdown",
+      "scope": "Visual review parallel; later t420u for visual handling",
+      "sha256": "c48ca4604c015732444e3ea54a224aaf026a43218daca57fecae083ccc8c07ff",
+      "source": {
+        "path": "docs/decisions/OWNER_DECISION_VISUAL_REVIEW_NONBLOCKING_V001.md"
+      },
+      "status": "approved",
+      "storage": "git",
+      "supersedes": [],
+      "version": "v1"
+    },
+    {
+      "approval_ref": {
+        "owner_message_ids": [
+          "t417u",
+          "t418u",
+          "t420u",
+          "t424u"
+        ],
+        "path": "docs/decisions/OWNER_DECISION_MAP_POPUPS_V001.md",
+        "sha256": "1aaa0699646991e5899ae267d9fb8ac4fd62c6f36c37decf5bcf0e1cc4e5466a"
+      },
+      "approval_scope": "reviewed_reference_input_only_not_runtime_acceptance",
+      "approved_by": "Pavel (Owner); exact Stage A record through reviewed merge t424u",
+      "bytes": 8094,
+      "id": "unified-players-radar-contract",
+      "kind": "contract",
+      "media_type": "text/markdown",
+      "scope": "Source candidate; proof-scoped upcoming public games allowlist, no runtime cutover",
+      "sha256": "f13ea3cf66976cfe2fd19bfb0ce8e19604da51423422ee48abbe75da0306597f",
+      "source": {
+        "path": "docs/api/UNIFIED_PLAYERS_RADAR_V001.md"
+      },
+      "status": "approved",
+      "storage": "git",
+      "supersedes": [],
+      "version": "v1"
+    },
+    {
+      "approval_ref": {
+        "owner_message_ids": [
+          "t417u",
+          "t418u",
+          "t420u",
+          "t424u"
+        ],
+        "path": "docs/decisions/OWNER_DECISION_MAP_POPUPS_V001.md",
+        "sha256": "1aaa0699646991e5899ae267d9fb8ac4fd62c6f36c37decf5bcf0e1cc4e5466a"
+      },
+      "approval_scope": "reviewed_reference_input_only_not_runtime_acceptance",
+      "approved_by": "Pavel (Owner); exact Stage A record through reviewed merge t424u",
+      "bytes": 13528,
+      "id": "m2r-design-spec",
+      "kind": "spec",
+      "media_type": "text/markdown",
+      "scope": "WORKING SPEC for M2R acceptance inputs; no new product scope",
+      "sha256": "20445aa26fef0ebd13f68a00fbe48c9782a0d7956ee97e571e8f18e629574c72",
+      "source": {
+        "path": "docs/product/M2R_DESIGN_SPEC.md"
+      },
+      "status": "approved",
+      "storage": "git",
+      "supersedes": [],
+      "version": "v1"
+    }
+  ],
+  "open_owner_decisions": [
+    {
+      "blocking": false,
+      "id": "O1",
+      "options": [
+        "A = map-only slice, game cards do not navigate",
+        "B = permit game-page navigation/return behaviour"
+      ],
+      "recommended_default": "A_map_only: default pending Owner answer (Architect recommends A)",
+      "stage": "A",
+      "topic": "M2R public-game navigation; no existing player-popup answer found in docs/decisions, docs/product, OPEN_DECISIONS"
+    },
+    {
+      "blocking": false,
+      "id": "O2",
+      "options": [
+        "A PMA relay + one Owner GitHub confirmation",
+        "B chat-only after proven authenticated ingress"
+      ],
+      "recommended_default": "A",
+      "stage": "C",
+      "topic": "Authentic answer-confirmation channel for Task-Audit answers; listed only"
+    },
+    {
+      "blocking": false,
+      "id": "O3",
+      "options": [
+        "Explicit manual review when useful",
+        "Pending visual acceptance"
+      ],
+      "recommended_default": "Explicit manual review when useful",
+      "stage": "B-C",
+      "topic": "Manual vs pending visual acceptance when the image route fails; listed only"
+    }
+  ],
+  "owner_rulings": [
+    {
+      "id": "t417u",
+      "text": "Binaries out of GitHub, hub is the single source, registry in git holds id/version/sha256/bytes/url/text spec."
+    },
+    {
+      "id": "t418u",
+      "text": "Binaries out of GitHub, hub is the single source, registry in git holds id/version/sha256/bytes/url/text spec."
+    },
+    {
+      "id": "t420u",
+      "text": "Mockups are ALWAYS approximate; Style Guide is orientation, not a rigid rule; NEW elements are an allowed recorded path; block only substantive violations: broken function, ignored Owner Decision, ignored existing-component reuse without reason, privacy; never block on mere deviation from a mockup or Style Guide."
+    },
+    {
+      "id": "t424u",
+      "text": "«Да этап А» = approval of Stage A and, through merging this reviewed record, of these exact mockup bytes as approximate reference inputs. PMA-delivered provenance; merge not yet claimed."
+    }
+  ],
+  "principles": [
+    "Mockups are ALWAYS approximate.",
+    "Style Guide is orientation, not a rigid rule.",
+    "t420u: NEW elements are an allowed recorded path; block only substantive violations: broken function, ignored Owner Decision, ignored existing-component reuse without reason, privacy; never block on mere deviation from a mockup or Style Guide.",
+    "Binary content stays out of git; files.anpavel.ru is the single heavy-file source. Stage A only, inactive; no runtime admission or visual PASS."
+  ],
+  "repository": "anpavel84-afk/gobadminton-clean",
+  "schema": "GB_DESIGN_MATERIALS_V1"
+}

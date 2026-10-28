@@ -42,6 +42,9 @@
 .fr3 .player-card__main > em { display: block; margin-top: 8px; color: var(--gb-purple); font: 500 11px var(--gb-font); }
 .fr3 .player-card__arrow { width:40px;height:40px;border:1px solid var(--gb-line);border-radius:50%;display:grid;place-items:center; }
 .fr3 .player-profile-page { padding-bottom: 90px; }
+/* Radar sheet embed: keep shared public body readable without a second shell. */
+.gb-venue-popup .fr3.player-profile-page.is-embedded { padding-bottom: 0; }
+.gb-venue-popup .fr3.player-profile-page.is-embedded .profile-section { margin-top: 16px; }
 .fr3 .player-profile-hero { min-height: 520px; overflow: hidden; border-radius: var(--gb-radius-lg); background: var(--gb-ink); color: var(--gb-white); display: grid; grid-template-columns: .8fr 1.2fr; }
 .fr3 .player-profile-visual { position: relative; overflow: hidden; background: var(--gb-lime); display: grid; place-items: center; }
 .fr3 .player-profile-visual > .avatar { z-index: 2; width: 150px; height: 150px; border-width: 8px; font-size: 36px; }

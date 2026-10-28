@@ -1,0 +1,41 @@
+/* Sheet-embedded public profile: reuse page classes at compact sheet scale. */
+.gb-venue-popup .player-profile-content { display: grid; gap: 16px; }
+.gb-venue-popup .player-profile-content .player-profile-hero {
+  min-height: 0;
+  display: block;
+  border-radius: var(--gb-radius-md);
+}
+.gb-venue-popup .player-profile-content .player-profile-visual {
+  min-height: 160px;
+}
+.gb-venue-popup .player-profile-content .player-profile-visual > .avatar {
+  width: 112px;
+  height: 112px;
+  border-width: 6px;
+  font-size: 28px;
+}
+.gb-venue-popup .player-profile-content .player-profile-copy {
+  padding: 16px;
+}
+.gb-venue-popup .player-profile-content .player-profile-copy h1,
+.gb-venue-popup .player-profile-content .player-profile-copy h2 {
+  margin: 12px 0 8px;
+  font: 700 22px var(--gb-font);
+  letter-spacing: -.02em;
+}
+.gb-venue-popup .player-profile-content .player-profile-grid {
+  margin-top: 0;
+  grid-template-columns: 1fr;
+}
+.gb-venue-popup .player-profile-content .preference-card { grid-row: auto; }
+.gb-venue-popup .player-profile-content .preference-card > div {
+  grid-template-columns: 1fr 1fr;
+}
+.gb-venue-popup .player-profile-content .player-profile-actions {
+  flex-direction: column;
+  align-items: stretch;
+}
+.gb-venue-popup .player-profile-content .player-profile-distance {
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 12px;
+}

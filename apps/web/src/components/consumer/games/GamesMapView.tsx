@@ -12,11 +12,13 @@ import "../../../styles/discovery.css";
 import { GamesMapBackButton } from "./GamesMapBackButton";
 import { VenuePreviewCard } from "./VenuePreviewCard";
 import { VenuePopup } from "./VenuePopup";
+import { useDesktopMapInspector } from "./DesktopMapInspector";
 import { SelectedVenueCover, useSelectedVenueCover } from "../venues/SelectedVenueCover";
 import { VenueSheet } from "./VenueSheet";
 import { Button } from "../Button";
 import { SurfacePanel } from "../Surfaces";
 import { GamesMapModuleLoading } from "./GamesMapModuleLoading";
+import { MapLayerFiltersControls, MapLayerFiltersProvider } from "./MapLayerFilters";
 import type { GamesVenueMap } from "./GamesVenueMap";
 
 /** A failed chunk stays unavailable; recovery uses the existing venue list. */
@@ -89,17 +91,35 @@ export function GamesMapView({ cityId, day, venueId, activity = "all", onReturnT
     const next = snapshot?.cityId === cityId && snapshot.gamesReady ? new Map([...schedules].map(([id, games]) => [id, games.length])) : null;
     return previousCounts.current = stableVenueCounts(previousCounts.current, next);
   }, [schedules, snapshot, cityId]);
+  const desktop = useDesktopMapInspector();
   const [selectedVenueId, setSelectedVenueId] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
-  const selectVenue = (venue: VenueSummary) => { setExpanded(false); setSelectedVenueId(venue.id); };
+  const clearVenueSelection = () => { setSelectedVenueId(null); setExpanded(false); };
+  // Sync handoff via same-turn CustomEvent: player sheet closes before venue state commits.
+  // Desktop opens the right inspector immediately; mobile keeps the compact preview first.
+  const selectVenue = (venue: VenueSummary) => {
+    window.dispatchEvent(new Event("gb-map-select-venue"));
+    setExpanded(desktop);
+    setSelectedVenueId(venue.id);
+  };
   const selectedVenue = venues.find(item => item.id === selectedVenueId);
   const selectedCover = useSelectedVenueCover(cityId, selectedVenue);
   const escapeSelection = useRef<VenueSummary | undefined>(undefined);
   useEffect(() => { escapeSelection.current = selectedVenue; }, [selectedVenue]);
   useEffect(() => { setSelectedVenueId(null); setExpanded(false); }, [cityId]);
+  // Promote parent expanded on desktop while a venue is selected; do not force-collapse
+  // on resize to mobile (keeps VenueSheet/create across the presentation change).
+  useEffect(() => {
+    if (selectedVenueId && desktop) setExpanded(true);
+  }, [selectedVenueId, desktop]);
   useEffect(() => {
     if (selectedVenueId !== null && !selectedVenue) setSelectedVenueId(null);
   }, [selectedVenueId, selectedVenue]);
+  useEffect(() => {
+    const onPlayer = () => clearVenueSelection();
+    window.addEventListener("gb-map-select-player", onPlayer);
+    return () => window.removeEventListener("gb-map-select-player", onPlayer);
+  }, []);
   useEffect(() => {
     const escape = (event: KeyboardEvent) => {
       if (!escapeSelection.current || event.key !== "Escape" || event.defaultPrevented || document.querySelector("dialog[open], [role=dialog]")) return;
@@ -118,24 +138,27 @@ export function GamesMapView({ cityId, day, venueId, activity = "all", onReturnT
       gamesReady={!!snapshot?.gamesReady} day={day} hasUpcoming={!!all.get(venue.id)?.length} />}
     {!loading && !error && !venue && <p className="gb-map-sr-only" role="status">Площадка отсутствует в каталоге города.</p>}
   </section>;
-  return <section className="gb-games-map" data-venue-preview={!!selectedVenue} aria-label="Игры на карте">
-    {(!mapErrorCardShown || cityId !== MOSCOW_BUNDLE.cityId) && onReturnToList && <GamesMapBackButton onClick={onReturnToList} />}
-    {loading && <p className="gb-map-sr-only" role="status">Загружаем все площадки и расписание…</p>}
-    {error && <p role="alert">Не удалось загрузить полный каталог или расписание. Проверьте соединение и повторите. Непроверенные количества не показываем.</p>}
-    {<>
-      {cityId === MOSCOW_BUNDLE.cityId ? <MapView venues={venues} counts={counts} selectedVenueId={selectedVenueId} onSelect={selectVenue} onDeselect={() => setSelectedVenueId(null)} onAvailability={setMapAvailable} onErrorCardChange={setMapErrorCardShown} onReturnToList={onReturnToList} /> : <p role="alert">Карта выбранного города пока недоступна. Все площадки доступны списком.</p>}
-      {selectedVenue && <VenuePopup key={selectedVenue.id} expanded={expanded} onExpandedChange={setExpanded} onDeselect={() => setSelectedVenueId(null)}
-        preview={<VenuePreviewCard embedded coverSlot={<SelectedVenueCover slotRef={selectedCover.compact} className="gb-venue-preview-cover" />} venue={selectedVenue} games={all.get(selectedVenue.id) ?? []}
-          gamesReady={snapshot?.cityId === cityId && snapshot.gamesReady} now={now} onOpen={() => setExpanded(true)} />}>
-        <VenueSheet embedded coverSlot={<SelectedVenueCover slotRef={selectedCover.info} className="gb-venue-sheet-cover" />} active={expanded} venue={selectedVenue} games={all.get(selectedVenue.id) ?? []}
-          gamesReady={snapshot?.cityId === cityId && snapshot.gamesReady === true} now={now}
-          onCollapse={() => setExpanded(false)} onDeselect={() => setSelectedVenueId(null)} />
-      </VenuePopup>}
-      {!venues.length && <p className="gb-map-sr-only" role="status">В каталоге города пока нет площадок.</p>}
-      {(!mapAvailable || cityId !== MOSCOW_BUNDLE.cityId) && <details className="gb-games-map-fallback">
-        <summary>Площадки списком — карта или координаты недоступны</summary>
-        <div role="group" aria-label="Все площадки города">{venues.map(venue => <button className="gb-discovery-chip" type="button" key={venue.id} onClick={() => selectVenue(venue)}>{venue.name} · {counts ? counts.get(venue.id) ?? 0 : "?"}</button>)}</div>
-      </details>}
-    </>}
-  </section>;
+  return <MapLayerFiltersProvider>
+    <section className="gb-games-map" data-venue-preview={!!selectedVenue} aria-label="Игры на карте">
+      {(!mapErrorCardShown || cityId !== MOSCOW_BUNDLE.cityId) && onReturnToList && <GamesMapBackButton onClick={onReturnToList} />}
+      {cityId === MOSCOW_BUNDLE.cityId && mapAvailable && <MapLayerFiltersControls />}
+      {loading && <p className="gb-map-sr-only" role="status">Загружаем все площадки и расписание…</p>}
+      {error && <p role="alert">Не удалось загрузить полный каталог или расписание. Проверьте соединение и повторите. Непроверенные количества не показываем.</p>}
+      {<>
+        {cityId === MOSCOW_BUNDLE.cityId ? <MapView venues={venues} counts={counts} selectedVenueId={selectedVenueId} onSelect={selectVenue} onDeselect={clearVenueSelection} onAvailability={setMapAvailable} onErrorCardChange={setMapErrorCardShown} onReturnToList={onReturnToList} /> : <p role="alert">Карта выбранного города пока недоступна. Все площадки доступны списком.</p>}
+        {selectedVenue && <VenuePopup key={selectedVenue.id} expanded={expanded || desktop} onExpandedChange={setExpanded} onDeselect={clearVenueSelection}
+          preview={<VenuePreviewCard embedded coverSlot={<SelectedVenueCover slotRef={selectedCover.compact} className="gb-venue-preview-cover" />} venue={selectedVenue} games={all.get(selectedVenue.id) ?? []}
+            gamesReady={snapshot?.cityId === cityId && snapshot.gamesReady} now={now} onOpen={() => setExpanded(true)} />}>
+          <VenueSheet embedded coverSlot={<SelectedVenueCover slotRef={selectedCover.info} className="gb-venue-sheet-cover" />} active={expanded || desktop} venue={selectedVenue} games={all.get(selectedVenue.id) ?? []}
+            gamesReady={snapshot?.cityId === cityId && snapshot.gamesReady === true} now={now}
+            onCollapse={desktop ? clearVenueSelection : () => setExpanded(false)} onDeselect={clearVenueSelection} />
+        </VenuePopup>}
+        {!venues.length && <p className="gb-map-sr-only" role="status">В каталоге города пока нет площадок.</p>}
+        {(!mapAvailable || cityId !== MOSCOW_BUNDLE.cityId) && <details className="gb-games-map-fallback">
+          <summary>Площадки списком — карта или координаты недоступны</summary>
+          <div role="group" aria-label="Все площадки города">{venues.map(venue => <button className="gb-discovery-chip" type="button" key={venue.id} onClick={() => selectVenue(venue)}>{venue.name} · {counts ? counts.get(venue.id) ?? 0 : "?"}</button>)}</div>
+        </details>}
+      </>}
+    </section>
+  </MapLayerFiltersProvider>;
 }

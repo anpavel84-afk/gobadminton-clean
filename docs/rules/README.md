@@ -1,28 +1,9 @@
-# GoBadminton — Project Rules
+# Правила GoBadminton CLEAN — один канон
 
-Статус: **OWNER_CONFIRMED**. Эти правила определяют, как проект сохраняет рабочую память и передаёт результаты между людьми, агентами и будущими командами.
+Вход для каждой модели: [START_HERE.md](../../START_HERE.md) → [AGENTS.md](../../AGENTS.md) → **[ENGINEERING_OPERATING_MODEL.md](ENGINEERING_OPERATING_MODEL.md)** и принятая политика маршрутизации **[SMART_ROUTING.md](SMART_ROUTING.md)**. Полный канон содержит роли (§3), семейства моделей (§5), попытки/делегацию (§6), FAIL-цикл (§8.1), контекст (§10) и изменение правил (§11); SMART_ROUTING — единственный источник детальной матрицы и классов FAIL.
 
-## Обязательные правила
+[CONTEXT_SOURCES.json](CONTEXT_SOURCES.json) фиксирует accepted commit/hash/size, а не новую runtime policy. [DOCUMENT_REGISTER.md](DOCUMENT_REGISTER.md) определяет статус источников и указывает точные supersession; он не добавляет вторую таблицу моделей или backlog. [PROJECT_RECORD_POLICY.md](PROJECT_RECORD_POLICY.md) остаётся единственной специализированной политикой хранения/передачи.
 
-1. [Project Record & Handoff Policy](PROJECT_RECORD_POLICY.md) — GitHub как долговременная память проекта; правила для prompts, drafts, handoffs, reviews и canonical artifacts.
-2. `docs/workbench/` (legacy README отсутствует в Clean extraction) — промежуточные и ещё не согласованные рабочие материалы.
-3. Project prompts в [ChatOps Issues](../operations/chatops/PM-CHEATSHEET.md) (legacy `docs/prompts/README.md` отсутствует в Clean extraction) — проектные задания и launcher/assignment records.
-4. Handoffs по [Project Record & Handoff Policy](PROJECT_RECORD_POLICY.md) (legacy `docs/handoffs/README.md` отсутствует в Clean extraction) — передача результата следующей роли/команде.
+[Master Plan](../ops/AI_TRAIN_MASTER_PLAN.md) — состояние приёмки, [CURRENT handoff](../handoffs/CURRENT.md) — продолжение. [Предметные контракты](../README.md) сохраняют бизнес/privacy-инварианты. Dated evidence, draft-предложения и старые launchers не становятся действующим регламентом из-за наличия в Git.
 
-## Универсальный launcher для всех ролей
-
-Для уже открытых GoBadminton-чатов применять один и тот же launcher:
-
-https://github.com/anpavel84-afk/agents/blob/42619275e47c292b9c37d7db6719239f26c75457/prompts/launchers/gobadminton-project-record-policy/v001.md
-
-Он не меняет профессию/роль и не требует пересоздания чата. Он только подключает обязательное правило project memory, prompts, handoffs и GitHub-based file exchange.
-
-## Основной принцип
-
-**Chat is transport, GitHub is record.**
-
-Существенный результат проекта не должен существовать только в истории чата, временной ссылке или локальном sandbox.
-
-Другой ИИ или новая команда должны иметь возможность начать с [docs/README.md](../README.md), прочитать правила, решения, актуальные документы, prompts и handoffs и продолжить проект без обязательного доступа к старым чатам.
-
-Если Agent Agency Hub доступен, он остаётся источником operational state Project/Task/Mission/Run/Result. GitHub хранит durable project record и не превращается во второй task board.
+Принятый core v1.3 при консолидации 24.10.2026 был сохранён byte-for-byte; поправка SR0 (24.10.2026, решение Owner) выпустила редакцию 1.4 и принятую политику SMART_ROUTING 1.0, предыдущий pin 1.3 сохранён в CONTEXT_SOURCES.json. Синхронизация документации не переписывает installed pin, grants или правила активного candidate; перевод кода на 1.4 — отдельный reviewed code-pin. Реальная доставка каждой роли проверяется отдельно; если full reference недоступен, применим lossless full fallback по §10.3.

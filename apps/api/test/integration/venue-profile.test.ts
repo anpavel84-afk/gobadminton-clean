@@ -102,7 +102,11 @@ run("0039 venue profile — disposable synthetic DB, authored only", () => {
     expect(response.statusCode, response.body).toBe(200); return response.json<VenueDto>();
   }
   async function stored(id: string) {
-    return (await pool.query("SELECT court_count,amenity_parking,amenity_showers,public_profile_updated_at,public_contacts,version,name,contact_phone,contact_website,booking_note FROM venues WHERE id=$1", [id])).rows[0]!;
+    return (await pool.query("SELECT court_count,amenity_parking,amenity_showers,public_profile_updated_at,(extract(epoch from public_profile_updated_at)*1000000)::bigint::text AS public_profile_updated_at_us,public_contacts,version,name,contact_phone,contact_website,booking_note FROM venues WHERE id=$1", [id])).rows[0]!;
+  }
+  // pg parses timestamptz as JS Date (milliseconds); retain DB microseconds for strict increase checks.
+  function stamp(row: { public_profile_updated_at_us: string }): bigint {
+    return BigInt(row.public_profile_updated_at_us);
   }
   it("fresh schema has nullable/no-default facts, SQL bounds and DB-generated insert date", async () => {
     const x = await fixture(), row = await stored(x.v.id);
@@ -199,30 +203,30 @@ run("0039 venue profile — disposable synthetic DB, authored only", () => {
     const key = randomUUID();
     const first = await edit(x.v.id, { ...x.f, profile: facts, publicContacts: { ...contacts, website: "HTTPS://EXAMPLE.INVALID:443/a/../" } }, 1, key);
     expect(first.statusCode, first.body).toBe(201);
-    const changed = await stored(x.v.id); expect(+changed.public_profile_updated_at).toBeGreaterThan(+initial.public_profile_updated_at);
+    const changed = await stored(x.v.id); expect(stamp(changed)).toBeGreaterThan(stamp(initial));
     const replay = await edit(x.v.id, { ...x.f, profile: facts, publicContacts: { ...contacts, website: "HTTPS://EXAMPLE.INVALID:443/a/../" } }, 1, key);
     expect(replay.body).toBe(first.body); expect(await stored(x.v.id)).toEqual(changed);
     for (const f of [{ ...x.f, profile: facts, publicContacts: contacts }, x.f, { ...x.f, contactPhone: "private", bookingNote: "private note" }]) {
       const current = await stored(x.v.id), r = await edit(x.v.id, f, current.version); expect(r.statusCode, r.body).toBe(201);
-      expect((await stored(x.v.id)).public_profile_updated_at).toEqual(changed.public_profile_updated_at);
+      expect(stamp(await stored(x.v.id))).toBe(stamp(changed));
     }
     await pool.query("UPDATE venues SET lifecycle_state='retired',version=version+1,provenance='admin_corrected',updated_at=now(),public_profile_updated_at='1900-01-01' WHERE id=$1", [x.v.id]);
-    expect((await stored(x.v.id)).public_profile_updated_at).toEqual(changed.public_profile_updated_at);
+    expect(stamp(await stored(x.v.id))).toBe(stamp(changed));
     await pool.query("UPDATE venues SET lifecycle_state='unverified' WHERE id=$1", [x.v.id]);
     for (const patch of ["name=name||' edited'", "address=address||' edited'", "timezone='UTC'", "location=ST_SetSRID(ST_MakePoint(38,56),4326)::geography", "identity_discriminator='hall:2'", "public_contacts=NULL", "court_count=2", "amenity_parking=true", "amenity_showers=false"]) {
       const before = await stored(x.v.id); await pool.query(`UPDATE venues SET ${patch} WHERE id=$1`, [x.v.id]);
-      expect(+(await stored(x.v.id)).public_profile_updated_at).toBeGreaterThan(+before.public_profile_updated_at);
+      expect(stamp(await stored(x.v.id))).toBeGreaterThan(stamp(before));
     }
   });
   it("eligible moderated photo only; replacement/removal/moderation/actor/retirement and content date", async () => {
     const x = await fixture(), uid = await user();
     const approval = (await pool.query<{ id: string }>("INSERT INTO content_moderation_approvals(content_type,surface_key,fingerprint_version,content_fingerprint,policy_version,local_policy_version,provider_key,provider_model,category_flags,decision,checked_at) VALUES('image','cover_image',1,$1,'synthetic','synthetic','fake','synthetic','{}','allow',now()) RETURNING id", [randomUUID().replaceAll("-", "").repeat(2)])).rows[0]!.id;
-    const key = randomUUID().replaceAll("-", "").repeat(2) + ".png", oldDate = (await stored(x.v.id)).public_profile_updated_at;
+    const key = randomUUID().replaceAll("-", "").repeat(2) + ".png", oldDate = stamp(await stored(x.v.id));
     await pool.query("UPDATE venues SET cover_key=$2,cover_actor_id=$3,cover_moderation_approval_id=$4,cover_credit_kind='photo',cover_credit_text='Фото: Synthetic',cover_credit_url='https://example.invalid/' WHERE id=$1", [x.v.id, key, uid, approval]);
     const profile = (await detail(x.v.id)).profile!;
     expect(profile.gallery).toEqual({ coverage: "cover_only", items: [{ url: `/v1/media/venue-covers/${key}`, credit: { kind: "photo", text: "Фото: Synthetic", url: "https://example.invalid/" } }] });
-    expect(+(await stored(x.v.id)).public_profile_updated_at).toBeGreaterThan(+oldDate);
-    const contentDate = (await stored(x.v.id)).public_profile_updated_at;
+    expect(stamp(await stored(x.v.id))).toBeGreaterThan(oldDate);
+    const contentDate = stamp(await stored(x.v.id));
     // Existing moderation decisions are allow/reject/review (migration0020).
     // Changing eligibility alone leaves stored venue content and its date intact.
     await pool.query("UPDATE content_moderation_approvals SET decision='reject',checked_at=now() WHERE id=$1", [approval]);
@@ -230,29 +234,29 @@ run("0039 venue profile — disposable synthetic DB, authored only", () => {
     expect(rejected.profile?.gallery).toEqual({ coverage: "cover_only", items: [] });
     expect(rejected.profile?.updatedAt).toBe(profile.updatedAt);
     expect(rejected.cover?.uploadedUrl).toBeNull();
-    expect((await stored(x.v.id)).public_profile_updated_at).toEqual(contentDate);
+    expect(stamp(await stored(x.v.id))).toBe(contentDate);
     await pool.query("UPDATE content_moderation_approvals SET decision='allow',checked_at=now() WHERE id=$1", [approval]);
     expect((await detail(x.v.id)).profile?.gallery).toEqual(profile.gallery);
-    expect((await stored(x.v.id)).public_profile_updated_at).toEqual(contentDate);
+    expect(stamp(await stored(x.v.id))).toBe(contentDate);
     for (const [kind, text, url] of [["logo", "Логотип: Synthetic", "https://example.invalid/"], ["illustration", "Иллюстрация", null], [null, null, null]]) {
-      const beforeCredit = (await stored(x.v.id)).public_profile_updated_at;
+      const beforeCredit = stamp(await stored(x.v.id));
       await pool.query("UPDATE venues SET cover_credit_kind=$2,cover_credit_text=$3,cover_credit_url=$4 WHERE id=$1", [x.v.id, kind, text, url]);
       expect((await detail(x.v.id)).profile?.gallery).toEqual({ coverage: "cover_only", items: [] });
-      expect(+(await stored(x.v.id)).public_profile_updated_at).toBeGreaterThan(+beforeCredit);
+      expect(stamp(await stored(x.v.id))).toBeGreaterThan(beforeCredit);
     }
     await pool.query("UPDATE venues SET cover_credit_kind='photo',cover_credit_text='Фото: Synthetic',cover_credit_url='https://example.invalid/' WHERE id=$1", [x.v.id]);
-    const beforeReplacement = (await stored(x.v.id)).public_profile_updated_at;
+    const beforeReplacement = stamp(await stored(x.v.id));
     await pool.query("UPDATE venues SET cover_key=$2 WHERE id=$1", [x.v.id, randomUUID().replaceAll("-", "").repeat(2) + ".png"]);
     expect((await detail(x.v.id)).profile?.gallery.items).toEqual([]);
-    expect(+(await stored(x.v.id)).public_profile_updated_at).toBeGreaterThan(+beforeReplacement);
+    expect(stamp(await stored(x.v.id))).toBeGreaterThan(beforeReplacement);
     await pool.query("UPDATE venues SET cover_credit_kind='photo',cover_credit_text='Фото: Synthetic',cover_credit_url='https://example.invalid/' WHERE id=$1", [x.v.id]);
     await pool.query("UPDATE venues SET lifecycle_state='retired' WHERE id=$1", [x.v.id]);
     expect((await detail(x.v.id)).profile?.gallery.items).toEqual([]);
     await pool.query("UPDATE venues SET lifecycle_state='unverified' WHERE id=$1", [x.v.id]);
-    const beforeRemoval = (await stored(x.v.id)).public_profile_updated_at;
+    const beforeRemoval = stamp(await stored(x.v.id));
     await pool.query("UPDATE venues SET cover_key=NULL,cover_actor_id=NULL,cover_moderation_approval_id=NULL WHERE id=$1", [x.v.id]);
     expect((await detail(x.v.id)).profile?.gallery.items).toEqual([]);
-    expect(+(await stored(x.v.id)).public_profile_updated_at).toBeGreaterThan(+beforeRemoval);
+    expect(stamp(await stored(x.v.id))).toBeGreaterThan(beforeRemoval);
     await pool.query("UPDATE venues SET cover_key=$2,cover_actor_id=$3,cover_moderation_approval_id=$4,cover_credit_kind='photo',cover_credit_text='Фото: Synthetic',cover_credit_url='https://example.invalid/' WHERE id=$1", [x.v.id, key, uid, approval]);
     expect((await detail(x.v.id)).profile?.gallery.items).toHaveLength(1);
     await pool.query("UPDATE users SET status='deletion_pending' WHERE id=$1", [uid]);

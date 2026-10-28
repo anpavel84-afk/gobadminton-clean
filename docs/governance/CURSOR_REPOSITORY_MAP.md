@@ -1,47 +1,7 @@
-# Cursor Repository & Source Map
+# Карта источников — единый CLEAN
 
-## Product repository
+Общий вход — [START_HERE.md](../../START_HERE.md); [полный канон](../rules/ENGINEERING_OPERATING_MODEL.md); [предметный индекс](../README.md); [статус документов](../rules/DOCUMENT_REGISTER.md).
 
-`anpavel84-afk/gobadminton` owns code, contracts, canonical docs, prompts, handoffs and runtime records.
+Repo `anpavel84-afk/gobadminton-clean`. Source/candidate revision задаётся exact assignment; rules revision — accepted policy, и эти SHAs могут различаться. Не считать checkout актуальным по имени каталога. Для модели нужен полный trusted текст либо квалифицированный capsule и recipient-readable source.
 
-## Agent launcher repository
-
-`anpavel84-afk/agents` owns role bootstrap/authority launchers. Do not put GoBadminton application code there.
-
-## Primary development execution host
-
-Germany VPS `vmi3510488`:
-- repo: `/srv/gobadminton-dev/repo`;
-- worktrees: `/srv/gobadminton-dev/worktrees`;
-- runner: `/srv/gobadminton-dev/runner`;
-- Git remote host alias: `github-gobadminton`;
-- repository-specific GitHub write access: enabled.
-
-The live backend tree `/srv/gobadminton` is separate deployment material and is not the development checkout.
-
-## PLAN recovery workspace
-
-`C:\Users\PLAN\Documents\gobadminton`
-
-PLAN is paused recovery/reference only. Do not use it as a concurrent writer after Germany VPS cutover.
-
-## Runtime aliases
-
-### Moscow web
-`gobadminton-moscow`
-→ root@194.87.214.217  
-→ device `ruvds-68jzd`
-
-### Germany backend
-`gobadminton-backend`
-→ root@169.58.183.182  
-→ device `vmi3510488`
-
-Both aliases use project-dedicated ED25519 identities and strict host-key checking.
-
-## Runtime ownership
-
-Moscow: web/nginx only.  
-Germany: API/DB/worker only.
-
-Do not infer authority from SSH access. Exact assignment controls writes.
+Germany `vmi3510488` — разрешённый task host; PLAN — просмотр/управление, не execution. Git/publish/deploy выполняет trusted bridge. DEV и PROD разделены; реальные paths, identities и installed pins берутся из действующих receipts, не копируются из старого handoff. Внешний Hub/архивная очередь не обязательные источники проектной authority.

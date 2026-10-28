@@ -5,7 +5,8 @@ export type CloseButtonProps = Omit<ComponentPropsWithRef<"button">,
   type?: never;
   children?: never;
   dangerouslySetInnerHTML?: never;
-  "aria-label"?: `Закрыть${string}`;
+  /** Close or collapse dismissals share the X control; labels stay in these two families. */
+  "aria-label"?: `Закрыть${string}` | `Свернуть${string}`;
 };
 
 /** Shared close control. The caller owns placement and all dismissal guards. */

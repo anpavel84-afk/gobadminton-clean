@@ -1,3 +1,4 @@
+import { httpsCreditUrl } from "../lib/original-http-authority";
 import { readVenueProfile, venueProfileSelectSql, type VenueProfile, type VenueProfileRow } from "./venue-profile";
 import { readPublicVenueContacts, type PublicVenueContacts } from "./public-venue-contacts";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -810,7 +811,7 @@ function mapVenue(row: VenueRow, resolvedFromVenueId?: string): VenueDto {
   const dto: VenueDto = {
     profile: readVenueProfile(row),
     publicContacts: readPublicVenueContacts(row.public_contacts),
-    cover: { uploadedUrl: row.cover_url ?? null, credit: row.cover_url && row.cover_credit_kind && row.cover_credit_text !== null ? { kind: row.cover_credit_kind, text: row.cover_credit_text, url: row.cover_credit_url } : null },
+    cover: { uploadedUrl: row.cover_url ?? null, credit: row.cover_url && row.cover_credit_kind && row.cover_credit_text !== null ? { kind: row.cover_credit_kind, text: row.cover_credit_text, url: row.cover_credit_url != null && httpsCreditUrl(row.cover_credit_url) !== null ? row.cover_credit_url : null } : null },
     id: row.id,
     name: row.name,
     cityId: row.city_id,

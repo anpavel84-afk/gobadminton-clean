@@ -1,0 +1,224 @@
+{
+  "schema": "GB_TEST_GROUPS_V1",
+  "groups": [
+    {
+      "id": "foundation",
+      "description": "Product CI foundation: bounded dependency-free static checks.",
+      "argv": [
+        "python3",
+        "-B",
+        "scripts/check_foundation.py"
+      ],
+      "cwd": ".",
+      "timeout_s": 600,
+      "tiers": [
+        "T0",
+        "T2",
+        "T3"
+      ],
+      "env_flags": [],
+      "kind": "local"
+    },
+    {
+      "id": "chatops_receiver_actions_train",
+      "description": "Receiver unittest discovery; includes testing-tools tests. Full receiver job remains separate.",
+      "argv": [
+        "python3",
+        "-B",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "scripts/chatops/tests",
+        "-p",
+        "test_actions_train*.py"
+      ],
+      "cwd": ".",
+      "timeout_s": 600,
+      "tiers": [
+        "T3"
+      ],
+      "env_flags": [],
+      "kind": "local"
+    },
+    {
+      "id": "chatops_phase",
+      "description": "Receiver phase/planner unittest discovery.",
+      "argv": [
+        "python3",
+        "-B",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "scripts/chatops/tests",
+        "-p",
+        "test_phase_*.py"
+      ],
+      "cwd": ".",
+      "timeout_s": 600,
+      "tiers": [
+        "T3"
+      ],
+      "env_flags": [],
+      "kind": "local"
+    },
+    {
+      "id": "chatops_testing_tools",
+      "description": "Offline proportionate-testing tool tests (receiver subset).",
+      "argv": [
+        "python3",
+        "-B",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "scripts/chatops/tests",
+        "-p",
+        "test_actions_train_testing_*.py"
+      ],
+      "cwd": ".",
+      "timeout_s": 600,
+      "tiers": [
+        "T3"
+      ],
+      "env_flags": [],
+      "kind": "local"
+    },
+    {
+      "id": "targeted_py",
+      "description": "Explicit existing test modules only: --tests test_x test_y; unittest mechanism from receiver.",
+      "argv": [
+        "python3",
+        "-B",
+        "-m",
+        "unittest"
+      ],
+      "cwd": "scripts/chatops/tests",
+      "timeout_s": 600,
+      "tiers": [
+        "T1",
+        "T2"
+      ],
+      "env_flags": [],
+      "kind": "local"
+    },
+    {
+      "id": "ci_source_api",
+      "description": "Product CI source (api): typecheck, lint, test:unit; admin also requires standalone Docker/path checks. CI-only representative argv; never executed locally.",
+      "argv": [
+        "pnpm",
+        "--filter",
+        "@gobadminton/api",
+        "run",
+        "test:unit"
+      ],
+      "cwd": ".",
+      "timeout_s": 1500,
+      "tiers": [
+        "T1",
+        "T2",
+        "T3"
+      ],
+      "env_flags": [],
+      "kind": "ci_only"
+    },
+    {
+      "id": "ci_source_web",
+      "description": "Product CI source (web): typecheck, lint, test:unit; admin also requires standalone Docker/path checks. CI-only representative argv; never executed locally.",
+      "argv": [
+        "pnpm",
+        "--filter",
+        "@gobadminton/web",
+        "run",
+        "test:unit"
+      ],
+      "cwd": ".",
+      "timeout_s": 1500,
+      "tiers": [
+        "T1",
+        "T2",
+        "T3"
+      ],
+      "env_flags": [],
+      "kind": "ci_only"
+    },
+    {
+      "id": "ci_source_admin",
+      "description": "Product CI source (admin): typecheck, lint, test:unit; admin also requires standalone Docker/path checks. CI-only representative argv; never executed locally.",
+      "argv": [
+        "pnpm",
+        "--filter",
+        "@gobadminton/admin",
+        "run",
+        "test:unit"
+      ],
+      "cwd": ".",
+      "timeout_s": 1500,
+      "tiers": [
+        "T1",
+        "T2",
+        "T3"
+      ],
+      "env_flags": [],
+      "kind": "ci_only"
+    },
+    {
+      "id": "ci_source_contracts",
+      "description": "Product CI source (contracts): typecheck, lint, test:unit; admin also requires standalone Docker/path checks. CI-only representative argv; never executed locally.",
+      "argv": [
+        "pnpm",
+        "--filter",
+        "@gobadminton/contracts",
+        "run",
+        "test:unit"
+      ],
+      "cwd": ".",
+      "timeout_s": 1500,
+      "tiers": [
+        "T1",
+        "T2",
+        "T3"
+      ],
+      "env_flags": [],
+      "kind": "ci_only"
+    },
+    {
+      "id": "ci_database",
+      "description": "Product CI database: PostgreSQL/Docker integration and migration/security checks.",
+      "argv": [
+        "bash",
+        "scripts/chatops/db-ci.sh"
+      ],
+      "cwd": ".",
+      "timeout_s": 3600,
+      "tiers": [
+        "T3"
+      ],
+      "env_flags": [
+        "BASE_SHA"
+      ],
+      "kind": "ci_only"
+    },
+    {
+      "id": "ci_receiver",
+      "description": "Product CI receiver: full native/helper/release-generator job, including sudo and pinned tools; local unittest subsets cannot satisfy it.",
+      "argv": [
+        "python3",
+        "-B",
+        "scripts/chatops/tests/test_ci_workflow.py"
+      ],
+      "cwd": ".",
+      "timeout_s": 600,
+      "tiers": [
+        "T3"
+      ],
+      "env_flags": [
+        "TRAIN_SOURCE_SHA",
+        "TRAIN_BASE_SHA",
+        "TRAIN_TOOLS_SHA"
+      ],
+      "kind": "ci_only"
+    }
+  ]
+}

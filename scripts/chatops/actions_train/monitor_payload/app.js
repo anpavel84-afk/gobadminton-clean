@@ -7,11 +7,19 @@ window.GBTrainMonitor = {
     var model = a.model || {}, process = a.process;
     var last = a.last_confirmed_event ? new Date(a.last_confirmed_event * 1000).toISOString() : 'unknown';
     parent.appendChild(kv([
+      ['Failure loop', (a.failure_loop || {}).status || 'not_applicable'],
+      ['Failure / brief hash', ((a.failure_loop || {}).failure_fingerprint || 'none') + ' / ' + ((a.failure_loop || {}).brief_hash || 'none')],
       ['Actions stage', (a.operation || 'not_started') + ' / ' + a.status],
       ['Workflow', a.workflow_run ? String(a.workflow_run) + ' attempt ' + a.workflow_attempt : 'not_started'],
       ['CLI process', process ? 'PID ' + process.pid + ' / start ' + process.start + (a.status === 'stale' ? ' (last observation)' : '') : 'not_started'],
       ['Provider / role', model.provider ? model.provider + ' / ' + model.role : 'unknown'],
       ['Requested / effective model', (model.requested_model || 'default') + ' / ' + (model.effective_model || 'unknown')],
+      ['Effort requested / effective', (model.requested_effort || model.effort || 'unknown') + ' / ' + (model.effective_effort || model.effort || 'unknown')],
+      ['Stage complexity', model.stage_complexity || 'legacy immutable'],
+      ['Selection reason', model.selection_reason || 'not recorded'],
+      ['Escalation', model.escalation_reason || 'none'],
+      ['Cost diagnostic', model.expense_diagnostic || 'none'],
+      ['Measured calls / tokens', model.usage ? String(model.usage.charged_calls) + ' / ' + (model.usage.tokens === null ? 'unavailable' : String(model.usage.tokens)) : 'not recorded'],
       ['Fallback', model.fallback_reason || 'not_applicable'],
       ['Last CONFIRMED event', last],
       ['Wait reason', a.wait_reason || 'not_applicable']
@@ -247,8 +255,43 @@ window.GBTrainMonitor = {
     });
   }
 
+  // External evidence metadata only; reuse the existing snapshot poll and styles.
+  function renderExternal(x) {
+    var s = $('external');
+    if (!s) { s = el('section'); s.id = 'external'; $('infra').parentNode.insertBefore(s, $('infra')); }
+    clear(s); s.appendChild(el('h2', null, 'Внешние запуски (вне слотов)'));
+    if (!x || x.available === false) { s.appendChild(el('div', 'mut', 'Данные о внешних запусках недоступны.')); return; }
+    s.appendChild(el('div', 'mut', 'Выполняется сейчас: ' + x.running));
+    if (x.stale > 0) s.appendChild(el('div', 'mut', 'без событий >15 мин: ' + x.stale));
+    var runs = x.runs || [];
+    if (x.omitted > 0) s.appendChild(el('div', 'mut', 'Показано ' + runs.length + ' из ' + (runs.length + x.omitted)));
+    if (x.truncated === true) s.appendChild(el('div', 'mut', 'Показаны не все запуски; охват может быть неполным.'));
+    if (!runs.length) { s.appendChild(el('div', 'mut', x.truncated ? 'Нет строк для отображения; наличие других запусков неизвестно.' : 'Внешних запусков нет.')); return; }
+    var states = { running: ['идёт', 'ok'], stale: ['нет событий >15 мин', 'warn'],
+      done: ['завершён', 'ok'], failed: ['ошибка', 'bad'] };
+    var kinds = { qa: 'QA', diagnosis: 'диагностика', author: 'автор' };
+    runs.forEach(function (r) {
+      var b = el('div', 'item'), title = el('div', null, r.tag), state = states[r.state];
+      if (state) title.appendChild(chip(state[0], state[1]));
+      b.appendChild(title);
+      var parts = [kinds[r.kind] || '—'];
+      if (r.role) parts.push(r.role);
+      if (r.model) parts.push(r.model);
+      parts.push('начало (прибл.): ' + (r.started_utc || 'неизвестно'));
+      parts.push('последнее событие ' + (r.last_event_utc ? ago(r.age_s) : 'неизвестно'));
+      b.appendChild(el('div', 'mut', parts.join(' · ')));
+      if (r.state === 'done') {
+        if (r.verdict) b.appendChild(chip(r.verdict, r.verdict === 'PASS' ? 'ok' : (r.verdict === 'FAIL' ? 'bad' : 'warn')));
+        if (r.reviewed_sha) b.appendChild(kv([['Коммит', sh(r.reviewed_sha)]]));
+      }
+      if (r.exit_code != null && r.exit_code !== 0) b.appendChild(el('div', 'mut', 'Код выхода: ' + r.exit_code));
+      s.appendChild(b);
+    });
+  }
+
   function render(d) {
     renderPipeline(d.pipeline);
+    renderExternal(d.external_runs);
     var f = $('fresh'), bn = $('banner');
     var stale = d.available === false || d.stale;
     f.className = 'chip ' + (stale ? 'bad' : 'ok');
@@ -264,7 +307,7 @@ window.GBTrainMonitor = {
     else if (d.source_mode === 'slots' && d.source_ok === false) { bn.hidden = false; bn.textContent = d.source_error || 'Статусы слотов недоступны.'; }
     else if (d.executor && d.executor.running === false) { bn.hidden = false; bn.className = 'warn'; bn.textContent = 'Исполнитель остановлен.'; }
     if (d.available === false) { ['now', 'backlog', 'infra', 'paused', 'done', 'doneall', 'outside'].forEach(function (k) { clear($(k)); }); renderNext({}); return; }
-    var dim = stale ? 0.55 : 1; ['now', 'backlog', 'infra', 'paused', 'next', 'done', 'doneall', 'outside'].forEach(function (k) { $(k).style.opacity = dim; });
+    var dim = stale ? 0.55 : 1; ['now', 'backlog', 'infra', 'paused', 'next', 'done', 'doneall', 'outside', 'external'].forEach(function (k) { $(k).style.opacity = dim; });
     renderNow(d); renderBacklog(d); renderInfra(d); renderPaused(d); renderNext(d); renderDone(d); renderDoneAll(d); renderOutside(d);
     $('updated').textContent = 'обновлено ' + new Date().toLocaleTimeString('ru-RU');
   }

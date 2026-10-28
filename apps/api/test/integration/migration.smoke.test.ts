@@ -82,6 +82,21 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
         "venues",
       ]);
 
+      // FR-3A additive schema: private references and own-list indexes only.
+      const recommendations = await pool.query<{table_name:string}>(`SELECT table_name FROM information_schema.tables
+        WHERE table_schema='public' AND table_name IN ('game_recommendations','game_recommendation_actions') ORDER BY table_name`);
+      expect(recommendations.rows.map(r=>r.table_name)).toEqual(["game_recommendation_actions","game_recommendations"]);
+      const recommendationFks=await pool.query<{target:string}>(`SELECT confrelid::regclass::text AS target
+        FROM pg_constraint WHERE conrelid='game_recommendations'::regclass AND contype='f' ORDER BY target`);
+      expect(recommendationFks.rows.map(r=>r.target)).toEqual(["friendships","games","users","users"]);
+      const recommendationIndexes=await pool.query<{indexname:string}>(`SELECT indexname FROM pg_indexes
+        WHERE tablename='game_recommendations' ORDER BY indexname`);
+      expect(recommendationIndexes.rows.map(r=>r.indexname)).toEqual(expect.arrayContaining([
+        "game_recommendations_direction_idx","game_recommendations_received_idx","game_recommendations_sent_idx"]));
+      const recommendationColumns=await pool.query<{column_name:string}>(`SELECT column_name FROM information_schema.columns
+        WHERE table_name='game_recommendations' ORDER BY column_name`);
+      expect(recommendationColumns.rows.map(r=>r.column_name).join(",")).not.toMatch(/contact|message|bio|seat|participation|invitation|latitude|longitude/);
+
       const hostCols = await pool.query<{ column_name: string; is_nullable: string }>(
         `SELECT column_name, is_nullable
          FROM information_schema.columns
@@ -162,6 +177,8 @@ describeIntegration("PostgreSQL/PostGIS migration smoke", () => {
         "0037_venue_cover_credit",
         "0038_public_venue_contacts",
         "0039_venue_public_profile",
+        "0040_external_http_url_storage",
+        "0041_game_recommendations",
       ]);
       const profileColumns = await pool.query("SELECT column_name,data_type,is_nullable,column_default FROM information_schema.columns WHERE table_schema='public' AND table_name='venues' AND column_name IN ('court_count','amenity_parking','amenity_showers','public_profile_updated_at') ORDER BY column_name");
       expect(profileColumns.rows).toEqual([

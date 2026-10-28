@@ -3,6 +3,7 @@ import { CloseButton } from "../CloseButton";
 import type { ReactNode } from "react";
 import { useEffect, useId, useRef, useState } from "react";
 import type { Game, VenueSummary } from "../../../lib/consumer-types";
+import { forbiddenUrlScalars, httpUrlAgreesWithOriginalAuthority } from "../../../lib/original-http-authority";
 import { venueDays, venueDayLabel } from "../../../lib/venue-popup";
 import { formatSeats } from "../../../lib/game-presentation";
 import { CreateGamePage } from "../pages/CreateGamePage";
@@ -11,27 +12,23 @@ import { VenueCover } from "../venues/VenueCover";
 import { Avatar } from "../players/ProfileComposition";
 import { GameHero, GameTerms } from "./GameDetailComposition";
 import { VenueGameActions } from "./VenueGameActions";
+import { useVenuePopupModalLifecycle } from "./VenuePopup";
+import { useDesktopMapInspector } from "./DesktopMapInspector";
 import "../../../styles/venue-popup.css";
 
 // Validate untrusted/older API data independently of server normalization.
-function hasForbiddenContactCharacters(value: string): boolean {
-  return Array.from(value).some(character => {
-    const code = character.charCodeAt(0);
-    return code <= 0x1f || (code >= 0x7f && code <= 0x9f) || character === "\\";
-  });
-}
+const hasForbiddenContactCharacters = forbiddenUrlScalars;
 function contactUrl(value: unknown, kind?: string): string | null {
   if (typeof value !== "string" || hasForbiddenContactCharacters(value)) return null;
   const raw = value.trim();
-  if (!/^https?:\/\//i.test(raw) || raw.split(/[/?#]/)[2]?.includes("@")) return null;
-  try {
-    const url = new URL(raw);
-    if (!url.hostname.startsWith("[") && (url.hostname.length > 253 || !url.hostname.split(".").every(label => /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(label)))) return null;
-    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.port || url.href.length > 300) return null;
-    const host = kind === "telegram" ? "t.me" : kind === "whatsapp" ? "wa.me" : kind === "vk" ? "vk.com" : null;
-    if (kind && (!host || url.protocol !== "https:" || url.hostname !== host || url.pathname === "/")) return null;
-    return url.href;
-  } catch { return null; }
+  if (!/^https?:\/\//i.test(raw)) return null;
+  const url = httpUrlAgreesWithOriginalAuthority(raw, hasForbiddenContactCharacters);
+  if (!url) return null;
+  if (!url.hostname.startsWith("[") && (url.hostname.length > 253 || !url.hostname.split(".").every(label => /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(label)))) return null;
+  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.port || url.href.length > 300) return null;
+  const host = kind === "telegram" ? "t.me" : kind === "whatsapp" ? "wa.me" : kind === "vk" ? "vk.com" : null;
+  if (kind && (!host || url.protocol !== "https:" || url.hostname !== host || url.pathname === "/")) return null;
+  return url.href;
 }
 export function VenuePublicContacts({ value }: { value: unknown }) {
   const row = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -98,6 +95,7 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
   venue: VenueSummary; games: readonly Game[]; gamesReady: boolean; now: number;
   onCollapse: () => void; onDeselect: () => void; embedded?: boolean; active?: boolean; coverSlot?: ReactNode;
 }) {
+  const desktop = useDesktopMapInspector();
   const [view, setView] = useState<"info" | "schedule" | "game" | "create">("info");
   const [selectedDate, setSelectedDate] = useState("");
   const [gameId, setGameId] = useState<string | null>(null);
@@ -115,50 +113,56 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
   const panel = useRef<HTMLDivElement>(null);
   const close = useRef<HTMLButtonElement>(null);
   const collapse = useRef(onCollapse); collapse.current = onCollapse;
-  useEffect(() => {
-    if (!active) return;
-    const initiator = document.activeElement;
-    const overflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    close.current?.focus();
-    const keydown = (event: KeyboardEvent) => {
-      // The portal/native dialog owns its own keyboard and focus lifecycle.
-      if (document.querySelector(".gb-venue-picker, dialog[open]")) return;
-      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); collapse.current(); }
-      if (event.key !== "Tab") return;
-      const boundary = embedded ? panel.current?.closest?.<HTMLElement>(".gb-venue-popup") ?? panel.current : panel.current;
-      const targets = [...boundary?.querySelectorAll<HTMLElement>('button, a[href], input, select, textarea, [tabindex]') ?? []].filter(target => {
-        if (target.tabIndex < 0 || target.matches(':disabled, [aria-disabled="true"], input[type="hidden"]') || target.closest('[hidden], [inert]')) return false;
-        const style = window.getComputedStyle(target);
-        return style.visibility !== 'hidden' && style.visibility !== 'collapse' && target.getClientRects().length > 0;
-      });
-      const first = targets[0]; const last = targets.at(-1);
-      if (event.shiftKey && (document.activeElement === first || !boundary?.contains(document.activeElement))) { event.preventDefault(); last?.focus(); }
-      else if (!event.shiftKey && (document.activeElement === last || !boundary?.contains(document.activeElement))) { event.preventDefault(); first?.focus(); }
-    };
-    const options = { capture: true };
-    window.addEventListener("keydown", keydown, options);
-    return () => {
-      window.removeEventListener("keydown", keydown, options); document.body.style.overflow = overflow;
-      if (initiator instanceof HTMLElement && initiator.isConnected && !initiator.closest?.("[hidden]")) initiator.focus();
-      else (document.querySelector<HTMLButtonElement>('.gb-venue-popup .gb-venue-handle') ?? document.querySelector<HTMLButtonElement>('.gb-venue-preview-button'))?.focus();
-    };
-  }, [active, embedded]);
+  const deselect = useRef(onDeselect); deselect.current = onDeselect;
+  // Desktop X closes to a clean map; mobile X still collapses to the compact card.
+  const onCloseClick = desktop ? onDeselect : onCollapse;
+  const backFromGame = () => setView(desktop ? "info" : "schedule");
+  useVenuePopupModalLifecycle({
+    active, embedded, panelRef: panel, initialFocusRef: close,
+    onEscape: () => {
+      if (desktop && currentView === "create") { setView("info"); return; }
+      if (desktop && (currentView === "game" || currentView === "schedule")) {
+        if (currentView === "game") backFromGame();
+        else setView("info");
+        return;
+      }
+      if (desktop) deselect.current();
+      else collapse.current();
+    },
+    lockBody: !desktop,
+  });
+  const openCreate = () => setView("create");
   return <>
-    {!embedded && <div className="gb-venue-sheet-backdrop" onClick={onDeselect} />}
-    <div ref={panel} className="gb-venue-sheet" data-view={currentView} role={active && !embedded ? "dialog" : undefined} aria-modal={active && !embedded ? "true" : undefined} aria-labelledby={label}>
-      {!embedded && <button type="button" className="gb-venue-handle" aria-label="Свернуть площадку" onClick={onCollapse}><span /></button>}
+    {!embedded && !desktop && <div className="gb-venue-sheet-backdrop" onClick={onDeselect} />}
+    <div ref={panel} className="gb-venue-sheet" data-view={currentView} data-desktop={desktop ? "true" : undefined} role={active && !embedded ? "dialog" : undefined} aria-modal={active && !embedded && !desktop ? "true" : undefined} aria-labelledby={label}>
+      {!embedded && !desktop && <button type="button" className="gb-venue-handle" aria-label="Свернуть площадку" onClick={onCollapse}><span /></button>}
       <header className="gb-venue-sheet-header">
-        {currentView !== "info" && <button type="button" aria-label={currentView === "game" ? "К расписанию" : "К информации о площадке"} onClick={() => setView(currentView === "game" ? "schedule" : "info")}>←</button>}
-        <h2 id={label}>{venue.name}</h2>
-        <CloseButton ref={close} className="gb-venue-sheet-close" onClick={onCollapse} />
+        {currentView !== "info" && <button type="button" className="gb-venue-sheet-back" aria-label={currentView === "game" ? (desktop ? "К площадке" : "К расписанию") : "К информации о площадке"} onClick={() => currentView === "game" ? backFromGame() : setView("info")}>
+          <span aria-hidden="true">←</span>{desktop && currentView === "game" ? " К площадке" : ""}
+        </button>}
+        <div className="gb-venue-sheet-heading">
+          {desktop && currentView === "info" && <small className="gb-venue-sheet-kicker">Площадка</small>}
+          <h2 id={label}>{venue.name}</h2>
+          {currentView !== "info" && <p className="gb-venue-sheet-header-address">{venue.address}</p>}
+        </div>
+        <CloseButton ref={close} className="gb-venue-sheet-close" onClick={onCloseClick} />
       </header>
       {currentView === "info" ? <div className="gb-venue-sheet-info">
         {coverSlot ?? <VenueCover cover={venue.cover} name={venue.name} className="gb-venue-sheet-cover" />}
         <h3>{venue.name}</h3><p>{venue.address}</p>
         <VenuePublicContacts value={venue.publicContacts} />
         {!gamesReady && <p role="status">Расписание временно недоступно</p>}
-        {gamesReady && games.length === 0 && <button type="button" className="gb-venue-sheet-primary" aria-label="Создать игру на этой площадке" onClick={() => setView("create")}>Создать игру на этой площадке<span aria-hidden="true">→</span></button>}
+        {gamesReady && games.length === 0 && (desktop
+          ? <section className="gb-venue-sheet-empty" aria-label="Ближайшие игры">
+              <h3>Ближайшие игры</h3>
+              <div className="gb-venue-sheet-empty-card">
+                <p><strong>На этой площадке пока нет игр</strong></p>
+                <p>Будьте первым, кто создаст игру и соберет компанию!</p>
+              </div>
+              <button type="button" className="gb-venue-sheet-primary" aria-label="Создать игру на этой площадке" onClick={openCreate}>Создать игру на этой площадке<span aria-hidden="true">→</span></button>
+            </section>
+          : <button type="button" className="gb-venue-sheet-primary" aria-label="Создать игру на этой площадке" onClick={openCreate}>Создать игру на этой площадке<span aria-hidden="true">→</span></button>
+        )}
         {gamesReady && days.length > 0 && <button type="button" className="gb-venue-sheet-primary" aria-label="Показать игры на этой площадке" onClick={() => setView("schedule")}>Показать игры на этой площадке<span aria-hidden="true">→</span></button>}
       </div> : currentView === "create" ? <CreateGamePage key={`${venue.cityId}:${venue.id}`} embedded initialVenue={venue} onClose={() => setView("info")} /> : currentView === "game" && game ? <div className="gb-venue-sheet-detail"><GameHero game={game} /><VenueGameActions key={game.id} gameId={game.id} /><GameTerms game={game} onVenueClick={() => setView("info")} /></div>
         : <div><h3>Игры на этой площадке</h3>

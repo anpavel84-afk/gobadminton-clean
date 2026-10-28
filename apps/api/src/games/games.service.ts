@@ -22,11 +22,60 @@ import { InvitationsService } from "../invitations/invitations.service";
 import { ParticipationsService } from "../participations/participations.service";
 import { TrainersService } from "../trainers/trainers.service";
 import { APP_ENV, DATABASE_POOL } from "../tokens";
+import { privateContactWebsite } from "../lib/original-http-authority";
 import { effectiveVenueCtes } from "../venues/effective-venue.query";
 import { eligibleGames, normalizeDiscovery, type DiscoveryInput } from "./games-discovery.query";
 import { readGamesMap } from "./games-map.read";
 import type { DiscoveryFilter } from "./games-discovery.query";
 import { GameAuthorityService } from "./game-authority.service";
+import { unrestrictedSql } from "../restrictions/policy";
+import type { UnifiedUpcomingGame } from "@gobadminton/contracts/src/unified.generated";
+
+/** Read only, inside the caller's redeemed Radar transaction. A public Game
+ * does not make participation public. Every candidate is authorized before
+ * LIMIT; Game fences serialize roster, management and moderation writers.
+ */
+export async function readRadarPlayerGames(
+  client: PoolClient,
+  viewerId: string,
+  targetId: string,
+  env: Pick<AppEnv, "SOCIAL_DIRECTORY_ENABLED" | "USER_RESTRICTIONS_INTERNAL_ENABLED" | "GAME_MODERATION_INTERNAL_ENABLED">,
+): Promise<UnifiedUpcomingGame[]> {
+  const eligible = eligibleGames(normalizeDiscovery({ temporalScope: "upcoming" }), env.GAME_MODERATION_INTERNAL_ENABLED);
+  const relationship = `(
+    ($3::boolean AND g.created_by_user_id=$2 AND EXISTS (
+      SELECT 1 FROM player_social_profiles p JOIN users u ON u.id=p.user_id
+      WHERE p.user_id=$2 AND u.status='active' AND p.directory_visible AND p.social_eligible
+        AND ${unrestrictedSql(env.USER_RESTRICTIONS_INTERNAL_ENABLED, "p.user_id", ["account.access", "profile.public", "social.directory"])}
+        AND NOT EXISTS (SELECT 1 FROM user_blocks b WHERE
+          (b.blocker_user_id=$1 AND b.blocked_user_id=$2) OR
+          (b.blocker_user_id=$2 AND b.blocked_user_id=$1))))
+    OR (EXISTS (SELECT 1 FROM participations p WHERE p.game_id=g.id AND p.user_id=$2 AND p.status='confirmed')
+      AND EXISTS (SELECT 1 FROM game_managers gm WHERE gm.game_id=g.id AND gm.user_id=$1
+        AND gm.status='active' AND gm.role IN ('owner','manager')))
+  )`;
+  const params = [viewerId, targetId, env.SOCIAL_DIRECTORY_ENABLED];
+  const from = `FROM games g JOIN effective_venues v ON v.source_id=g.venue_id
+    WHERE ${eligible.where} AND ${relationship}`;
+  const candidates = await client.query<{ id: string }>(`${effectiveVenueCtes()}
+    SELECT g.id ${from} ORDER BY g.starts_at,g.id LIMIT 3`, params);
+  const ids = candidates.rows.map(row => row.id).sort();
+  if (!ids.length) return [];
+  // Lock only the bounded distinct candidate set, in deterministic UUID order.
+  // A separate statement after the wait MUST reread all relationship predicates.
+  await client.query("SELECT id FROM games WHERE id=ANY($1::uuid[]) ORDER BY id FOR SHARE", [ids]);
+  const fresh = await client.query<GameRow>(`${effectiveVenueCtes()}
+    SELECT ${gameSelectColumns()} ${from} AND g.id=ANY($4::uuid[])
+    ORDER BY g.starts_at,g.id LIMIT 3`, [...params, ids]);
+  return fresh.rows.map(row => {
+    const game = mapGameRow(row);
+    // Explicit allowlist: never spread a GameDto (contacts, IDs, roster, geo).
+    return { id: game.id, title: game.title, activityKind: game.activityKind,
+      startsAt: game.startsAt, endsAt: game.endsAt, timezone: game.timezone,
+      cover: { uploadedUrl: game.cover?.uploadedUrl ?? null },
+      venue: { name: game.venue.name, cover: { uploadedUrl: game.venue.cover?.uploadedUrl ?? null } } };
+  });
+}
 
 export type SettlementDto =
   | {
@@ -546,6 +595,24 @@ export class GamesService {
     }
   }
 
+  /** FR-3A projection: same public discovery eligibility, no participant/contact DTO.
+   * Hold Game SHARE through the local transaction, then re-read after any wait.
+   * Missing IDs are indistinguishable from unpublished/unlisted/moderated games. */
+  async recommendationSummary(client: PoolClient, gameId: string) {
+    await client.query("SELECT id FROM games WHERE id=$1 FOR SHARE", [gameId]);
+    const eligible = eligibleGames(normalizeDiscovery({ temporalScope: "upcoming" }),
+      this.env.GAME_MODERATION_INTERNAL_ENABLED);
+    const result = await client.query<{id:string;title:string;starts_at:Date;ends_at:Date;timezone:string}>(`
+      ${effectiveVenueCtes("SELECT venue_id AS id FROM games WHERE id=$1")}
+      SELECT g.id,g.title,g.starts_at,g.ends_at,g.timezone
+      FROM games g JOIN effective_venues v ON v.source_id=g.venue_id
+      WHERE g.id=$1 AND ${eligible.where}`, [gameId]);
+    const row = result.rows[0];
+    if (row && this.env.GAME_MODERATION_INTERNAL_ENABLED && (await readModeration(client,gameId)).requestsLocked) return null;
+    return row ? { id:row.id, title:row.title, startsAt:row.starts_at.toISOString(),
+      endsAt:row.ends_at.toISOString(), timezone:row.timezone } : null;
+  }
+
   async mapPublished(filter: DiscoveryFilter, signal?: AbortSignal) {
     return readGamesMap(this.pool, filter, signal, this.env.GAME_MODERATION_INTERNAL_ENABLED);
   }
@@ -831,7 +898,7 @@ function mapGameRow(row: GameRow): GameDto {
     venue: {
       ...(row.venue_contacts_allowed ? {
         contactPhone: row.venue_contact_phone,
-        contactWebsite: row.venue_contact_website,
+        contactWebsite: privateContactWebsite(row.venue_contact_website),
         bookingNote: row.venue_booking_note,
       } : {}),
       cover: { uploadedUrl: row.venue_cover_url ?? null },

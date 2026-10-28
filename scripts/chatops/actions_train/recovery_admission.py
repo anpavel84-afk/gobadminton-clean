@@ -95,7 +95,7 @@ def parent_unchanged(a, api, f):
     a.Bridge.unchanged_issue(None, original)
 
 
-def root_admission(a, api, cache, issue, config):
+def root_admission(a, api, cache, issue, config, *, verification=None):
     p = policy(config)
     raw = issue.get('body') or ''
     marker, sep, text = raw.partition('\n')
@@ -104,6 +104,9 @@ def root_admission(a, api, cache, issue, config):
     key = payload.get('receipt')
     need(isinstance(key, str) and key in cache['receipts'], 'no root recovery receipt')
     r = cache['receipts'][key]
+    need(key == digest(r['frozen']), 'frozen recovery receipt digest mismatch')
+    from recovery import verify_frozen
+    verify_frozen(r['frozen'], verification)
     need(r['policy_hash'] == digest(p) and r['frozen']['source_sha'] == config['controller_sha'],
          'recovery delegation changed or revoked')
     task = parse_issue(issue, r, bound=r['status'] == 'successor_bound')
@@ -116,6 +119,8 @@ def root_admission(a, api, cache, issue, config):
          'ambiguous recovery publication; do not choose an arbitrary duplicate')
     cert = dict(key=key, issue=issue['number'], body_hash=digest(raw), created_at=issue['created_at'],
                 task=copy.deepcopy(task), frozen=copy.deepcopy(r['frozen']), policy_hash=r['policy_hash'])
+    if 'failure_diagnosis' in r:
+        cert['failure_diagnosis'] = copy.deepcopy(r['failure_diagnosis'])
     if r.get('successor'): need(r['successor'] == {k:cert[k] for k in ('issue','body_hash','created_at')}, 'successor binding drift')
     r['successor'] = {k:cert[k] for k in ('issue','body_hash','created_at')}
     r['status'] = 'successor_bound'
@@ -127,6 +132,14 @@ def assert_certificate(a, api, active, cert, config):
     need(cert and active.get('recovery_receipt') == cert['key'] and active['issue'] == cert['issue']
          and active['task'] == cert['task'] and cert['policy_hash'] == digest(policy(config)),
          'missing or mismatched trusted stage recovery certificate')
+    need(digest(cert['frozen']) == cert['key'], 'recovery certificate frozen digest mismatch')
+    if 'qa_evidence' in cert['frozen']:
+        from qa_equivalence import supplemental
+        f = cert['frozen']
+        need(supplemental(f['snapshot'], f['slot'], f['qa_evidence']['qa']) == f['qa_evidence'],
+             'certificate parent QA provenance mismatch')
+        need(active.get('parent_qa_provenance') == dict(receipt=cert['key'], evidence=f['qa_evidence']),
+             'successor parent QA provenance drift')
     issue = api(f'issues/{active["issue"]}')
     need(issue.get('state') == 'open' and 'pull_request' not in issue
          and issue.get('user', {}).get('id') == BOT
@@ -168,7 +181,12 @@ def claim(a, api, store, cert, config):
     active = dict(issue=cert['issue'], task=copy.deepcopy(cert['task']), fingerprint=a.fingerprint(issue),
         approved_since=issue['created_at'], phase='claimed', base=cert['frozen']['base'],
         head=cert['frozen']['head'], pr=None, ci=None, run=None, attempt=0,
-        qa=copy.deepcopy(cert['frozen']['snapshot']['qa']), recovery_receipt=cert['key'])
+        qa=(None if cert['frozen'].get('qa_provenance') else
+            copy.deepcopy(cert['frozen']['snapshot']['qa'])), recovery_receipt=cert['key'])
+    if 'qa_evidence' in cert['frozen']:
+        active['parent_qa_provenance'] = dict(receipt=cert['key'],
+            evidence=copy.deepcopy(cert['frozen']['qa_evidence']))
+        active['qa'] = None  # parent evidence never grants current-task QA permission
     assert_certificate(a, api, active, cert, config)
     store.data['active'] = active
     store.save()

@@ -150,7 +150,7 @@ describe("VK ID OAuth 2.1 request shapes", () => {
           email: "player@example.com",
           first_name: "Иван",
           last_name: "Иванов",
-          avatar: "https://example.test/avatar.png",
+          avatar: "https://sun1-1.userapi.com/photo",
         },
       });
     });
@@ -166,8 +166,26 @@ describe("VK ID OAuth 2.1 request shapes", () => {
       subject: "42",
       email: "player@example.com",
       displayName: "Иван Иванов",
-      avatarUrl: "https://example.test/avatar.png",
+      avatarUrl: "https://sun1-1.userapi.com/photo",
     });
+  });
+
+  it("stores null when the VK avatar misses the shared authority grammar or allowlist", async () => {
+    const rejected = [
+      "https://vk.com@evil.example/",
+      "https://user:pass@sun1-1.userapi.com/a",
+      "https:///@sun1-1.userapi.com/a",
+      "https://sun1-1.userapi.com/a\\b",
+      "https://sun1-1.userapi.com/a\n",
+      "https://sun1-1.userapi.com/a\u0085",
+      "https://example.test/avatar.png",
+      "http://sun1-1.userapi.com/photo",
+    ];
+    for (const avatar of rejected) {
+      vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ user: { user_id: "42", avatar } })));
+      const identity = await new VkAuthProvider(makeEnv()).fetchVerifiedIdentity({ accessToken: "vk-access-token" });
+      expect(identity.avatarUrl, avatar).toBeNull();
+    }
   });
 });
 
@@ -224,5 +242,18 @@ describe("Yandex adapter contract remains unchanged", () => {
     expect(identity.provider).toBe("yandex");
     expect(identity.subject).toBe("7");
     expect(identity.issuerNamespace).toBe("yandex:oauth:ya-app-id");
+    expect(identity.avatarUrl).toBeNull();
+  });
+
+  it("keeps an allowlisted Yandex avatar and drops one that breaks the shared grammar", async () => {
+    const kept = "https://avatars.yandex.net/get-yapic/abc/islands-200";
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({
+      id: "7", default_avatar_id: "abc", is_avatar_empty: false,
+    })));
+    expect((await new YandexAuthProvider(makeEnv()).fetchVerifiedIdentity({ accessToken: "ya" })).avatarUrl).toBe(kept);
+    for (const default_avatar_id of ["abc\\evil", "abc\n", "abc\u0085"]) {
+      vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ id: "7", default_avatar_id, is_avatar_empty: false })));
+      expect((await new YandexAuthProvider(makeEnv()).fetchVerifiedIdentity({ accessToken: "ya" })).avatarUrl, default_avatar_id).toBeNull();
+    }
   });
 });

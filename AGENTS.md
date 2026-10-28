@@ -1,77 +1,28 @@
-# GoBadminton — правила для участников и агентов
+# GoBadminton — Lean Delivery v2 · Mode A
 
-## Непересекаемая граница проекта
+Основа: принятое Owner приложение D GoBadminton_Lean_Architecture_v2_2026-10-27.md, Drive file 1blMccmPscHYBXHQ8zLzCr1qR_0KjHOZf; прямое решение Owner 28.10.2026.
 
-Этот репозиторий — **GoBadminton**, самостоятельный greenfield-продукт. BadmintonOpen — другой проект. Его пути, CMS, репозитории, серверы, данные и задачи не являются источником реализации. Не открывать и не менять их в рамках GoBadminton. Старые launcher/context-файлы, утверждающие обратное, опровергнуты владельцем: см. OD-001.
+Текущий этап: integration branch dev; автор Cursor Auto; независимый QA Codex Sol Medium. Сначала #337/PR338 → #284 → #308 до DEV ACCEPTED. C5 выключен и не включается; #361 припаркован. Mode B/main/cleanup/дальнейшая миграция отложены.
 
-## Обязательные project rules
+Приоритет: прямое решение Owner → эти короткие правила → конкретная Issue → применимые предметные документы. EOM 1.4, SMART_ROUTING и C5 Master Plan исторические в части заменённой организации исполнения. Продуктовые инварианты, права, приватность, вместимость игр, миграции, утверждённые макеты и специальные правила модулей сохраняются.
 
-Перед значимой работой прочитать [индекс правил](docs/rules/README.md), прежде всего [Project Record & Handoff Policy](docs/rules/PROJECT_RECORD_POLICY.md).
+**GoBadminton: продукт прежде инфраструктуры.**
 
-Ключевой принцип: **Chat is transport, GitHub is durable project record.**
+Работаем в одном CLEAN-репозитории. Требование и критерии находятся в канонической Issue. Один source writer одновременно. Продолжение исправления остаётся в той же Issue/PR; новый номер не обнуляет расходы и историю.
 
-Prompts, рабочие artifacts, handoffs, review/evidence и принятые документы должны иметь durable GitHub representation согласно правилам. Значимый результат не должен оставаться только в чате, временном attachment или sandbox.
+Автор по умолчанию Cursor Auto, если Owner выбрал иначе — указанный доступный квалифицированный provider. Источник правил и конфигурации — зафиксированный pipeline revision текущего запуска. Исторические документы в archive не являются текущими инструкциями.
 
-## Cursor / implementation runtime
+Автор меняет назначенные исходники в своей рабочей копии, не live runtime и не PROD. Обычные OPS-исходники разрешены в явно указанном scope. Публикацию, merge, установку и deploy выполняет trusted process. Секреты не печатаются и не добавляются в Git.
 
-Cursor является частью GoBadminton delivery system.
+Пропорциональная проверка: до QA — только адресные deterministic checks затронутой функции и подтверждённых рисков. Не наращивать число тестов, синтетических сценариев и проверочных матриц без конкретной причины; не повторять всю матрицу после каждой небольшой правки. Один независимый reviewer проверяет содержательный кандидат; после ремонта проверяются конкретные findings и связанные изменения, принятые проверки неизменённого кода переиспользуются. Обязательные Product CI, security checks и DEV smoke сохраняются. Как только кандидат готов и прошёл применимые gates — выпускать DEV и сразу передавать Owner на пользовательское тестирование, явно указывая NOT_TESTED; исчерпывающая синтетическая проверка не является условием раннего Owner UAT. Авторская самопроверка не считается независимой QA. Antigravity и Codex — альтернативные проверяющие, не обязательная пара для каждой задачи.
 
-**Current primary execution host:** Germany VPS `vmi3510488`.
+Понятный FAIL возвращается автору с точным логом/замечанием. Нет обязательной Astra-диагностики обычного теста. OD-016: фиксированного потолка author passes нет в разрешённой обычной задаче при доказанном прогрессе; фактические попытки, расходы и FAIL сохраняются. Два последовательных прохода без улучшения тех же блокеров останавливают слепой повтор стратегии: нужны адресные deterministic evidence и новый подход. Реальные provider/cost limits, неизвестные эффекты, второй writer и границы данных/PROD остаются обязательными стопами. High назначается предметно для подтверждённо сложной задачи, не по имени каталога.
 
-- canonical source: `anpavel84-afk/gobadminton-clean`; task worktrees: `/srv/gobadminton-clean/worktrees`;
-- current PM task board: GitHub Projects/Issues; checks and release: GitHub Actions;
-- implementation: task-scoped Cursor or Codex CLI on Germany, invoked under authorized PM assignment;
-- GitHub source write transport: repository-specific SSH identity via `github-gobadminton-clean`;
-- legacy Clean Runner/Autopilot are retired from active task execution; never start a second writer;
-- PLAN is a control/viewing workstation, not a model executor;
-- `/srv/gobadminton` is live backend/deployment material, not the development checkout.
+Процессная ошибка, продуктовый FAIL, лимит попыток и неизвестный внешний эффект различаются. Завершённый протокольный сбой не удерживает writer. Неизвестный push/deploy сначала проверяется в целевой системе. Старые UNKNOWN не стираются и не replay; independent work не ждёт их полной исторической реконструкции.
 
-Repository access does not grant product/runtime authority. The authorized GitHub Issue/assignment limits code changes, GitHub Actions gates DEV release, and PROD remains subject to separate Owner GO.
+До пяти Antigravity calls на canonical Issue за сутки UTC, без общего дневного потолка. No-call, повторы чтения логов и parser replay не выдумываются как оплаченные model calls. Неизвестный расход не объявляется нулевым. Новые деньги/подписки требуют Owner.
 
-## Frontend visual authority
+DONE означает выполненные критерии, принятые CI/QA, DEV release и применимый smoke. Merge, exit=0 и слово PASS по отдельности не достаточны. PROD — только отдельное точное решение Owner.
 
-Любая работа в `apps/web/**` с визуальной/композиционной частью подчиняется Owner rule **Style Guide first**:
-- `docs/decisions/OWNER_DECISION_FRONTEND_STYLE_GUIDE_FIRST_V001.md`;
-- `docs/operations/FRONTEND_STYLE_GUIDE_FIRST_V001.md`;
-- frozen Figma Make `#guide` / `#construction-kit`.
+В первоначальном Mode A следующую независимую разрешённую задачу после DONE/BLOCKED назначает PMA; автоматическая очередь отложена. Если нужен Owner, сообщить конкретное решение, а не требовать micro-GO для стандартного шага. Не создавать новый framework, scheduler или поток review без необходимости для текущего результата.
 
-Сначала проверить существующий canonical pattern; новый визуальный паттерн допустим только как документированный `STYLE_GUIDE_GAP` или после явного `OWNER_VISUAL_OVERRIDE`. Старый frontend-код не является presentation authority.
-
-При работе через Cursor обязательно:
-1. прочитать [ChatOps route](docs/operations/chatops/README.md); legacy `CURSOR.md` отсутствует в Clean extraction;
-2. прочитать [PM / GitHub Projects и Issues](docs/operations/chatops/PM-CHEATSHEET.md); legacy `.cursor/rules/` отсутствует в Clean extraction;
-3. пройти [Cursor onboarding](docs/governance/CURSOR_ONBOARDING.md);
-4. открыть **exact active assignment**, а не выбирать задачу по памяти/дате;
-5. работать только в выделенном GoBadminton Clean worktree на Germany VPS под `/srv/gobadminton-clean/worktrees`; PLAN не исполняет модельные задачи;
-6. публиковать результат через GitHub branch/PR + durable handoff.
-
-Cursor/CLI/model не дают authority сами по себе. Scope и effects задаются Owner/PM assignment и canonical project rules.
-
-## Загрузка контекста
-
-Прочитать [решения владельца](docs/manifest/OWNER_DECISIONS.md), [манифест](docs/manifest/PROJECT_MANIFEST.md), [bootstrap](docs/governance/BOOTSTRAP.md), [архитектуру](docs/architecture/OVERVIEW.md), [границы модулей](docs/architecture/MODULE_BOUNDARIES.md) и документы точного текущего среза. Не требуется перечитывать всю историю чатов.
-
-Прямое поручение владельца имеет приоритет в его явной области. Технические решения v1 приняты архитектором в пределах делегирования OD-006. Продуктовые предположения отдельно отмечены, не выдаются за слова владельца.
-
-## Работа
-
-1. Проверить фактический repository, branch, HEAD и незакоммиченные изменения. Не стирать чужую работу, не делать force push.
-2. Указать scope, точный базовый commit, ожидаемые файлы, проверки и способ отката. Не запускать второго writer поверх неизвестного активного writer.
-3. Не расширять MVP платежами, MAX/Сбер, чатами, клубной ERP, бронированием кортов или мультиспортом из старых концепций.
-4. Приложения используют API, но не БД. Авторизация и инварианты мест проверяются сервером, а не UI. Секреты не попадают в shared packages или клиентские bundles.
-5. Обновлять документацию и контракт вместе с изменением поведения. Архитектурное изменение оформляется новым ADR с последствиями и совместимостью.
-6. Не сообщать PASS без выполненной проверки. Самопроверка автора не является независимым QA. Наличие файла не означает реализацию или deployment.
-7. Implementation получает отдельный ограниченный slice; не переходить к следующему автоматически.
-8. Перед завершением существенной работы проверить continuity: новый ИИ/новая команда должны уметь продолжить проект по репозиторию, exact permalinks и разрешённым внешним references без обязательного чтения старого чата.
-
-## Полномочия и источники
-
-Репозиторий хранит продуктовые и инженерные документы. Если используется Agent Agency Hub, его Project/Task/Mission/Run/Result состояние не заменяется GitHub-таблицами или чатами. Этот файл не создаёт Employee, membership, runtime binding или Mission и не меняет Agency Core.
-
-Долгие handoff-пакеты, prompts и рабочие deliverables публиковать как versioned GitHub artifacts; в чат возвращать короткий итог и exact permalink. Не использовать владельца как постоянного курьера между агентами.
-
-Нельзя самостоятельно оформлять договоры, совершать платежи, подключать production OAuth, публиковать приложения или разворачивать production под видом подготовки структуры.
-
-## Постоянный продуктовый бэклог · Owner 2026-10-10
-
-Перед передачей любого продуктового замечания в работу PM регистрирует или находит его постоянный `GB-###` в GitHub Issue по [ChatOps / Projects route](docs/operations/chatops/PM-CHEATSHEET.md). Legacy `docs/product/backlog/README.md`, `REGULATION.md` и `ROLES.md` не включены в Clean extraction; исторические GB-номера сохраняются как references в Issue, без импорта старого реестра. Код, независимый QA, публикация и приёмка Owner — отдельные факты. Задачи и старые номера не удаляются. Технические Runner/V3 ID связываются с GB-номером и не заменяют его. Реестр не даёт новых прав на выполнение, деплой или снятие защитных ограничений.

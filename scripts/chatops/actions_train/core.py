@@ -17,11 +17,12 @@ REPO = 'anpavel84-afk/gobadminton-clean'
 REPO_ID = 1416250340
 OWNER = 318610566
 SINCE = '2026-10-15T02:27:00+00:00'
-PINS = {'autonomous_issues.py': '8d8baae3089f0a0cafeb047af8d9241dbc756be6a7b30bdc6306ee389361f2fe',
-        'slots.py': 'e586703954551d5af212c0f347bb83679cb8cdecffa4e48465f3889df318ad5a',
+PINS = {'autonomous_issues.py': 'f3ca85b4392fa1e2ba76a09ec1140d78ebc6c708ba42397bee047184fec3ebe0',
+        'slots.py': '3c6d910ccdaa5d482a1cf05c9330f35ef5c9a5aabd5b14ce88d4033c71e144ce',
         'check_foundation.py': 'c2975b19bd46d00acbdbc08227545b8f9c9501d7b8e8783e9b397751c612bd13'}
 RECOVERY_STAGES = ('diagnose', 'task_review')
-STAGES = ('claim', 'author', 'publish', 'qa', 'ci', 'integrate', 'promote', 'dev') + RECOVERY_STAGES
+STAGES = ('failure_diagnosis', 'claim', 'author', 'publish', 'qa', 'ci', 'integrate', 'promote', 'dev',
+          'qa_qualification', 'product_qa') + RECOVERY_STAGES
 PROFILES = ('auto', 'codex', 'cursor', 'agy')
 SHA = re.compile('[0-9a-f]{40}')
 
@@ -32,6 +33,12 @@ class Retry(Refused):
     def __init__(self, reason, after=30):
         super().__init__(reason)
         self.after = max(1, int(after))
+
+class SubmissionFailed(Refused):
+    """A definitive per-request HTTP validation refusal, not an authority failure."""
+
+class SubmissionUnknown(Retry):
+    """The HTTP submission may have succeeded; never retry within this pass."""
 
 def need(ok, reason):
     if not ok:
@@ -61,7 +68,18 @@ def live():
         modules.append(module)
     need(hashlib.sha256((HERE / 'live/check_foundation.py').read_bytes()).hexdigest()
          == PINS['check_foundation.py'], 'foundation drift')
-    return modules[1], modules[0]
+    # Preserve the pinned parser, adding the bounded AGY-author admission at
+    # its public entry point for legacy V2 tasks as well as cost-policy tasks.
+    issues, slots = modules[1], modules[0]
+    validate_issue = issues.validate_issue
+    def admitted_issue(*args, **kwargs):
+        task = validate_issue(*args, **kwargs)
+        if (any(r.split(':')[0] == 'agy' for r in task.get('author_routes', []))
+                and not executable_independent_qa(task, slots.MODEL_ADAPTER)):
+            raise issues.Hold('AGY author requires an executable independent non-agy QA route')
+        return task
+    issues.validate_issue = admitted_issue
+    return issues, slots
 
 def safe_credential(value):
     # Transport/header safety only. GitHub authenticates the opaque token; clients
@@ -113,11 +131,16 @@ class API:
                         delay = 60
                     raise Retry('GitHub rate/permission response ' + str(error.code), max(1, delay)) from None
                 if error.code < 500:
-                    raise Refused('GitHub response ' + str(error.code)) from None
+                    specific = (data is not None and path == 'actions/workflows/train-stage.yml/dispatches'
+                                and error.code in (400, 409, 422))
+                    kind = SubmissionFailed if specific else Refused
+                    raise kind('GitHub response ' + str(error.code)) from None
             except (urllib.error.URLError, TimeoutError, ConnectionError):
                 pass
             if data is not None or method not in (None, 'GET') or attempt == 2:
-                raise Retry('API unavailable; reconcile before retry') from None
+                kind = (SubmissionUnknown if data is not None
+                        and path == 'actions/workflows/train-stage.yml/dispatches' else Retry)
+                raise kind('API unavailable; reconcile before retry') from None
             time.sleep(2 ** attempt)
 
     def pages(self, path, key=None):
@@ -184,12 +207,56 @@ def request(value):
     need(value['head'] is None or isinstance(value['head'], str) and SHA.fullmatch(value['head']), 'invalid head')
     need(value['profile'] in PROFILES, 'unknown profile')
     need(safe_credential(value['gh_token']), 'invalid API credential')
+    if value['stage'] == 'qa_qualification':
+        need(value['slot'] == 'slot2' and value['issue'] == 29 and value['phase'] == 'idle'
+             and value['attempt'] == 0 and value['profile'] == 'agy' and value['head'] is not None,
+             'invalid bounded QA qualification request')
+    if value['stage'] == 'product_qa':
+        # Logical slot carries UID978 executor home only; provider is role/capability, not slot==slot2.
+        # Issue/head/attempt come from authorized admission (any positive Issue + exact SHA); not fixed 346.
+        need(value['slot'] == 'slot2' and type(value['issue']) is int and 1 <= value['issue'] <= 10**9
+             and value['phase'] == 'idle' and 1 <= value['attempt'] <= 3 and value['profile'] == 'agy'
+             and isinstance(value['head'], str) and SHA.fullmatch(value['head']),
+             'invalid bounded product QA request')
     return value
 
 def binding(req):
     return {k: v for k, v in req.items() if k not in ('gh_token', 'run', 'run_attempt')}
 
-def route(slots, task, role, profile, budget, slot):
+_CODEX_MODELS = ('gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-luna')
+
+
+def _codex_model_effort_admitted(model, effort):
+    return (model in _CODEX_MODELS and effort in ('medium', 'high')
+            and (model != 'gpt-6-luna' or effort == 'medium'))
+
+
+def executable_independent_qa(task, model_adapter=None, *, policy=None):
+    """Static QA resolver admission, ignoring only runtime quota/availability.
+
+    Run the actual ordered QA walk with permissive availability and quota.
+    Cursor QA is unqualified; AGY cannot review any listed AGY author.
+    Passing a validated policy avoids recursion from validate_policy.
+    """
+    from types import SimpleNamespace
+    from cost_policy import _selection, validate_policy
+    slots = SimpleNamespace(
+        MODEL_ADAPTER=({_model: 'codex' for _model in _CODEX_MODELS}
+                       if model_adapter is None else model_adapter), UNKNOWN=object())
+    budget = SimpleNamespace(remaining=lambda *args: 1, used=lambda *args: 0)
+    view = task
+    try:
+        if 'routing_policy' in task:
+            p = policy if policy is not None else validate_policy(task)
+            preferred, rationale = _selection(p, task, 'qa')
+            view = dict(task, qa_routes=[preferred, *rationale['approved_fallback_routes']])
+        choice = _route_immutable(slots, view, 'qa', 'auto', budget, 'slot2', admission=True)
+        return choice['provider'] == 'codex'
+    except (Refused, ValueError):
+        return False
+
+
+def _route_immutable(slots, task, role, profile, budget, slot, task_hash=None, *, admission=False):
     """Choose a model by immutable stage preferences, not by relative token usage.
 
     V1 scalar-model Issues retain their previous route. For new V2 stage routes,
@@ -198,6 +265,7 @@ def route(slots, task, role, profile, budget, slot):
     sandboxed adapters are actually qualified, only Codex may execute.
     """
     need(role in ('author', 'qa'), 'invalid route role')
+    need(not admission or role == 'qa', 'static admission is QA-only')
     stage_key = 'author_routes' if role == 'author' else 'qa_routes'
     if stage_key in task:
         need(task.get('work_kind') in ('architecture', 'implementation', 'ux', 'contract', 'test')
@@ -216,17 +284,77 @@ def route(slots, task, role, profile, budget, slot):
             # Preserve the existing Codex permission/landlock guarantees.
             # Other providers can be enabled ONLY alongside a reviewed native
             # sandbox adapter; merely flipping an Adapter flag cannot mint it.
+            if provider == 'cursor':
+                need(model == 'auto' and effort is None and role == 'author', 'unqualified Cursor role/model')
+                from native_cursor import available
+                ok, why = available(slot, task_hash or digest(task))
+                if ok:
+                    left = budget.remaining('cursor', role, slot)
+                    ok = left is not slots.UNKNOWN and left > 0
+                    why = 'Cursor author budget UNKNOWN/exhausted' if not ok else why
+                if not ok:
+                    refusal[entry] = why; continue
+                return dict(profile=profile, provider='cursor', requested_model='auto', effective_model='Auto',
+                            underlying_model=None, effort=None, role=role, work_kind=task['work_kind'],risk=task['risk'],
+                            fallback_reason=('previous preferred providers unavailable' if refusal else None),
+                            unavailable=refusal, remaining_calls=left, used_calls=budget.used('cursor', role, slot))
+            if provider == 'agy' and role == 'author':
+                from native_antigravity_author import available, MODELS as AUTHOR_MODELS
+                if model not in AUTHOR_MODELS or effort is not None:
+                    refusal[entry] = 'Antigravity author role/model/effort unsupported'
+                    continue
+                if not executable_independent_qa(task, slots.MODEL_ADAPTER):
+                    refusal[entry] = 'AGY author requires an executable independent non-agy QA route'
+                    continue
+                ok, why = available(slot, task_hash or digest(task), model=model)
+                if not ok:
+                    refusal[entry] = why; continue
+                try:
+                    left = budget.remaining('agy', 'author', slot)
+                    used = budget.used('agy', 'author', slot)
+                    ok = left is not slots.UNKNOWN and type(left) in (int, float) and left > 0
+                except Exception:
+                    ok = False
+                if not ok:
+                    refusal[entry] = 'Antigravity author budget UNKNOWN/exhausted'; continue
+                return dict(profile=profile, provider='agy', requested_model=model, effective_model=model,
+                            underlying_model=None, effort=None, role=role, work_kind=task['work_kind'], risk=task['risk'],
+                            fallback_reason=('previous preferred providers unavailable' if refusal else None),
+                            unavailable=refusal, remaining_calls=left, used_calls=used)
+            if (provider == 'agy' and role == 'qa'
+                    and any(r.split(':')[0] == 'agy' for r in task.get('author_routes', []))):
+                refusal[entry] = 'independent QA must be a different provider'
+                continue
+            if provider == 'agy':
+                from native_antigravity import MODELS as AGY_MODELS
+                if role != 'qa' or model not in AGY_MODELS or effort is not None:
+                    refusal[entry] = 'Antigravity role/model/effort not supported by native QA adapter'
+                    continue
+                from native_antigravity import available
+                ok, why = ((True, 'static admission') if admission else
+                           available(slot, task_hash or digest(task), model=model))
+                # Exact model admission and executor qualification remain mandatory.
+                # A route string alone cannot charge a budget or start a provider.
+                if not ok:
+                    refusal[entry] = why; continue
+                left = budget.remaining('agy', role, slot)
+                if left is slots.UNKNOWN or left <= 0:
+                    refusal[entry] = 'Antigravity QA budget UNKNOWN/exhausted'; continue
+                return dict(profile=profile, provider='agy', requested_model=model, effective_model=model,
+                            underlying_model=None, effort=None, role=role, work_kind=task['work_kind'], risk=task['risk'],
+                            fallback_reason=('previous preferred providers unavailable' if refusal else None),
+                            unavailable=refusal, remaining_calls=left, used_calls=budget.used('agy', role, slot))
             if provider != 'codex':
                 refusal[entry] = 'native sandbox adapter not installed'
                 continue
             if model not in slots.MODEL_ADAPTER or slots.MODEL_ADAPTER[model] != provider:
                 refusal[entry] = 'exact Codex model not supported by installed bridge'
                 continue
-            need(model in ('gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-luna')
-                 and effort in ('medium', 'high'), 'model/effort out of closed route registry')
-            if model == 'gpt-6-luna':
-                need(effort == 'medium', 'Luna effort not admitted')
-            ok, why = slots.adapter_status(provider, role, budget, slot)
+            need(model in _CODEX_MODELS and effort in ('medium', 'high'),
+                 'model/effort out of closed route registry')
+            need(_codex_model_effort_admitted(model, effort), 'Luna effort not admitted')
+            ok, why = ((True, 'static admission') if admission else
+                       slots.adapter_status(provider, role, budget, slot))
             if not ok:
                 refusal[entry] = why
                 continue
@@ -268,30 +396,105 @@ def route(slots, task, role, profile, budget, slot):
                 unavailable=refusals, remaining_calls=budget.remaining(name, role, slot),
                 used_calls=budget.used(name, role, slot))
 
+def route(slots, task, role, profile, budget, slot):
+    from cost_policy import selection, annotate_legacy
+    if "routing_policy" in task:
+        try:
+            approved, rationale = selection(task, role)
+        except ValueError as error:
+            raise Refused(str(error)) from None
+        # Internal routing view only; the immutable task/checkpoint is never changed.
+        fallback = rationale.pop('approved_fallback_routes', [])
+        view = dict(task, **{role + "_routes": [approved, *fallback]})
+        choice = _route_immutable(slots, view, role, profile, budget, slot, task_hash=digest(task))
+        choice.update(rationale)
+        choice["requested_route"] = approved
+    else:
+        choice = _route_immutable(slots, task, role, profile, budget, slot)
+        choice.update(annotate_legacy(task, choice))
+        choice["requested_route"] = choice["provider"] + ":" + str(choice["requested_model"] or "default") + ":" + str(task.get("effort", "high"))
+    if choice.get("remaining_calls") == float("inf"):
+        choice["remaining_calls"] = None
+        choice["budget_policy"] = "unlimited_daily_metered"
+    else:
+        choice["budget_policy"] = "finite_daily"
+    choice["requested_effort"] = choice["effort"]
+    choice["effective_effort"] = choice["effort"]
+    return choice
+
+def task_review_route(slots, task, budget, slot):
+    """Task-definition review has a Codex JSON contract, using admitted QA routes."""
+    choice = route(slots, task, 'qa', 'codex', budget, slot)
+    need(choice['provider'] == 'codex', 'task_review requires an admitted compatible Codex route')
+    return dict(choice, stage_role='task_review', permission_role='qa')
+
+def diagnosis_route(slots, task, budget, slot):
+    """#218 uses qualified Codex QA permissions/ledger, never ordinary QA selection."""
+    from failure_diagnosis import policy
+    policy(task)
+    need(slots.MODEL_ADAPTER.get('gpt-6-astra') == 'codex', 'Astra exact model unavailable')
+    ok, why = slots.adapter_status('codex', 'qa', budget, slot)
+    need(ok, 'Astra failure diagnosis unavailable: ' + str(why))
+    left = budget.remaining('codex', 'qa', slot)
+    return dict(profile='codex', provider='codex', role='failure_diagnosis', permission_role='qa',
+                requested_route='codex:gpt-6-astra:high', requested_model='gpt-6-astra',
+                effective_model='gpt-6-astra', effort='high', requested_effort='high',
+                effective_effort='high', fallback_reason=None, unavailable={},
+                selection_reason='mandatory_source_FAIL_218', used_calls=budget.used('codex','qa',slot),
+                remaining_calls=None if left == float('inf') else left,
+                budget_policy='unlimited_daily_metered' if left == float('inf') else 'finite_daily')
+
 def next_stage(active):
     if not active or active['phase'] == 'done':
         return None
     p = active['phase']
     if p == 'claimed': return 'author'
     if p == 'candidate': return 'publish'
-    if p == 'pr_wait': return 'qa'
-    if p == 'qa': return 'ci' if (active.get('qa') or {}).get('verdict') == 'PASS' else 'author'
-    if p == 'ci': return 'author' if active.get('ci_failure') else 'integrate' if active.get('ci') else 'ci'
+    from failure_diagnosis import next_stage as repair_stage
+    if p == 'pr_wait': return repair_stage(active) if active.get('deterministic_failure') else 'qa'
+    if p == 'qa': return 'ci' if (active.get('qa') or {}).get('verdict') == 'PASS' else repair_stage(active)
+    if p == 'ci': return repair_stage(active) if active.get('ci_failure') else 'integrate' if active.get('ci') else 'ci'
     if p == 'promoting': return 'promote'
     if p == 'dev_wait': return 'dev'
     return None
 
 def plan(a, s, snapshot, candidates, profile='auto'):
-    """One finite pass. Issues are durable intent; no dispatch queue is treated as a task store."""
+    """One finite pass. Issues are durable intent; no dispatch queue is treated as a task store.
+
+    Owner DIRECT 2026-10-27: new author claims are globally sequential. Existing
+    non-writer stages (immutable QA/CI/integrate) continue on their slot. Historical
+    UNKNOWN writer occupancy blocks new authors without clearing or replaying.
+    """
     occupied, completed, blocked = [], set(), set()
+    writer_occupied = False
     for card in snapshot['slots'].values():
         completed.update(card['done'])
         blocked.update(card['parked'])
         active = card.get('active')
-        if card.get('reservation'):
-            occupied.append(card['reservation'])
+        pending = card.get('pending')
+        reservation = card.get('reservation')
+        if reservation:
+            occupied.append(reservation)
+            writer_occupied = writer_occupied or s.record_is_writer(reservation)
         if active and active['phase'] != 'done':
-            occupied.append(s.task_record(active['issue'], active['task']))
+            # Admitted stage lease/reservation is authoritative: QA while phase is still
+            # pr_wait must not look like a live source writer.
+            if reservation is not None:
+                writer = s.record_is_writer(reservation)
+            else:
+                writer = s.is_source_writer_phase(active.get('phase'))
+            occupied.append(s.task_record(active['issue'], active['task'], writer=writer))
+            writer_occupied = writer_occupied or writer
+        if isinstance(pending, dict):
+            # Receiver snapshot includes binding; synthetic/partial cards may only have
+            # top-level stage or reservation. Missing stage evidence fails closed.
+            binding = pending.get('binding')
+            stage = binding.get('stage') if isinstance(binding, dict) else pending.get('stage')
+            if stage is not None:
+                if s.is_source_writer_stage(stage):
+                    writer_occupied = True
+            elif reservation is None:
+                writer_occupied = True
     out = []
     # Prefer the longest-idle slot, not slot1 on every empty-queue wake.
     def last_confirmed(item):
@@ -301,11 +504,40 @@ def plan(a, s, snapshot, candidates, profile='auto'):
         if not card['owned']:
             continue
         pending = card.get('pending')
+        product = card.get('product_qa')
+        # Product QA uses a separate ops ledger; historical slot2 pending may remain.
+        # Generation binds to product_qa_ops (trusted proposal source), never legacy slot journal.
+        if snapshot.get('mode') == 'active' and name == 'slot2' and product:
+            ops = snapshot.get('product_qa_ops')
+            ops_gen = ops.get('generation', 0) if isinstance(ops, dict) else None
+            need(set(product) == {'slot','issue','stage','phase','head','attempt','generation','profile'}
+                 and product['slot'] == name
+                 and type(product['issue']) is int and 1 <= product['issue'] <= 10**9
+                 and product['stage'] == 'product_qa' and product['phase'] == 'idle'
+                 and type(product['attempt']) is int and 1 <= product['attempt'] <= 3
+                 and product['profile'] == 'agy'
+                 and isinstance(product['head'], str) and SHA.fullmatch(product['head'])
+                 and type(product['generation']) is int and 0 <= product['generation'] <= 10**9
+                 and (ops_gen is None or product['generation'] == ops_gen),
+                 'invalid root product QA proposal')
+            out.append(dict(product))
         if pending:
             if pending['status'] == 'unknown' and pending.get('recoverable', True) and pending['binding']['stage'] in ('publish', 'integrate', 'promote', 'dev', 'qa'):
                 out.append({k: v for k, v in pending['binding'].items() if k != 'action'})
             continue
         active = card.get('active')
+        qualification = card.get('qa_qualification')
+        # Legacy canary qualification remains bound to slot2 executor home (unchanged).
+        if snapshot.get('mode') == 'active' and name == 'slot2' and active is None and qualification:
+            need(set(qualification) == {'slot','issue','stage','phase','head','attempt','generation','profile'}
+                 and qualification['slot'] == name and qualification['issue'] == 29
+                 and qualification['stage'] == 'qa_qualification' and qualification['phase'] == 'idle'
+                 and qualification['attempt'] == 0 and qualification['profile'] == 'agy'
+                 and qualification['generation'] == card['generation']
+                 and isinstance(qualification['head'], str) and SHA.fullmatch(qualification['head']),
+                 'invalid root QA qualification proposal')
+            out.append(dict(qualification))
+            continue  # Only this free slot; no product claim/author checkpoint is manufactured.
         if active and active['phase'] != 'done':
             stage = next_stage(active)
             if stage:
@@ -316,8 +548,10 @@ def plan(a, s, snapshot, candidates, profile='auto'):
         from queue_diagnostics import provider_ready
         if not provider_ready(card, profile):
             continue
+        if writer_occupied:
+            continue  # global one source writer; do not claim a second author
         for issue, task in candidates:
-            record = s.task_record(issue, task)
+            record = s.task_record(issue, task, writer=True)
             if issue in completed | blocked or any(s.conflicts(record, r) for r in occupied):
                 continue
             if not set(task.get('depends_on', [])) <= completed:
@@ -325,5 +559,6 @@ def plan(a, s, snapshot, candidates, profile='auto'):
             out.append(dict(slot=name, issue=issue, stage='claim', phase='idle', head=None,
                             attempt=0, generation=card['generation'], profile=profile))
             occupied.append(record)
+            writer_occupied = True
             break
     return out

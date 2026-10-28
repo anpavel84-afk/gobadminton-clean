@@ -1,44 +1,9 @@
-# Cursor Preflight / Closeout Checklist
+# Checklist исполнения — без второй политики
 
-## Before write
+Нормативные условия — [единый регламент](../rules/ENGINEERING_OPERATING_MODEL.md). Вход — [START_HERE.md](../../START_HERE.md).
 
-- [ ] AGENTS.md read
-- [ ] CURSOR.md read
-- [ ] project-local .cursor/rules loaded
-- [ ] exact assignment identified
-- [ ] exact base SHA identified
-- [ ] canonical docs loaded
-- [ ] branch/HEAD verified
-- [ ] dirty state understood
-- [ ] no overlapping writer conflict
-- [ ] target/runtime boundaries understood
-- [ ] secrets handled outside Git
+До эффектов: получены и проверены accepted rules commit/hash и full либо квалифицированный common+role capsule (§10.3); установлены exact assignment/base/candidate, критерии, allowed paths/effects; проверены worktree/identity/ownership, реальная квалификация маршрута и доступность необходимых inputs. Невыполненная проверка не считается пройденной.
 
-## Before PR
+До передачи: diff остаётся в scope, существенные assertions сохранены, source/test результаты отделены от независимой QA; нет secrets/unrelated изменений; NOT_TESTED указан явно. Handoff содержит exact commit/PR, evidence, ограничения и следующий допустимый шаг.
 
-- [ ] scope did not expand
-- [ ] relevant docs/contracts updated
-- [ ] real checks executed
-- [ ] no fake PASS
-- [ ] no unrelated files/services touched
-- [ ] no secret committed
-- [ ] exact changed resources known
-
-## Before deploy
-
-- [ ] exact candidate SHA
-- [ ] CI status known
-- [ ] target preflight captured
-- [ ] rollback path known
-- [ ] shared-host collision check complete
-- [ ] public exposure explicitly permitted
-
-## Before handoff
-
-- [ ] PR/commit permalinks
-- [ ] test/CI evidence
-- [ ] runtime smoke if applicable
-- [ ] limitations/not checked
-- [ ] rollback
-- [ ] next bounded action
-- [ ] GitHub handoff committed
+До приёмки: exact-SHA независимая QA, обязательный CI, интеграционные и DEV gates подтверждены в нужной стадии; stale PASS не переносится на изменённый candidate без предусмотренного доказательства. PROD не выводится из DEV-разрешения. История, budgets и rollback сохраняются.

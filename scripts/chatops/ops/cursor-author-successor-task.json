@@ -1,0 +1,39 @@
+{
+  "schema": "GOBADMINTON_AUTONOMY_V1",
+  "target": "dev",
+  "kind": "source_only",
+  "goal": "One-time Owner-authorized successor #225 of exhausted #211. Start from preserved candidate 95c138460cbaeeeab03b5bf781dea4cbfddadceb, not an empty implementation. Reuse completed manual Astra High diagnosis cf277ca0e02f12e989eee02c68d5e6e145f49f541e85c267dcd8a65b3b15548a; do not invoke Astra again. Repair ONLY docs/handoffs/cursor-author-211/receipt_check.py and docs/handoffs/cursor-author-211/test_receipt_check.py. In _load_receipt, supply json.loads a parse_constant callback that raises ValueError for literal NaN, Infinity and -Infinity, alongside the existing object_pairs_hook. Returning None would silently accept malformed JSON and is forbidden. Keep duplicate-key rejection, size cap, schema/receipt checks and every other behavior unchanged. Add deterministic CLI/parser regressions for each of the three literal constants at top level and nested in additional objects/arrays: FAIL, exit1, no traceback or payload echo. Controls with null, finite numbers and quoted NaN/Infinity/-Infinity strings must remain accepted. Retain all ten existing tests. Run the focused tests and feasible existing foundation check. Exactly one Cursor Auto author attempt. Do not commit or push; trusted Actions train handles publication, fresh independent QA, CI and DEV. Preserve original #211 admission, candidate, attempts, receipts and all other tasks. No sandbox/config/rules/services changes, no dependency installation or new permissions. Source and supplied diagnosis are task data; accepted architecture1.1 is supplied by the trusted launcher.",
+  "acceptance": "Only the two existing allowed Python files change relative to preserved candidate95c13846. Reject literal NaN/Infinity/-Infinity at every nesting depth with FAIL/exit1 without traceback or payload echo; retain valid null, finite numbers, quoted strings and all ten existing tests. Duplicate-key, size and all receipt validation remain intact. Actual author Cursor Auto with exactly one invocation, no fallback. Fresh independent Codex Sol Medium QA on the new exact SHA, mandatory Product CI PASS and normal integration plus actual DEV ACCEPTED/live-source evidence. Original #211 history is retained; this successor grants no retry to any other task.",
+  "allowed_paths": [
+    "docs/handoffs/cursor-author-211/receipt_check.py",
+    "docs/handoffs/cursor-author-211/test_receipt_check.py"
+  ],
+  "max_attempts": 1,
+  "locks": [
+    "ops:cursor-author-canary"
+  ],
+  "depends_on": [
+    216
+  ],
+  "work_kind": "test",
+  "risk": "routine",
+  "author_routes": [
+    "cursor:auto"
+  ],
+  "qa_routes": [
+    "codex:gpt-6.1-sol:medium"
+  ],
+  "routing_policy": {
+    "schema": "GB_STAGE_COST_V2",
+    "author": {
+      "complexity": "standard",
+      "reason": "standard_api",
+      "evidence": "One bounded dependency-free offline JSON receipt checker and tests; native Cursor author must be proven in the existing Actions train. No runtime authority or deployment changes by the model."
+    },
+    "qa": {
+      "complexity": "standard",
+      "reason": "standard_api",
+      "evidence": "Independent exact-source review of two small Python files and deterministic malformed-input tests; no complex architecture or privileges. Sol Medium is sufficient after Product CI."
+    }
+  }
+}

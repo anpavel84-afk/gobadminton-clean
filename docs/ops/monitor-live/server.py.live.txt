@@ -1,0 +1,308 @@
+#!/usr/bin/env python3
+"""GoBadminton OPS monitor: tiny read-only web service (stdlib only).
+
+Reads ONLY snapshot.json. PIN login (salted scrypt hash in a config file), rate limiting,
+signed HttpOnly cookie. No write endpoints except login/logout. Listens on loopback;
+public access goes through nginx under /ops-monitor/.
+"""
+import base64, hashlib, hmac, json, os, secrets, sys, threading, time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+WEB = os.path.join(os.path.dirname(HERE), 'web')
+COOKIE = 'gbops'
+SNAP_MAX = 131072
+STALE_AFTER_S = 90
+KNOWN = {
+    'top': ('schema', 'generated_utc', 'host', 'source_ok', 'source_error', 'queue', 'model', 'product_outside',
+            'executor', 'dev', 'claim', 'parked', 'done_count', 'changed_utc', 'recent_done', 'done_all', 'backlog',
+            'source_mode', 'slots', 'counts_complete', 'parked_count', 'external_runs'),
+}
+
+
+def hash_pin(pin, salt, n=2 ** 14):
+    return hashlib.scrypt(pin.encode(), salt=salt, n=n, r=8, p=1, dklen=32)
+
+
+class Limiter:
+    """In-memory: per-IP and global failure windows."""
+    def __init__(self, per_ip=5, lock_s=900, global_cap=30, global_window=3600, clock=time.time):
+        self.per_ip, self.lock_s, self.gcap, self.gwin, self.clock = per_ip, lock_s, global_cap, global_window, clock
+        self.fails, self.locked, self.gfails, self.glock = {}, {}, [], 0
+        self.mu = threading.Lock()
+
+    def check(self, ip):
+        """Returns seconds to wait (0 = allowed)."""
+        with self.mu:
+            t = self.clock()
+            w = max(self.locked.get(ip, 0), self.glock) - t
+            return int(w) + 1 if w > 0 else 0
+
+    def fail(self, ip):
+        with self.mu:
+            t = self.clock()
+            lst = [x for x in self.fails.get(ip, []) if t - x < self.lock_s] + [t]
+            self.fails[ip] = lst
+            if len(lst) >= self.per_ip:
+                self.locked[ip] = t + self.lock_s
+                self.fails[ip] = []
+            self.gfails = [x for x in self.gfails if t - x < self.gwin] + [t]
+            if len(self.gfails) >= self.gcap:
+                self.glock = t + self.lock_s
+                self.gfails = []
+            if len(self.fails) > 5000:
+                self.fails.clear()
+
+    def ok(self, ip):
+        with self.mu:
+            self.fails.pop(ip, None)
+
+
+
+# gb-pipeline: only projected, root-owned status; existing PIN gate is unchanged.
+def pipeline_snapshot():
+    import datetime, re, stat
+    try:
+        fd = os.open('/var/lib/gb-ops-monitor/pipeline.json', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode) or st.st_uid != 0 or st.st_nlink != 1 or not 2 <= st.st_size <= 16384:
+                raise ValueError('file')
+            d = json.loads(os.read(fd, 16385))
+        finally:
+            os.close(fd)
+        age = time.time() - datetime.datetime.fromisoformat(d['generated_utc']).timestamp()
+        if d.get('schema') != 1 or not isinstance(d['runs'], list) or len(d['runs']) > 2:
+            raise ValueError('schema')
+        runs, kinds = [], set()
+        for r in d['runs']:
+            k = r['kind']
+            if k not in ('brief', 'install') or k in kinds:
+                raise ValueError('kind')
+            kinds.add(k)
+            if not isinstance(r['name'], str) or not re.fullmatch(r'[a-z0-9-]{1,40}|\[REDACTED\]', r['name']):
+                raise ValueError('name')
+            start = datetime.datetime.fromisoformat(r['start']).isoformat(timespec='seconds')
+            nums = {}
+            for key in ('elapsed_s', 'eta_s', 'remaining_s'):
+                v = r[key]
+                if v is not None and (type(v) not in (int, float) or not 0 <= v < 10**9):
+                    raise ValueError('duration')
+                nums[key] = v
+            phase = r.get('phase')
+            if not isinstance(phase, str) or not re.fullmatch(r'[a-z0-9-]{1,32}', phase):
+                raise ValueError('phase')
+            runs.append(dict(kind=k, name=r['name'], start=start, phase=phase, **nums))
+        return dict(available=True, stale=not 0 <= age <= 15, age_s=max(0, int(age)), runs=runs)
+    except Exception:
+        return dict(available=False, stale=True, runs=[])
+
+class App:
+    def __init__(self, cfg, clock=time.time):
+        self.cfg = cfg
+        self.clock = clock
+        self.salt = base64.b64decode(cfg['pin_salt'])
+        self.hash = base64.b64decode(cfg['pin_hash'])
+        self.n = int(cfg.get('scrypt_n', 2 ** 14))
+        self.key = base64.b64decode(cfg['cookie_secret'])
+        self.max_age = int(cfg.get('session_seconds', 43200))
+        self.secure = bool(cfg.get('cookie_secure', True))
+        self.prefix = cfg.get('prefix', '/ops-monitor').rstrip('/')
+        self.snapshot_path = cfg['snapshot_path']
+        self.limiter = Limiter(clock=clock)
+        self.static = {}
+        for name in ('index.html', 'app.js', 'style.css', 'manifest.webmanifest', 'icon-180.png', 'icon-192.png', 'icon-512.png'):
+            with open(os.path.join(WEB, name), 'rb') as f:
+                self.static[name] = f.read()
+
+    # --- session
+    def make_cookie(self):
+        exp = int(self.clock()) + self.max_age
+        body = '%d.%s' % (exp, secrets.token_hex(8))
+        sig = hmac.new(self.key, body.encode(), hashlib.sha256).hexdigest()
+        return '%s.%s' % (body, sig)
+
+    def valid_cookie(self, val):
+        try:
+            exp, nonce, sig = val.split('.')
+            good = hmac.new(self.key, ('%s.%s' % (exp, nonce)).encode(), hashlib.sha256).hexdigest()
+            return hmac.compare_digest(sig, good) and int(exp) > self.clock()
+        except Exception:
+            return False
+
+    def pin_ok(self, pin):
+        if not (isinstance(pin, str) and pin.isascii() and pin.isdigit() and 4 <= len(pin) <= 12):
+            hash_pin('0000', self.salt, self.n)  # keep timing similar
+            return False
+        return hmac.compare_digest(hash_pin(pin, self.salt, self.n), self.hash)
+
+    # --- data
+    def snapshot(self):
+        try:
+            fd = os.open(self.snapshot_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+            try:
+                st = os.fstat(fd)
+                import stat as _s
+                if not _s.S_ISREG(st.st_mode) or st.st_size > SNAP_MAX or st.st_size < 2:
+                    raise ValueError('bad file')
+                raw = os.read(fd, SNAP_MAX + 1)
+            finally:
+                os.close(fd)
+            d = json.loads(raw)
+            if not isinstance(d, dict):
+                raise ValueError('shape')
+        except Exception:
+            return {'available': False, 'reason': 'снимок недоступен', 'stale': True, 'age_s': None, 'pipeline': pipeline_snapshot()}
+        out = {k: d[k] for k in KNOWN['top'] if k in d}
+        age = None
+        try:
+            import datetime
+            g = datetime.datetime.fromisoformat(d['generated_utc'])
+            age = max(0, int(self.clock() - g.timestamp()))
+        except Exception:
+            pass
+        out.update(available=True, age_s=age, stale=(age is None or age > STALE_AFTER_S), server_utc=
+                   time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(self.clock())))
+        out['pipeline'] = pipeline_snapshot()
+        return out
+
+
+SEC_HEADERS = [
+    ('Cache-Control', 'no-store'), ('Pragma', 'no-cache'),
+    ('X-Content-Type-Options', 'nosniff'), ('X-Robots-Tag', 'noindex, nofollow, noarchive'),
+    ('Referrer-Policy', 'no-referrer'), ('X-Frame-Options', 'DENY'),
+    ('Content-Security-Policy', "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; "
+                                "connect-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"),
+]
+TYPES = {'index.html': 'text/html; charset=utf-8', 'app.js': 'application/javascript; charset=utf-8',
+         'style.css': 'text/css; charset=utf-8', 'manifest.webmanifest': 'application/manifest+json',
+         'icon-180.png': 'image/png', 'icon-192.png': 'image/png', 'icon-512.png': 'image/png'}
+
+
+def make_handler(app):
+    class H(BaseHTTPRequestHandler):
+        server_version = 'opsmon'
+        sys_version = ''
+        protocol_version = 'HTTP/1.1'
+
+        def log_message(self, fmt, *a):  # never log paths/cookies/query; only status
+            sys.stderr.write('%s %s\n' % (self.command, a[1] if len(a) > 1 else '-'))
+
+        def ip(self):
+            peer = self.client_address[0]
+            if peer in ('127.0.0.1', '::1'):
+                xr = self.headers.get('X-Real-IP', '')
+                if 0 < len(xr) <= 45 and all(c in '0123456789abcdefABCDEF:.' for c in xr):
+                    return xr
+            return peer
+
+        def send(self, code, body=b'', ctype='application/json', extra=()):
+            self.send_response(code)
+            for k, v in SEC_HEADERS:
+                self.send_header(k, v)
+            self.send_header('Content-Type', ctype)
+            self.send_header('Content-Length', str(len(body)))
+            for k, v in extra:
+                self.send_header(k, v)
+            self.end_headers()
+            if self.command != 'HEAD':
+                self.wfile.write(body)
+
+        def jsend(self, code, obj, extra=()):
+            self.send(code, json.dumps(obj, ensure_ascii=False).encode(), extra=extra)
+
+        def authed(self):
+            for part in (self.headers.get('Cookie') or '').split(';'):
+                k, _, v = part.strip().partition('=')
+                if k == COOKIE and app.valid_cookie(v):
+                    return True
+            return False
+
+        def route(self):
+            path = self.path.split('?', 1)[0]
+            if path == app.prefix:
+                return '/redirect'
+            if path.startswith(app.prefix + '/'):
+                path = path[len(app.prefix):]
+            return path
+
+        def do_HEAD(self): self.do_GET()
+
+        def do_GET(self):
+            p = self.route()
+            if p == '/redirect':
+                return self.send(308, b'', extra=[('Location', app.prefix + '/')])
+            if p in ('/', '/index.html'):
+                return self.send(200, app.static['index.html'], TYPES['index.html'])
+            name = p.lstrip('/')
+            if name in ('app.js', 'style.css', 'manifest.webmanifest', 'icon-180.png', 'icon-192.png', 'icon-512.png'):
+                return self.send(200, app.static[name], TYPES[name])
+            if p == '/healthz':
+                return self.send(200, b'ok\n', 'text/plain')
+            if p == '/api/snapshot':
+                if not self.authed():
+                    return self.jsend(401, {'error': 'auth'})
+                return self.jsend(200, app.snapshot())
+            return self.jsend(404, {'error': 'not found'})
+
+        def origin_ok(self):
+            o = self.headers.get('Origin')
+            if not o:
+                return True
+            host = self.headers.get('X-Forwarded-Host') or self.headers.get('Host') or ''
+            return o.split('://', 1)[-1] == host
+
+        def do_POST(self):
+            p = self.route()
+            ln = int(self.headers.get('Content-Length') or 0)
+            if ln > 512 or self.headers.get('Content-Type', '').split(';')[0] != 'application/json' or not self.origin_ok():
+                return self.jsend(400, {'error': 'bad request'})
+            raw = self.rfile.read(ln)
+            if p == '/api/logout':
+                return self.jsend(200, {'ok': True}, extra=[('Set-Cookie', self.cookie('', 0))])
+            if p != '/api/login':
+                return self.jsend(404, {'error': 'not found'})
+            ip = self.ip()
+            wait = app.limiter.check(ip)
+            if wait:
+                return self.jsend(429, {'error': 'locked', 'retry_after_s': wait}, extra=[('Retry-After', str(wait))])
+            try:
+                pin = json.loads(raw).get('pin')
+            except Exception:
+                pin = None
+            if app.pin_ok(pin):
+                app.limiter.ok(ip)
+                return self.jsend(200, {'ok': True}, extra=[('Set-Cookie', self.cookie(app.make_cookie(), app.max_age))])
+            app.limiter.fail(ip)
+            time.sleep(0.4)
+            wait = app.limiter.check(ip)
+            if wait:
+                return self.jsend(429, {'error': 'locked', 'retry_after_s': wait}, extra=[('Retry-After', str(wait))])
+            return self.jsend(401, {'error': 'pin'})
+
+        def cookie(self, val, age):
+            c = '%s=%s; Path=%s/; Max-Age=%d; HttpOnly; SameSite=Strict' % (COOKIE, val, app.prefix, age)
+            return c + ('; Secure' if app.secure else '')
+
+        do_PUT = do_DELETE = do_PATCH = lambda self: self.jsend(405, {'error': 'method'})
+    return H
+
+
+def load_config(path):
+    st = os.stat(path)
+    if st.st_mode & 0o007:
+        raise SystemExit('config must not be world-accessible')
+    with open(path) as f:
+        return json.load(f)
+
+
+def main():
+    cfg = load_config(os.environ.get('OPSMON_CONFIG', '/etc/gb-ops-monitor/config.json'))
+    app = App(cfg)
+    srv = ThreadingHTTPServer((cfg.get('bind', '127.0.0.1'), int(cfg.get('port', 18090))), make_handler(app))
+    srv.daemon_threads = True
+    srv.serve_forever()
+
+
+if __name__ == '__main__':
+    main()

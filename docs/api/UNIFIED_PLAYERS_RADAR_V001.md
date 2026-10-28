@@ -17,3 +17,47 @@ Encrypted authenticated tokens bind purposes, account/session, city/namespace, f
 Unified results redeem through current target identity/model/receipt/generation/owner-session/filter/region/origin checks without cap20 or reciprocity. Preview/contact revalidate after persistence waits with existing pair/presence fences; directory contact and Game authority remain independent. Errors are no-store problem+json. Query/map/result bodies are absent from idempotency records. Keep operational SQL/HTTP logging free of bodies/parameters; synthetic evidence is separate from real-data logging/release acceptance.
 
 Recovery: retire current v2 generations before older source serves traffic; never adapt100m into a1km G1 DTO. Logical dump excludes radar_presences data, restored presence is cleared, and token epoch rotates. Old v1 rows remain metadata-null and outside unified P; no backfill/consent upgrade. No source acceptance, deployment, map asset, browser/device/legal gate is implied. Producer evidence and next admitted independent QA live in the task handoff/workbench.
+
+## Proof-scoped upcoming public games (Issue #308 source candidate)
+
+Only the `u1.` branch of the existing cookie/CSRF/key-protected POST
+`/v1/radar/results/preview` adds required `upcomingGames` to `UnifiedPreview`.
+The request remains resultRef-only; no player-ID schedule route is added.
+Legacy MVP/geographic preview shapes and the ordinary directory stay unchanged.
+Responses remain no-store and are never durable preview receipts.
+
+Games owns `readRadarPlayerGames`, invoked with the redeemed target and the
+same transaction/PoolClient. It reuses canonical upcoming discovery eligibility,
+effective Venues and current cover projections. Authorization precedes the
+three-game limit, with distinct games ordered by startsAt/id and no hidden total.
+An association is permitted only through either of these current relationships:
+
+- Immutable `created_by_user_id` equals the target, and the target is currently
+  directory-public: directory capability, visible/eligible profile, active account,
+  account/profile/directory restrictions and bilateral blocks all pass.
+- Target participation is confirmed and the viewer is an active Game owner or
+  manager authorized to read the roster. Public Game visibility alone never
+  reveals participation; Radar-only targets have no public-creator shortcut.
+
+Invitations, nonconfirmed memberships and management/trainer associations of
+the target do not establish either relationship. Draft, unlisted, cancelled,
+completed, started, unclassified and discovery-moderated Games are excluded
+under the canonical discovery policy. At most three candidate Game SHARE fences
+are acquired in UUID order; a fresh statement rereads eligibility and both
+relationships after waits. The final players revision SHARE fence, actor/session
+recheck and existing final proof check cover the whole transaction. Games that
+start during the remaining work are omitted before commit.
+
+`UnifiedUpcomingGame` is an explicit allowlist: public Game id, title,
+activityKind, startsAt, endsAt, timezone, cover.uploadedUrl and
+venue.{name,cover.uploadedUrl}. No roster/status, internal identity, contacts,
+booking notes, coordinates, provider metadata or counts are serialized.
+
+The map card expands over the existing mounted map. The client validates the
+complete preview and schedule, identity and finite deadlines before admission
+and rendering; cancellation/invalidation covers the whole schedule. Loading,
+retryable failure and checked empty are separate states. The empty message
+“Нет доступных ближайших публичных игр” makes no assertion about private games.
+See [source recovery handoff](../handoffs/radar-player-games-recovery.md) for
+actual verification limits; this section claims neither independent QA nor DEV
+acceptance.

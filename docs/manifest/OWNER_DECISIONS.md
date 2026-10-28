@@ -1,46 +1,38 @@
-# Решения владельца
+# Решения Owner — актуальная навигация CLEAN
 
-Статус: **OWNER_CONFIRMED**. Дата актуализации: 2026-10-02. Источник: прямые сообщения Pavel в GoBadminton-чатах. Это запись поручений для работы в репозитории, не подтверждение записи в Agent Agency Hub.
+22.10.2026: операционные решения сведены в [единый регламент разработки и PMA](../rules/ENGINEERING_OPERATING_MODEL.md). Исторические формулировки и основания сохраняются в Git. Сам реестр не создаёт машинных полномочий: нижеприведённая standing delegation действует по **прямому решению Owner от 26.10.2026**, исключительно в указанной области и с действующими gates.
 
-| ID | Решение | Последствия |
-|---|---|---|
-| OD-001 | GoBadminton и BadmintonOpen — разные проекты. | Greenfield; нет наследования кода/БД/runtime/design. |
-| OD-002 | Архитектура охватывает web, iOS, Android, backend; MVP помещается в долгосрочную архитектуру. | Target architecture и delivery slices разделены. |
-| OD-003 | Первый рынок Москва/Россия, затем расширение. | География/locale не зашиваются как единственные значения. |
-| OD-004 | В первом этапе внутренних платежей нет. | Только внешние условия расчёта; финансовый контур позже. |
-| OD-005 | Первая авторизация только VK и Яндекс. | Provider-independent Identity; новые провайдеры отдельно. |
-| OD-006 | Архитектору делегирован технический выбор и docs/structure в `anpavel84-afk/gobadminton`. | ADR в технической области допустимы без рутинного возврата к Owner. |
-| OD-007 | Немецкий VPS `vmi3510488` разрешён для технического MVP backend. | GoBadminton backend/runtime изолирован от других проектов на shared host. |
-| OD-008 | Implementation выполняется через **Cursor AUTO на PLAN**, GitHub — canonical source. | Серверы получают exact Git candidates; не кодировать напрямую на VPS. |
-| OD-009 | Домен **gobadminton.ru** приобретён; API hostname должен быть независим от физического backend host. | `api.gobadminton.ru` / `dev-api.gobadminton.ru` остаются стабильными именами при переносах. |
-| OD-010 | Текущая MVP-топология: **frontend/nginx на отдельной VPS Rucloud в Королёве (Москва), backend/API/worker/PostgreSQL в Германии на `vmi3510488`**. | Browser идёт same-origin через московский web proxy; DB остаётся рядом с API в Германии. Никакой БД через WAN. |
-| OD-011 | GoBadminton Implementation/QA/queue execution переносится на Germany VPS `vmi3510488`; VPS получает repo-specific write access к `anpavel84-afk/gobadminton`. PLAN остаётся paused recovery/reference и не является обычным writer. | Germany VPS — primary execution host для Cursor/Codex queue; PLAN и VPS не пишут одновременно; Git access не даёт deploy/PROD/acceptance authority. |
+## Сохраняемые решения
 
-## Текущие host facts
+| ID | Содержание и текущая область |
+| --- | --- |
+| OD-001 | GoBadminton и BadmintonOpen — самостоятельные проекты, без наследования runtime/данных/прав |
+| OD-002 | Долгосрочная архитектура охватывает web, iOS, Android и backend; не все платформы входят в текущий slice |
+| OD-003 | Москва/Россия сначала, затем расширение; география не зашивается как единственное значение |
+| OD-004 | Внутренние платежи не добавляются без отдельного решения |
+| OD-005 | Начальный продуктовый вход VK/Яндекс; последующие авторизации — только по отдельно принятым решениям |
+| OD-006 | Технические ADR и документация допустимы в делегированном scope; текущий repo — `anpavel84-afk/gobadminton-clean` |
+| OD-007 | Разрешённый Germany host — `vmi3510488`; границы shared host/других проектов сохраняются |
+| OD-008 | Прежняя инструкция исполнения на PLAN отменена в части execution host; не использовать её для запуска задач |
+| OD-009 | `gobadminton.ru` — домен продукта, API hostname не должен зависеть от физического host |
+| OD-010 | Split-host production: Moscow web, Germany backend/DB; это не запрет отдельного Germany DEV |
+| OD-011 | Модельные implementation/QA выполняются на разрешённой Германии; PLAN не является исполнителем; Git access не даёт PROD authority |
+| OD-012 | **26.10.2026 · Standing OPS Delegation.** Действующий единый PMA может через **существующий доверенный root OPS-интегратор** без отдельного Owner micro-GO на каждую root-команду и SHA выполнить штатный DEV/OPS цикл на Germany `vmi3510488`: подготовка → установка → `dry` → `apply` → `verify` → предусмотренный `rollback`. В том числе ограниченное завершение [#329](https://github.com/anpavel84-afk/gobadminton-clean/pull/329) **только** по его независимо проверенному контракту; повторная установка существующего скрипта не нужна. Предусловия обязательны: точный SHA скрипта, независимая QA PASS, применимый CI PASS, утверждённый scope, проверка живых процессов/locks/drift и состояния VPS, сохранность UNKNOWN, attempts, бюджетов, истории, backup, транзакционность, безопасный отказ, проверяемый rollback. Временный `policy` toggle — только внутри проверенной транзакции с exact restoration. **Не разрешены** произвольный root/sudo или новые права source-моделям, PROD, другие проекты/VPN, постоянное ослабление security, новые платные сервисы или обход отказов инструментов. При любом несоответствии/FAIL/платформенном отказе — остановить этот эффект и сообщить причину. Отменено лишь прежнее требование поштучного Owner GO на такие точно ограниченные root/SHA операции; контрольные gates и специальные полномочия для иных эффектов сохраняются. |
 
-Moscow web host:
-- device: `ruvds-68jzd`;
-- public IPv4: `194.87.214.217`;
-- Ubuntu 24.04 LTS;
-- 2 vCPU / 4 GiB RAM / 40 GiB SSD;
-- `gobadminton.ru` и `www.gobadminton.ru` указывают на этот IP.
+| OD-013 | **26.10.2026 · Плановая совместимость DEV/OPS версий по всей вертикали.** [Единое scoped Owner-решение](../decisions/OWNER_DECISION_DEV_OPS_VERSION_COMPATIBILITY_V001.md) обязательно для ChatGPT/Grok PMA, technical planning, author/QA, trusted OPS/Actions и каждого handoff. Разные source/dev/VPS версии штатны при доказанной эквивалентности или точном OLD→NEW; запрещено глобально игнорировать SHA, security, controller, receipts или UNKNOWN. EOM 1.4 pins не изменены этим документом; доставка в машинные capsules/OPS-код требует отдельного reviewed rollout. |
 
-Germany backend host:
-- device: `vmi3510488`;
-- public IPv4: `169.58.183.182`;
-- более мощный shared host;
-- `dev-api.gobadminton.ru` указывает на этот IP.
+**Приоритет и согласование с EOM 1.4:** OD-012 — точное последующее решение Owner по §1 и §7 [Engineering Operating Model](../rules/ENGINEERING_OPERATING_MODEL.md), а не отдельный регламент, bypass или machine admission. Его standing-границы дополняют EOM §§1, 2.1, 3, 6.4, 7–8 и заменяют только устаревшую формулу «Owner GO на каждую root-команду/SHA» в прежних handoff/локальных инструкциях. Текст, принятые SHA-256 и установленный rules pin EOM этим документом **не меняются**. Исполнение подтверждается только фактическими receipts и независимыми gates; протокол передачи PMA остаётся прежним.
 
-## Не решено владельцем
+## Более поздние операционные основания
 
-Юридический оператор/privacy/возраст, точная шкала уровня, финальная коммерческая модель, production data-residency, бюджет долгосрочного hosting, iOS store-login и сроки платформ остаются отдельными gates.
+- Owner t417u/t418u/t420u/t424u: [Stage A materials](DESIGN_MATERIALS.json), approximate mockups и [scoped Style Guide supersession](../decisions/OWNER_DECISION_FRONTEND_STYLE_GUIDE_FIRST_V001.md); публикация не включает runtime enforcement.
 
-Размещение frontend в РФ **не решает само по себе** вопрос хранения персональных данных: пока primary DB находится в Германии, public real-data launch требует отдельного legal/data-residency решения.
+- [#158](https://github.com/anpavel84-afk/gobadminton-clean/issues/158): Actions-owned bounded train, сохранение изоляции/истории и отсутствие второго dispatcher.
+- [#175](https://github.com/anpavel84-afk/gobadminton-clean/issues/175): GitHub Projects/Issues — единый backlog; сайт — read-only Owner Monitor.
+- [#199](https://github.com/anpavel84-afk/gobadminton-clean/issues/199): этапы и маршрутизация Cursor/Codex/Antigravity; квалификация перед активацией.
+- [#211](https://github.com/anpavel84-afk/gobadminton-clean/issues/211): экономная маршрутизация, Astra High не обычная QA; последующие Owner-комментарии уточняют снятие искусственного дневного cap и восстановление Cursor/Antigravity.
+- [PR #212](https://github.com/anpavel84-afk/gobadminton-clean/pull/212): ревизия и единый нормативный текст по прямому поручению Owner; публикация не равна runtime применению.
 
-## Supersession
+Текущие DNS/процессы/версии не хранятся в этом реестре как вечные факты. Юридические, data-residency, store и финансовые решения вне подтверждённого scope остаются отдельными gates; нахождение frontend в РФ само по себе их не закрывает.
 
-OD-010 фиксирует split-host MVP topology и отменяет промежуточную идею размещать весь стек на московской VPS.
-
-OD-011 supersedes OD-008 **только в части execution host**: Implementation больше не обязан выполняться через PLAN. Germany VPS `vmi3510488` — primary execution host; PLAN остаётся recovery/reference. GitHub остаётся durable project record.
-
-Временный GoBadminton runtime, ранее поднятый на немецкой VPS в F-01, был полностью снят 2026-10-02 при промежуточном retarget. Код сохранён в GitHub и backend должен быть чисто redeployed, а не переписан заново.
+Предметные новые решения находятся в [ADR/Owner decisions](../decisions/README.md) и exact Issue. При конфликте использовать правила приоритета и supersession разделов 1/11 регламента, не старую дату snapshot как текущую authority.
