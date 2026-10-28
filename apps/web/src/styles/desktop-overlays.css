@@ -245,8 +245,8 @@
     padding: 16px; /* retain inner semantic card padding */
   }
 
-  /* ProfileDialog skin — inherit without rewriting business callers. */
-  .fr3 .profile-dialog {
+  /* ProfileDialog skin — [open] only; closed native <dialog> stays UA-hidden. */
+  .fr3 .profile-dialog[open] {
     display: flex;
     flex-direction: column;
     width: min(560px, calc(100vw - 48px));
@@ -256,16 +256,13 @@
     border-radius: 28px;
   }
 
+  /* Control row 44 + gap 8 reserved above title (24+44+8 = 76); X at shell 24. */
   .fr3 .profile-dialog > header {
     position: relative;
     flex: 0 0 auto;
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 12px;
+    display: block;
     margin: 0;
-    padding: var(--gb-overlay-shell-pad) var(--gb-overlay-inset) 16px;
-    padding-right: calc(var(--gb-overlay-shell-pad) + 44px + 12px);
+    padding: calc(var(--gb-overlay-shell-pad) + 44px + 8px) var(--gb-overlay-inset) 16px;
     border-bottom: 1px solid var(--gb-line, #dfe4dc);
   }
 
@@ -283,6 +280,7 @@
   }
 
   .fr3 .profile-dialog__body {
+    display: block;
     flex: 1 1 auto;
     min-height: 0;
     overflow-x: clip;
@@ -292,7 +290,7 @@
     box-sizing: border-box;
   }
 
-  .fr3 .profile-dialog--small {
+  .fr3 .profile-dialog--small[open] {
     width: min(400px, calc(100vw - 48px));
   }
 
@@ -303,7 +301,8 @@
   }
 
   .fr3 .profile-dialog--small > header {
-    padding-right: calc(var(--gb-overlay-shell-pad) + 44px + 12px);
+    padding-top: calc(var(--gb-overlay-shell-pad) + 44px + 8px);
+    padding-bottom: 16px;
   }
 
   .fr3 .profile-dialog--small > header h2 {
@@ -311,19 +310,20 @@
     line-height: 26px;
   }
 
-  /* Venue picker 680 — same anchors; list remains sole scroll. */
+  /* Venue picker 680 — h2+subtitle both below control row; list remains sole scroll. */
   .gb-venue-picker {
     border-radius: 28px;
   }
 
   .gb-venue-picker-header {
     position: relative;
-    padding: var(--gb-overlay-shell-pad) var(--gb-overlay-inset) 16px;
-    padding-right: calc(var(--gb-overlay-shell-pad) + 44px + 12px);
+    display: block;
+    padding: calc(var(--gb-overlay-shell-pad) + 44px + 8px) var(--gb-overlay-inset) 16px;
     border-bottom: 1px solid var(--gb-line, #dfe4dc);
   }
 
   .gb-venue-picker-header h2 {
+    margin: 0;
     font-size: var(--gb-overlay-title-size);
     line-height: var(--gb-overlay-title-line);
     font-weight: 700;
@@ -348,30 +348,31 @@
     padding-right: var(--gb-overlay-inset);
   }
 
-  /* Map filters 480 */
+  /* Map filters 480 — higher specificity beats radar-geographic duplicate padding. */
   .gb-map-filters-sheet {
     border-radius: 28px;
     max-height: calc(100dvh - 48px);
   }
 
-  .gb-map-filters-sheet__header {
+  .gb-map-filters-backdrop .gb-map-filters-sheet__header {
     position: relative;
+    display: block;
     grid-template-columns: 1fr;
     align-items: start;
-    gap: 8px;
-    padding: var(--gb-overlay-shell-pad) var(--gb-overlay-inset) 16px;
-    padding-right: calc(var(--gb-overlay-shell-pad) + 44px + 12px);
+    gap: 0;
+    padding: calc(var(--gb-overlay-shell-pad) + 44px + 8px) var(--gb-overlay-inset) 16px;
   }
 
-  .gb-map-filters-sheet__handle { display: none; }
+  .gb-map-filters-backdrop .gb-map-filters-sheet__handle { display: none; }
 
-  .gb-map-filters-sheet__header h2 {
+  .gb-map-filters-backdrop .gb-map-filters-sheet__header h2 {
+    margin: 0;
     font-size: var(--gb-overlay-title-size);
     line-height: var(--gb-overlay-title-line);
     font-weight: 700;
   }
 
-  .gb-map-filters-sheet__header .gb-close-button {
+  .gb-map-filters-backdrop .gb-map-filters-sheet__header .gb-close-button {
     position: absolute;
     top: var(--gb-overlay-shell-pad);
     right: var(--gb-overlay-shell-pad);

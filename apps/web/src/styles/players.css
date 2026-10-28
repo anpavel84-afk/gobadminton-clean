@@ -229,11 +229,12 @@
   /* Only [open] — never force closed native <dialog> to display:flex. */
   .fr3 .profile-dialog[open] {
     display:flex; flex-direction:column; padding:0; overflow:hidden;
-    width:min(560px,calc(100vw - 48px)); border-radius:28px;
+    width:min(560px,calc(100vw - 48px)); max-height:calc(100dvh - 48px); border-radius:28px;
   }
+  /* Control row 44 + gap 8 above title (top 76); X absolute 24 / 44×44. */
   .fr3 .profile-dialog > header {
-    position:relative; flex:0 0 auto; gap:12px; margin:0;
-    padding:24px 40px 16px; padding-right:calc(24px + 44px + 12px);
+    position:relative; flex:0 0 auto; display:block; margin:0;
+    padding:76px 40px 16px;
     border-bottom:1px solid var(--gb-line);
   }
   .fr3 .profile-dialog > header h2 {
@@ -249,7 +250,7 @@
   .fr3 .profile-dialog--small[open] { width:min(400px,calc(100vw - 48px)); }
   .fr3 .profile-dialog--small > header,
   .fr3 .profile-dialog--small .profile-dialog__body { padding-left:32px; padding-right:32px; }
-  .fr3 .profile-dialog--small > header { padding-right:calc(24px + 44px + 12px); }
+  .fr3 .profile-dialog--small > header { padding-top:76px; padding-bottom:16px; }
   .fr3 .profile-dialog--small > header h2 { font-size:20px; line-height:26px; }
 }
 @media (max-width:1050px) {

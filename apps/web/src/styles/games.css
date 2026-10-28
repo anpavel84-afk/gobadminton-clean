@@ -236,15 +236,15 @@
  .gb-venue-picker-option{padding:9px 16px}
 }
 @media (min-width:1024px) {
-  /* #365 «Просторный40» — wins over base picker padding in this file. */
+  /* #365 «Просторный40» — h2+subtitle below control row 44+gap8 (top 76); X at 24. */
   .gb-venue-picker { border-radius:28px; }
   .gb-venue-picker-header {
     position:relative;
-    padding:24px 40px 16px;
-    padding-right:calc(24px + 44px + 12px);
+    display:block;
+    padding:76px 40px 16px;
     border-bottom:1px solid var(--gb-line);
   }
-  .gb-venue-picker-header h2 { font-size:22px; line-height:26px; font-weight:700; }
+  .gb-venue-picker-header h2 { margin:0; font-size:22px; line-height:26px; font-weight:700; }
   .gb-venue-picker-header .gb-close-button {
     position:absolute; top:24px; right:24px;
   }
