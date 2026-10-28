@@ -274,18 +274,18 @@ describe("unknown-report latch across Radar remounts (shared body)", () => {
   });
 
   it("parent latch blocks a second POST after dismiss → remount (games/collapse)", async () => {
-    let latch: string | null = null;
+    let latch = new Set<string>();
     const propsFor = (): React.ComponentProps<typeof PublicPlayerProfile> => ({
       publicPlayerId: "peer",
       embedded: true,
       nearbyGamesAction: null,
-      reportUnknown: latch === reportUnknownScopeKey("viewer", "peer"),
-      onReportUnknown: scope => { latch = scope; },
+      reportUnknown: latch.has(reportUnknownScopeKey("viewer", "peer")),
+      onReportUnknown: scope => { latch = new Set([...latch, scope]); },
     });
 
     await openAndSubmit(propsFor());
     expect(api.createAbuseReport).toHaveBeenCalledTimes(1);
-    expect(latch).toBe(reportUnknownScopeKey("viewer", "peer"));
+    expect(latch.has(reportUnknownScopeKey("viewer", "peer"))).toBe(true);
 
     // Dismiss dialog while uncertain, then Radar replaces the profile subtree.
     hooks.cursor = 0;
@@ -304,11 +304,11 @@ describe("unknown-report latch across Radar remounts (shared body)", () => {
   });
 
   it("profile refresh clears generic uncertain UI but keeps unknown-report latch", async () => {
-    let latch: string | null = null;
+    let latch = new Set<string>();
     const propsFor = (): React.ComponentProps<typeof PublicPlayerProfile> => ({
       publicPlayerId: "peer",
-      reportUnknown: latch === reportUnknownScopeKey("viewer", "peer"),
-      onReportUnknown: scope => { latch = scope; },
+      reportUnknown: latch.has(reportUnknownScopeKey("viewer", "peer")),
+      onReportUnknown: scope => { latch = new Set([...latch, scope]); },
     });
 
     await openAndSubmit(propsFor());
@@ -337,12 +337,12 @@ describe("unknown-report latch across Radar remounts (shared body)", () => {
   it("late unknown completion after unmount latches original scope without poisoning another peer", async () => {
     let resolveReport!: (value: unknown) => void;
     api.createAbuseReport.mockImplementation(() => new Promise(resolve => { resolveReport = resolve; }));
-    let latch: string | null = null;
+    let latch = new Set<string>();
 
     const propsA = (): React.ComponentProps<typeof PublicPlayerProfile> => ({
       publicPlayerId: "peer-a",
-      reportUnknown: latch === reportUnknownScopeKey("viewer", "peer-a"),
-      onReportUnknown: scope => { latch = scope; },
+      reportUnknown: latch.has(reportUnknownScopeKey("viewer", "peer-a")),
+      onReportUnknown: scope => { latch = new Set([...latch, scope]); },
     });
     renderProfile(propsA());
     await Promise.resolve();
@@ -361,7 +361,7 @@ describe("unknown-report latch across Radar remounts (shared body)", () => {
     resetHooks();
     resolveReport({ ok: false, status: 503, error: "upstream" });
     await pending;
-    expect(latch).toBe(reportUnknownScopeKey("viewer", "peer-a"));
+    expect(latch.has(reportUnknownScopeKey("viewer", "peer-a"))).toBe(true);
     expect(api.createAbuseReport).toHaveBeenCalledTimes(1);
 
     api.getMe.mockResolvedValue({ ok: true, status: 200, data: { id: "viewer", csrfToken: "csrf", displayName: "Viewer", locale: "ru", linkedProviders: [] } });
@@ -371,8 +371,8 @@ describe("unknown-report latch across Radar remounts (shared body)", () => {
 
     const propsB = (): React.ComponentProps<typeof PublicPlayerProfile> => ({
       publicPlayerId: "peer-b",
-      reportUnknown: latch === reportUnknownScopeKey("viewer", "peer-b"),
-      onReportUnknown: scope => { latch = scope; },
+      reportUnknown: latch.has(reportUnknownScopeKey("viewer", "peer-b")),
+      onReportUnknown: scope => { latch = new Set([...latch, scope]); },
     });
     // Other peer is not latched by peer-a's pending/unknown result.
     expect(propsB().reportUnknown).toBe(false);
@@ -385,6 +385,54 @@ describe("unknown-report latch across Radar remounts (shared body)", () => {
     await openAndSubmit(propsA());
     // Original peer keeps the unknown latch — no third POST.
     expect(api.createAbuseReport).toHaveBeenCalledTimes(2);
+  });
+
+  it("A 503 then B 503 retains both; A reopen + games/back does not POST again", async () => {
+    let latch = new Set<string>();
+    const addScope = (scope: string) => { latch = new Set([...latch, scope]); };
+    const propsA = (): React.ComponentProps<typeof PublicPlayerProfile> => ({
+      publicPlayerId: "peer-a",
+      embedded: true,
+      nearbyGamesAction: null,
+      reportUnknown: latch.has(reportUnknownScopeKey("viewer", "peer-a")),
+      onReportUnknown: addScope,
+    });
+    const propsB = (): React.ComponentProps<typeof PublicPlayerProfile> => ({
+      publicPlayerId: "peer-b",
+      embedded: true,
+      nearbyGamesAction: null,
+      reportUnknown: latch.has(reportUnknownScopeKey("viewer", "peer-b")),
+      onReportUnknown: addScope,
+    });
+
+    api.createAbuseReport.mockResolvedValue({ ok: false, status: 503, error: "upstream" });
+    await openAndSubmit(propsA());
+    expect(api.createAbuseReport).toHaveBeenCalledTimes(1);
+    expect(latch.has(reportUnknownScopeKey("viewer", "peer-a"))).toBe(true);
+
+    // Collapse/remount A, then select B and report unknown.
+    resetHooks();
+    api.getMe.mockResolvedValue({ ok: true, status: 200, data: { id: "viewer", csrfToken: "csrf", displayName: "Viewer", locale: "ru", linkedProviders: [] } });
+    api.getPlayer.mockResolvedValue({ ok: true, status: 200, data: { ...player, publicPlayerId: "peer-b", displayName: "Другой" } });
+    api.listCities.mockResolvedValue({ ok: true, status: 200, data: { items: [{ id: "city", nameRu: "Москва" }] } });
+    await openAndSubmit(propsB());
+    expect(api.createAbuseReport).toHaveBeenCalledTimes(2);
+    expect(latch.has(reportUnknownScopeKey("viewer", "peer-a"))).toBe(true);
+    expect(latch.has(reportUnknownScopeKey("viewer", "peer-b"))).toBe(true);
+
+    // A reopen (games/back remount): still latched — no third POST. B remains protected.
+    resetHooks();
+    api.getPlayer.mockResolvedValue({ ok: true, status: 200, data: { ...player, publicPlayerId: "peer-a", displayName: "Мария Л." } });
+    const tree = await openAndSubmit(propsA());
+    expect(api.createAbuseReport).toHaveBeenCalledTimes(2);
+    expect(propsA().reportUnknown).toBe(true);
+    expect(propsB().reportUnknown).toBe(true);
+    expect(renderToStaticMarkup(tree)).toContain("disabled");
+
+    // Late A callback after B cannot erase B; unrelated pair stays usable.
+    addScope(reportUnknownScopeKey("viewer", "peer-a"));
+    expect(latch.has(reportUnknownScopeKey("viewer", "peer-b"))).toBe(true);
+    expect(latch.has(reportUnknownScopeKey("viewer", "peer-c"))).toBe(false);
   });
 
   it("viewer/peer scope key does not transfer a latch to another pair", () => {

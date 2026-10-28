@@ -227,12 +227,37 @@ it("RadarPage wires report-unknown latch into both VenuePopup preview surfaces",
   expect(previews.some(n => n.props.surface === "compact")).toBe(true);
   expect(previews.some(n => n.props.surface === "detail")).toBe(true);
   for (const preview of previews) {
-    expect("reportUnknownScope" in preview.props).toBe(true);
+    expect("reportUnknownScopes" in preview.props).toBe(true);
     expect(typeof preview.props.onReportUnknownScope).toBe("function");
   }
   // Parent-held scope survives detail remount (collapse/reopen replaces children).
   (previews.find(n => n.props.surface === "detail")!.props.onReportUnknownScope as (scope: string) => void)("viewer:peer");
   const again = page();
   const detail = nodes(again).filter(n => n.type === UnifiedPlayerPreview).find(n => n.props.surface === "detail")!;
-  expect(detail.props.reportUnknownScope).toBe("viewer:peer");
+  expect((detail.props.reportUnknownScopes as ReadonlySet<string>).has("viewer:peer")).toBe(true);
+});
+
+it("RadarPage retains multiple unknown scopes; late B cannot erase A", () => {
+  page();
+  let tree = page();
+  let detail = nodes(tree).filter(n => n.type === UnifiedPlayerPreview).find(n => n.props.surface === "detail")!;
+  const latch = detail.props.onReportUnknownScope as (scope: string) => void;
+  // A 503 → collapse, then B 503 → collapse: both scopes must remain.
+  latch("viewer:peer-a");
+  tree = page();
+  detail = nodes(tree).filter(n => n.type === UnifiedPlayerPreview).find(n => n.props.surface === "detail")!;
+  (detail.props.onReportUnknownScope as (scope: string) => void)("viewer:peer-b");
+  tree = page();
+  detail = nodes(tree).filter(n => n.type === UnifiedPlayerPreview).find(n => n.props.surface === "detail")!;
+  const scopes = detail.props.reportUnknownScopes as ReadonlySet<string>;
+  expect(scopes.has("viewer:peer-a")).toBe(true);
+  expect(scopes.has("viewer:peer-b")).toBe(true);
+  // Late A callback after B must not wipe B; unrelated pair stays usable.
+  (detail.props.onReportUnknownScope as (scope: string) => void)("viewer:peer-a");
+  tree = page();
+  detail = nodes(tree).filter(n => n.type === UnifiedPlayerPreview).find(n => n.props.surface === "detail")!;
+  const again = detail.props.reportUnknownScopes as ReadonlySet<string>;
+  expect(again.has("viewer:peer-a")).toBe(true);
+  expect(again.has("viewer:peer-b")).toBe(true);
+  expect(again.has("viewer:peer-c")).toBe(false);
 });

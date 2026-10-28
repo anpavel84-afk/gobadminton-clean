@@ -20,7 +20,7 @@ function gameWhen(game: UnifiedUpcomingGame): string {
   return `${day} · ${time.format(start)}–${time.format(end)}`;
 }
 
-export function UnifiedPlayerPreview({ dialog = false, onClose, expanded: controlled, onExpandedChange, surface, onOpen, onCollapse, skipFocusRestore, reportUnknownScope, onReportUnknownScope }: {
+export function UnifiedPlayerPreview({ dialog = false, onClose, expanded: controlled, onExpandedChange, surface, onOpen, onCollapse, skipFocusRestore, reportUnknownScopes, onReportUnknownScope }: {
   dialog?: boolean; onClose: () => void; expanded?: boolean; onExpandedChange?: (value: boolean) => void;
   /** compact/detail split the same content into VenuePopup preview + sheet slots. */
   surface?: "compact" | "detail";
@@ -29,15 +29,15 @@ export function UnifiedPlayerPreview({ dialog = false, onClose, expanded: contro
   /** Shared with RadarPage: venue replacement must not restore the old player trigger. */
   skipFocusRestore?: { current: boolean };
   /**
-   * RadarPage-held latch survives VenuePopup detail unmount on collapse/reopen.
-   * When omitted (dialog / standalone), this preview keeps its own narrow latch across games↔profile.
+   * RadarPage-held additive set of viewer:peer keys survives VenuePopup detail unmount.
+   * When omitted (dialog / standalone), this preview keeps its own narrow set across games↔profile.
    */
-  reportUnknownScope?: string | null;
+  reportUnknownScopes?: ReadonlySet<string>;
   onReportUnknownScope?: (scopeKey: string) => void;
 }) {
   const [localExpanded, setLocalExpanded] = useState(false);
   const [gamesView, setGamesView] = useState(false);
-  const [localReportUnknownScope, setLocalReportUnknownScope] = useState<string | null>(null);
+  const [localReportUnknownScopes, setLocalReportUnknownScopes] = useState(new Set<string>());
   const expanded = surface === "compact" ? false : surface === "detail" ? true : (controlled ?? localExpanded);
   const expand = (value: boolean) => { setLocalExpanded(value); onExpandedChange?.(value); if (!value) setGamesView(false); };
   const collapseSheet = () => {
@@ -47,8 +47,9 @@ export function UnifiedPlayerPreview({ dialog = false, onClose, expanded: contro
     else onClose();
   };
   const directory = useUnifiedDirectory(); const { view } = useRadarSession(); const focus = useRef<HTMLDivElement>(null);
-  const latchScope = reportUnknownScope !== undefined ? reportUnknownScope : localReportUnknownScope;
-  const latchUnknown = onReportUnknownScope ?? setLocalReportUnknownScope;
+  const latchScopes = reportUnknownScopes ?? localReportUnknownScopes;
+  const latchUnknown = onReportUnknownScope
+    ?? ((scope: string) => setLocalReportUnknownScopes(prev => new Set([...prev, scope])));
   const row = [...directory.view.pins, ...directory.view.rows].find(row => row.publicPlayerId === directory.view.selected);
   const preview = directory.view.preview;
   const now = Date.now();
@@ -153,7 +154,7 @@ export function UnifiedPlayerPreview({ dialog = false, onClose, expanded: contro
         ? <RadarContact key={row.radar.resultRef} me={view.me} item={{ resultId: row.radar.resultId, resultRef: row.radar.resultRef, player: safePreview.player }} />
         : undefined}
       nearbyGamesAction={null}
-      reportUnknown={reportScope !== null && latchScope === reportScope}
+      reportUnknown={reportScope !== null && latchScopes.has(reportScope)}
       onReportUnknown={latchUnknown}
     />
     <Button variant="outline" aria-controls="radar-player-detail" onClick={() => setGamesView(true)}>Ближайшие публичные игры</Button>
