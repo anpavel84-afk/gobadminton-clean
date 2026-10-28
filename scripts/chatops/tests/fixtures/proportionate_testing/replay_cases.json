@@ -1,0 +1,364 @@
+{
+ "schema": "GB_PROPORTIONATE_TESTING_REPLAY_V1",
+ "note": "saved real file lists; sizes irrelevant to tier",
+ "cases": [
+  {
+   "id": "pr314_small_test_only",
+   "source": "PR #314 (issue #313) autonomous test-only fix, ~28 min to DEV",
+   "files": [
+    {
+     "path": "apps/api/test/unit/original-http-authority-parity.test.ts",
+     "status": "A"
+    }
+   ],
+   "expect": {
+    "tier": "T1",
+    "visual_qa": false,
+    "must_not_require_full_suite": true
+   }
+  },
+  {
+   "id": "docs_only_handoff",
+   "source": "synthetic: docs-only edit",
+   "files": [
+    {
+     "path": "docs/handoffs/CURRENT.md",
+     "status": "M"
+    }
+   ],
+   "expect": {
+    "tier": "T0",
+    "visual_qa": false,
+    "must_not_require_full_suite": true
+   }
+  },
+  {
+   "id": "pr312_agy_author_route",
+   "source": "PR #312",
+   "files": [
+    {
+     "path": "docs/ops/ANTIGRAVITY_AUTHOR_ROUTE.md",
+     "status": "A"
+    },
+    {
+     "path": "docs/rules/DOCUMENT_REGISTER.md",
+     "status": "M"
+    },
+    {
+     "path": "scripts/chatops/actions_train/core.py",
+     "status": "M"
+    },
+    {
+     "path": "scripts/chatops/actions_train/cost_policy.py",
+     "status": "M"
+    },
+    {
+     "path": "scripts/chatops/actions_train/manifest.json",
+     "status": "M"
+    },
+    {
+     "path": "scripts/chatops/actions_train/native_antigravity_author.py",
+     "status": "A"
+    },
+    {
+     "path": "scripts/chatops/actions_train/stage.py",
+     "status": "M"
+    },
+    {
+     "path": "scripts/chatops/ops/antigravity_author_upgrade.py",
+     "status": "A"
+    },
+    {
+     "path": "scripts/chatops/tests/test_actions_train_agy_author_routes.py",
+     "status": "A"
+    },
+    {
+     "path": "scripts/chatops/tests/test_actions_train_agy_author_upgrade.py",
+     "status": "A"
+    },
+    {
+     "path": "scripts/chatops/tests/test_actions_train_antigravity_author.py",
+     "status": "A"
+    }
+   ],
+   "expect": {
+    "tier": "T3",
+    "strict": true
+   }
+  },
+  {
+   "id": "pr315_design_exchange_stage_a",
+   "source": "PR #315",
+   "files": [
+    {
+     "path": "docs/README.md",
+     "status": "M"
+    },
+    {
+     "path": "docs/decisions/OWNER_DECISION_FRONTEND_STYLE_GUIDE_FIRST_V001.md",
+     "status": "M"
+    },
+    {
+     "path": "docs/manifest/DESIGN_MATERIALS.json",
+     "status": "A"
+    },
+    {
+     "path": "docs/manifest/OWNER_DECISIONS.md",
+     "status": "M"
+    },
+    {
+     "path": "docs/operations/chatops/DESIGN_EXCHANGE_STAGE_A.md",
+     "status": "A"
+    },
+    {
+     "path": "docs/product/M2R_DESIGN_SPEC.md",
+     "status": "A"
+    },
+    {
+     "path": "docs/rules/DOCUMENT_REGISTER.md",
+     "status": "M"
+    },
+    {
+     "path": "docs/rules/PROJECT_RECORD_POLICY.md",
+     "status": "M"
+    },
+    {
+     "path": "scripts/chatops/actions_train/context_exchange.py",
+     "status": "M"
+    },
+    {
+     "path": "scripts/chatops/actions_train/manifest.json",
+     "status": "M"
+    },
+    {
+     "path": "scripts/chatops/ops/design_access_probe.py",
+     "status": "A"
+    },
+    {
+     "path": "scripts/chatops/ops/design_materials.py",
+     "status": "A"
+    },
+    {
+     "path": "scripts/chatops/tests/fixtures/design_exchange/issue309-negative-regression.json",
+     "status": "A"
+    },
+    {
+     "path": "scripts/chatops/tests/test_actions_train_context_exchange.py",
+     "status": "M"
+    },
+    {
+     "path": "scripts/chatops/tests/test_actions_train_design_materials.py",
+     "status": "A"
+    }
+   ],
+   "expect": {
+    "tier": "T3",
+    "strict": true
+   }
+  },
+  {
+   "id": "pr316_stage5_cursor",
+   "source": "PR #316",
+   "files": [
+    {
+     "path": "docs/workbench/context-exchange-20261023/STAGE5_CURSOR_AGY_COMPARE.json",
+     "status": "A"
+    },
+    {
+     "path": "docs/workbench/context-exchange-20261023/STAGE5_CURSOR_AGY_OFFLINE.md",
+     "status": "A"
+    },
+    {
+     "path": "docs/workbench/context-exchange-20261023/offline_replay.py",
+     "status": "M"
+    },
+    {
+     "path": "docs/workbench/context-exchange-20261023/stage5_offline_compare.py",
+     "status": "A"
+    },
+    {
+     "path": "scripts/chatops/actions_train/context_cursor_delivery.py",
+     "status": "A"
+    },
+    {
+     "path": "scripts/chatops/actions_train/context_native_delivery.py",
+     "status": "A"
+    },
+    {
+     "path": "scripts/chatops/actions_train/manifest.json",
+     "status": "M"
+    },
+    {
+     "path": "scripts/chatops/actions_train/stage.py",
+     "status": "M"
+    },
+    {
+     "path": "scripts/chatops/ops/agy29_pkg_finish_install.py",
+     "status": "M"
+    },
+    {
+     "path": "scripts/chatops/tests/test_actions_train_agy_author_routes.py",
+     "status": "M"
+    },
+    {
+     "path": "scripts/chatops/tests/test_actions_train_context_cursor_agy.py",
+     "status": "A"
+    },
+    {
+     "path": "scripts/chatops/tests/test_actions_train_context_cursor_scoped.py",
+     "status": "A"
+    },
+    {
+     "path": "scripts/chatops/tests/test_actions_train_cursor.py",
+     "status": "M"
+    }
+   ],
+   "expect": {
+    "tier": "T3",
+    "strict": true
+   }
+  },
+  {
+   "id": "pr317_agy29_pkg_finish",
+   "source": "PR #317",
+   "files": [
+    {
+     "path": "docs/ops/AGY29_PACKAGE_FINISH.md",
+     "status": "A"
+    },
+    {
+     "path": "docs/rules/DOCUMENT_REGISTER.md",
+     "status": "M"
+    },
+    {
+     "path": "scripts/chatops/actions_train/antigravity_qa_recovery.py",
+     "status": "M"
+    },
+    {
+     "path": "scripts/chatops/actions_train/manifest.json",
+     "status": "M"
+    },
+    {
+     "path": "scripts/chatops/actions_train/owner_package_admission.py",
+     "status": "M"
+    },
+    {
+     "path": "scripts/chatops/ops/agy29_pkg_finish_install.py",
+     "status": "A"
+    },
+    {
+     "path": "scripts/chatops/tests/test_actions_train_admission_pm.py",
+     "status": "M"
+    },
+    {
+     "path": "scripts/chatops/tests/test_actions_train_owner_package.py",
+     "status": "M"
+    },
+    {
+     "path": "scripts/chatops/tests/test_actions_train_pkg_finish.py",
+     "status": "A"
+    },
+    {
+     "path": "scripts/chatops/tests/test_actions_train_stage3_grants.py",
+     "status": "M"
+    }
+   ],
+   "expect": {
+    "tier": "T3",
+    "strict": true
+   }
+  },
+  {
+   "id": "pr309_radar_popup_ui",
+   "source": "PR #309 (issue #308 UI popups); touches contracts so T3 is allowed; visual/interaction QA must be kept",
+   "files": [
+    {
+     "path": "apps/api/src/games/games.service.ts",
+     "status": "M"
+    },
+    {
+     "path": "apps/api/src/radar/radar.service.ts",
+     "status": "M"
+    },
+    {
+     "path": "apps/api/test/integration/radar.unified.test.ts",
+     "status": "M"
+    },
+    {
+     "path": "apps/api/test/unit/radar-player-games.test.ts",
+     "status": "A"
+    },
+    {
+     "path": "apps/web/src/components/consumer/radar/RadarPage.tsx",
+     "status": "M"
+    },
+    {
+     "path": "apps/web/src/components/consumer/radar/UnifiedPlayerPreview.tsx",
+     "status": "M"
+    },
+    {
+     "path": "apps/web/src/lib/unified-directory.ts",
+     "status": "M"
+    },
+    {
+     "path": "apps/web/src/styles/radar-geographic.css",
+     "status": "M"
+    },
+    {
+     "path": "apps/web/test/radar-player-games.test.tsx",
+     "status": "A"
+    },
+    {
+     "path": "apps/web/test/shared-map-controller.test.ts",
+     "status": "M"
+    },
+    {
+     "path": "apps/web/test/unified-directory.test.ts",
+     "status": "M"
+    },
+    {
+     "path": "apps/web/test/unified-legacy-compat.test.ts",
+     "status": "M"
+    },
+    {
+     "path": "docs/api/UNIFIED_PLAYERS_RADAR_V001.md",
+     "status": "M"
+    },
+    {
+     "path": "docs/handoffs/radar-player-games-recovery.md",
+     "status": "A"
+    },
+    {
+     "path": "packages/contracts/openapi.json",
+     "status": "M"
+    },
+    {
+     "path": "packages/contracts/src/unified.generated.ts",
+     "status": "M"
+    }
+   ],
+   "expect": {
+    "min_tier": "T2",
+    "visual_qa": true
+   }
+  },
+  {
+   "id": "ui_css_only_popup",
+   "source": "synthetic: popup CSS+component only (no contract)",
+   "files": [
+    {
+     "path": "apps/web/src/components/consumer/radar/UnifiedPlayerPreview.tsx",
+     "status": "M"
+    },
+    {
+     "path": "apps/web/src/styles/radar-geographic.css",
+     "status": "M"
+    }
+   ],
+   "expect": {
+    "tier": "T2",
+    "visual_qa": true
+   }
+  }
+ ]
+}

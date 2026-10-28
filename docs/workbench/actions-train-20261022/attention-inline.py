@@ -1,0 +1,85 @@
+import base64,hashlib,io,json,os,re,sys,urllib.request,urllib.error,urllib.parse,zipfile
+REPO='anpavel84-afk/gobadminton-clean';RID=1416250340;OWNER=318610566;BOT=41898282;MAX=2097152
+class Refused(Exception):pass
+def need(ok,msg):
+    if not ok:raise Refused(msg)
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self,*args,**kwargs):return None
+def valid_run(run):
+    return (run.get('repository',{}).get('id')==RID and run.get('head_repository',{}).get('id')==RID
+        and run.get('path')=='.github/workflows/train-stage.yml' and run.get('event')=='workflow_dispatch'
+        and run.get('head_branch')=='dev' and run.get('status')=='completed'
+        and run.get('actor',{}).get('id') in (OWNER,BOT) and type(run.get('run_attempt')) is int)
+def read_stage(raw):
+    need(len(raw)<=MAX,'oversized artifact')
+    with zipfile.ZipFile(io.BytesIO(raw)) as z:
+        items=[x for x in z.infolist() if x.filename=='stage.json']
+        need(len(items)==1 and len(z.infolist())<=8 and items[0].file_size<=65536,'unexpected artifact layout')
+        with z.open(items[0]) as f:data=f.read(65537)
+    need(len(data)<=65536,'oversized stage result');v=json.loads(data);need(type(v) is dict,'invalid result');return v
+def attention(value,conclusion):
+    status=value.get('status')
+    if status not in ('deferred','unknown','refused','error'):
+        if conclusion not in ('failure','timed_out','cancelled'):return None
+        status='workflow_failed'
+    reason=(value.get('last') or value.get('result') or {}).get('reason',value.get('reason'))
+    reasons={'attempts exhausted':'Лимит попыток исчерпан; задача отложена, не завершена.',
+        'command failed: codex (output withheld)':'CLI завершился ошибкой; требуется сверка состояния, без слепого повторного запуска.'}
+    text=reasons.get(reason,{'deferred':'Задача отложена; проверьте сохранённую причину и лимиты.',
+        'unknown':'Результат этапа неизвестен: сначала сверить процессы и сохранённые данные.',
+        'refused':'Этап остановлен защитной проверкой.', 'error':'Этап завершился ошибкой.',
+        'workflow_failed':'Workflow завершился с ошибкой/отменой; сверить серверный журнал до повторного запуска.'}[status])
+    return status,text
+def main():
+    need(os.environ.get('GITHUB_REPOSITORY')==REPO and os.environ.get('GITHUB_REF')=='refs/heads/main','trusted default workflow only')
+    event=json.load(open(os.environ['GITHUB_EVENT_PATH']));kind=os.environ['GITHUB_EVENT_NAME']
+    if kind=='workflow_run':run_id=event['workflow_run']['id']
+    else:
+        need(kind=='issue_comment' and event.get('action')=='created' and event['issue']['number']==158 and event['comment']['user']['id']==OWNER,'not an Owner alert check')
+        marker,sep,body=event['comment']['body'].partition('\n');need(marker=='GOBADMINTON_TRAIN_ALERT_CHECK_V1' and sep,'wrong marker')
+        args=json.loads(body);need(set(args)=={'run_id'} and type(args['run_id']) is int,'closed numeric check only');run_id=args['run_id']
+    need(type(run_id) is int and run_id>0,'invalid run')
+    token=os.environ['GH_TOKEN'];opener=urllib.request.build_opener(NoRedirect())
+    def request(path,data=None):
+        url='https://api.github.com/repos/'+REPO+'/'+path
+        headers={'Accept':'application/vnd.github+json','User-Agent':'gobadminton-train-attention','Authorization':'Bearer '+token}
+        payload=None if data is None else json.dumps(data).encode();headers['Content-Type']='application/json'
+        return opener.open(urllib.request.Request(url,data=payload,headers=headers),timeout=25)
+    def api(path,data=None):
+        with request(path,data) as response:raw=response.read(MAX+1)
+        need(len(raw)<=MAX,'oversized API response');return json.loads(raw)
+    run=api(f'actions/runs/{run_id}');need(valid_run(run),'untrusted upstream workflow')
+    artifacts=api(f'actions/runs/{run_id}/artifacts?per_page=30')['artifacts']
+    items=[a for a in artifacts if a.get('name')=='train-stage' and not a.get('expired')]
+    value={}
+    if items:
+        need(len(items)==1,'ambiguous stage artifacts');a=items[0]
+        need(type(a.get('id')) is int and 0<a.get('size_in_bytes',0)<=MAX and a.get('workflow_run',{}).get('id')==run_id,'unbound artifact')
+        try:
+            with request(f'actions/artifacts/{a["id"]}/zip') as response:raw=response.read(MAX+1)
+        except urllib.error.HTTPError as error:
+            need(error.code==302,'artifact unavailable');url=error.headers.get('Location','');host=urllib.parse.urlsplit(url)
+            need(host.scheme=='https' and not host.username and not host.password and host.port in (None,443)
+                and host.hostname and any(host.hostname.endswith(s) for s in ('.blob.core.windows.net','.actions.githubusercontent.com')), 'unexpected artifact host')
+            # The signed blob URL receives NO GitHub Authorization, and no redirects are followed.
+            with opener.open(urllib.request.Request(url,headers={'User-Agent':'gobadminton-train-attention'}),timeout=25) as response:raw=response.read(MAX+1)
+        need(len(raw)<=MAX and a.get('digest')=='sha256:'+hashlib.sha256(raw).hexdigest(),'artifact hash mismatch')
+        value=read_stage(raw)
+    alert=attention(value,run['conclusion'])
+    if alert is None:print('NO_ATTENTION_NEEDED');return
+    marker=f'<!-- gb-train-attention:{run_id}:{run["run_attempt"]} -->'
+    for page in range(1,11):
+        comments=api('issues/158/comments?per_page=100&page='+str(page)+'&since='+urllib.parse.quote(run['created_at'],safe=''))
+        if any(c.get('user',{}).get('id')==BOT and marker in c.get('body','') for c in comments):print('ALREADY_NOTIFIED');return
+        if len(comments)<100:break
+    else:raise Refused('notification history bound exceeded')
+    status,text=alert
+    body=marker+'\n@anpavel84-afk — **Train: требуется внимание**\n\n'+text+'\n\n'
+    body+='Фактический статус: `'+status+'`. Run '+str(run_id)+', попытка workflow '+str(run['run_attempt'])+'.\n'
+    body+='https://github.com/'+REPO+'/actions/runs/'+str(run_id)+'\n\n'
+    body+='Это событийное уведомление GitHub Actions, не GPT-мониторинг. Независимая очередь не остановлена автоматически; проверки и лимиты не отключались.'
+    posted=api('issues/158/comments',{'body':body});print('NOTIFICATION_POSTED comment='+str(posted['id']))
+if __name__=='__main__':
+    try:main()
+    except Exception as error:
+        print(str(error) if isinstance(error,Refused) else type(error).__name__,file=sys.stderr);raise SystemExit(1)

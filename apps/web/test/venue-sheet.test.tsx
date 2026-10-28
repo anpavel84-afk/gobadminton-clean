@@ -271,7 +271,8 @@ it.each(["mouse", "touch", "pen"])("moves the real surface continuously before r
   h.pointer("onPointerMove", 400, 2000, { pointerType });
   expect(firstHeight).toBe("calc(172px + 100px)"); expect(h.height()).toBe("calc(172px + 300px)");
   expect(h.find("gb-venue-popup").props.style).toMatchObject({ transition: "none" });
-  expect(popupElements(h.render()).some(node => node.type === VenueSheet)).toBe(true);
+  // Image stays in compact cover instead of mounting full VenueSheet on first move.
+  expect(popupElements(h.render()).some(node => node.type === VenueSheet)).toBe(false);
   // Render actual expanded info using a separate hook scope before release.
   const saved = { slots: hooks.slots, cursor: hooks.cursor, effects: hooks.effects };
   hooks.slots = []; hooks.cursor = 0; hooks.effects = [];
@@ -281,6 +282,7 @@ it.each(["mouse", "touch", "pen"])("moves the real surface continuously before r
   expect(h.change).not.toHaveBeenCalled();
   h.pointer("onPointerUp", 400, 2200); expect(h.change).toHaveBeenLastCalledWith(true);
   vi.advanceTimersByTime(220); expect(h.height()).toBe("88dvh");
+  expect(popupElements(h.render()).some(node => node.type === VenueSheet)).toBe(true);
   h.pointer("onPointerDown", 100, 3000); h.pointer("onPointerMove", 350, 4000); const down = h.height();
   h.pointer("onPointerMove", 600, 5000); expect(h.height()).not.toBe(down);
   h.pointer("onPointerUp", 600, 5200); expect(h.change).toHaveBeenLastCalledWith(false);
@@ -291,8 +293,9 @@ it("opens by dragging any part of the compact card, while retaining an ordinary 
   // A touch on the preview title/photo/arrow bubbles to the compact popup shell.
   h.pointerCard("onPointerDown", 600, 0);
   h.pointerCard("onPointerMove", 597, 15);
-  expect(h.height()).toBe("172px"); expect(h.capture.size).toBe(0);
+  expect(h.height()).toBe("172px"); expect(h.capture.size).toBe(1); // immediate capture before threshold
   h.pointerCard("onPointerUp", 597, 18);
+  expect(h.capture.size).toBe(0);
   expect(h.change).not.toHaveBeenCalled();
   expect(h.click(1).preventDefault).not.toHaveBeenCalled(); // normal button click survives
   const preview = popupElements(h.render()).find(node => node.type === VenuePreviewCard);
@@ -316,7 +319,78 @@ it("opens by dragging any part of the compact card, while retaining an ordinary 
   swipe.dispose();
 });
 
+it("does not swallow the first real Close tap after an iPhone swipe without a synthetic click", () => {
+  const h = popupHarness(false, true);
+  h.pointerCard("onPointerDown", 600, 0);
+  h.pointerCard("onPointerMove", 480, 100);
+  h.pointerCard("onPointerUp", 470, 150);
+  expect(h.change).toHaveBeenLastCalledWith(true);
+
+  // iOS may omit the post-swipe synthetic click. A new pointerdown on the X
+  // must therefore disarm stale swipe-click suppression before its click event.
+  const popup = h.find("gb-venue-popup");
+  expect(popup.props.onPointerDown).toBeUndefined(); // full popup never handles gestures
+  (popup.props.onPointerDownCapture as () => void)();
+  const clickOnClose = h.click(1);
+  expect(clickOnClose.preventDefault).not.toHaveBeenCalled();
+  expect(clickOnClose.stopPropagation).not.toHaveBeenCalled();
+
+  const sheet = popupElements(h.render()).find(node => node.type === VenueSheet);
+  if (!sheet) throw new Error("Expected expanded venue sheet");
+  (sheet.props.onCollapse as () => void)(); // CloseButton routes to onCollapse
+  expect(h.change).toHaveBeenLastCalledWith(false);
+  h.dispose();
+});
+
+it("still consumes a swipe-generated ghost click when no fresh press occurs", () => {
+  const h = popupHarness(false, true);
+  h.pointerCard("onPointerDown", 600, 0);
+  h.pointerCard("onPointerMove", 480, 100);
+  h.pointerCard("onPointerUp", 470, 150);
+  expect(h.change).toHaveBeenLastCalledWith(true);
+  expect(h.click(1).preventDefault).toHaveBeenCalledOnce();
+  const nextRealPress = h.find("gb-venue-popup").props.onPointerDownCapture as () => void;
+  nextRealPress();
+  expect(h.click(1).preventDefault).not.toHaveBeenCalled();
+  h.dispose();
+});
+
+it("captures the original preview button on pointerdown before any iPhone movement", () => {
+  // The working gray handle captures immediately; the former compact implementation
+  // waited until >8px and iOS could cancel the pointer before it got captured.
+  const h = popupHarness(false, true);
+  const source = { closest: (selector: string) => selector === ".gb-venue-preview-button" ? h.target : null };
+  h.pointerCard("onPointerDown", 600, 0, { target: source });
+  expect(h.target.setPointerCapture).toHaveBeenCalledWith(3);
+  expect(h.capture.has(3)).toBe(true);
+  // A small tap releases capture without suppressing the ordinary preview click.
+  h.pointerCard("onPointerMove", 597, 15);
+  h.pointerCard("onPointerUp", 597, 16);
+  expect(h.capture.size).toBe(0);
+  expect(h.click(1).preventDefault).not.toHaveBeenCalled();
+  expect(h.change).not.toHaveBeenCalled();
+  h.dispose();
+});
+
+it("does not let iPhone viewport resizing cancel a compact card swipe", () => {
+  const h = popupHarness(false, true);
+  h.pointerCard("onPointerDown", 620, 0);
+  expect(h.capture.has(3)).toBe(true);
+  window.dispatchEvent(new Event("resize"));
+  expect(h.capture.has(3)).toBe(true);
+  h.pointerCard("onPointerMove", 530, 100);
+  expect(h.height()).toBe("calc(172px + 90px)");
+  window.dispatchEvent(new Event("resize"));
+  expect(h.capture.has(3)).toBe(true);
+  expect(h.height()).toBe("calc(172px + 90px)");
+  h.pointerCard("onPointerUp", 520, 140);
+  expect(h.change).toHaveBeenLastCalledWith(true);
+  expect(h.capture.size).toBe(0);
+  h.dispose();
+});
+
 it("keeps the compact preview mounted and pointer-addressable during a real swipe", () => {
+  vi.useFakeTimers();
   // Regression for Owner iPhone UAT FAIL #179: the old hidden={moving} turned
   // the original touch target display:none on the first move. WebKit then
   // cancelled the pointer stream even though the root had pointer capture.
@@ -328,19 +402,68 @@ it("keeps the compact preview mounted and pointer-addressable during a real swip
   h.pointerCard("onPointerMove", 575, 20);
   const movingPreview = h.find("gb-venue-popup-preview-surface");
   expect(movingPreview.props.hidden).toBeUndefined();
-  expect(movingPreview.props.style).toMatchObject({ opacity: 0, pointerEvents: "auto" });
+  expect(movingPreview.props.style).toMatchObject({ opacity: 1, pointerEvents: "auto" });
+  expect(h.find("gb-venue-popup").props["data-compact-morph"]).toBe(true);
+  expect((movingPreview.props.style as Record<string, unknown>)["--gb-venue-cover-width"]).toBe("75px");
+  expect(popupElements(h.render()).some(node => node.type === VenueSheet)).toBe(false);
   expect(h.find("gb-venue-popup").props["data-moving"]).toBe(true);
   expect(h.capture.has(3)).toBe(true);
   // Subsequent pointermove is still deliverable after preview transitions.
   h.pointerCard("onPointerMove", 505, 80);
   expect(h.height()).toBe("calc(172px + 95px)");
+  expect((h.find("gb-venue-popup-preview-surface").props.style as Record<string, unknown>)["--gb-venue-cover-width"]).toBe("107px");
   h.pointerCard("onPointerUp", 505, 100);
   expect(h.change).toHaveBeenLastCalledWith(true);
   const openedPreview = h.find("gb-venue-popup-preview-surface");
   expect(openedPreview.props.hidden).toBeUndefined();
-  expect(openedPreview.props.style).toMatchObject({ opacity: 0, pointerEvents: "none" });
+  expect(openedPreview.props.style).toMatchObject({ opacity: 1, pointerEvents: "none" });
+  expect((openedPreview.props.style as Record<string, unknown>)["--gb-venue-cover-width"]).toBe("334px");
+  expect(popupElements(h.render()).some(node => node.type === VenueSheet)).toBe(false);
   expect(h.capture.size).toBe(0);
+  vi.advanceTimersByTime(220);
+  expect(popupElements(h.render()).some(node => node.type === VenueSheet)).toBe(true);
+  expect(h.find("gb-venue-popup-preview-surface").props.style).toMatchObject({ opacity: 0, pointerEvents: "none" });
   h.dispose();
+});
+
+it("keeps the compact photo small on DOWN swipe, including short aborted downward drags", () => {
+  const down = popupHarness(false, true);
+  down.pointerCard("onPointerDown", 490, 0);
+  down.pointerCard("onPointerMove", 525, 20);
+  expect(down.height()).toBe("calc(172px + 0px)");
+  expect(down.find("gb-venue-popup").props["data-compact-morph"]).toBe(false);
+  expect(down.find("gb-venue-popup-preview-surface").props.style).toMatchObject({ opacity: 1, pointerEvents: "auto" });
+  expect((down.find("gb-venue-popup-preview-surface").props.style as Record<string,unknown>)["--gb-venue-cover-width"]).toBeUndefined();
+  expect(popupElements(down.render()).some(node => node.type === VenueSheet)).toBe(false);
+  down.pointerCard("onPointerUp", 529, 40);
+  expect(down.change).not.toHaveBeenCalled();
+  expect(down.deselect).not.toHaveBeenCalled();
+  expect(popupElements(down.render()).some(node => node.type === VenueSheet)).toBe(false);
+  down.dispose();
+});
+
+it("keeps the growing cover until settled; an already expanded sheet stays unchanged", () => {
+  vi.useFakeTimers();
+  const swipe = popupHarness(false);
+  swipe.pointerCard("onPointerDown", 600, 0);
+  swipe.pointerCard("onPointerMove", 300, 1000);
+  const media = swipe.find("gb-venue-popup-preview-surface").props.style as Record<string,unknown>;
+  expect(Number.parseInt(String(media["--gb-venue-cover-width"]),10)).toBeGreaterThan(64);
+  expect(Number.parseInt(String(media["--gb-venue-cover-width"]),10)).toBeLessThan(334);
+  expect(popupElements(swipe.render()).some(node => node.type === VenueSheet)).toBe(false);
+  swipe.pointerCard("onPointerUp", 300, 1020);
+  expect(swipe.change).toHaveBeenLastCalledWith(true);
+  expect(swipe.find("gb-venue-popup").props["data-settling"]).toBe(true);
+  expect(popupElements(swipe.render()).some(node => node.type === VenueSheet)).toBe(false);
+  vi.advanceTimersByTime(220);
+  expect(swipe.find("gb-venue-popup").props["data-settling"]).toBe(false);
+  expect(popupElements(swipe.render()).some(node => node.type === VenueSheet)).toBe(true);
+  swipe.dispose();
+
+  const expanded = popupHarness(true, true);
+  expect(expanded.find("gb-venue-popup").props["data-compact-morph"]).toBe(false);
+  expect(popupElements(expanded.render()).some(node => node.type === VenueSheet)).toBe(true);
+  expanded.dispose();
 });
 
 it("dismisses the selected venue on a downward compact-card swipe, also from its handle", () => {

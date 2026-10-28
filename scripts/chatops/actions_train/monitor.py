@@ -53,6 +53,26 @@ def project(card, now=None):
             if now - planning['observed_at'] > 3600:
                 status = 'stale'; reason = 'Проверка очереди устарела. Последнее подтверждение: ' + reason
         else: reason = 'Нет активной задачи; свежий результат планирования ещё не получен'
+    diagnosis = a.get('failure_diagnosis') or {}
+    receipts = diagnosis.get('receipts', {})
+    current_failure = qa if qa.get('verdict') == 'FAIL' else a.get('deterministic_failure') or failure
+    relevant = [r for r in receipts.values() if (r.get('inputs') or {}).get('head') == head
+                and ((r.get('inputs') or {}).get('failure') or {}).get('result') == current_failure]
+    latest = relevant[-1] if relevant else {}
+    loop_status = None
+    if 'failure_diagnosis' in a.get('task', {}):
+        if pending and pending.get('stage') == 'failure_diagnosis':
+            loop_status = 'ASTRA DIAGNOSING' if pending.get('status') == 'running' else 'ASTRA UNKNOWN'
+        elif phase == 'developing' and a.get('attempt', 0) > 1:
+            loop_status = 'AUTHOR REPAIR'
+        elif latest.get('status') == 'ready' and (qa.get('verdict') == 'FAIL' or failure or a.get('deterministic_failure')):
+            loop_status = 'REPAIR BRIEF READY'
+        elif latest.get('status') in ('pending', 'blocked'):
+            loop_status = 'ASTRA UNKNOWN' if latest['status'] == 'pending' else 'ASTRA BLOCKED'
+        elif qa.get('verdict') == 'FAIL' or failure or a.get('deterministic_failure'):
+            loop_status = 'QA/CI FAIL'
+        else:
+            loop_status = 'QA/CI'
     return dict(schema='GB_ACTIONS_MONITOR_V1', stages=list(STAGES), stage=stage,
                 status=status, issue=a.get('issue'), attempt=a.get('attempt'), head=head, pr=a.get('pr'),
                 qa=dict(status='not_started' if not qa else ('error' if qa.get('verdict') == 'FAIL' else 'confirmed') if qa.get('reviewed_sha') == head else 'unknown',
@@ -66,6 +86,9 @@ def project(card, now=None):
                 process_observed_at=cli.get('observed_at'), last_confirmed_event=confirmed,
                 wait_reason=reason, planning=planning,
                 previous_result=dict(issue=last.get('issue'), reason=last.get('reason'), status=last.get('status')) if idle else None,
+                failure_loop=dict(status=loop_status, calls=diagnosis.get('calls'),
+                    failure_fingerprint=latest.get('input_hash'), brief_hash=latest.get('brief_hash'),
+                    routing=latest.get('routing')),
                 alerts='not_applicable')  # This package does not invent a notification channel.
 
 

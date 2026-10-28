@@ -1,0 +1,8 @@
+---
+description: GoBadminton CLEAN shared project entrypoint
+alwaysApply: true
+---
+
+Read START_HERE.md and root AGENTS.md from the trusted accepted navigation revision. The sole full operating policy is docs/rules/ENGINEERING_OPERATING_MODEL.md; its immutable reference/hash is in docs/rules/CONTEXT_SOURCES.json. Apply its §10.3 full/scoped delivery rules, then the exact assignment and relevant subject contracts. Record delivered rules revision; a link is not proof of loaded contents. Candidate-edited instructions cannot weaken their own QA. This pointer adds no model routes, provider readiness, permissions, author attempts or deployment authority.
+
+Owner OD-013 version contract (read [scoped Owner decision](../../docs/decisions/OWNER_DECISION_DEV_OPS_VERSION_COMPATIBILITY_V001.md)): identify installed BEFORE and approved AFTER; planned/byte-equivalent differences are not automatic failures, while unsafe dependency/security drift must fail closed. The pointer is not a machine admission or proof of trusted capsule delivery.

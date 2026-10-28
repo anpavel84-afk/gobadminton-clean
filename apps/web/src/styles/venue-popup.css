@@ -39,7 +39,7 @@
 .gb-consumer .gb-venue-sheet-detail .gb-game-hero, .gb-consumer .gb-venue-sheet-detail .gb-game-content, .gb-consumer .gb-venue-sheet-detail .gb-game-schedule, .gb-consumer .gb-venue-sheet-detail .gb-game-facts { display:grid; grid-template-columns:minmax(0,1fr); }
 @media (min-width:768px) { .gb-consumer .gb-venue-sheet { right:16px; width:420px; max-width:calc(100% - 32px); } }
 
-/* BottomSheet surface: one measured shell; only its handle captures pointers. */
+/* BottomSheet surface: compact card or handle captures its own pointer; expanded content scrolls normally. */
 .gb-consumer .gb-venue-popup { position:fixed; z-index:104; left:12px; right:12px; bottom:calc(12px + var(--gb-safe-bottom)); max-height:88dvh; overflow:hidden; background:var(--gb-white); color:var(--gb-ink); border-radius:var(--gb-radius-lg); box-shadow:var(--gb-shadow-elevated); }
 /* The compact card is one touch surface. Horizontal browser gestures and pinch-zoom
    remain native; vertical swipes are interpreted by VenuePopup only while collapsed. */
@@ -51,12 +51,43 @@
 }
 /* Stop mobile Safari from claiming a touch-scroll before pointer capture;
    only the compact card is affected, never the expanded popup content. */
-.gb-consumer .gb-venue-popup[data-expanded="false"] .gb-venue-popup-preview-surface {
+.gb-consumer .gb-venue-popup[data-expanded="false"] .gb-venue-popup-preview-surface,
+.gb-consumer .gb-venue-popup[data-expanded="false"] .gb-venue-preview-button {
   touch-action:none;
+  -webkit-user-select:none;
+  user-select:none;
 }
 .gb-consumer .gb-venue-popup-compact-measure { position:absolute; height:172px; width:0; pointer-events:none; }
 .gb-consumer .gb-venue-popup-full-measure { position:absolute; height:88dvh; width:0; pointer-events:none; }
 .gb-consumer .gb-venue-popup .gb-venue-preview { position:static; height:128px; box-shadow:none; }
+/* Owner #179: the selected venue owns ONE image. While the compact sheet grows,
+   enlarge that existing thumbnail in-place; do not move it to the info slot
+   until the 220ms settle completes. A downward compact swipe stays unchanged. */
+.gb-consumer .gb-venue-popup[data-compact-morph="true"] .gb-venue-preview-cover {
+  position:absolute;
+  left:16px;
+  top:var(--gb-venue-cover-top);
+  width:var(--gb-venue-cover-width);
+  height:var(--gb-venue-cover-height);
+  max-width:none;
+  aspect-ratio:auto;
+  z-index:2;
+}
+.gb-consumer .gb-venue-popup[data-compact-morph="true"] .gb-venue-preview-copy {
+  grid-column:2;
+  opacity:var(--gb-venue-copy-opacity);
+}
+.gb-consumer .gb-venue-popup[data-compact-morph="true"] .gb-venue-preview-arrow {
+  grid-column:3;
+  opacity:var(--gb-venue-copy-opacity);
+}
+.gb-consumer .gb-venue-popup[data-compact-morph="true"][data-settling="true"] .gb-venue-preview-cover {
+  transition:width 220ms cubic-bezier(.2,.8,.2,1), height 220ms cubic-bezier(.2,.8,.2,1), top 220ms cubic-bezier(.2,.8,.2,1);
+}
+.gb-consumer .gb-venue-popup[data-compact-morph="true"][data-settling="true"] :is(.gb-venue-preview-copy,.gb-venue-preview-arrow) {
+  transition:opacity 220ms cubic-bezier(.2,.8,.2,1);
+}
+
 .gb-consumer .gb-venue-popup-content { width:100%; min-width:0; height:calc(100% - 44px); overflow-y:auto; overflow-x:clip; overscroll-behavior:contain; scroll-padding-top:80px; scroll-padding-bottom:96px; box-sizing:border-box; -webkit-overflow-scrolling:touch; }
 .gb-consumer .gb-venue-popup .gb-venue-sheet { position:static; width:100%; max-width:none; max-height:none; overflow:visible; border-radius:0; }
 .gb-consumer a.gb-venue-sheet-primary { display:block; box-sizing:border-box; text-align:center; text-decoration:none; color:var(--gb-ink); }

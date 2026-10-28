@@ -11,10 +11,11 @@ import { profileSetupPath, safeAuthReturnPath } from "../../../lib/auth-return";
 import { Button } from "../Button";
 import { listAuthMethods } from "../../../lib/email-auth";
 import { EmailCodeForm } from "./EmailCodeForm";
+import { forbiddenUrlScalars, httpUrlAgreesWithOriginalAuthority } from "../../../lib/original-http-authority";
 
 export function safeAvatarUrl(raw: string): boolean {
   if (/^\/v1\/media\/avatars\/[a-f0-9]{64}\.png$/.test(raw)) return true;
-  if (raw.length > 2048) return false;
+  if (raw.length > 2048 || !httpUrlAgreesWithOriginalAuthority(raw, forbiddenUrlScalars)) return false;
   try { const url = new URL(raw); return url.protocol === "https:" && !url.username && !url.password && !url.port && (url.hostname === "avatars.yandex.net" || url.hostname.endsWith(".userapi.com")); } catch { return false; }
 }
 export function Avatar({ name, tone = "lime", avatar, className }: { name: string; tone?: "lime" | "purple" | "yellow"; avatar?: PlayerAvatar; className?: string }) {

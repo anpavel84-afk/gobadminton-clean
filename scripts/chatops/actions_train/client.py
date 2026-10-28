@@ -63,6 +63,37 @@ def trusted_event(event, name, api):
         need(name == 'schedule', 'untrusted event type')
 
 
+def stage_planning_evidence(issues, comments, directory=Path('evidence')):
+    """Read-only, bounded stage DAG proposal; never makes Issue/Git/CLI writes.
+
+    An Owner's exact GOBADMINTON_PHASE_SCOPE_V2 grants a draft plan only.
+    No new admission, root reservation, stage dispatch or Project field mutation.
+    """
+    import importlib.util
+    from urllib.parse import urlparse
+    source = Path(__file__).resolve().parent.parent / 'planning' / 'phase_task_plan_v2.py'
+    spec = importlib.util.spec_from_file_location('gobadminton_phase_task_plan_v2', source)
+    need(spec is not None and spec.loader is not None, 'phase planner unavailable')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    grouped = {}
+    for comment in comments:
+        raw = comment.get('issue_url', '')
+        try:
+            path = urlparse(raw).path.rsplit('/', 1)[-1]
+            number = int(path)
+        except (ValueError, TypeError, AttributeError):
+            continue
+        grouped.setdefault(number, []).append(comment)
+    result = module.preview_for_issues(issues, grouped)
+    need(result['schema'] == 'GB_PHASE_PREVIEW_V2'
+         and result['can_start_execution'] is False, 'unsafe planner side effect marker')
+    directory.mkdir(exist_ok=True)
+    (directory / 'phase-plan-preview-v2.json').write_text(
+        json.dumps(result, ensure_ascii=False, sort_keys=True))
+    return result
+
+
 def reconcile(api, ssh, event, name):
     import datetime as dt
     trusted_event(event, name, api)
@@ -74,6 +105,15 @@ def reconcile(api, ssh, event, name):
     for issue in issues:
         if 'pull_request' not in issue:
             comments.extend(api.pages(f'issues/{issue["number"]}/comments'))
+    # Side-effect-free planning is independent of source dispatch and cannot
+    # stall an already approved stage due to a malformed draft parent.
+    try:
+        stage_planning_evidence(issues, comments)
+    except (OSError, ValueError, KeyError, TypeError, Refused) as error:
+        Path('evidence').mkdir(exist_ok=True)
+        Path('evidence/phase-plan-preview-v2.json').write_text(
+            json.dumps({'schema':'GB_PHASE_PREVIEW_V2','status':'NOT_AVAILABLE',
+                        'reason':type(error).__name__,'can_start_execution':False}))
     candidates = s.admitted(a, issues, comments, dt.datetime.fromisoformat(SINCE))
     from recovery_admission import candidates as recovery_candidates
     candidates.extend(recovery_candidates(a, snap, issues))
@@ -103,10 +143,50 @@ def reconcile(api, ssh, event, name):
     ssh({'action':'train','stage':'planning','controller_sha':controller,
          'run':int(os.environ['GITHUB_RUN_ID']),'run_attempt':int(os.environ['GITHUB_RUN_ATTEMPT']),
          'report':report})
-    for descriptor in intents + recovery_intents:
-        api('actions/workflows/train-stage.yml/dispatches', dict(ref='dev', inputs={
-            'operation': json.dumps(descriptor, sort_keys=True, separators=(',', ':'))}))
-    print('Dispatched bounded stages: ' + str(len(intents) + len(recovery_intents)))
+    dispatch_descriptors(api, intents + recovery_intents)
+
+
+def dispatch_descriptors(api, descriptors):
+    """One finite dispatch pass; isolation without a second reservation journal.
+
+    Receiver generation + immutable operation binding remains the sole execution
+    deduplicator. An ambiguous HTTP request is not retried here. A future wake
+    must read the durable receiver snapshot before deciding anything again.
+    """
+    from core import SubmissionFailed, SubmissionUnknown, binding
+    unique = {}
+    for descriptor in descriptors:
+        need(isinstance(descriptor, dict) and set(descriptor) ==
+             {'slot','issue','stage','phase','head','attempt','generation','profile'},
+             'unknown dispatch descriptor fields')
+        full = dict(descriptor, action='train', run=int(os.environ['GITHUB_RUN_ID']),
+                    run_attempt=int(os.environ['GITHUB_RUN_ATTEMPT']), gh_token='schema-validation-only')
+        request(full)  # Validate the whole batch before any HTTP side effect.
+        unique.setdefault(digest(binding(full)), descriptor)
+    outcomes = []
+    directory = Path('evidence'); directory.mkdir(exist_ok=True)
+    def save():
+        temporary = directory / 'dispatch-results.tmp'
+        temporary.write_text(json.dumps(outcomes, sort_keys=True))
+        os.replace(temporary, directory / 'dispatch-results.json')
+    for fingerprint, descriptor in unique.items():
+        row = dict(fingerprint=fingerprint, slot=descriptor['slot'], issue=descriptor['issue'],
+                   generation=descriptor['generation'], outcome='submitting')
+        outcomes.append(row); save()
+        try:
+            api('actions/workflows/train-stage.yml/dispatches', dict(ref='dev', inputs={
+                'operation': json.dumps(descriptor, sort_keys=True, separators=(',', ':'))}))
+            row['outcome'] = 'submitted'
+        except SubmissionFailed:
+            row['outcome'] = 'rejected'  # known no-start; another disjoint slot may proceed
+        except SubmissionUnknown:
+            row['outcome'] = 'unknown'   # no retry and no invented success
+        except (Refused, OSError, ValueError, KeyError, TypeError):
+            row['outcome'] = 'blocked'; save()
+            raise  # auth/rate limits/global identity/integrity errors remain global
+        save()
+    print('Bounded dispatch outcomes: ' + json.dumps(outcomes, sort_keys=True))
+    return outcomes
 
 
 def execute(api, ssh, descriptor):
@@ -121,6 +201,24 @@ def execute(api, ssh, descriptor):
         time.sleep(20)
         snap = ssh({'action': 'train', 'stage': 'status'})
         card = snap['slots'][descriptor['slot']]
+        # Product QA occupies its own ops ledger, not historical slot pending.
+        if descriptor.get('stage') == 'product_qa':
+            product = (snap.get('product_qa_ops') or {})
+            pending = product.get('pending')
+            if pending:
+                op = (product.get('operations') or {}).get(pending) or {}
+                if not op.get('process') and product.get('last'):
+                    pass
+                elif op.get('result') and op['result'].get('status') == 'unknown':
+                    value = dict(status='unknown', reason='lost process identity; reconcile exact effects')
+                    break
+                continue
+            last = product.get('last') or {}
+            if last and last.get('workflow_run') == req['run'] and last.get('workflow_attempt') == req['run_attempt']:
+                value = dict(status=last['status'], last=last)
+                break
+            value = dict(status='unknown', reason='product QA journal result identity mismatch')
+            break
         pending = card['pending']
         if pending:
             if pending['status'] == 'unknown':
@@ -137,9 +235,20 @@ def execute(api, ssh, descriptor):
     Path('evidence/stage.json').write_text(json.dumps(value, sort_keys=True))
     last = value.get('last') or {}
     # Explicit dispatch bypasses GITHUB_TOKEN event suppression, only on a factual transition.
-    changed = (last.get('changed') and last.get('workflow_run') == req['run']
-               and last.get('workflow_attempt') == req['run_attempt']
-               and value['status'] in ('confirmed', 'deferred'))
+    author_changed = (last.get('changed') and last.get('workflow_run') == req['run']
+                      and last.get('workflow_attempt') == req['run_attempt']
+                      and value['status'] in ('confirmed', 'deferred'))
+    # Product QA: factual Root envelope (not author checkpoint `changed`). Same
+    # workflow run/attempt + confirmed validated PASS/FAIL only; duplicates /
+    # already-consumed / UNKNOWN do not signal a new transition.
+    product_changed = (
+        descriptor.get('stage') == 'product_qa'
+        and last.get('product_operation_changed') is True
+        and last.get('workflow_run') == req['run']
+        and last.get('workflow_attempt') == req['run_attempt']
+        and value['status'] == 'confirmed'
+        and last.get('qa_verdict') in ('PASS', 'FAIL'))
+    changed = bool(author_changed or product_changed)
     # The remote token is READ-ONLY. A separate hosted job owns actions:write continuation.
     with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
         out.write('changed=' + ('true' if changed else 'false') + '\n')

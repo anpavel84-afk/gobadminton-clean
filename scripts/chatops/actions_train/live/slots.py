@@ -36,6 +36,10 @@ SLOT_USERS = {'slot1': LEGACY_USER}
 SOLO_LOCKS = {'global', 'migrations', 'contracts', 'workflows', 'chatops'}
 UNKNOWN = None          # quota unknown != 0: never "free", never "empty"; it blocks scheduling
 ROLES = ('author', 'qa', 'review')
+# Owner DIRECT 2026-10-27: new source authors are globally sequential even for disjoint
+# paths. Immutable QA is read-only and must not be confused with a writer lease.
+SOURCE_WRITER_PHASES = frozenset({'claimed', 'developing', 'candidate', 'pr_wait'})
+SOURCE_WRITER_STAGES = frozenset({'claim', 'author', 'publish'})
 ASSIGN_SCHEMA = 'GB_SLOT_ASSIGN_V1'
 STATUS_SCHEMA = 'GB_SLOT_STATUS_V1'
 RETIRED = 'RETIRED_TO_SLOT.json'
@@ -235,10 +239,25 @@ def disjoint(paths_a, paths_b):
 
 
 # ---------------------------------------------------------------- locks
-def task_record(issue, task):
+def task_record(issue, task, *, writer=True):
     locks = task.get('locks') or ['global']    # undeclared = solo
     return dict(issue=issue, locks=list(locks), allowed_paths=list(task['allowed_paths']),
-                depends_on=list(task.get('depends_on', [])))
+                depends_on=list(task.get('depends_on', [])), writer=bool(writer))
+
+
+def is_source_writer_phase(phase):
+    return phase in SOURCE_WRITER_PHASES
+
+
+def is_source_writer_stage(stage):
+    return stage in SOURCE_WRITER_STAGES
+
+
+def record_is_writer(record):
+    """Legacy lease bytes without writer default to writer=True (fail closed)."""
+    if not isinstance(record, dict):
+        return True
+    return record.get('writer', True) is not False
 
 
 def lock_conflict(a, b):
@@ -261,8 +280,16 @@ def path_overlap(p, q):
 
 
 def conflicts(r1, r2):
-    """Conservative: any lock conflict OR any allowed_paths overlap serializes the pair."""
+    """Conservative path/lock intersection. Also: two source writers always conflict.
+
+    Owner DIRECT 2026-10-27 supersedes parallel disjoint authors. Immutable QA
+    records set writer=False and still serialize only on real intersection.
+    Historical UNKNOWN occupancy keeps using this predicate; never evade by
+    renaming path/slot/op alone.
+    """
     if r1['issue'] == r2['issue']:
+        return True
+    if record_is_writer(r1) and record_is_writer(r2):
         return True
     return (any(lock_conflict(a, b) for a in r1['locks'] for b in r2['locks'])
             or any(path_overlap(p, q) for p in r1['allowed_paths'] for q in r2['allowed_paths']))
@@ -304,8 +331,8 @@ class LockRegistry:
                 fd = os.open(self.directory / entry, os.O_RDONLY | os.O_NOFOLLOW)
             except FileNotFoundError:
                 continue
-            except PermissionError:                    # unreadable lease: fail closed, treat as global
-                out[name] = dict(issue=0, locks=['global'], allowed_paths=[])
+            except PermissionError:                    # unreadable lease: fail closed, treat as global writer
+                out[name] = dict(issue=0, locks=['global'], allowed_paths=[], writer=True)
                 continue
             try:
                 try:
@@ -313,7 +340,7 @@ class LockRegistry:
                 except BlockingIOError:
                     raw = os.read(fd, MAX_FILE + 1)
                     require(len(raw) <= MAX_FILE, 'lease too large')
-                    out[name] = loads(raw) if raw else dict(issue=0, locks=['global'], allowed_paths=[])
+                    out[name] = loads(raw) if raw else dict(issue=0, locks=['global'], allowed_paths=[], writer=True)
                 else:
                     fcntl.flock(fd, fcntl.LOCK_UN)     # nobody holds it: stale, not live
             finally:
@@ -325,7 +352,11 @@ class LockRegistry:
             return self._live()
 
     def acquire(self, slot, record):
-        """Atomic check-and-take under the registry mutex. Returns False on conflict."""
+        """Atomic check-and-take under the registry mutex. Returns False on conflict.
+
+        Two writer leases always conflict (Owner one-writer). QA leases (writer=False)
+        still conflict on path/lock intersection and never clear UNKNOWN occupancy.
+        """
         require(SLOT_RE.fullmatch(slot), 'invalid slot name')
         if self.fd is not None:
             require(self.slot == slot and self.record == record, 'slot already holds a different lease')
@@ -425,13 +456,13 @@ class Adapter:
 # Closed registry. Flipping a flag is a reviewed code change, never runtime input.
 ADAPTERS = {
     'codex': Adapter('codex', 'codex', ('author', 'qa', 'review'), True, True, True, True, True, True),
-    'cursor': Adapter('cursor', 'cursor', ('author',), True, True, True, False, False, False,
-                      'no tokens until the billing period renews; then Auto mode, provider test on 3 tasks, Owner yes'),
+    'cursor': Adapter('cursor', 'cursor', ('author',), True, True, True, True, True, True,
+                      '#211 exact native adapter; root qualification marker still required'),
     'agy': Adapter('agy', 'agy', ('review',), True, True, True, False, False, False,
                    '#29: 7 known defects open; never a QA gate'),
 }
 FORBIDDEN = {'agy': {'qa', 'author'}}    # hard rule, independent of flags
-MODEL_ADAPTER = {'gpt-6.1-sol': 'codex'}  # task "model" -> adapter; absent model -> codex default
+MODEL_ADAPTER = {'gpt-6.1-sol': 'codex', 'gpt-6-astra': 'codex', 'gpt-6-luna': 'codex'}  # exact proven secure CLI provider
 QA_ADAPTER = 'codex'
 
 
@@ -455,6 +486,10 @@ def adapter_status(name, role, budget=None, slot=None, adapters=None):
     for flag in ('installed', 'in_catalog', 'authenticated', 'inference_proven', 'owner_approved', 'executable'):
         if not getattr(ad, flag):
             return False, f'{flag}=false' + (f' ({ad.reason})' if ad.reason else '')
+    if name == 'cursor' and adapters is None:
+        from native_cursor import available
+        ok, reason = available(slot, None)
+        if not ok:return False, reason
     if budget is not None:
         left = budget.remaining(ad.provider, role, slot)
         if left is UNKNOWN:
@@ -467,12 +502,34 @@ def adapter_status(name, role, budget=None, slot=None, adapters=None):
 # ---------------------------------------------------------------- budgets
 class Budget:
     """Daily call budgets per provider/role (host total) AND per slot. Missing limit = UNKNOWN.
-    Each slot writes only its own ledger (outbox/<slot>/ledger.json); totals sum every ledger."""
+    Each slot writes only its own ledger (outbox/<slot>/ledger.json); totals sum every ledger.
 
-    def __init__(self, limits_path, outbox_root, registry_lock, today=None):
+    Optional AGY policy: providers.agy.per_issue_daily (positive int) caps the sum of all AGY
+    role charges for one GitHub Issue across slots in the UTC day. Requires a trusted positive
+    issue binding before remaining/charge can authorize an AGY call. Issue counters live under
+    ledger[day][agy]['issues'] and are updated atomically with the role aggregate.
+    """
+
+    _ISSUE_META = 'issues'
+    _PER_ISSUE = 'per_issue_daily'
+
+    def __init__(self, limits_path, outbox_root, registry_lock, today=None, issue=None):
         self.limits_path, self.outbox_root = Path(limits_path), Path(outbox_root)
         self.registry_lock = Path(registry_lock)
         self.today = today or (lambda: dt.datetime.now(dt.timezone.utc).date().isoformat())
+        self.issue = None
+        if issue is not None:
+            self.bind_issue(issue)
+
+    @staticmethod
+    def _require_issue(issue):
+        # bool is a subclass of int; reject it explicitly.
+        require(type(issue) is int and issue > 0, 'invalid issue id')
+        return issue
+
+    def bind_issue(self, issue):
+        self.issue = self._require_issue(issue)
+        return self
 
     def limits(self):
         try:
@@ -484,23 +541,38 @@ class Budget:
             require(isinstance(value.get(section, {}), dict), 'invalid budgets')
         return value
 
+    def per_issue_daily(self, provider):
+        """Return AGY per-issue UTC daily cap when configured; None keeps legacy provider behavior."""
+        if provider != 'agy':
+            return None
+        cell = self.limits().get('providers', {}).get('agy')
+        if not isinstance(cell, dict) or self._PER_ISSUE not in cell:
+            return None
+        value = cell[self._PER_ISSUE]
+        require(type(value) is int and value > 0 and value <= 10000, 'invalid per_issue_daily')
+        return value
+
     @staticmethod
     def _limit(table, provider, role):
-        value = (table or {}).get(provider, {}).get(role, UNKNOWN)
+        cell = (table or {}).get(provider, {}) or {}
+        if role in (Budget._PER_ISSUE, Budget._ISSUE_META):
+            return UNKNOWN
+        value = cell.get(role, UNKNOWN)
         if value is UNKNOWN:
             return UNKNOWN
+        if value == 'unlimited': return float('inf')
         require(type(value) is int and 0 <= value <= 10000, 'invalid budget value')
-        if provider == 'codex' and role in {'author', 'qa'}:
-            require(value <= 40, 'Codex daily cap exceeds approved host ceiling 40 per role')
         return value
+
+    def _slot_names(self, slot=None):
+        if not self.outbox_root.exists():
+            return []
+        return [name for name in sorted(os.listdir(self.outbox_root))
+                if SLOT_RE.fullmatch(name) and (not slot or name == slot)]
 
     def used(self, provider, role, slot=None):
         total, day = 0, self.today()
-        if not self.outbox_root.exists():
-            return 0
-        for name in sorted(os.listdir(self.outbox_root)):
-            if not SLOT_RE.fullmatch(name) or (slot and name != slot):
-                continue
+        for name in self._slot_names(slot):
             path = self.outbox_root / name / 'ledger.json'
             if not path.exists():
                 continue
@@ -509,6 +581,46 @@ class Budget:
             require(type(count) is int and count >= 0, 'invalid ledger')
             total += count
         return total
+
+    def issue_used(self, provider, issue, slot=None):
+        issue = self._require_issue(issue)
+        total, day, key = 0, self.today(), str(issue)
+        for name in self._slot_names(slot):
+            path = self.outbox_root / name / 'ledger.json'
+            if not path.exists():
+                continue
+            ledger = read_json(path)
+            issues = ledger.get(day, {}).get(provider, {}).get(self._ISSUE_META, {})
+            require(isinstance(issues, dict), 'invalid issue ledger')
+            count = issues.get(key, 0)
+            require(type(count) is int and count >= 0, 'invalid issue ledger')
+            total += count
+        return total
+
+    def _provider_role_total(self, provider, slot=None):
+        return sum(self.used(provider, role, slot) for role in ROLES)
+
+    def _provider_issue_total(self, provider, slot=None):
+        total, day = 0, self.today()
+        for name in self._slot_names(slot):
+            path = self.outbox_root / name / 'ledger.json'
+            if not path.exists():
+                continue
+            ledger = read_json(path)
+            issues = ledger.get(day, {}).get(provider, {}).get(self._ISSUE_META, {})
+            require(isinstance(issues, dict), 'invalid issue ledger')
+            for key, count in issues.items():
+                require(type(key) is str and key.isdigit() and int(key) > 0, 'invalid issue ledger key')
+                require(type(count) is int and count >= 0, 'invalid issue ledger')
+                total += count
+        return total
+
+    def unattributed(self, provider, slot=None):
+        """Same-day role aggregate minus attributed issue counters (host-wide unless slot set)."""
+        roles = self._provider_role_total(provider, slot)
+        attributed = self._provider_issue_total(provider, slot)
+        require(attributed <= roles, 'issue attribution exceeds role aggregate')
+        return roles - attributed
 
     def remaining(self, provider, role, slot=None):
         limits = self.limits()
@@ -521,11 +633,26 @@ class Budget:
             if own is UNKNOWN:
                 return UNKNOWN
             left = min(left, own - self.used(provider, role, slot))
+        cap = self.per_issue_daily(provider)
+        if cap is not None:
+            # Policy active: never authorize AGY without a trusted issue binding.
+            if self.issue is None:
+                return UNKNOWN
+            if self.unattributed(provider) != 0:
+                return UNKNOWN
+            left = min(left, cap - self.issue_used(provider, self.issue))
         return left
 
-    def charge(self, slot, provider, role):
+    def charge(self, slot, provider, role, issue=None):
         with _Flock(self.registry_lock):
-            left = self.remaining(provider, role, slot)
+            cap = self.per_issue_daily(provider)
+            bound = self.issue if issue is None else self._require_issue(issue)
+            if cap is not None:
+                require(bound is not None, f'{provider} {role} charge requires trusted issue')
+                require(self.unattributed(provider) == 0,
+                        f'{provider} unattributed same-day usage; seed issue attribution under registry lock')
+            left = self.remaining(provider, role, slot) if issue is None else self._remaining_with_issue(
+                provider, role, slot, bound)
             require(left is not UNKNOWN, f'{provider} {role} quota UNKNOWN; refusing model call')
             require(left > 0, f'{provider} {role} daily budget exhausted')
             path = self.outbox_root / slot / 'ledger.json'
@@ -551,6 +678,10 @@ class Budget:
                     Path(tmp).unlink(missing_ok=True)
             cell = ledger.setdefault(day, {}).setdefault(provider, {})
             cell[role] = cell.get(role, 0) + 1
+            if cap is not None:
+                issues = cell.setdefault(self._ISSUE_META, {})
+                key = str(bound)
+                issues[key] = issues.get(key, 0) + 1
             try:
                 atomic(path, ledger, 0o644)
             except Exception:
@@ -560,6 +691,64 @@ class Budget:
                     path.unlink(missing_ok=True)
                 raise
             return left - 1
+
+    def _remaining_with_issue(self, provider, role, slot, issue):
+        """remaining() using an explicit issue without mutating self.issue (charge kwarg path)."""
+        previous, self.issue = self.issue, issue
+        try:
+            return self.remaining(provider, role, slot)
+        finally:
+            self.issue = previous
+
+    def seed_issue_attribution(self, slot, provider, issue, count):
+        """OPS additive seed under registry lock: set issue counter without changing role aggregates.
+
+        Fails closed unless count equals current unattributed host-wide total for provider today
+        (or is a no-op equal to the existing counter). Does not refund or rewrite role history.
+        """
+        issue = self._require_issue(issue)
+        require(type(count) is int and count >= 0, 'invalid seed count')
+        require(SLOT_RE.fullmatch(slot or ''), 'invalid slot name')
+        require(provider == 'agy', 'issue attribution seed is AGY-only')
+        with _Flock(self.registry_lock):
+            current = self.issue_used(provider, issue)
+            if current == count:
+                return count
+            gap = self.unattributed(provider)
+            require(current == 0 and count == gap and gap > 0,
+                    'seed must attribute exact unattributed same-day total once')
+            path = self.outbox_root / slot / 'ledger.json'
+            existed = path.exists()
+            ledger = read_json(path) if existed else {}
+            day = self.today()
+            backup = path.with_name('ledger.json.bak')
+            if existed:
+                fd, tmp = tempfile.mkstemp(prefix='.ledger-', dir=path.parent)
+                os.close(fd)
+                try:
+                    os.unlink(tmp)
+                    os.link(path, tmp, follow_symlinks=False)
+                    os.replace(tmp, backup)
+                    directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+                    try:
+                        os.fsync(directory)
+                    finally:
+                        os.close(directory)
+                finally:
+                    Path(tmp).unlink(missing_ok=True)
+            cell = ledger.setdefault(day, {}).setdefault(provider, {})
+            issues = cell.setdefault(self._ISSUE_META, {})
+            issues[str(issue)] = count
+            try:
+                atomic(path, ledger, 0o644)
+            except Exception:
+                if existed:
+                    os.replace(backup, path)
+                else:
+                    path.unlink(missing_ok=True)
+                raise
+            require(self.unattributed(provider) == 0, 'seed left unattributed usage')
+            return count
 
 
 # ---------------------------------------------------------------- runtime (executor side)
@@ -628,8 +817,11 @@ class Runtime:
                 and type(value['issue']) is int and value['issue'] > 0, 'invalid assignment')
         return value['issue']
 
-    def lease(self, active):
-        record = task_record(active['issue'], active['task'])
+    def lease(self, active, *, writer=None):
+        if writer is None:
+            writer = getattr(self, 'source_writer', True)
+        require(type(writer) is bool, 'invalid source writer role')
+        record = task_record(active['issue'], active['task'], writer=writer)
         require(self.registry.acquire(self.slot, record), 'lock conflict with another live slot')
 
     def release_lease(self):
@@ -675,19 +867,29 @@ def plan(candidates, statuses, assignments, slots, max_parallel, budget=None, ad
 
     * ready  = every depends_on is done; an unresolved parked dependency stays unsatisfied;
     * serial = locks/paths conflict with any busy or newly planned task (conservative);
+    * Owner DIRECT 2026-10-27: new source authors are globally sequential (even disjoint);
+      immutable QA occupancy (non-writer phase) does not alone consume author capacity;
     * at most max_parallel slots busy; author adapter and codex QA must be enabled with known quota."""
     done = set().union(*[set(s.get('done', [])) for s in statuses.values()]) if statuses else set()
     parked = set().union(*[set(s.get('parked', [])) for s in statuses.values()]) if statuses else set()
     busy = {}
+    writer_busy = False
     for slot in slots:
         active = (statuses.get(slot) or {}).get('active')
         if active and active['phase'] != 'done':
-            busy[slot] = dict(issue=active['issue'], locks=active['locks'], allowed_paths=active['allowed_paths'])
+            rec = dict(issue=active['issue'], locks=active['locks'], allowed_paths=active['allowed_paths'],
+                       writer=is_source_writer_phase(active.get('phase')))
+            busy[slot] = rec
+            writer_busy = writer_busy or rec['writer']
         elif slot in assignments and assignments[slot]['issue'] not in done | parked:
-            busy[slot] = assignments[slot]['record']
+            busy[slot] = dict(assignments[slot]['record'])
+            busy[slot].setdefault('writer', True)
+            writer_busy = writer_busy or record_is_writer(busy[slot])
     taken = {r['issue'] for r in busy.values()}
     free = [s for s in slots if s not in busy and s in statuses]
-    capacity = max(0, max_parallel - len(busy))
+    # New author claims always need a free slot; global writer occupancy refuses another author
+    # even when max_parallel would have allowed a disjoint second writer.
+    capacity = 0 if writer_busy else max(0, max_parallel - len(busy))
     result, reasons = {}, {}
     for issue, task in candidates:
         if issue in done or issue in parked or issue in taken:
@@ -705,7 +907,10 @@ def plan(candidates, statuses, assignments, slots, max_parallel, budget=None, ad
         except Hold as error:
             reasons[issue] = str(error)
             continue
-        record = task_record(issue, task)
+        record = task_record(issue, task, writer=True)
+        if writer_busy or any(record_is_writer(r) for r in busy.values()):
+            reasons[issue] = 'global source writer sequential'
+            continue
         if any(conflicts(record, r) for r in busy.values()):
             reasons[issue] = 'lock/path conflict: serialized'
             continue
@@ -725,6 +930,7 @@ def plan(candidates, statuses, assignments, slots, max_parallel, budget=None, ad
         reasons.pop(issue, None)
         result[slot] = issue
         busy[slot] = record
+        writer_busy = True
         taken.add(issue)
         free.remove(slot)
         capacity -= 1

@@ -1,36 +1,33 @@
-# Документация GoBadminton
+# Документация GoBadminton CLEAN
 
-**Foundation v1, 2026-10-01.** Связная архитектурная база для web, iOS, Android, backend и дальнейшего развития; не утверждение о готовности продукта.
+**[START_HERE.md](../START_HERE.md)** — единый вход для всех моделей. [AGENTS.md](../AGENTS.md) задаёт границы, [полный регламент](rules/ENGINEERING_OPERATING_MODEL.md) — организацию разработки. [Реестр](rules/DOCUMENT_REGISTER.md) разделяет нормативные документы, контракты, runbooks, drafts и историю.
 
-## Порядок чтения
+## Управление разработкой
 
-| Вопрос | Основной документ |
+| Вопрос | Единственный источник |
 |---|---|
-| Какие project rules обязательны для всех? | [Rules index](rules/README.md), [Project Record & Handoff Policy](rules/PROJECT_RECORD_POLICY.md) |
-| Что должен прочитать Cursor? | [ChatOps route](operations/chatops/README.md), [Cursor onboarding](governance/CURSOR_ONBOARDING.md), [Cursor workflow](governance/CURSOR_EXECUTION_WORKFLOW.md) |
-| Как найти задачу в ChatOps? | [PM / GitHub Projects и Issues](operations/chatops/PM-CHEATSHEET.md); legacy Cursor Queue отсутствует в Clean extraction |
-| Что строим и что решил владелец? | [Манифест](manifest/PROJECT_MANIFEST.md), [Owner decisions](manifest/OWNER_DECISIONS.md) |
-| Что делаем сначала, что откладываем? | [Scope](product/SCOPE.md), [открытые решения](manifest/OPEN_DECISIONS.md) |
-| Как устроена система? | [Overview](architecture/OVERVIEW.md), [Stack](architecture/STACK.md), [ADR](decisions/README.md) |
-| Какая текущая MVP topology? | [Environments](operations/ENVIRONMENTS.md) (исторический MVP runtime document отсутствует в Clean extraction), [ADR-0010](decisions/ADR-0010-SPLIT-MVP-HOSTING.md) |
-| Где границы модулей? | [Module boundaries](architecture/MODULE_BOUNDARIES.md), [Scaling](architecture/SCALING.md) |
-| Как работают игры/места? | [Domain model](domain/MODEL.md), [States/invariants](domain/STATES_AND_INVARIANTS.md) |
-| Кто что может видеть/менять? | [Permissions](domain/PERMISSIONS.md), [Security/privacy](security/SECURITY_AND_PRIVACY.md) |
-| Как храним/меняем данные? | [Data model](data/DATA_MODEL.md), [Migrations/retention](data/MIGRATIONS_AND_RETENTION.md) |
-| Как клиенты общаются с backend? | [API policy](api/API_POLICY.md), [OpenAPI](../packages/contracts/openapi.json) |
-| Как устроен вход? | [Auth](integrations/AUTH.md), [Providers](integrations/PROVIDERS.md) |
-| Что отличается на платформах? | [Web/admin](platforms/WEB_AND_ADMIN.md), [iOS/Android](platforms/IOS_ANDROID.md) |
-| Что проверять и в каком порядке? | [Tests](quality/TEST_STRATEGY.md), [Acceptance](quality/ACCEPTANCE_MATRIX.md), [Slices](delivery/IMPLEMENTATION_SLICES.md) |
-| Какое текущее Implementation-задание? | [PM / GitHub Projects и Issues](operations/chatops/PM-CHEATSHEET.md): открыть exact assigned Issue; F-01 Split Runtime v004 — историческое задание, отсутствующее в Clean extraction |
-| Кто отвечает и как войти в контекст? | [Team](governance/TEAM.md), [Bootstrap](governance/BOOTSTRAP.md) |
-| Где drafts/prompts/handoffs? | [Project Record & Handoff Policy](rules/PROJECT_RECORD_POLICY.md) и [ChatOps Issues](operations/chatops/PM-CHEATSHEET.md); legacy Workbench/Prompts/Handoffs indexes отсутствуют в Clean extraction |
-| Откуда требования? | [Sources](reference/SOURCES.md), [Presentation brief](reference/PRESENTATION_BRIEF.md) |
-| Что проверено в foundation? | [Foundation handoff](delivery/FOUNDATION_HANDOFF.md) |
+| Роли и модели, attempts, FAIL/QA/CI/DEV | [Engineering Operating Model](rules/ENGINEERING_OPERATING_MODEL.md) |
+| Точная принятая редакция и доставка | [Context Sources](rules/CONTEXT_SOURCES.json), §10 канона |
+| Что осталось принять | [AI Train Master Plan](ops/AI_TRAIN_MASTER_PLAN.md) |
+| Кто управляет и откуда продолжать | [CURRENT handoff](handoffs/CURRENT.md), точное решение Owner |
+| Как хранить решения и evidence | [Project Record Policy](rules/PROJECT_RECORD_POLICY.md) |
+| Backlog/приоритеты | [GitHub Issues/Projects](ACTIVE_BACKLOG.md), не копия в Markdown |
+| Технический запуск | [Actions train](operations/chatops/ACTIONS_TRAIN.md), точный допуск и installed receipts |
 
-## Статусы
+## Предметные документы приложения
 
-**OWNER_CONFIRMED** — Owner decision. **TECH_SELECTED** — delegated technical decision. **PROPOSED_PRODUCT** — product default. **DESIGN_DRAFT** — design contract/draft. **DEFERRED** — future extension. **UNVERIFIED** — fact not established.
+Читать их **в exact source/design revision, привязанной к заданию**. Они не заменяют регламент PMA и не дают execution authority. Отсутствующий вход нельзя подменять более старой branch-копией или догадкой.
 
-Не поддерживаем два источника одного правила. При конфликте обновлять зависимые документы вместе.
+| Область | Источники |
+|---|---|
+| Продукт и решения | [Owner decisions](manifest/OWNER_DECISIONS.md), [манифест](manifest/PROJECT_MANIFEST.md), [scope](product/SCOPE.md), [открытые вопросы](manifest/OPEN_DECISIONS.md) |
+| Архитектура | [Overview](architecture/OVERVIEW.md), [stack](architecture/STACK.md), [границы модулей](architecture/MODULE_BOUNDARIES.md), [все ADR/Owner decisions](decisions/README.md) |
+| Домен и данные | [Модель](domain/MODEL.md), [инварианты](domain/STATES_AND_INVARIANTS.md), [права](domain/PERMISSIONS.md), [данные](data/DATA_MODEL.md), [миграции](data/MIGRATIONS_AND_RETENTION.md) |
+| API/auth/privacy | [API policy](api/API_POLICY.md), [OpenAPI](../packages/contracts/openapi.json), [auth](integrations/AUTH.md), [security/privacy](security/SECURITY_AND_PRIVACY.md) |
+| UI | [Design materials registry](manifest/DESIGN_MATERIALS.json), [M2R working spec](product/M2R_DESIGN_SPEC.md); [Style Guide first](decisions/OWNER_DECISION_FRONTEND_STYLE_GUIDE_FIRST_V001.md), применимый later Owner override и exact макет; [локальные web instructions](../apps/web/AGENTS.md) |
+| Проверки | [Test strategy](quality/TEST_STRATEGY.md), [acceptance matrix](quality/ACCEPTANCE_MATRIX.md), exact критерии текущего задания |
+| Окружения и выпуск | [Environments](operations/ENVIRONMENTS.md), [deployment/recovery](operations/DEPLOYMENT_AND_RECOVERY.md) |
 
-Для долговременной памяти действует [Project Record & Handoff Policy](rules/PROJECT_RECORD_POLICY.md).
+## История не равна текущему заданию
+
+[Handoffs](handoffs/README.md), dated `docs/delivery/`, `docs/workbench/`, старые prompts и конкретные receipts сохраняют происхождение решений/результатов. Их команда «следующее действие» не возобновляет старую задачу. Принятые части перенесены в постоянный канон либо соответствующий контракт; непринятые остаются proposal. [Порядок принятия](prompts/pma-adopt-engineering-rules-20261022.md) больше не требует заново выполнять старый PR #217.

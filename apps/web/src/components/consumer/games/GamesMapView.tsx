@@ -17,6 +17,7 @@ import { VenueSheet } from "./VenueSheet";
 import { Button } from "../Button";
 import { SurfacePanel } from "../Surfaces";
 import { GamesMapModuleLoading } from "./GamesMapModuleLoading";
+import { MapLayerFiltersControls, MapLayerFiltersProvider } from "./MapLayerFilters";
 import type { GamesVenueMap } from "./GamesVenueMap";
 
 /** A failed chunk stays unavailable; recovery uses the existing venue list. */
@@ -118,24 +119,27 @@ export function GamesMapView({ cityId, day, venueId, activity = "all", onReturnT
       gamesReady={!!snapshot?.gamesReady} day={day} hasUpcoming={!!all.get(venue.id)?.length} />}
     {!loading && !error && !venue && <p className="gb-map-sr-only" role="status">Площадка отсутствует в каталоге города.</p>}
   </section>;
-  return <section className="gb-games-map" data-venue-preview={!!selectedVenue} aria-label="Игры на карте">
-    {(!mapErrorCardShown || cityId !== MOSCOW_BUNDLE.cityId) && onReturnToList && <GamesMapBackButton onClick={onReturnToList} />}
-    {loading && <p className="gb-map-sr-only" role="status">Загружаем все площадки и расписание…</p>}
-    {error && <p role="alert">Не удалось загрузить полный каталог или расписание. Проверьте соединение и повторите. Непроверенные количества не показываем.</p>}
-    {<>
-      {cityId === MOSCOW_BUNDLE.cityId ? <MapView venues={venues} counts={counts} selectedVenueId={selectedVenueId} onSelect={selectVenue} onDeselect={() => setSelectedVenueId(null)} onAvailability={setMapAvailable} onErrorCardChange={setMapErrorCardShown} onReturnToList={onReturnToList} /> : <p role="alert">Карта выбранного города пока недоступна. Все площадки доступны списком.</p>}
-      {selectedVenue && <VenuePopup key={selectedVenue.id} expanded={expanded} onExpandedChange={setExpanded} onDeselect={() => setSelectedVenueId(null)}
-        preview={<VenuePreviewCard embedded coverSlot={<SelectedVenueCover slotRef={selectedCover.compact} className="gb-venue-preview-cover" />} venue={selectedVenue} games={all.get(selectedVenue.id) ?? []}
-          gamesReady={snapshot?.cityId === cityId && snapshot.gamesReady} now={now} onOpen={() => setExpanded(true)} />}>
-        <VenueSheet embedded coverSlot={<SelectedVenueCover slotRef={selectedCover.info} className="gb-venue-sheet-cover" />} active={expanded} venue={selectedVenue} games={all.get(selectedVenue.id) ?? []}
-          gamesReady={snapshot?.cityId === cityId && snapshot.gamesReady === true} now={now}
-          onCollapse={() => setExpanded(false)} onDeselect={() => setSelectedVenueId(null)} />
-      </VenuePopup>}
-      {!venues.length && <p className="gb-map-sr-only" role="status">В каталоге города пока нет площадок.</p>}
-      {(!mapAvailable || cityId !== MOSCOW_BUNDLE.cityId) && <details className="gb-games-map-fallback">
-        <summary>Площадки списком — карта или координаты недоступны</summary>
-        <div role="group" aria-label="Все площадки города">{venues.map(venue => <button className="gb-discovery-chip" type="button" key={venue.id} onClick={() => selectVenue(venue)}>{venue.name} · {counts ? counts.get(venue.id) ?? 0 : "?"}</button>)}</div>
-      </details>}
-    </>}
-  </section>;
+  return <MapLayerFiltersProvider>
+    <section className="gb-games-map" data-venue-preview={!!selectedVenue} aria-label="Игры на карте">
+      {(!mapErrorCardShown || cityId !== MOSCOW_BUNDLE.cityId) && onReturnToList && <GamesMapBackButton onClick={onReturnToList} />}
+      {cityId === MOSCOW_BUNDLE.cityId && mapAvailable && <MapLayerFiltersControls />}
+      {loading && <p className="gb-map-sr-only" role="status">Загружаем все площадки и расписание…</p>}
+      {error && <p role="alert">Не удалось загрузить полный каталог или расписание. Проверьте соединение и повторите. Непроверенные количества не показываем.</p>}
+      {<>
+        {cityId === MOSCOW_BUNDLE.cityId ? <MapView venues={venues} counts={counts} selectedVenueId={selectedVenueId} onSelect={selectVenue} onDeselect={() => setSelectedVenueId(null)} onAvailability={setMapAvailable} onErrorCardChange={setMapErrorCardShown} onReturnToList={onReturnToList} /> : <p role="alert">Карта выбранного города пока недоступна. Все площадки доступны списком.</p>}
+        {selectedVenue && <VenuePopup key={selectedVenue.id} expanded={expanded} onExpandedChange={setExpanded} onDeselect={() => setSelectedVenueId(null)}
+          preview={<VenuePreviewCard embedded coverSlot={<SelectedVenueCover slotRef={selectedCover.compact} className="gb-venue-preview-cover" />} venue={selectedVenue} games={all.get(selectedVenue.id) ?? []}
+            gamesReady={snapshot?.cityId === cityId && snapshot.gamesReady} now={now} onOpen={() => setExpanded(true)} />}>
+          <VenueSheet embedded coverSlot={<SelectedVenueCover slotRef={selectedCover.info} className="gb-venue-sheet-cover" />} active={expanded} venue={selectedVenue} games={all.get(selectedVenue.id) ?? []}
+            gamesReady={snapshot?.cityId === cityId && snapshot.gamesReady === true} now={now}
+            onCollapse={() => setExpanded(false)} onDeselect={() => setSelectedVenueId(null)} />
+        </VenuePopup>}
+        {!venues.length && <p className="gb-map-sr-only" role="status">В каталоге города пока нет площадок.</p>}
+        {(!mapAvailable || cityId !== MOSCOW_BUNDLE.cityId) && <details className="gb-games-map-fallback">
+          <summary>Площадки списком — карта или координаты недоступны</summary>
+          <div role="group" aria-label="Все площадки города">{venues.map(venue => <button className="gb-discovery-chip" type="button" key={venue.id} onClick={() => selectVenue(venue)}>{venue.name} · {counts ? counts.get(venue.id) ?? 0 : "?"}</button>)}</div>
+        </details>}
+      </>}
+    </section>
+  </MapLayerFiltersProvider>;
 }

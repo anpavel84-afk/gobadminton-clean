@@ -1,33 +1,27 @@
-# Deployment, backup и восстановление
+# Выпуск и восстановление — CLEAN
 
-Статус: **TECH_SELECTED**, runbook target. Реального deployment/backup drill ещё нет.
+Полномочия и критерии: [единый регламент](../rules/ENGINEERING_OPERATING_MODEL.md), технический маршрут — [Actions train](chatops/ACTIONS_TRAIN.md). Здесь нет разрешения новой установки или PROD.
 
-## CI и выпуск
+## Version preflight · Owner OD-013
 
-PR: docs/contract checks → clean dependency install → typecheck/lint → unit/integration/security tests → API diff → build candidates. Фактическая foundation CI пока запускает только `scripts/check_foundation.py`; будущие команды добавляются с исполняемым кодом, не имитируются успешными echo.
+[Сквозное решение OD-013](../decisions/OWNER_DECISION_DEV_OPS_VERSION_COMPATIBILITY_V001.md): перед затратным QA/CI и особенно перед OPS install read-only сверить installed_before / reviewed desired_after / unchanged_dependencies. Различные OLD и NEW для планового обновления штатны; иной `dev` SHA вне closure не blocker. Controller/workflow/native_guard/permissions drift требует адресного пересмотра и согласованного release, а не игнорирования защитного gate. Сверить полный contract снова перед protected write. Руководство само не устанавливает automated resolver.
 
-Application release: exact Git commit → immutable OCI images/digests → STAGE → миграции по плану → smoke/independent QA → approval → те же images в PROD. Не собирать «latest main» непосредственно на PROD. Worker/API совместимость и previous mobile clients проверяются до продвижения.
+## Выпуск
 
-Branch protection/required checks и environments approvals — настройки GitHub, их наличие не следует из YAML/документации. Защиту main и credentials нужно настроить до многопользовательской разработки/release.
+Точный source candidate → независимая QA → обязательный Product CI → контролируемая интеграция → immutable paired artifacts → существующий DEV receiver → smoke/ACCEPTED и live проверка. Если конкретный pipeline ставит часть детерминированных checks раньше QA, это не отменяет ни один обязательный gate.
 
-## Deploy steps
+Перед изменением ресурсов: проверить текущие версии/схему, отсутствие конкурирующего deployment, реальные backup/rollback условия. Использовать установленный reviewed receiver и exact artifacts, не сборку latest на production host. Доступность workflows и branch/environment protections проверяется фактически, не выводится из Markdown.
 
-Записать текущие images/schema revision и backup checkpoint; проверить отсутствие конкурирующего deploy; выполнить backward-compatible expand migration отдельной DDL-ролью; выпустить API/worker/web с readiness; smoke authentication/read/write/cancel в разрешённом scope; наблюдать ошибки, latency, locks, outbox. Остановить rollout при нарушении correctness/security, а не ждать общего error threshold.
+Наличие DEV success не означает Owner UAT или PROD release. PROD требует отдельного конкретного Owner GO и действующих source/image/compatibility gates. Перенос документации на default branch не является продуктовым release.
 
-## Rollback
+## Откат и данные
 
-App rollback к previous image допустим только при совместимой схеме и contracts. destructive migration не имеет гарантированного автоматического down. Для неё нужен отдельный reviewed plan: forward fix или restore/controlled replay. Никогда не откатывать БД поверх новых пользовательских writes без решения об их сохранении/потере.
+Сохранить предыдущие image digests и restore evidence. App rollback допустим при совместимой схеме/контрактах. Не считать его SQL rollback. Destructive migration требует отдельного reviewed плана; нельзя восстанавливать БД поверх новых пользовательских writes без решения об их сохранности.
 
-Store binary rollback не мгновенный: отключить проблемную server capability, обеспечить совместимость, выпустить исправление. OTA не используется как способ обойти native review.
+Backup не считается проверенным только из-за существования файла. Проверять восстановление в изолированной разрешённой среде, consistency DB/media, дедупликацию outbox и отсутствие повторной отправки уведомлений. RPO/RTO и совместимость утверждаются по реальным drills, не обещаются этим документом.
 
-## Backups
+## Ошибка и recovery
 
-Предлагаемый начальный target: PostgreSQL base backups + WAL/PITR, encrypted object storage/versioning, off-host копия в согласованном регионе. Конкретные RPO/RTO проверяются drill, не обещаются одной галочкой backup.
+Сохранить точный failure и checkpoints, установить состояние предыдущего процесса/эффектов, выполнить ограниченный штатный recovery. Не запускать второй writer при неизвестном исходе и не стирать attempts/историю.
 
-Перед real-data pilot: восстановить БД+media mapping в чистом изолированном окружении, проверить число записей/constraints, возможность входа test users, capacity, outbox dedupe, deletion journal; зафиксировать время и найденные потери. Восстановление не должно повторно отправить старые уведомления или будущие financial effects.
-
-## Incident flow
-
-Назначенный человек принимает инцидент → ограничивает вред/отключает affected writes → сохраняет redacted evidence → оценивает пользователей/данные → принимает recovery/communication → проверяет consistency → возвращает трафик → оформляет причины и предотвращение.
-
-Нет бесконечных autonomous retry loops: ограничение попыток и escalation. Error recovery не создаёт новый writer, пока не установлен статус предыдущего. Production incident не чинится под архитектурной ролью без отдельного scope.
+OPS изменения контроллера/adapter/profile — отдельно reviewed, с backup/rollback и безопасной границей active work. Продуктовое назначение не даёт права чинить production. Незатронутые допустимые задачи продолжаются по действующему train.

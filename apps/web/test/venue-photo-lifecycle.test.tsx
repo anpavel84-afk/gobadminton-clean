@@ -48,6 +48,12 @@ vi.mock("react", async original => {
       if (previous && equalDeps(previous.deps, deps)) return previous.value;
       const slot = { deps, value: factory() }; store.slots[index] = slot; return slot.value;
     },
+    useCallback(fn: unknown, deps?: readonly unknown[]) {
+      const store = active(); const index = store.cursor++;
+      const previous = store.slots[index] as { deps?: readonly unknown[]; value: unknown } | undefined;
+      if (previous && equalDeps(previous.deps, deps)) return previous.value;
+      const slot = { deps, value: fn }; store.slots[index] = slot; return slot.value;
+    },
     useEffect: effect, useLayoutEffect: effect,
     useId() { const store = active(); return `id-${store.cursor++}`; },
     useContext(context: { _currentValue: unknown }) { return context._currentValue; },
@@ -162,6 +168,15 @@ class Renderer {
           const output = (value.type as (props: Record<string, unknown>) => ReactNode)(value.props);
           runtime.current = null;
           return walk(output, `${key}.output`, depth + 1);
+        }
+        // Transparent default for Context.Provider (MapLayerFilters and similar).
+        if (value.type && typeof value.type === "object" && value.type !== null && ("_context" in value.type || ("Provider" in value.type && "_currentValue" in value.type))) {
+          const provider = value.type as { _context?: { _currentValue: unknown }; _currentValue?: unknown };
+          const context = provider._context ?? provider;
+          const previous = context._currentValue;
+          context._currentValue = value.props.value;
+          try { return walk(value.props.children as ReactNode, `${key}.provider`, depth + 1); }
+          finally { context._currentValue = previous; }
         }
         if (typeof value.type !== "string") throw new Error(`Unsupported element ${String(value.type)}`);
         const node = this.hosts.get(key)?.node ?? new Node(value.type);
@@ -304,9 +319,12 @@ it.each([false, true])("keeps selected photo before/after load=%s through moving
   if (loaded) image.dispatchEvent(new Event("load"));
   const requests = transport.venues.mock.calls.length; const mapFetches = vi.mocked(fetch).mock.calls.length;
   gesture(renderer, "onPointerDown", 0, 600); gesture(renderer, "onPointerMove", 0, 200, 100);
-  expect(surface(renderer).props["data-moving"]).toBe(true); expect(image.parentNode?.className).toContain("gb-venue-sheet-cover");
+  expect(surface(renderer).props["data-moving"]).toBe(true);
+  expect(image.parentNode?.className).toContain("gb-venue-preview-cover"); // one photo stays compact while morphing
   gesture(renderer, "onPointerUp", 0, 200, 110); expect(surface(renderer).props.role).toBe("dialog");
+  expect(image.parentNode?.className).toContain("gb-venue-preview-cover");
   await vi.advanceTimersByTimeAsync(220); renderer.render();
+  expect(image.parentNode?.className).toContain("gb-venue-sheet-cover"); // same photo transfers once at end
   click(renderer, "Показать игры на этой площадке"); expect(output(renderer)).toContain("Игры на этой площадке"); expect(output(renderer)).toContain("Вечерняя игра");
   expect(image.parentNode?.className).toContain("gb-venue-preview-cover");
   click(renderer, "К информации о площадке"); expect(image.parentNode?.className).toContain("gb-venue-sheet-cover");

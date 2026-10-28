@@ -17,6 +17,12 @@ vi.mock("react", async original => ({
     if (!prev || deps.some((v, n) => v !== prev.deps[n])) h.slots[i] = { deps, value: fn() };
     return (h.slots[i] as { value: unknown }).value;
   },
+  useCallback(fn: unknown, deps: unknown[]) {
+    const i = h.cursor++; const prev = h.slots[i] as { deps: unknown[]; fn: unknown } | undefined;
+    if (!prev || deps.some((v, n) => v !== prev.deps[n])) h.slots[i] = { deps, fn };
+    return (h.slots[i] as { fn: unknown }).fn;
+  },
+  useContext(context: { _currentValue: unknown }) { return context._currentValue; },
   useEffect(effect: () => void | (() => void), deps: unknown[]) {
     const i = h.cursor++; const prev = h.slots[i] as unknown[] | undefined;
     if (!prev || deps.some((v, n) => v !== prev[n])) { h.slots[i] = deps; h.effects.push(() => { h.cleanups[i]?.(); h.cleanups[i] = effect() || (() => {}); }); }
@@ -203,10 +209,11 @@ it.each(["games", "venues", "reject"] as const)("keeps the real Moscow map throu
   const firstPosition = elements(popupTree).find(node => node.props.className === "gb-venue-popup")?.props.style;
   pointer("onPointerMove", 200, 2000); cycle();
   expect(elements(popupTree).find(node => node.props.className === "gb-venue-popup")?.props.style).not.toEqual(firstPosition);
-  expect(renderToStaticMarkup(sheetTree)).toContain("Показать игры на этой площадке");
+  expect(sheetTree).toBeNull(); // do not mount expanded cover at first swipe movement
   expect(transport.games).toHaveBeenCalledTimes(callsBefore); expect(transport.venues).toHaveBeenCalledTimes(venueCallsBefore);
-  pointer("onPointerUp", 200, 2200); const expanded = cycle();
-  await vi.advanceTimersByTimeAsync(220); cycle(); const popup = elements(expanded).find(node => node.type === VenueSheet);
+  pointer("onPointerUp", 200, 2200); cycle();
+  expect(sheetTree).toBeNull(); // keep cover in compact DOM until settle
+  await vi.advanceTimersByTimeAsync(220); const expanded = cycle(); const popup = elements(expanded).find(node => node.type === VenueSheet);
   if (!popup) throw new Error("No sheet");
   expect(h.maps).toHaveLength(1); expect(map.remove).not.toHaveBeenCalled();
   sheetClick("Показать игры"); cycle();

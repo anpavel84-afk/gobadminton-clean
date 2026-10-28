@@ -65,9 +65,6 @@
     },
     {
       "name": "Inbox"
-    },
-    {
-      "name": "GameRecommendations"
     }
   ],
   "paths": {
@@ -12705,7 +12702,7 @@
           "Friends"
         ],
         "summary": "getSocialCapabilities",
-        "description": "Friends admission remains default OFF, with existing bounded DEV/local synthetic admission. No public social graph. FR-3A recommendations are a separate protected resource; see GAME_RECOMMENDATIONS_V001.",
+        "description": "S1 source only. Friends contact is OFF by default; only explicit local synthetic fixture configuration may enable. No public graph or recommendations.",
         "security": [
           {
             "cookieSession": []
@@ -12803,7 +12800,7 @@
           "Friends"
         ],
         "summary": "listFriendships",
-        "description": "Friends admission remains default OFF, with existing bounded DEV/local synthetic admission. No public social graph. FR-3A recommendations are a separate protected resource; see GAME_RECOMMENDATIONS_V001.",
+        "description": "S1 source only. Friends contact is OFF by default; only explicit local synthetic fixture configuration may enable. No public graph or recommendations.",
         "security": [
           {
             "cookieSession": []
@@ -12944,7 +12941,7 @@
           "Friends"
         ],
         "summary": "getFriendshipStates",
-        "description": "Friends admission remains default OFF, with existing bounded DEV/local synthetic admission. No public social graph. FR-3A recommendations are a separate protected resource; see GAME_RECOMMENDATIONS_V001.",
+        "description": "S1 source only. Friends contact is OFF by default; only explicit local synthetic fixture configuration may enable. No public graph or recommendations.",
         "security": [
           {
             "cookieSession": []
@@ -13059,7 +13056,7 @@
           "Friends"
         ],
         "summary": "getFriendship",
-        "description": "Friends admission remains default OFF, with existing bounded DEV/local synthetic admission. No public social graph. FR-3A recommendations are a separate protected resource; see GAME_RECOMMENDATIONS_V001.",
+        "description": "S1 source only. Friends contact is OFF by default; only explicit local synthetic fixture configuration may enable. No public graph or recommendations.",
         "security": [
           {
             "cookieSession": []
@@ -13167,7 +13164,7 @@
           "Friends"
         ],
         "summary": "createFriendRequest",
-        "description": "Friends admission remains default OFF, with existing bounded DEV/local synthetic admission. No public social graph. FR-3A recommendations are a separate protected resource; see GAME_RECOMMENDATIONS_V001.",
+        "description": "S1 source only. Friends contact is OFF by default; only explicit local synthetic fixture configuration may enable. No public graph or recommendations.",
         "security": [
           {
             "cookieSession": []
@@ -13351,7 +13348,7 @@
           "Friends"
         ],
         "summary": "acceptFriendship",
-        "description": "Friends admission remains default OFF, with existing bounded DEV/local synthetic admission. No public social graph. FR-3A recommendations are a separate protected resource; see GAME_RECOMMENDATIONS_V001.",
+        "description": "S1 source only. Friends contact is OFF by default; only explicit local synthetic fixture configuration may enable. No public graph or recommendations.",
         "security": [
           {
             "cookieSession": []
@@ -13506,7 +13503,7 @@
           "Friends"
         ],
         "summary": "declineFriendship",
-        "description": "Friends admission remains default OFF, with existing bounded DEV/local synthetic admission. No public social graph. FR-3A recommendations are a separate protected resource; see GAME_RECOMMENDATIONS_V001.",
+        "description": "S1 source only. Friends contact is OFF by default; only explicit local synthetic fixture configuration may enable. No public graph or recommendations.",
         "security": [
           {
             "cookieSession": []
@@ -13661,7 +13658,7 @@
           "Friends"
         ],
         "summary": "cancelFriendship",
-        "description": "Friends admission remains default OFF, with existing bounded DEV/local synthetic admission. No public social graph. FR-3A recommendations are a separate protected resource; see GAME_RECOMMENDATIONS_V001.",
+        "description": "S1 source only. Friends contact is OFF by default; only explicit local synthetic fixture configuration may enable. No public graph or recommendations.",
         "security": [
           {
             "cookieSession": []
@@ -13816,7 +13813,7 @@
           "Friends"
         ],
         "summary": "removeFriendship",
-        "description": "Friends admission remains default OFF, with existing bounded DEV/local synthetic admission. No public social graph. FR-3A recommendations are a separate protected resource; see GAME_RECOMMENDATIONS_V001.",
+        "description": "S1 source only. Friends contact is OFF by default; only explicit local synthetic fixture configuration may enable. No public graph or recommendations.",
         "security": [
           {
             "cookieSession": []
@@ -15087,641 +15084,6 @@
           }
         }
       }
-    },
-    "/games/{gameId}/recommendations": {
-      "post": {
-        "operationId": "sendGameRecommendation",
-        "tags": [
-          "GameRecommendations"
-        ],
-        "summary": "sendGameRecommendation",
-        "security": [
-          {
-            "cookieSession": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Own authorized result; no seat or notification.",
-            "headers": {
-              "Cache-Control": {
-                "schema": {
-                  "type": "string",
-                  "enum": [
-                    "no-store"
-                  ]
-                }
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GameRecommendationReceipt"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid/missing Idempotency-Key or malformed JSON.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No active cookie session/account; bearer does not authenticate this surface.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Origin/CSRF/credential conflict or restricted actor capability.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "RESOURCE_UNAVAILABLE: unknown/non-owned friendship/recommendation, unavailable peer/game or recipient budget; no existence detail.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Idempotency mismatch/command in progress, stale state/version or invalid cursor.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Strict input invalid, including extra fields and limit outside 1..20.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Friends admission OFF or migration0040 absent: writes unavailable.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Technical/unknown commit outcome. Never treat as confirmed send. Manually retry exact body/key; no new key."
-          },
-          "201": {
-            "description": "Created exactly one recommendation and audit send.",
-            "headers": {
-              "Cache-Control": {
-                "schema": {
-                  "type": "string",
-                  "enum": [
-                    "no-store"
-                  ]
-                }
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GameRecommendationReceipt"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "Actor game.recommend budget exhausted; Retry-After. Recipient exhaustion returns generic 404.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "headers": {
-              "Retry-After": {
-                "schema": {
-                  "type": "integer",
-                  "minimum": 1
-                }
-              }
-            }
-          }
-        },
-        "parameters": [
-          {
-            "name": "gameId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          },
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 16,
-              "maxLength": 128
-            }
-          },
-          {
-            "name": "X-CSRF-Token",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "Origin",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "Must match a configured consumer web origin."
-          }
-        ],
-        "description": "FR-3A. ONLY one current accepted friendshipId. Current public upcoming Games discovery eligibility plus interaction moderation; both profiles/epochs/restrictions/blocks fenced. Duplicate active direction returns 200; same-key replay preserves original 201/200 after reauthorization. Hidden/withdrawn/expired or retired generation cannot be resent. No bulk sends, invitations, seats, DM, outbox, alerts or UI.",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/GameRecommendationSendRequest"
-              }
-            }
-          }
-        }
-      }
-    },
-    "/me/game-recommendations": {
-      "get": {
-        "operationId": "listGameRecommendations",
-        "tags": [
-          "GameRecommendations"
-        ],
-        "summary": "listGameRecommendations",
-        "security": [
-          {
-            "cookieSession": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Own authorized result; no seat or notification.",
-            "headers": {
-              "Cache-Control": {
-                "schema": {
-                  "type": "string",
-                  "enum": [
-                    "no-store"
-                  ]
-                }
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GameRecommendationList"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No active cookie session/account; bearer does not authenticate this surface.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Origin/CSRF/credential conflict or restricted actor capability.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "RESOURCE_UNAVAILABLE: unknown/non-owned friendship/recommendation, unavailable peer/game or recipient budget; no existence detail.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Idempotency mismatch/command in progress, stale state/version or invalid cursor.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Strict input invalid, including extra fields and limit outside 1..20.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Technical/unknown commit outcome. Never treat as confirmed send. Manually retry exact body/key; no new key."
-          }
-        },
-        "description": "Strict query (unknown fields rejected). Cookie only. Own received or sent rows only, revalidated under Game/profile/pair/friendship/row fences. Received omits hidden/withdrawn. Sent may include withdrawn but never recipient_hidden. Ineligible content omitted. Pages may be empty with nextCursor; scan at most N candidates, N<=20, never skip revalidation. Cursor HMAC-bound to actor/view, expires after 15 minutes, contains no internal user/pair IDs. OFF/N-1 returns empty. No total counts or opponent private metadata.",
-        "parameters": [
-          {
-            "name": "view",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "enum": [
-                "received",
-                "sent"
-              ]
-            }
-          },
-          {
-            "name": "cursor",
-            "in": "query",
-            "schema": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 2048
-            }
-          },
-          {
-            "name": "limit",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 20,
-              "default": 20
-            }
-          }
-        ]
-      }
-    },
-    "/me/game-recommendations/{id}/hide": {
-      "post": {
-        "operationId": "hideGameRecommendation",
-        "tags": [
-          "GameRecommendations"
-        ],
-        "summary": "hideGameRecommendation",
-        "security": [
-          {
-            "cookieSession": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Own authorized result; no seat or notification.",
-            "headers": {
-              "Cache-Control": {
-                "schema": {
-                  "type": "string",
-                  "enum": [
-                    "no-store"
-                  ]
-                }
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GameRecommendationHideReceipt"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid/missing Idempotency-Key or malformed JSON.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No active cookie session/account; bearer does not authenticate this surface.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Origin/CSRF/credential conflict or restricted actor capability.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "RESOURCE_UNAVAILABLE: unknown/non-owned friendship/recommendation, unavailable peer/game or recipient budget; no existence detail.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Idempotency mismatch/command in progress, stale state/version or invalid cursor.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Strict input invalid, including extra fields and limit outside 1..20.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Friends admission OFF or migration0040 absent: writes unavailable.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Technical/unknown commit outcome. Never treat as confirmed send. Manually retry exact body/key; no new key."
-          }
-        },
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          },
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 16,
-              "maxLength": 128
-            }
-          },
-          {
-            "name": "X-CSRF-Token",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "Origin",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "Must match a configured consumer web origin."
-          }
-        ],
-        "description": "Recipient only; hide from own received list without restoring delivery; no hide flag or notification sent to sender. Exact numeric expectedVersion; same key replays minimal historical action receipt, new key/stale version gives 409. Safe terminal actions remain available with Friends OFF or ineligible game/peer. Atomic immutable audit; no notification.",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/GameRecommendationDecisionRequest"
-              }
-            }
-          }
-        }
-      }
-    },
-    "/me/game-recommendations/{id}/withdraw": {
-      "post": {
-        "operationId": "withdrawGameRecommendation",
-        "tags": [
-          "GameRecommendations"
-        ],
-        "summary": "withdrawGameRecommendation",
-        "security": [
-          {
-            "cookieSession": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Own authorized result; no seat or notification.",
-            "headers": {
-              "Cache-Control": {
-                "schema": {
-                  "type": "string",
-                  "enum": [
-                    "no-store"
-                  ]
-                }
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GameRecommendationWithdrawReceipt"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid/missing Idempotency-Key or malformed JSON.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No active cookie session/account; bearer does not authenticate this surface.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Origin/CSRF/credential conflict or restricted actor capability.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "RESOURCE_UNAVAILABLE: unknown/non-owned friendship/recommendation, unavailable peer/game or recipient budget; no existence detail.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Idempotency mismatch/command in progress, stale state/version or invalid cursor.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Strict input invalid, including extra fields and limit outside 1..20.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Friends admission OFF or migration0040 absent: writes unavailable.",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Technical/unknown commit outcome. Never treat as confirmed send. Manually retry exact body/key; no new key."
-          }
-        },
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          },
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 16,
-              "maxLength": 128
-            }
-          },
-          {
-            "name": "X-CSRF-Token",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "Origin",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "Must match a configured consumer web origin."
-          }
-        ],
-        "description": "Sender only; withdraw from recipient list, grants no new rights. Exact numeric expectedVersion; same key replays minimal historical action receipt, new key/stale version gives 409. Safe terminal actions remain available with Friends OFF or ineligible game/peer. Atomic immutable audit; no notification.",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/GameRecommendationDecisionRequest"
-              }
-            }
-          }
-        }
-      }
     }
   },
   "components": {
@@ -16119,7 +15481,8 @@
               "null"
             ],
             "maxLength": 300,
-            "description": "Только в GET /games/{gameId} для активного управляющего или подтверждённого участника; иначе ключ отсутствует."
+            "description": "Только в GET /games/{gameId} для активного управляющего или подтверждённого участника; иначе ключ отсутствует. Шаблон отсекает userinfo (@ в authority), обратную косую и управляющие символы; строгую проверку делает приложение.",
+            "pattern": "^(?:$|https?:///*[^@/?#\\\\\\u0000-\\u001F\\u007F-\\u009F]+(?:[/?#][^\\\\\\u0000-\\u001F\\u007F-\\u009F]*)?)$"
           },
           "bookingNote": {
             "type": [
@@ -21427,7 +20790,8 @@
         "required": [
           "player",
           "proximityBand",
-          "radar"
+          "radar",
+          "upcomingGames"
         ],
         "properties": {
           "player": {
@@ -21438,6 +20802,14 @@
           },
           "radar": {
             "$ref": "#/components/schemas/UnifiedPreviewRadar"
+          },
+          "upcomingGames": {
+            "type": "array",
+            "maxItems": 3,
+            "items": {
+              "$ref": "#/components/schemas/UnifiedUpcomingGame"
+            },
+            "description": "Viewer-authorized upcoming public games only. Empty does not assert absence of private games or participation."
           }
         }
       },
@@ -24764,8 +24136,8 @@
                   "contactWebsite": {
                     "type": "string",
                     "maxLength": 300,
-                    "description": "Пробелы по краям удаляются; пустая строка очищает значение. Пропуск сохраняет значение.",
-                    "pattern": "^(https?://|$)"
+                    "description": "Пробелы по краям удаляются; пустая строка очищает значение. Пропуск сохраняет значение. Шаблон отсекает userinfo (@ в authority), обратную косую и управляющие символы; строгую проверку делает приложение.",
+                    "pattern": "^(?:$|https?:///*[^@/?#\\\\\\u0000-\\u001F\\u007F-\\u009F]+(?:[/?#][^\\\\\\u0000-\\u001F\\u007F-\\u009F]*)?)$"
                   },
                   "bookingNote": {
                     "type": "string",
@@ -24909,8 +24281,8 @@
           "contactWebsite": {
             "type": "string",
             "maxLength": 300,
-            "description": "Пробелы по краям удаляются; пустая строка очищает значение. Пропуск сохраняет значение.",
-            "pattern": "^(https?://|$)"
+            "description": "Пробелы по краям удаляются; пустая строка очищает значение. Пропуск сохраняет значение. Шаблон отсекает userinfo (@ в authority), обратную косую и управляющие символы; строгую проверку делает приложение.",
+            "pattern": "^(?:$|https?:///*[^@/?#\\\\\\u0000-\\u001F\\u007F-\\u009F]+(?:[/?#][^\\\\\\u0000-\\u001F\\u007F-\\u009F]*)?)$"
           },
           "bookingNote": {
             "type": "string",
@@ -25460,8 +24832,7 @@
             "type": "boolean"
           },
           "gameRecommendations": {
-            "type": "boolean",
-            "description": "Remains false in the API-only FR-3A slice, including with migration 0040 installed. Product UI activation belongs to the separately assigned FR-3B slice. Recommendation routes enforce existing Friends admission independently."
+            "type": "boolean"
           },
           "gameAttention": {
             "type": "boolean"
@@ -25564,7 +24935,8 @@
                       "string",
                       "null"
                     ],
-                    "pattern": "^https://",
+                    "description": "Original HTTPS credit string. Port is absent or the exact digits 443 (no empty port, no leading zeros). The pattern also rejects userinfo, a backslash and controls where a regex can; httpsCreditUrl remains the strict check.",
+                    "pattern": "^https:///*(?:\\[[0-9A-Fa-f:.]+\\]|(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\.)*[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(?::443)?(?:[/?#](?:%[0-9A-Fa-f]{2}|[!#$&'(-;=?-[\\]_a-z~-])*)?$",
                     "maxLength": 300
                   }
                 }
@@ -25886,7 +25258,8 @@
                         "url": {
                           "type": "string",
                           "format": "uri",
-                          "pattern": "^https://",
+                          "description": "Original HTTPS credit string. format uri is not the authority check. Port is absent or the exact digits 443 (no empty port, no leading zeros). The pattern also rejects userinfo, a backslash and controls where a regex can; httpsCreditUrl remains the strict check.",
+                          "pattern": "^https:///*(?:\\[[0-9A-Fa-f:.]+\\]|(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\.)*[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(?::443)?(?:[/?#](?:%[0-9A-Fa-f]{2}|[!#$&'(-;=?-[\\]_a-z~-])*)?$",
                           "maxLength": 300
                         }
                       }
@@ -25900,120 +25273,18 @@
         },
         "description": "Complete server projection. Unknown facts remain null, false/0 survive. Optional on Venue/AdminVenue during rollout/old receipts; current server emits all keys. Gallery has at most one current eligible moderated photo with safe HTTPS attribution; empty never asserts full gallery inspection/completion. No rating or review/count source."
       },
-      "GameRecommendationSendRequest": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "friendshipId"
-        ],
-        "properties": {
-          "friendshipId": {
-            "type": "string",
-            "format": "uuid"
-          }
-        }
-      },
-      "GameRecommendationDecisionRequest": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "expectedVersion"
-        ],
-        "properties": {
-          "expectedVersion": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 2147483647
-          }
-        }
-      },
-      "GameRecommendationReceipt": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "id",
-          "version",
-          "outcome"
-        ],
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "version": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 2147483647
-          },
-          "outcome": {
-            "type": "string",
-            "enum": [
-              "sent"
-            ]
-          }
-        }
-      },
-      "GameRecommendationHideReceipt": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "id",
-          "version",
-          "outcome"
-        ],
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "version": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 2147483647
-          },
-          "outcome": {
-            "type": "string",
-            "enum": [
-              "hidden"
-            ]
-          }
-        }
-      },
-      "GameRecommendationWithdrawReceipt": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "id",
-          "version",
-          "outcome"
-        ],
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "version": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 2147483647
-          },
-          "outcome": {
-            "type": "string",
-            "enum": [
-              "withdrawn"
-            ]
-          }
-        }
-      },
-      "GameRecommendationGame": {
+      "UnifiedUpcomingGame": {
         "type": "object",
         "additionalProperties": false,
         "required": [
           "id",
           "title",
+          "activityKind",
           "startsAt",
           "endsAt",
-          "timezone"
+          "timezone",
+          "cover",
+          "venue"
         ],
         "properties": {
           "id": {
@@ -26022,6 +25293,13 @@
           },
           "title": {
             "type": "string"
+          },
+          "activityKind": {
+            "type": "string",
+            "enum": [
+              "regular",
+              "trainer_led"
+            ]
           },
           "startsAt": {
             "type": "string",
@@ -26033,97 +25311,49 @@
           },
           "timezone": {
             "type": "string"
-          }
-        }
-      },
-      "GameRecommendationPeer": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "publicPlayerId",
-          "displayName"
-        ],
-        "properties": {
-          "publicPlayerId": {
-            "type": "string",
-            "format": "uuid"
           },
-          "displayName": {
-            "type": "string"
-          }
-        }
-      },
-      "GameRecommendation": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "id",
-          "version",
-          "state",
-          "createdAt",
-          "expiresAt",
-          "game",
-          "peer"
-        ],
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "version": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 2147483647
-          },
-          "state": {
-            "type": "string",
-            "enum": [
-              "active",
-              "withdrawn"
-            ]
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "expiresAt": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "game": {
-            "$ref": "#/components/schemas/GameRecommendationGame"
-          },
-          "peer": {
-            "$ref": "#/components/schemas/GameRecommendationPeer"
-          }
-        }
-      },
-      "GameRecommendationList": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "items",
-          "nextCursor",
-          "asOf"
-        ],
-        "properties": {
-          "items": {
-            "type": "array",
-            "maxItems": 20,
-            "items": {
-              "$ref": "#/components/schemas/GameRecommendation"
+          "cover": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "uploadedUrl"
+            ],
+            "properties": {
+              "uploadedUrl": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
             }
           },
-          "nextCursor": {
-            "type": [
-              "string",
-              "null"
+          "venue": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "cover"
             ],
-            "maxLength": 2048
-          },
-          "asOf": {
-            "type": "string",
-            "format": "date-time"
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "cover": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "uploadedUrl"
+                ],
+                "properties": {
+                  "uploadedUrl": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            }
           }
         }
       }

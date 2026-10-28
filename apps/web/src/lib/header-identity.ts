@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { getMe, getMySocialProfile } from "./api-client";
 import type { PlayerAvatar } from "./consumer-types";
 import { privateActor } from "./foreground-updates";
+import { forbiddenUrlScalars, httpUrlAgreesWithOriginalAuthority } from "./original-http-authority";
 
 type HeaderIdentity = { name: string; avatar?: PlayerAvatar };
 
@@ -11,7 +12,7 @@ type HeaderIdentity = { name: string; avatar?: PlayerAvatar };
 export function headerAvatarUrls(avatar?: PlayerAvatar): string[] {
   const urls: string[] = [];
   if (avatar?.uploadedUrl && /^\/v1\/media\/avatars\/[a-f0-9]{64}\.png$/.test(avatar.uploadedUrl)) urls.push(avatar.uploadedUrl);
-  if (avatar?.providerUrl) {
+  if (avatar?.providerUrl && httpUrlAgreesWithOriginalAuthority(avatar.providerUrl, forbiddenUrlScalars)) {
     try {
       const url = new URL(avatar.providerUrl);
       if (url.protocol === "https:" && !url.username && !url.password && !url.port &&

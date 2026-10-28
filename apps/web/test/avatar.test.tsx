@@ -10,6 +10,12 @@ import type { InboxItem } from "../src/lib/messaging-types";
 const avatar = {uploadedUrl:'/v1/media/avatars/'+ 'a'.repeat(64)+'.png', providerUrl:'https://avatars.yandex.net/test'};
 afterEach(()=>vi.unstubAllGlobals());
 describe('owned avatars',()=>{
+  it('does not paint a provider URL whose empty userinfo normalizes onto the allowlist',()=>{
+    for (const providerUrl of ["https:///@avatars.yandex.net/a","https:///:@avatars.yandex.net/","https:////@sun9.userapi.com/a","https://avatars.yandex.net@evil.example/phish"]) {
+      const html=renderToStaticMarkup(<Avatar name="Иван Иванов" avatar={{uploadedUrl:null,providerUrl}}/>);
+      expect(html).not.toContain("<img"); expect(html).not.toContain("yandex"); expect(html).not.toContain("userapi"); expect(html).toContain("ИИ");
+    }
+  });
   it('upload wins, absent upload uses provider, absent fields use initials',()=>{
     expect(renderToStaticMarkup(<Avatar name="Иван Иванов" avatar={avatar}/>)).toContain(avatar.uploadedUrl);
     expect(renderToStaticMarkup(<Avatar name="Иван Иванов" avatar={{...avatar,uploadedUrl:null}}/>)).toContain(avatar.providerUrl);

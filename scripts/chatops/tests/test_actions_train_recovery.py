@@ -107,6 +107,55 @@ class Receipts(unittest.TestCase):
             r=copy.deepcopy(self.j);R.reserve(r,self.request(),self.c)
             result=R.finish(r,self.key,'diagnose',dict(status='confirmed',outcome=diagnosis()|change,evidence=[]),self.c)
             self.assertEqual(result['status'],'needs-owner');self.assertIsNone(result['proposal'])
+    def test_owner_allowed_product_docs_accompany_real_source_repair_only(self):
+        parent = copy.deepcopy(TASK)
+        doc_api = 'docs/api/PRODUCT_V001.md'
+        doc_handoff = 'docs/handoffs/product-repair.md'
+        source = 'apps/api/src/sample.ts'
+        parent['allowed_paths'] = [source, doc_api, doc_handoff]
+        proposal = diagnosis() | {'paths': [source, doc_api, doc_handoff]}
+        result = R.revised(parent, proposal)
+        self.assertEqual(result['max_attempts'], 2)
+        self.assertEqual(result['allowed_paths'], parent['allowed_paths'])
+        self.assertEqual(result['acceptance'], parent['acceptance'])
+        self.assertEqual(result['kind'], parent['kind'])
+        self.assertEqual(result.get('depends_on'), parent.get('depends_on'))
+        self.assertTrue(result['goal'].startswith(parent['goal']))
+        self.assertIn('Bounded diagnosed repair requirements', result['goal'])
+        for invalid in ([doc_api], [doc_handoff], [doc_api, doc_handoff],
+                        ['apps/api/README.md', doc_api], ['packages/contracts/README.md', doc_handoff],
+                        ['apps/api/docs/fix.md', doc_api],
+                        ['apps/web/public/discovery/provenance.json', doc_api],
+                        ['apps/api/package.json', doc_api],
+                        ['packages/contracts/package.json', doc_handoff]):
+            allowed = copy.deepcopy(parent)
+            allowed['allowed_paths'] = list(dict.fromkeys([*allowed['allowed_paths'], *invalid]))
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(core.Refused, 'no product source/test'):
+                R.revised(allowed, proposal | {'paths': invalid})
+
+    def test_original_task_allowlist_never_authorizes_control_or_traversal(self):
+        source = 'apps/api/src/sample.ts'
+        for path in ('docs/operations/CHEATSHEET.md','docs/governance/POLICY.md',
+                     'scripts/chatops/actions_train/core.py','.github/workflows/train-stage.yml',
+                     'packages/tooling/exec.ts','docs/api/../../scripts/hijack.py'):
+            with self.subTest(path=path):
+                parent = copy.deepcopy(TASK)
+                parent['allowed_paths'] = [source, path]
+                with self.assertRaises(core.Refused):
+                    R.revised(parent, diagnosis() | {'paths': [source, path]})
+        # Real source/test extension required, including expected JS/CSS/SQL/contract data.
+        for path in ('apps/web/src/fix.tsx', 'apps/web/src/styles/fix.css',
+                     'apps/api/migrations/0040.sql', 'packages/contracts/openapi.json'):
+            parent = copy.deepcopy(TASK)
+            parent['allowed_paths'] = [path, 'docs/api/PRODUCT_V001.md']
+            proposal = diagnosis() | {'paths': parent['allowed_paths']}
+            self.assertEqual(R.revised(parent, proposal)['max_attempts'], 2)
+        # No broad docs/ prefix: only existing product API/handoff documents.
+        parent = copy.deepcopy(TASK)
+        parent['allowed_paths'] = [source, 'docs/random.md']
+        with self.assertRaisesRegex(core.Refused, 'recovery control path forbidden'):
+            R.revised(parent, diagnosis() | {'paths': parent['allowed_paths']})
+
     def test_policy_and_generation_effect_gates(self):
         for mutate in (lambda c:c.update(controller_sha=BASE),lambda c:c.update(mode='disabled'),
                        lambda c:c['recovery'].update(delegation_issue=186),lambda c:c['recovery'].update(excluded=[]),

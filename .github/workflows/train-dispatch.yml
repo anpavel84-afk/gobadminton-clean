@@ -15,7 +15,8 @@ permissions:
 concurrency:
   group: gobadminton-train-dispatch
   cancel-in-progress: false
-  queue: max
+  # Reconcile rereads the complete durable queue; retain only the latest wake-up.
+  queue: single
 jobs:
   commissioning:
     if: github.event_name == 'push' && github.repository_id == '1416250340'
@@ -39,7 +40,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: ba02b9d9f9d56c7b07379da22d128c3dfa7341e1
+          ref: 7100e0f5caa9960c45254b80b0ce0a7ea1e1ab7a
           persist-credentials: false
       - name: One finite authenticated reconciliation; disabled server remains read-only
         run: python3 -B scripts/chatops/actions_train/client.py reconcile
@@ -52,3 +53,37 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with: {name: train-reconcile, path: evidence/, retention-days: 90}
+  # A separate hosted job may publish only a reviewed DRAFT. No DEV server,
+  # source writer, SSH key or model token is present. The workflow-wide
+  # gobadminton-train-dispatch concurrency group serializes all such writes.
+  publish_phase_drafts:
+    needs: reconcile
+    if: >-
+      needs.reconcile.result == 'success' && github.event_name == 'workflow_dispatch' &&
+      github.repository_id == '1416250340' && github.ref == 'refs/heads/dev' &&
+      (github.actor_id == '318610566' || github.actor == 'github-actions[bot]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 7100e0f5caa9960c45254b80b0ce0a7ea1e1ab7a
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: train-reconcile
+          path: evidence
+      - name: Publish immutable Owner-scoped planning DRAFT only
+        run: python3 -B scripts/chatops/planning/phase_plan_publish_v2.py
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: phase-plan-publication
+          path: evidence/phase-plan-publication-v2.json
+          retention-days: 90

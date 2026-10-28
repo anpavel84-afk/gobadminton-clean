@@ -1,0 +1,11 @@
+{
+  "delivered_closure": null,
+  "description": "Sanitized negative regression for #308/#309, lineage #149 to #177 to #308: M2R requires exact reference inputs but the author received no closure. Synthetic metadata control only; no raw issue body, secrets, image bytes, runtime or visual claim.",
+  "required_ids": [
+    "m2r-mockup",
+    "style-guide-manifest",
+    "map-popups-decision",
+    "m2r-design-spec"
+  ],
+  "schema": "GB_DESIGN_NEGATIVE_REGRESSION_FIXTURE_V1"
+}

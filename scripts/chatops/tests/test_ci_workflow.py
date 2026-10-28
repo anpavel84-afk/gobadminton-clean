@@ -98,6 +98,12 @@ class ProductWorkflow(unittest.TestCase):
             with self.subTest(previous_yaml_if=package), self.assertRaisesRegex(gate.Hold, 'unexpected skipped step'):
                 gate.successful(run, bad, SHA, gate.CI_JOBS)
 
+    def test_receiver_has_full_history_for_immutable_controller_provenance(self):
+        receiver = self.source.split('\n  receiver:\n', 1)[1]
+        self.assertIn(
+            '      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683\n'
+            '        with: {fetch-depth: 0, persist-credentials: false}\n', receiver)
+
     def test_actual_addon_shell_dispatch_and_fail_closed(self):
         expected = [
             'python3 -B scripts/chatops/tests/test_admin_path.py',

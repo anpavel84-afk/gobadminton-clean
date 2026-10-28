@@ -1,0 +1,45 @@
+{
+  "issue": 156,
+  "reason": "attempts exhausted",
+  "head": "360aeee8a4f47243e80d802e5f389ec99c8b6d95",
+  "attempt": 3,
+  "max_attempts": 3,
+  "qa": {
+    "findings": [
+      "[P1] VenueSheet.tsx:120–121 breaks the existing venue-photo-lifecycle.test.tsx Tab cases (lines 341–349): its window fixture lacks getComputedStyle and its Node fixture lacks getClientRects. Independently executing the production handler with those fixtures reproduced TypeError: window.getComputedStyle is not a function, leaving defaultPrevented=false; the base handler prevents Tab successfully. The CI repair remains incomplete. Full Vitest, typecheck and lint were NOT_TESTED because dependencies/executables are absent; this finding is an independently reproduced source incompatibility."
+    ],
+    "reviewed_sha": "360aeee8a4f47243e80d802e5f389ec99c8b6d95",
+    "verdict": "FAIL"
+  },
+  "ci_failure": {
+    "failed": [
+      {
+        "job": "source (web)",
+        "steps": [
+          "Run pnpm --filter @gobadminton/web run test:unit"
+        ]
+      }
+    ],
+    "head": "1519768cab2db41d93d869d327992e4d0ee568a6",
+    "run": 39698597948,
+    "run_attempt": 1
+  },
+  "allowed_paths": [
+    "apps/web/src/components/consumer/games/VenueSheet.tsx",
+    "apps/web/src/components/consumer/pages/CreateGamePage.tsx",
+    "apps/web/src/styles/venue-popup.css",
+    "apps/web/src/lib/venue-popup-create.ts",
+    "apps/web/test/venue-popup-owner-fixes.test.tsx",
+    "apps/web/test/venue-public-contacts.test.tsx",
+    "apps/web/test/venue-sheet.test.tsx",
+    "apps/web/test/create-game-venue-cta.test.tsx",
+    "docs/handoffs/venue-popup-owner-fixes.md"
+  ],
+  "original_task_admission": {
+    "fingerprint": "fe8c6bc26fcb7e635fc367e5dcbe039ac58f5f610f364c799fc3496dbfe39952",
+    "id": 6327429195
+  },
+  "done": false,
+  "next_task_157_claim_run": 39700264816,
+  "next_task_157_author_run": 39700380835
+}

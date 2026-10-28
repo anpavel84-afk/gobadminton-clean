@@ -22,9 +22,9 @@ function installProtocol() {
     protocol = new Protocol(); maplibregl.addProtocol("pmtiles", protocol.tile);
   }
 }
-export function GeographicRadarMap({ controller, rows, selected, onSelect, onUnavailable, sharedMap, resumeCamera = false }: { resumeCamera?: boolean; sharedMap?: LibreMap; controller: UnifiedDirectoryController; rows: UnifiedRow[]; selected: string | null; onSelect: (row: UnifiedRow) => void; onUnavailable: () => void }) {
+export function GeographicRadarMap({ controller, rows, selected, onSelect, onUnavailable, sharedMap, resumeCamera = false, playersVisible = true }: { resumeCamera?: boolean; sharedMap?: LibreMap; controller: UnifiedDirectoryController; rows: UnifiedRow[]; selected: string | null; onSelect: (row: UnifiedRow) => void; onUnavailable: () => void; playersVisible?: boolean }) {
   const { view: session } = useRadarSession();
-  const center = session.phase === "active" && session.confirmedOn && !session.pendingStop && session.status?.state === "active" ? session.status.coarseCenter : undefined;
+  const center = session.phase === "active" && session.confirmedOn && !session.pendingStop && session.status?.state === "active" && playersVisible ? session.status.coarseCenter : undefined;
   const centerLatitude = center?.latitude, centerLongitude = center?.longitude;
   const container = useRef<HTMLDivElement>(null); const map = useRef<LibreMap | null>(null);
   const markers = useRef<Array<{ marker: maplibregl.Marker; button: HTMLButtonElement; id: string; dispose?: () => void }>>([]);
@@ -73,6 +73,7 @@ export function GeographicRadarMap({ controller, rows, selected, onSelect, onUna
   useEffect(() => {
     if (!ready || !map.current) return;
     markers.current.forEach(m => { m.marker.remove(); m.dispose?.(); }); markers.current = [];
+    if (!playersVisible) return;
     for (const row of rows) {
       if (row.publicPlayerId === ownProfile?.publicPlayerId) continue;
       const geo = row.radar?.geo;
@@ -84,7 +85,7 @@ export function GeographicRadarMap({ controller, rows, selected, onSelect, onUna
       markers.current.push({ marker, button, id: row.publicPlayerId, dispose: () => root.unmount() });
     }
     // Selection focus survives subsequent tick renders; source rows change only on a new window.
-  }, [rows, ready, ownProfile?.publicPlayerId]);
+  }, [rows, ready, ownProfile?.publicPlayerId, playersVisible]);
   useEffect(() => {
     if (sharedMap || !ready || !map.current) return;
     let alive = true; const venueMarkers: maplibregl.Marker[] = [];
