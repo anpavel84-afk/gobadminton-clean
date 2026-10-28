@@ -75,10 +75,37 @@ function render<T>(fn:()=>T){context.directory={controller,view:controller.view}
 function card(expanded=false){return render(()=>UnifiedPlayerPreview({expanded,onClose:()=>controller.close()}));}
 it("renders compact -> expanded -> collapsed actual preview without profile navigation",()=>{
   const expand=vi.fn();let tree=render(()=>UnifiedPlayerPreview({expanded:false,onExpandedChange:expand,onClose:()=>controller.close()}));
-  const html=renderToStaticMarkup(tree);expect(html).toContain("Подробнее об игроке");expect(html).not.toContain("Разрешённая игра");expect(html).not.toContain("/players/peer");
+  const html=renderToStaticMarkup(tree);
+  expect(html).toContain('data-preview-mode="compact"');
+  expect(html).toContain("unified-preview__compact");
+  expect(html).toContain("radar-player-preview");
+  expect(html).toContain("Подробнее об игроке");
+  expect(html).not.toContain("Разрешённая игра");
+  expect(html).not.toContain("unified-preview__expanded");
+  expect(html).not.toContain("/players/peer");
   activate(tree,"Подробнее об игроке");expect(expand).toHaveBeenCalledWith(true);
-  tree=card(true);expect(renderToStaticMarkup(tree)).toContain("Разрешённая игра");expect(renderToStaticMarkup(tree)).toContain('href="/games/g"');
+  tree=card(true);
+  const expanded=renderToStaticMarkup(tree);
+  expect(expanded).toContain('data-preview-mode="expanded"');
+  expect(expanded).toContain("unified-preview__expanded");
+  expect(expanded).toContain("unified-preview__hero");
+  expect(expanded).toContain("Ближайшие публичные игры");
+  expect(expanded).toContain("Разрешённая игра");
+  expect(expanded).toContain("Открыть игру");
+  expect(expanded).toContain('href="/games/g"');
+  expect(expanded).toContain("Свернуть карточку");
+  expect(expanded).not.toContain("Подробнее об игроке");
+  expect(expanded).not.toContain("/players/peer");
   tree=card(false);expect(renderToStaticMarkup(tree)).not.toContain("Разрешённая игра");
+  expect(renderToStaticMarkup(tree)).toContain('data-preview-mode="compact"');
+});
+it("keeps honest empty games state inside expanded hierarchy",()=>{
+  controller.view={...controller.view,preview:{...preview,upcomingGames:[]}};
+  const html=renderToStaticMarkup(card(true));
+  expect(html).toContain('data-preview-mode="expanded"');
+  expect(html).toContain("Нет доступных ближайших публичных игр");
+  expect(html).not.toContain("Разрешённая игра");
+  expect(html).not.toContain("124 игры");
 });
 it("distinguishes API loading, error with retry, and authorized empty",async()=>{
   controller.view={...controller.view,preview:null,previewBusy:true};expect(renderToStaticMarkup(card(true))).toContain("Проверяем доступность");
@@ -100,8 +127,11 @@ function page(){return render(()=>RadarPage({sharedMap:map}));}
 it("uses complete totals and controlled expansion over the same shared map with no dialog",()=>{
   page();let tree=page();const child=nodes(tree).find(n=>n.type===UnifiedPlayerPreview)!;expect(child).toBeDefined();expect(child.props.dialog).toBeUndefined();expect(child.props.expanded).toBe(false);
   const layer=nodes(tree).find(n=>n.props.sharedMap===map)!;expect(layer).toBeDefined();expect(nodes(tree).some(n=>n.props.children==="На карте: 1 из 1")).toBe(true);
+  const aside=nodes(tree).find(n=>n.type==="aside")!;expect(String(aside.props.className)).not.toContain("is-expanded");
   activate(tree,"Развернуть карточку");tree=page();expect(nodes(tree).find(n=>n.type===UnifiedPlayerPreview)!.props.expanded).toBe(true);
+  expect(String(nodes(tree).find(n=>n.type==="aside")!.props.className)).toContain("is-expanded");
   expect(nodes(tree).find(n=>n.props.sharedMap===map)!.type).toBe(layer.type);expect(nodes(tree).some(n=>n.type==="main")).toBe(false);
+  expect(map).toBe(layer.props.sharedMap);
 });
 for(const action of ["close","Escape","back"] as const) it(`${action} restores focus and clears Page selection without navigating away`,()=>{
   controller.close();page();const initial=page();

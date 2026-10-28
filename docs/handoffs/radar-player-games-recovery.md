@@ -3,6 +3,69 @@
 From: bounded source author. To: existing Actions bridge / independent exact-SHA QA.
 Date: 2026-10-25. Status: SOURCE CANDIDATE; independent QA, Product CI and DEV NOT_TESTED.
 
+## Mode A visual CSS repair — Owner 28.10.2026 (attempt 2/3, cursor:auto)
+
+Narrow presentation repair on candidate base `90bbeebda214bcd84183e959938a98234608a839`
+(prior: 64 focused tests, typecheck, Product CI `40616387127`, independent Medium SOURCE QA
+passed; rendered visual acceptance still pending). No API/contract/privacy/map/component
+API changes. Operator fixture remains photo-less/synthetic. This section does not overwrite
+attempt-1 or earlier history below and does **not** claim visual PASS.
+
+### Design inputs reopened
+
+| Kind | Delivered path | SHA256 | Observation |
+| --- | --- | --- | --- |
+| image | `/tmp/gb-cursor-211-owner-quota-oe7jkbkz/data/design-inputs/M2R_mockup.png` | `bf53191f8f917a119105ea058a3becefbbb50ca6fc6bf64d8d07d8f5b5cd2b60` | Opened as image. Expanded frame (2) uses a wide rectangular hero photograph with rounded corners — not a 112×112 circular portrait. Compact (1) stays a small side avatar. |
+| text | `/tmp/gb-cursor-211-owner-quota-oe7jkbkz/data/design-inputs/M2R-style-guide-excerpts.txt` | `45920a7685f958bf2315c549438112ca0f2a368ab81a76f043dd904e7933a7c4` | Read as text. Guide `--radius: 18px` maps to accepted consumer token `--gb-radius-md` (18px); tokens are `--gb-radius-sm/md/lg` only — no bare `--gb-radius`. |
+
+### Source delta (allowed paths only)
+
+- `radar-geographic.css`: (1) `.unified-preview__compact` and `.unified-preview__hero` now use `var(--gb-radius-md)` instead of absent `var(--gb-radius)`. (2) CSS-only `.unified-preview__hero .avatar:has(> img)` presents authorized Avatar `img` at hero width, `max-height:220px`, `aspect-ratio:16/9`, `object-fit:cover`, rounded container; initials path keeps the prior 112×112 circular frame. No new token.
+- `UnifiedPlayerPreview.tsx`: unchanged — existing Avatar safe URL / `onError` initials fallback is sufficient; no new props/data fields.
+- Handoff: this attempt-2 section only.
+
+### Checks
+
+- Design-input SHA256 verified equal to TASK_DATA.
+- Grep: no remaining `var(--gb-radius)` in `apps/web/src`; `:has(> img)` hero rules present; Avatar import/fences in TSX untouched.
+- Vitest/typecheck/lint: **NOT_TESTED** — workspace has no `.git` / no usable `node_modules` install in this writer copy; no dependency install performed. Prior candidate evidence (64 tests / typecheck / CI / Medium QA) retained as history, not re-run here.
+- Rendered browser visual acceptance: **NOT_TESTED** (no invented PASS). Product CI / independent QA / DEV: PMA-owned.
+
+## Mode A UI/design delivery — Owner 28.10.2026 (attempt 1, cursor:auto)
+
+Closes remaining unverified on-map compact/expanded composition for the same #308
+criteria. Backend projection, contracts, eligibility/privacy fences and D1/D2
+fixture work are already on accepted DEV via PR309 / product base
+`3367686018a8516789b1ec6c1da420daa8dc1bbd`. This pass does **not** reimplement
+API, reset history, or reopen old PRs. Supplied author base marker:
+`f253ad6fd399444a38495dd44bdfc69da337bdc0` (trusted Owner AGENTS supersession
+included in supplied tree; AGENTS is not an author-edit path). Workspace has no
+`.git` metadata in this writer copy.
+
+### Design inputs actually opened
+
+| Kind | Delivered path | SHA256 | Observation |
+| --- | --- | --- | --- |
+| image | `/tmp/gb-cursor-211-owner-quota-kkvfbdox/data/design-inputs/M2R_mockup.png` | `bf53191f8f917a119105ea058a3becefbbb50ca6fc6bf64d8d07d8f5b5cd2b60` | Opened as image (not headers). Three mobile frames: compact horizontal bottom card (avatar · name · level/distance · expand), expanded sheet (hero photo · name · level · details · actions · public-only note), player-games list (cover · title · when · venue · open). Demo names/activity/counts/preferences/roster are reference-only — not rendered. |
+| text | `/tmp/gb-cursor-211-owner-quota-kkvfbdox/data/design-inputs/M2R-style-guide-excerpts.txt` | `45920a7685f958bf2315c549438112ca0f2a368ab81a76f043dd904e7933a7c4` | Read as text. Authority for primitives: `RadarPlayerPreview` grid (Avatar + copy + CTA), `CompactUpcomingGame` / `upcoming-game-row`, tokens (`--lime`, `--paper`, `--radius`, `--ink-soft`, purple eyebrow). Mockup guides composition; Style Guide guides primitive styling. |
+
+### Source delta (allowed paths only)
+
+- `UnifiedPlayerPreview.tsx`: deliberate compact (`radar-player-preview` horizontal) vs expanded (hero Avatar, badges from authorized level/trainer only, distance + geo honesty, collapse CTA, existing `RadarContact`, games section ≤3). Preserves `liveUnifiedPreview`, deadline/selected/session/stale/expiry fences. No `/players/:id` expansion, no nested dialogs, no invented looking/activity/counts/area/roster.
+- `radar-geographic.css`: compact/expanded hierarchy + upcoming-game-row layout; removed mobile rule that hid direct preview Avatar (blocked compact card).
+- `radar-player-games.test.tsx`: retained suite; added compact/expanded hierarchy, honest empty games, panel `is-expanded` + same shared map assertions.
+- `RadarPage.tsx` / `shared-map-controller.test.ts`: unchanged behavior (map/camera/close/Escape/back already wired); controller fixtures already complete.
+- Handoff: this section only; historical records below preserved.
+
+### Checks
+
+- Design-input SHA256 verified equal to TASK_DATA.
+- Source/test/CSS invariants scripted (hierarchy markers, no demo fakes, fences/imports present).
+- `node:module.stripTypeScriptTypes` PARSE_OK for `shared-map-controller.test.ts`.
+- Vitest/typecheck/lint: **NOT_TESTED** — no `node_modules`; `pnpm --filter @gobadminton/web run test:unit` → `vitest: not found` / missing install. No dependency install performed.
+- Product CI, independent Medium QA, DEV smoke: PMA-owned, **NOT_TESTED** here.
+- STYLE_GUIDE_PARITY: composition applied from opened mockup + Style Guide excerpts against existing Avatar/GameCover/Button/CloseButton/Badge tokens. Rendered browser visual parity remains **NOT_TESTED** (no invented PASS).
+
 ## CI repair of published candidate f7af62d4 (2026-10-25)
 
 This section records the current bounded repair. The original source-attempt
