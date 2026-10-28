@@ -2066,6 +2066,7 @@ def parse_stream(raw, head, model=MODEL, *, analysis_binding=None, strict_source
     conversation = events[0].get('conversation_id')
     need(isinstance(conversation, str) and conversation, 'missing conversation identity')
     finish = False
+    finish_params = None  # exact canonical verdict from native finish tool parameters
     inference = False
     tool_steps = {}
     tool_names = set()
@@ -2086,8 +2087,24 @@ def parse_stream(raw, head, model=MODEL, *, analysis_binding=None, strict_source
             need(all(i != index or n == name for i,n in tool_steps), 'tool identity changed')
             need(tool_steps.get((index,name)) != 'DONE' or step['state']=='DONE', 'tool reopened')
             tool_steps[(index, name)] = step['state']; tool_names.add(name)
+            if analysis_binding is None and name == 'finish':
+                finish_params = _capture_finish_tool_params(step, head, finish_params)
+        elif step.get('step_type') == 'finish' and step.get('state') == 'DONE':
+            # Native protocol: TOOL finish ACTIVE then STEP_TYPE finish DONE at the
+            # same index. Legacy synthetic envelopes emit finish DONE with no tool.
+            name = step.get('tool_name')
+            need(name is None or name == 'finish', 'finish name mismatch')
+            index = step.get('step_index')
+            open_finish = [(i, n) for (i, n), state in tool_steps.items()
+                           if n == 'finish' and state != 'DONE']
+            if open_finish:
+                need(len(open_finish) == 1, 'multiple unfinished finish tools')
+                open_index, open_name = open_finish[0]
+                need(type(index) is int and index == open_index and open_name == 'finish',
+                     'finish index mismatch')
+                tool_steps[(open_index, open_name)] = 'DONE'
+            finish = True
         inference |= step.get('step_type') == 'agent_response' and step.get('state') == 'DONE'
-        finish |= step.get('step_type') == 'finish' and step.get('state') == 'DONE'
     need(all(state == 'DONE' for state in tool_steps.values()), 'incomplete native tool execution')
     out = events[-1].get('result')
     need(type(out) is dict and out.get('status') == 'SUCCESS'
@@ -2097,15 +2114,25 @@ def parse_stream(raw, head, model=MODEL, *, analysis_binding=None, strict_source
         structured = out.get('structured_output')
         if structured is None:
             # Schema output missing: the model text may repeat one verdict object.
-            result = parse_verdict_response(out.get('response'), head)
+            response = out.get('response')
+            response = _project_finish_response(response, head, finish_params)
+            result = parse_verdict_response(response, head)
+            if finish_params is not None:
+                need(result == finish_params, 'contradictory finish params/result')
         elif type(structured) is dict:
             # Seed the same bounded whole-response scanner with the canonical
             # structured verdict. Text need not repeat it, but no verdict-bearing
             # content in either channel may contradict it or evade validation.
+            # Provider may add toolAction/toolSummary only with matching native
+            # finish canonical parameters on the completed finish step.
+            structured = _project_finish_payload(structured, head, finish_params)
             response = out.get('response')
             need(response is None or type(response) is str, 'invalid QA response')
+            response = _project_finish_response(response, head, finish_params)
             result = parse_verdict_response(
                 dec(canonical_verdict_bytes(structured, head)) + '\n' + (response or ''), head)
+            if finish_params is not None:
+                need(result == finish_params, 'contradictory finish params/result')
         else:
             # false, [], "", 0, "x" are not a missing schema and are not a verdict.
             raise ReviewError('AGY_PARSE_FAILED', 'parse')
@@ -2194,6 +2221,83 @@ def canonical(value, head):
          and all(isinstance(x, str) and len(x) <= 4000 for x in findings), 'schema mismatch')
     need(value['verdict'] == 'FAIL' or not findings, 'PASS with findings')
     return {'verdict': value['verdict'], 'findings': list(findings), 'reviewed_sha': head}
+
+
+# Provider-only finish metadata observed on real native finish; never part of canonical().
+_PROVIDER_FINISH_META = frozenset({'toolAction', 'toolSummary'})
+_PROVIDER_FINISH_META_MAX = 4000
+
+
+def _capture_finish_tool_params(step, head, previous):
+    """Exact canonical finish parameters from a native finish tool step, if present."""
+    info = step.get('tool_info')
+    if info is None:
+        return previous
+    need(type(info) is dict, 'invalid finish tool_info')
+    params = info.get('parameters')
+    if params is None:
+        return previous
+    captured = canonical(params, head)
+    need(previous is None or previous == captured, 'contradictory finish params/result')
+    return captured
+
+
+# Fail closed on structured/encoded JSON inside provider finish metadata labels.
+# Observed toolAction/toolSummary are short prose ("Finishing QA" / "Final QA verdict").
+_PROVIDER_FINISH_META_JSON_CHARS = frozenset('"{}[]\\')
+
+
+def _validate_finish_metadata_strings(value):
+    """Bounded string labels only; no second JSON scanner for two short fields."""
+    for key in _PROVIDER_FINISH_META:
+        if key not in value:
+            continue
+        text = value[key]
+        need(type(text) is str and 1 <= len(text) <= _PROVIDER_FINISH_META_MAX,
+             'invalid finish metadata type')
+        need(len(text.encode('utf-8')) <= _PROVIDER_FINISH_META_MAX, 'invalid finish metadata type')
+        need(not any(ch in text for ch in _PROVIDER_FINISH_META_JSON_CHARS),
+             'finish metadata hides verdict')
+
+
+def _project_finish_payload(value, head, finish_params):
+    """Strip bounded toolAction/toolSummary only when native finish params match.
+
+    canonical() itself stays strict. Unknown extras still reach canonical().
+    """
+    if type(value) is not dict:
+        return value
+    extras = set(value) - {'verdict', 'findings', 'reviewed_sha'}
+    if not extras:
+        return value
+    if not extras <= _PROVIDER_FINISH_META:
+        return value  # arbitrary extras: leave for canonical() rejection
+    need(finish_params is not None, 'finish metadata without native finish params')
+    need({'verdict', 'findings', 'reviewed_sha'} <= set(value), 'schema mismatch')
+    _validate_finish_metadata_strings(value)
+    projected = {key: value[key] for key in ('verdict', 'findings', 'reviewed_sha')}
+    need(canonical(projected, head) == finish_params, 'contradictory finish params/result')
+    return projected
+
+
+def _project_finish_response(text, head, finish_params):
+    """Normalize a response that is solely canonical + provider finish metadata."""
+    if text is None or not isinstance(text, str) or not text.strip():
+        return text
+    if finish_params is None:
+        return text
+    try:
+        value = json.loads(text, object_pairs_hook=uniq,
+                           parse_constant=lambda _: need(False, 'non-JSON constant'))
+    except (ValueError, RecursionError, ReviewError):
+        return text
+    if type(value) is not dict:
+        return text
+    extras = set(value) - {'verdict', 'findings', 'reviewed_sha'}
+    if not extras or not extras <= _PROVIDER_FINISH_META:
+        return text
+    projected = _project_finish_payload(value, head, finish_params)
+    return json.dumps(projected, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
 
 
 def canonical_verdict_bytes(value, head):
