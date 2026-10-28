@@ -110,9 +110,32 @@ it("renders compact desktop composition without GameHero classes or fabricated e
   expect(html).not.toContain("4.8");
   expect(html).not.toContain("участник");
   expect(html).not.toContain("Популярная");
+  expect(html).not.toContain("Тренер · самостоятельно указано");
+  expect(html).not.toContain("Условия аренды площадки уточняйте у организатора.");
   expect(elements(tree).some(node => node.type === VenueGameActions)).toBe(true);
   expect(elements(tree).some(node => node.type === GameHero)).toBe(false);
   expect(elements(tree).some(node => node.type === GameTerms)).toBe(false);
+});
+
+it("shows real trainer disclosure and rent note only for trainer_led with trainer", () => {
+  const trainerGame = fixture({
+    activityKind: "trainer_led",
+    trainer: { profileId: "t", displayName: "Ирина Т.", declarationSource: "self_declared" },
+    settlement: { mode: "external", purpose: "trainer_fee", priceMinor: null, currency: null, terms: "Оплата на месте", priceStatus: "by_agreement" },
+  });
+  hooks.cursor = 0;
+  const trainerHtml = renderToStaticMarkup(DesktopInspectorGame({ game: trainerGame }));
+  expect(trainerHtml).toContain("Ирина Т.");
+  expect(trainerHtml).toContain("Тренер · самостоятельно указано");
+  expect(trainerHtml).toContain("Анна");
+  expect(trainerHtml).toContain("Оплата тренеру по договорённости · Оплата на месте");
+  expect(trainerHtml).toContain("Условия аренды площадки уточняйте у организатора.");
+
+  const regularHtml = renderToStaticMarkup(DesktopInspectorGame({ game: fixture() }));
+  expect(regularHtml).not.toContain("Тренер · самостоятельно указано");
+  expect(regularHtml).not.toContain("Условия аренды площадки уточняйте у организатора.");
+  expect(regularHtml).toContain("Анна");
+  expect(regularHtml).toContain("Разделяем корт");
 });
 
 it("expands a real long description via Подробнее without inventing copy", () => {

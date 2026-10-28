@@ -58,6 +58,12 @@ export function DesktopInspectorGame({
             <span className="gb-desktop-inspector-game__fact-label">Организатор</span>
             <span>{game.organizer.displayName}</span>
           </li>
+          {trainer && game.trainer ? (
+            <li>
+              <span className="gb-desktop-inspector-game__fact-label">Тренер · самостоятельно указано</span>
+              <span>{game.trainer.displayName}</span>
+            </li>
+          ) : null}
           <li>
             <span className="gb-desktop-inspector-game__fact-label">Места</span>
             <span>{capacityStatusLabel(game)}</span>
@@ -73,10 +79,15 @@ export function DesktopInspectorGame({
               <small>{game.venue.address}</small>
             </span>
           </li>
-          {terms ? (
+          {terms || trainer ? (
             <li>
               <span className="gb-desktop-inspector-game__fact-label">Условия</span>
-              <span>{terms}</span>
+              <span>
+                {terms ? <span>{terms}</span> : null}
+                {trainer ? (
+                  <small>Условия аренды площадки уточняйте у организатора.</small>
+                ) : null}
+              </span>
             </li>
           ) : null}
         </ul>
