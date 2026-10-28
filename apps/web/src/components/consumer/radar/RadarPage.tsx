@@ -33,6 +33,14 @@ export function RadarPage({ sharedMap, resumeCamera = false }: { sharedMap?: Lib
   const skipFocusRestore = useRef(false);
   // Exactly one owner for the current same-URL preview history entry (Close must not also retire).
   const previewHistoryOwned = useRef(false);
+  // Ownership generation: live player→player reuse keeps the same generation; a new push advances it.
+  const previewHistoryGeneration = useRef(0);
+  // Programmatic history.back() of an older generation must not close a newer player listener.
+  const pendingRetiredGeneration = useRef<number | null>(null);
+  // Single popstate coordinator: active player handler, or orphan-clear when none.
+  const previewPopstateHandler = useRef<(() => void) | null>(null);
+  const selectedRef = useRef(view.selected);
+  selectedRef.current = view.selected;
   const snapshot = view.snapshot;
   // Keep the map marker identity stable between one-second header ticks;
   // the exact-deadline timer below invalidates this array when a lease expires.
@@ -96,22 +104,50 @@ export function RadarPage({ sharedMap, resumeCamera = false }: { sharedMap?: Lib
     skipFocusRestore.current = false;
   }, [view.selected]);
   useEffect(() => { if (listOpen) sheet.current?.focus(); }, [listOpen]);
+  // One window listener for preview history; player effects publish/replace the active handler.
+  useEffect(() => {
+    if (!sharedMap) return;
+    const onPopstate = () => {
+      const handler = previewPopstateHandler.current;
+      if (handler) {
+        handler();
+        return;
+      }
+      // Orphan programmatic retirement (venue handoff with no new player yet).
+      pendingRetiredGeneration.current = null;
+    };
+    window.addEventListener("popstate", onPopstate);
+    return () => window.removeEventListener("popstate", onPopstate);
+  }, [sharedMap]);
   useEffect(() => {
     if (!sharedMap || !view.selected) return;
-    // One owned same-URL preview entry for the current player selection.
-    window.history.pushState({ ...window.history.state, gbRadarPreview: true }, "", window.location.href);
-    previewHistoryOwned.current = true;
-    const back = () => {
+    // Reuse the owned same-URL entry across live player→player replacement; push only when unowned.
+    if (!previewHistoryOwned.current) {
+      window.history.pushState({ ...window.history.state, gbRadarPreview: true }, "", window.location.href);
+      previewHistoryOwned.current = true;
+      previewHistoryGeneration.current += 1;
+    }
+    const ownedGeneration = previewHistoryGeneration.current;
+    previewPopstateHandler.current = () => {
+      // Absorb a pending programmatic retirement from a prior ownership; do not close the new player.
+      if (pendingRetiredGeneration.current !== null && pendingRetiredGeneration.current < ownedGeneration) {
+        pendingRetiredGeneration.current = null;
+        return;
+      }
+      pendingRetiredGeneration.current = null;
       // Browser Back / Escape already retired the entry before popstate.
       previewHistoryOwned.current = false;
+      previewPopstateHandler.current = null;
       controller?.close(); setListOpen(false); setExpanded(false);
     };
-    window.addEventListener("popstate", back);
     return () => {
-      window.removeEventListener("popstate", back);
+      // Live replacement: keep ownership and let the incoming effect replace the handler.
+      if (selectedRef.current) return;
+      previewPopstateHandler.current = null;
       // Sole retirement path for ordinary Close, venue replacement, and other non-Back clears.
       // Do not also history.back() from close(): native back is async and would double-pop.
       if (previewHistoryOwned.current && window.history.state?.gbRadarPreview) {
+        pendingRetiredGeneration.current = previewHistoryGeneration.current;
         previewHistoryOwned.current = false;
         window.history.back();
       }
@@ -166,6 +202,8 @@ export function RadarPage({ sharedMap, resumeCamera = false }: { sharedMap?: Lib
       event.preventDefault();
       if (window.history.state?.gbRadarPreview) {
         // Claim retirement before async native back so effect cleanup cannot double-pop.
+        // Mark generation so a player selected before popstate can absorb without closing.
+        pendingRetiredGeneration.current = previewHistoryGeneration.current;
         previewHistoryOwned.current = false;
         window.history.back();
       } else { controller?.close(); setListOpen(false); setExpanded(false); }

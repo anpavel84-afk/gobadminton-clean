@@ -597,3 +597,144 @@ it("browser Back closes player once; late popstate after venue replacement does 
   expect(controller.view.selected).toBeNull();
   expect(nodes(renderRadar()).some(n => n.type === VenuePopup)).toBe(false);
 });
+
+function peerBRow(): UnifiedRow {
+  return {
+    ...row,
+    publicPlayerId: "peer-b",
+    player: { ...row.player, publicPlayerId: "peer-b", displayName: "Игрок B" },
+    radar: { ...row.radar!, resultId: "r-b", resultRef: "private-proof-b" },
+  };
+}
+
+function delayHistoryBack() {
+  const pendingBacks: Array<() => void> = [];
+  history.back.mockImplementation(() => {
+    pendingBacks.push(() => {
+      if (historyStack.length > 1) historyStack.pop();
+      else historyStack[0] = {};
+      window.dispatchEvent(new Event("popstate"));
+    });
+  });
+  return pendingBacks;
+}
+
+it("direct A→B reuses owned history; delayed retirement cannot close B", async () => {
+  const baseline = historyStack.length;
+  const peerB = peerBRow();
+  controller.view = { ...controller.view, pins: [controller.view.pins[0]!, peerB] };
+  let tree = renderRadar();
+  Object.assign(document, { activeElement: trigger });
+  (nodes(tree).find(n => n.props.sharedMap === map)!.props.onSelect as (row: UnifiedRow) => void)(controller.view.pins[0]!);
+  await Promise.resolve();
+  await Promise.resolve();
+  tree = renderRadar();
+  expect(controller.view.selected).toBe("peer");
+  expect(historyStack.length).toBe(baseline + 1);
+  expect(history.pushState).toHaveBeenCalledTimes(1);
+
+  const pendingBacks = delayHistoryBack();
+  request.mockImplementation(async (path: string) => ({
+    ok: true, status: 200,
+    data: path.endsWith("/preview")
+      ? { ...preview, player: { ...preview.player, publicPlayerId: peerB.publicPlayerId, displayName: peerB.player.displayName } }
+      : path.endsWith("/map")
+        ? { ...snapshot, mapPage: { returnedCount: 1, rankStart: 1, rankEnd: 1, hasMore: false, nextMapCursor: null } }
+        : snapshot,
+  }));
+  // Real select(B) sets selected synchronously before awaiting preview.
+  const selectingB = controller.select(peerB);
+  expect(controller.view.selected).toBe("peer-b");
+  tree = renderRadar();
+  expect(pendingBacks.length).toBe(0);
+  expect(history.pushState).toHaveBeenCalledTimes(1);
+  expect(historyStack.length).toBe(baseline + 1);
+  pendingBacks.splice(0).forEach(fn => fn());
+  tree = renderRadar();
+  expect(controller.view.selected).toBe("peer-b");
+  expect(nodes(tree).some(n => n.type === VenuePopup)).toBe(true);
+  expect(historyStack.length).toBe(baseline + 1);
+
+  (nodes(tree).find(n => n.type === VenuePopup)!.props.onDeselect as () => void)();
+  tree = renderRadar();
+  expect(controller.view.selected).toBeNull();
+  expect(historyStack.length).toBe(baseline);
+  await selectingB;
+});
+
+it("venue→new player before pending retirement popstate keeps the new player", async () => {
+  const baseline = historyStack.length;
+  const peerB = peerBRow();
+  controller.view = { ...controller.view, pins: [controller.view.pins[0]!, peerB] };
+  let tree = renderRadar();
+  Object.assign(document, { activeElement: trigger });
+  (nodes(tree).find(n => n.props.sharedMap === map)!.props.onSelect as (row: UnifiedRow) => void)(controller.view.pins[0]!);
+  await Promise.resolve();
+  await Promise.resolve();
+  tree = renderRadar();
+  expect(historyStack.length).toBe(baseline + 1);
+
+  const pendingBacks = delayHistoryBack();
+  window.dispatchEvent(new Event("gb-map-select-venue"));
+  tree = renderRadar();
+  expect(controller.view.selected).toBeNull();
+  expect(pendingBacks.length).toBe(1);
+
+  request.mockImplementation(async (path: string) => ({
+    ok: true, status: 200,
+    data: path.endsWith("/preview")
+      ? { ...preview, player: { ...preview.player, publicPlayerId: peerB.publicPlayerId, displayName: peerB.player.displayName } }
+      : path.endsWith("/map")
+        ? { ...snapshot, mapPage: { returnedCount: 1, rankStart: 1, rankEnd: 1, hasMore: false, nextMapCursor: null } }
+        : snapshot,
+  }));
+  const selectingB = controller.select(peerB);
+  expect(controller.view.selected).toBe("peer-b");
+  tree = renderRadar();
+  expect(history.pushState.mock.calls.length).toBeGreaterThanOrEqual(2);
+  pendingBacks.splice(0).forEach(fn => fn());
+  tree = renderRadar();
+  expect(controller.view.selected).toBe("peer-b");
+  expect(nodes(tree).some(n => n.type === VenuePopup)).toBe(true);
+
+  (nodes(tree).find(n => n.type === VenuePopup)!.props.onDeselect as () => void)();
+  tree = renderRadar();
+  expect(controller.view.selected).toBeNull();
+  expect(historyStack.length).toBe(baseline);
+  await selectingB;
+});
+
+it("compact Escape retires once under async back; browser Back still closes", async () => {
+  const baseline = historyStack.length;
+  let tree = renderRadar();
+  Object.assign(document, { activeElement: trigger });
+  (nodes(tree).find(n => n.props.sharedMap === map)!.props.onSelect as (row: UnifiedRow) => void)(controller.view.pins[0]!);
+  await Promise.resolve();
+  await Promise.resolve();
+  tree = renderRadar();
+  expect(historyStack.length).toBe(baseline + 1);
+
+  const pendingBacks = delayHistoryBack();
+  window.dispatchEvent(Object.assign(new Event("keydown", { cancelable: true }), { key: "Escape" }));
+  expect(pendingBacks.length).toBe(1);
+  pendingBacks.splice(0).forEach(fn => fn());
+  tree = renderRadar();
+  expect(controller.view.selected).toBeNull();
+  expect(historyStack.length).toBe(baseline);
+  expect(pendingBacks.length).toBe(0);
+
+  // Restore synchronous back for the browser-Back half of this regression.
+  history.back.mockImplementation(() => {
+    if (historyStack.length > 1) historyStack.pop();
+    else historyStack[0] = {};
+    window.dispatchEvent(new Event("popstate"));
+  });
+  (nodes(tree).find(n => n.props.sharedMap === map)!.props.onSelect as (row: UnifiedRow) => void)(controller.view.pins[0]!);
+  await Promise.resolve();
+  await Promise.resolve();
+  tree = renderRadar();
+  window.history.back();
+  tree = renderRadar();
+  expect(controller.view.selected).toBeNull();
+  expect(historyStack.length).toBe(baseline);
+});
