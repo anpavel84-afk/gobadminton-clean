@@ -11,6 +11,7 @@ import type { apiFetch } from "../src/lib/api-client";
 import { MOSCOW_BUNDLE } from "../src/lib/radar-map-assets";
 import { RadarPage } from "../src/components/consumer/radar/RadarPage";
 import { UnifiedPlayerPreview } from "../src/components/consumer/radar/UnifiedPlayerPreview";
+import { VenuePopup } from "../src/components/consumer/games/VenuePopup";
 
 const hooks = vi.hoisted(() => ({ slots: [] as unknown[], cursor: 0, effects: [] as (() => void)[], cleanups: [] as (() => void)[] }));
 const context = vi.hoisted(() => ({ directory: null as unknown, session: null as unknown, config: null as unknown }));
@@ -51,7 +52,7 @@ const snapshot:UnifiedSnapshot={contractVersion:"players-unified-radar-v1",polic
 const preview:UnifiedPreview={player:{publicPlayerId:"peer",displayName:"Игрок",level:null,trainer:false,avatar:{uploadedUrl:null,providerUrl:null},canRequestContact:false},proximityBand:null,
   radar:{consentPolicyVersion:row.radar!.consentPolicyVersion,geo:row.radar!.geo,validUntil:until,distance:null},upcomingGames:[{id:"g",title:"Разрешённая игра",activityKind:"regular",startsAt:new Date(now+86400000).toISOString(),endsAt:new Date(now+90000000).toISOString(),timezone:"Europe/Moscow",cover:{uploadedUrl:null},venue:{name:"Зал",cover:{uploadedUrl:null}}}]};
 type Node=React.ReactElement<Record<string,unknown>>;
-function nodes(tree:ReactNode):Node[]{const found:Node[]=[];function walk(node:ReactNode){if(!isValidElement<Record<string,unknown>>(node))return;found.push(node);Children.forEach(node.props.children as ReactNode,walk);}walk(tree);return found;}
+function nodes(tree:ReactNode):Node[]{const found:Node[]=[];function walk(node:ReactNode){if(!isValidElement<Record<string,unknown>>(node))return;found.push(node);Children.forEach(node.props.children as ReactNode,walk);if("preview" in node.props)walk(node.props.preview as ReactNode);}walk(tree);return found;}
 function activate(tree:ReactNode,label:string){const node=nodes(tree).find(n=>n.props.children===label||n.props["aria-label"]===label);if(!node)throw Error(`Missing ${label}`);(node.props.onClick as ()=>void)();}
 const listeners=new Map<string,Set<()=>void>>();
 const trigger={isConnected:true,focus:vi.fn()}, sheet={focus:vi.fn()};
@@ -62,7 +63,7 @@ beforeEach(async()=>{
   vi.useFakeTimers();vi.setSystemTime(now);
   const history:{state:Record<string,unknown>;pushState:(state:Record<string,unknown>)=>void;back:()=>void}={state:{},pushState:vi.fn((state:Record<string,unknown>)=>{history.state=state;}),back:vi.fn(()=>{history.state={};listeners.get("popstate")?.forEach(fn=>fn());})};
   vi.stubGlobal("window",{location:{origin:"https://dev.gobadminton.ru",href:"https://dev.gobadminton.ru/games?view=map"},history,
-    addEventListener:(name:string,fn:()=>void)=>{if(!listeners.has(name))listeners.set(name,new Set());listeners.get(name)!.add(fn);},removeEventListener:(name:string,fn:()=>void)=>listeners.get(name)?.delete(fn),setTimeout,clearTimeout});
+    addEventListener:(name:string,fn:()=>void)=>{if(!listeners.has(name))listeners.set(name,new Set());listeners.get(name)!.add(fn);},removeEventListener:(name:string,fn:()=>void)=>listeners.get(name)?.delete(fn),setTimeout,clearTimeout,matchMedia:()=>({matches:false,addEventListener:()=>{},removeEventListener:()=>{}})});
   vi.stubGlobal("document",{activeElement:trigger,querySelector:()=>null,body:{style:{overflow:""}}});
   vi.stubGlobal("requestAnimationFrame",(fn:()=>void)=>fn());
   request.mockImplementation(async(path:string)=>({ok:true,status:200,data:path.endsWith("/preview")?preview:path.endsWith("/map")?{...snapshot,mapPage:{returnedCount:1,rankStart:1,rankEnd:1,hasMore:false,nextMapCursor:null}}:snapshot}));
@@ -73,7 +74,7 @@ beforeEach(async()=>{
 afterEach(()=>{hooks.cleanups.forEach(fn=>fn?.());controller.dispose();vi.unstubAllGlobals();vi.useRealTimers();});
 function render<T>(fn:()=>T){context.directory={controller,view:controller.view};hooks.cursor=0;const tree=fn();for(const node of nodes(tree as ReactNode)){if(node.type==="aside"&&(node.props.ref as {current:unknown}|undefined)) (node.props.ref as {current:unknown}).current=sheet;}hooks.effects.splice(0).forEach(fn=>fn());return tree;}
 function card(expanded=false){return render(()=>UnifiedPlayerPreview({expanded,onClose:()=>controller.close()}));}
-it("renders compact -> expanded -> collapsed actual preview without profile navigation",()=>{
+it("renders compact -> expanded profile; games stay an internal sheet view",()=>{
   const expand=vi.fn();let tree=render(()=>UnifiedPlayerPreview({expanded:false,onExpandedChange:expand,onClose:()=>controller.close()}));
   const html=renderToStaticMarkup(tree);
   expect(html).toContain('data-preview-mode="compact"');
@@ -87,22 +88,35 @@ it("renders compact -> expanded -> collapsed actual preview without profile navi
   tree=card(true);
   const expanded=renderToStaticMarkup(tree);
   expect(expanded).toContain('data-preview-mode="expanded"');
+  expect(expanded).toContain('data-player-view="profile"');
   expect(expanded).toContain("unified-preview__expanded");
   expect(expanded).toContain("unified-preview__hero");
   expect(expanded).toContain("Ближайшие публичные игры");
-  expect(expanded).toContain("Разрешённая игра");
-  expect(expanded).toContain("Открыть игру");
-  expect(expanded).toContain('href="/games/g"');
+  expect(expanded).not.toContain("Разрешённая игра");
   expect(expanded).toContain("Свернуть карточку");
   expect(expanded).not.toContain("Подробнее об игроке");
   expect(expanded).not.toContain("/players/peer");
+  activate(tree,"Ближайшие публичные игры");
+  tree=card(true);
+  const games=renderToStaticMarkup(tree);
+  expect(games).toContain('data-player-view="games"');
+  expect(games).toContain("Разрешённая игра");
+  expect(games).toContain("Открыть игру");
+  expect(games).toContain('href="/games/g"');
+  activate(tree,`Назад к профилю ${preview.player.displayName}`);
+  tree=card(true);
+  expect(renderToStaticMarkup(tree)).toContain('data-player-view="profile"');
+  expect(renderToStaticMarkup(tree)).not.toContain("Разрешённая игра");
   tree=card(false);expect(renderToStaticMarkup(tree)).not.toContain("Разрешённая игра");
   expect(renderToStaticMarkup(tree)).toContain('data-preview-mode="compact"');
 });
-it("keeps honest empty games state inside expanded hierarchy",()=>{
+it("keeps honest empty games state inside internal games view",()=>{
   controller.view={...controller.view,preview:{...preview,upcomingGames:[]}};
-  const html=renderToStaticMarkup(card(true));
-  expect(html).toContain('data-preview-mode="expanded"');
+  let tree=card(true);
+  activate(tree,"Ближайшие публичные игры");
+  tree=card(true);
+  const html=renderToStaticMarkup(tree);
+  expect(html).toContain('data-player-view="games"');
   expect(html).toContain("Нет доступных ближайших публичных игр");
   expect(html).not.toContain("Разрешённая игра");
   expect(html).not.toContain("124 игры");
@@ -112,7 +126,10 @@ it("distinguishes API loading, error with retry, and authorized empty",async()=>
   request.mockResolvedValueOnce({ok:false,status:503,error:"unavailable"});await controller.select(controller.view.pins[0]!);
   let tree=card(true);expect(renderToStaticMarkup(tree)).toContain("Повторить");expect(renderToStaticMarkup(tree)).not.toContain("Нет доступных ближайших");
   request.mockResolvedValueOnce({ok:true,status:200,data:{...preview,upcomingGames:[]}});activate(tree,"Повторить");await Promise.resolve();await Promise.resolve();
-  tree=card(true);expect(renderToStaticMarkup(tree)).toContain("Нет доступных ближайших публичных игр");expect(renderToStaticMarkup(tree)).not.toContain("Разрешённая игра");
+  tree=card(true);
+  activate(tree,"Ближайшие публичные игры");
+  tree=card(true);
+  expect(renderToStaticMarkup(tree)).toContain("Нет доступных ближайших публичных игр");expect(renderToStaticMarkup(tree)).not.toContain("Разрешённая игра");
 });
 it("Escape clears real private selection and schedules",()=>{
   const tree=card(true);const e={key:"Escape",preventDefault:vi.fn(),stopPropagation:vi.fn()};(tree!.props.onKeyDown)(e);
@@ -124,13 +141,21 @@ it("rejects expired or mismatched retained preview at render time",()=>{
 });
 const map={getCanvas:()=>({setAttribute:vi.fn(),removeAttribute:vi.fn(),addEventListener:vi.fn(),removeEventListener:vi.fn()}),on:vi.fn(),off:vi.fn()} as unknown as LibreMap;
 function page(){return render(()=>RadarPage({sharedMap:map}));}
-it("uses complete totals and controlled expansion over the same shared map with no dialog",()=>{
-  page();let tree=page();const child=nodes(tree).find(n=>n.type===UnifiedPlayerPreview)!;expect(child).toBeDefined();expect(child.props.dialog).toBeUndefined();expect(child.props.expanded).toBe(false);
-  const layer=nodes(tree).find(n=>n.props.sharedMap===map)!;expect(layer).toBeDefined();expect(nodes(tree).some(n=>n.props.children==="На карте: 1 из 1")).toBe(true);
-  const aside=nodes(tree).find(n=>n.type==="aside")!;expect(String(aside.props.className)).not.toContain("is-expanded");
-  activate(tree,"Развернуть карточку");tree=page();expect(nodes(tree).find(n=>n.type===UnifiedPlayerPreview)!.props.expanded).toBe(true);
-  expect(String(nodes(tree).find(n=>n.type==="aside")!.props.className)).toContain("is-expanded");
-  expect(nodes(tree).find(n=>n.props.sharedMap===map)!.type).toBe(layer.type);expect(nodes(tree).some(n=>n.type==="main")).toBe(false);
+it("uses VenuePopup shell over shared map; no g2-map-panel sidebar for selected player",()=>{
+  page();let tree=page();
+  const popup=nodes(tree).find(n=>n.type===VenuePopup)!;
+  expect(popup).toBeDefined();
+  expect(popup.props.expanded).toBe(false);
+  expect(popup.props.labels).toMatchObject({dialog:"Выбранный игрок"});
+  const previews=nodes(tree).filter(n=>n.type===UnifiedPlayerPreview);
+  expect(previews.some(n=>n.props.surface==="compact")).toBe(true);
+  expect(previews.some(n=>n.props.surface==="detail")).toBe(true);
+  expect(nodes(tree).some(n=>n.props.children==="На карте: 1 из 1")).toBe(true);
+  expect(nodes(tree).some(n=>n.type==="aside")).toBe(false);
+  (popup.props.onExpandedChange as (value:boolean)=>void)(true);tree=page();
+  expect(nodes(tree).find(n=>n.type===VenuePopup)!.props.expanded).toBe(true);
+  const layer=nodes(tree).find(n=>n.props.sharedMap===map)!;expect(layer).toBeDefined();
+  expect(nodes(tree).some(n=>n.type==="main")).toBe(false);
   expect(map).toBe(layer.props.sharedMap);
 });
 for(const action of ["close","Escape","back"] as const) it(`${action} restores focus and clears Page selection without navigating away`,()=>{
@@ -138,8 +163,7 @@ for(const action of ["close","Escape","back"] as const) it(`${action} restores f
   const layer=nodes(initial).find(n=>n.props.sharedMap===map)!;
   (layer.props.onSelect as (row:UnifiedRow)=>void)(controller.view.pins[0]!);
   const tree=page();
-  if(action==="close")activate(tree,"Закрыть карточку игрока");
-  else if(action==="back")window.history.back();
-  else (nodes(tree).find(n=>n.type==="aside")!.props.onKeyDown as (e:unknown)=>void)({key:"Escape",target:{closest:()=>null},stopPropagation:vi.fn()});
+  if(action==="back")window.history.back();
+  else (nodes(tree).find(n=>n.type===VenuePopup)!.props.onDeselect as ()=>void)();
   page();expect(controller.view.selected).toBeNull();expect(controller.view.preview).toBeNull();expect(trigger.focus).toHaveBeenCalled();expect(window.location.href).toContain("/games?view=map");
 });

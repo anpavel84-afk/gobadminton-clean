@@ -5,10 +5,15 @@ type Drag = { id: number; x: number; y: number; lastY: number; time: number; vel
 type CompactDrag = { id: number; x: number; y: number; travel: number; axis: "pending" | "vertical"; target: HTMLElement };
 
 /** The handle retains its old expanded gesture. Only the compact surface gains full-card swipes. */
-export function VenuePopup({ expanded, onExpandedChange, onDeselect, preview, children }: {
+export function VenuePopup({ expanded, onExpandedChange, onDeselect, preview, children, labels }: {
   expanded: boolean; onExpandedChange: (value: boolean) => void; onDeselect: () => void;
   preview: ReactNode; children: ReactNode;
+  /** Narrow neutral copy for non-venue sheets; gesture/geometry stay identical. */
+  labels?: { dialog?: string; expandHandle?: string; collapseHandle?: string };
 }) {
+  const dialogLabel = labels?.dialog ?? "Выбранная площадка";
+  const expandHandle = labels?.expandHandle ?? "Развернуть площадку";
+  const collapseHandle = labels?.collapseHandle ?? "Свернуть площадку";
   const surface = useRef<HTMLDivElement>(null);
   const compact = useRef<HTMLDivElement>(null);
   const full = useRef<HTMLDivElement>(null);
@@ -153,7 +158,7 @@ export function VenuePopup({ expanded, onExpandedChange, onDeselect, preview, ch
   const visible = (expanded || moving || settling) && !compactMorph;
   return <>
     {expanded && <div className="gb-venue-sheet-backdrop" onClick={onDeselect} />}
-    <div ref={surface} className="gb-venue-popup" role={expanded ? "dialog" : undefined} aria-modal={expanded ? "true" : undefined} aria-label={expanded ? "Выбранная площадка" : undefined} data-expanded={expanded} data-moving={moving}
+    <div ref={surface} className="gb-venue-popup" role={expanded ? "dialog" : undefined} aria-modal={expanded ? "true" : undefined} aria-label={expanded ? dialogLabel : undefined} data-expanded={expanded} data-moving={moving}
       style={{ height: position === null ? (expanded ? "88dvh" : "172px") : `calc(172px + ${position}px)`, transition: moving ? "none" : "height 220ms cubic-bezier(.2,.8,.2,1)" }}
       // A swipe's synthetic click has no new pointerdown. A later real tap does.
       // Clear only stale suppression at the start of a fresh press so the first
@@ -172,7 +177,7 @@ export function VenuePopup({ expanded, onExpandedChange, onDeselect, preview, ch
       }} data-compact-morph={compactMorph} data-settling={settling}>
       <div ref={compact} className="gb-venue-popup-compact-measure" aria-hidden="true" />
       <div ref={full} className="gb-venue-popup-full-measure" aria-hidden="true" />
-      <button type="button" className="gb-venue-handle" aria-label={expanded ? "Свернуть площадку" : "Развернуть площадку"}
+      <button type="button" className="gb-venue-handle" aria-label={expanded ? collapseHandle : expandHandle}
         onClick={() => { reset(); onExpandedChange(!expanded); }}
         onKeyDown={event => { if (event.key === "ArrowUp") { event.preventDefault(); reset(); onExpandedChange(true); } }}
         onPointerDown={event => {

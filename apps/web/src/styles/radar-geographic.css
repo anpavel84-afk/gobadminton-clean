@@ -102,7 +102,15 @@
   width:9px; height:9px; flex:none; border-radius:50%; background:var(--gb-lime);
 }
 .gb-consumer.gb-radar-layer { background: transparent; min-height: 0; }
-.gb-radar-layer .g2-map-panel,.gb-radar-layer dialog,.gb-radar-layer .gb-map-layer-summary { pointer-events:auto; }
+.gb-radar-layer .g2-map-panel,.gb-radar-layer .gb-venue-popup,.gb-radar-layer .gb-venue-sheet-backdrop,.gb-radar-layer dialog,.gb-radar-layer .gb-map-layer-summary { pointer-events:auto; }
+/* Player sheet reuses VenuePopup geometry; keep avatar thumb in the compact cover slot. */
+.gb-venue-popup .unified-preview__compact-cover { display:grid; place-items:center; background:var(--gb-lime-soft); }
+.gb-venue-popup .unified-preview__compact-cover .avatar { width:64px; height:64px; border-width:0; font-size:18px; }
+.gb-venue-popup .unified-preview.is-expanded { padding:0 16px 16px; box-sizing:border-box; }
+.unified-preview__sheet-head { display:flex; justify-content:flex-end; align-items:center; min-height:44px; margin:0 0 8px; }
+.unified-preview__games-nav { display:flex; align-items:center; gap:8px; position:sticky; top:0; z-index:2; min-height:56px; margin:0 -4px 12px; padding:8px 0; background:var(--gb-white); border-bottom:1px solid var(--gb-line); }
+.unified-preview__back { flex:1; min-width:0; min-height:44px; padding:8px 4px; border:0; background:transparent; color:var(--gb-ink); font:inherit; font-weight:600; text-align:left; cursor:pointer; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.unified-preview__games-view { display:grid; gap:12px; }
 .gb-map-layer-summary:not(:focus-within) { width:1px; height:1px; padding:0; clip-path:inset(50%); }
 .gb-map-layer-summary:focus-within { top:calc(72px + env(safe-area-inset-top,0px)); }
 .gb-games-map .g2-map-venue-marker { width:44px; height:44px; padding:7px; border:1px solid var(--gb-line); border-radius:50%; background:var(--gb-white); color:var(--gb-purple); box-shadow:var(--c23-shadow-lift); }

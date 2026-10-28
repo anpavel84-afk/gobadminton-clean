@@ -12,7 +12,9 @@
 .gb-consumer .gb-venue-preview-count { color:var(--gb-lime-deep); }
 .gb-consumer .gb-venue-preview-arrow { display:grid; place-items:center; width:44px; height:44px; border-radius:var(--gb-radius-pill); background:var(--gb-lime); color:var(--gb-ink); }
 .gb-consumer .gb-games-map[data-venue-preview="true"] .maplibregl-ctrl-bottom-right,
-.gb-consumer .gb-games-map[data-venue-preview="true"] .maplibregl-ctrl-bottom-left { bottom:calc(172px + 24px + var(--gb-safe-bottom)); }
+.gb-consumer .gb-games-map[data-venue-preview="true"] .maplibregl-ctrl-bottom-left,
+.gb-consumer .gb-games-map:has(.gb-venue-popup) .maplibregl-ctrl-bottom-right,
+.gb-consumer .gb-games-map:has(.gb-venue-popup) .maplibregl-ctrl-bottom-left { bottom:calc(172px + 24px + var(--gb-safe-bottom)); }
 .gb-consumer .gb-venue-sheet-backdrop { position:fixed; inset:0; background:color-mix(in srgb, var(--gb-ink) 32%, transparent); z-index:103; }
 .gb-consumer .gb-venue-sheet { position:fixed; bottom:0; right:0; width:100%; max-height:88dvh; overflow:auto; z-index:104; background:var(--gb-white); color:var(--gb-ink); border-radius:var(--gb-radius-lg) var(--gb-radius-lg) 0 0; padding:0 16px calc(16px + var(--gb-safe-bottom)); box-sizing:border-box; min-width:0; overflow-wrap:anywhere; }
 .gb-consumer .gb-venue-sheet * { box-sizing:border-box; min-width:0; }
