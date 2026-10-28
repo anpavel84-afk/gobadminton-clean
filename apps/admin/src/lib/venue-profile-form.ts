@@ -48,11 +48,50 @@ function forbidden(value: string): boolean {
     return code <= 0x1f || (code >= 0x7f && code <= 0x9f) || character === "\\";
   });
 }
+/** Equivalent of apps/api originalHttpAuthority + httpUrlAgreesWithOriginalAuthority for public contacts. */
+function originalHttpAuthority(text: string): { scheme: "http" | "https"; host: string; port: string } | null {
+  const prefix = /^(https?):\/{2,}/i.exec(text);
+  if (!prefix) return null;
+  const remainder = text.slice(prefix[0].length);
+  const boundary = remainder.search(/[/?#]/);
+  const authority = boundary < 0 ? remainder : remainder.slice(0, boundary);
+  const parts = /^(\[[0-9a-f:.]+\]|[^:[\]@/\\?#]+)(?::([0-9]*))?$/i.exec(authority);
+  if (!parts) return null;
+  const schemeName = prefix[1]!.toLowerCase();
+  if (schemeName !== "http" && schemeName !== "https") return null;
+  const host = parts[1]!;
+  let port = parts[2] === undefined || parts[2] === "" ? "" : parts[2].replace(/^0+/, "") || "0";
+  if (port.length > 5 || (port.length === 5 && port > "65535")) return null;
+  if (port === (schemeName === "https" ? "443" : "80")) port = "";
+  return { scheme: schemeName, host, port };
+}
+function httpUrlAgreesWithOriginalAuthority(text: string): boolean {
+  if (/[\ud800-\udfff]/u.test(text)) return false;
+  const authority = originalHttpAuthority(text);
+  if (!authority) return false;
+  try {
+    if (forbidden(decodeURIComponent(text))) return false;
+    const url = new URL(text);
+    const protocol = `${authority.scheme}:`;
+    if (url.protocol !== protocol || !url.hostname || url.username || url.password) return false;
+    const hostOnly = new URL(`${authority.scheme}://${authority.host}/`);
+    if (hostOnly.protocol !== protocol || !hostOnly.hostname || hostOnly.username || hostOnly.password || hostOnly.port
+      || hostOnly.pathname !== "/" || hostOnly.search || hostOnly.hash) return false;
+    const expectedHost = hostOnly.hostname + (authority.port ? `:${authority.port}` : "");
+    if (url.hostname !== hostOnly.hostname || url.port !== authority.port || url.host !== expectedHost) return false;
+    const stable = new URL(url.href);
+    return !(stable.href !== url.href || stable.protocol !== protocol || stable.hostname !== url.hostname
+      || stable.port !== url.port || stable.host !== url.host || stable.origin !== url.origin || stable.username || stable.password);
+  } catch {
+    return false;
+  }
+}
 const hosts = { telegram: "t.me", whatsapp: "wa.me", vk: "vk.com" } as const;
 function contactUrl(value: string, kind?: MessengerKind): string | null {
   if (forbidden(value)) return null;
   const raw = value.trim();
   if (!/^https?:\/\//i.test(raw) || raw.split(/[/?#]/)[2]?.includes("@")) return null;
+  if (!httpUrlAgreesWithOriginalAuthority(raw)) return null;
   try {
     const url = new URL(raw);
     if (!url.hostname.startsWith("[") && (url.hostname.length > 253 || !url.hostname.split(".").every(label => /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(label)))) return null;

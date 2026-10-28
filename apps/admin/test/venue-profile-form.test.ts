@@ -62,6 +62,12 @@ describe("venue public profile form against the existing edit contract", () => {
       expect(validateVenueProfile({ ...initializeVenueProfile({}), contactsChanged: true, website }).errors.website).toBeTruthy();
     });
   }
+  it("rejects website with encoded forbidden control matching current API authority guard", () => {
+    const website = "https://venue.example/%0A";
+    const result = validateVenueProfile({ ...initializeVenueProfile({}), contactsChanged: true, website });
+    expect(result.errors.website).toBeTruthy();
+    expect(result.patch.publicContacts).toBeNull();
+  });
   for (const [kind, url] of [
     ["telegram", "http://t.me/venue"], ["telegram", "https://t.me/"], ["telegram", "https://t.me.evil.org/venue"],
     ["whatsapp", "https://t.me/1234567"], ["vk", "https://m.vk.com/venue"], ["vk", "https://user@vk.com/venue"],
@@ -70,6 +76,12 @@ describe("venue public profile form against the existing edit contract", () => {
       expect(validateVenueProfile({ ...initializeVenueProfile({}), contactsChanged: true, messengers: [{ kind, url }] }).errors["messenger-0"]).toBeTruthy();
     });
   }
+  it("rejects Telegram URL with encoded forbidden control matching current API authority guard", () => {
+    const url = "https://t.me/venue%0A";
+    const result = validateVenueProfile({ ...initializeVenueProfile({}), contactsChanged: true, messengers: [{ kind: "telegram", url }] });
+    expect(result.errors["messenger-0"]).toBeTruthy();
+    expect(result.patch.publicContacts?.messengers ?? []).toEqual([]);
+  });
   it("normalizes valid public URLs and supports exactly three distinct messenger kinds", () => {
     const result = validateVenueProfile({
       ...initializeVenueProfile({}), contactsChanged: true, phone: " +7 (999) 123-45-67 ", website: " HTTPS://ПРИМЕР.РФ ",

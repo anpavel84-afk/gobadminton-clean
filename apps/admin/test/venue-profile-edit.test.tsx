@@ -210,6 +210,23 @@ describe("existing venue EDIT UI and transport", () => {
     await h.click("Удалить мессенджер 2"); expect(h.button("Подтвердить сохранение").disabled).toBe(false);
   });
 
+  it("rejects encoded control %0A on public website and Telegram with field feedback and Save disabled", async () => {
+    const h = harness(); await h.mount(); await h.edit();
+    h.change("Сайт (виден всем)", "https://venue.example/%0A");
+    const site = h.control("Сайт (виден всем)");
+    expect(site.props["aria-invalid"]).toBe(true);
+    expect(h.view().find(node => node.props.id === site.props["aria-describedby"] && node.props.role === "alert")).toBeDefined();
+    expect(h.button("Подтвердить сохранение").disabled).toBe(true);
+    expect(h.posts()).toHaveLength(0);
+    h.change("Сайт (виден всем)", "https://venue.example/");
+    h.change("Ссылка мессенджера 1 (видна всем)", "https://t.me/venue%0A");
+    const messenger = h.control("Ссылка мессенджера 1 (видна всем)");
+    expect(messenger.props["aria-invalid"]).toBe(true);
+    expect(h.view().find(node => node.props.id === messenger.props["aria-describedby"] && node.props.role === "alert")).toBeDefined();
+    expect(h.button("Подтвердить сохранение").disabled).toBe(true);
+    expect(h.posts()).toHaveLength(0);
+  });
+
   it("switches venue without leaking a previous draft, including a stale save callback during the read", async () => {
     const h = harness(); await h.mount(); await h.edit(); h.change("Телефон (виден всем)", "+70001112233");
     const staleSubmit = h.button("Подтвердить сохранение").props.onClick as () => void;

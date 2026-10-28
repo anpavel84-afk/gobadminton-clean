@@ -110,10 +110,12 @@ frontend change is required or included.
   `updatedAt`/`gallery` are never copied into editable payloads.
 - Public phone rules match ASCII digit/format/length bounds. Public HTTP(S)
   URLs use the same WHATWG/IDN normalization, hostname/credential/control-byte/
-  backslash/port/normalized-length checks. Messenger URLs require HTTPS and
-  exact `t.me`, `wa.me`, `vk.com` hosts plus a non-root path. Duplicate kinds
-  and invalid rows block submission; a blank row must be removed or completed.
-  Client feedback is advisory; server validation/authorization remain decisive.
+  backslash/port/normalized-length checks, plus the current API original-authority
+  agreement and decoded-character guard (encoded controls such as `%0A` rejected).
+  Messenger URLs require HTTPS and exact `t.me`, `wa.me`, `vk.com` hosts plus a
+  non-root path. Duplicate kinds and invalid rows block submission; a blank row
+  must be removed or completed. Client feedback is advisory; server validation/
+  authorization remain decisive.
 - Strict existing `action:edit`, required identity fields, selected
   `expectedVersion`, current reason and session CSRF use unchanged adminRequest
   headers/cookies/no-store transport. No private contact/booking payload exists.
@@ -226,3 +228,20 @@ source actor cannot manufacture it or report acceptance ahead of those gates.
 Owner requested continuation of existing product backlog. Historical PARK/attempt2 and source4f3a0ff remain unchanged; this is a separate managed Mode A continuation, not replay of historical C5 CI-stage UNKNOWN. Retained source was merged with accepted dev eb3977b9cce2586373813d31e1c22327c0c5b6df into isolated worktree. No source implementation reordered or reauthored. C5 remains disabled.
 
 Trusted operator checks on retained product source: 59/59 existing focused form/UI tests PASS and admin typecheck PASS. Targeted lint found one forbidden inline import() type in a test; mechanical namespace type-import correction only, no product logic or assertions changed. New paid Cursor author was unnecessary at this point. Independent Codex Sol Medium QA, final-SHA Product CI and actual DEV acceptance remain required. Earlier QA/CI FAIL and UNKNOWN are preserved, not passed by this note. Browser/admin positive authenticated live UAT NOT_TESTED; no user session created or copied.
+
+## Lean Mode A retained repair — F1 authority/decoded-char URL guard — 2026-10-28
+
+Owner assignment: Cursor Auto source author, narrow repair retained #207/PR210 exact `0e61d3b`; only independent QA finding **F1**. Old C5 PARK/UNKNOWN/grants/High/max3 untouched. API/DB/contracts/runtime unchanged.
+
+**Actual repair (F1):** `apps/admin/src/lib/venue-profile-form.ts` `contactUrl` previously checked only literal forbidden scalars and WHATWG properties, so `https://venue.example/%0A` and `https://t.me/venue%0A` validated as OK while current API `publicContactUrl` → `httpUrlAgreesWithOriginalAuthority` rejects decoded control characters. Added equivalent in-file original-authority / decoded-character predicate (same grammar as `apps/api/src/lib/original-http-authority.ts`) and require it before accepting website or messenger URLs. Existing field errors and Save disable path unchanged. No new helper file, no API import, no component rewrite.
+
+**Tests authored (not executed here):** focused form regressions for the two emitted-payload mismatches; UI case asserting accessible website/messenger alerts and disabled Save for those inputs. Existing form/UI suite otherwise retained.
+
+| Check | Disposition |
+| --- | --- |
+| Affected form/UI vitest + admin typecheck | NOT_TESTED by this author; PMA runs checks (no install/cache search). |
+| Live admin auth / real user mutation | NOT_TESTED; forbidden. |
+| Independent Codex Sol Medium QA on candidate SHA | PENDING. |
+| Product CI / DEV smoke / Owner UAT | PENDING trusted process; report NOT_TESTED until executed. |
+
+No Git write, push, or deploy by this author.
