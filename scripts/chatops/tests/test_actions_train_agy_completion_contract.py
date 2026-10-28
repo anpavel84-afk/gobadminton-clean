@@ -498,6 +498,28 @@ def with_tools(updates):
     return events
 
 
+def provider_meta(**changes):
+    value = dict(toolAction='Finishing QA', toolSummary='Final QA verdict')
+    value.update(changes)
+    return value
+
+
+def with_native_finish(events, *, active_params=None, done_params=None, index=2):
+    """Replace legacy STEP finish with TOOL finish ACTIVE + STEP finish DONE."""
+    events = copy.deepcopy(events)
+    events = [e for e in events if e.get('step_update', {}).get('step_type') != 'finish']
+    active = dict(conversation_id=CID, step_index=index, step_type='tool',
+                  tool_name='finish', state='ACTIVE')
+    if active_params is not None:
+        active['tool_info'] = dict(name='finish', parameters=copy.deepcopy(active_params))
+    done = dict(conversation_id=CID, step_index=index, step_type='finish', state='DONE')
+    if done_params is not None:
+        done['tool_info'] = dict(name='finish', parameters=copy.deepcopy(done_params))
+    events.insert(-1, dict(event='step_update', step_update=active))
+    events.insert(-1, dict(event='step_update', step_update=done))
+    return events
+
+
 class ToolCompletionState(unittest.TestCase):
     def parse_tools(self, updates, role):
         events = with_tools(updates)
@@ -614,6 +636,91 @@ class ToolCompletionState(unittest.TestCase):
                         [(4, 'run_command', s, {}) for s in ('DONE', 'ACTIVE', 'DONE')]):
             with self.subTest(updates=updates), self.assertRaises(N.ReviewError):
                 self.parse_tools(updates, 'analysis')
+
+
+class NativeFinishMetadata(unittest.TestCase):
+    """Provider toolAction/toolSummary only with matching native finish params."""
+
+    def parse(self, events):
+        return N.parse_stream(wire(events), SHA)
+
+    def test_matching_finish_metadata_on_structured_and_response_accept(self):
+        meta = provider_meta()
+        body = dict(verdict(), **meta)
+        for structured, response in (
+                (body, None),
+                (body, ''),
+                (body, 'Review complete. See notes.'),
+                (verdict(), json.dumps(body, sort_keys=True, separators=(',', ':'))),
+                (None, json.dumps(body, sort_keys=True, separators=(',', ':')))):
+            events = with_native_finish(rows(), active_params=verdict(), done_params=verdict())
+            events[-1]['result']['structured_output'] = structured
+            if response is not None:
+                events[-1]['result']['response'] = response
+            elif 'response' in events[-1]['result']:
+                del events[-1]['result']['response']
+            with self.subTest(structured=structured is not None, response=response):
+                self.assertEqual(self.parse(events)[0], verdict())
+
+    def test_canonical_still_rejects_unknown_extras_and_wrong_sha(self):
+        self.assertEqual(N.canonical(verdict(), SHA), verdict())
+        with self.assertRaises(N.ReviewError):
+            N.canonical(dict(verdict(), toolAction='Finishing QA'), SHA)
+        events = with_native_finish(rows(), active_params=verdict())
+        events[-1]['result']['structured_output'] = dict(verdict(), extra=True)
+        with self.assertRaises(N.ReviewError):
+            self.parse(events)
+        events = with_native_finish(rows(), active_params=verdict(reviewed_sha='b' * 40))
+        with self.assertRaises(N.ReviewError):
+            self.parse(events)
+
+    def test_finish_metadata_without_native_params_or_hidden_verdict_reject(self):
+        events = rows()  # legacy STEP finish only: no finish tool parameters
+        events[-1]['result']['structured_output'] = dict(verdict(), **provider_meta())
+        with self.assertRaises(N.ReviewError):
+            self.parse(events)
+        for bad in (provider_meta(toolAction='{"verdict":"FAIL"}'),
+                    provider_meta(toolSummary='see [notes] {x}'),
+                    provider_meta(toolAction='Finishing QA', toolSummary='x' * 4001)):
+            events = with_native_finish(rows(), active_params=verdict())
+            events[-1]['result']['structured_output'] = dict(verdict(), **bad)
+            with self.subTest(bad=bad), self.assertRaises(N.ReviewError):
+                self.parse(events)
+
+    def test_contradictory_active_done_or_result_cannot_bypass(self):
+        # Historical F1: capture/compare DONE params, not only ACTIVE.
+        fail = verdict(verdict='FAIL', findings=['blocker'])
+        events = with_native_finish(rows(), active_params=verdict(), done_params=fail)
+        with self.assertRaises(N.ReviewError):
+            self.parse(events)
+        events = with_native_finish(rows(), active_params=verdict(), done_params=verdict())
+        events[-1]['result']['structured_output'] = fail
+        with self.assertRaises(N.ReviewError):
+            self.parse(events)
+        events = with_native_finish(rows(), active_params=verdict(), done_params=verdict())
+        events[-1]['result']['structured_output'] = dict(fail, **provider_meta())
+        with self.assertRaises(N.ReviewError):
+            self.parse(events)
+
+    def test_missing_finish_incomplete_command_and_saved_failure_stay_rejected(self):
+        events = with_native_finish(rows(), active_params=verdict())
+        events = [e for e in events if e.get('step_update', {}).get('step_type') != 'finish']
+        # TOOL finish left ACTIVE without STEP finish DONE.
+        with self.assertRaises(N.ReviewError):
+            self.parse(events)
+        events = with_tools([(4, 'run_command', 'ACTIVE', {})])
+        events = with_native_finish(events, active_params=verdict(), done_params=verdict())
+        with self.assertRaises(N.ReviewError):
+            self.parse(events)
+        events = with_tools([(4, 'run_command', 'DONE', {
+            'denied_actions': ['synthetic denied read']})])
+        events = with_native_finish(events, active_params=verdict(), done_params=verdict())
+        with self.assertRaises(N.ReviewError):
+            self.parse(events)
+        # Existing sanitized raw failure remains REJECTED (no finish).
+        saved = SavedSanitizedFailure().events()
+        with self.assertRaises(N.ReviewError):
+            N.parse_stream(wire(saved), 'de193c74c11e1fef33d1e3c8405abe5a40081b87')
 
 
 if __name__ == '__main__':

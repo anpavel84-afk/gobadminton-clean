@@ -104,7 +104,7 @@ def via_pty(argv):
    if slave > 2: os.close(slave)
    os.execve(argv[0], argv, {'PATH':'/usr/bin:/bin','LANG':'C'})
   os.close(slave)
-  chunks=[]; 
+  chunks=[]
   while True:
    r,_,_ = select.select([master],[],[],5)
    if not r: break
@@ -140,9 +140,13 @@ print(json.dumps(out))
                 p.mkdir()
             outside = root / 'outside'
             outside.write_text('synthetic outside canary')
+            # Mode A already grants /dev/null writable (Git opens it O_RDWR).
+            # Keep it on the writable list for both arms; never grant whole /dev.
+            null = Path('/dev/null')
             readonly = [p for p in (Path('/usr/lib'), Path('/usr/local/lib'), Path('/lib'),
                         Path('/lib64'), Path('/usr/bin'), Path('/bin'), Path('/etc/ld.so.cache'),
-                        work, home, Path('/dev/urandom'), Path('/dev/null')) if p.exists()]
+                        work, home, Path('/dev/urandom')) if p.exists()]
+            writable_base = [p for p in (work, config, null) if p.exists()]
             executables = [p for p in (Path(sys.executable), Path('/lib64/ld-linux-x86-64.so.2'),
                            Path('/usr/bin'), Path('/bin'), Path('/usr/lib'), Path('/lib64')) if p.exists()]
             env = {'PATH': '/usr/bin:/bin', 'HOME': str(home), 'WORK': str(work),
@@ -152,7 +156,7 @@ print(json.dumps(out))
             denied = subprocess.run(
                 py, cwd=work, env=env, text=True, capture_output=True, timeout=20,
                 start_new_session=True,
-                preexec_fn=lambda: _landlock(readonly, [work, config], executables))
+                preexec_fn=lambda: _landlock(readonly, writable_base, executables))
             self.assertEqual(denied.returncode, 0, denied.stderr[:2000])
             no_pty = json.loads(denied.stdout)
             self.assertFalse(no_pty['openpty'])
@@ -165,7 +169,7 @@ print(json.dumps(out))
                 py, cwd=work, env=env, text=True, capture_output=True, timeout=20,
                 start_new_session=True,
                 preexec_fn=lambda: _landlock(
-                    readonly, [work, config, ptmx, pts], executables))
+                    readonly, writable_base + [ptmx, pts], executables))
             self.assertEqual(granted.returncode, 0, granted.stderr[:2000])
             with_pty = json.loads(granted.stdout)
             self.assertTrue(with_pty['openpty'], with_pty)
