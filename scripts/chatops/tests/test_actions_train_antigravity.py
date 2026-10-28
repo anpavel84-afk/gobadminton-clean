@@ -149,6 +149,180 @@ class Protocol(EvidenceTestCase):
             self.assertEqual(N.available('slot2', 'x'), (False, 'Antigravity QA unavailable: AGY_PRECHECK_FAILED:preflight'))
 
 
+class NativeFinishProtocol(unittest.TestCase):
+    """Offline regressions from real paid #346 finish TOOL ACTIVE → STEP_TYPE finish DONE.
+
+    Two observed mismatches: incomplete finish tool (ACTIVE never DONE via tool
+    step), then canonical_verdict_bytes rejecting provider toolAction/toolSummary.
+    """
+
+    HEAD = '8024caa659f4fee911d7e3afcb69ed7ac845ce5c'
+
+    def canonical(self, **changes):
+        value = {'verdict': 'PASS', 'findings': [], 'reviewed_sha': self.HEAD}
+        value.update(changes)
+        return value
+
+    def with_meta(self, base=None, **meta):
+        value = dict(base or self.canonical())
+        value.setdefault('toolAction', 'Finishing QA')
+        value.setdefault('toolSummary', 'Final QA verdict')
+        value.update(meta)
+        return value
+
+    def real_346_events(self, *, structured=None, response='meta', finish_params=None,
+                        finish_done_index=5, finish_tool_index=5, include_finish_tool=True,
+                        include_finish_done=True, finish_tool_name='finish',
+                        finish_done_name=None):
+        params = self.canonical() if finish_params is None else finish_params
+        structured = self.with_meta() if structured is None else structured
+        if response == 'meta':
+            response = json.dumps(self.with_meta(), sort_keys=True, separators=(',', ':'))
+        elif response == 'canonical':
+            response = json.dumps(self.canonical(), sort_keys=True, separators=(',', ':'))
+        events = [
+            {'event': 'init', 'conversation_id': CID, 'init': {
+                'model': N.MODEL, 'agent': N.AGENT,
+                'tools': ['finish', 'view_file', 'run_command', 'call_mcp_tool'],
+                'permission_mode': N.PERMISSION_MODE, 'json_schema': copy.deepcopy(N.SCHEMA)}},
+            {'event': 'step_update', 'step_update': {
+                'conversation_id': CID, 'step_index': 0, 'step_type': 'user_input', 'state': 'DONE'}},
+            {'event': 'step_update', 'step_update': {
+                'conversation_id': CID, 'step_index': 2, 'step_type': 'tool',
+                'tool_name': 'run_command', 'state': 'ACTIVE'}},
+            {'event': 'step_update', 'step_update': {
+                'conversation_id': CID, 'step_index': 2, 'step_type': 'tool',
+                'tool_name': 'run_command', 'state': 'DONE'}},
+            {'event': 'step_update', 'step_update': {
+                'conversation_id': CID, 'step_index': 3, 'step_type': 'tool',
+                'tool_name': 'view_file', 'state': 'ACTIVE'}},
+            {'event': 'step_update', 'step_update': {
+                'conversation_id': CID, 'step_index': 3, 'step_type': 'tool',
+                'tool_name': 'view_file', 'state': 'DONE'}},
+            {'event': 'step_update', 'step_update': {
+                'conversation_id': CID, 'step_index': 4, 'step_type': 'agent_response',
+                'state': 'DONE', 'text_delta': json.dumps(self.with_meta())}},
+        ]
+        if include_finish_tool:
+            tool = {'conversation_id': CID, 'step_index': finish_tool_index,
+                    'step_type': 'tool', 'tool_name': finish_tool_name, 'state': 'ACTIVE'}
+            if params is not False:
+                tool['tool_info'] = {'parameters': params}
+            events.append({'event': 'step_update', 'step_update': tool})
+        if include_finish_done:
+            done = {'conversation_id': CID, 'step_index': finish_done_index,
+                    'step_type': 'finish', 'state': 'DONE'}
+            if finish_done_name is not None:
+                done['tool_name'] = finish_done_name
+            events.append({'event': 'step_update', 'step_update': done})
+        events.append({'event': 'result', 'conversation_id': CID, 'result': {
+            'conversation_id': CID, 'status': 'SUCCESS',
+            'structured_output': structured,
+            'response': response,
+            'usage': {'input_tokens': 74023, 'output_tokens': 727, 'cache_read_tokens': 5883}}})
+        return events
+
+    def test_real_346_finish_tool_active_then_finish_done_with_provider_metadata(self):
+        result, receipt = N.parse_stream(wire(self.real_346_events()), self.HEAD)
+        self.assertEqual(result, self.canonical())
+        self.assertTrue(receipt['finish_done'])
+        self.assertEqual(set(receipt['tool_names']), {'finish', 'run_command', 'view_file'})
+
+    def test_real_346_canonical_pass_and_fail_with_matching_finish_params(self):
+        for verdict, findings in (('PASS', []), ('FAIL', ['missing acceptance coverage'])):
+            base = self.canonical(verdict=verdict, findings=findings)
+            events = self.real_346_events(
+                finish_params=base,
+                structured=dict(base, toolAction='Finishing QA', toolSummary='Final QA verdict'),
+                response=json.dumps(dict(base, toolAction='Finishing QA', toolSummary='Final QA verdict'),
+                                    sort_keys=True, separators=(',', ':')))
+            with self.subTest(verdict=verdict):
+                self.assertEqual(N.parse_stream(wire(events), self.HEAD)[0], base)
+
+    def test_legacy_finish_done_only_envelope_still_accepted(self):
+        result, receipt = N.parse_stream(wire(rows()), SHA)
+        self.assertEqual(result['verdict'], 'PASS')
+        self.assertTrue(receipt['finish_done'])
+        self.assertEqual(receipt['tool_events'], 0)
+
+    def test_legacy_finish_done_rejects_provider_metadata_without_finish_params(self):
+        events = rows()
+        events[-1]['result']['structured_output'] = dict(
+            verdict='PASS', findings=[], reviewed_sha=SHA,
+            toolAction='Finishing QA', toolSummary='Final QA verdict')
+        with self.assertRaises(N.ReviewError):
+            N.parse_stream(wire(events), SHA)
+
+    def test_missing_finish_done_leaves_finish_tool_incomplete(self):
+        events = self.real_346_events(include_finish_done=False, structured=self.canonical(),
+                                      response='canonical')
+        with self.assertRaises(N.ReviewError):
+            N.parse_stream(wire(events), self.HEAD)
+
+    def test_mismatched_finish_done_index_rejected(self):
+        events = self.real_346_events(finish_done_index=9, structured=self.canonical(),
+                                      response='canonical')
+        with self.assertRaises(N.ReviewError):
+            N.parse_stream(wire(events), self.HEAD)
+
+    def test_mismatched_finish_done_name_rejected(self):
+        events = self.real_346_events(finish_done_name='view_file', structured=self.canonical(),
+                                      response='canonical')
+        with self.assertRaises(N.ReviewError):
+            N.parse_stream(wire(events), self.HEAD)
+
+    def test_wrong_sha_in_finish_params_or_channels_rejected(self):
+        bad = self.canonical(reviewed_sha='b' * 40)
+        with self.assertRaises(N.ReviewError):
+            N.parse_stream(wire(self.real_346_events(finish_params=bad)), self.HEAD)
+        with self.assertRaises(N.ReviewError):
+            N.parse_stream(wire(self.real_346_events(
+                structured=self.with_meta(self.canonical(reviewed_sha='b' * 40)))), self.HEAD)
+
+    def test_conflicting_finish_params_and_structured_rejected(self):
+        events = self.real_346_events(
+            finish_params=self.canonical(),
+            structured=self.with_meta(self.canonical(verdict='FAIL', findings=['x'])))
+        with self.assertRaises(N.ReviewError):
+            N.parse_stream(wire(events), self.HEAD)
+
+    def test_extra_unknown_fields_still_rejected(self):
+        events = self.real_346_events(
+            structured=dict(self.with_meta(), severity='high'),
+            response=json.dumps(self.canonical()))
+        with self.assertRaises(N.ReviewError):
+            N.parse_stream(wire(events), self.HEAD)
+        self.assertRaises(N.ReviewError, N.canonical,
+                          dict(self.canonical(), toolAction='x'), self.HEAD)
+
+    def test_invalid_metadata_types_rejected(self):
+        for bad in (True, 1, None, ['Finishing QA'], {'x': 1}):
+            events = self.real_346_events(
+                structured=dict(self.canonical(), toolAction=bad, toolSummary='Final QA verdict'))
+            with self.subTest(bad=bad), self.assertRaises(N.ReviewError):
+                N.parse_stream(wire(events), self.HEAD)
+
+    def test_metadata_cannot_hide_embedded_verdict_object(self):
+        hidden = json.dumps(self.canonical(verdict='FAIL', findings=['smuggled']))
+        events = self.real_346_events(
+            structured=dict(self.canonical(), toolAction=hidden, toolSummary='Final QA verdict'))
+        with self.assertRaises(N.ReviewError):
+            N.parse_stream(wire(events), self.HEAD)
+
+    def test_finish_params_absent_rejects_metadata_even_with_native_finish_tool(self):
+        events = self.real_346_events(finish_params=False)
+        with self.assertRaises(N.ReviewError):
+            N.parse_stream(wire(events), self.HEAD)
+
+    def test_response_channel_conflict_with_structured_rejected(self):
+        fail = self.canonical(verdict='FAIL', findings=['response disagrees'])
+        events = self.real_346_events(
+            structured=self.with_meta(),
+            response=json.dumps(dict(fail, toolAction='Finishing QA', toolSummary='Final QA verdict')))
+        with self.assertRaises(N.ReviewError):
+            N.parse_stream(wire(events), self.HEAD)
+
+
 class VerdictBlocks(unittest.TestCase):
     """QA canary 2026-10-25 repeated one verdict object and the adapter parse failed."""
 
