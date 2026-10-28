@@ -74,8 +74,31 @@ export function RadarPage({ sharedMap, resumeCamera = false }: { sharedMap?: Lib
   const filterKey = JSON.stringify(queryFilters);
   useEffect(() => {
     if (!sharedMap || !controller || !activationId || !cityId || !config?.unifiedDirectory.enabled || !config.cities.some(c => c.cityId === cityId)) return;
-    const recover = () => { const current = controller.snapshot(); if (!current.busy && !current.capabilityUnavailable && !current.authenticationRequired && !controller.matches(queryFilters, activationKey)) void controller.query(queryFilters, { kind: "current_activation", activationId }, activationKey); };
-    recover(); const timer = setInterval(recover, 30000); return () => clearInterval(timer);
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const arm = () => {
+      if (cancelled) return;
+      const current = controller.snapshot();
+      if (!current.busy && !current.capabilityUnavailable && !current.authenticationRequired && !controller.matches(queryFilters, activationKey)) {
+        void controller.query(queryFilters, { kind: "current_activation", activationId }, activationKey);
+      }
+      // Schedule from server refreshAfterSeconds / validUntil — a fixed 30s interval
+      // skipped refresh while matches() only checked TTL, leaving a post-expiry blank gap.
+      const snap = controller.snapshot().snapshot;
+      let delay = 30000;
+      if (snap) {
+        const generated = Date.parse(snap.generatedAt);
+        const until = Date.parse(snap.validUntil);
+        const refreshAfter = typeof snap.refreshAfterSeconds === "number" ? snap.refreshAfterSeconds : 30;
+        if (Number.isFinite(generated) && Number.isFinite(until)) {
+          const due = Math.min(generated + refreshAfter * 1000, until);
+          delay = Math.max(500, Math.min(30000, due - Date.now()));
+        }
+      }
+      timer = setTimeout(arm, delay);
+    };
+    arm();
+    return () => { cancelled = true; if (timer !== undefined) clearTimeout(timer); };
   }, [controller, activationKey, filterKey, config]);
 
   useEffect(() => {

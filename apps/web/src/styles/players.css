@@ -222,6 +222,33 @@
 .fr3 .profile-dialog::backdrop { background:rgba(19,34,26,.55); }
 .fr3 .profile-dialog > header { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
 .fr3 .profile-dialog h2 { margin:0; font-size:28px; }
+/* #365 «Просторный40»: desktop ProfileDialog slots (after base; wins cascade vs consumer import order). */
+@media (min-width:1024px) {
+  .fr3 .profile-dialog {
+    display:flex; flex-direction:column; padding:0; overflow:hidden;
+    width:min(560px,calc(100vw - 48px)); border-radius:28px;
+  }
+  .fr3 .profile-dialog > header {
+    position:relative; flex:0 0 auto; gap:12px; margin:0;
+    padding:24px 40px 16px; padding-right:calc(24px + 44px + 12px);
+    border-bottom:1px solid var(--gb-line);
+  }
+  .fr3 .profile-dialog > header h2 {
+    margin:0; font-size:22px; line-height:26px; font-weight:700;
+  }
+  .fr3 .profile-dialog > header .gb-close-button {
+    position:absolute; top:24px; right:24px;
+  }
+  .fr3 .profile-dialog__body {
+    flex:1 1 auto; min-height:0; overflow-x:clip; overflow-y:auto;
+    overscroll-behavior:contain; padding:16px 40px; box-sizing:border-box;
+  }
+  .fr3 .profile-dialog--small { width:min(400px,calc(100vw - 48px)); }
+  .fr3 .profile-dialog--small > header,
+  .fr3 .profile-dialog--small .profile-dialog__body { padding-left:32px; padding-right:32px; }
+  .fr3 .profile-dialog--small > header { padding-right:calc(24px + 44px + 12px); }
+  .fr3 .profile-dialog--small > header h2 { font-size:20px; line-height:26px; }
+}
 @media (max-width:1050px) {
   .fr3 .player-controls { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .fr3 .player-controls .area-filter { grid-column:auto; }

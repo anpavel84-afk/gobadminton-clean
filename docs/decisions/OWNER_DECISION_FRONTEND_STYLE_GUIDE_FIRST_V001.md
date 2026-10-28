@@ -103,3 +103,10 @@ Frozen Style Guide source bytes не изменены. Точный реестр
 доставлены PMA в прямом Stage A assignment; merge reviewed record закрепляет
 exact mockup bytes только как approximate reference inputs, не все нарисованные
 действия и данные.
+
+## Accepted desktop overlay extension · «Просторный40» (#365)
+
+Owner approved Astra High «Просторный40» (28.10.2026; comment 6481017808).
+Canonical product contract: [DESKTOP_OVERLAY_STYLE_GUIDE.md](../product/DESKTOP_OVERLAY_STYLE_GUIDE.md).
+Frozen Guide and Figma.site remain unchanged; 32 px was not selected as primary;
+documented small/popover functional exceptions stay.

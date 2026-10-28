@@ -1,0 +1,431 @@
+/* Owner #365 — «Просторный40» desktop overlay anatomy (≥1024). Scoped to overlay families only. */
+:root {
+  --gb-overlay-inset: 40px;
+  --gb-overlay-inset-small: 32px;
+  --gb-overlay-shell-pad: 24px;
+  --gb-overlay-title-size: 22px;
+  --gb-overlay-title-line: 26px;
+}
+
+.gb-desktop-overlay-header {
+  position: relative;
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  padding: var(--gb-overlay-shell-pad) var(--gb-overlay-inset) 16px;
+  background: var(--gb-white, #fff);
+  border-bottom: 1px solid var(--gb-line, #dfe4dc);
+  color: var(--gb-ink, #13221a);
+}
+
+.gb-desktop-overlay-header__chrome {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 44px;
+  padding-right: 56px; /* X 44 + gap 12 */
+  box-sizing: border-box;
+}
+
+.gb-desktop-overlay-header__chrome-spacer { flex: 1 1 auto; min-width: 0; }
+
+.gb-desktop-overlay-header__kicker {
+  display: block;
+  margin: 0;
+  color: var(--gb-purple, #7945de);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.gb-desktop-overlay-header__back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 44px;
+  max-width: 100%;
+  margin: 0;
+  padding: 0 4px 0 0;
+  border: 0;
+  background: transparent;
+  color: var(--gb-purple, #7945de);
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.gb-desktop-overlay-header__back-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gb-desktop-overlay-header__close {
+  position: absolute !important;
+  top: var(--gb-overlay-shell-pad);
+  right: var(--gb-overlay-shell-pad);
+  z-index: 2;
+}
+
+.gb-desktop-overlay-header__titles {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+  min-width: 0;
+}
+
+.gb-desktop-overlay-header__title {
+  margin: 0;
+  font-size: var(--gb-overlay-title-size);
+  line-height: var(--gb-overlay-title-line);
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.gb-desktop-overlay-header__subtitle {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--gb-ink-soft, #536159);
+  overflow-wrap: anywhere;
+}
+
+.gb-desktop-overlay-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  overflow-x: clip;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  box-sizing: border-box;
+  padding: 16px var(--gb-overlay-inset);
+  scroll-padding-top: 24px;
+  scroll-padding-bottom: 24px;
+}
+
+.gb-desktop-overlay-footer {
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  padding: 12px var(--gb-overlay-inset) 16px;
+  background: var(--gb-white, #fff);
+  border-top: 1px solid var(--gb-line, #dfe4dc);
+}
+
+@media (min-width: 1024px) {
+  /* Inspector rail: 40px content line; X from shell. */
+  .gb-desktop-map-inspector {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .gb-desktop-map-inspector .gb-venue-popup-content {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
+    padding: 0;
+  }
+
+  .gb-desktop-map-inspector .gb-venue-sheet {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
+    height: 100%;
+    padding: 0;
+    overflow: hidden;
+  }
+
+  .gb-desktop-map-inspector .gb-venue-sheet > .gb-desktop-overlay-header {
+    flex: 0 0 auto;
+  }
+
+  .gb-desktop-map-inspector .gb-venue-sheet > .gb-desktop-overlay-body {
+    flex: 1 1 auto;
+  }
+
+  .gb-desktop-map-inspector .gb-venue-sheet > .gb-desktop-overlay-footer {
+    flex: 0 0 auto;
+  }
+
+  /* Legacy header path (mobile markup still mounted below 1024 only). */
+  .gb-desktop-map-inspector .gb-venue-sheet > .gb-venue-sheet-header {
+    position: relative;
+    flex: 0 0 auto;
+    display: grid;
+    gap: 8px;
+    align-items: start;
+    margin: 0;
+    padding: var(--gb-overlay-shell-pad) var(--gb-overlay-inset) 16px;
+    padding-right: calc(var(--gb-overlay-shell-pad) + 44px + 12px);
+    border-bottom: 1px solid var(--gb-line, #dfe4dc);
+    background: var(--gb-white, #fff);
+  }
+
+  .gb-desktop-map-inspector .gb-venue-sheet-header h2 {
+    font-size: var(--gb-overlay-title-size);
+    line-height: var(--gb-overlay-title-line);
+    font-weight: 700;
+  }
+
+  .gb-desktop-map-inspector .gb-venue-sheet-close {
+    position: absolute;
+    top: var(--gb-overlay-shell-pad);
+    right: var(--gb-overlay-shell-pad);
+  }
+
+  .gb-desktop-map-inspector .gb-venue-sheet:has(.gb-venue-sheet-info) .gb-venue-sheet-close {
+    position: absolute;
+    top: var(--gb-overlay-shell-pad);
+    right: var(--gb-overlay-shell-pad);
+  }
+
+  .gb-desktop-map-inspector .gb-desktop-inspector-game__body {
+    padding-left: 0;
+    padding-right: 0;
+  }
+
+  .gb-desktop-map-inspector .gb-desktop-inspector-game__actions {
+    padding: 12px var(--gb-overlay-inset) 16px;
+    margin: 0 calc(var(--gb-overlay-inset) * -1);
+  }
+
+  .gb-desktop-map-inspector .gb-desktop-inspector-game {
+    padding: 0 var(--gb-overlay-inset);
+    box-sizing: border-box;
+  }
+
+  .gb-desktop-map-inspector .gb-desktop-inspector-game__facts > li {
+    grid-template-columns: 96px minmax(0, 1fr);
+  }
+
+  /* Player: chrome outside profile body; drop only duplicated outer host padding. */
+  .gb-desktop-map-inspector .unified-preview.is-expanded {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
+    height: 100%;
+    padding: 0;
+    overflow: hidden;
+  }
+
+  .gb-desktop-map-inspector .unified-preview.is-expanded > .gb-desktop-overlay-header {
+    flex: 0 0 auto;
+  }
+
+  .gb-desktop-map-inspector .unified-preview__scroll {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-x: clip;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 16px var(--gb-overlay-inset);
+    box-sizing: border-box;
+    display: grid;
+    gap: 16px;
+    align-content: start;
+  }
+
+  .gb-desktop-map-inspector .unified-preview__expanded {
+    gap: 16px;
+  }
+
+  .gb-desktop-map-inspector .fr3.player-profile-page.is-embedded {
+    padding: 0;
+    padding-bottom: 0;
+  }
+
+  .gb-desktop-map-inspector .player-profile-content .player-profile-copy {
+    padding: 16px; /* retain inner semantic card padding */
+  }
+
+  /* ProfileDialog skin — inherit without rewriting business callers. */
+  .fr3 .profile-dialog {
+    display: flex;
+    flex-direction: column;
+    width: min(560px, calc(100vw - 48px));
+    max-height: calc(100dvh - 48px);
+    padding: 0;
+    overflow: hidden;
+    border-radius: 28px;
+  }
+
+  .fr3 .profile-dialog > header {
+    position: relative;
+    flex: 0 0 auto;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 0;
+    padding: var(--gb-overlay-shell-pad) var(--gb-overlay-inset) 16px;
+    padding-right: calc(var(--gb-overlay-shell-pad) + 44px + 12px);
+    border-bottom: 1px solid var(--gb-line, #dfe4dc);
+  }
+
+  .fr3 .profile-dialog > header h2 {
+    margin: 0;
+    font-size: var(--gb-overlay-title-size);
+    line-height: var(--gb-overlay-title-line);
+    font-weight: 700;
+  }
+
+  .fr3 .profile-dialog > header .gb-close-button {
+    position: absolute;
+    top: var(--gb-overlay-shell-pad);
+    right: var(--gb-overlay-shell-pad);
+  }
+
+  .fr3 .profile-dialog__body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-x: clip;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 16px var(--gb-overlay-inset) 16px;
+    box-sizing: border-box;
+  }
+
+  .fr3 .profile-dialog--small {
+    width: min(400px, calc(100vw - 48px));
+  }
+
+  .fr3 .profile-dialog--small > header,
+  .fr3 .profile-dialog--small .profile-dialog__body {
+    padding-left: var(--gb-overlay-inset-small);
+    padding-right: var(--gb-overlay-inset-small);
+  }
+
+  .fr3 .profile-dialog--small > header {
+    padding-right: calc(var(--gb-overlay-shell-pad) + 44px + 12px);
+  }
+
+  .fr3 .profile-dialog--small > header h2 {
+    font-size: 20px;
+    line-height: 26px;
+  }
+
+  /* Venue picker 680 — same anchors; list remains sole scroll. */
+  .gb-venue-picker {
+    border-radius: 28px;
+  }
+
+  .gb-venue-picker-header {
+    position: relative;
+    padding: var(--gb-overlay-shell-pad) var(--gb-overlay-inset) 16px;
+    padding-right: calc(var(--gb-overlay-shell-pad) + 44px + 12px);
+    border-bottom: 1px solid var(--gb-line, #dfe4dc);
+  }
+
+  .gb-venue-picker-header h2 {
+    font-size: var(--gb-overlay-title-size);
+    line-height: var(--gb-overlay-title-line);
+    font-weight: 700;
+  }
+
+  .gb-venue-picker-header .gb-close-button {
+    position: absolute;
+    top: var(--gb-overlay-shell-pad);
+    right: var(--gb-overlay-shell-pad);
+  }
+
+  .gb-venue-picker-search {
+    margin: 12px var(--gb-overlay-inset) 0;
+  }
+
+  .gb-venue-picker-count {
+    padding: 9px var(--gb-overlay-inset) 11px;
+  }
+
+  .gb-venue-picker-option {
+    padding-left: var(--gb-overlay-inset);
+    padding-right: var(--gb-overlay-inset);
+  }
+
+  /* Map filters 480 */
+  .gb-map-filters-sheet {
+    border-radius: 28px;
+    max-height: calc(100dvh - 48px);
+  }
+
+  .gb-map-filters-sheet__header {
+    position: relative;
+    grid-template-columns: 1fr;
+    align-items: start;
+    gap: 8px;
+    padding: var(--gb-overlay-shell-pad) var(--gb-overlay-inset) 16px;
+    padding-right: calc(var(--gb-overlay-shell-pad) + 44px + 12px);
+  }
+
+  .gb-map-filters-sheet__handle { display: none; }
+
+  .gb-map-filters-sheet__header h2 {
+    font-size: var(--gb-overlay-title-size);
+    line-height: var(--gb-overlay-title-line);
+    font-weight: 700;
+  }
+
+  .gb-map-filters-sheet__header .gb-close-button {
+    position: absolute;
+    top: var(--gb-overlay-shell-pad);
+    right: var(--gb-overlay-shell-pad);
+  }
+
+  .gb-map-filters-sheet__body {
+    padding: 16px var(--gb-overlay-inset);
+  }
+
+  .gb-map-filters-sheet__footer {
+    padding: 12px var(--gb-overlay-inset) 16px;
+  }
+
+  /* Radar list 360 — shared X/header without forcing 450. */
+  .gb-radar-layer .g2-map-panel {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding: 0;
+    border-radius: 28px;
+  }
+
+  .gb-radar-layer .g2-map-panel > header {
+    position: relative;
+    flex: 0 0 auto;
+    justify-content: flex-end;
+    min-height: calc(var(--gb-overlay-shell-pad) + 44px);
+    padding: var(--gb-overlay-shell-pad) var(--gb-overlay-shell-pad) 8px;
+    border-bottom: 1px solid var(--gb-line, #dfe4dc);
+  }
+
+  .gb-radar-layer .g2-map-panel > header .gb-close-button {
+    position: absolute;
+    top: var(--gb-overlay-shell-pad);
+    right: var(--gb-overlay-shell-pad);
+  }
+
+  .gb-radar-layer .g2-map-panel > h2 {
+    flex: 0 0 auto;
+    margin: 0;
+    padding: 8px var(--gb-overlay-inset) 12px;
+    font-size: var(--gb-overlay-title-size);
+    line-height: var(--gb-overlay-title-line);
+  }
+
+  .gb-radar-layer .g2-map-panel .g2-map-list-row {
+    padding-left: var(--gb-overlay-inset);
+    padding-right: var(--gb-overlay-inset);
+  }
+
+}
+
+@media (min-width: 1024px) and (max-width: 1279px) {
+  .gb-desktop-map-inspector .gb-desktop-inspector-game__facts > li {
+    grid-template-columns: minmax(72px, 96px) minmax(0, 1fr);
+  }
+}

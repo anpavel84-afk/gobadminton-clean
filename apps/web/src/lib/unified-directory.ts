@@ -138,7 +138,20 @@ export class UnifiedDirectoryController {
   private retryAt = 0;
   private pending = false;
   private activationOriginKey: string | null = null;
-  matches(filters: UnifiedFilters, activationKey: string | null) { return Boolean(this.view.snapshot && Date.parse(this.view.snapshot.validUntil) > this.clock() && JSON.stringify(this.filters) === JSON.stringify(filters) && this.activationOriginKey === activationKey); }
+  /**
+   * True only while the authorized snapshot still matches filters/activation AND
+   * has not yet reached the server refresh recommendation. Recovery must refresh
+   * before validUntil; matching TTL alone left a blank gap after tick expiry.
+   */
+  matches(filters: UnifiedFilters, activationKey: string | null) {
+    const snapshot = this.view.snapshot;
+    if (!snapshot || JSON.stringify(this.filters) !== JSON.stringify(filters) || this.activationOriginKey !== activationKey) return false;
+    const until = Date.parse(snapshot.validUntil);
+    const generated = Date.parse(snapshot.generatedAt);
+    if (!Number.isFinite(until) || until <= this.clock() || !Number.isFinite(generated)) return false;
+    const refreshAfterSeconds = typeof snapshot.refreshAfterSeconds === "number" ? snapshot.refreshAfterSeconds : 30;
+    return this.clock() < generated + refreshAfterSeconds * 1000;
+  }
   camera: { center: [number, number]; zoom: number } | null = null;
   scrollY = 0;
   subscribe = (fn: () => void) => { this.listeners.add(fn); return () => { this.listeners.delete(fn); }; };
@@ -198,15 +211,39 @@ export class UnifiedDirectoryController {
       this.set({ mode: "ordinary" });
     }
     if (this.clock() < Math.max(this.nextInitial, this.retryAt)) {
-      if (changed) { this.invalidate(); this.set({ mode: "ordinary" }); }
-      // Never retain a raw foreground fix while waiting for the cooldown.
-      this.origin = { kind: "none" };
-      this.set({ stale: true, notice: "Обновить участников Radar можно через несколько секунд. Пока доступен обычный каталог." }); return;
+      if (changed) {
+        this.invalidate();
+        this.set({ mode: "ordinary" });
+        // Never retain a raw foreground fix while waiting for the cooldown.
+        this.origin = { kind: "none" };
+        this.set({ stale: true, notice: "Обновить участников Radar можно через несколько секунд. Пока доступен обычный каталог." });
+      }
+      // Unchanged early request during cooldown must not falsely stale/blank a still-valid window.
+      return;
     }
+    const keepWindow = !changed
+      && this.view.mode === "unified"
+      && !this.view.stale
+      && this.view.snapshot !== null
+      && Number.isFinite(Date.parse(this.view.snapshot.validUntil))
+      && Date.parse(this.view.snapshot.validUntil) > this.clock();
     this.filters = filters; this.origin = origin; this.activationOriginKey = activationKey;
-    this.invalidate(); this.set({ mode: "unified" });
+    const previousQueryRef = this.view.snapshot?.query.queryRef ?? null;
+    const previousSelected = keepWindow ? this.view.selected : null;
+    const previousPreview = keepWindow ? this.view.preview : null;
+    if (!keepWindow) {
+      this.invalidate();
+      this.set({ mode: "unified" });
+    } else {
+      // Soft proactive refresh: fence in-flight without blanking still-valid authorized geometry.
+      ++this.epoch;
+      this.abort.abort();
+      this.abort = new AbortController();
+      this.pending = false;
+    }
     this.nextInitial = this.clock() + 30000;
-    const epoch = this.epoch; this.pending = true; this.set({ busy: true });
+    const epoch = this.epoch; this.pending = true;
+    if (!keepWindow) this.set({ busy: true });
     const result = await this.request<UnifiedSnapshot>("/v1/players/query", { method: "POST", csrfToken: this.me.csrfToken, signal: this.abort.signal, body: JSON.stringify({ contractVersion: UNIFIED_WIRE, filters, origin, limit: 50 }) });
     if (!this.valid(epoch)) return;
     this.pending = false; this.set({ busy: false });
@@ -214,7 +251,30 @@ export class UnifiedDirectoryController {
     if (!this.acceptable(result.data)) { this.invalidate("Список устарел. Обновите участников Radar.", true); return; }
     // Never retain the transient raw foreground input once the server issued a private reference.
     this.origin = result.data.query.originRef ? { kind: "reference", originRef: result.data.query.originRef } : { kind: "none" };
-    this.set({ snapshot: result.data, rows: result.data.items, notice: result.data.query.originState === "none" ? "Участники Radar по городу. Расстояние неизвестно." : "Расстояние приблизительное, по опубликованным геопозициям." });
+    const notice = result.data.query.originState === "none" ? "Участники Radar по городу. Расстояние неизвестно." : "Расстояние приблизительное, по опубликованным геопозициям.";
+    if (!keepWindow) {
+      this.set({ snapshot: result.data, rows: result.data.items, notice });
+      return;
+    }
+    const queryRefChanged = result.data.query.queryRef !== previousQueryRef;
+    const now = this.clock();
+    const keepRow = previousSelected
+      ? result.data.items.find(row => row.publicPlayerId === previousSelected && row.radar !== null && Date.parse(row.radar.validUntil) > now)
+      : undefined;
+    const keepPreview = Boolean(keepRow && !queryRefChanged && previousPreview && liveUnifiedPreview(previousPreview, keepRow.publicPlayerId, now));
+    this.set({
+      snapshot: result.data,
+      rows: result.data.items,
+      notice,
+      stale: false,
+      mode: "unified",
+      ...(queryRefChanged ? { pins: [], mapPage: null } : {}),
+      selected: keepRow ? keepRow.publicPlayerId : null,
+      preview: keepPreview ? previousPreview : null,
+      previewBusy: false,
+    });
+    // Never pair a new queryRef with an unvalidated old map cursor; RadarPage remaps when mapPage is null.
+    if (keepRow && !keepPreview) void this.select(keepRow);
   }
   private acceptable(data: UnifiedSnapshot | UnifiedMapSnapshot) {
     const now = this.clock();

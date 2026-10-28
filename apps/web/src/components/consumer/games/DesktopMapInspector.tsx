@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState, type ReactNode } from "react";
 import "../../../styles/venue-popup.css";
+import "../../../styles/desktop-overlays.css";
 
 /** Owner #365 desktop map inspector: composition starts at 1024px. */
 export const DESKTOP_MAP_INSPECTOR_MQ = "(min-width: 1024px)";

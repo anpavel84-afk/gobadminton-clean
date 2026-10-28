@@ -254,9 +254,9 @@
   }
   .gb-desktop-map-inspector .gb-venue-popup-content {
     flex:1 1 auto; height:auto; min-height:0;
-    overflow-y:auto; overflow-x:clip;
-    /* Inner padding 24–28px */
-    padding:0 24px 24px; box-sizing:border-box;
+    overflow:hidden;
+    /* Inset owned by «Просторный40» header/body/footer slots (desktop-overlays.css). */
+    padding:0; box-sizing:border-box;
   }
   .gb-desktop-map-inspector .gb-venue-handle,
   .gb-desktop-map-inspector .gb-venue-popup-preview-surface,
@@ -266,15 +266,9 @@
     position:static; width:100%; max-width:none; max-height:none;
     overflow:visible; border-radius:0; padding:0;
   }
-  .gb-desktop-map-inspector .gb-venue-sheet:has(.gb-venue-sheet-info) .gb-venue-sheet-header {
-    height:auto; min-height:0; margin:0; padding:16px 0 0; border:0;
-  }
   .gb-desktop-map-inspector .gb-venue-sheet:has(.gb-venue-sheet-info) .gb-venue-sheet-heading,
   .gb-desktop-map-inspector .gb-venue-sheet:has(.gb-venue-sheet-info) .gb-venue-sheet-header h2 {
     position:static; width:auto; height:auto; clip-path:none; overflow:visible;
-  }
-  .gb-desktop-map-inspector .gb-venue-sheet:has(.gb-venue-sheet-info) .gb-venue-sheet-close {
-    position:absolute; right:0; top:8px;
   }
   .gb-desktop-map-inspector .gb-venue-sheet[data-view="info"] .gb-venue-sheet-info {
     display:grid; gap:16px;
@@ -303,18 +297,15 @@
   .gb-desktop-map-inspector .gb-venue-sheet[data-view="game"][data-desktop="true"] {
     display:flex; flex-direction:column; flex:1 1 auto; min-height:0; height:100%;
   }
-  .gb-desktop-map-inspector .gb-venue-sheet[data-view="game"][data-desktop="true"] > .gb-venue-sheet-header {
-    position:static; flex:0 0 auto; margin:0 0 16px; padding:16px 0 12px;
-  }
   .gb-desktop-inspector-game {
     display:flex; flex-direction:column; flex:1 1 auto; min-height:0; min-width:0;
   }
   .gb-desktop-inspector-game__body {
     flex:1 1 auto; min-height:0; overflow-y:auto; overflow-x:clip;
-    display:grid; gap:16px; align-content:start; padding-bottom:16px;
+    display:grid; gap:16px; align-content:start; padding:16px 0;
   }
   .gb-desktop-inspector-game__actions {
-    flex:0 0 auto; padding:8px 0 16px; background:var(--gb-white);
+    flex:0 0 auto; padding:12px 0 16px; background:var(--gb-white);
     border-top:1px solid var(--gb-line);
   }
   /* Nested card chrome is redundant inside the already-white inspector foot. */
@@ -363,7 +354,7 @@
     list-style:none; margin:0; padding:0; display:grid; gap:8px;
   }
   .gb-desktop-inspector-game__facts > li {
-    display:grid; grid-template-columns:minmax(88px,120px) minmax(0,1fr);
+    display:grid; grid-template-columns:96px minmax(0,1fr);
     gap:10px; align-items:start; font-size:14px; line-height:1.4;
   }
   .gb-desktop-inspector-game__fact-label { color:var(--gb-ink-soft); font-size:13px; }

@@ -79,16 +79,27 @@ describe("unified directory privacy and global pagination", () => {
   it("matches the exact viewer activation version and retains it through reference-based refresh", async () => {
     let time = now;
     const data = { ...snapshot(), query: { ...snapshot().query, originState: "authorized", originRef: "private-reference" } };
-    const request = vi.fn(async () => ok({ ...data, validUntil: new Date(time + 45000).toISOString() })) as typeof apiFetch;
+    const request = vi.fn(async () => ok({
+      ...data,
+      generatedAt: new Date(time).toISOString(),
+      validUntil: new Date(time + 45000).toISOString(),
+    })) as typeof apiFetch;
     const c = new UnifiedDirectoryController(request, () => time); c.bind(me);
     await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
     expect(c.matches(filters, "activation:1")).toBe(true); expect(c.matches(filters, "activation:2")).toBe(false);
-    time += 30000; await c.refresh();
+    time += 30000;
+    expect(c.matches(filters, "activation:1")).toBe(false);
+    await c.refresh();
     expect(c.matches(filters, "activation:1")).toBe(true);
     expect(JSON.parse(vi.mocked(request).mock.calls[1]![1]!.body as string).origin).toEqual({ kind: "reference", originRef: "private-reference" });
   });
   it("recovers an expired private route context with the live activation and rate limit", async () => {
-    let time = now; const request = vi.fn(async () => ok({ ...snapshot(), validUntil: new Date(time + 45000).toISOString() })) as typeof apiFetch;
+    let time = now;
+    const request = vi.fn(async () => ok({
+      ...snapshot(),
+      generatedAt: new Date(time).toISOString(),
+      validUntil: new Date(time + 45000).toISOString(),
+    })) as typeof apiFetch;
     const c = new UnifiedDirectoryController(request, () => time); c.bind(me);
     await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
     await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
@@ -103,6 +114,16 @@ describe("unified directory privacy and global pagination", () => {
     const request = vi.fn(async () => ok(snapshot())) as typeof apiFetch;
     const c = new UnifiedDirectoryController(request, () => now); c.bind(me); await c.query(filters); await c.query({ ...filters, trainer: true });
     expect(c.view.rows).toEqual([]); expect(c.view.stale).toBe(true); expect(request).toHaveBeenCalledTimes(1);
+  });
+  it("does not falsely stale a valid window on early unchanged cooldown request", async () => {
+    const request = vi.fn(async () => ok(snapshot())) as typeof apiFetch;
+    const c = new UnifiedDirectoryController(request, () => now); c.bind(me);
+    await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(c.view.snapshot).not.toBeNull();
+    expect(c.view.stale).toBe(false);
+    expect(c.view.mode).toBe("unified");
   });
 });
 describe("distance and map authority", () => {
@@ -137,6 +158,73 @@ const privateRow: UnifiedRow = { publicPlayerId: "peer", projection: "radar_publ
 const privatePreview: UnifiedPreview = { player: { publicPlayerId: "peer", displayName: "Peer", level: null, trainer: false, avatar: { uploadedUrl: null, providerUrl: null }, canRequestContact: false }, proximityBand: null,
   radar: { consentPolicyVersion: privateRow.radar!.consentPolicyVersion, geo: privateRow.radar!.geo, validUntil: privateRow.radar!.validUntil, distance: null },
   upcomingGames: [{ id: "game", title: "Permitted game", activityKind: "regular", startsAt: new Date(now+86400000).toISOString(), endsAt: new Date(now+90000000).toISOString(), timezone: "Europe/Moscow", cover: { uploadedUrl: null }, venue: { name: "Court", cover: { uploadedUrl: null } } }] };
+
+describe("proactive Radar soft refresh (#365)", () => {
+  it("soft-refreshes before TTL without blank blink and keeps continuity past the original 45s wall", async () => {
+    let time = now;
+    let resolveRefresh!: (value: ReturnType<typeof ok>) => void;
+    const refreshPending = new Promise<ReturnType<typeof ok>>(resolve => { resolveRefresh = resolve; });
+    let queryCalls = 0;
+    let activeQueryRef = "query-ref-1";
+    const livePin = (): UnifiedRow => ({
+      ...privateRow,
+      radar: { ...privateRow.radar!, validUntil: new Date(time + 45000).toISOString() },
+    });
+    const request = vi.fn(async (path: string) => {
+      if (String(path).endsWith("/map")) {
+        return ok({
+          ...snapshot([livePin()]),
+          generatedAt: new Date(time).toISOString(),
+          validUntil: new Date(time + 45000).toISOString(),
+          query: { ...snapshot().query, queryRef: activeQueryRef, originState: "authorized", originRef: "origin" },
+          items: [livePin()],
+          mapPage: { returnedCount: 1, rankStart: 1, rankEnd: 1, hasMore: false, nextMapCursor: null },
+        });
+      }
+      queryCalls += 1;
+      if (queryCalls === 1) {
+        activeQueryRef = "query-ref-1";
+        return ok({
+          ...snapshot([livePin()]),
+          generatedAt: new Date(time).toISOString(),
+          validUntil: new Date(time + 45000).toISOString(),
+          query: { ...snapshot().query, queryRef: activeQueryRef, originState: "authorized", originRef: "origin" },
+        });
+      }
+      return refreshPending;
+    }) as typeof apiFetch;
+    const c = new UnifiedDirectoryController(request, () => time);
+    c.bind(me);
+    await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    await c.map();
+    expect(c.view.pins).toHaveLength(1);
+    expect(c.matches(filters, "activation:1")).toBe(true);
+    time += 30000;
+    expect(c.matches(filters, "activation:1")).toBe(false);
+    const refresh = c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    expect(c.view.snapshot).not.toBeNull();
+    expect(c.view.pins).toHaveLength(1);
+    expect(c.view.busy).toBe(false);
+    expect(c.view.mode).toBe("unified");
+    time += 10000;
+    resolveRefresh(ok({
+      ...snapshot([livePin()]),
+      generatedAt: new Date(time).toISOString(),
+      validUntil: new Date(time + 45000).toISOString(),
+      query: { ...snapshot().query, queryRef: "query-ref-2", originState: "authorized", originRef: "origin" },
+    }));
+    await refresh;
+    expect(c.view.mode).toBe("unified");
+    expect(c.view.snapshot?.query.queryRef).toBe("query-ref-2");
+    expect(c.view.pins).toEqual([]);
+    expect(c.matches(filters, "activation:1")).toBe(true);
+    time = now + 50000;
+    c.tick();
+    expect(c.view.snapshot).not.toBeNull();
+    expect(c.view.mode).toBe("unified");
+  });
+});
+
 describe("whole-schedule admission and cancellation fences", () => {
   const invalid: unknown[] = [null, {}, { ...privatePreview, upcomingGames: undefined }, { ...privatePreview, proximityBand: "near" },
     { ...privatePreview, contact: "secret" }, { ...privatePreview, player: { ...privatePreview.player, userId: "secret" } },
