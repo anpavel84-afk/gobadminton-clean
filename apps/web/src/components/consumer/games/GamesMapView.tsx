@@ -92,7 +92,13 @@ export function GamesMapView({ cityId, day, venueId, activity = "all", onReturnT
   }, [schedules, snapshot, cityId]);
   const [selectedVenueId, setSelectedVenueId] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
-  const selectVenue = (venue: VenueSummary) => { setExpanded(false); setSelectedVenueId(venue.id); };
+  const clearVenueSelection = () => { setSelectedVenueId(null); setExpanded(false); };
+  // Sync handoff via same-turn CustomEvent: player sheet closes before venue state commits.
+  const selectVenue = (venue: VenueSummary) => {
+    window.dispatchEvent(new Event("gb-map-select-venue"));
+    setExpanded(false);
+    setSelectedVenueId(venue.id);
+  };
   const selectedVenue = venues.find(item => item.id === selectedVenueId);
   const selectedCover = useSelectedVenueCover(cityId, selectedVenue);
   const escapeSelection = useRef<VenueSummary | undefined>(undefined);
@@ -101,6 +107,11 @@ export function GamesMapView({ cityId, day, venueId, activity = "all", onReturnT
   useEffect(() => {
     if (selectedVenueId !== null && !selectedVenue) setSelectedVenueId(null);
   }, [selectedVenueId, selectedVenue]);
+  useEffect(() => {
+    const onPlayer = () => clearVenueSelection();
+    window.addEventListener("gb-map-select-player", onPlayer);
+    return () => window.removeEventListener("gb-map-select-player", onPlayer);
+  }, []);
   useEffect(() => {
     const escape = (event: KeyboardEvent) => {
       if (!escapeSelection.current || event.key !== "Escape" || event.defaultPrevented || document.querySelector("dialog[open], [role=dialog]")) return;
@@ -126,13 +137,13 @@ export function GamesMapView({ cityId, day, venueId, activity = "all", onReturnT
       {loading && <p className="gb-map-sr-only" role="status">Загружаем все площадки и расписание…</p>}
       {error && <p role="alert">Не удалось загрузить полный каталог или расписание. Проверьте соединение и повторите. Непроверенные количества не показываем.</p>}
       {<>
-        {cityId === MOSCOW_BUNDLE.cityId ? <MapView venues={venues} counts={counts} selectedVenueId={selectedVenueId} onSelect={selectVenue} onDeselect={() => setSelectedVenueId(null)} onAvailability={setMapAvailable} onErrorCardChange={setMapErrorCardShown} onReturnToList={onReturnToList} /> : <p role="alert">Карта выбранного города пока недоступна. Все площадки доступны списком.</p>}
-        {selectedVenue && <VenuePopup key={selectedVenue.id} expanded={expanded} onExpandedChange={setExpanded} onDeselect={() => setSelectedVenueId(null)}
+        {cityId === MOSCOW_BUNDLE.cityId ? <MapView venues={venues} counts={counts} selectedVenueId={selectedVenueId} onSelect={selectVenue} onDeselect={clearVenueSelection} onAvailability={setMapAvailable} onErrorCardChange={setMapErrorCardShown} onReturnToList={onReturnToList} /> : <p role="alert">Карта выбранного города пока недоступна. Все площадки доступны списком.</p>}
+        {selectedVenue && <VenuePopup key={selectedVenue.id} expanded={expanded} onExpandedChange={setExpanded} onDeselect={clearVenueSelection}
           preview={<VenuePreviewCard embedded coverSlot={<SelectedVenueCover slotRef={selectedCover.compact} className="gb-venue-preview-cover" />} venue={selectedVenue} games={all.get(selectedVenue.id) ?? []}
             gamesReady={snapshot?.cityId === cityId && snapshot.gamesReady} now={now} onOpen={() => setExpanded(true)} />}>
           <VenueSheet embedded coverSlot={<SelectedVenueCover slotRef={selectedCover.info} className="gb-venue-sheet-cover" />} active={expanded} venue={selectedVenue} games={all.get(selectedVenue.id) ?? []}
             gamesReady={snapshot?.cityId === cityId && snapshot.gamesReady === true} now={now}
-            onCollapse={() => setExpanded(false)} onDeselect={() => setSelectedVenueId(null)} />
+            onCollapse={() => setExpanded(false)} onDeselect={clearVenueSelection} />
         </VenuePopup>}
         {!venues.length && <p className="gb-map-sr-only" role="status">В каталоге города пока нет площадок.</p>}
         {(!mapAvailable || cityId !== MOSCOW_BUNDLE.cityId) && <details className="gb-games-map-fallback">
