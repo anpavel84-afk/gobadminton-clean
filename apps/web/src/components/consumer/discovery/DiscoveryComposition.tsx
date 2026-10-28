@@ -32,7 +32,7 @@ export function CreateBanner({ onClick, busy }: { onClick: () => void; busy: boo
   </button>;
 }
 
-export function DiscoverySidebar({ city, onMap, onMapIntent }: { city: string; onMap: () => void; onMapIntent?: () => void }) {
+export function DiscoverySidebar({ city, onMap }: { city: string; onMap: () => void }) {
   return <aside className="gb-discovery-sidebar" aria-label="Город и сообщество">
     <section className="gb-discovery-map-card">
       <header><small>Рядом с вами</small><h2>Все игры на карте</h2></header>
@@ -44,7 +44,7 @@ export function DiscoverySidebar({ city, onMap, onMapIntent }: { city: string; o
         <span className="gb-discovery-map__label">{city}</span>
       </div>
       <p className="gb-discovery-map-caption">Площадки {city}: доступные публичные игры и расписание.</p>
-      <Button className="gb-map-desktop-entry" variant="dark" onClick={onMap} onFocus={onMapIntent} onPointerEnter={onMapIntent}><span className="gb-map-entry-tile"><FoldedMapGlyph /></span>Все игры на карте</Button>
+      <Button className="gb-map-desktop-entry" variant="dark" onClick={onMap}><span className="gb-map-entry-tile"><FoldedMapGlyph /></span>Все игры на карте</Button>
     </section>
     <section className="gb-discovery-community">
       <small>Game first</small>

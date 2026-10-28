@@ -53,7 +53,7 @@ it("keeps the Next dynamic literal import with ssr:false and warms without insta
   expect(mapExport).not.toHaveBeenCalled();
 });
 
-it("wires desktop map entry focus/hover to the optional preload intent", async () => {
+it("keeps desktop map entry class for effect-owned root intent delegation", async () => {
   vi.resetModules();
   vi.doMock("../src/components/consumer/NavIcon", () => ({ FoldedMapGlyph: () => null }));
   vi.doMock("../src/components/consumer/Button", () => ({
@@ -64,14 +64,13 @@ it("wires desktop map entry focus/hover to the optional preload intent", async (
   }));
   const { DiscoverySidebar } = await import("../src/components/consumer/discovery/DiscoveryComposition");
   const onMap = vi.fn();
-  const onMapIntent = vi.fn();
   const html = renderToStaticMarkup(
-    <DiscoverySidebar city="Москва" onMap={onMap} onMapIntent={onMapIntent} />,
+    <DiscoverySidebar city="Москва" onMap={onMap} />,
   );
   expect(html).toContain("gb-map-desktop-entry");
-  expect(buttonProps.current?.onFocus).toBe(onMapIntent);
-  expect(buttonProps.current?.onPointerEnter).toBe(onMapIntent);
   expect(buttonProps.current?.onClick).toBe(onMap);
+  expect(buttonProps.current?.onFocus).toBeUndefined();
+  expect(buttonProps.current?.onPointerEnter).toBeUndefined();
 });
 
 it("does not claim Moscow map UI for an unsupported city branch", async () => {

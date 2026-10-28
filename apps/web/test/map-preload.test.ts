@@ -94,3 +94,27 @@ it("returns aborted without marking style success when the caller signal aborts"
     fetchStyle: vi.fn(async () => ({ ok: true, arrayBuffer: async () => new ArrayBuffer(0) }) as Response),
   })).resolves.toBe("done");
 });
+
+it("aborts idle and intent callers sharing one signal before a deferred module can start style fetch", async () => {
+  let resolveWarm!: () => void;
+  const warmModule = vi.fn(() => new Promise<void>(resolve => { resolveWarm = resolve; }));
+  const fetchStyle = vi.fn(async (_url: RequestInfo | URL) => ({
+    ok: true,
+    arrayBuffer: async () => new ArrayBuffer(0),
+  } as Response));
+  const abort = new AbortController();
+
+  const idle = preloadGamesMapAssets({
+    env: eligible, warmModule, fetchStyle, signal: abort.signal,
+  });
+  const intent = preloadGamesMapAssets({
+    env: eligible, warmModule, fetchStyle, signal: abort.signal,
+  });
+  await Promise.resolve();
+  expect(warmModule).toHaveBeenCalledOnce();
+
+  abort.abort();
+  resolveWarm();
+  await expect(Promise.all([idle, intent])).resolves.toEqual(["aborted", "aborted"]);
+  expect(fetchStyle).not.toHaveBeenCalled();
+});

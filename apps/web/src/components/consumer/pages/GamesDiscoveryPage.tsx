@@ -294,12 +294,7 @@ export function GamesDiscoveryPage() {
           {pageError && <p role="alert" className="gb-discovery-notice">Не удалось загрузить остальные игры. Попробуйте ещё раз.</p>}
           {(showCards || state === "empty") && feed.nextCursor && state !== "stale" && <Button className="gb-discovery-more" variant="outline" loading={paging} onClick={() => void loadMore()}>{paging ? "Загружаем…" : "Показать ещё"}</Button>}
         </div>
-        <DiscoverySidebar city={location.nameRu} onMap={() => changeView("map")} onMapIntent={() => {
-          void preloadGamesMapAssets({
-            env: readMapPreloadBrowserEnv(location.cityId),
-            warmModule: warmGamesVenueMapModule,
-          }).catch(() => { /* Optional preload. */ });
-        }} />
+        <DiscoverySidebar city={location.nameRu} onMap={() => changeView("map")} />
       </section>
       {view === "map" && <div className="gb-map-radar"><RadarStatusAffordance mapControls /></div>}
       <GamesViewAction view={view} onClick={() => changeView(view === "list" ? "map" : "list")} />
