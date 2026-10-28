@@ -233,9 +233,10 @@
   .gb-desktop-map-inspector {
     display:flex; flex-direction:column;
     position:absolute; z-index:104;
-    top:12px; right:12px; bottom:12px;
-    width:min(450px, calc(100% - 48px));
-    max-width:calc(100% - 48px);
+    /* Outer working gap 20–24px; keep ~450px rail, not half-screen. */
+    top:20px; right:20px; bottom:20px;
+    width:min(450px, calc(100% - 40px));
+    max-width:calc(100% - 40px);
     min-width:0; min-height:0;
     overflow:hidden;
     background:var(--gb-white); color:var(--gb-ink);
@@ -243,7 +244,7 @@
     box-shadow:var(--gb-shadow-elevated);
   }
   .gb-desktop-map-inspector:has(.gb-venue-sheet[data-view="create"]) {
-    width:min(640px, calc(100% - 48px));
+    width:min(640px, calc(100% - 40px));
   }
   .gb-desktop-map-inspector .gb-venue-popup--desktop {
     position:static; inset:auto; left:auto; right:auto; bottom:auto;
@@ -254,7 +255,8 @@
   .gb-desktop-map-inspector .gb-venue-popup-content {
     flex:1 1 auto; height:auto; min-height:0;
     overflow-y:auto; overflow-x:clip;
-    padding:0 16px 16px; box-sizing:border-box;
+    /* Inner padding 24–28px */
+    padding:0 24px 24px; box-sizing:border-box;
   }
   .gb-desktop-map-inspector .gb-venue-handle,
   .gb-desktop-map-inspector .gb-venue-popup-preview-surface,
@@ -265,7 +267,7 @@
     overflow:visible; border-radius:0; padding:0;
   }
   .gb-desktop-map-inspector .gb-venue-sheet:has(.gb-venue-sheet-info) .gb-venue-sheet-header {
-    height:auto; min-height:0; margin:0; padding:12px 0 0; border:0;
+    height:auto; min-height:0; margin:0; padding:16px 0 0; border:0;
   }
   .gb-desktop-map-inspector .gb-venue-sheet:has(.gb-venue-sheet-info) .gb-venue-sheet-heading,
   .gb-desktop-map-inspector .gb-venue-sheet:has(.gb-venue-sheet-info) .gb-venue-sheet-header h2 {
@@ -274,8 +276,18 @@
   .gb-desktop-map-inspector .gb-venue-sheet:has(.gb-venue-sheet-info) .gb-venue-sheet-close {
     position:absolute; right:0; top:8px;
   }
+  .gb-desktop-map-inspector .gb-venue-sheet[data-view="info"] .gb-venue-sheet-info {
+    display:grid; gap:16px;
+  }
   .gb-desktop-map-inspector .gb-venue-sheet[data-view="info"] .gb-venue-sheet-info > h3 {
     position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%);
+  }
+  .gb-desktop-map-inspector .gb-venue-sheet[data-view="info"] .gb-venue-contacts {
+    margin:0;
+  }
+  .gb-desktop-map-inspector .gb-venue-sheet[data-view="info"] .gb-venue-sheet-cover,
+  .gb-desktop-map-inspector .gb-venue-sheet[data-view="info"] .gb-venue-sheet-cover img {
+    max-height:200px; aspect-ratio:16/9; object-fit:cover;
   }
   .gb-desktop-map-inspector .gb-venue-sheet[data-view="create"] .gb-game-create--embedded .gb-game-fields,
   .gb-desktop-map-inspector .gb-venue-sheet[data-view="create"] .gb-game-create--embedded .gb-game-detail-grid {
@@ -284,23 +296,97 @@
   .gb-desktop-map-inspector .gb-venue-sheet[data-view="create"] .gb-game-create--embedded .gb-game-field--wide {
     grid-column:1 / -1;
   }
+  /* Game view: one internal scroll; header + actions stay reachable. */
+  .gb-desktop-map-inspector .gb-venue-popup-content:has(.gb-desktop-inspector-game) {
+    display:flex; flex-direction:column; overflow:hidden; padding-bottom:0;
+  }
+  .gb-desktop-map-inspector .gb-venue-sheet[data-view="game"][data-desktop="true"] {
+    display:flex; flex-direction:column; flex:1 1 auto; min-height:0; height:100%;
+  }
+  .gb-desktop-map-inspector .gb-venue-sheet[data-view="game"][data-desktop="true"] > .gb-venue-sheet-header {
+    position:static; flex:0 0 auto; margin:0 0 16px; padding:16px 0 12px;
+  }
+  .gb-desktop-inspector-game {
+    display:flex; flex-direction:column; flex:1 1 auto; min-height:0; min-width:0;
+  }
+  .gb-desktop-inspector-game__body {
+    flex:1 1 auto; min-height:0; overflow-y:auto; overflow-x:clip;
+    display:grid; gap:16px; padding-bottom:16px;
+  }
+  .gb-desktop-inspector-game__actions {
+    flex:0 0 auto; padding:12px 0 20px; background:var(--gb-white);
+    border-top:1px solid var(--gb-line);
+  }
+  .gb-desktop-inspector-game__actions .gb-venue-game-actions {
+    margin:0; padding:12px; gap:10px;
+  }
+  .gb-desktop-inspector-game__snapshot {
+    display:grid; grid-template-columns:88px minmax(0,1fr); gap:14px; align-items:start;
+    padding:14px; border-radius:var(--gb-radius-md);
+    background:color-mix(in srgb, var(--gb-ink) 92%, var(--gb-lime));
+    color:var(--gb-white);
+  }
+  .gb-desktop-inspector-game__media {
+    position:relative; width:88px; min-width:88px;
+  }
+  .gb-desktop-inspector-game__cover,
+  .gb-desktop-inspector-game__cover img {
+    display:block; width:88px; height:88px; aspect-ratio:1/1;
+    object-fit:cover; border-radius:var(--gb-radius-sm); overflow:hidden;
+  }
+  .gb-desktop-inspector-game__date {
+    position:absolute; left:6px; bottom:6px;
+    display:grid; place-items:center; min-width:52px; max-width:76px;
+    padding:4px 6px; border-radius:8px;
+    background:color-mix(in srgb, var(--gb-lime-deep) 88%, var(--gb-ink));
+    color:var(--gb-white); font-size:11px; line-height:1.2; font-weight:700;
+    text-align:center; overflow-wrap:anywhere;
+  }
+  .gb-desktop-inspector-game__snapshot-copy { display:grid; gap:6px; min-width:0; }
+  .gb-desktop-inspector-game__time { margin:0; font-size:13px; color:color-mix(in srgb, var(--gb-white) 72%, transparent); }
+  .gb-desktop-inspector-game__title {
+    margin:0; font-size:24px; line-height:1.2; font-weight:800;
+    overflow-wrap:anywhere;
+  }
+  .gb-desktop-inspector-game__subtitle { margin:0; font-size:13px; color:color-mix(in srgb, var(--gb-white) 78%, transparent); }
+  .gb-desktop-inspector-game__facts {
+    list-style:none; margin:0; padding:0; display:grid; gap:12px;
+  }
+  .gb-desktop-inspector-game__facts > li {
+    display:grid; grid-template-columns:minmax(88px,120px) minmax(0,1fr);
+    gap:10px; align-items:start; font-size:14px; line-height:1.4;
+  }
+  .gb-desktop-inspector-game__fact-label { color:var(--gb-ink-soft); font-size:13px; }
+  .gb-desktop-inspector-game__place { display:grid; gap:2px; min-width:0; }
+  .gb-desktop-inspector-game__place button {
+    border:0; padding:0; background:transparent; color:var(--gb-ink);
+    font:inherit; font-weight:600; text-align:left; min-height:auto; min-width:0;
+  }
+  .gb-desktop-inspector-game__place small { color:var(--gb-ink-soft); font-size:12px; }
+  .gb-desktop-inspector-game__description { display:grid; gap:8px; }
+  .gb-desktop-inspector-game__description h4 { margin:0; font-size:15px; }
+  .gb-desktop-inspector-game__description p { margin:0; font-size:14px; line-height:1.45; color:var(--gb-ink-soft); overflow-wrap:anywhere; }
+  .gb-desktop-inspector-game__more {
+    justify-self:start; border:0; padding:0; background:transparent;
+    color:var(--gb-purple); font:inherit; font-weight:600; min-height:44px;
+  }
   /* Keep map attribution/controls clear of the inspector rail. */
   .gb-games-map:has(.gb-desktop-map-inspector) .maplibregl-ctrl-bottom-right,
   .gb-games-map:has(.gb-desktop-map-inspector) .maplibregl-ctrl-bottom-left,
   .gb-fullscreen-map-viewport:has(.gb-desktop-map-inspector) .maplibregl-ctrl-bottom-right,
   .gb-fullscreen-map-viewport:has(.gb-desktop-map-inspector) .maplibregl-ctrl-bottom-left {
-    bottom:12px;
-    right:calc(min(450px, 100% - 48px) + 28px);
+    bottom:20px;
+    right:calc(min(450px, 100% - 40px) + 28px);
   }
   .gb-games-map:has(.gb-desktop-map-inspector .gb-venue-sheet[data-view="create"]) .maplibregl-ctrl-bottom-right,
   .gb-games-map:has(.gb-desktop-map-inspector .gb-venue-sheet[data-view="create"]) .maplibregl-ctrl-bottom-left,
   .gb-fullscreen-map-viewport:has(.gb-desktop-map-inspector .gb-venue-sheet[data-view="create"]) .maplibregl-ctrl-bottom-right,
   .gb-fullscreen-map-viewport:has(.gb-desktop-map-inspector .gb-venue-sheet[data-view="create"]) .maplibregl-ctrl-bottom-left {
-    right:calc(min(640px, 100% - 48px) + 28px);
+    right:calc(min(640px, 100% - 40px) + 28px);
   }
   .gb-games-map:has(.gb-desktop-map-inspector) .maplibregl-ctrl-bottom-left,
   .gb-fullscreen-map-viewport:has(.gb-desktop-map-inspector) .maplibregl-ctrl-bottom-left {
-    right:auto; left:12px;
+    right:auto; left:20px;
   }
   /* Ordinary desktop inspector must not steal the whole map like a mobile modal. */
   .gb-desktop-map-inspector .gb-venue-popup--desktop { pointer-events:auto; }
@@ -309,4 +395,5 @@
 @media (min-width:1024px) and (max-width:1279px) {
   .gb-desktop-map-inspector { width:min(400px, calc(100% - 40px)); }
   .gb-desktop-map-inspector:has(.gb-venue-sheet[data-view="create"]) { width:min(520px, calc(100% - 40px)); }
+  .gb-desktop-inspector-game__title { font-size:22px; }
 }
