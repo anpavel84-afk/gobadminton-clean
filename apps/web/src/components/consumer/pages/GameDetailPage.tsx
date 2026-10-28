@@ -10,8 +10,10 @@ import { Button } from "../Button";
 import { ConsumerShell } from "../ConsumerShell";
 import { GameHero, GameTerms, GameStatusBadge } from "../games/GameDetailComposition";
 import { GameShare } from "../games/GameShare";
+import { GameRecommendationButton } from "../games/GameRecommendationButton";
 import { GameActionBar } from "../games/GameActionBar";
 import { GameVenueContacts } from "../games/GameVenueContacts";
+import { isRecommendableGame } from "../../../lib/game-recommendations";
 
 function ParticipationActions({ game, own, busy, notice, readable, onRequest, onReload }: {
   game: Game; own: Participation | null; busy: boolean; notice: string | null;
@@ -100,6 +102,9 @@ export function GameDetailPage({ gameId }: { gameId: string }) {
   return <ConsumerShell active="games" title="Игра" mode="page" hideHeading>
     <div className="gb-games-detail" data-surface="game-detail" data-sticky-cta="dr-08">
       <div className="gb-game-detail-actions"><Button variant="ghost" className="gb-game-back" href="/games">← Все игры</Button>{state === "ready" && game && <GameShare gameId={game.id} />}</div>
+      {state === "ready" && game && game.id === gameId && isRecommendableGame(game) && (
+        <GameRecommendationButton gameId={game.id} me={me} eligible onLogin={() => setAuthOpen(true)} />
+      )}
       {state === "loading" && <div className="gb-game-feedback" data-state="loading" role="status"><h1>Загружаем игру</h1><p>Скоро покажем место, время и условия.</p></div>}
       {state === "error" && <div className="gb-game-feedback" data-state="error"><h1>Игра недоступна</h1><p>Не удалось загрузить игру. Проверьте соединение и попробуйте ещё раз.</p><Button onClick={() => void reload()}>Обновить</Button></div>}
       {state === "ready" && game && game.id === gameId && <div data-state="ready">
