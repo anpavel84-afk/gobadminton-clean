@@ -97,18 +97,23 @@ describe("WEB-02 Players / Profile", () => {
     const page = await readSource(
       "../src/components/consumer/pages/PublicPlayerProfilePage.tsx",
     );
+    const content = await readSource(
+      "../src/components/consumer/players/PlayerProfileContent.tsx",
+    );
     const route = await readSource(
       "../src/app/players/[publicPlayerId]/page.tsx",
     );
     expect(route).toContain("PublicPlayerProfilePage");
     expect(page).toContain('data-surface="public-player"');
     expect(page).toContain('data-variant={variant}');
+    expect(page).toContain("<PlayerProfileContent");
     expect(page).toContain("<ContactAction");
     expect(page).toContain("<ContactNote");
     expect(page).not.toContain('Radar включён');
     expect(page).toContain("Ближайшие игры этого игрока пока недоступны");
-    expect(page).toContain("Тренер");
-    expect(page).toContain("Ищу игру");
+    expect(content).toContain("Тренер");
+    expect(content).toContain("Ищу игру");
+    expect(content).toContain("player-profile-hero");
     expect(page).toContain('data-action={blocked ? "unblock" : "block"}');
     expect(page).toContain("createAbuseReport");
     expect(page).not.toMatch(/proximityBand|displaySlot|Radar включён/);

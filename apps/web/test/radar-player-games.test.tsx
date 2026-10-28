@@ -95,10 +95,13 @@ it("renders compact -> expanded profile; games stay an internal sheet view",()=>
   expect(expanded).toContain('data-preview-mode="expanded"');
   expect(expanded).toContain('data-player-view="profile"');
   expect(expanded).toContain("unified-preview__expanded");
-  expect(expanded).toContain("unified-preview__hero");
+  expect(expanded).toContain("player-profile-content");
+  expect(expanded).toContain("player-profile-hero");
   expect(expanded).toContain("Ближайшие публичные игры");
   expect(expanded).not.toContain("Разрешённая игра");
-  expect(expanded).toContain("Свернуть карточку");
+  expect(expanded).toContain('aria-label="Свернуть карточку игрока"');
+  expect(expanded).not.toContain(">Свернуть карточку<");
+  expect(expanded).not.toContain("Приблизительное положение");
   expect(expanded).not.toContain("Подробнее об игроке");
   expect(expanded).not.toContain("/players/peer");
   activate(tree,"Ближайшие публичные игры");

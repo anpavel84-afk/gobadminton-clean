@@ -4,8 +4,8 @@ import { formatSocialLevel } from "../../../lib/player-presentation";
 import { distanceText, liveUnifiedPreview } from "../../../lib/unified-directory";
 import type { UnifiedUpcomingGame } from "@gobadminton/contracts";
 import { Avatar, Badge, ProfileDialog } from "../players/ProfileComposition";
+import { PlayerProfileContent, type PlayerProfileFields } from "../players/PlayerProfileContent";
 import { Button } from "../Button";
-import { CloseButton } from "../CloseButton";
 import { GameCover } from "../games/GameCover";
 import { useVenuePopupModalLifecycle } from "../games/VenuePopup";
 import { RadarContact } from "./RadarContact";
@@ -18,6 +18,12 @@ function gameWhen(game: UnifiedUpcomingGame): string {
   const time = new Intl.DateTimeFormat("ru-RU", { timeZone: game.timezone, hour: "2-digit", minute: "2-digit" });
   return `${day} · ${time.format(start)}–${time.format(end)}`;
 }
+
+/** Same X glyph as CloseButton; label is collapse (CloseButton aria is locked to «Закрыть…»). */
+const collapseGlyph = <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" width={24} height={24} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round">
+  <line x1={6} y1={6} x2={18} y2={18} />
+  <line x1={18} y1={6} x2={6} y2={18} />
+</svg>;
 
 export function UnifiedPlayerPreview({ dialog = false, onClose, expanded: controlled, onExpandedChange, surface, onOpen, onCollapse, skipFocusRestore }: {
   dialog?: boolean; onClose: () => void; expanded?: boolean; onExpandedChange?: (value: boolean) => void;
@@ -32,6 +38,12 @@ export function UnifiedPlayerPreview({ dialog = false, onClose, expanded: contro
   const [gamesView, setGamesView] = useState(false);
   const expanded = surface === "compact" ? false : surface === "detail" ? true : (controlled ?? localExpanded);
   const expand = (value: boolean) => { setLocalExpanded(value); onExpandedChange?.(value); if (!value) setGamesView(false); };
+  const collapseSheet = () => {
+    setGamesView(false);
+    if (onCollapse) onCollapse();
+    else if (surface !== "detail") expand(false);
+    else onClose();
+  };
   const directory = useUnifiedDirectory(); const { view } = useRadarSession(); const focus = useRef<HTMLDivElement>(null);
   const row = [...directory.view.pins, ...directory.view.rows].find(row => row.publicPlayerId === directory.view.selected);
   const preview = directory.view.preview;
@@ -54,8 +66,7 @@ export function UnifiedPlayerPreview({ dialog = false, onClose, expanded: contro
   const escapeDetail = useRef(() => {});
   escapeDetail.current = () => {
     if (gamesView) setGamesView(false);
-    else if (onCollapse) onCollapse();
-    else onClose();
+    else collapseSheet();
   };
   // Same VenueSheet shell lifecycle: handle Escape, Tab containment, body overflow, nested dialogs.
   useVenuePopupModalLifecycle({
@@ -81,6 +92,18 @@ export function UnifiedPlayerPreview({ dialog = false, onClose, expanded: contro
   const levelLabel = safePreview?.player.level ? formatSocialLevel(safePreview.player.level) : null;
   const distance = safePreview ? (distanceText(safePreview.radar.distance) ?? "Расстояние неизвестно") : null;
   const games = safePreview ? safePreview.upcomingGames.slice(0, 3) : [];
+
+  // Shared public-profile fields from the live selected pin + preview only — no invented cover/bio/city.
+  const profileFields: PlayerProfileFields | null = safePreview && row ? {
+    publicPlayerId: safePreview.player.publicPlayerId,
+    displayName: safePreview.player.displayName,
+    level: safePreview.player.level ?? row.player.level,
+    trainer: safePreview.player.trainer,
+    avatar: safePreview.player.avatar ?? row.player.avatar,
+    lookingForGame: row.player.lookingForGame,
+    areaKey: row.player.areaKey,
+    bio: row.player.bio ?? null,
+  } : null;
 
   const gamesSection = safePreview && <section id="radar-player-detail" className="unified-preview__games" aria-label="Ближайшие публичные игры игрока">
     <header className="unified-preview__games-head"><small>Публичные будущие события</small><h3>Ближайшие публичные игры</h3></header>
@@ -118,33 +141,19 @@ export function UnifiedPlayerPreview({ dialog = false, onClose, expanded: contro
     </div>;
   }
 
-  const profileArticle = safePreview && <article className="unified-preview__expanded" aria-label={`Карточка: ${safePreview.player.displayName}`}>
-    <div className="unified-preview__sheet-head"><span /><CloseButton aria-label="Закрыть карточку игрока" onClick={onClose} /></div>
-    <div className="unified-preview__hero">
-      <Avatar name={safePreview.player.displayName} avatar={safePreview.player.avatar} tone={safePreview.player.trainer ? "purple" : "yellow"} />
-    </div>
-    <div className="unified-preview__expanded-copy">
-      <h2>{safePreview.player.displayName}</h2>
-      <div className="unified-preview__meta-row">
-        {levelLabel && <Badge>{levelLabel}</Badge>}
-        {safePreview.player.trainer && <Badge trainer>Тренер</Badge>}
-      </div>
-      <p className="unified-distance">{distance}</p>
-      <p>Приблизительное положение · погрешность {safePreview.radar.geo.uncertaintyMeters} м · возраст геопозиции до {safePreview.radar.geo.sourceAgeSeconds} с.</p>
-      {safePreview.radar.geo.quality === "degraded" && <p>Местоположение определяется неточно.</p>}
-      {surface === "detail"
-        ? <Button variant="outline" onClick={() => onCollapse?.()}>Свернуть карточку</Button>
-        : <Button variant="outline" aria-expanded={true} aria-controls="radar-player-detail" onClick={() => expand(false)}>Свернуть карточку</Button>}
-      {view.me && <RadarContact key={row.radar.resultRef} me={view.me} item={{ resultId: row.radar.resultId, resultRef: row.radar.resultRef, player: safePreview.player }} />}
-      <Button variant="outline" aria-controls="radar-player-detail" onClick={() => setGamesView(true)}>Ближайшие публичные игры</Button>
-      <p className="unified-preview__privacy"><small>Только публичная информация</small></p>
-    </div>
+  const collapseLabel = "Свернуть карточку игрока";
+  const profileArticle = safePreview && profileFields && <article className="unified-preview__expanded" aria-label={`Карточка: ${safePreview.player.displayName}`}>
+    <div className="unified-preview__sheet-head"><span /><button type="button" className="gb-close-button" aria-label={collapseLabel} onClick={collapseSheet}>{collapseGlyph}</button></div>
+    <PlayerProfileContent player={profileFields} distance={distance} titleAs="h2" />
+    {view.me && <RadarContact key={row.radar.resultRef} me={view.me} item={{ resultId: row.radar.resultId, resultRef: row.radar.resultRef, player: safePreview.player }} />}
+    <Button variant="outline" aria-controls="radar-player-detail" onClick={() => setGamesView(true)}>Ближайшие публичные игры</Button>
+    <p className="unified-preview__privacy"><small>Только публичная информация</small></p>
   </article>;
 
   const gamesInternal = safePreview && gamesView && <div className="unified-preview__games-view" data-player-view="games">
     <header className="unified-preview__games-nav">
       <button type="button" className="unified-preview__back" aria-label={`Назад к профилю ${safePreview.player.displayName}`} onClick={() => setGamesView(false)}>← {safePreview.player.displayName}</button>
-      <CloseButton aria-label="Закрыть карточку игрока" onClick={onClose} />
+      <button type="button" className="gb-close-button" aria-label={collapseLabel} onClick={collapseSheet}>{collapseGlyph}</button>
     </header>
     {gamesSection}
   </div>;

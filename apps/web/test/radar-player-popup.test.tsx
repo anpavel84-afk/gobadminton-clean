@@ -10,6 +10,7 @@ import type { apiFetch } from "../src/lib/api-client";
 import { MOSCOW_BUNDLE } from "../src/lib/radar-map-assets";
 import { RadarPage } from "../src/components/consumer/radar/RadarPage";
 import { UnifiedPlayerPreview } from "../src/components/consumer/radar/UnifiedPlayerPreview";
+import { PlayerProfileContent } from "../src/components/consumer/players/PlayerProfileContent";
 import { VenuePopup } from "../src/components/consumer/games/VenuePopup";
 import { GamesMapView } from "../src/components/consumer/games/GamesMapView";
 import { VenuePreviewCard } from "../src/components/consumer/games/VenuePreviewCard";
@@ -712,6 +713,50 @@ it("venue→new player before pending retirement popstate keeps the new player",
   expect(window.history.state.gbRadarPreview).toBeUndefined();
   expect(controller.view.selected).toBeNull();
   await selectingB;
+});
+
+it("expanded X collapses to compact without clearing selection, history, or filters", async () => {
+  const baseline = historyStack.length;
+  await controller.select(controller.view.pins[0]!);
+  let tree = renderRadar();
+  (nodes(tree).find(n => n.type === VenuePopup)!.props.onExpandedChange as (value: boolean) => void)(true);
+  tree = renderRadar();
+  expect(nodes(tree).find(n => n.type === VenuePopup)!.props.expanded).toBe(true);
+  expect(historyStack.length).toBe(baseline + 1);
+
+  const collapse = vi.fn();
+  hooks.use("preview"); hooks.resetFiber();
+  const detail = renderPreview({ surface: "detail", onClose: () => controller.close(), onCollapse: collapse });
+  const closeX = nodes(detail).find(n => n.props["aria-label"] === "Свернуть карточку игрока");
+  expect(closeX).toBeDefined();
+  expect(JSON.stringify(detail)).not.toMatch(/>Свернуть карточку</);
+  expect(nodes(detail).some(n => n.type === PlayerProfileContent)).toBe(true);
+  expect(JSON.stringify(detail)).not.toContain("Приблизительное положение");
+  (closeX!.props.onClick as () => void)();
+  expect(collapse).toHaveBeenCalledOnce();
+  expect(controller.view.selected).toBe("peer");
+  expect(controller.view.preview).not.toBeNull();
+
+  hooks.use("radar");
+  const detailOnPage = nodes(tree).find(n => n.type === UnifiedPlayerPreview && n.props.surface === "detail")!;
+  (detailOnPage.props.onCollapse as () => void)();
+  tree = renderRadar();
+  expect(nodes(tree).find(n => n.type === VenuePopup)!.props.expanded).toBe(false);
+  expect(controller.view.selected).toBe("peer");
+  expect(historyStack.length).toBe(baseline + 1);
+  expect(window.history.state.gbRadarPreview).toBe(true);
+});
+
+it("ordinary full Close still deselects once via VenuePopup onDeselect", async () => {
+  const baseline = historyStack.length;
+  await controller.select(controller.view.pins[0]!);
+  let tree = renderRadar();
+  expect(historyStack.length).toBe(baseline + 1);
+  (nodes(tree).find(n => n.type === VenuePopup)!.props.onDeselect as () => void)();
+  tree = renderRadar();
+  expect(controller.view.selected).toBeNull();
+  expect(controller.view.preview).toBeNull();
+  expect(historyStack.length).toBe(baseline);
 });
 
 it("compact Escape retires once under async back; browser Back still closes", async () => {
