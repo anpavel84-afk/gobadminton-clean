@@ -16,7 +16,8 @@ import { DiscoveryGameCard } from "../discovery/DiscoveryGameCard";
 import { RadarStatusAffordance } from "../radar/RadarSessionProvider";
 import { GamesViewAction } from "../games/GamesViewAction";
 import { GamesMapViewport } from "../games/GamesMapViewport";
-import { GamesMapView } from "../games/GamesMapView";
+import { GamesMapView, warmGamesVenueMapModule } from "../games/GamesMapView";
+import { preloadGamesMapAssets, readMapPreloadBrowserEnv, scheduleMapPreloadIdle } from "../../../lib/map-preload";
 
 type LoadState = "loading" | "ready" | "filtered" | "empty" | "error" | "stale";
 type Feed = GamePage & { key: string; state: LoadState };
@@ -157,6 +158,33 @@ export function GamesDiscoveryPage() {
     if (today && selectedDay && selectedDay < today) setSelectedDay(today);
   }, [today, selectedDay]);
 
+  // Optional bounded map warm while the list is visible; never awaited by map navigation.
+  const preloadCityId = location?.cityId;
+  useEffect(() => {
+    if (!contextReady || view !== "list" || !preloadCityId) return;
+    const abort = new AbortController();
+    const kick = () => {
+      void preloadGamesMapAssets({
+        env: readMapPreloadBrowserEnv(preloadCityId),
+        warmModule: warmGamesVenueMapModule,
+        signal: abort.signal,
+      }).catch(() => { /* Optional preload; live map fetch remains authority. */ });
+    };
+    const cancelIdle = scheduleMapPreloadIdle(kick);
+    const root = document.querySelector('[data-surface="games-discovery"]');
+    const interested = (target: EventTarget | null) =>
+      target instanceof Element && !!target.closest(".gb-map-desktop-entry, .gb-games-view-action");
+    const onIntent = (event: Event) => { if (interested(event.target)) kick(); };
+    root?.addEventListener("pointerenter", onIntent, true);
+    root?.addEventListener("focusin", onIntent, true);
+    return () => {
+      abort.abort();
+      cancelIdle();
+      root?.removeEventListener("pointerenter", onIntent, true);
+      root?.removeEventListener("focusin", onIntent, true);
+    };
+  }, [contextReady, view, preloadCityId]);
+
   useEffect(() => {
     if (!contextReady || !location) return;
     const request = ++generation.current;
@@ -266,7 +294,12 @@ export function GamesDiscoveryPage() {
           {pageError && <p role="alert" className="gb-discovery-notice">Не удалось загрузить остальные игры. Попробуйте ещё раз.</p>}
           {(showCards || state === "empty") && feed.nextCursor && state !== "stale" && <Button className="gb-discovery-more" variant="outline" loading={paging} onClick={() => void loadMore()}>{paging ? "Загружаем…" : "Показать ещё"}</Button>}
         </div>
-        <DiscoverySidebar city={location.nameRu} onMap={() => changeView("map")} />
+        <DiscoverySidebar city={location.nameRu} onMap={() => changeView("map")} onMapIntent={() => {
+          void preloadGamesMapAssets({
+            env: readMapPreloadBrowserEnv(location.cityId),
+            warmModule: warmGamesVenueMapModule,
+          }).catch(() => { /* Optional preload. */ });
+        }} />
       </section>
       {view === "map" && <div className="gb-map-radar"><RadarStatusAffordance mapControls /></div>}
       <GamesViewAction view={view} onClick={() => changeView(view === "list" ? "map" : "list")} />
