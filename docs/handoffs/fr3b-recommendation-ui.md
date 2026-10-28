@@ -1,4 +1,4 @@
-# Issue #182 / FR-3B source handoff — Mode A author attempt 2 (narrow repair)
+# Issue #182 / FR-3B source handoff — Mode A author attempt 3 (narrow repair)
 
 From: Cursor Auto SOURCE AUTHOR. To: one independent PMA QA (not claimed here).
 Status: SOURCE DRAFT / NOT_TESTED / NOT ACCEPTED. No paid QA, DEV, UAT, merge, push, or deploy claimed.
@@ -7,25 +7,21 @@ Status: SOURCE DRAFT / NOT_TESTED / NOT ACCEPTED. No paid QA, DEV, UAT, merge, p
 
 Bounded web UI on accepted FR-3A API only. No backend/auth/C5/runtime edits. `gameRecommendations` capability gate respected (remains false until Owner/PMA activation); UI shows truthful unavailable. No author Git/push/deploy; no dependency installs in this worktree.
 
-## Repair vs attempt 1
+## Repair vs attempt 2 (independent FR3B-QA-01 / FR3B-QA-02)
 
-1. **JSX** — `GameRecommendationButton` ready-state wrapped in a fragment (TS2657 / adjacent nodes / esbuild `Expected ')'`).
-2. **B2 privacy** — components no longer use `useSocialMutation` default `persist=true`. Module-level in-memory pending Map + ownership in `game-recommendations.ts` keeps path/body/key across remount; no `sessionStorage` writes of `me.id` / `friendshipId`. Shared messaging hook untouched.
-3. **Ownership** — session/expiry invalidates callback ownership without erasing unresolved UNKNOWN ops; late success does not publish into a new actor/view; explicit same-key retry only; no automatic write retries on foreground.
-4. **Copy** — unavailable: «Рекомендации сейчас недоступны. Попробуйте позже.» (no internal jargon).
-5. **Guest auth** — parent `onLogin` **or** local `AuthChooser`, never both (GameDetailPage keeps its single chooser).
-6. **Picker foreground** — while open, `visibilitychange` → visible clears stale friends and re-reads capabilities/friends; no write retries.
-7. **Tests** — `my-games-recommendations.test.tsx` targets new mutation + UI lifecycles; ordinary list/path helpers kept. Author did not run vitest (`node_modules` absent); PMA runs checks.
+1. **FR3B-QA-01** — Same-key recovery of an already-UNKNOWN write: a definitive replay rejection (404/409/…) no longer clears `pendingByScope`. Exact path/body/key stay; replacement writes stay blocked; actor-owned list reread is offered (`rereadOwnList` + refresh on failed recovery). Failed recovery is not treated as proof the original commit was absent. Fresh definitive rejection (no prior UNKNOWN) still clears pending as before. Exact same-key transport unchanged.
+2. **FR3B-QA-02** — Received/sent first page `{items:[], nextCursor:<non-null>}` is not claimed as an empty inbox. Intermediate copy + «Ещё»; count `0` is not shown while a cursor remains. Empty-then-item continuation covered by one targeted UI test.
+3. **Pending lifetime** — Module `pendingByScope` survives component remount **within the current document only**. Full page reload / tab close loses key/body/UNKNOWN. No durable storage, sessionStorage, or new framework added.
 
 ## Files (allowed paths only)
 
-1. `apps/web/src/lib/game-recommendations.ts` — wire types, paths, gates, in-memory pending Map + `useGameRecommendationMutation`
-2. `apps/web/src/components/consumer/games/GameRecommendationButton.tsx` — detail CTA, picker, guest auth, foreground refresh
-3. `apps/web/src/components/consumer/games/GameRecommendationsSection.tsx` — My Games received/sent, hide/withdraw
-4. `apps/web/src/components/consumer/pages/GameDetailPage.tsx` — wire button (unchanged this pass; already passes `onLogin`)
-5. `apps/web/src/components/consumer/pages/MyGamesPage.tsx` — wire section (unchanged this pass)
-6. `apps/web/test/game-recommendations.test.tsx` — gates, eligibility, paths, share separation, guest auth copy
-7. `apps/web/test/my-games-recommendations.test.tsx` — in-memory mutation ownership + bounded UI lifecycle
+1. `apps/web/src/lib/game-recommendations.ts` — UNKNOWN recovery preserve + `rereadOwnList`
+2. `apps/web/src/components/consumer/games/GameRecommendationButton.tsx` — actor-owned list reread control while pending
+3. `apps/web/src/components/consumer/games/GameRecommendationsSection.tsx` — empty+cursor honest intermediate; reread control; count guard
+4. `apps/web/src/components/consumer/pages/GameDetailPage.tsx` — unchanged this pass
+5. `apps/web/src/components/consumer/pages/MyGamesPage.tsx` — unchanged this pass
+6. `apps/web/test/game-recommendations.test.tsx` — unchanged this pass (prior suite reused)
+7. `apps/web/test/my-games-recommendations.test.tsx` — +rejected UNKNOWN replay; +empty continuation then item
 8. `docs/handoffs/fr3b-recommendation-ui.md` — this handoff
 
 Not touched: backend, contracts, deps, C5, GameCard/DiscoveryGameCard, shared `useSocialMutation`, Git.
@@ -34,13 +30,15 @@ Not touched: backend, contracts, deps, C5, GameCard/DiscoveryGameCard, shared `u
 
 - Send body: `{ friendshipId }` only
 - Hide/withdraw body: `{ expectedVersion: number }`
-- List: `view=received|sent`
+- List: `view=received|sent`; empty page with `nextCursor` is valid (bounded scan)
 - Receipt outcomes: `sent` | `hidden` | `withdrawn`
 - Capability `gameRecommendations:false` blocks activation; no override
+- Failed same-key replay ≠ proof of noncommit (GAME_RECOMMENDATIONS_V001 Send/hide/withdraw and retries)
 
 ## Limitations
 
-- Backend capability remains false — send UX stays on unavailable until separate activation.
+- Backend capability remains false — send UX stays on unavailable until separate activation. **Release dependency; API scope unchanged.**
+- `pendingByScope` is **document-lifetime only** (survives remount, not full reload/tab close). No claim of durable reload persistence or paid live E2E.
 - No live user actions; Product CI / DEV smoke / Owner UAT are PMA/trusted process.
 - Typecheck/lint/vitest **NOT_TESTED** here (no deps in private export). PMA: lockfile offline install, then targeted:
   - `pnpm --filter @gobadminton/web exec vitest run test/game-recommendations.test.tsx test/my-games-recommendations.test.tsx`

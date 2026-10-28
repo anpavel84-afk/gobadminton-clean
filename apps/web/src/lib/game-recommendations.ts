@@ -178,6 +178,9 @@ export function useGameRecommendationMutation<T>(
 
   async function perform(value: RecommendationPendingOp) {
     if (lock.current || inflightScopes.has(scope)) return;
+    // Same-key recovery of an already-UNKNOWN op — failed replay is not proof of noncommit.
+    const prior = readRecommendationPending(scope, actorId);
+    const recoveringUnknown = Boolean(prior && prior.actorId === actorId && prior.key === value.key);
     lock.current = true;
     inflightScopes.add(scope);
     setBusy(true);
@@ -203,14 +206,30 @@ export function useGameRecommendationMutation<T>(
         return;
       }
       const unknown = result.status === 0 || result.status >= 500;
-      if (!unknown) writeRecommendationPending(scope, null);
+      if (unknown) {
+        if (owns && live.current) {
+          setNotice(socialError(result));
+          setCode(result.problem?.code ?? String(result.status));
+        }
+        return;
+      }
+      if (recoveringUnknown) {
+        // Preserve operation/body/key; offer actor-owned list reread; keep replacement writes blocked.
+        if (owns && live.current) {
+          setNotice(
+            "Результат отправки пока неизвестен. Обновите свой список рекомендаций перед дальнейшими действиями.",
+          );
+          setCode(result.problem?.code ?? String(result.status));
+          onRefreshRef.current();
+        }
+        return;
+      }
+      writeRecommendationPending(scope, null);
       if (owns && live.current) {
         setNotice(socialError(result));
         setCode(result.problem?.code ?? String(result.status));
-        if (!unknown) {
-          setPending(null);
-          onRefreshRef.current();
-        }
+        setPending(null);
+        onRefreshRef.current();
       }
     } finally {
       inflightScopes.delete(scope);
@@ -235,6 +254,11 @@ export function useGameRecommendationMutation<T>(
       if (lock.current || inflightScopes.has(scope)) return;
       const saved = readRecommendationPending(scope, actorId) ?? pending;
       if (saved && saved.actorId === actorId) void perform(saved);
+    },
+    /** Actor-owned list reread only — never silent autoPOST; no-op after ownership loss. */
+    rereadOwnList() {
+      if (!recommendationMutationOwnerActive(scope, actorId, ownerToken.current)) return;
+      onRefreshRef.current();
     },
   };
 }

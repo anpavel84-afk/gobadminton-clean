@@ -284,6 +284,33 @@ describe("FR-3B in-memory recommendation mutation ownership", () => {
     expect(renderMutation().pending).toBe(false);
     expect(sessionSet).not.toHaveBeenCalled();
   });
+
+  it("rejected same-key replay after UNKNOWN keeps pending, offers reread, blocks fresh write", async () => {
+    vi.mocked(apiFetch)
+      .mockResolvedValueOnce({ ok: false, status: 0, error: "network" })
+      .mockResolvedValueOnce({ ok: false, status: 404, error: "gone" });
+    const first = renderMutation();
+    first.run(hideGameRecommendationPath(item.id), { expectedVersion: item.version });
+    await settle();
+    const scope = recommendationMutationScope(me.id, "game-rec:received");
+    expect(readRecommendationPending(scope, me.id)?.key).toBe("same-rec-key");
+    expect(refresh).not.toHaveBeenCalled();
+
+    first.retry();
+    await settle();
+    expect(apiFetch).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(apiFetch).mock.calls[1]).toEqual(vi.mocked(apiFetch).mock.calls[0]);
+    expect(readRecommendationPending(scope, me.id)?.key).toBe("same-rec-key");
+    expect(readRecommendationPending(scope, me.id)?.body).toEqual({ expectedVersion: item.version });
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(success).not.toHaveBeenCalled();
+
+    resetHooks();
+    const remounted = renderMutation();
+    expect(remounted.pending).toBe(true);
+    remounted.run(hideGameRecommendationPath(item.id), { expectedVersion: 99 });
+    expect(apiFetch).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("FR-3B recommendation UI lifecycle", () => {
@@ -434,5 +461,44 @@ describe("FR-3B recommendation UI lifecycle", () => {
       friends: true, gameRecommendations: false, gameAttention: false, socialPush: false,
     })).toBe(false);
     expect(readRecommendationPending(scope, me.id)?.key).toBe("same-rec-key");
+  });
+
+  it("empty first page with nextCursor is not an empty inbox; continuation can yield items", async () => {
+    vi.mocked(getSocialCapabilities).mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: { friends: true, gameRecommendations: true, gameAttention: false, socialPush: false },
+    });
+    vi.mocked(apiFetch)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        data: { items: [], nextCursor: "page-2", asOf: "2026-10-28T10:00:00.000Z" },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        data: { items: [item], nextCursor: null, asOf: "2026-10-28T10:00:00.000Z" },
+      });
+
+    hooks.cursor = 0;
+    let tree = GameRecommendationsSection({ me });
+    flushEffects();
+    await settle();
+    hooks.cursor = 0;
+    tree = GameRecommendationsSection({ me });
+    flushEffects();
+    expect(elements(tree).some((el) => el.props.title === "Пока нет советов")).toBe(false);
+    expect(elements(tree).some((el) => el.props.title === "Проверяем доступные советы")).toBe(true);
+    activate(tree, "Ещё");
+    hooks.cursor = 0;
+    tree = GameRecommendationsSection({ me });
+    flushEffects();
+    await settle();
+    hooks.cursor = 0;
+    tree = GameRecommendationsSection({ me });
+    flushEffects();
+    expect(labelOf(tree)).toContain("Парная игра");
+    expect(apiFetch).toHaveBeenCalledWith("/v1/me/game-recommendations?view=received&limit=20&cursor=page-2");
   });
 });

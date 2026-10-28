@@ -154,6 +154,13 @@ export function GameRecommendationButton({
       </Button>
       {sentNotice ? <p className="gb-game-notice" role="status">{sentNotice}</p> : null}
       <MutationNotice mutation={mutation} />
+      {mutation.pending ? (
+        <div className="profile-form-actions">
+          <Button variant="outline" disabled={mutation.busy} onClick={() => mutation.rereadOwnList()}>
+            Обновить свой список
+          </Button>
+        </div>
+      ) : null}
       {open && me ? (
         <div className="fr3">
           <ProfileDialog

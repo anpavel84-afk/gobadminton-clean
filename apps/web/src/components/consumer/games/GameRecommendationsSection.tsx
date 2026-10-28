@@ -151,7 +151,7 @@ export function GameRecommendationsSection({ me }: { me: Me }) {
             Совет не резервирует место и не создаёт приглашение организатора. Участие оформляется отдельно.
           </p>
         </div>
-        {state === "ready" ? <b>{items.length}</b> : null}
+        {state === "ready" && (items.length > 0 || !nextCursor) ? <b>{items.length}</b> : null}
       </header>
       <div className="gb-game-segmented" role="group" aria-label="Рекомендации">
         <button type="button" aria-pressed={view === "received"} disabled={locked} onClick={() => switchView("received")}>
@@ -162,6 +162,13 @@ export function GameRecommendationsSection({ me }: { me: Me }) {
         </button>
       </div>
       <MutationNotice mutation={mutation} />
+      {mutation.pending ? (
+        <div className="profile-form-actions">
+          <Button variant="outline" disabled={mutation.busy} onClick={() => mutation.rereadOwnList()}>
+            Обновить свой список
+          </Button>
+        </div>
+      ) : null}
       {state === "loading" && <ProfileState title="Загружаем рекомендации…" state="loading" />}
       {state === "guest" && <ProfileState title="Войдите снова">Личные рекомендации скрыты после выхода или истечения сессии.</ProfileState>}
       {state === "unavailable" && (
@@ -179,13 +186,18 @@ export function GameRecommendationsSection({ me }: { me: Me }) {
           Обновите раздел перед действиями.
         </ProfileState>
       )}
-      {state === "ready" && items.length === 0 && (
+      {state === "ready" && items.length === 0 && !nextCursor && (
         <ProfileState title={view === "received" ? "Пока нет советов" : "Вы ещё никому не советовали"}>
           {view === "received"
             ? "Когда друг посоветует публичную игру, она появится здесь."
             : "Совет другу можно отправить со страницы публичной будущей игры."}
         </ProfileState>
       )}
+      {state === "ready" && items.length === 0 && nextCursor ? (
+        <ProfileState title="Проверяем доступные советы">
+          На этой странице нет видимых записей. Загрузите следующую — список ещё не исчерпан.
+        </ProfileState>
+      ) : null}
       {state === "ready" && items.length > 0 && (
         <div className="gb-personal-list-items">
           {items.map((item) => (
