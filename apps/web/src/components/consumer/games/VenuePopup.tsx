@@ -4,6 +4,52 @@ import { useEffect, useRef, useState, type CSSProperties, type PointerEvent, typ
 type Drag = { id: number; x: number; y: number; lastY: number; time: number; velocity: number; origin: boolean; start: number; travel: number; axis: "pending" | "vertical"; target: HTMLButtonElement };
 type CompactDrag = { id: number; x: number; y: number; travel: number; axis: "pending" | "vertical"; target: HTMLElement };
 
+/** Shared expanded-shell keyboard/focus/body-overflow lifecycle for VenueSheet and player detail. */
+export function useVenuePopupModalLifecycle({
+  active, embedded = false, panelRef, initialFocusRef, onEscape, skipFocusRestore,
+}: {
+  active: boolean;
+  embedded?: boolean;
+  panelRef: { current: HTMLElement | null };
+  initialFocusRef?: { current: HTMLElement | null };
+  onEscape: () => void;
+  /** When true at cleanup (player→venue replacement), do not restore the old opener. */
+  skipFocusRestore?: { current: boolean };
+}) {
+  const escape = useRef(onEscape);
+  escape.current = onEscape;
+  useEffect(() => {
+    if (!active) return;
+    const initiator = document.activeElement;
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    initialFocusRef?.current?.focus();
+    const keydown = (event: KeyboardEvent) => {
+      // The portal/native dialog owns its own keyboard and focus lifecycle.
+      if (document.querySelector(".gb-venue-picker, dialog[open]")) return;
+      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); escape.current(); }
+      if (event.key !== "Tab") return;
+      const boundary = embedded ? panelRef.current?.closest?.<HTMLElement>(".gb-venue-popup") ?? panelRef.current : panelRef.current;
+      const targets = [...boundary?.querySelectorAll<HTMLElement>('button, a[href], input, select, textarea, [tabindex]') ?? []].filter(target => {
+        if (target.tabIndex < 0 || target.matches(':disabled, [aria-disabled="true"], input[type="hidden"]') || target.closest('[hidden], [inert]')) return false;
+        const style = window.getComputedStyle(target);
+        return style.visibility !== 'hidden' && style.visibility !== 'collapse' && target.getClientRects().length > 0;
+      });
+      const first = targets[0]; const last = targets.at(-1);
+      if (event.shiftKey && (document.activeElement === first || !boundary?.contains(document.activeElement))) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && (document.activeElement === last || !boundary?.contains(document.activeElement))) { event.preventDefault(); first?.focus(); }
+    };
+    const options = { capture: true };
+    window.addEventListener("keydown", keydown, options);
+    return () => {
+      window.removeEventListener("keydown", keydown, options); document.body.style.overflow = overflow;
+      if (skipFocusRestore?.current) return;
+      if (initiator instanceof HTMLElement && initiator.isConnected && !initiator.closest?.("[hidden]")) initiator.focus();
+      else (document.querySelector<HTMLButtonElement>('.gb-venue-popup .gb-venue-handle') ?? document.querySelector<HTMLButtonElement>('.gb-venue-preview-button'))?.focus();
+    };
+  }, [active, embedded, panelRef, initialFocusRef, skipFocusRestore]);
+}
+
 /** The handle retains its old expanded gesture. Only the compact surface gains full-card swipes. */
 export function VenuePopup({ expanded, onExpandedChange, onDeselect, preview, children, labels }: {
   expanded: boolean; onExpandedChange: (value: boolean) => void; onDeselect: () => void;

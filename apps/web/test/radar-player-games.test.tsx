@@ -60,9 +60,15 @@ const request=vi.fn();
 beforeEach(async()=>{
   hooks.slots=[];hooks.cursor=0;hooks.effects=[];hooks.cleanups=[];trigger.focus.mockClear();sheet.focus.mockClear();request.mockReset();
   vi.useFakeTimers();vi.setSystemTime(now);
-  const history:{state:Record<string,unknown>;pushState:(state:Record<string,unknown>)=>void;back:()=>void}={state:{},pushState:vi.fn((state:Record<string,unknown>)=>{history.state=state;}),back:vi.fn(()=>{history.state={};window.dispatchEvent(new Event("popstate"));})};
+  const stack:Record<string,unknown>[]=[{}];
+  const history={
+    stack,
+    get state(){return stack.at(-1)??{};},
+    pushState:vi.fn((state:Record<string,unknown>)=>{stack.push({...(stack.at(-1)??{}),...state});}),
+    back:vi.fn(()=>{if(stack.length>1)stack.pop();else stack[0]={};window.dispatchEvent(new Event("popstate"));}),
+  };
   vi.stubGlobal("window",Object.assign(new EventTarget(),{location:{origin:"https://dev.gobadminton.ru",href:"https://dev.gobadminton.ru/games?view=map"},history,
-    setTimeout,clearTimeout,matchMedia:()=>({matches:false,addEventListener:()=>{},removeEventListener:()=>{}})}));
+    setTimeout,clearTimeout,getComputedStyle:()=>({visibility:"visible"}),matchMedia:()=>({matches:false,addEventListener:()=>{},removeEventListener:()=>{}})}));
   vi.stubGlobal("document",Object.assign(new EventTarget(),{activeElement:trigger,querySelector:()=>null,body:{style:{overflow:""}},visibilityState:"visible"}));
   vi.stubGlobal("requestAnimationFrame",(fn:()=>void)=>fn());
   request.mockImplementation(async(path:string)=>({ok:true,status:200,data:path.endsWith("/preview")?preview:path.endsWith("/map")?{...snapshot,mapPage:{returnedCount:1,rankStart:1,rankEnd:1,hasMore:false,nextMapCursor:null}}:snapshot}));

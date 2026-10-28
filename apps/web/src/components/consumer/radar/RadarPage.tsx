@@ -96,10 +96,16 @@ export function RadarPage({ sharedMap, resumeCamera = false }: { sharedMap?: Lib
   useEffect(() => { if (listOpen) sheet.current?.focus(); }, [listOpen]);
   useEffect(() => {
     if (!sharedMap || !view.selected) return;
+    // One owned same-URL preview entry for the current player selection.
     window.history.pushState({ ...window.history.state, gbRadarPreview: true }, "", window.location.href);
     const back = () => { controller?.close(); setListOpen(false); setExpanded(false); };
     window.addEventListener("popstate", back);
-    return () => window.removeEventListener("popstate", back);
+    return () => {
+      window.removeEventListener("popstate", back);
+      // Venue replacement (and any non-Back clear) must retire the owned entry without
+      // leaving a listener that could close the replacement or restore an obsolete trigger.
+      if (window.history.state?.gbRadarPreview) window.history.back();
+    };
   }, [view.selected, controller]);
   useEffect(() => {
     if (!sharedMap || !controller || !activationId) return;
@@ -169,7 +175,7 @@ export function RadarPage({ sharedMap, resumeCamera = false }: { sharedMap?: Lib
       {view.selected && <VenuePopup key={view.selected} expanded={expanded} onExpandedChange={setExpanded} onDeselect={close}
         labels={{ dialog: "Выбранный игрок", expandHandle: "Развернуть игрока", collapseHandle: "Свернуть игрока" }}
         preview={<UnifiedPlayerPreview surface="compact" onClose={close} onOpen={() => setExpanded(true)} />}>
-        <UnifiedPlayerPreview surface="detail" onClose={close} onCollapse={() => setExpanded(false)} />
+        <UnifiedPlayerPreview surface="detail" onClose={close} onCollapse={() => setExpanded(false)} skipFocusRestore={skipFocusRestore} />
       </VenuePopup>}
       {listOpen && !view.selected && <aside id="g2-map-panel" ref={sheet} tabIndex={-1} aria-label="Игроки на карте" className="g2-map-panel is-expanded" onKeyDown={e => { if (e.key === "Escape" && !(e.target as Element).closest("dialog")) { e.stopPropagation(); close(); } }}>
         <header><CloseButton aria-label="Закрыть список игроков" onClick={close} /></header>

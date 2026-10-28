@@ -7,6 +7,7 @@ import { Avatar, Badge, ProfileDialog } from "../players/ProfileComposition";
 import { Button } from "../Button";
 import { CloseButton } from "../CloseButton";
 import { GameCover } from "../games/GameCover";
+import { useVenuePopupModalLifecycle } from "../games/VenuePopup";
 import { RadarContact } from "./RadarContact";
 import { useRadarSession, useUnifiedDirectory } from "./RadarSessionProvider";
 
@@ -18,12 +19,14 @@ function gameWhen(game: UnifiedUpcomingGame): string {
   return `${day} · ${time.format(start)}–${time.format(end)}`;
 }
 
-export function UnifiedPlayerPreview({ dialog = false, onClose, expanded: controlled, onExpandedChange, surface, onOpen, onCollapse }: {
+export function UnifiedPlayerPreview({ dialog = false, onClose, expanded: controlled, onExpandedChange, surface, onOpen, onCollapse, skipFocusRestore }: {
   dialog?: boolean; onClose: () => void; expanded?: boolean; onExpandedChange?: (value: boolean) => void;
   /** compact/detail split the same content into VenuePopup preview + sheet slots. */
   surface?: "compact" | "detail";
   onOpen?: () => void;
   onCollapse?: () => void;
+  /** Shared with RadarPage: venue replacement must not restore the old player trigger. */
+  skipFocusRestore?: { current: boolean };
 }) {
   const [localExpanded, setLocalExpanded] = useState(false);
   const [gamesView, setGamesView] = useState(false);
@@ -34,13 +37,35 @@ export function UnifiedPlayerPreview({ dialog = false, onClose, expanded: contro
   const preview = directory.view.preview;
   const now = Date.now();
   const safePreview = preview && row && liveUnifiedPreview(preview, row.publicPlayerId, now) ? preview : null;
-  useEffect(() => { setLocalExpanded(false); setGamesView(false); }, [directory.view.selected]);
-  useEffect(() => { if (!dialog && surface !== "compact") focus.current?.focus(); }, [directory.view.selected, dialog, surface]);
   const deadline = Math.min(
     Date.parse(directory.view.snapshot?.validUntil ?? "invalid"),
     Date.parse(row?.radar?.validUntil ?? "invalid"),
     Date.parse(safePreview?.radar.validUntil ?? row?.radar?.validUntil ?? "invalid"),
     ...((safePreview?.upcomingGames ?? []).map(game => Date.parse(game.startsAt))));
+  const detailLive = surface === "detail" && !!row?.radar && !!directory.view.snapshot && !directory.view.stale
+    && Number.isFinite(deadline) && deadline > now && !(preview && !safePreview);
+  useEffect(() => { setLocalExpanded(false); setGamesView(false); }, [directory.view.selected]);
+  // Selection and internal profile↔games transitions move focus into the new view.
+  useEffect(() => {
+    if (dialog || surface === "compact") return;
+    if (surface === "detail" && !detailLive) return;
+    focus.current?.focus();
+  }, [directory.view.selected, dialog, surface, gamesView, detailLive]);
+  const escapeDetail = useRef(() => {});
+  escapeDetail.current = () => {
+    if (gamesView) setGamesView(false);
+    else if (onCollapse) onCollapse();
+    else onClose();
+  };
+  // Same VenueSheet shell lifecycle: handle Escape, Tab containment, body overflow, nested dialogs.
+  useVenuePopupModalLifecycle({
+    active: detailLive,
+    embedded: true,
+    panelRef: focus,
+    initialFocusRef: focus,
+    onEscape: () => escapeDetail.current(),
+    skipFocusRestore,
+  });
   useEffect(() => {
     if (!directory.controller || !Number.isFinite(deadline)) return;
     const id = window.setTimeout(() => directory.controller?.tick(), Math.max(0, deadline - Date.now()));
@@ -48,6 +73,7 @@ export function UnifiedPlayerPreview({ dialog = false, onClose, expanded: contro
   }, [directory.controller, deadline]);
   // Use live wall clock, not the last one-second session tick, as the final
   // rendering fence. The exact-deadline timer retires retained preview state.
+  if (!detailLive && surface === "detail") return null;
   if (!row?.radar || !directory.view.snapshot || directory.view.stale ||
       !Number.isFinite(deadline) || deadline <= now) return null;
   if (preview && !safePreview) return null;
@@ -138,7 +164,7 @@ export function UnifiedPlayerPreview({ dialog = false, onClose, expanded: contro
   </div>;
 
   if (surface === "detail") {
-    return <div ref={focus} tabIndex={-1} className="unified-preview is-expanded" data-preview-mode="expanded" data-player-view={gamesView ? "games" : "profile"} onKeyDown={e => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); if (gamesView) setGamesView(false); else onClose(); } }}>
+    return <div ref={focus} tabIndex={-1} className="unified-preview is-expanded" data-preview-mode="expanded" data-player-view={gamesView ? "games" : "profile"} onKeyDown={e => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); escapeDetail.current(); } }}>
       {statusBlock}
       {safePreview && (gamesView ? gamesInternal : profileArticle)}
     </div>;

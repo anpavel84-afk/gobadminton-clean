@@ -12,6 +12,7 @@ import { VenueCover } from "../venues/VenueCover";
 import { Avatar } from "../players/ProfileComposition";
 import { GameHero, GameTerms } from "./GameDetailComposition";
 import { VenueGameActions } from "./VenueGameActions";
+import { useVenuePopupModalLifecycle } from "./VenuePopup";
 import "../../../styles/venue-popup.css";
 
 // Validate untrusted/older API data independently of server normalization.
@@ -110,35 +111,10 @@ export function VenueSheet({ venue, games, gamesReady, now, onCollapse, onDesele
   const panel = useRef<HTMLDivElement>(null);
   const close = useRef<HTMLButtonElement>(null);
   const collapse = useRef(onCollapse); collapse.current = onCollapse;
-  useEffect(() => {
-    if (!active) return;
-    const initiator = document.activeElement;
-    const overflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    close.current?.focus();
-    const keydown = (event: KeyboardEvent) => {
-      // The portal/native dialog owns its own keyboard and focus lifecycle.
-      if (document.querySelector(".gb-venue-picker, dialog[open]")) return;
-      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); collapse.current(); }
-      if (event.key !== "Tab") return;
-      const boundary = embedded ? panel.current?.closest?.<HTMLElement>(".gb-venue-popup") ?? panel.current : panel.current;
-      const targets = [...boundary?.querySelectorAll<HTMLElement>('button, a[href], input, select, textarea, [tabindex]') ?? []].filter(target => {
-        if (target.tabIndex < 0 || target.matches(':disabled, [aria-disabled="true"], input[type="hidden"]') || target.closest('[hidden], [inert]')) return false;
-        const style = window.getComputedStyle(target);
-        return style.visibility !== 'hidden' && style.visibility !== 'collapse' && target.getClientRects().length > 0;
-      });
-      const first = targets[0]; const last = targets.at(-1);
-      if (event.shiftKey && (document.activeElement === first || !boundary?.contains(document.activeElement))) { event.preventDefault(); last?.focus(); }
-      else if (!event.shiftKey && (document.activeElement === last || !boundary?.contains(document.activeElement))) { event.preventDefault(); first?.focus(); }
-    };
-    const options = { capture: true };
-    window.addEventListener("keydown", keydown, options);
-    return () => {
-      window.removeEventListener("keydown", keydown, options); document.body.style.overflow = overflow;
-      if (initiator instanceof HTMLElement && initiator.isConnected && !initiator.closest?.("[hidden]")) initiator.focus();
-      else (document.querySelector<HTMLButtonElement>('.gb-venue-popup .gb-venue-handle') ?? document.querySelector<HTMLButtonElement>('.gb-venue-preview-button'))?.focus();
-    };
-  }, [active, embedded]);
+  useVenuePopupModalLifecycle({
+    active, embedded, panelRef: panel, initialFocusRef: close,
+    onEscape: () => collapse.current(),
+  });
   return <>
     {!embedded && <div className="gb-venue-sheet-backdrop" onClick={onDeselect} />}
     <div ref={panel} className="gb-venue-sheet" data-view={currentView} role={active && !embedded ? "dialog" : undefined} aria-modal={active && !embedded ? "true" : undefined} aria-labelledby={label}>

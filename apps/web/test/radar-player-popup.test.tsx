@@ -123,7 +123,42 @@ function bindDirectory() {
   context.directory = { controller, view: controller.view };
 }
 
-const trigger = { isConnected: true, focus: vi.fn() };
+class FocusTarget {
+  isConnected = true;
+  tabIndex = 0;
+  disabled = false;
+  hidden = false;
+  inert = false;
+  inputHidden = false;
+  visibility = "visible";
+  rendered = true;
+  matches = () => this.disabled || this.inputHidden;
+  closest = () => this.hidden || this.inert ? this : null;
+  getClientRects = () => this.rendered ? [{}] : [];
+  focus = vi.fn(() => { Object.assign(document, { activeElement: this }); });
+}
+const trigger = Object.assign(new FocusTarget(), { focus: vi.fn() });
+const handle = new FocusTarget();
+const firstControl = new FocusTarget();
+const lastControl = new FocusTarget();
+const detailPanel = {
+  closest: () => popupBoundary,
+  contains: (target: unknown) => target === firstControl || target === lastControl || target === handle || target === detailPanel,
+  querySelectorAll: () => [handle, firstControl, lastControl],
+  focus: vi.fn(() => { Object.assign(document, { activeElement: detailPanel }); }),
+};
+const popupBoundary = {
+  contains: (target: unknown) => target === handle || target === firstControl || target === lastControl || target === detailPanel,
+  querySelectorAll: () => [handle, firstControl, lastControl],
+};
+let nestedDialog: string | null = null;
+let historyStack: Record<string, unknown>[];
+let history: {
+  stack: Record<string, unknown>[];
+  readonly state: Record<string, unknown>;
+  pushState: ReturnType<typeof vi.fn>;
+  back: ReturnType<typeof vi.fn>;
+};
 let controller: UnifiedDirectoryController;
 const request = vi.fn();
 const map = {
@@ -132,22 +167,40 @@ const map = {
 } as unknown as LibreMap;
 
 beforeEach(async () => {
-  hooks.reset(); trigger.focus.mockClear(); request.mockReset();
+  hooks.reset(); trigger.focus.mockClear(); trigger.isConnected = true; request.mockReset();
+  handle.focus.mockClear(); firstControl.focus.mockClear(); lastControl.focus.mockClear(); detailPanel.focus.mockClear();
+  nestedDialog = null;
   vi.useFakeTimers(); vi.setSystemTime(now);
-  const history = {
-    state: {} as Record<string, unknown>,
-    pushState: vi.fn((state: Record<string, unknown>) => { history.state = state; }),
-    back: vi.fn(() => { history.state = {}; window.dispatchEvent(new Event("popstate")); }),
+  historyStack = [{}];
+  history = {
+    stack: historyStack,
+    get state() { return historyStack.at(-1) ?? {}; },
+    pushState: vi.fn((state: Record<string, unknown>) => { historyStack.push({ ...(historyStack.at(-1) ?? {}), ...state }); }),
+    back: vi.fn(() => {
+      if (historyStack.length > 1) historyStack.pop();
+      else historyStack[0] = {};
+      window.dispatchEvent(new Event("popstate"));
+    }),
   };
   vi.stubGlobal("window", Object.assign(new EventTarget(), {
     location: { origin: "https://dev.gobadminton.ru", href: "https://dev.gobadminton.ru/games?view=map", pathname: "/games", search: "?view=map", assign: vi.fn() },
     history,
     setTimeout, clearTimeout,
+    getComputedStyle: (target: FocusTarget) => ({ visibility: target.visibility }),
     matchMedia: () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} }),
   }));
   vi.stubGlobal("document", Object.assign(new EventTarget(), {
-    activeElement: trigger, querySelector: () => null, body: { style: { overflow: "" } }, visibilityState: "visible",
+    activeElement: trigger as unknown,
+    querySelector: (selector: string) => {
+      if (selector === ".gb-venue-picker, dialog[open]") return nestedDialog ? { className: nestedDialog } : null;
+      if (selector === ".gb-venue-popup .gb-venue-handle") return handle;
+      if (selector === ".gb-venue-preview-button") return firstControl;
+      if (selector === "dialog[open], [role=dialog]") return null;
+      return null;
+    },
+    body: { style: { overflow: "" } }, visibilityState: "visible",
   }));
+  vi.stubGlobal("HTMLElement", FocusTarget);
   vi.stubGlobal("requestAnimationFrame", (fn: () => void) => fn());
   vi.stubGlobal("sessionStorage", { getItem: () => null, setItem: vi.fn(), removeItem: vi.fn() });
   vi.stubGlobal("fetch", vi.fn(async (url: string) => {
@@ -203,6 +256,10 @@ function renderPreview(props: React.ComponentProps<typeof UnifiedPlayerPreview>)
   bindDirectory();
   hooks.cursor = 0;
   const tree = UnifiedPlayerPreview(props);
+  for (const node of nodes(tree)) {
+    const ref = node.props.ref as { current: unknown } | undefined;
+    if (ref && node.props.tabIndex === -1) ref.current = detailPanel;
+  }
   hooks.effects.splice(0).forEach(fn => fn());
   return tree;
 }
@@ -374,4 +431,130 @@ it("player→venue replacement does not steal focus; Close still restores trigge
   tree = renderRadar();
   expect(controller.view.selected).toBeNull();
   expect(trigger.focus).toHaveBeenCalled();
+});
+
+it("expanded player Escape on shell handle collapses; Tab stays inside popup boundary", async () => {
+  await controller.select(controller.view.pins[0]!);
+  const collapse = vi.fn();
+  const skipFocusRestore = { current: false };
+  hooks.use("preview"); hooks.resetFiber();
+  renderPreview({ surface: "detail", onClose: () => controller.close(), onCollapse: collapse, skipFocusRestore });
+  expect(document.body.style.overflow).toBe("hidden");
+  expect(detailPanel.focus).toHaveBeenCalled();
+
+  Object.assign(document, { activeElement: handle });
+  const escape = Object.assign(new Event("keydown", { cancelable: true }), { key: "Escape" });
+  window.dispatchEvent(escape);
+  expect(escape.defaultPrevented).toBe(true);
+  expect(collapse).toHaveBeenCalledOnce();
+
+  Object.assign(document, { activeElement: lastControl });
+  const tab = Object.assign(new Event("keydown", { cancelable: true }), { key: "Tab", shiftKey: false });
+  window.dispatchEvent(tab);
+  expect(tab.defaultPrevented).toBe(true);
+  expect(document.activeElement).toBe(handle);
+
+  Object.assign(document, { activeElement: handle });
+  const shiftTab = Object.assign(new Event("keydown", { cancelable: true }), { key: "Tab", shiftKey: true });
+  window.dispatchEvent(shiftTab);
+  expect(shiftTab.defaultPrevented).toBe(true);
+  expect(document.activeElement).toBe(lastControl);
+
+  nestedDialog = "dialog[open]";
+  const nestedEscape = Object.assign(new Event("keydown", { cancelable: true }), { key: "Escape" });
+  window.dispatchEvent(nestedEscape);
+  expect(nestedEscape.defaultPrevented).toBe(false);
+  expect(collapse).toHaveBeenCalledOnce();
+});
+
+it("internal games and Back move focus into the new view; Escape backs then collapses", async () => {
+  await controller.select(controller.view.pins[0]!);
+  const collapse = vi.fn();
+  hooks.use("preview"); hooks.resetFiber();
+  let tree = renderPreview({ surface: "detail", onClose: () => controller.close(), onCollapse: collapse });
+  detailPanel.focus.mockClear();
+  activate(tree, "Ближайшие публичные игры");
+  tree = renderPreview({ surface: "detail", onClose: () => controller.close(), onCollapse: collapse });
+  expect((tree as Node).props["data-player-view"]).toBe("games");
+  expect(detailPanel.focus).toHaveBeenCalled();
+
+  detailPanel.focus.mockClear();
+  activate(tree, `Назад к профилю ${preview.player.displayName}`);
+  tree = renderPreview({ surface: "detail", onClose: () => controller.close(), onCollapse: collapse });
+  expect((tree as Node).props["data-player-view"]).toBe("profile");
+  expect(detailPanel.focus).toHaveBeenCalled();
+
+  activate(tree, "Ближайшие публичные игры");
+  tree = renderPreview({ surface: "detail", onClose: () => controller.close(), onCollapse: collapse });
+  const escapeGames = Object.assign(new Event("keydown", { cancelable: true }), { key: "Escape" });
+  window.dispatchEvent(escapeGames);
+  expect(escapeGames.defaultPrevented).toBe(true);
+  tree = renderPreview({ surface: "detail", onClose: () => controller.close(), onCollapse: collapse });
+  expect((tree as Node).props["data-player-view"]).toBe("profile");
+  expect(collapse).not.toHaveBeenCalled();
+
+  const escapeProfile = Object.assign(new Event("keydown", { cancelable: true }), { key: "Escape" });
+  window.dispatchEvent(escapeProfile);
+  expect(collapse).toHaveBeenCalledOnce();
+});
+
+it("player→venue retires owned preview history; repeated switches do not accumulate", async () => {
+  const baseline = historyStack.length;
+  await controller.select(controller.view.pins[0]!);
+  let tree = renderRadar();
+  expect(historyStack.length).toBe(baseline + 1);
+  expect(window.history.state.gbRadarPreview).toBe(true);
+
+  window.dispatchEvent(new Event("gb-map-select-venue"));
+  tree = renderRadar();
+  expect(controller.view.selected).toBeNull();
+  expect(historyStack.length).toBe(baseline);
+  expect(window.history.state.gbRadarPreview).toBeUndefined();
+
+  for (let n = 0; n < 3; n++) {
+    await controller.select(controller.view.pins[0]!);
+    tree = renderRadar();
+    expect(historyStack.length).toBe(baseline + 1);
+    window.dispatchEvent(new Event("gb-map-select-venue"));
+    tree = renderRadar();
+    expect(historyStack.length).toBe(baseline);
+    expect(window.history.state.gbRadarPreview).toBeUndefined();
+  }
+
+  await controller.select(controller.view.pins[0]!);
+  tree = renderRadar();
+  expect(historyStack.length).toBe(baseline + 1);
+  trigger.focus.mockClear();
+  (nodes(tree).find(n => n.type === VenuePopup)!.props.onDeselect as () => void)();
+  tree = renderRadar();
+  expect(controller.view.selected).toBeNull();
+  expect(historyStack.length).toBe(baseline);
+  expect(window.history.state.gbRadarPreview).toBeUndefined();
+  expect(trigger.focus).toHaveBeenCalled();
+  void tree;
+});
+
+it("browser Back closes player once; late popstate after venue replacement does not restore player", async () => {
+  const baseline = historyStack.length;
+  await controller.select(controller.view.pins[0]!);
+  renderRadar();
+  expect(historyStack.length).toBe(baseline + 1);
+
+  window.history.back();
+  renderRadar();
+  expect(controller.view.selected).toBeNull();
+  expect(historyStack.length).toBe(baseline);
+
+  await controller.select(controller.view.pins[0]!);
+  renderRadar();
+  window.dispatchEvent(new Event("gb-map-select-venue"));
+  renderRadar();
+  expect(controller.view.selected).toBeNull();
+  expect(historyStack.length).toBe(baseline);
+
+  // Orphan popstate after retirement must not resurrect selection or reopen player.
+  window.dispatchEvent(new Event("popstate"));
+  renderRadar();
+  expect(controller.view.selected).toBeNull();
+  expect(nodes(renderRadar()).some(n => n.type === VenuePopup)).toBe(false);
 });
