@@ -4,7 +4,7 @@ import { formatSocialLevel } from "../../../lib/player-presentation";
 import { distanceText, liveUnifiedPreview } from "../../../lib/unified-directory";
 import type { UnifiedUpcomingGame } from "@gobadminton/contracts";
 import { Avatar, Badge, ProfileDialog } from "../players/ProfileComposition";
-import { PublicPlayerProfile } from "../players/PublicPlayerProfile";
+import { PublicPlayerProfile, reportUnknownScopeKey } from "../players/PublicPlayerProfile";
 import { Button } from "../Button";
 import { CloseButton } from "../CloseButton";
 import { GameCover } from "../games/GameCover";
@@ -20,7 +20,7 @@ function gameWhen(game: UnifiedUpcomingGame): string {
   return `${day} · ${time.format(start)}–${time.format(end)}`;
 }
 
-export function UnifiedPlayerPreview({ dialog = false, onClose, expanded: controlled, onExpandedChange, surface, onOpen, onCollapse, skipFocusRestore }: {
+export function UnifiedPlayerPreview({ dialog = false, onClose, expanded: controlled, onExpandedChange, surface, onOpen, onCollapse, skipFocusRestore, reportUnknownScope, onReportUnknownScope }: {
   dialog?: boolean; onClose: () => void; expanded?: boolean; onExpandedChange?: (value: boolean) => void;
   /** compact/detail split the same content into VenuePopup preview + sheet slots. */
   surface?: "compact" | "detail";
@@ -28,9 +28,16 @@ export function UnifiedPlayerPreview({ dialog = false, onClose, expanded: contro
   onCollapse?: () => void;
   /** Shared with RadarPage: venue replacement must not restore the old player trigger. */
   skipFocusRestore?: { current: boolean };
+  /**
+   * RadarPage-held latch survives VenuePopup detail unmount on collapse/reopen.
+   * When omitted (dialog / standalone), this preview keeps its own narrow latch across games↔profile.
+   */
+  reportUnknownScope?: string | null;
+  onReportUnknownScope?: (scopeKey: string) => void;
 }) {
   const [localExpanded, setLocalExpanded] = useState(false);
   const [gamesView, setGamesView] = useState(false);
+  const [localReportUnknownScope, setLocalReportUnknownScope] = useState<string | null>(null);
   const expanded = surface === "compact" ? false : surface === "detail" ? true : (controlled ?? localExpanded);
   const expand = (value: boolean) => { setLocalExpanded(value); onExpandedChange?.(value); if (!value) setGamesView(false); };
   const collapseSheet = () => {
@@ -40,6 +47,8 @@ export function UnifiedPlayerPreview({ dialog = false, onClose, expanded: contro
     else onClose();
   };
   const directory = useUnifiedDirectory(); const { view } = useRadarSession(); const focus = useRef<HTMLDivElement>(null);
+  const latchScope = reportUnknownScope !== undefined ? reportUnknownScope : localReportUnknownScope;
+  const latchUnknown = onReportUnknownScope ?? setLocalReportUnknownScope;
   const row = [...directory.view.pins, ...directory.view.rows].find(row => row.publicPlayerId === directory.view.selected);
   const preview = directory.view.preview;
   const now = Date.now();
@@ -129,6 +138,9 @@ export function UnifiedPlayerPreview({ dialog = false, onClose, expanded: contro
   }
 
   const collapseLabel = "Свернуть карточку игрока" as const;
+  const reportScope = view.me && safePreview
+    ? reportUnknownScopeKey(view.me.id, safePreview.player.publicPlayerId)
+    : null;
   const profileArticle = safePreview && profileMountKey && row.radar && <article className="unified-preview__expanded" aria-label={`Карточка: ${safePreview.player.displayName}`}>
     <div className="unified-preview__sheet-head"><span /><CloseButton aria-label={collapseLabel} onClick={collapseSheet} /></div>
     <PublicPlayerProfile
@@ -141,6 +153,8 @@ export function UnifiedPlayerPreview({ dialog = false, onClose, expanded: contro
         ? <RadarContact key={row.radar.resultRef} me={view.me} item={{ resultId: row.radar.resultId, resultRef: row.radar.resultRef, player: safePreview.player }} />
         : undefined}
       nearbyGamesAction={null}
+      reportUnknown={reportScope !== null && latchScope === reportScope}
+      onReportUnknown={latchUnknown}
     />
     <Button variant="outline" aria-controls="radar-player-detail" onClick={() => setGamesView(true)}>Ближайшие публичные игры</Button>
     <p className="unified-preview__privacy"><small>Только публичная информация</small></p>

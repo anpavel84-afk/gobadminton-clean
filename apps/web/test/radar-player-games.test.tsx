@@ -198,3 +198,41 @@ for(const action of ["close","Escape","back"] as const) it(`${action} restores f
   else (nodes(tree).find(n=>n.type===VenuePopup)!.props.onDeselect as ()=>void)();
   page();expect(controller.view.selected).toBeNull();expect(controller.view.preview).toBeNull();expect(trigger.focus).toHaveBeenCalled();expect(window.location.href).toContain("/games?view=map");
 });
+it("keeps unknown-report latch across internal games round-trip", () => {
+  let tree = card(true);
+  let shared = nodes(tree).find(n => n.type === PublicPlayerProfile)!;
+  expect(shared.props.reportUnknown).toBe(false);
+  expect(typeof shared.props.onReportUnknown).toBe("function");
+  // Shared body latches via Radar parent callback (POST/unknown covered in public-player-profile tests).
+  (shared.props.onReportUnknown as (scope: string) => void)("viewer:peer");
+  tree = card(true);
+  shared = nodes(tree).find(n => n.type === PublicPlayerProfile)!;
+  expect(shared.props.reportUnknown).toBe(true);
+
+  activate(tree, "Ближайшие публичные игры");
+  tree = card(true);
+  expect(nodes(tree).some(n => n.type === PublicPlayerProfile)).toBe(false);
+  activate(tree, `Назад к профилю ${preview.player.displayName}`);
+  tree = card(true);
+  shared = nodes(tree).find(n => n.type === PublicPlayerProfile)!;
+  expect(shared.props.reportUnknown).toBe(true);
+});
+
+it("RadarPage wires report-unknown latch into both VenuePopup preview surfaces", () => {
+  page();
+  const tree = page();
+  const popup = nodes(tree).find(n => n.type === VenuePopup)!;
+  expect(popup).toBeDefined();
+  const previews = nodes(tree).filter(n => n.type === UnifiedPlayerPreview);
+  expect(previews.some(n => n.props.surface === "compact")).toBe(true);
+  expect(previews.some(n => n.props.surface === "detail")).toBe(true);
+  for (const preview of previews) {
+    expect("reportUnknownScope" in preview.props).toBe(true);
+    expect(typeof preview.props.onReportUnknownScope).toBe("function");
+  }
+  // Parent-held scope survives detail remount (collapse/reopen replaces children).
+  (previews.find(n => n.props.surface === "detail")!.props.onReportUnknownScope as (scope: string) => void)("viewer:peer");
+  const again = page();
+  const detail = nodes(again).filter(n => n.type === UnifiedPlayerPreview).find(n => n.props.surface === "detail")!;
+  expect(detail.props.reportUnknownScope).toBe("viewer:peer");
+});

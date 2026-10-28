@@ -11,6 +11,11 @@ import { AuthEntry, ProfileDialog, ProfileState } from "./ProfileComposition";
 import { PlayerProfileContent } from "./PlayerProfileContent";
 import { ProfileFriendship } from "../friends/ProfileFriendship";
 
+/** Stable viewer/peer key for Radar-held unknown-report latches across internal remounts. */
+export function reportUnknownScopeKey(viewerId: string, peerId: string): string {
+  return `${viewerId}:${peerId}`;
+}
+
 /**
  * Shared public-profile body for the ordinary route and Radar expanded sheet.
  * Caller supplies publicPlayerId; route params stay outside. Mount only behind
@@ -24,6 +29,8 @@ export function PublicPlayerProfile({
   nearbyGamesAction,
   titleAs = "h1",
   className,
+  reportUnknown: reportUnknownProp,
+  onReportUnknown,
 }: {
   publicPlayerId: string;
   embedded?: boolean;
@@ -35,6 +42,13 @@ export function PublicPlayerProfile({
   nearbyGamesAction?: ReactNode;
   titleAs?: "h1" | "h2";
   className?: string;
+  /**
+   * Radar parent may hold unknown-report latch across profile↔games / collapse remounts.
+   * When omitted, the ordinary page keeps a local latch (not cleared by profile refresh).
+   */
+  reportUnknown?: boolean;
+  /** Latch the original viewer/peer scope even if this body unmounts before the POST settles. */
+  onReportUnknown?: (scopeKey: string) => void;
 }) {
   const [me, setMe] = useState<Me | null>(null);
   const [authState, setAuthState] = useState("loading");
@@ -45,10 +59,12 @@ export function PublicPlayerProfile({
   const [blocked, setBlocked] = useState(false);
   const [busy, setBusy] = useState(false);
   const [uncertain, setUncertain] = useState(false);
+  const [localReportUnknown, setLocalReportUnknown] = useState(false);
   const [notice, setNotice] = useState("");
   const [reportOpen, setReportOpen] = useState(false);
   const [reasonCode, setReasonCode] = useState<AbuseReportReasonCode>("harassment");
   const [detail, setDetail] = useState("");
+  const reportUnknown = reportUnknownProp ?? localReportUnknown;
 
   useEffect(() => {
     let live = true, authLive = true;
@@ -67,7 +83,8 @@ export function PublicPlayerProfile({
     return () => { live = false; window.removeEventListener("gb-private-expired", expired); window.removeEventListener("gb-session-changed", session); };
   }, [publicPlayerId, reload]);
 
-  useEffect(() => { setBlocked(false); setNotice(""); setUncertain(false); }, [publicPlayerId]);
+  // Public GET / reload is not report reconciliation — only peer change drops a local latch.
+  useEffect(() => { setBlocked(false); setNotice(""); setUncertain(false); setLocalReportUnknown(false); }, [publicPlayerId]);
 
   async function toggleBlock() {
     if (!me || busy || uncertain) return;
@@ -86,13 +103,20 @@ export function PublicPlayerProfile({
   }
 
   async function submitReport() {
-    if (!me || busy || uncertain) return;
+    if (!me || busy || uncertain || reportUnknown) return;
+    const scopeKey = reportUnknownScopeKey(me.id, publicPlayerId);
     setBusy(true); setNotice("");
     const r = await createAbuseReport({ targetKind: "player", targetPublicPlayerId: publicPlayerId, reasonCode, detail: detail.trim() || null }, me.csrfToken);
     setBusy(false);
     if (!r.ok) {
       if (r.status === 401) { setMe(null); setAuthState("guest"); setReportOpen(false); }
-      if (r.status === 0 || r.status >= 500) { setUncertain(true); setNotice("Не удалось подтвердить отправку жалобы. Она могла быть получена. Не отправляйте её повторно."); }
+      if (r.status === 0 || r.status >= 500) {
+        // Latch original scope even if Radar already unmounted this body (games/collapse).
+        setLocalReportUnknown(true);
+        onReportUnknown?.(scopeKey);
+        setUncertain(true);
+        setNotice("Не удалось подтвердить отправку жалобы. Она могла быть получена. Не отправляйте её повторно.");
+      }
       else setNotice("Не удалось отправить жалобу. Попробуйте позже.");
       return;
     }
@@ -127,8 +151,8 @@ export function PublicPlayerProfile({
       {nearbyGamesAction !== undefined
         ? nearbyGamesAction
         : <section className="profile-upcoming-section" data-surface="pp-02-upcoming" data-state="unavailable"><header className="profile-upcoming-header"><span><small>Публичные будущие события</small><h2>Ближайшие игры</h2></span></header><p>Ближайшие игры этого игрока пока недоступны.</p></section>}
-      <section className="profile-section profile-safety"><h2>Безопасность общения</h2>{authState === "guest" ? <><p>Войдите, чтобы заблокировать игрока или отправить жалобу.</p><AuthEntry returnPath={`/players/${publicPlayerId}`} /></> : authState === "error" ? <ProfileState title="Не удалось проверить вход" state="error" retry={() => setReload(n => n + 1)} /> : <div className="profile-form-actions"><Button variant="outline" disabled={!me || busy || uncertain} data-action={blocked ? "unblock" : "block"} onClick={() => void toggleBlock()}>Заблокировать</Button><Button variant="ghost" disabled={!me || busy || uncertain} onClick={() => { setNotice(""); setReportOpen(true); }}>Пожаловаться</Button></div>}</section>
+      <section className="profile-section profile-safety"><h2>Безопасность общения</h2>{authState === "guest" ? <><p>Войдите, чтобы заблокировать игрока или отправить жалобу.</p><AuthEntry returnPath={`/players/${publicPlayerId}`} /></> : authState === "error" ? <ProfileState title="Не удалось проверить вход" state="error" retry={() => setReload(n => n + 1)} /> : <div className="profile-form-actions"><Button variant="outline" disabled={!me || busy || uncertain} data-action={blocked ? "unblock" : "block"} onClick={() => void toggleBlock()}>Заблокировать</Button><Button variant="ghost" disabled={!me || busy || uncertain || reportUnknown} onClick={() => { setNotice(""); setReportOpen(true); }}>Пожаловаться</Button></div>}</section>
     </>}
-    {reportOpen && <ProfileDialog title="Пожаловаться на игрока" onClose={() => { if (!busy) setReportOpen(false); }}><form onSubmit={e => { e.preventDefault(); void submitReport(); }}><label className="profile-field">Причина<select value={reasonCode} onChange={e => setReasonCode(e.target.value as AbuseReportReasonCode)}>{REPORT_REASON_OPTIONS.map(o => <option value={o.code} key={o.code}>{o.label}</option>)}</select></label><label className="profile-field">Подробности<textarea value={detail} onChange={e => setDetail(e.target.value)} maxLength={1000} rows={4} /></label>{notice && <p role="status">{notice}</p>}<Button type="submit" disabled={busy || uncertain}>Отправить жалобу</Button></form></ProfileDialog>}
+    {reportOpen && <ProfileDialog title="Пожаловаться на игрока" onClose={() => { if (!busy) setReportOpen(false); }}><form onSubmit={e => { e.preventDefault(); void submitReport(); }}><label className="profile-field">Причина<select value={reasonCode} onChange={e => setReasonCode(e.target.value as AbuseReportReasonCode)}>{REPORT_REASON_OPTIONS.map(o => <option value={o.code} key={o.code}>{o.label}</option>)}</select></label><label className="profile-field">Подробности<textarea value={detail} onChange={e => setDetail(e.target.value)} maxLength={1000} rows={4} /></label>{notice && <p role="status">{notice}</p>}<Button type="submit" disabled={busy || uncertain || reportUnknown}>Отправить жалобу</Button></form></ProfileDialog>}
   </div>;
 }

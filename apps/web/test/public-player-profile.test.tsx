@@ -1,3 +1,4 @@
+import { Children, isValidElement } from "react";
 import type * as React from "react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -24,9 +25,26 @@ vi.mock("../src/components/consumer/players/ContactAction", () => ({
 }));
 vi.mock("next/link", () => ({ default: ({ href, children }: { href: string; children: ReactNode }) => <a href={href}>{children}</a> }));
 
-import { PublicPlayerProfile } from "../src/components/consumer/players/PublicPlayerProfile";
+import { PublicPlayerProfile, reportUnknownScopeKey } from "../src/components/consumer/players/PublicPlayerProfile";
 import { PublicPlayerProfilePage } from "../src/components/consumer/pages/PublicPlayerProfilePage";
 import { PlayerProfileContent } from "../src/components/consumer/players/PlayerProfileContent";
+
+type Node = React.ReactElement<Record<string, unknown>>;
+function nodes(tree: ReactNode): Node[] {
+  const found: Node[] = [];
+  function walk(node: ReactNode) {
+    if (!isValidElement<Record<string, unknown>>(node)) return;
+    found.push(node);
+    Children.forEach(node.props.children as ReactNode, walk);
+  }
+  walk(tree);
+  return found;
+}
+function activate(tree: ReactNode, label: string) {
+  const node = nodes(tree).find(n => n.props.children === label || n.props["aria-label"] === label);
+  if (!node) throw Error(`Missing ${label}`);
+  (node.props.onClick as () => void)();
+}
 
 const hooks = vi.hoisted(() => ({
   slots: [] as unknown[],
@@ -225,5 +243,152 @@ describe("shared PublicPlayerProfile ordinary + Radar composition", () => {
     expect(html).not.toContain("player-profile-hero");
     expect(html).not.toContain("Люблю парную игру");
     expect(html).not.toContain("Обложка профиля");
+  });
+});
+
+describe("unknown-report latch across Radar remounts (shared body)", () => {
+  async function readyProfile(props: React.ComponentProps<typeof PublicPlayerProfile>) {
+    renderProfile(props);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    hooks.cursor = 0;
+    return PublicPlayerProfile(props);
+  }
+
+  async function openAndSubmit(props: React.ComponentProps<typeof PublicPlayerProfile>) {
+    let tree = await readyProfile(props);
+    activate(tree, "Пожаловаться");
+    hooks.cursor = 0;
+    tree = PublicPlayerProfile(props);
+    const form = nodes(tree).find(n => n.type === "form");
+    if (!form) throw Error("Missing report form");
+    await (form.props.onSubmit as (e: { preventDefault(): void }) => void | Promise<void>)({ preventDefault() {} });
+    hooks.cursor = 0;
+    return PublicPlayerProfile(props);
+  }
+
+  beforeEach(() => {
+    api.createAbuseReport.mockReset();
+    api.createAbuseReport.mockResolvedValue({ ok: false, status: 0, error: "network" });
+  });
+
+  it("parent latch blocks a second POST after dismiss → remount (games/collapse)", async () => {
+    let latch: string | null = null;
+    const propsFor = (): React.ComponentProps<typeof PublicPlayerProfile> => ({
+      publicPlayerId: "peer",
+      embedded: true,
+      nearbyGamesAction: null,
+      reportUnknown: latch === reportUnknownScopeKey("viewer", "peer"),
+      onReportUnknown: scope => { latch = scope; },
+    });
+
+    await openAndSubmit(propsFor());
+    expect(api.createAbuseReport).toHaveBeenCalledTimes(1);
+    expect(latch).toBe(reportUnknownScopeKey("viewer", "peer"));
+
+    // Dismiss dialog while uncertain, then Radar replaces the profile subtree.
+    hooks.cursor = 0;
+    let tree = PublicPlayerProfile(propsFor());
+    const dialog = nodes(tree).find(n => n.props.title === "Пожаловаться на игрока");
+    (dialog!.props.onClose as () => void)();
+
+    resetHooks();
+    api.getMe.mockResolvedValue({ ok: true, status: 200, data: { id: "viewer", csrfToken: "csrf", displayName: "Viewer", locale: "ru", linkedProviders: [] } });
+    api.getPlayer.mockResolvedValue({ ok: true, status: 200, data: player });
+    api.listCities.mockResolvedValue({ ok: true, status: 200, data: { items: [{ id: "city", nameRu: "Москва" }] } });
+
+    tree = await openAndSubmit(propsFor());
+    expect(api.createAbuseReport).toHaveBeenCalledTimes(1);
+    expect(renderToStaticMarkup(tree)).toContain("disabled");
+  });
+
+  it("profile refresh clears generic uncertain UI but keeps unknown-report latch", async () => {
+    let latch: string | null = null;
+    const propsFor = (): React.ComponentProps<typeof PublicPlayerProfile> => ({
+      publicPlayerId: "peer",
+      reportUnknown: latch === reportUnknownScopeKey("viewer", "peer"),
+      onReportUnknown: scope => { latch = scope; },
+    });
+
+    await openAndSubmit(propsFor());
+    expect(api.createAbuseReport).toHaveBeenCalledTimes(1);
+
+    hooks.cursor = 0;
+    let tree = PublicPlayerProfile(propsFor());
+    const dialog = nodes(tree).find(n => n.props.title === "Пожаловаться на игрока");
+    (dialog!.props.onClose as () => void)();
+    hooks.cursor = 0;
+    tree = PublicPlayerProfile(propsFor());
+    activate(tree, "Обновить профиль");
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    hooks.cursor = 0;
+    tree = PublicPlayerProfile(propsFor());
+    // Refresh re-enabled block reconciliation, but report stays latched — no second POST.
+    const reportBtn = nodes(tree).find(n => n.props.children === "Пожаловаться");
+    expect(reportBtn?.props.disabled).toBe(true);
+    if (reportBtn && !reportBtn.props.disabled) activate(tree, "Пожаловаться");
+    expect(api.createAbuseReport).toHaveBeenCalledTimes(1);
+  });
+
+  it("late unknown completion after unmount latches original scope without poisoning another peer", async () => {
+    let resolveReport!: (value: unknown) => void;
+    api.createAbuseReport.mockImplementation(() => new Promise(resolve => { resolveReport = resolve; }));
+    let latch: string | null = null;
+
+    const propsA = (): React.ComponentProps<typeof PublicPlayerProfile> => ({
+      publicPlayerId: "peer-a",
+      reportUnknown: latch === reportUnknownScopeKey("viewer", "peer-a"),
+      onReportUnknown: scope => { latch = scope; },
+    });
+    renderProfile(propsA());
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    hooks.cursor = 0;
+    let tree = PublicPlayerProfile(propsA());
+    activate(tree, "Пожаловаться");
+    hooks.cursor = 0;
+    tree = PublicPlayerProfile(propsA());
+    const form = nodes(tree).find(n => n.type === "form")!;
+    const pending = (form.props.onSubmit as (e: { preventDefault(): void }) => Promise<void>)({ preventDefault() {} });
+
+    // Radar games/collapse unmounts the body before the POST settles.
+    hooks.cleanups.forEach(fn => fn?.());
+    resetHooks();
+    resolveReport({ ok: false, status: 503, error: "upstream" });
+    await pending;
+    expect(latch).toBe(reportUnknownScopeKey("viewer", "peer-a"));
+    expect(api.createAbuseReport).toHaveBeenCalledTimes(1);
+
+    api.getMe.mockResolvedValue({ ok: true, status: 200, data: { id: "viewer", csrfToken: "csrf", displayName: "Viewer", locale: "ru", linkedProviders: [] } });
+    api.getPlayer.mockResolvedValue({ ok: true, status: 200, data: { ...player, publicPlayerId: "peer-b", displayName: "Другой" } });
+    api.listCities.mockResolvedValue({ ok: true, status: 200, data: { items: [{ id: "city", nameRu: "Москва" }] } });
+    api.createAbuseReport.mockResolvedValue({ ok: true, status: 200, data: {} });
+
+    const propsB = (): React.ComponentProps<typeof PublicPlayerProfile> => ({
+      publicPlayerId: "peer-b",
+      reportUnknown: latch === reportUnknownScopeKey("viewer", "peer-b"),
+      onReportUnknown: scope => { latch = scope; },
+    });
+    // Other peer is not latched by peer-a's pending/unknown result.
+    expect(propsB().reportUnknown).toBe(false);
+    await openAndSubmit(propsB());
+    expect(api.createAbuseReport).toHaveBeenCalledTimes(2);
+
+    resetHooks();
+    api.getPlayer.mockResolvedValue({ ok: true, status: 200, data: { ...player, publicPlayerId: "peer-a", displayName: "Мария Л." } });
+    api.createAbuseReport.mockResolvedValue({ ok: false, status: 0, error: "network" });
+    await openAndSubmit(propsA());
+    // Original peer keeps the unknown latch — no third POST.
+    expect(api.createAbuseReport).toHaveBeenCalledTimes(2);
+  });
+
+  it("viewer/peer scope key does not transfer a latch to another pair", () => {
+    expect(reportUnknownScopeKey("viewer", "peer")).not.toBe(reportUnknownScopeKey("other", "peer"));
+    expect(reportUnknownScopeKey("viewer", "peer")).not.toBe(reportUnknownScopeKey("viewer", "other"));
   });
 });
