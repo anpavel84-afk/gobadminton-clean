@@ -41,7 +41,7 @@
   .g2-map-header { left:8px; right:8px; padding:8px; gap:8px; }.g2-map-header > span strong { font-size:14px; }.g2-map-header > span small { font-size:10px; }.g2-map-header .radar-entry .toggle-row > span { display:none; }.g2-map-back { font-size:13px; }
   .g2-map-camera,.g2-map-summary { top:88px; }.g2-map-summary { left:8px; padding:8px; }.g2-map-summary small { max-width:220px; }
   .g2-map-panel { top:auto; bottom:calc(36px + env(safe-area-inset-bottom,0px)); left:0; right:0; width:100%; max-width:100%; max-height:30dvh; border-radius:28px 28px 0 0; padding:8px 16px 16px; transition:max-height 220ms var(--gb-ease); }
-  .g2-map-panel.is-expanded { max-height:68dvh; }.g2-map-panel > header { touch-action:none; justify-content:space-between; }.g2-sheet-handle { display:block; flex:1; }.g2-map-panel .unified-preview > .avatar { display:none; }.g2-map-panel h2 { margin:0 0 8px; }
+  .g2-map-panel.is-expanded { max-height:68dvh; }.g2-map-panel > header { touch-action:none; justify-content:space-between; }.g2-sheet-handle { display:block; flex:1; }.g2-map-panel h2 { margin:0 0 8px; }
 }
 @media(prefers-reduced-motion:reduce) { .g2-radar-map * { transition:none !important; } }
 
@@ -125,17 +125,53 @@ svg.gb-venue-court-glyph { width:28px; height:28px; border-radius:0; box-shadow:
 .gb-fullscreen-map-viewport .gb-games-map > .gb-map-sr-only,
 .gb-map-sr-only { position:absolute; width:1px; height:1px; margin:-1px; padding:0; border:0; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
 
-/* Bounded on-map detail composition: existing panel, Avatar, Button, GameCover. */
+/* Bounded on-map detail: Style Guide RadarPlayerPreview + CompactUpcomingGame over panel. */
 .g2-map-panel:not(.is-expanded) { bottom:auto; max-height:50dvh; }
+.unified-preview.is-compact { padding:0; }
+.unified-preview__compact.radar-player-preview {
+  padding:14px; border:1px solid var(--gb-line); border-radius:var(--gb-radius);
+  background:var(--gb-paper); display:grid; grid-template-columns:auto minmax(0,1fr); gap:12px; align-items:center;
+}
+.unified-preview__compact > .avatar { width:56px; height:56px; flex:none; }
+.unified-preview__compact-body { min-width:0; }
+.unified-preview__title-row { display:flex; align-items:center; gap:7px; flex-wrap:wrap; }
+.unified-preview__compact h2 { margin:0; font-size:18px; font-weight:700; overflow-wrap:anywhere; }
+.unified-preview__compact strong { display:block; margin-top:4px; font-size:12px; }
+.unified-preview__compact p { margin:6px 0 0; color:var(--gb-ink-soft); font-size:12px; line-height:1.4; }
+.unified-preview__compact > .gb-c23-btn { grid-column:1 / -1; width:100%; min-height:40px; }
+.unified-preview__expanded { display:grid; gap:16px; }
+.unified-preview__hero {
+  min-height:160px; border-radius:var(--gb-radius); background:var(--gb-lime);
+  display:grid; place-items:center; overflow:hidden;
+}
+.unified-preview__hero .avatar { width:112px; height:112px; border-width:6px; font-size:28px; }
+.unified-preview__expanded-copy { display:grid; gap:8px; }
+.unified-preview__expanded-copy h2 { margin:0; font-size:22px; overflow-wrap:anywhere; }
+.unified-preview__meta-row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+.unified-preview__privacy { margin:4px 0 0; color:var(--gb-ink-soft); font-size:12px; }
+.unified-preview__games-head { display:grid; gap:2px; }
+.unified-preview__games-head small { color:var(--gb-purple); text-transform:uppercase; letter-spacing:.07em; font-size:11px; }
+.unified-preview__games-head h3 { margin:0; font-size:18px; }
 .g2-player-games { list-style:none; margin:0; padding:0; display:grid; gap:12px; }
-.g2-player-games li { display:flex; gap:12px; padding:12px 0; border-top:1px solid var(--gb-line); }
-.g2-player-games .gb-venue-cover { width:88px; height:64px; flex:none; overflow:hidden; border-radius:var(--gb-radius-sm); }
-.g2-player-games li > div { min-width:0; overflow-wrap:anywhere; }
-.g2-player-games p { margin:4px 0; }
-.g2-player-games a { color:var(--gb-purple); font-weight:600; }
+.g2-player-games li.upcoming-game-row,
+.g2-player-games .upcoming-game-row {
+  display:grid; grid-template-columns:90px minmax(0,1fr); gap:12px; align-items:center;
+  margin:0; padding:12px 14px 12px 0; border:1px solid var(--gb-line); border-radius:var(--gb-radius-sm); background:var(--gb-white);
+}
+.g2-player-games .gb-venue-cover { width:90px; height:100%; min-height:96px; flex:none; overflow:hidden; border-radius:var(--gb-radius-sm); }
+.g2-player-games li > div { min-width:0; overflow-wrap:anywhere; display:grid; gap:4px; }
+.g2-player-games h4 { margin:0; font-size:16px; font-weight:700; overflow-wrap:anywhere; }
+.g2-player-games p { margin:0; color:var(--gb-ink-soft); font-size:12px; }
+.g2-player-games strong { font-size:12px; }
+.g2-player-games .gb-c23-btn { grid-column:1 / -1; width:calc(100% - 14px); margin:0 0 0 14px; }
 .gb-radar-layer button:focus-visible,.gb-radar-layer a:focus-visible { outline:3px solid var(--gb-purple); outline-offset:3px; }
+@media(min-width:721px) {
+  .g2-player-games li.upcoming-game-row { grid-template-columns:110px minmax(0,1fr) auto; padding-right:0; }
+  .g2-player-games .gb-c23-btn { grid-column:auto; width:auto; margin:0 16px 0 0; }
+}
 @media(max-width:720px) {
   .g2-map-panel:not(.is-expanded) { bottom:calc(36px + env(safe-area-inset-bottom,0px)); max-height:30dvh; }
+  .g2-map-panel:not(.is-expanded) .unified-preview__compact { box-shadow:none; border:0; background:transparent; padding:4px 0 0; }
 }
 @media(prefers-reduced-motion:reduce) { .gb-radar-layer .g2-map-panel { transition:none; } }
 
