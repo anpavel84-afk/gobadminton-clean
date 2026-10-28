@@ -658,7 +658,12 @@ it("direct A→B reuses owned history; delayed retirement cannot close B", async
   (nodes(tree).find(n => n.type === VenuePopup)!.props.onDeselect as () => void)();
   tree = renderRadar();
   expect(controller.view.selected).toBeNull();
+  expect(pendingBacks.length).toBe(1);
+  pendingBacks.splice(0).forEach(fn => fn());
+  tree = renderRadar();
   expect(historyStack.length).toBe(baseline);
+  expect(window.history.state.gbRadarPreview).toBeUndefined();
+  expect(controller.view.selected).toBeNull();
   await selectingB;
 });
 
@@ -700,7 +705,12 @@ it("venue→new player before pending retirement popstate keeps the new player",
   (nodes(tree).find(n => n.type === VenuePopup)!.props.onDeselect as () => void)();
   tree = renderRadar();
   expect(controller.view.selected).toBeNull();
+  expect(pendingBacks.length).toBe(1);
+  pendingBacks.splice(0).forEach(fn => fn());
+  tree = renderRadar();
   expect(historyStack.length).toBe(baseline);
+  expect(window.history.state.gbRadarPreview).toBeUndefined();
+  expect(controller.view.selected).toBeNull();
   await selectingB;
 });
 
