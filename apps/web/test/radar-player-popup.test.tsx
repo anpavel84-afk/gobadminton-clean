@@ -168,9 +168,9 @@ beforeEach(async () => {
   context.config = { exposureMode: "live", unifiedDirectory: { enabled: true }, cities: [{ cityId: MOSCOW_BUNDLE.cityId, map: { availability: "dev_preview", mapId: "moscow", version: MOSCOW_BUNDLE.version } }] };
 });
 afterEach(() => {
-  hooks.use("radar"); hooks.cleanups.forEach(fn => fn?.());
-  hooks.use("map"); hooks.cleanups.forEach(fn => fn?.());
-  hooks.use("preview"); hooks.cleanups.forEach(fn => fn?.());
+  // Invoke and clear fiber cleanups while stubbed window/document still exist;
+  // otherwise next beforeEach hooks.reset() would replay stale cleanups after unstub.
+  hooks.reset();
   controller.dispose(); vi.unstubAllGlobals(); vi.useRealTimers();
 });
 
