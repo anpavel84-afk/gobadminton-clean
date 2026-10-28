@@ -3,6 +3,7 @@ name: Lean Mode B delivery
 # on default main for true schedule/comment events; PMA publishes ONLY the reviewed
 # workflow file to main after source CI on dev. Integration remains branch dev.
 # Concurrency distinct from gobadminton-dev so this never blocks DEV deploy.
+# Fixed accepted client SHA required via vars.LEAN_CLIENT_SHA — no github.sha fallback.
 on:
   schedule:
     - cron: '*/15 * * * *'
@@ -11,9 +12,9 @@ on:
   workflow_dispatch:
     inputs:
       action:
-        description: 'status | recover'
+        description: 'status | recover | advance'
         type: choice
-        options: [status, recover]
+        options: [status, recover, advance]
         default: status
       recover_kind:
         description: 'push | merge | deploy (recover only)'
@@ -42,6 +43,7 @@ jobs:
   lean:
     if: >-
       github.repository_id == 1416250340 &&
+      vars.LEAN_CLIENT_SHA != '' &&
       (
         github.event_name == 'schedule' ||
         github.event_name == 'workflow_dispatch' &&
@@ -55,11 +57,14 @@ jobs:
     # Environment secrets (DEPLOY_*) only with fixed reviewed client; never Issue head.
     environment: dev
     steps:
-      - name: Checkout fixed reviewed client (not untrusted Issue head)
+      - name: Require fixed accepted client SHA
+        run: |
+          test -n "${{ vars.LEAN_CLIENT_SHA }}"
+          echo "${{ vars.LEAN_CLIENT_SHA }}" | grep -E '^[0-9a-f]{40}$'
+      - name: Checkout fixed reviewed client (not untrusted Issue head, not moving github.sha)
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          # PMA may pin LEAN_CLIENT_SHA / repository variable after review.
-          ref: ${{ vars.LEAN_CLIENT_SHA || github.sha }}
+          ref: ${{ vars.LEAN_CLIENT_SHA }}
           persist-credentials: false
       - name: One bounded Lean reconcile via existing SSH transport
         run: python3 -I -B tools/train/client.py reconcile
@@ -67,7 +72,7 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}/tools/train
           GH_TOKEN: ${{ github.token }}
           GITHUB_ACTOR_ID: ${{ github.actor_id }}
-          LEAN_CLIENT_SHA: ${{ vars.LEAN_CLIENT_SHA || '' }}
+          LEAN_CLIENT_SHA: ${{ vars.LEAN_CLIENT_SHA }}
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_PORT: ${{ vars.DEPLOY_PORT }}
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}

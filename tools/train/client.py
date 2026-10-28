@@ -6,6 +6,8 @@ Actions → VPS SSH. PMA must not SSH to itself. Uses existing secret profile
 DEPLOY_* and forced SSH user gb-deploy-dev. GITHUB_TOKEN is for API identity
 checks only — publication uses trusted gh as UID1002 on the host, never
 GITHUB_TOKEN for push (which does not wake CI).
+
+Requires fixed accepted LEAN_CLIENT_SHA — no fallback to moving github.sha.
 """
 from __future__ import annotations
 
@@ -24,7 +26,8 @@ ACTIONS_BOT_ID = 41898282
 REPO = 'anpavel84-afk/gobadminton-clean'
 REPO_ID = 1416250340
 WORKFLOW_PATH = '.github/workflows/lean-delivery.yml'
-CONCURRENCY_GROUP = 'gobadminton-lean-delivery'  # distinct from gobadminton-dev
+CONCURRENCY_GROUP = 'gobadminton-lean-delivery'
+SHA40 = re.compile(r'^[0-9a-f]{40}$')
 
 
 class Refused(Exception):
@@ -80,14 +83,12 @@ class SSH:
         self.temp.cleanup()
 
     def __call__(self, req, timeout=2400):
-        # Child SSH has no API/model credentials. JSON private stdin is never logged.
         proc = subprocess.run(
             self.argv, input=json.dumps(req, sort_keys=True), text=True,
             capture_output=True, timeout=timeout,
             env={'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8'},
         )
         need(len(proc.stdout) <= 2097152, 'SSH response too large')
-        # Never print stderr if it might echo secrets — bound and classify only.
         try:
             value = loads(proc.stdout) if proc.stdout.strip() else {'status': 'empty'}
         except (ValueError, Refused):
@@ -118,7 +119,9 @@ def trusted_event(event, name):
     return True
 
 
-def lean_request(event_name, workflow_sha, client_sha=None):
+def lean_request(event_name, workflow_sha, client_sha):
+    need(isinstance(client_sha, str) and SHA40.fullmatch(client_sha),
+         'client_sha required (fixed accepted SHA; no github.sha fallback)')
     req = {
         'action': 'lean',
         'run_id': int(os.environ['GITHUB_RUN_ID']),
@@ -127,14 +130,12 @@ def lean_request(event_name, workflow_sha, client_sha=None):
         'repository_id': REPO_ID,
         'actor_id': int(os.environ.get('GITHUB_ACTOR_ID') or (
             OWNER_ID if os.environ.get('GITHUB_ACTOR') == 'anpavel84-afk' else ACTIONS_BOT_ID)),
-        'ref': os.environ.get('GITHUB_REF') or 'refs/heads/dev',
+        'ref': os.environ.get('GITHUB_REF') or 'refs/heads/main',
         'event_name': event_name,
         'workflow_sha': workflow_sha,
+        'client_sha': client_sha,
         'status': 'requested',
     }
-    if client_sha:
-        need(re.fullmatch(r'[0-9a-f]{40}', client_sha), 'invalid client_sha')
-        req['client_sha'] = client_sha
     return req
 
 
@@ -155,10 +156,10 @@ def wait_with_keepalive(ssh, req, *, deadline_s=2300, poll_s=20):
                 'ref': req['ref'],
                 'event_name': 'workflow_dispatch',
                 'workflow_sha': req['workflow_sha'],
+                'client_sha': req['client_sha'],
                 'status': 'queued',
             })
         except Refused as err:
-            # Disconnect: do not invent success; durable host intent remains.
             return {'status': 'unknown', 'reason': str(err), 'recovery': 'read_host_intent'}
     need(value.get('status') != 'running', 'bounded lean wait expired')
     return value
@@ -166,8 +167,8 @@ def wait_with_keepalive(ssh, req, *, deadline_s=2300, poll_s=20):
 
 def reconcile():
     need(os.environ.get('GITHUB_REPOSITORY') == REPO, 'trusted repository only')
-    # Execution environment is DEV; workflow file may live on main for events.
     ref = os.environ.get('GITHUB_REF') or ''
+    # Workflow events default on main; product integration remains on dev.
     need(ref in ('refs/heads/dev', 'refs/heads/main') or ref.startswith('refs/heads/'),
          'unexpected ref')
     event_path = Path(os.environ['GITHUB_EVENT_PATH'])
@@ -175,14 +176,10 @@ def reconcile():
     name = os.environ['GITHUB_EVENT_NAME']
     trusted_event(event, name)
     workflow_sha = workflow_file_sha256()
-    client_sha = subprocess.check_output(
-        ['/usr/bin/git', 'rev-parse', 'HEAD'], text=True).strip()
-    # Prefer reviewed fixed client SHA from env when installer/PMA pins it.
-    pinned = os.environ.get('LEAN_CLIENT_SHA')
-    if pinned:
-        need(re.fullmatch(r'[0-9a-f]{40}', pinned), 'invalid LEAN_CLIENT_SHA')
-        client_sha = pinned
-    req = lean_request(name, workflow_sha, client_sha=client_sha)
+    # Fixed accepted client SHA required — refuse moving github.sha fallback.
+    pinned = os.environ.get('LEAN_CLIENT_SHA') or ''
+    need(SHA40.fullmatch(pinned), 'LEAN_CLIENT_SHA required (fixed accepted client; no github.sha fallback)')
+    req = lean_request(name, workflow_sha, client_sha=pinned)
     Path('evidence').mkdir(exist_ok=True)
     Path('evidence/lean-request.json').write_text(json.dumps(req, sort_keys=True) + '\n')
     with SSH() as ssh:

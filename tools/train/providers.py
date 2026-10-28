@@ -4,6 +4,8 @@
 Stdlib-only. Reuses installed native transport utilities when present; does not
 enable C5 policy, open historical #29 grants, or claim READY from this module.
 Real paid model calls happen only after reviewed install + PMA commissioning.
+Intents are saved before any side-effecting call. UNKNOWN timeouts are not
+blindly replayed.
 """
 from __future__ import annotations
 
@@ -96,7 +98,6 @@ def _import_native(name):
     import importlib.util
     path = NATIVE_TRAIN / f'{name}.py'
     if not path.is_file():
-        # Source-tree fallback for unit tests / pre-install review only.
         alt = Path(__file__).resolve().parents[2] / 'scripts' / 'chatops' / 'actions_train' / f'{name}.py'
         path = alt if alt.is_file() else path
     if not path.is_file():
@@ -130,6 +131,13 @@ def read_ready_marker(path):
         return None
     if value.get('phase') != 'ready':
         return None
+    # Readiness must bind accepted model/CLI/version/adapter/executor/credential.
+    required = ('role', 'model', 'cli', 'cli_sha256', 'adapter', 'executor_uid',
+                'credential_identity', 'verified_terminal_verdict')
+    if any(not value.get(k) for k in required):
+        return None
+    if value.get('verified_terminal_verdict') not in ('PASS', 'FAIL'):
+        return None
     return value
 
 
@@ -147,6 +155,8 @@ def role_ready(role):
     marker = read_ready_marker(path)
     if marker is None:
         return False, f'{role} READY marker absent or not verified'
+    if marker.get('role') != role:
+        return False, 'role mismatch in READY marker'
     return True, marker
 
 
@@ -179,11 +189,11 @@ def charged_agy_calls(issue, day_utc=None):
     rec = read_agy_quota(issue, day_utc)
     charged = int(rec.get('charged_calls') or 0)
     unknown = int(rec.get('unknown_calls') or 0)
-    # Unknown charge counts as unknown, not zero — blocks further AGY until reconciled.
     return charged, unknown, rec
 
 
 def agy_quota_available(issue, limit=5, day_utc=None):
+    """5 charged calls per canonical Issue per UTC day; all roles; no global count."""
     charged, unknown, rec = charged_agy_calls(issue, day_utc)
     if unknown:
         return False, 'agy_quota_unknown_pending_reconcile', rec
@@ -224,68 +234,116 @@ def record_agy_charge(issue, receipt, *, charge='charged', day_utc=None, results
         os.close(fd)
 
 
-def parse_qa_verdict(raw, reviewed_sha, *, model=AGY_MODEL):
-    """Reparse saved output; never a paid call. Bind exact candidate SHA."""
+def _normalize_native_parse(result):
+    """native_antigravity.parse_stream returns (result, evidence), not a dict."""
+    if isinstance(result, tuple) and len(result) == 2:
+        verdict, evidence = result
+        return verdict, evidence
+    if isinstance(result, dict) and 'verdict' in result:
+        return result, {}
+    raise ProviderError('native_parse_shape', type(result).__name__)
+
+
+def parse_agy_stream(raw, reviewed_sha, *, model=AGY_MODEL):
+    """Strict native AGY stream validation. NEVER regex-fallback after native-invalid."""
     if not (isinstance(reviewed_sha, str) and SHA40.fullmatch(reviewed_sha)):
         raise ProviderError('invalid_reviewed_sha')
-    native = None
-    try:
-        native = _import_native('native_antigravity')
-    except ProviderError:
-        native = None
+    native = _import_native('native_antigravity')
+    if not hasattr(native, 'parse_stream'):
+        raise ProviderError('native_parse_stream_missing')
     wire = raw if isinstance(raw, bytes) else raw.encode()
-    # Prefer native parse_stream only for real AGY stream-json; preserve raw for reparse.
-    looks_agy = b'"event":"init"' in wire or b'"event": "init"' in wire
-    if looks_agy and native is not None and hasattr(native, 'parse_stream'):
-        try:
-            result = native.parse_stream(wire, reviewed_sha, model=model)
-            verdict = result if isinstance(result, dict) else getattr(result, '__dict__', {})
-            if 'verdict' in verdict and 'reviewed_sha' in verdict:
-                if verdict['reviewed_sha'] != reviewed_sha:
-                    raise ProviderError('stale_sha_verdict', verdict['reviewed_sha'])
-                return {'verdict': verdict['verdict'], 'findings': list(verdict.get('findings') or []),
-                        'reviewed_sha': reviewed_sha, 'source': 'native_parse_stream', 'charge': 'none'}
-            structured = verdict.get('structured_output') or verdict.get('result') or verdict
-            if isinstance(structured, dict) and 'verdict' in structured:
-                if structured.get('reviewed_sha') != reviewed_sha:
-                    raise ProviderError('stale_sha_verdict', str(structured.get('reviewed_sha')))
-                return {'verdict': structured['verdict'], 'findings': list(structured.get('findings') or []),
-                        'reviewed_sha': reviewed_sha, 'source': 'native_parse_stream', 'charge': 'none'}
-        except ProviderError:
-            raise
-        except Exception as err:
-            # Parser failure after saved output: fall through to lean reparse, never new call.
-            if type(err).__name__ == 'ReviewError' and 'stale' in str(err).lower():
-                raise ProviderError('stale_sha_verdict', str(err)) from err
-            # continue to standalone
-    # Minimal standalone parser for unit tests / compact verdict JSON / native miss.
+    try:
+        parsed = native.parse_stream(wire, reviewed_sha, model=model)
+    except ProviderError:
+        raise
+    except Exception as err:
+        # Native invalid stream: retain raw for local replay; do not regex-fallback.
+        raise ProviderError('agy_native_invalid_stream', type(err).__name__ + ':' + str(err)[:200],
+                            charge='none') from err
+    verdict, evidence = _normalize_native_parse(parsed)
+    if not isinstance(verdict, dict):
+        verdict = getattr(verdict, '__dict__', None) or {}
+    structured = verdict if 'verdict' in verdict else (
+        verdict.get('structured_output') or verdict.get('result') or verdict)
+    if not isinstance(structured, dict) or structured.get('verdict') not in ('PASS', 'FAIL'):
+        raise ProviderError('agy_native_invalid_verdict')
+    if structured.get('reviewed_sha') != reviewed_sha:
+        raise ProviderError('stale_sha_verdict', str(structured.get('reviewed_sha')))
+    return {
+        'verdict': structured['verdict'],
+        'findings': list(structured.get('findings') or []),
+        'reviewed_sha': reviewed_sha,
+        'source': 'native_parse_stream',
+        'charge': 'none',
+        'evidence': evidence if isinstance(evidence, dict) else {},
+    }
+
+
+def parse_codex_final(raw, reviewed_sha):
+    """Codex final exact JSON parsed separately with exact reviewed SHA. No regex hunt."""
+    if not (isinstance(reviewed_sha, str) and SHA40.fullmatch(reviewed_sha)):
+        raise ProviderError('invalid_reviewed_sha')
     text = raw.decode() if isinstance(raw, bytes) else raw
-    # Prefer last JSON object containing verdict.
-    matches = list(re.finditer(r'\{[^{}]*"verdict"[^{}]*\}', text, re.DOTALL))
-    if not matches:
-        # try whole-file JSON lines
-        for line in text.splitlines():
-            line = line.strip()
-            if not line.startswith('{'):
-                continue
-            try:
-                obj = loads(line)
-            except (ValueError, ProviderError):
-                continue
-            if isinstance(obj, dict) and obj.get('verdict') in ('PASS', 'FAIL'):
-                matches = [re.search(re.escape(line), text)] if line in text else matches
-                if obj.get('reviewed_sha') != reviewed_sha:
-                    raise ProviderError('stale_sha_verdict', str(obj.get('reviewed_sha')))
-                return {'verdict': obj['verdict'], 'findings': list(obj.get('findings') or []),
-                        'reviewed_sha': reviewed_sha, 'source': 'lean_jsonl', 'charge': 'none'}
-        raise ProviderError('parse_failed')
-    obj = loads(matches[-1].group(0))
+    text = text.strip()
+    try:
+        obj = loads(text)
+    except (ValueError, ProviderError) as err:
+        # Try last non-empty line if final.txt wraps a single JSON object line.
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        if not lines:
+            raise ProviderError('codex_final_empty') from err
+        try:
+            obj = loads(lines[-1])
+        except (ValueError, ProviderError) as err2:
+            raise ProviderError('codex_final_not_exact_json') from err2
+    if not isinstance(obj, dict):
+        raise ProviderError('codex_final_not_object')
     if obj.get('reviewed_sha') != reviewed_sha:
         raise ProviderError('stale_sha_verdict', str(obj.get('reviewed_sha')))
     if obj.get('verdict') not in ('PASS', 'FAIL'):
         raise ProviderError('invalid_verdict')
+    return {
+        'verdict': obj['verdict'],
+        'findings': list(obj.get('findings') or []),
+        'reviewed_sha': reviewed_sha,
+        'source': 'codex_final_json',
+        'charge': 'none',
+    }
+
+
+def parse_qa_verdict(raw, reviewed_sha, *, model=AGY_MODEL, provider=None):
+    """Reparse saved output; never a paid call. Bind exact candidate SHA.
+
+    AGY native streams use parse_agy_stream (no regex fallback after invalid).
+    Codex finals use parse_codex_final. Compact unit-test JSON only when the
+    payload is clearly not an AGY stream and provider is not agy.
+    """
+    if not (isinstance(reviewed_sha, str) and SHA40.fullmatch(reviewed_sha)):
+        raise ProviderError('invalid_reviewed_sha')
+    wire = raw if isinstance(raw, bytes) else raw.encode()
+    looks_agy = b'"event":"init"' in wire or b'"event": "init"' in wire
+    if provider in ('agy', 'agy_qa', 'antigravity') or looks_agy:
+        return parse_agy_stream(raw, reviewed_sha, model=model)
+    if provider in ('codex', 'codex_sol_medium', 'codex_qa') or (
+            not looks_agy and b'"verdict"' in wire and b'"event"' not in wire):
+        # Prefer exact Codex JSON when not an AGY stream.
+        try:
+            return parse_codex_final(raw, reviewed_sha)
+        except ProviderError:
+            if provider in ('codex', 'codex_sol_medium', 'codex_qa'):
+                raise
+    # Compact standalone JSON for unit tests / lean receipts only (never after AGY native fail).
+    text = wire.decode()
+    try:
+        obj = loads(text.strip())
+    except (ValueError, ProviderError):
+        raise ProviderError('parse_failed')
+    if not isinstance(obj, dict) or obj.get('verdict') not in ('PASS', 'FAIL'):
+        raise ProviderError('parse_failed')
+    if obj.get('reviewed_sha') != reviewed_sha:
+        raise ProviderError('stale_sha_verdict', str(obj.get('reviewed_sha')))
     return {'verdict': obj['verdict'], 'findings': list(obj.get('findings') or []),
-            'reviewed_sha': reviewed_sha, 'source': 'lean_regex', 'charge': 'none'}
+            'reviewed_sha': reviewed_sha, 'source': 'lean_exact_json', 'charge': 'none'}
 
 
 def select_qa_provider(task, *, issue):
@@ -305,22 +363,29 @@ def select_qa_provider(task, *, issue):
     return 'codex_sol_medium', 'default_codex', None
 
 
-def build_agy_landlock_roots(source_ro, private_home, runtime_dirs=None):
-    """Landlock-only confinement roots (no seccomp — run_command needs fork)."""
-    readonly = [Path(p) for p in (
+def build_agy_landlock_roots(source_ro, private_home, private_scratch, runtime_dirs=None):
+    """Landlock-only confinement. No writable global /tmp — private HOME/scratch only."""
+    readonly = []
+    for p in (
         '/usr/bin', '/usr/lib', '/usr/lib64', '/lib', '/lib64', '/usr/share',
         '/etc/ld.so.cache', '/etc/ssl', '/etc/resolv.conf', '/etc/hosts', '/etc/nsswitch.conf',
         '/opt/gb-slots/runtime/antigravity', '/opt/gb-slots/runtime/node',
-        str(source_ro), str(private_home),
-    ) if Path(p).exists()]
+        str(source_ro),
+    ):
+        if Path(p).exists():
+            readonly.append(Path(p))
     for extra in runtime_dirs or ():
         p = Path(extra)
         if p.exists():
             readonly.append(p)
-    writable = [Path(private_home)]
-    for p in ('/dev/null', '/dev/urandom', '/dev/random', '/tmp'):
+    # Readonly snapshot of credentials dir metadata only when present as file parent.
+    if AGY_AUTH.parent.exists():
+        readonly.append(AGY_AUTH.parent)
+    writable = [Path(private_home), Path(private_scratch)]
+    for p in ('/dev/null', '/dev/urandom', '/dev/random'):
         if Path(p).exists():
             writable.append(Path(p))
+    # Explicit: global /tmp is NOT writable.
     executables = [Path(p) for p in (
         '/usr/bin', '/usr/lib', '/usr/lib64', '/lib', '/lib64',
         '/opt/gb-slots/runtime/antigravity', AGY_CLI,
@@ -329,19 +394,29 @@ def build_agy_landlock_roots(source_ro, private_home, runtime_dirs=None):
 
 
 def agy_child_preexec(readonly, writable, executables, *, uid=AGY_UID, gid=AGY_GID):
-    """UID978 child: setuid/groups, nnp, zero caps, Landlock — not seccomp."""
+    """UID978/GID968 child: setuid/groups, nnp, zero caps, Landlock — not seccomp.
+
+    native_guard.restrict adds seccomp that blocks fork/run_command; AGY needs
+    the existing _landlock primitive only.
+    """
     def _child():
         os.setgroups([65042])
         os.setgid(gid)
         os.setuid(uid)
-        # Drop ambient/capabilities best-effort without requiring priv reclaim.
         try:
             import ctypes
             libc = ctypes.CDLL(None, use_errno=True)
             libc.prctl(38, 1, 0, 0, 0)  # no_new_privs
+            # Best-effort zero capabilities (ambient + bounding).
+            for cap in range(0, 64):
+                try:
+                    libc.prctl(24, cap, 0, 0, 0)  # PR_CAPBSET_DROP
+                except Exception:
+                    break
         except Exception:
             pass
         guard = _import_native('native_guard')
+        # Use _landlock only — never restrict() (seccomp blocks fork).
         guard._landlock(readonly, writable, executables)
     return _child
 
@@ -382,6 +457,30 @@ def prepare_qa_intent(task, candidate_sha, provider, evidence_dir):
     return intent, path
 
 
+def prepare_operation_intent(kind, payload, evidence_dir):
+    """Save raw/operation intent before any GitHub or model side effect."""
+    intent = {
+        'schema': 'GB_LEAN_OPERATION_INTENT_V1',
+        'kind': kind,
+        'payload': payload,
+        'phase': 'prepared',
+        'started_at': int(time.time()),
+    }
+    path = Path(evidence_dir) / f'op-intent-{kind}-{int(time.time())}.json'
+    atomic_write(path, intent, 0o600)
+    return intent, path
+
+
+def mark_intent_phase(path, phase, **extra):
+    rec = loads(Path(path).read_bytes())
+    rec['phase'] = phase
+    rec.update(extra)
+    if phase in ('UNKNOWN', 'timeout'):
+        rec['no_blind_replay'] = True
+    atomic_write(path, rec, 0o600)
+    return rec
+
+
 def fingerprint_findings(findings):
     norm = sorted(str(f).strip() for f in (findings or []) if str(f).strip())
     return hashlib.sha256(json.dumps(norm, separators=(',', ':')).encode()).hexdigest()
@@ -394,6 +493,80 @@ def progress_halt(previous_fingerprints, findings):
     return len(hits) >= 2, fp
 
 
+def invoke_cursor_author(*, task, worktree, evidence_dir, launcher=None, parent_lease=True):
+    """Bounded Cursor author call via injected launcher (Mode A pattern).
+
+    parent_lease=True means the controller already holds the one writer lease —
+    do not nest a second acquisition inside the launcher.
+    """
+    intent, intent_path = prepare_cursor_author_intent(task, worktree, evidence_dir)
+    if launcher is None:
+        mark_intent_phase(intent_path, 'HOLD_launcher_absent')
+        raise ProviderError('cursor_launcher_absent', 'PMA supplies existing Mode A launcher')
+    mark_intent_phase(intent_path, 'launching', parent_lease=bool(parent_lease))
+    try:
+        result = launcher(task=task, worktree=worktree, evidence_dir=evidence_dir,
+                          intent_path=str(intent_path), parent_lease=True)
+    except TimeoutError as err:
+        mark_intent_phase(intent_path, 'UNKNOWN', error='timeout')
+        raise ProviderError('cursor_timeout_unknown', str(err), charge='unknown') from err
+    except Exception as err:
+        mark_intent_phase(intent_path, 'HOLD_no_automatic_replay', error_type=type(err).__name__)
+        raise
+    sha = result.get('candidate_sha')
+    if not (isinstance(sha, str) and SHA40.fullmatch(sha)):
+        raise ProviderError('author_missing_candidate_sha')
+    mark_intent_phase(intent_path, 'completed', candidate_sha=sha)
+    return result
+
+
+def invoke_codex_qa(*, task, candidate_sha, evidence_dir, launcher=None):
+    """Independent Codex Sol Medium QA via injected launcher (Mode A pattern)."""
+    intent, intent_path = prepare_qa_intent(task, candidate_sha, 'codex_sol_medium', evidence_dir)
+    if launcher is None:
+        mark_intent_phase(intent_path, 'HOLD_launcher_absent')
+        raise ProviderError('codex_launcher_absent', 'PMA supplies existing Mode A launcher')
+    mark_intent_phase(intent_path, 'launching')
+    try:
+        raw_or_result = launcher(task=task, candidate_sha=candidate_sha,
+                                 evidence_dir=evidence_dir, intent_path=str(intent_path))
+    except TimeoutError as err:
+        mark_intent_phase(intent_path, 'UNKNOWN', error='timeout')
+        raise ProviderError('qa_timeout_unknown', str(err), charge='unknown') from err
+    except Exception as err:
+        mark_intent_phase(intent_path, 'HOLD_no_automatic_replay', error_type=type(err).__name__)
+        raise
+    if isinstance(raw_or_result, dict) and raw_or_result.get('verdict') in ('PASS', 'FAIL'):
+        if raw_or_result.get('reviewed_sha') != candidate_sha:
+            raise ProviderError('stale_sha_verdict', str(raw_or_result.get('reviewed_sha')))
+        mark_intent_phase(intent_path, 'completed', verdict=raw_or_result['verdict'])
+        return dict(raw_or_result, charge=raw_or_result.get('charge', 'charged'))
+    raw = raw_or_result if isinstance(raw_or_result, (bytes, str)) else raw_or_result.get('raw', '')
+    parsed = parse_codex_final(raw, candidate_sha)
+    parsed['charge'] = 'charged'
+    mark_intent_phase(intent_path, 'completed', verdict=parsed['verdict'])
+    return parsed
+
+
+def invoke_trusted_publish(*, kind, payload, evidence_dir, publisher=None):
+    """Trusted UID1002 gh publication — never GITHUB_TOKEN push."""
+    intent, intent_path = prepare_operation_intent(kind, payload, evidence_dir)
+    if publisher is None:
+        mark_intent_phase(intent_path, 'HOLD_publisher_absent')
+        raise ProviderError('publisher_absent', 'UID1002 gh publisher required')
+    mark_intent_phase(intent_path, 'launching')
+    try:
+        result = publisher(kind=kind, payload=payload, intent_path=str(intent_path))
+    except TimeoutError as err:
+        mark_intent_phase(intent_path, 'UNKNOWN', error='timeout')
+        raise ProviderError('publish_timeout_unknown', str(err), charge='unknown') from err
+    except Exception as err:
+        mark_intent_phase(intent_path, 'HOLD_no_automatic_replay', error_type=type(err).__name__)
+        raise
+    mark_intent_phase(intent_path, 'completed', result_keys=sorted(result))
+    return result
+
+
 # Explicit: this author pass does not claim AGY/Cursor/Codex READY and does not
 # invoke paid model CLIs. PMA owns real provider proof after install.
 AUTHOR_PASS_CLAIMS = {
@@ -401,5 +574,5 @@ AUTHOR_PASS_CLAIMS = {
     'agy_author_ready': False,
     'mode_b_active': False,
     'model_calls': 0,
-    'note': 'source-only OD017; READY/qualification deferred to PMA commissioning',
+    'note': 'source-only OD017 pass2; READY/qualification deferred to PMA commissioning',
 }

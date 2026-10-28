@@ -2,7 +2,8 @@
 # Lean Mode B DEV Actions dispatch snippet (OD-017).
 # Addressed by installer into /usr/local/sbin/gb-deploy-helper.sh when the
 # ENV=dev ACTION=lean branch is applied. Standalone reference for PMA review.
-# Preserves train/dev/prod behavior; does not grant models root.
+# Resolves root-owned regular-file current pointer → releases/<SHA>/host.py
+# (no symlink ancestors — trusted() contract). Preserves train/dev/prod.
 set -Eeuo pipefail
 umask 077
 export PATH=/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8 LC_ALL=C.UTF-8
@@ -20,9 +21,13 @@ jq -e 'type=="object" and (.action|type=="string")' <<<"$REQUEST" >/dev/null || 
 ACTION=$(jq -r .action <<<"$REQUEST")
 [[ $ACTION == lean ]] || fail 'action must be lean'
 
-HOST=/usr/local/lib/gobadminton-lean/current/tools/train/host.py
+LEAN_PTR=/usr/local/lib/gobadminton-lean/current
+[[ -f $LEAN_PTR && ! -L $LEAN_PTR ]] || fail "lean current pointer missing: $LEAN_PTR"
+LEAN_SHA=$(tr -d '[:space:]' <"$LEAN_PTR")
+[[ $LEAN_SHA =~ ^[0-9a-f]{40}$ ]] || fail "lean current pointer invalid: $LEAN_SHA"
+HOST=/usr/local/lib/gobadminton-lean/releases/$LEAN_SHA/tools/train/host.py
 [[ -f $HOST && ! -L $HOST ]] || fail "missing fixed host entry: $HOST"
-# trusted parents: root-owned, not group/world writable
+# trusted parents: root-owned, not group/world writable, no symlink ancestors
 p=$HOST
 while :; do
   [[ ! -L $p ]] || fail "symlink: $p"

@@ -2,9 +2,10 @@
 """Root installer for Lean Mode B. PMA-only after independent QA+CI on exact Git SHA.
 
 selected accepted commit → Git blobs → root-owned versioned release directory
-/usr/local/lib/gobadminton-lean/releases/SHA + pointer/current + config enabled=false
-until explicit commission. Backup/rollback of only touched files. Does not patch
-PROD config/secret/sudoers/services or grant models root.
+/usr/local/lib/gobadminton-lean/releases/SHA + regular-file current pointer
+(content = SHA; NOT a symlink — trusted() forbids symlink ancestors) + config
+enabled=false until explicit commission. Backup/rollback of only touched files.
+Does not claim MODE_B_ACTIVE before two real tasks. Does not patch PROD.
 """
 from __future__ import annotations
 
@@ -23,7 +24,7 @@ from pathlib import Path
 REPO = 'anpavel84-afk/gobadminton-clean'
 INSTALL_ROOT = Path('/usr/local/lib/gobadminton-lean')
 RELEASES = INSTALL_ROOT / 'releases'
-CURRENT = INSTALL_ROOT / 'current'
+CURRENT = INSTALL_ROOT / 'current'  # regular file pointer, not symlink
 CONFIG_DIR = Path('/etc/gobadminton-lean')
 CONFIG = CONFIG_DIR / 'config.json'
 STATE_ROOT = Path('/var/lib/gobadminton-lean')
@@ -32,7 +33,6 @@ HELPER_BACKUP = Path('/var/lib/gobadminton-lean/backup/gb-deploy-helper.sh')
 MONITOR_PROJECTION = Path('/var/lib/gb-ops-monitor/lean-mode-b.json')
 SHA40 = re.compile(r'^[0-9a-f]{40}$')
 
-# Source files installed from the accepted commit (OD017 allowed set + receiver).
 INSTALL_FILES = (
     'tools/train/run.py',
     'tools/train/providers.py',
@@ -40,11 +40,12 @@ INSTALL_FILES = (
     'tools/train/install.py',
     'tools/train/client.py',
     'tools/train/test_train.py',
+    'tools/train/monitor.py',
     '.github/workflows/lean-delivery.yml',
     'scripts/chatops/lean-delivery-receiver.sh',
-    'AGENTS.md',
     'docs/handoffs/OD-017-lean-mode-b.md',
 )
+
 
 class InstallError(RuntimeError):
     pass
@@ -86,6 +87,7 @@ def trusted_parents(path):
         info = parent.lstat()
         need(stat.S_ISDIR(info.st_mode) and info.st_uid == 0 and not info.st_mode & 0o022,
              f'untrusted parent {parent}')
+        need(not parent.is_symlink(), f'symlink parent refused {parent}')
 
 
 def atomic_write(path, data, mode=0o644, uid=0, gid=0):
@@ -119,6 +121,7 @@ def ensure_layout():
         d.mkdir(parents=True, exist_ok=True)
         os.chown(d, 0, 0)
         os.chmod(d, mode)
+        need(not d.is_symlink(), f'layout symlink refused {d}')
 
 
 def collect_blobs(repo, sha):
@@ -136,7 +139,6 @@ def collect_blobs(repo, sha):
 def write_release(sha, blobs):
     dest = RELEASES / sha
     if dest.exists():
-        # Concurrent install check: refuse dirty partial tree.
         need(dest.is_dir() and not dest.is_symlink(), 'release path conflict')
         meta = dest / 'RELEASE.json'
         if meta.is_file():
@@ -144,7 +146,8 @@ def write_release(sha, blobs):
             need(existing.get('sha') == sha, 'release SHA mismatch')
             for rel, info in blobs.items():
                 path = dest / rel
-                need(path.is_file() and sha256_bytes(path.read_bytes()) == info['sha256'],
+                need(path.is_file() and not path.is_symlink()
+                     and sha256_bytes(path.read_bytes()) == info['sha256'],
                      f'installed bytes drift {rel}')
             return dest, False
     staging = RELEASES / f'.staging-{sha}-{os.getpid()}'
@@ -165,10 +168,12 @@ def write_release(sha, blobs):
             'files': {rel: {'sha256': b['sha256'], 'bytes': b['bytes']} for rel, b in blobs.items()},
             'installed_at': int(time.time()),
             'enabled_default': False,
+            'pointer': 'regular_file_current',
         }
         atomic_write(staging / 'RELEASE.json', json.dumps(meta, sort_keys=True, indent=2) + '\n', 0o644)
         os.rename(staging, dest)
         os.chown(dest, 0, 0)
+        need(not dest.is_symlink(), 'release became symlink')
         return dest, True
     except BaseException:
         if staging.exists():
@@ -177,22 +182,55 @@ def write_release(sha, blobs):
 
 
 def point_current(sha):
+    """Root-owned exact current→releases/<acceptedSHA> pointer as a regular file.
+
+    Content is the 40-hex SHA. Never a symlink (trusted() forbids symlink ancestors
+    when resolving releases/<SHA>/tools/train/host.py).
+    """
     dest = RELEASES / sha
-    need(dest.is_dir(), 'release missing')
-    # Symlink/owner/type checks.
-    tmp = INSTALL_ROOT / f'.current-tmp-{os.getpid()}'
-    if tmp.exists() or tmp.is_symlink():
-        tmp.unlink()
-    os.symlink(str(dest), tmp)
-    os.replace(tmp, CURRENT)
-    need(CURRENT.is_symlink() and Path(os.readlink(CURRENT)).name == sha
-         or Path(os.readlink(CURRENT)) == dest, 'current pointer failed')
+    need(dest.is_dir() and not dest.is_symlink(), 'release missing')
+    # Remove legacy symlink if a previous candidate left one.
+    if CURRENT.is_symlink() or CURRENT.exists():
+        if CURRENT.is_symlink() or CURRENT.is_file():
+            CURRENT.unlink()
+        elif CURRENT.is_dir():
+            raise InstallError('current is a directory; refuse blind replace')
+    atomic_write(CURRENT, sha + '\n', mode=0o644)
+    need(CURRENT.is_file() and not CURRENT.is_symlink(), 'current pointer must be regular file')
+    need(CURRENT.read_text(encoding='utf-8').strip() == sha, 'current pointer write failed')
+    info = CURRENT.stat()
+    need(info.st_uid == 0 and not info.st_mode & 0o022, 'current pointer untrusted')
+    # Validate resolved codepath has no symlink ancestors.
+    host = dest / 'tools/train/host.py'
+    need(host.is_file() and not host.is_symlink(), 'host.py missing in release')
+    p = host
+    while True:
+        need(not p.is_symlink(), f'symlink in resolved codepath: {p}')
+        info = p.lstat()
+        need(info.st_uid == 0 and not info.st_mode & 0o022, f'untrusted codepath {p}')
+        if p == Path('/'):
+            break
+        p = p.parent
+    return dest
 
 
-def write_config(enabled=False, workflow_main_pending=True):
+def resolved_host_path(sha=None):
+    if sha is None:
+        need(CURRENT.is_file() and not CURRENT.is_symlink(), 'current pointer missing')
+        sha = CURRENT.read_text(encoding='utf-8').strip()
+    need(SHA40.fullmatch(sha), 'invalid pointer sha')
+    return RELEASES / sha / 'tools/train/host.py'
+
+
+def write_config(*, enabled=False, commissioning=True, mode_b_active=False,
+                 workflow_main_pending=True):
+    # Never claim MODE_B_ACTIVE before two real sequential product tasks.
+    need(not mode_b_active, 'MODE_B_ACTIVE requires two real task proofs — installer refuses claim')
     cfg = {
         'schema': 'GB_LEAN_CONFIG_V1',
         'enabled': bool(enabled),
+        'commissioning': bool(commissioning),
+        'mode_b_active': False,
         'branch_policy': ['dev'],
         'c5': 'off',
         'issue_182': 'OFF',
@@ -200,6 +238,7 @@ def write_config(enabled=False, workflow_main_pending=True):
         'workflow_on_main_required_for_schedule': True,
         'workflow_main_publication': 'PMA_after_review' if workflow_main_pending else 'done',
         'monitor_projection': str(MONITOR_PROJECTION),
+        'current_pointer': 'regular_file',
         'updated_at': int(time.time()),
     }
     atomic_write(CONFIG, json.dumps(cfg, sort_keys=True, indent=2) + '\n', 0o644)
@@ -215,22 +254,26 @@ def backup_helper():
 
 
 def patch_helper_lean_branch():
-    """Minimal DEV action=lean receiver branch; preserve train/dev/prod otherwise."""
+    """Minimal DEV action=lean → resolved releases/<SHA>/host.py (no current symlink)."""
     need(HELPER.is_file(), 'gb-deploy-helper.sh missing — report exact fact to PMA')
     text = HELPER.read_text(encoding='utf-8')
-    if 'gobadminton-lean/current/tools/train/host.py' in text and 'ACTION == lean' in text:
+    if 'gobadminton-lean/releases/' in text and 'ACTION == lean' in text:
         return {'status': 'already_patched'}
     backup_helper()
     marker = 'if [[ $ACTION == train ]]'
     lean_block = (
         '  if [[ $ACTION == lean ]]; then\n'
         '    [[ $ENVIRONMENT == dev ]] || fail \'lean is DEV-only\'\n'
-        '    trusted /usr/local/lib/gobadminton-lean/current/tools/train/host.py\n'
-        '    exec /usr/bin/python3 -I -B /usr/local/lib/gobadminton-lean/current/tools/train/host.py <<<"$REQUEST"\n'
+        '    LEAN_PTR=/usr/local/lib/gobadminton-lean/current\n'
+        '    [[ -f $LEAN_PTR && ! -L $LEAN_PTR ]] || fail \'lean current pointer missing\'\n'
+        '    LEAN_SHA=$(tr -d \'[:space:]\' <"$LEAN_PTR")\n'
+        '    [[ $LEAN_SHA =~ ^[0-9a-f]{40}$ ]] || fail \'lean current pointer invalid\'\n'
+        '    LEAN_HOST=/usr/local/lib/gobadminton-lean/releases/$LEAN_SHA/tools/train/host.py\n'
+        '    trusted "$LEAN_HOST"\n'
+        '    exec /usr/bin/python3 -I -B "$LEAN_HOST" <<<"$REQUEST"\n'
         '  fi\n'
     )
     if marker not in text:
-        # Report exact fact; do not invent authority or skip gates.
         raise InstallError(
             'helper lacks train ACTION branch; apply reviewed lean-delivery-receiver.sh '
             'DEV dispatch snippet manually — refusing blind patch')
@@ -247,23 +290,37 @@ def publish_monitor_projection(sha):
     parent = MONITOR_PROJECTION.parent
     if not parent.is_dir():
         return {'status': 'skipped', 'reason': f'monitor dir absent: {parent}'}
-    projection = {
-        'schema': 'GB_LEAN_MODE_B_PROJECTION_V1',
-        'mode': 'lean_mode_b',
-        'enabled': False,
-        'release_sha': sha,
-        'phase': 'installed_disabled',
-        'observed_at': int(time.time()),
-    }
     try:
-        atomic_write(MONITOR_PROJECTION, json.dumps(projection, sort_keys=True, indent=2) + '\n', 0o644)
-        return {'status': 'written', 'path': str(MONITOR_PROJECTION)}
-    except OSError as err:
-        return {'status': 'skipped', 'reason': f'monitor write refused: {err}'}
+        # Prefer helper if installed in the release tree.
+        sys.path.insert(0, str(RELEASES / sha / 'tools/train'))
+        import monitor as lean_mon  # type: ignore
+        return lean_mon.write_projection(
+            MONITOR_PROJECTION,
+            release_sha=sha,
+            claim=None,
+            config={'enabled': False, 'commissioning': True, 'mode_b_active': False},
+            worker=None,
+            last_event='install',
+        )
+    except Exception:
+        projection = {
+            'schema': 'GB_LEAN_MODE_B_PROJECTION_V1',
+            'mode': 'lean_mode_b',
+            'enabled': False,
+            'commissioning': True,
+            'mode_b_active': False,
+            'release_sha': sha,
+            'phase': 'installed_disabled',
+            'observed_at': int(time.time()),
+        }
+        try:
+            atomic_write(MONITOR_PROJECTION, json.dumps(projection, sort_keys=True, indent=2) + '\n', 0o644)
+            return {'status': 'written', 'path': str(MONITOR_PROJECTION)}
+        except OSError as err:
+            return {'status': 'skipped', 'reason': f'monitor write refused: {err}'}
 
 
 def rollback(sha=None):
-    """Rollback pointer / helper / config using backups only for touched files."""
     need(os.geteuid() == 0, 'rollback requires root')
     report = {'helper': None, 'current': None, 'config': None}
     if HELPER_BACKUP.is_file():
@@ -276,7 +333,7 @@ def rollback(sha=None):
         atomic_write(CONFIG, cfg_backup.read_bytes(), 0o644)
         report['config'] = 'restored'
     else:
-        write_config(enabled=False)
+        write_config(enabled=False, commissioning=True, mode_b_active=False)
         report['config'] = 'disabled'
     if sha and SHA40.fullmatch(sha) and (RELEASES / sha).is_dir():
         point_current(sha)
@@ -296,7 +353,7 @@ def install(repo, sha, *, enable=False, patch_helper=True):
     blobs = collect_blobs(repo, sha)
     dest, created = write_release(sha, blobs)
     point_current(sha)
-    write_config(enabled=False)  # always false until explicit commission
+    write_config(enabled=False, commissioning=True, mode_b_active=False)
     helper_result = {'status': 'skipped'}
     if patch_helper:
         try:
@@ -304,7 +361,6 @@ def install(repo, sha, *, enable=False, patch_helper=True):
         except InstallError as err:
             helper_result = {'status': 'missing_permission_or_structure', 'reason': str(err)}
     monitor = publish_monitor_projection(sha)
-    # Validate installed bytes against Git blobs again.
     for rel, info in blobs.items():
         path = dest / rel
         need(path.is_file() and sha256_bytes(path.read_bytes()) == info['sha256'],
@@ -314,13 +370,18 @@ def install(repo, sha, *, enable=False, patch_helper=True):
         'sha': sha,
         'created': created,
         'release': str(dest),
-        'current': str(CURRENT),
+        'current_pointer': str(CURRENT),
+        'current_is_symlink': CURRENT.is_symlink(),
+        'resolved_host': str(resolved_host_path(sha)),
         'enabled': False,
+        'commissioning': True,
+        'mode_b_active': False,
         'enable_requested': bool(enable),
         'helper': helper_result,
         'monitor': monitor,
         'commission_required': True,
         'note': 'config.enabled stays false until explicit root commission; '
+                'commissioning remains true until two real task proofs; '
                 'PMA publishes reviewed lean-delivery.yml to main after source CI on dev',
     }
     atomic_write(STATE_ROOT / 'state' / 'last-install.json',
@@ -331,11 +392,25 @@ def install(repo, sha, *, enable=False, patch_helper=True):
 
 
 def commission():
-    """Explicit activation after live proof — separate from install."""
+    """Enable bounded worker after review/CI. Status stays commissioning until proof.
+
+    Does NOT set mode_b_active — that requires two real sequential product tasks.
+    """
     need(os.geteuid() == 0, 'commission requires root')
-    need(CURRENT.exists(), 'not installed')
-    write_config(enabled=True, workflow_main_pending=False)
-    return {'schema': 'GB_LEAN_COMMISSION_V1', 'enabled': True, 'at': int(time.time())}
+    need(CURRENT.is_file() and not CURRENT.is_symlink(), 'not installed')
+    sha = CURRENT.read_text(encoding='utf-8').strip()
+    need(SHA40.fullmatch(sha) and (RELEASES / sha).is_dir(), 'release missing')
+    write_config(enabled=True, commissioning=True, mode_b_active=False,
+                 workflow_main_pending=False)
+    return {
+        'schema': 'GB_LEAN_COMMISSION_V1',
+        'enabled': True,
+        'commissioning': True,
+        'mode_b_active': False,
+        'release_sha': sha,
+        'at': int(time.time()),
+        'note': 'bounded worker enabled; MODE_B_ACTIVE remains false until two real proofs',
+    }
 
 
 def main(argv=None):
