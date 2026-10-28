@@ -22,12 +22,12 @@ describe("sortVenueOptions ordering regression", () => {
 
   it("breaks equal names by address then id", () => {
     const input = [
-      venue({ id: "b", name: "Одинаковое", address: "Улица Б" }),
-      venue({ id: "a2", name: "Одинаковое", address: "Улица А" }),
-      venue({ id: "a1", name: "Одинаковое", address: "Улица А" }),
+      venue({ id: "a", name: "Одинаковое", address: "Улица Б" }),
+      venue({ id: "z2", name: "Одинаковое", address: "Улица А" }),
+      venue({ id: "z1", name: "Одинаковое", address: "Улица А" }),
     ];
 
-    expect(sortVenueOptions(input).map(v => v.id)).toEqual(["a1", "a2", "b"]);
+    expect(sortVenueOptions(input).map(v => v.id)).toEqual(["z1", "z2", "a"]);
   });
 
   it("returns a new array and leaves frozen input array and records unchanged", () => {
