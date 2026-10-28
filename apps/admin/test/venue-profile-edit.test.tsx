@@ -1,4 +1,5 @@
 import { isValidElement } from "react";
+import type * as ReactModule from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Venues } from "../src/components/Venues";
 import { VenueProfileFields } from "../src/components/VenueProfileFields";
@@ -14,7 +15,7 @@ const hooks = vi.hoisted(() => ({
   effects: [] as (() => unknown)[],
 }));
 vi.mock("react", async importOriginal => {
-  const actual = await importOriginal<typeof import("react")>();
+  const actual = await importOriginal<typeof ReactModule>();
   function cell() {
     const index = hooks.index++;
     return hooks.slots[index] ?? (hooks.slots[index] = { value: undefined });
