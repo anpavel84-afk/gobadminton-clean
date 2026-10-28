@@ -258,7 +258,9 @@ run("FR-3A protected recommendations — disposable synthetic PostGIS",()=>{
     await pool.query("INSERT INTO user_restrictions(user_id,capability,reason_code,expires_at,created_by) VALUES($1,$2,'synthetic_fixture',clock_timestamp()+interval '1 hour',$3)",[b.userId,capability,principal]);
     expect((await inbox(a,"sent")).json().items).toEqual([]);expect((await send(a,g.id,f.friendshipId,idem)).statusCode).toBe(404);
     await pool.query("INSERT INTO user_restrictions(user_id,capability,reason_code,expires_at,created_by) VALUES($1,$2,'synthetic_fixture',clock_timestamp()+interval '1 hour',$3)",[a.userId,capability,principal]);
-    expect((await send(a,g.id,f.friendshipId)).statusCode).toBe(403);
+    // account.access invalidates session lookup / actor fence (401 fail-closed).
+    // profile.public / social.directory keep mutation capability 403; no peer metadata either way.
+    expect((await send(a,g.id,f.friendshipId)).statusCode).toBe(capability==="account.access"?401:403);
   });
   it("old recommendation does not resurrect after opt-out/re-enable or remove/re-friend",async()=>{
     const f=await accepted(),g=await game(),idem=key();expect((await send(a,g.id,f.friendshipId,idem)).statusCode).toBe(201);
@@ -293,8 +295,10 @@ run("FR-3A protected recommendations — disposable synthetic PostGIS",()=>{
     expect((await send(a,g.id,f.friendshipId)).statusCode).toBe(200);
     const next=await game(),limited=await send(a,next.id,f.friendshipId);expect(limited.statusCode).toBe(429);
     expect(Number(limited.headers["retry-after"])).toBeGreaterThan(0);
-    env.FRIENDS_SEND_LIMIT=100;env.FRIENDS_RECEIVE_LIMIT=1;
-    const other=await accepted(c,b);expect((await send(c,next.id,other.friendshipId)).statusCode).toBe(404);
+    // Friendship uses friend.receive; build c↔b before lowering the shared receive quota
+    // so the assertion exercises game.recommend recipient cap (neutral 404), not friend-request 404.
+    env.FRIENDS_SEND_LIMIT=100;const other=await accepted(c,b);env.FRIENDS_RECEIVE_LIMIT=1;
+    expect((await send(c,next.id,other.friendshipId)).statusCode).toBe(404);
     expect(await count(next.id)).toBe(0);
   });
   it("signed cursor is actor/view-bound, private, strict, and survives empty revalidated pages",async()=>{
