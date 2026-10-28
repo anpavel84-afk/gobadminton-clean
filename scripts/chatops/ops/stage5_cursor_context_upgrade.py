@@ -1915,14 +1915,21 @@ def _v5_validate_parse_failed_op(ops, operation, baseline):
          and re.fullmatch('[a-f0-9]{64}',op['admission_sha256'])
          and digest(admission)==op['admission_sha256'],
          'admission digest mismatch')
-    need(type(op.get('task_hash')) is str and re.fullmatch('[a-f0-9]{64}',op['task_hash']),
-         'invalid product task_hash')
+    expected_task=digest(dict(schema='GB_PRODUCT_QA_TASK_V1',issue=admission['issue'],
+                               source_sha=admission['source_sha'],admission=digest(admission),
+                               work=admission['work'],model=admission['model'],
+                               attempt=admission['attempt']))
+    need(type(op.get('task_hash')) is str and re.fullmatch('[a-f0-9]{64}',op['task_hash'])
+         and op['task_hash']==expected_task,
+         'product task_hash mismatch vs recomputed GB_PRODUCT_QA_TASK_V1')
     binding=op.get('binding')
     need(isinstance(binding,dict) and binding.get('stage')=='product_qa'
          and binding.get('head')==admission.get('source_sha')
          and binding.get('issue')==admission.get('issue')
          and binding.get('attempt')==admission.get('attempt'),
          'operation binding mismatch vs admission')
+    need(digest(binding)==operation,
+         'operation binding digest mismatch vs requested product operation')
     process=op.get('process')
     if process is not None:
         need(type(process) is dict and set(process)=={'pid','start','boot'}
@@ -1955,9 +1962,14 @@ def _v5_validate_retained_evidence(evidence_dir, op, installed_adapter_sha):
          and terminal.get('source_sha')==admission.get('source_sha')
          and terminal.get('task_sha256')==op.get('task_hash')
          and terminal.get('requested_model')==admission.get('model')
-         and type(terminal.get('rules_sha256')) is str
-         and re.fullmatch('[a-f0-9]{64}',terminal.get('rules_sha256') or ''),
+         and terminal.get('rules_sha256')==RULES_SHA256,
          'evidence base/source/task/model/rules binding mismatch')
+    need(type(terminal.get('input_sha256')) is str
+         and re.fullmatch('[a-f0-9]{64}',terminal.get('input_sha256') or '')
+         and type(terminal.get('semantic_input_sha256')) is str
+         and re.fullmatch('[a-f0-9]{64}',terminal.get('semantic_input_sha256') or '')
+         and terminal['input_sha256']==terminal['semantic_input_sha256'],
+         'evidence written input/semantic input identity missing or inconsistent')
     need(terminal.get('adapter_sha256')==installed_adapter_sha,
          'evidence adapter_sha256 does not match installed baseline adapter')
     streams=terminal.get('streams')
@@ -2060,28 +2072,21 @@ def execute_v5_resolve_product(bundle,manifest,controller,stage_sha,dispatch_sha
     parsed,parse_evidence=_offline_native_parse(
         parser_raw,stdout_raw,op['admission']['source_sha'],op['admission']['model'])
     verdict,parse_evidence=_v5_require_parsed_product_qa(parsed,parse_evidence,op['admission'])
-    # Policy disable BEFORE releasing pending so the old broken parser cannot launch
-    # a queued follow-on while pending is cleared. Preserve non-mode policy fields.
+    # Persist Root resolution intent + original prior_policy_backup BEFORE any policy
+    # change. A crash between disable and receipt must not lose the active backup.
+    # Resume with exact pending still present reuses that receipt; never overwrite
+    # prior_policy_backup with the now-disabled policy.
     policy_raw=regular_bytes(receiver.POLICY)
     policy=loads(policy_raw)
     need(isinstance(policy,dict) and policy.get('controller_sha')==baseline
          and policy.get('mode') in ('active','disabled')
          and re.fullmatch('[a-f0-9]{64}',policy.get('stage_workflow_sha256') or ''),
          'V5 resolve baseline policy/controller HOLD')
-    prior_policy=copy.deepcopy(policy)
-    if policy.get('mode')!='disabled':
-        disabled=copy.deepcopy(policy)
-        disabled['mode']='disabled'
-        # Keep controller/stage bindings of the installed baseline; do not rewrite them here.
-        need(disabled.get('controller_sha')==baseline,'policy baseline rewrite refused')
-        atomic_bytes(receiver.POLICY,encoded(disabled),
-                     canonical_meta(bytes_sha(encoded(disabled))),
-                     expected=current(receiver.POLICY))
     ready_before=None
     from native_antigravity import PRODUCT_READY
     if PRODUCT_READY.exists():
         ready_before=regular_bytes(PRODUCT_READY)
-    resolution=dict(
+    identity=dict(
         schema=V5_RESOLVE_SCHEMA,operation=product_operation,
         evidence_id=evidence_id,
         original_result_digest=original_result_digest,
@@ -2095,17 +2100,57 @@ def execute_v5_resolve_product(bundle,manifest,controller,stage_sha,dispatch_sha
         tool_names=list(parse_evidence.get('tool_names') or []),
         effective_model=parse_evidence.get('effective_model'),
         provider_reported_usage=parse_evidence.get('provider_reported_usage'),
-        prior_policy_mode=prior_policy.get('mode'),
-        prior_policy_backup=prior_policy,
         policy_disabled=True,
         ready=False,role_qualified=False,
-        hosted_continuation=False,native_post_install_qualification=False,
-        resolved_at=int(time.time()))
-    receipt=dict(resolution,original_result=original_result,
-                 admission_sha256=op['admission_sha256'],task_hash=op['task_hash'],
-                 bundle_commit=commit,baseline=baseline,controller=controller)
-    atomic_bytes(receipt_path,encoded(receipt),
-                 dict(mode=0o600,uid=OWNER_UID,gid=OWNER_GID))
+        hosted_continuation=False,native_post_install_qualification=False)
+    if os.path.lexists(receipt_path):
+        receipt=loads(regular_bytes(receipt_path))
+        prior_policy=receipt.get('prior_policy_backup')
+        need(isinstance(receipt,dict) and isinstance(prior_policy,dict)
+             and receipt.get('schema')==V5_RESOLVE_SCHEMA
+             and receipt.get('operation')==product_operation,
+             'pending resume receipt schema/operation mismatch')
+        for key,value in identity.items():
+            need(receipt.get(key)==value,'pending resume receipt identity drift: '+key)
+        need(receipt.get('original_result')==original_result
+             and receipt.get('admission_sha256')==op['admission_sha256']
+             and receipt.get('task_hash')==op['task_hash']
+             and receipt.get('bundle_commit')==commit
+             and receipt.get('baseline')==baseline
+             and receipt.get('controller')==controller,
+             'pending resume receipt task/admission/source drift')
+        # Policy fields must match original backup except allowed active→disabled.
+        prior_rest={k:v for k,v in prior_policy.items() if k!='mode'}
+        policy_rest={k:v for k,v in policy.items() if k!='mode'}
+        need(prior_rest==policy_rest,'pending resume policy fields drift vs backup')
+        need(policy.get('mode')==prior_policy.get('mode')
+             or (prior_policy.get('mode')=='active' and policy.get('mode')=='disabled'),
+             'pending resume policy mode transition refused')
+        need(receipt.get('prior_policy_mode')==prior_policy.get('mode'),
+             'pending resume prior_policy_mode drift')
+        resolution=dict(identity,prior_policy_mode=prior_policy.get('mode'),
+                        prior_policy_backup=prior_policy,
+                        resolved_at=receipt.get('resolved_at'))
+        # Do not rewrite receipt: preserve original prior active policy backup.
+    else:
+        prior_policy=copy.deepcopy(policy)
+        resolution=dict(identity,prior_policy_mode=prior_policy.get('mode'),
+                        prior_policy_backup=prior_policy,
+                        resolved_at=int(time.time()))
+        receipt=dict(resolution,original_result=original_result,
+                     admission_sha256=op['admission_sha256'],task_hash=op['task_hash'],
+                     bundle_commit=commit,baseline=baseline,controller=controller)
+        atomic_bytes(receipt_path,encoded(receipt),
+                     dict(mode=0o600,uid=OWNER_UID,gid=OWNER_GID))
+    # Disable policy AFTER durable receipt/backup; before releasing pending so the
+    # old broken parser cannot launch a queued follow-on while pending is cleared.
+    if policy.get('mode')!='disabled':
+        disabled=copy.deepcopy(policy)
+        disabled['mode']='disabled'
+        need(disabled.get('controller_sha')==baseline,'policy baseline rewrite refused')
+        atomic_bytes(receiver.POLICY,encoded(disabled),
+                     canonical_meta(bytes_sha(encoded(disabled))),
+                     expected=current(receiver.POLICY))
     # Append resolution on the SAME operation; preserve result UNKNOWN byte-for-byte
     # at data level; consume pending once; bump generation once; update last envelope.
     ops=receiver.read(V4_PRODUCT_OPS,0)

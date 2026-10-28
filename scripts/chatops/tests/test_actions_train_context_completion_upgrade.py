@@ -1012,13 +1012,31 @@ class FinishMetadataNoJsonScanner(unittest.TestCase):
 class RetainedProductQaResolve(unittest.TestCase):
     """Offline V5 resolve-product: recover saved stdout; preserve UNKNOWN; no charge/READY."""
 
-    OP='a1'*32
     EVID='b'*32
     HEAD='c'*40
     BASE='d'*40
-    TASK='e'*64
     MODEL='claude-sonnet-5-5-medium'
-    RULES='f'*64
+    # Synthetic written-input identity (input_sha256 == semantic_input_sha256).
+    INPUT='1'*64
+
+    def _binding(self):
+        return dict(action='train',stage='product_qa',slot='slot2',issue=360,
+                    phase='idle',head=self.HEAD,attempt=1,generation=0,profile='agy')
+
+    def _task_hash(self, admission):
+        from core import digest
+        return digest(dict(schema='GB_PRODUCT_QA_TASK_V1',issue=admission['issue'],
+                           source_sha=admission['source_sha'],admission=digest(admission),
+                           work=admission['work'],model=admission['model'],
+                           attempt=admission['attempt']))
+
+    def _op_key(self, binding=None):
+        from core import digest
+        return digest(binding if binding is not None else self._binding())
+
+    @property
+    def OP(self):
+        return self._op_key()
 
     def _stream(self, head=None):
         import native_antigravity as N
@@ -1055,17 +1073,18 @@ class RetainedProductQaResolve(unittest.TestCase):
                     controller_sha=baseline,acceptance=['exact retained product QA'],
                     allowed_paths=['scripts/chatops/actions_train/native_antigravity.py'])
 
-    def _ops(self, baseline, *, pending=None, other=None):
+    def _ops(self, baseline, *, pending=None, other=None, task_hash=None, binding=None):
         from core import digest
         admission=self._admission(baseline)
-        key=pending or self.OP
+        bind=dict(binding if binding is not None else self._binding())
+        key=pending if pending is not None else digest(bind)
+        expected=self._task_hash(admission)
         result=dict(status='unknown',reason='AGY_PARSE_FAILED',safe_release=False,
                     adapter_error=dict(code='AGY_PARSE_FAILED',phase='parse',
                                       evidence_id=self.EVID))
-        op=dict(task_hash=self.TASK,admission_sha256=digest(admission),admission=admission,
-                binding=dict(action='train',stage='product_qa',slot='slot2',issue=360,
-                             phase='idle',head=self.HEAD,attempt=1,generation=0,profile='agy'),
-                run=1,run_attempt=1,started_at=1,
+        op=dict(task_hash=expected if task_hash is None else task_hash,
+                admission_sha256=digest(admission),admission=admission,
+                binding=bind,run=1,run_attempt=1,started_at=1,
                 process=dict(pid=4242,start='1',boot='boot'),
                 result=result)
         operations={key:op}
@@ -1075,7 +1094,8 @@ class RetainedProductQaResolve(unittest.TestCase):
         return dict(schema='GB_PRODUCT_QA_OPS_V1',generation=3,pending=key,
                     operations=operations,last=None), result, admission
 
-    def _evidence_tree(self, root, adapter_sha, stdout):
+    def _evidence_tree(self, root, adapter_sha, stdout, *, task_hash=None, rules_sha256=None,
+                       input_sha256=None, semantic_input_sha256=None):
         evid=root/'antigravity-evidence'/self.EVID
         evid.mkdir(parents=True)
         (evid/'stdout').write_bytes(stdout)
@@ -1085,11 +1105,15 @@ class RetainedProductQaResolve(unittest.TestCase):
             stdout=dict(bytes=len(stdout),retained_bytes=len(stdout),truncated=False,
                         sha256=H(stdout)),
             stderr=dict(bytes=0,retained_bytes=0,truncated=False,sha256=H(b'')))
+        inp=self.INPUT if input_sha256 is None else input_sha256
+        sem=inp if semantic_input_sha256 is None else semantic_input_sha256
         terminal=dict(schema='GB_AGY_PRIVATE_EVIDENCE_V1',evidence_id=self.EVID,
-                      task_sha256=self.TASK,base_sha=self.BASE,source_sha=self.HEAD,
-                      adapter_sha256=adapter_sha,rules_sha256=self.RULES,phase='parse',
-                      exit_code=0,timeout=False,charge_state='charged',terminal=True,
-                      status='unknown',error_code='AGY_PARSE_FAILED',
+                      task_sha256=task_hash,base_sha=self.BASE,source_sha=self.HEAD,
+                      adapter_sha256=adapter_sha,
+                      rules_sha256=U.RULES_SHA256 if rules_sha256 is None else rules_sha256,
+                      input_sha256=inp,semantic_input_sha256=sem,
+                      phase='parse',exit_code=0,timeout=False,charge_state='charged',
+                      terminal=True,status='unknown',error_code='AGY_PARSE_FAILED',
                       input_delivery='written',candidate_state='unchanged',
                       requested_model=self.MODEL,streams=streams)
         (evid/('phase-%02d.json'%U.V5_RESOLVE_TERMINAL_PHASE)).write_bytes(
@@ -1153,12 +1177,14 @@ class RetainedProductQaResolve(unittest.TestCase):
             policy=dict(schema='GB_ACTIONS_TRAIN_POLICY_V1',mode='active',
                         controller_sha='b'*40,stage_workflow_sha256='1'*64)
             policy_path.write_bytes(json.dumps(policy,sort_keys=True,separators=(',',':')).encode())
-            ops,original_result,_admission=self._ops('b'*40)
+            ops,original_result,admission=self._ops('b'*40)
+            op_key=self.OP
+            task=self._task_hash(admission)
             ops_path=state/'product-qa-operations.json'
             ops_path.write_bytes(json.dumps(ops,sort_keys=True).encode())
-            evid,_terminal=self._evidence_tree(root,H(adapter.read_bytes()),stdout)
+            evid,_terminal=self._evidence_tree(root,H(adapter.read_bytes()),stdout,task_hash=task)
             ready_path=root/'product-qa-role-ready.json'
-            receipt_path=state/('product-qa-retained-resolution-%s.json'%self.OP)
+            receipt_path=state/('product-qa-retained-resolution-%s.json'%op_key)
             items={install/'native_antigravity.py':adapter.read_bytes()}
             with ExitStack() as stack:
                 self._patch_resolve(stack,install=install,state=state,ops_path=ops_path,
@@ -1166,7 +1192,7 @@ class RetainedProductQaResolve(unittest.TestCase):
                                     ready_path=ready_path)
                 r=U.execute_v5_resolve_product(
                     root/'bundle','0'*64,'c'*40,'1'*64,'2'*64,
-                    'b'*40,'d'*40,'dev',self.OP)
+                    'b'*40,'d'*40,'dev',op_key)
             self.assertEqual(r['phase'],'resolved-retained')
             self.assertFalse(r['ready'])
             self.assertFalse(r.get('idempotent'))
@@ -1174,20 +1200,21 @@ class RetainedProductQaResolve(unittest.TestCase):
             after=json.loads(ops_path.read_bytes())
             self.assertIsNone(after['pending'])
             self.assertEqual(after['generation'],4)
-            self.assertEqual(after['operations'][self.OP]['result'],original_result)
-            self.assertEqual(after['operations'][self.OP]['resolution']['verdict'],'PASS')
+            self.assertEqual(after['operations'][op_key]['result'],original_result)
+            self.assertEqual(after['operations'][op_key]['resolution']['verdict'],'PASS')
             self.assertEqual(json.loads(policy_path.read_bytes())['mode'],'disabled')
             self.assertFalse(ready_path.exists())
             self.assertTrue(receipt_path.exists())
             receipt=json.loads(receipt_path.read_bytes())
             self.assertEqual(receipt['prior_policy_backup']['mode'],'active')
             self.assertEqual(receipt['original_result'],original_result)
+            self.assertEqual(receipt['task_hash'],task)
             with ExitStack() as stack:
                 self._patch_resolve(stack,install=install,state=state,ops_path=ops_path,
                                     policy_path=policy_path,items=items)
                 r2=U.execute_v5_resolve_product(
                     root/'bundle','0'*64,'c'*40,'1'*64,'2'*64,
-                    'b'*40,'d'*40,'dev',self.OP)
+                    'b'*40,'d'*40,'dev',op_key)
             self.assertTrue(r2['idempotent'])
             self.assertEqual(json.loads(ops_path.read_bytes())['generation'],4)
 
@@ -1229,6 +1256,137 @@ class RetainedProductQaResolve(unittest.TestCase):
                         root/'bundle','0'*64,'c'*40,'1'*64,'2'*64,
                         'b'*40,'d'*40,'dev',self.OP)
             self.assertEqual(ops_path.read_bytes(),before2)
+
+    def test_resolve_refuses_wrong_task_or_operation_identity(self):
+        sys.path.insert(0,str(ROOT/'scripts/chatops/actions_train'))
+        from contextlib import ExitStack
+        stdout=self._stream()
+        with tempfile.TemporaryDirectory(prefix='.gb-resolve-id-') as tmp:
+            root=Path(tmp)
+            def setup(name):
+                base=root/name;state=base/'state';state.mkdir(parents=True)
+                install=base/'install';install.mkdir()
+                adapter=install/'native_antigravity.py'
+                adapter.write_bytes((ROOT/'scripts/chatops/actions_train'/
+                                    'native_antigravity.py').read_bytes())
+                policy_path=base/'policy.json'
+                policy_path.write_bytes(json.dumps(dict(
+                    schema='GB_ACTIONS_TRAIN_POLICY_V1',mode='active',controller_sha='b'*40,
+                    stage_workflow_sha256='1'*64),sort_keys=True,separators=(',',':')).encode())
+                return state,install,adapter,policy_path,{install/'native_antigravity.py':adapter.read_bytes()}
+            # Wrong recomputed task_hash (format-valid but not GB_PRODUCT_QA_TASK_V1).
+            state,install,adapter,policy_path,items=setup('wrong-task')
+            ops,_,_=self._ops('b'*40,task_hash='e'*64)
+            ops_path=state/'product-qa-operations.json'
+            ops_path.write_bytes(json.dumps(ops,sort_keys=True).encode())
+            evid,_=self._evidence_tree(root/'wrong-task',H(adapter.read_bytes()),stdout,
+                                       task_hash='e'*64)
+            before=ops_path.read_bytes();policy_before=policy_path.read_bytes()
+            with ExitStack() as stack:
+                self._patch_resolve(stack,install=install,state=state,ops_path=ops_path,
+                                    policy_path=policy_path,items=items,evid=evid)
+                with self.assertRaisesRegex(core.Refused,'task_hash mismatch'):
+                    U.execute_v5_resolve_product(
+                        root/'bundle','0'*64,'c'*40,'1'*64,'2'*64,
+                        'b'*40,'d'*40,'dev',self.OP)
+            self.assertEqual(ops_path.read_bytes(),before)
+            self.assertEqual(policy_path.read_bytes(),policy_before)
+            # Wrong operation: binding digest != requested product operation key.
+            state,install,adapter,policy_path,items=setup('wrong-op')
+            bad_key='a1'*32
+            ops2,original,_=self._ops('b'*40,pending=bad_key)
+            self.assertNotEqual(bad_key,self._op_key(ops2['operations'][bad_key]['binding']))
+            ops_path=state/'product-qa-operations.json'
+            ops_path.write_bytes(json.dumps(ops2,sort_keys=True).encode())
+            task=ops2['operations'][bad_key]['task_hash']
+            evid2,_=self._evidence_tree(root/'wrong-op',H(adapter.read_bytes()),stdout,
+                                        task_hash=task)
+            before2=ops_path.read_bytes()
+            with ExitStack() as stack:
+                self._patch_resolve(stack,install=install,state=state,ops_path=ops_path,
+                                    policy_path=policy_path,items=items,evid=evid2)
+                with self.assertRaisesRegex(core.Refused,'binding digest mismatch'):
+                    U.execute_v5_resolve_product(
+                        root/'bundle','0'*64,'c'*40,'1'*64,'2'*64,
+                        'b'*40,'d'*40,'dev',bad_key)
+            self.assertEqual(ops_path.read_bytes(),before2)
+            self.assertEqual(ops2['operations'][bad_key]['result'],original)
+
+    def test_resolve_backup_before_policy_resume_preserves_prior_active(self):
+        """Receipt+prior_policy_backup written before disable; resume keeps original active."""
+        sys.path.insert(0,str(ROOT/'scripts/chatops/actions_train'))
+        from contextlib import ExitStack
+        stdout=self._stream()
+        with tempfile.TemporaryDirectory(prefix='.gb-resolve-irq-') as tmp:
+            root=Path(tmp)
+            state=root/'state';state.mkdir()
+            install=root/'install';install.mkdir()
+            adapter=(install/'native_antigravity.py')
+            adapter.write_bytes((ROOT/'scripts/chatops/actions_train'/'native_antigravity.py').read_bytes())
+            policy_path=root/'policy.json'
+            policy=dict(schema='GB_ACTIONS_TRAIN_POLICY_V1',mode='active',
+                        controller_sha='b'*40,stage_workflow_sha256='1'*64)
+            policy_path.write_bytes(json.dumps(policy,sort_keys=True,separators=(',',':')).encode())
+            ops,original_result,admission=self._ops('b'*40)
+            op_key=self.OP
+            task=self._task_hash(admission)
+            ops_path=state/'product-qa-operations.json'
+            ops_path.write_bytes(json.dumps(ops,sort_keys=True).encode())
+            evid,_=self._evidence_tree(root,H(adapter.read_bytes()),stdout,task_hash=task)
+            ready_path=root/'product-qa-role-ready.json'
+            receipt_path=state/('product-qa-retained-resolution-%s.json'%op_key)
+            items={install/'native_antigravity.py':adapter.read_bytes()}
+            real_atomic=U.atomic_bytes
+            # Interrupt after durable receipt, before policy disable.
+            def crash_before_policy(path,raw,meta,**kw):
+                if Path(path)==policy_path:
+                    raise InterruptedError('disable-before-ops')
+                return real_atomic(path,raw,meta,**kw)
+            with ExitStack() as stack:
+                self._patch_resolve(stack,install=install,state=state,ops_path=ops_path,
+                                    policy_path=policy_path,items=items,evid=evid,
+                                    ready_path=ready_path)
+                stack.enter_context(patch.object(U,'atomic_bytes',side_effect=crash_before_policy))
+                with self.assertRaises(InterruptedError):
+                    U.execute_v5_resolve_product(
+                        root/'bundle','0'*64,'c'*40,'1'*64,'2'*64,
+                        'b'*40,'d'*40,'dev',op_key)
+            self.assertTrue(receipt_path.exists())
+            mid=json.loads(receipt_path.read_bytes())
+            self.assertEqual(mid['prior_policy_backup']['mode'],'active')
+            self.assertEqual(mid['original_result'],original_result)
+            self.assertEqual(json.loads(policy_path.read_bytes())['mode'],'active')
+            mid_ops=json.loads(ops_path.read_bytes())
+            self.assertEqual(mid_ops['pending'],op_key)
+            self.assertEqual(mid_ops['generation'],3)
+            self.assertIsNone(mid_ops['operations'][op_key].get('resolution'))
+            # Resume after disable-before-ops interruption: reuse receipt backup.
+            with ExitStack() as stack:
+                self._patch_resolve(stack,install=install,state=state,ops_path=ops_path,
+                                    policy_path=policy_path,items=items,evid=evid,
+                                    ready_path=ready_path)
+                r=U.execute_v5_resolve_product(
+                    root/'bundle','0'*64,'c'*40,'1'*64,'2'*64,
+                    'b'*40,'d'*40,'dev',op_key)
+            self.assertFalse(r.get('idempotent'))
+            self.assertEqual(r['verdict'],'PASS')
+            after=json.loads(ops_path.read_bytes())
+            self.assertIsNone(after['pending'])
+            self.assertEqual(after['generation'],4)
+            self.assertEqual(after['operations'][op_key]['result'],original_result)
+            final_receipt=json.loads(receipt_path.read_bytes())
+            self.assertEqual(final_receipt['prior_policy_backup']['mode'],'active')
+            self.assertEqual(final_receipt['prior_policy_backup'],mid['prior_policy_backup'])
+            self.assertEqual(json.loads(policy_path.read_bytes())['mode'],'disabled')
+            # Second resume after pending released stays idempotent; no generation bump.
+            with ExitStack() as stack:
+                self._patch_resolve(stack,install=install,state=state,ops_path=ops_path,
+                                    policy_path=policy_path,items=items)
+                r2=U.execute_v5_resolve_product(
+                    root/'bundle','0'*64,'c'*40,'1'*64,'2'*64,
+                    'b'*40,'d'*40,'dev',op_key)
+            self.assertTrue(r2['idempotent'])
+            self.assertEqual(json.loads(ops_path.read_bytes())['generation'],4)
 
     def test_quiet_v4_allow_exact_pending_only(self):
         ops_ok=type('P',(),{
