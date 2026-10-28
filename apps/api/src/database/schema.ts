@@ -673,7 +673,7 @@ export const friendships = pgTable("friendships", {
   updatedAt:timestamp("updated_at",{withTimezone:true}).notNull().defaultNow(),
 });
 
-/** FR-3A typed projections. Migration0040 owns relationship membership,
+/** FR-3A typed projections. Migration0041 owns relationship membership,
  * unique direction, state/version guards, inbox indexes and immutable audit. */
 export const gameRecommendations = pgTable("game_recommendations", {
   id:uuid("id").defaultRandom().primaryKey(), friendshipId:uuid("friendship_id").notNull().references(()=>friendships.id),

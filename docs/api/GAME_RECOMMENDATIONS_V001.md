@@ -14,7 +14,7 @@ notification, outbox event, delivery job, push, message or new social edge.
 Reuse existing `friendsEnabled` admission, including its default OFF and exact DEV/local bounds.
 No new flag or runtime setting. `GET /v1/me/social-capabilities` preserves the accepted Friends S1
 contract: `gameRecommendations`, `gameAttention` and `socialPush` remain false, including after
-migration0040. Installing the API schema does not activate the product UI. Recommendation routes
+migration0041. Installing the API schema does not activate the product UI. Recommendation routes
 independently enforce existing Friends admission and schema availability. The separately assigned
 FR-3B slice must define and review capability activation along with its UI; FR-3A does not enable it.
 
@@ -122,7 +122,7 @@ moderation share the existing Game fence. Batch reads acquire all fences of a ki
 Terminal actions need only actor/session and their own recommendation row. Nothing in this module
 writes Games, Friendships, participants, invitations, consent, permissions or the block graph.
 
-[0040](../../apps/api/migrations/0040_game_recommendations.sql) is additive. Foreign keys preserve
+[0041](../../apps/api/migrations/0041_game_recommendations.sql) is additive. Foreign keys preserve
 safe endpoints and game/friendship references, a membership guard verifies the accepted friendship
 on creation, bounded state/version and immutable identity prevent recycling, and indexes scope own
 sent/received scans. `game_recommendation_actions` is a minimal immutable transaction-local audit
@@ -130,11 +130,11 @@ sent/received scans. `game_recommendation_actions` is a minimal immutable transa
 a notification consumer. No private content is copied. Deletes/truncates cannot erase history.
 Historical migrations and automation remain unchanged.
 
-Current app with N-1 (0039) schema: capability false, own lists empty, writes 503. N-1 app on 0040
+Current app with N-1 (through 0040_external_http_url_storage) schema: capability false, own lists empty, writes 503. N-1 app on 0041
 schema continues using its existing tables; no historical object/function is replaced. Normal release
 must migrate before exposing writes. Application rollback uses existing release tooling and keeps
-0040/history; Friends OFF is a release-owner option, not an author action. Empty-install schema
-[rollback](../../apps/api/migrations/rollback/0040_game_recommendations.sql) requires caller-owned
+0041/history; Friends OFF is a release-owner option, not an author action. Empty-install schema
+[rollback](../../apps/api/migrations/rollback/0041_game_recommendations.sql) requires caller-owned
 transaction and stopped writers; it refuses populated recommendations or audit. Never erase populated
 history as release recovery.
 

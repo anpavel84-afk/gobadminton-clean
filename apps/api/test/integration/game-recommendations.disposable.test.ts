@@ -61,7 +61,7 @@ run("FR-3A protected recommendations — disposable synthetic PostGIS",()=>{
     const existing=await pool.query("SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename<>'spatial_ref_sys'");
     if(existing.rows.length)throw new Error("Requires EMPTY disposable application schema");
     await pool.query("CREATE TABLE schema_migrations(id text PRIMARY KEY,applied_at timestamptz NOT NULL DEFAULT now())");
-    for(const file of (await readdir(migrations)).filter(f=>f.endsWith(".sql")&&f<"0040").sort()) await migrate(file);
+    for(const file of (await readdir(migrations)).filter(f=>f.endsWith(".sql")&&f<"0041").sort()) await migrate(file);
     env=loadEnv({NODE_ENV:"test",APP_ENV:"local",DATABASE_URL:databaseUrl,PUBLIC_API_ORIGIN:"http://127.0.0.1:3000",
       PUBLIC_WEB_ORIGIN:origin,COOKIE_SECURE:"false",AUTH_PEPPER:"fr3a-synthetic-fixture-pepper-only",
       CONTENT_MODERATION_PROVIDER:"fake",CONTENT_MODERATION_FINGERPRINT_SECRET:"fr3a-synthetic-fingerprint-fixture-only",
@@ -79,12 +79,12 @@ run("FR-3A protected recommendations — disposable synthetic PostGIS",()=>{
     expect((await get(old,"/v1/me/social-capabilities")).json().gameRecommendations).toBe(false);
     expect((await get(old,"/v1/me/game-recommendations?view=received")).json().items).toEqual([]);
     expect((await post(old,`/v1/games/${randomUUID()}/recommendations`,{friendshipId:randomUUID()})).statusCode).toBe(503);
-    await migrate("0040_game_recommendations.sql");
+    await migrate("0041_game_recommendations.sql");
     const client=await pool.connect();
     try{
-      await client.query("BEGIN");await client.query(await readFile(path.join(migrations,"rollback/0040_game_recommendations.sql"),"utf8"));
+      await client.query("BEGIN");await client.query(await readFile(path.join(migrations,"rollback/0041_game_recommendations.sql"),"utf8"));
       expect((await client.query("SELECT to_regclass('game_recommendations') AS name")).rows[0].name).toBeNull();
-      expect((await client.query("SELECT count(*)::int AS n FROM schema_migrations")).rows[0].n).toBe(39);
+      expect((await client.query("SELECT count(*)::int AS n FROM schema_migrations")).rows[0].n).toBe(40);
     }finally{await client.query("ROLLBACK");client.release();}
     // Additive API/schema installation preserves the accepted Friends S1 capabilities.
     expect((await get(old,"/v1/me/social-capabilities")).json()).toEqual({
@@ -346,7 +346,7 @@ run("FR-3A protected recommendations — disposable synthetic PostGIS",()=>{
     await expect(pool.query("UPDATE game_recommendations SET state='confirmed' WHERE id=$1",[r.id])).rejects.toMatchObject({code:"23514"});
     await expect(pool.query("DELETE FROM game_recommendation_actions WHERE recommendation_id=$1",[r.id])).rejects.toMatchObject({code:"23514"});
     const client=await pool.connect();try{await client.query("BEGIN");
-      await expect(client.query(await readFile(path.join(migrations,"rollback/0040_game_recommendations.sql"),"utf8"))).rejects.toMatchObject({code:"23514"});
+      await expect(client.query(await readFile(path.join(migrations,"rollback/0041_game_recommendations.sql"),"utf8"))).rejects.toMatchObject({code:"23514"});
     }finally{await client.query("ROLLBACK");client.release();}
   });
 });
