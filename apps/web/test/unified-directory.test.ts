@@ -248,6 +248,86 @@ describe("proactive Radar soft refresh (#365)", () => {
     expect(c.view.mode).toBe("unified");
     expect(c.view.pins.length).toBeGreaterThan(0);
   });
+
+  it("soft-refresh after close() commits refreshed pins without resurrecting selection", async () => {
+    let time = now;
+    let resolveRefresh!: (value: ReturnType<typeof ok>) => void;
+    let resolveFreshMap!: (value: ReturnType<typeof ok>) => void;
+    const refreshPending = new Promise<ReturnType<typeof ok>>(resolve => { resolveRefresh = resolve; });
+    const freshMapPending = new Promise<ReturnType<typeof ok>>(resolve => { resolveFreshMap = resolve; });
+    let queryCalls = 0;
+    let mapCalls = 0;
+    let previewCalls = 0;
+    const livePin = (id: string): UnifiedRow => ({
+      ...privateRow,
+      publicPlayerId: id,
+      player: { ...privateRow.player, publicPlayerId: id, displayName: id },
+      radar: { ...privateRow.radar!, resultRef: `${id}-proof`, validUntil: new Date(time + 45000).toISOString() },
+    });
+    const request = vi.fn(async (path: string) => {
+      if (String(path).endsWith("/preview")) {
+        previewCalls += 1;
+        return ok({ ...privatePreview, player: { ...privatePreview.player, publicPlayerId: "peer" } });
+      }
+      if (String(path).endsWith("/map")) {
+        mapCalls += 1;
+        if (mapCalls === 1) {
+          return ok({
+            ...snapshot([livePin("peer")]),
+            generatedAt: new Date(time).toISOString(),
+            validUntil: new Date(time + 45000).toISOString(),
+            query: { ...snapshot().query, queryRef: "query-ref-1", originState: "authorized", originRef: "origin" },
+            items: [livePin("peer")],
+            mapPage: { returnedCount: 1, rankStart: 1, rankEnd: 1, hasMore: false, nextMapCursor: null },
+          });
+        }
+        return freshMapPending;
+      }
+      queryCalls += 1;
+      if (queryCalls === 1) {
+        return ok({
+          ...snapshot([livePin("peer")]),
+          generatedAt: new Date(time).toISOString(),
+          validUntil: new Date(time + 45000).toISOString(),
+          query: { ...snapshot().query, queryRef: "query-ref-1", originState: "authorized", originRef: "origin" },
+        });
+      }
+      return refreshPending;
+    }) as typeof apiFetch;
+    const c = new UnifiedDirectoryController(request, () => time);
+    c.bind(me);
+    await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    await c.map();
+    await c.select(c.view.pins[0]!);
+    expect(c.view.selected).toBe("peer");
+    const previewsBeforeRefresh = previewCalls;
+    time += 30000;
+    const refresh = c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    // RadarPage Close / venue handoff / hide-layer all use close() while query/map may still be in flight.
+    c.close();
+    expect(c.view.selected).toBeNull();
+    resolveRefresh(ok({
+      ...snapshot([livePin("peer"), livePin("fresh")]),
+      generatedAt: new Date(time).toISOString(),
+      validUntil: new Date(time + 45000).toISOString(),
+      query: { ...snapshot().query, queryRef: "query-ref-2", originState: "authorized", originRef: "origin" },
+    }));
+    await vi.waitFor(() => { expect(mapCalls).toBe(2); });
+    resolveFreshMap(ok({
+      ...snapshot([livePin("peer"), livePin("fresh")]),
+      generatedAt: new Date(time).toISOString(),
+      validUntil: new Date(time + 45000).toISOString(),
+      query: { ...snapshot().query, queryRef: "query-ref-2", originState: "authorized", originRef: "origin" },
+      items: [livePin("peer"), livePin("fresh")],
+      mapPage: { returnedCount: 2, rankStart: 1, rankEnd: 2, hasMore: false, nextMapCursor: null },
+    }));
+    await refresh;
+    expect(c.view.snapshot?.query.queryRef).toBe("query-ref-2");
+    expect(c.view.pins.map(row => row.publicPlayerId)).toEqual(["peer", "fresh"]);
+    expect(c.view.selected).toBeNull();
+    expect(c.view.preview).toBeNull();
+    expect(previewCalls).toBe(previewsBeforeRefresh);
+  });
 });
 
 describe("whole-schedule admission and cancellation fences", () => {

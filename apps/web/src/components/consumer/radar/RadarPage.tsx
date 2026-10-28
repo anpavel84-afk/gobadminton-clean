@@ -263,7 +263,8 @@ export function RadarPage({ sharedMap, resumeCamera = false }: { sharedMap?: Lib
       </VenuePopup>}
       {listOpen && !view.selected && <aside id="g2-map-panel" ref={sheet} tabIndex={-1} aria-label="Игроки на карте" className="g2-map-panel is-expanded" onKeyDown={e => { if (e.key === "Escape" && !(e.target as Element).closest("dialog")) { e.stopPropagation(); close(); } }}>
         <header><CloseButton aria-label="Закрыть список игроков" onClick={close} /></header>
-        <h2>Игроки на карте</h2>{view.pins.map(row => <button className="g2-map-list-row" key={row.publicPlayerId} onClick={() => selectPlayer(row)}><strong>{row.player.displayName}</strong><small>{distanceText(row.radar?.distance ?? null) ?? "Расстояние неизвестно"}</small></button>)}
+        <h2>Игроки на карте</h2>
+        <div className="gb-desktop-overlay-body g2-map-panel__body">{view.pins.map(row => <button className="g2-map-list-row" key={row.publicPlayerId} onClick={() => selectPlayer(row)}><strong>{row.player.displayName}</strong><small>{distanceText(row.radar?.distance ?? null) ?? "Расстояние неизвестно"}</small></button>)}</div>
       </aside>}
     </>}
   </div>;

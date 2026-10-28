@@ -78,7 +78,8 @@
   min-width: 0;
 }
 
-.gb-desktop-overlay-header__title {
+/* header+title beats `.unified-preview h2 { margin:12px 0 }` (0,1,1) so player chrome matches venue 76. */
+.gb-desktop-overlay-header .gb-desktop-overlay-header__title {
   margin: 0;
   font-size: var(--gb-overlay-title-size);
   line-height: var(--gb-overlay-title-line);
@@ -416,6 +417,15 @@
     padding: 8px var(--gb-overlay-inset) 12px;
     font-size: var(--gb-overlay-title-size);
     line-height: var(--gb-overlay-title-line);
+  }
+
+  /* List rows scroll; header/title stay outside. Rows keep 40px gutter. */
+  .gb-radar-layer .g2-map-panel > .g2-map-panel__body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-x: clip;
+    overflow-y: auto;
+    padding: 0;
   }
 
   .gb-radar-layer .g2-map-panel .g2-map-list-row {

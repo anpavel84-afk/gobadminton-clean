@@ -34,6 +34,7 @@
 .g2-radar-map button:focus-visible,.g2-radar-map a:focus-visible { outline:3px solid var(--gb-purple); outline-offset:3px; }
 .g2-map-panel { position:absolute; right:80px; top:110px; bottom:48px; width:360px; max-width:calc(100% - 32px); padding:16px 20px; z-index:4; border:1px solid var(--gb-line); border-radius:18px; background:var(--gb-white); overflow:auto; }
 .g2-map-panel > header { display:flex; justify-content:flex-end; gap:12px; }.g2-map-panel > header button { min-width:44px; min-height:44px; background:transparent; color:var(--gb-ink); border:0; font-size:24px; cursor:pointer; }.g2-sheet-handle { display:none; }
+.g2-map-panel__body { min-width:0; }
 .g2-map-list-row { display:grid; gap:4px; width:100%; padding:14px 4px; text-align:left; border:0; border-top:1px solid var(--gb-line); background:transparent; color:var(--gb-ink); cursor:pointer; }.g2-map-list-row small { color:var(--gb-ink-soft); }
 .g2-radar-map .maplibregl-ctrl-attrib { font-family:inherit; max-width:100%; font-size:12px; background:var(--gb-white); }.g2-radar-map .maplibregl-ctrl-bottom-right { right:8px; bottom:calc(8px + env(safe-area-inset-bottom,0px)); }
 @media(max-width:900px) { .g2-map-panel { right:16px; width:340px; } }

@@ -252,6 +252,8 @@ export class UnifiedDirectoryController {
     const previousPins = keepWindow ? this.view.pins : [];
     const previousMapPage = keepWindow ? this.view.mapPage : null;
     const previouslyMapped = previousMapPage !== null || previousPins.length > 0;
+    // Soft refresh may await query/map; close()/select()/map() bump selectionEpoch meanwhile.
+    const selectionGeneration = this.selectionEpoch;
     if (!keepWindow) {
       this.invalidate();
       this.set({ mode: "unified" });
@@ -304,8 +306,10 @@ export class UnifiedDirectoryController {
       if (queryRefChanged) { mapPins = []; mapPage = null; }
     }
     const now = this.clock();
+    // Always commit refreshed rows/pins; only restore/redeem selection if still current.
+    const selectionCurrent = selectionGeneration === this.selectionEpoch;
     const livePeer = (row: UnifiedRow) => row.publicPlayerId === previousSelected && row.radar !== null && Date.parse(row.radar.validUntil) > now;
-    const keepRow = previousSelected
+    const keepRow = previousSelected && selectionCurrent
       ? (result.data.items.find(livePeer) ?? mapItems.find(livePeer) ?? mapPins.find(livePeer))
       : undefined;
     const keepPreview = Boolean(keepRow && !queryRefChanged && previousPreview && liveUnifiedPreview(previousPreview, keepRow.publicPlayerId, now));
@@ -317,9 +321,11 @@ export class UnifiedDirectoryController {
       mode: "unified",
       pins: mapPins,
       mapPage,
-      selected: keepRow ? keepRow.publicPlayerId : null,
-      preview: keepPreview ? previousPreview : null,
-      previewBusy: false,
+      ...(selectionCurrent ? {
+        selected: keepRow ? keepRow.publicPlayerId : null,
+        preview: keepPreview ? previousPreview : null,
+        previewBusy: false,
+      } : {}),
     });
     // New queryRef needs a fresh proof redemption; same-ref preview may stay until its own TTL.
     if (keepRow && !keepPreview) void this.select(keepRow);
