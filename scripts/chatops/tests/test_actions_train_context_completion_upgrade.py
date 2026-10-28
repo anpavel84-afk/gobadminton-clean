@@ -989,4 +989,263 @@ class ProductQaFinishEvidence(unittest.TestCase):
         self.assertNotIn("'finish' in tools",src)
 
 
+class FinishMetadataNoJsonScanner(unittest.TestCase):
+    """Parser-only: reject structured metadata without a second JSON scanner."""
+
+    def test_prose_labels_ok_json_delimiters_fail_closed(self):
+        sys.path.insert(0,str(ROOT/'scripts/chatops/actions_train'))
+        import native_antigravity as N
+        import inspect
+        src=inspect.getsource(N)
+        self.assertNotIn('_embedded_verdict_objects',src)
+        self.assertIn('_PROVIDER_FINISH_META_JSON_CHARS',src)
+        head='b'*40
+        base={'verdict':'PASS','findings':[],'reviewed_sha':head}
+        N._validate_finish_metadata_strings(dict(base,toolAction='Finishing QA',
+                                                 toolSummary='Final QA verdict'))
+        for bad in ('{"verdict":"FAIL"}','[1]', 'x\\y', 'say "hi"', 'a{b', 'c}d'):
+            with self.subTest(bad=bad), self.assertRaises(N.ReviewError):
+                N._validate_finish_metadata_strings(
+                    dict(base,toolAction=bad,toolSummary='Final QA verdict'))
+
+
+class RetainedProductQaResolve(unittest.TestCase):
+    """Offline V5 resolve-product: recover saved stdout; preserve UNKNOWN; no charge/READY."""
+
+    OP='a1'*32
+    EVID='b'*32
+    HEAD='c'*40
+    BASE='d'*40
+    TASK='e'*64
+    MODEL='claude-sonnet-5-5-medium'
+    RULES='f'*64
+
+    def _stream(self, head=None):
+        import native_antigravity as N
+        import copy
+        head=head or self.HEAD
+        cid='resolve-synthetic'
+        verdict={'verdict':'PASS','findings':[],'reviewed_sha':head}
+        meta=dict(verdict,toolAction='Finishing QA',toolSummary='Final QA verdict')
+        events=[
+            {'event':'init','conversation_id':cid,'init':{
+                'model':N.MODEL,'agent':N.AGENT,
+                'tools':['finish','view_file','run_command'],
+                'permission_mode':N.PERMISSION_MODE,'json_schema':copy.deepcopy(N.SCHEMA)}},
+            {'event':'step_update','step_update':{'conversation_id':cid,'step_index':0,
+                'step_type':'user_input','state':'DONE'}},
+            {'event':'step_update','step_update':{'conversation_id':cid,'step_index':1,
+                'tool_name':'view_file','step_type':'tool','state':'DONE'}},
+            {'event':'step_update','step_update':{'conversation_id':cid,'step_index':2,
+                'tool_name':'run_command','step_type':'tool','state':'DONE'}},
+            {'event':'step_update','step_update':{'conversation_id':cid,'step_index':3,
+                'step_type':'agent_response','state':'DONE'}},
+            {'event':'step_update','step_update':{'conversation_id':cid,'step_index':4,
+                'step_type':'tool','tool_name':'finish','state':'ACTIVE',
+                'tool_info':{'parameters':verdict}}},
+            {'event':'step_update','step_update':{'conversation_id':cid,'step_index':4,
+                'step_type':'finish','state':'DONE'}},
+            {'event':'result','result':{'conversation_id':cid,'status':'SUCCESS',
+                'structured_output':meta,'usage':{'inputTokens':1,'outputTokens':1}}}]
+        return b'\n'.join(json.dumps(e,sort_keys=True).encode() for e in events)+b'\n'
+
+    def _admission(self, baseline):
+        return dict(schema='GB_PRODUCT_QA_ADMISSION_V2',issue=360,source_sha=self.HEAD,
+                    source_base=self.BASE,model=self.MODEL,attempt=1,work='/srv/gb/work',
+                    controller_sha=baseline,acceptance=['exact retained product QA'],
+                    allowed_paths=['scripts/chatops/actions_train/native_antigravity.py'])
+
+    def _ops(self, baseline, *, pending=None, other=None):
+        from core import digest
+        admission=self._admission(baseline)
+        key=pending or self.OP
+        result=dict(status='unknown',reason='AGY_PARSE_FAILED',safe_release=False,
+                    adapter_error=dict(code='AGY_PARSE_FAILED',phase='parse',
+                                      evidence_id=self.EVID))
+        op=dict(task_hash=self.TASK,admission_sha256=digest(admission),admission=admission,
+                binding=dict(action='train',stage='product_qa',slot='slot2',issue=360,
+                             phase='idle',head=self.HEAD,attempt=1,generation=0,profile='agy'),
+                run=1,run_attempt=1,started_at=1,
+                process=dict(pid=4242,start='1',boot='boot'),
+                result=result)
+        operations={key:op}
+        if other:
+            operations[other]=dict(op,result=dict(status='unknown',reason='OTHER',
+                                                   safe_release=False))
+        return dict(schema='GB_PRODUCT_QA_OPS_V1',generation=3,pending=key,
+                    operations=operations,last=None), result, admission
+
+    def _evidence_tree(self, root, adapter_sha, stdout):
+        evid=root/'antigravity-evidence'/self.EVID
+        evid.mkdir(parents=True)
+        (evid/'stdout').write_bytes(stdout)
+        (evid/'stderr').write_bytes(b'')
+        os.chmod(evid/'stdout',0o600);os.chmod(evid/'stderr',0o600);os.chmod(evid,0o700)
+        streams=dict(
+            stdout=dict(bytes=len(stdout),retained_bytes=len(stdout),truncated=False,
+                        sha256=H(stdout)),
+            stderr=dict(bytes=0,retained_bytes=0,truncated=False,sha256=H(b'')))
+        terminal=dict(schema='GB_AGY_PRIVATE_EVIDENCE_V1',evidence_id=self.EVID,
+                      task_sha256=self.TASK,base_sha=self.BASE,source_sha=self.HEAD,
+                      adapter_sha256=adapter_sha,rules_sha256=self.RULES,phase='parse',
+                      exit_code=0,timeout=False,charge_state='charged',terminal=True,
+                      status='unknown',error_code='AGY_PARSE_FAILED',
+                      input_delivery='written',candidate_state='unchanged',
+                      requested_model=self.MODEL,streams=streams)
+        (evid/('phase-%02d.json'%U.V5_RESOLVE_TERMINAL_PHASE)).write_bytes(
+            json.dumps(terminal,sort_keys=True,separators=(',',':')).encode())
+        os.chmod(evid/('phase-%02d.json'%U.V5_RESOLVE_TERMINAL_PHASE),0o600)
+        return evid, terminal
+
+    def _patch_resolve(self, stack, *, install, state, ops_path, policy_path, items,
+                       evid=None, ready_path=None, identity=None):
+        import native_antigravity as N
+        def fake_read(path,owner=None,limit=2097152):
+            return json.loads(Path(path).read_bytes())
+        def fake_atomic(path,value,mode=0o600):
+            Path(path).write_bytes(json.dumps(value,sort_keys=True).encode())
+        def read978(path,**kw):
+            raw=Path(path).read_bytes()
+            return raw,dict(sha256=H(raw),mode=0o600,uid=978,gid=os.getgid(),bytes=len(raw))
+        stack.enter_context(patch.object(U,'OWNER_UID',os.getuid()))
+        stack.enter_context(patch.object(U,'OWNER_GID',os.getgid()))
+        stack.enter_context(patch.object(U.os,'geteuid',return_value=os.getuid()))
+        stack.enter_context(patch.object(U,'INSTALL',install))
+        stack.enter_context(patch.object(U,'STATE',state))
+        stack.enter_context(patch.object(U,'V4_PRODUCT_OPS',ops_path))
+        stack.enter_context(patch.object(U.receiver,'POLICY',policy_path))
+        stack.enter_context(patch.object(U.receiver,'read',side_effect=fake_read))
+        stack.enter_context(patch.object(U.receiver,'atomic',side_effect=fake_atomic))
+        stack.enter_context(patch.object(U.receiver,'trusted_tree'))
+        stack.enter_context(patch.object(
+            U.receiver,'identity',
+            return_value=identity or {'pid':1,'start':'x','boot':'y'}))
+        stack.enter_context(patch.object(U,'quiet_v5'))
+        stack.enter_context(patch.object(U,'_v5_workflow_gates'))
+        stack.enter_context(patch.object(U,'source',return_value=items))
+        stack.enter_context(patch.object(U,'current',side_effect=lambda p: dict(
+            mode=0o644,uid=os.getuid(),gid=os.getgid(),sha256=H(Path(p).read_bytes()))))
+        if evid is not None:
+            stack.enter_context(patch.object(U,'_product_evidence_dir',return_value=evid))
+            stack.enter_context(patch.object(U,'_read_uid978_private',side_effect=read978))
+        if ready_path is not None:
+            stack.enter_context(patch.object(N,'PRODUCT_READY',ready_path))
+            stack.enter_context(patch.dict('sys.modules',native_antigravity=N))
+            import builtins
+            real_import=builtins.__import__
+            def import_hook(name,*a,**k):
+                if name=='native_antigravity':
+                    return N
+                return real_import(name,*a,**k)
+            stack.enter_context(patch('builtins.__import__',side_effect=import_hook))
+
+    def test_resolve_once_preserves_unknown_disables_policy_no_ready(self):
+        sys.path.insert(0,str(ROOT/'scripts/chatops/actions_train'))
+        from contextlib import ExitStack
+        stdout=self._stream()
+        with tempfile.TemporaryDirectory(prefix='.gb-resolve-ok-') as tmp:
+            root=Path(tmp)
+            state=root/'state';state.mkdir()
+            install=root/'install';install.mkdir()
+            adapter=(install/'native_antigravity.py')
+            adapter.write_bytes((ROOT/'scripts/chatops/actions_train'/'native_antigravity.py').read_bytes())
+            policy_path=root/'policy.json'
+            policy=dict(schema='GB_ACTIONS_TRAIN_POLICY_V1',mode='active',
+                        controller_sha='b'*40,stage_workflow_sha256='1'*64)
+            policy_path.write_bytes(json.dumps(policy,sort_keys=True,separators=(',',':')).encode())
+            ops,original_result,_admission=self._ops('b'*40)
+            ops_path=state/'product-qa-operations.json'
+            ops_path.write_bytes(json.dumps(ops,sort_keys=True).encode())
+            evid,_terminal=self._evidence_tree(root,H(adapter.read_bytes()),stdout)
+            ready_path=root/'product-qa-role-ready.json'
+            receipt_path=state/('product-qa-retained-resolution-%s.json'%self.OP)
+            items={install/'native_antigravity.py':adapter.read_bytes()}
+            with ExitStack() as stack:
+                self._patch_resolve(stack,install=install,state=state,ops_path=ops_path,
+                                    policy_path=policy_path,items=items,evid=evid,
+                                    ready_path=ready_path)
+                r=U.execute_v5_resolve_product(
+                    root/'bundle','0'*64,'c'*40,'1'*64,'2'*64,
+                    'b'*40,'d'*40,'dev',self.OP)
+            self.assertEqual(r['phase'],'resolved-retained')
+            self.assertFalse(r['ready'])
+            self.assertFalse(r.get('idempotent'))
+            self.assertEqual(r['verdict'],'PASS')
+            after=json.loads(ops_path.read_bytes())
+            self.assertIsNone(after['pending'])
+            self.assertEqual(after['generation'],4)
+            self.assertEqual(after['operations'][self.OP]['result'],original_result)
+            self.assertEqual(after['operations'][self.OP]['resolution']['verdict'],'PASS')
+            self.assertEqual(json.loads(policy_path.read_bytes())['mode'],'disabled')
+            self.assertFalse(ready_path.exists())
+            self.assertTrue(receipt_path.exists())
+            receipt=json.loads(receipt_path.read_bytes())
+            self.assertEqual(receipt['prior_policy_backup']['mode'],'active')
+            self.assertEqual(receipt['original_result'],original_result)
+            with ExitStack() as stack:
+                self._patch_resolve(stack,install=install,state=state,ops_path=ops_path,
+                                    policy_path=policy_path,items=items)
+                r2=U.execute_v5_resolve_product(
+                    root/'bundle','0'*64,'c'*40,'1'*64,'2'*64,
+                    'b'*40,'d'*40,'dev',self.OP)
+            self.assertTrue(r2['idempotent'])
+            self.assertEqual(json.loads(ops_path.read_bytes())['generation'],4)
+
+    def test_resolve_refuses_wrong_pending_incomplete_live_process(self):
+        sys.path.insert(0,str(ROOT/'scripts/chatops/actions_train'))
+        from contextlib import ExitStack
+        with tempfile.TemporaryDirectory(prefix='.gb-resolve-bad-') as tmp:
+            root=Path(tmp);state=root/'state';state.mkdir();install=root/'install';install.mkdir()
+            adapter=(install/'native_antigravity.py')
+            adapter.write_bytes(b'# adapter stub\n')
+            policy_path=root/'policy.json'
+            policy_path.write_bytes(json.dumps(dict(
+                schema='GB_ACTIONS_TRAIN_POLICY_V1',mode='active',controller_sha='b'*40,
+                stage_workflow_sha256='1'*64),sort_keys=True,separators=(',',':')).encode())
+            ops,_,_=self._ops('b'*40,pending='9'*64)
+            ops_path=state/'product-qa-operations.json'
+            ops_path.write_bytes(json.dumps(ops,sort_keys=True).encode())
+            before=ops_path.read_bytes();policy_before=policy_path.read_bytes()
+            items={install/'native_antigravity.py':(ROOT/'scripts/chatops/actions_train'/
+                                                   'native_antigravity.py').read_bytes()}
+            with ExitStack() as stack:
+                self._patch_resolve(stack,install=install,state=state,ops_path=ops_path,
+                                    policy_path=policy_path,items=items)
+                with self.assertRaisesRegex(core.Refused,'not the sole pending|pending/UNKNOWN'):
+                    U.execute_v5_resolve_product(
+                        root/'bundle','0'*64,'c'*40,'1'*64,'2'*64,
+                        'b'*40,'d'*40,'dev',self.OP)
+            self.assertEqual(ops_path.read_bytes(),before)
+            self.assertEqual(policy_path.read_bytes(),policy_before)
+            ops2,_,_=self._ops('b'*40)
+            ops_path.write_bytes(json.dumps(ops2,sort_keys=True).encode())
+            before2=ops_path.read_bytes()
+            live=ops2['operations'][self.OP]['process']
+            with ExitStack() as stack:
+                self._patch_resolve(stack,install=install,state=state,ops_path=ops_path,
+                                    policy_path=policy_path,items=items,identity=live)
+                with self.assertRaisesRegex(core.Refused,'still alive'):
+                    U.execute_v5_resolve_product(
+                        root/'bundle','0'*64,'c'*40,'1'*64,'2'*64,
+                        'b'*40,'d'*40,'dev',self.OP)
+            self.assertEqual(ops_path.read_bytes(),before2)
+
+    def test_quiet_v4_allow_exact_pending_only(self):
+        ops_ok=type('P',(),{
+            'exists':staticmethod(lambda:True)})()
+        with patch.object(U,'V4_PRODUCT_OPS',ops_ok), \
+             patch.object(U.receiver,'read',return_value={
+                 'pending':self.OP,'operations':{self.OP:{}}}):
+            U._product_ops_pending_free(allow_pending=self.OP)
+            with self.assertRaisesRegex(core.Refused,'pending/UNKNOWN HOLD'):
+                U._product_ops_pending_free(allow_pending=None)
+            with self.assertRaisesRegex(core.Refused,'pending/UNKNOWN HOLD'):
+                U._product_ops_pending_free(allow_pending='0'*64)
+        # Ordinary quiet still documents pending UNKNOWN may remain historically,
+        # but product-qa pending none remains the default gate.
+        import inspect
+        self.assertIn('allow_product_pending',inspect.signature(U.quiet_v4).parameters)
+        self.assertIn('_product_ops_pending_free',inspect.getsource(U.quiet_v4))
+
+
 if __name__=='__main__': unittest.main()

@@ -2242,47 +2242,13 @@ def _capture_finish_tool_params(step, head, previous):
     return captured
 
 
-def _embedded_verdict_objects(text):
-    """True when metadata embeds a JSON object/array carrying a verdict key.
-
-    Unlike verdict_documents(), the bare word "verdict" in leftover prose is
-    allowed (observed toolSummary is "Final QA verdict").
-    """
-    found = []
-    budget = _VerdictScanBudget(len(text))
-    decoder = _verdict_decoder()
-    index = 0
-    length = len(text)
-    while index < length:
-        start = index
-        while start < length and text[start] not in '{[':
-            start += 1
-        if start >= length:
-            break
-        budget.scan(max(1, start - index))
-        decoded = _decode_verdict_candidate(decoder, text, start, budget)
-        if decoded is None:
-            index = start + 1
-            continue
-        value, end = decoded
-        if end <= start:
-            index = start + 1
-            continue
-        stack = [value]
-        while stack:
-            budget.visit(1)
-            node = stack.pop()
-            if type(node) is dict:
-                if 'verdict' in node:
-                    found.append(node)
-                stack.extend(node.values())
-            elif type(node) is list:
-                stack.extend(node)
-        index = end
-    return bool(found)
+# Fail closed on structured/encoded JSON inside provider finish metadata labels.
+# Observed toolAction/toolSummary are short prose ("Finishing QA" / "Final QA verdict").
+_PROVIDER_FINISH_META_JSON_CHARS = frozenset('"{}[]\\')
 
 
 def _validate_finish_metadata_strings(value):
+    """Bounded string labels only; no second JSON scanner for two short fields."""
     for key in _PROVIDER_FINISH_META:
         if key not in value:
             continue
@@ -2290,7 +2256,8 @@ def _validate_finish_metadata_strings(value):
         need(type(text) is str and 1 <= len(text) <= _PROVIDER_FINISH_META_MAX,
              'invalid finish metadata type')
         need(len(text.encode('utf-8')) <= _PROVIDER_FINISH_META_MAX, 'invalid finish metadata type')
-        need(not _embedded_verdict_objects(text), 'finish metadata hides verdict')
+        need(not any(ch in text for ch in _PROVIDER_FINISH_META_JSON_CHARS),
+             'finish metadata hides verdict')
 
 
 def _project_finish_payload(value, head, finish_params):

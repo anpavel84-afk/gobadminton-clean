@@ -550,10 +550,10 @@ def validate_current(j,backups,new,*,installed=False,preparing=False):
 
 
 def execute(action,bundle,manifest,controller,stage_sha,dispatch_sha,run_id=None,baseline=None,
-            bundle_commit=None,bundle_branch='dev',version=2):
+            bundle_commit=None,bundle_branch='dev',version=2,product_operation=None):
     if version==5:
         return execute_v5(action,bundle,manifest,controller,stage_sha,dispatch_sha,run_id,baseline,
-                          bundle_commit,bundle_branch)
+                          bundle_commit,bundle_branch,product_operation=product_operation)
     if version==4:
         return execute_v4(action,bundle,manifest,controller,stage_sha,dispatch_sha,run_id,baseline,
                           bundle_commit,bundle_branch)
@@ -1107,17 +1107,37 @@ def _v4_historical_checkpoint_ok(slot, state, journal):
     return receiver.identity(process['pid'])!=process
 
 
-def quiet_v4():
+def _product_ops_pending_free(*, allow_pending=None):
+    """Ordinary installs require product-qa pending none.
+
+    Retained-result resolution may pass exactly one independently validated
+    pending operation key; never an ignore_pending flag or other UNKNOWN causes.
+    """
+    if not V4_PRODUCT_OPS.exists():
+        return
+    ops=receiver.read(V4_PRODUCT_OPS,0)
+    pending=ops.get('pending')
+    if pending is None:
+        return
+    need(type(allow_pending) is str and re.fullmatch('[a-f0-9]{64}',allow_pending)
+         and pending==allow_pending
+         and type(ops.get('operations')) is dict and pending in ops['operations'],
+         'product QA operation still pending/UNKNOWN HOLD')
+
+
+def quiet_v4(*, allow_product_pending=None):
     """Historical pending UNKNOWN may remain; NEW product-QA resources must be free.
 
     Does not call quiet()/safe_checkpoint (those require pending=none / terminal
     ACCEPTED evidence). Proves units inactive+masked, UID1002/978 model/cgroup
     absence, recorded PID/start/boot identities dead, kernel worker locks/leases
     free, no integration/recovery occupancy, free product-qa lease, and
-    product-qa ops pending none. Does NOT assert installed OLD pins (those are
-    transaction current-state checks). Targeted HOLD names the conflicting live
-    resource; never invents assume_safe/ignore_pending bypass. Only the proven
-    historical Issue346 pr_wait CP (dead process) plus idle/done may remain.
+    product-qa ops pending none (unless allow_product_pending names the exact
+    independently validated operation for retained-result resolution). Does NOT
+    assert installed OLD pins (those are transaction current-state checks).
+    Targeted HOLD names the conflicting live resource; never invents
+    assume_safe/ignore_pending bypass. Only the proven historical Issue346
+    pr_wait CP (dead process) plus idle/done may remain.
     """
     import pwd
     receiver.units_quiet(receiver.UNITS)
@@ -1153,9 +1173,7 @@ def quiet_v4():
     lock_unheld(receiver.AUTONOMY/'locks'/'product-qa.lease',978)
     receiver.free_lock(receiver.AUTONOMY/'locks'/'product-qa.lease')
     # The installed C5 adapter has no product constants before this upgrade.
-    if V4_PRODUCT_OPS.exists():
-        ops=receiver.read(V4_PRODUCT_OPS,0)
-        need(ops.get('pending') is None,'product QA operation still pending/UNKNOWN HOLD')
+    _product_ops_pending_free(allow_pending=allow_product_pending)
 
 
 def v4_reviewed_budget_config5(budget):
@@ -1555,9 +1573,9 @@ def _uid978_provider_procs_absent():
              'UID978 provider process still alive HOLD')
 
 
-def quiet_v5():
+def quiet_v5(*, allow_product_pending=None):
     """Reuse V4 resource quiescence; preserve completed V4 journal/backup/history."""
-    quiet_v4()
+    quiet_v4(allow_product_pending=allow_product_pending)
     _uid978_provider_procs_absent()
     # Completed V4 transaction must remain; never mutate its journal/backup.
     if V4_JOURNAL.exists():
@@ -1779,9 +1797,363 @@ def _v5_restore_one(j,name,paths,backup):
     atomic_bytes(path,raw,before,expected=after)
 
 
-def execute_v5(action,bundle,manifest,controller,stage_sha,dispatch_sha,run_id,baseline,commit,branch):
+# Retained complete product-QA resolution (Owner continuation): recover already-saved
+# native stdout via the selected Git parser without a second provider charge.
+PRODUCT_EVIDENCE_ROOT=receiver.AUTONOMY/'slots'/'slot2'/'antigravity-evidence'
+V5_RESOLVE_SCHEMA='GB_PRODUCT_QA_RETAINED_RESULT_RESOLUTION_V1'
+V5_RESOLVE_TERMINAL_PHASE=16
+
+
+def _read_uid978_private(path, *, limit=67108864):
+    """Bounded regular read of UID978 mode-0600 private evidence; no symlink/hardlink."""
+    path=pathlib.Path(path)
+    need(path.is_absolute() and '..' not in path.parts,'noncanonical evidence path')
+    parent=directory_fd(path.parent)
+    fd=None
+    try:
+        fd=os.open(path.name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK|os.O_CLOEXEC,dir_fd=parent)
+        before=os.fstat(fd)
+        need(stat.S_ISREG(before.st_mode) and before.st_nlink==1 and before.st_uid==978
+             and stat.S_IMODE(before.st_mode)==0o600 and before.st_size<=limit,
+             'unsafe UID978 evidence file')
+        digest_=hashlib.sha256();seen=0;chunks=[]
+        with os.fdopen(os.dup(fd),'rb') as stream:
+            while True:
+                chunk=stream.read(min(1048576,limit+1-seen))
+                if not chunk: break
+                seen+=len(chunk);need(seen<=limit,'evidence file too large');digest_.update(chunk)
+                chunks.append(chunk)
+        raw=b''.join(chunks)
+        need(seen==before.st_size and stable(os.fstat(fd))==stable(before),
+             'evidence changed during read')
+        current=os.stat(path.name,dir_fd=parent,follow_symlinks=False)
+        need(stable(current)==stable(before),'evidence replaced during read')
+        return raw,dict(sha256=digest_.hexdigest(),mode=0o600,uid=978,gid=before.st_gid,
+                        bytes=before.st_size)
+    finally:
+        if fd is not None: os.close(fd)
+        os.close(parent)
+
+
+def _product_evidence_dir(evidence_id):
+    need(type(evidence_id) is str and re.fullmatch('[0-9a-f]{32}',evidence_id),
+         'invalid product evidence id')
+    root=PRODUCT_EVIDENCE_ROOT
+    need(root.is_absolute() and '..' not in root.parts,'noncanonical evidence root')
+    # Parent chain: no symlink components; directory owned by UID978 mode 0700.
+    parent=directory_fd(root)
+    try:
+        info=os.fstat(parent)
+        need(stat.S_ISDIR(info.st_mode) and info.st_uid==978
+             and stat.S_IMODE(info.st_mode)==0o700,'unsafe product evidence root')
+        child=os.open(evidence_id,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC,dir_fd=parent)
+        try:
+            meta=os.fstat(child)
+            need(stat.S_ISDIR(meta.st_mode) and meta.st_uid==978
+                 and stat.S_IMODE(meta.st_mode)==0o700,'unsafe product evidence directory')
+        finally:
+            os.close(child)
+    finally:
+        os.close(parent)
+    path=root/evidence_id
+    need(path.resolve()==path and not path.is_symlink(),'evidence directory must be canonical')
+    return path
+
+
+def _offline_native_parse(parser_raw, stdout_raw, head, model):
+    """Load verified Git native adapter bytes as offline parser only; never invoke/charge."""
+    import importlib.util
+    import tempfile
+    need(isinstance(parser_raw,(bytes,bytearray)) and len(parser_raw)>0,'empty parser blob')
+    need(isinstance(stdout_raw,(bytes,bytearray)),'stdout must be bytes')
+    need(re.fullmatch('[a-f0-9]{40}',head or ''),'exact reviewed SHA required for parse')
+    with tempfile.TemporaryDirectory(prefix='.gb-agy-resolve-') as tmp:
+        path=pathlib.Path(tmp)/'native_antigravity.py'
+        path.write_bytes(parser_raw);os.chmod(path,0o600)
+        name='_gb_v5_resolve_native_antigravity'
+        spec=importlib.util.spec_from_file_location(name,path)
+        mod=importlib.util.module_from_spec(spec)
+        sys.modules[name]=mod
+        try:
+            spec.loader.exec_module(mod)
+            parse=getattr(mod,'parse_stream',None)
+            need(callable(parse),'verified adapter missing parse_stream')
+            # Never call review/invoke/charge surfaces from this path.
+            return parse(bytes(stdout_raw),head,model=model)
+        finally:
+            sys.modules.pop(name,None)
+
+
+def _v5_resolve_receipt_path(operation):
+    return STATE/('product-qa-retained-resolution-%s.json'%operation)
+
+
+def _v5_validate_parse_failed_op(ops, operation, baseline):
+    """Exact pending UNKNOWN AGY_PARSE_FAILED(parse) op; reject other UNKNOWN causes."""
+    need(isinstance(ops,dict) and ops.get('schema')=='GB_PRODUCT_QA_OPS_V1',
+         'invalid product-qa operations schema')
+    need(ops.get('pending')==operation,'product operation is not the sole pending key')
+    need(type(ops.get('operations')) is dict and operation in ops['operations'],
+         'product operation missing from ledger')
+    op=ops['operations'][operation]
+    need(isinstance(op,dict),'invalid product operation record')
+    result=op.get('result')
+    need(isinstance(result,dict) and result.get('status')=='unknown'
+         and result.get('reason')=='AGY_PARSE_FAILED'
+         and result.get('safe_release') is False,
+         'product result is not AGY_PARSE_FAILED UNKNOWN')
+    err=result.get('adapter_error')
+    need(isinstance(err,dict) and err.get('code')=='AGY_PARSE_FAILED'
+         and err.get('phase')=='parse'
+         and type(err.get('evidence_id')) is str
+         and re.fullmatch('[0-9a-f]{32}',err['evidence_id']),
+         'adapter_error is not terminal parse AGY_PARSE_FAILED')
+    admission=op.get('admission')
+    need(isinstance(admission,dict) and admission.get('controller_sha')==baseline,
+         'admission/controller baseline mismatch')
+    need(type(op.get('admission_sha256')) is str
+         and re.fullmatch('[a-f0-9]{64}',op['admission_sha256'])
+         and digest(admission)==op['admission_sha256'],
+         'admission digest mismatch')
+    need(type(op.get('task_hash')) is str and re.fullmatch('[a-f0-9]{64}',op['task_hash']),
+         'invalid product task_hash')
+    binding=op.get('binding')
+    need(isinstance(binding,dict) and binding.get('stage')=='product_qa'
+         and binding.get('head')==admission.get('source_sha')
+         and binding.get('issue')==admission.get('issue')
+         and binding.get('attempt')==admission.get('attempt'),
+         'operation binding mismatch vs admission')
+    process=op.get('process')
+    if process is not None:
+        need(type(process) is dict and set(process)=={'pid','start','boot'}
+             and type(process['pid']) is int and process['pid']>0,
+             'invalid recorded product process identity')
+        need(receiver.identity(process['pid'])!=process,
+             'product operation process still alive HOLD')
+    return op, err['evidence_id']
+
+
+def _v5_validate_retained_evidence(evidence_dir, op, installed_adapter_sha):
+    """Terminal phase-16 parse failure with full charged stdout and zero stderr."""
+    phase_path=evidence_dir/('phase-%02d.json'%V5_RESOLVE_TERMINAL_PHASE)
+    raw,meta=_read_uid978_private(phase_path)
+    terminal=loads(raw)
+    need(isinstance(terminal,dict) and terminal.get('schema')=='GB_AGY_PRIVATE_EVIDENCE_V1'
+         and terminal.get('evidence_id')==evidence_dir.name
+         and terminal.get('phase')=='parse'
+         and terminal.get('error_code')=='AGY_PARSE_FAILED'
+         and terminal.get('terminal') is True
+         and terminal.get('status')=='unknown'
+         and terminal.get('input_delivery')=='written'
+         and terminal.get('charge_state')=='charged'
+         and terminal.get('exit_code')==0
+         and terminal.get('candidate_state')=='unchanged'
+         and terminal.get('timeout') is False,
+         'terminal phase16 parse-failure evidence incomplete')
+    admission=op['admission']
+    need(terminal.get('base_sha')==admission.get('source_base')
+         and terminal.get('source_sha')==admission.get('source_sha')
+         and terminal.get('task_sha256')==op.get('task_hash')
+         and terminal.get('requested_model')==admission.get('model')
+         and type(terminal.get('rules_sha256')) is str
+         and re.fullmatch('[a-f0-9]{64}',terminal.get('rules_sha256') or ''),
+         'evidence base/source/task/model/rules binding mismatch')
+    need(terminal.get('adapter_sha256')==installed_adapter_sha,
+         'evidence adapter_sha256 does not match installed baseline adapter')
+    streams=terminal.get('streams')
+    need(isinstance(streams,dict) and set(streams)>= {'stdout','stderr'},
+         'terminal evidence missing stream digests')
+    stdout_meta=streams['stdout'];stderr_meta=streams['stderr']
+    need(isinstance(stdout_meta,dict) and stdout_meta.get('truncated') is False
+         and type(stdout_meta.get('bytes')) is int and stdout_meta['bytes']>0
+         and stdout_meta.get('retained_bytes')==stdout_meta['bytes']
+         and type(stdout_meta.get('sha256')) is str
+         and re.fullmatch('[a-f0-9]{64}',stdout_meta['sha256']),
+         'stdout retention incomplete or truncated')
+    need(isinstance(stderr_meta,dict) and stderr_meta.get('truncated') is False
+         and stderr_meta.get('bytes')==0 and stderr_meta.get('retained_bytes')==0
+         and type(stderr_meta.get('sha256')) is str
+         and re.fullmatch('[a-f0-9]{64}',stderr_meta['sha256']),
+         'stderr must be exact empty retained stream')
+    stdout_raw,stdout_file=_read_uid978_private(evidence_dir/'stdout')
+    stderr_raw,stderr_file=_read_uid978_private(evidence_dir/'stderr')
+    need(stdout_file['sha256']==stdout_meta['sha256']
+         and stdout_file['bytes']==stdout_meta['bytes']
+         and len(stdout_raw)==stdout_meta['bytes']
+         and bytes_sha(stdout_raw)==stdout_meta['sha256'],
+         'stdout bytes/sha256 contradict terminal evidence')
+    need(stderr_file['sha256']==stderr_meta['sha256']
+         and stderr_raw==b'' and stderr_meta['bytes']==0
+         and bytes_sha(stderr_raw)==stderr_meta['sha256'],
+         'stderr bytes/sha256 contradict terminal evidence')
+    return terminal, stdout_raw
+
+
+def _v5_require_parsed_product_qa(result, evidence, admission):
+    need(isinstance(result,dict) and result.get('verdict') in ('PASS','FAIL')
+         and result.get('reviewed_sha')==admission.get('source_sha')
+         and isinstance(result.get('findings'),list),
+         'offline parser did not yield exact PASS/FAIL verdict')
+    need(isinstance(evidence,dict)
+         and evidence.get('effective_model')==admission.get('model')
+         and evidence.get('finish_done') is True
+         and isinstance(evidence.get('tool_names'),list)
+         and 'view_file' in evidence['tool_names']
+         and 'run_command' in evidence['tool_names'],
+         'offline parser missing finish DONE / read-tool completion evidence')
+    return result, evidence
+
+
+def execute_v5_resolve_product(bundle,manifest,controller,stage_sha,dispatch_sha,
+                               baseline,commit,branch,product_operation):
+    """Recover already-saved complete product QA via offline Git parser; no provider call."""
     need(os.geteuid()==OWNER_UID,'root integrator only')
-    need(action in ('dry','apply','verify','activate','rollback'),'invalid V5 action')
+    need(re.fullmatch('[a-f0-9]{64}',product_operation or ''),
+         'exact --product-operation 64hex required')
+    need(re.fullmatch('[a-f0-9]{40}',baseline or '') and re.fullmatch('[a-f0-9]{40}',controller or ''),
+         'immutable controller required')
+    need(re.fullmatch('[a-f0-9]{64}',stage_sha or '') and re.fullmatch('[a-f0-9]{64}',dispatch_sha or ''),
+         'exact workflow digests required')
+    need(re.fullmatch('[a-f0-9]{64}',manifest or ''),'legacy manifest digest format')
+    need(re.fullmatch('[a-f0-9]{40}',commit or ''),'V5 exact reviewed candidate required')
+    need(controller!=baseline,'V5 distinct reviewed controller required')
+    # Trusted Git materialization BEFORE any import of candidate adapter or mutation.
+    _v5_workflow_gates(bundle,controller,baseline,stage_sha,dispatch_sha)
+    items=source(bundle,commit,branch,manifest,controller,stage_sha,dispatch_sha,
+                 version=5,baseline=baseline)
+    parser_raw=items[INSTALL/'native_antigravity.py']
+    parser_digest=bytes_sha(parser_raw)
+    receipt_path=_v5_resolve_receipt_path(product_operation)
+    # Idempotent re-entry: prior successful resolution of THIS operation only.
+    if V4_PRODUCT_OPS.exists():
+        prior_ops=receiver.read(V4_PRODUCT_OPS,0)
+        prior_op=(prior_ops.get('operations') or {}).get(product_operation)
+        if (isinstance(prior_op,dict) and isinstance(prior_op.get('resolution'),dict)
+                and prior_ops.get('pending') is None
+                and prior_op['resolution'].get('schema')==V5_RESOLVE_SCHEMA
+                and prior_op['resolution'].get('operation')==product_operation
+                and os.path.lexists(receipt_path)):
+            receipt=loads(regular_bytes(receipt_path))
+            need(receipt.get('schema')==V5_RESOLVE_SCHEMA
+                 and receipt.get('operation')==product_operation
+                 and receipt.get('parser_module_sha256')==parser_digest,
+                 'prior resolution receipt drift')
+            # Original UNKNOWN result must still be present unchanged at data level.
+            need(prior_op.get('result')==receipt.get('original_result'),
+                 'original UNKNOWN result drift after resolution')
+            return dict(phase='resolved-retained',version=5,operation=product_operation,
+                        idempotent=True,ready=False,role_qualified=False,
+                        receipt_sha256=bytes_sha(encoded(receipt)),
+                        generation=prior_ops.get('generation'))
+    quiet_v5(allow_product_pending=product_operation)
+    need(V4_PRODUCT_OPS.exists(),'product-qa-operations.json missing')
+    ops=receiver.read(V4_PRODUCT_OPS,0)
+    op,evidence_id=_v5_validate_parse_failed_op(ops,product_operation,baseline)
+    original_result=copy.deepcopy(op['result'])
+    original_result_digest=digest(original_result)
+    installed_adapter=sha(INSTALL/'native_antigravity.py')
+    evidence_dir=_product_evidence_dir(evidence_id)
+    terminal,stdout_raw=_v5_validate_retained_evidence(evidence_dir,op,installed_adapter)
+    transcript_digest=bytes_sha(stdout_raw)
+    need(transcript_digest==terminal['streams']['stdout']['sha256'],
+         'transcript digest mismatch')
+    parsed,parse_evidence=_offline_native_parse(
+        parser_raw,stdout_raw,op['admission']['source_sha'],op['admission']['model'])
+    verdict,parse_evidence=_v5_require_parsed_product_qa(parsed,parse_evidence,op['admission'])
+    # Policy disable BEFORE releasing pending so the old broken parser cannot launch
+    # a queued follow-on while pending is cleared. Preserve non-mode policy fields.
+    policy_raw=regular_bytes(receiver.POLICY)
+    policy=loads(policy_raw)
+    need(isinstance(policy,dict) and policy.get('controller_sha')==baseline
+         and policy.get('mode') in ('active','disabled')
+         and re.fullmatch('[a-f0-9]{64}',policy.get('stage_workflow_sha256') or ''),
+         'V5 resolve baseline policy/controller HOLD')
+    prior_policy=copy.deepcopy(policy)
+    if policy.get('mode')!='disabled':
+        disabled=copy.deepcopy(policy)
+        disabled['mode']='disabled'
+        # Keep controller/stage bindings of the installed baseline; do not rewrite them here.
+        need(disabled.get('controller_sha')==baseline,'policy baseline rewrite refused')
+        atomic_bytes(receiver.POLICY,encoded(disabled),
+                     canonical_meta(bytes_sha(encoded(disabled))),
+                     expected=current(receiver.POLICY))
+    ready_before=None
+    from native_antigravity import PRODUCT_READY
+    if PRODUCT_READY.exists():
+        ready_before=regular_bytes(PRODUCT_READY)
+    resolution=dict(
+        schema=V5_RESOLVE_SCHEMA,operation=product_operation,
+        evidence_id=evidence_id,
+        original_result_digest=original_result_digest,
+        evidence_terminal_digest=digest(terminal),
+        transcript_sha256=transcript_digest,
+        source_git_commit=commit,parser_module_sha256=parser_digest,
+        installed_adapter_sha256=installed_adapter,
+        reviewed_sha=verdict['reviewed_sha'],verdict=verdict['verdict'],
+        findings=list(verdict['findings']),
+        finish_done=True,
+        tool_names=list(parse_evidence.get('tool_names') or []),
+        effective_model=parse_evidence.get('effective_model'),
+        provider_reported_usage=parse_evidence.get('provider_reported_usage'),
+        prior_policy_mode=prior_policy.get('mode'),
+        prior_policy_backup=prior_policy,
+        policy_disabled=True,
+        ready=False,role_qualified=False,
+        hosted_continuation=False,native_post_install_qualification=False,
+        resolved_at=int(time.time()))
+    receipt=dict(resolution,original_result=original_result,
+                 admission_sha256=op['admission_sha256'],task_hash=op['task_hash'],
+                 bundle_commit=commit,baseline=baseline,controller=controller)
+    atomic_bytes(receipt_path,encoded(receipt),
+                 dict(mode=0o600,uid=OWNER_UID,gid=OWNER_GID))
+    # Append resolution on the SAME operation; preserve result UNKNOWN byte-for-byte
+    # at data level; consume pending once; bump generation once; update last envelope.
+    ops=receiver.read(V4_PRODUCT_OPS,0)
+    need(ops.get('pending')==product_operation,'pending drifted before release')
+    op=ops['operations'][product_operation]
+    need(op.get('result')==original_result,'original UNKNOWN result mutated before release')
+    need(op.get('resolution') is None,'resolution already present without idempotent receipt')
+    op['resolution']=resolution
+    # Data-level identity: do not rewrite result.
+    need(op['result']==original_result,'result rewrite refused')
+    ops['pending']=None
+    ops['generation']=int(ops.get('generation') or 0)+1
+    ops['last']=dict(
+        stage='product_qa',issue=op['admission']['issue'],
+        status='recovered_retained',reason='AGY_PARSE_FAILED_RESOLVED_RETAINED',
+        confirmed_at=None,workflow_run=None,workflow_attempt=None,
+        product_ready=False,receipt_file=str(receipt_path),
+        product_operation_changed=False,product_operation_transition=False,
+        hosted_continuation=False,native_post_install_qualification=False,
+        operation=product_operation,head=op['admission']['source_sha'],
+        attempt=op['admission'].get('attempt'),admission_sha256=op['admission_sha256'],
+        task_digest=op['task_hash'],qa_verdict=verdict['verdict'],
+        recovered_reviewed_sha=verdict['reviewed_sha'],
+        resolution_schema=V5_RESOLVE_SCHEMA)
+    receiver.atomic(V4_PRODUCT_OPS,ops)
+    # READY must stay false: do not write/qualify product role from this recovery.
+    if ready_before is None:
+        need(not PRODUCT_READY.exists(),'READY must remain absent after retained resolve')
+    else:
+        need(PRODUCT_READY.exists() and regular_bytes(PRODUCT_READY)==ready_before,
+             'READY bytes must remain unchanged after retained resolve')
+    need(loads(regular_bytes(receiver.POLICY)).get('mode')=='disabled',
+         'policy must stay disabled after retained resolve')
+    return dict(phase='resolved-retained',version=5,operation=product_operation,
+                idempotent=False,ready=False,role_qualified=False,
+                verdict=verdict['verdict'],reviewed_sha=verdict['reviewed_sha'],
+                generation=ops['generation'],receipt_sha256=bytes_sha(encoded(receipt)),
+                parser_module_sha256=parser_digest,policy_disabled=True)
+
+
+def execute_v5(action,bundle,manifest,controller,stage_sha,dispatch_sha,run_id,baseline,commit,branch,
+               product_operation=None):
+    need(os.geteuid()==OWNER_UID,'root integrator only')
+    need(action in ('dry','apply','verify','activate','rollback','resolve-product'),'invalid V5 action')
+    if action=='resolve-product':
+        return execute_v5_resolve_product(
+            bundle,manifest,controller,stage_sha,dispatch_sha,baseline,commit,branch,
+            product_operation)
     need(re.fullmatch('[a-f0-9]{40}',baseline or '') and re.fullmatch('[a-f0-9]{40}',controller or ''),
          'immutable controller required')
     need(re.fullmatch('[a-f0-9]{64}',stage_sha or '') and re.fullmatch('[a-f0-9]{64}',dispatch_sha or ''),
@@ -1963,7 +2335,7 @@ def unlink_cas(path,expected):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action',choices=('dry','apply','verify','activate','rollback'))
+    parser.add_argument('action',choices=('dry','apply','verify','activate','rollback','resolve-product'))
     parser.add_argument('--bundle',required=True,type=pathlib.Path)
     parser.add_argument('--manifest',required=True)
     parser.add_argument('--baseline-controller',required=True)
@@ -1971,7 +2343,13 @@ def main():
     parser.add_argument('--stage-hash',required=True);parser.add_argument('--dispatch-hash',required=True)
     parser.add_argument('--bundle-commit');parser.add_argument('--bundle-branch',default='dev')
     parser.add_argument('--version',type=int,choices=(2,3,4,5),default=2)
-    parser.add_argument('--run',type=int);a=parser.parse_args()
+    parser.add_argument('--run',type=int)
+    parser.add_argument('--product-operation',help='exact 64hex product-qa operation for resolve-product')
+    a=parser.parse_args()
+    if a.action=='resolve-product':
+        need(a.version==5,'resolve-product requires --version 5')
+        need(re.fullmatch('[a-f0-9]{64}',a.product_operation or ''),
+             'resolve-product requires exact --product-operation 64hex')
     path=STATE/'controller.lock'
     # Existing lock only, including dry: no O_CREAT, mkdir or managed byte writes.
     read_file(path)
@@ -1984,7 +2362,8 @@ def main():
         fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
         need(stable(os.stat(path.name,dir_fd=parent,follow_symlinks=False))==stable(info),'controller lock replaced')
         print(json.dumps(execute(a.action,a.bundle,a.manifest,a.controller,a.stage_hash,a.dispatch_hash,
-                                a.run,a.baseline_controller,a.bundle_commit,a.bundle_branch,a.version),sort_keys=True))
+                                a.run,a.baseline_controller,a.bundle_commit,a.bundle_branch,a.version,
+                                product_operation=a.product_operation),sort_keys=True))
     finally:
         if fd is not None: os.close(fd)
         os.close(parent)
