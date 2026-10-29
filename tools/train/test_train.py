@@ -2636,6 +2636,26 @@ class LeanDeliveryWorkflowTransportTests(unittest.TestCase):
             'claim': {'phase': 'DONE'},
         })
         self.assertTrue(self.decide_continue(accepted))
+        # Stale historical capacity wake on completed accepted entry is not a stop.
+        hist = self._wake_doc()
+        hist['controller']['results'] = [{
+            'status': 'dev_accepted_uat_pending',
+            'claim': {
+                'phase': 'DEV_ACCEPTED_UAT_PENDING',
+                'wake': 'capacity_fallback_budget',
+                'uat': 'NOT_TESTED',
+            },
+        }]
+        self.assertTrue(self.decide_continue(hist))
+        # Known BLOCKED may coexist with independent accepted progress.
+        blocked_ok = self._wake_doc()
+        blocked_ok['controller']['results'] = [
+            {'status': 'blocked', 'reason': 'blocked',
+             'claim': {'phase': 'BLOCKED'}},
+            {'status': 'dev_accepted_uat_pending',
+             'claim': {'phase': 'DEV_ACCEPTED_UAT_PENDING', 'uat': 'NOT_TESTED'}},
+        ]
+        self.assertTrue(self.decide_continue(blocked_ok))
         # Idle / empty queue stops — no dispatch loop.
         idle = self._wake_doc()
         idle['controller']['results'] = []
@@ -2680,6 +2700,13 @@ class LeanDeliveryWorkflowTransportTests(unittest.TestCase):
         phase_run = self._wake_doc()
         phase_run['controller']['results'][0]['claim']['phase'] = 'RUNNING'
         self.assertFalse(self.decide_continue(phase_run))
+        mismatched = self._wake_doc()
+        mismatched['controller']['results'] = [
+            {'status': 'blocked', 'claim': {'phase': 'UNKNOWN'}},
+            {'status': 'dev_accepted_uat_pending',
+             'claim': {'phase': 'DEV_ACCEPTED_UAT_PENDING'}},
+        ]
+        self.assertFalse(self.decide_continue(mismatched))
         unknown_reason = self._wake_doc()
         unknown_reason['controller']['results'][0]['reason'] = 'mystery'
         self.assertFalse(self.decide_continue(unknown_reason))

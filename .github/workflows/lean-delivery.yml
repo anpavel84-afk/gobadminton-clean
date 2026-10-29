@@ -177,6 +177,8 @@ jobs:
 
               Do not gate on controller.projection.enabled (placeholder).
               Do not treat UNKNOWN/budget/capacity/unsafe paid outcomes as wake.
+              Accepted status+phase is progress (ignore stale claim.wake).
+              Known blocked may coexist with independent accepted/eligible wake.
               """
               if not isinstance(doc, dict):
                   return False
@@ -199,22 +201,8 @@ jobs:
               }
               accepted_status = frozenset({'dev_accepted_uat_pending', 'done'})
               accepted_phase = frozenset({'DEV_ACCEPTED_UAT_PENDING', 'DONE'})
-              unsafe_status = frozenset({
-                  'strategy_halt', 'blocked', 'hold', 'running', 'unknown',
-                  'no_admissions_source', 'queue_unavailable', 'schedule_reconcile',
-                  'already_terminal', 'denied', 'duplicate_ignored', 'admitted',
-              })
-              unsafe_reason = frozenset({
-                  'capacity_fallback_budget', 'agy_ineligible', 'blocked',
-                  'strategy_halt', 'unknown',
-              })
-              unsafe_phase = frozenset({
-                  'RUNNING', 'HOLD', 'BLOCKED', 'STRATEGY_HALT', 'UNKNOWN',
-                  'DENIED',
-              })
-              unsafe_wake = frozenset({
-                  'capacity_fallback_budget', 'agy_ineligible',
-              })
+              known_blocked = frozenset({'blocked', 'strategy_halt', 'denied'})
+              progress = False
               for item in results:
                   if not isinstance(item, dict):
                       return False
@@ -226,25 +214,22 @@ jobs:
                   if not isinstance(claim, dict):
                       return False
                   phase = claim.get('phase')
-                  wake = claim.get('wake')
-                  if status in unsafe_status:
-                      return False
-                  if reason in unsafe_reason:
-                      return False
-                  if phase in unsafe_phase:
-                      return False
-                  if wake in unsafe_wake:
-                      return False
+                  if status in accepted_status and phase in accepted_phase:
+                      progress = True
+                      continue
                   if status == 'wake_resume':
                       if reason not in wake_reason_phase:
                           return False
                       if phase != wake_reason_phase[reason]:
                           return False
+                      progress = True
                       continue
-                  if status in accepted_status and phase in accepted_phase:
+                  if status in known_blocked:
+                      if phase not in ('BLOCKED', 'STRATEGY_HALT', 'DENIED'):
+                          return False
                       continue
                   return False
-              return True
+              return progress
           # LEAN_DECIDE_CONTINUE_END
 
           def _unique(pairs):
