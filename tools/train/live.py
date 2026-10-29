@@ -654,10 +654,15 @@ def create_task_worktree(task, *, repo=None, root=None):
         return str(work)
     # Create only a genuinely fresh assigned tree from verified origin/dev or
     # explicit prepared base SHA. Git runs under UID1002 drop (run_argv).
-    git(repo, 'fetch', 'origin', 'dev', timeout=120)
+    # Explicit refspec updates refs/remotes/origin/dev even when the repo's
+    # remote.origin.fetch is main-only (FETCH_HEAD alone must not freeze a stale tip).
+    git(repo, 'fetch', 'origin', '+refs/heads/dev:refs/remotes/origin/dev', timeout=120)
     base = expected_base
     if not (isinstance(base, str) and SHA40.fullmatch(base)):
-        base = git(repo, 'rev-parse', 'origin/dev')
+        try:
+            base = git(repo, 'rev-parse', 'refs/remotes/origin/dev')
+        except LiveError:
+            base = git(repo, 'rev-parse', 'FETCH_HEAD')
         if not SHA40.fullmatch(str(base)):
             raise LiveError('origin_dev_unresolved', str(base))
     run_argv(
@@ -919,6 +924,146 @@ def _cursor_namespace_argv_uid1002(guard, base, cmd):
         payload.get('argv'), base, cmd, bwrap=bwrap)
 
 
+# Fixed trusted child body for native.snapshot under UID1002/NNP via run_argv.
+# Parent substitutes the protected NATIVE_TRAIN path; JSON stdin is work/bridge/
+# baseline only — no eval/pickle/shell, no model/auth, no user Repo Python.
+_NATIVE_SNAPSHOT_CHILD = r'''
+import json, os, sys
+from pathlib import Path
+from types import SimpleNamespace
+req = json.load(sys.stdin)
+if not isinstance(req, dict) or set(req) - {"work", "bridge_work", "baseline"}:
+    sys.stdout.write(json.dumps({"ok": False, "error": "unexpected_fields"}))
+    raise SystemExit(2)
+if os.geteuid() != 1002:
+    sys.stdout.write(json.dumps({"ok": False, "error": "geteuid", "geteuid": os.geteuid()}))
+    raise SystemExit(3)
+sys.path.append(__NATIVE_TRAIN__)
+from native_cursor import snapshot
+env = {
+    "PATH": "/usr/bin:/bin",
+    "HOME": "/home/agentagency-dev",
+    "GIT_CONFIG_GLOBAL": "/dev/null",
+    "GIT_CONFIG_SYSTEM": "/dev/null",
+    "GIT_OPTIONAL_LOCKS": "0",
+    "GIT_TERMINAL_PROMPT": "0",
+}
+bridge = SimpleNamespace(work=Path(req["bridge_work"]), env=env)
+files = snapshot(Path(req["work"]), bridge, req["baseline"])
+sys.stdout.write(json.dumps({"ok": True, "geteuid": 1002, "files": files}, separators=(",", ":")))
+'''
+
+
+def _native_snapshot_child_snippet():
+    """Trusted constant snippet with protected NATIVE_TRAIN path baked in."""
+    native = str(Path(NATIVE_TRAIN).resolve())
+    if not native or "'" in native or '"' in native or '\n' in native:
+        raise LiveError('native_train_path_invalid', native[:80])
+    return _NATIVE_SNAPSHOT_CHILD.replace('__NATIVE_TRAIN__', repr(native))
+
+
+def _native_snapshot_uid1002(work, bridge_work, baseline, *, env=None):
+    """Same protected native.snapshot as UID1002/NNP — never Root Git on user checkout.
+
+    Already-1002 callers invoke the native function directly. Root uses run_argv
+    drop + fixed python -I snippet (JSON stdin/stdout). Native module unchanged;
+    no Git ownership-check bypass.
+    """
+    from types import SimpleNamespace
+    require_executor_uid()
+    euid = os.geteuid()
+    work = Path(work)
+    bridge_work = Path(bridge_work)
+    if not isinstance(baseline, dict):
+        raise LiveError('snapshot_baseline_invalid', type(baseline).__name__)
+    if euid == CURSOR_UID:
+        native = _load_native('native_cursor')
+        bridge = SimpleNamespace(work=bridge_work, env=env or git_env())
+        return native.snapshot(work, bridge, baseline)
+    if euid != 0:
+        raise LiveError('unexpected_executor_uid', str(euid))
+    payload = json.dumps({
+        'work': str(work),
+        'bridge_work': str(bridge_work),
+        'baseline': baseline,
+    }, separators=(',', ':'))
+    proc = run_argv(
+        ['/usr/bin/python3', '-I', '-c', _native_snapshot_child_snippet()],
+        env=git_env(), timeout=120, input_text=payload, check=False, drop_uid=True,
+    )
+    raw = (proc.stdout or '').strip()
+    if proc.returncode != 0 or not raw:
+        err = (proc.stderr or raw or 'snapshot_child_failed')[:400]
+        raise LiveError('native_snapshot_uid1002', err)
+    try:
+        obj = json.loads(raw)
+    except (ValueError, TypeError) as err:
+        raise LiveError('native_snapshot_uid1002', 'bad_json') from err
+    if not isinstance(obj, dict) or not obj.get('ok'):
+        raise LiveError('native_snapshot_uid1002', str((obj or {}).get('error') or raw)[:400])
+    if obj.get('geteuid') != CURSOR_UID:
+        raise LiveError('native_snapshot_child_uid', str(obj.get('geteuid')))
+    files = obj.get('files')
+    if not isinstance(files, dict):
+        raise LiveError('native_snapshot_uid1002', 'files_type')
+    return files
+
+
+def _preserve_unpublished_author_sources(
+        evidence, *, work, baseline, allowed, native, token=None):
+    """Keep allowed source bytes after paid model when technical import fails.
+
+    Evidence only — labeled UNVALIDATED; never accept/publish by preservation.
+    Uses native._source type/symlink/size checks; refuses token bytes in data.
+    """
+    evidence = Path(evidence)
+    work = Path(work)
+    allowed = [n for n in sorted(set(allowed or [])) if isinstance(n, str) and n]
+    meta = {
+        'validation': 'UNVALIDATED',
+        'files': {},
+        'deleted': [],
+        'errors': [],
+    }
+    root = evidence / 'unpublished-source'
+    root.mkdir(parents=True, exist_ok=True)
+    tok = token.encode() if token else None
+    for name in allowed:
+        try:
+            if not hasattr(native, 'source_name') or not native.source_name(name):
+                meta['errors'].append({'name': name, 'error': 'source_name_refused'})
+                continue
+        except Exception as err:
+            meta['errors'].append({'name': name, 'error': type(err).__name__[:80]})
+            continue
+        path = work / name
+        if not path.exists():
+            if name in (baseline or {}):
+                meta['deleted'].append({
+                    'name': name, 'baseline_sha256': baseline.get(name),
+                })
+            continue
+        try:
+            data = native._source(path, work)
+        except Exception as err:
+            meta['errors'].append({'name': name, 'error': type(err).__name__[:80]})
+            continue
+        if tok and tok in data:
+            meta['errors'].append({'name': name, 'error': 'token_refused'})
+            continue
+        dest = root / name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(data)
+        meta['files'][name] = {
+            'sha256': hashlib.sha256(data).hexdigest(),
+            'bytes': len(data),
+            'relative': 'unpublished-source/' + name,
+        }
+    (evidence / 'unpublished-source.json').write_text(
+        json.dumps(meta, ensure_ascii=False, indent=2), encoding='utf-8')
+    return meta
+
+
 def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_lease=True):
     """Actual Cursor Auto CLI via native export/import (Mode A pattern in source).
 
@@ -950,6 +1095,10 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
     # Private sandbox under /tmp/gb-cursor-211-* — native_guard exact prefix.
     base = Path(tempfile.mkdtemp(prefix='gb-cursor-211-', dir='/tmp'))
     p = None
+    token = None
+    before = None
+    model_result = None
+    import_done = False
     try:
         for name in CURSOR_PRIVATE_DIRS:
             (base / name).mkdir(mode=0o700)
@@ -1080,7 +1229,25 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
         if token.encode() in raw or token.encode() in errf.read_bytes():
             raise ProviderError('token_leak_in_stream')
         result = native.parse_stream(raw)
-        after = native.snapshot(base / 'work', bridge, before)
+        model_result = result
+        # Local snapshot must run as UID1002 against the original checkout (check-ignore).
+        try:
+            after = _native_snapshot_uid1002(
+                base / 'work', worktree, before, env=env_git)
+        except Exception as err:
+            mark_intent_phase(
+                intent_path, 'completed',
+                import_failed=True,
+                import_error=f'{type(err).__name__}:{err}'[:500],
+                cursor_result=result,
+                model_launch=1,
+                charge='charged',
+            )
+            raise ProviderError(
+                'source_import',
+                f'{type(err).__name__}:{err}'[:400],
+                charge='charged',
+            ) from err
         changed = sorted(n for n in set(before) | set(after) if before.get(n) != after.get(n))
         allowed = set(task.get('allowed_paths') or [])
         if not changed or not set(changed) <= allowed:
@@ -1120,6 +1287,7 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
             raise ProviderError('author_missing_candidate_sha')
         mark_intent_phase(intent_path, 'completed', candidate_sha=sha,
                           changed_paths=changed, cursor_result=result)
+        import_done = True
         return {
             'candidate_sha': sha,
             'changed_paths': changed,
@@ -1130,6 +1298,23 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
             'uid': CURSOR_UID,
         }
     finally:
+        # Paid model completed but technical import failed: keep allowed sources
+        # before private sandbox cleanup (UNVALIDATED; RAW already on evidence).
+        if (
+            model_result is not None and not import_done
+            and native is not None and before is not None
+        ):
+            try:
+                _preserve_unpublished_author_sources(
+                    evidence,
+                    work=base / 'work',
+                    baseline=before,
+                    allowed=set(task.get('allowed_paths') or []),
+                    native=native,
+                    token=token,
+                )
+            except Exception:
+                pass
         if p is not None and p.poll() is None:
             _kill_owned_process_group(p)
         shutil.rmtree(base, ignore_errors=True)
