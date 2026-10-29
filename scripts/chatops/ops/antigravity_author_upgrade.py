@@ -59,8 +59,8 @@ def encoded(value):
     return json.dumps(value, sort_keys=True).encode()
 
 
-def _load_quiet_v5():
-    """Reuse accepted stage5 quiet_v5 — no new quiescence framework."""
+def _load_quiet_mod():
+    """Reuse accepted stage5 quiet helpers — no new quiescence framework."""
     path = Path(__file__).resolve().with_name('stage5_cursor_context_upgrade.py')
     if not path.is_file():
         # Installed OPS may live beside the train lib.
@@ -71,13 +71,29 @@ def _load_quiet_v5():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     need(hasattr(mod, 'quiet_v5'), 'quiet_v5 absent')
-    return mod.quiet_v5
+    need(getattr(mod, 'QUIET_SCOPE_NATIVE_ANTIGRAVITY_AUTHOR', None)
+         == 'native_antigravity_author', 'author quiet scope absent')
+    return mod
 
 
-def quiet(base_controller=None):
-    """DEAD historical occupancy via quiet_v5; policy stays disabled; no pending clear."""
-    quiet_v5 = _load_quiet_v5()
-    quiet_v5()
+def _load_quiet_v5():
+    """Compatibility: return quiet_v5 callable from the shared stage5 module."""
+    return _load_quiet_mod().quiet_v5
+
+
+def quiet(base_controller=None, *, canary_task_sha256=None):
+    """DEAD historical occupancy via quiet_v5 author scope; never clears pending UNKNOWN.
+
+    Requests native_antigravity_author resource scope only: shared_qa default for
+    other callers stays strict. Carries this install's canary task hash so same-task
+    product-QA pending cannot be skipped. Physical UID978 provider absence remains
+    inside quiet_v5 after quiet_v4.
+    """
+    need(re.fullmatch('[a-f0-9]{64}', canary_task_sha256 or ''),
+         'exact canary task hash required for author quiet')
+    mod = _load_quiet_mod()
+    mod.quiet_v5(mod.QUIET_SCOPE_NATIVE_ANTIGRAVITY_AUTHOR,
+                 author_canary_task_sha256=canary_task_sha256)
     policy = r.read(r.POLICY, 0)
     need(policy.get('mode') == 'disabled', 'launches enabled; refuse author install')
     if base_controller:
@@ -187,7 +203,7 @@ def preserved():
 
 def plan(bundle, commit, task_hash, *, base_controller=None, legacy_finite=None):
     need(re.fullmatch('[a-f0-9]{64}', task_hash or ''), 'exact canary task hash required')
-    quiet(base_controller)
+    quiet(base_controller, canary_task_sha256=task_hash)
     material = git_blobs(bundle, commit)
     author_raw = material[REPO_PREFIX + AUTHOR_MODULE]
     # Verify retained N/Guard match chosen Git blobs AND installed QA-ready modules.
@@ -295,7 +311,7 @@ def execute(action, bundle, commit, task_hash, *, base_controller=None, legacy_f
     need(j.get('schema') == 'GB_AGY_AUTHOR_UPGRADE_V1'
          and j.get('bundle_commit') == commit
          and j.get('task_sha256') == task_hash, 'upgrade identity differs')
-    quiet(base_controller or j.get('base_controller'))
+    quiet(base_controller or j.get('base_controller'), canary_task_sha256=task_hash)
     need(preserved() == j['history'], 'history changed; never rewind it')
     allowed = {str(INSTALL / AUTHOR_MODULE), str(MARKER), str(BUDGET)}
     need(set(j['changes']) == allowed, 'invalid journal targets')
