@@ -22,6 +22,7 @@ from providers import (
     OWNER_ID, REPO_ID, REPO, ProviderError, SHA40, atomic_write, digest, loads,
     progress_halt, default_routes, AUTHOR_PASS_CLAIMS, role_ready,
     invoke_cursor_author, invoke_codex_qa, invoke_trusted_publish, select_qa_provider,
+    select_author_provider,
     parse_qa_verdict,
 )
 
@@ -999,11 +1000,14 @@ def execute_claim(admission, adapters, *, results_root, config=None, parent_leas
                 task['repair_findings'] = findings
                 task['findings'] = findings
             # Runtime context for author — do not rewrite admission task.base/revision.
+            # author_attempt is stripped by canonical_task_payload for canary digest.
             task['worktree'] = worktree
             task['runtime_base_sha'] = base_sha
+            task['author_attempt'] = author_n
             mark_phase(path, 'RUNNING', stage='author', attempts=claim['attempts'],
                        repair_findings=findings or None,
                        worktree=str(worktree), base_sha=base_sha,
+                       author_attempt=author_n,
                        author_evidence_dir=str(author_evidence),
                        evidence_root=str(evidence))
             try:
@@ -1028,10 +1032,31 @@ def execute_claim(admission, adapters, *, results_root, config=None, parent_leas
                 mark_phase(path, 'BLOCKED', stage='author', error=err.code)
                 raise
             candidate_sha = author_result['candidate_sha']
+            # Store actual provider/model/op/native evidence — do not drop AGY as Cursor.
+            routes = dict(claim.get('routes') or {})
+            routes['author'] = {
+                'requested': (
+                    (task.get('authorroute') or task.get('author_route')
+                     or task.get('author_routes') or ['cursor_auto'])
+                ),
+                'provider': author_result.get('provider') or 'cursor_auto',
+                'effective_model': author_result.get('effective_model'),
+                'operation_fingerprint': author_result.get('operation_fingerprint'),
+                'native_evidence_dir': author_result.get('native_evidence_dir'),
+                'author_attempt': author_n,
+            }
             claim = mark_phase(path, 'AUTHOR_DONE', stage='author',
                                candidate_sha=candidate_sha,
                                reviewed_candidate_sha=candidate_sha,
                                author_changed=author_result.get('changed_paths') or [],
+                               author_provider=author_result.get('provider'),
+                               effective_model=author_result.get('effective_model'),
+                               operation_fingerprint=author_result.get(
+                                   'operation_fingerprint'),
+                               native_evidence_dir=author_result.get(
+                                   'native_evidence_dir'),
+                               author_attempt=author_n,
+                               routes=routes,
                                attempts=claim['attempts'], worktree=str(worktree),
                                base_sha=base_sha,
                                author_evidence_dir=str(author_evidence),

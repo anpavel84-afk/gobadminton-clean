@@ -1230,10 +1230,89 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
             raise ProviderError('token_leak_in_stream')
         result = native.parse_stream(raw)
         model_result = result
-        # Local snapshot must run as UID1002 against the original checkout (check-ignore).
+        # Post-model local only: snapshot/import/git. LiveError must not escape
+        # as bare exception leaving claim RUNNING — charged source_import.
         try:
             after = _native_snapshot_uid1002(
                 base / 'work', worktree, before, env=env_git)
+            changed = sorted(
+                n for n in set(before) | set(after) if before.get(n) != after.get(n))
+            allowed = set(task.get('allowed_paths') or [])
+            if not changed or not set(changed) <= allowed:
+                raise ProviderError('author_empty_or_oos', ','.join(changed[:20]))
+            for name in changed:
+                target = worktree / name
+                # Match Mode A: refuse symlink target/parents before Root atomic replace.
+                if any(x.is_symlink() for x in (target, *target.parents)):
+                    raise ProviderError('symlink_import_refused', name)
+                if name not in after:
+                    if target.exists() and not target.is_symlink():
+                        target.unlink()
+                    continue
+                data = native._source(base / 'work' / name, base / 'work')
+                if token.encode() in data:
+                    raise ProviderError('token_leak_in_source')
+                if any(x.is_symlink() for x in (target.parent, *target.parent.parents)):
+                    raise ProviderError('symlink_import_refused', name)
+                # Fresh missing parents only — never recursive chown of existing tree.
+                created_dirs = []
+                probe = target.parent
+                while probe != worktree and worktree in probe.parents:
+                    if probe.exists():
+                        break
+                    created_dirs.append(probe)
+                    probe = probe.parent
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if os.geteuid() == 0:
+                    for d in reversed(created_dirs):
+                        if d.is_dir() and not d.is_symlink():
+                            os.chown(d, CURSOR_UID, CURSOR_GID)
+                if any(x.is_symlink() for x in (target, *target.parents)):
+                    raise ProviderError('symlink_import_refused', name)
+                import stat as statmod
+                mode = (
+                    statmod.S_IMODE(target.stat().st_mode) if target.exists() else 0o644)
+                fd, tmp = tempfile.mkstemp(
+                    prefix='.lean-import-', dir=str(target.parent))
+                try:
+                    with os.fdopen(fd, 'wb') as fh:
+                        os.fchmod(fh.fileno(), mode)
+                        fh.write(data)
+                        fh.flush()
+                        os.fsync(fh.fileno())
+                        # Root mkstemp is root:root; hand off before replace so
+                        # UID1002 git add can read preserved 0600 modes.
+                        if os.geteuid() == 0:
+                            os.fchown(fh.fileno(), CURSOR_UID, CURSOR_GID)
+                    os.replace(tmp, target)
+                except BaseException:
+                    try:
+                        os.unlink(tmp)
+                    except OSError:
+                        pass
+                    raise
+            git(worktree, 'add', '--', *changed)
+            git(worktree, '-c', 'user.name=agentagency-dev',
+                '-c', 'user.email=agentagency-dev@localhost',
+                '-c', 'commit.gpgsign=false', 'commit', '-m',
+                f'lean: issue-{task["issue"]} author candidate')
+            sha = git(worktree, 'rev-parse', 'HEAD')
+            if not SHA40.fullmatch(sha):
+                raise ProviderError('author_missing_candidate_sha')
+            mark_intent_phase(intent_path, 'completed', candidate_sha=sha,
+                              changed_paths=changed, cursor_result=result)
+            import_done = True
+            return {
+                'candidate_sha': sha,
+                'changed_paths': changed,
+                'model_launch': 1,
+                'provider': 'cursor_auto',
+                'result': result,
+                'root_model': False,
+                'uid': CURSOR_UID,
+            }
+        except ProviderError:
+            raise
         except Exception as err:
             mark_intent_phase(
                 intent_path, 'completed',
@@ -1248,55 +1327,6 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
                 f'{type(err).__name__}:{err}'[:400],
                 charge='charged',
             ) from err
-        changed = sorted(n for n in set(before) | set(after) if before.get(n) != after.get(n))
-        allowed = set(task.get('allowed_paths') or [])
-        if not changed or not set(changed) <= allowed:
-            raise ProviderError('author_empty_or_oos', ','.join(changed[:20]))
-        for name in changed:
-            target = worktree / name
-            # Match Mode A: refuse symlink target/parents before Root atomic replace.
-            if any(x.is_symlink() for x in (target, *target.parents)):
-                raise ProviderError('symlink_import_refused', name)
-            if name not in after:
-                if target.exists() and not target.is_symlink():
-                    target.unlink()
-                continue
-            data = native._source(base / 'work' / name, base / 'work')
-            if token.encode() in data:
-                raise ProviderError('token_leak_in_source')
-            if any(x.is_symlink() for x in (target.parent, *target.parent.parents)):
-                raise ProviderError('symlink_import_refused', name)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            if any(x.is_symlink() for x in (target, *target.parents)):
-                raise ProviderError('symlink_import_refused', name)
-            import stat as statmod
-            mode = statmod.S_IMODE(target.stat().st_mode) if target.exists() else 0o644
-            fd, tmp = tempfile.mkstemp(prefix='.lean-import-', dir=str(target.parent))
-            with os.fdopen(fd, 'wb') as fh:
-                os.fchmod(fh.fileno(), mode)
-                fh.write(data)
-                fh.flush()
-                os.fsync(fh.fileno())
-            os.replace(tmp, target)
-        git(worktree, 'add', '--', *changed)
-        git(worktree, '-c', 'user.name=agentagency-dev', '-c', 'user.email=agentagency-dev@localhost',
-            '-c', 'commit.gpgsign=false', 'commit', '-m',
-            f'lean: issue-{task["issue"]} author candidate')
-        sha = git(worktree, 'rev-parse', 'HEAD')
-        if not SHA40.fullmatch(sha):
-            raise ProviderError('author_missing_candidate_sha')
-        mark_intent_phase(intent_path, 'completed', candidate_sha=sha,
-                          changed_paths=changed, cursor_result=result)
-        import_done = True
-        return {
-            'candidate_sha': sha,
-            'changed_paths': changed,
-            'model_launch': 1,
-            'provider': 'cursor_auto',
-            'result': result,
-            'root_model': False,
-            'uid': CURSOR_UID,
-        }
     finally:
         # Paid model completed but technical import failed: keep allowed sources
         # before private sandbox cleanup (UNVALIDATED; RAW already on evidence).
@@ -2431,6 +2461,770 @@ def agy_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None,
     return parsed
 
 
+def owner_safe_atomic_import(*, worktree, payloads, deleted, uid=CURSOR_UID, gid=CURSOR_GID):
+    """Cursor21 owner-safe atomic import into UID1002 task tree (Root parent only).
+
+    Fresh missing parents get UID1002 ownership; existing trees are never recursively
+    chowned. Root mkstemp is fchown'd before replace so preserved 0600 remains readable.
+    """
+    worktree = Path(worktree)
+    import stat as statmod
+    for name in list(deleted or []):
+        target = worktree / name
+        if any(x.is_symlink() for x in (target, *target.parents)):
+            raise LiveError('symlink_import_refused', name)
+        if target.exists() and not target.is_symlink():
+            target.unlink()
+    for name, data in (payloads or {}).items():
+        target = worktree / name
+        if any(x.is_symlink() for x in (target, *target.parents)):
+            raise LiveError('symlink_import_refused', name)
+        if any(x.is_symlink() for x in (target.parent, *target.parent.parents)):
+            raise LiveError('symlink_import_refused', name)
+        created_dirs = []
+        probe = target.parent
+        while probe != worktree and worktree in probe.parents:
+            if probe.exists():
+                break
+            created_dirs.append(probe)
+            probe = probe.parent
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if os.geteuid() == 0:
+            for d in reversed(created_dirs):
+                if d.is_dir() and not d.is_symlink():
+                    os.chown(d, uid, gid)
+        if any(x.is_symlink() for x in (target, *target.parents)):
+            raise LiveError('symlink_import_refused', name)
+        mode = (statmod.S_IMODE(target.stat().st_mode) if target.exists() else 0o644)
+        fd, tmp = tempfile.mkstemp(prefix='.lean-import-', dir=str(target.parent))
+        try:
+            with os.fdopen(fd, 'wb') as fh:
+                os.fchmod(fh.fileno(), mode)
+                fh.write(data)
+                fh.flush()
+                os.fsync(fh.fileno())
+                if os.geteuid() == 0:
+                    os.fchown(fh.fileno(), uid, gid)
+            os.replace(tmp, target)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+
+
+def _agy_author_operation_fingerprint(task, base_sha, attempt):
+    payload = {
+        'issue': int(task['issue']),
+        'revision': task.get('revision') or task.get('task_revision'),
+        'attempt': attempt,
+        'base': base_sha,
+        'provider': 'agy_author',
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()
+    ).hexdigest()
+
+
+# Native author input_payload refuses oversize; keep whole materials (no slice).
+AGY_AUTHOR_PROMPT_MAX = 1 << 20
+
+
+def _agy_author_prompt(task, *, rules_text, materials=None):
+    """Short AGENTS + task; verified materials fully inlined into private-cwd prompt.
+
+    Model Landlock sees only /tmp/gb-agy-author-*/ws — never instruct staging paths.
+    Missing/unreadable approved materials fail closed (caller NO_CALL before charge).
+    """
+    allowed = list(task.get('allowed_paths') or [])
+    body = {
+        k: task.get(k) for k in (
+            'issue', 'goal', 'acceptance', 'allowed_paths', 'assignment',
+            'revision', 'findings', 'repair_findings', 'ci_failure',
+        ) if task.get(k) is not None
+    }
+    prompt = rules_text + '\n'
+    prompt += 'EXACT OWNER ASSIGNMENT (Lean Mode B AGY author live binding)\n'
+    prompt += json.dumps(body, ensure_ascii=False, indent=2) + '\n'
+    prompt += (
+        'Work ONLY in the current private export cwd (model workspace). '
+        'Do not use staging paths, external task checkout paths, or model Git metadata.\n'
+    )
+    prompt += 'Allowed paths: ' + json.dumps(allowed) + '\n'
+    if materials:
+        prompt += 'ACTUAL INPUT MATERIALS:\n' + json.dumps([
+            {k: v for k, v in item.items() if k != 'path'}
+            for item in materials
+        ], ensure_ascii=False) + '\n'
+        for item in materials:
+            kind = item.get('kind')
+            if kind != 'text':
+                # No native image delivery path — fail closed before charge/launch.
+                raise LiveError(
+                    'unsupported_material_kind',
+                    str(kind if kind is not None else 'missing'),
+                )
+            delivered = item.get('delivered_path')
+            if not delivered:
+                raise LiveError('author_material_missing', str(item.get('sha256') or 'text'))
+            try:
+                text = Path(delivered).read_text(encoding='utf-8')
+            except OSError as err:
+                raise LiveError(
+                    'author_material_unreadable',
+                    f'{Path(delivered).name}:{type(err).__name__}',
+                ) from err
+            prompt += '\n--- INPUT MATERIAL ' + Path(delivered).name + ' ---\n'
+            prompt += text + '\n'
+    if task.get('repair_findings'):
+        prompt += '\nADDRESS THESE FINDINGS EXACTLY:\n' + json.dumps(task['repair_findings'])
+    if len(prompt.encode('utf-8')) > AGY_AUTHOR_PROMPT_MAX:
+        raise LiveError(
+            'author_prompt_exceeds_input_bound',
+            str(len(prompt.encode('utf-8'))),
+        )
+    return prompt
+
+
+def _agy_author_read_native_receipt(native_ev):
+    """Fixed Root-known receipt path — never trust child-supplied paths."""
+    path = Path(native_ev) / 'agy-author-receipt.json'
+    if not path.is_file() or path.is_symlink():
+        return {}
+    try:
+        value = loads(path.read_bytes())
+    except (ValueError, LiveError, OSError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _agy_author_collect_raw(native_ev, receipt, root_evidence):
+    """Copy native ReviewEvidence stdout into Root stream.raw after native wrote it."""
+    root_evidence = Path(root_evidence)
+    root_evidence.mkdir(parents=True, exist_ok=True)
+    eid = receipt.get('evidence_id')
+    raw = b''
+    if isinstance(eid, str) and re.fullmatch(r'[a-f0-9]{32}', eid or ''):
+        src = Path(native_ev) / eid / 'stdout'
+        if src.is_file() and not src.is_symlink():
+            raw = src.read_bytes()
+    if not raw:
+        # Fallback: collect helper may have copied stream.raw already.
+        alt = Path(native_ev) / 'stream.raw'
+        if alt.is_file() and not alt.is_symlink():
+            raw = alt.read_bytes()
+    if raw:
+        (root_evidence / 'stream.raw').write_bytes(raw)
+    return raw
+
+
+def _agy_payload_map_digest(payload_hashes):
+    """Same canonical JSON digest as native core.digest (no new IPC helper module)."""
+    return hashlib.sha256(
+        json.dumps(payload_hashes, sort_keys=True, separators=(',', ':')).encode()
+    ).hexdigest()
+
+
+def _agy_author_trusted_payloads(native, staging, receipt, allowed):
+    """Read staging via protected native._source; bind imported_payload_sha256."""
+    changed = list(receipt.get('changed_paths') or [])
+    if not changed or not set(changed) <= set(allowed or []):
+        raise LiveError('author_empty_or_oos', ','.join(changed[:20]))
+    source_fn = getattr(native, '_source', None)
+    if source_fn is None:
+        raise LiveError('native_source_missing')
+    staging = Path(staging)
+    payloads = {}
+    payload_hashes = {}
+    deleted = []
+    for name in changed:
+        path = staging / name
+        if not path.exists() and not path.is_symlink():
+            deleted.append(name)
+            continue
+        raw = source_fn(path, staging)
+        payload_hashes[name] = hashlib.sha256(raw).hexdigest()
+        payloads[name] = raw
+    expected = receipt.get('imported_payload_sha256')
+    got = _agy_payload_map_digest(payload_hashes)
+    if not (isinstance(expected, str) and re.fullmatch(r'[a-f0-9]{64}', expected or '')):
+        raise LiveError('imported_payload_sha_absent')
+    if got != expected:
+        raise LiveError('imported_payload_sha_mismatch', got)
+    raw_hash = receipt.get('transcript_sha256')
+    if raw_hash is not None and not (
+            isinstance(raw_hash, str) and re.fullmatch(r'[a-f0-9]{64}', raw_hash or '')):
+        raise LiveError('raw_sha_absent')
+    return payloads, deleted, changed
+
+
+def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_lease=True,
+                    _invoke=None):
+    """Native AGY AUTHOR live binding beside cursor_author_live / agy_qa_live.
+
+    UID978 edits a separate staging snapshot (never 1002 Git metadata / Slot2 journal).
+    Parent validates allowlist + native receipt, then owner-safe atomic-imports into the
+    real UID1002 task tree and creates the candidate commit as 1002. Shared Budget
+    charges role=author once at launch. Fallback to Cursor ONLY pre-launch when AGY
+    is unavailable (no charge). After paid/unknown transport failure: HOLD with raw.
+    """
+    from providers import (
+        prepare_cursor_author_intent, mark_intent_phase, ProviderError,
+        role_ready, agy_quota_available, record_agy_charge, AGY_MODEL,
+        agy_author_canary_admitted,
+    )
+    from types import SimpleNamespace
+
+    require_executor_uid()
+    evidence = Path(evidence_dir)
+    evidence.mkdir(parents=True, exist_ok=True)
+    worktree = Path(worktree)
+    if intent_path is None:
+        _, intent_path = prepare_cursor_author_intent(task, worktree, evidence)
+        # Correct provider label — compatibility intent helper defaults to cursor_auto.
+        mark_intent_phase(intent_path, 'prepared', provider='agy_author', role='author',
+                          requested_provider='agy_author', effective_model=AGY_MODEL)
+
+    ok, reason = role_ready('agy_author')
+    canary_ok, canary_meta = (False, None)
+    if not ok:
+        canary_ok, canary_meta = agy_author_canary_admitted(task)
+    if not ok and not canary_ok:
+        # Pre-launch fallback only — never charge, never mislabel as AGY success.
+        mark_intent_phase(intent_path, 'agy_author_not_ready_fallback',
+                          error='agy_author_not_ready', reason=reason,
+                          canary=canary_meta, fallback_provider='cursor_auto')
+        return cursor_author_live(
+            task=task, worktree=worktree, evidence_dir=evidence,
+            intent_path=intent_path, parent_lease=parent_lease)
+
+    avail, why, _rec = agy_quota_available(int(task['issue']))
+    if not avail:
+        if why == 'agy_quota_unknown_pending_reconcile':
+            mark_intent_phase(intent_path, 'HOLD_no_automatic_replay',
+                              error='agy_quota_unknown_pending_reconcile')
+            raise ProviderError('agy_quota_unknown_pending_reconcile', why, charge='none')
+        mark_intent_phase(intent_path, 'agy_author_unavailable_fallback',
+                          error=why or 'agy_quota_unavailable',
+                          fallback_provider='cursor_auto')
+        return cursor_author_live(
+            task=task, worktree=worktree, evidence_dir=evidence,
+            intent_path=intent_path, parent_lease=parent_lease)
+
+    try:
+        native = _load_native('native_antigravity_author')
+    except LiveError as err:
+        mark_intent_phase(intent_path, 'agy_author_not_ready_fallback',
+                          error='native_author_missing', detail=err.detail,
+                          fallback_provider='cursor_auto')
+        return cursor_author_live(
+            task=task, worktree=worktree, evidence_dir=evidence,
+            intent_path=intent_path, parent_lease=parent_lease)
+
+    base_sha = (
+        task.get('runtime_base_sha') or task.get('base') or task.get('source_base')
+        or git(worktree, 'rev-parse', 'HEAD')
+    )
+    if not SHA40.fullmatch(str(base_sha)):
+        mark_intent_phase(intent_path, 'HOLD_no_automatic_replay', error='invalid_base_sha')
+        raise ProviderError('invalid_base_sha', str(base_sha))
+    # Repair: HEAD may be prior candidate after QA FAIL; keep frozen base for review.
+    head_before = git(worktree, 'rev-parse', 'HEAD')
+    if not SHA40.fullmatch(str(head_before)):
+        mark_intent_phase(intent_path, 'HOLD_no_automatic_replay', error='invalid_head_before')
+        raise ProviderError('invalid_head_before', str(head_before))
+    if git(worktree, 'status', '--porcelain').strip():
+        mark_intent_phase(intent_path, 'HOLD_no_automatic_replay', error='author_worktree_dirty')
+        raise ProviderError('author_worktree_dirty')
+
+    attempt = int(task.get('author_attempt') or task.get('attempt') or 1)
+    fingerprint = _agy_author_operation_fingerprint(task, base_sha, attempt)
+    mark_intent_phase(
+        intent_path, 'prepared', operation_fingerprint=fingerprint,
+        issue=int(task['issue']), attempt=attempt, author_attempt=attempt,
+        base_sha=base_sha, head_before=head_before,
+        provider='agy_author', effective_model=AGY_MODEL,
+        selection=('ready' if ok else 'canary'))
+
+    try:
+        budget = shared_agy_budget(int(task['issue']))
+        left = budget.remaining('agy', 'author', AGY_SLOT)
+        if not budget_left_eligible(left):
+            mark_intent_phase(intent_path, 'agy_author_unavailable_fallback',
+                              error='shared_budget_ineligible', left=repr(left),
+                              fallback_provider='cursor_auto')
+            return cursor_author_live(
+                task=task, worktree=worktree, evidence_dir=evidence,
+                intent_path=intent_path, parent_lease=parent_lease)
+    except (LiveError, OSError, ValueError) as err:
+        mark_intent_phase(intent_path, 'agy_author_unavailable_fallback',
+                          error='shared_budget_unavailable', detail=type(err).__name__,
+                          fallback_provider='cursor_auto')
+        return cursor_author_live(
+            task=task, worktree=worktree, evidence_dir=evidence,
+            intent_path=intent_path, parent_lease=parent_lease)
+
+    # Fresh 978 staging from current HEAD; frozen base retained for full review diff.
+    try:
+        staging_snap = _agy_materialize_qa_snapshot(
+            author_source=worktree, candidate_sha=head_before, base_sha=base_sha,
+            issue=int(task['issue']), operation=fingerprint)
+    except LiveError as err:
+        mark_intent_phase(intent_path, 'HOLD_no_automatic_replay',
+                          error=err.code, detail=err.detail)
+        raise ProviderError(err.code, err.detail) from err
+    staging = Path(staging_snap['qa_work'])
+    native_ev = Path(staging_snap['input_dir']) / 'native-author-evidence'
+    native_ev.mkdir(mode=0o700, exist_ok=True)
+    if os.geteuid() == 0:
+        try:
+            os.chown(native_ev, AGY_UID, 968)
+        except OSError:
+            # Unit/host without UID978 mapping — parent still owns evidence dir.
+            pass
+
+    try:
+        rules_text, rules_sha, _rules_path = load_short_rules()
+    except LiveError as err:
+        mark_intent_phase(intent_path, 'HOLD_no_automatic_replay',
+                          error=err.code, detail=err.detail)
+        raise ProviderError(err.code, err.detail, charge='none') from err
+
+    materials_dir = Path(staging_snap['input_dir']) / 'design-inputs'
+    try:
+        materials = materialize_inputs(task, materials_dir)
+        if os.geteuid() == 0 and materials_dir.is_dir():
+            try:
+                os.chown(materials_dir, AGY_UID, 968)
+                for child in materials_dir.iterdir():
+                    try:
+                        os.chown(child, AGY_UID, 968)
+                    except OSError:
+                        pass
+            except OSError:
+                pass
+        prompt = _agy_author_prompt(
+            task, rules_text=rules_text, materials=materials)
+    except LiveError as err:
+        mark_intent_phase(intent_path, 'preflight_no_call',
+                          error=err.code, detail=err.detail, no_model_launched=True)
+        raise ProviderError(
+            'preflight_no_call', f'{err.code}:{err.detail or ""}', charge='none',
+        ) from err
+    (evidence / 'prompt.txt').write_text(prompt)
+    (evidence / 'author-snapshot.json').write_text(json.dumps({
+        'staging': str(staging),
+        'input_dir': str(staging_snap['input_dir']),
+        'native_evidence': str(native_ev),
+        'ref': staging_snap['ref'],
+        'base_sha': base_sha,
+        'head_before': head_before,
+        'author_attempt': attempt,
+        'author_source': str(worktree),
+    }, sort_keys=True, indent=2) + '\n')
+
+    charge_receipt = native_ev / 'shared-charge-receipt.json'
+
+    def charge():
+        if charge_receipt.is_file():
+            raise ProviderError('agy_double_charge_refused')
+        budget.charge(AGY_SLOT, 'agy', 'author')
+        charge_receipt.write_text(json.dumps({
+            'calls_charged': 1,
+            'stage': 'charged',
+            'role': 'author',
+            'operation_fingerprint': fingerprint,
+            'at': int(time.time()),
+        }, sort_keys=True) + '\n')
+
+    mark_intent_phase(
+        intent_path, 'launching', transport='native_antigravity_author',
+        rules_sha256=rules_sha, operation_fingerprint=fingerprint,
+        staging=str(staging), parent_lease=bool(parent_lease))
+
+    if hasattr(native, 'canonical_task_payload'):
+        canon_task = native.canonical_task_payload(task)
+    else:
+        canon_task = {
+            k: v for k, v in dict(task).items()
+            if k not in ('worktree', 'runtime_base_sha', 'author_attempt', 'attempt')
+        }
+
+    native_receipt = {}
+    changed = []
+    payloads = {}
+    deleted = []
+    try:
+        if _invoke is not None:
+            charge()
+            result = _invoke(staging=staging, prompt=prompt, evidence=native_ev,
+                             charge_already=True)
+            native_receipt = (result or {}).get('native_receipt') or {}
+            changed = list((result or {}).get('changed_paths') or [])
+            payloads = dict((result or {}).get('payloads') or {})
+            deleted = [n for n in changed if n not in payloads]
+        else:
+            # Standalone bridge/store over 978 staging; parent never grants 978→1002 write.
+            env_git = _agy_plain_git_env(staging_snap['input_dir'])
+
+            def staging_git(*args, cwd=None):
+                return _agy_plain_git(
+                    cwd or staging, *args,
+                    home=str(staging_snap['input_dir']),
+                    drop=978 if os.geteuid() == 0 else None)
+
+            bridge = SimpleNamespace(
+                work=staging,
+                git=lambda *a, **k: staging_git(*a, **k),
+                env=env_git,
+                c=SimpleNamespace(model_timeout=AUTHOR_TIMEOUT_S),
+                store=SimpleNamespace(data={
+                    'active': {
+                        'issue': int(task['issue']),
+                        'attempt': attempt,
+                        'task': canon_task,
+                        'base': base_sha,
+                        'head': head_before,
+                    }
+                }),
+            )
+            rt = SimpleNamespace(
+                slot=AGY_SLOT,
+                layout=SimpleNamespace(outbox=native_ev),
+                budget=SimpleNamespace(
+                    charge=lambda slot, provider, role: charge()),
+            )
+            choice = {
+                'effective_model': AGY_MODEL,
+                'rules_context': {'rules_sha256': rules_sha},
+            }
+            ipc_status = native_ev / 'child-ipc-status.json'
+            receipt_path = native_ev / 'agy-author-receipt.json'
+
+            # os.fork + bounded JSON IPC (same pattern as _agy_product_invoke).
+            # Parent never unpickles child UID data; receipt/raw use fixed paths.
+            r_fd, w_fd = os.pipe()
+            pid = os.fork()
+            if pid == 0:
+                os.close(r_fd)
+                status = 0
+                charged_flag = False
+                try:
+                    if os.geteuid() == 0:
+                        _agy_drop_to_executor()
+                    native.invoke(
+                        bridge, rt, prompt, choice,
+                        popen=subprocess.Popen,
+                        atomic=lambda path, value: (
+                            Path(path).write_text(
+                                json.dumps(value, sort_keys=True) + '\n')
+                        ),
+                        permitted=lambda n, allowed: n in set(allowed or []),
+                        evidence_dir=native_ev,
+                    )
+                    charged_flag = _agy_read_charge_receipt(charge_receipt)[0]
+                    payload = {'ok': True, 'charged': charged_flag}
+                except BaseException as err:
+                    status = 1
+                    charged_flag = _agy_read_charge_receipt(charge_receipt)[0]
+                    payload = {
+                        'ok': False,
+                        'charged': charged_flag,
+                        'error_type': type(err).__name__,
+                        'error': str(err)[:500],
+                        'error_code': getattr(err, 'code', None),
+                    }
+                try:
+                    ipc_status.write_text(
+                        json.dumps(
+                            {k: payload.get(k) for k in AGY_IPC_FIELDS if k in payload},
+                            sort_keys=True,
+                        ) + '\n')
+                except OSError:
+                    pass
+                try:
+                    os.write(w_fd, _agy_ipc_pack(payload))
+                except Exception:
+                    pass
+                try:
+                    os.close(w_fd)
+                except Exception:
+                    pass
+                os._exit(status)
+
+            os.close(w_fd)
+            raw_ipc = b''
+            # Bounded select wait (same UNKNOWN semantics as prior join timeout).
+            import select as _select
+            ready, _, _ = _select.select([r_fd], [], [], AUTHOR_TIMEOUT_S + 30)
+            if not ready:
+                try:
+                    os.close(r_fd)
+                except OSError:
+                    pass
+                try:
+                    os.kill(pid, 9)
+                except OSError:
+                    pass
+                try:
+                    os.waitpid(pid, 0)
+                except OSError:
+                    pass
+                record_agy_charge(
+                    int(task['issue']),
+                    {'phase': 'timeout', 'operation_fingerprint': fingerprint},
+                    charge='unknown')
+                mark_intent_phase(intent_path, 'UNKNOWN', error='timeout',
+                                  operation_fingerprint=fingerprint, no_blind_replay=True)
+                raise ProviderError('agy_author_timeout_unknown', 'timeout', charge='unknown')
+            try:
+                raw_ipc = os.read(r_fd, AGY_IPC_MAX)
+            finally:
+                os.close(r_fd)
+            os.waitpid(pid, 0)
+
+            try:
+                msg = _agy_ipc_unpack(raw_ipc) if raw_ipc else {}
+            except LiveError:
+                msg = {}
+            if not msg and ipc_status.is_file() and not ipc_status.is_symlink():
+                try:
+                    msg = _agy_ipc_unpack(ipc_status.read_bytes())
+                except LiveError:
+                    msg = {}
+            _agy_collect_native_evidence(native_ev, evidence)
+            # Fixed receipt path only — never child-supplied paths.
+            native_receipt = _agy_author_read_native_receipt(native_ev)
+            if not native_receipt and receipt_path.is_file():
+                native_receipt = _agy_author_read_native_receipt(native_ev)
+            raw_bytes = _agy_author_collect_raw(native_ev, native_receipt, evidence)
+            if native_receipt:
+                (evidence / 'native-receipt.json').write_text(
+                    json.dumps(native_receipt, sort_keys=True, indent=2) + '\n')
+            charged_shared, _crec = _agy_read_charge_receipt(charge_receipt)
+            if msg.get('charged') or charged_shared:
+                charged_shared = True
+
+            if not msg.get('ok'):
+                if charged_shared:
+                    record_agy_charge(
+                        int(task['issue']),
+                        {'phase': 'charged', 'operation_fingerprint': fingerprint,
+                         'shared_budget': True, 'after_failure': True, 'role': 'author'},
+                        charge='charged')
+                    mark_intent_phase(
+                        intent_path, 'HOLD_NO_REPLAY',
+                        error_type=msg.get('error_type'),
+                        operation_fingerprint=fingerprint,
+                        calls_charged=1, no_blind_replay=True,
+                        no_fallback_after_paid=True)
+                    raise ProviderError(
+                        'agy_author_protocol_or_provider_failed',
+                        msg.get('error_type') or 'failed', charge='charged')
+                record_agy_charge(
+                    int(task['issue']),
+                    {'phase': 'launch_error', 'operation_fingerprint': fingerprint,
+                     'role': 'author'},
+                    charge='unknown')
+                mark_intent_phase(
+                    intent_path, 'UNKNOWN', error=msg.get('error_type'),
+                    operation_fingerprint=fingerprint, no_blind_replay=True)
+                raise ProviderError('agy_author_launch_unknown',
+                                    msg.get('error_type') or 'failed', charge='unknown')
+            if charged_shared:
+                record_agy_charge(
+                    int(task['issue']),
+                    {'phase': 'charged', 'operation_fingerprint': fingerprint,
+                     'shared_budget': True, 'role': 'author'},
+                    charge='charged')
+            # Trusted import contract: protected _source + payload digest bind.
+            try:
+                payloads, deleted, changed = _agy_author_trusted_payloads(
+                    native, staging, native_receipt, task.get('allowed_paths') or [])
+            except LiveError as err:
+                mark_intent_phase(intent_path, 'HOLD_no_automatic_replay',
+                                  error=err.code, detail=err.detail)
+                raise ProviderError(err.code, err.detail, charge='charged') from err
+            if raw_bytes and not native_receipt.get('transcript_sha256'):
+                # Persist raw sha into Root evidence even if receipt used another field.
+                (evidence / 'stream.raw.sha256').write_text(
+                    hashlib.sha256(raw_bytes).hexdigest() + '\n')
+    except ProviderError:
+        raise
+    except Exception as err:
+        charged_shared, _crec = _agy_read_charge_receipt(charge_receipt)
+        _agy_collect_native_evidence(native_ev, evidence)
+        if charged_shared:
+            record_agy_charge(
+                int(task['issue']),
+                {'phase': 'charged', 'operation_fingerprint': fingerprint,
+                 'shared_budget': True, 'after_failure': True, 'role': 'author'},
+                charge='charged')
+            mark_intent_phase(
+                intent_path, 'HOLD_NO_REPLAY', error_type=type(err).__name__,
+                operation_fingerprint=fingerprint, calls_charged=1,
+                no_blind_replay=True, no_fallback_after_paid=True)
+            raise ProviderError(
+                'agy_author_protocol_or_provider_failed', type(err).__name__,
+                charge='charged') from err
+        record_agy_charge(
+            int(task['issue']),
+            {'phase': 'launch_error', 'operation_fingerprint': fingerprint,
+             'role': 'author'},
+            charge='unknown')
+        mark_intent_phase(
+            intent_path, 'UNKNOWN', error=type(err).__name__,
+            operation_fingerprint=fingerprint, no_blind_replay=True)
+        raise ProviderError('agy_author_launch_unknown', type(err).__name__,
+                            charge='unknown') from err
+
+    allowed = set(task.get('allowed_paths') or [])
+    if not changed or not set(changed) <= allowed:
+        mark_intent_phase(intent_path, 'HOLD_no_automatic_replay',
+                          error='author_empty_or_oos', changed=changed[:20])
+        raise ProviderError('author_empty_or_oos', ','.join(changed[:20]), charge='charged')
+
+    # Parent validates: 1002 tree still at snapshotted HEAD; import; commit as 1002.
+    if git(worktree, 'rev-parse', 'HEAD') != head_before or git(worktree, 'status', '--porcelain').strip():
+        mark_intent_phase(intent_path, 'HOLD_no_automatic_replay',
+                          error='author_source_changed_during_agy')
+        raise ProviderError('agy_author_source_changed', charge='charged')
+
+    if not deleted:
+        deleted = [n for n in changed if n not in payloads]
+    try:
+        owner_safe_atomic_import(
+            worktree=worktree, payloads=payloads, deleted=deleted)
+        git(worktree, 'add', '--', *changed)
+        git(worktree, '-c', 'user.name=agentagency-dev',
+            '-c', 'user.email=agentagency-dev@localhost',
+            '-c', 'commit.gpgsign=false', 'commit', '-m',
+            f'lean: issue-{task["issue"]} agy author candidate')
+        sha = git(worktree, 'rev-parse', 'HEAD')
+        if not SHA40.fullmatch(sha):
+            raise ProviderError('author_missing_candidate_sha')
+    except ProviderError:
+        raise
+    except LiveError as err:
+        mark_intent_phase(
+            intent_path, 'completed', import_failed=True,
+            import_error=f'{err.code}:{err.detail}'[:500],
+            model_launch=1, charge='charged', provider='agy_author')
+        raise ProviderError(err.code, err.detail, charge='charged') from err
+    except Exception as err:
+        mark_intent_phase(
+            intent_path, 'completed', import_failed=True,
+            import_error=f'{type(err).__name__}:{err}'[:500],
+            model_launch=1, charge='charged', provider='agy_author')
+        raise ProviderError(
+            'source_import', f'{type(err).__name__}:{err}'[:400],
+            charge='charged') from err
+
+    if native_receipt:
+        (evidence / 'native-receipt.json').write_text(
+            json.dumps(native_receipt, sort_keys=True, indent=2) + '\n')
+    mark_intent_phase(
+        intent_path, 'completed', candidate_sha=sha, changed_paths=changed,
+        provider='agy_author', effective_model=AGY_MODEL,
+        operation_fingerprint=fingerprint, author_attempt=attempt,
+        native_evidence_dir=str(native_ev), root_model=False, uid=AGY_UID)
+    return {
+        'candidate_sha': sha,
+        'changed_paths': changed,
+        'model_launch': 1,
+        'provider': 'agy_author',
+        'effective_model': AGY_MODEL,
+        'native_receipt': native_receipt,
+        'operation_fingerprint': fingerprint,
+        'author_attempt': attempt,
+        'native_evidence_dir': str(native_ev),
+        'base_sha': base_sha,
+        'head_before': head_before,
+        'root_model': False,
+        'uid': AGY_UID,
+    }
+
+
+def _claim_recorded_qa_provider(claim):
+    """Independent Codex identity from actual Root claim fields (issue 182 shape).
+
+    Prefer claim.qa_provider / claim.routes.qa; optional last_qa.provider aliases
+    accepted when present. Never invent claim.qa.provider nesting.
+    """
+    last_qa = claim.get('last_qa') if isinstance(claim.get('last_qa'), dict) else {}
+    routes = claim.get('routes') if isinstance(claim.get('routes'), dict) else {}
+    routes_qa = routes.get('qa')
+    if isinstance(routes_qa, dict):
+        routes_qa = routes_qa.get('provider') or routes_qa.get('qa_provider')
+    for raw in (
+        claim.get('qa_provider'),
+        routes_qa,
+        last_qa.get('provider'),
+        last_qa.get('qa_provider'),
+    ):
+        if raw is None:
+            continue
+        key = str(raw).split(':')[0].strip().lower().replace('-', '_')
+        if key:
+            return key
+    return None
+
+
+def evaluate_agy_author_qualification_gates(*, claim, native_receipt, candidate_sha,
+                                            qa_verdict, ci_ok, deploy_accepted, live_sha):
+    """Reusable gate check for AGY author READY — never asserts READY itself.
+
+    Requires exact candidate, native imported/finish, recorded independent Codex
+    QA PASS bound to the exact candidate (claim.qa_provider / routes.qa +
+    last_qa.verdict/reviewed_sha), mandatory CI, and server ACCEPTED/live SHA
+    matching merge. Caller qa_verdict alone is insufficient. Uses
+    claim.merged_sha (controller field); merge_sha accepted as alias only.
+    """
+    claim = claim or {}
+    if not (isinstance(candidate_sha, str) and SHA40.fullmatch(candidate_sha)):
+        return False, 'invalid_candidate'
+    if not isinstance(native_receipt, dict):
+        return False, 'native_receipt_absent'
+    if native_receipt.get('phase') != 'imported':
+        return False, 'native_not_imported'
+    if not native_receipt.get('changed_paths'):
+        return False, 'no_changed_paths'
+    raw_hash = (
+        native_receipt.get('transcript_sha256')
+        or native_receipt.get('output_manifest_sha256')
+    )
+    if not (isinstance(raw_hash, str) and re.fullmatch(r'[a-f0-9]{64}', raw_hash or '')):
+        return False, 'raw_hash_absent'
+    if qa_verdict != 'PASS':
+        return False, 'qa_not_pass'
+    last_qa = claim.get('last_qa') if isinstance(claim.get('last_qa'), dict) else {}
+    if not last_qa:
+        return False, 'qa_record_absent'
+    if last_qa.get('verdict') != 'PASS':
+        return False, 'qa_not_pass'
+    reviewed = last_qa.get('reviewed_sha')
+    if not (isinstance(reviewed, str) and SHA40.fullmatch(reviewed or '')):
+        return False, 'qa_reviewed_sha_missing'
+    if reviewed != candidate_sha:
+        return False, 'qa_candidate_mismatch'
+    qa_provider = _claim_recorded_qa_provider(claim)
+    if qa_provider is None:
+        return False, 'qa_provider_missing'
+    if qa_provider not in ('codex', 'codex_qa', 'codex_sol_medium', 'codex_sol'):
+        return False, 'qa_provider_not_independent'
+    if not ci_ok:
+        return False, 'ci_incomplete'
+    if not deploy_accepted:
+        return False, 'deploy_not_accepted'
+    merged = claim.get('merged_sha') or claim.get('merge_sha')
+    if live_sha != candidate_sha:
+        if not (isinstance(merged, str) and SHA40.fullmatch(merged) and live_sha == merged):
+            return False, 'live_sha_mismatch'
+    # Refuse cosmetic CANARY-only promotion: marker phase ready is parent OPS duty.
+    return True, 'gates_satisfied'
+
+
 def _https_origin_url():
     return f'https://github.com/{REPO}.git'
 
@@ -3101,6 +3895,13 @@ def build_live_adapters(*, results_root=None, lock_dir=None, evidence_dir=None,
             dict(task, reuse_frozen=True), repo=repo)
 
     def author(**kwargs):
+        """Route by task.authorroute; Cursor default; AGY only when actually qualified."""
+        from providers import select_author_provider
+        task = kwargs.get('task') or {}
+        provider, _reason, _meta = select_author_provider(
+            task, issue=task.get('issue'))
+        if provider == 'agy_author':
+            return agy_author_live(**kwargs)
         return cursor_author_live(**kwargs)
 
     def qa(claim):
@@ -3151,11 +3952,14 @@ def live_self_check():
     return {
         'schema': 'GB_LEAN_LIVE_BINDINGS_V1',
         'bindings': [
-            'cursor_author_live', 'codex_qa_live', 'agy_qa_live',
+            'cursor_author_live', 'agy_author_live', 'codex_qa_live', 'agy_qa_live',
             'publish_push_pr', 'wait_product_ci', 'merge_pr_live',
             'wait_dev_deploy', 'fetch_project_admissions', 'create_task_worktree',
+            'evaluate_agy_author_qualification_gates', 'owner_safe_atomic_import',
         ],
         'project_number': CANONICAL_PROJECT_NUMBER,
         'host_wake_budget_s': HOST_WAKE_BUDGET_S,
         'model_calls': 'not_invoked_by_self_check',
+        'agy_author_ready': False,
+        'note': 'Native AGY author binding present; READY only after real acceptance gates',
     }
