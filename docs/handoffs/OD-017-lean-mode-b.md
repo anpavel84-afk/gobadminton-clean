@@ -1,3 +1,11 @@
+# Current transport follow-up · 2026-10-29
+
+PR #378 / source 5c5cdb7 is installed with QA PASS, CI40817183378 PASS7/7 and DEV40818055376 r40818055376-a1 ACCEPTED (merge d1038ad). OD-020 shared policy is applied; native QA remains READY and author UNKNOWN. Root config is disabled; no product call or MODE_B_ACTIVE is claimed.
+
+Actual status-only run40820375302 was rejected before runner steps because environment dev permits only branch dev. The follow-up preserves that protection: this same workflow forwards trusted main wakes without environment/deployment secrets to a fixed dev workflow_dispatch; only the dev executor uses environment dev and the fixed reviewed client. No new controller, scheduler or service. C5 remains off and legacy UNKNOWN unchanged. Two frozen approved product admissions182 then375 are ready; runtime/publication check follows the bounded workflow QA+CI.
+
+## Earlier source checkpoint and history
+
 # OD-017 / OD-018 — current source checkpoint · 2026-10-29
 
 Native Antigravity independent QA is READY after PR #376 and real PASS[] on source 85a38ec5 (protected root proof). Author is NOT READY. This qualification does not claim Mode B runtime acceptance.
