@@ -1,4 +1,4 @@
-import { Controller, Get, Header, Param, Put, Req, Res } from "@nestjs/common";
+import { Controller, Get, Header, Param, Put, Query, Req, Res } from "@nestjs/common";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { ConsumerAuthService } from "../auth/consumer-auth.service";
 import { IdempotencyService } from "../common/idempotency.service";
@@ -14,9 +14,17 @@ export class GameOutcomesController {
 
   @Get("games/:gameId/results")
   @Header("Cache-Control", "no-store")
-  async getResults(@Req() request: FastifyRequest, @Param("gameId") gameId: string) {
+  async getResults(
+    @Req() request: FastifyRequest,
+    @Param("gameId") gameId: string,
+    @Query("revisionsLimit") revisionsLimit?: string,
+    @Query("revisionsCursor") revisionsCursor?: string,
+  ) {
     const actor = await this.auth.requireSession(request);
-    return this.outcomes.getResults(gameId, actor.userId);
+    return this.outcomes.getResults(gameId, actor.userId, {
+      revisionsLimit,
+      revisionsCursor,
+    });
   }
 
   @Put("games/:gameId/outcome")

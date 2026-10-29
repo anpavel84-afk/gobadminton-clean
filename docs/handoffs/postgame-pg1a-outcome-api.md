@@ -1,11 +1,13 @@
 # Issue #375 / PG-1a GameOutcome API — Mode B author handoff
 
-From: Cursor Auto (`OD018_PG1A_OUTCOME_API_DEV`, revision `567bfce3d709dee0acd014548468a2c5233ea9ca5adc5b7de9bdf8e244e14a86`).
+From: Cursor Auto (`OD018_PG1A_OUTCOME_API_DEV`, revision `f05846318753600e7c9f78db9ae1465816aa11b369ab7c35b190b3edb644f5f4`).
 To: one independent Codex Medium QA → mandatory Product CI → trusted DEV release/smoke.
-Status: SOURCE CANDIDATE / author checks local where possible / **UAT=NOT_TESTED** / writes default **OFF**.
+Status: SOURCE CANDIDATE / QA repair (provenance + bounded revisions) / author checks local where possible / **UAT=NOT_TESTED** / writes default **OFF**.
 Parent #372 remains open for attendance/notices/disputes/reviews/UI. Entire Postgame NOT claimed complete.
 
 Continuation: prior author1 recovered bundle reused (NOT_QA_ACCEPTED / shell-only OpenAPI was absent). Compatibility pass against current accepted `dev` (0041 recommendations + social/capability modules preserved). Immutable prior author1 stays in continuation_history/expenses; this is not a replay of the old operation.
+
+QA repair (exact findings): `provenance.recordedAt` projects current revision time (`updated_at`) with separate immutable `createdAt`; manager revision history is a newest bounded window (`revisionsLimit` default 20 / max 50) with `revisionsNextCursor` for older continuation.
 
 ## Claim freeze
 

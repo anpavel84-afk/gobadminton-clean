@@ -1686,7 +1686,7 @@
           "Games"
         ],
         "summary": "Read game outcome projection for current manager or confirmed participant",
-        "description": "PG-1a. Absent outcome projects unknown/version 0; elapsed endsAt never inserts a row. Current active manager may receive bounded revision history. Confirmed participants see outcome facts for their game without revisions. Guest/outsider/revoked-manager-without-seat are private 404. Reads remain available when POST_GAME_INTERNAL_ENABLED is off. No attendance/roster/private host fields. Cookie session required.",
+        "description": "PG-1a. Absent outcome projects unknown/version 0; elapsed endsAt never inserts a row. Current active manager may receive a bounded newest revision window (default 20, max 50) with revisionsNextCursor for older continuation. Confirmed participants see outcome facts for their game without revisions. Guest/outsider/revoked-manager-without-seat are private 404. Reads remain available when POST_GAME_INTERNAL_ENABLED is off. No attendance/roster/private host fields. Cookie session required.",
         "security": [
           {
             "cookieSession": []
@@ -1701,6 +1701,28 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "revisionsLimit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 20
+            },
+            "description": "Manager revision page size. Ignored for participants (revisions omitted). Malformed or out-of-range → 400 LIMIT_INVALID."
+          },
+          {
+            "name": "revisionsCursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "description": "Opaque cursor from a prior revisionsNextCursor; continues into older revision history. Malformed → 400 CURSOR_INVALID. Ignored for participants."
           }
         ],
         "responses": {
@@ -1720,6 +1742,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/GameResults"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -26470,7 +26502,8 @@
         "additionalProperties": false,
         "required": [
           "source",
-          "recordedAt"
+          "recordedAt",
+          "createdAt"
         ],
         "properties": {
           "source": {
@@ -26481,7 +26514,13 @@
           },
           "recordedAt": {
             "type": "string",
-            "format": "date-time"
+            "format": "date-time",
+            "description": "Timestamp of the current outcome revision (updates on correction)."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Immutable first recording time; retained across corrections."
           }
         }
       },
@@ -26635,10 +26674,19 @@
           },
           "revisions": {
             "type": "array",
+            "maxItems": 50,
             "items": {
               "$ref": "#/components/schemas/GameOutcomeRevision"
             },
-            "description": "Current active manager only; omitted for confirmed participants."
+            "description": "Current active manager only; omitted for confirmed participants. Newest bounded window in ascending version order within the page."
+          },
+          "revisionsNextCursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 2048,
+            "description": "Manager-only. Opaque cursor for an older revision page; null when the returned window is complete. Omitted for participants."
           },
           "allowedActions": {
             "$ref": "#/components/schemas/GameResultsAllowedActions"

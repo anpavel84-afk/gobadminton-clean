@@ -256,11 +256,14 @@ run("PG-1a GameOutcome — disposable synthetic PostGIS", () => {
     const held = await put(manager, `/v1/games/${g.id}/outcome`, { expectedVersion: 0, outcome: "held" });
     expect(held.statusCode).toBe(200);
     expect(held.json().outcome).toMatchObject({ value: "held", version: 1, reason: null });
-    expect(held.json().outcome.provenance).toEqual({
+    const heldProv = held.json().outcome.provenance;
+    expect(heldProv).toEqual({
       source: "manager_explicit",
       recordedAt: expect.any(String),
+      createdAt: expect.any(String),
     });
     expect(held.json().revisions).toHaveLength(1);
+    expect(held.json().revisionsNextCursor).toBeNull();
     expect(await effects(g.id)).toMatchObject({ outcomes: 1, revisions: 1, status: "completed" });
 
     const corrected = await put(manager, `/v1/games/${g.id}/outcome`, {
@@ -270,8 +273,61 @@ run("PG-1a GameOutcome — disposable synthetic PostGIS", () => {
     });
     expect(corrected.statusCode).toBe(200);
     expect(corrected.json().outcome).toMatchObject({ value: "not_held", version: 2, reason: "Зал закрыли" });
+    const corrProv = corrected.json().outcome.provenance;
+    expect(corrProv.createdAt).toBe(heldProv.createdAt);
+    expect(corrProv.recordedAt).toBe(corrected.json().revisions[1].recordedAt);
+    expect(Date.parse(corrProv.recordedAt)).toBeGreaterThanOrEqual(Date.parse(heldProv.recordedAt));
     expect(corrected.json().revisions).toHaveLength(2);
+    expect(corrected.json().revisionsNextCursor).toBeNull();
     expect(await effects(g.id)).toMatchObject({ status: "completed", revisions: 2 });
+
+    await confirmParticipant(g.id, participant.userId);
+    const asParticipant = await get(participant, `/v1/games/${g.id}/results`);
+    expect(asParticipant.statusCode).toBe(200);
+    expect(asParticipant.json().outcome.provenance).toEqual(corrProv);
+    expect(asParticipant.json().revisions).toBeUndefined();
+    expect(asParticipant.json().revisionsNextCursor).toBeUndefined();
+  });
+
+  it("manager revision history is a bounded newest window with older continuation", async () => {
+    const g = await createEndedGame(manager);
+    let version = 0;
+    let outcome: "held" | "not_held" = "held";
+    for (let i = 0; i < 5; i += 1) {
+      const body =
+        version === 0 && outcome === "held"
+          ? { expectedVersion: version, outcome }
+          : { expectedVersion: version, outcome, reason: `corr-${i}` };
+      const res = await put(manager, `/v1/games/${g.id}/outcome`, body);
+      expect(res.statusCode).toBe(200);
+      version = res.json().outcome.version;
+      outcome = outcome === "held" ? "not_held" : "held";
+    }
+    expect(await effects(g.id)).toMatchObject({ revisions: 5 });
+
+    const page1 = await get(manager, `/v1/games/${g.id}/results?revisionsLimit=2`);
+    expect(page1.statusCode).toBe(200);
+    expect(page1.json().revisions.map((r: { version: number }) => r.version)).toEqual([4, 5]);
+    expect(page1.json().revisionsNextCursor).toEqual(expect.any(String));
+
+    const page2 = await get(
+      manager,
+      `/v1/games/${g.id}/results?revisionsLimit=2&revisionsCursor=${encodeURIComponent(page1.json().revisionsNextCursor)}`,
+    );
+    expect(page2.statusCode).toBe(200);
+    expect(page2.json().revisions.map((r: { version: number }) => r.version)).toEqual([2, 3]);
+    expect(page2.json().revisionsNextCursor).toEqual(expect.any(String));
+
+    const page3 = await get(
+      manager,
+      `/v1/games/${g.id}/results?revisionsLimit=2&revisionsCursor=${encodeURIComponent(page2.json().revisionsNextCursor)}`,
+    );
+    expect(page3.statusCode).toBe(200);
+    expect(page3.json().revisions.map((r: { version: number }) => r.version)).toEqual([1]);
+    expect(page3.json().revisionsNextCursor).toBeNull();
+
+    expect((await get(manager, `/v1/games/${g.id}/results?revisionsLimit=0`)).statusCode).toBe(400);
+    expect((await get(manager, `/v1/games/${g.id}/results?revisionsCursor=bad`)).statusCode).toBe(400);
   });
 
   it("manager history vs participant projection; guest/outsider/revoked manager private 404; replay after revoke denied", async () => {
@@ -284,7 +340,13 @@ run("PG-1a GameOutcome — disposable synthetic PostGIS", () => {
     const idem = key();
     const saved = await put(manager, `/v1/games/${g.id}/outcome`, { expectedVersion: 0, outcome: "held" }, idem);
     expect(saved.statusCode).toBe(200);
-    expect(Object.keys(saved.json()).sort()).toEqual(["allowedActions", "gameId", "outcome", "revisions"]);
+    expect(Object.keys(saved.json()).sort()).toEqual([
+      "allowedActions",
+      "gameId",
+      "outcome",
+      "revisions",
+      "revisionsNextCursor",
+    ]);
     const body = JSON.stringify(saved.json());
     expect(body).not.toMatch(/PRIVATE TERMS SENTINEL|telegram:@synthetic_private|roster|attendance|absent/);
 
@@ -292,6 +354,7 @@ run("PG-1a GameOutcome — disposable synthetic PostGIS", () => {
     expect(asParticipant.statusCode).toBe(200);
     expect(asParticipant.json().outcome.value).toBe("held");
     expect(asParticipant.json().revisions).toBeUndefined();
+    expect(asParticipant.json().revisionsNextCursor).toBeUndefined();
     expect(asParticipant.headers["cache-control"]).toBe("no-store");
 
     for (const who of [outsider]) {

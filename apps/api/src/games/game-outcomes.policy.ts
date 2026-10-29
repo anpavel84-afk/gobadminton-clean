@@ -1,8 +1,11 @@
 import { z } from "zod";
 import type { AppEnv } from "../config/env";
-import { notFound, serviceUnavailable, unprocessable } from "../auth/problem";
+import { badRequest, notFound, serviceUnavailable, unprocessable } from "../auth/problem";
 
 export const OUTCOME_REASON_MAX = 500;
+/** Default / hard cap for manager revision history pages (newest window). */
+export const OUTCOME_REVISIONS_DEFAULT_LIMIT = 20;
+export const OUTCOME_REVISIONS_MAX_LIMIT = 50;
 export const uuid = z.string().uuid().transform((value) => value.toLowerCase());
 
 const plainReason = z
@@ -49,7 +52,10 @@ export type OutcomeProjectionValue = "unknown" | OutcomeValue;
 
 export type OutcomeProvenance = {
   source: "manager_explicit";
+  /** Timestamp of the current outcome revision (matches latest correction). */
   recordedAt: string;
+  /** Immutable first recording time; retained across corrections. */
+  createdAt: string;
 };
 
 export type OutcomeRevisionView = {
@@ -61,6 +67,17 @@ export type OutcomeRevisionView = {
   recordedAt: string;
 };
 
+export type RevisionsQuery = {
+  limit: number;
+  /** Exclusive upper bound on resource_version; continues into older history. */
+  beforeVersion: number | null;
+};
+
+export type RevisionsPage = {
+  revisions: OutcomeRevisionView[];
+  nextCursor: string | null;
+};
+
 export type GameResultsView = {
   gameId: string;
   outcome: {
@@ -70,6 +87,8 @@ export type GameResultsView = {
     provenance: OutcomeProvenance | null;
   };
   revisions?: OutcomeRevisionView[];
+  /** Manager-only; null when the returned window is complete (no older page). */
+  revisionsNextCursor?: string | null;
   allowedActions: { canRecordOutcome: boolean };
 };
 
@@ -157,5 +176,76 @@ export function unknownOutcome(gameId: string, canRecordOutcome: boolean): GameR
     gameId,
     outcome: { value: "unknown", version: 0, reason: null, provenance: null },
     allowedActions: { canRecordOutcome },
+  };
+}
+
+export function outcomeProvenance(row: Pick<OutcomeRow, "source" | "recorded_at" | "updated_at">): OutcomeProvenance {
+  return {
+    source: row.source,
+    recordedAt: row.updated_at.toISOString(),
+    createdAt: row.recorded_at.toISOString(),
+  };
+}
+
+export function parseRevisionsQuery(input: {
+  revisionsLimit?: string;
+  revisionsCursor?: string;
+}): RevisionsQuery {
+  const limit = parseRevisionsLimit(input.revisionsLimit);
+  const beforeVersion = decodeRevisionsCursor(input.revisionsCursor);
+  return { limit, beforeVersion };
+}
+
+export function parseRevisionsLimit(raw: string | undefined): number {
+  if (raw === undefined || raw === "") return OUTCOME_REVISIONS_DEFAULT_LIMIT;
+  if (!/^[1-9]\d*$/.test(raw)) {
+    throw badRequest("LIMIT_INVALID", "Некорректный revisionsLimit");
+  }
+  const value = Number.parseInt(raw, 10);
+  if (value < 1 || value > OUTCOME_REVISIONS_MAX_LIMIT) {
+    throw badRequest("LIMIT_INVALID", "revisionsLimit должен быть 1–50");
+  }
+  return value;
+}
+
+export function encodeRevisionsCursor(beforeVersion: number): string {
+  return Buffer.from(JSON.stringify({ v: 1, beforeVersion }), "utf8").toString("base64url");
+}
+
+export function decodeRevisionsCursor(cursor: string | undefined): number | null {
+  if (cursor === undefined || cursor === "") return null;
+  try {
+    const raw = Buffer.from(cursor, "base64url").toString("utf8");
+    const parsed = JSON.parse(raw) as { v?: unknown; beforeVersion?: unknown };
+    if (
+      parsed?.v !== 1 ||
+      typeof parsed.beforeVersion !== "number" ||
+      !Number.isInteger(parsed.beforeVersion) ||
+      parsed.beforeVersion < 1 ||
+      parsed.beforeVersion > 2147483647
+    ) {
+      throw new Error("shape");
+    }
+    return parsed.beforeVersion;
+  } catch {
+    throw badRequest("CURSOR_INVALID", "Некорректный revisionsCursor");
+  }
+}
+
+/**
+ * Newest-first SQL window → ascending projection. `rows` must be DESC by version,
+ * length may be limit+1; the extra row signals an older continuation page.
+ */
+export function pageRevisionsDesc(
+  rowsDesc: OutcomeRevisionView[],
+  limit: number,
+): RevisionsPage {
+  const hasOlder = rowsDesc.length > limit;
+  const window = hasOlder ? rowsDesc.slice(0, limit) : rowsDesc;
+  const revisions = [...window].reverse();
+  const oldest = revisions[0];
+  return {
+    revisions,
+    nextCursor: hasOlder && oldest ? encodeRevisionsCursor(oldest.version) : null,
   };
 }

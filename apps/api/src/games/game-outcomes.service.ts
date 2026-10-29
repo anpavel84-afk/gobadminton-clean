@@ -8,8 +8,11 @@ import { MutationRunner } from "../common/mutation-runner.service";
 import {
   assertLifecycle,
   canRecordHint,
+  outcomeProvenance,
+  pageRevisionsDesc,
   parse,
   parseGameId,
+  parseRevisionsQuery,
   postGameWritesEnabled,
   putOutcomeRequest,
   unavailable,
@@ -19,6 +22,8 @@ import {
   type LockedGameRow,
   type OutcomeRevisionView,
   type OutcomeRow,
+  type RevisionsPage,
+  type RevisionsQuery,
 } from "./game-outcomes.policy";
 
 type AccessRole = "manager" | "participant" | "none";
@@ -104,7 +109,11 @@ export class GameOutcomesService {
     ).rows[0] ?? null;
   }
 
-  private async readRevisions(client: PoolClient | Pool, gameId: string): Promise<OutcomeRevisionView[]> {
+  private async readRevisionsPage(
+    client: PoolClient | Pool,
+    gameId: string,
+    query: RevisionsQuery,
+  ): Promise<RevisionsPage> {
     const rows = await client.query<{
       resource_version: number;
       before_value: "held" | "not_held" | null;
@@ -118,10 +127,12 @@ export class GameOutcomesService {
       `SELECT resource_version, before_value, after_value, before_reason, after_reason, reason, source, recorded_at
        FROM game_outcome_revisions
        WHERE game_id = $1
-       ORDER BY resource_version ASC`,
-      [gameId],
+         AND ($2::int IS NULL OR resource_version < $2)
+       ORDER BY resource_version DESC
+       LIMIT $3`,
+      [gameId, query.beforeVersion, query.limit + 1],
     );
-    return rows.rows.map((row) => ({
+    const mapped: OutcomeRevisionView[] = rows.rows.map((row) => ({
       version: row.resource_version,
       before: row.before_value
         ? { value: row.before_value, reason: row.before_reason }
@@ -131,6 +142,7 @@ export class GameOutcomesService {
       source: row.source,
       recordedAt: row.recorded_at.toISOString(),
     }));
+    return pageRevisionsDesc(mapped, query.limit);
   }
 
   private project(
@@ -138,11 +150,18 @@ export class GameOutcomesService {
     row: OutcomeRow | null,
     role: AccessRole,
     canRecordOutcome: boolean,
-    revisions: OutcomeRevisionView[] | undefined,
+    revisionsPage: RevisionsPage | undefined,
   ): GameResultsView {
     if (!row) {
       const base = unknownOutcome(gameId, canRecordOutcome);
-      return role === "manager" && revisions ? { ...base, revisions } : base;
+      if (role === "manager" && revisionsPage) {
+        return {
+          ...base,
+          revisions: revisionsPage.revisions,
+          revisionsNextCursor: revisionsPage.nextCursor,
+        };
+      }
+      return base;
     }
     const view: GameResultsView = {
       gameId,
@@ -150,16 +169,24 @@ export class GameOutcomesService {
         value: row.value,
         version: row.version,
         reason: row.reason,
-        provenance: { source: row.source, recordedAt: row.recorded_at.toISOString() },
+        provenance: outcomeProvenance(row),
       },
       allowedActions: { canRecordOutcome },
     };
-    if (role === "manager" && revisions) view.revisions = revisions;
+    if (role === "manager" && revisionsPage) {
+      view.revisions = revisionsPage.revisions;
+      view.revisionsNextCursor = revisionsPage.nextCursor;
+    }
     return view;
   }
 
-  async getResults(gameIdRaw: string, userId: string): Promise<GameResultsView> {
+  async getResults(
+    gameIdRaw: string,
+    userId: string,
+    revisionsRaw: { revisionsLimit?: string; revisionsCursor?: string } = {},
+  ): Promise<GameResultsView> {
     const gameId = parseGameId(gameIdRaw);
+    const revisionsQuery = parseRevisionsQuery(revisionsRaw);
     const client = await this.pool.connect();
     try {
       const game = (
@@ -176,8 +203,9 @@ export class GameOutcomesService {
       const canRecord = canRecordHint(this.env, role, game, now, installed);
       if (!installed) return unknownOutcome(gameId, false);
       const row = await this.readOutcome(client, gameId);
-      const revisions = role === "manager" ? await this.readRevisions(client, gameId) : undefined;
-      return this.project(gameId, row, role, canRecord, revisions);
+      const revisionsPage =
+        role === "manager" ? await this.readRevisionsPage(client, gameId, revisionsQuery) : undefined;
+      return this.project(gameId, row, role, canRecord, revisionsPage);
     } finally {
       client.release();
     }
@@ -276,7 +304,10 @@ export class GameOutcomesService {
           );
         }
         const row = (await this.readOutcome(client, gameId))!;
-        const revisions = await this.readRevisions(client, gameId);
+        const revisionsPage = await this.readRevisionsPage(client, gameId, {
+          limit: parseRevisionsQuery({}).limit,
+          beforeVersion: null,
+        });
         const refreshed = (
           await client.query<LockedGameRow>(
             `SELECT id, status, version, ends_at FROM games WHERE id = $1`,
@@ -286,7 +317,7 @@ export class GameOutcomesService {
         const canRecord = canRecordHint(this.env, "manager", refreshed, now, true);
         return {
           statusCode: 200,
-          body: this.project(gameId, row, "manager", canRecord, revisions),
+          body: this.project(gameId, row, "manager", canRecord, revisionsPage),
         };
       },
     });

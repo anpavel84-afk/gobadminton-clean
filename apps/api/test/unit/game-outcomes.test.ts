@@ -3,10 +3,17 @@ import { GameOutcomesController } from "../../src/games/game-outcomes.controller
 import {
   assertLifecycle,
   canRecordHint,
+  decodeRevisionsCursor,
+  encodeRevisionsCursor,
+  outcomeProvenance,
+  OUTCOME_REVISIONS_DEFAULT_LIMIT,
+  pageRevisionsDesc,
   parse,
+  parseRevisionsQuery,
   postGameWritesEnabled,
   putOutcomeRequest,
   type LockedGameRow,
+  type OutcomeRevisionView,
 } from "../../src/games/game-outcomes.policy";
 import { IdempotencyService } from "../../src/common/idempotency.service";
 import { SESSION_COOKIE } from "../../src/auth/constants";
@@ -139,5 +146,57 @@ describe("PG-1a outcome policy and transport", () => {
     );
     expect(put).toHaveBeenCalledWith(a, s, "pg1a-synthetic-key-12345", past.id, body);
     expect(reply.status).toHaveBeenCalledWith(200);
+  });
+
+  it("forwards revisionsLimit/revisionsCursor on GET", async () => {
+    const auth = { requireSession: vi.fn().mockResolvedValue({ userId: past.id }) };
+    const getResults = vi.fn().mockResolvedValue({ gameId: past.id });
+    const controller = new GameOutcomesController(
+      auth as never,
+      new IdempotencyService({} as never, env),
+      { getResults } as never,
+    );
+    await controller.getResults({} as never, past.id, "5", "cursor-token");
+    expect(getResults).toHaveBeenCalledWith(past.id, past.id, {
+      revisionsLimit: "5",
+      revisionsCursor: "cursor-token",
+    });
+  });
+
+  it("provenance.recordedAt follows current revision; createdAt stays original", () => {
+    const created = new Date("2026-01-01T10:00:00.000Z");
+    const corrected = new Date("2026-01-02T12:00:00.000Z");
+    expect(outcomeProvenance({
+      source: "manager_explicit",
+      recorded_at: created,
+      updated_at: corrected,
+    })).toEqual({
+      source: "manager_explicit",
+      recordedAt: corrected.toISOString(),
+      createdAt: created.toISOString(),
+    });
+  });
+
+  it("bounds revision history with explicit older continuation", () => {
+    expect(parseRevisionsQuery({}).limit).toBe(OUTCOME_REVISIONS_DEFAULT_LIMIT);
+    expect(parseRevisionsQuery({ revisionsLimit: "3" })).toEqual({ limit: 3, beforeVersion: null });
+    expect(() => parseRevisionsQuery({ revisionsLimit: "0" })).toThrow();
+    expect(() => parseRevisionsQuery({ revisionsLimit: "51" })).toThrow();
+    expect(() => parseRevisionsQuery({ revisionsCursor: "not-a-cursor" })).toThrow();
+
+    const rev = (version: number): OutcomeRevisionView => ({
+      version,
+      before: version === 1 ? null : { value: "held", reason: null },
+      after: { value: "held", reason: null },
+      reason: version === 1 ? null : "fix",
+      source: "manager_explicit",
+      recordedAt: new Date(Date.UTC(2026, 0, version)).toISOString(),
+    });
+    // SQL returns DESC; limit+1 signals older page.
+    const page = pageRevisionsDesc([rev(5), rev(4), rev(3), rev(2)], 3);
+    expect(page.revisions.map((r) => r.version)).toEqual([3, 4, 5]);
+    expect(page.nextCursor).toBe(encodeRevisionsCursor(3));
+    expect(decodeRevisionsCursor(page.nextCursor!)).toBe(3);
+    expect(pageRevisionsDesc([rev(2), rev(1)], 3).nextCursor).toBeNull();
   });
 });
