@@ -1102,6 +1102,53 @@ class LiveBindingsTests(unittest.TestCase):
         self.assertIn('mode_a_rules_absent', rules_src)
         self.assertIn('load_short_rules', inspect.getsource(lean_live.cursor_author_live))
 
+    def test_codex_child_env_path_includes_qualified_node24(self):
+        """ENVIRONMENT_PATH_NO_CALL fix: child PATH must resolve #!/usr/bin/env node."""
+        src = inspect.getsource(lean_live.codex_qa_live)
+        node_bin = lean_live.AGENT_HOME / '.local' / 'node-v24.21.0' / 'bin'
+        self.assertIn("AGENT_HOME / '.local' / 'node-v24.21.0' / 'bin'", src)
+        # Global uid1002_env / GH transport PATH must stay untouched.
+        gh_path = lean_live.uid1002_env()['PATH']
+        self.assertNotIn('node-v24.21.0', gh_path)
+        # Optional no-model --version under constructed child PATH (may be invisible
+        # in author namespace — do not invent workarounds; parent host probe covers).
+        import subprocess
+        child_path = (
+            str(node_bin) + ':/usr/bin:/bin:'
+            + str(lean_live.AGENT_HOME / '.local' / 'bin')
+        )
+        node = node_bin / 'node'
+        if node.is_file():
+            proc = subprocess.run(
+                [str(node), '--version'],
+                env={'PATH': child_path, 'LANG': 'C.UTF-8', 'HOME': str(lean_live.AGENT_HOME)},
+                capture_output=True, text=True, timeout=10, check=False)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn('v24.21', proc.stdout)
+
+    def test_qa_candidate_dir_codex_attempt_fresh_path_agy_unchanged(self):
+        """Codex attempt-N dirs; same attempt intent exclusive; AGY/None compat."""
+        with tempfile.TemporaryDirectory() as td:
+            sha = 'f' * 40
+            legacy = lean_run._qa_candidate_dir(td, sha, provider='codex')
+            self.assertEqual(legacy.name, f'qa-codex-{sha[:12]}')
+            a1 = lean_run._qa_candidate_dir(td, sha, provider='codex', attempt=1)
+            a2 = lean_run._qa_candidate_dir(td, sha, provider='codex', attempt=2)
+            self.assertEqual(a1.name, f'qa-codex-{sha[:12]}-attempt-1')
+            self.assertEqual(a2.name, f'qa-codex-{sha[:12]}-attempt-2')
+            self.assertNotEqual(legacy, a1)
+            self.assertNotEqual(a1, a2)
+            agy = lean_run._qa_candidate_dir(td, sha, provider='agy')
+            self.assertEqual(agy.name, f'qa-agy-{sha[:12]}')
+            self.assertNotIn('attempt', agy.name)
+            task = {'issue': 182, 'revision': 'rev', 'worktree': '/tmp/wt'}
+            providers.prepare_qa_intent(task, sha, 'codex_sol_medium', a1)
+            with self.assertRaises(providers.ProviderError) as ctx:
+                providers.prepare_qa_intent(task, sha, 'codex_sol_medium', a1)
+            self.assertEqual(ctx.exception.code, 'qa_intent_exists_no_overwrite')
+            providers.prepare_qa_intent(task, sha, 'codex_sol_medium', a2)
+            self.assertTrue((a2 / 'qa-intent-codex_sol_medium.json').is_file())
+
 
 class HostRequestTests(unittest.TestCase):
     def _base(self):

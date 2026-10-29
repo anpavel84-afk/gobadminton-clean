@@ -1895,8 +1895,14 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None):
             '-c', 'model_reasoning_effort="medium"',
             '--json', '-o', str(final_private), '-',
         ]
+        # Codex shebang is #!/usr/bin/env node — include the already-qualified
+        # Node 24.21 bin (same FS allowlist). Do not mutate global uid1002_env.
         child_env = {
-            'PATH': '/usr/bin:/bin:' + str(AGENT_HOME / '.local' / 'bin'),
+            'PATH': (
+                str(AGENT_HOME / '.local' / 'node-v24.21.0' / 'bin')
+                + ':/usr/bin:/bin:'
+                + str(AGENT_HOME / '.local' / 'bin')
+            ),
             'LANG': 'C.UTF-8',
             'HOME': str(AGENT_HOME),
             'TMPDIR': str(tmpdir),
