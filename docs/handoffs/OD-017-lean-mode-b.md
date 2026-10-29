@@ -1,3 +1,11 @@
+# Native import preflight follow-up · 2026-10-29
+
+The main-to-dev status transport was actually accepted (40823787452 ->40823797119), preserving DEV-only environment access. The first product wake40824264633 recorded author attempt1 then failed before CLI/auth/export/temp allocation with ModuleNotFoundError core in isolated native_cursor import. No product model call occurred. Trace, original intent and RUNNING claim are preserved; queue is paused rather than attempts or UNKNOWN being cleared.
+
+This bounded repair supplies the installed native dependency directory under isolated Python and precisely classifies import-only NO_CALL before any provider launch. 94 worker checks pass; actual native_cursor imports through both loaders succeed as UID1002 under python-I. Independent delta review and mandatory CI remain gates. A single administrative recovery must verify the protected pre-CLI traceback, original intent and unchanged frozen source, use existing controller transition, preserve attempt1 and old intent, and allocate a distinct next attempt. No generic UNKNOWN release, new recovery framework, native qualification or provider grant is introduced.
+
+## Earlier checkpoints and history
+
 # Current transport follow-up · 2026-10-29
 
 PR #378 / source 5c5cdb7 is installed with QA PASS, CI40817183378 PASS7/7 and DEV40818055376 r40818055376-a1 ACCEPTED (merge d1038ad). OD-020 shared policy is applied; native QA remains READY and author UNKNOWN. Root config is disabled; no product call or MODE_B_ACTIVE is claimed.

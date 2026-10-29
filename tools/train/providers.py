@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import re
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -102,6 +103,24 @@ def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
+def _ensure_native_sys_path(native_dir):
+    """Expose protected native dir for transitive imports under python -I.
+
+    Place after this Mode B tools/train directory when present so `live` /
+    `run` / `providers` are not shadowed by native `live/`. Never prepend
+    user-writable project/hook dirs ahead of the Mode B binding.
+    """
+    native_dir = str(Path(native_dir).resolve())
+    if native_dir in sys.path:
+        return native_dir
+    train_dir = str(Path(__file__).resolve().parent)
+    if train_dir in sys.path:
+        sys.path.insert(sys.path.index(train_dir) + 1, native_dir)
+    else:
+        sys.path.append(native_dir)
+    return native_dir
+
+
 def _import_native(name):
     """Load installed native module; never invent readiness from repo copy alone."""
     import importlib.util
@@ -111,9 +130,18 @@ def _import_native(name):
         path = alt if alt.is_file() else path
     if not path.is_file():
         raise ProviderError('native_missing', name)
+    _ensure_native_sys_path(path.parent)
     spec = importlib.util.spec_from_file_location(f'lean_native_{name}', path)
     mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    try:
+        spec.loader.exec_module(mod)
+    except ImportError as err:
+        # Loader transitive import failure — known NO_CALL, before CLI/auth.
+        raise ProviderError(
+            'preflight_no_call',
+            f'{type(err).__name__}:{err}',
+            charge='none',
+        ) from err
     return mod
 
 
@@ -598,6 +626,13 @@ def invoke_cursor_author(*, task, worktree, evidence_dir, launcher=None, parent_
     except TimeoutError as err:
         mark_intent_phase(intent_path, 'UNKNOWN', error='timeout')
         raise ProviderError('cursor_timeout_unknown', str(err), charge='unknown') from err
+    except ProviderError as err:
+        # Preserve loader preflight_no_call / no_model_launched intent; do not
+        # overwrite with HOLD or invent a paid retry.
+        if err.code != 'preflight_no_call':
+            mark_intent_phase(intent_path, 'HOLD_no_automatic_replay',
+                              error_type=type(err).__name__, error=err.code)
+        raise
     except Exception as err:
         mark_intent_phase(intent_path, 'HOLD_no_automatic_replay', error_type=type(err).__name__)
         raise

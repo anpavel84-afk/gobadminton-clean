@@ -1005,6 +1005,14 @@ def execute_claim(admission, adapters, *, results_root, config=None, parent_leas
                 else:
                     raise LeanError('author_adapter_required')
             except ProviderError as err:
+                if err.code == 'preflight_no_call':
+                    # Known loader NO_CALL before CLI/auth: terminal BLOCKED (or
+                    # parent mark_phase WAKE_RESUME). Preserve attempt count /
+                    # intent; never dead RUNNING / UNKNOWN / paid reflex retry.
+                    mark_phase(
+                        path, 'BLOCKED', stage='author', error=err.code,
+                        no_model_launched=True, attempts=claim['attempts'])
+                    raise
                 if err.charge == 'unknown' or err.code.endswith('unknown'):
                     mark_phase(path, 'UNKNOWN', stage='author', error=err.code)
                     raise LeanError('no_automatic_paid_replay', 'UNKNOWN') from err
