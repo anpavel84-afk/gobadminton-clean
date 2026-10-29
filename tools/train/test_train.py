@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Proportionate deterministic tests for Lean Mode B (OD-017 repair3).
+"""Proportionate deterministic tests for Lean Mode B (OD-017/OD-018).
 
 Exercises the real run_once controller with mocked external adapters — not a
 parallel demo. Covers: two eligible Project-style tasks auto-next; stale/park/OFF
@@ -7,7 +7,8 @@ exclusion; QA FAIL→repair→new SHA; distinct candidate/merge SHA; duplicate e
 concurrent writer; UNKNOWN no replay; CI repairable FAIL→author findings; wake
 deadline resume; Project queue_unavailable zero calls; live default binding
 presence via mock subprocess boundary (no live calls); parser; quota; landlock
-fixtures with injected temp auth path (never probe host /srv); host request gates.
+fixtures with injected temp auth path (never probe host /srv); host request gates;
+frozen worktree/base once; author-attempt evidence; HTTPS FF publish fields.
 """
 from __future__ import annotations
 
@@ -86,15 +87,21 @@ class FakeRegistry:
 
 
 def make_flow_adapters(td, *, fail_qa_once=False, distinct_merge=False, shas=None,
-                       ci_fail_once=False, wait_ci_once=False):
+                       ci_fail_once=False, wait_ci_once=False, frozen_base=None):
     """Mocked adapters exercising the real execute_claim path.
 
     Injects temp lock_dir + integration_lock under td — never host-protected paths.
+    Tracks worktree create vs reuse and evidence paths for OD018 seam regressions.
     """
     shas = list(shas or [_sha(1), _sha(2), _sha(3)])
+    base_sha = frozen_base or _sha(100)
     state = {
         'author_i': 0, 'qa_calls': 0, 'author_calls': 0, 'publish_calls': 0,
         'merge_calls': 0, 'ci_calls': 0, 'author_findings': [],
+        'worktree_calls': 0, 'validate_calls': 0, 'frozen_base': base_sha,
+        'heads': {}, 'preqa_bases': [], 'preqa_worktrees': [],
+        'qa_worktrees': [], 'qa_bases': [], 'qa_evidence_dirs': [],
+        'author_evidence_dirs': [], 'publish_payloads': [],
     }
     integ = Path(td) / 'integration.lock'
     integ.write_text('test')
@@ -102,20 +109,51 @@ def make_flow_adapters(td, *, fail_qa_once=False, distinct_merge=False, shas=Non
     locks.mkdir(exist_ok=True)
 
     def worktree(task):
-        return str(Path(td) / 'wt' / str(task['issue']))
+        state['worktree_calls'] += 1
+        path = str(Path(td) / 'wt' / str(task['issue']))
+        Path(path).mkdir(parents=True, exist_ok=True)
+        state['heads'].setdefault(path, state['frozen_base'])
+        return path
+
+    def read_head(wt):
+        return state['heads'].get(str(wt), state['frozen_base'])
+
+    def validate_worktree(work, *, expected_head=None):
+        state['validate_calls'] += 1
+        head = state['heads'].get(str(work), state['frozen_base'])
+        if expected_head and head != expected_head:
+            raise lean_run.LeanError('worktree_unexpected_head_hold',
+                                     f'{head}!={expected_head}')
+        return head
 
     def author(**kwargs):
         state['author_calls'] += 1
         task = kwargs.get('task') or {}
         state['author_findings'].append(list(task.get('repair_findings') or []))
+        ev = kwargs.get('evidence_dir')
+        if ev:
+            state['author_evidence_dirs'].append(str(ev))
+            Path(ev).mkdir(parents=True, exist_ok=True)
+            # Simulate exclusive raw create (stream.jsonl xb semantics).
+            raw = Path(ev) / 'stream.jsonl'
+            if raw.exists():
+                raise FileExistsError(str(raw))
+            raw.write_text('{"type":"test"}\n')
+            (Path(ev) / 'author-intent.json').write_text('{"phase":"completed"}\n')
         i = min(state['author_i'], len(shas) - 1)
         sha = shas[i]
         state['author_i'] += 1
+        wt = str(kwargs.get('worktree') or '')
+        if wt:
+            state['heads'][wt] = sha
         return {'candidate_sha': sha, 'changed_paths': ['apps/web/src/x.ts']}
 
     def qa(claim):
         state['qa_calls'] += 1
         sha = claim['candidate_sha']
+        state['qa_worktrees'].append(claim.get('worktree'))
+        state['qa_bases'].append(claim.get('base_sha'))
+        state['qa_evidence_dirs'].append(claim.get('evidence_dir'))
         if fail_qa_once and state['qa_calls'] == 1:
             return {'verdict': 'FAIL', 'findings': ['missing test for X'],
                     'reviewed_sha': sha, 'charge': 'charged'}
@@ -123,9 +161,13 @@ def make_flow_adapters(td, *, fail_qa_once=False, distinct_merge=False, shas=Non
 
     def publish(kind=None, payload=None, intent_path=None, **_):
         state['publish_calls'] += 1
+        state['publish_payloads'].append(dict(payload or {}))
         if kind == 'merge_dev':
             return merge(kind=kind, payload=payload)
-        return {'pr': 1000 + int(payload['issue']), 'head_sha': payload['sha']}
+        branch = (payload or {}).get('publication_branch') or (
+            f"automation/issue-{(payload or {}).get('issue')}")
+        return {'pr': int((payload or {}).get('existing_pr') or (1000 + int(payload['issue']))),
+                'head_sha': payload['sha'], 'branch': branch}
 
     def merge(kind=None, payload=None, intent_path=None, **_):
         state['merge_calls'] += 1
@@ -157,6 +199,8 @@ def make_flow_adapters(td, *, fail_qa_once=False, distinct_merge=False, shas=Non
                 'receipt': {'status': 'ACCEPTED', 'line': 'ACCEPTED'}}
 
     def preqa(worktree, allowed, base):
+        state['preqa_bases'].append(base)
+        state['preqa_worktrees'].append(str(worktree))
         return {'ok': True, 'head': shas[min(state['author_i'] - 1, len(shas) - 1)],
                 'changed': list(allowed), 'illegal': [], 'base': base}
 
@@ -169,6 +213,8 @@ def make_flow_adapters(td, *, fail_qa_once=False, distinct_merge=False, shas=Non
         wait_ci=wait_ci,
         deploy=deploy,
         worktree=worktree,
+        read_head=read_head,
+        validate_worktree=validate_worktree,
         preqa_diff=preqa,
         lock_registry=FakeRegistry,
         lock_dir=str(locks),
@@ -554,13 +600,229 @@ class ParserQuotaTests(unittest.TestCase):
             self.assertFalse(ok)
 
 
+def _git_repo(path, *, branch='dev'):
+    """Minimal temp git repo for deterministic worktree/base regressions."""
+    path = Path(path)
+    path.mkdir(parents=True, exist_ok=True)
+    env = {
+        'PATH': '/usr/bin:/bin', 'HOME': str(path / '.home'),
+        'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_CONFIG_SYSTEM': '/dev/null',
+        'GIT_OPTIONAL_LOCKS': '0', 'GIT_TERMINAL_PROMPT': '0',
+    }
+    (path / '.home').mkdir(exist_ok=True)
+
+    def g(*args):
+        import subprocess
+        return subprocess.run(
+            ['/usr/bin/git', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', *args],
+            cwd=str(path), env=env, text=True, capture_output=True, check=True, timeout=30,
+        )
+
+    g('init', '-b', branch)
+    g('config', 'user.name', 'test')
+    g('config', 'user.email', 'test@localhost')
+    (path / 'README').write_text('base\n')
+    g('add', 'README')
+    g('commit', '-m', 'base')
+    head = g('rev-parse', 'HEAD').stdout.strip()
+    return head, g, env
+
+
+class Od018LifecycleSeamTests(unittest.TestCase):
+    """Addressed regressions for confirmed Mode B controller/live seams."""
+
+    def test_frozen_base_worktree_reaches_preqa_qa_without_second_create(self):
+        with tempfile.TemporaryDirectory() as td:
+            adapters, state = make_flow_adapters(td, shas=[_sha(1)])
+            comment, _ = owner_task_comment(issue=801)
+            adm = lean_run.admit_comment(
+                comment, {'number': 801, 'state': 'open'}, {'id': REPO_ID})
+            out = lean_run.execute_claim(adm, adapters, results_root=td)
+            self.assertEqual(out['claim']['phase'], 'DEV_ACCEPTED_UAT_PENDING')
+            self.assertEqual(state['worktree_calls'], 1)
+            self.assertEqual(out['claim']['base_sha'], state['frozen_base'])
+            self.assertEqual(state['preqa_bases'], [state['frozen_base']])
+            self.assertEqual(state['qa_bases'], [state['frozen_base']])
+            self.assertEqual(state['preqa_worktrees'], [out['claim']['worktree']])
+            self.assertEqual(state['qa_worktrees'], [out['claim']['worktree']])
+            self.assertNotEqual(out['claim']['base_sha'], '0' * 40)
+
+    def test_qa_fail_repair_preserves_first_raw_and_same_base(self):
+        with tempfile.TemporaryDirectory() as td:
+            adapters, state = make_flow_adapters(
+                td, fail_qa_once=True, shas=[_sha(1), _sha(2)])
+            comment, _ = owner_task_comment(issue=802)
+            adm = lean_run.admit_comment(
+                comment, {'number': 802, 'state': 'open'}, {'id': REPO_ID})
+            out = lean_run.execute_claim(adm, adapters, results_root=td)
+            self.assertEqual(out['claim']['phase'], 'DEV_ACCEPTED_UAT_PENDING')
+            self.assertEqual(state['author_calls'], 2)
+            self.assertEqual(state['worktree_calls'], 1)
+            self.assertEqual(out['claim']['base_sha'], state['frozen_base'])
+            self.assertEqual(state['preqa_bases'], [state['frozen_base'], state['frozen_base']])
+            self.assertEqual(len(state['author_evidence_dirs']), 2)
+            self.assertNotEqual(state['author_evidence_dirs'][0], state['author_evidence_dirs'][1])
+            first = Path(state['author_evidence_dirs'][0])
+            second = Path(state['author_evidence_dirs'][1])
+            self.assertTrue((first / 'stream.jsonl').is_file())
+            self.assertTrue((second / 'stream.jsonl').is_file())
+            self.assertIn('author-attempt-1', str(first))
+            self.assertIn('author-attempt-2', str(second))
+            # First raw preserved (not overwritten by repair).
+            self.assertEqual((first / 'stream.jsonl').read_text(), '{"type":"test"}\n')
+
+    def test_second_issue_after_dev_merge_resolves_fresh_base(self):
+        with tempfile.TemporaryDirectory() as td:
+            adapters, state = make_flow_adapters(td, shas=[_sha(11), _sha(22)])
+            # First issue completes DEV; second must resolve its own worktree once.
+            for issue, prio in ((811, 20), (812, 10)):
+                comment, _ = owner_task_comment(issue=issue, priority=prio)
+                adm = lean_run.admit_comment(
+                    comment, {'number': issue, 'state': 'open'}, {'id': REPO_ID})
+                out = lean_run.execute_claim(adm, adapters, results_root=td)
+                self.assertEqual(out['claim']['phase'], 'DEV_ACCEPTED_UAT_PENDING')
+            self.assertEqual(state['worktree_calls'], 2)
+            self.assertEqual(state['author_calls'], 2)
+            bases = state['preqa_bases']
+            self.assertEqual(len(bases), 2)
+            self.assertTrue(all(b == state['frozen_base'] for b in bases))
+
+    def test_temp_git_create_once_candidate_head_reused(self):
+        """Real temp git: create at origin/dev, author moves HEAD, preqa reuses."""
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td) / 'repo'
+            wt_root = Path(td) / 'wt'
+            base, g, env = _git_repo(repo)
+            # Simulate origin/dev for create_task_worktree fetch/rev-parse path.
+            g('remote', 'add', 'origin', str(repo))
+            g('update-ref', 'refs/remotes/origin/dev', base)
+
+            # create from missing task.base → origin/dev.
+            with mock.patch.object(lean_live, 'git') as git_mock:
+                def git_side(cwd, *args, **kwargs):
+                    import subprocess
+                    proc = subprocess.run(
+                        ['/usr/bin/git', '-c', 'core.hooksPath=/dev/null',
+                         '-c', 'core.fsmonitor=false', *args],
+                        cwd=str(cwd), env=env, text=True, capture_output=True,
+                        check=True, timeout=30)
+                    return (proc.stdout or '').strip()
+
+                git_mock.side_effect = git_side
+                real_run = lean_live.run_argv
+
+                def run_side(argv, **kwargs):
+                    if argv and argv[0] == '/usr/bin/git':
+                        # Drop UID may fail in unit env — run without preexec.
+                        kwargs = dict(kwargs)
+                        kwargs['drop_uid'] = False
+                        if kwargs.get('env'):
+                            e = dict(kwargs['env'])
+                            e['HOME'] = str(repo / '.home')
+                            kwargs['env'] = e
+                    return real_run(argv, **kwargs)
+
+                with mock.patch.object(lean_live, 'run_argv', side_effect=run_side), \
+                        mock.patch.object(lean_live, 'require_executor_uid', return_value=0), \
+                        mock.patch.object(lean_live.os, 'geteuid', return_value=1002):
+                    wt = lean_live.create_task_worktree(
+                        {'issue': 901}, repo=repo, root=wt_root)
+                    head1 = lean_live.git(wt, 'rev-parse', 'HEAD')
+                    self.assertEqual(head1, base)
+                    # Author commit advances HEAD past base.
+                    f = Path(wt) / 'apps' / 'x.ts'
+                    f.parent.mkdir(parents=True, exist_ok=True)
+                    f.write_text('x\n')
+                    lean_live.git(wt, 'add', '--', 'apps/x.ts')
+                    lean_live.git(
+                        wt, '-c', 'user.name=t', '-c', 'user.email=t@localhost',
+                        '-c', 'commit.gpgsign=false', 'commit', '-m', 'cand')
+                    cand = lean_live.git(wt, 'rev-parse', 'HEAD')
+                    self.assertNotEqual(cand, base)
+                    # Reuse with expected candidate — must NOT hold / recreate.
+                    wt2 = lean_live.create_task_worktree(
+                        {'issue': 901, 'base': base, 'expected_head': cand,
+                         'candidate_sha': cand},
+                        repo=repo, root=wt_root)
+                    self.assertEqual(wt2, wt)
+                    self.assertEqual(lean_live.git(wt2, 'rev-parse', 'HEAD'), cand)
+                    # Wrong expected head still HOLDs.
+                    with self.assertRaises(lean_live.LiveError) as ctx:
+                        lean_live.create_task_worktree(
+                            {'issue': 901, 'base': base}, repo=repo, root=wt_root)
+                    self.assertEqual(ctx.exception.code, 'worktree_unexpected_head_hold')
+
+    def test_publish_propagates_publication_branch_and_existing_pr(self):
+        with tempfile.TemporaryDirectory() as td:
+            adapters, state = make_flow_adapters(td, shas=[_sha(7)])
+            comment, task = owner_task_comment(
+                issue=182,
+                owner_authority_comment=lean_run.OD018_SIGNED_COMMENT_ID,
+                publication_branch='mode-a/182-friend-recommendations',
+                existing_pr=367,
+            )
+            signed = {
+                'id': lean_run.OD018_SIGNED_COMMENT_ID,
+                'body': (
+                    '# OWNER DIRECT · SOCIAL GAMES RESTART & DEV ADMISSION · OD-017\n'
+                    'Supersedes the former Owner HOLD/OFF comment PROSPECTIVELY, '
+                    'only for the following bounded DEV rollout. '
+                    'This is not permission for PROD.\n'
+                ),
+                'user': {'id': OWNER, 'login': 'anpavel84-afk'},
+                'created_at': '2026-10-28T23:09:33Z',
+                'updated_at': '2026-10-28T23:09:33Z',
+            }
+            comment['id'] = lean_run.OD018_SIGNED_COMMENT_ID + 50
+            adm = lean_run.admit_comment(
+                comment, {'number': 182, 'state': 'open'}, {'id': REPO_ID},
+                all_comments=[signed, comment])
+            out = lean_run.execute_claim(adm, adapters, results_root=td)
+            self.assertEqual(out['claim']['phase'], 'DEV_ACCEPTED_UAT_PENDING')
+            self.assertTrue(state['publish_payloads'])
+            pub = state['publish_payloads'][0]
+            self.assertEqual(pub.get('publication_branch'),
+                             'mode-a/182-friend-recommendations')
+            self.assertEqual(int(pub.get('existing_pr')), 367)
+            self.assertEqual(out['claim'].get('publication_branch'),
+                             'mode-a/182-friend-recommendations')
+
+    def test_publish_push_pr_no_force_uses_https_helper(self):
+        import inspect
+        src = inspect.getsource(lean_live.publish_push_pr)
+        helper = inspect.getsource(lean_live._git_https_argv)
+        # Body must not invoke force/reset (ignore prose in docstring).
+        body = src.split('"""', 2)[-1]
+        self.assertNotIn('--force-with-lease', body)
+        self.assertNotIn("checkout', '-B'", body)
+        self.assertNotIn('checkout", "-B"', body)
+        self.assertIn('gh auth git-credential', helper)
+        self.assertIn('_git_https_argv', src)
+        self.assertIn('publication_branch', src)
+        self.assertIn('existing_pr', src)
+        self.assertIn('remote_branch_unexpected_sha_hold', src)
+        self.assertIn('https://github.com/', inspect.getsource(lean_live._https_origin_url))
+        # No permanent Issue→branch hardcode table.
+        self.assertNotIn('mode-a/182-friend-recommendations', src)
+
+    def test_preqa_uses_live_git_not_root_subprocess(self):
+        import inspect
+        src = inspect.getsource(lean_run.deterministic_preqa_diff)
+        body = src.split('"""', 2)[-1]
+        self.assertIn('lean_live.git', src)
+        self.assertNotIn('subprocess.run', body)
+        self.assertNotIn('safe.directory', body)
+        self.assertIn('preqa_base_sha_required', src)
+
+
 class LiveBindingsTests(unittest.TestCase):
     def test_live_module_exposes_required_functions(self):
         for name in (
             'cursor_author_live', 'codex_qa_live', 'agy_qa_live',
             'publish_push_pr', 'wait_product_ci', 'merge_pr_live',
             'wait_dev_deploy', 'fetch_project_admissions', 'create_task_worktree',
-            'build_live_adapters', 'uid1002_preexec',
+            'build_live_adapters', 'uid1002_preexec', 'validate_frozen_worktree',
+            'resolve_task_worktree',
         ):
             self.assertTrue(callable(getattr(lean_live, name)))
 

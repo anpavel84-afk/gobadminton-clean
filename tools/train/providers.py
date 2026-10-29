@@ -443,7 +443,17 @@ def agy_child_preexec(readonly, writable, executables, *, uid=AGY_UID, gid=AGY_G
 
 
 def prepare_cursor_author_intent(task, worktree, evidence_dir):
-    """Write intent before any paid call; Mode A launch pattern factored."""
+    """Write intent before any paid call; Mode A launch pattern factored.
+
+    evidence_dir must be the unique author-attempt-N folder. Never overwrite an
+    existing intent/raw receipt (would erase history or hide a second paid call).
+    """
+    path = Path(evidence_dir) / 'author-intent.json'
+    if path.exists():
+        raise ProviderError('author_intent_exists_no_overwrite', str(path))
+    for raw_name in ('stream.jsonl', 'stderr', 'prompt.txt'):
+        if (Path(evidence_dir) / raw_name).exists():
+            raise ProviderError('author_raw_exists_no_overwrite', raw_name)
     intent = {
         'schema': 'GB_LEAN_PROVIDER_INTENT_V1',
         'provider': 'cursor_auto',
@@ -451,11 +461,12 @@ def prepare_cursor_author_intent(task, worktree, evidence_dir):
         'issue': int(task['issue']),
         'revision': task.get('revision') or task.get('task_revision'),
         'worktree': str(worktree),
+        'runtime_base_sha': task.get('runtime_base_sha') or task.get('base'),
         'allowed_paths': list(task.get('allowed_paths') or []),
         'phase': 'prepared',
         'started_at': int(time.time()),
+        'evidence_dir': str(evidence_dir),
     }
-    path = Path(evidence_dir) / 'author-intent.json'
     atomic_write(path, intent, 0o600)
     return intent, path
 
@@ -463,6 +474,9 @@ def prepare_cursor_author_intent(task, worktree, evidence_dir):
 def prepare_qa_intent(task, candidate_sha, provider, evidence_dir):
     if not (isinstance(candidate_sha, str) and SHA40.fullmatch(candidate_sha)):
         raise ProviderError('invalid_candidate_sha')
+    path = Path(evidence_dir) / f'qa-intent-{provider}.json'
+    if path.exists():
+        raise ProviderError('qa_intent_exists_no_overwrite', str(path))
     intent = {
         'schema': 'GB_LEAN_PROVIDER_INTENT_V1',
         'provider': provider,
@@ -470,10 +484,12 @@ def prepare_qa_intent(task, candidate_sha, provider, evidence_dir):
         'issue': int(task['issue']),
         'revision': task.get('revision') or task.get('task_revision'),
         'candidate_sha': candidate_sha,
+        'runtime_base_sha': task.get('runtime_base_sha') or task.get('base'),
+        'worktree': task.get('worktree'),
         'phase': 'prepared',
         'started_at': int(time.time()),
+        'evidence_dir': str(evidence_dir),
     }
-    path = Path(evidence_dir) / f'qa-intent-{provider}.json'
     atomic_write(path, intent, 0o600)
     return intent, path
 
@@ -650,8 +666,10 @@ AUTHOR_PASS_CLAIMS = {
     'nested_agy_codex_model_calls': 0,
     'model_calls': 1,
     'note': (
-        'OD018 Mode B commissioning: live launch blockers repaired in allowed '
-        'train sources only; AGY remains not READY (no bare CLI product QA); '
-        'MODE_B_ACTIVE unproven until independent QA/CI/install; no paid AGY calls'
+        'OD018 Mode B commissioning: frozen worktree/base once, per-attempt '
+        'evidence, HTTPS FF publish + existing_pr propagation repaired in '
+        'allowed train sources only; AGY remains not READY; MODE_B_ACTIVE '
+        'unproven until independent QA/CI/install + two real DEV tasks; '
+        'no paid AGY calls'
     ),
 }

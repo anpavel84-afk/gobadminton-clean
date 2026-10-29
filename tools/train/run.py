@@ -461,17 +461,16 @@ def recover_publication(kind, *, remote_head=None, pr_number=None, merged_sha=No
 
 
 def deterministic_preqa_diff(worktree, allowed_paths, base_sha):
-    """Addressed git diff check before QA; no model call."""
-    import subprocess
-    env = {'PATH': '/usr/bin:/bin', 'HOME': '/nonexistent', 'GIT_CONFIG_GLOBAL': '/dev/null',
-           'GIT_CONFIG_SYSTEM': '/dev/null', 'GIT_OPTIONAL_LOCKS': '0', 'GIT_TERMINAL_PROMPT': '0'}
-    def git(*args):
-        return subprocess.run(['/usr/bin/git', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', *args],
-                              cwd=worktree, env=env, text=True, capture_output=True, check=True, timeout=60)
-    head = git('rev-parse', 'HEAD').stdout.strip()
-    status = git('status', '--porcelain').stdout
+    """Addressed git diff check before QA; no model call.
+
+    Uses live.git (UID1002 drop) — never Root direct subprocess or safe.directory.
+    """
+    _need(isinstance(base_sha, str) and SHA40.fullmatch(base_sha), 'preqa_base_sha_required', str(base_sha))
+    import live as lean_live
+    head = lean_live.git(worktree, 'rev-parse', 'HEAD')
+    status = lean_live.git(worktree, 'status', '--porcelain')
     changed = []
-    for line in status.splitlines():
+    for line in (status or '').splitlines():
         if not line.strip():
             continue
         path = line[3:].strip()
@@ -479,8 +478,8 @@ def deterministic_preqa_diff(worktree, allowed_paths, base_sha):
             path = path.split(' -> ', 1)[1]
         changed.append(path)
     if not changed:
-        diff = git('diff', '--name-only', base_sha, 'HEAD').stdout.splitlines()
-        changed = [p for p in diff if p]
+        diff = lean_live.git(worktree, 'diff', '--name-only', base_sha, 'HEAD')
+        changed = [p for p in (diff or '').splitlines() if p]
     illegal = [p for p in changed if p not in set(allowed_paths)]
     return {
         'head': head,
@@ -610,6 +609,10 @@ class Adapters:
         self.merge = hooks.get('merge')
         self.deploy = hooks.get('deploy')
         self.worktree = hooks.get('worktree')
+        self.resolve_worktree = hooks.get('resolve_worktree')
+        self.validate_worktree = hooks.get('validate_worktree')
+        self.reuse_worktree = hooks.get('reuse_worktree')
+        self.read_head = hooks.get('read_head')
         self.project_status = hooks.get('project_status')
         self.lock_registry = hooks.get('lock_registry')
         self.lock_dir = hooks.get('lock_dir')
@@ -640,12 +643,123 @@ def _wake_budget_exhausted(adapters, stage):
 
 
 def _evidence_dir(adapters, claim, results_root):
+    """Evidence root for one Issue/revision — attempt folders live under it.
+
+    Host may supply a parent evidence_dir; always namespace by issue/revision so
+    independent claims never share author-attempt-N / qa-* raw paths.
+    """
     if adapters.evidence_dir:
-        base = Path(adapters.evidence_dir)
+        base = (Path(adapters.evidence_dir)
+                / f'issue-{claim["issue"]}' / claim['revision'][:16])
     else:
         base = Path(results_root) / f'issue-{claim["issue"]}' / claim['revision'][:16] / 'evidence'
     base.mkdir(parents=True, exist_ok=True)
     return base
+
+
+def _author_attempt_dir(evidence_root, attempt_n):
+    """Unique author-attempt-N folder under the existing evidence root."""
+    d = Path(evidence_root) / f'author-attempt-{int(attempt_n)}'
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _qa_candidate_dir(evidence_root, candidate_sha, provider='codex'):
+    """Unique QA candidate folder; never reuse raw paths across SHA/provider."""
+    tag = (candidate_sha or 'unknown')[:12]
+    d = Path(evidence_root) / f'qa-{provider}-{tag}'
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _read_worktree_head(adapters, worktree):
+    """Actual HEAD under UID1002 live.git; adapters.read_head for unit fakes."""
+    if getattr(adapters, 'read_head', None):
+        head = adapters.read_head(worktree)
+        _need(isinstance(head, str) and SHA40.fullmatch(head), 'worktree_head_invalid', str(head))
+        return head
+    import live as lean_live
+    head = lean_live.git(worktree, 'rev-parse', 'HEAD')
+    _need(isinstance(head, str) and SHA40.fullmatch(head), 'worktree_head_invalid', str(head))
+    return head
+
+
+def _ensure_frozen_runtime(claim, path, adapters, task):
+    """Resolve worktree ONCE; persist clean initial HEAD as base_sha before paid launch.
+
+    Admission task/revision are never rewritten. Missing task.base is normal —
+    freeze actual verified HEAD (origin/dev via create). Never 000… fallback.
+    Later preqa/QA/repair reuse claim.worktree + claim.base_sha.
+    """
+    frozen_wt = claim.get('worktree')
+    frozen_base = claim.get('base_sha')
+    if (
+        isinstance(frozen_wt, str) and frozen_wt
+        and isinstance(frozen_base, str) and SHA40.fullmatch(frozen_base)
+    ):
+        runtime = dict(claim.get('runtime') or {})
+        runtime.update({'worktree': frozen_wt, 'base_sha': frozen_base})
+        # Reuse: validate expected current HEAD (candidate after author, else base).
+        expected = claim.get('candidate_sha') or frozen_base
+        if getattr(adapters, 'validate_worktree', None):
+            adapters.validate_worktree(frozen_wt, expected_head=expected)
+        elif adapters.worktree and getattr(adapters, 'reuse_worktree', None):
+            adapters.reuse_worktree(dict(task, worktree=frozen_wt, base=frozen_base,
+                                         expected_head=expected, candidate_sha=claim.get('candidate_sha')))
+        else:
+            try:
+                import live as lean_live
+                lean_live.validate_frozen_worktree(
+                    frozen_wt, expected_head=expected, base_sha=frozen_base)
+            except ImportError:
+                pass
+            except Exception as err:
+                code = getattr(err, 'code', None) or type(err).__name__
+                raise LeanError(code if isinstance(code, str) else 'worktree_reuse_hold', str(err)) from err
+        if claim.get('runtime') != runtime:
+            claim = mark_phase(path, claim.get('phase') or 'CLAIMED',
+                               worktree=frozen_wt, base_sha=frozen_base, runtime=runtime)
+        return claim, frozen_wt, frozen_base
+
+    # First resolve for this claim — paid launch must not start without freeze.
+    if getattr(adapters, 'resolve_worktree', None):
+        resolved = adapters.resolve_worktree(task)
+        _need(isinstance(resolved, dict), 'worktree_resolve_invalid')
+        worktree = resolved.get('worktree')
+        base_sha = resolved.get('base_sha')
+    else:
+        worktree = adapters.worktree(task) if adapters.worktree else task.get('worktree')
+        _need(worktree, 'worktree_required')
+        # Prefer explicit prepared/base only when already a real SHA; else read HEAD.
+        prepared = task.get('base') or task.get('prepared_base')
+        if isinstance(prepared, str) and SHA40.fullmatch(prepared):
+            # create_task_worktree already validated HEAD==prepared when present.
+            base_sha = prepared
+            # Still confirm actual HEAD matches (or capture if adapter created from origin/dev).
+            try:
+                actual = _read_worktree_head(adapters, worktree)
+            except LeanError:
+                actual = prepared
+            if actual != prepared:
+                # Fresh create from missing base freezes actual origin/dev HEAD.
+                base_sha = actual
+        else:
+            base_sha = _read_worktree_head(adapters, worktree)
+    _need(worktree, 'worktree_required')
+    _need(isinstance(base_sha, str) and SHA40.fullmatch(base_sha), 'base_sha_unresolved', str(base_sha))
+    runtime = {
+        'worktree': str(worktree),
+        'base_sha': base_sha,
+        'publication_branch': task.get('publication_branch'),
+        'existing_pr': task.get('existing_pr'),
+    }
+    claim = mark_phase(
+        path, claim.get('phase') or 'CLAIMED',
+        worktree=str(worktree), base_sha=base_sha, runtime=runtime,
+        publication_branch=task.get('publication_branch'),
+        existing_pr=task.get('existing_pr'),
+    )
+    return claim, str(worktree), base_sha
 
 
 def fetch_owner_admissions(gh_api, *, config=None):
@@ -813,8 +927,12 @@ def execute_claim(admission, adapters, *, results_root, config=None, parent_leas
                                    wake='deadline')
                 return {'status': 'wake_resume', 'claim': claim, 'claim_path': str(path),
                         'reason': 'deadline'}
+            # Freeze worktree/base_sha ONCE before any paid author launch.
+            claim, worktree, base_sha = _ensure_frozen_runtime(claim, path, adapters, task)
             claim['attempts'] = dict(claim.get('attempts') or {})
             claim['attempts']['author'] = int(claim['attempts'].get('author') or 0) + 1
+            author_n = int(claim['attempts']['author'])
+            author_evidence = _author_attempt_dir(evidence, author_n)
             # Propagate exact findings into author task (same worktree/PR/history).
             findings = list(claim.get('repair_findings')
                             or (claim.get('last_qa') or {}).get('findings')
@@ -822,15 +940,18 @@ def execute_claim(admission, adapters, *, results_root, config=None, parent_leas
             if findings:
                 task['repair_findings'] = findings
                 task['findings'] = findings
-            mark_phase(path, 'RUNNING', stage='author', attempts=claim['attempts'],
-                       repair_findings=findings or None)
-            worktree = adapters.worktree(task) if adapters.worktree else task.get('worktree')
-            _need(worktree, 'worktree_required')
+            # Runtime context for author — do not rewrite admission task.base/revision.
             task['worktree'] = worktree
+            task['runtime_base_sha'] = base_sha
+            mark_phase(path, 'RUNNING', stage='author', attempts=claim['attempts'],
+                       repair_findings=findings or None,
+                       worktree=str(worktree), base_sha=base_sha,
+                       author_evidence_dir=str(author_evidence),
+                       evidence_root=str(evidence))
             try:
                 if adapters.author:
                     author_result = invoke_cursor_author(
-                        task=task, worktree=worktree, evidence_dir=evidence,
+                        task=task, worktree=worktree, evidence_dir=author_evidence,
                         launcher=adapters.author, parent_lease=True)
                 else:
                     raise LeanError('author_adapter_required')
@@ -845,14 +966,24 @@ def execute_claim(admission, adapters, *, results_root, config=None, parent_leas
                                candidate_sha=candidate_sha,
                                reviewed_candidate_sha=candidate_sha,
                                author_changed=author_result.get('changed_paths') or [],
-                               attempts=claim['attempts'], worktree=str(worktree))
+                               attempts=claim['attempts'], worktree=str(worktree),
+                               base_sha=base_sha,
+                               author_evidence_dir=str(author_evidence),
+                               evidence_root=str(evidence))
 
         # --- preqa diff ---
         claim = read_receipt(path)
         if claim.get('phase') == 'AUTHOR_DONE':
-            base_sha = task.get('base') or claim.get('base_sha') or ('0' * 40)
-            worktree = adapters.worktree(task) if adapters.worktree else (
-                claim.get('worktree') or task.get('worktree'))
+            # Immutable frozen runtime — never recreate worktree / never 000 SHA.
+            base_sha = claim.get('base_sha')
+            _need(isinstance(base_sha, str) and SHA40.fullmatch(base_sha),
+                  'base_sha_unresolved', str(base_sha))
+            worktree = claim.get('worktree') or task.get('worktree')
+            _need(worktree, 'worktree_required')
+            # Validate candidate HEAD + clean; do not call adapters.worktree again.
+            if getattr(adapters, 'validate_worktree', None):
+                adapters.validate_worktree(
+                    worktree, expected_head=claim.get('candidate_sha') or base_sha)
             if adapters.preqa_diff:
                 diff = adapters.preqa_diff(worktree, task['allowed_paths'], base_sha)
             else:
@@ -866,7 +997,8 @@ def execute_claim(admission, adapters, *, results_root, config=None, parent_leas
                         'reason': 'preqa_diff'}
             claim = mark_phase(path, 'PREQA_OK', stage='preqa_diff', preqa=diff,
                                candidate_sha=diff.get('head') or claim.get('candidate_sha'),
-                               reviewed_candidate_sha=diff.get('head') or claim.get('candidate_sha'))
+                               reviewed_candidate_sha=diff.get('head') or claim.get('candidate_sha'),
+                               worktree=str(worktree), base_sha=base_sha)
 
         # --- publish PR (UID1002 gh, not GITHUB_TOKEN) ---
         claim = read_receipt(path)
@@ -876,13 +1008,29 @@ def execute_claim(admission, adapters, *, results_root, config=None, parent_leas
                 return {'status': 'wake_resume', 'claim': claim, 'claim_path': str(path),
                         'reason': 'deadline'}
             mark_phase(path, 'RUNNING', stage='publish_pr')
+            pub_branch = (
+                claim.get('publication_branch')
+                or task.get('publication_branch')
+                or (claim.get('runtime') or {}).get('publication_branch')
+            )
+            existing_pr = (
+                claim.get('existing_pr')
+                or task.get('existing_pr')
+                or (claim.get('runtime') or {}).get('existing_pr')
+            )
             try:
                 if adapters.publish:
                     pub = invoke_trusted_publish(
                         kind='push_pr',
-                        payload={'issue': claim['issue'], 'sha': claim['candidate_sha'],
-                                 'allowed_paths': task['allowed_paths'],
-                                 'worktree': claim.get('worktree') or task.get('worktree')},
+                        payload={
+                            'issue': claim['issue'],
+                            'sha': claim['candidate_sha'],
+                            'allowed_paths': task['allowed_paths'],
+                            'worktree': claim.get('worktree') or task.get('worktree'),
+                            'base_sha': claim.get('base_sha'),
+                            'publication_branch': pub_branch,
+                            'existing_pr': existing_pr,
+                        },
                         evidence_dir=evidence, publisher=adapters.publish)
                 else:
                     raise LeanError('publish_adapter_required')
@@ -896,6 +1044,8 @@ def execute_claim(admission, adapters, *, results_root, config=None, parent_leas
                                pr=pub.get('pr'),
                                candidate_sha=pub.get('head_sha') or claim['candidate_sha'],
                                reviewed_candidate_sha=pub.get('head_sha') or claim['candidate_sha'],
+                               publication_branch=pub.get('branch') or pub_branch,
+                               existing_pr=existing_pr,
                                publish=pub)
 
         # --- Product CI all7 exact head (durable WAITING_CI, not RUNNING) ---
@@ -944,17 +1094,40 @@ def execute_claim(admission, adapters, *, results_root, config=None, parent_leas
                 return {'status': 'wake_resume', 'claim': claim, 'claim_path': str(path),
                         'reason': 'deadline'}
             provider, reason, _meta = select_qa_provider(task, issue=claim['issue'])
-            mark_phase(path, 'RUNNING', stage='qa', qa_provider=provider, qa_route_reason=reason)
             claim['attempts'] = dict(claim.get('attempts') or {})
             claim['attempts']['qa'] = int(claim['attempts'].get('qa') or 0) + 1
+            qa_evidence = _qa_candidate_dir(
+                evidence, claim['candidate_sha'],
+                provider=('agy' if provider == 'agy_qa' else 'codex'))
+            runtime = dict(claim.get('runtime') or {})
+            runtime.update({
+                'worktree': claim.get('worktree'),
+                'base_sha': claim.get('base_sha'),
+                'candidate_sha': claim.get('candidate_sha'),
+                'evidence_root': str(evidence),
+                'qa_evidence_dir': str(qa_evidence),
+            })
+            mark_phase(path, 'RUNNING', stage='qa', qa_provider=provider, qa_route_reason=reason,
+                       attempts=claim['attempts'], qa_evidence_dir=str(qa_evidence),
+                       runtime=runtime)
+            # Feed immutable frozen runtime to QA — never recreate worktree from raw task.
+            qa_task = dict(task)
+            qa_task['worktree'] = claim.get('worktree')
+            qa_task['runtime_base_sha'] = claim.get('base_sha')
             try:
                 if adapters.qa:
-                    raw = adapters.qa(dict(claim, qa_provider=provider,
-                                           task=task, worktree=claim.get('worktree')))
+                    raw = adapters.qa(dict(
+                        claim, qa_provider=provider, task=qa_task,
+                        worktree=claim.get('worktree'),
+                        base_sha=claim.get('base_sha'),
+                        evidence_dir=str(qa_evidence),
+                        evidence_root=str(evidence),
+                        runtime=runtime,
+                    ))
                 else:
                     raw = invoke_codex_qa(
-                        task=task, candidate_sha=claim['candidate_sha'],
-                        evidence_dir=evidence, launcher=None)
+                        task=qa_task, candidate_sha=claim['candidate_sha'],
+                        evidence_dir=qa_evidence, launcher=None)
             except ProviderError as err:
                 if 'unknown' in err.code or err.charge == 'unknown':
                     mark_phase(path, 'UNKNOWN', stage='qa', error=err.code, attempts=claim['attempts'])

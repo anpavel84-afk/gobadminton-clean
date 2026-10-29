@@ -575,24 +575,55 @@ def _worktree_clean_readback(work, *, expected_base=None):
     return head
 
 
+def validate_frozen_worktree(worktree, *, expected_head=None, base_sha=None):
+    """Reuse frozen claim worktree: clean + expected HEAD; never recreate/reset."""
+    expected = expected_head or base_sha
+    return _worktree_clean_readback(worktree, expected_base=expected)
+
+
+def resolve_task_worktree(task, *, repo=None, root=None):
+    """Create-or-reuse once; return {worktree, base_sha} (initial clean base frozen)."""
+    work = create_task_worktree(task, repo=repo, root=root)
+    prepared = task.get('base') or task.get('prepared_base')
+    if isinstance(prepared, str) and SHA40.fullmatch(prepared):
+        base_sha = prepared
+        expected = task.get('expected_head') or task.get('candidate_sha') or prepared
+        _worktree_clean_readback(work, expected_base=expected)
+    else:
+        # Missing task.base: freeze actual HEAD after verified origin/dev create.
+        base_sha = _worktree_clean_readback(work)
+    if not SHA40.fullmatch(str(base_sha)):
+        raise LiveError('base_sha_unresolved', str(base_sha))
+    return {'worktree': str(work), 'base_sha': base_sha}
+
+
 def create_task_worktree(task, *, repo=None, root=None):
     """Fresh worktree from verified origin/dev or explicit prepared base.
 
     Never force-removes dirty/unexpected trees — those HOLD and preserve.
     Existing #182 candidate (PR367) is reused via prepared_worktree/base when
     supplied; no broad new prebuilt framework.
+
+    When expected_head/candidate_sha is set (frozen claim reuse), validate that
+    HEAD instead of initial base — do not recreate or reset.
     """
     repo = Path(repo or task.get('repo_path') or CLEAN_REPO)
     root = Path(root or WORKTREES_ROOT)
     issue = int(task['issue'])
-    expected = task.get('base') or task.get('prepared_base')
+    expected_base = task.get('base') or task.get('prepared_base')
+    expected_head = task.get('expected_head') or task.get('candidate_sha')
     # Reuse an explicitly prepared candidate tree (e.g. #182 PR367) when clean.
-    prepared = task.get('prepared_worktree') or task.get('reuse_worktree')
-    if prepared:
+    prepared = task.get('prepared_worktree') or task.get('reuse_worktree') or task.get('worktree')
+    if prepared and task.get('reuse_frozen'):
         work = Path(prepared)
         if not work.is_dir():
             raise LiveError('prepared_worktree_missing', str(work))
-        _worktree_clean_readback(work, expected_base=expected)
+        _worktree_clean_readback(work, expected_base=expected_head or expected_base)
+        return str(work)
+    if prepared and Path(prepared).is_dir() and (
+            task.get('prepared_worktree') or task.get('reuse_worktree')):
+        work = Path(prepared)
+        _worktree_clean_readback(work, expected_base=expected_head or expected_base)
         return str(work)
     if not root.exists():
         # Parent trusted process may create the Mode B worktrees root; drop child
@@ -605,14 +636,17 @@ def create_task_worktree(task, *, repo=None, root=None):
                 pass
     work = root / f'issue-{issue}'
     if work.exists():
-        _worktree_clean_readback(work, expected_base=expected)
+        # Reuse existing: prefer candidate/expected_head after author; else initial base.
+        _worktree_clean_readback(work, expected_base=expected_head or expected_base)
         return str(work)
     # Create only a genuinely fresh assigned tree from verified origin/dev or
     # explicit prepared base SHA. Git runs under UID1002 drop (run_argv).
     git(repo, 'fetch', 'origin', 'dev', timeout=120)
-    base = expected
+    base = expected_base
     if not (isinstance(base, str) and SHA40.fullmatch(base)):
         base = git(repo, 'rev-parse', 'origin/dev')
+        if not SHA40.fullmatch(str(base)):
+            raise LiveError('origin_dev_unresolved', str(base))
     run_argv(
         ['/usr/bin/git', '-C', str(repo), 'worktree', 'add', '--detach', str(work), base],
         env=git_env(), timeout=60, check=True,
@@ -905,11 +939,19 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None):
     require_executor_uid()
     if not (isinstance(candidate_sha, str) and SHA40.fullmatch(candidate_sha)):
         raise ProviderError('invalid_candidate_sha')
-    evidence = Path(evidence_dir) / f'qa-codex-{candidate_sha[:12]}'
+    evidence_root = Path(evidence_dir)
+    if evidence_root.name.startswith('qa-'):
+        evidence = evidence_root
+    else:
+        evidence = evidence_root / f'qa-codex-{candidate_sha[:12]}'
     evidence.mkdir(parents=True, exist_ok=True)
     if intent_path is None:
         _, intent_path = prepare_qa_intent(task, candidate_sha, 'codex_sol_medium', evidence)
-    source = Path(task.get('worktree') or create_task_worktree(task))
+    # Frozen claim worktree only — never create_task_worktree from raw admission.
+    if not task.get('worktree'):
+        mark_intent_phase(intent_path, 'HOLD_no_automatic_replay', error='qa_worktree_required')
+        raise ProviderError('qa_worktree_required')
+    source = Path(task['worktree'])
     head = git(source, 'rev-parse', 'HEAD')
     if head != candidate_sha:
         mark_intent_phase(intent_path, 'HOLD_no_automatic_replay',
@@ -921,11 +963,12 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None):
         mark_intent_phase(intent_path, 'HOLD_no_automatic_replay',
                           error=err.code, detail=err.detail)
         raise ProviderError(err.code, err.detail) from err
+    frozen_base = task.get('runtime_base_sha') or task.get('base') or task.get('prepared_base') or ''
     prompt = (
         rules_text + '\n'
         + 'Independent read-only QA. Return ONLY JSON keys verdict, findings, reviewed_sha.\n'
         f'reviewed_sha must be exactly {candidate_sha}.\n'
-        f'base={task.get("base") or task.get("prepared_base") or ""}\n'
+        f'base={frozen_base}\n'
         f'TASK: {json.dumps({k: task.get(k) for k in ("issue","goal","acceptance","allowed_paths")}, ensure_ascii=False)}\n'
         'PASS => findings must be []. Findings list only actionable defects.\n'
     )
@@ -1056,7 +1099,11 @@ def agy_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None):
     if not avail:
         return codex_qa_live(task=task, candidate_sha=candidate_sha,
                             evidence_dir=evidence_dir, intent_path=intent_path)
-    evidence = Path(evidence_dir) / f'qa-agy-{candidate_sha[:12]}'
+    evidence_root = Path(evidence_dir)
+    if evidence_root.name.startswith('qa-'):
+        evidence = evidence_root
+    else:
+        evidence = evidence_root / f'qa-agy-{candidate_sha[:12]}'
     evidence.mkdir(parents=True, exist_ok=True)
     if intent_path is None:
         _, intent_path = prepare_qa_intent(task, candidate_sha, 'agy_qa', evidence)
@@ -1072,7 +1119,10 @@ def agy_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None):
                           error='product_run_qa_absent_no_bare_cli')
         return codex_qa_live(task=task, candidate_sha=candidate_sha,
                             evidence_dir=evidence_dir, intent_path=intent_path)
-    source = Path(task.get('worktree') or create_task_worktree(task))
+    if not task.get('worktree'):
+        mark_intent_phase(intent_path, 'HOLD_no_automatic_replay', error='qa_worktree_required')
+        raise ProviderError('qa_worktree_required')
+    source = Path(task['worktree'])
     head = git(source, 'rev-parse', 'HEAD')
     if head != candidate_sha:
         mark_intent_phase(intent_path, 'HOLD_no_automatic_replay',
@@ -1106,63 +1156,163 @@ def agy_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None):
     return parsed
 
 
-def publish_push_pr(*, kind, payload, intent_path=None):
-    """UID1002 gh: commit already in worktree → push branch → create/update PR to dev.
+def _https_origin_url():
+    return f'https://github.com/{REPO}.git'
 
-    Real gh auth triggers CI; never GITHUB_TOKEN push.
+
+def _git_https_env():
+    """Trusted Mode A profile: HTTPS + gh auth git-credential; never SSH force push."""
+    return uid1002_env({
+        # Strip any inherited token; gh credential helper supplies auth.
+        'GIT_TERMINAL_PROMPT': '0',
+    })
+
+
+def _git_https_argv(*git_args):
+    """git argv with credential.helper=!gh auth git-credential (HTTPS only)."""
+    return [
+        '/usr/bin/git',
+        '-c', 'core.hooksPath=/dev/null',
+        '-c', 'core.fsmonitor=false',
+        '-c', 'credential.helper=',
+        '-c', 'credential.helper=!/usr/bin/gh auth git-credential',
+        *git_args,
+    ]
+
+
+def publish_push_pr(*, kind, payload, intent_path=None):
+    """UID1002 gh: push candidate fast-forward-only over HTTPS; create/resume PR.
+
+    No branch reset and no force push. publication_branch / existing_pr come from
+    machine assignment (task→payload); no permanent Issue hardcodes.
+    Existing remote branch at unexpected SHA => HOLD. Remote head readback required.
     """
     issue = int(payload['issue'])
     sha = payload['sha']
     if not SHA40.fullmatch(str(sha)):
         raise LiveError('invalid_candidate_sha')
     worktree = Path(payload.get('worktree') or WORKTREES_ROOT / f'issue-{issue}')
-    branch = f'automation/issue-{issue}'
+    branch = payload.get('publication_branch') or f'automation/issue-{issue}'
+    if not isinstance(branch, str) or not branch.strip() or '..' in branch or branch.startswith('/'):
+        raise LiveError('invalid_publication_branch', str(branch))
+    branch = branch.strip()
+    existing_pr = payload.get('existing_pr')
     head = git(worktree, 'rev-parse', 'HEAD')
     if head != sha:
         raise LiveError('worktree_head_mismatch', head)
-    # Ensure branch points at candidate then push with UID1002 gh/git SSH.
-    run_argv(
-        ['/usr/bin/git', '-C', str(worktree), 'checkout', '-B', branch],
-        env=git_env(), check=True)
-    # Push via git SSH as agentagency-dev (UID1002 key) — no GITHUB_TOKEN.
-    env = uid1002_env({
-        'GIT_SSH_COMMAND': (
-            '/usr/bin/ssh -F /dev/null -i /home/agentagency-dev/.ssh/gobadminton-clean-chatops-ed25519 '
-            '-o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes'
-        ),
-    })
-    run_argv(
-        ['/usr/bin/git', '-C', str(worktree), 'push', '-u', 'origin', branch, '--force-with-lease'],
-        env=env, timeout=120, check=True)
-    # Create or reuse PR base=dev head=branch.
+    # Ensure origin is HTTPS (Mode A working gh identity); never SSH force path.
+    try:
+        current = git(worktree, 'remote', 'get-url', 'origin')
+    except LiveError:
+        current = ''
+    https = _https_origin_url()
+    if current != https and 'github.com/' + REPO in (current or '').replace(':', '/'):
+        run_argv(
+            _git_https_argv('-C', str(worktree), 'remote', 'set-url', 'origin', https),
+            env=_git_https_env(), check=True)
+    elif current != https:
+        # Missing/wrong remote — set HTTPS origin for this push only via explicit URL.
+        pass
+    # Remote readback before push: unexpected different SHA => HOLD (no overwrite).
+    ls = run_argv(
+        _git_https_argv('-C', str(worktree), 'ls-remote', https, f'refs/heads/{branch}'),
+        env=_git_https_env(), timeout=60, check=False)
+    remote_sha = None
+    if ls.returncode == 0 and (ls.stdout or '').strip():
+        remote_sha = (ls.stdout or '').split()[0].strip()
+        if remote_sha and not SHA40.fullmatch(remote_sha):
+            remote_sha = None
+    if remote_sha and remote_sha != sha:
+        # Allow only strict fast-forward: candidate must contain remote tip.
+        mb = run_argv(
+            _git_https_argv('-C', str(worktree), 'merge-base', '--is-ancestor', remote_sha, sha),
+            env=_git_https_env(), check=False)
+        if mb.returncode != 0:
+            raise LiveError('remote_branch_unexpected_sha_hold',
+                            f'{branch}:{remote_sha}!={sha}')
+    # Fast-forward-only push of exact candidate (no force, no branch reset).
+    if remote_sha != sha:
+        push = run_argv(
+            _git_https_argv(
+                '-C', str(worktree), 'push', '--set-upstream', https,
+                f'{sha}:refs/heads/{branch}'),
+            env=_git_https_env(), timeout=120, check=False)
+        if push.returncode != 0:
+            # Uncertain push — target readback before raising.
+            rb = run_argv(
+                _git_https_argv('-C', str(worktree), 'ls-remote', https, f'refs/heads/{branch}'),
+                env=_git_https_env(), timeout=60, check=False)
+            rb_sha = ((rb.stdout or '').split() or [''])[0].strip()
+            if rb_sha != sha:
+                raise LiveError(
+                    'push_ff_failed',
+                    ((push.stderr or push.stdout or '')[:300] + f' remote={rb_sha}'))
+    else:
+        # Already at candidate — skip push; still verify PR.
+        pass
+    # Confirm remote actual head == candidate.
+    rb2 = run_argv(
+        _git_https_argv('-C', str(worktree), 'ls-remote', https, f'refs/heads/{branch}'),
+        env=_git_https_env(), timeout=60, check=True)
+    remote_head = ((rb2.stdout or '').split() or [''])[0].strip()
+    if remote_head != sha:
+        raise LiveError('remote_head_mismatch', f'{remote_head}!={sha}')
+
+    pr_number = None
+    if existing_pr is not None:
+        try:
+            pr_number = int(existing_pr)
+        except (TypeError, ValueError):
+            raise LiveError('invalid_existing_pr', str(existing_pr))
+        pr = gh_api(f'repos/{REPO}/pulls/{pr_number}')
+        head_ref = (pr.get('head') or {}).get('ref')
+        head_sha = (pr.get('head') or {}).get('sha')
+        base_ref = (pr.get('base') or {}).get('ref')
+        head_repo = ((pr.get('head') or {}).get('repo') or {}).get('full_name')
+        if head_ref != branch or base_ref != 'dev':
+            raise LiveError('existing_pr_mismatch',
+                            f'pr={pr_number} head={head_ref} base={base_ref}')
+        if head_repo and head_repo != REPO:
+            raise LiveError('existing_pr_head_repo_mismatch', str(head_repo))
+        if head_sha != sha:
+            # After FF push, API may lag — re-read once; still no silent new PR.
+            pr = gh_api(f'repos/{REPO}/pulls/{pr_number}')
+            head_sha = (pr.get('head') or {}).get('sha')
+            if head_sha != sha:
+                raise LiveError('existing_pr_head_mismatch', f'{head_sha}!={sha}')
+        return {'pr': pr_number, 'head_sha': sha, 'base': 'dev', 'branch': branch,
+                'existing_pr': pr_number, 'transport': 'https+gh'}
+
+    # Create or reuse PR by head branch — never silently replace with a duplicate.
     proc = run_argv(
         ['/usr/bin/gh', 'pr', 'list', '--repo', REPO, '--base', 'dev',
          '--head', f'{OWNER_LOGIN}:{branch}', '--json', 'number,headRefOid,baseRefName,state'],
         env=uid1002_env(), check=False)
     prs = loads(proc.stdout) if proc.returncode == 0 and proc.stdout.strip() else []
-    pr_number = None
     if isinstance(prs, list) and prs:
         pr_number = int(prs[0]['number'])
     else:
-        proc = run_argv(
+        run_argv(
             ['/usr/bin/gh', 'pr', 'create', '--repo', REPO, '--base', 'dev',
              '--head', branch, '--title', f'lean: issue-{issue}',
              '--body', f'Lean Mode B candidate for #{issue} (`{sha}`).'],
             env=uid1002_env(), check=True)
-        # gh prints URL; resolve number.
         proc2 = run_argv(
             ['/usr/bin/gh', 'pr', 'list', '--repo', REPO, '--base', 'dev',
              '--head', f'{OWNER_LOGIN}:{branch}', '--json', 'number,headRefOid'],
             env=uid1002_env(), check=True)
         prs = loads(proc2.stdout)
         pr_number = int(prs[0]['number'])
-    # Readback exact head.
     pr = gh_api(f'repos/{REPO}/pulls/{pr_number}')
     head_sha = (pr.get('head') or {}).get('sha')
     base_ref = (pr.get('base') or {}).get('ref')
+    head_repo = ((pr.get('head') or {}).get('repo') or {}).get('full_name')
     if head_sha != sha or base_ref != 'dev':
         raise LiveError('pr_readback_mismatch', f'head={head_sha} base={base_ref}')
-    return {'pr': pr_number, 'head_sha': head_sha, 'base': 'dev', 'branch': branch}
+    if head_repo and head_repo != REPO:
+        raise LiveError('pr_head_repo_mismatch', str(head_repo))
+    return {'pr': pr_number, 'head_sha': head_sha, 'base': 'dev', 'branch': branch,
+            'transport': 'https+gh'}
 
 
 def wait_product_ci(claim, *, budget_s=None, poll_s=None):
@@ -1182,9 +1332,15 @@ def wait_product_ci(claim, *, budget_s=None, poll_s=None):
         workflow_runs = (runs or {}).get('workflow_runs') if isinstance(runs, dict) else runs
         if not isinstance(workflow_runs, list):
             workflow_runs = []
+        pub_branch = (
+            claim.get('publication_branch')
+            or (claim.get('publish') or {}).get('branch')
+            or (claim.get('runtime') or {}).get('publication_branch')
+            or f'automation/issue-{issue}'
+        )
         matches = [r for r in workflow_runs
                    if r.get('head_sha') == sha and r.get('name') == 'Product CI'
-                   and r.get('head_branch') == f'automation/issue-{issue}']
+                   and r.get('head_branch') == pub_branch]
         if matches:
             latest = max(matches, key=lambda r: (r.get('id') or 0, r.get('run_attempt') or 0))
             jobs_payload = gh_api(
@@ -1340,13 +1496,28 @@ def wait_dev_deploy(claim, *, budget_s=None, poll_s=None):
 
 
 def qa_dispatch(claim):
-    """Route QA: AGY when READY+admitted+quota else Codex Medium."""
+    """Route QA: AGY when READY+admitted+quota else Codex Medium.
+
+    Uses immutable claim.runtime worktree/base/evidence — never recreate from raw task.
+    """
     from providers import select_qa_provider
+    runtime = dict(claim.get('runtime') or {})
     task = dict(claim.get('task') or {})
     task['issue'] = claim['issue']
-    task['worktree'] = claim.get('worktree') or task.get('worktree')
+    # Prefer frozen claim runtime over admission raw task fields.
+    wt = (claim.get('worktree') or runtime.get('worktree') or task.get('worktree'))
+    if not wt:
+        raise LiveError('qa_worktree_required')
+    task['worktree'] = wt
+    task['runtime_base_sha'] = claim.get('base_sha') or runtime.get('base_sha')
     provider, reason, _meta = select_qa_provider(task, issue=claim['issue'])
-    evidence = claim.get('evidence_dir') or EVIDENCE_ROOT
+    evidence = (
+        claim.get('evidence_dir')
+        or runtime.get('qa_evidence_dir')
+        or claim.get('qa_evidence_dir')
+        or claim.get('evidence_root')
+        or EVIDENCE_ROOT
+    )
     if provider == 'agy_qa':
         return agy_qa_live(task=task, candidate_sha=claim['candidate_sha'],
                            evidence_dir=evidence)
@@ -1394,12 +1565,23 @@ def build_live_adapters(*, results_root=None, lock_dir=None, evidence_dir=None,
     def worktree(task):
         return create_task_worktree(task, repo=repo)
 
+    def resolve_worktree(task):
+        return resolve_task_worktree(task, repo=repo)
+
+    def validate_worktree(work, *, expected_head=None):
+        return validate_frozen_worktree(work, expected_head=expected_head)
+
+    def reuse_worktree(task):
+        return create_task_worktree(
+            dict(task, reuse_frozen=True), repo=repo)
+
     def author(**kwargs):
         return cursor_author_live(**kwargs)
 
     def qa(claim):
         claim = dict(claim)
-        if evidence_dir:
+        # Prefer claim-scoped evidence_dir (attempt/candidate) over host default.
+        if not claim.get('evidence_dir') and evidence_dir:
             claim['evidence_dir'] = evidence_dir
         return qa_dispatch(claim)
 
@@ -1431,6 +1613,9 @@ def build_live_adapters(*, results_root=None, lock_dir=None, evidence_dir=None,
         wait_ci=wait_ci,
         deploy=deploy,
         worktree=worktree,
+        resolve_worktree=resolve_worktree,
+        validate_worktree=validate_worktree,
+        reuse_worktree=reuse_worktree,
         lock_dir=lock_dir,
         evidence_dir=evidence_dir,
         # integration lock NOT held across waits — narrow merge helper uses it.
