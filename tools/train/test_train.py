@@ -16,6 +16,7 @@ import json
 import os
 import sys
 import tempfile
+import textwrap
 import time
 import unittest
 from pathlib import Path
@@ -2503,7 +2504,14 @@ class LeanDeliveryWorkflowTransportTests(unittest.TestCase):
         cls.path = root / lean_client.WORKFLOW_PATH
         cls.text = cls.path.read_text()
         cls.wake = cls.text.split('\n  wake:')[1].split('\n  lean:')[0]
-        cls.lean = cls.text.split('\n  lean:')[1]
+        cls.lean = cls.text.split('\n  lean:')[1].split('\n  continuation:')[0]
+        cls.continuation = cls.text.split('\n  continuation:')[1]
+        mark = cls.text.index('# LEAN_DECIDE_CONTINUE_BEGIN')
+        begin = cls.text.rfind('\n', 0, mark) + 1
+        end = cls.text.rfind('\n', 0, cls.text.index('# LEAN_DECIDE_CONTINUE_END'))
+        ns = {}
+        exec(textwrap.dedent(cls.text[begin:end]), ns)  # noqa: S102 — workflow source
+        cls.decide_continue = staticmethod(ns['decide_continue'])
 
     def test_main_schedule_comment_manual_forward_to_fixed_dev(self):
         self.assertIn('  wake:', self.text)
@@ -2574,6 +2582,163 @@ class LeanDeliveryWorkflowTransportTests(unittest.TestCase):
         self.assertIn("vars.LEAN_CLIENT_SHA != ''", self.lean)
         self.assertIn('github.repository_id == 1416250340', self.wake)
         self.assertIn('github.repository_id == 1416250340', self.lean)
+
+    def _wake_doc(self, **overrides):
+        """Actual Root wake_resume shape (projection.enabled false is placeholder)."""
+        doc = {
+            'status': 'ok',
+            'exit': 0,
+            'dispatch_action': 'advance',
+            'controller': {
+                'status': 'advanced',
+                'projection': {'enabled': False},
+                'results': [{
+                    'status': 'wake_resume',
+                    'reason': 'deadline',
+                    'claim': {
+                        'phase': 'WAKE_RESUME',
+                        'stage': 'qa',
+                        'wake': 'deadline',
+                        'candidate_sha': '152a30e7fb5c5f4bc0fd403f6b7d43f5bda13c17',
+                        'revision': 'f7eeeaa165468babe2f270c47b2994052dab9800550a72b89b6b4889dec37ff2',
+                    },
+                }],
+            },
+        }
+        doc.update(overrides)
+        return doc
+
+    def test_decide_continue_actual_wake_shape_ignores_projection_enabled(self):
+        doc = self._wake_doc()
+        self.assertFalse(doc['controller']['projection']['enabled'])
+        self.assertTrue(self.decide_continue(doc))
+        doc['controller']['projection']['enabled'] = True
+        self.assertTrue(self.decide_continue(doc))
+
+    def test_decide_continue_waiting_ci_deploy_and_accepted_batch(self):
+        for reason, phase in (
+                ('waiting_ci', 'WAITING_CI'),
+                ('waiting_deploy', 'WAITING_DEPLOY')):
+            doc = self._wake_doc()
+            doc['controller']['results'][0]['reason'] = reason
+            doc['controller']['results'][0]['claim']['phase'] = phase
+            doc['controller']['results'][0]['claim']['wake'] = reason
+            self.assertTrue(self.decide_continue(doc), reason)
+        accepted = self._wake_doc()
+        accepted['controller']['results'] = [{
+            'status': 'dev_accepted_uat_pending',
+            'claim': {'phase': 'DEV_ACCEPTED_UAT_PENDING', 'uat': 'NOT_TESTED'},
+        }]
+        self.assertTrue(self.decide_continue(accepted))
+        # Finite batch filled → still one more advance so next ready is not stranded.
+        accepted['controller']['results'].append({
+            'status': 'done',
+            'claim': {'phase': 'DONE'},
+        })
+        self.assertTrue(self.decide_continue(accepted))
+        # Stale historical capacity wake on completed accepted entry is not a stop.
+        hist = self._wake_doc()
+        hist['controller']['results'] = [{
+            'status': 'dev_accepted_uat_pending',
+            'claim': {
+                'phase': 'DEV_ACCEPTED_UAT_PENDING',
+                'wake': 'capacity_fallback_budget',
+                'uat': 'NOT_TESTED',
+            },
+        }]
+        self.assertTrue(self.decide_continue(hist))
+        # Known BLOCKED may coexist with independent accepted progress.
+        blocked_ok = self._wake_doc()
+        blocked_ok['controller']['results'] = [
+            {'status': 'blocked', 'reason': 'blocked',
+             'claim': {'phase': 'BLOCKED'}},
+            {'status': 'dev_accepted_uat_pending',
+             'claim': {'phase': 'DEV_ACCEPTED_UAT_PENDING', 'uat': 'NOT_TESTED'}},
+        ]
+        self.assertTrue(self.decide_continue(blocked_ok))
+        # Idle / empty queue stops — no dispatch loop.
+        idle = self._wake_doc()
+        idle['controller']['results'] = []
+        self.assertFalse(self.decide_continue(idle))
+
+    def test_decide_continue_fail_closed_malformed_manual_unsafe(self):
+        self.assertFalse(self.decide_continue(None))
+        self.assertFalse(self.decide_continue('x'))
+        self.assertFalse(self.decide_continue({}))
+        bad_exit = self._wake_doc(exit=1)
+        self.assertFalse(self.decide_continue(bad_exit))
+        bad_status = self._wake_doc(status='error')
+        self.assertFalse(self.decide_continue(bad_status))
+        for action in ('status', 'recover'):
+            self.assertFalse(self.decide_continue(self._wake_doc(dispatch_action=action)))
+        hold = self._wake_doc()
+        hold['controller']['status'] = 'schedule_reconcile'
+        self.assertFalse(self.decide_continue(hold))
+        no_adm = self._wake_doc()
+        no_adm['controller']['status'] = 'no_admissions_source'
+        self.assertFalse(self.decide_continue(no_adm))
+        for status in ('strategy_halt', 'blocked', 'unknown', 'running'):
+            doc = self._wake_doc()
+            doc['controller']['results'][0]['status'] = status
+            self.assertFalse(self.decide_continue(doc), status)
+        budget = self._wake_doc()
+        budget['controller']['results'][0]['reason'] = 'capacity_fallback_budget'
+        budget['controller']['results'][0]['claim']['wake'] = 'capacity_fallback_budget'
+        self.assertFalse(self.decide_continue(budget))
+        # Accepted earlier in batch does not authorize unsafe capacity resume loop.
+        mixed = self._wake_doc()
+        mixed['controller']['results'] = [
+            {'status': 'dev_accepted_uat_pending',
+             'claim': {'phase': 'DEV_ACCEPTED_UAT_PENDING'}},
+            {'status': 'wake_resume', 'reason': 'capacity_fallback_budget',
+             'claim': {'phase': 'WAKE_RESUME', 'wake': 'capacity_fallback_budget'}},
+        ]
+        self.assertFalse(self.decide_continue(mixed))
+        agy = self._wake_doc()
+        agy['controller']['results'][0]['reason'] = 'agy_ineligible'
+        self.assertFalse(self.decide_continue(agy))
+        phase_run = self._wake_doc()
+        phase_run['controller']['results'][0]['claim']['phase'] = 'RUNNING'
+        self.assertFalse(self.decide_continue(phase_run))
+        mismatched = self._wake_doc()
+        mismatched['controller']['results'] = [
+            {'status': 'blocked', 'claim': {'phase': 'UNKNOWN'}},
+            {'status': 'dev_accepted_uat_pending',
+             'claim': {'phase': 'DEV_ACCEPTED_UAT_PENDING'}},
+        ]
+        self.assertFalse(self.decide_continue(mismatched))
+        unknown_reason = self._wake_doc()
+        unknown_reason['controller']['results'][0]['reason'] = 'mystery'
+        self.assertFalse(self.decide_continue(unknown_reason))
+
+    def test_continuation_job_secret_free_fixed_dispatch_no_wait(self):
+        self.assertIn('needs: lean', self.continuation)
+        self.assertIn("needs.lean.result == 'success'", self.continuation)
+        self.assertIn("needs.lean.outputs.continue == 'true'", self.continuation)
+        self.assertIn('github.repository_id == 1416250340', self.continuation)
+        self.assertIn("github.ref == 'refs/heads/dev'", self.continuation)
+        self.assertIn("github.event_name == 'workflow_dispatch'", self.continuation)
+        self.assertIn('github.actor_id == 318610566', self.continuation)
+        self.assertIn("github.actor == 'github-actions[bot]'", self.continuation)
+        self.assertIn('actions: write', self.continuation)
+        self.assertIn('contents: read', self.continuation)
+        self.assertNotIn('environment:', self.continuation)
+        self.assertNotIn('actions/checkout', self.continuation)
+        for secret in ('DEPLOY_HOST', 'DEPLOY_SSH_KEY', 'DEPLOY_KNOWN_HOSTS', 'DEPLOY_PORT'):
+            self.assertNotIn(secret, self.continuation)
+        self.assertIn("WORKFLOW = 'lean-delivery.yml'", self.continuation)
+        self.assertIn("REF = 'dev'", self.continuation)
+        self.assertIn("inputs['action'] = 'advance'", self.continuation)
+        self.assertIn('/dispatches', self.continuation)
+        self.assertNotIn('gh run watch', self.continuation)
+        self.assertNotIn('run watch', self.continuation)
+        self.assertNotIn('workflow_run', self.text)
+        self.assertIn('cancel-in-progress: false', self.text)
+        self.assertIn('group: gobadminton-lean-delivery', self.text)
+        # Executor stays readonly; only wake+continuation get actions:write.
+        self.assertNotIn('actions: write', self.lean)
+        self.assertIn('continue: ${{ steps.decision.outputs.continue }}', self.lean)
+        self.assertIn('evidence/lean-result.json', self.lean)
 
 
 class NativeImportPreflightTests(unittest.TestCase):

@@ -141,6 +141,8 @@ jobs:
       contents: read
       issues: read
       actions: read
+    outputs:
+      continue: ${{ steps.decision.outputs.continue }}
     steps:
       - name: Require fixed accepted client SHA
         run: |
@@ -162,6 +164,104 @@ jobs:
           DEPLOY_PORT: ${{ vars.DEPLOY_PORT }}
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+      - name: Extract Mode B continuation decision from lean-result.json
+        id: decision
+        if: success()
+        run: |
+          python3 -I - <<'PY'
+          import json, os, pathlib, sys
+
+          # LEAN_DECIDE_CONTINUE_BEGIN
+          def decide_continue(doc):
+              """Literal true/false from trusted Root JSON only. Fail closed.
+
+              Do not gate on controller.projection.enabled (placeholder).
+              Do not treat UNKNOWN/budget/capacity/unsafe paid outcomes as wake.
+              Accepted status+phase is progress (ignore stale claim.wake).
+              Known blocked may coexist with independent accepted/eligible wake.
+              """
+              if not isinstance(doc, dict):
+                  return False
+              if doc.get('status') != 'ok' or doc.get('exit') != 0:
+                  return False
+              if doc.get('dispatch_action') != 'advance':
+                  return False
+              ctrl = doc.get('controller')
+              if not isinstance(ctrl, dict):
+                  return False
+              if ctrl.get('status') != 'advanced':
+                  return False
+              results = ctrl.get('results')
+              if not isinstance(results, list) or not results:
+                  return False
+              wake_reason_phase = {
+                  'deadline': 'WAKE_RESUME',
+                  'waiting_ci': 'WAITING_CI',
+                  'waiting_deploy': 'WAITING_DEPLOY',
+              }
+              accepted_status = frozenset({'dev_accepted_uat_pending', 'done'})
+              accepted_phase = frozenset({'DEV_ACCEPTED_UAT_PENDING', 'DONE'})
+              known_blocked = frozenset({'blocked', 'strategy_halt', 'denied'})
+              progress = False
+              for item in results:
+                  if not isinstance(item, dict):
+                      return False
+                  status = item.get('status')
+                  reason = item.get('reason')
+                  claim = item.get('claim')
+                  if claim is None:
+                      claim = {}
+                  if not isinstance(claim, dict):
+                      return False
+                  phase = claim.get('phase')
+                  if status in accepted_status and phase in accepted_phase:
+                      progress = True
+                      continue
+                  if status == 'wake_resume':
+                      if reason not in wake_reason_phase:
+                          return False
+                      if phase != wake_reason_phase[reason]:
+                          return False
+                      progress = True
+                      continue
+                  if status in known_blocked:
+                      if phase not in ('BLOCKED', 'STRATEGY_HALT', 'DENIED'):
+                          return False
+                      continue
+                  return False
+              return progress
+          # LEAN_DECIDE_CONTINUE_END
+
+          def _unique(pairs):
+              out = {}
+              for key, value in pairs:
+                  if key in out:
+                      raise ValueError('duplicate JSON key')
+                  out[key] = value
+              return out
+
+          out_path = os.environ.get('GITHUB_OUTPUT')
+          if not out_path:
+              print('missing GITHUB_OUTPUT', file=sys.stderr)
+              raise SystemExit(1)
+
+          def write(flag):
+              with open(out_path, 'a', encoding='utf-8') as fh:
+                  fh.write('continue=' + flag + '\n')
+              print('lean.continue=' + flag)
+
+          path = pathlib.Path('evidence/lean-result.json')
+          if not path.is_file():
+              write('false')
+              raise SystemExit(0)
+          try:
+              doc = json.loads(path.read_text(encoding='utf-8'),
+                               object_pairs_hook=_unique)
+          except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
+              write('false')
+              raise SystemExit(0)
+          write('true' if decide_continue(doc) else 'false')
+          PY
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
@@ -169,3 +269,54 @@ jobs:
           path: evidence/
           retention-days: 90
           if-no-files-found: warn
+  # Secret-free Mode B handoff: one fixed advance dispatch, then end (no wait).
+  # Same concurrency group queues the child behind this run; never cancel active.
+  continuation:
+    needs: lean
+    if: >-
+      needs.lean.result == 'success' &&
+      needs.lean.outputs.continue == 'true' &&
+      github.repository_id == 1416250340 &&
+      vars.LEAN_CLIENT_SHA != '' &&
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/dev' &&
+      (github.actor_id == 318610566 || github.actor == 'github-actions[bot]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Dispatch one advance continuation to fixed ref dev
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 -I - <<'PY'
+          import json, os, subprocess, sys
+          REPO = 'anpavel84-afk/gobadminton-clean'
+          WORKFLOW = 'lean-delivery.yml'
+          REF = 'dev'
+          CLOSED = ('action', 'recover_kind', 'remote_head', 'merged_sha',
+                    'deploy_run', 'live_sha')
+          assert os.environ['GITHUB_REPOSITORY'] == REPO
+          assert os.environ['GITHUB_REF'] == 'refs/heads/dev'
+          inputs = {k: '' for k in CLOSED}
+          inputs['action'] = 'advance'
+          payload = {'ref': REF, 'inputs': {k: inputs[k] for k in CLOSED}}
+          proc = subprocess.run(
+              ['gh', 'api',
+               'repos/' + REPO + '/actions/workflows/' + WORKFLOW + '/dispatches',
+               '-X', 'POST', '--input', '-'],
+              input=json.dumps(payload),
+              text=True,
+              capture_output=True,
+              env={
+                  'PATH': os.environ.get('PATH', '/usr/bin:/bin'),
+                  'GH_TOKEN': os.environ['GH_TOKEN'],
+              },
+          )
+          if proc.returncode != 0:
+              sys.stderr.write(proc.stderr or proc.stdout or 'dispatch failed\n')
+              raise SystemExit(proc.returncode or 1)
+          print('continuation forwarded lean-delivery to fixed ref dev action=advance')
+          PY
