@@ -7,6 +7,8 @@ Status: SOURCE DRAFT / NOT_TESTED / NOT ACCEPTED. No paid QA, DEV release, UAT, 
 
 Minimal backend capability delta only. Reuses accepted PR #367 recommendation UI and FR-3A API/migration. Does **not** rebuild UI/backend, enable all Social, or claim Social Games complete.
 
+CI `40830799956` repair (head `9116a508`): Friends S1 `friends-s1.disposable.test.ts:354` now expects `gameRecommendations:true` for eligible DEV actor with installed recommendation table; schema0031 / Friends OFF / PROD-fail-closed and all security assertions preserved.
+
 `GET /v1/me/social-capabilities.gameRecommendations` is true only when:
 1. existing `friendsEnabled(env)` admits (fail-closed PROD / outside DEV),
 2. actor is Friends-eligible (same fence as `friends`),
@@ -19,9 +21,10 @@ No new env/shell toggle. Guests/restricted/table-missing stay false. `gameAttent
 1. `apps/api/src/friendships/friendships.service.ts` — capability derived from friends + recommendation schema
 2. `apps/api/test/unit/friends-dev-admission.test.ts` — table/eligibility matrix; restricted stays false
 3. `apps/api/test/integration/game-recommendations.disposable.test.ts` — post-0041 expects true; Friends OFF stays false
-4. `apps/web/src/lib/game-recommendations.ts` — comment: UI follows server cap only
-5. `apps/web/src/components/consumer/games/GameRecommendationButton.tsx` — comment alignment
-6. `docs/handoffs/fr3b-recommendation-ui.md` — this handoff
+4. `apps/api/test/integration/friends-s1.disposable.test.ts` — line 354: eligible DEV + installed rec table → true; schema0031 evidence stays false
+5. `apps/web/src/lib/game-recommendations.ts` — comment: UI follows server cap only
+6. `apps/web/src/components/consumer/games/GameRecommendationButton.tsx` — comment alignment
+7. `docs/handoffs/fr3b-recommendation-ui.md` — this handoff
 
 Unchanged this pass: recommendation routes/policy/service, My Games / detail UI behavior (already server-gated), prior QA/CI history for UI candidate.
 
@@ -40,7 +43,7 @@ pnpm --filter @gobadminton/api exec vitest run test/unit/friends-dev-admission.t
 pnpm --filter @gobadminton/web exec vitest run test/game-recommendations.test.tsx test/my-games-recommendations.test.tsx
 ```
 
-Disposable PostGIS suite + Product CI 7/7 + trusted DEV ACCEPTED/live SHA: trusted process. Author sandbox: unit/deps **NOT_TESTED** if `node_modules` absent.
+Disposable PostGIS suite + Product CI 7/7 + trusted DEV ACCEPTED/live SHA: trusted process. Author sandbox this pass: `node_modules` absent → unit/deps **NOT_TESTED**; S1 expectation aligned to CI40830799956 finding only.
 
 ## Limits / out of scope
 

@@ -351,9 +351,10 @@ run("Friends S1 API — isolated synthetic PostGIS only", () => {
   it("keeps schema0031 compatibility and source capability gates truthful",async()=>{
     expect(schema0031Evidence.capabilities).toEqual({friends:false,gameRecommendations:false,gameAttention:false,socialPush:false});
     expect(schema0031Evidence.list).toMatchObject({items:[],nextCursor:null});expect(schema0031Evidence.sendStatus).toBe(503);
-    expect((await get(a,"/v1/me/social-capabilities")).json()).toEqual({friends:true,gameRecommendations:false,gameAttention:false,socialPush:false});
+    // Eligible DEV actor + installed friendships/game_recommendations → true; schema0031/off stay false above/below.
+    expect((await get(a,"/v1/me/social-capabilities")).json()).toEqual({friends:true,gameRecommendations:true,gameAttention:false,socialPush:false});
     env.FRIENDS_SEND_LIMIT=undefined;
-    expect((await get(a,"/v1/me/social-capabilities")).json().friends).toBe(false);
+    expect((await get(a,"/v1/me/social-capabilities")).json()).toEqual({friends:false,gameRecommendations:false,gameAttention:false,socialPush:false});
     expect((await post(a,"/v1/friend-requests",{targetPublicPlayerId:b.publicPlayerId})).statusCode).toBe(503);
   });
   it("creates pending + exact immutable attempt atomically, dedupes and requires crossed decision",async()=>{
