@@ -2210,6 +2210,88 @@ class Od018TransportSeamTests(unittest.TestCase):
             self.assertEqual(state['merge_calls'], 0)
 
 
+class LeanDeliveryWorkflowTransportTests(unittest.TestCase):
+    """Static gates for main→dev forwarder after env:dev PERMISSION_DENIED on main."""
+
+    @classmethod
+    def setUpClass(cls):
+        root = Path(__file__).resolve().parents[2]
+        cls.path = root / lean_client.WORKFLOW_PATH
+        cls.text = cls.path.read_text()
+        cls.wake = cls.text.split('\n  wake:')[1].split('\n  lean:')[0]
+        cls.lean = cls.text.split('\n  lean:')[1]
+
+    def test_main_schedule_comment_manual_forward_to_fixed_dev(self):
+        self.assertIn('  wake:', self.text)
+        self.assertIn("github.ref == 'refs/heads/main'", self.wake)
+        self.assertIn("github.event_name == 'schedule'", self.wake)
+        self.assertIn("github.event_name == 'issue_comment'", self.wake)
+        self.assertIn("github.event_name == 'workflow_dispatch'", self.wake)
+        self.assertIn('GOBADMINTON_LEAN_TASK_V1', self.wake)
+        self.assertIn("inputs['action'] = 'advance'", self.wake)
+        self.assertIn("action = raw.get('action') or 'status'", self.wake)
+        self.assertIn("'ref': REF", self.wake)
+        self.assertIn("REF = 'dev'", self.wake)
+        self.assertIn("WORKFLOW = 'lean-delivery.yml'", self.wake)
+        self.assertIn("REPO = 'anpavel84-afk/gobadminton-clean'", self.wake)
+        self.assertIn("--input', '-'", self.wake)
+        # End after POST — no watch/poll of the queued env:dev worker (deadlock).
+        self.assertNotIn('gh run watch', self.wake)
+        self.assertNotIn('run watch', self.wake)
+        self.assertNotIn('actions/runs/', self.wake)
+
+    def test_dev_dispatch_executor_no_extra_forward_hop(self):
+        self.assertIn("github.event_name == 'workflow_dispatch'", self.lean)
+        self.assertIn("github.ref == 'refs/heads/dev'", self.lean)
+        self.assertIn("github.actor == 'github-actions[bot]'", self.lean)
+        self.assertIn('github.actor_id == 318610566', self.lean)
+        self.assertNotIn("github.event_name == 'schedule'", self.lean)
+        self.assertNotIn('issue_comment', self.lean)
+        self.assertNotIn('/dispatches', self.lean)
+        self.assertNotIn("REF = 'dev'", self.lean)
+        # Wake must not re-fire on the forwarded dev dispatch.
+        self.assertIn("github.ref == 'refs/heads/main'", self.wake)
+        self.assertNotIn("github.ref == 'refs/heads/dev'", self.wake)
+
+    def test_manual_default_status_and_closed_recovery_inputs(self):
+        self.assertIn('default: status', self.text)
+        self.assertIn('options: [status, recover, advance]', self.text)
+        for name in ('recover_kind', 'remote_head', 'merged_sha', 'deploy_run', 'live_sha'):
+            self.assertIn(name + ':', self.text.split('workflow_dispatch:')[1].split('permissions:')[0])
+        self.assertIn("ACTIONS = frozenset({'status', 'advance', 'recover'})", self.wake)
+        self.assertIn('unexpected action', self.wake)
+        self.assertIn("'recover_kind', 'remote_head', 'merged_sha',", self.wake)
+        self.assertIn("'deploy_run', 'live_sha'", self.wake)
+        self.assertIn('CLOSED[1:]', self.wake)
+
+    def test_actions_write_only_secret_free_forwarder_env_dev_only_worker(self):
+        self.assertIn('actions: write', self.wake)
+        self.assertNotIn('actions: write', self.lean)
+        self.assertIn('actions: read', self.lean)
+        self.assertNotIn('environment:', self.wake)
+        self.assertIn('environment: dev', self.lean)
+        for secret in ('DEPLOY_HOST', 'DEPLOY_SSH_KEY', 'DEPLOY_KNOWN_HOSTS', 'DEPLOY_PORT'):
+            self.assertNotIn(secret, self.wake)
+            self.assertIn(secret, self.lean)
+        self.assertNotIn('actions/checkout', self.wake)
+        self.assertIn('group: gobadminton-lean-delivery', self.text)
+
+    def test_no_raw_issue_injection_or_moving_client_sha_fallback(self):
+        # Marker gate only; comment body never enters dispatch JSON / shell argv.
+        self.assertIn("assert 'GOBADMINTON_LEAN_TASK_V1' in body", self.wake)
+        comment_branch = self.wake.split("elif kind == 'issue_comment':")[1].split(
+            "elif kind == 'workflow_dispatch':")[0]
+        self.assertIn("inputs['action'] = 'advance'", comment_branch)
+        self.assertNotIn('body', comment_branch.split("assert 'GOBADMINTON_LEAN_TASK_V1' in body")[1])
+        self.assertNotIn('${{ github.event.comment.body }}', self.text)
+        self.assertNotIn('ref: ${{ github.sha }}', self.text)
+        self.assertIn('ref: ${{ vars.LEAN_CLIENT_SHA }}', self.lean)
+        self.assertIn("vars.LEAN_CLIENT_SHA != ''", self.wake)
+        self.assertIn("vars.LEAN_CLIENT_SHA != ''", self.lean)
+        self.assertIn('github.repository_id == 1416250340', self.wake)
+        self.assertIn('github.repository_id == 1416250340', self.lean)
+
+
 if __name__ == '__main__':
     os.chdir(Path(__file__).resolve().parent)
     unittest.main()

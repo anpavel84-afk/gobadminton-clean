@@ -2,7 +2,10 @@ name: Lean Mode B delivery
 # OD-017: wake + bounded recovery for the same finite worker. Workflow must exist
 # on default main for true schedule/comment events; PMA publishes ONLY the reviewed
 # workflow file to main after source CI on dev. Integration remains branch dev.
-# Concurrency distinct from gobadminton-dev so this never blocks DEV deploy.
+# Main schedule/Owner comment/manual wake has NO environment (PERMISSION_DENIED if
+# env:dev on main). That job only workflow_dispatchs THIS SAME file to fixed ref
+# dev, then ends — never waits under concurrency (deadlock). Dev executor alone
+# uses environment:dev + DEPLOY_*. Concurrency distinct from gobadminton-dev.
 # Fixed accepted client SHA required via vars.LEAN_CLIENT_SHA — no github.sha fallback.
 on:
   schedule:
@@ -40,22 +43,104 @@ concurrency:
   group: gobadminton-lean-delivery
   cancel-in-progress: false
 jobs:
-  lean:
+  # Secret-free main forwarder: no environment, no DEPLOY_*, no checkout.
+  # actions:write only here for existing workflow_dispatch API (GITHUB_TOKEN).
+  wake:
     if: >-
       github.repository_id == 1416250340 &&
       vars.LEAN_CLIENT_SHA != '' &&
+      github.ref == 'refs/heads/main' &&
       (
         github.event_name == 'schedule' ||
         github.event_name == 'workflow_dispatch' &&
-          (github.actor_id == 318610566 || github.actor == 'github-actions[bot]') ||
+          github.actor_id == 318610566 ||
         github.event_name == 'issue_comment' &&
           github.event.sender.id == 318610566 &&
           contains(github.event.comment.body, 'GOBADMINTON_LEAN_TASK_V1')
       )
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Forward lean-delivery workflow_dispatch to fixed ref dev
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 -I - <<'PY'
+          import json, os, pathlib, subprocess, sys
+          REPO = 'anpavel84-afk/gobadminton-clean'
+          WORKFLOW = 'lean-delivery.yml'
+          REF = 'dev'
+          OWNER_ID = 318610566
+          ACTIONS = frozenset({'status', 'advance', 'recover'})
+          CLOSED = ('action', 'recover_kind', 'remote_head', 'merged_sha',
+                    'deploy_run', 'live_sha')
+          assert os.environ['GITHUB_REPOSITORY'] == REPO
+          assert os.environ['GITHUB_REF'] == 'refs/heads/main'
+          event = json.loads(pathlib.Path(os.environ['GITHUB_EVENT_PATH']).read_text())
+          assert event['repository']['id'] == 1416250340
+          kind = os.environ['GITHUB_EVENT_NAME']
+          inputs = {k: '' for k in CLOSED}
+          if kind == 'schedule':
+              inputs['action'] = 'advance'
+          elif kind == 'issue_comment':
+              assert event.get('sender', {}).get('id') == OWNER_ID
+              body = event.get('comment', {}).get('body') or ''
+              assert 'GOBADMINTON_LEAN_TASK_V1' in body
+              inputs['action'] = 'advance'
+          elif kind == 'workflow_dispatch':
+              assert event.get('sender', {}).get('id') == OWNER_ID
+              raw = event.get('inputs') or {}
+              action = raw.get('action') or 'status'
+              if action not in ACTIONS:
+                  print('unexpected action: ' + repr(action), file=sys.stderr)
+                  raise SystemExit(1)
+              inputs['action'] = action
+              for key in CLOSED[1:]:
+                  val = raw.get(key) or ''
+                  if not isinstance(val, str):
+                      print('unexpected input type: ' + key, file=sys.stderr)
+                      raise SystemExit(1)
+                  inputs[key] = val
+          else:
+              print('unexpected event: ' + kind, file=sys.stderr)
+              raise SystemExit(1)
+          # Fixed own-repo + workflow path + ref; no dynamic path/ref; end after POST.
+          payload = {'ref': REF, 'inputs': {k: inputs[k] for k in CLOSED}}
+          proc = subprocess.run(
+              ['gh', 'api',
+               'repos/' + REPO + '/actions/workflows/' + WORKFLOW + '/dispatches',
+               '-X', 'POST', '--input', '-'],
+              input=json.dumps(payload),
+              text=True,
+              capture_output=True,
+              env={
+                  'PATH': os.environ.get('PATH', '/usr/bin:/bin'),
+                  'GH_TOKEN': os.environ['GH_TOKEN'],
+              },
+          )
+          if proc.returncode != 0:
+              sys.stderr.write(proc.stderr or proc.stdout or 'dispatch failed\n')
+              raise SystemExit(proc.returncode or 1)
+          print('forwarded lean-delivery to fixed ref dev action=' + inputs['action'])
+          PY
+  lean:
+    if: >-
+      github.repository_id == 1416250340 &&
+      vars.LEAN_CLIENT_SHA != '' &&
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/dev' &&
+      (github.actor_id == 318610566 || github.actor == 'github-actions[bot]')
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
-    # Environment secrets (DEPLOY_*) only with fixed reviewed client; never Issue head.
+    # Environment secrets (DEPLOY_*) only on permitted branch dev; never main.
     environment: dev
+    permissions:
+      contents: read
+      issues: read
+      actions: read
     steps:
       - name: Require fixed accepted client SHA
         run: |
