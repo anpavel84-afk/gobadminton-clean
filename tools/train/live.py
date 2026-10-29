@@ -2479,6 +2479,9 @@ def _fetch_ci_job_log(job_id, *, timeout=90):
         proc = run_argv(argv, env=uid1002_env(), timeout=timeout, check=False)
     except LiveError as exc:
         return None, (exc.code + (': ' + str(exc.detail or '')) )[:300]
+    except subprocess.TimeoutExpired as exc:
+        # run_argv uses subprocess.run(timeout=...); preserve CI FAIL path.
+        return None, ('timeout: ' + str(exc))[:300]
     if proc.returncode != 0:
         err = (proc.stderr or proc.stdout or 'gh_api_failed')[:300]
         return None, err

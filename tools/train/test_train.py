@@ -1814,6 +1814,39 @@ class WaitProductCiTests(unittest.TestCase):
         self.assertTrue(any('log unavailable' in f for f in out['findings']))
         self.assertTrue(any('40830799956' in f for f in out['findings']))
 
+    def test_log_fetch_timeout_stays_fail_repairable(self):
+        """TimeoutExpired on job-log fetch must not escape wait_product_ci."""
+        run = self._pr_run(conclusion='failure')
+        jobs = self._jobs(failed={'database'})
+
+        def fake_gh(path, **kwargs):
+            if 'workflows/ci.yml/runs' in path:
+                return {'workflow_runs': [run]}
+            if '/jobs' in path:
+                self.assertIn('40830799956', path)
+                return {'jobs': jobs}
+            raise AssertionError(path)
+
+        def fake_run_argv(argv, **kwargs):
+            self.assertEqual(argv[0], '/usr/bin/gh')
+            self.assertEqual(argv[1], 'api')
+            self.assertIn('/actions/jobs/', argv[2])
+            self.assertTrue(argv[2].endswith('/logs'))
+            raise lean_live.subprocess.TimeoutExpired(
+                cmd=argv, timeout=kwargs.get('timeout', 90))
+
+        with mock.patch.object(lean_live, 'gh_api', side_effect=fake_gh), \
+                mock.patch.object(lean_live, 'run_argv', side_effect=fake_run_argv), \
+                mock.patch.object(lean_live.time, 'sleep', return_value=None):
+            out = lean_live.wait_product_ci(self._claim(), budget_s=1, poll_s=0)
+        self.assertFalse(out['ok'])
+        self.assertTrue(out.get('repairable'))
+        self.assertEqual(out['run_id'], 40830799956)
+        self.assertEqual(out['checks'], 7)
+        self.assertTrue(any('database' in f for f in out['findings']))
+        self.assertTrue(any('log unavailable' in f for f in out['findings']))
+        self.assertTrue(any('40830799956' in f for f in out['findings']))
+
 
 class HostIssueCommentAdvanceTests(unittest.TestCase):
     def _base(self):
