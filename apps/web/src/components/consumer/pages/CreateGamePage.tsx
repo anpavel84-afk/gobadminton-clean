@@ -1,8 +1,7 @@
 "use client";
 import { initialCreateVenue, selectCreateVenue } from "../../../lib/venue-popup-create";
 import { profileSetupPath, safeAuthReturnPath } from "../../../lib/auth-return";
-import { venueCreatePath } from "../../../lib/games-venue-map";
-import { pendingInviteeFromSearch } from "../../../lib/invitation-continuation";
+import { inviteGameAuthReturnPath, pendingInviteeFromSearch } from "../../../lib/invitation-continuation";
 import { InvitationChooser } from "../messages/InvitationChooser";
 
 import { GamePhotoSelection } from "../games/GamePhotoSelection";
@@ -436,9 +435,10 @@ function useCreateGameController(initialVenue?: VenueSummary | null) {
     }
   }, []);
 
-  const returnPath = safeAuthReturnPath(venueCreatePath(initialVenue !== undefined
-    ? new URLSearchParams({ venueId: initialVenue?.id ?? "" }).toString()
-    : typeof window === "undefined" ? "" : window.location.search));
+  const returnPath = safeAuthReturnPath(inviteGameAuthReturnPath(
+    typeof window === "undefined" ? "" : window.location.search,
+    initialVenue === undefined ? undefined : initialVenue?.id ?? "",
+  ));
   return {
     step, me, preferences, saveContact, setSaveContact, creatorSeat, trainer, setReload,
     activityKind, setActivityKind, dateChoice, setDateChoice, customDuration, setCustomDuration,

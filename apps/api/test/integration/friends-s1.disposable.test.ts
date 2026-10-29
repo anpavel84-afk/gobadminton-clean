@@ -454,6 +454,8 @@ run("Friends S1 API — isolated synthetic PostGIS only", () => {
     const fresh=await request();
     expect(fresh.requestId).not.toBe(old.requestId);
     expect((await decide(b,fresh,"accept")).statusCode).toBe(200);
+    const searched=(await get(a,"/v1/me/friendships?view=accepted&q=Synthetic%20B")).json();
+    expect(searched.items.map((item:FriendshipView)=>item.friendshipId)).toContain(fresh.friendshipId);
     const policy=(await pool.query("SELECT contact_policy FROM player_social_profiles WHERE user_id=$1",[b.userId])).rows[0].contact_policy;
     expect(policy).toBe("closed");
   });

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { Me } from "../src/lib/consumer-types";
 import { InvitationChooser } from "../src/components/consumer/messages/InvitationChooser";
-import { conversationWithInvitePath, createGameForInvitePath, pendingInviteeFromSearch } from "../src/lib/invitation-continuation";
+import { conversationWithInvitePath, createGameForInvitePath, inviteGameAuthReturnPath, pendingInviteeFromSearch } from "../src/lib/invitation-continuation";
 
 const peer = "10000000-0000-4000-8000-000000000001";
 const me = { id: "viewer", csrfToken: "csrf" } as Me;
@@ -16,6 +16,16 @@ describe("invite → create game → resume exactly the same player", () => {
       expect(pendingInviteeFromSearch(search)).toBeNull();
     }
     expect(createGameForInvitePath("javascript:alert(1)")).toBe("/games/create");
+  });
+  it("keeps the invitee through OAuth and profile-city setup but filters unrelated params", () => {
+    expect(inviteGameAuthReturnPath("?invitePlayer=" + peer)).toBe("/games/create?invitePlayer=" + peer);
+    expect(inviteGameAuthReturnPath("?venueId=venue&invitePlayer=" + peer + "&next=https://bad.example"))
+      .toBe("/games/create?venueId=venue&invitePlayer=" + peer);
+    expect(inviteGameAuthReturnPath("?invitePlayer=" + peer, "venue"))
+      .toBe("/games/create?venueId=venue&invitePlayer=" + peer);
+    expect(inviteGameAuthReturnPath("?invitePlayer=" + peer + "&invitePlayer=" + peer))
+      .toBe("/games/create");
+    expect(inviteGameAuthReturnPath("?invitePlayer=not-a-uuid&untrusted=1")).toBe("/games/create");
   });
   it("preserves intent when the player already has an existing conversation", () => {
     expect(conversationWithInvitePath("conv&ref", true)).toBe("/messages?conversation=conv%26ref&action=invite");
