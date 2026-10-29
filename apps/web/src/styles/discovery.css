@@ -139,11 +139,11 @@
 .gb-discovery-skeleton i:nth-child(2) { width: 75%; height: 30px; }
 @keyframes gb-discovery-float { 50% { transform: translateY(-12px) rotate(5deg); } }
 @keyframes gb-discovery-spin { to { transform: rotate(360deg); } }
-/* #394: ≥1200 sidebar right; 768–1199 feed full-width, sidebar below. */
+/* #394: ≥1200 sidebar right; 721–1199 feed full-width, sidebar below; ≤720 mobile unchanged. */
 @media (min-width: 1200px) {
   .gb-discovery-layout { grid-template-columns: minmax(0, 1fr) 360px; }
 }
-@media (min-width: 768px) and (max-width: 1199px) {
+@media (min-width: 721px) and (max-width: 1199px) {
   .gb-discovery-layout { grid-template-columns: minmax(0, 1fr); }
   .gb-discovery-sidebar { position: static; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
   .gb-discovery-search { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }

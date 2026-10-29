@@ -31,7 +31,7 @@ Shared presentational class: `.gb-page-local-header` (+ optional `.utility-page_
 ## Five Owner defect bindings
 
 1. **Profile / Back** — separate page header before hero; predictable gap; long names wrap; empty bio does not leave an empty block.
-2. **Game / recommend & share** — existing actions in one contextual group with Back (above hero per approved v3); participation stays in the single `GameActionBar`; recommendation keeps capability/friend gate; share is not invite/recommend.
+2. **Game / recommend & share** — Back alone above hero; existing recommendation/share in one contextual group **after** `GameHero` (approved v3); participation stays in the single `GameActionBar`; recommendation keeps capability/friend gate; share is not invite/recommend.
 3. **Game chat** — separate section after participation terms; spacing 24 desktop / 20 mobile; only under the existing active-chat result of `getGameChat` (confirmed alone does not grant chat).
 4. **Map CTA** — floating «Все игры на карте» over the **feed** column (desktop sticky; mobile retains above-nav / visualViewport / safe-area behavior). Sidebar map preview is **one** keyboard-accessible button with the same `onMap` path and city/day/activity; no duplicate button beneath the map; no nested interactive controls inside the preview decoration. CTA must not obscure last card, pagination, focused control, or footer; reuse existing scroll/pages/popstate restoration.
 5. **Contact status/actions** — one flex row (`align-items: center`, `gap: 16`, wrap); no outer `p` margin; desktop status/action min-height 48; explanation once below via `ContactNote`. Contact and friendship remain separate contracts; privacy/auth/error/UNKNOWN unchanged.
@@ -47,8 +47,9 @@ Scoped media change only for discovery feed cards at desktop/tablet:
 
 Layout widths:
 
-- **768–1199**: feed full width; sidebar below (supporting panels side-by-side when space allows);
+- **721–1199**: feed full width; sidebar below (supporting panels side-by-side when space allows);
 - **≥1200**: sidebar to the right.
+- **≤720**: mobile landscape media / sidebar hide unchanged.
 
 Do not apply the square rule to `GameCover`, personal cards, venue schedule, or map inspector.
 

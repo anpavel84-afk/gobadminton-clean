@@ -3,7 +3,7 @@
 .gb-games-detail, .gb-my-games, .gb-game-create { min-width: 0; overflow-wrap: anywhere; }
 .gb-game-back { display: inline-flex; align-items: center; min-height: 44px; margin: 0; color: var(--gb-ink-soft); font-weight: 600; }
 .gb-game-detail-header { margin-bottom: 28px; }
-.gb-game-detail-contextual { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 12px; min-width: 0; }
+.gb-game-detail-contextual { display: flex; align-items: center; justify-content: flex-start; flex-wrap: wrap; gap: 12px; min-width: 0; margin: 24px 0 0; }
 .gb-game-chat-section { margin-top: 24px; }
 @media (max-width: 720px) {
   .gb-game-detail-header { margin-bottom: 24px; }

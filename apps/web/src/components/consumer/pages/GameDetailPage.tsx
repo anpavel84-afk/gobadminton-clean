@@ -104,18 +104,18 @@ export function GameDetailPage({ gameId }: { gameId: string }) {
       <header className="gb-page-local-header gb-game-detail-header">
         <div className="gb-page-local-header__row">
           <Button variant="ghost" className="gb-game-back" href="/games">← Все игры</Button>
-          <div className="gb-game-detail-contextual">
-            {state === "ready" && game && game.id === gameId && isRecommendableGame(game) && (
-              <GameRecommendationButton gameId={game.id} me={me} eligible onLogin={() => setAuthOpen(true)} />
-            )}
-            {state === "ready" && game && <GameShare gameId={game.id} />}
-          </div>
         </div>
       </header>
       {state === "loading" && <div className="gb-game-feedback" data-state="loading" role="status"><h1>Загружаем игру</h1><p>Скоро покажем место, время и условия.</p></div>}
       {state === "error" && <div className="gb-game-feedback" data-state="error"><h1>Игра недоступна</h1><p>Не удалось загрузить игру. Проверьте соединение и попробуйте ещё раз.</p><Button onClick={() => void reload()}>Обновить</Button></div>}
       {state === "ready" && game && game.id === gameId && <div data-state="ready">
         <GameHero game={game} />
+        <div className="gb-game-detail-contextual">
+          {isRecommendableGame(game) && (
+            <GameRecommendationButton gameId={game.id} me={me} eligible onLogin={() => setAuthOpen(true)} />
+          )}
+          <GameShare gameId={game.id} />
+        </div>
         <div className="gb-game-detail-grid">
           <div>
             <GameTerms game={game} />
