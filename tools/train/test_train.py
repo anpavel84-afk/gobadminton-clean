@@ -191,11 +191,40 @@ class AdmissionTests(unittest.TestCase):
             lean_run.admit_comment(comment, {'number': 337, 'state': 'open'}, {'id': REPO_ID})
         self.assertEqual(ctx.exception.code, 'outsider_comment_denied')
 
-    def test_182_hard_hold(self):
+    def test_182_old_admission_still_held(self):
+        """Old #182 admissions without OD018 signed prospective release stay held."""
         comment, _ = owner_task_comment(issue=182)
         with self.assertRaises(lean_run.LeanError) as ctx:
             lean_run.admit_comment(comment, {'number': 182, 'state': 'open'}, {'id': REPO_ID})
         self.assertEqual(ctx.exception.code, 'admission_hold')
+        self.assertEqual(ctx.exception.detail, 'issue_182_hard_hold')
+
+    def test_182_od018_prospective_admission(self):
+        """OD018 signed Owner comment + DEV envelope admits #182; not a global allow."""
+        comment, _ = owner_task_comment(issue=182)
+        signed = {
+            'id': lean_run.OD018_SIGNED_COMMENT_ID,
+            'body': (
+                '# OWNER DIRECT · SOCIAL GAMES RESTART & DEV ADMISSION · OD-017\n'
+                'Supersedes the former Owner HOLD/OFF comment PROSPECTIVELY, '
+                'only for the following bounded DEV rollout. '
+                'This is not permission for PROD.\n'
+            ),
+            'user': {'id': OWNER, 'login': 'anpavel84-afk'},
+            'created_at': '2026-10-28T23:09:33Z',
+            'updated_at': '2026-10-28T23:09:33Z',
+        }
+        adm = lean_run.admit_comment(
+            comment, {'number': 182, 'state': 'open'}, {'id': REPO_ID},
+            all_comments=[signed, comment])
+        self.assertEqual(adm['issue'], 182)
+        self.assertEqual(adm['owner_id'], OWNER)
+        # Unrelated issue must not use OD018 as a global 182 allow path.
+        other, _ = owner_task_comment(issue=701)
+        held, why = lean_run.od018_prospective_release(
+            {'number': 701, 'state': 'open'}, [signed])
+        self.assertFalse(held)
+        self.assertEqual(why, 'not_182')
 
     def test_closed_issue_denied(self):
         comment, _ = owner_task_comment()
@@ -237,7 +266,8 @@ class FiniteFlowTests(unittest.TestCase):
             {'issue': 94, 'status': 'Ready', 'state': 'OPEN'})[0])
         self.assertFalse(lean_live.item_eligible(
             {'issue': 365, 'status': 'Ready', 'state': 'OPEN'})[0])
-        self.assertFalse(lean_live.item_eligible(
+        # #182 is Project-eligible under OD018; admission still requires signed release.
+        self.assertTrue(lean_live.item_eligible(
             {'issue': 182, 'status': 'Ready', 'state': 'OPEN'})[0])
         self.assertFalse(lean_live.item_eligible(
             {'issue': 701, 'status': 'Park', 'state': 'OPEN'})[0])
@@ -518,7 +548,7 @@ class LiveBindingsTests(unittest.TestCase):
             'cursor_author_live', 'codex_qa_live', 'agy_qa_live',
             'publish_push_pr', 'wait_product_ci', 'merge_pr_live',
             'wait_dev_deploy', 'fetch_project_admissions', 'create_task_worktree',
-            'build_live_adapters',
+            'build_live_adapters', 'uid1002_preexec',
         ):
             self.assertTrue(callable(getattr(lean_live, name)))
 
@@ -543,6 +573,123 @@ class LiveBindingsTests(unittest.TestCase):
     def test_main_self_check_reports_live_defaults(self):
         code = lean_run.main(['--self-check'])
         self.assertEqual(code, 0)
+
+    def test_run_argv_drop_uid_before_provider(self):
+        """Trusted Root path must attach UID1002/NNP preexec; HOME alone is insufficient."""
+        seen = {}
+
+        def fake_run(*args, **kwargs):
+            seen['preexec_fn'] = kwargs.get('preexec_fn')
+            seen['env'] = kwargs.get('env')
+            return mock.Mock(returncode=0, stdout='ok\n', stderr='')
+
+        with mock.patch.object(lean_live.os, 'geteuid', return_value=0), \
+                mock.patch.object(lean_live.subprocess, 'run', side_effect=fake_run):
+            lean_live.run_argv(['/usr/bin/true'], env=lean_live.uid1002_env())
+        self.assertTrue(callable(seen.get('preexec_fn')))
+        self.assertEqual(seen['env'].get('HOME'), '/home/agentagency-dev')
+        # preexec source must drop groups/gid/uid before provider/Git/GH.
+        import inspect
+        src = inspect.getsource(lean_live.uid1002_preexec)
+        self.assertIn('setgroups', src)
+        self.assertIn('setuid', src)
+        self.assertIn('CURSOR_UID', src)
+        self.assertIn('prctl', src)
+
+    def test_dirty_worktree_preserved_hold(self):
+        """Existing dirty/unexpected worktree => specific HOLD; no force-remove."""
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td) / 'repo'
+            root = Path(td) / 'wt'
+            work = root / 'issue-182'
+            work.mkdir(parents=True)
+            calls = []
+
+            def fake_git(cwd, *args, **kwargs):
+                calls.append((str(cwd), list(args)))
+                if args and args[0] == 'rev-parse' and 'HEAD' in args:
+                    return 'a' * 40
+                if args and args[0] == 'status':
+                    return ' M apps/web/src/x.ts'
+                raise AssertionError('unexpected git ' + str(args))
+
+            removed = []
+
+            def fake_run_argv(argv, **kwargs):
+                if 'worktree' in argv and 'remove' in argv:
+                    removed.append(list(argv))
+                return mock.Mock(returncode=0, stdout='', stderr='')
+
+            with mock.patch.object(lean_live, 'git', side_effect=fake_git), \
+                    mock.patch.object(lean_live, 'run_argv', side_effect=fake_run_argv):
+                with self.assertRaises(lean_live.LiveError) as ctx:
+                    lean_live.create_task_worktree(
+                        {'issue': 182, 'base': 'a' * 40}, repo=repo, root=root)
+            self.assertEqual(ctx.exception.code, 'worktree_dirty_hold')
+            self.assertEqual(removed, [])
+            self.assertTrue(work.is_dir())
+
+    def test_unexpected_head_worktree_hold_no_force_remove(self):
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td) / 'repo'
+            root = Path(td) / 'wt'
+            work = root / 'issue-182'
+            work.mkdir(parents=True)
+
+            def fake_git(cwd, *args, **kwargs):
+                if args and args[0] == 'rev-parse' and 'HEAD' in args:
+                    return 'b' * 40
+                if args and args[0] == 'status':
+                    return ''
+                raise AssertionError(str(args))
+
+            removed = []
+
+            def fake_run_argv(argv, **kwargs):
+                if 'remove' in argv:
+                    removed.append(list(argv))
+                return mock.Mock(returncode=0, stdout='', stderr='')
+
+            with mock.patch.object(lean_live, 'git', side_effect=fake_git), \
+                    mock.patch.object(lean_live, 'run_argv', side_effect=fake_run_argv):
+                with self.assertRaises(lean_live.LiveError) as ctx:
+                    lean_live.create_task_worktree(
+                        {'issue': 182, 'base': 'a' * 40}, repo=repo, root=root)
+            self.assertEqual(ctx.exception.code, 'worktree_unexpected_head_hold')
+            self.assertEqual(removed, [])
+
+    def test_agy_not_ready_falls_back_before_charge_no_bare_cli(self):
+        """AGY CANARY/HOLD: not READY => Codex fallback; never bare [agy,--model]."""
+        provider, reason, _ = providers.select_qa_provider(
+            {'qaroute': ['agy_qa']}, issue=182)
+        self.assertEqual(provider, 'codex_sol_medium')
+        self.assertEqual(reason, 'agy_not_ready_fallback')
+        # live.agy_qa_live must not contain unsupported bare CLI product launch.
+        import inspect
+        src = inspect.getsource(lean_live.agy_qa_live)
+        self.assertIn('agy_not_ready_fallback', src)
+        self.assertIn('product_run_qa_absent_no_bare_cli', src)
+        self.assertNotIn("[AGY_CLI, '--model', AGY_MODEL]", src)
+        self.assertNotIn('[AGY_CLI, "--model", AGY_MODEL]', src)
+
+    def test_codex_completion_requires_exit_and_turn_completed(self):
+        """Exact QA completion: exit0 + turn.completed + SHA; timeout => no replay."""
+        self.assertFalse(lean_live._codex_turn_completed(Path('/no/such/events.jsonl')))
+        with tempfile.TemporaryDirectory() as td:
+            events = Path(td) / 'events.jsonl'
+            events.write_text('{"type":"thread.started"}\n')
+            self.assertFalse(lean_live._codex_turn_completed(events))
+            events.write_text(
+                '{"type":"thread.started"}\n'
+                '{"type":"turn.completed","usage":{"input_tokens":1}}\n')
+            self.assertTrue(lean_live._codex_turn_completed(events))
+        # Timeout path marks UNKNOWN / no blind replay in source.
+        import inspect
+        src = inspect.getsource(lean_live.codex_qa_live)
+        self.assertIn('no_blind_replay', src)
+        self.assertIn('_kill_owned_process_group', src)
+        self.assertIn('turn_completed', src)
+        self.assertIn('gpt-6.1-sol', src)
 
 
 class HostRequestTests(unittest.TestCase):

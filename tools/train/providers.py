@@ -356,7 +356,12 @@ def parse_qa_verdict(raw, reviewed_sha, *, model=AGY_MODEL, provider=None):
 
 
 def select_qa_provider(task, *, issue):
-    """Nonblocking routing: AGY only when READY + admitted + quota; else Codex."""
+    """Nonblocking routing: default Codex Medium; AGY only when READY+quota.
+
+    Explicit not-ready fallback happens BEFORE any charge. Never invent READY.
+    Bare unsupported [AGY_CLI, --model] product QA is refused in live.agy_qa_live
+    (native product_run_qa required); budget history is unchanged here.
+    """
     routes = task.get('qaroute') or task.get('qa_route') or ['codex_sol_medium']
     if isinstance(routes, str):
         routes = [routes]
@@ -645,7 +650,8 @@ AUTHOR_PASS_CLAIMS = {
     'nested_agy_codex_model_calls': 0,
     'model_calls': 1,
     'note': (
-        'OD017 repair3: live default bindings in live.py; this Cursor author pass '
-        'is 1 launch; AGY/Codex READY and MODE_B_ACTIVE remain unproven runtime gates'
+        'OD018 Mode B commissioning: live launch blockers repaired in allowed '
+        'train sources only; AGY remains not READY (no bare CLI product QA); '
+        'MODE_B_ACTIVE unproven until independent QA/CI/install; no paid AGY calls'
     ),
 }

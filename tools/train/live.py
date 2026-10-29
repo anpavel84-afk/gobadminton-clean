@@ -46,12 +46,19 @@ ELIGIBLE_STATUSES = frozenset({
     'ready', 'todo', 'in progress', 'in_progress', 'approved', 'queued',
     'admitted', 'lean ready', 'mode b',
 })
-CLEAN_REPO = Path('/home/agentagency-dev/gobadminton-clean')
+# Local main may be stale; origin/dev refresh is allowed for Mode B bases.
+CLEAN_REPO = Path('/srv/gobadminton-clean/repo')
 WORKTREES_ROOT = Path('/home/agentagency-dev/mode-b-worktrees')
 EVIDENCE_ROOT = Path('/var/lib/gobadminton-lean/results')
 NATIVE_TRAIN = Path('/usr/local/lib/gb-actions-train')
+MODE_A_RULES = Path(
+    '/home/agentagency-dev/Documents/Codex/2026-10-26/'
+    'codex-dev-vps-vmi3510488-gobadminton-clean/execution-20261027/mode-a/AGENTS.md'
+)
 AGY_UID = 978
 CURSOR_UID = 1002
+CURSOR_GID = 1002
+REGISTRY_GID = 65042
 HOST_WAKE_BUDGET_S = 2400  # fit Actions 45m client keepalive; stages resume
 CI_POLL_S = 30
 CI_WAIT_BUDGET_S = 1200
@@ -113,11 +120,60 @@ def uid1002_env(extra=None):
     return env
 
 
-def run_argv(argv, *, cwd=None, env=None, timeout=60, input_text=None, check=True):
-    """Subprocess with argv list + proper env; never shell/eval."""
+def uid1002_preexec():
+    """Per-role child: groups 65042 / gid 1002 / uid 1002 / NNP before CLI/Git/GH.
+
+    Parent trusted Root retains controller/publisher and the global writer lease.
+    Model/Git/GH never keep root. Matches working Mode A drop boundary.
+    """
+    def _drop():
+        euid = os.geteuid()
+        if euid == 0:
+            os.setgroups([REGISTRY_GID])
+            os.setgid(CURSOR_GID)
+            os.setuid(CURSOR_UID)
+        elif euid != CURSOR_UID:
+            os._exit(125)
+        try:
+            import ctypes
+            libc = ctypes.CDLL(None, use_errno=True)
+            if libc.prctl(38, 1, 0, 0, 0) != 0:
+                os._exit(126)
+        except Exception:
+            os._exit(126)
+    return _drop
+
+
+def require_executor_uid():
+    euid = os.geteuid()
+    if euid not in (0, CURSOR_UID):
+        raise LiveError('unexpected_executor_uid', str(euid))
+    return euid
+
+
+def chown_private_tree(base, uid=CURSOR_UID, gid=CURSOR_GID):
+    """Only a fresh private Cursor/Codex temp tree — never recursive project/state."""
+    base = Path(base)
+    for root, _dirs, files in os.walk(base):
+        os.chown(root, uid, gid)
+        for name in files:
+            os.chown(os.path.join(root, name), uid, gid)
+
+
+def run_argv(argv, *, cwd=None, env=None, timeout=60, input_text=None, check=True,
+             drop_uid=True):
+    """Subprocess with argv list + proper env; never shell/eval.
+
+    When parent is trusted Root, drop to UID1002/NNP in the child before Git/GH.
+    HOME alone is insufficient — native Cursor/Codex/Git must not inherit root.
+    """
+    require_executor_uid()
+    kw = {}
+    if drop_uid:
+        kw['preexec_fn'] = uid1002_preexec()
     proc = subprocess.run(
         list(argv), cwd=cwd, env=env or uid1002_env(), text=True,
-        capture_output=True, timeout=timeout, input=input_text,
+        capture_output=True, timeout=timeout, input=input_text, **kw,
     )
     if check and proc.returncode != 0:
         raise LiveError('subprocess_failed',
@@ -347,10 +403,12 @@ def read_canonical_project(*, project_number=CANONICAL_PROJECT_NUMBER):
 
 
 def item_eligible(item):
-    """Residual eligible scope from Project status/priority + Owner exclusions."""
+    """Residual eligible scope from Project status/priority + Owner exclusions.
+
+    #182 is no longer a hard Project exclusion under OD018; admission still
+    requires prospective Owner+signed-comment validation in owner_hold_markers.
+    """
     number = int(item['issue'])
-    if number == 182:
-        return False, 'issue_182_hard_hold'
     if number in UAT_DELIVERED:
         return False, 'uat_delivered_not_new_product'
     if number == 94:
@@ -468,41 +526,68 @@ def git(cwd, *args, timeout=60):
     return (proc.stdout or '').strip()
 
 
+def _worktree_clean_readback(work, *, expected_base=None):
+    """Exact clean HEAD readback under UID1002 git; HOLD on dirty/unexpected."""
+    work = Path(work)
+    try:
+        head = git(work, 'rev-parse', 'HEAD')
+        dirty = git(work, 'status', '--porcelain')
+    except LiveError as err:
+        raise LiveError('worktree_unexpected_hold', f'{work}:{err.code}') from err
+    if dirty:
+        raise LiveError('worktree_dirty_hold', str(work))
+    if expected_base and SHA40.fullmatch(str(expected_base)) and head != expected_base:
+        raise LiveError('worktree_unexpected_head_hold', f'{head}!={expected_base}')
+    if not SHA40.fullmatch(head):
+        raise LiveError('worktree_unexpected_hold', f'bad_head:{head}')
+    return head
+
+
 def create_task_worktree(task, *, repo=None, root=None):
-    """Fresh worktree from current dev base for the task issue."""
+    """Fresh worktree from verified origin/dev or explicit prepared base.
+
+    Never force-removes dirty/unexpected trees — those HOLD and preserve.
+    Existing #182 candidate (PR367) is reused via prepared_worktree/base when
+    supplied; no broad new prebuilt framework.
+    """
     repo = Path(repo or task.get('repo_path') or CLEAN_REPO)
     root = Path(root or WORKTREES_ROOT)
-    root.mkdir(parents=True, exist_ok=True)
     issue = int(task['issue'])
+    expected = task.get('base') or task.get('prepared_base')
+    # Reuse an explicitly prepared candidate tree (e.g. #182 PR367) when clean.
+    prepared = task.get('prepared_worktree') or task.get('reuse_worktree')
+    if prepared:
+        work = Path(prepared)
+        if not work.is_dir():
+            raise LiveError('prepared_worktree_missing', str(work))
+        _worktree_clean_readback(work, expected_base=expected)
+        return str(work)
+    if not root.exists():
+        # Parent trusted process may create the Mode B worktrees root; drop child
+        # git never mkdir as root into user trees beyond this controller path.
+        root.mkdir(parents=True, exist_ok=True)
+        if os.geteuid() == 0:
+            try:
+                os.chown(root, CURSOR_UID, CURSOR_GID)
+            except OSError:
+                pass
     work = root / f'issue-{issue}'
     if work.exists():
-        # Reuse only if clean and on expected base when provided.
-        try:
-            head = git(work, 'rev-parse', 'HEAD')
-            dirty = git(work, 'status', '--porcelain')
-            if dirty:
-                raise LiveError('worktree_dirty', str(work))
-            base = task.get('base')
-            if base and SHA40.fullmatch(str(base)) and head != base:
-                # Recreate from fresh base.
-                run_argv(['/usr/bin/git', '-C', str(repo), 'worktree', 'remove', '--force', str(work)],
-                         env=git_env(), check=False)
-            else:
-                return str(work)
-        except LiveError:
-            run_argv(['/usr/bin/git', '-C', str(repo), 'worktree', 'remove', '--force', str(work)],
-                     env=git_env(), check=False)
-    # Refresh origin/dev then add worktree.
+        _worktree_clean_readback(work, expected_base=expected)
+        return str(work)
+    # Create only a genuinely fresh assigned tree from verified origin/dev or
+    # explicit prepared base SHA. Git runs under UID1002 drop (run_argv).
     git(repo, 'fetch', 'origin', 'dev', timeout=120)
-    base = task.get('base')
+    base = expected
     if not (isinstance(base, str) and SHA40.fullmatch(base)):
         base = git(repo, 'rev-parse', 'origin/dev')
-    branch = f'automation/issue-{issue}'
-    # Detached worktree at base; branch created on publish.
     run_argv(
         ['/usr/bin/git', '-C', str(repo), 'worktree', 'add', '--detach', str(work), base],
         env=git_env(), timeout=60, check=True,
     )
+    head = _worktree_clean_readback(work, expected_base=base)
+    if head != base:
+        raise LiveError('worktree_unexpected_head_hold', f'{head}!={base}')
     return str(work)
 
 
@@ -544,20 +629,22 @@ def materialize_inputs(task, dest_dir):
 def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_lease=True):
     """Actual Cursor Auto CLI via native export/import (Mode A pattern in source).
 
-    Adapts working Mode A implementation into accepted source — does not exec
-    user-writable root paths. Root never runs the model; UID1002 after setuid
-    in the Mode A bridge. When this process is already UID1002, invoke native
-    CLI path directly with private sandbox dirs.
+    Trusted Root obtains Cursor auth in memory, then per-role Popen drops to
+    groups 65042 / gid+uid 1002 / NNP before the CLI. Parent keeps controller
+    and writer lease. Never exec user-writable external Python as Root; never
+    reuse Root HOME/API secrets beyond the memory token in the child env.
     """
     from providers import prepare_cursor_author_intent, mark_intent_phase, ProviderError
+    require_executor_uid()
     evidence = Path(evidence_dir)
     evidence.mkdir(parents=True, exist_ok=True)
     if intent_path is None:
         _, intent_path = prepare_cursor_author_intent(task, worktree, evidence)
     worktree = Path(worktree)
     native = _load_native('native_cursor')
-    # Private sandbox under /tmp/gb-cursor-* owned by current executor.
+    # Private sandbox under /tmp/gb-cursor-* — chown only this tree to UID1002.
     base = Path(tempfile.mkdtemp(prefix='gb-cursor-lean-', dir='/tmp'))
+    p = None
     try:
         for name in ('home', 'config', 'data', 'cache', 'tmp', 'work'):
             (base / name).mkdir(mode=0o700)
@@ -575,7 +662,6 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
         for item in materials:
             config['permissions']['allow'].append('Read(' + item['delivered_path'] + ')')
         (base / 'config' / 'cli-config.json').write_text(json.dumps(config))
-        # Prompt: Owner assignment already in task; do not rewrite AGENTS.
         prompt = (
             'EXACT OWNER ASSIGNMENT (Lean Mode B live binding)\n'
             + json.dumps({k: task.get(k) for k in (
@@ -588,8 +674,7 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
         if task.get('repair_findings'):
             prompt += '\nADDRESS THESE FINDINGS EXACTLY:\n' + json.dumps(task['repair_findings'])
         (evidence / 'prompt.txt').write_text(prompt)
-        # Token: only via existing root bridge when euid==0; else rely on CURSOR_AUTH_TOKEN
-        # already injected by trusted host pre-exec (never print).
+        # Auth in parent memory only (Root may load); never print / never Root HOME reuse.
         token = os.environ.get('CURSOR_AUTH_TOKEN')
         if not token and os.geteuid() == 0:
             token = native.existing_auth_for_stage(
@@ -597,6 +682,8 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
         if not token:
             mark_intent_phase(intent_path, 'HOLD_no_automatic_replay', error='cursor_auth_absent')
             raise ProviderError('cursor_auth_absent', 'trusted Cursor auth unavailable')
+        if os.geteuid() == 0:
+            chown_private_tree(base)
         env = {
             'PATH': '/opt/gb-slots/runtime/node/bin:/usr/bin:/bin',
             'LANG': 'C.UTF-8',
@@ -612,6 +699,12 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
             'AGENT_CLI_CREDENTIAL_STORE': 'memory',
             'CURSOR_AUTH_TOKEN': token,
         }
+        # Strip inherited Root/API secrets from child model env.
+        for secret_key in (
+            'GITHUB_TOKEN', 'GH_TOKEN', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY',
+            'CURSOR_API_KEY', 'AWS_SECRET_ACCESS_KEY', 'SSH_AUTH_SOCK',
+        ):
+            env.pop(secret_key, None)
         guard = _load_native('native_guard')
         node = str(native.CURSOR_PIN / 'node')
         cmd = [node, str(native.CURSOR_PIN / 'index.js'),
@@ -627,25 +720,42 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
         with stream.open('xb') as a, errf.open('xb') as e:
             p = subprocess.Popen(
                 argv, cwd=str(base / 'work'), env=env, stdin=subprocess.PIPE,
-                stdout=a, stderr=e, start_new_session=True)
+                stdout=a, stderr=e, start_new_session=True, close_fds=True,
+                preexec_fn=uid1002_preexec())
+            # Native process-boundary verification (UID1002 / NNP / namespace).
+            boundary = None
+            if hasattr(native, 'process_boundary'):
+                try:
+                    boundary = native.process_boundary(p.pid, node, CURSOR_UID)
+                except Exception as err:
+                    if hasattr(native, '_stop'):
+                        native._stop(p)
+                    mark_intent_phase(intent_path, 'HOLD_no_automatic_replay',
+                                      error='process_boundary', detail=type(err).__name__)
+                    raise ProviderError('cursor_process_boundary', type(err).__name__) from err
+            mark_intent_phase(intent_path, 'running', process=boundary,
+                              root_model=False, uid=CURSOR_UID)
             try:
                 p.communicate(input=prompt.encode(), timeout=AUTHOR_TIMEOUT_S)
             except subprocess.TimeoutExpired as err:
                 if hasattr(native, '_stop'):
                     native._stop(p)
+                else:
+                    _kill_owned_process_group(p)
                 mark_intent_phase(intent_path, 'UNKNOWN', error='timeout')
                 raise ProviderError('cursor_timeout_unknown', str(err), charge='unknown') from err
         if p.returncode != 0:
             mark_intent_phase(intent_path, 'HOLD_no_automatic_replay', exit=p.returncode)
             raise ProviderError('cursor_exit_nonzero', str(p.returncode))
         raw = stream.read_bytes()
+        if token.encode() in raw or token.encode() in errf.read_bytes():
+            raise ProviderError('token_leak_in_stream')
         result = native.parse_stream(raw)
         after = native.snapshot(base / 'work', bridge, before)
         changed = sorted(n for n in set(before) | set(after) if before.get(n) != after.get(n))
         allowed = set(task.get('allowed_paths') or [])
         if not changed or not set(changed) <= allowed:
             raise ProviderError('author_empty_or_oos', ','.join(changed[:20]))
-        # Import changed files back into real worktree (trusted).
         for name in changed:
             target = worktree / name
             if name not in after:
@@ -665,7 +775,6 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
                 fh.flush()
                 os.fsync(fh.fileno())
             os.replace(tmp, target)
-        # Commit as UID1002 identity inside worktree (no push yet).
         git(worktree, 'add', '--', *changed)
         git(worktree, '-c', 'user.name=agentagency-dev', '-c', 'user.email=agentagency-dev@localhost',
             '-c', 'commit.gpgsign=false', 'commit', '-m',
@@ -681,14 +790,73 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
             'model_launch': 1,
             'provider': 'cursor_auto',
             'result': result,
+            'root_model': False,
+            'uid': CURSOR_UID,
         }
     finally:
+        if p is not None and p.poll() is None:
+            _kill_owned_process_group(p)
         shutil.rmtree(base, ignore_errors=True)
 
 
+def _kill_owned_process_group(p):
+    """Kill/reap only the owned process group on timeout — no blind paid replay."""
+    if p is None:
+        return
+    if p.poll() is None:
+        try:
+            os.killpg(p.pid, 9)
+        except (ProcessLookupError, PermissionError, OSError):
+            try:
+                p.kill()
+            except (ProcessLookupError, OSError):
+                pass
+    try:
+        p.wait(timeout=5)
+    except Exception:
+        pass
+
+
+def _git_common_dir(source):
+    proc = run_argv(
+        ['/usr/bin/git', '-C', str(source), 'rev-parse',
+         '--path-format=absolute', '--git-common-dir'],
+        env=git_env(), timeout=30, check=True,
+    )
+    return (proc.stdout or '').strip()
+
+
+def _codex_turn_completed(events_path):
+    """Require an explicit turn.completed event in saved Codex JSONL."""
+    path = Path(events_path)
+    if not path.is_file():
+        return False
+    for line in path.read_text(errors='replace').splitlines():
+        if not line.strip():
+            continue
+        try:
+            obj = loads(line)
+        except (ValueError, LiveError):
+            if 'turn.completed' in line:
+                return True
+            continue
+        typ = str(obj.get('type') or obj.get('event') or '')
+        if typ in ('turn.completed', 'turn_completed') or typ.endswith('turn.completed'):
+            return True
+        if obj.get('item', {}).get('type') == 'turn.completed':
+            return True
+    return False
+
+
 def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None):
-    """Actual Codex Sol Medium read-only QA (Mode A launch pattern in source)."""
+    """Actual Codex Sol Medium read-only QA (Mode A gpt-6.1-sol effort=medium).
+
+    Independent readonly source includes git-common-dir + explicit short Mode A
+    rules, exact SHA/base/task criteria. Verify exit0 AND turn.completed AND
+    canonical exact SHA final; raw saved first. Timeout kills only owned pg.
+    """
     from providers import prepare_qa_intent, mark_intent_phase, parse_codex_final, ProviderError
+    require_executor_uid()
     if not (isinstance(candidate_sha, str) and SHA40.fullmatch(candidate_sha)):
         raise ProviderError('invalid_candidate_sha')
     evidence = Path(evidence_dir) / f'qa-codex-{candidate_sha[:12]}'
@@ -696,25 +864,50 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None):
     if intent_path is None:
         _, intent_path = prepare_qa_intent(task, candidate_sha, 'codex_sol_medium', evidence)
     source = Path(task.get('worktree') or create_task_worktree(task))
-    # Ensure source at candidate.
     head = git(source, 'rev-parse', 'HEAD')
     if head != candidate_sha:
         git(source, 'checkout', '--detach', candidate_sha)
+    rules_text = ''
+    rules_sha = None
+    if readable_present(MODE_A_RULES):
+        raw_rules = MODE_A_RULES.read_bytes()
+        rules_sha = hashlib.sha256(raw_rules).hexdigest()
+        rules_text = (
+            'TRUSTED OWNER MODE A SHORT RULES SHA256 ' + rules_sha + '\n'
+            + raw_rules.decode('utf-8', errors='replace') + '\n'
+        )
     prompt = (
-        'Independent read-only QA. Return ONLY JSON keys verdict, findings, reviewed_sha.\n'
+        rules_text
+        + 'Independent read-only QA. Return ONLY JSON keys verdict, findings, reviewed_sha.\n'
         f'reviewed_sha must be exactly {candidate_sha}.\n'
+        f'base={task.get("base") or task.get("prepared_base") or ""}\n'
         f'TASK: {json.dumps({k: task.get(k) for k in ("issue","goal","acceptance","allowed_paths")}, ensure_ascii=False)}\n'
+        'PASS => findings must be []. Findings list only actionable defects.\n'
     )
     (evidence / 'prompt.md').write_text(prompt)
     codex = Path('/home/agentagency-dev/.local/bin/codex')
     if not codex.is_file():
         mark_intent_phase(intent_path, 'HOLD_no_automatic_replay', error='codex_absent')
         raise ProviderError('codex_absent')
+    common = _git_common_dir(source)
     fs = {
         ':root': 'deny', ':minimal': 'read', ':slash_tmp': 'deny', ':tmpdir': 'write',
         str(source): 'read', str(source / '.git'): 'read',
         str(evidence): 'write',
+        str(Path('/home/agentagency-dev/train-execution-evidence-20261027')): 'read',
+        str(Path('/home/agentagency-dev/.local/lib/node_modules/@openai')): 'read',
+        str(Path('/home/agentagency-dev/.local/node-v24.21.0')): 'read',
+        str(Path('/home/agentagency-dev/.ssh')): 'deny',
+        '/srv/gb-slots': 'deny',
+        '/var/lib/gobadminton-actions-train': 'deny',
+        '/var/lib/gobadminton-autonomy': 'deny',
+        '/etc/gobadminton-slots': 'deny',
     }
+    if common:
+        fs[common] = 'read'
+    if readable_present(MODE_A_RULES):
+        fs[str(MODE_A_RULES.parent)] = 'read'
+        fs[str(MODE_A_RULES)] = 'read'
     fs_expr = ','.join(json.dumps(k) + '=' + json.dumps(v) for k, v in fs.items())
     cmd = [
         '/usr/bin/timeout', '--signal=TERM', '--kill-after=15s', str(QA_TIMEOUT_S),
@@ -729,39 +922,85 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None):
         '-c', 'model_reasoning_effort="medium"',
         '--json', '-o', str(evidence / 'final.txt'), '-',
     ]
-    mark_intent_phase(intent_path, 'launching')
-    with (evidence / 'prompt.md').open() as i, \
-            (evidence / 'events.jsonl').open('w') as o, \
-            (evidence / 'stderr').open('w') as e:
-        p = subprocess.Popen(cmd, stdin=i, stdout=o, stderr=e, start_new_session=True, umask=0o022)
-        try:
-            p.wait(timeout=QA_TIMEOUT_S + 30)
-        except subprocess.TimeoutExpired as err:
-            p.kill()
-            mark_intent_phase(intent_path, 'UNKNOWN', error='timeout')
-            raise ProviderError('qa_timeout_unknown', str(err), charge='unknown') from err
-    final = evidence / 'final.txt'
-    if not final.is_file():
-        raise ProviderError('codex_final_missing')
-    parsed = parse_codex_final(final.read_text(), candidate_sha)
-    parsed['charge'] = 'charged'
-    mark_intent_phase(intent_path, 'completed', verdict=parsed['verdict'])
-    return parsed
+    # Private HOME for Codex child (UID1002 writable); do not reuse Root HOME.
+    private = Path(tempfile.mkdtemp(prefix='gb-codex-lean-', dir='/tmp'))
+    p = None
+    try:
+        for name in ('home', 'tmp'):
+            (private / name).mkdir(mode=0o700)
+        if os.geteuid() == 0:
+            chown_private_tree(private)
+        child_env = {
+            'PATH': '/usr/bin:/bin:/home/agentagency-dev/.local/bin',
+            'LANG': 'C.UTF-8',
+            'HOME': str(private / 'home'),
+            'TMPDIR': str(private / 'tmp'),
+        }
+        mark_intent_phase(intent_path, 'launching', model='gpt-6.1-sol', effort='medium',
+                          rules_sha256=rules_sha, root_model=False)
+        with (evidence / 'prompt.md').open() as i, \
+                (evidence / 'events.jsonl').open('w') as o, \
+                (evidence / 'stderr').open('w') as e:
+            p = subprocess.Popen(
+                cmd, stdin=i, stdout=o, stderr=e, start_new_session=True,
+                umask=0o022, close_fds=True, env=child_env, preexec_fn=uid1002_preexec())
+            try:
+                p.wait(timeout=QA_TIMEOUT_S + 30)
+            except subprocess.TimeoutExpired as err:
+                # Raw events already on disk via stdout inheritance; kill owned pg only.
+                _kill_owned_process_group(p)
+                mark_intent_phase(intent_path, 'UNKNOWN', error='timeout',
+                                  no_blind_replay=True)
+                raise ProviderError('qa_timeout_unknown', str(err), charge='unknown') from err
+        # Persist raw completion envelope before parse (no automatic paid replay).
+        completion = {
+            'exit': p.returncode,
+            'turn_completed': _codex_turn_completed(evidence / 'events.jsonl'),
+            'candidate_sha': candidate_sha,
+            'rules_sha256': rules_sha,
+        }
+        (evidence / 'completion.json').write_text(json.dumps(completion, indent=2) + '\n')
+        if p.returncode != 0:
+            mark_intent_phase(intent_path, 'HOLD_no_automatic_replay', exit=p.returncode)
+            raise ProviderError('codex_exit_nonzero', str(p.returncode))
+        if not completion['turn_completed']:
+            mark_intent_phase(intent_path, 'HOLD_no_automatic_replay', error='turn_completed_missing')
+            raise ProviderError('codex_turn_completed_missing')
+        final = evidence / 'final.txt'
+        if not final.is_file():
+            raise ProviderError('codex_final_missing')
+        raw_final = final.read_text()
+        (evidence / 'final.raw.txt').write_text(raw_final)
+        parsed = parse_codex_final(raw_final, candidate_sha)
+        if parsed.get('reviewed_sha') != candidate_sha:
+            raise ProviderError('stale_sha_verdict', str(parsed.get('reviewed_sha')))
+        parsed['charge'] = 'charged'
+        parsed['turn_completed'] = True
+        parsed['exit'] = 0
+        mark_intent_phase(intent_path, 'completed', verdict=parsed['verdict'])
+        return parsed
+    finally:
+        if p is not None and p.poll() is None:
+            _kill_owned_process_group(p)
+        shutil.rmtree(private, ignore_errors=True)
 
 
 def agy_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None):
-    """Actual AGY Sonnet Medium QA via native command/input/parse (UID978 Landlock).
+    """AGY product QA only via verified native transport — never bare CLI.
 
-    Reuses accepted native transport. Falls back to Codex when role not READY /
-    quota / executor unavailable — never fabricates READY.
+    CANARY/HOLD: installed PTY may pass run_command/view_file, but findings[]
+    contract violations keep AGY not READY. Default remains Codex Medium.
+    Explicit not-ready fallback BEFORE any charge; never invent READY; never
+    launch unsupported [AGY_CLI, --model] for product QA. Future AGY prompts
+    must require findings-only actionable defects and PASS => [].
     """
     from providers import (
         prepare_qa_intent, mark_intent_phase, parse_agy_stream, ProviderError,
-        role_ready, agy_quota_available, record_agy_charge,
-        build_agy_landlock_roots, agy_child_preexec, AGY_CLI, AGY_MODEL, AGY_UID, AGY_GID,
+        role_ready, agy_quota_available, record_agy_charge, AGY_MODEL,
     )
     ok, reason = role_ready('agy_qa')
     if not ok:
+        # Explicit not-ready fallback before any AGY charge / model launch.
         return codex_qa_live(task=task, candidate_sha=candidate_sha,
                             evidence_dir=evidence_dir, intent_path=intent_path)
     avail, why, _rec = agy_quota_available(int(task['issue']))
@@ -772,59 +1011,47 @@ def agy_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None):
     evidence.mkdir(parents=True, exist_ok=True)
     if intent_path is None:
         _, intent_path = prepare_qa_intent(task, candidate_sha, 'agy_qa', evidence)
-    native = _load_native('native_antigravity')
+    try:
+        native = _load_native('native_antigravity')
+    except LiveError:
+        mark_intent_phase(intent_path, 'agy_not_ready_fallback', error='native_missing')
+        return codex_qa_live(task=task, candidate_sha=candidate_sha,
+                            evidence_dir=evidence_dir, intent_path=intent_path)
+    # Bare [AGY_CLI, --model] is unsupported for product QA — require native entry.
+    if not hasattr(native, 'product_run_qa'):
+        mark_intent_phase(intent_path, 'agy_not_ready_fallback',
+                          error='product_run_qa_absent_no_bare_cli')
+        return codex_qa_live(task=task, candidate_sha=candidate_sha,
+                            evidence_dir=evidence_dir, intent_path=intent_path)
     source = Path(task.get('worktree') or create_task_worktree(task))
     if git(source, 'rev-parse', 'HEAD') != candidate_sha:
         git(source, 'checkout', '--detach', candidate_sha)
-    # Private HOME/scratch — no global writable /tmp for AGY child.
-    private = Path(tempfile.mkdtemp(prefix='gb-agy-lean-', dir=str(Path.home() / '.cache')))
+    prompt = (
+        f'Read-only QA of exact SHA {candidate_sha}. '
+        'findings must list ONLY actionable defects; PASS => findings must be []. '
+        'Finish with DONE JSON '
+        '{"verdict":"PASS"|"FAIL","findings":[],"reviewed_sha":"%s"}.'
+        % candidate_sha
+    )
+    (evidence / 'prompt.txt').write_text(prompt)
+    mark_intent_phase(intent_path, 'launching', transport='native_product_run_qa')
     try:
-        home = private / 'home'
-        scratch = private / 'scratch'
-        home.mkdir(mode=0o700)
-        scratch.mkdir(mode=0o700)
-        ro, wr, ex = build_agy_landlock_roots(source, home, scratch)
-        preexec = agy_child_preexec(ro, wr, ex, uid=AGY_UID, gid=AGY_GID)
-        prompt = (
-            f'Read-only QA of exact SHA {candidate_sha}. '
-            'Use run_command/view_file as needed; finish with DONE JSON '
-            '{"verdict":"PASS"|"FAIL","findings":[],"reviewed_sha":"%s"}.'
-            % candidate_sha
-        )
-        (evidence / 'prompt.txt').write_text(prompt)
-        # Prefer native runner if it exposes a product entry; else argv CLI.
-        if hasattr(native, 'product_run_qa'):
-            mark_intent_phase(intent_path, 'launching', transport='native_product_run_qa')
-            raw = native.product_run_qa(
-                work=str(source), head=candidate_sha, prompt=prompt,
-                evidence_dir=str(evidence), model=AGY_MODEL)
-        else:
-            if not Path(AGY_CLI).is_file():
-                return codex_qa_live(task=task, candidate_sha=candidate_sha,
-                                    evidence_dir=evidence_dir, intent_path=intent_path)
-            cmd = [AGY_CLI, '--model', AGY_MODEL]
-            mark_intent_phase(intent_path, 'launching', transport='agy_cli')
-            with (evidence / 'stream.jsonl').open('wb') as o, (evidence / 'stderr').open('wb') as e:
-                p = subprocess.Popen(
-                    cmd, cwd=str(source), stdin=subprocess.PIPE, stdout=o, stderr=e,
-                    start_new_session=True, preexec_fn=preexec,
-                    env={'HOME': str(home), 'TMPDIR': str(scratch), 'PATH': '/usr/bin:/bin',
-                         'LANG': 'C.UTF-8'})
-                try:
-                    p.communicate(input=prompt.encode(), timeout=QA_TIMEOUT_S)
-                except subprocess.TimeoutExpired as err:
-                    p.kill()
-                    record_agy_charge(int(task['issue']), {'phase': 'timeout'}, charge='unknown')
-                    mark_intent_phase(intent_path, 'UNKNOWN', error='timeout')
-                    raise ProviderError('qa_timeout_unknown', str(err), charge='unknown') from err
-            raw = (evidence / 'stream.jsonl').read_bytes()
-        record_agy_charge(int(task['issue']), {'phase': 'completed'}, charge='charged')
-        parsed = parse_agy_stream(raw, candidate_sha, model=AGY_MODEL)
-        parsed['charge'] = 'charged'
-        mark_intent_phase(intent_path, 'completed', verdict=parsed['verdict'])
-        return parsed
-    finally:
-        shutil.rmtree(private, ignore_errors=True)
+        raw = native.product_run_qa(
+            work=str(source), head=candidate_sha, prompt=prompt,
+            evidence_dir=str(evidence), model=AGY_MODEL)
+    except Exception as err:
+        record_agy_charge(int(task['issue']), {'phase': 'launch_error'}, charge='unknown')
+        mark_intent_phase(intent_path, 'UNKNOWN', error=type(err).__name__,
+                          no_blind_replay=True)
+        raise ProviderError('agy_launch_unknown', type(err).__name__, charge='unknown') from err
+    (evidence / 'stream.raw').write_bytes(raw if isinstance(raw, bytes) else str(raw).encode())
+    record_agy_charge(int(task['issue']), {'phase': 'completed'}, charge='charged')
+    parsed = parse_agy_stream(raw, candidate_sha, model=AGY_MODEL)
+    if parsed.get('verdict') == 'PASS' and list(parsed.get('findings') or []):
+        raise ProviderError('agy_pass_with_findings_contract')
+    parsed['charge'] = 'charged'
+    mark_intent_phase(intent_path, 'completed', verdict=parsed['verdict'])
+    return parsed
 
 
 def publish_push_pr(*, kind, payload, intent_path=None):

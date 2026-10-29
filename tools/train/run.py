@@ -28,6 +28,10 @@ from providers import (
 MARKER = 'GOBADMINTON_LEAN_TASK_V1'
 HOLD_ISSUE = 182
 HOLD_CONFIG_KEY = 'gameRecommendations'
+# OD018 signed Owner comment on #182 (2026-10-28). Supersedes older 182 OFF
+# prospectively for guarded DEV only — never a global allow or JSON rewrite.
+OD018_SIGNED_COMMENT_ID = 6483075322
+OD018_QUEUE = (182, 372, 373)
 RESULTS = Path('/var/lib/gobadminton-lean/results')
 LOCKS = Path('/var/lib/gobadminton-lean/locks')
 STATE = Path('/var/lib/gobadminton-lean/state')
@@ -130,15 +134,78 @@ def validate_task_fields(task):
     return True
 
 
+def od018_prospective_release(issue, comments):
+    """Exact prospective OD018 release for #182 guarded DEV admissions.
+
+    Requires numeric Owner identity on the signed comment (or a later Owner
+    comment that cites that id + OD018/OD-017 supersession scope) and a DEV
+    envelope. Old admissions / holds without this evidence stay protected.
+    Does not rewrite comment JSON history and is not a global 182 allow.
+    """
+    number = int(issue.get('number') or 0)
+    if number != HOLD_ISSUE:
+        return False, 'not_182'
+    if str(issue.get('state') or '').lower() == 'closed':
+        return False, 'issue_closed'
+    signed = False
+    for c in comments or []:
+        user = c.get('user') or {}
+        if user.get('id') != OWNER_ID:
+            continue
+        body = str(c.get('body') or '')
+        cid = c.get('id')
+        try:
+            cid_int = int(cid)
+        except (TypeError, ValueError):
+            cid_int = None
+        is_signed = cid_int == OD018_SIGNED_COMMENT_ID
+        cites_signed = (
+            str(OD018_SIGNED_COMMENT_ID) in body
+            or f'issuecomment-{OD018_SIGNED_COMMENT_ID}' in body
+        )
+        od_mark = (
+            'OD018' in body or 'OD-018' in body
+            or ('OD-017' in body and ('SUPERSEDE' in body.upper() or 'Supersedes' in body))
+        )
+        dev_env = (
+            'DEV ADMISSION' in body
+            or 'guarded DEV' in body
+            or 'target": "dev"' in body
+            or 'target\': \'dev\'' in body
+            or '"target":"dev"' in body
+            or ('DEV' in body and 'PROD' in body and 'not permission for PROD' in body.lower())
+            or ('dev' in body.lower() and 'no prod' in body.lower())
+        )
+        if is_signed and ('Supersedes' in body or 'SUPERSEDE' in body.upper()) and (
+                'DEV' in body or 'dev' in body):
+            signed = True
+            break
+        if cites_signed and od_mark and (dev_env or 'dev' in body.lower()):
+            signed = True
+            break
+    if not signed:
+        return False, 'issue_182_hard_hold'
+    return True, 'od018_prospective_dev'
+
+
 def owner_hold_markers(issue, comments, config=None):
-    """Explicit Owner hold / closed / 182 config deny stops admission."""
+    """Explicit Owner hold / closed / 182 prospective-deny stops admission."""
     if issue.get('state') == 'closed':
         return True, 'issue_closed'
-    if int(issue.get('number') or 0) == HOLD_ISSUE:
-        return True, 'issue_182_hard_hold'
+    number = int(issue.get('number') or 0)
+    od018_ok = False
+    if number == HOLD_ISSUE:
+        od018_ok, od018_why = od018_prospective_release(issue, comments)
+        if not od018_ok:
+            return True, od018_why or 'issue_182_hard_hold'
     cfg = config or {}
     if cfg.get(HOLD_CONFIG_KEY) is False:
-        if int(issue.get('number') or 0) == HOLD_ISSUE or any(
+        # Capability flag OFF still blocks non-OD018 182 / false-flag chatter;
+        # OD018 prospective DEV source admission is authorized while the flag
+        # remains OFF until gated release (signed scope).
+        if number == HOLD_ISSUE and od018_ok:
+            pass
+        elif number == HOLD_ISSUE or any(
                 'gameRecommendations' in str((c.get('body') or '')) and 'false' in str((c.get('body') or ''))
                 for c in comments or []):
             return True, '182_config_deny'
@@ -584,8 +651,6 @@ def fetch_owner_admissions(gh_api, *, config=None):
         if issue.get('pull_request'):
             continue
         number = int(issue['number'])
-        if number == HOLD_ISSUE:
-            continue
         comments = gh_api(f'repos/{REPO}/issues/{number}/comments?per_page=100')
         if not isinstance(comments, list):
             continue
@@ -1189,7 +1254,9 @@ def main(argv=None):
             'schema': 'GB_LEAN_SELF_CHECK_V1',
             'controller': 'lean_mode_b',
             'c5': 'off',
-            'issue_182': 'OFF',
+            'issue_182': 'OD018_PROSPECTIVE_DEV',
+            'od018_signed_comment_id': OD018_SIGNED_COMMENT_ID,
+            'od018_queue': list(OD018_QUEUE),
             'author_claims': AUTHOR_PASS_CLAIMS,
             'stages': list(stage_order()),
             'effectful': True,
