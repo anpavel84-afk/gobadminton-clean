@@ -118,77 +118,81 @@ export function ParticipationReviewPage({
 
   return (
     <ConsumerShell active="my-games" title={title} mode="local">
-      <header className="gb-page-local-header">
-        <button
-          type="button"
-          className="gb-c23-back"
-          onClick={() => router.push(`/games/${gameId}`)}
-        >
-          ← Назад
-        </button>
-      </header>
-
-      {state === "loading" ? (
-        <div className="gb-c23-state" data-state="loading">
-          <h2>Проверяем участие</h2>
-          <p>Загружаем актуальный статус заявки…</p>
-        </div>
-      ) : null}
-
-      {state === "auth" ? (
-        <div className="gb-c23-state" data-state="auth">
-          <h2>Нужен вход</h2>
-          <p>Войдите, чтобы управлять своей заявкой.</p>
-          <Button href={`/games/${gameId}`}>К игре</Button>
-        </div>
-      ) : null}
-
-      {state === "error" ? (
-        <div className="gb-c23-state" data-state="error">
-          <h2>Не удалось проверить участие</h2>
-          <p>Без актуальных данных действие недоступно.</p>
-          <Button onClick={() => setReload((value) => value + 1)}>
-            Обновить
-          </Button>
-        </div>
-      ) : null}
-
-      {state === "ready" ? (
-        <div className="gb-c23-state" data-state={done ? "done" : "review"}>
-          <h2>{title}</h2>
-          {own ? (
-            <GameStatusBadge tone={own.status}>
-              {participationLabel(own.status)}
-            </GameStatusBadge>
-          ) : (
-            <p>Активной заявки на эту игру нет.</p>
-          )}
-          <p>
-            {intent === "withdraw"
-              ? "Отзыв снимает ожидающую заявку. Pending не занимает место в составе."
-              : "Отказ снимает подтверждённое участие до начала игры. Сервер освободит место."}
-          </p>
-          {notice ? (
-            <p className="gb-game-notice" role="status">
-              {notice}
-            </p>
+      <div className="fr3 utility-page participation-review">
+        <header className="gb-page-local-header">
+          <button
+            type="button"
+            className="gb-c23-back"
+            onClick={() => router.push(`/games/${gameId}`)}
+          >
+            ← Назад к игре
+          </button>
+          <h1>{title}</h1>
+        </header>
+        <div className="utility-page__body">
+          {state === "loading" ? (
+            <div className="gb-c23-state" data-state="loading">
+              <h2>Проверяем участие</h2>
+              <p>Загружаем актуальный статус заявки…</p>
+            </div>
           ) : null}
-          <div className="gb-game-form-actions">
-            {canAct ? (
-              <Button
-                variant="dark"
-                disabled={busy}
-                onClick={() => void onConfirm()}
-              >
-                {busy ? "Отправляем…" : actionLabel}
+
+          {state === "auth" ? (
+            <div className="gb-c23-state" data-state="auth">
+              <h2>Нужен вход</h2>
+              <p>Войдите, чтобы управлять своей заявкой.</p>
+              <Button href={`/games/${gameId}`}>К игре</Button>
+            </div>
+          ) : null}
+
+          {state === "error" ? (
+            <div className="gb-c23-state" data-state="error">
+              <h2>Не удалось проверить участие</h2>
+              <p>Без актуальных данных действие недоступно.</p>
+              <Button onClick={() => setReload((value) => value + 1)}>
+                Обновить
               </Button>
-            ) : null}
-            <Button variant="secondary" href={`/games/${gameId}`}>
-              Вернуться к игре
-            </Button>
-          </div>
+            </div>
+          ) : null}
+
+          {state === "ready" ? (
+            <section className="settings-panel" data-state={done ? "done" : "review"}>
+              {game ? <p className="participation-review__meta">{game.title}</p> : null}
+              {own ? (
+                <GameStatusBadge tone={own.status}>
+                  {participationLabel(own.status)}
+                </GameStatusBadge>
+              ) : (
+                <p>Активной заявки на эту игру нет.</p>
+              )}
+              <p>
+                {intent === "withdraw"
+                  ? "Отзыв снимает ожидающую заявку. Pending не занимает место в составе."
+                  : "Отказ снимает подтверждённое участие до начала игры. Сервер освободит место."}
+              </p>
+              {notice ? (
+                <p className="gb-game-notice" role="status">
+                  {notice}
+                </p>
+              ) : null}
+              <div className="gb-game-form-actions">
+                <Button variant="secondary" href={`/games/${gameId}`}>
+                  Вернуться к игре
+                </Button>
+                {canAct ? (
+                  <Button
+                    variant="dark"
+                    disabled={busy}
+                    onClick={() => void onConfirm()}
+                  >
+                    {busy ? "Отправляем…" : actionLabel}
+                  </Button>
+                ) : null}
+              </div>
+            </section>
+          ) : null}
         </div>
-      ) : null}
+      </div>
     </ConsumerShell>
   );
 }

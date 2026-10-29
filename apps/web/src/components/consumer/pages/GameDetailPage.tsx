@@ -110,12 +110,22 @@ export function GameDetailPage({ gameId }: { gameId: string }) {
       {state === "error" && <div className="gb-game-feedback" data-state="error"><h1>Игра недоступна</h1><p>Не удалось загрузить игру. Проверьте соединение и попробуйте ещё раз.</p><Button onClick={() => void reload()}>Обновить</Button></div>}
       {state === "ready" && game && game.id === gameId && <div data-state="ready">
         <GameHero game={game} />
-        <div className="gb-game-detail-contextual">
-          {isRecommendableGame(game) && (
-            <GameRecommendationButton gameId={game.id} me={me} eligible onLogin={() => setAuthOpen(true)} />
-          )}
-          <GameShare gameId={game.id} />
-        </div>
+        <section className="gb-game-detail-contextual" aria-label="Об этой игре">
+          <div className="gb-game-detail-contextual__secondary">
+            <h2>Об этой игре</h2>
+            <div className="gb-game-detail-contextual__actions">
+              {isRecommendableGame(game) && (
+                <GameRecommendationButton gameId={game.id} me={me} eligible onLogin={() => setAuthOpen(true)} />
+              )}
+              <GameShare gameId={game.id} label="Поделиться" />
+            </div>
+            {isRecommendableGame(game) ? <small>Совет другу не резервирует место</small> : null}
+          </div>
+          <div className="gb-game-detail-contextual__primary">
+            <div className="gb-game-booking__terms"><strong>{capacityStatusLabel(game)}</strong><p>{settlementTerms(game.settlement)}</p></div>
+            <ParticipationActions game={game} own={own} busy={busy} notice={notice} readable={readable} onRequest={() => void onRequest()} onReload={() => void reload()} />
+          </div>
+        </section>
         <div className="gb-game-detail-grid">
           <div>
             <GameTerms game={game} />
@@ -126,9 +136,11 @@ export function GameDetailPage({ gameId }: { gameId: string }) {
               </section>
             )}
           </div>
-          <aside className="gb-game-booking">
-            <div className="gb-game-booking__terms"><strong>{capacityStatusLabel(game)}</strong><p>{settlementTerms(game.settlement)}</p><small>{game.venue.name}</small><p>{game.venue.address}</p></div>
-            <ParticipationActions game={game} own={own} busy={busy} notice={notice} readable={readable} onRequest={() => void onRequest()} onReload={() => void reload()} />
+          <aside className="gb-game-booking gb-game-booking--note" aria-label="Перед встречей">
+            <strong>Перед встречей</strong>
+            <p>Проверьте время, место и условия участия.</p>
+            <small>{game.venue.name}</small>
+            <p>{game.venue.address}</p>
           </aside>
         </div>
       </div>}

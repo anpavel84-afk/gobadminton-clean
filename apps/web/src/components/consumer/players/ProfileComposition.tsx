@@ -28,17 +28,23 @@ export function Badge({ children, trainer = false }: { children: ReactNode; trai
   return <span className={`status-badge status-badge--${trainer ? "attention" : "available"}`}>{children}</span>;
 }
 export function PlayerCard({ player, city, metadata, onSelect }: { player: PublicPlayer; city?: string; metadata?: ReactNode; onSelect?: () => void }) {
+  const meta = [player.level ? formatSocialLevel(player.level) : "Уровень не указан", city].filter(Boolean).join(" · ");
   const content = <>
-    <Avatar avatar={player.avatar} name={player.displayName} tone={player.trainer ? "purple" : "yellow"} />
-    <div className="player-card__main">
-      <div className="player-card__title"><h3>{player.displayName}</h3>{player.lookingForGame && <Badge>Ищу игру</Badge>}</div>
-      {player.level && <strong>{formatSocialLevel(player.level)}</strong>}
-      {(city || player.areaKey) && <span><img className="profile-icon" src="/discovery/pin.svg" alt="" />{[city, player.areaKey].filter(Boolean).join(" · ")}</span>}
-      {metadata}
+    <div className="player-card__identity">
+      <Avatar avatar={player.avatar} name={player.displayName} tone={player.trainer ? "purple" : "yellow"} />
+      <div className="player-card__main">
+        <div className="player-card__title"><h3>{player.displayName}</h3>{player.lookingForGame && <Badge>Ищу игру</Badge>}</div>
+        <strong>{meta}</strong>
+        {(city || player.areaKey) && <span className="player-card__area"><img className="profile-icon" src="/discovery/pin.svg" alt="" />{[city, player.areaKey].filter(Boolean).join(" · ")}</span>}
+        {metadata}
+      </div>
+      <span className="player-card__arrow" aria-hidden="true"><img className="profile-icon" src="/discovery/arrow.svg" alt="" /><span className="player-card__arrow-label">Профиль</span></span>
+    </div>
+    {(player.bio || player.trainer || player.canRequestContact === true) && <div className="player-card__bio">
       {player.bio && <p>{player.bio}</p>}
       {player.trainer && <em>Тренер</em>}
       {player.canRequestContact === true && <small>Принимает запросы на общение</small>}
-    </div><span className="player-card__arrow" aria-hidden="true"><img className="profile-icon" src="/discovery/arrow.svg" alt="" /></span>
+    </div>}
   </>;
   return onSelect ? <button type="button" className="player-card" onClick={onSelect}>{content}</button> : <Link className="player-card" href={`/players/${player.publicPlayerId}`}>{content}</Link>;
 }

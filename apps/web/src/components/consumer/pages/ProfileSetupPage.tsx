@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { getMe, getMySocialProfile, listCities, patchMySocialProfile } from "../../../lib/api-client";
@@ -71,11 +72,16 @@ export function ProfileSetupPage() {
   }
 
   return <ConsumerShell active="profile" title="Настройка профиля" mode="local"><div className="fr3 utility-page" data-surface="profile-setup">
+    <header className="gb-page-local-header">
+      <Link className="back-link" href="/profile">← Мой профиль</Link>
+      <h1>Где будете играть?</h1>
+      <p>Выберите город для игрового профиля. После сохранения продолжим выбранное действие.</p>
+    </header>
     <div className="utility-page__body">
       {state === "loading" && <ProfileState title="Проверяем игровой профиль…" state="loading" />}
-      {state === "auth" && <section className="profile-section"><h1>Войдите, чтобы сохранить город</h1><p>После входа продолжим настройку и вернём вас к выбранному действию.</p>{notice && <p role="alert">{notice}</p>}<AuthEntry returnPath={returnTo} /></section>}
+      {state === "auth" && <section className="profile-section"><p>Войдите, чтобы сохранить город. После входа продолжим настройку и вернём вас к выбранному действию.</p>{notice && <p role="alert">{notice}</p>}<AuthEntry returnPath={returnTo} /></section>}
       {state === "error" && <ProfileState title="Не удалось проверить профиль" state="error" retry={() => setReload(n => n + 1)}>{notice || "Проверьте соединение и попробуйте снова."}</ProfileState>}
-      {state === "ready" && <section className="profile-section"><h1>Где будете играть?</h1><p>Выберите город для игрового профиля. После сохранения продолжим выбранное действие.</p><form className="gb-game-form" onSubmit={e => { e.preventDefault(); void save(); }}><label className="gb-game-field">Город<select id="setupCity" required disabled={busy} value={cityId} onChange={e => setCityId(e.target.value)}><option value="">Выберите город</option>{cities.map(city => <option key={city.id} value={city.id}>{city.nameRu}</option>)}</select></label>{notice && <p className="gb-game-notice" role="alert">{notice}</p>}<div className="gb-game-form-actions"><Button type="submit" disabled={busy || !cityId} loading={busy}>Сохранить и продолжить</Button></div></form></section>}
+      {state === "ready" && <section className="profile-section"><form className="gb-game-form" onSubmit={e => { e.preventDefault(); void save(); }}><label className="gb-game-field">Город<select id="setupCity" required disabled={busy} value={cityId} onChange={e => setCityId(e.target.value)}><option value="">Выберите город</option>{cities.map(city => <option key={city.id} value={city.id}>{city.nameRu}</option>)}</select></label>{notice && <p className="gb-game-notice" role="alert">{notice}</p>}<div className="gb-game-form-actions"><Button type="submit" disabled={busy || !cityId} loading={busy}>Сохранить и продолжить</Button></div></form></section>}
     </div>
   </div></ConsumerShell>;
 }

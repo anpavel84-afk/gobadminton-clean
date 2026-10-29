@@ -122,7 +122,9 @@ describe("WEB-01 Games completion", () => {
     expect(page).toContain('data-list="managed-by-me"');
     expect(page).toContain("gb-my-games-header");
     expect(page).toContain('ownStatus={participation.status}');
-    expect(page).toContain('gb-history-link');
+    expect(page).toContain('aria-pressed={view === "history"}');
+    expect(page).toContain('onClick={() => go(relation, "history")}');
+    expect(page).toContain(">История</button>");
     expect(page).toContain('view === "history"');
     expect(page).not.toContain('data-gated="D-HIST"');
     expect(page).toContain("isParticipatingHistoryRow");

@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { GameCover } from "./GameCover";
+import { GameShare } from "./GameShare";
 import { Avatar } from "../players/ProfileComposition";
 import type { ReactNode } from "react";
 import type { Game, ParticipationStatus } from "../../../lib/consumer-types";
@@ -15,20 +16,21 @@ export function GameStatusBadge({ tone, children }: { tone: string; children: Re
 export function GameHero({ game, preview = false, localPreview }: { game: Game; preview?: boolean; localPreview?: string }) {
   const when = discoveryGameWhen(game);
   const trainer = game.activityKind === "trainer_led";
+  const format = discoveryFormat(game.formatKey);
   return <section className="gb-game-hero" data-activity={game.activityKind}>
     <div className="gb-game-hero__image">
       {preview && localPreview?.startsWith("blob:") ? <span className="gb-venue-cover"><img src={localPreview} alt="Предпросмотр фото игры" /></span> : <GameCover game={game} />}
-      <span className="gb-game-ribbon" data-trainer={trainer}>{trainer ? "Тренировка с тренером" : "Обычная игра"}</span>
     </div>
     <div className="gb-game-hero__copy">
-      <span className="gb-game-eyebrow">{preview ? "Предпросмотр игры" : capacityStatusLabel(game)}</span>
+      <span className="gb-game-ribbon" data-trainer={trainer}>{trainer ? "С тренером" : "Обычная игра"}</span>
       <h1>{game.title}</h1>
+      <p className="gb-game-eyebrow">{preview ? "Предпросмотр игры" : <>{capacityStatusLabel(game)} · {game.venue.name}</>}</p>
       {trainer && game.trainingDescription && <p className="gb-game-intro">{game.trainingDescription}</p>}
       <dl className="gb-game-schedule">
-        <div><dt>Дата</dt><dd>{when.day}</dd></div>
-        <div><dt>Время</dt><dd>{when.time}</dd></div>
+        <div><dt>Когда</dt><dd>{when.day}</dd></div>
+        <div><dt>Время площадки</dt><dd>{when.time}</dd></div>
         <div><dt>Место</dt><dd>{game.venue.name}</dd></div>
-        <div><dt>Уровень · формат</dt><dd>{game.levelRule.allowedLevelIds.join(", ")}{discoveryFormat(game.formatKey) && <> · {discoveryFormat(game.formatKey)}</>}</dd></div>
+        <div><dt>Уровень и формат</dt><dd>{game.levelRule.allowedLevelIds.join(", ")}{format && <> · {format}</>}</dd></div>
       </dl>
       <small className="gb-game-timezone">Время площадки</small>
     </div>
@@ -72,24 +74,45 @@ export function PersonalGameCard({
   managementRelation?: string | null;
 }) {
   const when = discoveryGameWhen(game);
+  const format = discoveryFormat(game.formatKey);
   const tone = game.status === "cancelled" ? "cancelled" : owned ? game.status : ownStatus ?? "published";
   const label = game.status === "cancelled" ? "Игра отменена" : owned
     ? ({ draft: "Черновик", published: "Опубликовано", cancelled: "Игра отменена", completed: "Завершена" }[game.status])
     : ownStatus ? participationLabel(ownStatus) : capacityStatusLabel(game);
+  const levels = game.levelRule.allowedLevelIds.join(", ");
+  const levelLabel = owned ? levels : (levels ? `Уровни ${levels}` : "");
+  const meta = [levelLabel, format, capacityStatusLabel(game)].filter(Boolean).join(" · ");
+  const terms = settlementTerms(game.settlement);
   return <article className="gb-personal-card" data-tone={tone} data-management={managementRelation ?? undefined}>
-    <div className="gb-personal-card__status"><GameStatusBadge tone={tone}>{label}</GameStatusBadge>
-      {tone === "pending" && <small>Ждём решения организатора. Место пока не подтверждено.</small>}
-      {tone === "draft" && <small>Ещё не опубликована</small>}
-      {managementRelation ? <small data-field="management-relation">{managementRelation}</small> : null}
-    </div>
-    <div className="gb-personal-card__body">
+    <div className="gb-personal-card__media">
+      <GameCover game={game} />
       <span className="gb-game-type" data-trainer={game.activityKind === "trainer_led"}>{game.activityKind === "trainer_led" ? "С тренером" : "Обычная игра"}</span>
-      <GameCover game={game} /><h3>{game.title}</h3><strong>{when.day} · {when.time}</strong>
-      <p>{game.venue.name}</p>
-      <small>{game.levelRule.allowedLevelIds.join(", ")} · {capacityStatusLabel(game)}</small>
-      {/* STYLE_GUIDE_GAP #15: kit IdentityRow inside the canonical card body; no footer/divider. */}
-      <div className="gb-game-identity gb-personal-card__organizer"><Avatar className="gb-discovery-avatar" name={game.organizer.displayName} avatar={game.organizer.avatar} /><span><small>Организатор</small><strong>{game.organizer.displayName}</strong></span></div>
     </div>
-    <div className="gb-personal-card__action"><Button variant={tone === "draft" ? "dark" : "outline"} href={owned ? `/my-games/${game.id}` : `/games/${game.id}`}>{owned ? (game.status === "draft" ? "Продолжить" : "Управление") : "Открыть игру"} →</Button></div>
+    <div className="gb-personal-card__main">
+      <div className="gb-personal-card__body">
+        <div className="gb-personal-card__topline"><strong>{when.day} · {when.time}</strong><GameStatusBadge tone={tone}>{label}</GameStatusBadge></div>
+        {tone === "pending" && <small className="gb-personal-card__hint">Ждём решения организатора. Место пока не подтверждено.</small>}
+        {tone === "draft" && <small className="gb-personal-card__hint">Ещё не опубликована</small>}
+        {managementRelation ? <small className="gb-personal-card__hint" data-field="management-relation">{managementRelation}</small> : null}
+        <h3>{game.title}</h3>
+        <p className="gb-personal-card__venue">{game.venue.name}</p>
+        {game.venue.address ? <p className="gb-personal-card__address">{game.venue.address}</p> : null}
+        {meta ? <small className="gb-personal-card__meta">{meta}</small> : null}
+        {terms ? <small className="gb-personal-card__terms">{terms}</small> : null}
+      </div>
+      <div className="gb-personal-card__footer">
+        <div className="gb-game-identity gb-personal-card__organizer"><Avatar className="gb-discovery-avatar" name={game.organizer.displayName} avatar={game.organizer.avatar} /><span><small>Организатор</small><strong>{game.organizer.displayName}</strong></span></div>
+        <div className="gb-personal-card__action">
+          {owned ? (
+            <Button variant={tone === "draft" ? "dark" : "outline"} href={`/my-games/${game.id}`}>{game.status === "draft" ? "Продолжить" : "Управление"} →</Button>
+          ) : (
+            <>
+              <Button variant="outline" href={`/games/${game.id}`}>Подробнее →</Button>
+              <GameShare gameId={game.id} label="Поделиться" />
+            </>
+          )}
+        </div>
+      </div>
+    </div>
   </article>;
 }

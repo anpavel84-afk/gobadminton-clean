@@ -10,7 +10,7 @@ import { GameContactPreference } from "../players/GameContactPreference";
 import { ConsumerShell } from "../ConsumerShell";
 import { AuthEntry, ProfileState } from "../players/ProfileComposition";
 
-/** Frozen StyleGuide section 09: Grouped settings. Unsupported commands stay gated. */
+/** Grouped settings as separate panels; unsupported commands stay gated. */
 export function SettingsPage() {
   const router = useRouter();
   const [me, setMe] = useState<Me | null>(null);
@@ -82,20 +82,37 @@ export function SettingsPage() {
         <Link className="back-link" href="/profile">← Мой профиль</Link>
         <h1>Настройки</h1>
       </header>
-      <div className="utility-page__body">
+      <div className="utility-page__body utility-page__stack">
         {state === "loading" && <ProfileState title="Проверяем вход…" state="loading" />}
         {state === "error" && <ProfileState title="Не удалось загрузить аккаунт" state="error" retry={() => setReload(n => n + 1)}>Попробуйте ещё раз.</ProfileState>}
         {state === "auth" && <section className="profile-section"><p>Войдите, чтобы управлять своим аккаунтом.</p><AuthEntry returnPath="/profile/settings" /></section>}
         {state === "ready" && me && <GameContactPreference key={`${me.id}:${me.csrfToken}:${epoch.current}`} me={me} />}
-        <section className="settings-list" aria-label="Настройки аккаунта">
+        <section className="settings-panel" aria-label="Вход и безопасность">
           <h2>Вход и безопасность</h2>
-          <Link href="/profile/settings/login-methods">Способы входа <span aria-hidden="true">→</span></Link>
-          <Link href="/profile/settings/sessions">Активные сессии <span aria-hidden="true">→</span></Link>
+          <Link className="settings-panel__row" href="/profile/settings/login-methods">
+            <span><strong>Способы входа</strong><small>Подключённые способы авторизации</small></span>
+            <span className="settings-panel__open">Открыть <span aria-hidden="true">→</span></span>
+          </Link>
+          <Link className="settings-panel__row" href="/profile/settings/sessions">
+            <span><strong>Активные сессии</strong><small>Устройства и выход</small></span>
+            <span className="settings-panel__open">Открыть <span aria-hidden="true">→</span></span>
+          </Link>
+        </section>
+        <section className="settings-panel" aria-label="Помощь и документы">
           <h2>Помощь и документы</h2>
-          <Link href="/help">Помощь <span aria-hidden="true">→</span></Link>
-          <Link href="/legal">Документы сервиса <span aria-hidden="true">→</span></Link>
-          <button type="button" className="settings-list__logout" onClick={() => void onLogout()} disabled={!me || busy}>{busy ? "Выходим…" : "Выйти"}</button>
-          <button type="button" className="settings-list__danger" disabled data-gated="C-DEL">Удалить аккаунт <small>Пока недоступно</small></button>
+          <Link className="settings-panel__row" href="/help">
+            <span><strong>Помощь</strong></span>
+            <span className="settings-panel__open">Открыть <span aria-hidden="true">→</span></span>
+          </Link>
+          <Link className="settings-panel__row" href="/legal">
+            <span><strong>Документы сервиса</strong></span>
+            <span className="settings-panel__open">Открыть <span aria-hidden="true">→</span></span>
+          </Link>
+          <div className="settings-panel__rule" />
+          <div className="settings-panel__actions">
+            <button type="button" className="settings-list__logout" onClick={() => void onLogout()} disabled={!me || busy}>{busy ? "Выходим…" : "Выйти"}</button>
+            <button type="button" className="settings-list__danger" disabled data-gated="C-DEL">Удалить аккаунт <small>Пока недоступно</small></button>
+          </div>
         </section>
         {notice && <p className="profile-notice" role="alert">{notice}</p>}
       </div>

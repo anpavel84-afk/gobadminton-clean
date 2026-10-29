@@ -45,23 +45,28 @@ export function FriendsPage() {
     })();
     return () => { live = false; release?.(); window.removeEventListener("gb-private-expired", expire); window.removeEventListener("gb-session-changed", session); document.removeEventListener("visibilitychange", foreground); };
   }, [tab, cursor, reload]);
-  return <ConsumerShell active="players" title="Друзья" mode="local"><div className="fr3 player-profile-page">
+  return <ConsumerShell active="players" title="Друзья" mode="local"><div className="fr3 friends-page">
     <header className="gb-page-local-header">
       <Link className="back-link" href="/profile">← Мой профиль</Link>
       <h1>Друзья</h1>
+      <p>Дружба и личная переписка управляются отдельно.</p>
     </header>
-    <div className="profile-form-actions" role="group" aria-label="Списки друзей">{tabs.map(([value, label]) => <Button key={value} variant={tab === value ? "dark" : "outline"} aria-pressed={tab === value} onClick={() => { setPage(null); setState("loading"); setTab(value); setCursor(null); setReload(n => n + 1); }}>{label}</Button>)}</div>
-    {state === "loading" && <ProfileState title="Загружаем друзей…" state="loading" />}
-    {state === "guest" && <section className="profile-section"><p>Войдите, чтобы увидеть друзей и запросы.</p><AuthEntry returnPath="/friends" /></section>}
-    {state === "unavailable" && <ProfileState title="Друзья сейчас недоступны">Проверьте доступность игрового профиля и повторите попытку. Запрос на общение для дружбы не требуется.</ProfileState>}
-    {state === "error" && <ProfileState title="Не удалось загрузить друзей" state="error" retry={refresh}>Обновите список перед следующими действиями.</ProfileState>}
-    {state === "ready" && page && me && <>
-      {!page.items.length && <ProfileState title="Здесь пока никого нет">Запрос можно отправить из публичного профиля игрока.</ProfileState>}
-      {page.items.map((view, index) => <section className="profile-section" key={view.friendshipId ?? index}>
-        {view.peer ? <Link className="player-card" href={`/players/${encodeURIComponent(view.peer.publicPlayerId)}`}><Avatar avatar={view.peer.avatar} name={view.peer.displayName} tone="yellow" /><div className="player-card__main"><div className="player-card__title"><h3>{view.peer.displayName}</h3></div></div><span className="player-card__arrow" aria-hidden="true">→</span></Link> : <h2>Игрок недоступен</h2>}
-        <FriendActions me={me} view={view} peerId={view.peer?.publicPlayerId} refresh={refresh} />
-      </section>)}
-      <div className="profile-form-actions"><Button variant="outline" onClick={refresh}>Обновить список</Button>{page.nextCursor && <Button variant="outline" onClick={() => { setPage(null); setState("loading"); setCursor(page.nextCursor); }}>Следующая страница</Button>}</div>
-    </>}
+    <div className="friends-page__body">
+      <div className="friends-tabs" role="group" aria-label="Списки друзей">{tabs.map(([value, label]) => <button key={value} type="button" className="friends-tabs__tab" aria-pressed={tab === value} onClick={() => { setPage(null); setState("loading"); setTab(value); setCursor(null); setReload(n => n + 1); }}>{label}</button>)}</div>
+      {state === "loading" && <ProfileState title="Загружаем друзей…" state="loading" />}
+      {state === "guest" && <section className="profile-section"><p>Войдите, чтобы увидеть друзей и запросы.</p><AuthEntry returnPath="/friends" /></section>}
+      {state === "unavailable" && <ProfileState title="Друзья сейчас недоступны">Проверьте доступность игрового профиля и повторите попытку. Запрос на общение для дружбы не требуется.</ProfileState>}
+      {state === "error" && <ProfileState title="Не удалось загрузить друзей" state="error" retry={refresh}>Обновите список перед следующими действиями.</ProfileState>}
+      {state === "ready" && page && me && <>
+        {!page.items.length && <ProfileState title="Здесь пока никого нет">Запрос можно отправить из публичного профиля игрока.</ProfileState>}
+        <div className="friends-list" role="list">
+          {page.items.map((view, index) => <section className="friends-row" role="listitem" key={view.friendshipId ?? index}>
+            {view.peer ? <Link className="friends-row__identity" href={`/players/${encodeURIComponent(view.peer.publicPlayerId)}`}><Avatar avatar={view.peer.avatar} name={view.peer.displayName} tone="yellow" /><span className="friends-row__copy"><strong>{view.peer.displayName}</strong></span><span className="friends-row__open">Профиль <span aria-hidden="true">→</span></span></Link> : <h2>Игрок недоступен</h2>}
+            <FriendActions me={me} view={view} peerId={view.peer?.publicPlayerId} refresh={refresh} />
+          </section>)}
+        </div>
+        <div className="profile-form-actions"><Button variant="outline" onClick={refresh}>Обновить список</Button>{page.nextCursor && <Button variant="outline" onClick={() => { setPage(null); setState("loading"); setCursor(page.nextCursor); }}>Следующая страница</Button>}</div>
+      </>}
+    </div>
   </div></ConsumerShell>;
 }

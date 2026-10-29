@@ -147,11 +147,17 @@ export function PublicPlayerProfile({
           : contactActions}
         note={useDefaultContact ? <ContactNote result={contact} /> : null}
       />
-      {me && <ProfileFriendship key={`${me.id}:${me.csrfToken}:${publicPlayerId}`} me={me} peerId={publicPlayerId} />}
-      {nearbyGamesAction !== undefined
-        ? nearbyGamesAction
-        : <section className="profile-upcoming-section" data-surface="pp-02-upcoming" data-state="unavailable"><header className="profile-upcoming-header"><span><small>Публичные будущие события</small><h2>Ближайшие игры</h2></span></header><p>Ближайшие игры этого игрока пока недоступны.</p></section>}
-      <section className="profile-section profile-safety"><h2>Безопасность общения</h2>{authState === "guest" ? <><p>Войдите, чтобы заблокировать игрока или отправить жалобу.</p><AuthEntry returnPath={`/players/${publicPlayerId}`} /></> : authState === "error" ? <ProfileState title="Не удалось проверить вход" state="error" retry={() => setReload(n => n + 1)} /> : <div className="profile-form-actions"><Button variant="outline" disabled={!me || busy || uncertain} data-action={blocked ? "unblock" : "block"} onClick={() => void toggleBlock()}>Заблокировать</Button><Button variant="ghost" disabled={!me || busy || uncertain || reportUnknown} onClick={() => { setNotice(""); setReportOpen(true); }}>Пожаловаться</Button></div>}</section>
+      <div className="player-profile-body">
+        <div className="player-profile-body__main">
+          {me && <ProfileFriendship key={`${me.id}:${me.csrfToken}:${publicPlayerId}`} me={me} peerId={publicPlayerId} />}
+          {nearbyGamesAction !== undefined
+            ? nearbyGamesAction
+            : <section className="profile-upcoming-section" data-surface="pp-02-upcoming" data-state="unavailable"><header className="profile-upcoming-header"><span><small>Публичные будущие события</small><h2>Ближайшие игры</h2></span></header><p>Ближайшие игры этого игрока пока недоступны.</p></section>}
+        </div>
+        <aside className="player-profile-body__rail">
+          <section className="profile-section profile-safety"><h2>Безопасность общения</h2>{authState === "guest" ? <><p>Войдите, чтобы заблокировать игрока или отправить жалобу.</p><AuthEntry returnPath={`/players/${publicPlayerId}`} /></> : authState === "error" ? <ProfileState title="Не удалось проверить вход" state="error" retry={() => setReload(n => n + 1)} /> : <div className="profile-form-actions"><Button variant="outline" disabled={!me || busy || uncertain} data-action={blocked ? "unblock" : "block"} onClick={() => void toggleBlock()}>Заблокировать</Button><Button variant="ghost" disabled={!me || busy || uncertain || reportUnknown} onClick={() => { setNotice(""); setReportOpen(true); }}>Пожаловаться</Button></div>}</section>
+        </aside>
+      </div>
     </>}
     {reportOpen && <ProfileDialog title="Пожаловаться на игрока" onClose={() => { if (!busy) setReportOpen(false); }}><form onSubmit={e => { e.preventDefault(); void submitReport(); }}><label className="profile-field">Причина<select value={reasonCode} onChange={e => setReasonCode(e.target.value as AbuseReportReasonCode)}>{REPORT_REASON_OPTIONS.map(o => <option value={o.code} key={o.code}>{o.label}</option>)}</select></label><label className="profile-field">Подробности<textarea value={detail} onChange={e => setDetail(e.target.value)} maxLength={1000} rows={4} /></label>{notice && <p role="status">{notice}</p>}<Button type="submit" disabled={busy || uncertain || reportUnknown}>Отправить жалобу</Button></form></ProfileDialog>}
   </div>;

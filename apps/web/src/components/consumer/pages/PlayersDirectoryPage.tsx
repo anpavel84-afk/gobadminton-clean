@@ -100,21 +100,29 @@ export function PlayersDirectoryPage() {
   const catalog = mergeRadarCatalog(players, directory.view, liveRadar);
   const cityName = cities.find(c => c.id === cityId)?.nameRu;
   return <ConsumerShell active="players" title="Игроки" hideHeading><div className="fr3 players-page" data-surface="players-directory" data-state={state}>
-    <section className="players-hero"><div><span className="eyebrow">Игровое сообщество</span><h1>Игроки</h1><p>Находите партнёров по уровню и игровому настрою.</p></div></section>
-    <RadarSwitchControl />
-    <RadarStatusControls />
-    {activationId && <div className="unified-actions"><Button href="/players/radar" variant="dark">Показать на карте</Button></div>}
-    {directory.view.authenticationRequired && <AuthEntry returnPath="/players">Войти для участников Radar</AuthEntry>}
+    <section className="players-hero"><div><h1>Игроки</h1><p>Находите партнёров по уровню и игровому настрою.</p></div></section>
+    <section className="players-radar-band" aria-label="Игроки рядом">
+      <div><h2>Игроки рядом с вами</h2><p>Временный поиск по приблизительной близости</p></div>
+      <div className="players-radar-band__controls">
+        <RadarSwitchControl />
+        <RadarStatusControls />
+        {activationId && <Button href="/players/radar" variant="dark">Показать на карте</Button>}
+        {directory.view.authenticationRequired && <AuthEntry returnPath="/players">Войти для Radar</AuthEntry>}
+      </div>
+    </section>
     {directory.view.notice && <section className="radar-notice"><span role="status"><strong>{directory.view.notice}</strong></span></section>}
     <section className="player-controls" role="search" aria-label="Фильтры каталога">
       <label className="player-location"><span>Город</span><select aria-label="Город" value={cityId} onChange={e => { setCityId(e.target.value); setCursor(null); }}><option value="">Все города</option>{cities.map(c => <option value={c.id} key={c.id}>{c.nameRu}</option>)}</select></label>
       <label className="player-search"><img className="profile-icon" src="/canonical/search.svg" alt="" /><input aria-label="Найти игрока" type="search" placeholder="Найти игрока" value={name} onChange={e => { setName(e.target.value); setCursor(null); }} /></label>
+      <label className="player-search area-filter"><input aria-label="Район / метро" placeholder="Район / метро" value={areaKey} maxLength={64} onChange={e => { setAreaKey(e.target.value); setCursor(null); }} /></label>
+    </section>
+    <div className="players-filter-chips" role="group" aria-label="Быстрые фильтры">
+      <button className={`chip ${!lookingOnly && !trainerOnly ? "chip--active" : ""}`} aria-pressed={!lookingOnly && !trainerOnly} onClick={() => { setLookingOnly(false); setTrainerOnly(false); setCursor(null); }}>Все</button>
       <button className={`chip ${lookingOnly ? "chip--active" : ""}`} aria-pressed={lookingOnly} onClick={() => { setLookingOnly(!lookingOnly); setCursor(null); }}>Ищу игру</button>
       <button className={`chip ${trainerOnly ? "chip--active" : ""}`} aria-pressed={trainerOnly} onClick={() => { setTrainerOnly(!trainerOnly); setCursor(null); }}>Тренер</button>
-      <label className="player-search area-filter"><input aria-label="Район" placeholder="Район" value={areaKey} maxLength={64} onChange={e => { setAreaKey(e.target.value); setCursor(null); }} /></label>
-    </section>
+    </div>
     <section className="players-list"><div className="players-list__heading"><span><small>{filtered ? "Подходят по фильтрам" : "Игровое сообщество"}</small><h2>{cityName ? `Игроки · ${cityName}` : "Все игроки"}</h2></span><button onClick={reset}>Сбросить фильтры</button></div>
-      <div aria-label="Каталог игроков">
+      <div className="players-catalog-grid" aria-label="Каталог игроков">
         {catalog.radar.map(row => <UnifiedPlayerCard key={row.publicPlayerId} row={row} city={cities.find(c => c.id === row.player.cityId)?.nameRu} onSelect={() => void directory.controller?.select(row)} />)}
         {catalog.moreRadar && <Button variant="outline" disabled={directory.view.busy} onClick={() => void directory.controller?.more()}>Ещё участники Radar</Button>}
         {catalog.ordinary.map(player => <PlayerCard key={player.publicPlayerId} player={player} city={cities.find(c => c.id === player.cityId)?.nameRu} />)}
