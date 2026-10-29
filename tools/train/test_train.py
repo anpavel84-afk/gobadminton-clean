@@ -3256,6 +3256,344 @@ class CursorNamespaceUid1002Tests(unittest.TestCase):
             self.assertTrue(intent.get('no_model_launched'))
 
 
+class RootEnvBindingDefectTests(unittest.TestCase):
+    """OD-018 author20: UID1002 snapshot, fresh origin/dev refspec, unpublished preserve."""
+
+    NATIVE_DIR = Path(__file__).resolve().parents[2] / 'scripts' / 'chatops' / 'actions_train'
+
+    def test_uid1002_snapshot_newfile_and_trusted_gitignore(self):
+        """Direct 1002 path: real native.snapshot + User Git ignore; candidate cannot relax."""
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td) / 'checkout'
+            repo.mkdir()
+            env = {
+                'PATH': '/usr/bin:/bin', 'HOME': str(Path(td) / 'home'),
+                'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_CONFIG_SYSTEM': '/dev/null',
+                'GIT_OPTIONAL_LOCKS': '0', 'GIT_TERMINAL_PROMPT': '0',
+            }
+            (Path(td) / 'home').mkdir()
+            import subprocess
+
+            def g(*args):
+                return subprocess.run(
+                    ['/usr/bin/git', '-c', 'core.hooksPath=/dev/null',
+                     '-c', 'core.fsmonitor=false', *args],
+                    cwd=str(repo), env=env, text=True, capture_output=True,
+                    check=True, timeout=30)
+
+            g('init', '-b', 'dev')
+            g('config', 'user.name', 't')
+            g('config', 'user.email', 't@localhost')
+            (repo / '.gitignore').write_text('generated/\n')
+            (repo / 'tools' / 'train').mkdir(parents=True)
+            (repo / 'tools' / 'train' / 'live.py').write_text('V=1\n')
+            g('add', '.gitignore', 'tools/train/live.py')
+            g('commit', '-m', 'base')
+            work = Path(td) / 'export'
+            work.mkdir()
+            (work / 'tools' / 'train').mkdir(parents=True)
+            (work / 'tools' / 'train' / 'live.py').write_text('V=2\n')
+            (work / 'tools' / 'train' / 'test_train.py').write_text('T=1\n')
+            (work / 'generated').mkdir()
+            (work / 'generated' / 'out.bin').write_bytes(b'\x00\x01')
+            # Candidate tries to relax ignore — trusted checkout policy must win.
+            (work / '.gitignore').write_text('')
+            baseline = {
+                'tools/train/live.py': hashlib.sha256(b'V=1\n').hexdigest(),
+            }
+            self.assertTrue(self.NATIVE_DIR.is_dir())
+            with mock.patch.object(lean_live, 'NATIVE_TRAIN', self.NATIVE_DIR), \
+                    mock.patch.object(os, 'geteuid', return_value=1002), \
+                    mock.patch.object(lean_live, 'require_executor_uid', return_value=1002):
+                files = lean_live._native_snapshot_uid1002(
+                    work, repo, baseline, env=env)
+            self.assertIn('tools/train/live.py', files)
+            self.assertIn('tools/train/test_train.py', files)
+            self.assertNotIn('generated/out.bin', files)
+            src = inspect.getsource(lean_live.cursor_author_live)
+            self.assertIn('_native_snapshot_uid1002', src)
+            self.assertNotIn('native.snapshot(', src)
+            snap_src = inspect.getsource(lean_live._native_snapshot_uid1002)
+            self.assertNotIn('safe.directory', snap_src)
+            self.assertNotIn('safe.directory', src)
+            self.assertNotIn('safe.directory', lean_live._NATIVE_SNAPSHOT_CHILD)
+
+    def test_root_snapshot_uses_run_argv_python_I_not_inprocess(self):
+        """Root parent must drop via run_argv + fixed python -I; reject non-0/1002."""
+        with tempfile.TemporaryDirectory() as td:
+            work = Path(td) / 'work'
+            bridge = Path(td) / 'bridge'
+            work.mkdir()
+            bridge.mkdir()
+            baseline = {'a.py': 'a' * 64}
+            seen = {}
+
+            def fake_run(argv, **kwargs):
+                seen['argv'] = list(argv)
+                seen['kwargs'] = dict(kwargs)
+                seen['input'] = kwargs.get('input_text')
+                return mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps({
+                        'ok': True, 'geteuid': 1002,
+                        'files': {'a.py': 'b' * 64},
+                    }),
+                    stderr='',
+                )
+
+            with mock.patch.object(os, 'geteuid', return_value=0), \
+                    mock.patch.object(lean_live, 'require_executor_uid', return_value=0), \
+                    mock.patch.object(lean_live, 'run_argv', side_effect=fake_run), \
+                    mock.patch.object(lean_live, 'NATIVE_TRAIN', self.NATIVE_DIR):
+                out = lean_live._native_snapshot_uid1002(work, bridge, baseline)
+            self.assertEqual(out, {'a.py': 'b' * 64})
+            self.assertEqual(seen['argv'][:3], ['/usr/bin/python3', '-I', '-c'])
+            self.assertIn('native_cursor', seen['argv'][3])
+            self.assertIn('snapshot', seen['argv'][3])
+            self.assertNotIn('pickle', seen['argv'][3])
+            self.assertNotIn('safe.directory', seen['argv'][3])
+            payload = json.loads(seen['input'])
+            self.assertEqual(set(payload), {'work', 'bridge_work', 'baseline'})
+            self.assertTrue(seen['kwargs'].get('drop_uid', True))
+            with mock.patch.object(os, 'geteuid', return_value=978), \
+                    mock.patch.object(lean_live, 'require_executor_uid', return_value=978):
+                with self.assertRaises(lean_live.LiveError) as ctx:
+                    lean_live._native_snapshot_uid1002(work, bridge, baseline)
+            self.assertEqual(ctx.exception.code, 'unexpected_executor_uid')
+
+    def test_create_task_worktree_fresh_dev_with_main_only_fetch(self):
+        """main-only remote.fetch + stale origin/dev → explicit refspec selects fresh tip."""
+        import subprocess
+        with tempfile.TemporaryDirectory() as td:
+            upstream = Path(td) / 'upstream'
+            upstream.mkdir()
+            env_u = {
+                'PATH': '/usr/bin:/bin', 'HOME': str(Path(td) / 'uhome'),
+                'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_CONFIG_SYSTEM': '/dev/null',
+                'GIT_OPTIONAL_LOCKS': '0', 'GIT_TERMINAL_PROMPT': '0',
+            }
+            (Path(td) / 'uhome').mkdir()
+
+            def gu(*args):
+                return subprocess.run(
+                    ['/usr/bin/git', '-c', 'core.hooksPath=/dev/null',
+                     '-c', 'core.fsmonitor=false', *args],
+                    cwd=str(upstream), env=env_u, text=True, capture_output=True,
+                    check=True, timeout=30)
+
+            gu('init', '-b', 'main')
+            gu('config', 'user.name', 't')
+            gu('config', 'user.email', 't@localhost')
+            (upstream / 'README').write_text('main0\n')
+            gu('add', 'README')
+            gu('commit', '-m', 'main0')
+            gu('branch', 'dev')
+            gu('checkout', 'dev')
+            (upstream / 'README').write_text('dev-old\n')
+            gu('add', 'README')
+            gu('commit', '-m', 'dev-old')
+            stale = gu('rev-parse', 'HEAD').stdout.strip()
+            (upstream / 'README').write_text('dev-fresh\n')
+            gu('add', 'README')
+            gu('commit', '-m', 'dev-fresh')
+            fresh = gu('rev-parse', 'HEAD').stdout.strip()
+            self.assertNotEqual(stale, fresh)
+            gu('checkout', 'main')
+
+            repo = Path(td) / 'repo'
+            env_r = {
+                'PATH': '/usr/bin:/bin', 'HOME': str(Path(td) / 'rhome'),
+                'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_CONFIG_SYSTEM': '/dev/null',
+                'GIT_OPTIONAL_LOCKS': '0', 'GIT_TERMINAL_PROMPT': '0',
+            }
+            (Path(td) / 'rhome').mkdir()
+            subprocess.run(
+                ['/usr/bin/git', 'clone', '--single-branch', '--branch', 'main',
+                 str(upstream), str(repo)],
+                env=env_r, check=True, capture_output=True, timeout=30)
+            # Mirror production: fetch only main; plant stale origin/dev tip.
+            subprocess.run(
+                ['/usr/bin/git', '-C', str(repo), 'config', '--unset-all',
+                 'remote.origin.fetch'],
+                env=env_r, check=False, capture_output=True)
+            subprocess.run(
+                ['/usr/bin/git', '-C', str(repo), 'config', 'remote.origin.fetch',
+                 '+refs/heads/main:refs/remotes/origin/main'],
+                env=env_r, check=True, capture_output=True)
+            subprocess.run(
+                ['/usr/bin/git', '-C', str(repo), 'update-ref',
+                 'refs/remotes/origin/dev', stale],
+                env=env_r, check=True, capture_output=True)
+            # Prove plain `git fetch origin dev` leaves origin/dev stale (FETCH_HEAD only).
+            subprocess.run(
+                ['/usr/bin/git', '-C', str(repo), 'fetch', 'origin', 'dev'],
+                env=env_r, check=True, capture_output=True, timeout=30)
+            still = subprocess.run(
+                ['/usr/bin/git', '-C', str(repo), 'rev-parse', 'refs/remotes/origin/dev'],
+                env=env_r, text=True, capture_output=True, check=True).stdout.strip()
+            self.assertEqual(still, stale)
+
+            wt_root = Path(td) / 'wt'
+            real_run = lean_live.run_argv
+
+            def run_side(argv, **kwargs):
+                kwargs = dict(kwargs)
+                kwargs['drop_uid'] = False
+                if kwargs.get('env'):
+                    e = dict(kwargs['env'])
+                    e['HOME'] = str(Path(td) / 'rhome')
+                    kwargs['env'] = e
+                return real_run(argv, **kwargs)
+
+            # Prepared/frozen reuse still short-circuits without fetch rewrite.
+            prep = Path(td) / 'prepared'
+            subprocess.run(
+                ['/usr/bin/git', '-C', str(repo), 'worktree', 'add', '--detach',
+                 str(prep), fresh],
+                env=env_r, check=True, capture_output=True, timeout=30)
+            with mock.patch.object(lean_live, 'run_argv', side_effect=run_side), \
+                    mock.patch.object(lean_live, 'require_executor_uid', return_value=0), \
+                    mock.patch.object(lean_live.os, 'geteuid', return_value=1002):
+                prepared = lean_live.create_task_worktree(
+                    {'issue': 902, 'prepared_worktree': str(prep),
+                     'reuse_frozen': True, 'base': fresh, 'expected_head': fresh},
+                    repo=repo, root=wt_root)
+                self.assertEqual(prepared, str(prep))
+                # Stale origin/dev still planted; fresh create must refresh via refspec.
+                subprocess.run(
+                    ['/usr/bin/git', '-C', str(repo), 'update-ref',
+                     'refs/remotes/origin/dev', stale],
+                    env=env_r, check=True, capture_output=True)
+                wt = lean_live.create_task_worktree(
+                    {'issue': 903}, repo=repo, root=wt_root)
+            head = subprocess.run(
+                ['/usr/bin/git', '-C', str(wt), 'rev-parse', 'HEAD'],
+                env=env_r, text=True, capture_output=True, check=True).stdout.strip()
+            self.assertEqual(head, fresh)
+            origin_dev = subprocess.run(
+                ['/usr/bin/git', '-C', str(repo), 'rev-parse', 'refs/remotes/origin/dev'],
+                env=env_r, text=True, capture_output=True, check=True).stdout.strip()
+            self.assertEqual(origin_dev, fresh)
+            # Fetch config remains main-only (no permanent remote rewrite).
+            fetch_cfg = subprocess.run(
+                ['/usr/bin/git', '-C', str(repo), 'config', '--get-all',
+                 'remote.origin.fetch'],
+                env=env_r, text=True, capture_output=True, check=True).stdout.strip()
+            self.assertEqual(fetch_cfg, '+refs/heads/main:refs/remotes/origin/main')
+            body = inspect.getsource(lean_live.create_task_worktree)
+            self.assertIn('+refs/heads/dev:refs/remotes/origin/dev', body)
+
+    def test_post_model_snapshot_fail_preserves_unpublished_charged_blocked(self):
+        """Model completed + snapshot fail → UNVALIDATED sources, charged source_import, BLOCKED."""
+        with tempfile.TemporaryDirectory() as td:
+            work = Path(td) / 'work'
+            work.mkdir()
+            (work / 'tools' / 'train').mkdir(parents=True)
+            (work / 'tools' / 'train' / 'live.py').write_text('ORIG\n')
+            evidence = Path(td) / 'evidence'
+            evidence.mkdir()
+            task = {
+                'issue': 375,
+                'allowed_paths': ['tools/train/live.py', 'tools/train/test_train.py'],
+                'revision': 'a' * 64, 'runtime_base_sha': 'b' * 40,
+            }
+            native = mock.Mock(spec=[
+                'CURSOR_PIN', 'AUTHOR_TOOLS', 'export', 'author_config',
+                'parse_stream', 'source_name', '_source',
+            ])
+            native.CURSOR_PIN = Path('/opt/pin')
+            native.AUTHOR_TOOLS = 'Shell,Read'
+            native.author_config.return_value = {'permissions': {'allow': []}, 'sandbox': {}}
+            native.parse_stream.return_value = {'ok': True, 'model': 'auto'}
+            native.source_name.side_effect = lambda n: True
+            native._source.side_effect = lambda path, root: Path(path).read_bytes()
+            guard = mock.Mock(spec=['CURSOR_PIN'])
+            guard.CURSOR_PIN = Path('/opt/pin')
+
+            def export_side(bridge, work_path):
+                work_path = Path(work_path)
+                (work_path / 'tools' / 'train').mkdir(parents=True, exist_ok=True)
+                (work_path / 'tools' / 'train' / 'live.py').write_text('ORIG\n')
+                return {
+                    'tools/train/live.py': hashlib.sha256(b'ORIG\n').hexdigest(),
+                }
+
+            native.export.side_effect = export_side
+
+            def boom_snap(work_path, *a, **k):
+                # Paid model wrote allowed sources; local snapshot then fails.
+                w = Path(work_path) / 'tools' / 'train'
+                w.mkdir(parents=True, exist_ok=True)
+                (w / 'live.py').write_text('NEW_LIVE\n')
+                (w / 'test_train.py').write_text('NEW_TEST\n')
+                raise lean_live.LiveError(
+                    'native_snapshot_uid1002', 'trusted ignore check failed')
+
+            proc = mock.Mock()
+            proc.returncode = 0
+            proc.pid = 4242
+            proc.poll.return_value = 0
+            proc.communicate.return_value = (b'', b'')
+
+            with mock.patch.object(lean_live, 'require_executor_uid'), \
+                    mock.patch.object(lean_live, '_load_native', side_effect=lambda n: (
+                        native if n == 'native_cursor' else guard)), \
+                    mock.patch.object(lean_live, 'run_argv', return_value=mock.Mock(
+                        stdout='tools/train/live.py\0', returncode=0)), \
+                    mock.patch.object(lean_live, 'load_short_rules', return_value=(
+                        'RULES\n', 'a' * 64, Path('AGENTS.md'))), \
+                    mock.patch.object(lean_live, 'chown_private_tree'), \
+                    mock.patch.object(lean_live, 'chown_bounded_output_dir'), \
+                    mock.patch.object(lean_live, '_ensure_cursor_private_root'), \
+                    mock.patch.object(lean_live, '_cursor_namespace_argv_uid1002',
+                                      return_value=['/usr/bin/true']), \
+                    mock.patch.object(lean_live, '_native_snapshot_uid1002',
+                                      side_effect=boom_snap), \
+                    mock.patch.object(lean_live.subprocess, 'Popen', return_value=proc), \
+                    mock.patch.dict(os.environ, {'CURSOR_AUTH_TOKEN': 'tok-secret-xyz'}):
+                with self.assertRaises(providers.ProviderError) as ctx:
+                    lean_live.cursor_author_live(
+                        task=task, worktree=work, evidence_dir=evidence)
+            self.assertEqual(ctx.exception.code, 'source_import')
+            self.assertEqual(ctx.exception.charge, 'charged')
+            intent = json.loads((evidence / 'author-intent.json').read_text())
+            self.assertEqual(intent['phase'], 'completed')
+            self.assertTrue(intent.get('import_failed'))
+            self.assertEqual(intent.get('charge'), 'charged')
+            self.assertFalse(intent.get('no_model_launched'))
+            meta = json.loads((evidence / 'unpublished-source.json').read_text())
+            self.assertEqual(meta['validation'], 'UNVALIDATED')
+            self.assertIn('tools/train/live.py', meta['files'])
+            self.assertIn('tools/train/test_train.py', meta['files'])
+            self.assertEqual(
+                (evidence / 'unpublished-source' / 'tools' / 'train' / 'live.py'
+                 ).read_text(), 'NEW_LIVE\n')
+            unpublished = evidence / 'unpublished-source'
+            for bad in ('home', 'config', 'cache', '.ssh', 'auth.json'):
+                self.assertFalse((unpublished / bad).exists())
+            blob = (evidence / 'unpublished-source.json').read_text()
+            self.assertNotIn('tok-secret-xyz', blob)
+            adapters, _ = make_flow_adapters(td)
+
+            def boom_author(**kwargs):
+                raise providers.ProviderError(
+                    'source_import', 'trusted ignore check failed', charge='charged')
+
+            adapters.author = boom_author
+            comment, _ = owner_task_comment(issue=375)
+            adm = lean_run.admit_comment(
+                comment, {'number': 375, 'state': 'open'}, {'id': REPO_ID})
+            with self.assertRaises(providers.ProviderError) as ectx:
+                lean_run.execute_claim(adm, adapters, results_root=td)
+            self.assertEqual(ectx.exception.code, 'source_import')
+            claim = json.loads(next(Path(td).rglob('claim.json')).read_text())
+            self.assertEqual(claim['phase'], 'BLOCKED')
+            self.assertEqual(claim.get('error'), 'source_import')
+            self.assertNotEqual(claim['phase'], 'UNKNOWN')
+            self.assertNotEqual(claim['phase'], 'RUNNING')
+            self.assertFalse(claim.get('no_model_launched'))
+
+
 if __name__ == '__main__':
     os.chdir(Path(__file__).resolve().parent)
     unittest.main()
