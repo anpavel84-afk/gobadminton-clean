@@ -6,7 +6,14 @@
 .fr3 .eyebrow--purple { color: var(--gb-purple); background: var(--gb-purple-soft); }
 .fr3 .chip { min-height: 38px; padding: 0 15px; border: 1px solid var(--gb-line); border-radius: 999px; background: var(--gb-white); color: var(--gb-ink-soft); font: 500 13px var(--gb-font); cursor: pointer; }
 .fr3 .chip--active { border-color: var(--gb-ink); color: var(--gb-white); background: var(--gb-ink); }
-.fr3 .back-link { margin: 28px 0; border: 0; background: transparent; display: inline-flex; align-items: center; gap: 8px; font-family: var(--gb-font); cursor: pointer; }
+.fr3 .back-link { margin: 0; min-height: 44px; border: 0; background: transparent; display: inline-flex; align-items: center; gap: 8px; font-family: var(--gb-font); cursor: pointer; }
+.gb-page-local-header--profile { margin-bottom: 28px; }
+.fr3 .player-contact-row { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; margin: 0; min-height: 48px; }
+.fr3 .player-contact-row__status { display: inline-flex; align-items: center; min-height: 48px; margin: 0; line-height: 22px; font-weight: 600; }
+.fr3 .player-profile-actions { margin-top: 22px; display: flex; align-items: center; flex-wrap: wrap; gap: 16px; }
+.fr3 .player-profile-actions > .player-contact-row { margin: 0; }
+.fr3 .player-profile-copy h1,
+.fr3 .player-profile-copy h2 { overflow-wrap: anywhere; }
 .fr3 .guide-panel { padding: 24px; border: 1px solid var(--gb-line); border-radius: var(--gb-radius-md); background: var(--gb-white); }
 .fr3 .guide-panel > small { display: block; margin-bottom: 20px; color: var(--gb-ink-soft); text-transform: uppercase; letter-spacing: .08em; }
 .fr3 .status-badge { width: fit-content; min-height: 28px; padding: 5px 10px; border: 1px solid transparent; border-radius: 999px; display: inline-flex; align-items: center; font: 600 11px var(--gb-font); }
@@ -55,7 +62,6 @@
 .fr3 .player-profile-copy h1 { margin: 22px 0 8px; font: 700 clamp(48px, 6vw, 76px)/1 var(--gb-font); letter-spacing: -.05em; }
 .fr3 .player-profile-meta { color: var(--gb-lime); font-family: var(--gb-font); }
 .fr3 .player-profile-bio { max-width: 640px; color: rgba(255,255,255,.72); font-size: 16px; line-height: 1.6; }
-.fr3 .player-profile-actions { margin-top: 22px; display: flex; gap: 10px; }
 .fr3 .player-profile-actions .message-glyph::after { background: var(--gb-ink); }
 .fr3 .player-profile-grid { margin-top: 22px; display: grid; grid-template-columns: 1.2fr .8fr; gap: 16px; }
 .fr3 .preference-card { grid-row: span 2; }
@@ -217,7 +223,8 @@
 .fr3 .profile-field { display:grid; gap:8px; margin:18px 0; font-weight:600; }
 .fr3 .profile-field :is(input,select,textarea) { width:100%; min-width:0; min-height:48px; padding:12px; border:1px solid var(--gb-line); border-radius:12px; background:var(--gb-white); color:var(--gb-ink); font:400 14px var(--gb-font); }
 .fr3 .profile-field textarea { resize:vertical; }
-.fr3.trainer-editor { max-width:820px; margin:auto; }
+.fr3.trainer-editor { width:100%; max-width:none; margin:0; }
+.fr3.trainer-editor > :not(.gb-page-local-header) { max-width:820px; }
 .fr3 .profile-dialog { color:var(--gb-ink); background:var(--gb-white); width:min(560px,calc(100vw - 32px)); max-height:calc(100dvh - 48px); padding:28px; border:1px solid var(--gb-line); border-radius:28px; overflow:auto; box-shadow:var(--gb-shadow-elevated); }
 .fr3 .profile-dialog::backdrop { background:rgba(19,34,26,.55); }
 .fr3 .profile-dialog > header { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
@@ -288,7 +295,9 @@
   .fr3 .player-card__title h3 { font-size:19px; }
   .fr3 .player-card__main > p { font-size:12px; }
   .fr3 .player-card__arrow { width:34px; height:34px; }
-  .fr3 .back-link { margin:0 0 22px; }
+  .gb-page-local-header--profile { margin-bottom: 24px; }
+  .fr3 .player-contact-row { min-height: 0; align-items: center; }
+  .fr3 .player-contact-row__status { min-height: 32px; white-space: normal; }
   .fr3 .player-profile-hero, .fr3 .own-profile-hero { min-height:0; display:block; border-radius:18px; }
   .fr3 .player-profile-visual { min-height:230px; }
   .fr3 .player-profile-visual > .avatar { width:112px; height:112px; font-size:26px; }
@@ -296,8 +305,10 @@
   .fr3 .player-profile-status { align-items:flex-start; flex-wrap:wrap; }
   .fr3 .player-profile-copy h1, .fr3 .own-profile-intro h1 { font-size:45px; }
   .fr3 .player-profile-bio, .fr3 .own-profile-intro > p { font-size:14px; }
-  .fr3 .player-profile-actions { flex-direction:column; }
-  .fr3 .player-profile-actions .gb-c23-btn { width:100%; }
+  .fr3 .player-profile-actions { flex-direction:column; align-items:stretch; }
+  .fr3 .player-profile-actions .gb-c23-btn,
+  .fr3 .player-contact-row .gb-c23-btn { width:100%; }
+  .fr3 .player-contact-row { flex-direction:column; align-items:stretch; }
   .fr3 .player-profile-grid { grid-template-columns:1fr; }
   .fr3 .preference-card > div { grid-template-columns:1fr; }
   .fr3 .profile-upcoming-section { padding:18px; }

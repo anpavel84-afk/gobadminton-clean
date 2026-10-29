@@ -78,23 +78,27 @@ export function SettingsPage() {
 
   return <ConsumerShell active="profile" title="Настройки" mode="local">
     <div className="fr3 utility-page">
-      <Link className="back-link" href="/profile">← Мой профиль</Link>
-      <h1>Настройки</h1>
-      {state === "loading" && <ProfileState title="Проверяем вход…" state="loading" />}
-      {state === "error" && <ProfileState title="Не удалось загрузить аккаунт" state="error" retry={() => setReload(n => n + 1)}>Попробуйте ещё раз.</ProfileState>}
-      {state === "auth" && <section className="profile-section"><p>Войдите, чтобы управлять своим аккаунтом.</p><AuthEntry returnPath="/profile/settings" /></section>}
-      {state === "ready" && me && <GameContactPreference key={`${me.id}:${me.csrfToken}:${epoch.current}`} me={me} />}
-      <section className="settings-list" aria-label="Настройки аккаунта">
-        <h2>Вход и безопасность</h2>
-        <Link href="/profile/settings/login-methods">Способы входа <span aria-hidden="true">→</span></Link>
-        <Link href="/profile/settings/sessions">Активные сессии <span aria-hidden="true">→</span></Link>
-        <h2>Помощь и документы</h2>
-        <Link href="/help">Помощь <span aria-hidden="true">→</span></Link>
-        <Link href="/legal">Документы сервиса <span aria-hidden="true">→</span></Link>
-        <button type="button" className="settings-list__logout" onClick={() => void onLogout()} disabled={!me || busy}>{busy ? "Выходим…" : "Выйти"}</button>
-        <button type="button" className="settings-list__danger" disabled data-gated="C-DEL">Удалить аккаунт <small>Пока недоступно</small></button>
-      </section>
-      {notice && <p className="profile-notice" role="alert">{notice}</p>}
+      <header className="gb-page-local-header">
+        <Link className="back-link" href="/profile">← Мой профиль</Link>
+        <h1>Настройки</h1>
+      </header>
+      <div className="utility-page__body">
+        {state === "loading" && <ProfileState title="Проверяем вход…" state="loading" />}
+        {state === "error" && <ProfileState title="Не удалось загрузить аккаунт" state="error" retry={() => setReload(n => n + 1)}>Попробуйте ещё раз.</ProfileState>}
+        {state === "auth" && <section className="profile-section"><p>Войдите, чтобы управлять своим аккаунтом.</p><AuthEntry returnPath="/profile/settings" /></section>}
+        {state === "ready" && me && <GameContactPreference key={`${me.id}:${me.csrfToken}:${epoch.current}`} me={me} />}
+        <section className="settings-list" aria-label="Настройки аккаунта">
+          <h2>Вход и безопасность</h2>
+          <Link href="/profile/settings/login-methods">Способы входа <span aria-hidden="true">→</span></Link>
+          <Link href="/profile/settings/sessions">Активные сессии <span aria-hidden="true">→</span></Link>
+          <h2>Помощь и документы</h2>
+          <Link href="/help">Помощь <span aria-hidden="true">→</span></Link>
+          <Link href="/legal">Документы сервиса <span aria-hidden="true">→</span></Link>
+          <button type="button" className="settings-list__logout" onClick={() => void onLogout()} disabled={!me || busy}>{busy ? "Выходим…" : "Выйти"}</button>
+          <button type="button" className="settings-list__danger" disabled data-gated="C-DEL">Удалить аккаунт <small>Пока недоступно</small></button>
+        </section>
+        {notice && <p className="profile-notice" role="alert">{notice}</p>}
+      </div>
     </div>
   </ConsumerShell>;
 }

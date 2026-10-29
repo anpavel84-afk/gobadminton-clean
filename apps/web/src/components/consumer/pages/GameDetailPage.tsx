@@ -101,16 +101,31 @@ export function GameDetailPage({ gameId }: { gameId: string }) {
 
   return <ConsumerShell active="games" title="Игра" mode="page" hideHeading>
     <div className="gb-games-detail" data-surface="game-detail" data-sticky-cta="dr-08">
-      <div className="gb-game-detail-actions"><Button variant="ghost" className="gb-game-back" href="/games">← Все игры</Button>{state === "ready" && game && <GameShare gameId={game.id} />}</div>
-      {state === "ready" && game && game.id === gameId && isRecommendableGame(game) && (
-        <GameRecommendationButton gameId={game.id} me={me} eligible onLogin={() => setAuthOpen(true)} />
-      )}
+      <header className="gb-page-local-header gb-game-detail-header">
+        <div className="gb-page-local-header__row">
+          <Button variant="ghost" className="gb-game-back" href="/games">← Все игры</Button>
+        </div>
+      </header>
       {state === "loading" && <div className="gb-game-feedback" data-state="loading" role="status"><h1>Загружаем игру</h1><p>Скоро покажем место, время и условия.</p></div>}
       {state === "error" && <div className="gb-game-feedback" data-state="error"><h1>Игра недоступна</h1><p>Не удалось загрузить игру. Проверьте соединение и попробуйте ещё раз.</p><Button onClick={() => void reload()}>Обновить</Button></div>}
       {state === "ready" && game && game.id === gameId && <div data-state="ready">
         <GameHero game={game} />
+        <div className="gb-game-detail-contextual">
+          {isRecommendableGame(game) && (
+            <GameRecommendationButton gameId={game.id} me={me} eligible onLogin={() => setAuthOpen(true)} />
+          )}
+          <GameShare gameId={game.id} />
+        </div>
         <div className="gb-game-detail-grid">
-          <div><GameTerms game={game} />{me && <GameVenueContacts venue={game.venue} />}{chatAvailable && <Button variant="outline" href={`/messages?game=${encodeURIComponent(gameId)}`}>Чат игры →</Button>}</div>
+          <div>
+            <GameTerms game={game} />
+            {me && <GameVenueContacts venue={game.venue} />}
+            {chatAvailable && (
+              <section className="gb-game-chat-section" aria-label="Чат игры">
+                <Button variant="outline" href={`/messages?game=${encodeURIComponent(gameId)}`}>Чат игры →</Button>
+              </section>
+            )}
+          </div>
           <aside className="gb-game-booking">
             <div className="gb-game-booking__terms"><strong>{capacityStatusLabel(game)}</strong><p>{settlementTerms(game.settlement)}</p><small>{game.venue.name}</small><p>{game.venue.address}</p></div>
             <ParticipationActions game={game} own={own} busy={busy} notice={notice} readable={readable} onRequest={() => void onRequest()} onReload={() => void reload()} />

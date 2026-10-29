@@ -118,71 +118,75 @@ export function ActiveSessionsPage() {
   return (
     <ConsumerShell active="profile" title="Активные сессии" mode="local">
       <div className="fr3 utility-page">
-        <Link className="back-link" href="/profile/settings">
-          ← Настройки
-        </Link>
-        <h1>Активные сессии</h1>
-        <p>Здесь только ваши сессии входа. Отключение способа входа не завершает сессии.</p>
-        {state === "loading" && <ProfileState title="Загружаем сессии…" state="loading" />}
-        {state === "error" && (
-          <ProfileState title="Не удалось загрузить сессии" state="error" retry={() => setReload((n) => n + 1)}>
-            Попробуйте ещё раз.
-          </ProfileState>
-        )}
-        {state === "auth" && (
-          <section className="profile-section">
-            <p>Войдите, чтобы управлять сессиями.</p>
-            <AuthEntry returnPath="/profile/settings/sessions" />
-          </section>
-        )}
-        {state === "ready" && (
-          <>
-            <section className="settings-list account-security-list" aria-label="Активные сессии">
-              {items.map((item) => (
-                <div className="data-row" key={item.id}>
-                  <span>
-                    <small>{item.current ? "Текущая сессия" : "Другая сессия"}</small>
-                    <strong>
-                      {item.current ? "Этот браузер" : "Активна на другом устройстве"}
-                    </strong>
-                  </span>
-                  <em>{item.current ? "Сейчас" : formatWhen(item.lastSeenAt)}</em>
-                  {item.current ? (
-                    <Button
-                      variant="outline"
-                      disabled={Boolean(busy)}
-                      onClick={() => void onLogoutCurrent()}
-                    >
-                      {busy === "logout" ? "Выходим…" : "Выйти"}
-                    </Button>
-                  ) : (
-                    <Button
-                      variant="outline"
-                      disabled={Boolean(busy)}
-                      onClick={() => void onRevoke(item.id)}
-                    >
-                      {busy === item.id ? "Завершаем…" : "Завершить"}
-                    </Button>
-                  )}
-                </div>
-              ))}
+        <header className="gb-page-local-header">
+          <Link className="back-link" href="/profile/settings">
+            ← Настройки
+          </Link>
+          <h1>Активные сессии</h1>
+        </header>
+        <div className="utility-page__body">
+          <p>Здесь только ваши сессии входа. Отключение способа входа не завершает сессии.</p>
+          {state === "loading" && <ProfileState title="Загружаем сессии…" state="loading" />}
+          {state === "error" && (
+            <ProfileState title="Не удалось загрузить сессии" state="error" retry={() => setReload((n) => n + 1)}>
+              Попробуйте ещё раз.
+            </ProfileState>
+          )}
+          {state === "auth" && (
+            <section className="profile-section">
+              <p>Войдите, чтобы управлять сессиями.</p>
+              <AuthEntry returnPath="/profile/settings/sessions" />
             </section>
-            <div className="account-security-actions">
-              <Button
-                variant="dark"
-                disabled={Boolean(busy) || others === 0}
-                onClick={() => void onRevokeOthers()}
-              >
-                {busy === "others" ? "Завершаем…" : "Завершить другие сессии"}
-              </Button>
-            </div>
-          </>
-        )}
-        {notice && (
-          <p className="profile-notice" role="alert">
-            {notice}
-          </p>
-        )}
+          )}
+          {state === "ready" && (
+            <>
+              <section className="settings-list account-security-list" aria-label="Активные сессии">
+                {items.map((item) => (
+                  <div className="data-row" key={item.id}>
+                    <span>
+                      <small>{item.current ? "Текущая сессия" : "Другая сессия"}</small>
+                      <strong>
+                        {item.current ? "Этот браузер" : "Активна на другом устройстве"}
+                      </strong>
+                    </span>
+                    <em>{item.current ? "Сейчас" : formatWhen(item.lastSeenAt)}</em>
+                    {item.current ? (
+                      <Button
+                        variant="outline"
+                        disabled={Boolean(busy)}
+                        onClick={() => void onLogoutCurrent()}
+                      >
+                        {busy === "logout" ? "Выходим…" : "Выйти"}
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="outline"
+                        disabled={Boolean(busy)}
+                        onClick={() => void onRevoke(item.id)}
+                      >
+                        {busy === item.id ? "Завершаем…" : "Завершить"}
+                      </Button>
+                    )}
+                  </div>
+                ))}
+              </section>
+              <div className="account-security-actions">
+                <Button
+                  variant="dark"
+                  disabled={Boolean(busy) || others === 0}
+                  onClick={() => void onRevokeOthers()}
+                >
+                  {busy === "others" ? "Завершаем…" : "Завершить другие сессии"}
+                </Button>
+              </div>
+            </>
+          )}
+          {notice && (
+            <p className="profile-notice" role="alert">
+              {notice}
+            </p>
+          )}
+        </div>
       </div>
     </ConsumerShell>
   );

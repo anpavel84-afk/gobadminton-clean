@@ -1,5 +1,5 @@
-import type { ButtonHTMLAttributes, ComponentProps, ComponentType, ReactElement, ReactNode } from "react";
-import { createElement } from "react";
+import type { ComponentProps, ComponentType, ReactElement, ReactNode } from "react";
+import { isValidElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { DynamicOptions, Loader } from "next/dynamic";
 import { afterEach, expect, it, vi } from "vitest";
@@ -12,13 +12,9 @@ type DynamicCapture = {
   options: DynamicOptions<MapProps>;
 };
 
-const buttonProps = vi.hoisted(() => ({ current: null as ButtonHTMLAttributes<HTMLButtonElement> | null }));
-
 afterEach(() => {
-  buttonProps.current = null;
   vi.doUnmock("next/dynamic");
   vi.doUnmock("../src/components/consumer/games/GamesVenueMap");
-  vi.doUnmock("../src/components/consumer/Button");
   vi.doUnmock("../src/components/consumer/NavIcon");
   vi.resetModules();
 });
@@ -39,6 +35,22 @@ async function importMapView() {
   return { ...mod, captured: registration.current, mapExport };
 }
 
+function findElement(
+  node: ReactNode,
+  predicate: (el: ReactElement) => boolean,
+): ReactElement | null {
+  if (!isValidElement(node)) return null;
+  if (predicate(node)) return node;
+  const children = (node.props as { children?: ReactNode }).children;
+  if (children == null) return null;
+  const list = Array.isArray(children) ? children : [children];
+  for (const child of list) {
+    const found = findElement(child, predicate);
+    if (found) return found;
+  }
+  return null;
+}
+
 it("keeps the Next dynamic literal import with ssr:false and warms without instantiating the map", async () => {
   const { captured, warmGamesVenueMapModule, mapExport } = await importMapView();
   expect(captured.options.ssr).toBe(false);
@@ -56,21 +68,35 @@ it("keeps the Next dynamic literal import with ssr:false and warms without insta
 it("keeps desktop map entry class for effect-owned root intent delegation", async () => {
   vi.resetModules();
   vi.doMock("../src/components/consumer/NavIcon", () => ({ FoldedMapGlyph: () => null }));
-  vi.doMock("../src/components/consumer/Button", () => ({
-    Button: (props: ButtonHTMLAttributes<HTMLButtonElement> & { children?: ReactNode }) => {
-      buttonProps.current = props;
-      return createElement("button", { type: "button", className: props.className }, props.children);
-    },
-  }));
   const { DiscoverySidebar } = await import("../src/components/consumer/discovery/DiscoveryComposition");
   const onMap = vi.fn();
-  const html = renderToStaticMarkup(
-    <DiscoverySidebar city="Москва" onMap={onMap} />,
+  const tree = DiscoverySidebar({ city: "Москва", onMap });
+  const preview = findElement(
+    tree,
+    (el) => el.type === "button" && (el.props as { className?: string }).className === "gb-discovery-map-preview",
   );
-  expect(html).toContain("gb-map-desktop-entry");
-  expect(buttonProps.current?.onClick).toBe(onMap);
-  expect(buttonProps.current?.onFocus).toBeUndefined();
-  expect(buttonProps.current?.onPointerEnter).toBeUndefined();
+  expect(preview).toBeTruthy();
+  const previewProps = preview!.props as {
+    type?: string;
+    onClick?: unknown;
+    onFocus?: unknown;
+    onPointerEnter?: unknown;
+    children?: ReactNode;
+  };
+  expect(previewProps.type).toBe("button");
+  expect(previewProps.onClick).toBe(onMap);
+  // Focus/pointer preload stays on the discovery root effect, not the preview props.
+  expect(previewProps.onFocus).toBeUndefined();
+  expect(previewProps.onPointerEnter).toBeUndefined();
+  expect(findElement(previewProps.children, (el) => el.type === "button" || el.type === "a")).toBeNull();
+
+  const html = renderToStaticMarkup(tree);
+  expect(html).toContain('class="gb-discovery-map-preview"');
+  expect(html).toContain('aria-label="Все игры на карте"');
+  expect(html.match(/<button\b/g)?.length).toBe(1);
+  // Sidebar preview is the native control; floating feed CTA owns gb-map-desktop-entry.
+  expect(html).not.toContain("gb-map-desktop-entry");
+  expect(html).not.toMatch(/gb-discovery-map-preview[\s\S]*<button\b/);
 });
 
 it("does not claim Moscow map UI for an unsupported city branch", async () => {

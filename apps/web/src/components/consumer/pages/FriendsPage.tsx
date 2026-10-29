@@ -46,7 +46,10 @@ export function FriendsPage() {
     return () => { live = false; release?.(); window.removeEventListener("gb-private-expired", expire); window.removeEventListener("gb-session-changed", session); document.removeEventListener("visibilitychange", foreground); };
   }, [tab, cursor, reload]);
   return <ConsumerShell active="players" title="Друзья" mode="local"><div className="fr3 player-profile-page">
-    <Link className="back-link" href="/profile">← Мой профиль</Link><h1>Друзья</h1>
+    <header className="gb-page-local-header">
+      <Link className="back-link" href="/profile">← Мой профиль</Link>
+      <h1>Друзья</h1>
+    </header>
     <div className="profile-form-actions" role="group" aria-label="Списки друзей">{tabs.map(([value, label]) => <Button key={value} variant={tab === value ? "dark" : "outline"} aria-pressed={tab === value} onClick={() => { setPage(null); setState("loading"); setTab(value); setCursor(null); setReload(n => n + 1); }}>{label}</Button>)}</div>
     {state === "loading" && <ProfileState title="Загружаем друзей…" state="loading" />}
     {state === "guest" && <section className="profile-section"><p>Войдите, чтобы увидеть друзей и запросы.</p><AuthEntry returnPath="/friends" /></section>}

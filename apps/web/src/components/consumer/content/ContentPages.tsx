@@ -3,7 +3,10 @@ import { ConsumerShell } from "../ConsumerShell";
 export const documents = { terms: "Пользовательское соглашение", privacy: "Политика конфиденциальности", rules: "Правила сервиса" } as const;
 function ReadingFooter() { return <nav className="mobile-reading-footer" aria-label="Навигация по материалам"><Link href="/games">← К играм</Link><Link href="/legal">Документы</Link><Link href="/help">Помощь</Link></nav>; }
 export function EditorialPage({ help = false }: { help?: boolean }) {
-  return <ConsumerShell active="none" title={help ? "Помощь" : "О GoBadminton"} mode="local" reading><div className="fr6-content content-page"><Link className="back-link" href="/games">← На главную</Link>
+  return <ConsumerShell active="none" title={help ? "Помощь" : "О GoBadminton"} mode="local" reading><div className="fr6-content content-page">
+    <header className="gb-page-local-header">
+      <Link className="back-link" href="/games">← На главную</Link>
+    </header>
     <section className="about-hero"><div><span className="eyebrow">{help ? "Помощь" : "О сервисе"}</span><h1>{help ? "Всё начинается с игры" : "О GoBadminton"}</h1><p>{help ? "Как найти игру, запросить участие и общаться с игроками." : "GoBadminton помогает находить игры, партнёров и тренерские занятия. В центре — встреча на площадке."}</p></div><img src="/discovery/badminton-gear.jpg" alt="Ракетки и воланы для бадминтона" /></section>
     <section className="about-content">
       <article><small>01 · {help ? "Участие" : "Идея"}</small><h2>{help ? "Заявка и подтверждение" : "Сначала игра"}</h2><p>{help ? "Отправьте заявку на странице игры. Дождитесь подтверждения: отправленная заявка сама по себе не означает, что место занято за вами. Актуальный статус смотрите в «Моих играх»." : "Выбирайте подходящую игру по времени, месту и условиям. Узнайте подробности и отправьте заявку организатору."}</p><Link href={help ? "/my-games" : "/games"}>{help ? "Мои игры →" : "Найти игру →"}</Link></article>
@@ -15,7 +18,10 @@ export function EditorialPage({ help = false }: { help?: boolean }) {
   </div></ConsumerShell>;
 }
 export function LegalPage({ document }: { document?: keyof typeof documents }) {
-  return <ConsumerShell active="none" title={document ? documents[document] : "Документы сервиса"} mode="local" reading><div className="fr6-content content-page content-page--legal"><Link className="back-link" href={document ? "/legal" : "/help"}>← {document ? "К документам" : "К помощи"}</Link>
+  return <ConsumerShell active="none" title={document ? documents[document] : "Документы сервиса"} mode="local" reading><div className="fr6-content content-page content-page--legal">
+    <header className="gb-page-local-header">
+      <Link className="back-link" href={document ? "/legal" : "/help"}>← {document ? "К документам" : "К помощи"}</Link>
+    </header>
     <article className="legal-document" id="document-top"><header><span className="eyebrow">Документ сервиса</span><h1>{document ? documents[document] : "Документы сервиса"}</h1><div><span>Не опубликовано</span></div><p>Тексты документов готовятся к публикации. Утверждённая редакция и дата её действия пока недоступны.</p></header>
       <nav className="document-toc" aria-label="Содержание"><strong>Содержание</strong><a href="#availability">1. Доступность документов</a><a href="#contacts">2. Информация об операторе</a></nav>
       <section id="availability"><small>01</small><h2>Доступность документов</h2><div className="document-note" role="status"><strong>{document ? "Документ пока недоступен" : "Документы пока недоступны"}</strong><p>На этой странице нет действующих юридических условий. Текст появится после публикации.</p></div></section>

@@ -6,6 +6,8 @@ Accepted Owner decision: «Утверждаю “Просторный40”».
 Authority: https://github.com/anpavel84-afk/gobadminton-clean/issues/365#issuecomment-6481017808  
 Provenance (immutable proposal copy): https://files.anpavel.ru/projects/gobadminton/design/style-guide/desktop-overlays/20261028-astra-v1/index.html · https://files.anpavel.ru/projects/gobadminton/design/style-guide/desktop-overlays/20261028-astra-v1/DESKTOP_OVERLAY_STYLE_GUIDE_PROPOSED.md
 
+Related (does not override this document): sitewide page composition for ordinary consumer surfaces is recorded in [SITEWIDE_UI_STYLE_GUIDE.md](./SITEWIDE_UI_STYLE_GUIDE.md) (Owner #394 · approved v3 · 29.10.2026). Overlay inset/X/scroll/focus contracts below remain authoritative for desktop overlays.
+
 Primary accepted system: **«Просторный 40»** — единая левая линия содержимого 40 px, отдельная читаемая шапка, X в 24 px от верхнего и правого края shell. Alternate **normal 32 px** was not chosen. Documented functional **small / popover** exceptions stay. Frozen Style Guide source and Figma.site are unchanged by this document.
 
 ## Основание и пределы

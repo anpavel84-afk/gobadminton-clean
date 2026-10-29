@@ -173,7 +173,7 @@ export function GamesDiscoveryPage() {
     const cancelIdle = scheduleMapPreloadIdle(kick);
     const root = document.querySelector('[data-surface="games-discovery"]');
     const interested = (target: EventTarget | null) =>
-      target instanceof Element && !!target.closest(".gb-map-desktop-entry, .gb-games-view-action");
+      target instanceof Element && !!target.closest(".gb-map-desktop-entry, .gb-games-view-action, .gb-discovery-map-preview");
     const onIntent = (event: Event) => { if (interested(event.target)) kick(); };
     root?.addEventListener("pointerenter", onIntent, true);
     root?.addEventListener("focusin", onIntent, true);
@@ -293,11 +293,11 @@ export function GamesDiscoveryPage() {
           {showCards && <div className="gb-discovery-cards" data-state={state}>{items.map(game => <DiscoveryGameCard key={game.id} game={game} />)}{state === "stale" && !items.length && <p className="gb-discovery-helper">В сохранённом списке игр нет.</p>}</div>}
           {pageError && <p role="alert" className="gb-discovery-notice">Не удалось загрузить остальные игры. Попробуйте ещё раз.</p>}
           {(showCards || state === "empty") && feed.nextCursor && state !== "stale" && <Button className="gb-discovery-more" variant="outline" loading={paging} onClick={() => void loadMore()}>{paging ? "Загружаем…" : "Показать ещё"}</Button>}
+          <GamesViewAction view={view} onClick={() => changeView(view === "list" ? "map" : "list")} />
         </div>
         <DiscoverySidebar city={location.nameRu} onMap={() => changeView("map")} />
       </section>
       {view === "map" && <div className="gb-map-radar"><RadarStatusAffordance mapControls /></div>}
-      <GamesViewAction view={view} onClick={() => changeView(view === "list" ? "map" : "list")} />
     </div>
     {authOpen && <AuthChooser returnPath="/games/create" intent={{ kind: "create" }} onClose={() => setAuthOpen(false)} />}
   </ConsumerShell>;

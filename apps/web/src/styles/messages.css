@@ -1,5 +1,6 @@
 /* FR-04: frozen MessagesPage/InboxRow and social kit CSS, scoped to the canonical surface. */
-.fr4.messages-page { width: min(1380px, calc(100% - 64px)); height: calc(100vh - 116px); min-height: 680px; margin: 32px auto; padding: 0; overflow: hidden; border: 1px solid var(--gb-line); border-radius: var(--gb-radius-lg); background: var(--gb-white); display: grid; grid-template-columns: 420px minmax(0, 1fr); box-shadow: var(--gb-shadow-elevated); }
+/* #394: messages host stays on the shell content rail (no second centered max-width). */
+.fr4.messages-page { width: 100%; min-width: 0; height: calc(100vh - 116px); min-height: 680px; margin: 0; padding: 0; overflow: hidden; border: 1px solid var(--gb-line); border-radius: var(--gb-radius-lg); background: var(--gb-white); display: grid; grid-template-columns: 420px minmax(0, 1fr); box-shadow: var(--gb-shadow-elevated); }
 .fr4 .inbox-panel { min-width: 0; border-right: 1px solid var(--gb-line); display: flex; flex-direction: column; }
 .fr4 .inbox-header { padding: 24px; display: flex; align-items: center; justify-content: space-between; }
 .fr4 .inbox-header small { color: var(--gb-purple); text-transform: uppercase; letter-spacing: .07em; }
