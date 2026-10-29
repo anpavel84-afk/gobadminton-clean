@@ -1,7 +1,16 @@
 /* FR-02: frozen TrainerDetail / PersonalGameCard and Construction Kit form families.
    Responsive production dispositions: DR-04, DR-05, DR-08. */
 .gb-games-detail, .gb-my-games, .gb-game-create { min-width: 0; overflow-wrap: anywhere; }
-.gb-game-back { display: inline-flex; align-items: center; min-height: 44px; margin-bottom: 16px; color: var(--gb-ink-soft); font-weight: 600; }
+.gb-game-back { display: inline-flex; align-items: center; min-height: 44px; margin: 0; color: var(--gb-ink-soft); font-weight: 600; }
+.gb-game-detail-header { margin-bottom: 28px; }
+.gb-game-detail-contextual { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 12px; min-width: 0; }
+.gb-game-chat-section { margin-top: 24px; }
+@media (max-width: 720px) {
+  .gb-game-detail-header { margin-bottom: 24px; }
+  .gb-game-detail-contextual { width: 100%; justify-content: stretch; }
+  .gb-game-detail-contextual > * { flex: 1 1 auto; }
+  .gb-game-chat-section { margin-top: 20px; }
+}
 .gb-game-hero { overflow: hidden; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); min-height: 530px; border-radius: 28px; background: var(--gb-ink); color: var(--gb-white); }
 .gb-game-hero__image { position: relative; min-height: 500px; }
 .gb-game-hero__image > img { position: absolute; width: 100%; height: 100%; object-fit: cover; }
@@ -86,7 +95,7 @@
 .gb-personal-card__body > strong { display: block; font-size: 14px; }
 .gb-personal-card__body p { margin: 8px 0; font-size: 13px; color: var(--gb-ink-soft); }
 .gb-personal-card__body > small { color: var(--gb-ink-soft); font-size: 12px; }
-.gb-game-create { max-width: 900px; margin: auto; }
+.gb-game-create { max-width: 900px; margin: 0; width: 100%; }
 .gb-game-create:has(.gb-game-preview) { max-width: none; }
 .gb-create-header { margin: 16px 0 32px; }
 .gb-create-header h1 { font-size: clamp(36px,4vw,56px); letter-spacing: -.04em; line-height: 1.05; margin: 14px 0; }

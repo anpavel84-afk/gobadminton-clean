@@ -175,9 +175,11 @@ export function OwnedGameSummaryPage({ gameId }: { gameId: string }) {
 
   return (
     <ConsumerShell active="my-games" title="Управление игрой" mode="local">
-      <Button variant="ghost" className="gb-game-back" href="/my-games?tab=created">
-        ← Мои игры
-      </Button>
+      <header className="gb-page-local-header">
+        <Button variant="ghost" className="gb-game-back" href="/my-games?tab=created">
+          ← Мои игры
+        </Button>
+      </header>
 
       {state === "loading" ? (
         <div className="gb-game-feedback" data-state="loading">

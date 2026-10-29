@@ -30,8 +30,11 @@ export function VenuePage({venueId}:{venueId:string}) {
     return ()=>{active=false;controller.abort();clearTimeout(timer);};
   },[venueId,reload]);
   return <ConsumerShell active="games" title="Площадка" mode="page" hideHeading><div className="gb-venue-page">
-    <Button variant="ghost" href={context.returnTo}>Назад к карте</Button>
-    {venue?<><h1>{venue.name}</h1><p>{venue.address}</p><div className="gb-venue-media"><VenueCover name={venue.name} cover={venue.cover}/></div><VenueCoverCredit credit={venue.cover?.credit}/><VenuePublicProfile venue={venue}/><GamesMapView cityId={venue.cityId} day={context.day} venueId={venue.id} activity={activity}/>
+    <header className="gb-page-local-header">
+      <Button variant="ghost" className="gb-game-back" href={context.returnTo}>← Назад к карте</Button>
+      {venue ? <h1>{venue.name}</h1> : null}
+    </header>
+    {venue?<><p>{venue.address}</p><div className="gb-venue-media"><VenueCover name={venue.name} cover={venue.cover}/></div><VenueCoverCredit credit={venue.cover?.credit}/><VenuePublicProfile venue={venue}/><GamesMapView cityId={venue.cityId} day={context.day} venueId={venue.id} activity={activity}/>
     </>:error?<div role="alert"><p>Площадка недоступна.</p><Button onClick={()=>setReload(v=>v+1)}>Повторить</Button></div>:<p role="status">Загружаем площадку…</p>}
   </div></ConsumerShell>;
 }

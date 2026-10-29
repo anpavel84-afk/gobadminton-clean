@@ -118,13 +118,15 @@ export function ParticipationReviewPage({
 
   return (
     <ConsumerShell active="my-games" title={title} mode="local">
-      <button
-        type="button"
-        className="gb-c23-back"
-        onClick={() => router.push(`/games/${gameId}`)}
-      >
-        ← Назад
-      </button>
+      <header className="gb-page-local-header">
+        <button
+          type="button"
+          className="gb-c23-back"
+          onClick={() => router.push(`/games/${gameId}`)}
+        >
+          ← Назад
+        </button>
+      </header>
 
       {state === "loading" ? (
         <div className="gb-c23-state" data-state="loading">

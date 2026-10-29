@@ -184,88 +184,92 @@ export function LoginMethodsPage() {
   return (
     <ConsumerShell active="profile" title="Способы входа" mode="local">
       <div className="fr3 utility-page">
-        <Link className="back-link" href="/profile/settings">
-          ← Настройки
-        </Link>
-        <h1>Способы входа</h1>
-        <p>Подключайте только свои аккаунты и email. Совпадение email не объединяет профили.</p>
-        {state === "loading" && <ProfileState title="Загружаем способы входа…" state="loading" />}
-        {state === "error" && (
-          <ProfileState title="Не удалось загрузить способы входа" state="error" retry={() => setReload((n) => n + 1)}>
-            Попробуйте ещё раз.
-          </ProfileState>
-        )}
-        {state === "auth" && (
-          <section className="profile-section">
-            <p>Войдите, чтобы управлять способами входа.</p>
-            <AuthEntry returnPath="/profile/settings/login-methods" />
-          </section>
-        )}
-        {state === "ready" && (
-          <section className="settings-list account-security-list" aria-label="Способы входа">
-            {items.map((item) => (
-              <div className="data-row" key={item.provider}>
-                <span>
-                  <small>{item.label}</small>
-                  <strong>{statusCopy(item)}</strong>
-                </span>
-                <em>{item.status === "connected" && item.linkedAt ? new Date(item.linkedAt).toLocaleDateString("ru-RU") : ""}</em>
-                {item.status === "connected" ? (
-                  <Button
-                    variant="outline"
-                    disabled={emailBusy || Boolean(busy) || connectedCount <= 1}
-                    onClick={() => void onUnlink(item.provider)}
-                  >
-                    {busy === item.provider ? "Отключаем…" : "Отключить"}
-                  </Button>
-                ) : item.status === "available" ? (
-                  <Button
-                    variant="dark"
-                    disabled={emailBusy || Boolean(busy)}
-                    onClick={() => void onLink(item.provider)}
-                  >
-                    {busy === item.provider ? "Подключаем…" : "Подключить"}
-                  </Button>
-                ) : (
-                  <Button variant="outline" disabled>
-                    Недоступен
-                  </Button>
-                )}
+        <header className="gb-page-local-header">
+          <Link className="back-link" href="/profile/settings">
+            ← Настройки
+          </Link>
+          <h1>Способы входа</h1>
+        </header>
+        <div className="utility-page__body">
+          <p>Подключайте только свои аккаунты и email. Совпадение email не объединяет профили.</p>
+          {state === "loading" && <ProfileState title="Загружаем способы входа…" state="loading" />}
+          {state === "error" && (
+            <ProfileState title="Не удалось загрузить способы входа" state="error" retry={() => setReload((n) => n + 1)}>
+              Попробуйте ещё раз.
+            </ProfileState>
+          )}
+          {state === "auth" && (
+            <section className="profile-section">
+              <p>Войдите, чтобы управлять способами входа.</p>
+              <AuthEntry returnPath="/profile/settings/login-methods" />
+            </section>
+          )}
+          {state === "ready" && (
+            <section className="settings-list account-security-list" aria-label="Способы входа">
+              {items.map((item) => (
+                <div className="data-row" key={item.provider}>
+                  <span>
+                    <small>{item.label}</small>
+                    <strong>{statusCopy(item)}</strong>
+                  </span>
+                  <em>{item.status === "connected" && item.linkedAt ? new Date(item.linkedAt).toLocaleDateString("ru-RU") : ""}</em>
+                  {item.status === "connected" ? (
+                    <Button
+                      variant="outline"
+                      disabled={emailBusy || Boolean(busy) || connectedCount <= 1}
+                      onClick={() => void onUnlink(item.provider)}
+                    >
+                      {busy === item.provider ? "Отключаем…" : "Отключить"}
+                    </Button>
+                  ) : item.status === "available" ? (
+                    <Button
+                      variant="dark"
+                      disabled={emailBusy || Boolean(busy)}
+                      onClick={() => void onLink(item.provider)}
+                    >
+                      {busy === item.provider ? "Подключаем…" : "Подключить"}
+                    </Button>
+                  ) : (
+                    <Button variant="outline" disabled>
+                      Недоступен
+                    </Button>
+                  )}
+                </div>
+              ))}
+              <div className="data-row" key="email">
+                <span><small>Email</small><strong>{email?.maskedEmail ?? (emailAvailable ? "Можно подключить" : "Сейчас недоступен")}</strong></span>
+                <em>{email ? new Date(email.linkedAt).toLocaleDateString("ru-RU") : ""}</em>
+                <div className="profile-form-actions">
+                  {email ? <><Button variant="outline" disabled={emailBusy || Boolean(busy) || !emailAvailable} onClick={() => { setNotice(null); setEmailFlow("change_current"); }}>Изменить email</Button>
+                    <Button variant="outline" disabled={emailBusy || Boolean(busy) || !emailAvailable || connectedCount <= 1} onClick={() => setEmailFlow("unlink")}>Отключить email</Button></>
+                    : <Button variant="dark" disabled={emailBusy || Boolean(busy) || !emailAvailable} onClick={() => { setNotice(null); setEmailFlow("link"); }}>Добавить email</Button>}
+                </div>
               </div>
-            ))}
-            <div className="data-row" key="email">
-              <span><small>Email</small><strong>{email?.maskedEmail ?? (emailAvailable ? "Можно подключить" : "Сейчас недоступен")}</strong></span>
-              <em>{email ? new Date(email.linkedAt).toLocaleDateString("ru-RU") : ""}</em>
-              <div className="profile-form-actions">
-                {email ? <><Button variant="outline" disabled={emailBusy || Boolean(busy) || !emailAvailable} onClick={() => { setNotice(null); setEmailFlow("change_current"); }}>Изменить email</Button>
-                  <Button variant="outline" disabled={emailBusy || Boolean(busy) || !emailAvailable || connectedCount <= 1} onClick={() => setEmailFlow("unlink")}>Отключить email</Button></>
-                  : <Button variant="dark" disabled={emailBusy || Boolean(busy) || !emailAvailable} onClick={() => { setNotice(null); setEmailFlow("link"); }}>Добавить email</Button>}
-              </div>
-            </div>
-          </section>
-        )}
-        {state === "ready" && connectedCount <= 1 && <p className="account-security-hint">Последний способ входа нельзя отключить. Сначала подключите другой.</p>}
-        {state === "ready" && emailFlow && me && <ProfileDialog title={emailFlow === "link" ? "Добавить email" : emailFlow === "unlink" ? "Отключить email?" : "Изменить email"} onClose={closeEmail}>
-          {emailFlow === "unlink" ? <><p>Вы больше не сможете входить через {email?.maskedEmail}. Другой подключённый способ входа сохранится.</p><div className="profile-form-actions"><Button variant="outline" disabled={emailBusy || Boolean(busy)} onClick={closeEmail}>Отмена</Button><Button variant="danger" disabled={emailBusy || Boolean(busy)} onClick={() => void revokeEmail()}>Подтвердить отключение</Button></div></>
-            : <><EmailCodeForm key={emailFlow} purpose={emailFlow} csrfToken={me.csrfToken} currentEmail={email?.maskedEmail} proofChallengeId={proofId} onCancel={closeEmail} onRestartProof={() => { setProofId(undefined); setEmailFlow("change_current"); }} onBusyChange={setEmailBusy} onSuccess={result => {
-              if (activeMe.current !== me) return;
-              if (result.proved && result.proofChallengeId) { setProofId(result.proofChallengeId); setEmailFlow("change"); }
-              else { closeEmail(); setNotice(result.changed ? "Email изменён." : "Email подключён."); }
-            }} /><p className="account-security-hint">Для изменения способов входа нужен недавний вход. Если запрос устарел, войдите снова своим подключённым способом.</p><AuthEntry returnPath="/profile/settings/login-methods">Войти снова</AuthEntry></>}
-        </ProfileDialog>}
-        {reauth && <AuthEntry returnPath="/profile/settings/login-methods">Войти снова</AuthEntry>}
-        {notice && (
-          <p className="profile-notice" role="alert">
-            {notice}
-          </p>
-        )}
-        {state === "ready" && (
-          <p className="account-security-hint">
-            <button type="button" className="text-link" onClick={() => router.push("/profile/settings/sessions")}>
-              Активные сессии →
-            </button>
-          </p>
-        )}
+            </section>
+          )}
+          {state === "ready" && connectedCount <= 1 && <p className="account-security-hint">Последний способ входа нельзя отключить. Сначала подключите другой.</p>}
+          {state === "ready" && emailFlow && me && <ProfileDialog title={emailFlow === "link" ? "Добавить email" : emailFlow === "unlink" ? "Отключить email?" : "Изменить email"} onClose={closeEmail}>
+            {emailFlow === "unlink" ? <><p>Вы больше не сможете входить через {email?.maskedEmail}. Другой подключённый способ входа сохранится.</p><div className="profile-form-actions"><Button variant="outline" disabled={emailBusy || Boolean(busy)} onClick={closeEmail}>Отмена</Button><Button variant="danger" disabled={emailBusy || Boolean(busy)} onClick={() => void revokeEmail()}>Подтвердить отключение</Button></div></>
+              : <><EmailCodeForm key={emailFlow} purpose={emailFlow} csrfToken={me.csrfToken} currentEmail={email?.maskedEmail} proofChallengeId={proofId} onCancel={closeEmail} onRestartProof={() => { setProofId(undefined); setEmailFlow("change_current"); }} onBusyChange={setEmailBusy} onSuccess={result => {
+                if (activeMe.current !== me) return;
+                if (result.proved && result.proofChallengeId) { setProofId(result.proofChallengeId); setEmailFlow("change"); }
+                else { closeEmail(); setNotice(result.changed ? "Email изменён." : "Email подключён."); }
+              }} /><p className="account-security-hint">Для изменения способов входа нужен недавний вход. Если запрос устарел, войдите снова своим подключённым способом.</p><AuthEntry returnPath="/profile/settings/login-methods">Войти снова</AuthEntry></>}
+          </ProfileDialog>}
+          {reauth && <AuthEntry returnPath="/profile/settings/login-methods">Войти снова</AuthEntry>}
+          {notice && (
+            <p className="profile-notice" role="alert">
+              {notice}
+            </p>
+          )}
+          {state === "ready" && (
+            <p className="account-security-hint">
+              <button type="button" className="text-link" onClick={() => router.push("/profile/settings/sessions")}>
+                Активные сессии →
+              </button>
+            </p>
+          )}
+        </div>
       </div>
     </ConsumerShell>
   );

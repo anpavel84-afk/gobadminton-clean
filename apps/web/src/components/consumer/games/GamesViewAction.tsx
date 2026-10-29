@@ -23,7 +23,11 @@ export function GamesViewAction({ view, onClick }: { view: "list" | "map"; onCli
     return () => { observer.disconnect(); window.removeEventListener("resize", measure); viewport?.removeEventListener("resize", measure); viewport?.removeEventListener("scroll", measure); };
   }, [view]);
   if (view === "map") return null;
-  return <div ref={ref} className="gb-games-view-action"><Button variant="dark" onClick={onClick}>
-    <span className="gb-map-entry-tile"><FoldedMapGlyph /></span>На карте
-  </Button></div>;
+  return <div ref={ref} className="gb-games-view-action gb-games-view-action--feed">
+    <Button className="gb-map-desktop-entry" variant="dark" onClick={onClick} aria-label="Все игры на карте">
+      <span className="gb-map-entry-tile"><FoldedMapGlyph /></span>
+      <span className="gb-map-cta-label gb-map-cta-label--full">Все игры на карте</span>
+      <span className="gb-map-cta-label gb-map-cta-label--short">На карте</span>
+    </Button>
+  </div>;
 }

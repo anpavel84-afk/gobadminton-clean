@@ -55,7 +55,13 @@ export function ContactAction({ result, auth, peer, canInvite, retryAuth }: { re
   if (!result || !result.ok || auth !== "ready") return <Button variant="dark" disabled>Проверяем…</Button>;
   if (result.data.targetPublicPlayerId !== peer) return <span role="status">Общение сейчас недоступно</span>;
   const action = contactAction(result.data);
-  return <>{result.data.state === "pending_outgoing" && <span role="status">Запрос отправлен</span>}{action.href ? <Button variant="dark" href={action.href}><MessageGlyph />{action.label}</Button> : <span role="status">{action.label}</span>}{canInvite && action.href && <Button href={`/messages?to=${encodeURIComponent(peer)}&action=invite`}>Пригласить на игру</Button>}</>;
+  return <div className="player-contact-row" data-surface="contact-status-actions">
+    {result.data.state === "pending_outgoing" && <span className="player-contact-row__status" role="status">Запрос отправлен</span>}
+    {action.href
+      ? <Button variant="dark" href={action.href}><MessageGlyph />{action.label}</Button>
+      : <span className="player-contact-row__status" role="status">{action.label}</span>}
+    {canInvite && action.href && <Button href={`/messages?to=${encodeURIComponent(peer)}&action=invite`}>Пригласить на игру</Button>}
+  </div>;
 }
 
 export function ContactNote({ result }: { result: ApiResult<ContactState> | null }) {

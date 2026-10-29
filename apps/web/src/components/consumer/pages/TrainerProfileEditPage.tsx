@@ -111,9 +111,12 @@ export function TrainerProfileEditPage() {
   return (
     <ConsumerShell active="profile" title="Тренерский профиль" mode="local">
       <div className="fr3 trainer-editor">
-        <Link className="back-link" href="/profile">
-          ← Мой профиль
-        </Link>
+        <header className="gb-page-local-header">
+          <Link className="back-link" href="/profile">
+            ← Мой профиль
+          </Link>
+          <h1>Тренерский профиль</h1>
+        </header>
         {state === "loading" && <ProfileState title="Загрузка…" state="loading" />}
         {state === "error" && (
           <ProfileState
@@ -124,7 +127,6 @@ export function TrainerProfileEditPage() {
         )}
         {state === "auth" && (
           <section className="profile-section">
-            <h1>Тренерский профиль</h1>
             <p>Войдите, чтобы рассказать о своих тренировках.</p>
             <AuthEntry returnPath="/profile/trainer" />
           </section>
@@ -138,7 +140,6 @@ export function TrainerProfileEditPage() {
             }}
           >
             <span className="eyebrow eyebrow--purple">Тренер</span>
-            <h1>Тренерский профиль</h1>
             <p>Информация заполнена пользователем</p>
             <SectionHeader title="О ваших тренировках" />
             <label className="profile-field">

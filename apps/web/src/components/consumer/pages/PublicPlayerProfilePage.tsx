@@ -12,7 +12,9 @@ export function PublicPlayerProfilePage() {
   const search = useSearchParams();
   const returnPath = safeProfileReturnPath(search.get("returnTo"));
   return <ConsumerShell active="players" title="Профиль игрока" mode="local">
-    <Link className="back-link" href={returnPath}>{returnPath === "/players" ? "← Все игроки" : "← К переписке"}</Link>
+    <header className="gb-page-local-header gb-page-local-header--profile">
+      <Link className="back-link" href={returnPath}>{returnPath === "/players" ? "← Все игроки" : "← К переписке"}</Link>
+    </header>
     <PublicPlayerProfile publicPlayerId={publicPlayerId} />
   </ConsumerShell>;
 }
