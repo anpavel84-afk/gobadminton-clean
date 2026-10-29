@@ -48,6 +48,40 @@ class Parser(unittest.TestCase):
         self.assertIn('--dangerously-skip-permissions', argv)
         for tool in N.AUTHOR_TOOLS: self.assertIn('  - '+tool+'\n', N.AGENT_DEF)
 
+    def test_author_landlock_uses_private_workspace_and_scoped_pty(self):
+        # Root selection is deterministic and must not include the real source,
+        # arbitrary /tmp, /home, /srv, /etc root or project credentials.
+        with tempfile.TemporaryDirectory(prefix='gb-agy-author-') as folder:
+            readonly, writable, executables = N.author_sandbox_roots(folder)
+            self.assertIn(Path(folder), writable)
+            self.assertIn(Path('/usr/bin'), readonly)
+            self.assertIn(Path(N.AGY), executables)
+            self.assertNotIn(Path('/tmp'), writable)
+            self.assertNotIn(Path('/srv'), readonly)
+            self.assertNotIn(Path('/home'), readonly)
+            self.assertNotIn(Path('/'), readonly + writable + executables)
+            if Path('/dev/ptmx').exists():
+                self.assertIn(Path('/dev/ptmx'), writable)
+        for folder in ('/tmp', '/home', '/srv'):
+            with self.subTest(folder=folder), self.assertRaises(core.Refused):
+                N.author_sandbox_roots(folder)
+
+    def test_real_provider_catalog_and_terminal_without_model_field(self):
+        # Native CLI init advertises more tools than custom-agent frontmatter.
+        # Enforce allowed executions rather than rejecting extra catalog entries.
+        events = rows()
+        events[0]['init']['tools'] += ['execute_browser_javascript', 'delete_file', 'invoke_subagent']
+        self.assertIn('  - finish', N.AGENT_DEF)
+        self.assertEqual(N.parse_stream(wire(events))['effective_model'], N.MODEL)
+        bad = copy.deepcopy(events)
+        bad[2]['step_update']['tool_name'] = 'delete_file'
+        with self.assertRaises(core.Refused):
+            N.parse_stream(wire(bad))
+        bad = copy.deepcopy(events)
+        bad[-1]['result']['model'] = 'wrong'
+        with self.assertRaises(core.Refused):
+            N.parse_stream(wire(bad))
+
     def test_exact_advertised_subset_is_allowed(self):
         events = rows(); events[0]['init']['tools'] = ['write_to_file']
         N.parse_stream(wire(events))
@@ -196,6 +230,9 @@ class Invocation(unittest.TestCase):
         self.catalog = patcher('catalog_precharge', return_value=3)
         self.refresh = patcher('retain_oauth_refresh', return_value='unchanged')
         self.trusted = patcher('trusted', return_value=OAUTH)
+        # Synthetic exporter uses a TemporaryDirectory outside /tmp; a separate
+        # test exercises the real exact /tmp sandbox root checks.
+        patcher('author_sandbox_roots', side_effect=lambda base: ((), (Path(base),), ()))
         patcher('_prepare_invocation_cgroup', return_value=None)
         patcher('_observe_cgroup_membership', return_value=False)
         self.reap_state = patcher('_executor_reap_state', return_value='cgroup-absent')
