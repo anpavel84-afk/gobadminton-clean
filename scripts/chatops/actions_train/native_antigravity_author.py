@@ -56,8 +56,21 @@ def canonical_task_digest(task):
     return digest(canonical_task_payload(task))
 # These edit tool names exist in the pinned binary. Custom-agent CLI support
 # remains UNVERIFIED until the exact-task Medium canary; do not infer readiness.
-AUTHOR_TOOLS = ('view_file', 'run_command', 'write_to_file',
+AUTHOR_TOOLS = ('view_file', 'run_command', 'manage_task', 'write_to_file',
                 'replace_file_content', 'multi_replace_file_content', 'finish')
+# Exact non-effect view_file input-validation failure observed on AGY#386 attempt2.
+_VIEW_FILE_INPUT_VALIDATION_ERROR = {
+    'type': 'TOOL_ERROR',
+    'message': "invalid arguments:\n- missing properties 'toolSummary', 'toolAction'",
+}
+_BACKGROUND_CONTEXT_CANCELED_ERROR = {
+    'type': 'TOOL_ERROR',
+    'message': 'context canceled',
+}
+_MANAGE_TASK_ACTIONS = frozenset({'status', 'kill'})
+_SYSTEM_MESSAGE_KEYS = frozenset({
+    'conversation_id', 'step_index', 'state', 'step_type', 'duration_seconds',
+})
 AGENT_DEF = '''---
 name: gobadminton-author
 description: Limited source author in a private task export.
@@ -78,6 +91,121 @@ exactly once. Only report completion after making a real source edit; the
 trusted importer independently verifies every changed path against the task.
 Never edit files outside this private workspace, or use hidden provider tools.
 '''
+
+
+def _tool_info(step):
+    info = step.get('tool_info')
+    return info if type(info) is dict else {}
+
+
+def _tool_params(step):
+    params = _tool_info(step).get('parameters')
+    return params if type(params) is dict else {}
+
+
+def _tool_error(step):
+    error = _tool_info(step).get('error')
+    return error if type(error) is dict else None
+
+
+def _is_view_file_input_validation_error(step):
+    """Exact TOOL_ARGUMENT_ERROR shape; never permission/safety denial."""
+    return (step.get('step_type') == 'tool'
+            and step.get('tool_name') == 'view_file'
+            and step.get('state') == 'ERROR'
+            and _tool_error(step) == _VIEW_FILE_INPUT_VALIDATION_ERROR
+            and 'output' not in _tool_info(step)
+            and type(step.get('step_index')) is int and step['step_index'] >= 0
+            and type(_tool_params(step).get('AbsolutePath')) is str
+            and _tool_params(step).get('AbsolutePath'))
+
+
+def _view_file_read_identity(step):
+    params = {k: v for k, v in _tool_params(step).items()
+              if k not in ('toolSummary', 'toolAction')}
+    return (_tool_params(step).get('AbsolutePath'), digest(params))
+
+
+def _is_background_context_canceled(step):
+    """Native background handoff: DONE run_command with exact context canceled."""
+    return (step.get('step_type') == 'tool'
+            and step.get('tool_name') == 'run_command'
+            and step.get('state') == 'DONE'
+            and _tool_error(step) == _BACKGROUND_CONTEXT_CANCELED_ERROR
+            and type(step.get('step_index')) is int and step['step_index'] >= 0)
+
+
+def _manage_task_target_index(conversation, params):
+    task_id = params.get('TaskId')
+    action = params.get('Action')
+    if not (type(task_id) is str and type(action) is str
+            and action in _MANAGE_TASK_ACTIONS
+            and set(params) == {'Action', 'TaskId'}
+            and type(conversation) is str and conversation):
+        return None
+    prefix = conversation + '/task-'
+    if not task_id.startswith(prefix):
+        return None
+    suffix = task_id[len(prefix):]
+    if not suffix.isdigit():
+        return None
+    return int(suffix)
+
+
+def _prescan_author_recovery(events, conversation):
+    """Collect same-stream recovery evidence before shared audit exclusions."""
+    run_command_indices = set()
+    view_file_done_by_path = {}
+    managed_task_indices = set()
+    for event in events[1:-1]:
+        step = event.get('step_update')
+        if type(step) is not dict or step.get('step_type') != 'tool':
+            continue
+        name, index = step.get('tool_name'), step.get('step_index')
+        if type(index) is not int or index < 0 or type(name) is not str:
+            continue
+        if name == 'run_command':
+            run_command_indices.add(index)
+        if name == 'view_file' and step.get('state') == 'DONE':
+            path = _view_file_read_identity(step)
+            if type(path[0]) is str and path[0]:
+                view_file_done_by_path[path] = max(view_file_done_by_path.get(path, -1), index)
+        if name == 'manage_task' and step.get('state') == 'DONE':
+            target = _manage_task_target_index(conversation, _tool_params(step))
+            if target is not None and target < index and _tool_params(step).get('Action') == 'kill':
+                managed_task_indices.add(target)
+    return run_command_indices, view_file_done_by_path, managed_task_indices
+
+
+def _author_audit(event, *, conversation, run_command_indices,
+                  view_file_done_by_path, managed_task_indices):
+    """Shared audit with exact author-only exclusions; validate before stripping."""
+    step = event.get('step_update') if type(event) is dict else None
+    if type(step) is dict and _is_view_file_input_validation_error(step):
+        path = _view_file_read_identity(step)
+        recovered_at = view_file_done_by_path.get(path)
+        need(type(recovered_at) is int and recovered_at > step['step_index'],
+             'unrecovered view_file input validation error')
+        # Exclude only state=ERROR and tool_info.error after exact validation.
+        safe = copy.deepcopy(event)
+        safe_step = safe['step_update']
+        safe_step.pop('state', None)
+        info = safe_step.get('tool_info')
+        if type(info) is dict:
+            info.pop('error', None)
+        audit(safe)
+        return
+    if type(step) is dict and _is_background_context_canceled(step):
+        index = step['step_index']
+        need(index in run_command_indices and index in managed_task_indices,
+             'unrecovered run_command context canceled')
+        safe = copy.deepcopy(event)
+        info = safe['step_update'].get('tool_info')
+        if type(info) is dict:
+            info.pop('error', None)
+        audit(safe)
+        return
+    audit(event)
 
 
 def author_sandbox_roots(base):
@@ -206,6 +334,14 @@ def parse_stream(raw, model=MODEL, *, tokens=()):
     Saved ordinary envelopes include a DONE finish step. Require it until a
     reviewed non-schema canary proves a different terminal sequence necessary.
     finish is a step type, never an implicitly advertised author tool.
+
+    Author-only envelopes admitted from real AGY#386 attempt2 raw:
+    - view_file ERROR that is exact input-validation (not safety/permission) and
+      later DONE with the same AbsolutePath identity; raw ERROR preserved and
+      surfaced in recovered_input_errors — never rewritten as DONE.
+    - manage_task status/kill of same-conversation run_command background tasks.
+    - advisory system_message DONE with the known scalar envelope only.
+    Shared QA audit is unchanged; exclusions are validated then stripped locally.
     """
     need(model in MODELS and type(raw) is bytes and len(raw) <= MAX_OUT, 'invalid author stream')
     events = _stream_events(raw, tokens, strict=True)
@@ -225,44 +361,106 @@ def parse_stream(raw, model=MODEL, *, tokens=()):
          and len(tools) == len(set(tools))
          and any(name in AUTHOR_TOOLS for name in tools),
          'invalid author tools advertisement')
+    run_command_indices, view_file_done_by_path, managed_task_indices = (
+        _prescan_author_recovery(events, conversation))
     steps = {}; inference = finish = False
+    recovered_input_errors = []
+    executed_tools = []
     for event in events:
-        audit(event)
+        _author_audit(event, conversation=conversation,
+                      run_command_indices=run_command_indices,
+                      view_file_done_by_path=view_file_done_by_path,
+                      managed_task_indices=managed_task_indices)
         need(event.get('conversation_id', conversation) == conversation
              and event.get('model', model) == model, 'author event identity drift')
     for event in events[1:-1]:
         step = event.get('step_update')
         need(event.get('event') == 'step_update' and type(step) is dict
              and step.get('conversation_id') == conversation
-             and step.get('model', model) == model
-             and step.get('step_type') in ('user_input', 'agent_response', 'finish', 'tool')
-             and step.get('state') in ('ACTIVE', 'DONE'), 'invalid author step')
-        kind, state = step['step_type'], step['state']
+             and step.get('model', model) == model, 'invalid author step')
+        kind, state = step.get('step_type'), step.get('state')
+        if kind == 'system_message':
+            # Advisory empty native envelope only; never inference/finish alone.
+            need(state == 'DONE'
+                 and set(step) <= _SYSTEM_MESSAGE_KEYS
+                 and {'conversation_id', 'step_index', 'state', 'step_type'} <= set(step)
+                 and type(step.get('step_index')) is int and step['step_index'] >= 0
+                 and (step.get('duration_seconds') is None
+                      or type(step.get('duration_seconds')) in (int, float)),
+                 'invalid author system_message')
+            continue
+        need(kind in ('user_input', 'agent_response', 'finish', 'tool')
+             and state in ('ACTIVE', 'DONE', 'ERROR'), 'invalid author step')
         if kind == 'tool':
             index, name = step.get('step_index'), step.get('tool_name')
             need(type(index) is int and index >= 0 and name in tools and name in AUTHOR_TOOLS,
                  'unauthorized author tool execution')
+            if state == 'ERROR':
+                need(_is_view_file_input_validation_error(step),
+                     'unrecovered author tool error')
+                path = _view_file_read_identity(step)
+                recovered_at = view_file_done_by_path.get(path)
+                need(type(recovered_at) is int and recovered_at > index,
+                     'unrecovered view_file input validation error')
+                recovered_input_errors.append({
+                    'step_index': index,
+                    'tool_name': 'view_file',
+                    'error_type': 'TOOL_ERROR',
+                    'error_message': _VIEW_FILE_INPUT_VALIDATION_ERROR['message'],
+                    'recovered_by_step_index': recovered_at,
+                })
+                need(index not in steps or (steps[index][0] == name
+                     and steps[index][1] != 'DONE'), 'author tool identity/state drift')
+                steps[index] = (name, 'ERROR')
+                continue
+            if name == 'manage_task':
+                params = _tool_params(step)
+                target = _manage_task_target_index(conversation, params)
+                need(target is not None and target < index and target in run_command_indices,
+                     'unauthorized manage_task')
+                need(_tool_error(step) is None, 'manage_task error refused')
+            elif _tool_error(step) is not None:
+                need(_is_background_context_canceled(step)
+                     and index in managed_task_indices,
+                     'unrecovered author tool error')
             need(index not in steps or (steps[index][0] == name
                  and (steps[index][1] != 'DONE' or state == 'DONE')), 'author tool identity/state drift')
             steps[index] = (name, state)
+            if state == 'DONE' and name not in executed_tools:
+                # Preserve first-seen DONE order; recovered ERROR never listed.
+                executed_tools.append(name)
+        else:
+            need(state in ('ACTIVE', 'DONE'), 'invalid author step')
+            need(_tool_error(step) is None, 'unexpected author step error')
         inference |= kind == 'agent_response' and state == 'DONE'
         finish |= kind == 'finish' and state == 'DONE'
     out = events[-1].get('result')
     need(type(out) is dict and out.get('status') == 'SUCCESS'
          and out.get('conversation_id') == conversation and out.get('model', model) == model
-         and inference and finish and all(state == 'DONE' for _, state in steps.values()),
+         and inference and finish
+         and all(state in ('DONE', 'ERROR') for _, state in steps.values())
+         and any(state == 'DONE' for _, state in steps.values()),
+         'author terminal completion missing')
+    # Recovered ERROR steps stay ERROR in history; every other tool must be DONE.
+    need(all(state == 'DONE' or (name == 'view_file' and state == 'ERROR')
+             for name, state in steps.values()),
          'author terminal completion missing')
     usage = out.get('usage')
     need(usage is None or type(usage) is dict and len(usage) <= 32
          and all(type(k) is str and re.fullmatch(r'[a-z][a-z0-9_]{0,63}', k)
                  and type(v) is int and v >= 0 for k, v in usage.items()),
          'invalid author usage')
+    need(len(recovered_input_errors) <= 32, 'recovered_input_errors bound exceeded')
     return dict(requested_model=model, effective_model=model, effort=None,
                 effective_agent=init['agent'], effective_tools=tools,
                 effective_permission_mode=init['permission_mode'],
                 provider_reported_usage=usage, tool_events=len(steps), event_count=len(events),
                 transcript_sha256=hashlib.sha256(raw).hexdigest(),
-                conversation_sha256=hashlib.sha256(conversation.encode()).hexdigest())
+                conversation_sha256=hashlib.sha256(conversation.encode()).hexdigest(),
+                native_finish=True,
+                executed_tools=list(executed_tools),
+                managed_background_cancellations=sorted(managed_task_indices),
+                recovered_input_errors=list(recovered_input_errors))
 
 
 def _credentials(raw):

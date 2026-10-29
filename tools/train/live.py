@@ -3353,9 +3353,12 @@ def publish_push_pr(*, kind, payload, intent_path=None):
                 'existing_pr': pr_number, 'transport': 'https+gh'}
 
     # Create or reuse PR by head branch — never silently replace with a duplicate.
+    # Own-repo heads must use plain `--head branch` (not OWNER_LOGIN:branch);
+    # the owner-prefixed form returns [] for same-repository branches and caused
+    # IndexError after a successful `gh pr create --head branch`.
     proc = run_argv(
         ['/usr/bin/gh', 'pr', 'list', '--repo', REPO, '--base', 'dev',
-         '--head', f'{OWNER_LOGIN}:{branch}', '--json', 'number,headRefOid,baseRefName,state'],
+         '--head', branch, '--json', 'number,headRefOid,baseRefName,state'],
         env=uid1002_env(), check=False)
     prs = loads(proc.stdout) if proc.returncode == 0 and proc.stdout.strip() else []
     if isinstance(prs, list) and prs:
@@ -3368,9 +3371,12 @@ def publish_push_pr(*, kind, payload, intent_path=None):
             env=uid1002_env(), check=True)
         proc2 = run_argv(
             ['/usr/bin/gh', 'pr', 'list', '--repo', REPO, '--base', 'dev',
-             '--head', f'{OWNER_LOGIN}:{branch}', '--json', 'number,headRefOid'],
+             '--head', branch, '--json', 'number,headRefOid'],
             env=uid1002_env(), check=True)
-        prs = loads(proc2.stdout)
+        prs = loads(proc2.stdout) if proc2.stdout and str(proc2.stdout).strip() else []
+        if not isinstance(prs, list) or not prs:
+            # Known readback HOLD — do not IndexError or recreate on uncertainty.
+            raise LiveError('pr_readback_hold', 'empty_post_create_list')
         pr_number = int(prs[0]['number'])
     pr = gh_api(f'repos/{REPO}/pulls/{pr_number}')
     head_sha = (pr.get('head') or {}).get('sha')

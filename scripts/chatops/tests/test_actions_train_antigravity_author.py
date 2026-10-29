@@ -128,6 +128,114 @@ class Parser(unittest.TestCase):
             with self.subTest(usage=usage), self.assertRaises(core.Refused):
                 N.parse_stream(wire(events))
 
+    def test_view_file_input_validation_error_recovered_by_same_read(self):
+        path = '/tmp/gb-agy-author-fixture/ws/apps/web/src/components/consumer/games/VenueSheet.tsx'
+        err = dict(type='TOOL_ERROR',
+                   message="invalid arguments:\n- missing properties 'toolSummary', 'toolAction'")
+        events = [
+            dict(event='init', conversation_id=CID, init=dict(model=N.MODEL, agent=N.AGENT,
+                tools=list(N.AUTHOR_TOOLS), permission_mode=N.PERMISSION_MODE)),
+            dict(event='step_update', step_update=dict(conversation_id=CID, step_index=0,
+                step_type='agent_response', state='DONE')),
+            dict(event='step_update', step_update=dict(
+                conversation_id=CID, step_index=6, step_type='tool', tool_name='view_file',
+                state='ACTIVE', tool_info=dict(name='view_file',
+                    parameters=dict(AbsolutePath=path)))),
+            dict(event='step_update', step_update=dict(
+                conversation_id=CID, step_index=6, step_type='tool', tool_name='view_file',
+                state='ERROR', tool_info=dict(name='view_file',
+                    parameters=dict(AbsolutePath=path), error=err))),
+            dict(event='step_update', step_update=dict(
+                conversation_id=CID, step_index=8, step_type='tool', tool_name='view_file',
+                state='DONE', tool_info=dict(name='view_file',
+                    parameters=dict(AbsolutePath=path), output='ok'))),
+            dict(event='step_update', step_update=dict(
+                conversation_id=CID, step_index=9, step_type='tool', tool_name='write_to_file',
+                state='DONE')),
+            dict(event='step_update', step_update=dict(
+                conversation_id=CID, step_index=10, step_type='finish', state='DONE')),
+            dict(event='result', result=dict(status='SUCCESS', conversation_id=CID,
+                usage={'input_tokens': 1, 'output_tokens': 1})),
+        ]
+        result = N.parse_stream(wire(events))
+        self.assertEqual(result['recovered_input_errors'], [{
+            'step_index': 6, 'tool_name': 'view_file', 'error_type': 'TOOL_ERROR',
+            'error_message': err['message'], 'recovered_by_step_index': 8,
+        }])
+        self.assertTrue(result['native_finish'])
+        self.assertIn('view_file', result['executed_tools'])
+        # Unrecovered / different identity / permission text stay rejected.
+        bad = copy.deepcopy(events)
+        del bad[4]  # remove recovering DONE
+        with self.assertRaises((core.Refused, N.ReviewError)):
+            N.parse_stream(wire(bad))
+        bad = copy.deepcopy(events)
+        bad[3]['step_update']['tool_info']['error'] = dict(
+            type='TOOL_ERROR', message='permission check failed for read_file')
+        with self.assertRaises((core.Refused, N.ReviewError)):
+            N.parse_stream(wire(bad))
+        bad = copy.deepcopy(events)
+        bad[4]['step_update']['tool_info']['parameters']['AbsolutePath'] = path + '.other'
+        with self.assertRaises((core.Refused, N.ReviewError)):
+            N.parse_stream(wire(bad))
+
+    def test_manage_task_own_background_and_system_message(self):
+        events = [
+            dict(event='init', conversation_id=CID, init=dict(model=N.MODEL, agent=N.AGENT,
+                tools=list(N.AUTHOR_TOOLS), permission_mode=N.PERMISSION_MODE)),
+            dict(event='step_update', step_update=dict(conversation_id=CID, step_index=0,
+                step_type='agent_response', state='DONE')),
+            dict(event='step_update', step_update=dict(
+                conversation_id=CID, step_index=18, step_type='tool', tool_name='run_command',
+                state='DONE', tool_info=dict(name='run_command',
+                    parameters=dict(CommandLine='echo bg'),
+                    error=dict(type='TOOL_ERROR', message='context canceled')))),
+            dict(event='step_update', step_update=dict(
+                conversation_id=CID, step_index=20, step_type='tool', tool_name='manage_task',
+                state='DONE', tool_info=dict(name='manage_task',
+                    parameters=dict(Action='status', TaskId=CID+'/task-18'),
+                    output='RUNNING'))),
+            dict(event='step_update', step_update=dict(
+                conversation_id=CID, step_index=26, step_type='tool', tool_name='manage_task',
+                state='DONE', tool_info=dict(name='manage_task',
+                    parameters=dict(Action='kill', TaskId=CID+'/task-18'),
+                    output='cancelled'))),
+            dict(event='step_update', step_update=dict(
+                conversation_id=CID, step_index=29, step_type='tool', tool_name='write_to_file',
+                state='DONE')),
+            dict(event='step_update', step_update=dict(
+                conversation_id=CID, step_index=30, step_type='finish', state='DONE')),
+            dict(event='step_update', step_update=dict(
+                conversation_id=CID, step_index=31, step_type='system_message', state='DONE',
+                duration_seconds=0.0001)),
+            dict(event='result', result=dict(status='SUCCESS', conversation_id=CID,
+                usage={'input_tokens': 2, 'output_tokens': 2})),
+        ]
+        result = N.parse_stream(wire(events))
+        self.assertEqual(result['executed_tools'],
+                         ['run_command', 'manage_task', 'write_to_file'])
+        self.assertEqual(result['managed_background_cancellations'], [18])
+        self.assertEqual(result['recovered_input_errors'], [])
+        no_kill = copy.deepcopy(events)
+        del no_kill[4]
+        with self.assertRaises((core.Refused, N.ReviewError)):
+            N.parse_stream(wire(no_kill))
+        # Foreign task / create / dangerous system_message payload fail closed.
+        bad = copy.deepcopy(events)
+        bad[3]['step_update']['tool_info']['parameters']['TaskId'] = 'other/task-18'
+        with self.assertRaises((core.Refused, N.ReviewError)):
+            N.parse_stream(wire(bad))
+        bad = copy.deepcopy(events)
+        bad[3]['step_update']['tool_info']['parameters'] = dict(
+            Action='create', TaskId=CID+'/task-18')
+        with self.assertRaises((core.Refused, N.ReviewError)):
+            N.parse_stream(wire(bad))
+        bad = copy.deepcopy(events)
+        bad[7]['step_update']['text'] = 'danger'
+        with self.assertRaises((core.Refused, N.ReviewError)):
+            N.parse_stream(wire(bad))
+
+
 
 class Qualification(unittest.TestCase):
     def setUp(self):
