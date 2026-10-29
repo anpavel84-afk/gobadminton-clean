@@ -2476,6 +2476,290 @@ class NativeImportPreflightTests(unittest.TestCase):
             self.assertFalse(intent.get('no_model_launched'))
 
 
+class CursorNamespaceUid1002Tests(unittest.TestCase):
+    """OD-018 author14: native guard under real 1002 boundary; prefix/mode/IPC."""
+
+    def _private_base(self, prefix='gb-cursor-211-'):
+        base = Path(tempfile.mkdtemp(prefix=prefix, dir='/tmp'))
+        for name in lean_live.CURSOR_PRIVATE_DIRS:
+            (base / name).mkdir(mode=0o700)
+        return base
+
+    def _synthetic_argv(self, base, cmd, *, bwrap='/usr/bin/gb-bwrap-test'):
+        argv = [bwrap, '--unshare-all', '--share-net']
+        for name in lean_live.CURSOR_PRIVATE_DIRS:
+            p = str(base / name)
+            argv.extend(['--bind', p, p])
+        argv.extend(['--chdir', str(base / 'work'), '--', *cmd])
+        return argv
+
+    def test_source_uses_211_prefix_and_uid1002_builder_not_root_guard(self):
+        src = inspect.getsource(lean_live.cursor_author_live)
+        self.assertIn("prefix='gb-cursor-211-'", src)
+        self.assertNotIn("prefix='gb-cursor-lean-'", src)
+        self.assertIn('_cursor_namespace_argv_uid1002', src)
+        self.assertIn('_ensure_cursor_private_root', src)
+        self.assertIn('preflight_no_call', src)
+        self.assertNotIn('pickle', inspect.getsource(lean_live._cursor_namespace_argv_uid1002))
+        # Root must not call native builder in-process.
+        builder = inspect.getsource(lean_live._cursor_namespace_argv_uid1002)
+        self.assertIn('os.fork()', builder)
+        self.assertIn('_cursor_drop_to_author', builder)
+        self.assertIn('CURSOR_UID', builder)
+
+    def test_native_guard_real_uid_prefix_private_mode(self):
+        """Actual native_guard import: UID / prefix / private mode (no model)."""
+        guard = lean_live._load_native('native_guard')
+        self.assertTrue(hasattr(guard, 'cursor_namespace_argv'))
+        self.assertTrue(hasattr(guard, 'GuardError'))
+        # Live Root parent calling builder directly must fail slot UID first.
+        base = self._private_base()
+        try:
+            cmd = [str(guard.CURSOR_PIN / 'node'), '-e', 'process.exit(0)']
+            with mock.patch.object(os, 'geteuid', return_value=0), \
+                    self.assertRaises(guard.GuardError) as ctx:
+                guard.cursor_namespace_argv(base, cmd)
+            self.assertIn('exact GoBadminton slot UID', str(ctx.exception))
+            # Wrong prefix with mocked slot euid — fails before ownership/pin.
+            wrong = self._private_base(prefix='gb-cursor-lean-')
+            try:
+                with mock.patch.object(os, 'geteuid', return_value=1002):
+                    with self.assertRaises(guard.GuardError) as pctx:
+                        guard.cursor_namespace_argv(wrong, cmd)
+                self.assertIn('unqualified Cursor private root', str(pctx.exception))
+            finally:
+                import shutil
+                shutil.rmtree(wrong, ignore_errors=True)
+            # Correct prefix but group-readable → private-root failure (uid mocked).
+            os.chmod(base / 'work', 0o750)
+            real_stat = os.stat
+
+            def stat_as_1002(path, *args, **kwargs):
+                st = real_stat(path, *args, **kwargs)
+                return os.stat_result((
+                    st.st_mode, st.st_ino, st.st_dev, st.st_nlink,
+                    1002, 1002, st.st_size,
+                    st.st_atime, st.st_mtime, st.st_ctime,
+                ))
+
+            with mock.patch.object(os, 'geteuid', return_value=1002), \
+                    mock.patch.object(os, 'stat', side_effect=stat_as_1002):
+                with self.assertRaises(guard.GuardError) as mctx:
+                    guard.cursor_namespace_argv(base, cmd)
+            self.assertIn('Cursor root must be private', str(mctx.exception))
+        finally:
+            import shutil
+            shutil.rmtree(base, ignore_errors=True)
+
+    def test_ensure_private_root_restores_0700(self):
+        base = self._private_base()
+        try:
+            os.chmod(base / 'work', 0o755)
+            os.chmod(base / 'config', 0o775)
+            real_stat = os.stat
+
+            def stat_slot(path, *args, **kwargs):
+                st = real_stat(path, *args, **kwargs)
+                return os.stat_result((
+                    st.st_mode, st.st_ino, st.st_dev, st.st_nlink,
+                    lean_live.CURSOR_UID, lean_live.CURSOR_GID, st.st_size,
+                    st.st_atime, st.st_mtime, st.st_ctime,
+                ))
+
+            with mock.patch.object(os, 'geteuid', return_value=0), \
+                    mock.patch.object(os, 'chown') as chown, \
+                    mock.patch.object(os, 'stat', side_effect=stat_slot):
+                lean_live._ensure_cursor_private_root(base)
+            self.assertEqual(oct((base / 'work').stat().st_mode & 0o777), '0o700')
+            self.assertEqual(oct((base / 'config').stat().st_mode & 0o777), '0o700')
+            self.assertEqual(oct(base.stat().st_mode & 0o777), '0o700')
+            self.assertEqual(chown.call_count, 1 + len(lean_live.CURSOR_PRIVATE_DIRS))
+        finally:
+            import shutil
+            shutil.rmtree(base, ignore_errors=True)
+
+    def test_ipc_pack_unpack_malicious_oversized_error(self):
+        good = lean_live._cursor_ns_ipc_pack({
+            'ok': True, 'argv': ['/bin/bwrap', '--', '/bin/true'],
+            'geteuid': 1002,
+        })
+        self.assertEqual(lean_live._cursor_ns_ipc_unpack(good)['geteuid'], 1002)
+        with self.assertRaises(lean_live.LiveError) as ctx:
+            lean_live._cursor_ns_ipc_unpack(b'{"ok":true,"evil":1}')
+        self.assertEqual(ctx.exception.code, 'cursor_ns_ipc_failed')
+        self.assertIn('unexpected_fields', ctx.exception.detail)
+        huge = lean_live._cursor_ns_ipc_pack({
+            'ok': True, 'argv': ['x' * (lean_live.CURSOR_NS_IPC_MAX)], 'geteuid': 1002,
+        })
+        self.assertIn(b'ipc_too_large', huge)
+        unpacked = lean_live._cursor_ns_ipc_unpack(huge)
+        self.assertFalse(unpacked.get('ok'))
+        with self.assertRaises(lean_live.LiveError):
+            lean_live._cursor_ns_ipc_unpack(b'x' * (lean_live.CURSOR_NS_IPC_MAX + 1))
+        bad_argv = lean_live._cursor_ns_ipc_pack({'ok': True, 'argv': [1, 2], 'geteuid': 1002})
+        self.assertIn(b'ipc_bad_argv', bad_argv)
+
+    def test_validate_argv_requires_fixed_cli_and_binds(self):
+        base = self._private_base()
+        try:
+            cmd = ['/opt/pin/node', '/opt/pin/index.js', '--workspace', str(base / 'work')]
+            bwrap = '/usr/bin/gb-bwrap-test'
+            ok = self._synthetic_argv(base, cmd, bwrap=bwrap)
+            self.assertEqual(
+                lean_live._validate_cursor_namespace_argv(ok, base, cmd, bwrap=bwrap), ok)
+            evil = list(ok)
+            evil[evil.index('--') + 1] = '/tmp/evil'
+            with self.assertRaises(lean_live.LiveError) as ctx:
+                lean_live._validate_cursor_namespace_argv(evil, base, cmd, bwrap=bwrap)
+            self.assertEqual(ctx.exception.detail, 'cmd_mismatch')
+            missing = [x for x in ok if x != str(base / 'home')]
+            with self.assertRaises(lean_live.LiveError) as mctx:
+                lean_live._validate_cursor_namespace_argv(missing, base, cmd, bwrap=bwrap)
+            self.assertIn('missing_bind', mctx.exception.detail)
+        finally:
+            import shutil
+            shutil.rmtree(base, ignore_errors=True)
+
+    def test_uid1002_direct_path_reports_real_geteuid_via_guard(self):
+        """Already-1002 path invokes native builder; child geteuid is real 1002."""
+        base = self._private_base()
+        try:
+            pin = Path('/opt/pin')
+            cmd = [str(pin / 'node'), 'index.js', '--workspace', str(base / 'work')]
+            bwrap = str(pin / 'gb-bwrap')
+            seen = {}
+
+            def fake_builder(b, c):
+                seen['geteuid'] = os.geteuid()
+                seen['base'] = str(b)
+                return self._synthetic_argv(b, c, bwrap=bwrap)
+
+            guard = mock.Mock()
+            guard.CURSOR_PIN = pin
+            guard.cursor_namespace_argv.side_effect = fake_builder
+            with mock.patch.object(os, 'geteuid', return_value=1002):
+                argv = lean_live._cursor_namespace_argv_uid1002(guard, base, cmd)
+            self.assertEqual(seen['geteuid'], 1002)
+            self.assertEqual(argv[-len(cmd):], cmd)
+            guard.cursor_namespace_argv.assert_called_once()
+        finally:
+            import shutil
+            shutil.rmtree(base, ignore_errors=True)
+
+    def test_root_fork_ipc_ok_malicious_and_error_before_popen(self):
+        """Root parent consumes bounded IPC only; bad child payloads fail pre-Popen."""
+        base = self._private_base()
+        try:
+            pin = Path('/opt/pin')
+            cmd = [str(pin / 'node'), 'index.js', '--workspace', str(base / 'work')]
+            bwrap = str(pin / 'gb-bwrap')
+            good_argv = self._synthetic_argv(base, cmd, bwrap=bwrap)
+            guard = mock.Mock()
+            guard.CURSOR_PIN = pin
+
+            def run_with_ipc(raw):
+                with mock.patch.object(os, 'geteuid', return_value=0), \
+                        mock.patch.object(os, 'fork', return_value=4242), \
+                        mock.patch.object(os, 'pipe', return_value=(11, 12)), \
+                        mock.patch.object(os, 'close'), \
+                        mock.patch.object(os, 'read', return_value=raw), \
+                        mock.patch.object(os, 'waitpid', return_value=(4242, 0)):
+                    return lean_live._cursor_namespace_argv_uid1002(guard, base, cmd)
+
+            ok_raw = lean_live._cursor_ns_ipc_pack({
+                'ok': True, 'argv': good_argv, 'geteuid': 1002,
+            })
+            self.assertEqual(run_with_ipc(ok_raw), good_argv)
+
+            with self.assertRaises(lean_live.LiveError) as uid_ctx:
+                run_with_ipc(lean_live._cursor_ns_ipc_pack({
+                    'ok': True, 'argv': good_argv, 'geteuid': 0,
+                }))
+            self.assertEqual(uid_ctx.exception.code, 'cursor_ns_child_uid')
+
+            with self.assertRaises(lean_live.LiveError) as err_ctx:
+                run_with_ipc(lean_live._cursor_ns_ipc_pack({
+                    'ok': False, 'error_type': 'GuardError',
+                    'error': 'Cursor adapter requires exact GoBadminton slot UID',
+                    'error_code': 'cursor_namespace_guard', 'geteuid': 0,
+                }))
+            self.assertEqual(err_ctx.exception.code, 'cursor_namespace_guard')
+
+            evil_argv = list(good_argv)
+            sep = evil_argv.index('--')
+            evil_argv = (
+                evil_argv[:sep]
+                + ['--ro-bind', '/root/.ssh', '/root/.ssh']
+                + evil_argv[sep:]
+            )
+            with self.assertRaises(lean_live.LiveError) as evil_ctx:
+                run_with_ipc(lean_live._cursor_ns_ipc_pack({
+                    'ok': True, 'argv': evil_argv, 'geteuid': 1002,
+                }))
+            self.assertEqual(evil_ctx.exception.detail, 'credential_path')
+
+            with self.assertRaises(lean_live.LiveError) as over_ctx:
+                run_with_ipc(b'y' * (lean_live.CURSOR_NS_IPC_MAX + 1))
+            self.assertEqual(over_ctx.exception.detail, 'oversized')
+            # Native builder never runs in Root parent process on fork path.
+            guard.cursor_namespace_argv.assert_not_called()
+        finally:
+            import shutil
+            shutil.rmtree(base, ignore_errors=True)
+
+    def test_namespace_guard_error_marks_preflight_no_call_zero_popen(self):
+        """Guard/IPC failure before Popen → preflight_no_call, charge none."""
+        with tempfile.TemporaryDirectory() as td:
+            work = Path(td) / 'work'
+            work.mkdir()
+            (work / 'tracked.txt').write_text('x')
+            evidence = Path(td) / 'evidence'
+            evidence.mkdir()
+            task = {
+                'issue': 182, 'allowed_paths': ['tracked.txt'],
+                'revision': 'e' * 64, 'runtime_base_sha': 'f' * 40,
+            }
+            native = mock.Mock()
+            native.CURSOR_PIN = Path('/opt/pin')
+            native.AUTHOR_TOOLS = 'Shell,Read'
+            native.export.return_value = {'tracked.txt': 'a' * 64}
+            native.author_config.return_value = {
+                'permissions': {'allow': []}, 'sandbox': {},
+            }
+            guard = mock.Mock()
+            guard.CURSOR_PIN = Path('/opt/pin')
+            popen = mock.Mock(side_effect=AssertionError('Popen must not run'))
+
+            def boom_ns(*a, **k):
+                raise lean_live.LiveError(
+                    'cursor_namespace_guard',
+                    'GuardError:Cursor adapter requires exact GoBadminton slot UID')
+
+            with mock.patch.object(lean_live, 'require_executor_uid'), \
+                    mock.patch.object(lean_live, '_load_native', side_effect=lambda n: (
+                        native if n == 'native_cursor' else guard)), \
+                    mock.patch.object(lean_live, 'run_argv', return_value=mock.Mock(
+                        stdout='tracked.txt\0', returncode=0)), \
+                    mock.patch.object(lean_live, 'load_short_rules', return_value=(
+                        'RULES\n', 'a' * 64, Path('AGENTS.md'))), \
+                    mock.patch.object(lean_live, 'chown_private_tree'), \
+                    mock.patch.object(lean_live, 'chown_bounded_output_dir'), \
+                    mock.patch.object(lean_live, '_ensure_cursor_private_root'), \
+                    mock.patch.object(lean_live, '_cursor_namespace_argv_uid1002',
+                                      side_effect=boom_ns), \
+                    mock.patch.object(lean_live.subprocess, 'Popen', popen), \
+                    mock.patch.dict(os.environ, {'CURSOR_AUTH_TOKEN': 'tok-test-auth-xx'}):
+                with self.assertRaises(providers.ProviderError) as ctx:
+                    lean_live.cursor_author_live(
+                        task=task, worktree=work, evidence_dir=evidence)
+            self.assertEqual(ctx.exception.code, 'preflight_no_call')
+            self.assertEqual(ctx.exception.charge, 'none')
+            self.assertEqual(popen.call_count, 0)
+            intent = json.loads((evidence / 'author-intent.json').read_text())
+            self.assertEqual(intent['phase'], 'preflight_no_call')
+            self.assertTrue(intent.get('no_model_launched'))
+
+
 if __name__ == '__main__':
     os.chdir(Path(__file__).resolve().parent)
     unittest.main()

@@ -728,6 +728,194 @@ def materialize_inputs(task, dest_dir):
     return materials
 
 
+CURSOR_PRIVATE_DIRS = ('home', 'config', 'data', 'cache', 'tmp', 'work')
+CURSOR_NS_IPC_MAX = 65536
+CURSOR_NS_IPC_FIELDS = frozenset({
+    'ok', 'argv', 'geteuid', 'error_type', 'error_code', 'error',
+})
+
+
+def _ensure_cursor_private_root(base, uid=CURSOR_UID, gid=CURSOR_GID):
+    """Re-assert base + six dirs private 0700 / slot-owned after export/setup.
+
+    Native guard requires exact ownership and no group/other bits. Export and
+    materialize must not leave the private root world-readable.
+    """
+    base = Path(base)
+    expect_uid = uid if os.geteuid() == 0 else os.geteuid()
+    for path in (base, *(base / name for name in CURSOR_PRIVATE_DIRS)):
+        if path.is_symlink() or not path.is_dir():
+            raise LiveError('cursor_private_root', str(path))
+        os.chmod(path, 0o700)
+        if os.geteuid() == 0:
+            os.chown(path, uid, gid)
+        info = path.lstat()
+        if info.st_uid != expect_uid:
+            raise LiveError('cursor_private_root_uid', str(path))
+        if info.st_mode & 0o077:
+            raise LiveError('cursor_private_root_mode', str(path))
+
+
+def _cursor_drop_to_author():
+    """Fork child only: groups 65042 / gid+uid 1002 / NNP. Parent stays Root."""
+    os.setgroups([REGISTRY_GID])
+    os.setgid(CURSOR_GID)
+    os.setuid(CURSOR_UID)
+    try:
+        import ctypes
+        if ctypes.CDLL(None, use_errno=True).prctl(38, 1, 0, 0, 0) != 0:
+            raise OSError('no_new_privs failed')
+    except Exception as err:
+        raise LiveError('cursor_author_nnp', type(err).__name__) from err
+
+
+def _cursor_ns_ipc_pack(payload):
+    """Bounded JSON fixed fields only — argv is list[str]; no pickle/paths invent."""
+    out = {}
+    for key in CURSOR_NS_IPC_FIELDS:
+        if key not in payload:
+            continue
+        out[key] = payload[key]
+    if 'argv' in out:
+        argv = out['argv']
+        if not (isinstance(argv, list) and all(isinstance(x, str) for x in argv)):
+            out = {'ok': False, 'error_type': 'ipc_bad_argv'}
+    raw = json.dumps(out, separators=(',', ':')).encode()
+    if len(raw) > CURSOR_NS_IPC_MAX:
+        raw = b'{"ok":false,"error_type":"ipc_too_large"}'
+    return raw
+
+
+def _cursor_ns_ipc_unpack(raw):
+    if not raw or len(raw) > CURSOR_NS_IPC_MAX:
+        raise LiveError('cursor_ns_ipc_failed', 'empty_or_oversized')
+    try:
+        obj = json.loads(raw.decode('utf-8'))
+    except (ValueError, UnicodeDecodeError) as err:
+        raise LiveError('cursor_ns_ipc_failed', type(err).__name__) from err
+    if not isinstance(obj, dict) or set(obj) - CURSOR_NS_IPC_FIELDS:
+        raise LiveError('cursor_ns_ipc_failed', 'unexpected_fields')
+    return obj
+
+
+def _validate_cursor_namespace_argv(argv, base, cmd, *, bwrap):
+    """Trusted parent checks child argv against fixed intended CLI / private base."""
+    if not (isinstance(argv, list) and argv and all(isinstance(x, str) and x for x in argv)):
+        raise LiveError('cursor_ns_argv_invalid', 'type')
+    if len(argv) > 512 or sum(len(x) for x in argv) > CURSOR_NS_IPC_MAX - 64:
+        raise LiveError('cursor_ns_argv_invalid', 'size')
+    if argv[0] != str(bwrap):
+        raise LiveError('cursor_ns_argv_invalid', 'bwrap')
+    try:
+        sep = argv.index('--')
+    except ValueError as err:
+        raise LiveError('cursor_ns_argv_invalid', 'no_sep') from err
+    if list(argv[sep + 1:]) != list(cmd):
+        raise LiveError('cursor_ns_argv_invalid', 'cmd_mismatch')
+    base = Path(base)
+    for name in CURSOR_PRIVATE_DIRS:
+        if str(base / name) not in argv:
+            raise LiveError('cursor_ns_argv_invalid', 'missing_bind:' + name)
+    joined = '\n'.join(argv)
+    for bad in ('/root/', str(AGENT_HOME / '.ssh'), 'SSH_AUTH_SOCK=', 'GITHUB_TOKEN='):
+        if bad in joined:
+            raise LiveError('cursor_ns_argv_invalid', 'credential_path')
+    return argv
+
+
+def _cursor_namespace_argv_uid1002(guard, base, cmd):
+    """Call native cursor_namespace_argv under real euid 1002.
+
+    Root parent retains lease/auth in memory; fork + drop + bounded JSON IPC
+    returns argv. Already-UID1002 callers invoke the native builder directly.
+    Failures here are before Popen — known no-model-call.
+    """
+    base = Path(base)
+    cmd = list(cmd)
+    bwrap = Path(guard.CURSOR_PIN) / 'gb-bwrap'
+
+    def _build():
+        try:
+            argv = guard.cursor_namespace_argv(base, cmd)
+        except Exception as err:
+            raise LiveError(
+                'cursor_namespace_guard',
+                f'{type(err).__name__}:{err}',
+            ) from err
+        return _validate_cursor_namespace_argv(argv, base, cmd, bwrap=bwrap)
+
+    euid = os.geteuid()
+    if euid == CURSOR_UID:
+        return _build()
+    if euid != 0:
+        raise LiveError('cursor_ns_wrong_uid', str(euid))
+
+    r_fd, w_fd = os.pipe()
+    pid = os.fork()
+    if pid == 0:
+        os.close(r_fd)
+        status = 1
+        try:
+            _cursor_drop_to_author()
+            try:
+                argv = guard.cursor_namespace_argv(base, cmd)
+                payload = {
+                    'ok': True,
+                    'argv': argv,
+                    'geteuid': os.geteuid(),
+                }
+                status = 0
+            except BaseException as err:
+                payload = {
+                    'ok': False,
+                    'geteuid': os.geteuid(),
+                    'error_type': type(err).__name__,
+                    'error': str(err)[:500],
+                    'error_code': 'cursor_namespace_guard',
+                }
+            try:
+                os.write(w_fd, _cursor_ns_ipc_pack(payload))
+            except Exception:
+                pass
+        except BaseException as err:
+            try:
+                os.write(w_fd, _cursor_ns_ipc_pack({
+                    'ok': False,
+                    'geteuid': os.geteuid(),
+                    'error_type': 'child_setup_failed',
+                    'error': str(err)[:200],
+                    'error_code': 'cursor_ns_child_setup',
+                }))
+            except Exception:
+                pass
+            status = 1
+        try:
+            os.close(w_fd)
+        except Exception:
+            pass
+        os._exit(status)
+
+    os.close(w_fd)
+    raw_ipc = b''
+    try:
+        raw_ipc = os.read(r_fd, CURSOR_NS_IPC_MAX + 1)
+    finally:
+        os.close(r_fd)
+    os.waitpid(pid, 0)
+    if len(raw_ipc) > CURSOR_NS_IPC_MAX:
+        raise LiveError('cursor_ns_ipc_failed', 'oversized')
+    payload = _cursor_ns_ipc_unpack(raw_ipc)
+    if not payload.get('ok'):
+        raise LiveError(
+            str(payload.get('error_code') or 'cursor_namespace_guard'),
+            str(payload.get('error') or payload.get('error_type') or 'failed'),
+        )
+    if payload.get('geteuid') != CURSOR_UID:
+        raise LiveError('cursor_ns_child_uid', str(payload.get('geteuid')))
+    return _validate_cursor_namespace_argv(
+        payload.get('argv'), base, cmd, bwrap=bwrap)
+
+
 def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_lease=True):
     """Actual Cursor Auto CLI via native export/import (Mode A pattern in source).
 
@@ -756,11 +944,11 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
             no_model_launched=True,
         )
         raise ProviderError('preflight_no_call', err.detail, charge='none') from err
-    # Private sandbox under /tmp/gb-cursor-* — chown only this tree to UID1002.
-    base = Path(tempfile.mkdtemp(prefix='gb-cursor-lean-', dir='/tmp'))
+    # Private sandbox under /tmp/gb-cursor-211-* — native_guard exact prefix.
+    base = Path(tempfile.mkdtemp(prefix='gb-cursor-211-', dir='/tmp'))
     p = None
     try:
-        for name in ('home', 'config', 'data', 'cache', 'tmp', 'work'):
+        for name in CURSOR_PRIVATE_DIRS:
             (base / name).mkdir(mode=0o700)
         env_git = git_env()
         def bridge_git(*args, cwd=None):
@@ -807,6 +995,8 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
             raise ProviderError('cursor_auth_absent', 'trusted Cursor auth unavailable')
         if os.geteuid() == 0:
             chown_private_tree(base)
+        # Export/materialize may alter nested modes; re-assert private root for guard.
+        _ensure_cursor_private_root(base)
         env = {
             'PATH': '/opt/gb-slots/runtime/node/bin:/usr/bin:/bin',
             'LANG': 'C.UTF-8',
@@ -836,7 +1026,20 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
                '--disable-indexing', '--disable-codebase-ref',
                '--allowed-tools', native.AUTHOR_TOOLS, '--trust', '--single-turn',
                '--workspace', str(base / 'work')]
-        argv = guard.cursor_namespace_argv(base, cmd)
+        try:
+            argv = _cursor_namespace_argv_uid1002(guard, base, cmd)
+        except LiveError as err:
+            mark_intent_phase(
+                intent_path, 'preflight_no_call',
+                error_type=err.code,
+                error=str(err.detail or err.code)[:500],
+                no_model_launched=True,
+            )
+            raise ProviderError(
+                'preflight_no_call',
+                f'{err.code}:{err.detail or ""}',
+                charge='none',
+            ) from err
         mark_intent_phase(intent_path, 'launching', parent_lease=bool(parent_lease))
         stream = evidence / 'stream.jsonl'
         errf = evidence / 'stderr'
