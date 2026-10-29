@@ -282,7 +282,7 @@ def execute(action, bundle, commit, task_hash, *, base_controller=None, legacy_f
         j['phase'] = 'applying'
         put(JOURNAL, encoded(j), 0o600)
         for target, raw in payload.items():
-            put(target, raw, 0o600 if target == MARKER else 0o644)
+            put(target, raw, 0o644)  # Nonsecret role metadata: UID978 reads; only Root writes.
         need(all(sha(read(Path(p))) == row['after'] for p, row in changes.items()),
              'installed verification failed')
         need(preserved() == history, 'authoritative history changed')

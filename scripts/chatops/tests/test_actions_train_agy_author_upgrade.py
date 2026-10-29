@@ -131,6 +131,7 @@ class Upgrade(unittest.TestCase):
         self.assertFalse(result['ready'])
         self.assertTrue(self.call('verify')['verified'])
         marker = json.loads((self.config / 'antigravity-author.json').read_bytes())
+        self.assertEqual((self.config / 'antigravity-author.json').stat().st_mode & 0o777, 0o644)
         self.assertEqual(marker['phase'], 'canary')
         self.assertEqual(marker['executor_uid'], 978)
         self.assertEqual(marker['canary_task_sha256'], self.task_hash)
