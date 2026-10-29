@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { getGame, listMyManagedGames } from "../../../lib/api-client";
+import { createGameForInvitePath } from "../../../lib/invitation-continuation";
 import type { ManagedGame, Me } from "../../../lib/consumer-types";
 import type { GameInvitation } from "../../../lib/messaging-types";
 import { Button } from "../Button";
@@ -8,7 +9,7 @@ import { ProfileDialog, ProfileState } from "../players/ProfileComposition";
 import { MutationNotice } from "./MessageComposition";
 import { useSocialMutation } from "./useSocialMutation";
 
-export function InvitationChooser({ me, playerId, resultRef, onClose, onCreated }: { me: Me; playerId: string; resultRef?: string; onClose: () => void; onCreated: (id: string) => void }) {
+export function InvitationChooser({ me, playerId, resultRef, preferredGameId, onClose, onCreated }: { me: Me; playerId: string; resultRef?: string; preferredGameId?: string; onClose: () => void; onCreated: (id: string) => void }) {
   const live = useRef(true);
   useEffect(() => { live.current = true; return () => { live.current = false; }; }, []);
   const [games, setGames] = useState<ManagedGame[]>([]);
@@ -40,10 +41,13 @@ export function InvitationChooser({ me, playerId, resultRef, onClose, onCreated 
     if (!fresh.ok) { mutation.setNotice("Игра сейчас недоступна. Обновите список."); setReload(n => n + 1); return; }
     mutation.run(`/v1/games/${encodeURIComponent(game.id)}/invitations`, { inviteePublicPlayerId: playerId, expectedGameVersion: fresh.data.version, ...(resultRef ? { discoveryProof: resultRef } : {}) });
   }
-  return <ProfileDialog title="Пригласить на игру" onClose={() => { if (!checking && !mutation.busy) onClose(); }}><div className="invite-dialog-example"><small>Пригласить на игру</small><strong>Выберите вашу игру</strong><p>Приглашение не резервирует место.</p>
+  const selected = preferredGameId ? games.find(g => g.id === preferredGameId) : null;
+  const offeredGames = preferredGameId ? selected ? [selected] : [] : games;
+  return <ProfileDialog title="Пригласить на игру" onClose={() => { if (!checking && !mutation.busy) onClose(); }}><div className="invite-dialog-example"><small>Пригласить на игру</small><strong>{preferredGameId ? "Пригласить в созданную игру" : "Выберите вашу игру"}</strong><p>Приглашение не резервирует место.</p>
     {state === "loading" && <ProfileState title="Загружаем игры…" state="loading" />}
     {state === "error" && <ProfileState title="Не удалось загрузить игры" state="error" retry={() => setReload(n => n + 1)} />}
-    {state === "ready" && games.length === 0 && <p>Пока нет опубликованных игр, которыми вы управляете.</p>}
-    {games.map(g => <button key={g.id} disabled={checking || mutation.busy || mutation.pending} onClick={() => void invite(g)}><span>{g.title}<small>{new Date(g.startsAt).toLocaleString("ru-RU", { timeZone: g.timezone, day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" })}</small></span><b aria-hidden="true">→</b></button>)}
-    <Button variant="outline" href="/games/create">+ Создать новую игру</Button><MutationNotice mutation={mutation} /></div></ProfileDialog>;
+    {state === "ready" && !preferredGameId && games.length === 0 && <p>Пока нет опубликованных игр, которыми вы управляете.</p>}
+    {state === "ready" && preferredGameId && !selected && <><p role="status">Созданная игра пока не найдена в вашем списке. Обновите игры, не создавая новую.</p><Button variant="outline" onClick={() => setReload(n => n + 1)}>Обновить игры</Button></>}
+    {offeredGames.map(g => <button key={g.id} disabled={checking || mutation.busy || mutation.pending} onClick={() => void invite(g)}><span>{g.title}<small>{new Date(g.startsAt).toLocaleString("ru-RU", { timeZone: g.timezone, day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" })}</small></span><b aria-hidden="true">→</b></button>)}
+    {!preferredGameId && <Button variant="outline" href={createGameForInvitePath(playerId)}>+ Создать новую игру</Button>}<MutationNotice mutation={mutation} /></div></ProfileDialog>;
 }

@@ -36,7 +36,7 @@ export function ProfileFriendship({ me, peerId }: { me: Me; peerId: string }) {
     {state === "loading" && <p role="status">Проверяем состояние дружбы…</p>}
     {state === "guest" && <AuthEntry returnPath={`/players/${peerId}`}>Войти для действий с друзьями</AuthEntry>}
     {state === "error" && <ProfileState title="Не удалось проверить дружбу" state="error" retry={refresh} />}
-    {state === "unavailable" && <p role="status">Друзья сейчас недоступны. Проверьте настройки видимости профиля и запросов на общение.</p>}
+    {state === "unavailable" && <p role="status">Друзья сейчас недоступны. Проверьте доступность игрового профиля и повторите попытку. Запрос на общение для дружбы не требуется.</p>}
     {state === "ready" && view && <FriendActions me={me} view={view} peerId={peerId} refresh={refresh} />}
   </section>;
 }

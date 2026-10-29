@@ -2,6 +2,8 @@
 import { initialCreateVenue, selectCreateVenue } from "../../../lib/venue-popup-create";
 import { profileSetupPath, safeAuthReturnPath } from "../../../lib/auth-return";
 import { venueCreatePath } from "../../../lib/games-venue-map";
+import { pendingInviteeFromSearch } from "../../../lib/invitation-continuation";
+import { InvitationChooser } from "../messages/InvitationChooser";
 
 import { GamePhotoSelection } from "../games/GamePhotoSelection";
 import { gameCoverRequest } from "../../../lib/game-cover-api";
@@ -101,8 +103,14 @@ export type CreateGamePageProps = {
 };
 
 export function CreateGamePage({ embedded = false, initialVenue, onClose }: CreateGamePageProps = {}) {
+  const [invitePlayerId, setInvitePlayerId] = useState<string | null>(null);
+  useEffect(() => {
+    // Only the full-route invitation flow carries a public UUID. Never trust
+    // arbitrary return URLs or an invitation proof from the query string.
+    setInvitePlayerId(embedded ? null : pendingInviteeFromSearch(window.location.search));
+  }, [embedded]);
   const model = useCreateGameController(initialVenue);
-  return <CreateGamePresentation {...model} embedded={embedded} onClose={onClose} />;
+  return <CreateGamePresentation {...model} embedded={embedded} onClose={onClose} invitePlayerId={invitePlayerId} />;
 }
 
 function useCreateGameController(initialVenue?: VenueSummary | null) {
@@ -432,7 +440,7 @@ function useCreateGameController(initialVenue?: VenueSummary | null) {
     ? new URLSearchParams({ venueId: initialVenue?.id ?? "" }).toString()
     : typeof window === "undefined" ? "" : window.location.search));
   return {
-    step, preferences, saveContact, setSaveContact, creatorSeat, trainer, setReload,
+    step, me, preferences, saveContact, setSaveContact, creatorSeat, trainer, setReload,
     activityKind, setActivityKind, dateChoice, setDateChoice, customDuration, setCustomDuration,
     draft, setDraft, knownVenues, selectedVenue, venueStatus, setVenueReload, venuePickerOpen,
     setVenuePickerOpen, venueTriggerRef, onVenueModeChange, onVenueSelect, created, error, busy,
@@ -442,17 +450,19 @@ function useCreateGameController(initialVenue?: VenueSummary | null) {
 }
 
 /** The route and popup render the same fields, validation, photo, preview and actions. */
-export function CreateGamePresentation({ embedded = false, onClose,
-  step, preferences, saveContact, setSaveContact, creatorSeat, trainer, setReload,
+export function CreateGamePresentation({ embedded = false, onClose, invitePlayerId = null,
+  step, me, preferences, saveContact, setSaveContact, creatorSeat, trainer, setReload,
   activityKind, setActivityKind, dateChoice, setDateChoice, customDuration, setCustomDuration,
   draft, setDraft, knownVenues, selectedVenue, venueStatus, setVenueReload, venuePickerOpen,
   setVenuePickerOpen, venueTriggerRef, onVenueModeChange, onVenueSelect, created, error, busy,
   setBusy, photo, setPhoto, photoReady, setPhotoReady, photoUrl, contactEdited, previewPayload,
   previewGame, location, onCheck, onPublish, setStep, recoveryChecked, rereadResult, returnPath,
-}: ReturnType<typeof useCreateGameController> & Pick<CreateGamePageProps, "embedded" | "onClose">) {
+}: ReturnType<typeof useCreateGameController> & Pick<CreateGamePageProps, "embedded" | "onClose"> & { invitePlayerId?: string | null }) {
+  const [inviteOpen, setInviteOpen] = useState(true);
+  const [sentInvitation, setSentInvitation] = useState<string | null>(null);
   // One publish action surface. The embedded variant renders it as a sticky popup footer.
   const publishActionBar = <GameActionBar>
-    <Button disabled={busy} loading={busy} onClick={() => void onPublish()}>{busy ? "Публикуем…" : "Опубликовать игру"}</Button>
+    <Button disabled={busy} loading={busy} onClick={() => void onPublish()}>{busy ? "Создаём…" : "Создать игру"}</Button>
     <Button variant="outline" disabled={busy} onClick={() => setStep("form")}>Назад к редактированию</Button>
   </GameActionBar>;
   const content = (
@@ -537,11 +547,11 @@ export function CreateGamePresentation({ embedded = false, onClose,
           </div></section>
           <GamePhotoSelection onChange={setPhoto} onReady={setPhotoReady} disabled={busy}/>
           {error && <div className="gb-game-notice" role="alert"><p>{error}</p><Button variant="outline" type="button" onClick={() => setReload(n => n + 1)}>Обновить проверку входа</Button></div>}
-          <div className="gb-game-form-actions">{embedded ? <Button variant="outline" onClick={onClose}>Отмена</Button> : <Button variant="outline" href="/games">Отмена</Button>}<Button type="submit" disabled={!photoReady}>Проверить игру</Button></div>
+          <div className="gb-game-form-actions">{embedded ? <Button variant="outline" onClick={onClose}>Отмена</Button> : <Button variant="outline" href="/games">Отмена</Button>}<Button type="submit" disabled={!photoReady}>Далее — к созданию</Button></div>
         </form>
       </>}
       {step === "preview" && previewGame && <div className="gb-game-preview" data-surface="create-preview">
-        <header className="gb-game-preview-heading"><h2>Проверка перед публикацией</h2><p>Проверьте данные. Игра появится после нажатия «Опубликовать игру».</p></header>
+        <header className="gb-game-preview-heading"><h2>Проверка перед созданием</h2><p>Проверьте данные. Игра появится после нажатия «Создать игру».</p></header>
         <GameHero game={previewGame} preview localPreview={photoUrl} />
         <p>{photo ? "Выбрано своё фото этой игры. Перед публикацией сервер проверит изображение." : "Будет использована текущая одобренная обложка площадки или стандартная."}</p>
         <div className="gb-game-detail-grid"><div><GameTerms game={previewGame} onVenueClick={embedded ? () => { setStep("form"); setVenuePickerOpen(true); } : undefined} /><section className="gb-game-section"><h2>Кто увидит игру</h2><p>{draft.visibility === "public" ? "Игра появится в поиске" : "Только те, у кого есть ссылка"}</p></section></div>
@@ -549,7 +559,12 @@ export function CreateGamePresentation({ embedded = false, onClose,
         </div>
         {embedded && <div className="gb-game-popup-preview-actions">{publishActionBar}</div>}
       </div>}
-      {step === "published" && created && <div className="gb-game-feedback" data-state="ready" data-result="success"><span className="gb-game-kicker">Всё готово</span><h1>Игра опубликована</h1><p>{created.title} · {formatGameWhen(created)}</p><p>Подтверждено: {created.confirmedCount} · Свободно: {created.availablePlaces} · Вместимость: {created.capacity}</p><p>{creatorSeat || "Проверяем ваше участие…"}</p><p>Вы можете открыть игру или перейти к её сводке.</p><div className="gb-game-form-actions"><Button variant="outline" href={`/games/${created.id}`}>Открыть игру</Button><Button href={`/my-games/${created.id}`}>Открыть сводку созданной игры</Button>{embedded && <Button variant="outline" onClick={onClose}>К площадке</Button>}</div></div>}
+      {step === "published" && created && <div className="gb-game-feedback" data-state="ready" data-result="success"><span className="gb-game-kicker">Всё готово</span><h1>Игра опубликована</h1><p>{created.title} · {formatGameWhen(created)}</p><p>Подтверждено: {created.confirmedCount} · Свободно: {created.availablePlaces} · Вместимость: {created.capacity}</p><p>{creatorSeat || "Проверяем ваше участие…"}</p><p>{invitePlayerId && !embedded ? "Вернитесь к приглашению: отправьте его выбранному игроку в только что созданную игру." : "Вы можете открыть игру или перейти к её сводке."}</p>
+          {invitePlayerId && !embedded && (sentInvitation ? <p role="status">Приглашение отправлено. <Button href={`/messages?invitation=${encodeURIComponent(sentInvitation)}`}>Открыть приглашение</Button></p>
+            : <Button variant="outline" onClick={() => setInviteOpen(true)}>Пригласить выбранного игрока</Button>)}
+          <div className="gb-game-form-actions"><Button variant="outline" href={`/games/${created.id}`}>Открыть игру</Button><Button href={`/my-games/${created.id}`}>Открыть сводку созданной игры</Button>{embedded && <Button variant="outline" onClick={onClose}>К площадке</Button>}</div>
+          {invitePlayerId && me && !embedded && inviteOpen && !sentInvitation && <InvitationChooser me={me} playerId={invitePlayerId} preferredGameId={created.id} onClose={() => setInviteOpen(false)} onCreated={id => { setSentInvitation(id); setInviteOpen(false); }} />}
+        </div>}
       {(step === "unknown" || step === "conflict") && <div className="gb-game-feedback" data-state="error" data-result={step}>
         <h1>{step === "unknown" ? "Результат публикации неизвестен" : "Данные игры изменились"}</h1><p>{error}</p><p>Проверьте список своих игр перед повторной публикацией.</p>
         <p role="status">{recoveryChecked ? created ? (created.status === "draft" ? "Игра сохранена как черновик. Публикация не подтверждена." : "Статус игры обновлён.") : "Список обновлён. Откройте созданные игры и проверьте результат." : "Не удалось проверить результат. Обновите состояние ещё раз."}</p>

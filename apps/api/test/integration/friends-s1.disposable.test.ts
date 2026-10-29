@@ -431,10 +431,10 @@ run("Friends S1 API — isolated synthetic PostGIS only", () => {
     const view=(await get(a,`/v1/friendships/${r.friendshipId}`)).json();expect(view.relationship).toBe("unavailable");expect(view.peer).toBeNull();
     expect((await get(a,"/v1/me/friendships?view=accepted")).json().items).toEqual([]);
   });
-  it.each(["directory","contact","eligibility","disabled","deletion_pending"])("%s closure invalidates pending epoch permanently",async kind=>{
+  it.each(["directory","eligibility","disabled","deletion_pending"])("%s closure invalidates pending epoch permanently",async kind=>{
     const requestKey=key(),r=await request(a,b,requestKey);const oldEpoch=(await pool.query("SELECT social_action_epoch FROM player_social_profiles WHERE user_id=$1",[b.userId])).rows[0].social_action_epoch;
     if (kind==="directory") await pool.query("UPDATE player_social_profiles SET directory_visible=false WHERE user_id=$1",[b.userId]);
-    else if (kind==="contact") await pool.query("UPDATE player_social_profiles SET contact_policy='closed' WHERE user_id=$1",[b.userId]);
+
     else if (kind==="eligibility") await pool.query("UPDATE player_social_profiles SET social_eligible=false WHERE user_id=$1",[b.userId]);
     else await pool.query("UPDATE users SET status=$2 WHERE id=$1",[b.userId,kind]);
     const epoch=(await pool.query("SELECT social_action_epoch FROM player_social_profiles WHERE user_id=$1",[b.userId])).rows[0].social_action_epoch;
@@ -446,6 +446,16 @@ run("Friends S1 API — isolated synthetic PostGIS only", () => {
     expect((await decide(b,r,"accept")).statusCode).toBe(404);
     expect((await post(a,"/v1/friend-requests",{targetPublicPlayerId:b.publicPlayerId},requestKey)).statusCode).toBe(404);
     const fresh=await request();expect(fresh.requestId).not.toBe(r.requestId);expect(await ledgerCount(fresh)).toBe(2);
+  });
+  it("direct-message opt-out does not block a new friend request, but old epoch stays invalid",async()=>{
+    const old=await request();
+    await pool.query("UPDATE player_social_profiles SET contact_policy='closed' WHERE user_id=$1",[b.userId]);
+    expect((await decide(b,old,"accept")).statusCode).toBe(404);
+    const fresh=await request();
+    expect(fresh.requestId).not.toBe(old.requestId);
+    expect((await decide(b,fresh,"accept")).statusCode).toBe(200);
+    const policy=(await pool.query("SELECT contact_policy FROM player_social_profiles WHERE user_id=$1",[b.userId])).rows[0].contact_policy;
+    expect(policy).toBe("closed");
   });
   it("TTL expiration is authoritative with no worker, old replay and decisions cannot revive it",async()=>{
     env.FRIENDS_REQUEST_TTL_SECONDS=1;
@@ -576,7 +586,7 @@ run("Friends S1 API — isolated synthetic PostGIS only", () => {
       expect((await decide(b,response.json(),"accept")).statusCode).toBe(404);
     } finally {gate.release.resolve();pairs.clear();await Promise.allSettled([sending,...(hiding?[hiding]:[])]);await lifecycle.query("ROLLBACK");lifecycle.release();}
   });
-  it("closure holds profile UPDATE: concurrent send waits and fails without orphan ledger",async()=>{
+  it("contact opt-out holds profile UPDATE: concurrent friend request waits then succeeds",async()=>{
     const lifecycle=await pool.connect();let sending:Promise<Response>|undefined;
     try {
       await lifecycle.query("BEGIN");await lifecycle.query("SET LOCAL lock_timeout='3s'");await lifecycle.query("SET LOCAL statement_timeout='10s'");
@@ -584,8 +594,8 @@ run("Friends S1 API — isolated synthetic PostGIS only", () => {
       await lifecycle.query("SELECT id FROM users WHERE id=$1 FOR NO KEY UPDATE",[b.userId]);
       await lifecycle.query("UPDATE player_social_profiles SET contact_policy='closed' WHERE user_id=$1",[b.userId]);
       sending=post(a,"/v1/friend-requests",{targetPublicPlayerId:b.publicPlayerId});
-      await waitBlocked(pid);await lifecycle.query("COMMIT");expect((await sending).statusCode).toBe(404);
-      expect((await pool.query("SELECT count(*)::int AS n FROM friendship_request_attempts WHERE requester_user_id=$1",[a.userId])).rows[0].n).toBe(0);
+      await waitBlocked(pid);await lifecycle.query("COMMIT");expect((await sending).statusCode).toBe(201);
+      expect((await pool.query("SELECT count(*)::int AS n FROM friendship_request_attempts WHERE requester_user_id=$1",[a.userId])).rows[0].n).toBe(1);
     } finally {await lifecycle.query("ROLLBACK");await Promise.allSettled(sending?[sending]:[]);lifecycle.release();}
   });
   it.each(["disabled","deletion_pending"])("account %s waits behind send's profile fence and permanently invalidates its epoch",async status=>{

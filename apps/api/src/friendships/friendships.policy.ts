@@ -48,8 +48,10 @@ export type Availability = {
   social_action_epoch: string; status: string; unrestricted: boolean;
 };
 export function eligible(p: Availability | undefined): p is Availability {
+  // Friend requests are independent of direct-message contact requests.
+  // Public/social opt-in, blocks and account restrictions still fence both peers.
   return Boolean(p && p.status === "active" && p.directory_visible && p.social_eligible
-    && p.contact_policy === "requests" && p.unrestricted);
+    && p.unrestricted);
 }
 export function effectivePending(row: FriendshipRow, profiles: Availability[], blocked: boolean, now: Date): boolean {
   return row.state === "pending" && !blocked && Boolean(row.expires_at && row.expires_at > now)
