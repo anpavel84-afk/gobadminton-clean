@@ -158,6 +158,81 @@ class AgyIssueBudget(unittest.TestCase):
         ledger = json.loads((self.out / 'slot1' / 'ledger.json').read_text())
         self.assertNotIn('issues', ledger[self.day]['agy'])
 
+    def test_od020_no_artificial_cap_unlimited_qa(self):
+        """OD-020: absent per_issue_daily + unlimited qa — no artificial 5 ceiling."""
+        self.limits_path.write_text(json.dumps(limits(per_issue=None, agy_qa='unlimited')))
+        b = S.Budget(self.limits_path, self.out, self.root / 'lock', today=lambda: self.day)
+        self.assertIsNone(b.per_issue_daily('agy'))
+        self.assertEqual(b.remaining('agy', 'qa', 'slot1'), float('inf'))
+        for _ in range(6):
+            b.charge('slot1', 'agy', 'qa')
+        self.assertEqual(b.used('agy', 'qa', 'slot1'), 6)
+        self.assertEqual(b.remaining('agy', 'qa', 'slot1'), float('inf'))
+
+    def test_od020_absent_author_unknown(self):
+        self.limits_path.write_text(json.dumps({
+            'schema': 1,
+            'providers': {'agy': {'qa': 'unlimited'}},
+            'slots': {'slot1': {'agy': {'qa': 'unlimited'}}},
+        }))
+        b = S.Budget(self.limits_path, self.out, self.root / 'lock', today=lambda: self.day)
+        self.assertIs(b.remaining('agy', 'author', 'slot1'), S.UNKNOWN)
+        with self.assertRaises(S.Hold):
+            b.charge('slot1', 'agy', 'author')
+
+    def test_od020_historical_explicit_five_still_enforced(self):
+        """Existing tests verify historical 5 when explicit — retain that fact."""
+        self.budget.bind_issue(29)
+        self.assertEqual(self.budget.per_issue_daily('agy'), 5)
+        for _ in range(5):
+            self.budget.charge('slot1', 'agy', 'qa')
+        with self.assertRaises(S.Hold):
+            self.budget.charge('slot1', 'agy', 'qa')
+        self.assertEqual(self.budget.issue_used('agy', 29), 5)
+
+    def test_od020_invalid_per_issue_rejected(self):
+        for bad in (0, -1, True, 1.5, 'unlimited', None):
+            self.limits_path.write_text(json.dumps({
+                'schema': 1,
+                'providers': {'agy': {'qa': 'unlimited', 'per_issue_daily': bad}},
+                'slots': {'slot1': {'agy': {'qa': 'unlimited'}}},
+            }))
+            b = S.Budget(self.limits_path, self.out, self.root / 'lock', today=lambda: self.day)
+            with self.assertRaises(S.Hold):
+                b.per_issue_daily('agy')
+
+
+class Od020ReceiverBudgetGate(unittest.TestCase):
+    """Receiver float/inf eligibility (OD-020); no LIVE pin import of core.live()."""
+
+    @classmethod
+    def setUpClass(cls):
+        root = Path(__file__).resolve().parents[1] / 'actions_train'
+        if str(root) not in sys.path:
+            sys.path.insert(0, str(root))
+        import receiver as R
+        cls.R = R
+
+    def test_budget_left_eligible_accepts_float_inf(self):
+        R = self.R
+        # Default / product QA: positive finite + inf.
+        self.assertTrue(R.budget_left_eligible(float('inf')))
+        self.assertTrue(R.budget_left_eligible(2))
+        self.assertTrue(R.budget_left_eligible(1.5))
+        self.assertFalse(R.budget_left_eligible(0))
+        self.assertFalse(R.budget_left_eligible(-3))
+        self.assertFalse(R.budget_left_eligible(True))
+        self.assertFalse(R.budget_left_eligible(None))
+        self.assertFalse(R.budget_left_eligible(float('nan')))
+        # Successor: positive finite + inf (restored legacy orientation).
+        self.assertTrue(R.budget_left_eligible(float('inf'), successor=True))
+        self.assertTrue(R.budget_left_eligible(1, successor=True))
+        self.assertTrue(R.budget_left_eligible(2, successor=True))
+        # Legacy exact_one: finite 1 + OD-020 inf; 2 refused.
+        self.assertTrue(R.budget_left_eligible(1, exact_one=True))
+        self.assertFalse(R.budget_left_eligible(2, exact_one=True))
+        self.assertTrue(R.budget_left_eligible(float('inf'), exact_one=True))
+
 
 if __name__ == '__main__':
     unittest.main()

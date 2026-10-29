@@ -1,0 +1,322 @@
+name: Lean Mode B delivery
+# OD-017: wake + bounded recovery for the same finite worker. Workflow must exist
+# on default main for true schedule/comment events; PMA publishes ONLY the reviewed
+# workflow file to main after source CI on dev. Integration remains branch dev.
+# Main schedule/Owner comment/manual wake has NO environment (PERMISSION_DENIED if
+# env:dev on main). That job only workflow_dispatchs THIS SAME file to fixed ref
+# dev, then ends — never waits under concurrency (deadlock). Dev executor alone
+# uses environment:dev + DEPLOY_*. Concurrency distinct from gobadminton-dev.
+# Fixed accepted client SHA required via vars.LEAN_CLIENT_SHA — no github.sha fallback.
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  issue_comment:
+    types: [created, edited]
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'status | recover | advance'
+        type: choice
+        options: [status, recover, advance]
+        default: status
+      recover_kind:
+        description: 'push | merge | deploy (recover only)'
+        type: string
+        default: ''
+      remote_head:
+        type: string
+        default: ''
+      merged_sha:
+        type: string
+        default: ''
+      deploy_run:
+        type: string
+        default: ''
+      live_sha:
+        type: string
+        default: ''
+permissions:
+  contents: read
+  issues: read
+  actions: read
+concurrency:
+  group: gobadminton-lean-delivery
+  cancel-in-progress: false
+jobs:
+  # Secret-free main forwarder: no environment, no DEPLOY_*, no checkout.
+  # actions:write only here for existing workflow_dispatch API (GITHUB_TOKEN).
+  wake:
+    if: >-
+      github.repository_id == 1416250340 &&
+      vars.LEAN_CLIENT_SHA != '' &&
+      github.ref == 'refs/heads/main' &&
+      (
+        github.event_name == 'schedule' ||
+        github.event_name == 'workflow_dispatch' &&
+          github.actor_id == 318610566 ||
+        github.event_name == 'issue_comment' &&
+          github.event.sender.id == 318610566 &&
+          contains(github.event.comment.body, 'GOBADMINTON_LEAN_TASK_V1')
+      )
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Forward lean-delivery workflow_dispatch to fixed ref dev
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 -I - <<'PY'
+          import json, os, pathlib, subprocess, sys
+          REPO = 'anpavel84-afk/gobadminton-clean'
+          WORKFLOW = 'lean-delivery.yml'
+          REF = 'dev'
+          OWNER_ID = 318610566
+          ACTIONS = frozenset({'status', 'advance', 'recover'})
+          CLOSED = ('action', 'recover_kind', 'remote_head', 'merged_sha',
+                    'deploy_run', 'live_sha')
+          assert os.environ['GITHUB_REPOSITORY'] == REPO
+          assert os.environ['GITHUB_REF'] == 'refs/heads/main'
+          event = json.loads(pathlib.Path(os.environ['GITHUB_EVENT_PATH']).read_text())
+          assert event['repository']['id'] == 1416250340
+          kind = os.environ['GITHUB_EVENT_NAME']
+          inputs = {k: '' for k in CLOSED}
+          if kind == 'schedule':
+              inputs['action'] = 'advance'
+          elif kind == 'issue_comment':
+              assert event.get('sender', {}).get('id') == OWNER_ID
+              body = event.get('comment', {}).get('body') or ''
+              assert 'GOBADMINTON_LEAN_TASK_V1' in body
+              inputs['action'] = 'advance'
+          elif kind == 'workflow_dispatch':
+              assert event.get('sender', {}).get('id') == OWNER_ID
+              raw = event.get('inputs') or {}
+              action = raw.get('action') or 'status'
+              if action not in ACTIONS:
+                  print('unexpected action: ' + repr(action), file=sys.stderr)
+                  raise SystemExit(1)
+              inputs['action'] = action
+              for key in CLOSED[1:]:
+                  val = raw.get(key) or ''
+                  if not isinstance(val, str):
+                      print('unexpected input type: ' + key, file=sys.stderr)
+                      raise SystemExit(1)
+                  inputs[key] = val
+          else:
+              print('unexpected event: ' + kind, file=sys.stderr)
+              raise SystemExit(1)
+          # Fixed own-repo + workflow path + ref; no dynamic path/ref; end after POST.
+          payload = {'ref': REF, 'inputs': {k: inputs[k] for k in CLOSED}}
+          proc = subprocess.run(
+              ['gh', 'api',
+               'repos/' + REPO + '/actions/workflows/' + WORKFLOW + '/dispatches',
+               '-X', 'POST', '--input', '-'],
+              input=json.dumps(payload),
+              text=True,
+              capture_output=True,
+              env={
+                  'PATH': os.environ.get('PATH', '/usr/bin:/bin'),
+                  'GH_TOKEN': os.environ['GH_TOKEN'],
+              },
+          )
+          if proc.returncode != 0:
+              sys.stderr.write(proc.stderr or proc.stdout or 'dispatch failed\n')
+              raise SystemExit(proc.returncode or 1)
+          print('forwarded lean-delivery to fixed ref dev action=' + inputs['action'])
+          PY
+  lean:
+    if: >-
+      github.repository_id == 1416250340 &&
+      vars.LEAN_CLIENT_SHA != '' &&
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/dev' &&
+      (github.actor_id == 318610566 || github.actor == 'github-actions[bot]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    # Environment secrets (DEPLOY_*) only on permitted branch dev; never main.
+    environment: dev
+    permissions:
+      contents: read
+      issues: read
+      actions: read
+    outputs:
+      continue: ${{ steps.decision.outputs.continue }}
+    steps:
+      - name: Require fixed accepted client SHA
+        run: |
+          test -n "${{ vars.LEAN_CLIENT_SHA }}"
+          echo "${{ vars.LEAN_CLIENT_SHA }}" | grep -E '^[0-9a-f]{40}$'
+      - name: Checkout fixed reviewed client (not untrusted Issue head, not moving github.sha)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ vars.LEAN_CLIENT_SHA }}
+          persist-credentials: false
+      - name: One bounded Lean reconcile via existing SSH transport
+        run: python3 -I -B tools/train/client.py reconcile
+        env:
+          PYTHONPATH: ${{ github.workspace }}/tools/train
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_ACTOR_ID: ${{ github.actor_id }}
+          LEAN_CLIENT_SHA: ${{ vars.LEAN_CLIENT_SHA }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ vars.DEPLOY_PORT }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+      - name: Extract Mode B continuation decision from lean-result.json
+        id: decision
+        if: success()
+        run: |
+          python3 -I - <<'PY'
+          import json, os, pathlib, sys
+
+          # LEAN_DECIDE_CONTINUE_BEGIN
+          def decide_continue(doc):
+              """Literal true/false from trusted Root JSON only. Fail closed.
+
+              Do not gate on controller.projection.enabled (placeholder).
+              Do not treat UNKNOWN/budget/capacity/unsafe paid outcomes as wake.
+              Accepted status+phase is progress (ignore stale claim.wake).
+              Known blocked may coexist with independent accepted/eligible wake.
+              """
+              if not isinstance(doc, dict):
+                  return False
+              if doc.get('status') != 'ok' or doc.get('exit') != 0:
+                  return False
+              if doc.get('dispatch_action') != 'advance':
+                  return False
+              ctrl = doc.get('controller')
+              if not isinstance(ctrl, dict):
+                  return False
+              if ctrl.get('status') != 'advanced':
+                  return False
+              results = ctrl.get('results')
+              if not isinstance(results, list) or not results:
+                  return False
+              wake_reason_phase = {
+                  'deadline': 'WAKE_RESUME',
+                  'waiting_ci': 'WAITING_CI',
+                  'waiting_deploy': 'WAITING_DEPLOY',
+              }
+              accepted_status = frozenset({'dev_accepted_uat_pending', 'done'})
+              accepted_phase = frozenset({'DEV_ACCEPTED_UAT_PENDING', 'DONE'})
+              known_blocked = frozenset({'blocked', 'strategy_halt', 'denied'})
+              progress = False
+              for item in results:
+                  if not isinstance(item, dict):
+                      return False
+                  status = item.get('status')
+                  reason = item.get('reason')
+                  claim = item.get('claim')
+                  if claim is None:
+                      claim = {}
+                  if not isinstance(claim, dict):
+                      return False
+                  phase = claim.get('phase')
+                  if status in accepted_status and phase in accepted_phase:
+                      progress = True
+                      continue
+                  if status == 'wake_resume':
+                      if reason not in wake_reason_phase:
+                          return False
+                      if phase != wake_reason_phase[reason]:
+                          return False
+                      progress = True
+                      continue
+                  if status in known_blocked:
+                      if phase not in ('BLOCKED', 'STRATEGY_HALT', 'DENIED'):
+                          return False
+                      continue
+                  return False
+              return progress
+          # LEAN_DECIDE_CONTINUE_END
+
+          def _unique(pairs):
+              out = {}
+              for key, value in pairs:
+                  if key in out:
+                      raise ValueError('duplicate JSON key')
+                  out[key] = value
+              return out
+
+          out_path = os.environ.get('GITHUB_OUTPUT')
+          if not out_path:
+              print('missing GITHUB_OUTPUT', file=sys.stderr)
+              raise SystemExit(1)
+
+          def write(flag):
+              with open(out_path, 'a', encoding='utf-8') as fh:
+                  fh.write('continue=' + flag + '\n')
+              print('lean.continue=' + flag)
+
+          path = pathlib.Path('evidence/lean-result.json')
+          if not path.is_file():
+              write('false')
+              raise SystemExit(0)
+          try:
+              doc = json.loads(path.read_text(encoding='utf-8'),
+                               object_pairs_hook=_unique)
+          except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
+              write('false')
+              raise SystemExit(0)
+          write('true' if decide_continue(doc) else 'false')
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: lean-delivery-evidence
+          path: evidence/
+          retention-days: 90
+          if-no-files-found: warn
+  # Secret-free Mode B handoff: one fixed advance dispatch, then end (no wait).
+  # Same concurrency group queues the child behind this run; never cancel active.
+  continuation:
+    needs: lean
+    if: >-
+      needs.lean.result == 'success' &&
+      needs.lean.outputs.continue == 'true' &&
+      github.repository_id == 1416250340 &&
+      vars.LEAN_CLIENT_SHA != '' &&
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/dev' &&
+      (github.actor_id == 318610566 || github.actor == 'github-actions[bot]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Dispatch one advance continuation to fixed ref dev
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 -I - <<'PY'
+          import json, os, subprocess, sys
+          REPO = 'anpavel84-afk/gobadminton-clean'
+          WORKFLOW = 'lean-delivery.yml'
+          REF = 'dev'
+          CLOSED = ('action', 'recover_kind', 'remote_head', 'merged_sha',
+                    'deploy_run', 'live_sha')
+          assert os.environ['GITHUB_REPOSITORY'] == REPO
+          assert os.environ['GITHUB_REF'] == 'refs/heads/dev'
+          inputs = {k: '' for k in CLOSED}
+          inputs['action'] = 'advance'
+          payload = {'ref': REF, 'inputs': {k: inputs[k] for k in CLOSED}}
+          proc = subprocess.run(
+              ['gh', 'api',
+               'repos/' + REPO + '/actions/workflows/' + WORKFLOW + '/dispatches',
+               '-X', 'POST', '--input', '-'],
+              input=json.dumps(payload),
+              text=True,
+              capture_output=True,
+              env={
+                  'PATH': os.environ.get('PATH', '/usr/bin:/bin'),
+                  'GH_TOKEN': os.environ['GH_TOKEN'],
+              },
+          )
+          if proc.returncode != 0:
+              sys.stderr.write(proc.stderr or proc.stdout or 'dispatch failed\n')
+              raise SystemExit(proc.returncode or 1)
+          print('continuation forwarded lean-delivery to fixed ref dev action=advance')
+          PY
