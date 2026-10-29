@@ -2,8 +2,8 @@
   "openapi": "3.1.1",
   "info": {
     "title": "GoBadminton API — critical pilot design",
-    "version": "0.19.0",
-    "description": "DESIGN_DRAFT. F-01 foundation. F-02 browser identity/session. F-03 organizer/venue/game publish + public discovery. F-04 transactional participation loop. Game-scoped authority. Checkpoint B: optional self-declared TrainerProfile; required activityKind regular|trainer_led; external settlement purpose no_trainer_fee|trainer_fee; trainer fee fixed per_player_per_session or by_agreement. Authenticated GET /me/games lists Games with active game_managers for the session user (draft/unlisted included; management.role + createdByMe). Unlisted share-token access remains out of scope. See docs/api/API_POLICY.md. LS-01: opt-in SocialProfile/directory/looking-for-game, Radar consent storage (no matching), block/report; SOCIAL_DIRECTORY_ENABLED default off. LS-R1: ephemeral Radar presence/matching + resultRef preview; SOCIAL_RADAR_ENABLED default off. SOCIAL_RADAR_DEMO_ENABLED default off enables synthetic/internal city-scoped Radar for deterministic demo identities only; live real-user Radar remains gated. LS-03: lean 1:1 text DM (request/accept/decline/send/list/read); SOCIAL_DM_ENABLED default off; polling-first; optional discoveryProof seam. LS-04: GameInvitation as a separate Sessions resource (manager invite, capacity-safe accept, block/expiry/idempotency); SOCIAL_INVITATIONS_ENABLED default off; pending invite reserves zero seats. LS-R2: discoveryProof/resultRef is viewer/session/generation-bound and revalidated against current Radar activations, expiry, radius/cohort, block and eligibility at preview and first-contact redemption; not a bearer grant; SOCIAL_RADAR_ENABLED remains default off. LS-05: text-only Game Chat scoped to current manager/confirmed membership with cancel/endsAt lifecycle fences; SOCIAL_GAME_CHAT_ENABLED default off; optional DM gameContextId for applicant clarification without room access. LS-06: lean composed Inbox read model over DM + GameInvitation + Game Chat (no second write ownership); SOCIAL_INBOX_ENABLED default off; polling-first. Account security: linked-provider link/unlink bound to current session (no email auto-link) and own session list/revoke/revoke-others. Venue A1a: catalog search, unverified find-or-propose, race-safe exact identity reservation, advisory fuzzy duplicates, confirm-distinct tokens. Legacy POST /venues is compatibility-only and cannot self-verify. G1 source-staged radar-geographic-v1: independent OFF-viewer city/nearby, coarse WGS84 center, exact geographic consent evidence, strict v2 proof and atomic revocation. SOCIAL_RADAR_GEOGRAPHIC_ENABLED defaults false; no cutover/deployment implied. GMap-1: public bounded city-wide Games map aggregate, shared upcoming/venue discovery filters, canonical Venue read projection; no map renderer or deployment."
+    "version": "0.20.0",
+    "description": "DESIGN_DRAFT. F-01 foundation. F-02 browser identity/session. F-03 organizer/venue/game publish + public discovery. F-04 transactional participation loop. Game-scoped authority. Checkpoint B: optional self-declared TrainerProfile; required activityKind regular|trainer_led; external settlement purpose no_trainer_fee|trainer_fee; trainer fee fixed per_player_per_session or by_agreement. Authenticated GET /me/games lists Games with active game_managers for the session user (draft/unlisted included; management.role + createdByMe). Unlisted share-token access remains out of scope. See docs/api/API_POLICY.md. LS-01: opt-in SocialProfile/directory/looking-for-game, Radar consent storage (no matching), block/report; SOCIAL_DIRECTORY_ENABLED default off. LS-R1: ephemeral Radar presence/matching + resultRef preview; SOCIAL_RADAR_ENABLED default off. SOCIAL_RADAR_DEMO_ENABLED default off enables synthetic/internal city-scoped Radar for deterministic demo identities only; live real-user Radar remains gated. LS-03: lean 1:1 text DM (request/accept/decline/send/list/read); SOCIAL_DM_ENABLED default off; polling-first; optional discoveryProof seam. LS-04: GameInvitation as a separate Sessions resource (manager invite, capacity-safe accept, block/expiry/idempotency); SOCIAL_INVITATIONS_ENABLED default off; pending invite reserves zero seats. LS-R2: discoveryProof/resultRef is viewer/session/generation-bound and revalidated against current Radar activations, expiry, radius/cohort, block and eligibility at preview and first-contact redemption; not a bearer grant; SOCIAL_RADAR_ENABLED remains default off. LS-05: text-only Game Chat scoped to current manager/confirmed membership with cancel/endsAt lifecycle fences; SOCIAL_GAME_CHAT_ENABLED default off; optional DM gameContextId for applicant clarification without room access. LS-06: lean composed Inbox read model over DM + GameInvitation + Game Chat (no second write ownership); SOCIAL_INBOX_ENABLED default off; polling-first. Account security: linked-provider link/unlink bound to current session (no email auto-link) and own session list/revoke/revoke-others. Venue A1a: catalog search, unverified find-or-propose, race-safe exact identity reservation, advisory fuzzy duplicates, confirm-distinct tokens. Legacy POST /venues is compatibility-only and cannot self-verify. G1 source-staged radar-geographic-v1: independent OFF-viewer city/nearby, coarse WGS84 center, exact geographic consent evidence, strict v2 proof and atomic revocation. SOCIAL_RADAR_GEOGRAPHIC_ENABLED defaults false; no cutover/deployment implied. GMap-1: public bounded city-wide Games map aggregate, shared upcoming/venue discovery filters, canonical Venue read projection; no map renderer or deployment. PG-1a (#375): additive GET /games/{gameId}/results and PUT /games/{gameId}/outcome with default-off POST_GAME_INTERNAL_ENABLED writes; no attendance/reviews/UI."
   },
   "x-document-status": "DESIGN_DRAFT",
   "servers": [
@@ -1672,6 +1672,250 @@
           },
           "409": {
             "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/games/{gameId}/results": {
+      "get": {
+        "operationId": "getGameResults",
+        "tags": [
+          "Games"
+        ],
+        "summary": "Read game outcome projection for current manager or confirmed participant",
+        "description": "PG-1a. Absent outcome projects unknown/version 0; elapsed endsAt never inserts a row. Current active manager may receive a bounded newest revision window (default 20, max 50) with revisionsNextCursor for older continuation. Confirmed participants see outcome facts for their game without revisions. Guest/outsider/revoked-manager-without-seat are private 404. Reads remain available when POST_GAME_INTERNAL_ENABLED is off. No attendance/roster/private host fields. Cookie session required.",
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "gameId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "revisionsLimit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 20
+            },
+            "description": "Manager revision page size. Ignored for participants (revisions omitted). Malformed or out-of-range → 400 LIMIT_INVALID."
+          },
+          {
+            "name": "revisionsCursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "description": "Opaque cursor from a prior revisionsNextCursor; continues into older revision history. Malformed → 400 CURSOR_INVALID. Ignored for participants."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized GameResults projection; no-store.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GameResults"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/games/{gameId}/outcome": {
+      "put": {
+        "operationId": "putGameOutcome",
+        "tags": [
+          "Games"
+        ],
+        "summary": "Record or correct held/not_held outcome after endsAt",
+        "description": "PG-1a. Current scoped GameManager only. Requires endsAt passed; draft/pre-end rejected; cancelled rejects held until case-scoped adjudication; published completes only on explicit held/not_held command; completed correction does not reopen enrollment. expectedVersion + Idempotency-Key + cookie/Origin/CSRF. Writes default disabled (POST_GAME_INTERNAL_ENABLED); fail-closed outside local test or exact bounded DEV. No attendance/notices/reviews/UI. Authorize replay under current rights.",
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "gameId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Must match a configured consumer web origin."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutGameOutcomeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Authorized GameResults projection; no-store.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GameResults"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Problem details with safe code and requestId; no internals/PII",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Writes unavailable (feature flag off or schema not installed).",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           },
           "default": {
             "$ref": "#/components/responses/Problem"
@@ -26222,6 +26466,233 @@
             "format": "date-time"
           }
         }
+      },
+      "PutGameOutcomeRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "expectedVersion",
+          "outcome"
+        ],
+        "properties": {
+          "expectedVersion": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647,
+            "description": "0 when no outcome row exists; otherwise current outcome.version."
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "held",
+              "not_held"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "description": "Plain text required for not_held and any correction (expectedVersion>0). No control characters."
+          }
+        },
+        "description": "PG-1a. Current GameManager only. No actorId/visibility/staff fields."
+      },
+      "GameOutcomeProvenance": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source",
+          "recordedAt",
+          "createdAt"
+        ],
+        "properties": {
+          "source": {
+            "type": "string",
+            "enum": [
+              "manager_explicit"
+            ]
+          },
+          "recordedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Timestamp of the current outcome revision (updates on correction)."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Immutable first recording time; retained across corrections."
+          }
+        }
+      },
+      "GameOutcomeFact": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "value",
+          "version",
+          "reason",
+          "provenance"
+        ],
+        "properties": {
+          "value": {
+            "type": "string",
+            "enum": [
+              "unknown",
+              "held",
+              "not_held"
+            ]
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "provenance": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GameOutcomeProvenance"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "description": "Absent row projects as unknown/version 0 with null provenance; time never invents a row."
+      },
+      "GameOutcomeRevisionSide": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "value",
+          "reason"
+        ],
+        "properties": {
+          "value": {
+            "type": "string",
+            "enum": [
+              "held",
+              "not_held"
+            ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 500
+          }
+        }
+      },
+      "GameOutcomeRevision": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "version",
+          "before",
+          "after",
+          "reason",
+          "source",
+          "recordedAt"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "before": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GameOutcomeRevisionSide"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "after": {
+            "$ref": "#/components/schemas/GameOutcomeRevisionSide"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "manager_explicit"
+            ]
+          },
+          "recordedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "GameResultsAllowedActions": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "canRecordOutcome"
+        ],
+        "properties": {
+          "canRecordOutcome": {
+            "type": "boolean",
+            "description": "UI hint only; PUT revalidates current manager, lifecycle, and write admission."
+          }
+        }
+      },
+      "GameResults": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "gameId",
+          "outcome",
+          "allowedActions"
+        ],
+        "properties": {
+          "gameId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/GameOutcomeFact"
+          },
+          "revisions": {
+            "type": "array",
+            "maxItems": 50,
+            "items": {
+              "$ref": "#/components/schemas/GameOutcomeRevision"
+            },
+            "description": "Current active manager only; omitted for confirmed participants. Newest bounded window in ascending version order within the page."
+          },
+          "revisionsNextCursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 2048,
+            "description": "Manager-only. Opaque cursor for an older revision page; null when the returned window is complete. Omitted for participants."
+          },
+          "allowedActions": {
+            "$ref": "#/components/schemas/GameResultsAllowedActions"
+          }
+        },
+        "description": "PG-1a slice: outcome + actions only. No roster, attendance, private host contact, or reviews."
       }
     }
   }
