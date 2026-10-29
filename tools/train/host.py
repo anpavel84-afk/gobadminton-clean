@@ -311,12 +311,43 @@ def dispatch_controller(req, meta):
         k: req[k] for k in CLOSED_KEYS if k in req
     }, 'meta': {k: meta[k] for k in ('installed_sha', 'enabled', 'code_root')}}
     atomic_write(intent_dir / 'intent.json', intent, 0o600)
-    event = {
-        'event_name': req.get('event_name') or 'workflow_dispatch',
-        'inputs': {'action': dispatch_action},
-        'repository': {'id': REPO_ID, 'full_name': REPO},
-        'client_sha': client_sha,
+    # Retain the verified GitHub wake in audit. Never fabricate comment/issue
+    # payloads for admit_comment — issue_comment+advance maps to advance_queue.
+    verified_wake = {
+        'event_name': actual_event,
+        'dispatch_action': dispatch_action,
+        'run_id': req.get('run_id'),
+        'run_attempt': req.get('run_attempt'),
+        'actor_id': req.get('actor_id'),
+        'ref': req.get('ref'),
+        'repository_id': req.get('repository_id') or REPO_ID,
     }
+    atomic_write(intent_dir / 'verified_wake.json', verified_wake, 0o600)
+    if actual_event == 'issue_comment' and dispatch_action == 'advance':
+        # Map to existing advance_queue path (refetch Project + numericOwner).
+        event = {
+            'event_name': 'workflow_dispatch',
+            'inputs': {'action': 'advance'},
+            'repository': {'id': REPO_ID, 'full_name': REPO},
+            'client_sha': client_sha,
+            'verified_wake': verified_wake,
+        }
+    elif actual_event == 'schedule' and dispatch_action == 'advance':
+        event = {
+            'event_name': 'schedule',
+            'inputs': {'action': 'advance'},
+            'repository': {'id': REPO_ID, 'full_name': REPO},
+            'client_sha': client_sha,
+            'verified_wake': verified_wake,
+        }
+    else:
+        event = {
+            'event_name': req.get('event_name') or 'workflow_dispatch',
+            'inputs': {'action': dispatch_action},
+            'repository': {'id': REPO_ID, 'full_name': REPO},
+            'client_sha': client_sha,
+            'verified_wake': verified_wake,
+        }
     event_path = intent_dir / 'event.json'
     atomic_write(event_path, event, 0o600)
     env = {'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8', 'HOME': '/nonexistent',

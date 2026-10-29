@@ -33,6 +33,7 @@ import host as lean_host
 import client as lean_client
 import monitor as lean_mon
 import live as lean_live
+import install as lean_install
 
 
 OWNER = 318610566
@@ -548,8 +549,16 @@ class ParserQuotaTests(unittest.TestCase):
             for i in range(5):
                 providers.record_agy_charge(368, {'id': f'r{i}'}, charge='charged',
                                             day_utc='2026-10-28', results_root=root)
+            # OD-020: no artificial day/5 cap by default.
             with mock.patch.object(providers, 'RESULTS_ROOT', root):
-                avail, why, _ = providers.agy_quota_available(368, day_utc='2026-10-28')
+                avail, why, rec = providers.agy_quota_available(368, day_utc='2026-10-28')
+            self.assertTrue(avail)
+            self.assertEqual(why, 'ok')
+            self.assertTrue(rec.get('od020_no_artificial_cap'))
+            # Historical explicit limit still exhausts when tests pass limit=5.
+            with mock.patch.object(providers, 'RESULTS_ROOT', root):
+                avail, why, _ = providers.agy_quota_available(
+                    368, limit=5, day_utc='2026-10-28')
             self.assertFalse(avail)
             self.assertEqual(why, 'agy_quota_exhausted')
             providers.record_agy_charge(2, {'id': 'u'}, charge='unknown',
@@ -557,6 +566,7 @@ class ParserQuotaTests(unittest.TestCase):
             with mock.patch.object(providers, 'RESULTS_ROOT', root):
                 avail, why, rec = providers.agy_quota_available(2, day_utc='2026-10-28')
             self.assertFalse(avail)
+            self.assertEqual(why, 'agy_quota_unknown_pending_reconcile')
             self.assertGreaterEqual(rec['unknown_calls'], 1)
 
     def test_landlock_roots_inject_temp_auth_never_probe_srv(self):
@@ -944,11 +954,14 @@ class LiveBindingsTests(unittest.TestCase):
             {'qaroute': ['agy_qa']}, issue=182)
         self.assertEqual(provider, 'codex_sol_medium')
         self.assertEqual(reason, 'agy_not_ready_fallback')
-        # live.agy_qa_live must not contain unsupported bare CLI product launch.
+        # live.agy_qa_live binds native.invoke(product=True); never product_run_qa/bare CLI.
         import inspect
         src = inspect.getsource(lean_live.agy_qa_live)
         self.assertIn('agy_not_ready_fallback', src)
-        self.assertIn('product_run_qa_absent_no_bare_cli', src)
+        self.assertIn('native_invoke_product', src)
+        self.assertIn('product=True', inspect.getsource(lean_live._agy_product_invoke))
+        self.assertNotIn('native.product_run_qa', src)
+        self.assertNotIn('product_run_qa(', src)
         self.assertNotIn("[AGY_CLI, '--model', AGY_MODEL]", src)
         self.assertNotIn('[AGY_CLI, "--model", AGY_MODEL]', src)
 
@@ -1358,6 +1371,291 @@ class DeployAcceptanceTests(unittest.TestCase):
             receipt={'status': 'ACCEPTED', 'line': 'ACCEPTED'},
             live_sha='a' * 40)
         self.assertTrue(ok['accepted'])
+
+
+class WaitDevDeployGitShaTests(unittest.TestCase):
+    """Real /v1/meta shape uses gitSha; exact merged SHA required."""
+
+    def _claim(self, merge_sha):
+        return {'merged_sha': merge_sha, 'merge_sha': merge_sha}
+
+    def test_real_shape_gitSha_pass(self):
+        merge = 'a' * 40
+        meta = json.dumps({'gitSha': merge, 'env': 'dev'}).encode()
+
+        def fake_gh(path, **kwargs):
+            return {'workflow_runs': [{
+                'id': 1, 'status': 'completed', 'conclusion': 'success',
+                'head_sha': merge, 'run_attempt': 1,
+            }]}
+
+        def fake_run_argv(argv, **kwargs):
+            return mock.Mock(returncode=0, stdout=meta.decode(), stderr='')
+
+        with mock.patch.object(lean_live, 'gh_api', side_effect=fake_gh), \
+                mock.patch.object(lean_live, 'run_argv', side_effect=fake_run_argv), \
+                mock.patch.object(lean_live, 'readable_present', return_value=False), \
+                mock.patch.object(lean_live.time, 'sleep', return_value=None):
+            out = lean_live.wait_dev_deploy(self._claim(merge), budget_s=1, poll_s=0)
+        self.assertTrue(out['accepted'])
+        self.assertEqual(out['live_sha'], merge)
+
+    def test_mismatched_gitSha_rejected(self):
+        merge = 'a' * 40
+        other = 'b' * 40
+        meta = json.dumps({'gitSha': other}).encode()
+
+        def fake_gh(path, **kwargs):
+            return {'workflow_runs': [{
+                'id': 2, 'status': 'completed', 'conclusion': 'success',
+                'head_sha': merge, 'run_attempt': 1,
+            }]}
+
+        def fake_run_argv(argv, **kwargs):
+            return mock.Mock(returncode=0, stdout=meta.decode(), stderr='')
+
+        with mock.patch.object(lean_live, 'gh_api', side_effect=fake_gh), \
+                mock.patch.object(lean_live, 'run_argv', side_effect=fake_run_argv), \
+                mock.patch.object(lean_live, 'readable_present', return_value=False), \
+                mock.patch.object(lean_live.time, 'sleep', return_value=None):
+            out = lean_live.wait_dev_deploy(self._claim(merge), budget_s=1, poll_s=0)
+        self.assertFalse(out['accepted'])
+        self.assertEqual(out['live_sha'], other)
+        self.assertEqual(out.get('reason'), 'live_sha_mismatch')
+
+    def test_legacy_sha_field_not_accepted(self):
+        """Wrong meta keys (sha/git_sha/commit) must not satisfy exact gitSha."""
+        merge = 'c' * 40
+        meta = json.dumps({'sha': merge, 'git_sha': merge, 'commit': merge}).encode()
+
+        def fake_gh(path, **kwargs):
+            return {'workflow_runs': [{
+                'id': 3, 'status': 'completed', 'conclusion': 'success',
+                'head_sha': merge, 'run_attempt': 1,
+            }]}
+
+        def fake_run_argv(argv, **kwargs):
+            return mock.Mock(returncode=0, stdout=meta.decode(), stderr='')
+
+        with mock.patch.object(lean_live, 'gh_api', side_effect=fake_gh), \
+                mock.patch.object(lean_live, 'run_argv', side_effect=fake_run_argv), \
+                mock.patch.object(lean_live, 'readable_present', return_value=False), \
+                mock.patch.object(lean_live.time, 'sleep', return_value=None):
+            out = lean_live.wait_dev_deploy(self._claim(merge), budget_s=1, poll_s=0)
+        self.assertFalse(out.get('accepted'))
+        self.assertIsNone(out.get('live_sha'))
+
+
+class HostIssueCommentAdvanceTests(unittest.TestCase):
+    def _base(self):
+        return {
+            'action': 'lean', 'run_id': 11, 'run_attempt': 1,
+            'actor_id': OWNER, 'ref': 'refs/heads/main',
+            'event_name': 'issue_comment', 'workflow_sha': 'a' * 64,
+            'client_sha': 'b' * 40, 'dispatch_action': 'advance',
+            'repository': REPO, 'repository_id': REPO_ID,
+        }
+
+    def test_issue_comment_advance_maps_to_advance_queue_event(self):
+        captured = {}
+
+        def fake_run(argv, **kwargs):
+            event_path = Path(argv[-1])
+            captured['event'] = json.loads(event_path.read_text())
+            intent_dir = event_path.parent
+            captured['verified_wake'] = json.loads(
+                (intent_dir / 'verified_wake.json').read_text())
+            # Simulate run.py advance_queue success (not admit_comment).
+            return mock.Mock(
+                returncode=0,
+                stdout='{"status":"ok","projection":{"mode":"lean_mode_b"}}\n',
+                stderr='')
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            run_py = root / 'tools/train/run.py'
+            run_py.parent.mkdir(parents=True)
+            run_py.write_text('#!/usr/bin/env python3\n')
+            meta = {
+                'config': {
+                    'schema': 'GB_LEAN_CONFIG_V1', 'enabled': True, 'wake_budget_s': 300,
+                },
+                'code_root': str(root),
+                'installed_sha': 'b' * 40,
+                'enabled': True,
+                'github': {'run': {'event': 'issue_comment'}},
+            }
+            req = self._base()
+            with mock.patch.object(lean_host, 'RESULTS', root / 'results'), \
+                    mock.patch.object(lean_host.subprocess, 'run', side_effect=fake_run):
+                out = lean_host.dispatch_controller(req, meta)
+            self.assertEqual(out['status'], 'ok')
+            self.assertEqual(captured['event']['event_name'], 'workflow_dispatch')
+            self.assertEqual(captured['event']['inputs']['action'], 'advance')
+            self.assertNotIn('comment', captured['event'])
+            self.assertNotIn('issue', captured['event'])
+            self.assertEqual(captured['verified_wake']['event_name'], 'issue_comment')
+            self.assertEqual(captured['verified_wake']['dispatch_action'], 'advance')
+
+    def test_host_issue_comment_event_reaches_run_advance(self):
+        """Real host→run.py path: mapped event advances queue, not admit_comment."""
+        with tempfile.TemporaryDirectory() as td:
+            adapters, _state = make_flow_adapters(td, shas=[_sha(3)])
+            adapters.fetch_admissions = lambda: []
+            event = {
+                'event_name': 'workflow_dispatch',
+                'inputs': {'action': 'advance'},
+                'repository': {'id': REPO_ID, 'full_name': REPO},
+                'verified_wake': {
+                    'event_name': 'issue_comment', 'dispatch_action': 'advance',
+                },
+            }
+            out = lean_run.run_once(event, adapters=adapters, results_root=td)
+            self.assertIn(
+                out.get('status'),
+                ('ok', 'advanced', 'queue_unavailable', 'hold', 'empty',
+                 'no_admissions_source', 'schedule_reconcile'))
+            self.assertNotEqual(out.get('status'), 'denied')
+            self.assertNotEqual(out.get('code'), 'invalid_issue')
+
+
+class AgyNativeTransportTests(unittest.TestCase):
+    def test_agy_invoke_product_mock_one_charge_no_unknown_replay(self):
+        sha = 'e' * 40
+        with tempfile.TemporaryDirectory() as td:
+            work = Path(td) / 'work'
+            work.mkdir()
+            evidence = Path(td) / 'qa-agy-deadbeef'
+            evidence.mkdir()
+            task = {
+                'issue': 29, 'worktree': str(work), 'revision': 'r' * 64,
+                'attempt': 8, 'runtime_base_sha': 'f' * 40,
+                'goal': 'commission', 'acceptance': ['DEV'],
+            }
+            raw = (
+                b'{"event":"init","init":{"model":"x","agent":"qa","tools":'
+                b'["run_command","view_file","finish"],"permission_mode":"default",'
+                b'"json_schema":{}}}\n'
+                b'{"event":"result","result":{"status":"SUCCESS"}}\n'
+            )
+            charges = {'n': 0}
+
+            class FakeBudget:
+                def remaining(self, *a, **k):
+                    return float('inf')
+
+                def charge(self, *a, **k):
+                    charges['n'] += 1
+
+            def fake_invoke(**kwargs):
+                (evidence / 'stream.raw').write_bytes(raw)
+                return raw, {
+                    'protocol': {
+                        'tool_names': ['run_command', 'view_file', 'finish'],
+                        'finish_done': True,
+                    }
+                }
+
+            with mock.patch.object(lean_live, 'git', side_effect=lambda *a, **k: (
+                    sha if 'HEAD' in a else '')), \
+                    mock.patch.object(lean_live, 'load_short_rules',
+                                      return_value=('RULES', 'r' * 64, Path('/tmp/r'))), \
+                    mock.patch.object(lean_live, 'shared_agy_budget',
+                                      return_value=FakeBudget()), \
+                    mock.patch.object(lean_live, '_load_native') as load_n, \
+                    mock.patch.object(providers, 'role_ready',
+                                      return_value=(True, {'source': 'native'})), \
+                    mock.patch.object(providers, 'agy_quota_available',
+                                      return_value=(True, 'ok', {})), \
+                    mock.patch.object(providers, 'record_agy_charge',
+                                      return_value={}), \
+                    mock.patch.object(providers, 'parse_agy_stream', return_value={
+                        'verdict': 'PASS', 'findings': [], 'reviewed_sha': sha,
+                        'evidence': {'tool_names': ['run_command', 'view_file'],
+                                     'finish_done': True},
+                    }):
+                fake_native = mock.Mock()
+                fake_native.invoke = mock.Mock()
+                fake_native.parse_stream = mock.Mock(return_value=(
+                    {'verdict': 'PASS', 'findings': [], 'reviewed_sha': sha},
+                    {'tool_names': ['run_command', 'view_file'], 'finish_done': True},
+                ))
+                load_n.return_value = fake_native
+                out = lean_live.agy_qa_live(
+                    task=task, candidate_sha=sha, evidence_dir=evidence,
+                    _invoke=fake_invoke)
+            self.assertEqual(out['verdict'], 'PASS')
+            self.assertEqual(out['findings'], [])
+            self.assertEqual(out['reviewed_sha'], sha)
+            self.assertEqual(charges['n'], 1)
+            self.assertTrue((evidence / 'stream.raw').is_file())
+            # UNKNOWN never replayed: second call with unknown private ledger refuses.
+            with mock.patch.object(providers, 'role_ready',
+                                   return_value=(True, {'source': 'native'})), \
+                    mock.patch.object(providers, 'agy_quota_available', return_value=(
+                        False, 'agy_quota_unknown_pending_reconcile', {'unknown_calls': 1})):
+                with self.assertRaises(providers.ProviderError) as ctx:
+                    lean_live.agy_qa_live(
+                        task=dict(task, attempt=9), candidate_sha=sha,
+                        evidence_dir=Path(td) / 'qa-agy-2')
+                self.assertEqual(ctx.exception.code, 'agy_quota_unknown_pending_reconcile')
+
+    def test_role_ready_binds_product_role_ready(self):
+        fake = mock.Mock()
+        fake.product_role_ready.return_value = True
+        with mock.patch.object(providers, '_import_native', return_value=fake):
+            ok, meta = providers.role_ready('agy_qa')
+        self.assertTrue(ok)
+        self.assertEqual(meta['source'], 'native_product_role_ready')
+
+    def test_wrong_task_sha_rejected(self):
+        with tempfile.TemporaryDirectory() as td:
+            work = Path(td) / 'work'
+            work.mkdir()
+            task = {'issue': 29, 'worktree': str(work), 'attempt': 1}
+            with mock.patch.object(providers, 'role_ready',
+                                   return_value=(True, {'source': 'native'})), \
+                    mock.patch.object(providers, 'agy_quota_available',
+                                      return_value=(True, 'ok', {})), \
+                    mock.patch.object(lean_live, '_load_native', return_value=mock.Mock(
+                        invoke=mock.Mock(), parse_stream=mock.Mock())), \
+                    mock.patch.object(lean_live, 'git',
+                                      side_effect=lambda *a, **k: 'a' * 40):
+                with self.assertRaises(providers.ProviderError) as ctx:
+                    lean_live.agy_qa_live(
+                        task=task, candidate_sha='b' * 40,
+                        evidence_dir=Path(td) / 'qa')
+            self.assertEqual(ctx.exception.code, 'qa_head_mismatch')
+
+
+class Od020InstallPairTests(unittest.TestCase):
+    def test_remove_agy_per_issue_daily_only(self):
+        policy = {
+            'schema': 1,
+            'providers': {
+                'agy': {'qa': 'unlimited', 'per_issue_daily': 5},
+                'codex': {'qa': 3},
+            },
+            'slots': {'slot2': {'agy': {'qa': 'unlimited'}}},
+        }
+        cleaned = lean_install.remove_agy_per_issue_daily(policy)
+        self.assertNotIn('per_issue_daily', cleaned['providers']['agy'])
+        self.assertEqual(cleaned['providers']['agy']['qa'], 'unlimited')
+        self.assertEqual(cleaned['providers']['codex']['qa'], 3)
+        self.assertEqual(policy['providers']['agy']['per_issue_daily'], 5)
+
+    def test_budget_left_eligible_float_inf_and_rejects(self):
+        self.assertTrue(lean_live.budget_left_eligible(float('inf')))
+        self.assertTrue(lean_live.budget_left_eligible(2.5))
+        self.assertTrue(lean_live.budget_left_eligible(1))
+        self.assertFalse(lean_live.budget_left_eligible(0))
+        self.assertFalse(lean_live.budget_left_eligible(-1))
+        self.assertFalse(lean_live.budget_left_eligible(True))
+        self.assertFalse(lean_live.budget_left_eligible(None))
+        self.assertFalse(lean_live.budget_left_eligible(float('nan')))
+        self.assertFalse(lean_live.budget_left_eligible(3, successor=True))
+        self.assertTrue(lean_live.budget_left_eligible(1, successor=True))
+        self.assertFalse(lean_live.budget_left_eligible(float('inf'), successor=True))
 
 
 if __name__ == '__main__':

@@ -151,11 +151,33 @@ def read_ready_marker(path):
 
 
 def role_ready(role):
-    """Separate verified predicates. Author pass must not claim READY."""
+    """Separate verified predicates. Author pass must not claim READY.
+
+    agy_qa binds the real native product_role_ready()/root proof (PR #376).
+    Never fabricate a lean READY marker; lean file remains optional secondary.
+    """
+    if role == 'agy_qa':
+        try:
+            native = _import_native('native_antigravity')
+            if hasattr(native, 'product_role_ready') and native.product_role_ready():
+                return True, {
+                    'source': 'native_product_role_ready',
+                    'role': 'agy_qa',
+                    'schema': 'GB_PRODUCT_QA_ROLE_READY_V1',
+                }
+        except ProviderError:
+            pass
+        except Exception:
+            pass
+        marker = read_ready_marker(AGY_QA_READY)
+        if marker is None:
+            return False, 'agy_qa READY marker absent or not verified'
+        if marker.get('role') != 'agy_qa':
+            return False, 'role mismatch in READY marker'
+        return True, marker
     mapping = {
         'cursor_author': CURSOR_AUTHOR_READY,
         'codex_qa': CODEX_QA_READY,
-        'agy_qa': AGY_QA_READY,
         'agy_author': AGY_AUTHOR_READY,
     }
     path = mapping.get(role)
@@ -201,14 +223,23 @@ def charged_agy_calls(issue, day_utc=None):
     return charged, unknown, rec
 
 
-def agy_quota_available(issue, limit=5, day_utc=None):
-    """5 charged calls per canonical Issue per UTC day; all roles; no global count."""
+def agy_quota_available(issue, limit=None, day_utc=None):
+    """Mode B private AGY audit ledger — authorization is shared Budget (OD-020).
+
+    OD-020: no artificial numeric per-Issue/day cap. UNKNOWN never authorizes a
+    replay. Optional explicit ``limit`` retained only for historical tests that
+    still pass a concrete positive int; default is no private numeric ceiling.
+    Shared native Budget (/etc/gobadminton-slots/budgets.json) charges once.
+    """
     charged, unknown, rec = charged_agy_calls(issue, day_utc)
     if unknown:
         return False, 'agy_quota_unknown_pending_reconcile', rec
-    if charged >= limit:
-        return False, 'agy_quota_exhausted', rec
-    return True, 'ok', rec
+    if limit is not None:
+        if type(limit) is not int or limit <= 0:
+            raise ProviderError('invalid_agy_quota_limit', str(limit))
+        if charged >= limit:
+            return False, 'agy_quota_exhausted', rec
+    return True, 'ok', dict(rec, charged_calls=charged, od020_no_artificial_cap=limit is None)
 
 
 def record_agy_charge(issue, receipt, *, charge='charged', day_utc=None, results_root=None):

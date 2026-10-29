@@ -16,6 +16,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -178,7 +179,8 @@ def uid1002_preexec():
 
 def require_executor_uid():
     euid = os.geteuid()
-    if euid not in (0, CURSOR_UID):
+    # Root retains lease; Cursor author/publish is 1002; native AGY invoke is 978.
+    if euid not in (0, CURSOR_UID, AGY_UID):
         raise LiveError('unexpected_executor_uid', str(euid))
     return euid
 
@@ -201,7 +203,9 @@ def run_argv(argv, *, cwd=None, env=None, timeout=60, input_text=None, check=Tru
     """
     require_executor_uid()
     kw = {}
-    if drop_uid:
+    # Drop Root→1002 for Git/GH. Already-unprivileged AGY 978 keeps its identity
+    # (uid1002_preexec would _exit(125) if invoked from UID978).
+    if drop_uid and os.geteuid() == 0:
         kw['preexec_fn'] = uid1002_preexec()
     proc = subprocess.run(
         list(argv), cwd=cwd, env=env or uid1002_env(), text=True,
@@ -908,6 +912,15 @@ def _git_common_dir(source):
     return (proc.stdout or '').strip()
 
 
+CODEX_CAPACITY_MSG = 'Selected model is at capacity. Please try a different model.'
+AGY_SHARED_BUDGET = Path('/etc/gobadminton-slots/budgets.json')
+AGY_SHARED_OUTBOX = Path('/var/lib/gobadminton-autonomy/outbox')
+AGY_SHARED_LOCK = Path('/var/lib/gobadminton-autonomy/locks/registry.lock')
+AGY_QA_GIT_BASE = Path(
+    '/srv/gb-slots/slot2/worktrees/issue-337-product-qa-general-20261027')
+AGY_SLOT = 'slot2'
+
+
 def _codex_turn_completed(events_path):
     """Require a valid JSONL event with type exactly turn.completed — no heuristics."""
     path = Path(events_path)
@@ -925,6 +938,274 @@ def _codex_turn_completed(events_path):
         if obj.get('type') == 'turn.completed':
             return True
     return False
+
+
+def _codex_capacity_technical(evidence_dir):
+    """Exact Codex capacity + turn.failed/error, no completed verdict.
+
+    Completed technical failure — not content FAIL / EXPLICIT_SAFETY_REFUSAL.
+    """
+    evidence = Path(evidence_dir)
+    blobs = []
+    for name in ('events.jsonl', 'stderr', 'final.txt'):
+        path = evidence / name
+        if path.is_file():
+            blobs.append(path.read_text(errors='replace'))
+    text = '\n'.join(blobs)
+    if CODEX_CAPACITY_MSG not in text:
+        return False
+    if _codex_turn_completed(evidence / 'events.jsonl'):
+        return False
+    events = evidence / 'events.jsonl'
+    if not events.is_file():
+        return CODEX_CAPACITY_MSG in text
+    for line in events.read_text(errors='replace').splitlines():
+        if not line.strip():
+            continue
+        try:
+            obj = loads(line)
+        except (ValueError, LiveError):
+            continue
+        if not isinstance(obj, dict):
+            continue
+        typ = obj.get('type')
+        if typ in ('turn.failed', 'error') or obj.get('error'):
+            return True
+        msg = str(obj.get('message') or obj.get('error') or '')
+        if CODEX_CAPACITY_MSG in msg:
+            return True
+    return False
+
+
+def budget_left_eligible(left, *, successor=False):
+    """OD-020: accept numeric positive finite/infinity; reject bool/UNKNOWN/≤0/NaN."""
+    if left is None or type(left) is bool:
+        return False
+    if type(left) not in (int, float):
+        return False
+    if left != left or left <= 0:
+        return False
+    if successor:
+        return left == 1
+    return left >= 1
+
+
+def _load_slots_budget():
+    """Installed shared Budget class (no second quota DB)."""
+    import importlib.util
+    path = NATIVE_TRAIN / 'live' / 'slots.py'
+    if not path.is_file():
+        alt = Path(__file__).resolve().parents[2] / 'scripts' / 'chatops' / 'actions_train' / 'live' / 'slots.py'
+        path = alt if alt.is_file() else path
+    if not path.is_file():
+        raise LiveError('slots_budget_missing')
+    spec = importlib.util.spec_from_file_location('lean_live_slots_budget', path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def shared_agy_budget(issue):
+    slots = _load_slots_budget()
+    return slots.Budget(
+        AGY_SHARED_BUDGET, AGY_SHARED_OUTBOX, AGY_SHARED_LOCK, issue=int(issue))
+
+
+def _agy_operation_fingerprint(task, candidate_sha, attempt):
+    payload = {
+        'issue': int(task['issue']),
+        'revision': task.get('revision') or task.get('task_revision'),
+        'attempt': attempt,
+        'candidate': candidate_sha,
+        'provider': 'agy_qa',
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()
+    ).hexdigest()
+
+
+def _agy_build_prompt(task, candidate_sha, *, rules_text, source, base_sha):
+    """Exact short rules + task criteria + source diff; dynamic issue/base/candidate/attempt."""
+    issue = int(task['issue'])
+    attempt = task.get('attempt') or task.get('qa_attempt') or 1
+    acceptance = task.get('acceptance') or task.get('criteria') or []
+    goal = task.get('goal') or ''
+    diff_names = ''
+    diff_stat = ''
+    if base_sha and SHA40.fullmatch(str(base_sha)):
+        try:
+            diff_names = git(source, 'diff', '--name-status', str(base_sha), candidate_sha, '--')
+            diff_stat = git(source, 'diff', '--stat', str(base_sha), candidate_sha, '--')
+        except LiveError:
+            diff_names = ''
+            diff_stat = ''
+    prompt = rules_text + '\n'
+    prompt += (
+        f'OWNER AUTHORIZED INDEPENDENT SOURCE QA. issue={issue} '
+        f'attempt={attempt} candidate={candidate_sha} base={base_sha or ""}. '
+        f'readonly SOURCE_ROOT {source}.\n'
+        f'goal={goal}\n'
+        f'acceptance={json.dumps(acceptance, ensure_ascii=False)}\n'
+        'Use native run_command for /usr/bin/git rev-parse HEAD; use native view_file '
+        'for actual relevant files. ALL view_file calls MUST follow the supplied native '
+        'schema and include AbsolutePath, toolAction, toolSummary. Do not skip TOOL_ERROR '
+        'auditing. Require run_command HEAD DONE, view_file DONE, finish DONE, '
+        f'reviewed_sha exactly {candidate_sha}. PASS MUST findings=[]. '
+        'Return exact canonical finish once: verdict PASS|FAIL, findings ONLY concrete '
+        'actionable acceptance blockers, reviewed_sha exact HEAD.\n'
+    )
+    if diff_names:
+        prompt += 'CHANGED FILES:\n' + diff_names + '\n'
+    if diff_stat:
+        prompt += 'DIFFSTAT:\n' + diff_stat + '\n'
+    return prompt
+
+
+def _agy_confined_popen_factory(native, work, temp_root, record):
+    """Landlock source RO + private HOME/out/PTMX/pts write — proven recipe."""
+    guard = _load_native('native_guard')
+
+    def confined_popen(argv, **kwargs):
+        original = kwargs.get('preexec_fn')
+        cwd = Path(kwargs['cwd'])
+        common = Path(git(work, 'rev-parse', '--path-format=absolute', '--git-common-dir'))
+        ro, _, ex = native.filesystem_roots(temp_root, work, common)
+        ro = list(ro) + [cwd, temp_root / 'home']
+        wr = [
+            temp_root / 'home', temp_root / 'out',
+            Path('/dev/null'), Path('/dev/urandom'), Path('/dev/random'),
+            Path('/dev/ptmx'), Path('/dev/pts'),
+        ]
+        kwargs = dict(kwargs)
+        env = dict(kwargs.get('env') or {})
+        env.update(
+            GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL='/dev/null',
+            GIT_CONFIG_SYSTEM='/dev/null')
+        kwargs['env'] = env
+
+        def child():
+            if original:
+                original()
+            guard._landlock(ro, wr, ex)
+
+        kwargs['preexec_fn'] = child
+        argv = list(argv) + ['--add-dir', str(work)]
+        p = subprocess.Popen(argv, **kwargs)
+        record['pid'] = p.pid
+        record['executor_uid'] = AGY_UID
+        record['filesystem_boundary'] = 'Landlock source RO / private HOME+out writable'
+        record['no_new_privileges'] = True
+        return p
+
+    return confined_popen
+
+
+def _agy_drop_to_executor():
+    """Actual native caller must be UID978/groups65042/NNP (invoke checks caller UID)."""
+    os.setgroups([REGISTRY_GID])
+    os.setgid(968)
+    os.setuid(AGY_UID)
+    try:
+        import ctypes
+        libc = ctypes.CDLL(None, use_errno=True)
+        if libc.prctl(38, 1, 0, 0, 0) != 0:
+            os._exit(126)
+    except Exception:
+        os._exit(126)
+
+
+def _agy_product_invoke(native, prompt, work, evidence, task_hash, charge, *, timeout=900):
+    """Call installed native.invoke(..., product=True). Parent may be Root; child is 978."""
+    evidence = Path(evidence)
+    out_raw = evidence / 'stream.raw'
+    out_receipt = evidence / 'native-receipt.json'
+    # Unprivileged review output must be writable to 978; root collects after.
+    if os.geteuid() == 0:
+        chown_bounded_output_dir(evidence, uid=AGY_UID, gid=968)
+
+    if os.geteuid() == AGY_UID:
+        record = {}
+        temp_root = Path(tempfile.mkdtemp(prefix='gb-agy-lean-', dir=str(evidence)))
+        try:
+            popen = _agy_confined_popen_factory(native, work, temp_root, record)
+            raw, native_receipt = native.invoke(
+                prompt, timeout, work=work, slot=AGY_SLOT, task_hash=task_hash,
+                charge=charge, popen=popen, evidence_dir=evidence / 'evidence',
+                product=True)
+        finally:
+            shutil.rmtree(temp_root, ignore_errors=True)
+        out_raw.write_bytes(raw if isinstance(raw, bytes) else str(raw).encode())
+        out_receipt.write_text(json.dumps(native_receipt, indent=2, default=str) + '\n')
+        return raw, native_receipt
+
+    if os.geteuid() != 0:
+        raise LiveError('agy_wrong_executor_uid', str(os.geteuid()))
+
+    # Root retains writer lease; fork real UID978 native caller (not Popen-only child).
+    import pickle
+    r_fd, w_fd = os.pipe()
+    pid = os.fork()
+    if pid == 0:
+        os.close(r_fd)
+        status = 0
+        try:
+            _agy_drop_to_executor()
+            # Load only installed trusted package code into child.
+            sys_path_native = str(NATIVE_TRAIN)
+            if sys_path_native not in sys.path:
+                sys.path.insert(0, sys_path_native)
+            if str(NATIVE_TRAIN / 'live') not in sys.path:
+                sys.path.insert(0, str(NATIVE_TRAIN / 'live'))
+            record = {}
+            temp_root = Path(tempfile.mkdtemp(prefix='gb-agy-lean-', dir=str(evidence)))
+            try:
+                popen = _agy_confined_popen_factory(native, work, temp_root, record)
+                raw, native_receipt = native.invoke(
+                    prompt, timeout, work=work, slot=AGY_SLOT, task_hash=task_hash,
+                    charge=charge, popen=popen, evidence_dir=str(evidence / 'evidence'),
+                    product=True)
+            finally:
+                shutil.rmtree(temp_root, ignore_errors=True)
+            # Raw saved BEFORE parse (parent parses).
+            out_raw.write_bytes(raw if isinstance(raw, bytes) else str(raw).encode())
+            out_receipt.write_text(
+                json.dumps({'native': native_receipt, 'record': record},
+                           indent=2, default=str) + '\n')
+            with os.fdopen(w_fd, 'wb') as w:
+                pickle.dump({'ok': True, 'raw_path': str(out_raw)}, w)
+        except BaseException as err:
+            status = 1
+            try:
+                with os.fdopen(w_fd, 'wb') as w:
+                    pickle.dump({
+                        'ok': False,
+                        'error_type': type(err).__name__,
+                        'error': str(err)[:500],
+                        'error_code': getattr(err, 'code', None),
+                    }, w)
+            except Exception:
+                pass
+            os._exit(status)
+        os._exit(0)
+    os.close(w_fd)
+    with os.fdopen(r_fd, 'rb') as r:
+        try:
+            payload = pickle.load(r)
+        except Exception as err:
+            os.waitpid(pid, 0)
+            raise LiveError('agy_child_ipc_failed', type(err).__name__) from err
+    os.waitpid(pid, 0)
+    if not payload.get('ok'):
+        code = payload.get('error_code') or 'agy_native_child_failed'
+        raise LiveError(str(code), payload.get('error'))
+    raw = out_raw.read_bytes()
+    receipt = {}
+    if out_receipt.is_file():
+        try:
+            receipt = loads(out_receipt.read_bytes())
+        except (ValueError, LiveError):
+            receipt = {}
+    return raw, receipt
 
 
 def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None):
@@ -1052,6 +1333,14 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None):
             'rules_sha256': rules_sha,
         }
         (evidence / 'completion.json').write_text(json.dumps(completion, indent=2) + '\n')
+        # Exact capacity + turn.failed/error without completed verdict = technical failure.
+        if _codex_capacity_technical(evidence):
+            mark_intent_phase(
+                intent_path, 'codex_capacity_technical',
+                error=CODEX_CAPACITY_MSG, exit=p.returncode,
+                turn_completed=False)
+            raise ProviderError(
+                'codex_capacity_technical', CODEX_CAPACITY_MSG, charge='charged')
         if p.returncode != 0:
             mark_intent_phase(intent_path, 'HOLD_no_automatic_replay', exit=p.returncode)
             raise ProviderError('codex_exit_nonzero', str(p.returncode))
@@ -1077,14 +1366,14 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None):
         shutil.rmtree(private, ignore_errors=True)
 
 
-def agy_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None):
-    """AGY product QA only via verified native transport — never bare CLI.
+def agy_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None,
+                _invoke=None):
+    """AGY product QA via installed native.invoke(..., product=True).
 
-    CANARY/HOLD: installed PTY may pass run_command/view_file, but findings[]
-    contract violations keep AGY not READY. Default remains Codex Medium.
-    Explicit not-ready fallback BEFORE any charge; never invent READY; never
-    launch unsupported [AGY_CLI, --model] for product QA. Future AGY prompts
-    must require findings-only actionable defects and PASS => [].
+    Binds product_role_ready()/parse_stream; never product_run_qa or fabricated
+    READY markers; never bare [AGY_CLI, --model]. Shared Budget charges once
+    before spawn (OD-020); Mode B private ledger is audit-only and must not
+    double-authorize. Default remains Codex Medium when AGY is not READY.
     """
     from providers import (
         prepare_qa_intent, mark_intent_phase, parse_agy_stream, ProviderError,
@@ -1095,8 +1384,11 @@ def agy_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None):
         # Explicit not-ready fallback before any AGY charge / model launch.
         return codex_qa_live(task=task, candidate_sha=candidate_sha,
                             evidence_dir=evidence_dir, intent_path=intent_path)
+    # Private ledger: UNKNOWN never replayed; no artificial day/5 authorization.
     avail, why, _rec = agy_quota_available(int(task['issue']))
     if not avail:
+        if why == 'agy_quota_unknown_pending_reconcile':
+            raise ProviderError('agy_quota_unknown_pending_reconcile', why, charge='none')
         return codex_qa_live(task=task, candidate_sha=candidate_sha,
                             evidence_dir=evidence_dir, intent_path=intent_path)
     evidence_root = Path(evidence_dir)
@@ -1105,54 +1397,162 @@ def agy_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None):
     else:
         evidence = evidence_root / f'qa-agy-{candidate_sha[:12]}'
     evidence.mkdir(parents=True, exist_ok=True)
+    attempt = task.get('attempt') or task.get('qa_attempt') or 1
+    fingerprint = _agy_operation_fingerprint(task, candidate_sha, attempt)
     if intent_path is None:
         _, intent_path = prepare_qa_intent(task, candidate_sha, 'agy_qa', evidence)
+    mark_intent_phase(
+        intent_path, 'prepared', operation_fingerprint=fingerprint,
+        issue=int(task['issue']), attempt=attempt, candidate_sha=candidate_sha,
+        provider='agy_qa')
     try:
         native = _load_native('native_antigravity')
     except LiveError:
         mark_intent_phase(intent_path, 'agy_not_ready_fallback', error='native_missing')
         return codex_qa_live(task=task, candidate_sha=candidate_sha,
                             evidence_dir=evidence_dir, intent_path=intent_path)
-    # Bare [AGY_CLI, --model] is unsupported for product QA — require native entry.
-    if not hasattr(native, 'product_run_qa'):
+    if not hasattr(native, 'invoke') or not hasattr(native, 'parse_stream'):
         mark_intent_phase(intent_path, 'agy_not_ready_fallback',
-                          error='product_run_qa_absent_no_bare_cli')
+                          error='native_invoke_or_parse_stream_absent')
         return codex_qa_live(task=task, candidate_sha=candidate_sha,
                             evidence_dir=evidence_dir, intent_path=intent_path)
+    # Never call nonexistent product_run_qa; bind real invoke(product=True).
     if not task.get('worktree'):
         mark_intent_phase(intent_path, 'HOLD_no_automatic_replay', error='qa_worktree_required')
         raise ProviderError('qa_worktree_required')
     source = Path(task['worktree'])
-    head = git(source, 'rev-parse', 'HEAD')
-    if head != candidate_sha:
+    head_before = git(source, 'rev-parse', 'HEAD')
+    if head_before != candidate_sha:
         mark_intent_phase(intent_path, 'HOLD_no_automatic_replay',
-                          error='qa_head_mismatch', head=head, expected=candidate_sha)
-        raise ProviderError('qa_head_mismatch', f'{head}!={candidate_sha}')
-    prompt = (
-        f'Read-only QA of exact SHA {candidate_sha}. '
-        'findings must list ONLY actionable defects; PASS => findings must be []. '
-        'Finish with DONE JSON '
-        '{"verdict":"PASS"|"FAIL","findings":[],"reviewed_sha":"%s"}.'
-        % candidate_sha
-    )
-    (evidence / 'prompt.txt').write_text(prompt)
-    mark_intent_phase(intent_path, 'launching', transport='native_product_run_qa')
+                          error='qa_head_mismatch', head=head_before, expected=candidate_sha)
+        raise ProviderError('qa_head_mismatch', f'{head_before}!={candidate_sha}')
+    dirty = git(source, 'status', '--porcelain')
+    if dirty.strip():
+        mark_intent_phase(intent_path, 'HOLD_no_automatic_replay', error='qa_worktree_dirty')
+        raise ProviderError('qa_worktree_dirty')
     try:
-        raw = native.product_run_qa(
-            work=str(source), head=candidate_sha, prompt=prompt,
-            evidence_dir=str(evidence), model=AGY_MODEL)
+        rules_text, rules_sha, _rules_path = load_short_rules()
+    except LiveError as err:
+        mark_intent_phase(intent_path, 'HOLD_no_automatic_replay',
+                          error=err.code, detail=err.detail)
+        raise ProviderError(err.code, err.detail) from err
+    base_sha = (
+        task.get('runtime_base_sha') or task.get('base') or task.get('source_base')
+        or task.get('prepared_base') or ''
+    )
+    prompt = _agy_build_prompt(
+        task, candidate_sha, rules_text=rules_text, source=source, base_sha=base_sha)
+    (evidence / 'prompt.txt').write_text(prompt)
+    # Shared Budget: one charge before spawn; Mode B ledger is audit-only.
+    budget = None
+    charged_shared = False
+    try:
+        budget = shared_agy_budget(int(task['issue']))
+        left = budget.remaining('agy', 'qa', AGY_SLOT)
+        if not budget_left_eligible(left):
+            mark_intent_phase(intent_path, 'agy_unavailable_fallback',
+                              error='shared_budget_ineligible', left=repr(left))
+            return codex_qa_live(task=task, candidate_sha=candidate_sha,
+                                evidence_dir=evidence_dir, intent_path=intent_path)
+    except (LiveError, OSError, ValueError) as err:
+        mark_intent_phase(intent_path, 'agy_unavailable_fallback',
+                          error='shared_budget_unavailable', detail=type(err).__name__)
+        return codex_qa_live(task=task, candidate_sha=candidate_sha,
+                            evidence_dir=evidence_dir, intent_path=intent_path)
+
+    charge_state = {'calls_charged': 0}
+
+    def charge():
+        if charge_state['calls_charged'] != 0:
+            raise ProviderError('agy_double_charge_refused')
+        budget.charge(AGY_SLOT, 'agy', 'qa')
+        charge_state['calls_charged'] = 1
+        # Audit-only private receipt — does not authorize a second call.
+        record_agy_charge(
+            int(task['issue']),
+            {'phase': 'charged', 'operation_fingerprint': fingerprint,
+             'shared_budget': True},
+            charge='charged')
+
+    mark_intent_phase(
+        intent_path, 'launching', transport='native_invoke_product',
+        rules_sha256=rules_sha, operation_fingerprint=fingerprint)
+    try:
+        if _invoke is not None:
+            # Deterministic mock seam: still one shared charge before spawn.
+            charge()
+            raw, native_receipt = _invoke(timeout=QA_TIMEOUT_S)
+        else:
+            raw, native_receipt = _agy_product_invoke(
+                native, prompt, source, evidence, fingerprint, charge,
+                timeout=QA_TIMEOUT_S)
+        charged_shared = charge_state['calls_charged'] == 1
+    except ProviderError:
+        raise
     except Exception as err:
-        record_agy_charge(int(task['issue']), {'phase': 'launch_error'}, charge='unknown')
-        mark_intent_phase(intent_path, 'UNKNOWN', error=type(err).__name__,
-                          no_blind_replay=True)
-        raise ProviderError('agy_launch_unknown', type(err).__name__, charge='unknown') from err
-    (evidence / 'stream.raw').write_bytes(raw if isinstance(raw, bytes) else str(raw).encode())
-    record_agy_charge(int(task['issue']), {'phase': 'completed'}, charge='charged')
-    parsed = parse_agy_stream(raw, candidate_sha, model=AGY_MODEL)
+        if charge_state['calls_charged']:
+            # Preserve usage + original intent; known complete protocol failure retained.
+            mark_intent_phase(
+                intent_path, 'HOLD_NO_REPLAY', error_type=type(err).__name__,
+                error_code=getattr(err, 'code', None),
+                operation_fingerprint=fingerprint,
+                calls_charged=charge_state['calls_charged'],
+                no_blind_replay=True)
+            raise ProviderError(
+                'agy_protocol_or_provider_failed', type(err).__name__,
+                charge='charged') from err
+        record_agy_charge(
+            int(task['issue']),
+            {'phase': 'launch_error', 'operation_fingerprint': fingerprint},
+            charge='unknown')
+        mark_intent_phase(
+            intent_path, 'UNKNOWN', error=type(err).__name__,
+            operation_fingerprint=fingerprint, no_blind_replay=True)
+        raise ProviderError('agy_launch_unknown', type(err).__name__,
+                            charge='unknown') from err
+    # Raw must already be on disk before parse (invoke path writes stream.raw).
+    raw_path = evidence / 'stream.raw'
+    if not raw_path.is_file():
+        raw_path.write_bytes(raw if isinstance(raw, bytes) else str(raw).encode())
+    head_after = git(source, 'rev-parse', 'HEAD')
+    if head_after != candidate_sha or git(source, 'status', '--porcelain').strip():
+        mark_intent_phase(intent_path, 'HOLD_no_automatic_replay',
+                          error='source_changed_during_qa')
+        raise ProviderError('agy_source_changed', f'{head_after}')
+    try:
+        parsed = parse_agy_stream(raw, candidate_sha, model=AGY_MODEL)
+        # Strict protocol: require run_command + view_file + finish DONE.
+        protocol = {}
+        if isinstance(native_receipt, dict):
+            protocol = native_receipt.get('protocol') or native_receipt.get('evidence') or {}
+        if not protocol and hasattr(native, 'parse_stream'):
+            try:
+                _verdict, protocol = native.parse_stream(
+                    raw if isinstance(raw, bytes) else raw.encode(), candidate_sha)
+            except Exception:
+                protocol = parsed.get('evidence') or {}
+        tool_names = set(protocol.get('tool_names') or [])
+        if not ({'run_command', 'view_file'} <= tool_names and protocol.get('finish_done') is True):
+            mark_intent_phase(
+                intent_path, 'HOLD_NO_REPLAY', error='agy_protocol_incomplete',
+                tool_names=sorted(tool_names),
+                finish_done=protocol.get('finish_done'),
+                operation_fingerprint=fingerprint)
+            raise ProviderError('agy_protocol_incomplete',
+                                f'tools={sorted(tool_names)} finish={protocol.get("finish_done")}',
+                                charge='charged')
+    except ProviderError:
+        raise
+    if parsed.get('reviewed_sha') != candidate_sha:
+        raise ProviderError('stale_sha_verdict', str(parsed.get('reviewed_sha')))
     if parsed.get('verdict') == 'PASS' and list(parsed.get('findings') or []):
         raise ProviderError('agy_pass_with_findings_contract')
     parsed['charge'] = 'charged'
-    mark_intent_phase(intent_path, 'completed', verdict=parsed['verdict'])
+    parsed['operation_fingerprint'] = fingerprint
+    parsed['shared_budget_charged'] = charged_shared or charge_state['calls_charged'] == 1
+    parsed['transport'] = 'native_invoke_product'
+    mark_intent_phase(intent_path, 'completed', verdict=parsed['verdict'],
+                      operation_fingerprint=fingerprint)
     return parsed
 
 
@@ -1457,7 +1857,10 @@ def wait_dev_deploy(claim, *, budget_s=None, poll_s=None):
                         env={'PATH': '/usr/bin:/bin'}, check=False, timeout=20)
                     if proc.returncode == 0 and proc.stdout:
                         meta = loads(proc.stdout)
-                        live_sha = meta.get('sha') or meta.get('git_sha') or meta.get('commit')
+                        # Real DEV /v1/meta shape (health.controller) exposes gitSha.
+                        live_sha = meta.get('gitSha')
+                        if not (isinstance(live_sha, str) and SHA40.fullmatch(live_sha)):
+                            live_sha = None
                 except (LiveError, ValueError, OSError):
                     live_sha = None
                 # Evidence file fallback when public meta unavailable in some sandboxes.
@@ -1476,12 +1879,18 @@ def wait_dev_deploy(claim, *, budget_s=None, poll_s=None):
                     ) and (receipt.get('sha') in (merge_sha, None) or True)
                     if receipt.get('sha') and receipt.get('sha') != merge_sha:
                         accepted = False
+                # Exact merged SHA required — mismatched live gitSha is not ACCEPTED.
                 if live_sha == merge_sha and (
                         accepted or latest.get('conclusion') == 'success'):
                     return {
                         'accepted': True, 'live_sha': live_sha, 'merged_sha': merge_sha,
                         'receipt': receipt or {'status': 'ACCEPTED', 'line': 'ACCEPTED'},
                         **last,
+                    }
+                if live_sha and live_sha != merge_sha and latest.get('conclusion') == 'success':
+                    return {
+                        'accepted': False, 'live_sha': live_sha, 'merged_sha': merge_sha,
+                        'repairable': False, 'reason': 'live_sha_mismatch', **last,
                     }
                 if latest.get('conclusion') == 'failure':
                     return {
@@ -1499,8 +1908,11 @@ def qa_dispatch(claim):
     """Route QA: AGY when READY+admitted+quota else Codex Medium.
 
     Uses immutable claim.runtime worktree/base/evidence — never recreate from raw task.
+    Exact Codex capacity technical failure may fall back to qualified AGY with a
+    distinct provider intent/evidence — never overwrite/replay the Codex call,
+    never fall back on substantive FAIL / UNKNOWN / EXPLICIT_SAFETY_REFUSAL.
     """
-    from providers import select_qa_provider
+    from providers import select_qa_provider, role_ready, ProviderError
     runtime = dict(claim.get('runtime') or {})
     task = dict(claim.get('task') or {})
     task['issue'] = claim['issue']
@@ -1510,6 +1922,7 @@ def qa_dispatch(claim):
         raise LiveError('qa_worktree_required')
     task['worktree'] = wt
     task['runtime_base_sha'] = claim.get('base_sha') or runtime.get('base_sha')
+    # Explicit task provider routes remain authoritative.
     provider, reason, _meta = select_qa_provider(task, issue=claim['issue'])
     evidence = (
         claim.get('evidence_dir')
@@ -1521,8 +1934,28 @@ def qa_dispatch(claim):
     if provider == 'agy_qa':
         return agy_qa_live(task=task, candidate_sha=claim['candidate_sha'],
                            evidence_dir=evidence)
-    return codex_qa_live(task=task, candidate_sha=claim['candidate_sha'],
-                         evidence_dir=evidence)
+    try:
+        return codex_qa_live(task=task, candidate_sha=claim['candidate_sha'],
+                             evidence_dir=evidence)
+    except ProviderError as err:
+        if err.code != 'codex_capacity_technical':
+            raise
+        ok, _ready = role_ready('agy_qa')
+        if not ok:
+            raise
+        # Distinct AGY intent/evidence — do not overwrite Codex receipts.
+        agy_evidence = Path(evidence)
+        if agy_evidence.name.startswith('qa-'):
+            fallback = agy_evidence.parent / f'qa-agy-capacity-fallback-{claim["candidate_sha"][:12]}'
+        else:
+            fallback = Path(evidence) / f'qa-agy-capacity-fallback-{claim["candidate_sha"][:12]}'
+        fallback.mkdir(parents=True, exist_ok=True)
+        agy_task = dict(task)
+        agy_task['attempt'] = f'capacity-fallback-{task.get("attempt") or 1}'
+        agy_task['qaroute'] = ['agy_qa']
+        return agy_qa_live(
+            task=agy_task, candidate_sha=claim['candidate_sha'],
+            evidence_dir=fallback)
 
 
 def update_monitor_backlog(queue_result, *, monitor_path=None):

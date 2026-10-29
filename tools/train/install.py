@@ -48,6 +48,19 @@ INSTALL_FILES = (
     'docs/handoffs/OD-017-lean-mode-b.md',
 )
 
+# OD-020 paired shared-budget receivers (exact accepted Git blobs). Native
+# adapter/guard unchanged — qualification proof stays. Parent derives digests.
+PAIRED_ACTIONS_TRAIN = (
+    'scripts/chatops/actions_train/receiver.py',
+    'scripts/chatops/actions_train/live/slots.py',
+)
+ACTIONS_TRAIN_INSTALL = Path('/usr/local/lib/gb-actions-train')
+BUDGETS_POLICY = Path('/etc/gobadminton-slots/budgets.json')
+CONTROLLER_LOCK = Path('/var/lib/gobadminton-actions-train/controller.lock')
+INTEGRATION_LOCK = Path('/var/lib/gobadminton-autonomy/locks/integration.lock')
+WRITER_REGISTRY_LOCK = Path('/var/lib/gobadminton-autonomy/locks/registry.lock')
+AGY_EXECUTOR_UID = 978
+
 
 class InstallError(RuntimeError):
     pass
@@ -374,7 +387,150 @@ def rollback(sha=None):
     return report
 
 
-def install(repo, sha, *, enable=False, patch_helper=True):
+def _regular_root_bytes(path):
+    """Root-owned regular file, no symlink; return (raw, meta)."""
+    path = Path(path)
+    need(path.is_file() and not path.is_symlink(), f'not a regular file: {path}')
+    info = path.lstat()
+    need(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and not info.st_mode & 0o022,
+         f'untrusted target {path}')
+    need(info.st_nlink == 1, f'hardlink refused {path}')
+    raw = path.read_bytes()
+    meta = {
+        'sha256': sha256_bytes(raw), 'uid': info.st_uid, 'gid': info.st_gid,
+        'mode': stat.S_IMODE(info.st_mode), 'size': info.st_size,
+    }
+    return raw, meta
+
+
+def _agy_executor_quiet():
+    probe = subprocess.run(
+        ['/usr/bin/ps', '-u', str(AGY_EXECUTOR_UID), '-o', 'pid='],
+        capture_output=True, text=True, timeout=15)
+    need(not (probe.stdout or '').strip(), 'UID978 executor process active')
+
+
+def remove_agy_per_issue_daily(policy):
+    """Prospective OD-020: drop ONLY providers.agy.per_issue_daily; keep qa/author."""
+    need(isinstance(policy, dict), 'invalid budgets policy')
+    out = json.loads(json.dumps(policy))  # deep copy via JSON
+    providers = out.setdefault('providers', {})
+    agy = providers.get('agy')
+    if isinstance(agy, dict) and 'per_issue_daily' in agy:
+        agy = dict(agy)
+        agy.pop('per_issue_daily', None)
+        providers['agy'] = agy
+        out['providers'] = providers
+    return out
+
+
+def apply_od020_paired(repo, sha, *, dry_run=False):
+    """Same-PR install pair: receiver.py + live/slots.py + budgets policy OD-020.
+
+    Backup prior bytes/meta, root regular/no symlink, controller/integration/writer
+    locks + UID978 quiescence, atomic compare-current replacement + readback +
+    rollback. Preserve C5 disabled / old journals byte-identical. Does not touch
+    native adapter/guard. dry_run prepares plan without writing (author default).
+    """
+    need(SHA40.fullmatch(sha), 'invalid SHA')
+    repo = Path(repo)
+    plan = {'schema': 'GB_LEAN_OD020_PAIR_V1', 'sha': sha, 'targets': {}, 'dry_run': bool(dry_run)}
+    paired_blobs = {}
+    for rel in PAIRED_ACTIONS_TRAIN:
+        raw = git_blob(repo, sha, rel)
+        paired_blobs[rel] = {'sha256': sha256_bytes(raw), 'bytes': len(raw), 'data': raw}
+        dest = ACTIONS_TRAIN_INSTALL / rel.split('actions_train/', 1)[1]
+        plan['targets'][rel] = {'path': str(dest), 'after_sha256': paired_blobs[rel]['sha256']}
+    # Budget policy: remove ONLY AGY per_issue_daily when file exists.
+    if BUDGETS_POLICY.is_file() and not BUDGETS_POLICY.is_symlink():
+        before_raw, before_meta = _regular_root_bytes(BUDGETS_POLICY)
+        before_policy = loads(before_raw)
+        after_policy = remove_agy_per_issue_daily(before_policy)
+        after_raw = (json.dumps(after_policy, sort_keys=True, indent=2) + '\n').encode()
+        plan['targets']['budgets.json'] = {
+            'path': str(BUDGETS_POLICY),
+            'before_sha256': before_meta['sha256'],
+            'after_sha256': sha256_bytes(after_raw),
+            'removed_per_issue_daily': (
+                isinstance(before_policy.get('providers', {}).get('agy'), dict)
+                and 'per_issue_daily' in before_policy['providers']['agy']
+            ),
+        }
+        paired_blobs['budgets.json'] = {
+            'sha256': sha256_bytes(after_raw), 'bytes': len(after_raw), 'data': after_raw,
+            'before': before_raw, 'before_meta': before_meta,
+        }
+    else:
+        plan['targets']['budgets.json'] = {
+            'path': str(BUDGETS_POLICY), 'status': 'absent_or_untrusted_skip',
+        }
+    if dry_run:
+        return plan
+
+    need(os.geteuid() == 0, 'OD-020 pair apply requires root')
+    import fcntl
+    _agy_executor_quiet()
+    controller = os.open(str(CONTROLLER_LOCK), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    fcntl.flock(controller, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    integration = os.open(str(INTEGRATION_LOCK), os.O_RDONLY | os.O_NOFOLLOW)
+    fcntl.flock(integration, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    registry = os.open(str(WRITER_REGISTRY_LOCK), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    fcntl.flock(registry, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    backup_dir = STATE_ROOT / 'backup' / f'od020-{sha[:12]}-{int(time.time())}'
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    os.chmod(backup_dir, 0o700)
+    attempted = []
+    previous = {}
+    try:
+        # Preserve C5/journals byte-identical by never opening them.
+        for rel, info in paired_blobs.items():
+            if rel == 'budgets.json':
+                path = BUDGETS_POLICY
+            else:
+                path = ACTIONS_TRAIN_INSTALL / rel.split('actions_train/', 1)[1]
+            if path.exists():
+                raw, meta = _regular_root_bytes(path)
+                previous[rel] = (raw, meta)
+                atomic_write(backup_dir / (rel.replace('/', '__') + '.before'), raw, 0o600)
+            else:
+                previous[rel] = None
+                meta = dict(uid=0, gid=0, mode=0o644)
+            attempted.append(rel)
+            expected = previous[rel][1] if previous[rel] else None
+            # Atomic compare-current replacement + readback.
+            if expected is not None:
+                now = path.read_bytes()
+                need(sha256_bytes(now) == expected['sha256'], f'preimage drift {rel}')
+            atomic_write(path, info['data'], mode=(expected or meta).get('mode', 0o644)
+                         if isinstance(expected or meta, dict) else 0o644)
+            need(sha256_bytes(path.read_bytes()) == info['sha256'], f'readback drift {rel}')
+        plan['status'] = 'APPLIED'
+        plan['backup'] = str(backup_dir)
+        atomic_write(backup_dir / 'receipt.json',
+                     json.dumps(plan, sort_keys=True, indent=2) + '\n', 0o600)
+        return plan
+    except BaseException:
+        for rel in reversed(attempted):
+            if previous.get(rel) is None:
+                continue
+            raw, meta = previous[rel]
+            if rel == 'budgets.json':
+                path = BUDGETS_POLICY
+            else:
+                path = ACTIONS_TRAIN_INSTALL / rel.split('actions_train/', 1)[1]
+            atomic_write(path, raw, mode=meta['mode'])
+            need(sha256_bytes(path.read_bytes()) == meta['sha256'], f'rollback drift {rel}')
+        plan['status'] = 'ROLLED_BACK_AFTER_APPLY_FAILURE'
+        atomic_write(backup_dir / 'receipt.json',
+                     json.dumps(plan, sort_keys=True, indent=2) + '\n', 0o600)
+        raise
+    finally:
+        fcntl.flock(registry, fcntl.LOCK_UN); os.close(registry)
+        fcntl.flock(integration, fcntl.LOCK_UN); os.close(integration)
+        fcntl.flock(controller, fcntl.LOCK_UN); os.close(controller)
+
+
+def install(repo, sha, *, enable=False, patch_helper=True, apply_od020=True):
     need(os.geteuid() == 0, 'install requires root PMA')
     need(SHA40.fullmatch(sha), 'invalid SHA')
     repo = Path(repo)
@@ -398,6 +554,14 @@ def install(repo, sha, *, enable=False, patch_helper=True):
         path = dest / rel
         need(path.is_file() and sha256_bytes(path.read_bytes()) == info['sha256'],
              f'post-install drift {rel}')
+    od020 = {'status': 'skipped'}
+    if apply_od020:
+        # Derive plan from exact accepted Git blobs; parent may dry-run separately.
+        try:
+            od020 = apply_od020_paired(repo, sha, dry_run=False)
+        except InstallError as err:
+            od020 = {'status': 'refused', 'reason': str(err)}
+            raise
     report = {
         'schema': 'GB_LEAN_INSTALL_REPORT_V1',
         'sha': sha,
@@ -412,6 +576,7 @@ def install(repo, sha, *, enable=False, patch_helper=True):
         'enable_requested': bool(enable),
         'helper': helper_result,
         'monitor': monitor,
+        'od020_pair': od020,
         'commission_required': True,
         'note': 'config.enabled stays false until explicit root commission; '
                 'commissioning remains true until two real task proofs; '
@@ -449,7 +614,8 @@ def commission():
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv or argv[0] in ('-h', '--help'):
-        print('usage: install.py install <repo> <sha> | rollback [sha] | commission | dry-blobs <repo> <sha>')
+        print('usage: install.py install <repo> <sha> | rollback [sha] | commission | '
+              'dry-blobs <repo> <sha> | dry-od020 <repo> <sha>')
         return 2
     cmd = argv[0]
     try:
@@ -469,6 +635,11 @@ def main(argv=None):
             blobs = collect_blobs(argv[1], argv[2])
             print(json.dumps({rel: {'sha256': b['sha256'], 'bytes': b['bytes']}
                               for rel, b in blobs.items()}, sort_keys=True, indent=2))
+            return 0
+        if cmd == 'dry-od020':
+            need(len(argv) == 3, 'dry-od020 <repo> <sha>')
+            plan = apply_od020_paired(argv[1], argv[2], dry_run=True)
+            print(json.dumps(plan, sort_keys=True, indent=2))
             return 0
         raise InstallError('unknown command')
     except InstallError as err:

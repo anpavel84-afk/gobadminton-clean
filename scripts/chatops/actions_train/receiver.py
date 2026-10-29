@@ -177,6 +177,23 @@ def qualification_api():
     return SimpleNamespace(read=read,STATE=STATE,atomic=atomic)
 
 
+def budget_left_eligible(left, *, successor=False):
+    """OD-020: numeric positive finite/infinity OK; reject bool/UNKNOWN/zero/negative/NaN.
+
+    Successor still requires exact remaining==1 (old #29 used 2/2 safeguards untouched).
+    UNKNOWN is slots.UNKNOWN (None) and never authorizes a call.
+    """
+    if left is None or type(left) is bool:
+        return False
+    if type(left) not in (int, float):
+        return False
+    if left != left or left <= 0:
+        return False
+    if successor:
+        return left == 1
+    return left >= 1
+
+
 def qualification_plan(policy, card, budget):
     """Read-only root canary proposal; reservation/launch remains in handle()."""
     if policy.get('mode') != 'active' or not card.get('owned') or card.get('active') is not None \
@@ -195,7 +212,9 @@ def qualification_plan(policy, card, budget):
         elif recovery.successor(q):recovery.lineage_ready(qualification_api(),q)
         budget.bind_issue(29)
         left=budget.remaining('agy','qa','slot2')
-        if not recovery.grant(q) and not (type(left) is int and (left>=1 if recovery.successor(q) else left==1)):return None
+        if not recovery.grant(q) and not budget_left_eligible(
+                left, successor=recovery.successor(q)):
+            return None
         return dict(slot='slot2',issue=29,stage='qa_qualification',phase='idle',head=q['head'],
                     attempt=0,generation=card['generation'],profile='agy')
     except (OSError, ValueError, ReviewError, Refused, KeyError, TypeError):
@@ -358,7 +377,7 @@ def product_qa_plan(policy, card, budget):
         product_executor_ready()
         budget.bind_issue(admission['issue'])
         left = budget.remaining('agy', 'qa', 'slot2')
-        if not (type(left) is int and left >= 1):
+        if not budget_left_eligible(left):
             return None
         # Generation tracks the product ops ledger, not historical slot2 pending.
         # Issue/head/attempt come from authorized admission, never fixed Issue346 constants.
@@ -1010,7 +1029,7 @@ def product_qa_request(req, policy):
     budget = s.Budget(BUDGET, AUTONOMY/'outbox', AUTONOMY/'locks/registry.lock')
     budget.bind_issue(admission['issue'])
     left = budget.remaining('agy', 'qa', 'slot2')
-    need(type(left) is int and left >= 1, 'product QA requires finite eligible daily budget')
+    need(budget_left_eligible(left), 'product QA requires finite eligible daily budget')
     free_lock(AUTONOMY / 'locks' / 'product-qa.lease')
     task_hash = digest(dict(schema='GB_PRODUCT_QA_TASK_V1', issue=admission['issue'],
                             source_sha=admission['source_sha'], admission=digest(admission),
@@ -1079,7 +1098,8 @@ def qualification_request(req, policy):
     budget = s.Budget(BUDGET, AUTONOMY/'outbox', AUTONOMY/'locks/registry.lock')
     budget.bind_issue(29)  # This legacy qualification admission is closed to Issue29.
     left = budget.remaining('agy', 'qa', slot)
-    need(recovery.grant(q) or type(left) is int and (left>=1 if recovery.successor(q) else left==1),
+    need(recovery.grant(q) or budget_left_eligible(
+            left, successor=recovery.successor(q)),
          'QA qualification requires finite eligible daily budget')
     reservation = dict(schema='GB_ANTIGRAVITY_QA_29_RESERVATION_V1', operation=key,
         task_hash=q['task_sha256'], descriptor=q, started_at=int(time.time()), result=None)
