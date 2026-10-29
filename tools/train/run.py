@@ -1019,18 +1019,28 @@ def execute_claim(admission, adapters, *, results_root, config=None, parent_leas
                     raise LeanError('author_adapter_required')
             except ProviderError as err:
                 if err.code == 'preflight_no_call':
-                    # Known loader NO_CALL before CLI/auth: terminal BLOCKED (or
-                    # parent mark_phase WAKE_RESUME). Preserve attempt count /
-                    # intent; never dead RUNNING / UNKNOWN / paid reflex retry.
+                    # Known loader NO_CALL before CLI/auth: terminal BLOCKED.
+                    # Structured blocked return (not re-raise) so advance_queue
+                    # may progress other eligible work; never RUNNING/UNKNOWN/
+                    # paid reflex retry of the same immutable admission.
                     mark_phase(
                         path, 'BLOCKED', stage='author', error=err.code,
                         no_model_launched=True, attempts=claim['attempts'])
-                    raise
+                    return {
+                        'status': 'blocked', 'claim': read_receipt(path),
+                        'claim_path': str(path), 'reason': 'author',
+                    }
                 if err.charge == 'unknown' or err.code.endswith('unknown'):
                     mark_phase(path, 'UNKNOWN', stage='author', error=err.code)
                     raise LeanError('no_automatic_paid_replay', 'UNKNOWN') from err
-                mark_phase(path, 'BLOCKED', stage='author', error=err.code)
-                raise
+                # Known charged terminal author failure: BLOCKED + structured
+                # return. Do not escape as controller_failed / replay paid call.
+                mark_phase(path, 'BLOCKED', stage='author', error=err.code,
+                           attempts=claim['attempts'])
+                return {
+                    'status': 'blocked', 'claim': read_receipt(path),
+                    'claim_path': str(path), 'reason': 'author',
+                }
             candidate_sha = author_result['candidate_sha']
             # Store actual provider/model/op/native evidence — do not drop AGY as Cursor.
             routes = dict(claim.get('routes') or {})

@@ -23,7 +23,7 @@ from native_guard import no_new_privileges, _landlock
 from native_antigravity import (
     trusted, ReviewError, ReviewEvidence, MODELS, MODEL, AGY, AGY_SHA256, AUTH,
     EXECUTOR_UID, EXECUTOR_GID, REGISTRY_GROUP, REGISTRY_GROUP_NOTE,
-    FILESYSTEM_BOUNDARY, OWNER_WAIVER, RESIDUAL_RISK, CANDIDATE_INTEGRITY, WRITE_GUARD,
+    RESIDUAL_RISK, CANDIDATE_INTEGRITY, WRITE_GUARD,
     PERMISSION_MODE, MAX_OUT, MIN_TIMEOUT, SECRET, loads, dec, audit, input_payload,
     _verify_executor_boundary, catalog_precharge, retain_oauth_refresh,
     _prepare_invocation_cgroup, _enter_invocation_cgroup, _observe_cgroup_membership,
@@ -323,6 +323,13 @@ def _stream_events(raw, tokens, *, strict=False):
     return events
 
 
+# Finite processing stages only — never free-form exception text or paths.
+_PROCESSING_STAGES = frozenset({
+    'prepared', 'charged', 'running', 'streams_scanned', 'streams_retained',
+    'parsed', 'output_policy', 'validated', 'imported', 'unknown',
+})
+# Author invokes Landlock private roots; receipt must not claim "no confinement".
+AUTHOR_FILESYSTEM_BOUNDARY = 'uid978_unix_permissions_nnp_landlock_roots'
 # A failed receipt never reuses provider dictionaries, paths, tools or context.
 # Keep only bounded, credential-checked scalars under these fixed field names.
 _FAILURE_FIELDS = (
@@ -335,7 +342,17 @@ _FAILURE_FIELDS = (
     'charge_state', 'error_code', 'oauth_refresh', 'cleanup',
     'cleanup_restore_guard', 'cleanup_private_tree', 'cleanup_oauth_copy',
     'cleanup_cgroup', 'cleanup_evidence', 'cleanup_reap', 'receipt_persist',
+    'processing_stage', 'safe_exception_class',
+    'stdout_sha256', 'stderr_sha256', 'transcript_sha256',
 )
+
+
+def _safe_exception_class(error):
+    """Bounded exception class name only — never exception text/args."""
+    name = type(error).__name__
+    if type(name) is not str or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,63}', name):
+        return 'Exception'
+    return name
 
 
 def _failed_receipt(receipt, tokens):
@@ -348,8 +365,21 @@ def _failed_receipt(receipt, tokens):
         try: _decoded_credentials(value, tokens)
         except Exception: continue
         safe[key] = value
+    # Preserve already-scanned usage only; never invent token counts.
+    usage = receipt.get('provider_reported_usage')
+    if type(usage) is dict:
+        try:
+            _decoded_credentials(usage, tokens)
+            safe['provider_reported_usage'] = usage
+        except Exception:
+            safe['provider_reported_usage'] = None
+    else:
+        safe['provider_reported_usage'] = None
+    stage = safe.get('processing_stage')
+    if stage not in _PROCESSING_STAGES:
+        safe['processing_stage'] = 'unknown'
     safe.update(schema='GB_AGY_AUTHOR_RECEIPT_V1', phase='failed_no_automatic_replay',
-                provider_reported_usage=None, finished_at=int(time.time()))
+                finished_at=int(time.time()))
     return safe
 
 
@@ -657,17 +687,21 @@ def invoke(bridge, rt, prompt, choice, *, popen, atomic, permitted, evidence_dir
         attempt=active['attempt'], task_sha256=task_hash, source_head=active.get('head') or active['base'],
         requested_route='agy:'+model, requested_model=model, effective_model=None, requested_effort=None,
         qualification_phase=marker['phase'], started_at=int(time.time()), finished_at=None, exit_code=None,
-        filesystem_boundary=FILESYSTEM_BOUNDARY, filesystem_roots_enforced=False,
-        requested_native_sandbox=False, owner_waiver=OWNER_WAIVER, residual_risk=RESIDUAL_RISK,
+        filesystem_boundary=AUTHOR_FILESYSTEM_BOUNDARY, filesystem_roots_enforced=True,
+        requested_native_sandbox=False, owner_waiver=None, residual_risk=RESIDUAL_RISK,
         candidate_integrity=CANDIDATE_INTEGRITY, write_guard=WRITE_GUARD,
         executor_uid=EXECUTOR_UID, executor_gid=EXECUTOR_GID,
         executor_supplementary_groups=[REGISTRY_GROUP], registry_group_note=REGISTRY_GROUP_NOTE,
         evidence_id=ev.id, rules_context=dict(choice['rules_context']), executor_reap=None,
         source_export_sha256=None, output_manifest_sha256=None, changed_paths=[],
-        transcript_sha256=None, provider_reported_usage=None, charge_state='not_charged', **transport)
+        transcript_sha256=None, provider_reported_usage=None, charge_state='not_charged',
+        processing_stage='prepared', safe_exception_class=None,
+        stdout_sha256=None, stderr_sha256=None, **transport)
     path = rt.layout.outbox/'agy-author-receipt.json'
     def save(phase):
         nonlocal receipt
+        if phase in _PROCESSING_STAGES:
+            receipt['processing_stage'] = phase
         proposed = dict(receipt, phase=phase)
         _decoded_credentials(proposed, tokens)
         atomic(path, proposed)
@@ -771,11 +805,25 @@ def invoke(bridge, rt, prompt, choice, *, popen, atomic, permitted, evidence_dir
         for name in ('stdout', 'stderr'):
             streams[name] = _source(out/name, out)
             need(len(streams[name]) <= MAX_OUT, 'author output exceeds bound')
-            _stream_events(streams[name], tokens, strict=name == 'stdout')
+            # Secret-safety scan is independent of protocol acceptance.
+            _stream_events(streams[name], tokens, strict=False)
+        receipt['processing_stage'] = 'streams_scanned'
+        receipt['stdout_sha256'] = hashlib.sha256(streams['stdout']).hexdigest()
+        receipt['stderr_sha256'] = hashlib.sha256(streams['stderr']).hexdigest()
+        # Retain credential-clean raw into existing ReviewEvidence BEFORE semantic
+        # parse / source-output validation. Failure must not erase these bytes.
+        for name, raw in streams.items():
+            ev.write(name, raw)
+        receipt['processing_stage'] = 'streams_retained'
         result = parse_stream(streams['stdout'], model, tokens=tokens)
         # Validate in private memory BEFORE touching the receipt shared with stage.
         _decoded_credentials(result, tokens)
-        _remove_agent(work); _output_policy(work, tokens)
+        receipt.update(processing_stage='parsed', **{
+            k: result[k] for k in ('provider_reported_usage', 'transcript_sha256',
+                                   'effective_model') if k in result})
+        _remove_agent(work)
+        receipt['processing_stage'] = 'output_policy'
+        _output_policy(work, tokens)
         after = snapshot(work, bridge, before)
         changed = sorted(n for n in set(before) | set(after) if before.get(n) != after.get(n))
         need(changed and all(permitted(n, task['allowed_paths']) for n in changed), 'empty or unauthorized author diff')
@@ -791,11 +839,9 @@ def invoke(bridge, rt, prompt, choice, *, popen, atomic, permitted, evidence_dir
             need(payload_hash == after[name], 'author payload changed after snapshot')
             _no_credentials(raw, tokens)
             payloads[name] = raw; payload_hashes[name] = payload_hash
-        proposed = dict(receipt, **result, changed_paths=changed,
+        proposed = dict(receipt, **result, changed_paths=changed, processing_stage='validated',
                         output_manifest_sha256=digest(after), imported_payload_sha256=digest(payload_hashes))
         _decoded_credentials(proposed, tokens)
-        # Stream bytes are retained only after every credential check succeeds.
-        for name, raw in streams.items(): ev.write(name, raw)
         receipt = proposed
         save('validated')
         try:
@@ -805,6 +851,7 @@ def invoke(bridge, rt, prompt, choice, *, popen, atomic, permitted, evidence_dir
             raise
         guard = None  # Only a verified restoration permits the trusted import.
         _import(bridge, changed, payloads)
+        receipt['processing_stage'] = 'imported'
         receipt['finished_at'] = int(time.time()); save('imported')
         return result
     except BaseException as error:
@@ -818,7 +865,10 @@ def invoke(bridge, rt, prompt, choice, *, popen, atomic, permitted, evidence_dir
                 receipt['exit_code'] = process.returncode
             except BaseException:
                 receipt['cleanup_reap'] = 'failed'
-        # No provider exception text, prompt, OAuth bytes or raw output retained.
+        # Finite stage + class only. No exception text, prompts, tokens or raw copy.
+        if receipt.get('processing_stage') not in _PROCESSING_STAGES:
+            receipt['processing_stage'] = 'unknown'
+        receipt['safe_exception_class'] = _safe_exception_class(error)
         receipt['error_code'] = 'AGY_CANDIDATE_CHANGED' if str(error) == 'AGY_CANDIDATE_CHANGED' else 'AGY_ADAPTER_ERROR'
         fail()
         raise ReviewError(receipt['error_code'], 'output', ev.id) from None

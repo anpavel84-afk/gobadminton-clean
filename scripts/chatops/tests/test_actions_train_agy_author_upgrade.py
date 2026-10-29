@@ -178,6 +178,11 @@ class Upgrade(unittest.TestCase):
         self.assertEqual(parsed['slots']['slot2']['agy']['author'], 3)
         self.assertEqual(parsed['providers']['agy']['qa'], 'unlimited')
 
+    def test_budget_already_unlimited_keeps_exact_bytes(self):
+        installed = U.budget_author_unlimited(self.budget)
+        again = U.budget_author_unlimited(installed)
+        self.assertEqual(again, installed)
+
     def test_budget_rejects_non_unlimited_qa_or_existing_author(self):
         for raw in (
                 self.budget.replace(b'"qa":"unlimited"', b'"qa":2', 1),
@@ -187,6 +192,76 @@ class Upgrade(unittest.TestCase):
             with self.assertRaises(core.Refused):
                 U.budget_author_unlimited(raw)
         self.assertEqual((self.config / 'budgets.json').read_bytes(), self.budget)
+
+    def test_sequential_upgrade_archives_prior_and_keeps_history(self):
+        """Completed canary install → sequential apply of new blobs; prior journal frozen."""
+        first = self.call('apply')
+        self.assertEqual(first['phase'], 'installed-canary-disabled')
+        prior_journal = (self.state / 'upgrade.json').read_bytes()
+        prior_module = (self.install / U.AUTHOR_MODULE).read_bytes()
+        prior_marker = (self.config / 'antigravity-author.json').read_bytes()
+        prior_budget = (self.config / 'budgets.json').read_bytes()
+        prior_slots = {p.name: p.read_bytes() for p in U.BACKUP.iterdir() if p.is_file()}
+        history_snap = {
+            name: (self.root / name).read_bytes()
+            for name, raw in self.initial.items()
+            if name.startswith('autonomy/') or name in (
+                'config/policy.json', 'config/antigravity-qa.json',
+                'config/cursor-author.json', 'state/slot2.json')
+        }
+        # Mutate only the chosen author module bytes in the bundle (new commit).
+        new_commit = 'd' * 40
+        author_path = self.bundle / 'scripts/chatops/actions_train' / U.AUTHOR_MODULE
+        author_path.write_bytes(prior_module + b'\n# sequential diagnostic fix\n')
+
+        def fake_git_blobs(bundle, commit):
+            mat = _material(bundle)
+            mat[U.OPS_SCRIPT] = Path(U.__file__).read_bytes()
+            return mat
+
+        with patch.object(U, 'git_blobs', side_effect=fake_git_blobs):
+            dry = self.call('dry', commit=new_commit)
+            self.assertTrue(dry['dry'])
+            self.assertTrue(dry['sequential'])
+            self.assertEqual(dry['prior_bundle_commit'], self.commit)
+            self.assertEqual(self.files().get('state/upgrade.json'), prior_journal)
+            second = self.call('apply', commit=new_commit)
+        self.assertEqual(second['phase'], 'installed-canary-disabled')
+        self.assertTrue(second['sequential'])
+        self.assertEqual(second['prior_bundle_commit'], self.commit)
+        # Prior journal/backup frozen under BACKUP/revisions/<old_commit>/.
+        archived = (self.state / 'upgrade-backup' / 'revisions' / self.commit
+                    / 'antigravity-author-upgrade.json')
+        self.assertTrue(archived.is_file())
+        self.assertEqual(archived.read_bytes(), prior_journal)
+        for name, raw in prior_slots.items():
+            self.assertEqual((U.BACKUP / name).read_bytes(), raw)
+        new_journal = json.loads((self.state / 'upgrade.json').read_bytes())
+        self.assertEqual(new_journal['backup_dir'], str(U.BACKUP / 'transactions' / new_commit))
+        # New transaction uses current before-bytes; module changed, budget same.
+        self.assertEqual((self.install / U.AUTHOR_MODULE).read_bytes(),
+                         prior_module + b'\n# sequential diagnostic fix\n')
+        self.assertNotEqual((self.install / U.AUTHOR_MODULE).read_bytes(), prior_module)
+        self.assertEqual((self.config / 'budgets.json').read_bytes(), prior_budget)
+        marker = json.loads((self.config / 'antigravity-author.json').read_bytes())
+        self.assertEqual(marker['phase'], 'canary')
+        self.assertEqual(marker['canary_task_sha256'], self.task_hash)
+        self.assertEqual(marker['executor_uid'], 978)
+        self.assertEqual(marker['model'], U.MODEL)
+        self.assertEqual(marker['adapter_commit'], new_commit)
+        self.assertEqual(marker['modules'][U.AUTHOR_MODULE],
+                         U.sha((self.install / U.AUTHOR_MODULE).read_bytes()))
+        for name, raw in history_snap.items():
+            self.assertEqual((self.root / name).read_bytes(), raw, name)
+        # Live journal is the NEW transaction; prior archive untouched by verify.
+        self.assertTrue(self.call('verify', commit=new_commit)['verified'])
+        self.assertEqual(archived.read_bytes(), prior_journal)
+        # Rollback restores pre-upgrade (prior after) bytes; archive remains.
+        self.assertEqual(self.call('rollback', commit=new_commit)['phase'],
+                         'rolled-back-disabled')
+        self.assertEqual((self.install / U.AUTHOR_MODULE).read_bytes(), prior_module)
+        self.assertEqual((self.config / 'antigravity-author.json').read_bytes(), prior_marker)
+        self.assertEqual(archived.read_bytes(), prior_journal)
 
     def test_stale_qa_pins_are_reported_not_rewritten(self):
         path = self.config / 'antigravity-qa.json'
