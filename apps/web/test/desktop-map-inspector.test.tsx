@@ -36,6 +36,7 @@ import { DesktopMapInspector, DESKTOP_MAP_INSPECTOR_MQ, useDesktopMapInspector }
 import { VenuePopup } from "../src/components/consumer/games/VenuePopup";
 import { VenueSheet } from "../src/components/consumer/games/VenueSheet";
 import { CloseButton } from "../src/components/consumer/CloseButton";
+import { DesktopOverlayHeader } from "../src/components/consumer/DesktopOverlayHeader";
 
 const venue: VenueSummary = { id: "a", cityId: "city", name: "ФОК", address: "Адрес", timezone: "Europe/Moscow" };
 function fixture(id: string): Game {
@@ -176,8 +177,9 @@ it("desktop Close deselects while mobile Close still collapses", () => {
   hooks.effects.splice(0).forEach(effect => effect());
   hooks.cursor = 0;
   tree = VenueSheet({ venue, games: [fixture("g")], gamesReady: true, now: Date.parse("2026-11-01T12:00:00Z"), embedded: true, active: true, onCollapse: collapse, onDeselect: deselect });
-  const desktopClose = elements(tree).find(node => node.type === CloseButton);
-  expect(desktopClose?.props.onClick).toBe(deselect);
+  // CloseButton lives inside DesktopOverlayHeader; assert the header onClose wiring.
+  const desktopHeader = elements(tree).find(node => node.type === DesktopOverlayHeader);
+  expect(desktopHeader?.props.onClose).toBe(deselect);
 });
 
 it("useDesktopMapInspector follows matchMedia changes", () => {

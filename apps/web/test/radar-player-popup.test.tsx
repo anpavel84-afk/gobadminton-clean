@@ -416,8 +416,21 @@ it("list access keeps aside without stacking a player VenuePopup", () => {
   expect(summary).toBeDefined();
   (summary!.props.onClick as () => void)();
   tree = renderRadar();
-  expect(nodes(tree).some(n => n.type === "aside")).toBe(true);
+  const aside = nodes(tree).find(n => n.type === "aside" && n.props.id === "g2-map-panel");
+  expect(aside).toBeDefined();
   expect(nodes(tree).some(n => n.type === VenuePopup)).toBe(false);
+  const body = nodes(aside).find(n => n.type === "div" && String(n.props.className ?? "").includes("g2-map-panel__body"));
+  expect(body).toBeDefined();
+  expect(nodes(body).some(n => n.type === "button" && String(n.props.className ?? "").includes("g2-map-list-row"))).toBe(true);
+});
+
+it("desktop overlay header title selector outranks unified-preview h2 margin", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const overlays = await readFile(new URL("../src/styles/desktop-overlays.css", import.meta.url), "utf8");
+  const geographic = await readFile(new URL("../src/styles/radar-geographic.css", import.meta.url), "utf8");
+  expect(geographic).toMatch(/\.unified-preview h2\s*\{[^}]*margin:\s*12px 0/);
+  expect(overlays).toMatch(/\.gb-desktop-overlay-header\s+\.gb-desktop-overlay-header__title\s*\{[^}]*margin:\s*0/);
+  expect(overlays).toMatch(/\.gb-radar-layer\s+\.g2-map-panel\s*>\s*\.g2-map-panel__body\s*\{[^}]*overflow-y:\s*auto/);
 });
 
 it("player→venue replacement does not steal focus; Close still restores trigger", async () => {

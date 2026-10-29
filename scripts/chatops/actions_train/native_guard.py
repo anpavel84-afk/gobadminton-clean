@@ -20,6 +20,21 @@ def need(ok, why):
         raise GuardError(why)
 
 
+def _supported_sandbox_root(target, st):
+    """Admit dirs/files, existing null/random, or an explicit verified PTY mux."""
+    mode = st.st_mode
+    if stat.S_ISDIR(mode) or stat.S_ISREG(mode):
+        return True
+    path = str(target)
+    if path in ('/dev/null', '/dev/urandom', '/dev/random'):
+        return True
+    # Explicit PTY multiplexer only: resolved /dev/ptmx or /dev/pts/ptmx
+    # (symlink on some runners), CHR major 5 minor 2. No blanket /dev.
+    if path in ('/dev/ptmx', '/dev/pts/ptmx') and stat.S_ISCHR(mode):
+        return os.major(st.st_rdev) == 5 and os.minor(st.st_rdev) == 2
+    return False
+
+
 def _landlock(readonly, writable, executables):
     libc = ctypes.CDLL(None, use_errno=True)
     need(libc.syscall(444, 0, 0, 1) >= 3, 'Landlock ABI >=3 required')
@@ -41,9 +56,10 @@ def _landlock(readonly, writable, executables):
                 need(target != Path('/'), 'root filesystem cannot be exposed')
                 handle = os.open(target, os.O_PATH | os.O_CLOEXEC)
                 try:
-                    mode = os.fstat(handle).st_mode
+                    st = os.fstat(handle)
+                    mode = st.st_mode
                     mask = access if stat.S_ISDIR(mode) else access & ((1 << 0) | (1 << 1) | (1 << 2) | (1 << 14))
-                    need(mask and (stat.S_ISDIR(mode) or stat.S_ISREG(mode) or str(target) in ('/dev/null', '/dev/urandom', '/dev/random')), 'unsupported sandbox root')
+                    need(mask and _supported_sandbox_root(target, st), 'unsupported sandbox root')
                     rule = Beneath(mask, handle)
                     need(libc.syscall(445, fd, 1, ctypes.byref(rule), 0) == 0, 'Landlock rule failed')
                 finally:

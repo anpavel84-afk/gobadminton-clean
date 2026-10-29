@@ -1,4 +1,4 @@
-# OD-017 — Lean Mode B + AGY adapter · source handoff (repair3)
+# OD-017 / OD-018 — Lean Mode B · source handoff
 
 **Date:** 2026-10-28
 **Author:** Cursor Auto (source-only OD-017 repair3 — live default bindings)
@@ -17,7 +17,7 @@
 | `MODE_B_ACTIVE` | **false** (needs two real task proofs) |
 | `AGY_QA_READY` / `AGY_AUTHOR_READY` | **false** (no fabricated READY; Medium fallback while not ready) |
 | C5 | **off** |
-| #182 / gameRecommendations | **OFF** |
+| #182 / gameRecommendations | **OD-018 prospective guarded DEV authorization; not yet released** |
 | #94 | **PARK remains** (not auto-cleared; not 365→94 hardcode) |
 | This Cursor author launch | **1** (nested AGY/Codex inference in-process = 0) |
 | UAT | **NOT_TESTED** |
@@ -40,7 +40,7 @@
 - Auth/scope failure → `PROJECT_ACCESS_NOT_VERIFIED` / `INSUFFICIENT_SCOPES` → `queue_unavailable` + **ZERO calls** (no empty backlog, no all-open-Issues fallback, no stale `backlog-after.json` / `backlog_ru.json`)
 - Field bindings from actual queried names; absent/ambiguous status fails closed (not guessed READY)
 - Owner admission comments freeze role/scope/acceptance; Project priority/status/deps gate eligibility
-- #94 PARK remains; #182 OFF; delivered 365/308/207/368 = UAT not new product
+- #94 PARK remains; #182 prospective OD-018 scope only; delivered 365/308/207/368 = UAT not new product
 
 ## Not installed / not proven (do not present as live)
 
@@ -69,5 +69,5 @@ python3 -I -B ../../scripts/chatops/tests/test_actions_train_lean_mode_b.py
 6. Two real sequential product proofs before `MODE_B_ACTIVE`
 7. Separate AGY QA qualification (cap 5/issue/UTC day); Codex Medium fallback meanwhile
 
-C5 off. #182 off. #94 park. PROD forbidden. Author does not publish/install/runtime.
+C5 off. #182 follows Owner OD-018 comment6483075322; old admissions unchanged. #94 park. PROD forbidden. Author does not publish/install/runtime.
 No AGENTS/instruction-file edits in this pass.

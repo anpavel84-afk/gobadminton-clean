@@ -259,12 +259,12 @@
       },
       "approval_scope": "reviewed_reference_input_only_not_runtime_acceptance",
       "approved_by": "Pavel (Owner); exact Stage A record through reviewed merge t424u",
-      "bytes": 5924,
+      "bytes": 6327,
       "id": "style-guide-first-decision",
       "kind": "owner_decision",
       "media_type": "text/markdown",
       "scope": "Original decision plus scoped supersession by t420u",
-      "sha256": "a67abf52b223bf32f405be6e59a837ac5f42e5ba638b7c1c0aec6eb77ea80ad9",
+      "sha256": "356ae002c82d4d660ad39912c1422371e0fd68ca88cd0ece6af5417af266d3e3",
       "source": {
         "path": "docs/decisions/OWNER_DECISION_FRONTEND_STYLE_GUIDE_FIRST_V001.md"
       },
