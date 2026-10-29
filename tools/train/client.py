@@ -28,6 +28,10 @@ REPO_ID = 1416250340
 WORKFLOW_PATH = '.github/workflows/lean-delivery.yml'
 CONCURRENCY_GROUP = 'gobadminton-lean-delivery'
 SHA40 = re.compile(r'^[0-9a-f]{40}$')
+DISPATCH_ACTIONS = frozenset({'status', 'advance', 'recover'})
+# Host worker budget default 2400s; host subprocess timeout is budget+60.
+# Client SSH must outlive that with a bounded margin inside the 45m job.
+DEFAULT_SSH_TIMEOUT_S = 2520
 
 
 class Refused(Exception):
@@ -82,7 +86,7 @@ class SSH:
     def __exit__(self, *_):
         self.temp.cleanup()
 
-    def __call__(self, req, timeout=2400):
+    def __call__(self, req, timeout=DEFAULT_SSH_TIMEOUT_S):
         proc = subprocess.run(
             self.argv, input=json.dumps(req, sort_keys=True), text=True,
             capture_output=True, timeout=timeout,
@@ -119,9 +123,24 @@ def trusted_event(event, name):
     return True
 
 
-def lean_request(event_name, workflow_sha, client_sha):
+def resolve_dispatch_action(event_name, event=None):
+    """Closed enum: schedule/authorized comment => advance; manual default => status."""
+    if event_name in ('schedule', 'issue_comment'):
+        return 'advance'
+    if event_name == 'workflow_dispatch':
+        raw = ((event or {}).get('inputs') or {}).get('action')
+        if raw in DISPATCH_ACTIONS:
+            return raw
+        return 'status'
+    raise Refused('untrusted event type')
+
+
+def lean_request(event_name, workflow_sha, client_sha, *, event=None, dispatch_action=None):
     need(isinstance(client_sha, str) and SHA40.fullmatch(client_sha),
          'client_sha required (fixed accepted SHA; no github.sha fallback)')
+    action = dispatch_action if dispatch_action is not None else resolve_dispatch_action(
+        event_name, event)
+    need(action in DISPATCH_ACTIONS, 'dispatch_action must be status|advance|recover')
     req = {
         'action': 'lean',
         'run_id': int(os.environ['GITHUB_RUN_ID']),
@@ -135,13 +154,19 @@ def lean_request(event_name, workflow_sha, client_sha):
         'workflow_sha': workflow_sha,
         'client_sha': client_sha,
         'status': 'requested',
+        'dispatch_action': action,
     }
     return req
 
 
-def wait_with_keepalive(ssh, req, *, deadline_s=2300, poll_s=20):
-    """Bounded wait; robust disconnect saves intent/readback — no new service."""
-    value = ssh(req)
+def wait_with_keepalive(ssh, req, *, deadline_s=2300, poll_s=20,
+                        ssh_timeout_s=DEFAULT_SSH_TIMEOUT_S):
+    """Bounded wait; robust disconnect saves intent/readback — no new service.
+
+    Preserves original event_name and dispatch_action on keepalive polls —
+    never relabels schedule as workflow_dispatch.
+    """
+    value = ssh(req, timeout=ssh_timeout_s)
     deadline = time.monotonic() + deadline_s
     while value.get('status') == 'running' and time.monotonic() < deadline:
         time.sleep(poll_s)
@@ -154,11 +179,12 @@ def wait_with_keepalive(ssh, req, *, deadline_s=2300, poll_s=20):
                 'repository_id': REPO_ID,
                 'actor_id': req['actor_id'],
                 'ref': req['ref'],
-                'event_name': 'workflow_dispatch',
+                'event_name': req['event_name'],
                 'workflow_sha': req['workflow_sha'],
                 'client_sha': req['client_sha'],
                 'status': 'queued',
-            })
+                'dispatch_action': req.get('dispatch_action') or 'status',
+            }, timeout=ssh_timeout_s)
         except Refused as err:
             return {'status': 'unknown', 'reason': str(err), 'recovery': 'read_host_intent'}
     need(value.get('status') != 'running', 'bounded lean wait expired')
@@ -179,7 +205,7 @@ def reconcile():
     # Fixed accepted client SHA required — refuse moving github.sha fallback.
     pinned = os.environ.get('LEAN_CLIENT_SHA') or ''
     need(SHA40.fullmatch(pinned), 'LEAN_CLIENT_SHA required (fixed accepted client; no github.sha fallback)')
-    req = lean_request(name, workflow_sha, client_sha=pinned)
+    req = lean_request(name, workflow_sha, client_sha=pinned, event=event)
     Path('evidence').mkdir(exist_ok=True)
     Path('evidence/lean-request.json').write_text(json.dumps(req, sort_keys=True) + '\n')
     with SSH() as ssh:

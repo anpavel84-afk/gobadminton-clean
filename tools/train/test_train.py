@@ -23,14 +23,20 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import base64
+import hashlib
+import inspect
+
 import providers
 import run as lean_run
 import host as lean_host
+import client as lean_client
 import monitor as lean_mon
 import live as lean_live
 
 
 OWNER = 318610566
+ACTIONS_BOT = 41898282
 REPO_ID = 1416250340
 REPO = 'anpavel84-afk/gobadminton-clean'
 
@@ -998,7 +1004,18 @@ class HostRequestTests(unittest.TestCase):
             'actor_id': OWNER, 'ref': 'refs/heads/main',
             'event_name': 'workflow_dispatch',
             'workflow_sha': 'a' * 64, 'client_sha': 'b' * 40, 'status': 'queued',
+            'dispatch_action': 'status',
         }
+
+    def _run_payload(self, **overrides):
+        payload = {
+            'id': 1, 'run_attempt': 1, 'path': lean_host.WORKFLOW_PATH,
+            'status': 'in_progress', 'event': 'workflow_dispatch',
+            'repository': {'id': REPO_ID}, 'head_repository': {'id': REPO_ID},
+            'actor': {'id': OWNER}, 'head_sha': 'b' * 40, 'head_branch': 'main',
+        }
+        payload.update(overrides)
+        return payload
 
     def test_rejects_shell_and_arbitrary_paths(self):
         base = self._base()
@@ -1026,28 +1043,233 @@ class HostRequestTests(unittest.TestCase):
 
     def test_verify_github_run_fresh_fields(self):
         base = self._base()
+
         def api(path):
-            return {
-                'id': 1, 'run_attempt': 1, 'path': lean_host.WORKFLOW_PATH,
-                'status': 'in_progress', 'event': 'workflow_dispatch',
-                'repository': {'id': REPO_ID}, 'head_repository': {'id': REPO_ID},
-                'actor': {'id': OWNER}, 'head_sha': 'b' * 40,
-            }
+            self.assertIn('/actions/runs/', path)
+            return self._run_payload()
+
         verified = lean_host.verify_github_run(base, api_fetch=api)
         self.assertTrue(verified['verified'])
         self.assertEqual(verified['run']['path'], lean_host.WORKFLOW_PATH)
+        self.assertEqual(verified['run']['ref'], 'main')
+        self.assertEqual(verified['run']['head_sha'], 'b' * 40)
 
     def test_verify_rejects_wrong_workflow_path(self):
         base = self._base()
+
         def api(path):
-            return {
-                'id': 1, 'run_attempt': 1, 'path': '.github/workflows/other.yml',
-                'status': 'in_progress', 'event': 'workflow_dispatch',
-                'repository': {'id': REPO_ID}, 'head_repository': {'id': REPO_ID},
-                'actor': {'id': OWNER},
-            }
+            return self._run_payload(path='.github/workflows/other.yml')
+
         with self.assertRaises(lean_host.HostRefused):
             lean_host.verify_github_run(base, api_fetch=api)
+
+    def test_default_gh_api_fetch_uses_uid1002_drop(self):
+        """Trusted live.gh_api/uid1002 path — never Root HOME gh profile."""
+        src = inspect.getsource(lean_host.default_gh_api_fetch)
+        self.assertIn('ensure_same_release_train_import', src)
+        self.assertIn('gh_api', src)
+        self.assertIn('sys.path.insert', inspect.getsource(lean_host.ensure_same_release_train_import))
+        seen = {}
+
+        def fake_gh(path, **kwargs):
+            seen['path'] = path
+            seen['env'] = lean_live.uid1002_env()
+            return {'ok': True, 'id': 9}
+
+        with mock.patch.object(lean_live, 'gh_api', side_effect=fake_gh):
+            out = lean_host.default_gh_api_fetch('repos/x')
+        self.assertEqual(out['id'], 9)
+        self.assertEqual(seen['path'], 'repos/x')
+        self.assertEqual(seen['env']['HOME'], '/home/agentagency-dev')
+        self.assertEqual(seen['env']['GH_CONFIG_DIR'], '/home/agentagency-dev/.config/gh')
+        self.assertNotIn('GITHUB_TOKEN', seen['env'])
+        drop_src = inspect.getsource(lean_live.uid1002_preexec)
+        self.assertIn('65042', drop_src)
+        self.assertIn('setuid', drop_src)
+
+    def test_forged_actor_event_ref_workflow_refused(self):
+        base = self._base()
+
+        def bad_actor(path):
+            return self._run_payload(actor={'id': 1})
+
+        with self.assertRaises(lean_host.HostRefused):
+            lean_host.verify_github_run(base, api_fetch=bad_actor)
+
+        def actor_or_fallback_trap(path):
+            # Wrong actual actor must fail even if request.actor_id is trusted.
+            return self._run_payload(actor={'id': ACTIONS_BOT})
+
+        with self.assertRaises(lean_host.HostRefused):
+            lean_host.verify_github_run(base, api_fetch=actor_or_fallback_trap)
+
+        def bad_event(path):
+            return self._run_payload(event='schedule')
+
+        with self.assertRaises(lean_host.HostRefused):
+            lean_host.verify_github_run(base, api_fetch=bad_event)
+
+        def bad_ref(path):
+            return self._run_payload(head_branch='feature/x')
+
+        with self.assertRaises(lean_host.HostRefused):
+            lean_host.verify_github_run(base, api_fetch=bad_ref)
+
+        def completed_replay(path):
+            return self._run_payload(status='completed')
+
+        with self.assertRaises(lean_host.HostRefused):
+            lean_host.verify_github_run(base, api_fetch=completed_replay)
+
+        workflow_bytes = b'name: lean-delivery\non: workflow_dispatch\n'
+        good_hash = hashlib.sha256(workflow_bytes).hexdigest()
+        release = 'b' * 40
+        req = dict(base, workflow_sha=good_hash, client_sha=release)
+
+        def contents_api(path):
+            if '/contents/' in path:
+                self.assertIn('ref=' + ('c' * 40), path)
+                self.assertIn(lean_host.WORKFLOW_PATH, path)
+                return {
+                    'encoding': 'base64',
+                    'content': base64.b64encode(workflow_bytes).decode(),
+                }
+            raise AssertionError(path)
+
+        with mock.patch.object(lean_host, 'installed_workflow_blob_sha256',
+                               return_value=(good_hash, Path('/installed/wf'))), \
+                mock.patch.object(lean_host, 'installed_release_sha', return_value=release), \
+                mock.patch.object(lean_host, 'read_config', return_value={
+                    'schema': 'GB_LEAN_CONFIG_V1', 'enabled': False}), \
+                mock.patch.object(lean_host, 'resolved_code_root',
+                                  return_value=Path('/installed')):
+            meta = lean_host.verify_workflow_matches_install(
+                req, api_fetch=contents_api, head_sha='c' * 40)
+            self.assertEqual(meta['workflow_git_sha256'], good_hash)
+
+        forged = base64.b64encode(b'name: forged\n').decode()
+
+        def forged_contents(path):
+            return {'encoding': 'base64', 'content': forged}
+
+        with mock.patch.object(lean_host, 'installed_workflow_blob_sha256',
+                               return_value=(good_hash, Path('/installed/wf'))), \
+                mock.patch.object(lean_host, 'installed_release_sha', return_value=release), \
+                mock.patch.object(lean_host, 'read_config', return_value={
+                    'schema': 'GB_LEAN_CONFIG_V1', 'enabled': False}), \
+                mock.patch.object(lean_host, 'resolved_code_root',
+                                  return_value=Path('/installed')):
+            with self.assertRaises(lean_host.HostRefused):
+                lean_host.verify_workflow_matches_install(
+                    req, api_fetch=forged_contents, head_sha='c' * 40)
+            with self.assertRaises(lean_host.HostRefused):
+                lean_host.verify_workflow_matches_install(
+                    dict(req, client_sha='d' * 40),
+                    api_fetch=contents_api, head_sha='c' * 40)
+
+    def test_status_dispatch_no_advance_and_schedule_transport(self):
+        """Manual default status; schedule/comment advance; keepalive preserves fields."""
+        self.assertEqual(
+            lean_client.resolve_dispatch_action('workflow_dispatch', {'inputs': {}}),
+            'status')
+        self.assertEqual(
+            lean_client.resolve_dispatch_action(
+                'workflow_dispatch', {'inputs': {'action': 'advance'}}),
+            'advance')
+        self.assertEqual(lean_client.resolve_dispatch_action('schedule'), 'advance')
+        self.assertEqual(lean_client.resolve_dispatch_action('issue_comment'), 'advance')
+
+        base = self._base()
+        lean_host.validate_request(base)
+        with self.assertRaises(lean_host.HostRefused):
+            lean_host.validate_request(dict(base, dispatch_action='run-models'))
+        with self.assertRaises(lean_host.HostRefused):
+            lean_host.validate_request(dict(
+                base, event_name='schedule', dispatch_action='status'))
+
+        env = {
+            'GITHUB_RUN_ID': '42',
+            'GITHUB_RUN_ATTEMPT': '1',
+            'GITHUB_ACTOR_ID': str(OWNER),
+            'GITHUB_REF': 'refs/heads/main',
+        }
+        with mock.patch.dict(os.environ, env, clear=False):
+            manual = lean_client.lean_request(
+                'workflow_dispatch', 'a' * 64, 'b' * 40, event={'inputs': {}})
+            self.assertEqual(manual['dispatch_action'], 'status')
+            sched = lean_client.lean_request('schedule', 'a' * 64, 'b' * 40)
+            self.assertEqual(sched['dispatch_action'], 'advance')
+            self.assertEqual(sched['event_name'], 'schedule')
+
+        captured = {}
+
+        def fake_run(argv, **kwargs):
+            event_path = Path(argv[-1])
+            captured['event'] = json.loads(event_path.read_text())
+            return mock.Mock(returncode=0, stdout='{"status":"ok"}\n', stderr='')
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            run_py = root / 'tools/train/run.py'
+            run_py.parent.mkdir(parents=True)
+            run_py.write_text('#!/usr/bin/env python3\n')
+            meta = {
+                'config': {
+                    'schema': 'GB_LEAN_CONFIG_V1', 'enabled': True, 'wake_budget_s': 300,
+                },
+                'code_root': str(root),
+                'installed_sha': 'b' * 40,
+                'enabled': True,
+                'github': {'run': {'event': 'workflow_dispatch'}},
+            }
+            req = dict(self._base(), dispatch_action='status')
+            with mock.patch.object(lean_host, 'RESULTS', root / 'results'), \
+                    mock.patch.object(lean_host.subprocess, 'run', side_effect=fake_run):
+                out = lean_host.dispatch_controller(req, meta)
+            self.assertEqual(out['dispatch_action'], 'status')
+            self.assertEqual(captured['event']['inputs']['action'], 'status')
+            self.assertEqual(captured['event']['event_name'], 'workflow_dispatch')
+
+            captured.clear()
+            meta['github'] = {'run': {'event': 'schedule'}}
+            req_sched = dict(self._base(), event_name='schedule',
+                             dispatch_action='advance', actor_id=ACTIONS_BOT)
+            with mock.patch.object(lean_host, 'RESULTS', root / 'results'), \
+                    mock.patch.object(lean_host.subprocess, 'run', side_effect=fake_run):
+                out2 = lean_host.dispatch_controller(req_sched, meta)
+            self.assertEqual(out2['dispatch_action'], 'advance')
+            self.assertEqual(captured['event']['inputs']['action'], 'advance')
+            self.assertEqual(captured['event']['event_name'], 'schedule')
+
+            disabled = lean_host.dispatch_controller(req, dict(meta, config={
+                'schema': 'GB_LEAN_CONFIG_V1', 'enabled': False}))
+            self.assertEqual(disabled['status'], 'disabled')
+
+        polls = []
+
+        class FakeSSH:
+            def __call__(self, req, timeout=None):
+                polls.append(dict(req))
+                if len(polls) == 1:
+                    return {'status': 'running'}
+                return {'status': 'ok'}
+
+        with mock.patch.object(lean_client.time, 'sleep', return_value=None):
+            result = lean_client.wait_with_keepalive(
+                FakeSSH(),
+                {
+                    'action': 'lean', 'run_id': 7, 'run_attempt': 1,
+                    'actor_id': OWNER, 'ref': 'refs/heads/main',
+                    'event_name': 'schedule', 'workflow_sha': 'a' * 64,
+                    'client_sha': 'b' * 40, 'dispatch_action': 'advance',
+                },
+                deadline_s=100, poll_s=0,
+            )
+        self.assertEqual(result['status'], 'ok')
+        self.assertEqual(polls[1]['event_name'], 'schedule')
+        self.assertEqual(polls[1]['dispatch_action'], 'advance')
+        self.assertEqual(lean_client.DEFAULT_SSH_TIMEOUT_S, 2520)
+        self.assertGreater(lean_client.DEFAULT_SSH_TIMEOUT_S, 2400)
 
 
 class InstallPointerTests(unittest.TestCase):
