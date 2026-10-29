@@ -692,10 +692,19 @@ def _author_attempt_dir(evidence_root, attempt_n):
     return d
 
 
-def _qa_candidate_dir(evidence_root, candidate_sha, provider='codex'):
-    """Unique QA candidate folder; never reuse raw paths across SHA/provider."""
+def _qa_candidate_dir(evidence_root, candidate_sha, provider='codex', attempt=None):
+    """Unique QA candidate folder; never reuse raw paths across SHA/provider.
+
+    Optional attempt (Codex only at call sites) yields qa-{provider}-{tag}-attempt-N
+    so a proven ENVIRONMENT_PATH NO_CALL recovery does not hit the exclusive prior
+    intent. attempt=None keeps the legacy qa-{provider}-{tag} layout (compat/AGY).
+    """
     tag = (candidate_sha or 'unknown')[:12]
-    d = Path(evidence_root) / f'qa-{provider}-{tag}'
+    if attempt is None:
+        name = f'qa-{provider}-{tag}'
+    else:
+        name = f'qa-{provider}-{tag}-attempt-{int(attempt)}'
+    d = Path(evidence_root) / name
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -1159,10 +1168,14 @@ def execute_claim(admission, adapters, *, results_root, config=None, parent_leas
             else:
                 provider, reason, _meta = select_qa_provider(task, issue=claim['issue'])
             claim['attempts'] = dict(claim.get('attempts') or {})
-            claim['attempts']['qa'] = int(claim['attempts'].get('qa') or 0) + 1
+            qa_attempt = int(claim['attempts'].get('qa') or 0) + 1
+            claim['attempts']['qa'] = qa_attempt
+            qa_provider_tag = 'agy' if provider == 'agy_qa' else 'codex'
+            # Codex only: attempt-suffixed evidence dir. AGY path/fingerprint unchanged.
             qa_evidence = _qa_candidate_dir(
                 evidence, claim['candidate_sha'],
-                provider=('agy' if provider == 'agy_qa' else 'codex'))
+                provider=qa_provider_tag,
+                attempt=(qa_attempt if qa_provider_tag == 'codex' else None))
             runtime = dict(claim.get('runtime') or {})
             runtime.update({
                 'worktree': claim.get('worktree'),
