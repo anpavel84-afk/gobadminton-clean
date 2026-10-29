@@ -1035,8 +1035,14 @@ def execute_v3(action,bundle,manifest,controller,stage_sha,dispatch_sha,run_id,b
 # journal OLD/NEW current-state validation during apply/verify/rollback.
 V4_SCHEMA='GB_STAGE5_PRODUCT_QA_ADMISSION_V4'
 V4_PRODUCT_OPS=STATE/'product-qa-operations.json'
+V4_PRODUCT_READY=pathlib.Path('/etc/gobadminton-slots/product-qa-role-ready.json')
 V4_JOURNAL=STATE/'stage5-product-qa-admission.json'
 V4_BACKUP=STATE/'stage5-product-qa-admission-backup'
+# Fixed named quiet scopes. Default shared_qa keeps strict product-QA pending NULL
+# for all shared QA/Guard callers. native_antigravity_author is author-namespace
+# only (new module/marker/budget author keys); never a universal bypass flag.
+QUIET_SCOPE_SHARED_QA='shared_qa'
+QUIET_SCOPE_NATIVE_ANTIGRAVITY_AUTHOR='native_antigravity_author'
 # Owner-approved stopped historical isolation (Issue346 slot1 pr_wait CP).
 V4_HISTORICAL_SLOT1_PENDING='02057f1cd74e35cfaf58d67ac1f3943abfe37995cbce938033bd957d1d05fa48'
 V4_HISTORICAL_SLOT1_HEAD='8024caa659f4fee911d7e3afcb69ed7ac845ce5c'
@@ -1107,18 +1113,72 @@ def _v4_historical_checkpoint_ok(slot, state, journal):
     return receiver.identity(process['pid'])!=process
 
 
-def quiet_v4():
+def _quiet_author_scope_product_qa_ok(ops, author_canary_task_sha256):
+    """Author-namespace may leave one finished independent product-QA UNKNOWN pending.
+
+    Physical quiescence already passed. Does not clear pending, invent safe_release,
+    declare old PASS, or replay. Unfinished/malformed/same-task/non-QA/wrong
+    metadata/live PID still HOLD. Requires a later protected role-ready PASS proof.
+    """
+    pending=ops.get('pending')
+    if pending is None:
+        return
+    need(ops.get('schema')=='GB_PRODUCT_QA_OPS_V1' and isinstance(ops.get('operations'),dict),
+         'malformed product QA ops HOLD')
+    need(re.fullmatch('[a-f0-9]{64}', author_canary_task_sha256 or ''),
+         'author canary task hash required for author quiet scope HOLD')
+    need(pending!=author_canary_task_sha256,'same canary task product QA pending HOLD')
+    need(isinstance(pending,str) and pending in ops['operations'],
+         'malformed product QA pending HOLD')
+    op=ops['operations'][pending]
+    need(isinstance(op,dict),'malformed product QA pending HOLD')
+    need(re.fullmatch('[a-f0-9]{64}',op.get('task_hash') or '')
+         and op['task_hash']!=author_canary_task_sha256,'same canary task or unbound task HOLD')
+    binding=op.get('binding')
+    need(isinstance(binding,dict) and binding.get('stage')=='product_qa',
+         'non-QA product pending HOLD')
+    need(type(op.get('finished_at')) is int and op['finished_at']>0,
+         'unfinished product QA pending HOLD')
+    process=op.get('process')
+    if process is not None:
+        need(type(process) is dict and set(process)=={'pid','start','boot'}
+             and type(process['pid']) is int and process['pid']>0,
+             'malformed product QA process HOLD')
+        need(receiver.identity(process['pid'])!=process,
+             'live product QA process HOLD')
+    result=op.get('result')
+    need(isinstance(result,dict) and result.get('status')=='unknown'
+         and result.get('safe_release') is False,
+         'product QA pending not finished UNKNOWN HOLD')
+    need(V4_PRODUCT_READY.exists(),'later product QA ready proof required for author scope HOLD')
+    ready=receiver.read(V4_PRODUCT_READY,0)
+    need(isinstance(ready,dict) and ready.get('schema')=='GB_PRODUCT_QA_ROLE_READY_V1'
+         and ready.get('phase')=='ready' and ready.get('verdict')=='PASS'
+         and ready.get('executor_uid')==978 and ready.get('model')=='claude-sonnet-5-5-medium'
+         and re.fullmatch('[a-f0-9]{64}',ready.get('operation') or '')
+         and ready['operation']!=pending
+         and type(ready.get('confirmed_at')) is int
+         and ready['confirmed_at']>op['finished_at'],
+         'later product QA ready proof required for author scope HOLD')
+
+
+def quiet_v4(resource_scope=QUIET_SCOPE_SHARED_QA, *, author_canary_task_sha256=None):
     """Historical pending UNKNOWN may remain; NEW product-QA resources must be free.
 
     Does not call quiet()/safe_checkpoint (those require pending=none / terminal
     ACCEPTED evidence). Proves units inactive+masked, UID1002/978 model/cgroup
     absence, recorded PID/start/boot identities dead, kernel worker locks/leases
     free, no integration/recovery occupancy, free product-qa lease, and
-    product-qa ops pending none. Does NOT assert installed OLD pins (those are
+    product-qa ops pending none under default shared_qa scope. Author-only scope
+    native_antigravity_author may leave one finished independent product-QA
+    UNKNOWN after the same physical checks plus later role-ready proof; it is not
+    a CLI/universal bypass. Does NOT assert installed OLD pins (those are
     transaction current-state checks). Targeted HOLD names the conflicting live
     resource; never invents assume_safe/ignore_pending bypass. Only the proven
     historical Issue346 pr_wait CP (dead process) plus idle/done may remain.
     """
+    need(resource_scope in (QUIET_SCOPE_SHARED_QA, QUIET_SCOPE_NATIVE_ANTIGRAVITY_AUTHOR),
+         'unsupported quiet resource scope HOLD')
     import pwd
     receiver.units_quiet(receiver.UNITS)
     for unit in receiver.UNITS:
@@ -1155,7 +1215,10 @@ def quiet_v4():
     # The installed C5 adapter has no product constants before this upgrade.
     if V4_PRODUCT_OPS.exists():
         ops=receiver.read(V4_PRODUCT_OPS,0)
-        need(ops.get('pending') is None,'product QA operation still pending/UNKNOWN HOLD')
+        if resource_scope==QUIET_SCOPE_SHARED_QA:
+            need(ops.get('pending') is None,'product QA operation still pending/UNKNOWN HOLD')
+        else:
+            _quiet_author_scope_product_qa_ok(ops, author_canary_task_sha256)
 
 
 def v4_reviewed_budget_config5(budget):
@@ -1555,9 +1618,14 @@ def _uid978_provider_procs_absent():
              'UID978 provider process still alive HOLD')
 
 
-def quiet_v5():
-    """Reuse V4 resource quiescence; preserve completed V4 journal/backup/history."""
-    quiet_v4()
+def quiet_v5(resource_scope=QUIET_SCOPE_SHARED_QA, *, author_canary_task_sha256=None):
+    """Reuse V4 resource quiescence; preserve completed V4 journal/backup/history.
+
+    Default shared_qa is unchanged. Author upgrade may pass
+    native_antigravity_author with its canary task hash; UID978 direct-provider
+    absence remains mandatory after quiet_v4 for every scope.
+    """
+    quiet_v4(resource_scope, author_canary_task_sha256=author_canary_task_sha256)
     _uid978_provider_procs_absent()
     # Completed V4 transaction must remain; never mutate its journal/backup.
     if V4_JOURNAL.exists():

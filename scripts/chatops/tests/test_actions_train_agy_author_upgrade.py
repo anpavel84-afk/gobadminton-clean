@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 from test_actions_train import ROOT, core
@@ -15,6 +16,12 @@ spec = importlib.util.spec_from_file_location(
     'agy_author_upgrade_fixture', ROOT / 'scripts/chatops/ops/antigravity_author_upgrade.py')
 U = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(U)
+
+stage5_spec = importlib.util.spec_from_file_location(
+    'agy_author_stage5_quiet_fixture',
+    ROOT / 'scripts/chatops/ops/stage5_cursor_context_upgrade.py')
+S5 = importlib.util.module_from_spec(stage5_spec)
+stage5_spec.loader.exec_module(S5)
 
 
 def _material(bundle):
@@ -230,10 +237,212 @@ class Upgrade(unittest.TestCase):
         quiet = self.stack.enter_context(patch.object(U, 'quiet'))
         self.call('dry')
         quiet.assert_called()
+        # plan/verify/rollback must carry canary task hash into author quiet scope.
+        quiet.assert_called_with(self.commit, canary_task_sha256=self.task_hash)
         src = Path(U.__file__).read_text()
         self.assertIn('quiet_v5', src)
+        self.assertIn('QUIET_SCOPE_NATIVE_ANTIGRAVITY_AUTHOR', src)
+        self.assertIn('native_antigravity_author', src)
+        self.assertNotIn('allowUnknown', src)
         self.assertNotIn('safe_release', src)
         self.assertNotIn('pendingclearing', src.lower().replace('_', ''))
+
+    def test_author_quiet_requests_named_author_scope_not_shared_default(self):
+        captured = {}
+
+        class Mod:
+            QUIET_SCOPE_NATIVE_ANTIGRAVITY_AUTHOR = 'native_antigravity_author'
+
+            @staticmethod
+            def quiet_v5(resource_scope, *, author_canary_task_sha256=None):
+                captured['scope'] = resource_scope
+                captured['task'] = author_canary_task_sha256
+
+        # Fresh module: setUp mocks U.quiet; probe the real wiring independently.
+        spec2 = importlib.util.spec_from_file_location(
+            'agy_author_upgrade_quiet_probe',
+            ROOT / 'scripts/chatops/ops/antigravity_author_upgrade.py')
+        probe = importlib.util.module_from_spec(spec2)
+        spec2.loader.exec_module(probe)
+        with patch.object(probe, '_load_quiet_mod', return_value=Mod), \
+             patch.object(probe.r, 'read', return_value=dict(
+                 mode='disabled', controller_sha=self.commit)):
+            probe.quiet(self.commit, canary_task_sha256=self.task_hash)
+        self.assertEqual(captured['scope'], 'native_antigravity_author')
+        self.assertEqual(captured['task'], self.task_hash)
+        with self.assertRaises(core.Refused):
+            probe.quiet(self.commit, canary_task_sha256=None)
+
+
+class QuietScope(unittest.TestCase):
+    """Addressed quiet_v4/v5 resource_scope checks; no full matrix / history mutation."""
+
+    PENDING = '3d556fe74c103d021184ca06a208718763f14f7713cdecfe56573a241a752a88'
+    AUTHOR_TASK = '4b4ae8780d0ff1655886c7a9ed9c5c067a54d674e53ae4ea88cd474580a9fe06'
+
+    def _finished_unknown_op(self, **overrides):
+        op = {
+            'task_hash': 'a' * 64,
+            'binding': dict(action='train', attempt=1, generation=0,
+                            head='8024caa659f4fee911d7e3afcb69ed7ac845ce5c',
+                            issue=346, phase='idle', profile='agy', slot='slot2',
+                            stage='product_qa'),
+            'process': None,
+            'started_at': 1793146026,
+            'finished_at': 1793146043,
+            'result': dict(status='unknown', safe_release=False,
+                           reason='AGY_PARSE_FAILED',
+                           adapter_error=dict(code='AGY_PARSE_FAILED', phase='parse',
+                                              evidence_id='a21d29dae60642f784b6a52c6baca59d')),
+        }
+        op.update(overrides)
+        return op
+
+    def _ops(self, pending=None, op=None):
+        if pending is None:
+            pending = self.PENDING
+        if op is None:
+            op = self._finished_unknown_op()
+        return dict(schema='GB_PRODUCT_QA_OPS_V1', generation=0, pending=pending,
+                    operations={pending: op}, last=None)
+
+    def _ready(self, confirmed_at=1793238391):
+        return dict(schema='GB_PRODUCT_QA_ROLE_READY_V1', phase='ready', verdict='PASS',
+                    confirmed_at=confirmed_at, model='claude-sonnet-5-5-medium',
+                    executor_uid=978, operation='1d021ff96bbf57c048a12605e340590d192fefca5fcf1de512b7581dd5438960')
+
+    def _physical(self, ops_path, ready_path, ops_value, ready_value, *, identity_dead=True):
+        accounts = {'agentagency-dev': SimpleNamespace(pw_uid=1002),
+                    'gb-slot2': SimpleNamespace(pw_uid=978)}
+        dead = {'pid': 999, 'start': 'reused', 'boot': 'old'}
+
+        def read(path, owner=None):
+            # Same object: detect accidental pending clear / safe_release mutation.
+            if path == ops_path:
+                return ops_value
+            if path == ready_path:
+                return ready_value
+            raise AssertionError('unexpected read ' + str(path))
+
+        import pwd
+        return (
+            patch.object(pwd, 'getpwnam', side_effect=lambda n: accounts[n]),
+            patch.object(S5, 'run', return_value=(
+                b'ActiveState=inactive\nMainPID=0\nUnitFileState=masked\n')),
+            patch.object(S5.receiver, 'units_quiet'),
+            patch.object(S5.receiver, 'journal', return_value={'operations': {}}),
+            patch.object(S5.receiver, 'checkpoint',
+                         return_value=({'active': None, 'done': []}, [])),
+            patch.object(S5.receiver, 'identity',
+                         return_value=dead if identity_dead else {'pid': 1, 'start': 'x', 'boot': 'y'}),
+            patch.object(S5.receiver, 'no_models'),
+            patch.object(S5, 'lock_unheld'),
+            patch.object(S5.receiver, 'free_lock'),
+            patch.object(S5.receiver, 'recovery_journal', return_value={'receipts': {}}),
+            patch.object(S5.os.path, 'lexists', return_value=False),
+            patch.object(S5, 'V4_PRODUCT_OPS', ops_path),
+            patch.object(S5, 'V4_PRODUCT_READY', ready_path),
+            patch.object(S5.receiver, 'read', side_effect=read),
+            patch.object(S5, '_uid978_provider_procs_absent'),
+            patch.object(S5, 'V4_JOURNAL', type('P', (), {'exists': staticmethod(lambda: False)})()),
+        )
+
+    def test_default_shared_qa_still_holds_product_pending(self):
+        with tempfile.TemporaryDirectory(prefix='quiet-scope-') as tmp:
+            root = Path(tmp)
+            ops_path = root / 'product-qa-operations.json'
+            ready_path = root / 'product-qa-role-ready.json'
+            ops_path.write_text('{}')
+            ready_path.write_text('{}')
+            ops = self._ops()
+            snap = copy.deepcopy(ops)
+            ctx = self._physical(ops_path, ready_path, ops, self._ready())
+            with ExitStack() as stack:
+                for p in ctx:
+                    stack.enter_context(p)
+                with self.assertRaisesRegex(core.Refused, 'product QA operation still pending'):
+                    S5.quiet_v4()
+                with self.assertRaisesRegex(core.Refused, 'product QA operation still pending'):
+                    S5.quiet_v5()
+                with self.assertRaisesRegex(core.Refused, 'product QA operation still pending'):
+                    S5.quiet_v5(S5.QUIET_SCOPE_SHARED_QA)
+                self.assertEqual(ops, snap)
+                self.assertEqual(ops['pending'], self.PENDING)
+                self.assertIs(ops['operations'][self.PENDING]['result']['safe_release'], False)
+
+    def test_author_scope_allows_finished_independent_unknown_after_proof(self):
+        with tempfile.TemporaryDirectory(prefix='quiet-scope-') as tmp:
+            root = Path(tmp)
+            ops_path = root / 'product-qa-operations.json'
+            ready_path = root / 'product-qa-role-ready.json'
+            ops_path.write_text('{}')
+            ready_path.write_text('{}')
+            ops = self._ops()
+            ready = self._ready()
+            snap = copy.deepcopy(ops)
+            ctx = self._physical(ops_path, ready_path, ops, ready)
+            with ExitStack() as stack:
+                for p in ctx:
+                    stack.enter_context(p)
+                S5.quiet_v4(S5.QUIET_SCOPE_NATIVE_ANTIGRAVITY_AUTHOR,
+                            author_canary_task_sha256=self.AUTHOR_TASK)
+                S5.quiet_v5(S5.QUIET_SCOPE_NATIVE_ANTIGRAVITY_AUTHOR,
+                            author_canary_task_sha256=self.AUTHOR_TASK)
+                self.assertEqual(ops, snap)
+                self.assertEqual(ops['pending'], self.PENDING)
+                self.assertIs(ops['operations'][self.PENDING]['result']['safe_release'], False)
+
+    def test_author_scope_holds_active_malformed_unfinished_same_task(self):
+        with tempfile.TemporaryDirectory(prefix='quiet-scope-') as tmp:
+            root = Path(tmp)
+            ops_path = root / 'product-qa-operations.json'
+            ready_path = root / 'product-qa-role-ready.json'
+            ops_path.write_text('{}')
+            ready_path.write_text('{}')
+            cases = [
+                ('same canary task', self._ops(pending=self.AUTHOR_TASK,
+                                               op=self._finished_unknown_op()),
+                 self._ready(), self.AUTHOR_TASK, 'same canary task'),
+                ('same task different operation', self._ops(op=self._finished_unknown_op(
+                     task_hash=self.AUTHOR_TASK)), self._ready(), self.AUTHOR_TASK, 'same canary task'),
+                ('unfinished', self._ops(op=self._finished_unknown_op(finished_at=None)),
+                 self._ready(), self.AUTHOR_TASK, 'unfinished'),
+                ('non-QA', self._ops(op=self._finished_unknown_op(
+                     binding=dict(stage='author', slot='slot2', profile='agy'))),
+                 self._ready(), self.AUTHOR_TASK, 'non-QA'),
+                ('wrong metadata safe_release', self._ops(op=self._finished_unknown_op(
+                     result=dict(status='unknown', safe_release=True))),
+                 self._ready(), self.AUTHOR_TASK, 'finished UNKNOWN'),
+                ('ready before finished', self._ops(op=self._finished_unknown_op()),
+                 self._ready(confirmed_at=1793146000), self.AUTHOR_TASK, 'ready proof'),
+                ('malformed missing op', dict(schema='GB_PRODUCT_QA_OPS_V1', generation=0,
+                                              pending=self.PENDING, operations={}, last=None),
+                 self._ready(), self.AUTHOR_TASK, 'malformed'),
+            ]
+            for name, ops, ready, task, needle in cases:
+                with self.subTest(name=name):
+                    ctx = self._physical(ops_path, ready_path, ops, ready)
+                    with ExitStack() as stack:
+                        for p in ctx:
+                            stack.enter_context(p)
+                        with self.assertRaisesRegex(core.Refused, needle):
+                            S5.quiet_v5(S5.QUIET_SCOPE_NATIVE_ANTIGRAVITY_AUTHOR,
+                                        author_canary_task_sha256=task)
+            # Live recorded PID with matching identity HOLDs even when finished_at set.
+            live_op = self._finished_unknown_op(
+                process={'pid': 4242, 'start': 'live', 'boot': 'boot'})
+            ctx = self._physical(ops_path, ready_path, self._ops(op=live_op), self._ready(),
+                                 identity_dead=False)
+            with ExitStack() as stack:
+                for p in ctx:
+                    stack.enter_context(p)
+                # Force identity equal to recorded process (alive).
+                stack.enter_context(patch.object(
+                    S5.receiver, 'identity',
+                    return_value=live_op['process']))
+                with self.assertRaisesRegex(core.Refused, 'live product QA process'):
+                    S5.quiet_v5(S5.QUIET_SCOPE_NATIVE_ANTIGRAVITY_AUTHOR,
+                                author_canary_task_sha256=self.AUTHOR_TASK)
 
 
 if __name__ == '__main__':
