@@ -606,14 +606,20 @@ class ParserQuotaTests(unittest.TestCase):
         self.assertTrue(halt)
 
     def test_ready_marker_requires_bindings(self):
+        """Incomplete lean marker stays not-ready; isolate real native role proof."""
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / 'agy-qa-ready.json'
             path.write_text(json.dumps({
                 'schema': 'GB_LEAN_ROLE_READY_V1', 'phase': 'ready', 'role': 'agy_qa',
             }))
-            with mock.patch.object(providers, 'AGY_QA_READY', path):
+            # Negative case: real host product_role_ready must not leak into this unit.
+            fake_native = mock.Mock()
+            fake_native.product_role_ready.return_value = False
+            with mock.patch.object(providers, 'AGY_QA_READY', path), \
+                    mock.patch.object(providers, '_import_native', return_value=fake_native):
                 ok, reason = providers.role_ready('agy_qa')
             self.assertFalse(ok)
+            fake_native.product_role_ready.assert_called()
 
 
 def _git_repo(path, *, branch='dev'):
@@ -853,8 +859,9 @@ class LiveBindingsTests(unittest.TestCase):
             admissions.append(adm)
             adapters.fetch_admissions = lambda: admissions
             with mock.patch.object(lean_run, 'default_live_adapters', return_value=adapters):
+                # wake_budget must cover AUTHOR_TIMEOUT+margin and QA_TIMEOUT+margin
                 out = lean_run.run_once(
-                    {'event_name': 'schedule', 'wake_budget_s': 120},
+                    {'event_name': 'schedule', 'wake_budget_s': 2400},
                     results_root=td, limit=1, use_live_defaults=True)
             self.assertEqual(out['status'], 'advanced')
             self.assertEqual(out['results'][0]['claim']['issue'], 720)
@@ -950,12 +957,16 @@ class LiveBindingsTests(unittest.TestCase):
 
     def test_agy_not_ready_falls_back_before_charge_no_bare_cli(self):
         """AGY CANARY/HOLD: not READY => Codex fallback; never bare [agy,--model]."""
-        provider, reason, _ = providers.select_qa_provider(
-            {'qaroute': ['agy_qa']}, issue=182)
+        # Isolate real qualified native proof — negative unit must not see host READY.
+        fake_native = mock.Mock()
+        fake_native.product_role_ready.return_value = False
+        with mock.patch.object(providers, '_import_native', return_value=fake_native), \
+                mock.patch.object(providers, 'AGY_QA_READY', Path('/no/such/agy-qa-ready.json')):
+            provider, reason, _ = providers.select_qa_provider(
+                {'qaroute': ['agy_qa']}, issue=182)
         self.assertEqual(provider, 'codex_sol_medium')
         self.assertEqual(reason, 'agy_not_ready_fallback')
         # live.agy_qa_live binds native.invoke(product=True); never product_run_qa/bare CLI.
-        import inspect
         src = inspect.getsource(lean_live.agy_qa_live)
         self.assertIn('agy_not_ready_fallback', src)
         self.assertIn('native_invoke_product', src)
@@ -964,6 +975,11 @@ class LiveBindingsTests(unittest.TestCase):
         self.assertNotIn('product_run_qa(', src)
         self.assertNotIn("[AGY_CLI, '--model', AGY_MODEL]", src)
         self.assertNotIn('[AGY_CLI, "--model", AGY_MODEL]', src)
+        inv = inspect.getsource(lean_live._agy_product_invoke)
+        self.assertNotIn('pickle.load', inv)
+        self.assertNotIn('pickle.dump', inv)
+        self.assertIn('_agy_ipc_pack', inv)
+        self.assertIn('_agy_materialize_qa_snapshot', src)
 
     def test_codex_completion_requires_exit_and_turn_completed(self):
         """Exact QA completion: exit0 + turn.completed + SHA; timeout => no replay."""
@@ -1645,17 +1661,182 @@ class Od020InstallPairTests(unittest.TestCase):
         self.assertEqual(policy['providers']['agy']['per_issue_daily'], 5)
 
     def test_budget_left_eligible_float_inf_and_rejects(self):
+        # Default / product QA: positive finite + inf.
         self.assertTrue(lean_live.budget_left_eligible(float('inf')))
         self.assertTrue(lean_live.budget_left_eligible(2.5))
         self.assertTrue(lean_live.budget_left_eligible(1))
         self.assertFalse(lean_live.budget_left_eligible(0))
         self.assertFalse(lean_live.budget_left_eligible(-1))
+        self.assertFalse(lean_live.budget_left_eligible(float('-inf')))
         self.assertFalse(lean_live.budget_left_eligible(True))
         self.assertFalse(lean_live.budget_left_eligible(None))
         self.assertFalse(lean_live.budget_left_eligible(float('nan')))
-        self.assertFalse(lean_live.budget_left_eligible(3, successor=True))
+        # Successor (restored): positive finite + inf (not exact-1-only).
+        self.assertTrue(lean_live.budget_left_eligible(3, successor=True))
         self.assertTrue(lean_live.budget_left_eligible(1, successor=True))
-        self.assertFalse(lean_live.budget_left_eligible(float('inf'), successor=True))
+        self.assertTrue(lean_live.budget_left_eligible(float('inf'), successor=True))
+        self.assertFalse(lean_live.budget_left_eligible(0, successor=True))
+        # Legacy exact_one: finite==1 + OD-020 inf; 2 refused.
+        self.assertTrue(lean_live.budget_left_eligible(1, exact_one=True))
+        self.assertFalse(lean_live.budget_left_eligible(2, exact_one=True))
+        self.assertTrue(lean_live.budget_left_eligible(float('inf'), exact_one=True))
+
+    def test_od020_busy_writer_zero_changes(self):
+        """LockRegistry writer busy ⇒ refuse with zero filesystem writes."""
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td) / 'repo'
+            repo.mkdir()
+            fake_reg = mock.Mock()
+            fake_reg.acquire.return_value = False
+            fake_reg.release = mock.Mock()
+            writes = []
+
+            def track_atomic(path, data, mode=0o644, uid=0, gid=0):
+                writes.append(str(path))
+                raise AssertionError('atomic_write must not run when writer busy')
+
+            with mock.patch.object(lean_install, 'git_blob', return_value=b'x'), \
+                    mock.patch.object(lean_install, '_agy_executor_quiet'), \
+                    mock.patch('os.geteuid', return_value=0), \
+                    mock.patch('os.open', return_value=3), \
+                    mock.patch('fcntl.flock'), \
+                    mock.patch('os.close'), \
+                    mock.patch.dict('sys.modules', {
+                        'slots': mock.Mock(
+                            LockRegistry=mock.Mock(return_value=fake_reg),
+                            task_record=lambda *a, **k: {'issue': 29, 'writer': True},
+                        ),
+                    }), \
+                    mock.patch.object(lean_install, 'atomic_write', side_effect=track_atomic):
+                # Force import path used inside apply
+                with mock.patch.object(lean_install, 'ACTIONS_TRAIN_INSTALL', Path(td)), \
+                        mock.patch.object(lean_install, 'BUDGETS_POLICY', Path(td) / 'budgets.json'), \
+                        mock.patch.object(lean_install, 'CONTROLLER_LOCK', Path(td) / 'c.lock'), \
+                        mock.patch.object(lean_install, 'INTEGRATION_LOCK', Path(td) / 'i.lock'), \
+                        mock.patch.object(lean_install, 'WRITER_REGISTRY_LOCK', Path(td) / 'r.lock'), \
+                        mock.patch.object(lean_install, 'STATE_ROOT', Path(td)):
+                    (Path(td) / 'c.lock').write_text('')
+                    (Path(td) / 'i.lock').write_text('')
+                    (Path(td) / 'r.lock').write_text('')
+                    with self.assertRaises(lean_install.InstallError) as ctx:
+                        lean_install.apply_od020_paired(repo, 'a' * 40, dry_run=False)
+            self.assertIn('writer busy', str(ctx.exception).lower())
+            self.assertEqual(writes, [])
+
+    def test_od020_midwrite_rollback_preserves_history(self):
+        """Mid-write failure restores saved-before bytes; history untouched."""
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            recv = td / 'receiver.py'
+            slots = td / 'live' / 'slots.py'
+            slots.parent.mkdir(parents=True)
+            budgets = td / 'budgets.json'
+            hist = td / 'slot1.json'
+            recv.write_bytes(b'OLD_RECV')
+            slots.write_bytes(b'OLD_SLOTS')
+            budgets.write_text(json.dumps({
+                'schema': 1,
+                'providers': {'agy': {'qa': 'unlimited', 'per_issue_daily': 5}},
+                'slots': {},
+            }) + '\n')
+            hist_raw = b'{"history":true}'
+            hist.write_bytes(hist_raw)
+            # root-owned regular meta stub via _regular_root_bytes mock
+            meta = {'sha256': '', 'uid': 0, 'gid': 0, 'mode': 0o644, 'size': 0}
+
+            def fake_regular(path):
+                raw = Path(path).read_bytes()
+                return raw, dict(meta, sha256=lean_install.sha256_bytes(raw), size=len(raw))
+
+            blobs = {
+                'scripts/chatops/actions_train/receiver.py': b'NEW_RECV',
+                'scripts/chatops/actions_train/live/slots.py': b'NEW_SLOTS',
+            }
+            calls = {'n': 0}
+
+            def fake_atomic(path, data, mode=0o644, uid=0, gid=0):
+                path = Path(path)
+                # Fail on second real target write (after backups+receipt).
+                if path.name in ('receiver.py', 'slots.py', 'budgets.json'):
+                    calls['n'] += 1
+                    if calls['n'] == 2:
+                        path.write_bytes(data if isinstance(data, bytes) else data.encode())
+                        raise lean_install.InstallError('simulated mid-write fail')
+                raw = data if isinstance(data, bytes) else data.encode()
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(raw)
+
+            fake_reg = mock.Mock()
+            fake_reg.acquire.return_value = True
+            fake_reg.release = mock.Mock()
+            with mock.patch.object(lean_install, 'git_blob',
+                                   side_effect=lambda r, s, rel: blobs[rel]), \
+                    mock.patch.object(lean_install, '_agy_executor_quiet'), \
+                    mock.patch.object(lean_install, '_regular_root_bytes',
+                                      side_effect=fake_regular), \
+                    mock.patch.object(lean_install, 'atomic_write', side_effect=fake_atomic), \
+                    mock.patch.object(lean_install, 'write_config'), \
+                    mock.patch('os.geteuid', return_value=0), \
+                    mock.patch('os.open', return_value=3), \
+                    mock.patch('fcntl.flock'), \
+                    mock.patch('os.close'), \
+                    mock.patch.dict('sys.modules', {
+                        'slots': mock.Mock(
+                            LockRegistry=mock.Mock(return_value=fake_reg),
+                            task_record=lambda *a, **k: {'issue': 29, 'writer': True},
+                        ),
+                    }), \
+                    mock.patch.object(lean_install, 'ACTIONS_TRAIN_INSTALL', td), \
+                    mock.patch.object(lean_install, 'BUDGETS_POLICY', budgets), \
+                    mock.patch.object(lean_install, 'CONTROLLER_LOCK', td / 'c.lock'), \
+                    mock.patch.object(lean_install, 'INTEGRATION_LOCK', td / 'i.lock'), \
+                    mock.patch.object(lean_install, 'WRITER_REGISTRY_LOCK', td / 'r.lock'), \
+                    mock.patch.object(lean_install, 'STATE_ROOT', td):
+                (td / 'c.lock').write_text('')
+                (td / 'i.lock').write_text('')
+                (td / 'r.lock').write_text('')
+                with self.assertRaises(lean_install.InstallError):
+                    lean_install.apply_od020_paired(td / 'repo', 'b' * 40, dry_run=False)
+            self.assertEqual(recv.read_bytes(), b'OLD_RECV')
+            self.assertEqual(slots.read_bytes(), b'OLD_SLOTS')
+            self.assertEqual(hist.read_bytes(), hist_raw)
+
+
+class WakeBudgetStageTests(unittest.TestCase):
+    def test_wake_budget_author_insufficient_no_deadline_ok(self):
+        adapters = lean_run.Adapters(deadline=None)
+        self.assertFalse(lean_run._wake_budget_exhausted(adapters, 'author'))
+        self.assertFalse(lean_run._wake_budget_exhausted(adapters, 'qa'))
+
+    def test_wake_budget_author_rem50_exhausted(self):
+        adapters = lean_run.Adapters(deadline=time.monotonic() + 50)
+        self.assertTrue(lean_run._wake_budget_exhausted(adapters, 'author'))
+        self.assertTrue(lean_run._wake_budget_exhausted(adapters, 'repair'))
+        self.assertTrue(lean_run._wake_budget_exhausted(adapters, 'qa'))
+
+    def test_wake_budget_enough_window_proceeds(self):
+        # AUTHOR need=1260, QA need=1860
+        adapters = lean_run.Adapters(deadline=time.monotonic() + 2000)
+        self.assertFalse(lean_run._wake_budget_exhausted(adapters, 'author'))
+        self.assertFalse(lean_run._wake_budget_exhausted(adapters, 'qa'))
+        adapters_mid = lean_run.Adapters(deadline=time.monotonic() + 1300)
+        self.assertFalse(lean_run._wake_budget_exhausted(adapters_mid, 'author'))
+        self.assertTrue(lean_run._wake_budget_exhausted(adapters_mid, 'qa'))
+        adapters2 = lean_run.Adapters(deadline=time.monotonic() + 1900)
+        self.assertFalse(lean_run._wake_budget_exhausted(adapters2, 'qa'))
+
+    def test_wake_resume_preserves_stage_attempts(self):
+        with tempfile.TemporaryDirectory() as td:
+            adapters, state = make_flow_adapters(td, shas=[_sha(1)])
+            adapters.deadline = time.monotonic() + 30
+            comment, _ = owner_task_comment(issue=910)
+            adm = lean_run.admit_comment(
+                comment, {'number': 910, 'state': 'open'}, {'id': REPO_ID})
+            out = lean_run.execute_claim(adm, adapters, results_root=td)
+            self.assertEqual(out['status'], 'wake_resume')
+            self.assertEqual(out['claim']['phase'], 'WAKE_RESUME')
+            self.assertEqual(state['author_calls'], 0)
+            self.assertEqual(int((out['claim'].get('attempts') or {}).get('author') or 0), 0)
 
 
 if __name__ == '__main__':

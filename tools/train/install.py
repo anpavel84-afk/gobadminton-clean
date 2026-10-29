@@ -366,9 +366,10 @@ def publish_monitor_projection(sha):
             return {'status': 'skipped', 'reason': f'monitor write refused: {err}'}
 
 
-def rollback(sha=None):
+def rollback(sha=None, *, od020_backup=None):
+    """Restore helper/config and, when given, OD-020 paired targets from backup."""
     need(os.geteuid() == 0, 'rollback requires root')
-    report = {'helper': None, 'current': None, 'config': None}
+    report = {'helper': None, 'current': None, 'config': None, 'od020_pair': None}
     if HELPER_BACKUP.is_file():
         atomic_write(HELPER, HELPER_BACKUP.read_bytes(),
                      mode=stat.S_IMODE(HELPER_BACKUP.stat().st_mode))
@@ -384,7 +385,64 @@ def rollback(sha=None):
     if sha and SHA40.fullmatch(sha) and (RELEASES / sha).is_dir():
         point_current(sha)
         report['current'] = sha
+    backup = Path(od020_backup) if od020_backup else None
+    if backup is None:
+        # Prefer newest prepared OD-020 backup receipt when present.
+        root = STATE_ROOT / 'backup'
+        if root.is_dir():
+            candidates = sorted(
+                (p for p in root.glob('od020-*/receipt.json') if p.is_file()),
+                key=lambda p: p.stat().st_mtime, reverse=True)
+            if candidates:
+                backup = candidates[0].parent
+    if backup is not None:
+        report['od020_pair'] = rollback_od020_paired(backup)
+    # Entire installer leaves disabled on failure/rollback — never forge READY.
+    write_config(enabled=False, commissioning=True, mode_b_active=False)
+    report['enabled'] = False
     return report
+
+
+def rollback_od020_paired(backup_dir):
+    """Restore paired receiver/slots/budgets from recorded backup bytes+meta."""
+    backup_dir = Path(backup_dir)
+    need(backup_dir.is_dir() and not backup_dir.is_symlink(), 'od020 backup missing')
+    receipt_path = backup_dir / 'receipt.json'
+    need(receipt_path.is_file() and not receipt_path.is_symlink(), 'od020 receipt missing')
+    receipt = loads(receipt_path.read_bytes())
+    targets = receipt.get('targets') or {}
+    need(isinstance(targets, dict) and targets, 'od020 receipt has no targets')
+    restored = []
+    for rel in reversed(list(targets)):
+        info = targets[rel]
+        before_name = rel.replace('/', '__') + '.before'
+        before_path = backup_dir / before_name
+        need(before_path.is_file(), f'missing backup bytes {before_name}')
+        path = Path(info['path'])
+        before_meta = info.get('before_meta') or {}
+        need(isinstance(before_meta, dict) and before_meta.get('sha256'),
+             f'missing before_meta {rel}')
+        raw = before_path.read_bytes()
+        need(sha256_bytes(raw) == before_meta['sha256'], f'backup drift {rel}')
+        # Preserve recorded uid/gid/mode (root:root expected).
+        mode = int(before_meta.get('mode') or 0o644)
+        uid = int(before_meta.get('uid') or 0)
+        gid = int(before_meta.get('gid') or 0)
+        # Refuse symlink / wrong type at destination parent.
+        need(path.parent.is_dir() and not path.parent.is_symlink(),
+             f'untrusted parent {path.parent}')
+        if path.exists() or path.is_symlink():
+            need(path.is_file() and not path.is_symlink(), f'rollback target not file {path}')
+        atomic_write(path, raw, mode=mode, uid=uid, gid=gid)
+        need(sha256_bytes(path.read_bytes()) == before_meta['sha256'],
+             f'rollback readback drift {rel}')
+        restored.append(rel)
+    atomic_write(
+        backup_dir / 'rollback.json',
+        json.dumps({'status': 'ROLLED_BACK', 'restored': restored,
+                    'at': int(time.time())}, sort_keys=True, indent=2) + '\n',
+        0o600)
+    return {'status': 'ROLLED_BACK', 'backup': str(backup_dir), 'restored': restored}
 
 
 def _regular_root_bytes(path):
@@ -424,25 +482,42 @@ def remove_agy_per_issue_daily(policy):
     return out
 
 
+def _od020_target_path(rel):
+    if rel == 'budgets.json':
+        return BUDGETS_POLICY
+    return ACTIONS_TRAIN_INSTALL / rel.split('actions_train/', 1)[1]
+
+
 def apply_od020_paired(repo, sha, *, dry_run=False):
     """Same-PR install pair: receiver.py + live/slots.py + budgets policy OD-020.
 
-    Backup prior bytes/meta, root regular/no symlink, controller/integration/writer
-    locks + UID978 quiescence, atomic compare-current replacement + readback +
-    rollback. Preserve C5 disabled / old journals byte-identical. Does not touch
-    native adapter/guard. dry_run prepares plan without writing (author default).
+    ONE writer via LockRegistry.acquire(task_record(writer=True)) — registry.lock
+    alone does not fence an already-held per-slot lease. Controller/integration
+    locks + UID978 quiescence. Desired budgets computed from ACTUAL snapshot
+    UNDER locks. Backup all prior bytes+uid/gid/mode before first write; durable
+    prepared receipt then replacements/readback. Missing/untrusted budget policy
+    REFUSES (no partial success). Existing targets required — never silently
+    create. Preserve C5 disabled / old journals. No native adapter/guard writes.
     """
     need(SHA40.fullmatch(sha), 'invalid SHA')
     repo = Path(repo)
-    plan = {'schema': 'GB_LEAN_OD020_PAIR_V1', 'sha': sha, 'targets': {}, 'dry_run': bool(dry_run)}
-    paired_blobs = {}
+    plan = {
+        'schema': 'GB_LEAN_OD020_PAIR_V1', 'sha': sha, 'targets': {},
+        'dry_run': bool(dry_run),
+    }
+    # Git blobs for paired actions_train sources (plan preview; apply re-reads under lock).
+    paired_src = {}
     for rel in PAIRED_ACTIONS_TRAIN:
         raw = git_blob(repo, sha, rel)
-        paired_blobs[rel] = {'sha256': sha256_bytes(raw), 'bytes': len(raw), 'data': raw}
-        dest = ACTIONS_TRAIN_INSTALL / rel.split('actions_train/', 1)[1]
-        plan['targets'][rel] = {'path': str(dest), 'after_sha256': paired_blobs[rel]['sha256']}
-    # Budget policy: remove ONLY AGY per_issue_daily when file exists.
-    if BUDGETS_POLICY.is_file() and not BUDGETS_POLICY.is_symlink():
+        paired_src[rel] = {'sha256': sha256_bytes(raw), 'bytes': len(raw), 'data': raw}
+        dest = _od020_target_path(rel)
+        plan['targets'][rel] = {
+            'path': str(dest), 'after_sha256': paired_src[rel]['sha256'],
+        }
+    # dry_run may preview budgets only when trusted file already exists.
+    if dry_run:
+        if not (BUDGETS_POLICY.is_file() and not BUDGETS_POLICY.is_symlink()):
+            raise InstallError('budgets policy missing or untrusted; refuse OD-020 pair')
         before_raw, before_meta = _regular_root_bytes(BUDGETS_POLICY)
         before_policy = loads(before_raw)
         after_policy = remove_agy_per_issue_daily(before_policy)
@@ -456,15 +531,12 @@ def apply_od020_paired(repo, sha, *, dry_run=False):
                 and 'per_issue_daily' in before_policy['providers']['agy']
             ),
         }
-        paired_blobs['budgets.json'] = {
-            'sha256': sha256_bytes(after_raw), 'bytes': len(after_raw), 'data': after_raw,
-            'before': before_raw, 'before_meta': before_meta,
-        }
-    else:
-        plan['targets']['budgets.json'] = {
-            'path': str(BUDGETS_POLICY), 'status': 'absent_or_untrusted_skip',
-        }
-    if dry_run:
+        # Existing paired targets required even for dry preview.
+        for rel in PAIRED_ACTIONS_TRAIN:
+            path = _od020_target_path(rel)
+            need(path.is_file() and not path.is_symlink(),
+                 f'existing paired target required: {path}')
+        plan['status'] = 'DRY_RUN'
         return plan
 
     need(os.geteuid() == 0, 'OD-020 pair apply requires root')
@@ -474,58 +546,126 @@ def apply_od020_paired(repo, sha, *, dry_run=False):
     fcntl.flock(controller, fcntl.LOCK_EX | fcntl.LOCK_NB)
     integration = os.open(str(INTEGRATION_LOCK), os.O_RDONLY | os.O_NOFOLLOW)
     fcntl.flock(integration, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    registry = os.open(str(WRITER_REGISTRY_LOCK), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-    fcntl.flock(registry, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    # SAME LockRegistry writer lease as reviewed apply recipe — not registry.lock alone.
+    locks_dir = WRITER_REGISTRY_LOCK.parent
+    sys.path.insert(0, str(ACTIONS_TRAIN_INSTALL / 'live'))
+    from slots import LockRegistry, task_record  # type: ignore
+    registry = LockRegistry(str(locks_dir), str(WRITER_REGISTRY_LOCK))
+    writer_rec = task_record(
+        29, {'locks': ['owner:isolated-source'], 'allowed_paths': []}, writer=True)
+    need(registry.acquire('slot1', writer_rec),
+         'source writer busy; OD-020 pair refused (zero changes)')
+
     backup_dir = STATE_ROOT / 'backup' / f'od020-{sha[:12]}-{int(time.time())}'
     backup_dir.mkdir(parents=True, exist_ok=True)
     os.chmod(backup_dir, 0o700)
     attempted = []
     previous = {}
+    desired = {}
     try:
-        # Preserve C5/journals byte-identical by never opening them.
-        for rel, info in paired_blobs.items():
-            if rel == 'budgets.json':
-                path = BUDGETS_POLICY
-            else:
-                path = ACTIONS_TRAIN_INSTALL / rel.split('actions_train/', 1)[1]
-            if path.exists():
-                raw, meta = _regular_root_bytes(path)
-                previous[rel] = (raw, meta)
-                atomic_write(backup_dir / (rel.replace('/', '__') + '.before'), raw, 0o600)
-            else:
-                previous[rel] = None
-                meta = dict(uid=0, gid=0, mode=0o644)
-            attempted.append(rel)
-            expected = previous[rel][1] if previous[rel] else None
-            # Atomic compare-current replacement + readback.
-            if expected is not None:
-                now = path.read_bytes()
-                need(sha256_bytes(now) == expected['sha256'], f'preimage drift {rel}')
-            atomic_write(path, info['data'], mode=(expected or meta).get('mode', 0o644)
-                         if isinstance(expected or meta, dict) else 0o644)
-            need(sha256_bytes(path.read_bytes()) == info['sha256'], f'readback drift {rel}')
-        plan['status'] = 'APPLIED'
+        # UNDER locks: recompute budgets desired from ACTUAL snapshot (no stale plan).
+        need(BUDGETS_POLICY.is_file() and not BUDGETS_POLICY.is_symlink(),
+             'budgets policy missing or untrusted; refuse OD-020 pair')
+        for rel in PAIRED_ACTIONS_TRAIN:
+            path = _od020_target_path(rel)
+            need(path.is_file() and not path.is_symlink(),
+                 f'existing paired target required: {path}')
+            raw, meta = _regular_root_bytes(path)
+            previous[rel] = (raw, meta)
+            desired[rel] = paired_src[rel]['data']
+        before_raw, before_meta = _regular_root_bytes(BUDGETS_POLICY)
+        previous['budgets.json'] = (before_raw, before_meta)
+        before_policy = loads(before_raw)
+        after_policy = remove_agy_per_issue_daily(before_policy)
+        after_raw = (json.dumps(after_policy, sort_keys=True, indent=2) + '\n').encode()
+        desired['budgets.json'] = after_raw
+        plan['targets']['budgets.json'] = {
+            'path': str(BUDGETS_POLICY),
+            'before_sha256': before_meta['sha256'],
+            'after_sha256': sha256_bytes(after_raw),
+            'removed_per_issue_daily': (
+                isinstance(before_policy.get('providers', {}).get('agy'), dict)
+                and 'per_issue_daily' in before_policy['providers']['agy']
+            ),
+        }
+
+        # Backup ALL prior bytes+uid/gid/mode before first write.
+        for rel, (raw, meta) in previous.items():
+            atomic_write(
+                backup_dir / (rel.replace('/', '__') + '.before'), raw, 0o600)
+            plan['targets'].setdefault(rel, {})
+            plan['targets'][rel].update({
+                'path': str(_od020_target_path(rel)),
+                'before_meta': meta,
+                'after_sha256': sha256_bytes(desired[rel]),
+            })
+        plan['status'] = 'PREPARED'
         plan['backup'] = str(backup_dir)
-        atomic_write(backup_dir / 'receipt.json',
-                     json.dumps(plan, sort_keys=True, indent=2) + '\n', 0o600)
+        atomic_write(
+            backup_dir / 'receipt.json',
+            json.dumps(plan, sort_keys=True, indent=2) + '\n', 0o600)
+
+        # Atomic CAS: recognize only saved-before / desired-after else HOLD.
+        for rel in list(PAIRED_ACTIONS_TRAIN) + ['budgets.json']:
+            path = _od020_target_path(rel)
+            before_raw, before_meta = previous[rel]
+            now = path.read_bytes()
+            need(sha256_bytes(now) == before_meta['sha256'],
+                 f'preimage drift {rel}')
+            need(not path.is_symlink(), f'symlink refused {path}')
+            attempted.append(rel)
+            atomic_write(
+                path, desired[rel],
+                mode=before_meta['mode'], uid=before_meta['uid'], gid=before_meta['gid'])
+            need(sha256_bytes(path.read_bytes()) == sha256_bytes(desired[rel]),
+                 f'readback drift {rel}')
+            # Metadata root:root preserved.
+            info = path.stat()
+            need(info.st_uid == before_meta['uid'] and info.st_gid == before_meta['gid'],
+                 f'metadata drift {rel}')
+
+        plan['status'] = 'APPLIED'
+        atomic_write(
+            backup_dir / 'receipt.json',
+            json.dumps(plan, sort_keys=True, indent=2) + '\n', 0o600)
         return plan
     except BaseException:
+        # Rollback only recognizes saved-before → restore; else HOLD.
         for rel in reversed(attempted):
-            if previous.get(rel) is None:
+            if rel not in previous:
                 continue
             raw, meta = previous[rel]
-            if rel == 'budgets.json':
-                path = BUDGETS_POLICY
-            else:
-                path = ACTIONS_TRAIN_INSTALL / rel.split('actions_train/', 1)[1]
-            atomic_write(path, raw, mode=meta['mode'])
-            need(sha256_bytes(path.read_bytes()) == meta['sha256'], f'rollback drift {rel}')
+            path = _od020_target_path(rel)
+            now = path.read_bytes() if path.is_file() else None
+            desired_sha = sha256_bytes(desired[rel])
+            before_sha = meta['sha256']
+            if now is not None and sha256_bytes(now) == before_sha:
+                continue
+            if now is not None and sha256_bytes(now) != desired_sha:
+                plan['status'] = 'HOLD_UNRECOGNIZED_APPLY_STATE'
+                atomic_write(
+                    backup_dir / 'receipt.json',
+                    json.dumps(plan, sort_keys=True, indent=2) + '\n', 0o600)
+                raise InstallError(f'unrecognized apply state; HOLD {rel}')
+            atomic_write(
+                path, raw, mode=meta['mode'], uid=meta['uid'], gid=meta['gid'])
+            need(sha256_bytes(path.read_bytes()) == meta['sha256'],
+                 f'rollback drift {rel}')
         plan['status'] = 'ROLLED_BACK_AFTER_APPLY_FAILURE'
-        atomic_write(backup_dir / 'receipt.json',
-                     json.dumps(plan, sort_keys=True, indent=2) + '\n', 0o600)
+        atomic_write(
+            backup_dir / 'receipt.json',
+            json.dumps(plan, sort_keys=True, indent=2) + '\n', 0o600)
+        # Leave lean config disabled — no Root READY forge.
+        try:
+            write_config(enabled=False, commissioning=True, mode_b_active=False)
+        except Exception:
+            pass
         raise
     finally:
-        fcntl.flock(registry, fcntl.LOCK_UN); os.close(registry)
+        try:
+            registry.release()
+        except Exception:
+            pass
         fcntl.flock(integration, fcntl.LOCK_UN); os.close(integration)
         fcntl.flock(controller, fcntl.LOCK_UN); os.close(controller)
 

@@ -215,6 +215,7 @@ class Od020ReceiverBudgetGate(unittest.TestCase):
 
     def test_budget_left_eligible_accepts_float_inf(self):
         R = self.R
+        # Default / product QA: positive finite + inf.
         self.assertTrue(R.budget_left_eligible(float('inf')))
         self.assertTrue(R.budget_left_eligible(2))
         self.assertTrue(R.budget_left_eligible(1.5))
@@ -223,9 +224,14 @@ class Od020ReceiverBudgetGate(unittest.TestCase):
         self.assertFalse(R.budget_left_eligible(True))
         self.assertFalse(R.budget_left_eligible(None))
         self.assertFalse(R.budget_left_eligible(float('nan')))
-        self.assertFalse(R.budget_left_eligible(float('inf'), successor=True))
+        # Successor: positive finite + inf (restored legacy orientation).
+        self.assertTrue(R.budget_left_eligible(float('inf'), successor=True))
         self.assertTrue(R.budget_left_eligible(1, successor=True))
-        self.assertFalse(R.budget_left_eligible(2, successor=True))
+        self.assertTrue(R.budget_left_eligible(2, successor=True))
+        # Legacy exact_one: finite 1 + OD-020 inf; 2 refused.
+        self.assertTrue(R.budget_left_eligible(1, exact_one=True))
+        self.assertFalse(R.budget_left_eligible(2, exact_one=True))
+        self.assertTrue(R.budget_left_eligible(float('inf'), exact_one=True))
 
 
 if __name__ == '__main__':

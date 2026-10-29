@@ -637,9 +637,28 @@ def _remaining(adapters):
     return max(0, float(adapters.deadline) - time.monotonic())
 
 
+# Completion margin after model timeout so host (wake_budget+60) can collect
+# raw/receipt and release the writer lease before Actions forcibly kills.
+WAKE_STAGE_MARGIN_S = 60
+# Mirrored from live.py stage timeouts — avoid importing live at module load.
+_AUTHOR_STAGE_NEED_S = 1200 + WAKE_STAGE_MARGIN_S
+_QA_STAGE_NEED_S = 1800 + WAKE_STAGE_MARGIN_S
+
+
 def _wake_budget_exhausted(adapters, stage):
+    """Defer paid stage unless remaining covers actual launch timeout + margin.
+
+    author/repair → AUTHOR_TIMEOUT(1200)+margin; qa → QA_TIMEOUT(1800)+margin;
+    other short stages keep the prior 45s floor. No deadline ⇒ not exhausted.
+    """
     rem = _remaining(adapters)
-    return rem is not None and rem < 45
+    if rem is None:
+        return False
+    if stage in ('author', 'repair', 'claim'):
+        return rem < _AUTHOR_STAGE_NEED_S
+    if stage == 'qa':
+        return rem < _QA_STAGE_NEED_S
+    return rem < 45
 
 
 def _evidence_dir(adapters, claim, results_root):
@@ -1129,6 +1148,15 @@ def execute_claim(admission, adapters, *, results_root, config=None, parent_leas
                         task=qa_task, candidate_sha=claim['candidate_sha'],
                         evidence_dir=qa_evidence, launcher=None)
             except ProviderError as err:
+                if err.code == 'wake_defer_capacity_fallback':
+                    # Codex capacity already charged; AGY fallback deferred — no
+                    # attempt bump beyond the Codex call, no AGY paid call.
+                    claim = mark_phase(
+                        path, 'WAKE_RESUME', stage='qa',
+                        wake='capacity_fallback_budget', error=err.code,
+                        attempts=claim['attempts'])
+                    return {'status': 'wake_resume', 'claim': claim,
+                            'claim_path': str(path), 'reason': 'deadline'}
                 if 'unknown' in err.code or err.charge == 'unknown':
                     mark_phase(path, 'UNKNOWN', stage='qa', error=err.code, attempts=claim['attempts'])
                     raise LeanError('no_automatic_paid_replay', 'UNKNOWN') from err

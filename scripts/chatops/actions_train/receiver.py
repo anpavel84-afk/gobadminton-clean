@@ -177,10 +177,12 @@ def qualification_api():
     return SimpleNamespace(read=read,STATE=STATE,atomic=atomic)
 
 
-def budget_left_eligible(left, *, successor=False):
-    """OD-020: numeric positive finite/infinity OK; reject bool/UNKNOWN/zero/negative/NaN.
+def budget_left_eligible(left, *, successor=False, exact_one=False):
+    """OD-020 budget gate. Reject bool/UNKNOWN/None/NaN/≤0/-inf.
 
-    Successor still requires exact remaining==1 (old #29 used 2/2 safeguards untouched).
+    Restored legacy orientation: successor ⇒ positive finite/inf; exact_one
+    (legacy non-successor) ⇒ finite remaining==1, plus +inf under OD-020.
+    Default / product QA ⇒ positive finite/inf. Old #29 closed 2/2 grant untouched.
     UNKNOWN is slots.UNKNOWN (None) and never authorizes a call.
     """
     if left is None or type(left) is bool:
@@ -189,8 +191,8 @@ def budget_left_eligible(left, *, successor=False):
         return False
     if left != left or left <= 0:
         return False
-    if successor:
-        return left == 1
+    if exact_one:
+        return left == 1 or left == float('inf')
     return left >= 1
 
 
@@ -213,7 +215,8 @@ def qualification_plan(policy, card, budget):
         budget.bind_issue(29)
         left=budget.remaining('agy','qa','slot2')
         if not recovery.grant(q) and not budget_left_eligible(
-                left, successor=recovery.successor(q)):
+                left, successor=recovery.successor(q),
+                exact_one=not recovery.successor(q)):
             return None
         return dict(slot='slot2',issue=29,stage='qa_qualification',phase='idle',head=q['head'],
                     attempt=0,generation=card['generation'],profile='agy')
@@ -1029,7 +1032,7 @@ def product_qa_request(req, policy):
     budget = s.Budget(BUDGET, AUTONOMY/'outbox', AUTONOMY/'locks/registry.lock')
     budget.bind_issue(admission['issue'])
     left = budget.remaining('agy', 'qa', 'slot2')
-    need(budget_left_eligible(left), 'product QA requires finite eligible daily budget')
+    need(budget_left_eligible(left), 'product QA requires eligible positive shared budget')
     free_lock(AUTONOMY / 'locks' / 'product-qa.lease')
     task_hash = digest(dict(schema='GB_PRODUCT_QA_TASK_V1', issue=admission['issue'],
                             source_sha=admission['source_sha'], admission=digest(admission),
@@ -1099,8 +1102,9 @@ def qualification_request(req, policy):
     budget.bind_issue(29)  # This legacy qualification admission is closed to Issue29.
     left = budget.remaining('agy', 'qa', slot)
     need(recovery.grant(q) or budget_left_eligible(
-            left, successor=recovery.successor(q)),
-         'QA qualification requires finite eligible daily budget')
+            left, successor=recovery.successor(q),
+            exact_one=not recovery.successor(q)),
+         'QA qualification requires eligible positive shared budget')
     reservation = dict(schema='GB_ANTIGRAVITY_QA_29_RESERVATION_V1', operation=key,
         task_hash=q['task_sha256'], descriptor=q, started_at=int(time.time()), result=None)
     # Reservation first: a crash between writes consumes the canary, never replays it.
