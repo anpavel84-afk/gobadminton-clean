@@ -2091,7 +2091,9 @@ class AgyNativeTransportTests(unittest.TestCase):
         self.assertEqual(prov, 'agy_author')
         self.assertEqual(reason, 'agy_author_selected')
         with mock.patch.object(providers, 'role_ready',
-                               return_value=(False, 'not ready')):
+                               return_value=(False, 'not ready')), \
+                mock.patch.object(providers, 'agy_author_canary_admitted',
+                                  return_value=(False, 'no canary')):
             prov2, reason2, _ = providers.select_author_provider(task, issue=29)
         self.assertEqual(prov2, 'cursor_auto')
         self.assertEqual(reason2, 'agy_author_not_ready_fallback')
@@ -2122,6 +2124,8 @@ class AgyNativeTransportTests(unittest.TestCase):
 
             with mock.patch.object(providers, 'role_ready',
                                    return_value=(False, 'not ready')), \
+                    mock.patch.object(providers, 'agy_author_canary_admitted',
+                                      return_value=(False, 'no canary')), \
                     mock.patch.object(lean_live, 'cursor_author_live',
                                       side_effect=fake_cursor), \
                     mock.patch.object(providers, 'record_agy_charge',
@@ -2216,7 +2220,7 @@ class AgyNativeTransportTests(unittest.TestCase):
 
     def test_agy_author_qualification_gates_and_fake_ready_denial(self):
         ok, why = lean_live.evaluate_agy_author_qualification_gates(
-            claim={'merge_sha': 'a' * 40},
+            claim={'merged_sha': 'a' * 40},
             native_receipt={'phase': 'imported', 'changed_paths': ['x.py'],
                             'transcript_sha256': 'b' * 64},
             candidate_sha='c' * 40, qa_verdict='PASS', ci_ok=True,
@@ -2238,6 +2242,180 @@ class AgyNativeTransportTests(unittest.TestCase):
             deploy_accepted=True, live_sha='c' * 40)
         self.assertFalse(ok3)
         self.assertEqual(why3, 'qa_not_pass')
+        # Different reviewed candidate must not PASS gates.
+        ok4, why4 = lean_live.evaluate_agy_author_qualification_gates(
+            claim={'candidate_sha': 'd' * 40, 'merged_sha': 'c' * 40,
+                   'last_qa': {'verdict': 'PASS', 'reviewed_sha': 'd' * 40,
+                               'provider': 'codex_sol_medium'}},
+            native_receipt={'phase': 'imported', 'changed_paths': ['x.py'],
+                            'transcript_sha256': 'b' * 64},
+            candidate_sha='c' * 40, qa_verdict='PASS', ci_ok=True,
+            deploy_accepted=True, live_sha='c' * 40)
+        self.assertFalse(ok4)
+        self.assertEqual(why4, 'qa_candidate_mismatch')
+
+    def test_agy_author_canary_exact_vs_wrong_precharge(self):
+        """Exact CANARY digest selects AGY; mismatch falls back Cursor before charge."""
+        task = {
+            'issue': 29, 'revision': 'a' * 64, 'goal': 'canary',
+            'allowed_paths': ['a.py'], 'author_route': ['agy_author', 'cursor_auto'],
+            'worktree': '/tmp/runtime-wt', 'runtime_base_sha': 'b' * 40,
+            'author_attempt': 3, 'attempt': 3,
+        }
+        canary_meta = {
+            'phase': 'canary', 'task_sha256': 'c' * 64,
+            'model': providers.AGY_MODEL, 'source': 'native_qualification_canary',
+        }
+        with mock.patch.object(providers, 'role_ready',
+                               return_value=(False, 'not ready')), \
+                mock.patch.object(providers, 'agy_author_canary_admitted',
+                                  return_value=(True, canary_meta)), \
+                mock.patch.object(providers, 'agy_quota_available',
+                                  return_value=(True, 'ok', {})):
+            prov, reason, meta = providers.select_author_provider(task, issue=29)
+        self.assertEqual(prov, 'agy_author')
+        self.assertEqual(reason, 'agy_author_canary_selected')
+        self.assertEqual(meta.get('phase'), 'canary')
+        # role_ready stays false for canary.
+        with mock.patch.object(providers, '_import_native',
+                               side_effect=providers.ProviderError('native_missing')), \
+                mock.patch.object(providers, 'read_ready_marker', return_value=None):
+            ready, _ = providers.role_ready('agy_author')
+        self.assertFalse(ready)
+        with mock.patch.object(providers, 'role_ready',
+                               return_value=(False, 'not ready')), \
+                mock.patch.object(providers, 'agy_author_canary_admitted',
+                                  return_value=(False, 'mismatch')):
+            prov2, reason2, _ = providers.select_author_provider(task, issue=29)
+        self.assertEqual(prov2, 'cursor_auto')
+        self.assertEqual(reason2, 'agy_author_not_ready_fallback')
+
+    def test_agy_author_prompt_cwd_and_material_fail_closed(self):
+        with tempfile.TemporaryDirectory() as td:
+            mat = Path(td) / 'AGENTS.md'
+            mat.write_text('TRUSTED RULES BODY\n' + ('x' * 100), encoding='utf-8')
+            materials = [{
+                'kind': 'text', 'delivered_path': str(mat),
+                'bytes': mat.stat().st_size,
+                'sha256': hashlib.sha256(mat.read_bytes()).hexdigest(),
+            }]
+            prompt = lean_live._agy_author_prompt(
+                {'issue': 29, 'allowed_paths': ['a.py'], 'revision': 'r' * 64},
+                rules_text='RULES\n', materials=materials)
+            self.assertIn('private export cwd', prompt)
+            self.assertNotIn(str(td), prompt.split('ACTUAL INPUT MATERIALS')[0])
+            self.assertIn('TRUSTED RULES BODY', prompt)
+            self.assertIn('x' * 100, prompt)
+            # Missing material fails closed (no silent omit).
+            with self.assertRaises(lean_live.LiveError) as ctx:
+                lean_live._agy_author_prompt(
+                    {'issue': 29, 'allowed_paths': ['a.py']},
+                    rules_text='RULES\n',
+                    materials=[{'kind': 'text', 'delivered_path': str(Path(td) / 'missing.md')}])
+            self.assertEqual(ctx.exception.code, 'author_material_unreadable')
+        # Source must not use pickle Queue for AGY author IPC.
+        src = inspect.getsource(lean_live.agy_author_live)
+        self.assertNotIn('multiprocessing', src)
+        self.assertNotIn('Queue(', src)
+        self.assertIn('_agy_ipc_pack', src)
+        self.assertIn('os.fork()', src)
+
+    def test_agy_author_repair_head_keeps_base_and_attempt(self):
+        """Repair HEAD!=frozen base is allowed; attempt enters fingerprint."""
+        with tempfile.TemporaryDirectory() as td:
+            work = Path(td) / 'work'
+            work.mkdir()
+            import subprocess as sp
+            sp.run(['git', 'init'], cwd=work, check=True, capture_output=True)
+            sp.run(['git', 'config', 'user.email', 't@t'], cwd=work, check=True)
+            sp.run(['git', 'config', 'user.name', 't'], cwd=work, check=True)
+            (work / 'a.py').write_text('old\n')
+            sp.run(['git', 'add', 'a.py'], cwd=work, check=True, capture_output=True)
+            sp.run(['git', 'commit', '-m', 'base'], cwd=work, check=True, capture_output=True)
+            base = sp.run(['git', 'rev-parse', 'HEAD'], cwd=work, check=True,
+                          capture_output=True, text=True).stdout.strip()
+            (work / 'a.py').write_text('cand\n')
+            sp.run(['git', 'add', 'a.py'], cwd=work, check=True, capture_output=True)
+            sp.run(['git', 'commit', '-m', 'prior'], cwd=work, check=True, capture_output=True)
+            head = sp.run(['git', 'rev-parse', 'HEAD'], cwd=work, check=True,
+                          capture_output=True, text=True).stdout.strip()
+            self.assertNotEqual(base, head)
+            ev = Path(td) / 'author-repair'
+            ev.mkdir()
+            task = {
+                'issue': 29, 'author_attempt': 2, 'allowed_paths': ['a.py'],
+                'runtime_base_sha': base, 'revision': 'r' * 64,
+                'author_route': ['agy_author', 'cursor_auto'],
+            }
+            receipt = {
+                'phase': 'imported', 'changed_paths': ['a.py'],
+                'transcript_sha256': 'd' * 64,
+            }
+            seen = {}
+
+            def fake_invoke(**kwargs):
+                return {
+                    'changed_paths': ['a.py'],
+                    'payloads': {'a.py': b'repaired\n'},
+                    'native_receipt': receipt,
+                }
+
+            class FakeBudget:
+                def remaining(self, *a):
+                    return float('inf')
+
+                def charge(self, *a):
+                    return None
+
+            (Path(td) / 'staging').mkdir()
+            (Path(td) / 'input').mkdir()
+            commits = {'n': 0}
+
+            def git_side(cwd, *args, **k):
+                if args[:2] == ('rev-parse', 'HEAD'):
+                    return head if commits['n'] == 0 else 'e' * 40
+                if args[:1] == ('status',):
+                    return ''
+                if args[0] == 'add':
+                    return ''
+                if args[0] == '-c' or (args and 'commit' in args):
+                    commits['n'] += 1
+                    return ''
+                return ''
+
+            def snap(**kwargs):
+                seen['candidate_sha'] = kwargs.get('candidate_sha')
+                seen['base_sha'] = kwargs.get('base_sha')
+                return {
+                    'qa_work': Path(td) / 'staging',
+                    'input_dir': Path(td) / 'input',
+                    'ref': 'refs/lean-qa/29/y',
+                }
+
+            with mock.patch.object(providers, 'role_ready',
+                                   return_value=(True, {'source': 'native'})), \
+                    mock.patch.object(providers, 'agy_quota_available',
+                                      return_value=(True, 'ok', {})), \
+                    mock.patch.object(lean_live, '_load_native', return_value=mock.Mock()), \
+                    mock.patch.object(lean_live, 'shared_agy_budget',
+                                      return_value=FakeBudget()), \
+                    mock.patch.object(lean_live, '_agy_materialize_qa_snapshot',
+                                      side_effect=snap), \
+                    mock.patch.object(lean_live, 'load_short_rules',
+                                      return_value=('RULES', 'e' * 64, Path('AGENTS.md'))), \
+                    mock.patch.object(lean_live, 'materialize_inputs', return_value=[]), \
+                    mock.patch.object(providers, 'record_agy_charge', return_value={}), \
+                    mock.patch.object(lean_live.os, 'geteuid', return_value=1002), \
+                    mock.patch.object(lean_live, 'git', side_effect=git_side):
+                out = lean_live.agy_author_live(
+                    task=task, worktree=work, evidence_dir=ev, _invoke=fake_invoke)
+            self.assertEqual(seen['candidate_sha'], head)
+            self.assertEqual(seen['base_sha'], base)
+            self.assertEqual(out['author_attempt'], 2)
+            self.assertEqual(out['head_before'], head)
+            self.assertEqual(out['base_sha'], base)
+            fp = lean_live._agy_author_operation_fingerprint(task, base, 2)
+            self.assertEqual(out['operation_fingerprint'], fp)
 
     def test_wrong_task_sha_rejected(self):
         with tempfile.TemporaryDirectory() as td:

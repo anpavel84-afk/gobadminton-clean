@@ -144,6 +144,22 @@ class Qualification(unittest.TestCase):
         self.stack.enter_context(patch.object(N, 'AGY_SHA256', hashlib.sha256(b'fixture-executable').hexdigest()))
         self.boundary = self.stack.enter_context(patch.object(N, '_verify_executor_boundary'))
 
+    def test_canonical_task_payload_strips_runtime_keeps_revision(self):
+        raw = dict(issue=29, revision='a' * 64, goal='canary', allowed_paths=['a.py'],
+                   worktree='/tmp/wt', runtime_base_sha='b' * 40,
+                   author_attempt=2, attempt=2)
+        payload = N.canonical_task_payload(raw)
+        self.assertEqual(payload['revision'], 'a' * 64)
+        self.assertNotIn('worktree', payload)
+        self.assertNotIn('runtime_base_sha', payload)
+        self.assertNotIn('author_attempt', payload)
+        self.assertNotIn('attempt', payload)
+        # Operator hash on {**admission.task, revision: admission.revision}.
+        self.assertEqual(
+            N.canonical_task_digest({**dict(issue=29, goal='canary', allowed_paths=['a.py']),
+                                     'revision': 'a' * 64}),
+            N.canonical_task_digest(raw))
+
     def test_canary_task_and_medium_only(self):
         self.assertEqual(N.qualification('slot2', 'exact')['phase'], 'canary')
         for slot, task, model in [('slot1','exact',N.MODEL), ('slot2','wrong',N.MODEL),

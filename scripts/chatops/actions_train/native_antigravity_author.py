@@ -34,6 +34,25 @@ from native_antigravity import (
 MARKER = Path('/etc/gobadminton-slots/antigravity-author.json')
 MODULES = ('native_antigravity_author.py', 'native_antigravity.py', 'native_guard.py')
 AGENT = 'gobadminton-author'
+# Controller may inject these at launch; they are never part of canary digest.
+_CANONICAL_TASK_STRIP = frozenset({
+    'worktree', 'runtime_base_sha', 'author_attempt', 'attempt',
+})
+
+
+def canonical_task_payload(task):
+    """Immutable admission task + revision for canary digest and bridge.active.task.
+
+    Strips controller runtime fields. Operator computes exact canary hash as
+    digest(canonical_task_payload({**admission.task, 'revision': admission.revision})).
+    """
+    need(isinstance(task, dict), 'invalid author task')
+    return {k: v for k, v in task.items() if k not in _CANONICAL_TASK_STRIP}
+
+
+def canonical_task_digest(task):
+    """SHA256 of canonical JSON task — same helper for preflight and native.invoke."""
+    return digest(canonical_task_payload(task))
 # These edit tool names exist in the pinned binary. Custom-agent CLI support
 # remains UNVERIFIED until the exact-task Medium canary; do not infer readiness.
 AUTHOR_TOOLS = ('view_file', 'run_command', 'write_to_file',
@@ -622,16 +641,19 @@ def _repair_private_removal(saved, function, name, exc_info):
 
 
 def invoke(bridge, rt, prompt, choice, *, popen, atomic, permitted, evidence_dir=None):
-    active = bridge.store.data['active']; task = active['task']; model = choice['effective_model']
+    active = bridge.store.data['active']
+    task = canonical_task_payload(active['task'])
+    model = choice['effective_model']
     need(os.geteuid() == EXECUTOR_UID, 'wrong AGY author UID')
-    marker = qualification(rt.slot, digest(task), model)
+    marker = qualification(rt.slot, canonical_task_digest(task), model)
     timeout = bridge.c.model_timeout
     need(type(timeout) is int and MIN_TIMEOUT <= timeout <= 3600, 'invalid author timeout')
     wire, transport = input_payload(prompt)
-    ev = ReviewEvidence(evidence_dir or rt.layout.outbox/'agy-author-evidence', digest(task),
+    task_hash = canonical_task_digest(task)
+    ev = ReviewEvidence(evidence_dir or rt.layout.outbox/'agy-author-evidence', task_hash,
                         active['base'], active.get('head'))
     receipt = dict(schema='GB_AGY_AUTHOR_RECEIPT_V1', phase='prepared', issue=active['issue'],
-        attempt=active['attempt'], task_sha256=digest(task), source_head=active.get('head') or active['base'],
+        attempt=active['attempt'], task_sha256=task_hash, source_head=active.get('head') or active['base'],
         requested_route='agy:'+model, requested_model=model, effective_model=None, requested_effort=None,
         qualification_phase=marker['phase'], started_at=int(time.time()), finished_at=None, exit_code=None,
         filesystem_boundary=FILESYSTEM_BOUNDARY, filesystem_roots_enforced=False,

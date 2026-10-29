@@ -460,12 +460,51 @@ def select_qa_provider(task, *, issue):
     return 'codex_sol_medium', 'default_codex', None
 
 
+def agy_author_canary_admitted(task):
+    """Exact Root-marker CANARY for this immutable task digest — not role_ready.
+
+    Uses native.qualification/available (digest/model/UID/modules). Ordinary
+    mismatching tasks must not charge. CANARY never implies product READY.
+    """
+    try:
+        native = _import_native('native_antigravity_author')
+    except ProviderError as err:
+        return False, str(err.code)
+    except Exception as err:
+        return False, type(err).__name__
+    if hasattr(native, 'product_role_ready') and native.product_role_ready():
+        # Ready path is role_ready(); canary helper stays false.
+        return False, 'agy_author_ready_use_role_ready'
+    try:
+        if hasattr(native, 'canonical_task_digest'):
+            task_hash = native.canonical_task_digest(task)
+        else:
+            payload = dict(task or {})
+            for key in ('worktree', 'runtime_base_sha', 'author_attempt', 'attempt'):
+                payload.pop(key, None)
+            task_hash = digest(payload)
+        marker = native.qualification('slot2', task_hash, AGY_MODEL)
+    except Exception:
+        return False, 'agy_author_canary_not_admitted'
+    if not (isinstance(marker, dict) and marker.get('phase') == 'canary'
+            and marker.get('canary_task_sha256') == task_hash
+            and marker.get('executor_uid') == AGY_UID):
+        return False, 'agy_author_canary_mismatch'
+    return True, {
+        'phase': 'canary',
+        'task_sha256': task_hash,
+        'model': AGY_MODEL,
+        'source': 'native_qualification_canary',
+    }
+
+
 def select_author_provider(task, *, issue=None):
     """Author routing via task.authorroute / author_route.
 
     Cursor Auto is the default. Explicit ['agy_author','cursor_auto'] selects
-    actually qualified AGY author, or pre-launch Cursor fallback when not READY.
-    Codex Author is NOT QUALIFIED — never route to it or fake READY.
+    actually qualified READY AGY author, or exact native CANARY for this task
+    digest, else pre-launch Cursor fallback (before charge). CANARY is never
+    role_ready. Codex Author is NOT QUALIFIED — never route to it or fake READY.
     """
     routes = (
         task.get('authorroute') or task.get('author_route')
@@ -493,11 +532,20 @@ def select_author_provider(task, *, issue=None):
             if issue is not None:
                 avail, why, rec = agy_quota_available(int(issue))
                 if not avail:
-                    if 'cursor_auto' in normalized:
-                        return 'cursor_auto', 'agy_author_unavailable_fallback', why
                     return 'cursor_auto', 'agy_author_unavailable_fallback', why
                 return 'agy_author', 'agy_author_selected', rec
             return 'agy_author', 'agy_author_selected', reason
+        canary_ok, canary_meta = agy_author_canary_admitted(task)
+        if canary_ok:
+            if issue is not None:
+                avail, why, rec = agy_quota_available(int(issue))
+                if not avail:
+                    return 'cursor_auto', 'agy_author_unavailable_fallback', why
+                return 'agy_author', 'agy_author_canary_selected', {
+                    **(canary_meta if isinstance(canary_meta, dict) else {}),
+                    'quota': rec,
+                }
+            return 'agy_author', 'agy_author_canary_selected', canary_meta
         if 'cursor_auto' in normalized:
             return 'cursor_auto', 'agy_author_not_ready_fallback', reason
         return 'cursor_auto', 'agy_author_not_ready_fallback', reason
@@ -709,7 +757,12 @@ def invoke_cursor_author(*, task, worktree, evidence_dir, launcher=None, parent_
                           intent_path=str(intent_path), parent_lease=True)
     except TimeoutError as err:
         mark_intent_phase(intent_path, 'UNKNOWN', error='timeout')
-        raise ProviderError('author_timeout_unknown', str(err), charge='unknown') from err
+        # Preserve Cursor UNKNOWN code; AGY author uses its own timeout UNKNOWN.
+        timeout_code = (
+            'agy_author_timeout_unknown' if provider == 'agy_author'
+            else 'cursor_timeout_unknown'
+        )
+        raise ProviderError(timeout_code, str(err), charge='unknown') from err
     except ProviderError as err:
         # Preserve loader preflight_no_call / no_model_launched intent; do not
         # overwrite with HOLD or invent a paid retry.
