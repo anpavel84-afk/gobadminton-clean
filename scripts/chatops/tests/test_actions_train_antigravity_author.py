@@ -307,6 +307,7 @@ class Invocation(unittest.TestCase):
                 if mode == 'ignored':
                     (work/'build').mkdir(); (work/'build/test-result').write_text('generated')
                 raw = wire(events or rows())
+                if mode == 'malformed-stdout': raw += b'not JSON\n'
                 if mode == 'stream-secret': raw += TOKEN.encode()
                 if mode == 'stderr-secret': kwargs['stderr'].write(REFRESH.encode())
                 if mode == 'stream-oversize': raw = b'x'*(N.MAX_OUT+1)
@@ -348,8 +349,8 @@ class Invocation(unittest.TestCase):
         self.assertTrue(all(not p.exists() for p in self.jobs))
         r = self.choice['native_receipt']
         self.assertEqual(r['changed_paths'],['allowed.txt']); self.assertEqual(r['exit_code'],0)
-        self.assertEqual(r['filesystem_boundary'],'uid978_unix_permissions_nnp')
-        self.assertFalse(r['filesystem_roots_enforced']); self.assertFalse(r['requested_native_sandbox'])
+        self.assertEqual(r['filesystem_boundary'], N.AUTHOR_FILESYSTEM_BOUNDARY)
+        self.assertTrue(r['filesystem_roots_enforced']); self.assertFalse(r['requested_native_sandbox'])
         self.assertEqual(r['executor_reap'],'cgroup-absent')
         self.assertIsNotNone(r['source_export_sha256']); self.assertIsNotNone(r['output_manifest_sha256'])
         self.assertNotIn(TOKEN,json.dumps(r)); self.assertNotIn(REFRESH,json.dumps(r))
@@ -364,6 +365,58 @@ class Invocation(unittest.TestCase):
     def test_timeout(self):
         with self.assertRaises(N.ReviewError): self.invoke('timeout')
         self.assert_failed()
+
+    def test_protocol_failure_retains_safe_raw_and_finite_stage(self):
+        """After credential-clean streams, protocol FAIL keeps raw+stage; no import/READY."""
+        with self.assertRaises(N.ReviewError):
+            self.invoke(events=rows()[:-1])  # missing terminal result
+        self.assert_failed()
+        receipt = self.choice['native_receipt']
+        self.assertEqual(receipt['phase'], 'failed_no_automatic_replay')
+        self.assertEqual(receipt['error_code'], 'AGY_ADAPTER_ERROR')
+        self.assertIn(receipt.get('processing_stage'),
+                      ('streams_retained', 'parsed', 'output_policy', 'unknown'))
+        # parse_stream/need uses core.Refused; adapter wraps as ReviewError without text.
+        self.assertEqual(receipt.get('safe_exception_class'), 'Refused')
+        self.assertIsNotNone(receipt.get('stdout_sha256'))
+        self.assertIsNotNone(receipt.get('stderr_sha256'))
+        self.assertNotIn(TOKEN, json.dumps(receipt))
+        self.assertNotIn(REFRESH, json.dumps(receipt))
+        # Safe raw retained in ReviewEvidence; credentials never copied there.
+        evidence_files = [p for p in self.outbox.rglob('*') if p.is_file()]
+        stdout_files = [p for p in evidence_files if p.name == 'stdout']
+        self.assertTrue(stdout_files)
+        self.assertEqual(
+            hashlib.sha256(stdout_files[0].read_bytes()).hexdigest(),
+            receipt['stdout_sha256'])
+        for path in evidence_files:
+            self.assertNotIn(TOKEN.encode(), path.read_bytes())
+            self.assertNotIn(REFRESH.encode(), path.read_bytes())
+        self.assertEqual((self.source / 'allowed.txt').read_text(), 'before\n')
+        self.assertNotEqual(receipt.get('phase'), 'imported')
+
+    def test_malformed_protocol_retains_credential_clean_raw(self):
+        with self.assertRaises(N.ReviewError):
+            self.invoke('malformed-stdout')
+        self.assert_failed()
+        receipt = self.choice['native_receipt']
+        self.assertEqual(receipt['processing_stage'], 'streams_retained')
+        raw = next(self.outbox.rglob('stdout')).read_bytes()
+        self.assertTrue(raw.endswith(b'not JSON\n'))
+        self.assertEqual(hashlib.sha256(raw).hexdigest(), receipt['stdout_sha256'])
+        self.assertEqual((self.source / 'allowed.txt').read_text(), 'before\n')
+
+    def test_credential_streams_still_not_retained_on_failure(self):
+        with self.assertRaises(N.ReviewError):
+            self.invoke('stream-secret')
+        self.assert_failed()
+        receipt = self.choice['native_receipt']
+        self.assertIsNone(receipt.get('stdout_sha256'))
+        evidence_stdout = [p for p in self.outbox.rglob('stdout') if p.is_file()]
+        self.assertEqual(evidence_stdout, [])
+        for path in self.outbox.rglob('*'):
+            if path.is_file():
+                self.assertNotIn(TOKEN.encode(), path.read_bytes())
 
     def test_empty(self):
         with self.assertRaises(N.ReviewError): self.invoke('empty')
@@ -599,12 +652,13 @@ class Invocation(unittest.TestCase):
             after = snapshot(work, bridge, before)
             (work/'allowed.txt').unlink()
             return after
-        # A missing payload must also discard previously parsed provider fields
-        # from the durable failure receipt, rather than retaining stale usage.
+        # Missing payload never imports; real credential-scanned usage remains
+        # evidence of the completed call, not evidence of source success.
         with patch.object(N, 'snapshot', side_effect=race), self.assertRaises(N.ReviewError): self.invoke()
         self.assert_failed()
         self.assertEqual(self.choice['native_receipt'].get('imported_payload_sha256'), None)
-        self.assertIsNone(self.choice['native_receipt'].get('provider_reported_usage'))
+        self.assertEqual(self.choice['native_receipt'].get('provider_reported_usage'),
+                         {'input_tokens': 12, 'output_tokens': 5})
 
     def test_deletion_replaced_with_write_refuses_import(self):
         snapshot = N.snapshot

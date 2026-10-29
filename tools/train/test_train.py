@@ -3380,12 +3380,10 @@ class NativeImportPreflightTests(unittest.TestCase):
             comment, _ = owner_task_comment(issue=913)
             adm = lean_run.admit_comment(
                 comment, {'number': 913, 'state': 'open'}, {'id': REPO_ID})
-            with self.assertRaises(providers.ProviderError) as ctx:
-                lean_run.execute_claim(adm, adapters, results_root=td)
-            self.assertEqual(ctx.exception.code, 'preflight_no_call')
-            claims = list(Path(td).rglob('claim.json'))
-            self.assertTrue(claims)
-            claim = json.loads(claims[0].read_text())
+            out = lean_run.execute_claim(adm, adapters, results_root=td)
+            self.assertEqual(out['status'], 'blocked')
+            self.assertEqual(out.get('reason'), 'author')
+            claim = out['claim']
             self.assertEqual(claim['phase'], 'BLOCKED')
             self.assertEqual(claim.get('error'), 'preflight_no_call')
             self.assertTrue(claim.get('no_model_launched'))
@@ -4036,10 +4034,10 @@ class RootEnvBindingDefectTests(unittest.TestCase):
             comment, _ = owner_task_comment(issue=375)
             adm = lean_run.admit_comment(
                 comment, {'number': 375, 'state': 'open'}, {'id': REPO_ID})
-            with self.assertRaises(providers.ProviderError) as ectx:
-                lean_run.execute_claim(adm, adapters, results_root=td)
-            self.assertEqual(ectx.exception.code, 'source_import')
-            claim = json.loads(next(Path(td).rglob('claim.json')).read_text())
+            out = lean_run.execute_claim(adm, adapters, results_root=td)
+            self.assertEqual(out['status'], 'blocked')
+            self.assertEqual(out.get('reason'), 'author')
+            claim = out['claim']
             self.assertEqual(claim['phase'], 'BLOCKED')
             self.assertEqual(claim.get('error'), 'source_import')
             self.assertNotEqual(claim['phase'], 'UNKNOWN')
@@ -4275,13 +4273,81 @@ class RootEnvBindingDefectTests(unittest.TestCase):
             comment, _ = owner_task_comment(issue=375)
             adm = lean_run.admit_comment(
                 comment, {'number': 375, 'state': 'open'}, {'id': REPO_ID})
-            with self.assertRaises(providers.ProviderError) as ectx:
-                lean_run.execute_claim(adm, adapters, results_root=td)
-            self.assertEqual(ectx.exception.code, 'source_import')
-            claim = json.loads(next(Path(td).rglob('claim.json')).read_text())
+            out = lean_run.execute_claim(adm, adapters, results_root=td)
+            self.assertEqual(out['status'], 'blocked')
+            self.assertEqual(out.get('reason'), 'author')
+            claim = out['claim']
             self.assertEqual(claim['phase'], 'BLOCKED')
             self.assertEqual(claim.get('error'), 'source_import')
             self.assertNotEqual(claim['phase'], 'RUNNING')
+
+    def test_known_terminal_author_blocked_advances_independent_next(self):
+        """Known charged author terminal → BLOCKED; advance_queue selects next eligible.
+
+        UNKNOWN stays fail-closed (no replay). Same immutable admission is not retried.
+        """
+        with tempfile.TemporaryDirectory() as td:
+            adapters, _state = make_flow_adapters(td)
+            blocked_issue, next_issue = 501, 502
+            boom_calls = []
+            real_author = adapters.author
+
+            def selective_author(**kwargs):
+                task = kwargs.get('task') or {}
+                issue = int(task.get('issue') or 0)
+                boom_calls.append(issue)
+                if issue == blocked_issue:
+                    raise providers.ProviderError(
+                        'agy_adapter_error', 'native failed_no_automatic_replay',
+                        charge='charged')
+                return real_author(**kwargs)
+
+            adapters.author = selective_author
+            admissions = []
+            # Higher priority number is selected first by pick_next_ready.
+            for issue, prio in ((blocked_issue, 90), (next_issue, 10)):
+                comment, _ = owner_task_comment(issue=issue, priority=prio)
+                admissions.append(lean_run.admit_comment(
+                    comment, {'number': issue, 'state': 'open'}, {'id': REPO_ID}))
+            adapters.fetch_admissions = lambda: admissions
+            out = lean_run.advance_queue(adapters, results_root=td, limit=2)
+            self.assertEqual(out['status'], 'advanced')
+            self.assertEqual(len(out['results']), 2)
+            first, second = out['results']
+            self.assertEqual(first['status'], 'blocked')
+            self.assertEqual(first['claim']['phase'], 'BLOCKED')
+            self.assertEqual(int(first['claim']['issue']), blocked_issue)
+            self.assertEqual(first['claim'].get('error'), 'agy_adapter_error')
+            self.assertEqual(int((first['claim'].get('attempts') or {}).get('author') or 0), 1)
+            # Independent next eligible progressed (not stranded by controller_failed).
+            self.assertIn(second['status'], (
+                'dev_accepted_uat_pending', 'done', 'wake_resume', 'blocked'))
+            self.assertEqual(int(second['claim']['issue']), next_issue)
+            self.assertNotEqual(second['claim']['phase'], 'UNKNOWN')
+            self.assertEqual(boom_calls, [blocked_issue, next_issue])
+            # UNKNOWN never auto-replayed: charge-unknown still fail-closes HOLD.
+            with tempfile.TemporaryDirectory() as td_u:
+                adapters2, _ = make_flow_adapters(td_u)
+
+                def unknown_author(**kwargs):
+                    raise providers.ProviderError(
+                        'cursor_timeout_unknown', 'timeout', charge='unknown')
+
+                adapters2.author = unknown_author
+                comment_u, _ = owner_task_comment(issue=503)
+                adm_u = lean_run.admit_comment(
+                    comment_u, {'number': 503, 'state': 'open'}, {'id': REPO_ID})
+                with self.assertRaises(lean_run.LeanError) as ctx:
+                    lean_run.execute_claim(adm_u, adapters2, results_root=td_u)
+                self.assertEqual(ctx.exception.code, 'no_automatic_paid_replay')
+                claim_u = json.loads(next(Path(td_u).rglob('claim.json')).read_text())
+                # ACTIVE_HOLD (RUNNING/UNKNOWN): no structured blocked return, no replay.
+                self.assertIn(claim_u['phase'], lean_run.ACTIVE_HOLD_PHASES)
+                self.assertNotEqual(claim_u['phase'], 'BLOCKED')
+                self.assertNotEqual(claim_u['phase'], 'AUTHOR_DONE')
+                with self.assertRaises(lean_run.LeanError) as ctx2:
+                    lean_run.execute_claim(adm_u, adapters2, results_root=td_u)
+                self.assertEqual(ctx2.exception.code, 'no_automatic_paid_replay')
 
 
 if __name__ == '__main__':

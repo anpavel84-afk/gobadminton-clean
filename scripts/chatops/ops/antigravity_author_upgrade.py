@@ -154,6 +154,8 @@ def budget_author_unlimited(raw, *, legacy_finite=None):
 
     Main install path requires explicit unlimited. Optional legacy_finite retained only
     for historical unit fixtures that still exercise finite author caps.
+    Legitimate sequential upgrade may already have author=unlimited (OD-020); keep
+    exact current bytes when the desired value matches — never rewrite ledgers.
     """
     old = loads(raw)
     need(isinstance(old, dict) and old.get('schema') == 1, 'unexpected budget schema')
@@ -162,18 +164,21 @@ def budget_author_unlimited(raw, *, legacy_finite=None):
     agy = dict(providers.get('agy') or {})
     need(agy.get('qa') == 'unlimited', 'current AGY QA budget must already be unlimited')
     need('per_issue_daily' not in agy, 'per_issue_daily must already be absent (OD-020)')
-    need('author' not in agy, 'prior author budget must be reconciled')
     slots = old.get('slots') or {}
     need(isinstance(slots, dict), 'invalid slots')
     own = slots.get('slot2')
     need(isinstance(own, dict), 'slot2 budget baseline required')
     slot_agy = dict(own.get('agy') or {})
-    need('author' not in slot_agy, 'slot2 author budget must be absent before install')
-    desired = copy.deepcopy(old)
     value = 'unlimited' if legacy_finite is None else legacy_finite
     if legacy_finite is not None:
         need(type(legacy_finite) is int and 1 <= legacy_finite <= 10000,
              'finite positive legacy budget required')
+    # Already at desired OD-020 unlimited (or fixture finite): keep exact bytes.
+    if agy.get('author') == value and slot_agy.get('author') == value:
+        return raw
+    need('author' not in agy, 'prior author budget must be reconciled')
+    need('author' not in slot_agy, 'slot2 author budget must be absent before install')
+    desired = copy.deepcopy(old)
     desired['providers']['agy']['author'] = value
     desired['slots']['slot2'].setdefault('agy', {})['author'] = value
     # Preserve unrelated providers / slot1 / qa / counters by structural equality check.
@@ -201,7 +206,8 @@ def preserved():
     return result
 
 
-def plan(bundle, commit, task_hash, *, base_controller=None, legacy_finite=None):
+def plan(bundle, commit, task_hash, *, base_controller=None, legacy_finite=None,
+         prior_journal=None):
     need(re.fullmatch('[a-f0-9]{64}', task_hash or ''), 'exact canary task hash required')
     quiet(base_controller, canary_task_sha256=task_hash)
     material = git_blobs(bundle, commit)
@@ -216,8 +222,34 @@ def plan(bundle, commit, task_hash, *, base_controller=None, legacy_finite=None)
         need(installed == git_raw, 'installed ' + name + ' differs from chosen Git blob')
         need(qa.get('modules', {}).get(name) == sha(installed),
              'AGY QA marker pins stale; separate reviewed re-pin required')
-    need(optional(INSTALL / AUTHOR_MODULE) is None, 'prior author installation must be reconciled')
-    need(optional(MARKER) is None, 'prior author qualification exists')
+    if prior_journal is not None:
+        validate_prior_installed(prior_journal)
+        need(prior_journal.get('task_sha256') == task_hash,
+             'sequential upgrade must keep the same canary task')
+        need(prior_journal.get('bundle_commit') != commit,
+             'sequential upgrade requires a distinct accepted Git commit')
+        installed_author = optional(INSTALL / AUTHOR_MODULE)
+        installed_marker = optional(MARKER)
+        need(installed_author is not None, 'prior author module missing')
+        need(installed_marker is not None, 'prior author marker missing')
+        need(sha(installed_author) == prior_journal['changes'][str(INSTALL / AUTHOR_MODULE)]['after'],
+             'author module differs from prior accepted transaction')
+        old_marker = loads(installed_marker)
+        need(old_marker.get('schema') == 'GB_ANTIGRAVITY_AUTHOR_V1'
+             and old_marker.get('phase') == 'canary'
+             and old_marker.get('slot') == 'slot2'
+             and old_marker.get('executor_uid') == 978
+             and old_marker.get('canary_task_sha256') == task_hash
+             and old_marker.get('model') == MODEL
+             and old_marker.get('admitted_models') == [MODEL],
+             'prior canary author marker identity differs')
+        # Pins already matched Git+QA above; marker pin digests must agree.
+        for name in PINS:
+            need(old_marker.get('modules', {}).get(name) == sha(material[REPO_PREFIX + name]),
+                 'prior marker pin digest differs')
+    else:
+        need(optional(INSTALL / AUTHOR_MODULE) is None, 'prior author installation must be reconciled')
+        need(optional(MARKER) is None, 'prior author qualification exists')
     marker = dict(
         schema='GB_ANTIGRAVITY_AUTHOR_V1', phase='canary', slot='slot2',
         executor_uid=978, canary_task_sha256=task_hash, admitted_models=[MODEL],
@@ -235,7 +267,8 @@ def plan(bundle, commit, task_hash, *, base_controller=None, legacy_finite=None)
 def put(path, raw, mode=0o644):
     """Exact bytes, same-directory atomic replace; only the fixed target allowlist."""
     allowed = {INSTALL / AUTHOR_MODULE, MARKER, BUDGET}
-    need(path in allowed or path == JOURNAL or path.parent == BACKUP, 'out-of-scope upgrade write')
+    under_backup = path == BACKUP or path.parent == BACKUP or BACKUP in path.parents
+    need(path in allowed or path == JOURNAL or under_backup, 'out-of-scope upgrade write')
     r.trusted_tree(path.parent)
     need(not path.is_symlink(), 'upgrade destination link')
     fd, temp = tempfile.mkstemp(prefix='.agy-upgrade-', dir=path.parent)
@@ -256,6 +289,93 @@ def put(path, raw, mode=0o644):
             os.unlink(temp)
 
 
+def _mkdir_backup(path, mode=0o700):
+    """Create a directory only under the existing author BACKUP area."""
+    need(path == BACKUP or BACKUP in path.parents or path.parent == BACKUP,
+         'out-of-scope backup mkdir')
+    r.trusted_tree(path.parent)
+    need(not path.is_symlink(), 'backup mkdir link refused')
+    path.mkdir(mode=mode)
+    directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
+def read_prior_journal():
+    """Return completed prior journal or None when no author upgrade exists yet."""
+    if not JOURNAL.exists():
+        need(not BACKUP.exists(), 'orphaned author backup without journal')
+        return None
+    j = loads(read(JOURNAL))
+    need(j.get('schema') == 'GB_AGY_AUTHOR_UPGRADE_V1'
+         and j.get('phase') == 'installed-canary-disabled',
+         'prior upgrade journal must be installed-canary-disabled')
+    need(BACKUP.is_dir() and not BACKUP.is_symlink(), 'prior author backup required')
+    return j
+
+
+def validate_prior_installed(j):
+    """Current installed bytes must equal the previous accepted transaction after-hashes."""
+    allowed = {str(INSTALL / AUTHOR_MODULE), str(MARKER), str(BUDGET)}
+    need(set(j.get('changes') or ()) == allowed, 'invalid prior journal targets')
+    for name, row in j['changes'].items():
+        raw = optional(Path(name))
+        actual = sha(raw) if raw is not None else None
+        need(actual == row.get('after'), 'installed bytes differ from prior accepted transaction')
+    need(j.get('task_sha256') and re.fullmatch('[a-f0-9]{64}', j['task_sha256']),
+         'prior canary task hash required')
+    need(j.get('bundle_commit') and re.fullmatch('[a-f0-9]{40}', j['bundle_commit']),
+         'prior bundle commit required')
+
+
+def journal_backup(j):
+    """Old transactions use BACKUP; new sequential ones retain distinct before-bytes."""
+    value = j.get('backup_dir')
+    if value is None:
+        return BACKUP
+    expected = BACKUP / 'transactions' / j['bundle_commit']
+    need(value == str(expected), 'invalid transaction backup directory')
+    r.trusted_tree(expected)
+    need(expected.is_dir() and not expected.is_symlink(), 'transaction backup absent')
+    return expected
+
+
+def archive_prior_transaction(j):
+    """Freeze prior proof; never unlink its journal or numbered backups.
+
+    The live journal remains valid until the new before-bytes are durable and
+    atomically replacing the journal starts the next transaction.
+    """
+    validate_prior_installed(j)
+    revisions = BACKUP / 'revisions'
+    dest = revisions / j['bundle_commit']
+    if not revisions.exists():
+        _mkdir_backup(revisions)
+    if not dest.exists():
+        _mkdir_backup(dest)
+    else:
+        r.trusted_tree(dest)
+        need(dest.is_dir() and not dest.is_symlink(), 'unsafe prior archive')
+    def freeze(path, raw):
+        if path.exists():
+            need(read(path) == raw, 'prior archive differs')
+        else:
+            put(path, raw, 0o600)
+    freeze(dest / 'antigravity-author-upgrade.json', read(JOURNAL))
+    source = journal_backup(j)
+    for n, name in enumerate(sorted(j['changes'])):
+        src = source / str(n)
+        if j['changes'][name].get('before') is None:
+            need(not src.exists(), 'unexpected prior backup slot')
+            continue
+        raw = read(src)
+        need(sha(raw) == j['changes'][name]['before'], 'prior backup drift')
+        freeze(dest / str(n), raw)
+    return dest
+
+
 def execute(action, bundle, commit, task_hash, *, base_controller=None, legacy_finite=None,
             manifest_hash=None, calls=None):
     """Caller holds existing controller.lock; main acquires it, fixture caller isolates it.
@@ -268,11 +388,10 @@ def execute(action, bundle, commit, task_hash, *, base_controller=None, legacy_f
     if calls is not None and legacy_finite is None and calls != 'unlimited':
         legacy_finite = calls
     if action in ('dry', 'apply'):
+        prior = read_prior_journal()
         payload, history, marker = plan(
             bundle, commit, task_hash, base_controller=base_controller,
-            legacy_finite=legacy_finite)
-        need(not JOURNAL.exists() and not BACKUP.exists(),
-             'prior upgrade journal must be reconciled')
+            legacy_finite=legacy_finite, prior_journal=prior)
         changes = {
             str(p): dict(
                 before=sha(raw) if (raw := optional(p)) is not None else None,
@@ -282,19 +401,45 @@ def execute(action, bundle, commit, task_hash, *, base_controller=None, legacy_f
         if action == 'dry':
             return dict(dry=True, changes=changes, qa_pins='match', no_activation=True,
                         canary_task_sha256=task_hash, author_budget='unlimited'
-                        if legacy_finite is None else legacy_finite)
+                        if legacy_finite is None else legacy_finite,
+                        sequential=prior is not None,
+                        prior_bundle_commit=(prior or {}).get('bundle_commit'))
+        if prior is not None:
+            archive_prior_transaction(prior)
+            transactions = BACKUP / 'transactions'
+            if not transactions.exists():
+                _mkdir_backup(transactions)
+            backup = transactions / commit
+            if not backup.exists():
+                _mkdir_backup(backup)
+            else:
+                r.trusted_tree(backup)
+                need(backup.is_dir() and not backup.is_symlink(), 'unsafe next backup')
+        else:
+            need(not JOURNAL.exists() and not BACKUP.exists(),
+                 'prior upgrade journal must be reconciled')
+            BACKUP.mkdir(mode=0o700)
+            backup = BACKUP
+        # Keep prior journal and backup slots intact until all new before-bytes
+        # are durable. An interrupted preparation never loses the current proof.
+        for n, name in enumerate(sorted(changes)):
+            before = optional(Path(name))
+            slot = backup / str(n)
+            if before is None:
+                need(not slot.exists(), 'unexpected backup for absent target')
+            elif slot.exists():
+                need(read(slot) == before, 'prepared backup differs')
+            else:
+                put(slot, before, 0o600)
         j = dict(
             schema='GB_AGY_AUTHOR_UPGRADE_V1', phase='backing-up', changes=changes,
             bundle_commit=commit, task_sha256=task_hash, history=history,
             base_controller=base_controller, marker_phase='canary',
+            prior_bundle_commit=(prior or {}).get('bundle_commit'),
+            **({'backup_dir': str(backup)} if prior is not None else {}),
             metadata={str(p): (stat.S_IMODE(p.stat().st_mode) if p.exists() else 0o644)
                       for p in payload})
         put(JOURNAL, encoded(j), 0o600)
-        BACKUP.mkdir(mode=0o700)
-        for n, name in enumerate(sorted(changes)):
-            before = optional(Path(name))
-            if before is not None:
-                put(BACKUP / str(n), before, 0o600)
         j['phase'] = 'applying'
         put(JOURNAL, encoded(j), 0o600)
         for target, raw in payload.items():
@@ -306,7 +451,9 @@ def execute(action, bundle, commit, task_hash, *, base_controller=None, legacy_f
         put(JOURNAL, encoded(j), 0o600)
         return dict(phase=j['phase'], qa_pins='match', no_activation=True,
                     canary_task_sha256=task_hash, ready=False,
-                    marker_modules=marker['modules'])
+                    marker_modules=marker['modules'],
+                    sequential=prior is not None,
+                    prior_bundle_commit=(prior or {}).get('bundle_commit'))
     j = loads(read(JOURNAL))
     need(j.get('schema') == 'GB_AGY_AUTHOR_UPGRADE_V1'
          and j.get('bundle_commit') == commit
@@ -325,7 +472,7 @@ def execute(action, bundle, commit, task_hash, *, base_controller=None, legacy_f
         elif actual != row['before']:
             before = None
             if row['before'] is not None:
-                before = read(BACKUP / str(n))
+                before = read(journal_backup(j) / str(n))
                 need(sha(before) == row['before'], 'backup drift')
             restore.append((Path(name), before, j['metadata'][name]))
     for target, before, mode in restore:
