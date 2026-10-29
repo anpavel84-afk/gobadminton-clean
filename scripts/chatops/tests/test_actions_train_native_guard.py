@@ -102,7 +102,11 @@ def via_pty(argv):
    os.setsid()
    os.dup2(slave, 0); os.dup2(slave, 1); os.dup2(slave, 2)
    if slave > 2: os.close(slave)
-   os.execve(argv[0], argv, {'PATH':'/usr/bin:/bin','LANG':'C'})
+   # Match runtime: private fixture HOME + ignore host/system Git config.
+   env={'PATH':'/usr/bin:/bin','LANG':'C','HOME':os.environ['HOME'],
+        'GIT_CONFIG_NOSYSTEM':'1','GIT_CONFIG_GLOBAL':'/dev/null',
+        'GIT_CONFIG_SYSTEM':'/dev/null'}
+   os.execve(argv[0], argv, env)
   os.close(slave)
   chunks=[]
   while True:
@@ -127,6 +131,9 @@ except OSError:
 if out['openpty']:
  st, git_out = via_pty(['/usr/bin/git','--version'])
  out['git_ok']=os.WIFEXITED(st) and os.WEXITSTATUS(st)==0 and git_out.startswith(b'git version')
+ if not out['git_ok']:
+  out['git_exit']=os.WEXITSTATUS(st) if os.WIFEXITED(st) else ('signal',os.WTERMSIG(st)) if os.WIFSIGNALED(st) else st
+  out['git_out']=git_out[:200].decode('utf-8','replace')
  st, sh_out = via_pty(['/bin/sh','-c','echo PTY_SHELL_OK'])
  out['shell_ok']=os.WIFEXITED(st) and os.WEXITSTATUS(st)==0 and b'PTY_SHELL_OK' in sh_out
 else:

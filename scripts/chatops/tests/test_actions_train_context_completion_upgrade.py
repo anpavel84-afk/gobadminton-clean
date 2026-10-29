@@ -113,8 +113,52 @@ class ProtocolEvidence(unittest.TestCase):
             print('NOT_TESTED: frozen V3 native_guard blob (no Git history)')
             return
         old=ast.parse(old_raw);new=ast.parse((ROOT/U.PREFIX/'native_guard.py').read_bytes())
-        for name in ('_landlock','_seccomp','restrict','no_new_privileges'):
+        # OD019: _landlock may carry only the approved fstat→st + predicate→helper
+        # delta; other restriction surfaces stay exact AST equivalents of V3.
+        for name in ('_seccomp','restrict','no_new_privileges'):
             self.assertEqual(ast.dump(function(ast.unparse(old),name)),ast.dump(function(ast.unparse(new),name)))
+        old_ll=function(ast.unparse(old),'_landlock')
+        new_ll=function(ast.unparse(new),'_landlock')
+        old_pred=ast.parse(
+            "stat.S_ISDIR(mode) or stat.S_ISREG(mode) or str(target) in "
+            "('/dev/null', '/dev/urandom', '/dev/random')", mode='eval').body
+        new_pred=ast.parse('_supported_sandbox_root(target, st)', mode='eval').body
+        def od019_landlock(fn):
+            fn=copy.deepcopy(fn);n=0
+            def stmts(body):
+                nonlocal n;out=[]
+                for stmt in body:
+                    if isinstance(stmt,ast.Try):
+                        stmt.body=stmts(stmt.body);stmt.orelse=stmts(stmt.orelse)
+                        stmt.finalbody=stmts(stmt.finalbody);out.append(stmt);continue
+                    if isinstance(stmt,(ast.For,ast.While,ast.If,ast.With)):
+                        stmt.body=stmts(stmt.body)
+                        if hasattr(stmt,'orelse'): stmt.orelse=stmts(stmt.orelse)
+                        out.append(stmt);continue
+                    # mode = os.fstat(handle).st_mode → st = os.fstat(handle); mode = st.st_mode
+                    if (isinstance(stmt,ast.Assign) and len(stmt.targets)==1
+                        and isinstance(stmt.targets[0],ast.Name) and stmt.targets[0].id=='mode'
+                        and isinstance(stmt.value,ast.Attribute) and stmt.value.attr=='st_mode'
+                        and isinstance(stmt.value.value,ast.Call)
+                        and isinstance(stmt.value.value.func,ast.Attribute)
+                        and stmt.value.value.func.attr=='fstat'):
+                        out.append(ast.Assign([ast.Name('st',ast.Store())],stmt.value.value))
+                        out.append(ast.Assign([ast.Name('mode',ast.Store())],
+                                              ast.Attribute(ast.Name('st',ast.Load()),'st_mode',ast.Load())))
+                        n+=1;continue
+                    if (isinstance(stmt,ast.Expr) and isinstance(stmt.value,ast.Call)
+                        and isinstance(stmt.value.func,ast.Name) and stmt.value.func.id=='need'
+                        and stmt.value.args and isinstance(stmt.value.args[0],ast.BoolOp)
+                        and isinstance(stmt.value.args[0].op,ast.And)
+                        and len(stmt.value.args[0].values)==2
+                        and ast.dump(stmt.value.args[0].values[1])==ast.dump(old_pred)):
+                        stmt.value.args[0].values[1]=copy.deepcopy(new_pred);n+=1
+                    out.append(stmt)
+                return out
+            fn.body=stmts(fn.body);ast.fix_missing_locations(fn);return fn,n
+        expected,transforms=od019_landlock(old_ll)
+        self.assertEqual(transforms,2)
+        self.assertEqual(ast.dump(expected),ast.dump(new_ll))
         oldfn=function(ast.unparse(old),'cursor_namespace_argv')
         newfn=copy.deepcopy(function(ast.unparse(new),'cursor_namespace_argv'))
         added=[n for n in newfn.body if isinstance(n,ast.AugAssign) and isinstance(n.value,ast.Call)
