@@ -147,7 +147,8 @@ class Qualification(unittest.TestCase):
     def test_canonical_task_payload_strips_runtime_keeps_revision(self):
         raw = dict(issue=29, revision='a' * 64, goal='canary', allowed_paths=['a.py'],
                    worktree='/tmp/wt', runtime_base_sha='b' * 40,
-                   author_attempt=2, attempt=2)
+                   author_attempt=2, attempt=2, findings=['QA fix'],
+                   repair_findings=['QA fix'], ci_failure={'log': 'same task repair'})
         payload = N.canonical_task_payload(raw)
         self.assertEqual(payload['revision'], 'a' * 64)
         self.assertNotIn('worktree', payload)

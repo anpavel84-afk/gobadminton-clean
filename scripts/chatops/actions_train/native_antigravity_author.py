@@ -37,6 +37,7 @@ AGENT = 'gobadminton-author'
 # Controller may inject these at launch; they are never part of canary digest.
 _CANONICAL_TASK_STRIP = frozenset({
     'worktree', 'runtime_base_sha', 'author_attempt', 'attempt',
+    'findings', 'repair_findings', 'ci_failure',
 })
 
 
