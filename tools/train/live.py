@@ -667,6 +667,24 @@ def create_task_worktree(task, *, repo=None, root=None):
     return str(work)
 
 
+def _ensure_native_sys_path(native_dir):
+    """Expose protected native dir for transitive imports under python -I.
+
+    Place after this Mode B tools/train directory when present so `live` /
+    `run` / `providers` are not shadowed by native `live/`. Never prepend
+    user-writable project/hook dirs ahead of the Mode B binding.
+    """
+    native_dir = str(Path(native_dir).resolve())
+    if native_dir in sys.path:
+        return native_dir
+    train_dir = str(Path(__file__).resolve().parent)
+    if train_dir in sys.path:
+        sys.path.insert(sys.path.index(train_dir) + 1, native_dir)
+    else:
+        sys.path.append(native_dir)
+    return native_dir
+
+
 def _load_native(name):
     import importlib.util
     path = NATIVE_TRAIN / f'{name}.py'
@@ -675,9 +693,17 @@ def _load_native(name):
         path = alt if alt.is_file() else path
     if not path.is_file():
         raise LiveError('native_missing', name)
+    _ensure_native_sys_path(path.parent)
     spec = importlib.util.spec_from_file_location(f'lean_live_{name}', path)
     mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    try:
+        spec.loader.exec_module(mod)
+    except ImportError as err:
+        # Loader transitive import failure — known NO_CALL, before CLI/auth.
+        raise LiveError(
+            'native_import_preflight',
+            f'{type(err).__name__}:{err}',
+        ) from err
     return mod
 
 
@@ -717,7 +743,19 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
     if intent_path is None:
         _, intent_path = prepare_cursor_author_intent(task, worktree, evidence)
     worktree = Path(worktree)
-    native = _load_native('native_cursor')
+    try:
+        native = _load_native('native_cursor')
+    except LiveError as err:
+        if err.code != 'native_import_preflight':
+            raise
+        cause = err.__cause__
+        mark_intent_phase(
+            intent_path, 'preflight_no_call',
+            error_type=(type(cause).__name__ if cause is not None else 'ImportError'),
+            error=str(cause if cause is not None else err.detail)[:500],
+            no_model_launched=True,
+        )
+        raise ProviderError('preflight_no_call', err.detail, charge='none') from err
     # Private sandbox under /tmp/gb-cursor-* — chown only this tree to UID1002.
     base = Path(tempfile.mkdtemp(prefix='gb-cursor-lean-', dir='/tmp'))
     p = None

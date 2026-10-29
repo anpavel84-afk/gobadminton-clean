@@ -2292,6 +2292,190 @@ class LeanDeliveryWorkflowTransportTests(unittest.TestCase):
         self.assertIn('github.repository_id == 1416250340', self.lean)
 
 
+class NativeImportPreflightTests(unittest.TestCase):
+    """python -I native loader path + known NO_CALL preflight (OD-018 author13)."""
+
+    def _isolate_sys_path(self, train_dir):
+        saved_path = sys.path[:]
+        saved_modules = {k: sys.modules.get(k) for k in ('core', 'native_guard', 'native_cursor')}
+        sys.path[:] = [train_dir]
+        for k in ('core', 'native_guard', 'native_cursor'):
+            sys.modules.pop(k, None)
+        return saved_path, saved_modules
+
+    def _restore_sys_path(self, saved_path, saved_modules):
+        sys.path[:] = saved_path
+        for k, v in saved_modules.items():
+            if v is None:
+                sys.modules.pop(k, None)
+            else:
+                sys.modules[k] = v
+        # Drop lean_live_* / lean_native_* stub modules from this fixture.
+        for k in list(sys.modules):
+            if k.startswith('lean_live_native_') or k.startswith('lean_native_native_'):
+                sys.modules.pop(k, None)
+
+    def test_load_native_python_I_transitive_core_no_shadow(self):
+        """Stub native_cursor+core under protected-dir-like temp; works without prior path."""
+        with tempfile.TemporaryDirectory() as td:
+            native_dir = Path(td) / 'gb-actions-train'
+            native_dir.mkdir()
+            shadow = Path(td) / 'project-shadow'
+            shadow.mkdir()
+            (shadow / 'core.py').write_text('VALUE = "shadow-project"\n', encoding='utf-8')
+            (native_dir / 'core.py').write_text(
+                'VALUE = "from-protected-native"\n'
+                'def need(x):\n'
+                '    return x\n',
+                encoding='utf-8',
+            )
+            (native_dir / 'native_cursor.py').write_text(
+                'from core import VALUE, need\n'
+                'LOADED = VALUE\n'
+                'def late():\n'
+                '    from core import VALUE as V\n'
+                '    return need(V)\n',
+                encoding='utf-8',
+            )
+            train_dir = str(Path(lean_live.__file__).resolve().parent)
+            saved_path, saved_modules = self._isolate_sys_path(train_dir)
+            try:
+                with mock.patch.object(lean_live, 'NATIVE_TRAIN', native_dir):
+                    mod = lean_live._load_native('native_cursor')
+                self.assertEqual(mod.LOADED, 'from-protected-native')
+                self.assertEqual(mod.late(), 'from-protected-native')
+                # Mode B live binding preserved (native live/ package must not win).
+                self.assertEqual(
+                    Path(lean_live.__file__).resolve(),
+                    Path(__import__('live').__file__).resolve())
+                # Native dir on path after tools/train — not prepended ahead of it.
+                self.assertEqual(sys.path[0], train_dir)
+                self.assertIn(str(native_dir.resolve()), sys.path)
+                self.assertLess(
+                    sys.path.index(train_dir),
+                    sys.path.index(str(native_dir.resolve())))
+                # Project shadow never consulted.
+                self.assertNotIn(str(shadow.resolve()), sys.path)
+                self.assertEqual(sys.modules['core'].VALUE, 'from-protected-native')
+            finally:
+                self._restore_sys_path(saved_path, saved_modules)
+
+    def test_import_native_python_I_same_path_contract(self):
+        with tempfile.TemporaryDirectory() as td:
+            native_dir = Path(td) / 'gb-actions-train'
+            native_dir.mkdir()
+            (native_dir / 'core.py').write_text('X = 1\n', encoding='utf-8')
+            (native_dir / 'native_guard.py').write_text(
+                'from core import X\nFLAG = X\n', encoding='utf-8')
+            train_dir = str(Path(providers.__file__).resolve().parent)
+            saved_path, saved_modules = self._isolate_sys_path(train_dir)
+            try:
+                with mock.patch.object(providers, 'NATIVE_TRAIN', native_dir):
+                    mod = providers._import_native('native_guard')
+                self.assertEqual(mod.FLAG, 1)
+                self.assertEqual(sys.path[0], train_dir)
+                self.assertIn(str(native_dir.resolve()), sys.path)
+            finally:
+                self._restore_sys_path(saved_path, saved_modules)
+
+    def test_loader_import_error_preflight_no_call_zero_popen(self):
+        """Missing transitive dep → preflight_no_call; no Popen; original error kept."""
+        with tempfile.TemporaryDirectory() as td:
+            native_dir = Path(td) / 'gb-actions-train'
+            native_dir.mkdir()
+            (native_dir / 'native_cursor.py').write_text(
+                'from core import need, digest, loads\n', encoding='utf-8')
+            work = Path(td) / 'work'
+            work.mkdir()
+            evidence = Path(td) / 'evidence'
+            evidence.mkdir()
+            task = {
+                'issue': 182, 'allowed_paths': ['apps/web/src/x.ts'],
+                'revision': 'a' * 64, 'runtime_base_sha': 'b' * 40,
+            }
+            train_dir = str(Path(lean_live.__file__).resolve().parent)
+            saved_path, saved_modules = self._isolate_sys_path(train_dir)
+            popen = mock.Mock(side_effect=AssertionError('Popen must not run'))
+            try:
+                with mock.patch.object(lean_live, 'NATIVE_TRAIN', native_dir), \
+                        mock.patch.object(lean_live, 'require_executor_uid'), \
+                        mock.patch.object(lean_live.subprocess, 'Popen', popen), \
+                        mock.patch.object(lean_live.tempfile, 'mkdtemp',
+                                          side_effect=AssertionError('tempdir before load')):
+                    with self.assertRaises(providers.ProviderError) as ctx:
+                        lean_live.cursor_author_live(
+                            task=task, worktree=work, evidence_dir=evidence)
+                self.assertEqual(ctx.exception.code, 'preflight_no_call')
+                self.assertEqual(ctx.exception.charge, 'none')
+                self.assertIn('ModuleNotFoundError', ctx.exception.detail)
+                self.assertIn('core', ctx.exception.detail)
+                intent = json.loads((evidence / 'author-intent.json').read_text())
+                self.assertEqual(intent['phase'], 'preflight_no_call')
+                self.assertEqual(intent['error_type'], 'ModuleNotFoundError')
+                self.assertTrue(intent.get('no_model_launched'))
+                self.assertEqual(popen.call_count, 0)
+            finally:
+                self._restore_sys_path(saved_path, saved_modules)
+
+    def test_execute_claim_preflight_no_call_blocked_not_running(self):
+        """Known NO_CALL marks BLOCKED with attempts preserved; not DONE/RUNNING/UNKNOWN."""
+        with tempfile.TemporaryDirectory() as td:
+            adapters, _state = make_flow_adapters(td)
+
+            def boom_author(**kwargs):
+                raise providers.ProviderError(
+                    'preflight_no_call', 'ModuleNotFoundError:No module named \'core\'',
+                    charge='none')
+
+            adapters.author = boom_author
+            comment, _ = owner_task_comment(issue=913)
+            adm = lean_run.admit_comment(
+                comment, {'number': 913, 'state': 'open'}, {'id': REPO_ID})
+            with self.assertRaises(providers.ProviderError) as ctx:
+                lean_run.execute_claim(adm, adapters, results_root=td)
+            self.assertEqual(ctx.exception.code, 'preflight_no_call')
+            claims = list(Path(td).rglob('claim.json'))
+            self.assertTrue(claims)
+            claim = json.loads(claims[0].read_text())
+            self.assertEqual(claim['phase'], 'BLOCKED')
+            self.assertEqual(claim.get('error'), 'preflight_no_call')
+            self.assertTrue(claim.get('no_model_launched'))
+            self.assertEqual(int((claim.get('attempts') or {}).get('author') or 0), 1)
+            self.assertNotEqual(claim['phase'], 'RUNNING')
+            self.assertNotEqual(claim['phase'], 'UNKNOWN')
+            self.assertNotEqual(claim['phase'], 'AUTHOR_DONE')
+
+    def test_post_spawn_timeout_unknown_not_treated_as_no_call(self):
+        """Later timeout/unknown stays UNKNOWN intent — not preflight_no_call / no_model."""
+        src = inspect.getsource(lean_run.execute_claim)
+        preflight_at = src.index("err.code == 'preflight_no_call'")
+        unknown_at = src.index("err.charge == 'unknown'")
+        self.assertLess(preflight_at, unknown_at)
+        with tempfile.TemporaryDirectory() as td:
+            work = Path(td) / 'work'
+            work.mkdir()
+            evidence = Path(td) / 'evidence'
+            evidence.mkdir()
+            task = {
+                'issue': 183, 'allowed_paths': ['apps/web/src/x.ts'],
+                'revision': 'c' * 64, 'runtime_base_sha': 'd' * 40,
+            }
+
+            def late_timeout(**kwargs):
+                raise TimeoutError('post-spawn timeout')
+
+            with self.assertRaises(providers.ProviderError) as ctx:
+                providers.invoke_cursor_author(
+                    task=task, worktree=work, evidence_dir=evidence,
+                    launcher=late_timeout, parent_lease=True)
+            self.assertEqual(ctx.exception.code, 'cursor_timeout_unknown')
+            self.assertEqual(ctx.exception.charge, 'unknown')
+            intent = json.loads((evidence / 'author-intent.json').read_text())
+            self.assertEqual(intent['phase'], 'UNKNOWN')
+            self.assertNotEqual(intent['phase'], 'preflight_no_call')
+            self.assertFalse(intent.get('no_model_launched'))
+
+
 if __name__ == '__main__':
     os.chdir(Path(__file__).resolve().parent)
     unittest.main()
