@@ -104,6 +104,8 @@ export const envSchema = z
     FRIENDS_RATE_WINDOW_SECONDS: z.coerce.number().int().positive().safe().optional(),
     FRIENDS_SEND_LIMIT: z.coerce.number().int().positive().max(2147483647).optional(),
     FRIENDS_RECEIVE_LIMIT: z.coerce.number().int().positive().max(2147483647).optional(),
+    /** PG-1a outcome writes; default off. Own history reads stay available when schema present. */
+    POST_GAME_INTERNAL_ENABLED: z.enum(["0", "1"]).default("0"),
     SOCIAL_DIRECTORY_ENABLED: z
       .enum(["0", "1", "true", "false"])
       .optional()
@@ -186,6 +188,18 @@ export const envSchema = z
       if (!dev || !raw.SOCIAL_DIRECTORY_ENABLED || !bounded) {
         ctx.addIssue({code:"custom", path:["FRIENDS_INTERNAL_ENABLED"],
           message:"Friends production runtime requires exact DEV origins, mvp/stage, directory and bounded explicit TTL/rate limits; PROD forbidden"});
+      }
+    }
+    if (raw.POST_GAME_INTERNAL_ENABLED === "1" && (raw.NODE_ENV === "production" || raw.APP_ENV === "prod")) {
+      const dev = ["mvp", "stage"].includes(raw.APP_ENV)
+        && raw.PUBLIC_WEB_ORIGIN === "https://dev.gobadminton.ru"
+        && raw.PUBLIC_API_ORIGIN === "https://dev.gobadminton.ru";
+      if (!dev || raw.APP_ENV === "prod") {
+        ctx.addIssue({
+          code: "custom",
+          path: ["POST_GAME_INTERNAL_ENABLED"],
+          message: "Post-game writes require exact DEV origins and mvp/stage; PROD forbidden",
+        });
       }
     }
     if (raw.RADAR_DEV_TEST_SECOND_USER_ID && !raw.RADAR_DEV_TEST_OWNER_USER_ID) {
@@ -325,6 +339,7 @@ export const envSchema = z
       FRIENDS_RATE_WINDOW_SECONDS: raw.FRIENDS_RATE_WINDOW_SECONDS,
       FRIENDS_SEND_LIMIT: raw.FRIENDS_SEND_LIMIT,
       FRIENDS_RECEIVE_LIMIT: raw.FRIENDS_RECEIVE_LIMIT,
+      POST_GAME_INTERNAL_ENABLED: raw.POST_GAME_INTERNAL_ENABLED === "1",
       SOCIAL_DIRECTORY_ENABLED: raw.SOCIAL_DIRECTORY_ENABLED ?? false,
       RADAR_DEV_MAP_PREVIEW_ENABLED: raw.RADAR_DEV_MAP_PREVIEW_ENABLED === "1",
       RADAR_DEV_MAP_PREVIEW_VERSION: raw.RADAR_DEV_MAP_PREVIEW_VERSION,
