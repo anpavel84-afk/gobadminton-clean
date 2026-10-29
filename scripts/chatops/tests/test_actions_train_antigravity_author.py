@@ -51,11 +51,16 @@ class Parser(unittest.TestCase):
     def test_author_landlock_uses_private_workspace_and_scoped_pty(self):
         # Root selection is deterministic and must not include the real source,
         # arbitrary /tmp, /home, /srv, /etc root or project credentials.
-        with tempfile.TemporaryDirectory(prefix='gb-agy-author-') as folder:
+        # N.AGY host path is absent on GitHub runners; fixture uses a real
+        # executable so Path.exists filtering still includes the CLI root.
+        import sys
+        fake_agy = Path(sys.executable)
+        with patch.object(N, 'AGY', fake_agy), \
+             tempfile.TemporaryDirectory(prefix='gb-agy-author-', dir='/tmp') as folder:
             readonly, writable, executables = N.author_sandbox_roots(folder)
             self.assertIn(Path(folder), writable)
             self.assertIn(Path('/usr/bin'), readonly)
-            self.assertIn(Path(N.AGY), executables)
+            self.assertIn(fake_agy, executables)
             self.assertNotIn(Path('/tmp'), writable)
             self.assertNotIn(Path('/srv'), readonly)
             self.assertNotIn(Path('/home'), readonly)

@@ -22,6 +22,7 @@ from providers import (
     OWNER_ID, REPO_ID, REPO, ProviderError, SHA40, atomic_write, digest, loads,
     progress_halt, default_routes, AUTHOR_PASS_CLAIMS, role_ready,
     invoke_cursor_author, invoke_codex_qa, invoke_trusted_publish, select_qa_provider,
+    select_author_provider,
     parse_qa_verdict,
 )
 

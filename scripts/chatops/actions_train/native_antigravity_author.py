@@ -118,6 +118,61 @@ def available(slot, task_hash, model=MODEL):
         return False, 'Antigravity author qualification unavailable'
 
 
+# Root-owned READY proof after real acceptance (not local CLI exit).
+PRODUCT_AUTHOR_READY = Path('/etc/gobadminton-slots/product-author-role-ready.json')
+
+
+def product_module_pins():
+    """Exact installed author/QA/guard digests bound into READY proof."""
+    pins = {}
+    for name in MODULES:
+        pins[name] = hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
+    return pins
+
+
+def product_role_ready():
+    """READY after confirmed independent QA+CI+DEV acceptance; no Issue forever-pin.
+
+    Cosmetic marker/phase existence is insufficient — proof must bind modules,
+    UID978, model, and a PASS verdict on an exact operation fingerprint.
+    """
+    try:
+        raw = trusted(PRODUCT_AUTHOR_READY, owner=0)
+    except (OSError, ReviewError):
+        return False
+    try:
+        value = loads(raw)
+    except (ValueError, TypeError, ReviewError):
+        return False
+    if not (isinstance(value, dict) and value.get('schema') == 'GB_PRODUCT_AUTHOR_ROLE_READY_V1'
+            and value.get('phase') == 'ready'
+            and value.get('model') == MODEL
+            and value.get('executor_uid') == EXECUTOR_UID
+            and value.get('verdict') == 'PASS'
+            and type(value.get('operation')) is str
+            and re.fullmatch(r'[a-f0-9]{64}', value['operation'])):
+        return False
+    expected = product_module_pins()
+    modules = value.get('modules')
+    if not (isinstance(modules, dict)
+            and all(modules.get(n) == expected[n] for n in MODULES)):
+        return False
+    # Protected canary/READY marker must still match installed modules.
+    try:
+        marker = loads(trusted(MARKER))
+    except (OSError, ReviewError, ValueError, TypeError):
+        return False
+    if not (isinstance(marker, dict) and marker.get('schema') == 'GB_ANTIGRAVITY_AUTHOR_V1'
+            and marker.get('phase') == 'ready'
+            and marker.get('executor_uid') == EXECUTOR_UID
+            and marker.get('slot') == 'slot2'):
+        return False
+    marker_modules = marker.get('modules') or {}
+    if not all(marker_modules.get(n) == expected[n] for n in MODULES):
+        return False
+    return True
+
+
 def command(timeout, model=MODEL):
     need(model in MODELS and type(timeout) is int and 1 <= timeout <= 3600, 'invalid author command')
     return [AGY, '--model', model, '--dangerously-skip-permissions',

@@ -182,6 +182,8 @@ def role_ready(role):
     """Separate verified predicates. Author pass must not claim READY.
 
     agy_qa binds the real native product_role_ready()/root proof (PR #376).
+    agy_author binds protected NativeAuthor marker + product_role_ready proof
+    (modules/UID/model) — NEVER cosmetic file existence or CANARY-only phase.
     Never fabricate a lean READY marker; lean file remains optional secondary.
     """
     if role == 'agy_qa':
@@ -203,10 +205,31 @@ def role_ready(role):
         if marker.get('role') != 'agy_qa':
             return False, 'role mismatch in READY marker'
         return True, marker
+    if role == 'agy_author':
+        try:
+            native = _import_native('native_antigravity_author')
+            if hasattr(native, 'product_role_ready') and native.product_role_ready():
+                return True, {
+                    'source': 'native_product_role_ready',
+                    'role': 'agy_author',
+                    'schema': 'GB_PRODUCT_AUTHOR_ROLE_READY_V1',
+                }
+        except ProviderError:
+            pass
+        except Exception:
+            pass
+        marker = read_ready_marker(AGY_AUTHOR_READY)
+        if marker is None:
+            return False, 'agy_author READY marker absent or not verified'
+        if marker.get('role') != 'agy_author':
+            return False, 'role mismatch in READY marker'
+        # CANARY-only / unbound proof must never look READY.
+        if marker.get('phase') != 'ready' or not marker.get('verified_terminal_verdict'):
+            return False, 'agy_author READY proof incomplete'
+        return True, marker
     mapping = {
         'cursor_author': CURSOR_AUTHOR_READY,
         'codex_qa': CODEX_QA_READY,
-        'agy_author': AGY_AUTHOR_READY,
     }
     path = mapping.get(role)
     if path is None:
@@ -420,6 +443,7 @@ def select_qa_provider(task, *, issue):
     Explicit not-ready fallback happens BEFORE any charge. Never invent READY.
     Bare unsupported [AGY_CLI, --model] product QA is refused in live.agy_qa_live
     (native product_run_qa required); budget history is unchanged here.
+    AGY author never self-QAs — default QA remains Codex Sol Medium.
     """
     routes = task.get('qaroute') or task.get('qa_route') or ['codex_sol_medium']
     if isinstance(routes, str):
@@ -434,6 +458,50 @@ def select_qa_provider(task, *, issue):
             return 'codex_sol_medium', 'agy_unavailable_fallback', why
         return 'agy_qa', 'agy_selected', rec
     return 'codex_sol_medium', 'default_codex', None
+
+
+def select_author_provider(task, *, issue=None):
+    """Author routing via task.authorroute / author_route.
+
+    Cursor Auto is the default. Explicit ['agy_author','cursor_auto'] selects
+    actually qualified AGY author, or pre-launch Cursor fallback when not READY.
+    Codex Author is NOT QUALIFIED — never route to it or fake READY.
+    """
+    routes = (
+        task.get('authorroute') or task.get('author_route')
+        or task.get('author_routes') or ['cursor_auto']
+    )
+    if isinstance(routes, str):
+        routes = [routes]
+    normalized = []
+    for r in routes:
+        key = str(r).split(':')[0].strip().lower().replace('-', '_')
+        if key in ('agy', 'agy_author', 'antigravity_author'):
+            normalized.append('agy_author')
+        elif key in ('cursor', 'cursor_auto', 'cursor_author'):
+            normalized.append('cursor_auto')
+        elif key in ('codex', 'codex_author'):
+            # Explicitly not qualified — skip, never fake READY.
+            continue
+        else:
+            normalized.append(key)
+    if not normalized:
+        return 'cursor_auto', 'default_cursor', None
+    if normalized[0] == 'agy_author':
+        ok, reason = role_ready('agy_author')
+        if ok:
+            if issue is not None:
+                avail, why, rec = agy_quota_available(int(issue))
+                if not avail:
+                    if 'cursor_auto' in normalized:
+                        return 'cursor_auto', 'agy_author_unavailable_fallback', why
+                    return 'cursor_auto', 'agy_author_unavailable_fallback', why
+                return 'agy_author', 'agy_author_selected', rec
+            return 'agy_author', 'agy_author_selected', reason
+        if 'cursor_auto' in normalized:
+            return 'cursor_auto', 'agy_author_not_ready_fallback', reason
+        return 'cursor_auto', 'agy_author_not_ready_fallback', reason
+    return 'cursor_auto', 'default_cursor', None
 
 
 def build_agy_landlock_roots(source_ro, private_home, private_scratch, runtime_dirs=None,
@@ -594,6 +662,11 @@ def _live_cursor_author():
     return lean_live.cursor_author_live
 
 
+def _live_agy_author():
+    import live as lean_live
+    return lean_live.agy_author_live
+
+
 def _live_codex_qa():
     import live as lean_live
     return lean_live.codex_qa_live
@@ -607,25 +680,36 @@ def _live_publish(kind):
 
 
 def invoke_cursor_author(*, task, worktree, evidence_dir, launcher=None, parent_lease=True):
-    """Bounded Cursor author call. Live default = live.cursor_author_live.
+    """Bounded author call (compatibility name). Routes by select_author_provider.
 
-    parent_lease=True means the controller already holds the one writer lease —
-    do not nest a second acquisition inside the launcher. Tests inject fakes.
+    Live default selects cursor_author_live or agy_author_live. Never mislabels an
+    actual AGY call as Cursor. parent_lease=True means the controller already holds
+    the one writer lease — do not nest a second acquisition. Tests inject fakes.
     """
+    provider, route_reason, _meta = select_author_provider(
+        task, issue=task.get('issue'))
     intent, intent_path = prepare_cursor_author_intent(task, worktree, evidence_dir)
+    mark_intent_phase(
+        intent_path, 'prepared', requested_provider=provider,
+        effective_provider=provider, route_reason=route_reason,
+        fallback_provider=('cursor_auto' if provider == 'agy_author' else None))
     if launcher is None:
         try:
-            launcher = _live_cursor_author()
+            if provider == 'agy_author':
+                launcher = _live_agy_author()
+            else:
+                launcher = _live_cursor_author()
         except Exception as err:
             mark_intent_phase(intent_path, 'HOLD_launcher_absent', error=type(err).__name__)
-            raise ProviderError('cursor_launcher_absent', type(err).__name__) from err
-    mark_intent_phase(intent_path, 'launching', parent_lease=bool(parent_lease))
+            raise ProviderError('author_launcher_absent', type(err).__name__) from err
+    mark_intent_phase(intent_path, 'launching', parent_lease=bool(parent_lease),
+                      provider=provider, effective_provider=provider)
     try:
         result = launcher(task=task, worktree=worktree, evidence_dir=evidence_dir,
                           intent_path=str(intent_path), parent_lease=True)
     except TimeoutError as err:
         mark_intent_phase(intent_path, 'UNKNOWN', error='timeout')
-        raise ProviderError('cursor_timeout_unknown', str(err), charge='unknown') from err
+        raise ProviderError('author_timeout_unknown', str(err), charge='unknown') from err
     except ProviderError as err:
         # Preserve loader preflight_no_call / no_model_launched intent; do not
         # overwrite with HOLD or invent a paid retry.
@@ -639,7 +723,11 @@ def invoke_cursor_author(*, task, worktree, evidence_dir, launcher=None, parent_
     sha = result.get('candidate_sha')
     if not (isinstance(sha, str) and SHA40.fullmatch(sha)):
         raise ProviderError('author_missing_candidate_sha')
-    mark_intent_phase(intent_path, 'completed', candidate_sha=sha)
+    # Preserve actual provider from launcher result (fallback may switch to Cursor).
+    effective = result.get('provider') or provider
+    mark_intent_phase(intent_path, 'completed', candidate_sha=sha,
+                      provider=effective, effective_provider=effective,
+                      requested_provider=provider, route_reason=route_reason)
     return result
 
 
@@ -732,10 +820,9 @@ AUTHOR_PASS_CLAIMS = {
     'nested_agy_codex_model_calls': 0,
     'model_calls': 1,
     'note': (
-        'OD018 Mode B commissioning: frozen worktree/base once, per-attempt '
-        'evidence, HTTPS FF publish + existing_pr propagation repaired in '
-        'allowed train sources only; AGY remains not READY; MODE_B_ACTIVE '
-        'unproven until independent QA/CI/install + two real DEV tasks; '
-        'no paid AGY calls'
+        'OD018 Mode B AGY author source path: OD014A install + live binding + '
+        'selection present; NativeAuthor CANARY/READY absent until parent real '
+        'product386 qual + CodexQA/CI/DEV acceptance; no fake Runtime READY; '
+        'no paid AGY author calls by this Cursor pass'
     ),
 }
