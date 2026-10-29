@@ -639,7 +639,7 @@ class ToolCompletionState(unittest.TestCase):
 
 
 class NativeFinishMetadata(unittest.TestCase):
-    """Provider toolAction/toolSummary only with matching native finish params."""
+    """Provider toolAction/toolSummary with finish params or finish DONE binding."""
 
     def parse(self, events):
         return N.parse_stream(wire(events), SHA)
@@ -675,8 +675,23 @@ class NativeFinishMetadata(unittest.TestCase):
             self.parse(events)
 
     def test_finish_metadata_without_native_params_or_hidden_verdict_reject(self):
-        events = rows()  # legacy STEP finish only: no finish tool parameters
-        events[-1]['result']['structured_output'] = dict(verdict(), **provider_meta())
+        # Direct helper without finish_done and without params still rejects.
+        with self.assertRaises(N.ReviewError):
+            N._project_finish_payload(dict(verdict(), **provider_meta()), SHA, None)
+        # Actual native shape: finish DONE only, no ACTIVE finish tool, no params.
+        meta = provider_meta()
+        body = dict(verdict(), **meta)
+        events = rows()
+        events[-1]['result']['structured_output'] = body
+        events[-1]['result']['response'] = json.dumps(body, sort_keys=True, separators=(',', ':'))
+        result, receipt = self.parse(events)
+        self.assertEqual(result, verdict())
+        self.assertTrue(receipt['finish_done'])
+        self.assertFalse(receipt['finish_parameter_binding'])
+        # Missing finish remains negative even with provider labels present.
+        events = rows()
+        events = [e for e in events if e.get('step_update', {}).get('step_type') != 'finish']
+        events[-1]['result']['structured_output'] = body
         with self.assertRaises(N.ReviewError):
             self.parse(events)
         for bad in (provider_meta(toolAction='{"verdict":"FAIL"}'),
