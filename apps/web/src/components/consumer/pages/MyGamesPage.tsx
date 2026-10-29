@@ -8,7 +8,7 @@ import {
   listAllMyManagedGames,
   listAllMyParticipations,
 } from "../../../lib/api-client";
-import type { Game, ManagedGame, Participation } from "../../../lib/consumer-types";
+import type { Game, ManagedGame, Me, Participation } from "../../../lib/consumer-types";
 import {
   isActiveCreatedGame,
   isParticipatingHistoryRow,
@@ -19,6 +19,7 @@ import { AuthEntry } from "../players/ProfileComposition";
 import { Button } from "../Button";
 import { ConsumerShell } from "../ConsumerShell";
 import { PersonalGameCard, GameStatusBadge } from "../games/GameDetailComposition";
+import { GameRecommendationsSection } from "../games/GameRecommendationsSection";
 
 type Relation = "participating" | "created";
 type View = "upcoming" | "history";
@@ -35,8 +36,10 @@ export function MyGamesPage() {
   const relation: Relation =
     search.get("tab") === "created" ? "created" : "participating";
   const view: View = search.get("view") === "history" ? "history" : "upcoming";
+  const recommendationsEntry = search.get("rec") === "sent" ? "sent" : "received";
   const [rows, setRows] = useState<ParticipationRow[]>([]);
   const [created, setCreated] = useState<ManagedGame[]>([]);
+  const [me, setMe] = useState<Me | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
   const [state, setState] = useState<"loading" | "ready" | "error" | "auth">(
     "loading",
@@ -49,20 +52,36 @@ export function MyGamesPage() {
     setError(null);
     setRows([]);
     setCreated([]);
+    setMe(null);
+    const clearPrivate = () => {
+      cancelled = true;
+      setMe(null);
+      setRows([]);
+      setCreated([]);
+      setState("auth");
+    };
+    const onSession = () => {
+      clearPrivate();
+      setReloadToken((token) => token + 1);
+    };
+    window.addEventListener("gb-private-expired", clearPrivate);
+    window.addEventListener("gb-session-changed", onSession);
     void (async () => {
-      const me = await getMe();
+      const account = await getMe();
       if (cancelled) return;
-      if (!me.ok) {
-        setState(me.status === 401 ? "auth" : "error");
+      if (!account.ok) {
+        setState(account.status === 401 ? "auth" : "error");
         setError("Не удалось проверить вход. Попробуйте ещё раз.");
         return;
       }
+      setMe(account.data);
 
       if (relation === "created") {
         // Include owner + non-creator manager rows from /v1/me/games.
         const managed = await listAllMyManagedGames();
         if (cancelled) return;
         if (!managed.ok) {
+          setMe(null);
           setState("error");
           setError("Не удалось загрузить управляемые игры.");
           return;
@@ -75,6 +94,7 @@ export function MyGamesPage() {
       const parts = await listAllMyParticipations();
       if (!parts.ok) {
         if (cancelled) return;
+        setMe(null);
         setState("error");
         setError("Не удалось загрузить ваши заявки.");
         return;
@@ -94,6 +114,8 @@ export function MyGamesPage() {
     })();
     return () => {
       cancelled = true;
+      window.removeEventListener("gb-private-expired", clearPrivate);
+      window.removeEventListener("gb-session-changed", onSession);
     };
   }, [relation, reloadToken]);
 
@@ -159,6 +181,9 @@ export function MyGamesPage() {
           </div>
           <Button href="/games/create">+ Создать игру</Button>
         </header>
+        {state === "ready" && me && view === "upcoming" ? (
+          <GameRecommendationsSection me={me} initialView={recommendationsEntry} />
+        ) : null}
         <section className="gb-relationship-bar">
           <div
             className="gb-game-segmented"

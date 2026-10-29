@@ -66,15 +66,53 @@ describe("DEV privacy fences", () => {
     const queries: string[] = [];
     const client = { query: async (sql: string) => {
       queries.push(sql);
-      if (sql.includes("to_regclass")) return { rows: [{ name: "friendships" }] };
+      if (sql.includes("to_regclass")) {
+        return { rows: [{ friendships: "friendships", recommendations: "game_recommendations" }] };
+      }
       if (sql.includes("SELECT p.*")) return { rows: [{ ...actor, unrestricted: false }] };
       return { rows: [] };
     } };
     const service = Object.assign(Object.create(FriendshipsService.prototype), {
       env: loadEnv(dev), read: async (_actor: string, _session: string, fn: (value: unknown) => Promise<unknown>) => fn(client),
     }) as FriendshipsService;
-    expect(await service.capabilities("actor", "session")).toMatchObject({ friends: false });
+    expect(await service.capabilities("actor", "session")).toEqual({
+      friends: false, gameRecommendations: false, gameAttention: false, socialPush: false,
+    });
     expect(queries.find(sql => sql.includes("SELECT p.*"))).toContain("FROM user_restrictions ur");
     expect(queries.find(sql => sql.includes("SELECT p.*"))).toContain("'account.access'");
+  });
+  it("gameRecommendations requires friends eligibility and both installed tables", async () => {
+    const cases: Array<{
+      friendships: string | null; recommendations: string | null; profile: Availability; friendsOn: boolean;
+      expectFriends: boolean; expectRecs: boolean;
+    }> = [
+      { friendships: "friendships", recommendations: "game_recommendations", profile: actor, friendsOn: true,
+        expectFriends: true, expectRecs: true },
+      { friendships: "friendships", recommendations: null, profile: actor, friendsOn: true,
+        expectFriends: true, expectRecs: false },
+      { friendships: null, recommendations: "game_recommendations", profile: actor, friendsOn: true,
+        expectFriends: false, expectRecs: false },
+      { friendships: "friendships", recommendations: "game_recommendations", profile: { ...actor, unrestricted: false },
+        friendsOn: true, expectFriends: false, expectRecs: false },
+      { friendships: "friendships", recommendations: "game_recommendations", profile: actor, friendsOn: false,
+        expectFriends: false, expectRecs: false },
+    ];
+    for (const c of cases) {
+      const client = { query: async (sql: string) => {
+        if (sql.includes("to_regclass")) {
+          return { rows: [{ friendships: c.friendships, recommendations: c.recommendations }] };
+        }
+        if (sql.includes("SELECT p.*")) return { rows: [c.profile] };
+        return { rows: [] };
+      } };
+      const env = loadEnv(dev);
+      if (!c.friendsOn) env.FRIENDS_INTERNAL_ENABLED = false;
+      const service = Object.assign(Object.create(FriendshipsService.prototype), {
+        env, read: async (_a: string, _s: string, fn: (value: unknown) => Promise<unknown>) => fn(client),
+      }) as FriendshipsService;
+      expect(await service.capabilities("actor", "session")).toEqual({
+        friends: c.expectFriends, gameRecommendations: c.expectRecs, gameAttention: false, socialPush: false,
+      });
+    }
   });
 });
