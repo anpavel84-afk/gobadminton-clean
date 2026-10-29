@@ -901,6 +901,48 @@ class Od018LifecycleSeamTests(unittest.TestCase):
         # No permanent Issue→branch hardcode table.
         self.assertNotIn('mode-a/182-friend-recommendations', src)
 
+    def test_publish_push_pr_own_repo_head_query_and_empty_readback(self):
+        """Own-repo PR list uses plain --head branch; empty post-create is HOLD."""
+        sha = '54c7b2a6b529300cd26dfc0c35154c2c9032cc02'
+        branch = 'automation/issue-375'
+        calls = []
+
+        def fake_run(argv, **kwargs):
+            calls.append(list(argv))
+            # git rev-parse / ls-remote / push paths
+            if argv[:1] == ['/usr/bin/gh'] and argv[1:3] == ['pr', 'list']:
+                self.assertIn('--head', argv)
+                self.assertEqual(argv[argv.index('--head') + 1], branch)
+                self.assertNotIn(f'{lean_live.OWNER_LOGIN}:{branch}', argv)
+                return mock.Mock(returncode=0, stdout='[]\n', stderr='')
+            if argv[:1] == ['/usr/bin/gh'] and argv[1:3] == ['pr', 'create']:
+                return mock.Mock(returncode=0, stdout='https://example/pull/391\n', stderr='')
+            if 'ls-remote' in argv:
+                return mock.Mock(returncode=0, stdout=f'{sha}\trefs/heads/{branch}\n', stderr='')
+            if 'rev-parse' in argv:
+                return mock.Mock(returncode=0, stdout=sha + '\n', stderr='')
+            if 'remote' in argv and 'get-url' in argv:
+                return mock.Mock(returncode=0, stdout=lean_live._https_origin_url() + '\n', stderr='')
+            if 'push' in argv:
+                return mock.Mock(returncode=0, stdout='', stderr='')
+            return mock.Mock(returncode=0, stdout='', stderr='')
+
+        with mock.patch.object(lean_live, 'run_argv', side_effect=fake_run), \
+                mock.patch.object(lean_live, 'git', return_value=sha), \
+                mock.patch.object(lean_live, 'uid1002_env', return_value={}), \
+                mock.patch.object(lean_live, 'gh_api', side_effect=AssertionError('no recreate')):
+            with self.assertRaises(lean_live.LiveError) as ctx:
+                lean_live.publish_push_pr(
+                    kind='publish',
+                    payload={'issue': 375, 'sha': sha, 'publication_branch': branch,
+                             'worktree': '/tmp/gb-publish-readback-fixture'})
+        self.assertEqual(ctx.exception.code, 'pr_readback_hold')
+        self.assertEqual(ctx.exception.detail, 'empty_post_create_list')
+        list_heads = [c[c.index('--head') + 1] for c in calls
+                      if c[:3] == ['/usr/bin/gh', 'pr', 'list']]
+        self.assertEqual(list_heads, [branch, branch])
+        self.assertEqual(sum(1 for c in calls if c[:3] == ['/usr/bin/gh', 'pr', 'create']), 1)
+
     def test_preqa_uses_live_git_not_root_subprocess(self):
         import inspect
         src = inspect.getsource(lean_run.deterministic_preqa_diff)
