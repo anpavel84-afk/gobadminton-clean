@@ -4,6 +4,7 @@ import type { Venue, VenueProfile } from "../../../lib/consumer-types";
 import { httpsCreditUrl } from "../../../lib/original-http-authority";
 import { VenueCoverCredit } from "./VenueCoverCredit";
 import { venueCoverUrl } from "./VenueCover";
+import { VenuePublicContacts } from "../games/VenueSheet";
 import "../../../styles/venue-public-profile.css";
 
 function record(value: unknown): Record<string, unknown> {
@@ -50,7 +51,14 @@ function ProfilePhoto({ photo }: { photo: VenueProfile["gallery"]["items"][numbe
 }
 
 /** Allowlisted public facts only. Never stringify arbitrary API/private metadata. */
-export function VenuePublicProfile({ venue }: { venue: Pick<Venue, "profile" | "cover"> }) {
+export function VenuePublicProfile({
+  venue,
+  omitContacts = false,
+}: {
+  venue: Pick<Venue, "profile" | "cover" | "publicContacts">;
+  /** Opt out when a parent (e.g. VenuePage rail) already renders contacts once. Default keeps standalone consumers. */
+  omitContacts?: boolean;
+}) {
   const profile = record(venue.profile), amenities = record(profile.amenities);
   const count = profile.courtCount;
   const courtCount = typeof count === "number" && Number.isInteger(count) && count >= 0 && count <= 2147483647 ? count : null;
@@ -66,6 +74,7 @@ export function VenuePublicProfile({ venue }: { venue: Pick<Venue, "profile" | "
       </dl>
       {updatedAt && <p className="gb-venue-profile-updated">Содержимое обновлено: <time dateTime={updatedAt}>{new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(updatedAt))}</time></p>}
     </section>
+    {!omitContacts && <VenuePublicContacts value={venue.publicContacts} />}
     {photo && <ProfilePhoto key={photo.url} photo={photo} />}
   </div>;
 }
