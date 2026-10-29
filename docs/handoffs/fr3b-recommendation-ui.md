@@ -1,47 +1,54 @@
-# Issue #182 / FR-3B source handoff — Mode A author attempt 4 (FR3B-QA-01 residual)
+# Issue #182 / FR-3B — OD-018 guarded DEV capability (Mode B)
 
-From: Cursor Auto SOURCE AUTHOR. To: one independent PMA QA (not claimed here).
-Status: SOURCE DRAFT / NOT_TESTED / NOT ACCEPTED. No paid QA, DEV, UAT, merge, push, or deploy claimed.
+From: Cursor Auto SOURCE AUTHOR (`OD018_FR3B_SOCIAL_GAMES_DEV`). To: one independent Codex Sol Medium QA (default), then mandatory Product CI + trusted DEV.
+Status: SOURCE DRAFT / NOT_TESTED / NOT ACCEPTED. No paid QA, DEV release, UAT, merge, push, or PROD claimed.
 
 ## Scope delivered
 
-Bounded residual repair on send recovery only. Closed R1 pagination and UNKNOWN-core components not redone. No backend/cap activation/C5/deps/Git/publication/deploy.
+Minimal backend capability delta only. Reuses accepted PR #367 recommendation UI and FR-3A API/migration. Does **not** rebuild UI/backend, enable all Social, or claim Social Games complete.
 
-## Repair vs attempt 3 (FR3B-QA-01 residual)
+`GET /v1/me/social-capabilities.gameRecommendations` is true only when:
+1. existing `friendsEnabled(env)` admits (fail-closed PROD / outside DEV),
+2. actor is Friends-eligible (same fence as `friends`),
+3. `friendships` and `game_recommendations` tables are installed.
 
-**FR3B-QA-01** — Send surface `Обновить свой список` no longer routes through friends reload. `useGameRecommendationMutation` `onRefresh` / `rereadOwnList` now triggers actor-owned `listGameRecommendations('sent')` with live/session/game/unmount guards. Empty or failed sent read keeps UNKNOWN path/body/key and replacement-write block; no auto POST; no success/noncommit claim from list absence. Truthful recovery feedback + link `/my-games?rec=sent` opens My Games recommendations on the sent entry view. Friends load remains picker-only.
+No new env/shell toggle. Guests/restricted/table-missing stay false. `gameAttention` / `socialPush` remain false. Authorization/CSRF/idempotency negatives unchanged.
 
-One new focused send-component integration assertion: recovery transport must be sent-recommendations GET (not friends, not injected refresh spy alone). Prior 19 targeted assertions reused.
+## Files (allowed paths)
 
-## Files (allowed paths only)
+1. `apps/api/src/friendships/friendships.service.ts` — capability derived from friends + recommendation schema
+2. `apps/api/test/unit/friends-dev-admission.test.ts` — table/eligibility matrix; restricted stays false
+3. `apps/api/test/integration/game-recommendations.disposable.test.ts` — post-0041 expects true; Friends OFF stays false
+4. `apps/web/src/lib/game-recommendations.ts` — comment: UI follows server cap only
+5. `apps/web/src/components/consumer/games/GameRecommendationButton.tsx` — comment alignment
+6. `docs/handoffs/fr3b-recommendation-ui.md` — this handoff
 
-1. `apps/web/src/components/consumer/games/GameRecommendationButton.tsx` — sent-list recovery + honest copy + My Games sent link
-2. `apps/web/src/components/consumer/games/GameRecommendationsSection.tsx` — optional `initialView` for sent entry
-3. `apps/web/src/components/consumer/pages/MyGamesPage.tsx` — `?rec=sent` → sent recommendations entry
-4. `apps/web/test/my-games-recommendations.test.tsx` — +send recovery GET sent assertion
-5. `docs/handoffs/fr3b-recommendation-ui.md` — this handoff
+Unchanged this pass: recommendation routes/policy/service, My Games / detail UI behavior (already server-gated), prior QA/CI history for UI candidate.
 
-Unchanged this pass: `game-recommendations.ts` (hook `rereadOwnList` already correct; wiring was the defect), `GameDetailPage.tsx`, `game-recommendations.test.tsx`.
+## Preserved evidence (do not reset)
 
-## Contract notes
+- Original UI head `62f1bb9` Medium R3 PASS + Product CI `40727200985` 7/7 retained
+- Prepared merge bases / transport fix history retained; no admission rewrite
+- Full-reload UNKNOWN caveat from PR #367 remains honest if not separately addressed in UAT
 
-- Recovery reread: `GET /v1/me/game-recommendations?view=sent&limit=20`
-- Failed/empty list ≠ proof of noncommit; pending UNKNOWN preserved
-- UI copy plain (no key/protocol details)
+## Checks
 
-## Limitations
+Targeted (when deps available):
 
-- Typecheck/lint/vitest **NOT_TESTED** here (no deps in private export). PMA: lockfile offline install, then targeted:
-  - `pnpm --filter @gobadminton/web exec vitest run test/game-recommendations.test.tsx test/my-games-recommendations.test.tsx`
-  - `pnpm --filter @gobadminton/web typecheck`
-  - scoped lint equivalent
-- Capability remains false until separate activation.
-- No live E2E; Product CI / DEV smoke / Owner UAT are PMA/trusted process.
+```bash
+pnpm --filter @gobadminton/api exec vitest run test/unit/friends-dev-admission.test.ts test/unit/friendships.test.ts test/unit/game-recommendations.test.ts
+pnpm --filter @gobadminton/web exec vitest run test/game-recommendations.test.tsx test/my-games-recommendations.test.tsx
+```
 
-## Remaining for DONE
+Disposable PostGIS suite + Product CI 7/7 + trusted DEV ACCEPTED/live SHA: trusted process. Author sandbox: unit/deps **NOT_TESTED** if `node_modules` absent.
 
-1. PMA install + targeted tests/typecheck/lint PASS
-2. One independent QA PASS on exact candidate
-3. Product CI + DEV release/smoke; Owner UAT with NOT_TESTED where applicable
-4. Capability activation (separate)
-5. PROD only by separate Owner decision
+## Limits / out of scope
+
+- No PROD, no global social enable, no C5, no second writer, no new framework
+- No shell/env flip before gated release
+- Owner UAT: two synthetic friends + organizer journey; if no authorized browser session → **UAT=NOT_TESTED**
+- After DEV ACCEPTED, next eligible Project #1 task proceeds per OD-018 (#375 under #372) without PMA chat
+
+## Acceptance transfer
+
+Independent QA verifies capability fail-closed matrix + no UI/API rebuild + retained prior receipts. DONE needs QA + CI + trusted merge + DEV ACCEPTED exact SHA + public live smoke. PROD only by separate Owner decision.

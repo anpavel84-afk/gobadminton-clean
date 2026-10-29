@@ -263,7 +263,7 @@ export function useGameRecommendationMutation<T>(
   };
 }
 
-/** Product UI stays off while server keeps gameRecommendations:false (FR-3A). Do not override. */
+/** Product UI follows server gameRecommendations only (Friends DEV admission + schema). Do not override. */
 export function recommendationsUiEnabled(capabilities: SocialCapabilities | null | undefined): boolean {
   return Boolean(capabilities?.gameRecommendations);
 }

@@ -26,7 +26,7 @@ type SentRereadState = "idle" | "loading" | "ready" | "empty" | "error" | "guest
 
 /**
  * Detail-only «Посоветовать другу». External GameShare stays separate.
- * Honours social-capabilities.gameRecommendations (currently false on FR-3A).
+ * Honours social-capabilities.gameRecommendations (Friends DEV + recommendation schema).
  */
 export function GameRecommendationButton({
   gameId,
