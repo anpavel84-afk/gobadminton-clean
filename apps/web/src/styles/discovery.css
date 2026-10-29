@@ -183,8 +183,8 @@
   .gb-discovery-feed-heading h2 { font-size: 30px; }
   .gb-discovery-feed-actions { flex-direction: column; align-items: end; font-size: 11px; }
   .gb-discovery-card, .gb-discovery-skeleton { display: block; }
-  /* Mobile landscape media retained; square applies only to desktop/tablet feed. */
-  .gb-discovery-card__image, .gb-discovery-skeleton > div { aspect-ratio: auto; height: 210px; min-height: 0; }
+  /* Mobile landscape media: reset base max-width:300 so image fills the card width. */
+  .gb-discovery-card__image, .gb-discovery-skeleton > div { aspect-ratio: auto; height: 210px; min-height: 0; max-width: none; width: 100%; }
   .gb-discovery-card__content { padding: 18px; }
   .gb-discovery-card h3 { font-size: 21px; }
   .gb-consumer .gb-discovery-host .gb-c23-btn { width: 44px; padding: 0; }

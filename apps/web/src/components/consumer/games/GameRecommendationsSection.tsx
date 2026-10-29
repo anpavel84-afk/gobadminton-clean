@@ -149,16 +149,16 @@ export function GameRecommendationsSection({
   const locked = mutation.busy || mutation.pending;
 
   return (
-    <section className="gb-personal-list" data-surface="game-recommendations" data-view={view}>
+    <section className="gb-personal-list gb-my-games-recommendations" data-surface="game-recommendations" data-view={view}>
       <header className="gb-personal-list__heading">
-        <div>
-          <span className="gb-game-kicker">Рекомендации друзей</span>
+        <span className="gb-game-kicker">Рекомендации друзей</span>
+        <div className="gb-personal-list__title">
           <h2>{title}</h2>
-          <p className="gb-c23-helper">
-            Совет не резервирует место и не создаёт приглашение организатора. Участие оформляется отдельно.
-          </p>
+          {state === "ready" && (items.length > 0 || !nextCursor) ? <b>{items.length}</b> : null}
         </div>
-        {state === "ready" && (items.length > 0 || !nextCursor) ? <b>{items.length}</b> : null}
+        <p className="gb-c23-helper">
+          Совет не резервирует место и не создаёт приглашение организатора. Участие оформляется отдельно.
+        </p>
       </header>
       <div className="gb-game-segmented" role="group" aria-label="Рекомендации">
         <button type="button" aria-pressed={view === "received"} disabled={locked} onClick={() => switchView("received")}>

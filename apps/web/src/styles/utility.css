@@ -24,11 +24,11 @@
   justify-content: space-between; gap: 16px; text-align: left; text-decoration: none;
 }
 .fr3 .settings-panel__row:first-of-type { border-top: 0; padding-top: 0; }
-.fr3 .settings-panel__row span { display: grid; gap: 4px; min-width: 0; }
+.fr3 .settings-panel__row > span:not(.settings-panel__open) { display: grid; gap: 4px; min-width: 0; }
 .fr3 .settings-panel__row strong { font-size: 16px; font-weight: 700; }
 .fr3 .settings-panel__row small { color: var(--gb-ink-soft); font-size: 13px; text-align: left; }
-.fr3 .settings-panel__open {
-  display: inline-flex; align-items: center; gap: 6px; flex: none;
+.fr3 .settings-panel__row .settings-panel__open {
+  display: inline-flex; align-items: center; gap: 6px; flex: none; white-space: nowrap;
   color: var(--gb-ink-soft); font-size: 14px; font-weight: 600;
 }
 .fr3 .settings-panel__rule { height: 1px; background: var(--gb-line); margin: 16px 0; }
