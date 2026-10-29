@@ -3593,6 +3593,243 @@ class RootEnvBindingDefectTests(unittest.TestCase):
             self.assertNotEqual(claim['phase'], 'RUNNING')
             self.assertFalse(claim.get('no_model_launched'))
 
+    def test_root_atomic_import_fchown_0600_and_newdir_ownership(self):
+        """Root importer fchown before replace; fresh source dirs user-owned; mode kept."""
+        with tempfile.TemporaryDirectory(dir='/tmp') as td:
+            work = Path(td) / 'work'
+            # Existing 0600 file (reproduces Root replace preserving mode).
+            existing = work / 'tools' / 'train' / 'live.py'
+            existing.parent.mkdir(parents=True)
+            existing.write_text('ORIG\n')
+            os.chmod(existing, 0o600)
+            # New file under missing nested dir (fresh parents only).
+            new_rel = 'apps/web/src/env.ts'
+            evidence = Path(td) / 'evidence'
+            evidence.mkdir()
+            task = {
+                'issue': 375,
+                'allowed_paths': [
+                    'tools/train/live.py', 'apps/web/src/env.ts',
+                ],
+                'revision': 'a' * 64, 'runtime_base_sha': 'b' * 40,
+            }
+            native = mock.Mock(spec=[
+                'CURSOR_PIN', 'AUTHOR_TOOLS', 'export', 'author_config',
+                'parse_stream', 'source_name', '_source',
+            ])
+            native.CURSOR_PIN = Path('/opt/pin')
+            native.AUTHOR_TOOLS = 'Shell,Read'
+            native.author_config.return_value = {
+                'permissions': {'allow': []}, 'sandbox': {}}
+            native.parse_stream.return_value = {'ok': True, 'model': 'auto'}
+            native.source_name.side_effect = lambda n: True
+            native._source.side_effect = lambda path, root: Path(path).read_bytes()
+            guard = mock.Mock(spec=['CURSOR_PIN'])
+            guard.CURSOR_PIN = Path('/opt/pin')
+            before = {
+                'tools/train/live.py': hashlib.sha256(b'ORIG\n').hexdigest(),
+            }
+
+            def export_side(bridge, work_path):
+                work_path = Path(work_path)
+                (work_path / 'tools' / 'train').mkdir(parents=True, exist_ok=True)
+                (work_path / 'tools' / 'train' / 'live.py').write_text('ORIG\n')
+                return dict(before)
+
+            native.export.side_effect = export_side
+
+            def snap(work_path, *a, **k):
+                w = Path(work_path)
+                (w / 'tools' / 'train').mkdir(parents=True, exist_ok=True)
+                (w / 'tools' / 'train' / 'live.py').write_text('NEW_LIVE\n')
+                env_p = w / 'apps' / 'web' / 'src'
+                env_p.mkdir(parents=True, exist_ok=True)
+                (env_p / 'env.ts').write_text('NEW_ENV\n')
+                return {
+                    'tools/train/live.py': hashlib.sha256(
+                        b'NEW_LIVE\n').hexdigest(),
+                    new_rel: hashlib.sha256(b'NEW_ENV\n').hexdigest(),
+                }
+
+            proc = mock.Mock()
+            proc.returncode = 0
+            proc.pid = 4242
+            proc.poll.return_value = 0
+            proc.communicate.return_value = (b'', b'')
+            fchowns = []
+            dir_chowns = []
+            real_fchown = os.fchown
+            real_chown = os.chown
+
+            def track_fchown(fd, uid, gid):
+                fchowns.append((uid, gid))
+                # Sandbox may refuse numeric 1002; ownership call is the contract.
+                if uid == 0 and gid == 0:
+                    real_fchown(fd, uid, gid)
+
+            def track_chown(path, uid, gid):
+                dir_chowns.append((str(path), uid, gid))
+                if uid == 0 and gid == 0:
+                    real_chown(path, uid, gid)
+
+            cand = 'c' * 40
+            git_calls = []
+
+            def fake_git(cwd, *args, **kwargs):
+                git_calls.append(list(args))
+                if args and args[0] == 'rev-parse':
+                    return cand
+                return ''
+
+            with mock.patch.object(lean_live, 'require_executor_uid'), \
+                    mock.patch.object(lean_live, '_load_native', side_effect=lambda n: (
+                        native if n == 'native_cursor' else guard)), \
+                    mock.patch.object(lean_live, 'run_argv', return_value=mock.Mock(
+                        stdout='', returncode=0)), \
+                    mock.patch.object(lean_live, 'load_short_rules', return_value=(
+                        'RULES\n', 'a' * 64, Path('AGENTS.md'))), \
+                    mock.patch.object(lean_live, 'chown_private_tree'), \
+                    mock.patch.object(lean_live, 'chown_bounded_output_dir'), \
+                    mock.patch.object(lean_live, '_ensure_cursor_private_root'), \
+                    mock.patch.object(lean_live, '_cursor_namespace_argv_uid1002',
+                                      return_value=['/usr/bin/true']), \
+                    mock.patch.object(lean_live, '_native_snapshot_uid1002',
+                                      side_effect=snap), \
+                    mock.patch.object(lean_live, 'git', side_effect=fake_git), \
+                    mock.patch.object(lean_live.subprocess, 'Popen',
+                                      return_value=proc), \
+                    mock.patch.object(lean_live.os, 'geteuid', return_value=0), \
+                    mock.patch.object(lean_live.os, 'fchown',
+                                      side_effect=track_fchown), \
+                    mock.patch.object(lean_live.os, 'chown',
+                                      side_effect=track_chown), \
+                    mock.patch.dict(os.environ, {'CURSOR_AUTH_TOKEN': 'tok-xyz'}):
+                out = lean_live.cursor_author_live(
+                    task=task, worktree=work, evidence_dir=evidence)
+            self.assertEqual(out['candidate_sha'], cand)
+            self.assertEqual(
+                fchowns.count((lean_live.CURSOR_UID, lean_live.CURSOR_GID)), 2)
+            import_stat = existing.stat()
+            self.assertEqual(import_stat.st_mode & 0o777, 0o600)
+            self.assertEqual(existing.read_text(), 'NEW_LIVE\n')
+            self.assertEqual((work / new_rel).read_text(), 'NEW_ENV\n')
+            # Fresh nested parents under worktree must be handed to CURSOR_UID.
+            env_dir = str(work / 'apps' / 'web' / 'src')
+            self.assertTrue(any(
+                p == env_dir and uid == lean_live.CURSOR_UID
+                and gid == lean_live.CURSOR_GID
+                for p, uid, gid in dir_chowns))
+            # Existing tools/train must not be recursively chowned.
+            self.assertFalse(any(
+                p == str(existing.parent) for p, _u, _g in dir_chowns))
+            self.assertTrue(any(c and c[0] == 'add' for c in git_calls))
+
+    def test_post_model_git_fail_charged_source_import_blocked(self):
+        """Model completed + local git failure → ProviderError source_import charged BLOCKED."""
+        with tempfile.TemporaryDirectory(dir='/tmp') as td:
+            work = Path(td) / 'work'
+            work.mkdir()
+            (work / 'tools' / 'train').mkdir(parents=True)
+            (work / 'tools' / 'train' / 'live.py').write_text('ORIG\n')
+            evidence = Path(td) / 'evidence'
+            evidence.mkdir()
+            task = {
+                'issue': 375,
+                'allowed_paths': ['tools/train/live.py'],
+                'revision': 'a' * 64, 'runtime_base_sha': 'b' * 40,
+            }
+            native = mock.Mock(spec=[
+                'CURSOR_PIN', 'AUTHOR_TOOLS', 'export', 'author_config',
+                'parse_stream', 'source_name', '_source',
+            ])
+            native.CURSOR_PIN = Path('/opt/pin')
+            native.AUTHOR_TOOLS = 'Shell,Read'
+            native.author_config.return_value = {
+                'permissions': {'allow': []}, 'sandbox': {}}
+            native.parse_stream.return_value = {'ok': True, 'model': 'auto'}
+            native.source_name.side_effect = lambda n: True
+            native._source.side_effect = lambda path, root: Path(path).read_bytes()
+            guard = mock.Mock(spec=['CURSOR_PIN'])
+            guard.CURSOR_PIN = Path('/opt/pin')
+
+            def export_side(bridge, work_path):
+                work_path = Path(work_path)
+                (work_path / 'tools' / 'train').mkdir(parents=True, exist_ok=True)
+                (work_path / 'tools' / 'train' / 'live.py').write_text('ORIG\n')
+                return {
+                    'tools/train/live.py': hashlib.sha256(b'ORIG\n').hexdigest(),
+                }
+
+            native.export.side_effect = export_side
+
+            def snap(work_path, *a, **k):
+                w = Path(work_path) / 'tools' / 'train'
+                w.mkdir(parents=True, exist_ok=True)
+                (w / 'live.py').write_text('NEW_LIVE\n')
+                return {
+                    'tools/train/live.py': hashlib.sha256(
+                        b'NEW_LIVE\n').hexdigest(),
+                }
+
+            def boom_git(cwd, *args, **kwargs):
+                raise lean_live.LiveError(
+                    'subprocess_failed', 'git:add: Permission denied')
+
+            proc = mock.Mock()
+            proc.returncode = 0
+            proc.pid = 4242
+            proc.poll.return_value = 0
+            proc.communicate.return_value = (b'', b'')
+
+            with mock.patch.object(lean_live, 'require_executor_uid'), \
+                    mock.patch.object(lean_live, '_load_native', side_effect=lambda n: (
+                        native if n == 'native_cursor' else guard)), \
+                    mock.patch.object(lean_live, 'run_argv', return_value=mock.Mock(
+                        stdout='', returncode=0)), \
+                    mock.patch.object(lean_live, 'load_short_rules', return_value=(
+                        'RULES\n', 'a' * 64, Path('AGENTS.md'))), \
+                    mock.patch.object(lean_live, 'chown_private_tree'), \
+                    mock.patch.object(lean_live, 'chown_bounded_output_dir'), \
+                    mock.patch.object(lean_live, '_ensure_cursor_private_root'), \
+                    mock.patch.object(lean_live, '_cursor_namespace_argv_uid1002',
+                                      return_value=['/usr/bin/true']), \
+                    mock.patch.object(lean_live, '_native_snapshot_uid1002',
+                                      side_effect=snap), \
+                    mock.patch.object(lean_live, 'git', side_effect=boom_git), \
+                    mock.patch.object(lean_live.subprocess, 'Popen',
+                                      return_value=proc), \
+                    mock.patch.object(lean_live.os, 'geteuid', return_value=0), \
+                    mock.patch.object(lean_live.os, 'fchown'), \
+                    mock.patch.dict(os.environ, {'CURSOR_AUTH_TOKEN': 'tok-xyz'}):
+                with self.assertRaises(providers.ProviderError) as ctx:
+                    lean_live.cursor_author_live(
+                        task=task, worktree=work, evidence_dir=evidence)
+            self.assertEqual(ctx.exception.code, 'source_import')
+            self.assertEqual(ctx.exception.charge, 'charged')
+            self.assertNotIsInstance(ctx.exception, lean_live.LiveError)
+            intent = json.loads((evidence / 'author-intent.json').read_text())
+            self.assertEqual(intent['phase'], 'completed')
+            self.assertTrue(intent.get('import_failed'))
+            self.assertEqual(intent.get('charge'), 'charged')
+            self.assertIn('cursor_result', intent)
+            adapters, _ = make_flow_adapters(td)
+
+            def boom_author(**kwargs):
+                raise providers.ProviderError(
+                    'source_import', 'git:add: Permission denied', charge='charged')
+
+            adapters.author = boom_author
+            comment, _ = owner_task_comment(issue=375)
+            adm = lean_run.admit_comment(
+                comment, {'number': 375, 'state': 'open'}, {'id': REPO_ID})
+            with self.assertRaises(providers.ProviderError) as ectx:
+                lean_run.execute_claim(adm, adapters, results_root=td)
+            self.assertEqual(ectx.exception.code, 'source_import')
+            claim = json.loads(next(Path(td).rglob('claim.json')).read_text())
+            self.assertEqual(claim['phase'], 'BLOCKED')
+            self.assertEqual(claim.get('error'), 'source_import')
+            self.assertNotEqual(claim['phase'], 'RUNNING')
+
 
 if __name__ == '__main__':
     os.chdir(Path(__file__).resolve().parent)

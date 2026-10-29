@@ -1230,10 +1230,89 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
             raise ProviderError('token_leak_in_stream')
         result = native.parse_stream(raw)
         model_result = result
-        # Local snapshot must run as UID1002 against the original checkout (check-ignore).
+        # Post-model local only: snapshot/import/git. LiveError must not escape
+        # as bare exception leaving claim RUNNING — charged source_import.
         try:
             after = _native_snapshot_uid1002(
                 base / 'work', worktree, before, env=env_git)
+            changed = sorted(
+                n for n in set(before) | set(after) if before.get(n) != after.get(n))
+            allowed = set(task.get('allowed_paths') or [])
+            if not changed or not set(changed) <= allowed:
+                raise ProviderError('author_empty_or_oos', ','.join(changed[:20]))
+            for name in changed:
+                target = worktree / name
+                # Match Mode A: refuse symlink target/parents before Root atomic replace.
+                if any(x.is_symlink() for x in (target, *target.parents)):
+                    raise ProviderError('symlink_import_refused', name)
+                if name not in after:
+                    if target.exists() and not target.is_symlink():
+                        target.unlink()
+                    continue
+                data = native._source(base / 'work' / name, base / 'work')
+                if token.encode() in data:
+                    raise ProviderError('token_leak_in_source')
+                if any(x.is_symlink() for x in (target.parent, *target.parent.parents)):
+                    raise ProviderError('symlink_import_refused', name)
+                # Fresh missing parents only — never recursive chown of existing tree.
+                created_dirs = []
+                probe = target.parent
+                while probe != worktree and worktree in probe.parents:
+                    if probe.exists():
+                        break
+                    created_dirs.append(probe)
+                    probe = probe.parent
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if os.geteuid() == 0:
+                    for d in reversed(created_dirs):
+                        if d.is_dir() and not d.is_symlink():
+                            os.chown(d, CURSOR_UID, CURSOR_GID)
+                if any(x.is_symlink() for x in (target, *target.parents)):
+                    raise ProviderError('symlink_import_refused', name)
+                import stat as statmod
+                mode = (
+                    statmod.S_IMODE(target.stat().st_mode) if target.exists() else 0o644)
+                fd, tmp = tempfile.mkstemp(
+                    prefix='.lean-import-', dir=str(target.parent))
+                try:
+                    with os.fdopen(fd, 'wb') as fh:
+                        os.fchmod(fh.fileno(), mode)
+                        fh.write(data)
+                        fh.flush()
+                        os.fsync(fh.fileno())
+                        # Root mkstemp is root:root; hand off before replace so
+                        # UID1002 git add can read preserved 0600 modes.
+                        if os.geteuid() == 0:
+                            os.fchown(fh.fileno(), CURSOR_UID, CURSOR_GID)
+                    os.replace(tmp, target)
+                except BaseException:
+                    try:
+                        os.unlink(tmp)
+                    except OSError:
+                        pass
+                    raise
+            git(worktree, 'add', '--', *changed)
+            git(worktree, '-c', 'user.name=agentagency-dev',
+                '-c', 'user.email=agentagency-dev@localhost',
+                '-c', 'commit.gpgsign=false', 'commit', '-m',
+                f'lean: issue-{task["issue"]} author candidate')
+            sha = git(worktree, 'rev-parse', 'HEAD')
+            if not SHA40.fullmatch(sha):
+                raise ProviderError('author_missing_candidate_sha')
+            mark_intent_phase(intent_path, 'completed', candidate_sha=sha,
+                              changed_paths=changed, cursor_result=result)
+            import_done = True
+            return {
+                'candidate_sha': sha,
+                'changed_paths': changed,
+                'model_launch': 1,
+                'provider': 'cursor_auto',
+                'result': result,
+                'root_model': False,
+                'uid': CURSOR_UID,
+            }
+        except ProviderError:
+            raise
         except Exception as err:
             mark_intent_phase(
                 intent_path, 'completed',
@@ -1248,55 +1327,6 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
                 f'{type(err).__name__}:{err}'[:400],
                 charge='charged',
             ) from err
-        changed = sorted(n for n in set(before) | set(after) if before.get(n) != after.get(n))
-        allowed = set(task.get('allowed_paths') or [])
-        if not changed or not set(changed) <= allowed:
-            raise ProviderError('author_empty_or_oos', ','.join(changed[:20]))
-        for name in changed:
-            target = worktree / name
-            # Match Mode A: refuse symlink target/parents before Root atomic replace.
-            if any(x.is_symlink() for x in (target, *target.parents)):
-                raise ProviderError('symlink_import_refused', name)
-            if name not in after:
-                if target.exists() and not target.is_symlink():
-                    target.unlink()
-                continue
-            data = native._source(base / 'work' / name, base / 'work')
-            if token.encode() in data:
-                raise ProviderError('token_leak_in_source')
-            if any(x.is_symlink() for x in (target.parent, *target.parent.parents)):
-                raise ProviderError('symlink_import_refused', name)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            if any(x.is_symlink() for x in (target, *target.parents)):
-                raise ProviderError('symlink_import_refused', name)
-            import stat as statmod
-            mode = statmod.S_IMODE(target.stat().st_mode) if target.exists() else 0o644
-            fd, tmp = tempfile.mkstemp(prefix='.lean-import-', dir=str(target.parent))
-            with os.fdopen(fd, 'wb') as fh:
-                os.fchmod(fh.fileno(), mode)
-                fh.write(data)
-                fh.flush()
-                os.fsync(fh.fileno())
-            os.replace(tmp, target)
-        git(worktree, 'add', '--', *changed)
-        git(worktree, '-c', 'user.name=agentagency-dev', '-c', 'user.email=agentagency-dev@localhost',
-            '-c', 'commit.gpgsign=false', 'commit', '-m',
-            f'lean: issue-{task["issue"]} author candidate')
-        sha = git(worktree, 'rev-parse', 'HEAD')
-        if not SHA40.fullmatch(sha):
-            raise ProviderError('author_missing_candidate_sha')
-        mark_intent_phase(intent_path, 'completed', candidate_sha=sha,
-                          changed_paths=changed, cursor_result=result)
-        import_done = True
-        return {
-            'candidate_sha': sha,
-            'changed_paths': changed,
-            'model_launch': 1,
-            'provider': 'cursor_auto',
-            'result': result,
-            'root_model': False,
-            'uid': CURSOR_UID,
-        }
     finally:
         # Paid model completed but technical import failed: keep allowed sources
         # before private sandbox cleanup (UNVALIDATED; RAW already on evidence).
