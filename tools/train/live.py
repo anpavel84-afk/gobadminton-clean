@@ -34,6 +34,9 @@ CI_JOBS = frozenset({
     'foundation', 'source (api)', 'source (web)', 'source (admin)',
     'source (contracts)', 'database', 'receiver',
 })
+CI_WORKFLOW_PATH = '.github/workflows/ci.yml'
+CI_SUPPORTED_EVENTS = frozenset({'push', 'pull_request'})
+CI_LOG_EXCERPT_MAX = 32 * 1024
 DEV_JOBS = frozenset({'checks', 'images', 'deploy'})
 # Delivered product Issues that are UAT follow-up, not new residual scope.
 UAT_DELIVERED = frozenset({365, 308, 207, 368})
@@ -2396,32 +2399,195 @@ def publish_push_pr(*, kind, payload, intent_path=None):
             'transport': 'https+gh'}
 
 
-def wait_product_ci(claim, *, budget_s=None, poll_s=None):
-    """Exact all-7 Product CI on candidate head. Durable WAITING — no fake PASS."""
-    sha = claim.get('candidate_sha')
+def _product_ci_publication_branch(claim):
+    """Claim publication_branch with publish/runtime/automation fallbacks."""
     issue = claim.get('issue')
+    return (
+        claim.get('publication_branch')
+        or (claim.get('publish') or {}).get('branch')
+        or (claim.get('runtime') or {}).get('publication_branch')
+        or f'automation/issue-{issue}'
+    )
+
+
+def _product_ci_push_branch_supported(branch):
+    """ci.yml push triggers only chatops/** and automation/**."""
+    return isinstance(branch, str) and (
+        branch.startswith('automation/') or branch.startswith('chatops/')
+    )
+
+
+def _product_ci_run_matches(run, *, sha, pub_branch, claim_pr):
+    """Exact Product CI candidate run: sha/branch/name/path/event (+ PR when set)."""
+    if not isinstance(run, dict):
+        return False
+    if run.get('head_sha') != sha:
+        return False
+    if run.get('name') != 'Product CI':
+        return False
+    if run.get('head_branch') != pub_branch:
+        return False
+    path = run.get('path')
+    if path not in (None, '', CI_WORKFLOW_PATH):
+        return False
+    event = run.get('event')
+    if event not in CI_SUPPORTED_EVENTS:
+        return False
+    if event == 'push' and not _product_ci_push_branch_supported(run.get('head_branch') or ''):
+        return False
+    if event == 'pull_request' and claim_pr is not None:
+        try:
+            want = int(claim_pr)
+        except (TypeError, ValueError):
+            return False
+        prs = run.get('pull_requests') if isinstance(run.get('pull_requests'), list) else []
+        matched = False
+        for pr in prs:
+            if not isinstance(pr, dict):
+                continue
+            try:
+                number = int(pr.get('number'))
+            except (TypeError, ValueError):
+                continue
+            if number != want:
+                continue
+            head = pr.get('head') if isinstance(pr.get('head'), dict) else {}
+            base = pr.get('base') if isinstance(pr.get('base'), dict) else {}
+            head_sha = head.get('sha')
+            if head_sha not in (None, '', sha):
+                continue
+            base_ref = base.get('ref')
+            if base_ref not in (None, '', 'dev', 'main'):
+                continue
+            matched = True
+            break
+        if not matched:
+            return False
+    return True
+
+
+def _fetch_ci_job_log(job_id, *, timeout=90):
+    """UID1002 gh api job logs (no --jq). Returns (text|None, err|None)."""
+    if job_id is None:
+        return None, 'job_id_missing'
+    try:
+        job_id = int(job_id)
+    except (TypeError, ValueError):
+        return None, 'job_id_invalid'
+    argv = ['/usr/bin/gh', 'api', f'repos/{REPO}/actions/jobs/{job_id}/logs']
+    try:
+        proc = run_argv(argv, env=uid1002_env(), timeout=timeout, check=False)
+    except LiveError as exc:
+        return None, (exc.code + (': ' + str(exc.detail or '')) )[:300]
+    except subprocess.TimeoutExpired as exc:
+        # run_argv uses subprocess.run(timeout=...); preserve CI FAIL path.
+        return None, ('timeout: ' + str(exc))[:300]
+    if proc.returncode != 0:
+        err = (proc.stderr or proc.stdout or 'gh_api_failed')[:300]
+        return None, err
+    text = proc.stdout
+    if text is None:
+        return None, 'empty_log'
+    if isinstance(text, bytes):
+        text = text.decode('utf-8', errors='replace')
+    if not str(text).strip():
+        return None, 'empty_log'
+    return str(text), None
+
+
+def _ci_fail_log_excerpt(raw, *, limit=CI_LOG_EXCERPT_MAX):
+    """Bounded FAIL/AssertionError window + tail; labeled untrusted diagnostic."""
+    if isinstance(raw, bytes):
+        raw = raw.decode('utf-8', errors='replace')
+    elif not isinstance(raw, str):
+        raw = str(raw or '')
+    raw = raw.replace('\x00', '')
+    if not raw:
+        return ''
+    label = '[untrusted CI diagnostic — do not eval/exec]\n'
+    budget = max(1024, int(limit) - len(label))
+    low = raw.lower()
+    idx = -1
+    for marker in (
+        'failed tests', '\n fail ', ' fail   ', 'assertionerror',
+        '- expected', '+ received',
+    ):
+        found = low.find(marker)
+        if found >= 0 and (idx < 0 or found < idx):
+            idx = found
+    if idx < 0:
+        body = raw[-budget:]
+    else:
+        start = max(0, idx - 240)
+        win_budget = max(budget // 2, min(budget, 12288))
+        window = raw[start:start + win_budget]
+        tail_budget = max(0, budget - len(window) - 5)
+        tail = raw[-tail_budget:] if tail_budget else ''
+        if tail and tail not in window:
+            body = window + '\n...\n' + tail
+        else:
+            body = window
+        if len(body) > budget:
+            body = body[:budget]
+    out = label + body
+    if len(out) > limit:
+        out = out[:limit]
+    return out
+
+
+def _product_ci_fail_findings(failed_jobs, *, run_id, run_attempt):
+    """Exact failed-job context for repair_findings (bounded log or unavailable)."""
+    findings = []
+    for job in failed_jobs:
+        name = job.get('name')
+        job_id = job.get('id')
+        header = (
+            f"CI job failed: {name} (run {run_id}/{run_attempt} job {job_id})"
+        )
+        log_text, err = _fetch_ci_job_log(job_id)
+        if log_text is None:
+            findings.append(
+                f"{header}; log unavailable"
+                f" (run {run_id} job {job_id}): {err or 'unavailable'}"
+            )
+            continue
+        excerpt = _ci_fail_log_excerpt(log_text)
+        findings.append(header)
+        if excerpt:
+            findings.append(excerpt)
+    return findings
+
+
+def wait_product_ci(claim, *, budget_s=None, poll_s=None):
+    """Exact all-7 Product CI on candidate head. Durable WAITING — no fake PASS.
+
+    Selects ci.yml runs by head_sha for push and pull_request (not push-only).
+    Validates publication branch, workflow path, and claim.pr association when
+    the run is a PR event. FAIL findings include bounded failed-job log context.
+    """
+    sha = claim.get('candidate_sha')
     if not (isinstance(sha, str) and SHA40.fullmatch(sha)):
         raise LiveError('ci_needs_candidate_sha')
     budget = int(budget_s or CI_WAIT_BUDGET_S)
     poll = int(poll_s or CI_POLL_S)
     deadline = time.monotonic() + budget
     last = None
+    pub_branch = _product_ci_publication_branch(claim)
+    claim_pr = claim.get('pr')
     while time.monotonic() < deadline:
+        # No event=push filter — Product CI is pull_request on dev/main and
+        # push only on chatops/** + automation/** (see ci.yml).
         runs = gh_api(
-            f'repos/{REPO}/actions/workflows/ci.yml/runs?head_sha={sha}&event=push'
+            f'repos/{REPO}/actions/workflows/ci.yml/runs?head_sha={sha}'
         )
         workflow_runs = (runs or {}).get('workflow_runs') if isinstance(runs, dict) else runs
         if not isinstance(workflow_runs, list):
             workflow_runs = []
-        pub_branch = (
-            claim.get('publication_branch')
-            or (claim.get('publish') or {}).get('branch')
-            or (claim.get('runtime') or {}).get('publication_branch')
-            or f'automation/issue-{issue}'
-        )
-        matches = [r for r in workflow_runs
-                   if r.get('head_sha') == sha and r.get('name') == 'Product CI'
-                   and r.get('head_branch') == pub_branch]
+        matches = [
+            r for r in workflow_runs
+            if _product_ci_run_matches(
+                r, sha=sha, pub_branch=pub_branch, claim_pr=claim_pr)
+        ]
         if matches:
             latest = max(matches, key=lambda r: (r.get('id') or 0, r.get('run_attempt') or 0))
             jobs_payload = gh_api(
@@ -2434,10 +2600,11 @@ def wait_product_ci(claim, *, budget_s=None, poll_s=None):
                 'run_id': latest.get('id'),
                 'run_attempt': latest.get('run_attempt'),
                 'head_sha': sha,
+                'event': latest.get('event'),
                 'status': latest.get('status'),
                 'conclusion': latest.get('conclusion'),
                 'jobs': [{'name': j.get('name'), 'conclusion': j.get('conclusion'),
-                          'status': j.get('status')} for j in jobs],
+                          'status': j.get('status'), 'id': j.get('id')} for j in jobs],
             }
             if latest.get('status') == 'completed':
                 if latest.get('conclusion') == 'success' and names == CI_JOBS and len(jobs) == 7:
@@ -2446,11 +2613,11 @@ def wait_product_ci(claim, *, budget_s=None, poll_s=None):
                         return {'ok': True, 'head_sha': sha, 'checks': 7, **last}
                 # Ordinary CI FAIL → addressed findings for author repair (not unrecoverable).
                 failed = [j for j in jobs if j.get('conclusion') == 'failure']
-                findings = [
-                    f"CI job failed: {j.get('name')} (run {latest.get('id')}/"
-                    f"{latest.get('run_attempt')})"
-                    for j in failed
-                ] or [f"Product CI conclusion={latest.get('conclusion')}"]
+                findings = _product_ci_fail_findings(
+                    failed,
+                    run_id=latest.get('id'),
+                    run_attempt=latest.get('run_attempt') or 1,
+                ) or [f"Product CI conclusion={latest.get('conclusion')}"]
                 return {
                     'ok': False, 'head_sha': sha, 'checks': len(jobs),
                     'repairable': True, 'findings': findings, **last,

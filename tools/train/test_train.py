@@ -1564,6 +1564,290 @@ class WaitDevDeployGitShaTests(unittest.TestCase):
         self.assertIsNone(out.get('live_sha'))
 
 
+class WaitProductCiTests(unittest.TestCase):
+    """Product CI poll: PR+push events, foreign ignore, bounded FAIL logs."""
+
+    SHA = '9116a5088ce0f3d09e39e646206181c0de772c12'
+    BRANCH = 'mode-a/182-friend-recommendations'
+    AUTO_BRANCH = 'automation/issue-182'
+
+    def _jobs(self, *, failed=None, head_sha=None):
+        failed = set(failed or [])
+        head_sha = head_sha or self.SHA
+        out = []
+        for i, name in enumerate(sorted(lean_live.CI_JOBS)):
+            conc = 'failure' if name in failed else 'success'
+            out.append({
+                'id': 5000 + i, 'name': name, 'conclusion': conc,
+                'status': 'completed', 'head_sha': head_sha,
+            })
+        return out
+
+    def _pr_run(self, *, run_id=40830799956, attempt=1, conclusion='success',
+                sha=None, branch=None, pr=367, event='pull_request', path=None,
+                foreign_pr=False):
+        sha = sha or self.SHA
+        branch = branch or self.BRANCH
+        path = lean_live.CI_WORKFLOW_PATH if path is None else path
+        prs = [{
+            'number': 999 if foreign_pr else pr,
+            'head': {'sha': sha, 'ref': branch},
+            'base': {'ref': 'dev', 'sha': 'd' * 40},
+        }]
+        return {
+            'id': run_id, 'run_attempt': attempt, 'name': 'Product CI',
+            'head_sha': sha, 'head_branch': branch, 'event': event,
+            'path': path, 'status': 'completed', 'conclusion': conclusion,
+            'pull_requests': prs,
+        }
+
+    def _push_run(self, *, run_id=11, attempt=1, conclusion='success',
+                  sha=None, branch=None):
+        sha = sha or self.SHA
+        branch = branch or self.AUTO_BRANCH
+        return {
+            'id': run_id, 'run_attempt': attempt, 'name': 'Product CI',
+            'head_sha': sha, 'head_branch': branch, 'event': 'push',
+            'path': lean_live.CI_WORKFLOW_PATH, 'status': 'completed',
+            'conclusion': conclusion, 'pull_requests': [],
+        }
+
+    def _claim(self, **extra):
+        claim = {
+            'candidate_sha': self.SHA,
+            'issue': 182,
+            'publication_branch': self.BRANCH,
+            'pr': 367,
+        }
+        claim.update(extra)
+        return claim
+
+    def test_pr_event_exact_metadata_pass(self):
+        run = self._pr_run()
+        jobs = self._jobs()
+        seen = []
+
+        def fake_gh(path, **kwargs):
+            seen.append(path)
+            if 'workflows/ci.yml/runs' in path:
+                self.assertIn(f'head_sha={self.SHA}', path)
+                self.assertNotIn('event=push', path)
+                return {'workflow_runs': [
+                    run,
+                    self._pr_run(run_id=1, sha='b' * 40, branch='other', pr=1),
+                    {**run, 'id': 2, 'event': 'workflow_dispatch', 'conclusion': 'success'},
+                    {**run, 'id': 3, 'head_branch': 'foreign-branch'},
+                    {**run, 'id': 4, 'name': 'Other'},
+                ]}
+            if '/jobs' in path:
+                return {'jobs': jobs}
+            raise AssertionError(path)
+
+        with mock.patch.object(lean_live, 'gh_api', side_effect=fake_gh), \
+                mock.patch.object(lean_live.time, 'sleep', return_value=None):
+            out = lean_live.wait_product_ci(self._claim(), budget_s=1, poll_s=0)
+        self.assertTrue(out['ok'])
+        self.assertEqual(out['checks'], 7)
+        self.assertEqual(out['run_id'], 40830799956)
+        self.assertEqual(out.get('event'), 'pull_request')
+        self.assertTrue(any('workflows/ci.yml/runs?head_sha=' in p for p in seen))
+        self.assertFalse(any('event=push' in p for p in seen))
+
+    def test_push_automation_branch_still_supported(self):
+        run = self._push_run()
+        jobs = self._jobs()
+
+        def fake_gh(path, **kwargs):
+            if 'workflows/ci.yml/runs' in path:
+                self.assertNotIn('event=push', path)
+                return {'workflow_runs': [run]}
+            if '/jobs' in path:
+                return {'jobs': jobs}
+            raise AssertionError(path)
+
+        claim = self._claim(
+            publication_branch=self.AUTO_BRANCH, pr=None)
+        with mock.patch.object(lean_live, 'gh_api', side_effect=fake_gh), \
+                mock.patch.object(lean_live.time, 'sleep', return_value=None):
+            out = lean_live.wait_product_ci(claim, budget_s=1, poll_s=0)
+        self.assertTrue(out['ok'])
+        self.assertEqual(out.get('event'), 'push')
+
+    def test_foreign_head_branch_pr_and_dispatch_ignored(self):
+        good = self._pr_run(run_id=50, conclusion='success')
+        noise = [
+            self._pr_run(run_id=99, sha='c' * 40, conclusion='success'),
+            self._pr_run(run_id=98, branch='mode-a/other', conclusion='success'),
+            self._pr_run(run_id=97, foreign_pr=True, conclusion='success'),
+            self._pr_run(run_id=96, event='workflow_dispatch', conclusion='success'),
+            self._push_run(run_id=95, branch=self.BRANCH),  # push on non-automation
+            {**good, 'id': 94, 'path': '.github/workflows/other.yml'},
+        ]
+
+        def fake_gh(path, **kwargs):
+            if 'workflows/ci.yml/runs' in path:
+                return {'workflow_runs': noise + [good]}
+            if '/jobs' in path:
+                self.assertIn('/50/', path)
+                return {'jobs': self._jobs()}
+            raise AssertionError(path)
+
+        with mock.patch.object(lean_live, 'gh_api', side_effect=fake_gh), \
+                mock.patch.object(lean_live.time, 'sleep', return_value=None):
+            out = lean_live.wait_product_ci(self._claim(), budget_s=1, poll_s=0)
+        self.assertTrue(out['ok'])
+        self.assertEqual(out['run_id'], 50)
+
+    def test_latest_failure_not_greened_by_older_pass(self):
+        older_pass = self._pr_run(run_id=10, attempt=1, conclusion='success')
+        newer_fail = self._pr_run(run_id=40830799956, attempt=1, conclusion='failure')
+
+        def fake_gh(path, **kwargs):
+            if 'workflows/ci.yml/runs' in path:
+                return {'workflow_runs': [older_pass, newer_fail]}
+            if '/jobs' in path:
+                self.assertIn('40830799956', path)
+                return {'jobs': self._jobs(failed={'database'})}
+            raise AssertionError(path)
+
+        def fake_run_argv(argv, **kwargs):
+            return mock.Mock(returncode=1, stdout='', stderr='log gone')
+
+        with mock.patch.object(lean_live, 'gh_api', side_effect=fake_gh), \
+                mock.patch.object(lean_live, 'run_argv', side_effect=fake_run_argv), \
+                mock.patch.object(lean_live.time, 'sleep', return_value=None):
+            out = lean_live.wait_product_ci(self._claim(), budget_s=1, poll_s=0)
+        self.assertFalse(out['ok'])
+        self.assertTrue(out.get('repairable'))
+        self.assertEqual(out['run_id'], 40830799956)
+        self.assertTrue(any('database' in f for f in out['findings']))
+
+    def test_seven_job_gate_rejects_partial_success(self):
+        run = self._pr_run(conclusion='success')
+        partial = [j for j in self._jobs() if j['name'] != 'receiver']
+
+        def fake_gh(path, **kwargs):
+            if 'workflows/ci.yml/runs' in path:
+                return {'workflow_runs': [run]}
+            if '/jobs' in path:
+                return {'jobs': partial}
+            raise AssertionError(path)
+
+        with mock.patch.object(lean_live, 'gh_api', side_effect=fake_gh), \
+                mock.patch.object(lean_live.time, 'sleep', return_value=None):
+            out = lean_live.wait_product_ci(self._claim(), budget_s=1, poll_s=0)
+        self.assertFalse(out['ok'])
+        self.assertNotEqual(out.get('checks'), 7)
+
+    def test_fail_bounded_log_includes_assertion_context(self):
+        run = self._pr_run(conclusion='failure')
+        # Shape from real CI40830799956 database FAIL (friends-s1 line 354).
+        log_body = (
+            '⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯\n'
+            ' FAIL   integration  test/integration/friends-s1.disposable.test.ts'
+            ' > Friends S1 API\n'
+            'AssertionError: expected { friends: true, …(3) }'
+            ' to deeply equal { friends: true, …(3) }\n'
+            '- Expected\n+ Received\n'
+            '  {\n'
+            '    "friends": true,\n'
+            '    "gameAttention": false,\n'
+            '-   "gameRecommendations": false,\n'
+            '+   "gameRecommendations": true,\n'
+            '    "socialPush": false,\n'
+            '  }\n'
+            ' ❯ test/integration/friends-s1.disposable.test.ts:354:64\n'
+            '    354|     expect((await get(a,"/v1/me/social-capabilities"))'
+            '.json()).toEqual…\n'
+            ' Test Files  1 failed (1)\n'
+        )
+
+        def fake_gh(path, **kwargs):
+            if 'workflows/ci.yml/runs' in path:
+                return {'workflow_runs': [run]}
+            if '/jobs' in path:
+                return {'jobs': self._jobs(failed={'database'})}
+            raise AssertionError(path)
+
+        def fake_run_argv(argv, **kwargs):
+            self.assertEqual(argv[0], '/usr/bin/gh')
+            self.assertEqual(argv[1], 'api')
+            self.assertIn('/actions/jobs/', argv[2])
+            self.assertTrue(argv[2].endswith('/logs'))
+            return mock.Mock(returncode=0, stdout=log_body, stderr='')
+
+        with mock.patch.object(lean_live, 'gh_api', side_effect=fake_gh), \
+                mock.patch.object(lean_live, 'run_argv', side_effect=fake_run_argv), \
+                mock.patch.object(lean_live.time, 'sleep', return_value=None):
+            out = lean_live.wait_product_ci(self._claim(), budget_s=1, poll_s=0)
+        self.assertFalse(out['ok'])
+        self.assertTrue(out.get('repairable'))
+        blob = '\n'.join(out['findings'])
+        self.assertIn('friends-s1.disposable.test.ts', blob)
+        self.assertIn('354', blob)
+        self.assertIn('gameRecommendations', blob)
+        self.assertIn('false', blob)
+        self.assertIn('true', blob)
+        self.assertIn('untrusted CI diagnostic', blob)
+        self.assertLessEqual(
+            max(len(f) for f in out['findings']), lean_live.CI_LOG_EXCERPT_MAX)
+
+    def test_log_unavailable_stays_fail_never_pass(self):
+        run = self._pr_run(conclusion='failure')
+
+        def fake_gh(path, **kwargs):
+            if 'workflows/ci.yml/runs' in path:
+                return {'workflow_runs': [run]}
+            if '/jobs' in path:
+                return {'jobs': self._jobs(failed={'database'})}
+            raise AssertionError(path)
+
+        def fake_run_argv(argv, **kwargs):
+            return mock.Mock(returncode=1, stdout='', stderr='HTTP 404')
+
+        with mock.patch.object(lean_live, 'gh_api', side_effect=fake_gh), \
+                mock.patch.object(lean_live, 'run_argv', side_effect=fake_run_argv), \
+                mock.patch.object(lean_live.time, 'sleep', return_value=None):
+            out = lean_live.wait_product_ci(self._claim(), budget_s=1, poll_s=0)
+        self.assertFalse(out['ok'])
+        self.assertTrue(out.get('repairable'))
+        self.assertTrue(any('log unavailable' in f for f in out['findings']))
+        self.assertTrue(any('40830799956' in f for f in out['findings']))
+
+    def test_log_fetch_timeout_stays_fail_repairable(self):
+        """TimeoutExpired on job-log fetch must not escape wait_product_ci."""
+        run = self._pr_run(conclusion='failure')
+        jobs = self._jobs(failed={'database'})
+
+        def fake_gh(path, **kwargs):
+            if 'workflows/ci.yml/runs' in path:
+                return {'workflow_runs': [run]}
+            if '/jobs' in path:
+                self.assertIn('40830799956', path)
+                return {'jobs': jobs}
+            raise AssertionError(path)
+
+        def fake_run_argv(argv, **kwargs):
+            self.assertEqual(argv[0], '/usr/bin/gh')
+            self.assertEqual(argv[1], 'api')
+            self.assertIn('/actions/jobs/', argv[2])
+            self.assertTrue(argv[2].endswith('/logs'))
+            raise lean_live.subprocess.TimeoutExpired(
+                cmd=argv, timeout=kwargs.get('timeout', 90))
+
+        with mock.patch.object(lean_live, 'gh_api', side_effect=fake_gh), \
+                mock.patch.object(lean_live, 'run_argv', side_effect=fake_run_argv), \
+                mock.patch.object(lean_live.time, 'sleep', return_value=None):
+            out = lean_live.wait_product_ci(self._claim(), budget_s=1, poll_s=0)
+        self.assertFalse(out['ok'])
+        self.assertTrue(out.get('repairable'))
+        self.assertEqual(out['run_id'], 40830799956)
+        self.assertEqual(out['checks'], 7)
+        self.assertTrue(any('database' in f for f in out['findings']))
+        self.assertTrue(any('log unavailable' in f for f in out['findings']))
+        self.assertTrue(any('40830799956' in f for f in out['findings']))
+
+
 class HostIssueCommentAdvanceTests(unittest.TestCase):
     def _base(self):
         return {
