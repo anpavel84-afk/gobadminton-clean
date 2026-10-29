@@ -74,8 +74,30 @@ export function RadarPage({ sharedMap, resumeCamera = false }: { sharedMap?: Lib
   const filterKey = JSON.stringify(queryFilters);
   useEffect(() => {
     if (!sharedMap || !controller || !activationId || !cityId || !config?.unifiedDirectory.enabled || !config.cities.some(c => c.cityId === cityId)) return;
-    const recover = () => { const current = controller.snapshot(); if (!current.busy && !current.capabilityUnavailable && !current.authenticationRequired && !controller.matches(queryFilters, activationKey)) void controller.query(queryFilters, { kind: "current_activation", activationId }, activationKey); };
-    recover(); const timer = setInterval(recover, 30000); return () => clearInterval(timer);
+    let cancelled = false;
+    let arming = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const arm = () => {
+      if (cancelled || arming) return;
+      arming = true;
+      try {
+        if (timer !== undefined) clearTimeout(timer);
+        const current = controller.snapshot();
+        // Soft refresh stays !busy while pending; rely on matches + controller pending/cooldown gates.
+        if (!current.capabilityUnavailable && !current.authenticationRequired && !controller.matches(queryFilters, activationKey)) {
+          void controller.query(queryFilters, { kind: "current_activation", activationId }, activationKey);
+        }
+        // Schedule from controller refresh/cooldown deadline (not the pre-settlement snapshot).
+        const delay = Math.max(500, controller.nextRefreshAt() - Date.now());
+        timer = setTimeout(arm, delay);
+      } finally {
+        arming = false;
+      }
+    };
+    arm();
+    // Re-arm on settlement so query+map latency does not leave a 500ms busy-loop or miss cooldown.
+    const unsubscribe = controller.subscribe(arm);
+    return () => { cancelled = true; if (timer !== undefined) clearTimeout(timer); unsubscribe(); };
   }, [controller, activationKey, filterKey, config]);
 
   useEffect(() => {
@@ -241,7 +263,8 @@ export function RadarPage({ sharedMap, resumeCamera = false }: { sharedMap?: Lib
       </VenuePopup>}
       {listOpen && !view.selected && <aside id="g2-map-panel" ref={sheet} tabIndex={-1} aria-label="Игроки на карте" className="g2-map-panel is-expanded" onKeyDown={e => { if (e.key === "Escape" && !(e.target as Element).closest("dialog")) { e.stopPropagation(); close(); } }}>
         <header><CloseButton aria-label="Закрыть список игроков" onClick={close} /></header>
-        <h2>Игроки на карте</h2>{view.pins.map(row => <button className="g2-map-list-row" key={row.publicPlayerId} onClick={() => selectPlayer(row)}><strong>{row.player.displayName}</strong><small>{distanceText(row.radar?.distance ?? null) ?? "Расстояние неизвестно"}</small></button>)}
+        <h2>Игроки на карте</h2>
+        <div className="g2-map-panel__body">{view.pins.map(row => <button className="g2-map-list-row" key={row.publicPlayerId} onClick={() => selectPlayer(row)}><strong>{row.player.displayName}</strong><small>{distanceText(row.radar?.distance ?? null) ?? "Расстояние неизвестно"}</small></button>)}</div>
       </aside>}
     </>}
   </div>;

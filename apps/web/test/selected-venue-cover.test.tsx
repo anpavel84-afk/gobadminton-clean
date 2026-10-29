@@ -225,6 +225,27 @@ it("creates eager/async before src and moves the same image through load/open/cl
   expect(image.alt).toBe("Обложка: Новое имя"); expect(image.srcWrites).toEqual([uploaded]);
   expect(created.filter(node => node.tag === "img")).toEqual([image]);
 });
+it("initializes the same image from the info slot without a compact preview", async () => {
+  function InfoOnly() {
+    resource = useSelectedVenueCover(city, venue);
+    return <SelectedVenueCover slotRef={resource.info} className="gb-venue-sheet-cover" />;
+  }
+  const renderer = mount(() => <InfoOnly />);
+  const image = imageAt();
+  expect(image.srcWrites).toEqual([uploaded]);
+  expect(image.parentNode?.className).toContain("gb-venue-sheet-cover");
+  expect(image.parentNode?.dataset).toEqual({ cover: "uploaded" });
+  venue = { ...venue, cover: { uploadedUrl: null } };
+  // Identity change via city/venue/url remounts resource; info-only null cover uses court fallback.
+  renderer.unmount();
+  await Promise.resolve();
+  venue = { id: "venue", name: "Зал", cover: { uploadedUrl: null } };
+  mount(() => <InfoOnly />);
+  const fallback = imageAt(1);
+  expect(fallback.srcWrites).toEqual([court]);
+  expect(fallback.parentNode?.dataset).toEqual({ cover: "default", fallback: "court" });
+  expect(fallback.alt).toBe("Бадминтонный корт");
+});
 it.each([null, "invalid", "https://external.invalid/photo.png"])("uses court for %s", value => {
   venue.cover.uploadedUrl = value; mount(() => <Selected />);
   const image = imageAt(); expect(image.srcWrites).toEqual([court]); expect(image.alt).toBe("Бадминтонный корт");

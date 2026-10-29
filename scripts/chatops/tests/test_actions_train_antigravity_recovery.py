@@ -261,13 +261,41 @@ class Successor(unittest.TestCase):
         with self.date_fixture('2026-10-24') as (receiver,budget,clock,req,fork,_):
             from test_actions_train import S
             card=dict(owned=True,active=None,pending=None,generation=86)
-            for left in (0,-1,S.UNKNOWN,float('inf'),True,None,'2',{},1.0):
+            # OD-020: positive finite / +inf are eligible — not in the invalid set.
+            # Keep zero/negative/bool/None/UNKNOWN/string/dict; add NaN and -inf.
+            for left in (0,-1,S.UNKNOWN,True,None,'2',{},float('nan'),float('-inf')):
                 with self.subTest(left=repr(left)),patch.object(budget,'remaining',return_value=left):
                     self.assertIsNone(receiver.qualification_plan({'mode':'active'},card,budget))
                     with self.assertRaises(Refused):receiver.qualification_request(req,{})
                     self.assertEqual(self.data[R.LINEAGE]['used_calls'],1)
                     self.assertFalse(R.reservation_path(self.root,self.q).exists())
             fork.assert_not_called()
+    def _od020_positive_reserves_once(self, left):
+        """Fresh date_fixture: eligible left reserves/forks once; lineage closed 2/2."""
+        with self.date_fixture('2026-10-24') as (receiver, budget, clock, req, fork, original):
+            card=dict(owned=True,active=None,pending=None,generation=86)
+            before_lineage=copy.deepcopy(self.data[R.LINEAGE])
+            with patch.object(budget,'remaining',return_value=left):
+                self.assertIsNotNone(receiver.qualification_plan({'mode':'active'},card,budget))
+                answer=receiver.qualification_request(req,{})
+                self.assertEqual(answer['status'],'running')
+                fork.assert_called_once()
+                self.assertEqual(self.data[R.LINEAGE]['used_calls'],2)
+                self.assertEqual(self.data[R.LINEAGE].get('ceiling'),2)
+                self.assertTrue(R.reservation_path(self.root,self.q).exists())
+                # No old UNKNOWN writes; closed 2/2 lineage schema preserved.
+                self.assertNotIn('UNKNOWN', json.dumps(self.data[R.LINEAGE]))
+                self.assertEqual(before_lineage.get('schema'),
+                                 self.data[R.LINEAGE].get('schema'))
+                self.assertEqual(
+                    json.loads((budget.outbox_root/'slot2/ledger.json').read_text()),
+                    original)
+    def test_daily_od020_positive_inf_reserves_once(self):
+        """OD-020: float('inf') eligible with fresh fixture."""
+        self._od020_positive_reserves_once(float('inf'))
+    def test_daily_od020_positive_one_point_zero_reserves_once(self):
+        """OD-020: 1.0 eligible with fresh fixture."""
+        self._od020_positive_reserves_once(1.0)
     def test_original_v1_remains_exact_integer_one_in_both_predicates(self):
         with self.date_fixture() as (receiver,budget,clock,req,fork,_):
             q={k:self.q[k] for k in ('issue','base','head','work')};q['task_sha256']=digest(N.qualification_task(q['base'],q['head']))

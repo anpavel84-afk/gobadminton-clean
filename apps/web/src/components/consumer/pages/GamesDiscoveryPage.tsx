@@ -16,7 +16,8 @@ import { DiscoveryGameCard } from "../discovery/DiscoveryGameCard";
 import { RadarStatusAffordance } from "../radar/RadarSessionProvider";
 import { GamesViewAction } from "../games/GamesViewAction";
 import { GamesMapViewport } from "../games/GamesMapViewport";
-import { GamesMapView } from "../games/GamesMapView";
+import { GamesMapView, warmGamesVenueMapModule } from "../games/GamesMapView";
+import { preloadGamesMapAssets, readMapPreloadBrowserEnv, scheduleMapPreloadIdle } from "../../../lib/map-preload";
 
 type LoadState = "loading" | "ready" | "filtered" | "empty" | "error" | "stale";
 type Feed = GamePage & { key: string; state: LoadState };
@@ -156,6 +157,33 @@ export function GamesDiscoveryPage() {
   useEffect(() => {
     if (today && selectedDay && selectedDay < today) setSelectedDay(today);
   }, [today, selectedDay]);
+
+  // Optional bounded map warm while the list is visible; never awaited by map navigation.
+  const preloadCityId = location?.cityId;
+  useEffect(() => {
+    if (!contextReady || view !== "list" || !preloadCityId) return;
+    const abort = new AbortController();
+    const kick = () => {
+      void preloadGamesMapAssets({
+        env: readMapPreloadBrowserEnv(preloadCityId),
+        warmModule: warmGamesVenueMapModule,
+        signal: abort.signal,
+      }).catch(() => { /* Optional preload; live map fetch remains authority. */ });
+    };
+    const cancelIdle = scheduleMapPreloadIdle(kick);
+    const root = document.querySelector('[data-surface="games-discovery"]');
+    const interested = (target: EventTarget | null) =>
+      target instanceof Element && !!target.closest(".gb-map-desktop-entry, .gb-games-view-action");
+    const onIntent = (event: Event) => { if (interested(event.target)) kick(); };
+    root?.addEventListener("pointerenter", onIntent, true);
+    root?.addEventListener("focusin", onIntent, true);
+    return () => {
+      abort.abort();
+      cancelIdle();
+      root?.removeEventListener("pointerenter", onIntent, true);
+      root?.removeEventListener("focusin", onIntent, true);
+    };
+  }, [contextReady, view, preloadCityId]);
 
   useEffect(() => {
     if (!contextReady || !location) return;

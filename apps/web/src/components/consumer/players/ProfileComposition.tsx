@@ -55,10 +55,16 @@ export function Toggle({ label, helper, on, disabled, onClick, describedBy, id }
   return <button type="button" id={id} className={`toggle-row ${on ? "is-on" : ""}`} aria-label={label} aria-describedby={describedBy} role="switch" aria-checked={on} disabled={disabled} onClick={onClick}><span><strong>{label}</strong>{helper && <small>{helper}</small>}</span><i aria-hidden="true"><b /></i></button>;
 }
 /** Native modal provides focus containment, Escape and focus restoration. */
-export function ProfileDialog({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+export function ProfileDialog({ title, onClose, children, size = "normal" }: {
+  title: string;
+  onClose: () => void;
+  children: ReactNode;
+  /** Functional width family; callers inherit desktop overlay skin without rewrite. */
+  size?: "normal" | "small";
+}) {
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => { const dialog = ref.current; const trigger = document.activeElement as HTMLElement | null; dialog?.showModal(); return () => { dialog?.close(); if (trigger?.isConnected) trigger.focus(); }; }, []);
-  return <dialog ref={ref} className="profile-dialog" aria-label={title} onCancel={e => { e.preventDefault(); onClose(); }} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}><header><h2>{title}</h2><CloseButton onClick={onClose} /></header>{children}</dialog>;
+  return <dialog ref={ref} className={`profile-dialog${size === "small" ? " profile-dialog--small" : ""}`} aria-label={title} onCancel={e => { e.preventDefault(); onClose(); }} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}><header><h2>{title}</h2><CloseButton onClick={onClose} /></header><div className="profile-dialog__body">{children}</div></dialog>;
 }
 /** Shared chooser: provider starts only after an explicit selection, even for one provider. */
 export function AuthChooser({ returnPath, intent, onClose }: { returnPath: string; intent?: AuthIntent; onClose: () => void }) {

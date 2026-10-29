@@ -7,11 +7,13 @@ import { Avatar, Badge, ProfileDialog } from "../players/ProfileComposition";
 import { PublicPlayerProfile, reportUnknownScopeKey } from "../players/PublicPlayerProfile";
 import { Button } from "../Button";
 import { CloseButton } from "../CloseButton";
+import { DesktopOverlayHeader } from "../DesktopOverlayHeader";
 import { GameCover } from "../games/GameCover";
 import { useVenuePopupModalLifecycle } from "../games/VenuePopup";
 import { useDesktopMapInspector } from "../games/DesktopMapInspector";
 import { RadarContact } from "./RadarContact";
 import { useRadarSession, useUnifiedDirectory } from "./RadarSessionProvider";
+import "../../../styles/desktop-overlays.css";
 
 function gameWhen(game: UnifiedUpcomingGame): string {
   const start = new Date(game.startsAt);
@@ -145,8 +147,7 @@ export function UnifiedPlayerPreview({ dialog = false, onClose, expanded: contro
   const reportScope = view.me && safePreview
     ? reportUnknownScopeKey(view.me.id, safePreview.player.publicPlayerId)
     : null;
-  const profileArticle = safePreview && profileMountKey && row.radar && <article className="unified-preview__expanded" aria-label={`Карточка: ${safePreview.player.displayName}`}>
-    <div className="unified-preview__sheet-head"><span /><CloseButton aria-label={collapseLabel} onClick={collapseSheet} /></div>
+  const profileInner = safePreview && profileMountKey && row.radar && <>
     <PublicPlayerProfile
       key={profileMountKey}
       publicPlayerId={safePreview.player.publicPlayerId}
@@ -162,15 +163,35 @@ export function UnifiedPlayerPreview({ dialog = false, onClose, expanded: contro
     />
     <Button variant="outline" aria-controls="radar-player-detail" onClick={() => setGamesView(true)}>Ближайшие публичные игры</Button>
     <p className="unified-preview__privacy"><small>Только публичная информация</small></p>
+  </>;
+  const profileArticle = safePreview && profileMountKey && row.radar && <article className="unified-preview__expanded" aria-label={`Карточка: ${safePreview.player.displayName}`}>
+    {!desktop && <div className="unified-preview__sheet-head"><span /><CloseButton aria-label={collapseLabel} onClick={collapseSheet} /></div>}
+    {profileInner}
   </article>;
 
-  const gamesInternal = safePreview && gamesView && <div className="unified-preview__games-view" data-player-view="games">
-    <header className="unified-preview__games-nav">
-      <button type="button" className="unified-preview__back" aria-label={`Назад к профилю ${safePreview.player.displayName}`} onClick={() => setGamesView(false)}>← {safePreview.player.displayName}</button>
-      <CloseButton aria-label={collapseLabel} onClick={collapseSheet} />
-    </header>
-    {gamesSection}
-  </div>;
+  const gamesInternal = safePreview && gamesView && (desktop
+    ? gamesSection
+    : <div className="unified-preview__games-view" data-player-view="games">
+      <header className="unified-preview__games-nav">
+        <button type="button" className="unified-preview__back" aria-label={`Назад к профилю ${safePreview.player.displayName}`} onClick={() => setGamesView(false)}>← {safePreview.player.displayName}</button>
+        <CloseButton aria-label={collapseLabel} onClick={collapseSheet} />
+      </header>
+      {gamesSection}
+    </div>);
+
+  const desktopChrome = desktop && safePreview ? (
+    <DesktopOverlayHeader
+      kicker={gamesView ? undefined : "Игрок"}
+      title={gamesView ? "Ближайшие публичные игры" : "Профиль игрока"}
+      back={gamesView ? {
+        label: safePreview.player.displayName,
+        ariaLabel: `Назад к профилю ${safePreview.player.displayName}`,
+        onClick: () => setGamesView(false),
+      } : undefined}
+      onClose={collapseSheet}
+      closeLabel={collapseLabel}
+    />
+  ) : null;
 
   const body = <div ref={focus} tabIndex={-1} className={`unified-preview ${expanded ? "is-expanded" : "is-compact"}`} data-preview-mode={expanded ? "expanded" : "compact"} data-player-view={gamesView ? "games" : "profile"} onKeyDown={e => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); if (gamesView) setGamesView(false); else onClose(); } }}>
     {statusBlock}
@@ -188,8 +209,11 @@ export function UnifiedPlayerPreview({ dialog = false, onClose, expanded: contro
 
   if (surface === "detail") {
     return <div ref={focus} tabIndex={-1} className="unified-preview is-expanded" data-preview-mode="expanded" data-player-view={gamesView ? "games" : "profile"} onKeyDown={e => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); escapeDetail.current(); } }}>
+      {desktopChrome}
       {statusBlock}
-      {safePreview && (gamesView ? gamesInternal : profileArticle)}
+      {safePreview && (desktop
+        ? <div className="unified-preview__scroll" data-player-view={gamesView ? "games" : "profile"}>{gamesView ? gamesInternal : profileArticle}</div>
+        : (gamesView ? gamesInternal : profileArticle))}
     </div>;
   }
 

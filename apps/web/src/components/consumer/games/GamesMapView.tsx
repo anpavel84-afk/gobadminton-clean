@@ -39,6 +39,11 @@ const MapView = dynamic(() => import("./GamesVenueMap").then(module => module.Ga
   loading: GamesMapModuleLoading,
 });
 
+/** Warm the existing GamesVenueMap chunk only — no MapLibre/WebGL/worker instantiation. */
+export function warmGamesVenueMapModule(): Promise<void> {
+  return import("./GamesVenueMap").then(() => undefined);
+}
+
 /** Public venues never depend on Radar consent, a location fix or a people query. */
 export function GamesMapView({ cityId, day, venueId, activity = "all", onReturnToList }: { cityId: string; day: string; venueId?: string; activity?: "all" | ActivityKind; onReturnToList?: () => void }) {
   const [snapshot, setSnapshot] = useState<{ cityId: string; venues: VenueSummary[]; games: Game[]; gamesReady: boolean } | null>(null);

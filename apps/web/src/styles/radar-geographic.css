@@ -34,6 +34,7 @@
 .g2-radar-map button:focus-visible,.g2-radar-map a:focus-visible { outline:3px solid var(--gb-purple); outline-offset:3px; }
 .g2-map-panel { position:absolute; right:80px; top:110px; bottom:48px; width:360px; max-width:calc(100% - 32px); padding:16px 20px; z-index:4; border:1px solid var(--gb-line); border-radius:18px; background:var(--gb-white); overflow:auto; }
 .g2-map-panel > header { display:flex; justify-content:flex-end; gap:12px; }.g2-map-panel > header button { min-width:44px; min-height:44px; background:transparent; color:var(--gb-ink); border:0; font-size:24px; cursor:pointer; }.g2-sheet-handle { display:none; }
+.g2-map-panel__body { min-width:0; }
 .g2-map-list-row { display:grid; gap:4px; width:100%; padding:14px 4px; text-align:left; border:0; border-top:1px solid var(--gb-line); background:transparent; color:var(--gb-ink); cursor:pointer; }.g2-map-list-row small { color:var(--gb-ink-soft); }
 .g2-radar-map .maplibregl-ctrl-attrib { font-family:inherit; max-width:100%; font-size:12px; background:var(--gb-white); }.g2-radar-map .maplibregl-ctrl-bottom-right { right:8px; bottom:calc(8px + env(safe-area-inset-bottom,0px)); }
 @media(max-width:900px) { .g2-map-panel { right:16px; width:340px; } }
@@ -126,6 +127,11 @@
 .gb-venue-popup .unified-preview__compact-cover { display:grid; place-items:center; background:var(--gb-lime-soft); }
 .gb-venue-popup .unified-preview__compact-cover .avatar { width:64px; height:64px; border-width:0; font-size:18px; }
 .gb-venue-popup .unified-preview.is-expanded { padding:0 16px 16px; box-sizing:border-box; }
+@media (min-width:1024px) {
+  /* Desktop inspector owns 40px gutter; drop duplicated outer host padding only. */
+  .gb-desktop-map-inspector .gb-venue-popup .unified-preview.is-expanded { padding:0; }
+  .gb-desktop-map-inspector .unified-preview__sheet-head { display:none; }
+}
 .unified-preview__sheet-head { display:flex; justify-content:flex-end; align-items:center; min-height:44px; margin:0 0 8px; }
 .unified-preview__games-nav { display:flex; align-items:center; gap:8px; position:sticky; top:0; z-index:2; min-height:56px; margin:0 -4px 12px; padding:8px 0; background:var(--gb-white); border-bottom:1px solid var(--gb-line); }
 .unified-preview__back { flex:1; min-width:0; min-height:44px; padding:8px 4px; border:0; background:transparent; color:var(--gb-ink); font:inherit; font-weight:600; text-align:left; cursor:pointer; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -470,4 +476,32 @@ svg.gb-venue-court-glyph { width:28px; height:28px; border-radius:0; box-shadow:
 }
 @media (prefers-reduced-motion: reduce) {
   .gb-map-filters-sheet .toggle-row > i b { transition: none; }
+}
+@media (min-width: 1024px) {
+  /* #365 «Просторный40» filters — after base sheet rules in this file. */
+  .gb-map-filters-sheet {
+    border-radius: 28px;
+    max-height: calc(100dvh - 48px);
+  }
+  .gb-map-filters-sheet__header {
+    position: relative;
+    grid-template-columns: 1fr;
+    align-items: start;
+    gap: 8px;
+    padding: 24px 40px 16px;
+    padding-right: calc(24px + 44px + 12px);
+  }
+  .gb-map-filters-sheet__handle { display: none; }
+  .gb-map-filters-sheet__header h2 {
+    font-size: 22px;
+    line-height: 26px;
+    font-weight: 700;
+  }
+  .gb-map-filters-sheet__header .gb-close-button {
+    position: absolute;
+    top: 24px;
+    right: 24px;
+  }
+  .gb-map-filters-sheet__body { padding: 16px 40px; }
+  .gb-map-filters-sheet__footer { padding: 12px 40px 16px; }
 }
