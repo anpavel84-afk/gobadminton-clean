@@ -717,6 +717,22 @@ class NativeFinishMetadata(unittest.TestCase):
         with self.assertRaises(N.ReviewError):
             self.parse(events)
 
+    def test_finish_active_fail_or_wrong_sha_before_done_without_params_rejects(self):
+        # F3: step_type=finish state=ACTIVE is admitted; params must bind for every
+        # finish state. ACTIVE FAIL/wrong SHA then DONE without params + PASS
+        # must not silently accept the terminal PASS.
+        for bad in (verdict(verdict='FAIL', findings=['blocker']),
+                    verdict(reviewed_sha='b' * 40)):
+            events = rows()
+            done_at = next(i for i, e in enumerate(events)
+                           if e.get('step_update', {}).get('step_type') == 'finish')
+            active = dict(conversation_id=CID, step_index=2, step_type='finish',
+                          state='ACTIVE',
+                          tool_info=dict(name='finish', parameters=copy.deepcopy(bad)))
+            events.insert(done_at, dict(event='step_update', step_update=active))
+            with self.subTest(bad=bad), self.assertRaises(N.ReviewError):
+                self.parse(events)
+
     def test_missing_finish_incomplete_command_and_saved_failure_stay_rejected(self):
         events = with_native_finish(rows(), active_params=verdict())
         events = [e for e in events if e.get('step_update', {}).get('step_type') != 'finish']

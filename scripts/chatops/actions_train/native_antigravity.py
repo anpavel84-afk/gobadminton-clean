@@ -2089,25 +2089,27 @@ def parse_stream(raw, head, model=MODEL, *, analysis_binding=None, strict_source
             tool_steps[(index, name)] = step['state']; tool_names.add(name)
             if analysis_binding is None and name == 'finish':
                 finish_params = _capture_finish_tool_params(step, head, finish_params)
-        elif step.get('step_type') == 'finish' and step.get('state') == 'DONE':
-            # Native protocol: TOOL finish ACTIVE then STEP_TYPE finish DONE at the
-            # same index. Legacy synthetic envelopes emit finish DONE with no tool.
-            # DONE may carry tool_info; capture/reject it the same way as TOOL finish
-            # so contradictory params cannot silently release an ACTIVE PASS.
+        elif step.get('step_type') == 'finish':
+            # Admit finish ACTIVE and DONE; capture/validate params on every state.
+            # Only DONE completes finish. TOOL finish ACTIVE/DONE path above is
+            # unchanged. Legacy finish DONE with no tool/params stays accepted.
             name = step.get('tool_name')
             need(name is None or name == 'finish', 'finish name mismatch')
-            index = step.get('step_index')
-            open_finish = [(i, n) for (i, n), state in tool_steps.items()
-                           if n == 'finish' and state != 'DONE']
-            if open_finish:
-                need(len(open_finish) == 1, 'multiple unfinished finish tools')
-                open_index, open_name = open_finish[0]
-                need(type(index) is int and index == open_index and open_name == 'finish',
-                     'finish index mismatch')
-                tool_steps[(open_index, open_name)] = 'DONE'
             if analysis_binding is None:
                 finish_params = _capture_finish_tool_params(step, head, finish_params)
-            finish = True
+            if step.get('state') == 'DONE':
+                # Native protocol: TOOL finish ACTIVE then STEP_TYPE finish DONE at
+                # the same index. DONE may also carry tool_info (captured above).
+                index = step.get('step_index')
+                open_finish = [(i, n) for (i, n), state in tool_steps.items()
+                               if n == 'finish' and state != 'DONE']
+                if open_finish:
+                    need(len(open_finish) == 1, 'multiple unfinished finish tools')
+                    open_index, open_name = open_finish[0]
+                    need(type(index) is int and index == open_index and open_name == 'finish',
+                         'finish index mismatch')
+                    tool_steps[(open_index, open_name)] = 'DONE'
+                finish = True
         inference |= step.get('step_type') == 'agent_response' and step.get('state') == 'DONE'
     need(all(state == 'DONE' for state in tool_steps.values()), 'incomplete native tool execution')
     out = events[-1].get('result')
