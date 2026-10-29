@@ -508,12 +508,18 @@ def fetch_project_admissions(gh_api_fn=None, *, config=None, admit_comment=None,
             if lean_run.MARKER not in (comment.get('body') or ''):
                 continue
             try:
-                found = lean_run.admit_comment(
+                admitted = lean_run.admit_comment(
                     comment, issue, {'id': REPO_ID}, config=config, all_comments=comments)
             except lean_run.LeanError as err:
-                holds.append({'issue': number, 'reason': 'admission:' + err.code})
-                found = None
-                break
+                # Keep full comment history; superseded/inapplicable machine
+                # admissions (e.g. pre-OD018 #182) must not break the scan and
+                # hide a later applicable validated Owner admission. Real Owner
+                # HOLD / authority failures still yield zero eligible when no
+                # later comment validates.
+                why = err.detail or err.code
+                holds.append({'issue': number, 'reason': 'admission:' + why})
+                continue
+            found = admitted
         if found is None:
             holds.append({'issue': number, 'reason': 'owner_admission_marker_required'})
             continue
@@ -1713,30 +1719,50 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None):
 
 
 def agy_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None,
-                _invoke=None):
+                _invoke=None, capacity_alternative_only=False):
     """AGY product QA via installed native.invoke(..., product=True).
 
     Binds product_role_ready()/parse_stream; never product_run_qa or fabricated
     READY markers; never bare [AGY_CLI, --model]. Shared Budget charges once
     before spawn (OD-020); Mode B private ledger is audit-only and must not
     double-authorize. Default remains Codex Medium when AGY is not READY.
+
+    capacity_alternative_only (parameter or task runtime property): after a
+    completed Codex capacity failure, AGY preflight must never reverse-fallback
+    to Codex. Ineligible/shared-budget-unavailable ⇒ no-call technical HOLD.
+    Ordinary AGY-before-any-Codex may still fall back to Medium before charge.
     """
     from providers import (
         prepare_qa_intent, mark_intent_phase, parse_agy_stream, ProviderError,
         role_ready, agy_quota_available, record_agy_charge, AGY_MODEL,
     )
+    # Runtime copy property only — never mutate immutable admission task JSON.
+    capacity_only = bool(
+        capacity_alternative_only
+        or (task or {}).get('capacity_alternative_only'))
+
+    def _codex_fallback_or_capacity_hold(phase, **extra):
+        if capacity_only:
+            if intent_path is not None:
+                mark_intent_phase(intent_path, phase, **extra)
+            raise ProviderError(
+                'agy_capacity_alternative_ineligible',
+                extra.get('error') or phase, charge='none')
+        return codex_qa_live(task=task, candidate_sha=candidate_sha,
+                            evidence_dir=evidence_dir, intent_path=intent_path)
+
     ok, reason = role_ready('agy_qa')
     if not ok:
         # Explicit not-ready fallback before any AGY charge / model launch.
-        return codex_qa_live(task=task, candidate_sha=candidate_sha,
-                            evidence_dir=evidence_dir, intent_path=intent_path)
+        return _codex_fallback_or_capacity_hold(
+            'agy_not_ready_fallback', error='agy_qa_not_ready', reason=reason)
     # Private ledger: UNKNOWN never replayed; no artificial day/5 authorization.
     avail, why, _rec = agy_quota_available(int(task['issue']))
     if not avail:
         if why == 'agy_quota_unknown_pending_reconcile':
             raise ProviderError('agy_quota_unknown_pending_reconcile', why, charge='none')
-        return codex_qa_live(task=task, candidate_sha=candidate_sha,
-                            evidence_dir=evidence_dir, intent_path=intent_path)
+        return _codex_fallback_or_capacity_hold(
+            'agy_not_ready_fallback', error=why or 'agy_quota_unavailable')
     evidence_root = Path(evidence_dir)
     if evidence_root.name.startswith('qa-'):
         evidence = evidence_root
@@ -1754,14 +1780,12 @@ def agy_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None,
     try:
         native = _load_native('native_antigravity')
     except LiveError:
-        mark_intent_phase(intent_path, 'agy_not_ready_fallback', error='native_missing')
-        return codex_qa_live(task=task, candidate_sha=candidate_sha,
-                            evidence_dir=evidence_dir, intent_path=intent_path)
+        return _codex_fallback_or_capacity_hold(
+            'agy_not_ready_fallback', error='native_missing')
     if not hasattr(native, 'invoke') or not hasattr(native, 'parse_stream'):
-        mark_intent_phase(intent_path, 'agy_not_ready_fallback',
-                          error='native_invoke_or_parse_stream_absent')
-        return codex_qa_live(task=task, candidate_sha=candidate_sha,
-                            evidence_dir=evidence_dir, intent_path=intent_path)
+        return _codex_fallback_or_capacity_hold(
+            'agy_not_ready_fallback',
+            error='native_invoke_or_parse_stream_absent')
     # Never call nonexistent product_run_qa; bind real invoke(product=True).
     if not task.get('worktree'):
         mark_intent_phase(intent_path, 'HOLD_no_automatic_replay', error='qa_worktree_required')
@@ -1791,15 +1815,13 @@ def agy_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None,
         budget = shared_agy_budget(int(task['issue']))
         left = budget.remaining('agy', 'qa', AGY_SLOT)
         if not budget_left_eligible(left):
-            mark_intent_phase(intent_path, 'agy_unavailable_fallback',
-                              error='shared_budget_ineligible', left=repr(left))
-            return codex_qa_live(task=task, candidate_sha=candidate_sha,
-                                evidence_dir=evidence_dir, intent_path=intent_path)
+            return _codex_fallback_or_capacity_hold(
+                'agy_unavailable_fallback',
+                error='shared_budget_ineligible', left=repr(left))
     except (LiveError, OSError, ValueError) as err:
-        mark_intent_phase(intent_path, 'agy_unavailable_fallback',
-                          error='shared_budget_unavailable', detail=type(err).__name__)
-        return codex_qa_live(task=task, candidate_sha=candidate_sha,
-                            evidence_dir=evidence_dir, intent_path=intent_path)
+        return _codex_fallback_or_capacity_hold(
+            'agy_unavailable_fallback',
+            error='shared_budget_unavailable', detail=type(err).__name__)
 
     # Fresh UID978 QA snapshot — prompt SOURCE_ROOT is the QA copy, not author tree.
     qa_snap = None
@@ -2363,9 +2385,11 @@ def _qa_resume_agy_capacity(claim, task, evidence, *, deadline=None):
     agy_task = dict(task)
     agy_task['attempt'] = f'capacity-fallback-{task.get("attempt") or 1}'
     agy_task['qaroute'] = ['agy_qa']
+    # Runtime-only constraint: never reverse-fallback to Codex on this path.
+    agy_task['capacity_alternative_only'] = True
     return agy_qa_live(
         task=agy_task, candidate_sha=claim['candidate_sha'],
-        evidence_dir=fallback)
+        evidence_dir=fallback, capacity_alternative_only=True)
 
 
 def qa_dispatch(claim, *, deadline=None):

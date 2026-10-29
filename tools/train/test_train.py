@@ -504,6 +504,79 @@ class ProjectQueueTests(unittest.TestCase):
             self.assertEqual(out['status'], 'queue_unavailable')
             self.assertEqual(out['calls'], 0)
 
+    def test_fetch_admissions_scans_past_stale_182_to_latest_valid(self):
+        """Old pre-OD018 machine comment must not hide a later valid admission."""
+        old, _ = owner_task_comment(
+            issue=182, owner_authority_comment=lean_run.OD018_SIGNED_COMMENT_ID)
+        new, _ = owner_task_comment(
+            issue=182, owner_authority_comment=lean_run.OD018_SIGNED_COMMENT_ID)
+        new['id'] = lean_run.OD018_SIGNED_COMMENT_ID + 100
+        signed = {
+            'id': lean_run.OD018_SIGNED_COMMENT_ID,
+            'user': {'id': lean_live.OWNER_ID},
+            'body': 'OD-018 Supersedes old OFF for guarded DEV; no PROD',
+        }
+        projection = {
+            'items': [{'issue': 182, 'status': 'ready', 'state': 'OPEN', 'priority': 300}],
+            'holds': [],
+        }
+        with mock.patch.object(lean_live, 'read_canonical_project', return_value=projection), \
+                mock.patch.object(lean_live, 'gh_api', return_value=[old, signed, new]):
+            result = lean_live.fetch_project_admissions()
+        self.assertEqual(result['status'], 'ok')
+        self.assertEqual(len(result['admissions']), 1)
+        self.assertEqual(result['admissions'][0]['comment_id'], new['id'])
+        stale_holds = [
+            h for h in result['holds']
+            if 'issue_182_stale_machine_comment' in str(h.get('reason'))]
+        self.assertTrue(stale_holds)
+        # Same new admission alone still admits.
+        with mock.patch.object(lean_live, 'read_canonical_project', return_value=projection), \
+                mock.patch.object(lean_live, 'gh_api', return_value=[signed, new]):
+            alone = lean_live.fetch_project_admissions()
+        self.assertEqual(len(alone['admissions']), 1)
+
+    def test_fetch_admissions_wrong_owner_hold_or_only_stale_zero_eligible(self):
+        projection = {
+            'items': [{'issue': 182, 'status': 'ready', 'state': 'OPEN', 'priority': 300}],
+            'holds': [],
+        }
+        signed = {
+            'id': lean_run.OD018_SIGNED_COMMENT_ID,
+            'user': {'id': lean_live.OWNER_ID},
+            'body': 'OD-018 Supersedes old OFF for guarded DEV; no PROD',
+        }
+        # Only stale machine comment → zero eligible (history retained via holds).
+        old, _ = owner_task_comment(
+            issue=182, owner_authority_comment=lean_run.OD018_SIGNED_COMMENT_ID)
+        with mock.patch.object(lean_live, 'read_canonical_project', return_value=projection), \
+                mock.patch.object(lean_live, 'gh_api', return_value=[old, signed]):
+            only_stale = lean_live.fetch_project_admissions()
+        self.assertEqual(only_stale['admissions'], [])
+        # Wrong Owner user id on machine marker → skipped; zero eligible.
+        wrong, _ = owner_task_comment(
+            issue=182, owner_authority_comment=lean_run.OD018_SIGNED_COMMENT_ID)
+        wrong['id'] = lean_run.OD018_SIGNED_COMMENT_ID + 100
+        wrong['user'] = {'id': 1, 'login': 'not-owner'}
+        with mock.patch.object(lean_live, 'read_canonical_project', return_value=projection), \
+                mock.patch.object(lean_live, 'gh_api', return_value=[signed, wrong]):
+            bad_owner = lean_live.fetch_project_admissions()
+        self.assertEqual(bad_owner['admissions'], [])
+        # Real Owner HOLD marker blocks even a fresh-looking admission id.
+        hold_cmt = {
+            'id': lean_run.OD018_SIGNED_COMMENT_ID + 50,
+            'user': {'id': lean_live.OWNER_ID},
+            'body': 'GOBADMINTON_LEAN_HOLD owner stop',
+        }
+        fresh, _ = owner_task_comment(
+            issue=182, owner_authority_comment=lean_run.OD018_SIGNED_COMMENT_ID)
+        fresh['id'] = lean_run.OD018_SIGNED_COMMENT_ID + 200
+        with mock.patch.object(lean_live, 'read_canonical_project', return_value=projection), \
+                mock.patch.object(lean_live, 'gh_api',
+                                  return_value=[signed, hold_cmt, fresh]):
+            held = lean_live.fetch_project_admissions()
+        self.assertEqual(held['admissions'], [])
+
 
 class ParserQuotaTests(unittest.TestCase):
     def test_stale_sha_verdict_rejected(self):
@@ -1371,6 +1444,31 @@ class NextReadyTests(unittest.TestCase):
         nxt = lean_run.pick_next_ready([a, b], uat_pending={1})
         self.assertEqual(nxt['issue'], 2)
 
+    def test_unmet_dependency_not_ready_without_done_evidence(self):
+        """Non-empty deps require done_issues; unstarted/absent ≠ done."""
+        dependent = {'issue': 375, 'task': {'priority': 200, 'dependencies': [372]}}
+        self.assertIsNone(
+            lean_run.pick_next_ready([dependent], done_issues=set(), blocked_issues=set()))
+        self.assertIsNone(
+            lean_run.pick_next_ready([dependent], done_issues={999}, blocked_issues=set()))
+        # Independent ready still selected while a dependent stays unmet.
+        independent = {'issue': 370, 'task': {'priority': 50, 'dependencies': []}}
+        nxt = lean_run.pick_next_ready(
+            [dependent, independent], done_issues=set(), blocked_issues={371})
+        self.assertEqual(nxt['issue'], 370)
+
+    def test_completed_uat_pending_prereq_satisfies_dependency(self):
+        """Technical DEV accepted (UAT pending) counts as done for deps."""
+        dependent = {'issue': 375, 'task': {'priority': 200, 'dependencies': [372]}}
+        nxt = lean_run.pick_next_ready(
+            [dependent], done_issues={372}, blocked_issues=set(), uat_pending={372})
+        self.assertEqual(nxt['issue'], 375)
+        # Priority/order among ready independents preserved when another is blocked.
+        a = {'issue': 10, 'task': {'dependencies': [], 'priority': 1}}
+        b = {'issue': 11, 'task': {'dependencies': [], 'priority': 9}}
+        nxt2 = lean_run.pick_next_ready([a, b], blocked_issues={10}, done_issues=set())
+        self.assertEqual(nxt2['issue'], 11)
+
 
 class AuthorClaimsTests(unittest.TestCase):
     def test_author_pass_claims_one_launch_not_ready(self):
@@ -2043,6 +2141,73 @@ class Od018TransportSeamTests(unittest.TestCase):
             self.assertEqual(state['merge_calls'], 1)
             self.assertEqual(deploy_calls['n'], 1)
             self.assertNotIn('resume_provider', out2['claim'] or {})
+
+    def test_capacity_agy_resume_shared_budget_zero_never_calls_codex(self):
+        """After Codex capacity, exhausted AGY shared budget must not launch Codex."""
+        from types import SimpleNamespace
+        task = {
+            'issue': 375, 'worktree': '/unused/frozen',
+            'runtime_base_sha': 'a' * 40, 'independentfallback': ['agy_qa'],
+        }
+        claim = {
+            'issue': 375, 'candidate_sha': 'b' * 40, 'task': task,
+            'resume_provider': 'agy_qa',
+        }
+        with tempfile.TemporaryDirectory() as td:
+            ev = Path(td)
+            with mock.patch.object(providers, 'role_ready', return_value=(True, {})), \
+                    mock.patch.object(providers, 'agy_quota_available',
+                                      return_value=(True, 'ok', {})), \
+                    mock.patch.object(lean_live, '_load_native',
+                                      return_value=SimpleNamespace(
+                                          invoke=lambda: None, parse_stream=lambda: None)), \
+                    mock.patch.object(lean_live, 'git', side_effect=['b' * 40, '']), \
+                    mock.patch.object(lean_live, 'load_short_rules',
+                                      return_value=('rules', 'hash', Path('/unused/rules'))), \
+                    mock.patch.object(lean_live, 'shared_agy_budget',
+                                      return_value=SimpleNamespace(
+                                          remaining=lambda *a: 0)), \
+                    mock.patch.object(lean_live, 'codex_qa_live',
+                                      return_value={'unexpected': 'second Codex call'}) as codex:
+                with self.assertRaises(providers.ProviderError) as ctx:
+                    lean_live._qa_resume_agy_capacity(claim, task, ev)
+                self.assertEqual(ctx.exception.code, 'agy_capacity_alternative_ineligible')
+                self.assertEqual(ctx.exception.charge, 'none')
+                self.assertEqual(codex.call_count, 0)
+
+    def test_capacity_agy_ineligible_wake_preserves_pending_not_dev_accepted(self):
+        """Known no-call AGY capacity HOLD must not become false DEV accepted."""
+        with tempfile.TemporaryDirectory() as td:
+            cand = _sha(77)
+            adapters, state = make_flow_adapters(td, shas=[cand])
+            state['codex_calls'] = 0
+
+            def qa(claim):
+                state['qa_calls'] += 1
+                resume = claim.get('resume_provider') or claim.get('qa_provider')
+                if resume == 'agy_qa':
+                    raise providers.ProviderError(
+                        'agy_capacity_alternative_ineligible',
+                        'shared_budget_ineligible', charge='none')
+                state['codex_calls'] += 1
+                raise providers.ProviderError(
+                    'wake_defer_capacity_fallback', 'remaining<1860', charge='charged')
+
+            adapters.qa = qa
+            comment, _ = owner_task_comment(
+                issue=912, independentfallback=['agy_qa'], qaroute=['codex_sol_medium'])
+            adm = lean_run.admit_comment(
+                comment, {'number': 912, 'state': 'open'}, {'id': REPO_ID})
+            out1 = lean_run.execute_claim(adm, adapters, results_root=td)
+            self.assertEqual(out1['status'], 'wake_resume')
+            self.assertEqual(out1['claim'].get('resume_provider'), 'agy_qa')
+            out2 = lean_run.execute_claim(adm, adapters, results_root=td)
+            self.assertEqual(out2['status'], 'wake_resume')
+            self.assertEqual(out2['claim']['phase'], 'WAKE_RESUME')
+            self.assertEqual(out2['claim'].get('resume_provider'), 'agy_qa')
+            self.assertNotEqual(out2['status'], 'dev_accepted_uat_pending')
+            self.assertEqual(state['codex_calls'], 1)
+            self.assertEqual(state['merge_calls'], 0)
 
 
 if __name__ == '__main__':

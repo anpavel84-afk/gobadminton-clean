@@ -533,17 +533,26 @@ def record_uat_not_tested(claim_path, issue, sha):
 
 
 def pick_next_ready(admissions, *, blocked_issues=None, uat_pending=None, done_issues=None):
-    """Continue independent ready work even if local BLOCKED or Owner UAT pending."""
+    """Continue independent ready work even if local BLOCKED or Owner UAT pending.
+
+    Non-empty dependencies require real done_issues evidence (technical DEV
+    accepted; UAT=NOT_TESTED pending allowed). Unstarted, absent, or otherwise
+    unfinished prerequisites keep the dependent not-ready — never invent
+    completion from an open Issue or from mere non-blocked status.
+    """
     blocked = set(blocked_issues or ())
     uat = set(uat_pending or ())
     done = set(done_issues or ())
     ready = []
     for adm in admissions:
         issue = int(adm['issue'])
-        deps = set(adm.get('task', {}).get('dependencies') or [])
+        deps = {int(d) for d in (adm.get('task', {}).get('dependencies') or [])}
         if issue in blocked or issue in done:
             continue
         if deps & blocked:
+            continue
+        # Paid author execution only when every declared dependency is done.
+        if deps and not deps <= done:
             continue
         if issue in uat:
             continue
@@ -1181,9 +1190,12 @@ def execute_claim(admission, adapters, *, results_root, config=None, parent_leas
                         task=qa_task, candidate_sha=claim['candidate_sha'],
                         evidence_dir=qa_evidence, launcher=None)
             except ProviderError as err:
-                if err.code == 'wake_defer_capacity_fallback':
-                    # Codex capacity already charged; persist next AGY operation —
-                    # no AGY paid call this wake; next wake skips Codex.
+                if err.code in (
+                        'wake_defer_capacity_fallback',
+                        'agy_capacity_alternative_ineligible'):
+                    # Codex capacity already charged (or AGY alternative ineligible
+                    # after that charge): persist pending AGY alternative — never
+                    # reverse to Codex; no false DEV accepted; no unlimited paid retry.
                     claim = mark_phase(
                         path, 'WAKE_RESUME', stage='qa',
                         wake='capacity_fallback_budget', error=err.code,
