@@ -474,8 +474,9 @@ export function CreateGamePresentation({ embedded = false, onClose, invitePlayer
       {step === "auth" && <div className="gb-game-feedback" data-state="auth"><h1>Войдите, чтобы создать игру</h1><p>После входа вы сможете заполнить игру и проверить её перед публикацией.</p><AuthEntry returnPath={returnPath} intent={{ kind: "create", activityKind }} />{error && <p role="alert">{error}</p>}</div>}
       {/* Keep local photo/crop state alive for the preview → edit round trip. */}
       {(step === "form" || step === "preview") && <>
-        <header className="gb-create-header" hidden={step !== "form"} style={step !== "form" ? { display: "none" } : undefined}><span className="gb-game-kicker">Соберите свою игру</span><h1>Создать игру</h1><p>Выберите место, время и условия. Перед публикацией вы сможете всё проверить.</p></header>
-        <form className="gb-game-form" data-surface="create-form" hidden={step !== "form"} style={step !== "form" ? { display: "none" } : undefined} onSubmit={event => { event.preventDefault(); void onCheck(); }}>
+        <header className="gb-page-local-header gb-create-header" hidden={step !== "form"} style={step !== "form" ? { display: "none" } : undefined}><span className="gb-game-kicker">Соберите свою игру</span><h1>Создать игру</h1><p>Выберите место, время и условия. Перед публикацией вы сможете всё проверить.</p></header>
+        <div className="gb-create-layout" hidden={step !== "form"} style={step !== "form" ? { display: "none" } : undefined}>
+        <form className="gb-game-form" data-surface="create-form" onSubmit={event => { event.preventDefault(); void onCheck(); }}>
           <section className="gb-game-form-group" aria-labelledby="gb-create-game-section-1"><h2 id="gb-create-game-section-1" className="gb-game-form-group-title">Основное</h2><div className="gb-game-fields">
             {trainer && <div className="gb-game-field gb-game-field--wide"><span>Тип игры</span><div className="gb-game-segmented" role="group" aria-label="Тип игры"><button type="button" aria-pressed={activityKind === "regular"} onClick={() => setActivityKind("regular")}>Обычная игра</button><button type="button" aria-pressed={activityKind === "trainer_led"} onClick={() => setActivityKind("trainer_led")}>С тренером</button></div></div>}
             <label className="gb-game-field gb-game-field--wide">Название (необязательно)<input id="title" maxLength={160} value={draft.title} onChange={e => setDraft({ ...draft, title: e.target.value })} placeholder="Например, парная игра в субботу" /></label>
@@ -549,6 +550,11 @@ export function CreateGamePresentation({ embedded = false, onClose, invitePlayer
           {error && <div className="gb-game-notice" role="alert"><p>{error}</p><Button variant="outline" type="button" onClick={() => setReload(n => n + 1)}>Обновить проверку входа</Button></div>}
           <div className="gb-game-form-actions">{embedded ? <Button variant="outline" onClick={onClose}>Отмена</Button> : <Button variant="outline" href="/games">Отмена</Button>}<Button type="submit" disabled={!photoReady}>Далее — к созданию</Button></div>
         </form>
+        {!embedded && <aside className="gb-create-rail" aria-label="Подсказки создания">
+          <div className="gb-create-rail__tip"><strong>Соберите своих</strong><p>Место, время и понятные условия помогут игрокам выбрать встречу.</p></div>
+          <div className="gb-create-rail__note"><strong>Видимость</strong><p>«В поиске» — публичная игра. «Только по ссылке» не добавляет игру в поиск.</p></div>
+        </aside>}
+        </div>
       </>}
       {step === "preview" && previewGame && <div className="gb-game-preview" data-surface="create-preview">
         <header className="gb-game-preview-heading"><h2>Проверка перед созданием</h2><p>Проверьте данные. Игра появится после нажатия «Создать игру».</p></header>

@@ -253,6 +253,38 @@
 .fr3 .profile-field textarea { resize:vertical; }
 .fr3.trainer-editor { width:100%; max-width:none; margin:0; }
 .fr3.trainer-editor > :not(.gb-page-local-header) { max-width:880px; }
+.fr3.trainer-editor .trainer-editor__stack { display:grid; gap:24px; max-width:880px; }
+.fr3.trainer-editor .trainer-editor__lede { margin:0; color:var(--gb-ink-soft); }
+.fr3.trainer-editor .trainer-editor__form { margin:0; }
+.fr3.trainer-editor .trainer-editor__actions {
+  display:flex; flex-wrap:wrap; gap:12px; align-items:center;
+  padding:16px 20px; border:1px solid var(--gb-line); border-radius:20px; background:var(--gb-white);
+}
+.fr3.friends-page { width:100%; max-width:none; margin:0; padding-bottom:90px; }
+.fr3.friends-page > .gb-page-local-header > p { margin:0; max-width:740px; color:var(--gb-ink-soft); }
+.fr3.friends-page .friends-page__body { width:100%; max-width:880px; display:grid; gap:24px; }
+.fr3.friends-page .friends-tabs { display:flex; flex-wrap:wrap; gap:8px; margin:0; }
+.fr3.friends-page .friends-tabs__tab {
+  min-height:44px; padding:10px 16px; border:1px solid var(--gb-line); border-radius:999px;
+  background:var(--gb-white); color:var(--gb-ink); font:inherit; font-size:14px; font-weight:600; cursor:pointer;
+}
+.fr3.friends-page .friends-tabs__tab[aria-pressed="true"] { background:var(--gb-ink); color:var(--gb-white); border-color:var(--gb-ink); }
+.fr3.friends-page .friends-list { display:grid; gap:16px; }
+.fr3.friends-page .friends-row {
+  padding:24px 28px; border:1px solid var(--gb-line); border-radius:20px; background:var(--gb-white);
+  display:grid; gap:16px; min-width:0;
+}
+.fr3.friends-page .friends-row__identity {
+  display:flex; align-items:center; gap:16px; min-width:0; color:inherit; text-decoration:none;
+}
+.fr3.friends-page .friends-row__copy { flex:1; min-width:0; display:grid; gap:4px; }
+.fr3.friends-page .friends-row__copy strong { font-size:18px; }
+.fr3.friends-page .friends-row__open { flex:none; color:var(--gb-ink-soft); font-size:14px; font-weight:600; }
+.fr3.friends-page .friends-row .player-card,
+.fr3.friends-page .friends-row .profile-section { border:0; box-shadow:none; background:transparent; padding:0; margin:0; }
+.fr3.friends-page .friends-row > div { display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; min-height:48px; padding-top:16px; border-top:1px solid var(--gb-line); }
+.fr3.friends-page .friends-row > div > p { margin:0; font-weight:600; }
+.fr3.friends-page .friends-row .profile-form-actions { margin-top:0; }
 .fr3 .profile-dialog { color:var(--gb-ink); background:var(--gb-white); width:min(560px,calc(100vw - 32px)); max-height:calc(100dvh - 48px); padding:28px; border:1px solid var(--gb-line); border-radius:28px; overflow:auto; box-shadow:var(--gb-shadow-elevated); }
 .fr3 .profile-dialog::backdrop { background:rgba(19,34,26,.55); }
 .fr3 .profile-dialog > header { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
@@ -397,11 +429,13 @@
  * Scoped to the editor/disclosure so unrelated profile dialogs are unchanged.
  */
 @media (max-width: 720px) {
+  .fr3.trainer-editor .trainer-editor__actions,
   .fr3.trainer-editor .profile-form-actions,
   .fr3 .trainer-disclosure .profile-form-actions {
     flex-direction: column;
     align-items: stretch;
   }
+  .fr3.trainer-editor .trainer-editor__actions > .gb-c23-btn,
   .fr3.trainer-editor .profile-form-actions > .gb-c23-btn,
   .fr3 .trainer-disclosure .profile-form-actions > .gb-c23-btn {
     flex: none;

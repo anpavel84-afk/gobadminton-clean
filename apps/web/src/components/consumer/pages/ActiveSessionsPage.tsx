@@ -140,14 +140,15 @@ export function ActiveSessionsPage() {
           )}
           {state === "ready" && (
             <>
-              <section className="settings-list account-security-list" aria-label="Активные сессии">
+              <section className="settings-panel account-security-list" aria-label="Активные сессии">
+                <h2>Ваши устройства</h2>
                 {items.map((item) => (
                   <div className="data-row" key={item.id}>
                     <span>
-                      <small>{item.current ? "Текущая сессия" : "Другая сессия"}</small>
-                      <strong>
+                      <strong>{item.current ? "Текущая сессия" : "Другая сессия"}</strong>
+                      <small>
                         {item.current ? "Этот браузер" : "Активна на другом устройстве"}
-                      </strong>
+                      </small>
                     </span>
                     <em>{item.current ? "Сейчас" : formatWhen(item.lastSeenAt)}</em>
                     {item.current ? (
@@ -172,13 +173,17 @@ export function ActiveSessionsPage() {
               </section>
               <div className="account-security-actions">
                 <Button
-                  variant="dark"
+                  variant="outline"
                   disabled={Boolean(busy) || others === 0}
                   onClick={() => void onRevokeOthers()}
                 >
                   {busy === "others" ? "Завершаем…" : "Завершить другие сессии"}
                 </Button>
               </div>
+              <aside className="utility-note account-security-hint" role="note">
+                <strong>Безопасность аккаунта</strong>
+                <p>Завершение сессии требует актуальной проверки состояния.</p>
+              </aside>
             </>
           )}
           {notice && (

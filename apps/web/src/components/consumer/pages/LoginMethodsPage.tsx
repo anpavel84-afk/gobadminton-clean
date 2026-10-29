@@ -205,12 +205,13 @@ export function LoginMethodsPage() {
             </section>
           )}
           {state === "ready" && (
-            <section className="settings-list account-security-list" aria-label="Способы входа">
+            <section className="settings-panel account-security-list" aria-label="Способы входа">
+              <h2>Подключение способов входа</h2>
               {items.map((item) => (
                 <div className="data-row" key={item.provider}>
                   <span>
-                    <small>{item.label}</small>
-                    <strong>{statusCopy(item)}</strong>
+                    <strong>{item.label}</strong>
+                    <small>{statusCopy(item)}</small>
                   </span>
                   <em>{item.status === "connected" && item.linkedAt ? new Date(item.linkedAt).toLocaleDateString("ru-RU") : ""}</em>
                   {item.status === "connected" ? (
@@ -237,7 +238,7 @@ export function LoginMethodsPage() {
                 </div>
               ))}
               <div className="data-row" key="email">
-                <span><small>Email</small><strong>{email?.maskedEmail ?? (emailAvailable ? "Можно подключить" : "Сейчас недоступен")}</strong></span>
+                <span><strong>Email</strong><small>{email?.maskedEmail ?? (emailAvailable ? "Не добавлен" : "Сейчас недоступен")}</small></span>
                 <em>{email ? new Date(email.linkedAt).toLocaleDateString("ru-RU") : ""}</em>
                 <div className="profile-form-actions">
                   {email ? <><Button variant="outline" disabled={emailBusy || Boolean(busy) || !emailAvailable} onClick={() => { setNotice(null); setEmailFlow("change_current"); }}>Изменить email</Button>
@@ -247,7 +248,7 @@ export function LoginMethodsPage() {
               </div>
             </section>
           )}
-          {state === "ready" && connectedCount <= 1 && <p className="account-security-hint">Последний способ входа нельзя отключить. Сначала подключите другой.</p>}
+          {state === "ready" && <aside className="utility-note account-security-hint" role="note"><strong>Безопасность аккаунта</strong><p>Отключение последнего способа входа недоступно. Совпадение email не объединяет профили.</p></aside>}
           {state === "ready" && emailFlow && me && <ProfileDialog title={emailFlow === "link" ? "Добавить email" : emailFlow === "unlink" ? "Отключить email?" : "Изменить email"} onClose={closeEmail}>
             {emailFlow === "unlink" ? <><p>Вы больше не сможете входить через {email?.maskedEmail}. Другой подключённый способ входа сохранится.</p><div className="profile-form-actions"><Button variant="outline" disabled={emailBusy || Boolean(busy)} onClick={closeEmail}>Отмена</Button><Button variant="danger" disabled={emailBusy || Boolean(busy)} onClick={() => void revokeEmail()}>Подтвердить отключение</Button></div></>
               : <><EmailCodeForm key={emailFlow} purpose={emailFlow} csrfToken={me.csrfToken} currentEmail={email?.maskedEmail} proofChallengeId={proofId} onCancel={closeEmail} onRestartProof={() => { setProofId(undefined); setEmailFlow("change_current"); }} onBusyChange={setEmailBusy} onSuccess={result => {

@@ -5,12 +5,16 @@ const groups = [
   { title: "Продукт", items: [
     { label: "Игры", href: "/games" }, { label: "Игроки", href: "/players" }, { label: "Мои игры", href: "/my-games" },
   ] },
-  { title: "Сервис", items: [{ label: "О сервисе", href: "/about" }, { label: "Помощь", href: "/help" }, { label: "Контакты" }] },
-  { title: "Документы", items: [{ label: "Пользовательское соглашение", href: "/legal/terms" }, { label: "Политика конфиденциальности", href: "/legal/privacy" }, { label: "Правила сервиса", href: "/legal/rules" }] },
-  { title: "Оператор", items: [{ label: "Реквизиты" }, { label: "Информация об операторе" }] },
+  { title: "Сервис", items: [{ label: "О сервисе", href: "/about" }, { label: "Помощь", href: "/help" }, { label: "Настройки", href: "/profile/settings" }] },
+  { title: "Документы и оператор", items: [
+    { label: "Пользовательское соглашение", href: "/legal/terms" },
+    { label: "Политика конфиденциальности", href: "/legal/privacy" },
+    { label: "Правила сервиса", href: "/legal/rules" },
+    { label: "Информация об операторе" },
+  ] },
 ] satisfies { title: string; items: { label: string; href?: string }[] }[];
 
-/** SiteFooter / DesktopFooter. Unaccepted destinations remain noninteractive. */
+/** SiteFooter / DesktopFooter. Four groups: brand + product + service + documents/operator. */
 export function DesktopFooter() {
   return (
     <footer className="gb-site-footer">
@@ -18,7 +22,6 @@ export function DesktopFooter() {
         <div className="gb-site-footer-brand">
           <Link href="/games" aria-label="GoBadminton — Игры" className="gb-brand-link"><ConsumerLogo /></Link>
           <p>Люди. Игра. Больше хороших дней.</p>
-          <img src="/brand/footer-shape.svg" alt="" aria-hidden="true" />
         </div>
         {groups.map((group) => (
           <div className="gb-site-footer-group" key={group.title}>

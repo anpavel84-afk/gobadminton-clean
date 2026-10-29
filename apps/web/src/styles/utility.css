@@ -1,12 +1,53 @@
-/* Frozen StyleGuide section 09 settings-list + Kit SurfacePanel/ListRow.
+/* Frozen StyleGuide section 09 settings panels + Kit SurfacePanel/ListRow.
    #394: outer utility wrapper stays on the shell left rail; only the body is narrow. */
 .fr3.utility-page { width: 100%; min-width: 0; max-width: none; margin: 0; }
 .fr3.utility-page > .gb-page-local-header > h1,
 .fr3.utility-page > h1 { margin: 0; font-size: 48px; letter-spacing: -.035em; line-height: 1.06; font-weight: 700; overflow-wrap: anywhere; }
+.fr3.utility-page > .gb-page-local-header > p,
 .fr3.utility-page > .gb-page-local-header + .utility-page__body > p:first-child,
-.fr3.utility-page > h1 + p { color: var(--gb-ink-soft); }
+.fr3.utility-page > h1 + p { color: var(--gb-ink-soft); max-width: 740px; }
 .fr3.utility-page > .utility-page__body { width: 100%; max-width: 880px; min-width: 0; }
+.fr3.utility-page > .utility-page__stack { display: grid; gap: 24px; }
 .fr3.utility-page > .back-link { margin: 0 0 16px; min-height: 44px; }
+
+.fr3 .settings-panel {
+  display: grid; gap: 0; padding: 28px; border: 1px solid var(--gb-line);
+  border-radius: 20px; background: var(--gb-white); min-width: 0;
+}
+.fr3 .settings-panel > h2 {
+  margin: 0 0 20px; padding: 0; color: var(--gb-ink); font-size: 26px;
+  line-height: 1.2; letter-spacing: -.6px; font-weight: 700; text-transform: none;
+}
+.fr3 .settings-panel__row {
+  min-height: 56px; padding: 16px 0; border: 0; border-top: 1px solid var(--gb-line);
+  background: transparent; color: var(--gb-ink); display: flex; align-items: center;
+  justify-content: space-between; gap: 16px; text-align: left; text-decoration: none;
+}
+.fr3 .settings-panel__row:first-of-type { border-top: 0; padding-top: 0; }
+.fr3 .settings-panel__row span { display: grid; gap: 4px; min-width: 0; }
+.fr3 .settings-panel__row strong { font-size: 16px; font-weight: 700; }
+.fr3 .settings-panel__row small { color: var(--gb-ink-soft); font-size: 13px; text-align: left; }
+.fr3 .settings-panel__open {
+  display: inline-flex; align-items: center; gap: 6px; flex: none;
+  color: var(--gb-ink-soft); font-size: 14px; font-weight: 600;
+}
+.fr3 .settings-panel__rule { height: 1px; background: var(--gb-line); margin: 16px 0; }
+.fr3 .settings-panel__actions {
+  display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+}
+.fr3 .settings-panel__actions > :is(button,a) {
+  min-height: 48px; padding: 10px 16px; border: 1px solid var(--gb-line);
+  border-radius: 12px; background: var(--gb-white); color: var(--gb-ink);
+  display: inline-flex; align-items: center; gap: 10px; font: inherit; font-weight: 600; cursor: pointer;
+}
+.fr3 .settings-panel__actions > button:disabled { cursor: not-allowed; color: var(--gb-ink-soft); }
+.fr3 .settings-panel__actions .settings-list__logout { font-weight: 600; }
+.fr3 .settings-panel__actions .settings-list__danger { color: var(--gb-danger); background: #fff0ed; border-color: #f2d2ce; }
+.fr3 .settings-panel__actions .settings-list__danger small { color: var(--gb-ink-soft); font-size: 12px; font-weight: 500; }
+.fr3 .settings-panel__row:hover { background: transparent; color: var(--gb-ink); }
+.fr3 .settings-panel__row:hover .settings-panel__open { color: var(--gb-ink); }
+
+/* Legacy list kept for any remaining callers; prefer settings-panel. */
 .fr3 .settings-list { display:flex; flex-direction:column; padding:24px; border:1px solid var(--gb-line); border-radius:var(--gb-radius-md); background:var(--gb-white); margin-top:24px; }
 .fr3 .settings-list h2 { margin:0; padding:15px 0 7px; color:var(--gb-ink-soft); font-size:11px; text-transform:uppercase; letter-spacing:.07em; }
 .fr3 .settings-list > :is(button,a) { min-height:46px; padding:10px 0; border:0; border-top:1px solid var(--gb-line); background:transparent; color:var(--gb-ink); display:flex; align-items:center; justify-content:space-between; gap:16px; text-align:left; cursor:pointer; }
@@ -16,39 +57,58 @@
 .fr3 .settings-list .settings-list__danger { color:var(--gb-danger); font-weight:600; }
 .fr3 .settings-list > :is(a,button:not(:disabled)):hover { background:var(--gb-paper); }
 .fr3 .settings-list > button[aria-pressed="true"] { color:var(--gb-ink); background:var(--gb-lime-soft); }
-.fr3 .location-city-list > button:first-child { border-top:0; }
+
+.fr3 .utility-note {
+  padding: 20px 24px; border-radius: 16px; background: var(--gb-purple-soft);
+  display: grid; gap: 6px; align-content: start;
+}
+.fr3 .utility-note strong { color: var(--gb-ink); font-size: 15px; }
+.fr3 .utility-note p { margin: 0; color: var(--gb-ink-soft); font-size: 14px; line-height: 1.5; }
+
 /* Kit DataRow — Style Guide §08 Identity/status & data */
-.fr3 .account-security-list { gap:10px; }
+.fr3 .account-security-list { gap: 0; }
 .fr3 .account-security-list .data-row {
-  padding:14px; border:1px solid var(--gb-line); border-radius:10px;
-  display:grid; grid-template-columns:1fr auto auto; align-items:center; gap:10px;
+  padding: 18px 0; border: 0; border-top: 1px solid var(--gb-line); border-radius: 0;
+  display: grid; grid-template-columns: minmax(0,1fr) auto auto; align-items: center; gap: 12px 16px;
+  background: transparent;
 }
+.fr3 .account-security-list .data-row:first-of-type { border-top: 0; padding-top: 0; }
 .fr3 .account-security-list .data-row strong,
-.fr3 .account-security-list .data-row small { display:block; }
-.fr3 .account-security-list .data-row small { color:var(--gb-ink-soft); text-align:left; font-size:12px; }
-.fr3 .account-security-list .data-row em { color:#245d21; font-style:normal; white-space:nowrap; }
-.fr3 .account-security-actions { margin-top:16px; display:flex; flex-wrap:wrap; gap:12px; }
-.fr3 .account-security-hint { margin-top:20px; }
+.fr3 .account-security-list .data-row small { display: block; text-align: left; }
+.fr3 .account-security-list .data-row strong { font-size: 16px; }
+.fr3 .account-security-list .data-row small { color: var(--gb-ink-soft); font-size: 13px; margin-top: 4px; }
+.fr3 .account-security-list .data-row em { color: #245d21; font-style: normal; white-space: nowrap; font-size: 13px; font-weight: 600; }
+.fr3 .account-security-actions { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 12px; }
+.fr3 .account-security-hint { margin-top: 0; }
 .fr3 .account-security-hint .text-link {
-  border:0; background:transparent; color:var(--gb-purple); cursor:pointer; font:inherit; padding:0;
-}
-@media (max-width:720px) {
-  .fr3.utility-page > .gb-page-local-header > h1,
-  .fr3.utility-page > h1 { font-size:30px; }
-  .fr3.utility-page > .back-link { margin-bottom:12px; }
-  .fr3 .settings-list { padding:20px; }
-  .fr3 .location-city-confirm { margin-top:var(--gb-space-md); }
-  .fr3 .account-security-list .data-row {
-    grid-template-columns:1fr; gap:8px;
-  }
+  border: 0; background: transparent; color: var(--gb-purple); cursor: pointer; font: inherit; padding: 0;
 }
 
 /* FB01 015 / #394: wide ContentContainer with a left-aligned narrow form recipe. */
 .fr3.utility-page.location-page { width: 100%; min-width: 0; max-width: none; margin: 0; }
-.fr3.utility-page.location-page > .utility-page__body { max-width: none; }
+.fr3.utility-page.location-page > .utility-page__body { max-width: 880px; }
+.location-city-panel .location-city-rows { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; }
+.location-city-rows__item {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  min-height: 56px; padding: 14px 0; border-top: 1px solid var(--gb-line);
+}
+.location-city-rows__item:first-child { border-top: 0; padding-top: 0; }
+.location-city-rows__item > span { font-size: 16px; font-weight: 600; }
+.location-city-panel__actions { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--gb-line); }
 .location-picker { width: 100%; max-width: 760px; }
 .location-picker .location-city-confirm { margin-top: 16px; }
+
 @media (max-width:720px) {
+  .fr3.utility-page > .gb-page-local-header > h1,
+  .fr3.utility-page > h1 { font-size: 30px; }
+  .fr3.utility-page > .back-link { margin-bottom: 12px; }
+  .fr3 .settings-panel { padding: 20px; border-radius: 18px; }
+  .fr3 .settings-panel > h2 { margin-bottom: 16px; font-size: 23px; }
+  .fr3 .location-city-confirm { margin-top: var(--gb-space-md); }
+  .fr3 .account-security-list .data-row {
+    grid-template-columns: 1fr; gap: 8px;
+  }
+  .fr3 .settings-panel__actions { flex-direction: column; align-items: stretch; }
   .profile-section[data-surface="game-contact-preference"] .profile-form-actions { flex-direction: column; align-items: stretch; }
   .profile-section[data-surface="game-contact-preference"] .profile-form-actions .gb-c23-btn { width: 100%; flex: none; }
 }

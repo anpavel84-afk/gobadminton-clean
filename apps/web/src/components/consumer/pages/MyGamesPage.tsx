@@ -156,10 +156,6 @@ export function MyGamesPage() {
     router.replace(qs ? `/my-games?${qs}` : "/my-games");
   }
 
-  function setRelation(next: Relation) {
-    go(next, view);
-  }
-
   function setView(next: View) {
     go(relation, next);
   }

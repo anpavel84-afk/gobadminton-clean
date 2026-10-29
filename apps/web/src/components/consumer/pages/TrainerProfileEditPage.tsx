@@ -132,48 +132,50 @@ export function TrainerProfileEditPage() {
           </section>
         )}
         {state === "ready" && (
-          <form
-            className="profile-section"
-            onSubmit={(e) => {
-              e.preventDefault();
-              void save();
-            }}
-          >
-            <span className="eyebrow eyebrow--purple">Тренер</span>
-            <p>Информация заполнена пользователем</p>
-            <SectionHeader title="О ваших тренировках" />
-            <label className="profile-field">
-              Имя тренера
-              <input
-                required
-                maxLength={160}
-                value={displayName}
-                onChange={(e) => setDisplayName(e.target.value)}
-              />
-            </label>
-            <label className="profile-field">
-              Коротко о себе
-              <textarea
-                rows={6}
-                maxLength={1000}
-                value={bio}
-                onChange={(e) => setBio(e.target.value)}
-              />
-            </label>
-            <p>
-              Сохранение включает профиль тренера. Отключение не отзывает
-              управление созданными играми.
-            </p>
-            {notice && <p role="status">{notice}</p>}
-            {refresh && (
-              <Button variant="outline" onClick={() => setReload((n) => n + 1)}>
-                Обновить данные
+          <div className="trainer-editor__stack">
+            <p className="trainer-editor__lede">Информация заполнена пользователем.</p>
+            <form
+              id="trainer-edit-form" className="profile-section trainer-editor__form"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void save();
+              }}
+            >
+              <SectionHeader title="О ваших тренировках" />
+              <label className="profile-field">
+                Имя тренера
+                <input
+                  required
+                  maxLength={160}
+                  value={displayName}
+                  onChange={(e) => setDisplayName(e.target.value)}
+                />
+              </label>
+              <label className="profile-field">
+                Коротко о себе
+                <textarea
+                  rows={6}
+                  maxLength={1000}
+                  value={bio}
+                  onChange={(e) => setBio(e.target.value)}
+                />
+              </label>
+              <p>
+                Сохранение включает профиль тренера. Отключение не отзывает
+                управление созданными играми.
+              </p>
+              {notice && <p role="status">{notice}</p>}
+              {refresh && (
+                <Button variant="outline" onClick={() => setReload((n) => n + 1)}>
+                  Обновить данные
+                </Button>
+              )}
+            </form>
+            <div className="trainer-editor__actions">
+              <Button variant="outline" href="/profile">
+                К профилю
               </Button>
-            )}
-            <div className="profile-form-actions">
-              <Button type="submit" disabled={busy || refresh}>
-                Сохранить
-              </Button>
+              <Button type="submit" form="trainer-edit-form" disabled={busy || refresh}>Сохранить</Button>
               {active ? (
                 <Button
                   type="button"
@@ -184,11 +186,8 @@ export function TrainerProfileEditPage() {
                   Отключить профиль тренера
                 </Button>
               ) : null}
-              <Button variant="outline" href="/profile">
-                Отмена
-              </Button>
             </div>
-          </form>
+          </div>
         )}
       </div>
     </ConsumerShell>

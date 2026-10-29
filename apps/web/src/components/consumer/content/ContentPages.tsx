@@ -22,11 +22,11 @@ export function LegalPage({ document }: { document?: keyof typeof documents }) {
     <header className="gb-page-local-header">
       <Link className="back-link" href={document ? "/legal" : "/help"}>← {document ? "К документам" : "К помощи"}</Link>
     </header>
-    <article className="legal-document" id="document-top"><header><span className="eyebrow">Документ сервиса</span><h1>{document ? documents[document] : "Документы сервиса"}</h1><div><span>Не опубликовано</span></div><p>Тексты документов готовятся к публикации. Утверждённая редакция и дата её действия пока недоступны.</p></header>
+    <article className="legal-document" id="document-top"><header><span className="eyebrow">Документ сервиса</span><h1>{document ? documents[document] : "Документы сервиса"}</h1><span className="legal-status-badge">Не опубликовано</span><p>Тексты документов готовятся к публикации. Утверждённая редакция и дата её действия пока недоступны.</p></header>
       <nav className="document-toc" aria-label="Содержание"><strong>Содержание</strong><a href="#availability">1. Доступность документов</a><a href="#contacts">2. Информация об операторе</a></nav>
-      <section id="availability"><small>01</small><h2>Доступность документов</h2><div className="document-note" role="status"><strong>{document ? "Документ пока недоступен" : "Документы пока недоступны"}</strong><p>На этой странице нет действующих юридических условий. Текст появится после публикации.</p></div></section>
-      <section id="contacts"><small>02</small><h2>Информация об операторе</h2><p>Сведения об операторе и контакт для обращений пока не опубликованы.</p></section>
-      <footer className="document-end"><a href="#document-top">Наверх ↑</a><nav aria-label="Другие документы">{Object.entries(documents).filter(([key]) => key !== document).map(([key, title]) => <Link key={key} href={`/legal/${key}`}>{title}</Link>)}</nav></footer>
+      <section id="availability"><h2>Доступность документов</h2><div className="document-note" role="status"><strong>{document ? "Документ пока недоступен" : "Документы пока недоступны"}</strong><p>На этой странице нет действующих юридических условий. Текст появится после публикации.</p></div></section>
+      <section id="contacts"><h2>Информация об операторе</h2><p>Сведения об операторе и контакт для обращений пока не опубликованы.</p></section>
+      <footer className="document-end"><Link href="/legal">Все документы</Link><nav aria-label="Другие документы">{Object.entries(documents).filter(([key]) => key !== document).map(([key, title]) => <Link key={key} href={`/legal/${key}`}>{title}</Link>)}</nav></footer>
     </article><ReadingFooter />
   </div></ConsumerShell>;
 }

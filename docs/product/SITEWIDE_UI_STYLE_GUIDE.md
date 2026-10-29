@@ -45,6 +45,8 @@ Scoped media change only for discovery feed cards at desktop/tablet:
 - media column fills the card row to the bottom with `object-fit: cover` (no white gap under the photo);
 - **max-square** media (~280–300): width must not become a portrait column relative to height;
 - when content growth / available width would force a portrait media column, the **whole card** switches to stacked media+content (not `align-self: start` on an independent square, and not stretch-only height that creates portrait);
+- **stable fallback latch**: once a card stacks for the current content identity and card width, keep stacked until width or content identity changes meaningfully; do not unstack merely because stacked content became shorter than the row media budget (hysteresis alone is not sufficient);
+- observe the actual media budget from card width where possible; no hidden duplicate DOM, no `overflow-x: hidden` mask, no global Observer framework;
 - mobile landscape geometry **unchanged** (product ~210 px height).
 
 Layout widths:
@@ -52,6 +54,8 @@ Layout widths:
 - **721–1199**: feed full width; sidebar below (supporting panels side-by-side when space allows);
 - **≥1200**: sidebar to the right.
 - **≤720**: mobile landscape media / sidebar hide unchanged.
+
+Ordinary pages keep Back/H1 on the shell left rail; narrow forms/lists use ≈880 body; legal reading measure ≈820 with compact H1≈42, status badge, and bordered TOC panel. Footer is brand + product + service + documents/operator with compact ≈40 padding on the shared content rail.
 
 Do not apply the feed media rule to `GameCover` hero/personal cards, venue schedule, or map inspector.
 

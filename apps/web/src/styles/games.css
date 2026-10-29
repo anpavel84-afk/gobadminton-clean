@@ -116,11 +116,23 @@
 .gb-personal-card__body p { margin: 8px 0; font-size: 13px; color: var(--gb-ink-soft); }
 .gb-personal-card__body > small { color: var(--gb-ink-soft); font-size: 12px; }
 .gb-personal-card__action { display: flex; align-items: center; padding: 20px 20px 20px 0; }
-.gb-game-create { max-width: 900px; margin: 0; width: 100%; }
+.gb-game-create { max-width: none; margin: 0; width: 100%; }
 .gb-game-create:has(.gb-game-preview) { max-width: none; }
-.gb-create-header { margin: 16px 0 32px; }
-.gb-create-header h1 { font-size: clamp(36px,4vw,56px); letter-spacing: -.04em; line-height: 1.05; margin: 14px 0; }
-.gb-create-header p { color: var(--gb-ink-soft); line-height: 1.6; }
+.gb-create-header { margin: 0 0 28px; }
+.gb-create-header h1 { font-size: 48px; letter-spacing: -.035em; line-height: 1.06; margin: 8px 0 12px; font-weight: 700; }
+.gb-create-header p { color: var(--gb-ink-soft); line-height: 1.55; max-width: 740px; }
+.gb-create-layout { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 24px; align-items: start; }
+.gb-create-layout:not(:has(.gb-create-rail)) { grid-template-columns: minmax(0, 1fr); }
+.gb-create-layout > .gb-game-form { min-width: 0; }
+.gb-create-rail { display: grid; gap: 24px; min-width: 0; }
+.gb-create-rail__tip, .gb-create-rail__note { padding: 20px 24px; border-radius: 16px; display: grid; gap: 6px; }
+.gb-create-rail__tip { background: #eaffcd; }
+.gb-create-rail__note { border: 1px solid var(--gb-line); background: var(--gb-white); }
+.gb-create-rail__tip strong, .gb-create-rail__note strong { font-size: 16px; }
+.gb-create-rail__tip p, .gb-create-rail__note p { margin: 0; color: var(--gb-ink-soft); font-size: 14px; line-height: 1.5; }
+@media (max-width: 900px) {
+  .gb-create-layout { grid-template-columns: 1fr; }
+}
 .gb-game-form { display: grid; gap: 24px; }
 .gb-game-form-group { margin: 0; min-width: 0; padding: 24px; border: 1px solid var(--gb-line); border-radius: 18px; background: white; }
 .gb-game-form-group > .gb-game-form-group-title { margin: 0 0 18px; padding: 0; font-size: 20px; line-height: 1.25; font-weight: 700; color: var(--gb-ink); }
@@ -345,6 +357,11 @@
 .gb-venue-rail-note { padding:24px; border:1px solid var(--gb-line); border-radius:20px; background:var(--gb-white); display:grid; gap:12px; }
 .gb-venue-rail-note strong { font-size:18px; }
 .gb-venue-rail-note p { margin:0; color:var(--gb-ink-soft); font-size:14px; line-height:1.5; }
+.gb-venue-layout__rail .gb-venue-contacts { margin:0; padding:24px; border:1px solid var(--gb-line); border-radius:20px; background:var(--gb-white); display:grid; gap:12px; }
+.gb-venue-layout__rail .gb-venue-contacts h3 { margin:0; font-size:18px; }
+.gb-venue-layout__rail .gb-venue-contact-rows { display:grid; gap:8px; }
+.gb-venue-layout__rail .gb-venue-contact-row { display:flex; align-items:center; gap:8px; min-height:44px; padding:10px 12px; border:1px solid var(--gb-line); border-radius:var(--gb-radius-sm); color:var(--gb-ink); text-decoration:none; }
+.gb-venue-layout__rail .gb-venue-contact-messengers { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
 .gb-venue-editor { display:grid; gap:16px; margin-top:24px; }
 .gb-venue-editor input { max-width:100%; }
 .gb-venue-editor__actions { display:flex; flex-wrap:wrap; gap:12px; }

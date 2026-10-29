@@ -10,31 +10,48 @@ import { formatSeats, isTrainerLed, settlementTerms } from "../../../lib/game-pr
 import { discoveryFormat, discoveryGameWhen } from "../../../lib/discovery-presentation";
 import { DiscoveryIcon } from "./DiscoveryComposition";
 
-/** Desktop feed: keep max-square media fill; stack when content outgrows the square column. */
+/** Desktop feed: keep max-square media fill; stack when content outgrows the square column.
+ * Once stacked for a content/width identity, latch until width or content identity meaningfully changes —
+ * do not unstack merely because stacked content became shorter than the row media budget. */
 function useFeedCardLayout() {
   const cardRef = useRef<HTMLElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const [layout, setLayout] = useState<"row" | "stacked">("row");
+  const latchRef = useRef<{ width: number; identity: string } | null>(null);
   useEffect(() => {
     const card = cardRef.current;
     const content = contentRef.current;
     if (!card || !content || typeof ResizeObserver === "undefined") return;
     let frame = 0;
+    const contentIdentity = () => {
+      const text = (content.textContent ?? "").replace(/\s+/g, " ").trim();
+      return `${text.length}:${text.slice(0, 96)}`;
+    };
     const measure = () => {
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
         if (window.matchMedia("(max-width: 720px)").matches) {
+          latchRef.current = null;
           setLayout("row");
           return;
         }
-        const mediaBudget = Math.min(300, Math.max(210, Math.floor(card.clientWidth * 0.36)));
-        setLayout((prev) => {
-          if (prev === "stacked") {
-            const next = content.scrollHeight <= mediaBudget - 40 ? "row" : "stacked";
-            return next;
-          }
-          return content.scrollHeight > mediaBudget + 8 ? "stacked" : "row";
-        });
+        const width = Math.round(card.clientWidth);
+        const identity = contentIdentity();
+        const mediaBudget = Math.min(300, Math.max(210, Math.floor(width * 0.36)));
+        const latch = latchRef.current;
+        const widthChanged = !latch || Math.abs(latch.width - width) >= 24;
+        const contentChanged = !latch || latch.identity !== identity;
+        if (latch && !widthChanged && !contentChanged) {
+          setLayout("stacked");
+          return;
+        }
+        if (content.scrollHeight > mediaBudget + 8) {
+          latchRef.current = { width, identity };
+          setLayout("stacked");
+          return;
+        }
+        latchRef.current = null;
+        setLayout("row");
       });
     };
     const observer = new ResizeObserver(measure);
