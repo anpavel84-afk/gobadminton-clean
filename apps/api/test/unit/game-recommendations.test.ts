@@ -54,10 +54,14 @@ describe("FR-3A strict transport, role and current relationship policies",()=>{
       expect(effectiveAccepted({...friendship,state},profiles,false)).toBe(false);
     }
     for (const index of [0,1]) for (const change of [{social_action_epoch:"2"},{directory_visible:false},
-      {contact_policy:"closed"},{social_eligible:false},{status:"disabled"},{status:"deletion_pending"},{unrestricted:false}]) {
+      {social_eligible:false},{status:"disabled"},{status:"deletion_pending"},{unrestricted:false}]) {
       const changed=profiles.map((p,i)=>i===index?{...p,...change}:p);
       expect(effectiveAccepted(friendship,changed,false)).toBe(false);
     }
+    // Direct-message opt-out alone must not revoke an accepted friendship.
+    // The recorded epoch still prevents resurrection after a policy change.
+    expect(effectiveAccepted(friendship,[profiles[0]!,{...profiles[1]!,contact_policy:"closed"}],false)).toBe(true);
+    expect(effectiveAccepted(friendship,[profiles[0]!,{...profiles[1]!,contact_policy:"closed",social_action_epoch:"2"}],false)).toBe(false);
     expect(effectiveAccepted(friendship,[profile(a)],false)).toBe(false);
   });
   it.each([

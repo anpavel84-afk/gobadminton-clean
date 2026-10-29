@@ -58,9 +58,15 @@ describe("DEV privacy fences", () => {
     expect(effectivePending(pending, [actor, peer], true, now)).toBe(false);
     expect(effectivePending(pending, [actor, { ...peer, social_action_epoch: "4" }], false, now)).toBe(false);
   });
-  it.each([{ directory_visible: false }, { social_eligible: false }, { contact_policy: "closed" }, { unrestricted: false }, { status: "deleted" }])("withdraw/restriction denies entitlement: %j", extra => {
+  it.each([{ directory_visible: false }, { social_eligible: false }, { unrestricted: false }, { status: "deleted" }])("withdraw/restriction denies entitlement: %j", extra => {
     expect(eligible({ ...peer, ...extra })).toBe(false);
     expect(effectivePending(pending, [actor, { ...peer, ...extra }], false, now)).toBe(false);
+  });
+  it("permits an independent friend request when private messages are closed", () => {
+    const closed = { ...peer, contact_policy: "closed" };
+    expect(eligible(closed)).toBe(true);
+    expect(effectivePending(pending, [actor, closed], false, now)).toBe(true);
+    expect(effectivePending(pending, [actor, { ...closed, social_action_epoch: "4" }], false, now)).toBe(false);
   });
   it("DEV capabilities query enforces existing restrictions even with global Admin flag off", async () => {
     const queries: string[] = [];

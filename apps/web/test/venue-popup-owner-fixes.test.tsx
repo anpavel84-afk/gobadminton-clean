@@ -41,7 +41,7 @@ function links(html: string) {
 type PresentationProps = ComponentProps<typeof CreateGamePresentation>;
 function presentation(overrides: Partial<PresentationProps> = {}): PresentationProps {
   return {
-    step: "form", preferences: null, saveContact: false, setSaveContact: noop, creatorSeat: null,
+    step: "form", me: null, preferences: null, saveContact: false, setSaveContact: noop, creatorSeat: null,
     trainer: null, setReload: noop, activityKind: "regular", setActivityKind: noop, dateChoice: "today",
     setDateChoice: noop, customDuration: false, setCustomDuration: noop,
     draft: { ...emptyDraft(), venueId: venue.id, startDate: "2026-11-20", startTime: "18:00" }, setDraft: noop,
@@ -95,7 +95,7 @@ describe("production venue popup presentation with real React", () => {
     expect(standalonePreview).not.toContain('gb-game-popup-preview-actions');
     expect(embeddedPreview.match(/aria-label="Действия игры"/g)).toHaveLength(1);
     expect(standalonePreview.match(/aria-label="Действия игры"/g)).toHaveLength(1);
-    expect(embeddedPreview).toContain("Опубликовать игру");
+    expect(embeddedPreview).toContain("Создать игру");
     expect(embeddedPreview).toContain("Назад к редактированию");
   });
   it("keeps trainer fallback distinct from organizer identity", () => {
@@ -157,8 +157,8 @@ describe("production venue popup presentation with real React", () => {
     const full = ssr(<CreateGamePresentation {...props} />);
     for (const html of [embedded, full]) {
       for (const field of ["title", "venueMode", "venueId", "startDate", "startTime", "capacity", "format", "levels", "visibility", "contact", "venueTerms"]) expect(html).toContain(`id="${field}"`);
-      expect(html).toContain('type="file"'); expect(html).toContain("Проверить игру"); expect(html).toContain("Отмена");
-      if (step === "preview") { expect(html).toContain("Опубликовать игру"); expect(html).toContain("Назад к редактированию"); expect(html).toMatch(/<form[^>]*hidden=""/); }
+      expect(html).toContain('type="file"'); expect(html).toContain("Далее — к созданию"); expect(html).toContain("Отмена");
+      if (step === "preview") { expect(html).toContain("Создать игру"); expect(html).toContain("Назад к редактированию"); expect(html).toMatch(/<form[^>]*hidden=""/); }
     }
     expect(embedded).not.toContain('data-shell-mode='); expect(embedded).not.toMatch(/<nav\b/);
     expect(embedded).not.toContain("Все игры"); expect(links(embedded).some(link => link.href?.startsWith("/venues"))).toBe(false);
@@ -169,7 +169,19 @@ describe("production venue popup presentation with real React", () => {
     const props = presentation({ draft: { ...emptyDraft(), createNewVenue: true }, photoReady: false, customDuration: true, error: "Проверьте поля" });
     const html = ssr(<CreateGamePresentation {...props} embedded />);
     for (const id of ["venueName", "venueAddress", "lat", "lng", "duration"]) expect(html).toContain(`id="${id}"`);
-    expect(html).toContain("Проверьте поля"); expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Проверить игру/);
+    expect(html).toContain("Проверьте поля"); expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Далее — к созданию/);
+  });
+  it("resumes an invite after publishing without creating an invitation automatically", () => {
+    const peerId = "10000000-0000-4000-8000-000000000001";
+    const published = ssr(<CreateGamePresentation {...presentation({
+      step: "published", created: { ...game, status: "published" },
+      invitePlayerId: peerId, me: { id: "viewer", csrfToken: "test" } as PresentationProps["me"],
+    })} />);
+    expect(published).toContain("Пригласить выбранного игрока");
+    expect(published).toContain("Пригласить в созданную игру");
+    expect(published).not.toContain("Приглашение отправлено");
+    const standalone = ssr(<CreateGamePresentation {...presentation({ step: "published", created: game })} />);
+    expect(standalone).not.toContain("Пригласить выбранного игрока");
   });
   it("keeps publication/recovery results local with explicit game/summary links", () => {
     const published = ssr(<CreateGamePresentation {...presentation({ step: "published", created: game })} embedded onClose={noop} />);

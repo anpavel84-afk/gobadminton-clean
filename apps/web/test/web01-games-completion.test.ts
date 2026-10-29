@@ -100,7 +100,7 @@ describe("WEB-01 Games completion", () => {
     expect(page).toContain('data-surface="create-form"');
     expect(page).toContain('data-surface="create-preview"');
     expect(page).toContain("gb-game-form-group");
-    expect(page).toContain("Опубликовать игру");
+    expect(page).toContain("Создать игру");
     expect(page).toContain("Назад к редактированию");
     expect(page).toContain('data-result="success"');
     expect(page).toContain('data-result={step}');

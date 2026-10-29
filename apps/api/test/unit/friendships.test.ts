@@ -85,7 +85,14 @@ describe("Friends S1 policy and HTTP authentication", () => {
     expect(effectivePending({...row,state:"blocked"},profiles,false,now)).toBe(false);
     expect(effectivePending(row,[profiles[0]!],false,now)).toBe(false);
   });
-  it.each([{status:"disabled"},{status:"deletion_pending"},{directory_visible:false},{contact_policy:"closed"},
+  it("permits friendship requests without opening direct-message contact requests", () => {
+    const closed = {...profiles[1]!,contact_policy:"closed"};
+    expect(eligible(closed)).toBe(true);
+    expect(canRequestAgain({...row,state:"removed"},[profiles[0]!,closed],false,now,true)).toBe(true);
+    expect(effectivePending(row,[profiles[0]!,closed],false,now)).toBe(true);
+    expect(effectivePending(row,[profiles[0]!,{...closed,social_action_epoch:"4"}],false,now)).toBe(false);
+  });
+  it.each([{status:"disabled"},{status:"deletion_pending"},{directory_visible:false},
     {social_eligible:false},{unrestricted:false}])("availability fails closed: %j", change => {
     expect(eligible({...profiles[1]!,...change})).toBe(false);
     expect(effectivePending(row,[profiles[0]!,{...profiles[1]!,...change}],false,now)).toBe(false);

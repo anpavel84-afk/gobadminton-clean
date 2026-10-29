@@ -50,7 +50,7 @@ export function FriendsPage() {
     <div className="profile-form-actions" role="group" aria-label="Списки друзей">{tabs.map(([value, label]) => <Button key={value} variant={tab === value ? "dark" : "outline"} aria-pressed={tab === value} onClick={() => { setPage(null); setState("loading"); setTab(value); setCursor(null); setReload(n => n + 1); }}>{label}</Button>)}</div>
     {state === "loading" && <ProfileState title="Загружаем друзей…" state="loading" />}
     {state === "guest" && <section className="profile-section"><p>Войдите, чтобы увидеть друзей и запросы.</p><AuthEntry returnPath="/friends" /></section>}
-    {state === "unavailable" && <ProfileState title="Друзья сейчас недоступны">Проверьте настройки видимости профиля и запросов на общение.</ProfileState>}
+    {state === "unavailable" && <ProfileState title="Друзья сейчас недоступны">Проверьте доступность игрового профиля и повторите попытку. Запрос на общение для дружбы не требуется.</ProfileState>}
     {state === "error" && <ProfileState title="Не удалось загрузить друзей" state="error" retry={refresh}>Обновите список перед следующими действиями.</ProfileState>}
     {state === "ready" && page && me && <>
       {!page.items.length && <ProfileState title="Здесь пока никого нет">Запрос можно отправить из публичного профиля игрока.</ProfileState>}

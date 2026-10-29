@@ -15,7 +15,7 @@ import { ConversationSafety } from "./ConversationSafety";
 import { InvitationChooser } from "./InvitationChooser";
 import { useSocialMutation } from "./useSocialMutation";
 
-export function DirectConversation({ id, me, changed, openInvitation }: { id: string; me: Me; changed: () => void; openInvitation: (id: string) => void }) {
+export function DirectConversation({ id, me, changed, openInvitation, startInvite = false }: { id: string; me: Me; changed: () => void; openInvitation: (id: string) => void; startInvite?: boolean }) {
   const [conversation, setConversation] = useState<Conversation | null>(null);
   const [messages, setMessages] = useState<DirectMessage[]>([]);
   const [state, setState] = useState("loading");
@@ -25,7 +25,7 @@ export function DirectConversation({ id, me, changed, openInvitation }: { id: st
   const [reload, setReload] = useState(0);
   const [text, setText] = useState("");
   const [blocked, setBlocked] = useState(false);
-  const [chooser, setChooser] = useState(false);
+  const [chooser, setChooser] = useState(startInvite);
   const bodyRef = useRef<HTMLDivElement>(null);
   const history = useRef(new DirectHistory(id));
   const [contactAvailable, setContactAvailable] = useState(false);
@@ -108,7 +108,7 @@ export function DirectConversation({ id, me, changed, openInvitation }: { id: st
   const disabled = mutation.busy || mutation.pending || state !== "ready" || restricted;
   const firstUnread = messages.find(m => m.authorPublicPlayerId === conversation?.peer.publicPlayerId && BigInt(m.seq) > BigInt(initialRead.current ?? "0"))?.id;
   return <section className="conversation-panel" aria-label="Личная переписка">
-    <ConversationHeader playerId={conversation?.peer.publicPlayerId} conversationId={conversation?.id} avatar={conversation?.peer.avatar} name={conversation?.peer.displayName ?? "Переписка"} subtitle={conversation ? requestCopy[conversation.requestState] : "Сообщения"}>{conversation && <Button variant="outline" aria-label="Пригласить на игру" disabled={disabled} onClick={() => setChooser(true)}><span className="conversation-invite-label">Пригласить на игру</span></Button>}{conversation && <ConversationSafety overflow playerId={conversation.peer.publicPlayerId} me={me} onBlocked={() => { setBlocked(true); changed(); }} />}</ConversationHeader>
+    <ConversationHeader playerId={conversation?.peer.publicPlayerId} conversationId={conversation?.id} avatar={conversation?.peer.avatar} name={conversation?.peer.displayName ?? "Переписка"} subtitle={conversation ? requestCopy[conversation.requestState] : "Сообщения"}>{conversation && <Button variant="outline" aria-label="Пригласить на игру" disabled={state !== "ready" || blocked || mutation.busy || mutation.pending} onClick={() => setChooser(true)}><span className="conversation-invite-label">Пригласить на игру</span></Button>}{conversation && <ConversationSafety overflow playerId={conversation.peer.publicPlayerId} me={me} onBlocked={() => { setBlocked(true); changed(); }} />}</ConversationHeader>
     <div className="conversation-body" ref={bodyRef} onScroll={() => { const node = bodyRef.current; const bottom = !!node && node.scrollHeight - node.scrollTop - node.clientHeight < 48; nearBottom.current = bottom; setAtBottom(bottom); }}>
       {state === "loading" && <ProfileState title="Загружаем переписку…" state="loading" />}
       {state === "error" && <ProfileState title="Не удалось обновить переписку" state="error" retry={() => setReload(n => n + 1)}>Отправка недоступна до обновления.</ProfileState>}
@@ -122,6 +122,6 @@ export function DirectConversation({ id, me, changed, openInvitation }: { id: st
       <MutationNotice mutation={mutation} />
     </div>
     {canCompose(conversation) && !blocked && state !== "guest" && state !== "unavailable" ? <form className="composer" onSubmit={e => { e.preventDefault(); if (!disabled && text.trim()) mutation.run(`${conversationPath(id)}/messages`, { kind: "text", text: text.trim(), clientMessageId: crypto.randomUUID() }); }}><input aria-label="Сообщение" placeholder="Сообщение" maxLength={2000} value={text} disabled={disabled} onChange={e => setText(e.target.value)} /><Button type="submit" variant="dark" disabled={disabled || !text.trim()}>Отправить</Button></form> : <div className="composer-restricted">{restricted ? "Отправка сейчас недоступна." : "Переписка станет доступна после принятия запроса."}</div>}
-    {chooser && conversation && <InvitationChooser me={me} playerId={conversation.peer.publicPlayerId} onClose={() => setChooser(false)} onCreated={openInvitation} />}
+    {chooser && conversation && state === "ready" && !blocked && <InvitationChooser me={me} playerId={conversation.peer.publicPlayerId} onClose={() => setChooser(false)} onCreated={openInvitation} />}
   </section>;
 }
