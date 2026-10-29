@@ -262,6 +262,8 @@ run("PG-1a GameOutcome — disposable synthetic PostGIS", () => {
       recordedAt: expect.any(String),
       createdAt: expect.any(String),
     });
+    expect(heldProv.recordedAt).toBe(held.json().revisions[0].recordedAt);
+    expect(heldProv.createdAt).toBe(heldProv.recordedAt);
     expect(held.json().revisions).toHaveLength(1);
     expect(held.json().revisionsNextCursor).toBeNull();
     expect(await effects(g.id)).toMatchObject({ outcomes: 1, revisions: 1, status: "completed" });

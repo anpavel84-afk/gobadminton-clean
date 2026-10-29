@@ -9,6 +9,8 @@ Continuation: prior author1 recovered bundle reused (NOT_QA_ACCEPTED / shell-onl
 
 QA repair (exact findings): `provenance.recordedAt` projects current revision time (`updated_at`) with separate immutable `createdAt`; manager revision history is a newest bounded window (`revisionsLimit` default 20 / max 50) with `revisionsNextCursor` for older continuation.
 
+CI repair (run 40915709594 database): putOutcome now writes one shared `clock_timestamp()` into outcome `updated_at`/`recorded_at` and revision `recorded_at` — separate DEFAULT/`clock_timestamp()` calls could differ by 1ms and break `provenance.recordedAt === revisions[n].recordedAt`.
+
 ## Claim freeze
 
 - Next free migration on accepted checkout: **0042** (0040 URL storage, 0041 recommendations present). No path collision; do not invent a parallel migration.

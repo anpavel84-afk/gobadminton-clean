@@ -259,11 +259,14 @@ export class GameOutcomesService {
         }
         const nextVersion = currentVersion + 1;
         const reason = body.reason ?? null;
+        // One clock value for outcome.updated_at and revision.recorded_at so
+        // provenance.recordedAt equals the current revision (separate DEFAULTs can drift 1ms).
         if (!existing) {
           await client.query(
-            `INSERT INTO game_outcomes (game_id, value, version, reason, source, actor_user_id)
-             VALUES ($1, $2, 1, $3, 'manager_explicit', $4)`,
-            [gameId, body.outcome, reason, userId],
+            `INSERT INTO game_outcomes
+               (game_id, value, version, reason, source, actor_user_id, recorded_at, updated_at)
+             VALUES ($1, $2, 1, $3, 'manager_explicit', $4, $5, $5)`,
+            [gameId, body.outcome, reason, userId, now],
           );
         } else {
           await client.query(
@@ -272,16 +275,16 @@ export class GameOutcomesService {
                  version = $3,
                  reason = $4,
                  actor_user_id = $5,
-                 updated_at = clock_timestamp()
+                 updated_at = $6
              WHERE game_id = $1`,
-            [gameId, body.outcome, nextVersion, reason, userId],
+            [gameId, body.outcome, nextVersion, reason, userId, now],
           );
         }
         await client.query(
           `INSERT INTO game_outcome_revisions
              (game_id, resource_version, actor_user_id, source,
-              before_value, after_value, before_reason, after_reason, reason)
-           VALUES ($1, $2, $3, 'manager_explicit', $4, $5, $6, $7, $8)`,
+              before_value, after_value, before_reason, after_reason, reason, recorded_at)
+           VALUES ($1, $2, $3, 'manager_explicit', $4, $5, $6, $7, $8, $9)`,
           [
             gameId,
             nextVersion,
@@ -291,6 +294,7 @@ export class GameOutcomesService {
             existing?.reason ?? null,
             reason,
             nextVersion === 1 && body.outcome === "held" ? null : reason,
+            now,
           ],
         );
         if (locked.status === "published") {
