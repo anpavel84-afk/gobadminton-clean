@@ -23,7 +23,13 @@
   font: 700 22px var(--gb-font);
   letter-spacing: -.02em;
 }
-.gb-venue-popup .player-profile-content .player-profile-grid {
+.gb-venue-popup .player-profile-content .player-profile-actionband {
+  margin-top: 0;
+  padding: 16px;
+  border-radius: var(--gb-radius-md);
+}
+.gb-venue-popup .player-profile-content .player-profile-grid,
+.gb-venue-popup .player-profile-content .player-profile-body {
   margin-top: 0;
   grid-template-columns: 1fr;
 }
@@ -34,6 +40,18 @@
 .gb-venue-popup .player-profile-content .player-profile-actions {
   flex-direction: column;
   align-items: stretch;
+}
+/* Embedded Radar must not inherit ordinary page header/rail framing. */
+.gb-venue-popup .fr3.player-profile-page.is-embedded .player-profile-body {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16px;
+}
+.gb-venue-popup .fr3.player-profile-page.is-embedded .player-profile-grid {
+  grid-template-columns: 1fr;
+}
+.gb-venue-popup .fr3.player-profile-page.is-embedded .gb-page-local-header {
+  display: contents;
 }
 .gb-venue-popup .player-profile-content .player-profile-distance {
   color: rgba(255, 255, 255, 0.72);

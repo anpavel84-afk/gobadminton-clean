@@ -5,10 +5,10 @@
 .gb-topbar { position: sticky; top: 0; z-index: 30; padding-top: env(safe-area-inset-top, 0px); border-bottom: 1px solid rgba(203,211,202,.8); background: rgba(245,246,242,.9); backdrop-filter: blur(18px); }
 .gb-topbar-inner { position: relative; width: var(--gb-content-max); min-height: 84px; margin: auto; display: flex; align-items: center; gap: 48px; }
 .gb-brand-link { display: inline-flex; flex: none; padding: 0; }
-.gb-brand-logo { display: block; width: 144px; height: auto; }
+.gb-brand-logo { display: block; width: 122px; height: auto; }
 /* The SVG's first painted path starts 88.125/1280 units into its viewBox. */
 .gb-topbar-inner > .gb-brand-link > .gb-brand-logo { transform: translateX(-6.885%); }
-.gb-desktop-nav { display: flex; align-self: stretch; gap: 34px; }
+.gb-desktop-nav { display: flex; align-self: stretch; gap: 26px; }
 .gb-desktop-nav a { position: relative; display: flex; align-items: center; color: var(--gb-ink-soft); font-weight: 500; white-space: nowrap; }
 .gb-desktop-nav a[aria-current="page"] { color: var(--gb-ink); }
 .gb-desktop-nav a[aria-current="page"]::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: var(--gb-lime); border-radius: 4px 4px 0 0; }
@@ -25,13 +25,13 @@
 .gb-header-profile-label { max-width: 156px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gb-shell-content { width: var(--gb-content-max); margin: 0 auto; padding: 32px 0 0; flex: 1; min-width: 0; }
 .gb-page-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; margin-bottom: 28px; }
-.gb-page-heading h1 { margin: 0; font-size: 38px; line-height: 1.15; font-weight: 700; letter-spacing: -.03em; }
+.gb-page-heading h1 { margin: 0; font-size: 48px; line-height: 1.06; font-weight: 700; letter-spacing: -.035em; }
 /* #394 sitewide: Back + page title share the shell left rail; body may be narrower. */
 .gb-page-local-header { display: grid; gap: 16px; margin: 0 0 28px; min-width: 0; }
 .gb-page-local-header > .back-link,
 .gb-page-local-header > .gb-game-back,
 .gb-page-local-header > .gb-c23-back { margin: 0; min-height: 44px; width: fit-content; align-items: center; }
-.gb-page-local-header h1 { margin: 0; font-size: 38px; line-height: 1.15; font-weight: 700; letter-spacing: -.03em; overflow-wrap: anywhere; }
+.gb-page-local-header h1 { margin: 0; font-size: 48px; line-height: 1.06; font-weight: 700; letter-spacing: -.035em; overflow-wrap: anywhere; }
 .gb-page-local-header__row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px 16px; min-width: 0; }
 .gb-shell-content--document { max-width: 820px; overflow-wrap: anywhere; }
 .gb-shell-content--document :is(h2,h3) { scroll-margin-top: 100px; }

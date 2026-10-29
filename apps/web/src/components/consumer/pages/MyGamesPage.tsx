@@ -148,20 +148,20 @@ export function MyGamesPage() {
     setReloadToken((token) => token + 1);
   }
 
-  function setRelation(next: Relation) {
+  function go(nextRelation: Relation, nextView: View) {
     const params = new URLSearchParams();
-    if (next === "created") params.set("tab", "created");
-    if (view === "history") params.set("view", "history");
+    if (nextRelation === "created") params.set("tab", "created");
+    if (nextView === "history") params.set("view", "history");
     const qs = params.toString();
     router.replace(qs ? `/my-games?${qs}` : "/my-games");
   }
 
+  function setRelation(next: Relation) {
+    go(next, view);
+  }
+
   function setView(next: View) {
-    const params = new URLSearchParams();
-    if (relation === "created") params.set("tab", "created");
-    if (next === "history") params.set("view", "history");
-    const qs = params.toString();
-    router.replace(qs ? `/my-games?${qs}` : "/my-games");
+    go(relation, next);
   }
 
   const listCount =
@@ -172,58 +172,20 @@ export function MyGamesPage() {
       <div className="gb-my-games" data-surface="my-games" data-view={view}>
         <header className="gb-my-games-header">
           <div>
-            <span className="gb-game-kicker">Личный раздел</span>
             <h1>Мои игры</h1>
-            <p>
-              Заявки, подтверждённые игры и события, которые вы создали. История
-              строится только из уже доступных серверных записей.
-            </p>
+            <p>Заявки, участия и игры, которыми вы управляете.</p>
           </div>
-          <Button href="/games/create">+ Создать игру</Button>
+          <Button href="/games/create">Создать игру</Button>
         </header>
-        {state === "ready" && me && view === "upcoming" ? (
-          <GameRecommendationsSection me={me} initialView={recommendationsEntry} />
-        ) : null}
-        <section className="gb-relationship-bar">
-          <div
-            className="gb-game-segmented"
-            role="group"
-            aria-label="Отношение к играм"
-          >
-            <button
-              type="button"
-              aria-pressed={relation === "participating"}
-              onClick={() => setRelation("participating")}
-            >
-              Участвую
-            </button>
-            <button
-              type="button"
-              aria-pressed={relation === "created"}
-              onClick={() => setRelation("created")}
-            >
-              Управляю
-            </button>
+        <section className="gb-relationship-bar" aria-label="Разделы моих игр">
+          <div className="gb-game-segmented" role="group" aria-label="Отношение к играм">
+            <button type="button" aria-pressed={relation === "participating" && view === "upcoming"} onClick={() => go("participating", "upcoming")}>Участвую</button>
+            <button type="button" aria-pressed={relation === "created" && view === "upcoming"} onClick={() => go("created", "upcoming")}>Управляю</button>
+            <button type="button" aria-pressed={view === "history"} onClick={() => go(relation, "history")}>История</button>
           </div>
-          <button
-            type="button"
-            className="gb-history-link"
-            aria-pressed={view === "history"}
-            data-active={view === "history" ? "true" : "false"}
-            onClick={() =>
-              setView(view === "history" ? "upcoming" : "history")
-            }
-          >
-            {relation === "created"
-              ? view === "history"
-                ? "К текущим управляемым"
-                : "История управляемых игр"
-              : view === "history"
-                ? "К ближайшим"
-                : "История"}{" "}
-            →
-          </button>
         </section>
+        <div className="gb-my-games-layout">
+          <div className="gb-my-games-layout__main">
         {state === "ready" ? (
           <header className="gb-personal-list__heading gb-personal-list">
             <div>
@@ -384,6 +346,18 @@ export function MyGamesPage() {
             )}
           </div>
         ) : null}
+          </div>
+          {state === "ready" && me && view === "upcoming" ? (
+            <aside className="gb-my-games-layout__rail" aria-label="Советы и приглашения">
+              <GameRecommendationsSection me={me} initialView={recommendationsEntry} />
+              <section className="gb-my-games-invites">
+                <h2>Приглашения</h2>
+                <p>Приглашения в игру находятся в сообщениях.</p>
+                <Button variant="outline" href="/messages">К сообщениям</Button>
+              </section>
+            </aside>
+          ) : null}
+        </div>
       </div>
     </ConsumerShell>
   );

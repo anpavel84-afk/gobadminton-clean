@@ -1,11 +1,14 @@
 /* FR-04: frozen MessagesPage/InboxRow and social kit CSS, scoped to the canonical surface. */
-/* #394: messages host stays on the shell content rail (no second centered max-width). */
-.fr4.messages-page { width: 100%; min-width: 0; height: calc(100vh - 116px); min-height: 680px; margin: 0; padding: 0; overflow: hidden; border: 1px solid var(--gb-line); border-radius: var(--gb-radius-lg); background: var(--gb-white); display: grid; grid-template-columns: 420px minmax(0, 1fr); box-shadow: var(--gb-shadow-elevated); }
-.fr4 .inbox-panel { min-width: 0; border-right: 1px solid var(--gb-line); display: flex; flex-direction: column; }
-.fr4 .inbox-header { padding: 24px; display: flex; align-items: center; justify-content: space-between; }
+/* #394: desktop messages host stays on the shell content rail; inbox ~310. */
+.gb-messages-page-heading { margin-bottom: 20px; }
+.gb-messages-page-heading p { margin: 8px 0 0; color: var(--gb-ink-soft); max-width: 640px; }
+.fr4.messages-page { width: 100%; min-width: 0; height: calc(100vh - 220px); min-height: 560px; margin: 0; padding: 0; overflow: hidden; border: 1px solid var(--gb-line); border-radius: var(--gb-radius-lg); background: var(--gb-white); display: grid; grid-template-columns: 310px minmax(0, 1fr); box-shadow: var(--gb-shadow-elevated); }
+.fr4 .inbox-panel { min-width: 0; border-right: 1px solid var(--gb-line); display: flex; flex-direction: column; min-height: 0; }
+.fr4 .inbox-header { padding: 20px 20px 12px; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
 .fr4 .inbox-header small { color: var(--gb-purple); text-transform: uppercase; letter-spacing: .07em; }
 .fr4 .inbox-header h1 { margin: 3px 0 0; font: 700 31px var(--gb-font); }
-.fr4 .inbox-tabs { padding: 0 20px 14px; display: flex; gap: 6px; overflow: auto; }
+.fr4 .inbox-header__title { display: block; margin-top: 4px; font: 700 18px var(--gb-font); }
+.fr4 .inbox-tabs { padding: 0 16px 14px; display: flex; flex-wrap: wrap; gap: 6px; overflow: visible; flex-shrink: 0; }
 .fr4 .inbox-list { min-height: 0; overflow-y: auto; }
 .fr4 .inbox-row { width: 100%; min-height: 82px; padding: 12px 18px; border: 0; border-top: 1px solid var(--gb-line); background: transparent; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; text-align: left; cursor: pointer; }
 .fr4 .inbox-row.is-selected { background: var(--gb-lime-soft); }
@@ -60,7 +63,8 @@
 .fr4 .invitation-card--cancelled, .fr4 .invitation-card--unavailable { background: #fff8f6; }
 .fr4 .invitation-card--expired, .fr4 .invitation-card--declined { opacity: .72; }
 /* Production interpretation: dynamic viewport and DD-07 focused navigation. */
-.fr4.messages-page { flex: 1; height: auto; min-height: 0; margin: 24px auto; }
+.fr4.messages-page { flex: 1; height: auto; min-height: 560px; margin: 0 0 32px; }
+.gb-shell-content--focused .fr4.messages-page { margin: 0; min-height: 0; height: auto; border-radius: 0; border: 0; box-shadow: none; }
 .fr4 .conversation-panel { min-height: 0; }
 .fr4 .conversation-identity { min-width: 0; flex: 1; overflow-wrap: anywhere; }
 .fr4 .conversation-header > .gb-c23-btn { flex-shrink: 0; }
@@ -93,7 +97,8 @@
 .fr4 .invite-dialog-example > button:disabled { opacity: .5; cursor: not-allowed; }
 .gb-header-message[aria-current="page"] { background: var(--gb-ink); color: var(--gb-white); }
 @media (max-width: 1050px) {
-  .fr4.messages-page { grid-template-columns: 360px minmax(0, 1fr); }
+  .fr4.messages-page { grid-template-columns: minmax(240px, 310px) minmax(0, 1fr); }
+  .fr4 .inbox-tabs { flex-wrap: wrap; overflow: visible; }
   .fr4 .conversation-header { flex-wrap: wrap; }
   .fr4 .conversation-header > .gb-c23-btn { margin-left: auto; min-height: 38px; font-size: 12px; }
   .fr4 .composer { flex-wrap: wrap; }

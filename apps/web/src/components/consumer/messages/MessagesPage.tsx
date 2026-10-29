@@ -73,8 +73,11 @@ export function MessagesPage() {
   function chooseFilter(value: InboxFilter) { ++epoch.current; setMoreBusy(false); setMoreError(false); setPage(null); setState("loading"); setFilter(value); }
   const rows = (page?.items ?? []).map(inboxRow).filter(r => r !== null);
   const { conversationId, invitationId, gameId } = inboxSelection(params, rows, splitPane);
-  return <ConsumerShell active="none" title="Сообщения" mode="focused"><div className={`fr3 fr4 messages-page ${selected ? "show-conversation" : ""}`}>
-    <aside className="inbox-panel" aria-label="Входящие"><div className="inbox-header"><span><small>Личные и игровые</small><h1>Сообщения</h1></span></div>
+  /* Desktop: ordinary page rail + footer; mobile keeps focused host / bottom nav. */
+  return <ConsumerShell active="none" title="Сообщения" mode={splitPane ? "page" : "focused"} hideHeading={splitPane}>
+    {splitPane ? <header className="gb-page-heading gb-messages-page-heading"><div><h1>Сообщения</h1><p>Личные и игровые сообщения</p></div></header> : null}
+    <div className={`fr3 fr4 messages-page ${selected ? "show-conversation" : ""}`}>
+    <aside className="inbox-panel" aria-label="Входящие"><div className="inbox-header">{splitPane ? <span><small>Входящие</small><strong className="inbox-header__title">Переписки</strong></span> : <span><small>Личные и игровые</small><h1>Сообщения</h1></span>}</div>
       <div className="inbox-tabs" aria-label="Фильтры сообщений">{([["all", "Все"], ["unread", "Непрочитанные"], ["attention", "Требуют ответа"]] as const).map(([key, label]) => <button key={key} className={`chip ${filter === key ? "chip--active" : ""}`} aria-pressed={filter === key} onClick={() => { if (key !== filter) chooseFilter(key); }}>{label}</button>)}</div>
       <div className="inbox-list">
         {auth === "loading" && <ProfileState title="Загружаем сообщения…" state="loading" />}
@@ -88,5 +91,5 @@ export function MessagesPage() {
       </div>
     </aside>
     {me && auth === "ready" ? gameId ? <GameConversation key={`${me.id}:${me.csrfToken}:${gameId}`} id={gameId} me={me} changed={changed} /> : conversationId ? <DirectConversation key={`${me.id}:${me.csrfToken}:${conversationId}`} id={conversationId} me={me} changed={changed} startInvite={params.get("action") === "invite"} openInvitation={id => router.push(`/messages?invitation=${encodeURIComponent(id)}`)} /> : invitationId ? <InvitationDetail key={invitationId} id={invitationId} me={me} changed={changed} /> : target ? <NewContact key={`${me.id}:${me.csrfToken}:${target}`} playerId={target} invite={params.get("action") === "invite"} me={me} openConversation={id => router.push(conversationWithInvitePath(id, params.get("action") === "invite"))} openInvitation={id => router.push(`/messages?invitation=${encodeURIComponent(id)}`)} /> : <section className="conversation-panel conversation-empty"><ProfileState title="Выберите переписку">Здесь появятся сообщения и приглашения в игры.</ProfileState><Button href="/players" variant="outline">Найти игрока</Button></section> : <section className="conversation-panel conversation-empty"><Link className="conversation-back" href="/messages">←</Link><ProfileState title={auth === "guest" ? "Войдите, чтобы открыть сообщения" : "Загружаем…"} />{auth === "guest" && <AuthEntry returnPath={`/messages?${params}`} />}{auth === "error" && <Button onClick={() => setReload(n => n + 1)}>Повторить</Button>}</section>}
-  </div><RootNav active="messages" /></ConsumerShell>;
+  </div>{!splitPane ? <RootNav active="messages" /> : null}</ConsumerShell>;
 }

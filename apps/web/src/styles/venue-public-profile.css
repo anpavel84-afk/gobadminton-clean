@@ -1,6 +1,6 @@
 /* Bounded ContentCard / ListRow / media composition; frozen parity pending QA. */
 .gb-consumer .gb-venue-public-profile {
-  display:grid; gap:var(--gb-space-6); min-width:0; margin:var(--gb-space-6) 0;
+  display:grid; gap:24px; min-width:0; margin:0;
   overflow-wrap:anywhere;
 }
 .gb-consumer .gb-venue-public-profile > section {

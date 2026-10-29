@@ -54,24 +54,32 @@ export function PlayerProfileContent({
         <div className="player-profile-status">
           {looking && <Badge>Ищу игру</Badge>}
           {trainer && <Badge trainer>Тренер</Badge>}
+          {!looking && !trainer && <Badge>Игрок</Badge>}
           {distance != null && distance !== "" && <span className="player-profile-distance">{distance}</span>}
         </div>
         <Title>{player.displayName}</Title>
         {meta && <p className="player-profile-meta">{meta}</p>}
         {player.bio ? <p className="player-profile-bio">{player.bio}</p> : null}
-        {actions ? <div className="player-profile-actions" data-surface="pp-actions">{actions}</div> : null}
       </div>
     </section>
+    {(actions || note) ? <div className="player-profile-actionband">
+      {actions ? <div className="player-profile-actions" data-surface="pp-actions">{actions}</div> : null}
+      {note}
+    </div> : null}
     <section className="player-profile-grid">
-      <div className="guide-panel preference-card">
-        <small>Игровой профиль</small>
-        <div>
-          <span>Уровень<strong>{levelLabel}</strong></span>
-          <span>Район<strong>{player.areaKey || "Не указан"}</strong></span>
+      <div className="player-profile-main">
+        <div className="guide-panel preference-card">
+          <small>Игровой профиль</small>
+          <div>
+            <span>Уровень<strong>{levelLabel}</strong></span>
+            <span>Район / метро<strong>{player.areaKey || "Не указан"}</strong></span>
+          </div>
         </div>
       </div>
-      {note}
-      {trainer && <div className="guide-panel trainer-profile-optional"><Badge trainer>Тренер</Badge><p>Информация заполнена пользователем</p></div>}
+      <aside className="player-profile-rail">
+        {trainer ? <div className="guide-panel trainer-profile-optional"><Badge trainer>Тренер</Badge><p>Информация заполнена пользователем</p></div>
+          : <div className="guide-panel first-contact-note player-profile-public-note"><span><strong>Публичный профиль</strong><p>Показаны только доступные сведения. Неуказанные данные не заменяются догадками.</p></span></div>}
+      </aside>
     </section>
   </div>;
 }

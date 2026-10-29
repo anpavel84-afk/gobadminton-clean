@@ -9,14 +9,11 @@ export function DiscoveryHero({ city }: { city: string }) {
   return <section className="gb-discovery-hero" aria-labelledby="discovery-title">
     <div className="gb-discovery-hero__copy">
       <span className="gb-discovery-eyebrow">Игры рядом · {city}</span>
-      <h1 id="discovery-title">Игры<br /> <em>{discoveryCityHeading(city)}.</em></h1>
+      <h1 id="discovery-title">Игры <em>{discoveryCityHeading(city)}.</em></h1>
       <p>Настоящие люди. Большой бадминтон. Выбирайте игру или тренировку и выходите на корт.</p>
     </div>
     <div className="gb-discovery-hero__visual" aria-hidden="true">
-      <img className="gb-discovery-shape gb-discovery-shape--lime" src="/discovery/hero-lime.svg" alt="" />
-      <img className="gb-discovery-shape gb-discovery-shape--purple" src="/discovery/purple-shape.svg" alt="" />
       <div className="gb-discovery-hero__photo"><img src="/discovery/badminton-gear.jpg" alt="" /></div>
-      <span className="gb-discovery-hero__note">Game first.<br />Always.</span>
     </div>
   </section>;
 }

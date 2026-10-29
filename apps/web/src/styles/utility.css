@@ -2,10 +2,10 @@
    #394: outer utility wrapper stays on the shell left rail; only the body is narrow. */
 .fr3.utility-page { width: 100%; min-width: 0; max-width: none; margin: 0; }
 .fr3.utility-page > .gb-page-local-header > h1,
-.fr3.utility-page > h1 { margin: 0; font-size: 38px; letter-spacing: -.8px; line-height: 1.15; font-weight: 700; overflow-wrap: anywhere; }
+.fr3.utility-page > h1 { margin: 0; font-size: 48px; letter-spacing: -.035em; line-height: 1.06; font-weight: 700; overflow-wrap: anywhere; }
 .fr3.utility-page > .gb-page-local-header + .utility-page__body > p:first-child,
 .fr3.utility-page > h1 + p { color: var(--gb-ink-soft); }
-.fr3.utility-page > .utility-page__body { width: 100%; max-width: 760px; min-width: 0; }
+.fr3.utility-page > .utility-page__body { width: 100%; max-width: 880px; min-width: 0; }
 .fr3.utility-page > .back-link { margin: 0 0 16px; min-height: 44px; }
 .fr3 .settings-list { display:flex; flex-direction:column; padding:24px; border:1px solid var(--gb-line); border-radius:var(--gb-radius-md); background:var(--gb-white); margin-top:24px; }
 .fr3 .settings-list h2 { margin:0; padding:15px 0 7px; color:var(--gb-ink-soft); font-size:11px; text-transform:uppercase; letter-spacing:.07em; }

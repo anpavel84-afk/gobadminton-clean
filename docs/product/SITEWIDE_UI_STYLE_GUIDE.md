@@ -42,7 +42,9 @@ Shared presentational class: `.gb-page-local-header` (+ optional `.utility-page_
 
 Scoped media change only for discovery feed cards at desktop/tablet:
 
-- square slot (`aspect-ratio: 1`, `align-self: start`, no content-stretched height, `object-fit: cover`);
+- media column fills the card row to the bottom with `object-fit: cover` (no white gap under the photo);
+- **max-square** media (~280–300): width must not become a portrait column relative to height;
+- when content growth / available width would force a portrait media column, the **whole card** switches to stacked media+content (not `align-self: start` on an independent square, and not stretch-only height that creates portrait);
 - mobile landscape geometry **unchanged** (product ~210 px height).
 
 Layout widths:
@@ -51,7 +53,7 @@ Layout widths:
 - **≥1200**: sidebar to the right.
 - **≤720**: mobile landscape media / sidebar hide unchanged.
 
-Do not apply the square rule to `GameCover`, personal cards, venue schedule, or map inspector.
+Do not apply the feed media rule to `GameCover` hero/personal cards, venue schedule, or map inspector.
 
 ## Overlays
 
