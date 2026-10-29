@@ -181,10 +181,11 @@ def read_ready_marker(path):
 def role_ready(role):
     """Separate verified predicates. Author pass must not claim READY.
 
-    agy_qa binds the real native product_role_ready()/root proof (PR #376).
-    agy_author binds protected NativeAuthor marker + product_role_ready proof
-    (modules/UID/model) — NEVER cosmetic file existence or CANARY-only phase.
-    Never fabricate a lean READY marker; lean file remains optional secondary.
+    agy_qa binds the real native product_role_ready()/root proof (PR #376),
+    with optional lean READY marker only when native proof is unavailable.
+    agy_author READY is exclusively native product_role_ready() protected proof
+    (modules/UID/model). A lean marker MUST NOT independently establish READY,
+    including FAIL/wrong-UID/wrong-model cosmetic files. CANARY stays separate.
     """
     if role == 'agy_qa':
         try:
@@ -218,15 +219,8 @@ def role_ready(role):
             pass
         except Exception:
             pass
-        marker = read_ready_marker(AGY_AUTHOR_READY)
-        if marker is None:
-            return False, 'agy_author READY marker absent or not verified'
-        if marker.get('role') != 'agy_author':
-            return False, 'role mismatch in READY marker'
-        # CANARY-only / unbound proof must never look READY.
-        if marker.get('phase') != 'ready' or not marker.get('verified_terminal_verdict'):
-            return False, 'agy_author READY proof incomplete'
-        return True, marker
+        # Lean READY marker is never an independent READY grant for author.
+        return False, 'agy_author READY native proof absent or not verified'
     mapping = {
         'cursor_author': CURSOR_AUTHOR_READY,
         'codex_qa': CODEX_QA_READY,
@@ -532,6 +526,9 @@ def select_author_provider(task, *, issue=None):
             if issue is not None:
                 avail, why, rec = agy_quota_available(int(issue))
                 if not avail:
+                    if why == 'agy_quota_unknown_pending_reconcile':
+                        raise ProviderError(
+                            'agy_quota_unknown_pending_reconcile', why, charge='none')
                     return 'cursor_auto', 'agy_author_unavailable_fallback', why
                 return 'agy_author', 'agy_author_selected', rec
             return 'agy_author', 'agy_author_selected', reason
@@ -540,6 +537,9 @@ def select_author_provider(task, *, issue=None):
             if issue is not None:
                 avail, why, rec = agy_quota_available(int(issue))
                 if not avail:
+                    if why == 'agy_quota_unknown_pending_reconcile':
+                        raise ProviderError(
+                            'agy_quota_unknown_pending_reconcile', why, charge='none')
                     return 'cursor_auto', 'agy_author_unavailable_fallback', why
                 return 'agy_author', 'agy_author_canary_selected', {
                     **(canary_meta if isinstance(canary_meta, dict) else {}),

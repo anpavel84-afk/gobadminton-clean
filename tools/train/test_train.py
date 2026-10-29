@@ -2066,21 +2066,35 @@ class AgyNativeTransportTests(unittest.TestCase):
             ok, meta = providers.role_ready('agy_author')
         self.assertTrue(ok)
         self.assertEqual(meta['role'], 'agy_author')
-        # Cosmetic lean marker without verified verdict is denied.
-        with mock.patch.object(providers, '_import_native', side_effect=providers.ProviderError('native_missing')), \
-                mock.patch.object(providers, 'read_ready_marker', return_value={
-                    'schema': 'GB_LEAN_ROLE_READY_V1', 'phase': 'ready', 'role': 'agy_author',
-                    'model': 'x', 'cli': 'x', 'cli_sha256': 'a' * 64, 'adapter': 'x',
-                    'executor_uid': 978, 'credential_identity': 'x',
-                    'verified_terminal_verdict': None}):
-            ok2, _ = providers.role_ready('agy_author')
+        self.assertEqual(meta['source'], 'native_product_role_ready')
+        # Lean marker (even FAIL / wrong UID/model) must not independently grant READY.
+        lean_fail = {
+            'schema': 'GB_LEAN_ROLE_READY_V1', 'phase': 'ready', 'role': 'agy_author',
+            'model': 'wrong-model', 'cli': 'x', 'cli_sha256': 'a' * 64, 'adapter': 'x',
+            'executor_uid': 1, 'credential_identity': 'x',
+            'verified_terminal_verdict': 'FAIL',
+        }
+        with mock.patch.object(providers, '_import_native',
+                               side_effect=providers.ProviderError('native_missing')), \
+                mock.patch.object(providers, 'read_ready_marker', return_value=lean_fail):
+            ok2, reason2 = providers.role_ready('agy_author')
         self.assertFalse(ok2)
-        # Absent native proof => not READY (CANARY install alone insufficient).
-        with mock.patch.object(providers, '_import_native', side_effect=providers.ProviderError('native_missing')), \
-                mock.patch.object(providers, 'read_ready_marker', return_value=None):
-            ok3, reason = providers.role_ready('agy_author')
+        self.assertIn('native', reason2)
+        # Native returns False — lean marker still cannot establish READY.
+        fake_denied = mock.Mock()
+        fake_denied.product_role_ready.return_value = False
+        with mock.patch.object(providers, '_import_native', return_value=fake_denied), \
+                mock.patch.object(providers, 'read_ready_marker', return_value=lean_fail):
+            ok3, reason3 = providers.role_ready('agy_author')
         self.assertFalse(ok3)
-        self.assertIn('absent', reason)
+        self.assertIn('native', reason3)
+        # Absent native proof => not READY (CANARY install alone insufficient).
+        with mock.patch.object(providers, '_import_native',
+                               side_effect=providers.ProviderError('native_missing')), \
+                mock.patch.object(providers, 'read_ready_marker', return_value=None):
+            ok4, reason4 = providers.role_ready('agy_author')
+        self.assertFalse(ok4)
+        self.assertIn('absent', reason4)
 
     def test_select_author_provider_agy_or_prelaunch_fallback(self):
         task = {'issue': 29, 'author_route': ['agy_author', 'cursor_auto']}
@@ -2097,6 +2111,33 @@ class AgyNativeTransportTests(unittest.TestCase):
             prov2, reason2, _ = providers.select_author_provider(task, issue=29)
         self.assertEqual(prov2, 'cursor_auto')
         self.assertEqual(reason2, 'agy_author_not_ready_fallback')
+        # UNKNOWN private quota must HOLD — never Cursor fallback on either branch.
+        with mock.patch.object(providers, 'role_ready',
+                               return_value=(True, {'source': 'native'})), \
+                mock.patch.object(providers, 'agy_quota_available', return_value=(
+                    False, 'agy_quota_unknown_pending_reconcile', {'unknown_calls': 1})):
+            with self.assertRaises(providers.ProviderError) as ctx:
+                providers.select_author_provider(task, issue=29)
+            self.assertEqual(ctx.exception.code, 'agy_quota_unknown_pending_reconcile')
+            self.assertEqual(ctx.exception.charge, 'none')
+        with mock.patch.object(providers, 'role_ready',
+                               return_value=(False, 'not ready')), \
+                mock.patch.object(providers, 'agy_author_canary_admitted',
+                                  return_value=(True, {'phase': 'canary'})), \
+                mock.patch.object(providers, 'agy_quota_available', return_value=(
+                    False, 'agy_quota_unknown_pending_reconcile', {'unknown_calls': 2})):
+            with self.assertRaises(providers.ProviderError) as ctx2:
+                providers.select_author_provider(task, issue=29)
+            self.assertEqual(ctx2.exception.code, 'agy_quota_unknown_pending_reconcile')
+        # Known precharge unavailability still falls back Cursor.
+        with mock.patch.object(providers, 'role_ready',
+                               return_value=(True, {'source': 'native'})), \
+                mock.patch.object(providers, 'agy_quota_available', return_value=(
+                    False, 'agy_quota_exhausted', {'charged_calls': 5})):
+            prov_u, reason_u, why_u = providers.select_author_provider(task, issue=29)
+        self.assertEqual(prov_u, 'cursor_auto')
+        self.assertEqual(reason_u, 'agy_author_unavailable_fallback')
+        self.assertEqual(why_u, 'agy_quota_exhausted')
         # Codex author never selected / never faked READY.
         task_codex = {'author_route': ['codex_author', 'cursor_auto']}
         prov3, reason3, _ = providers.select_author_provider(task_codex)
@@ -2122,7 +2163,8 @@ class AgyNativeTransportTests(unittest.TestCase):
                 return {'candidate_sha': 'c' * 40, 'changed_paths': ['a.py'],
                         'provider': 'cursor_auto', 'model_launch': 1}
 
-            with mock.patch.object(providers, 'role_ready',
+            with mock.patch.object(lean_live, 'require_executor_uid', return_value=1002), \
+                    mock.patch.object(providers, 'role_ready',
                                    return_value=(False, 'not ready')), \
                     mock.patch.object(providers, 'agy_author_canary_admitted',
                                       return_value=(False, 'no canary')), \
@@ -2219,38 +2261,74 @@ class AgyNativeTransportTests(unittest.TestCase):
             self.assertEqual((work / 'a.py').read_bytes(), b'new\n')
 
     def test_agy_author_qualification_gates_and_fake_ready_denial(self):
-        ok, why = lean_live.evaluate_agy_author_qualification_gates(
+        cand = 'c' * 40
+        receipt = {'phase': 'imported', 'changed_paths': ['x.py'],
+                   'transcript_sha256': 'b' * 64}
+        # Bare merged_sha + caller qa_verdict=PASS is insufficient (no QA identity/SHA).
+        ok0, why0 = lean_live.evaluate_agy_author_qualification_gates(
             claim={'merged_sha': 'a' * 40},
-            native_receipt={'phase': 'imported', 'changed_paths': ['x.py'],
-                            'transcript_sha256': 'b' * 64},
-            candidate_sha='c' * 40, qa_verdict='PASS', ci_ok=True,
+            native_receipt=receipt,
+            candidate_sha=cand, qa_verdict='PASS', ci_ok=True,
+            deploy_accepted=True, live_sha='a' * 40)
+        self.assertFalse(ok0)
+        self.assertEqual(why0, 'qa_record_absent')
+        # Actual Root claim shape (issue 182): qa_provider + last_qa + routes.qa.
+        real_claim = {
+            'merged_sha': 'a' * 40,
+            'qa_provider': 'codex_sol_medium',
+            'routes': {'qa': 'codex_sol_medium'},
+            'last_qa': {
+                'verdict': 'PASS', 'reviewed_sha': cand, 'charge': 'charged',
+                'findings': [],
+            },
+        }
+        ok, why = lean_live.evaluate_agy_author_qualification_gates(
+            claim=real_claim, native_receipt=receipt,
+            candidate_sha=cand, qa_verdict='PASS', ci_ok=True,
             deploy_accepted=True, live_sha='a' * 40)
         self.assertTrue(ok)
         self.assertEqual(why, 'gates_satisfied')
+        # Missing independent QA provider identity fails closed.
+        ok_id, why_id = lean_live.evaluate_agy_author_qualification_gates(
+            claim={'merged_sha': 'a' * 40,
+                   'last_qa': {'verdict': 'PASS', 'reviewed_sha': cand,
+                               'charge': 'charged', 'findings': []}},
+            native_receipt=receipt,
+            candidate_sha=cand, qa_verdict='PASS', ci_ok=True,
+            deploy_accepted=True, live_sha='a' * 40)
+        self.assertFalse(ok_id)
+        self.assertEqual(why_id, 'qa_provider_missing')
+        # Missing reviewed SHA fails closed.
+        ok_sha, why_sha = lean_live.evaluate_agy_author_qualification_gates(
+            claim={'merged_sha': 'a' * 40, 'qa_provider': 'codex_sol_medium',
+                   'last_qa': {'verdict': 'PASS', 'charge': 'charged', 'findings': []}},
+            native_receipt=receipt,
+            candidate_sha=cand, qa_verdict='PASS', ci_ok=True,
+            deploy_accepted=True, live_sha='a' * 40)
+        self.assertFalse(ok_sha)
+        self.assertEqual(why_sha, 'qa_reviewed_sha_missing')
         # Incomplete native / canary-style receipt denied.
         ok2, why2 = lean_live.evaluate_agy_author_qualification_gates(
-            claim={}, native_receipt={'phase': 'validated', 'changed_paths': ['x.py'],
-                                      'transcript_sha256': 'b' * 64},
-            candidate_sha='c' * 40, qa_verdict='PASS', ci_ok=True,
-            deploy_accepted=True, live_sha='c' * 40)
+            claim=real_claim, native_receipt={'phase': 'validated', 'changed_paths': ['x.py'],
+                                              'transcript_sha256': 'b' * 64},
+            candidate_sha=cand, qa_verdict='PASS', ci_ok=True,
+            deploy_accepted=True, live_sha=cand)
         self.assertFalse(ok2)
         self.assertEqual(why2, 'native_not_imported')
         ok3, why3 = lean_live.evaluate_agy_author_qualification_gates(
-            claim={}, native_receipt={'phase': 'imported', 'changed_paths': ['x.py'],
-                                      'transcript_sha256': 'b' * 64},
-            candidate_sha='c' * 40, qa_verdict='FAIL', ci_ok=True,
-            deploy_accepted=True, live_sha='c' * 40)
+            claim=real_claim, native_receipt=receipt,
+            candidate_sha=cand, qa_verdict='FAIL', ci_ok=True,
+            deploy_accepted=True, live_sha=cand)
         self.assertFalse(ok3)
         self.assertEqual(why3, 'qa_not_pass')
         # Different reviewed candidate must not PASS gates.
         ok4, why4 = lean_live.evaluate_agy_author_qualification_gates(
-            claim={'candidate_sha': 'd' * 40, 'merged_sha': 'c' * 40,
+            claim={'merged_sha': cand, 'qa_provider': 'codex_sol_medium',
                    'last_qa': {'verdict': 'PASS', 'reviewed_sha': 'd' * 40,
-                               'provider': 'codex_sol_medium'}},
-            native_receipt={'phase': 'imported', 'changed_paths': ['x.py'],
-                            'transcript_sha256': 'b' * 64},
-            candidate_sha='c' * 40, qa_verdict='PASS', ci_ok=True,
-            deploy_accepted=True, live_sha='c' * 40)
+                               'charge': 'charged', 'findings': []}},
+            native_receipt=receipt,
+            candidate_sha=cand, qa_verdict='PASS', ci_ok=True,
+            deploy_accepted=True, live_sha=cand)
         self.assertFalse(ok4)
         self.assertEqual(why4, 'qa_candidate_mismatch')
 
@@ -2306,6 +2384,8 @@ class AgyNativeTransportTests(unittest.TestCase):
             self.assertNotIn(str(td), prompt.split('ACTUAL INPUT MATERIALS')[0])
             self.assertIn('TRUSTED RULES BODY', prompt)
             self.assertIn('x' * 100, prompt)
+            # Full text retained (no 20k truncate).
+            self.assertIn(('x' * 100), prompt)
             # Missing material fails closed (no silent omit).
             with self.assertRaises(lean_live.LiveError) as ctx:
                 lean_live._agy_author_prompt(
@@ -2313,6 +2393,20 @@ class AgyNativeTransportTests(unittest.TestCase):
                     rules_text='RULES\n',
                     materials=[{'kind': 'text', 'delivered_path': str(Path(td) / 'missing.md')}])
             self.assertEqual(ctx.exception.code, 'author_material_unreadable')
+            # Unsupported image kind fails closed before prompt/charge — no silent skip.
+            img = Path(td) / 'mock.png'
+            img.write_bytes(b'\x89PNG\r\n')
+            with self.assertRaises(lean_live.LiveError) as ctx_img:
+                lean_live._agy_author_prompt(
+                    {'issue': 29, 'allowed_paths': ['a.py']},
+                    rules_text='RULES\n',
+                    materials=[{
+                        'kind': 'image', 'delivered_path': str(img),
+                        'bytes': img.stat().st_size,
+                        'sha256': hashlib.sha256(img.read_bytes()).hexdigest(),
+                    }])
+            self.assertEqual(ctx_img.exception.code, 'unsupported_material_kind')
+            self.assertEqual(ctx_img.exception.detail, 'image')
         # Source must not use pickle Queue for AGY author IPC.
         src = inspect.getsource(lean_live.agy_author_live)
         self.assertNotIn('multiprocessing', src)

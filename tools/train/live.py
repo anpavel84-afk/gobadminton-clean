@@ -2558,8 +2558,13 @@ def _agy_author_prompt(task, *, rules_text, materials=None):
             for item in materials
         ], ensure_ascii=False) + '\n'
         for item in materials:
-            if item.get('kind') != 'text':
-                continue
+            kind = item.get('kind')
+            if kind != 'text':
+                # No native image delivery path — fail closed before charge/launch.
+                raise LiveError(
+                    'unsupported_material_kind',
+                    str(kind if kind is not None else 'missing'),
+                )
             delivered = item.get('delivered_path')
             if not delivered:
                 raise LiveError('author_material_missing', str(item.get('sha256') or 'text'))
@@ -3141,14 +3146,40 @@ def agy_author_live(*, task, worktree, evidence_dir, intent_path=None, parent_le
     }
 
 
+def _claim_recorded_qa_provider(claim):
+    """Independent Codex identity from actual Root claim fields (issue 182 shape).
+
+    Prefer claim.qa_provider / claim.routes.qa; optional last_qa.provider aliases
+    accepted when present. Never invent claim.qa.provider nesting.
+    """
+    last_qa = claim.get('last_qa') if isinstance(claim.get('last_qa'), dict) else {}
+    routes = claim.get('routes') if isinstance(claim.get('routes'), dict) else {}
+    routes_qa = routes.get('qa')
+    if isinstance(routes_qa, dict):
+        routes_qa = routes_qa.get('provider') or routes_qa.get('qa_provider')
+    for raw in (
+        claim.get('qa_provider'),
+        routes_qa,
+        last_qa.get('provider'),
+        last_qa.get('qa_provider'),
+    ):
+        if raw is None:
+            continue
+        key = str(raw).split(':')[0].strip().lower().replace('-', '_')
+        if key:
+            return key
+    return None
+
+
 def evaluate_agy_author_qualification_gates(*, claim, native_receipt, candidate_sha,
                                             qa_verdict, ci_ok, deploy_accepted, live_sha):
     """Reusable gate check for AGY author READY — never asserts READY itself.
 
-    Requires exact candidate, native imported/finish, independent Codex QA PASS,
-    mandatory CI, and server ACCEPTED/live SHA matching merge. Callers (runtime
-    acceptance hook or protected OPS qualify) promote Root proof only after True.
-    Uses claim.merged_sha (controller field); merge_sha accepted as alias only.
+    Requires exact candidate, native imported/finish, recorded independent Codex
+    QA PASS bound to the exact candidate (claim.qa_provider / routes.qa +
+    last_qa.verdict/reviewed_sha), mandatory CI, and server ACCEPTED/live SHA
+    matching merge. Caller qa_verdict alone is insufficient. Uses
+    claim.merged_sha (controller field); merge_sha accepted as alias only.
     """
     claim = claim or {}
     if not (isinstance(candidate_sha, str) and SHA40.fullmatch(candidate_sha)):
@@ -3167,30 +3198,21 @@ def evaluate_agy_author_qualification_gates(*, claim, native_receipt, candidate_
         return False, 'raw_hash_absent'
     if qa_verdict != 'PASS':
         return False, 'qa_not_pass'
-    # When claim carries QA fields, require exact Codex + reviewed candidate.
     last_qa = claim.get('last_qa') if isinstance(claim.get('last_qa'), dict) else {}
-    reviewed = (
-        last_qa.get('reviewed_sha')
-        or claim.get('reviewed_candidate_sha')
-        or claim.get('candidate_sha')
-    )
-    if reviewed is not None:
-        if not (isinstance(reviewed, str) and SHA40.fullmatch(reviewed)):
-            return False, 'qa_reviewed_sha_invalid'
-        if reviewed != candidate_sha:
-            return False, 'qa_candidate_mismatch'
-    qa_provider = (
-        last_qa.get('provider') or last_qa.get('qa_provider')
-        or claim.get('qa_provider')
-    )
-    if qa_provider is not None:
-        key = str(qa_provider).split(':')[0].strip().lower().replace('-', '_')
-        if key not in ('codex', 'codex_qa', 'codex_sol_medium', 'codex_sol'):
-            return False, 'qa_provider_not_independent'
-    if last_qa and not (last_qa.get('reviewed_sha') or last_qa.get('provider')
-                        or last_qa.get('qa_provider')):
-        # Refuse independence from a bare PASS string with empty claim QA.
-        return False, 'qa_independence_unproven'
+    if not last_qa:
+        return False, 'qa_record_absent'
+    if last_qa.get('verdict') != 'PASS':
+        return False, 'qa_not_pass'
+    reviewed = last_qa.get('reviewed_sha')
+    if not (isinstance(reviewed, str) and SHA40.fullmatch(reviewed or '')):
+        return False, 'qa_reviewed_sha_missing'
+    if reviewed != candidate_sha:
+        return False, 'qa_candidate_mismatch'
+    qa_provider = _claim_recorded_qa_provider(claim)
+    if qa_provider is None:
+        return False, 'qa_provider_missing'
+    if qa_provider not in ('codex', 'codex_qa', 'codex_sol_medium', 'codex_sol'):
+        return False, 'qa_provider_not_independent'
     if not ci_ok:
         return False, 'ci_incomplete'
     if not deploy_accepted:
