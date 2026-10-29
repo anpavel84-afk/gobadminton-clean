@@ -1,3 +1,5 @@
+Current runtime checkpoint: PR #376 native AGY QA READY after real PASS[] on 85a38ec5, trusted UID978 proof; AGY author NOT READY. Mode B itself remains SOURCE ONLY, not installed/active; primary QA Codex Medium. Owner OD-020 supersedes the old five-call policy; source+runtime budget reconciliation is pending and is not a provider limit.
+
 # OD-017 / OD-018 — Lean Mode B · source handoff
 
 **Date:** 2026-10-28

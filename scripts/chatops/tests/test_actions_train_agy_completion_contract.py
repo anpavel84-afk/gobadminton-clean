@@ -371,6 +371,18 @@ class CompletionContract(unittest.TestCase):
         self.assertIn('call native finish exactly once', body)
         self.assertIn('{verdict, findings, reviewed_sha}', body)
         self.assertIn('Do not merely print JSON', body)
+        self.assertIn('PASS -> findings=[]', body)
+        self.assertIn('mandatory checks', body)
+        self.assertIn('Never conceal a blocker', body)
+        # The independently supplied QA context must repeat the same strict rule;
+        # the wire JSON Schema by itself does not express the PASS invariant.
+        import inspect
+        source = inspect.getsource(N.collect)
+        self.assertIn('PASS must use findings=[] exactly', source)
+        self.assertIn('Findings are ONLY real acceptance blockers', source)
+        self.assertEqual(N.canonical(verdict(), SHA), verdict())
+        with self.assertRaises(N.ReviewError):
+            N.canonical(verdict(findings=['HEAD verified; no defect']), SHA)
         events = rows()
         events[0]['init']['tools'] = tools
         self.assertEqual(N.parse_stream(wire(events), SHA)[0], verdict())
