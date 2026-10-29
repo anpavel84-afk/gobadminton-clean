@@ -225,6 +225,22 @@ def admit_comment(comment, issue, repository, *, config=None, all_comments=None)
     _need(task is not None, 'marker_missing_or_invalid')
     validate_task_fields(task)
     _need(int(task['issue']) == int(issue['number']), 'issue_number_mismatch')
+    # #182: prospective Owner release must not retroactively admit old machine
+    # comments. Require a NEW admission comment id > signed authority and an
+    # explicit task.owner_authority_comment binding. Do not rewrite old snapshots.
+    if int(issue['number']) == HOLD_ISSUE:
+        try:
+            cid = int(comment['id'])
+        except (TypeError, ValueError):
+            raise LeanError('admission_hold', 'issue_182_stale_machine_comment')
+        if cid <= OD018_SIGNED_COMMENT_ID:
+            raise LeanError('admission_hold', 'issue_182_stale_machine_comment')
+        try:
+            auth = int(task.get('owner_authority_comment'))
+        except (TypeError, ValueError):
+            auth = None
+        if auth != OD018_SIGNED_COMMENT_ID:
+            raise LeanError('admission_hold', 'issue_182_owner_authority_required')
     rev, snap = task_revision(task, comment['id'], comment.get('updated_at') or comment.get('created_at'))
     return {
         'schema': 'GB_LEAN_ADMISSION_V1',

@@ -51,10 +51,11 @@ CLEAN_REPO = Path('/srv/gobadminton-clean/repo')
 WORKTREES_ROOT = Path('/home/agentagency-dev/mode-b-worktrees')
 EVIDENCE_ROOT = Path('/var/lib/gobadminton-lean/results')
 NATIVE_TRAIN = Path('/usr/local/lib/gb-actions-train')
-MODE_A_RULES = Path(
-    '/home/agentagency-dev/Documents/Codex/2026-10-26/'
-    'codex-dev-vps-vmi3510488-gobadminton-clean/execution-20261027/mode-a/AGENTS.md'
-)
+# Short rules from this exact Git/release package (never interactive workspace path).
+PACKAGE_ROOT = Path(__file__).resolve().parents[2]
+MODE_A_RULES = PACKAGE_ROOT / 'AGENTS.md'
+AGENT_HOME = Path('/home/agentagency-dev')
+NATIVE_CODEX_HOME = AGENT_HOME / '.codex'
 AGY_UID = 978
 CURSOR_UID = 1002
 CURSOR_GID = 1002
@@ -95,6 +96,37 @@ def readable_present(path):
         return Path(path).exists()
     except OSError:
         return False
+
+
+def load_short_rules():
+    """Accepted short Mode A rules from this package — stdin delivery + SHA256.
+
+    Missing/unreadable rules => precise no-call HOLD (never silently empty).
+    Old EOM capsules are not delivered; only package AGENTS.md.
+    """
+    path = MODE_A_RULES
+    if not readable_present(path) or not path.is_file() or path.is_symlink():
+        raise LiveError('mode_a_rules_absent', str(path))
+    raw = path.read_bytes()
+    if not raw.strip():
+        raise LiveError('mode_a_rules_absent', 'empty:' + str(path))
+    digest = hashlib.sha256(raw).hexdigest()
+    text = (
+        'TRUSTED OWNER MODE A SHORT RULES SHA256 ' + digest + '\n'
+        + raw.decode('utf-8', errors='replace')
+    )
+    return text, digest, path
+
+
+def chown_bounded_output_dir(path, uid=CURSOR_UID, gid=CURSOR_GID):
+    """Chown only a fresh bounded QA/author evidence dir (parents stay Root)."""
+    path = Path(path)
+    os.chown(path, uid, gid)
+    for child in path.iterdir():
+        try:
+            os.chown(child, uid, gid)
+        except OSError:
+            pass
 
 
 def uid1002_env(extra=None):
@@ -662,8 +694,15 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
         for item in materials:
             config['permissions']['allow'].append('Read(' + item['delivered_path'] + ')')
         (base / 'config' / 'cli-config.json').write_text(json.dumps(config))
+        try:
+            rules_text, rules_sha, rules_path = load_short_rules()
+        except LiveError as err:
+            mark_intent_phase(intent_path, 'HOLD_no_automatic_replay',
+                              error=err.code, detail=err.detail)
+            raise ProviderError(err.code, err.detail) from err
         prompt = (
-            'EXACT OWNER ASSIGNMENT (Lean Mode B live binding)\n'
+            rules_text + '\n'
+            + 'EXACT OWNER ASSIGNMENT (Lean Mode B live binding)\n'
             + json.dumps({k: task.get(k) for k in (
                 'issue', 'goal', 'acceptance', 'allowed_paths', 'assignment',
                 'revision', 'findings', 'repair_findings', 'ci_failure',
@@ -674,6 +713,8 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
         if task.get('repair_findings'):
             prompt += '\nADDRESS THESE FINDINGS EXACTLY:\n' + json.dumps(task['repair_findings'])
         (evidence / 'prompt.txt').write_text(prompt)
+        if os.geteuid() == 0:
+            chown_bounded_output_dir(evidence)
         # Auth in parent memory only (Root may load); never print / never Root HOME reuse.
         token = os.environ.get('CURSOR_AUTH_TOKEN')
         if not token and os.geteuid() == 0:
@@ -758,14 +799,21 @@ def cursor_author_live(*, task, worktree, evidence_dir, intent_path=None, parent
             raise ProviderError('author_empty_or_oos', ','.join(changed[:20]))
         for name in changed:
             target = worktree / name
+            # Match Mode A: refuse symlink target/parents before Root atomic replace.
+            if any(x.is_symlink() for x in (target, *target.parents)):
+                raise ProviderError('symlink_import_refused', name)
             if name not in after:
-                if target.exists():
+                if target.exists() and not target.is_symlink():
                     target.unlink()
                 continue
             data = native._source(base / 'work' / name, base / 'work')
             if token.encode() in data:
                 raise ProviderError('token_leak_in_source')
+            if any(x.is_symlink() for x in (target.parent, *target.parent.parents)):
+                raise ProviderError('symlink_import_refused', name)
             target.parent.mkdir(parents=True, exist_ok=True)
+            if any(x.is_symlink() for x in (target, *target.parents)):
+                raise ProviderError('symlink_import_refused', name)
             import stat as statmod
             mode = statmod.S_IMODE(target.stat().st_mode) if target.exists() else 0o644
             fd, tmp = tempfile.mkstemp(prefix='.lean-import-', dir=str(target.parent))
@@ -827,7 +875,7 @@ def _git_common_dir(source):
 
 
 def _codex_turn_completed(events_path):
-    """Require an explicit turn.completed event in saved Codex JSONL."""
+    """Require a valid JSONL event with type exactly turn.completed — no heuristics."""
     path = Path(events_path)
     if not path.is_file():
         return False
@@ -837,13 +885,10 @@ def _codex_turn_completed(events_path):
         try:
             obj = loads(line)
         except (ValueError, LiveError):
-            if 'turn.completed' in line:
-                return True
             continue
-        typ = str(obj.get('type') or obj.get('event') or '')
-        if typ in ('turn.completed', 'turn_completed') or typ.endswith('turn.completed'):
-            return True
-        if obj.get('item', {}).get('type') == 'turn.completed':
+        if not isinstance(obj, dict):
+            continue
+        if obj.get('type') == 'turn.completed':
             return True
     return False
 
@@ -851,9 +896,10 @@ def _codex_turn_completed(events_path):
 def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None):
     """Actual Codex Sol Medium read-only QA (Mode A gpt-6.1-sol effort=medium).
 
-    Independent readonly source includes git-common-dir + explicit short Mode A
-    rules, exact SHA/base/task criteria. Verify exit0 AND turn.completed AND
-    canonical exact SHA final; raw saved first. Timeout kills only owned pg.
+    Match working launch_medium_qa: UID1002 real HOME + native CODEX_HOME,
+    private TMPDIR, explicit short rules on stdin, deny model FS .codex/.ssh.
+    Verify exit0 AND turn.completed AND canonical exact SHA final. No author
+    worktree checkout on HEAD mismatch — precise HOLD. Timeout kills owned pg.
     """
     from providers import prepare_qa_intent, mark_intent_phase, parse_codex_final, ProviderError
     require_executor_uid()
@@ -866,18 +912,17 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None):
     source = Path(task.get('worktree') or create_task_worktree(task))
     head = git(source, 'rev-parse', 'HEAD')
     if head != candidate_sha:
-        git(source, 'checkout', '--detach', candidate_sha)
-    rules_text = ''
-    rules_sha = None
-    if readable_present(MODE_A_RULES):
-        raw_rules = MODE_A_RULES.read_bytes()
-        rules_sha = hashlib.sha256(raw_rules).hexdigest()
-        rules_text = (
-            'TRUSTED OWNER MODE A SHORT RULES SHA256 ' + rules_sha + '\n'
-            + raw_rules.decode('utf-8', errors='replace') + '\n'
-        )
+        mark_intent_phase(intent_path, 'HOLD_no_automatic_replay',
+                          error='qa_head_mismatch', head=head, expected=candidate_sha)
+        raise ProviderError('qa_head_mismatch', f'{head}!={candidate_sha}')
+    try:
+        rules_text, rules_sha, rules_path = load_short_rules()
+    except LiveError as err:
+        mark_intent_phase(intent_path, 'HOLD_no_automatic_replay',
+                          error=err.code, detail=err.detail)
+        raise ProviderError(err.code, err.detail) from err
     prompt = (
-        rules_text
+        rules_text + '\n'
         + 'Independent read-only QA. Return ONLY JSON keys verdict, findings, reviewed_sha.\n'
         f'reviewed_sha must be exactly {candidate_sha}.\n'
         f'base={task.get("base") or task.get("prepared_base") or ""}\n'
@@ -885,7 +930,10 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None):
         'PASS => findings must be []. Findings list only actionable defects.\n'
     )
     (evidence / 'prompt.md').write_text(prompt)
-    codex = Path('/home/agentagency-dev/.local/bin/codex')
+    # Bounded QA output must be writable by UID1002 CLI (-o final.txt); parents stay Root.
+    if os.geteuid() == 0:
+        chown_bounded_output_dir(evidence)
+    codex = AGENT_HOME / '.local' / 'bin' / 'codex'
     if not codex.is_file():
         mark_intent_phase(intent_path, 'HOLD_no_automatic_replay', error='codex_absent')
         raise ProviderError('codex_absent')
@@ -894,10 +942,11 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None):
         ':root': 'deny', ':minimal': 'read', ':slash_tmp': 'deny', ':tmpdir': 'write',
         str(source): 'read', str(source / '.git'): 'read',
         str(evidence): 'write',
-        str(Path('/home/agentagency-dev/train-execution-evidence-20261027')): 'read',
-        str(Path('/home/agentagency-dev/.local/lib/node_modules/@openai')): 'read',
-        str(Path('/home/agentagency-dev/.local/node-v24.21.0')): 'read',
-        str(Path('/home/agentagency-dev/.ssh')): 'deny',
+        str(AGENT_HOME / 'train-execution-evidence-20261027'): 'read',
+        str(AGENT_HOME / '.local' / 'lib' / 'node_modules' / '@openai'): 'read',
+        str(AGENT_HOME / '.local' / 'node-v24.21.0'): 'read',
+        str(NATIVE_CODEX_HOME): 'deny',
+        str(AGENT_HOME / '.ssh'): 'deny',
         '/srv/gb-slots': 'deny',
         '/var/lib/gobadminton-actions-train': 'deny',
         '/var/lib/gobadminton-autonomy': 'deny',
@@ -905,9 +954,7 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None):
     }
     if common:
         fs[common] = 'read'
-    if readable_present(MODE_A_RULES):
-        fs[str(MODE_A_RULES.parent)] = 'read'
-        fs[str(MODE_A_RULES)] = 'read'
+    fs[str(rules_path)] = 'read'
     fs_expr = ','.join(json.dumps(k) + '=' + json.dumps(v) for k, v in fs.items())
     cmd = [
         '/usr/bin/timeout', '--signal=TERM', '--kill-after=15s', str(QA_TIMEOUT_S),
@@ -922,22 +969,24 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None):
         '-c', 'model_reasoning_effort="medium"',
         '--json', '-o', str(evidence / 'final.txt'), '-',
     ]
-    # Private HOME for Codex child (UID1002 writable); do not reuse Root HOME.
+    # Match launch_medium_qa: real HOME + native ~/.codex for CLI OAuth; private TMPDIR only.
+    # Never Root HOME, never copy/print credentials, never empty private HOME without CODEX_HOME.
     private = Path(tempfile.mkdtemp(prefix='gb-codex-lean-', dir='/tmp'))
     p = None
     try:
-        for name in ('home', 'tmp'):
-            (private / name).mkdir(mode=0o700)
+        tmpdir = private / 'tmp'
+        tmpdir.mkdir(mode=0o700)
         if os.geteuid() == 0:
             chown_private_tree(private)
         child_env = {
-            'PATH': '/usr/bin:/bin:/home/agentagency-dev/.local/bin',
+            'PATH': '/usr/bin:/bin:' + str(AGENT_HOME / '.local' / 'bin'),
             'LANG': 'C.UTF-8',
-            'HOME': str(private / 'home'),
-            'TMPDIR': str(private / 'tmp'),
+            'HOME': str(AGENT_HOME),
+            'TMPDIR': str(tmpdir),
         }
         mark_intent_phase(intent_path, 'launching', model='gpt-6.1-sol', effort='medium',
-                          rules_sha256=rules_sha, root_model=False)
+                          rules_sha256=rules_sha, root_model=False,
+                          home=str(AGENT_HOME), codex_home=str(NATIVE_CODEX_HOME))
         with (evidence / 'prompt.md').open() as i, \
                 (evidence / 'events.jsonl').open('w') as o, \
                 (evidence / 'stderr').open('w') as e:
@@ -1024,8 +1073,11 @@ def agy_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None):
         return codex_qa_live(task=task, candidate_sha=candidate_sha,
                             evidence_dir=evidence_dir, intent_path=intent_path)
     source = Path(task.get('worktree') or create_task_worktree(task))
-    if git(source, 'rev-parse', 'HEAD') != candidate_sha:
-        git(source, 'checkout', '--detach', candidate_sha)
+    head = git(source, 'rev-parse', 'HEAD')
+    if head != candidate_sha:
+        mark_intent_phase(intent_path, 'HOLD_no_automatic_replay',
+                          error='qa_head_mismatch', head=head, expected=candidate_sha)
+        raise ProviderError('qa_head_mismatch', f'{head}!={candidate_sha}')
     prompt = (
         f'Read-only QA of exact SHA {candidate_sha}. '
         'findings must list ONLY actionable defects; PASS => findings must be []. '

@@ -42,6 +42,7 @@ INSTALL_FILES = (
     'tools/train/client.py',
     'tools/train/test_train.py',
     'tools/train/monitor.py',
+    'AGENTS.md',
     '.github/workflows/lean-delivery.yml',
     'scripts/chatops/lean-delivery-receiver.sh',
     'docs/handoffs/OD-017-lean-mode-b.md',
@@ -76,9 +77,35 @@ def sha256_bytes(raw):
 
 
 def git_blob(repo, rev, path):
+    """Read exact SHA blob as UID1002 — never Root Git against the agent repo.
+
+    Disables hooks/fsmonitor/replacements. No safe-directory, chown, or recloning.
+    """
+    env = {
+        'PATH': '/usr/bin:/bin',
+        'HOME': '/nonexistent',
+        'GIT_CONFIG_GLOBAL': '/dev/null',
+        'GIT_CONFIG_SYSTEM': '/dev/null',
+        'GIT_OPTIONAL_LOCKS': '0',
+        'GIT_TERMINAL_PROMPT': '0',
+    }
+    argv = [
+        '/usr/bin/git', '--no-replace-objects',
+        '-c', 'core.hooksPath=/dev/null',
+        '-c', 'core.fsmonitor=false',
+        '-c', 'core.useReplaceRefs=false',
+        '-C', str(repo), 'cat-file', '-p', f'{rev}:{path}',
+    ]
+
+    def _drop():
+        if os.geteuid() == 0:
+            os.setgroups([65042])
+            os.setgid(1002)
+            os.setuid(1002)
+
     raw = subprocess.check_output(
-        ['/usr/bin/git', '-C', str(repo), 'cat-file', '-p', f'{rev}:{path}'],
-        stderr=subprocess.PIPE, timeout=60)
+        argv, stderr=subprocess.PIPE, timeout=60, env=env,
+        preexec_fn=_drop if os.geteuid() == 0 else None)
     return raw
 
 
@@ -234,7 +261,12 @@ def write_config(*, enabled=False, commissioning=True, mode_b_active=False,
         'mode_b_active': False,
         'branch_policy': ['dev'],
         'c5': 'off',
-        'issue_182': 'OFF',
+        # Capability gameRecommendations stays OFF until gated release; OD018
+        # marks guarded DEV source admission authorized — not MODE_B_ACTIVE.
+        'issue_182': 'OD018_PROSPECTIVE_DEV',
+        'od018_signed_comment_id': 6483075322,
+        'od018_queue': [182, 372, 373],
+        'mode_b_active_claim': False,
         'main_product_trunk': False,
         'workflow_on_main_required_for_schedule': True,
         'workflow_main_publication': 'PMA_after_review' if workflow_main_pending else 'done',

@@ -199,9 +199,8 @@ class AdmissionTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, 'admission_hold')
         self.assertEqual(ctx.exception.detail, 'issue_182_hard_hold')
 
-    def test_182_od018_prospective_admission(self):
-        """OD018 signed Owner comment + DEV envelope admits #182; not a global allow."""
-        comment, _ = owner_task_comment(issue=182)
+    def test_182_od018_old_machine_held_new_admits(self):
+        """Same signed OD018 context: old machine comment held; new id admits."""
         signed = {
             'id': lean_run.OD018_SIGNED_COMMENT_ID,
             'body': (
@@ -214,13 +213,26 @@ class AdmissionTests(unittest.TestCase):
             'created_at': '2026-10-28T23:09:33Z',
             'updated_at': '2026-10-28T23:09:33Z',
         }
+        old_comment, _ = owner_task_comment(
+            issue=182, owner_authority_comment=lean_run.OD018_SIGNED_COMMENT_ID)
+        # Old machine admission id stays held even with new Owner release present.
+        with self.assertRaises(lean_run.LeanError) as ctx:
+            lean_run.admit_comment(
+                old_comment, {'number': 182, 'state': 'open'}, {'id': REPO_ID},
+                all_comments=[signed, old_comment])
+        self.assertEqual(ctx.exception.code, 'admission_hold')
+        self.assertEqual(ctx.exception.detail, 'issue_182_stale_machine_comment')
+        # NEW machine admission (id > signed) + owner_authority_comment binding.
+        new_comment, _ = owner_task_comment(
+            issue=182, owner_authority_comment=lean_run.OD018_SIGNED_COMMENT_ID)
+        new_comment['id'] = lean_run.OD018_SIGNED_COMMENT_ID + 100
         adm = lean_run.admit_comment(
-            comment, {'number': 182, 'state': 'open'}, {'id': REPO_ID},
-            all_comments=[signed, comment])
+            new_comment, {'number': 182, 'state': 'open'}, {'id': REPO_ID},
+            all_comments=[signed, new_comment])
         self.assertEqual(adm['issue'], 182)
+        self.assertEqual(adm['comment_id'], lean_run.OD018_SIGNED_COMMENT_ID + 100)
         self.assertEqual(adm['owner_id'], OWNER)
         # Unrelated issue must not use OD018 as a global 182 allow path.
-        other, _ = owner_task_comment(issue=701)
         held, why = lean_run.od018_prospective_release(
             {'number': 701, 'state': 'open'}, [signed])
         self.assertFalse(held)
@@ -679,6 +691,18 @@ class LiveBindingsTests(unittest.TestCase):
             events = Path(td) / 'events.jsonl'
             events.write_text('{"type":"thread.started"}\n')
             self.assertFalse(lean_live._codex_turn_completed(events))
+            # Negative: malformed / alias / nested strings must not qualify even
+            # with a PASS-looking final line in the same stream.
+            events.write_text(
+                '{"type":"thread.started"}\n'
+                'PREFIX turn.completed SUFFIX not-json\n'
+                '{"type":"turn_completed"}\n'
+                '{"event":"turn.completed"}\n'
+                '{"type":"foo.turn.completed"}\n'
+                '{"item":{"type":"turn.completed"}}\n'
+                '{"verdict":"PASS","findings":[],"reviewed_sha":"' + ('a' * 40) + '"}\n')
+            self.assertFalse(lean_live._codex_turn_completed(events))
+            # Positive: genuine JSON event type exactly turn.completed.
             events.write_text(
                 '{"type":"thread.started"}\n'
                 '{"type":"turn.completed","usage":{"input_tokens":1}}\n')
@@ -690,6 +714,18 @@ class LiveBindingsTests(unittest.TestCase):
         self.assertIn('_kill_owned_process_group', src)
         self.assertIn('turn_completed', src)
         self.assertIn('gpt-6.1-sol', src)
+        self.assertIn('qa_head_mismatch', src)
+        self.assertNotIn("checkout', '--detach'", src)
+        self.assertIn("HOME': str(AGENT_HOME)", src)
+        self.assertIn('NATIVE_CODEX_HOME', src)
+        self.assertIn("str(NATIVE_CODEX_HOME): 'deny'", src)
+        self.assertIn("str(AGENT_HOME / '.ssh'): 'deny'", src)
+        self.assertEqual(lean_live.MODE_A_RULES, lean_live.PACKAGE_ROOT / 'AGENTS.md')
+        self.assertIn('parents[2]', inspect.getsource(lean_live))
+        rules_src = inspect.getsource(lean_live.load_short_rules)
+        self.assertIn('AGENTS.md', rules_src)
+        self.assertIn('mode_a_rules_absent', rules_src)
+        self.assertIn('load_short_rules', inspect.getsource(lean_live.cursor_author_live))
 
 
 class HostRequestTests(unittest.TestCase):
@@ -774,6 +810,23 @@ class InstallPointerTests(unittest.TestCase):
     def test_live_py_in_install_files(self):
         import install as lean_inst
         self.assertIn('tools/train/live.py', lean_inst.INSTALL_FILES)
+        self.assertIn('AGENTS.md', lean_inst.INSTALL_FILES)
+        # git_blob drops to UID1002; no Root Git / safe.directory / chown repo.
+        import inspect
+        blob_src = inspect.getsource(lean_inst.git_blob)
+        self.assertIn('setuid', blob_src)
+        self.assertIn('65042', blob_src)
+        self.assertIn('--no-replace-objects', blob_src)
+        self.assertIn('core.hooksPath=/dev/null', blob_src)
+        self.assertNotIn('safe.directory', blob_src)
+        cfg_src = inspect.getsource(lean_inst.write_config)
+        self.assertIn('OD018_PROSPECTIVE_DEV', cfg_src)
+        self.assertNotIn("'issue_182': 'OFF'", cfg_src)
+        self.assertIn('mode_b_active', cfg_src)
+        # Import refuses symlink parents before atomic replace.
+        import_src = inspect.getsource(lean_live.cursor_author_live)
+        self.assertIn('symlink_import_refused', import_src)
+        self.assertIn('is_symlink()', import_src)
 
 
 class MonitorTests(unittest.TestCase):
