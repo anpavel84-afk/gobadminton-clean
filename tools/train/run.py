@@ -936,6 +936,27 @@ def execute_claim(admission, adapters, *, results_root, config=None, parent_leas
             # Resume after deadline mid-publish: redo publish from PREQA_OK.
             claim = mark_phase(path, 'PREQA_OK', stage='preqa_diff',
                                candidate_sha=claim.get('candidate_sha'))
+        if claim.get('phase') == 'WAKE_RESUME' and claim.get('stage') == 'qa':
+            # Restore eligible CI_PASS for ordinary deferred QA / capacity fallback.
+            # Without this, wake skips every branch and returns DEV_ACCEPTED path
+            # incorrectly (no QA/merge/deploy). Verify retained candidate + CI SHA.
+            cand = claim.get('candidate_sha')
+            ci = claim.get('ci') or {}
+            if not (isinstance(cand, str) and SHA40.fullmatch(cand)):
+                mark_phase(path, 'BLOCKED', stage='qa', error='resume_candidate_missing')
+                return {'status': 'blocked', 'claim': read_receipt(path),
+                        'claim_path': str(path), 'reason': 'resume_candidate'}
+            if ci.get('head_sha') and ci['head_sha'] != cand:
+                mark_phase(path, 'BLOCKED', stage='wait_ci', ci=ci,
+                           error='ci_head_mismatch')
+                raise LeanError('ci_head_mismatch', ci.get('head_sha'))
+            claim = mark_phase(
+                path, 'CI_PASS', stage='wait_ci', ci=ci,
+                candidate_sha=cand,
+                resume_provider=claim.get('resume_provider'),
+                resume_operation=claim.get('resume_operation'),
+                wake=claim.get('wake'),
+                runtime=claim.get('runtime'))
         _resume_author = (
             claim.get('phase') == 'WAKE_RESUME'
             and claim.get('stage') in ('claim', 'author', 'repair', None)
@@ -1109,10 +1130,17 @@ def execute_claim(admission, adapters, *, results_root, config=None, parent_leas
         claim = read_receipt(path)
         if claim.get('phase') == 'CI_PASS':
             if _wake_budget_exhausted(adapters, 'qa'):
-                claim = mark_phase(path, 'WAKE_RESUME', stage='qa', wake='deadline')
+                claim = mark_phase(path, 'WAKE_RESUME', stage='qa', wake='deadline',
+                                   resume_provider=claim.get('resume_provider'),
+                                   resume_operation=claim.get('resume_operation'))
                 return {'status': 'wake_resume', 'claim': claim, 'claim_path': str(path),
                         'reason': 'deadline'}
-            provider, reason, _meta = select_qa_provider(task, issue=claim['issue'])
+            resume_provider = claim.get('resume_provider')
+            if resume_provider == 'agy_qa':
+                # Codex capacity already done on prior wake — AGY only, no Codex rerun.
+                provider, reason = 'agy_qa', 'capacity_fallback_resume'
+            else:
+                provider, reason, _meta = select_qa_provider(task, issue=claim['issue'])
             claim['attempts'] = dict(claim.get('attempts') or {})
             claim['attempts']['qa'] = int(claim['attempts'].get('qa') or 0) + 1
             qa_evidence = _qa_candidate_dir(
@@ -1125,14 +1153,18 @@ def execute_claim(admission, adapters, *, results_root, config=None, parent_leas
                 'candidate_sha': claim.get('candidate_sha'),
                 'evidence_root': str(evidence),
                 'qa_evidence_dir': str(qa_evidence),
+                'resume_provider': resume_provider,
             })
             mark_phase(path, 'RUNNING', stage='qa', qa_provider=provider, qa_route_reason=reason,
                        attempts=claim['attempts'], qa_evidence_dir=str(qa_evidence),
+                       resume_provider=resume_provider,
                        runtime=runtime)
             # Feed immutable frozen runtime to QA — never recreate worktree from raw task.
             qa_task = dict(task)
             qa_task['worktree'] = claim.get('worktree')
             qa_task['runtime_base_sha'] = claim.get('base_sha')
+            if resume_provider == 'agy_qa':
+                qa_task['qaroute'] = ['agy_qa']
             try:
                 if adapters.qa:
                     raw = adapters.qa(dict(
@@ -1141,6 +1173,7 @@ def execute_claim(admission, adapters, *, results_root, config=None, parent_leas
                         base_sha=claim.get('base_sha'),
                         evidence_dir=str(qa_evidence),
                         evidence_root=str(evidence),
+                        resume_provider=resume_provider,
                         runtime=runtime,
                     ))
                 else:
@@ -1149,12 +1182,16 @@ def execute_claim(admission, adapters, *, results_root, config=None, parent_leas
                         evidence_dir=qa_evidence, launcher=None)
             except ProviderError as err:
                 if err.code == 'wake_defer_capacity_fallback':
-                    # Codex capacity already charged; AGY fallback deferred — no
-                    # attempt bump beyond the Codex call, no AGY paid call.
+                    # Codex capacity already charged; persist next AGY operation —
+                    # no AGY paid call this wake; next wake skips Codex.
                     claim = mark_phase(
                         path, 'WAKE_RESUME', stage='qa',
                         wake='capacity_fallback_budget', error=err.code,
-                        attempts=claim['attempts'])
+                        resume_provider='agy_qa',
+                        resume_operation='agy_capacity_fallback',
+                        attempts=claim['attempts'],
+                        candidate_sha=claim.get('candidate_sha'),
+                        runtime=runtime)
                     return {'status': 'wake_resume', 'claim': claim,
                             'claim_path': str(path), 'reason': 'deadline'}
                 if 'unknown' in err.code or err.charge == 'unknown':
@@ -1169,6 +1206,10 @@ def execute_claim(admission, adapters, *, results_root, config=None, parent_leas
             else:
                 verdict = parse_qa_verdict(raw, claim['candidate_sha'], provider=provider)
             claim = apply_qa_result(claim, verdict, claim_path=path)
+            # Clear one-shot capacity resume after actual QA completed.
+            if claim.get('resume_provider'):
+                claim.pop('resume_provider', None)
+                claim.pop('resume_operation', None)
             claim['attempts'] = claim.get('attempts') or {}
             if claim.get('phase') == 'QA_FAIL':
                 claim['repair_findings'] = list(verdict.get('findings') or [])

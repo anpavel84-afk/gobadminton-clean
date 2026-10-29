@@ -1017,6 +1017,10 @@ class LiveBindingsTests(unittest.TestCase):
         self.assertIn('NATIVE_CODEX_HOME', src)
         self.assertIn("str(NATIVE_CODEX_HOME): 'deny'", src)
         self.assertIn("str(AGENT_HOME / '.ssh'): 'deny'", src)
+        # umask 077 Root evidence: CLI -o final under private 1002 TMPDIR, parent collects.
+        self.assertIn('final_private', src)
+        self.assertIn("tmpdir / 'final.txt'", src)
+        self.assertNotIn("'-o', str(evidence / 'final.txt')", src)
         self.assertEqual(lean_live.MODE_A_RULES, lean_live.PACKAGE_ROOT / 'AGENTS.md')
         self.assertIn('parents[2]', inspect.getsource(lean_live))
         rules_src = inspect.getsource(lean_live.load_short_rules)
@@ -1837,6 +1841,208 @@ class WakeBudgetStageTests(unittest.TestCase):
             self.assertEqual(out['claim']['phase'], 'WAKE_RESUME')
             self.assertEqual(state['author_calls'], 0)
             self.assertEqual(int((out['claim'].get('attempts') or {}).get('author') or 0), 0)
+
+
+class Od018TransportSeamTests(unittest.TestCase):
+    def test_agy_bundle_create_head_and_fetch_exact_candidate(self):
+        """Real local git: bundle create HEAD (not bare SHA) + fetch tip == candidate."""
+        import subprocess
+        mat = inspect.getsource(lean_live._agy_materialize_qa_snapshot)
+        self.assertIn("'HEAD'", mat)
+        self.assertIn('chown(tmp_bundle', mat)
+        self.assertNotIn(
+            "bundle', 'create', str(tmp_path), candidate_sha", mat)
+        # Proven recipe: named ref required; bare SHA → empty bundle refused.
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            repo = td / 'author'
+            repo.mkdir()
+            env = {
+                'PATH': '/usr/bin:/bin', 'HOME': str(td),
+                'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null',
+                'GIT_CONFIG_SYSTEM': '/dev/null',
+            }
+            def g(*args):
+                return subprocess.run(
+                    ['/usr/bin/git', '-c', 'core.hooksPath=/dev/null', *args],
+                    cwd=repo, env=env, capture_output=True, text=True, check=True)
+            g('init')
+            g('config', 'user.email', 't@example.com')
+            g('config', 'user.name', 't')
+            (repo / 'f.txt').write_text('x\n')
+            g('add', 'f.txt')
+            g('commit', '-m', 'c1')
+            head = g('rev-parse', 'HEAD').stdout.strip()
+            self.assertEqual(len(head), 40)
+            empty = td / 'empty.bundle'
+            bad = subprocess.run(
+                ['/usr/bin/git', '-c', 'core.hooksPath=/dev/null',
+                 'bundle', 'create', str(empty), head],
+                cwd=repo, env=env, capture_output=True, text=True)
+            self.assertNotEqual(bad.returncode, 0)
+            self.assertIn('empty bundle', (bad.stderr or bad.stdout or '').lower())
+            good = td / 'ok.bundle'
+            g('bundle', 'create', str(good), 'HEAD')
+            dest = td / 'dest'
+            dest.mkdir()
+            subprocess.run(
+                ['/usr/bin/git', '-c', 'core.hooksPath=/dev/null', 'init'],
+                cwd=dest, env=env, check=True, capture_output=True)
+            subprocess.run(
+                ['/usr/bin/git', '-c', 'core.hooksPath=/dev/null',
+                 'fetch', '--no-tags', str(good), f'{head}:refs/lean-qa/t'],
+                cwd=dest, env=env, check=True, capture_output=True)
+            tip = subprocess.run(
+                ['/usr/bin/git', '-c', 'core.hooksPath=/dev/null',
+                 'rev-parse', 'refs/lean-qa/t'],
+                cwd=dest, env=env, capture_output=True, text=True, check=True
+            ).stdout.strip()
+            self.assertEqual(tip, head)
+            # Ownership drop order: chown fresh tmpdir before bundle Git drop.
+            order = []
+            real_chown = os.chown
+
+            def track_chown(path, uid, gid):
+                order.append(('chown', str(path), uid, gid))
+                try:
+                    real_chown(path, uid, gid)
+                except OSError:
+                    pass
+
+            with mock.patch.object(lean_live, 'AGY_QA_GIT_BASE', dest), \
+                    mock.patch.object(lean_live, 'AGY_QA_WORKTREES', td / 'wt'), \
+                    mock.patch.object(lean_live, 'AGY_QA_INPUTS', td / 'inputs'), \
+                    mock.patch.object(lean_live, 'git', side_effect=lambda cwd, *a, **k: (
+                        head if 'HEAD' in a else (
+                            '' if a and a[0] == 'status' else head))), \
+                    mock.patch.object(lean_live, '_agy_plain_git') as plain, \
+                    mock.patch('os.chown', side_effect=track_chown), \
+                    mock.patch('os.geteuid', return_value=0):
+                (td / 'wt').mkdir(exist_ok=True)
+                (td / 'inputs').mkdir(exist_ok=True)
+
+                def fake_plain(cwd, *args, home='/nonexistent', drop=None, timeout=120):
+                    order.append(('git', list(args), drop))
+                    if args[:2] == ('bundle', 'create'):
+                        self.assertEqual(args[3], 'HEAD')
+                        Path(args[2]).write_bytes(good.read_bytes())
+                        return ''
+                    if args and args[0] == 'rev-parse' and 'refs/lean-qa' in str(args):
+                        raise lean_live.LiveError('agy_plain_git_failed', 'missing')
+                    if args and args[0] == 'fetch':
+                        return ''
+                    if args[:2] == ('worktree', 'add'):
+                        qa = Path(args[3])
+                        qa.mkdir(parents=True, exist_ok=True)
+                        return ''
+                    if args and args[0] == 'rev-parse' and 'HEAD' in args:
+                        return head
+                    if args and args[0] == 'status':
+                        return ''
+                    return head
+
+                plain.side_effect = fake_plain
+                out = lean_live._agy_materialize_qa_snapshot(
+                    author_source=repo, candidate_sha=head, base_sha=head,
+                    issue=29, operation='abc123')
+            self.assertEqual(out['candidate_sha'], head)
+            chowns_before_bundle = [
+                e for e in order
+                if e[0] == 'chown' and 'gb-agy-bundle-' in e[1]
+            ]
+            bundle_git = [
+                e for e in order
+                if e[0] == 'git' and e[1][:2] == ['bundle', 'create']
+            ]
+            self.assertTrue(chowns_before_bundle)
+            self.assertTrue(bundle_git)
+            self.assertLess(
+                order.index(chowns_before_bundle[0]),
+                order.index(bundle_git[0]))
+            self.assertEqual(chowns_before_bundle[0][2], lean_live.CURSOR_UID)
+
+    def test_agy_prompt_diff_source_and_native_evidence_under_input(self):
+        prompt_src = inspect.getsource(lean_live._agy_build_prompt)
+        self.assertIn('diff_source', prompt_src)
+        live_src = inspect.getsource(lean_live.agy_qa_live)
+        self.assertIn('diff_source=author_source', live_src)
+        self.assertIn("native-evidence", live_src)
+        inv = inspect.getsource(lean_live._agy_product_invoke)
+        self.assertIn('native_evidence', inv)
+        self.assertIn('_agy_collect_native_evidence', inv)
+
+    def test_wake_resume_qa_restores_ci_pass_capacity_two_wake(self):
+        """Wake1: Codex capacity defer, no AGY/merge/deploy. Wake2: AGY only + DEV."""
+        with tempfile.TemporaryDirectory() as td:
+            cand = _sha(42)
+            adapters, state = make_flow_adapters(td, shas=[cand])
+            state['codex_calls'] = 0
+            state['agy_calls'] = 0
+
+            def qa(claim):
+                state['qa_calls'] += 1
+                sha = claim['candidate_sha']
+                state['qa_worktrees'].append(claim.get('worktree'))
+                state['qa_bases'].append(claim.get('base_sha'))
+                state['qa_evidence_dirs'].append(claim.get('evidence_dir'))
+                resume = claim.get('resume_provider') or claim.get('qa_provider')
+                if resume == 'agy_qa':
+                    state['agy_calls'] += 1
+                    return {
+                        'verdict': 'PASS', 'findings': [], 'reviewed_sha': sha,
+                        'charge': 'charged', 'provider': 'agy_qa',
+                    }
+                state['codex_calls'] += 1
+                if state['codex_calls'] == 1:
+                    raise providers.ProviderError(
+                        'wake_defer_capacity_fallback', 'remaining<1860',
+                        charge='charged')
+                self.fail('Codex must not rerun on capacity-fallback resume')
+
+            adapters.qa = qa
+            # Deploy must not be accepted until real server ACCEPTED on second wake.
+            deploy_calls = {'n': 0}
+
+            def deploy(claim):
+                deploy_calls['n'] += 1
+                return {
+                    'accepted': True, 'live_sha': claim['merged_sha'],
+                    'receipt': {'status': 'ACCEPTED', 'line': 'ACCEPTED'},
+                }
+
+            adapters.deploy = deploy
+            comment, _ = owner_task_comment(
+                issue=911,
+                independentfallback=['agy_qa'],
+                qaroute=['codex_sol_medium'],
+            )
+            adm = lean_run.admit_comment(
+                comment, {'number': 911, 'state': 'open'}, {'id': REPO_ID})
+            out1 = lean_run.execute_claim(adm, adapters, results_root=td)
+            self.assertEqual(out1['status'], 'wake_resume')
+            self.assertEqual(out1['claim']['phase'], 'WAKE_RESUME')
+            self.assertEqual(out1['claim'].get('stage'), 'qa')
+            self.assertEqual(out1['claim'].get('resume_provider'), 'agy_qa')
+            self.assertEqual(out1['claim'].get('wake'), 'capacity_fallback_budget')
+            self.assertEqual(state['codex_calls'], 1)
+            self.assertEqual(state['agy_calls'], 0)
+            self.assertEqual(state['merge_calls'], 0)
+            self.assertEqual(deploy_calls['n'], 0)
+            # Negative: must not report DEV accepted before server ACCEPTED.
+            self.assertNotEqual(out1['status'], 'dev_accepted_uat_pending')
+            self.assertNotEqual(
+                out1['claim'].get('phase'), 'DEV_ACCEPTED_UAT_PENDING')
+            self.assertNotEqual(out1['claim'].get('phase'), 'DEV_ACCEPTED')
+
+            out2 = lean_run.execute_claim(adm, adapters, results_root=td)
+            self.assertEqual(out2['status'], 'dev_accepted_uat_pending')
+            self.assertEqual(out2['claim']['phase'], 'DEV_ACCEPTED_UAT_PENDING')
+            self.assertEqual(state['codex_calls'], 1)
+            self.assertEqual(state['agy_calls'], 1)
+            self.assertEqual(state['qa_calls'], 2)
+            self.assertEqual(state['merge_calls'], 1)
+            self.assertEqual(deploy_calls['n'], 1)
+            self.assertNotIn('resume_provider', out2['claim'] or {})
 
 
 if __name__ == '__main__':

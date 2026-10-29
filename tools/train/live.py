@@ -1037,18 +1037,28 @@ def _agy_operation_fingerprint(task, candidate_sha, attempt):
     ).hexdigest()
 
 
-def _agy_build_prompt(task, candidate_sha, *, rules_text, source, base_sha):
-    """Exact short rules + task criteria + source diff; dynamic issue/base/candidate/attempt."""
+def _agy_build_prompt(task, candidate_sha, *, rules_text, source, base_sha,
+                      diff_source=None):
+    """Exact short rules + task criteria + source diff; dynamic issue/base/candidate/attempt.
+
+    Diff is computed as Root parent via live.git on the original author UID1002
+    tree (diff_source). Prompt SOURCE_ROOT is the readonly QA copy — never
+    live.git UID1002 against the QA978 tree (dubious ownership omits diff).
+    """
     issue = int(task['issue'])
     attempt = task.get('attempt') or task.get('qa_attempt') or 1
     acceptance = task.get('acceptance') or task.get('criteria') or []
     goal = task.get('goal') or ''
     diff_names = ''
     diff_stat = ''
+    # Prefer explicit author source for diff; fall back only when same tree.
+    diff_from = Path(diff_source) if diff_source else Path(source)
     if base_sha and SHA40.fullmatch(str(base_sha)):
         try:
-            diff_names = git(source, 'diff', '--name-status', str(base_sha), candidate_sha, '--')
-            diff_stat = git(source, 'diff', '--stat', str(base_sha), candidate_sha, '--')
+            diff_names = git(
+                diff_from, 'diff', '--name-status', str(base_sha), candidate_sha, '--')
+            diff_stat = git(
+                diff_from, 'diff', '--stat', str(base_sha), candidate_sha, '--')
         except LiveError:
             diff_names = ''
             diff_stat = ''
@@ -1175,12 +1185,18 @@ def _agy_materialize_qa_snapshot(*, author_source, candidate_sha, base_sha,
         raise LiveError('agy_qa_worktree_exists', str(qa_work))
     bundle = input_dir / 'candidate.bundle'
     # Temporary bounded bundle as UID1002 from author source (Root parent).
+    # Root mkdtemp is 0700 — chown ONLY this fresh dir so Git drop 1002 can write.
     tmp_bundle = Path(tempfile.mkdtemp(prefix='gb-agy-bundle-', dir='/tmp'))
     try:
+        if os.geteuid() == 0:
+            os.chown(tmp_bundle, CURSOR_UID, CURSOR_GID)
         tmp_path = tmp_bundle / 'candidate.bundle'
+        # Git bundle refuses a bare SHA tip ("empty bundle"); named ref HEAD
+        # after exact candidate+clean verification above.
         _agy_plain_git(
-            author_source, 'bundle', 'create', str(tmp_path), candidate_sha,
+            author_source, 'bundle', 'create', str(tmp_path), 'HEAD',
             drop=1002 if os.geteuid() == 0 else None)
+        # Root copies bundle after child known completed.
         shutil.copy2(tmp_path, bundle)
     finally:
         shutil.rmtree(tmp_bundle, ignore_errors=True)
@@ -1321,33 +1337,73 @@ def _agy_read_charge_receipt(path):
     return int(rec.get('calls_charged') or 0) == 1, rec
 
 
+def _agy_collect_native_evidence(child_ev, root_ev):
+    """Copy raw/native/charge/status from 978 native dir into Root private evidence.
+
+    Never opens Root protected state for the child; never chowns historical trees.
+    Regular non-symlink files only.
+    """
+    child_ev = Path(child_ev)
+    root_ev = Path(root_ev)
+    try:
+        if child_ev.resolve() == root_ev.resolve():
+            return
+    except OSError:
+        if str(child_ev) == str(root_ev):
+            return
+    root_ev.mkdir(parents=True, exist_ok=True)
+    for name in ('stream.raw', 'native-receipt.json',
+                 'shared-charge-receipt.json', 'child-ipc-status.json'):
+        src = child_ev / name
+        if src.is_file() and not src.is_symlink():
+            (root_ev / name).write_bytes(src.read_bytes())
+    nested = child_ev / 'evidence'
+    if nested.is_dir() and not nested.is_symlink():
+        dest = root_ev / 'evidence'
+        dest.mkdir(parents=True, exist_ok=True)
+        for src in nested.iterdir():
+            if src.is_file() and not src.is_symlink():
+                (dest / src.name).write_bytes(src.read_bytes())
+
+
 def _agy_product_invoke(native, prompt, work, evidence, task_hash, charge, *,
-                        timeout=900, common_git=None):
+                        timeout=900, common_git=None, native_evidence=None):
     """Call installed native.invoke(..., product=True). Parent Root; child 978.
 
     Fork IPC is bounded JSON fixed fields only. Parent knows fixed evidence paths
     and never trusts child-supplied paths. charge_state is COW after fork — child
-    persists charged stage in evidence receipt; parent audits once after collect.
+    persists charged stage in native evidence receipt; parent audits once after
+    collect into Root private evidence. With umask 077 Root parents, child MUST
+    write under qa_snap.input_dir (978-owned), not Root results leaves.
     """
     evidence = Path(evidence)
     work = Path(work)
-    out_raw = evidence / 'stream.raw'
-    out_receipt = evidence / 'native-receipt.json'
-    charge_receipt = evidence / 'shared-charge-receipt.json'
-    ipc_status = evidence / 'child-ipc-status.json'
-    # Unprivileged review output must be writable to 978; root collects after.
-    if os.geteuid() == 0:
+    # Native/child writes: fresh 978-owned dir under qa input, else legacy leaf.
+    child_ev = Path(native_evidence) if native_evidence else evidence
+    if native_evidence is not None:
+        child_ev.mkdir(parents=True, exist_ok=True)
+        if os.geteuid() == 0:
+            try:
+                os.chown(child_ev, AGY_UID, 968)
+            except OSError:
+                pass
+    elif os.geteuid() == 0:
+        # Legacy path only when no native_evidence — chown just this leaf.
         chown_bounded_output_dir(evidence, uid=AGY_UID, gid=968)
+    out_raw = child_ev / 'stream.raw'
+    out_receipt = child_ev / 'native-receipt.json'
+    charge_receipt = child_ev / 'shared-charge-receipt.json'
+    ipc_status = child_ev / 'child-ipc-status.json'
 
     def _run_invoke(local_charge):
         record = {}
         common = common_git or _agy_plain_git(
             work, 'rev-parse', '--path-format=absolute', '--git-common-dir',
-            home=str(evidence))
+            home=str(child_ev))
         popen = _agy_confined_popen_factory(native, work, common, record)
         raw, native_receipt = native.invoke(
             prompt, timeout, work=work, slot=AGY_SLOT, task_hash=task_hash,
-            charge=local_charge, popen=popen, evidence_dir=evidence / 'evidence',
+            charge=local_charge, popen=popen, evidence_dir=child_ev / 'evidence',
             product=True)
         out_raw.write_bytes(raw if isinstance(raw, bytes) else str(raw).encode())
         out_receipt.write_text(
@@ -1355,8 +1411,41 @@ def _agy_product_invoke(native, prompt, work, evidence, task_hash, charge, *,
                        indent=2, default=str) + '\n')
         return raw, native_receipt
 
+    def _finish(raw, receipt_obj, charged_flag, charge_rec, payload_ok=True, payload=None):
+        _agy_collect_native_evidence(child_ev, evidence)
+        # Prefer Root copies after collect.
+        root_raw = evidence / 'stream.raw'
+        root_receipt = evidence / 'native-receipt.json'
+        root_charge = evidence / 'shared-charge-receipt.json'
+        if root_raw.is_file():
+            raw = root_raw.read_bytes()
+        elif out_raw.is_file() and not raw:
+            raw = out_raw.read_bytes()
+        if not receipt_obj and root_receipt.is_file():
+            try:
+                receipt_obj = loads(root_receipt.read_bytes())
+            except (ValueError, LiveError):
+                receipt_obj = {}
+        if not charge_rec:
+            charged_flag, charge_rec = _agy_read_charge_receipt(root_charge)
+            if not charged_flag:
+                charged_flag, charge_rec = _agy_read_charge_receipt(charge_receipt)
+        receipt = dict(receipt_obj) if isinstance(receipt_obj, dict) else {}
+        receipt['shared_budget_charged'] = charged_flag
+        receipt['charge_receipt'] = charge_rec
+        if not payload_ok:
+            code = (payload or {}).get('error_code') or 'agy_native_child_failed'
+            err = LiveError(str(code), (payload or {}).get('error'))
+            err.charged = charged_flag
+            err.raw = raw
+            err.receipt = receipt
+            raise err
+        return raw if isinstance(raw, bytes) else (raw or b''), receipt
+
     if os.geteuid() == AGY_UID:
-        return _run_invoke(charge)
+        raw, native_receipt = _run_invoke(charge)
+        charged_flag, charge_rec = _agy_read_charge_receipt(charge_receipt)
+        return _finish(raw, {'native': native_receipt}, charged_flag, charge_rec)
 
     if os.geteuid() != 0:
         raise LiveError('agy_wrong_executor_uid', str(os.geteuid()))
@@ -1380,7 +1469,7 @@ def _agy_product_invoke(native, prompt, work, evidence, task_hash, charge, *,
                 nonlocal charged
                 if charged:
                     raise LiveError('agy_double_charge_refused')
-                # ONLY shared Budget.charge + own bounded receipt — never Root
+                # ONLY shared Budget.charge + own native receipt — never Root
                 # private results audit ledger from UID978.
                 charge()
                 charged = True
@@ -1436,7 +1525,7 @@ def _agy_product_invoke(native, prompt, work, evidence, task_hash, charge, *,
     finally:
         os.close(r_fd)
     os.waitpid(pid, 0)
-    # Prefer pipe JSON; fall back to fixed status file parent already owns.
+    # Prefer pipe JSON; fall back to fixed status file under native evidence.
     try:
         payload = _agy_ipc_unpack(raw_ipc) if raw_ipc else {}
     except LiveError:
@@ -1457,19 +1546,9 @@ def _agy_product_invoke(native, prompt, work, evidence, task_hash, charge, *,
             receipt = loads(out_receipt.read_bytes())
         except (ValueError, LiveError):
             receipt = {}
-    receipt = dict(receipt) if isinstance(receipt, dict) else {}
-    receipt['shared_budget_charged'] = charged_flag
-    receipt['charge_receipt'] = charge_rec
-    if not payload.get('ok'):
-        code = payload.get('error_code') or 'agy_native_child_failed'
-        err = LiveError(str(code), payload.get('error'))
-        err.charged = charged_flag
-        err.raw = raw
-        err.receipt = receipt
-        raise err
-    if not raw and out_raw.is_file():
-        raw = out_raw.read_bytes()
-    return raw, receipt
+    return _finish(
+        raw, receipt, charged_flag, charge_rec,
+        payload_ok=bool(payload.get('ok')), payload=payload)
 
 
 def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None):
@@ -1518,45 +1597,13 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None):
         'PASS => findings must be []. Findings list only actionable defects.\n'
     )
     (evidence / 'prompt.md').write_text(prompt)
-    # Bounded QA output must be writable by UID1002 CLI (-o final.txt); parents stay Root.
-    if os.geteuid() == 0:
-        chown_bounded_output_dir(evidence)
+    # Prompt/events/stderr stay Root-opened FDs (inherited). CLI -o final must NOT
+    # target Root 0700 evidence ancestors — use private 1002 TMPDIR tree instead.
     codex = AGENT_HOME / '.local' / 'bin' / 'codex'
     if not codex.is_file():
         mark_intent_phase(intent_path, 'HOLD_no_automatic_replay', error='codex_absent')
         raise ProviderError('codex_absent')
     common = _git_common_dir(source)
-    fs = {
-        ':root': 'deny', ':minimal': 'read', ':slash_tmp': 'deny', ':tmpdir': 'write',
-        str(source): 'read', str(source / '.git'): 'read',
-        str(evidence): 'write',
-        str(AGENT_HOME / 'train-execution-evidence-20261027'): 'read',
-        str(AGENT_HOME / '.local' / 'lib' / 'node_modules' / '@openai'): 'read',
-        str(AGENT_HOME / '.local' / 'node-v24.21.0'): 'read',
-        str(NATIVE_CODEX_HOME): 'deny',
-        str(AGENT_HOME / '.ssh'): 'deny',
-        '/srv/gb-slots': 'deny',
-        '/var/lib/gobadminton-actions-train': 'deny',
-        '/var/lib/gobadminton-autonomy': 'deny',
-        '/etc/gobadminton-slots': 'deny',
-    }
-    if common:
-        fs[common] = 'read'
-    fs[str(rules_path)] = 'read'
-    fs_expr = ','.join(json.dumps(k) + '=' + json.dumps(v) for k, v in fs.items())
-    cmd = [
-        '/usr/bin/timeout', '--signal=TERM', '--kill-after=15s', str(QA_TIMEOUT_S),
-        str(codex), '--no-daemon', 'exec', '--ignore-user-config', '--ignore-rules',
-        '--ephemeral', '--skip-git-repo-check', '-C', str(source),
-        '-c', 'approval_policy="never"',
-        '-c', 'default_permissions="gb-task"',
-        '-c', 'permissions.gb-task=' + ('{extends=":read-only",network={enabled=false},filesystem={' + fs_expr + '}}'),
-        '-c', 'mcp_servers={}', '-c', 'features.hooks=false', '-c', 'features.apps=false',
-        '-c', 'web_search="disabled"',
-        '--model', 'gpt-6.1-sol',
-        '-c', 'model_reasoning_effort="medium"',
-        '--json', '-o', str(evidence / 'final.txt'), '-',
-    ]
     # Match launch_medium_qa: real HOME + native ~/.codex for CLI OAuth; private TMPDIR only.
     # Never Root HOME, never copy/print credentials, never empty private HOME without CODEX_HOME.
     private = Path(tempfile.mkdtemp(prefix='gb-codex-lean-', dir='/tmp'))
@@ -1566,6 +1613,38 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None):
         tmpdir.mkdir(mode=0o700)
         if os.geteuid() == 0:
             chown_private_tree(private)
+        final_private = tmpdir / 'final.txt'
+        fs = {
+            ':root': 'deny', ':minimal': 'read', ':slash_tmp': 'deny', ':tmpdir': 'write',
+            str(source): 'read', str(source / '.git'): 'read',
+            str(tmpdir): 'write',
+            str(AGENT_HOME / 'train-execution-evidence-20261027'): 'read',
+            str(AGENT_HOME / '.local' / 'lib' / 'node_modules' / '@openai'): 'read',
+            str(AGENT_HOME / '.local' / 'node-v24.21.0'): 'read',
+            str(NATIVE_CODEX_HOME): 'deny',
+            str(AGENT_HOME / '.ssh'): 'deny',
+            '/srv/gb-slots': 'deny',
+            '/var/lib/gobadminton-actions-train': 'deny',
+            '/var/lib/gobadminton-autonomy': 'deny',
+            '/etc/gobadminton-slots': 'deny',
+        }
+        if common:
+            fs[common] = 'read'
+        fs[str(rules_path)] = 'read'
+        fs_expr = ','.join(json.dumps(k) + '=' + json.dumps(v) for k, v in fs.items())
+        cmd = [
+            '/usr/bin/timeout', '--signal=TERM', '--kill-after=15s', str(QA_TIMEOUT_S),
+            str(codex), '--no-daemon', 'exec', '--ignore-user-config', '--ignore-rules',
+            '--ephemeral', '--skip-git-repo-check', '-C', str(source),
+            '-c', 'approval_policy="never"',
+            '-c', 'default_permissions="gb-task"',
+            '-c', 'permissions.gb-task=' + ('{extends=":read-only",network={enabled=false},filesystem={' + fs_expr + '}}'),
+            '-c', 'mcp_servers={}', '-c', 'features.hooks=false', '-c', 'features.apps=false',
+            '-c', 'web_search="disabled"',
+            '--model', 'gpt-6.1-sol',
+            '-c', 'model_reasoning_effort="medium"',
+            '--json', '-o', str(final_private), '-',
+        ]
         child_env = {
             'PATH': '/usr/bin:/bin:' + str(AGENT_HOME / '.local' / 'bin'),
             'LANG': 'C.UTF-8',
@@ -1589,6 +1668,10 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None):
                 mark_intent_phase(intent_path, 'UNKNOWN', error='timeout',
                                   no_blind_replay=True)
                 raise ProviderError('qa_timeout_unknown', str(err), charge='unknown') from err
+        # Parent securely collects regular non-symlink final into Root evidence AFTER exit.
+        final = evidence / 'final.txt'
+        if final_private.is_file() and not final_private.is_symlink():
+            final.write_bytes(final_private.read_bytes())
         # Persist raw completion envelope before parse (no automatic paid replay).
         completion = {
             'exit': p.returncode,
@@ -1611,7 +1694,6 @@ def codex_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None):
         if not completion['turn_completed']:
             mark_intent_phase(intent_path, 'HOLD_no_automatic_replay', error='turn_completed_missing')
             raise ProviderError('codex_turn_completed_missing')
-        final = evidence / 'final.txt'
         if not final.is_file():
             raise ProviderError('codex_final_missing')
         raw_final = final.read_text()
@@ -1723,6 +1805,7 @@ def agy_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None,
     qa_snap = None
     source = author_source
     common_git = None
+    native_ev = evidence
     if _invoke is None:
         try:
             qa_snap = _agy_materialize_qa_snapshot(
@@ -1733,9 +1816,15 @@ def agy_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None,
                 source, 'rev-parse', '--path-format=absolute', '--git-common-dir',
                 home=str(qa_snap['input_dir']),
                 drop=978 if os.geteuid() == 0 else None)
+            # Child native evidence under fresh 978-owned input_dir — not Root results.
+            native_ev = Path(qa_snap['input_dir']) / 'native-evidence'
+            native_ev.mkdir(mode=0o700, exist_ok=True)
+            if os.geteuid() == 0:
+                os.chown(native_ev, AGY_UID, 968)
             (evidence / 'qa-snapshot.json').write_text(json.dumps({
                 'qa_work': str(source),
                 'input_dir': str(qa_snap['input_dir']),
+                'native_evidence': str(native_ev),
                 'ref': qa_snap['ref'],
                 'candidate_sha': candidate_sha,
                 'author_source': str(author_source),
@@ -1745,11 +1834,14 @@ def agy_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None,
                               error=err.code, detail=err.detail)
             raise ProviderError(err.code, err.detail) from err
 
+    # Diff from author UID1002 source; prompt names readonly QA SOURCE_ROOT.
     prompt = _agy_build_prompt(
-        task, candidate_sha, rules_text=rules_text, source=source, base_sha=base_sha)
+        task, candidate_sha, rules_text=rules_text, source=source, base_sha=base_sha,
+        diff_source=author_source)
     (evidence / 'prompt.txt').write_text(prompt)
 
-    charge_receipt = evidence / 'shared-charge-receipt.json'
+    # Charge receipt lives on child-writable native evidence (978), not Root 0700 tree.
+    charge_receipt = Path(native_ev) / 'shared-charge-receipt.json'
     # Child/same-UID charge: shared Budget ONLY. Parent writes private audit once.
     def charge():
         if charge_receipt.is_file():
@@ -1776,7 +1868,8 @@ def agy_qa_live(*, task, candidate_sha, evidence_dir, intent_path=None,
         else:
             raw, native_receipt = _agy_product_invoke(
                 native, prompt, source, evidence, fingerprint, charge,
-                timeout=QA_TIMEOUT_S, common_git=common_git)
+                timeout=QA_TIMEOUT_S, common_git=common_git,
+                native_evidence=native_ev)
     except ProviderError:
         raise
     except Exception as err:
@@ -2239,6 +2332,42 @@ def _agy_in_independent_fallback(task):
         for r in routes)
 
 
+def _agy_capacity_fallback_evidence(evidence, candidate_sha):
+    """Distinct AGY intent/evidence dir — never overwrite Codex receipts."""
+    agy_evidence = Path(evidence)
+    if agy_evidence.name.startswith('qa-'):
+        fallback = agy_evidence.parent / (
+            f'qa-agy-capacity-fallback-{candidate_sha[:12]}')
+    else:
+        fallback = Path(evidence) / (
+            f'qa-agy-capacity-fallback-{candidate_sha[:12]}')
+    fallback.mkdir(parents=True, exist_ok=True)
+    return fallback
+
+
+def _qa_resume_agy_capacity(claim, task, evidence, *, deadline=None):
+    """Invoke only qualified+explicit AGY after Codex capacity — no Codex rerun."""
+    from providers import role_ready, ProviderError
+    if not _agy_in_independent_fallback(task):
+        raise ProviderError('agy_capacity_fallback_not_admitted')
+    ok, _ready = role_ready('agy_qa')
+    if not ok:
+        raise ProviderError('agy_fallback_not_ready')
+    need_s = QA_TIMEOUT_S + 60
+    if deadline is not None and (deadline - time.monotonic()) < need_s:
+        # Still short: re-defer without AGY charge / without Codex replay.
+        raise ProviderError(
+            'wake_defer_capacity_fallback',
+            f'remaining<{need_s}', charge='charged')
+    fallback = _agy_capacity_fallback_evidence(evidence, claim['candidate_sha'])
+    agy_task = dict(task)
+    agy_task['attempt'] = f'capacity-fallback-{task.get("attempt") or 1}'
+    agy_task['qaroute'] = ['agy_qa']
+    return agy_qa_live(
+        task=agy_task, candidate_sha=claim['candidate_sha'],
+        evidence_dir=fallback)
+
+
 def qa_dispatch(claim, *, deadline=None):
     """Route QA: AGY when READY+admitted+quota else Codex Medium.
 
@@ -2246,7 +2375,8 @@ def qa_dispatch(claim, *, deadline=None):
     Exact Codex capacity + turn.failed may fall back to qualified AGY only when
     independentfallback explicitly includes agy — never on content FAIL / UNKNOWN /
     safety, never overwrite Codex output. Capacity fallback also needs remaining
-    wake budget for QA_TIMEOUT+margin or honest no-call deferral.
+    wake budget for QA_TIMEOUT+margin or honest no-call deferral. After deferred
+    capacity wake, resume_provider=agy_qa skips Codex prepare on the same candidate.
     """
     from providers import select_qa_provider, role_ready, ProviderError
     runtime = dict(claim.get('runtime') or {})
@@ -2258,8 +2388,6 @@ def qa_dispatch(claim, *, deadline=None):
         raise LiveError('qa_worktree_required')
     task['worktree'] = wt
     task['runtime_base_sha'] = claim.get('base_sha') or runtime.get('base_sha')
-    # Explicit task provider routes remain authoritative — do not override prohibited.
-    provider, reason, _meta = select_qa_provider(task, issue=claim['issue'])
     evidence = (
         claim.get('evidence_dir')
         or runtime.get('qa_evidence_dir')
@@ -2267,6 +2395,13 @@ def qa_dispatch(claim, *, deadline=None):
         or claim.get('evidence_root')
         or EVIDENCE_ROOT
     )
+    # Persisted capacity-fallback resume: skip already-completed Codex entirely.
+    resume = claim.get('resume_provider') or runtime.get('resume_provider')
+    if resume == 'agy_qa' or claim.get('wake') == 'capacity_fallback_budget':
+        return _qa_resume_agy_capacity(
+            claim, task, evidence, deadline=deadline)
+    # Explicit task provider routes remain authoritative — do not override prohibited.
+    provider, reason, _meta = select_qa_provider(task, issue=claim['issue'])
     if provider == 'agy_qa':
         return agy_qa_live(task=task, candidate_sha=claim['candidate_sha'],
                            evidence_dir=evidence)
@@ -2288,21 +2423,8 @@ def qa_dispatch(claim, *, deadline=None):
             raise ProviderError(
                 'wake_defer_capacity_fallback',
                 f'remaining<{need_s}', charge='charged') from err
-        # Distinct AGY intent/evidence — do not overwrite Codex receipts.
-        agy_evidence = Path(evidence)
-        if agy_evidence.name.startswith('qa-'):
-            fallback = agy_evidence.parent / (
-                f'qa-agy-capacity-fallback-{claim["candidate_sha"][:12]}')
-        else:
-            fallback = Path(evidence) / (
-                f'qa-agy-capacity-fallback-{claim["candidate_sha"][:12]}')
-        fallback.mkdir(parents=True, exist_ok=True)
-        agy_task = dict(task)
-        agy_task['attempt'] = f'capacity-fallback-{task.get("attempt") or 1}'
-        agy_task['qaroute'] = ['agy_qa']
-        return agy_qa_live(
-            task=agy_task, candidate_sha=claim['candidate_sha'],
-            evidence_dir=fallback)
+        return _qa_resume_agy_capacity(
+            claim, task, evidence, deadline=deadline)
 
 
 def update_monitor_backlog(queue_result, *, monitor_path=None):

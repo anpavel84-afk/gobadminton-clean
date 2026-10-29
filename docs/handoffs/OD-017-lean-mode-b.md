@@ -1,3 +1,17 @@
+# OD-017 / OD-018 — current source checkpoint · 2026-10-29
+
+Native Antigravity independent QA is READY after PR #376 and real PASS[] on source 85a38ec5 (protected root proof). Author is NOT READY. This qualification does not claim Mode B runtime acceptance.
+
+Same PR #378 now binds native product QA to fresh UID978 snapshots and accepted root qualification, with exact candidate verification, strict native finish/tools, private raw output, one shared Budget charge and provider-specific intents. Codex Medium remains default; only a known completed capacity failure with an explicitly authorized AGY alternative can use that fallback. Deferred QA resumes the preserved stage and pending provider, without repeating the completed Codex call.
+
+OD-020 paired installation removes only the artificial AGY per-Issue/day policy field, retains shared usage/history and absent author eligibility, and accepts eligible positive/infinite QA budget without historical OLD pins. Installation uses accepted Git blobs, existing writer/integration/controller locks, actual backups and rollback. Native adapter/guard and their READY proof remain unchanged. Legacy UNKNOWN is preserved; C5 stays disabled.
+
+Parent deterministic verification: 78 worker tests, 15 shared-budget tests and 10 budget-preflight tests PASS. New exact candidate independent QA and mandatory Product CI are pending. Mode B is NOT INSTALLED / NOT ACTIVE. No product call or automatic-delivery proof is claimed.
+
+Initial admitted queue: reuse #182 / PR #367 with guarded DEV capability, then bounded API child #375 under #372, then remaining authorized #372 / #373 scopes. Canonical Project #1 write access and parent/child priorities are verified; old OFF and stale backlog copies are not scheduling authority. Owner UAT remains separate. Integration stays dev; only the reviewed wake workflow is published on default main. MODE_B_ACTIVE requires two actual unattended product deliveries through DEV ACCEPTED.
+
+## Historical source-pass notes (superseded operational status)
+
 Current runtime checkpoint: PR #376 native AGY QA READY after real PASS[] on 85a38ec5, trusted UID978 proof; AGY author NOT READY. Mode B itself remains SOURCE ONLY, not installed/active; primary QA Codex Medium. Owner OD-020 supersedes the old five-call policy; source+runtime budget reconciliation is pending and is not a provider limit.
 
 # OD-017 / OD-018 — Lean Mode B · source handoff
