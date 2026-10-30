@@ -175,12 +175,15 @@ describe("player browse desktop v5 contracts", () => {
     expect(estimateBrowseBioChunkChars(long.length, 200, 200)).toBe(long.length);
     expect(deckSource).toContain("chunkBrowseBio");
     expect(deckSource).toContain("bioChunks.length > 1");
+    expect(deckSource).toContain('data-reserved="true"');
+    expect(deckSource).toContain("pb-profile-link--heading");
     expect(deckSource).toContain("Публичные ближайшие игры этого игрока пока недоступны.");
     expect(deckSource).not.toContain("Публичные игры пока не указаны.");
     expect(radarSource).toContain("directory-desktop");
     expect(radarSource).toContain("radar-dir-switch");
     expect(cssSource).toContain("radar-dir-switch");
     expect(cssSource).toContain("pb-details-bio");
+    expect(cssSource).toContain("pb-expanded-heading-actions");
   });
 
   it("desktop skips gestures while mobile keeps pointer handlers and tutorial gate", () => {
@@ -213,6 +216,10 @@ describe("player browse desktop v5 contracts", () => {
     expect(deckSource).toContain("setSlideDir(direction)");
     expect(deckSource).toContain("slideGen.current");
     expect(deckSource).toContain("reducedMotionRef");
+    expect(deckSource).toContain("slideFrameRef");
+    expect(deckSource).toContain("cancelSlideAnimation");
+    expect(deckSource).toContain("frame.animate");
+    expect(deckSource).toContain("getAnimations()");
     expect(deckSource).toMatch(/moveTo\(index \+ 1, "next"\)/);
     expect(deckSource).toMatch(/moveTo\(index - 1, "prev"\)/);
     expect(cssSource).toContain("is-sliding-next");

@@ -1220,12 +1220,12 @@
   min-height: inherit;
 }
 
-.gb-player-browse .pb-slide-frame.is-sliding-next {
-  animation: pb-slide-from-right 240ms ease both;
-}
-
+/* Directional slide motion is restarted per navigation via Web Animations API
+   (cancel + animate on the stable .pb-slide-frame). Class hooks remain for
+   direction state; CSS keyframes document the same geometry. */
+.gb-player-browse .pb-slide-frame.is-sliding-next,
 .gb-player-browse .pb-slide-frame.is-sliding-prev {
-  animation: pb-slide-from-left 240ms ease both;
+  will-change: transform, opacity;
 }
 
 @keyframes pb-slide-from-right {
@@ -1468,6 +1468,24 @@
     flex: none;
   }
 
+  .gb-player-browse[data-browse-desktop="true"] .pb-expanded-heading-actions {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 12px;
+    flex: none;
+    min-width: 0;
+  }
+
+  .gb-player-browse[data-browse-desktop="true"] .pb-profile-link--heading {
+    flex: none;
+    margin-top: 0;
+    min-height: 32px;
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
   .gb-player-browse[data-browse-desktop="true"] .pb-expanded-person {
     display: flex;
     align-items: center;
@@ -1566,8 +1584,14 @@
   .gb-player-browse[data-browse-desktop="true"] .pb-bio-chunk-meta {
     flex: none;
     margin-top: 6px !important;
+    min-height: 16px;
     font-size: 10px !important;
+    line-height: 1.2;
     color: #8fa28e !important;
+  }
+
+  .gb-player-browse[data-browse-desktop="true"] .pb-bio-chunk-meta[data-active="false"] {
+    visibility: hidden;
   }
 
   .gb-player-browse[data-browse-desktop="true"] .pb-expanded-dl {
@@ -1580,7 +1604,7 @@
     justify-content: space-between;
     gap: 16px;
     border-bottom: 1px solid #304536;
-    padding: 6px 0;
+    padding: 4px 0;
   }
 
   .gb-player-browse[data-browse-desktop="true"] .pb-expanded-dl dt {
@@ -1592,34 +1616,34 @@
     margin: 0;
     font-size: 11px;
     text-align: right;
-    line-height: 1.35;
+    line-height: 1.3;
   }
 
   .gb-player-browse[data-browse-desktop="true"] .pb-expanded-dl dd small {
     display: block;
     color: #8fa28e;
     font-size: 9px;
-    margin-top: 2px;
+    margin-top: 1px;
   }
 
   .gb-player-browse[data-browse-desktop="true"] .pb-games-note {
     font-size: 10px;
     color: #95aa94;
-    margin-top: 8px !important;
+    margin-top: 6px !important;
     flex: none;
-  }
-
-  .gb-player-browse[data-browse-desktop="true"] .pb-expanded-facts .pb-profile-link {
-    flex: none;
-    margin-top: 8px;
-    font-size: 11px;
   }
 
   .gb-player-browse[data-browse-desktop="true"] .pb-details-pager {
     flex: none;
     display: flex;
     gap: 12px;
+    align-items: center;
+    min-height: 32px;
     padding-top: 2px;
+  }
+
+  .gb-player-browse[data-browse-desktop="true"] .pb-details-pager[data-active="false"] {
+    visibility: hidden;
   }
 
   .gb-player-browse[data-browse-desktop="true"] .pb-details-more {

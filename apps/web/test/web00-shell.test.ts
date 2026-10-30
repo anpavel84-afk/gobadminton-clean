@@ -43,8 +43,10 @@ describe("WEB-00 frozen production shell", () => {
     expect(page).toContain('data-surface="players-directory"');
     expect(page).toContain("Каталог игроков сейчас недоступен");
     expect(page).toContain("isSocialDirectoryDisabled");
-    expect(page).not.toMatch(/Radar включён|displaySlot|proximityBand/);
+    // Truthful confirmedOn-gated ON/OFF copy is allowed; fabricated radar fields are not.
+    expect(page).not.toMatch(/displaySlot|proximityBand/);
     expect(page).not.toMatch(/fake player|fixture players/i);
+    expect(page).toMatch(/view\.confirmedOn\s*\?\s*[\s\S]*?Radar включён[\s\S]*?:\s*[\s\S]*?Radar выключен/);
   });
 
   it("keeps Button frozen variants with compatibility aliases", async () => {

@@ -112,6 +112,7 @@ export function PlayerBrowseDeck({
   const [slideDir, setSlideDir] = useState<PlayerBrowseSlideDirection | null>(null);
   const deckRef = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLElement>(null);
+  const slideFrameRef = useRef<HTMLDivElement>(null);
   const detailsBodyRef = useRef<HTMLDivElement>(null);
   const detailsBioRef = useRef<HTMLParagraphElement>(null);
   const tutorialRef = useRef<HTMLElement>(null);
@@ -120,6 +121,7 @@ export function PlayerBrowseDeck({
   const coverGen = useRef(0);
   const scopeGen = useRef(0);
   const slideGen = useRef(0);
+  const slideMounted = useRef(true);
   const restoredScope = useRef<string | null>(null);
   const reducedMotionRef = useRef(false);
 
@@ -179,6 +181,10 @@ export function PlayerBrowseDeck({
   useEffect(() => {
     scopeGen.current += 1;
     slideGen.current += 1;
+    const frame = slideFrameRef.current;
+    if (frame && typeof frame.getAnimations === "function") {
+      for (const anim of frame.getAnimations()) anim.cancel();
+    }
     setSkipStack([]);
     setDetailsOpen(false);
     setDetailsPage(0);
@@ -191,6 +197,10 @@ export function PlayerBrowseDeck({
 
   useEffect(() => {
     slideGen.current += 1;
+    const frame = slideFrameRef.current;
+    if (frame && typeof frame.getAnimations === "function") {
+      for (const anim of frame.getAnimations()) anim.cancel();
+    }
     setSlideDir(null);
   }, [authReload]);
 
@@ -288,6 +298,12 @@ export function PlayerBrowseDeck({
 
   const cityName = (cityId: string | null) => cities.find(c => c.id === cityId)?.nameRu;
 
+  const cancelSlideAnimation = useCallback(() => {
+    const frame = slideFrameRef.current;
+    if (!frame || typeof frame.getAnimations !== "function") return;
+    for (const anim of frame.getAnimations()) anim.cancel();
+  }, []);
+
   const moveTo = useCallback((next: number, direction?: PlayerBrowseSlideDirection) => {
     if (navigationLocked) return;
     if (next < 0 || next >= browsePlayers.length) return;
@@ -300,18 +316,47 @@ export function PlayerBrowseDeck({
       setIndex(next);
       setAnnounce(`Карточка ${String(next + 1).padStart(2, "0")} из ${String(browsePlayers.length).padStart(2, "0")}`);
       const duration = browseSlideDurationMs(false);
-      window.setTimeout(() => {
-        if (slideGen.current !== token) return;
-        setSlideDir(null);
-      }, duration);
+      const frame = slideFrameRef.current;
+      // Cancel + restart visible motion on the stable frame (no friendship remount).
+      if (frame && typeof frame.animate === "function") {
+        cancelSlideAnimation();
+        const fromX = direction === "next" ? "28%" : "-28%";
+        const animation = frame.animate(
+          [
+            { transform: `translateX(${fromX})`, opacity: 0.72 },
+            { transform: "translateX(0)", opacity: 1 },
+          ],
+          { duration, easing: "ease" },
+        );
+        void animation.finished.then(() => {
+          if (!slideMounted.current || slideGen.current !== token) return;
+          setSlideDir(null);
+        }).catch(() => { /* superseded cancel */ });
+      } else {
+        window.setTimeout(() => {
+          if (!slideMounted.current || slideGen.current !== token) return;
+          setSlideDir(null);
+        }, duration);
+      }
       return;
     }
+    cancelSlideAnimation();
     setSlideDir(null);
     setIndex(next);
     setAnnounce(`Карточка ${String(next + 1).padStart(2, "0")} из ${String(browsePlayers.length).padStart(2, "0")}`);
-  }, [browsePlayers.length, navigationLocked, desktop]);
+  }, [browsePlayers.length, navigationLocked, desktop, cancelSlideAnimation]);
 
-  useEffect(() => () => { slideGen.current += 1; }, []);
+  useEffect(() => {
+    slideMounted.current = true;
+    return () => {
+      slideMounted.current = false;
+      slideGen.current += 1;
+      const frame = slideFrameRef.current;
+      if (frame && typeof frame.getAnimations === "function") {
+        for (const anim of frame.getAnimations()) anim.cancel();
+      }
+    };
+  }, []);
 
   const skipCurrent = useCallback(() => {
     if (!current || navigationLocked || tutorialOpen) return;
@@ -357,11 +402,12 @@ export function PlayerBrowseDeck({
     // Instant index change — not a browse slide (no automatic browsing animation).
     if (next >= 0) {
       slideGen.current += 1;
+      cancelSlideAnimation();
       setSlideDir(null);
       setIndex(next);
       setAnnounce(`Карточка ${String(next + 1).padStart(2, "0")} из ${String(browsePlayers.length).padStart(2, "0")}`);
     }
-  }, [current, skipStack, browsePlayers, index, known]);
+  }, [current, skipStack, browsePlayers, index, known, cancelSlideAnimation]);
 
   const dismissTutorial = useCallback(() => {
     setTutorialOpen(false);
@@ -396,25 +442,37 @@ export function PlayerBrowseDeck({
         return;
       }
       if (!bioEl) return;
-      // Probe full bio in the same available box; chunk only when it actually overflows.
+      // Pager + chunk-meta slots stay reserved in layout before this measure runs.
       const previous = bioEl.textContent;
       bioEl.textContent = bio;
-      let client = bioEl.clientHeight;
-      let scroll = bioEl.scrollHeight;
+      const client = bioEl.clientHeight;
+      const scroll = bioEl.scrollHeight;
       let nextChunks = scroll <= client + 2
         ? [bio]
         : chunkBrowseBio(bio, estimateBrowseBioChunkChars(bio.length, client, scroll));
-      // Tighten once if the first chunk still clips in the same box.
-      if (nextChunks.length > 1 && nextChunks[0]) {
-        bioEl.textContent = nextChunks[0];
-        client = bioEl.clientHeight;
-        scroll = bioEl.scrollHeight;
-        if (scroll > client + 2) {
-          nextChunks = chunkBrowseBio(
-            bio,
-            estimateBrowseBioChunkChars(nextChunks[0].length, client, scroll),
-          );
+      // Every rendered chunk must fit the final control layout (not only the first).
+      for (let guard = 0; guard < 8; guard += 1) {
+        let clippedLen = 0;
+        let clippedClient = client;
+        let clippedScroll = scroll;
+        for (const chunk of nextChunks) {
+          bioEl.textContent = chunk;
+          const chunkClient = bioEl.clientHeight;
+          const chunkScroll = bioEl.scrollHeight;
+          if (chunkScroll > chunkClient + 2 && chunk.length > clippedLen) {
+            clippedLen = chunk.length;
+            clippedClient = chunkClient;
+            clippedScroll = chunkScroll;
+          }
         }
+        if (!clippedLen) break;
+        const tighter = estimateBrowseBioChunkChars(clippedLen, clippedClient, clippedScroll);
+        const rebuilt = chunkBrowseBio(bio, tighter);
+        if (
+          rebuilt.length === nextChunks.length
+          && rebuilt.every((part, i) => part === nextChunks[i])
+        ) break;
+        nextChunks = rebuilt;
       }
       bioEl.textContent = previous;
       setBioChunks(prev => (
@@ -426,7 +484,15 @@ export function PlayerBrowseDeck({
     };
     recompute();
     window.addEventListener("resize", recompute);
-    return () => window.removeEventListener("resize", recompute);
+    const bioBox = detailsBioRef.current;
+    const ro = typeof ResizeObserver === "function" && bioBox
+      ? new ResizeObserver(() => recompute())
+      : null;
+    if (ro && bioBox) ro.observe(bioBox);
+    return () => {
+      window.removeEventListener("resize", recompute);
+      ro?.disconnect();
+    };
   }, [desktop, detailsOpen, current?.publicPlayerId, current?.bio]);
 
   useEffect(() => {
@@ -632,7 +698,10 @@ export function PlayerBrowseDeck({
         data-slide={slideDir ?? undefined}
       >
         {current && <div className="pb-surface" inert={showHelp ? true : undefined}>
-          <div className={`pb-slide-frame${slideDir ? ` is-sliding-${slideDir}` : ""}`}>
+          <div
+            ref={slideFrameRef}
+            className={`pb-slide-frame${slideDir ? ` is-sliding-${slideDir}` : ""}`}
+          >
             {desktop ? (
               <article
                 ref={cardRef}
@@ -680,9 +749,12 @@ export function PlayerBrowseDeck({
                             {locationLine && <p>{locationLine}</p>}
                           </div>
                         </div>
-                        <button type="button" className="pb-collapse-details" onClick={closeDetails}>
-                          К карточке <Chevron dir="left" />
-                        </button>
+                        <div className="pb-expanded-heading-actions">
+                          <Link className="pb-profile-link pb-profile-link--heading" href={`/players/${current.publicPlayerId}`}>Открыть публичный профиль</Link>
+                          <button type="button" className="pb-collapse-details" onClick={closeDetails}>
+                            К карточке <Chevron dir="left" />
+                          </button>
+                        </div>
                       </div>
                       <div ref={detailsBodyRef} className="pb-expanded-body" data-details-page={detailsPage}>
                         <div className="pb-expanded-columns">
@@ -695,11 +767,17 @@ export function PlayerBrowseDeck({
                             ) : (
                               <p ref={detailsBioRef} className="pb-details-bio" data-details-bio="">О себе пока ничего не написано.</p>
                             )}
-                            {bioChunks.length > 1 && (
-                              <p className="pb-bio-chunk-meta" aria-live="polite">
-                                Текст {String(detailsPage + 1)} / {String(bioChunks.length)}
-                              </p>
-                            )}
+                            {/* Reserved before measure so pager/meta never shrink the bio after chunking. */}
+                            <p
+                              className="pb-bio-chunk-meta"
+                              aria-live="polite"
+                              data-reserved="true"
+                              data-active={bioChunks.length > 1 ? "true" : "false"}
+                            >
+                              {bioChunks.length > 1
+                                ? `Текст ${String(detailsPage + 1)} / ${String(bioChunks.length)}`
+                                : "\u00a0"}
+                            </p>
                           </section>
                           <section className="pb-expanded-facts" data-details-facts="">
                             <h3>Игровой профиль</h3>
@@ -709,24 +787,25 @@ export function PlayerBrowseDeck({
                               <div><dt>Где играю</dt><dd>{current.areaKey || "Не указан"}</dd></div>
                             </dl>
                             <p className="pb-games-note">Публичные ближайшие игры этого игрока пока недоступны.</p>
-                            <Link className="pb-profile-link" href={`/players/${current.publicPlayerId}`}>Открыть публичный профиль</Link>
                           </section>
                         </div>
                       </div>
-                      {bioChunks.length > 1 && (
-                        <div className="pb-details-pager">
-                          {detailsPage > 0 && (
-                            <button type="button" className="pb-details-more" onClick={() => setDetailsPage(page => Math.max(0, page - 1))}>
-                              Назад
-                            </button>
-                          )}
-                          {detailsPage < bioChunks.length - 1 && (
-                            <button type="button" className="pb-details-more" onClick={() => setDetailsPage(page => Math.min(bioChunks.length - 1, page + 1))}>
-                              Ещё сведения
-                            </button>
-                          )}
-                        </div>
-                      )}
+                      <div
+                        className="pb-details-pager"
+                        data-reserved="true"
+                        data-active={bioChunks.length > 1 ? "true" : "false"}
+                      >
+                        {bioChunks.length > 1 && detailsPage > 0 && (
+                          <button type="button" className="pb-details-more" onClick={() => setDetailsPage(page => Math.max(0, page - 1))}>
+                            Назад
+                          </button>
+                        )}
+                        {bioChunks.length > 1 && detailsPage < bioChunks.length - 1 && (
+                          <button type="button" className="pb-details-more" onClick={() => setDetailsPage(page => Math.min(bioChunks.length - 1, page + 1))}>
+                            Ещё сведения
+                          </button>
+                        )}
+                      </div>
                     </section>
                   )}
                   {/* Stable slot: details toggle must not remount friendship / pending UNKNOWN. */}
