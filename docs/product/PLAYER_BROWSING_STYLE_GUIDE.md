@@ -22,7 +22,7 @@ This document records product contracts for the integrated consumer surface. Do 
 
 ## Mobile <1024
 
-- Keep existing swipe / tutorial / fixed action bar and existing card layout. Do not apply desktop v5 composition globally.
+Superseded by the **Mobile fullscreen contract (Owner UAT repair)** appendix below for cards mode. Do not apply desktop v5 composition globally.
 
 ## Catalog & Radar boundary
 
@@ -35,9 +35,9 @@ This document records product contracts for the integrated consumer surface. Do 
 
 ## Interaction (shared)
 
-- Side arrows and Left/Right on a deliberately focused deck: **browse only** (never friendship mutation).
-- Mobile only: Left swipe / «Пропустить»: local skip (no block/decline/unfriend). Right swipe or friendship CTA: request via the same handlers.
-- Threshold / direction / cancel / vertical pan / pinch; interactive and details targets exclude drag. No request on partial drag, cancel, navigation, load, or pagination.
+- Side arrows and Left/Right on a deliberately focused deck: **browse only** (never friendship mutation). Desktop ≥1024: buttons only (no pointer swipe).
+- Mobile only: Left swipe / «Пропустить»: local skip (no block/decline/unfriend). Right swipe or friendship CTA: existing friendship request handlers — see mobile appendix for 1:1 drag, fly-off, and confirmed-only right advance.
+- Axis lock / distance-or-flick release / cancel / vertical details; interactive targets exclude drag. No request on partial drag, cancel, navigation, load, or pagination.
 - After **confirmed** receipt: short toast + auto-next eligible candidate (instant index — not the desktop browse slide). Busy / UNKNOWN must not fake success.
 - Previous restores preserved relationship; no repeated request. Position within the loaded public scope uses browser history state (no new storage engine). Filter change resets selection/skip.
 - No mutations on mouseenter or keyboard browse navigation.
@@ -64,3 +64,31 @@ Public list/detail DTO: name, city, area, self-declared level, bio, cover/avatar
 ## Sitewide link
 
 See also [SITEWIDE_UI_STYLE_GUIDE.md](./SITEWIDE_UI_STYLE_GUIDE.md) for shared shell/rail rules. Player-browsing deck visuals are governed here (#404 desktop v5), not by rejected feed-card proposals.
+
+---
+
+## Appendix · Mobile fullscreen contract (Owner UAT repair, #404)
+
+**Implemented behaviour (author pass · NOT a QA PASS claim).** Desktop ≥1024 v5 / 406 prepared media / F1–F5 remain unchanged.
+
+### Shell
+- Cards mode on viewport `<1024` opens a **fixed fullscreen** portal (`role="dialog"`, `aria-modal`) covering app header / nav / footer, with safe-area insets.
+- Chrome: small counter + place, help `?`, close **X** ≥44px top-right.
+- Underlying directory is `inert` + `body` scroll locked; focus returns to the opener and list scroll restores on close.
+- Close paths: **X**, **Escape**, **browser Back**. `pushState` only when entering from list; close uses `history.back()` or `replaceState` for direct `?view=cards` — no history growth loop.
+- Resize/rotation to ≥1024 tears down the portal and shows desktop v5 inline; no Fullscreen API; no global shell / C5 / runtime changes.
+
+### Card
+- Full-viewport cover + avatar + **compact** identity. No fixed huge bio excerpt on the cover; details are a separate page covering the photo.
+- Swipe **up** opens details; **down** returns to cover. Long bio/details page via up/down and accessible pager buttons — **no ordinary vertical scroll** inside the card.
+- Friendship / pending UNKNOWN UI stays in a stable bottom slot across details open/close (not remounted).
+- Minimal persistent **Пропустить** / **В друзья** buttons remain accessible alternatives. Actions must remain usable at 390×844 and 375×667 without horizontal overflow.
+- One-time gesture hint (`gb-player-gallery-tutorial-v2`); help reopens. Existing real metadata only; games copy stays honest unavailable.
+
+### Gestures
+- Register only after the pending card is **media-ready**. Single active pointer; stable **pointer capture**; handlers use refs so the controller is not recreated mid-drag.
+- `touch-action: none` on the fullscreen gesture surface only (not a global pinch hijack). Interactive targets (`button,a,…`, `[data-browse-no-drag]`) excluded. `pointercancel` / non-primary / multitouch / blur → **no mutation**, spring-back.
+- Horizontal drag is **1:1** via RAF + CSS vars (`--pb-drag-x` / `--pb-drag-rot`) — **no 0.32 damping**. Slight rotation. Full-surface **red (left / skip)** and **green (right / request)** intent layers with label + icon (not colour alone). Green while touching is **intent**, not server PASS.
+- Axis lock after 10px with 1.5× dominance. Release commits on distance threshold **or** same-direction flick above velocity with **minimum travel**; reverse / cancel / short travel springs back.
+- Left commit: card flies off beyond card width, **then** advances to the next ready peer (no late snap-back of the old card).
+- Right commit: existing explicit friendship `request` only (not a fake Match). Bind to the peer at gesture start; cancel if peer changes; no duplicate send on release+click. **Only confirmed receipt** may auto-advance and play the successful right fly-out; failed / UNKNOWN restores the card with honest status and **no automatic replay**. No new match API/schema.

@@ -33,9 +33,11 @@ import {
   readTutorialDismissed,
   reconstructBrowseBio,
   relationshipBlocksNewRequest,
+  swipeMinTravelPx,
   swipeThresholdPx,
   withBrowseHistoryState,
   writeBrowseViewSearch,
+  PLAYER_BROWSE_FLICK_VELOCITY,
   PLAYER_BROWSE_HISTORY_KEY,
   PLAYER_BROWSE_TUTORIAL_KEY,
 } from "../src/lib/player-browse";
@@ -103,21 +105,56 @@ describe("player browse navigation and skip order", () => {
 });
 
 describe("player browse swipe boundaries", () => {
-  it("requires horizontal dominance and release threshold; partial/cancel stays none", () => {
-    expect(swipeThresholdPx(400)).toBe(96);
+  it("locks axis with dominance; distance or same-direction flick commits; cancel/vertical stay none for horizontal", () => {
+    expect(swipeThresholdPx(400)).toBe(80);
+    expect(swipeMinTravelPx(400)).toBe(24);
     expect(classifyPointerGesture({ dx: 8, dy: 0, width: 400, phase: "move" })).toBe("none");
     expect(classifyPointerGesture({ dx: 30, dy: 5, width: 400, phase: "move" })).toBe("horizontal");
+    expect(classifyPointerGesture({ dx: 5, dy: 30, width: 400, phase: "move" })).toBe("vertical");
     expect(classifyPointerGesture({ dx: 30, dy: 40, width: 400, phase: "move" })).toBe("none");
-    expect(classifyPointerGesture({ dx: -50, dy: 0, width: 400, phase: "release" })).toBe("none");
-    expect(classifyPointerGesture({ dx: -100, dy: 10, width: 400, phase: "release" })).toBe("skip");
-    expect(classifyPointerGesture({ dx: 100, dy: 10, width: 400, phase: "release" })).toBe("request");
+    expect(classifyPointerGesture({ dx: -30, dy: 0, width: 400, phase: "release" })).toBe("none");
+    expect(classifyPointerGesture({ dx: -80, dy: 10, width: 400, phase: "release", lockedAxis: "horizontal" })).toBe("skip");
+    expect(classifyPointerGesture({ dx: 80, dy: 10, width: 400, phase: "release", lockedAxis: "horizontal" })).toBe("request");
     expect(classifyPointerGesture({ dx: 100, dy: 90, width: 400, phase: "release" })).toBe("none");
+    // Fast short flick with minimum travel commits; reverse velocity does not.
+    expect(classifyPointerGesture({
+      dx: -28, dy: 0, width: 400, phase: "release", lockedAxis: "horizontal", velocity: -PLAYER_BROWSE_FLICK_VELOCITY,
+    })).toBe("skip");
+    expect(classifyPointerGesture({
+      dx: -28, dy: 0, width: 400, phase: "release", lockedAxis: "horizontal", velocity: PLAYER_BROWSE_FLICK_VELOCITY,
+    })).toBe("none");
+    // Vertical release reports up/down; not a horizontal mutation.
+    expect(swipeThresholdPx(700)).toBe(88);
+    expect(classifyPointerGesture({
+      dx: 4, dy: -90, width: 400, height: 700, phase: "release", lockedAxis: "vertical",
+    })).toBe("vertical-up");
+    expect(classifyPointerGesture({
+      dx: 4, dy: 90, width: 400, height: 700, phase: "release", lockedAxis: "vertical",
+    })).toBe("vertical-down");
+    expect(classifyPointerGesture({
+      dx: 4, dy: -90, width: 400, height: 700, phase: "release", lockedAxis: "horizontal",
+    })).toBe("none");
   });
 
   it("excludes interactive targets from drag start", () => {
     const rootEl = { closest: (sel: string) => (sel.includes("button") ? {} : null) } as unknown as Element;
     expect(isBrowseDragExcludedTarget(rootEl)).toBe(true);
     expect(isBrowseDragExcludedTarget(null)).toBe(false);
+  });
+
+  it("mobile fullscreen cards use portal shell, body lock hooks, and 1:1 drag without damping", () => {
+    expect(pageSource).toContain("createPortal");
+    expect(pageSource).toContain("pb-mobile-fs");
+    expect(pageSource).toContain("closeMobileCards");
+    expect(deckSource).toContain("--pb-drag-x");
+    expect(deckSource).not.toContain("* 0.32");
+    expect(deckSource).toContain("touchAction");
+    expect(deckSource).toContain("setPointerCapture");
+    expect(deckSource).toContain("flyOffCard");
+    expect(deckSource).toContain("awaitingRightRef");
+    expect(cssSource).toContain("pb-mobile-fs");
+    expect(cssSource).toContain("touch-action: none");
+    expect(cssSource).toContain("pb-intent--skip");
   });
 });
 

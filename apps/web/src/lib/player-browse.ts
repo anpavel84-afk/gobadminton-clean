@@ -64,26 +64,93 @@ export function persistTutorialDismissed(storage: Pick<Storage, "setItem"> | nul
   }
 }
 
+/** Axis lock after this travel (px). */
+export const PLAYER_BROWSE_AXIS_LOCK_PX = 10;
+/** Horizontal/vertical dominance multiplier once travel exceeds the lock. */
+export const PLAYER_BROWSE_AXIS_DOMINANCE = 1.5;
+/** Fast flick velocity along the locked axis (px/ms). */
+export const PLAYER_BROWSE_FLICK_VELOCITY = 0.5;
+
+export type PlayerBrowseGestureAxis = "none" | "horizontal" | "vertical";
+export type PlayerBrowseGestureResult =
+  | "none"
+  | "horizontal"
+  | "vertical"
+  | "skip"
+  | "request"
+  | "vertical-up"
+  | "vertical-down";
+
+/** Distance release threshold — lower than the old 84–120 clamp for responsive mobile. */
 export function swipeThresholdPx(width: number): number {
-  return Math.max(84, Math.min(120, width * 0.24));
+  return Math.max(48, Math.min(88, width * 0.2));
 }
 
-/** Horizontal intent after 10px travel with 1.5× dominance; release needs threshold. */
+/** Minimum travel required even for a velocity flick (and for cancel/reverse spring-back). */
+export function swipeMinTravelPx(width: number): number {
+  return Math.max(20, Math.min(36, width * 0.06));
+}
+
+function axisFromDelta(dx: number, dy: number, locked: PlayerBrowseGestureAxis): PlayerBrowseGestureAxis {
+  if (locked === "horizontal" || locked === "vertical") return locked;
+  const absX = Math.abs(dx);
+  const absY = Math.abs(dy);
+  if (absX < PLAYER_BROWSE_AXIS_LOCK_PX && absY < PLAYER_BROWSE_AXIS_LOCK_PX) return "none";
+  if (absX > absY * PLAYER_BROWSE_AXIS_DOMINANCE) return "horizontal";
+  if (absY > absX * PLAYER_BROWSE_AXIS_DOMINANCE) return "vertical";
+  return "none";
+}
+
+function releaseCommitted(
+  travel: number,
+  extent: number,
+  velocity: number | undefined,
+  sameDirection: boolean,
+): boolean {
+  const minTravel = swipeMinTravelPx(extent);
+  if (travel < minTravel) return false;
+  if (travel >= swipeThresholdPx(extent)) return true;
+  const speed = Math.abs(velocity ?? 0);
+  return sameDirection && speed >= PLAYER_BROWSE_FLICK_VELOCITY;
+}
+
+/**
+ * Mobile gesture contract: axis lock after 10px + 1.5× dominance;
+ * release accepts distance threshold or a same-direction flick with minimum travel.
+ * Vertical release reports up/down; the deck maps those to details/cover/paging.
+ * Cancel, reverse, vertical-during-horizontal, and short travels stay `none` (spring-back).
+ */
 export function classifyPointerGesture(input: {
   dx: number;
   dy: number;
   width: number;
+  height?: number;
   phase: "move" | "release";
-}): "none" | "horizontal" | "skip" | "request" {
-  const absX = Math.abs(input.dx);
-  const absY = Math.abs(input.dy);
+  lockedAxis?: PlayerBrowseGestureAxis;
+  /** Axis velocity in px/ms (sign follows dx for horizontal, dy for vertical). */
+  velocity?: number;
+}): PlayerBrowseGestureResult {
+  const locked = input.lockedAxis ?? "none";
+  const axis = axisFromDelta(input.dx, input.dy, locked);
   if (input.phase === "move") {
-    if (absX < 10 && absY < 10) return "none";
-    return absX > absY * 1.5 ? "horizontal" : "none";
+    if (axis === "horizontal") return "horizontal";
+    if (axis === "vertical") return "vertical";
+    return "none";
   }
-  const threshold = swipeThresholdPx(input.width);
-  if (absX < threshold || absX <= absY * 1.5) return "none";
-  return input.dx < 0 ? "skip" : "request";
+  if (axis === "horizontal") {
+    const sameDir = input.velocity == null
+      || (input.dx < 0 ? input.velocity <= 0 : input.velocity >= 0);
+    if (!releaseCommitted(Math.abs(input.dx), input.width, input.velocity, sameDir)) return "none";
+    return input.dx < 0 ? "skip" : "request";
+  }
+  if (axis === "vertical") {
+    const extent = input.height ?? input.width;
+    const sameDir = input.velocity == null
+      || (input.dy < 0 ? input.velocity <= 0 : input.velocity >= 0);
+    if (!releaseCommitted(Math.abs(input.dy), extent, input.velocity, sameDir)) return "none";
+    return input.dy < 0 ? "vertical-up" : "vertical-down";
+  }
+  return "none";
 }
 
 export function isBrowseDragExcludedTarget(target: EventTarget | null): boolean {
