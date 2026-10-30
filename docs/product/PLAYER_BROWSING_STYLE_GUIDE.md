@@ -17,8 +17,8 @@ This document records product contracts for the integrated consumer surface. Do 
 - Deck: photograph **LEFT ~44%**, identity/actions **RIGHT**, circular avatar inside cover. One stable outer banner rectangle for normal and details; fixed geometry from the viewport (`clamp` height). Details replaces the photo with full-width identity + actual info; return via «К карточке» / Escape. No height/width/page jump; no internal vertical scrolling in the banner.
 - Base card shows a short bio preview. Expanded state must not silently drop the full actual bio: if content cannot fit (long bio / zoom), use same-size details pages with an accessible «Ещё» control — do not clip away info or grow the container. Minimal paging only; no generic pagination framework.
 - Actions stay visible. Reuse actual profile fields and the honest unavailable-games note + public profile link. No mock preference / rating / nearby facts.
-- Desktop: **no** pointer swipe/drag mutations and **no** swipe tutorial. Explicit «Добавить в друзья» and «Следующий» plus side arrows. Arrows / Next are **browse-only**.
-- Directional horizontal slide **200–280ms** on next/prev: stationary outer frame/header/toolbar; animate content inside a clipped stationary frame; direction follows navigation. No automatic browsing timers. No duplicate mounted friendship controls or concurrent actions. `prefers-reduced-motion` → instant. Rapid clicks, scope/filter/auth change, or unmount cancel obsolete animation. Initial load and details toggle must **not** trigger the player-change slide. Never delay/update wrong-peer mutation callbacks; preserve pending/UNKNOWN and existing capabilities.
+- Desktop: **no** pointer swipe/drag mutations and **no** swipe tutorial. Explicit «Хочу сыграть» and «Следующий» plus side arrows. Arrows / Next are **browse-only**.
+- Directional horizontal slide **200–280ms** on next/prev: stationary outer frame/header/toolbar; animate content inside a clipped stationary frame; direction follows navigation. No automatic browsing timers. No duplicate mounted play-interest controls or concurrent actions. `prefers-reduced-motion` → instant. Rapid clicks, scope/filter/auth change, or unmount cancel obsolete animation. Initial load and details toggle must **not** trigger the player-change slide. Never delay/update wrong-peer mutation callbacks; preserve pending/UNKNOWN and existing capabilities.
 
 ## Mobile <1024
 
@@ -30,32 +30,33 @@ Superseded by the **Mobile fullscreen contract** appendix below for cards mode. 
 - Existing Radar semantics, TTL, and privacy fences stay as on `/players`. Desktop compact strip must not auto-toggle or stop Radar.
 - Filters, dedup by `publicPlayerId`, cursor pagination, and explicit «Загрузить ещё» / «Показать ещё» when the loaded page + cursor are exhausted — no eager multi-page scanning for the next candidate.
 - Filter/scope change invalidates selection and local skips immediately so previous-scope rows/actions cannot flash.
-- Self is excluded when the viewer’s own `publicPlayerId` is known. `canRequest=false` never sends.
-- Guests may browse; friendship requires auth prompt. No auto-send after login.
+- Self is excluded when the viewer’s own `publicPlayerId` is known. `canSend=false` never sends.
+- Guests may browse; play interest requires auth prompt. No auto-send after login.
 
 ## Interaction (shared)
 
-- Side arrows and Left/Right on a deliberately focused deck: **browse only** (never friendship mutation). Desktop ≥1024: buttons only (no pointer swipe).
-- Mobile only: Left swipe / «Пропустить»: local skip (no block/decline/unfriend). Right swipe or friendship CTA: existing friendship request handlers — see mobile appendix for 1:1 drag, fly-off, and confirmed-only right advance.
-- Axis lock / distance-or-flick release / cancel / vertical details; interactive targets exclude drag. No request on partial drag, cancel, navigation, load, or pagination.
-- After **confirmed** receipt: short toast + auto-next eligible candidate (instant index — not the desktop browse slide). Busy / UNKNOWN must not fake success.
-- Previous restores preserved relationship; no repeated request. Position within the loaded public scope uses browser history state (no new storage engine). Filter change resets selection/skip.
+- Side arrows and Left/Right on a deliberately focused deck: **browse only** (never play-interest mutation). Desktop ≥1024: buttons only (no pointer swipe).
+- Mobile only: Left swipe / «Пропустить»: local skip (no block/withdraw). Right swipe or green «Хочу сыграть»: play-interest send — see mobile appendix for 1:1 drag, fly-off, and confirmed-only right advance.
+- Axis lock / distance-or-flick release / cancel / vertical details; interactive targets exclude drag. No send on partial drag, cancel, navigation, load, or pagination.
+- After **confirmed** receipt: short toast + auto-next eligible candidate (instant index — not the desktop browse slide). Busy / UNKNOWN must not fake success. Unilateral outcome copy is «Интерес отправлен» — never «match»/friends. Mutual only after server confirms both current intents: «Вы хотите сыграть вместе».
+- Previous restores preserved interest state; no repeated send. Position within the loaded public scope uses browser history state (no new storage engine). Filter change resets selection/skip.
 - No mutations on mouseenter or keyboard browse navigation.
 
 ## Onboarding (mobile)
 
 - First open: short overlay on the card (gestures). Dismiss via «Понятно» / X / Escape. No auto-timer.
 - Per-version boolean `gb-player-gallery-tutorial-v2=1` in `sessionStorage` (memory fallback). Discreet «?» reopens. No persistent instruction banner.
+- Tutorial: right = want-to-play; match only when mutual. No old auto-friend labels.
 - Background card inert while tutorial; focus return; controls ≥44px; honor reduced motion / safe area.
 - Desktop does not show this swipe tutorial.
 
-## Friendships
+## Play interest (browse deck)
 
-- Reuse `friendCommand`, server capabilities/states, `useSocialMutation`, and pending scope `${me.id}:friends:${peerId}` (same as `FriendActions`). Do not clear that pending key on skip/filter/unmount/reload. Do not change shared `useSocialMutation` or unified-directory sources for this follow-up.
-- Key per-peer action UI by current auth user + peer. Refresh caps/state on foreground/session change; retire private UI on `gb-private-expired` / `gb-session-changed`.
-- Confirm `receipt.outcome` (`pending` is not `friends` unless accepted). Stale 409 → reload state. 429 → honor Retry-After with one stable deadline timer that clears at expiry; no invented visible countdown or auto POST retry; parent rate-limit callback must stay identity-stable.
-- UNKNOWN: «Проверить статус» is **GET** `getFriendState` only — never `mutation.retry()` / default MutationNotice POST replay on the deck. Ignore retired readonly/status results after generation, peer, or auth scope change.
-- Incoming decisions only via explicit `canAccept` / `canDecline`. No silent right-swipe accept. Do not disclose blocked reason.
+- Browse deck uses `PlayerBrowsePlayInterest` / `playInterestCommand`, server play-interest states, `useSocialMutation`, and pending scope `${me.id}:play-interest:${peerId}`. **Never** reuse or clear friendship pending `${me.id}:friends:${peerId}`. Do not call `/friend-requests` from browse gestures.
+- Profile/Friends panel friendship (`FriendActions` / `ProfileFriendship` / `FriendshipsPanel`) stays intact and independent.
+- Confirm `receipt.outcome` (`outgoing` ≠ mutual; never invent friends). Stale 409 → reload state. 429 → honor Retry-After with one stable deadline timer that clears at expiry; no invented visible countdown or auto POST retry; parent rate-limit callback must stay identity-stable.
+- UNKNOWN: «Проверить статус» is **GET** `getPlayInterestState` only — never `mutation.retry()` / default MutationNotice POST replay on the deck. Ignore retired readonly/status results after generation, peer, or auth scope change.
+- Unilateral inbound interest is never disclosed (indistinguishable from none). No automatic friendship, contact, chat, invitation, booking, or notification.
 
 ## Data honesty
 
@@ -65,7 +66,7 @@ Public list/detail DTO: name, city, area, self-declared level, bio, cover/avatar
 
 - **Stable page header from first visible frame:** server-parsed `view` (`initialBrowseView`) + viewport CSS (≥1024 → fixed 116px desktop hero with subtitle; mobile cards → compact without waiting for JS `data-directory-desktop`). Do not open mobile fullscreen portal until the desktop MQ is known (no desktop flash). Preserve route/history/back/X/focus and list defaults.
 - **Tinder four-ahead prepare:** `browseMediaNeighborhood` = previous + current + next 4 (max 6), deduped; prep priority current → ahead → previous. Exact retained decoded pixels; existing cache keys, identity/CSRF/session/generation fences, 5s deadline, eviction. Radar pin `RADAR_PIN_MEDIA_CAP=4` / admission / selected-retain stays independent — do not change.
-- Gesture parameters and design tokens above remain authoritative; no new policy bundle. Friendship POS copy stays honest until a separate Owner match-contract task.
+- Gesture parameters and design tokens above remain authoritative; no new policy bundle. Play-interest POS copy: unilateral = interest sent; mutual-only match wording; never auto-friend.
 
 ## Sitewide link
 
@@ -88,12 +89,12 @@ Source-backed mechanics reference: Astra High deep gesture study (Owner); number
 
 ### Card
 - Full-viewport cover + avatar + **compact** identity. No fixed huge bio excerpt on the cover; details are a separate page covering the photo.
-- **Single retained avatar host**: mount `PreparedBrowseAvatar` on cover **or** details, never both — a second host steals the same `HTMLImageElement`. Friendship controls stay in the stable bottom slot (not remounted / not cloned).
+- **Single retained avatar host**: mount `PreparedBrowseAvatar` on cover **or** details, never both — a second host steals the same `HTMLImageElement`. Play-interest controls stay in the stable bottom slot (not remounted / not cloned).
 - Avatar render (portal-safe): `.pb-avatar` / `.pb-details-avatar` hosts clip to a circle (`overflow: clip`, `border-radius: 50%`); **descendant** `img` (not only direct-child) uses `width/height: 100%`, `object-fit: cover`, `border-radius: inherit`. Do not rely on `.fr3 .avatar > img` — the mobile `<dialog>` portal drops `.fr3`, and `RetainedBrowseImage` wraps with `display: contents`.
-- Swipe **up** opens details; **down** on details text/background returns to cover / previous **mobile info page**. `data-browse-no-drag` only on actual buttons/links/pager — **not** on the whole `.pb-mobile-details` surface. Closed details stay mounted with `inert` + `aria-hidden`; while details are open, cover/identity controls are inert (not tabbable). One retained avatar host and stable friendship slot unchanged.
+- Swipe **up** opens details; **down** on details text/background returns to cover / previous **mobile info page**. `data-browse-no-drag` only on actual buttons/links/pager — **not** on the whole `.pb-mobile-details` surface. Closed details stay mounted with `inert` + `aria-hidden`; while details are open, cover/identity controls are inert (not tabbable). One retained avatar host and stable play-interest slot unchanged.
 - **Fixed mobile information pages** (not one packed scroll of facts+bio+games): (1) facts/overview, (2) about-bio page(s) height-fit via existing `chunkBrowseBio` / measure helpers, (3) games notice + public profile link. Up advances page; down previous; down from the first page returns to cover. Accessible «К обложке» / «Назад» / «Ещё сведения» stay **outside** the clipped body so they are never below the fold. Desktop `detailsPage` bio pager is separate — do not change desktop v5 details paging.
 - Bio chunks must fit the available about-page height at 375×667 and 390×844 (including font zoom): **no** full-text cutoff, **no** ordinary nested scroll, **no** `-webkit-line-clamp` clipping of lossless bio. Recompute on viewport/text-size changes. Do not invent a generic pagination framework.
-- Minimal persistent **Пропустить** / **В друзья** buttons remain accessible alternatives. Whole card height stays fixed; X/actions always available at 390×844 and 375×667 without horizontal overflow.
+- Minimal persistent **Пропустить** / **Хочу сыграть** buttons remain accessible alternatives. Whole card height stays fixed; X/actions always available at 390×844 and 375×667 without horizontal overflow.
 - Last card left must settle to a visible honest end / «Загрузить ещё» terminal (`pb-deck-end--fs`), not leave only a flown-off card forever.
 - One-time gesture hint (`gb-player-gallery-tutorial-v2`); help reopens. Existing real metadata only; games copy stays honest unavailable.
 
@@ -105,7 +106,7 @@ Source-backed mechanics reference: Astra High deep gesture study (Owner); number
 - Recent velocity: last **80ms** window including the release sample; **0** after ~100ms pause; capped ±2.5 px/ms (`sampleBrowseVelocity`).
 - Release (`releaseCommitted`): **reverse veto first** (≈10px reverse travel + opposite velocity ≥0.2 px/ms) even past distance — then **slow-distance** `D=clamp(72,.24W,112)` **or** short-fast projected flick `F=clamp(18,.06W,28)`, `|vx|≥0.65`, `p=travel+|vx|·180ms ≥ D`. Gesture duration is not a cutoff. Residual axis ratio ≥1.2 on release.
 - Left commit: fly off from **rendered release pose** with geometry-safe offscreen target (rotated AABB + 24px margin — width+48 alone can leave corners visible); duration `clamp(140, L/max(|v|,1.6), 300)` ms; carry velocity direction; **no recenter before exit**. Then advance to next ready peer. Generation/peer fence ignores obsolete completions.
-- Right commit: existing explicit friendship `request` only (not a fake Match). Bind to the peer at gesture start; cancel if peer changes; single-flight consumed ref covers gesture **and** buttons. **Only confirmed receipt** may auto-advance and play the successful right fly-out; failed / UNKNOWN restores the readable card with honest status and **no automatic replay**. No new match API/schema.
+- Right commit: explicit play-interest `send` only (unilateral is never Match; mutual only after server receipt). Bind to the peer at gesture start; cancel if peer changes; single-flight consumed ref covers gesture **and** buttons. **Only confirmed receipt** may auto-advance and play the successful right fly-out; failed / UNKNOWN restores the readable card with honest status and **no automatic replay**. Do not POST `/friend-requests` from browse.
 - Cancel / spring-return is interruptible (pin computed transform, then cancel transition) for re-grab without jump when practical.
 - **Spring re-grab**: on pointerdown during return, parse the pinned computed matrix (`parseBrowseCssTransformPose`) into drag `originX/originY`; subsequent moves apply **fresh dx/dy relative to that base** (visual = origin + delta). Classifier axis / intent / reversal / velocity stay on the fresh grab samples — do not replace the first move with absolute finger delta alone (that jumps opposite the finger).
 - No extra motion/gesture dependencies or generic recognizer packages.

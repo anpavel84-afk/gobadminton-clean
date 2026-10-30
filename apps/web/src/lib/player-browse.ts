@@ -1,4 +1,4 @@
-import type { FriendshipView } from "@gobadminton/contracts/friendship-types";
+import type { FriendshipView, PlayInterestView } from "@gobadminton/contracts/friendship-types";
 import type { PublicPlayer } from "./consumer-types";
 
 export type PlayerBrowseView = "list" | "cards";
@@ -356,11 +356,18 @@ export function relationshipBlocksNewRequest(relationship: FriendshipView["relat
     || relationship === "friends" || relationship === "unavailable";
 }
 
-/** Auto-advance after confirmed request: next peer that is still open for a new request. */
+/** Play-interest browse eligibility — never casts into friendship enums. */
+export function playInterestBlocksNewSend(
+  relationship: PlayInterestView["relationship"] | undefined,
+): boolean {
+  return relationship === "outgoing" || relationship === "mutual" || relationship === "unavailable";
+}
+
+/** Auto-advance after confirmed play interest: next peer still open for a new send. */
 export function nextEligibleBrowseIndex(
   players: PublicPlayer[],
   fromIndex: number,
-  known: ReadonlyMap<string, FriendshipView["relationship"]>,
+  known: ReadonlyMap<string, PlayInterestView["relationship"] | FriendshipView["relationship"]>,
   skipped: ReadonlySet<string>,
 ): number {
   if (players.length <= 1) return -1;
@@ -370,7 +377,13 @@ export function nextEligibleBrowseIndex(
     const player = players[index];
     if (!player || skipped.has(player.publicPlayerId)) continue;
     const relationship = known.get(player.publicPlayerId);
-    if (relationshipBlocksNewRequest(relationship)) continue;
+    if (relationship == null) return index;
+    if (
+      relationship === "outgoing"
+      || relationship === "mutual"
+      || relationship === "unavailable"
+      || relationshipBlocksNewRequest(relationship as FriendshipView["relationship"])
+    ) continue;
     return index;
   }
   return -1;
@@ -378,6 +391,10 @@ export function nextEligibleBrowseIndex(
 
 export function canOfferFriendship(view: FriendshipView | null | undefined): boolean {
   return Boolean(view?.capabilities.canRequest && view.relationship === "none");
+}
+
+export function canOfferPlayInterest(view: PlayInterestView | null | undefined): boolean {
+  return Boolean(view?.capabilities.canSend && view.relationship === "none");
 }
 
 export type BrowseSkipStack = string[];

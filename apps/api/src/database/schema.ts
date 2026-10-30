@@ -706,3 +706,19 @@ export const gameRecommendationActions = pgTable("game_recommendation_actions", 
   actorUserId:uuid("actor_user_id").notNull().references(()=>users.id),
   createdAt:timestamp("created_at",{withTimezone:true}).notNull().defaultNow(),
 },t=>[primaryKey({columns:[t.recommendationId,t.version]})]);
+
+/** #404 play interest; independent of friendships. Migration0043. */
+export const playInterests = pgTable("play_interests", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  pairId: uuid("pair_id").notNull().references(() => socialPairs.id),
+  actorUserId: uuid("actor_user_id").notNull().references(() => users.id),
+  peerUserId: uuid("peer_user_id").notNull().references(() => users.id),
+  interestId: uuid("interest_id").notNull().unique(),
+  generation: bigint("generation", { mode: "bigint" }).notNull().default(1n),
+  version: bigint("version", { mode: "bigint" }).notNull().default(1n),
+  state: text("state").notNull(),
+  actorEpoch: bigint("actor_epoch", { mode: "bigint" }).notNull(),
+  peerEpoch: bigint("peer_epoch", { mode: "bigint" }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});

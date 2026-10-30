@@ -29,7 +29,12 @@ function type(s) {
   );
 }
 const names = new Set(
-  Object.keys(schemas).filter((n) => n.startsWith("Friendship") || n === "SocialCapabilities"),
+  Object.keys(schemas).filter(
+    (n) =>
+      n.startsWith("Friendship") ||
+      n.startsWith("PlayInterest") ||
+      n === "SocialCapabilities",
+  ),
 );
 function dependencies(s) {
   if (s && typeof s === "object") {

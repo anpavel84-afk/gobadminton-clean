@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type { FriendshipReceipt, FriendshipView } from "@gobadminton/contracts/friendship-types";
+import type { PlayInterestReceipt, PlayInterestView } from "@gobadminton/contracts/friendship-types";
 import { getMe, getMySocialProfile } from "../../../lib/api-client";
 import type { City, Me, PublicPlayer } from "../../../lib/consumer-types";
 import { formatSocialLevel } from "../../../lib/player-presentation";
@@ -38,7 +38,11 @@ import {
   withBrowseHistoryState,
 } from "../../../lib/player-browse";
 import { Button } from "../Button";
-import { isBrowseConfirmedRequestOutcome, PlayerBrowseFriendship, type BrowseFriendshipApi } from "./PlayerBrowseFriendship";
+import {
+  isBrowseConfirmedPlayInterestOutcome,
+  PlayerBrowsePlayInterest,
+  type BrowsePlayInterestApi,
+} from "./PlayerBrowsePlayInterest";
 import {
   browseMediaNeighborhood,
   browsePeerMediaKey,
@@ -136,7 +140,7 @@ export function PlayerBrowseDeck({
   const [intentIndex, setIntentIndex] = useState(0);
   const [committedMedia, setCommittedMedia] = useState<PreparedBrowsePeerMedia | null>(null);
   const [skipStack, setSkipStack] = useState<string[]>([]);
-  const [known, setKnown] = useState<Map<string, FriendshipView["relationship"]>>(() => new Map());
+  const [known, setKnown] = useState<Map<string, PlayInterestView["relationship"]>>(() => new Map());
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [detailsPage, setDetailsPage] = useState(0);
   /** Mobile-only fixed info pages: facts → about bio chunks → games (desktop keeps detailsPage). */
@@ -160,7 +164,7 @@ export function PlayerBrowseDeck({
   const detailsBioRef = useRef<HTMLParagraphElement>(null);
   const mobileDetailsBodyRef = useRef<HTMLDivElement>(null);
   const tutorialRef = useRef<HTMLElement>(null);
-  const friendshipApi = useRef<BrowseFriendshipApi | null>(null);
+  const friendshipApi = useRef<BrowsePlayInterestApi | null>(null);
   const drag = useRef<DragState | null>(null);
   const dragRaf = useRef(0);
   const flyingRef = useRef(false);
@@ -907,19 +911,19 @@ export function PlayerBrowseDeck({
     if (!started) actionConsumedRef.current = false;
   }, [navigationLocked, tutorialOpen]);
 
-  const onConfirmedRequest = useCallback((receipt: FriendshipReceipt) => {
+  const onConfirmedRequest = useCallback((receipt: PlayInterestReceipt) => {
     if (!current) return;
-    // Cancel/decline/remove are successful mutations but must not toast "sent" or auto-advance.
-    if (!isBrowseConfirmedRequestOutcome(receipt.outcome)) return;
+    // Withdraw succeeds as a mutation but must not toast "sent" or auto-advance.
+    if (!isBrowseConfirmedPlayInterestOutcome(receipt.outcome)) return;
     const peerId = current.publicPlayerId;
-    const relationship = receipt.outcome === "accepted" ? "friends" : "outgoing_pending";
+    const relationship = receipt.outcome === "mutual" ? "mutual" : "outgoing";
     setKnown(prev => {
       const next = new Map(prev);
       next.set(peerId, relationship);
       return next;
     });
-    setToast(receipt.outcome === "accepted" ? "Теперь вы друзья" : "Запрос отправлен");
-    setAnnounce(receipt.outcome === "accepted" ? "Запрос принят" : "Запрос отправлен");
+    setToast(receipt.outcome === "mutual" ? "Вы хотите сыграть вместе" : "Интерес отправлен");
+    setAnnounce(receipt.outcome === "mutual" ? "Взаимный интерес" : "Интерес отправлен");
     const skipped = new Set(skipStack);
     const next = nextEligibleBrowseIndex(browsePlayers, index, new Map([
       ...known,
@@ -1222,7 +1226,7 @@ export function PlayerBrowseDeck({
       setDragStamp({
         opacity: 0.95 * progress,
         skip,
-        label: skip ? "Пропустить" : blocked ? "Запросы временно недоступны" : "В друзья",
+        label: skip ? "Пропустить" : blocked ? "Интерес временно недоступен" : "Хочу сыграть",
       });
       return;
     }
@@ -1593,7 +1597,7 @@ export function PlayerBrowseDeck({
   const intentAtStart = intentIndex <= 0;
   const intentAtEnd = intentIndex >= browsePlayers.length - 1;
   const friendship = current && mediaReady && (
-    <PlayerBrowseFriendship
+    <PlayerBrowsePlayInterest
       key={`${me?.id ?? "guest"}:${current.publicPlayerId}`}
       me={me}
       authState={authState}
@@ -1610,10 +1614,10 @@ export function PlayerBrowseDeck({
           return next;
         });
       }}
-      onConfirmedRequest={onConfirmedRequest}
+      onConfirmedInterest={onConfirmedRequest}
       onBusyChange={(busy) => {
         setFriendBusy(busy);
-        // Single-flight covers friendship buttons as well as gestures.
+        // Single-flight covers interest buttons as well as gestures.
         if (busy) actionConsumedRef.current = true;
         else if (!flyingRef.current && !awaitingRightRef.current) actionConsumedRef.current = false;
       }}
@@ -1656,7 +1660,7 @@ export function PlayerBrowseDeck({
           Следующий <Chevron dir="right" />
         </button>
       </div>
-      <p className="pb-action-caption">Дружба — после подтверждения игрока.</p>
+      <p className="pb-action-caption">Совпадение — только при взаимном интересе. Не дружба.</p>
     </div>
   );
 
@@ -1840,7 +1844,7 @@ export function PlayerBrowseDeck({
                   </div>
                   <div className="pb-intent pb-intent--request">
                     <span className="pb-intent-icon" aria-hidden="true">＋</span>
-                    <span className="pb-intent-label">В друзья</span>
+                    <span className="pb-intent-label">Хочу сыграть</span>
                   </div>
                 </div>
 
@@ -1986,10 +1990,10 @@ export function PlayerBrowseDeck({
               <h2 id="pb-tutorial-title">Одна карточка. Два жеста.</h2>
               <div className="pb-gesture-pair">
                 <div className="pb-gesture-choice"><strong>Свайп влево</strong><span>Пропустить. Без уведомления игроку.</span></div>
-                <div className="pb-gesture-choice"><strong>Свайп вправо</strong><span>Предложить дружбу явной командой.</span></div>
+                <div className="pb-gesture-choice"><strong>Свайп вправо</strong><span>Хочу сыграть — явная команда интереса.</span></div>
                 <div className="pb-gesture-choice"><strong>Свайп вверх</strong><span>Открыть сведения. Вниз — к обложке.</span></div>
               </div>
-              <p className="pb-tutorial-note">Кнопки «Пропустить» и «В друзья» дублируют жесты. Запрос уходит только после подтверждения сервера.</p>
+              <p className="pb-tutorial-note">Кнопки «Пропустить» и «Хочу сыграть» дублируют жесты. Совпадение только при взаимном интересе; дружба не создаётся.</p>
               <button type="button" className="pb-tutorial-dismiss" onClick={dismissTutorial}>Понятно</button>
             </section>
           </div>

@@ -1,5 +1,6 @@
 import { GameRecommendationsModule } from "./game-recommendations/game-recommendations.module";
 import { FriendshipsModule } from "./friendships/friendships.module";
+import { PlayInterestsModule } from "./play-interests/play-interests.module";
 import { Module } from "@nestjs/common";
 import { CityHintController } from "./discovery/city-hint.controller";
 import { APP_FILTER } from "@nestjs/core";
@@ -37,6 +38,7 @@ import { VenuesModule } from "./venues/venues.module";
     ProfilesModule,
     SafetyModule,
     FriendshipsModule,
+    PlayInterestsModule,
     GameRecommendationsModule,
     RadarModule,
     MessagingModule,
