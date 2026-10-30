@@ -7,7 +7,7 @@ import { listCities, listPlayers } from "../../../lib/api-client";
 import type { City, PublicPlayer } from "../../../lib/consumer-types";
 import { readSelectedLocation } from "../../../lib/location-context";
 import { isSocialDirectoryDisabled } from "../../../lib/player-presentation";
-import { parseBrowseView, writeBrowseViewSearch, type PlayerBrowseView } from "../../../lib/player-browse";
+import { parseBrowseView, PLAYER_BROWSE_DESKTOP_MQ, writeBrowseViewSearch, type PlayerBrowseView } from "../../../lib/player-browse";
 import { confirmedDirectoryActivation } from "../../../lib/radar-controller";
 import { RadarSwitchControl, RadarStatusControls } from "../radar/RadarControls";
 import { Button } from "../Button";
@@ -21,6 +21,27 @@ import { mergeRadarCatalog, scopedCatalogCursor, unifiedDirectoryAvailable, type
 import { useRadarSession, useDirectoryFilters } from "../radar/RadarSessionProvider";
 import { AuthEntry, PlayerCard, ProfileState } from "../players/ProfileComposition";
 import { PlayerBrowseDeck } from "../players/PlayerBrowseDeck";
+import { PlayersDirectoryToolbar } from "../players/PlayersDirectoryToolbar";
+
+/** Client-only desktop directory composition; first paint false until effect (SSR-safe). */
+function usePlayersDirectoryDesktop(): boolean {
+  const [desktop, setDesktop] = useState(false);
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const media = window.matchMedia(PLAYER_BROWSE_DESKTOP_MQ);
+    const sync = () => setDesktop(media.matches);
+    sync();
+    if (typeof media.addEventListener === "function") {
+      media.addEventListener("change", sync);
+      return () => media.removeEventListener("change", sync);
+    }
+    if (typeof media.addListener === "function") {
+      media.addListener(sync);
+      return () => media.removeListener(sync);
+    }
+  }, []);
+  return desktop;
+}
 
 export function PlayersDirectoryPage() {
   const [players, setPlayers] = useState<PublicPlayer[]>([]);
@@ -29,6 +50,7 @@ export function PlayersDirectoryPage() {
   // Default list for SSR/hydration; URL `view=cards` applies after mount.
   const [browseView, setBrowseView] = useState<PlayerBrowseView>("list");
   const [viewReady, setViewReady] = useState(false);
+  const desktop = usePlayersDirectoryDesktop();
   const { controller, view } = useRadarSession();
   const { filters, update } = useDirectoryFilters();
   const { name, areaKey, cityId, lookingOnly, trainerOnly } = filters;
@@ -165,24 +187,42 @@ export function PlayersDirectoryPage() {
       </div>
     </>
   );
-  return <ConsumerShell active="players" title="Игроки" hideHeading><div className="fr3 players-page gb-player-browse" data-surface="players-directory" data-state={state} data-browse-view={showCards ? "cards" : "list"}>
-    <section className={`players-hero${showCards ? " pb-hero--compact" : ""}`}>
+  const desktopToolbar = (
+    <PlayersDirectoryToolbar
+      cities={cities}
+      cityId={cityId}
+      name={name}
+      areaKey={areaKey}
+      lookingOnly={lookingOnly}
+      trainerOnly={trainerOnly}
+      onCityId={setCityId}
+      onName={setName}
+      onAreaKey={setAreaKey}
+      onLookingOnly={setLookingOnly}
+      onTrainerOnly={setTrainerOnly}
+      onReset={reset}
+      onFilterCommit={() => setCursor(null)}
+      notice={directory.view.notice}
+    />
+  );
+  return <ConsumerShell active="players" title="Игроки" hideHeading><div className="fr3 players-page gb-player-browse" data-surface="players-directory" data-state={state} data-browse-view={showCards ? "cards" : "list"} data-directory-desktop={desktop ? "true" : "false"}>
+    <section className={`players-hero${showCards && !desktop ? " pb-hero--compact" : ""}`}>
       <div>
         <h1>Игроки</h1>
-        {!showCards && <p>Находите партнёров по уровню и игровому настрою.</p>}
+        {(desktop || !showCards) && <p>Найдите партнёров для хорошей игры.</p>}
       </div>
       <div className="pb-view-switch" role="group" aria-label="Вид каталога">
-        <button type="button" aria-pressed={showCards} onClick={() => changeBrowseView("cards")}>
-          <span aria-hidden="true">▣</span>
-          <span className="pb-view-switch__label">По одному</span>
-        </button>
         <button type="button" aria-pressed={!showCards} onClick={() => changeBrowseView("list")}>
           <span aria-hidden="true">☰</span>
           <span className="pb-view-switch__label">Списком</span>
         </button>
+        <button type="button" aria-pressed={showCards} onClick={() => changeBrowseView("cards")}>
+          <span aria-hidden="true">▣</span>
+          <span className="pb-view-switch__label">По одному</span>
+        </button>
       </div>
     </section>
-    {showCards ? (
+    {desktop ? desktopToolbar : showCards ? (
       <details className="pb-catalog-tools">
         <summary>Radar и фильтры</summary>
         {radarBand}
@@ -213,10 +253,14 @@ export function PlayersDirectoryPage() {
           hasMore={Boolean(availableNextCursor)}
           onLoadMore={() => { if (availableNextCursor) setCursor({ scope: ordinaryScope, value: availableNextCursor }); }}
           placeLabel={placeLabel}
+          desktop={desktop}
         />
       </section>
     ) : (
-      <section className="players-list"><div className="players-list__heading"><span><small>{filtered ? "Подходят по фильтрам" : "Игровое сообщество"}</small><h2>{cityName ? `Игроки · ${cityName}` : "Все игроки"}</h2></span><button onClick={reset}>Сбросить фильтры</button></div>
+      <section className="players-list">
+        {!desktop && (
+          <div className="players-list__heading"><span><small>{filtered ? "Подходят по фильтрам" : "Игровое сообщество"}</small><h2>{cityName ? `Игроки · ${cityName}` : "Все игроки"}</h2></span><button onClick={reset}>Сбросить фильтры</button></div>
+        )}
         <div className="players-catalog-grid" aria-label="Каталог игроков">
           {catalog.radar.map(row => <UnifiedPlayerCard key={row.publicPlayerId} row={row} city={cities.find(c => c.id === row.player.cityId)?.nameRu} onSelect={() => void directory.controller?.select(row)} />)}
           {catalog.moreRadar && <Button variant="outline" disabled={directory.view.busy} onClick={() => void directory.controller?.more()}>Ещё участники Radar</Button>}
@@ -228,6 +272,13 @@ export function PlayersDirectoryPage() {
         {state === "empty" && !catalog.radar.length && <ProfileState title={filtered ? "Никого не нашли" : "Игроков пока нет"} state="empty">{filtered ? "Попробуйте изменить или сбросить фильтры." : "Вернитесь немного позже."}</ProfileState>}
         {availableNextCursor && <Button variant="outline" disabled={moreBusy} onClick={() => setCursor({ scope: ordinaryScope, value: availableNextCursor })}>{moreBusy ? "Загрузка…" : "Показать ещё"}</Button>}
       </section>
+    )}
+    {desktop && (
+      <p className="pb-radar-foot" role="status">
+        {view.confirmedOn
+          ? "Radar включён. Приблизительное положение видно участникам."
+          : "Radar выключен. Публичные профили доступны без него."}
+      </p>
     )}
     {liveRadar && directory.view.selected && <UnifiedPlayerPreview dialog onClose={() => directory.controller?.close()} />}
   </div></ConsumerShell>;

@@ -2,9 +2,30 @@ import type { FriendshipView } from "@gobadminton/contracts/friendship-types";
 import type { PublicPlayer } from "./consumer-types";
 
 export type PlayerBrowseView = "list" | "cards";
+export type PlayerBrowseSlideDirection = "next" | "prev";
+
+/** Desktop directory / deck composition (Owner v5). Mobile keeps existing <1024 layout. */
+export const PLAYER_BROWSE_DESKTOP_MQ = "(min-width: 1024px)";
+/** Visible horizontal player change on desktop; reduced-motion uses 0. */
+export const PLAYER_BROWSE_SLIDE_MS = 240;
 
 export const PLAYER_BROWSE_TUTORIAL_KEY = "gb-player-gallery-tutorial-v2";
 export const PLAYER_BROWSE_HISTORY_KEY = "gbPlayerBrowse";
+
+export function browseSlideDurationMs(reducedMotion: boolean): number {
+  return reducedMotion ? 0 : PLAYER_BROWSE_SLIDE_MS;
+}
+
+export function browseSlideDirection(fromIndex: number, toIndex: number): PlayerBrowseSlideDirection | null {
+  if (toIndex === fromIndex) return null;
+  return toIndex > fromIndex ? "next" : "prev";
+}
+
+export function prefersBrowseReducedMotion(
+  media: Pick<MediaQueryList, "matches"> | null | undefined,
+): boolean {
+  return Boolean(media?.matches);
+}
 
 export type PlayerBrowseHistoryState = {
   id: string;

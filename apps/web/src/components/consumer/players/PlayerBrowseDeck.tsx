@@ -1,22 +1,26 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { FriendshipReceipt, FriendshipView } from "@gobadminton/contracts/friendship-types";
 import { getMe, getMySocialProfile, getPlayer } from "../../../lib/api-client";
 import type { City, Me, PublicPlayer } from "../../../lib/consumer-types";
 import { formatSocialLevel } from "../../../lib/player-presentation";
 import {
+  browseSlideDurationMs,
   classifyPointerGesture,
   indexOfBrowsePlayer,
   isBrowseDragExcludedTarget,
   nextEligibleBrowseIndex,
   ordinaryBrowsePlayers,
   persistTutorialDismissed,
+  PLAYER_BROWSE_DESKTOP_MQ,
   popSkip,
+  prefersBrowseReducedMotion,
   pushSkip,
   readBrowseHistoryState,
   readTutorialDismissed,
+  type PlayerBrowseSlideDirection,
   withBrowseHistoryState,
 } from "../../../lib/player-browse";
 import { ProfileCover } from "./CoverEditor";
@@ -34,6 +38,8 @@ type Props = {
   hasMore: boolean;
   onLoadMore: () => void;
   placeLabel: string;
+  /** Parent desktop breakpoint; when omitted, deck measures PLAYER_BROWSE_DESKTOP_MQ itself. */
+  desktop?: boolean;
 };
 
 type DragState = {
@@ -50,6 +56,26 @@ function Chevron({ dir }: { dir: "left" | "right" | "down" }) {
   return <svg className="pb-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d={path} fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></svg>;
 }
 
+function useLocalDesktop(explicit?: boolean): boolean {
+  const [local, setLocal] = useState(false);
+  useEffect(() => {
+    if (explicit !== undefined) return;
+    if (typeof window.matchMedia !== "function") return;
+    const media = window.matchMedia(PLAYER_BROWSE_DESKTOP_MQ);
+    const sync = () => setLocal(media.matches);
+    sync();
+    if (typeof media.addEventListener === "function") {
+      media.addEventListener("change", sync);
+      return () => media.removeEventListener("change", sync);
+    }
+    if (typeof media.addListener === "function") {
+      media.addListener(sync);
+      return () => media.removeListener(sync);
+    }
+  }, [explicit]);
+  return explicit ?? local;
+}
+
 export function PlayerBrowseDeck({
   players,
   cities,
@@ -59,7 +85,9 @@ export function PlayerBrowseDeck({
   hasMore,
   onLoadMore,
   placeLabel,
+  desktop: desktopProp,
 }: Props) {
+  const desktop = useLocalDesktop(desktopProp);
   const [me, setMe] = useState<Me | null>(null);
   const [authState, setAuthState] = useState<"loading" | "ready" | "guest" | "error">("loading");
   const [ownPublicPlayerId, setOwnPublicPlayerId] = useState<string | null>(null);
@@ -68,6 +96,8 @@ export function PlayerBrowseDeck({
   const [skipStack, setSkipStack] = useState<string[]>([]);
   const [known, setKnown] = useState<Map<string, FriendshipView["relationship"]>>(() => new Map());
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [detailsPage, setDetailsPage] = useState(0);
+  const [detailsNeedsMore, setDetailsNeedsMore] = useState(false);
   const [coverById, setCoverById] = useState<Record<string, string | null>>({});
   const [friendBusy, setFriendBusy] = useState(false);
   const [rateBlockedUntil, setRateBlockedUntil] = useState<number | null>(null);
@@ -76,14 +106,18 @@ export function PlayerBrowseDeck({
   const [tutorialOpen, setTutorialOpen] = useState(false);
   const [tutorialMemory, setTutorialMemory] = useState(false);
   const [dragStamp, setDragStamp] = useState<{ opacity: number; skip: boolean; label: string }>({ opacity: 0, skip: false, label: "" });
+  const [slideDir, setSlideDir] = useState<PlayerBrowseSlideDirection | null>(null);
   const deckRef = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLElement>(null);
+  const detailsBodyRef = useRef<HTMLDivElement>(null);
   const tutorialRef = useRef<HTMLElement>(null);
   const friendshipApi = useRef<BrowseFriendshipApi | null>(null);
   const drag = useRef<DragState | null>(null);
   const coverGen = useRef(0);
   const scopeGen = useRef(0);
+  const slideGen = useRef(0);
   const restoredScope = useRef<string | null>(null);
+  const reducedMotionRef = useRef(false);
 
   const browsePlayers = useMemo(
     () => ordinaryBrowsePlayers(players, ownPublicPlayerId),
@@ -92,6 +126,21 @@ export function PlayerBrowseDeck({
   const current = browsePlayers[index] ?? null;
   // In-flight POST locks browse navigation; UNKNOWN latch stays in per-peer pending storage without freezing the deck.
   const navigationLocked = friendBusy;
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const media = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const sync = () => { reducedMotionRef.current = prefersBrowseReducedMotion(media); };
+    sync();
+    if (typeof media.addEventListener === "function") {
+      media.addEventListener("change", sync);
+      return () => media.removeEventListener("change", sync);
+    }
+    if (typeof media.addListener === "function") {
+      media.addListener(sync);
+      return () => media.removeListener(sync);
+    }
+  }, []);
 
   useEffect(() => {
     let live = true;
@@ -125,12 +174,21 @@ export function PlayerBrowseDeck({
 
   useEffect(() => {
     scopeGen.current += 1;
+    slideGen.current += 1;
     setSkipStack([]);
     setDetailsOpen(false);
+    setDetailsPage(0);
+    setDetailsNeedsMore(false);
     setKnown(new Map());
     restoredScope.current = null;
     setIndex(0);
+    setSlideDir(null);
   }, [ordinaryScope]);
+
+  useEffect(() => {
+    slideGen.current += 1;
+    setSlideDir(null);
+  }, [authReload]);
 
   useEffect(() => {
     if (restoredScope.current === ordinaryScope) return;
@@ -158,6 +216,8 @@ export function PlayerBrowseDeck({
 
   useEffect(() => {
     setDetailsOpen(false);
+    setDetailsPage(0);
+    setDetailsNeedsMore(false);
     setFriendBusy(false);
     setDragStamp({ opacity: 0, skip: false, label: "" });
     if (cardRef.current) {
@@ -167,13 +227,18 @@ export function PlayerBrowseDeck({
   }, [current?.publicPlayerId]);
 
   useEffect(() => {
+    // Desktop: no swipe tutorial. Mobile keeps existing onboarding.
+    if (desktop) {
+      setTutorialOpen(false);
+      return;
+    }
     const dismissed = readTutorialDismissed(
       typeof sessionStorage !== "undefined" ? sessionStorage : null,
       tutorialMemory,
     );
     const blank = catalogState === "loading" || catalogState === "empty" || catalogState === "error" || catalogState === "unavailable" || !browsePlayers.length;
     if (!dismissed && !blank) setTutorialOpen(true);
-  }, [catalogState, browsePlayers.length, tutorialMemory]);
+  }, [catalogState, browsePlayers.length, tutorialMemory, desktop]);
 
   useEffect(() => {
     if (!current) return;
@@ -219,21 +284,39 @@ export function PlayerBrowseDeck({
 
   const cityName = (cityId: string | null) => cities.find(c => c.id === cityId)?.nameRu;
 
-  const moveTo = useCallback((next: number) => {
+  const moveTo = useCallback((next: number, direction?: PlayerBrowseSlideDirection) => {
     if (navigationLocked) return;
     if (next < 0 || next >= browsePlayers.length) return;
+    slideGen.current += 1;
+    const token = slideGen.current;
+    const reduced = reducedMotionRef.current;
+    const shouldSlide = Boolean(desktop && direction && !reduced);
+    if (shouldSlide && direction) {
+      setSlideDir(direction);
+      setIndex(next);
+      setAnnounce(`Карточка ${String(next + 1).padStart(2, "0")} из ${String(browsePlayers.length).padStart(2, "0")}`);
+      const duration = browseSlideDurationMs(false);
+      window.setTimeout(() => {
+        if (slideGen.current !== token) return;
+        setSlideDir(null);
+      }, duration);
+      return;
+    }
+    setSlideDir(null);
     setIndex(next);
     setAnnounce(`Карточка ${String(next + 1).padStart(2, "0")} из ${String(browsePlayers.length).padStart(2, "0")}`);
-  }, [browsePlayers.length, navigationLocked]);
+  }, [browsePlayers.length, navigationLocked, desktop]);
+
+  useEffect(() => () => { slideGen.current += 1; }, []);
 
   const skipCurrent = useCallback(() => {
     if (!current || navigationLocked || tutorialOpen) return;
     setSkipStack(stack => pushSkip(stack, current.publicPlayerId));
-    if (index < browsePlayers.length - 1) moveTo(index + 1);
+    if (index < browsePlayers.length - 1) moveTo(index + 1, desktop ? "next" : undefined);
     else if (hasMore) setAnnounce("Подборка на этой странице закончилась. Можно загрузить ещё.");
     else setAnnounce("Подборка закончилась.");
     setToast("Пропущено. Игрок не получит уведомления.");
-  }, [current, navigationLocked, tutorialOpen, index, browsePlayers.length, hasMore, moveTo]);
+  }, [current, navigationLocked, tutorialOpen, index, browsePlayers.length, hasMore, moveTo, desktop]);
 
   const undoSkip = useCallback(() => {
     if (navigationLocked || tutorialOpen) return;
@@ -241,8 +324,8 @@ export function PlayerBrowseDeck({
     if (!id) return;
     const restored = indexOfBrowsePlayer(browsePlayers, id);
     setSkipStack(stack);
-    if (restored >= 0) moveTo(restored);
-  }, [navigationLocked, tutorialOpen, skipStack, browsePlayers, moveTo]);
+    if (restored >= 0) moveTo(restored, desktop && restored < index ? "prev" : desktop ? "next" : undefined);
+  }, [navigationLocked, tutorialOpen, skipStack, browsePlayers, moveTo, desktop, index]);
 
   const requestFriendship = useCallback(() => {
     if (navigationLocked || tutorialOpen) return;
@@ -267,7 +350,10 @@ export function PlayerBrowseDeck({
       [current.publicPlayerId, relationship] as const,
     ]), skipped);
     // Bypass navigationLocked: confirmed receipt already cleared the mutation busy latch in the child.
+    // Instant index change — not a browse slide (no automatic browsing animation).
     if (next >= 0) {
+      slideGen.current += 1;
+      setSlideDir(null);
       setIndex(next);
       setAnnounce(`Карточка ${String(next + 1).padStart(2, "0")} из ${String(browsePlayers.length).padStart(2, "0")}`);
     }
@@ -280,6 +366,29 @@ export function PlayerBrowseDeck({
     else setTutorialMemory(true);
     requestAnimationFrame(() => deckRef.current?.focus({ preventScroll: true }));
   }, []);
+
+  const openDetails = useCallback(() => {
+    setDetailsPage(0);
+    setDetailsNeedsMore(false);
+    setDetailsOpen(true);
+  }, []);
+
+  const closeDetails = useCallback(() => {
+    setDetailsOpen(false);
+    setDetailsPage(0);
+    setDetailsNeedsMore(false);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!desktop || !detailsOpen || detailsPage !== 0) {
+      if (!detailsOpen) setDetailsNeedsMore(false);
+      return;
+    }
+    const node = detailsBodyRef.current;
+    if (!node) return;
+    // Same-size banner: if page 0 overflows, offer next page instead of clipping or growing.
+    setDetailsNeedsMore(node.scrollHeight > node.clientHeight + 2);
+  }, [desktop, detailsOpen, detailsPage, current?.publicPlayerId, current?.bio]);
 
   useEffect(() => {
     if (tutorialOpen) requestAnimationFrame(() => tutorialRef.current?.focus({ preventScroll: true }));
@@ -296,14 +405,19 @@ export function PlayerBrowseDeck({
         dismissTutorial();
         return;
       }
+      if (event.key === "Escape" && detailsOpen) {
+        event.preventDefault();
+        closeDetails();
+        return;
+      }
       if (event.repeat || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || tutorialOpen) return;
       if (event.target !== deckRef.current) return;
-      if (event.key === "ArrowRight") { event.preventDefault(); moveTo(index + 1); }
-      if (event.key === "ArrowLeft") { event.preventDefault(); moveTo(index - 1); }
+      if (event.key === "ArrowRight") { event.preventDefault(); moveTo(index + 1, "next"); }
+      if (event.key === "ArrowLeft") { event.preventDefault(); moveTo(index - 1, "prev"); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [tutorialOpen, dismissTutorial, moveTo, index]);
+  }, [tutorialOpen, dismissTutorial, moveTo, index, detailsOpen, closeDetails]);
 
   function resetDrag() {
     drag.current = null;
@@ -317,6 +431,8 @@ export function PlayerBrowseDeck({
   useEffect(() => {
     const deck = deckRef.current;
     if (!deck) return;
+    // Desktop: explicit buttons only — no pointer swipe/drag mutations.
+    if (desktop) return;
 
     const onDown = (event: PointerEvent) => {
       if (navigationLocked || tutorialOpen || !current) return;
@@ -377,10 +493,10 @@ export function PlayerBrowseDeck({
       deck.removeEventListener("lostpointercapture", onCancel);
       window.removeEventListener("blur", onCancel);
     };
-  }, [navigationLocked, tutorialOpen, current, rateBlockedUntil, skipCurrent, requestFriendship]);
+  }, [navigationLocked, tutorialOpen, current, rateBlockedUntil, skipCurrent, requestFriendship, desktop]);
 
   const blank = catalogState === "loading" || (!browsePlayers.length && (catalogState === "empty" || catalogState === "ready"));
-  const showHelp = tutorialOpen && !blank && catalogState !== "error" && catalogState !== "unavailable";
+  const showHelp = !desktop && tutorialOpen && !blank && catalogState !== "error" && catalogState !== "unavailable";
 
   if (catalogState === "loading" && !players.length) {
     return <div className="gb-player-browse"><div className="pb-loading" role="status"><h2>Ищем игроков…</h2><p>Загружаем публичный каталог.</p></div></div>;
@@ -403,21 +519,68 @@ export function PlayerBrowseDeck({
 
   const levelLabel = formatSocialLevel(current?.level);
   const meta = [levelLabel !== "не указан" ? levelLabel : null, cityName(current?.cityId ?? null), current?.areaKey].filter(Boolean).join(" · ");
+  const locationLine = [cityName(current?.cityId ?? null), current?.areaKey].filter(Boolean).join(" · ");
   const coverUrl = current ? coverById[current.publicPlayerId] : undefined;
   const atEnd = index >= browsePlayers.length - 1;
+  const counter = `${String(index + 1).padStart(2, "0")} / ${String(browsePlayers.length).padStart(2, "0")}`;
+  const friendship = current && (
+    <PlayerBrowseFriendship
+      key={`${me?.id ?? "guest"}:${current.publicPlayerId}`}
+      me={me}
+      authState={authState}
+      peerId={current.publicPlayerId}
+      returnPath={`/players?view=cards`}
+      navigationLocked={false}
+      rateBlockedUntil={rateBlockedUntil}
+      onRateLimited={onRateLimited}
+      onRelationship={(view) => {
+        if (!view) return;
+        setKnown(prev => {
+          const next = new Map(prev);
+          next.set(current.publicPlayerId, view.relationship);
+          return next;
+        });
+      }}
+      onConfirmedRequest={onConfirmedRequest}
+      onBusyChange={setFriendBusy}
+      onApi={(api) => { friendshipApi.current = api; }}
+      onSkip={skipCurrent}
+      onAuthRetry={() => setAuthReload(n => n + 1)}
+      chrome={desktop ? "desktop" : "mobile"}
+    />
+  );
 
-  return <div className={`gb-player-browse${showHelp ? " is-teaching" : ""}`} data-surface="player-browse-deck">
-    <div className="pb-deck-context">
-      <strong className="pb-deck-context__place"><img className="profile-icon" src="/discovery/pin.svg" alt="" />{placeLabel}</strong>
-      <div className="pb-deck-context__tools">
-        <span className="pb-counter" aria-live="polite">{String(index + 1).padStart(2, "0")} / {String(browsePlayers.length).padStart(2, "0")}</span>
-        <button type="button" className="pb-help" aria-label="Подсказка по жестам" onClick={() => setTutorialOpen(true)}>?</button>
+  const desktopActions = (
+    <div className="pb-profile-bottom">
+      <div className="pb-profile-actions">
+        <div className="pb-friend-slot">{friendship}</div>
+        <button
+          type="button"
+          className="pb-btn-next"
+          disabled={navigationLocked || showHelp || atEnd}
+          onClick={() => moveTo(index + 1, "next")}
+        >
+          Следующий <Chevron dir="right" />
+        </button>
       </div>
+      <p className="pb-action-caption">Дружба — после подтверждения игрока.</p>
     </div>
+  );
+
+  return <div className={`gb-player-browse${showHelp ? " is-teaching" : ""}`} data-surface="player-browse-deck" data-browse-desktop={desktop ? "true" : "false"}>
+    {!desktop && (
+      <div className="pb-deck-context">
+        <strong className="pb-deck-context__place"><img className="profile-icon" src="/discovery/pin.svg" alt="" />{placeLabel}</strong>
+        <div className="pb-deck-context__tools">
+          <span className="pb-counter" aria-live="polite">{counter}</span>
+          <button type="button" className="pb-help" aria-label="Подсказка по жестам" onClick={() => setTutorialOpen(true)}>?</button>
+        </div>
+      </div>
+    )}
 
     <div className="pb-slider-stage">
-      <button type="button" className="pb-slider-nav prev" aria-label="Предыдущий игрок — только просмотр" disabled={navigationLocked || showHelp || index <= 0} onClick={() => moveTo(index - 1)}><Chevron dir="left" /></button>
-      <button type="button" className="pb-slider-nav next" aria-label="Следующий игрок — только просмотр" disabled={navigationLocked || showHelp || index >= browsePlayers.length - 1} onClick={() => moveTo(index + 1)}><Chevron dir="right" /></button>
+      <button type="button" className="pb-slider-nav prev" aria-label="Предыдущий игрок — только просмотр" disabled={navigationLocked || showHelp || index <= 0} onClick={() => moveTo(index - 1, "prev")}><Chevron dir="left" /></button>
+      <button type="button" className="pb-slider-nav next" aria-label="Следующий игрок — только просмотр" disabled={navigationLocked || showHelp || index >= browsePlayers.length - 1} onClick={() => moveTo(index + 1, "next")}><Chevron dir="right" /></button>
 
       <div
         ref={deckRef}
@@ -427,84 +590,164 @@ export function PlayerBrowseDeck({
         role="group"
         aria-label="Игроки по одному"
         aria-describedby="player-browse-live"
+        data-slide={slideDir ?? undefined}
       >
         {current && <div className="pb-surface" inert={showHelp ? true : undefined}>
-          <article ref={cardRef} className="pb-card" data-player-id={current.publicPlayerId}>
-            <div className="pb-cover">
-              <ProfileCover url={coverUrl ?? undefined} />
-              <Avatar className={`avatar avatar--${current.trainer ? "purple" : "yellow"} pb-avatar`} avatar={current.avatar} name={current.displayName} tone={current.trainer ? "purple" : "yellow"} />
-            </div>
-            <div className="pb-copy">
-              <div>
-                {current.lookingForGame && <span className="pb-pill">● Ищу игру</span>}
-                {current.trainer && !current.lookingForGame && <span className="pb-pill">Тренер</span>}
-                <h2>{current.displayName}</h2>
-                {meta && <p className="pb-meta">{meta}</p>}
-                <small className="pb-level-note">Уровень — со слов игрока</small>
-              </div>
-              <div className="pb-excerpt">
-                {current.bio ? <p className="pb-bio">{current.bio}</p> : <p className="pb-bio">О себе пока ничего не написано.</p>}
-                <button type="button" className="pb-detail-toggle" aria-expanded={detailsOpen} data-browse-no-drag="" onClick={() => setDetailsOpen(v => !v)}>
-                  <span>{detailsOpen ? "Скрыть подробности" : "Подробнее об игроке"}</span>
-                  <Chevron dir="down" />
-                </button>
-              </div>
-            </div>
-
-            <div className={`pb-details${detailsOpen ? " is-open" : ""}`} data-browse-no-drag="">
-              <div className="pb-details-panel">
-                <h3>Подробнее</h3>
-                <div className="pb-facts">
-                  <div className="pb-fact"><span>Уровень</span><strong>{levelLabel}</strong><small>Самооценка игрока</small></div>
-                  <div className="pb-fact"><span>Город</span><strong>{cityName(current.cityId) || "Не указан"}</strong></div>
-                  <div className="pb-fact"><span>Район / метро</span><strong>{current.areaKey || "Не указан"}</strong></div>
-                  <div className="pb-fact"><span>Роль</span><strong>{current.trainer ? "Тренер" : "Игрок"}</strong></div>
+          <div className={`pb-slide-frame${slideDir ? ` is-sliding-${slideDir}` : ""}`}>
+            {desktop ? (
+              <article
+                ref={cardRef}
+                className={`pb-card pb-card--desktop${detailsOpen ? " is-expanded" : ""}`}
+                data-player-id={current.publicPlayerId}
+                data-details={detailsOpen ? "open" : "closed"}
+              >
+                {!detailsOpen && (
+                  <div className="pb-cover">
+                    <ProfileCover url={coverUrl ?? undefined} />
+                    {current.lookingForGame && <span className="pb-media-tag">Ищу партнёра</span>}
+                    {current.trainer && !current.lookingForGame && <span className="pb-media-tag">Тренер</span>}
+                    <Avatar className={`avatar avatar--${current.trainer ? "purple" : "yellow"} pb-avatar`} avatar={current.avatar} name={current.displayName} tone={current.trainer ? "purple" : "yellow"} />
+                  </div>
+                )}
+                <div className="pb-copy">
+                  {!detailsOpen ? (
+                    <div className="pb-identity">
+                      <div className="pb-identity-top">
+                        <span className="pb-eyebrow">ЗНАКОМИМСЯ НА КОРТЕ</span>
+                        <span className="pb-counter" aria-live="polite">{counter}</span>
+                      </div>
+                      <h2>{current.displayName}</h2>
+                      {locationLine && <p className="pb-meta"><img className="profile-icon" src="/discovery/pin.svg" alt="" />{locationLine}</p>}
+                      <div className="pb-facts pb-facts--inline">
+                        <div className="pb-fact"><span>Уровень игры</span><strong>{levelLabel}</strong><small>Указан игроком</small></div>
+                        <div className="pb-fact"><span>Роль</span><strong>{current.trainer ? "Тренер" : "Игрок"}</strong><small>{current.lookingForGame ? "Ищет игру" : "Открыт к знакомству"}</small></div>
+                      </div>
+                      <div className="pb-excerpt">
+                        {current.bio ? <p className="pb-bio pb-bio--preview">{current.bio}</p> : <p className="pb-bio pb-bio--preview">О себе пока ничего не написано.</p>}
+                        <button type="button" className="pb-detail-toggle" aria-expanded={false} data-browse-no-drag="" onClick={openDetails}>
+                          <span>Подробнее об игроке</span>
+                          <Chevron dir="right" />
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <section className="pb-expanded" aria-label="Подробнее об игроке">
+                      <div className="pb-expanded-heading">
+                        <div className="pb-expanded-person">
+                          <Avatar className={`avatar avatar--${current.trainer ? "purple" : "yellow"} pb-expanded-avatar`} avatar={current.avatar} name={current.displayName} tone={current.trainer ? "purple" : "yellow"} />
+                          <div>
+                            <span className="pb-eyebrow">ПРОФИЛЬ ИГРОКА</span>
+                            <h2>{current.displayName}</h2>
+                            {locationLine && <p>{locationLine}</p>}
+                          </div>
+                        </div>
+                        <button type="button" className="pb-collapse-details" onClick={closeDetails}>
+                          К карточке <Chevron dir="left" />
+                        </button>
+                      </div>
+                      <div ref={detailsBodyRef} className="pb-expanded-body" data-details-page={detailsPage}>
+                        {detailsPage === 0 ? (
+                          <div className="pb-expanded-columns">
+                            <section>
+                              <h3>Об игроке</h3>
+                              {current.bio ? <p>{current.bio}</p> : <p>О себе пока ничего не написано.</p>}
+                            </section>
+                            <section>
+                              <h3>Игровой профиль</h3>
+                              <dl className="pb-expanded-dl">
+                                <div><dt>Уровень игры</dt><dd>{levelLabel}<small>Указан игроком</small></dd></div>
+                                <div><dt>Роль</dt><dd>{current.trainer ? "Тренер" : "Игрок"}</dd></div>
+                                <div><dt>Где играю</dt><dd>{current.areaKey || "Не указан"}</dd></div>
+                              </dl>
+                              <p className="pb-games-note">Публичные игры пока не указаны.</p>
+                              <Link className="pb-profile-link" href={`/players/${current.publicPlayerId}`}>Открыть публичный профиль</Link>
+                            </section>
+                          </div>
+                        ) : (
+                          <div className="pb-expanded-columns">
+                            <section>
+                              <h3>Об игроке</h3>
+                              {current.bio ? <p>{current.bio}</p> : <p>О себе пока ничего не написано.</p>}
+                            </section>
+                            <section>
+                              <h3>Ближайшие игры</h3>
+                              <p>Публичные ближайшие игры этого игрока пока недоступны.</p>
+                              <Link className="pb-profile-link" href={`/players/${current.publicPlayerId}`}>Открыть публичный профиль</Link>
+                            </section>
+                          </div>
+                        )}
+                      </div>
+                      {(detailsNeedsMore || detailsPage > 0) && (
+                        <div className="pb-details-pager">
+                          {detailsPage > 0 && (
+                            <button type="button" className="pb-details-more" onClick={() => setDetailsPage(0)}>Назад к сведениям</button>
+                          )}
+                          {detailsPage === 0 && detailsNeedsMore && (
+                            <button type="button" className="pb-details-more" onClick={() => setDetailsPage(1)}>Ещё сведения</button>
+                          )}
+                        </div>
+                      )}
+                    </section>
+                  )}
+                  {/* Stable slot: details toggle must not remount friendship / pending UNKNOWN. */}
+                  {desktopActions}
                 </div>
-                {current.bio && <div className="pb-about"><h3>О себе</h3><p>{current.bio}</p></div>}
-                <div className="pb-games">
-                  <h3>Ближайшие игры</h3>
-                  <p>Публичные ближайшие игры этого игрока пока недоступны.</p>
-                  <Link className="pb-profile-link" href={`/players/${current.publicPlayerId}`}>Открыть публичный профиль</Link>
+              </article>
+            ) : (
+              <article ref={cardRef} className="pb-card" data-player-id={current.publicPlayerId}>
+                <div className="pb-cover">
+                  <ProfileCover url={coverUrl ?? undefined} />
+                  <Avatar className={`avatar avatar--${current.trainer ? "purple" : "yellow"} pb-avatar`} avatar={current.avatar} name={current.displayName} tone={current.trainer ? "purple" : "yellow"} />
                 </div>
-              </div>
-            </div>
+                <div className="pb-copy">
+                  <div>
+                    {current.lookingForGame && <span className="pb-pill">● Ищу игру</span>}
+                    {current.trainer && !current.lookingForGame && <span className="pb-pill">Тренер</span>}
+                    <h2>{current.displayName}</h2>
+                    {meta && <p className="pb-meta">{meta}</p>}
+                    <small className="pb-level-note">Уровень — со слов игрока</small>
+                  </div>
+                  <div className="pb-excerpt">
+                    {current.bio ? <p className="pb-bio">{current.bio}</p> : <p className="pb-bio">О себе пока ничего не написано.</p>}
+                    <button type="button" className="pb-detail-toggle" aria-expanded={detailsOpen} data-browse-no-drag="" onClick={() => setDetailsOpen(v => !v)}>
+                      <span>{detailsOpen ? "Скрыть подробности" : "Подробнее об игроке"}</span>
+                      <Chevron dir="down" />
+                    </button>
+                  </div>
+                </div>
 
-            <div className={`pb-swipe-stamp${dragStamp.skip ? " is-skip" : ""}`} aria-hidden="true" style={{ opacity: dragStamp.opacity }}>
-              <span>{dragStamp.label}</span>
-            </div>
+                <div className={`pb-details${detailsOpen ? " is-open" : ""}`} data-browse-no-drag="">
+                  <div className="pb-details-panel">
+                    <h3>Подробнее</h3>
+                    <div className="pb-facts">
+                      <div className="pb-fact"><span>Уровень</span><strong>{levelLabel}</strong><small>Самооценка игрока</small></div>
+                      <div className="pb-fact"><span>Город</span><strong>{cityName(current.cityId) || "Не указан"}</strong></div>
+                      <div className="pb-fact"><span>Район / метро</span><strong>{current.areaKey || "Не указан"}</strong></div>
+                      <div className="pb-fact"><span>Роль</span><strong>{current.trainer ? "Тренер" : "Игрок"}</strong></div>
+                    </div>
+                    {current.bio && <div className="pb-about"><h3>О себе</h3><p>{current.bio}</p></div>}
+                    <div className="pb-games">
+                      <h3>Ближайшие игры</h3>
+                      <p>Публичные ближайшие игры этого игрока пока недоступны.</p>
+                      <Link className="pb-profile-link" href={`/players/${current.publicPlayerId}`}>Открыть публичный профиль</Link>
+                    </div>
+                  </div>
+                </div>
 
-            <div className="pb-controls">
-              <button type="button" className="pb-undo" disabled={!skipStack.length || navigationLocked || showHelp} onClick={undoSkip}>
-                ← Вернуть пропущенного
-              </button>
-              <div style={{ flex: 1 }} />
-              {current && (
-                <PlayerBrowseFriendship
-                  key={`${me?.id ?? "guest"}:${current.publicPlayerId}`}
-                  me={me}
-                  authState={authState}
-                  peerId={current.publicPlayerId}
-                  returnPath={`/players?view=cards`}
-                  navigationLocked={false}
-                  rateBlockedUntil={rateBlockedUntil}
-                  onRateLimited={onRateLimited}
-                  onRelationship={(view) => {
-                    if (!view) return;
-                    setKnown(prev => {
-                      const next = new Map(prev);
-                      next.set(current.publicPlayerId, view.relationship);
-                      return next;
-                    });
-                  }}
-                  onConfirmedRequest={onConfirmedRequest}
-                  onBusyChange={setFriendBusy}
-                  onApi={(api) => { friendshipApi.current = api; }}
-                  onSkip={skipCurrent}
-                  onAuthRetry={() => setAuthReload(n => n + 1)}
-                />
-              )}
-            </div>
-          </article>
+                <div className={`pb-swipe-stamp${dragStamp.skip ? " is-skip" : ""}`} aria-hidden="true" style={{ opacity: dragStamp.opacity }}>
+                  <span>{dragStamp.label}</span>
+                </div>
+
+                <div className="pb-controls">
+                  <button type="button" className="pb-undo" disabled={!skipStack.length || navigationLocked || showHelp} onClick={undoSkip}>
+                    ← Вернуть пропущенного
+                  </button>
+                  <div style={{ flex: 1 }} />
+                  {friendship}
+                </div>
+              </article>
+            )}
+          </div>
         </div>}
 
         {showHelp && (

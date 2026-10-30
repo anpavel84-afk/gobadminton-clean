@@ -22,7 +22,16 @@ export function RadarSwitchControl({ map = false }: { map?: boolean }) {
   const config = useRadarConfig();
   return <div className="radar-entry">{view.phase === "guest" && <AuthEntry returnPath="/players">Войти для Radar</AuthEntry>}{!view.confirmedOn && view.phase !== "guest" && <Button disabled={!config?.publishingV2.enabled || radarSwitchDisabled(view)} onClick={() => controller?.permission()}>Включить Radar</Button>}{(map || view.confirmedOn) && <Toggle id="radar-switch" label="Radar" on={view.confirmedOn} disabled={!controller || (!view.confirmedOn && !config?.publishingV2.enabled) || radarSwitchDisabled(view)} describedBy="radar-switch-helper" onClick={() => { if (!controller || radarSwitchDisabled(view)) return; if (view.confirmedOn) void controller.stop(); else controller.permission(); }} />}<small id="radar-switch-helper">{view.phase === "off" || view.phase === "guest" ? "Включите, чтобы поделиться геопозицией." : radarPhaseTitle[view.phase]}</small></div>;
 }
-export function RadarStatusControls({ map = false }: { map?: boolean }) {
+export type RadarStatusPresentation = "default" | "directory-compact";
+
+export function RadarStatusControls({
+  map = false,
+  presentation = "default",
+}: {
+  map?: boolean;
+  /** directory-compact: desktop /players strip — hide DEV synthetic label; keep permission/error/recovery/consent. */
+  presentation?: RadarStatusPresentation;
+}) {
   const { controller, view } = useRadarSession();
   const config = useRadarConfig();
   if (!controller) return null;
@@ -30,9 +39,17 @@ export function RadarStatusControls({ map = false }: { map?: boolean }) {
   const demo = view.exposureMode === "synthetic_demo";
   const busy = ["checking", "locating", "activating", "stopping"].includes(view.phase);
   const due = active && view.now >= Date.parse(status.nextLocationUpdateAt);
-  return <div className="radar-status-controls" aria-busy={busy}>
-    {typeof window !== "undefined" && usesDevMoscowLocation(config, window.location.origin) && <section className="radar-notice"><span role="status"><strong>{DEV_MOSCOW_LABEL}</strong></span></section>}
-    {active && !map && <section className="radar-on radar-on--compact"><span><small className="radar-countdown">Подтверждённый срок Radar: осталось {remainingTime(new Date(effectiveDeadline(status)).toISOString(), view.now)}</small><small>Примерное положение и расстояние видны участникам.</small>{status.gridSizeMeters === 1000 && <small>Местоположение определяется неточно.</small>}</span>{Date.parse(status.hardExpiresAt) > Date.parse(status.expiresAt) && <Button variant="outline" onClick={() => void controller.activate(() => acquireRadarLocation(controller), "renew")}>Продлить</Button>}</section>}
+  const directoryCompact = presentation === "directory-compact";
+  const canRenew = active && Date.parse(status.hardExpiresAt) > Date.parse(status.expiresAt);
+  return <div className="radar-status-controls" data-presentation={presentation} aria-busy={busy}>
+    {!directoryCompact && typeof window !== "undefined" && usesDevMoscowLocation(config, window.location.origin) && <section className="radar-notice"><span role="status"><strong>{DEV_MOSCOW_LABEL}</strong></span></section>}
+    {active && !map && !directoryCompact && <section className="radar-on radar-on--compact"><span><small className="radar-countdown">Подтверждённый срок Radar: осталось {remainingTime(new Date(effectiveDeadline(status)).toISOString(), view.now)}</small><small>Примерное положение и расстояние видны участникам.</small>{status.gridSizeMeters === 1000 && <small>Местоположение определяется неточно.</small>}</span>{canRenew && <Button variant="outline" onClick={() => void controller.activate(() => acquireRadarLocation(controller), "renew")}>Продлить</Button>}</section>}
+    {active && !map && directoryCompact && (
+      <p className="radar-list-notice pb-dir-radar-note" role="status">
+        Radar включён. Примерное положение видно участникам.
+        {canRenew && <Button variant="outline" onClick={() => void controller.activate(() => acquireRadarLocation(controller), "renew")}>Продлить</Button>}
+      </p>
+    )}
     {due && <section className="radar-notice"><span><strong>Обновите геопозицию, чтобы продолжить поиск</strong><small>Поиск приостановится, когда геопозиция устареет.</small></span><Button variant="outline" onClick={() => void controller.activate(() => acquireRadarLocation(controller), "location")}>{demo ? "Обновить демо-позицию" : "Обновить геопозицию"}</Button></section>}
     {/* The persistent header affordance owns the single shared consent dialog. */}
     {view.phase === "guest" && view.notice && <section className="radar-notice"><span><strong>Войдите, чтобы включить Radar</strong></span><AuthEntry returnPath="/players" /></section>}
