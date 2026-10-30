@@ -10,8 +10,9 @@ import { DIRECTORY_CONSENT_POLICY_VERSION, formatSocialLevel, isSocialDirectoryD
 import { Button } from "../Button";
 import { ConsumerShell } from "../ConsumerShell";
 import { AuthEntry, Avatar, ProfileDialog, ProfileState, SectionHeader, Toggle, VisibilityRow } from "../players/ProfileComposition";
-import { CoverEditor, ProfileCover } from "../players/CoverEditor";
+import { CoverEditor } from "../players/CoverEditor";
 import { AvatarEditor } from "../players/AvatarEditor";
+import { PlayerProfileHero } from "../players/PlayerProfileContent";
 import { useSocialMutation } from "../messages/useSocialMutation";
 import { MutationNotice } from "../messages/MessageComposition";
 import { OwnUpcomingGames } from "../players/OwnUpcomingGames";
@@ -161,20 +162,32 @@ export function ProfilePage() {
     {state === "error" && <ProfileState title="Не удалось загрузить профиль" state="error" retry={() => setReload(n => n + 1)}>Попробуйте снова.</ProfileState>}
     {state === "auth" && <section className="own-profile-guest"><header className="gb-page-heading"><div><h1>Мой профиль</h1><p>Войдите, чтобы заполнить профиль и находить партнёров для игры.</p></div></header><div className="own-profile-guest__panel"><ProfileState title="Войдите в аккаунт">После входа здесь появятся игровые данные и настройки аккаунта.</ProfileState><AuthEntry returnPath="/profile" /></div></section>}
     {state === "ready" && me && <>
-      <header className="gb-page-heading own-profile-pagehead"><div><h1>Мой профиль</h1><p>Управляйте игровыми данными и тем, что видят другие.</p></div><Button variant="outline" disabled={!social || socialUnavailable || locked} onClick={edit}>Изменить профиль</Button></header>
+      <header className="gb-page-heading own-profile-pagehead"><div><h1>Мой профиль</h1><p>Управляйте игровыми данными и тем, что видят другие.</p></div></header>
       <section className="own-profile-identity" data-surface="op-01" data-cover={social?.cover?.uploadedUrl ? "uploaded" : "fallback"}>
-        <div className="own-profile-identity__row">
-          <Avatar avatar={social?.avatar} name={social?.displayName || me.displayName} />
-          <div className="own-profile-identity__copy">
-            <strong>{social?.displayName || me.displayName}</strong>
-            <span>{[city, formatSocialLevel(social?.level)].filter(Boolean).join(" · ") || "Город и уровень не указаны"}</span>
+        <PlayerProfileHero
+          titleAs="h2"
+          visualRef={coverFrame}
+          visualClassName="own-profile-avatar"
+          city={city}
+          player={{
+            publicPlayerId: social?.publicPlayerId ?? me.id,
+            displayName: social?.displayName || me.displayName,
+            level: social?.level,
+            trainer: Boolean(social?.trainer),
+            lookingForGame: lookingActive,
+            avatar: social?.avatar,
+            bio: social?.bio,
+            areaKey: social?.areaKey,
+            cover: social?.cover,
+          }}
+        />
+        <div className="own-profile-actionband player-profile-actionband">
+          <div className="player-profile-actions" data-surface="op-actions">
+            <Button variant="outline" disabled={!social || socialUnavailable || locked} onClick={edit}>Изменить профиль</Button>
+            <Button href="/profile/settings" variant="ghost">Настройки</Button>
           </div>
-          <Button href="/profile/settings" variant="ghost">Настройки</Button>
+          {social && !socialUnavailable && <CoverEditor frameRef={coverFrame} onUnauthorized={() => setState("auth")} cover={social.cover} version={social.version} csrfToken={me.csrfToken} disabled={locked} onBusy={setBusy} onReconcile={hydrate} onChange={value => setSocial(current => current && value.version >= current.version ? { ...current, ...value } : current)} />}
         </div>
-        <div ref={coverFrame} className={`own-profile-avatar${social?.cover?.uploadedUrl ? " own-profile-avatar--compact" : " own-profile-avatar--measure"}`}>
-          {social?.cover?.uploadedUrl ? <ProfileCover url={social.cover.uploadedUrl} /> : null}
-        </div>
-        {social && !socialUnavailable && <CoverEditor frameRef={coverFrame} onUnauthorized={() => setState("auth")} cover={social.cover} version={social.version} csrfToken={me.csrfToken} disabled={locked} onBusy={setBusy} onReconcile={hydrate} onChange={value => setSocial(current => current && value.version >= current.version ? { ...current, ...value } : current)} />}
       </section>
       <div className="own-profile-layout"><div className="own-profile-main">
         {socialUnavailable ? <ProfileState title="Игровой профиль сейчас недоступен">Попробуйте вернуться позже. Настройки аккаунта доступны ниже.</ProfileState> : social && <>

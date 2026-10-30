@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import type { ReactNode, Ref } from "react";
 import type { PlayerAvatar, SocialLevel } from "../../../lib/consumer-types";
 import { formatSocialLevel } from "../../../lib/player-presentation";
 import { ProfileCover } from "./CoverEditor";
@@ -20,6 +20,51 @@ export type PlayerProfileFields = {
   cover?: { uploadedUrl: string | null } | null;
 };
 
+/** Shared cover + avatar + title strip used by public/Radar and own profile. */
+export function PlayerProfileHero({
+  player,
+  city,
+  distance,
+  titleAs = "h1",
+  visualRef,
+  visualClassName,
+}: {
+  player: PlayerProfileFields;
+  city?: string;
+  /** Radar-only optional metadata; omit on the ordinary public page. */
+  distance?: ReactNode;
+  titleAs?: "h1" | "h2";
+  /** Own-profile CoverEditor measures this on-screen visual region. */
+  visualRef?: Ref<HTMLDivElement>;
+  /** Optional extra class on the cover/avatar panel (e.g. legacy own-profile frame alias). */
+  visualClassName?: string;
+}) {
+  const Title = titleAs;
+  const levelLabel = formatSocialLevel(player.level);
+  const meta = [levelLabel, city, player.areaKey].filter(Boolean).join(" · ");
+  const looking = player.lookingForGame === true;
+  const trainer = player.trainer === true;
+  const visualClass = visualClassName ? `player-profile-visual ${visualClassName}` : "player-profile-visual";
+  return <section className="player-profile-hero">
+    <div ref={visualRef} className={visualClass}>
+      {player.cover?.uploadedUrl && <ProfileCover url={player.cover.uploadedUrl} />}
+      <Avatar avatar={player.avatar ?? undefined} name={player.displayName} tone={trainer ? "purple" : "yellow"} />
+      <img src="/canonical/bb5a8.svg" alt="" />
+    </div>
+    <div className="player-profile-copy">
+      <div className="player-profile-status">
+        {looking && <Badge>Ищу игру</Badge>}
+        {trainer && <Badge trainer>Тренер</Badge>}
+        {!looking && !trainer && <Badge>Игрок</Badge>}
+        {distance != null && distance !== "" && <span className="player-profile-distance">{distance}</span>}
+      </div>
+      <Title>{player.displayName}</Title>
+      {meta && <p className="player-profile-meta">{meta}</p>}
+      {player.bio ? <p className="player-profile-bio">{player.bio}</p> : null}
+    </div>
+  </section>;
+}
+
 export function PlayerProfileContent({
   player,
   city,
@@ -38,30 +83,10 @@ export function PlayerProfileContent({
   titleAs?: "h1" | "h2";
   className?: string;
 }) {
-  const Title = titleAs;
   const levelLabel = formatSocialLevel(player.level);
-  const meta = [levelLabel, city, player.areaKey].filter(Boolean).join(" · ");
-  const looking = player.lookingForGame === true;
   const trainer = player.trainer === true;
   return <div className={className ? `player-profile-content ${className}` : "player-profile-content"} data-player-profile-content="">
-    <section className="player-profile-hero">
-      <div className="player-profile-visual">
-        {player.cover?.uploadedUrl && <ProfileCover url={player.cover.uploadedUrl} />}
-        <Avatar avatar={player.avatar ?? undefined} name={player.displayName} tone={trainer ? "purple" : "yellow"} />
-        <img src="/canonical/bb5a8.svg" alt="" />
-      </div>
-      <div className="player-profile-copy">
-        <div className="player-profile-status">
-          {looking && <Badge>Ищу игру</Badge>}
-          {trainer && <Badge trainer>Тренер</Badge>}
-          {!looking && !trainer && <Badge>Игрок</Badge>}
-          {distance != null && distance !== "" && <span className="player-profile-distance">{distance}</span>}
-        </div>
-        <Title>{player.displayName}</Title>
-        {meta && <p className="player-profile-meta">{meta}</p>}
-        {player.bio ? <p className="player-profile-bio">{player.bio}</p> : null}
-      </div>
-    </section>
+    <PlayerProfileHero player={player} city={city} distance={distance} titleAs={titleAs} />
     {(actions || note) ? <div className="player-profile-actionband">
       {actions ? <div className="player-profile-actions" data-surface="pp-actions">{actions}</div> : null}
       {note}
