@@ -60,11 +60,18 @@ describe("PlayerProfileContent shared ordinary/Radar presentation", () => {
     const fields = { ...player, cover: { uploadedUrl: coverUrl } };
     const hero = renderToStaticMarkup(<PlayerProfileHero player={fields} city="Москва" titleAs="h2" />);
     const content = renderToStaticMarkup(<PlayerProfileContent player={fields} city="Москва" titleAs="h2" />);
+    // React 19 SSR hoists image preload <link> tags to the markup root. Standalone
+    // PlayerProfileHero therefore yields "preloads + section", while PlayerProfileContent
+    // yields "preloads + wrapper div + section". Compare the section subtree only.
+    const stripReactPreloadLinkPrefixes = (html: string) =>
+      html.replace(/^(?:<link\s+rel="preload"[^>]*\/>)*/, "");
+    const heroSection = stripReactPreloadLinkPrefixes(hero);
     expect(hero).toContain("player-profile-hero");
     expect(hero).toContain("player-profile-visual");
     expect(hero).toContain(coverUrl);
     expect(hero).toContain("<h2>Мария Л.</h2>");
     expect(hero).toContain("avatar");
-    expect(content).toContain(hero);
+    expect(heroSection.startsWith('<section class="player-profile-hero">')).toBe(true);
+    expect(stripReactPreloadLinkPrefixes(content)).toContain(heroSection);
   });
 });
