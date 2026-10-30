@@ -17,7 +17,7 @@ This document records product contracts for the integrated consumer surface. Do 
 - Deck: photograph **LEFT ~44%**, identity/actions **RIGHT**, circular avatar inside cover. One stable outer banner rectangle for normal and details; fixed geometry from the viewport (`clamp` height). Details replaces the photo with full-width identity + actual info; return via «К карточке» / Escape. No height/width/page jump; no internal vertical scrolling in the banner.
 - Base card shows a short bio preview. Expanded state must not silently drop the full actual bio: if content cannot fit (long bio / zoom), use same-size details pages with an accessible «Ещё» control — do not clip away info or grow the container. Minimal paging only; no generic pagination framework.
 - Actions stay visible. Reuse actual profile fields and the honest unavailable-games note + public profile link. No mock preference / rating / nearby facts.
-- Desktop: **no** pointer swipe/drag mutations and **no** swipe tutorial. Explicit «Хочу сыграть» and «Следующий» plus side arrows. Arrows / Next are **browse-only**.
+- Desktop: **no** pointer swipe/drag mutations and **no** swipe tutorial. Explicit «Давай сыграем» and «Следующий» plus side arrows. Arrows / Next are **browse-only**.
 - Directional horizontal slide **200–280ms** on next/prev: stationary outer frame/header/toolbar; animate content inside a clipped stationary frame; direction follows navigation. No automatic browsing timers. No duplicate mounted play-interest controls or concurrent actions. `prefers-reduced-motion` → instant. Rapid clicks, scope/filter/auth change, or unmount cancel obsolete animation. Initial load and details toggle must **not** trigger the player-change slide. Never delay/update wrong-peer mutation callbacks; preserve pending/UNKNOWN and existing capabilities.
 
 ## Mobile <1024
@@ -36,9 +36,9 @@ Superseded by the **Mobile fullscreen contract** appendix below for cards mode. 
 ## Interaction (shared)
 
 - Side arrows and Left/Right on a deliberately focused deck: **browse only** (never play-interest mutation). Desktop ≥1024: buttons only (no pointer swipe).
-- Mobile only: Left swipe / «Пропустить»: local skip (no block/withdraw). Right swipe or green «Хочу сыграть»: play-interest send — see mobile appendix for 1:1 drag, fly-off, and confirmed-only right advance.
+- Mobile only: Left swipe / «Пропустить»: local skip (no block/withdraw). Right swipe or green «Давай сыграем»: play-interest send — see mobile appendix for 1:1 drag, fly-off, and confirmed-only right advance.
 - Axis lock / distance-or-flick release / cancel / vertical details; interactive targets exclude drag. No send on partial drag, cancel, navigation, load, or pagination.
-- After **confirmed** receipt: short toast + auto-next eligible candidate (instant index — not the desktop browse slide). Busy / UNKNOWN must not fake success. Unilateral outcome copy is «Интерес отправлен» — never «match»/friends. Mutual only after server confirms both current intents: «Вы хотите сыграть вместе».
+- After **confirmed** receipt: short toast + auto-next eligible candidate (instant index — not the desktop browse slide). Busy / UNKNOWN must not fake success. Unilateral outcome copy is «Предложение отправлено» — never «match»/friends. Mutual only after server confirms both current intents: «Вы оба хотите сыграть». Withdraw control: «Отменить предложение».
 - Previous restores preserved interest state; no repeated send. Position within the loaded public scope uses browser history state (no new storage engine). Filter change resets selection/skip.
 - No mutations on mouseenter or keyboard browse navigation.
 
@@ -57,6 +57,9 @@ Superseded by the **Mobile fullscreen contract** appendix below for cards mode. 
 - Confirm `receipt.outcome` (`outgoing` ≠ mutual; never invent friends). Stale 409 → reload state. 429 → honor Retry-After with one stable deadline timer that clears at expiry; no invented visible countdown or auto POST retry; parent rate-limit callback must stay identity-stable.
 - UNKNOWN: «Проверить статус» is **GET** `getPlayInterestState` only — never `mutation.retry()` / default MutationNotice POST replay on the deck. Ignore retired readonly/status results after generation, peer, or auth scope change.
 - Unilateral inbound interest is never disclosed (indistinguishable from none). No automatic friendship, contact, chat, invitation, booking, or notification.
+- **Owner #404 friendly match copy (accepted):** primary CTA «Давай сыграем»; outgoing «Предложение отправлено»; mutual «Вы оба хотите сыграть»; withdraw «Отменить предложение». Separate mutual **game match** only — not friendship, not a concrete-game invitation. Remove user-facing technical «интерес к игре» / «интерес недоступен» / «подтверждён сервером» panels from player browsing. Domain DB/API names (`play-interest*`) stay unchanged.
+- **Stable action footer:** through loading / send / outgoing / mutual keep one reserved short status line (`.pb-action-status`) and the same action baseline — do not insert a status block above that pushes controls or card size. No new UI framework. Desktop never swipe; mobile native gestures unchanged.
+- Definitive peer `relationship: "unavailable"`: no technical unavailability panel and no disabled send CTA; rely on existing deck eligibility / Next / Skip. Do **not** infer explicit opt-out from network / 503 / auth errors. No separate browse opt-out setting exists in the contract today — privacy/capability boundary is `relationship` + `canSend` / `canWithdraw` only.
 
 ## Data honesty
 
@@ -66,7 +69,7 @@ Public list/detail DTO: name, city, area, self-declared level, bio, cover/avatar
 
 - **Stable page header from first visible frame:** server-parsed `view` (`initialBrowseView`) + viewport CSS (≥1024 → fixed 116px desktop hero with subtitle; mobile cards → compact without waiting for JS `data-directory-desktop`). Do not open mobile fullscreen portal until the desktop MQ is known (no desktop flash). Preserve route/history/back/X/focus and list defaults.
 - **Tinder four-ahead prepare:** `browseMediaNeighborhood` = previous + current + next 4 (max 6), deduped; prep priority current → ahead → previous. Exact retained decoded pixels; existing cache keys, identity/CSRF/session/generation fences, 5s deadline, eviction. Radar pin `RADAR_PIN_MEDIA_CAP=4` / admission / selected-retain stays independent — do not change.
-- Gesture parameters and design tokens above remain authoritative; no new policy bundle. Play-interest POS copy: unilateral = interest sent; mutual-only match wording; never auto-friend.
+- Gesture parameters and design tokens above remain authoritative; no new policy bundle. Play-interest POS copy: unilateral = «Предложение отправлено»; mutual-only = «Вы оба хотите сыграть»; never auto-friend.
 
 ## Sitewide link
 
@@ -94,7 +97,7 @@ Source-backed mechanics reference: Astra High deep gesture study (Owner); number
 - Swipe **up** opens details; **down** on details text/background returns to cover / previous **mobile info page**. `data-browse-no-drag` only on actual buttons/links/pager — **not** on the whole `.pb-mobile-details` surface. Closed details stay mounted with `inert` + `aria-hidden`; while details are open, cover/identity controls are inert (not tabbable). One retained avatar host and stable play-interest slot unchanged.
 - **Fixed mobile information pages** (not one packed scroll of facts+bio+games): (1) facts/overview, (2) about-bio page(s) height-fit via existing `chunkBrowseBio` / measure helpers, (3) games notice + public profile link. Up advances page; down previous; down from the first page returns to cover. Accessible «К обложке» / «Назад» / «Ещё сведения» stay **outside** the clipped body so they are never below the fold. Desktop `detailsPage` bio pager is separate — do not change desktop v5 details paging.
 - Bio chunks must fit the available about-page height at 375×667 and 390×844 (including font zoom): **no** full-text cutoff, **no** ordinary nested scroll, **no** `-webkit-line-clamp` clipping of lossless bio. Recompute on viewport/text-size changes. Do not invent a generic pagination framework.
-- Minimal persistent **Пропустить** / **Хочу сыграть** buttons remain accessible alternatives. Whole card height stays fixed; X/actions always available at 390×844 and 375×667 without horizontal overflow.
+- Minimal persistent **Пропустить** / **Давай сыграем** buttons remain accessible alternatives (stable footer + one status line; no nested scroll; fixed outer card size). Whole card height stays fixed; X/actions always available at 390×844 and 375×667 without horizontal overflow.
 - Last card left must settle to a visible honest end / «Загрузить ещё» terminal (`pb-deck-end--fs`), not leave only a flown-off card forever.
 - One-time gesture hint (`gb-player-gallery-tutorial-v2`); help reopens. Existing real metadata only; games copy stays honest unavailable.
 

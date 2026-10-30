@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { PlayInterestReceipt, PlayInterestView } from "@gobadminton/contracts/friendship-types";
 import type { Me } from "../../../lib/consumer-types";
 import {
@@ -41,6 +41,46 @@ type Props = {
   /** desktop: primary want-to-play only (Next lives in the deck). mobile: Skip + send. */
   chrome?: "mobile" | "desktop";
 };
+
+/** Stable footer: one reserved status line + same action baseline (no panel that pushes controls). */
+function StableActionFooter({
+  desktop,
+  status,
+  statusTone,
+  primary,
+  showSkip,
+  skipDisabled,
+  onSkip,
+}: {
+  desktop: boolean;
+  status: string;
+  statusTone?: "success" | "warning" | "";
+  primary: ReactNode | null;
+  showSkip: boolean;
+  skipDisabled: boolean;
+  onSkip: () => void;
+}) {
+  const tone = statusTone ? ` is-${statusTone}` : "";
+  return (
+    <div className={`pb-action-slot${desktop ? " pb-action-slot--desktop" : ""}`} data-browse-no-drag="">
+      <p className={`pb-action-status${tone}`} role="status">{status || "\u00a0"}</p>
+      {desktop ? (
+        <div className="pb-main-actions pb-main-actions--desktop">
+          {primary}
+        </div>
+      ) : (
+        <div className={`pb-main-actions${primary ? "" : " pb-main-actions--skip-only"}`}>
+          {showSkip && (
+            <button type="button" className="pb-btn-skip" disabled={skipDisabled} onClick={onSkip}>
+              Пропустить
+            </button>
+          )}
+          {primary}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function PlayerBrowsePlayInterest({
   me,
@@ -97,6 +137,7 @@ export function PlayerBrowsePlayInterest({
     const result = await getPlayInterestState(peer);
     if (gen !== generation.current || peer !== peerRef.current) return;
     if (!result.ok) {
+      // Network/auth/503 — not an explicit peer opt-out; do not invent privacy state.
       const next = result.status === 401 ? "guest" : [403, 404, 503].includes(result.status) ? "unavailable" : "error";
       setView(null); setLoadState(next); onRelationship(null); return;
     }
@@ -178,7 +219,7 @@ export function PlayerBrowsePlayInterest({
     if (gen !== generation.current || peer !== peerRef.current || meIdRef.current !== authId) return;
     setChecking(false);
     if (!result.ok) {
-      setCheckNotice("Не удалось проверить статус. Исходная операция могла быть получена — не отправляйте интерес повторно.");
+      setCheckNotice("Не удалось проверить статус. Предыдущая отправка могла быть получена — не повторяйте.");
       return;
     }
     const nextView = result.data.items[0] ?? null;
@@ -189,7 +230,7 @@ export function PlayerBrowsePlayInterest({
       setCheckNotice(playInterestStatus[nextView.relationship]);
       return;
     }
-    setCheckNotice("Статус не подтверждает результат предыдущей отправки. Не отправляйте интерес повторно.");
+    setCheckNotice("Статус не подтверждает результат предыдущей отправки. Не повторяйте отправку.");
   }
 
   useEffect(() => {
@@ -202,104 +243,148 @@ export function PlayerBrowsePlayInterest({
     return () => onApi(null);
   }, [locked, mutation.pending, canRequest, me, peerId, rateBlocked]);
 
+  const skipDisabled = locked || navigationLocked;
+
   if (authState === "loading" || loadState === "loading") {
-    return <div className="pb-status" role="status"><div className="pb-status__title">Проверяем интерес к игре…</div></div>;
+    return (
+      <StableActionFooter
+        desktop={desktopChrome}
+        status="Проверяем…"
+        showSkip={!desktopChrome}
+        skipDisabled={skipDisabled}
+        onSkip={onSkip}
+        primary={
+          <button type="button" className="pb-btn-request" disabled>
+            Давай сыграем
+          </button>
+        }
+      />
+    );
   }
 
   if (authState === "guest" || loadState === "guest") {
-    return <div className="pb-status" data-browse-no-drag="">
-      <div className="pb-status__title">Войдите, чтобы отметить интерес к игре</div>
-      <p>Гости могут листать каталог. Интерес отправится только после явного действия после входа.</p>
-      <div className="pb-status-actions"><AuthEntry returnPath={returnPath}>Войти</AuthEntry></div>
-    </div>;
+    return (
+      <StableActionFooter
+        desktop={desktopChrome}
+        status="Войдите, чтобы предложить игру"
+        showSkip={!desktopChrome}
+        skipDisabled={navigationLocked}
+        onSkip={onSkip}
+        primary={<AuthEntry returnPath={returnPath}>Войти</AuthEntry>}
+      />
+    );
   }
 
   if (authState === "error" || loadState === "error") {
-    return <div className="pb-status is-warning" role="status">
-      <div className="pb-status__title">Не удалось проверить интерес к игре</div>
-      <div className="pb-status-actions"><Button variant="outline" onClick={onAuthRetry}>Повторить</Button></div>
-    </div>;
+    return (
+      <StableActionFooter
+        desktop={desktopChrome}
+        status="Не удалось проверить. Повторите."
+        statusTone="warning"
+        showSkip={!desktopChrome}
+        skipDisabled={navigationLocked}
+        onSkip={onSkip}
+        primary={
+          <Button variant="outline" onClick={onAuthRetry}>Повторить</Button>
+        }
+      />
+    );
   }
 
+  // Definitive peer unavailable (relationship) or empty/403/404/503 load: no technical panel,
+  // no disabled send. Deck Next/Skip + known eligibility handle navigation.
   if (loadState === "unavailable" || view?.relationship === "unavailable") {
-    return <div className="pb-status" role="status">
-      <div className="pb-status__title">{playInterestStatus.unavailable}</div>
-      <p>Просмотр доступен. Причина недоступности не раскрывается.</p>
-    </div>;
+    return (
+      <StableActionFooter
+        desktop={desktopChrome}
+        status=""
+        showSkip={!desktopChrome}
+        skipDisabled={navigationLocked}
+        onSkip={onSkip}
+        primary={null}
+      />
+    );
   }
 
   if (mutation.pending) {
-    return <div className="pb-status is-warning" role="status" data-browse-no-drag="">
-      <div className="pb-status__title">Результат отправки не подтверждён</div>
-      <p>{mutation.notice || "Предыдущая отправка могла быть получена. Не отправляйте интерес повторно."}</p>
-      {(view?.relationship === "outgoing" || view?.relationship === "mutual") && (
-        <p>{playInterestStatus[view.relationship]}</p>
-      )}
-      {checkNotice && <p>{checkNotice}</p>}
-      <div className="pb-status-actions">
-        <Button variant="outline" disabled={checking || mutation.busy} onClick={() => void checkStatusReadonly()}>
-          {checking ? "Проверяем…" : "Проверить статус"}
-        </Button>
-      </div>
-    </div>;
+    const knownLine = (view?.relationship === "outgoing" || view?.relationship === "mutual")
+      ? playInterestStatus[view.relationship]
+      : "";
+    const status = checkNotice
+      || knownLine
+      || mutation.notice
+      || "Результат не подтверждён. Не повторяйте отправку.";
+    return (
+      <StableActionFooter
+        desktop={desktopChrome}
+        status={status}
+        statusTone="warning"
+        showSkip={!desktopChrome}
+        skipDisabled={skipDisabled}
+        onSkip={onSkip}
+        primary={
+          <Button variant="outline" disabled={checking || mutation.busy} onClick={() => void checkStatusReadonly()}>
+            {checking ? "Проверяем…" : "Проверить статус"}
+          </Button>
+        }
+      />
+    );
   }
 
   if (rateBlocked) {
-    return <div className="pb-status is-warning" role="status">
-      <div className="pb-status__title">Слишком много попыток</div>
-      <p>Просмотр доступен. Новые отметки интереса временно недоступны.</p>
-      {desktopChrome ? (
-        <div className="pb-main-actions pb-main-actions--desktop" style={{ marginTop: 12 }}>
-          <button type="button" className="pb-btn-request" disabled>Хочу сыграть · позже</button>
-        </div>
-      ) : (
-        <div className="pb-main-actions" style={{ marginTop: 12 }}>
-          <button type="button" className="pb-btn-skip" disabled={navigationLocked} onClick={onSkip}>Пропустить</button>
-          <button type="button" className="pb-btn-request" disabled>Хочу сыграть · позже</button>
-        </div>
-      )}
-    </div>;
+    return (
+      <StableActionFooter
+        desktop={desktopChrome}
+        status="Слишком много попыток. Позже."
+        statusTone="warning"
+        showSkip={!desktopChrome}
+        skipDisabled={navigationLocked}
+        onSkip={onSkip}
+        primary={null}
+      />
+    );
   }
 
-  if (view?.relationship === "outgoing") {
-    return <div className="pb-status is-success" role="status" data-browse-no-drag="">
-      <div className="pb-status__title">{playInterestStatus.outgoing}</div>
-      <p>Совпадение появится только при взаимном интересе. Это не дружба и не запрос в друзья.</p>
-      <div className="pb-status-actions">
-        {playInterestCommand(view, peerId, "withdraw") && (
-          <Button variant="outline" disabled={locked} onClick={() => runWithdraw()}>Отозвать интерес</Button>
-        )}
-      </div>
-    </div>;
+  if (view?.relationship === "outgoing" || view?.relationship === "mutual") {
+    const canWithdraw = Boolean(playInterestCommand(view, peerId, "withdraw"));
+    return (
+      <StableActionFooter
+        desktop={desktopChrome}
+        status={playInterestStatus[view.relationship]}
+        statusTone="success"
+        showSkip={!desktopChrome}
+        skipDisabled={skipDisabled}
+        onSkip={onSkip}
+        primary={
+          canWithdraw ? (
+            <button type="button" className="pb-btn-withdraw" disabled={locked} onClick={() => runWithdraw()}>
+              {mutation.busy ? "Отменяем…" : "Отменить предложение"}
+            </button>
+          ) : null
+        }
+      />
+    );
   }
 
-  if (view?.relationship === "mutual") {
-    return <div className="pb-status is-success" role="status" data-browse-no-drag="">
-      <div className="pb-status__title">{playInterestStatus.mutual}</div>
-      <p>Взаимный интерес подтверждён сервером. Дружба и контакты не создаются автоматически.</p>
-      <div className="pb-status-actions">
-        {playInterestCommand(view, peerId, "withdraw") && (
-          <Button variant="outline" disabled={locked} onClick={() => runWithdraw()}>Отозвать интерес</Button>
-        )}
-      </div>
-    </div>;
-  }
-
-  return <div className={`pb-action-slot${desktopChrome ? " pb-action-slot--desktop" : ""}`} data-browse-no-drag="">
-    {mutation.notice && !mutation.pending && <p className="pb-status" role="status" style={{ marginBottom: 12 }}>{mutation.notice}</p>}
-    {desktopChrome ? (
-      <div className="pb-main-actions pb-main-actions--desktop">
-        <button type="button" className="pb-btn-request" disabled={!canRequest || locked} onClick={() => { void runSend(); }}>
-          {mutation.busy ? "Отправляем…" : "Хочу сыграть"}
+  const notice = mutation.notice && !mutation.pending ? mutation.notice : "";
+  return (
+    <StableActionFooter
+      desktop={desktopChrome}
+      status={notice}
+      statusTone={notice ? "warning" : ""}
+      showSkip={!desktopChrome}
+      skipDisabled={locked}
+      onSkip={onSkip}
+      primary={
+        <button
+          type="button"
+          className="pb-btn-request"
+          disabled={!canRequest || locked}
+          onClick={() => { void runSend(); }}
+        >
+          {mutation.busy ? "Отправляем…" : "Давай сыграем"}
         </button>
-      </div>
-    ) : (
-      <div className="pb-main-actions">
-        <button type="button" className="pb-btn-skip" disabled={locked} onClick={onSkip}>Пропустить</button>
-        <button type="button" className="pb-btn-request" disabled={!canRequest || locked} onClick={() => { void runSend(); }}>
-          {mutation.busy ? "Отправляем…" : "Хочу сыграть"}
-        </button>
-      </div>
-    )}
-  </div>;
+      }
+    />
+  );
 }

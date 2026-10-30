@@ -922,8 +922,8 @@ export function PlayerBrowseDeck({
       next.set(peerId, relationship);
       return next;
     });
-    setToast(receipt.outcome === "mutual" ? "Вы хотите сыграть вместе" : "Интерес отправлен");
-    setAnnounce(receipt.outcome === "mutual" ? "Взаимный интерес" : "Интерес отправлен");
+    setToast(receipt.outcome === "mutual" ? "Вы оба хотите сыграть" : "Предложение отправлено");
+    setAnnounce(receipt.outcome === "mutual" ? "Вы оба хотите сыграть" : "Предложение отправлено");
     const skipped = new Set(skipStack);
     const next = nextEligibleBrowseIndex(browsePlayers, index, new Map([
       ...known,
@@ -1226,7 +1226,7 @@ export function PlayerBrowseDeck({
       setDragStamp({
         opacity: 0.95 * progress,
         skip,
-        label: skip ? "Пропустить" : blocked ? "Интерес временно недоступен" : "Хочу сыграть",
+        label: skip ? "Пропустить" : blocked ? "Слишком много попыток" : "Давай сыграем",
       });
       return;
     }
@@ -1660,7 +1660,7 @@ export function PlayerBrowseDeck({
           Следующий <Chevron dir="right" />
         </button>
       </div>
-      <p className="pb-action-caption">Совпадение — только при взаимном интересе. Не дружба.</p>
+      <p className="pb-action-caption">Совпадение — когда оба хотите сыграть. Не дружба.</p>
     </div>
   );
 
@@ -1844,7 +1844,7 @@ export function PlayerBrowseDeck({
                   </div>
                   <div className="pb-intent pb-intent--request">
                     <span className="pb-intent-icon" aria-hidden="true">＋</span>
-                    <span className="pb-intent-label">Хочу сыграть</span>
+                    <span className="pb-intent-label">Давай сыграем</span>
                   </div>
                 </div>
 
@@ -1990,10 +1990,10 @@ export function PlayerBrowseDeck({
               <h2 id="pb-tutorial-title">Одна карточка. Два жеста.</h2>
               <div className="pb-gesture-pair">
                 <div className="pb-gesture-choice"><strong>Свайп влево</strong><span>Пропустить. Без уведомления игроку.</span></div>
-                <div className="pb-gesture-choice"><strong>Свайп вправо</strong><span>Хочу сыграть — явная команда интереса.</span></div>
+                <div className="pb-gesture-choice"><strong>Свайп вправо</strong><span>Давай сыграем — предложение сыграть, не дружба.</span></div>
                 <div className="pb-gesture-choice"><strong>Свайп вверх</strong><span>Открыть сведения. Вниз — к обложке.</span></div>
               </div>
-              <p className="pb-tutorial-note">Кнопки «Пропустить» и «Хочу сыграть» дублируют жесты. Совпадение только при взаимном интересе; дружба не создаётся.</p>
+              <p className="pb-tutorial-note">Кнопки «Пропустить» и «Давай сыграем» дублируют жесты. Совпадение только когда оба хотите сыграть; дружба не создаётся.</p>
               <button type="button" className="pb-tutorial-dismiss" onClick={dismissTutorial}>Понятно</button>
             </section>
           </div>

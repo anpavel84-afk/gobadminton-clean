@@ -521,14 +521,46 @@
   width: min(520px, 60%);
 }
 
+/* Reserved one-line status — keeps action baseline stable across loading/send/outgoing/mutual. */
+.gb-player-browse .pb-action-status {
+  box-sizing: border-box;
+  min-height: 1.35em;
+  margin: 0 0 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--pb-muted);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gb-player-browse .pb-action-status.is-success {
+  color: var(--pb-ink);
+}
+
+.gb-player-browse .pb-action-status.is-warning {
+  color: #7a5a00;
+}
+
 .gb-player-browse .pb-main-actions {
   display: grid;
   grid-template-columns: 1fr 1.65fr;
   gap: 12px;
+  min-height: 52px;
+  align-items: stretch;
+}
+
+.gb-player-browse .pb-main-actions--skip-only {
+  grid-template-columns: 1fr;
 }
 
 .gb-player-browse .pb-main-actions .btn,
-.gb-player-browse .pb-main-actions button {
+.gb-player-browse .pb-main-actions button,
+.gb-player-browse .pb-main-actions a {
   min-height: 52px;
 }
 
@@ -552,8 +584,19 @@
   cursor: pointer;
 }
 
+.gb-player-browse .pb-btn-withdraw {
+  border: 1px solid var(--pb-line);
+  border-radius: 14px;
+  background: var(--pb-white);
+  color: var(--pb-ink);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
 .gb-player-browse .pb-btn-skip:disabled,
-.gb-player-browse .pb-btn-request:disabled {
+.gb-player-browse .pb-btn-request:disabled,
+.gb-player-browse .pb-btn-withdraw:disabled {
   opacity: .55;
   cursor: default;
 }
@@ -1750,15 +1793,38 @@
     margin: 0;
   }
 
-  .gb-player-browse[data-browse-desktop="true"] .pb-main-actions--desktop {
-    display: block;
+  .gb-player-browse[data-browse-desktop="true"] .pb-action-status {
+    margin: 0 0 6px;
+    color: #9bac9b;
+    font-size: 11px;
   }
 
-  .gb-player-browse[data-browse-desktop="true"] .pb-btn-request {
+  .gb-player-browse[data-browse-desktop="true"] .pb-action-status.is-success {
+    color: #d4e8bc;
+  }
+
+  .gb-player-browse[data-browse-desktop="true"] .pb-action-status.is-warning {
+    color: #ece0b5;
+  }
+
+  .gb-player-browse[data-browse-desktop="true"] .pb-main-actions--desktop {
+    display: block;
+    min-height: 48px;
+  }
+
+  .gb-player-browse[data-browse-desktop="true"] .pb-btn-request,
+  .gb-player-browse[data-browse-desktop="true"] .pb-btn-withdraw,
+  .gb-player-browse[data-browse-desktop="true"] .pb-main-actions--desktop .btn {
     width: 100%;
     min-height: 48px;
     border-radius: 10px;
     font-size: 12px;
+  }
+
+  .gb-player-browse[data-browse-desktop="true"] .pb-btn-withdraw {
+    border-color: #4b6050;
+    background: #20352a;
+    color: var(--pb-white);
   }
 
   .gb-player-browse[data-browse-desktop="true"] .pb-btn-next {
@@ -1791,6 +1857,7 @@
     color: #9bac9b;
   }
 
+  /* Legacy panel skin retained for any residual .pb-status; browse actions use .pb-action-status. */
   .gb-player-browse[data-browse-desktop="true"] .pb-friend-slot .pb-status {
     background: #20352a;
     border-color: #3d5144;
@@ -2294,12 +2361,32 @@ dialog.pb-mobile-fs::backdrop {
   border: 0;
 }
 
+.gb-player-browse .pb-controls--mobile .pb-action-status {
+  margin: 0 0 6px;
+  color: #c6d3ca;
+  font-size: 11px;
+}
+
+.gb-player-browse .pb-controls--mobile .pb-action-status.is-success {
+  color: #d4e8bc;
+}
+
+.gb-player-browse .pb-controls--mobile .pb-action-status.is-warning {
+  color: #ece0b5;
+}
+
 .gb-player-browse .pb-controls--mobile .pb-main-actions {
   grid-template-columns: 1fr 1.35fr;
   gap: 8px;
+  min-height: 48px;
 }
 
-.gb-player-browse .pb-controls--mobile .pb-main-actions button {
+.gb-player-browse .pb-controls--mobile .pb-main-actions--skip-only {
+  grid-template-columns: 1fr;
+}
+
+.gb-player-browse .pb-controls--mobile .pb-main-actions button,
+.gb-player-browse .pb-controls--mobile .pb-main-actions .btn {
   min-height: 48px;
   font-size: 12px;
 }
