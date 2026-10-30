@@ -6,11 +6,17 @@ import { AvatarSourceError, preprocessAvatar } from "../../../lib/avatar-preproc
 import { Button } from "../Button";
 import { ProfileDialog } from "./ProfileComposition";
 
-export function ProfileCover({ url }: { url?: string | null }) {
+export function ProfileCover({ url, onSettled }: { url?: string | null; onSettled?: (kind: "uploaded" | "default") => void }) {
   const [failed, setFailed] = useState<string | null>(null);
+  const settledRef = useRef(false);
   const safe = url && /^\/v1\/media\/covers\/[a-f0-9]{64}\.png$/.test(url) && failed !== url;
+  useEffect(() => {
+    if (settledRef.current || safe) return;
+    settledRef.current = true;
+    onSettled?.("default");
+  }, [safe, onSettled]);
   return <div className="profile-cover" data-cover={safe ? "uploaded" : "default"}>
-    {safe ? <img src={url ?? undefined} alt="Обложка профиля" onError={() => setFailed(url ?? null)} /> : <img src="/canonical/ce252.svg" alt="" className="profile-cover__fallback" />}
+    {safe ? <img src={url ?? undefined} alt="Обложка профиля" onLoad={() => { if (settledRef.current) return; settledRef.current = true; onSettled?.("uploaded"); }} onError={() => setFailed(url ?? null)} /> : <img src="/canonical/ce252.svg" alt="" className="profile-cover__fallback" onLoad={() => { if (settledRef.current) return; settledRef.current = true; onSettled?.("default"); }} />}
   </div>;
 }
 

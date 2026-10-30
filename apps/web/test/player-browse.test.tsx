@@ -4,6 +4,11 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { PublicPlayer } from "../src/lib/consumer-types";
 import {
+  browseMediaNeighborhood,
+  isSafeBrowseCoverUrl,
+  PLAYER_BROWSE_MEDIA_DEADLINE_MS,
+} from "../src/components/consumer/players/PlayerBrowseMedia";
+import {
   browseSlideDirection,
   browseSlideDurationMs,
   chunkBrowseBio,
@@ -33,6 +38,7 @@ import {
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const deckSource = readFileSync(join(root, "src/components/consumer/players/PlayerBrowseDeck.tsx"), "utf8");
+const mediaSource = readFileSync(join(root, "src/components/consumer/players/PlayerBrowseMedia.tsx"), "utf8");
 const pageSource = readFileSync(join(root, "src/components/consumer/pages/PlayersDirectoryPage.tsx"), "utf8");
 const toolbarSource = readFileSync(join(root, "src/components/consumer/players/PlayersDirectoryToolbar.tsx"), "utf8");
 const radarSource = readFileSync(join(root, "src/components/consumer/radar/RadarControls.tsx"), "utf8");
@@ -220,11 +226,40 @@ describe("player browse desktop v5 contracts", () => {
     expect(deckSource).toContain("cancelSlideAnimation");
     expect(deckSource).toContain("frame.animate");
     expect(deckSource).toContain("getAnimations()");
-    expect(deckSource).toMatch(/moveTo\(index \+ 1, "next"\)/);
-    expect(deckSource).toMatch(/moveTo\(index - 1, "prev"\)/);
+    expect(deckSource).toContain("runSlideAfterCommit");
+    expect(deckSource).toMatch(/moveTo\(intentIndex \+ 1, "next"\)/);
+    expect(deckSource).toMatch(/moveTo\(intentIndex - 1, "prev"\)/);
     expect(cssSource).toContain("is-sliding-next");
     expect(cssSource).toContain("is-sliding-prev");
     expect(cssSource).toContain("@media (prefers-reduced-motion: reduce)");
+  });
+
+  it("prepares bounded neighborhood media before identity commit", () => {
+    expect(PLAYER_BROWSE_MEDIA_DEADLINE_MS).toBe(5000);
+    expect(browseMediaNeighborhood(0, 5)).toEqual([0, 1]);
+    expect(browseMediaNeighborhood(2, 5)).toEqual([1, 2, 3]);
+    expect(browseMediaNeighborhood(4, 5)).toEqual([3, 4]);
+    expect(browseMediaNeighborhood(0, 0)).toEqual([]);
+    expect(isSafeBrowseCoverUrl("/v1/media/covers/" + "a".repeat(64) + ".png")).toBe(true);
+    expect(isSafeBrowseCoverUrl("https://example.com/x.png")).toBe(false);
+    expect(mediaSource).toContain("prepareBrowsePeerMedia");
+    expect(mediaSource).toContain("getPlayer(player.publicPlayerId, signal)");
+    expect(mediaSource).toContain("naturalWidth");
+    expect(mediaSource).toContain("img.decode");
+    expect(mediaSource).toContain("RetainedBrowseImage");
+    expect(mediaSource).not.toContain("new Image(");
+    expect(deckSource).toContain("intentIndex");
+    expect(deckSource).toContain("commitPreparedPeer");
+    expect(deckSource).toContain("prepareBrowsePeerMedia");
+    expect(deckSource).toContain("browseMediaNeighborhood");
+    expect(deckSource).toContain("PLAYER_BROWSE_MEDIA_DEADLINE_MS");
+    expect(deckSource).toContain("PreparedBrowseCover");
+    expect(deckSource).toContain("PreparedBrowseAvatar");
+    expect(deckSource).toContain("commitPending");
+    expect(deckSource).toContain("navigationLocked={commitPending}");
+    expect(deckSource).toContain("viewerGen");
+    expect(deckSource).not.toContain("coverById");
+    expect(deckSource).not.toContain("setCoverById");
   });
 
   it("hides DEV synthetic label only for directory-compact presentation", () => {

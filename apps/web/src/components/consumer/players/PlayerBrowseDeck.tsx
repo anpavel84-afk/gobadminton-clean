@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { FriendshipReceipt, FriendshipView } from "@gobadminton/contracts/friendship-types";
-import { getMe, getMySocialProfile, getPlayer } from "../../../lib/api-client";
+import { getMe, getMySocialProfile } from "../../../lib/api-client";
 import type { City, Me, PublicPlayer } from "../../../lib/consumer-types";
 import { formatSocialLevel } from "../../../lib/player-presentation";
 import {
@@ -26,10 +26,17 @@ import {
   type PlayerBrowseSlideDirection,
   withBrowseHistoryState,
 } from "../../../lib/player-browse";
-import { ProfileCover } from "./CoverEditor";
-import { Avatar } from "./ProfileComposition";
 import { Button } from "../Button";
 import { isBrowseConfirmedRequestOutcome, PlayerBrowseFriendship, type BrowseFriendshipApi } from "./PlayerBrowseFriendship";
+import {
+  browseMediaNeighborhood,
+  disposePreparedBrowseMedia,
+  PLAYER_BROWSE_MEDIA_DEADLINE_MS,
+  prepareBrowsePeerMedia,
+  PreparedBrowseAvatar,
+  PreparedBrowseCover,
+  type PreparedBrowsePeerMedia,
+} from "./PlayerBrowseMedia";
 import "../../../styles/player-browse.css";
 
 type Props = {
@@ -96,12 +103,13 @@ export function PlayerBrowseDeck({
   const [ownPublicPlayerId, setOwnPublicPlayerId] = useState<string | null>(null);
   const [authReload, setAuthReload] = useState(0);
   const [index, setIndex] = useState(0);
+  const [intentIndex, setIntentIndex] = useState(0);
+  const [committedMedia, setCommittedMedia] = useState<PreparedBrowsePeerMedia | null>(null);
   const [skipStack, setSkipStack] = useState<string[]>([]);
   const [known, setKnown] = useState<Map<string, FriendshipView["relationship"]>>(() => new Map());
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [detailsPage, setDetailsPage] = useState(0);
   const [bioChunks, setBioChunks] = useState<string[]>([]);
-  const [coverById, setCoverById] = useState<Record<string, string | null>>({});
   const [friendBusy, setFriendBusy] = useState(false);
   const [rateBlockedUntil, setRateBlockedUntil] = useState<number | null>(null);
   const [toast, setToast] = useState("");
@@ -118,20 +126,65 @@ export function PlayerBrowseDeck({
   const tutorialRef = useRef<HTMLElement>(null);
   const friendshipApi = useRef<BrowseFriendshipApi | null>(null);
   const drag = useRef<DragState | null>(null);
-  const coverGen = useRef(0);
   const scopeGen = useRef(0);
+  const viewerGen = useRef(0);
   const slideGen = useRef(0);
   const slideMounted = useRef(true);
   const restoredScope = useRef<string | null>(null);
   const reducedMotionRef = useRef(false);
+  const pendingDirectionRef = useRef<PlayerBrowseSlideDirection | null>(null);
+  const mediaCacheRef = useRef<Map<string, {
+    status: "loading" | "ready" | "unauthorized" | "unavailable";
+    media?: PreparedBrowsePeerMedia;
+    controller: AbortController;
+    generation: number;
+  }>>(new Map());
+  const committedMediaRef = useRef<PreparedBrowsePeerMedia | null>(null);
+  const intentIndexRef = useRef(0);
+  const indexRef = useRef(0);
+  const prepSeq = useRef(0);
+  intentIndexRef.current = intentIndex;
+  indexRef.current = index;
 
   const browsePlayers = useMemo(
     () => ordinaryBrowsePlayers(players, ownPublicPlayerId),
     [players, ownPublicPlayerId],
   );
   const current = browsePlayers[index] ?? null;
-  // In-flight POST locks browse navigation; UNKNOWN latch stays in per-peer pending storage without freezing the deck.
+  const intentPlayer = browsePlayers[intentIndex] ?? null;
+  const commitPending = Boolean(
+    browsePlayers.length
+    && (
+      intentIndex !== index
+      || !committedMedia
+      || !current
+      || committedMedia.peerId !== current.publicPlayerId
+    ),
+  );
+  // In-flight POST locks browse navigation; media wait stays cancelable by further navigation.
+  // UNKNOWN latch stays in per-peer pending storage without freezing the deck.
   const navigationLocked = friendBusy;
+
+  const clearMediaCache = useCallback((retainPeerId?: string | null) => {
+    const retain = retainPeerId ?? null;
+    for (const [id, entry] of mediaCacheRef.current) {
+      entry.controller.abort();
+      if (entry.media && entry.media.peerId !== retain && entry.media !== committedMediaRef.current) {
+        disposePreparedBrowseMedia(entry.media);
+      }
+      mediaCacheRef.current.delete(id);
+    }
+  }, []);
+
+  const replaceCommittedMedia = useCallback((next: PreparedBrowsePeerMedia | null) => {
+    const prev = committedMediaRef.current;
+    if (prev && prev !== next) {
+      const cached = mediaCacheRef.current.get(prev.peerId);
+      if (!cached || cached.media !== prev) disposePreparedBrowseMedia(prev);
+    }
+    committedMediaRef.current = next;
+    setCommittedMedia(next);
+  }, []);
 
   useEffect(() => {
     if (typeof window.matchMedia !== "function") return;
@@ -150,6 +203,9 @@ export function PlayerBrowseDeck({
 
   useEffect(() => {
     let live = true;
+    viewerGen.current += 1;
+    clearMediaCache();
+    replaceCommittedMedia(null);
     setAuthState("loading");
     setMe(null);
     setOwnPublicPlayerId(null);
@@ -167,7 +223,15 @@ export function PlayerBrowseDeck({
       if (!live) return;
       if (social.ok && social.data.publicPlayerId) setOwnPublicPlayerId(social.data.publicPlayerId);
     })();
-    const expire = () => { live = false; setMe(null); setOwnPublicPlayerId(null); setAuthState("guest"); };
+    const expire = () => {
+      live = false;
+      viewerGen.current += 1;
+      clearMediaCache();
+      replaceCommittedMedia(null);
+      setMe(null);
+      setOwnPublicPlayerId(null);
+      setAuthState("guest");
+    };
     const session = () => { expire(); setAuthReload(n => n + 1); };
     window.addEventListener("gb-private-expired", expire);
     window.addEventListener("gb-session-changed", session);
@@ -176,11 +240,14 @@ export function PlayerBrowseDeck({
       window.removeEventListener("gb-private-expired", expire);
       window.removeEventListener("gb-session-changed", session);
     };
-  }, [authReload]);
+  }, [authReload, clearMediaCache, replaceCommittedMedia]);
 
   useEffect(() => {
     scopeGen.current += 1;
+    viewerGen.current += 1;
     slideGen.current += 1;
+    clearMediaCache();
+    replaceCommittedMedia(null);
     const frame = slideFrameRef.current;
     if (frame && typeof frame.getAnimations === "function") {
       for (const anim of frame.getAnimations()) anim.cancel();
@@ -192,31 +259,43 @@ export function PlayerBrowseDeck({
     setKnown(new Map());
     restoredScope.current = null;
     setIndex(0);
+    setIntentIndex(0);
+    pendingDirectionRef.current = null;
     setSlideDir(null);
-  }, [ordinaryScope]);
+  }, [ordinaryScope, clearMediaCache, replaceCommittedMedia]);
 
   useEffect(() => {
     slideGen.current += 1;
+    viewerGen.current += 1;
+    clearMediaCache();
+    replaceCommittedMedia(null);
     const frame = slideFrameRef.current;
     if (frame && typeof frame.getAnimations === "function") {
       for (const anim of frame.getAnimations()) anim.cancel();
     }
     setSlideDir(null);
-  }, [authReload]);
+    pendingDirectionRef.current = null;
+  }, [authReload, clearMediaCache, replaceCommittedMedia]);
 
   useEffect(() => {
     if (restoredScope.current === ordinaryScope) return;
     const saved = readBrowseHistoryState(window.history.state, ordinaryScope);
     const savedIndex = saved ? indexOfBrowsePlayer(browsePlayers, saved.id) : -1;
-    if (savedIndex >= 0) setIndex(savedIndex);
-    else setIndex(0);
+    const next = savedIndex >= 0 ? savedIndex : 0;
+    setIndex(next);
+    setIntentIndex(next);
     restoredScope.current = ordinaryScope;
   }, [ordinaryScope, browsePlayers]);
 
   useEffect(() => {
     if (!browsePlayers.length) return;
-    if (index >= browsePlayers.length) setIndex(Math.max(0, browsePlayers.length - 1));
-  }, [browsePlayers, index]);
+    if (index >= browsePlayers.length) {
+      const next = Math.max(0, browsePlayers.length - 1);
+      setIndex(next);
+      setIntentIndex(current => Math.min(current, next));
+    }
+    if (intentIndex >= browsePlayers.length) setIntentIndex(Math.max(0, browsePlayers.length - 1));
+  }, [browsePlayers, index, intentIndex]);
 
   useEffect(() => {
     const id = current?.publicPlayerId;
@@ -254,36 +333,15 @@ export function PlayerBrowseDeck({
     if (!dismissed && !blank) setTutorialOpen(true);
   }, [catalogState, browsePlayers.length, tutorialMemory, desktop]);
 
-  useEffect(() => {
-    if (!current) return;
-    if (coverById[current.publicPlayerId] !== undefined) return;
-    if (current.cover?.uploadedUrl) {
-      setCoverById(prev => ({ ...prev, [current.publicPlayerId]: current.cover?.uploadedUrl ?? null }));
-      return;
-    }
-    const gen = ++coverGen.current;
-    const peer = current.publicPlayerId;
-    const scope = scopeGen.current;
-    const auth = authState;
-    void getPlayer(peer).then(result => {
-      if (coverGen.current !== gen || scopeGen.current !== scope || authState !== auth) return;
-      if (!result.ok) {
-        setCoverById(prev => (prev[peer] !== undefined ? prev : { ...prev, [peer]: null }));
-        return;
-      }
-      setCoverById(prev => ({ ...prev, [peer]: result.data.cover?.uploadedUrl ?? null }));
-    });
-  }, [current, coverById, authState]);
+  const onRateLimited = useCallback((until: number | null, _retryAfterSeconds: number | null) => {
+    setRateBlockedUntil(until);
+  }, []);
 
   useEffect(() => {
     if (!toast) return;
     const timer = window.setTimeout(() => setToast(""), 2400);
     return () => window.clearTimeout(timer);
   }, [toast]);
-
-  const onRateLimited = useCallback((until: number | null, _retryAfterSeconds: number | null) => {
-    setRateBlockedUntil(until);
-  }, []);
 
   useEffect(() => {
     if (rateBlockedUntil == null) return;
@@ -304,20 +362,17 @@ export function PlayerBrowseDeck({
     for (const anim of frame.getAnimations()) anim.cancel();
   }, []);
 
-  const moveTo = useCallback((next: number, direction?: PlayerBrowseSlideDirection) => {
-    if (navigationLocked) return;
-    if (next < 0 || next >= browsePlayers.length) return;
+  const runSlideAfterCommit = useCallback((direction: PlayerBrowseSlideDirection | null, nextIndex: number) => {
     slideGen.current += 1;
     const token = slideGen.current;
     const reduced = reducedMotionRef.current;
     const shouldSlide = Boolean(desktop && direction && !reduced);
     if (shouldSlide && direction) {
       setSlideDir(direction);
-      setIndex(next);
-      setAnnounce(`Карточка ${String(next + 1).padStart(2, "0")} из ${String(browsePlayers.length).padStart(2, "0")}`);
+      setAnnounce(`Карточка ${String(nextIndex + 1).padStart(2, "0")} из ${String(browsePlayers.length).padStart(2, "0")}`);
       const duration = browseSlideDurationMs(false);
       const frame = slideFrameRef.current;
-      // Cancel + restart visible motion on the stable frame (no friendship remount).
+      // Cancel + restart visible motion on the stable frame after prepared media commit.
       if (frame && typeof frame.animate === "function") {
         cancelSlideAnimation();
         const fromX = direction === "next" ? "28%" : "-28%";
@@ -342,21 +397,138 @@ export function PlayerBrowseDeck({
     }
     cancelSlideAnimation();
     setSlideDir(null);
-    setIndex(next);
-    setAnnounce(`Карточка ${String(next + 1).padStart(2, "0")} из ${String(browsePlayers.length).padStart(2, "0")}`);
-  }, [browsePlayers.length, navigationLocked, desktop, cancelSlideAnimation]);
+    setAnnounce(`Карточка ${String(nextIndex + 1).padStart(2, "0")} из ${String(browsePlayers.length).padStart(2, "0")}`);
+  }, [browsePlayers.length, desktop, cancelSlideAnimation]);
+
+  const commitPreparedPeer = useCallback((nextIndex: number, media: PreparedBrowsePeerMedia, direction: PlayerBrowseSlideDirection | null) => {
+    if (!slideMounted.current) return;
+    const peer = browsePlayers[nextIndex];
+    if (!peer || peer.publicPlayerId !== media.peerId) return;
+    if (
+      committedMediaRef.current?.peerId === media.peerId
+      && indexRef.current === nextIndex
+      && committedMediaRef.current === media
+    ) {
+      pendingDirectionRef.current = null;
+      return;
+    }
+    replaceCommittedMedia(media);
+    setIndex(nextIndex);
+    const slideDirection = direction;
+    pendingDirectionRef.current = null;
+    runSlideAfterCommit(slideDirection, nextIndex);
+  }, [browsePlayers, replaceCommittedMedia, runSlideAfterCommit]);
+
+  useEffect(() => {
+    if (!browsePlayers.length) return;
+    const scope = scopeGen.current;
+    const viewer = viewerGen.current;
+    const targetIndex = Math.max(0, Math.min(intentIndex, browsePlayers.length - 1));
+    const neighborhood = browseMediaNeighborhood(targetIndex, browsePlayers.length);
+    const wanted = new Set(neighborhood.map(i => browsePlayers[i]!.publicPlayerId));
+    const retainId = committedMediaRef.current?.peerId ?? null;
+
+    for (const [id, entry] of [...mediaCacheRef.current.entries()]) {
+      if (wanted.has(id)) continue;
+      entry.controller.abort();
+      if (entry.media && entry.media.peerId !== retainId && entry.media !== committedMediaRef.current) {
+        disposePreparedBrowseMedia(entry.media);
+      }
+      mediaCacheRef.current.delete(id);
+    }
+
+    const ordered = [
+      targetIndex,
+      ...neighborhood.filter(i => i !== targetIndex),
+    ];
+
+    for (const i of ordered) {
+      const peer = browsePlayers[i]!;
+      const existing = mediaCacheRef.current.get(peer.publicPlayerId);
+      if (existing && (existing.status === "loading" || existing.status === "ready")) continue;
+      if (existing && (existing.status === "unauthorized" || existing.status === "unavailable")) continue;
+
+      const controller = new AbortController();
+      const generation = ++prepSeq.current;
+      mediaCacheRef.current.set(peer.publicPlayerId, { status: "loading", controller, generation });
+      void prepareBrowsePeerMedia(peer, controller.signal, PLAYER_BROWSE_MEDIA_DEADLINE_MS).then(result => {
+        if (!slideMounted.current || scopeGen.current !== scope || viewerGen.current !== viewer) {
+          if (result.ok) disposePreparedBrowseMedia(result.media);
+          return;
+        }
+        const entry = mediaCacheRef.current.get(peer.publicPlayerId);
+        if (!entry || entry.generation !== generation) {
+          if (result.ok) disposePreparedBrowseMedia(result.media);
+          return;
+        }
+        if (!result.ok) {
+          if (result.reason === "aborted") {
+            mediaCacheRef.current.delete(peer.publicPlayerId);
+            return;
+          }
+          entry.status = result.reason === "unauthorized" ? "unauthorized" : "unavailable";
+          const latestIntent = intentIndexRef.current;
+          if (
+            (result.reason === "unauthorized" || result.reason === "unavailable")
+            && peer.publicPlayerId === browsePlayers[latestIntent]?.publicPlayerId
+          ) {
+            setAnnounce(result.reason === "unauthorized"
+              ? "Этот игрок сейчас недоступен в каталоге."
+              : "Не удалось подготовить карточку игрока.");
+            pendingDirectionRef.current = null;
+            if (committedMediaRef.current) {
+              setIntentIndex(indexRef.current);
+            } else if (latestIntent + 1 < browsePlayers.length) {
+              setIntentIndex(latestIntent + 1);
+            }
+          }
+          return;
+        }
+        entry.status = "ready";
+        entry.media = result.media;
+        const latestIntent = intentIndexRef.current;
+        if (peer.publicPlayerId === browsePlayers[latestIntent]?.publicPlayerId) {
+          commitPreparedPeer(latestIntent, result.media, pendingDirectionRef.current);
+        }
+      });
+    }
+
+    const intentPeer = browsePlayers[targetIndex];
+    if (intentPeer) {
+      const ready = mediaCacheRef.current.get(intentPeer.publicPlayerId);
+      if (ready?.status === "ready" && ready.media) {
+        if (
+          !committedMediaRef.current
+          || committedMediaRef.current.peerId !== intentPeer.publicPlayerId
+          || index !== targetIndex
+        ) {
+          commitPreparedPeer(targetIndex, ready.media, pendingDirectionRef.current);
+        }
+      }
+    }
+  }, [browsePlayers, intentIndex, index, authReload, ordinaryScope, commitPreparedPeer]);
+
+  const moveTo = useCallback((next: number, direction?: PlayerBrowseSlideDirection) => {
+    if (navigationLocked) return;
+    if (next < 0 || next >= browsePlayers.length) return;
+    pendingDirectionRef.current = direction ?? null;
+    setIntentIndex(next);
+  }, [browsePlayers.length, navigationLocked]);
 
   useEffect(() => {
     slideMounted.current = true;
     return () => {
       slideMounted.current = false;
       slideGen.current += 1;
+      viewerGen.current += 1;
+      clearMediaCache();
+      replaceCommittedMedia(null);
       const frame = slideFrameRef.current;
       if (frame && typeof frame.getAnimations === "function") {
         for (const anim of frame.getAnimations()) anim.cancel();
       }
     };
-  }, []);
+  }, [clearMediaCache, replaceCommittedMedia]);
 
   const skipCurrent = useCallback(() => {
     if (!current || navigationLocked || tutorialOpen) return;
@@ -398,16 +570,13 @@ export function PlayerBrowseDeck({
       ...known,
       [current.publicPlayerId, relationship] as const,
     ]), skipped);
-    // Bypass navigationLocked: confirmed receipt already cleared the mutation busy latch in the child.
-    // Instant index change — not a browse slide (no automatic browsing animation).
+    // Bypass post lock: confirmed receipt already cleared the mutation busy latch in the child.
+    // Non-animated readiness commit — not a browse slide.
     if (next >= 0) {
-      slideGen.current += 1;
-      cancelSlideAnimation();
-      setSlideDir(null);
-      setIndex(next);
-      setAnnounce(`Карточка ${String(next + 1).padStart(2, "0")} из ${String(browsePlayers.length).padStart(2, "0")}`);
+      pendingDirectionRef.current = null;
+      setIntentIndex(next);
     }
-  }, [current, skipStack, browsePlayers, index, known, cancelSlideAnimation]);
+  }, [current, skipStack, browsePlayers, index, known]);
 
   const dismissTutorial = useCallback(() => {
     setTutorialOpen(false);
@@ -517,12 +686,12 @@ export function PlayerBrowseDeck({
       }
       if (event.repeat || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || tutorialOpen) return;
       if (event.target !== deckRef.current) return;
-      if (event.key === "ArrowRight") { event.preventDefault(); moveTo(index + 1, "next"); }
-      if (event.key === "ArrowLeft") { event.preventDefault(); moveTo(index - 1, "prev"); }
+      if (event.key === "ArrowRight") { event.preventDefault(); moveTo(intentIndex + 1, "next"); }
+      if (event.key === "ArrowLeft") { event.preventDefault(); moveTo(intentIndex - 1, "prev"); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [tutorialOpen, dismissTutorial, moveTo, index, detailsOpen, closeDetails]);
+  }, [tutorialOpen, dismissTutorial, moveTo, intentIndex, detailsOpen, closeDetails]);
 
   function resetDrag() {
     drag.current = null;
@@ -625,17 +794,19 @@ export function PlayerBrowseDeck({
   const levelLabel = formatSocialLevel(current?.level);
   const meta = [levelLabel !== "не указан" ? levelLabel : null, cityName(current?.cityId ?? null), current?.areaKey].filter(Boolean).join(" · ");
   const locationLine = [cityName(current?.cityId ?? null), current?.areaKey].filter(Boolean).join(" · ");
-  const coverUrl = current ? coverById[current.publicPlayerId] : undefined;
   const atEnd = index >= browsePlayers.length - 1;
+  const intentAtStart = intentIndex <= 0;
+  const intentAtEnd = intentIndex >= browsePlayers.length - 1;
   const counter = `${String(index + 1).padStart(2, "0")} / ${String(browsePlayers.length).padStart(2, "0")}`;
-  const friendship = current && (
+  const mediaReady = Boolean(current && committedMedia && committedMedia.peerId === current.publicPlayerId);
+  const friendship = current && mediaReady && (
     <PlayerBrowseFriendship
       key={`${me?.id ?? "guest"}:${current.publicPlayerId}`}
       me={me}
       authState={authState}
       peerId={current.publicPlayerId}
       returnPath={`/players?view=cards`}
-      navigationLocked={false}
+      navigationLocked={commitPending}
       rateBlockedUntil={rateBlockedUntil}
       onRateLimited={onRateLimited}
       onRelationship={(view) => {
@@ -662,8 +833,8 @@ export function PlayerBrowseDeck({
         <button
           type="button"
           className="pb-btn-next"
-          disabled={navigationLocked || showHelp || atEnd}
-          onClick={() => moveTo(index + 1, "next")}
+          disabled={navigationLocked || showHelp || intentAtEnd}
+          onClick={() => moveTo(intentIndex + 1, "next")}
         >
           Следующий <Chevron dir="right" />
         </button>
@@ -684,8 +855,8 @@ export function PlayerBrowseDeck({
     )}
 
     <div className="pb-slider-stage">
-      <button type="button" className="pb-slider-nav prev" aria-label="Предыдущий игрок — только просмотр" disabled={navigationLocked || showHelp || index <= 0} onClick={() => moveTo(index - 1, "prev")}><Chevron dir="left" /></button>
-      <button type="button" className="pb-slider-nav next" aria-label="Следующий игрок — только просмотр" disabled={navigationLocked || showHelp || index >= browsePlayers.length - 1} onClick={() => moveTo(index + 1, "next")}><Chevron dir="right" /></button>
+      <button type="button" className="pb-slider-nav prev" aria-label="Предыдущий игрок — только просмотр" disabled={navigationLocked || showHelp || intentAtStart} onClick={() => moveTo(intentIndex - 1, "prev")}><Chevron dir="left" /></button>
+      <button type="button" className="pb-slider-nav next" aria-label="Следующий игрок — только просмотр" disabled={navigationLocked || showHelp || intentAtEnd} onClick={() => moveTo(intentIndex + 1, "next")}><Chevron dir="right" /></button>
 
       <div
         ref={deckRef}
@@ -697,7 +868,14 @@ export function PlayerBrowseDeck({
         aria-describedby="player-browse-live"
         data-slide={slideDir ?? undefined}
       >
-        {current && <div className="pb-surface" inert={showHelp ? true : undefined}>
+        {!mediaReady && (
+          <div className="pb-surface" role="status" aria-busy="true">
+            <div className={`pb-card${desktop ? " pb-card--desktop" : ""}`} data-media-pending="true">
+              <p className="pb-action-caption">Готовим карточку игрока…</p>
+            </div>
+          </div>
+        )}
+        {current && mediaReady && <div className="pb-surface" inert={showHelp ? true : undefined}>
           <div
             ref={slideFrameRef}
             className={`pb-slide-frame${slideDir ? ` is-sliding-${slideDir}` : ""}`}
@@ -708,13 +886,14 @@ export function PlayerBrowseDeck({
                 className={`pb-card pb-card--desktop${detailsOpen ? " is-expanded" : ""}`}
                 data-player-id={current.publicPlayerId}
                 data-details={detailsOpen ? "open" : "closed"}
+                aria-busy={commitPending ? true : undefined}
               >
                 {!detailsOpen && (
                   <div className="pb-cover">
-                    <ProfileCover url={coverUrl ?? undefined} />
+                    <PreparedBrowseCover media={committedMedia!.cover} />
                     {current.lookingForGame && <span className="pb-media-tag">Ищу партнёра</span>}
                     {current.trainer && !current.lookingForGame && <span className="pb-media-tag">Тренер</span>}
-                    <Avatar className={`avatar avatar--${current.trainer ? "purple" : "yellow"} pb-avatar`} avatar={current.avatar} name={current.displayName} tone={current.trainer ? "purple" : "yellow"} />
+                    <PreparedBrowseAvatar className={`avatar avatar--${current.trainer ? "purple" : "yellow"} pb-avatar`} media={committedMedia!.avatar} name={current.displayName} tone={current.trainer ? "purple" : "yellow"} />
                   </div>
                 )}
                 <div className="pb-copy">
@@ -724,6 +903,9 @@ export function PlayerBrowseDeck({
                         <span className="pb-eyebrow">ЗНАКОМИМСЯ НА КОРТЕ</span>
                         <span className="pb-counter" aria-live="polite">{counter}</span>
                       </div>
+                      {commitPending && intentPlayer && (
+                        <span className="pb-live" role="status">Готовим карточку…</span>
+                      )}
                       <h2>{current.displayName}</h2>
                       {locationLine && <p className="pb-meta"><img className="profile-icon" src="/discovery/pin.svg" alt="" />{locationLine}</p>}
                       <div className="pb-facts pb-facts--inline">
@@ -742,7 +924,7 @@ export function PlayerBrowseDeck({
                     <section className="pb-expanded" aria-label="Подробнее об игроке">
                       <div className="pb-expanded-heading">
                         <div className="pb-expanded-person">
-                          <Avatar className={`avatar avatar--${current.trainer ? "purple" : "yellow"} pb-expanded-avatar`} avatar={current.avatar} name={current.displayName} tone={current.trainer ? "purple" : "yellow"} />
+                          <PreparedBrowseAvatar className={`avatar avatar--${current.trainer ? "purple" : "yellow"} pb-expanded-avatar`} media={committedMedia!.avatar} name={current.displayName} tone={current.trainer ? "purple" : "yellow"} />
                           <div>
                             <span className="pb-eyebrow">ПРОФИЛЬ ИГРОКА</span>
                             <h2>{current.displayName}</h2>
@@ -813,10 +995,10 @@ export function PlayerBrowseDeck({
                 </div>
               </article>
             ) : (
-              <article ref={cardRef} className="pb-card" data-player-id={current.publicPlayerId}>
+              <article ref={cardRef} className="pb-card" data-player-id={current.publicPlayerId} aria-busy={commitPending ? true : undefined}>
                 <div className="pb-cover">
-                  <ProfileCover url={coverUrl ?? undefined} />
-                  <Avatar className={`avatar avatar--${current.trainer ? "purple" : "yellow"} pb-avatar`} avatar={current.avatar} name={current.displayName} tone={current.trainer ? "purple" : "yellow"} />
+                  <PreparedBrowseCover media={committedMedia!.cover} />
+                  <PreparedBrowseAvatar className={`avatar avatar--${current.trainer ? "purple" : "yellow"} pb-avatar`} media={committedMedia!.avatar} name={current.displayName} tone={current.trainer ? "purple" : "yellow"} />
                 </div>
                 <div className="pb-copy">
                   <div>
