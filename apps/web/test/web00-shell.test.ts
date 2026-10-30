@@ -43,10 +43,16 @@ describe("WEB-00 frozen production shell", () => {
     expect(page).toContain('data-surface="players-directory"');
     expect(page).toContain("Каталог игроков сейчас недоступен");
     expect(page).toContain("isSocialDirectoryDisabled");
-    // Truthful confirmedOn-gated ON/OFF copy is allowed; fabricated radar fields are not.
+    // Fabricated radar fields are not allowed; ON/OFF lives in header overlay, not page-inline ternary.
     expect(page).not.toMatch(/displaySlot|proximityBand/);
     expect(page).not.toMatch(/fake player|fixture players/i);
-    expect(page).toMatch(/view\.confirmedOn\s*\?\s*[\s\S]*?Radar включён[\s\S]*?:\s*[\s\S]*?Radar выключен/);
+    // Owner: authoritative Radar status is header RadarStatusAffordance → radarHeaderStatus;
+    // inactive/unconfirmed must not claim ON (confirmedOn|me gate before any ON copy).
+    const nav = await readSource("../src/components/consumer/RootNav.tsx");
+    const header = await readSource("../src/lib/radar-header.ts");
+    expect(nav).toContain("<RadarStatusAffordance");
+    expect(header).toContain("if (!view.me || !view.confirmedOn) return null");
+    expect(header).toContain('"Радар включён"');
   });
 
   it("keeps Button frozen variants with compatibility aliases", async () => {
