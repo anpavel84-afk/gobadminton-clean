@@ -382,7 +382,9 @@ run("Friends S1 API — isolated synthetic PostGIS only", () => {
     const wire=JSON.stringify(view);for (const secret of [a.userId,b.userId,(await stored(r)).pair_id,"social_action_epoch","latitude","longitude","contactPolicy","generation"]) expect(wire).not.toContain(secret);
     expect((await get(outsider,`/v1/friendships/${r.friendshipId}`)).statusCode).toBe(404);
     expect((await decide(a,receipt,"remove")).statusCode).toBe(200);expect((await stored(r)).state).toBe("removed");
-    expect((await get(a,`/v1/me/friendship-states?publicPlayerId=${b.publicPlayerId}`)).json().items[0].capabilities.canRequest).toBe(true);
+    const afterRemove=(await get(a,`/v1/me/friendship-states?publicPlayerId=${b.publicPlayerId}`)).json().items[0];
+    expect(afterRemove.relationship).toBe("none");expect(afterRemove.capabilities.canRequest).toBe(true);
+    expect(afterRemove.peer?.publicPlayerId).toBe(b.publicPlayerId);
     const fresh=await request();const acceptAgain=(await decide(b,fresh,"accept")).json<FriendshipReceipt>();
     expect((await decide(b,acceptAgain,"remove")).statusCode).toBe(200);
   });
@@ -390,7 +392,9 @@ run("Friends S1 API — isolated synthetic PostGIS only", () => {
     const old=await request();const rightful=action==="decline"?b:a;const wrong=action==="decline"?a:b;
     expect((await decide(wrong,old,action)).statusCode).toBe(404);
     expect((await decide(rightful,old,action)).statusCode).toBe(200);
-    expect((await get(a,`/v1/me/friendship-states?publicPlayerId=${b.publicPlayerId}`)).json().items[0].capabilities.canRequest).toBe(true);
+    const afterRetire=(await get(a,`/v1/me/friendship-states?publicPlayerId=${b.publicPlayerId}`)).json().items[0];
+    expect(afterRetire.relationship).toBe("none");expect(afterRetire.capabilities.canRequest).toBe(true);
+    expect(afterRetire.peer?.publicPlayerId).toBe(b.publicPlayerId);
     const fresh=await request();expect(fresh.requestId).not.toBe(old.requestId);expect(fresh.friendshipId).toBe(old.friendshipId);
     expect((await stored(fresh)).generation).toBe("2");expect(await ledgerCount(fresh)).toBe(2);
     expect((await decide(b,old,"accept")).json().code).toBe("FRIENDSHIP_STALE");
@@ -428,7 +432,10 @@ run("Friends S1 API — isolated synthetic PostGIS only", () => {
     const r=await request();expect((await decide(b,r,"accept")).statusCode).toBe(200);
     expect((await putBlock(b,a)).statusCode).toBe(200);expect((await stored(r)).state).toBe("blocked");
     expect((await putBlock(b,a,true)).statusCode).toBe(200);
-    const view=(await get(a,`/v1/friendships/${r.friendshipId}`)).json();expect(view.relationship).toBe("unavailable");expect(view.peer).toBeNull();
+    const view=(await get(a,`/v1/friendships/${r.friendshipId}`)).json();
+    // Blocked generation stays non-friends; after unblock eligible peers may re-request (none, not unavailable).
+    expect(view.relationship).toBe("none");expect(view.peer?.publicPlayerId).toBe(b.publicPlayerId);
+    expect(view.capabilities.canRequest).toBe(true);
     expect((await get(a,"/v1/me/friendships?view=accepted")).json().items).toEqual([]);
   });
   it.each(["directory","eligibility","disabled","deletion_pending"])("%s closure invalidates pending epoch permanently",async kind=>{

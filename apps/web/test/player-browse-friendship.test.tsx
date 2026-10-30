@@ -35,6 +35,14 @@ const incoming: FriendshipView = {
 const unavailable: FriendshipView = {
   friendshipId: null, relationship: "unavailable", version: null, request: null, peer: null, capabilities: { ...caps },
 };
+const retiredButEligible: FriendshipView = {
+  friendshipId: "f1", relationship: "unavailable", version: "3", request: null, peer: null,
+  capabilities: { ...caps, canRequest: true },
+};
+const friends: FriendshipView = {
+  friendshipId: "f2", relationship: "friends", version: "2", request: null, peer: null,
+  capabilities: { ...caps, canRemove: true },
+};
 
 describe("profile friendship remains intact outside browse deck", () => {
   it("keeps ProfileFriendship source and friendCommand paths for the friends panel", () => {
@@ -43,6 +51,9 @@ describe("profile friendship remains intact outside browse deck", () => {
     expect(canOfferFriendship(outgoing)).toBe(false);
     expect(canOfferFriendship(incoming)).toBe(false);
     expect(canOfferFriendship(unavailable)).toBe(false);
+    expect(canOfferFriendship(retiredButEligible)).toBe(true);
+    expect(canOfferFriendship(friends)).toBe(false);
+    expect(canOfferFriendship({ ...friends, capabilities: { ...caps, canRequest: true } })).toBe(false);
     expect(friendCommand(none, "peer-1", "request")).toEqual({
       path: "/v1/friend-requests",
       body: { targetPublicPlayerId: "peer-1" },
