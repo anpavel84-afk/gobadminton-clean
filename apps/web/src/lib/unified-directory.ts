@@ -200,8 +200,11 @@ export class UnifiedDirectoryController {
       this.set({ mode: "ordinary", capabilityUnavailable: true }); return;
     }
     if (result.status === 429) this.retryAt = this.clock() + (result.retryAfterSeconds ?? 60) * 1000;
+    // 409/410 are recoverable with a fresh current_activation initial; do not keep the
+    // prior 30s initial gate that would leave list/map blank until cooldown ends.
+    if (result.status === 409 || result.status === 410) this.nextInitial = 0;
     this.origin = { kind: "none" };
-    this.invalidate(result.status === 401 ? "Войдите снова, чтобы смотреть участников Radar." : result.status === 403 ? "Нет доступа к участникам Radar. Можно смотреть обычный каталог." : result.status === 429 ? "Попробуйте обновить список немного позже." : result.status === 409 || result.status === 410 ? "Список изменился. Обновите участников Radar." : result.status === 422 ? "Radar недоступен для выбранного города или геопозиции. Можно смотреть обычный каталог." : "Не удалось загрузить участников Radar. Попробуйте снова.", true);
+    this.invalidate(result.status === 401 ? "Войдите снова, чтобы смотреть участников Radar." : result.status === 403 ? "Нет доступа к участникам Radar. Можно смотреть обычный каталог." : result.status === 429 ? "Попробуйте обновить список немного позже." : result.status === 409 || result.status === 410 ? "Список изменился. Обновляем участников Radar." : result.status === 422 ? "Radar недоступен для выбранного города или геопозиции. Можно смотреть обычный каталог." : "Не удалось загрузить участников Radar. Попробуйте снова.", true);
     if (result.status === 401) this.set({ mode: "ordinary", authenticationRequired: true });
   }
   tick() {
@@ -214,6 +217,8 @@ export class UnifiedDirectoryController {
     const previewExpired = this.view.preview && !liveUnifiedPreview(this.view.preview, this.view.selected ?? "", now);
     if (snapshotExpired || rowExpired || previewExpired) {
       this.origin = { kind: "none" };
+      // Allow immediate current_activation recovery; expired markers must not linger.
+      this.nextInitial = 0;
       this.invalidate("Список участников Radar устарел. Обновляем данные.", true);
       this.set({ mode: "ordinary" });
     }
@@ -230,6 +235,19 @@ export class UnifiedDirectoryController {
     }
     if (this.clock() < Math.max(this.nextInitial, this.retryAt)) {
       if (changed) {
+        const sameActivationId = Boolean(activationKey && this.activationOriginKey &&
+          activationKey.split(":")[0] === this.activationOriginKey.split(":")[0]);
+        const filterSame = JSON.stringify(this.filters) === JSON.stringify(filters);
+        const liveSnapshot = this.view.mode === "unified" && !this.view.stale && this.view.snapshot !== null
+          && Number.isFinite(Date.parse(this.view.snapshot.validUntil))
+          && Date.parse(this.view.snapshot.validUntil) > this.clock();
+        // Activation version churn during the 30s initial gate: keep the still-valid
+        // authorized window instead of blanking list/map until the gate opens.
+        if (filterSame && sameActivationId && liveSnapshot) {
+          this.activationOriginKey = activationKey;
+          this.set({ stale: true, notice: "Обновляем участников Radar…" });
+          return;
+        }
         this.invalidate();
         this.set({ mode: "ordinary" });
         // Never retain a raw foreground fix while waiting for the cooldown.

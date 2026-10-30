@@ -1483,8 +1483,9 @@ dbDescribe("Unified Players / isolated synthetic PostGIS and HTTP", () => {
       const evidence = await pool.query(`SELECT r.*,ST_AsText(coarse_center) center FROM radar_presences r WHERE user_id=ANY($1::uuid[])`, [DEV_MOSCOW_PEER_IDS]);
       expect(new Set(evidence.rows.map(r => r.center)).size).toBe(6);
       for (const r of evidence.rows) {
-        expect(r.foreground_until.getTime()-r.started_at.getTime()).toBeCloseTo(90000,-2);
-        expect(r.location_valid_until.getTime()-r.started_at.getTime()).toBeCloseTo(360000,-2);
+        // DEV fixtures use a stable 15-minute lease (not real-user 90s foreground).
+        expect(r.foreground_until.getTime()-r.started_at.getTime()).toBeCloseTo(900000,-2);
+        expect(r.location_valid_until.getTime()-r.started_at.getTime()).toBeCloseTo(900000,-2);
         expect(r.expires_at.getTime()-r.started_at.getTime()).toBeCloseTo(900000,-2);
         expect(r.hard_expires_at.getTime()-r.started_at.getTime()).toBeCloseTo(1800000,-2);
       }
@@ -1508,9 +1509,12 @@ dbDescribe("Unified Players / isolated synthetic PostGIS and HTTP", () => {
       await pool.query("UPDATE radar_presences SET foreground_until=clock_timestamp()-interval '1 second' WHERE user_id=ANY($1::uuid[])",[DEV_MOSCOW_PEER_IDS]);
       await clearBudget(owner);
       await clearBudget(viewer);
+      const beforeRenew = (await pool.query("SELECT user_id,activation_id FROM radar_presences WHERE user_id=ANY($1::uuid[]) ORDER BY user_id",[DEV_MOSCOW_PEER_IDS])).rows;
       const refreshed = await service.query(viewer.id,viewer.issued.session.id,initial(), false);
       expect(refreshed.items.filter(r=>r.player.displayName.startsWith("TEST"))).toHaveLength(6);
       expect(refreshed.items.find(r=>r.publicPlayerId===peers[0]!.publicPlayerId)!.radar!.resultRef).not.toBe(peers[0]!.radar!.resultRef);
+      // Due renew extends leases in place; activation churn is not required for fixture stability.
+      expect((await pool.query("SELECT user_id,activation_id FROM radar_presences WHERE user_id=ANY($1::uuid[]) ORDER BY user_id",[DEV_MOSCOW_PEER_IDS])).rows).toEqual(beforeRenew);
       const expiredClient = await pool.connect();
       try { await expect(redeemUnifiedProof(expiredClient,proof,false,false,env)).rejects.toThrow(); }
       finally { expiredClient.release(); }

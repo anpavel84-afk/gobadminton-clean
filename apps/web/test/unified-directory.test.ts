@@ -125,6 +125,37 @@ describe("unified directory privacy and global pagination", () => {
     expect(c.view.stale).toBe(false);
     expect(c.view.mode).toBe("unified");
   });
+  it("keeps a still-valid window on activation version churn during initial cooldown", async () => {
+    const request = vi.fn(async () => ok(snapshot())) as typeof apiFetch;
+    const c = new UnifiedDirectoryController(request, () => now); c.bind(me);
+    await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:2");
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(c.view.snapshot).not.toBeNull();
+    expect(c.view.rows).toHaveLength(1);
+    expect(c.view.stale).toBe(true);
+    expect(c.view.mode).toBe("unified");
+  });
+  it("recovers immediately after 409 without waiting out the initial cooldown", async () => {
+    let time = now;
+    let calls = 0;
+    const request = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) return ok({ ...snapshot(), generatedAt: new Date(time).toISOString(), validUntil: new Date(time + 45000).toISOString() });
+      if (calls === 2) return { ok: false as const, status: 409, error: "stale" };
+      return ok({ ...snapshot([row("recovered")]), generatedAt: new Date(time).toISOString(), validUntil: new Date(time + 45000).toISOString() });
+    }) as typeof apiFetch;
+    const c = new UnifiedDirectoryController(request, () => time); c.bind(me);
+    await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    time += 30000;
+    await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    expect(c.view.snapshot).toBeNull();
+    expect(c.view.stale).toBe(true);
+    await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    expect(calls).toBe(3);
+    expect(c.view.rows.map(r => r.publicPlayerId)).toEqual(["recovered"]);
+    expect(c.view.mode).toBe("unified");
+  });
 });
 describe("distance and map authority", () => {
   const estimate = (meters: number, step: 100 | 500 | 1000 = 100) => ({ kind: "estimate", roundedMeters: meters, roundingStepMeters: step }) as UnifiedDistance;

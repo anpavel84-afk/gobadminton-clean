@@ -46,13 +46,20 @@ export function PlayersDirectoryPage() {
     const unified = directory.controller;
     if (!unified) return;
     if (!activationId || view.pendingStop || !eligibleCity || !unifiedAvailable) { unified.ordinary(); return; }
+    let arming = false;
     const query = () => {
-      if (!controller || confirmedDirectoryActivation(controller.snapshot()) !== activationId) { unified.ordinary(); return; }
-      if (!unified.matches(queryFilters, activationKey)) void unified.query(queryFilters, { kind: "current_activation", activationId }, activationKey);
+      if (arming) return;
+      arming = true;
+      try {
+        if (!controller || confirmedDirectoryActivation(controller.snapshot()) !== activationId) { unified.ordinary(); return; }
+        if (!unified.matches(queryFilters, activationKey)) void unified.query(queryFilters, { kind: "current_activation", activationId }, activationKey);
+      } finally { arming = false; }
     };
     query();
+    // Re-arm on 409/TTL settlement so recovery is not stuck waiting for the 30s interval.
+    const unsubscribe = unified.subscribe(query);
     const timer = setInterval(query, 30000);
-    return () => clearInterval(timer);
+    return () => { clearInterval(timer); unsubscribe(); };
   }, [controller, directory.controller, activationId, activationKey, view.pendingStop, eligibleCity, unifiedAvailable, filterKey]);
   const [reload, setReload] = useState(0);
   // Radar toggles do not change the ordinary query or its pagination.
