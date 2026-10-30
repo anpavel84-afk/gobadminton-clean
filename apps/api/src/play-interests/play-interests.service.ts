@@ -117,8 +117,13 @@ export class PlayInterestsService {
     }
     this.assertEnabled();
     const ctx = await this.context(client, profiles, pair.id);
-    // Peer may become mutual later without a new actor write; require own live identity only.
+    // Own live identity always required; outgoing may later become mutual without a new actor write.
     if (receipt.outcome === "withdrawn" || !effectiveActive(row, ctx.profiles, ctx.blocked)) unavailable();
+    // Stored mutual must still have a live reciprocal intent under current lock/directions.
+    if (receipt.outcome === "mutual") {
+      const peerRow = rows.find(r => r.actor_user_id === row.peer_user_id);
+      if (!effectiveActive(peerRow, ctx.profiles, ctx.blocked)) unavailable();
+    }
   }
 
   async create(actor: string, sessionId: string, key: string, input: unknown) {

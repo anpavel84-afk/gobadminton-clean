@@ -244,6 +244,35 @@ run("Play interests API — isolated synthetic PostGIS only", () => {
     }
   });
 
+  it("unchanged mutual idempotency replays; peer withdrawal rejects stale mutual key without a new write", async () => {
+    const aOutgoing = await send(a, b);
+    const idem = key();
+    const mutual = await send(b, a, idem);
+    expect(mutual.outcome).toBe("mutual");
+    const liveReplay = await post(b, "/v1/play-interests", { targetPublicPlayerId: a.publicPlayerId }, idem);
+    expect(liveReplay.statusCode).toBe(201);
+    expect(liveReplay.json()).toEqual(mutual);
+
+    expect((await post(a, `/v1/play-interests/${aOutgoing.interestId}/withdraw`, {
+      expectedVersion: aOutgoing.version,
+    })).statusCode).toBe(200);
+    expect((await state(b, a)).json().items[0].relationship).toBe("outgoing");
+
+    const before = (await pool.query(
+      "SELECT interest_id, version, state, generation FROM play_interests WHERE actor_user_id=$1",
+      [b.userId],
+    )).rows;
+    const stale = await post(b, "/v1/play-interests", { targetPublicPlayerId: a.publicPlayerId }, idem);
+    expect(stale.statusCode).toBe(404);
+    expect(stale.json()).not.toMatchObject({ outcome: "mutual" });
+    const after = (await pool.query(
+      "SELECT interest_id, version, state, generation FROM play_interests WHERE actor_user_id=$1",
+      [b.userId],
+    )).rows;
+    expect(after).toEqual(before);
+    expect(await friendshipCount()).toBe(0);
+  });
+
   it("block and privacy epoch invalidate mutual; stale replay confers no rights; CSRF/auth/visibility fail closed", async () => {
     const aReceipt = await send(a, b);
     const bReceipt = await send(b, a);
