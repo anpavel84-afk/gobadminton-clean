@@ -139,11 +139,37 @@ export function PlayersDirectoryPage() {
   const cityName = cities.find(c => c.id === cityId)?.nameRu;
   const placeLabel = [cityName || (cityId ? "Город" : "Все города"), areaKey.trim() || "Все районы"].join(" · ");
   const showCards = viewReady && browseView === "cards";
+  const radarBand = (
+    <section className="players-radar-band" aria-label="Игроки рядом">
+      <div><h2>Игроки рядом с вами</h2><p>Временный поиск по приблизительной близости</p></div>
+      <div className="players-radar-band__controls">
+        <RadarSwitchControl />
+        <RadarStatusControls />
+        {activationId && <Button href="/players/radar" variant="dark">Показать на карте</Button>}
+        {directory.view.authenticationRequired && <AuthEntry returnPath="/players">Войти для Radar</AuthEntry>}
+      </div>
+    </section>
+  );
+  const catalogFilters = (
+    <>
+      {directory.view.notice && <section className="radar-notice"><span role="status"><strong>{directory.view.notice}</strong></span></section>}
+      <section className="player-controls" role="search" aria-label="Фильтры каталога">
+        <label className="player-location"><span>Город</span><select aria-label="Город" value={cityId} onChange={e => { setCityId(e.target.value); setCursor(null); }}><option value="">Все города</option>{cities.map(c => <option value={c.id} key={c.id}>{c.nameRu}</option>)}</select></label>
+        <label className="player-search"><img className="profile-icon" src="/canonical/search.svg" alt="" /><input aria-label="Найти игрока" type="search" placeholder="Найти игрока" value={name} onChange={e => { setName(e.target.value); setCursor(null); }} /></label>
+        <label className="player-search area-filter"><input aria-label="Район / метро" placeholder="Район / метро" value={areaKey} maxLength={64} onChange={e => { setAreaKey(e.target.value); setCursor(null); }} /></label>
+      </section>
+      <div className="players-filter-chips" role="group" aria-label="Быстрые фильтры">
+        <button className={`chip ${!lookingOnly && !trainerOnly ? "chip--active" : ""}`} aria-pressed={!lookingOnly && !trainerOnly} onClick={() => { setLookingOnly(false); setTrainerOnly(false); setCursor(null); }}>Все</button>
+        <button className={`chip ${lookingOnly ? "chip--active" : ""}`} aria-pressed={lookingOnly} onClick={() => { setLookingOnly(!lookingOnly); setCursor(null); }}>Ищу игру</button>
+        <button className={`chip ${trainerOnly ? "chip--active" : ""}`} aria-pressed={trainerOnly} onClick={() => { setTrainerOnly(!trainerOnly); setCursor(null); }}>Тренер</button>
+      </div>
+    </>
+  );
   return <ConsumerShell active="players" title="Игроки" hideHeading><div className="fr3 players-page gb-player-browse" data-surface="players-directory" data-state={state} data-browse-view={showCards ? "cards" : "list"}>
-    <section className="players-hero">
+    <section className={`players-hero${showCards ? " pb-hero--compact" : ""}`}>
       <div>
         <h1>Игроки</h1>
-        <p>Находите партнёров по уровню и игровому настрою.</p>
+        {!showCards && <p>Находите партнёров по уровню и игровому настрою.</p>}
       </div>
       <div className="pb-view-switch" role="group" aria-label="Вид каталога">
         <button type="button" aria-pressed={showCards} onClick={() => changeBrowseView("cards")}>
@@ -156,33 +182,27 @@ export function PlayersDirectoryPage() {
         </button>
       </div>
     </section>
-    <section className="players-radar-band" aria-label="Игроки рядом">
-      <div><h2>Игроки рядом с вами</h2><p>Временный поиск по приблизительной близости</p></div>
-      <div className="players-radar-band__controls">
-        <RadarSwitchControl />
-        <RadarStatusControls />
-        {activationId && <Button href="/players/radar" variant="dark">Показать на карте</Button>}
-        {directory.view.authenticationRequired && <AuthEntry returnPath="/players">Войти для Radar</AuthEntry>}
-      </div>
-    </section>
-    {directory.view.notice && <section className="radar-notice"><span role="status"><strong>{directory.view.notice}</strong></span></section>}
-    <section className="player-controls" role="search" aria-label="Фильтры каталога">
-      <label className="player-location"><span>Город</span><select aria-label="Город" value={cityId} onChange={e => { setCityId(e.target.value); setCursor(null); }}><option value="">Все города</option>{cities.map(c => <option value={c.id} key={c.id}>{c.nameRu}</option>)}</select></label>
-      <label className="player-search"><img className="profile-icon" src="/canonical/search.svg" alt="" /><input aria-label="Найти игрока" type="search" placeholder="Найти игрока" value={name} onChange={e => { setName(e.target.value); setCursor(null); }} /></label>
-      <label className="player-search area-filter"><input aria-label="Район / метро" placeholder="Район / метро" value={areaKey} maxLength={64} onChange={e => { setAreaKey(e.target.value); setCursor(null); }} /></label>
-    </section>
-    <div className="players-filter-chips" role="group" aria-label="Быстрые фильтры">
-      <button className={`chip ${!lookingOnly && !trainerOnly ? "chip--active" : ""}`} aria-pressed={!lookingOnly && !trainerOnly} onClick={() => { setLookingOnly(false); setTrainerOnly(false); setCursor(null); }}>Все</button>
-      <button className={`chip ${lookingOnly ? "chip--active" : ""}`} aria-pressed={lookingOnly} onClick={() => { setLookingOnly(!lookingOnly); setCursor(null); }}>Ищу игру</button>
-      <button className={`chip ${trainerOnly ? "chip--active" : ""}`} aria-pressed={trainerOnly} onClick={() => { setTrainerOnly(!trainerOnly); setCursor(null); }}>Тренер</button>
-    </div>
+    {showCards ? (
+      <details className="pb-catalog-tools">
+        <summary>Radar и фильтры</summary>
+        {radarBand}
+        {catalogFilters}
+      </details>
+    ) : (
+      <>
+        {radarBand}
+        {catalogFilters}
+      </>
+    )}
     {showCards ? (
       <section className="players-browse-deck" aria-label="Игроки по одному">
-        {catalog.radar.length > 0 && (
-          <div className="players-catalog-grid" aria-label="Участники Radar" style={{ marginBottom: 20 }}>
-            {catalog.radar.map(row => <UnifiedPlayerCard key={row.publicPlayerId} row={row} city={cities.find(c => c.id === row.player.cityId)?.nameRu} onSelect={() => void directory.controller?.select(row)} />)}
-            {catalog.moreRadar && <Button variant="outline" disabled={directory.view.busy} onClick={() => void directory.controller?.more()}>Ещё участники Radar</Button>}
-          </div>
+        {liveRadar && catalog.radar.length > 0 && (
+          <p className="pb-radar-elsewhere" role="note">
+            Участники Radar — в{" "}
+            <button type="button" className="pb-radar-elsewhere__link" onClick={() => changeBrowseView("list")}>списке</button>
+            {activationId && <> или <a href="/players/radar">на карте</a></>}
+            . Карточки ниже — обычный каталог.
+          </p>
         )}
         <PlayerBrowseDeck
           players={catalog.ordinary}

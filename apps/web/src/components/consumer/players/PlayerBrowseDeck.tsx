@@ -202,6 +202,21 @@ export function PlayerBrowseDeck({
     return () => window.clearTimeout(timer);
   }, [toast]);
 
+  const onRateLimited = useCallback((until: number | null, _retryAfterSeconds: number | null) => {
+    setRateBlockedUntil(until);
+  }, []);
+
+  useEffect(() => {
+    if (rateBlockedUntil == null) return;
+    const delay = rateBlockedUntil - Date.now();
+    if (delay <= 0) {
+      setRateBlockedUntil(null);
+      return;
+    }
+    const timer = window.setTimeout(() => setRateBlockedUntil(null), delay);
+    return () => window.clearTimeout(timer);
+  }, [rateBlockedUntil]);
+
   const cityName = (cityId: string | null) => cities.find(c => c.id === cityId)?.nameRu;
 
   const moveTo = useCallback((next: number) => {
@@ -473,7 +488,7 @@ export function PlayerBrowseDeck({
                   returnPath={`/players?view=cards`}
                   navigationLocked={false}
                   rateBlockedUntil={rateBlockedUntil}
-                  onRateLimited={(until) => setRateBlockedUntil(until)}
+                  onRateLimited={onRateLimited}
                   onRelationship={(view) => {
                     if (!view) return;
                     setKnown(prev => {

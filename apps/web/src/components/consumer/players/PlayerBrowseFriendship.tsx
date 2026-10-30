@@ -55,6 +55,8 @@ export function PlayerBrowseFriendship({
   const [checkNotice, setCheckNotice] = useState("");
   const generation = useRef(0);
   const peerRef = useRef(peerId);
+  const meIdRef = useRef(me?.id);
+  meIdRef.current = me?.id;
   const viewRef = useRef<FriendshipView | null>(null);
   viewRef.current = view;
 
@@ -121,13 +123,13 @@ export function PlayerBrowseFriendship({
     document.addEventListener("visibilitychange", foreground);
     void loadFriendship();
     return () => {
+      generation.current += 1;
       release?.();
       window.removeEventListener("gb-private-expired", expire);
       window.removeEventListener("gb-session-changed", session);
       document.removeEventListener("visibilitychange", foreground);
       onApi(null);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- peer/auth fence; stale callbacks ignored via generation
   }, [me?.id, me?.csrfToken, peerId, authState, reload]);
 
   useEffect(() => { onBusyChange(mutation.busy); }, [mutation.busy, onBusyChange]);
@@ -162,9 +164,13 @@ export function PlayerBrowseFriendship({
 
   async function checkStatusReadonly() {
     if (!me || checking || mutation.busy) return;
+    const gen = generation.current;
+    const peer = peerId;
+    const authId = me.id;
     setChecking(true);
     setCheckNotice("");
-    const result = await getFriendState(peerId);
+    const result = await getFriendState(peer);
+    if (gen !== generation.current || peer !== peerRef.current || meIdRef.current !== authId) return;
     setChecking(false);
     if (!result.ok) {
       setCheckNotice("Не удалось проверить статус. Исходная операция могла быть получена — не отправляйте запрос повторно.");

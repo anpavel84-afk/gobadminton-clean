@@ -15,13 +15,15 @@ Supersedes any PROPOSED markers in those design-pass texts for implementation sc
 - One large continuous profile card in the `/players` workspace (not v1 small-left-tile + right inspector).
 - Desktop ~1440×900 / 1920×1080: scene follows the window; side chevron zones; cover grows with viewport height. No Fullscreen API.
 - Cover + avatar-in-white-circle + dark identity/bio/actions on one surface. Details expand **inside** the same card.
-- Mobile ≤720: compact cover/avatar; primary skip/request actions stay reachable; one document scroll (no nested competing scroll).
+- Cards mode only: compact page header; existing Radar / filters / chips sit in an accessible `<details>` collapsed by default so the closed deck and main actions fit ~1440×900 and remain large on ~1920×1080. List mode keeps the expanded Radar band, filters, chips, list, and unified privacy TTL unchanged.
+- Cards mode must not place the private Radar tile grid above the ordinary deck; a short readonly note may link to the existing list or map.
+- Height budget is scoped CSS only (no ResizeObserver / `scrollIntoView` composition masks). Mobile ≤720: compact cover/avatar; primary skip/request actions stay reachable; one document scroll (no nested competing scroll).
 - Reuse existing `ProfileCover` / `Avatar` / presentation helpers with **scoped** `.gb-player-browse` CSS only — do not change global hero styles.
 
 ## Catalog & Radar boundary
 
 - Deck reads the **ordinary public catalog** (`listPlayers`) only. No private Radar rows / `resultRef` in the deck.
-- Existing Radar band, unified rendering, TTL, and privacy fences stay as on `/players`.
+- Existing Radar band, unified rendering, TTL, and privacy fences stay as on `/players`. Cards-mode collapse must not auto-toggle or stop Radar.
 - Filters, dedup by `publicPlayerId`, cursor pagination, and explicit «Загрузить ещё» / «Показать ещё» when the loaded page + cursor are exhausted — no eager multi-page scanning for the next candidate.
 - Filter/scope change invalidates selection and local skips immediately so previous-scope rows/actions cannot flash.
 - Self is excluded when the viewer’s own `publicPlayerId` is known. `canRequest=false` never sends.
@@ -46,8 +48,8 @@ Supersedes any PROPOSED markers in those design-pass texts for implementation sc
 
 - Reuse `friendCommand`, server capabilities/states, `useSocialMutation`, and pending scope `${me.id}:friends:${peerId}` (same as `FriendActions`). Do not clear that pending key on skip/filter/unmount/reload.
 - Key per-peer action UI by current auth user + peer. Refresh caps/state on foreground/session change; retire private UI on `gb-private-expired` / `gb-session-changed`.
-- Confirm `receipt.outcome` (`pending` is not `friends` unless accepted). Stale 409 → reload state. 429 → honor Retry-After; no invented countdown or auto POST retry.
-- UNKNOWN: «Проверить статус» is **GET** `getFriendState` only — never `mutation.retry()` / default MutationNotice POST replay on the deck.
+- Confirm `receipt.outcome` (`pending` is not `friends` unless accepted). Stale 409 → reload state. 429 → honor Retry-After with one stable deadline timer that clears at expiry; no invented visible countdown or auto POST retry; parent rate-limit callback must stay identity-stable.
+- UNKNOWN: «Проверить статус» is **GET** `getFriendState` only — never `mutation.retry()` / default MutationNotice POST replay on the deck. Ignore retired readonly/status results after generation, peer, or auth scope change.
 - Incoming decisions only via explicit `canAccept` / `canDecline`. No silent right-swipe accept. Do not disclose blocked reason.
 
 ## Data honesty

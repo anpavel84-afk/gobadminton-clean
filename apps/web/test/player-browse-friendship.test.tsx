@@ -114,6 +114,10 @@ describe("player browse unknown readonly check vs mutation retry", () => {
     expect(after.retryAfterSeconds).toBe(42);
     expect(after.pending).toBe(false);
     expect(success).not.toHaveBeenCalled();
+    // Deck maps Retry-After to one absolute deadline; a single expiry timer clears it (no polling/countdown UI).
+    const until = Date.now() + Math.max(1, after.retryAfterSeconds ?? 60) * 1000;
+    expect(until - Date.now()).toBeGreaterThan(40_000);
+    expect(until - Date.now()).toBeLessThanOrEqual(42_000);
   });
 
   it("does not start a second write while pending for the same peer scope", async () => {

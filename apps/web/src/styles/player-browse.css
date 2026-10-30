@@ -12,6 +12,110 @@
   --pb-radius: 28px;
 }
 
+/* Cards mode: compact page header + collapsed tools so default-closed deck fits ~1440×900. */
+.gb-player-browse[data-browse-view="cards"] .players-hero.pb-hero--compact {
+  margin-bottom: 10px;
+  gap: 12px;
+  align-items: center;
+}
+
+.gb-player-browse[data-browse-view="cards"] .players-hero.pb-hero--compact h1 {
+  margin: 0;
+  font-size: 28px;
+  line-height: 1.15;
+  letter-spacing: -.03em;
+}
+
+.gb-player-browse .pb-catalog-tools {
+  margin: 0 0 12px;
+  border: 1px solid var(--pb-line);
+  border-radius: 16px;
+  background: var(--pb-white);
+}
+
+.gb-player-browse .pb-catalog-tools > summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 10px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--pb-ink);
+  user-select: none;
+}
+
+.gb-player-browse .pb-catalog-tools > summary::-webkit-details-marker {
+  display: none;
+}
+
+.gb-player-browse .pb-catalog-tools > summary::after {
+  content: "";
+  margin-left: auto;
+  width: 10px;
+  height: 10px;
+  border-right: 2px solid var(--pb-muted);
+  border-bottom: 2px solid var(--pb-muted);
+  transform: rotate(45deg);
+  transition: transform .16s;
+}
+
+.gb-player-browse .pb-catalog-tools[open] > summary::after {
+  transform: rotate(225deg);
+}
+
+.gb-player-browse .pb-catalog-tools > summary:focus-visible {
+  outline: 3px solid var(--pb-purple);
+  outline-offset: 2px;
+}
+
+.gb-player-browse .pb-catalog-tools .players-radar-band {
+  margin: 0;
+  border: 0;
+  border-top: 1px solid var(--pb-line);
+  border-radius: 0;
+  padding: 16px;
+}
+
+.gb-player-browse .pb-catalog-tools .player-controls {
+  margin: 0;
+  border: 0;
+  border-top: 1px solid var(--pb-line);
+  border-radius: 0;
+}
+
+.gb-player-browse .pb-catalog-tools .players-filter-chips {
+  margin: 0;
+  padding: 12px 16px 16px;
+  border-top: 1px solid var(--pb-line);
+}
+
+.gb-player-browse .pb-catalog-tools .radar-notice {
+  margin: 0;
+  padding: 10px 16px;
+  border-top: 1px solid var(--pb-line);
+}
+
+.gb-player-browse .pb-radar-elsewhere {
+  margin: 0 0 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--pb-muted);
+}
+
+.gb-player-browse .pb-radar-elsewhere a,
+.gb-player-browse .pb-radar-elsewhere__link {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--pb-purple);
+  font: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 .gb-player-browse .pb-view-switch {
   display: inline-flex;
   gap: 4px;
@@ -656,6 +760,26 @@
   height: 1px;
   overflow: hidden;
   clip: rect(0 0 0 0);
+}
+
+/* Desktop cards directory: local height budget so closed deck + actions fit 1440×900; grow on 1920×1080. */
+@media (min-width: 721px) {
+  .gb-player-browse[data-browse-view="cards"] .pb-surface {
+    min-height: calc(100dvh - 280px);
+  }
+
+  .gb-player-browse[data-browse-view="cards"] .pb-cover {
+    height: clamp(220px, calc(100dvh - 560px), 560px);
+  }
+
+  .gb-player-browse[data-browse-view="cards"] .pb-slider-nav {
+    top: calc(clamp(220px, calc(100dvh - 560px), 560px) / 2 - 24px);
+  }
+
+  .gb-player-browse[data-browse-view="cards"] .pb-empty,
+  .gb-player-browse[data-browse-view="cards"] .pb-loading {
+    min-height: calc(100dvh - 280px);
+  }
 }
 
 @media (max-width: 1023px) {
