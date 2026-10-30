@@ -125,6 +125,115 @@ describe("unified directory privacy and global pagination", () => {
     expect(c.view.stale).toBe(false);
     expect(c.view.mode).toBe("unified");
   });
+  it("rejects activation version key churn during cooldown; same-key soft refresh stays renderable", async () => {
+    let time = now;
+    const request = vi.fn(async () => ok({
+      ...snapshot(),
+      generatedAt: new Date(time).toISOString(),
+      validUntil: new Date(time + 45000).toISOString(),
+    })) as typeof apiFetch;
+    const c = new UnifiedDirectoryController(request, () => time); c.bind(me);
+    await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:2");
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(c.renderable(filters, "activation:2")).toBe(false);
+    expect(c.view.stale).toBe(true);
+    expect(c.view.mode).toBe("ordinary");
+    time = now + 30000;
+    await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(c.renderable(filters, "activation:1")).toBe(true);
+    time = now + 60000;
+    expect(c.matches(filters, "activation:1")).toBe(false);
+    expect(c.renderable(filters, "activation:1")).toBe(true);
+    await c.refresh();
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(c.renderable(filters, "activation:1")).toBe(true);
+  });
+
+  it("keeps renderable authorized window at +30s of 45s while matches is false and expiry is false", async () => {
+    let time = now;
+    const request = vi.fn(async () => ok({
+      ...snapshot([row("peer-a"), row("peer-b"), row("peer-c"), row("peer-d"), row("peer-e"), row("peer-f")].map((r, i) => ({
+        ...r,
+        publicPlayerId: `peer-${i + 1}`,
+        projection: "radar_public",
+        radar: { resultId: `r${i}`, resultRef: `ref-${i}`, consentPolicyVersion: "radar-geographic-sharing-v2", validUntil: new Date(now + 45000).toISOString(), distance: null,
+          geo: { latitude: 55.75, longitude: 37.6, crs: "EPSG:4326", model: "regional_grid_100m_v1", gridSizeMeters: 100, uncertaintyMeters: 100, quality: "approximate", sourceTimestampBucket: new Date(now).toISOString(), sourceAgeSeconds: 0 } },
+      }))),
+      generatedAt: new Date(now).toISOString(),
+      validUntil: new Date(now + 45000).toISOString(),
+    })) as typeof apiFetch;
+    const c = new UnifiedDirectoryController(request, () => time); c.bind(me);
+    await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    expect(c.view.rows).toHaveLength(6);
+    time = now + 30000;
+    expect(c.matches(filters, "activation:1")).toBe(false);
+    expect(c.renderable(filters, "activation:1")).toBe(true);
+    c.tick();
+    expect(c.view.snapshot).not.toBeNull();
+    expect(c.view.mode).toBe("unified");
+    expect(c.view.stale).toBe(false);
+    expect(c.renderable(filters, "activation:1")).toBe(true);
+  });
+
+  it("nextRefreshAt recovers after 429 Retry-After without stacking another fixed 30s wait", async () => {
+    let time = now;
+    let calls = 0;
+    const request = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) {
+        return ok({
+          ...snapshot([row("before")]),
+          generatedAt: new Date(time).toISOString(),
+          validUntil: new Date(time + 45000).toISOString(),
+        });
+      }
+      if (calls === 2) return { ok: false as const, status: 429, error: "rate", retryAfterSeconds: 5 };
+      return ok({
+        ...snapshot([row("recovered-after-429")]),
+        generatedAt: new Date(time).toISOString(),
+        validUntil: new Date(time + 45000).toISOString(),
+      });
+    }) as typeof apiFetch;
+    const c = new UnifiedDirectoryController(request, () => time); c.bind(me);
+    await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    time += 30000;
+    await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    expect(c.view.snapshot).toBeNull();
+    expect(c.nextRefreshAt()).toBe(time + 5000);
+    // Projection path: arm only fires when nextRefreshAt allows (not a fixed +30s).
+    time += 4999;
+    await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    expect(calls).toBe(2);
+    expect(c.view.rows).toEqual([]);
+    time += 1;
+    expect(c.nextRefreshAt()).toBe(time);
+    await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    expect(calls).toBe(3);
+    expect(c.view.rows.map(r => r.publicPlayerId)).toEqual(["recovered-after-429"]);
+    expect(c.renderable(filters, "activation:1")).toBe(true);
+  });
+  it("recovers immediately after 409 without waiting out the initial cooldown", async () => {
+    let time = now;
+    let calls = 0;
+    const request = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) return ok({ ...snapshot(), generatedAt: new Date(time).toISOString(), validUntil: new Date(time + 45000).toISOString() });
+      if (calls === 2) return { ok: false as const, status: 409, error: "stale" };
+      return ok({ ...snapshot([row("recovered")]), generatedAt: new Date(time).toISOString(), validUntil: new Date(time + 45000).toISOString() });
+    }) as typeof apiFetch;
+    const c = new UnifiedDirectoryController(request, () => time); c.bind(me);
+    await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    time += 30000;
+    await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    expect(c.view.snapshot).toBeNull();
+    expect(c.view.stale).toBe(true);
+    await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    expect(calls).toBe(3);
+    expect(c.view.rows.map(r => r.publicPlayerId)).toEqual(["recovered"]);
+    expect(c.view.mode).toBe("unified");
+  });
 });
 describe("distance and map authority", () => {
   const estimate = (meters: number, step: 100 | 500 | 1000 = 100) => ({ kind: "estimate", roundedMeters: meters, roundingStepMeters: step }) as UnifiedDistance;

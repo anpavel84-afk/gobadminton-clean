@@ -46,13 +46,28 @@ export function PlayersDirectoryPage() {
     const unified = directory.controller;
     if (!unified) return;
     if (!activationId || view.pendingStop || !eligibleCity || !unifiedAvailable) { unified.ordinary(); return; }
-    const query = () => {
-      if (!controller || confirmedDirectoryActivation(controller.snapshot()) !== activationId) { unified.ordinary(); return; }
-      if (!unified.matches(queryFilters, activationKey)) void unified.query(queryFilters, { kind: "current_activation", activationId }, activationKey);
+    let cancelled = false;
+    let arming = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const arm = () => {
+      if (cancelled || arming) return;
+      arming = true;
+      try {
+        if (timer !== undefined) clearTimeout(timer);
+        if (!controller || confirmedDirectoryActivation(controller.snapshot()) !== activationId) { unified.ordinary(); return; }
+        // Soft refresh stays !busy while pending; rely on matches + controller pending/cooldown gates.
+        if (!unified.matches(queryFilters, activationKey)) {
+          void unified.query(queryFilters, { kind: "current_activation", activationId }, activationKey);
+        }
+        // Schedule from controller refresh/cooldown/Retry-After (not a fixed 30s interval).
+        const delay = Math.max(500, unified.nextRefreshAt() - Date.now());
+        timer = setTimeout(arm, delay);
+      } finally { arming = false; }
     };
-    query();
-    const timer = setInterval(query, 30000);
-    return () => clearInterval(timer);
+    arm();
+    // Re-arm on settlement so 429 Retry-After / 409/410 recover when allowed without hammering.
+    const unsubscribe = unified.subscribe(arm);
+    return () => { cancelled = true; if (timer !== undefined) clearTimeout(timer); unsubscribe(); };
   }, [controller, directory.controller, activationId, activationKey, view.pendingStop, eligibleCity, unifiedAvailable, filterKey]);
   const [reload, setReload] = useState(0);
   // Radar toggles do not change the ordinary query or its pagination.
@@ -96,7 +111,8 @@ export function PlayersDirectoryPage() {
     return () => { live = false; clearTimeout(timer); };
   }, [ordinaryScope, pageCursor, reload]);
   function reset() { setName(""); setAreaKey(""); setCityId(""); setLookingOnly(false); setTrainerOnly(false); setCursor(null); }
-  const liveRadar = Boolean(activationId && eligibleCity && directory.controller?.matches(queryFilters, activationKey));
+  // Renderable authorized window (45s TTL), not refresh-due matches (30s): soft refresh must keep rows.
+  const liveRadar = Boolean(activationId && eligibleCity && directory.controller?.renderable(queryFilters, activationKey));
   const catalog = mergeRadarCatalog(players, directory.view, liveRadar);
   const cityName = cities.find(c => c.id === cityId)?.nameRu;
   return <ConsumerShell active="players" title="Игроки" hideHeading><div className="fr3 players-page" data-surface="players-directory" data-state={state}>
