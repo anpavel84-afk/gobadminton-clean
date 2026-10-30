@@ -128,6 +128,89 @@ describe("Friends S1 policy and HTTP authentication", () => {
   });
 });
 
+describe("Friends S1 Service.view retired relationship contract", () => {
+  const enabledEnv = env({
+    FRIENDS_INTERNAL_ENABLED: "1",
+    FRIENDS_REQUEST_TTL_SECONDS: "90",
+    FRIENDS_RATE_WINDOW_SECONDS: "60",
+    FRIENDS_SEND_LIMIT: "2",
+    FRIENDS_RECEIVE_LIMIT: "3",
+  });
+  const avatarClient = {
+    query: async () => ({ rows: [{ avatar_key: null, provider_url: null }] }),
+  };
+  function serviceWithEnv(config: AppEnv = enabledEnv) {
+    return Object.assign(Object.create(FriendshipsService.prototype), { env: config }) as FriendshipsService;
+  }
+  async function viewOf(
+    service: FriendshipsService,
+    actor: string,
+    friendship: FriendshipRow,
+    ctx: { profiles: Availability[]; blocked: boolean; now: Date },
+  ) {
+    return (service as unknown as {
+      view: (client: unknown, actor: string, row: FriendshipRow, ctx: unknown) => Promise<{
+        relationship: string; peer: { publicPlayerId: string } | null;
+        capabilities: { canRequest: boolean };
+        request: unknown;
+      }>;
+    }).view(avatarClient, actor, friendship, ctx);
+  }
+
+  it("retired/expired/stale-epoch eligible peers surface as none + canRequest with visible peer", async () => {
+    const service = serviceWithEnv();
+    const ctx = { profiles, blocked: false, now };
+    for (const state of ["declined", "cancelled", "removed", "blocked", "expired"] as const) {
+      const viewed = await viewOf(service, a, { ...row, state }, ctx);
+      expect(viewed).toMatchObject({
+        relationship: "none",
+        peer: { publicPlayerId: b },
+        capabilities: { canRequest: true },
+        request: null,
+      });
+    }
+    const expired = await viewOf(service, a, row, { profiles, blocked: false, now: row.expires_at! });
+    expect(expired).toMatchObject({ relationship: "none", peer: { publicPlayerId: b }, capabilities: { canRequest: true } });
+    const staleEpoch = await viewOf(service, a, row, {
+      profiles: [profiles[0]!, { ...profiles[1]!, social_action_epoch: "4" }],
+      blocked: false,
+      now,
+    });
+    expect(staleEpoch).toMatchObject({ relationship: "none", peer: { publicPlayerId: b }, capabilities: { canRequest: true } });
+  });
+
+  it("preserves accepted/pending and blocked/ineligible/disabled unavailable boundaries", async () => {
+    const service = serviceWithEnv();
+    const friends = await viewOf(service, a, { ...row, state: "accepted" }, { profiles, blocked: false, now });
+    expect(friends).toMatchObject({ relationship: "friends", peer: { publicPlayerId: b }, capabilities: { canRequest: false } });
+    const outgoing = await viewOf(service, a, row, { profiles, blocked: false, now });
+    expect(outgoing).toMatchObject({
+      relationship: "outgoing_pending",
+      peer: { publicPlayerId: b },
+      capabilities: { canRequest: false },
+    });
+    const incoming = await viewOf(service, b, row, { profiles, blocked: false, now });
+    expect(incoming).toMatchObject({ relationship: "incoming_pending", capabilities: { canRequest: false } });
+
+    const blocked = await viewOf(service, a, { ...row, state: "removed" }, { profiles, blocked: true, now });
+    expect(blocked).toMatchObject({ relationship: "unavailable", peer: null, capabilities: { canRequest: false } });
+    const ineligible = await viewOf(service, a, { ...row, state: "removed" }, {
+      profiles: [profiles[0]!, { ...profiles[1]!, directory_visible: false }],
+      blocked: false,
+      now,
+    });
+    expect(ineligible).toMatchObject({ relationship: "unavailable", peer: null, capabilities: { canRequest: false } });
+    const disabled = await viewOf(service, a, { ...row, state: "removed" }, {
+      profiles: [profiles[0]!, { ...profiles[1]!, status: "disabled" }],
+      blocked: false,
+      now,
+    });
+    expect(disabled).toMatchObject({ relationship: "unavailable", peer: null, capabilities: { canRequest: false } });
+    const featureOff = await viewOf(serviceWithEnv(env()), a, { ...row, state: "removed" }, { profiles, blocked: false, now });
+    expect(featureOff).toMatchObject({ relationship: "unavailable", peer: null, capabilities: { canRequest: false } });
+  });
+});
+
 describe("Friends S1 cursor privacy regression", () => {
   it("opaque cursor contains no internal user/pair IDs, retains public friendship pagination and actor/query binding", async () => {
     const visibleFriendshipId = "10000000-0000-4000-8000-000000000004";

@@ -230,13 +230,16 @@ export class FriendshipsService {
     const live = effectivePending(row, ctx.profiles, ctx.blocked, ctx.now);
     const accepted = row.state === "accepted" && !ctx.blocked;
     const pending = live && friendsEnabled(this.env);
+    const canRequest = canRequestAgain(row, ctx.profiles, ctx.blocked, ctx.now, friendsEnabled(this.env));
+    // Retired/expired/stale-epoch rows that may be requested again are "none", not "unavailable".
     const relationship = accepted ? "friends" : pending
-      ? row.requester_user_id === actor ? "outgoing_pending" : "incoming_pending" : "unavailable";
+      ? row.requester_user_id === actor ? "outgoing_pending" : "incoming_pending"
+      : canRequest ? "none" : "unavailable";
     return { friendshipId: row.id, relationship, version: row.version,
       request: pending ? { id: row.request_id, expiresAt: row.expires_at!.toISOString() } : null,
-      peer: visible && (accepted || pending) ? { publicPlayerId: peer.public_player_id, displayName: peer.display_name,
+      peer: visible && (accepted || pending || canRequest) ? { publicPlayerId: peer.public_player_id, displayName: peer.display_name,
         avatar: await avatarForUser(client, peerId) } : null,
-      capabilities: { canRequest: canRequestAgain(row, ctx.profiles, ctx.blocked, ctx.now, friendsEnabled(this.env)), canAccept: pending && row.recipient_user_id === actor,
+      capabilities: { canRequest, canAccept: pending && row.recipient_user_id === actor,
         canDecline: row.state === "pending" && row.recipient_user_id === actor,
         canCancel: row.state === "pending" && row.requester_user_id === actor,
         canRemove: row.state === "accepted" } };

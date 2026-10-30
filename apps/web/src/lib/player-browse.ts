@@ -390,7 +390,13 @@ export function nextEligibleBrowseIndex(
 }
 
 export function canOfferFriendship(view: FriendshipView | null | undefined): boolean {
-  return Boolean(view?.capabilities.canRequest && view.relationship === "none");
+  if (!view?.capabilities.canRequest) return false;
+  const relationship = view.relationship;
+  // Honor coherent canRequest; never treat live accepted/pending as a fresh offer.
+  if (relationship === "friends" || relationship === "outgoing_pending" || relationship === "incoming_pending") {
+    return false;
+  }
+  return relationship === "none" || relationship === "unavailable";
 }
 
 export function canOfferPlayInterest(view: PlayInterestView | null | undefined): boolean {
