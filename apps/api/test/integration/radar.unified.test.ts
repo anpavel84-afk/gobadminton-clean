@@ -1,4 +1,5 @@
-import { DEV_MOSCOW_PEER_IDS } from "../../src/radar/dev-moscow-test";
+import { DEV_MOSCOW_PEER_IDS, DEV_MOSCOW_FIXTURE_IDENTITY_SQL } from "../../src/radar/dev-moscow-test";
+import { assertFixtureActor } from "../../src/database/dev-radar-fixture-enrichment";
 import { redeemUnifiedProof } from "../../src/radar/unified-proof";
 import { GeographicRadarService } from "../../src/radar/geographic.service";
 import cookie from "@fastify/cookie";
@@ -1480,6 +1481,26 @@ dbDescribe("Unified Players / isolated synthetic PostGIS and HTTP", () => {
       const peers = first.items.filter(r => r.player.displayName.startsWith("TEST · DEV Москва"));
       expect(peers).toHaveLength(6);
       expect(peers.every(r => r.projection === "radar_public" && r.radar?.geo.gridSizeMeters === 100 && r.radar.distance !== null)).toBe(true);
+      // Seed-guard SQL (users outer alias + DEV_MOSCOW_FIXTURE_IDENTITY_SQL) against migrated Postgres.
+      const guardClient = await pool.connect();
+      try {
+        for (const [i, id] of DEV_MOSCOW_PEER_IDS.entries()) {
+          const guard = await guardClient.query<{ display_name: string; credentials: boolean; fixture: boolean; session_id: string | null }>(
+            `SELECT users.display_name,
+                    EXISTS(SELECT 1 FROM external_identities e WHERE e.user_id=users.id) credentials,
+                    ${DEV_MOSCOW_FIXTURE_IDENTITY_SQL} fixture,
+                    (SELECT s.id FROM app_sessions s WHERE s.user_id=users.id AND s.revoked_at IS NULL AND s.csrf_ciphertext='!fixture-no-login' AND s.expires_at>clock_timestamp() ORDER BY s.created_at DESC LIMIT 1) session_id
+             FROM users JOIN player_social_profiles p ON p.user_id=users.id WHERE users.id=$1`,
+            [id],
+          );
+          expect(guard.rows[0]?.display_name).toBe(`TEST · DEV Москва ${i + 1}`);
+          expect(guard.rows[0]?.credentials).toBe(false);
+          expect(guard.rows[0]?.fixture).toBe(true);
+          expect(guard.rows[0]?.session_id).toBeTruthy();
+          const actor = await assertFixtureActor(guardClient, id);
+          expect(actor.sessionId).toBe(guard.rows[0]!.session_id);
+        }
+      } finally { guardClient.release(); }
       const evidence = await pool.query(`SELECT r.*,ST_AsText(coarse_center) center FROM radar_presences r WHERE user_id=ANY($1::uuid[])`, [DEV_MOSCOW_PEER_IDS]);
       expect(new Set(evidence.rows.map(r => r.center)).size).toBe(6);
       for (const r of evidence.rows) {

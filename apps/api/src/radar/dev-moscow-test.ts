@@ -32,13 +32,13 @@ export const DEV_MOSCOW_FIXTURE_IDENTITY_SQL = `EXISTS(SELECT 1 FROM app_session
   AND NOT EXISTS(SELECT 1 FROM app_sessions other WHERE other.user_id=$1 AND other.csrf_ciphertext<>'!fixture-no-login')
   AND (NOT p.directory_visible OR (p.directory_visible AND p.city_id IS NOT NULL AND p.consent_policy_version IS NOT NULL AND p.opted_in_at IS NOT NULL)))`;
 
-/** Exact DEV gate and authenticated actor fence precede all fixture SQL. Caller owns the transaction. */
-export async function refreshDevMoscowPeers(
-  client: PoolClient, env: AppEnv, fence: ActorFenceService,
-  actor: { actorId: string; sessionId: string },
-) {
-  if (!devMoscowFixturesEnabled(env) || DEV_MOSCOW_PEER_IDS.includes(actor.actorId)) throw new Error("DEV fixtures disabled");
-  await fence.assertActiveConsumerInTransaction(client, actor);
+/**
+ * Trusted DEV fixture lifecycle for the six reserved !fixture-no-login identities.
+ * Caller owns the transaction and must already hold the exact DEV gate. No actor fence,
+ * cookie, bearer, or provider login — used by HTTP path after fence and by seed --apply.
+ */
+export async function ensureDevMoscowFixtureSessions(client: PoolClient, env: AppEnv) {
+  if (!devMoscowFixturesEnabled(env)) throw new Error("DEV fixtures disabled");
   // Serialize fixture writers before checking due dates. No work/timer on continuation.
   await client.query("SELECT pg_advisory_xact_lock(hashtextextended('radar-dev-moscow-peers',0))");
   const active = await client.query<{ user_id: string }>(
@@ -92,4 +92,14 @@ export async function refreshDevMoscowPeers(
       VALUES($1,$2,$3,1,$4,$5,clock_timestamp(),clock_timestamp()+interval '15 minutes',clock_timestamp()+interval '30 minutes',clock_timestamp()+interval '15 minutes',clock_timestamp()+interval '15 minutes',clock_timestamp()+interval '5 minutes',clock_timestamp(),clock_timestamp(),0,$6,$7,ST_SetSRID(ST_MakePoint($8::float8,$9::float8),4326)::geography,5,$10,$11,$12,25,to_timestamp($13::float8/1000))`,
       [id, randomUUID(), sessionId, UNIFIED_POLICY, point.regionId, point.cellI, point.cellJ, point.longitude, point.latitude, receipt.rows[0]!.id, point.model, point.grid, point.capturedAt]);
   }
+}
+
+/** Exact DEV gate and authenticated actor fence precede all fixture SQL. Caller owns the transaction. */
+export async function refreshDevMoscowPeers(
+  client: PoolClient, env: AppEnv, fence: ActorFenceService,
+  actor: { actorId: string; sessionId: string },
+) {
+  if (!devMoscowFixturesEnabled(env) || DEV_MOSCOW_PEER_IDS.includes(actor.actorId)) throw new Error("DEV fixtures disabled");
+  await fence.assertActiveConsumerInTransaction(client, actor);
+  await ensureDevMoscowFixtureSessions(client, env);
 }

@@ -144,25 +144,37 @@ export class UnifiedDirectoryController {
    * before validUntil; matching TTL alone left a blank gap after tick expiry.
    */
   matches(filters: UnifiedFilters, activationKey: string | null) {
-    const snapshot = this.view.snapshot;
-    if (!snapshot || JSON.stringify(this.filters) !== JSON.stringify(filters) || this.activationOriginKey !== activationKey) return false;
-    const until = Date.parse(snapshot.validUntil);
+    if (!this.renderable(filters, activationKey)) return false;
+    const snapshot = this.view.snapshot!;
     const generated = Date.parse(snapshot.generatedAt);
-    if (!Number.isFinite(until) || until <= this.clock() || !Number.isFinite(generated)) return false;
+    if (!Number.isFinite(generated)) return false;
     const refreshAfterSeconds = typeof snapshot.refreshAfterSeconds === "number" ? snapshot.refreshAfterSeconds : 30;
     return this.clock() < generated + refreshAfterSeconds * 1000;
+  }
+  /**
+   * Authorized window still showable in the list/map: same filters/activation,
+   * non-stale, current auth, and within validUntil — independent of refresh-due.
+   * Soft refresh may leave matches() false while rows remain renderable.
+   */
+  renderable(filters: UnifiedFilters, activationKey: string | null) {
+    const snapshot = this.view.snapshot;
+    if (!snapshot || this.view.mode !== "unified" || this.view.stale || this.view.authenticationRequired || this.view.capabilityUnavailable) return false;
+    if (JSON.stringify(this.filters) !== JSON.stringify(filters) || this.activationOriginKey !== activationKey) return false;
+    const until = Date.parse(snapshot.validUntil);
+    return Number.isFinite(until) && until > this.clock();
   }
   /**
    * Absolute clock when RadarPage may next soft-refresh / retry.
    * Honours 30s initial cooldown and 429 retryAt; while a request is pending,
    * callers should await settlement (subscribe) instead of busy-looping.
+   * After invalidate (409/410/429), gate alone decides — no extra fixed 30s wait.
    */
   nextRefreshAt() {
     const now = this.clock();
     const gate = Math.max(this.nextInitial, this.retryAt);
     if (this.pending) return Math.max(gate, now + 1000);
     const snapshot = this.view.snapshot;
-    if (!snapshot) return gate > now ? gate : now + 30000;
+    if (!snapshot) return Math.max(gate, now);
     const generated = Date.parse(snapshot.generatedAt);
     const until = Date.parse(snapshot.validUntil);
     if (!Number.isFinite(generated) || !Number.isFinite(until)) return Math.max(gate, now + 30000);
@@ -199,7 +211,11 @@ export class UnifiedDirectoryController {
       this.invalidate("Участники Radar сейчас недоступны. Можно пользоваться обычным каталогом.");
       this.set({ mode: "ordinary", capabilityUnavailable: true }); return;
     }
-    if (result.status === 429) this.retryAt = this.clock() + (result.retryAfterSeconds ?? 60) * 1000;
+    if (result.status === 429) {
+      this.retryAt = this.clock() + (result.retryAfterSeconds ?? 60) * 1000;
+      // Honour server Retry-After only; do not stack another fixed 30s initial wait.
+      this.nextInitial = 0;
+    }
     // 409/410 are recoverable with a fresh current_activation initial; do not keep the
     // prior 30s initial gate that would leave list/map blank until cooldown ends.
     if (result.status === 409 || result.status === 410) this.nextInitial = 0;
@@ -244,8 +260,9 @@ export class UnifiedDirectoryController {
         // Activation version churn during the 30s initial gate: keep the still-valid
         // authorized window instead of blanking list/map until the gate opens.
         if (filterSame && sameActivationId && liveSnapshot) {
+          // Keep the authorized window renderable; do not mark stale (mergeRadarCatalog hides stale).
           this.activationOriginKey = activationKey;
-          this.set({ stale: true, notice: "Обновляем участников Radar…" });
+          this.set({ notice: "Обновляем участников Radar…" });
           return;
         }
         this.invalidate();

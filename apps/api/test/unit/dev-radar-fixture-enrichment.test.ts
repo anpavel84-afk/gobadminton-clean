@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
-  DEV_MOSCOW_PEER_IDS,
   FIXTURE_PERSONAS,
+  fixtureHostPublicContact,
   gameTitle,
   operationId,
   parseEnrichmentArgs,
@@ -11,6 +11,7 @@ import {
   validateManifest,
   type EnrichmentManifest,
 } from "../../src/database/dev-radar-fixture-enrichment";
+import { DEV_MOSCOW_PEER_IDS } from "../../src/radar/dev-moscow-test";
 import { MOSCOW_CITY_ID } from "../../src/venues/venues.service";
 
 const asOf = "2026-10-30T00:00:00.000Z";
@@ -94,5 +95,13 @@ describe("dev radar fixture enrichment planning", () => {
     expect(Date.parse(schedule.startsAt)).toBeGreaterThan(Date.parse(asOf));
     expect(Date.parse(schedule.endsAt)).toBeGreaterThan(Date.parse(schedule.startsAt));
     expect(Date.parse(schedule.deadlineAt)).toBeLessThanOrEqual(Date.parse(schedule.startsAt));
+  });
+
+  it("uses a truthful Russian fixture contact notice without fake phone/email/link", () => {
+    const contact = fixtureHostPublicContact(3);
+    expect(contact).toMatch(/фикстура DEV Москва 3/);
+    expect(contact).toMatch(/контакт недоступен/i);
+    expect(contact).not.toMatch(/@|https?:|\+\d|telegram:/i);
+    expect(contact).not.toMatch(/fixture-no-contact/);
   });
 });

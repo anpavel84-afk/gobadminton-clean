@@ -18,10 +18,16 @@ import { createDatabase } from "./client";
 import {
   DEV_MOSCOW_PEER_IDS,
   DEV_MOSCOW_FIXTURE_IDENTITY_SQL,
+  ensureDevMoscowFixtureSessions,
   devMoscowFixturesEnabled,
 } from "../radar/dev-moscow-test";
 import { MOSCOW_CITY_ID } from "../venues/venues.service";
 import { DIRECTORY_CONSENT_POLICY_VERSION } from "../profiles/constants";
+
+/** Truthful Russian notice: fictitious DEV organizer, contact unavailable. Never a fake phone/email/link. */
+export function fixtureHostPublicContact(ordinal: number): string {
+  return `Организатор тестовый (фикстура DEV Москва ${ordinal}); контакт недоступен`;
+}
 
 export type FixturePersona = {
   userId: string;
@@ -226,8 +232,11 @@ async function readBoundedFile(filePath: string, limit: number): Promise<Buffer>
   }
 }
 
-async function assertFixtureActor(client: PoolClient, userId: string): Promise<{ sessionId: string; publicPlayerId: string; version: number }> {
+/** Outer table must stay `users` (no alias): DEV_MOSCOW_FIXTURE_IDENTITY_SQL correlates to users.display_name. */
+export async function assertFixtureActor(client: PoolClient, userId: string): Promise<{ sessionId: string; publicPlayerId: string; version: number }> {
   if (!DEV_MOSCOW_PEER_IDS.includes(userId)) throw new Error("FOREIGN_IDENTITY");
+  const expectedName = FIXTURE_PERSONAS.find((p) => p.userId === userId)?.displayName;
+  if (!expectedName) throw new Error("FOREIGN_IDENTITY");
   const row = await client.query<{
     display_name: string;
     credentials: boolean;
@@ -236,17 +245,17 @@ async function assertFixtureActor(client: PoolClient, userId: string): Promise<{
     public_player_id: string;
     version: number;
   }>(
-    `SELECT u.display_name,
-            EXISTS(SELECT 1 FROM external_identities e WHERE e.user_id=u.id) credentials,
+    `SELECT users.display_name,
+            EXISTS(SELECT 1 FROM external_identities e WHERE e.user_id=users.id) credentials,
             ${DEV_MOSCOW_FIXTURE_IDENTITY_SQL} fixture,
-            (SELECT s.id FROM app_sessions s WHERE s.user_id=u.id AND s.revoked_at IS NULL AND s.csrf_ciphertext='!fixture-no-login' AND s.expires_at>clock_timestamp() ORDER BY s.created_at DESC LIMIT 1) session_id,
+            (SELECT s.id FROM app_sessions s WHERE s.user_id=users.id AND s.revoked_at IS NULL AND s.csrf_ciphertext='!fixture-no-login' AND s.expires_at>clock_timestamp() ORDER BY s.created_at DESC LIMIT 1) session_id,
             p.public_player_id, p.version
-     FROM users u JOIN player_social_profiles p ON p.user_id=u.id WHERE u.id=$1`,
+     FROM users JOIN player_social_profiles p ON p.user_id=users.id WHERE users.id=$1`,
     [userId],
   );
   const current = row.rows[0];
   if (!current) throw new Error("FIXTURE_NOT_MATERIALIZED");
-  if (current.credentials || !current.fixture) throw new Error("FIXTURE_IDENTITY_COLLISION");
+  if (current.display_name !== expectedName || current.credentials || !current.fixture) throw new Error("FIXTURE_IDENTITY_COLLISION");
   if (!current.session_id) throw new Error("FIXTURE_SESSION_INACTIVE");
   return { sessionId: current.session_id, publicPlayerId: current.public_player_id, version: current.version };
 }
@@ -265,10 +274,33 @@ export async function loadDryRunReport(pool: Pool, manifest: EnrichmentManifest)
       profile,
       gameTitles: games.rows.map((g) => g.title),
     });
+    // Readonly fixture session status for operators; never materializes or renews in dry-run.
+    const fixture = await pool.query<{
+      display_name: string | null;
+      credentials: boolean;
+      fixture: boolean;
+      session_id: string | null;
+      session_expires_at: Date | null;
+    }>(
+      `SELECT users.display_name,
+              EXISTS(SELECT 1 FROM external_identities e WHERE e.user_id=users.id) credentials,
+              COALESCE(${DEV_MOSCOW_FIXTURE_IDENTITY_SQL}, false) fixture,
+              (SELECT s.id FROM app_sessions s WHERE s.user_id=users.id AND s.revoked_at IS NULL AND s.csrf_ciphertext='!fixture-no-login' AND s.expires_at>clock_timestamp() ORDER BY s.created_at DESC LIMIT 1) session_id,
+              (SELECT s.expires_at FROM app_sessions s WHERE s.user_id=users.id AND s.revoked_at IS NULL AND s.csrf_ciphertext='!fixture-no-login' ORDER BY s.created_at DESC LIMIT 1) session_expires_at
+       FROM users WHERE users.id=$1`,
+      [persona.userId],
+    );
+    const status = fixture.rows[0];
+    let fixtureStatus: string;
+    if (!status || !status.display_name) fixtureStatus = "FIXTURE_MISSING";
+    else if (status.display_name !== persona.displayName || status.credentials || !status.fixture) fixtureStatus = "FIXTURE_IDENTITY_COLLISION";
+    else if (!status.session_id) fixtureStatus = status.session_expires_at ? "FIXTURE_SESSION_EXPIRED" : "FIXTURE_SESSION_MISSING";
+    else fixtureStatus = "FIXTURE_SESSION_ACTIVE";
     report.push({
       ...plan,
       publicPlayerId: profile?.public_player_id ?? null,
       existingGames: games.rows.map((g) => ({ id: g.id, title: g.title, status: g.status })),
+      fixtureStatus,
       mode: "dry-run",
     });
   }
@@ -424,7 +456,7 @@ async function applyPersona(
         operationId(manifest, persona.userId, "game", String(slot)),
         {
           hostDisplayName: persona.displayName,
-          hostPublicContact: `fixture-no-contact:TEST-DEV-Moscow-${persona.ordinal}`,
+          hostPublicContact: fixtureHostPublicContact(persona.ordinal),
           venueId: manifest.venueId,
           title,
           startsAt: schedule.startsAt,
@@ -493,18 +525,40 @@ export async function main(argv: string[], rawEnv: NodeJS.ProcessEnv = process.e
       throw new Error("MEDIA_PIPELINE_UNAVAILABLE");
     }
     // Nest boots only for --apply so dry-run/unit imports stay free of CoreModule side effects.
+    // Minimal transient context: Core + Profiles + Games (+ JobEnqueue DI). No AppModule/JobsModule workers.
     await import("reflect-metadata");
+    const { Module, Global } = await import("@nestjs/common");
     const { NestFactory } = await import("@nestjs/core");
-    const { AppModule } = await import("../app.module");
+    const { CoreModule } = await import("../core.module");
+    const { ProfilesModule } = await import("../profiles/profiles.module");
+    const { GamesModule } = await import("../games/games.module");
+    const { JobEnqueueService } = await import("../jobs/job-enqueue.service");
     const { ProfilesService } = await import("../profiles/profiles.service");
     const { AvatarService } = await import("../profiles/avatar.service");
     const { GamesService } = await import("../games/games.service");
     const { APP_ENV, DATABASE_POOL } = await import("../tokens");
-    const app = await NestFactory.createApplicationContext(AppModule, { logger: false });
+    @Global()
+    @Module({ providers: [JobEnqueueService], exports: [JobEnqueueService] })
+    class EnrichmentJobEnqueueBridge {}
+    @Module({ imports: [CoreModule, EnrichmentJobEnqueueBridge, ProfilesModule, GamesModule] })
+    class EnrichmentApplyModule {}
+    const app = await NestFactory.createApplicationContext(EnrichmentApplyModule, { logger: false });
     try {
       const runtimeEnv = app.get<AppEnv>(APP_ENV);
       if (!devMoscowFixturesEnabled(runtimeEnv)) throw new Error("DEV_MOSCOW_GATE_REFUSED");
       const runtimePool = app.get<Pool>(DATABASE_POOL);
+      // Trusted --apply may renew the six fixture sessions without Owner login priming.
+      const boot = await runtimePool.connect();
+      try {
+        await boot.query("BEGIN");
+        await ensureDevMoscowFixtureSessions(boot, runtimeEnv);
+        await boot.query("COMMIT");
+      } catch (error) {
+        await boot.query("ROLLBACK").catch(() => undefined);
+        throw error;
+      } finally {
+        boot.release();
+      }
       const services: ApplyServices = {
         profiles: app.get(ProfilesService),
         avatars: app.get(AvatarService),
@@ -522,7 +576,7 @@ export async function main(argv: string[], rawEnv: NodeJS.ProcessEnv = process.e
       return failed === 0 ? 0 : 1;
     } finally {
       await app.close();
-      await AppModule.close().catch(() => undefined);
+      await CoreModule.close().catch(() => undefined);
     }
   } finally {
     await pool.end();
