@@ -72,10 +72,16 @@ export function DiscoveryGameCard({ game }: { game: Game }) {
   const when = discoveryGameWhen(game);
   const format = discoveryFormat(game.formatKey);
   const { cardRef, contentRef, layout } = useFeedCardLayout();
-  return <article ref={cardRef} className={`gb-discovery-card${trainer ? " gb-discovery-card--trainer" : ""}`} data-activity={game.activityKind} data-layout={layout}>
+  const trainerMarker =
+    trainer && game.trainer
+      ? `С тренером. Тренер · самостоятельно указано: ${game.trainer.displayName}`
+      : trainer
+        ? "С тренером"
+        : "Обычная игра";
+  return <article ref={cardRef} className="gb-discovery-card" data-activity={game.activityKind} data-layout={layout}>
     <div className="gb-discovery-card__image">
       <GameCover game={game} />
-      <span className="gb-discovery-type">{trainer ? "С тренером" : "Обычная игра"}</span>
+      <span className="gb-discovery-type" title={trainer && game.trainer ? `Тренер · самостоятельно указано: ${game.trainer.displayName}` : undefined} aria-label={trainerMarker}>{trainer ? "С тренером" : "Обычная игра"}</span>
     </div>
     <div className="gb-discovery-card__content" ref={contentRef}>
       <div className="gb-discovery-card__topline"><span>{when.day}</span><span className="gb-discovery-spots" data-full={game.availablePlaces <= 0 || game.status !== "published"}>{formatSeats(game)}</span></div>
@@ -85,14 +91,10 @@ export function DiscoveryGameCard({ game }: { game: Game }) {
       <p className="gb-discovery-address"><DiscoveryIcon name="pin" />{game.venue.address}</p>
       <div className="gb-discovery-meta"><span>Уровень: {game.levelRule.allowedLevelIds.join(", ")}</span>{format && <span>{format}</span>}</div>
       <p className="gb-discovery-terms">{settlementTerms(game.settlement)}</p>
-      {trainer && game.trainer && <div className="gb-game-identity gb-discovery-trainer">
-        <Avatar className="gb-discovery-avatar" name={game.trainer.displayName} />
-        <span><small>Тренер · самостоятельно указано</small><strong>{game.trainer.displayName}</strong></span>
-      </div>}
       <div className="gb-discovery-host">
         <Avatar className="gb-discovery-avatar" name={host} avatar={game.organizer.avatar} />
         <span><small>Организатор</small><strong>{host}</strong></span>
-        <div className="gb-discovery-card__actions"><Link className={`gb-c23-btn gb-c23-btn--${trainer ? "dark" : "outline"}`} href={`/games/${game.id}`} aria-label={`Подробнее: ${game.title}`}><span>Подробнее</span><DiscoveryIcon name="arrow" /></Link><GameShare gameId={game.id} /></div>
+        <div className="gb-discovery-card__actions"><Link className="gb-c23-btn gb-c23-btn--outline" href={`/games/${game.id}`} aria-label={`Подробнее: ${game.title}`}><span>Подробнее</span><DiscoveryIcon name="arrow" /></Link><GameShare gameId={game.id} /></div>
       </div>
     </div>
   </article>;

@@ -140,27 +140,12 @@ button.gb-close-button.gb-close-button:disabled {
   margin-top: 12px;
 }
 
-.gb-c23-card--trainer {
-  border-color: #7945de59;
-  box-shadow: inset 5px 0 0 var(--c23-purple);
-}
-
-.gb-c23-card--trainer:hover {
-  box-shadow: inset 5px 0 0 var(--c23-purple), var(--c23-shadow);
-}
-
 .gb-c23-card__media {
   min-height: 100%;
   background:
     linear-gradient(160deg, var(--c23-lime-soft) 0%, var(--c23-surface) 55%, var(--c23-purple-soft) 100%),
     radial-gradient(circle at 30% 20%, var(--c23-yellow) 0 12%, transparent 13%);
   position: relative;
-}
-
-.gb-c23-card--trainer .gb-c23-card__media {
-  background:
-    linear-gradient(160deg, var(--c23-purple-soft) 0%, var(--c23-surface) 50%, var(--c23-lime-soft) 100%),
-    radial-gradient(circle at 70% 30%, var(--c23-yellow) 0 10%, transparent 11%);
 }
 
 .gb-c23-card__media::after {
