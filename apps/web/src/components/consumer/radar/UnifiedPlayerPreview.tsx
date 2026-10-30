@@ -3,7 +3,14 @@ import { useEffect, useRef, useState } from "react";
 import { formatSocialLevel } from "../../../lib/player-presentation";
 import { distanceText, liveUnifiedPreview } from "../../../lib/unified-directory";
 import type { UnifiedUpcomingGame } from "@gobadminton/contracts";
+import type { PublicPlayer } from "../../../lib/consumer-types";
 import { Avatar, Badge, ProfileDialog } from "../players/ProfileComposition";
+import {
+  browsePeerMediaKey,
+  PreparedBrowseAvatar,
+  subscribeRadarPreparedMedia,
+  takeRadarPreparedMedia,
+} from "../players/PlayerBrowseMedia";
 import { PublicPlayerProfile, reportUnknownScopeKey } from "../players/PublicPlayerProfile";
 import { Button } from "../Button";
 import { CloseButton } from "../CloseButton";
@@ -58,6 +65,14 @@ export function UnifiedPlayerPreview({ dialog = false, onClose, expanded: contro
   const preview = directory.view.preview;
   const now = Date.now();
   const safePreview = preview && row && liveUnifiedPreview(preview, row.publicPlayerId, now) ? preview : null;
+  const [, setMediaTick] = useState(0);
+  // Provider owns prewarm lifecycle; subscribe to end-of-load commits (no fixed 200ms timeout).
+  useEffect(() => subscribeRadarPreparedMedia(() => setMediaTick(n => n + 1)), []);
+  // Default session matches RadarAuthorizedMediaPrewarm; catalog mediaKey may omit cover until GET.
+  const preparedMedia = row
+    ? (takeRadarPreparedMedia(row.publicPlayerId, browsePeerMediaKey(row.player as PublicPlayer))
+      ?? takeRadarPreparedMedia(row.publicPlayerId))
+    : null;
   const deadline = Math.min(
     Date.parse(directory.view.snapshot?.validUntil ?? "invalid"),
     Date.parse(row?.radar?.validUntil ?? "invalid"),
@@ -129,10 +144,14 @@ export function UnifiedPlayerPreview({ dialog = false, onClose, expanded: contro
   </>;
 
   if (surface === "compact") {
+    const avatarTone = safePreview?.player.trainer ? "purple" : "yellow";
+    // Compact must not bind retained DOM nodes — detail/PublicPlayerProfile owns them (#404 steal).
     return <div className="gb-venue-preview unified-preview is-compact" data-preview-mode="compact" role="region" aria-label={safePreview ? `Кратко: ${safePreview.player.displayName}` : "Карточка игрока"}>
       {statusBlock}
       {safePreview && <button type="button" className="gb-venue-preview-button" aria-label={`Открыть игрока ${safePreview.player.displayName}`} onClick={() => onOpen?.()}>
-        <span className="gb-venue-preview-cover unified-preview__compact-cover"><Avatar name={safePreview.player.displayName} avatar={safePreview.player.avatar} tone={safePreview.player.trainer ? "purple" : "yellow"} /></span>
+        <span className="gb-venue-preview-cover unified-preview__compact-cover">
+          <Avatar name={safePreview.player.displayName} avatar={safePreview.player.avatar} tone={avatarTone} />
+        </span>
         <span className="gb-venue-preview-copy">
           <strong>{safePreview.player.displayName}</strong>
           {levelLabel && <span className="gb-venue-preview-address">{levelLabel}{safePreview.player.trainer ? " · Тренер" : ""}</span>}
@@ -154,6 +173,7 @@ export function UnifiedPlayerPreview({ dialog = false, onClose, expanded: contro
       embedded
       distance={distance}
       titleAs="h2"
+      preparedMedia={preparedMedia}
       contactActions={view.me
         ? <RadarContact key={row.radar.resultRef} me={view.me} item={{ resultId: row.radar.resultId, resultRef: row.radar.resultRef, player: safePreview.player }} />
         : undefined}
@@ -196,7 +216,9 @@ export function UnifiedPlayerPreview({ dialog = false, onClose, expanded: contro
   const body = <div ref={focus} tabIndex={-1} className={`unified-preview ${expanded ? "is-expanded" : "is-compact"}`} data-preview-mode={expanded ? "expanded" : "compact"} data-player-view={gamesView ? "games" : "profile"} onKeyDown={e => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); if (gamesView) setGamesView(false); else onClose(); } }}>
     {statusBlock}
     {safePreview && !expanded && <article className="unified-preview__compact radar-player-preview" aria-label={`Кратко: ${safePreview.player.displayName}`}>
-      <Avatar name={safePreview.player.displayName} avatar={safePreview.player.avatar} tone={safePreview.player.trainer ? "purple" : "yellow"} />
+      {preparedMedia
+        ? <PreparedBrowseAvatar media={preparedMedia.avatar} name={safePreview.player.displayName} tone={safePreview.player.trainer ? "purple" : "yellow"} />
+        : <Avatar name={safePreview.player.displayName} avatar={safePreview.player.avatar} tone={safePreview.player.trainer ? "purple" : "yellow"} />}
       <div className="unified-preview__compact-body">
         <span className="unified-preview__title-row"><h2>{safePreview.player.displayName}</h2>{safePreview.player.trainer && <Badge trainer>Тренер</Badge>}</span>
         {levelLabel && <strong>{levelLabel}</strong>}

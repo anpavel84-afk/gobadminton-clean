@@ -1238,14 +1238,24 @@
   gap: 8px;
 }
 
-.gb-player-browse .pb-radar-foot {
+/* Overlay map CTA above the list — mirrors games map entry; does not move toolbar controls. */
+.gb-player-browse .gb-players-map-cta {
   display: flex;
-  align-items: center;
   justify-content: center;
-  gap: 8px;
-  margin: 22px 0 12px;
-  color: #7b8679;
-  font-size: 10px;
+  padding: 10px 0 4px;
+  pointer-events: none;
+}
+.gb-player-browse .gb-players-map-cta > a,
+.gb-player-browse .gb-players-map-cta > button {
+  pointer-events: auto;
+}
+/* Hide map CTA in mobile cards only; desktop cards keep the shared upper entry. */
+.gb-player-browse[data-browse-view="cards"]:not([data-directory-desktop="true"]) .gb-players-map-cta {
+  display: none;
+}
+/* Mobile fullscreen swipe cards: keep CTA out of the gesture surface. */
+.pb-mobile-fs .gb-players-map-cta {
+  display: none;
 }
 
 .gb-player-browse .pb-slide-frame {

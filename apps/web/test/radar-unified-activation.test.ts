@@ -1,8 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { RadarController } from "../src/lib/radar-controller";
 import { DEMO_MOSCOW_CITY_ID } from "../src/lib/radar-demo-fix";
+import { confirmedSessionDeadline, effectiveDeadline, remainingTime } from "../src/lib/radar-presentation";
+import { radarRingFraction } from "../src/lib/radar-header";
 import type { RadarConfig } from "../src/lib/unified-directory";
 import type { apiFetch } from "../src/lib/api-client";
+import type { RadarActivation } from "../src/lib/radar-types";
+import type { RadarView } from "../src/lib/radar-controller";
 const policy = "radar-geographic-sharing-v2";
 const wire = "players-unified-radar-v1";
 const disclosure = { id: "radar-geographic-sharing-v2.ru.v1", sha256: "4db62187f338a24b05cecd1a379da01e64027161e3171043c1c6233546fac19f", text: "Передаю геопозицию пока Radar включён", locale: "ru" as const };
@@ -13,6 +17,27 @@ function harness() {
   const controller = new RadarController(request); controller.configure(config); controller.setResultView("none");
   return { controller, request };
 }
+describe("session timer vs foreground pulse", () => {
+  it("default 15m display uses expiresAt∩hardExpiresAt while authority still uses effectiveDeadline", () => {
+    const origin = Date.parse("2030-01-01T00:00:00Z");
+    const activation = {
+      state: "active", activationId: "a", version: 1, ownerHere: true, policyVersion: policy, exposureMode: "live",
+      regionId: "moscow", radiusBucketKm: 5, startedAt: new Date(origin).toISOString(),
+      expiresAt: new Date(origin + 15 * 60000).toISOString(),
+      hardExpiresAt: new Date(origin + 60 * 60000).toISOString(),
+      foregroundUntil: new Date(origin + 90 * 1000).toISOString(),
+      locationValidUntil: new Date(origin + 360 * 1000).toISOString(),
+      nextLocationUpdateAt: new Date(origin + 300 * 1000).toISOString(),
+      nextRadiusChangeAt: new Date(origin).toISOString(),
+    } as RadarActivation;
+    expect(effectiveDeadline(activation)).toBe(origin + 90_000);
+    expect(confirmedSessionDeadline(activation)).toBe(origin + 15 * 60_000);
+    expect(remainingTime(new Date(confirmedSessionDeadline(activation)).toISOString(), origin)).toBe("15:00");
+    const view = { phase: "active", confirmedOn: true, now: origin, status: activation } as RadarView;
+    expect(radarRingFraction(view)).toBeCloseTo(1, 5);
+    expect(radarRingFraction({ ...view, now: origin + 90_000 })).toBeGreaterThan(0.8);
+  });
+});
 describe("negotiated v2 sharing", () => {
   it("cold/off/permission do not acquire; explicit start sends the exact receipt with no old profile consent PATCH", async () => {
     const { controller, request } = harness(); const acquire = vi.fn(async () => fix);

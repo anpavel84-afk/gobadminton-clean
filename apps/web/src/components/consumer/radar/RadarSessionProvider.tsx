@@ -3,14 +3,19 @@ import { usePathname } from "next/navigation";
 import { createContext, useContext, useEffect, useId, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { radarHeaderStatus, radarRingFraction } from "../../../lib/radar-header";
 import { RadarController, type RadarView } from "../../../lib/radar-controller";
-import { effectiveDeadline, remainingTime } from "../../../lib/radar-presentation";
+import { confirmedSessionDeadline, remainingTime } from "../../../lib/radar-presentation";
 import { Button } from "../Button";
 import { AuthEntry, ProfileDialog } from "../players/ProfileComposition";
+import {
+  clearRadarPreparedMedia,
+  prewarmRadarPeerMedia,
+  selectRadarMediaPrewarmPeers,
+} from "../players/PlayerBrowseMedia";
 import { syntheticDemoFix } from "../../../lib/radar-demo-fix";
 import { apiFetch } from "../../../lib/api-client";
 import { devMoscowFix, usesDevMoscowLocation } from "../../../lib/radar-dev-moscow";
 import { UnifiedDirectoryController, compatibleRadarConfig, type RadarConfig } from "../../../lib/unified-directory";
-import type { OwnSocialProfile } from "../../../lib/consumer-types";
+import type { OwnSocialProfile, PublicPlayer } from "../../../lib/consumer-types";
 import { isAdmittedDemoCity } from "../../../lib/radar-demo-fix";
 import type { RadarFix } from "../../../lib/radar-types";
 
@@ -102,10 +107,87 @@ export function RadarSessionProvider({ children }: { children: ReactNode }) {
   }, [sessionEpoch]);
   useEffect(() => {
     if (!controller) return;
+    // Unified directory owns results; keep resultView none across consumer routes.
     controller.setResultView("none");
+  }, [controller]);
+  useEffect(() => {
+    if (!controller) return;
+    // Identity fence on real route changes only — venue/game panel overlays must not
+    // re-enter checkIdentity and disturb an authorized Radar window.
     void controller.checkIdentity();
   }, [controller, pathname]);
-  return <Session.Provider value={controller}><Unified.Provider value={unified}><Configuration.Provider value={config}><Directory.Provider value={{ filters, update: patch => setFilters(previous => ({ ...previous, ...patch })) }}><RadarPermissionObserver />{children}</Directory.Provider></Configuration.Provider></Unified.Provider></Session.Provider>;
+  return <Session.Provider value={controller}><Unified.Provider value={unified}><Configuration.Provider value={config}><Directory.Provider value={{ filters, update: patch => setFilters(previous => ({ ...previous, ...patch })) }}><RadarPermissionObserver /><RadarAuthorizedMediaPrewarm />{children}</Directory.Provider></Configuration.Provider></Unified.Provider></Session.Provider>;
+}
+/**
+ * Owns bounded Radar peer media lifecycle ahead of map/profile open.
+ * UnifiedPlayerPreview only consumes prepared nodes — it must not be the sole warmer.
+ */
+function RadarAuthorizedMediaPrewarm() {
+  const directory = useUnifiedDirectory();
+  const { view } = useRadarSession();
+  const activation = view.status?.state === "active" && view.confirmedOn && !view.pendingStop
+    ? view.status
+    : null;
+  const activationId = activation?.activationId ?? null;
+  const activationVersion = activation && "version" in activation ? activation.version : null;
+  useEffect(() => {
+    const me = view.me;
+    const snapshot = directory.view.snapshot;
+    const authorized = Boolean(
+      me
+      && activation
+      && directory.view.mode === "unified"
+      && !directory.view.stale
+      && !directory.view.authenticationRequired
+      && !directory.view.capabilityUnavailable
+      && snapshot
+      && Number.isFinite(Date.parse(snapshot.validUntil))
+      && Date.parse(snapshot.validUntil) > Date.now(),
+    );
+    if (!authorized || !me || !activation) {
+      clearRadarPreparedMedia();
+      return;
+    }
+    const now = Date.now();
+    const peers = [...directory.view.pins, ...directory.view.rows].filter(row =>
+      row.radar && Number.isFinite(Date.parse(row.radar.validUntil)) && Date.parse(row.radar.validUntil) > now);
+    const deduped: typeof peers = [];
+    const seen = new Set<string>();
+    for (const row of peers) {
+      if (seen.has(row.publicPlayerId)) continue;
+      seen.add(row.publicPlayerId);
+      deduped.push(row);
+    }
+    const selectedId = directory.view.selected;
+    const neighborhood = selectRadarMediaPrewarmPeers(deduped, selectedId, 4);
+    const keep = new Set(neighborhood.map(row => row.publicPlayerId));
+    clearRadarPreparedMedia(id => keep.has(id));
+    const sessionKey = `${me.id}:${me.csrfToken}:${activation.activationId}:${"version" in activation ? activation.version : 0}`;
+    const retainIds = [...keep];
+    for (const row of neighborhood) {
+      // Public GET cover metadata for known authorized peers — not private proofs.
+      prewarmRadarPeerMedia(row.player as PublicPlayer, {
+        resolveCover: true,
+        sessionKey,
+        retainIds,
+      });
+    }
+  }, [
+    directory.view.pins,
+    directory.view.rows,
+    directory.view.selected,
+    directory.view.snapshot?.query.queryRef,
+    directory.view.snapshot?.validUntil,
+    directory.view.mode,
+    directory.view.stale,
+    directory.view.authenticationRequired,
+    directory.view.capabilityUnavailable,
+    view.me?.id,
+    view.me?.csrfToken,
+    activationId,
+    activationVersion,
+  ]);
+  return null;
 }
 function RadarPermissionObserver() {
   const { controller, view } = useRadarSession();
@@ -131,25 +213,11 @@ export function RadarStatusAffordance({ mapControls = false }: { mapControls?: b
   const [open, setOpen] = useState(false);
   const host = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const outside = (event: PointerEvent) => {
-      if (!host.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const escape = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !document.querySelector("dialog[open]") && !(event.target instanceof Element && event.target.closest("[role=dialog]") && !host.current?.contains(event.target))) {
-        event.preventDefault();
-        setOpen(false);
-        trigger.current?.focus();
-      }
-    };
-    document.addEventListener("pointerdown", outside);
-    document.addEventListener("keydown", escape);
-    return () => {
-      document.removeEventListener("pointerdown", outside);
-      document.removeEventListener("keydown", escape);
-    };
-  }, [open]);
+  // Once per confirmed activation+expiry: dismissal sticky across background/checking/phase pulses.
+  // Reset only on actual session/identity transition or expiry-key change — never permanent cross-account.
+  const warnedExpiryKey = useRef<string | null>(null);
+  const warnedIdentityId = useRef<string | null>(null);
+  const [expiryPrompt, setExpiryPrompt] = useState<{ key: string; until: number } | null>(null);
   const activation = view.status?.state === "active" ? view.status : null;
   const running = view.phase === "active" && Boolean(activation) && view.confirmedOn;
   const progress = radarRingFraction(view);
@@ -160,8 +228,13 @@ export function RadarStatusAffordance({ mapControls = false }: { mapControls?: b
   const canRenew = Boolean(running && activation && Date.parse(activation.hardExpiresAt) > Date.parse(activation.expiresAt));
   const needsLocation = Boolean(running && activation && view.now >= Date.parse(activation.nextLocationUpdateAt));
   const canStop = Boolean(controller && view.me && view.status && "activationId" in view.status && !busy);
-  const remaining = running && activation ? remainingTime(new Date(effectiveDeadline(activation)).toISOString(), view.now) : null;
+  const sessionUntil = running && activation ? confirmedSessionDeadline(activation) : NaN;
+  const remaining = running && activation && Number.isFinite(sessionUntil)
+    ? remainingTime(new Date(sessionUntil).toISOString(), view.now) : null;
   const caption = status?.text ?? (view.phase === "guest" ? "Войдите для Radar" : view.phase === "disabled" ? "Radar недоступен" : view.phase === "error" ? "Статус Radar неизвестен" : ["checking", "locating", "activating", "stopping"].includes(view.phase) ? "Проверяем Radar…" : "Radar выключен");
+  const directoryNotice = directory.view.notice;
+  const distanceNotice = directoryNotice.startsWith("Расстояние приблизительное")
+    || directoryNotice.startsWith("Участники Radar по городу");
   const diagnostic =
     view.phase === "denied" ? "Доступ к геолокации запрещён. Разрешите его в настройках браузера." :
     view.phase === "location_error" ? "Не удалось определить геопозицию. Проверьте разрешения и попробуйте снова." :
@@ -169,13 +242,75 @@ export function RadarStatusAffordance({ mapControls = false }: { mapControls?: b
     view.phase === "error" ? (view.notice || "Не удалось проверить Radar. Повторите проверку статуса.") :
     view.pendingStop || view.phase === "stopping" ? "Ожидаем подтверждения выключения Radar." :
     view.phase === "background" ? "Radar приостановлен, пока приложение неактивно." :
-    view.phase === "expired" ? "Сессия завершена. Включите Radar снова." : "";
+    view.phase === "expired" ? "Сессия завершена. Включите Radar снова." :
+    directory.view.authenticationRequired ? "Войдите снова, чтобы смотреть участников Radar." :
+    // Transient/stale unified notices belong in the header, not the /players in-flow strip.
+    directoryNotice && !distanceNotice ? directoryNotice : "";
+  useEffect(() => {
+    // Cross-account fence: ignore transient me=null recovery pulses; clear only on real id change or guest.
+    if (view.me?.id) {
+      if (warnedIdentityId.current && warnedIdentityId.current !== view.me.id) {
+        warnedExpiryKey.current = null;
+        setExpiryPrompt(null);
+      }
+      warnedIdentityId.current = view.me.id;
+    } else if (view.phase === "guest") {
+      warnedIdentityId.current = null;
+      warnedExpiryKey.current = null;
+      setExpiryPrompt(null);
+    }
+    if (!running || !activation || !Number.isFinite(sessionUntil)) {
+      // Hide bubble during background/checking/status-null recovery; keep dismissal sticky.
+      setExpiryPrompt(null);
+      const transientPhase = ["background", "checking", "activating", "stopping", "permission", "locating"].includes(view.phase);
+      // Actual session end (not a pulse): clear sticky key so the next activation can warn.
+      const sessionEnded = ["guest", "expired", "off", "stopped", "owned_elsewhere", "denied", "location_error", "disabled"].includes(view.phase);
+      if (!transientPhase && sessionEnded) {
+        warnedExpiryKey.current = null;
+      }
+      return;
+    }
+    const key = `${activation.activationId}:${activation.expiresAt}`;
+    const remainingMs = sessionUntil - view.now;
+    if (remainingMs > 60000 || remainingMs <= 0) {
+      if (remainingMs <= 0) setExpiryPrompt(null);
+      return;
+    }
+    // One terminal warning per actual session expiry key (including hard-cap / cannot renew).
+    if (warnedExpiryKey.current === key) return;
+    warnedExpiryKey.current = key;
+    setExpiryPrompt({ key, until: sessionUntil });
+  }, [running, activation, sessionUntil, view.now, view.me?.id, view.phase, view.confirmedOn]);
+  const showExpiry = Boolean(expiryPrompt && running && expiryPrompt.key === `${activation?.activationId}:${activation?.expiresAt}`);
+  useEffect(() => {
+    if (!open && !showExpiry) return;
+    const dismissOverlay = () => {
+      setOpen(false);
+      setExpiryPrompt(null);
+      trigger.current?.focus();
+    };
+    const outside = (event: PointerEvent) => {
+      if (!host.current?.contains(event.target as Node)) dismissOverlay();
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !document.querySelector("dialog[open]") && !(event.target instanceof Element && event.target.closest("[role=dialog]") && !host.current?.contains(event.target))) {
+        event.preventDefault();
+        dismissOverlay();
+      }
+    };
+    document.addEventListener("pointerdown", outside);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("pointerdown", outside);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [open, showExpiry]);
   const close = () => { setOpen(false); trigger.current?.focus(); };
   return <div ref={host} className="gb-radar-indicator" data-tone={status?.tone ?? "off"}>
     <button ref={trigger} type="button" className="gb-radar-indicator__link"
       aria-label={caption + ". Открыть управление Radar"} aria-haspopup="dialog"
-      aria-expanded={open} aria-controls={open ? popupId : undefined}
-      onClick={() => setOpen(value => !value)}>
+      aria-expanded={open || showExpiry} aria-controls={open || showExpiry ? popupId : undefined}
+      onClick={() => { setOpen(value => !value); if (showExpiry) setExpiryPrompt(null); }}>
       <svg aria-hidden="true" viewBox="0 0 48 48" className="gb-radar-symbol">
         <circle cx="24" cy="24" r="21" fill="none" stroke="currentColor" strokeWidth="3.5" opacity=".13"/>
         {running && <circle className="gb-radar-progress" cx="24" cy="24" r="21" fill="none"
@@ -189,10 +324,19 @@ export function RadarStatusAffordance({ mapControls = false }: { mapControls?: b
         </g>
       </svg>
     </button>
+    {showExpiry && !open && <div id={popupId} className="gb-radar-expiry-warn" role="status">
+      <p>Сессия Radar скоро закончится ({remaining}).</p>
+      <div className="gb-radar-expiry-warn__actions">
+        {canRenew
+          ? <Button disabled={!controller || busy} onClick={() => { setExpiryPrompt(null); if (controller) void controller.activate(() => acquireRadarLocation(controller), "renew"); }}>Продлить</Button>
+          : <p>Продление недоступно — достигнут предельный срок сессии.</p>}
+        <Button variant="ghost" onClick={() => setExpiryPrompt(null)}>Скрыть</Button>
+      </div>
+    </div>}
     {open && <section id={popupId} className="gb-radar-popover" role="dialog" aria-label="Управление Radar">
       <strong>{caption}</strong>
       {running && <><p role="status">Radar включён. Участники видят только приблизительное положение. Обновляйте геопозицию и продлевайте сессию на этом экране.</p><div className="gb-radar-popover__time" aria-live="off">
-        <b>{remaining}</b><small>до ближайшей проверки / окончания lease</small>
+        <b>{remaining}</b><small>до окончания подтверждённой сессии</small>
       </div><div className="gb-radar-popover__track" aria-hidden="true"><span style={{ width: String(Math.round(progress * 100)) + "%" }}/></div></>}
       {diagnostic && <p role="status">{diagnostic}</p>}
       {needsLocation && <p role="status">Обновите геопозицию, чтобы Radar продолжал показывать участников.</p>}
@@ -202,14 +346,17 @@ export function RadarStatusAffordance({ mapControls = false }: { mapControls?: b
         {mapControls && running && !view.pendingStop && directory.view.mapPage?.nextMapCursor && <Button variant="outline" disabled={directory.view.busy || !directory.controller} onClick={() => { if (directory.controller) void directory.controller.map(true); }}>Следующие точки</Button>}
         {view.phase === "guest" ? <AuthEntry returnPath="/players">Войти для Radar</AuthEntry> :
           running ? <>
-            {canRenew && <Button disabled={!controller || busy} onClick={() => { close(); if (controller) void controller.activate(() => acquireRadarLocation(controller), "renew"); }}>Продлить</Button>}
+            {canRenew && <Button disabled={!controller || busy} onClick={() => { setExpiryPrompt(null); close(); if (controller) void controller.activate(() => acquireRadarLocation(controller), "renew"); }}>Продлить</Button>}
             {needsLocation && <Button variant="outline" disabled={!controller || busy} onClick={() => { close(); if (controller) void controller.activate(() => acquireRadarLocation(controller), "location"); }}>Обновить позицию</Button>}
             <Button variant="outline" disabled={!canStop} onClick={() => { close(); if (controller) void controller.stop(); }}>Выключить</Button>
           </> : <>
             {view.confirmedOn && canStop && <Button variant="outline" onClick={() => { close(); if (controller) void controller.stop(); }}>Выключить</Button>}
             {!view.confirmedOn && <Button disabled={!canStart} onClick={() => { close(); controller?.permission(); }}>Включить Radar</Button>}
             {view.phase === "error" && <Button variant="outline" onClick={() => { close(); if (controller) void controller.reconcile(); }}>Проверить статус</Button>}
+            {view.phase === "denied" && <Button variant="outline" onClick={() => { close(); controller?.permission(); }}>Попробовать снова</Button>}
+            {view.phase === "location_error" && <Button variant="outline" onClick={() => { close(); controller?.permission(); }}>Попробовать снова</Button>}
             {view.phase === "owned_elsewhere" && <Button disabled={!canStart} onClick={() => { close(); controller?.permission(); }}>Перенести сюда</Button>}
+            {directory.view.authenticationRequired && <AuthEntry returnPath="/players">Войти для Radar</AuthEntry>}
           </>}
       </div>
     </section>}

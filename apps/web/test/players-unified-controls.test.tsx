@@ -14,12 +14,12 @@ import { PlayersDirectoryPage } from "../src/components/consumer/pages/PlayersDi
 describe("Players automatic Radar composition", () => {
   it("adds only the map action during active Radar, even while capability loads", () => {
     session.on = true; const html = renderToStaticMarkup(<PlayersDirectoryPage />);
-    expect(html).toContain("Показать на карте"); expect(html).toContain('href="/players/radar"');
-    for (const label of ["Смотреть участников Radar", "Сортировать по близости", "Обычный каталог", "Обновить участников Radar", "Никого не нашли"]) expect(html).not.toContain(label);
+    expect(html).toContain("Игроки на карте"); expect(html).toContain('href="/players/radar"');
+    for (const label of ["Смотреть участников Radar", "Сортировать по близости", "Обычный каталог", "Обновить участников Radar", "Никого не нашли", "Показать на карте"]) expect(html).not.toContain(label);
     expect(html).toContain("Ищем игроков…");
   });
   it("keeps OFF in ordinary catalog without a map action", () => {
     session.on = false; const html = renderToStaticMarkup(<PlayersDirectoryPage />);
-    expect(html).not.toContain("Показать на карте"); expect(html).toContain('aria-label="Фильтры каталога"');
+    expect(html).not.toContain("Игроки на карте"); expect(html).not.toContain("Показать на карте"); expect(html).toContain('aria-label="Фильтры каталога"');
   });
 });

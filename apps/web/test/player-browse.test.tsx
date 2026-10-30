@@ -11,6 +11,10 @@ import {
   nextBrowseIntentAfterFailure,
   PLAYER_BROWSE_MEDIA_DEADLINE_MS,
   PreparedBrowseCover,
+  preparedMediaFitsPublicPlayer,
+  RADAR_PIN_MEDIA_CAP,
+  RADAR_PIN_MEDIA_DEADLINE_MS,
+  selectRadarMediaPrewarmPeers,
 } from "../src/components/consumer/players/PlayerBrowseMedia";
 import {
   browseDragRotationDeg,
@@ -63,6 +67,8 @@ const toolbarSource = readFileSync(join(root, "src/components/consumer/players/P
 const radarSource = readFileSync(join(root, "src/components/consumer/radar/RadarControls.tsx"), "utf8");
 const cssSource = readFileSync(join(root, "src/styles/player-browse.css"), "utf8");
 const friendshipSource = readFileSync(join(root, "src/components/consumer/players/PlayerBrowseFriendship.tsx"), "utf8");
+const mapSource = readFileSync(join(root, "src/components/consumer/radar/GeographicRadarMap.tsx"), "utf8");
+const sessionSource = readFileSync(join(root, "src/components/consumer/radar/RadarSessionProvider.tsx"), "utf8");
 
 const player = (id: string): PublicPlayer => ({
   publicPlayerId: id,
@@ -521,5 +527,51 @@ describe("player browse desktop v5 contracts", () => {
     expect(radarSource).toContain('directoryCompact');
     expect(radarSource).toContain("!directoryCompact && typeof window");
     expect(radarSource).toContain("DEV_MOSCOW_LABEL");
+  });
+
+  it("QA-02: radar prewarm deadline matches finite prepare budget; timeout default is not cover-ready", () => {
+    expect(RADAR_PIN_MEDIA_DEADLINE_MS).toBe(PLAYER_BROWSE_MEDIA_DEADLINE_MS);
+    expect(RADAR_PIN_MEDIA_DEADLINE_MS).toBeGreaterThanOrEqual(5000);
+    expect(mediaSource).not.toMatch(/RADAR_PIN_MEDIA_DEADLINE_MS\s*=\s*1200/);
+    expect(mediaSource).toContain("authoritative");
+    expect(mediaSource).toContain("deadlineFired");
+    const coverUrl = "/v1/media/covers/" + "b".repeat(64) + ".png";
+    const peer = {
+      ...player("warm"),
+      cover: { uploadedUrl: coverUrl },
+    };
+    const timedOutDefault = {
+      peerId: peer.publicPlayerId,
+      mediaKey: browsePeerMediaKey(peer),
+      peer,
+      avatar: { kind: "initials" as const, text: "W" },
+      cover: { kind: "default" as const, node: null, authoritative: false },
+    };
+    expect(preparedMediaFitsPublicPlayer(timedOutDefault, peer)).toBe(false);
+    const absent = {
+      ...timedOutDefault,
+      peer: { ...player("warm"), cover: { uploadedUrl: null } },
+      mediaKey: browsePeerMediaKey({ ...player("warm"), cover: { uploadedUrl: null } }),
+      cover: { kind: "default" as const, node: null, authoritative: true },
+    };
+    expect(preparedMediaFitsPublicPlayer(absent, absent.peer)).toBe(true);
+    expect(mediaSource).toContain("authoritativeDefault");
+    expect(mediaSource).toContain("authoritative !== false");
+  });
+
+  it("QA-03: RADAR_PIN_MEDIA_CAP bounds pending+retained; hover uses same admission", () => {
+    expect(RADAR_PIN_MEDIA_CAP).toBe(4);
+    const peers = Array.from({ length: 9 }, (_, i) => ({ publicPlayerId: `p${i}` }));
+    expect(selectRadarMediaPrewarmPeers(peers, "p8", RADAR_PIN_MEDIA_CAP)).toHaveLength(4);
+    expect(selectRadarMediaPrewarmPeers(peers, "p8", RADAR_PIN_MEDIA_CAP)[0]?.publicPlayerId).toBe("p8");
+    expect(mediaSource).toContain("admitRadarMediaPeer");
+    expect(mediaSource).toContain("radarMediaOccupiedCount");
+    expect(mediaSource).toContain("retainIds");
+    expect(mediaSource).toMatch(/while \(radarMediaOccupiedCount\(\) >= RADAR_PIN_MEDIA_CAP/);
+    expect(mapSource).toContain("prewarmRadarPeerMedia");
+    expect(mapSource).toContain("retainIds");
+    expect(mapSource).toContain("pointerenter");
+    expect(mapSource).toContain("focus");
+    expect(sessionSource).toContain("retainIds");
   });
 });

@@ -8,6 +8,13 @@ import { safeAvatarUrl } from "./ProfileComposition";
 
 /** End-to-end bound for metadata + image load/decode before fallback settle. */
 export const PLAYER_BROWSE_MEDIA_DEADLINE_MS = 5000;
+/**
+ * Radar pin/open prewarm uses the same finite prepare budget as browse (≥ observed
+ * network+decode). A shorter deadline cached timeout defaults as cover-ready.
+ */
+export const RADAR_PIN_MEDIA_DEADLINE_MS = PLAYER_BROWSE_MEDIA_DEADLINE_MS;
+/** Hard union cap for pending + retained Radar peer preparations. */
+export const RADAR_PIN_MEDIA_CAP = 4;
 
 const DEFAULT_COVER_SRC = "/canonical/ce252.svg";
 const COVER_URL_RE = /^\/v1\/media\/covers\/[a-f0-9]{64}\.png$/;
@@ -32,7 +39,8 @@ export type PreparedBrowseAvatar =
 
 export type PreparedBrowseCover =
   | { kind: "uploaded"; src: string; node: HTMLImageElement }
-  | { kind: "default"; node: HTMLImageElement | null };
+  /** authoritative:true = confirmed no uploaded cover; false = timeout/load fallback (not cover-ready). */
+  | { kind: "default"; node: HTMLImageElement | null; authoritative?: boolean };
 
 export type PreparedBrowsePeerMedia = {
   peerId: string;
@@ -228,22 +236,28 @@ export async function prepareBrowsePeerMedia(
   player: PublicPlayer,
   signal: AbortSignal,
   deadlineMs: number = PLAYER_BROWSE_MEDIA_DEADLINE_MS,
+  options?: { resolveCover?: boolean },
 ): Promise<PrepareBrowsePeerResult> {
   const peerId = player.publicPlayerId;
   const mediaKey = browsePeerMediaKey(player);
   if (signal.aborted) return { ok: false, reason: "aborted" };
+  const resolveCover = options?.resolveCover !== false;
 
   const work = new AbortController();
   let parentAborted = false;
+  let deadlineFired = false;
   const onParentAbort = () => {
     parentAborted = true;
     work.abort();
   };
   signal.addEventListener("abort", onParentAbort);
-  const timer = window.setTimeout(() => work.abort(), deadlineMs);
+  const timer = window.setTimeout(() => {
+    deadlineFired = true;
+    work.abort();
+  }, deadlineMs);
 
   let avatar: PreparedBrowseAvatar = { kind: "initials", text: initialsFromName(player.displayName) };
-  let cover: PreparedBrowseCover = { kind: "default", node: null };
+  let cover: PreparedBrowseCover = { kind: "default", node: null, authoritative: false };
 
   try {
     // Avatar bytes start with the profile GET when cover metadata is missing.
@@ -258,6 +272,10 @@ export async function prepareBrowsePeerMedia(
     if (player.cover && "uploadedUrl" in player.cover) {
       coverUrl = player.cover.uploadedUrl;
       coverMetaReady = true;
+    } else if (!resolveCover) {
+      // Radar pin prewarm: only available avatar/cover fields — never speculative profile GET.
+      coverMetaReady = true;
+      coverUrl = null;
     } else {
       const meta = await resolveBrowseCoverUrl(player, work.signal);
       if (parentAborted || signal.aborted) {
@@ -273,7 +291,7 @@ export async function prepareBrowsePeerMedia(
       } else if (meta.reason === "unavailable") {
         authFail = "unavailable";
       }
-      // Deadline abort during GET: settle with default cover (coverMetaReady stays false).
+      // Deadline abort during GET: settle with non-authoritative default (coverMetaReady stays false).
     }
 
     if (authFail) {
@@ -287,14 +305,21 @@ export async function prepareBrowsePeerMedia(
       prepareCoverFromUrl(coverMetaReady ? coverUrl : null, work.signal),
       avatarPromise.catch(() => undefined),
     ]);
-    cover = coverResult;
+    // Authoritative absence: confirmed null uploaded cover. Timeout/load failure must not
+    // permanently satisfy coverReady when an uploaded cover was expected.
+    if (coverResult.kind === "uploaded") {
+      cover = coverResult;
+    } else {
+      const authoritative = coverMetaReady && coverUrl === null && !deadlineFired;
+      cover = { kind: "default", node: coverResult.node, authoritative };
+    }
 
     if (parentAborted || signal.aborted) {
       disposePreparedBrowseMedia({ peerId, mediaKey, peer: player, avatar, cover });
       return { ok: false, reason: "aborted" };
     }
 
-    // Timed-out loads stay terminal: no second request; null default is a stable settle.
+    // Honest fallback settle: no second in-function request; non-authoritative default may be retried by prewarm.
     return { ok: true, media: { peerId, mediaKey, peer: player, avatar, cover } };
   } catch {
     if (parentAborted || signal.aborted) {
@@ -307,6 +332,226 @@ export async function prepareBrowsePeerMedia(
     window.clearTimeout(timer);
     signal.removeEventListener("abort", onParentAbort);
   }
+}
+
+type RadarMediaSlot = { sessionKey: string; media: PreparedBrowsePeerMedia };
+type RadarInflight = {
+  key: string;
+  abort: AbortController;
+  listeners: Set<() => void>;
+  retainIds: ReadonlySet<string>;
+};
+const radarMediaByPeer = new Map<string, RadarMediaSlot>();
+const radarMediaInflight = new Map<string, RadarInflight>();
+const radarMediaListeners = new Set<() => void>();
+let radarMediaSessionKey = "";
+let radarMediaEpoch = 0;
+
+/** Union of pending + retained peers currently occupying the Radar media budget. */
+export function radarPreparedMediaOccupancy(): { retained: string[]; pending: string[] } {
+  return {
+    retained: [...radarMediaByPeer.keys()],
+    pending: [...radarMediaInflight.keys()],
+  };
+}
+
+function radarMediaOccupiedCount() {
+  const ids = new Set<string>([...radarMediaByPeer.keys(), ...radarMediaInflight.keys()]);
+  return ids.size;
+}
+
+/**
+ * Make room for `admitId` under RADAR_PIN_MEDIA_CAP across pending+completed.
+ * Aborts evicted pending before a new GET starts; never disposes retainIds (selected/visible).
+ */
+function admitRadarMediaPeer(admitId: string, retainIds: ReadonlySet<string>): boolean {
+  const protect = new Set(retainIds);
+  protect.add(admitId);
+  while (radarMediaOccupiedCount() >= RADAR_PIN_MEDIA_CAP && !radarMediaByPeer.has(admitId) && !radarMediaInflight.has(admitId)) {
+    const pendingVictim = [...radarMediaInflight.keys()].find(id => !protect.has(id));
+    if (pendingVictim) {
+      const inflight = radarMediaInflight.get(pendingVictim)!;
+      inflight.abort.abort();
+      radarMediaInflight.delete(pendingVictim);
+      continue;
+    }
+    const retainedVictim = [...radarMediaByPeer.keys()].find(id => !protect.has(id));
+    if (retainedVictim) {
+      const slot = radarMediaByPeer.get(retainedVictim);
+      radarMediaByPeer.delete(retainedVictim);
+      disposePreparedBrowseMedia(slot?.media);
+      continue;
+    }
+    // Every slot is protected — cannot admit another peer.
+    return false;
+  }
+  return true;
+}
+
+function notifyRadarMediaReady() {
+  for (const listener of [...radarMediaListeners]) listener();
+}
+
+/** Subscribe to Radar prepared-media commit/eviction (end-of-load, not a fixed timeout). */
+export function subscribeRadarPreparedMedia(listener: () => void) {
+  radarMediaListeners.add(listener);
+  return () => { radarMediaListeners.delete(listener); };
+}
+
+/** Drop retained Radar pin media; optional keep predicate for still-authorized peers. */
+export function clearRadarPreparedMedia(keep?: (peerId: string) => boolean) {
+  for (const [peerId, slot] of [...radarMediaByPeer.entries()]) {
+    if (keep?.(peerId)) continue;
+    radarMediaByPeer.delete(peerId);
+    disposePreparedBrowseMedia(slot.media);
+  }
+  for (const [peerId, inflight] of [...radarMediaInflight.entries()]) {
+    if (keep?.(peerId)) continue;
+    inflight.abort.abort();
+    radarMediaInflight.delete(peerId);
+  }
+  if (!keep) {
+    radarMediaSessionKey = "";
+    radarMediaEpoch += 1;
+  }
+  notifyRadarMediaReady();
+}
+
+export function takeRadarPreparedMedia(peerId: string, mediaKey?: string, sessionKey = radarMediaSessionKey): PreparedBrowsePeerMedia | null {
+  const hit = radarMediaByPeer.get(peerId);
+  if (!hit || hit.sessionKey !== sessionKey) return null;
+  if (mediaKey && hit.media.mediaKey !== mediaKey) return null;
+  return hit.media;
+}
+
+/** True when prepared cover/avatar still matches a freshly loaded public profile. */
+export function preparedMediaFitsPublicPlayer(media: PreparedBrowsePeerMedia, player: PublicPlayer): boolean {
+  if (media.peerId !== player.publicPlayerId) return false;
+  if (media.avatar.kind === "image") {
+    const src = media.avatar.src;
+    if (src !== player.avatar?.uploadedUrl && src !== player.avatar?.providerUrl) return false;
+  }
+  if (media.cover.kind === "uploaded") {
+    return player.cover?.uploadedUrl === media.cover.src;
+  }
+  // Timeout/load fallback must not satisfy warm/profile readiness when an uploaded cover exists.
+  if (media.cover.authoritative === false) return false;
+  // Authoritative default/empty prepared cover is valid only when the profile has no uploaded cover.
+  return !player.cover?.uploadedUrl;
+}
+
+/**
+ * Bounded prewarm for authorized Radar pins.
+ * Public GET cover metadata is allowed for known authorized peers (resolveCover);
+ * never speculative private proofs. Same peer+mediaKey+cover intent reuses inflight
+ * work instead of abort/restart on every render. Cap applies to pending+retained union;
+ * hover/focus must call this same admission path.
+ */
+export function prewarmRadarPeerMedia(
+  player: PublicPlayer,
+  options?: {
+    resolveCover?: boolean;
+    deadlineMs?: number;
+    sessionKey?: string;
+    onReady?: () => void;
+    /** Selected / currently visible prepared peers — never dispose these while evicting. */
+    retainIds?: readonly string[];
+  },
+) {
+  if (typeof document === "undefined") return;
+  const sessionKey = options?.sessionKey ?? radarMediaSessionKey;
+  if (sessionKey !== radarMediaSessionKey) {
+    clearRadarPreparedMedia();
+    radarMediaSessionKey = sessionKey;
+  }
+  const resolveCover = options?.resolveCover === true;
+  const mediaKey = browsePeerMediaKey(player);
+  const inflightKey = `${player.publicPlayerId}|${mediaKey}|${resolveCover ? "cover" : "avatar"}`;
+  const retainIds = new Set(options?.retainIds ?? []);
+  const existing = radarMediaByPeer.get(player.publicPlayerId);
+  const authoritativeDefault = existing?.media.cover.kind === "default"
+    && existing.media.cover.authoritative !== false
+    && !player.cover?.uploadedUrl;
+  const coverReady = existing?.media.cover.kind === "uploaded"
+    || (player.cover && "uploadedUrl" in player.cover && player.cover.uploadedUrl === null)
+    || authoritativeDefault;
+  if (existing?.sessionKey === sessionKey && existing.media.mediaKey === mediaKey && (!resolveCover || coverReady)) {
+    options?.onReady?.();
+    return;
+  }
+  const prior = radarMediaInflight.get(player.publicPlayerId);
+  if (prior) {
+    // Same immutable key: join listeners; do not abort/restart.
+    if (prior.key === inflightKey) {
+      if (options?.onReady) prior.listeners.add(options.onReady);
+      return;
+    }
+    prior.abort.abort();
+    radarMediaInflight.delete(player.publicPlayerId);
+  }
+  // Enforce union cap before starting a new GET (abort evicted pending first).
+  if (!admitRadarMediaPeer(player.publicPlayerId, retainIds)) return;
+  const work = new AbortController();
+  const listeners = new Set<() => void>();
+  if (options?.onReady) listeners.add(options.onReady);
+  const inflight: RadarInflight = { key: inflightKey, abort: work, listeners, retainIds };
+  radarMediaInflight.set(player.publicPlayerId, inflight);
+  const epoch = radarMediaEpoch;
+  void prepareBrowsePeerMedia(player, work.signal, options?.deadlineMs ?? RADAR_PIN_MEDIA_DEADLINE_MS, {
+    resolveCover,
+  }).then(result => {
+    if (radarMediaInflight.get(player.publicPlayerId) !== inflight) {
+      // Orphan successful completion after cancel/eviction — dispose pixels.
+      if (result.ok) disposePreparedBrowseMedia(result.media);
+      return;
+    }
+    radarMediaInflight.delete(player.publicPlayerId);
+    if (!result.ok || radarMediaSessionKey !== sessionKey || epoch !== radarMediaEpoch) {
+      if (result.ok) disposePreparedBrowseMedia(result.media);
+      for (const listener of listeners) listener();
+      notifyRadarMediaReady();
+      return;
+    }
+    const previous = radarMediaByPeer.get(player.publicPlayerId);
+    if (previous && previous.media !== result.media) disposePreparedBrowseMedia(previous.media);
+    radarMediaByPeer.set(player.publicPlayerId, { sessionKey, media: result.media });
+    // Cap retained nodes; never dispose selected/visible retainIds or the peer just completed.
+    const protect = new Set(retainIds);
+    protect.add(player.publicPlayerId);
+    while (radarMediaByPeer.size + radarMediaInflight.size > RADAR_PIN_MEDIA_CAP) {
+      const victim = [...radarMediaByPeer.keys()].find(id => !protect.has(id));
+      if (!victim) break;
+      const slot = radarMediaByPeer.get(victim);
+      radarMediaByPeer.delete(victim);
+      disposePreparedBrowseMedia(slot?.media);
+    }
+    for (const listener of listeners) listener();
+    notifyRadarMediaReady();
+  });
+}
+
+/**
+ * Choose up to `cap` authorized peers for prewarm: selected first, then pin/row order.
+ */
+export function selectRadarMediaPrewarmPeers<T extends { publicPlayerId: string }>(
+  peers: T[],
+  selectedId: string | null | undefined,
+  cap = RADAR_PIN_MEDIA_CAP,
+): T[] {
+  if (peers.length === 0 || cap <= 0) return [];
+  const seen = new Set<string>();
+  const out: T[] = [];
+  const push = (peer: T) => {
+    if (seen.has(peer.publicPlayerId) || out.length >= cap) return;
+    seen.add(peer.publicPlayerId);
+    out.push(peer);
+  };
+  if (selectedId) {
+    const selected = peers.find(peer => peer.publicPlayerId === selectedId);
+    if (selected) push(selected);
+  }
+  for (const peer of peers) push(peer);
+  return out;
 }
 
 /** Mount a retained decoded <img> into a React host without remounting a new fetch. */

@@ -200,19 +200,99 @@ describe("unified directory privacy and global pagination", () => {
     await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
     time += 30000;
     await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
-    expect(c.view.snapshot).toBeNull();
+    // Soft same-key 429 keeps the still-valid authorized window.
+    expect(c.view.snapshot).not.toBeNull();
+    expect(c.view.rows.map(r => r.publicPlayerId)).toEqual(["before"]);
+    expect(c.view.mode).toBe("unified");
+    expect(c.renderable(filters, "activation:1")).toBe(true);
     expect(c.nextRefreshAt()).toBe(time + 5000);
     // Projection path: arm only fires when nextRefreshAt allows (not a fixed +30s).
     time += 4999;
     await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
     expect(calls).toBe(2);
-    expect(c.view.rows).toEqual([]);
+    expect(c.view.rows.map(r => r.publicPlayerId)).toEqual(["before"]);
     time += 1;
     expect(c.nextRefreshAt()).toBe(time);
     await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
     expect(calls).toBe(3);
     expect(c.view.rows.map(r => r.publicPlayerId)).toEqual(["recovered-after-429"]);
     expect(c.renderable(filters, "activation:1")).toBe(true);
+  });
+  it("clears retained window when Retry-After outlives validUntil", async () => {
+    let time = now;
+    let calls = 0;
+    const request = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) {
+        return ok({
+          ...snapshot([row("before")]),
+          generatedAt: new Date(time).toISOString(),
+          validUntil: new Date(time + 45000).toISOString(),
+        });
+      }
+      return { ok: false as const, status: 429, error: "rate", retryAfterSeconds: 60 };
+    }) as typeof apiFetch;
+    const c = new UnifiedDirectoryController(request, () => time); c.bind(me);
+    await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    time += 30000;
+    await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    expect(c.view.snapshot).toBeNull();
+    expect(c.view.rows).toEqual([]);
+    expect(c.view.mode).toBe("ordinary");
+  });
+  it("resource 404 does not permanently disable unified capability", async () => {
+    let time = now;
+    let calls = 0;
+    const request = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) {
+        return ok({
+          ...snapshot([row("before")]),
+          generatedAt: new Date(time).toISOString(),
+          validUntil: new Date(time + 45000).toISOString(),
+        });
+      }
+      if (calls === 2) {
+        return { ok: false as const, status: 404, error: "gone", problem: { type: "about:blank", title: "Источник местоположения недоступен", status: 404, code: "RESOURCE_UNAVAILABLE", requestId: "test" } };
+      }
+      return ok({
+        ...snapshot([row("recovered-after-resource-404")]),
+        generatedAt: new Date(time).toISOString(),
+        validUntil: new Date(time + 45000).toISOString(),
+      });
+    }) as typeof apiFetch;
+    const c = new UnifiedDirectoryController(request, () => time); c.bind(me);
+    await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    time += 30000;
+    await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    expect(c.view.capabilityUnavailable).toBe(false);
+    expect(c.view.snapshot).toBeNull();
+    expect(c.view.mode).toBe("ordinary");
+    await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    expect(calls).toBe(3);
+    expect(c.view.rows.map(r => r.publicPlayerId)).toEqual(["recovered-after-resource-404"]);
+    expect(c.view.mode).toBe("unified");
+  });
+  it("publishes expiry fences atomically before subscribers can re-arm unified", async () => {
+    let time = now;
+    const request = vi.fn(async () => ok({
+      ...snapshot([row("peer")]),
+      generatedAt: new Date(time).toISOString(),
+      validUntil: new Date(time + 45000).toISOString(),
+    })) as typeof apiFetch;
+    const c = new UnifiedDirectoryController(request, () => time); c.bind(me);
+    await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    let seenOrdinary = false;
+    c.subscribe(() => {
+      if (c.view.mode === "ordinary" && c.view.snapshot === null) seenOrdinary = true;
+      // A synchronous subscriber must never observe cleared rows still marked unified.
+      if (c.view.snapshot === null) expect(c.view.mode).toBe("ordinary");
+    });
+    time += 45000;
+    c.tick();
+    expect(seenOrdinary).toBe(true);
+    expect(c.view.mode).toBe("ordinary");
+    expect(c.view.rows).toEqual([]);
   });
   it("recovers immediately after 409 without waiting out the initial cooldown", async () => {
     let time = now;
@@ -233,6 +313,173 @@ describe("unified directory privacy and global pagination", () => {
     expect(calls).toBe(3);
     expect(c.view.rows.map(r => r.publicPlayerId)).toEqual(["recovered"]);
     expect(c.view.mode).toBe("unified");
+  });
+  it("503 soft refresh retries within valid TTL instead of waiting out the 30s nextInitial gate", async () => {
+    let time = now;
+    let calls = 0;
+    const request = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) {
+        return ok({
+          ...snapshot([row("before")]),
+          generatedAt: new Date(time).toISOString(),
+          validUntil: new Date(time + 45000).toISOString(),
+        });
+      }
+      if (calls === 2) return { ok: false as const, status: 503, error: "upstream" };
+      return ok({
+        ...snapshot([row("recovered-after-503")]),
+        generatedAt: new Date(time).toISOString(),
+        validUntil: new Date(time + 45000).toISOString(),
+      });
+    }) as typeof apiFetch;
+    const c = new UnifiedDirectoryController(request, () => time); c.bind(me);
+    await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    time += 30000;
+    await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    expect(c.view.rows.map(r => r.publicPlayerId)).toEqual(["before"]);
+    expect(c.view.mode).toBe("unified");
+    expect(c.renderable(filters, "activation:1")).toBe(true);
+    // Bounded ~2s retry — not requestStart+30s which would land after validUntil.
+    expect(c.nextRefreshAt()).toBe(time + 2000);
+    time += 2000;
+    await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    expect(calls).toBe(3);
+    expect(c.view.rows.map(r => r.publicPlayerId)).toEqual(["recovered-after-503"]);
+    expect(c.view.mode).toBe("unified");
+  });
+  it("clears expired displayed peers while allowing an in-flight refresh to commit after latency", async () => {
+    let time = now;
+    let resolveRefresh!: (value: ReturnType<typeof ok>) => void;
+    let calls = 0;
+    const request = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) {
+        return ok({
+          ...snapshot([row("before")]),
+          generatedAt: new Date(time).toISOString(),
+          validUntil: new Date(time + 45000).toISOString(),
+        });
+      }
+      return new Promise<ReturnType<typeof ok>>(resolve => { resolveRefresh = resolve; });
+    }) as typeof apiFetch;
+    const c = new UnifiedDirectoryController(request, () => time); c.bind(me);
+    await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    time += 30000;
+    const pending = c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    time += 15000;
+    c.tick();
+    expect(c.view.snapshot).toBeNull();
+    expect(c.view.rows).toEqual([]);
+    expect(c.view.mode).toBe("ordinary");
+    resolveRefresh(ok({
+      ...snapshot([row("fresh-after-expiry")]),
+      generatedAt: new Date(time).toISOString(),
+      validUntil: new Date(time + 45000).toISOString(),
+    }));
+    await pending;
+    expect(calls).toBe(2);
+    expect(c.view.rows.map(r => r.publicPlayerId)).toEqual(["fresh-after-expiry"]);
+    expect(c.view.mode).toBe("unified");
+    expect(c.view.stale).toBe(false);
+  });
+  it("QA-01: expiry-during-read 429 installs Retry-After before sync subscriber can re-query", async () => {
+    let time = now;
+    type RateLimited = { ok: false; status: number; error: string; retryAfterSeconds: number };
+    let resolveRefresh!: (value: RateLimited) => void;
+    let calls = 0;
+    const request = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) {
+        return ok({
+          ...snapshot([row("before")]),
+          generatedAt: new Date(time).toISOString(),
+          validUntil: new Date(time + 45000).toISOString(),
+        });
+      }
+      return new Promise<RateLimited>(resolve => { resolveRefresh = resolve; });
+    }) as typeof apiFetch;
+    const c = new UnifiedDirectoryController(request, () => time); c.bind(me);
+    await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    time += 30000;
+    const pending = c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    time += 15000;
+    c.tick();
+    expect(c.view.snapshot).toBeNull();
+    c.subscribe(() => {
+      // Must observe Retry-After already installed — no extra read before the gate.
+      void c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    });
+    resolveRefresh({ ok: false, status: 429, error: "rate", retryAfterSeconds: 5 });
+    await pending;
+    expect(calls).toBe(2);
+    expect(c.nextRefreshAt()).toBe(time + 5000);
+    expect(c.view.busy).toBe(false);
+  });
+  it("QA-01: resource 404 settles mode+fences atomically; sync recovery publishes unified", async () => {
+    let time = now;
+    let calls = 0;
+    const request = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) {
+        return ok({
+          ...snapshot([row("a"), row("b"), row("c"), row("d"), row("e"), row("f")]),
+          generatedAt: new Date(time).toISOString(),
+          validUntil: new Date(time + 45000).toISOString(),
+        });
+      }
+      if (calls === 2) {
+        return {
+          ok: false as const,
+          status: 404,
+          error: "gone",
+          problem: {
+            type: "about:blank",
+            title: "Источник местоположения недоступен",
+            status: 404,
+            code: "RESOURCE_UNAVAILABLE",
+            requestId: "test",
+          },
+        };
+      }
+      return ok({
+        ...snapshot([row("r1"), row("r2"), row("r3"), row("r4"), row("r5"), row("r6")]),
+        generatedAt: new Date(time).toISOString(),
+        validUntil: new Date(time + 45000).toISOString(),
+      });
+    }) as typeof apiFetch;
+    const c = new UnifiedDirectoryController(request, () => time); c.bind(me);
+    await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    expect(c.view.rows).toHaveLength(6);
+    let recovering: Promise<void> | null = null;
+    // Mirror PlayersDirectoryPage arming: set BEFORE c.query so invalidate/set notify
+    // cannot reenter while recovering is still null (assignment happens only after query returns).
+    let arming = false;
+    let sawAtomic404 = false;
+    c.subscribe(() => {
+      if (c.view.mode === "ordinary" && c.view.snapshot === null && !c.view.capabilityUnavailable && !arming && !recovering) {
+        // Failure settlement must publish ordinary+clear together (not cleared while still unified).
+        expect(c.view.rows).toEqual([]);
+        sawAtomic404 = true;
+        arming = true;
+        try {
+          recovering = c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+        } finally {
+          arming = false;
+        }
+      }
+    });
+    time += 30000;
+    await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    if (recovering) await recovering;
+    expect(sawAtomic404).toBe(true);
+    expect(calls).toBe(3);
+    expect(c.view.capabilityUnavailable).toBe(false);
+    expect(c.view.mode).toBe("unified");
+    expect(c.view.rows.map(r => r.publicPlayerId)).toEqual(["r1", "r2", "r3", "r4", "r5", "r6"]);
+    expect(c.matches(filters, "activation:1")).toBe(true);
+    expect(c.renderable(filters, "activation:1")).toBe(true);
+    expect(c.nextRefreshAt()).toBe(time + 30000);
   });
 });
 describe("distance and map authority", () => {
