@@ -316,6 +316,26 @@ describe("player browse desktop v5 contracts", () => {
     expect(empty).not.toContain("/canonical/ce252.svg");
   });
 
+  it("F4: displayed-index replacement failure clears committed into terminal unavailable", () => {
+    const settleStart = deckSource.indexOf("const settleIntentFailure");
+    expect(settleStart).toBeGreaterThan(-1);
+    const afterSettle = deckSource.slice(settleStart);
+    const settleEnd = afterSettle.indexOf("}, [browsePlayers");
+    expect(settleEnd).toBeGreaterThan(-1);
+    const settleBody = afterSettle.slice(0, settleEnd);
+    expect(settleBody).toContain("failedIndex === indexRef.current");
+    expect(settleBody).toContain("replaceCommittedMedia(null)");
+    expect(settleBody).toContain("setMediaUnavailable(true)");
+    expect(settleBody).toMatch(/committed\.mediaKey !== browsePeerMediaKey\(failedPeer\)/);
+    expect(deckSource).toMatch(/const navigationLocked = friendBusy/);
+  });
+
+  it("F5: current uses catalogPeer when mediaKey matches; old peer only while replacement pending", () => {
+    expect(deckSource).toMatch(
+      /committedMedia\.peerId === catalogPeer\.publicPlayerId\s*\n\s*&&\s*committedMedia\.mediaKey !== browsePeerMediaKey\(catalogPeer\)/,
+    );
+  });
+
   it("hides DEV synthetic label only for directory-compact presentation", () => {
     expect(radarSource).toContain('presentation?: RadarStatusPresentation');
     expect(radarSource).toContain('directoryCompact');

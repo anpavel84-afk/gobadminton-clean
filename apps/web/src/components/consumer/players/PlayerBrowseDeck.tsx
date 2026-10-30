@@ -156,11 +156,12 @@ export function PlayerBrowseDeck({
     [players, ownPublicPlayerId],
   );
   const catalogPeer = browsePlayers[index] ?? null;
-  // Name/metadata/pixels stay on the committed snapshot; catalog mediaKey changes re-prep in place.
+  // F5: catalogPeer metadata when mediaKey matches prepared nodes; old snapshot only while replacement pending.
   const current = (
     committedMedia?.peer
     && catalogPeer
     && committedMedia.peerId === catalogPeer.publicPlayerId
+    && committedMedia.mediaKey !== browsePeerMediaKey(catalogPeer)
   )
     ? committedMedia.peer
     : catalogPeer;
@@ -231,6 +232,22 @@ export function PlayerBrowseDeck({
       indexRef.current,
     );
     if (decision.kind === "revert") {
+      // F4: replacement failure on displayed index — clear/dispose committed; terminal unavailable
+      // (esp. 401/403 must not keep stale authorized pixels / commitPending forever).
+      const failedPeer = browsePlayers[failedIndex];
+      const committed = committedMediaRef.current;
+      if (
+        failedIndex === indexRef.current
+        && failedPeer
+        && committed
+        && committed.peerId === failedPeer.publicPlayerId
+        && committed.mediaKey !== browsePeerMediaKey(failedPeer)
+      ) {
+        replaceCommittedMedia(null);
+        setMediaUnavailable(true);
+        setIntentIndex(decision.index);
+        return;
+      }
       setMediaUnavailable(false);
       setIntentIndex(decision.index);
       return;
@@ -241,7 +258,7 @@ export function PlayerBrowseDeck({
       return;
     }
     setMediaUnavailable(true);
-  }, [browsePlayers]);
+  }, [browsePlayers, replaceCommittedMedia]);
 
   useEffect(() => {
     if (typeof window.matchMedia !== "function") return;
