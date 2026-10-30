@@ -358,11 +358,19 @@ describe("player browse desktop v5 contracts", () => {
     expect(PLAYER_BROWSE_DESKTOP_MQ).toBe("(min-width: 1024px)");
   });
 
-  it("keeps loading header geometry stable via initial view + viewport CSS; floating map CTA", () => {
+  it("keeps loading header geometry stable via initial view + viewport CSS; floating map CTA", async () => {
     const routeSource = readFileSync(join(root, "src/app/players/page.tsx"), "utf8");
     const playersCss = readFileSync(join(root, "src/styles/players.css"), "utf8");
     expect(routeSource).toContain("initialBrowseView");
-    expect(routeSource).toContain("parseBrowseView");
+    // Route binds decoded Next params directly (not parseBrowseView by name); assert actual Page output.
+    const { default: PlayersPage } = await import("../src/app/players/page");
+    const boundView = async (view: string | string[] | undefined) => {
+      const el = await PlayersPage({ searchParams: Promise.resolve({ view }) });
+      return (el as { props: { initialBrowseView: "cards" | "list" } }).props.initialBrowseView;
+    };
+    expect(await boundView("cards")).toBe("cards");
+    expect(await boundView("list")).toBe("list");
+    expect(await boundView(undefined)).toBe("list");
     expect(pageSource).toContain("initialBrowseView");
     expect(pageSource).toContain("mqReady");
     expect(pageSource).toContain("players-hero__subtitle");
