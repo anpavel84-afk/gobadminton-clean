@@ -271,6 +271,25 @@ describe("player browse swipe boundaries", () => {
     expect(deckSource).toContain("Single retained avatar host");
     expect(deckSource).toContain("Stable friendship slot");
   });
+
+  it("mobile details use fixed info pages (facts / about chunks / games) with pager outside clip", () => {
+    expect(deckSource).toContain("mobileInfoPage");
+    expect(deckSource).toContain('data-mobile-section={mobileSection}');
+    expect(deckSource).toContain('mobileSection === "facts"');
+    expect(deckSource).toContain('mobileSection === "about"');
+    expect(deckSource).toContain('mobileSection === "games"');
+    expect(deckSource).toContain("pb-mobile-details__body");
+    expect(deckSource).toContain("pb-mobile-bio-measure");
+    expect(deckSource).toContain("setMobileInfoPage");
+    expect(deckSource).toContain("mobileInfoPageCountRef");
+    // Up/down map to mobile page index — not desktop detailsPage bio index.
+    expect(deckSource).toContain("mobileInfoPageRef.current < last");
+    expect(deckSource).toContain("mobileInfoPageRef.current > 0");
+    expect(deckSource).toContain("Публичные ближайшие игры этого игрока пока недоступны.");
+    expect(cssSource).toContain("pb-mobile-details__body");
+    expect(cssSource).not.toContain("-webkit-line-clamp: 6");
+    expect(cssSource).toContain('pb-mobile-details__head[data-page-role="host"]');
+  });
 });
 
 describe("player browse tutorial marker", () => {
@@ -335,12 +354,21 @@ describe("player browse desktop v5 contracts", () => {
     expect(chunks.join("")).not.toContain(first + first);
     expect(estimateBrowseBioChunkChars(long.length, 100, 220)).toBeLessThan(long.length);
     expect(estimateBrowseBioChunkChars(long.length, 200, 200)).toBe(long.length);
+    // Mobile page bounds: facts + about chunks + games (about count at least 1).
+    const mobileAboutCount = Math.max(1, chunks.length);
+    const mobilePageCount = 1 + mobileAboutCount + 1;
+    expect(mobilePageCount).toBe(chunks.length + 2);
+    expect(chunkBrowseBio("", 90)).toEqual([]);
+    expect(1 + Math.max(1, chunkBrowseBio("", 90).length) + 1).toBe(3);
     expect(deckSource).toContain("chunkBrowseBio");
     expect(deckSource).toContain("bioChunks.length > 1");
+    expect(deckSource).toContain("estimateBrowseBioChunkChars");
     expect(deckSource).toContain('data-reserved="true"');
     expect(deckSource).toContain("pb-profile-link--heading");
     expect(deckSource).toContain("Публичные ближайшие игры этого игрока пока недоступны.");
     expect(deckSource).not.toContain("Публичные игры пока не указаны.");
+    expect(deckSource).toContain("mobileAboutCount");
+    expect(deckSource).toContain("mobileInfoLast");
     expect(radarSource).toContain("directory-desktop");
     expect(radarSource).toContain("radar-dir-switch");
     expect(cssSource).toContain("radar-dir-switch");

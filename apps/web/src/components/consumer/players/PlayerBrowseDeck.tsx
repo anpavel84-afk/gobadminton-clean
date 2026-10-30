@@ -139,6 +139,8 @@ export function PlayerBrowseDeck({
   const [known, setKnown] = useState<Map<string, FriendshipView["relationship"]>>(() => new Map());
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [detailsPage, setDetailsPage] = useState(0);
+  /** Mobile-only fixed info pages: facts → about bio chunks → games (desktop keeps detailsPage). */
+  const [mobileInfoPage, setMobileInfoPage] = useState(0);
   const [bioChunks, setBioChunks] = useState<string[]>([]);
   const [friendBusy, setFriendBusy] = useState(false);
   const [rateBlockedUntil, setRateBlockedUntil] = useState<number | null>(null);
@@ -156,6 +158,7 @@ export function PlayerBrowseDeck({
   const slideFrameRef = useRef<HTMLDivElement>(null);
   const detailsBodyRef = useRef<HTMLDivElement>(null);
   const detailsBioRef = useRef<HTMLParagraphElement>(null);
+  const mobileDetailsBodyRef = useRef<HTMLDivElement>(null);
   const tutorialRef = useRef<HTMLElement>(null);
   const friendshipApi = useRef<BrowseFriendshipApi | null>(null);
   const drag = useRef<DragState | null>(null);
@@ -177,6 +180,8 @@ export function PlayerBrowseDeck({
   const tutorialOpenRef = useRef(false);
   const detailsOpenRef = useRef(false);
   const detailsPageRef = useRef(0);
+  const mobileInfoPageRef = useRef(0);
+  const mobileInfoPageCountRef = useRef(3);
   const bioChunksRef = useRef<string[]>([]);
   const rateBlockedUntilRef = useRef<number | null>(null);
   const currentPeerRef = useRef<string | null>(null);
@@ -392,6 +397,7 @@ export function PlayerBrowseDeck({
     setSkipStack([]);
     setDetailsOpen(false);
     setDetailsPage(0);
+    setMobileInfoPage(0);
     setBioChunks([]);
     setKnown(new Map());
     restoredScope.current = null;
@@ -455,6 +461,7 @@ export function PlayerBrowseDeck({
   useEffect(() => {
     setDetailsOpen(false);
     setDetailsPage(0);
+    setMobileInfoPage(0);
     setBioChunks([]);
     setFriendBusy(false);
     awaitingRightRef.current = null;
@@ -966,6 +973,7 @@ export function PlayerBrowseDeck({
 
   const openDetails = useCallback(() => {
     setDetailsPage(0);
+    setMobileInfoPage(0);
     setBioChunks([]);
     setDetailsOpen(true);
   }, []);
@@ -973,6 +981,7 @@ export function PlayerBrowseDeck({
   const closeDetails = useCallback(() => {
     setDetailsOpen(false);
     setDetailsPage(0);
+    setMobileInfoPage(0);
     setBioChunks([]);
   }, []);
 
@@ -1050,18 +1059,73 @@ export function PlayerBrowseDeck({
     if (mobileFullscreen) requestAnimationFrame(() => closeBtnRef.current?.focus({ preventScroll: true }));
   }, [mobileFullscreen]);
 
-  // Mobile details bio pages — fixed pages, no ordinary vertical scroll inside the card.
+  // Mobile: height-fit bio chunks for about pages (facts / about* / games stay separate).
   useLayoutEffect(() => {
     if (desktop || !detailsOpen) return;
     const bio = normalizeBrowseBio(current?.bio);
-    if (!bio) {
-      setBioChunks([]);
-      setDetailsPage(0);
-      return;
-    }
-    const chunks = chunkBrowseBio(bio, 140);
-    setBioChunks(chunks);
-    setDetailsPage(page => Math.min(page, Math.max(0, chunks.length - 1)));
+    const clampMobilePage = (aboutLen: number) => {
+      const aboutCount = Math.max(1, aboutLen);
+      const last = aboutCount + 1; // facts=0 … games=last
+      setMobileInfoPage(page => Math.min(page, last));
+    };
+    const recompute = () => {
+      const bioEl = detailsBioRef.current;
+      if (!bio) {
+        setBioChunks([]);
+        clampMobilePage(0);
+        return;
+      }
+      if (!bioEl) return;
+      // Measure host mirrors about-page chrome so chunks fit available height (375×667 / zoom).
+      const previous = bioEl.textContent;
+      bioEl.textContent = bio;
+      const client = bioEl.clientHeight;
+      const scroll = bioEl.scrollHeight;
+      let nextChunks = scroll <= client + 2
+        ? [bio]
+        : chunkBrowseBio(bio, estimateBrowseBioChunkChars(bio.length, client, scroll));
+      for (let guard = 0; guard < 8; guard += 1) {
+        let clippedLen = 0;
+        let clippedClient = client;
+        let clippedScroll = scroll;
+        for (const chunk of nextChunks) {
+          bioEl.textContent = chunk;
+          const chunkClient = bioEl.clientHeight;
+          const chunkScroll = bioEl.scrollHeight;
+          if (chunkScroll > chunkClient + 2 && chunk.length > clippedLen) {
+            clippedLen = chunk.length;
+            clippedClient = chunkClient;
+            clippedScroll = chunkScroll;
+          }
+        }
+        if (!clippedLen) break;
+        const tighter = estimateBrowseBioChunkChars(clippedLen, clippedClient, clippedScroll);
+        const rebuilt = chunkBrowseBio(bio, tighter);
+        if (
+          rebuilt.length === nextChunks.length
+          && rebuilt.every((part, i) => part === nextChunks[i])
+        ) break;
+        nextChunks = rebuilt;
+      }
+      bioEl.textContent = previous;
+      setBioChunks(prev => (
+        prev.length === nextChunks.length && prev.every((part, i) => part === nextChunks[i])
+          ? prev
+          : nextChunks
+      ));
+      clampMobilePage(nextChunks.length);
+    };
+    recompute();
+    window.addEventListener("resize", recompute);
+    const measureRoot = detailsBioRef.current?.parentElement ?? mobileDetailsBodyRef.current;
+    const ro = typeof ResizeObserver === "function" && measureRoot
+      ? new ResizeObserver(() => recompute())
+      : null;
+    if (ro && measureRoot) ro.observe(measureRoot);
+    return () => {
+      window.removeEventListener("resize", recompute);
+      ro?.disconnect();
+    };
   }, [desktop, detailsOpen, current?.publicPlayerId, current?.bio]);
 
   // Failed / UNKNOWN right-swipe: restore readable card, no automatic replay.
@@ -1091,6 +1155,9 @@ export function PlayerBrowseDeck({
   tutorialOpenRef.current = tutorialOpen;
   detailsOpenRef.current = detailsOpen;
   detailsPageRef.current = detailsPage;
+  mobileInfoPageRef.current = mobileInfoPage;
+  // facts + max(1, bioChunks) about pages + games
+  mobileInfoPageCountRef.current = 1 + Math.max(1, bioChunks.length) + 1;
   bioChunksRef.current = bioChunks;
   rateBlockedUntilRef.current = rateBlockedUntil;
   currentPeerRef.current = current?.publicPlayerId ?? null;
@@ -1392,16 +1459,16 @@ export function PlayerBrowseDeck({
           openDetailsRef.current();
           return;
         }
-        const chunks = bioChunksRef.current;
-        if (chunks.length > 1 && detailsPageRef.current < chunks.length - 1) {
-          setDetailsPage(page => Math.min(chunks.length - 1, page + 1));
+        const last = mobileInfoPageCountRef.current - 1;
+        if (mobileInfoPageRef.current < last) {
+          setMobileInfoPage(page => Math.min(last, page + 1));
         }
         springBackCard();
         return;
       }
       if (result === "vertical-down") {
         if (detailsOpenRef.current) {
-          if (detailsPageRef.current > 0) setDetailsPage(page => Math.max(0, page - 1));
+          if (mobileInfoPageRef.current > 0) setMobileInfoPage(page => Math.max(0, page - 1));
           else closeDetailsRef.current();
         }
         springBackCard();
@@ -1513,6 +1580,17 @@ export function PlayerBrowseDeck({
   const levelLabel = formatSocialLevel(current?.level);
   const meta = [levelLabel !== "не указан" ? levelLabel : null, cityName(current?.cityId ?? null), current?.areaKey].filter(Boolean).join(" · ");
   const locationLine = [cityName(current?.cityId ?? null), current?.areaKey].filter(Boolean).join(" · ");
+  // Mobile fixed pages: 0=facts/overview, 1..N=about bio, last=games/profile link.
+  const mobileAboutCount = Math.max(1, bioChunks.length);
+  const mobileInfoLast = mobileAboutCount + 1;
+  const mobileAboutIndex = mobileInfoPage >= 1 && mobileInfoPage <= mobileAboutCount
+    ? mobileInfoPage - 1
+    : 0;
+  const mobileSection: "facts" | "about" | "games" = mobileInfoPage <= 0
+    ? "facts"
+    : mobileInfoPage <= mobileAboutCount
+      ? "about"
+      : "games";
   const atEnd = index >= browsePlayers.length - 1;
   const intentAtStart = intentIndex <= 0;
   const intentAtEnd = intentIndex >= browsePlayers.length - 1;
@@ -1796,44 +1874,87 @@ export function PlayerBrowseDeck({
                       aria-hidden={!detailsOpen ? true : undefined}
                     >
                       <div className="pb-mobile-details__panel">
-                        <div className="pb-mobile-details__head">
-                          {detailsOpen && (
-                            <PreparedBrowseAvatar className={`avatar avatar--${current.trainer ? "purple" : "yellow"} pb-details-avatar`} media={committedMedia!.avatar} name={current.displayName} tone={current.trainer ? "purple" : "yellow"} />
-                          )}
-                          <div>
-                            <h3>{current.displayName}</h3>
-                            {meta && <p className="pb-meta">{meta}</p>}
+                        {/* Body clips one info page; pager stays outside so prev/next are never below the fold. */}
+                        <div
+                          ref={mobileDetailsBodyRef}
+                          className="pb-mobile-details__body"
+                          data-mobile-info-page={mobileInfoPage}
+                          data-mobile-section={mobileSection}
+                        >
+                          {/* Measure host mirrors about-page geometry for height-fit chunking (not shown). */}
+                          <div className="pb-mobile-bio-measure" aria-hidden="true">
+                            <div className="pb-about pb-about--measure">
+                              <h3>О себе</h3>
+                              <p ref={detailsBioRef} className="pb-details-bio pb-mobile-bio" data-details-bio="" />
+                              <p className="pb-bio-chunk-meta" data-reserved="true" data-active="true">Текст 1 / 1</p>
+                            </div>
                           </div>
-                        </div>
-                        <div className="pb-facts">
-                          <div className="pb-fact"><span>Уровень</span><strong>{levelLabel}</strong><small>Самооценка игрока</small></div>
-                          <div className="pb-fact"><span>Город</span><strong>{cityName(current.cityId) || "Не указан"}</strong></div>
-                          <div className="pb-fact"><span>Район / метро</span><strong>{current.areaKey || "Не указан"}</strong></div>
-                          <div className="pb-fact"><span>Роль</span><strong>{current.trainer ? "Тренер" : "Игрок"}</strong></div>
-                        </div>
-                        <div className="pb-about">
-                          <h3>О себе</h3>
-                          <p>{bioChunks[detailsPage] ?? (normalizeBrowseBio(current.bio) || "О себе пока ничего не написано.")}</p>
-                          {bioChunks.length > 1 && (
-                            <p className="pb-bio-chunk-meta" aria-live="polite">
-                              Текст {String(detailsPage + 1)} / {String(bioChunks.length)}
-                            </p>
+
+                          {/* Single retained avatar host while details open — visual only on facts/overview. */}
+                          <div
+                            className="pb-mobile-details__head"
+                            data-page-role={mobileSection === "facts" ? "overview" : "host"}
+                            aria-hidden={mobileSection !== "facts" ? true : undefined}
+                          >
+                            {detailsOpen && (
+                              <PreparedBrowseAvatar className={`avatar avatar--${current.trainer ? "purple" : "yellow"} pb-details-avatar`} media={committedMedia!.avatar} name={current.displayName} tone={current.trainer ? "purple" : "yellow"} />
+                            )}
+                            {mobileSection === "facts" && (
+                              <div>
+                                <h3>{current.displayName}</h3>
+                                {meta && <p className="pb-meta">{meta}</p>}
+                              </div>
+                            )}
+                          </div>
+
+                          {mobileSection === "facts" && (
+                            <div className="pb-facts">
+                              <div className="pb-fact"><span>Уровень</span><strong>{levelLabel}</strong><small>Самооценка игрока</small></div>
+                              <div className="pb-fact"><span>Город</span><strong>{cityName(current.cityId) || "Не указан"}</strong></div>
+                              <div className="pb-fact"><span>Район / метро</span><strong>{current.areaKey || "Не указан"}</strong></div>
+                              <div className="pb-fact"><span>Роль</span><strong>{current.trainer ? "Тренер" : "Игрок"}</strong></div>
+                            </div>
+                          )}
+
+                          {mobileSection === "about" && (
+                            <div className="pb-about">
+                              <h3>О себе</h3>
+                              <p className="pb-details-bio pb-mobile-bio" data-details-bio="">
+                                {bioChunks[mobileAboutIndex] ?? (normalizeBrowseBio(current.bio) || "О себе пока ничего не написано.")}
+                              </p>
+                              <p
+                                className="pb-bio-chunk-meta"
+                                data-reserved="true"
+                                data-active={mobileAboutCount > 1 ? "true" : "false"}
+                                aria-live="polite"
+                              >
+                                {mobileAboutCount > 1
+                                  ? `Текст ${String(mobileAboutIndex + 1)} / ${String(mobileAboutCount)}`
+                                  : "Текст 1 / 1"}
+                              </p>
+                            </div>
+                          )}
+
+                          {mobileSection === "games" && (
+                            <div className="pb-games">
+                              <h3>Ближайшие игры</h3>
+                              <p>Публичные ближайшие игры этого игрока пока недоступны.</p>
+                              <Link className="pb-profile-link" href={`/players/${current.publicPlayerId}`} data-browse-no-drag="">Открыть публичный профиль</Link>
+                            </div>
                           )}
                         </div>
-                        <div className="pb-games">
-                          <h3>Ближайшие игры</h3>
-                          <p>Публичные ближайшие игры этого игрока пока недоступны.</p>
-                          <Link className="pb-profile-link" href={`/players/${current.publicPlayerId}`}>Открыть публичный профиль</Link>
-                        </div>
-                        <div className="pb-details-pager" data-browse-no-drag="">
-                          <button type="button" className="pb-details-more" disabled={detailsPage <= 0 && !detailsOpen} onClick={() => {
-                            if (detailsPage > 0) setDetailsPage(page => page - 1);
+
+                        <div className="pb-details-pager" data-browse-no-drag="" data-active="true">
+                          <button type="button" className="pb-details-more" onClick={() => {
+                            if (mobileInfoPage > 0) setMobileInfoPage(page => Math.max(0, page - 1));
                             else closeDetails();
                           }}>
-                            {detailsPage > 0 ? "Назад" : "К обложке"}
+                            {mobileInfoPage > 0 ? "Назад" : "К обложке"}
                           </button>
-                          {bioChunks.length > 1 && detailsPage < bioChunks.length - 1 && (
-                            <button type="button" className="pb-details-more" onClick={() => setDetailsPage(page => Math.min(bioChunks.length - 1, page + 1))}>
+                          {mobileInfoPage < mobileInfoLast && (
+                            <button type="button" className="pb-details-more" onClick={() => {
+                              setMobileInfoPage(page => Math.min(mobileInfoLast, page + 1));
+                            }}>
                               Ещё сведения
                             </button>
                           )}
