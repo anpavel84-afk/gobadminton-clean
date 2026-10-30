@@ -352,7 +352,7 @@ export function PlayersDirectoryPage() {
         {catalogFilters}
       </>
     )}
-    {!showCards && playersMapCta}
+    {(desktop || !showCards) && playersMapCta}
     {showCards && desktop ? (
       <section className="players-browse-deck" aria-label="Игроки по одному">
         {liveRadar && catalog.radar.length > 0 && (

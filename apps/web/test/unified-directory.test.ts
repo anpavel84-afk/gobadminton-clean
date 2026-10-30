@@ -452,23 +452,34 @@ describe("unified directory privacy and global pagination", () => {
     await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
     expect(c.view.rows).toHaveLength(6);
     let recovering: Promise<void> | null = null;
+    // Mirror PlayersDirectoryPage arming: set BEFORE c.query so invalidate/set notify
+    // cannot reenter while recovering is still null (assignment happens only after query returns).
+    let arming = false;
     let sawAtomic404 = false;
     c.subscribe(() => {
-      if (c.view.mode === "ordinary" && c.view.snapshot === null && !c.view.capabilityUnavailable && !recovering) {
+      if (c.view.mode === "ordinary" && c.view.snapshot === null && !c.view.capabilityUnavailable && !arming && !recovering) {
         // Failure settlement must publish ordinary+clear together (not cleared while still unified).
         expect(c.view.rows).toEqual([]);
         sawAtomic404 = true;
-        recovering = c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+        arming = true;
+        try {
+          recovering = c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+        } finally {
+          arming = false;
+        }
       }
     });
     time += 30000;
     await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
     if (recovering) await recovering;
     expect(sawAtomic404).toBe(true);
-    expect(calls).toBeGreaterThanOrEqual(3);
+    expect(calls).toBe(3);
     expect(c.view.capabilityUnavailable).toBe(false);
     expect(c.view.mode).toBe("unified");
-    expect(c.view.rows).toHaveLength(6);
+    expect(c.view.rows.map(r => r.publicPlayerId)).toEqual(["r1", "r2", "r3", "r4", "r5", "r6"]);
+    expect(c.matches(filters, "activation:1")).toBe(true);
+    expect(c.renderable(filters, "activation:1")).toBe(true);
+    expect(c.nextRefreshAt()).toBe(time + 30000);
   });
 });
 describe("distance and map authority", () => {

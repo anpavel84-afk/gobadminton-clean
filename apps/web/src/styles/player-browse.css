@@ -1249,7 +1249,8 @@
 .gb-player-browse .gb-players-map-cta > button {
   pointer-events: auto;
 }
-.gb-player-browse[data-browse-view="cards"] .gb-players-map-cta {
+/* Hide map CTA in mobile cards only; desktop cards keep the shared upper entry. */
+.gb-player-browse[data-browse-view="cards"]:not([data-directory-desktop="true"]) .gb-players-map-cta {
   display: none;
 }
 /* Mobile fullscreen swipe cards: keep CTA out of the gesture surface. */
