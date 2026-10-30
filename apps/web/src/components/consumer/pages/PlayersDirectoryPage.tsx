@@ -13,7 +13,6 @@ import { confirmedDirectoryActivation } from "../../../lib/radar-controller";
 import { RadarSwitchControl, RadarStatusControls } from "../radar/RadarControls";
 import { Button } from "../Button";
 import { ConsumerShell } from "../ConsumerShell";
-import { FoldedMapGlyph } from "../NavIcon";
 import { UnifiedPlayerCard } from "../radar/UnifiedPlayerCard";
 import { UnifiedPlayerPreview } from "../radar/UnifiedPlayerPreview";
 import { useUnifiedDirectory, useRadarConfig } from "../radar/RadarSessionProvider";
@@ -24,6 +23,7 @@ import { useRadarSession, useDirectoryFilters } from "../radar/RadarSessionProvi
 import { AuthEntry, PlayerCard, ProfileState } from "../players/ProfileComposition";
 import { PlayerBrowseDeck } from "../players/PlayerBrowseDeck";
 import { PlayersDirectoryToolbar } from "../players/PlayersDirectoryToolbar";
+import { GamesViewAction } from "../games/GamesViewAction";
 
 /**
  * Unified Radar notices (distance, transient, stale, auth) live in the header affordance.
@@ -33,14 +33,19 @@ function directoryInFlowNotice(_notice: string): string | null {
   return null;
 }
 
-/** Client-only desktop directory composition; first paint false until effect (SSR-safe). */
-function usePlayersDirectoryDesktop(): boolean {
+/** Desktop MQ + readiness; gate mobile fullscreen until MQ is known (no desktop flash). */
+function usePlayersDirectoryDesktop(): { desktop: boolean; mqReady: boolean } {
   const [desktop, setDesktop] = useState(false);
+  const [mqReady, setMqReady] = useState(false);
   useEffect(() => {
-    if (typeof window.matchMedia !== "function") return;
+    if (typeof window.matchMedia !== "function") {
+      setMqReady(true);
+      return;
+    }
     const media = window.matchMedia(PLAYER_BROWSE_DESKTOP_MQ);
     const sync = () => setDesktop(media.matches);
     sync();
+    setMqReady(true);
     if (typeof media.addEventListener === "function") {
       media.addEventListener("change", sync);
       return () => media.removeEventListener("change", sync);
@@ -50,18 +55,23 @@ function usePlayersDirectoryDesktop(): boolean {
       return () => media.removeListener(sync);
     }
   }, []);
-  return desktop;
+  return { desktop, mqReady };
 }
 
-export function PlayersDirectoryPage() {
+export function PlayersDirectoryPage({
+  initialBrowseView = "list",
+}: {
+  /** Server-parsed from searchParams so first paint matches URL (stable header geometry). */
+  initialBrowseView?: PlayerBrowseView;
+} = {}) {
   const [players, setPlayers] = useState<PublicPlayer[]>([]);
   const [cities, setCities] = useState<City[]>([]);
   const [state, setState] = useState("loading");
-  // Default list for SSR/hydration; URL `view=cards` applies after mount.
-  const [browseView, setBrowseView] = useState<PlayerBrowseView>("list");
-  const [viewReady, setViewReady] = useState(false);
+  // Server passes URL view; client keeps it through hydration (no list→cards header flash).
+  const [browseView, setBrowseView] = useState<PlayerBrowseView>(initialBrowseView);
+  const [viewReady, setViewReady] = useState(true);
   const [portalReady, setPortalReady] = useState(false);
-  const desktop = usePlayersDirectoryDesktop();
+  const { desktop, mqReady } = usePlayersDirectoryDesktop();
   const cardsHistoryPushed = useRef(false);
   const listScrollY = useRef(0);
   const cardsTrigger = useRef<HTMLElement | null>(null);
@@ -237,7 +247,8 @@ export function PlayersDirectoryPage() {
   const cityName = cities.find(c => c.id === cityId)?.nameRu;
   const placeLabel = [cityName || (cityId ? "Город" : "Все города"), areaKey.trim() || "Все районы"].join(" · ");
   const showCards = viewReady && browseView === "cards";
-  const mobileCards = showCards && !desktop;
+  // Wait for MQ before mobile portal — avoids fullscreen flash when desktop ≥1024 hydrates.
+  const mobileCards = showCards && mqReady && !desktop;
   // Mobile cards: native <dialog>.showModal for focus containment; body scroll lock; desktop resize tears down.
   useEffect(() => {
     if (!mobileCards || !portalReady) return;
@@ -272,14 +283,16 @@ export function PlayersDirectoryPage() {
       </div>
     </section>
   );
+  // Floating overlay (GamesViewAction layout) — does not shift toolbar/list/card geometry ON/OFF.
   const playersMapCta = activationId ? (
-    <div className="gb-players-map-cta" data-radar-map-cta="true">
-      <Button className="gb-map-desktop-entry" variant="dark" href="/players/radar" aria-label="Игроки на карте">
-        <span className="gb-map-entry-tile"><FoldedMapGlyph /></span>
-        <span className="gb-map-cta-label gb-map-cta-label--full">Игроки на карте</span>
-        <span className="gb-map-cta-label gb-map-cta-label--short">На карте</span>
-      </Button>
-    </div>
+    <GamesViewAction
+      view="list"
+      href="/players/radar"
+      labelFull="Игроки на карте"
+      labelShort="На карте"
+      className="gb-players-map-cta"
+      aria-label="Игроки на карте"
+    />
   ) : null;
   const catalogFilters = (
     <>
@@ -330,10 +343,11 @@ export function PlayersDirectoryPage() {
     />
   );
   return <ConsumerShell active="players" title="Игроки" hideHeading><div className="fr3 players-page gb-player-browse" data-surface="players-directory" data-state={state} data-browse-view={showCards ? "cards" : "list"} data-directory-desktop={desktop ? "true" : "false"} inert={mobileCards ? true : undefined}>
-    <section className={`players-hero${showCards && !desktop ? " pb-hero--compact" : ""}`}>
+    <section className={`players-hero${showCards ? " pb-hero--compact" : ""}`}>
       <div>
         <h1>Игроки</h1>
-        {(desktop || !showCards) && <p>Найдите партнёров для хорошей игры.</p>}
+        {/* Always in DOM; CSS media + data-browse-view keep geometry stable (no JS subtitle flash). */}
+        <p className="players-hero__subtitle">Найдите партнёров для хорошей игры.</p>
       </div>
       <div className="pb-view-switch" role="group" aria-label="Вид каталога">
         <button type="button" aria-pressed={!showCards} onClick={() => changeBrowseView("list")}>
@@ -352,6 +366,7 @@ export function PlayersDirectoryPage() {
         {catalogFilters}
       </>
     )}
+    {/* Overlay CTA: list (mobile+desktop) and desktop cards; never mobile fullscreen gesture surface. */}
     {(desktop || !showCards) && playersMapCta}
     {showCards && desktop ? (
       <section className="players-browse-deck" aria-label="Игроки по одному">
@@ -364,7 +379,7 @@ export function PlayersDirectoryPage() {
         )}
         {deck}
       </section>
-    ) : showCards && portalReady ? createPortal(
+    ) : mobileCards && portalReady ? createPortal(
       <dialog
         ref={mobileFsDialogRef}
         className="gb-player-browse pb-mobile-fs"

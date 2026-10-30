@@ -73,12 +73,21 @@ export function nextBrowseIntentAfterFailure(
   return { kind: "unavailable" };
 }
 
+/**
+ * Tinder browse window: previous + current + next 4 (max 6), deduped.
+ * Priority order: current, then ahead peers, then previous — so prep/eviction
+ * never starves the visible/next cards for far-behind work.
+ * Radar pin cap/admission is separate (RADAR_PIN_MEDIA_CAP) and must not use this.
+ */
 export function browseMediaNeighborhood(index: number, length: number): number[] {
   if (length <= 0 || index < 0 || index >= length) return [];
   const out: number[] = [];
-  for (const i of [index - 1, index, index + 1]) {
+  const push = (i: number) => {
     if (i >= 0 && i < length && !out.includes(i)) out.push(i);
-  }
+  };
+  push(index);
+  for (let ahead = 1; ahead <= 4; ahead += 1) push(index + ahead);
+  push(index - 1);
   return out;
 }
 

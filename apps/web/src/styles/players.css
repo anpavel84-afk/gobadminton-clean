@@ -424,9 +424,16 @@
 .fr3 .profile-icon { width:18px; height:18px; flex:none; }
 .fr3 .player-profile-status > span.status-badge--available { color:var(--gb-ink); }
 
-/* Frozen photo-avatar family, composed inside existing profile form/modal. */
+/* Frozen photo-avatar family, composed inside existing profile form/modal.
+ * RetainedBrowseImage wraps with display:contents span — direct-child `>` misses nested img. */
 .fr3 .avatar { overflow: hidden; }
-.fr3 .avatar > img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.fr3 .avatar > img,
+.fr3 .avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
 .avatar-editor { display: flex; gap: 16px; align-items: flex-start; margin-bottom: 24px; }
 .fr3 .avatar-editor > .avatar { width: 80px; height: 80px; }
 .avatar-editor p { color: var(--gb-ink-soft); font-size: 13px; }

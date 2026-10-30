@@ -603,10 +603,8 @@ export function PlayerBrowseDeck({
       mediaCacheRef.current.delete(id);
     }
 
-    const ordered = [
-      targetIndex,
-      ...neighborhood.filter(i => i !== targetIndex),
-    ];
+    // neighborhood is already current → ahead → previous; keep that prep priority.
+    const ordered = neighborhood;
 
     for (const i of ordered) {
       const peer = browsePlayers[i]!;

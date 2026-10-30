@@ -15,6 +15,8 @@ describe("Players automatic Radar composition", () => {
   it("adds only the map action during active Radar, even while capability loads", () => {
     session.on = true; const html = renderToStaticMarkup(<PlayersDirectoryPage />);
     expect(html).toContain("Игроки на карте"); expect(html).toContain('href="/players/radar"');
+    expect(html).toContain("gb-players-map-cta");
+    expect(html).toContain("gb-games-view-action");
     for (const label of ["Смотреть участников Radar", "Сортировать по близости", "Обычный каталог", "Обновить участников Radar", "Никого не нашли", "Показать на карте"]) expect(html).not.toContain(label);
     expect(html).toContain("Ищем игроков…");
   });

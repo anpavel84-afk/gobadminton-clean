@@ -341,6 +341,27 @@ describe("player browse desktop v5 contracts", () => {
     expect(PLAYER_BROWSE_DESKTOP_MQ).toBe("(min-width: 1024px)");
   });
 
+  it("keeps loading header geometry stable via initial view + viewport CSS; floating map CTA", () => {
+    const routeSource = readFileSync(join(root, "src/app/players/page.tsx"), "utf8");
+    const playersCss = readFileSync(join(root, "src/styles/players.css"), "utf8");
+    expect(routeSource).toContain("initialBrowseView");
+    expect(routeSource).toContain("parseBrowseView");
+    expect(pageSource).toContain("initialBrowseView");
+    expect(pageSource).toContain("mqReady");
+    expect(pageSource).toContain("players-hero__subtitle");
+    expect(pageSource).toContain("GamesViewAction");
+    expect(pageSource).toContain('className="gb-players-map-cta"');
+    expect(pageSource).toMatch(/mobileCards = showCards && mqReady && !desktop/);
+    // Desktop hero height from viewport MQ — not gated on hydrated data-directory-desktop.
+    expect(cssSource).toMatch(/@media \(min-width: 1024px\)[\s\S]*?\.gb-player-browse \.players-hero[\s\S]*?height:\s*116px/);
+    expect(cssSource).toContain("players-hero__subtitle");
+    expect(cssSource).toContain("position: fixed");
+    expect(cssSource).toContain("gb-players-map-cta.gb-games-view-action");
+    // Refs398 retained avatar: nested img under display:contents span.
+    expect(playersCss).toContain(".fr3 .avatar img");
+    expect(playersCss).toMatch(/\.fr3 \.avatar > img,\s*\.fr3 \.avatar img/);
+  });
+
   it("chunks long details bios without repeating clipped text; short bio stays single page", () => {
     const short = "Ищу партнёров для парных игр по вечерам.";
     expect(chunkBrowseBio(short, 180)).toEqual([short]);
@@ -426,9 +447,12 @@ describe("player browse desktop v5 contracts", () => {
 
   it("prepares bounded neighborhood media before identity commit", () => {
     expect(PLAYER_BROWSE_MEDIA_DEADLINE_MS).toBe(5000);
-    expect(browseMediaNeighborhood(0, 5)).toEqual([0, 1]);
-    expect(browseMediaNeighborhood(2, 5)).toEqual([1, 2, 3]);
-    expect(browseMediaNeighborhood(4, 5)).toEqual([3, 4]);
+    // Tinder window: current + next4 + previous (max 6), priority current/ahead then prev.
+    expect(browseMediaNeighborhood(0, 5)).toEqual([0, 1, 2, 3, 4]);
+    expect(browseMediaNeighborhood(2, 5)).toEqual([2, 3, 4, 1]);
+    expect(browseMediaNeighborhood(4, 5)).toEqual([4, 3]);
+    expect(browseMediaNeighborhood(1, 10)).toEqual([1, 2, 3, 4, 5, 0]);
+    expect(browseMediaNeighborhood(1, 10).length).toBeLessThanOrEqual(6);
     expect(browseMediaNeighborhood(0, 0)).toEqual([]);
     expect(isSafeBrowseCoverUrl("/v1/media/covers/" + "a".repeat(64) + ".png")).toBe(true);
     expect(isSafeBrowseCoverUrl("https://example.com/x.png")).toBe(false);
@@ -450,6 +474,8 @@ describe("player browse desktop v5 contracts", () => {
     expect(deckSource).toContain("viewerGen");
     expect(deckSource).not.toContain("coverById");
     expect(deckSource).not.toContain("setCoverById");
+    // Radar pin cap stays independently at 4 — Tinder four-ahead must not rewrite it.
+    expect(RADAR_PIN_MEDIA_CAP).toBe(4);
   });
 
   it("F1: cached terminal failures settle intent — revert, skip, or explicit unavailable", () => {
