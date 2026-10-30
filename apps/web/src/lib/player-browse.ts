@@ -160,3 +160,57 @@ export function popSkip(stack: BrowseSkipStack): { stack: BrowseSkipStack; id: s
   const next = stack.slice(0, -1);
   return { stack: next, id: stack[stack.length - 1] ?? null };
 }
+
+/** Normalize bio whitespace before details pagination. */
+export function normalizeBrowseBio(bio: string | null | undefined): string {
+  return (bio ?? "").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Split a details bio into complete, non-overlapping word-boundary chunks
+ * for the fixed-size desktop banner pager (no clipped/repeated same page).
+ */
+export function chunkBrowseBio(bio: string, maxChars: number): string[] {
+  const text = normalizeBrowseBio(bio);
+  if (!text) return [];
+  if (maxChars <= 0 || text.length <= maxChars) return [text];
+  const chunks: string[] = [];
+  let start = 0;
+  while (start < text.length) {
+    const remaining = text.length - start;
+    if (remaining <= maxChars) {
+      chunks.push(text.slice(start));
+      break;
+    }
+    const hardEnd = start + maxChars;
+    let breakAt = text.lastIndexOf(" ", hardEnd);
+    if (breakAt <= start) breakAt = hardEnd;
+    const piece = text.slice(start, breakAt).trimEnd();
+    if (!piece) {
+      chunks.push(text.slice(start, hardEnd));
+      start = hardEnd;
+      continue;
+    }
+    chunks.push(piece);
+    start = breakAt;
+    while (text[start] === " ") start += 1;
+  }
+  return chunks;
+}
+
+/** Reconstruct normalized bio from pager chunks (space-joined). */
+export function reconstructBrowseBio(chunks: readonly string[]): string {
+  return normalizeBrowseBio(chunks.join(" "));
+}
+
+/** Estimate first-chunk capacity from a full-bio overflow measure. */
+export function estimateBrowseBioChunkChars(
+  bioLength: number,
+  clientHeight: number,
+  scrollHeight: number,
+): number {
+  if (bioLength <= 0) return 0;
+  if (scrollHeight <= clientHeight + 2) return bioLength;
+  const ratio = clientHeight / Math.max(scrollHeight, 1);
+  return Math.max(24, Math.floor(bioLength * ratio * 0.9));
+}

@@ -965,7 +965,7 @@
 }
 
 .gb-player-browse .pb-dir-toolbar__radar {
-  width: 226px;
+  width: 246px;
   flex: none;
 }
 
@@ -973,25 +973,109 @@
   height: 100%;
   min-height: 48px;
   margin: 0;
-  padding: 6px 12px;
+  padding: 0;
   border: 1px solid #dce8ca;
   border-radius: 12px;
   background: #eff6e5;
   display: flex;
   flex-direction: row;
   align-items: center;
-  gap: 10px;
+  gap: 0;
   flex-wrap: nowrap;
+  overflow: hidden;
 }
 
-.gb-player-browse .pb-dir-toolbar__radar .radar-entry > .gb-c23-btn,
+.gb-player-browse .pb-dir-toolbar__radar .radar-entry--directory-desktop {
+  padding: 0;
+}
+
 .gb-player-browse .pb-dir-toolbar__radar .radar-entry > a {
   flex: 1;
   min-width: 0;
+  margin: 6px 10px;
 }
 
-.gb-player-browse .pb-dir-toolbar__radar .radar-entry small {
-  display: none;
+.gb-player-browse .pb-dir-toolbar__radar .radar-dir-switch {
+  width: 100%;
+  min-height: 48px;
+  margin: 0;
+  padding: 7px 12px 7px 10px;
+  border: 0;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  text-align: left;
+  cursor: pointer;
+  color: var(--pb-ink);
+  font: inherit;
+}
+
+.gb-player-browse .pb-dir-toolbar__radar .radar-dir-switch:disabled {
+  opacity: .55;
+  cursor: default;
+}
+
+.gb-player-browse .pb-dir-toolbar__radar .radar-dir-switch__glyph {
+  width: 22px;
+  height: 22px;
+  flex: none;
+  color: #5f8f1f;
+}
+
+.gb-player-browse .pb-dir-toolbar__radar .radar-dir-switch__copy {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.gb-player-browse .pb-dir-toolbar__radar .radar-dir-switch__copy strong {
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.gb-player-browse .pb-dir-toolbar__radar .radar-dir-switch__copy small {
+  display: block;
+  font-size: 10px;
+  color: #6f7d6a;
+  line-height: 1.25;
+}
+
+.gb-player-browse .pb-dir-toolbar__radar .radar-dir-switch__track {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  border-radius: 999px;
+  background: #c5d0bc;
+  flex: none;
+}
+
+.gb-player-browse .pb-dir-toolbar__radar .radar-dir-switch__track b {
+  position: absolute;
+  left: 2px;
+  top: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform .18s cubic-bezier(.2, .8, .2, 1);
+}
+
+.gb-player-browse .pb-dir-toolbar__radar .radar-dir-switch.is-on .radar-dir-switch__track {
+  background: var(--pb-lime-deep, #8de126);
+}
+
+.gb-player-browse .pb-dir-toolbar__radar .radar-dir-switch.is-on .radar-dir-switch__track b {
+  transform: translateX(16px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gb-player-browse .pb-dir-toolbar__radar .radar-dir-switch__track b {
+    transition: none;
+  }
 }
 
 .gb-player-browse .pb-dir-toolbar__popover {
@@ -1273,7 +1357,7 @@
 
   .gb-player-browse[data-browse-desktop="true"] .pb-card--desktop.is-expanded .pb-copy {
     flex: 1;
-    padding: 30px 38px 24px;
+    padding: 18px 28px 16px;
   }
 
   .gb-player-browse[data-browse-desktop="true"] .pb-identity {
@@ -1378,8 +1462,8 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    gap: 24px;
-    padding-bottom: 23px;
+    gap: 16px;
+    padding-bottom: 12px;
     border-bottom: 1px solid #34463b;
     flex: none;
   }
@@ -1387,41 +1471,41 @@
   .gb-player-browse[data-browse-desktop="true"] .pb-expanded-person {
     display: flex;
     align-items: center;
-    gap: 17px;
+    gap: 12px;
     min-width: 0;
   }
 
   .gb-player-browse[data-browse-desktop="true"] .pb-expanded-avatar {
-    width: 70px !important;
-    height: 70px !important;
+    width: 52px !important;
+    height: 52px !important;
     border: 3px solid #fff !important;
     flex: none;
   }
 
   .gb-player-browse[data-browse-desktop="true"] .pb-expanded-person h2 {
-    margin: 6px 0;
-    font-size: 28px;
+    margin: 3px 0;
+    font-size: 22px;
     line-height: 1.15;
-    letter-spacing: -.8px;
+    letter-spacing: -.6px;
   }
 
   .gb-player-browse[data-browse-desktop="true"] .pb-expanded-person p {
     margin: 0;
-    font-size: 12px;
+    font-size: 11px;
     color: #a8bda9;
   }
 
   .gb-player-browse[data-browse-desktop="true"] .pb-collapse-details {
     display: inline-flex;
     align-items: center;
-    gap: 11px;
-    padding: 11px 15px;
+    gap: 8px;
+    padding: 8px 12px;
     border: 1px solid #506452;
     border-radius: 10px;
     background: transparent;
     color: #eff7ed;
     font: inherit;
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 600;
     white-space: nowrap;
     cursor: pointer;
@@ -1431,70 +1515,111 @@
     flex: 1;
     min-height: 0;
     overflow: hidden;
+    display: flex;
+    flex-direction: column;
   }
 
   .gb-player-browse[data-browse-desktop="true"] .pb-expanded-columns {
     display: grid;
-    grid-template-columns: 1.2fr 1fr;
-    gap: 54px;
-    padding: 24px 0 10px;
-    height: 100%;
+    grid-template-columns: 1.15fr 1fr;
+    gap: 28px;
+    padding: 12px 0 6px;
+    flex: 1;
+    min-height: 0;
+    height: auto;
+    overflow: hidden;
+  }
+
+  .gb-player-browse[data-browse-desktop="true"] .pb-expanded-about,
+  .gb-player-browse[data-browse-desktop="true"] .pb-expanded-facts {
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .gb-player-browse[data-browse-desktop="true"] .pb-expanded-facts {
+    overflow: hidden;
   }
 
   .gb-player-browse[data-browse-desktop="true"] .pb-expanded-columns h3 {
-    margin: 0 0 12px;
-    font-size: 15px;
+    margin: 0 0 8px;
+    font-size: 13px;
+    flex: none;
   }
 
   .gb-player-browse[data-browse-desktop="true"] .pb-expanded-columns p {
     margin: 0;
-    font-size: 13px;
-    line-height: 1.7;
+    font-size: 12px;
+    line-height: 1.55;
     color: #c8d6c5;
+  }
+
+  .gb-player-browse[data-browse-desktop="true"] .pb-details-bio {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    overflow-wrap: break-word;
+  }
+
+  .gb-player-browse[data-browse-desktop="true"] .pb-bio-chunk-meta {
+    flex: none;
+    margin-top: 6px !important;
+    font-size: 10px !important;
+    color: #8fa28e !important;
   }
 
   .gb-player-browse[data-browse-desktop="true"] .pb-expanded-dl {
     margin: 0;
+    flex: none;
   }
 
   .gb-player-browse[data-browse-desktop="true"] .pb-expanded-dl > div {
     display: flex;
     justify-content: space-between;
-    gap: 20px;
+    gap: 16px;
     border-bottom: 1px solid #304536;
-    padding: 10px 0;
+    padding: 6px 0;
   }
 
   .gb-player-browse[data-browse-desktop="true"] .pb-expanded-dl dt {
-    font-size: 12px;
+    font-size: 11px;
     color: #a9bba8;
   }
 
   .gb-player-browse[data-browse-desktop="true"] .pb-expanded-dl dd {
     margin: 0;
-    font-size: 12px;
+    font-size: 11px;
     text-align: right;
-    line-height: 1.4;
+    line-height: 1.35;
   }
 
   .gb-player-browse[data-browse-desktop="true"] .pb-expanded-dl dd small {
     display: block;
     color: #8fa28e;
-    font-size: 10px;
-    margin-top: 3px;
+    font-size: 9px;
+    margin-top: 2px;
   }
 
   .gb-player-browse[data-browse-desktop="true"] .pb-games-note {
-    font-size: 11px;
+    font-size: 10px;
     color: #95aa94;
-    margin-top: 12px !important;
+    margin-top: 8px !important;
+    flex: none;
+  }
+
+  .gb-player-browse[data-browse-desktop="true"] .pb-expanded-facts .pb-profile-link {
+    flex: none;
+    margin-top: 8px;
+    font-size: 11px;
   }
 
   .gb-player-browse[data-browse-desktop="true"] .pb-details-pager {
     flex: none;
     display: flex;
     gap: 12px;
-    padding-top: 4px;
+    padding-top: 2px;
   }
 
   .gb-player-browse[data-browse-desktop="true"] .pb-details-more {
@@ -1504,15 +1629,15 @@
     font: inherit;
     font-size: 12px;
     font-weight: 600;
-    min-height: 40px;
+    min-height: 32px;
     cursor: pointer;
   }
 
   .gb-player-browse[data-browse-desktop="true"] .pb-profile-bottom {
     flex: none;
     border-top: 1px solid #34463b;
-    padding-top: 18px;
-    margin-top: 14px;
+    padding-top: 12px;
+    margin-top: 8px;
   }
 
   .gb-player-browse[data-browse-desktop="true"] .pb-profile-actions {

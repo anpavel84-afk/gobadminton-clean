@@ -6,10 +6,13 @@ import type { PublicPlayer } from "../src/lib/consumer-types";
 import {
   browseSlideDirection,
   browseSlideDurationMs,
+  chunkBrowseBio,
   classifyPointerGesture,
+  estimateBrowseBioChunkChars,
   indexOfBrowsePlayer,
   isBrowseDragExcludedTarget,
   nextEligibleBrowseIndex,
+  normalizeBrowseBio,
   ordinaryBrowsePlayers,
   parseBrowseView,
   PLAYER_BROWSE_DESKTOP_MQ,
@@ -19,6 +22,7 @@ import {
   pushSkip,
   readBrowseHistoryState,
   readTutorialDismissed,
+  reconstructBrowseBio,
   relationshipBlocksNewRequest,
   swipeThresholdPx,
   withBrowseHistoryState,
@@ -142,11 +146,41 @@ describe("player browse desktop v5 contracts", () => {
     expect(pageSource).toContain("PlayersDirectoryToolbar");
     expect(pageSource).toMatch(/desktop \? desktopToolbar/);
     expect(toolbarSource).toContain("RadarSwitchControl");
+    expect(toolbarSource).toContain('presentation="directory-desktop"');
     expect(toolbarSource).toContain('presentation="directory-compact"');
     expect(toolbarSource).toContain("aria-expanded");
     expect(toolbarSource).toContain("Escape");
     expect(pageSource).toContain("PLAYER_BROWSE_DESKTOP_MQ");
     expect(PLAYER_BROWSE_DESKTOP_MQ).toBe("(min-width: 1024px)");
+  });
+
+  it("chunks long details bios without repeating clipped text; short bio stays single page", () => {
+    const short = "Ищу партнёров для парных игр по вечерам.";
+    expect(chunkBrowseBio(short, 180)).toEqual([short]);
+    expect(chunkBrowseBio(short, 180).length).toBe(1);
+
+    const long = normalizeBrowseBio(
+      "Тестовый профиль DEV. Играю в Хамовниках по выходным, предпочитаю смешанные пары и дружеский темп. "
+      + "Рада буду познакомиться на корте и договориться о спокойной игре после работы. "
+      + "Люблю ровный темп, понятные договорённости и открытый публичный профиль без выдуманных игр.",
+    );
+    expect(long.length).toBeGreaterThan(180);
+    const chunks = chunkBrowseBio(long, 90);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(reconstructBrowseBio(chunks)).toBe(long);
+    const first = chunks[0] ?? "";
+    expect(first.length).toBeGreaterThan(0);
+    expect(chunks.join("")).not.toContain(first + first);
+    expect(estimateBrowseBioChunkChars(long.length, 100, 220)).toBeLessThan(long.length);
+    expect(estimateBrowseBioChunkChars(long.length, 200, 200)).toBe(long.length);
+    expect(deckSource).toContain("chunkBrowseBio");
+    expect(deckSource).toContain("bioChunks.length > 1");
+    expect(deckSource).toContain("Публичные ближайшие игры этого игрока пока недоступны.");
+    expect(deckSource).not.toContain("Публичные игры пока не указаны.");
+    expect(radarSource).toContain("directory-desktop");
+    expect(radarSource).toContain("radar-dir-switch");
+    expect(cssSource).toContain("radar-dir-switch");
+    expect(cssSource).toContain("pb-details-bio");
   });
 
   it("desktop skips gestures while mobile keeps pointer handlers and tutorial gate", () => {

@@ -8,10 +8,13 @@ import type { City, Me, PublicPlayer } from "../../../lib/consumer-types";
 import { formatSocialLevel } from "../../../lib/player-presentation";
 import {
   browseSlideDurationMs,
+  chunkBrowseBio,
   classifyPointerGesture,
+  estimateBrowseBioChunkChars,
   indexOfBrowsePlayer,
   isBrowseDragExcludedTarget,
   nextEligibleBrowseIndex,
+  normalizeBrowseBio,
   ordinaryBrowsePlayers,
   persistTutorialDismissed,
   PLAYER_BROWSE_DESKTOP_MQ,
@@ -97,7 +100,7 @@ export function PlayerBrowseDeck({
   const [known, setKnown] = useState<Map<string, FriendshipView["relationship"]>>(() => new Map());
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [detailsPage, setDetailsPage] = useState(0);
-  const [detailsNeedsMore, setDetailsNeedsMore] = useState(false);
+  const [bioChunks, setBioChunks] = useState<string[]>([]);
   const [coverById, setCoverById] = useState<Record<string, string | null>>({});
   const [friendBusy, setFriendBusy] = useState(false);
   const [rateBlockedUntil, setRateBlockedUntil] = useState<number | null>(null);
@@ -110,6 +113,7 @@ export function PlayerBrowseDeck({
   const deckRef = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLElement>(null);
   const detailsBodyRef = useRef<HTMLDivElement>(null);
+  const detailsBioRef = useRef<HTMLParagraphElement>(null);
   const tutorialRef = useRef<HTMLElement>(null);
   const friendshipApi = useRef<BrowseFriendshipApi | null>(null);
   const drag = useRef<DragState | null>(null);
@@ -178,7 +182,7 @@ export function PlayerBrowseDeck({
     setSkipStack([]);
     setDetailsOpen(false);
     setDetailsPage(0);
-    setDetailsNeedsMore(false);
+    setBioChunks([]);
     setKnown(new Map());
     restoredScope.current = null;
     setIndex(0);
@@ -217,7 +221,7 @@ export function PlayerBrowseDeck({
   useEffect(() => {
     setDetailsOpen(false);
     setDetailsPage(0);
-    setDetailsNeedsMore(false);
+    setBioChunks([]);
     setFriendBusy(false);
     setDragStamp({ opacity: 0, skip: false, label: "" });
     if (cardRef.current) {
@@ -369,26 +373,61 @@ export function PlayerBrowseDeck({
 
   const openDetails = useCallback(() => {
     setDetailsPage(0);
-    setDetailsNeedsMore(false);
+    setBioChunks([]);
     setDetailsOpen(true);
   }, []);
 
   const closeDetails = useCallback(() => {
     setDetailsOpen(false);
     setDetailsPage(0);
-    setDetailsNeedsMore(false);
+    setBioChunks([]);
   }, []);
 
   useLayoutEffect(() => {
-    if (!desktop || !detailsOpen || detailsPage !== 0) {
-      if (!detailsOpen) setDetailsNeedsMore(false);
+    if (!desktop || !detailsOpen) {
       return;
     }
-    const node = detailsBodyRef.current;
-    if (!node) return;
-    // Same-size banner: if page 0 overflows, offer next page instead of clipping or growing.
-    setDetailsNeedsMore(node.scrollHeight > node.clientHeight + 2);
-  }, [desktop, detailsOpen, detailsPage, current?.publicPlayerId, current?.bio]);
+    const bio = normalizeBrowseBio(current?.bio);
+    const recompute = () => {
+      const bioEl = detailsBioRef.current;
+      if (!bio) {
+        setBioChunks([]);
+        setDetailsPage(0);
+        return;
+      }
+      if (!bioEl) return;
+      // Probe full bio in the same available box; chunk only when it actually overflows.
+      const previous = bioEl.textContent;
+      bioEl.textContent = bio;
+      let client = bioEl.clientHeight;
+      let scroll = bioEl.scrollHeight;
+      let nextChunks = scroll <= client + 2
+        ? [bio]
+        : chunkBrowseBio(bio, estimateBrowseBioChunkChars(bio.length, client, scroll));
+      // Tighten once if the first chunk still clips in the same box.
+      if (nextChunks.length > 1 && nextChunks[0]) {
+        bioEl.textContent = nextChunks[0];
+        client = bioEl.clientHeight;
+        scroll = bioEl.scrollHeight;
+        if (scroll > client + 2) {
+          nextChunks = chunkBrowseBio(
+            bio,
+            estimateBrowseBioChunkChars(nextChunks[0].length, client, scroll),
+          );
+        }
+      }
+      bioEl.textContent = previous;
+      setBioChunks(prev => (
+        prev.length === nextChunks.length && prev.every((part, i) => part === nextChunks[i])
+          ? prev
+          : nextChunks
+      ));
+      setDetailsPage(page => Math.min(page, Math.max(0, nextChunks.length - 1)));
+    };
+    recompute();
+    window.addEventListener("resize", recompute);
+    return () => window.removeEventListener("resize", recompute);
+  }, [desktop, detailsOpen, current?.publicPlayerId, current?.bio]);
 
   useEffect(() => {
     if (tutorialOpen) requestAnimationFrame(() => tutorialRef.current?.focus({ preventScroll: true }));
@@ -646,44 +685,45 @@ export function PlayerBrowseDeck({
                         </button>
                       </div>
                       <div ref={detailsBodyRef} className="pb-expanded-body" data-details-page={detailsPage}>
-                        {detailsPage === 0 ? (
-                          <div className="pb-expanded-columns">
-                            <section>
-                              <h3>Об игроке</h3>
-                              {current.bio ? <p>{current.bio}</p> : <p>О себе пока ничего не написано.</p>}
-                            </section>
-                            <section>
-                              <h3>Игровой профиль</h3>
-                              <dl className="pb-expanded-dl">
-                                <div><dt>Уровень игры</dt><dd>{levelLabel}<small>Указан игроком</small></dd></div>
-                                <div><dt>Роль</dt><dd>{current.trainer ? "Тренер" : "Игрок"}</dd></div>
-                                <div><dt>Где играю</dt><dd>{current.areaKey || "Не указан"}</dd></div>
-                              </dl>
-                              <p className="pb-games-note">Публичные игры пока не указаны.</p>
-                              <Link className="pb-profile-link" href={`/players/${current.publicPlayerId}`}>Открыть публичный профиль</Link>
-                            </section>
-                          </div>
-                        ) : (
-                          <div className="pb-expanded-columns">
-                            <section>
-                              <h3>Об игроке</h3>
-                              {current.bio ? <p>{current.bio}</p> : <p>О себе пока ничего не написано.</p>}
-                            </section>
-                            <section>
-                              <h3>Ближайшие игры</h3>
-                              <p>Публичные ближайшие игры этого игрока пока недоступны.</p>
-                              <Link className="pb-profile-link" href={`/players/${current.publicPlayerId}`}>Открыть публичный профиль</Link>
-                            </section>
-                          </div>
-                        )}
+                        <div className="pb-expanded-columns">
+                          <section className="pb-expanded-about">
+                            <h3>Об игроке</h3>
+                            {normalizeBrowseBio(current.bio) ? (
+                              <p ref={detailsBioRef} className="pb-details-bio" data-details-bio="">
+                                {bioChunks[detailsPage] ?? normalizeBrowseBio(current.bio)}
+                              </p>
+                            ) : (
+                              <p ref={detailsBioRef} className="pb-details-bio" data-details-bio="">О себе пока ничего не написано.</p>
+                            )}
+                            {bioChunks.length > 1 && (
+                              <p className="pb-bio-chunk-meta" aria-live="polite">
+                                Текст {String(detailsPage + 1)} / {String(bioChunks.length)}
+                              </p>
+                            )}
+                          </section>
+                          <section className="pb-expanded-facts" data-details-facts="">
+                            <h3>Игровой профиль</h3>
+                            <dl className="pb-expanded-dl">
+                              <div><dt>Уровень игры</dt><dd>{levelLabel}<small>Указан игроком</small></dd></div>
+                              <div><dt>Роль</dt><dd>{current.trainer ? "Тренер" : "Игрок"}</dd></div>
+                              <div><dt>Где играю</dt><dd>{current.areaKey || "Не указан"}</dd></div>
+                            </dl>
+                            <p className="pb-games-note">Публичные ближайшие игры этого игрока пока недоступны.</p>
+                            <Link className="pb-profile-link" href={`/players/${current.publicPlayerId}`}>Открыть публичный профиль</Link>
+                          </section>
+                        </div>
                       </div>
-                      {(detailsNeedsMore || detailsPage > 0) && (
+                      {bioChunks.length > 1 && (
                         <div className="pb-details-pager">
                           {detailsPage > 0 && (
-                            <button type="button" className="pb-details-more" onClick={() => setDetailsPage(0)}>Назад к сведениям</button>
+                            <button type="button" className="pb-details-more" onClick={() => setDetailsPage(page => Math.max(0, page - 1))}>
+                              Назад
+                            </button>
                           )}
-                          {detailsPage === 0 && detailsNeedsMore && (
-                            <button type="button" className="pb-details-more" onClick={() => setDetailsPage(1)}>Ещё сведения</button>
+                          {detailsPage < bioChunks.length - 1 && (
+                            <button type="button" className="pb-details-more" onClick={() => setDetailsPage(page => Math.min(bioChunks.length - 1, page + 1))}>
+                              Ещё сведения
+                            </button>
                           )}
                         </div>
                       )}

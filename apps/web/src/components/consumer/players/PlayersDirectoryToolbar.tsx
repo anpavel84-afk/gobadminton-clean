@@ -114,7 +114,7 @@ export function PlayersDirectoryToolbar({
           {filterCount > 0 && <span className="pb-dir-toolbar__filter-count">{filterCount}</span>}
         </button>
         <div className="pb-dir-toolbar__radar">
-          <RadarSwitchControl />
+          <RadarSwitchControl presentation="directory-desktop" />
         </div>
       </div>
       {filtersOpen && (

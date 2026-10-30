@@ -17,10 +17,72 @@ export const radarPhaseTitle: Record<RadarView["phase"], string> = {
 export function radarSwitchDisabled(view: RadarView) {
   return ["checking", "permission", "locating", "activating", "stopping", "background", "error", "disabled"].includes(view.phase);
 }
-export function RadarSwitchControl({ map = false }: { map?: boolean }) {
+export type RadarSwitchPresentation = "default" | "directory-desktop";
+
+function DirectoryRadarGlyph() {
+  return (
+    <svg className="radar-dir-switch__glyph" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="1.7" opacity=".35" />
+      <circle cx="12" cy="12" r="5.5" fill="none" stroke="currentColor" strokeWidth="1.7" />
+      <circle cx="12" cy="12" r="1.6" fill="currentColor" />
+      <path d="M12 12L17 7" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function RadarSwitchControl({
+  map = false,
+  presentation = "default",
+}: {
+  map?: boolean;
+  /** directory-desktop: compact icon + two lines + switch for /players toolbar only. */
+  presentation?: RadarSwitchPresentation;
+}) {
   const { controller, view } = useRadarSession();
   const config = useRadarConfig();
-  return <div className="radar-entry">{view.phase === "guest" && <AuthEntry returnPath="/players">Войти для Radar</AuthEntry>}{!view.confirmedOn && view.phase !== "guest" && <Button disabled={!config?.publishingV2.enabled || radarSwitchDisabled(view)} onClick={() => controller?.permission()}>Включить Radar</Button>}{(map || view.confirmedOn) && <Toggle id="radar-switch" label="Radar" on={view.confirmedOn} disabled={!controller || (!view.confirmedOn && !config?.publishingV2.enabled) || radarSwitchDisabled(view)} describedBy="radar-switch-helper" onClick={() => { if (!controller || radarSwitchDisabled(view)) return; if (view.confirmedOn) void controller.stop(); else controller.permission(); }} />}<small id="radar-switch-helper">{view.phase === "off" || view.phase === "guest" ? "Включите, чтобы поделиться геопозицией." : radarPhaseTitle[view.phase]}</small></div>;
+  const publishingOff = !config?.publishingV2.enabled;
+  const switchDisabled = !controller || (!view.confirmedOn && publishingOff) || radarSwitchDisabled(view);
+  const onToggle = () => {
+    if (!controller || radarSwitchDisabled(view)) return;
+    if (view.confirmedOn) void controller.stop();
+    else controller.permission();
+  };
+
+  if (presentation === "directory-desktop") {
+    const on = view.confirmedOn;
+    const title = on ? "Radar включён" : "Включить Radar";
+    const subtitle = on
+      ? (view.phase === "active" ? "Игроки поблизости" : radarPhaseTitle[view.phase])
+      : "Игроки поблизости";
+    return (
+      <div className="radar-entry radar-entry--directory-desktop" data-presentation="directory-desktop">
+        {view.phase === "guest" ? (
+          <AuthEntry returnPath="/players">Войти для Radar</AuthEntry>
+        ) : (
+          <button
+            type="button"
+            id="radar-switch"
+            className={`radar-dir-switch${on ? " is-on" : ""}`}
+            role="switch"
+            aria-checked={on}
+            aria-label="Radar"
+            aria-describedby="radar-switch-helper"
+            disabled={switchDisabled || (publishingOff && !on)}
+            onClick={onToggle}
+          >
+            <DirectoryRadarGlyph />
+            <span className="radar-dir-switch__copy">
+              <strong>{title}</strong>
+              <small id="radar-switch-helper">{subtitle}</small>
+            </span>
+            <i className="radar-dir-switch__track" aria-hidden="true"><b /></i>
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  return <div className="radar-entry">{view.phase === "guest" && <AuthEntry returnPath="/players">Войти для Radar</AuthEntry>}{!view.confirmedOn && view.phase !== "guest" && <Button disabled={publishingOff || radarSwitchDisabled(view)} onClick={() => controller?.permission()}>Включить Radar</Button>}{(map || view.confirmedOn) && <Toggle id="radar-switch" label="Radar" on={view.confirmedOn} disabled={switchDisabled} describedBy="radar-switch-helper" onClick={onToggle} />}<small id="radar-switch-helper">{view.phase === "off" || view.phase === "guest" ? "Включите, чтобы поделиться геопозицией." : radarPhaseTitle[view.phase]}</small></div>;
 }
 export type RadarStatusPresentation = "default" | "directory-compact";
 
