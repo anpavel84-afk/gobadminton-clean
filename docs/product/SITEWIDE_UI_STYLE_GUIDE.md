@@ -59,6 +59,10 @@ Ordinary pages keep Back/H1 on the shell left rail; narrow forms/lists use ≈88
 
 Do not apply the feed media rule to `GameCover` hero/personal cards, venue schedule, or map inspector.
 
+## Player browsing (#404)
+
+Ordinary `/players` may switch **По одному / Списком**. Owner-approved deck composition, gestures, and friendship/Radar boundaries are recorded in [PLAYER_BROWSING_STYLE_GUIDE.md](./PLAYER_BROWSING_STYLE_GUIDE.md) (published v2, 30.10.2026). Do not apply feed-card media rules or gallery mock JS to that deck.
+
 ## Overlays
 
 Accepted Spacious40 overlay foundations, mobile sheets, gestures, history, and focus remain. Local overlay titles stay inside overlay inset; do not promote them to page headers or invent extra Back actions.

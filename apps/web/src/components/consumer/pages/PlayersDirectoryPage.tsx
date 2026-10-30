@@ -1,11 +1,13 @@
 "use client";
 
 import "../../../styles/radar-geographic.css";
+import "../../../styles/player-browse.css";
 import { useEffect, useState } from "react";
 import { listCities, listPlayers } from "../../../lib/api-client";
 import type { City, PublicPlayer } from "../../../lib/consumer-types";
 import { readSelectedLocation } from "../../../lib/location-context";
 import { isSocialDirectoryDisabled } from "../../../lib/player-presentation";
+import { parseBrowseView, writeBrowseViewSearch, type PlayerBrowseView } from "../../../lib/player-browse";
 import { confirmedDirectoryActivation } from "../../../lib/radar-controller";
 import { RadarSwitchControl, RadarStatusControls } from "../radar/RadarControls";
 import { Button } from "../Button";
@@ -18,11 +20,15 @@ import { MOSCOW_BUNDLE } from "../../../lib/radar-map-assets";
 import { mergeRadarCatalog, scopedCatalogCursor, unifiedDirectoryAvailable, type ScopedCatalogCursor } from "../../../lib/unified-directory";
 import { useRadarSession, useDirectoryFilters } from "../radar/RadarSessionProvider";
 import { AuthEntry, PlayerCard, ProfileState } from "../players/ProfileComposition";
+import { PlayerBrowseDeck } from "../players/PlayerBrowseDeck";
 
 export function PlayersDirectoryPage() {
   const [players, setPlayers] = useState<PublicPlayer[]>([]);
   const [cities, setCities] = useState<City[]>([]);
   const [state, setState] = useState("loading");
+  // Default list for SSR/hydration; URL `view=cards` applies after mount.
+  const [browseView, setBrowseView] = useState<PlayerBrowseView>("list");
+  const [viewReady, setViewReady] = useState(false);
   const { controller, view } = useRadarSession();
   const { filters, update } = useDirectoryFilters();
   const { name, areaKey, cityId, lookingOnly, trainerOnly } = filters;
@@ -97,6 +103,15 @@ export function PlayersDirectoryPage() {
     const selected = readSelectedLocation()?.cityId ?? "";
     if (selected && !cityId) setCityId(selected);
   }, []);
+  useEffect(() => {
+    const readView = () => {
+      setBrowseView(parseBrowseView(window.location.search));
+      setViewReady(true);
+    };
+    readView();
+    window.addEventListener("popstate", readView);
+    return () => window.removeEventListener("popstate", readView);
+  }, []);
   useEffect(() => { let live = true; void listCities().then(r => { if (live && r.ok) setCities(r.data.items); }); return () => { live = false; }; }, []);
   useEffect(() => {
     let live = true;
@@ -111,12 +126,36 @@ export function PlayersDirectoryPage() {
     return () => { live = false; clearTimeout(timer); };
   }, [ordinaryScope, pageCursor, reload]);
   function reset() { setName(""); setAreaKey(""); setCityId(""); setLookingOnly(false); setTrainerOnly(false); setCursor(null); }
+  function changeBrowseView(next: PlayerBrowseView) {
+    if (next === browseView) return;
+    const url = new URL(window.location.href);
+    url.search = writeBrowseViewSearch(url.search, next);
+    window.history.pushState(window.history.state, "", url);
+    setBrowseView(next);
+  }
   // Renderable authorized window (45s TTL), not refresh-due matches (30s): soft refresh must keep rows.
   const liveRadar = Boolean(activationId && eligibleCity && directory.controller?.renderable(queryFilters, activationKey));
   const catalog = mergeRadarCatalog(players, directory.view, liveRadar);
   const cityName = cities.find(c => c.id === cityId)?.nameRu;
-  return <ConsumerShell active="players" title="Игроки" hideHeading><div className="fr3 players-page" data-surface="players-directory" data-state={state}>
-    <section className="players-hero"><div><h1>Игроки</h1><p>Находите партнёров по уровню и игровому настрою.</p></div></section>
+  const placeLabel = [cityName || (cityId ? "Город" : "Все города"), areaKey.trim() || "Все районы"].join(" · ");
+  const showCards = viewReady && browseView === "cards";
+  return <ConsumerShell active="players" title="Игроки" hideHeading><div className="fr3 players-page gb-player-browse" data-surface="players-directory" data-state={state} data-browse-view={showCards ? "cards" : "list"}>
+    <section className="players-hero">
+      <div>
+        <h1>Игроки</h1>
+        <p>Находите партнёров по уровню и игровому настрою.</p>
+      </div>
+      <div className="pb-view-switch" role="group" aria-label="Вид каталога">
+        <button type="button" aria-pressed={showCards} onClick={() => changeBrowseView("cards")}>
+          <span aria-hidden="true">▣</span>
+          <span className="pb-view-switch__label">По одному</span>
+        </button>
+        <button type="button" aria-pressed={!showCards} onClick={() => changeBrowseView("list")}>
+          <span aria-hidden="true">☰</span>
+          <span className="pb-view-switch__label">Списком</span>
+        </button>
+      </div>
+    </section>
     <section className="players-radar-band" aria-label="Игроки рядом">
       <div><h2>Игроки рядом с вами</h2><p>Временный поиск по приблизительной близости</p></div>
       <div className="players-radar-band__controls">
@@ -137,19 +176,39 @@ export function PlayersDirectoryPage() {
       <button className={`chip ${lookingOnly ? "chip--active" : ""}`} aria-pressed={lookingOnly} onClick={() => { setLookingOnly(!lookingOnly); setCursor(null); }}>Ищу игру</button>
       <button className={`chip ${trainerOnly ? "chip--active" : ""}`} aria-pressed={trainerOnly} onClick={() => { setTrainerOnly(!trainerOnly); setCursor(null); }}>Тренер</button>
     </div>
-    <section className="players-list"><div className="players-list__heading"><span><small>{filtered ? "Подходят по фильтрам" : "Игровое сообщество"}</small><h2>{cityName ? `Игроки · ${cityName}` : "Все игроки"}</h2></span><button onClick={reset}>Сбросить фильтры</button></div>
-      <div className="players-catalog-grid" aria-label="Каталог игроков">
-        {catalog.radar.map(row => <UnifiedPlayerCard key={row.publicPlayerId} row={row} city={cities.find(c => c.id === row.player.cityId)?.nameRu} onSelect={() => void directory.controller?.select(row)} />)}
-        {catalog.moreRadar && <Button variant="outline" disabled={directory.view.busy} onClick={() => void directory.controller?.more()}>Ещё участники Radar</Button>}
-        {catalog.ordinary.map(player => <PlayerCard key={player.publicPlayerId} player={player} city={cities.find(c => c.id === player.cityId)?.nameRu} />)}
-      </div>
-      {state === "loading" && <ProfileState title="Ищем игроков…" state="loading" />}
-      {state === "unavailable" && <ProfileState title="Каталог игроков сейчас недоступен" state="unavailable">Попробуйте вернуться позже.</ProfileState>}
-      {state === "error" && <ProfileState title="Не удалось загрузить каталог" state="error" retry={() => setReload(n => n + 1)}>Проверьте соединение и попробуйте снова.</ProfileState>}
-      {state === "empty" && !catalog.radar.length && <ProfileState title={filtered ? "Никого не нашли" : "Игроков пока нет"} state="empty">{filtered ? "Попробуйте изменить или сбросить фильтры." : "Вернитесь немного позже."}</ProfileState>}
-      {availableNextCursor && <Button variant="outline" disabled={moreBusy} onClick={() => setCursor({ scope: ordinaryScope, value: availableNextCursor })}>{moreBusy ? "Загрузка…" : "Показать ещё"}</Button>}
-
-    </section>
+    {showCards ? (
+      <section className="players-browse-deck" aria-label="Игроки по одному">
+        {catalog.radar.length > 0 && (
+          <div className="players-catalog-grid" aria-label="Участники Radar" style={{ marginBottom: 20 }}>
+            {catalog.radar.map(row => <UnifiedPlayerCard key={row.publicPlayerId} row={row} city={cities.find(c => c.id === row.player.cityId)?.nameRu} onSelect={() => void directory.controller?.select(row)} />)}
+            {catalog.moreRadar && <Button variant="outline" disabled={directory.view.busy} onClick={() => void directory.controller?.more()}>Ещё участники Radar</Button>}
+          </div>
+        )}
+        <PlayerBrowseDeck
+          players={catalog.ordinary}
+          cities={cities}
+          ordinaryScope={ordinaryScope}
+          catalogState={state}
+          moreBusy={moreBusy}
+          hasMore={Boolean(availableNextCursor)}
+          onLoadMore={() => { if (availableNextCursor) setCursor({ scope: ordinaryScope, value: availableNextCursor }); }}
+          placeLabel={placeLabel}
+        />
+      </section>
+    ) : (
+      <section className="players-list"><div className="players-list__heading"><span><small>{filtered ? "Подходят по фильтрам" : "Игровое сообщество"}</small><h2>{cityName ? `Игроки · ${cityName}` : "Все игроки"}</h2></span><button onClick={reset}>Сбросить фильтры</button></div>
+        <div className="players-catalog-grid" aria-label="Каталог игроков">
+          {catalog.radar.map(row => <UnifiedPlayerCard key={row.publicPlayerId} row={row} city={cities.find(c => c.id === row.player.cityId)?.nameRu} onSelect={() => void directory.controller?.select(row)} />)}
+          {catalog.moreRadar && <Button variant="outline" disabled={directory.view.busy} onClick={() => void directory.controller?.more()}>Ещё участники Radar</Button>}
+          {catalog.ordinary.map(player => <PlayerCard key={player.publicPlayerId} player={player} city={cities.find(c => c.id === player.cityId)?.nameRu} />)}
+        </div>
+        {state === "loading" && <ProfileState title="Ищем игроков…" state="loading" />}
+        {state === "unavailable" && <ProfileState title="Каталог игроков сейчас недоступен" state="unavailable">Попробуйте вернуться позже.</ProfileState>}
+        {state === "error" && <ProfileState title="Не удалось загрузить каталог" state="error" retry={() => setReload(n => n + 1)}>Проверьте соединение и попробуйте снова.</ProfileState>}
+        {state === "empty" && !catalog.radar.length && <ProfileState title={filtered ? "Никого не нашли" : "Игроков пока нет"} state="empty">{filtered ? "Попробуйте изменить или сбросить фильтры." : "Вернитесь немного позже."}</ProfileState>}
+        {availableNextCursor && <Button variant="outline" disabled={moreBusy} onClick={() => setCursor({ scope: ordinaryScope, value: availableNextCursor })}>{moreBusy ? "Загрузка…" : "Показать ещё"}</Button>}
+      </section>
+    )}
     {liveRadar && directory.view.selected && <UnifiedPlayerPreview dialog onClose={() => directory.controller?.close()} />}
   </div></ConsumerShell>;
 }
