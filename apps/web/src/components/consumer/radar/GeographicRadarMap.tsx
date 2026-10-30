@@ -31,7 +31,7 @@ export function GeographicRadarMap({ controller, rows, selected, onSelect, onUna
   const container = useRef<HTMLDivElement>(null); const map = useRef<LibreMap | null>(null);
   type PeerMarker = { marker: maplibregl.Marker; button: HTMLButtonElement; id: string; mediaKey: string; row: UnifiedRow; dispose?: () => void };
   const markers = useRef<PeerMarker[]>([]);
-  const callbacks = useRef({ onSelect, onUnavailable }); callbacks.current = { onSelect, onUnavailable };
+  const callbacks = useRef({ onSelect, onUnavailable, selected }); callbacks.current = { onSelect, onUnavailable, selected };
   const entryCamera = useRef(createRadarEntryCamera(resumeCamera));
   const [ownProfile, setOwnProfile] = useState<OwnSocialProfile | null>(null);
   useEffect(() => {
@@ -122,10 +122,14 @@ export function GeographicRadarMap({ controller, rows, selected, onSelect, onUna
       };
       button.addEventListener("click", () => { button.focus({ preventScroll: true }); callbacks.current.onSelect(entry.row); });
       // Hover/focus share the same bounded pending+retained admission as provider prewarm.
-      const warm = () => prewarmRadarPeerMedia(entry.row.player as PublicPlayer, {
-        resolveCover: true,
-        retainIds: selected ? [selected, row.publicPlayerId] : [row.publicPlayerId],
-      });
+      // Read selected at event time — reused markers keep these listeners across selection changes.
+      const warm = () => {
+        const currentSelected = callbacks.current.selected;
+        prewarmRadarPeerMedia(entry.row.player as PublicPlayer, {
+          resolveCover: true,
+          retainIds: currentSelected ? [currentSelected, entry.row.publicPlayerId] : [entry.row.publicPlayerId],
+        });
+      };
       button.addEventListener("pointerenter", warm);
       button.addEventListener("focus", warm);
       entry.marker.setLngLat([geo.longitude, geo.latitude]).addTo(map.current!);
