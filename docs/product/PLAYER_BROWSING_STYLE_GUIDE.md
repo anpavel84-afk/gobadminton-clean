@@ -22,7 +22,7 @@ This document records product contracts for the integrated consumer surface. Do 
 
 ## Mobile <1024
 
-Superseded by the **Mobile fullscreen contract (Owner UAT repair)** appendix below for cards mode. Do not apply desktop v5 composition globally.
+Superseded by the **Mobile fullscreen contract** appendix below for cards mode. Do not apply desktop v5 composition globally.
 
 ## Catalog & Radar boundary
 
@@ -70,25 +70,33 @@ See also [SITEWIDE_UI_STYLE_GUIDE.md](./SITEWIDE_UI_STYLE_GUIDE.md) for shared s
 ## Appendix · Mobile fullscreen contract (Owner UAT repair, #404)
 
 **Implemented behaviour (author pass · NOT a QA PASS claim).** Desktop ≥1024 v5 / 406 prepared media / F1–F5 remain unchanged.
+Source-backed mechanics reference: Astra High deep gesture study (Owner); numbers below are **OUR** measured tuning labels in `player-browse.ts`, not Tinder private constants.
 
 ### Shell
-- Cards mode on viewport `<1024` opens a **fixed fullscreen** portal (`role="dialog"`, `aria-modal`) covering app header / nav / footer, with safe-area insets.
+- Cards mode on viewport `<1024` opens a **native `<dialog>` portal** with `showModal()` (focus containment + top layer), covering app header / nav / footer, with safe-area insets and exact fullscreen CSS reset (`margin/border/padding/max-width` cleared).
 - Chrome: small counter + place, help `?`, close **X** ≥44px top-right.
 - Underlying directory is `inert` + `body` scroll locked; focus returns to the opener and list scroll restores on close.
-- Close paths: **X**, **Escape**, **browser Back**. `pushState` only when entering from list; close uses `history.back()` or `replaceState` for direct `?view=cards` — no history growth loop.
+- Close paths: **X**, **Escape** (`cancel` → same close), **browser Back**. `pushState` only when entering from list; close uses `history.back()` or `replaceState` for direct `?view=cards` — no history growth loop. Unmount / resize-to-desktop closes the dialog **without** calling the history close path again.
+- Nested auth `ProfileDialog` (`<dialog>.showModal`) remains a separate top layer; safe with the browse shell.
 - Resize/rotation to ≥1024 tears down the portal and shows desktop v5 inline; no Fullscreen API; no global shell / C5 / runtime changes.
 
 ### Card
 - Full-viewport cover + avatar + **compact** identity. No fixed huge bio excerpt on the cover; details are a separate page covering the photo.
-- Swipe **up** opens details; **down** returns to cover. Long bio/details page via up/down and accessible pager buttons — **no ordinary vertical scroll** inside the card.
-- Friendship / pending UNKNOWN UI stays in a stable bottom slot across details open/close (not remounted).
+- **Single retained avatar host**: mount `PreparedBrowseAvatar` on cover **or** details, never both — a second host steals the same `HTMLImageElement`. Friendship controls stay in the stable bottom slot (not remounted / not cloned).
+- Swipe **up** opens details; **down** on details text/background returns to cover / previous page. `data-browse-no-drag` only on actual buttons/links/pager — **not** on the whole `.pb-mobile-details` surface.
+- Long bio/details page via up/down and accessible pager buttons — **no ordinary vertical scroll** inside the card when content fits; pager remains for overflow chunks.
 - Minimal persistent **Пропустить** / **В друзья** buttons remain accessible alternatives. Actions must remain usable at 390×844 and 375×667 without horizontal overflow.
+- Last card left must settle to a visible honest end / «Загрузить ещё» terminal (`pb-deck-end--fs`), not leave only a flown-off card forever.
 - One-time gesture hint (`gb-player-gallery-tutorial-v2`); help reopens. Existing real metadata only; games copy stays honest unavailable.
 
-### Gestures
-- Register only after the pending card is **media-ready**. Single active pointer; stable **pointer capture**; handlers use refs so the controller is not recreated mid-drag.
-- `touch-action: none` on the fullscreen gesture surface only (not a global pinch hijack). Interactive targets (`button,a,…`, `[data-browse-no-drag]`) excluded. `pointercancel` / non-primary / multitouch / blur → **no mutation**, spring-back.
-- Horizontal drag is **1:1** via RAF + CSS vars (`--pb-drag-x` / `--pb-drag-rot`) — **no 0.32 damping**. Slight rotation. Full-surface **red (left / skip)** and **green (right / request)** intent layers with label + icon (not colour alone). Green while touching is **intent**, not server PASS.
-- Axis lock after 10px with 1.5× dominance. Release commits on distance threshold **or** same-direction flick above velocity with **minimum travel**; reverse / cancel / short travel springs back.
-- Left commit: card flies off beyond card width, **then** advances to the next ready peer (no late snap-back of the old card).
-- Right commit: existing explicit friendship `request` only (not a fake Match). Bind to the peer at gesture start; cancel if peer changes; no duplicate send on release+click. **Only confirmed receipt** may auto-advance and play the successful right fly-out; failed / UNKNOWN restores the card with honest status and **no automatic replay**. No new match API/schema.
+### Gestures · OUR tuning (`player-browse.ts`)
+- Register only after the pending card is **media-ready**. Single active pointer; stable **pointer capture**; handlers use refs so the controller is not recreated mid-drag. Second contact cancels; does not reassign `pointerId`.
+- `touch-action: pinch-zoom` on the gesture surface (app owns pans; browser keeps pinch). Interactive targets (`button,a,…`, `[data-browse-no-drag]`) excluded. `pointercancel` / non-primary / multitouch / blur / unmount / auth / scope / breakpoint → **no mutation**, cancel timers, spring-back.
+- Horizontal drag is **1:1** via RAF + CSS transform from release pose — **no damping**. Grab-pivot `transform-origin` at pointerdown; rotation bounded `±12°` (`browseDragRotationDeg`), not unbounded `dx/28`. Full-surface **red (left / skip)** and **green (right / request)** saturating intent layers (smoothstep). Green while touching is **intent**, not server PASS.
+- Axis lock after **8px** with **1.3×** dominance.
+- Recent velocity: last **80ms** window including the release sample; **0** after ~100ms pause; capped ±2.5 px/ms (`sampleBrowseVelocity`).
+- Release (`releaseCommitted`): **reverse veto first** (≈10px reverse travel + opposite velocity ≥0.2 px/ms) even past distance — then **slow-distance** `D=clamp(72,.24W,112)` **or** short-fast projected flick `F=clamp(18,.06W,28)`, `|vx|≥0.65`, `p=travel+|vx|·180ms ≥ D`. Gesture duration is not a cutoff. Residual axis ratio ≥1.2 on release.
+- Left commit: fly off from **rendered release pose** with geometry-safe offscreen target (rotated AABB + 24px margin — width+48 alone can leave corners visible); duration `clamp(140, L/max(|v|,1.6), 300)` ms; carry velocity direction; **no recenter before exit**. Then advance to next ready peer. Generation/peer fence ignores obsolete completions.
+- Right commit: existing explicit friendship `request` only (not a fake Match). Bind to the peer at gesture start; cancel if peer changes; single-flight consumed ref covers gesture **and** buttons. **Only confirmed receipt** may auto-advance and play the successful right fly-out; failed / UNKNOWN restores the readable card with honest status and **no automatic replay**. No new match API/schema.
+- Cancel / spring-return is interruptible (pin computed transform, then cancel transition) for re-grab without jump when practical.
+- No extra motion/gesture dependencies or generic recognizer packages.

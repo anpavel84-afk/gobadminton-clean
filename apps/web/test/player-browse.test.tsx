@@ -13,6 +13,10 @@ import {
   PreparedBrowseCover,
 } from "../src/components/consumer/players/PlayerBrowseMedia";
 import {
+  browseDragRotationDeg,
+  browseExitDurationMs,
+  browseExitTranslationPx,
+  browseReleaseReverseVeto,
   browseSlideDirection,
   browseSlideDurationMs,
   chunkBrowseBio,
@@ -24,8 +28,17 @@ import {
   normalizeBrowseBio,
   ordinaryBrowsePlayers,
   parseBrowseView,
+  PLAYER_BROWSE_AXIS_DOMINANCE,
+  PLAYER_BROWSE_AXIS_LOCK_PX,
   PLAYER_BROWSE_DESKTOP_MQ,
+  PLAYER_BROWSE_EXIT_MS_MAX,
+  PLAYER_BROWSE_EXIT_MS_MIN,
+  PLAYER_BROWSE_FLICK_VELOCITY,
+  PLAYER_BROWSE_HISTORY_KEY,
+  PLAYER_BROWSE_MAX_ROTATION_DEG,
+  PLAYER_BROWSE_PROJECT_MS,
   PLAYER_BROWSE_SLIDE_MS,
+  PLAYER_BROWSE_TUTORIAL_KEY,
   popSkip,
   prefersBrowseReducedMotion,
   pushSkip,
@@ -33,13 +46,12 @@ import {
   readTutorialDismissed,
   reconstructBrowseBio,
   relationshipBlocksNewRequest,
+  releaseCommitted,
+  sampleBrowseVelocity,
   swipeMinTravelPx,
   swipeThresholdPx,
   withBrowseHistoryState,
   writeBrowseViewSearch,
-  PLAYER_BROWSE_FLICK_VELOCITY,
-  PLAYER_BROWSE_HISTORY_KEY,
-  PLAYER_BROWSE_TUTORIAL_KEY,
 } from "../src/lib/player-browse";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -105,35 +117,61 @@ describe("player browse navigation and skip order", () => {
 });
 
 describe("player browse swipe boundaries", () => {
-  it("locks axis with dominance; distance or same-direction flick commits; cancel/vertical stay none for horizontal", () => {
-    expect(swipeThresholdPx(400)).toBe(80);
-    expect(swipeMinTravelPx(400)).toBe(24);
-    expect(classifyPointerGesture({ dx: 8, dy: 0, width: 400, phase: "move" })).toBe("none");
-    expect(classifyPointerGesture({ dx: 30, dy: 5, width: 400, phase: "move" })).toBe("horizontal");
-    expect(classifyPointerGesture({ dx: 5, dy: 30, width: 400, phase: "move" })).toBe("vertical");
-    expect(classifyPointerGesture({ dx: 30, dy: 40, width: 400, phase: "move" })).toBe("none");
-    expect(classifyPointerGesture({ dx: -30, dy: 0, width: 400, phase: "release" })).toBe("none");
-    expect(classifyPointerGesture({ dx: -80, dy: 10, width: 400, phase: "release", lockedAxis: "horizontal" })).toBe("skip");
-    expect(classifyPointerGesture({ dx: 80, dy: 10, width: 400, phase: "release", lockedAxis: "horizontal" })).toBe("request");
-    expect(classifyPointerGesture({ dx: 100, dy: 90, width: 400, phase: "release" })).toBe("none");
-    // Fast short flick with minimum travel commits; reverse velocity does not.
+  it("locks axis with OUR 8px/1.3 dominance; reverse veto before distance; slow-D or projected flick", () => {
+    expect(PLAYER_BROWSE_AXIS_LOCK_PX).toBe(8);
+    expect(PLAYER_BROWSE_AXIS_DOMINANCE).toBe(1.3);
+    expect(PLAYER_BROWSE_FLICK_VELOCITY).toBe(0.65);
+    expect(PLAYER_BROWSE_PROJECT_MS).toBe(180);
+    expect(swipeThresholdPx(360)).toBe(Math.max(72, Math.min(112, 360 * 0.24)));
+    expect(swipeMinTravelPx(360)).toBe(Math.max(18, Math.min(28, 360 * 0.06)));
+    expect(classifyPointerGesture({ dx: 6, dy: 0, width: 360, phase: "move" })).toBe("none");
+    expect(classifyPointerGesture({ dx: 30, dy: 5, width: 360, phase: "move" })).toBe("horizontal");
+    expect(classifyPointerGesture({ dx: 5, dy: 30, width: 360, phase: "move" })).toBe("vertical");
+    // Ambiguous diagonal under 1.3 dominance stays undecided.
+    expect(classifyPointerGesture({ dx: 30, dy: 35, width: 360, phase: "move" })).toBe("none");
+    expect(classifyPointerGesture({ dx: -30, dy: 0, width: 360, phase: "release" })).toBe("none");
+    // Slow distance commit (W=360 → D≈86.4).
+    expect(classifyPointerGesture({ dx: -100, dy: 10, width: 360, phase: "release", lockedAxis: "horizontal" })).toBe("skip");
+    expect(classifyPointerGesture({ dx: 100, dy: 10, width: 360, phase: "release", lockedAxis: "horizontal" })).toBe("request");
+    expect(classifyPointerGesture({ dx: 100, dy: 90, width: 360, phase: "release" })).toBe("none");
+    // Short fast projected flick commits; reverse velocity vetoes even past D.
     expect(classifyPointerGesture({
-      dx: -28, dy: 0, width: 400, phase: "release", lockedAxis: "horizontal", velocity: -PLAYER_BROWSE_FLICK_VELOCITY,
+      dx: -28, dy: 0, width: 360, phase: "release", lockedAxis: "horizontal", velocity: -PLAYER_BROWSE_FLICK_VELOCITY,
     })).toBe("skip");
     expect(classifyPointerGesture({
-      dx: -28, dy: 0, width: 400, phase: "release", lockedAxis: "horizontal", velocity: PLAYER_BROWSE_FLICK_VELOCITY,
+      dx: -100, dy: 0, width: 360, phase: "release", lockedAxis: "horizontal", velocity: 0.45, reverseVeto: true,
     })).toBe("none");
-    // Vertical release reports up/down; not a horizontal mutation.
-    expect(swipeThresholdPx(700)).toBe(88);
+    expect(browseReleaseReverseVeto(100, -0.45)).toBe(true);
+    expect(releaseCommitted({ travel: 100, extent: 360, velocity: -0.45, reverseVeto: true })).toBe(false);
+    expect(releaseCommitted({ travel: 100, extent: 360, velocity: 0 })).toBe(true);
+    // Vertical release reports up/down; not a horizontal mutation (H=700 → D=112).
     expect(classifyPointerGesture({
-      dx: 4, dy: -90, width: 400, height: 700, phase: "release", lockedAxis: "vertical",
+      dx: 4, dy: -120, width: 360, height: 700, phase: "release", lockedAxis: "vertical",
     })).toBe("vertical-up");
     expect(classifyPointerGesture({
-      dx: 4, dy: 90, width: 400, height: 700, phase: "release", lockedAxis: "vertical",
+      dx: 4, dy: 120, width: 360, height: 700, phase: "release", lockedAxis: "vertical",
     })).toBe("vertical-down");
     expect(classifyPointerGesture({
-      dx: 4, dy: -90, width: 400, height: 700, phase: "release", lockedAxis: "horizontal",
+      dx: 4, dy: -120, width: 360, height: 700, phase: "release", lockedAxis: "horizontal",
     })).toBe("none");
+  });
+
+  it("samples recent 80ms velocity including release; zero after pause; bounds rotation and exit geometry", () => {
+    const samples = [
+      { t: 0, x: 0, y: 0 },
+      { t: 40, x: -20, y: 0 },
+      { t: 80, x: -40, y: 0 },
+    ];
+    expect(sampleBrowseVelocity(samples, "horizontal", 80)).toBeCloseTo(-0.5, 5);
+    expect(sampleBrowseVelocity(samples, "horizontal", 220)).toBe(0);
+    expect(browseDragRotationDeg(400, 360)).toBe(PLAYER_BROWSE_MAX_ROTATION_DEG);
+    expect(browseDragRotationDeg(-400, 360)).toBe(-PLAYER_BROWSE_MAX_ROTATION_DEG);
+    expect(browseDragRotationDeg(180, 360)).toBe(6);
+    const exit = browseExitTranslationPx({ dir: -1, width: 390, height: 788, rotationDeg: 12, currentX: -90 });
+    expect(exit).toBeLessThan(-(390 / 2));
+    expect(Math.abs(exit)).toBeGreaterThan(390 + 48);
+    expect(browseExitDurationMs(400, 2)).toBeGreaterThanOrEqual(PLAYER_BROWSE_EXIT_MS_MIN);
+    expect(browseExitDurationMs(400, 2)).toBeLessThanOrEqual(PLAYER_BROWSE_EXIT_MS_MAX);
   });
 
   it("excludes interactive targets from drag start", () => {
@@ -142,9 +180,11 @@ describe("player browse swipe boundaries", () => {
     expect(isBrowseDragExcludedTarget(null)).toBe(false);
   });
 
-  it("mobile fullscreen cards use portal shell, body lock hooks, and 1:1 drag without damping", () => {
+  it("mobile fullscreen cards use native dialog portal, single avatar host, and 1:1 drag without damping", () => {
     expect(pageSource).toContain("createPortal");
     expect(pageSource).toContain("pb-mobile-fs");
+    expect(pageSource).toContain("showModal");
+    expect(pageSource).toContain("<dialog");
     expect(pageSource).toContain("closeMobileCards");
     expect(deckSource).toContain("--pb-drag-x");
     expect(deckSource).not.toContain("* 0.32");
@@ -152,9 +192,16 @@ describe("player browse swipe boundaries", () => {
     expect(deckSource).toContain("setPointerCapture");
     expect(deckSource).toContain("flyOffCard");
     expect(deckSource).toContain("awaitingRightRef");
+    expect(deckSource).toContain("flyGen");
+    expect(deckSource).toContain("actionConsumedRef");
+    expect(deckSource).toContain("Single retained avatar host");
+    expect(deckSource).not.toContain('pb-mobile-details${detailsOpen ? " is-open" : ""}`} data-browse-no-drag');
+    expect(deckSource).toContain("{!detailsOpen && (");
+    expect(deckSource).toContain("{detailsOpen && (");
     expect(cssSource).toContain("pb-mobile-fs");
-    expect(cssSource).toContain("touch-action: none");
+    expect(cssSource).toContain("touch-action: pinch-zoom");
     expect(cssSource).toContain("pb-intent--skip");
+    expect(cssSource).toContain("dialog.pb-mobile-fs");
   });
 });
 

@@ -1773,25 +1773,41 @@
   .gb-player-browse[data-browse-desktop="true"] .pb-profile-bottom { padding-top: 14px; margin-top: 10px; }
 }
 
-/* ——— Owner mobile <1024 (#404): fullscreen fixed viewport + 1:1 swipe ——— */
+/* ——— Owner mobile <1024 (#404): native <dialog> fullscreen + 1:1 swipe ——— */
+dialog.pb-mobile-fs,
 .pb-mobile-fs {
   position: fixed;
   inset: 0;
   z-index: 80;
   display: flex;
   flex-direction: column;
+  box-sizing: border-box;
   width: 100%;
+  max-width: none;
   height: 100dvh;
   max-height: 100dvh;
+  margin: 0;
   padding:
     env(safe-area-inset-top, 0px)
     env(safe-area-inset-right, 0px)
     env(safe-area-inset-bottom, 0px)
     env(safe-area-inset-left, 0px);
+  border: 0;
+  border-radius: 0;
   background: var(--pb-ink, #13221a);
   color: var(--pb-white, #fff);
   overflow: hidden;
   overscroll-behavior: none;
+  /* Exact fullscreen CSS reset for UA dialog chrome */
+  outline: none;
+}
+
+dialog.pb-mobile-fs:not([open]) {
+  display: none;
+}
+
+dialog.pb-mobile-fs::backdrop {
+  background: #0a120e;
 }
 
 .pb-mobile-fs .gb-player-browse,
@@ -1869,9 +1885,8 @@
   min-height: 0;
   border-radius: 0;
   overflow: hidden;
-  touch-action: none;
+  touch-action: pinch-zoom;
 }
-
 .gb-player-browse.pb-browse--fs .pb-surface {
   flex: 1;
   min-height: 0;
@@ -1892,7 +1907,8 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  touch-action: none;
+  touch-action: pinch-zoom;
+  /* Grab pivot is set inline per gesture; default stays near lower third. */
   transform-origin: 50% 80%;
 }
 
@@ -1900,8 +1916,24 @@
   position: relative;
   flex: 1;
   min-height: 0;
-  touch-action: none;
+  /* App owns pan; browser keeps pinch-zoom (do not change after pointerdown). */
+  touch-action: pinch-zoom;
   overflow: hidden;
+}
+
+.gb-player-browse .pb-deck-end {
+  margin-top: 16px;
+  display: flex;
+  justify-content: center;
+  padding: 0 16px 12px;
+}
+
+.gb-player-browse .pb-deck-end--fs {
+  flex: 0 0 auto;
+  margin-top: 0;
+  padding: 10px 16px calc(12px + env(safe-area-inset-bottom, 0px));
+  background: #0f1c15;
+  border-top: 1px solid #2a3d31;
 }
 
 .gb-player-browse .pb-mobile-stage {

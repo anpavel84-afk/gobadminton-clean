@@ -56,6 +56,8 @@ export function PlayersDirectoryPage() {
   const cardsHistoryPushed = useRef(false);
   const listScrollY = useRef(0);
   const cardsTrigger = useRef<HTMLElement | null>(null);
+  const mobileFsDialogRef = useRef<HTMLDialogElement | null>(null);
+  const closingFsRef = useRef(false);
   const { controller, view } = useRadarSession();
   const { filters, update } = useDirectoryFilters();
   const { name, areaKey, cityId, lookingOnly, trainerOnly } = filters;
@@ -178,10 +180,18 @@ export function PlayersDirectoryPage() {
   }
   function closeMobileCards() {
     if (browseView !== "cards") return;
+    if (closingFsRef.current) return;
+    closingFsRef.current = true;
+    // Close native dialog without relying on unmount cancel → history push.
+    const dialog = mobileFsDialogRef.current;
+    if (dialog?.open) {
+      try { dialog.close(); } catch { /* ignore */ }
+    }
     if (cardsHistoryPushed.current) {
       // Browser Back / popstate clears view — do not push another list entry (no growth loop).
       cardsHistoryPushed.current = false;
       window.history.back();
+      closingFsRef.current = false;
       return;
     }
     const url = new URL(window.location.href);
@@ -189,6 +199,7 @@ export function PlayersDirectoryPage() {
     window.history.replaceState(window.history.state, "", url);
     setBrowseView("list");
     restoreListChrome();
+    closingFsRef.current = false;
   }
   function changeBrowseView(next: PlayerBrowseView) {
     if (next === browseView) return;
@@ -218,19 +229,29 @@ export function PlayersDirectoryPage() {
   const placeLabel = [cityName || (cityId ? "Город" : "Все города"), areaKey.trim() || "Все районы"].join(" · ");
   const showCards = viewReady && browseView === "cards";
   const mobileCards = showCards && !desktop;
-  // Mobile cards: lock underlying page scroll; desktop cards stay in-flow. Resize to desktop cleans up.
+  // Mobile cards: native <dialog>.showModal for focus containment; body scroll lock; desktop resize tears down.
   useEffect(() => {
-    if (!mobileCards) return;
+    if (!mobileCards || !portalReady) return;
     const previousOverflow = document.body.style.overflow;
     const previousScrollY = window.scrollY;
     document.body.style.overflow = "hidden";
+    const dialog = mobileFsDialogRef.current;
+    if (dialog && typeof dialog.showModal === "function" && !dialog.open) {
+      try { dialog.showModal(); } catch { /* already open / unsupported */ }
+    }
     return () => {
       document.body.style.overflow = previousOverflow;
+      // Tear down without invoking closeMobileCards (avoids history push during unmount / desktop resize).
+      closingFsRef.current = true;
+      if (dialog?.open) {
+        try { dialog.close(); } catch { /* ignore */ }
+      }
+      closingFsRef.current = false;
       if (parseBrowseView(window.location.search) === "list") {
         window.scrollTo(0, listScrollY.current || previousScrollY);
       }
     };
-  }, [mobileCards]);
+  }, [mobileCards, portalReady]);
   const radarBand = (
     <section className="players-radar-band" aria-label="Игроки рядом">
       <div><h2>Игроки рядом с вами</h2><p>Временный поиск по приблизительной близости</p></div>
@@ -326,9 +347,19 @@ export function PlayersDirectoryPage() {
         {deck}
       </section>
     ) : showCards && portalReady ? createPortal(
-      <div className="gb-player-browse pb-mobile-fs" role="dialog" aria-modal="true" aria-label="Игроки по одному" data-surface="player-browse-mobile-fs">
+      <dialog
+        ref={mobileFsDialogRef}
+        className="gb-player-browse pb-mobile-fs"
+        aria-label="Игроки по одному"
+        data-surface="player-browse-mobile-fs"
+        onCancel={(event) => {
+          // Escape: same close path as X (replace/back). Nested auth <dialog> is a separate top layer.
+          event.preventDefault();
+          if (!closingFsRef.current) closeMobileCards();
+        }}
+      >
         {deck}
-      </div>,
+      </dialog>,
       document.body,
     ) : showCards ? null : (
       <section className="players-list">

@@ -7,6 +7,10 @@ import { getMe, getMySocialProfile } from "../../../lib/api-client";
 import type { City, Me, PublicPlayer } from "../../../lib/consumer-types";
 import { formatSocialLevel } from "../../../lib/player-presentation";
 import {
+  browseDragRotationDeg,
+  browseExitDurationMs,
+  browseExitTranslationPx,
+  browseReleaseReverseVeto,
   browseSlideDurationMs,
   chunkBrowseBio,
   classifyPointerGesture,
@@ -18,13 +22,17 @@ import {
   ordinaryBrowsePlayers,
   persistTutorialDismissed,
   PLAYER_BROWSE_DESKTOP_MQ,
+  PLAYER_BROWSE_MAX_ROTATION_DEG,
+  PLAYER_BROWSE_RETURN_MS,
+  PLAYER_BROWSE_VELOCITY_WINDOW_MS,
+  sampleBrowseVelocity,
   type PlayerBrowseGestureAxis,
+  type PlayerBrowseVelocitySample,
   popSkip,
   prefersBrowseReducedMotion,
   pushSkip,
   readBrowseHistoryState,
   readTutorialDismissed,
-  swipeThresholdPx,
   type PlayerBrowseSlideDirection,
   withBrowseHistoryState,
 } from "../../../lib/player-browse";
@@ -68,9 +76,13 @@ type DragState = {
   dx: number;
   dy: number;
   t: number;
-  samples: Array<{ t: number; x: number; y: number }>;
+  samples: PlayerBrowseVelocitySample[];
   axis: PlayerBrowseGestureAxis;
   capturing: boolean;
+  /** Local origin for grab-pivot rotation (relative to card top-left). */
+  pivotX: number;
+  pivotY: number;
+  consumed: boolean;
 };
 
 function Chevron({ dir }: { dir: "left" | "right" | "down" }) {
@@ -145,6 +157,9 @@ export function PlayerBrowseDeck({
   const drag = useRef<DragState | null>(null);
   const dragRaf = useRef(0);
   const flyingRef = useRef(false);
+  const flyGen = useRef(0);
+  const actionConsumedRef = useRef(false);
+  const transitionTimerRef = useRef(0);
   const awaitingRightRef = useRef<string | null>(null);
   const rightConfirmGen = useRef(0);
   const scopeGen = useRef(0);
@@ -162,7 +177,8 @@ export function PlayerBrowseDeck({
   const rateBlockedUntilRef = useRef<number | null>(null);
   const currentPeerRef = useRef<string | null>(null);
   const mediaReadyRef = useRef(false);
-  const skipCurrentRef = useRef<() => void>(() => {});
+  const skipCurrentRef = useRef<(opts?: { alreadyFlying?: boolean; generation?: number; peerId?: string | null }) => void>(() => {});
+  const applySkipAdvanceRef = useRef<(peerId: string, generation: number | null) => void>(() => {});
   const requestFriendshipRef = useRef<() => void>(() => {});
   const openDetailsRef = useRef<() => void>(() => {});
   const closeDetailsRef = useRef<() => void>(() => {});
@@ -353,6 +369,10 @@ export function PlayerBrowseDeck({
     scopeGen.current += 1;
     viewerGen.current += 1;
     slideGen.current += 1;
+    flyGen.current += 1;
+    actionConsumedRef.current = false;
+    awaitingRightRef.current = null;
+    flyingRef.current = false;
     clearMediaCache();
     replaceCommittedMedia(null);
     setMediaUnavailable(false);
@@ -406,6 +426,13 @@ export function PlayerBrowseDeck({
     if (intentIndex >= browsePlayers.length) setIntentIndex(Math.max(0, browsePlayers.length - 1));
   }, [browsePlayers, index, intentIndex]);
 
+  const clearTransitionTimer = useCallback(() => {
+    if (transitionTimerRef.current) {
+      window.clearTimeout(transitionTimerRef.current);
+      transitionTimerRef.current = 0;
+    }
+  }, []);
+
   useEffect(() => {
     const id = current?.publicPlayerId;
     if (!id) return;
@@ -422,9 +449,15 @@ export function PlayerBrowseDeck({
     setBioChunks([]);
     setFriendBusy(false);
     awaitingRightRef.current = null;
+    actionConsumedRef.current = false;
+    flyGen.current += 1;
+    clearTransitionTimer();
+    flyingRef.current = false;
     setDragStamp({ opacity: 0, skip: false, label: "" });
-    if (cardRef.current && !flyingRef.current) {
+    if (cardRef.current) {
+      cardRef.current.style.transition = "none";
       cardRef.current.style.transform = "";
+      cardRef.current.style.transformOrigin = "";
       cardRef.current.style.removeProperty("--pb-drag-x");
       cardRef.current.style.removeProperty("--pb-drag-y");
       cardRef.current.style.removeProperty("--pb-drag-rot");
@@ -432,7 +465,7 @@ export function PlayerBrowseDeck({
       cardRef.current.style.removeProperty("--pb-intent-request");
       cardRef.current.classList.remove("is-dragging", "is-flying");
     }
-  }, [current?.publicPlayerId]);
+  }, [current?.publicPlayerId, clearTransitionTimer]);
 
   useEffect(() => {
     // Desktop: no swipe tutorial. Mobile keeps existing onboarding.
@@ -657,6 +690,14 @@ export function PlayerBrowseDeck({
       slideMounted.current = false;
       slideGen.current += 1;
       viewerGen.current += 1;
+      flyGen.current += 1;
+      actionConsumedRef.current = false;
+      awaitingRightRef.current = null;
+      flyingRef.current = false;
+      if (transitionTimerRef.current) {
+        window.clearTimeout(transitionTimerRef.current);
+        transitionTimerRef.current = 0;
+      }
       clearMediaCache();
       replaceCommittedMedia(null);
       const frame = slideFrameRef.current;
@@ -666,9 +707,9 @@ export function PlayerBrowseDeck({
     };
   }, [clearMediaCache, replaceCommittedMedia]);
 
-  const clearCardMotion = useCallback((instant = false) => {
-    const card = cardRef.current;
+  const clearCardMotion = useCallback((instant = false) => {    const card = cardRef.current;
     if (!card) return;
+    clearTransitionTimer();
     if (instant || reducedMotionRef.current) card.style.transition = "none";
     card.style.setProperty("--pb-drag-x", "0px");
     card.style.setProperty("--pb-drag-y", "0px");
@@ -676,86 +717,164 @@ export function PlayerBrowseDeck({
     card.style.setProperty("--pb-intent-skip", "0");
     card.style.setProperty("--pb-intent-request", "0");
     card.style.transform = "";
+    card.style.transformOrigin = "";
     card.classList.remove("is-dragging", "is-flying");
-  }, []);
+    flyingRef.current = false;
+  }, [clearTransitionTimer]);
 
   const springBackCard = useCallback(() => {
     const card = cardRef.current;
+    actionConsumedRef.current = false;
     if (!card) {
       setDragStamp({ opacity: 0, skip: false, label: "" });
       return;
     }
-    card.classList.remove("is-dragging");
+    // Interruptible return: pin computed pose to inline values before cancelling prior motion.
+    const computed = typeof window.getComputedStyle === "function" ? window.getComputedStyle(card) : null;
+    if (computed?.transform && computed.transform !== "none") {
+      card.style.transform = computed.transform;
+    }
+    clearTransitionTimer();
+    card.classList.remove("is-dragging", "is-flying");
+    flyingRef.current = false;
     if (reducedMotionRef.current) {
       clearCardMotion(true);
     } else {
-      card.style.transition = "transform 200ms ease-out";
+      card.style.transition = `transform ${PLAYER_BROWSE_RETURN_MS}ms ease-out`;
       card.style.setProperty("--pb-drag-x", "0px");
       card.style.setProperty("--pb-drag-y", "0px");
       card.style.setProperty("--pb-drag-rot", "0deg");
       card.style.setProperty("--pb-intent-skip", "0");
       card.style.setProperty("--pb-intent-request", "0");
       card.style.transform = "translate3d(0,0,0) rotate(0deg)";
-      window.setTimeout(() => {
+      transitionTimerRef.current = window.setTimeout(() => {
+        transitionTimerRef.current = 0;
         if (cardRef.current === card) clearCardMotion(true);
-      }, 220);
+      }, PLAYER_BROWSE_RETURN_MS + 20);
     }
     setDragStamp({ opacity: 0, skip: false, label: "" });
-  }, [clearCardMotion]);
+  }, [clearCardMotion, clearTransitionTimer]);
 
-  const flyOffCard = useCallback((dir: -1 | 1): Promise<void> => {
+  const flyOffCard = useCallback((dir: -1 | 1, opts?: {
+    peerId?: string | null;
+    velocity?: number;
+    fromX?: number;
+    fromRot?: number;
+  }): Promise<{ ok: boolean; generation: number; peerId: string | null }> => {
     const card = cardRef.current;
-    if (!card) return Promise.resolve();
+    const peerId = opts?.peerId ?? currentPeerRef.current;
+    const generation = ++flyGen.current;
+    if (!card) return Promise.resolve({ ok: true, generation, peerId });
     flyingRef.current = true;
+    clearTransitionTimer();
     card.classList.remove("is-dragging");
     card.classList.add("is-flying");
-    const width = Math.max(card.getBoundingClientRect().width, window.innerWidth * 0.92);
-    const x = dir * (width + 48);
-    const rot = dir * 18;
+    const rect = card.getBoundingClientRect();
+    const width = Math.max(rect.width, 1);
+    const height = Math.max(rect.height, 1);
+    const parsedX = Number.parseFloat(card.style.getPropertyValue("--pb-drag-x"));
+    const fromX = opts?.fromX ?? (Number.isFinite(parsedX) ? parsedX : 0);
+    const parsedRot = Number.parseFloat(card.style.getPropertyValue("--pb-drag-rot"));
+    const fromRot = opts?.fromRot
+      ?? (Number.isFinite(parsedRot) ? parsedRot : browseDragRotationDeg(fromX, width, reducedMotionRef.current));
+    const rot = Math.max(
+      -PLAYER_BROWSE_MAX_ROTATION_DEG,
+      Math.min(
+        PLAYER_BROWSE_MAX_ROTATION_DEG,
+        fromRot !== 0 ? fromRot : dir * Math.min(PLAYER_BROWSE_MAX_ROTATION_DEG, 10),
+      ),
+    );
+    const x = browseExitTranslationPx({
+      dir,
+      width,
+      height,
+      rotationDeg: rot,
+      currentX: fromX,
+    });
     if (reducedMotionRef.current) {
       clearCardMotion(true);
-      flyingRef.current = false;
-      return Promise.resolve();
+      return Promise.resolve({ ok: flyGen.current === generation, generation, peerId });
     }
+    const distance = Math.abs(x - fromX);
+    const duration = browseExitDurationMs(distance, opts?.velocity ?? 0);
     return new Promise(resolve => {
-      card.style.transition = "transform 240ms ease-out";
-      card.style.setProperty("--pb-drag-x", `${x}px`);
+      // Continue from release pose — no recenter before exit.
+      card.style.transition = "none";
+      card.style.setProperty("--pb-drag-x", `${fromX}px`);
       card.style.setProperty("--pb-drag-y", "0px");
       card.style.setProperty("--pb-drag-rot", `${rot}deg`);
+      card.style.transform = `translate3d(${fromX}px, 0, 0) rotate(${rot}deg)`;
+      // Force style flush so the next transition starts from the release pose.
+      void card.offsetWidth;
+      card.style.transition = `transform ${duration}ms linear`;
+      card.style.setProperty("--pb-drag-x", `${x}px`);
       card.style.transform = `translate3d(${x}px, 0, 0) rotate(${rot}deg)`;
       let settled = false;
       const finish = () => {
         if (settled) return;
         settled = true;
         card.removeEventListener("transitionend", onEnd);
+        clearTransitionTimer();
+        const live = flyGen.current === generation && slideMounted.current;
+        if (!live) {
+          flyingRef.current = false;
+          resolve({ ok: false, generation, peerId });
+          return;
+        }
         flyingRef.current = false;
-        resolve();
+        resolve({ ok: true, generation, peerId });
       };
       const onEnd = (event: TransitionEvent) => {
         if (event.target === card && event.propertyName === "transform") finish();
       };
       card.addEventListener("transitionend", onEnd);
-      window.setTimeout(finish, 300);
+      transitionTimerRef.current = window.setTimeout(finish, duration + 40);
     });
-  }, [clearCardMotion]);
+  }, [clearCardMotion, clearTransitionTimer]);
 
-  const skipCurrent = useCallback((opts?: { alreadyFlying?: boolean }) => {
-    if (!current || navigationLocked || tutorialOpen) return;
-    const peerId = current.publicPlayerId;
-    const advance = () => {
-      setSkipStack(stack => pushSkip(stack, peerId));
-      if (index < browsePlayers.length - 1) moveTo(index + 1, desktop ? "next" : undefined);
-      else if (hasMore) setAnnounce("Подборка на этой странице закончилась. Можно загрузить ещё.");
-      else setAnnounce("Подборка закончилась.");
-      setToast("Пропущено. Игрок не получит уведомления.");
-    };
-    if (opts?.alreadyFlying || desktop) {
-      advance();
+  const applySkipAdvance = useCallback((peerId: string, generation: number | null) => {
+    if (generation != null && generation !== flyGen.current) return;
+    if (!slideMounted.current) return;
+    // Ignore obsolete completion after peer/scope change mid-flight.
+    if (generation != null && peerId !== currentPeerRef.current) {
+      actionConsumedRef.current = false;
       return;
     }
-    void flyOffCard(-1).then(advance);
-  }, [current, navigationLocked, tutorialOpen, index, browsePlayers.length, hasMore, moveTo, desktop, flyOffCard]);
+    setSkipStack(stack => pushSkip(stack, peerId));
+    setToast("Пропущено. Игрок не получит уведомления.");
+    const liveIndex = indexRef.current;
+    if (liveIndex < browsePlayers.length - 1) {
+      actionConsumedRef.current = false;
+      moveTo(liveIndex + 1, desktop ? "next" : undefined);
+      return;
+    }
+    // Last card: settle to a usable terminal (not a permanent flown-off ghost).
+    clearCardMotion(true);
+    actionConsumedRef.current = false;
+    if (hasMore) setAnnounce("Подборка на этой странице закончилась. Можно загрузить ещё.");
+    else setAnnounce("Подборка закончилась.");
+  }, [browsePlayers.length, hasMore, moveTo, desktop, clearCardMotion]);
 
+  const skipCurrent = useCallback((opts?: { alreadyFlying?: boolean; generation?: number; peerId?: string | null }) => {
+    if (!current || navigationLocked || tutorialOpen) return;
+    if (actionConsumedRef.current && !opts?.alreadyFlying) return;
+    const peerId = opts?.peerId ?? current.publicPlayerId;
+    if (opts?.peerId && current.publicPlayerId !== opts.peerId && !opts.alreadyFlying) return;
+    if (opts?.generation != null && opts.generation !== flyGen.current) return;
+    actionConsumedRef.current = true;
+    if (opts?.alreadyFlying || desktop) {
+      applySkipAdvance(peerId, opts?.generation ?? null);
+      return;
+    }
+    const capturedPeer = peerId;
+    void flyOffCard(-1, { peerId: capturedPeer }).then(result => {
+      if (!result.ok || result.peerId !== capturedPeer || result.generation !== flyGen.current) {
+        actionConsumedRef.current = false;
+        return;
+      }
+      applySkipAdvance(capturedPeer, result.generation);
+    });
+  }, [current, navigationLocked, tutorialOpen, desktop, flyOffCard, applySkipAdvance]);
   const undoSkip = useCallback(() => {
     if (navigationLocked || tutorialOpen) return;
     const { stack, id } = popSkip(skipStack);
@@ -766,8 +885,10 @@ export function PlayerBrowseDeck({
   }, [navigationLocked, tutorialOpen, skipStack, browsePlayers, moveTo, desktop, index]);
 
   const requestFriendship = useCallback(() => {
-    if (navigationLocked || tutorialOpen) return;
-    friendshipApi.current?.request();
+    if (navigationLocked || tutorialOpen || actionConsumedRef.current || flyingRef.current) return;
+    actionConsumedRef.current = true;
+    const started = friendshipApi.current?.request() ?? false;
+    if (!started) actionConsumedRef.current = false;
   }, [navigationLocked, tutorialOpen]);
 
   const onConfirmedRequest = useCallback((receipt: FriendshipReceipt) => {
@@ -788,15 +909,23 @@ export function PlayerBrowseDeck({
       ...known,
       [peerId, relationship] as const,
     ]), skipped);
-    const finishAdvance = () => {
+    const finishAdvance = (generation: number | null) => {
+      if (generation != null && generation !== flyGen.current) return;
+      if (generation != null && peerId !== currentPeerRef.current) {
+        actionConsumedRef.current = false;
+        return;
+      }
       awaitingRightRef.current = null;
+      actionConsumedRef.current = false;
       // Bypass post lock: confirmed receipt already cleared the mutation busy latch in the child.
       // Non-animated readiness commit — not a browse slide.
       if (next >= 0) {
         pendingDirectionRef.current = null;
         setIntentIndex(next);
       } else {
+        // Honest terminal when no further eligible peer.
         clearCardMotion(true);
+        setAnnounce(prev => prev || "Подборка закончилась.");
       }
     };
     // Successful right flyout only after confirmed receipt (green during drag was intent only).
@@ -804,12 +933,18 @@ export function PlayerBrowseDeck({
     awaitingRightRef.current = null;
     if (fromGesture && !desktop) {
       rightConfirmGen.current += 1;
-      void flyOffCard(1).then(finishAdvance);
+      const capturedPeer = peerId;
+      void flyOffCard(1, { peerId: capturedPeer }).then(result => {
+        if (!result.ok || result.peerId !== capturedPeer || result.generation !== flyGen.current) {
+          actionConsumedRef.current = false;
+          return;
+        }
+        finishAdvance(result.generation);
+      });
       return;
     }
-    finishAdvance();
+    finishAdvance(null);
   }, [current, skipStack, browsePlayers, index, known, desktop, flyOffCard, clearCardMotion]);
-
   const dismissTutorial = useCallback(() => {
     setTutorialOpen(false);
     const ok = persistTutorialDismissed(typeof sessionStorage !== "undefined" ? sessionStorage : null);
@@ -918,16 +1053,28 @@ export function PlayerBrowseDeck({
     setDetailsPage(page => Math.min(page, Math.max(0, chunks.length - 1)));
   }, [desktop, detailsOpen, current?.publicPlayerId, current?.bio]);
 
-  // Failed / UNKNOWN right-swipe: restore card, no automatic replay.
+  // Failed / UNKNOWN right-swipe: restore readable card, no automatic replay.
   useEffect(() => {
     if (desktop || friendBusy || flyingRef.current) return;
     const peer = awaitingRightRef.current;
     if (!peer || current?.publicPlayerId !== peer) return;
     // Busy cleared without a confirmed receipt consuming the await → restore.
     awaitingRightRef.current = null;
+    actionConsumedRef.current = false;
     springBackCard();
     setAnnounce("Запрос не подтверждён. Карточка восстановлена.");
   }, [friendBusy, desktop, current?.publicPlayerId, springBackCard]);
+
+  // Breakpoint → desktop: cancel mobile gesture/flight timers (no mutation).
+  useEffect(() => {
+    if (!desktop) return;
+    flyGen.current += 1;
+    actionConsumedRef.current = false;
+    awaitingRightRef.current = null;
+    flyingRef.current = false;
+    clearTransitionTimer();
+    drag.current = null;
+  }, [desktop, clearTransitionTimer]);
 
   navigationLockedRef.current = navigationLocked;
   tutorialOpenRef.current = tutorialOpen;
@@ -936,7 +1083,8 @@ export function PlayerBrowseDeck({
   bioChunksRef.current = bioChunks;
   rateBlockedUntilRef.current = rateBlockedUntil;
   currentPeerRef.current = current?.publicPlayerId ?? null;
-  skipCurrentRef.current = () => skipCurrent({ alreadyFlying: true });
+  skipCurrentRef.current = skipCurrent;
+  applySkipAdvanceRef.current = applySkipAdvance;
   requestFriendshipRef.current = requestFriendship;
   openDetailsRef.current = openDetails;
   closeDetailsRef.current = closeDetails;
@@ -976,21 +1124,26 @@ export function PlayerBrowseDeck({
     if (!card) return;
     const width = card.clientWidth || window.innerWidth;
     if (state.axis === "horizontal") {
-      const rot = state.dx / 28;
+      const rot = browseDragRotationDeg(state.dx, width, reducedMotionRef.current);
       card.style.transition = "none";
+      card.style.transformOrigin = `${state.pivotX}px ${state.pivotY}px`;
       card.style.setProperty("--pb-drag-x", `${state.dx}px`);
       card.style.setProperty("--pb-drag-y", "0px");
       card.style.setProperty("--pb-drag-rot", `${rot}deg`);
+      // Direct 1:1 tracking — no damping.
       card.style.transform = `translate3d(${state.dx}px, 0, 0) rotate(${rot}deg)`;
       card.classList.add("is-dragging");
-      const threshold = swipeThresholdPx(width);
-      const progress = Math.min(1, Math.abs(state.dx) / threshold);
+      const abs = Math.abs(state.dx);
+      const saturateAt = Math.max(8, width * 0.45 - 4);
+      const u = Math.max(0, Math.min(1, (abs - 4) / saturateAt));
+      // Smoothstep saturating tint (OUR feedback curve).
+      const progress = u * u * (3 - 2 * u);
       const skip = state.dx < 0;
       card.style.setProperty("--pb-intent-skip", skip ? String(progress) : "0");
       card.style.setProperty("--pb-intent-request", !skip ? String(progress) : "0");
       const blocked = rateBlockedUntilRef.current != null && Date.now() < rateBlockedUntilRef.current;
       setDragStamp({
-        opacity: progress,
+        opacity: 0.95 * progress,
         skip,
         label: skip ? "Пропустить" : blocked ? "Запросы временно недоступны" : "В друзья",
       });
@@ -999,6 +1152,7 @@ export function PlayerBrowseDeck({
     if (state.axis === "vertical") {
       const dy = detailsOpenRef.current ? Math.max(0, state.dy) : Math.min(0, state.dy);
       card.style.transition = "none";
+      card.style.transformOrigin = "";
       card.style.setProperty("--pb-drag-x", "0px");
       card.style.setProperty("--pb-drag-y", `${dy}px`);
       card.style.setProperty("--pb-drag-rot", "0deg");
@@ -1029,25 +1183,6 @@ export function PlayerBrowseDeck({
     }
   }
 
-  function sampleVelocity(state: DragState, axis: PlayerBrowseGestureAxis): number {
-    const samples = state.samples;
-    if (samples.length < 2) return 0;
-    const last = samples[samples.length - 1]!;
-    let earlier = samples[0]!;
-    for (let i = samples.length - 2; i >= 0; i -= 1) {
-      const candidate = samples[i]!;
-      if (last.t - candidate.t >= 24) {
-        earlier = candidate;
-        break;
-      }
-      earlier = candidate;
-    }
-    const dt = Math.max(1, last.t - earlier.t);
-    if (axis === "horizontal") return (last.x - earlier.x) / dt;
-    if (axis === "vertical") return (last.y - earlier.y) / dt;
-    return 0;
-  }
-
   // Gestures attach only after the pending card is ready; handlers use refs so drag is not recreated mid-gesture.
   useEffect(() => {
     // Desktop: explicit buttons only — no pointer swipe/drag mutations.
@@ -1055,12 +1190,34 @@ export function PlayerBrowseDeck({
     const surface = gestureRef.current;
     if (!surface || !mediaReady) return;
 
+    const pushSample = (state: DragState, event: PointerEvent, now: number) => {
+      state.samples.push({ t: now, x: event.clientX, y: event.clientY });
+      const cutoff = now - PLAYER_BROWSE_VELOCITY_WINDOW_MS - 40;
+      while (state.samples.length > 2 && state.samples[0]!.t < cutoff) state.samples.shift();
+      if (state.samples.length > 12) state.samples.shift();
+    };
+
     const onDown = (event: PointerEvent) => {
       if (navigationLockedRef.current || tutorialOpenRef.current || flyingRef.current || awaitingRightRef.current) return;
+      if (actionConsumedRef.current) return;
       if (!mediaReadyRef.current || !currentPeerRef.current) return;
       if (!event.isPrimary || (event.pointerType === "mouse" && event.button !== 0)) return;
       if (isBrowseDragExcludedTarget(event.target)) return;
-      if (drag.current) return;
+      if (drag.current) {
+        // Second contact cancels current manipulation; does not reassign pointerId.
+        cancelActiveGesture(true);
+        return;
+      }
+      // Re-grab an in-progress spring: pin computed pose, then cancel transition without jump.
+      const card = cardRef.current;
+      if (card?.classList.contains("is-flying")) return;
+      if (card && card.style.transition && card.style.transition !== "none") {
+        const computed = window.getComputedStyle(card);
+        if (computed.transform && computed.transform !== "none") card.style.transform = computed.transform;
+        clearTransitionTimer();
+        card.style.transition = "none";
+      }
+      const rect = card?.getBoundingClientRect();
       const now = performance.now();
       drag.current = {
         id: event.pointerId,
@@ -1073,6 +1230,9 @@ export function PlayerBrowseDeck({
         samples: [{ t: now, x: event.clientX, y: event.clientY }],
         axis: "none",
         capturing: false,
+        pivotX: rect ? event.clientX - rect.left : event.clientX,
+        pivotY: rect ? event.clientY - rect.top : event.clientY,
+        consumed: false,
       };
       try {
         surface.setPointerCapture(event.pointerId);
@@ -1090,8 +1250,8 @@ export function PlayerBrowseDeck({
       state.dx = event.clientX - state.x;
       state.dy = event.clientY - state.y;
       const now = performance.now();
-      state.samples.push({ t: now, x: event.clientX, y: event.clientY });
-      if (state.samples.length > 6) state.samples.shift();
+      state.t = now;
+      pushSample(state, event, now);
       const intent = classifyPointerGesture({
         dx: state.dx,
         dy: state.dy,
@@ -1113,11 +1273,19 @@ export function PlayerBrowseDeck({
     const finishPointer = (event: PointerEvent, cancelled: boolean) => {
       const state = drag.current;
       if (!state || state.id !== event.pointerId) return;
+      if (state.consumed) return;
+      state.consumed = true;
+      // Update with release sample before classifying (spec: include release point).
       state.dx = event.clientX - state.x;
       state.dy = event.clientY - state.y;
+      const now = performance.now();
+      pushSample(state, event, now);
       const axis = state.axis;
-      const velocity = sampleVelocity(state, axis);
+      const velocity = sampleBrowseVelocity(state.samples, axis, now);
       const peerAtStart = state.peerId;
+      const fromX = state.dx;
+      const width = surface.clientWidth || window.innerWidth;
+      const fromRot = browseDragRotationDeg(fromX, width, reducedMotionRef.current);
       drag.current = null;
       if (dragRaf.current) {
         cancelAnimationFrame(dragRaf.current);
@@ -1130,37 +1298,65 @@ export function PlayerBrowseDeck({
         springBackCard();
         return;
       }
-      if (peerAtStart !== currentPeerRef.current || navigationLockedRef.current || tutorialOpenRef.current) {
+      if (peerAtStart !== currentPeerRef.current || navigationLockedRef.current || tutorialOpenRef.current || actionConsumedRef.current) {
         springBackCard();
         return;
       }
+      const reverseVeto = axis === "horizontal"
+        ? browseReleaseReverseVeto(state.dx, velocity)
+        : axis === "vertical"
+          ? browseReleaseReverseVeto(state.dy, velocity)
+          : false;
       const result = classifyPointerGesture({
         dx: state.dx,
         dy: state.dy,
-        width: surface.clientWidth || window.innerWidth,
+        width,
         height: surface.clientHeight || window.innerHeight,
         phase: "release",
         lockedAxis: axis,
         velocity,
+        reverseVeto,
       });
       if (result === "skip") {
-        void flyOffCard(-1).then(() => skipCurrentRef.current());
+        if (actionConsumedRef.current) {
+          springBackCard();
+          return;
+        }
+        actionConsumedRef.current = true;
+        applyDragVisual({ ...state, axis: "horizontal" });
+        void flyOffCard(-1, { peerId: peerAtStart, velocity, fromX, fromRot }).then(fly => {
+          if (!fly.ok || fly.peerId !== peerAtStart || fly.generation !== flyGen.current) {
+            actionConsumedRef.current = false;
+            return;
+          }
+          applySkipAdvanceRef.current(peerAtStart, fly.generation);
+        });
         return;
       }
       if (result === "request") {
         const api = friendshipApi.current;
-        if (!api?.canRequest) {
+        if (!api?.canRequest || actionConsumedRef.current) {
           springBackCard();
           return;
         }
+        actionConsumedRef.current = true;
         awaitingRightRef.current = peerAtStart;
         const started = api.request();
         if (!started) {
           awaitingRightRef.current = null;
+          actionConsumedRef.current = false;
           springBackCard();
           return;
         }
-        // Hold card at release offset until receipt; green was intent only.
+        // Hold readable card near release pose until receipt; green was intent only.
+        const holdX = Math.max(-width * 0.25, Math.min(width * 0.25, fromX));
+        const card = cardRef.current;
+        if (card && Math.abs(fromX) > width * 0.25) {
+          card.style.transition = `transform ${PLAYER_BROWSE_RETURN_MS}ms ease-out`;
+          card.style.setProperty("--pb-drag-x", `${holdX}px`);
+          card.style.setProperty("--pb-drag-rot", `${browseDragRotationDeg(holdX, width, reducedMotionRef.current)}deg`);
+          card.style.transform = `translate3d(${holdX}px, 0, 0) rotate(${browseDragRotationDeg(holdX, width, reducedMotionRef.current)}deg)`;
+        }
         setDragStamp({ opacity: 0.55, skip: false, label: "Отправляем…" });
         return;
       }
@@ -1216,8 +1412,7 @@ export function PlayerBrowseDeck({
       window.removeEventListener("pointercancel", onCancel);
       window.removeEventListener("blur", onBlur);
     };
-  }, [desktop, mediaReady, flyOffCard, springBackCard]);
-
+  }, [desktop, mediaReady, flyOffCard, springBackCard, clearTransitionTimer]);
   const blank = catalogState === "loading" || (!browsePlayers.length && (catalogState === "empty" || catalogState === "ready"));
   const showHelp = !desktop && tutorialOpen && !blank && catalogState !== "error" && catalogState !== "unavailable";
 
@@ -1266,8 +1461,32 @@ export function PlayerBrowseDeck({
         });
       }}
       onConfirmedRequest={onConfirmedRequest}
-      onBusyChange={setFriendBusy}
-      onApi={(api) => { friendshipApi.current = api; }}
+      onBusyChange={(busy) => {
+        setFriendBusy(busy);
+        // Single-flight covers friendship buttons as well as gestures.
+        if (busy) actionConsumedRef.current = true;
+        else if (!flyingRef.current && !awaitingRightRef.current) actionConsumedRef.current = false;
+      }}
+      onApi={(api) => {
+        if (!api) {
+          friendshipApi.current = null;
+          return;
+        }
+        const base = api;
+        friendshipApi.current = {
+          busy: base.busy,
+          pendingUnknown: base.pendingUnknown,
+          canRequest: base.canRequest,
+          request: () => {
+            if (flyingRef.current) return false;
+            if (actionConsumedRef.current && awaitingRightRef.current == null) return false;
+            actionConsumedRef.current = true;
+            const started = base.request();
+            if (!started && awaitingRightRef.current == null) actionConsumedRef.current = false;
+            return started;
+          },
+        };
+      }}
       onSkip={skipCurrent}
       onAuthRetry={() => setAuthReload(n => n + 1)}
       chrome={desktop ? "desktop" : "mobile"}
@@ -1480,7 +1699,7 @@ export function PlayerBrowseDeck({
                 data-player-id={current.publicPlayerId}
                 data-details={detailsOpen ? "open" : "closed"}
                 aria-busy={commitPending ? true : undefined}
-                style={{ touchAction: "none" }}
+                style={{ touchAction: "pinch-zoom" }}
               >
                 <div className="pb-intent-layer" aria-hidden="true">
                   <div className="pb-intent pb-intent--skip">
@@ -1493,11 +1712,14 @@ export function PlayerBrowseDeck({
                   </div>
                 </div>
 
-                <div ref={gestureRef} className="pb-gesture-surface" style={{ touchAction: "none" }}>
+                <div ref={gestureRef} className="pb-gesture-surface" style={{ touchAction: "pinch-zoom" }}>
                   <div className={`pb-mobile-stage${detailsOpen ? " is-details" : ""}`}>
                     <div className="pb-cover" aria-hidden={detailsOpen ? true : undefined}>
                       <PreparedBrowseCover media={committedMedia!.cover} />
-                      <PreparedBrowseAvatar className={`avatar avatar--${current.trainer ? "purple" : "yellow"} pb-avatar`} media={committedMedia!.avatar} name={current.displayName} tone={current.trainer ? "purple" : "yellow"} />
+                      {/* Single retained avatar host: cover OR details — never both (second host steals the node). */}
+                      {!detailsOpen && (
+                        <PreparedBrowseAvatar className={`avatar avatar--${current.trainer ? "purple" : "yellow"} pb-avatar`} media={committedMedia!.avatar} name={current.displayName} tone={current.trainer ? "purple" : "yellow"} />
+                      )}
                     </div>
                     <div className="pb-identity-compact" aria-hidden={detailsOpen ? true : undefined}>
                       {current.lookingForGame && <span className="pb-pill">● Ищу игру</span>}
@@ -1511,10 +1733,13 @@ export function PlayerBrowseDeck({
                       </button>
                     </div>
 
-                    <div className={`pb-mobile-details${detailsOpen ? " is-open" : ""}`} data-browse-no-drag="">
+                    {/* No data-browse-no-drag on the whole details surface — vertical gestures on text/background must work. */}
+                    <div className={`pb-mobile-details${detailsOpen ? " is-open" : ""}`}>
                       <div className="pb-mobile-details__panel">
                         <div className="pb-mobile-details__head">
-                          <PreparedBrowseAvatar className={`avatar avatar--${current.trainer ? "purple" : "yellow"} pb-details-avatar`} media={committedMedia!.avatar} name={current.displayName} tone={current.trainer ? "purple" : "yellow"} />
+                          {detailsOpen && (
+                            <PreparedBrowseAvatar className={`avatar avatar--${current.trainer ? "purple" : "yellow"} pb-details-avatar`} media={committedMedia!.avatar} name={current.displayName} tone={current.trainer ? "purple" : "yellow"} />
+                          )}
                           <div>
                             <h3>{current.displayName}</h3>
                             {meta && <p className="pb-meta">{meta}</p>}
@@ -1594,10 +1819,10 @@ export function PlayerBrowseDeck({
     </div>
 
     {atEnd && (
-      <div style={{ marginTop: 16, display: "flex", justifyContent: "center" }}>
+      <div className={`pb-deck-end${mobileFullscreen ? " pb-deck-end--fs" : ""}`} role="status">
         {hasMore
           ? <Button variant="outline" disabled={moreBusy || navigationLocked} onClick={onLoadMore}>{moreBusy ? "Загрузка…" : "Загрузить ещё"}</Button>
-          : <p className="pb-counter" role="status">Больше игроков в текущей выборке нет.</p>}
+          : <p className="pb-counter">Больше игроков в текущей выборке нет.</p>}
       </div>
     )}
 
