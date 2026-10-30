@@ -1,12 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { FriendshipReceipt, FriendshipView } from "@gobadminton/contracts/friendship-types";
 import { getMe, getMySocialProfile } from "../../../lib/api-client";
 import type { City, Me, PublicPlayer } from "../../../lib/consumer-types";
 import { formatSocialLevel } from "../../../lib/player-presentation";
 import {
+  browseDragRotationDeg,
+  browseExitDurationMs,
+  browseExitTranslationPx,
+  browseReleaseReverseVeto,
   browseSlideDurationMs,
   chunkBrowseBio,
   classifyPointerGesture,
@@ -16,8 +20,15 @@ import {
   nextEligibleBrowseIndex,
   normalizeBrowseBio,
   ordinaryBrowsePlayers,
+  parseBrowseCssTransformPose,
   persistTutorialDismissed,
   PLAYER_BROWSE_DESKTOP_MQ,
+  PLAYER_BROWSE_MAX_ROTATION_DEG,
+  PLAYER_BROWSE_RETURN_MS,
+  PLAYER_BROWSE_VELOCITY_WINDOW_MS,
+  sampleBrowseVelocity,
+  type PlayerBrowseGestureAxis,
+  type PlayerBrowseVelocitySample,
   popSkip,
   prefersBrowseReducedMotion,
   pushSkip,
@@ -53,15 +64,29 @@ type Props = {
   placeLabel: string;
   /** Parent desktop breakpoint; when omitted, deck measures PLAYER_BROWSE_DESKTOP_MQ itself. */
   desktop?: boolean;
+  /** Mobile <1024 cards mode: fixed fullscreen shell (portal) covering app chrome. */
+  mobileFullscreen?: boolean;
+  onCloseFullscreen?: () => void;
 };
 
 type DragState = {
   id: number;
+  peerId: string;
   x: number;
   y: number;
   dx: number;
   dy: number;
-  horizontal: boolean;
+  /** Card pose at pointerdown (spring re-grab base); fresh dx/dy apply relative to this. */
+  originX: number;
+  originY: number;
+  t: number;
+  samples: PlayerBrowseVelocitySample[];
+  axis: PlayerBrowseGestureAxis;
+  capturing: boolean;
+  /** Local origin for grab-pivot rotation (relative to card top-left). */
+  pivotX: number;
+  pivotY: number;
+  consumed: boolean;
 };
 
 function Chevron({ dir }: { dir: "left" | "right" | "down" }) {
@@ -99,6 +124,8 @@ export function PlayerBrowseDeck({
   onLoadMore,
   placeLabel,
   desktop: desktopProp,
+  mobileFullscreen = false,
+  onCloseFullscreen,
 }: Props) {
   const desktop = useLocalDesktop(desktopProp);
   const [me, setMe] = useState<Me | null>(null);
@@ -112,6 +139,8 @@ export function PlayerBrowseDeck({
   const [known, setKnown] = useState<Map<string, FriendshipView["relationship"]>>(() => new Map());
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [detailsPage, setDetailsPage] = useState(0);
+  /** Mobile-only fixed info pages: facts → about bio chunks → games (desktop keeps detailsPage). */
+  const [mobileInfoPage, setMobileInfoPage] = useState(0);
   const [bioChunks, setBioChunks] = useState<string[]>([]);
   const [friendBusy, setFriendBusy] = useState(false);
   const [rateBlockedUntil, setRateBlockedUntil] = useState<number | null>(null);
@@ -124,12 +153,22 @@ export function PlayerBrowseDeck({
   const [mediaUnavailable, setMediaUnavailable] = useState(false);
   const deckRef = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLElement>(null);
+  const gestureRef = useRef<HTMLDivElement>(null);
+  const closeBtnRef = useRef<HTMLButtonElement>(null);
   const slideFrameRef = useRef<HTMLDivElement>(null);
   const detailsBodyRef = useRef<HTMLDivElement>(null);
   const detailsBioRef = useRef<HTMLParagraphElement>(null);
+  const mobileDetailsBodyRef = useRef<HTMLDivElement>(null);
   const tutorialRef = useRef<HTMLElement>(null);
   const friendshipApi = useRef<BrowseFriendshipApi | null>(null);
   const drag = useRef<DragState | null>(null);
+  const dragRaf = useRef(0);
+  const flyingRef = useRef(false);
+  const flyGen = useRef(0);
+  const actionConsumedRef = useRef(false);
+  const transitionTimerRef = useRef(0);
+  const awaitingRightRef = useRef<string | null>(null);
+  const rightConfirmGen = useRef(0);
   const scopeGen = useRef(0);
   const viewerGen = useRef(0);
   const slideGen = useRef(0);
@@ -137,6 +176,23 @@ export function PlayerBrowseDeck({
   const restoredScope = useRef<string | null>(null);
   const reducedMotionRef = useRef(false);
   const pendingDirectionRef = useRef<PlayerBrowseSlideDirection | null>(null);
+  const navigationLockedRef = useRef(false);
+  const tutorialOpenRef = useRef(false);
+  const detailsOpenRef = useRef(false);
+  const detailsPageRef = useRef(0);
+  const mobileInfoPageRef = useRef(0);
+  const mobileInfoPageCountRef = useRef(3);
+  const bioChunksRef = useRef<string[]>([]);
+  const rateBlockedUntilRef = useRef<number | null>(null);
+  const currentPeerRef = useRef<string | null>(null);
+  const mediaReadyRef = useRef(false);
+  const skipCurrentRef = useRef<(opts?: { alreadyFlying?: boolean; generation?: number; peerId?: string | null }) => void>(() => {});
+  const applySkipAdvanceRef = useRef<(peerId: string, generation: number | null) => void>(() => {});
+  const requestFriendshipRef = useRef<() => void>(() => {});
+  const openDetailsRef = useRef<() => void>(() => {});
+  const closeDetailsRef = useRef<() => void>(() => {});
+  const onCloseFullscreenRef = useRef(onCloseFullscreen);
+  onCloseFullscreenRef.current = onCloseFullscreen;
   const mediaCacheRef = useRef<Map<string, {
     status: BrowseMediaCacheStatus;
     mediaKey: string;
@@ -186,6 +242,8 @@ export function PlayerBrowseDeck({
   // In-flight POST locks browse navigation; media wait stays cancelable by further navigation.
   // UNKNOWN latch stays in per-peer pending storage without freezing the deck.
   const navigationLocked = friendBusy;
+  const mediaReady = Boolean(current && committedMedia && committedMedia.peerId === current.publicPlayerId);
+  mediaReadyRef.current = mediaReady;
 
   const clearMediaCache = useCallback((retainPeerId?: string | null) => {
     const retain = retainPeerId ?? null;
@@ -299,7 +357,12 @@ export function PlayerBrowseDeck({
     })();
     const expire = () => {
       live = false;
+      // Synchronously invalidate in-flight card exit so completion cannot skip/advance after auth change.
       viewerGen.current += 1;
+      flyGen.current += 1;
+      flyingRef.current = false;
+      actionConsumedRef.current = false;
+      awaitingRightRef.current = null;
       clearMediaCache();
       replaceCommittedMedia(null);
       setMe(null);
@@ -320,6 +383,10 @@ export function PlayerBrowseDeck({
     scopeGen.current += 1;
     viewerGen.current += 1;
     slideGen.current += 1;
+    flyGen.current += 1;
+    actionConsumedRef.current = false;
+    awaitingRightRef.current = null;
+    flyingRef.current = false;
     clearMediaCache();
     replaceCommittedMedia(null);
     setMediaUnavailable(false);
@@ -330,6 +397,7 @@ export function PlayerBrowseDeck({
     setSkipStack([]);
     setDetailsOpen(false);
     setDetailsPage(0);
+    setMobileInfoPage(0);
     setBioChunks([]);
     setKnown(new Map());
     restoredScope.current = null;
@@ -373,6 +441,13 @@ export function PlayerBrowseDeck({
     if (intentIndex >= browsePlayers.length) setIntentIndex(Math.max(0, browsePlayers.length - 1));
   }, [browsePlayers, index, intentIndex]);
 
+  const clearTransitionTimer = useCallback(() => {
+    if (transitionTimerRef.current) {
+      window.clearTimeout(transitionTimerRef.current);
+      transitionTimerRef.current = 0;
+    }
+  }, []);
+
   useEffect(() => {
     const id = current?.publicPlayerId;
     if (!id) return;
@@ -386,14 +461,27 @@ export function PlayerBrowseDeck({
   useEffect(() => {
     setDetailsOpen(false);
     setDetailsPage(0);
+    setMobileInfoPage(0);
     setBioChunks([]);
     setFriendBusy(false);
+    awaitingRightRef.current = null;
+    actionConsumedRef.current = false;
+    flyGen.current += 1;
+    clearTransitionTimer();
+    flyingRef.current = false;
     setDragStamp({ opacity: 0, skip: false, label: "" });
     if (cardRef.current) {
+      cardRef.current.style.transition = "none";
       cardRef.current.style.transform = "";
-      cardRef.current.classList.remove("is-dragging");
+      cardRef.current.style.transformOrigin = "";
+      cardRef.current.style.removeProperty("--pb-drag-x");
+      cardRef.current.style.removeProperty("--pb-drag-y");
+      cardRef.current.style.removeProperty("--pb-drag-rot");
+      cardRef.current.style.removeProperty("--pb-intent-skip");
+      cardRef.current.style.removeProperty("--pb-intent-request");
+      cardRef.current.classList.remove("is-dragging", "is-flying");
     }
-  }, [current?.publicPlayerId]);
+  }, [current?.publicPlayerId, clearTransitionTimer]);
 
   useEffect(() => {
     // Desktop: no swipe tutorial. Mobile keeps existing onboarding.
@@ -618,6 +706,14 @@ export function PlayerBrowseDeck({
       slideMounted.current = false;
       slideGen.current += 1;
       viewerGen.current += 1;
+      flyGen.current += 1;
+      actionConsumedRef.current = false;
+      awaitingRightRef.current = null;
+      flyingRef.current = false;
+      if (transitionTimerRef.current) {
+        window.clearTimeout(transitionTimerRef.current);
+        transitionTimerRef.current = 0;
+      }
       clearMediaCache();
       replaceCommittedMedia(null);
       const frame = slideFrameRef.current;
@@ -627,15 +723,176 @@ export function PlayerBrowseDeck({
     };
   }, [clearMediaCache, replaceCommittedMedia]);
 
-  const skipCurrent = useCallback(() => {
-    if (!current || navigationLocked || tutorialOpen) return;
-    setSkipStack(stack => pushSkip(stack, current.publicPlayerId));
-    if (index < browsePlayers.length - 1) moveTo(index + 1, desktop ? "next" : undefined);
-    else if (hasMore) setAnnounce("Подборка на этой странице закончилась. Можно загрузить ещё.");
-    else setAnnounce("Подборка закончилась.");
-    setToast("Пропущено. Игрок не получит уведомления.");
-  }, [current, navigationLocked, tutorialOpen, index, browsePlayers.length, hasMore, moveTo, desktop]);
+  const clearCardMotion = useCallback((instant = false) => {    const card = cardRef.current;
+    if (!card) return;
+    clearTransitionTimer();
+    if (instant || reducedMotionRef.current) card.style.transition = "none";
+    card.style.setProperty("--pb-drag-x", "0px");
+    card.style.setProperty("--pb-drag-y", "0px");
+    card.style.setProperty("--pb-drag-rot", "0deg");
+    card.style.setProperty("--pb-intent-skip", "0");
+    card.style.setProperty("--pb-intent-request", "0");
+    card.style.transform = "";
+    card.style.transformOrigin = "";
+    card.classList.remove("is-dragging", "is-flying");
+    flyingRef.current = false;
+  }, [clearTransitionTimer]);
 
+  const springBackCard = useCallback(() => {
+    const card = cardRef.current;
+    actionConsumedRef.current = false;
+    if (!card) {
+      setDragStamp({ opacity: 0, skip: false, label: "" });
+      return;
+    }
+    // Interruptible return: pin computed pose to inline values before cancelling prior motion.
+    const computed = typeof window.getComputedStyle === "function" ? window.getComputedStyle(card) : null;
+    if (computed?.transform && computed.transform !== "none") {
+      card.style.transform = computed.transform;
+    }
+    clearTransitionTimer();
+    card.classList.remove("is-dragging", "is-flying");
+    flyingRef.current = false;
+    if (reducedMotionRef.current) {
+      clearCardMotion(true);
+    } else {
+      card.style.transition = `transform ${PLAYER_BROWSE_RETURN_MS}ms ease-out`;
+      card.style.setProperty("--pb-drag-x", "0px");
+      card.style.setProperty("--pb-drag-y", "0px");
+      card.style.setProperty("--pb-drag-rot", "0deg");
+      card.style.setProperty("--pb-intent-skip", "0");
+      card.style.setProperty("--pb-intent-request", "0");
+      card.style.transform = "translate3d(0,0,0) rotate(0deg)";
+      transitionTimerRef.current = window.setTimeout(() => {
+        transitionTimerRef.current = 0;
+        if (cardRef.current === card) clearCardMotion(true);
+      }, PLAYER_BROWSE_RETURN_MS + 20);
+    }
+    setDragStamp({ opacity: 0, skip: false, label: "" });
+  }, [clearCardMotion, clearTransitionTimer]);
+
+  const flyOffCard = useCallback((dir: -1 | 1, opts?: {
+    peerId?: string | null;
+    velocity?: number;
+    fromX?: number;
+    fromRot?: number;
+  }): Promise<{ ok: boolean; generation: number; peerId: string | null }> => {
+    const card = cardRef.current;
+    const peerId = opts?.peerId ?? currentPeerRef.current;
+    const generation = ++flyGen.current;
+    const capturedViewer = viewerGen.current;
+    const flightLive = () => (
+      flyGen.current === generation
+      && viewerGen.current === capturedViewer
+      && slideMounted.current
+    );
+    if (!card) return Promise.resolve({ ok: flightLive(), generation, peerId });
+    flyingRef.current = true;
+    clearTransitionTimer();
+    card.classList.remove("is-dragging");
+    card.classList.add("is-flying");
+    const rect = card.getBoundingClientRect();
+    const width = Math.max(rect.width, 1);
+    const height = Math.max(rect.height, 1);
+    const parsedX = Number.parseFloat(card.style.getPropertyValue("--pb-drag-x"));
+    const fromX = opts?.fromX ?? (Number.isFinite(parsedX) ? parsedX : 0);
+    const parsedRot = Number.parseFloat(card.style.getPropertyValue("--pb-drag-rot"));
+    const fromRot = opts?.fromRot
+      ?? (Number.isFinite(parsedRot) ? parsedRot : browseDragRotationDeg(fromX, width, reducedMotionRef.current));
+    const rot = Math.max(
+      -PLAYER_BROWSE_MAX_ROTATION_DEG,
+      Math.min(
+        PLAYER_BROWSE_MAX_ROTATION_DEG,
+        fromRot !== 0 ? fromRot : dir * Math.min(PLAYER_BROWSE_MAX_ROTATION_DEG, 10),
+      ),
+    );
+    const x = browseExitTranslationPx({
+      dir,
+      width,
+      height,
+      rotationDeg: rot,
+      currentX: fromX,
+    });
+    if (reducedMotionRef.current) {
+      clearCardMotion(true);
+      return Promise.resolve({ ok: flightLive(), generation, peerId });
+    }
+    const distance = Math.abs(x - fromX);
+    const duration = browseExitDurationMs(distance, opts?.velocity ?? 0);
+    return new Promise(resolve => {
+      // Continue from release pose — no recenter before exit.
+      card.style.transition = "none";
+      card.style.setProperty("--pb-drag-x", `${fromX}px`);
+      card.style.setProperty("--pb-drag-y", "0px");
+      card.style.setProperty("--pb-drag-rot", `${rot}deg`);
+      card.style.transform = `translate3d(${fromX}px, 0, 0) rotate(${rot}deg)`;
+      // Force style flush so the next transition starts from the release pose.
+      void card.offsetWidth;
+      card.style.transition = `transform ${duration}ms linear`;
+      card.style.setProperty("--pb-drag-x", `${x}px`);
+      card.style.transform = `translate3d(${x}px, 0, 0) rotate(${rot}deg)`;
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        card.removeEventListener("transitionend", onEnd);
+        clearTransitionTimer();
+        // Fence against flyGen and viewer/auth generation; always settle the promise (no hang on unmount).
+        const live = flightLive();
+        flyingRef.current = false;
+        resolve({ ok: live, generation, peerId });
+      };
+      const onEnd = (event: TransitionEvent) => {
+        if (event.target === card && event.propertyName === "transform") finish();
+      };
+      card.addEventListener("transitionend", onEnd);
+      transitionTimerRef.current = window.setTimeout(finish, duration + 40);
+    });
+  }, [clearCardMotion, clearTransitionTimer]);
+
+  const applySkipAdvance = useCallback((peerId: string, generation: number | null) => {
+    if (generation != null && generation !== flyGen.current) return;
+    if (!slideMounted.current) return;
+    // Ignore obsolete completion after peer/scope change mid-flight.
+    if (generation != null && peerId !== currentPeerRef.current) {
+      actionConsumedRef.current = false;
+      return;
+    }
+    setSkipStack(stack => pushSkip(stack, peerId));
+    setToast("Пропущено. Игрок не получит уведомления.");
+    const liveIndex = indexRef.current;
+    if (liveIndex < browsePlayers.length - 1) {
+      actionConsumedRef.current = false;
+      moveTo(liveIndex + 1, desktop ? "next" : undefined);
+      return;
+    }
+    // Last card: settle to a usable terminal (not a permanent flown-off ghost).
+    clearCardMotion(true);
+    actionConsumedRef.current = false;
+    if (hasMore) setAnnounce("Подборка на этой странице закончилась. Можно загрузить ещё.");
+    else setAnnounce("Подборка закончилась.");
+  }, [browsePlayers.length, hasMore, moveTo, desktop, clearCardMotion]);
+
+  const skipCurrent = useCallback((opts?: { alreadyFlying?: boolean; generation?: number; peerId?: string | null }) => {
+    if (!current || navigationLocked || tutorialOpen) return;
+    if (actionConsumedRef.current && !opts?.alreadyFlying) return;
+    const peerId = opts?.peerId ?? current.publicPlayerId;
+    if (opts?.peerId && current.publicPlayerId !== opts.peerId && !opts.alreadyFlying) return;
+    if (opts?.generation != null && opts.generation !== flyGen.current) return;
+    actionConsumedRef.current = true;
+    if (opts?.alreadyFlying || desktop) {
+      applySkipAdvance(peerId, opts?.generation ?? null);
+      return;
+    }
+    const capturedPeer = peerId;
+    void flyOffCard(-1, { peerId: capturedPeer }).then(result => {
+      if (!result.ok || result.peerId !== capturedPeer || result.generation !== flyGen.current) {
+        actionConsumedRef.current = false;
+        return;
+      }
+      applySkipAdvance(capturedPeer, result.generation);
+    });
+  }, [current, navigationLocked, tutorialOpen, desktop, flyOffCard, applySkipAdvance]);
   const undoSkip = useCallback(() => {
     if (navigationLocked || tutorialOpen) return;
     const { stack, id } = popSkip(skipStack);
@@ -646,18 +903,21 @@ export function PlayerBrowseDeck({
   }, [navigationLocked, tutorialOpen, skipStack, browsePlayers, moveTo, desktop, index]);
 
   const requestFriendship = useCallback(() => {
-    if (navigationLocked || tutorialOpen) return;
-    friendshipApi.current?.request();
+    if (navigationLocked || tutorialOpen || actionConsumedRef.current || flyingRef.current) return;
+    actionConsumedRef.current = true;
+    const started = friendshipApi.current?.request() ?? false;
+    if (!started) actionConsumedRef.current = false;
   }, [navigationLocked, tutorialOpen]);
 
   const onConfirmedRequest = useCallback((receipt: FriendshipReceipt) => {
     if (!current) return;
     // Cancel/decline/remove are successful mutations but must not toast "sent" or auto-advance.
     if (!isBrowseConfirmedRequestOutcome(receipt.outcome)) return;
+    const peerId = current.publicPlayerId;
     const relationship = receipt.outcome === "accepted" ? "friends" : "outgoing_pending";
     setKnown(prev => {
       const next = new Map(prev);
-      next.set(current.publicPlayerId, relationship);
+      next.set(peerId, relationship);
       return next;
     });
     setToast(receipt.outcome === "accepted" ? "Теперь вы друзья" : "Запрос отправлен");
@@ -665,16 +925,44 @@ export function PlayerBrowseDeck({
     const skipped = new Set(skipStack);
     const next = nextEligibleBrowseIndex(browsePlayers, index, new Map([
       ...known,
-      [current.publicPlayerId, relationship] as const,
+      [peerId, relationship] as const,
     ]), skipped);
-    // Bypass post lock: confirmed receipt already cleared the mutation busy latch in the child.
-    // Non-animated readiness commit — not a browse slide.
-    if (next >= 0) {
-      pendingDirectionRef.current = null;
-      setIntentIndex(next);
+    const finishAdvance = (generation: number | null) => {
+      if (generation != null && generation !== flyGen.current) return;
+      if (generation != null && peerId !== currentPeerRef.current) {
+        actionConsumedRef.current = false;
+        return;
+      }
+      awaitingRightRef.current = null;
+      actionConsumedRef.current = false;
+      // Bypass post lock: confirmed receipt already cleared the mutation busy latch in the child.
+      // Non-animated readiness commit — not a browse slide.
+      if (next >= 0) {
+        pendingDirectionRef.current = null;
+        setIntentIndex(next);
+      } else {
+        // Honest terminal when no further eligible peer.
+        clearCardMotion(true);
+        setAnnounce(prev => prev || "Подборка закончилась.");
+      }
+    };
+    // Successful right flyout only after confirmed receipt (green during drag was intent only).
+    const fromGesture = awaitingRightRef.current === peerId;
+    awaitingRightRef.current = null;
+    if (fromGesture && !desktop) {
+      rightConfirmGen.current += 1;
+      const capturedPeer = peerId;
+      void flyOffCard(1, { peerId: capturedPeer }).then(result => {
+        if (!result.ok || result.peerId !== capturedPeer || result.generation !== flyGen.current) {
+          actionConsumedRef.current = false;
+          return;
+        }
+        finishAdvance(result.generation);
+      });
+      return;
     }
-  }, [current, skipStack, browsePlayers, index, known]);
-
+    finishAdvance(null);
+  }, [current, skipStack, browsePlayers, index, known, desktop, flyOffCard, clearCardMotion]);
   const dismissTutorial = useCallback(() => {
     setTutorialOpen(false);
     const ok = persistTutorialDismissed(typeof sessionStorage !== "undefined" ? sessionStorage : null);
@@ -685,6 +973,7 @@ export function PlayerBrowseDeck({
 
   const openDetails = useCallback(() => {
     setDetailsPage(0);
+    setMobileInfoPage(0);
     setBioChunks([]);
     setDetailsOpen(true);
   }, []);
@@ -692,6 +981,7 @@ export function PlayerBrowseDeck({
   const closeDetails = useCallback(() => {
     setDetailsOpen(false);
     setDetailsPage(0);
+    setMobileInfoPage(0);
     setBioChunks([]);
   }, []);
 
@@ -766,9 +1056,121 @@ export function PlayerBrowseDeck({
   }, [tutorialOpen]);
 
   useEffect(() => {
+    if (mobileFullscreen) requestAnimationFrame(() => closeBtnRef.current?.focus({ preventScroll: true }));
+  }, [mobileFullscreen]);
+
+  // Mobile: height-fit bio chunks for about pages (facts / about* / games stay separate).
+  useLayoutEffect(() => {
+    if (desktop || !detailsOpen) return;
+    const bio = normalizeBrowseBio(current?.bio);
+    const clampMobilePage = (aboutLen: number) => {
+      const aboutCount = Math.max(1, aboutLen);
+      const last = aboutCount + 1; // facts=0 … games=last
+      setMobileInfoPage(page => Math.min(page, last));
+    };
+    const recompute = () => {
+      const bioEl = detailsBioRef.current;
+      if (!bio) {
+        setBioChunks([]);
+        clampMobilePage(0);
+        return;
+      }
+      if (!bioEl) return;
+      // Measure host mirrors about-page chrome so chunks fit available height (375×667 / zoom).
+      const previous = bioEl.textContent;
+      bioEl.textContent = bio;
+      const client = bioEl.clientHeight;
+      const scroll = bioEl.scrollHeight;
+      let nextChunks = scroll <= client + 2
+        ? [bio]
+        : chunkBrowseBio(bio, estimateBrowseBioChunkChars(bio.length, client, scroll));
+      for (let guard = 0; guard < 8; guard += 1) {
+        let clippedLen = 0;
+        let clippedClient = client;
+        let clippedScroll = scroll;
+        for (const chunk of nextChunks) {
+          bioEl.textContent = chunk;
+          const chunkClient = bioEl.clientHeight;
+          const chunkScroll = bioEl.scrollHeight;
+          if (chunkScroll > chunkClient + 2 && chunk.length > clippedLen) {
+            clippedLen = chunk.length;
+            clippedClient = chunkClient;
+            clippedScroll = chunkScroll;
+          }
+        }
+        if (!clippedLen) break;
+        const tighter = estimateBrowseBioChunkChars(clippedLen, clippedClient, clippedScroll);
+        const rebuilt = chunkBrowseBio(bio, tighter);
+        if (
+          rebuilt.length === nextChunks.length
+          && rebuilt.every((part, i) => part === nextChunks[i])
+        ) break;
+        nextChunks = rebuilt;
+      }
+      bioEl.textContent = previous;
+      setBioChunks(prev => (
+        prev.length === nextChunks.length && prev.every((part, i) => part === nextChunks[i])
+          ? prev
+          : nextChunks
+      ));
+      clampMobilePage(nextChunks.length);
+    };
+    recompute();
+    window.addEventListener("resize", recompute);
+    const measureRoot = detailsBioRef.current?.parentElement ?? mobileDetailsBodyRef.current;
+    const ro = typeof ResizeObserver === "function" && measureRoot
+      ? new ResizeObserver(() => recompute())
+      : null;
+    if (ro && measureRoot) ro.observe(measureRoot);
+    return () => {
+      window.removeEventListener("resize", recompute);
+      ro?.disconnect();
+    };
+  }, [desktop, detailsOpen, current?.publicPlayerId, current?.bio]);
+
+  // Failed / UNKNOWN right-swipe: restore readable card, no automatic replay.
+  useEffect(() => {
+    if (desktop || friendBusy || flyingRef.current) return;
+    const peer = awaitingRightRef.current;
+    if (!peer || current?.publicPlayerId !== peer) return;
+    // Busy cleared without a confirmed receipt consuming the await → restore.
+    awaitingRightRef.current = null;
+    actionConsumedRef.current = false;
+    springBackCard();
+    setAnnounce("Запрос не подтверждён. Карточка восстановлена.");
+  }, [friendBusy, desktop, current?.publicPlayerId, springBackCard]);
+
+  // Breakpoint → desktop: cancel mobile gesture/flight timers (no mutation).
+  useEffect(() => {
+    if (!desktop) return;
+    flyGen.current += 1;
+    actionConsumedRef.current = false;
+    awaitingRightRef.current = null;
+    flyingRef.current = false;
+    clearTransitionTimer();
+    drag.current = null;
+  }, [desktop, clearTransitionTimer]);
+
+  navigationLockedRef.current = navigationLocked;
+  tutorialOpenRef.current = tutorialOpen;
+  detailsOpenRef.current = detailsOpen;
+  detailsPageRef.current = detailsPage;
+  mobileInfoPageRef.current = mobileInfoPage;
+  // facts + max(1, bioChunks) about pages + games
+  mobileInfoPageCountRef.current = 1 + Math.max(1, bioChunks.length) + 1;
+  bioChunksRef.current = bioChunks;
+  rateBlockedUntilRef.current = rateBlockedUntil;
+  currentPeerRef.current = current?.publicPlayerId ?? null;
+  skipCurrentRef.current = skipCurrent;
+  applySkipAdvanceRef.current = applySkipAdvance;
+  requestFriendshipRef.current = requestFriendship;
+  openDetailsRef.current = openDetails;
+  closeDetailsRef.current = closeDetails;
+
+  useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape" && drag.current) {
-        resetDrag();
+        cancelActiveGesture(true);
         return;
       }
       if (event.key === "Escape" && tutorialOpen) {
@@ -781,6 +1183,11 @@ export function PlayerBrowseDeck({
         closeDetails();
         return;
       }
+      if (event.key === "Escape" && mobileFullscreen && onCloseFullscreenRef.current) {
+        event.preventDefault();
+        onCloseFullscreenRef.current();
+        return;
+      }
       if (event.repeat || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || tutorialOpen) return;
       if (event.target !== deckRef.current) return;
       if (event.key === "ArrowRight") { event.preventDefault(); moveTo(intentIndex + 1, "next"); }
@@ -788,114 +1195,405 @@ export function PlayerBrowseDeck({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [tutorialOpen, dismissTutorial, moveTo, intentIndex, detailsOpen, closeDetails]);
+  }, [tutorialOpen, dismissTutorial, moveTo, intentIndex, detailsOpen, closeDetails, mobileFullscreen]);
 
-  function resetDrag() {
-    drag.current = null;
-    if (cardRef.current) {
-      cardRef.current.style.transform = "";
-      cardRef.current.classList.remove("is-dragging");
+  function applyDragVisual(state: DragState) {
+    const card = cardRef.current;
+    if (!card) return;
+    const width = card.clientWidth || window.innerWidth;
+    if (state.axis === "horizontal") {
+      const x = state.originX + state.dx;
+      const rot = browseDragRotationDeg(x, width, reducedMotionRef.current);
+      card.style.transition = "none";
+      card.style.transformOrigin = `${state.pivotX}px ${state.pivotY}px`;
+      card.style.setProperty("--pb-drag-x", `${x}px`);
+      card.style.setProperty("--pb-drag-y", "0px");
+      card.style.setProperty("--pb-drag-rot", `${rot}deg`);
+      // Direct 1:1 tracking from re-grab base — no damping.
+      card.style.transform = `translate3d(${x}px, 0, 0) rotate(${rot}deg)`;
+      card.classList.add("is-dragging");
+      const abs = Math.abs(x);
+      const saturateAt = Math.max(8, width * 0.45 - 4);
+      const u = Math.max(0, Math.min(1, (abs - 4) / saturateAt));
+      // Smoothstep saturating tint (OUR feedback curve).
+      const progress = u * u * (3 - 2 * u);
+      const skip = x < 0;
+      card.style.setProperty("--pb-intent-skip", skip ? String(progress) : "0");
+      card.style.setProperty("--pb-intent-request", !skip ? String(progress) : "0");
+      const blocked = rateBlockedUntilRef.current != null && Date.now() < rateBlockedUntilRef.current;
+      setDragStamp({
+        opacity: 0.95 * progress,
+        skip,
+        label: skip ? "Пропустить" : blocked ? "Запросы временно недоступны" : "В друзья",
+      });
+      return;
     }
-    setDragStamp({ opacity: 0, skip: false, label: "" });
+    if (state.axis === "vertical") {
+      const rawY = state.originY + state.dy;
+      const y = detailsOpenRef.current ? Math.max(0, rawY) : Math.min(0, rawY);
+      card.style.transition = "none";
+      card.style.transformOrigin = "";
+      card.style.setProperty("--pb-drag-x", "0px");
+      card.style.setProperty("--pb-drag-y", `${y}px`);
+      card.style.setProperty("--pb-drag-rot", "0deg");
+      card.style.transform = `translate3d(0, ${y}px, 0)`;
+      card.classList.add("is-dragging");
+      card.style.setProperty("--pb-intent-skip", "0");
+      card.style.setProperty("--pb-intent-request", "0");
+      setDragStamp({ opacity: 0, skip: false, label: "" });
+    }
   }
 
+  function cancelActiveGesture(spring: boolean) {
+    const state = drag.current;
+    drag.current = null;
+    if (dragRaf.current) {
+      cancelAnimationFrame(dragRaf.current);
+      dragRaf.current = 0;
+    }
+    if (state?.capturing) {
+      const surface = gestureRef.current;
+      try {
+        if (surface?.hasPointerCapture(state.id)) surface.releasePointerCapture(state.id);
+      } catch { /* ignore */ }
+    }
+    if (spring && !flyingRef.current && !awaitingRightRef.current) springBackCard();
+    else if (!awaitingRightRef.current && !flyingRef.current) {
+      setDragStamp({ opacity: 0, skip: false, label: "" });
+    }
+  }
+
+  // Gestures attach only after the pending card is ready; handlers use refs so drag is not recreated mid-gesture.
   useEffect(() => {
-    const deck = deckRef.current;
-    if (!deck) return;
     // Desktop: explicit buttons only — no pointer swipe/drag mutations.
     if (desktop) return;
+    const surface = gestureRef.current;
+    if (!surface || !mediaReady) return;
+
+    const pushSample = (state: DragState, event: PointerEvent, now: number) => {
+      state.samples.push({ t: now, x: event.clientX, y: event.clientY });
+      const cutoff = now - PLAYER_BROWSE_VELOCITY_WINDOW_MS - 40;
+      while (state.samples.length > 2 && state.samples[0]!.t < cutoff) state.samples.shift();
+      if (state.samples.length > 12) state.samples.shift();
+    };
 
     const onDown = (event: PointerEvent) => {
-      if (navigationLocked || tutorialOpen || !current) return;
+      // Second contact cancels BEFORE primary / interactive exclusions; never adopt secondary pointer.
+      if (drag.current && event.pointerId !== drag.current.id) {
+        cancelActiveGesture(true);
+        return;
+      }
+      if (navigationLockedRef.current || tutorialOpenRef.current || flyingRef.current || awaitingRightRef.current) return;
+      if (actionConsumedRef.current) return;
+      if (!mediaReadyRef.current || !currentPeerRef.current) return;
       if (!event.isPrimary || (event.pointerType === "mouse" && event.button !== 0)) return;
       if (isBrowseDragExcludedTarget(event.target)) return;
-      drag.current = { id: event.pointerId, x: event.clientX, y: event.clientY, dx: 0, dy: 0, horizontal: false };
-      try { deck.setPointerCapture(event.pointerId); } catch { /* Optional capture. */ }
+      // Re-grab an in-progress spring: pin computed pose as drag origin, then cancel transition.
+      const card = cardRef.current;
+      if (card?.classList.contains("is-flying")) return;
+      let originX = 0;
+      let originY = 0;
+      if (card && card.style.transition && card.style.transition !== "none") {
+        const computed = window.getComputedStyle(card);
+        if (computed.transform && computed.transform !== "none") {
+          card.style.transform = computed.transform;
+          const pose = parseBrowseCssTransformPose(computed.transform);
+          originX = pose.x;
+          originY = pose.y;
+          card.style.setProperty("--pb-drag-x", `${originX}px`);
+          card.style.setProperty("--pb-drag-y", `${originY}px`);
+          card.style.setProperty("--pb-drag-rot", `${pose.rotDeg}deg`);
+        }
+        clearTransitionTimer();
+        card.style.transition = "none";
+      }
+      const rect = card?.getBoundingClientRect();
+      const now = performance.now();
+      drag.current = {
+        id: event.pointerId,
+        peerId: currentPeerRef.current,
+        x: event.clientX,
+        y: event.clientY,
+        dx: 0,
+        dy: 0,
+        originX,
+        originY,
+        t: now,
+        samples: [{ t: now, x: event.clientX, y: event.clientY }],
+        axis: "none",
+        capturing: false,
+        pivotX: rect ? event.clientX - rect.left : event.clientX,
+        pivotY: rect ? event.clientY - rect.top : event.clientY,
+        consumed: false,
+      };
+      try {
+        surface.setPointerCapture(event.pointerId);
+        drag.current.capturing = true;
+      } catch { /* Optional capture — release-outside still ends via pointerup on window. */ }
     };
 
     const onMove = (event: PointerEvent) => {
       const state = drag.current;
       if (!state || state.id !== event.pointerId) return;
+      if (!event.isPrimary) {
+        cancelActiveGesture(true);
+        return;
+      }
       state.dx = event.clientX - state.x;
       state.dy = event.clientY - state.y;
-      const intent = classifyPointerGesture({ dx: state.dx, dy: state.dy, width: deck.clientWidth, phase: "move" });
-      if (intent !== "horizontal") return;
-      state.horizontal = true;
-      const card = cardRef.current;
-      if (card) {
-        card.classList.add("is-dragging");
-        card.style.transform = `translateX(${state.dx * 0.32}px) rotate(${state.dx / 30}deg)`;
-      }
-      const threshold = Math.max(84, Math.min(120, deck.clientWidth * 0.24));
-      const skip = state.dx < 0;
-      setDragStamp({
-        opacity: Math.min(1, Math.abs(state.dx) / threshold),
-        skip,
-        label: skip ? "← Пропустить" : rateBlockedUntil && Date.now() < rateBlockedUntil ? "Запросы временно недоступны" : "Предложить дружбу →",
+      const now = performance.now();
+      state.t = now;
+      pushSample(state, event, now);
+      const intent = classifyPointerGesture({
+        dx: state.dx,
+        dy: state.dy,
+        width: surface.clientWidth || window.innerWidth,
+        height: surface.clientHeight || window.innerHeight,
+        phase: "move",
+        lockedAxis: state.axis,
+      });
+      if (intent === "horizontal" || intent === "vertical") state.axis = intent;
+      if (state.axis === "none") return;
+      if (dragRaf.current) return;
+      dragRaf.current = requestAnimationFrame(() => {
+        dragRaf.current = 0;
+        const live = drag.current;
+        if (live) applyDragVisual(live);
       });
     };
 
-    const onUp = (event: PointerEvent) => {
+    const finishPointer = (event: PointerEvent, cancelled: boolean) => {
       const state = drag.current;
       if (!state || state.id !== event.pointerId) return;
+      if (state.consumed) return;
+      state.consumed = true;
+      // Update with release sample before classifying (spec: include release point).
       state.dx = event.clientX - state.x;
       state.dy = event.clientY - state.y;
-      const horizontal = state.horizontal;
-      const result = classifyPointerGesture({ dx: state.dx, dy: state.dy, width: deck.clientWidth, phase: "release" });
-      resetDrag();
-      try { if (deck.hasPointerCapture(event.pointerId)) deck.releasePointerCapture(event.pointerId); } catch { /* ignore */ }
-      if (!horizontal) return;
-      if (result === "skip") skipCurrent();
-      else if (result === "request") requestFriendship();
+      const now = performance.now();
+      pushSample(state, event, now);
+      const axis = state.axis;
+      const velocity = sampleBrowseVelocity(state.samples, axis, now);
+      const peerAtStart = state.peerId;
+      // Visual release pose includes spring re-grab base; classifier still uses fresh dx/dy.
+      const fromX = state.originX + state.dx;
+      const width = surface.clientWidth || window.innerWidth;
+      const fromRot = browseDragRotationDeg(fromX, width, reducedMotionRef.current);
+      drag.current = null;
+      if (dragRaf.current) {
+        cancelAnimationFrame(dragRaf.current);
+        dragRaf.current = 0;
+      }
+      try {
+        if (state.capturing && surface.hasPointerCapture(event.pointerId)) surface.releasePointerCapture(event.pointerId);
+      } catch { /* ignore */ }
+      if (cancelled || axis === "none") {
+        springBackCard();
+        return;
+      }
+      if (peerAtStart !== currentPeerRef.current || navigationLockedRef.current || tutorialOpenRef.current || actionConsumedRef.current) {
+        springBackCard();
+        return;
+      }
+      const reverseVeto = axis === "horizontal"
+        ? browseReleaseReverseVeto(state.dx, velocity)
+        : axis === "vertical"
+          ? browseReleaseReverseVeto(state.dy, velocity)
+          : false;
+      const result = classifyPointerGesture({
+        dx: state.dx,
+        dy: state.dy,
+        width,
+        height: surface.clientHeight || window.innerHeight,
+        phase: "release",
+        lockedAxis: axis,
+        velocity,
+        reverseVeto,
+      });
+      if (result === "skip") {
+        if (actionConsumedRef.current) {
+          springBackCard();
+          return;
+        }
+        actionConsumedRef.current = true;
+        applyDragVisual({ ...state, axis: "horizontal" });
+        void flyOffCard(-1, { peerId: peerAtStart, velocity, fromX, fromRot }).then(fly => {
+          if (!fly.ok || fly.peerId !== peerAtStart || fly.generation !== flyGen.current) {
+            actionConsumedRef.current = false;
+            return;
+          }
+          applySkipAdvanceRef.current(peerAtStart, fly.generation);
+        });
+        return;
+      }
+      if (result === "request") {
+        const api = friendshipApi.current;
+        if (!api?.canRequest || actionConsumedRef.current) {
+          springBackCard();
+          return;
+        }
+        actionConsumedRef.current = true;
+        awaitingRightRef.current = peerAtStart;
+        const started = api.request();
+        if (!started) {
+          awaitingRightRef.current = null;
+          actionConsumedRef.current = false;
+          springBackCard();
+          return;
+        }
+        // Hold readable card near release pose until receipt; green was intent only.
+        const holdX = Math.max(-width * 0.25, Math.min(width * 0.25, fromX));
+        const card = cardRef.current;
+        if (card && Math.abs(fromX) > width * 0.25) {
+          card.style.transition = `transform ${PLAYER_BROWSE_RETURN_MS}ms ease-out`;
+          card.style.setProperty("--pb-drag-x", `${holdX}px`);
+          card.style.setProperty("--pb-drag-rot", `${browseDragRotationDeg(holdX, width, reducedMotionRef.current)}deg`);
+          card.style.transform = `translate3d(${holdX}px, 0, 0) rotate(${browseDragRotationDeg(holdX, width, reducedMotionRef.current)}deg)`;
+        }
+        setDragStamp({ opacity: 0.55, skip: false, label: "Отправляем…" });
+        return;
+      }
+      if (result === "vertical-up") {
+        if (!detailsOpenRef.current) {
+          springBackCard();
+          openDetailsRef.current();
+          return;
+        }
+        const last = mobileInfoPageCountRef.current - 1;
+        if (mobileInfoPageRef.current < last) {
+          setMobileInfoPage(page => Math.min(last, page + 1));
+        }
+        springBackCard();
+        return;
+      }
+      if (result === "vertical-down") {
+        if (detailsOpenRef.current) {
+          if (mobileInfoPageRef.current > 0) setMobileInfoPage(page => Math.max(0, page - 1));
+          else closeDetailsRef.current();
+        }
+        springBackCard();
+        return;
+      }
+      springBackCard();
     };
 
-    const onCancel = () => resetDrag();
-    deck.addEventListener("pointerdown", onDown);
-    deck.addEventListener("pointermove", onMove);
-    deck.addEventListener("pointerup", onUp);
-    deck.addEventListener("pointercancel", onCancel);
-    deck.addEventListener("lostpointercapture", onCancel);
-    window.addEventListener("blur", onCancel);
+    const onUp = (event: PointerEvent) => finishPointer(event, false);
+    const onCancel = (event: PointerEvent) => finishPointer(event, true);
+    const onLost = (event: PointerEvent) => {
+      if (!drag.current || drag.current.id !== event.pointerId) return;
+      // Release outside capture still delivers pointerup; lost without up → cancel, no mutation.
+      if (drag.current) finishPointer(event, true);
+    };
+    const onBlur = () => cancelActiveGesture(true);
+    // Capture second contacts outside the gesture surface while a mobile drag is active.
+    // Do not stopPropagation — close/help and other chrome buttons must still receive the event.
+    const onDocPointerDownCapture = (event: PointerEvent) => {
+      if (!drag.current || event.pointerId === drag.current.id) return;
+      cancelActiveGesture(true);
+    };
+
+    surface.addEventListener("pointerdown", onDown);
+    surface.addEventListener("pointermove", onMove);
+    surface.addEventListener("pointerup", onUp);
+    surface.addEventListener("pointercancel", onCancel);
+    surface.addEventListener("lostpointercapture", onLost);
+    document.addEventListener("pointerdown", onDocPointerDownCapture, true);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onCancel);
+    window.addEventListener("blur", onBlur);
     return () => {
-      deck.removeEventListener("pointerdown", onDown);
-      deck.removeEventListener("pointermove", onMove);
-      deck.removeEventListener("pointerup", onUp);
-      deck.removeEventListener("pointercancel", onCancel);
-      deck.removeEventListener("lostpointercapture", onCancel);
-      window.removeEventListener("blur", onCancel);
+      cancelActiveGesture(false);
+      surface.removeEventListener("pointerdown", onDown);
+      surface.removeEventListener("pointermove", onMove);
+      surface.removeEventListener("pointerup", onUp);
+      surface.removeEventListener("pointercancel", onCancel);
+      surface.removeEventListener("lostpointercapture", onLost);
+      document.removeEventListener("pointerdown", onDocPointerDownCapture, true);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onCancel);
+      window.removeEventListener("blur", onBlur);
     };
-  }, [navigationLocked, tutorialOpen, current, rateBlockedUntil, skipCurrent, requestFriendship, desktop]);
-
+  }, [desktop, mediaReady, flyOffCard, springBackCard, clearTransitionTimer]);
   const blank = catalogState === "loading" || (!browsePlayers.length && (catalogState === "empty" || catalogState === "ready"));
   const showHelp = !desktop && tutorialOpen && !blank && catalogState !== "error" && catalogState !== "unavailable";
+  const counter = browsePlayers.length
+    ? `${String(index + 1).padStart(2, "0")} / ${String(browsePlayers.length).padStart(2, "0")}`
+    : "00 / 00";
+  // Shared mobile fullscreen chrome — used by early catalog states and the ready deck (one X/counter/help).
+  const mobileFsChrome = mobileFullscreen ? (
+    <header className="pb-fs-chrome">
+      <div className="pb-fs-chrome__meta">
+        <span className="pb-counter" aria-live="polite">{counter}</span>
+        <span className="pb-fs-place">{placeLabel}</span>
+      </div>
+      <div className="pb-fs-chrome__tools">
+        <button type="button" className="pb-help" aria-label="Подсказка по жестам" onClick={() => setTutorialOpen(true)}>?</button>
+        <button
+          ref={closeBtnRef}
+          type="button"
+          className="pb-fs-close"
+          aria-label="Закрыть карточки"
+          onClick={() => onCloseFullscreenRef.current?.()}
+        >
+          ×
+        </button>
+      </div>
+    </header>
+  ) : null;
+  const wrapCatalogState = (body: ReactNode) => (
+    <div
+      className={`gb-player-browse${mobileFullscreen ? " pb-browse--fs" : ""}`}
+      data-surface="player-browse-deck"
+      data-browse-desktop={desktop ? "true" : "false"}
+      data-mobile-fs={mobileFullscreen ? "true" : "false"}
+    >
+      {mobileFsChrome}
+      {body}
+    </div>
+  );
 
   if (catalogState === "loading" && !players.length) {
-    return <div className="gb-player-browse"><div className="pb-loading" role="status"><h2>Ищем игроков…</h2><p>Загружаем публичный каталог.</p></div></div>;
+    return wrapCatalogState(
+      <div className="pb-loading" role="status"><h2>Ищем игроков…</h2><p>Загружаем публичный каталог.</p></div>,
+    );
   }
   if (catalogState === "unavailable") {
-    return <div className="gb-player-browse"><div className="pb-empty" role="status"><h2>Каталог игроков сейчас недоступен</h2><p>Попробуйте вернуться позже.</p></div></div>;
+    return wrapCatalogState(
+      <div className="pb-empty" role="status"><h2>Каталог игроков сейчас недоступен</h2><p>Попробуйте вернуться позже.</p></div>,
+    );
   }
   if (catalogState === "error") {
-    return <div className="gb-player-browse"><div className="pb-empty" role="alert"><h2>Не удалось загрузить каталог</h2><p>Проверьте соединение и попробуйте снова.</p></div></div>;
+    return wrapCatalogState(
+      <div className="pb-empty" role="alert"><h2>Не удалось загрузить каталог</h2><p>Проверьте соединение и попробуйте снова.</p></div>,
+    );
   }
   if (!browsePlayers.length) {
-    return <div className="gb-player-browse">
+    return wrapCatalogState(
       <div className="pb-empty" role="status">
         <h2>Никого не нашли</h2>
         <p>Попробуйте изменить фильтры или загрузить ещё, если доступно.</p>
         {hasMore && <Button variant="outline" disabled={moreBusy} onClick={onLoadMore}>{moreBusy ? "Загрузка…" : "Загрузить ещё"}</Button>}
-      </div>
-    </div>;
+      </div>,
+    );
   }
 
   const levelLabel = formatSocialLevel(current?.level);
   const meta = [levelLabel !== "не указан" ? levelLabel : null, cityName(current?.cityId ?? null), current?.areaKey].filter(Boolean).join(" · ");
   const locationLine = [cityName(current?.cityId ?? null), current?.areaKey].filter(Boolean).join(" · ");
+  // Mobile fixed pages: 0=facts/overview, 1..N=about bio, last=games/profile link.
+  const mobileAboutCount = Math.max(1, bioChunks.length);
+  const mobileInfoLast = mobileAboutCount + 1;
+  const mobileAboutIndex = mobileInfoPage >= 1 && mobileInfoPage <= mobileAboutCount
+    ? mobileInfoPage - 1
+    : 0;
+  const mobileSection: "facts" | "about" | "games" = mobileInfoPage <= 0
+    ? "facts"
+    : mobileInfoPage <= mobileAboutCount
+      ? "about"
+      : "games";
   const atEnd = index >= browsePlayers.length - 1;
   const intentAtStart = intentIndex <= 0;
   const intentAtEnd = intentIndex >= browsePlayers.length - 1;
-  const counter = `${String(index + 1).padStart(2, "0")} / ${String(browsePlayers.length).padStart(2, "0")}`;
-  const mediaReady = Boolean(current && committedMedia && committedMedia.peerId === current.publicPlayerId);
   const friendship = current && mediaReady && (
     <PlayerBrowseFriendship
       key={`${me?.id ?? "guest"}:${current.publicPlayerId}`}
@@ -915,8 +1613,32 @@ export function PlayerBrowseDeck({
         });
       }}
       onConfirmedRequest={onConfirmedRequest}
-      onBusyChange={setFriendBusy}
-      onApi={(api) => { friendshipApi.current = api; }}
+      onBusyChange={(busy) => {
+        setFriendBusy(busy);
+        // Single-flight covers friendship buttons as well as gestures.
+        if (busy) actionConsumedRef.current = true;
+        else if (!flyingRef.current && !awaitingRightRef.current) actionConsumedRef.current = false;
+      }}
+      onApi={(api) => {
+        if (!api) {
+          friendshipApi.current = null;
+          return;
+        }
+        const base = api;
+        friendshipApi.current = {
+          busy: base.busy,
+          pendingUnknown: base.pendingUnknown,
+          canRequest: base.canRequest,
+          request: () => {
+            if (flyingRef.current) return false;
+            if (actionConsumedRef.current && awaitingRightRef.current == null) return false;
+            actionConsumedRef.current = true;
+            const started = base.request();
+            if (!started && awaitingRightRef.current == null) actionConsumedRef.current = false;
+            return started;
+          },
+        };
+      }}
       onSkip={skipCurrent}
       onAuthRetry={() => setAuthReload(n => n + 1)}
       chrome={desktop ? "desktop" : "mobile"}
@@ -940,8 +1662,9 @@ export function PlayerBrowseDeck({
     </div>
   );
 
-  return <div className={`gb-player-browse${showHelp ? " is-teaching" : ""}`} data-surface="player-browse-deck" data-browse-desktop={desktop ? "true" : "false"}>
-    {!desktop && (
+  return <div className={`gb-player-browse${showHelp ? " is-teaching" : ""}${mobileFullscreen ? " pb-browse--fs" : ""}`} data-surface="player-browse-deck" data-browse-desktop={desktop ? "true" : "false"} data-mobile-fs={mobileFullscreen ? "true" : "false"}>
+    {mobileFsChrome}
+    {!mobileFullscreen && !desktop ? (
       <div className="pb-deck-context">
         <strong className="pb-deck-context__place"><img className="profile-icon" src="/discovery/pin.svg" alt="" />{placeLabel}</strong>
         <div className="pb-deck-context__tools">
@@ -949,11 +1672,15 @@ export function PlayerBrowseDeck({
           <button type="button" className="pb-help" aria-label="Подсказка по жестам" onClick={() => setTutorialOpen(true)}>?</button>
         </div>
       </div>
-    )}
+    ) : null}
 
     <div className="pb-slider-stage">
-      <button type="button" className="pb-slider-nav prev" aria-label="Предыдущий игрок — только просмотр" disabled={navigationLocked || showHelp || intentAtStart} onClick={() => moveTo(intentIndex - 1, "prev")}><Chevron dir="left" /></button>
-      <button type="button" className="pb-slider-nav next" aria-label="Следующий игрок — только просмотр" disabled={navigationLocked || showHelp || intentAtEnd} onClick={() => moveTo(intentIndex + 1, "next")}><Chevron dir="right" /></button>
+      {desktop && (
+        <>
+          <button type="button" className="pb-slider-nav prev" aria-label="Предыдущий игрок — только просмотр" disabled={navigationLocked || showHelp || intentAtStart} onClick={() => moveTo(intentIndex - 1, "prev")}><Chevron dir="left" /></button>
+          <button type="button" className="pb-slider-nav next" aria-label="Следующий игрок — только просмотр" disabled={navigationLocked || showHelp || intentAtEnd} onClick={() => moveTo(intentIndex + 1, "next")}><Chevron dir="right" /></button>
+        </>
+      )}
 
       <div
         ref={deckRef}
@@ -1100,56 +1827,153 @@ export function PlayerBrowseDeck({
                 </div>
               </article>
             ) : (
-              <article ref={cardRef} className="pb-card" data-player-id={current.publicPlayerId} aria-busy={commitPending ? true : undefined}>
-                <div className="pb-cover">
-                  <PreparedBrowseCover media={committedMedia!.cover} />
-                  <PreparedBrowseAvatar className={`avatar avatar--${current.trainer ? "purple" : "yellow"} pb-avatar`} media={committedMedia!.avatar} name={current.displayName} tone={current.trainer ? "purple" : "yellow"} />
-                </div>
-                <div className="pb-copy">
-                  <div>
-                    {current.lookingForGame && <span className="pb-pill">● Ищу игру</span>}
-                    {current.trainer && !current.lookingForGame && <span className="pb-pill">Тренер</span>}
-                    <h2>{current.displayName}</h2>
-                    {meta && <p className="pb-meta">{meta}</p>}
-                    <small className="pb-level-note">Уровень — со слов игрока</small>
+              <article
+                ref={cardRef}
+                className="pb-card pb-card--mobile"
+                data-player-id={current.publicPlayerId}
+                data-details={detailsOpen ? "open" : "closed"}
+                aria-busy={commitPending ? true : undefined}
+                style={{ touchAction: "pinch-zoom" }}
+              >
+                <div className="pb-intent-layer" aria-hidden="true">
+                  <div className="pb-intent pb-intent--skip">
+                    <span className="pb-intent-icon" aria-hidden="true">✕</span>
+                    <span className="pb-intent-label">Пропустить</span>
                   </div>
-                  <div className="pb-excerpt">
-                    {current.bio ? <p className="pb-bio">{current.bio}</p> : <p className="pb-bio">О себе пока ничего не написано.</p>}
-                    <button type="button" className="pb-detail-toggle" aria-expanded={detailsOpen} data-browse-no-drag="" onClick={() => setDetailsOpen(v => !v)}>
-                      <span>{detailsOpen ? "Скрыть подробности" : "Подробнее об игроке"}</span>
-                      <Chevron dir="down" />
-                    </button>
+                  <div className="pb-intent pb-intent--request">
+                    <span className="pb-intent-icon" aria-hidden="true">＋</span>
+                    <span className="pb-intent-label">В друзья</span>
                   </div>
                 </div>
 
-                <div className={`pb-details${detailsOpen ? " is-open" : ""}`} data-browse-no-drag="">
-                  <div className="pb-details-panel">
-                    <h3>Подробнее</h3>
-                    <div className="pb-facts">
-                      <div className="pb-fact"><span>Уровень</span><strong>{levelLabel}</strong><small>Самооценка игрока</small></div>
-                      <div className="pb-fact"><span>Город</span><strong>{cityName(current.cityId) || "Не указан"}</strong></div>
-                      <div className="pb-fact"><span>Район / метро</span><strong>{current.areaKey || "Не указан"}</strong></div>
-                      <div className="pb-fact"><span>Роль</span><strong>{current.trainer ? "Тренер" : "Игрок"}</strong></div>
+                <div ref={gestureRef} className="pb-gesture-surface" style={{ touchAction: "pinch-zoom" }}>
+                  <div className={`pb-mobile-stage${detailsOpen ? " is-details" : ""}`}>
+                    <div className="pb-cover" aria-hidden={detailsOpen ? true : undefined} inert={detailsOpen ? true : undefined}>
+                      <PreparedBrowseCover media={committedMedia!.cover} />
+                      {/* Single retained avatar host: cover OR details — never both (second host steals the node). */}
+                      {!detailsOpen && (
+                        <PreparedBrowseAvatar className={`avatar avatar--${current.trainer ? "purple" : "yellow"} pb-avatar`} media={committedMedia!.avatar} name={current.displayName} tone={current.trainer ? "purple" : "yellow"} />
+                      )}
                     </div>
-                    {current.bio && <div className="pb-about"><h3>О себе</h3><p>{current.bio}</p></div>}
-                    <div className="pb-games">
-                      <h3>Ближайшие игры</h3>
-                      <p>Публичные ближайшие игры этого игрока пока недоступны.</p>
-                      <Link className="pb-profile-link" href={`/players/${current.publicPlayerId}`}>Открыть публичный профиль</Link>
+                    <div className="pb-identity-compact" aria-hidden={detailsOpen ? true : undefined} inert={detailsOpen ? true : undefined}>
+                      {current.lookingForGame && <span className="pb-pill">● Ищу игру</span>}
+                      {current.trainer && !current.lookingForGame && <span className="pb-pill">Тренер</span>}
+                      <h2>{current.displayName}</h2>
+                      {meta && <p className="pb-meta">{meta}</p>}
+                      <small className="pb-level-note">Уровень — со слов игрока</small>
+                      <button type="button" className="pb-detail-toggle" aria-expanded={detailsOpen} data-browse-no-drag="" onClick={openDetails}>
+                        <span>Подробнее · свайп вверх</span>
+                        <Chevron dir="down" />
+                      </button>
+                    </div>
+
+                    {/* Closed details stay mounted for stable layout but are inert/hidden; gesture surface still receives swipes. */}
+                    <div
+                      className={`pb-mobile-details${detailsOpen ? " is-open" : ""}`}
+                      inert={!detailsOpen ? true : undefined}
+                      aria-hidden={!detailsOpen ? true : undefined}
+                    >
+                      <div className="pb-mobile-details__panel">
+                        {/* Body clips one info page; pager stays outside so prev/next are never below the fold. */}
+                        <div
+                          ref={mobileDetailsBodyRef}
+                          className="pb-mobile-details__body"
+                          data-mobile-info-page={mobileInfoPage}
+                          data-mobile-section={mobileSection}
+                        >
+                          {/* Measure host mirrors about-page geometry for height-fit chunking (not shown). */}
+                          <div className="pb-mobile-bio-measure" aria-hidden="true">
+                            <div className="pb-about pb-about--measure">
+                              <h3>О себе</h3>
+                              <p ref={detailsBioRef} className="pb-details-bio pb-mobile-bio" data-details-bio="" />
+                              <p className="pb-bio-chunk-meta" data-reserved="true" data-active="true">Текст 1 / 1</p>
+                            </div>
+                          </div>
+
+                          {/* Single retained avatar host while details open — visual only on facts/overview. */}
+                          <div
+                            className="pb-mobile-details__head"
+                            data-page-role={mobileSection === "facts" ? "overview" : "host"}
+                            aria-hidden={mobileSection !== "facts" ? true : undefined}
+                          >
+                            {detailsOpen && (
+                              <PreparedBrowseAvatar className={`avatar avatar--${current.trainer ? "purple" : "yellow"} pb-details-avatar`} media={committedMedia!.avatar} name={current.displayName} tone={current.trainer ? "purple" : "yellow"} />
+                            )}
+                            {mobileSection === "facts" && (
+                              <div>
+                                <h3>{current.displayName}</h3>
+                                {meta && <p className="pb-meta">{meta}</p>}
+                              </div>
+                            )}
+                          </div>
+
+                          {mobileSection === "facts" && (
+                            <div className="pb-facts">
+                              <div className="pb-fact"><span>Уровень</span><strong>{levelLabel}</strong><small>Самооценка игрока</small></div>
+                              <div className="pb-fact"><span>Город</span><strong>{cityName(current.cityId) || "Не указан"}</strong></div>
+                              <div className="pb-fact"><span>Район / метро</span><strong>{current.areaKey || "Не указан"}</strong></div>
+                              <div className="pb-fact"><span>Роль</span><strong>{current.trainer ? "Тренер" : "Игрок"}</strong></div>
+                            </div>
+                          )}
+
+                          {mobileSection === "about" && (
+                            <div className="pb-about">
+                              <h3>О себе</h3>
+                              <p className="pb-details-bio pb-mobile-bio" data-details-bio="">
+                                {bioChunks[mobileAboutIndex] ?? (normalizeBrowseBio(current.bio) || "О себе пока ничего не написано.")}
+                              </p>
+                              <p
+                                className="pb-bio-chunk-meta"
+                                data-reserved="true"
+                                data-active={mobileAboutCount > 1 ? "true" : "false"}
+                                aria-live="polite"
+                              >
+                                {mobileAboutCount > 1
+                                  ? `Текст ${String(mobileAboutIndex + 1)} / ${String(mobileAboutCount)}`
+                                  : "Текст 1 / 1"}
+                              </p>
+                            </div>
+                          )}
+
+                          {mobileSection === "games" && (
+                            <div className="pb-games">
+                              <h3>Ближайшие игры</h3>
+                              <p>Публичные ближайшие игры этого игрока пока недоступны.</p>
+                              <Link className="pb-profile-link" href={`/players/${current.publicPlayerId}`} data-browse-no-drag="">Открыть публичный профиль</Link>
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="pb-details-pager" data-browse-no-drag="" data-active="true">
+                          <button type="button" className="pb-details-more" onClick={() => {
+                            if (mobileInfoPage > 0) setMobileInfoPage(page => Math.max(0, page - 1));
+                            else closeDetails();
+                          }}>
+                            {mobileInfoPage > 0 ? "Назад" : "К обложке"}
+                          </button>
+                          {mobileInfoPage < mobileInfoLast && (
+                            <button type="button" className="pb-details-more" onClick={() => {
+                              setMobileInfoPage(page => Math.min(mobileInfoLast, page + 1));
+                            }}>
+                              Ещё сведения
+                            </button>
+                          )}
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
 
-                <div className={`pb-swipe-stamp${dragStamp.skip ? " is-skip" : ""}`} aria-hidden="true" style={{ opacity: dragStamp.opacity }}>
+                <div className={`pb-swipe-stamp${dragStamp.skip ? " is-skip" : " is-request"}`} aria-hidden="true" style={{ opacity: dragStamp.opacity }}>
                   <span>{dragStamp.label}</span>
                 </div>
 
-                <div className="pb-controls">
+                {/* Stable friendship slot — must not unmount across details open/close. */}
+                <div className="pb-controls pb-controls--mobile">
                   <button type="button" className="pb-undo" disabled={!skipStack.length || navigationLocked || showHelp} onClick={undoSkip}>
-                    ← Вернуть пропущенного
+                    ← Вернуть
                   </button>
-                  <div style={{ flex: 1 }} />
-                  {friendship}
+                  <div className="pb-friend-slot">{friendship}</div>
                 </div>
               </article>
             )}
@@ -1165,8 +1989,9 @@ export function PlayerBrowseDeck({
               <div className="pb-gesture-pair">
                 <div className="pb-gesture-choice"><strong>Свайп влево</strong><span>Пропустить. Без уведомления игроку.</span></div>
                 <div className="pb-gesture-choice"><strong>Свайп вправо</strong><span>Предложить дружбу явной командой.</span></div>
+                <div className="pb-gesture-choice"><strong>Свайп вверх</strong><span>Открыть сведения. Вниз — к обложке.</span></div>
               </div>
-              <p className="pb-tutorial-note">Стрелки ‹ › и клавиши ← → только листают карточки и не отправляют запросы.</p>
+              <p className="pb-tutorial-note">Кнопки «Пропустить» и «В друзья» дублируют жесты. Запрос уходит только после подтверждения сервера.</p>
               <button type="button" className="pb-tutorial-dismiss" onClick={dismissTutorial}>Понятно</button>
             </section>
           </div>
@@ -1175,10 +2000,10 @@ export function PlayerBrowseDeck({
     </div>
 
     {atEnd && (
-      <div style={{ marginTop: 16, display: "flex", justifyContent: "center" }}>
+      <div className={`pb-deck-end${mobileFullscreen ? " pb-deck-end--fs" : ""}`} role="status">
         {hasMore
           ? <Button variant="outline" disabled={moreBusy || navigationLocked} onClick={onLoadMore}>{moreBusy ? "Загрузка…" : "Загрузить ещё"}</Button>
-          : <p className="pb-counter" role="status">Больше игроков в текущей выборке нет.</p>}
+          : <p className="pb-counter">Больше игроков в текущей выборке нет.</p>}
       </div>
     )}
 

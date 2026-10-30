@@ -2,7 +2,8 @@
 
 import "../../../styles/radar-geographic.css";
 import "../../../styles/player-browse.css";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { listCities, listPlayers } from "../../../lib/api-client";
 import type { City, PublicPlayer } from "../../../lib/consumer-types";
 import { readSelectedLocation } from "../../../lib/location-context";
@@ -50,7 +51,13 @@ export function PlayersDirectoryPage() {
   // Default list for SSR/hydration; URL `view=cards` applies after mount.
   const [browseView, setBrowseView] = useState<PlayerBrowseView>("list");
   const [viewReady, setViewReady] = useState(false);
+  const [portalReady, setPortalReady] = useState(false);
   const desktop = usePlayersDirectoryDesktop();
+  const cardsHistoryPushed = useRef(false);
+  const listScrollY = useRef(0);
+  const cardsTrigger = useRef<HTMLElement | null>(null);
+  const mobileFsDialogRef = useRef<HTMLDialogElement | null>(null);
+  const closingFsRef = useRef(false);
   const { controller, view } = useRadarSession();
   const { filters, update } = useDirectoryFilters();
   const { name, areaKey, cityId, lookingOnly, trainerOnly } = filters;
@@ -125,9 +132,23 @@ export function PlayersDirectoryPage() {
     const selected = readSelectedLocation()?.cityId ?? "";
     if (selected && !cityId) setCityId(selected);
   }, []);
+  useEffect(() => { setPortalReady(true); }, []);
   useEffect(() => {
+    const restoreListChrome = () => {
+      const trigger = cardsTrigger.current;
+      cardsTrigger.current = null;
+      cardsHistoryPushed.current = false;
+      requestAnimationFrame(() => {
+        window.scrollTo(0, listScrollY.current);
+        if (trigger?.isConnected) trigger.focus({ preventScroll: true });
+      });
+    };
     const readView = () => {
-      setBrowseView(parseBrowseView(window.location.search));
+      const next = parseBrowseView(window.location.search);
+      setBrowseView(prev => {
+        if (prev === "cards" && next === "list") restoreListChrome();
+        return next;
+      });
       setViewReady(true);
     };
     readView();
@@ -148,8 +169,54 @@ export function PlayersDirectoryPage() {
     return () => { live = false; clearTimeout(timer); };
   }, [ordinaryScope, pageCursor, reload]);
   function reset() { setName(""); setAreaKey(""); setCityId(""); setLookingOnly(false); setTrainerOnly(false); setCursor(null); }
+  function restoreListChrome() {
+    const trigger = cardsTrigger.current;
+    cardsTrigger.current = null;
+    cardsHistoryPushed.current = false;
+    requestAnimationFrame(() => {
+      window.scrollTo(0, listScrollY.current);
+      if (trigger?.isConnected) trigger.focus({ preventScroll: true });
+    });
+  }
+  function closeMobileCards() {
+    if (browseView !== "cards") return;
+    if (closingFsRef.current) return;
+    closingFsRef.current = true;
+    // Close native dialog without relying on unmount cancel → history push.
+    const dialog = mobileFsDialogRef.current;
+    if (dialog?.open) {
+      try { dialog.close(); } catch { /* ignore */ }
+    }
+    if (cardsHistoryPushed.current) {
+      // Browser Back / popstate clears view — do not push another list entry (no growth loop).
+      cardsHistoryPushed.current = false;
+      window.history.back();
+      closingFsRef.current = false;
+      return;
+    }
+    const url = new URL(window.location.href);
+    url.search = writeBrowseViewSearch(url.search, "list");
+    window.history.replaceState(window.history.state, "", url);
+    setBrowseView("list");
+    restoreListChrome();
+    closingFsRef.current = false;
+  }
   function changeBrowseView(next: PlayerBrowseView) {
     if (next === browseView) return;
+    if (next === "cards") {
+      listScrollY.current = window.scrollY;
+      cardsTrigger.current = document.activeElement as HTMLElement | null;
+      const url = new URL(window.location.href);
+      url.search = writeBrowseViewSearch(url.search, "cards");
+      window.history.pushState(window.history.state, "", url);
+      cardsHistoryPushed.current = true;
+      setBrowseView("cards");
+      return;
+    }
+    if (!desktop) {
+      closeMobileCards();
+      return;
+    }
     const url = new URL(window.location.href);
     url.search = writeBrowseViewSearch(url.search, next);
     window.history.pushState(window.history.state, "", url);
@@ -161,6 +228,30 @@ export function PlayersDirectoryPage() {
   const cityName = cities.find(c => c.id === cityId)?.nameRu;
   const placeLabel = [cityName || (cityId ? "Город" : "Все города"), areaKey.trim() || "Все районы"].join(" · ");
   const showCards = viewReady && browseView === "cards";
+  const mobileCards = showCards && !desktop;
+  // Mobile cards: native <dialog>.showModal for focus containment; body scroll lock; desktop resize tears down.
+  useEffect(() => {
+    if (!mobileCards || !portalReady) return;
+    const previousOverflow = document.body.style.overflow;
+    const previousScrollY = window.scrollY;
+    document.body.style.overflow = "hidden";
+    const dialog = mobileFsDialogRef.current;
+    if (dialog && typeof dialog.showModal === "function" && !dialog.open) {
+      try { dialog.showModal(); } catch { /* already open / unsupported */ }
+    }
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      // Tear down without invoking closeMobileCards (avoids history push during unmount / desktop resize).
+      closingFsRef.current = true;
+      if (dialog?.open) {
+        try { dialog.close(); } catch { /* ignore */ }
+      }
+      closingFsRef.current = false;
+      if (parseBrowseView(window.location.search) === "list") {
+        window.scrollTo(0, listScrollY.current || previousScrollY);
+      }
+    };
+  }, [mobileCards, portalReady]);
   const radarBand = (
     <section className="players-radar-band" aria-label="Игроки рядом">
       <div><h2>Игроки рядом с вами</h2><p>Временный поиск по приблизительной близости</p></div>
@@ -205,7 +296,22 @@ export function PlayersDirectoryPage() {
       notice={directory.view.notice}
     />
   );
-  return <ConsumerShell active="players" title="Игроки" hideHeading><div className="fr3 players-page gb-player-browse" data-surface="players-directory" data-state={state} data-browse-view={showCards ? "cards" : "list"} data-directory-desktop={desktop ? "true" : "false"}>
+  const deck = (
+    <PlayerBrowseDeck
+      players={catalog.ordinary}
+      cities={cities}
+      ordinaryScope={ordinaryScope}
+      catalogState={state}
+      moreBusy={moreBusy}
+      hasMore={Boolean(availableNextCursor)}
+      onLoadMore={() => { if (availableNextCursor) setCursor({ scope: ordinaryScope, value: availableNextCursor }); }}
+      placeLabel={placeLabel}
+      desktop={desktop}
+      mobileFullscreen={mobileCards}
+      onCloseFullscreen={closeMobileCards}
+    />
+  );
+  return <ConsumerShell active="players" title="Игроки" hideHeading><div className="fr3 players-page gb-player-browse" data-surface="players-directory" data-state={state} data-browse-view={showCards ? "cards" : "list"} data-directory-desktop={desktop ? "true" : "false"} inert={mobileCards ? true : undefined}>
     <section className={`players-hero${showCards && !desktop ? " pb-hero--compact" : ""}`}>
       <div>
         <h1>Игроки</h1>
@@ -222,19 +328,13 @@ export function PlayersDirectoryPage() {
         </button>
       </div>
     </section>
-    {desktop ? desktopToolbar : showCards ? (
-      <details className="pb-catalog-tools">
-        <summary>Radar и фильтры</summary>
-        {radarBand}
-        {catalogFilters}
-      </details>
-    ) : (
+    {desktop ? desktopToolbar : showCards ? null : (
       <>
         {radarBand}
         {catalogFilters}
       </>
     )}
-    {showCards ? (
+    {showCards && desktop ? (
       <section className="players-browse-deck" aria-label="Игроки по одному">
         {liveRadar && catalog.radar.length > 0 && (
           <p className="pb-radar-elsewhere" role="note">
@@ -244,19 +344,24 @@ export function PlayersDirectoryPage() {
             . Карточки ниже — обычный каталог.
           </p>
         )}
-        <PlayerBrowseDeck
-          players={catalog.ordinary}
-          cities={cities}
-          ordinaryScope={ordinaryScope}
-          catalogState={state}
-          moreBusy={moreBusy}
-          hasMore={Boolean(availableNextCursor)}
-          onLoadMore={() => { if (availableNextCursor) setCursor({ scope: ordinaryScope, value: availableNextCursor }); }}
-          placeLabel={placeLabel}
-          desktop={desktop}
-        />
+        {deck}
       </section>
-    ) : (
+    ) : showCards && portalReady ? createPortal(
+      <dialog
+        ref={mobileFsDialogRef}
+        className="gb-player-browse pb-mobile-fs"
+        aria-label="Игроки по одному"
+        data-surface="player-browse-mobile-fs"
+        onCancel={(event) => {
+          // Escape: same close path as X (replace/back). Nested auth <dialog> is a separate top layer.
+          event.preventDefault();
+          if (!closingFsRef.current) closeMobileCards();
+        }}
+      >
+        {deck}
+      </dialog>,
+      document.body,
+    ) : showCards ? null : (
       <section className="players-list">
         {!desktop && (
           <div className="players-list__heading"><span><small>{filtered ? "Подходят по фильтрам" : "Игровое сообщество"}</small><h2>{cityName ? `Игроки · ${cityName}` : "Все игроки"}</h2></span><button onClick={reset}>Сбросить фильтры</button></div>

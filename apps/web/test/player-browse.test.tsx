@@ -13,6 +13,10 @@ import {
   PreparedBrowseCover,
 } from "../src/components/consumer/players/PlayerBrowseMedia";
 import {
+  browseDragRotationDeg,
+  browseExitDurationMs,
+  browseExitTranslationPx,
+  browseReleaseReverseVeto,
   browseSlideDirection,
   browseSlideDurationMs,
   chunkBrowseBio,
@@ -23,9 +27,19 @@ import {
   nextEligibleBrowseIndex,
   normalizeBrowseBio,
   ordinaryBrowsePlayers,
+  parseBrowseCssTransformPose,
   parseBrowseView,
+  PLAYER_BROWSE_AXIS_DOMINANCE,
+  PLAYER_BROWSE_AXIS_LOCK_PX,
   PLAYER_BROWSE_DESKTOP_MQ,
+  PLAYER_BROWSE_EXIT_MS_MAX,
+  PLAYER_BROWSE_EXIT_MS_MIN,
+  PLAYER_BROWSE_FLICK_VELOCITY,
+  PLAYER_BROWSE_HISTORY_KEY,
+  PLAYER_BROWSE_MAX_ROTATION_DEG,
+  PLAYER_BROWSE_PROJECT_MS,
   PLAYER_BROWSE_SLIDE_MS,
+  PLAYER_BROWSE_TUTORIAL_KEY,
   popSkip,
   prefersBrowseReducedMotion,
   pushSkip,
@@ -33,11 +47,12 @@ import {
   readTutorialDismissed,
   reconstructBrowseBio,
   relationshipBlocksNewRequest,
+  releaseCommitted,
+  sampleBrowseVelocity,
+  swipeMinTravelPx,
   swipeThresholdPx,
   withBrowseHistoryState,
   writeBrowseViewSearch,
-  PLAYER_BROWSE_HISTORY_KEY,
-  PLAYER_BROWSE_TUTORIAL_KEY,
 } from "../src/lib/player-browse";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -103,21 +118,177 @@ describe("player browse navigation and skip order", () => {
 });
 
 describe("player browse swipe boundaries", () => {
-  it("requires horizontal dominance and release threshold; partial/cancel stays none", () => {
-    expect(swipeThresholdPx(400)).toBe(96);
-    expect(classifyPointerGesture({ dx: 8, dy: 0, width: 400, phase: "move" })).toBe("none");
-    expect(classifyPointerGesture({ dx: 30, dy: 5, width: 400, phase: "move" })).toBe("horizontal");
-    expect(classifyPointerGesture({ dx: 30, dy: 40, width: 400, phase: "move" })).toBe("none");
-    expect(classifyPointerGesture({ dx: -50, dy: 0, width: 400, phase: "release" })).toBe("none");
-    expect(classifyPointerGesture({ dx: -100, dy: 10, width: 400, phase: "release" })).toBe("skip");
-    expect(classifyPointerGesture({ dx: 100, dy: 10, width: 400, phase: "release" })).toBe("request");
-    expect(classifyPointerGesture({ dx: 100, dy: 90, width: 400, phase: "release" })).toBe("none");
+  it("locks axis with OUR 8px/1.3 dominance; reverse veto before distance; slow-D or projected flick", () => {
+    expect(PLAYER_BROWSE_AXIS_LOCK_PX).toBe(8);
+    expect(PLAYER_BROWSE_AXIS_DOMINANCE).toBe(1.3);
+    expect(PLAYER_BROWSE_FLICK_VELOCITY).toBe(0.65);
+    expect(PLAYER_BROWSE_PROJECT_MS).toBe(180);
+    expect(swipeThresholdPx(360)).toBe(Math.max(72, Math.min(112, 360 * 0.24)));
+    expect(swipeMinTravelPx(360)).toBe(Math.max(18, Math.min(28, 360 * 0.06)));
+    expect(classifyPointerGesture({ dx: 6, dy: 0, width: 360, phase: "move" })).toBe("none");
+    expect(classifyPointerGesture({ dx: 30, dy: 5, width: 360, phase: "move" })).toBe("horizontal");
+    expect(classifyPointerGesture({ dx: 5, dy: 30, width: 360, phase: "move" })).toBe("vertical");
+    // Ambiguous diagonal under 1.3 dominance stays undecided.
+    expect(classifyPointerGesture({ dx: 30, dy: 35, width: 360, phase: "move" })).toBe("none");
+    expect(classifyPointerGesture({ dx: -30, dy: 0, width: 360, phase: "release" })).toBe("none");
+    // Slow distance commit (W=360 → D≈86.4).
+    expect(classifyPointerGesture({ dx: -100, dy: 10, width: 360, phase: "release", lockedAxis: "horizontal" })).toBe("skip");
+    expect(classifyPointerGesture({ dx: 100, dy: 10, width: 360, phase: "release", lockedAxis: "horizontal" })).toBe("request");
+    expect(classifyPointerGesture({ dx: 100, dy: 90, width: 360, phase: "release" })).toBe("none");
+    // Short fast projected flick commits; reverse velocity vetoes even past D.
+    expect(classifyPointerGesture({
+      dx: -28, dy: 0, width: 360, phase: "release", lockedAxis: "horizontal", velocity: -PLAYER_BROWSE_FLICK_VELOCITY,
+    })).toBe("skip");
+    expect(classifyPointerGesture({
+      dx: -100, dy: 0, width: 360, phase: "release", lockedAxis: "horizontal", velocity: 0.45, reverseVeto: true,
+    })).toBe("none");
+    expect(browseReleaseReverseVeto(100, -0.45)).toBe(true);
+    expect(releaseCommitted({ travel: 100, extent: 360, velocity: -0.45, reverseVeto: true })).toBe(false);
+    expect(releaseCommitted({ travel: 100, extent: 360, velocity: 0 })).toBe(true);
+    // Vertical release reports up/down; not a horizontal mutation (H=700 → D=112).
+    expect(classifyPointerGesture({
+      dx: 4, dy: -120, width: 360, height: 700, phase: "release", lockedAxis: "vertical",
+    })).toBe("vertical-up");
+    expect(classifyPointerGesture({
+      dx: 4, dy: 120, width: 360, height: 700, phase: "release", lockedAxis: "vertical",
+    })).toBe("vertical-down");
+    expect(classifyPointerGesture({
+      dx: 4, dy: -120, width: 360, height: 700, phase: "release", lockedAxis: "horizontal",
+    })).toBe("none");
+  });
+
+  it("samples recent 80ms velocity including release; zero after pause; bounds rotation and exit geometry", () => {
+    const samples = [
+      { t: 0, x: 0, y: 0 },
+      { t: 40, x: -20, y: 0 },
+      { t: 80, x: -40, y: 0 },
+    ];
+    expect(sampleBrowseVelocity(samples, "horizontal", 80)).toBeCloseTo(-0.5, 5);
+    expect(sampleBrowseVelocity(samples, "horizontal", 220)).toBe(0);
+    expect(browseDragRotationDeg(400, 360)).toBe(PLAYER_BROWSE_MAX_ROTATION_DEG);
+    expect(browseDragRotationDeg(-400, 360)).toBe(-PLAYER_BROWSE_MAX_ROTATION_DEG);
+    expect(browseDragRotationDeg(180, 360)).toBe(6);
+    const exit = browseExitTranslationPx({ dir: -1, width: 390, height: 788, rotationDeg: 12, currentX: -90 });
+    expect(exit).toBeLessThan(-(390 / 2));
+    expect(Math.abs(exit)).toBeGreaterThan(390 + 48);
+    expect(browseExitDurationMs(400, 2)).toBeGreaterThanOrEqual(PLAYER_BROWSE_EXIT_MS_MIN);
+    expect(browseExitDurationMs(400, 2)).toBeLessThanOrEqual(PLAYER_BROWSE_EXIT_MS_MAX);
+  });
+
+  it("parses spring re-grab base pose so origin + finger delta does not jump opposite the finger", () => {
+    // CDP receipt: grabbed e=-26.1489, finger -15 → visual must be ~-41.15, not absolute -15.
+    const pose = parseBrowseCssTransformPose("matrix(0.998629, -0.052336, 0.052336, 0.998629, -26.1489, 0)");
+    expect(pose.x).toBeCloseTo(-26.1489, 4);
+    expect(pose.y).toBe(0);
+    expect(pose.x + -15).toBeCloseTo(-41.1489, 4);
+    expect(parseBrowseCssTransformPose("none")).toEqual({ x: 0, y: 0, rotDeg: 0 });
+    expect(parseBrowseCssTransformPose("matrix3d(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, -30.4696, 0, 0, 1)").x)
+      .toBeCloseTo(-30.4696, 4);
+    expect(deckSource).toContain("originX");
+    expect(deckSource).toContain("parseBrowseCssTransformPose");
+    expect(cssSource).toMatch(/\.gb-player-browse \.pb-avatar img/);
+    expect(cssSource).toMatch(/\.gb-player-browse \.pb-details-avatar img/);
+    expect(cssSource).toContain("object-fit: cover");
+    expect(cssSource).toContain("overflow: clip");
   });
 
   it("excludes interactive targets from drag start", () => {
     const rootEl = { closest: (sel: string) => (sel.includes("button") ? {} : null) } as unknown as Element;
     expect(isBrowseDragExcludedTarget(rootEl)).toBe(true);
     expect(isBrowseDragExcludedTarget(null)).toBe(false);
+  });
+
+  it("mobile fullscreen cards use native dialog portal, single avatar host, and 1:1 drag without damping", () => {
+    expect(pageSource).toContain("createPortal");
+    expect(pageSource).toContain("pb-mobile-fs");
+    expect(pageSource).toContain("showModal");
+    expect(pageSource).toContain("<dialog");
+    expect(pageSource).toContain("closeMobileCards");
+    expect(deckSource).toContain("--pb-drag-x");
+    expect(deckSource).not.toContain("* 0.32");
+    expect(deckSource).toContain("touchAction");
+    expect(deckSource).toContain("setPointerCapture");
+    expect(deckSource).toContain("flyOffCard");
+    expect(deckSource).toContain("awaitingRightRef");
+    expect(deckSource).toContain("flyGen");
+    expect(deckSource).toContain("actionConsumedRef");
+    expect(deckSource).toContain("Single retained avatar host");
+    expect(deckSource).not.toContain('pb-mobile-details${detailsOpen ? " is-open" : ""}`} data-browse-no-drag');
+    expect(deckSource).toContain("{!detailsOpen && (");
+    expect(deckSource).toContain("{detailsOpen && (");
+    expect(cssSource).toContain("pb-mobile-fs");
+    expect(cssSource).toContain("touch-action: pinch-zoom");
+    expect(cssSource).toContain("pb-intent--skip");
+    expect(cssSource).toContain("dialog.pb-mobile-fs");
+  });
+
+  it("QA-01: mobile fullscreen chrome wraps early catalog loading/unavailable/error/empty", () => {
+    expect(deckSource).toContain("wrapCatalogState");
+    expect(deckSource).toContain("mobileFsChrome");
+    const chromeDef = deckSource.indexOf("const mobileFsChrome");
+    const wrapDef = deckSource.indexOf("const wrapCatalogState");
+    expect(chromeDef).toBeGreaterThan(-1);
+    expect(wrapDef).toBeGreaterThan(chromeDef);
+    expect(deckSource).toContain("return wrapCatalogState(\n      <div className=\"pb-loading\"");
+    expect(deckSource).toContain("return wrapCatalogState(\n      <div className=\"pb-empty\" role=\"status\"><h2>Каталог игроков сейчас недоступен");
+    expect(deckSource).toContain("return wrapCatalogState(\n      <div className=\"pb-empty\" role=\"alert\"");
+    expect(deckSource).toContain("return wrapCatalogState(\n      <div className=\"pb-empty\" role=\"status\">\n        <h2>Никого не нашли");
+    expect(deckSource).toContain('className="pb-fs-close"');
+    expect(deckSource.match(/className="pb-fs-close"/g)?.length).toBe(1);
+    expect(deckSource.match(/return wrapCatalogState\(/g)?.length).toBe(4);
+  });
+
+  it("QA-02: second contact cancels active gesture before primary/interactive exclusions", () => {
+    const onDown = deckSource.indexOf("const onDown = (event: PointerEvent)");
+    expect(onDown).toBeGreaterThan(-1);
+    const body = deckSource.slice(onDown, onDown + 900);
+    const secondContact = body.indexOf("event.pointerId !== drag.current.id");
+    const primaryGate = body.indexOf("!event.isPrimary");
+    const excluded = body.indexOf("isBrowseDragExcludedTarget");
+    expect(secondContact).toBeGreaterThan(-1);
+    expect(secondContact).toBeLessThan(primaryGate);
+    expect(secondContact).toBeLessThan(excluded);
+    expect(deckSource).toContain('document.addEventListener("pointerdown", onDocPointerDownCapture, true)');
+    expect(deckSource).toContain("document.removeEventListener(\"pointerdown\", onDocPointerDownCapture, true)");
+  });
+
+  it("QA-03: flight completion fences viewerGen; auth expiry invalidates flyGen", () => {
+    expect(deckSource).toContain("const capturedViewer = viewerGen.current");
+    expect(deckSource).toContain("viewerGen.current === capturedViewer");
+    const expire = deckSource.indexOf("const expire = () =>");
+    expect(expire).toBeGreaterThan(-1);
+    const expireBody = deckSource.slice(expire, expire + 520);
+    expect(expireBody).toContain("viewerGen.current += 1");
+    expect(expireBody).toContain("flyGen.current += 1");
+  });
+
+  it("QA-04: closed mobile details are inert/aria-hidden; cover/identity inert while open", () => {
+    expect(deckSource).toContain('className={`pb-mobile-details${detailsOpen ? " is-open" : ""}`}');
+    expect(deckSource).toContain("inert={!detailsOpen ? true : undefined}");
+    expect(deckSource).toContain("aria-hidden={!detailsOpen ? true : undefined}");
+    expect(deckSource).toContain('className="pb-cover" aria-hidden={detailsOpen ? true : undefined} inert={detailsOpen ? true : undefined}');
+    expect(deckSource).toContain('className="pb-identity-compact" aria-hidden={detailsOpen ? true : undefined} inert={detailsOpen ? true : undefined}');
+    expect(deckSource).toContain("Single retained avatar host");
+    expect(deckSource).toContain("Stable friendship slot");
+  });
+
+  it("mobile details use fixed info pages (facts / about chunks / games) with pager outside clip", () => {
+    expect(deckSource).toContain("mobileInfoPage");
+    expect(deckSource).toContain('data-mobile-section={mobileSection}');
+    expect(deckSource).toContain('mobileSection === "facts"');
+    expect(deckSource).toContain('mobileSection === "about"');
+    expect(deckSource).toContain('mobileSection === "games"');
+    expect(deckSource).toContain("pb-mobile-details__body");
+    expect(deckSource).toContain("pb-mobile-bio-measure");
+    expect(deckSource).toContain("setMobileInfoPage");
+    expect(deckSource).toContain("mobileInfoPageCountRef");
+    // Up/down map to mobile page index — not desktop detailsPage bio index.
+    expect(deckSource).toContain("mobileInfoPageRef.current < last");
+    expect(deckSource).toContain("mobileInfoPageRef.current > 0");
+    expect(deckSource).toContain("Публичные ближайшие игры этого игрока пока недоступны.");
+    expect(cssSource).toContain("pb-mobile-details__body");
+    expect(cssSource).not.toContain("-webkit-line-clamp: 6");
+    expect(cssSource).toContain('pb-mobile-details__head[data-page-role="host"]');
   });
 });
 
@@ -183,12 +354,21 @@ describe("player browse desktop v5 contracts", () => {
     expect(chunks.join("")).not.toContain(first + first);
     expect(estimateBrowseBioChunkChars(long.length, 100, 220)).toBeLessThan(long.length);
     expect(estimateBrowseBioChunkChars(long.length, 200, 200)).toBe(long.length);
+    // Mobile page bounds: facts + about chunks + games (about count at least 1).
+    const mobileAboutCount = Math.max(1, chunks.length);
+    const mobilePageCount = 1 + mobileAboutCount + 1;
+    expect(mobilePageCount).toBe(chunks.length + 2);
+    expect(chunkBrowseBio("", 90)).toEqual([]);
+    expect(1 + Math.max(1, chunkBrowseBio("", 90).length) + 1).toBe(3);
     expect(deckSource).toContain("chunkBrowseBio");
     expect(deckSource).toContain("bioChunks.length > 1");
+    expect(deckSource).toContain("estimateBrowseBioChunkChars");
     expect(deckSource).toContain('data-reserved="true"');
     expect(deckSource).toContain("pb-profile-link--heading");
     expect(deckSource).toContain("Публичные ближайшие игры этого игрока пока недоступны.");
     expect(deckSource).not.toContain("Публичные игры пока не указаны.");
+    expect(deckSource).toContain("mobileAboutCount");
+    expect(deckSource).toContain("mobileInfoLast");
     expect(radarSource).toContain("directory-desktop");
     expect(radarSource).toContain("radar-dir-switch");
     expect(cssSource).toContain("radar-dir-switch");
