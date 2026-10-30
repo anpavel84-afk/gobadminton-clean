@@ -13,6 +13,7 @@ import { confirmedDirectoryActivation } from "../../../lib/radar-controller";
 import { RadarSwitchControl, RadarStatusControls } from "../radar/RadarControls";
 import { Button } from "../Button";
 import { ConsumerShell } from "../ConsumerShell";
+import { FoldedMapGlyph } from "../NavIcon";
 import { UnifiedPlayerCard } from "../radar/UnifiedPlayerCard";
 import { UnifiedPlayerPreview } from "../radar/UnifiedPlayerPreview";
 import { useUnifiedDirectory, useRadarConfig } from "../radar/RadarSessionProvider";
@@ -23,6 +24,13 @@ import { useRadarSession, useDirectoryFilters } from "../radar/RadarSessionProvi
 import { AuthEntry, PlayerCard, ProfileState } from "../players/ProfileComposition";
 import { PlayerBrowseDeck } from "../players/PlayerBrowseDeck";
 import { PlayersDirectoryToolbar } from "../players/PlayersDirectoryToolbar";
+
+/** Approximate-distance success copy stays out of the fixed /players toolbar. */
+function directoryInFlowNotice(notice: string): string | null {
+  if (!notice) return null;
+  if (notice.startsWith("Расстояние приблизительное") || notice.startsWith("Участники Radar по городу")) return null;
+  return notice;
+}
 
 /** Client-only desktop directory composition; first paint false until effect (SSR-safe). */
 function usePlayersDirectoryDesktop(): boolean {
@@ -252,20 +260,29 @@ export function PlayersDirectoryPage() {
       }
     };
   }, [mobileCards, portalReady]);
+  const inFlowNotice = directoryInFlowNotice(directory.view.notice);
   const radarBand = (
     <section className="players-radar-band" aria-label="Игроки рядом">
       <div><h2>Игроки рядом с вами</h2><p>Временный поиск по приблизительной близости</p></div>
       <div className="players-radar-band__controls">
         <RadarSwitchControl />
         <RadarStatusControls />
-        {activationId && <Button href="/players/radar" variant="dark">Показать на карте</Button>}
         {directory.view.authenticationRequired && <AuthEntry returnPath="/players">Войти для Radar</AuthEntry>}
       </div>
     </section>
   );
+  const playersMapCta = activationId ? (
+    <div className="gb-players-map-cta" data-radar-map-cta="true">
+      <Button className="gb-map-desktop-entry" variant="dark" href="/players/radar" aria-label="Игроки на карте">
+        <span className="gb-map-entry-tile"><FoldedMapGlyph /></span>
+        <span className="gb-map-cta-label gb-map-cta-label--full">Игроки на карте</span>
+        <span className="gb-map-cta-label gb-map-cta-label--short">На карте</span>
+      </Button>
+    </div>
+  ) : null;
   const catalogFilters = (
     <>
-      {directory.view.notice && <section className="radar-notice"><span role="status"><strong>{directory.view.notice}</strong></span></section>}
+      {inFlowNotice && <section className="radar-notice"><span role="status"><strong>{inFlowNotice}</strong></span></section>}
       <section className="player-controls" role="search" aria-label="Фильтры каталога">
         <label className="player-location"><span>Город</span><select aria-label="Город" value={cityId} onChange={e => { setCityId(e.target.value); setCursor(null); }}><option value="">Все города</option>{cities.map(c => <option value={c.id} key={c.id}>{c.nameRu}</option>)}</select></label>
         <label className="player-search"><img className="profile-icon" src="/canonical/search.svg" alt="" /><input aria-label="Найти игрока" type="search" placeholder="Найти игрока" value={name} onChange={e => { setName(e.target.value); setCursor(null); }} /></label>
@@ -293,7 +310,7 @@ export function PlayersDirectoryPage() {
       onTrainerOnly={setTrainerOnly}
       onReset={reset}
       onFilterCommit={() => setCursor(null)}
-      notice={directory.view.notice}
+      notice={inFlowNotice}
     />
   );
   const deck = (
@@ -334,13 +351,13 @@ export function PlayersDirectoryPage() {
         {catalogFilters}
       </>
     )}
+    {!showCards && playersMapCta}
     {showCards && desktop ? (
       <section className="players-browse-deck" aria-label="Игроки по одному">
         {liveRadar && catalog.radar.length > 0 && (
           <p className="pb-radar-elsewhere" role="note">
             Участники Radar — в{" "}
             <button type="button" className="pb-radar-elsewhere__link" onClick={() => changeBrowseView("list")}>списке</button>
-            {activationId && <> или <a href="/players/radar">на карте</a></>}
             . Карточки ниже — обычный каталог.
           </p>
         )}
@@ -377,13 +394,6 @@ export function PlayersDirectoryPage() {
         {state === "empty" && !catalog.radar.length && <ProfileState title={filtered ? "Никого не нашли" : "Игроков пока нет"} state="empty">{filtered ? "Попробуйте изменить или сбросить фильтры." : "Вернитесь немного позже."}</ProfileState>}
         {availableNextCursor && <Button variant="outline" disabled={moreBusy} onClick={() => setCursor({ scope: ordinaryScope, value: availableNextCursor })}>{moreBusy ? "Загрузка…" : "Показать ещё"}</Button>}
       </section>
-    )}
-    {desktop && (
-      <p className="pb-radar-foot" role="status">
-        {view.confirmedOn
-          ? "Radar включён. Приблизительное положение видно участникам."
-          : "Radar выключен. Публичные профили доступны без него."}
-      </p>
     )}
     {liveRadar && directory.view.selected && <UnifiedPlayerPreview dialog onClose={() => directory.controller?.close()} />}
   </div></ConsumerShell>;

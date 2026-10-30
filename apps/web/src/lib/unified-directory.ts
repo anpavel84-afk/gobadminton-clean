@@ -188,9 +188,21 @@ export class UnifiedDirectoryController {
   snapshot = () => this.view;
   constructor(private request = apiFetch, private clock = Date.now) {}
   private set(patch: Partial<DirectoryView>) { this.view = { ...this.view, ...patch }; this.listeners.forEach(fn => fn()); }
-  private invalidate(notice = "", stale = false) {
+  private fence() {
     ++this.epoch; ++this.selectionEpoch; this.abort.abort(); this.abort = new AbortController(); this.pending = false;
+  }
+  private invalidate(notice = "", stale = false) {
+    this.fence();
     this.set({ snapshot: null, rows: [], pins: [], mapPage: null, selected: null, preview: null, busy: false, previewBusy: false, notice, stale });
+  }
+  /** Still-authorized same-key window that soft refresh may keep across transient read failures. */
+  private retainableWindow() {
+    const snapshot = this.view.snapshot;
+    if (this.view.mode !== "unified" || this.view.stale || this.view.authenticationRequired || this.view.capabilityUnavailable || !snapshot) return false;
+    const until = Date.parse(snapshot.validUntil);
+    if (!Number.isFinite(until) || until <= this.clock()) return false;
+    const live = (row: UnifiedRow) => !row.radar || (Number.isFinite(Date.parse(row.radar.validUntil)) && Date.parse(row.radar.validUntil) > this.clock());
+    return this.view.rows.every(live) && this.view.pins.every(live);
   }
   bind(me: Me | null) {
     if (this.me?.id === me?.id && this.me?.csrfToken === me?.csrfToken) return;
@@ -205,9 +217,15 @@ export class UnifiedDirectoryController {
     if (!visible && !this.view.authenticationRequired) { this.origin = { kind: "none" }; this.invalidate("Вернитесь к списку и обновите участников Radar.", true); }
   }
   private valid(epoch: number) { return epoch === this.epoch && this.visible && this.me !== null; }
-  private fail(result: Exclude<ApiResult<unknown>, { ok: true }>) {
+  private fail(result: Exclude<ApiResult<unknown>, { ok: true }>, softRetain = false) {
     if (result.status === 404) {
-      this.origin = { kind: "none" }; this.activationOriginKey = null; this.camera = null; this.scrollY = 0;
+      this.origin = { kind: "none" }; this.activationOriginKey = null; this.camera = null; this.scrollY = 0; this.nextInitial = 0;
+      // RESOURCE_UNAVAILABLE is an expired/changed origin or proof — not missing capability.
+      if (result.problem?.code === "RESOURCE_UNAVAILABLE") {
+        this.invalidate("Список участников Radar устарел. Обновляем данные.", true);
+        this.set({ mode: "ordinary", capabilityUnavailable: false });
+        return;
+      }
       this.invalidate("Участники Radar сейчас недоступны. Можно пользоваться обычным каталогом.");
       this.set({ mode: "ordinary", capabilityUnavailable: true }); return;
     }
@@ -219,8 +237,21 @@ export class UnifiedDirectoryController {
     // 409/410 are recoverable with a fresh current_activation initial; do not keep the
     // prior 30s initial gate that would leave list/map blank until cooldown ends.
     if (result.status === 409 || result.status === 410) this.nextInitial = 0;
+    const notice = result.status === 401 ? "Войдите снова, чтобы смотреть участников Radar." : result.status === 403 ? "Нет доступа к участникам Radar. Можно смотреть обычный каталог." : result.status === 429 ? "Попробуйте обновить список немного позже." : result.status === 409 || result.status === 410 ? "Список изменился. Обновляем участников Radar." : result.status === 422 ? "Radar недоступен для выбранного города или геопозиции. Можно смотреть обычный каталог." : "Не удалось загрузить участников Radar. Попробуйте снова.";
+    const transient = result.status === 429 || result.status === 0 || result.status >= 500;
+    // Soft same-key refresh: keep only currently authorized non-expired rows/pins across 429/network/5xx.
+    if (softRetain && transient && this.retainableWindow()) {
+      if (result.status === 429 && this.retryAt > Date.parse(this.view.snapshot!.validUntil)) {
+        this.origin = { kind: "none" };
+        this.invalidate(notice, true);
+        this.set({ mode: "ordinary" });
+        return;
+      }
+      this.set({ busy: false, notice, stale: false });
+      return;
+    }
     this.origin = { kind: "none" };
-    this.invalidate(result.status === 401 ? "Войдите снова, чтобы смотреть участников Radar." : result.status === 403 ? "Нет доступа к участникам Radar. Можно смотреть обычный каталог." : result.status === 429 ? "Попробуйте обновить список немного позже." : result.status === 409 || result.status === 410 ? "Список изменился. Обновляем участников Radar." : result.status === 422 ? "Radar недоступен для выбранного города или геопозиции. Можно смотреть обычный каталог." : "Не удалось загрузить участников Radar. Попробуйте снова.", true);
+    this.invalidate(notice, true);
     if (result.status === 401) this.set({ mode: "ordinary", authenticationRequired: true });
   }
   tick() {
@@ -235,8 +266,12 @@ export class UnifiedDirectoryController {
       this.origin = { kind: "none" };
       // Allow immediate current_activation recovery; expired markers must not linger.
       this.nextInitial = 0;
-      this.invalidate("Список участников Radar устарел. Обновляем данные.", true);
-      this.set({ mode: "ordinary" });
+      // Fence + mode + clear publish atomically so subscribers cannot re-arm unified mid-transition.
+      this.fence();
+      this.set({
+        mode: "ordinary", snapshot: null, rows: [], pins: [], mapPage: null, selected: null, preview: null,
+        busy: false, previewBusy: false, notice: "Список участников Radar устарел. Обновляем данные.", stale: true,
+      });
     }
   }
   async query(filters: UnifiedFilters, origin: UnifiedOriginInput = { kind: "none" }, activationKey: string | null = origin.kind === "current_activation" ? origin.activationId : null) {
@@ -292,7 +327,7 @@ export class UnifiedDirectoryController {
     if (!keepWindow) this.set({ busy: true });
     const result = await this.request<UnifiedSnapshot>("/v1/players/query", { method: "POST", csrfToken: this.me.csrfToken, signal: this.abort.signal, body: JSON.stringify({ contractVersion: UNIFIED_WIRE, filters, origin, limit: 50 }) });
     if (!this.valid(epoch)) return;
-    if (!result.ok) { this.pending = false; this.set({ busy: false }); this.fail(result); return; }
+    if (!result.ok) { this.pending = false; this.set({ busy: false }); this.fail(result, keepWindow); return; }
     if (!this.acceptable(result.data)) { this.pending = false; this.set({ busy: false }); this.invalidate("Список устарел. Обновите участников Radar.", true); return; }
     // Never retain the transient raw foreground input once the server issued a private reference.
     this.origin = result.data.query.originRef ? { kind: "reference", originRef: result.data.query.originRef } : { kind: "none" };
@@ -316,7 +351,7 @@ export class UnifiedDirectoryController {
       });
       if (!this.valid(epoch)) return;
       this.pending = false; this.set({ busy: false });
-      if (!mapResult.ok) { this.fail(mapResult); return; }
+      if (!mapResult.ok) { this.fail(mapResult, true); return; }
       if (!this.acceptable(mapResult.data) || mapResult.data.query.queryRef !== result.data.query.queryRef) {
         this.invalidate("Список изменился. Обновите участников Radar.", true);
         return;

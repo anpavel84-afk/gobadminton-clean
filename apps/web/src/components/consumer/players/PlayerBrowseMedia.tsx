@@ -8,6 +8,9 @@ import { safeAvatarUrl } from "./ProfileComposition";
 
 /** End-to-end bound for metadata + image load/decode before fallback settle. */
 export const PLAYER_BROWSE_MEDIA_DEADLINE_MS = 5000;
+/** Bounded Radar pin/open prewarm — never a global unbounded media queue. */
+export const RADAR_PIN_MEDIA_DEADLINE_MS = 1200;
+export const RADAR_PIN_MEDIA_CAP = 12;
 
 const DEFAULT_COVER_SRC = "/canonical/ce252.svg";
 const COVER_URL_RE = /^\/v1\/media\/covers\/[a-f0-9]{64}\.png$/;
@@ -228,10 +231,12 @@ export async function prepareBrowsePeerMedia(
   player: PublicPlayer,
   signal: AbortSignal,
   deadlineMs: number = PLAYER_BROWSE_MEDIA_DEADLINE_MS,
+  options?: { resolveCover?: boolean },
 ): Promise<PrepareBrowsePeerResult> {
   const peerId = player.publicPlayerId;
   const mediaKey = browsePeerMediaKey(player);
   if (signal.aborted) return { ok: false, reason: "aborted" };
+  const resolveCover = options?.resolveCover !== false;
 
   const work = new AbortController();
   let parentAborted = false;
@@ -258,6 +263,10 @@ export async function prepareBrowsePeerMedia(
     if (player.cover && "uploadedUrl" in player.cover) {
       coverUrl = player.cover.uploadedUrl;
       coverMetaReady = true;
+    } else if (!resolveCover) {
+      // Radar pin prewarm: only available avatar/cover fields — never speculative profile GET.
+      coverMetaReady = true;
+      coverUrl = null;
     } else {
       const meta = await resolveBrowseCoverUrl(player, work.signal);
       if (parentAborted || signal.aborted) {
@@ -307,6 +316,77 @@ export async function prepareBrowsePeerMedia(
     window.clearTimeout(timer);
     signal.removeEventListener("abort", onParentAbort);
   }
+}
+
+type RadarMediaSlot = { sessionKey: string; media: PreparedBrowsePeerMedia };
+const radarMediaByPeer = new Map<string, RadarMediaSlot>();
+const radarMediaInflight = new Map<string, AbortController>();
+let radarMediaSessionKey = "";
+
+/** Drop retained Radar pin media; optional keep predicate for still-authorized peers. */
+export function clearRadarPreparedMedia(keep?: (peerId: string) => boolean) {
+  for (const [peerId, slot] of [...radarMediaByPeer.entries()]) {
+    if (keep?.(peerId)) continue;
+    radarMediaByPeer.delete(peerId);
+    disposePreparedBrowseMedia(slot.media);
+  }
+  for (const [peerId, abort] of [...radarMediaInflight.entries()]) {
+    if (keep?.(peerId)) continue;
+    abort.abort();
+    radarMediaInflight.delete(peerId);
+  }
+  if (!keep) radarMediaSessionKey = "";
+}
+
+export function takeRadarPreparedMedia(peerId: string, mediaKey: string, sessionKey = radarMediaSessionKey): PreparedBrowsePeerMedia | null {
+  const hit = radarMediaByPeer.get(peerId);
+  if (!hit || hit.sessionKey !== sessionKey || hit.media.mediaKey !== mediaKey) return null;
+  return hit.media;
+}
+
+/**
+ * Bounded prewarm for authorized Radar pins. Avatar-only by default (no speculative
+ * profile GET). Pass resolveCover after the viewer explicitly opens a pin.
+ */
+export function prewarmRadarPeerMedia(
+  player: PublicPlayer,
+  options?: { resolveCover?: boolean; deadlineMs?: number; sessionKey?: string },
+) {
+  if (typeof document === "undefined") return;
+  const sessionKey = options?.sessionKey ?? radarMediaSessionKey;
+  if (sessionKey !== radarMediaSessionKey) {
+    clearRadarPreparedMedia();
+    radarMediaSessionKey = sessionKey;
+  }
+  const mediaKey = browsePeerMediaKey(player);
+  const existing = radarMediaByPeer.get(player.publicPlayerId);
+  if (existing?.sessionKey === sessionKey && existing.media.mediaKey === mediaKey && (options?.resolveCover !== true || existing.media.cover.kind === "uploaded" || (player.cover && "uploadedUrl" in player.cover && player.cover.uploadedUrl === null))) {
+    return;
+  }
+  const prior = radarMediaInflight.get(player.publicPlayerId);
+  if (prior) prior.abort();
+  const work = new AbortController();
+  radarMediaInflight.set(player.publicPlayerId, work);
+  void prepareBrowsePeerMedia(player, work.signal, options?.deadlineMs ?? RADAR_PIN_MEDIA_DEADLINE_MS, {
+    resolveCover: options?.resolveCover === true,
+  }).then(result => {
+    if (radarMediaInflight.get(player.publicPlayerId) !== work) return;
+    radarMediaInflight.delete(player.publicPlayerId);
+    if (!result.ok || radarMediaSessionKey !== sessionKey) {
+      if (result.ok) disposePreparedBrowseMedia(result.media);
+      return;
+    }
+    const previous = radarMediaByPeer.get(player.publicPlayerId);
+    if (previous && previous.media !== result.media) disposePreparedBrowseMedia(previous.media);
+    radarMediaByPeer.set(player.publicPlayerId, { sessionKey, media: result.media });
+    while (radarMediaByPeer.size > RADAR_PIN_MEDIA_CAP) {
+      const oldest = radarMediaByPeer.keys().next().value;
+      if (!oldest || oldest === player.publicPlayerId) break;
+      const slot = radarMediaByPeer.get(oldest);
+      radarMediaByPeer.delete(oldest);
+      disposePreparedBrowseMedia(slot?.media);
+    }
+  });
 }
 
 /** Mount a retained decoded <img> into a React host without remounting a new fetch. */

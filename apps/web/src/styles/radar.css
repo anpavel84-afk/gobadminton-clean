@@ -80,3 +80,34 @@
 .radar-map-line--one { width:70%; left:8%; top:28%; transform:rotate(13deg); }.radar-map-line--two { width:68%; left:18%; top:72%; transform:rotate(-18deg); }.radar-map-line--three { width:55%; left:28%; top:12%; transform:rotate(64deg); }.radar-map-line--four { width:50%; left:8%; top:84%; transform:rotate(-55deg); }
 .radar-orbits { z-index:1; }
 .radar-disclosure { z-index:2; }
+
+/* Header-only once-per-session expiry prompt — must not shift /players toolbar layout. */
+.gb-radar-indicator .gb-radar-expiry-warn {
+  position: absolute;
+  z-index: 111;
+  right: 0;
+  top: calc(100% + 8px);
+  box-sizing: border-box;
+  display: grid;
+  gap: 8px;
+  width: min(260px, calc(100vw - 32px));
+  padding: 12px 14px;
+  border: 1px solid var(--gb-line);
+  border-radius: 14px;
+  background: var(--gb-white);
+  color: var(--gb-ink);
+  box-shadow: var(--gb-shadow-elevated);
+  text-align: left;
+  pointer-events: auto;
+}
+.gb-radar-indicator .gb-radar-expiry-warn > p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--gb-ink-soft);
+}
+.gb-radar-indicator .gb-radar-expiry-warn__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}

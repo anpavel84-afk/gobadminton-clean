@@ -16,8 +16,16 @@ export function radarPosition(item: Pick<RadarItem, "proximityBand" | "displaySl
   const angle = item.displaySlot * Math.PI / 180;
   return { left: `${50 + radius * Math.cos(angle)}%`, top: `${50 + radius * Math.sin(angle)}%` };
 }
+/** Authority/memory/privacy fence: every lease must still be live. */
 export function effectiveDeadline(a: RadarActivation) {
   return Math.min(...[a.expiresAt, a.hardExpiresAt, a.foregroundUntil, a.locationValidUntil].map(Date.parse));
+}
+/**
+ * User-visible confirmed session end for header ring/countdown.
+ * Never foregroundUntil / locationValidUntil / next heartbeat.
+ */
+export function confirmedSessionDeadline(a: Pick<RadarActivation, "expiresAt" | "hardExpiresAt">) {
+  return Math.min(Date.parse(a.expiresAt), Date.parse(a.hardExpiresAt));
 }
 export function remainingTime(expiresAt: string, now: number) {
   const seconds = Math.max(0, Math.ceil((Date.parse(expiresAt) - now) / 1000));

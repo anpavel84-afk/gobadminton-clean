@@ -27,7 +27,8 @@ export function GeographicRadarMap({ controller, rows, selected, onSelect, onUna
   const center = session.phase === "active" && session.confirmedOn && !session.pendingStop && session.status?.state === "active" && playersVisible ? session.status.coarseCenter : undefined;
   const centerLatitude = center?.latitude, centerLongitude = center?.longitude;
   const container = useRef<HTMLDivElement>(null); const map = useRef<LibreMap | null>(null);
-  const markers = useRef<Array<{ marker: maplibregl.Marker; button: HTMLButtonElement; id: string; dispose?: () => void }>>([]);
+  type PeerMarker = { marker: maplibregl.Marker; button: HTMLButtonElement; id: string; mediaKey: string; row: UnifiedRow; dispose?: () => void };
+  const markers = useRef<PeerMarker[]>([]);
   const callbacks = useRef({ onSelect, onUnavailable }); callbacks.current = { onSelect, onUnavailable };
   const entryCamera = useRef(createRadarEntryCamera(resumeCamera));
   const [ownProfile, setOwnProfile] = useState<OwnSocialProfile | null>(null);
@@ -72,20 +73,49 @@ export function GeographicRadarMap({ controller, rows, selected, onSelect, onUna
   }, [controller, sharedMap]);
   useEffect(() => {
     if (!ready || !map.current) return;
-    markers.current.forEach(m => { m.marker.remove(); m.dispose?.(); }); markers.current = [];
-    if (!playersVisible) return;
+    if (!playersVisible) {
+      markers.current.forEach(m => { m.marker.remove(); m.dispose?.(); });
+      markers.current = [];
+      return;
+    }
+    const previous = markers.current;
+    const byId = new Map(previous.map(entry => [entry.id, entry]));
+    const next: PeerMarker[] = [];
+    const keep = new Set<string>();
     for (const row of rows) {
       if (row.publicPlayerId === ownProfile?.publicPlayerId) continue;
       const geo = row.radar?.geo;
       if (!geo || geo.crs !== "EPSG:4326" || !Number.isFinite(geo.latitude) || !Number.isFinite(geo.longitude) || geo.longitude < 36 || geo.longitude > 39.5 || geo.latitude < 54.5 || geo.latitude > 56.5) { callbacks.current.onUnavailable(); return; }
+      const mediaKey = `${row.player.avatar?.uploadedUrl ?? ""}|${row.player.avatar?.providerUrl ?? ""}|${row.player.displayName}`;
+      const existing = byId.get(row.publicPlayerId);
+      if (existing && existing.mediaKey === mediaKey) {
+        existing.row = row;
+        existing.marker.setLngLat([geo.longitude, geo.latitude]);
+        existing.button.setAttribute("aria-pressed", String(row.publicPlayerId === selected));
+        keep.add(row.publicPlayerId);
+        next.push(existing);
+        continue;
+      }
+      if (existing) { existing.marker.remove(); existing.dispose?.(); }
       const button = document.createElement("button"); button.type = "button"; button.className = "g2-map-marker g2-person-marker";
       const root = createRoot(button); root.render(<Avatar name={row.player.displayName} avatar={row.player.avatar} />); button.setAttribute("aria-label", `Показать игрока: ${row.player.displayName}`); button.setAttribute("aria-pressed", String(row.publicPlayerId === selected));
-      button.addEventListener("click", () => { button.focus({ preventScroll: true }); callbacks.current.onSelect(row); });
-      const marker = new maplibregl.Marker({ element: button, anchor: "center" }).setLngLat([geo.longitude, geo.latitude]).addTo(map.current);
-      markers.current.push({ marker, button, id: row.publicPlayerId, dispose: () => root.unmount() });
+      const entry: PeerMarker = {
+        marker: new maplibregl.Marker({ element: button, anchor: "center" }),
+        button, id: row.publicPlayerId, mediaKey, dispose: () => root.unmount(), row,
+      };
+      button.addEventListener("click", () => { button.focus({ preventScroll: true }); callbacks.current.onSelect(entry.row); });
+      entry.marker.setLngLat([geo.longitude, geo.latitude]).addTo(map.current!);
+      keep.add(row.publicPlayerId);
+      next.push(entry);
     }
-    // Selection focus survives subsequent tick renders; source rows change only on a new window.
-  }, [rows, ready, ownProfile?.publicPlayerId, playersVisible]);
+    for (const entry of previous) {
+      if (keep.has(entry.id)) continue;
+      entry.marker.remove();
+      entry.dispose?.();
+    }
+    markers.current = next;
+    // Same-key soft refresh reuses markers; only identity/media/TTL changes remount.
+  }, [rows, ready, ownProfile?.publicPlayerId, playersVisible, selected]);
   useEffect(() => {
     if (sharedMap || !ready || !map.current) return;
     let alive = true; const venueMarkers: maplibregl.Marker[] = [];

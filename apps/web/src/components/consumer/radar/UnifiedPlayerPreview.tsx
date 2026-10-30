@@ -3,7 +3,15 @@ import { useEffect, useRef, useState } from "react";
 import { formatSocialLevel } from "../../../lib/player-presentation";
 import { distanceText, liveUnifiedPreview } from "../../../lib/unified-directory";
 import type { UnifiedUpcomingGame } from "@gobadminton/contracts";
+import type { PublicPlayer } from "../../../lib/consumer-types";
 import { Avatar, Badge, ProfileDialog } from "../players/ProfileComposition";
+import {
+  browsePeerMediaKey,
+  clearRadarPreparedMedia,
+  PreparedBrowseAvatar,
+  prewarmRadarPeerMedia,
+  takeRadarPreparedMedia,
+} from "../players/PlayerBrowseMedia";
 import { PublicPlayerProfile, reportUnknownScopeKey } from "../players/PublicPlayerProfile";
 import { Button } from "../Button";
 import { CloseButton } from "../CloseButton";
@@ -58,6 +66,35 @@ export function UnifiedPlayerPreview({ dialog = false, onClose, expanded: contro
   const preview = directory.view.preview;
   const now = Date.now();
   const safePreview = preview && row && liveUnifiedPreview(preview, row.publicPlayerId, now) ? preview : null;
+  const [, setMediaTick] = useState(0);
+  // Bounded pin neighborhood prewarm (avatar-only); selected peer may resolve cover after open.
+  useEffect(() => {
+    const authorized = directory.view.mode === "unified" && !directory.view.stale && !directory.view.authenticationRequired
+      && directory.view.snapshot && Date.parse(directory.view.snapshot.validUntil) > Date.now();
+    if (!authorized) {
+      clearRadarPreparedMedia();
+      return;
+    }
+    const peers = [...directory.view.pins, ...directory.view.rows].filter(item => item.radar && Date.parse(item.radar.validUntil) > Date.now());
+    const selectedId = directory.view.selected;
+    const selectedIndex = Math.max(0, peers.findIndex(item => item.publicPlayerId === selectedId));
+    const neighborhood = peers.slice(Math.max(0, selectedIndex - 1), selectedIndex + 2).slice(0, 3);
+    const keep = new Set(neighborhood.map(item => item.publicPlayerId));
+    clearRadarPreparedMedia(id => keep.has(id));
+    const sessionKey = view.me?.id ?? "";
+    for (const item of neighborhood) {
+      const player = item.player as PublicPlayer;
+      prewarmRadarPeerMedia(player, {
+        resolveCover: item.publicPlayerId === selectedId,
+        sessionKey,
+      });
+    }
+    const timer = window.setTimeout(() => setMediaTick(n => n + 1), 200);
+    return () => window.clearTimeout(timer);
+  }, [directory.view.pins, directory.view.rows, directory.view.selected, directory.view.snapshot?.query.queryRef, directory.view.mode, directory.view.stale, directory.view.authenticationRequired, view.me?.id]);
+  const preparedMedia = row
+    ? takeRadarPreparedMedia(row.publicPlayerId, browsePeerMediaKey(row.player as PublicPlayer), view.me?.id ?? "")
+    : null;
   const deadline = Math.min(
     Date.parse(directory.view.snapshot?.validUntil ?? "invalid"),
     Date.parse(row?.radar?.validUntil ?? "invalid"),
@@ -129,10 +166,15 @@ export function UnifiedPlayerPreview({ dialog = false, onClose, expanded: contro
   </>;
 
   if (surface === "compact") {
+    const avatarTone = safePreview?.player.trainer ? "purple" : "yellow";
     return <div className="gb-venue-preview unified-preview is-compact" data-preview-mode="compact" role="region" aria-label={safePreview ? `Кратко: ${safePreview.player.displayName}` : "Карточка игрока"}>
       {statusBlock}
       {safePreview && <button type="button" className="gb-venue-preview-button" aria-label={`Открыть игрока ${safePreview.player.displayName}`} onClick={() => onOpen?.()}>
-        <span className="gb-venue-preview-cover unified-preview__compact-cover"><Avatar name={safePreview.player.displayName} avatar={safePreview.player.avatar} tone={safePreview.player.trainer ? "purple" : "yellow"} /></span>
+        <span className="gb-venue-preview-cover unified-preview__compact-cover">
+          {preparedMedia
+            ? <PreparedBrowseAvatar media={preparedMedia.avatar} name={safePreview.player.displayName} tone={avatarTone} />
+            : <Avatar name={safePreview.player.displayName} avatar={safePreview.player.avatar} tone={avatarTone} />}
+        </span>
         <span className="gb-venue-preview-copy">
           <strong>{safePreview.player.displayName}</strong>
           {levelLabel && <span className="gb-venue-preview-address">{levelLabel}{safePreview.player.trainer ? " · Тренер" : ""}</span>}
@@ -196,7 +238,9 @@ export function UnifiedPlayerPreview({ dialog = false, onClose, expanded: contro
   const body = <div ref={focus} tabIndex={-1} className={`unified-preview ${expanded ? "is-expanded" : "is-compact"}`} data-preview-mode={expanded ? "expanded" : "compact"} data-player-view={gamesView ? "games" : "profile"} onKeyDown={e => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); if (gamesView) setGamesView(false); else onClose(); } }}>
     {statusBlock}
     {safePreview && !expanded && <article className="unified-preview__compact radar-player-preview" aria-label={`Кратко: ${safePreview.player.displayName}`}>
-      <Avatar name={safePreview.player.displayName} avatar={safePreview.player.avatar} tone={safePreview.player.trainer ? "purple" : "yellow"} />
+      {preparedMedia
+        ? <PreparedBrowseAvatar media={preparedMedia.avatar} name={safePreview.player.displayName} tone={safePreview.player.trainer ? "purple" : "yellow"} />
+        : <Avatar name={safePreview.player.displayName} avatar={safePreview.player.avatar} tone={safePreview.player.trainer ? "purple" : "yellow"} />}
       <div className="unified-preview__compact-body">
         <span className="unified-preview__title-row"><h2>{safePreview.player.displayName}</h2>{safePreview.player.trainer && <Badge trainer>Тренер</Badge>}</span>
         {levelLabel && <strong>{levelLabel}</strong>}
