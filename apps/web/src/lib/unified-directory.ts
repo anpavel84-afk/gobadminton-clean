@@ -191,9 +191,13 @@ export class UnifiedDirectoryController {
   private fence() {
     ++this.epoch; ++this.selectionEpoch; this.abort.abort(); this.abort = new AbortController(); this.pending = false;
   }
+  /** Cleared private projection fields — applied with mode/capability in one set(). */
+  private clearedPrivate(notice = "", stale = false): Partial<DirectoryView> {
+    return { snapshot: null, rows: [], pins: [], mapPage: null, selected: null, preview: null, busy: false, previewBusy: false, notice, stale };
+  }
   private invalidate(notice = "", stale = false) {
     this.fence();
-    this.set({ snapshot: null, rows: [], pins: [], mapPage: null, selected: null, preview: null, busy: false, previewBusy: false, notice, stale });
+    this.set(this.clearedPrivate(notice, stale));
   }
   /** Still-authorized same-key window that soft refresh may keep across transient read failures. */
   private retainableWindow() {
@@ -217,18 +221,31 @@ export class UnifiedDirectoryController {
     if (!visible && !this.view.authenticationRequired) { this.origin = { kind: "none" }; this.invalidate("Вернитесь к списку и обновите участников Radar.", true); }
   }
   private valid(epoch: number) { return epoch === this.epoch && this.visible && this.me !== null; }
+  /**
+   * Terminal read failure: install pending/retryAt/nextInitial/origin/capability/mode+fence
+   * BEFORE any subscriber notification. Never publish a transient busy:false ahead of Retry-After.
+   */
   private fail(result: Exclude<ApiResult<unknown>, { ok: true }>, softRetain = false) {
     if (result.status === 404) {
       this.origin = { kind: "none" }; this.activationOriginKey = null; this.camera = null; this.scrollY = 0; this.nextInitial = 0;
+      this.fence();
       // RESOURCE_UNAVAILABLE is an expired/changed origin or proof — not missing capability.
       if (result.problem?.code === "RESOURCE_UNAVAILABLE") {
-        this.invalidate("Список участников Radar устарел. Обновляем данные.", true);
-        this.set({ mode: "ordinary", capabilityUnavailable: false });
+        this.set({
+          ...this.clearedPrivate("Список участников Radar устарел. Обновляем данные.", true),
+          mode: "ordinary",
+          capabilityUnavailable: false,
+        });
         return;
       }
-      this.invalidate("Участники Radar сейчас недоступны. Можно пользоваться обычным каталогом.");
-      this.set({ mode: "ordinary", capabilityUnavailable: true }); return;
+      this.set({
+        ...this.clearedPrivate("Участники Radar сейчас недоступны. Можно пользоваться обычным каталогом."),
+        mode: "ordinary",
+        capabilityUnavailable: true,
+      });
+      return;
     }
+    // Install recovery gates before any publication (including soft-retain busy:false).
     if (result.status === 429) {
       this.retryAt = this.clock() + (result.retryAfterSeconds ?? 60) * 1000;
       // Honour server Retry-After only; do not stack another fixed 30s initial wait.
@@ -244,8 +261,8 @@ export class UnifiedDirectoryController {
       const until = Date.parse(this.view.snapshot!.validUntil);
       if (result.status === 429 && this.retryAt > until) {
         this.origin = { kind: "none" };
-        this.invalidate(notice, true);
-        this.set({ mode: "ordinary" });
+        this.fence();
+        this.set({ ...this.clearedPrivate(notice, true), mode: "ordinary" });
         return;
       }
       // Drop the pre-request 30s nextInitial gate; retry soon within the still-valid TTL.
@@ -253,12 +270,18 @@ export class UnifiedDirectoryController {
       if (result.status !== 429) {
         this.nextInitial = Math.min(this.clock() + 2000, until);
       }
+      this.pending = false;
       this.set({ busy: false, notice, stale: false });
       return;
     }
     this.origin = { kind: "none" };
-    this.invalidate(notice, true);
-    if (result.status === 401) this.set({ mode: "ordinary", authenticationRequired: true });
+    this.fence();
+    // Cleared private projection always leaves ordinary until a fresh unified initial commits.
+    this.set({
+      ...this.clearedPrivate(notice, true),
+      mode: "ordinary",
+      ...(result.status === 401 ? { authenticationRequired: true } : {}),
+    });
   }
   tick() {
     const now = this.clock();
@@ -344,13 +367,19 @@ export class UnifiedDirectoryController {
     if (!keepWindow) this.set({ busy: true });
     const result = await this.request<UnifiedSnapshot>("/v1/players/query", { method: "POST", csrfToken: this.me.csrfToken, signal: this.abort.signal, body: JSON.stringify({ contractVersion: UNIFIED_WIRE, filters, origin, limit: 50 }) });
     if (!this.valid(epoch)) return;
-    if (!result.ok) { this.pending = false; this.set({ busy: false }); this.fail(result, keepWindow); return; }
-    if (!this.acceptable(result.data)) { this.pending = false; this.set({ busy: false }); this.invalidate("Список устарел. Обновите участников Radar.", true); return; }
+    // Settle failure gates before any busy:false publication (Retry-After / resource-404 races).
+    if (!result.ok) { this.pending = false; this.fail(result, keepWindow); return; }
+    if (!this.acceptable(result.data)) { this.pending = false; this.invalidate("Список устарел. Обновите участников Radar.", true); return; }
     // Never retain the transient raw foreground input once the server issued a private reference.
     this.origin = result.data.query.originRef ? { kind: "reference", originRef: result.data.query.originRef } : { kind: "none" };
     const notice = result.data.query.originState === "none" ? "Участники Radar по городу. Расстояние неизвестно." : "Расстояние приблизительное, по опубликованным геопозициям.";
     if (!keepWindow) {
-      this.pending = false; this.set({ busy: false, snapshot: result.data, rows: result.data.items, notice });
+      // Fresh initial must publish consistent unified mode with the snapshot (not leave ordinary after recovery).
+      this.pending = false;
+      this.set({
+        busy: false, mode: "unified", stale: false, capabilityUnavailable: false,
+        snapshot: result.data, rows: result.data.items, notice,
+      });
       return;
     }
     const queryRefChanged = result.data.query.queryRef !== previousQueryRef;
@@ -367,7 +396,7 @@ export class UnifiedDirectoryController {
         body: JSON.stringify({ contractVersion: UNIFIED_WIRE, queryRef: result.data.query.queryRef, limit: 100 }),
       });
       if (!this.valid(epoch)) return;
-      this.pending = false; this.set({ busy: false });
+      this.pending = false;
       if (!mapResult.ok) { this.fail(mapResult, true); return; }
       if (!this.acceptable(mapResult.data) || mapResult.data.query.queryRef !== result.data.query.queryRef) {
         this.invalidate("Список изменился. Обновите участников Radar.", true);
@@ -377,7 +406,7 @@ export class UnifiedDirectoryController {
       mapPins = mapResult.data.items.filter(row => row.radar !== null).slice(0, 200);
       mapPage = mapResult.data.mapPage;
     } else {
-      this.pending = false; this.set({ busy: false });
+      this.pending = false;
       if (queryRefChanged) { mapPins = []; mapPage = null; }
     }
     const now = this.clock();
@@ -393,6 +422,7 @@ export class UnifiedDirectoryController {
       rows: result.data.items,
       notice,
       stale: false,
+      busy: false,
       mode: "unified",
       pins: mapPins,
       mapPage,
@@ -423,10 +453,10 @@ export class UnifiedDirectoryController {
     const epoch = this.epoch; this.pending = true; this.set({ busy: true });
     const r = await this.request<UnifiedSnapshot>("/v1/players/query", { method: "POST", csrfToken: me.csrfToken, signal: this.abort.signal, body: JSON.stringify({ contractVersion: UNIFIED_WIRE, queryRef: snapshot.query.queryRef, cursor: snapshot.page.nextCursor, limit: 50 }) });
     if (!this.valid(epoch)) return;
-    this.pending = false; this.set({ busy: false });
+    this.pending = false;
     if (!r.ok) { this.fail(r); return; }
     if (!this.acceptable(r.data) || r.data.query.queryRef !== snapshot.query.queryRef) { this.invalidate("Список изменился. Обновите участников Radar.", true); return; }
-    this.set({ snapshot: r.data, rows: [...this.view.rows, ...r.data.items.filter(row => !this.view.rows.some(old => old.publicPlayerId === row.publicPlayerId))] });
+    this.set({ busy: false, snapshot: r.data, rows: [...this.view.rows, ...r.data.items.filter(row => !this.view.rows.some(old => old.publicPlayerId === row.publicPlayerId))] });
   }
   async map(next = false) {
     const snapshot = this.view.snapshot, me = this.me;
@@ -435,12 +465,12 @@ export class UnifiedDirectoryController {
     const epoch = this.epoch; this.pending = true; this.set({ busy: true });
     const r = await this.request<UnifiedMapSnapshot>("/v1/players/query/map", { method: "POST", csrfToken: me.csrfToken, signal: this.abort.signal, body: JSON.stringify({ contractVersion: UNIFIED_WIRE, queryRef: snapshot.query.queryRef, ...(next ? { mapCursor: this.view.mapPage!.nextMapCursor } : {}), limit: 100 }) });
     if (!this.valid(epoch)) return;
-    this.pending = false; this.set({ busy: false });
+    this.pending = false;
     if (!r.ok) { this.fail(r); return; }
     if (!this.acceptable(r.data) || r.data.query.queryRef !== snapshot.query.queryRef) { this.invalidate("Список изменился. Обновите участников Radar.", true); return; }
     ++this.selectionEpoch;
     // Replace the map window; never silently accumulate/export the entire city.
-    this.set({ pins: r.data.items.filter(row => row.radar !== null).slice(0, 200), mapPage: r.data.mapPage, selected: null, preview: null, previewBusy: false });
+    this.set({ busy: false, pins: r.data.items.filter(row => row.radar !== null).slice(0, 200), mapPage: r.data.mapPage, selected: null, preview: null, previewBusy: false });
   }
   close() { ++this.selectionEpoch; this.set({ selected: null, preview: null, previewBusy: false }); }
   async select(row: UnifiedRow) {

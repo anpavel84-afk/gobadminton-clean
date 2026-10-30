@@ -163,11 +163,13 @@ function RadarAuthorizedMediaPrewarm() {
     const keep = new Set(neighborhood.map(row => row.publicPlayerId));
     clearRadarPreparedMedia(id => keep.has(id));
     const sessionKey = `${me.id}:${me.csrfToken}:${activation.activationId}:${"version" in activation ? activation.version : 0}`;
+    const retainIds = [...keep];
     for (const row of neighborhood) {
       // Public GET cover metadata for known authorized peers — not private proofs.
       prewarmRadarPeerMedia(row.player as PublicPlayer, {
         resolveCover: true,
         sessionKey,
+        retainIds,
       });
     }
   }, [
@@ -211,9 +213,10 @@ export function RadarStatusAffordance({ mapControls = false }: { mapControls?: b
   const [open, setOpen] = useState(false);
   const host = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
-  // Once per confirmed activation generation: expiry warning at <=60s (header overlay only).
-  // Dismissal is sticky for that key — ordinary phase/now pulses must not reopen it.
+  // Once per confirmed activation+expiry: dismissal sticky across background/checking/phase pulses.
+  // Reset only on actual session/identity transition or expiry-key change — never permanent cross-account.
   const warnedExpiryKey = useRef<string | null>(null);
+  const warnedIdentityId = useRef<string | null>(null);
   const [expiryPrompt, setExpiryPrompt] = useState<{ key: string; until: number } | null>(null);
   const activation = view.status?.state === "active" ? view.status : null;
   const running = view.phase === "active" && Boolean(activation) && view.confirmedOn;
@@ -244,8 +247,27 @@ export function RadarStatusAffordance({ mapControls = false }: { mapControls?: b
     // Transient/stale unified notices belong in the header, not the /players in-flow strip.
     directoryNotice && !distanceNotice ? directoryNotice : "";
   useEffect(() => {
+    // Cross-account fence: ignore transient me=null recovery pulses; clear only on real id change or guest.
+    if (view.me?.id) {
+      if (warnedIdentityId.current && warnedIdentityId.current !== view.me.id) {
+        warnedExpiryKey.current = null;
+        setExpiryPrompt(null);
+      }
+      warnedIdentityId.current = view.me.id;
+    } else if (view.phase === "guest") {
+      warnedIdentityId.current = null;
+      warnedExpiryKey.current = null;
+      setExpiryPrompt(null);
+    }
     if (!running || !activation || !Number.isFinite(sessionUntil)) {
-      if (!running) { warnedExpiryKey.current = null; setExpiryPrompt(null); }
+      // Hide bubble during background/checking/status-null recovery; keep dismissal sticky.
+      setExpiryPrompt(null);
+      const transientPhase = ["background", "checking", "activating", "stopping", "permission", "locating"].includes(view.phase);
+      // Actual session end (not a pulse): clear sticky key so the next activation can warn.
+      const sessionEnded = ["guest", "expired", "off", "stopped", "owned_elsewhere", "denied", "location_error", "disabled"].includes(view.phase);
+      if (!transientPhase && sessionEnded) {
+        warnedExpiryKey.current = null;
+      }
       return;
     }
     const key = `${activation.activationId}:${activation.expiresAt}`;
@@ -258,7 +280,7 @@ export function RadarStatusAffordance({ mapControls = false }: { mapControls?: b
     if (warnedExpiryKey.current === key) return;
     warnedExpiryKey.current = key;
     setExpiryPrompt({ key, until: sessionUntil });
-  }, [running, activation, sessionUntil, view.now]);
+  }, [running, activation, sessionUntil, view.now, view.me?.id, view.phase, view.confirmedOn]);
   const showExpiry = Boolean(expiryPrompt && running && expiryPrompt.key === `${activation?.activationId}:${activation?.expiresAt}`);
   useEffect(() => {
     if (!open && !showExpiry) return;

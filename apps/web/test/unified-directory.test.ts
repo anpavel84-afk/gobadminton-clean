@@ -383,6 +383,93 @@ describe("unified directory privacy and global pagination", () => {
     expect(c.view.mode).toBe("unified");
     expect(c.view.stale).toBe(false);
   });
+  it("QA-01: expiry-during-read 429 installs Retry-After before sync subscriber can re-query", async () => {
+    let time = now;
+    type RateLimited = { ok: false; status: number; error: string; retryAfterSeconds: number };
+    let resolveRefresh!: (value: RateLimited) => void;
+    let calls = 0;
+    const request = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) {
+        return ok({
+          ...snapshot([row("before")]),
+          generatedAt: new Date(time).toISOString(),
+          validUntil: new Date(time + 45000).toISOString(),
+        });
+      }
+      return new Promise<RateLimited>(resolve => { resolveRefresh = resolve; });
+    }) as typeof apiFetch;
+    const c = new UnifiedDirectoryController(request, () => time); c.bind(me);
+    await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    time += 30000;
+    const pending = c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    time += 15000;
+    c.tick();
+    expect(c.view.snapshot).toBeNull();
+    c.subscribe(() => {
+      // Must observe Retry-After already installed — no extra read before the gate.
+      void c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    });
+    resolveRefresh({ ok: false, status: 429, error: "rate", retryAfterSeconds: 5 });
+    await pending;
+    expect(calls).toBe(2);
+    expect(c.nextRefreshAt()).toBe(time + 5000);
+    expect(c.view.busy).toBe(false);
+  });
+  it("QA-01: resource 404 settles mode+fences atomically; sync recovery publishes unified", async () => {
+    let time = now;
+    let calls = 0;
+    const request = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) {
+        return ok({
+          ...snapshot([row("a"), row("b"), row("c"), row("d"), row("e"), row("f")]),
+          generatedAt: new Date(time).toISOString(),
+          validUntil: new Date(time + 45000).toISOString(),
+        });
+      }
+      if (calls === 2) {
+        return {
+          ok: false as const,
+          status: 404,
+          error: "gone",
+          problem: {
+            type: "about:blank",
+            title: "Источник местоположения недоступен",
+            status: 404,
+            code: "RESOURCE_UNAVAILABLE",
+            requestId: "test",
+          },
+        };
+      }
+      return ok({
+        ...snapshot([row("r1"), row("r2"), row("r3"), row("r4"), row("r5"), row("r6")]),
+        generatedAt: new Date(time).toISOString(),
+        validUntil: new Date(time + 45000).toISOString(),
+      });
+    }) as typeof apiFetch;
+    const c = new UnifiedDirectoryController(request, () => time); c.bind(me);
+    await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    expect(c.view.rows).toHaveLength(6);
+    let recovering: Promise<void> | null = null;
+    let sawAtomic404 = false;
+    c.subscribe(() => {
+      if (c.view.mode === "ordinary" && c.view.snapshot === null && !c.view.capabilityUnavailable && !recovering) {
+        // Failure settlement must publish ordinary+clear together (not cleared while still unified).
+        expect(c.view.rows).toEqual([]);
+        sawAtomic404 = true;
+        recovering = c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+      }
+    });
+    time += 30000;
+    await c.query(filters, { kind: "current_activation", activationId: "activation" }, "activation:1");
+    if (recovering) await recovering;
+    expect(sawAtomic404).toBe(true);
+    expect(calls).toBeGreaterThanOrEqual(3);
+    expect(c.view.capabilityUnavailable).toBe(false);
+    expect(c.view.mode).toBe("unified");
+    expect(c.view.rows).toHaveLength(6);
+  });
 });
 describe("distance and map authority", () => {
   const estimate = (meters: number, step: 100 | 500 | 1000 = 100) => ({ kind: "estimate", roundedMeters: meters, roundingStepMeters: step }) as UnifiedDistance;

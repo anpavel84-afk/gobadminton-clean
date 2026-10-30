@@ -121,7 +121,11 @@ export function GeographicRadarMap({ controller, rows, selected, onSelect, onUna
         button, id: row.publicPlayerId, mediaKey, dispose: () => root.unmount(), row,
       };
       button.addEventListener("click", () => { button.focus({ preventScroll: true }); callbacks.current.onSelect(entry.row); });
-      const warm = () => prewarmRadarPeerMedia(entry.row.player as PublicPlayer, { resolveCover: true });
+      // Hover/focus share the same bounded pending+retained admission as provider prewarm.
+      const warm = () => prewarmRadarPeerMedia(entry.row.player as PublicPlayer, {
+        resolveCover: true,
+        retainIds: selected ? [selected, row.publicPlayerId] : [row.publicPlayerId],
+      });
       button.addEventListener("pointerenter", warm);
       button.addEventListener("focus", warm);
       entry.marker.setLngLat([geo.longitude, geo.latitude]).addTo(map.current!);

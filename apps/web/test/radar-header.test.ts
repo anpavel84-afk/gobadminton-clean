@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { radarHeaderStatus, radarRingFraction } from "../src/lib/radar-header";
 import { confirmedSessionDeadline } from "../src/lib/radar-presentation";
@@ -5,6 +8,10 @@ import type { RadarView } from "../src/lib/radar-controller";
 const now = Date.parse("2026-10-09T12:00:00Z");
 const stamp = (n: number) => new Date(now + n * 1000).toISOString();
 const active = { phase: "active", me: { id:"A" }, status: { state:"active", startedAt:stamp(0), expiresAt:stamp(900),hardExpiresAt:stamp(1800),foregroundUntil:stamp(100),locationValidUntil:stamp(120),nextLocationUpdateAt:stamp(60) }, now, confirmedOn:true, pendingStop:false, exposureMode:"live" } as RadarView;
+const sessionSource = readFileSync(
+  join(dirname(fileURLToPath(import.meta.url)), "../src/components/consumer/radar/RadarSessionProvider.tsx"),
+  "utf8",
+);
 describe("compact Radar is a pure honest projection", () => {
   it.each(["checking","guest","off","permission","locating","activating","disabled"])("%s without server confirmation stays hidden", phase => {
     expect(radarHeaderStatus({...active, phase, confirmedOn:false} as RadarView)).toBeNull();
@@ -41,5 +48,17 @@ describe("compact Radar is a pure honest projection", () => {
     const shortHard = {...active, status:{...active.status!, expiresAt:stamp(900), hardExpiresAt:stamp(300)} as RadarView["status"]};
     expect(radarRingFraction({...shortHard, now:now+150000})).toBeLessThan(radarRingFraction(shortHard));
     expect(radarRingFraction({...shortHard, now:now+300000})).toBe(0);
+  });
+  it("QA-04: expiry warning dismissal survives background/checking; resets on identity/session end", () => {
+    expect(sessionSource).toContain("warnedExpiryKey");
+    expect(sessionSource).toContain("warnedIdentityId");
+    expect(sessionSource).toContain('transientPhase');
+    expect(sessionSource).toContain('"background"');
+    expect(sessionSource).toContain('"checking"');
+    // Must not clear sticky dismissal solely because running became false.
+    expect(sessionSource).not.toMatch(/if\s*\(\s*!running\s*\)\s*\{\s*warnedExpiryKey\.current\s*=\s*null/);
+    expect(sessionSource).toContain("setExpiryPrompt(null)");
+    expect(sessionSource).toContain("Escape");
+    expect(sessionSource).toContain("pointerdown");
   });
 });
