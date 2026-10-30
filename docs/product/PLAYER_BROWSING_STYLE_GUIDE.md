@@ -61,6 +61,12 @@ Superseded by the **Mobile fullscreen contract** appendix below for cards mode. 
 
 Public list/detail DTO: name, city, area, self-declared level, bio, cover/avatar when present. **Do not invent** star ratings, reviews, exact distance, or upcoming games. Ordinary public API does not provide games — show concise unavailable copy + link to the public profile. Cover may be omitted on list DTO: `getPlayer` on demand for the current id; ignore stale/unmounted/scope/auth-generation responses.
 
+## Loading geometry & media window (#404 Owner UAT)
+
+- **Stable page header from first visible frame:** server-parsed `view` (`initialBrowseView`) + viewport CSS (≥1024 → fixed 116px desktop hero with subtitle; mobile cards → compact without waiting for JS `data-directory-desktop`). Do not open mobile fullscreen portal until the desktop MQ is known (no desktop flash). Preserve route/history/back/X/focus and list defaults.
+- **Tinder four-ahead prepare:** `browseMediaNeighborhood` = previous + current + next 4 (max 6), deduped; prep priority current → ahead → previous. Exact retained decoded pixels; existing cache keys, identity/CSRF/session/generation fences, 5s deadline, eviction. Radar pin `RADAR_PIN_MEDIA_CAP=4` / admission / selected-retain stays independent — do not change.
+- Gesture parameters and design tokens above remain authoritative; no new policy bundle. Friendship POS copy stays honest until a separate Owner match-contract task.
+
 ## Sitewide link
 
 See also [SITEWIDE_UI_STYLE_GUIDE.md](./SITEWIDE_UI_STYLE_GUIDE.md) for shared shell/rail rules. Player-browsing deck visuals are governed here (#404 desktop v5), not by rejected feed-card proposals.

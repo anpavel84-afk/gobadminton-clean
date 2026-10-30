@@ -12,18 +12,25 @@
   --pb-radius: 28px;
 }
 
-/* Cards mode: compact page header + collapsed tools so default-closed deck fits ~1440×900. */
-.gb-player-browse[data-browse-view="cards"] .players-hero.pb-hero--compact {
-  margin-bottom: 10px;
-  gap: 12px;
-  align-items: center;
+/* Cards mode compact header is mobile-only; desktop ≥1024 uses fixed v5 geometry below.
+ * Subtitle stays in DOM; hide on mobile cards so first paint matches hydrated chrome. */
+.gb-player-browse[data-browse-view="cards"] .players-hero__subtitle {
+  display: none;
 }
 
-.gb-player-browse[data-browse-view="cards"] .players-hero.pb-hero--compact h1 {
-  margin: 0;
-  font-size: 28px;
-  line-height: 1.15;
-  letter-spacing: -.03em;
+@media (max-width: 1023px) {
+  .gb-player-browse[data-browse-view="cards"] .players-hero.pb-hero--compact {
+    margin-bottom: 10px;
+    gap: 12px;
+    align-items: center;
+  }
+
+  .gb-player-browse[data-browse-view="cards"] .players-hero.pb-hero--compact h1 {
+    margin: 0;
+    font-size: 28px;
+    line-height: 1.15;
+    letter-spacing: -.03em;
+  }
 }
 
 .gb-player-browse .pb-catalog-tools {
@@ -1238,18 +1245,33 @@
   gap: 8px;
 }
 
-/* Overlay map CTA above the list — mirrors games map entry; does not move toolbar controls. */
-.gb-player-browse .gb-players-map-cta {
+/* Floating Radar map CTA — games overlay pattern; does not shift toolbar/list/card geometry. */
+.gb-player-browse .gb-players-map-cta.gb-games-view-action {
   display: flex;
+  position: fixed;
+  z-index: 20;
+  left: 0;
+  right: 0;
+  bottom: calc(24px + env(safe-area-inset-bottom, 0px));
   justify-content: center;
-  padding: 10px 0 4px;
+  align-items: center;
   pointer-events: none;
+  margin: 0;
+  padding: 8px 0;
+  height: auto;
+  background: transparent;
 }
-.gb-player-browse .gb-players-map-cta > a,
-.gb-player-browse .gb-players-map-cta > button {
+.gb-player-browse .gb-players-map-cta.gb-games-view-action > a,
+.gb-player-browse .gb-players-map-cta.gb-games-view-action > button {
   pointer-events: auto;
 }
-/* Hide map CTA in mobile cards only; desktop cards keep the shared upper entry. */
+/* Desktop: sticky-over-content feel without in-flow height (fixed keeps geometry stable ON/OFF). */
+@media (min-width: 721px) {
+  .gb-player-browse .gb-players-map-cta.gb-games-view-action {
+    bottom: 24px;
+  }
+}
+/* Hide map CTA in mobile cards only; desktop cards keep the shared floating entry. */
 .gb-player-browse[data-browse-view="cards"]:not([data-directory-desktop="true"]) .gb-players-map-cta {
   display: none;
 }
@@ -1282,9 +1304,11 @@
 }
 
 @media (min-width: 1024px) {
-  .gb-player-browse[data-directory-desktop="true"] .players-hero,
-  .gb-player-browse[data-directory-desktop="true"] .players-hero.pb-hero--compact {
+  /* Viewport CSS owns desktop header geometry from first paint — do not wait for JS data-directory-desktop. */
+  .gb-player-browse .players-hero,
+  .gb-player-browse .players-hero.pb-hero--compact {
     display: flex;
+    flex-direction: row;
     align-items: center;
     justify-content: space-between;
     padding: 28px 0 24px;
@@ -1293,7 +1317,7 @@
     gap: 16px;
   }
 
-  .gb-player-browse[data-directory-desktop="true"] .players-hero h1 {
+  .gb-player-browse .players-hero h1 {
     margin: 0;
     font-size: 36px;
     line-height: 1.08;
@@ -1301,18 +1325,20 @@
     font-weight: 750;
   }
 
-  .gb-player-browse[data-directory-desktop="true"] .players-hero p {
+  .gb-player-browse .players-hero__subtitle,
+  .gb-player-browse[data-browse-view="cards"] .players-hero__subtitle {
+    display: block;
     margin: 9px 0 0;
     color: var(--pb-muted);
     font-size: 14px;
   }
 
-  .gb-player-browse[data-directory-desktop="true"] .pb-view-switch {
+  .gb-player-browse .pb-view-switch {
     border-radius: 14px;
     padding: 4px;
   }
 
-  .gb-player-browse[data-directory-desktop="true"] .pb-view-switch button {
+  .gb-player-browse .pb-view-switch button {
     border-radius: 10px;
   }
 

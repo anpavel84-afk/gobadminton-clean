@@ -4,8 +4,28 @@ import { Button } from "../Button";
 import { FoldedMapGlyph } from "../NavIcon";
 import "../../../styles/radar-geographic.css";
 
+type GamesViewActionProps = {
+  view: "list" | "map";
+  /** Games list toggle; omit when using `href` (e.g. players Radar map entry). */
+  onClick?: () => void;
+  href?: string;
+  /** Defaults preserve games feed copy. */
+  labelFull?: string;
+  labelShort?: string;
+  className?: string;
+  "aria-label"?: string;
+};
+
 /** A bounded action above the existing navigation, outside the map's gesture surface. */
-export function GamesViewAction({ view, onClick }: { view: "list" | "map"; onClick: () => void }) {
+export function GamesViewAction({
+  view,
+  onClick,
+  href,
+  labelFull = "Все игры на карте",
+  labelShort = "На карте",
+  className,
+  "aria-label": ariaLabel,
+}: GamesViewActionProps) {
   const ref = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const element = ref.current;
@@ -37,11 +57,18 @@ export function GamesViewAction({ view, onClick }: { view: "list" | "map"; onCli
     };
   }, [view]);
   if (view === "map") return null;
-  return <div ref={ref} className="gb-games-view-action gb-games-view-action--feed">
-    <Button className="gb-map-desktop-entry" variant="dark" onClick={onClick} aria-label="Все игры на карте">
+  const label = ariaLabel ?? labelFull;
+  const classes = ["gb-games-view-action", "gb-games-view-action--feed", className].filter(Boolean).join(" ");
+  const glyph = (
+    <>
       <span className="gb-map-entry-tile"><FoldedMapGlyph /></span>
-      <span className="gb-map-cta-label gb-map-cta-label--full">Все игры на карте</span>
-      <span className="gb-map-cta-label gb-map-cta-label--short">На карте</span>
-    </Button>
+      <span className="gb-map-cta-label gb-map-cta-label--full">{labelFull}</span>
+      <span className="gb-map-cta-label gb-map-cta-label--short">{labelShort}</span>
+    </>
+  );
+  return <div ref={ref} className={classes} {...(className?.includes("gb-players-map-cta") ? { "data-radar-map-cta": "true" } : {})}>
+    {href
+      ? <Button className="gb-map-desktop-entry" variant="dark" href={href} aria-label={label}>{glyph}</Button>
+      : <Button className="gb-map-desktop-entry" variant="dark" onClick={onClick} aria-label={label}>{glyph}</Button>}
   </div>;
 }
