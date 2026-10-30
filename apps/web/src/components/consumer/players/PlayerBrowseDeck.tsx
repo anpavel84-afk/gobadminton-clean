@@ -22,7 +22,7 @@ import {
 import { ProfileCover } from "./CoverEditor";
 import { Avatar } from "./ProfileComposition";
 import { Button } from "../Button";
-import { PlayerBrowseFriendship, type BrowseFriendshipApi } from "./PlayerBrowseFriendship";
+import { isBrowseConfirmedRequestOutcome, PlayerBrowseFriendship, type BrowseFriendshipApi } from "./PlayerBrowseFriendship";
 import "../../../styles/player-browse.css";
 
 type Props = {
@@ -251,20 +251,20 @@ export function PlayerBrowseDeck({
 
   const onConfirmedRequest = useCallback((receipt: FriendshipReceipt) => {
     if (!current) return;
-    const relationship = receipt.outcome === "accepted" ? "friends" : receipt.outcome === "pending" ? "outgoing_pending" : undefined;
-    if (relationship) {
-      setKnown(prev => {
-        const next = new Map(prev);
-        next.set(current.publicPlayerId, relationship);
-        return next;
-      });
-    }
+    // Cancel/decline/remove are successful mutations but must not toast "sent" or auto-advance.
+    if (!isBrowseConfirmedRequestOutcome(receipt.outcome)) return;
+    const relationship = receipt.outcome === "accepted" ? "friends" : "outgoing_pending";
+    setKnown(prev => {
+      const next = new Map(prev);
+      next.set(current.publicPlayerId, relationship);
+      return next;
+    });
     setToast(receipt.outcome === "accepted" ? "Теперь вы друзья" : "Запрос отправлен");
     setAnnounce(receipt.outcome === "accepted" ? "Запрос принят" : "Запрос отправлен");
     const skipped = new Set(skipStack);
     const next = nextEligibleBrowseIndex(browsePlayers, index, new Map([
       ...known,
-      ...(relationship ? [[current.publicPlayerId, relationship] as const] : []),
+      [current.publicPlayerId, relationship] as const,
     ]), skipped);
     // Bypass navigationLocked: confirmed receipt already cleared the mutation busy latch in the child.
     if (next >= 0) {
@@ -427,9 +427,8 @@ export function PlayerBrowseDeck({
         role="group"
         aria-label="Игроки по одному"
         aria-describedby="player-browse-live"
-        inert={showHelp ? true : undefined}
       >
-        {current && <div className="pb-surface">
+        {current && <div className="pb-surface" inert={showHelp ? true : undefined}>
           <article ref={cardRef} className="pb-card" data-player-id={current.publicPlayerId}>
             <div className="pb-cover">
               <ProfileCover url={coverUrl ?? undefined} />

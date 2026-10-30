@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { PublicPlayer } from "../src/lib/consumer-types";
 import {
@@ -18,6 +21,11 @@ import {
   PLAYER_BROWSE_HISTORY_KEY,
   PLAYER_BROWSE_TUTORIAL_KEY,
 } from "../src/lib/player-browse";
+
+const deckSource = readFileSync(
+  join(dirname(fileURLToPath(import.meta.url)), "../src/components/consumer/players/PlayerBrowseDeck.tsx"),
+  "utf8",
+);
 
 const player = (id: string): PublicPlayer => ({
   publicPlayerId: id,
@@ -99,5 +107,24 @@ describe("player browse tutorial marker", () => {
     expect(readTutorialDismissed(storage, false)).toBe(true);
     expect(readTutorialDismissed({ getItem: () => null }, true)).toBe(true);
     expect(readTutorialDismissed({ getItem: () => { throw new Error("denied"); } }, false)).toBe(false);
+  });
+
+  it("keeps inert on card surface only so the tutorial stays interactive", () => {
+    expect(deckSource).toMatch(/className="pb-surface"\s+inert=\{showHelp \? true : undefined\}/);
+    expect(deckSource).toMatch(/className="pb-deck"/);
+    const deckOpen = deckSource.indexOf('className="pb-deck"');
+    const surfaceInert = deckSource.indexOf('className="pb-surface" inert={showHelp ? true : undefined}');
+    const tutorial = deckSource.indexOf('className="pb-tutorial"');
+    expect(deckOpen).toBeGreaterThan(-1);
+    expect(surfaceInert).toBeGreaterThan(deckOpen);
+    expect(tutorial).toBeGreaterThan(surfaceInert);
+    // Tutorial must not sit inside the inert surface block that closes before the shade.
+    const surfaceCloseBeforeTutorial = deckSource.slice(surfaceInert, tutorial);
+    expect(surfaceCloseBeforeTutorial).toContain("</div>}");
+    expect(surfaceCloseBeforeTutorial).toContain("pb-controls");
+  });
+
+  it("ignores cancel/decline receipts in onConfirmedRequest toast/auto-advance", () => {
+    expect(deckSource).toMatch(/if \(!isBrowseConfirmedRequestOutcome\(receipt\.outcome\)\) return/);
   });
 });

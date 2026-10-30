@@ -17,6 +17,11 @@ export type BrowseFriendshipApi = {
   canRequest: boolean;
 };
 
+/** True only for send/accept receipts that may toast and auto-advance the browse deck. */
+export function isBrowseConfirmedRequestOutcome(outcome: FriendshipReceipt["outcome"]): boolean {
+  return outcome === "pending" || outcome === "accepted";
+}
+
 type Props = {
   me: Me | null;
   authState: "loading" | "ready" | "guest" | "error";
@@ -65,7 +70,8 @@ export function PlayerBrowseFriendship({
     me?.csrfToken ?? "",
     (receipt) => {
       setCheckNotice("");
-      onConfirmedRequest(receipt);
+      // Cancel/decline succeed as mutations but are not "request confirmed" for deck toast/advance.
+      if (isBrowseConfirmedRequestOutcome(receipt.outcome)) onConfirmedRequest(receipt);
       void loadFriendship(true);
     },
     () => { void loadFriendship(true); },

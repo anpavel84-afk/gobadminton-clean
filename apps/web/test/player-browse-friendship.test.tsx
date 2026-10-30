@@ -1,7 +1,20 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { FriendshipView } from "@gobadminton/contracts/friendship-types";
+import type { FriendshipReceipt, FriendshipView } from "@gobadminton/contracts/friendship-types";
 import { friendCommand } from "../src/lib/friendships";
 import { canOfferFriendship, relationshipBlocksNewRequest } from "../src/lib/player-browse";
+
+const friendshipSource = readFileSync(
+  join(dirname(fileURLToPath(import.meta.url)), "../src/components/consumer/players/PlayerBrowseFriendship.tsx"),
+  "utf8",
+);
+
+/** Mirrors isBrowseConfirmedRequestOutcome — keep in sync with PlayerBrowseFriendship. */
+function isBrowseConfirmedRequestOutcome(outcome: FriendshipReceipt["outcome"]): boolean {
+  return outcome === "pending" || outcome === "accepted";
+}
 
 const hooks = vi.hoisted(() => ({ slots: [] as unknown[], cursor: 0 }));
 vi.mock("react", () => ({
@@ -42,6 +55,17 @@ const incoming: FriendshipView = {
 const unavailable: FriendshipView = {
   friendshipId: null, relationship: "unavailable", version: null, request: null, peer: null, capabilities: { ...caps },
 };
+
+describe("player browse confirmed-request outcomes", () => {
+  it("treats only pending/accepted as deck confirm; cancel/decline do not", () => {
+    const outcomes: FriendshipReceipt["outcome"][] = ["pending", "accepted", "declined", "cancelled", "removed"];
+    expect(outcomes.filter(isBrowseConfirmedRequestOutcome)).toEqual(["pending", "accepted"]);
+    expect(isBrowseConfirmedRequestOutcome("cancelled")).toBe(false);
+    expect(isBrowseConfirmedRequestOutcome("declined")).toBe(false);
+    expect(friendshipSource).toContain("export function isBrowseConfirmedRequestOutcome");
+    expect(friendshipSource).toMatch(/if \(isBrowseConfirmedRequestOutcome\(receipt\.outcome\)\) onConfirmedRequest\(receipt\)/);
+  });
+});
 
 describe("player browse friendship intent and capabilities", () => {
   it("allows request only for none+canRequest and builds the existing create path", () => {
